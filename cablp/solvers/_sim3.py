@@ -91,7 +91,7 @@ input_flags_template = {
 class LAPDSim:
     def __init__(
         self,
-        input_dict=input_dic_template,
+        input_dict=input_dict_template,
         input_flags=input_flags_template,
     ):
         self._flags = input_flags
