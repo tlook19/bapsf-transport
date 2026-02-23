@@ -27,26 +27,30 @@ from matplotlib import pyplot as plt
 
 fit_coeff = [1.3950030050791237e-05, 13.62996440158007]
 
-input_dic_template = {
-    "ne0": [1e8, 1e8, 1e8],
-    "nn0": [3e13, 1e8, 1e8],
-    "Te0": [0.1, 0.1, 0.1],
-    "Ti0": [0.1, 0.1, 0.1],
-    "Bz0": [800, 800, 800],  # Magnetic field in gauss
-    "Lm": [100, 1800, 100],  # Length of machine
-    "Rm": [50, 50, 50],  # Machine radius
-    "Lp": [100, 1800, 100],  # Length of plasma
-    "Rp": [18, 18, 18],  # Plasma radius
-    "Lhf": [50, 1000, 50],  # Gradient scale length of axial heat flux
-    "Lpf": [50, 1000, 50],  # Gradient scale length of axial particle flux
-    "Rhf": [50, 50, 50],  # Gradient scale length radial of heat flux
-    "Vd": 120,  # Discharge voltage
+input_dict_template = {
+    "gas_type": "He",
+    "ne0": 1e9,
+    "Tn_fit": 0.1,  # Neutral temperature for reaction rate fits
+    "nn0": 5e12,
+    "Source_nn0": 2e13,
+    "Twin_nn0": 2e13,
+    "Te0": 0.1,
+    "Ti0": 0.1,
+    "Bz0": 1500,  # Magnetic field in gauss
+    "Lm": 1800,  # Length of machine
+    "Rm": 50,  # Machine radius
+    "Lp": 1800,  # Length of plasma
+    "Rp": 18,  # Plasma radius
+    "Rhf": 50,  # Gradient scale length of radial heat flux
+    "Vd": 100,  # Discharge voltage
+    "Twin_Vd": 100,
     "Id": 2500,  # Discharge current
-    "anode_transparency": 0.5,  # Anode transparency
-    "S_gp": [1200, 0, 0],  # Gas puff source rate
-    "S_pump": [4000, 0, 4000],  # Vacuum pump sink rate
-    "mit_el_temp": 0.5,  # reduced edge loss temp
-    "Tn": 0.1,  # Neutral temperature
+    "Twin_Id": 2500,
+    "anode_transparency": 1,  # Anode transparency
+    "S_gp": 2000,  # Gas puff source rate
+    "Twin_S_gp": 2000,
+    "S_pump_L": 4000,  # Vacuum pump sink rate
+    "S_pump_R": 4000,
     "tau_I_on": 0.001,  # Time constant for beam current rise
     "b_epara": 1.0,  # Scaling factor for e_para transport
     "b_ipara": 1.0,  # Scaling factor for i_para transport
@@ -60,7 +64,12 @@ input_dic_template = {
     "b_Qie": 1.0,  # Scaling factor for ion-electron heating
     "b_Qei": 1.0,  # Scaling factor for electron-ion cooling
     "b_Qen": 1.0,  # Scaling factor for electron-neutral cooling
-    "cycles": 1,  # number of discharge cycles to simulate
+    "cycles": 1,
+    "d_off": 20e-3,
+    "dt_main": 3e-8,
+    "end": 21e-3,
+    "dt_after": 1e-7,
+    "cells": 3,
 }
 
 input_flags_template = {
@@ -73,7 +82,9 @@ input_flags_template = {
     "C_imp": False,
     "O_imp": False,
     "icool_recomb": False,
-    "NoPlasma": False,
+    "Plasma": True,
+    "TwinCathode": False,
+    "Velocity": False,
 }
 
 
