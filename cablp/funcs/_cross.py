@@ -1,0 +1,333 @@
+import mpmath as mp
+import numpy as np
+from ..vars._cons import (
+    M_e_eV,
+    qe_cgs,
+    atm_cross_cgs,
+    Ry_eV,
+    E_ion,
+    E_21p,
+    I_ion,
+    I_21p,
+    I_double,
+    c_cgs,
+)
+
+
+def He_EII_cross(eps, A):
+    """
+    Helium electron impact ionization cross section.
+
+    Parameters
+    ----------
+    eps : float
+        Energy scaled by reaction threshold energy
+    A : list of floats
+        Coefficients for the cross section calculation
+
+    Returns
+    -------
+    mpf
+        Helium electron impact ionization cross section in cm^2
+    """
+    a = mp.fdiv(mp.mpf(1e-13), mp.fmul(eps, mp.power(E_ion, 2)))
+    b = mp.fdiv(1, eps)
+    term1 = mp.fmul(A[0], mp.log(eps))
+    term2 = mp.fsum([mp.fmul(A[i], mp.power(mp.fsub(1, b), i)) for i in range(1, 6)])
+    return mp.fmul(a, mp.fadd(term1, term2))
+
+
+def He_EIE_cross_DA(eps, A):
+    """
+    Helium electron impact excitation cross section.
+
+    Parameters
+    ----------
+    eps : float
+        Energy scaled by threshold energy
+    A : list
+        Coefficients for the cross section calculation
+
+    Returns
+    -------
+    mpf
+        Helium electron impact excitation cross section in cm^2
+    """
+    factor1 = mp.fdiv(mp.fmul(atm_cross_cgs, Ry_eV), mp.fmul(eps, E_21p))
+    factor2 = mp.fadd(
+        mp.fmul(A[0], mp.log(eps)),
+        mp.fsum([A[i] * (eps ** (1 - i)) for i in range(1, 5)]),
+    )
+    factor3 = mp.fdiv(mp.fadd(eps, 1), mp.fadd(eps, A[5]))
+    return mp.fprod([factor1, factor2, factor3])
+
+
+def int_factor(I):
+    return mp.fprod(
+        [mp.power(I, 2), mp.sqrt(mp.fdiv(2, mp.fmul(M_e_eV, mp.pi))), c_cgs]
+    )
+
+
+def rate_kern(cross_sec_func, eps, a, T, I):
+    # I is the minimum reaction energy threshold
+    x = mp.fmul(eps, mp.fdiv(I, T))
+    int_kern = mp.fprod([cross_sec_func(eps, a), eps, mp.exp(-x)])
+    return int_kern
+
+
+def kern_lambda(cross_sec_func, a, T, I):
+    return lambda eps: rate_kern(cross_sec_func, eps, a, T, I)
+
+
+def H_ion_rate(E, T):
+    return 10e-5 * np.sqrt(T / E) / (E**1.5 * (6.0 + (T / E))) * np.exp(-E / T)
+
+
+def alpha_r(T):
+    # return (
+    #     5.2e-14
+    #     * np.sqrt(I_ion / T)
+    #     * (0.43 + 0.5 * np.log(I_ion / T) + 0.469 * (I_ion / T) ** (-1 / 3))
+    # )
+    return 2.71e-13 * T ** (-0.5)
+
+
+def alpha_3(T):
+    return 8.75e-27 * T ** (-4.5)
+
+
+def integrate_kern(cross_sec_func, a, T, I):
+    scale_factor = int_factor(I)
+    rate_coeff = np.empty(T.shape)
+    for i, temp in enumerate(T):
+        integrand = kern_lambda(cross_sec_func, a, temp, I)
+        rate_coeff[i] = mp.fprod(
+            [
+                mp.quad(integrand, [1, mp.inf]),
+                scale_factor,
+                mp.power(temp, mp.fneg(1.5)),
+            ]
+        )
+    return rate_coeff
+
+
+A_R318 = [
+    [
+        -1.831670498376e01,
+        2.143624996483e-01,
+        5.139117192662e-02,
+        -9.896180369559e-04,
+        -2.495327546080e-03,
+        -2.417046684097e-05,
+        1.177406072793e-04,
+        -1.483036457978e-05,
+        5.351909441226e-07,
+    ],
+    [
+        1.650239332070e-01,
+        -1.067658289373e-01,
+        9.536923957409e-03,
+        9.536923957409e-03,
+        6.315097684976e-03,
+        -1.265503371044e-03,
+        -6.945512319613e-05,
+        3.698501620365e-05,
+        -3.348172574417e-06,
+        9.728230870242e-08,
+    ],
+    [
+        5.025740610454e-02,
+        -5.304993033743e-03,
+        -1.306075129405e-02,
+        2.655464630308e-03,
+        7.569269700468e-04,
+        -2.956984088728e-04,
+        3.424317896619e-05,
+        -1.527018819072e-06,
+        1.676354786072e-08,
+    ],
+    [
+        5.288358515136e-03,
+        8.289383645942e-03,
+        -1.033166370333e-03,
+        -1.365781346175e-03,
+        2.756946036257e-04,
+        2.318277483195e-05,
+        -9.815693511794e-06,
+        8.362050692462e-07,
+        -2.237567830699e-08,
+    ],
+    [
+        -2.437122342843e-03,
+        -9.698773663345e-05,
+        1.280464204775e-03,
+        -1.859939123743e-04,
+        -1.107375149384e-04,
+        3.704494397140e-05,
+        -4.285719813022e-06,
+        2.058392726953e-07,
+        -3.081685803820e-09,
+    ],
+    [
+        -4.461891214720e-04,
+        -4.470180279338e-04,
+        -8.453294908907e-05,
+        1.237942304972e-04,
+        -7.217379426085e-06,
+        -6.066558692480e-06,
+        1.169257650609e-06,
+        -7.463594884928e-08,
+        1.450862501121e-09,
+    ],
+    [
+        1.731631548110e-04,
+        7.944326905066e-05,
+        -3.040874906105e-05,
+        -1.588253432932e-05,
+        5.769971321188e-06,
+        -4.951573401626e-07,
+        -4.968953461875e-10,
+        5.924370389093e-10,
+        4.434231893204e-11,
+    ],
+    [
+        -1.588434781959e-05,
+        -5.303688417551e-06,
+        4.747888095498e-06,
+        6.603560345800e-07,
+        -6.717311113584e-07,
+        1.437520597154e-07,
+        -1.618948982477e-08,
+        1.078208689229e-09,
+        -3.324377862622e-11,
+    ],
+    [
+        4.482291414386e-07,
+        1.235167254501e-07,
+        -1.923953750574e-07,
+        -1.970606344918e-09,
+        2.440961351104e-08,
+        -6.998724470004e-09,
+        9.440094842562e-10,
+        -6.619767848464e-11,
+        1.935019679501e-12,
+    ],
+]
+
+A_R531 = [
+    [
+        -1.992795874184e01,
+        2.342319832717e-01,
+        5.150488618567e-02,
+        -4.457831664145e-03,
+        -1.543592188979e-03,
+        3.127935819690e-04,
+        -1.478649318411e-05,
+        -4.796924334410e-07,
+        3.623344342191e-08,
+    ],
+    [
+        1.866121633782e-01,
+        -1.085479286023e-01,
+        5.502643799842e-03,
+        6.751016280248e-03,
+        -9.368501420643e-04,
+        -1.564547327374e-04,
+        4.454044051200e-05,
+        -3.559977035839e-06,
+        9.673665606073e-08,
+    ],
+    [
+        5.632774905403e-02,
+        -5.796164637185e-03,
+        -1.070448355458e-02,
+        1.348104812381e-03,
+        6.678034019800e-04,
+        -1.638591652038e-04,
+        1.091423551219e-05,
+        1.429006251276e-08,
+        -1.626046817162e-08,
+    ],
+    [
+        -1.523524839309e-03,
+        7.964340512260e-03,
+        -2.811049856343e-04,
+        -1.009960297392e-03,
+        1.271484361215e-04,
+        2.743635453507e-05,
+        -6.757942983709e-06,
+        4.890540879010e-07,
+        -1.188613673713e-08,
+    ],
+    [
+        -2.153750537851e-03,
+        -2.259674261582e-04,
+        8.802921038196e-04,
+        -2.397230757181e-05,
+        -7.802314691135e-05,
+        1.364264736037e-05,
+        -3.524476702306e-07,
+        -6.293604516614e-08,
+        3.383446775161e-09,
+    ],
+    [
+        3.308881419986e-04,
+        -3.444207072047e-04,
+        -1.198248793959e-04,
+        5.675989835329e-05,
+        5.096915155186e-06,
+        -3.146182664420e-06,
+        2.858958575343e-07,
+        -2.702231414235e-09,
+        -3.684509743141e-10,
+    ],
+    [
+        -1.293912998397e-05,
+        6.164032099379e-05,
+        -7.766013174537e-07,
+        -8.581799112319e-06,
+        1.122093772403e-06,
+        9.721160837100e-08,
+        -1.739320039203e-08,
+        5.123073994873e-11,
+        3.976640871840e-11,
+    ],
+    [
+        -4.067520041201e-07,
+        -4.156975252360e-06,
+        9.213287306897e-07,
+        4.932159877322e-07,
+        -1.600545758983e-07,
+        1.677569938034e-08,
+        -1.179041806243e-09,
+        9.702183602739e-11,
+        -4.096335085504e-12,
+    ],
+    [
+        2.451185017055e-08,
+        1.009896955766e-07,
+        -4.014244306169e-08,
+        -9.746139175914e-09,
+        5.662679103625e-09,
+        -9.661966135256e-10,
+        9.352212060009e-11,
+        -5.755013542991e-12,
+        1.667878217006e-13,
+    ],
+]
+
+
+def heavy_reaction(T, E, A):
+    ln_sigv = 0
+    for i in range(len(A)):
+        for j in range(len(A[i])):
+            ln_sigv += A[i][j] * (np.log(E) ** i) * (np.log(T) ** j)
+    return np.exp(ln_sigv)
+
+
+temps = np.logspace(-1, 4, 1000)
+charge_ex = heavy_reaction(temps, 0.1, A_R531)
+
+
+def charge_ex_react(T):
+    return np.interp(T, temps, charge_ex)
