@@ -899,6 +899,13 @@ class LAPDSim:
     def _dstep(self, a):
         ne, nn, Te, Ti, v_plasma, v_neutral = a
         if self._flags["Plasma"]:
+            Ti[Ti < 0.01] = 0.01
+            Te[Te < 0.01] = 0.01
+            Ti[Ti > 100] = 100
+            Te[Te > 100] = 100
+            ne[ne < 1e8] = 1e8
+            nn[nn < 1e8] = 1e8
+        if self._flags["Plasma"]:
             self._A_ion_beam = self._n_beam_ion * nn
             self._ln_lambda = c_log(Te, ne)
         self.calc_boundary_terms(ne, nn, Te, Ti, v_plasma, v_neutral)
