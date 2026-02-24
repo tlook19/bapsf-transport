@@ -327,20 +327,27 @@ class LAPDSim:
         Te,
     ):
         Ne_flux, Nn_flux = self._calc_n_flux(Te, ne, nn)
+        S_ion_beam = np.zeros(self._cells)
+        S_ion_bulk = np.zeros(self._cells)
+        S_rec_rad = np.zeros(self._cells)
+        S_rec_3b = np.zeros(self._cells)
+        S_ion_beam = np.zeros(self._cells)
         if self._flags["Plasma"]:
             self._p_beam = self._calc_beam_prob(Te, ne, nn)
             if self._gas_type == "He":
                 S_ion_bulk = (
                     self._b_ioniz * ne * nn * rate_coeff(Te, self._I_ion, *fit_coeff)
                 )
-                S_ion_beam = self._A_ion_beam * self._p_beam * self._ion_multiplier
+                S_ion_beam[0] = (
+                    self._A_ion_beam[0] * self._p_beam[0] * self._ion_multiplier
+                )
+                if self._flags["TwinCathode"]:
+                    S_ion_beam[-1] = (
+                        self._A_ion_beam[-1] * self._p_beam[-1] * self._ion_multiplier
+                    )
             S_rec_rad = self._b_rec_rad * ne * ne * alpha_r(Te)
             S_rec_3b = self._b_rec_3b * ne * ne * ne * alpha_3(Te)
         elif not self._flags["Plasma"]:
-            S_ion_bulk = np.zeros(self._cells)
-            S_rec_rad = np.zeros(self._cells)
-            S_rec_3b = np.zeros(self._cells)
-            S_ion_beam = np.zeros(self._cells)
             self._p_beam = np.zeros(self._cells)
         den_terms = np.array(
             [
@@ -1034,12 +1041,15 @@ class LAPDSim:
                         )
                     else:
                         self._I_beam = self._I_discharge
-                    self._J_beam = self._I_beam / self._plasma_cross / qe_SI
+                    self._J_beam[0] = self._I_beam[0] / self._plasma_cross[0] / qe_SI
                     self._n_beam[0] = self._J_beam[0] / self._v_beam[0]
                     self._n_beam_ion[0] = (
                         self._n_beam[0] * self._beam_cross[0] * self._v_beam[0]
                     )
                     if self._flags["TwinCathode"]:
+                        self._J_beam[-1] = (
+                            self._I_beam[-1] / self._plasma_cross[-1] / qe_SI
+                        )
                         self._n_beam[-1] = self._J_beam[-1] / self._v_beam[-1]
                         self._n_beam_ion[-1] = (
                             self._n_beam[-1] * self._beam_cross[-1] * self._v_beam[-1]
