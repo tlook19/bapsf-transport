@@ -1,3 +1,4 @@
+import tomllib
 import numpy as np
 from cablp.funcs._heat import (
     IAEA_exp1,
@@ -84,7 +85,50 @@ input_flags_template = {
     "Plasma": True,
     "TwinCathode": False,
     "Velocity": False,
+    "breakdown_vel": True,  # Use diffusive flux during breakdown; set False to test without
 }
+
+
+def load_config(path):
+    """
+    Load simulation parameters and flags from a TOML file.
+
+    The file should have two optional sections: ``[params]`` and ``[flags]``.
+    Any key not present in the file falls back to the value in
+    ``input_dict_template`` / ``input_flags_template``.
+
+    Parameters
+    ----------
+    path : str or path-like
+        Path to the ``.toml`` configuration file.
+
+    Returns
+    -------
+    input_dict : dict
+    input_flags : dict
+
+    Example TOML
+    ------------
+    .. code-block:: toml
+
+        [params]
+        cells = 5
+        Id    = 3000
+
+        [flags]
+        Velocity      = true
+        breakdown_vel = false
+    """
+    with open(path, "rb") as f:
+        raw = tomllib.load(f)
+    input_dict = {**input_dict_template, **raw.get("params", {})}
+    input_flags = {**input_flags_template, **raw.get("flags", {})}
+    return input_dict, input_flags
+
+
+def default_config():
+    """Return copies of the default input dictionary and flags."""
+    return dict(input_dict_template), dict(input_flags_template)
 
 
 class LAPDSim:
@@ -94,8 +138,9 @@ class LAPDSim:
         input_flags=input_flags_template,
     ):
         self._flags = input_flags
-        self._cells = input_dict["cells"] if "cells" in input_dict else 3
-        self._gas_type = input_dict["gas_type"] if "gas_type" in input_dict else "He"
+        self._input_dict = dict(input_dict)
+        self._cells = input_dict.get("cells", 3)
+        self._gas_type = input_dict.get("gas_type", "He")
         if self._gas_type == "He":
             self._m_gas = m_He_cgs
             self._mu = 4
@@ -106,12 +151,10 @@ class LAPDSim:
             self._I_ion = I_Ry
         self._ne = np.ones(self._cells) * input_dict["ne0"]
         self._nn = np.ones(self._cells) * input_dict["nn0"]
-        self._nn[0] = (
-            input_dict["Source_nn0"] if "Source_nn0" in input_dict else self._nn[0]
-        )
+        self._nn[0] = input_dict.get("Source_nn0", self._nn[0])
         self._Te = np.ones(self._cells) * input_dict["Te0"]
         self._Ti = np.ones(self._cells) * input_dict["Ti0"]
-        self._Tn_fit = input_dict["Tn_fit"] if "Tn_fit" in input_dict else 0.1
+        self._Tn_fit = input_dict.get("Tn_fit", 0.1)
         self._v_plasma = np.zeros(self._cells)
         self._Bz0 = np.ones(self._cells) * input_dict["Bz0"]
         self._L_machine = input_dict["Lm"]
@@ -124,27 +167,25 @@ class LAPDSim:
         self._L_partflux = self._L_plasma / 2
         self._R_heatflux = np.ones(self._cells) * input_dict["Rhf"]
         self._V_discharge = np.zeros(self._cells)
-        self._V_discharge[0] = input_dict["Vd"] if "Vd" in input_dict else 0
+        self._V_discharge[0] = input_dict.get("Vd", 0)
         self._I_discharge = np.zeros(self._cells)
-        self._I_discharge[0] = input_dict["Id"] if "Id" in input_dict else 0
-        self._tau_I_on = input_dict["tau_I_on"] if "tau_I_on" in input_dict else 0.0001
+        self._I_discharge[0] = input_dict.get("Id", 0)
+        self._tau_I_on = input_dict.get("tau_I_on", 0.0001)
         self._P_discharge = self._V_discharge * self._I_discharge
-        self._mit_el_temp = (
-            input_dict["mit_el_temp"] if "mit_el_temp" in input_dict else 1
-        )
-        self._Tn = input_dict["Tn"] if "Tn" in input_dict else 0.025
-        self._b_epara = input_dict["b_epara"] if "b_epara" in input_dict else 1.0
-        self._b_ipara = input_dict["b_ipara"] if "b_ipara" in input_dict else 1.0
-        self._b_eperp = input_dict["b_eperp"] if "b_eperp" in input_dict else 1.0
-        self._b_iperp = input_dict["b_iperp"] if "b_iperp" in input_dict else 1.0
-        self._b_ioniz = input_dict["b_ioniz"] if "b_ioniz" in input_dict else 1.0
-        self._b_rec_rad = input_dict["b_rec_rad"] if "b_rec_rad" in input_dict else 1.0
-        self._b_rec_3b = input_dict["b_rec_3b"] if "b_rec_3b" in input_dict else 1.0
-        self._b_Qcx = input_dict["b_Qcx"] if "b_Qcx" in input_dict else 1.0
-        self._b_Qie = input_dict["b_Qie"] if "b_Qie" in input_dict else 1.0
-        self._b_Qei = input_dict["b_Qei"] if "b_Qei" in input_dict else 1.0
-        self._b_Qen = input_dict["b_Qen"] if "b_Qen" in input_dict else 1.0
-        self._b_source = input_dict["b_source"] if "b_source" in input_dict else 1.0
+        self._mit_el_temp = input_dict.get("mit_el_temp", 1)
+        self._Tn = input_dict.get("Tn", 0.025)
+        self._b_epara = input_dict.get("b_epara", 1.0)
+        self._b_ipara = input_dict.get("b_ipara", 1.0)
+        self._b_eperp = input_dict.get("b_eperp", 1.0)
+        self._b_iperp = input_dict.get("b_iperp", 1.0)
+        self._b_ioniz = input_dict.get("b_ioniz", 1.0)
+        self._b_rec_rad = input_dict.get("b_rec_rad", 1.0)
+        self._b_rec_3b = input_dict.get("b_rec_3b", 1.0)
+        self._b_Qcx = input_dict.get("b_Qcx", 1.0)
+        self._b_Qie = input_dict.get("b_Qie", 1.0)
+        self._b_Qei = input_dict.get("b_Qei", 1.0)
+        self._b_Qen = input_dict.get("b_Qen", 1.0)
+        self._b_source = input_dict.get("b_source", 1.0)
         self._plasma_cross = np.pi * self._R_plasma**2
         self._plasma_vol = self._plasma_cross * self._L_plasma
         self._cell_vol = np.pi * self._R_machine**2 * self._L_cell
@@ -160,6 +201,7 @@ class LAPDSim:
             self._S_gp[-1] = self.puff_rate(
                 input_dict["Twin_S_gp"], 2, self._cell_vol[-1]
             )
+        self._active_discharge = self._I_discharge > 0
         self._v_beam = np.sqrt(2 * self._V_discharge * 1.60218e-12 / 6.6464731e-24)
         eps = self._V_discharge / self._I_ion
         self._beam_cross = np.zeros(self._cells)
@@ -170,17 +212,13 @@ class LAPDSim:
         self._n_beam = np.zeros(self._cells)
         self._I_beam = np.zeros(self._cells)
         self._J_beam = np.zeros(self._cells)
-        self._anode_trans = (
-            input_dict["anode_transparency"]
-            if "anode_transparency" in input_dict
-            else 1.0
-        )
-        self._cycles = input_dict["cycles"] if "cycles" in input_dict else 1
+        self._anode_trans = input_dict.get("anode_transparency", 1.0)
+        self._cycles = input_dict.get("cycles", 1)
         self._cyclelength = 0
-        self._d_off = input_dict["d_off"] if "d_off" in input_dict else 20e-3
-        self._dt_main = input_dict["dt_main"] if "dt_main" in input_dict else 1e-3
-        self._end = input_dict["end"] if "end" in input_dict else 3
-        self._dt_after = input_dict["dt_after"] if "dt_after" in input_dict else 1e-3
+        self._d_off = input_dict.get("d_off", 20e-3)
+        self._dt_main = input_dict.get("dt_main", 1e-3)
+        self._end = input_dict.get("end", 3)
+        self._dt_after = input_dict.get("dt_after", 1e-3)
         self._ion_multiplier = 1  # self._V_discharge % self._I_ion
         self._ion_remainder = self._V_discharge - self._ion_multiplier * self._I_ion
         self._v_p_bound = np.zeros(self._cells + 1)
@@ -318,7 +356,6 @@ class LAPDSim:
         S_ion_bulk = np.zeros(self._cells)
         S_rec_rad = np.zeros(self._cells)
         S_rec_3b = np.zeros(self._cells)
-        S_ion_beam = np.zeros(self._cells)
         if self._flags["Plasma"]:
             self._p_beam = self._calc_beam_prob(Te, ne, nn)
             if self._gas_type == "He":
@@ -336,17 +373,7 @@ class LAPDSim:
             S_rec_3b = self._b_rec_3b * ne * ne * ne * alpha_3(Te)
         elif not self._flags["Plasma"]:
             self._p_beam = np.zeros(self._cells)
-        den_terms = np.array(
-            [
-                Ne_flux,
-                Nn_flux,
-                S_ion_bulk,
-                S_rec_rad,
-                S_rec_3b,
-                S_ion_beam,
-            ]
-        )
-        return den_terms
+        return Ne_flux, Nn_flux, S_ion_bulk, S_rec_rad, S_rec_3b, S_ion_beam
 
     def _calc_n_flux(self, Te, ne, nn, v_plasma):
         """
@@ -384,25 +411,19 @@ class LAPDSim:
                     Ne_flux[-1] *= self._cathode_factor
             Nn_flux[0] = -Ne_flux[0] * self._Rsq_ratio[0]
             Nn_flux[-1] = -Ne_flux[-1] * self._Rsq_ratio[-1]
-        for k in range(1, self._cells):
-            if self._flags["Plasma"]:
-                if self._flags["Velocity"] and not self._breakdown:
-                    ne_b = (ne[k - 1] + ne[k]) / 2
-                    v_b = (v_plasma[k - 1] + v_plasma[k]) / 2
-                    neflux = (
-                        2 * ne_b * v_b / (self._L_partflux[k - 1] + self._L_partflux[k])
-                    )  # flux through surface k in right going sense
-                elif self._breakdown or not self._flags["Velocity"]:
-                    neflux = (ne_flux[k - 1] - ne_flux[k]) / (
-                        self._L_partflux[k - 1] + self._L_partflux[k]
-                    )  # flux through surface k in right going sense
-                Ne_flux[k - 1] -= neflux  # remove flux from left cell
-                Ne_flux[k] += neflux  # add flux to right cell
-            nnflux = (nn_flux[k - 1] - nn_flux[k]) / (
-                self._L_partflux[k - 1] + self._L_partflux[k]
-            )  # flux through surface k in right going sense
-            Nn_flux[k - 1] -= nnflux  # remove flux from left cell
-            Nn_flux[k] += nnflux  # add flux to right cell
+        denom = self._L_partflux[:-1] + self._L_partflux[1:]
+        if self._flags["Plasma"]:
+            if self._flags["Velocity"] and not (self._breakdown and self._flags["breakdown_vel"]):
+                ne_b = (ne[:-1] + ne[1:]) / 2
+                v_b = (v_plasma[:-1] + v_plasma[1:]) / 2
+                neflux = 2 * ne_b * v_b / denom
+            else:
+                neflux = (ne_flux[:-1] - ne_flux[1:]) / denom
+            Ne_flux[:-1] -= neflux
+            Ne_flux[1:] += neflux
+        nnflux = (nn_flux[:-1] - nn_flux[1:]) / denom
+        Nn_flux[:-1] -= nnflux
+        Nn_flux[1:] += nnflux
         return Ne_flux, Nn_flux
 
     def _calc_beam_prob(self, Te, ne, nn):
@@ -438,11 +459,6 @@ class LAPDSim:
             )
         return p_beam
 
-    def _calc_velocity_terms(self, ne, nn, Te, Ti, v_plasma):
-        pres_acc = self._calc_pres_acc(ne, Te)
-        drag_in_plasma = self._calc_drag_in(Ti, nn, v_plasma)
-        return pres_acc, drag_in_plasma
-
     def _calc_pres_acc(self, ne, Te):
         """
         Calculate the plasma pressure gradient acceleration (dv/dt contribution).
@@ -451,17 +467,17 @@ class LAPDSim:
         NOTE: discretization scheme should be revisited in a future pass.
         """
         P = ne * Te * ev_to_erg  # pressure in erg/cm^3
+        L = self._L_partflux
         pres_acc = np.zeros(self._cells)
         # End cell 0: one-sided difference with adjacent cell
-        pres_acc[0] = -(P[1] - P[0]) / (self._L_partflux[0] * self._m_gas * ne[0])
+        pres_acc[0] = -(P[1] - P[0]) / (L[0] * self._m_gas * ne[0])
         # End cell -1: one-sided difference with adjacent cell
-        pres_acc[-1] = -(P[-1] - P[-2]) / (self._L_partflux[-1] * self._m_gas * ne[-1])
-        # Interior cells: net contribution from both neighbors
-        for k in range(1, self._cells - 1):
-            pres_acc[k] = -(
-                (P[k + 1] - P[k]) / (self._L_partflux[k] + self._L_partflux[k + 1])
-                + (P[k] - P[k - 1]) / (self._L_partflux[k - 1] + self._L_partflux[k])
-            ) / (self._m_gas * ne[k])
+        pres_acc[-1] = -(P[-1] - P[-2]) / (L[-1] * self._m_gas * ne[-1])
+        # Interior cells: net contribution from both neighbors (vectorized)
+        pres_acc[1:-1] = -(
+            (P[2:] - P[1:-1]) / (L[1:-1] + L[2:])
+            + (P[1:-1] - P[:-2]) / (L[:-2] + L[1:-1])
+        ) / (self._m_gas * ne[1:-1])
         return pres_acc
 
     def _calc_drag_in(self, Ti, nn, v_plasma):
@@ -551,23 +567,20 @@ class LAPDSim:
             pass  # Placeholder for carbon impurity cooling
         if self._flags["O_imp"]:
             pass  # Placeholder for oxygen impurity cooling
-        heat_terms = np.array(
-            [
-                e_par_flux[:],  # 0
-                i_par_flux[:],  # 1
-                e_perp_hl[:],  # 2
-                i_perp_hl[:],  # 3
-                Qie[:],  # 4
-                Qei[:],  # 5
-                Qen[:],  # 6
-                Qeb[:],  # 7
-                Qcx[:],  # 8
-                Qbeam[:],  # 9
-                div_v_elec[:],  # 10
-                div_v_ions[:],  # 11
-            ]
+        return (
+            e_par_flux,
+            i_par_flux,
+            e_perp_hl,
+            i_perp_hl,
+            Qie,
+            Qei,
+            Qen,
+            Qeb,
+            Qcx,
+            Qbeam,
+            div_v_elec,
+            div_v_ions,
         )
-        return heat_terms
 
     def _calc_cond_heat_flux(self, Te, Ti, ne):
         e_perp_hl = np.zeros(self._cells)
@@ -632,29 +645,16 @@ class LAPDSim:
             e_par_flux[0] -= e_par_hl[0]
             e_par_flux[-1] -= e_par_hl[-1]
         i_par_flux = np.zeros(self._cells)
-        # e_par_flux[0] -= e_par_hl[0]
-        # print("e_par_flux[0]: ", e_par_flux[0], " e_par_flux[-1]: ", e_par_flux[-1])
         i_par_flux[0] -= i_par_hl[0]
         i_par_flux[-1] -= i_par_hl[-1]
-        for k in range(self._cells):
-            if k < self._cells - 1:
-                e_par_flux[k] += (
-                    e_par_hl[k + 1] * self._L_heatflux[k]
-                    - e_par_hl[k] * self._L_heatflux[k]
-                ) / (self._L_heatflux[k] + self._L_heatflux[k + 1])
-                i_par_flux[k] += (
-                    i_par_hl[k + 1] * self._L_heatflux[k + 1]
-                    - i_par_hl[k] * self._L_heatflux[k]
-                ) / (self._L_heatflux[k] + self._L_heatflux[k + 1])
-            if k > 0:
-                e_par_flux[k] += (
-                    e_par_hl[k - 1] * self._L_heatflux[k - 1]
-                    - e_par_hl[k] * self._L_heatflux[k]
-                ) / (self._L_heatflux[k - 1] + self._L_heatflux[k])
-                i_par_flux[k] += (
-                    i_par_hl[k - 1] * self._L_heatflux[k - 1]
-                    - i_par_hl[k] * self._L_heatflux[k]
-                ) / (self._L_heatflux[k - 1] + self._L_heatflux[k])
+        L = self._L_heatflux
+        denom = L[:-1] + L[1:]
+        # Flux from right neighbor (k < cells-1)
+        e_par_flux[:-1] += (e_par_hl[1:] * L[:-1] - e_par_hl[:-1] * L[:-1]) / denom
+        i_par_flux[:-1] += (i_par_hl[1:] * L[1:] - i_par_hl[:-1] * L[:-1]) / denom
+        # Flux from left neighbor (k > 0)
+        e_par_flux[1:] += (e_par_hl[:-1] * L[:-1] - e_par_hl[1:] * L[1:]) / denom
+        i_par_flux[1:] += (i_par_hl[:-1] * L[:-1] - i_par_hl[1:] * L[1:]) / denom
         return e_par_flux, i_par_flux, e_perp_hl, i_perp_hl
 
     def _calc_div_v(self, Te, v_plasma):
@@ -665,25 +665,19 @@ class LAPDSim:
         """
         div_v = np.zeros(self._cells)
         c_s = v_ion_speed(Te, self._mu)
+        # Face-averaged velocities between adjacent cells (length cells-1)
+        v_face = (v_plasma[:-1] + v_plasma[1:]) / 2
         if self._discharge_on:
-            div_v[0] = ((v_plasma[1] + v_plasma[0]) / 2) / self._L_plasma[0]
+            div_v[0] = v_face[0] / self._L_plasma[0]
             if self._flags["TwinCathode"]:
-                div_v[-1] = (-(v_plasma[-1] + v_plasma[-2]) / 2) / self._L_plasma[-1]
+                div_v[-1] = -v_face[-1] / self._L_plasma[-1]
             else:
-                div_v[-1] = (
-                    c_s[-1] - (v_plasma[-1] + v_plasma[-2]) / 2
-                ) / self._L_plasma[-1]
-        elif not self._discharge_on:
-            div_v[0] = ((v_plasma[1] + v_plasma[0]) / 2 - c_s[0]) / self._L_plasma[0]
-            div_v[-1] = (c_s[-1] - (v_plasma[-1] + v_plasma[-2]) / 2) / self._L_plasma[
-                -1
-            ]
-        for k in range(1, self._cells - 1):
-            div_v[k] = (
-                ((v_plasma[k + 1] + v_plasma[k]) - (v_plasma[k - 1] + v_plasma[k]))
-                / 2
-                / (self._L_plasma[k])
-            )
+                div_v[-1] = (c_s[-1] - v_face[-1]) / self._L_plasma[-1]
+        else:
+            div_v[0] = (v_face[0] - c_s[0]) / self._L_plasma[0]
+            div_v[-1] = (c_s[-1] - v_face[-1]) / self._L_plasma[-1]
+        # Interior cells: central difference of face velocities (vectorized)
+        div_v[1:-1] = (v_face[1:] - v_face[:-1]) / self._L_plasma[1:-1]
         return div_v
 
     def calc_boundary_terms(self, ne, nn, Te, Ti, v_plasma):
@@ -717,8 +711,8 @@ class LAPDSim:
             ne[ne < 1e8] = 1e8
             nn[nn < 1e8] = 1e8
         if self._flags["Velocity"]:
-            c_s = v_ion_speed(Te, self._mu)
-            v_plasma[:] = np.clip(v_plasma, -c_s, c_s)
+            c_s_max = np.max(v_ion_speed(Te, self._mu))
+            v_plasma[:] = np.clip(v_plasma, -c_s_max, c_s_max)
         if self._flags["Plasma"]:
             self._A_ion_beam = self._n_beam_ion * nn
             self._ln_lambda = c_log(Te, ne)
@@ -735,18 +729,9 @@ class LAPDSim:
             Te,
             v_plasma,
         )
-        if self._discharge_on:
-            puff = self._S_gp[:]
-        else:
-            puff = np.zeros(self._cells)
         if self._flags["Velocity"]:
-            pres_acc, drag_in_plasma = self._calc_velocity_terms(
-                ne,
-                nn,
-                Te,
-                Ti,
-                v_plasma,
-            )
+            pres_acc = self._calc_pres_acc(ne, Te)
+            drag_in_plasma = self._calc_drag_in(Ti, nn, v_plasma)
         else:
             pres_acc = np.zeros(self._cells)
             drag_in_plasma = np.zeros(self._cells)
@@ -774,7 +759,7 @@ class LAPDSim:
             d_ne = S_ion_bulk + S_ion_beam - S_rec_rad - S_rec_3b + Ne_flux
             d_Te = Qeb + Qbeam - Qie - Qei - Qen + e_par_flux - e_perp_hl + div_v_elec
             d_Ti = Qie + i_par_flux - i_perp_hl - Qcx + div_v_ions
-        elif self._flags["Plasma"] == False:
+        else:
             d_ne = np.zeros(self._cells)
             d_Te = np.zeros(self._cells)
             d_Ti = np.zeros(self._cells)
@@ -784,7 +769,7 @@ class LAPDSim:
             - S_ion_beam * self._Rsq_ratio
             + S_rec_rad * self._Rsq_ratio
             + S_rec_3b * self._Rsq_ratio
-            + puff
+            + (self._S_gp if self._discharge_on else 0)
             - (self._S_pump * nn)
         )
         d_ve = pres_acc - drag_in_plasma
@@ -793,13 +778,13 @@ class LAPDSim:
 
     def _rk4_step(self, a):
         # print("RK4 step with h =", self._h)
-        k1 = self._dstep(a).copy()
+        k1 = self._dstep(a)
         k1_a = a + (0.5 * self._h * k1)
-        k2 = self._dstep(k1_a).copy()
+        k2 = self._dstep(k1_a)
         k2_a = a + (0.5 * self._h * k2)
-        k3 = self._dstep(k2_a).copy()
+        k3 = self._dstep(k2_a)
         k3_a = a + (self._h * k3)
-        k4 = self._dstep(k3_a).copy()
+        k4 = self._dstep(k3_a)
         # print("k: ", k1, k2, k3, k4)
         b = a + (self._h / 6) * (k1 + 2 * k2 + 2 * k3 + k4)
         # print("b: ", b)
@@ -812,14 +797,39 @@ class LAPDSim:
             ne[ne < 1e8] = 1e8
             nn[nn < 1e8] = 1e8
         if self._flags["Velocity"]:
-            c_s = v_ion_speed(Te, self._mu)
-            v_plasma[:] = np.clip(v_plasma, -c_s, c_s)
+            c_s_max = np.max(v_ion_speed(Te, self._mu))
+            v_plasma[:] = np.clip(v_plasma, -c_s_max, c_s_max)
+        # Store diagnostics at final state (avoids duplicate calls in start_simulation)
+        if self._flags["Plasma"]:
+            self._A_ion_beam = self._n_beam_ion * nn
+            self._ln_lambda = c_log(Te, ne)
+        (
+            self._Ne_flux,
+            self._Nn_flux,
+            self._S_ion_bulk,
+            self._S_rec_rad,
+            self._S_rec_3b,
+            self._S_ion_beam,
+        ) = self.calc_density_terms(ne, nn, Te, v_plasma)
+        if self._flags["Plasma"]:
+            (
+                self._e_par_flux,
+                self._i_par_flux,
+                self._e_perp_hl,
+                self._i_perp_hl,
+                self._Qie,
+                self._Qei,
+                self._Qen,
+                self._Qeb,
+                self._Qcx,
+                self._Qbeam,
+                self._div_v_elec,
+                self._div_v_ions,
+            ) = self.calc_heat_terms(ne, nn, Te, Ti, v_plasma)
         return ne, nn, Te, Ti, v_plasma
 
     def start_simulation(self):
         self.set_time_steps()
-        if not self._time_flag:
-            raise ValueError("Time steps not set. Use set_time_steps() method.")
         self.initialize_results()
         print("Starting simulation...")
         t = self._cyclelength
@@ -833,13 +843,13 @@ class LAPDSim:
                 if i < self._i_d_off and self._flags["Plasma"]:
                     self._discharge_on = True
                     self._h = self._dt_discharge
-                    active = self._I_discharge > 0
                     self._I_beam = self._I_discharge * (
                         1 - np.exp(-time / self._tau_I_on)
                     )
                     self._breakdown = True
-                    if active.any() and np.all(
-                        self._I_beam[active] >= self._I_discharge[active]
+                    if self._active_discharge.any() and np.all(
+                        self._I_beam[self._active_discharge]
+                        >= self._I_discharge[self._active_discharge]
                     ):
                         self._I_beam = self._I_discharge
                         self._breakdown = False
@@ -862,10 +872,11 @@ class LAPDSim:
                 elif self._afterlglow:
                     self._discharge_on = False
                     self._h = self._dt_afterglow
-                    self._I_beam[:] = 0
-                    self._J_beam[:] = 0
-                    self._n_beam[:] = 0
-                    self._n_beam_ion[:] = 0
+                    if i == self._i_d_off:  # zero beam quantities on discharge→afterglow transition
+                        self._I_beam[:] = 0
+                        self._J_beam[:] = 0
+                        self._n_beam[:] = 0
+                        self._n_beam_ion[:] = 0
                 else:
                     break
 
@@ -885,40 +896,6 @@ class LAPDSim:
                     self._Ti,
                     self._v_plasma,
                 ) = self._rk4_step(a)
-                (
-                    self._Ne_flux[:],
-                    self._Nn_flux[:],
-                    self._S_ion_bulk[:],
-                    self._S_rec_rad[:],
-                    self._S_rec_3b[:],
-                    self._S_ion_beam[:],
-                ) = self.calc_density_terms(
-                    self._ne[:],
-                    self._nn[:],
-                    self._Te[:],
-                    self._v_plasma[:],
-                )
-                if self._flags["Plasma"]:
-                    (
-                        self._e_par_flux[:],
-                        self._i_par_flux[:],
-                        self._e_perp_hl[:],
-                        self._i_perp_hl[:],
-                        self._Qie[:],
-                        self._Qei[:],
-                        self._Qen[:],
-                        self._Qeb[:],
-                        self._Qcx[:],
-                        self._Qbeam[:],
-                        self._div_v_elec[:],
-                        self._div_v_ions[:],
-                    ) = self.calc_heat_terms(
-                        self._ne,
-                        self._nn,
-                        self._Te,
-                        self._Ti,
-                        self._v_plasma,
-                    )
                 self.update_results(i, j)
                 if i % 5000 == 0 or i == t - 1:
                     print(f"Step {i+1}/{t}:")
@@ -1016,3 +993,7 @@ class LAPDSim:
             The calculated pump rate in cm^-3/s.
         """
         return lps * 1e3 / chamber_vol
+
+    def get_config(self):
+        """Return copies of the input dictionary and flags used for this simulation."""
+        return dict(self._input_dict), dict(self._flags)
