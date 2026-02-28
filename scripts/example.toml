@@ -1,0 +1,77 @@
+# Example LAPDSim configuration file
+# Load with: d, flags = load_config("example.toml")
+# Any key omitted here falls back to the template default in _sim3.py.
+
+# ── Simulation grid ────────────────────────────────────────────────────────────
+[params]
+cells    = 3        # Number of spatial cells along the plasma column
+gas_type = "He"     # Gas species ("He" only currently)
+
+# ── Initial conditions ─────────────────────────────────────────────────────────
+ne0         = 1e9   # Initial electron density [cm^-3]
+nn0         = 5e12  # Initial neutral density [cm^-3]
+Source_nn0  = 2e13  # Neutral density at source boundary [cm^-3]
+Twin_nn0    = 2e13  # Neutral density at twin-cathode boundary [cm^-3]
+Te0         = 0.1   # Initial electron temperature [eV]
+Ti0         = 0.1   # Initial ion temperature [eV]
+Tn_fit      = 0.1   # Neutral temperature used in reaction-rate fits [eV]
+
+# ── Machine geometry ───────────────────────────────────────────────────────────
+Lm  = 1800  # Machine length [cm]
+Rm  = 50    # Machine radius [cm]
+Lp  = 1800  # Plasma column length [cm]
+Rp  = 18    # Plasma column radius [cm]
+Rhf = 50    # Radial heat-flux gradient scale length [cm]
+Bz0 = 1500  # Axial magnetic field [G]
+
+# ── Discharge parameters ───────────────────────────────────────────────────────
+Vd          = 100   # Discharge voltage [V]
+Id          = 2500  # Discharge current [A]
+Twin_Vd     = 100   # Twin-cathode discharge voltage [V]
+Twin_Id     = 2500  # Twin-cathode discharge current [A]
+anode_transparency = 1.0   # Anode mesh transparency (0–1)
+tau_I_on    = 0.001 # Beam current rise time constant [s]
+
+# ── Gas / pumping ──────────────────────────────────────────────────────────────
+S_gp      = 2000  # Gas-puff source rate [cm^-3 s^-1]
+Twin_S_gp = 2000  # Twin-cathode gas-puff source rate [cm^-3 s^-1]
+S_pump_L  = 4000  # Left pump sink rate [L/s]
+S_pump_R  = 4000  # Right pump sink rate [L/s]
+
+# ── Timing ─────────────────────────────────────────────────────────────────────
+cycles   = 1      # Number of discharge cycles
+d_off    = 20e-3  # Discharge turn-off time [s]
+end      = 21e-3  # Simulation end time [s]
+dt_main  = 3e-8   # Timestep during discharge [s]
+dt_after = 1e-7   # Timestep during afterglow [s]
+
+# ── Transport scaling factors ──────────────────────────────────────────────────
+b_epara   = 1.0  # Electron parallel heat conduction
+b_ipara   = 1.0  # Ion parallel heat conduction
+b_eperp   = 1.0  # Electron perpendicular heat loss
+b_iperp   = 1.0  # Ion perpendicular heat loss
+b_ioniz   = 1.0  # Ionization source
+b_rec_rad = 1.0  # Radiative recombination sink
+b_rec_3b  = 1.0  # Three-body recombination sink
+b_Qcx    = 1.0   # Charge-exchange cooling
+b_source  = 1.0  # Beam source heating
+b_Qie    = 1.0   # Ion-electron energy exchange
+b_Qei    = 1.0   # Electron-ion energy exchange
+b_Qen    = 1.0   # Electron-neutral cooling
+
+# ── Physics flags ──────────────────────────────────────────────────────────────
+[flags]
+Plasma       = true   # Enable plasma (electron/ion) equations
+TwinCathode  = false  # Enable second cathode at far end
+Velocity     = false  # Enable parallel flow velocity equation
+breakdown_vel = true  # Use diffusive particle flux during breakdown phase
+                      # (set false to test advective flux throughout)
+eperp        = true   # Electron perpendicular heat loss
+iperp        = true   # Ion perpendicular heat loss
+icool        = true   # Ion cooling via inelastic collisions
+ncool        = true   # Neutral cooling
+cx           = true   # Charge-exchange energy loss
+icool_recomb = false  # Include recombination channel in ion cooling
+mit_el       = false  # MIT electron model
+C_imp        = false  # Carbon impurity cooling (not yet implemented)
+O_imp        = false  # Oxygen impurity cooling (not yet implemented)
