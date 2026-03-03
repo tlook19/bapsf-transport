@@ -42,8 +42,10 @@ S_pump_R  = 4000  # Right pump sink rate [L/s]
 cycles   = 1      # Number of discharge cycles
 d_off    = 20e-3  # Discharge turn-off time [s]
 end      = 21e-3  # Simulation end time [s]
-dt_main  = 3e-8   # Timestep during discharge [s]
-dt_after = 1e-7   # Timestep during afterglow [s]
+dt_main  = 3e-8   # Max timestep during discharge [s] (also initial h for adaptive)
+dt_after = 1e-7   # Max timestep during afterglow [s] (also initial h for adaptive)
+rtol     = 1e-3   # Relative tolerance for adaptive stepping
+h_min    = 1e-12  # Minimum allowed step size [s]
 
 # ── Transport scaling factors ──────────────────────────────────────────────────
 b_epara   = 1.0  # Electron parallel heat conduction
@@ -66,6 +68,7 @@ TwinCathode  = false  # Enable second cathode at far end
 Velocity     = false  # Enable parallel flow velocity equation
 breakdown_vel = true  # Use diffusive particle flux during breakdown phase
                       # (set false to test advective flux throughout)
+adaptive     = false  # Dormand-Prince RK45 adaptive stepping (true/false)
 eperp        = true   # Electron perpendicular heat loss
 iperp        = true   # Ion perpendicular heat loss
 icool        = true   # Ion cooling via inelastic collisions
