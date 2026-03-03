@@ -18,12 +18,13 @@ from cablp.vars._cons import (
     m_He_cgs,
     ev_to_erg,
     m_p_cgs,
+    m_e_cgs,
 )
 from cablp.funcs._fits import rate_coeff
 from cablp.funcs._cross import alpha_3, alpha_r, He_EII_cross
 from cablp.vars._coeff import aHeI, aHeII, a_11s
 from cablp.vars._cons import I_ion, I_Ry
-from cablp.funcs._plasmaparams import v_ion_speed, time_elec_coll, c_log
+from cablp.funcs._plasmaparams import v_ion_speed, v_thm_e, time_elec_coll, c_log
 
 fit_coeff = [1.3950030050791237e-05, 13.62996440158007]
 
@@ -32,8 +33,8 @@ input_dict_template = {
     "ne0": 1e9,
     "Tn_fit": 0.1,  # Neutral temperature for reaction rate fits
     "nn0": 5e12,
-    "Source_nn0": 2e13,
-    "Twin_nn0": 2e13,
+    "Source_nn0": 1.2e13,
+    "Twin_nn0": 1.2e13,
     "Te0": 0.1,
     "Ti0": 0.1,
     "Bz0": 1500,  # Magnetic field in gauss
@@ -44,11 +45,11 @@ input_dict_template = {
     "Rhf": 50,  # Gradient scale length of radial heat flux
     "Vd": 100,  # Discharge voltage
     "Twin_Vd": 100,
-    "Id": 2500,  # Discharge current
-    "Twin_Id": 2500,
+    "Id": 5000,  # Discharge current
+    "Twin_Id": 5000,
     "anode_transparency": 1,  # Anode transparency
-    "S_gp": 2000,  # Gas puff source rate
-    "Twin_S_gp": 2000,
+    "S_gp": 500,  # Gas puff source rate
+    "Twin_S_gp": 500,
     "S_pump_L": 4000,  # Vacuum pump sink rate
     "S_pump_R": 4000,
     "tau_I_on": 0.001,  # Time constant for beam current rise
@@ -70,11 +71,13 @@ input_dict_template = {
     "end": 21e-3,
     "dt_after": 1e-7,
     "cells": 3,
+    "rtol": 1e-3,  # relative tolerance for adaptive stepping
+    "h_min": 1e-12,  # minimum allowed step size [s]
 }
 
 input_flags_template = {
-    "eperp": True,
-    "iperp": True,
+    "eperp": False,
+    "iperp": False,
     "icool": True,
     "ncool": True,
     "cx": True,
@@ -84,8 +87,9 @@ input_flags_template = {
     "icool_recomb": False,
     "Plasma": True,
     "TwinCathode": False,
-    "Velocity": False,
+    "Velocity": True,
     "breakdown_vel": True,  # Use diffusive flux during breakdown; set False to test without
+    "adaptive": False,  # Use Dormand-Prince RK45 adaptive stepping
 }
 
 
@@ -202,7 +206,7 @@ class LAPDSim:
                 input_dict["Twin_S_gp"], 2, self._cell_vol[-1]
             )
         self._active_discharge = self._I_discharge > 0
-        self._v_beam = np.sqrt(2 * self._V_discharge * 1.60218e-12 / 6.6464731e-24)
+        self._v_beam = np.sqrt(2 * self._V_discharge * ev_to_erg / m_e_cgs)
         eps = self._V_discharge / self._I_ion
         self._beam_cross = np.zeros(self._cells)
         if self._gas_type == "He":
@@ -230,6 +234,11 @@ class LAPDSim:
         self._div_v_ions = np.zeros(self._cells)
         # self._ln_lambda = c_log(self._Te, self._ne)
         self._cathode_factor = 0.60653
+        self._rtol = input_dict.get("rtol", 1e-3)
+        self._h_min = input_dict.get("h_min", 1e-12)
+        # Per-component absolute tolerance matched to existing floor values.
+        # Shape (5, 1) broadcasts with state shape (5, cells).
+        self._atol = np.array([[1e8], [1e8], [0.01], [0.01], [1.0]])
 
     def set_time_steps(self):
         if self._d_off == 0:
@@ -291,58 +300,77 @@ class LAPDSim:
         self._S_rec_rad = np.zeros(self._cells)  # Radiative recombination sink
         self._S_rec_3b = np.zeros(self._cells)  # Three-body recombination sink
         self._S_ion_beam = np.zeros(self._cells)  # Beam ionization source
-        self._densities = np.zeros((self._cycles * self._cyclelength, 3, self._cells))
-        self._densities[0] = np.array([self._ne[:], self._nn[:], self._n_beam[:]])
-        self._temperatures = np.zeros(
-            (self._cycles * self._cyclelength, 2, self._cells)
-        )
-        self._temperatures[0] = np.array([self._Te[:], self._Ti[:]])
-        self._density_terms = np.zeros(
-            (self._cycles * self._cyclelength, 6, self._cells)
-        )
-        self._heat_terms = np.zeros((self._cycles * self._cyclelength, 12, self._cells))
-        self._velocities = np.zeros((self._cycles * self._cyclelength, 1, self._cells))
-        # self._velocity_terms = np.zeros((self._cycles * self._cyclelength, 3))
-        self._synthetic = np.zeros(
-            (self._cycles * self._cyclelength, 3)
-        )  # Placeholder for synthetic diagnostics
+        # Dynamic lists — converted to arrays by _finalize_results()
+        self._time_list = []
+        self._densities_list = []
+        self._temperatures_list = []
+        self._density_terms_list = []
+        self._heat_terms_list = []
+        self._velocities_list = []
+        self._synthetic_list = []
+        self._primary_mfp_list = []
+        self._bulk_mfp_list = []
 
-    def update_results(self, i, j):
-        self._densities[i + j * self._cyclelength] = np.array(
-            [self._ne[:], self._nn[:], self._n_beam[:]]
+    def update_results(self, t):
+        self._time_list.append(t)
+        self._densities_list.append(np.array([self._ne, self._nn, self._n_beam]))
+        self._temperatures_list.append(np.array([self._Te, self._Ti]))
+        self._density_terms_list.append(
+            np.array(
+                [
+                    self._Ne_flux,
+                    self._Nn_flux,
+                    self._S_ion_bulk,
+                    self._S_rec_rad,
+                    self._S_rec_3b,
+                    self._S_ion_beam,
+                ]
+            )
         )
-        self._temperatures[i + j * self._cyclelength] = np.array(
-            [self._Te[:], self._Ti[:]]
+        self._heat_terms_list.append(
+            np.array(
+                [
+                    self._e_par_flux,
+                    self._i_par_flux,
+                    self._e_perp_hl,
+                    self._i_perp_hl,
+                    self._Qie,
+                    self._Qei,
+                    self._Qen,
+                    self._Qcx,
+                    self._Qeb,
+                    self._Qbeam,
+                    self._div_v_elec,
+                    self._div_v_ions,
+                ]
+            )
         )
-        self._density_terms[i + j * self._cyclelength] = np.array(
-            [
-                self._Ne_flux[:],
-                self._Nn_flux[:],
-                self._S_ion_bulk[:],
-                self._S_rec_rad[:],
-                self._S_rec_3b[:],
-                self._S_ion_beam[:],
-            ]
-        )
-        self._heat_terms[i + j * self._cyclelength] = np.array(
-            [
-                self._e_par_flux[:],
-                self._i_par_flux[:],
-                self._e_perp_hl[:],
-                self._i_perp_hl[:],
-                self._Qie[:],
-                self._Qei[:],
-                self._Qen[:],
-                self._Qcx[:],
-                self._Qeb[:],
-                self._Qbeam[:],
-                self._div_v_elec[:],
-                self._div_v_ions[:],
-            ]
-        )
-        self._velocities[i + j * self._cyclelength] = np.array([self._v_plasma[:]])
-        self._synthetic[i + j * self._cyclelength] = self._ne * np.sqrt(self._Te)
-        # Placeholder for synthetic diagnostics
+        self._velocities_list.append(np.array([self._v_plasma]))
+        self._synthetic_list.append(self._ne * np.sqrt(self._Te))
+        if self._flags["Plasma"]:
+            tau_e = time_elec_coll(self._Te, self._ne, self._ln_lambda)
+            primary_mfp = np.zeros(self._cells)
+            primary_mfp[0] = self._v_beam[0] * tau_e[0] / self._L_plasma[0]
+            if self._flags["TwinCathode"]:
+                primary_mfp[-1] = self._v_beam[-1] * tau_e[-1] / self._L_plasma[-1]
+            bulk_mfp = v_thm_e(self._Te) * tau_e / self._L_plasma
+        else:
+            primary_mfp = np.zeros(self._cells)
+            bulk_mfp = np.zeros(self._cells)
+        self._primary_mfp_list.append(primary_mfp)
+        self._bulk_mfp_list.append(bulk_mfp)
+
+    def _finalize_results(self):
+        """Convert accumulated result lists to NumPy arrays after simulation."""
+        self._time = np.array(self._time_list)
+        self._densities = np.array(self._densities_list)  # (n, 3, cells)
+        self._temperatures = np.array(self._temperatures_list)  # (n, 2, cells)
+        self._density_terms = np.array(self._density_terms_list)  # (n, 6, cells)
+        self._heat_terms = np.array(self._heat_terms_list)  # (n, 12, cells)
+        self._velocities = np.array(self._velocities_list)  # (n, 1, cells)
+        self._synthetic = np.array(self._synthetic_list)  # (n, cells)
+        self._primary_mfp = np.array(self._primary_mfp_list)  # (n, cells)
+        self._bulk_mfp = np.array(self._bulk_mfp_list)  # (n, cells)
 
     def calc_density_terms(
         self,
@@ -413,7 +441,9 @@ class LAPDSim:
             Nn_flux[-1] = -Ne_flux[-1] * self._Rsq_ratio[-1]
         denom = self._L_partflux[:-1] + self._L_partflux[1:]
         if self._flags["Plasma"]:
-            if self._flags["Velocity"] and not (self._breakdown and self._flags["breakdown_vel"]):
+            if self._flags["Velocity"] and not (
+                self._breakdown and self._flags["breakdown_vel"]
+            ):
                 ne_b = (ne[:-1] + ne[1:]) / 2
                 v_b = (v_plasma[:-1] + v_plasma[1:]) / 2
                 neflux = 2 * ne_b * v_b / denom
@@ -828,24 +858,148 @@ class LAPDSim:
             ) = self.calc_heat_terms(ne, nn, Te, Ti, v_plasma)
         return ne, nn, Te, Ti, v_plasma
 
+    def _rkf45_step(self, a):
+        """
+        One Dormand-Prince RK45 adaptive step.
+
+        Uses ``self._h`` as the trial step size.  Returns
+        ``((ne, nn, Te, Ti, v_plasma), h_next, accepted)``.
+        Guardrails and diagnostics are stored only on accept.
+        The caller is responsible for retrying with the returned ``h_next``
+        when ``accepted`` is False.
+        """
+        h = self._h
+
+        # ── Dormand-Prince stages ──────────────────────────────────────────
+        k1 = self._dstep(a)
+        k2 = self._dstep(a + h * (1 / 5 * k1))
+        k3 = self._dstep(a + h * (3 / 40 * k1 + 9 / 40 * k2))
+        k4 = self._dstep(a + h * (44 / 45 * k1 - 56 / 15 * k2 + 32 / 9 * k3))
+        k5 = self._dstep(
+            a
+            + h
+            * (
+                19372 / 6561 * k1
+                - 25360 / 2187 * k2
+                + 64448 / 6561 * k3
+                - 212 / 729 * k4
+            )
+        )
+        k6 = self._dstep(
+            a
+            + h
+            * (
+                9017 / 3168 * k1
+                - 355 / 33 * k2
+                + 46732 / 5247 * k3
+                + 49 / 176 * k4
+                - 5103 / 18656 * k5
+            )
+        )
+
+        # ── 5th-order solution ─────────────────────────────────────────────
+        y5 = a + h * (
+            35 / 384 * k1
+            + 500 / 1113 * k3
+            + 125 / 192 * k4
+            - 2187 / 6784 * k5
+            + 11 / 84 * k6
+        )
+
+        # ── k7 for error estimate (FSAL) ───────────────────────────────────
+        k7 = self._dstep(y5)
+
+        # ── Error vector (difference between 5th and 4th order) ───────────
+        err = h * (
+            71 / 57600 * k1
+            - 71 / 16695 * k3
+            + 71 / 1920 * k4
+            - 17253 / 339200 * k5
+            + 22 / 525 * k6
+            - 1 / 40 * k7
+        )
+
+        # ── Mixed-tolerance error norm ─────────────────────────────────────
+        scale = self._atol + self._rtol * np.abs(a)
+        err_norm = np.sqrt(np.mean((err / scale) ** 2))
+
+        # ── Step size control (I-controller, factor clamped to [0.2, 5]) ──
+        factor = min(5.0, max(0.2, 0.9 * err_norm ** (-0.2))) if err_norm > 0 else 5.0
+        h_next = h * factor
+
+        accepted = err_norm <= 1.0 or h <= self._h_min
+
+        if accepted:
+            ne, nn, Te, Ti, v_plasma = y5
+            if self._flags["Plasma"]:
+                np.clip(Ti, 0.01, 100, out=Ti)
+                np.clip(Te, 0.01, 100, out=Te)
+                np.maximum(ne, 1e8, out=ne)
+                np.maximum(nn, 1e8, out=nn)
+            if self._flags["Velocity"]:
+                c_s_max = np.max(v_ion_speed(Te, self._mu))
+                np.clip(v_plasma, -c_s_max, c_s_max, out=v_plasma)
+            if self._flags["Plasma"]:
+                self._A_ion_beam = self._n_beam_ion * nn
+                self._ln_lambda = c_log(Te, ne)
+            (
+                self._Ne_flux,
+                self._Nn_flux,
+                self._S_ion_bulk,
+                self._S_rec_rad,
+                self._S_rec_3b,
+                self._S_ion_beam,
+            ) = self.calc_density_terms(ne, nn, Te, v_plasma)
+            if self._flags["Plasma"]:
+                (
+                    self._e_par_flux,
+                    self._i_par_flux,
+                    self._e_perp_hl,
+                    self._i_perp_hl,
+                    self._Qie,
+                    self._Qei,
+                    self._Qen,
+                    self._Qeb,
+                    self._Qcx,
+                    self._Qbeam,
+                    self._div_v_elec,
+                    self._div_v_ions,
+                ) = self.calc_heat_terms(ne, nn, Te, Ti, v_plasma)
+            return (ne, nn, Te, Ti, v_plasma), h_next, True
+        else:
+            return None, h_next, False
+
     def start_simulation(self):
         self.set_time_steps()
         self.initialize_results()
         print("Starting simulation...")
-        t = self._cyclelength
         for j in range(self._cycles):
             print(f"Starting cycle {j+1}/{self._cycles}...")
             self._I_beam = np.zeros(self._cells)
             self._J_beam = np.zeros(self._cells)
             self._n_beam = np.zeros(self._cells)
             self._n_beam_ion = np.zeros(self._cells)
-            for i, time in enumerate(self._onetime):
-                if i < self._i_d_off and self._flags["Plasma"]:
+
+            t = 0.0
+            self._h = self._dt_discharge if self._d_off > 0 else self._dt_afterglow
+            _afterglow_transitioned = False
+            step_count = 0
+
+            while t < self._end * (1 - 1e-12):
+                in_discharge = (self._d_off > 0) and (t < self._d_off)
+                h_max = self._dt_discharge if in_discharge else self._dt_afterglow
+                # Cap h to not overshoot phase boundary or end time
+                if in_discharge:
+                    h_max = min(h_max, self._d_off - t)
+                h_max = min(h_max, self._end - t)
+                self._h = min(self._h, h_max)
+                if self._h < self._h_min:
+                    self._h = self._h_min
+
+                # ── Update discharge / beam state ──────────────────────────
+                if in_discharge and self._flags["Plasma"]:
                     self._discharge_on = True
-                    self._h = self._dt_discharge
-                    self._I_beam = self._I_discharge * (
-                        1 - np.exp(-time / self._tau_I_on)
-                    )
+                    self._I_beam = self._I_discharge * (1 - np.exp(-t / self._tau_I_on))
                     self._breakdown = True
                     if self._active_discharge.any() and np.all(
                         self._I_beam[self._active_discharge]
@@ -866,17 +1020,17 @@ class LAPDSim:
                         self._n_beam_ion[-1] = (
                             self._n_beam[-1] * self._beam_cross[-1] * self._v_beam[-1]
                         )
-                elif i < self._i_d_off and not self._flags["Plasma"]:
+                elif in_discharge and not self._flags["Plasma"]:
                     self._discharge_on = True
-                    self._h = self._dt_discharge
                 elif self._afterlglow:
                     self._discharge_on = False
-                    self._h = self._dt_afterglow
-                    if i == self._i_d_off:  # zero beam quantities on discharge→afterglow transition
+                    if not _afterglow_transitioned:
                         self._I_beam[:] = 0
                         self._J_beam[:] = 0
                         self._n_beam[:] = 0
                         self._n_beam_ion[:] = 0
+                        _afterglow_transitioned = True
+                        self._h = self._dt_afterglow  # reset step size at transition
                 else:
                     break
 
@@ -889,19 +1043,35 @@ class LAPDSim:
                         self._v_plasma[:],
                     ]
                 )
-                (
-                    self._ne,
-                    self._nn,
-                    self._Te,
-                    self._Ti,
-                    self._v_plasma,
-                ) = self._rk4_step(a)
-                self.update_results(i, j)
-                if i % 5000 == 0 or i == t - 1:
-                    print(f"Step {i+1}/{t}:")
-                    print(f"ne= {self._ne}, nn = {self._nn}")
-                    print(f"Te = {self._Te}, Ti = {self._Ti}")
-                    # print(f"v_plasma = {self._v_plasma}")
+
+                # ── Integrate one step ─────────────────────────────────────
+                if self._flags["adaptive"]:
+                    result, h_next, accepted = self._rkf45_step(a)
+                else:
+                    result = self._rk4_step(a)
+                    h_next = self._h
+                    accepted = True
+
+                if accepted:
+                    self._ne, self._nn, self._Te, self._Ti, self._v_plasma = result
+                    t += self._h
+                    self._h = min(h_next, h_max)
+                    self.update_results(t + j * self._end)
+                    step_count += 1
+                    if step_count % 5000 == 0:
+                        print(
+                            f"  t={t * 1e3:.3f} ms  h={self._h:.2e} s  steps={step_count}"
+                        )
+                        print(f"  ne={self._ne}  nn={self._nn}")
+                        print(f"  Te={self._Te}  Ti={self._Ti}")
+                        print(
+                            f"  primary_mfp/dx={self._primary_mfp_list[-1]}"
+                            f"  bulk_mfp/dx={self._bulk_mfp_list[-1]}"
+                        )
+                else:
+                    self._h = h_next  # rejected: shrink h and retry
+
+        self._finalize_results()
         print("Simulation complete.")
 
     # def heat_balance(self, ylim=(-1e6, 1e6), discharge=True):
@@ -971,6 +1141,8 @@ class LAPDSim:
             "div_v_ions": self._heat_terms[:, 11],
             "v_plasma": self._velocities[:, 0],
             "isat": self._synthetic[:, 0],
+            "primary_mfp": self._primary_mfp,
+            "bulk_mfp": self._bulk_mfp,
         }
 
     def puff_rate(self, sccm, valves, chamber_vol):
