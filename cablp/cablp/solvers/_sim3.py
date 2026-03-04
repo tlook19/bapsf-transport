@@ -600,30 +600,20 @@ class LAPDSim:
                 en_factor
                 * self._I_beam[0]
                 * self._anode_trans
-                * self._V_discharge[0]
+                * (self._V_discharge[0] - self._p_beam[0] * self._I_ion)
                 / self._plasma_vol[0]
                 / qe_SI
                 / ne[0]
-                # - en_factor
-                # * self._p_beam[0]
-                # * self._A_ion_beam[0]
-                # * self._ion_multiplier
-                # * self._I_ion
             )
             if self._flags["TwinCathode"]:
                 Qeb[-1] = (
                     en_factor
                     * self._I_beam[-1]
                     * self._anode_trans
-                    * self._V_discharge[-1]
+                    * (self._V_discharge[-1] - self._p_beam[-1] * self._I_ion)
                     / self._plasma_vol[-1]
                     / qe_SI
                     / ne[-1]
-                    # - en_factor
-                    # * self._p_beam[-1]
-                    # * self._A_ion_beam[-1]
-                    # * self._ion_multiplier
-                    # * self._I_ion
                 )
         if self._flags["C_imp"]:
             pass  # Placeholder for carbon impurity cooling
