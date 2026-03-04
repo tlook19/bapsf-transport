@@ -98,8 +98,8 @@ def Q_en(ne, nn, Te, rk=True):
         return Q * ne
 
 
-def Q_cx_He(ne, nn, Ti, Tn, rk=True):
-    Q = nn * charge_ex_react(Ti) * (Ti - Tn)
+def Q_cx_He(ne, nn, Ti, Tn, gas_type="He", rk=True):
+    Q = nn * charge_ex_react(Ti, gas_type) * (Ti - Tn)
     if rk:
         return Q
     else:

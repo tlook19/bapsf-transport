@@ -13,6 +13,27 @@ from ..vars._cons import (
     c_cgs,
 )
 
+a215 = [
+    -7.7782130e2,
+    9.5401909e2,
+    -5.2277670e2,
+    1.5927011e2,
+    -2.9525572e1,
+    3.4130241e0,
+    -2.4055208e-1,
+    9.4651813e-3,
+    -1.5943253e-4,
+]
+
+
+def H_EII_cross(E, A=a215):
+    """
+    Hydrogen electron impact ionization cross section.
+    TODO: implement proper cross section (e.g. Lotz formula or tabulated data).
+    """
+    sigma = np.exp(np.sum([a * np.log(E) ** i for i, a in enumerate(A)]))
+    return sigma
+
 
 def He_EII_cross(eps, A):
     """
@@ -326,8 +347,10 @@ def heavy_reaction(T, E, A):
 
 
 temps = np.logspace(-1, 4, 1000)
-charge_ex = heavy_reaction(temps, 0.1, A_R531)
+_cx_He = heavy_reaction(temps, 0.1, A_R531)
+_cx_H = heavy_reaction(temps, 0.1, A_R318)
 
 
-def charge_ex_react(T):
-    return np.interp(T, temps, charge_ex)
+def charge_ex_react(T, gas_type="He"):
+    table = _cx_He if gas_type == "He" else _cx_H
+    return np.interp(T, temps, table)
