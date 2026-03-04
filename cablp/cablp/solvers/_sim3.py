@@ -1,8 +1,6 @@
 import tomllib
 import numpy as np
 from cablp.funcs._heat import (
-    IAEA_exp1,
-    IAEA_exp4,
     elec_par_heat_loss,
     ion_par_heat_loss,
     elec_perp_heat_loss,
@@ -12,7 +10,6 @@ from cablp.funcs._heat import (
 )
 from cablp.vars._cons import (
     qe_SI,
-    I_ion,
     en_factor,
     drag_factor,
     m_He_cgs,
@@ -20,13 +17,14 @@ from cablp.vars._cons import (
     m_p_cgs,
     m_e_cgs,
 )
-from cablp.funcs._fits import rate_coeff
-from cablp.funcs._cross import alpha_3, alpha_r, He_EII_cross
-from cablp.vars._coeff import aHeI, aHeII, a_11s
-from cablp.vars._cons import I_ion, I_Ry
+from cablp.funcs._fits import rate_coeff, IAEA_exp1, IAEA_exp4, IAEA_exp6
+from cablp.funcs._cross import alpha_3, alpha_r, He_EII_cross, H_EII_cross
+from cablp.vars._coeff import aHeI, aHeII, aHI, aHII, a_11s
+from cablp.vars._cons import I_ion as IE_Helium, I_Ry as IE_Hydrogen
 from cablp.funcs._plasmaparams import v_ion_speed, v_thm_e, time_elec_coll, c_log
 
-fit_coeff = [1.3950030050791237e-05, 13.62996440158007]
+He_ion_coeff = [1.3950030050791237e-05, 13.62996440158007]
+H_ion_coeff = [1e-5, 6.0]
 
 input_dict_template = {
     "gas_type": "He",
@@ -148,11 +146,13 @@ class LAPDSim:
         if self._gas_type == "He":
             self._m_gas = m_He_cgs
             self._mu = 4
-            self._I_ion = I_ion
+            self._I_ion = IE_Helium
+            self._ion_fit_coeff = He_ion_coeff
         elif self._gas_type == "H":
             self._m_gas = m_p_cgs
             self._mu = 1
-            self._I_ion = I_Ry
+            self._I_ion = IE_Hydrogen
+            self._ion_fit_coeff = H_ion_coeff
         self._ne = np.ones(self._cells) * input_dict["ne0"]
         self._nn = np.ones(self._cells) * input_dict["nn0"]
         self._nn[0] = input_dict.get("Source_nn0", self._nn[0])
@@ -213,6 +213,10 @@ class LAPDSim:
             self._beam_cross[0] = float(He_EII_cross(eps[0], a_11s))
             if self._flags["TwinCathode"]:
                 self._beam_cross[-1] = float(He_EII_cross(eps[-1], a_11s))
+        elif self._gas_type == "H":
+            self._beam_cross[0] = float(H_EII_cross(self._V_discharge[0]))
+            if self._flags["TwinCathode"]:
+                self._beam_cross[-1] = float(H_EII_cross(self._V_discharge[-1]))
         self._n_beam = np.zeros(self._cells)
         self._I_beam = np.zeros(self._cells)
         self._J_beam = np.zeros(self._cells)
@@ -239,6 +243,23 @@ class LAPDSim:
         # Per-component absolute tolerance matched to existing floor values.
         # Shape (5, 1) broadcasts with state shape (5, cells).
         self._atol = np.array([[1e8], [1e8], [0.01], [0.01], [1.0]])
+        self._print_init_summary()
+
+    def _print_init_summary(self):
+        """Print key derived quantities computed during __init__ for sanity checking."""
+        print(f"=== LAPDSim init summary ===")
+        print(f"  gas_type={self._gas_type}  mu={self._mu}  I_ion={self._I_ion:.4f} eV")
+        print(f"  ion_fit_coeff={self._ion_fit_coeff}")
+        print(f"  V_discharge={self._V_discharge}  I_discharge={self._I_discharge}")
+        print(f"  eps (V/I_ion)={self._V_discharge / self._I_ion}")
+        print(f"  v_beam={self._v_beam} cm/s")
+        print(f"  beam_cross={self._beam_cross} cm^2")
+        print(f"  plasma_cross={self._plasma_cross} cm^2")
+        print(f"  plasma_vol={self._plasma_vol} cm^3")
+        print(f"  Rsq_ratio={self._Rsq_ratio}")
+        print(f"  S_gp={self._S_gp} cm^-3 s^-1")
+        print(f"  S_pump={self._S_pump} s^-1")
+        print(f"============================")
 
     def set_time_steps(self):
         if self._d_off == 0:
@@ -310,6 +331,7 @@ class LAPDSim:
         self._synthetic_list = []
         self._primary_mfp_list = []
         self._bulk_mfp_list = []
+        self._ln_lambda_list = []
 
     def update_results(self, t):
         self._time_list.append(t)
@@ -354,11 +376,14 @@ class LAPDSim:
             if self._flags["TwinCathode"]:
                 primary_mfp[-1] = self._v_beam[-1] * tau_e[-1] / self._L_plasma[-1]
             bulk_mfp = v_thm_e(self._Te) * tau_e / self._L_plasma
+            ln_lambda = self._ln_lambda.copy()
         else:
             primary_mfp = np.zeros(self._cells)
             bulk_mfp = np.zeros(self._cells)
+            ln_lambda = np.zeros(self._cells)
         self._primary_mfp_list.append(primary_mfp)
         self._bulk_mfp_list.append(bulk_mfp)
+        self._ln_lambda_list.append(ln_lambda)
 
     def _finalize_results(self):
         """Convert accumulated result lists to NumPy arrays after simulation."""
@@ -371,6 +396,7 @@ class LAPDSim:
         self._synthetic = np.array(self._synthetic_list)  # (n, cells)
         self._primary_mfp = np.array(self._primary_mfp_list)  # (n, cells)
         self._bulk_mfp = np.array(self._bulk_mfp_list)  # (n, cells)
+        self._ln_lambda = np.array(self._ln_lambda_list)  # (n, cells)
 
     def calc_density_terms(
         self,
@@ -386,9 +412,12 @@ class LAPDSim:
         S_rec_3b = np.zeros(self._cells)
         if self._flags["Plasma"]:
             self._p_beam = self._calc_beam_prob(Te, ne, nn)
-            if self._gas_type == "He":
+            if self._gas_type in ("He", "H"):
                 S_ion_bulk = (
-                    self._b_ioniz * ne * nn * rate_coeff(Te, self._I_ion, *fit_coeff)
+                    self._b_ioniz
+                    * ne
+                    * nn
+                    * rate_coeff(Te, self._I_ion, *self._ion_fit_coeff)
                 )
                 S_ion_beam[0] = (
                     self._A_ion_beam[0] * self._p_beam[0] * self._ion_multiplier
@@ -397,6 +426,8 @@ class LAPDSim:
                     S_ion_beam[-1] = (
                         self._A_ion_beam[-1] * self._p_beam[-1] * self._ion_multiplier
                     )
+            # NOTE: alpha_r and alpha_3 are approximate power-law fits used for both species.
+            # For helium, replace with better species-specific recombination rates when available.
             S_rec_rad = self._b_rec_rad * ne * ne * alpha_r(Te)
             S_rec_3b = self._b_rec_3b * ne * ne * ne * alpha_3(Te)
         elif not self._flags["Plasma"]:
@@ -543,55 +574,46 @@ class LAPDSim:
             div_v = self._calc_div_v(Te, v_plasma)
             div_v_elec = -en_factor * Te * div_v
             div_v_ions = -en_factor * Ti * div_v
-        if self._gas_type == "He":
-            if self._flags["icool"]:
-                Qei = np.array(
-                    [
-                        self._b_Qei
-                        * en_factor
-                        * IAEA_exp4(Te[i], aHeII, recomb=self._flags["icool_recomb"])
-                        * ne[i]
-                        for i in range(self._cells)
-                    ]
+        if self._flags["icool"]:
+            if self._gas_type == "He":
+                Qei = (
+                    self._b_Qei
+                    * en_factor
+                    * IAEA_exp4(Te, aHeII, recomb=self._flags["icool_recomb"])
+                    * ne
                 )
-            if self._flags["ncool"]:
-                Qen = np.array(
-                    [
-                        self._b_Qen * en_factor * IAEA_exp1(Te[i], aHeI) * nn[i]
-                        for i in range(self._cells)
-                    ]
-                )
-            if self._flags["cx"]:
-                Qcx = self._b_Qcx * en_factor * Q_cx_He(ne, nn, Ti, self._Tn_fit)
+            else:
+                Qei = self._b_Qei * en_factor * IAEA_exp6(Te, aHII) * ne
+        if self._flags["ncool"]:
+            if self._gas_type == "He":
+                Qen = self._b_Qen * en_factor * IAEA_exp1(Te, aHeI) * nn
+            else:  # H
+                Qen = self._b_Qen * en_factor * IAEA_exp1(Te, aHI) * nn
+        if self._flags["cx"]:
+            Qcx = (
+                self._b_Qcx
+                * en_factor
+                * Q_cx_He(ne, nn, Ti, self._Tn_fit, gas_type=self._gas_type)
+            )
         if self._discharge_on:
             Qeb[0] = (
                 en_factor
                 * self._I_beam[0]
                 * self._anode_trans
-                * self._V_discharge[0]
+                * (self._V_discharge[0] - self._p_beam[0] * self._I_ion)
                 / self._plasma_vol[0]
                 / qe_SI
                 / ne[0]
-                # - en_factor
-                # * self._p_beam[0]
-                # * self._A_ion_beam[0]
-                # * self._ion_multiplier
-                # * self._I_ion
             )
             if self._flags["TwinCathode"]:
                 Qeb[-1] = (
                     en_factor
                     * self._I_beam[-1]
                     * self._anode_trans
-                    * self._V_discharge[-1]
+                    * (self._V_discharge[-1] - self._p_beam[-1] * self._I_ion)
                     / self._plasma_vol[-1]
                     / qe_SI
                     / ne[-1]
-                    # - en_factor
-                    # * self._p_beam[-1]
-                    # * self._A_ion_beam[-1]
-                    # * self._ion_multiplier
-                    # * self._I_ion
                 )
         if self._flags["C_imp"]:
             pass  # Placeholder for carbon impurity cooling
@@ -1068,6 +1090,7 @@ class LAPDSim:
                             f"  primary_mfp/dx={self._primary_mfp_list[-1]}"
                             f"  bulk_mfp/dx={self._bulk_mfp_list[-1]}"
                         )
+                        print(f"  ln_lambda={self._ln_lambda_list[-1]}")
                 else:
                     self._h = h_next  # rejected: shrink h and retry
 
@@ -1143,6 +1166,7 @@ class LAPDSim:
             "isat": self._synthetic[:, 0],
             "primary_mfp": self._primary_mfp,
             "bulk_mfp": self._bulk_mfp,
+            "ln_lambda": self._ln_lambda,
         }
 
     def puff_rate(self, sccm, valves, chamber_vol):
