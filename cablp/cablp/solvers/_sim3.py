@@ -65,9 +65,9 @@ input_dict_template = {
     "b_Qen": 1.0,  # Scaling factor for electron-neutral cooling
     "cycles": 1,
     "d_off": 20e-3,
-    "dt_main": 3e-8,
-    "end": 21e-3,
-    "dt_after": 1e-7,
+    "dt_main": 1e-6,
+    "end": 25e-3,
+    "dt_after": 1e-5,
     "cells": 3,
     "rtol": 1e-3,  # relative tolerance for adaptive stepping
     "h_min": 1e-12,  # minimum allowed step size [s]
@@ -87,7 +87,7 @@ input_flags_template = {
     "TwinCathode": False,
     "Velocity": True,
     "breakdown_vel": True,  # Use diffusive flux during breakdown; set False to test without
-    "adaptive": False,  # Use Dormand-Prince RK45 adaptive stepping
+    "adaptive": True,  # Use Dormand-Prince RK45 adaptive stepping
 }
 
 
