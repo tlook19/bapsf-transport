@@ -140,20 +140,54 @@ def _plot_2d(results, params, flags, z_pos, z_convention, save_dir):
         ax.set_yscale(yscale)
         return fig, ax
 
-    def _lines(ax, arr):
+    _LEGEND_KW = dict(loc="upper left", bbox_to_anchor=(1.01, 1), borderaxespad=0)
+
+    def _lines(ax, arr, legend=True):
         for ci in range(n_cells):
             ax.plot(t, arr[:, ci], color=colors[ci], label=labels[ci])
-        ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1), borderaxespad=0)
+        if legend:
+            ax.legend(**_LEGEND_KW)
+
+    def _autolim(ax, *arrs, t_cut=0.5):
+        """Set ylim from non-transient data (t >= t_cut ms), ignoring early spikes."""
+        mask = t >= t_cut
+        if not mask.any():
+            return
+        vals = []
+        for arr in arrs:
+            a = np.asarray(arr)
+            sub = a[mask, :].ravel() if a.ndim == 2 else a[mask].ravel()
+            finite = sub[np.isfinite(sub)]
+            if ax.get_yscale() == "log":
+                finite = finite[finite > 0]
+            if finite.size:
+                vals.append(finite)
+        if not vals:
+            return
+        all_v = np.concatenate(vals)
+        if not all_v.size:
+            return
+        if ax.get_yscale() == "log":
+            lv = np.log10(all_v)
+            span = lv.max() - lv.min()
+            margin = max(0.05 * span, 0.3)
+            ax.set_ylim(10 ** (lv.min() - margin), 10 ** (lv.max() + margin))
+        else:
+            span = all_v.max() - all_v.min()
+            margin = max(0.05 * span, abs(np.median(all_v)) * 0.05, 1e-30)
+            ax.set_ylim(all_v.min() - margin, all_v.max() + margin)
 
     # ── Electron density ──────────────────────────────────────────────────────
     fig, ax = _fig("Electron Density", r"$n_e$ [cm$^{-3}$]")
     _lines(ax, results["ne"])
+    _autolim(ax, results["ne"])
     figs["ne"] = fig
     _save(fig, "ne", save_dir)
 
     # ── Neutral density ───────────────────────────────────────────────────────
     fig, ax = _fig("Neutral Density", r"$n_n$ [cm$^{-3}$]")
     _lines(ax, results["nn"])
+    _autolim(ax, results["nn"])
     figs["nn"] = fig
     _save(fig, "nn", save_dir)
 
@@ -162,7 +196,7 @@ def _plot_2d(results, params, flags, z_pos, z_convention, save_dir):
         ion_frac = np.where(results["nn"] > 0, results["ne"] / results["nn"], np.nan)
     fig, ax = _fig("Ionisation Fraction", r"$n_e / n_n$", yscale="log")
     _lines(ax, ion_frac)
-    ax.set_ylim(1e-3, 1e3)
+    ax.set_ylim(1e-3, 1e3)           # fixed symmetric bounds (overrides autolim)
     ax.axhline(1.0, color="lightgray", lw=1.0, zorder=0)
     figs["ion_ratio"] = fig
     _save(fig, "ion_ratio", save_dir)
@@ -170,12 +204,14 @@ def _plot_2d(results, params, flags, z_pos, z_convention, save_dir):
     # ── Electron temperature ──────────────────────────────────────────────────
     fig, ax = _fig("Electron Temperature", r"$T_e$ [eV]")
     _lines(ax, results["Te"])
+    _autolim(ax, results["Te"])
     figs["Te"] = fig
     _save(fig, "Te", save_dir)
 
     # ── Ion temperature ───────────────────────────────────────────────────────
     fig, ax = _fig("Ion Temperature", r"$T_i$ [eV]")
     _lines(ax, results["Ti"])
+    _autolim(ax, results["Ti"])
     figs["Ti"] = fig
     _save(fig, "Ti", save_dir)
 
@@ -191,12 +227,31 @@ def _plot_2d(results, params, flags, z_pos, z_convention, save_dir):
 
     Qen_W = results["Qen"] * results["ne"] * cell_vol * _qe_SI
     Qen_W = np.where(Qen_W > 0, Qen_W, np.nan)
+    Qen_total = np.nansum(Qen_W, axis=1)
+    Qen_total = np.where(Qen_total > 0, Qen_total, np.nan)
 
-    fig, ax = _fig("Neutral Cooling Power (Qen)", "Power [W]", yscale="log")
-    _lines(ax, Qen_W)
+    fig, ax = _fig("Electron Cooling by Neutral Radiation", "Power [W]", yscale="log")
+    _lines(ax, Qen_W, legend=False)
+    ax.plot(t, Qen_total, color="black", lw=2.0, ls="--", label="Total")
+    ax.legend(**_LEGEND_KW)
+    _autolim(ax, Qen_W, Qen_total)
     ax.set_ylim(bottom=1e3)
     figs["Qen_power"] = fig
     _save(fig, "Qen_power", save_dir)
+
+    # ── Ion power loss to charge exchange (Qcx) ───────────────────────────────
+    Qcx_W = np.abs(results["Qcx"]) * results["ne"] * cell_vol * _qe_SI
+    Qcx_W = np.where(Qcx_W > 0, Qcx_W, np.nan)
+    Qcx_total = np.nansum(Qcx_W, axis=1)
+    Qcx_total = np.where(Qcx_total > 0, Qcx_total, np.nan)
+
+    fig, ax = _fig("Ion Power Loss to Charge Exchange", "Power [W]", yscale="log")
+    _lines(ax, Qcx_W, legend=False)
+    ax.plot(t, Qcx_total, color="black", lw=2.0, ls="--", label="Total")
+    ax.legend(**_LEGEND_KW)
+    _autolim(ax, Qcx_W, Qcx_total)
+    figs["Qcx_power"] = fig
+    _save(fig, "Qcx_power", save_dir)
 
     # ── Power balance ─────────────────────────────────────────────────────────
     # Normalise each term (summed over cells) to input power.
@@ -212,24 +267,28 @@ def _plot_2d(results, params, flags, z_pos, z_convention, save_dir):
         total = np.abs(results[key]).sum(axis=1)
         return np.where(total > 0, total / input_power, np.nan)
 
+    _pb_fracs = [_frac(k) for k in ("e_par_flux", "Qie", "Qei", "Qen", "Qeb", "Qcx")]
     fig, ax = _fig("Power Balance (fraction of input)", "Fraction of Input Power", yscale="log")
-    ax.plot(t, _frac("e_par_flux"), label=r"$e$-par flux", lw=1.5)
-    ax.plot(t, _frac("Qie"), label=r"$Q_{ie}$", lw=1.5)
-    ax.plot(t, _frac("Qei"), label=r"$Q_{ei}$", lw=1.5)
-    ax.plot(t, _frac("Qen"), label=r"$Q_{en}$", lw=1.5)
-    ax.plot(t, _frac("Qeb"), label=r"$Q_{eb}$", lw=1.5)
-    ax.plot(t, _frac("Qcx"), label=r"$Q_{cx}$", lw=1.5)
-    ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1), borderaxespad=0)
+    ax.plot(t, _pb_fracs[0], label=r"$e$-par flux", lw=1.5)
+    ax.plot(t, _pb_fracs[1], label=r"$Q_{ie}$", lw=1.5)
+    ax.plot(t, _pb_fracs[2], label=r"$Q_{ei}$", lw=1.5)
+    ax.plot(t, _pb_fracs[3], label=r"$Q_{en}$", lw=1.5)
+    ax.plot(t, _pb_fracs[4], label=r"$Q_{eb}$", lw=1.5)
+    ax.plot(t, _pb_fracs[5], label=r"$Q_{cx}$", lw=1.5)
+    ax.legend(**_LEGEND_KW)
+    _autolim(ax, *_pb_fracs)
     ax.set_ylim(bottom=1e-2)
     figs["power_balance"] = fig
     _save(fig, "power_balance", save_dir)
 
     # ── Ion power balance ─────────────────────────────────────────────────────
+    _ion_fracs = [_frac(k) for k in ("Qie", "Qcx", "i_par_flux")]
     fig, ax = _fig("Ion Power Balance (fraction of input)", "Fraction of Input Power", yscale="log")
-    ax.plot(t, _frac("Qie"), label=r"$Q_{io}$ (e-i exchange)", lw=1.5)
-    ax.plot(t, _frac("Qcx"), label=r"$Q_{cx}$ (charge exchange)", lw=1.5)
-    ax.plot(t, _frac("i_par_flux"), label=r"$i$-par flux (conductive)", lw=1.5)
-    ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1), borderaxespad=0)
+    ax.plot(t, _ion_fracs[0], label=r"$Q_{io}$ (e-i exchange)", lw=1.5)
+    ax.plot(t, _ion_fracs[1], label=r"$Q_{cx}$ (charge exchange)", lw=1.5)
+    ax.plot(t, _ion_fracs[2], label=r"$i$-par flux (conductive)", lw=1.5)
+    ax.legend(**_LEGEND_KW)
+    _autolim(ax, *_ion_fracs)
     figs["ion_power_balance"] = fig
     _save(fig, "ion_power_balance", save_dir)
 
@@ -252,6 +311,7 @@ def _plot_2d(results, params, flags, z_pos, z_convention, save_dir):
             r"$I_{sat}$ [norm.]",
         )
         _lines(ax, isat_norm)
+        _autolim(ax, isat_norm)
         ax.axhline(1, color="k", lw=0.8, ls="--")
         figs["isat"] = fig
         _save(fig, "isat", save_dir)
@@ -279,8 +339,10 @@ def _plot_2d(results, params, flags, z_pos, z_convention, save_dir):
 
     # ── Parallel velocity ─────────────────────────────────────────────────────
     if "v_plasma" in results:
+        _v_plot = results["v_plasma"] / 100.0
         fig, ax = _fig("Parallel Plasma Velocity", r"$v_\parallel$ [m/s]")
-        _lines(ax, results["v_plasma"] / 100.0)
+        _lines(ax, _v_plot)
+        _autolim(ax, _v_plot)
         ax.axhline(0, color="k", lw=0.8, ls="--")
         figs["v_plasma"] = fig
         _save(fig, "v_plasma", save_dir)
@@ -294,6 +356,7 @@ def _plot_2d(results, params, flags, z_pos, z_convention, save_dir):
             mach = np.where(c_s > 0, results["v_plasma"] / c_s, np.nan)
         fig, ax = _fig("Parallel Mach Number", r"$M_\parallel = v_\parallel / c_s(T_e)$")
         _lines(ax, mach)
+        _autolim(ax, mach)
         ax.axhline(0, color="k", lw=0.8, ls="--")
         figs["mach"] = fig
         _save(fig, "mach", save_dir)
@@ -317,6 +380,7 @@ def _plot_2d(results, params, flags, z_pos, z_convention, save_dir):
                 label=f"bulk {labels[ci]}",
             )
         ax.axhline(1, color="k", lw=0.8, ls=":", label="MFP = cell length")
+        _autolim(ax, results["primary_mfp"], results["bulk_mfp"])
         ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1), borderaxespad=0, fontsize=8)
         figs["mfp"] = fig
         _save(fig, "mfp", save_dir)
@@ -325,6 +389,7 @@ def _plot_2d(results, params, flags, z_pos, z_convention, save_dir):
     if "ln_lambda" in results:
         fig, ax = _fig("Coulomb Logarithm", r"$\ln \Lambda$")
         _lines(ax, results["ln_lambda"])
+        _autolim(ax, results["ln_lambda"])
         figs["ln_lambda"] = fig
         _save(fig, "ln_lambda", save_dir)
 
