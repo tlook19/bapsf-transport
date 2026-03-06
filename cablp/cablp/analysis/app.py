@@ -97,8 +97,8 @@ PARAM_META: dict[str, dict] = {
         "label": "Discharge voltage (Vd)", "unit": "V", "default": 100.0,
         "type": "float", "group": "Discharge (Primary Cathode)",
     },
-    "Id": {
-        "label": "Discharge current (Id)", "unit": "A", "default": 5000.0,
+    "P_in": {
+        "label": "Total Input Power (P_in)", "unit": "MW", "default": 0.5,
         "type": "float", "group": "Discharge (Primary Cathode)",
     },
     "S_gp": {
@@ -329,9 +329,16 @@ def _arange_inclusive(min_val, max_val, step):
 def _format_vals(vals):
     if len(vals) == 0:
         return "[]"
+    def _fv(v):
+        if isinstance(v, str):
+            return v
+        try:
+            return f"{v:g}"
+        except (TypeError, ValueError):
+            return str(v)
     if len(vals) <= 6:
-        return "[" + ", ".join(f"{v:g}" for v in vals) + "]"
-    return f"[{vals[0]:g}, {vals[1]:g}, … {vals[-1]:g}]  ({len(vals)} values)"
+        return "[" + ", ".join(_fv(v) for v in vals) + "]"
+    return f"[{_fv(vals[0])}, {_fv(vals[1])}, … {_fv(vals[-1])}]  ({len(vals)} values)"
 
 
 # ── Widget renderers ───────────────────────────────────────────────────────────
@@ -419,17 +426,18 @@ def _render_flag_row(key: str, meta: dict) -> None:
 def _build_sweep_config():
     """
     Read session state widgets and build
-    (param_ranges, flag_ranges, fixed_params, fixed_flags, param_aliases).
+    (param_ranges, flag_ranges, fixed_params, fixed_flags, param_transforms).
 
-    param_aliases is a dict ``{alias_key: source_key}`` passed to the sweep
-    engine so that correlated params (e.g. symmetric twin) track their primary
-    values correctly, even when the primary is being swept over a range.
+    param_transforms is a callable ``(params, flags) -> params`` applied by the
+    sweep engine after building each run's full params dict.  It derives ``Id``
+    from the user-facing ``P_in`` (Total Input Power) and ``Vd``, and — in
+    symmetric twin mode — splits power and neutral sources equally between the
+    two cathodes.
     """
     param_ranges = {}
     fixed_params = {}
     flag_ranges = {}
     fixed_flags = {}
-    param_aliases = None  # set for symmetric twin mode below
 
     for key in PARAM_META:
         cfg = st.session_state.get(f"param_{key}")
@@ -461,24 +469,11 @@ def _build_sweep_config():
     else:  # Both
         flag_ranges["TwinCathode"] = [True, False]
 
+    # Whether twin symmetric splitting applies (captured for the transform closure)
+    _is_symmetric = (dc_on_off != "Off") and (dc_type == "Twin (symmetric)")
+
     if dc_on_off in ("On", "Both"):
-        if dc_type == "Twin (symmetric)":
-            # Use param_aliases so twin params track their primaries per-combination
-            # (handles range mode correctly via the sweep engine).
-            # Twin_nn0 mirrors Source_nn0 (source gas density, not initial plasma density).
-            param_aliases = {
-                "Twin_Vd": "Vd",
-                "Twin_Id": "Id",
-                "Twin_S_gp": "S_gp",
-                "Twin_nn0": "Source_nn0",
-            }
-            # Also seed fixed_params with current primary values as a fallback for
-            # fixed runs where aliases aren't needed by the sweep engine.
-            fixed_params["Twin_Vd"] = fixed_params.get("Vd", PARAM_META["Vd"]["default"])
-            fixed_params["Twin_Id"] = fixed_params.get("Id", PARAM_META["Id"]["default"])
-            fixed_params["Twin_S_gp"] = fixed_params.get("S_gp", PARAM_META["S_gp"]["default"])
-            fixed_params["Twin_nn0"] = fixed_params.get("Source_nn0", PARAM_META["Source_nn0"]["default"])
-        else:  # Asymmetric
+        if dc_type != "Twin (symmetric)":  # Asymmetric — independent twin controls
             for key in TWIN_META:
                 cfg = st.session_state.get(f"param_{key}")
                 if cfg is None:
@@ -513,7 +508,32 @@ def _build_sweep_config():
         else:  # Both
             flag_ranges[key] = [True, False]
 
-    return param_ranges, flag_ranges, fixed_params, fixed_flags, param_aliases
+    # Build param_transforms closure.
+    # Derives Id = P_in / Vd, and in symmetric twin mode splits power + sources equally.
+    def _param_transform(params, flags, _sym=_is_symmetric):
+        P_in_MW = params.pop("P_in", PARAM_META["P_in"]["default"])
+        P_in_W = P_in_MW * 1e6  # convert MW → W
+        Vd = params.get("Vd", PARAM_META["Vd"]["default"])
+        twin_active = flags.get("TwinCathode", False)
+
+        if twin_active and _sym:
+            # Split total power equally; each cathode gets half the current
+            Id = P_in_W / (2.0 * Vd)
+            params["Id"] = Id
+            params["Twin_Id"] = Id
+            params["Twin_Vd"] = Vd
+            # Split gas puff and neutral source equally between cathodes
+            params["S_gp"] = params.get("S_gp", PARAM_META["S_gp"]["default"]) / 2.0
+            params["Twin_S_gp"] = params["S_gp"]
+            params["Source_nn0"] = params.get("Source_nn0", PARAM_META["Source_nn0"]["default"]) / 2.0
+            params["Twin_nn0"] = params["Source_nn0"]
+        else:
+            # Single cathode or asymmetric twin — primary drives full P_in
+            params["Id"] = P_in_W / Vd
+
+        return params
+
+    return param_ranges, flag_ranges, fixed_params, fixed_flags, _param_transform
 
 
 def _count_combos(param_ranges, flag_ranges):
@@ -606,7 +626,7 @@ def _drain_queue():
 
 
 def _start_sweep_thread(db_path, n_workers, t_window, param_ranges, flag_ranges,
-                        fixed_params, fixed_flags, param_aliases=None, equilibrate_nn=False):
+                        fixed_params, fixed_flags, param_transforms=None, equilibrate_nn=False):
     q: queue.Queue = queue.Queue()
     state = SweepState(total=_count_combos(param_ranges, flag_ranges))
 
@@ -625,7 +645,7 @@ def _start_sweep_thread(db_path, n_workers, t_window, param_ranges, flag_ranges,
                 t_window=t_window,
                 n_workers=n_workers,
                 progress_callback=progress_cb,
-                param_aliases=param_aliases,
+                param_transforms=param_transforms,
                 equilibrate_nn=equilibrate_nn,
                 verbose=False,
                 verbose_equil=False,
@@ -662,6 +682,18 @@ def _index_to_df(idx):
             row[f"f:{k}"] = bool(arr[i]) if i < len(arr) else None
         for k, arr in idx["stats_10_20ms"].items():
             row[f"s:{k}"] = float(arr[i]) if i < len(arr) else None
+        # Derived: total input power in MW = (Id + Twin_Id) * Vd / 1e6
+        def _f0(v):
+            """Return float, treating None and NaN as 0."""
+            try:
+                f = float(v)
+                return 0.0 if np.isnan(f) else f
+            except (TypeError, ValueError):
+                return 0.0
+        Id = _f0(row.get("p:Id"))
+        Twin_Id = _f0(row.get("p:Twin_Id"))
+        Vd = _f0(row.get("p:Vd"))
+        row["P_total_MW"] = (Id + Twin_Id) * Vd / 1e6
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -734,33 +766,70 @@ def _render_configure_tab():
                     horizontal=True,
                     key="dc_type",
                     help=(
-                        "**Twin**: second cathode mirrors primary (Vd, Id, nn0, S_gp).  "
-                        "**Asymmetric**: second cathode has independent controls."
+                        "**Twin**: total power (P_in) and sources (S_gp, Source_nn0) are split "
+                        "equally between cathodes; Vd is shared.  "
+                        "**Asymmetric**: second cathode has fully independent controls."
                     ),
                 )
                 if dc_type == "Twin (symmetric)":
-                    # Show which values the twin will use (live, mirrors primary)
-                    _TWIN_MIRROR_MAP = [
-                        ("Twin_Vd", "Vd", "Vd"),
-                        ("Twin_Id", "Id", "Id"),
-                        ("Twin_S_gp", "S_gp", "S_gp"),
-                        ("Twin_nn0", "Source_nn0", "Source_nn0"),
-                    ]
+                    # Show live splitting values
+                    vd_mode = st.session_state.get("pmode_Vd", "Fixed")
+                    p_in_mode = st.session_state.get("pmode_P_in", "Fixed")
+                    s_gp_mode = st.session_state.get("pmode_S_gp", "Fixed")
+                    snn0_mode = st.session_state.get("pmode_Source_nn0", "Fixed")
+
+                    vd = float(st.session_state.get("pfixed_Vd", PARAM_META["Vd"]["default"]))
+                    p_in = float(st.session_state.get("pfixed_P_in", PARAM_META["P_in"]["default"]))
+                    s_gp = float(st.session_state.get("pfixed_S_gp", PARAM_META["S_gp"]["default"]))
+                    s_nn0 = float(st.session_state.get("pfixed_Source_nn0", PARAM_META["Source_nn0"]["default"]))
+
                     lines = []
-                    for twin_key, src_key, src_label in _TWIN_MIRROR_MAP:
-                        pmode = st.session_state.get(f"pmode_{src_key}", "Fixed")
-                        if pmode == "Range":
-                            pmin = st.session_state.get(f"pmin_{src_key}",
-                                                        PARAM_META[src_key]["default"])
-                            pmax = st.session_state.get(f"pmax_{src_key}",
-                                                        PARAM_META[src_key]["default"])
-                            lines.append(f"- **{twin_key}** = *mirrors* **{src_label}** "
-                                         f"(range {pmin:g} → {pmax:g})")
-                        else:
-                            pval = st.session_state.get(f"pfixed_{src_key}",
-                                                        PARAM_META[src_key]["default"])
-                            lines.append(f"- **{twin_key}** = {_fmt_val(pval)}  *(= {src_label})*")
-                    st.info("Twin mode — second cathode copies primary:\n" + "\n".join(lines))
+                    # Twin_Vd = Vd (unchanged)
+                    if vd_mode == "Range":
+                        vd_min = st.session_state.get("pmin_Vd", vd)
+                        vd_max = st.session_state.get("pmax_Vd", vd)
+                        lines.append(f"- **Twin_Vd** = **Vd**  *(range {vd_min:g} → {vd_max:g} V)*")
+                    else:
+                        lines.append(f"- **Twin_Vd** = {vd:g} V  *(= Vd)*")
+                    # Id = Twin_Id = P_in / (2 × Vd)
+                    if p_in_mode == "Range" or vd_mode == "Range":
+                        lines.append("- **Id** = **Twin_Id** = P_in / (2×Vd)  *(computed per combination)*")
+                    else:
+                        id_split = p_in * 1e6 / (2.0 * vd)
+                        lines.append(
+                            f"- **Id** = **Twin_Id** = {_fmt_val(id_split)} A"
+                            f"  *(= {p_in:.3f} MW / (2×{vd:g} V))*"
+                        )
+                    # S_gp split
+                    if s_gp_mode == "Range":
+                        sg_min = st.session_state.get("pmin_S_gp", s_gp)
+                        sg_max = st.session_state.get("pmax_S_gp", s_gp)
+                        lines.append(
+                            f"- **S_gp** = **Twin_S_gp** = S_gp/2"
+                            f"  *(range {sg_min/2:g} → {sg_max/2:g} per cathode)*"
+                        )
+                    else:
+                        lines.append(
+                            f"- **S_gp** = **Twin_S_gp** = {_fmt_val(s_gp/2)}"
+                            f"  *(= {_fmt_val(s_gp)}/2 per cathode)*"
+                        )
+                    # Source_nn0 split
+                    if snn0_mode == "Range":
+                        sn_min = st.session_state.get("pmin_Source_nn0", s_nn0)
+                        sn_max = st.session_state.get("pmax_Source_nn0", s_nn0)
+                        lines.append(
+                            f"- **Source_nn0** = **Twin_nn0** = Source_nn0/2"
+                            f"  *(range {sn_min/2:.3e} → {sn_max/2:.3e} per cathode)*"
+                        )
+                    else:
+                        lines.append(
+                            f"- **Source_nn0** = **Twin_nn0** = {_fmt_val(s_nn0/2)}"
+                            f"  *(= {_fmt_val(s_nn0)}/2 per cathode)*"
+                        )
+                    st.info(
+                        "Twin mode — power and sources split equally between cathodes:\n"
+                        + "\n".join(lines)
+                    )
                 else:
                     st.markdown("**Second cathode parameters:**")
                     for key, meta in TWIN_META.items():
@@ -774,7 +843,7 @@ def _render_configure_tab():
                         _render_flag_row(key, meta)
 
     # Run count + parameter summary
-    param_ranges, flag_ranges, fixed_params, fixed_flags, _aliases = _build_sweep_config()
+    param_ranges, flag_ranges, fixed_params, fixed_flags, _transforms = _build_sweep_config()
     n_combos = _count_combos(param_ranges, flag_ranges)
     st.divider()
     col1, col2 = st.columns([1, 3])
@@ -855,7 +924,7 @@ def _render_run_tab():
         ),
     )
 
-    param_ranges, flag_ranges, fixed_params, fixed_flags, param_aliases = _build_sweep_config()
+    param_ranges, flag_ranges, fixed_params, fixed_flags, param_transforms = _build_sweep_config()
     n_combos = _count_combos(param_ranges, flag_ranges)
     st.markdown(f"**Ready to run {n_combos} combination(s).**  {_describe_sweep(param_ranges, flag_ranges)}")
 
@@ -866,6 +935,9 @@ def _render_run_tab():
         if n_combos == 0:
             st.warning("No parameter combinations — adjust configuration on the Configure tab.")
         else:
+            # Clear previous sweep state so the "Sweep complete" banner resets
+            st.session_state.pop("sweep_state", None)
+            st.session_state.pop("sweep_queue", None)
             _start_sweep_thread(
                 db_path=db_path,
                 n_workers=int(n_workers),
@@ -874,7 +946,7 @@ def _render_run_tab():
                 flag_ranges=flag_ranges,
                 fixed_params=fixed_params,
                 fixed_flags=fixed_flags,
-                param_aliases=param_aliases,
+                param_transforms=param_transforms,
                 equilibrate_nn=equilibrate_nn,
             )
             st.rerun()
@@ -950,6 +1022,44 @@ def _render_explore_tab():
 
     ok_runs = [r for r, s in zip(idx["run_ids"], idx["status"]) if s == "ok"]
 
+    # Build rich display labels for run-selection dropdowns
+    def _run_display_labels(idx):
+        labels = {}
+        p = idx["params"]
+        f = idx["flags"]
+        for i, run_id in enumerate(idx["run_ids"]):
+            def _p(key, default=0.0, _i=i):
+                arr = p.get(key)
+                if arr is None or _i >= len(arr):
+                    return default
+                v = arr[_i]
+                try:
+                    return default if np.isnan(float(v)) else v
+                except (TypeError, ValueError):
+                    return v if v else default
+            def _f(key, default=False, _i=i):
+                arr = f.get(key)
+                return bool(arr[_i]) if arr is not None and _i < len(arr) else default
+
+            twin = _f("TwinCathode")
+            Id = _p("Id")
+            Vd = _p("Vd")
+            Twin_Id = _p("Twin_Id") if twin else 0.0
+            S_gp = _p("S_gp")
+            Twin_S_gp = _p("Twin_S_gp") if twin else 0.0
+            gas = _p("gas_type", "?")
+            if isinstance(gas, bytes):
+                gas = gas.decode()
+            P_MW = (Id + Twin_Id) * Vd / 1e6
+            S_gp_total = S_gp + Twin_S_gp
+            twin_str = "twin" if twin else "single"
+            labels[run_id] = (
+                f"{run_id}  |  {gas}  P={P_MW:.2f} MW  "
+                f"S_gp={S_gp_total:.0f}  [{twin_str}]"
+            )
+        return labels
+    run_labels = _run_display_labels(idx)
+
     sub_tabs = st.tabs(["📋 Table", "📊 Variance", "🔬 Inspector", "⚖️ Comparison"])
 
     # ── Table ─────────────────────────────────────────────────────────────────
@@ -961,7 +1071,17 @@ def _render_explore_tab():
             for col in df.columns
             if col.startswith(("p:", "s:"))
         }
-        st.dataframe(df, width="stretch", height=500, column_config=col_conf)
+        col_conf["P_total_MW"] = st.column_config.NumberColumn(
+            "P_total [MW]", format="%.3f"
+        )
+        # Default visible columns; all columns still available in CSV export
+        _DEFAULT_PARAMS = ["Vd", "Twin_Vd", "Id", "Twin_Id", "gas_type",
+                           "nn0", "Source_nn0", "Twin_nn0"]
+        default_cols = ["run_id", "status", "n_cells", "P_total_MW"]
+        default_cols += [f"p:{k}" for k in _DEFAULT_PARAMS if f"p:{k}" in df.columns]
+        default_cols += [c for c in df.columns if c.startswith("f:")]
+        st.dataframe(df, width="stretch", height=500, column_config=col_conf,
+                     column_order=default_cols)
         csv = df.to_csv(index=False).encode()
         st.download_button("Export CSV", csv, "run_index.csv", mime="text/csv")
 
@@ -1025,7 +1145,8 @@ def _render_explore_tab():
             st.warning("No successful runs to inspect.")
         else:
             col1, col2 = st.columns([2, 1])
-            run_id = col1.selectbox("Select run", ok_runs, key="inspect_run")
+            run_id = col1.selectbox("Select run", ok_runs, key="inspect_run",
+                                    format_func=lambda r: run_labels.get(r, r))
             z_conv = col2.radio("Z convention", ["sim", "exp"], horizontal=True, key="inspect_z")
 
             try:
@@ -1066,6 +1187,7 @@ def _render_explore_tab():
                 default=ok_runs[:min(2, len(ok_runs))],
                 max_selections=4,
                 key="compare_runs",
+                format_func=lambda r: run_labels.get(r, r),
             )
             _COMPARE_QUANTITIES = ["ne", "nn", "Te", "Ti", "v_plasma", "isat", "ln_lambda",
                                    "primary_mfp", "bulk_mfp"]
