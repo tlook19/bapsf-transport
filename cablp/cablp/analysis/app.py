@@ -1553,6 +1553,12 @@ def _render_explore_tab():
 # ── App entry ─────────────────────────────────────────────────────────────────
 
 def main():
+    try:
+        import setproctitle
+        setproctitle.setproctitle("lapd-app")
+    except ImportError:
+        pass
+
     st.set_page_config(
         page_title="LAPDSim Explorer",
         page_icon="⚡",
