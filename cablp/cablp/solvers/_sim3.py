@@ -65,9 +65,9 @@ input_dict_template = {
     "b_Qen": 1.0,  # Scaling factor for electron-neutral cooling
     "cycles": 1,
     "d_off": 20e-3,
-    "dt_main": 3e-8,
-    "end": 21e-3,
-    "dt_after": 1e-7,
+    "dt_main": 1e-6,
+    "end": 25e-3,
+    "dt_after": 1e-5,
     "cells": 3,
     "rtol": 1e-3,  # relative tolerance for adaptive stepping
     "h_min": 1e-12,  # minimum allowed step size [s]
@@ -87,7 +87,7 @@ input_flags_template = {
     "TwinCathode": False,
     "Velocity": True,
     "breakdown_vel": True,  # Use diffusive flux during breakdown; set False to test without
-    "adaptive": False,  # Use Dormand-Prince RK45 adaptive stepping
+    "adaptive": True,  # Use Dormand-Prince RK45 adaptive stepping
 }
 
 
@@ -726,7 +726,7 @@ class LAPDSim:
             else:
                 div_v[-1] = (c_s[-1] - v_face[-1]) / self._L_plasma[-1]
         else:
-            div_v[0] = (v_face[0] - c_s[0]) / self._L_plasma[0]
+            div_v[0] = (v_face[0] + c_s[0]) / self._L_plasma[0]
             div_v[-1] = (c_s[-1] - v_face[-1]) / self._L_plasma[-1]
         # Interior cells: central difference of face velocities (vectorized)
         div_v[1:-1] = (v_face[1:] - v_face[:-1]) / self._L_plasma[1:-1]
@@ -1163,7 +1163,7 @@ class LAPDSim:
             "div_v_elec": self._heat_terms[:, 10],
             "div_v_ions": self._heat_terms[:, 11],
             "v_plasma": self._velocities[:, 0],
-            "isat": self._synthetic[:, 0],
+            "isat": self._synthetic,
             "primary_mfp": self._primary_mfp,
             "bulk_mfp": self._bulk_mfp,
             "ln_lambda": self._ln_lambda,
