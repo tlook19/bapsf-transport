@@ -213,13 +213,31 @@ def update_index(db, run_id, params, flags, stats, n_cells, status="ok"):
     _append_dataset(idx, "n_cells", int(n_cells))
 
     p_grp = idx.require_group("params")
-    for k, v in params.items():
-        if isinstance(v, bool):
-            _append_dataset(p_grp, k, int(v))
-        elif isinstance(v, (int, float, np.integer, np.floating)):
-            _append_dataset(p_grp, k, float(v))
+    n_rows = idx["run_ids"].shape[0]
+    # Union of existing param keys and this run's param keys; pad missing entries with NaN
+    # (same pattern as stats) so all numeric param arrays stay aligned with run_ids.
+    all_param_keys = set(p_grp.keys()) | set(params.keys())
+    for k in all_param_keys:
+        if k in params:
+            v = params[k]
+            if isinstance(v, bool):
+                val = int(v)
+            elif isinstance(v, (int, float, np.integer, np.floating)):
+                val = float(v)
+            else:
+                val = str(v)
         else:
-            _append_dataset(p_grp, k, str(v))
+            # Key exists from a prior run but not this one — pad with NaN for numeric,
+            # empty string for string datasets.
+            if k in p_grp and p_grp[k].dtype.kind in ("S", "O", "U"):
+                val = ""
+            else:
+                val = float("nan")
+        current_len = p_grp[k].shape[0] if k in p_grp else 0
+        for _ in range(n_rows - 1 - current_len):
+            pad = "" if k in p_grp and p_grp[k].dtype.kind in ("S", "O", "U") else float("nan")
+            _append_dataset(p_grp, k, pad)
+        _append_dataset(p_grp, k, val)
 
     f_grp = idx.require_group("flags")
     for k, v in flags.items():

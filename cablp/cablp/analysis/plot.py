@@ -61,8 +61,14 @@ def _run_title(params, flags):
     Vd = params.get("Vd", 0)
     Id = params.get("Id", 0)
     cells = params.get("cells", "?")
-    twin = "twin" if flags.get("TwinCathode", False) else "single"
-    return f"{gas}  Vd={Vd:.0f} V  Id={Id:.0f} A  {cells} cells  [{twin}]"
+    twin_active = flags.get("TwinCathode", False)
+    Twin_Id = params.get("Twin_Id", 0.0) if twin_active else 0.0
+    S_gp = params.get("S_gp", 0.0)
+    Twin_S_gp = params.get("Twin_S_gp", 0.0) if twin_active else 0.0
+    P_MW = (Id + Twin_Id) * Vd / 1e6
+    S_gp_total = S_gp + Twin_S_gp
+    twin = "twin" if twin_active else "single"
+    return f"{gas}  Vd={Vd:.0f} V  P={P_MW:.2f} MW  S_gp={S_gp_total:.0f}  {cells} cells  [{twin}]"
 
 
 # ── Main entry point ──────────────────────────────────────────────────────────
@@ -214,10 +220,31 @@ def _plot_2d(results, params, flags, z_pos, z_convention, save_dir):
     figs["power_balance"] = fig
     _save(fig, "power_balance", save_dir)
 
+    # ── Isat synthetic diagnostic (normalised to t=d_off) ────────────────────
+    if "isat" in results:
+        t_norm_ms = params.get("d_off", 20e-3) * 1e3  # d_off is in seconds → ms
+        norm_idx = int(np.argmin(np.abs(t - t_norm_ms)))
+        isat_raw = results["isat"]
+        if isat_raw.ndim == 1:          # old run: only first cell was stored
+            isat_raw = isat_raw[:, np.newaxis]
+        norm_vals = isat_raw[norm_idx, :]  # (n_cells,)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            isat_norm = np.where(norm_vals != 0,
+                                 isat_raw / norm_vals[np.newaxis, :],
+                                 np.nan)
+        fig, ax = _fig(
+            rf"Normalised $I_{{sat}}$  ($n_e\sqrt{{T_e}}$, norm. at t={t_norm_ms:.0f} ms)",
+            r"$I_{sat}$ [norm.]",
+        )
+        _lines(ax, isat_norm)
+        ax.axhline(1, color="k", lw=0.8, ls="--")
+        figs["isat"] = fig
+        _save(fig, "isat", save_dir)
+
     # ── Parallel velocity ─────────────────────────────────────────────────────
     if "v_plasma" in results:
-        fig, ax = _fig("Parallel Plasma Velocity", r"$v_\parallel$ [cm/s]")
-        _lines(ax, results["v_plasma"])
+        fig, ax = _fig("Parallel Plasma Velocity", r"$v_\parallel$ [m/s]")
+        _lines(ax, results["v_plasma"] / 100.0)
         ax.axhline(0, color="k", lw=0.8, ls="--")
         figs["v_plasma"] = fig
         _save(fig, "v_plasma", save_dir)
@@ -269,8 +296,8 @@ def _plot_3d(results, params, flags, z_pos, z_convention, save_dir):
 
     T, Z = np.meshgrid(t, z_pos)  # both (n_cells, n_t)
 
-    def _surf(key, label, title, log=False):
-        vals = results[key].T  # (n_cells, n_t)
+    def _surf(key, label, title, log=False, scale=1.0):
+        vals = results[key].T * scale  # (n_cells, n_t)
         if log:
             vals = np.where(vals > 0, np.log10(vals), np.nan)
             label = f"log₁₀({label})"
@@ -298,7 +325,7 @@ def _plot_3d(results, params, flags, z_pos, z_convention, save_dir):
     _save(figs["Ti_3d"], "Ti_3d", save_dir)
 
     if "v_plasma" in results:
-        figs["v_plasma_3d"] = _surf("v_plasma", r"$v_\parallel$ [cm/s]", "Parallel Velocity")
+        figs["v_plasma_3d"] = _surf("v_plasma", r"$v_\parallel$ [m/s]", "Parallel Velocity", scale=1/100.0)
         _save(figs["v_plasma_3d"], "v_plasma_3d", save_dir)
 
     return figs
@@ -477,8 +504,8 @@ _COMPARISON_YLABELS = {
     "nn": r"$n_n$ [cm$^{-3}$]",
     "Te": r"$T_e$ [eV]",
     "Ti": r"$T_i$ [eV]",
-    "v_plasma": r"$v_\parallel$ [cm/s]",
-    "isat": r"$I_{sat}$ [A]",
+    "v_plasma": r"$v_\parallel$ [m/s]",
+    "isat": r"$I_{sat}$ [norm.]",
     "ln_lambda": r"$\ln\Lambda$",
     "primary_mfp": "Primary MFP / cell length",
     "bulk_mfp": "Bulk MFP / cell length",
@@ -527,11 +554,32 @@ def plot_run_comparison(db_path, run_ids, quantity, cell_idx=-1):
             gas = params.get("gas_type", "?")
             Vd = params.get("Vd", 0)
             Id = params.get("Id", 0)
-            twin = "twin" if flags.get("TwinCathode", False) else "single"
-            run_label = f"{run_id}  {gas} Vd={Vd:.0f}V Id={Id:.0f}A [{twin}]"
+            twin_active = flags.get("TwinCathode", False)
+            Twin_Id = params.get("Twin_Id", 0.0) if twin_active else 0.0
+            S_gp = params.get("S_gp", 0.0)
+            Twin_S_gp = params.get("Twin_S_gp", 0.0) if twin_active else 0.0
+            P_total_MW = (Id + Twin_Id) * Vd / 1e6
+            S_gp_total = S_gp + Twin_S_gp
+            twin_str = "twin" if twin_active else "single"
+            run_label = f"{run_id}  {gas}  P={P_total_MW:.2f}MW  S_gp={S_gp_total:.0f}  [{twin_str}]"
             run_labels.append((run_i, run_label))
 
             ls = _RUN_LINESTYLES[run_i % len(_RUN_LINESTYLES)]
+
+            # Scale velocity from cm/s to m/s
+            if quantity == "v_plasma":
+                data = data / 100.0
+
+            # Normalise isat per-cell to value at t=20 ms
+            if quantity == "isat":
+                if data.ndim == 1:      # old run: only first cell was stored
+                    data = data[:, np.newaxis]
+                norm_idx = int(np.argmin(np.abs(t - 20.0)))
+                norm_vals = data[norm_idx, :]
+                with np.errstate(invalid="ignore", divide="ignore"):
+                    data = np.where(norm_vals != 0,
+                                    data / norm_vals[np.newaxis, :],
+                                    np.nan)
 
             if cell_idx == -1 and data.ndim == 2:
                 # One line per cell: color = cell, linestyle = run
@@ -548,7 +596,11 @@ def plot_run_comparison(db_path, run_ids, quantity, cell_idx=-1):
     ax.set_ylabel(ylabel)
 
     cell_desc = "all cells" if cell_idx == -1 else f"cell {cell_idx}"
-    ax.set_title(f"{quantity} comparison  ({cell_desc})")
+    if quantity == "isat":
+        ax.set_title(rf"Normalised $I_{{sat}}$ comparison  ({cell_desc}, norm. at t=20 ms)")
+        ax.axhline(1, color="k", lw=0.8, ls="--")
+    else:
+        ax.set_title(f"{quantity} comparison  ({cell_desc})")
 
     if cell_idx == -1 and cells_seen:
         # Two-part legend: linestyle = run, color = cell
