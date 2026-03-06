@@ -895,7 +895,7 @@ def _render_run_tab():
     st.header("Run Parameter Sweep")
 
     col1, col2, col3 = st.columns(3)
-    db_path = col1.text_input("Database path", "sweep.h5", key="run_db_path")
+    db_path = col1.text_input("Database path", "~/lapd_data/sweep.h5", key="run_db_path")
     max_workers = psutil.cpu_count(logical=True) or 4
     n_workers = col2.number_input("Workers", min_value=1, max_value=max_workers,
                                   value=1, key="run_n_workers")
@@ -939,7 +939,7 @@ def _render_run_tab():
             st.session_state.pop("sweep_state", None)
             st.session_state.pop("sweep_queue", None)
             _start_sweep_thread(
-                db_path=db_path,
+                db_path=os.path.expanduser(db_path),
                 n_workers=int(n_workers),
                 t_window=(float(t_start), float(t_end)),
                 param_ranges=param_ranges,
@@ -997,8 +997,9 @@ def _render_run_tab():
 
 def _render_explore_tab():
     st.header("Explore Database")
-    db_path = st.text_input("Database path", "sweep.h5", key="explore_db_path")
+    db_path = st.text_input("Database path", "~/lapd_data/sweep.h5", key="explore_db_path")
 
+    db_path = os.path.expanduser(db_path)
     if not os.path.exists(db_path):
         st.warning(f"File not found: `{db_path}`")
         return

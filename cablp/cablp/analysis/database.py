@@ -38,7 +38,11 @@ def open_db(path, mode="r"):
     mode : str
         'r'  read-only, 'r+' read-write, 'a' append/create, 'w' truncate+create.
     """
-    db = h5py.File(path, mode)
+    import pathlib
+    p = pathlib.Path(path).expanduser()
+    if mode in ("w", "a"):
+        p.parent.mkdir(parents=True, exist_ok=True)
+    db = h5py.File(p, mode)
     try:
         if mode in ("w", "a"):
             db.require_group("runs")
