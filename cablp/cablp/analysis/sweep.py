@@ -431,6 +431,7 @@ def grid_sweep_parallel(
     equilibrate_nn=False,
     verbose=True,
     verbose_equil=None,
+    stop_event=None,
 ):
     """
     Run all combinations of ``param_ranges × flag_ranges`` in parallel and save to HDF5.
@@ -658,6 +659,16 @@ def grid_sweep_parallel(
                         "_equilibrate_nn": equilibrate_nn,
                     }
                     progress_callback(completed_count, n_total, run_id, "failed", callback_stats)
+
+            # After each run, check for a user-requested stop.  Cancel any not-yet-started
+            # futures (best-effort; running processes will complete naturally).
+            if stop_event is not None and stop_event.is_set():
+                for remaining_fut in future_to_run:
+                    if not remaining_fut.done():
+                        remaining_fut.cancel()
+                if verbose:
+                    print(f"  Sweep aborted by user after {completed_count}/{n_total} runs.")
+                break
 
     if verbose:
         print(f"Parallel sweep complete: {len(successful)}/{n_total} runs succeeded.")

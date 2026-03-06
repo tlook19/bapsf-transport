@@ -25,14 +25,153 @@ import streamlit as st
 matplotlib.use("Agg")  # non-interactive backend required for Streamlit
 
 # Absolute imports (relative imports fail when Streamlit runs app.py as __main__)
-from cablp.analysis.sweep import grid_sweep_parallel
-from cablp.analysis.database import open_db, load_index, list_runs, load_run, rebuild_index
+from cablp.analysis.sweep import grid_sweep_parallel, param_combinations
+from cablp.analysis.database import open_db, load_index, list_runs, load_run, rebuild_index, update_index
 from cablp.analysis.plot import (
     plot_run,
     plot_run_comparison,
     plot_sweep_variance,
     plot_sweep_heatmap,
 )
+
+# ── Sweep progress manifest (persisted alongside the HDF5 database) ───────────
+
+def _manifest_path(db_path: str) -> pathlib.Path:
+    """Return the JSON manifest path for a given database path."""
+    p = pathlib.Path(db_path).expanduser()
+    return p.parent / (p.stem + ".progress.json")
+
+
+def _save_manifest(db_path: str, data: dict) -> None:
+    """Save sweep-progress state to a JSON file next to the database."""
+    try:
+        mp = _manifest_path(db_path)
+        mp.parent.mkdir(parents=True, exist_ok=True)
+        with open(mp, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass  # non-critical; never crash the sweep
+
+
+def _load_manifest(db_path: str) -> dict | None:
+    """Load sweep-progress state.  Returns None if not found or invalid."""
+    try:
+        mp = _manifest_path(db_path)
+        if not mp.exists():
+            return None
+        with open(mp) as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+# ── Directory / file browser widget ───────────────────────────────────────────
+
+def _render_path_input(key: str, label: str, default: str, file_ext: str = ".h5") -> str:
+    """
+    Text input with a collapsible directory browser for selecting an HDF5 file path.
+    Returns the current path value (unexpanded, as the user typed it).
+    """
+    txt_key = f"_pathtxt_{key}"
+    dir_key = f"_pathdir_{key}"
+    show_key = f"_pathshow_{key}"
+
+    if txt_key not in st.session_state:
+        st.session_state[txt_key] = default
+
+    col_input, col_btn = st.columns([8, 1])
+    with col_input:
+        st.text_input(label, key=txt_key)
+    if col_btn.button("📂", key=f"_pathbtn_{key}", help="Browse filesystem"):
+        cur = pathlib.Path(st.session_state[txt_key]).expanduser()
+        # Start browse from parent dir of current path, or best fallback
+        candidates = [
+            cur.parent if (cur.suffix == file_ext or cur.is_file()) else cur,
+            pathlib.Path("~/lapd_data").expanduser(),
+            pathlib.Path.home(),
+        ]
+        for c in candidates:
+            if c.exists():
+                st.session_state[dir_key] = str(c)
+                break
+        st.session_state[show_key] = not st.session_state.get(show_key, False)
+        st.rerun()
+
+    if st.session_state.get(show_key, False):
+        cur_dir = pathlib.Path(st.session_state.get(dir_key, str(pathlib.Path.home())))
+        st.caption(f"📁 `{cur_dir}`")
+
+        parent = cur_dir.parent
+        if parent != cur_dir:
+            if st.button("⬆ Parent dir", key=f"_pathup_{key}"):
+                st.session_state[dir_key] = str(parent)
+                st.rerun()
+
+        try:
+            entries = sorted(
+                cur_dir.iterdir(),
+                key=lambda e: (e.is_file(), e.name.lower()),
+            )
+            dirs = [e for e in entries if e.is_dir() and not e.name.startswith(".")]
+            files = [e for e in entries if e.is_file() and e.suffix == file_ext]
+
+            if dirs:
+                n_cols = min(4, len(dirs))
+                dir_cols = st.columns(n_cols)
+                for ci, d in enumerate(dirs[:12]):
+                    if dir_cols[ci % n_cols].button(f"📁 {d.name}", key=f"_pd_{key}_{d.name}"):
+                        st.session_state[dir_key] = str(d)
+                        st.rerun()
+
+            for f_entry in files:
+                if st.button(f"📄 {f_entry.name}", key=f"_pf_{key}_{f_entry.name}"):
+                    st.session_state[txt_key] = str(f_entry)
+                    st.session_state[show_key] = False
+                    st.rerun()
+
+            nc1, nc2 = st.columns([5, 1])
+            new_name = nc1.text_input(
+                "New filename",
+                key=f"_pnew_{key}",
+                placeholder=f"filename{file_ext}",
+                label_visibility="collapsed",
+            )
+            if nc2.button("Use", key=f"_puse_{key}") and new_name:
+                fn = new_name if new_name.endswith(file_ext) else new_name + file_ext
+                st.session_state[txt_key] = str(cur_dir / fn)
+                st.session_state[show_key] = False
+                st.rerun()
+
+        except PermissionError:
+            st.warning("Permission denied")
+
+    return st.session_state.get(txt_key, default)
+
+
+# ── Abort-helper: mark planned-but-not-started runs as failed in the DB ────────
+
+def _mark_incomplete_as_failed(db_path: str, manifest: dict) -> None:
+    """Write a 'failed' record for every planned run_id not yet in the database."""
+    planned_ids = manifest.get("planned_run_ids", [])
+    if not planned_ids:
+        st.warning("Manifest has no planned run IDs; nothing to mark.")
+        return
+    try:
+        with open_db(db_path, mode="a") as db:
+            existing = set(list_runs(db))
+            to_mark = [rid for rid in planned_ids if rid not in existing]
+            for run_id in to_mark:
+                grp = db.require_group("runs").require_group(run_id)
+                grp.attrs["status"] = "failed"
+                grp.attrs["error"] = "Sweep was aborted before this run could execute."
+                update_index(db, run_id, {}, {}, {}, 0, status="failed")
+        if to_mark:
+            st.success(f"Marked {len(to_mark)} incomplete run(s) as failed.")
+        else:
+            st.info("All planned runs are already recorded in the database.")
+    except Exception as exc:
+        st.error(f"Failed to mark incomplete runs: {exc}")
+
 
 # ── Parameter / flag metadata ─────────────────────────────────────────────────
 # Each entry: key → {label, unit, default, type, group}
@@ -301,6 +440,8 @@ class SweepState:
     done: bool = False
     error: str = ""
     total_time_s: float = 0.0
+    db_path: str = ""
+    planned_run_ids: list = field(default_factory=list)
 
 
 # ── Session state helpers ──────────────────────────────────────────────────────
@@ -579,21 +720,44 @@ def _drain_queue():
     state: SweepState = st.session_state.get("sweep_state")
     if q is None or state is None:
         return
+    changed = False
     while True:
         try:
             msg = q.get_nowait()
         except queue.Empty:
             break
+        changed = True
         if "done" in msg:
             state.running = False
             state.done = True
             state.total_time_s = msg.get("total_time_s", 0.0)
             st.session_state["sweep_running"] = False
+            if state.db_path:
+                _save_manifest(state.db_path, {
+                    "running": False,
+                    "db_path": state.db_path,
+                    "total": state.total,
+                    "completed": state.completed,
+                    "failed": state.failed,
+                    "planned_run_ids": state.planned_run_ids,
+                    "log": state.log[-50:],
+                })
         elif "error" in msg:
             state.error = msg["error"]
             state.running = False
             state.done = True
             st.session_state["sweep_running"] = False
+            if state.db_path:
+                _save_manifest(state.db_path, {
+                    "running": False,
+                    "db_path": state.db_path,
+                    "total": state.total,
+                    "completed": state.completed,
+                    "failed": state.failed,
+                    "planned_run_ids": state.planned_run_ids,
+                    "error": state.error,
+                    "log": state.log[-50:],
+                })
         else:
             state.completed = msg.get("i", state.completed)
             state.total = msg.get("total", state.total)
@@ -624,11 +788,45 @@ def _drain_queue():
                     line += f"  equil={equil_time:.1f}s(fresh,S_gp={equil_S_gp:.0f}{twin_str})"
             state.log.append(line)
 
+    # Persist progress to manifest every time something changed
+    if changed and state.running and state.db_path:
+        _save_manifest(state.db_path, {
+            "running": True,
+            "db_path": state.db_path,
+            "total": state.total,
+            "completed": state.completed,
+            "failed": state.failed,
+            "planned_run_ids": state.planned_run_ids,
+            "log": state.log[-50:],
+        })
+
 
 def _start_sweep_thread(db_path, n_workers, t_window, param_ranges, flag_ranges,
                         fixed_params, fixed_flags, param_transforms=None, equilibrate_nn=False):
     q: queue.Queue = queue.Queue()
-    state = SweepState(total=_count_combos(param_ranges, flag_ranges))
+    stop_event = threading.Event()
+
+    # Compute all planned run IDs (for reconnect / abort marking)
+    all_combos = param_combinations(param_ranges, flag_ranges)
+    n_total = len(all_combos)
+    planned_ids = [f"run_{i:04d}" for i in range(n_total)]
+
+    state = SweepState(
+        total=n_total,
+        db_path=db_path,
+        planned_run_ids=planned_ids,
+    )
+
+    # Persist the initial manifest so reconnect works immediately
+    _save_manifest(db_path, {
+        "running": True,
+        "db_path": db_path,
+        "total": n_total,
+        "completed": 0,
+        "failed": 0,
+        "planned_run_ids": planned_ids,
+        "log": [],
+    })
 
     def progress_cb(i, total, run_id, status, stats):
         q.put({"i": i, "total": total, "run_id": run_id, "status": status, "stats": stats})
@@ -649,6 +847,7 @@ def _start_sweep_thread(db_path, n_workers, t_window, param_ranges, flag_ranges,
                 equilibrate_nn=equilibrate_nn,
                 verbose=False,
                 verbose_equil=False,
+                stop_event=stop_event,
             )
         except Exception as exc:
             q.put({"error": str(exc)})
@@ -660,6 +859,7 @@ def _start_sweep_thread(db_path, n_workers, t_window, param_ranges, flag_ranges,
     st.session_state["sweep_queue"] = q
     st.session_state["sweep_state"] = state
     st.session_state["sweep_running"] = True
+    st.session_state["sweep_stop_event"] = stop_event
     thread.start()
 
 
@@ -894,16 +1094,50 @@ def _render_configure_tab():
 def _render_run_tab():
     st.header("Run Parameter Sweep")
 
-    col1, col2, col3 = st.columns(3)
-    db_path = col1.text_input("Database path", "~/lapd_data/sweep.h5", key="run_db_path")
+    db_path = _render_path_input("run_db", "Database path", "~/lapd_data/sweep.h5")
+    db_path_exp = os.path.expanduser(db_path)
+
+    col1, col2, _col3 = st.columns(3)
     max_workers = psutil.cpu_count(logical=True) or 4
-    n_workers = col2.number_input("Workers", min_value=1, max_value=max_workers,
+    n_workers = col1.number_input("Workers", min_value=1, max_value=max_workers,
                                   value=1, key="run_n_workers")
-    with col3:
+    with col2:
         t_start = st.number_input("t_window start (ms)", min_value=0.0, value=10.0,
                                   key="run_t_start")
         t_end = st.number_input("t_window end (ms)", min_value=0.0, value=20.0,
                                 key="run_t_end")
+
+    # ── Reconnect / interrupt banner ──────────────────────────────────────────
+    already_running = st.session_state.get("sweep_running", False)
+    if not already_running:
+        manifest = _load_manifest(db_path_exp)
+        if manifest and manifest.get("running"):
+            with st.container(border=True):
+                st.warning(
+                    f"⚠ A previous sweep was interrupted.  "
+                    f"{manifest.get('completed', '?')}/{manifest.get('total', '?')} run(s) completed, "
+                    f"{manifest.get('failed', 0)} failed."
+                )
+                c1, c2, c3 = st.columns(3)
+                if c1.button("▶ Resume Sweep", help="Re-launch sweep — completed runs are automatically skipped"):
+                    # Dismiss the banner then fall through to the normal launch flow below
+                    manifest["running"] = False
+                    _save_manifest(db_path_exp, manifest)
+                    st.session_state["_resume_sweep"] = True
+                    st.rerun()
+                if c2.button("❌ Mark incomplete as failed",
+                             help="Write 'failed' records for planned runs not yet in the database"):
+                    _mark_incomplete_as_failed(db_path_exp, manifest)
+                    manifest["running"] = False
+                    _save_manifest(db_path_exp, manifest)
+                if c3.button("✕ Dismiss", help="Hide this banner without taking action"):
+                    manifest["running"] = False
+                    _save_manifest(db_path_exp, manifest)
+                    st.rerun()
+                # Show last log lines
+                last_log = manifest.get("log", [])[-5:]
+                if last_log:
+                    st.caption("Last log entries: " + " | ".join(last_log))
 
     if n_workers > 1:
         st.info(
@@ -928,8 +1162,25 @@ def _render_run_tab():
     n_combos = _count_combos(param_ranges, flag_ranges)
     st.markdown(f"**Ready to run {n_combos} combination(s).**  {_describe_sweep(param_ranges, flag_ranges)}")
 
-    already_running = st.session_state.get("sweep_running", False)
-    launch = st.button("Launch Sweep", type="primary", disabled=already_running)
+    # ── Launch / Abort buttons ─────────────────────────────────────────────────
+    btn_col1, btn_col2, _ = st.columns([2, 2, 6])
+    launch = btn_col1.button("Launch Sweep", type="primary", disabled=already_running)
+    abort_clicked = btn_col2.button(
+        "⏹ Abort Sweep",
+        type="secondary",
+        disabled=not already_running,
+        help="Signal the sweep to stop after finishing the current runs. Already-running worker processes will complete naturally.",
+    )
+
+    if abort_clicked and already_running:
+        stop_ev = st.session_state.get("sweep_stop_event")
+        if stop_ev is not None:
+            stop_ev.set()
+        st.toast("Abort signal sent — sweep will stop after current runs complete.")
+
+    if st.session_state.pop("_resume_sweep", False):
+        # User clicked "Resume Sweep" in the reconnect banner — treat like a normal launch
+        launch = True
 
     if launch and not already_running:
         if n_combos == 0:
@@ -938,8 +1189,9 @@ def _render_run_tab():
             # Clear previous sweep state so the "Sweep complete" banner resets
             st.session_state.pop("sweep_state", None)
             st.session_state.pop("sweep_queue", None)
+            st.session_state.pop("sweep_stop_event", None)
             _start_sweep_thread(
-                db_path=os.path.expanduser(db_path),
+                db_path=db_path_exp,
                 n_workers=int(n_workers),
                 t_window=(float(t_start), float(t_end)),
                 param_ranges=param_ranges,
@@ -951,7 +1203,37 @@ def _render_run_tab():
             )
             st.rerun()
 
-    # Progress display
+    # ── Tab-close warning (beforeunload) when sweep is active ─────────────────
+    if already_running:
+        st.markdown(
+            """
+            <script>
+            (function () {
+                window._lapd_sweep_running = true;
+                function _lapd_warn(e) {
+                    if (window._lapd_sweep_running) {
+                        e.preventDefault();
+                        e.returnValue = '';
+                        return '';
+                    }
+                }
+                if (!window._lapd_warn_attached) {
+                    window.addEventListener('beforeunload', _lapd_warn);
+                    window._lapd_warn_attached = true;
+                }
+            })();
+            </script>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        # Clear the flag so closing the tab no longer triggers the dialog
+        st.markdown(
+            "<script>window._lapd_sweep_running = false;</script>",
+            unsafe_allow_html=True,
+        )
+
+    # ── Progress display ───────────────────────────────────────────────────────
     if "sweep_state" in st.session_state:
         _drain_queue()
         state: SweepState = st.session_state["sweep_state"]
@@ -997,8 +1279,7 @@ def _render_run_tab():
 
 def _render_explore_tab():
     st.header("Explore Database")
-    db_path = st.text_input("Database path", "~/lapd_data/sweep.h5", key="explore_db_path")
-
+    db_path = _render_path_input("explore_db", "Database path", "~/lapd_data/sweep.h5")
     db_path = os.path.expanduser(db_path)
     if not os.path.exists(db_path):
         st.warning(f"File not found: `{db_path}`")
