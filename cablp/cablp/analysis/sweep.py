@@ -203,6 +203,7 @@ def grid_sweep(
     db_path="sweep.h5",
     t_window=(10.0, 20.0),
     param_aliases=None,
+    param_transforms=None,
     equilibrate_nn=False,
     verbose=True,
     verbose_equil=None,
@@ -228,6 +229,10 @@ def grid_sweep(
         ``{alias_key: source_key}`` pairs applied **after** building each run's
         ``params`` dict.  E.g. ``{"Twin_Vd": "Vd"}`` ensures ``Twin_Vd`` always
         equals the current ``Vd`` value, even when ``Vd`` is swept.
+    param_transforms : callable or None
+        ``(params, flags) -> params`` applied after ``param_aliases``.  Used to
+        derive computed parameters, e.g. ``Id = P_in / Vd``.  The callable
+        may modify ``params`` in-place and must return the updated dict.
     equilibrate_nn : bool
         If ``True``, run a 100-cycle plasma-off pre-simulation before each
         run to find the equilibrium neutral density.  Results are cached by
@@ -289,6 +294,10 @@ def grid_sweep(
                 for alias, source in param_aliases.items():
                     if source in params:
                         params[alias] = params[source]
+
+            # Apply param transforms (derive computed params, e.g. Id = P_in / Vd)
+            if param_transforms is not None:
+                params = param_transforms(params, flags)
 
             if verbose:
                 varied = {**p_patch, **f_patch}
@@ -418,6 +427,7 @@ def grid_sweep_parallel(
     n_workers=1,
     progress_callback=None,
     param_aliases=None,
+    param_transforms=None,
     equilibrate_nn=False,
     verbose=True,
     verbose_equil=None,
@@ -456,6 +466,10 @@ def grid_sweep_parallel(
         ``{alias_key: source_key}`` pairs applied after building each run's
         params dict.  E.g. ``{"Twin_Vd": "Vd"}`` ensures symmetric twin mode
         tracks the primary even when ``Vd`` is swept.
+    param_transforms : callable or None
+        ``(params, flags) -> params`` applied after ``param_aliases``.  Used to
+        derive computed parameters, e.g. ``Id = P_in / Vd``.  Applied before
+        dispatching to workers, so workers always receive fully-resolved params.
     equilibrate_nn : bool
         If ``True``, run a 100-cycle plasma-off pre-simulation for each
         combination (serially, before dispatch) to find the equilibrium
@@ -509,6 +523,10 @@ def grid_sweep_parallel(
             for alias, source in param_aliases.items():
                 if source in params:
                     params[alias] = params[source]
+
+        # Apply param transforms (derive computed params, e.g. Id = P_in / Vd)
+        if param_transforms is not None:
+            params = param_transforms(params, flags)
 
         equil_time = 0.0
         cache_hit = False
