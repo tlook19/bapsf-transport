@@ -1,2 +1,10 @@
 scripts/*
 !scripts/example.toml
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Data files
+*.h5
+*.hdf5
