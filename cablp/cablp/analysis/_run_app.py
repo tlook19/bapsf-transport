@@ -10,6 +10,12 @@ import subprocess
 import sys
 import pathlib
 
+try:
+    import setproctitle
+    setproctitle.setproctitle("lapd-app")
+except ImportError:
+    pass
+
 
 def main():
     app = pathlib.Path(__file__).parent / "app.py"
