@@ -162,6 +162,8 @@ def _plot_2d(results, params, flags, z_pos, z_convention, save_dir):
         ion_frac = np.where(results["nn"] > 0, results["ne"] / results["nn"], np.nan)
     fig, ax = _fig("Ionisation Fraction", r"$n_e / n_n$", yscale="log")
     _lines(ax, ion_frac)
+    ax.set_ylim(1e-3, 1e3)
+    ax.axhline(1.0, color="lightgray", lw=1.0, zorder=0)
     figs["ion_ratio"] = fig
     _save(fig, "ion_ratio", save_dir)
 
@@ -192,6 +194,7 @@ def _plot_2d(results, params, flags, z_pos, z_convention, save_dir):
 
     fig, ax = _fig("Neutral Cooling Power (Qen)", "Power [W]", yscale="log")
     _lines(ax, Qen_W)
+    ax.set_ylim(bottom=1e3)
     figs["Qen_power"] = fig
     _save(fig, "Qen_power", save_dir)
 
@@ -217,16 +220,28 @@ def _plot_2d(results, params, flags, z_pos, z_convention, save_dir):
     ax.plot(t, _frac("Qeb"), label=r"$Q_{eb}$", lw=1.5)
     ax.plot(t, _frac("Qcx"), label=r"$Q_{cx}$", lw=1.5)
     ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1), borderaxespad=0)
+    ax.set_ylim(bottom=1e-2)
     figs["power_balance"] = fig
     _save(fig, "power_balance", save_dir)
 
+    # ── Ion power balance ─────────────────────────────────────────────────────
+    fig, ax = _fig("Ion Power Balance (fraction of input)", "Fraction of Input Power", yscale="log")
+    ax.plot(t, _frac("Qie"), label=r"$Q_{io}$ (e-i exchange)", lw=1.5)
+    ax.plot(t, _frac("Qcx"), label=r"$Q_{cx}$ (charge exchange)", lw=1.5)
+    ax.plot(t, _frac("i_par_flux"), label=r"$i$-par flux (conductive)", lw=1.5)
+    ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1), borderaxespad=0)
+    figs["ion_power_balance"] = fig
+    _save(fig, "ion_power_balance", save_dir)
+
     # ── Isat synthetic diagnostic (normalised to t=d_off) ────────────────────
     if "isat" in results:
-        t_norm_ms = params.get("d_off", 20e-3) * 1e3  # d_off is in seconds → ms
-        norm_idx = int(np.argmin(np.abs(t - t_norm_ms)))
         isat_raw = results["isat"]
         if isat_raw.ndim == 1:          # old run: only first cell was stored
             isat_raw = isat_raw[:, np.newaxis]
+
+        # Full-run plot: normalise to value at d_off
+        t_norm_ms = params.get("d_off", 20e-3) * 1e3  # d_off seconds → ms
+        norm_idx = int(np.argmin(np.abs(t - t_norm_ms)))
         norm_vals = isat_raw[norm_idx, :]  # (n_cells,)
         with np.errstate(invalid="ignore", divide="ignore"):
             isat_norm = np.where(norm_vals != 0,
@@ -241,6 +256,27 @@ def _plot_2d(results, params, flags, z_pos, z_convention, save_dir):
         figs["isat"] = fig
         _save(fig, "isat", save_dir)
 
+        # Afterglow-only plot: t >= 20 ms, normalise to first point in window
+        ag_mask = t >= 20.0
+        if ag_mask.any():
+            t_ag = t[ag_mask]
+            isat_ag = isat_raw[ag_mask, :]
+            norm_vals_ag = isat_ag[0, :]
+            with np.errstate(invalid="ignore", divide="ignore"):
+                isat_ag_norm = np.where(norm_vals_ag != 0,
+                                        isat_ag / norm_vals_ag[np.newaxis, :],
+                                        np.nan)
+            fig, ax = _fig(
+                r"Afterglow $I_{sat}$ (t$\geq$20 ms, norm. at t=20 ms)",
+                r"$I_{sat}$ [norm.]",
+            )
+            for ci in range(n_cells):
+                ax.plot(t_ag, isat_ag_norm[:, ci], color=colors[ci], label=labels[ci])
+            ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1), borderaxespad=0)
+            ax.axhline(1, color="k", lw=0.8, ls="--")
+            figs["isat_afterglow"] = fig
+            _save(fig, "isat_afterglow", save_dir)
+
     # ── Parallel velocity ─────────────────────────────────────────────────────
     if "v_plasma" in results:
         fig, ax = _fig("Parallel Plasma Velocity", r"$v_\parallel$ [m/s]")
@@ -248,6 +284,19 @@ def _plot_2d(results, params, flags, z_pos, z_convention, save_dir):
         ax.axhline(0, color="k", lw=0.8, ls="--")
         figs["v_plasma"] = fig
         _save(fig, "v_plasma", save_dir)
+
+    # ── Parallel Mach number ──────────────────────────────────────────────────
+    if "v_plasma" in results and "Te" in results:
+        _gas = str(params.get("gas_type", "He")).strip().lower()
+        _mu = 4.0 if _gas in ("he", "helium") else 1.0  # He=4, H=1
+        c_s = 9.79e5 * np.sqrt(results["Te"] / _mu)  # cm/s, same units as v_plasma
+        with np.errstate(invalid="ignore", divide="ignore"):
+            mach = np.where(c_s > 0, results["v_plasma"] / c_s, np.nan)
+        fig, ax = _fig("Parallel Mach Number", r"$M_\parallel = v_\parallel / c_s(T_e)$")
+        _lines(ax, mach)
+        ax.axhline(0, color="k", lw=0.8, ls="--")
+        figs["mach"] = fig
+        _save(fig, "mach", save_dir)
 
     # ── Mean free paths ───────────────────────────────────────────────────────
     if "primary_mfp" in results and "bulk_mfp" in results:
@@ -380,10 +429,19 @@ def plot_sweep_variance(
         )
 
     # Retrieve x values
+    def _to_float_array(arr, name):
+        try:
+            return np.asarray(arr, dtype=float)
+        except (ValueError, TypeError) as exc:
+            raise ValueError(
+                f"Parameter '{name}' contains non-numeric values and cannot be "
+                f"used as an axis.  Values: {list(arr)[:5]}"
+            ) from exc
+
     if x_param in params:
-        x = np.asarray(params[x_param], dtype=float)
+        x = _to_float_array(params[x_param], x_param)
     elif x_param in flags:
-        x = np.asarray(flags[x_param], dtype=float)
+        x = _to_float_array(flags[x_param], x_param)
     else:
         raise KeyError(f"'{x_param}' not found in params or flags.")
 
@@ -397,9 +455,9 @@ def plot_sweep_variance(
 
     if hue_param is not None:
         if hue_param in params:
-            hue = np.asarray(params[hue_param], dtype=float)[ok]
+            hue = _to_float_array(params[hue_param], hue_param)[ok]
         elif hue_param in flags:
-            hue = np.asarray(flags[hue_param], dtype=float)[ok]
+            hue = _to_float_array(flags[hue_param], hue_param)[ok]
         else:
             raise KeyError(f"hue_param '{hue_param}' not found in params or flags.")
 
@@ -463,10 +521,15 @@ def plot_sweep_heatmap(
         raise KeyError(f"'{quantity}' not found in index stats.")
 
     def _get(name):
-        if name in params:
-            return np.asarray(params[name], dtype=float)
-        if name in flags:
-            return np.asarray(flags[name], dtype=float)
+        try:
+            if name in params:
+                return np.asarray(params[name], dtype=float)
+            if name in flags:
+                return np.asarray(flags[name], dtype=float)
+        except (ValueError, TypeError) as exc:
+            raise ValueError(
+                f"Parameter '{name}' contains non-numeric values and cannot be used as an axis."
+            ) from exc
         raise KeyError(f"'{name}' not found in params or flags.")
 
     ok = np.array(index["status"]) == "ok"

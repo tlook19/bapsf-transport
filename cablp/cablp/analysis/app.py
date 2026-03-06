@@ -1095,18 +1095,74 @@ def _render_explore_tab():
             ok_mask = np.array(idx["status"]) == "ok"
             param_keys = list(idx["params"].keys())
             flag_keys = list(idx["flags"].keys())
-            # Only keep keys where the value actually varies across ok runs
-            def _is_varied(arr):
-                vals = np.asarray(arr)[ok_mask]
+
+            # ── Filter controls (gas_type and TwinCathode) ────────────────────
+            # These are used only as filters, not as x/hue axis options.
+            var_filter_mask = ok_mask.copy()
+
+            _gas_vals_all = np.asarray(idx["params"].get("gas_type", []))[ok_mask]
+            _unique_gases = sorted(set(str(v) for v in _gas_vals_all)) if len(_gas_vals_all) else []
+            _tc_vals_all = np.asarray(idx["flags"].get("TwinCathode", []))[ok_mask]
+            _unique_tc = sorted(set(bool(v) for v in _tc_vals_all)) if len(_tc_vals_all) else []
+
+            filt_cols = st.columns(2)
+            if len(_unique_gases) > 1:
+                sel_gas = filt_cols[0].multiselect(
+                    "Filter gas type", _unique_gases, default=_unique_gases, key="var_gas_filter"
+                )
+                gas_arr = np.asarray(idx["params"].get("gas_type", []))
+                if len(gas_arr) == len(ok_mask):
+                    var_filter_mask &= np.array([str(v) in sel_gas for v in gas_arr])
+            if len(_unique_tc) > 1:
+                tc_labels = {True: "Twin", False: "Single"}
+                sel_tc_label = filt_cols[1].radio(
+                    "Filter cathode mode", ["All", "Single", "Twin"],
+                    horizontal=True, key="var_tc_filter"
+                )
+                tc_arr = np.asarray(idx["flags"].get("TwinCathode", []))
+                if len(tc_arr) == len(ok_mask) and sel_tc_label != "All":
+                    sel_tc_bool = sel_tc_label == "Twin"
+                    var_filter_mask &= np.array([bool(v) == sel_tc_bool for v in tc_arr])
+
+            # Only keep keys where the value actually varies across filtered ok runs
+            def _is_varied(arr, mask=var_filter_mask):
+                vals = np.asarray(arr)[mask]
                 if vals.dtype.kind in ("O", "U", "S"):
                     return len(set(str(v) for v in vals)) > 1
-                return len(np.unique(vals[~np.isnan(vals.astype(float))])) > 1 if vals.size else False
-            varied_param_keys = [k for k in param_keys if _is_varied(idx["params"][k])]
-            varied_flag_keys = [k for k in flag_keys if _is_varied(idx["flags"][k])]
+                try:
+                    fv = vals.astype(float)
+                    return len(np.unique(fv[~np.isnan(fv)])) > 1 if vals.size else False
+                except (ValueError, TypeError):
+                    return False
+
+            # Exclude gas_type and TwinCathode — they are filter-only
+            _filter_only = {"gas_type", "TwinCathode"}
+            varied_param_keys = [
+                k for k in param_keys
+                if k not in _filter_only and _is_varied(idx["params"][k])
+            ]
+            varied_flag_keys = [
+                k for k in flag_keys
+                if k not in _filter_only and _is_varied(idx["flags"][k])
+            ]
             all_keys = varied_param_keys + varied_flag_keys
 
+            # Build filtered index for plot functions
+            def _apply_mask(idx_src, mask):
+                return {
+                    "run_ids": [r for r, m in zip(idx_src["run_ids"], mask) if m],
+                    "status": [s for s, m in zip(idx_src["status"], mask) if m],
+                    "params": {k: np.asarray(v)[mask] for k, v in idx_src["params"].items()},
+                    "flags":  {k: np.asarray(v)[mask] for k, v in idx_src["flags"].items()},
+                    "stats_10_20ms": {
+                        k: np.asarray(v)[mask] for k, v in idx_src["stats_10_20ms"].items()
+                    },
+                }
+
+            filtered_idx = _apply_mask(idx, var_filter_mask)
+
             if not all_keys:
-                st.info("No varied parameters recorded in this database.")
+                st.info("No numeric varied parameters in the current selection.")
             else:
                 c1, c2, c3, c4 = st.columns(4)
                 x_param = c1.selectbox("X axis", all_keys, key="var_x")
@@ -1118,7 +1174,7 @@ def _render_explore_tab():
                 try:
                     if plot_type == "Scatter":
                         fig = plot_sweep_variance(
-                            idx, x_param,
+                            filtered_idx, x_param,
                             hue_param=None if hue_param == "None" else hue_param,
                             quantity=quantity,
                         )
@@ -1131,7 +1187,7 @@ def _render_explore_tab():
                         else:
                             y_param = st.selectbox("Y axis (heatmap)", y_param_opts, key="var_y")
                             qty_key = f"{quantity}_var"
-                            fig = plot_sweep_heatmap(idx, x_param, y_param, quantity=qty_key)
+                            fig = plot_sweep_heatmap(filtered_idx, x_param, y_param, quantity=qty_key)
                             st.pyplot(fig, width="stretch")
                             plt.close(fig)
                 except Exception as exc:
