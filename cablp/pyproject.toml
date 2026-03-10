@@ -9,15 +9,8 @@ requires-python = ">=3.14"
 dependencies = [
     "numpy (>=2.4.2,<3.0.0)",
     "matplotlib (>=3.10.8,<4.0.0)",
-    "mpmath (>=1.4.0,<2.0.0)",
-    "h5py (>=3.0,<4.0)",
-    "streamlit (>=1.30,<2.0)",
-    "psutil (>=5.0,<7.0)",
-    "setproctitle (>=1.3,<2.0)"
+    "mpmath (>=1.4.0,<2.0.0)"
 ]
-
-[project.scripts]
-lapd-app = "cablp.analysis._run_app:main"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
