@@ -77,7 +77,7 @@ class DeviceConfig:
     eta: float = 0.358
     Twin: bool = False
     L_cath: float = 50.0
-    R_cath: float = 19.0
+    R_cath: float = 18.0
 
     # Derived constants computed once at construction
     # (stored as slots; frozen prevents reassignment)
@@ -175,9 +175,12 @@ class SolverResult:
     P_ohmic: float
     P_cathode_e: float
     P_cathode_i: float
+    P_cathode_i_pl: float
     P_anode_e: float
     P_anode_i: float
+    P_anode_i_pl: float
     P_net: float
+    P_net2: float
     P_loss: float
     # Regime
     regime: Literal["classical", "virtual_cathode"] = "classical"
@@ -299,7 +302,7 @@ def _find_bracket(
     )
 
 
-def _P_ion(phi: float, T_e: float, I_i: float) -> float:
+def _P_ion(phi: float, T_e: float, I_i: float, pl: bool = False) -> float:
     """
     Solve the ion heatflux to an electrode:
 
@@ -317,7 +320,10 @@ def _P_ion(phi: float, T_e: float, I_i: float) -> float:
     float
         _description_
     """
-    return I_i(T_e / 2 + phi)
+    if pl:
+        return I_i * T_e / 2
+    else:
+        return I_i * (T_e / 2 + phi)
 
 
 def _P_elec(phi: float, T_e: float, I_i: float, Lambda: float) -> float:
@@ -338,7 +344,7 @@ def _P_elec(phi: float, T_e: float, I_i: float, Lambda: float) -> float:
     float
         _description_
     """
-    return I_i(2 * T_e + phi) * math.exp(Lambda - phi / T_e)
+    return I_i * (2 * T_e + phi) * math.exp(Lambda - phi / T_e)
 
 
 # ---------------------------------------------------------------------------
@@ -347,7 +353,10 @@ def _P_elec(phi: float, T_e: float, I_i: float, Lambda: float) -> float:
 
 
 def solve(
-    config: DeviceConfig, plasma: PlasmaState, x0: float | None = None
+    config: DeviceConfig,
+    plasma: PlasmaState,
+    x0: float | None = None,
+    floating: bool = False,
 ) -> SolverResult:
     """Solve for all sheath potentials and currents given device config and plasma state.
 
@@ -357,6 +366,13 @@ def solve(
         Static device parameters (does not change between RK steps).
     plasma : PlasmaState
         Current electron temperature [eV] and density [cm⁻³].
+    x0 : float or None
+        Warm-start hint for the cathode sheath drop [V]. If None, a cold start
+        bracket is used.
+    floating : bool
+        If True, override V_bank = 0, forcing the floating-potential solution
+        where I_tot = V_b = 0 and phi_c = phi_a = T_e * Lambda (in the absence
+        of thermionic emission).
 
     Returns
     -------
@@ -402,7 +418,6 @@ def solve(
     # Circuit resistance ratio
     gamma = config.R_comp / R_p
 
-    # Scaled bank voltage
     psi_bank = config.V_bank / T_e
 
     # Scaled currents
@@ -418,74 +433,136 @@ def solve(
     # Root-find psi_c_plus
     # ------------------------------------------------------------------
 
-    def f(x: float) -> float:
-        return _residual(x, J_i, J_eth, Lambda, gamma, eta, delta, psi_bank, mu)
+    if floating:
+        # ------------------------------------------------------------------
+        # Floating (open-circuit) solution: I_tot = V_b = 0
+        #
+        # Two constraints must hold simultaneously:
+        #   (1) psi_c_plus - psi_c_minus = Lambda  (net sheath = floating potential)
+        #   (2) J_i*(1 - exp(Lambda - psi_c_plus)) = J_eth*exp(-psi_c_minus/delta)
+        #       (current balance at cathode, I_tot = 0)
+        #
+        # Substituting (1) into (2) gives a single residual in psi_c_plus:
+        #   f(x) = J_i*(1 - exp(Lambda-x)) - J_eth*exp(-(x-Lambda)/delta) = 0
+        #
+        # For J_eth = 0: f(Lambda) = 0 directly.
+        # For J_eth > 0: virtual cathode always forms; f(Lambda) = -J_eth < 0,
+        #   f(inf) → J_i > 0, so root exists in (Lambda, inf).
+        # ------------------------------------------------------------------
+        if J_eth <= 0.0:
+            psi_c_plus = Lambda
+            psi_c_minus = 0.0
+            J_star = 0.0
+            regime: Literal["classical", "virtual_cathode"] = "classical"
+        else:
+            regime = "virtual_cathode"
 
-    # --- warm-start: try a tight bracket around the previous solution ---
-    if x0 is not None:
-        x0_psi = x0 / T_e  # convert physical phi → scaled psi
-        a_w = max(1.0e-8, x0_psi * 0.5)
-        b_w = x0_psi * 2.0
-        try:
-            a_w, b_w = _find_bracket(f, a_w, b_w, max_doublings=4)
+            def f_float(x: float) -> float:
+                return J_i * (1.0 - math.exp(Lambda - x)) - J_eth * math.exp(
+                    -(x - Lambda) / delta
+                )
+
+            a_f = Lambda + 1.0e-8
+            b_f = Lambda + 10
+            a_f, b_f = _find_bracket(f_float, a_f, b_f)
             psi_c_plus = brentq(
-                f, a_w, b_w, xtol=1.0e-8, rtol=1.0e-6, full_output=False
+                f_float, a_f, b_f, xtol=1.0e-8, rtol=1.0e-6, full_output=False
             )
-        except ConvergenceError:
-            x0 = None  # fall through to wide bracket below
+            psi_c_minus = psi_c_plus - Lambda
+            J_star = J_eth * math.exp(-psi_c_minus / delta)
 
-    # --- cold start (or warm-start fallback) ---
-    if x0 is None:
-        a = 1.0e-8
-        b = psi_bank + Lambda + 2.0  # tighter than +10; physics: psi < psi_bank+Lambda
-        a, b = _find_bracket(f, a, b)
-        psi_c_plus = brentq(f, a, b, xtol=1.0e-8, rtol=1.0e-6, full_output=False)
+        J_tot = 0.0
+        psi_a = Lambda  # J_tot = 0  →  psi_a = Lambda - ln(1) = Lambda
 
-    # ------------------------------------------------------------------
-    # Recover all quantities at the solution
-    # ------------------------------------------------------------------
+        phi_c_plus = psi_c_plus * T_e
+        phi_c_minus = psi_c_minus * T_e
+        phi_c = phi_c_plus - phi_c_minus  # = T_e * Lambda by construction
+        phi_a = psi_a * T_e  # = T_e * Lambda
 
-    J_crit = _j_eth_crit(psi_c_plus, J_i, mu)
+        I_tot = 0.0
+        I_eth_star = J_star * T_e / R_p
 
-    if J_eth <= 0.0 or J_eth <= J_crit:
-        regime: Literal["classical", "virtual_cathode"] = "classical"
-        J_star = J_eth if J_eth > 0.0 else 0.0
-        psi_c_minus = 0.0
+        V_p = 0.0
+        V_b = 0.0
+
+        P_wall = 0.0
+        P_load = 0.0
+
     else:
-        regime = "virtual_cathode"
-        J_star = J_crit
-        psi_c_minus = delta * math.log(J_eth / J_crit)
 
-    J_tot = J_i * (1.0 - math.exp(Lambda - psi_c_plus)) + J_star
+        def f(x: float) -> float:
+            return _residual(x, J_i, J_eth, Lambda, gamma, eta, delta, psi_bank, mu)
 
-    # Scaled anode sheath potential
-    psi_a = Lambda - math.log(1.0 + J_tot / (J_i_a))
+        # --- warm-start: try a tight bracket around the previous solution ---
+        if x0 is not None:
+            x0_psi = x0 / T_e  # convert physical phi → scaled psi
+            a_w = max(1.0e-8, x0_psi * 0.5)
+            b_w = x0_psi * 2.0
+            try:
+                a_w, b_w = _find_bracket(f, a_w, b_w, max_doublings=4)
+                psi_c_plus = brentq(
+                    f, a_w, b_w, xtol=1.0e-8, rtol=1.0e-6, full_output=False
+                )
+            except ConvergenceError:
+                x0 = None  # fall through to wide bracket below
 
-    # Physical potentials [V]
-    phi_c_plus = psi_c_plus * T_e
-    phi_c_minus = psi_c_minus * T_e
-    phi_c = phi_c_plus - phi_c_minus
-    phi_a = psi_a * T_e
+        # --- cold start (or warm-start fallback) ---
+        if x0 is None:
+            a = 1.0e-8
+            b = (
+                psi_bank + Lambda + 2.0
+            )  # tighter than +10; physics: psi < psi_bank+Lambda
+            a, b = _find_bracket(f, a, b)
+            psi_c_plus = brentq(f, a, b, xtol=1.0e-8, rtol=1.0e-6, full_output=False)
 
-    # Currents [A]
-    I_tot = J_tot * T_e / R_p
-    I_eth_star = J_star * T_e / R_p
+        # ------------------------------------------------------------------
+        # Recover all quantities at the solution
+        # ------------------------------------------------------------------
 
-    # Voltages [V]
-    V_p = I_tot * R_p
-    V_b = config.V_bank - I_tot * config.R_comp
+        J_crit = _j_eth_crit(psi_c_plus, J_i, mu)
 
-    # Power [W]
-    P_wall = I_tot * config.V_bank
-    P_load = I_tot * V_b
+        if J_eth <= 0.0 or J_eth <= J_crit:
+            regime: Literal["classical", "virtual_cathode"] = "classical"
+            J_star = J_eth if J_eth > 0.0 else 0.0
+            psi_c_minus = 0.0
+        else:
+            regime = "virtual_cathode"
+            J_star = J_crit
+            psi_c_minus = delta * math.log(J_eth / J_crit)
+
+        J_tot = J_i * (1.0 - math.exp(Lambda - psi_c_plus)) + J_star
+
+        # Scaled anode sheath potential
+        psi_a = Lambda - math.log(1.0 + J_tot / (J_i_a))
+
+        # Physical potentials [V]
+        phi_c_plus = psi_c_plus * T_e
+        phi_c_minus = psi_c_minus * T_e
+        phi_c = phi_c_plus - phi_c_minus
+        phi_a = psi_a * T_e
+
+        # Currents [A]
+        I_tot = J_tot * T_e / R_p
+        I_eth_star = J_star * T_e / R_p
+
+        # Voltages [V]
+        V_p = I_tot * R_p
+        V_b = config.V_bank - I_tot * config.R_comp
+
+        # Power [W]
+        P_wall = I_tot * config.V_bank
+        P_load = I_tot * V_b
     P_comp = I_tot**2 * config.R_comp
     P_prim = I_eth_star * phi_c
     P_ohmic = I_tot * V_p
     P_cathode_e = _P_elec(phi_c, T_e, I_i, Lambda)
     P_cathode_i = _P_ion(phi_c, T_e, I_i)
+    P_cathode_i_pl = _P_ion(phi_c, T_e, I_i_a, pl=True)
     P_anode_e = _P_elec(phi_a, T_e, I_i_a, Lambda)
     P_anode_i = _P_ion(phi_a, T_e, I_i_a)
+    P_anode_i_pl = _P_ion(phi_a, T_e, I_i_a, pl=True)
     P_net = P_load - P_cathode_e - P_cathode_i - P_anode_e - P_anode_i
+    P_net2 = P_prim + P_ohmic - P_cathode_e - P_cathode_i_pl - P_anode_e - P_anode_i_pl
     P_loss = P_net - P_prim - P_ohmic
 
     return SolverResult(
@@ -508,9 +585,12 @@ def solve(
         P_ohmic=P_ohmic,
         P_cathode_e=P_cathode_e,
         P_cathode_i=P_cathode_i,
+        P_cathode_i_pl=P_cathode_i_pl,
         P_anode_e=P_anode_e,
         P_anode_i=P_anode_i,
+        P_anode_i_pl=P_anode_i_pl,
         P_net=P_net,
+        P_net2=P_net2,
         P_loss=P_loss,
         regime=regime,
     )

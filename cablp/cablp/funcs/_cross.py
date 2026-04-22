@@ -29,6 +29,7 @@ a215 = [
 def H_EII_cross(E, A=a215):
     """
     Hydrogen electron impact ionization cross section.
+    from Janev - Elementary Processes in Hydrogen-Helium Plasmas, updated coefficients from...?
     TODO: implement proper cross section (e.g. Lotz formula or tabulated data).
     """
     sigma = np.exp(np.sum([a * np.log(E) ** i for i, a in enumerate(A)]))
