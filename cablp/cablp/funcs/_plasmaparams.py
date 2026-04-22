@@ -27,5 +27,19 @@ def ion_gyro_freq(B, mu, Z=1):
     return 9.58e3 * Z * B / mu
 
 
-def c_log(Te, n):
-    return 23.4 - 1.15 * np.log10(n) + 3.45 * np.log10(Te)
+def c_log(Te, n, type="ee"):
+    if type == "ee":
+        return (
+            23.5
+            - np.log(np.sqrt(n) * Te ** (-5 / 4))
+            - np.sqrt(1e-5 + ((np.log(Te) - 2) ** 2) / 16)
+        )
+    elif type == "ei":
+        result = np.where(
+            Te > 10,
+            24 - np.log(np.sqrt(n) / Te),
+            23 - np.log(np.sqrt(n) * Te**-1.5),
+        )
+        return result
+    else:
+        return 23.4 - 1.15 * np.log10(n) + 3.45 * np.log10(Te)
