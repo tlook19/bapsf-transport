@@ -14,9 +14,9 @@ import importlib as _importlib
 
 def __getattr__(name):
     if name in submodules:
-        return _importlib.import_module(f"bapsfda.{name}")
+        return _importlib.import_module(f"cablp.{name}")
     else:
         try:
             return globals()[name]
         except KeyError:
-            raise AttributeError(f"Module 'bapsfda' has no attribute '{name}'")
+            raise AttributeError(f"Module 'cablp' has no attribute '{name}'")
