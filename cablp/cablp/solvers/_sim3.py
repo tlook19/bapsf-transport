@@ -97,6 +97,7 @@ input_flags_template = {
     "Velocity": True,
     "breakdown_vel": True,  # Use diffusive flux during breakdown; set False to test without
     "adaptive": True,  # Use Dormand-Prince RK45 adaptive stepping
+    "adaptive_mesh": True,  # Dynamically refine/coarsen spatial cells based on MFP criterion
 }
 
 
@@ -253,6 +254,10 @@ class LAPDSim:
         # Per-component absolute tolerance matched to existing floor values.
         # Shape (5, 1) broadcasts with state shape (5, cells).
         self._atol = np.array([[1e8], [1e8], [0.01], [0.01], [1.0]])
+        self._max_cells = max(input_dict.get("max_cells", 18), self._cells)
+        self._min_cells = min(input_dict.get("min_cells", 3), self._cells)
+        self._mfp_refine_thresh = input_dict.get("mfp_refine_threshold", 0.5)
+        self._mfp_coarsen_thresh = input_dict.get("mfp_coarsen_threshold", 2.0)
         self._print_init_summary()
 
     def _print_init_summary(self):
@@ -340,42 +345,53 @@ class LAPDSim:
         self._primary_mfp_list = []
         self._bulk_mfp_list = []
         self._ln_lambda_list = []
+        self._cells_list = []
+        self._refinement_events = []
+
+    def _pad(self, arr):
+        """Pad a 1-D per-cell array to max_cells with NaN for uniform output shape."""
+        out = np.full(self._max_cells, np.nan)
+        out[: self._cells] = arr
+        return out
 
     def update_results(self, t):
         self._time_list.append(t)
-        self._densities_list.append(np.array([self._ne, self._nn, self._n_beam]))
-        self._temperatures_list.append(np.array([self._Te, self._Ti]))
+        self._densities_list.append(
+            np.array([self._pad(self._ne), self._pad(self._nn), self._pad(self._n_beam)])
+        )
+        self._temperatures_list.append(np.array([self._pad(self._Te), self._pad(self._Ti)]))
         self._density_terms_list.append(
             np.array(
                 [
-                    self._Ne_flux,
-                    self._Nn_flux,
-                    self._S_ion_bulk,
-                    self._S_rec_rad,
-                    self._S_rec_3b,
-                    self._S_ion_beam,
+                    self._pad(self._Ne_flux),
+                    self._pad(self._Nn_flux),
+                    self._pad(self._S_ion_bulk),
+                    self._pad(self._S_rec_rad),
+                    self._pad(self._S_rec_3b),
+                    self._pad(self._S_ion_beam),
                 ]
             )
         )
         self._heat_terms_list.append(
             np.array(
                 [
-                    self._e_par_flux,
-                    self._i_par_flux,
-                    self._e_perp_hl,
-                    self._i_perp_hl,
-                    self._Qie,
-                    self._Qei,
-                    self._Qen,
-                    self._Qcx,
-                    self._Qeb,
-                    self._div_v_elec,
-                    self._div_v_ions,
+                    self._pad(self._e_par_flux),
+                    self._pad(self._i_par_flux),
+                    self._pad(self._e_perp_hl),
+                    self._pad(self._i_perp_hl),
+                    self._pad(self._Qie),
+                    self._pad(self._Qei),
+                    self._pad(self._Qen),
+                    self._pad(self._Qcx),
+                    self._pad(self._Qeb),
+                    self._pad(self._div_v_elec),
+                    self._pad(self._div_v_ions),
                 ]
             )
         )
-        self._velocities_list.append(np.array([self._v_plasma]))
-        self._synthetic_list.append(self._ne * np.sqrt(self._Te))
+        self._velocities_list.append(np.array([self._pad(self._v_plasma)]))
+        self._synthetic_list.append(self._pad(self._ne * np.sqrt(self._Te)))
+        self._cells_list.append(self._cells)
         if self._flags["Plasma"]:
             tau_e = time_elec_coll(self._Te, self._ne, self._ln_lambda)
             primary_mfp = self._l_b / self._L_plasma
@@ -385,22 +401,23 @@ class LAPDSim:
             primary_mfp = np.zeros(self._cells)
             bulk_mfp = np.zeros(self._cells)
             ln_lambda = np.zeros(self._cells)
-        self._primary_mfp_list.append(primary_mfp)
-        self._bulk_mfp_list.append(bulk_mfp)
-        self._ln_lambda_list.append(ln_lambda)
+        self._primary_mfp_list.append(self._pad(primary_mfp))
+        self._bulk_mfp_list.append(self._pad(bulk_mfp))
+        self._ln_lambda_list.append(self._pad(ln_lambda))
 
     def _finalize_results(self):
         """Convert accumulated result lists to NumPy arrays after simulation."""
         self._time = np.array(self._time_list)
-        self._densities = np.array(self._densities_list)  # (n, 3, cells)
-        self._temperatures = np.array(self._temperatures_list)  # (n, 2, cells)
-        self._density_terms = np.array(self._density_terms_list)  # (n, 6, cells)
-        self._heat_terms = np.array(self._heat_terms_list)  # (n, 11, cells)
-        self._velocities = np.array(self._velocities_list)  # (n, 1, cells)
-        self._synthetic = np.array(self._synthetic_list)  # (n, cells)
-        self._primary_mfp = np.array(self._primary_mfp_list)  # (n, cells)
-        self._bulk_mfp = np.array(self._bulk_mfp_list)  # (n, cells)
-        self._ln_lambda = np.array(self._ln_lambda_list)  # (n, cells)
+        self._densities = np.array(self._densities_list)  # (n, 3, max_cells)
+        self._temperatures = np.array(self._temperatures_list)  # (n, 2, max_cells)
+        self._density_terms = np.array(self._density_terms_list)  # (n, 6, max_cells)
+        self._heat_terms = np.array(self._heat_terms_list)  # (n, 11, max_cells)
+        self._velocities = np.array(self._velocities_list)  # (n, 1, max_cells)
+        self._synthetic = np.array(self._synthetic_list)  # (n, max_cells)
+        self._primary_mfp = np.array(self._primary_mfp_list)  # (n, max_cells)
+        self._bulk_mfp = np.array(self._bulk_mfp_list)  # (n, max_cells)
+        self._ln_lambda = np.array(self._ln_lambda_list)  # (n, max_cells)
+        self._cells_at_time = np.array(self._cells_list)  # (n,)
 
     def calc_density_terms(
         self,
@@ -720,6 +737,59 @@ class LAPDSim:
         self._n_beam_ion = self._n_beam * self._beam_cross * self._v_beam
         self._A_ion_beam = self._n_beam_ion * nn
 
+    def _resize_mesh(self, new_cells):
+        """Interpolate simulation state and geometry arrays to a new cell count."""
+        old_cells = self._cells
+        x_old = (np.arange(old_cells) + 0.5) / old_cells
+        x_new = (np.arange(new_cells) + 0.5) / new_cells
+        self._ne       = np.interp(x_new, x_old, self._ne)
+        self._nn       = np.interp(x_new, x_old, self._nn)
+        self._Te       = np.interp(x_new, x_old, self._Te)
+        self._Ti       = np.interp(x_new, x_old, self._Ti)
+        self._v_plasma = np.interp(x_new, x_old, self._v_plasma)
+        self._cells      = new_cells
+        self._L_cell     = np.ones(new_cells) * self._L_machine / new_cells
+        self._L_plasma   = np.ones(new_cells) * self._input_dict["Lp"] / new_cells
+        self._L_heatflux = self._L_plasma / 2
+        self._L_partflux = self._L_plasma / 2
+        self._R_machine  = np.ones(new_cells) * self._input_dict["Rm"]
+        self._R_plasma   = np.ones(new_cells) * self._input_dict["Rp"]
+        self._Rsq_ratio  = (self._R_plasma / self._R_machine) ** 2
+        self._R_heatflux = np.ones(new_cells) * self._input_dict["Rhf"]
+        self._Bz0        = np.ones(new_cells) * self._input_dict["Bz0"]
+        self._plasma_cross = np.pi * self._R_plasma ** 2
+        self._plasma_vol   = self._plasma_cross * self._L_plasma
+        self._cell_vol     = np.pi * self._R_machine ** 2 * self._L_cell
+        self._S_gp   = np.zeros(new_cells)
+        self._S_pump = np.zeros(new_cells)
+        self._S_gp[0]    = self.puff_rate(self._input_dict["S_gp"], 2, self._cell_vol[0])
+        self._S_pump[0]  = self.pump_rate(self._input_dict["S_pump_L"], self._cell_vol[0])
+        self._S_pump[-1] = self.pump_rate(self._input_dict["S_pump_R"], self._cell_vol[-1])
+        if self._flags["TwinCathode"]:
+            self._S_gp[-1] = self.puff_rate(
+                self._input_dict["Twin_S_gp"], 2, self._cell_vol[-1]
+            )
+        self._div_v_elec = np.zeros(new_cells)
+        self._div_v_ions = np.zeros(new_cells)
+
+    def _check_mesh(self, t):
+        """Refine or coarsen the spatial mesh based on the bulk electron MFP criterion."""
+        if not self._flags.get("adaptive_mesh", True):
+            return False
+        tau_e = time_elec_coll(self._Te, self._ne, self._ln_lambda)
+        bulk_mfp = v_thm_e(self._Te) * tau_e / self._L_plasma
+        if np.min(bulk_mfp) < self._mfp_refine_thresh and self._cells < self._max_cells:
+            new_cells = min(self._cells * 2, self._max_cells)
+            self._refinement_events.append((t, self._cells, new_cells))
+            self._resize_mesh(new_cells)
+            return True
+        if np.min(bulk_mfp) > self._mfp_coarsen_thresh and self._cells > self._min_cells:
+            new_cells = max(self._cells // 2, self._min_cells)
+            self._refinement_events.append((t, self._cells, new_cells))
+            self._resize_mesh(new_cells)
+            return True
+        return False
+
     def _dstep(self, a):
         ne, nn, Te, Ti, v_plasma = a
         zeros = np.zeros(self._cells)
@@ -1000,6 +1070,9 @@ class LAPDSim:
                     self._h = min(h_next, h_max)
                     self.update_results(t + j * self._end)
                     step_count += 1
+                    if self._flags["adaptive_mesh"] and self._flags["Plasma"]:
+                        if self._check_mesh(t + j * self._end):
+                            self._h = min(self._h, h_max * 0.1)
                     if step_count % 5000 == 0:
                         print(
                             f"  t={t * 1e3:.3f} ms  h={self._h:.2e} s  steps={step_count}"
@@ -1047,6 +1120,8 @@ class LAPDSim:
             "primary_mfp": self._primary_mfp,
             "bulk_mfp": self._bulk_mfp,
             "ln_lambda": self._ln_lambda,
+            "cells_at_time": self._cells_at_time,
+            "refinement_events": self._refinement_events,
         }
 
     def puff_rate(self, sccm, valves, chamber_vol):
