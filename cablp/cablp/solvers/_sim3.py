@@ -219,6 +219,7 @@ class LAPDSim:
         self._div_v_ions = np.zeros(self._cells)
         # self._ln_lambda = c_log(self._Te, self._ne)
         _R_cath = input_dict.get("R_cath", 19.0)
+        self._eta = input_dict.get("eta", 0.358)
         self._device_config = DeviceConfig(
             A_c=math.pi * _R_cath**2,
             mu=self._mu,
@@ -227,7 +228,7 @@ class LAPDSim:
             phi_wf=input_dict.get("phi_wf", 3.0),
             C_R=input_dict.get("C_R", 29.0),
             R_comp=input_dict.get("R_comp", 0.004),
-            eta=input_dict.get("eta", 0.358),
+            eta=self._eta,
             L_cath=input_dict.get("L_cath", 50.0),
             R_cath=_R_cath,
         )
@@ -242,7 +243,7 @@ class LAPDSim:
                 phi_wf=input_dict.get("phi_wf", 3.0),
                 C_R=input_dict.get("C_R", 29.0),
                 R_comp=input_dict.get("R_comp", 0.004),
-                eta=input_dict.get("eta", 0.358),
+                eta=self._eta,
                 Twin=self._flags["TwinCathode"],
                 L_cath=input_dict.get("L_cath", 50.0),
                 R_cath=_R_cath,
@@ -357,9 +358,13 @@ class LAPDSim:
     def update_results(self, t):
         self._time_list.append(t)
         self._densities_list.append(
-            np.array([self._pad(self._ne), self._pad(self._nn), self._pad(self._n_beam)])
+            np.array(
+                [self._pad(self._ne), self._pad(self._nn), self._pad(self._n_beam)]
+            )
         )
-        self._temperatures_list.append(np.array([self._pad(self._Te), self._pad(self._Ti)]))
+        self._temperatures_list.append(
+            np.array([self._pad(self._Te), self._pad(self._Ti)])
+        )
         self._density_terms_list.append(
             np.array(
                 [
@@ -463,8 +468,11 @@ class LAPDSim:
         nn_flux = nn * v_ion_speed(self._Tn, self._mu)
         if self._flags["Plasma"]:
             ne_flux = ne * v_ion_speed(Te, self._mu)
-            Ne_flux[0] = -ne_flux[0] / (2 * self._L_partflux[0])
-            Ne_flux[-1] = -ne_flux[-1] / (2 * self._L_partflux[-1])
+            Ne_flux[0] = -(1 + 2 * self._eta) * ne_flux[0] / self._L_partflux[0]
+            if self._flags["TwinCathode"]:
+                Ne_flux[-1] = -(1 + 2 * self._eta) * ne_flux[-1] / self._L_partflux[-1]
+            else:
+                Ne_flux[-1] = -ne_flux[-1] / self._L_partflux[-1]
             Nn_flux[0] = -Ne_flux[0] * self._Rsq_ratio[0]
             Nn_flux[-1] = -Ne_flux[-1] * self._Rsq_ratio[-1]
         denom = self._L_partflux[:-1] + self._L_partflux[1:]
@@ -731,7 +739,9 @@ class LAPDSim:
                     self._v_beam[-1],
                 )
                 if self._gas_type == "He":
-                    self._beam_cross[-1] = float(He_EII_cross(phi_c_1 / self._I_ion, a_11s))
+                    self._beam_cross[-1] = float(
+                        He_EII_cross(phi_c_1 / self._I_ion, a_11s)
+                    )
                 elif self._gas_type == "H":
                     self._beam_cross[-1] = float(H_EII_cross(phi_c_1))
         self._n_beam_ion = self._n_beam * self._beam_cross * self._v_beam
@@ -742,29 +752,33 @@ class LAPDSim:
         old_cells = self._cells
         x_old = (np.arange(old_cells) + 0.5) / old_cells
         x_new = (np.arange(new_cells) + 0.5) / new_cells
-        self._ne       = np.interp(x_new, x_old, self._ne)
-        self._nn       = np.interp(x_new, x_old, self._nn)
-        self._Te       = np.interp(x_new, x_old, self._Te)
-        self._Ti       = np.interp(x_new, x_old, self._Ti)
+        self._ne = np.interp(x_new, x_old, self._ne)
+        self._nn = np.interp(x_new, x_old, self._nn)
+        self._Te = np.interp(x_new, x_old, self._Te)
+        self._Ti = np.interp(x_new, x_old, self._Ti)
         self._v_plasma = np.interp(x_new, x_old, self._v_plasma)
-        self._cells      = new_cells
-        self._L_cell     = np.ones(new_cells) * self._L_machine / new_cells
-        self._L_plasma   = np.ones(new_cells) * self._input_dict["Lp"] / new_cells
+        self._cells = new_cells
+        self._L_cell = np.ones(new_cells) * self._L_machine / new_cells
+        self._L_plasma = np.ones(new_cells) * self._input_dict["Lp"] / new_cells
         self._L_heatflux = self._L_plasma / 2
         self._L_partflux = self._L_plasma / 2
-        self._R_machine  = np.ones(new_cells) * self._input_dict["Rm"]
-        self._R_plasma   = np.ones(new_cells) * self._input_dict["Rp"]
-        self._Rsq_ratio  = (self._R_plasma / self._R_machine) ** 2
+        self._R_machine = np.ones(new_cells) * self._input_dict["Rm"]
+        self._R_plasma = np.ones(new_cells) * self._input_dict["Rp"]
+        self._Rsq_ratio = (self._R_plasma / self._R_machine) ** 2
         self._R_heatflux = np.ones(new_cells) * self._input_dict["Rhf"]
-        self._Bz0        = np.ones(new_cells) * self._input_dict["Bz0"]
-        self._plasma_cross = np.pi * self._R_plasma ** 2
-        self._plasma_vol   = self._plasma_cross * self._L_plasma
-        self._cell_vol     = np.pi * self._R_machine ** 2 * self._L_cell
-        self._S_gp   = np.zeros(new_cells)
+        self._Bz0 = np.ones(new_cells) * self._input_dict["Bz0"]
+        self._plasma_cross = np.pi * self._R_plasma**2
+        self._plasma_vol = self._plasma_cross * self._L_plasma
+        self._cell_vol = np.pi * self._R_machine**2 * self._L_cell
+        self._S_gp = np.zeros(new_cells)
         self._S_pump = np.zeros(new_cells)
-        self._S_gp[0]    = self.puff_rate(self._input_dict["S_gp"], 2, self._cell_vol[0])
-        self._S_pump[0]  = self.pump_rate(self._input_dict["S_pump_L"], self._cell_vol[0])
-        self._S_pump[-1] = self.pump_rate(self._input_dict["S_pump_R"], self._cell_vol[-1])
+        self._S_gp[0] = self.puff_rate(self._input_dict["S_gp"], 2, self._cell_vol[0])
+        self._S_pump[0] = self.pump_rate(
+            self._input_dict["S_pump_L"], self._cell_vol[0]
+        )
+        self._S_pump[-1] = self.pump_rate(
+            self._input_dict["S_pump_R"], self._cell_vol[-1]
+        )
         if self._flags["TwinCathode"]:
             self._S_gp[-1] = self.puff_rate(
                 self._input_dict["Twin_S_gp"], 2, self._cell_vol[-1]
@@ -783,7 +797,10 @@ class LAPDSim:
             self._refinement_events.append((t, self._cells, new_cells))
             self._resize_mesh(new_cells)
             return True
-        if np.min(bulk_mfp) > self._mfp_coarsen_thresh and self._cells > self._min_cells:
+        if (
+            np.min(bulk_mfp) > self._mfp_coarsen_thresh
+            and self._cells > self._min_cells
+        ):
             new_cells = max(self._cells // 2, self._min_cells)
             self._refinement_events.append((t, self._cells, new_cells))
             self._resize_mesh(new_cells)
@@ -835,13 +852,15 @@ class LAPDSim:
         )
         d_nn = (
             self._Nn_flux
-            - (self._S_ion_bulk + self._S_ion_beam - self._S_rec_rad - self._S_rec_3b) * self._Rsq_ratio
+            - (self._S_ion_bulk + self._S_ion_beam - self._S_rec_rad - self._S_rec_3b)
+            * self._Rsq_ratio
             + (self._S_gp if self._discharge_on else 0)
             - self._S_pump * nn
         )
         d_ve = (
             self._calc_pres_acc(ne, Te) - self._calc_drag_in(Ti, nn, v_plasma)
-            if self._flags["Velocity"] else zeros
+            if self._flags["Velocity"]
+            else zeros
         )
         return np.array([d_ne, d_nn, d_Te, d_Ti, d_ve])
 
@@ -968,14 +987,35 @@ class LAPDSim:
         k3 = self._dstep_nn(nn + h * (3 / 40 * k1 + 9 / 40 * k2))
         k4 = self._dstep_nn(nn + h * (44 / 45 * k1 - 56 / 15 * k2 + 32 / 9 * k3))
         k5 = self._dstep_nn(
-            nn + h * (19372 / 6561 * k1 - 25360 / 2187 * k2 + 64448 / 6561 * k3 - 212 / 729 * k4)
+            nn
+            + h
+            * (
+                19372 / 6561 * k1
+                - 25360 / 2187 * k2
+                + 64448 / 6561 * k3
+                - 212 / 729 * k4
+            )
         )
         k6 = self._dstep_nn(
-            nn + h * (9017 / 3168 * k1 - 355 / 33 * k2 + 46732 / 5247 * k3 + 49 / 176 * k4 - 5103 / 18656 * k5)
+            nn
+            + h
+            * (
+                9017 / 3168 * k1
+                - 355 / 33 * k2
+                + 46732 / 5247 * k3
+                + 49 / 176 * k4
+                - 5103 / 18656 * k5
+            )
         )
 
         # ── 5th-order solution ─────────────────────────────────────────────
-        nn5 = nn + h * (35 / 384 * k1 + 500 / 1113 * k3 + 125 / 192 * k4 - 2187 / 6784 * k5 + 11 / 84 * k6)
+        nn5 = nn + h * (
+            35 / 384 * k1
+            + 500 / 1113 * k3
+            + 125 / 192 * k4
+            - 2187 / 6784 * k5
+            + 11 / 84 * k6
+        )
 
         # ── k7 for error estimate (FSAL) ───────────────────────────────────
         k7 = self._dstep_nn(nn5)
@@ -1033,7 +1073,6 @@ class LAPDSim:
                     self._floating = False
                     # if condition to say breakdown is over
                     #     self._breakdown = False
-                    # TODO: calculate beam density in dstep after cathode solver
                 elif in_discharge and not self._flags["Plasma"]:
                     self._discharge_on = True
                     self._floating = True
