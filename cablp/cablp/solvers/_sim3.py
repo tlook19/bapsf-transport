@@ -1,6 +1,7 @@
 import math
 import tomllib
 import numpy as np
+from types import SimpleNamespace
 from cablp.funcs._cathode_solver import (
     DeviceConfig,
     PlasmaState,
@@ -30,6 +31,21 @@ from cablp.vars._cons import I_ion as IE_Helium, I_Ry as IE_Hydrogen
 from cablp.funcs._plasmaparams import v_ion_speed, v_thm_e, time_elec_coll, c_log
 
 H_ion_coeff = [1e-5, 6.0]
+
+_CATHODE_FIELDS = (
+    "phi_c_plus", "phi_c_minus", "phi_c", "phi_a", "V_p", "V_b",
+    "R_p", "I_i", "I_e", "I_eth", "I_eth_star", "I_tot",
+    "P_wall", "P_load", "P_comp", "P_prim", "P_ohmic",
+    "P_cathode_e", "P_cathode_i", "P_anode_e", "P_anode_i",
+    "P_net", "P_net2", "P_loss",
+)
+_CATHODE_NAN = np.full(len(_CATHODE_FIELDS), np.nan)
+
+
+def _cathode_to_array(result):
+    if result is None:
+        return _CATHODE_NAN.copy()
+    return np.array([getattr(result, f) for f in _CATHODE_FIELDS])
 
 input_dict_template = {
     "gas_type": "He",
@@ -348,6 +364,8 @@ class LAPDSim:
         self._ln_lambda_list = []
         self._cells_list = []
         self._refinement_events = []
+        self._cathode_list = []
+        self._cathode_twin_list = []
 
     def _pad(self, arr):
         """Pad a 1-D per-cell array to max_cells with NaN for uniform output shape."""
@@ -397,6 +415,14 @@ class LAPDSim:
         self._velocities_list.append(np.array([self._pad(self._v_plasma)]))
         self._synthetic_list.append(self._pad(self._ne * np.sqrt(self._Te)))
         self._cells_list.append(self._cells)
+        self._cathode_list.append(_cathode_to_array(
+            self._cathode_result if self._flags["Plasma"] else None
+        ))
+        self._cathode_twin_list.append(_cathode_to_array(
+            self._cathode_result_twin
+            if self._flags["Plasma"] and self._flags["TwinCathode"]
+            else None
+        ))
         if self._flags["Plasma"]:
             tau_e = time_elec_coll(self._Te, self._ne, self._ln_lambda)
             primary_mfp = self._l_b / self._L_plasma
@@ -423,6 +449,8 @@ class LAPDSim:
         self._bulk_mfp = np.array(self._bulk_mfp_list)  # (n, max_cells)
         self._ln_lambda = np.array(self._ln_lambda_list)  # (n, max_cells)
         self._cells_at_time = np.array(self._cells_list)  # (n,)
+        self._cathode = np.array(self._cathode_list)       # (n, n_fields)
+        self._cathode_twin = np.array(self._cathode_twin_list)  # (n, n_fields)
 
     def calc_density_terms(
         self,
@@ -1130,38 +1158,43 @@ class LAPDSim:
         print("Simulation complete.")
 
     def get_results(self):
-        return {
-            "time": self._time * 1e3,
-            "ne": self._densities[:, 0],
-            "nn": self._densities[:, 1],
-            "n_beam": self._densities[:, 2],
-            "Te": self._temperatures[:, 0],
-            "Ti": self._temperatures[:, 1],
-            "Ne_flux": self._density_terms[:, 0],
-            "Nn_flux": self._density_terms[:, 1],
-            "S_ion_bulk": self._density_terms[:, 2],
-            "S_rec_rad": self._density_terms[:, 3],
-            "S_rec_3b": self._density_terms[:, 4],
-            "S_ion_beam": self._density_terms[:, 5],
-            "e_par_flux": self._heat_terms[:, 0],
-            "i_par_flux": self._heat_terms[:, 1],
-            "e_perp_hl": self._heat_terms[:, 2],
-            "i_perp_hl": self._heat_terms[:, 3],
-            "Qie": self._heat_terms[:, 4],
-            "Qei": self._heat_terms[:, 5],
-            "Qen": self._heat_terms[:, 6],
-            "Qcx": self._heat_terms[:, 7],
-            "Qeb": self._heat_terms[:, 8],
-            "div_v_elec": self._heat_terms[:, 9],
-            "div_v_ions": self._heat_terms[:, 10],
-            "v_plasma": self._velocities[:, 0],
-            "isat": self._synthetic,
-            "primary_mfp": self._primary_mfp,
-            "bulk_mfp": self._bulk_mfp,
-            "ln_lambda": self._ln_lambda,
-            "cells_at_time": self._cells_at_time,
-            "refinement_events": self._refinement_events,
-        }
+        def _cathode_ns(arr):
+            return SimpleNamespace(**{f: arr[:, i] for i, f in enumerate(_CATHODE_FIELDS)})
+
+        return SimpleNamespace(
+            time=self._time * 1e3,
+            ne=self._densities[:, 0],
+            nn=self._densities[:, 1],
+            n_beam=self._densities[:, 2],
+            Te=self._temperatures[:, 0],
+            Ti=self._temperatures[:, 1],
+            Ne_flux=self._density_terms[:, 0],
+            Nn_flux=self._density_terms[:, 1],
+            S_ion_bulk=self._density_terms[:, 2],
+            S_rec_rad=self._density_terms[:, 3],
+            S_rec_3b=self._density_terms[:, 4],
+            S_ion_beam=self._density_terms[:, 5],
+            e_par_flux=self._heat_terms[:, 0],
+            i_par_flux=self._heat_terms[:, 1],
+            e_perp_hl=self._heat_terms[:, 2],
+            i_perp_hl=self._heat_terms[:, 3],
+            Qie=self._heat_terms[:, 4],
+            Qei=self._heat_terms[:, 5],
+            Qen=self._heat_terms[:, 6],
+            Qcx=self._heat_terms[:, 7],
+            Qeb=self._heat_terms[:, 8],
+            div_v_elec=self._heat_terms[:, 9],
+            div_v_ions=self._heat_terms[:, 10],
+            v_plasma=self._velocities[:, 0],
+            isat=self._synthetic,
+            primary_mfp=self._primary_mfp,
+            bulk_mfp=self._bulk_mfp,
+            ln_lambda=self._ln_lambda,
+            cells_at_time=self._cells_at_time,
+            refinement_events=self._refinement_events,
+            cathode=_cathode_ns(self._cathode),
+            cathode_twin=_cathode_ns(self._cathode_twin),
+        )
 
     def puff_rate(self, sccm, valves, chamber_vol):
         return 4.477962e17 * sccm * valves / chamber_vol
