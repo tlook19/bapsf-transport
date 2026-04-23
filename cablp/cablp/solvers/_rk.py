@@ -1,3 +1,4 @@
+# DEPRECATED: Superseded by _sim3.py / LAPDSim. Kept for reference only.
 import numpy as np
 from cablp.funcs._heat import IAEA_exp1, IAEA_exp4
 from cablp.funcs._plasmaparams import (

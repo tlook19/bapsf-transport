@@ -304,21 +304,28 @@ def _find_bracket(
 
 def _P_ion(phi: float, T_e: float, I_i: float, pl: bool = False) -> float:
     """
-    Solve the ion heatflux to an electrode:
+    Ion power delivered to an electrode [W].
+
+    For a Bohm-sheath ion current I_i, ions arrive with kinetic energy T_e/2
+    plus the sheath acceleration energy phi (in eV, numerically equal to V).
+    When pl=True the sheath drop is excluded (plasma-side boundary condition).
 
     Parameters
     ----------
     phi : float
-        _description_
+        Electrode sheath potential [V].
     T_e : float
-        _description_
+        Electron temperature [eV].
     I_i : float
-        _description_
+        Ion saturation current to the electrode [A].
+    pl : bool
+        If True, return only the thermal contribution I_i * T_e / 2 (no sheath
+        acceleration term); used for the plasma-side power balance.
 
     Returns
     -------
     float
-        _description_
+        Ion power to the electrode [W].
     """
     if pl:
         return I_i * T_e / 2
@@ -328,21 +335,27 @@ def _P_ion(phi: float, T_e: float, I_i: float, pl: bool = False) -> float:
 
 def _P_elec(phi: float, T_e: float, I_i: float, Lambda: float) -> float:
     """
-    _summary_
+    Electron power delivered to an electrode [W].
+
+    The returning electron current is the saturation current I_i*exp(Lambda)
+    reduced by the repelling sheath factor exp(-phi/T_e). Each electron carries
+    energy 2*T_e (thermal) plus the sheath potential phi.
 
     Parameters
     ----------
     phi : float
-        _description_
+        Electrode sheath potential [V] (positive repels electrons).
     T_e : float
-        _description_
+        Electron temperature [eV].
     I_i : float
-        _description_
+        Ion saturation current [A] (electron saturation = I_i * exp(Lambda)).
+    Lambda : float
+        Floating-potential parameter = -ln(sqrt(2*pi/(mu*pemr))).
 
     Returns
     -------
     float
-        _description_
+        Electron power to the electrode [W].
     """
     return I_i * (2 * T_e + phi) * math.exp(Lambda - phi / T_e)
 
