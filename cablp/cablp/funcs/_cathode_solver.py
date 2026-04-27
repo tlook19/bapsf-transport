@@ -475,7 +475,7 @@ def solve(
                     -(x - Lambda) / delta
                 )
 
-            a_f = Lambda + 1.0e-8
+            a_f = Lambda
             b_f = Lambda + 10
             a_f, b_f = _find_bracket(f_float, a_f, b_f)
             psi_c_plus = brentq(
