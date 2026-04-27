@@ -197,6 +197,7 @@ class LAPDSim:
         self._L_partflux = self._L_plasma / 2
         self._R_heatflux = np.ones(self._cells) * input_dict["Rhf"]
         self._Tn = input_dict.get("Tn", 0.025)
+        self._v_Tn = v_ion_speed(self._Tn, self._mu)  # constant; pre-computed once
         self._b_epara = input_dict.get("b_epara", 1.0)
         self._b_ipara = input_dict.get("b_ipara", 1.0)
         self._b_eperp = input_dict.get("b_eperp", 1.0)
@@ -457,8 +458,9 @@ class LAPDSim:
         nn,
         Te,
         v_plasma,
+        c_s=None,
     ):
-        self._Ne_flux, self._Nn_flux = self._calc_n_flux(Te, ne, nn, v_plasma)
+        self._Ne_flux, self._Nn_flux = self._calc_n_flux(Te, ne, nn, v_plasma, c_s=c_s)
         self._S_ion_beam = np.zeros(self._cells)
         self._S_ion_bulk = np.zeros(self._cells)
         self._S_rec_rad = np.zeros(self._cells)
@@ -480,7 +482,7 @@ class LAPDSim:
 
     def _dstep_nn(self, nn):
         """Derivative for nn-only integration when Plasma=False."""
-        nn_flux = nn * v_ion_speed(self._Tn, self._mu)
+        nn_flux = nn * self._v_Tn
         denom = self._L_partflux[:-1] + self._L_partflux[1:]
         nnflux = (nn_flux[:-1] - nn_flux[1:]) / denom
         Nn_flux = np.zeros(self._cells)
@@ -488,13 +490,15 @@ class LAPDSim:
         Nn_flux[1:] += nnflux
         return Nn_flux + (self._S_gp if self._discharge_on else 0) - self._S_pump * nn
 
-    def _calc_n_flux(self, Te, ne, nn, v_plasma):
+    def _calc_n_flux(self, Te, ne, nn, v_plasma, c_s=None):
         # TODO: use the cathode solver results to determine plasma loss in cathode cells
         Ne_flux = np.zeros(self._cells)
         Nn_flux = np.zeros(self._cells)
-        nn_flux = nn * v_ion_speed(self._Tn, self._mu)
+        nn_flux = nn * self._v_Tn
         if self._flags["Plasma"]:
-            ne_flux = ne * v_ion_speed(Te, self._mu)
+            if c_s is None:
+                c_s = v_ion_speed(Te, self._mu)
+            ne_flux = ne * c_s
             Ne_flux[0] = -(1 + 2 * self._eta) * ne_flux[0] / self._L_partflux[0]
             if self._flags["TwinCathode"]:
                 Ne_flux[-1] = -(1 + 2 * self._eta) * ne_flux[-1] / self._L_partflux[-1]
@@ -552,12 +556,13 @@ class LAPDSim:
         ) / (self._m_gas * ne[1:-1])
         return pres_acc
 
-    def _calc_drag_in(self, Ti, nn, v_plasma):
+    def _calc_drag_in(self, Ti, nn, v_plasma, v_thm_i=None):
         """
         Calculate the ion-neutral drag force on the plasma per unit volume.
         This term is subtracted from the plasma velocity time derivative.
         """
-        v_thm_i = v_ion_speed(Ti, self._mu)
+        if v_thm_i is None:
+            v_thm_i = v_ion_speed(Ti, self._mu)
         drag_in = drag_factor * v_thm_i * v_plasma
         return drag_in * nn
 
@@ -568,6 +573,7 @@ class LAPDSim:
         Te,
         Ti,
         v_plasma,
+        c_s=None,
     ):
         self._e_par_flux, self._i_par_flux, self._e_perp_hl, self._i_perp_hl = (
             self._calc_cond_heat_flux(Te, Ti, ne)
@@ -583,7 +589,7 @@ class LAPDSim:
         )
         if self._flags["Velocity"]:
             # NOTE: physical form of div(v) term should be revisited.
-            div_v = self._calc_div_v(Te, v_plasma)
+            div_v = self._calc_div_v(Te, v_plasma, c_s=c_s)
             self._div_v_elec = -en_factor * Te * div_v
             self._div_v_ions = -en_factor * Ti * div_v
         if self._flags["icool"]:
@@ -693,14 +699,15 @@ class LAPDSim:
         i_par_flux[1:] += (i_par_hl[:-1] * L[:-1] - i_par_hl[1:] * L[1:]) / denom
         return e_par_flux, i_par_flux, e_perp_hl, i_perp_hl
 
-    def _calc_div_v(self, Te, v_plasma):
+    def _calc_div_v(self, Te, v_plasma, c_s=None):
         """
         Calculate the divergence of the plasma velocity field (dv/dx) for each cell.
         Uses one-sided differences for end cells and a central difference for interior cells.
         NOTE: the correct discretization scheme should be revisited in a future pass.
         """
         div_v = np.zeros(self._cells)
-        c_s = v_ion_speed(Te, self._mu)
+        if c_s is None:
+            c_s = v_ion_speed(Te, self._mu)
         # Face-averaged velocities between adjacent cells (length cells-1)
         v_face = (v_plasma[:-1] + v_plasma[1:]) / 2
         if self._discharge_on:
@@ -847,12 +854,21 @@ class LAPDSim:
             )
             return np.array([zeros, d_nn, zeros, zeros, zeros])
 
-        self._apply_state_guards(ne, nn, Te, Ti, v_plasma)
-        self._ln_lambda = c_log(Te, ne)
-        self._calc_cathode(Te, ne, nn)
-        self._calc_beam_prob(Te, ne, nn)
-        self.calc_density_terms(ne, nn, Te, v_plasma)
-        self.calc_heat_terms(ne, nn, Te, Ti, v_plasma)
+        # Lightweight floor for numerical stability at intermediate RK stages.
+        # Creates new arrays (does not mutate the input state vector).
+        # Full _apply_state_guards (including velocity clip) runs only at the
+        # accepted endpoint in _rkf45_step / _rk4_step.
+        Te = np.maximum(Te, 0.01)
+        Ti = np.maximum(Ti, 0.01)
+        ne = np.maximum(ne, 1e8)
+        nn = np.maximum(nn, 1e8)
+
+        # self._ln_lambda, cathode state, and beam quantities are frozen from
+        # the last accepted step and updated once per accepted step.
+        c_s = v_ion_speed(Te, self._mu)
+        v_thm_i = v_ion_speed(Ti, self._mu)
+        self.calc_density_terms(ne, nn, Te, v_plasma, c_s=c_s)
+        self.calc_heat_terms(ne, nn, Te, Ti, v_plasma, c_s=c_s)
 
         d_ne = (
             self._S_ion_bulk
@@ -885,7 +901,8 @@ class LAPDSim:
             - self._S_pump * nn
         )
         d_ve = (
-            self._calc_pres_acc(ne, Te) - self._calc_drag_in(Ti, nn, v_plasma)
+            self._calc_pres_acc(ne, Te)
+            - self._calc_drag_in(Ti, nn, v_plasma, v_thm_i=v_thm_i)
             if self._flags["Velocity"]
             else zeros
         )
@@ -903,13 +920,18 @@ class LAPDSim:
             self.calc_density_terms(ne, nn, Te, v_plasma)
             return ne, nn, Te, Ti, v_plasma
 
+        if self._cathode_result is None:
+            ne0, nn0, Te0, Ti0, _ = a
+            self._ln_lambda = c_log(Te0, ne0)
+            self._calc_cathode(Te0, ne0, nn0)
+            self._calc_beam_prob(Te0, ne0, nn0)
+
         k1 = self._dstep(a)
         k2 = self._dstep(a + 0.5 * self._h * k1)
         k3 = self._dstep(a + 0.5 * self._h * k2)
         k4 = self._dstep(a + self._h * k3)
         ne, nn, Te, Ti, v_plasma = a + (self._h / 6) * (k1 + 2 * k2 + 2 * k3 + k4)
         self._apply_state_guards(ne, nn, Te, Ti, v_plasma)
-        # Store diagnostics at final state (avoids duplicate calls in start_simulation)
         self._ln_lambda = c_log(Te, ne)
         self._calc_cathode(Te, ne, nn)
         self._calc_beam_prob(Te, ne, nn)
@@ -929,6 +951,14 @@ class LAPDSim:
         """
         if not self._flags["Plasma"]:
             return self._rkf45_step_nn(a)
+
+        # Initialize cathode/ln_lambda on the very first call (self._cathode_result
+        # is None until the first accepted step sets it).
+        if self._cathode_result is None:
+            ne0, nn0, Te0, Ti0, _ = a
+            self._ln_lambda = c_log(Te0, ne0)
+            self._calc_cathode(Te0, ne0, nn0)
+            self._calc_beam_prob(Te0, ne0, nn0)
 
         h = self._h
 
