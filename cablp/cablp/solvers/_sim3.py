@@ -25,10 +25,11 @@ from cablp.vars._cons import (
     m_e_cgs,
 )
 from cablp.funcs._fits import rate_coeff, IAEA_exp1, IAEA_exp4, IAEA_exp6
-from cablp.funcs._cross import alpha_3, alpha_r, He_EII_cross, H_EII_cross
-from cablp.vars._coeff import aHeI, aHeII, aHI, aHII, a_11s, He_ion_coeff
+from cablp.funcs._cross import alpha_3, alpha_r, He_EII_cross_lkup, H_EII_cross_lkup
+from cablp.vars._coeff import aHeI, aHeII, aHI, aHII, He_ion_coeff
 from cablp.vars._cons import I_ion as IE_Helium, I_Ry as IE_Hydrogen
 from cablp.funcs._plasmaparams import v_ion_speed, v_thm_e, time_elec_coll, c_log
+from cablp.vars._nn_table import lookup_nn0
 
 H_ion_coeff = [1e-5, 6.0]
 
@@ -51,9 +52,6 @@ input_dict_template = {
     "gas_type": "He",
     "ne0": 1e9,
     "Tn_fit": 0.1,  # Neutral temperature for reaction rate fits
-    "nn0": 5e12,
-    "Source_nn0": 1.2e13,
-    "Twin_nn0": 1.2e13,
     "Te0": 0.1,
     "Ti0": 0.1,
     "Bz0": 1500,  # Magnetic field in gauss
@@ -180,8 +178,10 @@ class LAPDSim:
             self._I_ion = IE_Hydrogen
             self._ion_fit_coeff = H_ion_coeff
         self._ne = np.ones(self._cells) * input_dict["ne0"]
-        self._nn = np.ones(self._cells) * input_dict["nn0"]
-        self._nn[0] = input_dict.get("Source_nn0", self._nn[0])
+        _nn0 = input_dict.get("nn0") or lookup_nn0(
+            input_dict["S_gp"], twin=self._flags["TwinCathode"]
+        )
+        self._nn = np.ones(self._cells) * _nn0
         self._Te = np.ones(self._cells) * input_dict["Te0"]
         self._Ti = np.ones(self._cells) * input_dict["Ti0"]
         self._Tn_fit = input_dict.get("Tn_fit", 0.1)
@@ -218,7 +218,6 @@ class LAPDSim:
         self._S_pump[0] = self.pump_rate(input_dict["S_pump_L"], self._cell_vol[0])
         self._S_pump[-1] = self.pump_rate(input_dict["S_pump_R"], self._cell_vol[-1])
         if self._flags["TwinCathode"]:
-            self._nn[-1] = input_dict["Twin_nn0"]
             self._S_gp[-1] = self.puff_rate(
                 input_dict["Twin_S_gp"], 2, self._cell_vol[-1]
             )
@@ -609,7 +608,9 @@ class LAPDSim:
                 * Q_cx_He(ne, nn, Ti, self._Tn_fit, gas_type=self._gas_type)
             )
         if self._discharge_on:
-            cathode_results = {0: self._cathode_result, -1: self._cathode_result_twin}
+            cathode_results = {0: self._cathode_result}
+            if self._flags["TwinCathode"]:
+                cathode_results[-1] = self._cathode_result_twin
             for i in [0, -1] if self._flags["TwinCathode"] else [0]:
                 self._Qeb[i] = (
                     en_factor
@@ -747,9 +748,9 @@ class LAPDSim:
                 self._cathode_result.I_eth_star, self._plasma_cross[0], self._v_beam[0]
             )
             if self._gas_type == "He":
-                self._beam_cross[0] = float(He_EII_cross(phi_c_0 / self._I_ion, a_11s))
+                self._beam_cross[0] = He_EII_cross_lkup(phi_c_0 / self._I_ion)
             elif self._gas_type == "H":
-                self._beam_cross[0] = float(H_EII_cross(phi_c_0))
+                self._beam_cross[0] = H_EII_cross_lkup(phi_c_0)
         if self._flags["TwinCathode"]:
             self._cathode_result_twin = cathode_solve(
                 self._device_config_twin,
@@ -767,11 +768,9 @@ class LAPDSim:
                     self._v_beam[-1],
                 )
                 if self._gas_type == "He":
-                    self._beam_cross[-1] = float(
-                        He_EII_cross(phi_c_1 / self._I_ion, a_11s)
-                    )
+                    self._beam_cross[-1] = He_EII_cross_lkup(phi_c_1 / self._I_ion)
                 elif self._gas_type == "H":
-                    self._beam_cross[-1] = float(H_EII_cross(phi_c_1))
+                    self._beam_cross[-1] = H_EII_cross_lkup(phi_c_1)
         self._n_beam_ion = self._n_beam * self._beam_cross * self._v_beam
         self._A_ion_beam = self._n_beam_ion * nn
 
