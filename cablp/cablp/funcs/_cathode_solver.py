@@ -41,6 +41,7 @@ _kB_SI: float = 1.380649e-23  # Boltzmann constant [J/K]
 _me_cgs: float = 9.1093837015e-28  # Electron mass [g]
 _mp_cgs: float = 1.67262192369e-24  # Proton mass [g]
 _pemr: float = _mp_cgs / _me_cgs  # Proton-to-electron mass ratio ≈ 1836.15
+_erg_per_eV: float = _e_SI * 1.0e7  # eV → erg conversion
 
 
 # ---------------------------------------------------------------------------
@@ -106,12 +107,16 @@ class PlasmaState:
 
     Parameters
     ----------
-    T_e : Electron temperature [eV]
-    n_e : Electron density [cm⁻³]
+    T_e    : Electron temperature [eV]
+    n_e    : Electron density [cm⁻³]
+    n_n    : Neutral density [cm⁻³]; used for beam MFP (default 0)
+    sigma_b: Beam ionization cross-section [cm²]; used for beam MFP (default 0)
     """
 
     T_e: float
     n_e: float
+    n_n: float = 0.0
+    sigma_b: float = 0.0
 
 
 @dataclass(slots=True)
@@ -184,11 +189,41 @@ class SolverResult:
     P_loss: float
     # Regime
     regime: Literal["classical", "virtual_cathode"] = "classical"
+    # Beam mean free path [cm]; 0.0 if beam parameters not provided
+    l_b: float = 0.0
 
 
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
+
+
+def _c_log_ei(T_e: float, n_e: float) -> float:
+    """Electron-ion Coulomb logarithm (NRL 2019, eqs. 2-3/2-4)."""
+    if T_e > 10.0:
+        return 24.0 - math.log(math.sqrt(n_e) / T_e)
+    return 23.0 - math.log(math.sqrt(n_e) * T_e**-1.5)
+
+
+def _psi_c_minus(psi_c_plus: float, J_i: float, J_eth: float, mu: float, delta: float) -> float:
+    """Virtual-cathode sheath drop (0 in classical regime)."""
+    J_crit = _j_eth_crit(psi_c_plus, J_i, mu)
+    if J_eth <= 0.0 or J_eth <= J_crit:
+        return 0.0
+    return delta * math.log(J_eth / J_crit)
+
+
+def _compute_l_b(phi_c: float, T_e: float, n_e: float, n_n: float, sigma_b: float) -> float:
+    """Beam mean free path [cm] for primary electrons accelerated through phi_c [V]."""
+    if phi_c <= 0.0:
+        return 0.0
+    v_beam = math.sqrt(2.0 * phi_c * _erg_per_eV / _me_cgs)
+    tau_ei = 3.44e5 * T_e**1.5 / n_e / _c_log_ei(T_e, n_e)
+    l_bi = v_beam * tau_ei
+    if sigma_b > 0.0 and n_n > 0.0:
+        l_bn = 1.0 / (sigma_b * n_n)
+        return 1.0 / (1.0 / l_bi + 1.0 / l_bn)
+    return l_bi
 
 
 def _j_eth_crit(psi: float, J_i: float, mu: float) -> float:
@@ -230,6 +265,8 @@ def _residual(
     delta: float,
     psi_bank: float,
     mu: float,
+    J_i_a: float,
+    long_mfp: bool = False,
 ) -> float:
     """Root equation for psi_c_plus (scaled positive cathode sheath drop).
 
@@ -237,14 +274,16 @@ def _residual(
         - psi_c_minus(psi_c_plus)
         + (1 + gamma) * J_tot(psi_c_plus)
         - Lambda
-        + ln(1 + J_tot / (eta * J_i))
+        + ln(1 + J_anode / (2 * eta * J_i))
         - psi_bank
 
     where
-        J_tot     = J_i*(1 - exp(Lambda - psi_c_plus)) + J_eth_star
+        J_tot      = J_i*(1 - exp(Lambda - psi_c_plus)) + J_eth_star
         J_eth_star = min(J_eth, J_eth_crit(psi_c_plus))
         psi_c_minus = delta * ln(J_eth / J_eth_star)  [virtual cathode]
                     = 0                                 [classical]
+        J_anode    = J_tot - eta * J_eth_star  [long MFP: beam current bypasses to anode]
+                   = J_tot                     [short MFP: normal]
     """
     J_crit = _j_eth_crit(psi_c_plus, J_i, mu)
 
@@ -263,8 +302,11 @@ def _residual(
 
     J_tot = J_i * (1.0 - math.exp(Lambda - psi_c_plus)) + J_star
 
+    # When l_b > L_cath, eta*I_eth_star bypasses plasma to anode directly
+    J_anode = J_tot - eta * J_star if long_mfp else J_tot
+
     # Anode sheath argument; clamp to avoid log(≤0) in extreme bracketing
-    anode_arg = max(1.0 + J_tot / (eta * J_i), 1e-300)
+    anode_arg = max(1.0 + J_anode / J_i_a, 1e-300)
 
     return (
         psi_c_plus
@@ -500,33 +542,46 @@ def solve(
 
         P_wall = 0.0
         P_load = 0.0
+        l_b = 0.0
+        long_mfp = False
 
     else:
 
-        def f(x: float) -> float:
-            return _residual(x, J_i, J_eth, Lambda, gamma, eta, delta, psi_bank, mu)
-
-        # --- warm-start: try a tight bracket around the previous solution ---
-        if x0 is not None:
-            x0_psi = x0 / T_e  # convert physical phi → scaled psi
-            a_w = max(1.0e-8, x0_psi * 0.5)
-            b_w = x0_psi * 2.0
-            try:
-                a_w, b_w = _find_bracket(f, a_w, b_w, max_doublings=4)
-                psi_c_plus = brentq(
-                    f, a_w, b_w, xtol=1.0e-8, rtol=1.0e-6, full_output=False
+        def _make_f(long_mfp: bool = False):
+            def f(x: float) -> float:
+                return _residual(
+                    x, J_i, J_eth, Lambda, gamma, eta, delta, psi_bank, mu, J_i_a, long_mfp
                 )
-            except ConvergenceError:
-                x0 = None  # fall through to wide bracket below
+            return f
 
-        # --- cold start (or warm-start fallback) ---
-        if x0 is None:
+        def _do_solve(f) -> float:
+            nonlocal x0
+            if x0 is not None:
+                x0_psi = x0 / T_e
+                a_w = max(1.0e-8, x0_psi * 0.5)
+                b_w = x0_psi * 2.0
+                try:
+                    a_w, b_w = _find_bracket(f, a_w, b_w, max_doublings=4)
+                    return brentq(f, a_w, b_w, xtol=1.0e-8, rtol=1.0e-6, full_output=False)
+                except ConvergenceError:
+                    x0 = None
             a = 1.0e-8
-            b = (
-                psi_bank + Lambda + 2.0
-            )  # tighter than +10; physics: psi < psi_bank+Lambda
+            b = psi_bank + Lambda + 2.0
             a, b = _find_bracket(f, a, b)
-            psi_c_plus = brentq(f, a, b, xtol=1.0e-8, rtol=1.0e-6, full_output=False)
+            return brentq(f, a, b, xtol=1.0e-8, rtol=1.0e-6, full_output=False)
+
+        # --- initial solve (normal anode condition) ---
+        psi_c_plus = _do_solve(_make_f(long_mfp=False))
+
+        # --- check beam mean free path; re-solve if l_b > L_cath ---
+        _pm = _psi_c_minus(psi_c_plus, J_i, J_eth, mu, delta)
+        l_b = _compute_l_b((psi_c_plus - _pm) * T_e, T_e, n_e, plasma.n_n, plasma.sigma_b)
+        long_mfp = l_b > 0.0 and l_b > config.L_cath
+        if long_mfp:
+            psi_c_plus = _do_solve(_make_f(long_mfp=True))
+            # recompute l_b at new solution
+            _pm = _psi_c_minus(psi_c_plus, J_i, J_eth, mu, delta)
+            l_b = _compute_l_b((psi_c_plus - _pm) * T_e, T_e, n_e, plasma.n_n, plasma.sigma_b)
 
         # ------------------------------------------------------------------
         # Recover all quantities at the solution
@@ -545,8 +600,9 @@ def solve(
 
         J_tot = J_i * (1.0 - math.exp(Lambda - psi_c_plus)) + J_star
 
+        J_anode = J_tot - eta * J_star if long_mfp else J_tot
         # Scaled anode sheath potential
-        psi_a = Lambda - math.log(1.0 + J_tot / (J_i_a))
+        psi_a = Lambda - math.log(1.0 + J_anode / J_i_a)
 
         # Physical potentials [V]
         phi_c_plus = psi_c_plus * T_e
@@ -566,7 +622,7 @@ def solve(
         P_wall = I_tot * config.V_bank
         P_load = I_tot * V_b
     P_comp = I_tot**2 * config.R_comp
-    P_prim = I_eth_star * phi_c
+    P_prim = (1.0 - eta) * I_eth_star * phi_c if long_mfp else I_eth_star * phi_c
     P_ohmic = I_tot * V_p
     P_cathode_e = _P_elec(phi_c, T_e, I_i, Lambda)
     P_cathode_i = _P_ion(phi_c, T_e, I_i)
@@ -574,7 +630,8 @@ def solve(
     P_anode_e = _P_elec(phi_a, T_e, I_i_a, Lambda)
     P_anode_i = _P_ion(phi_a, T_e, I_i_a)
     P_anode_i_pl = _P_ion(phi_a, T_e, I_i_a, pl=True)
-    P_net = P_load - P_cathode_e - P_cathode_i - P_anode_e - P_anode_i
+    _P_beam_bypass = eta * I_eth_star * V_b if long_mfp else 0.0
+    P_net = P_load - P_cathode_e - P_cathode_i - P_anode_e - P_anode_i - _P_beam_bypass
     P_net2 = P_prim + P_ohmic - P_cathode_e - P_cathode_i_pl - P_anode_e - P_anode_i_pl
     P_loss = P_net - P_prim - P_ohmic
 
@@ -606,6 +663,5 @@ def solve(
         P_net2=P_net2,
         P_loss=P_loss,
         regime=regime,
+        l_b=l_b,
     )
-
-
