@@ -33,12 +33,37 @@ from cablp.vars._nn_table import lookup_nn0
 
 H_ion_coeff = [1e-5, 6.0]
 
+
+def _to_odd(n):
+    """Round n up to the nearest odd integer."""
+    return n if n % 2 == 1 else n + 1
+
+
 _CATHODE_FIELDS = (
-    "phi_c_plus", "phi_c_minus", "phi_c", "phi_a", "V_p", "V_b",
-    "R_p", "I_i", "I_e", "I_eth", "I_eth_star", "I_tot",
-    "P_wall", "P_load", "P_comp", "P_prim", "P_ohmic",
-    "P_cathode_e", "P_cathode_i", "P_anode_e", "P_anode_i",
-    "P_net", "P_net2", "P_loss",
+    "phi_c_plus",
+    "phi_c_minus",
+    "phi_c",
+    "phi_a",
+    "V_p",
+    "V_b",
+    "R_p",
+    "I_i",
+    "I_e",
+    "I_eth",
+    "I_eth_star",
+    "I_tot",
+    "P_wall",
+    "P_load",
+    "P_comp",
+    "P_prim",
+    "P_ohmic",
+    "P_cathode_e",
+    "P_cathode_i",
+    "P_anode_e",
+    "P_anode_i",
+    "P_net",
+    "P_net2",
+    "P_loss",
 )
 _CATHODE_NAN = np.full(len(_CATHODE_FIELDS), np.nan)
 
@@ -47,6 +72,7 @@ def _cathode_to_array(result):
     if result is None:
         return _CATHODE_NAN.copy()
     return np.array([getattr(result, f) for f in _CATHODE_FIELDS])
+
 
 input_dict_template = {
     "gas_type": "He",
@@ -111,7 +137,7 @@ input_flags_template = {
     "Velocity": True,
     "breakdown_vel": True,  # Use diffusive flux during breakdown; set False to test without
     "adaptive": True,  # Use Dormand-Prince RK45 adaptive stepping
-    "adaptive_mesh": True,  # Dynamically refine/coarsen spatial cells based on MFP criterion
+    "adaptive_mesh": False,  # Dynamically refine/coarsen spatial cells based on MFP criterion
 }
 
 
@@ -165,7 +191,10 @@ class LAPDSim:
     ):
         self._flags = input_flags
         self._input_dict = dict(input_dict)
-        self._cells = input_dict.get("cells", 3)
+        self._cathode_cell_len = 100.0  # fixed cathode cell length [cm]
+        self._n_interior = _to_odd(input_dict.get("cells", 3))
+        self._n_cathode_cells = 2  # both ends always have a fixed 100 cm boundary cell
+        self._cells = self._n_interior + self._n_cathode_cells
         self._gas_type = input_dict.get("gas_type", "He")
         if self._gas_type == "He":
             self._m_gas = m_He_cgs
@@ -188,9 +217,9 @@ class LAPDSim:
         self._v_plasma = np.zeros(self._cells)
         self._Bz0 = np.ones(self._cells) * input_dict["Bz0"]
         self._L_machine = input_dict["Lm"]
-        self._L_cell = np.ones(self._cells) * self._L_machine / self._cells
+        self._L_cell = self._build_L_cell(self._n_interior)
         self._R_machine = np.ones(self._cells) * input_dict["Rm"]
-        self._L_plasma = np.ones(self._cells) * input_dict["Lp"] / self._cells
+        self._L_plasma = self._build_L_plasma(self._n_interior)
         self._R_plasma = np.ones(self._cells) * input_dict["Rp"]
         self._Rsq_ratio = (self._R_plasma / self._R_machine) ** 2
         self._L_heatflux = self._L_plasma / 2
@@ -271,11 +300,31 @@ class LAPDSim:
         # Per-component absolute tolerance matched to existing floor values.
         # Shape (5, 1) broadcasts with state shape (5, cells).
         self._atol = np.array([[1e8], [1e8], [0.01], [0.01], [1.0]])
-        self._max_cells = max(input_dict.get("max_cells", 18), self._cells)
-        self._min_cells = min(input_dict.get("min_cells", 3), self._cells)
+        _max_interior = _to_odd(max(input_dict.get("max_cells", 18), self._n_interior))
+        self._max_cells = _max_interior + self._n_cathode_cells
+        self._min_cells = _to_odd(min(input_dict.get("min_cells", 3), self._n_interior))
         self._mfp_refine_thresh = input_dict.get("mfp_refine_threshold", 0.5)
         self._mfp_coarsen_thresh = input_dict.get("mfp_coarsen_threshold", 2.0)
         self._print_init_summary()
+
+    def _build_L_plasma(self, n_interior):
+        """Build plasma cell length array: fixed 100 cm cathode cells + uniform interior."""
+        Lp = self._input_dict["Lp"]
+        interior_L = (Lp - self._n_cathode_cells * self._cathode_cell_len) / n_interior
+        arr = np.full(n_interior + self._n_cathode_cells, interior_L)
+        arr[0] = self._cathode_cell_len
+        if self._n_cathode_cells == 2:
+            arr[-1] = self._cathode_cell_len
+        return arr
+
+    def _build_L_cell(self, n_interior):
+        """Build machine cell length array: fixed 100 cm cathode cells + uniform interior."""
+        interior_L = (self._L_machine - self._n_cathode_cells * self._cathode_cell_len) / n_interior
+        arr = np.full(n_interior + self._n_cathode_cells, interior_L)
+        arr[0] = self._cathode_cell_len
+        if self._n_cathode_cells == 2:
+            arr[-1] = self._cathode_cell_len
+        return arr
 
     def _print_init_summary(self):
         """Print key derived quantities computed during __init__ for sanity checking."""
@@ -286,6 +335,8 @@ class LAPDSim:
             f"  V_discharge={self._device_config.V_bank}  R_comp={self._device_config.R_comp}"
         )
         print(f"  T_s={self._device_config.T_s} K")
+        print(f"  cells: {self._n_cathode_cells} cathode + {self._n_interior} interior = {self._cells} total")
+        print(f"  L_plasma={self._L_plasma} cm")
         print(f"  plasma_vol={self._plasma_vol} cm^3")
         print(f"  Rsq_ratio={self._Rsq_ratio}")
         print(f"  S_gp={self._S_gp} cm^-3 s^-1")
@@ -415,14 +466,16 @@ class LAPDSim:
         self._velocities_list.append(np.array([self._pad(self._v_plasma)]))
         self._synthetic_list.append(self._pad(self._ne * np.sqrt(self._Te)))
         self._cells_list.append(self._cells)
-        self._cathode_list.append(_cathode_to_array(
-            self._cathode_result if self._flags["Plasma"] else None
-        ))
-        self._cathode_twin_list.append(_cathode_to_array(
-            self._cathode_result_twin
-            if self._flags["Plasma"] and self._flags["TwinCathode"]
-            else None
-        ))
+        self._cathode_list.append(
+            _cathode_to_array(self._cathode_result if self._flags["Plasma"] else None)
+        )
+        self._cathode_twin_list.append(
+            _cathode_to_array(
+                self._cathode_result_twin
+                if self._flags["Plasma"] and self._flags["TwinCathode"]
+                else None
+            )
+        )
         if self._flags["Plasma"]:
             tau_e = time_elec_coll(self._Te, self._ne, self._ln_lambda)
             primary_mfp = self._l_b / self._L_plasma
@@ -449,7 +502,7 @@ class LAPDSim:
         self._bulk_mfp = np.array(self._bulk_mfp_list)  # (n, max_cells)
         self._ln_lambda = np.array(self._ln_lambda_list)  # (n, max_cells)
         self._cells_at_time = np.array(self._cells_list)  # (n,)
-        self._cathode = np.array(self._cathode_list)       # (n, n_fields)
+        self._cathode = np.array(self._cathode_list)  # (n, n_fields)
         self._cathode_twin = np.array(self._cathode_twin_list)  # (n, n_fields)
 
     def calc_density_terms(
@@ -523,17 +576,18 @@ class LAPDSim:
         Nn_flux[1:] += nnflux
         return Ne_flux, Nn_flux
 
-    def _calc_beam_prob(self, Te, ne, nn):
-        self._l_bi = np.zeros(self._cells)
-        self._l_bn = np.zeros(self._cells)
+    def _calc_beam_prob(self, nn):
         self._l_b = np.zeros(self._cells)
         self._p_beam = np.zeros(self._cells)
+        cathode_results = {0: self._cathode_result}
+        if self._flags["TwinCathode"]:
+            cathode_results[-1] = self._cathode_result_twin
         for i in [0, -1] if self._flags["TwinCathode"] else [0]:
-            ln_lambda_ei = c_log(Te[i], ne[i], kind="ei")
-            self._l_bi[i] = self._v_beam[i] * time_elec_coll(Te[i], ne[i], ln_lambda_ei)
-            self._l_bn[i] = 1.0 / (self._beam_cross[i] * nn[i])
-            self._l_b[i] = 1.0 / (1.0 / self._l_bi[i] + 1.0 / self._l_bn[i])
-            self._p_beam[i] = self._l_b[i] / self._l_bn[i]
+            if self._beam_cross[i] == 0.0 or nn[i] == 0.0:
+                continue
+            self._l_b[i] = cathode_results[i].l_b
+            l_bn = 1.0 / (self._beam_cross[i] * nn[i])
+            self._p_beam[i] = self._l_b[i] / l_bn
 
     def _calc_pres_acc(self, ne, Te):
         """
@@ -738,7 +792,7 @@ class LAPDSim:
     def _calc_cathode(self, Te, ne, nn):
         self._cathode_result = cathode_solve(
             self._device_config,
-            PlasmaState(T_e=Te[0], n_e=ne[0]),
+            PlasmaState(T_e=Te[0], n_e=ne[0], n_n=nn[0], sigma_b=self._beam_cross[0]),
             x0=self._cathode_x0,
             floating=self._floating,
         )
@@ -761,7 +815,7 @@ class LAPDSim:
         if self._flags["TwinCathode"]:
             self._cathode_result_twin = cathode_solve(
                 self._device_config_twin,
-                PlasmaState(T_e=Te[-1], n_e=ne[-1]),
+                PlasmaState(T_e=Te[-1], n_e=ne[-1], n_n=nn[-1], sigma_b=self._beam_cross[-1]),
                 x0=self._cathode_x0_twin,
                 floating=self._floating,
             )
@@ -781,31 +835,40 @@ class LAPDSim:
         self._n_beam_ion = self._n_beam * self._beam_cross * self._v_beam
         self._A_ion_beam = self._n_beam_ion * nn
 
-    def _resize_mesh(self, new_cells):
-        """Interpolate simulation state and geometry arrays to a new cell count."""
-        old_cells = self._cells
-        x_old = (np.arange(old_cells) + 0.5) / old_cells
-        x_new = (np.arange(new_cells) + 0.5) / new_cells
-        self._ne = np.interp(x_new, x_old, self._ne)
-        self._nn = np.interp(x_new, x_old, self._nn)
-        self._Te = np.interp(x_new, x_old, self._Te)
-        self._Ti = np.interp(x_new, x_old, self._Ti)
-        self._v_plasma = np.interp(x_new, x_old, self._v_plasma)
-        self._cells = new_cells
-        self._L_cell = np.ones(new_cells) * self._L_machine / new_cells
-        self._L_plasma = np.ones(new_cells) * self._input_dict["Lp"] / new_cells
+    def _resize_mesh(self, new_n_interior):
+        """Interpolate interior cells to new_n_interior count; cathode cells stay fixed."""
+        old_n_interior = self._n_interior
+        new_total = new_n_interior + self._n_cathode_cells
+
+        x_old = (np.arange(old_n_interior) + 0.5) / old_n_interior
+        x_new = (np.arange(new_n_interior) + 0.5) / new_n_interior
+        interior_slice = slice(1, -1)  # both ends are always fixed boundary cells
+
+        def _resize_arr(arr):
+            interior = np.interp(x_new, x_old, arr[interior_slice])
+            return np.concatenate([[arr[0]], interior, [arr[-1]]])
+
+        self._ne = _resize_arr(self._ne)
+        self._nn = _resize_arr(self._nn)
+        self._Te = _resize_arr(self._Te)
+        self._Ti = _resize_arr(self._Ti)
+        self._v_plasma = _resize_arr(self._v_plasma)
+        self._n_interior = new_n_interior
+        self._cells = new_total
+        self._L_plasma = self._build_L_plasma(new_n_interior)
+        self._L_cell = self._build_L_cell(new_n_interior)
         self._L_heatflux = self._L_plasma / 2
         self._L_partflux = self._L_plasma / 2
-        self._R_machine = np.ones(new_cells) * self._input_dict["Rm"]
-        self._R_plasma = np.ones(new_cells) * self._input_dict["Rp"]
+        self._R_machine = np.ones(new_total) * self._input_dict["Rm"]
+        self._R_plasma = np.ones(new_total) * self._input_dict["Rp"]
         self._Rsq_ratio = (self._R_plasma / self._R_machine) ** 2
-        self._R_heatflux = np.ones(new_cells) * self._input_dict["Rhf"]
-        self._Bz0 = np.ones(new_cells) * self._input_dict["Bz0"]
+        self._R_heatflux = np.ones(new_total) * self._input_dict["Rhf"]
+        self._Bz0 = np.ones(new_total) * self._input_dict["Bz0"]
         self._plasma_cross = np.pi * self._R_plasma**2
         self._plasma_vol = self._plasma_cross * self._L_plasma
         self._cell_vol = np.pi * self._R_machine**2 * self._L_cell
-        self._S_gp = np.zeros(new_cells)
-        self._S_pump = np.zeros(new_cells)
+        self._S_gp = np.zeros(new_total)
+        self._S_pump = np.zeros(new_total)
         self._S_gp[0] = self.puff_rate(self._input_dict["S_gp"], 2, self._cell_vol[0])
         self._S_pump[0] = self.pump_rate(
             self._input_dict["S_pump_L"], self._cell_vol[0]
@@ -817,8 +880,8 @@ class LAPDSim:
             self._S_gp[-1] = self.puff_rate(
                 self._input_dict["Twin_S_gp"], 2, self._cell_vol[-1]
             )
-        self._div_v_elec = np.zeros(new_cells)
-        self._div_v_ions = np.zeros(new_cells)
+        self._div_v_elec = np.zeros(new_total)
+        self._div_v_ions = np.zeros(new_total)
 
     def _check_mesh(self, t):
         """Refine or coarsen the spatial mesh based on the bulk electron MFP criterion."""
@@ -826,18 +889,19 @@ class LAPDSim:
             return False
         tau_e = time_elec_coll(self._Te, self._ne, self._ln_lambda)
         bulk_mfp = v_thm_e(self._Te) * tau_e / self._L_plasma
-        if np.min(bulk_mfp) < self._mfp_refine_thresh and self._cells < self._max_cells:
-            new_cells = min(self._cells * 2, self._max_cells)
-            self._refinement_events.append((t, self._cells, new_cells))
-            self._resize_mesh(new_cells)
+        _max_interior = self._max_cells - self._n_cathode_cells
+        if np.min(bulk_mfp) < self._mfp_refine_thresh and self._n_interior < _max_interior:
+            new_n_interior = _to_odd(min(self._n_interior * 2, _max_interior))
+            self._refinement_events.append((t, self._cells, new_n_interior + self._n_cathode_cells))
+            self._resize_mesh(new_n_interior)
             return True
         if (
             np.min(bulk_mfp) > self._mfp_coarsen_thresh
-            and self._cells > self._min_cells
+            and self._n_interior > self._min_cells
         ):
-            new_cells = max(self._cells // 2, self._min_cells)
-            self._refinement_events.append((t, self._cells, new_cells))
-            self._resize_mesh(new_cells)
+            new_n_interior = _to_odd(max(self._n_interior // 2, self._min_cells))
+            self._refinement_events.append((t, self._cells, new_n_interior + self._n_cathode_cells))
+            self._resize_mesh(new_n_interior)
             return True
         return False
 
@@ -924,7 +988,7 @@ class LAPDSim:
             ne0, nn0, Te0, Ti0, _ = a
             self._ln_lambda = c_log(Te0, ne0)
             self._calc_cathode(Te0, ne0, nn0)
-            self._calc_beam_prob(Te0, ne0, nn0)
+            self._calc_beam_prob(nn0)
 
         k1 = self._dstep(a)
         k2 = self._dstep(a + 0.5 * self._h * k1)
@@ -958,7 +1022,7 @@ class LAPDSim:
             ne0, nn0, Te0, Ti0, _ = a
             self._ln_lambda = c_log(Te0, ne0)
             self._calc_cathode(Te0, ne0, nn0)
-            self._calc_beam_prob(Te0, ne0, nn0)
+            self._calc_beam_prob(nn0)
 
         h = self._h
 
@@ -1026,7 +1090,7 @@ class LAPDSim:
             self._apply_state_guards(ne, nn, Te, Ti, v_plasma)
             self._ln_lambda = c_log(Te, ne)
             self._calc_cathode(Te, ne, nn)
-            self._calc_beam_prob(Te, ne, nn)
+            self._calc_beam_prob(nn)
             self.calc_density_terms(ne, nn, Te, v_plasma)
             self.calc_heat_terms(ne, nn, Te, Ti, v_plasma)
             return (ne, nn, Te, Ti, v_plasma), h_next, True
@@ -1110,6 +1174,7 @@ class LAPDSim:
             t = 0.0
             self._h = self._dt_discharge if self._d_off > 0 else self._dt_afterglow
             _afterglow_transitioned = False
+            _breakdown_ended = False
             step_count = 0
 
             while t < self._end * (1 - 1e-12):
@@ -1126,10 +1191,12 @@ class LAPDSim:
                 # ── Update discharge / beam state ──────────────────────────
                 if in_discharge and self._flags["Plasma"]:
                     self._discharge_on = True
-                    self._breakdown = True
                     self._floating = False
-                    # if condition to say breakdown is over
-                    #     self._breakdown = False
+                    if not _breakdown_ended:
+                        ne = self._ne
+                        if np.all(ne > 1e12) and np.max(ne) / np.min(ne) < 10.0:
+                            _breakdown_ended = True
+                    self._breakdown = not _breakdown_ended
                 elif in_discharge and not self._flags["Plasma"]:
                     self._discharge_on = True
                     self._floating = True
@@ -1188,7 +1255,9 @@ class LAPDSim:
 
     def get_results(self):
         def _cathode_ns(arr):
-            return SimpleNamespace(**{f: arr[:, i] for i, f in enumerate(_CATHODE_FIELDS)})
+            return SimpleNamespace(
+                **{f: arr[:, i] for i, f in enumerate(_CATHODE_FIELDS)}
+            )
 
         return SimpleNamespace(
             time=self._time * 1e3,
