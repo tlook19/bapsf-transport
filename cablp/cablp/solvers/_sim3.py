@@ -113,10 +113,14 @@ input_dict_template = {
     "b_Qei": 1.0,  # Scaling factor for electron-ion cooling
     "b_Qen": 1.0,  # Scaling factor for electron-neutral cooling
     "cycles": 1,
-    "d_off": 20e-3,
-    "dt_main": 1e-6,
-    "end": 25e-3,
-    "dt_after": 1e-5,
+    "tau_prebreakdown": 0.1,   # max pre-breakdown phase duration [s]
+    "tau_discharge": 15e-3,    # main discharge duration after breakdown [s]
+    "tau_afterglow": 10e-3,    # afterglow duration after discharge [s]
+    "tau_cycle": 3.0,          # total cycle length for Plasma=False [s]
+    "I_breakdown": 1000.0,     # I_tot threshold that marks breakdown [A]
+    "h0": 1e-6,                # initial adaptive step size [s]
+    "h_max_discharge": 1e-5,   # max step size during active discharge phases [s]
+    "h_max_afterglow": 1e-4,   # max step size during afterglow/off phases [s]
     "cells": 3,
     "rtol": 1e-3,  # relative tolerance for adaptive stepping
     "h_min": 1e-12,  # minimum allowed step size [s]
@@ -135,8 +139,7 @@ input_flags_template = {
     "Plasma": True,
     "TwinCathode": False,
     "Velocity": True,
-    "breakdown_vel": True,  # Use diffusive flux during breakdown; set False to test without
-    "adaptive": True,  # Use Dormand-Prince RK45 adaptive stepping
+    "velocity_transition": True,  # Use diffusive flux before velocity transition; set False to test without
     "adaptive_mesh": False,  # Dynamically refine/coarsen spatial cells based on MFP criterion
 }
 
@@ -169,7 +172,7 @@ def load_config(path):
 
         [flags]
         Velocity      = true
-        breakdown_vel = false
+        velocity_transition = false
     """
     with open(path, "rb") as f:
         raw = tomllib.load(f)
@@ -255,11 +258,14 @@ class LAPDSim:
         # size-2 arrays: index 0 = primary cathode, index 1 = twin cathode
         # updated each _dstep from cathode solver phi_c
         self._cycles = input_dict.get("cycles", 1)
-        self._cyclelength = 0
-        self._d_off = input_dict.get("d_off", 20e-3)
-        self._dt_main = input_dict.get("dt_main", 1e-3)
-        self._end = input_dict.get("end", 3)
-        self._dt_after = input_dict.get("dt_after", 1e-3)
+        self._tau_prebreakdown = input_dict.get("tau_prebreakdown", 0.1)
+        self._tau_discharge = input_dict.get("tau_discharge", 15e-3)
+        self._tau_afterglow = input_dict.get("tau_afterglow", 10e-3)
+        self._tau_cycle = input_dict.get("tau_cycle", 3.0)
+        self._I_breakdown = input_dict.get("I_breakdown", 1000.0)
+        self._h0 = input_dict.get("h0", 1e-6)
+        self._h_max_discharge = input_dict.get("h_max_discharge", 1e-5)
+        self._h_max_afterglow = input_dict.get("h_max_afterglow", 1e-4)
         self._div_v_elec = np.zeros(self._cells)
         self._div_v_ions = np.zeros(self._cells)
         # self._ln_lambda = c_log(self._Te, self._ne)
@@ -341,40 +347,22 @@ class LAPDSim:
         print(f"  Rsq_ratio={self._Rsq_ratio}")
         print(f"  S_gp={self._S_gp} cm^-3 s^-1")
         print(f"  S_pump={self._S_pump} s^-1")
+        if self._flags["Plasma"]:
+            print(f"  Phases: pre_breakdown(<{self._tau_prebreakdown*1e3:.1f} ms) "
+                  f"→ main_discharge({self._tau_discharge*1e3:.1f} ms) "
+                  f"→ afterglow({self._tau_afterglow*1e3:.1f} ms)  I_breakdown={self._I_breakdown:.0f} A")
+        else:
+            print(f"  Equilibrium: puffing({self._tau_discharge*1e3:.1f} ms) "
+                  f"→ off({(self._tau_cycle - self._tau_discharge)*1e3:.1f} ms)  "
+                  f"cycles={self._cycles}")
         print(f"============================")
 
     def set_time_steps(self):
-        if self._d_off == 0:
-            self._i_d_off = 0
-            self._afterglow = True
-            self._time = np.arange(0, self._end, self._dt_after)
-            self._dt_afterglow = self._dt_after
-        else:
-            self._dt_discharge = self._dt_main
-            self._dt_afterglow = self._dt_after
-            time = np.arange(0, self._d_off, self._dt_main)
-            self._i_d_off = time.shape[0]
-            if self._end is not None and self._dt_after is not None:
-                time = np.append(
-                    time, np.arange(self._d_off, self._end, self._dt_after)
-                )
-                self._afterglow = True
-                self._dt_afterglow = self._dt_after
-            else:
-                self._afterglow = False
-        self._cyclelength = time.shape[0]
-        self._onetime = time
-        if self._cycles == 1:
-            self._time = time
-        elif self._cycles > 1 and not self._flags["Plasma"]:
-            self._time = np.zeros(self._cycles * self._cyclelength)
-            for i in range(self._cycles):
-                tslice = slice(i * self._cyclelength, (i + 1) * self._cyclelength)
-                self._time[tslice] = time + i * self._end
-        self._time_flag = True
+        pass  # time stepping is now fully driven by the adaptive integrator
 
     def initialize_results(self):
         self._n_beam = np.zeros(self._cells)
+        self._beam_cross = np.zeros(self._cells)
         self._Qie = np.zeros(self._cells)  # Energy exchange between electrons and ions
         self._Qei = np.zeros(
             self._cells
@@ -552,9 +540,9 @@ class LAPDSim:
             if c_s is None:
                 c_s = v_ion_speed(Te, self._mu)
             ne_flux = ne * c_s
-            Ne_flux[0] = -(1 + 2 * self._eta) * ne_flux[0] / self._L_partflux[0]
+            Ne_flux[0] = -(1 + 2 * self._eta) * self._cathode_result.I_i / qe_SI / self._plasma_vol[0]
             if self._flags["TwinCathode"]:
-                Ne_flux[-1] = -(1 + 2 * self._eta) * ne_flux[-1] / self._L_partflux[-1]
+                Ne_flux[-1] = -(1 + 2 * self._eta) * self._cathode_result_twin.I_i / qe_SI /self._plasma_vol[-1]
             else:
                 Ne_flux[-1] = -ne_flux[-1] / self._L_partflux[-1]
             Nn_flux[0] = -Ne_flux[0] * self._Rsq_ratio[0]
@@ -562,7 +550,7 @@ class LAPDSim:
         denom = self._L_partflux[:-1] + self._L_partflux[1:]
         if self._flags["Plasma"]:
             if self._flags["Velocity"] and not (
-                self._breakdown and self._flags["breakdown_vel"]
+                self._breakdown and self._flags["velocity_transition"]
             ):
                 ne_b = (ne[:-1] + ne[1:]) / 2
                 v_b = (v_plasma[:-1] + v_plasma[1:]) / 2
@@ -972,37 +960,6 @@ class LAPDSim:
         )
         return np.array([d_ne, d_nn, d_Te, d_Ti, d_ve])
 
-    def _rk4_step(self, a):
-        if not self._flags["Plasma"]:
-            ne, nn, Te, Ti, v_plasma = a
-            h = self._h
-            k1 = self._dstep_nn(nn)
-            k2 = self._dstep_nn(nn + 0.5 * h * k1)
-            k3 = self._dstep_nn(nn + 0.5 * h * k2)
-            k4 = self._dstep_nn(nn + h * k3)
-            nn = nn + (h / 6) * (k1 + 2 * k2 + 2 * k3 + k4)
-            self.calc_density_terms(ne, nn, Te, v_plasma)
-            return ne, nn, Te, Ti, v_plasma
-
-        if self._cathode_result is None:
-            ne0, nn0, Te0, Ti0, _ = a
-            self._ln_lambda = c_log(Te0, ne0)
-            self._calc_cathode(Te0, ne0, nn0)
-            self._calc_beam_prob(nn0)
-
-        k1 = self._dstep(a)
-        k2 = self._dstep(a + 0.5 * self._h * k1)
-        k3 = self._dstep(a + 0.5 * self._h * k2)
-        k4 = self._dstep(a + self._h * k3)
-        ne, nn, Te, Ti, v_plasma = a + (self._h / 6) * (k1 + 2 * k2 + 2 * k3 + k4)
-        self._apply_state_guards(ne, nn, Te, Ti, v_plasma)
-        self._ln_lambda = c_log(Te, ne)
-        self._calc_cathode(Te, ne, nn)
-        self._calc_beam_prob(Te, ne, nn)
-        self.calc_density_terms(ne, nn, Te, v_plasma)
-        self.calc_heat_terms(ne, nn, Te, Ti, v_plasma)
-        return ne, nn, Te, Ti, v_plasma
-
     def _rkf45_step(self, a):
         """
         One Dormand-Prince RK45 adaptive step.
@@ -1166,92 +1123,133 @@ class LAPDSim:
             return None, h_next, False
 
     def start_simulation(self):
-        self.set_time_steps()
         self.initialize_results()
         print("Starting simulation...")
+        if self._flags["Plasma"]:
+            self._run_plasma_phases()
+        else:
+            self._run_equilibrium_cycles()
+        self._finalize_results()
+        print("Simulation complete.")
+
+    def _run_plasma_phases(self):
+        """
+        Three-phase adaptive integration for Plasma=True.
+
+        pre_breakdown: cathode + S_gp on, ends when I_tot >= I_breakdown (t=0)
+        main_discharge: cathode + S_gp on, lasts tau_discharge after breakdown
+        afterglow: cathode + S_gp off, lasts tau_afterglow
+        """
+        phase = "pre_breakdown"
+        t = 0.0
+        self._t_breakdown = None
+        self._h = self._h0
+        self._discharge_on = True
+        self._floating = False
+        self._breakdown = True
+        step_count = 0
+
+        while True:
+            if phase == "pre_breakdown":
+                t_phase_end = self._tau_prebreakdown
+                h_max_base = self._h_max_discharge
+            elif phase == "main_discharge":
+                t_phase_end = self._t_breakdown + self._tau_discharge
+                h_max_base = self._h_max_discharge
+            else:  # afterglow
+                t_phase_end = self._t_breakdown + self._tau_discharge + self._tau_afterglow
+                h_max_base = self._h_max_afterglow
+
+            remaining = t_phase_end - t
+            if remaining <= 0:
+                break
+            h_cap = min(h_max_base, remaining)
+            self._h = min(self._h, max(h_cap, self._h_min))
+
+            a = np.array([self._ne, self._nn, self._Te, self._Ti, self._v_plasma])
+            result, h_next, accepted = self._rkf45_step(a)
+
+            if accepted:
+                self._ne, self._nn, self._Te, self._Ti, self._v_plasma = result
+                t += self._h
+                self._h = min(h_next, h_cap)
+                step_count += 1
+
+                t_out = t if self._t_breakdown is None else t - self._t_breakdown
+                self.update_results(t_out)
+
+                if self._flags.get("adaptive_mesh"):
+                    if self._check_mesh(t_out):
+                        self._h = min(self._h, h_cap * 0.1)
+
+                if step_count % 5000 == 0:
+                    print(f"  [{phase}] t={t_out*1e3:.3f} ms  h={self._h:.2e} s  steps={step_count}")
+                    print(f"  ne={self._ne}  nn={self._nn}")
+                    print(f"  Te={self._Te}  Ti={self._Ti}")
+                    print(f"  primary_mfp/dx={self._primary_mfp_list[-1]}"
+                          f"  bulk_mfp/dx={self._bulk_mfp_list[-1]}")
+                    print(f"  ln_lambda={self._ln_lambda_list[-1]}")
+
+                # Phase transition checks
+                if phase == "pre_breakdown":
+                    if (self._cathode_result is not None and
+                            self._cathode_result.I_tot >= self._I_breakdown):
+                        self._t_breakdown = t
+                        phase = "main_discharge"
+                        self._breakdown = False
+                        print(f"  Breakdown at t={t*1e3:.3f} ms, "
+                              f"I_tot={self._cathode_result.I_tot:.1f} A")
+                    elif t >= self._tau_prebreakdown:
+                        print(f"  Pre-breakdown max time reached without breakdown.")
+                        break
+                elif phase == "main_discharge":
+                    if t >= self._t_breakdown + self._tau_discharge:
+                        phase = "afterglow"
+                        self._discharge_on = False
+                        self._floating = True
+                        self._h = min(self._h0, self._h_max_afterglow)
+                        print(f"  Main discharge ended at t={(t - self._t_breakdown)*1e3:.3f} ms. "
+                              f"Entering afterglow.")
+                else:  # afterglow
+                    if t >= self._t_breakdown + self._tau_discharge + self._tau_afterglow:
+                        break
+            else:
+                self._h = h_next
+
+    def _run_equilibrium_cycles(self):
+        """
+        Plasma=False equilibrium integration.
+
+        puffing phase: S_gp on for tau_discharge
+        off phase: S_gp off for the remainder of tau_cycle
+        Repeats for self._cycles cycles.
+        """
         for j in range(self._cycles):
             print(f"Starting cycle {j+1}/{self._cycles}...")
             t = 0.0
-            self._h = self._dt_discharge if self._d_off > 0 else self._dt_afterglow
-            _afterglow_transitioned = False
-            _breakdown_ended = False
-            step_count = 0
+            self._h = self._h0
+            t_offset = j * self._tau_cycle
 
-            while t < self._end * (1 - 1e-12):
-                in_discharge = (self._d_off > 0) and (t < self._d_off)
-                h_max = self._dt_discharge if in_discharge else self._dt_afterglow
-                # Cap h to not overshoot phase boundary or end time
-                if in_discharge:
-                    h_max = min(h_max, self._d_off - t)
-                h_max = min(h_max, self._end - t)
-                self._h = min(self._h, h_max)
-                if self._h < self._h_min:
-                    self._h = self._h_min
+            while t < self._tau_cycle * (1 - 1e-12):
+                in_puffing = t < self._tau_discharge
+                self._discharge_on = in_puffing
+                self._floating = True
 
-                # ── Update discharge / beam state ──────────────────────────
-                if in_discharge and self._flags["Plasma"]:
-                    self._discharge_on = True
-                    self._floating = False
-                    if not _breakdown_ended:
-                        ne = self._ne
-                        if np.all(ne > 1e12) and np.max(ne) / np.min(ne) < 10.0:
-                            _breakdown_ended = True
-                    self._breakdown = not _breakdown_ended
-                elif in_discharge and not self._flags["Plasma"]:
-                    self._discharge_on = True
-                    self._floating = True
-                elif self._afterglow:
-                    self._discharge_on = False
-                    self._floating = True
-                    if not _afterglow_transitioned:
-                        _afterglow_transitioned = True
-                        self._h = self._dt_afterglow  # reset step size at transition
-                else:
-                    break
+                t_phase_end = self._tau_discharge if in_puffing else self._tau_cycle
+                h_max_base = self._h_max_discharge if in_puffing else self._h_max_afterglow
+                h_cap = min(h_max_base, t_phase_end - t)
+                self._h = min(self._h, max(h_cap, self._h_min))
 
-                a = np.array(
-                    [
-                        self._ne[:],
-                        self._nn[:],
-                        self._Te[:],
-                        self._Ti[:],
-                        self._v_plasma[:],
-                    ]
-                )
-
-                # ── Integrate one step ─────────────────────────────────────
-                if self._flags["adaptive"]:
-                    result, h_next, accepted = self._rkf45_step(a)
-                else:
-                    result = self._rk4_step(a)
-                    h_next = self._h
-                    accepted = True
+                a = np.array([self._ne, self._nn, self._Te, self._Ti, self._v_plasma])
+                result, h_next, accepted = self._rkf45_step(a)
 
                 if accepted:
                     self._ne, self._nn, self._Te, self._Ti, self._v_plasma = result
                     t += self._h
-                    self._h = min(h_next, h_max)
-                    self.update_results(t + j * self._end)
-                    step_count += 1
-                    if self._flags["adaptive_mesh"] and self._flags["Plasma"]:
-                        if self._check_mesh(t + j * self._end):
-                            self._h = min(self._h, h_max * 0.1)
-                    if step_count % 5000 == 0:
-                        print(
-                            f"  t={t * 1e3:.3f} ms  h={self._h:.2e} s  steps={step_count}"
-                        )
-                        print(f"  ne={self._ne}  nn={self._nn}")
-                        print(f"  Te={self._Te}  Ti={self._Ti}")
-                        print(
-                            f"  primary_mfp/dx={self._primary_mfp_list[-1]}"
-                            f"  bulk_mfp/dx={self._bulk_mfp_list[-1]}"
-                        )
-                        print(f"  ln_lambda={self._ln_lambda_list[-1]}")
+                    self._h = min(h_next, h_cap)
+                    self.update_results(t + t_offset)
                 else:
-                    self._h = h_next  # rejected: shrink h and retry
-
-        self._finalize_results()
-        print("Simulation complete.")
+                    self._h = h_next
 
     def get_results(self):
         def _cathode_ns(arr):
@@ -1259,8 +1257,10 @@ class LAPDSim:
                 **{f: arr[:, i] for i, f in enumerate(_CATHODE_FIELDS)}
             )
 
+        t_breakdown_ms = (self._t_breakdown * 1e3) if getattr(self, "_t_breakdown", None) is not None else None
         return SimpleNamespace(
             time=self._time * 1e3,
+            t_breakdown=t_breakdown_ms,
             ne=self._densities[:, 0],
             nn=self._densities[:, 1],
             n_beam=self._densities[:, 2],
