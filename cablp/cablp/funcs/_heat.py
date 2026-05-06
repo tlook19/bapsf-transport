@@ -134,6 +134,72 @@ def ion_par_heat_loss(Ti, ni, L_p, L_hf, mu, lnlambda, rk=True):
     return kappa_par_ion(Ti, ni, mu, lnlambda, rk) * Ti / L_p / L_hf
 
 
+def elec_par_heat_div(Te, ne, L_plasma, lnlambda):
+    """
+    Inter-cell electron heating rate from parallel conduction: div(kappa_par * grad(Te)).
+
+    Conservative finite-volume discretization. Boundary cells receive a
+    contribution from their single interior face only; wall heat loss is
+    handled separately via elec_par_heat_loss.
+
+    Parameters
+    ----------
+    Te : array, shape (N,)
+        Electron temperature [eV].
+    ne : array, shape (N,)
+        Electron density [cm⁻³].
+    L_plasma : array, shape (N,)
+        Cell lengths [cm].
+    lnlambda : array, shape (N,)
+        Coulomb logarithm.
+
+    Returns
+    -------
+    array, shape (N,)
+        dTe/dt contribution [eV s⁻¹] per particle.
+    """
+    kappa = kappa_par_elec(Te, ne, lnlambda, rk=True)
+    kappa_face = (kappa[:-1] + kappa[1:]) / 2
+    d_face = (L_plasma[:-1] + L_plasma[1:]) / 2
+    Q_face = kappa_face * (Te[1:] - Te[:-1]) / d_face
+    result = np.zeros_like(Te)
+    result[:-1] += Q_face / L_plasma[:-1]
+    result[1:]  -= Q_face / L_plasma[1:]
+    return result
+
+
+def ion_par_heat_div(Ti, ni, L_plasma, mu, lnlambda):
+    """
+    Inter-cell ion heating rate from parallel conduction: div(kappa_par * grad(Ti)).
+
+    Parameters
+    ----------
+    Ti : array, shape (N,)
+        Ion temperature [eV].
+    ni : array, shape (N,)
+        Ion density [cm⁻³].
+    L_plasma : array, shape (N,)
+        Cell lengths [cm].
+    mu : float
+        Ion mass number.
+    lnlambda : array, shape (N,)
+        Coulomb logarithm.
+
+    Returns
+    -------
+    array, shape (N,)
+        dTi/dt contribution [eV s⁻¹] per particle.
+    """
+    kappa = kappa_par_ion(Ti, ni, mu, lnlambda, rk=True)
+    kappa_face = (kappa[:-1] + kappa[1:]) / 2
+    d_face = (L_plasma[:-1] + L_plasma[1:]) / 2
+    Q_face = kappa_face * (Ti[1:] - Ti[:-1]) / d_face
+    result = np.zeros_like(Ti)
+    result[:-1] += Q_face / L_plasma[:-1]
+    result[1:]  -= Q_face / L_plasma[1:]
+    return result
+
+
 def kappa_perp_elec(Te, ne, B, lnlambda, rk=True):
     """
     Electron perpendicular thermal conductivity (classical) [eV·cm²/s or eV·cm⁻¹/s].
