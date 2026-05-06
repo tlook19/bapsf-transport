@@ -2,7 +2,7 @@ from mpmath import mp
 
 en_factor = 2 / 3
 drag_factor = 7.5225e-15
-ev_to_erg = 1.602176634e-12
+ev_to_erg = 1.602176634e-12  # qe_SI * 1e-7
 
 I_ion = 24.58738793623
 I_21p = 21.217848
