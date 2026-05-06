@@ -9,9 +9,6 @@ gas_type = "He"     # Gas species ("He" only currently)
 
 # ── Initial conditions ─────────────────────────────────────────────────────────
 ne0         = 1e9   # Initial electron density [cm^-3]
-nn0         = 5e12  # Initial neutral density [cm^-3]
-Source_nn0  = 2e13  # Neutral density at source boundary [cm^-3]
-Twin_nn0    = 2e13  # Neutral density at twin-cathode boundary [cm^-3]
 Te0         = 0.1   # Initial electron temperature [eV]
 Ti0         = 0.1   # Initial ion temperature [eV]
 Tn_fit      = 0.1   # Neutral temperature used in reaction-rate fits [eV]

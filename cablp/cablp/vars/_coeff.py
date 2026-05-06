@@ -21,5 +21,6 @@ a_11s_double = [1.323e-6, 8.208e-3, -6.676e-2, 2.978e-1, -1.925e-1, 0.000e0]
 # fitting parameters for dipole-allowed excitation cross sections b_i_f
 b_11s_21p = [7.087e-1, -9.347e-2, -1.598e0, 2.986e0, -1.293e0, 3.086e-1]
 
-# other fit?
-fit_coeff = [1.3950030050791237e-05, 13.62996440158007]
+# Helium ionization rate fit coefficients (used by LAPDSim)
+He_ion_coeff = [1.3950030050791237e-05, 13.62996440158007]
+fit_coeff = He_ion_coeff  # legacy alias

@@ -1,5 +1,6 @@
 import mpmath as mp
 import numpy as np
+from pathlib import Path
 from ..vars._cons import (
     M_e_eV,
     qe_cgs,
@@ -25,37 +26,79 @@ a215 = [
     -1.5943253e-4,
 ]
 
+# ── EII cross section lookup tables (loaded at import time) ──────────────────
+_VARS_DIR = Path(__file__).parent.parent / "vars"
+
+_h_data = np.loadtxt(_VARS_DIR / "h_eii_cross.csv", delimiter=",", comments="#")
+_H_LOG_E = np.log(_h_data[:, 0])
+_H_LOG_SIGMA = np.log(_h_data[:, 1])
+
+_he_data = np.loadtxt(_VARS_DIR / "he_eii_cross.csv", delimiter=",", comments="#")
+_HE_LOG_EPS = np.log(_he_data[:, 0])
+_HE_LOG_SIGMA = np.log(_he_data[:, 1])
+
 
 def H_EII_cross(E, A=a215):
     """
-    Hydrogen electron impact ionization cross section.
-    TODO: implement proper cross section (e.g. Lotz formula or tabulated data).
+    Hydrogen electron impact ionization cross section [cm^2].
+
+    Parameters
+    ----------
+    E : float
+        Beam energy [eV].
+    A : list
+        Janev polynomial coefficients (default: a215).
     """
-    sigma = np.exp(np.sum([a * np.log(E) ** i for i, a in enumerate(A)]))
-    return sigma
+    return np.exp(np.sum([a * np.log(E) ** i for i, a in enumerate(A)]))
 
 
 def He_EII_cross(eps, A):
     """
-    Helium electron impact ionization cross section.
+    Helium electron impact ionization cross section [cm^2].
 
     Parameters
     ----------
     eps : float
-        Energy scaled by reaction threshold energy
+        Beam energy scaled by reaction threshold energy (E / IE_He).
     A : list of floats
-        Coefficients for the cross section calculation
-
-    Returns
-    -------
-    mpf
-        Helium electron impact ionization cross section in cm^2
+        Coefficients for the cross section calculation.
     """
     a = mp.fdiv(mp.mpf(1e-13), mp.fmul(eps, mp.power(E_ion, 2)))
     b = mp.fdiv(1, eps)
     term1 = mp.fmul(A[0], mp.log(eps))
     term2 = mp.fsum([mp.fmul(A[i], mp.power(mp.fsub(1, b), i)) for i in range(1, 6)])
     return mp.fmul(a, mp.fadd(term1, term2))
+
+
+def H_EII_cross_lkup(E):
+    """
+    Hydrogen electron impact ionization cross section [cm^2] via lookup table.
+
+    Log-linear interpolation over h_eii_cross.csv (13.6–1000 eV).
+
+    Parameters
+    ----------
+    E : float
+        Beam energy [eV].
+    """
+    return float(np.exp(np.interp(np.log(E), _H_LOG_E, _H_LOG_SIGMA,
+                                  left=_H_LOG_SIGMA[0], right=_H_LOG_SIGMA[-1])))
+
+
+def He_EII_cross_lkup(eps):
+    """
+    Helium electron impact ionization cross section [cm^2] via lookup table.
+
+    Log-linear interpolation over he_eii_cross.csv (eps = 1.001–40.67),
+    generated with a_11s coefficients.
+
+    Parameters
+    ----------
+    eps : float
+        Beam energy scaled by He ionization threshold (E / IE_He).
+    """
+    return float(np.exp(np.interp(np.log(eps), _HE_LOG_EPS, _HE_LOG_SIGMA,
+                                   left=_HE_LOG_SIGMA[0], right=_HE_LOG_SIGMA[-1])))
 
 
 def He_EIE_cross_DA(eps, A):
@@ -105,15 +148,46 @@ def H_ion_rate(E, T):
 
 
 def alpha_r(T):
-    # return (
-    #     5.2e-14
-    #     * np.sqrt(I_ion / T)
-    #     * (0.43 + 0.5 * np.log(I_ion / T) + 0.469 * (I_ion / T) ** (-1 / 3))
-    # )
+    """
+    Radiative recombination rate coefficient [cm³/s] — approximate power-law fit.
+
+    alpha_r(T) ≈ 2.71e-13 * T^(-0.5)
+
+    NOTE: This is a rough power-law approximation valid for T ~ 1–20 eV.
+    For helium, species-specific rates should be used when available.
+
+    Parameters
+    ----------
+    T : float or array
+        Electron temperature [eV].
+
+    Returns
+    -------
+    float or array
+        Radiative recombination rate coefficient [cm³/s].
+    """
     return 2.71e-13 * T ** (-0.5)
 
 
 def alpha_3(T):
+    """
+    Three-body recombination rate coefficient [cm⁶/s] — approximate power-law fit.
+
+    alpha_3(T) ≈ 8.75e-27 * T^(-4.5)
+
+    NOTE: This is a rough power-law approximation. For helium, species-specific
+    rates should be used when available.
+
+    Parameters
+    ----------
+    T : float or array
+        Electron temperature [eV].
+
+    Returns
+    -------
+    float or array
+        Three-body recombination rate coefficient [cm⁶/s].
+    """
     return 8.75e-27 * T ** (-4.5)
 
 
@@ -339,6 +413,28 @@ A_R531 = [
 
 
 def heavy_reaction(T, E, A):
+    """
+    Heavy-particle reaction rate coefficient from a 2-D polynomial fit in log-log space.
+
+    ln(<sigma*v>) = sum_{i,j} A[i][j] * ln(E)^i * ln(T)^j
+
+    Coefficient tables A_R318 (H + H⁺ charge exchange) and A_R531 (He + He⁺ charge
+    exchange) follow the IAEA heavy-particle reaction data format.
+
+    Parameters
+    ----------
+    T : float or array
+        Ion temperature [eV].
+    E : float
+        Reaction energy scaling parameter [eV] (typically 0.1 eV for cx tables).
+    A : list of lists
+        2-D array of polynomial coefficients A[i][j].
+
+    Returns
+    -------
+    float or array
+        Reaction rate coefficient [cm³/s].
+    """
     ln_sigv = 0
     for i in range(len(A)):
         for j in range(len(A[i])):
@@ -352,5 +448,23 @@ _cx_H = heavy_reaction(temps, 0.1, A_R318)
 
 
 def charge_ex_react(T, gas_type="He"):
+    """
+    Charge-exchange reaction rate coefficient [cm³/s] via table interpolation.
+
+    Pre-computed tables (_cx_He, _cx_H) are built at import time from
+    heavy_reaction() over T = 0.1–10,000 eV. Linear interpolation is used.
+
+    Parameters
+    ----------
+    T : float or array
+        Ion temperature [eV].
+    gas_type : str
+        Gas species: "He" for helium (A_R531 table) or "H" for hydrogen (A_R318 table).
+
+    Returns
+    -------
+    float or array
+        Charge-exchange rate coefficient [cm³/s].
+    """
     table = _cx_He if gas_type == "He" else _cx_H
     return np.interp(T, temps, table)
