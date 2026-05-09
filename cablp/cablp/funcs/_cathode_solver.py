@@ -193,6 +193,8 @@ class SolverResult:
     P_loss: float
     # Regime
     regime: Literal["classical", "virtual_cathode"] = "classical"
+    long_mfp: bool = False
+    beam_bypass_fraction: float = 0.0
     # Beam mean free path [cm]; 0.0 if beam parameters not provided
     l_b: float = 0.0
 
@@ -268,6 +270,13 @@ def _compute_l_b(phi_c: float, T_e: float, n_e: float, n_n: float, sigma_b: floa
     return l_bi
 
 
+def _compute_beam_bypass_fraction(l_b: float, L_cath: float) -> float:
+    """Fraction of anode-directed thermionic beam that survives to the anode."""
+    if l_b <= 0.0 or L_cath <= 0.0:
+        return 0.0
+    return math.exp(-L_cath / l_b)
+
+
 def _j_eth_crit(psi: float, J_i: float, mu: float) -> float:
     """Scaled critical thermionic current J_eth_crit(psi_c_plus).
 
@@ -308,7 +317,7 @@ def _residual(
     psi_bank: float,
     mu: float,
     J_i_a: float,
-    long_mfp: bool = False,
+    beam_bypass_fraction: float = 0.0,
 ) -> float:
     """Root equation for psi_c_plus (scaled positive cathode sheath drop).
 
@@ -324,8 +333,7 @@ def _residual(
         J_eth_star = min(J_eth, J_eth_crit(psi_c_plus))
         psi_c_minus = delta * ln(J_eth / J_eth_star)  [virtual cathode]
                     = 0                                 [classical]
-        J_anode    = J_tot - eta * J_eth_star  [long MFP: beam current bypasses to anode]
-                   = J_tot                     [short MFP: normal]
+        J_anode    = J_tot - eta * f_bypass * J_eth_star
     """
     J_crit = _j_eth_crit(psi_c_plus, J_i, mu)
 
@@ -344,8 +352,9 @@ def _residual(
 
     J_tot = J_i * (1.0 - math.exp(Lambda - psi_c_plus)) + J_star
 
-    # When l_b > L_cath, eta*I_eth_star bypasses plasma to anode directly
-    J_anode = J_tot - eta * J_star if long_mfp else J_tot
+    # A fraction of the thermionic beam can reach the anode without a
+    # plasma collision/ionization event.
+    J_anode = J_tot - eta * beam_bypass_fraction * J_star
 
     # Anode sheath argument; clamp to avoid log(≤0) in extreme bracketing
     anode_arg = max(1.0 + J_anode / J_i_a, 1e-300)
@@ -586,13 +595,24 @@ def solve(
         P_load = 0.0
         l_b = 0.0
         long_mfp = False
+        beam_bypass_fraction = 0.0
 
     else:
 
-        def _make_f(long_mfp: bool = False):
+        def _make_f(beam_bypass_fraction: float = 0.0):
             def f(x: float) -> float:
                 return _residual(
-                    x, J_i, J_eth, Lambda, gamma, eta, delta, psi_bank, mu, J_i_a, long_mfp
+                    x,
+                    J_i,
+                    J_eth,
+                    Lambda,
+                    gamma,
+                    eta,
+                    delta,
+                    psi_bank,
+                    mu,
+                    J_i_a,
+                    beam_bypass_fraction,
                 )
             return f
 
@@ -612,18 +632,26 @@ def solve(
             a, b = _find_bracket(f, a, b)
             return brentq(f, a, b, xtol=1.0e-8, rtol=1.0e-6, full_output=False)
 
-        # --- initial solve (normal anode condition) ---
-        psi_c_plus = _do_solve(_make_f(long_mfp=False))
-
-        # --- check beam mean free path; re-solve if l_b > L_cath ---
-        _pm = _psi_c_minus(psi_c_plus, J_i, J_eth, mu, delta)
-        l_b = _compute_l_b((psi_c_plus - _pm) * T_e, T_e, n_e, plasma.n_n, plasma.sigma_b)
-        long_mfp = l_b > 0.0 and l_b > config.L_cath
-        if long_mfp:
-            psi_c_plus = _do_solve(_make_f(long_mfp=True))
-            # recompute l_b at new solution
+        # Solve self-consistently for the sheath with a continuous beam-bypass
+        # fraction. The bypass fraction is the survival probability over the
+        # cathode-anode distance, exp(-L_cath / l_b), and replaces the old hard
+        # branch at l_b > L_cath.
+        beam_bypass_fraction = 0.0
+        l_b = 0.0
+        psi_c_plus = _do_solve(_make_f(beam_bypass_fraction))
+        for _ in range(4):
             _pm = _psi_c_minus(psi_c_plus, J_i, J_eth, mu, delta)
             l_b = _compute_l_b((psi_c_plus - _pm) * T_e, T_e, n_e, plasma.n_n, plasma.sigma_b)
+            next_bypass = _compute_beam_bypass_fraction(l_b, config.L_cath)
+            if abs(next_bypass - beam_bypass_fraction) < 1e-4:
+                beam_bypass_fraction = next_bypass
+                break
+            beam_bypass_fraction = next_bypass
+            psi_c_plus = _do_solve(_make_f(beam_bypass_fraction))
+        _pm = _psi_c_minus(psi_c_plus, J_i, J_eth, mu, delta)
+        l_b = _compute_l_b((psi_c_plus - _pm) * T_e, T_e, n_e, plasma.n_n, plasma.sigma_b)
+        beam_bypass_fraction = _compute_beam_bypass_fraction(l_b, config.L_cath)
+        long_mfp = l_b > 0.0 and l_b > config.L_cath
 
         # ------------------------------------------------------------------
         # Recover all quantities at the solution
@@ -642,7 +670,7 @@ def solve(
 
         J_tot = J_i * (1.0 - math.exp(Lambda - psi_c_plus)) + J_star
 
-        J_anode = J_tot - eta * J_star if long_mfp else J_tot
+        J_anode = J_tot - eta * beam_bypass_fraction * J_star
         # Scaled anode sheath potential
         psi_a = Lambda - math.log(1.0 + J_anode / J_i_a)
 
@@ -664,7 +692,7 @@ def solve(
         P_wall = I_tot * config.V_bank
         P_load = I_tot * V_b
     P_comp = I_tot**2 * config.R_comp
-    P_prim = (1.0 - eta) * I_eth_star * phi_c if long_mfp else I_eth_star * phi_c
+    P_prim = (1.0 - eta * beam_bypass_fraction) * I_eth_star * phi_c
     P_ohmic = I_tot * V_p
     P_cathode_e = _P_elec(phi_c, T_e, I_i, Lambda)
     P_cathode_i = _P_ion(phi_c, T_e, I_i)
@@ -672,7 +700,7 @@ def solve(
     P_anode_e = _P_elec(phi_a, T_e, I_i_a, Lambda)
     P_anode_i = _P_ion(phi_a, T_e, I_i_a)
     P_anode_i_pl = _P_ion(phi_a, T_e, I_i_a, pl=True)
-    _P_beam_bypass = eta * I_eth_star * V_b if long_mfp else 0.0
+    _P_beam_bypass = eta * beam_bypass_fraction * I_eth_star * V_b
     P_net = P_load - P_cathode_e - P_cathode_i - P_anode_e - P_anode_i - _P_beam_bypass
     P_net2 = P_prim + P_ohmic - P_cathode_e - P_cathode_i_pl - P_anode_e - P_anode_i_pl
     P_loss = P_cathode_e + P_cathode_i_pl + P_anode_e + P_anode_i_pl
@@ -705,6 +733,8 @@ def solve(
         P_net2=P_net2,
         P_loss=P_loss,
         regime=regime,
+        long_mfp=long_mfp,
+        beam_bypass_fraction=beam_bypass_fraction,
         l_b=l_b,
     )
 
@@ -764,8 +794,7 @@ def solve_beam_system(
     phi_c_0 = result.phi_c
     if phi_c_0 > I_ion:
         v_beam[0] = math.sqrt(2.0 * phi_c_0 * _erg_per_eV / _me_cgs)
-        _long_mfp_0 = result.l_b > 0.0 and result.l_b > config.L_cath
-        _I_beam_0 = result.I_eth_star * (1.0 - config.eta) if _long_mfp_0 else result.I_eth_star
+        _I_beam_0 = result.I_eth_star * (1.0 - config.eta * result.beam_bypass_fraction)
         n_beam[0] = _I_beam_0 / (_e_SI * plasma_cross[0] * v_beam[0])
         if gas_type == "He":
             beam_cross[0] = He_EII_cross_lkup(phi_c_0 / I_ion)
@@ -785,8 +814,9 @@ def solve_beam_system(
         phi_c_1 = result_twin.phi_c
         if phi_c_1 > I_ion:
             v_beam[-1] = math.sqrt(2.0 * phi_c_1 * _erg_per_eV / _me_cgs)
-            _long_mfp_1 = result_twin.l_b > 0.0 and result_twin.l_b > config.L_cath
-            _I_beam_1 = result_twin.I_eth_star * (1.0 - config.eta) if _long_mfp_1 else result_twin.I_eth_star
+            _I_beam_1 = result_twin.I_eth_star * (
+                1.0 - config.eta * result_twin.beam_bypass_fraction
+            )
             n_beam[-1] = _I_beam_1 / (_e_SI * plasma_cross[-1] * v_beam[-1])
             if gas_type == "He":
                 beam_cross[-1] = He_EII_cross_lkup(phi_c_1 / I_ion)
