@@ -1,4 +1,5 @@
 import math
+import time
 import tomllib
 import numpy as np
 from types import SimpleNamespace
@@ -11,8 +12,6 @@ from cablp.funcs._heat import (
     ion_par_heat_loss,
     elec_par_heat_div,
     ion_par_heat_div,
-    elec_perp_heat_loss,
-    ion_perp_heat_loss,
     Q_cx_He,
     Q_ie,
 )
@@ -44,6 +43,13 @@ class BreakdownError(RuntimeError):
     """Raised when the plasma fails to reach the breakdown current within tau_prebreakdown."""
 
 
+class NumericalInstabilityError(RuntimeError):
+    """Raised by debug checks when an accepted step creates an implausible state jump."""
+
+
+_STATE_NAMES = ("ne", "nn", "Te", "Ti", "v_plasma")
+
+
 _CATHODE_FIELDS = (
     "phi_c_plus",
     "phi_c_minus",
@@ -69,6 +75,9 @@ _CATHODE_FIELDS = (
     "P_net",
     "P_net2",
     "P_loss",
+    "long_mfp",
+    "beam_bypass_fraction",
+    "l_b",
 )
 _CATHODE_NAN = np.full(len(_CATHODE_FIELDS), np.nan)
 
@@ -81,36 +90,29 @@ def _cathode_to_array(result):
 
 input_dict_template = {
     "gas_type": "He",
-    "ne0": 1e9,
+    "ne0": 1e10,
     "Tn_fit": 0.1,  # Neutral temperature for reaction rate fits
     "Te0": 0.1,
     "Ti0": 0.1,
-    "Bz0": 1500,  # Magnetic field in gauss
     "Lm": 1800,  # Length of machine
     "Rm": 50,  # Machine radius
     "Lp": 1800,  # Length of plasma
     "Rp": 18,  # Plasma radius
-    "Rhf": 50,  # Gradient scale length of radial heat flux
     # Cathode device parameters (used by cathode solver)
     "V_bank": 100,  # Power supply voltage [V]
-    "T_s": 1900.0,  # Cathode surface temperature [K]
+    "T_s": 1973.15,  # Cathode surface temperature [K]
     "phi_wf": 3.0,  # Work function [eV] (LaB6 default)
     "C_R": 29.0,  # Richardson constant [A cm⁻² K⁻²]
     "R_comp": 0.004,  # Compliance resistor [Ω]
     "eta": 0.358,  # Anode area / cathode area
     "L_cath": 50.0,  # Cathode-to-anode distance [cm]
     "R_cath": 18.0,  # Cathode radius [cm]; A_c = π * R_cath²
-    "S_gp": 500,  # Gas puff source rate
-    "Twin_S_gp": 500,
-    "gp_puff_factor": 1.0,  # Initial gas puff multiplier (S_gp * gp_puff_factor for t < tau_gp_ramp)
-    "tau_gp_ramp": 0.0,  # Duration of initial boosted puff [s]; 0 = no boost
+    "S_gp": 8000,  # Gas puff source rate
+    "Twin_S_gp": 8000,
     "S_pump_L": 4000,  # Vacuum pump sink rate
     "S_pump_R": 4000,
-    "tau_I_on": 0.001,  # Time constant for beam current rise
     "b_epara": 1.0,  # Scaling factor for e_para transport
     "b_ipara": 1.0,  # Scaling factor for i_para transport
-    "b_eperp": 1.0,  # Scaling factor for e_perp transport
-    "b_iperp": 1.0,  # Scaling factor for i_perp transport
     "b_ioniz": 1.0,  # Scaling factor for ionization
     "b_rec_rad": 1.0,  # Scaling factor for radiative recombination
     "b_rec_3b": 1.0,  # Scaling factor for three-body recombination
@@ -120,37 +122,58 @@ input_dict_template = {
     "b_Qei": 1.0,  # Scaling factor for electron-ion cooling
     "b_Qen": 1.0,  # Scaling factor for electron-neutral cooling
     "cycles": 1,
-    "tau_prebreakdown": 0.1,   # max pre-breakdown phase duration [s]
-    "tau_discharge": 15e-3,    # main discharge duration after breakdown [s]
-    "tau_afterglow": 10e-3,    # afterglow duration after discharge [s]
+    "tau_prebreakdown": 0.05,   # max pre-breakdown phase duration [s]
+    "tau_discharge": 20e-3,    # main discharge duration after breakdown [s]
+    "tau_afterglow": 5e-3,    # afterglow duration after discharge [s]
     "tau_cycle": 3.0,          # total cycle length for Plasma=False [s]
-    "I_breakdown": 1000.0,     # I_tot threshold that marks breakdown [A]
+    "I_prebreakdown": 100.0,     # I_tot threshold to exit floor-dominated pre-breakdown (0 = skip)
+    "I_breakdown": 1000.0,     # I_tot threshold marking experimental t=0 (fixed at 1 kA for timing)
     "h0": 1e-6,                # initial adaptive step size [s]
-    "h_max_discharge": 1e-5,   # max step size during active discharge phases [s]
+    "h_max_discharge": 1e-4,   # max step size during active discharge phases [s]
     "h_max_afterglow": 1e-4,   # max step size during afterglow/off phases [s]
+    "dt_save": 1e-5,            # min simulation time between saved output steps [s]; 0 = save every step
+    "max_output_steps": 0,     # hard cap on total saved timesteps; 0 = unlimited
     "cells": 3,
     "rtol": 1e-3,  # relative tolerance for adaptive stepping
-    "h_min": 1e-12,  # minimum allowed step size [s]
+    "h_min": 1e-10,            # minimum allowed step size [s]
+    "ne_cfl_floor": None,      # minimum ne [cm^-3] used when computing the electron-conduction CFL (interior cells only); None = use actual ne
+    "ne_floor": 1e8,
+    "nn_floor": 1e8,
+    "Te_floor": 0.1,
+    "Ti_floor": 0.1,
+    "Te_reject_floor": 0.0,
+    "Ti_reject_floor": 0.0,
+    "ne_reject_floor": 0.0,
+    "nn_reject_floor": 0.0,
+    "debug_max_rel_step_change": np.inf,  # max per-step relative change when debug_checks is enabled
+    "debug_max_neighbor_ratio": np.inf,  # max adjacent-cell ratio when debug_checks is enabled
+    "v_atol_cs_fraction": 0.01,  # v_plasma abs tolerance as fraction of max(c_s); updated each accepted step
+    "debug_step_atol": None,  # optional dict/list of per-component scales for accepted-step jump checks
+    "debug_check_start_time": 0.005,  # skip debug jump checks before this absolute simulation time [s]
+    "debug_ignore_floor_neighbors": True,  # ignore neighbor ratios involving floor-clamped values
+    "alpha_ne_sonic_flux": 1.0,  # multiplier for hybrid_ne sound-speed pressure relaxation
+    "beta_ne_sonic_flux": 1.0,  # max hybrid_ne correction as a fraction of ne_face*c_s_face
+    "hybrid_ne_taper_dn0": 0.2,  # density contrast where hybrid_ne sonic correction is half strength
+    "hybrid_ne_taper_power": 0,  # exponent applied to the hybrid_ne density-contrast taper
+    "hybrid_ne_taper_delay": 5e-3,  # time after breakdown before hybrid_ne density taper is applied [s]
+    "ion_pressure_weight": 1.0,  # ion contribution to pressure-gradient acceleration: Te + w_i*Ti
 }
 
 input_flags_template = {
-    "eperp": False,
-    "iperp": False,
     "icool": True,
     "ncool": True,
     "cx": True,
-    "mit_el": False,
-    "C_imp": False,
-    "O_imp": False,
     "icool_recomb": False,
     "Plasma": True,
     "TwinCathode": False,
     "Velocity": True,
-    "advection": False,  # Include v·∇v convective acceleration in velocity equation
+    "advection": True,  # Include v·∇v convective acceleration in velocity equation
     "adaptive_mesh": False,  # Dynamically refine/coarsen spatial cells based on MFP criterion
-    "mfp_transport": False,  # Use exponential MFP kernel for ne transport; False = nearest-neighbor Laplacian
-    "nonlocal_ne": False,    # Non-local density flux correction: Beer-Lambert kernel gated by min(c_s*h, λ_ii) > dx
-    "sonic_ne": False,       # Interior face density flux at sound speed (symmetric ne*c_s); ignores v_plasma for transport
+    "hybrid_ne": True,      # Interior face flux: velocity advection plus limited sonic pressure correction
+    "debug_checks": False,   # Raise early on non-finite states or configured jump/gradient thresholds
+    "debug_raise_on_guard": False,  # Raise when accepted endpoints require clipping/flooring
+    "reject_floor_violations": True,  # Reject RK steps whose accepted endpoint crosses state floors
+    "reject_large_step_changes": False,  # Reject RK steps whose endpoint exceeds debug_max_rel_step_change
 }
 
 
@@ -181,8 +204,7 @@ def load_config(path):
         Id    = 3000
 
         [flags]
-        Velocity     = true
-        mfp_transport = true
+        Velocity = true
     """
     with open(path, "rb") as f:
         raw = tomllib.load(f)
@@ -201,11 +223,14 @@ class LAPDSim:
         self,
         input_dict=input_dict_template,
         input_flags=input_flags_template,
+        progress_callback=None,
     ):
         self._flags = input_flags
         self._input_dict = dict(input_dict)
         self._cathode_cell_len = 100.0  # fixed cathode cell length [cm]
         self._n_interior = _to_odd(input_dict.get("cells", 3))
+        if self._n_interior > 19:
+            raise ValueError(f"Interior cells must be <= 19 (got {self._n_interior})")
         self._n_cathode_cells = 2  # both ends always have a fixed 100 cm boundary cell
         self._cells = self._n_interior + self._n_cathode_cells
         self._gas_type = input_dict.get("gas_type", "He")
@@ -230,7 +255,6 @@ class LAPDSim:
         self._Ti = np.ones(self._cells) * input_dict["Ti0"]
         self._Tn_fit = input_dict.get("Tn_fit", 0.1)
         self._v_plasma = np.zeros(self._cells)
-        self._Bz0 = np.ones(self._cells) * input_dict["Bz0"]
         self._L_machine = input_dict["Lm"]
         self._L_cell = self._build_L_cell(self._n_interior)
         self._R_machine = np.ones(self._cells) * input_dict["Rm"]
@@ -239,13 +263,10 @@ class LAPDSim:
         self._R_plasma = np.ones(self._cells) * input_dict["Rp"]
         self._Rsq_ratio = (self._R_plasma / self._R_machine) ** 2
         self._L_heatflux = self._L_plasma / 2
-        self._R_heatflux = np.ones(self._cells) * input_dict["Rhf"]
         self._Tn = input_dict.get("Tn", 0.025)
         self._v_th_n = np.sqrt(8 * kb_cgs * 300.0 / (np.pi * self._mu_neutral * m_p_cgs))
         self._b_epara = input_dict.get("b_epara", 1.0)
         self._b_ipara = input_dict.get("b_ipara", 1.0)
-        self._b_eperp = input_dict.get("b_eperp", 1.0)
-        self._b_iperp = input_dict.get("b_iperp", 1.0)
         self._b_ioniz = input_dict.get("b_ioniz", 1.0)
         self._b_rec_rad = input_dict.get("b_rec_rad", 1.0)
         self._b_rec_3b = input_dict.get("b_rec_3b", 1.0)
@@ -254,6 +275,12 @@ class LAPDSim:
         self._b_Qei = input_dict.get("b_Qei", 1.0)
         self._b_Qen = input_dict.get("b_Qen", 1.0)
         self._b_source = input_dict.get("b_source", 1.0)
+        self._alpha_ne_sonic_flux = input_dict.get("alpha_ne_sonic_flux", 1.0)
+        self._beta_ne_sonic_flux = input_dict.get("beta_ne_sonic_flux", 1.0)
+        self._hybrid_ne_taper_dn0 = input_dict.get("hybrid_ne_taper_dn0", 0.2)
+        self._hybrid_ne_taper_power = input_dict.get("hybrid_ne_taper_power", 1.0)
+        self._hybrid_ne_taper_delay = input_dict.get("hybrid_ne_taper_delay", 5e-3)
+        self._ion_pressure_weight = input_dict.get("ion_pressure_weight", 1.0)
         self._plasma_cross = np.pi * self._R_plasma**2
         self._plasma_vol = self._plasma_cross * self._L_plasma
         self._cell_vol = np.pi * self._R_machine**2 * self._L_cell
@@ -273,7 +300,12 @@ class LAPDSim:
         self._tau_prebreakdown = input_dict.get("tau_prebreakdown", 0.1)
         self._tau_discharge = input_dict.get("tau_discharge", 15e-3)
         self._tau_afterglow = input_dict.get("tau_afterglow", 10e-3)
+        self._t_total = self._tau_prebreakdown + self._tau_discharge + self._tau_afterglow
+        self._progress_callback = progress_callback
+        self._last_cb_wall_t = None  # set on first callback tick
+        self._rate_ema = 0.0         # wall seconds per 1ms sim; 0 = no data yet
         self._tau_cycle = input_dict.get("tau_cycle", 3.0)
+        self._I_prebreakdown = input_dict.get("I_prebreakdown", 0.0)
         self._I_breakdown = input_dict.get("I_breakdown", 1000.0)
         self._h0 = input_dict.get("h0", 1e-6)
         self._h_max_discharge = input_dict.get("h_max_discharge", 1e-5)
@@ -303,20 +335,76 @@ class LAPDSim:
         self._cathode_x0_twin = None
         self._cathode_result = None
         self._cathode_result_twin = None
-        self._gp_puff_factor = input_dict.get("gp_puff_factor", 1.0)
-        self._tau_gp_ramp = input_dict.get("tau_gp_ramp", 0.0)
         self._t_current = 0.0
         self._rtol = input_dict.get("rtol", 1e-3)
         self._h_min = input_dict.get("h_min", 1e-12)
+        self._ne_cfl_floor = input_dict.get("ne_cfl_floor", None)
+        self._dt_save = input_dict.get("dt_save", 0.0)
+        self._max_output_steps = input_dict.get("max_output_steps", 0)
+        self._state_floor = np.array(
+            [
+                [input_dict.get("ne_floor", 1e8)],
+                [input_dict.get("nn_floor", 1e8)],
+                [input_dict.get("Te_floor", 0.1)],
+                [input_dict.get("Ti_floor", 0.1)],
+                [-np.inf],
+            ]
+        )
+        self._reject_floor = np.array(
+            [
+                [input_dict.get("ne_reject_floor", 0.0)],
+                [input_dict.get("nn_reject_floor", 0.0)],
+                [input_dict.get("Te_reject_floor", 0.0)],
+                [input_dict.get("Ti_reject_floor", 0.0)],
+                [-np.inf],
+            ]
+        )
         # Per-component absolute tolerance matched to existing floor values.
         # Shape (5, 1) broadcasts with state shape (5, cells).
-        self._atol = np.array([[1e8], [1e8], [0.01], [0.01], [1.0]])
-        _max_interior = _to_odd(max(input_dict.get("max_cells", 18), self._n_interior))
+        self._v_atol_cs_fraction = input_dict.get("v_atol_cs_fraction", 0.01)
+        _c_s0 = np.max(v_ion_speed(input_dict["Te0"], self._mu))
+        self._atol = np.array(
+            [
+                [self._state_floor[0, 0]],
+                [self._state_floor[1, 0]],
+                [self._state_floor[2, 0]],
+                [self._state_floor[3, 0]],
+                [self._v_atol_cs_fraction * _c_s0],
+            ]
+        )
+        self._debug_events = []
+        self._debug_max_rel_step_change = input_dict.get(
+            "debug_max_rel_step_change", np.inf
+        )
+        self._debug_max_neighbor_ratio = input_dict.get(
+            "debug_max_neighbor_ratio", np.inf
+        )
+        self._debug_step_atol = self._parse_debug_step_atol(
+            input_dict.get("debug_step_atol")
+        )
+        self._debug_check_start_time = input_dict.get("debug_check_start_time", 0.0)
+        self._debug_ignore_floor_neighbors = input_dict.get(
+            "debug_ignore_floor_neighbors", True
+        )
+        _max_interior = max(input_dict.get("max_cells", 19), self._n_interior)
         self._max_cells = _max_interior + self._n_cathode_cells
         self._min_cells = _to_odd(min(input_dict.get("min_cells", 3), self._n_interior))
         self._mfp_refine_thresh = input_dict.get("mfp_refine_threshold", 0.5)
         self._mfp_coarsen_thresh = input_dict.get("mfp_coarsen_threshold", 2.0)
         self._print_init_summary()
+
+    def _parse_debug_step_atol(self, value):
+        """Return per-component scales for debug accepted-step jump checks."""
+        if value is None:
+            return np.array([[1e8], [1e8], [0.05], [0.05], [1e5]])
+        if isinstance(value, dict):
+            return np.array([[value.get(name, default[0])] for name, default in zip(_STATE_NAMES, self._atol)])
+        arr = np.asarray(value, dtype=float)
+        if arr.shape != (len(_STATE_NAMES),):
+            raise ValueError(
+                f"debug_step_atol must have {len(_STATE_NAMES)} entries: {_STATE_NAMES}"
+            )
+        return arr.reshape(len(_STATE_NAMES), 1)
 
     def _build_L_plasma(self, n_interior):
         """Build plasma cell length array: fixed 100 cm cathode cells + uniform interior."""
@@ -353,9 +441,15 @@ class LAPDSim:
         print(f"  S_gp={self._S_gp} cm^-3 s^-1")
         print(f"  S_pump={self._S_pump} s^-1")
         if self._flags["Plasma"]:
-            print(f"  Phases: pre_breakdown(<{self._tau_prebreakdown*1e3:.1f} ms) "
-                  f"→ main_discharge({self._tau_discharge*1e3:.1f} ms) "
-                  f"→ afterglow({self._tau_afterglow*1e3:.1f} ms)  I_breakdown={self._I_breakdown:.0f} A")
+            if self._I_prebreakdown > 0:
+                print(f"  Phases: pre_breakdown(<{self._tau_prebreakdown*1e3:.1f} ms, I<{self._I_prebreakdown:.0f} A) "
+                      f"→ breakdown(I<{self._I_breakdown:.0f} A) "
+                      f"→ main_discharge({self._tau_discharge*1e3:.1f} ms) "
+                      f"→ afterglow({self._tau_afterglow*1e3:.1f} ms)")
+            else:
+                print(f"  Phases: pre_breakdown(<{self._tau_prebreakdown*1e3:.1f} ms) "
+                      f"→ main_discharge({self._tau_discharge*1e3:.1f} ms) "
+                      f"→ afterglow({self._tau_afterglow*1e3:.1f} ms)  I_breakdown={self._I_breakdown:.0f} A")
         else:
             print(f"  Equilibrium: puffing({self._tau_discharge*1e3:.1f} ms) "
                   f"→ off({(self._tau_cycle - self._tau_discharge)*1e3:.1f} ms)  "
@@ -366,6 +460,8 @@ class LAPDSim:
         pass  # time stepping is now fully driven by the adaptive integrator
 
     def initialize_results(self):
+        self._debug_events = []
+        self._t_breakdown = None
         self._n_beam = np.zeros(self._cells)
         self._beam_cross = np.zeros(self._cells)
         self._l_b_profile = np.zeros(self._cells)
@@ -386,8 +482,6 @@ class LAPDSim:
         self._i_par_hl = np.zeros(self._cells)  # Ion parallel heat loss
         self._e_par_flux = np.zeros(self._cells)  # Net electron parallel heat flux
         self._i_par_flux = np.zeros(self._cells)  # Net ion parallel heat flux
-        self._e_perp_hl = np.zeros(self._cells)  # Electron perpendicular heat loss
-        self._i_perp_hl = np.zeros(self._cells)  # Ion perpendicular heat loss
         self._ne_flux = np.zeros(
             self._cells
         )  # boundary outgoing electron particle flux
@@ -398,6 +492,7 @@ class LAPDSim:
         self._S_rec_rad = np.zeros(self._cells)  # Radiative recombination sink
         self._S_rec_3b = np.zeros(self._cells)  # Three-body recombination sink
         self._S_ion_beam = np.zeros(self._cells)  # Beam ionization source
+        self._t_last_save = -np.inf
         # Dynamic lists — converted to arrays by _finalize_results()
         self._time_list = []
         self._densities_list = []
@@ -421,6 +516,13 @@ class LAPDSim:
         return out
 
     def update_results(self, t):
+        if self._dt_save > 0 and t - self._t_last_save < self._dt_save:
+            return
+        if self._max_output_steps > 0 and len(self._time_list) >= self._max_output_steps:
+            if len(self._time_list) == self._max_output_steps:
+                print(f"  [output] max_output_steps={self._max_output_steps} reached at t={t:.4e} s; further steps will not be saved.")
+            return
+        self._t_last_save = t
         self._time_list.append(t)
         self._densities_list.append(
             np.array(
@@ -447,8 +549,6 @@ class LAPDSim:
                 [
                     self._pad(self._e_par_flux),
                     self._pad(self._i_par_flux),
-                    self._pad(self._e_perp_hl),
-                    self._pad(self._i_perp_hl),
                     self._pad(self._Qie),
                     self._pad(self._Qei),
                     self._pad(self._Qen),
@@ -477,8 +577,8 @@ class LAPDSim:
         )
         if self._flags["Plasma"]:
             tau_e = time_elec_coll(self._Te, self._ne, self._ln_lambda)
-            primary_mfp = self._l_b / self._L_plasma
-            bulk_mfp = v_thm_e(self._Te) * tau_e / self._L_plasma
+            primary_mfp = self._l_b
+            bulk_mfp = v_thm_e(self._Te) * tau_e
             ln_lambda = self._ln_lambda.copy()
         else:
             primary_mfp = np.zeros(self._cells)
@@ -542,14 +642,6 @@ class LAPDSim:
             self._S_rec_rad = self._b_rec_rad * ne * ne * alpha_r(Te)
             self._S_rec_3b = self._b_rec_3b * ne * ne * ne * alpha_3(Te)
 
-    def _effective_S_gp(self):
-        """Return S_gp, boosted by gp_puff_factor while t < tau_gp_ramp."""
-        if self._tau_gp_ramp <= 0.0 or self._gp_puff_factor == 1.0:
-            return self._S_gp
-        if self._t_current < self._tau_gp_ramp:
-            return self._S_gp * self._gp_puff_factor
-        return self._S_gp
-
     def _nn_clausing_flux(self, nn):
         """
         Neutral diffusion via molecular flow conductance with Clausing factor.
@@ -579,187 +671,60 @@ class LAPDSim:
     def _dstep_nn(self, nn):
         """Derivative for nn-only integration when Plasma=False."""
         Nn_flux = self._nn_clausing_flux(nn)
-        return Nn_flux + (self._effective_S_gp() if self._discharge_on else 0) - self._S_pump * nn
+        return Nn_flux + (self._S_gp if self._discharge_on else 0) - self._S_pump * nn
 
-
-    # ── NON-LOCAL FLUX KERNEL (disabled) ─────────────────────────────────────
-    # _compute_v_kernel and _ne_flux_mfp_kernel are retained for reference but
-    # are not called. v_plasma is always evolved by the velocity ODE.
-
-    def _compute_v_kernel(self, ne, c_s):
+    def _ne_flux_hybrid(self, ne, c_s, v_plasma):
         """
-        Infer cell-centred bulk velocity from the ambipolar flux pattern.
+        Interior density flux from resolved flow plus directional acoustic relaxation.
 
-        Net rightward particle flux at face f is Γ[f] - Γ[f+1] = n[f]*c_s[f] - n[f+1]*c_s[f+1].
-        Dividing by the face-averaged density gives the implied bulk velocity at that
-        face.  Cell-centred values are the average of the two adjacent face velocities
-        (one-sided for boundary cells).
-
-        Used to maintain v_plasma continuity: while a cell is in the kernel regime
-        (Kn > 1/3) its velocity is set to this value after each accepted RK45 step,
-        so the handoff to fluid advection at Kn ≤ 1/3 is seamless.
+        Positive Gamma_face[f] moves plasma from cell f to cell f+1.
+        Sonic emission is limited by the stronger source cell, not the receiving cell.
+        The sonic correction fades as adjacent cell densities equilibrate.
         """
-        Γ = ne * c_s
-        n_face = 0.5 * (ne[:-1] + ne[1:])
-        v_face = (Γ[:-1] - Γ[1:]) / n_face     # (cells-1,) net rightward face velocity
-        v_cell = np.empty(self._cells)
-        v_cell[0] = v_face[0]
-        v_cell[-1] = v_face[-1]
-        v_cell[1:-1] = 0.5 * (v_face[:-1] + v_face[1:])
-        return v_cell
-
-    def _ne_flux_mfp_kernel(self, ne, Te, c_s, v_plasma):
-        """
-        Per-face Kn-gated density transport.
-
-        At each face f the local Knudsen number Kn_f = λ_ei / Δx_face selects
-        the transport scheme:
-
-          Kn_f > 1/3  →  Beer-Lambert exponential kernel.
-              Rightward flux Γ[f] = ne[f]*c_s[f] leaves cell f and deposits into
-              cells f+1, f+2, … with weights derived from exponential absorption
-              (mean-free-path = λ_face).  The end cell absorbs all remaining flux,
-              so weights sum exactly to 1 without normalisation.
-              Leftward flux Γ[f+1] mirrors this toward cell 0.
-
-          Kn_f ≤ 1/3  →  Velocity advection using v_plasma from the ODE.
-              Face flux = ne_face · v_face (nearest-neighbour, fluid limit).
-
-        Returns the transport contribution to dne/dt [cm⁻³ s⁻¹].
-        Boundary conditions are NOT included; added by the caller.
-        """
-        L = self._L_plasma
-        Γ = ne * c_s
-        λ_ei = v_thm_e(Te) * time_elec_coll(Te, ne, self._ln_lambda)
-        λ_face = 0.5 * (λ_ei[:-1] + λ_ei[1:])
-        Kn_face = λ_face / (0.5 * (L[:-1] + L[1:]))
-
         Ne_flux = np.zeros(self._cells)
 
-        for f in range(self._cells - 1):
-            if Kn_face[f] > (1.0 / 3.0):
-                lam = λ_face[f]
+        ne_face = 0.5 * (ne[:-1] + ne[1:])
+        v_face = 0.5 * (v_plasma[:-1] + v_plasma[1:])
 
-                # ── Rightward: Γ[f] leaves cell f, deposits in cells f+1 … cells-1 ──
-                L_r = L[f + 1:]                                         # lengths of target cells
-                n_r = len(L_r)
-                d_entry_r = np.empty(n_r)
-                d_entry_r[0] = 0.0
-                if n_r > 1:
-                    d_entry_r[1:] = np.cumsum(L_r[:-1])
-                w_r = np.empty(n_r)
-                if n_r > 1:
-                    w_r[:-1] = np.exp(-d_entry_r[:-1] / lam) * (1.0 - np.exp(-L_r[:-1] / lam))
-                w_r[-1] = np.exp(-d_entry_r[-1] / lam)     # end cell absorbs remainder
-                Ne_flux[f] -= Γ[f] / L[f]
-                Ne_flux[f + 1:] += Γ[f] * w_r / L_r
+        Gamma_adv = ne_face * v_face
+        Gamma_r = ne[:-1] * c_s[:-1]
+        Gamma_l = ne[1:] * c_s[1:]
+        Gamma_sonic_raw = Gamma_r - Gamma_l
+        Gamma_sonic_max = self._beta_ne_sonic_flux * np.maximum(Gamma_r, Gamma_l)
+        Gamma_sonic_corr = np.clip(
+            Gamma_sonic_raw,
+            -Gamma_sonic_max,
+            Gamma_sonic_max,
+        )
 
-                # ── Leftward: Γ[f+1] leaves cell f+1, deposits in cells f … 0 ──
-                L_l = L[f::-1]                                          # [L[f], L[f-1], ..., L[0]]
-                n_l = len(L_l)
-                d_entry_l = np.empty(n_l)
-                d_entry_l[0] = 0.0
-                if n_l > 1:
-                    d_entry_l[1:] = np.cumsum(L_l[:-1])
-                w_l = np.empty(n_l)
-                if n_l > 1:
-                    w_l[:-1] = np.exp(-d_entry_l[:-1] / lam) * (1.0 - np.exp(-L_l[:-1] / lam))
-                w_l[-1] = np.exp(-d_entry_l[-1] / lam)     # end cell absorbs remainder
-                # w_l[k] → cell f-k (k=0 is cell f, k=f is cell 0)
-                left_idx = np.arange(f, -1, -1)
-                Ne_flux[f + 1] -= Γ[f + 1] / L[f + 1]
-                Ne_flux[left_idx] += Γ[f + 1] * w_l / L[left_idx]
+        taper = self._hybrid_ne_density_taper(ne, ne_face)
 
-            else:
-                # ── Fluid regime: nearest-neighbour velocity advection ──
-                ne_b = 0.5 * (ne[f] + ne[f + 1])
-                v_b = 0.5 * (v_plasma[f] + v_plasma[f + 1])
-                F = ne_b * v_b
-                Ne_flux[f] -= F / L[f]
-                Ne_flux[f + 1] += F / L[f + 1]
+        Gamma_face = Gamma_adv + self._alpha_ne_sonic_flux * taper * Gamma_sonic_corr
 
+        Ne_flux[:-1] -= Gamma_face / self._L_plasma[:-1]
+        Ne_flux[1:] += Gamma_face / self._L_plasma[1:]
         return Ne_flux
 
-    def _ne_flux_sonic_nonlocal(self, ne, c_s, v_plasma):
-        """
-        Density flux with non-local correction for long-mean-free-path transport.
+    def _hybrid_ne_density_taper(self, ne, ne_face):
+        t_breakdown = getattr(self, "_t_breakdown", None)
+        t_current = getattr(self, "_t_current", 0.0)
+        if t_breakdown is None:
+            t_since_breakdown = -np.inf
+        else:
+            t_since_breakdown = t_current - t_breakdown
+        if t_since_breakdown < self._hybrid_ne_taper_delay:
+            return 1.0
 
-        At each interior face f the effective non-local reach is:
-            L_eff = min(c_s_face * h, λ_ii_face)
-        where c_s * h is how far sound-speed plasma travels in one time step
-        and λ_ii = v_thi * τ_ii is the ion-ion mean free path (collisional cap).
-
-        L_eff > dx_face  →  Beer-Lambert exponential kernel.  Outward flux
-        Γ = ne * c_s from each cell is deposited into cells within reach with
-        weights exp(-d / L_eff) * (1 − exp(−Δx / L_eff)); the last cell
-        absorbs all remaining flux so weights sum to exactly 1.  Rightward
-        and leftward fluxes are treated symmetrically.
-
-        L_eff ≤ dx_face  →  local fluid advection: ne_face * v_plasma_face.
-
-        Uses self._Ti and self._ln_lambda frozen from the last accepted step.
-        Returns the interior-face contribution to dne/dt [cm⁻³ s⁻¹]; boundary
-        conditions are NOT included and are added by _calc_n_flux.
-        """
-        L = self._L_plasma
-        h = self._h
-        v_thi = v_ion_speed(self._Ti, self._mu)
-        tau_ii = time_ion_coll(self._Ti, ne, self._mu, self._ln_lambda)
-        lam_ii = v_thi * tau_ii
-        L_eff_cell = np.minimum(c_s * h, lam_ii)
-
-        Ne_flux = np.zeros(self._cells)
-
-        for f in range(self._cells - 1):
-            L_eff_f = 0.5 * (L_eff_cell[f] + L_eff_cell[f + 1])
-            dx_f = 0.5 * (L[f] + L[f + 1])
-
-            if L_eff_f <= dx_f:
-                # Local fluid limit
-                ne_b = 0.5 * (ne[f] + ne[f + 1])
-                v_b = 0.5 * (v_plasma[f] + v_plasma[f + 1])
-                F = ne_b * v_b
-                Ne_flux[f] -= F / L[f]
-                Ne_flux[f + 1] += F / L[f + 1]
-            else:
-                lam = L_eff_f
-
-                # ── Rightward: ne[f]*c_s[f] leaves cell f → cells f+1, f+2, … ──
-                L_r = L[f + 1:]
-                d_r = np.empty(len(L_r))
-                d_r[0] = 0.0
-                if len(L_r) > 1:
-                    d_r[1:] = np.cumsum(L_r[:-1])
-                w_r = np.empty(len(L_r))
-                if len(L_r) > 1:
-                    w_r[:-1] = np.exp(-d_r[:-1] / lam) * (1.0 - np.exp(-L_r[:-1] / lam))
-                w_r[-1] = np.exp(-d_r[-1] / lam)  # end cell absorbs remainder
-                Ne_flux[f] -= ne[f] * c_s[f] / L[f]
-                Ne_flux[f + 1:] += ne[f] * c_s[f] * w_r / L_r
-
-                # ── Leftward: ne[f+1]*c_s[f+1] leaves cell f+1 → cells f, f-1, … ──
-                L_l = L[f::-1]
-                d_l = np.empty(len(L_l))
-                d_l[0] = 0.0
-                if len(L_l) > 1:
-                    d_l[1:] = np.cumsum(L_l[:-1])
-                w_l = np.empty(len(L_l))
-                if len(L_l) > 1:
-                    w_l[:-1] = np.exp(-d_l[:-1] / lam) * (1.0 - np.exp(-L_l[:-1] / lam))
-                w_l[-1] = np.exp(-d_l[-1] / lam)  # end cell absorbs remainder
-                left_idx = np.arange(f, -1, -1)
-                Ne_flux[f + 1] -= ne[f + 1] * c_s[f + 1] / L[f + 1]
-                Ne_flux[left_idx] += ne[f + 1] * c_s[f + 1] * w_l / L[left_idx]
-
-        return Ne_flux
+        rel_dn = np.abs(ne[:-1] - ne[1:]) / np.maximum(ne_face, 1e-300)
+        dn0 = max(self._hybrid_ne_taper_dn0, 1e-300)
+        taper = rel_dn / (rel_dn + dn0)
+        return taper**self._hybrid_ne_taper_power
 
     def _calc_n_flux(self, Te, ne, nn, v_plasma, c_s=None):
         # TODO: use the cathode solver results to determine plasma loss in cathode cells
         Ne_flux = np.zeros(self._cells)
         Nn_flux = np.zeros(self._cells)
         if self._flags["Plasma"]:
-            if c_s is None:
-                c_s = v_ion_speed(Te, self._mu)
             # Boundary losses: cathode cells use sheath/cathode physics; right wall uses Bohm speed
             Ne_flux[0] = -(1 + 2 * self._eta) * self._cathode_result.I_i / qe_SI / self._plasma_vol[0]
             if self._flags["TwinCathode"]:
@@ -769,10 +734,10 @@ class LAPDSim:
             Nn_flux[0] = -Ne_flux[0] * self._Rsq_ratio[0]
             Nn_flux[-1] = -Ne_flux[-1] * self._Rsq_ratio[-1]
             # Interior face transport
-            if self._flags.get("nonlocal_ne"):
-                Ne_flux += self._ne_flux_sonic_nonlocal(ne, c_s, v_plasma)
-            elif self._flags.get("sonic_ne") or not self._flags["Velocity"]:
-                # Symmetric sound-speed flux: ne[f]*c_s[f] rightward, ne[f+1]*c_s[f+1] leftward
+            if self._flags.get("hybrid_ne"):
+                Ne_flux += self._ne_flux_hybrid(ne, c_s, v_plasma)
+            elif not self._flags["Velocity"]:
+                # Symmetric sound-speed flux when velocity equation is off
                 Gamma_r = ne[:-1] * c_s[:-1]
                 Gamma_l = ne[1:]  * c_s[1:]
                 Ne_flux[:-1] += (Gamma_l - Gamma_r) / self._L_plasma[:-1]
@@ -786,7 +751,7 @@ class LAPDSim:
         Nn_flux += self._nn_clausing_flux(nn)
         return Ne_flux, Nn_flux
 
-    def _calc_pres_acc(self, ne, Te):
+    def _calc_pres_acc(self, ne, Te, Ti):
         """
         Plasma pressure gradient acceleration -(1/ρ) ∇P [cm/s²].
 
@@ -796,7 +761,7 @@ class LAPDSim:
         Boundary cells use a zero-gradient (Neumann) condition at the wall face,
         so P_face_wall = P_boundary, leaving only the interior face contribution.
         """
-        P = ne * Te * ev_to_erg  # erg/cm³
+        P = ne * (Te + self._ion_pressure_weight * Ti) * ev_to_erg  # erg/cm³
         L = self._L_plasma
         P_face = (P[:-1] + P[1:]) / 2  # face pressures, shape (cells-1,)
         pres_acc = np.zeros(self._cells)
@@ -824,9 +789,7 @@ class LAPDSim:
         v_plasma,
         c_s=None,
     ):
-        self._e_par_flux, self._i_par_flux, self._e_perp_hl, self._i_perp_hl = (
-            self._calc_cond_heat_flux(Te, Ti, ne)
-        )
+        self._e_par_flux, self._i_par_flux = self._calc_cond_heat_flux(Te, Ti, ne)
         self._Qei = np.zeros(self._cells)
         self._Qen = np.zeros(self._cells)
         self._Qcx = np.zeros(self._cells)
@@ -885,15 +848,9 @@ class LAPDSim:
                 P_loss_e = cr.P_cathode_e + cr.P_anode_e
                 P_loss_i = cr.P_loss - P_loss_e
                 self._Qeb[i] -= en_factor * P_loss_e / (self._plasma_vol[i] * qe_SI * ne[i])
-                self._Qib[i] -= en_factor * P_loss_i / (self._plasma_vol[i] * qe_SI * ne[i])
-        if self._flags["C_imp"]:
-            pass  # Placeholder for carbon impurity cooling
-        if self._flags["O_imp"]:
-            pass  # Placeholder for oxygen impurity cooling
+                self._Qib[i] -= (1+2*self._eta)*Ti[i]*c_s[i]/self._L_plasma[i]
 
     def _calc_cond_heat_flux(self, Te, Ti, ne):
-        e_perp_hl = np.zeros(self._cells)
-        i_perp_hl = np.zeros(self._cells)
         e_par_hl = (
             self._b_epara
             * en_factor
@@ -917,28 +874,6 @@ class LAPDSim:
                 self._ln_lambda,
             )
         )
-        if self._flags["eperp"]:
-            e_perp_hl = (
-                self._b_eperp
-                * en_factor
-                * elec_perp_heat_loss(
-                    Te, ne, self._Bz0, self._R_plasma, self._R_heatflux, self._ln_lambda
-                )
-            )
-        if self._flags["iperp"]:
-            i_perp_hl = (
-                self._b_iperp
-                * en_factor
-                * ion_perp_heat_loss(
-                    Ti,
-                    ne,
-                    self._R_plasma,
-                    self._R_heatflux,
-                    self._Bz0,
-                    self._mu,
-                    self._ln_lambda,
-                )
-            )
         e_par_flux = np.zeros(self._cells)
         i_par_flux = np.zeros(self._cells)
         # if there is a cathode, then electron heat-loss is treated by the cathode solver
@@ -953,7 +888,7 @@ class LAPDSim:
         i_par_flux += self._b_ipara * en_factor * ion_par_heat_div(
             Ti, ne, self._L_plasma, self._mu, self._ln_lambda
         )
-        return e_par_flux, i_par_flux, e_perp_hl, i_perp_hl
+        return e_par_flux, i_par_flux
 
     def _calc_div_v(self, Te, c_s=None):
         """
@@ -962,8 +897,6 @@ class LAPDSim:
         NOTE: the correct discretization scheme should be revisited in a future pass.
         """
         div_v = np.zeros(self._cells)
-        if c_s is None:
-            c_s = v_ion_speed(Te, self._mu)
         v_face = self._v_face
         div_v[0] = (v_face[0] + c_s[0]) / self._L_plasma[0]
         div_v[-1] = (c_s[-1] - v_face[-1]) / self._L_plasma[-1]
@@ -1005,14 +938,215 @@ class LAPDSim:
         conv[-1] = -v_plasma[-1] * (T[-1] - T_face[-1]) / L[-1]
         return conv
 
+    def _raise_numerical_instability(self, event):
+        self._debug_events.append(event)
+        detail = ", ".join(f"{k}={v}" for k, v in event.items())
+        raise NumericalInstabilityError(detail)
+
+    def _check_finite_state(self, state, context):
+        if not self._flags.get("debug_checks"):
+            return
+        bad = np.argwhere(~np.isfinite(state))
+        if bad.size == 0:
+            return
+        comp, cell = bad[0]
+        self._raise_numerical_instability(
+            {
+                "kind": "nonfinite_state",
+                "context": context,
+                "time_s": getattr(self, "_t_current", None),
+                "h_s": getattr(self, "_h", None),
+                "component": _STATE_NAMES[comp],
+                "cell": int(cell),
+                "value": state[comp, cell],
+            }
+        )
+
+    def _check_accepted_step_jump(self, old_state, new_state):
+        if getattr(self, "_t_current", 0.0) < self._debug_check_start_time:
+            return
+        if not self._flags.get("debug_checks") or not np.isfinite(
+            self._debug_max_rel_step_change
+        ):
+            return
+        max_rel, comp, cell = self._max_step_change(old_state, new_state)
+        if max_rel > self._debug_max_rel_step_change:
+            event = {
+                "kind": "accepted_step_jump",
+                "time_s": getattr(self, "_t_current", None),
+                "h_s": getattr(self, "_h", None),
+                "component": _STATE_NAMES[comp],
+                "cell": int(cell),
+                "relative_change": float(max_rel),
+                "old": float(old_state[comp, cell]),
+                "new": float(new_state[comp, cell]),
+            }
+            event.update(self._debug_rhs_terms(_STATE_NAMES[comp], int(cell)))
+            self._raise_numerical_instability(
+                event
+            )
+
+    def _max_step_change(self, old_state, new_state):
+        scale = self._debug_step_atol + self._rtol * np.maximum(
+            np.abs(old_state), np.abs(new_state)
+        )
+        rel_change = np.abs(new_state - old_state) / scale
+        comp, cell = np.unravel_index(np.argmax(rel_change), rel_change.shape)
+        return rel_change[comp, cell], comp, cell
+
+    def _large_step_change_limited_h_next(self, h, old_state, new_state):
+        if getattr(self, "_t_current", 0.0) < self._debug_check_start_time:
+            return None
+        if not np.isfinite(self._debug_max_rel_step_change):
+            return None
+        max_rel, _, _ = self._max_step_change(old_state, new_state)
+        if max_rel <= self._debug_max_rel_step_change:
+            return None
+        shrink = min(0.5, max(0.05, 0.8 * self._debug_max_rel_step_change / max_rel))
+        return max(self._h_min, h * shrink)
+
+    def _debug_rhs_terms(self, component, cell):
+        """Return the current RHS term decomposition for a debug event."""
+        def arr(name):
+            return getattr(self, name, np.zeros(self._cells))
+
+        terms_by_component = {
+            "ne": {
+                "S_ion_bulk": arr("_S_ion_bulk"),
+                "S_ion_beam": arr("_S_ion_beam"),
+                "-S_rec_rad": -arr("_S_rec_rad"),
+                "-S_rec_3b": -arr("_S_rec_3b"),
+                "Ne_flux": arr("_Ne_flux"),
+            },
+            "nn": {
+                "Nn_flux": arr("_Nn_flux"),
+                "-S_ion_net*Rsq": -(
+                    arr("_S_ion_bulk")
+                    + arr("_S_ion_beam")
+                    - arr("_S_rec_rad")
+                    - arr("_S_rec_3b")
+                )
+                * self._Rsq_ratio,
+                "S_gp": self._S_gp
+                if getattr(self, "_discharge_on", False)
+                else np.zeros(self._cells),
+                "-S_pump*nn": -self._S_pump * self._nn,
+            },
+            "Te": {
+                "Qeb": arr("_Qeb"),
+                "-Qie": -arr("_Qie"),
+                "-Qei": -arr("_Qei"),
+                "-Qen": -arr("_Qen"),
+                "e_par_flux": arr("_e_par_flux"),
+                "div_v_elec": arr("_div_v_elec"),
+                "Te_conv": arr("_Te_conv"),
+            },
+            "Ti": {
+                "Qie": arr("_Qie"),
+                "i_par_flux": arr("_i_par_flux"),
+                "-Qcx": -arr("_Qcx"),
+                "div_v_ions": arr("_div_v_ions"),
+                "Qib": arr("_Qib"),
+                "Ti_conv": arr("_Ti_conv"),
+            },
+        }
+        terms = terms_by_component.get(component)
+        if terms is None:
+            return {}
+        values = {name: float(np.asarray(arr)[cell]) for name, arr in terms.items()}
+        dominant = max(values, key=lambda name: abs(values[name]))
+        return {
+            "rhs_sum": float(sum(values.values())),
+            "dominant_term": dominant,
+            "dominant_value": values[dominant],
+            "rhs_terms": values,
+        }
+
+    def _check_neighbor_ratios(self, state):
+        if getattr(self, "_t_current", 0.0) < self._debug_check_start_time:
+            return
+        if not self._flags.get("debug_checks") or not np.isfinite(
+            self._debug_max_neighbor_ratio
+        ):
+            return
+        for comp, name in enumerate(_STATE_NAMES[:4]):
+            values = np.abs(state[comp])
+            floor = self._atol[comp, 0]
+            denom = np.maximum(np.minimum(values[:-1], values[1:]), floor)
+            ratio = np.maximum(values[:-1], values[1:]) / denom
+            if self._debug_ignore_floor_neighbors:
+                near_floor = (values[:-1] <= floor) | (values[1:] <= floor)
+                ratio = np.where(near_floor, 1.0, ratio)
+            face = int(np.argmax(ratio))
+            max_ratio = ratio[face]
+            if max_ratio > self._debug_max_neighbor_ratio:
+                self._raise_numerical_instability(
+                    {
+                        "kind": "neighbor_jump",
+                        "time_s": getattr(self, "_t_current", None),
+                        "h_s": getattr(self, "_h", None),
+                        "component": name,
+                        "left_cell": face,
+                        "right_cell": face + 1,
+                        "ratio": float(max_ratio),
+                        "left": float(state[comp, face]),
+                        "right": float(state[comp, face + 1]),
+                    }
+                )
+
+    def _floor_violation(self, state):
+        bad = np.argwhere(state < self._reject_floor)
+        if bad.size == 0:
+            return None
+        comp, cell = bad[0]
+        return {
+            "component": _STATE_NAMES[comp],
+            "cell": int(cell),
+            "value": float(state[comp, cell]),
+            "floor": float(self._reject_floor[comp, 0]),
+        }
+
+    def _floor_limited_h_next(self, h, old_state, new_state):
+        violation = self._floor_violation(new_state)
+        if violation is None:
+            return None
+        comp = _STATE_NAMES.index(violation["component"])
+        cell = violation["cell"]
+        floor = violation["floor"]
+        old = old_state[comp, cell]
+        new = new_state[comp, cell]
+        frac_to_floor = (old - floor) / max(old - new, 1e-300)
+        shrink = min(0.5, max(0.05, 0.8 * frac_to_floor))
+        return max(self._h_min, h * shrink)
+
     def _apply_state_guards(self, ne, nn, Te, Ti, v_plasma):
-        np.clip(Ti, 0.01, 100, out=Ti)
-        np.clip(Te, 0.01, 100, out=Te)
-        np.maximum(ne, 1e8, out=ne)
-        np.maximum(nn, 1e8, out=nn)
+        if self._flags.get("debug_checks") and self._flags.get("debug_raise_on_guard"):
+            before = np.array([ne.copy(), nn.copy(), Te.copy(), Ti.copy(), v_plasma.copy()])
+        else:
+            before = None
+        np.clip(Ti, self._state_floor[3, 0], 100, out=Ti)
+        np.clip(Te, self._state_floor[2, 0], 100, out=Te)
+        np.maximum(ne, self._state_floor[0, 0], out=ne)
+        np.maximum(nn, self._state_floor[1, 0], out=nn)
         if self._flags["Velocity"]:
             c_s_max = 10 * np.max(v_ion_speed(Te, self._mu))
             np.clip(v_plasma, -c_s_max, c_s_max, out=v_plasma)
+        if before is not None:
+            after = np.array([ne, nn, Te, Ti, v_plasma])
+            changed = np.argwhere(after != before)
+            if changed.size:
+                comp, cell = changed[0]
+                self._raise_numerical_instability(
+                    {
+                        "kind": "state_guard_triggered",
+                        "time_s": getattr(self, "_t_current", None),
+                        "h_s": getattr(self, "_h", None),
+                        "component": _STATE_NAMES[comp],
+                        "cell": int(cell),
+                        "before": float(before[comp, cell]),
+                        "after": float(after[comp, cell]),
+                    }
+                )
 
     def _calc_cathode(self, Te, ne, nn):
         beam_result = solve_beam_system(
@@ -1102,8 +1236,6 @@ class LAPDSim:
         self._R_machine = np.ones(new_total) * self._input_dict["Rm"]
         self._R_plasma = np.ones(new_total) * self._input_dict["Rp"]
         self._Rsq_ratio = (self._R_plasma / self._R_machine) ** 2
-        self._R_heatflux = np.ones(new_total) * self._input_dict["Rhf"]
-        self._Bz0 = np.ones(new_total) * self._input_dict["Bz0"]
         self._plasma_cross = np.pi * self._R_plasma**2
         self._plasma_vol = self._plasma_cross * self._L_plasma
         self._cell_vol = np.pi * self._R_machine**2 * self._L_cell
@@ -1148,14 +1280,32 @@ class LAPDSim:
             return True
         return False
 
-    def _compute_h_max_physical(self):
-        """Step ceiling from diffusive and advective CFL conditions on electron heat conduction."""
-        kappa_e = 3.16 * time_elec_coll(self._Te, self._ne, self._ln_lambda) * v_thm_e(self._Te) ** 2
+    def _compute_h_max_physical(self, interior_only=False):
+        """Step ceiling from diffusive and advective CFL conditions on electron heat conduction.
+
+        interior_only: exclude cathode boundary cells from the kappa_e CFL. Use during
+        pre-breakdown when those cells are permanently floor-clamped and their kappa_e
+        is an artifact rather than a dynamics constraint.
+        """
+        if interior_only:
+            nc = self._n_cathode_cells
+            sl = slice(nc, -nc if nc else None)
+            ne = self._ne[sl]
+            Te = self._Te[sl]
+            ln_lam = self._ln_lambda[sl] if np.ndim(self._ln_lambda) > 0 else self._ln_lambda
+        else:
+            ne, Te, ln_lam = self._ne, self._Te, self._ln_lambda
+        ne_for_cfl = ne if self._ne_cfl_floor is None else np.maximum(ne, self._ne_cfl_floor)
+        kappa_e = 3.16 * time_elec_coll(Te, ne_for_cfl, ln_lam) * v_thm_e(Te) ** 2
         h_cond = 0.5 * np.min(self._L_plasma) ** 2 / np.max(kappa_e)
         c_s = v_ion_speed(self._Te, self._mu)
         v_eff = np.max(c_s + np.abs(self._v_plasma))
         h_advect = 0.5 * np.min(self._L_plasma) / v_eff
         return min(h_cond, h_advect)
+
+    def _compute_h_max_nn(self):
+        """Step ceiling from CFL condition on neutral Clausing diffusion."""
+        return 0.5 * np.min(self._L_plasma) / (0.25 * self._v_th_n)
 
     def _dstep(self, a):
         ne, nn, Te, Ti, v_plasma = a
@@ -1165,7 +1315,7 @@ class LAPDSim:
             _, self._Nn_flux = self._calc_n_flux(Te, ne, nn, v_plasma)
             d_nn = (
                 self._Nn_flux
-                + (self._effective_S_gp() if self._discharge_on else 0)
+                + (self._S_gp if self._discharge_on else 0)
                 - self._S_pump * nn
             )
             return np.array([zeros, d_nn, zeros, zeros, zeros])
@@ -1174,10 +1324,10 @@ class LAPDSim:
         # Creates new arrays (does not mutate the input state vector).
         # Full _apply_state_guards (including velocity clip) runs only at the
         # accepted endpoint in _rkf45_step / _rk4_step.
-        Te = np.maximum(Te, 0.01)
-        Ti = np.maximum(Ti, 0.01)
-        ne = np.maximum(ne, 1e8)
-        nn = np.maximum(nn, 1e8)
+        Te = np.maximum(Te, self._state_floor[2, 0])
+        Ti = np.maximum(Ti, self._state_floor[3, 0])
+        ne = np.maximum(ne, self._state_floor[0, 0])
+        nn = np.maximum(nn, self._state_floor[1, 0])
 
         # self._ln_lambda, cathode state, and beam quantities are frozen from
         # the last accepted step and updated once per accepted step.
@@ -1199,14 +1349,12 @@ class LAPDSim:
             - self._Qei
             - self._Qen
             + self._e_par_flux
-            - self._e_perp_hl
             + self._div_v_elec
             + self._Te_conv
         )
         d_Ti = (
             self._Qie
             + self._i_par_flux
-            - self._i_perp_hl
             - self._Qcx
             + self._div_v_ions
             + self._Qib
@@ -1216,12 +1364,12 @@ class LAPDSim:
             self._Nn_flux
             - (self._S_ion_bulk + self._S_ion_beam - self._S_rec_rad - self._S_rec_3b)
             * self._Rsq_ratio
-            + (self._effective_S_gp() if self._discharge_on else 0)
+            + (self._S_gp if self._discharge_on else 0)
             - self._S_pump * nn
         )
         if self._flags["Velocity"]:
             d_ve = (
-                self._calc_pres_acc(ne, Te)
+                self._calc_pres_acc(ne, Te, Ti)
                 - self._calc_drag_in(Ti, nn, v_plasma, v_thm_i=v_thm_i)
                 - (self._calc_advection(v_plasma, c_s) if self._flags["advection"] else 0)
             )
@@ -1305,18 +1453,35 @@ class LAPDSim:
         err_norm = np.sqrt(np.mean((err / scale) ** 2))
 
         # ── Step size control (I-controller, factor clamped to [0.2, 5]) ──
-        factor = min(5.0, max(0.2, 0.9 * err_norm ** (-0.2))) if err_norm > 0 else 5.0
+        if not np.isfinite(err_norm) or err_norm == 0.0:
+            # NaN/inf means intermediate stages overflowed; shrink aggressively
+            factor = 0.2 if not np.isfinite(err_norm) else 5.0
+        else:
+            factor = min(5.0, max(0.2, 0.9 * err_norm ** (-0.2)))
         h_next = h * factor
 
-        accepted = err_norm <= 1.0 or h <= self._h_min
+        accepted = (np.isfinite(err_norm) and err_norm <= 1.0) or h <= self._h_min
 
         if accepted:
+            if self._flags.get("reject_floor_violations", True) and h > self._h_min:
+                h_floor = self._floor_limited_h_next(h, a, y5)
+                if h_floor is not None:
+                    return None, h_floor, False
+            if self._flags.get("reject_large_step_changes", False) and h > self._h_min:
+                h_jump = self._large_step_change_limited_h_next(h, a, y5)
+                if h_jump is not None:
+                    return None, h_jump, False
             ne, nn, Te, Ti, v_plasma = y5
+            self._check_finite_state(y5, "accepted_endpoint_before_guards")
+            self._check_accepted_step_jump(a, y5)
             self._apply_state_guards(ne, nn, Te, Ti, v_plasma)
+            self._check_neighbor_ratios(np.array([ne, nn, Te, Ti, v_plasma]))
             self._ln_lambda = c_log(Te, ne)
             self._calc_cathode(Te, ne, nn)
-            self.calc_density_terms(ne, nn, Te, v_plasma)
-            self.calc_heat_terms(ne, nn, Te, Ti, v_plasma)
+            c_s = v_ion_speed(Te, self._mu)
+            self._atol[4, 0] = self._v_atol_cs_fraction * np.max(c_s)
+            self.calc_density_terms(ne, nn, Te, v_plasma, c_s=c_s)
+            self.calc_heat_terms(ne, nn, Te, Ti, v_plasma, c_s=c_s)
             return (ne, nn, Te, Ti, v_plasma), h_next, True
         else:
             return None, h_next, False
@@ -1379,11 +1544,27 @@ class LAPDSim:
         scale = self._atol[1] + self._rtol * np.abs(nn)
         err_norm = np.sqrt(np.mean((err / scale) ** 2))
 
-        factor = min(5.0, max(0.2, 0.9 * err_norm ** (-0.2))) if err_norm > 0 else 5.0
+        if not np.isfinite(err_norm) or err_norm == 0.0:
+            factor = 0.2 if not np.isfinite(err_norm) else 5.0
+        else:
+            factor = min(5.0, max(0.2, 0.9 * err_norm ** (-0.2)))
         h_next = h * factor
-        accepted = err_norm <= 1.0 or h <= self._h_min
+        accepted = (np.isfinite(err_norm) and err_norm <= 1.0) or h <= self._h_min
 
         if accepted:
+            state = np.array([ne, nn5, Te, Ti, v_plasma])
+            if self._flags.get("reject_floor_violations", True) and h > self._h_min:
+                h_floor = self._floor_limited_h_next(h, a, state)
+                if h_floor is not None:
+                    return None, h_floor, False
+            if self._flags.get("reject_large_step_changes", False) and h > self._h_min:
+                h_jump = self._large_step_change_limited_h_next(h, a, state)
+                if h_jump is not None:
+                    return None, h_jump, False
+            if self._flags.get("debug_checks"):
+                self._check_finite_state(state, "accepted_nn_endpoint")
+                self._check_accepted_step_jump(a, state)
+                self._check_neighbor_ratios(state)
             self.calc_density_terms(ne, nn5, Te, v_plasma)
             return (ne, nn5, Te, Ti, v_plasma), h_next, True
         else:
@@ -1405,23 +1586,28 @@ class LAPDSim:
 
     def _run_plasma_phases(self):
         """
-        Three-phase adaptive integration for Plasma=True.
+        Adaptive integration for Plasma=True.
 
-        pre_breakdown: cathode + S_gp on, ends when I_tot >= I_breakdown (t=0)
-        main_discharge: cathode + S_gp on, lasts tau_discharge after breakdown
-        afterglow: cathode + S_gp off, lasts tau_afterglow
+        pre_breakdown: floor-dominated, relaxed h_min, ends at I_prebreakdown (if set)
+        breakdown:     plasma forming, discharge h_min, ends when I_tot >= I_breakdown (1 kA = t=0)
+        main_discharge: cathode + S_gp on, lasts tau_discharge after t=0
+        afterglow:      cathode + S_gp off, lasts tau_afterglow
+
+        If I_prebreakdown=0 (default), pre_breakdown transitions directly to main_discharge
+        at I_breakdown, preserving the original three-phase behaviour.
         """
         phase = "pre_breakdown"
         t = 0.0
         self._t_breakdown = None
         self._h = self._h0
+        # h_min is a single value now; no per-phase distinction
         self._discharge_on = True
         self._floating = False
         step_count = 0
         _last_print_t = -1e-3
 
         while True:
-            if phase == "pre_breakdown":
+            if phase in ("pre_breakdown", "breakdown"):
                 t_phase_end = self._tau_prebreakdown
                 h_max_base = self._h_max_discharge
             elif phase == "main_discharge":
@@ -1435,9 +1621,9 @@ class LAPDSim:
             if remaining <= 0:
                 break
             if self._cathode_result is not None:
-                h_max_base = min(h_max_base, self._compute_h_max_physical())
+                h_max_base = min(h_max_base, self._compute_h_max_physical(interior_only=(phase == "pre_breakdown")))
             h_cap = min(h_max_base, remaining)
-            self._h = min(self._h, max(h_cap, self._h_min))
+            self._h = min(self._h, h_cap)
 
             a = np.array([self._ne, self._nn, self._Te, self._Ti, self._v_plasma])
             self._t_current = t
@@ -1446,14 +1632,14 @@ class LAPDSim:
             if accepted:
                 self._ne, self._nn, self._Te, self._Ti, self._v_plasma = result
                 t += self._h
-                self._h = min(h_next, h_cap)
+                self._h = max(min(self._h_min, h_cap), min(h_next, h_cap))
                 step_count += 1
 
                 self.update_results(t)
 
                 if self._flags.get("adaptive_mesh"):
                     if self._check_mesh(t):
-                        self._h = min(self._h, self._compute_h_max_physical())
+                        self._h = min(self._h, self._compute_h_max_physical(interior_only=(phase == "pre_breakdown")))
 
                 if t - _last_print_t >= 1e-3:
                     _last_print_t = t
@@ -1461,21 +1647,47 @@ class LAPDSim:
                     print(f"  [{phase}] t={t_rel*1e3:.3f} ms  h={self._h:.2e} s  steps={step_count}")
                     print(f"  ne={self._ne}  nn={self._nn}")
                     print(f"  Te={self._Te}  Ti={self._Ti}")
+                    if self._progress_callback is not None:
+                        wall_now = time.time()
+                        if self._last_cb_wall_t is not None:
+                            seg_wall = wall_now - self._last_cb_wall_t
+                            self._rate_ema = 0.2 * seg_wall + 0.8 * self._rate_ema if self._rate_ema else seg_wall
+                        else:
+                            seg_wall = 0.0
+                        self._last_cb_wall_t = wall_now
+                        self._progress_callback(min(t / self._t_total, 0.99), phase, seg_wall, self._rate_ema)
 
                 # Phase transition checks
                 if phase == "pre_breakdown":
-                    if (self._cathode_result is not None and
-                            self._cathode_result.I_tot >= self._I_breakdown):
-                        self._t_breakdown = t
-                        phase = "main_discharge"
-                        print(f"  Breakdown at t={t*1e3:.3f} ms, "
-                              f"I_tot={self._cathode_result.I_tot:.1f} A")
+                    I_now = self._cathode_result.I_tot if self._cathode_result is not None else 0.0
+                    first_thresh = self._I_prebreakdown if self._I_prebreakdown > 0 else self._I_breakdown
+                    if I_now >= first_thresh:
+
+                        if self._I_prebreakdown > 0:
+                            phase = "breakdown"
+                            print(f"  Pre-breakdown threshold at t={t*1e3:.3f} ms, "
+                                  f"I_tot={I_now:.1f} A — entering breakdown phase")
+                        else:
+                            self._t_breakdown = t
+                            phase = "main_discharge"
+                            print(f"  Breakdown at t={t*1e3:.3f} ms, I_tot={I_now:.1f} A")
                     elif t >= self._tau_prebreakdown:
                         raise BreakdownError(
                             f"Plasma failed to break down within tau_prebreakdown="
                             f"{self._tau_prebreakdown * 1e3:.1f} ms "
-                            f"(I_tot={self._cathode_result.I_tot:.1f} A < "
-                            f"I_breakdown={self._I_breakdown:.1f} A)"
+                            f"(I_tot={I_now:.1f} A < I_breakdown={self._I_breakdown:.1f} A)"
+                        )
+                elif phase == "breakdown":
+                    I_now = self._cathode_result.I_tot if self._cathode_result is not None else 0.0
+                    if I_now >= self._I_breakdown:
+                        self._t_breakdown = t
+                        phase = "main_discharge"
+                        print(f"  Breakdown (1 kA) at t={t*1e3:.3f} ms, I_tot={I_now:.1f} A")
+                    elif t >= self._tau_prebreakdown:
+                        raise BreakdownError(
+                            f"Plasma failed to reach {self._I_breakdown:.0f} A within tau_prebreakdown="
+                            f"{self._tau_prebreakdown * 1e3:.1f} ms "
+                            f"(I_tot={I_now:.1f} A)"
                         )
                 elif phase == "main_discharge":
                     if t >= self._t_breakdown + self._tau_discharge:
@@ -1489,7 +1701,7 @@ class LAPDSim:
                     if t >= self._t_breakdown + self._tau_discharge + self._tau_afterglow:
                         break
             else:
-                self._h = h_next
+                self._h = max(min(self._h_min, h_cap), min(h_next, h_cap))
 
     def _run_equilibrium_cycles(self):
         """
@@ -1499,10 +1711,11 @@ class LAPDSim:
         off phase: S_gp off for the remainder of tau_cycle
         Repeats for self._cycles cycles.
         """
+        h0_nn = self._compute_h_max_nn()
         for j in range(self._cycles):
             print(f"Starting cycle {j+1}/{self._cycles}...")
             t = 0.0
-            self._h = self._h0
+            self._h = min(self._h0, h0_nn)
             t_offset = j * self._tau_cycle
 
             while t < self._tau_cycle * (1 - 1e-12):
@@ -1513,7 +1726,7 @@ class LAPDSim:
                 t_phase_end = self._tau_discharge if in_puffing else self._tau_cycle
                 h_max_base = self._h_max_discharge if in_puffing else self._h_max_afterglow
                 h_cap = min(h_max_base, t_phase_end - t)
-                self._h = min(self._h, max(h_cap, self._h_min))
+                self._h = min(self._h, h_cap)
 
                 a = np.array([self._ne, self._nn, self._Te, self._Ti, self._v_plasma])
                 self._t_current = t
@@ -1522,10 +1735,10 @@ class LAPDSim:
                 if accepted:
                     self._ne, self._nn, self._Te, self._Ti, self._v_plasma = result
                     t += self._h
-                    self._h = min(h_next, h_cap)
+                    self._h = max(min(self._h_min, h_cap), min(h_next, h_cap))
                     self.update_results(t + t_offset)
                 else:
-                    self._h = h_next
+                    self._h = max(min(self._h_min, h_cap), min(h_next, h_cap))
 
     def get_results(self):
         def _cathode_ns(arr):
@@ -1550,18 +1763,16 @@ class LAPDSim:
             S_ion_beam=self._density_terms[:, 5],
             e_par_flux=self._heat_terms[:, 0],
             i_par_flux=self._heat_terms[:, 1],
-            e_perp_hl=self._heat_terms[:, 2],
-            i_perp_hl=self._heat_terms[:, 3],
-            Qie=self._heat_terms[:, 4],
-            Qei=self._heat_terms[:, 5],
-            Qen=self._heat_terms[:, 6],
-            Qcx=self._heat_terms[:, 7],
-            Qeb=self._heat_terms[:, 8],
-            div_v_elec=self._heat_terms[:, 9],
-            div_v_ions=self._heat_terms[:, 10],
-            Qib=self._heat_terms[:, 11],
-            Te_conv=self._heat_terms[:, 12],
-            Ti_conv=self._heat_terms[:, 13],
+            Qie=self._heat_terms[:, 2],
+            Qei=self._heat_terms[:, 3],
+            Qen=self._heat_terms[:, 4],
+            Qcx=self._heat_terms[:, 5],
+            Qeb=self._heat_terms[:, 6],
+            div_v_elec=self._heat_terms[:, 7],
+            div_v_ions=self._heat_terms[:, 8],
+            Qib=self._heat_terms[:, 9],
+            Te_conv=self._heat_terms[:, 10],
+            Ti_conv=self._heat_terms[:, 11],
             v_plasma=self._velocities[:, 0],
             isat=self._synthetic,
             primary_mfp=self._primary_mfp,
@@ -1569,6 +1780,7 @@ class LAPDSim:
             ln_lambda=self._ln_lambda,
             cells_at_time=self._cells_at_time,
             refinement_events=self._refinement_events,
+            debug_events=self._debug_events,
             cathode=_cathode_ns(self._cathode),
             cathode_twin=_cathode_ns(self._cathode_twin),
         )
