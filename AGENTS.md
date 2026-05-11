@@ -15,22 +15,33 @@ cooling, cathode sheath/circuit physics, and optional twin-cathode operation.
 
 ## Package Setup
 
-Use the `fenicsx-env` conda environment for Python:
+This repository is currently being developed on a Windows PC as part of the
+workspace at `D:\bapsf`.  Use the `bapsf-app` mamba environment for Python when
+working locally:
 
-```bash
-conda activate fenicsx-env
+```powershell
+mamba activate bapsf-app
+# or, if this environment is managed through conda:
+conda activate bapsf-app
 ```
 
 The Python package lives under `cablp/` and uses Poetry:
 
-```bash
-cd cablp
+```powershell
+cd D:\bapsf\bapsf-transport\cablp
 poetry install
 poetry build
 ```
 
-`pyproject.toml` currently requires Python `>=3.14`.  Core package dependencies
-are `numpy`, `matplotlib`, `mpmath`, and `scipy`.
+`pyproject.toml` currently requires Python `>=3.14`.  If the local `bapsf-app`
+environment has an older Python, update or recreate the environment before
+installing.  Core package dependencies are `numpy`, `matplotlib`, `mpmath`, and
+`scipy`.
+
+If `mamba`/`conda` is not visible in the active shell, do not assume the
+environment is missing.  On Windows, the shell may simply not have been
+initialized for conda/mamba; use an initialized PowerShell session or the full
+path to the environment's Python executable.
 
 There is no formal test suite or CI in the repository.  Development validation
 is done with scripts and notebooks under `scripts/`.  For quick sanity checks,
@@ -205,9 +216,16 @@ Useful result fields include:
 
 From the repository root:
 
-```bash
-cd cablp
+```powershell
+cd D:\bapsf\bapsf-transport\cablp
 python -m compileall cablp
+python -c "from cablp.solvers._sim3 import default_config, LAPDSim; params, flags = default_config(); flags['Plasma'] = False; params['cycles'] = 1; params['tau_cycle'] = 1e-3; params['tau_discharge'] = 2e-4; params['h_max_discharge'] = 1e-4; params['h_max_afterglow'] = 1e-4; sim = LAPDSim(params, flags); sim.start_simulation(); print(sim.get_results().nn[-1])"
+```
+
+For Git Bash or another POSIX-style shell, the same neutral-only smoke test can
+be written as:
+
+```bash
 python - <<'PY'
 from cablp.solvers._sim3 import default_config, LAPDSim
 
