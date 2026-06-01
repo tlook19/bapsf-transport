@@ -509,11 +509,11 @@ def solve(
     C_s = math.sqrt(T_e * _e_SI * 1.0e7 / (config.mu * _mp_cgs))
 
     # Ion saturation current [A]:  A_c [cm²] * e [C] * n_e [cm⁻³] * C_s [cm/s]
-    I_i = config.A_c * _e_SI * n_e * C_s
+    I_i = config.A_c * _e_SI * n_e * C_s * math.exp(-0.5)
     I_i_a = 2 * config.eta * I_i
 
     # Electron saturation current [A]
-    I_e = I_i * math.exp(config.Lambda)
+    I_e = I_i * math.exp(config.Lambda + 0.5)
 
     # Thermionic emission current [A] (precomputed in config)
     I_eth = config.I_eth
@@ -531,7 +531,7 @@ def solve(
     J_i_a = I_i_a * R_p / T_e
     J_eth = I_eth * R_p / T_e
 
-    Lambda = config.Lambda
+    Lambda = config.Lambda + 0.5
     eta = config.eta
     mu = config.mu
 
