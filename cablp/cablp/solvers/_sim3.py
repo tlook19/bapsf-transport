@@ -12,6 +12,8 @@ from cablp.funcs._heat import (
     ion_par_heat_loss,
     elec_par_heat_div,
     ion_par_heat_div,
+    elec_par_heat_face_flux,
+    ion_par_heat_face_flux,
     Q_cx_He,
     Q_ie,
 )
@@ -124,6 +126,7 @@ input_dict_template = {
     "cycles": 1,
     "tau_prebreakdown": 0.05,   # max pre-breakdown phase duration [s]
     "tau_discharge": 20e-3,    # main discharge duration after breakdown [s]
+    "tau_gp_after_breakdown": None,  # optional S_gp shutoff time after breakdown/main-discharge start [s]
     "tau_afterglow": 5e-3,    # afterglow duration after discharge [s]
     "tau_cycle": 3.0,          # total cycle length for Plasma=False [s]
     "I_prebreakdown": 100.0,     # I_tot threshold to exit floor-dominated pre-breakdown (0 = skip)
@@ -299,6 +302,12 @@ class LAPDSim:
         self._cycles = input_dict.get("cycles", 1)
         self._tau_prebreakdown = input_dict.get("tau_prebreakdown", 0.1)
         self._tau_discharge = input_dict.get("tau_discharge", 15e-3)
+        self._tau_gp_after_breakdown = input_dict.get("tau_gp_after_breakdown", None)
+        if self._tau_gp_after_breakdown is not None and self._tau_gp_after_breakdown < 0:
+            raise ValueError(
+                "tau_gp_after_breakdown must be >= 0 s, or None to keep S_gp on "
+                "through the main discharge"
+            )
         self._tau_afterglow = input_dict.get("tau_afterglow", 10e-3)
         self._t_total = self._tau_prebreakdown + self._tau_discharge + self._tau_afterglow
         self._progress_callback = progress_callback
@@ -335,6 +344,8 @@ class LAPDSim:
         self._cathode_x0_twin = None
         self._cathode_result = None
         self._cathode_result_twin = None
+        self._gas_puff_on = True
+        self._gas_puff_shutoff_reported = False
         self._t_current = 0.0
         self._rtol = input_dict.get("rtol", 1e-3)
         self._h_min = input_dict.get("h_min", 1e-12)
@@ -441,6 +452,11 @@ class LAPDSim:
         print(f"  S_gp={self._S_gp} cm^-3 s^-1")
         print(f"  S_pump={self._S_pump} s^-1")
         if self._flags["Plasma"]:
+            if self._tau_gp_after_breakdown is not None:
+                print(
+                    f"  S_gp shuts off {self._tau_gp_after_breakdown*1e3:.3f} ms "
+                    "after breakdown/main_discharge start"
+                )
             if self._I_prebreakdown > 0:
                 print(f"  Phases: pre_breakdown(<{self._tau_prebreakdown*1e3:.1f} ms, I<{self._I_prebreakdown:.0f} A) "
                       f"→ breakdown(I<{self._I_breakdown:.0f} A) "
@@ -462,6 +478,8 @@ class LAPDSim:
     def initialize_results(self):
         self._debug_events = []
         self._t_breakdown = None
+        self._gas_puff_on = True
+        self._gas_puff_shutoff_reported = False
         self._n_beam = np.zeros(self._cells)
         self._beam_cross = np.zeros(self._cells)
         self._l_b_profile = np.zeros(self._cells)
@@ -482,6 +500,10 @@ class LAPDSim:
         self._i_par_hl = np.zeros(self._cells)  # Ion parallel heat loss
         self._e_par_flux = np.zeros(self._cells)  # Net electron parallel heat flux
         self._i_par_flux = np.zeros(self._cells)  # Net ion parallel heat flux
+        self._e_par_face_flux = np.zeros(self._cells - 1)
+        self._i_par_face_flux = np.zeros(self._cells - 1)
+        self._Ne_face_flux = np.zeros(self._cells - 1)
+        self._Nn_face_flux = np.zeros(self._cells - 1)
         self._ne_flux = np.zeros(
             self._cells
         )  # boundary outgoing electron particle flux
@@ -499,6 +521,7 @@ class LAPDSim:
         self._temperatures_list = []
         self._density_terms_list = []
         self._heat_terms_list = []
+        self._face_fluxes_list = []
         self._velocities_list = []
         self._synthetic_list = []
         self._primary_mfp_list = []
@@ -513,6 +536,12 @@ class LAPDSim:
         """Pad a 1-D per-cell array to max_cells with NaN for uniform output shape."""
         out = np.full(self._max_cells, np.nan)
         out[: self._cells] = arr
+        return out
+
+    def _pad_face(self, arr):
+        """Pad a 1-D interior-face array to max_cells - 1 with NaN."""
+        out = np.full(self._max_cells - 1, np.nan)
+        out[: self._cells - 1] = arr
         return out
 
     def update_results(self, t):
@@ -562,6 +591,16 @@ class LAPDSim:
                 ]
             )
         )
+        self._face_fluxes_list.append(
+            np.array(
+                [
+                    self._pad_face(self._Ne_face_flux),
+                    self._pad_face(self._Nn_face_flux),
+                    self._pad_face(self._e_par_face_flux),
+                    self._pad_face(self._i_par_face_flux),
+                ]
+            )
+        )
         self._velocities_list.append(np.array([self._pad(self._v_plasma)]))
         self._synthetic_list.append(self._pad(self._ne * np.sqrt(self._Te)))
         self._cells_list.append(self._cells)
@@ -599,7 +638,8 @@ class LAPDSim:
         self._densities = np.array(self._densities_list)  # (n, 3, max_cells)
         self._temperatures = np.array(self._temperatures_list)  # (n, 2, max_cells)
         self._density_terms = np.array(self._density_terms_list)  # (n, 6, max_cells)
-        self._heat_terms = np.array(self._heat_terms_list)  # (n, 14, max_cells)
+        self._heat_terms = np.array(self._heat_terms_list)  # (n, 12, max_cells)
+        self._face_fluxes = np.array(self._face_fluxes_list)  # (n, 4, max_cells - 1)
         self._velocities = np.array(self._velocities_list)  # (n, 1, max_cells)
         self._synthetic = np.array(self._synthetic_list)  # (n, max_cells)
         self._primary_mfp = np.array(self._primary_mfp_list)  # (n, max_cells)
@@ -639,7 +679,7 @@ class LAPDSim:
                     self._S_ion_beam += weights * p_beam_arr * self._n_beam[i] * self._v_beam[i] / self._L_plasma
             # NOTE: alpha_r and alpha_3 are approximate power-law fits used for both species.
             # For helium, replace with better species-specific recombination rates when available.
-            self._S_rec_rad = self._b_rec_rad * ne * ne * alpha_r(Te)
+            self._S_rec_rad = self._b_rec_rad * ne * ne * alpha_r(Te, I=self._I_ion)
             self._S_rec_3b = self._b_rec_3b * ne * ne * ne * alpha_3(Te)
 
     def _nn_clausing_flux(self, nn):
@@ -663,15 +703,45 @@ class LAPDSim:
         k_face = 1.0 / (1.0 + (3.0 / 8.0) * L_eff / R)
         kappa = 0.25 * self._v_th_n * k_face  # (cells-1,)
         delta_n = nn[1:] - nn[:-1]
+        self._Nn_face_flux = -kappa * delta_n
         Nn_flux = np.zeros(self._cells)
-        Nn_flux[:-1] += kappa * delta_n / L[:-1]
-        Nn_flux[1:]  -= kappa * delta_n / L[1:]
+        Nn_flux[:-1] -= self._Nn_face_flux / L[:-1]
+        Nn_flux[1:]  += self._Nn_face_flux / L[1:]
         return Nn_flux
 
     def _dstep_nn(self, nn):
         """Derivative for nn-only integration when Plasma=False."""
         Nn_flux = self._nn_clausing_flux(nn)
-        return Nn_flux + (self._S_gp if self._discharge_on else 0) - self._S_pump * nn
+        return Nn_flux + self._gas_puff_source() - self._S_pump * nn
+
+    def _gas_puff_source(self):
+        """Return the active gas-puff source vector for the current phase."""
+        if getattr(self, "_gas_puff_on", getattr(self, "_discharge_on", False)):
+            return self._S_gp
+        return np.zeros(self._cells)
+
+    def _plasma_gas_puff_on(self, phase, t):
+        if phase in ("pre_breakdown", "breakdown"):
+            return True
+        if phase != "main_discharge" or self._t_breakdown is None:
+            return False
+        if self._tau_gp_after_breakdown is None:
+            return True
+        return t < self._t_breakdown + self._tau_gp_after_breakdown
+
+    def _sync_plasma_phase_switches(self, phase, t):
+        self._discharge_on = phase in ("pre_breakdown", "breakdown", "main_discharge")
+        self._floating = phase == "afterglow"
+        self._gas_puff_on = self._plasma_gas_puff_on(phase, t)
+
+    def _gas_puff_event_time(self, phase):
+        if (
+            phase != "main_discharge"
+            or self._t_breakdown is None
+            or self._tau_gp_after_breakdown is None
+        ):
+            return None
+        return self._t_breakdown + self._tau_gp_after_breakdown
 
     def _ne_flux_hybrid(self, ne, c_s, v_plasma):
         """
@@ -681,8 +751,6 @@ class LAPDSim:
         Sonic emission is limited by the stronger source cell, not the receiving cell.
         The sonic correction fades as adjacent cell densities equilibrate.
         """
-        Ne_flux = np.zeros(self._cells)
-
         ne_face = 0.5 * (ne[:-1] + ne[1:])
         v_face = 0.5 * (v_plasma[:-1] + v_plasma[1:])
 
@@ -701,9 +769,10 @@ class LAPDSim:
 
         Gamma_face = Gamma_adv + self._alpha_ne_sonic_flux * taper * Gamma_sonic_corr
 
+        Ne_flux = np.zeros(self._cells)
         Ne_flux[:-1] -= Gamma_face / self._L_plasma[:-1]
         Ne_flux[1:] += Gamma_face / self._L_plasma[1:]
-        return Ne_flux
+        return Ne_flux, Gamma_face
 
     def _hybrid_ne_density_taper(self, ne, ne_face):
         t_breakdown = getattr(self, "_t_breakdown", None)
@@ -724,6 +793,7 @@ class LAPDSim:
         # TODO: use the cathode solver results to determine plasma loss in cathode cells
         Ne_flux = np.zeros(self._cells)
         Nn_flux = np.zeros(self._cells)
+        self._Ne_face_flux = np.zeros(self._cells - 1)
         if self._flags["Plasma"]:
             # Boundary losses: cathode cells use sheath/cathode physics; right wall uses Bohm speed
             Ne_flux[0] = -(1 + 2 * self._eta) * self._cathode_result.I_i / qe_SI / self._plasma_vol[0]
@@ -735,19 +805,23 @@ class LAPDSim:
             Nn_flux[-1] = -Ne_flux[-1] * self._Rsq_ratio[-1]
             # Interior face transport
             if self._flags.get("hybrid_ne"):
-                Ne_flux += self._ne_flux_hybrid(ne, c_s, v_plasma)
+                Ne_flux_interior, self._Ne_face_flux = self._ne_flux_hybrid(
+                    ne, c_s, v_plasma
+                )
+                Ne_flux += Ne_flux_interior
             elif not self._flags["Velocity"]:
                 # Symmetric sound-speed flux when velocity equation is off
                 Gamma_r = ne[:-1] * c_s[:-1]
                 Gamma_l = ne[1:]  * c_s[1:]
-                Ne_flux[:-1] += (Gamma_l - Gamma_r) / self._L_plasma[:-1]
-                Ne_flux[1:]  += (Gamma_r - Gamma_l) / self._L_plasma[1:]
+                self._Ne_face_flux = Gamma_r - Gamma_l
+                Ne_flux[:-1] -= self._Ne_face_flux / self._L_plasma[:-1]
+                Ne_flux[1:]  += self._Ne_face_flux / self._L_plasma[1:]
             else:
                 ne_face = (ne[:-1] + ne[1:]) / 2
                 v_face = (v_plasma[:-1] + v_plasma[1:]) / 2
-                F_face = ne_face * v_face
-                Ne_flux[:-1] -= F_face / self._L_plasma[:-1]
-                Ne_flux[1:]  += F_face / self._L_plasma[1:]
+                self._Ne_face_flux = ne_face * v_face
+                Ne_flux[:-1] -= self._Ne_face_flux / self._L_plasma[:-1]
+                Ne_flux[1:]  += self._Ne_face_flux / self._L_plasma[1:]
         Nn_flux += self._nn_clausing_flux(nn)
         return Ne_flux, Nn_flux
 
@@ -882,6 +956,12 @@ class LAPDSim:
         if not self._flags["TwinCathode"]:
             e_par_flux[-1] -= e_par_hl[-1]
             i_par_flux[-1] -= i_par_hl[-1]
+        self._e_par_face_flux = self._b_epara * en_factor * elec_par_heat_face_flux(
+            Te, ne, self._L_plasma, self._ln_lambda
+        )
+        self._i_par_face_flux = self._b_ipara * en_factor * ion_par_heat_face_flux(
+            Ti, ne, self._L_plasma, self._mu, self._ln_lambda
+        )
         e_par_flux += self._b_epara * en_factor * elec_par_heat_div(
             Te, ne, self._L_plasma, self._ln_lambda
         )
@@ -1027,9 +1107,7 @@ class LAPDSim:
                     - arr("_S_rec_3b")
                 )
                 * self._Rsq_ratio,
-                "S_gp": self._S_gp
-                if getattr(self, "_discharge_on", False)
-                else np.zeros(self._cells),
+                "S_gp": self._gas_puff_source(),
                 "-S_pump*nn": -self._S_pump * self._nn,
             },
             "Te": {
@@ -1257,6 +1335,10 @@ class LAPDSim:
         self._Te_conv = np.zeros(new_total)
         self._Ti_conv = np.zeros(new_total)
         self._v_face = np.zeros(new_total - 1)
+        self._e_par_face_flux = np.zeros(new_total - 1)
+        self._i_par_face_flux = np.zeros(new_total - 1)
+        self._Ne_face_flux = np.zeros(new_total - 1)
+        self._Nn_face_flux = np.zeros(new_total - 1)
 
     def _check_mesh(self, t):
         """Refine or coarsen the spatial mesh based on the bulk electron MFP criterion."""
@@ -1315,7 +1397,7 @@ class LAPDSim:
             _, self._Nn_flux = self._calc_n_flux(Te, ne, nn, v_plasma)
             d_nn = (
                 self._Nn_flux
-                + (self._S_gp if self._discharge_on else 0)
+                + self._gas_puff_source()
                 - self._S_pump * nn
             )
             return np.array([zeros, d_nn, zeros, zeros, zeros])
@@ -1364,7 +1446,7 @@ class LAPDSim:
             self._Nn_flux
             - (self._S_ion_bulk + self._S_ion_beam - self._S_rec_rad - self._S_rec_3b)
             * self._Rsq_ratio
-            + (self._S_gp if self._discharge_on else 0)
+            + self._gas_puff_source()
             - self._S_pump * nn
         )
         if self._flags["Velocity"]:
@@ -1590,7 +1672,7 @@ class LAPDSim:
 
         pre_breakdown: floor-dominated, relaxed h_min, ends at I_prebreakdown (if set)
         breakdown:     plasma forming, discharge h_min, ends when I_tot >= I_breakdown (1 kA = t=0)
-        main_discharge: cathode + S_gp on, lasts tau_discharge after t=0
+        main_discharge: cathode on, S_gp optionally shuts off after breakdown
         afterglow:      cathode + S_gp off, lasts tau_afterglow
 
         If I_prebreakdown=0 (default), pre_breakdown transitions directly to main_discharge
@@ -1601,12 +1683,12 @@ class LAPDSim:
         self._t_breakdown = None
         self._h = self._h0
         # h_min is a single value now; no per-phase distinction
-        self._discharge_on = True
-        self._floating = False
+        self._sync_plasma_phase_switches(phase, t)
         step_count = 0
         _last_print_t = -1e-3
 
         while True:
+            self._sync_plasma_phase_switches(phase, t)
             if phase in ("pre_breakdown", "breakdown"):
                 t_phase_end = self._tau_prebreakdown
                 h_max_base = self._h_max_discharge
@@ -1623,6 +1705,13 @@ class LAPDSim:
             if self._cathode_result is not None:
                 h_max_base = min(h_max_base, self._compute_h_max_physical(interior_only=(phase == "pre_breakdown")))
             h_cap = min(h_max_base, remaining)
+            gas_puff_event_t = self._gas_puff_event_time(phase)
+            if (
+                gas_puff_event_t is not None
+                and self._gas_puff_on
+                and t < gas_puff_event_t < t_phase_end
+            ):
+                h_cap = min(h_cap, gas_puff_event_t - t)
             self._h = min(self._h, h_cap)
 
             a = np.array([self._ne, self._nn, self._Te, self._Ti, self._v_plasma])
@@ -1630,8 +1719,21 @@ class LAPDSim:
             result, h_next, accepted = self._rkf45_step(a)
 
             if accepted:
+                gas_puff_was_on = self._gas_puff_on
                 self._ne, self._nn, self._Te, self._Ti, self._v_plasma = result
                 t += self._h
+                self._sync_plasma_phase_switches(phase, t)
+                if (
+                    gas_puff_was_on
+                    and not self._gas_puff_on
+                    and phase == "main_discharge"
+                    and not self._gas_puff_shutoff_reported
+                ):
+                    self._gas_puff_shutoff_reported = True
+                    print(
+                        f"  S_gp shut off at t={(t - self._t_breakdown)*1e3:.3f} ms "
+                        "after breakdown."
+                    )
                 self._h = max(min(self._h_min, h_cap), min(h_next, h_cap))
                 step_count += 1
 
@@ -1692,8 +1794,7 @@ class LAPDSim:
                 elif phase == "main_discharge":
                     if t >= self._t_breakdown + self._tau_discharge:
                         phase = "afterglow"
-                        self._discharge_on = False
-                        self._floating = True
+                        self._sync_plasma_phase_switches(phase, t)
                         self._h = min(self._h0, self._h_max_afterglow)
                         print(f"  Main discharge ended at t={(t - self._t_breakdown)*1e3:.3f} ms. "
                               f"Entering afterglow.")
@@ -1721,6 +1822,7 @@ class LAPDSim:
             while t < self._tau_cycle * (1 - 1e-12):
                 in_puffing = t < self._tau_discharge
                 self._discharge_on = in_puffing
+                self._gas_puff_on = in_puffing
                 self._floating = True
 
                 t_phase_end = self._tau_discharge if in_puffing else self._tau_cycle
@@ -1757,12 +1859,16 @@ class LAPDSim:
             Ti=self._temperatures[:, 1],
             Ne_flux=self._density_terms[:, 0],
             Nn_flux=self._density_terms[:, 1],
+            Ne_face_flux=self._face_fluxes[:, 0],
+            Nn_face_flux=self._face_fluxes[:, 1],
             S_ion_bulk=self._density_terms[:, 2],
             S_rec_rad=self._density_terms[:, 3],
             S_rec_3b=self._density_terms[:, 4],
             S_ion_beam=self._density_terms[:, 5],
             e_par_flux=self._heat_terms[:, 0],
             i_par_flux=self._heat_terms[:, 1],
+            e_par_face_flux=self._face_fluxes[:, 2],
+            i_par_face_flux=self._face_fluxes[:, 3],
             Qie=self._heat_terms[:, 2],
             Qei=self._heat_terms[:, 3],
             Qen=self._heat_terms[:, 4],
