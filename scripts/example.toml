@@ -32,6 +32,7 @@ tau_I_on    = 0.001 # Beam current rise time constant [s]
 # ── Gas / pumping ──────────────────────────────────────────────────────────────
 S_gp      = 2000  # Gas-puff source rate [cm^-3 s^-1]
 Twin_S_gp = 2000  # Twin-cathode gas-puff source rate [cm^-3 s^-1]
+# tau_gp_after_breakdown = 2e-3  # Optional: shut S_gp off this long after breakdown/main_discharge starts [s]
 S_pump_L  = 4000  # Left pump sink rate [L/s]
 S_pump_R  = 4000  # Right pump sink rate [L/s]
 
