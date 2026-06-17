@@ -126,7 +126,7 @@ input_dict_template = {
     "cycles": 1,
     "tau_prebreakdown": 0.05,   # max pre-breakdown phase duration [s]
     "tau_discharge": 20e-3,    # main discharge duration after breakdown [s]
-    "tau_gp_after_breakdown": None,  # optional S_gp shutoff time after breakdown/main-discharge start [s]
+    "tau_gp_after_breakdown": None,  # optional S_gp exponential-decay start time after breakdown/main-discharge start [s]
     "tau_afterglow": 5e-3,    # afterglow duration after discharge [s]
     "tau_cycle": 3.0,          # total cycle length for Plasma=False [s]
     "I_prebreakdown": 100.0,     # I_tot threshold to exit floor-dominated pre-breakdown (0 = skip)
@@ -305,7 +305,7 @@ class LAPDSim:
         self._tau_gp_after_breakdown = input_dict.get("tau_gp_after_breakdown", None)
         if self._tau_gp_after_breakdown is not None and self._tau_gp_after_breakdown < 0:
             raise ValueError(
-                "tau_gp_after_breakdown must be >= 0 s, or None to keep S_gp on "
+                "tau_gp_after_breakdown must be >= 0 s, or None to keep S_gp steady "
                 "through the main discharge"
             )
         self._tau_afterglow = input_dict.get("tau_afterglow", 10e-3)
@@ -454,7 +454,7 @@ class LAPDSim:
         if self._flags["Plasma"]:
             if self._tau_gp_after_breakdown is not None:
                 print(
-                    f"  S_gp shuts off {self._tau_gp_after_breakdown*1e3:.3f} ms "
+                    f"  S_gp begins exponential decay {self._tau_gp_after_breakdown*1e3:.3f} ms "
                     "after breakdown/main_discharge start"
                 )
             if self._I_prebreakdown > 0:
@@ -714,22 +714,40 @@ class LAPDSim:
         Nn_flux = self._nn_clausing_flux(nn)
         return Nn_flux + self._gas_puff_source() - self._S_pump * nn
 
-    def _gas_puff_source(self):
+    def _gas_puff_source(self, t=None):
         """Return the active gas-puff source vector for the current phase."""
+        if self._flags["Plasma"]:
+            scale = self._plasma_gas_puff_scale(self._t_current if t is None else t)
+            if scale > 0.0:
+                return scale * self._S_gp
+            return np.zeros(self._cells)
         if getattr(self, "_gas_puff_on", getattr(self, "_discharge_on", False)):
             return self._S_gp
         return np.zeros(self._cells)
 
     def _plasma_gas_puff_on(self, phase, t):
+        return self._plasma_gas_puff_scale(t, phase=phase) > 0.0
+
+    def _plasma_gas_puff_scale(self, t, phase=None):
+        phase = phase or getattr(self, "_phase", None)
         if phase in ("pre_breakdown", "breakdown"):
-            return True
+            return 1.0
         if phase != "main_discharge" or self._t_breakdown is None:
-            return False
+            return 0.0
         if self._tau_gp_after_breakdown is None:
-            return True
-        return t < self._t_breakdown + self._tau_gp_after_breakdown
+            return 1.0
+
+        t_rel = t - self._t_breakdown
+        if t_rel <= self._tau_gp_after_breakdown:
+            return 1.0
+
+        tau_decay = self._tau_discharge - self._tau_gp_after_breakdown
+        if tau_decay <= 0.0:
+            return 1.0
+        return float(np.exp(-(t_rel - self._tau_gp_after_breakdown) / tau_decay))
 
     def _sync_plasma_phase_switches(self, phase, t):
+        self._phase = phase
         self._discharge_on = phase in ("pre_breakdown", "breakdown", "main_discharge")
         self._floating = phase == "afterglow"
         self._gas_puff_on = self._plasma_gas_puff_on(phase, t)
@@ -1389,9 +1407,10 @@ class LAPDSim:
         """Step ceiling from CFL condition on neutral Clausing diffusion."""
         return 0.5 * np.min(self._L_plasma) / (0.25 * self._v_th_n)
 
-    def _dstep(self, a):
+    def _dstep(self, a, t=None):
         ne, nn, Te, Ti, v_plasma = a
         zeros = np.zeros(self._cells)
+        rhs_t = self._t_current if t is None else t
 
         if not self._flags["Plasma"]:
             _, self._Nn_flux = self._calc_n_flux(Te, ne, nn, v_plasma)
@@ -1446,7 +1465,7 @@ class LAPDSim:
             self._Nn_flux
             - (self._S_ion_bulk + self._S_ion_beam - self._S_rec_rad - self._S_rec_3b)
             * self._Rsq_ratio
-            + self._gas_puff_source()
+            + self._gas_puff_source(rhs_t)
             - self._S_pump * nn
         )
         if self._flags["Velocity"]:
@@ -1482,10 +1501,11 @@ class LAPDSim:
         h = self._h
 
         # ── Dormand-Prince stages ──────────────────────────────────────────
-        k1 = self._dstep(a)
-        k2 = self._dstep(a + h * (1 / 5 * k1))
-        k3 = self._dstep(a + h * (3 / 40 * k1 + 9 / 40 * k2))
-        k4 = self._dstep(a + h * (44 / 45 * k1 - 56 / 15 * k2 + 32 / 9 * k3))
+        t0 = self._t_current
+        k1 = self._dstep(a, t0)
+        k2 = self._dstep(a + h * (1 / 5 * k1), t0 + h * (1 / 5))
+        k3 = self._dstep(a + h * (3 / 40 * k1 + 9 / 40 * k2), t0 + h * (3 / 10))
+        k4 = self._dstep(a + h * (44 / 45 * k1 - 56 / 15 * k2 + 32 / 9 * k3), t0 + h * (4 / 5))
         k5 = self._dstep(
             a
             + h
@@ -1494,7 +1514,8 @@ class LAPDSim:
                 - 25360 / 2187 * k2
                 + 64448 / 6561 * k3
                 - 212 / 729 * k4
-            )
+            ),
+            t0 + h * (8 / 9),
         )
         k6 = self._dstep(
             a
@@ -1505,7 +1526,8 @@ class LAPDSim:
                 + 46732 / 5247 * k3
                 + 49 / 176 * k4
                 - 5103 / 18656 * k5
-            )
+            ),
+            t0 + h,
         )
 
         # ── 5th-order solution ─────────────────────────────────────────────
@@ -1518,7 +1540,7 @@ class LAPDSim:
         )
 
         # ── k7 for error estimate (FSAL) ───────────────────────────────────
-        k7 = self._dstep(y5)
+        k7 = self._dstep(y5, t0 + h)
 
         # ── Error vector (difference between 5th and 4th order) ───────────
         err = h * (
@@ -1672,7 +1694,7 @@ class LAPDSim:
 
         pre_breakdown: floor-dominated, relaxed h_min, ends at I_prebreakdown (if set)
         breakdown:     plasma forming, discharge h_min, ends when I_tot >= I_breakdown (1 kA = t=0)
-        main_discharge: cathode on, S_gp optionally shuts off after breakdown
+        main_discharge: cathode on, S_gp optionally decays after breakdown
         afterglow:      cathode + S_gp off, lasts tau_afterglow
 
         If I_prebreakdown=0 (default), pre_breakdown transitions directly to main_discharge
@@ -1719,19 +1741,24 @@ class LAPDSim:
             result, h_next, accepted = self._rkf45_step(a)
 
             if accepted:
+                t_before = t
                 gas_puff_was_on = self._gas_puff_on
                 self._ne, self._nn, self._Te, self._Ti, self._v_plasma = result
                 t += self._h
                 self._sync_plasma_phase_switches(phase, t)
+                gas_puff_event_t = self._gas_puff_event_time(phase)
                 if (
                     gas_puff_was_on
-                    and not self._gas_puff_on
                     and phase == "main_discharge"
+                    and gas_puff_event_t is not None
+                    and gas_puff_event_t < self._t_breakdown + self._tau_discharge
+                    and t_before <= gas_puff_event_t <= t
                     and not self._gas_puff_shutoff_reported
                 ):
                     self._gas_puff_shutoff_reported = True
                     print(
-                        f"  S_gp shut off at t={(t - self._t_breakdown)*1e3:.3f} ms "
+                        f"  S_gp exponential decay started at "
+                        f"t={(gas_puff_event_t - self._t_breakdown)*1e3:.3f} ms "
                         "after breakdown."
                     )
                 self._h = max(min(self._h_min, h_cap), min(h_next, h_cap))
