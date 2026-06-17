@@ -50,6 +50,7 @@ dt_main  = 1e-6   # Max timestep during discharge [s] (also initial h for adapti
 dt_after = 1e-6   # Max timestep during afterglow [s] (also initial h for adaptive)
 rtol     = 1e-3   # Relative tolerance for adaptive stepping
 h_min    = 1e-12  # Minimum allowed step size [s]
+max_step_rejections = 200  # Consecutive rejected adaptive steps before failing the run; 0 disables
 
 # ── Transport scaling factors ──────────────────────────────────────────────────
 b_epara   = 1.0  # Electron parallel heat conduction
