@@ -127,6 +127,7 @@ input_dict_template = {
     "tau_prebreakdown": 0.05,   # max pre-breakdown phase duration [s]
     "tau_discharge": 20e-3,    # main discharge duration after breakdown [s]
     "tau_gp_after_breakdown": None,  # optional S_gp exponential-decay start time after breakdown/main-discharge start [s]
+    "tau_gp_decay_factor": 1.0,  # multiplier on S_gp decay time constant after tau_gp_after_breakdown
     "tau_afterglow": 5e-3,    # afterglow duration after discharge [s]
     "tau_cycle": 3.0,          # total cycle length for Plasma=False [s]
     "I_prebreakdown": 100.0,     # I_tot threshold to exit floor-dominated pre-breakdown (0 = skip)
@@ -308,6 +309,11 @@ class LAPDSim:
                 "tau_gp_after_breakdown must be >= 0 s, or None to keep S_gp steady "
                 "through the main discharge"
             )
+        self._tau_gp_decay_factor = input_dict.get("tau_gp_decay_factor", 1.0)
+        if self._tau_gp_decay_factor <= 0:
+            raise ValueError(
+                f"tau_gp_decay_factor must be > 0 (got {self._tau_gp_decay_factor})"
+            )
         self._tau_afterglow = input_dict.get("tau_afterglow", 10e-3)
         self._t_total = self._tau_prebreakdown + self._tau_discharge + self._tau_afterglow
         self._progress_callback = progress_callback
@@ -455,7 +461,8 @@ class LAPDSim:
             if self._tau_gp_after_breakdown is not None:
                 print(
                     f"  S_gp begins exponential decay {self._tau_gp_after_breakdown*1e3:.3f} ms "
-                    "after breakdown/main_discharge start"
+                    "after breakdown/main_discharge start; "
+                    f"tau_decay factor={self._tau_gp_decay_factor:g}"
                 )
             if self._I_prebreakdown > 0:
                 print(f"  Phases: pre_breakdown(<{self._tau_prebreakdown*1e3:.1f} ms, I<{self._I_prebreakdown:.0f} A) "
@@ -741,7 +748,9 @@ class LAPDSim:
         if t_rel <= self._tau_gp_after_breakdown:
             return 1.0
 
-        tau_decay = self._tau_discharge - self._tau_gp_after_breakdown
+        tau_decay = (
+            self._tau_discharge - self._tau_gp_after_breakdown
+        ) * self._tau_gp_decay_factor
         if tau_decay <= 0.0:
             return 1.0
         return float(np.exp(-(t_rel - self._tau_gp_after_breakdown) / tau_decay))
