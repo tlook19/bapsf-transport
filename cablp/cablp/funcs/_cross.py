@@ -147,25 +147,31 @@ def H_ion_rate(E, T):
     return 10e-5 * np.sqrt(T / E) / (E**1.5 * (6.0 + (T / E))) * np.exp(-E / T)
 
 
-def alpha_r(T):
+def alpha_r(T, I=None):
     """
-    Radiative recombination rate coefficient [cm³/s] — approximate power-law fit.
+    Radiative recombination rate coefficient [cm³/s].
 
-    alpha_r(T) ≈ 2.71e-13 * T^(-0.5)
+    If ionization energy I is provided, uses the Seaton (1959) hydrogenic formula:
+        alpha_r = 5.2e-14 * (I/T)^(1/2) * (0.43 + 0.5*ln(I/T) + 0.496*(I/T)^(-1/3))
 
-    NOTE: This is a rough power-law approximation valid for T ~ 1–20 eV.
-    For helium, species-specific rates should be used when available.
+    Otherwise falls back to the approximate power-law:
+        alpha_r ≈ 2.71e-13 * T^(-0.5)   [valid for T ~ 1–20 eV]
 
     Parameters
     ----------
     T : float or array
         Electron temperature [eV].
+    I : float or None
+        Ionization energy [eV]. If provided, uses the Seaton formula.
 
     Returns
     -------
     float or array
         Radiative recombination rate coefficient [cm³/s].
     """
+    if I is not None:
+        x = I / T
+        return 5.2e-14 * x**0.5 * (0.43 + 0.5 * np.log(x) + 0.496 * x ** (-1 / 3))
     return 2.71e-13 * T ** (-0.5)
 
 
