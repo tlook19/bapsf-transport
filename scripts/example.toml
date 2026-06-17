@@ -30,10 +30,15 @@ anode_transparency = 1.0   # Anode mesh transparency (0–1)
 tau_I_on    = 0.001 # Beam current rise time constant [s]
 
 # ── Gas / pumping ──────────────────────────────────────────────────────────────
+gas_puff_mode = "decay_after_breakdown"  # or "pulse_decay_to_level"
 S_gp      = 2000  # Gas-puff source rate [cm^-3 s^-1]
 Twin_S_gp = 2000  # Twin-cathode gas-puff source rate [cm^-3 s^-1]
+S_gp_decay_target = 0  # Target gas-puff rate for pulse_decay_to_level mode
+Twin_S_gp_decay_target = 0
 # tau_gp_after_breakdown = 2e-3  # Optional: begin exponential S_gp decay this long after breakdown/main_discharge starts [s]
 # tau_gp_decay_factor = 1.0      # Multiplies decay time constant: (tau_discharge - tau_gp_after_breakdown)
+# tau_gp_pulse_duration = 2e-3   # Full-rate puff duration after breakdown for pulse_decay_to_level mode [s]
+# tau_gp_decay_duration = 1e-3   # E-folding time toward S_gp_decay_target for pulse_decay_to_level mode [s]
 S_pump_L  = 4000  # Left pump sink rate [L/s]
 S_pump_R  = 4000  # Right pump sink rate [L/s]
 
