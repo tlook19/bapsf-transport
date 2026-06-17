@@ -49,6 +49,10 @@ class NumericalInstabilityError(RuntimeError):
     """Raised by debug checks when an accepted step creates an implausible state jump."""
 
 
+class StepRejectionError(RuntimeError):
+    """Raised when adaptive stepping repeatedly rejects a step without advancing time."""
+
+
 _STATE_NAMES = ("ne", "nn", "Te", "Ti", "v_plasma")
 
 
@@ -140,6 +144,7 @@ input_dict_template = {
     "h0": 1e-6,                # initial adaptive step size [s]
     "h_max_discharge": 1e-4,   # max step size during active discharge phases [s]
     "h_max_afterglow": 1e-4,   # max step size during afterglow/off phases [s]
+    "max_step_rejections": 200,  # max consecutive rejected RK attempts at one time; 0 disables
     "dt_save": 1e-5,            # min simulation time between saved output steps [s]; 0 = save every step
     "max_output_steps": 0,     # hard cap on total saved timesteps; 0 = unlimited
     "cells": 3,
@@ -384,6 +389,13 @@ class LAPDSim:
         self._t_current = 0.0
         self._rtol = input_dict.get("rtol", 1e-3)
         self._h_min = input_dict.get("h_min", 1e-12)
+        self._max_step_rejections = int(input_dict.get("max_step_rejections", 200))
+        if self._max_step_rejections < 0:
+            raise ValueError(
+                f"max_step_rejections must be >= 0 (got {self._max_step_rejections})"
+            )
+        self._step_reject_count = 0
+        self._last_reject_detail = None
         self._ne_cfl_floor = input_dict.get("ne_cfl_floor", None)
         self._dt_save = input_dict.get("dt_save", 0.0)
         self._max_output_steps = input_dict.get("max_output_steps", 0)
@@ -1631,10 +1643,25 @@ class LAPDSim:
             if self._flags.get("reject_floor_violations", True) and h > self._h_min:
                 h_floor = self._floor_limited_h_next(h, a, y5)
                 if h_floor is not None:
+                    self._last_reject_detail = {
+                        "reason": "floor_violation",
+                        "h_s": float(h),
+                        "h_next_s": float(h_floor),
+                        "detail": self._floor_violation(y5),
+                    }
                     return None, h_floor, False
             if self._flags.get("reject_large_step_changes", False) and h > self._h_min:
                 h_jump = self._large_step_change_limited_h_next(h, a, y5)
                 if h_jump is not None:
+                    max_rel, comp, cell = self._max_step_change(a, y5)
+                    self._last_reject_detail = {
+                        "reason": "large_step_change",
+                        "h_s": float(h),
+                        "h_next_s": float(h_jump),
+                        "component": _STATE_NAMES[comp],
+                        "cell": int(cell),
+                        "max_rel_change": float(max_rel),
+                    }
                     return None, h_jump, False
             ne, nn, Te, Ti, v_plasma = y5
             self._check_finite_state(y5, "accepted_endpoint_before_guards")
@@ -1649,6 +1676,12 @@ class LAPDSim:
             self.calc_heat_terms(ne, nn, Te, Ti, v_plasma, c_s=c_s)
             return (ne, nn, Te, Ti, v_plasma), h_next, True
         else:
+            self._last_reject_detail = {
+                "reason": "error_norm",
+                "h_s": float(h),
+                "h_next_s": float(h_next),
+                "err_norm": float(err_norm) if np.isfinite(err_norm) else str(err_norm),
+            }
             return None, h_next, False
 
     def _rkf45_step_nn(self, a):
@@ -1721,10 +1754,25 @@ class LAPDSim:
             if self._flags.get("reject_floor_violations", True) and h > self._h_min:
                 h_floor = self._floor_limited_h_next(h, a, state)
                 if h_floor is not None:
+                    self._last_reject_detail = {
+                        "reason": "floor_violation",
+                        "h_s": float(h),
+                        "h_next_s": float(h_floor),
+                        "detail": self._floor_violation(state),
+                    }
                     return None, h_floor, False
             if self._flags.get("reject_large_step_changes", False) and h > self._h_min:
                 h_jump = self._large_step_change_limited_h_next(h, a, state)
                 if h_jump is not None:
+                    max_rel, comp, cell = self._max_step_change(a, state)
+                    self._last_reject_detail = {
+                        "reason": "large_step_change",
+                        "h_s": float(h),
+                        "h_next_s": float(h_jump),
+                        "component": _STATE_NAMES[comp],
+                        "cell": int(cell),
+                        "max_rel_change": float(max_rel),
+                    }
                     return None, h_jump, False
             if self._flags.get("debug_checks"):
                 self._check_finite_state(state, "accepted_nn_endpoint")
@@ -1733,6 +1781,12 @@ class LAPDSim:
             self.calc_density_terms(ne, nn5, Te, v_plasma)
             return (ne, nn5, Te, Ti, v_plasma), h_next, True
         else:
+            self._last_reject_detail = {
+                "reason": "error_norm",
+                "h_s": float(h),
+                "h_next_s": float(h_next),
+                "err_norm": float(err_norm) if np.isfinite(err_norm) else str(err_norm),
+            }
             return None, h_next, False
 
     def start_simulation(self):
@@ -1748,6 +1802,22 @@ class LAPDSim:
             self._run_equilibrium_cycles()
         self._finalize_results()
         print("Simulation complete.")
+
+    def _register_step_rejection(self, phase, t, h_next, h_cap):
+        """Track consecutive rejected attempts and fail if time cannot advance."""
+        if self._max_step_rejections == 0:
+            return
+        self._step_reject_count += 1
+        if self._step_reject_count < self._max_step_rejections:
+            return
+        detail = self._last_reject_detail or {}
+        raise StepRejectionError(
+            "Adaptive step failed to converge after "
+            f"{self._step_reject_count} consecutive rejected attempts "
+            f"at phase={phase!r}, t={t:.9e} s, h={self._h:.3e} s, "
+            f"h_next={h_next:.3e} s, h_cap={h_cap:.3e} s, "
+            f"h_min={self._h_min:.3e} s, last_reject={detail}"
+        )
 
     def _run_plasma_phases(self):
         """
@@ -1768,6 +1838,7 @@ class LAPDSim:
         # h_min is a single value now; no per-phase distinction
         self._sync_plasma_phase_switches(phase, t)
         step_count = 0
+        self._step_reject_count = 0
         _last_print_t = -1e-3
 
         while True:
@@ -1802,6 +1873,7 @@ class LAPDSim:
             result, h_next, accepted = self._rkf45_step(a)
 
             if accepted:
+                self._step_reject_count = 0
                 t_before = t
                 gas_puff_was_on = self._gas_puff_on
                 self._ne, self._nn, self._Te, self._Ti, self._v_plasma = result
@@ -1890,6 +1962,7 @@ class LAPDSim:
                     if t >= self._t_breakdown + self._tau_discharge + self._tau_afterglow:
                         break
             else:
+                self._register_step_rejection(phase, t, h_next, h_cap)
                 self._h = max(min(self._h_min, h_cap), min(h_next, h_cap))
 
     def _run_equilibrium_cycles(self):
@@ -1905,6 +1978,7 @@ class LAPDSim:
             print(f"Starting cycle {j+1}/{self._cycles}...")
             t = 0.0
             self._h = min(self._h0, h0_nn)
+            self._step_reject_count = 0
             t_offset = j * self._tau_cycle
 
             while t < self._tau_cycle * (1 - 1e-12):
@@ -1923,11 +1997,14 @@ class LAPDSim:
                 result, h_next, accepted = self._rkf45_step(a)
 
                 if accepted:
+                    self._step_reject_count = 0
                     self._ne, self._nn, self._Te, self._Ti, self._v_plasma = result
                     t += self._h
                     self._h = max(min(self._h_min, h_cap), min(h_next, h_cap))
                     self.update_results(t + t_offset)
                 else:
+                    phase = "equilibrium_puff" if in_puffing else "equilibrium_off"
+                    self._register_step_rejection(phase, t + t_offset, h_next, h_cap)
                     self._h = max(min(self._h_min, h_cap), min(h_next, h_cap))
 
     def get_results(self):
