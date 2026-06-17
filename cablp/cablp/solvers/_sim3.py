@@ -109,8 +109,11 @@ input_dict_template = {
     "eta": 0.358,  # Anode area / cathode area
     "L_cath": 50.0,  # Cathode-to-anode distance [cm]
     "R_cath": 18.0,  # Cathode radius [cm]; A_c = π * R_cath²
+    "gas_puff_mode": "decay_after_breakdown",
     "S_gp": 8000,  # Gas puff source rate
     "Twin_S_gp": 8000,
+    "S_gp_decay_target": 0.0,  # Target gas-puff source rate for pulse_decay_to_level mode
+    "Twin_S_gp_decay_target": 0.0,
     "S_pump_L": 4000,  # Vacuum pump sink rate
     "S_pump_R": 4000,
     "b_epara": 1.0,  # Scaling factor for e_para transport
@@ -128,6 +131,8 @@ input_dict_template = {
     "tau_discharge": 20e-3,    # main discharge duration after breakdown [s]
     "tau_gp_after_breakdown": None,  # optional S_gp exponential-decay start time after breakdown/main-discharge start [s]
     "tau_gp_decay_factor": 1.0,  # multiplier on S_gp decay time constant after tau_gp_after_breakdown
+    "tau_gp_pulse_duration": 0.0,  # full-rate puff duration after breakdown for pulse_decay_to_level mode [s]
+    "tau_gp_decay_duration": 1e-3,  # e-folding time toward S_gp_decay_target for pulse_decay_to_level mode [s]
     "tau_afterglow": 5e-3,    # afterglow duration after discharge [s]
     "tau_cycle": 3.0,          # total cycle length for Plasma=False [s]
     "I_prebreakdown": 100.0,     # I_tot threshold to exit floor-dominated pre-breakdown (0 = skip)
@@ -288,14 +293,28 @@ class LAPDSim:
         self._plasma_cross = np.pi * self._R_plasma**2
         self._plasma_vol = self._plasma_cross * self._L_plasma
         self._cell_vol = np.pi * self._R_machine**2 * self._L_cell
+        self._gas_puff_mode = input_dict.get("gas_puff_mode", "decay_after_breakdown")
+        _gas_puff_modes = {"decay_after_breakdown", "pulse_decay_to_level"}
+        if self._gas_puff_mode not in _gas_puff_modes:
+            raise ValueError(
+                f"gas_puff_mode must be one of {sorted(_gas_puff_modes)} "
+                f"(got {self._gas_puff_mode!r})"
+            )
         self._S_gp = np.zeros(self._cells)
+        self._S_gp_decay_target = np.zeros(self._cells)
         self._S_pump = np.zeros(self._cells)
         self._S_gp[0] = self.puff_rate(input_dict["S_gp"], 2, self._cell_vol[0])
+        self._S_gp_decay_target[0] = self.puff_rate(
+            input_dict.get("S_gp_decay_target", 0.0), 2, self._cell_vol[0]
+        )
         self._S_pump[0] = self.pump_rate(input_dict["S_pump_L"], self._cell_vol[0])
         self._S_pump[-1] = self.pump_rate(input_dict["S_pump_R"], self._cell_vol[-1])
         if self._flags["TwinCathode"]:
             self._S_gp[-1] = self.puff_rate(
                 input_dict["Twin_S_gp"], 2, self._cell_vol[-1]
+            )
+            self._S_gp_decay_target[-1] = self.puff_rate(
+                input_dict.get("Twin_S_gp_decay_target", 0.0), 2, self._cell_vol[-1]
             )
         # self._active_discharge = self._I_discharge > 0 : need to calculate later with cathode solver
         # size-2 arrays: index 0 = primary cathode, index 1 = twin cathode
@@ -313,6 +332,16 @@ class LAPDSim:
         if self._tau_gp_decay_factor <= 0:
             raise ValueError(
                 f"tau_gp_decay_factor must be > 0 (got {self._tau_gp_decay_factor})"
+            )
+        self._tau_gp_pulse_duration = input_dict.get("tau_gp_pulse_duration", 0.0)
+        if self._tau_gp_pulse_duration < 0:
+            raise ValueError(
+                f"tau_gp_pulse_duration must be >= 0 (got {self._tau_gp_pulse_duration})"
+            )
+        self._tau_gp_decay_duration = input_dict.get("tau_gp_decay_duration", 1e-3)
+        if self._tau_gp_decay_duration <= 0:
+            raise ValueError(
+                f"tau_gp_decay_duration must be > 0 (got {self._tau_gp_decay_duration})"
             )
         self._tau_afterglow = input_dict.get("tau_afterglow", 10e-3)
         self._t_total = self._tau_prebreakdown + self._tau_discharge + self._tau_afterglow
@@ -455,10 +484,18 @@ class LAPDSim:
         print(f"  L_plasma={self._L_plasma} cm")
         print(f"  plasma_vol={self._plasma_vol} cm^3")
         print(f"  Rsq_ratio={self._Rsq_ratio}")
+        print(f"  gas_puff_mode={self._gas_puff_mode}")
         print(f"  S_gp={self._S_gp} cm^-3 s^-1")
+        if self._gas_puff_mode == "pulse_decay_to_level":
+            print(f"  S_gp_decay_target={self._S_gp_decay_target} cm^-3 s^-1")
         print(f"  S_pump={self._S_pump} s^-1")
         if self._flags["Plasma"]:
-            if self._tau_gp_after_breakdown is not None:
+            if self._gas_puff_mode == "pulse_decay_to_level":
+                print(
+                    f"  S_gp holds for {self._tau_gp_pulse_duration*1e3:.3f} ms "
+                    f"then decays toward target with tau={self._tau_gp_decay_duration*1e3:.3f} ms"
+                )
+            elif self._tau_gp_after_breakdown is not None:
                 print(
                     f"  S_gp begins exponential decay {self._tau_gp_after_breakdown*1e3:.3f} ms "
                     "after breakdown/main_discharge start; "
@@ -724,36 +761,41 @@ class LAPDSim:
     def _gas_puff_source(self, t=None):
         """Return the active gas-puff source vector for the current phase."""
         if self._flags["Plasma"]:
-            scale = self._plasma_gas_puff_scale(self._t_current if t is None else t)
-            if scale > 0.0:
-                return scale * self._S_gp
-            return np.zeros(self._cells)
+            return self._plasma_gas_puff_source(self._t_current if t is None else t)
         if getattr(self, "_gas_puff_on", getattr(self, "_discharge_on", False)):
             return self._S_gp
         return np.zeros(self._cells)
 
     def _plasma_gas_puff_on(self, phase, t):
-        return self._plasma_gas_puff_scale(t, phase=phase) > 0.0
+        return np.any(self._plasma_gas_puff_source(t, phase=phase) > 0.0)
 
-    def _plasma_gas_puff_scale(self, t, phase=None):
+    def _plasma_gas_puff_source(self, t, phase=None):
         phase = phase or getattr(self, "_phase", None)
         if phase in ("pre_breakdown", "breakdown"):
-            return 1.0
+            return self._S_gp
         if phase != "main_discharge" or self._t_breakdown is None:
-            return 0.0
-        if self._tau_gp_after_breakdown is None:
-            return 1.0
+            return np.zeros(self._cells)
 
         t_rel = t - self._t_breakdown
+        if self._gas_puff_mode == "pulse_decay_to_level":
+            if t_rel <= self._tau_gp_pulse_duration:
+                return self._S_gp
+            decay_elapsed = t_rel - self._tau_gp_pulse_duration
+            decay = float(np.exp(-decay_elapsed / self._tau_gp_decay_duration))
+            return self._S_gp_decay_target + (self._S_gp - self._S_gp_decay_target) * decay
+
+        if self._tau_gp_after_breakdown is None:
+            return self._S_gp
         if t_rel <= self._tau_gp_after_breakdown:
-            return 1.0
+            return self._S_gp
 
         tau_decay = (
             self._tau_discharge - self._tau_gp_after_breakdown
         ) * self._tau_gp_decay_factor
         if tau_decay <= 0.0:
-            return 1.0
-        return float(np.exp(-(t_rel - self._tau_gp_after_breakdown) / tau_decay))
+            return self._S_gp
+        decay = float(np.exp(-(t_rel - self._tau_gp_after_breakdown) / tau_decay))
+        return decay * self._S_gp
 
     def _sync_plasma_phase_switches(self, phase, t):
         self._phase = phase
@@ -765,8 +807,11 @@ class LAPDSim:
         if (
             phase != "main_discharge"
             or self._t_breakdown is None
-            or self._tau_gp_after_breakdown is None
         ):
+            return None
+        if self._gas_puff_mode == "pulse_decay_to_level":
+            return self._t_breakdown + self._tau_gp_pulse_duration
+        if self._tau_gp_after_breakdown is None:
             return None
         return self._t_breakdown + self._tau_gp_after_breakdown
 
@@ -1345,8 +1390,12 @@ class LAPDSim:
         self._plasma_vol = self._plasma_cross * self._L_plasma
         self._cell_vol = np.pi * self._R_machine**2 * self._L_cell
         self._S_gp = np.zeros(new_total)
+        self._S_gp_decay_target = np.zeros(new_total)
         self._S_pump = np.zeros(new_total)
         self._S_gp[0] = self.puff_rate(self._input_dict["S_gp"], 2, self._cell_vol[0])
+        self._S_gp_decay_target[0] = self.puff_rate(
+            self._input_dict.get("S_gp_decay_target", 0.0), 2, self._cell_vol[0]
+        )
         self._S_pump[0] = self.pump_rate(
             self._input_dict["S_pump_L"], self._cell_vol[0]
         )
@@ -1356,6 +1405,9 @@ class LAPDSim:
         if self._flags["TwinCathode"]:
             self._S_gp[-1] = self.puff_rate(
                 self._input_dict["Twin_S_gp"], 2, self._cell_vol[-1]
+            )
+            self._S_gp_decay_target[-1] = self.puff_rate(
+                self._input_dict.get("Twin_S_gp_decay_target", 0.0), 2, self._cell_vol[-1]
             )
         self._div_v_elec = np.zeros(new_total)
         self._div_v_ions = np.zeros(new_total)
