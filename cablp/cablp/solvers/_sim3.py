@@ -130,6 +130,8 @@ input_dict_template = {
     "b_Qie": 1.0,  # Scaling factor for ion-electron heating
     "b_Qei": 1.0,  # Scaling factor for electron-ion cooling
     "b_Qen": 1.0,  # Scaling factor for electron-neutral cooling
+    "b_div_v_elec": 1.0,  # Scaling factor for electron compressional heating/cooling
+    "b_div_v_ions": 0.0,  # Scaling factor for ion compressional heating/cooling
     "cycles": 1,
     "tau_prebreakdown": 0.05,   # max pre-breakdown phase duration [s]
     "tau_discharge": 20e-3,    # main discharge duration after breakdown [s]
@@ -291,6 +293,8 @@ class LAPDSim:
         self._b_Qei = input_dict.get("b_Qei", 1.0)
         self._b_Qen = input_dict.get("b_Qen", 1.0)
         self._b_source = input_dict.get("b_source", 1.0)
+        self._b_div_v_elec = input_dict.get("b_div_v_elec", 1.0)
+        self._b_div_v_ions = input_dict.get("b_div_v_ions", 0.0)
         self._alpha_ne_sonic_flux = input_dict.get("alpha_ne_sonic_flux", 1.0)
         self._beta_ne_sonic_flux = input_dict.get("beta_ne_sonic_flux", 1.0)
         self._hybrid_ne_taper_dn0 = input_dict.get("hybrid_ne_taper_dn0", 0.2)
@@ -972,8 +976,8 @@ class LAPDSim:
             self._v_face = (v_plasma[:-1] + v_plasma[1:]) / 2
             # NOTE: physical form of div(v) term should be revisited.
             div_v = self._calc_div_v(Te, c_s=c_s)
-            self._div_v_elec = -en_factor * Te * div_v
-            self._div_v_ions = -en_factor * Ti * div_v
+            self._div_v_elec = -self._b_div_v_elec * en_factor * Te * div_v
+            self._div_v_ions = -self._b_div_v_ions * en_factor * Ti * div_v
             self._Te_conv = self._calc_T_convection(Te, v_plasma)
             self._Ti_conv = self._calc_T_convection(Ti, v_plasma)
         if self._flags["icool"]:

@@ -67,6 +67,8 @@ b_source  = 1.0  # Beam source heating
 b_Qie    = 1.0   # Ion-electron energy exchange
 b_Qei    = 1.0   # Electron-ion energy exchange
 b_Qen    = 1.0   # Electron-neutral cooling
+b_div_v_elec = 1.0  # Electron compressional heating/cooling
+b_div_v_ions = 0.0  # Ion compressional heating/cooling
 
 # ── Physics flags ──────────────────────────────────────────────────────────────
 [flags]
