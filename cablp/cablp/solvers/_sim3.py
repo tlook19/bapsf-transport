@@ -151,6 +151,7 @@ input_dict_template = {
     "rtol": 1e-3,  # relative tolerance for adaptive stepping
     "h_min": 1e-12,            # minimum allowed step size [s]
     "h_min_prebreakdown": 1e-6,  # relaxed minimum step while pre-breakdown state is floor-clipped [s]
+    "prebreakdown_cfl_factor": 10.0,  # multiplier on physical CFL cap during floor-dominated pre-breakdown
     "ne_cfl_floor": None,      # minimum ne [cm^-3] used when computing the electron-conduction CFL (interior cells only); None = use actual ne
     "ne_floor": 1e8,
     "nn_floor": 1e8,
@@ -392,6 +393,12 @@ class LAPDSim:
         self._h_min_base = input_dict.get("h_min", 1e-12)
         self._h_min_prebreakdown = input_dict.get("h_min_prebreakdown", self._h_min_base)
         self._h_min = self._h_min_base
+        self._prebreakdown_cfl_factor = input_dict.get("prebreakdown_cfl_factor", 10.0)
+        if self._prebreakdown_cfl_factor <= 0:
+            raise ValueError(
+                "prebreakdown_cfl_factor must be > 0 "
+                f"(got {self._prebreakdown_cfl_factor})"
+            )
         self._max_step_rejections = int(input_dict.get("max_step_rejections", 200))
         if self._max_step_rejections < 0:
             raise ValueError(
@@ -1861,7 +1868,10 @@ class LAPDSim:
             if remaining <= 0:
                 break
             if self._cathode_result is not None:
-                h_max_base = min(h_max_base, self._compute_h_max_physical(interior_only=(phase == "pre_breakdown")))
+                h_physical = self._compute_h_max_physical(interior_only=(phase == "pre_breakdown"))
+                if phase == "pre_breakdown":
+                    h_physical *= self._prebreakdown_cfl_factor
+                h_max_base = min(h_max_base, h_physical)
             h_cap = min(h_max_base, remaining)
             gas_puff_event_t = self._gas_puff_event_time(phase)
             if (
