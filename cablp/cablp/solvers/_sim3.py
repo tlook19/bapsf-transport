@@ -188,7 +188,7 @@ input_flags_template = {
     "hybrid_ne": True,      # Interior face flux: velocity advection plus limited sonic pressure correction
     "debug_checks": False,   # Raise early on non-finite states or configured jump/gradient thresholds
     "debug_raise_on_guard": False,  # Raise when accepted endpoints require clipping/flooring
-    "reject_floor_violations": True,  # Reject RK steps whose accepted endpoint crosses state floors
+    "reject_floor_violations": False,  # Debug option: reject RK steps whose endpoint crosses state floors
     "reject_large_step_changes": False,  # Reject RK steps whose endpoint exceeds debug_max_rel_step_change
 }
 
@@ -1650,7 +1650,7 @@ class LAPDSim:
         accepted = (np.isfinite(err_norm) and err_norm <= 1.0) or h <= self._h_min
 
         if accepted:
-            if self._flags.get("reject_floor_violations", True) and h > self._h_min:
+            if self._flags.get("reject_floor_violations", False) and h > self._h_min:
                 h_floor = self._floor_limited_h_next(h, a, y5)
                 if h_floor is not None:
                     self._last_reject_detail = {
@@ -1761,7 +1761,7 @@ class LAPDSim:
 
         if accepted:
             state = np.array([ne, nn5, Te, Ti, v_plasma])
-            if self._flags.get("reject_floor_violations", True) and h > self._h_min:
+            if self._flags.get("reject_floor_violations", False) and h > self._h_min:
                 h_floor = self._floor_limited_h_next(h, a, state)
                 if h_floor is not None:
                     self._last_reject_detail = {
