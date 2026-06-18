@@ -1464,9 +1464,9 @@ class LAPDSim:
         return False
 
     def _compute_h_max_physical(self, interior_only=False):
-        """Step ceiling from diffusive and advective CFL conditions on electron heat conduction.
+        """Step ceiling from diffusive and advective CFL conditions.
 
-        interior_only: exclude cathode boundary cells from the kappa_e CFL. Use during
+        interior_only: exclude cathode boundary cells from the heat-conduction CFL. Use during
         pre-breakdown when those cells are permanently floor-clamped and their kappa_e
         is an artifact rather than a dynamics constraint.
         """
@@ -1475,12 +1475,28 @@ class LAPDSim:
             sl = slice(nc, -nc if nc else None)
             ne = self._ne[sl]
             Te = self._Te[sl]
+            Ti = self._Ti[sl]
+            L = self._L_plasma[sl]
             ln_lam = self._ln_lambda[sl] if np.ndim(self._ln_lambda) > 0 else self._ln_lambda
         else:
-            ne, Te, ln_lam = self._ne, self._Te, self._ln_lambda
+            ne, Te, Ti, L, ln_lam = self._ne, self._Te, self._Ti, self._L_plasma, self._ln_lambda
         ne_for_cfl = ne if self._ne_cfl_floor is None else np.maximum(ne, self._ne_cfl_floor)
-        kappa_e = 3.16 * time_elec_coll(Te, ne_for_cfl, ln_lam) * v_thm_e(Te) ** 2
-        h_cond = 0.5 * np.min(self._L_plasma) ** 2 / np.max(kappa_e)
+        kappa_e = (
+            self._b_epara
+            * en_factor
+            * 3.16
+            * time_elec_coll(Te, ne_for_cfl, ln_lam)
+            * v_thm_e(Te) ** 2
+        )
+        kappa_i = (
+            self._b_ipara
+            * en_factor
+            * 3.9
+            * time_ion_coll(Ti, ne_for_cfl, self._mu, ln_lam)
+            * v_ion_speed(Ti, self._mu) ** 2
+        )
+        max_kappa = max(float(np.max(kappa_e)), float(np.max(kappa_i)))
+        h_cond = np.inf if max_kappa <= 0 else 0.5 * np.min(L) ** 2 / max_kappa
         c_s = v_ion_speed(self._Te, self._mu)
         v_eff = np.max(c_s + np.abs(self._v_plasma))
         h_advect = 0.5 * np.min(self._L_plasma) / v_eff
