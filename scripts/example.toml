@@ -77,6 +77,7 @@ b_Ti_conv = 0.0  # Ion temperature convection
 Plasma       = true   # Enable plasma (electron/ion) equations
 TwinCathode  = false  # Enable second cathode at far end
 Velocity     = true  # Enable parallel flow velocity equation
+advection    = false # Include v·∇v convective acceleration in velocity equation
 breakdown_vel = true  # Use diffusive particle flux during breakdown phase
                       # (set false to test advective flux throughout)
 adaptive     = true  # Dormand-Prince RK45 adaptive stepping (true/false)

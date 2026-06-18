@@ -187,7 +187,7 @@ input_flags_template = {
     "Plasma": True,
     "TwinCathode": False,
     "Velocity": True,
-    "advection": True,  # Include v·∇v convective acceleration in velocity equation
+    "advection": False,  # Include v·∇v convective acceleration in velocity equation
     "adaptive_mesh": False,  # Dynamically refine/coarsen spatial cells based on MFP criterion
     "hybrid_ne": True,      # Interior face flux: velocity advection plus limited sonic pressure correction
     "debug_checks": False,   # Raise early on non-finite states or configured jump/gradient thresholds
