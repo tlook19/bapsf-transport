@@ -149,7 +149,8 @@ input_dict_template = {
     "max_output_steps": 0,     # hard cap on total saved timesteps; 0 = unlimited
     "cells": 3,
     "rtol": 1e-3,  # relative tolerance for adaptive stepping
-    "h_min": 1e-10,            # minimum allowed step size [s]
+    "h_min": 1e-12,            # minimum allowed step size [s]
+    "h_min_prebreakdown": 1e-6,  # relaxed minimum step while pre-breakdown state is floor-clipped [s]
     "ne_cfl_floor": None,      # minimum ne [cm^-3] used when computing the electron-conduction CFL (interior cells only); None = use actual ne
     "ne_floor": 1e8,
     "nn_floor": 1e8,
@@ -388,7 +389,9 @@ class LAPDSim:
         self._gas_puff_shutoff_reported = False
         self._t_current = 0.0
         self._rtol = input_dict.get("rtol", 1e-3)
-        self._h_min = input_dict.get("h_min", 1e-12)
+        self._h_min_base = input_dict.get("h_min", 1e-12)
+        self._h_min_prebreakdown = input_dict.get("h_min_prebreakdown", self._h_min_base)
+        self._h_min = self._h_min_base
         self._max_step_rejections = int(input_dict.get("max_step_rejections", 200))
         if self._max_step_rejections < 0:
             raise ValueError(
@@ -1835,7 +1838,7 @@ class LAPDSim:
         t = 0.0
         self._t_breakdown = None
         self._h = self._h0
-        # h_min is a single value now; no per-phase distinction
+        self._h_min = self._h_min_prebreakdown
         self._sync_plasma_phase_switches(phase, t)
         step_count = 0
         self._step_reject_count = 0
@@ -1843,6 +1846,7 @@ class LAPDSim:
 
         while True:
             self._sync_plasma_phase_switches(phase, t)
+            self._h_min = self._h_min_prebreakdown if phase == "pre_breakdown" else self._h_min_base
             if phase in ("pre_breakdown", "breakdown"):
                 t_phase_end = self._tau_prebreakdown
                 h_max_base = self._h_max_discharge
