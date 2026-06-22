@@ -37,6 +37,17 @@ _he_data = np.loadtxt(_VARS_DIR / "he_eii_cross.csv", delimiter=",", comments="#
 _HE_LOG_EPS = np.log(_he_data[:, 0])
 _HE_LOG_SIGMA = np.log(_he_data[:, 1])
 
+_HE_ION_RATE_PATH = _VARS_DIR / "he_ion_rate.csv"
+if _HE_ION_RATE_PATH.exists():
+    _he_ion_rate_data = np.loadtxt(
+        _HE_ION_RATE_PATH, delimiter=",", comments="#"
+    )
+    _HE_ION_LOG_T = np.log(_he_ion_rate_data[:, 0])
+    _HE_ION_LOG_RATE = np.log(_he_ion_rate_data[:, 1])
+else:
+    _HE_ION_LOG_T = None
+    _HE_ION_LOG_RATE = None
+
 
 def H_EII_cross(E, A=a215):
     """
@@ -101,6 +112,37 @@ def He_EII_cross_lkup(eps):
                                    left=_HE_LOG_SIGMA[0], right=_HE_LOG_SIGMA[-1])))
 
 
+def He_ion_rate_lkup(T):
+    """Helium Maxwellian ionization rate coefficient [cm^3/s].
+
+    Interpolates ``he_ion_rate.csv`` in log-temperature/log-rate space. Values
+    outside the tabulated 0.1--100 eV interval use the nearest endpoint.
+
+    Parameters
+    ----------
+    T : float or array-like
+        Electron temperature [eV]. Must be positive.
+    """
+    if _HE_ION_LOG_T is None:
+        raise FileNotFoundError(
+            f"Helium ionization-rate table not found: {_HE_ION_RATE_PATH}"
+        )
+
+    temperature = np.asarray(T, dtype=float)
+    if np.any(temperature <= 0):
+        raise ValueError("Electron temperature must be positive")
+
+    log_rate = np.interp(
+        np.log(temperature),
+        _HE_ION_LOG_T,
+        _HE_ION_LOG_RATE,
+        left=_HE_ION_LOG_RATE[0],
+        right=_HE_ION_LOG_RATE[-1],
+    )
+    rate = np.exp(log_rate)
+    return float(rate) if rate.ndim == 0 else rate
+
+
 def He_EIE_cross_DA(eps, A):
     """
     Helium electron impact excitation cross section.
@@ -128,7 +170,7 @@ def He_EIE_cross_DA(eps, A):
 
 def int_factor(I):
     return mp.fprod(
-        [mp.power(I, 2), mp.sqrt(mp.fdiv(2, mp.fmul(M_e_eV, mp.pi))), c_cgs]
+        [mp.power(I, 2), mp.sqrt(mp.fdiv(8, mp.fmul(M_e_eV, mp.pi))), c_cgs]
     )
 
 
@@ -198,16 +240,36 @@ def alpha_3(T):
 
 
 def integrate_kern(cross_sec_func, a, T, I):
+    """Maxwellian-average a threshold cross section over electron energy.
+
+    The cross section receives ``eps = E / I``. A shifted integration variable
+    ``z = (E - I) / T`` keeps the near-threshold peak resolved when ``T << I``.
+    """
+    temperatures = np.asarray(T, dtype=float)
+    if temperatures.ndim != 1:
+        raise ValueError("T must be a one-dimensional array of temperatures")
+    if np.any(temperatures <= 0):
+        raise ValueError("Temperatures must be positive")
+
     scale_factor = int_factor(I)
-    rate_coeff = np.empty(T.shape)
-    for i, temp in enumerate(T):
-        integrand = kern_lambda(cross_sec_func, a, temp, I)
-        rate_coeff[i] = mp.fprod(
+    rate_coeff = np.empty(temperatures.shape)
+    for i, temp in enumerate(temperatures):
+        temp_mp = mp.mpf(temp)
+        ratio = mp.fdiv(temp_mp, I)
+
+        def shifted_integrand(z):
+            eps = mp.fadd(1, mp.fmul(ratio, z))
+            return mp.fprod([cross_sec_func(eps, a), eps, mp.exp(-z)])
+
+        integral = mp.fprod(
             [
-                mp.quad(integrand, [1, mp.inf]),
-                scale_factor,
-                mp.power(temp, mp.fneg(1.5)),
+                mp.exp(mp.fneg(mp.fdiv(I, temp_mp))),
+                ratio,
+                mp.quad(shifted_integrand, [0, mp.inf]),
             ]
+        )
+        rate_coeff[i] = mp.fprod(
+            [integral, scale_factor, mp.power(temp_mp, mp.fneg(1.5))]
         )
     return rate_coeff
 
