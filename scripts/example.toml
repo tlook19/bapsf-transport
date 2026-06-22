@@ -30,9 +30,15 @@ anode_transparency = 1.0   # Anode mesh transparency (0–1)
 tau_I_on    = 0.001 # Beam current rise time constant [s]
 
 # ── Gas / pumping ──────────────────────────────────────────────────────────────
+gas_puff_mode = "decay_after_breakdown"  # or "pulse_decay_to_level"
 S_gp      = 2000  # Gas-puff source rate [cm^-3 s^-1]
 Twin_S_gp = 2000  # Twin-cathode gas-puff source rate [cm^-3 s^-1]
-# tau_gp_after_breakdown = 2e-3  # Optional: shut S_gp off this long after breakdown/main_discharge starts [s]
+S_gp_decay_target = 0  # Target gas-puff rate for pulse_decay_to_level mode
+Twin_S_gp_decay_target = 0
+# tau_gp_after_breakdown = 2e-3  # Optional: begin exponential S_gp decay this long after breakdown/main_discharge starts [s]
+# tau_gp_decay_factor = 1.0      # Multiplies decay time constant: (tau_discharge - tau_gp_after_breakdown)
+# tau_gp_pulse_duration = 2e-3   # Full-rate puff duration after breakdown for pulse_decay_to_level mode [s]
+# tau_gp_decay_duration = 1e-3   # E-folding time toward S_gp_decay_target for pulse_decay_to_level mode [s]
 S_pump_L  = 4000  # Left pump sink rate [L/s]
 S_pump_R  = 4000  # Right pump sink rate [L/s]
 
@@ -44,6 +50,9 @@ dt_main  = 1e-6   # Max timestep during discharge [s] (also initial h for adapti
 dt_after = 1e-6   # Max timestep during afterglow [s] (also initial h for adaptive)
 rtol     = 1e-3   # Relative tolerance for adaptive stepping
 h_min    = 1e-12  # Minimum allowed step size [s]
+h_min_prebreakdown = 1e-6  # Relaxed minimum while pre-breakdown temperatures are floor-clipped [s]
+prebreakdown_cfl_factor = 10.0  # Multiplier on the physical CFL cap before pre-breakdown exits
+max_step_rejections = 200  # Consecutive rejected adaptive steps before failing the run; 0 disables
 
 # ── Transport scaling factors ──────────────────────────────────────────────────
 b_epara   = 1.0  # Electron parallel heat conduction
@@ -58,12 +67,17 @@ b_source  = 1.0  # Beam source heating
 b_Qie    = 1.0   # Ion-electron energy exchange
 b_Qei    = 1.0   # Electron-ion energy exchange
 b_Qen    = 1.0   # Electron-neutral cooling
+b_div_v_elec = 0.0  # Electron compressional heating/cooling
+b_div_v_ions = 0.0  # Ion compressional heating/cooling
+b_Te_conv = 0.0  # Electron temperature convection
+b_Ti_conv = 0.0  # Ion temperature convection
 
 # ── Physics flags ──────────────────────────────────────────────────────────────
 [flags]
 Plasma       = true   # Enable plasma (electron/ion) equations
 TwinCathode  = false  # Enable second cathode at far end
 Velocity     = true  # Enable parallel flow velocity equation
+advection    = false # Include v·∇v convective acceleration in velocity equation
 breakdown_vel = true  # Use diffusive particle flux during breakdown phase
                       # (set false to test advective flux throughout)
 adaptive     = true  # Dormand-Prince RK45 adaptive stepping (true/false)
