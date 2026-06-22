@@ -49,6 +49,10 @@ class NumericalInstabilityError(RuntimeError):
     """Raised by debug checks when an accepted step creates an implausible state jump."""
 
 
+class StepRejectionError(RuntimeError):
+    """Raised when adaptive stepping repeatedly rejects a step without advancing time."""
+
+
 _STATE_NAMES = ("ne", "nn", "Te", "Ti", "v_plasma")
 
 
@@ -109,8 +113,11 @@ input_dict_template = {
     "eta": 0.358,  # Anode area / cathode area
     "L_cath": 50.0,  # Cathode-to-anode distance [cm]
     "R_cath": 18.0,  # Cathode radius [cm]; A_c = π * R_cath²
+    "gas_puff_mode": "decay_after_breakdown",
     "S_gp": 8000,  # Gas puff source rate
     "Twin_S_gp": 8000,
+    "S_gp_decay_target": 0.0,  # Target gas-puff source rate for pulse_decay_to_level mode
+    "Twin_S_gp_decay_target": 0.0,
     "S_pump_L": 4000,  # Vacuum pump sink rate
     "S_pump_R": 4000,
     "b_epara": 1.0,  # Scaling factor for e_para transport
@@ -123,10 +130,17 @@ input_dict_template = {
     "b_Qie": 1.0,  # Scaling factor for ion-electron heating
     "b_Qei": 1.0,  # Scaling factor for electron-ion cooling
     "b_Qen": 1.0,  # Scaling factor for electron-neutral cooling
+    "b_div_v_elec": 0.0,  # Scaling factor for electron compressional heating/cooling
+    "b_div_v_ions": 0.0,  # Scaling factor for ion compressional heating/cooling
+    "b_Te_conv": 0.0,  # Scaling factor for electron temperature convection
+    "b_Ti_conv": 0.0,  # Scaling factor for ion temperature convection
     "cycles": 1,
     "tau_prebreakdown": 0.05,   # max pre-breakdown phase duration [s]
     "tau_discharge": 20e-3,    # main discharge duration after breakdown [s]
-    "tau_gp_after_breakdown": None,  # optional S_gp shutoff time after breakdown/main-discharge start [s]
+    "tau_gp_after_breakdown": None,  # optional S_gp exponential-decay start time after breakdown/main-discharge start [s]
+    "tau_gp_decay_factor": 1.0,  # multiplier on S_gp decay time constant after tau_gp_after_breakdown
+    "tau_gp_pulse_duration": 0.0,  # full-rate puff duration after breakdown for pulse_decay_to_level mode [s]
+    "tau_gp_decay_duration": 1e-3,  # e-folding time toward S_gp_decay_target for pulse_decay_to_level mode [s]
     "tau_afterglow": 5e-3,    # afterglow duration after discharge [s]
     "tau_cycle": 3.0,          # total cycle length for Plasma=False [s]
     "I_prebreakdown": 100.0,     # I_tot threshold to exit floor-dominated pre-breakdown (0 = skip)
@@ -134,11 +148,14 @@ input_dict_template = {
     "h0": 1e-6,                # initial adaptive step size [s]
     "h_max_discharge": 1e-4,   # max step size during active discharge phases [s]
     "h_max_afterglow": 1e-4,   # max step size during afterglow/off phases [s]
+    "max_step_rejections": 200,  # max consecutive rejected RK attempts at one time; 0 disables
     "dt_save": 1e-5,            # min simulation time between saved output steps [s]; 0 = save every step
     "max_output_steps": 0,     # hard cap on total saved timesteps; 0 = unlimited
     "cells": 3,
     "rtol": 1e-3,  # relative tolerance for adaptive stepping
-    "h_min": 1e-10,            # minimum allowed step size [s]
+    "h_min": 1e-12,            # minimum allowed step size [s]
+    "h_min_prebreakdown": 1e-6,  # relaxed minimum step while pre-breakdown state is floor-clipped [s]
+    "prebreakdown_cfl_factor": 10.0,  # multiplier on physical CFL cap during floor-dominated pre-breakdown
     "ne_cfl_floor": None,      # minimum ne [cm^-3] used when computing the electron-conduction CFL (interior cells only); None = use actual ne
     "ne_floor": 1e8,
     "nn_floor": 1e8,
@@ -170,12 +187,12 @@ input_flags_template = {
     "Plasma": True,
     "TwinCathode": False,
     "Velocity": True,
-    "advection": True,  # Include v·∇v convective acceleration in velocity equation
+    "advection": False,  # Include v·∇v convective acceleration in velocity equation
     "adaptive_mesh": False,  # Dynamically refine/coarsen spatial cells based on MFP criterion
     "hybrid_ne": True,      # Interior face flux: velocity advection plus limited sonic pressure correction
     "debug_checks": False,   # Raise early on non-finite states or configured jump/gradient thresholds
     "debug_raise_on_guard": False,  # Raise when accepted endpoints require clipping/flooring
-    "reject_floor_violations": True,  # Reject RK steps whose accepted endpoint crosses state floors
+    "reject_floor_violations": False,  # Debug option: reject RK steps whose endpoint crosses state floors
     "reject_large_step_changes": False,  # Reject RK steps whose endpoint exceeds debug_max_rel_step_change
 }
 
@@ -278,6 +295,10 @@ class LAPDSim:
         self._b_Qei = input_dict.get("b_Qei", 1.0)
         self._b_Qen = input_dict.get("b_Qen", 1.0)
         self._b_source = input_dict.get("b_source", 1.0)
+        self._b_div_v_elec = input_dict.get("b_div_v_elec", 0.0)
+        self._b_div_v_ions = input_dict.get("b_div_v_ions", 0.0)
+        self._b_Te_conv = input_dict.get("b_Te_conv", 0.0)
+        self._b_Ti_conv = input_dict.get("b_Ti_conv", 0.0)
         self._alpha_ne_sonic_flux = input_dict.get("alpha_ne_sonic_flux", 1.0)
         self._beta_ne_sonic_flux = input_dict.get("beta_ne_sonic_flux", 1.0)
         self._hybrid_ne_taper_dn0 = input_dict.get("hybrid_ne_taper_dn0", 0.2)
@@ -287,14 +308,28 @@ class LAPDSim:
         self._plasma_cross = np.pi * self._R_plasma**2
         self._plasma_vol = self._plasma_cross * self._L_plasma
         self._cell_vol = np.pi * self._R_machine**2 * self._L_cell
+        self._gas_puff_mode = input_dict.get("gas_puff_mode", "decay_after_breakdown")
+        _gas_puff_modes = {"decay_after_breakdown", "pulse_decay_to_level"}
+        if self._gas_puff_mode not in _gas_puff_modes:
+            raise ValueError(
+                f"gas_puff_mode must be one of {sorted(_gas_puff_modes)} "
+                f"(got {self._gas_puff_mode!r})"
+            )
         self._S_gp = np.zeros(self._cells)
+        self._S_gp_decay_target = np.zeros(self._cells)
         self._S_pump = np.zeros(self._cells)
         self._S_gp[0] = self.puff_rate(input_dict["S_gp"], 2, self._cell_vol[0])
+        self._S_gp_decay_target[0] = self.puff_rate(
+            input_dict.get("S_gp_decay_target", 0.0), 2, self._cell_vol[0]
+        )
         self._S_pump[0] = self.pump_rate(input_dict["S_pump_L"], self._cell_vol[0])
         self._S_pump[-1] = self.pump_rate(input_dict["S_pump_R"], self._cell_vol[-1])
         if self._flags["TwinCathode"]:
             self._S_gp[-1] = self.puff_rate(
                 input_dict["Twin_S_gp"], 2, self._cell_vol[-1]
+            )
+            self._S_gp_decay_target[-1] = self.puff_rate(
+                input_dict.get("Twin_S_gp_decay_target", 0.0), 2, self._cell_vol[-1]
             )
         # self._active_discharge = self._I_discharge > 0 : need to calculate later with cathode solver
         # size-2 arrays: index 0 = primary cathode, index 1 = twin cathode
@@ -305,8 +340,23 @@ class LAPDSim:
         self._tau_gp_after_breakdown = input_dict.get("tau_gp_after_breakdown", None)
         if self._tau_gp_after_breakdown is not None and self._tau_gp_after_breakdown < 0:
             raise ValueError(
-                "tau_gp_after_breakdown must be >= 0 s, or None to keep S_gp on "
+                "tau_gp_after_breakdown must be >= 0 s, or None to keep S_gp steady "
                 "through the main discharge"
+            )
+        self._tau_gp_decay_factor = input_dict.get("tau_gp_decay_factor", 1.0)
+        if self._tau_gp_decay_factor <= 0:
+            raise ValueError(
+                f"tau_gp_decay_factor must be > 0 (got {self._tau_gp_decay_factor})"
+            )
+        self._tau_gp_pulse_duration = input_dict.get("tau_gp_pulse_duration", 0.0)
+        if self._tau_gp_pulse_duration < 0:
+            raise ValueError(
+                f"tau_gp_pulse_duration must be >= 0 (got {self._tau_gp_pulse_duration})"
+            )
+        self._tau_gp_decay_duration = input_dict.get("tau_gp_decay_duration", 1e-3)
+        if self._tau_gp_decay_duration <= 0:
+            raise ValueError(
+                f"tau_gp_decay_duration must be > 0 (got {self._tau_gp_decay_duration})"
             )
         self._tau_afterglow = input_dict.get("tau_afterglow", 10e-3)
         self._t_total = self._tau_prebreakdown + self._tau_discharge + self._tau_afterglow
@@ -348,7 +398,22 @@ class LAPDSim:
         self._gas_puff_shutoff_reported = False
         self._t_current = 0.0
         self._rtol = input_dict.get("rtol", 1e-3)
-        self._h_min = input_dict.get("h_min", 1e-12)
+        self._h_min_base = input_dict.get("h_min", 1e-12)
+        self._h_min_prebreakdown = input_dict.get("h_min_prebreakdown", self._h_min_base)
+        self._h_min = self._h_min_base
+        self._prebreakdown_cfl_factor = input_dict.get("prebreakdown_cfl_factor", 10.0)
+        if self._prebreakdown_cfl_factor <= 0:
+            raise ValueError(
+                "prebreakdown_cfl_factor must be > 0 "
+                f"(got {self._prebreakdown_cfl_factor})"
+            )
+        self._max_step_rejections = int(input_dict.get("max_step_rejections", 200))
+        if self._max_step_rejections < 0:
+            raise ValueError(
+                f"max_step_rejections must be >= 0 (got {self._max_step_rejections})"
+            )
+        self._step_reject_count = 0
+        self._last_reject_detail = None
         self._ne_cfl_floor = input_dict.get("ne_cfl_floor", None)
         self._dt_save = input_dict.get("dt_save", 0.0)
         self._max_output_steps = input_dict.get("max_output_steps", 0)
@@ -449,13 +514,22 @@ class LAPDSim:
         print(f"  L_plasma={self._L_plasma} cm")
         print(f"  plasma_vol={self._plasma_vol} cm^3")
         print(f"  Rsq_ratio={self._Rsq_ratio}")
+        print(f"  gas_puff_mode={self._gas_puff_mode}")
         print(f"  S_gp={self._S_gp} cm^-3 s^-1")
+        if self._gas_puff_mode == "pulse_decay_to_level":
+            print(f"  S_gp_decay_target={self._S_gp_decay_target} cm^-3 s^-1")
         print(f"  S_pump={self._S_pump} s^-1")
         if self._flags["Plasma"]:
-            if self._tau_gp_after_breakdown is not None:
+            if self._gas_puff_mode == "pulse_decay_to_level":
                 print(
-                    f"  S_gp shuts off {self._tau_gp_after_breakdown*1e3:.3f} ms "
-                    "after breakdown/main_discharge start"
+                    f"  S_gp holds for {self._tau_gp_pulse_duration*1e3:.3f} ms "
+                    f"then decays toward target with tau={self._tau_gp_decay_duration*1e3:.3f} ms"
+                )
+            elif self._tau_gp_after_breakdown is not None:
+                print(
+                    f"  S_gp begins exponential decay {self._tau_gp_after_breakdown*1e3:.3f} ms "
+                    "after breakdown/main_discharge start; "
+                    f"tau_decay factor={self._tau_gp_decay_factor:g}"
                 )
             if self._I_prebreakdown > 0:
                 print(f"  Phases: pre_breakdown(<{self._tau_prebreakdown*1e3:.1f} ms, I<{self._I_prebreakdown:.0f} A) "
@@ -714,22 +788,47 @@ class LAPDSim:
         Nn_flux = self._nn_clausing_flux(nn)
         return Nn_flux + self._gas_puff_source() - self._S_pump * nn
 
-    def _gas_puff_source(self):
+    def _gas_puff_source(self, t=None):
         """Return the active gas-puff source vector for the current phase."""
+        if self._flags["Plasma"]:
+            return self._plasma_gas_puff_source(self._t_current if t is None else t)
         if getattr(self, "_gas_puff_on", getattr(self, "_discharge_on", False)):
             return self._S_gp
         return np.zeros(self._cells)
 
     def _plasma_gas_puff_on(self, phase, t):
+        return np.any(self._plasma_gas_puff_source(t, phase=phase) > 0.0)
+
+    def _plasma_gas_puff_source(self, t, phase=None):
+        phase = phase or getattr(self, "_phase", None)
         if phase in ("pre_breakdown", "breakdown"):
-            return True
+            return self._S_gp
         if phase != "main_discharge" or self._t_breakdown is None:
-            return False
+            return np.zeros(self._cells)
+
+        t_rel = t - self._t_breakdown
+        if self._gas_puff_mode == "pulse_decay_to_level":
+            if t_rel <= self._tau_gp_pulse_duration:
+                return self._S_gp
+            decay_elapsed = t_rel - self._tau_gp_pulse_duration
+            decay = float(np.exp(-decay_elapsed / self._tau_gp_decay_duration))
+            return self._S_gp_decay_target + (self._S_gp - self._S_gp_decay_target) * decay
+
         if self._tau_gp_after_breakdown is None:
-            return True
-        return t < self._t_breakdown + self._tau_gp_after_breakdown
+            return self._S_gp
+        if t_rel <= self._tau_gp_after_breakdown:
+            return self._S_gp
+
+        tau_decay = (
+            self._tau_discharge - self._tau_gp_after_breakdown
+        ) * self._tau_gp_decay_factor
+        if tau_decay <= 0.0:
+            return self._S_gp
+        decay = float(np.exp(-(t_rel - self._tau_gp_after_breakdown) / tau_decay))
+        return decay * self._S_gp
 
     def _sync_plasma_phase_switches(self, phase, t):
+        self._phase = phase
         self._discharge_on = phase in ("pre_breakdown", "breakdown", "main_discharge")
         self._floating = phase == "afterglow"
         self._gas_puff_on = self._plasma_gas_puff_on(phase, t)
@@ -738,8 +837,11 @@ class LAPDSim:
         if (
             phase != "main_discharge"
             or self._t_breakdown is None
-            or self._tau_gp_after_breakdown is None
         ):
+            return None
+        if self._gas_puff_mode == "pulse_decay_to_level":
+            return self._t_breakdown + self._tau_gp_pulse_duration
+        if self._tau_gp_after_breakdown is None:
             return None
         return self._t_breakdown + self._tau_gp_after_breakdown
 
@@ -878,10 +980,10 @@ class LAPDSim:
             self._v_face = (v_plasma[:-1] + v_plasma[1:]) / 2
             # NOTE: physical form of div(v) term should be revisited.
             div_v = self._calc_div_v(Te, c_s=c_s)
-            self._div_v_elec = -en_factor * Te * div_v
-            self._div_v_ions = -en_factor * Ti * div_v
-            self._Te_conv = self._calc_T_convection(Te, v_plasma)
-            self._Ti_conv = self._calc_T_convection(Ti, v_plasma)
+            self._div_v_elec = -self._b_div_v_elec * en_factor * Te * div_v
+            self._div_v_ions = -self._b_div_v_ions * en_factor * Ti * div_v
+            self._Te_conv = self._b_Te_conv * self._calc_T_convection(Te, v_plasma)
+            self._Ti_conv = self._b_Ti_conv * self._calc_T_convection(Ti, v_plasma)
         if self._flags["icool"]:
             if self._gas_type == "He":
                 self._Qei = (
@@ -1318,8 +1420,12 @@ class LAPDSim:
         self._plasma_vol = self._plasma_cross * self._L_plasma
         self._cell_vol = np.pi * self._R_machine**2 * self._L_cell
         self._S_gp = np.zeros(new_total)
+        self._S_gp_decay_target = np.zeros(new_total)
         self._S_pump = np.zeros(new_total)
         self._S_gp[0] = self.puff_rate(self._input_dict["S_gp"], 2, self._cell_vol[0])
+        self._S_gp_decay_target[0] = self.puff_rate(
+            self._input_dict.get("S_gp_decay_target", 0.0), 2, self._cell_vol[0]
+        )
         self._S_pump[0] = self.pump_rate(
             self._input_dict["S_pump_L"], self._cell_vol[0]
         )
@@ -1329,6 +1435,9 @@ class LAPDSim:
         if self._flags["TwinCathode"]:
             self._S_gp[-1] = self.puff_rate(
                 self._input_dict["Twin_S_gp"], 2, self._cell_vol[-1]
+            )
+            self._S_gp_decay_target[-1] = self.puff_rate(
+                self._input_dict.get("Twin_S_gp_decay_target", 0.0), 2, self._cell_vol[-1]
             )
         self._div_v_elec = np.zeros(new_total)
         self._div_v_ions = np.zeros(new_total)
@@ -1363,9 +1472,9 @@ class LAPDSim:
         return False
 
     def _compute_h_max_physical(self, interior_only=False):
-        """Step ceiling from diffusive and advective CFL conditions on electron heat conduction.
+        """Step ceiling from diffusive and advective CFL conditions.
 
-        interior_only: exclude cathode boundary cells from the kappa_e CFL. Use during
+        interior_only: exclude cathode boundary cells from the heat-conduction CFL. Use during
         pre-breakdown when those cells are permanently floor-clamped and their kappa_e
         is an artifact rather than a dynamics constraint.
         """
@@ -1374,12 +1483,28 @@ class LAPDSim:
             sl = slice(nc, -nc if nc else None)
             ne = self._ne[sl]
             Te = self._Te[sl]
+            Ti = self._Ti[sl]
+            L = self._L_plasma[sl]
             ln_lam = self._ln_lambda[sl] if np.ndim(self._ln_lambda) > 0 else self._ln_lambda
         else:
-            ne, Te, ln_lam = self._ne, self._Te, self._ln_lambda
+            ne, Te, Ti, L, ln_lam = self._ne, self._Te, self._Ti, self._L_plasma, self._ln_lambda
         ne_for_cfl = ne if self._ne_cfl_floor is None else np.maximum(ne, self._ne_cfl_floor)
-        kappa_e = 3.16 * time_elec_coll(Te, ne_for_cfl, ln_lam) * v_thm_e(Te) ** 2
-        h_cond = 0.5 * np.min(self._L_plasma) ** 2 / np.max(kappa_e)
+        kappa_e = (
+            self._b_epara
+            * en_factor
+            * 3.16
+            * time_elec_coll(Te, ne_for_cfl, ln_lam)
+            * v_thm_e(Te) ** 2
+        )
+        kappa_i = (
+            self._b_ipara
+            * en_factor
+            * 3.9
+            * time_ion_coll(Ti, ne_for_cfl, self._mu, ln_lam)
+            * v_ion_speed(Ti, self._mu) ** 2
+        )
+        max_kappa = max(float(np.max(kappa_e)), float(np.max(kappa_i)))
+        h_cond = np.inf if max_kappa <= 0 else 0.5 * np.min(L) ** 2 / max_kappa
         c_s = v_ion_speed(self._Te, self._mu)
         v_eff = np.max(c_s + np.abs(self._v_plasma))
         h_advect = 0.5 * np.min(self._L_plasma) / v_eff
@@ -1389,9 +1514,10 @@ class LAPDSim:
         """Step ceiling from CFL condition on neutral Clausing diffusion."""
         return 0.5 * np.min(self._L_plasma) / (0.25 * self._v_th_n)
 
-    def _dstep(self, a):
+    def _dstep(self, a, t=None):
         ne, nn, Te, Ti, v_plasma = a
         zeros = np.zeros(self._cells)
+        rhs_t = self._t_current if t is None else t
 
         if not self._flags["Plasma"]:
             _, self._Nn_flux = self._calc_n_flux(Te, ne, nn, v_plasma)
@@ -1446,7 +1572,7 @@ class LAPDSim:
             self._Nn_flux
             - (self._S_ion_bulk + self._S_ion_beam - self._S_rec_rad - self._S_rec_3b)
             * self._Rsq_ratio
-            + self._gas_puff_source()
+            + self._gas_puff_source(rhs_t)
             - self._S_pump * nn
         )
         if self._flags["Velocity"]:
@@ -1482,10 +1608,11 @@ class LAPDSim:
         h = self._h
 
         # ── Dormand-Prince stages ──────────────────────────────────────────
-        k1 = self._dstep(a)
-        k2 = self._dstep(a + h * (1 / 5 * k1))
-        k3 = self._dstep(a + h * (3 / 40 * k1 + 9 / 40 * k2))
-        k4 = self._dstep(a + h * (44 / 45 * k1 - 56 / 15 * k2 + 32 / 9 * k3))
+        t0 = self._t_current
+        k1 = self._dstep(a, t0)
+        k2 = self._dstep(a + h * (1 / 5 * k1), t0 + h * (1 / 5))
+        k3 = self._dstep(a + h * (3 / 40 * k1 + 9 / 40 * k2), t0 + h * (3 / 10))
+        k4 = self._dstep(a + h * (44 / 45 * k1 - 56 / 15 * k2 + 32 / 9 * k3), t0 + h * (4 / 5))
         k5 = self._dstep(
             a
             + h
@@ -1494,7 +1621,8 @@ class LAPDSim:
                 - 25360 / 2187 * k2
                 + 64448 / 6561 * k3
                 - 212 / 729 * k4
-            )
+            ),
+            t0 + h * (8 / 9),
         )
         k6 = self._dstep(
             a
@@ -1505,7 +1633,8 @@ class LAPDSim:
                 + 46732 / 5247 * k3
                 + 49 / 176 * k4
                 - 5103 / 18656 * k5
-            )
+            ),
+            t0 + h,
         )
 
         # ── 5th-order solution ─────────────────────────────────────────────
@@ -1518,7 +1647,7 @@ class LAPDSim:
         )
 
         # ── k7 for error estimate (FSAL) ───────────────────────────────────
-        k7 = self._dstep(y5)
+        k7 = self._dstep(y5, t0 + h)
 
         # ── Error vector (difference between 5th and 4th order) ───────────
         err = h * (
@@ -1545,13 +1674,28 @@ class LAPDSim:
         accepted = (np.isfinite(err_norm) and err_norm <= 1.0) or h <= self._h_min
 
         if accepted:
-            if self._flags.get("reject_floor_violations", True) and h > self._h_min:
+            if self._flags.get("reject_floor_violations", False) and h > self._h_min:
                 h_floor = self._floor_limited_h_next(h, a, y5)
                 if h_floor is not None:
+                    self._last_reject_detail = {
+                        "reason": "floor_violation",
+                        "h_s": float(h),
+                        "h_next_s": float(h_floor),
+                        "detail": self._floor_violation(y5),
+                    }
                     return None, h_floor, False
             if self._flags.get("reject_large_step_changes", False) and h > self._h_min:
                 h_jump = self._large_step_change_limited_h_next(h, a, y5)
                 if h_jump is not None:
+                    max_rel, comp, cell = self._max_step_change(a, y5)
+                    self._last_reject_detail = {
+                        "reason": "large_step_change",
+                        "h_s": float(h),
+                        "h_next_s": float(h_jump),
+                        "component": _STATE_NAMES[comp],
+                        "cell": int(cell),
+                        "max_rel_change": float(max_rel),
+                    }
                     return None, h_jump, False
             ne, nn, Te, Ti, v_plasma = y5
             self._check_finite_state(y5, "accepted_endpoint_before_guards")
@@ -1566,6 +1710,12 @@ class LAPDSim:
             self.calc_heat_terms(ne, nn, Te, Ti, v_plasma, c_s=c_s)
             return (ne, nn, Te, Ti, v_plasma), h_next, True
         else:
+            self._last_reject_detail = {
+                "reason": "error_norm",
+                "h_s": float(h),
+                "h_next_s": float(h_next),
+                "err_norm": float(err_norm) if np.isfinite(err_norm) else str(err_norm),
+            }
             return None, h_next, False
 
     def _rkf45_step_nn(self, a):
@@ -1635,13 +1785,28 @@ class LAPDSim:
 
         if accepted:
             state = np.array([ne, nn5, Te, Ti, v_plasma])
-            if self._flags.get("reject_floor_violations", True) and h > self._h_min:
+            if self._flags.get("reject_floor_violations", False) and h > self._h_min:
                 h_floor = self._floor_limited_h_next(h, a, state)
                 if h_floor is not None:
+                    self._last_reject_detail = {
+                        "reason": "floor_violation",
+                        "h_s": float(h),
+                        "h_next_s": float(h_floor),
+                        "detail": self._floor_violation(state),
+                    }
                     return None, h_floor, False
             if self._flags.get("reject_large_step_changes", False) and h > self._h_min:
                 h_jump = self._large_step_change_limited_h_next(h, a, state)
                 if h_jump is not None:
+                    max_rel, comp, cell = self._max_step_change(a, state)
+                    self._last_reject_detail = {
+                        "reason": "large_step_change",
+                        "h_s": float(h),
+                        "h_next_s": float(h_jump),
+                        "component": _STATE_NAMES[comp],
+                        "cell": int(cell),
+                        "max_rel_change": float(max_rel),
+                    }
                     return None, h_jump, False
             if self._flags.get("debug_checks"):
                 self._check_finite_state(state, "accepted_nn_endpoint")
@@ -1650,6 +1815,12 @@ class LAPDSim:
             self.calc_density_terms(ne, nn5, Te, v_plasma)
             return (ne, nn5, Te, Ti, v_plasma), h_next, True
         else:
+            self._last_reject_detail = {
+                "reason": "error_norm",
+                "h_s": float(h),
+                "h_next_s": float(h_next),
+                "err_norm": float(err_norm) if np.isfinite(err_norm) else str(err_norm),
+            }
             return None, h_next, False
 
     def start_simulation(self):
@@ -1666,13 +1837,29 @@ class LAPDSim:
         self._finalize_results()
         print("Simulation complete.")
 
+    def _register_step_rejection(self, phase, t, h_next, h_cap):
+        """Track consecutive rejected attempts and fail if time cannot advance."""
+        if self._max_step_rejections == 0:
+            return
+        self._step_reject_count += 1
+        if self._step_reject_count < self._max_step_rejections:
+            return
+        detail = self._last_reject_detail or {}
+        raise StepRejectionError(
+            "Adaptive step failed to converge after "
+            f"{self._step_reject_count} consecutive rejected attempts "
+            f"at phase={phase!r}, t={t:.9e} s, h={self._h:.3e} s, "
+            f"h_next={h_next:.3e} s, h_cap={h_cap:.3e} s, "
+            f"h_min={self._h_min:.3e} s, last_reject={detail}"
+        )
+
     def _run_plasma_phases(self):
         """
         Adaptive integration for Plasma=True.
 
         pre_breakdown: floor-dominated, relaxed h_min, ends at I_prebreakdown (if set)
         breakdown:     plasma forming, discharge h_min, ends when I_tot >= I_breakdown (1 kA = t=0)
-        main_discharge: cathode on, S_gp optionally shuts off after breakdown
+        main_discharge: cathode on, S_gp optionally decays after breakdown
         afterglow:      cathode + S_gp off, lasts tau_afterglow
 
         If I_prebreakdown=0 (default), pre_breakdown transitions directly to main_discharge
@@ -1682,13 +1869,15 @@ class LAPDSim:
         t = 0.0
         self._t_breakdown = None
         self._h = self._h0
-        # h_min is a single value now; no per-phase distinction
+        self._h_min = self._h_min_prebreakdown
         self._sync_plasma_phase_switches(phase, t)
         step_count = 0
+        self._step_reject_count = 0
         _last_print_t = -1e-3
 
         while True:
             self._sync_plasma_phase_switches(phase, t)
+            self._h_min = self._h_min_prebreakdown if phase == "pre_breakdown" else self._h_min_base
             if phase in ("pre_breakdown", "breakdown"):
                 t_phase_end = self._tau_prebreakdown
                 h_max_base = self._h_max_discharge
@@ -1703,7 +1892,10 @@ class LAPDSim:
             if remaining <= 0:
                 break
             if self._cathode_result is not None:
-                h_max_base = min(h_max_base, self._compute_h_max_physical(interior_only=(phase == "pre_breakdown")))
+                h_physical = self._compute_h_max_physical(interior_only=(phase == "pre_breakdown"))
+                if phase == "pre_breakdown":
+                    h_physical *= self._prebreakdown_cfl_factor
+                h_max_base = min(h_max_base, h_physical)
             h_cap = min(h_max_base, remaining)
             gas_puff_event_t = self._gas_puff_event_time(phase)
             if (
@@ -1719,19 +1911,25 @@ class LAPDSim:
             result, h_next, accepted = self._rkf45_step(a)
 
             if accepted:
+                self._step_reject_count = 0
+                t_before = t
                 gas_puff_was_on = self._gas_puff_on
                 self._ne, self._nn, self._Te, self._Ti, self._v_plasma = result
                 t += self._h
                 self._sync_plasma_phase_switches(phase, t)
+                gas_puff_event_t = self._gas_puff_event_time(phase)
                 if (
                     gas_puff_was_on
-                    and not self._gas_puff_on
                     and phase == "main_discharge"
+                    and gas_puff_event_t is not None
+                    and gas_puff_event_t < self._t_breakdown + self._tau_discharge
+                    and t_before <= gas_puff_event_t <= t
                     and not self._gas_puff_shutoff_reported
                 ):
                     self._gas_puff_shutoff_reported = True
                     print(
-                        f"  S_gp shut off at t={(t - self._t_breakdown)*1e3:.3f} ms "
+                        f"  S_gp exponential decay started at "
+                        f"t={(gas_puff_event_t - self._t_breakdown)*1e3:.3f} ms "
                         "after breakdown."
                     )
                 self._h = max(min(self._h_min, h_cap), min(h_next, h_cap))
@@ -1802,6 +2000,7 @@ class LAPDSim:
                     if t >= self._t_breakdown + self._tau_discharge + self._tau_afterglow:
                         break
             else:
+                self._register_step_rejection(phase, t, h_next, h_cap)
                 self._h = max(min(self._h_min, h_cap), min(h_next, h_cap))
 
     def _run_equilibrium_cycles(self):
@@ -1817,6 +2016,7 @@ class LAPDSim:
             print(f"Starting cycle {j+1}/{self._cycles}...")
             t = 0.0
             self._h = min(self._h0, h0_nn)
+            self._step_reject_count = 0
             t_offset = j * self._tau_cycle
 
             while t < self._tau_cycle * (1 - 1e-12):
@@ -1835,11 +2035,14 @@ class LAPDSim:
                 result, h_next, accepted = self._rkf45_step(a)
 
                 if accepted:
+                    self._step_reject_count = 0
                     self._ne, self._nn, self._Te, self._Ti, self._v_plasma = result
                     t += self._h
                     self._h = max(min(self._h_min, h_cap), min(h_next, h_cap))
                     self.update_results(t + t_offset)
                 else:
+                    phase = "equilibrium_puff" if in_puffing else "equilibrium_off"
+                    self._register_step_rejection(phase, t + t_offset, h_next, h_cap)
                     self._h = max(min(self._h_min, h_cap), min(h_next, h_cap))
 
     def get_results(self):
