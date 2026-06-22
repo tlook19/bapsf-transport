@@ -27,8 +27,8 @@ from cablp.vars._cons import (
     kb_cgs,
 )
 from cablp.funcs._fits import rate_coeff, IAEA_exp1, IAEA_exp4, IAEA_exp6
-from cablp.funcs._cross import alpha_3, alpha_r
-from cablp.vars._coeff import aHeI, aHeII, aHI, aHII, He_ion_coeff
+from cablp.funcs._cross import He_ion_rate_lkup, alpha_3, alpha_r
+from cablp.vars._coeff import aHeI, aHeII, aHI, aHII
 from cablp.vars._cons import I_ion as IE_Helium, I_Ry as IE_Hydrogen
 from cablp.funcs._plasmaparams import v_ion_speed, v_thm_e, time_elec_coll, time_ion_coll, c_log
 from cablp.vars._nn_table import lookup_nn0
@@ -242,7 +242,7 @@ class LAPDSim:
             self._mu = 4
             self._mu_neutral = 4  # He atom
             self._I_ion = IE_Helium
-            self._ion_fit_coeff = He_ion_coeff
+            self._ion_fit_coeff = None
         elif self._gas_type == "H":
             self._m_gas = m_p_cgs
             self._mu = 1
@@ -440,7 +440,12 @@ class LAPDSim:
         """Print key derived quantities computed during __init__ for sanity checking."""
         print(f"=== LAPDSim init summary ===")
         print(f"  gas_type={self._gas_type}  mu={self._mu}  I_ion={self._I_ion:.4f} eV")
-        print(f"  ion_fit_coeff={self._ion_fit_coeff}")
+        ionization_model = (
+            "he_ion_rate.csv lookup"
+            if self._gas_type == "He"
+            else f"fit coefficients {self._ion_fit_coeff}"
+        )
+        print(f"  bulk_ionization={ionization_model}")
         print(
             f"  V_discharge={self._device_config.V_bank}  R_comp={self._device_config.R_comp}"
         )
@@ -664,11 +669,16 @@ class LAPDSim:
         self._S_rec_3b = np.zeros(self._cells)
         if self._flags["Plasma"]:
             if self._gas_type in ("He", "H"):
+                ion_rate = (
+                    He_ion_rate_lkup(Te)
+                    if self._gas_type == "He"
+                    else rate_coeff(Te, self._I_ion, *self._ion_fit_coeff)
+                )
                 self._S_ion_bulk = (
                     self._b_ioniz
                     * ne
                     * nn
-                    * rate_coeff(Te, self._I_ion, *self._ion_fit_coeff)
+                    * ion_rate
                 )
                 for i in [0, -1] if self._flags["TwinCathode"] else [0]:
                     if self._beam_cross[i] == 0.0:
