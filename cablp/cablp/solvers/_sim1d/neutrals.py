@@ -1,20 +1,71 @@
+import math
+
 import numpy as np
 
 from .state import ConservativeState1D
+from cablp.vars._cons import kb_cgs, m_p_cgs
+
+
+def neutral_thermal_speed(Tn_K, mu_neutral):
+    """Return neutral thermal speed [cm/s] using the _sim3 convention."""
+    if Tn_K <= 0.0:
+        raise ValueError(f"Tn_K must be positive (got {Tn_K})")
+    if mu_neutral <= 0.0:
+        raise ValueError(f"mu_neutral must be positive (got {mu_neutral})")
+    return np.sqrt(8.0 * kb_cgs * Tn_K / (np.pi * mu_neutral * m_p_cgs))
+
+
+def molecular_flow_coefficients(
+    geometry,
+    Tn_K,
+    mu_neutral,
+    clausing_scale=1.0,
+):
+    """Return internal-face molecular-flow conductances [cm^3/s]."""
+    if clausing_scale < 0.0:
+        raise ValueError(f"clausing_scale must be non-negative (got {clausing_scale})")
+    v_th_n = neutral_thermal_speed(Tn_K=Tn_K, mu_neutral=mu_neutral)
+    L_eff = 0.5 * (geometry.length_cm[:-1] + geometry.length_cm[1:])
+    R_face = 0.5 * (geometry.Rm_cm[:-1] + geometry.Rm_cm[1:])
+    if np.any(R_face <= 0.0):
+        raise ValueError("neutral radii must be positive")
+    clausing = 1.0 / (1.0 + (3.0 / 8.0) * L_eff / R_face)
+    return (
+        float(clausing_scale)
+        * 0.25
+        * v_th_n
+        * geometry.neutral_face_area_cm2[1:-1]
+        * clausing
+    )
+
+
+def neutral_exchange_coefficients(
+    geometry,
+    model,
+    constant_coeff_cm3_s,
+    Tn_K,
+    mu_neutral,
+    clausing_scale=1.0,
+):
+    """Return internal-face neutral exchange coefficients [cm^3/s]."""
+    if model == "constant":
+        return _as_face_coefficients(constant_coeff_cm3_s, geometry)
+    if model == "molecular_flow":
+        return molecular_flow_coefficients(
+            geometry=geometry,
+            Tn_K=Tn_K,
+            mu_neutral=mu_neutral,
+            clausing_scale=clausing_scale,
+        )
+    raise ValueError(
+        "neutral_exchange_model must be 'constant' or 'molecular_flow' "
+        f"(got {model!r})"
+    )
 
 
 def neutral_exchange_face_rates(nn, geometry, exchange_coeff_cm3_s):
     """Return neutral inventory rates across internal faces [particles/s]."""
-    coeff = np.asarray(exchange_coeff_cm3_s, dtype=float)
-    if coeff.ndim == 0:
-        coeff = np.full(geometry.cells - 1, float(coeff))
-    if coeff.shape != (geometry.cells - 1,):
-        raise ValueError(
-            "exchange_coeff_cm3_s must be scalar or have shape "
-            f"({geometry.cells - 1},), got {coeff.shape}"
-        )
-    if np.any(coeff < 0.0):
-        raise ValueError("exchange_coeff_cm3_s must be non-negative")
+    coeff = _as_face_coefficients(exchange_coeff_cm3_s, geometry)
     return coeff * (
         np.asarray(nn[:-1], dtype=float) - np.asarray(nn[1:], dtype=float)
     )
@@ -42,4 +93,18 @@ def neutral_exchange_rhs(state, geometry, exchange_coeff_cm3_s):
 
 def neutral_inventory_rate(rhs, geometry):
     """Return total neutral inventory rate [particles/s] from a neutral RHS."""
-    return float(np.sum(rhs.nn * geometry.neutral_volume_cm3))
+    return math.fsum((rhs.nn * geometry.neutral_volume_cm3).tolist())
+
+
+def _as_face_coefficients(exchange_coeff_cm3_s, geometry):
+    coeff = np.asarray(exchange_coeff_cm3_s, dtype=float)
+    if coeff.ndim == 0:
+        coeff = np.full(geometry.cells - 1, float(coeff))
+    if coeff.shape != (geometry.cells - 1,):
+        raise ValueError(
+            "exchange_coeff_cm3_s must be scalar or have shape "
+            f"({geometry.cells - 1},), got {coeff.shape}"
+        )
+    if np.any(coeff < 0.0):
+        raise ValueError("exchange_coeff_cm3_s must be non-negative")
+    return coeff

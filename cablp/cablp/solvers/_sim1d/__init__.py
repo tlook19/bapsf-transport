@@ -15,7 +15,7 @@ from .integrator import (
     floor_state_vector,
     ssprk2_step,
 )
-from .neutrals import neutral_exchange_rhs
+from .neutrals import neutral_exchange_coefficients, neutral_exchange_rhs
 from .sources import add_state_rhs, pressure_work_rhs
 from .state import (
     apply_state_floors,
@@ -46,7 +46,12 @@ class LAPDSim1D:
         self._flags = dict(input_flags)
         self._progress_callback = progress_callback
         self._gas_type = self._input_dict.get("gas_type", "He")
-        self._ion_mass_g, self._mu, self._I_ion = self._gas_constants(self._gas_type)
+        (
+            self._ion_mass_g,
+            self._mu,
+            self._mu_neutral,
+            self._I_ion,
+        ) = self._gas_constants(self._gas_type)
         self._geometry = build_geometry(self._input_dict)
         self._floors = {
             "n": float(self._input_dict["ne_floor"]),
@@ -167,9 +172,20 @@ class LAPDSim1D:
         return neutral_exchange_rhs(
             state=state,
             geometry=self._geometry,
-            exchange_coeff_cm3_s=float(
+            exchange_coeff_cm3_s=self.neutral_exchange_coefficients(),
+        )
+
+    def neutral_exchange_coefficients(self):
+        """Return internal-face neutral exchange coefficients [cm^3/s]."""
+        return neutral_exchange_coefficients(
+            geometry=self._geometry,
+            model=self._input_dict.get("neutral_exchange_model", "molecular_flow"),
+            constant_coeff_cm3_s=float(
                 self._input_dict.get("neutral_exchange_coeff_cm3_s", 1.0e5)
             ),
+            Tn_K=float(self._input_dict.get("Tn_K", 300.0)),
+            mu_neutral=self._mu_neutral,
+            clausing_scale=float(self._input_dict.get("neutral_clausing_scale", 1.0)),
         )
 
     def _set_state_vector(self, y):
@@ -198,7 +214,7 @@ class LAPDSim1D:
     @staticmethod
     def _gas_constants(gas_type):
         if gas_type == "He":
-            return m_He_cgs, 4, I_ion
+            return m_He_cgs, 4, 4, I_ion
         if gas_type == "H":
-            return m_p_cgs, 1, I_Ry
+            return m_p_cgs, 1, 2, I_Ry
         raise ValueError(f"unsupported gas_type {gas_type!r}; expected 'He' or 'H'")
