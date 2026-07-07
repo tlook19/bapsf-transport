@@ -1,6 +1,9 @@
 from dataclasses import dataclass
+import math
 
 import numpy as np
+
+from cablp.funcs._cathode_solver import DeviceConfig, solve_beam_system
 
 from ..core.state import ConservativeState1D, derive_state
 
@@ -48,6 +51,18 @@ class CathodeSourceTerms1D:
     metadata: dict
 
 
+@dataclass(frozen=True)
+class CathodeSolve1D:
+    """Opt-in cathode solve result without conservative RHS coupling."""
+
+    boundary: CathodeBoundaryState1D
+    beam_result: object | None
+    device_config: DeviceConfig | None
+    x0_next: float | None
+    x0_twin_next: float | None
+    metadata: dict
+
+
 def cathode_boundary_state(
     state,
     floors,
@@ -66,6 +81,109 @@ def cathode_boundary_state(
         end_mode=input_dict.get("end_mode", "collector"),
         twin_cathode=bool(input_flags.get("TwinCathode", False)),
         circuit=_circuit_placeholders(input_dict),
+    )
+
+
+def cathode_device_config(input_dict, input_flags, mu):
+    """Build the existing cathode solver's static device configuration."""
+    R_cath = float(input_dict["R_cath"])
+    return DeviceConfig(
+        A_c=math.pi * R_cath**2,
+        mu=mu,
+        V_bank=float(input_dict["V_bank"]),
+        T_s=float(input_dict["T_s"]),
+        phi_wf=float(input_dict["phi_wf"]),
+        C_R=float(input_dict["C_R"]),
+        R_comp=float(input_dict["R_comp"]),
+        eta=float(input_dict["eta"]),
+        Twin=bool(input_flags.get("TwinCathode", False)),
+        L_cath=float(input_dict["L_cath"]),
+        R_cath=R_cath,
+    )
+
+
+def solve_cathode_boundary(
+    state,
+    floors,
+    ion_mass_g,
+    mu,
+    geometry,
+    input_dict,
+    input_flags,
+    beam_cross_prev,
+    I_ion,
+    gas_type,
+    x0=None,
+    x0_twin=None,
+    floating=False,
+):
+    """Call the cathode/beam solver and return raw diagnostics only."""
+    boundary = cathode_boundary_state(
+        state=state,
+        floors=floors,
+        ion_mass_g=ion_mass_g,
+        geometry=geometry,
+        input_dict=input_dict,
+        input_flags=input_flags,
+    )
+    if not boundary.enabled:
+        return CathodeSolve1D(
+            boundary=boundary,
+            beam_result=None,
+            device_config=None,
+            x0_next=x0,
+            x0_twin_next=x0_twin,
+            metadata={
+                "enabled": False,
+                "mode": boundary.mode,
+                "floating": bool(floating),
+                "source_index": boundary.source.index,
+                "end_index": boundary.end.index,
+                "end_mode": boundary.end_mode,
+                "twin_cathode": boundary.twin_cathode,
+                "circuit": dict(boundary.circuit),
+            },
+        )
+
+    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
+    device_config = cathode_device_config(input_dict, input_flags, mu)
+    beam_cross_prev = np.asarray(beam_cross_prev, dtype=float)
+    if beam_cross_prev.shape != (geometry.cells,):
+        raise ValueError(
+            "beam_cross_prev must have shape "
+            f"({geometry.cells},), got {beam_cross_prev.shape}"
+        )
+    beam_result = solve_beam_system(
+        config=device_config,
+        Te=derived.Te,
+        ne=state.n,
+        nn=state.nn,
+        beam_cross_prev=beam_cross_prev,
+        plasma_cross=geometry.plasma_area_cm2,
+        I_ion=I_ion,
+        gas_type=gas_type,
+        x0=x0,
+        x0_twin=x0_twin,
+        floating=bool(floating),
+    )
+    return CathodeSolve1D(
+        boundary=boundary,
+        beam_result=beam_result,
+        device_config=device_config,
+        x0_next=beam_result.x0_next,
+        x0_twin_next=beam_result.x0_twin_next,
+        metadata={
+            "enabled": True,
+            "mode": boundary.mode,
+            "floating": bool(floating),
+            "source_index": boundary.source.index,
+            "end_index": boundary.end.index,
+            "end_mode": boundary.end_mode,
+            "twin_cathode": boundary.twin_cathode,
+            "circuit": dict(boundary.circuit),
+            "result": _solver_result_metadata(beam_result.result),
+            "result_twin": _solver_result_metadata(beam_result.result_twin),
+        },
     )
 
 
@@ -138,3 +256,27 @@ def _circuit_placeholders(input_dict):
         "R_cath",
     )
     return {key: input_dict.get(key) for key in keys if key in input_dict}
+
+
+def _solver_result_metadata(result):
+    if result is None:
+        return None
+    keys = (
+        "phi_c",
+        "phi_a",
+        "V_b",
+        "I_i",
+        "I_eth_star",
+        "I_tot",
+        "P_prim",
+        "P_ohmic",
+        "P_loss",
+        "P_cathode_e",
+        "P_anode_e",
+        "beam_bypass_fraction",
+        "l_b",
+    )
+    metadata = {key: float(getattr(result, key)) for key in keys}
+    metadata["regime"] = result.regime
+    metadata["long_mfp"] = bool(result.long_mfp)
+    return metadata
