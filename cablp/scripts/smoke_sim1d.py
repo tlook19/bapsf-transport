@@ -9,7 +9,12 @@ import numpy as np
 
 from cablp.funcs._heat import elec_par_heat_div, ion_par_heat_div
 from cablp.funcs._plasmaparams import c_log
-from cablp.solvers._sim1d import LAPDSim1D, default_config, load_result_hdf5
+from cablp.solvers._sim1d import (
+    LAPDSim1D,
+    default_config,
+    load_result_hdf5,
+    summarize_result,
+)
 from cablp.solvers._sim1d.conduction import (
     heat_conduction_rhs,
     implicit_heat_conduction_step,
@@ -783,6 +788,24 @@ def main():
     assert np.allclose(saved_term_sum, packed_total_rhs)
     assert np.allclose(run_result.y, run_before[None, :], rtol=0.0, atol=1e-20)
     assert np.allclose(run_result.time, [0.0, 1.0e-10, 2.0e-10, 3.0e-10])
+    run_summary = summarize_result(run_result)
+    run_summary_from_solver = LAPDSim1D.summarize_result(run_result)
+    for summary in (run_summary, run_summary_from_solver):
+        assert summary.finite
+        assert summary.samples == 4
+        assert summary.steps == run_result.steps
+        assert np.isclose(summary.final_time, run_result.final_time)
+        assert summary.n_min >= no_source_params["ne_floor"]
+        assert summary.nn_min >= no_source_params["nn_floor"]
+        assert summary.Te_min >= no_source_params["Te_floor"]
+        assert summary.Ti_min >= no_source_params["Ti_floor"]
+        assert np.isclose(
+            summary.total_particle_inventory_relative_drift,
+            0.0,
+            atol=1e-14,
+        )
+        assert np.isclose(summary.thermal_energy_relative_drift, 0.0, atol=1e-14)
+        assert summary.constraint_counts == {"dt_max": 3}
     with tempfile.TemporaryDirectory() as tmpdir:
         output_path = run_sim.save_result(
             f"{tmpdir}/sim1d_smoke.h5",
@@ -911,14 +934,23 @@ def main():
             text=True,
         )
         assert "sim1d run complete" in cli_run.stdout
+        assert "sim1d health:" in cli_run.stdout
+        assert "finite=True" in cli_run.stdout
         assert "steps=2" in cli_run.stdout
         cli_result = load_result_hdf5(cli_output)
+        cli_summary = summarize_result(cli_result)
         assert cli_result.steps == 2
         assert np.isclose(cli_result.final_time, 2.0e-10)
         assert cli_result.time.shape == (3,)
         assert cli_result.params["dt_save"] == 0.0
         assert cli_result.params["b_surface_loss"] == 0.0
         assert np.all(np.isfinite(cli_result.y))
+        assert cli_summary.finite
+        assert np.isclose(
+            cli_summary.total_particle_inventory_relative_drift,
+            0.0,
+            atol=1e-14,
+        )
 
     ramp_y0 = pack_state(ramp_state)
     ramp_y1 = ssprk2_step(
