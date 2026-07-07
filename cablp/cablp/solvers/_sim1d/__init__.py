@@ -20,6 +20,7 @@ from .neutrals import (
     neutral_exchange_rhs,
     neutral_source_sink_rhs,
 )
+from .reactions import reaction_rhs
 from .sources import add_state_rhs, pressure_work_rhs
 from .state import (
     apply_state_floors,
@@ -37,8 +38,8 @@ class LAPDSim1D:
     """Conservative axial 1D LAPD solver scaffold.
 
     This scaffold currently includes configuration, geometry, state handling,
-    conservative plasma fluxes, pressure work, neutral terms, and a minimal
-    explicit SSPRK2 step.
+    conservative plasma fluxes, pressure work, neutral terms, bulk reactions,
+    and a minimal explicit SSPRK2 step.
     """
 
     def __init__(
@@ -92,6 +93,10 @@ class LAPDSim1D:
         return self._mu
 
     @property
+    def I_ion(self):
+        return self._I_ion
+
+    @property
     def floors(self):
         return dict(self._floors)
 
@@ -118,9 +123,13 @@ class LAPDSim1D:
         pressure_rhs = self.pressure_work_rhs(state=state)
         neutral_rhs = self.neutral_exchange_rhs(state=state)
         source_rhs = self.neutral_source_sink_rhs(state=state)
+        reaction_rhs_state = self.reaction_rhs(state=state)
         state_rhs = add_state_rhs(
-            add_state_rhs(add_state_rhs(flux_rhs, pressure_rhs), neutral_rhs),
-            source_rhs,
+            add_state_rhs(
+                add_state_rhs(add_state_rhs(flux_rhs, pressure_rhs), neutral_rhs),
+                source_rhs,
+            ),
+            reaction_rhs_state,
         )
         return pack_state(state_rhs)
 
@@ -158,6 +167,7 @@ class LAPDSim1D:
             geometry=self._geometry,
             neutral_exchange_coeff_cm3_s=self.neutral_exchange_coefficients(),
             neutral_source_kwargs=self._neutral_source_kwargs(),
+            reaction_kwargs=self._reaction_kwargs(),
             cfl=float(self._input_dict.get("cfl", 0.4)),
             density_dt_fraction=float(
                 self._input_dict.get("density_dt_fraction", 0.25)
@@ -233,6 +243,18 @@ class LAPDSim1D:
             **self._neutral_source_kwargs(),
         )
 
+    def reaction_rhs(self, y=None, state=None):
+        """Return conservative bulk reaction sources."""
+        if state is None:
+            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        return reaction_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            geometry=self._geometry,
+            **self._reaction_kwargs(),
+        )
+
     def _neutral_source_kwargs(self):
         return {
             "S_gp": float(self._input_dict.get("S_gp", 0.0)),
@@ -243,6 +265,21 @@ class LAPDSim1D:
             "gas_puff_enabled": bool(self._input_dict.get("gas_puff_enabled", True)),
             "pump_enabled": bool(self._input_dict.get("pump_enabled", True)),
             "gas_puff_valves": float(self._input_dict.get("gas_puff_valves", 2)),
+        }
+
+    def _reaction_kwargs(self):
+        return {
+            "gas_type": self._gas_type,
+            "I_ion": self._I_ion,
+            "b_ioniz": float(self._input_dict.get("b_ioniz", 1.0)),
+            "b_rec_rad": float(self._input_dict.get("b_rec_rad", 1.0)),
+            "b_rec_3b": float(self._input_dict.get("b_rec_3b", 1.0)),
+            "Te_birth_ionization": self._input_dict.get(
+                "Te_birth_ionization", "local"
+            ),
+            "Ti_birth_ionization": self._input_dict.get(
+                "Ti_birth_ionization", "floor"
+            ),
         }
 
     def _set_state_vector(self, y):
