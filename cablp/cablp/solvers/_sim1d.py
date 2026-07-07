@@ -15,6 +15,7 @@ from cablp.solvers._sim1d_integrator import (
     floor_state_vector,
     ssprk2_step,
 )
+from cablp.solvers._sim1d_sources import add_state_rhs, pressure_work_rhs
 from cablp.solvers._sim1d_state import (
     apply_state_floors,
     assert_finite_state,
@@ -30,7 +31,8 @@ class LAPDSim1D:
     """Conservative axial 1D LAPD solver scaffold.
 
     This scaffold currently includes configuration, geometry, state handling,
-    conservative plasma fluxes, and a minimal explicit SSPRK2 step.
+    conservative plasma fluxes, pressure work, and a minimal explicit SSPRK2
+    step.
     """
 
     def __init__(
@@ -100,7 +102,10 @@ class LAPDSim1D:
 
     def rhs(self, y=None):
         """Return the packed explicit RHS for the current scaffold physics."""
-        state_rhs = self.plasma_flux_rhs(y=y)
+        state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        flux_rhs = self.plasma_flux_rhs(y=pack_state(state))
+        pressure_rhs = self.pressure_work_rhs(state=state)
+        state_rhs = add_state_rhs(flux_rhs, pressure_rhs)
         return pack_state(state_rhs)
 
     def floor_state_vector(self, y):
@@ -138,6 +143,19 @@ class LAPDSim1D:
             geometry=self._geometry,
             include_front=use_front,
             alpha_front=float(self._input_dict.get("alpha_front", 1.0)),
+        )
+
+    def pressure_work_rhs(self, y=None, state=None):
+        """Return conservative pressure-work energy sources."""
+        if state is None:
+            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        return pressure_work_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            geometry=self._geometry,
+            electron_scale=float(self._input_dict.get("b_pressure_work_elec", 1.0)),
+            ion_scale=float(self._input_dict.get("b_pressure_work_ions", 1.0)),
         )
 
     def _set_state_vector(self, y):
