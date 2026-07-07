@@ -129,6 +129,46 @@ def main():
     assert dt_default.dt_ion_charge_exchange > 0.0
     assert dt_default.dt_heat_conduction > 0.0
 
+    cathode_boundary = sim.cathode_boundary_state()
+    assert not cathode_boundary.enabled
+    assert cathode_boundary.mode == "disabled"
+    assert cathode_boundary.source.index == 0
+    assert cathode_boundary.source.role == "source"
+    assert cathode_boundary.end.index == geom.cells - 1
+    assert cathode_boundary.end.role == "end"
+    assert cathode_boundary.end_mode == params["end_mode"]
+    assert cathode_boundary.twin_cathode == flags["TwinCathode"]
+    for cell in (cathode_boundary.source, cathode_boundary.end):
+        for value in (
+            cell.n,
+            cell.nn,
+            cell.Te,
+            cell.Ti,
+            cell.u,
+            cell.plasma_volume_cm3,
+            cell.neutral_volume_cm3,
+            cell.plasma_area_cm2,
+            cell.neutral_area_cm2,
+            cell.length_cm,
+            cell.Rp_cm,
+            cell.Rm_cm,
+        ):
+            assert np.isfinite(value)
+    cathode_terms = sim.cathode_source_terms()
+    assert not cathode_terms.enabled
+    assert cathode_terms.mode == "disabled"
+    assert cathode_terms.metadata["source_index"] == 0
+    assert cathode_terms.metadata["end_index"] == geom.cells - 1
+    for values in (
+        cathode_terms.rhs.n,
+        cathode_terms.rhs.nn,
+        cathode_terms.rhs.M,
+        cathode_terms.rhs.Ee,
+        cathode_terms.rhs.Ei,
+    ):
+        assert np.allclose(values, 0.0)
+    assert np.allclose(pack_state(cathode_terms.rhs), 0.0)
+
     rhs = sim.plasma_flux_rhs(include_front=False)
     for values in (rhs.n, rhs.nn, rhs.M, rhs.Ee, rhs.Ei):
         assert np.allclose(values, 0.0, atol=1e-20)
