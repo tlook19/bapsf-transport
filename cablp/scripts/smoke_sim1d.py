@@ -1,6 +1,7 @@
 import numpy as np
 
 from cablp.solvers._sim1d import LAPDSim1D, default_config
+from cablp.solvers._sim1d.energy import electron_ion_exchange_rhs
 from cablp.solvers._sim1d.flux import front_filling_fluxes
 from cablp.solvers._sim1d.integrator import ssprk2_step
 from cablp.solvers._sim1d.neutrals import (
@@ -88,11 +89,13 @@ def main():
         "neutral_exchange",
         "neutral_sources",
         "reactions",
+        "energy_exchange",
         "dt_max",
         "dt_min",
     }
     assert np.isfinite(dt_default.dt_neutral_sources)
     assert dt_default.dt_reactions > 0.0
+    assert dt_default.dt_energy_exchange > 0.0
 
     rhs = sim.plasma_flux_rhs(include_front=False)
     for values in (rhs.n, rhs.nn, rhs.M, rhs.Ee, rhs.Ei):
@@ -271,6 +274,48 @@ def main():
     assert np.all(compressing_div_u[2:-2] < 0.0)
     assert np.all(compressing_pressure.Ee[2:-2] > 0.0)
     assert np.all(compressing_pressure.Ei[2:-2] > 0.0)
+
+    hot_e_state = conservative_from_primitives(
+        n=np.full(geom.cells, params["ne0"]),
+        nn=state.nn,
+        u=np.zeros(geom.cells),
+        Te=np.full(geom.cells, 2.0),
+        Ti=np.full(geom.cells, 0.5),
+        ion_mass_g=sim.ion_mass_g,
+    )
+    hot_e_exchange = sim.energy_exchange_rhs(state=hot_e_state)
+    assert np.all(hot_e_exchange.Ee < 0.0)
+    assert np.all(hot_e_exchange.Ei > 0.0)
+    assert np.allclose(hot_e_exchange.Ee + hot_e_exchange.Ei, 0.0)
+    hot_e_dt = sim.suggest_timestep(y=pack_state(hot_e_state))
+    assert np.isfinite(hot_e_dt.dt_energy_exchange)
+
+    hot_i_state = conservative_from_primitives(
+        n=np.full(geom.cells, params["ne0"]),
+        nn=state.nn,
+        u=np.zeros(geom.cells),
+        Te=np.full(geom.cells, 0.5),
+        Ti=np.full(geom.cells, 2.0),
+        ion_mass_g=sim.ion_mass_g,
+    )
+    hot_i_exchange = sim.energy_exchange_rhs(state=hot_i_state)
+    assert np.all(hot_i_exchange.Ee > 0.0)
+    assert np.all(hot_i_exchange.Ei < 0.0)
+    assert np.allclose(hot_i_exchange.Ee + hot_i_exchange.Ei, 0.0)
+
+    equal_temp_exchange = sim.energy_exchange_rhs()
+    assert np.allclose(equal_temp_exchange.Ee, 0.0, atol=1e-30)
+    assert np.allclose(equal_temp_exchange.Ei, 0.0, atol=1e-30)
+    disabled_exchange = electron_ion_exchange_rhs(
+        state=hot_e_state,
+        floors=sim.floors,
+        ion_mass_g=sim.ion_mass_g,
+        mu=sim.mu,
+        b_Qie=0.0,
+        ln_lambda_min=params["ln_lambda_min"],
+    )
+    assert np.allclose(disabled_exchange.Ee, 0.0)
+    assert np.allclose(disabled_exchange.Ei, 0.0)
 
     fast_state = conservative_from_primitives(
         n=np.full(geom.cells, params["ne0"]),
