@@ -1,7 +1,7 @@
 import numpy as np
 
 from cablp.solvers._sim1d import LAPDSim1D, default_config
-from cablp.solvers._sim1d.energy import electron_ion_exchange_rhs
+from cablp.solvers._sim1d.energy import electron_cooling_rhs, electron_ion_exchange_rhs
 from cablp.solvers._sim1d.flux import front_filling_fluxes
 from cablp.solvers._sim1d.integrator import ssprk2_step
 from cablp.solvers._sim1d.neutrals import (
@@ -90,12 +90,14 @@ def main():
         "neutral_sources",
         "reactions",
         "energy_exchange",
+        "electron_cooling",
         "dt_max",
         "dt_min",
     }
     assert np.isfinite(dt_default.dt_neutral_sources)
     assert dt_default.dt_reactions > 0.0
     assert dt_default.dt_energy_exchange > 0.0
+    assert dt_default.dt_electron_cooling > 0.0
 
     rhs = sim.plasma_flux_rhs(include_front=False)
     for values in (rhs.n, rhs.nn, rhs.M, rhs.Ee, rhs.Ei):
@@ -317,6 +319,62 @@ def main():
     assert np.allclose(disabled_exchange.Ee, 0.0)
     assert np.allclose(disabled_exchange.Ei, 0.0)
 
+    cooling_state = conservative_from_primitives(
+        n=np.full(geom.cells, 1.0e12),
+        nn=np.full(geom.cells, 1.0e12),
+        u=np.zeros(geom.cells),
+        Te=np.full(geom.cells, 10.0),
+        Ti=np.full(geom.cells, 1.0),
+        ion_mass_g=sim.ion_mass_g,
+    )
+    cooling_rhs = sim.electron_cooling_rhs(state=cooling_state)
+    assert np.all(cooling_rhs.Ee < 0.0)
+    assert np.allclose(cooling_rhs.n, 0.0)
+    assert np.allclose(cooling_rhs.nn, 0.0)
+    assert np.allclose(cooling_rhs.M, 0.0)
+    assert np.allclose(cooling_rhs.Ei, 0.0)
+    cooling_dt = sim.suggest_timestep(y=pack_state(cooling_state))
+    assert np.isfinite(cooling_dt.dt_electron_cooling)
+
+    ionization_only_cooling = electron_cooling_rhs(
+        state=cooling_state,
+        floors=sim.floors,
+        ion_mass_g=sim.ion_mass_g,
+        gas_type=params["gas_type"],
+        I_ion=sim.I_ion,
+        b_ioniz=params["b_ioniz"],
+        b_rec_rad=params["b_rec_rad"],
+        b_rec_3b=params["b_rec_3b"],
+        b_ionization_energy_cost=params["b_ionization_energy_cost"],
+        b_Qei=0.0,
+        b_Qen=0.0,
+        ionization_energy_cost=True,
+        icool=True,
+        ncool=True,
+        icool_recomb=flags["icool_recomb"],
+    )
+    assert np.all(ionization_only_cooling.Ee < 0.0)
+
+    disabled_cooling = electron_cooling_rhs(
+        state=cooling_state,
+        floors=sim.floors,
+        ion_mass_g=sim.ion_mass_g,
+        gas_type=params["gas_type"],
+        I_ion=sim.I_ion,
+        b_ioniz=params["b_ioniz"],
+        b_rec_rad=params["b_rec_rad"],
+        b_rec_3b=params["b_rec_3b"],
+        b_ionization_energy_cost=0.0,
+        b_Qei=0.0,
+        b_Qen=0.0,
+        ionization_energy_cost=True,
+        icool=True,
+        ncool=True,
+        icool_recomb=flags["icool_recomb"],
+    )
+    assert np.allclose(disabled_cooling.Ee, 0.0)
+    assert np.allclose(disabled_cooling.Ei, 0.0)
+
     fast_state = conservative_from_primitives(
         n=np.full(geom.cells, params["ne0"]),
         nn=state.nn,
@@ -334,6 +392,9 @@ def main():
     no_source_params["b_ioniz"] = 0.0
     no_source_params["b_rec_rad"] = 0.0
     no_source_params["b_rec_3b"] = 0.0
+    no_source_params["b_Qei"] = 0.0
+    no_source_params["b_Qen"] = 0.0
+    no_source_params["b_ionization_energy_cost"] = 0.0
     no_source_sim = LAPDSim1D(no_source_params, flags)
     y_before = no_source_sim.get_initial_snapshot().y.copy()
     stationary_after = no_source_sim.advance_one_step(1e-10)

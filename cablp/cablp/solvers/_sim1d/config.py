@@ -44,6 +44,9 @@ input_dict_template_1d = {
     "b_rec_rad": 1.0,
     "b_rec_3b": 1.0,
     "b_Qie": 1.0,
+    "b_Qei": 1.0,
+    "b_Qen": 1.0,
+    "b_ionization_energy_cost": 1.0,
     "b_pressure_work_elec": 1.0,
     "b_pressure_work_ions": 1.0,
     "ln_lambda_min": 1.0,
@@ -66,6 +69,10 @@ input_flags_template_1d = {
     "TwinCathode": False,
     "heat_conduction": True,
     "front_flux": True,
+    "ionization_energy_cost": True,
+    "icool": True,
+    "ncool": True,
+    "icool_recomb": False,
     "debug_checks": False,
 }
 
