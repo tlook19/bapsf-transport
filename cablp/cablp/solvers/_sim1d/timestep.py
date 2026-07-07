@@ -11,6 +11,7 @@ from .energy import (
 from .flux import ion_sound_speed, plasma_flux_rhs
 from .neutrals import neutral_exchange_rhs, neutral_source_sink_rhs
 from .reactions import reaction_rhs
+from .sources import surface_neutralization_rhs
 from .state import derive_state
 
 
@@ -19,6 +20,7 @@ class TimestepDiagnostics:
     dt: float
     dt_plasma_cfl: float
     dt_front_density: float
+    dt_surface_loss: float
     dt_neutral_exchange: float
     dt_neutral_sources: float
     dt_reactions: float
@@ -43,6 +45,7 @@ def suggest_timestep(
     electron_cooling_kwargs=None,
     ion_charge_exchange_kwargs=None,
     heat_conduction_kwargs=None,
+    surface_loss_kwargs=None,
     cfl=0.4,
     density_dt_fraction=0.25,
     neutral_dt_fraction=0.25,
@@ -78,6 +81,15 @@ def suggest_timestep(
             density_dt_fraction=density_dt_fraction,
             include_front=include_front,
             alpha_front=alpha_front,
+        ),
+        "surface_loss": surface_loss_timestep(
+            state=state,
+            floors=floors,
+            ion_mass_g=ion_mass_g,
+            mu=mu,
+            geometry=geometry,
+            surface_loss_kwargs=surface_loss_kwargs,
+            density_dt_fraction=density_dt_fraction,
         ),
         "neutral_exchange": neutral_exchange_timestep(
             state=state,
@@ -140,6 +152,7 @@ def suggest_timestep(
         dt=float(dt),
         dt_plasma_cfl=float(dt_candidates["plasma_cfl"]),
         dt_front_density=float(dt_candidates["front_density"]),
+        dt_surface_loss=float(dt_candidates["surface_loss"]),
         dt_neutral_exchange=float(dt_candidates["neutral_exchange"]),
         dt_neutral_sources=float(dt_candidates["neutral_sources"]),
         dt_reactions=float(dt_candidates["reactions"]),
@@ -204,6 +217,38 @@ def front_density_timestep(
     )
     dn_front = rhs_with_front.n - rhs_without_front.n
     return _fractional_timestep(state.n, dn_front, density_dt_fraction, floors["n"])
+
+
+def surface_loss_timestep(
+    state,
+    floors,
+    ion_mass_g,
+    mu,
+    geometry,
+    surface_loss_kwargs=None,
+    density_dt_fraction=0.25,
+):
+    """Return a fractional timestep for surface neutralization losses."""
+    if surface_loss_kwargs is None:
+        return np.inf
+    if density_dt_fraction <= 0.0:
+        raise ValueError(
+            f"density_dt_fraction must be positive (got {density_dt_fraction})"
+        )
+    rhs = surface_neutralization_rhs(
+        state=state,
+        floors=floors,
+        ion_mass_g=ion_mass_g,
+        mu=mu,
+        geometry=geometry,
+        **surface_loss_kwargs,
+    )
+    return min(
+        _fractional_timestep(state.n, rhs.n, density_dt_fraction, floors["n"]),
+        _fractional_timestep(state.nn, rhs.nn, density_dt_fraction, 0.0),
+        _fractional_timestep(state.Ee, rhs.Ee, density_dt_fraction, 0.0),
+        _fractional_timestep(state.Ei, rhs.Ei, density_dt_fraction, 0.0),
+    )
 
 
 def neutral_exchange_timestep(

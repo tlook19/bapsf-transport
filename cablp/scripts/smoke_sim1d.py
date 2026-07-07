@@ -97,6 +97,7 @@ def main():
     assert dt_default.active_constraint in {
         "plasma_cfl",
         "front_density",
+        "surface_loss",
         "neutral_exchange",
         "neutral_sources",
         "reactions",
@@ -108,6 +109,7 @@ def main():
         "dt_min",
     }
     assert np.isfinite(dt_default.dt_neutral_sources)
+    assert dt_default.dt_surface_loss > 0.0
     assert dt_default.dt_reactions > 0.0
     assert dt_default.dt_energy_exchange > 0.0
     assert dt_default.dt_electron_cooling > 0.0
@@ -165,6 +167,62 @@ def main():
         disabled_source.Ei,
     ):
         assert np.allclose(values, 0.0, atol=1e-20)
+
+    surface_state = conservative_from_primitives(
+        n=np.full(geom.cells, params["ne0"]),
+        nn=state.nn,
+        u=np.full(geom.cells, 1.0e5),
+        Te=np.full(geom.cells, 1.0),
+        Ti=np.full(geom.cells, 0.5),
+        ion_mass_g=sim.ion_mass_g,
+    )
+    surface_rhs = sim.surface_neutralization_rhs(state=surface_state)
+    active_surface = np.zeros(geom.cells, dtype=bool)
+    active_surface[[0, -1]] = True
+    assert np.all(surface_rhs.n[active_surface] < 0.0)
+    assert np.all(surface_rhs.nn[active_surface] > 0.0)
+    assert np.all(surface_rhs.M[active_surface] < 0.0)
+    assert np.all(surface_rhs.Ee[active_surface] < 0.0)
+    assert np.all(surface_rhs.Ei[active_surface] < 0.0)
+    assert np.allclose(surface_rhs.n[1:-1], 0.0)
+    assert np.allclose(surface_rhs.nn[1:-1], 0.0)
+    assert np.allclose(surface_rhs.M[1:-1], 0.0)
+    assert np.allclose(surface_rhs.Ee[1:-1], 0.0)
+    assert np.allclose(surface_rhs.Ei[1:-1], 0.0)
+    surface_inventory_scale = np.sum(
+        np.abs(surface_rhs.n * geom.plasma_volume_cm3)
+        + np.abs(surface_rhs.nn * geom.neutral_volume_cm3)
+    )
+    assert np.isclose(
+        particle_inventory_rate(surface_rhs, geom),
+        0.0,
+        atol=1e-12 * surface_inventory_scale,
+    )
+    assert np.allclose(
+        surface_rhs.Ee[active_surface],
+        1.5 * ev_to_erg * surface_rhs.n[active_surface],
+    )
+    assert np.allclose(
+        surface_rhs.Ei[active_surface],
+        1.5 * 0.5 * ev_to_erg * surface_rhs.n[active_surface],
+    )
+    surface_dt = sim.suggest_timestep(y=pack_state(surface_state))
+    assert np.isfinite(surface_dt.dt_surface_loss)
+
+    disabled_surface_params = dict(params)
+    disabled_surface_params["b_surface_loss"] = 0.0
+    disabled_surface_sim = LAPDSim1D(disabled_surface_params, flags)
+    disabled_surface_rhs = disabled_surface_sim.surface_neutralization_rhs(
+        state=surface_state
+    )
+    for values in (
+        disabled_surface_rhs.n,
+        disabled_surface_rhs.nn,
+        disabled_surface_rhs.M,
+        disabled_surface_rhs.Ee,
+        disabled_surface_rhs.Ei,
+    ):
+        assert np.allclose(values, 0.0)
 
     reaction_rhs = sim.reaction_rhs()
     for values in (
@@ -605,6 +663,7 @@ def main():
     no_source_params["b_Qen"] = 0.0
     no_source_params["b_Qcx"] = 0.0
     no_source_params["b_ionization_energy_cost"] = 0.0
+    no_source_params["b_surface_loss"] = 0.0
     no_source_sim = LAPDSim1D(no_source_params, flags)
     y_before = no_source_sim.get_initial_snapshot().y.copy()
     stationary_after = no_source_sim.advance_one_step(1e-10)
