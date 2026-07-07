@@ -1,6 +1,8 @@
 import numpy as np
 
 from cablp.solvers._sim1d import LAPDSim1D, default_config
+from cablp.solvers._sim1d_flux import front_filling_fluxes
+from cablp.solvers._sim1d_state import conservative_from_primitives, pack_state
 
 
 def main():
@@ -39,6 +41,32 @@ def main():
         derived.pi,
         derived.p,
     ):
+        assert np.all(np.isfinite(values))
+
+    rhs = sim.plasma_flux_rhs(include_front=False)
+    for values in (rhs.n, rhs.nn, rhs.M, rhs.Ee, rhs.Ei):
+        assert np.allclose(values, 0.0, atol=1e-20)
+
+    density_ramp = np.linspace(2.0, 1.0, geom.cells) * params["ne0"]
+    ramp_state = conservative_from_primitives(
+        n=density_ramp,
+        nn=state.nn,
+        u=np.zeros(geom.cells),
+        Te=np.full(geom.cells, params["Te0"]),
+        Ti=np.full(geom.cells, params["Ti0"]),
+        ion_mass_g=sim.ion_mass_g,
+    )
+    ramp_front = front_filling_fluxes(
+        state=ramp_state,
+        floors=sim.floors,
+        ion_mass_g=sim.ion_mass_g,
+        mu=sim.mu,
+        geometry=geom,
+        alpha_front=params["alpha_front"],
+    )
+    assert np.all(ramp_front.n[1:-1] > 0.0)
+    ramp_rhs = sim.plasma_flux_rhs(y=pack_state(ramp_state), include_front=True)
+    for values in (ramp_rhs.n, ramp_rhs.nn, ramp_rhs.M, ramp_rhs.Ee, ramp_rhs.Ei):
         assert np.all(np.isfinite(values))
 
     print(

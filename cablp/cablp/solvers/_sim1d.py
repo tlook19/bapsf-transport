@@ -10,6 +10,7 @@ from cablp.solvers._sim1d_config import (
     resolve_nn0,
 )
 from cablp.solvers._sim1d_geometry import build_geometry
+from cablp.solvers._sim1d_flux import plasma_flux_rhs
 from cablp.solvers._sim1d_state import (
     apply_state_floors,
     assert_finite_state,
@@ -73,6 +74,10 @@ class LAPDSim1D:
     def mu(self):
         return self._mu
 
+    @property
+    def floors(self):
+        return dict(self._floors)
+
     def get_config(self):
         """Return copies of the input dictionary and flags used by this object."""
         return dict(self._input_dict), dict(self._flags)
@@ -87,6 +92,22 @@ class LAPDSim1D:
             state=state,
             derived=derived,
             y=pack_state(state),
+        )
+
+    def plasma_flux_rhs(self, y=None, include_front=None):
+        """Return the conservative plasma flux RHS for inspection/testing."""
+        state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        use_front = self._flags.get("front_flux", True)
+        if include_front is not None:
+            use_front = include_front
+        return plasma_flux_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            mu=self._mu,
+            geometry=self._geometry,
+            include_front=use_front,
+            alpha_front=float(self._input_dict.get("alpha_front", 1.0)),
         )
 
     def _initial_state(self):
