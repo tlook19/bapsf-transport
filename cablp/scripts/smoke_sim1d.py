@@ -6,7 +6,7 @@ import numpy as np
 
 from cablp.funcs._heat import elec_par_heat_div, ion_par_heat_div
 from cablp.funcs._plasmaparams import c_log
-from cablp.solvers._sim1d import LAPDSim1D, default_config
+from cablp.solvers._sim1d import LAPDSim1D, default_config, load_result_hdf5
 from cablp.solvers._sim1d.conduction import (
     heat_conduction_rhs,
     implicit_heat_conduction_step,
@@ -814,6 +814,38 @@ def main():
             assert h5["diagnostics/dt"].shape == (len(run_result.diagnostics),)
             assert h5["diagnostics/active_constraint"].shape == (
                 len(run_result.diagnostics),
+            )
+        loaded_result = load_result_hdf5(output_path)
+        loaded_via_solver = LAPDSim1D.load_result(output_path)
+        for loaded in (loaded_result, loaded_via_solver):
+            assert loaded.path == output_path
+            assert loaded.steps == run_result.steps
+            assert np.isclose(loaded.final_time, run_result.final_time)
+            assert loaded.params["dt_save"] == run_params["dt_save"]
+            assert loaded.flags["front_flux"] == flags["front_flux"]
+            assert np.allclose(loaded.time, run_result.time)
+            assert np.allclose(loaded.y, run_result.y)
+            assert np.allclose(loaded.n, run_result.n)
+            assert np.allclose(loaded.Te, run_result.Te)
+            assert np.all(loaded.cell_role == run_result.cell_role)
+            assert set(loaded.rhs_terms) == expected_rhs_terms
+            assert np.allclose(
+                loaded.rhs_terms["pressure_work"]["Ee"],
+                run_result.rhs_terms["pressure_work"]["Ee"],
+            )
+            assert np.allclose(
+                loaded.total_rhs["Ee"],
+                run_result.total_rhs["Ee"],
+            )
+            assert np.allclose(
+                loaded.electron_energy_terms_W_cm3["pressure_work"],
+                run_result.electron_energy_terms_W_cm3["pressure_work"],
+            )
+            assert len(loaded.diagnostics) == len(run_result.diagnostics)
+            assert np.isclose(loaded.diagnostics[0].dt, run_result.diagnostics[0].dt)
+            assert (
+                loaded.diagnostics[0].active_constraint
+                == run_result.diagnostics[0].active_constraint
             )
 
     sparse_params = dict(no_source_params)

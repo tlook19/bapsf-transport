@@ -42,6 +42,13 @@ from .timestep import suggest_timestep
 from cablp.vars._cons import I_Ry, I_ion, m_He_cgs, m_p_cgs
 
 
+def load_result_hdf5(path):
+    """Load a saved sim1d HDF5 result without constructing a solver."""
+    from .io import load_result_hdf5 as _load_result_hdf5
+
+    return _load_result_hdf5(path)
+
+
 class LAPDSim1D:
     """Conservative axial 1D LAPD solver scaffold.
 
@@ -284,6 +291,11 @@ class LAPDSim1D:
             if flags is None:
                 flags = config_flags
         return save_result_hdf5(path, result, params=params, flags=flags)
+
+    @staticmethod
+    def load_result(path):
+        """Load a saved sim1d HDF5 result."""
+        return load_result_hdf5(path)
 
     def suggest_timestep(self, y=None, include_heat_conduction=None):
         """Return an explicit timestep suggestion and diagnostics."""
