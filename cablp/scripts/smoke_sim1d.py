@@ -71,6 +71,19 @@ def main():
     assert constant_coeff.shape == (geom.cells - 1,)
     assert np.allclose(constant_coeff, params["neutral_exchange_coeff_cm3_s"])
 
+    dt_default = sim.suggest_timestep()
+    assert np.isfinite(dt_default.dt)
+    assert dt_default.dt > 0.0
+    assert dt_default.dt <= params["dt_max"]
+    assert dt_default.dt >= params["dt_min"]
+    assert dt_default.active_constraint in {
+        "plasma_cfl",
+        "front_density",
+        "neutral_exchange",
+        "dt_max",
+        "dt_min",
+    }
+
     rhs = sim.plasma_flux_rhs(include_front=False)
     for values in (rhs.n, rhs.nn, rhs.M, rhs.Ee, rhs.Ei):
         assert np.allclose(values, 0.0, atol=1e-20)
@@ -136,6 +149,10 @@ def main():
     assert np.allclose(nn_ramp_rhs.Ee, 0.0)
     assert np.allclose(nn_ramp_rhs.Ei, 0.0)
 
+    nn_ramp_dt = sim.suggest_timestep(y=pack_state(nn_ramp_state))
+    assert np.isfinite(nn_ramp_dt.dt_neutral_exchange)
+    assert nn_ramp_dt.dt_neutral_exchange < dt_default.dt_neutral_exchange
+
     expanding_state = conservative_from_primitives(
         n=np.full(geom.cells, params["ne0"]),
         nn=state.nn,
@@ -167,6 +184,17 @@ def main():
     assert np.all(compressing_div_u[2:-2] < 0.0)
     assert np.all(compressing_pressure.Ee[2:-2] > 0.0)
     assert np.all(compressing_pressure.Ei[2:-2] > 0.0)
+
+    fast_state = conservative_from_primitives(
+        n=np.full(geom.cells, params["ne0"]),
+        nn=state.nn,
+        u=np.full(geom.cells, 1.0e7),
+        Te=np.full(geom.cells, params["Te0"]),
+        Ti=np.full(geom.cells, params["Ti0"]),
+        ion_mass_g=sim.ion_mass_g,
+    )
+    fast_dt = sim.suggest_timestep(y=pack_state(fast_state))
+    assert fast_dt.dt_plasma_cfl < dt_default.dt_plasma_cfl
 
     y_before = snapshot.y.copy()
     stationary_after = sim.advance_one_step(1e-10)
