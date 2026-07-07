@@ -9,7 +9,7 @@ from .config import (
     load_config,
     resolve_nn0,
 )
-from .energy import electron_ion_exchange_rhs
+from .energy import electron_cooling_rhs, electron_ion_exchange_rhs
 from .geometry import build_geometry
 from .flux import plasma_flux_rhs
 from .integrator import (
@@ -123,19 +123,20 @@ class LAPDSim1D:
         flux_rhs = self.plasma_flux_rhs(y=pack_state(state))
         pressure_rhs = self.pressure_work_rhs(state=state)
         energy_rhs = self.energy_exchange_rhs(state=state)
+        cooling_rhs = self.electron_cooling_rhs(state=state)
         neutral_rhs = self.neutral_exchange_rhs(state=state)
         source_rhs = self.neutral_source_sink_rhs(state=state)
         reaction_rhs_state = self.reaction_rhs(state=state)
-        state_rhs = add_state_rhs(
-            add_state_rhs(
-                add_state_rhs(
-                    add_state_rhs(add_state_rhs(flux_rhs, pressure_rhs), energy_rhs),
-                    neutral_rhs,
-                ),
-                source_rhs,
-            ),
+        state_rhs = flux_rhs
+        for term in (
+            pressure_rhs,
+            energy_rhs,
+            cooling_rhs,
+            neutral_rhs,
+            source_rhs,
             reaction_rhs_state,
-        )
+        ):
+            state_rhs = add_state_rhs(state_rhs, term)
         return pack_state(state_rhs)
 
     def floor_state_vector(self, y):
@@ -174,6 +175,7 @@ class LAPDSim1D:
             neutral_source_kwargs=self._neutral_source_kwargs(),
             reaction_kwargs=self._reaction_kwargs(),
             energy_exchange_kwargs=self._energy_exchange_kwargs(),
+            electron_cooling_kwargs=self._electron_cooling_kwargs(),
             cfl=float(self._input_dict.get("cfl", 0.4)),
             density_dt_fraction=float(
                 self._input_dict.get("density_dt_fraction", 0.25)
@@ -226,6 +228,17 @@ class LAPDSim1D:
             ion_mass_g=self._ion_mass_g,
             mu=self._mu,
             **self._energy_exchange_kwargs(),
+        )
+
+    def electron_cooling_rhs(self, y=None, state=None):
+        """Return conservative electron inelastic/radiative cooling sources."""
+        if state is None:
+            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        return electron_cooling_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            **self._electron_cooling_kwargs(),
         )
 
     def neutral_exchange_rhs(self, y=None, state=None):
@@ -289,6 +302,26 @@ class LAPDSim1D:
         return {
             "b_Qie": float(self._input_dict.get("b_Qie", 1.0)),
             "ln_lambda_min": float(self._input_dict.get("ln_lambda_min", 1.0)),
+        }
+
+    def _electron_cooling_kwargs(self):
+        return {
+            "gas_type": self._gas_type,
+            "I_ion": self._I_ion,
+            "b_ioniz": float(self._input_dict.get("b_ioniz", 1.0)),
+            "b_rec_rad": float(self._input_dict.get("b_rec_rad", 1.0)),
+            "b_rec_3b": float(self._input_dict.get("b_rec_3b", 1.0)),
+            "b_ionization_energy_cost": float(
+                self._input_dict.get("b_ionization_energy_cost", 1.0)
+            ),
+            "b_Qei": float(self._input_dict.get("b_Qei", 1.0)),
+            "b_Qen": float(self._input_dict.get("b_Qen", 1.0)),
+            "ionization_energy_cost": bool(
+                self._flags.get("ionization_energy_cost", True)
+            ),
+            "icool": bool(self._flags.get("icool", True)),
+            "ncool": bool(self._flags.get("ncool", True)),
+            "icool_recomb": bool(self._flags.get("icool_recomb", False)),
         }
 
     def _reaction_kwargs(self):
