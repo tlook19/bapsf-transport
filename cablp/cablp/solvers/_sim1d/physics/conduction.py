@@ -5,7 +5,7 @@ from cablp.funcs._heat import kappa_par_elec, kappa_par_ion
 from cablp.funcs._plasmaparams import c_log
 from cablp.vars._cons import ev_to_erg
 
-from .state import ConservativeState1D, derive_state
+from ..core.state import ConservativeState1D, derive_state
 
 
 def heat_conduction_rhs(

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import h5py
 import numpy as np
 
-from .timestep import TimestepDiagnostics
+from ..core.timestep import TimestepDiagnostics
 
 
 RESULT_VERSION = "sim1d-hdf5-v1"

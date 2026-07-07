@@ -2,7 +2,7 @@ import math
 
 import numpy as np
 
-from .state import ConservativeState1D
+from ..core.state import ConservativeState1D
 from cablp.vars._cons import kb_cgs, m_p_cgs
 
 

@@ -2,33 +2,19 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from .config import (
+from .core.config import (
     default_config,
     input_dict_template_1d,
     input_flags_template_1d,
     load_config,
     resolve_nn0,
 )
-from .conduction import heat_conduction_rhs, implicit_heat_conduction_step
-from .energy import (
-    electron_cooling_rhs,
-    electron_ion_exchange_rhs,
-    ion_charge_exchange_rhs,
-)
-from .geometry import build_geometry
-from .flux import plasma_flux_rhs, plasma_flux_rhs_terms
-from .integrator import (
+from .core.geometry import build_geometry
+from .core.integrator import (
     floor_state_vector,
     ssprk2_step,
 )
-from .neutrals import (
-    neutral_exchange_coefficients,
-    neutral_exchange_rhs,
-    neutral_source_sink_rhs,
-)
-from .reactions import reaction_rhs, reaction_rhs_terms
-from .sources import add_state_rhs, pressure_work_rhs, surface_neutralization_rhs
-from .state import (
+from .core.state import (
     STATE_NAMES_1D,
     ConservativeState1D,
     apply_state_floors,
@@ -38,20 +24,38 @@ from .state import (
     pack_state,
     unpack_state,
 )
-from .timestep import suggest_timestep
+from .core.timestep import suggest_timestep
+from .physics.conduction import heat_conduction_rhs, implicit_heat_conduction_step
+from .physics.energy import (
+    electron_cooling_rhs,
+    electron_ion_exchange_rhs,
+    ion_charge_exchange_rhs,
+)
+from .physics.flux import plasma_flux_rhs, plasma_flux_rhs_terms
+from .physics.neutrals import (
+    neutral_exchange_coefficients,
+    neutral_exchange_rhs,
+    neutral_source_sink_rhs,
+)
+from .physics.reactions import reaction_rhs, reaction_rhs_terms
+from .physics.sources import (
+    add_state_rhs,
+    pressure_work_rhs,
+    surface_neutralization_rhs,
+)
 from cablp.vars._cons import I_Ry, I_ion, m_He_cgs, m_p_cgs
 
 
 def load_result_hdf5(path):
     """Load a saved sim1d HDF5 result without constructing a solver."""
-    from .io import load_result_hdf5 as _load_result_hdf5
+    from .results.io import load_result_hdf5 as _load_result_hdf5
 
     return _load_result_hdf5(path)
 
 
 def summarize_result(result):
     """Return lightweight health diagnostics for a sim1d run result."""
-    from .health import summarize_result as _summarize_result
+    from .results.health import summarize_result as _summarize_result
 
     return _summarize_result(result)
 
@@ -289,7 +293,7 @@ class LAPDSim1D:
 
     def save_result(self, path, result, params=None, flags=None):
         """Write a run result to HDF5 with this solver's config metadata."""
-        from .io import save_result_hdf5
+        from .results.io import save_result_hdf5
 
         if params is None or flags is None:
             config_params, config_flags = self.get_config()

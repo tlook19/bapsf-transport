@@ -15,29 +15,29 @@ from cablp.solvers._sim1d import (
     load_result_hdf5,
     summarize_result,
 )
-from cablp.solvers._sim1d.conduction import (
+from cablp.solvers._sim1d.physics.conduction import (
     heat_conduction_rhs,
     implicit_heat_conduction_step,
 )
-from cablp.solvers._sim1d.energy import (
+from cablp.solvers._sim1d.physics.energy import (
     electron_cooling_rhs,
     electron_ion_exchange_rhs,
     ion_charge_exchange_rhs,
 )
-from cablp.solvers._sim1d.flux import front_filling_fluxes
-from cablp.solvers._sim1d.integrator import ssprk2_step
-from cablp.solvers._sim1d.neutrals import (
+from cablp.solvers._sim1d.physics.flux import front_filling_fluxes
+from cablp.solvers._sim1d.core.integrator import ssprk2_step
+from cablp.solvers._sim1d.physics.neutrals import (
     neutral_exchange_coefficients,
     neutral_inventory_rate,
     puff_rate,
     pump_rate,
 )
-from cablp.solvers._sim1d.reactions import (
+from cablp.solvers._sim1d.physics.reactions import (
     particle_inventory_rate,
     reaction_rates,
 )
-from cablp.solvers._sim1d.sources import velocity_divergence
-from cablp.solvers._sim1d.state import (
+from cablp.solvers._sim1d.physics.sources import velocity_divergence
+from cablp.solvers._sim1d.core.state import (
     STATE_NAMES_1D,
     conservative_from_primitives,
     derive_state,

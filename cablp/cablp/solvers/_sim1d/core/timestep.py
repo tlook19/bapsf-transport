@@ -2,16 +2,16 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .conduction import heat_conduction_timestep_bound
-from .energy import (
+from ..physics.conduction import heat_conduction_timestep_bound
+from ..physics.energy import (
     electron_cooling_rhs,
     electron_ion_exchange_rhs,
     ion_charge_exchange_rhs,
 )
-from .flux import ion_sound_speed, plasma_flux_rhs
-from .neutrals import neutral_exchange_rhs, neutral_source_sink_rhs
-from .reactions import reaction_rhs
-from .sources import surface_neutralization_rhs
+from ..physics.flux import ion_sound_speed, plasma_flux_rhs
+from ..physics.neutrals import neutral_exchange_rhs, neutral_source_sink_rhs
+from ..physics.reactions import reaction_rhs
+from ..physics.sources import surface_neutralization_rhs
 from .state import derive_state
 
 

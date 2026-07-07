@@ -3,7 +3,7 @@ import numpy as np
 from cablp.vars._cons import ev_to_erg
 
 from .flux import ion_sound_speed
-from .state import ConservativeState1D, derive_state
+from ..core.state import ConservativeState1D, derive_state
 
 
 def velocity_divergence(state, floors, ion_mass_g, geometry):
