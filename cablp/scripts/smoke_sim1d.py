@@ -676,6 +676,36 @@ def main():
     split_stationary_after = no_source_split_sim.advance_one_step(1e-10)
     assert np.allclose(split_stationary_after.y, split_before, rtol=0.0, atol=1e-20)
 
+    run_params = dict(no_source_params)
+    run_params["dt_save"] = 0.0
+    run_sim = LAPDSim1D(run_params, flags)
+    run_before = run_sim.get_initial_snapshot().y.copy()
+    run_result = run_sim.run(t_end=3.0e-10, dt=1.0e-10)
+    assert run_result.steps == 3
+    assert np.isclose(run_result.final_time, 3.0e-10)
+    assert run_result.time.shape == (4,)
+    assert run_result.y.shape == (4, run_before.size)
+    assert run_result.n.shape == (4, geom.cells)
+    assert len(run_result.diagnostics) == 3
+    assert np.allclose(run_result.y, run_before[None, :], rtol=0.0, atol=1e-20)
+    assert np.allclose(run_result.time, [0.0, 1.0e-10, 2.0e-10, 3.0e-10])
+
+    sparse_params = dict(no_source_params)
+    sparse_params["dt_save"] = 1.0e-10
+    sparse_params["t_save_start"] = 1.0e-10
+    sparse_params["max_output_steps"] = 2
+    sparse_sim = LAPDSim1D(sparse_params, flags)
+    sparse_result = sparse_sim.run(t_end=4.0e-10, dt=1.0e-10)
+    assert sparse_result.steps == 4
+    assert sparse_result.time.shape == (2,)
+    assert np.allclose(sparse_result.time, [1.0e-10, 2.0e-10])
+
+    split_run_sim = LAPDSim1D(run_params, split_flags)
+    split_run_result = split_run_sim.run(t_end=2.0e-10, dt=1.0e-10)
+    assert split_run_result.steps == 2
+    assert np.isclose(split_run_result.final_time, 2.0e-10)
+    assert np.all(np.isfinite(split_run_result.y))
+
     ramp_y0 = pack_state(ramp_state)
     ramp_y1 = ssprk2_step(
         y0=ramp_y0,
