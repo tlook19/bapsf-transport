@@ -26,6 +26,7 @@ from cablp.solvers._sim1d.reactions import (
 )
 from cablp.solvers._sim1d.sources import velocity_divergence
 from cablp.solvers._sim1d.state import (
+    STATE_NAMES_1D,
     conservative_from_primitives,
     derive_state,
     pack_state,
@@ -619,6 +620,35 @@ def main():
     full_rhs = sim.rhs(pack_state(heat_state), include_heat_conduction=True)
     heat_rhs_y = pack_state(heat_rhs)
     assert np.allclose(full_rhs - nonheat_rhs, heat_rhs_y)
+    rhs_terms = sim.rhs_terms(pack_state(heat_state), include_heat_conduction=True)
+    expected_rhs_terms = {
+        "plasma_flux",
+        "pressure_work",
+        "ei_exchange",
+        "electron_cooling",
+        "ion_charge_exchange",
+        "surface_loss",
+        "neutral_exchange",
+        "neutral_sources",
+        "reactions",
+        "heat_conduction",
+    }
+    assert set(rhs_terms) == expected_rhs_terms
+    term_sum = np.zeros_like(full_rhs)
+    for term in rhs_terms.values():
+        for field_name in STATE_NAMES_1D:
+            assert np.all(np.isfinite(getattr(term, field_name)))
+        term_sum = term_sum + pack_state(term)
+    assert np.allclose(term_sum, full_rhs)
+    nonheat_terms = sim.rhs_terms(
+        pack_state(heat_state),
+        include_heat_conduction=False,
+    )
+    assert np.allclose(pack_state(nonheat_terms["heat_conduction"]), 0.0)
+    assert np.allclose(
+        pack_state(rhs_terms["heat_conduction"]),
+        full_rhs - nonheat_rhs,
+    )
 
     split_dt = min(1.0e-10, 0.1 * heat_dt.dt_heat_conduction)
     manual_explicit_y = ssprk2_step(
@@ -687,6 +717,32 @@ def main():
     assert run_result.y.shape == (4, run_before.size)
     assert run_result.n.shape == (4, geom.cells)
     assert len(run_result.diagnostics) == 3
+    assert set(run_result.rhs_terms) == expected_rhs_terms
+    assert set(run_result.electron_energy_terms_W_cm3) == expected_rhs_terms
+    assert set(run_result.ion_energy_terms_W_cm3) == expected_rhs_terms
+    saved_term_sum = np.zeros_like(run_result.y)
+    for term_name in expected_rhs_terms:
+        term_fields = run_result.rhs_terms[term_name]
+        for field_name in STATE_NAMES_1D:
+            assert term_fields[field_name].shape == (4, geom.cells)
+            assert np.all(np.isfinite(term_fields[field_name]))
+        assert np.allclose(
+            run_result.electron_energy_terms_W_cm3[term_name],
+            1.0e-7 * term_fields["Ee"],
+        )
+        assert np.allclose(
+            run_result.ion_energy_terms_W_cm3[term_name],
+            1.0e-7 * term_fields["Ei"],
+        )
+        saved_term_sum = saved_term_sum + np.concatenate(
+            [term_fields[field_name] for field_name in STATE_NAMES_1D],
+            axis=1,
+        )
+    packed_total_rhs = np.concatenate(
+        [run_result.total_rhs[field_name] for field_name in STATE_NAMES_1D],
+        axis=1,
+    )
+    assert np.allclose(saved_term_sum, packed_total_rhs)
     assert np.allclose(run_result.y, run_before[None, :], rtol=0.0, atol=1e-20)
     assert np.allclose(run_result.time, [0.0, 1.0e-10, 2.0e-10, 3.0e-10])
 
