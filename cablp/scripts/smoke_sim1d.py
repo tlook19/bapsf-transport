@@ -138,6 +138,20 @@ def main():
     assert cathode_boundary.end.role == "end"
     assert cathode_boundary.end_mode == params["end_mode"]
     assert cathode_boundary.twin_cathode == flags["TwinCathode"]
+    for key in (
+        "V_bank",
+        "T_s",
+        "phi_wf",
+        "C_R",
+        "R_comp",
+        "eta",
+        "L_cath",
+        "R_cath",
+    ):
+        assert key in params
+        assert key in cathode_boundary.circuit
+        assert np.isfinite(cathode_boundary.circuit[key])
+        assert np.isclose(cathode_boundary.circuit[key], params[key])
     for cell in (cathode_boundary.source, cathode_boundary.end):
         for value in (
             cell.n,
@@ -159,6 +173,8 @@ def main():
     assert cathode_terms.mode == "disabled"
     assert cathode_terms.metadata["source_index"] == 0
     assert cathode_terms.metadata["end_index"] == geom.cells - 1
+    for key, value in cathode_boundary.circuit.items():
+        assert np.isclose(cathode_terms.metadata["circuit"][key], value)
     for values in (
         cathode_terms.rhs.n,
         cathode_terms.rhs.nn,
