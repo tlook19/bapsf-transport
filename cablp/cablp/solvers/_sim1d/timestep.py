@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .conduction import heat_conduction_timestep_bound
 from .energy import (
     electron_cooling_rhs,
     electron_ion_exchange_rhs,
@@ -24,6 +25,7 @@ class TimestepDiagnostics:
     dt_energy_exchange: float
     dt_electron_cooling: float
     dt_ion_charge_exchange: float
+    dt_heat_conduction: float
     dt_max: float
     active_constraint: str
 
@@ -40,9 +42,11 @@ def suggest_timestep(
     energy_exchange_kwargs=None,
     electron_cooling_kwargs=None,
     ion_charge_exchange_kwargs=None,
+    heat_conduction_kwargs=None,
     cfl=0.4,
     density_dt_fraction=0.25,
     neutral_dt_fraction=0.25,
+    heat_dt_fraction=0.25,
     dt_min=1e-12,
     dt_max=1e-6,
     include_front=True,
@@ -117,6 +121,15 @@ def suggest_timestep(
             ion_charge_exchange_kwargs=ion_charge_exchange_kwargs,
             density_dt_fraction=density_dt_fraction,
         ),
+        "heat_conduction": heat_conduction_timestep(
+            state=state,
+            floors=floors,
+            ion_mass_g=ion_mass_g,
+            mu=mu,
+            geometry=geometry,
+            heat_conduction_kwargs=heat_conduction_kwargs,
+            heat_dt_fraction=heat_dt_fraction,
+        ),
         "dt_max": float(dt_max),
     }
     active_constraint, raw_dt = min(dt_candidates.items(), key=lambda item: item[1])
@@ -133,6 +146,7 @@ def suggest_timestep(
         dt_energy_exchange=float(dt_candidates["energy_exchange"]),
         dt_electron_cooling=float(dt_candidates["electron_cooling"]),
         dt_ion_charge_exchange=float(dt_candidates["ion_charge_exchange"]),
+        dt_heat_conduction=float(dt_candidates["heat_conduction"]),
         dt_max=float(dt_max),
         active_constraint=active_constraint,
     )
@@ -332,6 +346,29 @@ def ion_charge_exchange_timestep(
         **ion_charge_exchange_kwargs,
     )
     return _fractional_timestep(state.Ei, rhs.Ei, density_dt_fraction, 0.0)
+
+
+def heat_conduction_timestep(
+    state,
+    floors,
+    ion_mass_g,
+    mu,
+    geometry,
+    heat_conduction_kwargs=None,
+    heat_dt_fraction=0.25,
+):
+    """Return an explicit diffusion timestep bound for heat conduction."""
+    if heat_conduction_kwargs is None:
+        return np.inf
+    return heat_conduction_timestep_bound(
+        state=state,
+        floors=floors,
+        ion_mass_g=ion_mass_g,
+        mu=mu,
+        geometry=geometry,
+        heat_dt_fraction=heat_dt_fraction,
+        **heat_conduction_kwargs,
+    )
 
 
 def _distance_timestep(distance, speed, fraction):
