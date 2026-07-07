@@ -1,6 +1,6 @@
 import numpy as np
 
-from cablp.solvers._sim1d_state import ConservativeState1D, derive_state
+from .state import ConservativeState1D, derive_state
 
 
 def velocity_divergence(state, floors, ion_mass_g, geometry):
