@@ -3,7 +3,10 @@ import numpy as np
 from cablp.funcs._heat import elec_par_heat_div, ion_par_heat_div
 from cablp.funcs._plasmaparams import c_log
 from cablp.solvers._sim1d import LAPDSim1D, default_config
-from cablp.solvers._sim1d.conduction import heat_conduction_rhs
+from cablp.solvers._sim1d.conduction import (
+    heat_conduction_rhs,
+    implicit_heat_conduction_step,
+)
 from cablp.solvers._sim1d.energy import (
     electron_cooling_rhs,
     electron_ion_exchange_rhs,
@@ -497,6 +500,62 @@ def main():
     )
     assert np.allclose(disabled_heat.Ee, 0.0)
     assert np.allclose(disabled_heat.Ei, 0.0)
+
+    implicit_heat_state = sim.implicit_heat_conduction_step(
+        dt=heat_dt.dt_heat_conduction,
+        state=heat_state,
+    )
+    implicit_heat_derived = derive_state(
+        implicit_heat_state, sim.floors, sim.ion_mass_g
+    )
+    assert np.all(np.isfinite(implicit_heat_state.Ee))
+    assert np.all(np.isfinite(implicit_heat_state.Ei))
+    assert np.all(implicit_heat_derived.Te >= params["Te_floor"])
+    assert np.all(implicit_heat_derived.Ti >= params["Ti_floor"])
+    assert implicit_heat_derived.Te[0] < heat_derived.Te[0]
+    assert implicit_heat_derived.Te[-1] > heat_derived.Te[-1]
+    assert implicit_heat_derived.Ti[0] < heat_derived.Ti[0]
+    assert implicit_heat_derived.Ti[-1] > heat_derived.Ti[-1]
+    assert np.isclose(
+        np.sum((implicit_heat_state.Ee - heat_state.Ee) * geom.plasma_volume_cm3),
+        0.0,
+        atol=heat_energy_tol,
+    )
+    assert np.isclose(
+        np.sum((implicit_heat_state.Ei - heat_state.Ei) * geom.plasma_volume_cm3),
+        0.0,
+        atol=heat_ion_energy_tol,
+    )
+
+    small_dt = min(1.0e-11, 1.0e-4 * heat_dt.dt_heat_conduction)
+    small_implicit = sim.implicit_heat_conduction_step(dt=small_dt, state=heat_state)
+    assert np.allclose(
+        (small_implicit.Ee - heat_state.Ee) / small_dt,
+        heat_rhs.Ee,
+        rtol=5.0e-4,
+        atol=1.0e-8,
+    )
+    assert np.allclose(
+        (small_implicit.Ei - heat_state.Ei) / small_dt,
+        heat_rhs.Ei,
+        rtol=5.0e-4,
+        atol=1.0e-8,
+    )
+
+    disabled_implicit = implicit_heat_conduction_step(
+        state=heat_state,
+        floors=sim.floors,
+        ion_mass_g=sim.ion_mass_g,
+        mu=sim.mu,
+        geometry=geom,
+        dt=heat_dt.dt_heat_conduction,
+        b_epara=0.0,
+        b_ipara=0.0,
+        heat_conduction=True,
+        ln_lambda_min=params["ln_lambda_min"],
+    )
+    assert np.allclose(disabled_implicit.Ee, heat_state.Ee)
+    assert np.allclose(disabled_implicit.Ei, heat_state.Ei)
 
     fast_state = conservative_from_primitives(
         n=np.full(geom.cells, params["ne0"]),

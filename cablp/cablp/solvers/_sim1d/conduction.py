@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.linalg import solve_banded
 
 from cablp.funcs._heat import kappa_par_elec, kappa_par_ion
 from cablp.funcs._plasmaparams import c_log
@@ -135,6 +136,75 @@ def heat_conduction_timestep_bound(
     return min(dt_e, dt_i)
 
 
+def implicit_heat_conduction_step(
+    state,
+    floors,
+    ion_mass_g,
+    mu,
+    geometry,
+    dt,
+    b_epara=1.0,
+    b_ipara=1.0,
+    heat_conduction=True,
+    ln_lambda_min=1.0,
+):
+    """Return a state after one frozen-conductivity backward-Euler heat step."""
+    if dt <= 0.0:
+        raise ValueError(f"dt must be positive (got {dt})")
+    if not heat_conduction or (b_epara == 0.0 and b_ipara == 0.0):
+        return ConservativeState1D(
+            n=state.n.copy(),
+            nn=state.nn.copy(),
+            M=state.M.copy(),
+            Ee=state.Ee.copy(),
+            Ei=state.Ei.copy(),
+        )
+
+    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
+    n = np.maximum(state.n, floors["n"])
+    ln_lambda = np.maximum(c_log(derived.Te, n, kind="ei"), ln_lambda_min)
+    capacity = 1.5 * n * ev_to_erg
+
+    Ee = _implicit_species_energy(
+        energy=state.Ee,
+        capacity=capacity,
+        temperature_floor=floors["Te"],
+        conductivity=kappa_par_elec(
+            derived.Te,
+            n,
+            ln_lambda,
+            per_particle=False,
+        )
+        * ev_to_erg
+        * float(b_epara),
+        geometry=geometry,
+        dt=dt,
+    )
+    Ei = _implicit_species_energy(
+        energy=state.Ei,
+        capacity=capacity,
+        temperature_floor=floors["Ti"],
+        conductivity=kappa_par_ion(
+            derived.Ti,
+            n,
+            mu,
+            ln_lambda,
+            per_particle=False,
+        )
+        * ev_to_erg
+        * float(b_ipara),
+        geometry=geometry,
+        dt=dt,
+    )
+    return ConservativeState1D(
+        n=state.n.copy(),
+        nn=state.nn.copy(),
+        M=state.M.copy(),
+        Ee=Ee,
+        Ei=Ei,
+    )
+
+
 def _species_heat_timestep(capacity, conductivity, geometry, fraction):
     face_coeff = np.zeros(geometry.cells + 1, dtype=float)
     k_face = 0.5 * (conductivity[:-1] + conductivity[1:])
@@ -150,3 +220,42 @@ def _species_heat_timestep(capacity, conductivity, geometry, fraction):
     if not np.any(active):
         return np.inf
     return float(fraction / np.max(cell_coeff[active]))
+
+
+def _implicit_species_energy(
+    energy,
+    capacity,
+    temperature_floor,
+    conductivity,
+    geometry,
+    dt,
+):
+    lower, diagonal, upper = _implicit_heat_diagonals(
+        capacity=capacity,
+        conductivity=conductivity,
+        geometry=geometry,
+        dt=dt,
+    )
+    banded = np.zeros((3, geometry.cells), dtype=float)
+    banded[0, 1:] = upper
+    banded[1, :] = diagonal
+    banded[2, :-1] = lower
+    temperature = solve_banded((1, 1), banded, np.asarray(energy, dtype=float))
+    temperature = np.maximum(temperature, temperature_floor)
+    return capacity * temperature
+
+
+def _implicit_heat_diagonals(capacity, conductivity, geometry, dt):
+    face_coeff = np.zeros(geometry.cells + 1, dtype=float)
+    k_face = 0.5 * (conductivity[:-1] + conductivity[1:])
+    face_coeff[1:-1] = (
+        geometry.plasma_face_area_cm2[1:-1]
+        * k_face
+        / geometry.center_distance_cm
+    )
+    left = dt * face_coeff[:-1] / geometry.plasma_volume_cm3
+    right = dt * face_coeff[1:] / geometry.plasma_volume_cm3
+    diagonal = capacity + left + right
+    lower = -left[1:]
+    upper = -right[:-1]
+    return lower, diagonal, upper
