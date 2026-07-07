@@ -11,6 +11,10 @@ from cablp.solvers._sim1d_config import (
 )
 from cablp.solvers._sim1d_geometry import build_geometry
 from cablp.solvers._sim1d_flux import plasma_flux_rhs
+from cablp.solvers._sim1d_integrator import (
+    floor_state_vector,
+    ssprk2_step,
+)
 from cablp.solvers._sim1d_state import (
     apply_state_floors,
     assert_finite_state,
@@ -25,8 +29,8 @@ from cablp.vars._cons import I_Ry, I_ion, m_He_cgs, m_p_cgs
 class LAPDSim1D:
     """Conservative axial 1D LAPD solver scaffold.
 
-    This first milestone builds configuration, geometry, and state handling.
-    Time integration and physics source terms are intentionally added later.
+    This scaffold currently includes configuration, geometry, state handling,
+    conservative plasma fluxes, and a minimal explicit SSPRK2 step.
     """
 
     def __init__(
@@ -94,6 +98,32 @@ class LAPDSim1D:
             y=pack_state(state),
         )
 
+    def rhs(self, y=None):
+        """Return the packed explicit RHS for the current scaffold physics."""
+        state_rhs = self.plasma_flux_rhs(y=y)
+        return pack_state(state_rhs)
+
+    def floor_state_vector(self, y):
+        """Apply configured density and temperature floors to a packed vector."""
+        return floor_state_vector(
+            y=y,
+            cells=self._geometry.cells,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+        )
+
+    def advance_one_step(self, dt):
+        """Advance the conservative state by one explicit SSPRK2 step."""
+        self._set_state_vector(
+            ssprk2_step(
+                y0=self._y,
+                dt=dt,
+                rhs_func=self.rhs,
+                floor_func=self.floor_state_vector,
+            )
+        )
+        return self.get_initial_snapshot()
+
     def plasma_flux_rhs(self, y=None, include_front=None):
         """Return the conservative plasma flux RHS for inspection/testing."""
         state = self.state if y is None else unpack_state(y, self._geometry.cells)
@@ -109,6 +139,13 @@ class LAPDSim1D:
             include_front=use_front,
             alpha_front=float(self._input_dict.get("alpha_front", 1.0)),
         )
+
+    def _set_state_vector(self, y):
+        self._y = self.floor_state_vector(y)
+        self._state = unpack_state(self._y, self._geometry.cells)
+        self._derived = derive_state(self._state, self._floors, self._ion_mass_g)
+        if self._flags.get("debug_checks", False):
+            assert_finite_state(self._state, self._derived)
 
     def _initial_state(self):
         cells = self._geometry.cells
