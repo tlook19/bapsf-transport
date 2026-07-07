@@ -1,7 +1,11 @@
 import numpy as np
 
 from cablp.solvers._sim1d import LAPDSim1D, default_config
-from cablp.solvers._sim1d.energy import electron_cooling_rhs, electron_ion_exchange_rhs
+from cablp.solvers._sim1d.energy import (
+    electron_cooling_rhs,
+    electron_ion_exchange_rhs,
+    ion_charge_exchange_rhs,
+)
 from cablp.solvers._sim1d.flux import front_filling_fluxes
 from cablp.solvers._sim1d.integrator import ssprk2_step
 from cablp.solvers._sim1d.neutrals import (
@@ -91,6 +95,7 @@ def main():
         "reactions",
         "energy_exchange",
         "electron_cooling",
+        "ion_charge_exchange",
         "dt_max",
         "dt_min",
     }
@@ -98,6 +103,7 @@ def main():
     assert dt_default.dt_reactions > 0.0
     assert dt_default.dt_energy_exchange > 0.0
     assert dt_default.dt_electron_cooling > 0.0
+    assert dt_default.dt_ion_charge_exchange > 0.0
 
     rhs = sim.plasma_flux_rhs(include_front=False)
     for values in (rhs.n, rhs.nn, rhs.M, rhs.Ee, rhs.Ei):
@@ -375,6 +381,45 @@ def main():
     assert np.allclose(disabled_cooling.Ee, 0.0)
     assert np.allclose(disabled_cooling.Ei, 0.0)
 
+    hot_ion_cx_state = conservative_from_primitives(
+        n=np.full(geom.cells, 1.0e12),
+        nn=np.full(geom.cells, 1.0e12),
+        u=np.zeros(geom.cells),
+        Te=np.full(geom.cells, 1.0),
+        Ti=np.full(geom.cells, 10.0),
+        ion_mass_g=sim.ion_mass_g,
+    )
+    hot_ion_cx = sim.ion_charge_exchange_rhs(state=hot_ion_cx_state)
+    assert np.all(hot_ion_cx.Ei < 0.0)
+    assert np.allclose(hot_ion_cx.n, 0.0)
+    assert np.allclose(hot_ion_cx.nn, 0.0)
+    assert np.allclose(hot_ion_cx.M, 0.0)
+    assert np.allclose(hot_ion_cx.Ee, 0.0)
+    hot_ion_cx_dt = sim.suggest_timestep(y=pack_state(hot_ion_cx_state))
+    assert np.isfinite(hot_ion_cx_dt.dt_ion_charge_exchange)
+
+    warm_neutral_cx = ion_charge_exchange_rhs(
+        state=hot_ion_cx_state,
+        floors=sim.floors,
+        ion_mass_g=sim.ion_mass_g,
+        gas_type=params["gas_type"],
+        Tn_fit=20.0,
+        b_Qcx=params["b_Qcx"],
+        cx=True,
+    )
+    assert np.all(warm_neutral_cx.Ei > 0.0)
+
+    disabled_cx = ion_charge_exchange_rhs(
+        state=hot_ion_cx_state,
+        floors=sim.floors,
+        ion_mass_g=sim.ion_mass_g,
+        gas_type=params["gas_type"],
+        Tn_fit=params["Tn_fit"],
+        b_Qcx=0.0,
+        cx=True,
+    )
+    assert np.allclose(disabled_cx.Ei, 0.0)
+
     fast_state = conservative_from_primitives(
         n=np.full(geom.cells, params["ne0"]),
         nn=state.nn,
@@ -394,6 +439,7 @@ def main():
     no_source_params["b_rec_3b"] = 0.0
     no_source_params["b_Qei"] = 0.0
     no_source_params["b_Qen"] = 0.0
+    no_source_params["b_Qcx"] = 0.0
     no_source_params["b_ionization_energy_cost"] = 0.0
     no_source_sim = LAPDSim1D(no_source_params, flags)
     y_before = no_source_sim.get_initial_snapshot().y.copy()

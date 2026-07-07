@@ -2,7 +2,11 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .energy import electron_cooling_rhs, electron_ion_exchange_rhs
+from .energy import (
+    electron_cooling_rhs,
+    electron_ion_exchange_rhs,
+    ion_charge_exchange_rhs,
+)
 from .flux import ion_sound_speed, plasma_flux_rhs
 from .neutrals import neutral_exchange_rhs, neutral_source_sink_rhs
 from .reactions import reaction_rhs
@@ -19,6 +23,7 @@ class TimestepDiagnostics:
     dt_reactions: float
     dt_energy_exchange: float
     dt_electron_cooling: float
+    dt_ion_charge_exchange: float
     dt_max: float
     active_constraint: str
 
@@ -34,6 +39,7 @@ def suggest_timestep(
     reaction_kwargs=None,
     energy_exchange_kwargs=None,
     electron_cooling_kwargs=None,
+    ion_charge_exchange_kwargs=None,
     cfl=0.4,
     density_dt_fraction=0.25,
     neutral_dt_fraction=0.25,
@@ -104,6 +110,13 @@ def suggest_timestep(
             electron_cooling_kwargs=electron_cooling_kwargs,
             density_dt_fraction=density_dt_fraction,
         ),
+        "ion_charge_exchange": ion_charge_exchange_timestep(
+            state=state,
+            floors=floors,
+            ion_mass_g=ion_mass_g,
+            ion_charge_exchange_kwargs=ion_charge_exchange_kwargs,
+            density_dt_fraction=density_dt_fraction,
+        ),
         "dt_max": float(dt_max),
     }
     active_constraint, raw_dt = min(dt_candidates.items(), key=lambda item: item[1])
@@ -119,6 +132,7 @@ def suggest_timestep(
         dt_reactions=float(dt_candidates["reactions"]),
         dt_energy_exchange=float(dt_candidates["energy_exchange"]),
         dt_electron_cooling=float(dt_candidates["electron_cooling"]),
+        dt_ion_charge_exchange=float(dt_candidates["ion_charge_exchange"]),
         dt_max=float(dt_max),
         active_constraint=active_constraint,
     )
@@ -295,6 +309,29 @@ def electron_cooling_timestep(
         **electron_cooling_kwargs,
     )
     return _fractional_timestep(state.Ee, rhs.Ee, density_dt_fraction, 0.0)
+
+
+def ion_charge_exchange_timestep(
+    state,
+    floors,
+    ion_mass_g,
+    ion_charge_exchange_kwargs=None,
+    density_dt_fraction=0.25,
+):
+    """Return a fractional ion-energy timestep for charge exchange."""
+    if ion_charge_exchange_kwargs is None:
+        return np.inf
+    if density_dt_fraction <= 0.0:
+        raise ValueError(
+            f"density_dt_fraction must be positive (got {density_dt_fraction})"
+        )
+    rhs = ion_charge_exchange_rhs(
+        state=state,
+        floors=floors,
+        ion_mass_g=ion_mass_g,
+        **ion_charge_exchange_kwargs,
+    )
+    return _fractional_timestep(state.Ei, rhs.Ei, density_dt_fraction, 0.0)
 
 
 def _distance_timestep(distance, speed, fraction):
