@@ -1,3 +1,7 @@
+import json
+import tempfile
+
+import h5py
 import numpy as np
 
 from cablp.funcs._heat import elec_par_heat_div, ion_par_heat_div
@@ -776,6 +780,41 @@ def main():
     assert np.allclose(saved_term_sum, packed_total_rhs)
     assert np.allclose(run_result.y, run_before[None, :], rtol=0.0, atol=1e-20)
     assert np.allclose(run_result.time, [0.0, 1.0e-10, 2.0e-10, 3.0e-10])
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_path = run_sim.save_result(
+            f"{tmpdir}/sim1d_smoke.h5",
+            run_result,
+        )
+        with h5py.File(output_path, "r") as h5:
+            assert h5.attrs["format"] == "sim1d-hdf5-v1"
+            assert h5.attrs["solver"] == "LAPDSim1D"
+            assert h5.attrs["steps"] == run_result.steps
+            assert np.isclose(h5.attrs["final_time"], run_result.final_time)
+            saved_params = json.loads(h5.attrs["params_json"])
+            saved_flags = json.loads(h5.attrs["flags_json"])
+            assert saved_params["dt_save"] == run_params["dt_save"]
+            assert saved_flags["front_flux"] == flags["front_flux"]
+            assert h5["time"].shape == run_result.time.shape
+            assert h5["y"].shape == run_result.y.shape
+            assert h5["n"].shape == run_result.n.shape
+            assert h5["geometry/cell_role"].shape == (geom.cells,)
+            assert h5["geometry/cell_role"][0].decode("utf-8") == "source"
+            assert h5["geometry/cell_role"][-1].decode("utf-8") == "end"
+            assert h5["rhs_terms/pressure_work/Ee"].shape == (4, geom.cells)
+            assert h5["total_rhs/Ee"].shape == (4, geom.cells)
+            assert (
+                h5["electron_energy_terms_W_cm3/pressure_work"].shape
+                == (4, geom.cells)
+            )
+            assert (
+                h5["ion_energy_terms_W_cm3/pressure_work"].shape
+                == (4, geom.cells)
+            )
+            assert h5["diagnostics"].attrs["count"] == len(run_result.diagnostics)
+            assert h5["diagnostics/dt"].shape == (len(run_result.diagnostics),)
+            assert h5["diagnostics/active_constraint"].shape == (
+                len(run_result.diagnostics),
+            )
 
     sparse_params = dict(no_source_params)
     sparse_params["dt_save"] = 1.0e-10
