@@ -273,6 +273,18 @@ class LAPDSim1D:
 
         return self._trajectory_result(saved=saved, diagnostics=diagnostics, steps=steps)
 
+    def save_result(self, path, result, params=None, flags=None):
+        """Write a run result to HDF5 with this solver's config metadata."""
+        from .io import save_result_hdf5
+
+        if params is None or flags is None:
+            config_params, config_flags = self.get_config()
+            if params is None:
+                params = config_params
+            if flags is None:
+                flags = config_flags
+        return save_result_hdf5(path, result, params=params, flags=flags)
+
     def suggest_timestep(self, y=None, include_heat_conduction=None):
         """Return an explicit timestep suggestion and diagnostics."""
         state = self.state if y is None else unpack_state(y, self._geometry.cells)
