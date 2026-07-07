@@ -75,6 +75,7 @@ class LAPDSim1D:
         self._state = apply_state_floors(self._state, self._floors, self._ion_mass_g)
         self._y = pack_state(self._state)
         self._derived = derive_state(self._state, self._floors, self._ion_mass_g)
+        self._time = 0.0
         if self._flags.get("debug_checks", False):
             assert_finite_state(self._state, self._derived)
 
@@ -106,6 +107,10 @@ class LAPDSim1D:
     def floors(self):
         return dict(self._floors)
 
+    @property
+    def time(self):
+        return self._time
+
     def get_config(self):
         """Return copies of the input dictionary and flags used by this object."""
         return dict(self._input_dict), dict(self._flags)
@@ -120,6 +125,7 @@ class LAPDSim1D:
             state=state,
             derived=derived,
             y=pack_state(state),
+            time=self._time,
         )
 
     def rhs(self, y=None, include_heat_conduction=True):
@@ -178,6 +184,7 @@ class LAPDSim1D:
                 floor_func=self.floor_state_vector,
             )
         )
+        self._time += dt
         return self.get_initial_snapshot()
 
     def operator_split_step(self, y=None, dt=None):
@@ -199,8 +206,68 @@ class LAPDSim1D:
 
     def advance_one_step_operator_split(self, dt=None):
         """Advance by explicit non-heat terms then implicit heat conduction."""
+        if dt is None:
+            dt = self.suggest_timestep(include_heat_conduction=False).dt
         self._set_state_vector(self.operator_split_step(dt=dt))
+        self._time += dt
         return self.get_initial_snapshot()
+
+    def run(self, t_end, dt=None, operator_split=None, max_steps=100000):
+        """Advance to ``t_end`` and return sparse saved trajectory arrays."""
+        t_end = float(t_end)
+        if t_end < self._time:
+            raise ValueError(f"t_end must be >= current time ({t_end} < {self._time})")
+        if max_steps <= 0:
+            raise ValueError(f"max_steps must be positive (got {max_steps})")
+
+        dt_save = float(self._input_dict.get("dt_save", 1e-5))
+        t_save_start = float(self._input_dict.get("t_save_start", 0.0))
+        max_output_steps = int(self._input_dict.get("max_output_steps", 0))
+        saved = []
+        diagnostics = []
+        t_last_save = -np.inf
+        time_tol = max(1e-15, 1e-12 * max(abs(t_end), 1.0))
+
+        def should_save(t):
+            if max_output_steps > 0 and len(saved) >= max_output_steps:
+                return False
+            if t + 1e-15 < t_save_start:
+                return False
+            if dt_save <= 0.0:
+                return True
+            return t - t_last_save >= dt_save - time_tol or abs(t - t_end) <= time_tol
+
+        if should_save(self._time):
+            saved.append(self._trajectory_snapshot(self._time))
+            t_last_save = self._time
+
+        steps = 0
+        while self._time < t_end - time_tol:
+            if steps >= max_steps:
+                raise RuntimeError(
+                    f"max_steps={max_steps} reached before t_end={t_end:g} s"
+                )
+            diag = self.suggest_timestep(
+                include_heat_conduction=not (
+                    operator_split
+                    if operator_split is not None
+                    else self._flags.get("implicit_heat_conduction", False)
+                )
+            )
+            step_dt = diag.dt if dt is None else float(dt)
+            step_dt = min(step_dt, t_end - self._time)
+            if step_dt <= 0.0:
+                raise RuntimeError(f"non-positive timestep selected ({step_dt})")
+            self.advance_one_step(dt=step_dt, operator_split=operator_split)
+            diagnostics.append(diag)
+            steps += 1
+            if self._progress_callback is not None and t_end > 0.0:
+                self._progress_callback(min(self._time / t_end, 1.0))
+            if should_save(self._time):
+                saved.append(self._trajectory_snapshot(self._time))
+                t_last_save = self._time
+
+        return self._trajectory_result(saved=saved, diagnostics=diagnostics, steps=steps)
 
     def suggest_timestep(self, y=None, include_heat_conduction=None):
         """Return an explicit timestep suggestion and diagnostics."""
@@ -474,6 +541,67 @@ class LAPDSim1D:
                 "Ti_birth_ionization", "floor"
             ),
         }
+
+    def _trajectory_snapshot(self, time):
+        state = self.state
+        derived = self.derived
+        assert_finite_state(state, derived)
+        return {
+            "time": float(time),
+            "n": state.n.copy(),
+            "nn": state.nn.copy(),
+            "M": state.M.copy(),
+            "Ee": state.Ee.copy(),
+            "Ei": state.Ei.copy(),
+            "u": derived.u.copy(),
+            "Te": derived.Te.copy(),
+            "Ti": derived.Ti.copy(),
+            "pe": derived.pe.copy(),
+            "pi": derived.pi.copy(),
+            "p": derived.p.copy(),
+            "y": pack_state(state),
+        }
+
+    def _trajectory_result(self, saved, diagnostics, steps):
+        cells = self._geometry.cells
+
+        def stack(name):
+            if not saved:
+                return np.empty((0, cells), dtype=float)
+            return np.stack([snapshot[name] for snapshot in saved])
+
+        def stack_y():
+            if not saved:
+                return np.empty((0, len(self._y)), dtype=float)
+            return np.stack([snapshot["y"] for snapshot in saved])
+
+        return SimpleNamespace(
+            time=np.asarray([snapshot["time"] for snapshot in saved], dtype=float),
+            y=stack_y(),
+            n=stack("n"),
+            nn=stack("nn"),
+            M=stack("M"),
+            momentum=stack("M"),
+            Ee=stack("Ee"),
+            Ei=stack("Ei"),
+            u=stack("u"),
+            Te=stack("Te"),
+            Ti=stack("Ti"),
+            pe=stack("pe"),
+            pi=stack("pi"),
+            p=stack("p"),
+            z_cm=self._geometry.z_cm.copy(),
+            cell_role=self._geometry.cell_role.copy(),
+            length_cm=self._geometry.length_cm.copy(),
+            Rp_cm=self._geometry.Rp_cm.copy(),
+            Rm_cm=self._geometry.Rm_cm.copy(),
+            plasma_volume_cm3=self._geometry.plasma_volume_cm3.copy(),
+            neutral_volume_cm3=self._geometry.neutral_volume_cm3.copy(),
+            volume_ratio=self._geometry.volume_ratio.copy(),
+            diagnostics=list(diagnostics),
+            steps=int(steps),
+            final_time=float(self._time),
+        )
 
     def _set_state_vector(self, y):
         self._y = self.floor_state_vector(y)
