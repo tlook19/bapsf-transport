@@ -4,6 +4,7 @@ import numpy as np
 
 from .flux import ion_sound_speed, plasma_flux_rhs
 from .neutrals import neutral_exchange_rhs, neutral_source_sink_rhs
+from .reactions import reaction_rhs
 from .state import derive_state
 
 
@@ -14,6 +15,7 @@ class TimestepDiagnostics:
     dt_front_density: float
     dt_neutral_exchange: float
     dt_neutral_sources: float
+    dt_reactions: float
     dt_max: float
     active_constraint: str
 
@@ -26,6 +28,7 @@ def suggest_timestep(
     geometry,
     neutral_exchange_coeff_cm3_s,
     neutral_source_kwargs=None,
+    reaction_kwargs=None,
     cfl=0.4,
     density_dt_fraction=0.25,
     neutral_dt_fraction=0.25,
@@ -73,6 +76,14 @@ def suggest_timestep(
             neutral_source_kwargs=neutral_source_kwargs,
             neutral_dt_fraction=neutral_dt_fraction,
         ),
+        "reactions": reaction_timestep(
+            state=state,
+            floors=floors,
+            ion_mass_g=ion_mass_g,
+            geometry=geometry,
+            reaction_kwargs=reaction_kwargs,
+            density_dt_fraction=density_dt_fraction,
+        ),
         "dt_max": float(dt_max),
     }
     active_constraint, raw_dt = min(dt_candidates.items(), key=lambda item: item[1])
@@ -85,6 +96,7 @@ def suggest_timestep(
         dt_front_density=float(dt_candidates["front_density"]),
         dt_neutral_exchange=float(dt_candidates["neutral_exchange"]),
         dt_neutral_sources=float(dt_candidates["neutral_sources"]),
+        dt_reactions=float(dt_candidates["reactions"]),
         dt_max=float(dt_max),
         active_constraint=active_constraint,
     )
@@ -182,6 +194,34 @@ def neutral_source_timestep(
         **neutral_source_kwargs,
     )
     return _fractional_timestep(state.nn, rhs.nn, neutral_dt_fraction, 0.0)
+
+
+def reaction_timestep(
+    state,
+    floors,
+    ion_mass_g,
+    geometry,
+    reaction_kwargs=None,
+    density_dt_fraction=0.25,
+):
+    """Return a fractional density timestep for local plasma reactions."""
+    if reaction_kwargs is None:
+        return np.inf
+    if density_dt_fraction <= 0.0:
+        raise ValueError(
+            f"density_dt_fraction must be positive (got {density_dt_fraction})"
+        )
+    rhs = reaction_rhs(
+        state=state,
+        floors=floors,
+        ion_mass_g=ion_mass_g,
+        geometry=geometry,
+        **reaction_kwargs,
+    )
+    return min(
+        _fractional_timestep(state.n, rhs.n, density_dt_fraction, floors["n"]),
+        _fractional_timestep(state.nn, rhs.nn, density_dt_fraction, 0.0),
+    )
 
 
 def _distance_timestep(distance, speed, fraction):

@@ -9,6 +9,10 @@ from cablp.solvers._sim1d.neutrals import (
     puff_rate,
     pump_rate,
 )
+from cablp.solvers._sim1d.reactions import (
+    particle_inventory_rate,
+    reaction_rates,
+)
 from cablp.solvers._sim1d.sources import velocity_divergence
 from cablp.solvers._sim1d.state import (
     conservative_from_primitives,
@@ -83,10 +87,12 @@ def main():
         "front_density",
         "neutral_exchange",
         "neutral_sources",
+        "reactions",
         "dt_max",
         "dt_min",
     }
     assert np.isfinite(dt_default.dt_neutral_sources)
+    assert dt_default.dt_reactions > 0.0
 
     rhs = sim.plasma_flux_rhs(include_front=False)
     for values in (rhs.n, rhs.nn, rhs.M, rhs.Ee, rhs.Ei):
@@ -139,6 +145,53 @@ def main():
         disabled_source.Ei,
     ):
         assert np.allclose(values, 0.0, atol=1e-20)
+
+    reaction_rhs = sim.reaction_rhs()
+    for values in (
+        reaction_rhs.n,
+        reaction_rhs.nn,
+        reaction_rhs.M,
+        reaction_rhs.Ee,
+        reaction_rhs.Ei,
+    ):
+        assert np.all(np.isfinite(values))
+    reaction_inventory_scale = np.sum(
+        np.abs(reaction_rhs.n * geom.plasma_volume_cm3)
+        + np.abs(reaction_rhs.nn * geom.neutral_volume_cm3)
+    )
+    reaction_inventory_tol = 1e-12 * reaction_inventory_scale
+    assert np.isclose(
+        particle_inventory_rate(reaction_rhs, geom),
+        0.0,
+        atol=reaction_inventory_tol,
+    )
+    S_ion_off, _, _ = reaction_rates(
+        state=state,
+        floors=sim.floors,
+        ion_mass_g=sim.ion_mass_g,
+        gas_type=params["gas_type"],
+        I_ion=sim.I_ion,
+        b_ioniz=0.0,
+        b_rec_rad=params["b_rec_rad"],
+        b_rec_3b=params["b_rec_3b"],
+    )
+    assert np.allclose(S_ion_off, 0.0)
+
+    recomb_state = conservative_from_primitives(
+        n=np.full(geom.cells, params["ne0"]),
+        nn=state.nn,
+        u=np.full(geom.cells, 1.0e5),
+        Te=np.full(geom.cells, 1.0),
+        Ti=np.full(geom.cells, 1.0),
+        ion_mass_g=sim.ion_mass_g,
+    )
+    recomb_params = dict(params)
+    recomb_params["b_ioniz"] = 0.0
+    recomb_sim = LAPDSim1D(recomb_params, flags)
+    recomb_rhs = recomb_sim.reaction_rhs(state=recomb_state)
+    assert np.all(recomb_rhs.M < 0.0)
+    assert np.all(recomb_rhs.Ee < 0.0)
+    assert np.all(recomb_rhs.Ei < 0.0)
 
     density_ramp = np.linspace(2.0, 1.0, geom.cells) * params["ne0"]
     ramp_state = conservative_from_primitives(
@@ -233,6 +286,9 @@ def main():
     no_source_params = dict(params)
     no_source_params["gas_puff_enabled"] = False
     no_source_params["pump_enabled"] = False
+    no_source_params["b_ioniz"] = 0.0
+    no_source_params["b_rec_rad"] = 0.0
+    no_source_params["b_rec_3b"] = 0.0
     no_source_sim = LAPDSim1D(no_source_params, flags)
     y_before = no_source_sim.get_initial_snapshot().y.copy()
     stationary_after = no_source_sim.advance_one_step(1e-10)
