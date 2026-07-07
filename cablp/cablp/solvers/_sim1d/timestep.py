@@ -1,0 +1,174 @@
+from dataclasses import dataclass
+
+import numpy as np
+
+from .flux import ion_sound_speed, plasma_flux_rhs
+from .neutrals import neutral_exchange_rhs
+from .state import derive_state
+
+
+@dataclass(frozen=True)
+class TimestepDiagnostics:
+    dt: float
+    dt_plasma_cfl: float
+    dt_front_density: float
+    dt_neutral_exchange: float
+    dt_max: float
+    active_constraint: str
+
+
+def suggest_timestep(
+    state,
+    floors,
+    ion_mass_g,
+    mu,
+    geometry,
+    neutral_exchange_coeff_cm3_s,
+    cfl=0.4,
+    density_dt_fraction=0.25,
+    neutral_dt_fraction=0.25,
+    dt_min=1e-12,
+    dt_max=1e-6,
+    include_front=True,
+    alpha_front=1.0,
+):
+    """Return a bounded explicit timestep and diagnostics."""
+    if dt_min <= 0.0:
+        raise ValueError(f"dt_min must be positive (got {dt_min})")
+    if dt_max <= 0.0:
+        raise ValueError(f"dt_max must be positive (got {dt_max})")
+    if dt_min > dt_max:
+        raise ValueError(f"dt_min must be <= dt_max (got {dt_min} > {dt_max})")
+
+    dt_candidates = {
+        "plasma_cfl": plasma_cfl_timestep(
+            state=state,
+            floors=floors,
+            ion_mass_g=ion_mass_g,
+            mu=mu,
+            geometry=geometry,
+            cfl=cfl,
+        ),
+        "front_density": front_density_timestep(
+            state=state,
+            floors=floors,
+            ion_mass_g=ion_mass_g,
+            mu=mu,
+            geometry=geometry,
+            density_dt_fraction=density_dt_fraction,
+            include_front=include_front,
+            alpha_front=alpha_front,
+        ),
+        "neutral_exchange": neutral_exchange_timestep(
+            state=state,
+            geometry=geometry,
+            neutral_exchange_coeff_cm3_s=neutral_exchange_coeff_cm3_s,
+            neutral_dt_fraction=neutral_dt_fraction,
+        ),
+        "dt_max": float(dt_max),
+    }
+    active_constraint, raw_dt = min(dt_candidates.items(), key=lambda item: item[1])
+    dt = min(max(raw_dt, dt_min), dt_max)
+    if dt == dt_min and raw_dt < dt_min:
+        active_constraint = "dt_min"
+    return TimestepDiagnostics(
+        dt=float(dt),
+        dt_plasma_cfl=float(dt_candidates["plasma_cfl"]),
+        dt_front_density=float(dt_candidates["front_density"]),
+        dt_neutral_exchange=float(dt_candidates["neutral_exchange"]),
+        dt_max=float(dt_max),
+        active_constraint=active_constraint,
+    )
+
+
+def plasma_cfl_timestep(state, floors, ion_mass_g, mu, geometry, cfl=0.4):
+    """Return the plasma wave CFL timestep [s]."""
+    if cfl <= 0.0:
+        raise ValueError(f"cfl must be positive (got {cfl})")
+    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
+    cs = ion_sound_speed(derived.Te, mu)
+    face_speed = 0.5 * (
+        np.abs(derived.u[:-1])
+        + np.abs(derived.u[1:])
+        + cs[:-1]
+        + cs[1:]
+    )
+    return _distance_timestep(geometry.center_distance_cm, face_speed, cfl)
+
+
+def front_density_timestep(
+    state,
+    floors,
+    ion_mass_g,
+    mu,
+    geometry,
+    density_dt_fraction=0.25,
+    include_front=True,
+    alpha_front=1.0,
+):
+    """Return a fractional density-change timestep for front filling."""
+    if not include_front:
+        return np.inf
+    if density_dt_fraction <= 0.0:
+        raise ValueError(
+            f"density_dt_fraction must be positive (got {density_dt_fraction})"
+        )
+    rhs_with_front = plasma_flux_rhs(
+        state=state,
+        floors=floors,
+        ion_mass_g=ion_mass_g,
+        mu=mu,
+        geometry=geometry,
+        include_front=True,
+        alpha_front=alpha_front,
+    )
+    rhs_without_front = plasma_flux_rhs(
+        state=state,
+        floors=floors,
+        ion_mass_g=ion_mass_g,
+        mu=mu,
+        geometry=geometry,
+        include_front=False,
+        alpha_front=alpha_front,
+    )
+    dn_front = rhs_with_front.n - rhs_without_front.n
+    return _fractional_timestep(state.n, dn_front, density_dt_fraction, floors["n"])
+
+
+def neutral_exchange_timestep(
+    state,
+    geometry,
+    neutral_exchange_coeff_cm3_s,
+    neutral_dt_fraction=0.25,
+):
+    """Return a fractional neutral-density timestep for pair exchange."""
+    if neutral_dt_fraction <= 0.0:
+        raise ValueError(
+            f"neutral_dt_fraction must be positive (got {neutral_dt_fraction})"
+        )
+    rhs = neutral_exchange_rhs(
+        state=state,
+        geometry=geometry,
+        exchange_coeff_cm3_s=neutral_exchange_coeff_cm3_s,
+    )
+    return _fractional_timestep(state.nn, rhs.nn, neutral_dt_fraction, 0.0)
+
+
+def _distance_timestep(distance, speed, fraction):
+    active = speed > 0.0
+    if not np.any(active):
+        return np.inf
+    return float(fraction * np.min(distance[active] / speed[active]))
+
+
+def _fractional_timestep(values, rates, fraction, floor):
+    active = np.abs(rates) > 0.0
+    if not np.any(active):
+        return np.inf
+    margin = np.maximum(np.asarray(values, dtype=float) - floor, 0.0)
+    positive_margin = margin[active] > 0.0
+    if not np.any(positive_margin):
+        return np.inf
+    active_rates = np.abs(rates[active])[positive_margin]
+    active_margin = margin[active][positive_margin]
+    return float(fraction * np.min(active_margin / active_rates))

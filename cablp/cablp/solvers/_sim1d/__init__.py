@@ -25,6 +25,7 @@ from .state import (
     pack_state,
     unpack_state,
 )
+from .timestep import suggest_timestep
 from cablp.vars._cons import I_Ry, I_ion, m_He_cgs, m_p_cgs
 
 
@@ -124,8 +125,10 @@ class LAPDSim1D:
             ion_mass_g=self._ion_mass_g,
         )
 
-    def advance_one_step(self, dt):
+    def advance_one_step(self, dt=None):
         """Advance the conservative state by one explicit SSPRK2 step."""
+        if dt is None:
+            dt = self.suggest_timestep().dt
         self._set_state_vector(
             ssprk2_step(
                 y0=self._y,
@@ -135,6 +138,29 @@ class LAPDSim1D:
             )
         )
         return self.get_initial_snapshot()
+
+    def suggest_timestep(self, y=None):
+        """Return an explicit timestep suggestion and diagnostics."""
+        state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        return suggest_timestep(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            mu=self._mu,
+            geometry=self._geometry,
+            neutral_exchange_coeff_cm3_s=self.neutral_exchange_coefficients(),
+            cfl=float(self._input_dict.get("cfl", 0.4)),
+            density_dt_fraction=float(
+                self._input_dict.get("density_dt_fraction", 0.25)
+            ),
+            neutral_dt_fraction=float(
+                self._input_dict.get("neutral_dt_fraction", 0.25)
+            ),
+            dt_min=float(self._input_dict.get("dt_min", 1e-12)),
+            dt_max=float(self._input_dict.get("dt_max", 1e-6)),
+            include_front=self._flags.get("front_flux", True),
+            alpha_front=float(self._input_dict.get("alpha_front", 1.0)),
+        )
 
     def plasma_flux_rhs(self, y=None, include_front=None):
         """Return the conservative plasma flux RHS for inspection/testing."""

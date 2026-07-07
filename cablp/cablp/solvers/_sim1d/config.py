@@ -41,6 +41,11 @@ input_dict_template_1d = {
     "neutral_exchange_model": "molecular_flow",
     "neutral_exchange_coeff_cm3_s": 1.0e5,
     "neutral_clausing_scale": 1.0,
+    "cfl": 0.4,
+    "density_dt_fraction": 0.25,
+    "neutral_dt_fraction": 0.25,
+    "dt_min": 1e-12,
+    "dt_max": 1e-6,
 }
 
 
