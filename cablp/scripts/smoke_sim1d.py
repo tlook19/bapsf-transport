@@ -1,4 +1,7 @@
 import json
+from pathlib import Path
+import subprocess
+import sys
 import tempfile
 
 import h5py
@@ -863,6 +866,59 @@ def main():
     assert split_run_result.steps == 2
     assert np.isclose(split_run_result.final_time, 2.0e-10)
     assert np.all(np.isfinite(split_run_result.y))
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        cli_config = tmp_path / "sim1d_cli_config.toml"
+        cli_output = tmp_path / "sim1d_cli_output.h5"
+        cli_config.write_text(
+            "\n".join(
+                [
+                    "[params]",
+                    "dt_save = 0.0",
+                    "gas_puff_enabled = false",
+                    "pump_enabled = false",
+                    "b_ioniz = 0.0",
+                    "b_rec_rad = 0.0",
+                    "b_rec_3b = 0.0",
+                    "b_Qei = 0.0",
+                    "b_Qen = 0.0",
+                    "b_Qcx = 0.0",
+                    "b_ionization_energy_cost = 0.0",
+                    "b_surface_loss = 0.0",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        cli_run = subprocess.run(
+            [
+                sys.executable,
+                "scripts/run_sim1d.py",
+                "--config",
+                str(cli_config),
+                "--output",
+                str(cli_output),
+                "--t-end",
+                "2e-10",
+                "--dt",
+                "1e-10",
+                "--max-steps",
+                "10",
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert "sim1d run complete" in cli_run.stdout
+        assert "steps=2" in cli_run.stdout
+        cli_result = load_result_hdf5(cli_output)
+        assert cli_result.steps == 2
+        assert np.isclose(cli_result.final_time, 2.0e-10)
+        assert cli_result.time.shape == (3,)
+        assert cli_result.params["dt_save"] == 0.0
+        assert cli_result.params["b_surface_loss"] == 0.0
+        assert np.all(np.isfinite(cli_result.y))
 
     ramp_y0 = pack_state(ramp_state)
     ramp_y1 = ssprk2_step(
