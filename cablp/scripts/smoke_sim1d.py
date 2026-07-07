@@ -2,7 +2,13 @@ import numpy as np
 
 from cablp.solvers._sim1d import LAPDSim1D, default_config
 from cablp.solvers._sim1d_flux import front_filling_fluxes
-from cablp.solvers._sim1d_state import conservative_from_primitives, pack_state
+from cablp.solvers._sim1d_integrator import ssprk2_step
+from cablp.solvers._sim1d_state import (
+    conservative_from_primitives,
+    derive_state,
+    pack_state,
+    unpack_state,
+)
 
 
 def main():
@@ -67,6 +73,41 @@ def main():
     assert np.all(ramp_front.n[1:-1] > 0.0)
     ramp_rhs = sim.plasma_flux_rhs(y=pack_state(ramp_state), include_front=True)
     for values in (ramp_rhs.n, ramp_rhs.nn, ramp_rhs.M, ramp_rhs.Ee, ramp_rhs.Ei):
+        assert np.all(np.isfinite(values))
+
+    y_before = snapshot.y.copy()
+    stationary_after = sim.advance_one_step(1e-10)
+    assert np.allclose(stationary_after.y, y_before, rtol=0.0, atol=1e-20)
+
+    ramp_y0 = pack_state(ramp_state)
+    ramp_y1 = ssprk2_step(
+        y0=ramp_y0,
+        dt=1e-10,
+        rhs_func=sim.rhs,
+        floor_func=sim.floor_state_vector,
+    )
+    ramp_y1 = sim.floor_state_vector(ramp_y1)
+    ramp_state_1 = unpack_state(ramp_y1, geom.cells)
+    ramp_derived_1 = derive_state(ramp_state_1, sim.floors, sim.ion_mass_g)
+    for values in (
+        ramp_state_1.n,
+        ramp_state_1.nn,
+        ramp_state_1.M,
+        ramp_state_1.Ee,
+        ramp_state_1.Ei,
+        ramp_derived_1.Te,
+        ramp_derived_1.Ti,
+    ):
+        assert np.all(np.isfinite(values))
+        assert np.all(values >= 0.0)
+    ramp_after = sim.plasma_flux_rhs(y=ramp_y1, include_front=True)
+    for values in (
+        ramp_after.n,
+        ramp_after.nn,
+        ramp_after.M,
+        ramp_after.Ee,
+        ramp_after.Ei,
+    ):
         assert np.all(np.isfinite(values))
 
     print(
