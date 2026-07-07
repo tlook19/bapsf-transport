@@ -6,6 +6,8 @@ from cablp.solvers._sim1d.integrator import ssprk2_step
 from cablp.solvers._sim1d.neutrals import (
     neutral_exchange_coefficients,
     neutral_inventory_rate,
+    puff_rate,
+    pump_rate,
 )
 from cablp.solvers._sim1d.sources import velocity_divergence
 from cablp.solvers._sim1d.state import (
@@ -80,9 +82,11 @@ def main():
         "plasma_cfl",
         "front_density",
         "neutral_exchange",
+        "neutral_sources",
         "dt_max",
         "dt_min",
     }
+    assert np.isfinite(dt_default.dt_neutral_sources)
 
     rhs = sim.plasma_flux_rhs(include_front=False)
     for values in (rhs.n, rhs.nn, rhs.M, rhs.Ee, rhs.Ei):
@@ -103,6 +107,36 @@ def main():
         neutral_rhs.M,
         neutral_rhs.Ee,
         neutral_rhs.Ei,
+    ):
+        assert np.allclose(values, 0.0, atol=1e-20)
+    source_rhs = sim.neutral_source_sink_rhs()
+    assert source_rhs.nn[0] > 0.0
+    assert source_rhs.nn[-1] < 0.0
+    assert np.isclose(
+        source_rhs.nn[0],
+        puff_rate(params["S_gp"], params["gas_puff_valves"], geom.neutral_volume_cm3[0])
+        - pump_rate(params["S_pump_L"], geom.neutral_volume_cm3[0]) * state.nn[0],
+    )
+    assert np.isclose(
+        source_rhs.nn[-1],
+        -pump_rate(params["S_pump_R"], geom.neutral_volume_cm3[-1]) * state.nn[-1],
+    )
+    assert np.allclose(source_rhs.n, 0.0)
+    assert np.allclose(source_rhs.M, 0.0)
+    assert np.allclose(source_rhs.Ee, 0.0)
+    assert np.allclose(source_rhs.Ei, 0.0)
+
+    disabled_params = dict(params)
+    disabled_params["gas_puff_enabled"] = False
+    disabled_params["pump_enabled"] = False
+    disabled_sim = LAPDSim1D(disabled_params, flags)
+    disabled_source = disabled_sim.neutral_source_sink_rhs()
+    for values in (
+        disabled_source.n,
+        disabled_source.nn,
+        disabled_source.M,
+        disabled_source.Ee,
+        disabled_source.Ei,
     ):
         assert np.allclose(values, 0.0, atol=1e-20)
 
@@ -196,8 +230,12 @@ def main():
     fast_dt = sim.suggest_timestep(y=pack_state(fast_state))
     assert fast_dt.dt_plasma_cfl < dt_default.dt_plasma_cfl
 
-    y_before = snapshot.y.copy()
-    stationary_after = sim.advance_one_step(1e-10)
+    no_source_params = dict(params)
+    no_source_params["gas_puff_enabled"] = False
+    no_source_params["pump_enabled"] = False
+    no_source_sim = LAPDSim1D(no_source_params, flags)
+    y_before = no_source_sim.get_initial_snapshot().y.copy()
+    stationary_after = no_source_sim.advance_one_step(1e-10)
     assert np.allclose(stationary_after.y, y_before, rtol=0.0, atol=1e-20)
 
     ramp_y0 = pack_state(ramp_state)
