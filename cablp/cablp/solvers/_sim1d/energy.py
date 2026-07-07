@@ -1,7 +1,7 @@
 import numpy as np
 
 from cablp.funcs._fits import IAEA_exp1, IAEA_exp4, IAEA_exp6
-from cablp.funcs._heat import Q_ie
+from cablp.funcs._heat import Q_cx_He, Q_ie
 from cablp.funcs._plasmaparams import c_log
 from cablp.vars._coeff import aHII, aHI, aHeI, aHeII
 from cablp.vars._cons import ev_to_erg
@@ -130,6 +130,48 @@ def _ion_inelastic_cooling_eV(Te, n, gas_type, recomb=False):
     if gas_type == "H":
         return IAEA_exp6(Te, aHII) * n * n
     raise ValueError(f"unsupported gas_type {gas_type!r}; expected 'He' or 'H'")
+
+
+def ion_charge_exchange_rhs(
+    state,
+    floors,
+    ion_mass_g,
+    gas_type,
+    Tn_fit=0.1,
+    b_Qcx=1.0,
+    cx=True,
+):
+    """Return conservative ion charge-exchange energy sources."""
+    zeros = np.zeros_like(state.n, dtype=float)
+    if not cx or b_Qcx == 0.0:
+        return ConservativeState1D(
+            n=zeros,
+            nn=zeros.copy(),
+            M=zeros.copy(),
+            Ee=zeros.copy(),
+            Ei=zeros.copy(),
+        )
+
+    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
+    q_cx = (
+        float(b_Qcx)
+        * Q_cx_He(
+            state.n,
+            state.nn,
+            derived.Ti,
+            float(Tn_fit),
+            gas_type=gas_type,
+            per_particle=False,
+        )
+        * ev_to_erg
+    )
+    return ConservativeState1D(
+        n=zeros,
+        nn=zeros.copy(),
+        M=zeros.copy(),
+        Ee=zeros.copy(),
+        Ei=-q_cx,
+    )
 
 
 def _neutral_inelastic_cooling_eV(Te, n, nn, gas_type):

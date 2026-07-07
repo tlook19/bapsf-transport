@@ -9,7 +9,11 @@ from .config import (
     load_config,
     resolve_nn0,
 )
-from .energy import electron_cooling_rhs, electron_ion_exchange_rhs
+from .energy import (
+    electron_cooling_rhs,
+    electron_ion_exchange_rhs,
+    ion_charge_exchange_rhs,
+)
 from .geometry import build_geometry
 from .flux import plasma_flux_rhs
 from .integrator import (
@@ -124,6 +128,7 @@ class LAPDSim1D:
         pressure_rhs = self.pressure_work_rhs(state=state)
         energy_rhs = self.energy_exchange_rhs(state=state)
         cooling_rhs = self.electron_cooling_rhs(state=state)
+        cx_rhs = self.ion_charge_exchange_rhs(state=state)
         neutral_rhs = self.neutral_exchange_rhs(state=state)
         source_rhs = self.neutral_source_sink_rhs(state=state)
         reaction_rhs_state = self.reaction_rhs(state=state)
@@ -132,6 +137,7 @@ class LAPDSim1D:
             pressure_rhs,
             energy_rhs,
             cooling_rhs,
+            cx_rhs,
             neutral_rhs,
             source_rhs,
             reaction_rhs_state,
@@ -176,6 +182,7 @@ class LAPDSim1D:
             reaction_kwargs=self._reaction_kwargs(),
             energy_exchange_kwargs=self._energy_exchange_kwargs(),
             electron_cooling_kwargs=self._electron_cooling_kwargs(),
+            ion_charge_exchange_kwargs=self._ion_charge_exchange_kwargs(),
             cfl=float(self._input_dict.get("cfl", 0.4)),
             density_dt_fraction=float(
                 self._input_dict.get("density_dt_fraction", 0.25)
@@ -239,6 +246,17 @@ class LAPDSim1D:
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
             **self._electron_cooling_kwargs(),
+        )
+
+    def ion_charge_exchange_rhs(self, y=None, state=None):
+        """Return conservative ion charge-exchange cooling sources."""
+        if state is None:
+            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        return ion_charge_exchange_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            **self._ion_charge_exchange_kwargs(),
         )
 
     def neutral_exchange_rhs(self, y=None, state=None):
@@ -322,6 +340,14 @@ class LAPDSim1D:
             "icool": bool(self._flags.get("icool", True)),
             "ncool": bool(self._flags.get("ncool", True)),
             "icool_recomb": bool(self._flags.get("icool_recomb", False)),
+        }
+
+    def _ion_charge_exchange_kwargs(self):
+        return {
+            "gas_type": self._gas_type,
+            "Tn_fit": float(self._input_dict.get("Tn_fit", 0.1)),
+            "b_Qcx": float(self._input_dict.get("b_Qcx", 1.0)),
+            "cx": bool(self._flags.get("cx", True)),
         }
 
     def _reaction_kwargs(self):

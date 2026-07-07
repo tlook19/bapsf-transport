@@ -46,6 +46,7 @@ input_dict_template_1d = {
     "b_Qie": 1.0,
     "b_Qei": 1.0,
     "b_Qen": 1.0,
+    "b_Qcx": 1.0,
     "b_ionization_energy_cost": 1.0,
     "b_pressure_work_elec": 1.0,
     "b_pressure_work_ions": 1.0,
@@ -72,6 +73,7 @@ input_flags_template_1d = {
     "ionization_energy_cost": True,
     "icool": True,
     "ncool": True,
+    "cx": True,
     "icool_recomb": False,
     "debug_checks": False,
 }
