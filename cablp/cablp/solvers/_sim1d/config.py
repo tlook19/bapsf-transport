@@ -37,7 +37,10 @@ input_dict_template_1d = {
     "D_amb": 0.0,
     "b_pressure_work_elec": 1.0,
     "b_pressure_work_ions": 1.0,
+    "Tn_K": 300.0,
+    "neutral_exchange_model": "molecular_flow",
     "neutral_exchange_coeff_cm3_s": 1.0e5,
+    "neutral_clausing_scale": 1.0,
 }
 
 

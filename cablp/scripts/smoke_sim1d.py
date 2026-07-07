@@ -3,7 +3,10 @@ import numpy as np
 from cablp.solvers._sim1d import LAPDSim1D, default_config
 from cablp.solvers._sim1d.flux import front_filling_fluxes
 from cablp.solvers._sim1d.integrator import ssprk2_step
-from cablp.solvers._sim1d.neutrals import neutral_inventory_rate
+from cablp.solvers._sim1d.neutrals import (
+    neutral_exchange_coefficients,
+    neutral_inventory_rate,
+)
 from cablp.solvers._sim1d.sources import velocity_divergence
 from cablp.solvers._sim1d.state import (
     conservative_from_primitives,
@@ -50,6 +53,23 @@ def main():
         derived.p,
     ):
         assert np.all(np.isfinite(values))
+
+    neutral_coeff = sim.neutral_exchange_coefficients()
+    assert neutral_coeff.shape == (geom.cells - 1,)
+    assert np.all(np.isfinite(neutral_coeff))
+    assert np.all(neutral_coeff >= 0.0)
+    assert np.any(neutral_coeff > 0.0)
+
+    constant_coeff = neutral_exchange_coefficients(
+        geometry=geom,
+        model="constant",
+        constant_coeff_cm3_s=params["neutral_exchange_coeff_cm3_s"],
+        Tn_K=params["Tn_K"],
+        mu_neutral=4,
+        clausing_scale=params["neutral_clausing_scale"],
+    )
+    assert constant_coeff.shape == (geom.cells - 1,)
+    assert np.allclose(constant_coeff, params["neutral_exchange_coeff_cm3_s"])
 
     rhs = sim.plasma_flux_rhs(include_front=False)
     for values in (rhs.n, rhs.nn, rhs.M, rhs.Ee, rhs.Ei):
@@ -106,7 +126,11 @@ def main():
     nn_ramp_rhs = sim.neutral_exchange_rhs(state=nn_ramp_state)
     assert nn_ramp_rhs.nn[0] < 0.0
     assert nn_ramp_rhs.nn[-1] > 0.0
-    assert np.isclose(neutral_inventory_rate(nn_ramp_rhs, geom), 0.0, atol=1e-6)
+    inventory_terms = nn_ramp_rhs.nn * geom.neutral_volume_cm3
+    inventory_tol = 1e-12 * np.sum(np.abs(inventory_terms))
+    assert np.isclose(
+        neutral_inventory_rate(nn_ramp_rhs, geom), 0.0, atol=inventory_tol
+    )
     assert np.allclose(nn_ramp_rhs.n, 0.0)
     assert np.allclose(nn_ramp_rhs.M, 0.0)
     assert np.allclose(nn_ramp_rhs.Ee, 0.0)
