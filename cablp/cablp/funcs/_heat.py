@@ -13,7 +13,14 @@ from ._plasmaparams import (
 )
 
 
-def kappa_par_elec(Te, ne, lnlambda, rk=True):
+def _resolve_per_particle(per_particle, rk):
+    """Resolve the legacy ``rk`` keyword to the explicit unit-mode flag."""
+    if rk is not None:
+        return rk
+    return per_particle
+
+
+def kappa_par_elec(Te, ne, lnlambda, per_particle=True, *, rk=None):
     """
     Electron parallel thermal conductivity (Braginskii) [eV·cm²/s or eV·cm⁻¹/s].
 
@@ -27,7 +34,7 @@ def kappa_par_elec(Te, ne, lnlambda, rk=True):
         Electron density [cm⁻³].
     lnlambda : float or array
         Coulomb logarithm.
-    rk : bool
+    per_particle : bool
         If True return the per-particle conductivity [eV·cm²/s].
         If False return the volumetric conductivity kappa * ne [eV·cm⁻¹/s].
 
@@ -36,14 +43,15 @@ def kappa_par_elec(Te, ne, lnlambda, rk=True):
     float or array
         Parallel electron thermal conductivity.
     """
+    per_particle = _resolve_per_particle(per_particle, rk)
     k = 3.16 * time_elec_coll(Te, ne, lnlambda) * v_thm_e(Te) ** 2
-    if rk:
+    if per_particle:
         return k
     else:
         return k * ne
 
 
-def kappa_par_ion(Ti, ni, mu, lnlambda, rk=True):
+def kappa_par_ion(Ti, ni, mu, lnlambda, per_particle=True, *, rk=None):
     """
     Ion parallel thermal conductivity (Braginskii) [eV·cm²/s or eV·cm⁻¹/s].
 
@@ -59,7 +67,7 @@ def kappa_par_ion(Ti, ni, mu, lnlambda, rk=True):
         Ion mass number (m_ion / m_proton).
     lnlambda : float or array
         Coulomb logarithm.
-    rk : bool
+    per_particle : bool
         If True return per-particle [eV·cm²/s]; if False return volumetric [eV·cm⁻¹/s].
 
     Returns
@@ -67,14 +75,15 @@ def kappa_par_ion(Ti, ni, mu, lnlambda, rk=True):
     float or array
         Parallel ion thermal conductivity.
     """
+    per_particle = _resolve_per_particle(per_particle, rk)
     k = 3.9 * time_ion_coll(Ti, ni, mu, lnlambda) * v_ion_speed(Ti, mu) ** 2
-    if rk:
+    if per_particle:
         return k
     else:
         return k * ni
 
 
-def elec_par_heat_loss(Te, ne, L_p, L_hf, lnlambda, rk=True):
+def elec_par_heat_loss(Te, ne, L_p, L_hf, lnlambda, per_particle=True, *, rk=None):
     """
     Electron parallel heat loss rate per unit volume [eV/s] or [eV·cm⁻³/s].
 
@@ -92,18 +101,19 @@ def elec_par_heat_loss(Te, ne, L_p, L_hf, lnlambda, rk=True):
         Heat-flux scale length [cm].
     lnlambda : float or array
         Coulomb logarithm.
-    rk : bool
+    per_particle : bool
         Passed through to kappa_par_elec.
 
     Returns
     -------
     float or array
-        Electron parallel heat loss [eV/s (rk=True) or eV·cm⁻³/s (rk=False)].
+        Electron parallel heat loss [eV/s (per_particle=True) or eV·cm⁻³/s (per_particle=False)].
     """
-    return kappa_par_elec(Te, ne, lnlambda, rk) * Te / L_p / L_hf
+    per_particle = _resolve_per_particle(per_particle, rk)
+    return kappa_par_elec(Te, ne, lnlambda, per_particle=per_particle) * Te / L_p / L_hf
 
 
-def ion_par_heat_loss(Ti, ni, L_p, L_hf, mu, lnlambda, rk=True):
+def ion_par_heat_loss(Ti, ni, L_p, L_hf, mu, lnlambda, per_particle=True, *, rk=None):
     """
     Ion parallel heat loss rate per unit volume [eV/s] or [eV·cm⁻³/s].
 
@@ -123,7 +133,7 @@ def ion_par_heat_loss(Ti, ni, L_p, L_hf, mu, lnlambda, rk=True):
         Ion mass number.
     lnlambda : float or array
         Coulomb logarithm.
-    rk : bool
+    per_particle : bool
         Passed through to kappa_par_ion.
 
     Returns
@@ -131,7 +141,8 @@ def ion_par_heat_loss(Ti, ni, L_p, L_hf, mu, lnlambda, rk=True):
     float or array
         Ion parallel heat loss [eV/s or eV·cm⁻³/s].
     """
-    return kappa_par_ion(Ti, ni, mu, lnlambda, rk) * Ti / L_p / L_hf
+    per_particle = _resolve_per_particle(per_particle, rk)
+    return kappa_par_ion(Ti, ni, mu, lnlambda, per_particle=per_particle) * Ti / L_p / L_hf
 
 
 def elec_par_heat_div(Te, ne, L_plasma, lnlambda):
@@ -172,7 +183,7 @@ def elec_par_heat_face_flux(Te, ne, L_plasma, lnlambda):
     Positive values carry heat from cell i to cell i+1; negative values carry
     heat from cell i+1 to cell i.
     """
-    kappa = kappa_par_elec(Te, ne, lnlambda, rk=True)
+    kappa = kappa_par_elec(Te, ne, lnlambda, per_particle=True)
     kappa_face = (kappa[:-1] + kappa[1:]) / 2
     d_face = (L_plasma[:-1] + L_plasma[1:]) / 2
     return -kappa_face * (Te[1:] - Te[:-1]) / d_face
@@ -214,13 +225,13 @@ def ion_par_heat_face_flux(Ti, ni, L_plasma, mu, lnlambda):
     Positive values carry heat from cell i to cell i+1; negative values carry
     heat from cell i+1 to cell i.
     """
-    kappa = kappa_par_ion(Ti, ni, mu, lnlambda, rk=True)
+    kappa = kappa_par_ion(Ti, ni, mu, lnlambda, per_particle=True)
     kappa_face = (kappa[:-1] + kappa[1:]) / 2
     d_face = (L_plasma[:-1] + L_plasma[1:]) / 2
     return -kappa_face * (Ti[1:] - Ti[:-1]) / d_face
 
 
-def kappa_perp_elec(Te, ne, B, lnlambda, rk=True):
+def kappa_perp_elec(Te, ne, B, lnlambda, per_particle=True, *, rk=None):
     """
     Electron perpendicular thermal conductivity (classical) [eV·cm²/s or eV·cm⁻¹/s].
 
@@ -236,7 +247,7 @@ def kappa_perp_elec(Te, ne, B, lnlambda, rk=True):
         Magnetic field [Gauss].
     lnlambda : float or array
         Coulomb logarithm.
-    rk : bool
+    per_particle : bool
         If True return per-particle; if False return volumetric (× ne).
 
     Returns
@@ -244,19 +255,20 @@ def kappa_perp_elec(Te, ne, B, lnlambda, rk=True):
     float or array
         Perpendicular electron thermal conductivity.
     """
+    per_particle = _resolve_per_particle(per_particle, rk)
     k = (
         4.7
         * v_thm_e(Te) ** 2
         / elec_gyro_freq(B) ** 2
         / time_elec_coll(Te, ne, lnlambda)
     )
-    if rk:
+    if per_particle:
         return k
     else:
         return k * ne
 
 
-def kappa_perp_ion(Ti, ni, B, mu, lnlambda, rk=True):
+def kappa_perp_ion(Ti, ni, B, mu, lnlambda, per_particle=True, *, rk=None):
     """
     Ion perpendicular thermal conductivity (classical) [eV·cm²/s or eV·cm⁻¹/s].
 
@@ -274,7 +286,7 @@ def kappa_perp_ion(Ti, ni, B, mu, lnlambda, rk=True):
         Ion mass number.
     lnlambda : float or array
         Coulomb logarithm.
-    rk : bool
+    per_particle : bool
         If True return per-particle; if False return volumetric (× ni).
 
     Returns
@@ -282,19 +294,20 @@ def kappa_perp_ion(Ti, ni, B, mu, lnlambda, rk=True):
     float or array
         Perpendicular ion thermal conductivity.
     """
+    per_particle = _resolve_per_particle(per_particle, rk)
     k = (
         2
         * v_ion_speed(Ti, mu) ** 2
         / ion_gyro_freq(B, mu) ** 2
         / time_ion_coll(Ti, ni, mu, lnlambda)
     )
-    if rk:
+    if per_particle:
         return k
     else:
         return k * ni
 
 
-def elec_perp_heat_loss(Te, ne, R_p, R_hf, B, lnlambda, rk=True):
+def elec_perp_heat_loss(Te, ne, R_p, R_hf, B, lnlambda, per_particle=True, *, rk=None):
     """
     Electron perpendicular heat loss rate [eV/s or eV·cm⁻³/s].
 
@@ -314,7 +327,7 @@ def elec_perp_heat_loss(Te, ne, R_p, R_hf, B, lnlambda, rk=True):
         Magnetic field [Gauss].
     lnlambda : float or array
         Coulomb logarithm.
-    rk : bool
+    per_particle : bool
         Passed through to kappa_perp_elec.
 
     Returns
@@ -322,10 +335,11 @@ def elec_perp_heat_loss(Te, ne, R_p, R_hf, B, lnlambda, rk=True):
     float or array
         Electron perpendicular heat loss.
     """
-    return kappa_perp_elec(Te, ne, B, lnlambda, rk) * Te / R_p / R_hf
+    per_particle = _resolve_per_particle(per_particle, rk)
+    return kappa_perp_elec(Te, ne, B, lnlambda, per_particle=per_particle) * Te / R_p / R_hf
 
 
-def ion_perp_heat_loss(Ti, ni, R_p, R_hf, B, mu, lnlambda, rk=True):
+def ion_perp_heat_loss(Ti, ni, R_p, R_hf, B, mu, lnlambda, per_particle=True, *, rk=None):
     """
     Ion perpendicular heat loss rate [eV/s or eV·cm⁻³/s].
 
@@ -347,7 +361,7 @@ def ion_perp_heat_loss(Ti, ni, R_p, R_hf, B, mu, lnlambda, rk=True):
         Ion mass number.
     lnlambda : float or array
         Coulomb logarithm.
-    rk : bool
+    per_particle : bool
         Passed through to kappa_perp_ion.
 
     Returns
@@ -355,10 +369,11 @@ def ion_perp_heat_loss(Ti, ni, R_p, R_hf, B, mu, lnlambda, rk=True):
     float or array
         Ion perpendicular heat loss.
     """
-    return kappa_perp_ion(Ti, ni, B, mu, lnlambda, rk) * Ti / R_p / R_hf
+    per_particle = _resolve_per_particle(per_particle, rk)
+    return kappa_perp_ion(Ti, ni, B, mu, lnlambda, per_particle=per_particle) * Ti / R_p / R_hf
 
 
-def Q_ie(Te, Ti, ne, mu, lnlambda, rk=True):
+def Q_ie(Te, Ti, ne, mu, lnlambda, per_particle=True, *, rk=None):
     """
     Electron-ion energy exchange rate (Braginskii) [eV/s or eV·cm⁻³/s].
 
@@ -378,7 +393,7 @@ def Q_ie(Te, Ti, ne, mu, lnlambda, rk=True):
         Ion mass number.
     lnlambda : float or array
         Coulomb logarithm.
-    rk : bool
+    per_particle : bool
         If True return per-particle [eV/s]; if False return volumetric (× ne).
 
     Returns
@@ -386,14 +401,15 @@ def Q_ie(Te, Ti, ne, mu, lnlambda, rk=True):
     float or array
         Electron-to-ion energy transfer rate.
     """
+    per_particle = _resolve_per_particle(per_particle, rk)
     Q = 3 * (Te - Ti) / time_elec_coll(Te, ne, lnlambda) / H_e_mass_ratio / mu
-    if rk:
+    if per_particle:
         return Q
     else:
         return Q * ne
 
 
-def Q_ei_in(ne, Te, rk=True):
+def Q_ei_in(ne, Te, per_particle=True, *, rk=None):
     """
     Electron cooling rate due to inelastic collisions with He II ions [eV/s or eV·cm⁻³/s].
 
@@ -405,7 +421,7 @@ def Q_ei_in(ne, Te, rk=True):
         Electron density [cm⁻³].
     Te : float or array
         Electron temperature [eV].
-    rk : bool
+    per_particle : bool
         If True return Q*ne [eV/s]; if False return Q*ne² [eV·cm⁻³/s].
 
     Returns
@@ -413,14 +429,15 @@ def Q_ei_in(ne, Te, rk=True):
     float or array
         Electron cooling rate from He II inelastic collisions.
     """
+    per_particle = _resolve_per_particle(per_particle, rk)
     Q = IAEA_exp4(Te, aHeII) * ne
-    if rk:
+    if per_particle:
         return Q
     else:
         return Q * ne
 
 
-def Q_en(ne, nn, Te, rk=True):
+def Q_en(ne, nn, Te, per_particle=True, *, rk=None):
     """
     Electron cooling rate due to inelastic collisions with He I neutrals [eV/s or eV·cm⁻³/s].
 
@@ -434,7 +451,7 @@ def Q_en(ne, nn, Te, rk=True):
         Neutral density [cm⁻³].
     Te : float or array
         Electron temperature [eV].
-    rk : bool
+    per_particle : bool
         If True return Q*nn [eV/s]; if False return Q*nn*ne [eV·cm⁻³/s].
 
     Returns
@@ -442,14 +459,15 @@ def Q_en(ne, nn, Te, rk=True):
     float or array
         Electron cooling rate from He I neutral collisions.
     """
+    per_particle = _resolve_per_particle(per_particle, rk)
     Q = IAEA_exp1(Te, aHeI) * nn
-    if rk:
+    if per_particle:
         return Q
     else:
         return Q * ne
 
 
-def Q_cx_He(ne, nn, Ti, Tn, gas_type="He", rk=True):
+def Q_cx_He(ne, nn, Ti, Tn, gas_type="He", per_particle=True, *, rk=None):
     """
     Ion cooling rate due to charge exchange with neutrals [eV/s or eV·cm⁻³/s].
 
@@ -467,7 +485,7 @@ def Q_cx_He(ne, nn, Ti, Tn, gas_type="He", rk=True):
         Neutral temperature [eV].
     gas_type : str
         Gas species; "He" or "H".
-    rk : bool
+    per_particle : bool
         If True return per-ion rate [eV/s]; if False return volumetric (× ne).
 
     Returns
@@ -475,8 +493,9 @@ def Q_cx_He(ne, nn, Ti, Tn, gas_type="He", rk=True):
     float or array
         Ion charge-exchange cooling rate.
     """
+    per_particle = _resolve_per_particle(per_particle, rk)
     Q = nn * charge_ex_react(Ti, gas_type) * (Ti - Tn)
-    if rk:
+    if per_particle:
         return Q
     else:
         return Q * ne
