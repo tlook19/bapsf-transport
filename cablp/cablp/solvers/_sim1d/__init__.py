@@ -29,6 +29,8 @@ from .neutrals import (
 from .reactions import reaction_rhs
 from .sources import add_state_rhs, pressure_work_rhs, surface_neutralization_rhs
 from .state import (
+    STATE_NAMES_1D,
+    ConservativeState1D,
     apply_state_floors,
     assert_finite_state,
     conservative_from_primitives,
@@ -130,34 +132,32 @@ class LAPDSim1D:
 
     def rhs(self, y=None, include_heat_conduction=True):
         """Return the packed explicit RHS for the current scaffold physics."""
-        state = self.state if y is None else unpack_state(y, self._geometry.cells)
-        flux_rhs = self.plasma_flux_rhs(y=pack_state(state))
-        pressure_rhs = self.pressure_work_rhs(state=state)
-        energy_rhs = self.energy_exchange_rhs(state=state)
-        cooling_rhs = self.electron_cooling_rhs(state=state)
-        cx_rhs = self.ion_charge_exchange_rhs(state=state)
-        surface_rhs = self.surface_neutralization_rhs(state=state)
-        neutral_rhs = self.neutral_exchange_rhs(state=state)
-        source_rhs = self.neutral_source_sink_rhs(state=state)
-        reaction_rhs_state = self.reaction_rhs(state=state)
-        state_rhs = flux_rhs
-        for term in (
-            pressure_rhs,
-            energy_rhs,
-            cooling_rhs,
-            cx_rhs,
-            surface_rhs,
-            neutral_rhs,
-            source_rhs,
-            reaction_rhs_state,
-        ):
+        state_rhs = self._zero_rhs_state()
+        for term in self.rhs_terms(
+            y=y,
+            include_heat_conduction=include_heat_conduction,
+        ).values():
             state_rhs = add_state_rhs(state_rhs, term)
-        if include_heat_conduction:
-            state_rhs = add_state_rhs(
-                state_rhs,
-                self.heat_conduction_rhs(state=state),
-            )
         return pack_state(state_rhs)
+
+    def rhs_terms(self, y=None, include_heat_conduction=True):
+        """Return named conservative RHS contributions for diagnostics."""
+        state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        terms = {
+            "plasma_flux": self.plasma_flux_rhs(y=pack_state(state)),
+            "pressure_work": self.pressure_work_rhs(state=state),
+            "ei_exchange": self.energy_exchange_rhs(state=state),
+            "electron_cooling": self.electron_cooling_rhs(state=state),
+            "ion_charge_exchange": self.ion_charge_exchange_rhs(state=state),
+            "surface_loss": self.surface_neutralization_rhs(state=state),
+            "neutral_exchange": self.neutral_exchange_rhs(state=state),
+            "neutral_sources": self.neutral_source_sink_rhs(state=state),
+            "reactions": self.reaction_rhs(state=state),
+            "heat_conduction": self._zero_rhs_state(),
+        }
+        if include_heat_conduction:
+            terms["heat_conduction"] = self.heat_conduction_rhs(state=state)
+        return terms
 
     def floor_state_vector(self, y):
         """Apply configured density and temperature floors to a packed vector."""
@@ -546,6 +546,7 @@ class LAPDSim1D:
         state = self.state
         derived = self.derived
         assert_finite_state(state, derived)
+        rhs_terms = self.rhs_terms(include_heat_conduction=True)
         return {
             "time": float(time),
             "n": state.n.copy(),
@@ -560,6 +561,13 @@ class LAPDSim1D:
             "pi": derived.pi.copy(),
             "p": derived.p.copy(),
             "y": pack_state(state),
+            "rhs_terms": {
+                term_name: {
+                    field_name: getattr(term_rhs, field_name).copy()
+                    for field_name in STATE_NAMES_1D
+                }
+                for term_name, term_rhs in rhs_terms.items()
+            },
         }
 
     def _trajectory_result(self, saved, diagnostics, steps):
@@ -574,6 +582,26 @@ class LAPDSim1D:
             if not saved:
                 return np.empty((0, len(self._y)), dtype=float)
             return np.stack([snapshot["y"] for snapshot in saved])
+
+        rhs_terms = self._stack_trajectory_rhs_terms(saved=saved, cells=cells)
+        total_rhs = {
+            field_name: sum(
+                (
+                    term_fields[field_name]
+                    for term_fields in rhs_terms.values()
+                ),
+                np.zeros((len(saved), cells), dtype=float),
+            )
+            for field_name in STATE_NAMES_1D
+        }
+        electron_energy_terms_W_cm3 = {
+            term_name: term_fields["Ee"] * 1.0e-7
+            for term_name, term_fields in rhs_terms.items()
+        }
+        ion_energy_terms_W_cm3 = {
+            term_name: term_fields["Ei"] * 1.0e-7
+            for term_name, term_fields in rhs_terms.items()
+        }
 
         return SimpleNamespace(
             time=np.asarray([snapshot["time"] for snapshot in saved], dtype=float),
@@ -598,9 +626,40 @@ class LAPDSim1D:
             plasma_volume_cm3=self._geometry.plasma_volume_cm3.copy(),
             neutral_volume_cm3=self._geometry.neutral_volume_cm3.copy(),
             volume_ratio=self._geometry.volume_ratio.copy(),
+            rhs_terms=rhs_terms,
+            total_rhs=total_rhs,
+            electron_energy_terms_W_cm3=electron_energy_terms_W_cm3,
+            ion_energy_terms_W_cm3=ion_energy_terms_W_cm3,
             diagnostics=list(diagnostics),
             steps=int(steps),
             final_time=float(self._time),
+        )
+
+    def _stack_trajectory_rhs_terms(self, saved, cells):
+        if not saved:
+            return {}
+        term_names = saved[0]["rhs_terms"].keys()
+        return {
+            term_name: {
+                field_name: np.stack(
+                    [
+                        snapshot["rhs_terms"][term_name][field_name]
+                        for snapshot in saved
+                    ]
+                )
+                for field_name in STATE_NAMES_1D
+            }
+            for term_name in term_names
+        }
+
+    def _zero_rhs_state(self):
+        zeros = np.zeros(self._geometry.cells, dtype=float)
+        return ConservativeState1D(
+            n=zeros,
+            nn=zeros.copy(),
+            M=zeros.copy(),
+            Ee=zeros.copy(),
+            Ei=zeros.copy(),
         )
 
     def _set_state_vector(self, y):
