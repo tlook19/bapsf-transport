@@ -2,7 +2,12 @@ import argparse
 from collections import Counter
 from pathlib import Path
 
-from cablp.solvers._sim1d import LAPDSim1D, default_config, load_config
+from cablp.solvers._sim1d import (
+    LAPDSim1D,
+    default_config,
+    load_config,
+    summarize_result,
+)
 
 
 def main(argv=None):
@@ -21,6 +26,7 @@ def main(argv=None):
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     sim.save_result(output, result, params=params, flags=flags)
+    summary = summarize_result(result)
 
     constraints = Counter(diag.active_constraint for diag in result.diagnostics)
     constraints_text = ", ".join(
@@ -35,6 +41,16 @@ def main(argv=None):
         f"saves={len(result.time)}, "
         f"constraints={constraints_text}, "
         f"output={output}"
+    )
+    print(
+        "sim1d health: "
+        f"finite={summary.finite}, "
+        f"n=[{summary.n_min:.6e}, {summary.n_max:.6e}] cm^-3, "
+        f"Te=[{summary.Te_min:.6e}, {summary.Te_max:.6e}] eV, "
+        f"Ti=[{summary.Ti_min:.6e}, {summary.Ti_max:.6e}] eV, "
+        "particle_drift="
+        f"{summary.total_particle_inventory_relative_drift:.6e}, "
+        f"thermal_drift={summary.thermal_energy_relative_drift:.6e}"
     )
     return 0
 

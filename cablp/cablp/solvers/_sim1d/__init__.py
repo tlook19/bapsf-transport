@@ -49,6 +49,13 @@ def load_result_hdf5(path):
     return _load_result_hdf5(path)
 
 
+def summarize_result(result):
+    """Return lightweight health diagnostics for a sim1d run result."""
+    from .health import summarize_result as _summarize_result
+
+    return _summarize_result(result)
+
+
 class LAPDSim1D:
     """Conservative axial 1D LAPD solver scaffold.
 
@@ -296,6 +303,11 @@ class LAPDSim1D:
     def load_result(path):
         """Load a saved sim1d HDF5 result."""
         return load_result_hdf5(path)
+
+    @staticmethod
+    def summarize_result(result):
+        """Return lightweight health diagnostics for a sim1d run result."""
+        return summarize_result(result)
 
     def suggest_timestep(self, y=None, include_heat_conduction=None):
         """Return an explicit timestep suggestion and diagnostics."""
