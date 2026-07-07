@@ -1,6 +1,9 @@
 import numpy as np
 
+from cablp.funcs._heat import elec_par_heat_div, ion_par_heat_div
+from cablp.funcs._plasmaparams import c_log
 from cablp.solvers._sim1d import LAPDSim1D, default_config
+from cablp.solvers._sim1d.conduction import heat_conduction_rhs
 from cablp.solvers._sim1d.energy import (
     electron_cooling_rhs,
     electron_ion_exchange_rhs,
@@ -25,6 +28,7 @@ from cablp.solvers._sim1d.state import (
     pack_state,
     unpack_state,
 )
+from cablp.vars._cons import en_factor, ev_to_erg
 
 
 def main():
@@ -96,6 +100,7 @@ def main():
         "energy_exchange",
         "electron_cooling",
         "ion_charge_exchange",
+        "heat_conduction",
         "dt_max",
         "dt_min",
     }
@@ -104,6 +109,7 @@ def main():
     assert dt_default.dt_energy_exchange > 0.0
     assert dt_default.dt_electron_cooling > 0.0
     assert dt_default.dt_ion_charge_exchange > 0.0
+    assert dt_default.dt_heat_conduction > 0.0
 
     rhs = sim.plasma_flux_rhs(include_front=False)
     for values in (rhs.n, rhs.nn, rhs.M, rhs.Ee, rhs.Ei):
@@ -419,6 +425,78 @@ def main():
         cx=True,
     )
     assert np.allclose(disabled_cx.Ei, 0.0)
+
+    heat_state = conservative_from_primitives(
+        n=np.full(geom.cells, 1.0e12),
+        nn=state.nn,
+        u=np.zeros(geom.cells),
+        Te=np.linspace(2.0, 1.0, geom.cells),
+        Ti=np.linspace(1.5, 0.5, geom.cells),
+        ion_mass_g=sim.ion_mass_g,
+    )
+    heat_rhs = sim.heat_conduction_rhs(state=heat_state)
+    for values in (heat_rhs.n, heat_rhs.nn, heat_rhs.M):
+        assert np.allclose(values, 0.0)
+    assert np.all(np.isfinite(heat_rhs.Ee))
+    assert np.all(np.isfinite(heat_rhs.Ei))
+    assert heat_rhs.Ee[0] < 0.0
+    assert heat_rhs.Ee[-1] > 0.0
+    assert heat_rhs.Ei[0] < 0.0
+    assert heat_rhs.Ei[-1] > 0.0
+    heat_energy_tol = 1e-12 * np.sum(
+        np.abs(heat_rhs.Ee * geom.plasma_volume_cm3)
+    )
+    assert np.isclose(
+        np.sum(heat_rhs.Ee * geom.plasma_volume_cm3),
+        0.0,
+        atol=heat_energy_tol,
+    )
+    heat_ion_energy_tol = 1e-12 * np.sum(
+        np.abs(heat_rhs.Ei * geom.plasma_volume_cm3)
+    )
+    assert np.isclose(
+        np.sum(heat_rhs.Ei * geom.plasma_volume_cm3),
+        0.0,
+        atol=heat_ion_energy_tol,
+    )
+    heat_dt = sim.suggest_timestep(y=pack_state(heat_state))
+    assert np.isfinite(heat_dt.dt_heat_conduction)
+    heat_derived = derive_state(heat_state, sim.floors, sim.ion_mass_g)
+    heat_ln_lambda = np.maximum(
+        c_log(heat_derived.Te, heat_state.n, kind="ei"),
+        params["ln_lambda_min"],
+    )
+    dTe_dt = heat_rhs.Ee / (1.5 * heat_state.n * ev_to_erg)
+    dTi_dt = heat_rhs.Ei / (1.5 * heat_state.n * ev_to_erg)
+    legacy_dTe_dt = en_factor * elec_par_heat_div(
+        heat_derived.Te,
+        heat_state.n,
+        geom.length_cm,
+        heat_ln_lambda,
+    )
+    legacy_dTi_dt = en_factor * ion_par_heat_div(
+        heat_derived.Ti,
+        heat_state.n,
+        geom.length_cm,
+        sim.mu,
+        heat_ln_lambda,
+    )
+    assert np.allclose(dTe_dt, legacy_dTe_dt)
+    assert np.allclose(dTi_dt, legacy_dTi_dt)
+
+    disabled_heat = heat_conduction_rhs(
+        state=heat_state,
+        floors=sim.floors,
+        ion_mass_g=sim.ion_mass_g,
+        mu=sim.mu,
+        geometry=geom,
+        b_epara=0.0,
+        b_ipara=0.0,
+        heat_conduction=True,
+        ln_lambda_min=params["ln_lambda_min"],
+    )
+    assert np.allclose(disabled_heat.Ee, 0.0)
+    assert np.allclose(disabled_heat.Ei, 0.0)
 
     fast_state = conservative_from_primitives(
         n=np.full(geom.cells, params["ne0"]),

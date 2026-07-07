@@ -9,6 +9,7 @@ from .config import (
     load_config,
     resolve_nn0,
 )
+from .conduction import heat_conduction_rhs
 from .energy import (
     electron_cooling_rhs,
     electron_ion_exchange_rhs,
@@ -129,6 +130,7 @@ class LAPDSim1D:
         energy_rhs = self.energy_exchange_rhs(state=state)
         cooling_rhs = self.electron_cooling_rhs(state=state)
         cx_rhs = self.ion_charge_exchange_rhs(state=state)
+        conduction_rhs = self.heat_conduction_rhs(state=state)
         neutral_rhs = self.neutral_exchange_rhs(state=state)
         source_rhs = self.neutral_source_sink_rhs(state=state)
         reaction_rhs_state = self.reaction_rhs(state=state)
@@ -138,6 +140,7 @@ class LAPDSim1D:
             energy_rhs,
             cooling_rhs,
             cx_rhs,
+            conduction_rhs,
             neutral_rhs,
             source_rhs,
             reaction_rhs_state,
@@ -183,6 +186,7 @@ class LAPDSim1D:
             energy_exchange_kwargs=self._energy_exchange_kwargs(),
             electron_cooling_kwargs=self._electron_cooling_kwargs(),
             ion_charge_exchange_kwargs=self._ion_charge_exchange_kwargs(),
+            heat_conduction_kwargs=self._heat_conduction_kwargs(),
             cfl=float(self._input_dict.get("cfl", 0.4)),
             density_dt_fraction=float(
                 self._input_dict.get("density_dt_fraction", 0.25)
@@ -190,6 +194,7 @@ class LAPDSim1D:
             neutral_dt_fraction=float(
                 self._input_dict.get("neutral_dt_fraction", 0.25)
             ),
+            heat_dt_fraction=float(self._input_dict.get("heat_dt_fraction", 0.25)),
             dt_min=float(self._input_dict.get("dt_min", 1e-12)),
             dt_max=float(self._input_dict.get("dt_max", 1e-6)),
             include_front=self._flags.get("front_flux", True),
@@ -257,6 +262,19 @@ class LAPDSim1D:
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
             **self._ion_charge_exchange_kwargs(),
+        )
+
+    def heat_conduction_rhs(self, y=None, state=None):
+        """Return conservative axial heat-conduction energy sources."""
+        if state is None:
+            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        return heat_conduction_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            mu=self._mu,
+            geometry=self._geometry,
+            **self._heat_conduction_kwargs(),
         )
 
     def neutral_exchange_rhs(self, y=None, state=None):
@@ -348,6 +366,14 @@ class LAPDSim1D:
             "Tn_fit": float(self._input_dict.get("Tn_fit", 0.1)),
             "b_Qcx": float(self._input_dict.get("b_Qcx", 1.0)),
             "cx": bool(self._flags.get("cx", True)),
+        }
+
+    def _heat_conduction_kwargs(self):
+        return {
+            "b_epara": float(self._input_dict.get("b_epara", 1.0)),
+            "b_ipara": float(self._input_dict.get("b_ipara", 1.0)),
+            "heat_conduction": bool(self._flags.get("heat_conduction", True)),
+            "ln_lambda_min": float(self._input_dict.get("ln_lambda_min", 1.0)),
         }
 
     def _reaction_kwargs(self):

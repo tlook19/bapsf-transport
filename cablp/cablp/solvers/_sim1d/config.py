@@ -47,6 +47,8 @@ input_dict_template_1d = {
     "b_Qei": 1.0,
     "b_Qen": 1.0,
     "b_Qcx": 1.0,
+    "b_epara": 1.0,
+    "b_ipara": 1.0,
     "b_ionization_energy_cost": 1.0,
     "b_pressure_work_elec": 1.0,
     "b_pressure_work_ions": 1.0,
@@ -60,6 +62,7 @@ input_dict_template_1d = {
     "cfl": 0.4,
     "density_dt_fraction": 0.25,
     "neutral_dt_fraction": 0.25,
+    "heat_dt_fraction": 0.25,
     "dt_min": 1e-12,
     "dt_max": 1e-6,
 }
