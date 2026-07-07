@@ -7,7 +7,7 @@ from cablp.vars._coeff import aHII, aHI, aHeI, aHeII
 from cablp.vars._cons import ev_to_erg
 
 from .reactions import reaction_rates
-from .state import ConservativeState1D, derive_state
+from ..core.state import ConservativeState1D, derive_state
 
 
 def electron_ion_exchange_rhs(

@@ -6,7 +6,7 @@ from cablp.funcs._cross import He_ion_rate_lkup, alpha_3, alpha_r
 from cablp.funcs._fits import rate_coeff
 from cablp.vars._cons import ev_to_erg
 
-from .state import ConservativeState1D, derive_state
+from ..core.state import ConservativeState1D, derive_state
 
 
 H_ION_COEFF = (1e-5, 6.0)
