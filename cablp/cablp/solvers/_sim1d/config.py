@@ -72,6 +72,7 @@ input_flags_template_1d = {
     "Plasma": True,
     "TwinCathode": False,
     "heat_conduction": True,
+    "implicit_heat_conduction": False,
     "front_flux": True,
     "ionization_energy_cost": True,
     "icool": True,

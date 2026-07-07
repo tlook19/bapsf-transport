@@ -557,6 +557,33 @@ def main():
     assert np.allclose(disabled_implicit.Ee, heat_state.Ee)
     assert np.allclose(disabled_implicit.Ei, heat_state.Ei)
 
+    nonheat_rhs = sim.rhs(pack_state(heat_state), include_heat_conduction=False)
+    full_rhs = sim.rhs(pack_state(heat_state), include_heat_conduction=True)
+    heat_rhs_y = pack_state(heat_rhs)
+    assert np.allclose(full_rhs - nonheat_rhs, heat_rhs_y)
+
+    split_dt = min(1.0e-10, 0.1 * heat_dt.dt_heat_conduction)
+    manual_explicit_y = ssprk2_step(
+        y0=pack_state(heat_state),
+        dt=split_dt,
+        rhs_func=lambda yy: sim.rhs(yy, include_heat_conduction=False),
+        floor_func=sim.floor_state_vector,
+    )
+    manual_heat_state = sim.implicit_heat_conduction_step(
+        dt=split_dt,
+        y=manual_explicit_y,
+    )
+    manual_split_y = sim.floor_state_vector(pack_state(manual_heat_state))
+    split_y = sim.operator_split_step(y=pack_state(heat_state), dt=split_dt)
+    assert np.allclose(split_y, manual_split_y)
+
+    no_heat_bound_dt = sim.suggest_timestep(
+        y=pack_state(heat_state),
+        include_heat_conduction=False,
+    )
+    assert np.isinf(no_heat_bound_dt.dt_heat_conduction)
+    assert no_heat_bound_dt.active_constraint != "heat_conduction"
+
     fast_state = conservative_from_primitives(
         n=np.full(geom.cells, params["ne0"]),
         nn=state.nn,
@@ -582,6 +609,13 @@ def main():
     y_before = no_source_sim.get_initial_snapshot().y.copy()
     stationary_after = no_source_sim.advance_one_step(1e-10)
     assert np.allclose(stationary_after.y, y_before, rtol=0.0, atol=1e-20)
+
+    split_flags = dict(flags)
+    split_flags["implicit_heat_conduction"] = True
+    no_source_split_sim = LAPDSim1D(no_source_params, split_flags)
+    split_before = no_source_split_sim.get_initial_snapshot().y.copy()
+    split_stationary_after = no_source_split_sim.advance_one_step(1e-10)
+    assert np.allclose(split_stationary_after.y, split_before, rtol=0.0, atol=1e-20)
 
     ramp_y0 = pack_state(ramp_state)
     ramp_y1 = ssprk2_step(
