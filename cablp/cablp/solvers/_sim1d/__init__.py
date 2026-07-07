@@ -26,6 +26,7 @@ from .core.state import (
 )
 from .core.timestep import suggest_timestep
 from .physics.conduction import heat_conduction_rhs, implicit_heat_conduction_step
+from .physics.cathode import cathode_boundary_state, cathode_source_terms
 from .physics.energy import (
     electron_cooling_rhs,
     electron_ion_exchange_rhs,
@@ -454,6 +455,32 @@ class LAPDSim1D:
             mu=self._mu,
             geometry=self._geometry,
             **self._heat_conduction_kwargs(),
+        )
+
+    def cathode_boundary_state(self, y=None, state=None):
+        """Return source/end primitive state for future cathode coupling."""
+        if state is None:
+            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        return cathode_boundary_state(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            geometry=self._geometry,
+            input_dict=self._input_dict,
+            input_flags=self._flags,
+        )
+
+    def cathode_source_terms(self, y=None, state=None):
+        """Return disabled cathode conservative source placeholders."""
+        if state is None:
+            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        return cathode_source_terms(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            geometry=self._geometry,
+            input_dict=self._input_dict,
+            input_flags=self._flags,
         )
 
     def implicit_heat_conduction_step(self, dt, y=None, state=None):
