@@ -51,6 +51,44 @@ def reaction_rhs(
     Ti_birth_ionization="floor",
 ):
     """Return conservative source terms for local bulk plasma reactions."""
+    terms = reaction_rhs_terms(
+        state=state,
+        floors=floors,
+        ion_mass_g=ion_mass_g,
+        geometry=geometry,
+        gas_type=gas_type,
+        I_ion=I_ion,
+        b_ioniz=b_ioniz,
+        b_rec_rad=b_rec_rad,
+        b_rec_3b=b_rec_3b,
+        Te_birth_ionization=Te_birth_ionization,
+        Ti_birth_ionization=Ti_birth_ionization,
+    )
+    ionization = terms["ionization_birth"]
+    recombination = terms["recombination_loss"]
+    return ConservativeState1D(
+        n=ionization.n + recombination.n,
+        nn=ionization.nn + recombination.nn,
+        M=ionization.M + recombination.M,
+        Ee=ionization.Ee + recombination.Ee,
+        Ei=ionization.Ei + recombination.Ei,
+    )
+
+
+def reaction_rhs_terms(
+    state,
+    floors,
+    ion_mass_g,
+    geometry,
+    gas_type,
+    I_ion,
+    b_ioniz=1.0,
+    b_rec_rad=1.0,
+    b_rec_3b=1.0,
+    Te_birth_ionization="local",
+    Ti_birth_ionization="floor",
+):
+    """Return ionization and recombination conservative source terms."""
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     S_ion, S_rec_rad, S_rec_3b = reaction_rates(
         state=state,
@@ -68,12 +106,25 @@ def reaction_rhs(
     Te_birth = _birth_temperature(Te_birth_ionization, derived.Te, floors["Te"])
     Ti_birth = _birth_temperature(Ti_birth_ionization, derived.Ti, floors["Ti"])
 
-    dn = S_ion - S_rec
-    dnn = -S_ion * volume_ratio + S_rec * volume_ratio
-    dM = -ion_mass_g * derived.u * S_rec
-    dEe = 1.5 * ev_to_erg * (Te_birth * S_ion - derived.Te * S_rec)
-    dEi = 1.5 * ev_to_erg * (Ti_birth * S_ion - derived.Ti * S_rec)
-    return ConservativeState1D(n=dn, nn=dnn, M=dM, Ee=dEe, Ei=dEi)
+    zeros = np.zeros_like(state.n, dtype=float)
+    ionization = ConservativeState1D(
+        n=S_ion,
+        nn=-S_ion * volume_ratio,
+        M=zeros,
+        Ee=1.5 * ev_to_erg * Te_birth * S_ion,
+        Ei=1.5 * ev_to_erg * Ti_birth * S_ion,
+    )
+    recombination = ConservativeState1D(
+        n=-S_rec,
+        nn=S_rec * volume_ratio,
+        M=-ion_mass_g * derived.u * S_rec,
+        Ee=-1.5 * ev_to_erg * derived.Te * S_rec,
+        Ei=-1.5 * ev_to_erg * derived.Ti * S_rec,
+    )
+    return {
+        "ionization_birth": ionization,
+        "recombination_loss": recombination,
+    }
 
 
 def particle_inventory_rate(rhs, geometry):

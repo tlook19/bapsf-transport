@@ -16,7 +16,7 @@ from .energy import (
     ion_charge_exchange_rhs,
 )
 from .geometry import build_geometry
-from .flux import plasma_flux_rhs
+from .flux import plasma_flux_rhs, plasma_flux_rhs_terms
 from .integrator import (
     floor_state_vector,
     ssprk2_step,
@@ -26,7 +26,7 @@ from .neutrals import (
     neutral_exchange_rhs,
     neutral_source_sink_rhs,
 )
-from .reactions import reaction_rhs
+from .reactions import reaction_rhs, reaction_rhs_terms
 from .sources import add_state_rhs, pressure_work_rhs, surface_neutralization_rhs
 from .state import (
     STATE_NAMES_1D,
@@ -143,8 +143,11 @@ class LAPDSim1D:
     def rhs_terms(self, y=None, include_heat_conduction=True):
         """Return named conservative RHS contributions for diagnostics."""
         state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        plasma_terms = self.plasma_flux_rhs_terms(state=state)
+        reaction_terms = self.reaction_rhs_terms(state=state)
         terms = {
-            "plasma_flux": self.plasma_flux_rhs(y=pack_state(state)),
+            "plasma_advective_flux": plasma_terms["plasma_advective_flux"],
+            "plasma_front_flux": plasma_terms["plasma_front_flux"],
             "pressure_work": self.pressure_work_rhs(state=state),
             "ei_exchange": self.energy_exchange_rhs(state=state),
             "electron_cooling": self.electron_cooling_rhs(state=state),
@@ -152,7 +155,8 @@ class LAPDSim1D:
             "surface_loss": self.surface_neutralization_rhs(state=state),
             "neutral_exchange": self.neutral_exchange_rhs(state=state),
             "neutral_sources": self.neutral_source_sink_rhs(state=state),
-            "reactions": self.reaction_rhs(state=state),
+            "ionization_birth": reaction_terms["ionization_birth"],
+            "recombination_loss": reaction_terms["recombination_loss"],
             "heat_conduction": self._zero_rhs_state(),
         }
         if include_heat_conduction:
@@ -322,6 +326,23 @@ class LAPDSim1D:
             alpha_front=float(self._input_dict.get("alpha_front", 1.0)),
         )
 
+    def plasma_flux_rhs_terms(self, y=None, state=None, include_front=None):
+        """Return split conservative plasma face-flux RHS terms."""
+        if state is None:
+            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        use_front = self._flags.get("front_flux", True)
+        if include_front is not None:
+            use_front = include_front
+        return plasma_flux_rhs_terms(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            mu=self._mu,
+            geometry=self._geometry,
+            include_front=use_front,
+            alpha_front=float(self._input_dict.get("alpha_front", 1.0)),
+        )
+
     def pressure_work_rhs(self, y=None, state=None):
         """Return conservative pressure-work energy sources."""
         if state is None:
@@ -447,6 +468,18 @@ class LAPDSim1D:
         if state is None:
             state = self.state if y is None else unpack_state(y, self._geometry.cells)
         return reaction_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            geometry=self._geometry,
+            **self._reaction_kwargs(),
+        )
+
+    def reaction_rhs_terms(self, y=None, state=None):
+        """Return split ionization and recombination conservative sources."""
+        if state is None:
+            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        return reaction_rhs_terms(
             state=state,
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
