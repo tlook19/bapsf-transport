@@ -122,7 +122,7 @@ class LAPDSim1D:
             y=pack_state(state),
         )
 
-    def rhs(self, y=None):
+    def rhs(self, y=None, include_heat_conduction=True):
         """Return the packed explicit RHS for the current scaffold physics."""
         state = self.state if y is None else unpack_state(y, self._geometry.cells)
         flux_rhs = self.plasma_flux_rhs(y=pack_state(state))
@@ -130,7 +130,6 @@ class LAPDSim1D:
         energy_rhs = self.energy_exchange_rhs(state=state)
         cooling_rhs = self.electron_cooling_rhs(state=state)
         cx_rhs = self.ion_charge_exchange_rhs(state=state)
-        conduction_rhs = self.heat_conduction_rhs(state=state)
         neutral_rhs = self.neutral_exchange_rhs(state=state)
         source_rhs = self.neutral_source_sink_rhs(state=state)
         reaction_rhs_state = self.reaction_rhs(state=state)
@@ -140,12 +139,16 @@ class LAPDSim1D:
             energy_rhs,
             cooling_rhs,
             cx_rhs,
-            conduction_rhs,
             neutral_rhs,
             source_rhs,
             reaction_rhs_state,
         ):
             state_rhs = add_state_rhs(state_rhs, term)
+        if include_heat_conduction:
+            state_rhs = add_state_rhs(
+                state_rhs,
+                self.heat_conduction_rhs(state=state),
+            )
         return pack_state(state_rhs)
 
     def floor_state_vector(self, y):
@@ -157,8 +160,12 @@ class LAPDSim1D:
             ion_mass_g=self._ion_mass_g,
         )
 
-    def advance_one_step(self, dt=None):
-        """Advance the conservative state by one explicit SSPRK2 step."""
+    def advance_one_step(self, dt=None, operator_split=None):
+        """Advance the conservative state by one explicit or split step."""
+        if operator_split is None:
+            operator_split = self._flags.get("implicit_heat_conduction", False)
+        if operator_split:
+            return self.advance_one_step_operator_split(dt=dt)
         if dt is None:
             dt = self.suggest_timestep().dt
         self._set_state_vector(
@@ -171,9 +178,35 @@ class LAPDSim1D:
         )
         return self.get_initial_snapshot()
 
-    def suggest_timestep(self, y=None):
+    def operator_split_step(self, y=None, dt=None):
+        """Return one explicit-nonheat plus implicit-heat split step."""
+        y0 = self._y if y is None else np.asarray(y, dtype=float)
+        if dt is None:
+            dt = self.suggest_timestep(
+                y=y0,
+                include_heat_conduction=False,
+            ).dt
+        explicit_y = ssprk2_step(
+            y0=y0,
+            dt=dt,
+            rhs_func=lambda yy: self.rhs(yy, include_heat_conduction=False),
+            floor_func=self.floor_state_vector,
+        )
+        heat_state = self.implicit_heat_conduction_step(dt=dt, y=explicit_y)
+        return self.floor_state_vector(pack_state(heat_state))
+
+    def advance_one_step_operator_split(self, dt=None):
+        """Advance by explicit non-heat terms then implicit heat conduction."""
+        self._set_state_vector(self.operator_split_step(dt=dt))
+        return self.get_initial_snapshot()
+
+    def suggest_timestep(self, y=None, include_heat_conduction=None):
         """Return an explicit timestep suggestion and diagnostics."""
         state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        if include_heat_conduction is None:
+            include_heat_conduction = not self._flags.get(
+                "implicit_heat_conduction", False
+            )
         return suggest_timestep(
             state=state,
             floors=self._floors,
@@ -186,7 +219,9 @@ class LAPDSim1D:
             energy_exchange_kwargs=self._energy_exchange_kwargs(),
             electron_cooling_kwargs=self._electron_cooling_kwargs(),
             ion_charge_exchange_kwargs=self._ion_charge_exchange_kwargs(),
-            heat_conduction_kwargs=self._heat_conduction_kwargs(),
+            heat_conduction_kwargs=(
+                self._heat_conduction_kwargs() if include_heat_conduction else None
+            ),
             cfl=float(self._input_dict.get("cfl", 0.4)),
             density_dt_fraction=float(
                 self._input_dict.get("density_dt_fraction", 0.25)
