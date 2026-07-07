@@ -9,7 +9,7 @@ from .config import (
     load_config,
     resolve_nn0,
 )
-from .conduction import heat_conduction_rhs
+from .conduction import heat_conduction_rhs, implicit_heat_conduction_step
 from .energy import (
     electron_cooling_rhs,
     electron_ion_exchange_rhs,
@@ -274,6 +274,20 @@ class LAPDSim1D:
             ion_mass_g=self._ion_mass_g,
             mu=self._mu,
             geometry=self._geometry,
+            **self._heat_conduction_kwargs(),
+        )
+
+    def implicit_heat_conduction_step(self, dt, y=None, state=None):
+        """Return state after one frozen-conductivity implicit heat substep."""
+        if state is None:
+            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        return implicit_heat_conduction_step(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            mu=self._mu,
+            geometry=self._geometry,
+            dt=dt,
             **self._heat_conduction_kwargs(),
         )
 
