@@ -109,6 +109,31 @@ def plasma_flux_rhs(
     alpha_front=1.0,
 ):
     """Return finite-volume RHS from conservative plasma face fluxes."""
+    flux_terms = plasma_flux_rhs_terms(
+        state=state,
+        floors=floors,
+        ion_mass_g=ion_mass_g,
+        mu=mu,
+        geometry=geometry,
+        include_front=include_front,
+        alpha_front=alpha_front,
+    )
+    return _add_state_rhs(
+        flux_terms["plasma_advective_flux"],
+        flux_terms["plasma_front_flux"],
+    )
+
+
+def plasma_flux_rhs_terms(
+    state,
+    floors,
+    ion_mass_g,
+    mu,
+    geometry,
+    include_front=True,
+    alpha_front=1.0,
+):
+    """Return separately named conservative RHS terms from plasma face fluxes."""
     rusanov = rusanov_fluxes(
         state=state,
         floors=floors,
@@ -116,6 +141,7 @@ def plasma_flux_rhs(
         mu=mu,
         geometry=geometry,
     )
+    front = _zero_fluxes(geometry.cells)
     if include_front:
         front = front_filling_fluxes(
             state=state,
@@ -125,10 +151,13 @@ def plasma_flux_rhs(
             geometry=geometry,
             alpha_front=alpha_front,
         )
-        fluxes = _add_fluxes(rusanov, front)
-    else:
-        fluxes = rusanov
+    return {
+        "plasma_advective_flux": _flux_rhs(rusanov, geometry),
+        "plasma_front_flux": _flux_rhs(front, geometry),
+    }
 
+
+def _flux_rhs(fluxes, geometry):
     return ConservativeState1D(
         n=_flux_divergence(fluxes.n, geometry),
         nn=np.zeros(geometry.cells, dtype=float),
@@ -147,9 +176,20 @@ def _flux_divergence(face_flux, geometry):
     return -(inventory_flux[1:] - inventory_flux[:-1]) / geometry.plasma_volume_cm3
 
 
-def _add_fluxes(left, right):
+def _zero_fluxes(cells):
+    zeros = np.zeros(cells + 1, dtype=float)
     return PlasmaFaceFluxes1D(
+        n=zeros,
+        M=zeros.copy(),
+        Ee=zeros.copy(),
+        Ei=zeros.copy(),
+    )
+
+
+def _add_state_rhs(left, right):
+    return ConservativeState1D(
         n=left.n + right.n,
+        nn=left.nn + right.nn,
         M=left.M + right.M,
         Ee=left.Ee + right.Ee,
         Ei=left.Ei + right.Ei,

@@ -244,6 +244,19 @@ def main():
         0.0,
         atol=reaction_inventory_tol,
     )
+    reaction_terms = sim.reaction_rhs_terms()
+    assert set(reaction_terms) == {"ionization_birth", "recombination_loss"}
+    reaction_term_sum = np.zeros_like(pack_state(reaction_rhs))
+    for term in reaction_terms.values():
+        for field_name in STATE_NAMES_1D:
+            assert np.all(np.isfinite(getattr(term, field_name)))
+        assert np.isclose(
+            particle_inventory_rate(term, geom),
+            0.0,
+            atol=reaction_inventory_tol,
+        )
+        reaction_term_sum = reaction_term_sum + pack_state(term)
+    assert np.allclose(reaction_term_sum, pack_state(reaction_rhs))
     S_ion_off, _, _ = reaction_rates(
         state=state,
         floors=sim.floors,
@@ -293,6 +306,22 @@ def main():
     ramp_rhs = sim.plasma_flux_rhs(y=pack_state(ramp_state), include_front=True)
     for values in (ramp_rhs.n, ramp_rhs.nn, ramp_rhs.M, ramp_rhs.Ee, ramp_rhs.Ei):
         assert np.all(np.isfinite(values))
+    ramp_flux_terms = sim.plasma_flux_rhs_terms(
+        state=ramp_state,
+        include_front=True,
+    )
+    assert set(ramp_flux_terms) == {"plasma_advective_flux", "plasma_front_flux"}
+    ramp_flux_sum = np.zeros_like(pack_state(ramp_rhs))
+    for term in ramp_flux_terms.values():
+        for field_name in STATE_NAMES_1D:
+            assert np.all(np.isfinite(getattr(term, field_name)))
+        ramp_flux_sum = ramp_flux_sum + pack_state(term)
+    assert np.allclose(ramp_flux_sum, pack_state(ramp_rhs))
+    no_front_terms = sim.plasma_flux_rhs_terms(
+        state=ramp_state,
+        include_front=False,
+    )
+    assert np.allclose(pack_state(no_front_terms["plasma_front_flux"]), 0.0)
 
     nn_ramp_state = conservative_from_primitives(
         n=state.n,
@@ -622,7 +651,8 @@ def main():
     assert np.allclose(full_rhs - nonheat_rhs, heat_rhs_y)
     rhs_terms = sim.rhs_terms(pack_state(heat_state), include_heat_conduction=True)
     expected_rhs_terms = {
-        "plasma_flux",
+        "plasma_advective_flux",
+        "plasma_front_flux",
         "pressure_work",
         "ei_exchange",
         "electron_cooling",
@@ -630,7 +660,8 @@ def main():
         "surface_loss",
         "neutral_exchange",
         "neutral_sources",
-        "reactions",
+        "ionization_birth",
+        "recombination_loss",
         "heat_conduction",
     }
     assert set(rhs_terms) == expected_rhs_terms
