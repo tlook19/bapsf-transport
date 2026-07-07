@@ -1,6 +1,6 @@
 import numpy as np
 
-from cablp.solvers._sim1d_state import ConservativeState1D
+from .state import ConservativeState1D
 
 
 def neutral_exchange_face_rates(nn, geometry, exchange_coeff_cm3_s):

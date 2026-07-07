@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from cablp.funcs._plasmaparams import v_ion_speed
-from cablp.solvers._sim1d_state import ConservativeState1D, derive_state
+from .state import ConservativeState1D, derive_state
 
 
 @dataclass(frozen=True)

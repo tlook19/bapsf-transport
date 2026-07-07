@@ -1,11 +1,11 @@
 import numpy as np
 
 from cablp.solvers._sim1d import LAPDSim1D, default_config
-from cablp.solvers._sim1d_flux import front_filling_fluxes
-from cablp.solvers._sim1d_integrator import ssprk2_step
-from cablp.solvers._sim1d_neutrals import neutral_inventory_rate
-from cablp.solvers._sim1d_sources import velocity_divergence
-from cablp.solvers._sim1d_state import (
+from cablp.solvers._sim1d.flux import front_filling_fluxes
+from cablp.solvers._sim1d.integrator import ssprk2_step
+from cablp.solvers._sim1d.neutrals import neutral_inventory_rate
+from cablp.solvers._sim1d.sources import velocity_divergence
+from cablp.solvers._sim1d.state import (
     conservative_from_primitives,
     derive_state,
     pack_state,

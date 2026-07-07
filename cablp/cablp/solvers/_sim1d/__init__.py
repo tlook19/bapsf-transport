@@ -2,22 +2,22 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from cablp.solvers._sim1d_config import (
+from .config import (
     default_config,
     input_dict_template_1d,
     input_flags_template_1d,
     load_config,
     resolve_nn0,
 )
-from cablp.solvers._sim1d_geometry import build_geometry
-from cablp.solvers._sim1d_flux import plasma_flux_rhs
-from cablp.solvers._sim1d_integrator import (
+from .geometry import build_geometry
+from .flux import plasma_flux_rhs
+from .integrator import (
     floor_state_vector,
     ssprk2_step,
 )
-from cablp.solvers._sim1d_neutrals import neutral_exchange_rhs
-from cablp.solvers._sim1d_sources import add_state_rhs, pressure_work_rhs
-from cablp.solvers._sim1d_state import (
+from .neutrals import neutral_exchange_rhs
+from .sources import add_state_rhs, pressure_work_rhs
+from .state import (
     apply_state_floors,
     assert_finite_state,
     conservative_from_primitives,

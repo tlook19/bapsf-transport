@@ -1,6 +1,6 @@
 import numpy as np
 
-from cablp.solvers._sim1d_state import ConservativeState1D, pack_state, unpack_state
+from .state import ConservativeState1D, pack_state, unpack_state
 
 
 def add_scaled_state(state, rhs, scale):
@@ -35,7 +35,7 @@ def ssprk2_step(y0, dt, rhs_func, floor_func):
 
 def floor_state_vector(y, cells, floors, ion_mass_g):
     """Apply density and temperature floors to a packed conservative vector."""
-    from cablp.solvers._sim1d_state import apply_state_floors
+    from .state import apply_state_floors
 
     state = unpack_state(y, cells)
     floored = apply_state_floors(state, floors=floors, ion_mass_g=ion_mass_g)
