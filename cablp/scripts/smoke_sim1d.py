@@ -3,6 +3,7 @@ import numpy as np
 from cablp.solvers._sim1d import LAPDSim1D, default_config
 from cablp.solvers._sim1d_flux import front_filling_fluxes
 from cablp.solvers._sim1d_integrator import ssprk2_step
+from cablp.solvers._sim1d_neutrals import neutral_inventory_rate
 from cablp.solvers._sim1d_sources import velocity_divergence
 from cablp.solvers._sim1d_state import (
     conservative_from_primitives,
@@ -62,6 +63,15 @@ def main():
         pressure_rhs.Ei,
     ):
         assert np.allclose(values, 0.0, atol=1e-20)
+    neutral_rhs = sim.neutral_exchange_rhs()
+    for values in (
+        neutral_rhs.n,
+        neutral_rhs.nn,
+        neutral_rhs.M,
+        neutral_rhs.Ee,
+        neutral_rhs.Ei,
+    ):
+        assert np.allclose(values, 0.0, atol=1e-20)
 
     density_ramp = np.linspace(2.0, 1.0, geom.cells) * params["ne0"]
     ramp_state = conservative_from_primitives(
@@ -84,6 +94,23 @@ def main():
     ramp_rhs = sim.plasma_flux_rhs(y=pack_state(ramp_state), include_front=True)
     for values in (ramp_rhs.n, ramp_rhs.nn, ramp_rhs.M, ramp_rhs.Ee, ramp_rhs.Ei):
         assert np.all(np.isfinite(values))
+
+    nn_ramp_state = conservative_from_primitives(
+        n=state.n,
+        nn=np.linspace(2.0, 1.0, geom.cells) * state.nn[0],
+        u=np.zeros(geom.cells),
+        Te=np.full(geom.cells, params["Te0"]),
+        Ti=np.full(geom.cells, params["Ti0"]),
+        ion_mass_g=sim.ion_mass_g,
+    )
+    nn_ramp_rhs = sim.neutral_exchange_rhs(state=nn_ramp_state)
+    assert nn_ramp_rhs.nn[0] < 0.0
+    assert nn_ramp_rhs.nn[-1] > 0.0
+    assert np.isclose(neutral_inventory_rate(nn_ramp_rhs, geom), 0.0, atol=1e-6)
+    assert np.allclose(nn_ramp_rhs.n, 0.0)
+    assert np.allclose(nn_ramp_rhs.M, 0.0)
+    assert np.allclose(nn_ramp_rhs.Ee, 0.0)
+    assert np.allclose(nn_ramp_rhs.Ei, 0.0)
 
     expanding_state = conservative_from_primitives(
         n=np.full(geom.cells, params["ne0"]),
@@ -151,6 +178,17 @@ def main():
         ramp_after.Ei,
     ):
         assert np.all(np.isfinite(values))
+
+    nn_ramp_y0 = pack_state(nn_ramp_state)
+    nn_ramp_y1 = ssprk2_step(
+        y0=nn_ramp_y0,
+        dt=1e-10,
+        rhs_func=sim.rhs,
+        floor_func=sim.floor_state_vector,
+    )
+    nn_ramp_state_1 = unpack_state(sim.floor_state_vector(nn_ramp_y1), geom.cells)
+    assert np.all(np.isfinite(nn_ramp_state_1.nn))
+    assert np.all(nn_ramp_state_1.nn >= params["nn_floor"])
 
     print(
         "sim1d smoke ok: "
