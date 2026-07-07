@@ -27,7 +27,7 @@ from .neutrals import (
     neutral_source_sink_rhs,
 )
 from .reactions import reaction_rhs
-from .sources import add_state_rhs, pressure_work_rhs
+from .sources import add_state_rhs, pressure_work_rhs, surface_neutralization_rhs
 from .state import (
     apply_state_floors,
     assert_finite_state,
@@ -130,6 +130,7 @@ class LAPDSim1D:
         energy_rhs = self.energy_exchange_rhs(state=state)
         cooling_rhs = self.electron_cooling_rhs(state=state)
         cx_rhs = self.ion_charge_exchange_rhs(state=state)
+        surface_rhs = self.surface_neutralization_rhs(state=state)
         neutral_rhs = self.neutral_exchange_rhs(state=state)
         source_rhs = self.neutral_source_sink_rhs(state=state)
         reaction_rhs_state = self.reaction_rhs(state=state)
@@ -139,6 +140,7 @@ class LAPDSim1D:
             energy_rhs,
             cooling_rhs,
             cx_rhs,
+            surface_rhs,
             neutral_rhs,
             source_rhs,
             reaction_rhs_state,
@@ -222,6 +224,7 @@ class LAPDSim1D:
             heat_conduction_kwargs=(
                 self._heat_conduction_kwargs() if include_heat_conduction else None
             ),
+            surface_loss_kwargs=self._surface_loss_kwargs(),
             cfl=float(self._input_dict.get("cfl", 0.4)),
             density_dt_fraction=float(
                 self._input_dict.get("density_dt_fraction", 0.25)
@@ -263,6 +266,19 @@ class LAPDSim1D:
             geometry=self._geometry,
             electron_scale=float(self._input_dict.get("b_pressure_work_elec", 1.0)),
             ion_scale=float(self._input_dict.get("b_pressure_work_ions", 1.0)),
+        )
+
+    def surface_neutralization_rhs(self, y=None, state=None):
+        """Return conservative source/end surface neutralization terms."""
+        if state is None:
+            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        return surface_neutralization_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            mu=self._mu,
+            geometry=self._geometry,
+            **self._surface_loss_kwargs(),
         )
 
     def energy_exchange_rhs(self, y=None, state=None):
@@ -387,6 +403,25 @@ class LAPDSim1D:
         return {
             "b_Qie": float(self._input_dict.get("b_Qie", 1.0)),
             "ln_lambda_min": float(self._input_dict.get("ln_lambda_min", 1.0)),
+        }
+
+    def _surface_loss_kwargs(self):
+        return {
+            "alpha_isat": float(self._input_dict.get("alpha_isat", np.exp(-0.5))),
+            "source_surface_area_scale": float(
+                self._input_dict.get("source_surface_area_scale", 2.0)
+            ),
+            "end_surface_area_scale": float(
+                self._input_dict.get("end_surface_area_scale", 1.0)
+            ),
+            "source_surface_loss_enabled": bool(
+                self._flags.get("source_surface_loss", True)
+            ),
+            "end_surface_loss_enabled": bool(
+                self._flags.get("end_surface_loss", True)
+            ),
+            "end_mode": self._input_dict.get("end_mode", "collector"),
+            "b_surface_loss": float(self._input_dict.get("b_surface_loss", 1.0)),
         }
 
     def _electron_cooling_kwargs(self):
