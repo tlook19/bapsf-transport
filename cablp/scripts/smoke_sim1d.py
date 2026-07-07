@@ -184,6 +184,45 @@ def main():
     ):
         assert np.allclose(values, 0.0)
     assert np.allclose(pack_state(cathode_terms.rhs), 0.0)
+    disabled_cathode_solve = sim.solve_cathode_boundary()
+    assert not disabled_cathode_solve.boundary.enabled
+    assert disabled_cathode_solve.beam_result is None
+    assert disabled_cathode_solve.device_config is None
+    assert disabled_cathode_solve.metadata["enabled"] is False
+
+    cathode_flags = dict(flags)
+    cathode_flags["cathode_coupling"] = True
+    cathode_sim = LAPDSim1D(params, cathode_flags)
+    cathode_solve = cathode_sim.solve_cathode_boundary()
+    assert cathode_solve.boundary.enabled
+    assert cathode_solve.device_config is not None
+    assert cathode_solve.beam_result is not None
+    assert cathode_solve.metadata["enabled"] is True
+    assert cathode_solve.metadata["result_twin"] is None
+    assert cathode_solve.device_config.Twin == cathode_flags["TwinCathode"]
+    assert np.isclose(cathode_solve.device_config.R_cath, params["R_cath"])
+    assert np.isclose(
+        cathode_solve.device_config.A_c,
+        np.pi * params["R_cath"] ** 2,
+    )
+    assert np.isfinite(cathode_solve.x0_next)
+    assert cathode_solve.x0_twin_next is None
+    assert cathode_solve.beam_result.result.I_tot > 0.0
+    assert cathode_solve.beam_result.result.phi_c > params["Te0"]
+    assert cathode_solve.beam_result.v_beam.shape == (geom.cells,)
+    assert cathode_solve.beam_result.n_beam.shape == (geom.cells,)
+    assert cathode_solve.beam_result.beam_cross.shape == (geom.cells,)
+    assert np.all(np.isfinite(cathode_solve.beam_result.v_beam))
+    assert np.all(np.isfinite(cathode_solve.beam_result.n_beam))
+    assert np.all(np.isfinite(cathode_solve.beam_result.beam_cross))
+    assert cathode_solve.beam_result.v_beam[0] > 0.0
+    assert cathode_solve.beam_result.n_beam[0] > 0.0
+    assert cathode_solve.beam_result.beam_cross[0] > 0.0
+    cached_cathode_solve = cathode_sim.solve_cathode_boundary()
+    assert np.isclose(
+        cached_cathode_solve.metadata["result"]["I_tot"],
+        cathode_solve.metadata["result"]["I_tot"],
+    )
 
     rhs = sim.plasma_flux_rhs(include_front=False)
     for values in (rhs.n, rhs.nn, rhs.M, rhs.Ee, rhs.Ei):

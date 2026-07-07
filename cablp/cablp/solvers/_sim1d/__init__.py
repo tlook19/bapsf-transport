@@ -26,7 +26,11 @@ from .core.state import (
 )
 from .core.timestep import suggest_timestep
 from .physics.conduction import heat_conduction_rhs, implicit_heat_conduction_step
-from .physics.cathode import cathode_boundary_state, cathode_source_terms
+from .physics.cathode import (
+    cathode_boundary_state,
+    cathode_source_terms,
+    solve_cathode_boundary,
+)
 from .physics.energy import (
     electron_cooling_rhs,
     electron_ion_exchange_rhs,
@@ -97,6 +101,10 @@ class LAPDSim1D:
         self._y = pack_state(self._state)
         self._derived = derive_state(self._state, self._floors, self._ion_mass_g)
         self._time = 0.0
+        self._cathode_x0 = None
+        self._cathode_x0_twin = None
+        self._cathode_beam_cross = np.zeros(self._geometry.cells)
+        self._cathode_solve = None
         if self._flags.get("debug_checks", False):
             assert_finite_state(self._state, self._derived)
 
@@ -482,6 +490,39 @@ class LAPDSim1D:
             input_dict=self._input_dict,
             input_flags=self._flags,
         )
+
+    def solve_cathode_boundary(
+        self,
+        y=None,
+        state=None,
+        floating=False,
+        update_cache=True,
+    ):
+        """Run the opt-in cathode solver adapter without changing the RHS."""
+        if state is None:
+            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        result = solve_cathode_boundary(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            mu=self._mu,
+            geometry=self._geometry,
+            input_dict=self._input_dict,
+            input_flags=self._flags,
+            beam_cross_prev=self._cathode_beam_cross,
+            I_ion=self._I_ion,
+            gas_type=self._gas_type,
+            x0=self._cathode_x0,
+            x0_twin=self._cathode_x0_twin,
+            floating=floating,
+        )
+        if update_cache:
+            self._cathode_solve = result
+            self._cathode_x0 = result.x0_next
+            self._cathode_x0_twin = result.x0_twin_next
+            if result.beam_result is not None:
+                self._cathode_beam_cross = result.beam_result.beam_cross.copy()
+        return result
 
     def implicit_heat_conduction_step(self, dt, y=None, state=None):
         """Return state after one frozen-conductivity implicit heat substep."""
