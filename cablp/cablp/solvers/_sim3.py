@@ -984,7 +984,9 @@ class LAPDSim:
         self._div_v_elec = np.zeros(self._cells)
         self._div_v_ions = np.zeros(self._cells)
         self._Qie = (
-            self._b_Qie * en_factor * Q_ie(Te, Ti, ne, self._mu, self._ln_lambda)
+            self._b_Qie
+            * en_factor
+            * Q_ie(Te, Ti, ne, self._mu, self._ln_lambda, per_particle=True)
         )
         if self._flags["Velocity"]:
             self._v_face = (v_plasma[:-1] + v_plasma[1:]) / 2
@@ -1013,7 +1015,14 @@ class LAPDSim:
             self._Qcx = (
                 self._b_Qcx
                 * en_factor
-                * Q_cx_He(ne, nn, Ti, self._Tn_fit, gas_type=self._gas_type)
+                * Q_cx_He(
+                    ne,
+                    nn,
+                    Ti,
+                    self._Tn_fit,
+                    gas_type=self._gas_type,
+                    per_particle=True,
+                )
             )
         if self._discharge_on:
             cathode_results = {0: self._cathode_result}
@@ -1046,6 +1055,7 @@ class LAPDSim:
                 self._L_plasma,
                 self._L_heatflux,
                 self._ln_lambda,
+                per_particle=True,
             )
         )
         i_par_hl = (
@@ -1058,6 +1068,7 @@ class LAPDSim:
                 self._L_heatflux,
                 self._mu,
                 self._ln_lambda,
+                per_particle=True,
             )
         )
         e_par_flux = np.zeros(self._cells)

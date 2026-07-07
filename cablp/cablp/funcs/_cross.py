@@ -26,6 +26,8 @@ a215 = [
     -1.5943253e-4,
 ]
 
+A_HEII_11s = [5.857e-1, -4.457e-1, 7.680e-1, -2.521, 3.317, 0.0]
+
 # ── EII cross section lookup tables (loaded at import time) ──────────────────
 _VARS_DIR = Path(__file__).parent.parent / "vars"
 
@@ -115,7 +117,7 @@ def He_EII_cross_lkup(eps):
 def He_ion_rate_lkup(T):
     """Helium Maxwellian ionization rate coefficient [cm^3/s].
 
-    Interpolates ``he_ion_rate.csv`` in log-temperature/log-rate space. Values
+    Interpolates ``he_ion_rate.csv`` in log-temperature/log-rate space.  Values
     outside the tabulated 0.1--100 eV interval use the nearest endpoint.
 
     Parameters
@@ -242,7 +244,7 @@ def alpha_3(T):
 def integrate_kern(cross_sec_func, a, T, I):
     """Maxwellian-average a threshold cross section over electron energy.
 
-    The cross section receives ``eps = E / I``. A shifted integration variable
+    The cross section receives ``eps = E / I``.  A shifted integration variable
     ``z = (E - I) / T`` keeps the near-threshold peak resolved when ``T << I``.
     """
     temperatures = np.asarray(T, dtype=float)
