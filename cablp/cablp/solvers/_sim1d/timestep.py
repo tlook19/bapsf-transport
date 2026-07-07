@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from .flux import ion_sound_speed, plasma_flux_rhs
-from .neutrals import neutral_exchange_rhs
+from .neutrals import neutral_exchange_rhs, neutral_source_sink_rhs
 from .state import derive_state
 
 
@@ -13,6 +13,7 @@ class TimestepDiagnostics:
     dt_plasma_cfl: float
     dt_front_density: float
     dt_neutral_exchange: float
+    dt_neutral_sources: float
     dt_max: float
     active_constraint: str
 
@@ -24,6 +25,7 @@ def suggest_timestep(
     mu,
     geometry,
     neutral_exchange_coeff_cm3_s,
+    neutral_source_kwargs=None,
     cfl=0.4,
     density_dt_fraction=0.25,
     neutral_dt_fraction=0.25,
@@ -65,6 +67,12 @@ def suggest_timestep(
             neutral_exchange_coeff_cm3_s=neutral_exchange_coeff_cm3_s,
             neutral_dt_fraction=neutral_dt_fraction,
         ),
+        "neutral_sources": neutral_source_timestep(
+            state=state,
+            geometry=geometry,
+            neutral_source_kwargs=neutral_source_kwargs,
+            neutral_dt_fraction=neutral_dt_fraction,
+        ),
         "dt_max": float(dt_max),
     }
     active_constraint, raw_dt = min(dt_candidates.items(), key=lambda item: item[1])
@@ -76,6 +84,7 @@ def suggest_timestep(
         dt_plasma_cfl=float(dt_candidates["plasma_cfl"]),
         dt_front_density=float(dt_candidates["front_density"]),
         dt_neutral_exchange=float(dt_candidates["neutral_exchange"]),
+        dt_neutral_sources=float(dt_candidates["neutral_sources"]),
         dt_max=float(dt_max),
         active_constraint=active_constraint,
     )
@@ -150,6 +159,27 @@ def neutral_exchange_timestep(
         state=state,
         geometry=geometry,
         exchange_coeff_cm3_s=neutral_exchange_coeff_cm3_s,
+    )
+    return _fractional_timestep(state.nn, rhs.nn, neutral_dt_fraction, 0.0)
+
+
+def neutral_source_timestep(
+    state,
+    geometry,
+    neutral_source_kwargs=None,
+    neutral_dt_fraction=0.25,
+):
+    """Return a fractional neutral-density timestep for puff/pump terms."""
+    if neutral_source_kwargs is None:
+        return np.inf
+    if neutral_dt_fraction <= 0.0:
+        raise ValueError(
+            f"neutral_dt_fraction must be positive (got {neutral_dt_fraction})"
+        )
+    rhs = neutral_source_sink_rhs(
+        state=state,
+        geometry=geometry,
+        **neutral_source_kwargs,
     )
     return _fractional_timestep(state.nn, rhs.nn, neutral_dt_fraction, 0.0)
 

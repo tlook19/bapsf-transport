@@ -91,6 +91,53 @@ def neutral_exchange_rhs(state, geometry, exchange_coeff_cm3_s):
     )
 
 
+def neutral_source_sink_rhs(
+    state,
+    geometry,
+    S_gp,
+    Twin_S_gp,
+    S_pump_L,
+    S_pump_R,
+    twin_cathode=False,
+    gas_puff_enabled=True,
+    pump_enabled=True,
+    gas_puff_valves=2,
+):
+    """Return conservative RHS for neutral gas puff and pump terms."""
+    dnn = np.zeros(geometry.cells, dtype=float)
+    if gas_puff_enabled:
+        dnn[0] += puff_rate(S_gp, gas_puff_valves, geometry.neutral_volume_cm3[0])
+        if twin_cathode:
+            dnn[-1] += puff_rate(
+                Twin_S_gp, gas_puff_valves, geometry.neutral_volume_cm3[-1]
+            )
+    if pump_enabled:
+        dnn[0] -= pump_rate(S_pump_L, geometry.neutral_volume_cm3[0]) * state.nn[0]
+        dnn[-1] -= pump_rate(S_pump_R, geometry.neutral_volume_cm3[-1]) * state.nn[-1]
+    zeros = np.zeros(geometry.cells, dtype=float)
+    return ConservativeState1D(
+        n=zeros.copy(),
+        nn=dnn,
+        M=zeros.copy(),
+        Ee=zeros.copy(),
+        Ei=zeros.copy(),
+    )
+
+
+def puff_rate(sccm, valves, chamber_vol):
+    """Return gas puff source rate [cm^-3 s^-1] using _sim3 conversion."""
+    if chamber_vol <= 0.0:
+        raise ValueError(f"chamber_vol must be positive (got {chamber_vol})")
+    return 4.477962e17 * float(sccm) * float(valves) / float(chamber_vol)
+
+
+def pump_rate(lps, chamber_vol):
+    """Return pump sink rate coefficient [s^-1] using _sim3 conversion."""
+    if chamber_vol <= 0.0:
+        raise ValueError(f"chamber_vol must be positive (got {chamber_vol})")
+    return float(lps) * 1e3 / float(chamber_vol)
+
+
 def neutral_inventory_rate(rhs, geometry):
     """Return total neutral inventory rate [particles/s] from a neutral RHS."""
     return math.fsum((rhs.nn * geometry.neutral_volume_cm3).tolist())
