@@ -621,6 +621,15 @@ class LAPDSim1D:
         }
 
     def _surface_loss_kwargs(self):
+        cathode_coupled = bool(self._flags.get("cathode_coupling", False))
+        source_surface_loss_enabled = bool(
+            self._flags.get("source_surface_loss", True)
+        )
+        if cathode_coupled:
+            # The cathode solver returns the combined cathode/anode collection
+            # current used by _sim3.py. A future 1D source model will need the
+            # cathode solver to expose separate cathode and anode currents.
+            source_surface_loss_enabled = False
         return {
             "alpha_isat": float(self._input_dict.get("alpha_isat", np.exp(-0.5))),
             "source_surface_area_scale": float(
@@ -629,9 +638,7 @@ class LAPDSim1D:
             "end_surface_area_scale": float(
                 self._input_dict.get("end_surface_area_scale", 1.0)
             ),
-            "source_surface_loss_enabled": bool(
-                self._flags.get("source_surface_loss", True)
-            ),
+            "source_surface_loss_enabled": source_surface_loss_enabled,
             "end_surface_loss_enabled": bool(
                 self._flags.get("end_surface_loss", True)
             ),
