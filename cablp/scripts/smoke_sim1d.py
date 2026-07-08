@@ -1379,6 +1379,8 @@ def main():
     assert np.allclose(run_result.phase_events["time"], [0.0])
     assert list(run_result.phase_events["phase"]) == ["pre_breakdown"]
     assert list(run_result.phase_events["reason"]) == ["initial"]
+    assert np.allclose(run_result.current_trigger_samples["time"], [])
+    assert np.allclose(run_result.current_trigger_samples["I_tot"], [])
     assert run_result.y.shape == (4, run_before.size)
     assert run_result.n.shape == (4, geom.cells)
     assert len(run_result.diagnostics) == 3
@@ -1505,6 +1507,8 @@ def main():
             assert h5["phase_events/time"].shape == (1,)
             assert h5["phase_events/phase"].shape == (1,)
             assert h5["phase_events/reason"].shape == (1,)
+            assert h5["current_trigger_samples/time"].shape == (0,)
+            assert h5["current_trigger_samples/I_tot"].shape == (0,)
             assert h5["cathode_diagnostics/solve_enabled"].shape == (4,)
             assert h5["cathode_diagnostics/floating"].shape == (4,)
             assert all(
@@ -1548,6 +1552,8 @@ def main():
             assert np.allclose(loaded.phase_events["time"], [0.0])
             assert list(loaded.phase_events["phase"]) == ["pre_breakdown"]
             assert list(loaded.phase_events["reason"]) == ["initial"]
+            assert np.allclose(loaded.current_trigger_samples["time"], [])
+            assert np.allclose(loaded.current_trigger_samples["I_tot"], [])
             assert loaded.params["dt_save"] == run_params["dt_save"]
             assert loaded.flags["front_flux"] == flags["front_flux"]
             assert np.allclose(loaded.time, run_result.time)
@@ -2142,6 +2148,14 @@ def main():
         current_phase_result.phase_events["time"],
         [0.0, 1.0e-10, 2.0e-10, 4.0e-10, 5.0e-10],
     )
+    assert np.allclose(
+        current_phase_result.current_trigger_samples["time"],
+        [1.0e-10, 2.0e-10],
+    )
+    assert np.allclose(
+        current_phase_result.current_trigger_samples["I_tot"],
+        current_phase_result.cathode_diagnostics["source_I_tot"][1:3],
+    )
     assert list(current_phase_result.phase_events["phase"]) == [
         "pre_breakdown",
         "breakdown",
@@ -2203,6 +2217,8 @@ def main():
             assert np.isclose(h5.attrs["t_prebreakdown_trigger"], 1.0e-10)
             assert np.isclose(h5.attrs["t_breakdown_trigger"], 2.0e-10)
             assert h5["phase_events/time"].shape == (5,)
+            assert h5["current_trigger_samples/time"].shape == (2,)
+            assert h5["current_trigger_samples/I_tot"].shape == (2,)
         loaded_current_phase = load_result_hdf5(current_phase_output)
         assert np.isclose(loaded_current_phase.t_prebreakdown_trigger, 1.0e-10)
         assert np.isclose(loaded_current_phase.t_breakdown_trigger, 2.0e-10)
@@ -2217,6 +2233,14 @@ def main():
         assert np.all(
             loaded_current_phase.phase_events["reason"]
             == current_phase_result.phase_events["reason"]
+        )
+        assert np.allclose(
+            loaded_current_phase.current_trigger_samples["time"],
+            current_phase_result.current_trigger_samples["time"],
+        )
+        assert np.allclose(
+            loaded_current_phase.current_trigger_samples["I_tot"],
+            current_phase_result.current_trigger_samples["I_tot"],
         )
 
     direct_current_phase_params = dict(current_phase_params)
