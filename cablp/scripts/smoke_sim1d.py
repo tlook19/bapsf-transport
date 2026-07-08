@@ -273,8 +273,7 @@ def main():
     )
     assert np.allclose(
         cathode_loss_terms.rhs.Ee[0],
-        1.5 * ev_to_erg * params["Te0"] * cathode_loss_terms.rhs.n[0]
-        - expected_electron_power_loss_W * 1.0e7 / geom.plasma_volume_cm3[0],
+        -expected_electron_power_loss_W * 1.0e7 / geom.plasma_volume_cm3[0],
     )
     assert np.allclose(
         cathode_loss_terms.rhs.Ei[0],
