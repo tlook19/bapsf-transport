@@ -2313,6 +2313,13 @@ def main():
         assert np.allclose(exc.phase_events["time"], [0.0])
         assert list(exc.phase_events["phase"]) == ["pre_breakdown"]
         assert list(exc.phase_events["reason"]) == ["initial"]
+        assert np.allclose(
+            exc.current_trigger_samples["time"],
+            [1.0e-10, 2.0e-10, 3.0e-10, 4.0e-10, 5.0e-10],
+        )
+        assert exc.current_trigger_samples["I_tot"].shape == (5,)
+        assert np.all(np.isfinite(exc.current_trigger_samples["I_tot"]))
+        assert exc.current_trigger_samples["I_tot"][-1] == exc.I_tot
     else:
         raise AssertionError("expected current-triggered run to fail breakdown")
 
@@ -2341,6 +2348,13 @@ def main():
             "initial",
             "I_prebreakdown",
         ]
+        assert np.allclose(
+            exc.current_trigger_samples["time"],
+            [1.0e-10, 2.0e-10, 3.0e-10, 4.0e-10, 5.0e-10],
+        )
+        assert exc.current_trigger_samples["I_tot"].shape == (5,)
+        assert np.all(np.isfinite(exc.current_trigger_samples["I_tot"]))
+        assert exc.current_trigger_samples["I_tot"][-1] == exc.I_tot
     else:
         raise AssertionError("expected current-triggered breakdown phase to fail")
 

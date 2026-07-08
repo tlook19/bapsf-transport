@@ -100,6 +100,7 @@ class BreakdownError(RuntimeError):
         threshold_name=None,
         tau_prebreakdown=None,
         phase_events=None,
+        current_trigger_samples=None,
     ):
         super().__init__(message)
         self.phase = phase
@@ -109,6 +110,7 @@ class BreakdownError(RuntimeError):
         self.threshold_name = threshold_name
         self.tau_prebreakdown = tau_prebreakdown
         self.phase_events = phase_events
+        self.current_trigger_samples = current_trigger_samples
         self.details = {
             "phase": phase,
             "time": time,
@@ -1128,6 +1130,9 @@ class LAPDSim1D:
                         run_start=self._run_start_for_phase_events,
                         final_time=float(self._time),
                     ),
+                    current_trigger_samples=_current_trigger_sample_arrays(
+                        self._current_trigger_samples + [(self._time, I_now)]
+                    ),
                 )
             self._record_current_trigger_sample(I_now)
             return
@@ -1153,6 +1158,9 @@ class LAPDSim1D:
                 phase_events=self._phase_events(
                     run_start=self._run_start_for_phase_events,
                     final_time=float(self._time),
+                ),
+                current_trigger_samples=_current_trigger_sample_arrays(
+                    self._current_trigger_samples + [(self._time, I_now)]
                 ),
             )
         self._record_current_trigger_sample(I_now)
