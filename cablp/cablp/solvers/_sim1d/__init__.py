@@ -180,6 +180,7 @@ class LAPDSim1D:
             "electron_cooling": self.electron_cooling_rhs(state=state),
             "ion_charge_exchange": self.ion_charge_exchange_rhs(state=state),
             "surface_loss": self.surface_neutralization_rhs(state=state),
+            "cathode_surface_loss": self.cathode_source_terms(state=state).rhs,
             "neutral_exchange": self.neutral_exchange_rhs(state=state),
             "neutral_sources": self.neutral_source_sink_rhs(state=state),
             "ionization_birth": reaction_terms["ionization_birth"],
