@@ -385,6 +385,107 @@ def main():
         cathode_term_sum = cathode_term_sum + pack_state(term)
     assert np.allclose(cathode_term_sum, cathode_nonheat_rhs)
 
+    twin_cathode_flags = dict(cathode_flags)
+    twin_cathode_flags["TwinCathode"] = True
+    twin_cathode_sim = LAPDSim1D(params, twin_cathode_flags)
+    twin_cathode_solve = twin_cathode_sim.solve_cathode_boundary()
+    assert twin_cathode_solve.boundary.twin_cathode
+    assert twin_cathode_solve.device_config.Twin
+    assert twin_cathode_solve.beam_result.result_twin is not None
+    assert twin_cathode_solve.metadata["result_twin"] is not None
+    assert np.isfinite(twin_cathode_solve.x0_twin_next)
+    assert twin_cathode_solve.beam_result.beam_cross[0] > 0.0
+    assert twin_cathode_solve.beam_result.beam_cross[-1] > 0.0
+    assert twin_cathode_solve.beam_result.n_beam[0] > 0.0
+    assert twin_cathode_solve.beam_result.n_beam[-1] > 0.0
+    twin_cathode_loss_terms = twin_cathode_sim.cathode_source_terms(
+        cathode_solve=twin_cathode_solve,
+    )
+    assert twin_cathode_loss_terms.rhs.n[0] < 0.0
+    assert twin_cathode_loss_terms.rhs.n[-1] < 0.0
+    assert twin_cathode_loss_terms.rhs.nn[0] > 0.0
+    assert twin_cathode_loss_terms.rhs.nn[-1] > 0.0
+    assert twin_cathode_loss_terms.rhs.Ee[0] < 0.0
+    assert twin_cathode_loss_terms.rhs.Ee[-1] < 0.0
+    assert twin_cathode_loss_terms.rhs.Ei[0] < 0.0
+    assert twin_cathode_loss_terms.rhs.Ei[-1] < 0.0
+    expected_twin_source_loss = (
+        (1.0 + 2.0 * params["eta"])
+        * twin_cathode_solve.beam_result.result.I_i
+        / qe_SI
+    )
+    expected_twin_end_loss = (
+        (1.0 + 2.0 * params["eta"])
+        * twin_cathode_solve.beam_result.result_twin.I_i
+        / qe_SI
+    )
+    assert np.isclose(
+        twin_cathode_loss_terms.metadata["source_surface_particle_loss_s_inv"],
+        expected_twin_source_loss,
+    )
+    assert np.isclose(
+        twin_cathode_loss_terms.metadata["end_surface_particle_loss_s_inv"],
+        expected_twin_end_loss,
+    )
+    twin_inventory_scale = np.sum(
+        np.abs(twin_cathode_loss_terms.rhs.n * geom.plasma_volume_cm3)
+        + np.abs(twin_cathode_loss_terms.rhs.nn * geom.neutral_volume_cm3)
+    )
+    assert np.isclose(
+        particle_inventory_rate(twin_cathode_loss_terms.rhs, geom),
+        0.0,
+        atol=1e-12 * twin_inventory_scale,
+    )
+    twin_beam_combined = twin_cathode_sim.beam_ionization_rhs(
+        cathode_solve=twin_cathode_solve,
+    )
+    twin_beam_terms = twin_cathode_sim.beam_ionization_rhs_terms(
+        cathode_solve=twin_cathode_solve,
+    )
+    twin_beam_sum = np.zeros_like(pack_state(twin_beam_combined))
+    for split_term in twin_beam_terms.values():
+        twin_beam_sum = twin_beam_sum + pack_state(split_term)
+    assert np.allclose(twin_beam_sum, pack_state(twin_beam_combined))
+    assert np.all(twin_beam_terms["beam_ionization_birth"].n >= 0.0)
+    assert twin_beam_terms["beam_ionization_birth"].n[0] > 0.0
+    assert twin_beam_terms["beam_ionization_birth"].n[-1] > 0.0
+    assert np.all(twin_beam_terms["beam_power_deposition"].Ee >= 0.0)
+    assert twin_beam_terms["beam_power_deposition"].Ee[0] > 0.0
+    assert twin_beam_terms["beam_power_deposition"].Ee[-1] > 0.0
+    assert np.all(twin_beam_terms["beam_ionization_cost"].Ee <= 0.0)
+    assert twin_beam_terms["beam_ionization_cost"].Ee[0] < 0.0
+    assert twin_beam_terms["beam_ionization_cost"].Ee[-1] < 0.0
+    twin_source_weights = beam_absorption_weights(
+        length_cm=geom.length_cm,
+        l_b_profile=twin_cathode_solve.beam_result.l_b_profile,
+        cathode_index=0,
+    )
+    twin_end_weights = beam_absorption_weights(
+        length_cm=geom.length_cm,
+        l_b_profile=twin_cathode_solve.beam_result.l_b_profile_twin,
+        cathode_index=-1,
+    )
+    expected_twin_beam_power_density = (
+        twin_source_weights
+        * (
+            twin_cathode_solve.beam_result.result.P_prim
+            + twin_cathode_solve.beam_result.result.P_ohmic
+        )
+        + twin_end_weights
+        * (
+            twin_cathode_solve.beam_result.result_twin.P_prim
+            + twin_cathode_solve.beam_result.result_twin.P_ohmic
+        )
+    ) * 1.0e7 / geom.plasma_volume_cm3
+    assert np.allclose(
+        twin_beam_terms["beam_power_deposition"].Ee,
+        expected_twin_beam_power_density,
+    )
+    assert np.allclose(
+        twin_beam_terms["beam_ionization_cost"].Ee,
+        -sim.I_ion * ev_to_erg * twin_beam_terms["beam_ionization_birth"].n,
+    )
+
     rhs = sim.plasma_flux_rhs(include_front=False)
     for values in (rhs.n, rhs.nn, rhs.M, rhs.Ee, rhs.Ei):
         assert np.allclose(values, 0.0, atol=1e-20)
