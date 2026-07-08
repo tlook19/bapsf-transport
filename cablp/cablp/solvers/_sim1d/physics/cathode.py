@@ -4,6 +4,7 @@ import math
 import numpy as np
 
 from cablp.funcs._cathode_solver import DeviceConfig, solve_beam_system
+from cablp.vars._cons import ev_to_erg, qe_SI
 
 from ..core.state import ConservativeState1D, derive_state
 
@@ -194,8 +195,9 @@ def cathode_source_terms(
     geometry,
     input_dict,
     input_flags,
+    cathode_solve=None,
 ):
-    """Return disabled cathode source placeholders in conservative units."""
+    """Return cathode surface particle-loss sources in conservative units."""
     boundary = cathode_boundary_state(
         state=state,
         floors=floors,
@@ -205,13 +207,52 @@ def cathode_source_terms(
         input_flags=input_flags,
     )
     zeros = np.zeros(geometry.cells, dtype=float)
+    if (
+        not boundary.enabled
+        or cathode_solve is None
+        or cathode_solve.beam_result is None
+    ):
+        return CathodeSourceTerms1D(
+            rhs=ConservativeState1D(
+                n=zeros,
+                nn=zeros.copy(),
+                M=zeros.copy(),
+                Ee=zeros.copy(),
+                Ei=zeros.copy(),
+            ),
+            enabled=boundary.enabled,
+            mode=boundary.mode,
+            metadata={
+                "source_index": boundary.source.index,
+                "end_index": boundary.end.index,
+                "end_mode": boundary.end_mode,
+                "twin_cathode": boundary.twin_cathode,
+                "circuit": dict(boundary.circuit),
+                "surface_particle_loss_s_inv": zeros.copy(),
+            },
+        )
+
+    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
+    dN_loss = zeros.copy()
+    dN_loss[0] = _cathode_particle_loss_rate(
+        cathode_solve.beam_result.result,
+        eta=input_dict["eta"],
+    )
+    if boundary.twin_cathode and cathode_solve.beam_result.result_twin is not None:
+        dN_loss[-1] = _cathode_particle_loss_rate(
+            cathode_solve.beam_result.result_twin,
+            eta=input_dict["eta"],
+        )
+
+    plasma_loss_rate = dN_loss / geometry.plasma_volume_cm3
+    neutral_gain_rate = dN_loss / geometry.neutral_volume_cm3
     return CathodeSourceTerms1D(
         rhs=ConservativeState1D(
-            n=zeros,
-            nn=zeros.copy(),
-            M=zeros.copy(),
-            Ee=zeros.copy(),
-            Ei=zeros.copy(),
+            n=-plasma_loss_rate,
+            nn=neutral_gain_rate,
+            M=-ion_mass_g * derived.u * plasma_loss_rate,
+            Ee=-1.5 * ev_to_erg * derived.Te * plasma_loss_rate,
+            Ei=-1.5 * ev_to_erg * derived.Ti * plasma_loss_rate,
         ),
         enabled=boundary.enabled,
         mode=boundary.mode,
@@ -221,6 +262,9 @@ def cathode_source_terms(
             "end_mode": boundary.end_mode,
             "twin_cathode": boundary.twin_cathode,
             "circuit": dict(boundary.circuit),
+            "surface_particle_loss_s_inv": dN_loss,
+            "source_surface_particle_loss_s_inv": float(dN_loss[0]),
+            "end_surface_particle_loss_s_inv": float(dN_loss[-1]),
         },
     )
 
@@ -256,6 +300,10 @@ def _circuit_placeholders(input_dict):
         "R_cath",
     )
     return {key: input_dict.get(key) for key in keys if key in input_dict}
+
+
+def _cathode_particle_loss_rate(result, eta):
+    return (1.0 + 2.0 * float(eta)) * result.I_i / qe_SI
 
 
 def _solver_result_metadata(result):
