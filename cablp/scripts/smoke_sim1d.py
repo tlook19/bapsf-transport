@@ -271,6 +271,16 @@ def main():
         cathode_loss_terms.rhs.Ei[0],
         1.5 * ev_to_erg * params["Ti0"] * cathode_loss_terms.rhs.n[0],
     )
+    cathode_rhs_terms = cathode_sim.rhs_terms(include_heat_conduction=False)
+    assert "cathode_surface_loss" in cathode_rhs_terms
+    assert cathode_rhs_terms["cathode_surface_loss"].n[0] < 0.0
+    assert cathode_rhs_terms["cathode_surface_loss"].nn[0] > 0.0
+    assert np.allclose(cathode_rhs_terms["cathode_surface_loss"].n[1:], 0.0)
+    cathode_nonheat_rhs = cathode_sim.rhs(include_heat_conduction=False)
+    cathode_term_sum = np.zeros_like(cathode_nonheat_rhs)
+    for term in cathode_rhs_terms.values():
+        cathode_term_sum = cathode_term_sum + pack_state(term)
+    assert np.allclose(cathode_term_sum, cathode_nonheat_rhs)
 
     rhs = sim.plasma_flux_rhs(include_front=False)
     for values in (rhs.n, rhs.nn, rhs.M, rhs.Ee, rhs.Ei):
@@ -813,6 +823,7 @@ def main():
         "electron_cooling",
         "ion_charge_exchange",
         "surface_loss",
+        "cathode_surface_loss",
         "neutral_exchange",
         "neutral_sources",
         "ionization_birth",
@@ -835,6 +846,7 @@ def main():
         pack_state(rhs_terms["heat_conduction"]),
         full_rhs - nonheat_rhs,
     )
+    assert np.allclose(pack_state(rhs_terms["cathode_surface_loss"]), 0.0)
 
     split_dt = min(1.0e-10, 0.1 * heat_dt.dt_heat_conduction)
     manual_explicit_y = ssprk2_step(
