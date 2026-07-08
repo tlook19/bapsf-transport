@@ -7,6 +7,7 @@ from cablp.funcs._cathode_solver import DeviceConfig, solve_beam_system
 from cablp.vars._cons import ev_to_erg, qe_SI
 
 from ..core.state import ConservativeState1D, derive_state
+from .reactions import _birth_temperature
 
 
 @dataclass(frozen=True)
@@ -286,6 +287,105 @@ def cathode_source_terms(
     )
 
 
+def beam_absorption_weights(length_cm, l_b_profile, cathode_index):
+    """Return Beer-Lambert absorbed beam fractions for one cathode."""
+    length_cm = np.asarray(length_cm, dtype=float)
+    l_b_profile = np.asarray(l_b_profile, dtype=float)
+    cells = length_cm.size
+    if l_b_profile.shape != (cells,):
+        raise ValueError(
+            f"l_b_profile must have shape ({cells},), got {l_b_profile.shape}"
+        )
+    if cathode_index == 0:
+        order = np.arange(cells)
+    elif cathode_index in {-1, cells - 1}:
+        order = np.arange(cells - 1, -1, -1)
+    else:
+        raise ValueError(
+            f"cathode_index must be 0 or -1/{cells - 1}, got {cathode_index}"
+        )
+
+    l_b_ordered = l_b_profile[order]
+    dx_ordered = length_cm[order]
+    safe_l_b = np.where(l_b_ordered > 0.0, l_b_ordered, np.inf)
+    tau = np.cumsum(dx_ordered / safe_l_b)
+    tau_in = np.concatenate([[0.0], tau[:-1]])
+    exp_neg_tau_in = np.exp(-tau_in)
+    absorbed_ordered = exp_neg_tau_in * (1.0 - np.exp(-dx_ordered / safe_l_b))
+
+    weights = np.zeros(cells, dtype=float)
+    weights[order] = absorbed_ordered
+    return weights
+
+
+def beam_ionization_rhs(
+    state,
+    floors,
+    ion_mass_g,
+    geometry,
+    input_dict,
+    input_flags,
+    cathode_solve=None,
+):
+    """Return conservative beam ionization birth terms without beam power."""
+    boundary = cathode_boundary_state(
+        state=state,
+        floors=floors,
+        ion_mass_g=ion_mass_g,
+        geometry=geometry,
+        input_dict=input_dict,
+        input_flags=input_flags,
+    )
+    zeros = np.zeros(geometry.cells, dtype=float)
+    if (
+        not boundary.enabled
+        or cathode_solve is None
+        or cathode_solve.beam_result is None
+    ):
+        return ConservativeState1D(
+            n=zeros,
+            nn=zeros.copy(),
+            M=zeros.copy(),
+            Ee=zeros.copy(),
+            Ei=zeros.copy(),
+        )
+
+    beam_result = cathode_solve.beam_result
+    S_beam = zeros.copy()
+    S_beam += _beam_ionization_profile(
+        state=state,
+        geometry=geometry,
+        beam_result=beam_result,
+        cathode_index=0,
+    )
+    if boundary.twin_cathode and beam_result.result_twin is not None:
+        S_beam += _beam_ionization_profile(
+            state=state,
+            geometry=geometry,
+            beam_result=beam_result,
+            cathode_index=-1,
+        )
+
+    volume_ratio = geometry.plasma_volume_cm3 / geometry.neutral_volume_cm3
+    Te_birth = _birth_temperature(
+        input_dict.get("Te_birth_ionization", "local"),
+        derive_state(state, floors=floors, ion_mass_g=ion_mass_g).Te,
+        floors["Te"],
+    )
+    Ti_birth = _birth_temperature(
+        input_dict.get("Ti_birth_ionization", "floor"),
+        derive_state(state, floors=floors, ion_mass_g=ion_mass_g).Ti,
+        floors["Ti"],
+    )
+    return ConservativeState1D(
+        n=S_beam,
+        nn=-S_beam * volume_ratio,
+        M=zeros.copy(),
+        Ee=1.5 * ev_to_erg * Te_birth * S_beam,
+        Ei=1.5 * ev_to_erg * Ti_birth * S_beam,
+    )
+
+
 def _cell_state(index, state, derived, geometry):
     return CathodeCellState1D(
         index=int(index),
@@ -325,6 +425,30 @@ def _cathode_particle_loss_rate(result, eta):
 
 def _electron_power_loss_W(result):
     return result.P_cathode_e + result.P_anode_e
+
+
+def _beam_ionization_profile(state, geometry, beam_result, cathode_index):
+    beam_cross = beam_result.beam_cross[cathode_index]
+    if beam_cross == 0.0:
+        return np.zeros(geometry.cells, dtype=float)
+    l_b_profile = (
+        beam_result.l_b_profile
+        if cathode_index == 0
+        else beam_result.l_b_profile_twin
+    )
+    p_beam = l_b_profile * beam_cross * state.nn
+    weights = beam_absorption_weights(
+        length_cm=geometry.length_cm,
+        l_b_profile=l_b_profile,
+        cathode_index=cathode_index,
+    )
+    return (
+        weights
+        * p_beam
+        * beam_result.n_beam[cathode_index]
+        * beam_result.v_beam[cathode_index]
+        / geometry.length_cm
+    )
 
 
 def _solver_result_metadata(result):
