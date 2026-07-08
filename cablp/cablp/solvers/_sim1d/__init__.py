@@ -125,6 +125,7 @@ class LAPDSim1D:
             self._I_ion,
         ) = self._gas_constants(self._gas_type)
         self._geometry = build_geometry(self._input_dict)
+        self._validate_phase_config()
         self._validate_gas_puff_config()
         self._floors = {
             "n": float(self._input_dict["ne_floor"]),
@@ -137,6 +138,8 @@ class LAPDSim1D:
         self._y = pack_state(self._state)
         self._derived = derive_state(self._state, self._floors, self._ion_mass_g)
         self._time = 0.0
+        self._t_prebreakdown_trigger = None
+        self._t_breakdown_trigger = None
         self._cathode_x0 = None
         self._cathode_x0_twin = None
         self._cathode_beam_cross = np.zeros(self._geometry.cells)
@@ -359,6 +362,7 @@ class LAPDSim1D:
             if step_dt <= 0.0:
                 raise RuntimeError(f"non-positive timestep selected ({step_dt})")
             self.advance_one_step(dt=step_dt, operator_split=operator_split)
+            self._update_current_phase_triggers()
             diagnostics.append(diag)
             steps += 1
             if self._progress_callback is not None and t_end > 0.0:
@@ -493,13 +497,26 @@ class LAPDSim1D:
         tau_breakdown = max(float(self._input_dict.get("tau_breakdown", 0.0)), 0.0)
         tau_discharge = max(float(self._input_dict.get("tau_discharge", 0.0)), 0.0)
         tau_afterglow = max(float(self._input_dict.get("tau_afterglow", 0.0)), 0.0)
-        main_start = tau_prebreakdown + tau_breakdown
-        boundaries = [
-            tau_prebreakdown,
-            main_start,
-            main_start + tau_discharge,
-            main_start + tau_discharge + tau_afterglow,
-        ]
+        if self._phase_transition_mode() == "current":
+            boundaries = []
+            main_start = self._t_breakdown_trigger
+            if main_start is None:
+                boundaries.append(tau_prebreakdown)
+            else:
+                boundaries.extend(
+                    [
+                        main_start + tau_discharge,
+                        main_start + tau_discharge + tau_afterglow,
+                    ]
+                )
+        else:
+            main_start = tau_prebreakdown + tau_breakdown
+            boundaries = [
+                tau_prebreakdown,
+                main_start,
+                main_start + tau_discharge,
+                main_start + tau_discharge + tau_afterglow,
+            ]
         gas_event = self._gas_puff_event_time()
         if gas_event is not None:
             boundaries.append(gas_event)
@@ -880,6 +897,27 @@ class LAPDSim1D:
                 f"tau_gp_decay_duration must be > 0 (got {tau_decay_duration})"
             )
 
+    def _validate_phase_config(self):
+        mode = self._phase_transition_mode()
+        if mode not in {"scheduled", "current"}:
+            raise ValueError(
+                "phase_transition_mode must be 'scheduled' or 'current' "
+                f"(got {mode!r})"
+            )
+
+    def _phase_transition_mode(self):
+        return self._input_dict.get("phase_transition_mode", "scheduled")
+
+    def _main_discharge_start_time(self):
+        if self._phase_transition_mode() == "current":
+            return self._t_breakdown_trigger
+        tau_prebreakdown = max(
+            float(self._input_dict.get("tau_prebreakdown", 0.0)),
+            0.0,
+        )
+        tau_breakdown = max(float(self._input_dict.get("tau_breakdown", 0.0)), 0.0)
+        return tau_prebreakdown + tau_breakdown
+
     def _effective_gas_puff_sccm(self, time=None):
         if time is None:
             time = self._time
@@ -929,12 +967,9 @@ class LAPDSim1D:
             and bool(self._input_dict.get("gas_puff_enabled", True))
         ):
             return None
-        tau_prebreakdown = max(
-            float(self._input_dict.get("tau_prebreakdown", 0.0)),
-            0.0,
-        )
-        tau_breakdown = max(float(self._input_dict.get("tau_breakdown", 0.0)), 0.0)
-        main_start = tau_prebreakdown + tau_breakdown
+        main_start = self._main_discharge_start_time()
+        if main_start is None:
+            return None
         tau_discharge = max(float(self._input_dict.get("tau_discharge", 0.0)), 0.0)
         mode = self._input_dict.get("gas_puff_mode", "decay_after_breakdown")
         if mode == "pulse_decay_to_level":
@@ -949,6 +984,59 @@ class LAPDSim1D:
         if event >= main_start + tau_discharge:
             return None
         return event
+
+    def _cathode_total_current_A(self):
+        cathode_solve = self._cathode_solve
+        if cathode_solve is None or cathode_solve.beam_result is None:
+            return 0.0
+        return float(cathode_solve.beam_result.result.I_tot)
+
+    def _update_current_phase_triggers(self):
+        if (
+            self._phase_transition_mode() != "current"
+            or not self._flags.get("Plasma", True)
+        ):
+            return
+        cathode_phase = self._cathode_phase_options(time=self._time)
+        if cathode_phase["solve_enabled"]:
+            self.solve_cathode_boundary(time=self._time, update_cache=True)
+
+        I_now = self._cathode_total_current_A()
+        tau_prebreakdown = max(
+            float(self._input_dict.get("tau_prebreakdown", 0.0)),
+            0.0,
+        )
+        I_prebreakdown = float(self._input_dict.get("I_prebreakdown", 0.0))
+        I_breakdown = float(self._input_dict.get("I_breakdown", 0.0))
+        time_tol = max(1e-15, 1e-12 * max(abs(tau_prebreakdown), 1.0))
+
+        if self._t_breakdown_trigger is not None:
+            return
+        if self._t_prebreakdown_trigger is None:
+            first_threshold = I_prebreakdown if I_prebreakdown > 0.0 else I_breakdown
+            if I_now >= first_threshold:
+                if I_prebreakdown > 0.0:
+                    self._t_prebreakdown_trigger = self._time
+                else:
+                    self._t_breakdown_trigger = self._time
+                return
+            if self._time >= tau_prebreakdown - time_tol:
+                raise RuntimeError(
+                    "plasma failed to break down within "
+                    f"tau_prebreakdown={tau_prebreakdown:.9e} s "
+                    f"(I_tot={I_now:.6g} A < threshold={first_threshold:.6g} A)"
+                )
+            return
+
+        if I_now >= I_breakdown:
+            self._t_breakdown_trigger = self._time
+            return
+        if self._time >= tau_prebreakdown - time_tol:
+            raise RuntimeError(
+                "plasma failed to reach breakdown current within "
+                f"tau_prebreakdown={tau_prebreakdown:.9e} s "
+                f"(I_tot={I_now:.6g} A < I_breakdown={I_breakdown:.6g} A)"
+            )
 
     def _energy_exchange_kwargs(self):
         return {
@@ -1191,6 +1279,30 @@ class LAPDSim1D:
         )
         tau_breakdown = max(float(self._input_dict.get("tau_breakdown", 0.0)), 0.0)
         tau_afterglow = max(float(self._input_dict.get("tau_afterglow", 0.0)), 0.0)
+        if self._phase_transition_mode() == "current":
+            if self._t_breakdown_trigger is not None:
+                main_start = self._t_breakdown_trigger
+                afterglow_start = main_start + tau_discharge
+                post_afterglow_start = afterglow_start + tau_afterglow
+                if time < main_start:
+                    if (
+                        self._t_prebreakdown_trigger is not None
+                        and time >= self._t_prebreakdown_trigger
+                    ):
+                        return "breakdown", time - self._t_prebreakdown_trigger
+                    return "pre_breakdown", time
+                if time < afterglow_start:
+                    return "main_discharge", time - main_start
+                if time < post_afterglow_start:
+                    return "afterglow", time - afterglow_start
+                return "post_afterglow", time - post_afterglow_start
+            if (
+                self._t_prebreakdown_trigger is not None
+                and time >= self._t_prebreakdown_trigger
+            ):
+                return "breakdown", time - self._t_prebreakdown_trigger
+            return "pre_breakdown", time
+
         breakdown_start = tau_prebreakdown
         main_start = breakdown_start + tau_breakdown
         afterglow_start = main_start + tau_discharge
