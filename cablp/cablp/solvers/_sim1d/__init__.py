@@ -338,6 +338,13 @@ class LAPDSim1D:
             )
             step_dt = diag.dt if dt is None else float(dt)
             step_dt = min(step_dt, t_end - self._time)
+            next_phase_boundary = self.next_phase_boundary_after(
+                self._time,
+                t_end=t_end,
+                time_tol=time_tol,
+            )
+            if next_phase_boundary is not None:
+                step_dt = min(step_dt, next_phase_boundary - self._time)
             if step_dt <= 0.0:
                 raise RuntimeError(f"non-positive timestep selected ({step_dt})")
             self.advance_one_step(dt=step_dt, operator_split=operator_split)
@@ -418,6 +425,58 @@ class LAPDSim1D:
         """Return diagnostic phase switches without changing RHS behavior."""
         phase = self.phase_at_time(time)
         return self._phase_switches(phase)
+
+    def next_phase_boundary_after(self, time, t_end=None, time_tol=0.0):
+        """Return the next diagnostic phase boundary after ``time`` [s]."""
+        time = max(float(time), 0.0)
+        time_tol = max(float(time_tol), 0.0)
+        t_end = None if t_end is None else float(t_end)
+
+        def in_run_window(boundary):
+            if boundary <= time + time_tol:
+                return False
+            return t_end is None or boundary <= t_end + time_tol
+
+        if not self._flags.get("Plasma", True):
+            tau_discharge = max(
+                float(self._input_dict.get("tau_discharge", 0.0)),
+                0.0,
+            )
+            tau_cycle = max(float(self._input_dict.get("tau_cycle", 0.0)), 0.0)
+            if tau_cycle <= 0.0:
+                if in_run_window(tau_discharge):
+                    return tau_discharge
+                return None
+
+            cycle_index = np.floor(time / tau_cycle)
+            cycle_start = cycle_index * tau_cycle
+            cycle_end = cycle_start + tau_cycle
+            boundaries = []
+            if 0.0 < tau_discharge < tau_cycle:
+                boundaries.append(cycle_start + tau_discharge)
+            boundaries.append(cycle_end)
+            if 0.0 < tau_discharge < tau_cycle:
+                boundaries.append(cycle_end + tau_discharge)
+            boundaries.append(cycle_end + tau_cycle)
+            for boundary in boundaries:
+                if in_run_window(boundary):
+                    return float(boundary)
+            return None
+
+        tau_prebreakdown = max(
+            float(self._input_dict.get("tau_prebreakdown", 0.0)),
+            0.0,
+        )
+        tau_discharge = max(float(self._input_dict.get("tau_discharge", 0.0)), 0.0)
+        tau_afterglow = max(float(self._input_dict.get("tau_afterglow", 0.0)), 0.0)
+        for boundary in (
+            tau_prebreakdown,
+            tau_prebreakdown + tau_discharge,
+            tau_prebreakdown + tau_discharge + tau_afterglow,
+        ):
+            if in_run_window(boundary):
+                return float(boundary)
+        return None
 
     def plasma_flux_rhs(self, y=None, include_front=None):
         """Return the conservative plasma flux RHS for inspection/testing."""
