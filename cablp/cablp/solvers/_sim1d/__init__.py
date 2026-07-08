@@ -1,3 +1,4 @@
+from dataclasses import replace
 from types import SimpleNamespace
 
 import numpy as np
@@ -396,7 +397,7 @@ class LAPDSim1D:
             include_heat_conduction = not self._flags.get(
                 "implicit_heat_conduction", False
             )
-        return suggest_timestep(
+        diag = suggest_timestep(
             state=state,
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
@@ -424,6 +425,18 @@ class LAPDSim1D:
             dt_max=float(self._input_dict.get("dt_max", 1e-6)),
             include_front=self._flags.get("front_flux", True),
             alpha_front=float(self._input_dict.get("alpha_front", 1.0)),
+        )
+        if time is None:
+            time = self._time
+        phase, _ = self._phase_info(time)
+        switches = self._phase_switches(phase)
+        return replace(
+            diag,
+            time=float(time),
+            phase=phase,
+            phase_cathode_enabled=float(switches["cathode_enabled"]),
+            phase_gas_puff_enabled=float(switches["gas_puff_enabled"]),
+            phase_floating=float(switches["floating"]),
         )
 
     def phase_at_time(self, time):

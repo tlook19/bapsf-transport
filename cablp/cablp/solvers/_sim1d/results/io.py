@@ -255,7 +255,7 @@ def _read_diagnostics(group):
         kwargs = {}
         for field_name, values in loaded.items():
             value = values[i]
-            if field_name == "active_constraint":
+            if field_name in {"active_constraint", "phase"}:
                 value = _decode_string(value)
             else:
                 value = float(value)
