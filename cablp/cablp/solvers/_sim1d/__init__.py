@@ -528,6 +528,7 @@ class LAPDSim1D:
             geometry=self._geometry,
             input_dict=self._input_dict,
             input_flags=self._flags,
+            I_ion=self._I_ion,
             cathode_solve=cathode_solve,
         )
 

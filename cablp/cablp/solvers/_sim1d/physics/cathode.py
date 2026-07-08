@@ -325,9 +325,10 @@ def beam_ionization_rhs(
     geometry,
     input_dict,
     input_flags,
+    I_ion,
     cathode_solve=None,
 ):
-    """Return conservative beam ionization birth terms without beam power."""
+    """Return conservative beam ionization and beam electron energy terms."""
     boundary = cathode_boundary_state(
         state=state,
         floors=floors,
@@ -352,26 +353,36 @@ def beam_ionization_rhs(
 
     beam_result = cathode_solve.beam_result
     S_beam = zeros.copy()
-    S_beam += _beam_ionization_profile(
+    beam_power_density = zeros.copy()
+    source_profile = _beam_ionization_profile(
         state=state,
         geometry=geometry,
         beam_result=beam_result,
         cathode_index=0,
     )
+    S_beam += source_profile
+    beam_power_density += _beam_power_deposition_density(
+        geometry=geometry,
+        beam_result=beam_result,
+        solver_result=beam_result.result,
+        cathode_index=0,
+    )
     if boundary.twin_cathode and beam_result.result_twin is not None:
-        S_beam += _beam_ionization_profile(
+        twin_profile = _beam_ionization_profile(
             state=state,
             geometry=geometry,
             beam_result=beam_result,
             cathode_index=-1,
         )
+        S_beam += twin_profile
+        beam_power_density += _beam_power_deposition_density(
+            geometry=geometry,
+            beam_result=beam_result,
+            solver_result=beam_result.result_twin,
+            cathode_index=-1,
+        )
 
     volume_ratio = geometry.plasma_volume_cm3 / geometry.neutral_volume_cm3
-    Te_birth = _birth_temperature(
-        input_dict.get("Te_birth_ionization", "local"),
-        derive_state(state, floors=floors, ion_mass_g=ion_mass_g).Te,
-        floors["Te"],
-    )
     Ti_birth = _birth_temperature(
         input_dict.get("Ti_birth_ionization", "floor"),
         derive_state(state, floors=floors, ion_mass_g=ion_mass_g).Ti,
@@ -381,7 +392,7 @@ def beam_ionization_rhs(
         n=S_beam,
         nn=-S_beam * volume_ratio,
         M=zeros.copy(),
-        Ee=1.5 * ev_to_erg * Te_birth * S_beam,
+        Ee=beam_power_density - I_ion * ev_to_erg * S_beam,
         Ei=1.5 * ev_to_erg * Ti_birth * S_beam,
     )
 
@@ -448,6 +459,33 @@ def _beam_ionization_profile(state, geometry, beam_result, cathode_index):
         * beam_result.n_beam[cathode_index]
         * beam_result.v_beam[cathode_index]
         / geometry.length_cm
+    )
+
+
+def _beam_power_deposition_density(
+    geometry,
+    beam_result,
+    solver_result,
+    cathode_index,
+):
+    beam_cross = beam_result.beam_cross[cathode_index]
+    if beam_cross == 0.0:
+        return np.zeros(geometry.cells, dtype=float)
+    l_b_profile = (
+        beam_result.l_b_profile
+        if cathode_index == 0
+        else beam_result.l_b_profile_twin
+    )
+    weights = beam_absorption_weights(
+        length_cm=geometry.length_cm,
+        l_b_profile=l_b_profile,
+        cathode_index=cathode_index,
+    )
+    return (
+        weights
+        * (solver_result.P_prim + solver_result.P_ohmic)
+        * 1.0e7
+        / geometry.plasma_volume_cm3
     )
 
 
