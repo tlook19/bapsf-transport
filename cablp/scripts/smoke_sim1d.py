@@ -1473,6 +1473,8 @@ def main():
             "phase": "pre_breakdown",
             "reason": "initial",
         }
+        assert summary.current_trigger_sample_count == 0
+        assert summary.last_current_trigger_sample is None
         assert summary.phase_switch_fractions == {
             "cathode_enabled": 0.0,
             "floating": 0.0,
@@ -2156,6 +2158,15 @@ def main():
         current_phase_result.current_trigger_samples["I_tot"],
         current_phase_result.cathode_diagnostics["source_I_tot"][1:3],
     )
+    assert current_phase_summary.current_trigger_sample_count == 2
+    assert np.isclose(
+        current_phase_summary.last_current_trigger_sample["time"],
+        current_phase_result.current_trigger_samples["time"][-1],
+    )
+    assert np.isclose(
+        current_phase_summary.last_current_trigger_sample["I_tot"],
+        current_phase_result.current_trigger_samples["I_tot"][-1],
+    )
     assert list(current_phase_result.phase_events["phase"]) == [
         "pre_breakdown",
         "breakdown",
@@ -2407,6 +2418,8 @@ def main():
         "phase": "equilibrium_off",
         "reason": "tau_discharge",
     }
+    assert neutral_phase_summary.current_trigger_sample_count == 0
+    assert neutral_phase_summary.last_current_trigger_sample is None
     neutral_phase_capped_sim = LAPDSim1D(
         neutral_phase_run_params,
         neutral_phase_run_flags,
