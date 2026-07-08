@@ -192,6 +192,26 @@ def _current_trigger_sample_arrays(samples):
     }
 
 
+def _timestep_rejection_event_arrays(events):
+    return {
+        "time": np.asarray([event["time"] for event in events], dtype=float),
+        "attempted_dt": np.asarray(
+            [event["attempted_dt"] for event in events],
+            dtype=float,
+        ),
+        "retry_index": np.asarray(
+            [event["retry_index"] for event in events],
+            dtype=float,
+        ),
+        "reason": np.asarray([event["reason"] for event in events], dtype=object),
+        "phase": np.asarray([event["phase"] for event in events], dtype=object),
+        "active_constraint": np.asarray(
+            [event["active_constraint"] for event in events],
+            dtype=object,
+        ),
+    }
+
+
 def _copy_cache_value(value):
     if value is None:
         return None
@@ -509,6 +529,7 @@ class LAPDSim1D:
         retry_count = 0
         last_reason = ""
         accepted_rejection_reason = ""
+        rejection_events = []
         y0 = self._y.copy()
         while True:
             attempt = self._attempt_step(
@@ -517,8 +538,23 @@ class LAPDSim1D:
             )
             last_reason = self._step_rejection_reason(attempt, y0=y0)
             if not last_reason:
-                return attempt, retry_count, accepted_rejection_reason
+                return (
+                    attempt,
+                    retry_count,
+                    accepted_rejection_reason,
+                    rejection_events,
+                )
             accepted_rejection_reason = last_reason
+            rejection_events.append(
+                {
+                    "time": float(self._time),
+                    "attempted_dt": float(attempted_dt),
+                    "retry_index": int(retry_count),
+                    "reason": last_reason,
+                    "phase": getattr(diag, "phase", ""),
+                    "active_constraint": getattr(diag, "active_constraint", ""),
+                }
+            )
             if not retries_enabled or retry_count >= max_retries:
                 self._raise_timestep_rejection(
                     attempted_dt=attempted_dt,
@@ -600,6 +636,7 @@ class LAPDSim1D:
         max_output_steps = int(self._input_dict.get("max_output_steps", 0))
         saved = []
         diagnostics = []
+        timestep_rejection_events = []
         t_last_save = -np.inf
         time_tol = max(1e-15, 1e-12 * max(abs(t_end), 1.0))
         run_start = float(self._time)
@@ -691,11 +728,17 @@ class LAPDSim1D:
                 )
             if step_dt <= 0.0:
                 raise RuntimeError(f"non-positive timestep selected ({step_dt})")
-            attempt, retry_count, rejection_reason = self._attempt_step_with_retries(
+            (
+                attempt,
+                retry_count,
+                rejection_reason,
+                step_rejection_events,
+            ) = self._attempt_step_with_retries(
                 dt=step_dt,
                 operator_split=operator_split,
                 diag=diag,
             )
+            timestep_rejection_events.extend(step_rejection_events)
             self._accept_step_attempt(attempt)
             self._update_current_phase_triggers()
             if retry_count:
@@ -721,6 +764,7 @@ class LAPDSim1D:
             diagnostics=diagnostics,
             steps=steps,
             run_start=run_start,
+            timestep_rejection_events=timestep_rejection_events,
         )
 
     def save_result(self, path, result, params=None, flags=None):
@@ -1573,7 +1617,14 @@ class LAPDSim1D:
             "cathode_diagnostics": self._cathode_diagnostic_snapshot(time=time),
         }
 
-    def _trajectory_result(self, saved, diagnostics, steps, run_start):
+    def _trajectory_result(
+        self,
+        saved,
+        diagnostics,
+        steps,
+        run_start,
+        timestep_rejection_events=None,
+    ):
         cells = self._geometry.cells
 
         def stack(name):
@@ -1654,6 +1705,9 @@ class LAPDSim1D:
             phase_events=self._phase_events(
                 run_start=run_start,
                 final_time=float(self._time),
+            ),
+            timestep_rejection_events=_timestep_rejection_event_arrays(
+                timestep_rejection_events or []
             ),
             current_trigger_samples=_current_trigger_sample_arrays(
                 self._current_trigger_samples

@@ -23,6 +23,18 @@ def summarize_result(result):
         for diag in getattr(result, "diagnostics", ())
         if getattr(diag, "step_cap", "")
     )
+    rejection_reason_counts = Counter(
+        diag.rejection_reason
+        for diag in getattr(result, "diagnostics", ())
+        if getattr(diag, "rejection_reason", "")
+    )
+    retry_counts = np.asarray(
+        [
+            getattr(diag, "retry_count", 0)
+            for diag in getattr(result, "diagnostics", ())
+        ],
+        dtype=int,
+    )
     accepted_dt = np.asarray(
         [
             diag.accepted_dt
@@ -32,6 +44,7 @@ def summarize_result(result):
         dtype=float,
     )
     phase_event_summary = _phase_event_summary(result)
+    rejection_event_summary = _timestep_rejection_event_summary(result)
     current_trigger_summary = _current_trigger_sample_summary(result)
     return SimpleNamespace(
         finite=all(finite_fields.values()),
@@ -62,10 +75,19 @@ def summarize_result(result):
         accepted_dt_min=float(np.min(accepted_dt)) if accepted_dt.size else np.nan,
         accepted_dt_max=float(np.max(accepted_dt)) if accepted_dt.size else np.nan,
         step_cap_counts=dict(sorted(step_cap_counts.items())),
+        retrying_step_count=int(np.count_nonzero(retry_counts))
+        if retry_counts.size
+        else 0,
+        total_retry_count=int(np.sum(retry_counts)) if retry_counts.size else 0,
+        max_retry_count=int(np.max(retry_counts)) if retry_counts.size else 0,
+        rejection_reason_counts=dict(sorted(rejection_reason_counts.items())),
         phase_event_count=phase_event_summary["count"],
         phase_event_phase_counts=phase_event_summary["phase_counts"],
         phase_event_reason_counts=phase_event_summary["reason_counts"],
         last_phase_event=phase_event_summary["last_event"],
+        timestep_rejection_event_count=rejection_event_summary["count"],
+        timestep_rejection_reason_counts=rejection_event_summary["reason_counts"],
+        last_timestep_rejection_event=rejection_event_summary["last_event"],
         current_trigger_sample_count=current_trigger_summary["count"],
         last_current_trigger_sample=current_trigger_summary["last_sample"],
         phase_switch_fractions=_phase_switch_fractions(result),
@@ -156,6 +178,35 @@ def _phase_event_summary(result):
             "time": float(times[last_index]),
             "phase": str(phases[last_index]),
             "reason": str(reasons[last_index]),
+        },
+    }
+
+
+def _timestep_rejection_event_summary(result):
+    events = getattr(result, "timestep_rejection_events", {})
+    times = np.asarray(events.get("time", ()), dtype=float)
+    attempted_dt = np.asarray(events.get("attempted_dt", ()), dtype=float)
+    retry_index = np.asarray(events.get("retry_index", ()), dtype=float)
+    reasons = np.asarray(events.get("reason", ()), dtype=object)
+    phases = np.asarray(events.get("phase", ()), dtype=object)
+    constraints = np.asarray(events.get("active_constraint", ()), dtype=object)
+    if times.size == 0:
+        return {
+            "count": 0,
+            "reason_counts": {},
+            "last_event": None,
+        }
+    last_index = times.size - 1
+    return {
+        "count": int(times.size),
+        "reason_counts": _value_counts(reasons),
+        "last_event": {
+            "time": float(times[last_index]),
+            "attempted_dt": float(attempted_dt[last_index]),
+            "retry_index": int(retry_index[last_index]),
+            "reason": str(reasons[last_index]),
+            "phase": str(phases[last_index]),
+            "active_constraint": str(constraints[last_index]),
         },
     }
 

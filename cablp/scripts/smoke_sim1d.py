@@ -1401,6 +1401,8 @@ def main():
     assert np.allclose(run_result.phase_events["time"], [0.0])
     assert list(run_result.phase_events["phase"]) == ["pre_breakdown"]
     assert list(run_result.phase_events["reason"]) == ["initial"]
+    assert np.allclose(run_result.timestep_rejection_events["time"], [])
+    assert list(run_result.timestep_rejection_events["reason"]) == []
     assert np.allclose(run_result.current_trigger_samples["time"], [])
     assert np.allclose(run_result.current_trigger_samples["I_tot"], [])
     assert run_result.y.shape == (4, run_before.size)
@@ -1515,6 +1517,13 @@ def main():
         assert summary.step_cap_counts == {"fixed_dt": 3}
         assert np.isclose(summary.accepted_dt_min, 1.0e-10)
         assert np.isclose(summary.accepted_dt_max, 1.0e-10)
+        assert summary.retrying_step_count == 0
+        assert summary.total_retry_count == 0
+        assert summary.max_retry_count == 0
+        assert summary.rejection_reason_counts == {}
+        assert summary.timestep_rejection_event_count == 0
+        assert summary.timestep_rejection_reason_counts == {}
+        assert summary.last_timestep_rejection_event is None
     with tempfile.TemporaryDirectory() as tmpdir:
         output_path = run_sim.save_result(
             f"{tmpdir}/sim1d_smoke.h5",
@@ -1540,6 +1549,8 @@ def main():
             assert h5["phase_events/time"].shape == (1,)
             assert h5["phase_events/phase"].shape == (1,)
             assert h5["phase_events/reason"].shape == (1,)
+            assert h5["timestep_rejection_events/time"].shape == (0,)
+            assert h5["timestep_rejection_events/reason"].shape == (0,)
             assert h5["current_trigger_samples/time"].shape == (0,)
             assert h5["current_trigger_samples/I_tot"].shape == (0,)
             assert h5["cathode_diagnostics/solve_enabled"].shape == (4,)
@@ -1589,6 +1600,8 @@ def main():
             assert np.allclose(loaded.phase_events["time"], [0.0])
             assert list(loaded.phase_events["phase"]) == ["pre_breakdown"]
             assert list(loaded.phase_events["reason"]) == ["initial"]
+            assert np.allclose(loaded.timestep_rejection_events["time"], [])
+            assert list(loaded.timestep_rejection_events["reason"]) == []
             assert np.allclose(loaded.current_trigger_samples["time"], [])
             assert np.allclose(loaded.current_trigger_samples["I_tot"], [])
             assert loaded.params["dt_save"] == run_params["dt_save"]
@@ -1884,6 +1897,57 @@ def main():
     assert retry_result.diagnostics[0].step_cap == "retry"
     assert np.isclose(retry_result.diagnostics[0].accepted_dt, 0.5e-6)
     assert retry_result.diagnostics[1].retry_count == 0
+    assert np.allclose(retry_result.timestep_rejection_events["time"], [0.0])
+    assert np.allclose(
+        retry_result.timestep_rejection_events["attempted_dt"],
+        [1.0e-6],
+    )
+    assert np.allclose(retry_result.timestep_rejection_events["retry_index"], [0])
+    assert list(retry_result.timestep_rejection_events["reason"]) == [
+        "neutral_step_fraction"
+    ]
+    assert list(retry_result.timestep_rejection_events["phase"]) == [
+        "equilibrium_puff"
+    ]
+    retry_summary = summarize_result(retry_result)
+    assert retry_summary.step_cap_counts == {"retry": 1, "t_end": 1}
+    assert retry_summary.retrying_step_count == 1
+    assert retry_summary.total_retry_count == 1
+    assert retry_summary.max_retry_count == 1
+    assert retry_summary.rejection_reason_counts == {"neutral_step_fraction": 1}
+    assert retry_summary.timestep_rejection_event_count == 1
+    assert retry_summary.timestep_rejection_reason_counts == {
+        "neutral_step_fraction": 1
+    }
+    assert retry_summary.last_timestep_rejection_event == {
+        "time": 0.0,
+        "attempted_dt": 1.0e-6,
+        "retry_index": 0,
+        "reason": "neutral_step_fraction",
+        "phase": "equilibrium_puff",
+        "active_constraint": "dt_max",
+    }
+    with tempfile.TemporaryDirectory() as tmpdir:
+        retry_output = retry_sim.save_result(
+            f"{tmpdir}/sim1d_retry_smoke.h5",
+            retry_result,
+        )
+        with h5py.File(retry_output, "r") as h5:
+            assert h5["timestep_rejection_events/time"].shape == (1,)
+            assert h5["timestep_rejection_events/attempted_dt"].shape == (1,)
+            assert h5["timestep_rejection_events/reason"].shape == (1,)
+        loaded_retry = load_result_hdf5(retry_output)
+        assert np.allclose(
+            loaded_retry.timestep_rejection_events["attempted_dt"],
+            retry_result.timestep_rejection_events["attempted_dt"],
+        )
+        assert list(loaded_retry.timestep_rejection_events["reason"]) == list(
+            retry_result.timestep_rejection_events["reason"]
+        )
+        assert loaded_retry.diagnostics[0].retry_count == 1
+        assert loaded_retry.diagnostics[0].rejection_reason == (
+            "neutral_step_fraction"
+        )
 
     failed_retry_params = dict(retry_params)
     failed_retry_params["max_neutral_step_fraction"] = 1.0e-30
