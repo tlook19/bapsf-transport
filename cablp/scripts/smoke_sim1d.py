@@ -486,6 +486,34 @@ def main():
     for term in cathode_rhs_terms.values():
         cathode_term_sum = cathode_term_sum + pack_state(term)
     assert np.allclose(cathode_term_sum, cathode_nonheat_rhs)
+    afterglow_rhs_terms = cathode_sim.rhs_terms(
+        include_heat_conduction=False,
+        time=afterglow_time,
+    )
+    assert np.allclose(
+        pack_state(afterglow_rhs_terms["cathode_surface_loss"]),
+        0.0,
+    )
+    assert np.allclose(
+        pack_state(afterglow_rhs_terms["beam_ionization_birth"]),
+        0.0,
+    )
+    assert np.allclose(
+        pack_state(afterglow_rhs_terms["beam_power_deposition"]),
+        0.0,
+    )
+    assert np.allclose(
+        pack_state(afterglow_rhs_terms["beam_ionization_cost"]),
+        0.0,
+    )
+    afterglow_nonheat_rhs = cathode_sim.rhs(
+        include_heat_conduction=False,
+        time=afterglow_time,
+    )
+    afterglow_term_sum = np.zeros_like(afterglow_nonheat_rhs)
+    for term in afterglow_rhs_terms.values():
+        afterglow_term_sum = afterglow_term_sum + pack_state(term)
+    assert np.allclose(afterglow_term_sum, afterglow_nonheat_rhs)
 
     twin_cathode_flags = dict(cathode_flags)
     twin_cathode_flags["TwinCathode"] = True
@@ -633,6 +661,21 @@ def main():
         puff_rate(params["S_gp"], params["gas_puff_valves"], geom.neutral_volume_cm3[0]),
     )
     assert np.isclose(afterglow_source.nn[-1], source_rhs.nn[-1])
+    afterglow_source_terms = sim.rhs_terms(
+        include_heat_conduction=False,
+        time=params["tau_prebreakdown"] + params["tau_discharge"],
+    )
+    assert np.allclose(
+        afterglow_source_terms["neutral_sources"].nn,
+        afterglow_source.nn,
+    )
+    assert np.allclose(afterglow_source_terms["neutral_sources"].n, 0.0)
+    assert (
+        sim.suggest_timestep(
+            time=params["tau_prebreakdown"] + params["tau_discharge"]
+        ).dt_neutral_sources
+        >= sim.suggest_timestep().dt_neutral_sources
+    )
     assert np.allclose(source_rhs.n, 0.0)
     assert np.allclose(source_rhs.M, 0.0)
     assert np.allclose(source_rhs.Ee, 0.0)
