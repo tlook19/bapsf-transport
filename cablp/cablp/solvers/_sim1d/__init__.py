@@ -51,6 +51,7 @@ from .physics.sources import (
     pressure_work_rhs,
     surface_neutralization_rhs,
 )
+from .results.compat import add_sim3_compat_aliases
 from cablp.vars._cons import I_Ry, I_ion, ev_to_erg, m_He_cgs, m_p_cgs
 
 
@@ -1729,7 +1730,7 @@ class LAPDSim1D:
             for term_name, term_fields in rhs_terms.items()
         }
 
-        return SimpleNamespace(
+        result = SimpleNamespace(
             time=np.asarray([snapshot["time"] for snapshot in saved], dtype=float),
             phase=np.asarray([snapshot["phase"] for snapshot in saved], dtype=object),
             phase_elapsed=np.asarray(
@@ -1798,6 +1799,7 @@ class LAPDSim1D:
                 else float(self._t_breakdown_trigger)
             ),
         )
+        return add_sim3_compat_aliases(result)
 
     def _phase_events(self, run_start, final_time):
         run_start = float(run_start)
