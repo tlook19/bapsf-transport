@@ -276,6 +276,10 @@ def main():
     assert cathode_rhs_terms["cathode_surface_loss"].n[0] < 0.0
     assert cathode_rhs_terms["cathode_surface_loss"].nn[0] > 0.0
     assert np.allclose(cathode_rhs_terms["cathode_surface_loss"].n[1:], 0.0)
+    assert np.allclose(cathode_rhs_terms["surface_loss"].n[0], 0.0)
+    assert np.allclose(cathode_rhs_terms["surface_loss"].nn[0], 0.0)
+    assert cathode_rhs_terms["surface_loss"].n[-1] < 0.0
+    assert cathode_rhs_terms["surface_loss"].nn[-1] > 0.0
     cathode_nonheat_rhs = cathode_sim.rhs(include_heat_conduction=False)
     cathode_term_sum = np.zeros_like(cathode_nonheat_rhs)
     for term in cathode_rhs_terms.values():
