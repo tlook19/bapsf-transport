@@ -938,7 +938,7 @@ class LAPDSim1D:
                 }
                 for term_name, term_rhs in rhs_terms.items()
             },
-            "cathode_diagnostics": self._cathode_diagnostic_snapshot(),
+            "cathode_diagnostics": self._cathode_diagnostic_snapshot(time=time),
         }
 
     def _trajectory_result(self, saved, diagnostics, steps):
@@ -1101,10 +1101,16 @@ class LAPDSim1D:
             "floating": phase == "afterglow",
         }
 
-    def _cathode_diagnostic_snapshot(self):
+    def _cathode_diagnostic_snapshot(self, time=None):
         cells = self._geometry.cells
+        cathode_phase = self._cathode_phase_options(time=time)
         diag = {
             "enabled": float(bool(self._flags.get("cathode_coupling", False))),
+            "configured": float(cathode_phase["configured"]),
+            "phase_enabled": float(cathode_phase["cathode_enabled"]),
+            "rhs_enabled": float(cathode_phase["cathode_enabled"]),
+            "solve_enabled": float(cathode_phase["solve_enabled"]),
+            "floating": float(cathode_phase["floating"]),
             "twin_cathode": float(bool(self._flags.get("TwinCathode", False))),
             "has_solution": 0.0,
             "has_twin_solution": 0.0,
@@ -1127,7 +1133,11 @@ class LAPDSim1D:
             diag[f"{prefix}_long_mfp"] = np.nan
 
         cathode_solve = self._cathode_solve
-        if cathode_solve is None or cathode_solve.beam_result is None:
+        if (
+            not cathode_phase["solve_enabled"]
+            or cathode_solve is None
+            or cathode_solve.beam_result is None
+        ):
             return diag
 
         beam_result = cathode_solve.beam_result

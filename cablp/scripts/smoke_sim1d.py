@@ -1250,6 +1250,11 @@ def main():
     assert set(run_result.ion_energy_terms_W_cm3) == expected_rhs_terms
     assert run_result.cathode_diagnostics["enabled"].shape == (4,)
     assert np.allclose(run_result.cathode_diagnostics["enabled"], 0.0)
+    assert np.allclose(run_result.cathode_diagnostics["configured"], 0.0)
+    assert np.allclose(run_result.cathode_diagnostics["phase_enabled"], 0.0)
+    assert np.allclose(run_result.cathode_diagnostics["rhs_enabled"], 0.0)
+    assert np.allclose(run_result.cathode_diagnostics["solve_enabled"], 0.0)
+    assert np.allclose(run_result.cathode_diagnostics["floating"], 0.0)
     assert np.allclose(run_result.cathode_diagnostics["has_solution"], 0.0)
     assert run_result.cathode_diagnostics["beam_cross"].shape == (4, geom.cells)
     assert np.allclose(run_result.cathode_diagnostics["beam_cross"], 0.0)
@@ -1319,6 +1324,8 @@ def main():
             assert h5["phase_cathode_enabled"].shape == run_result.phase.shape
             assert h5["phase_gas_puff_enabled"].shape == run_result.phase.shape
             assert h5["phase_floating"].shape == run_result.phase.shape
+            assert h5["cathode_diagnostics/solve_enabled"].shape == (4,)
+            assert h5["cathode_diagnostics/floating"].shape == (4,)
             assert all(
                 value.decode("utf-8") == "pre_breakdown"
                 for value in h5["phase"][()]
@@ -1372,6 +1379,14 @@ def main():
                 loaded.cathode_diagnostics["has_solution"],
                 run_result.cathode_diagnostics["has_solution"],
             )
+            assert np.allclose(
+                loaded.cathode_diagnostics["solve_enabled"],
+                run_result.cathode_diagnostics["solve_enabled"],
+            )
+            assert np.allclose(
+                loaded.cathode_diagnostics["floating"],
+                run_result.cathode_diagnostics["floating"],
+            )
             assert np.all(
                 loaded.cathode_diagnostics["source_regime"]
                 == run_result.cathode_diagnostics["source_regime"]
@@ -1412,6 +1427,11 @@ def main():
     cathode_diag = cathode_run_result.cathode_diagnostics
     assert cathode_diag["enabled"].shape == (4,)
     assert np.allclose(cathode_diag["enabled"], 1.0)
+    assert np.allclose(cathode_diag["configured"], 1.0)
+    assert np.allclose(cathode_diag["phase_enabled"], 1.0)
+    assert np.allclose(cathode_diag["rhs_enabled"], 1.0)
+    assert np.allclose(cathode_diag["solve_enabled"], 1.0)
+    assert np.allclose(cathode_diag["floating"], 0.0)
     assert np.allclose(cathode_diag["has_solution"], 1.0)
     assert np.allclose(cathode_diag["has_twin_solution"], 0.0)
     assert np.all(cathode_diag["source_phi_c"] > 0.0)
@@ -1490,6 +1510,9 @@ def main():
             )
             assert h5["cathode_diagnostics/source_phi_c"].shape == (4,)
             assert h5["cathode_diagnostics/source_regime"].shape == (4,)
+            assert np.all(h5["cathode_diagnostics/phase_enabled"][()] == 1.0)
+            assert np.all(h5["cathode_diagnostics/solve_enabled"][()] == 1.0)
+            assert np.all(h5["cathode_diagnostics/floating"][()] == 0.0)
             assert h5["cathode_diagnostics/beam_cross"].shape == (
                 4,
                 geom.cells,
@@ -1521,6 +1544,14 @@ def main():
         assert np.allclose(
             loaded_cathode_result.cathode_diagnostics["source_I_tot"],
             cathode_run_result.cathode_diagnostics["source_I_tot"],
+        )
+        assert np.allclose(
+            loaded_cathode_result.cathode_diagnostics["solve_enabled"],
+            cathode_run_result.cathode_diagnostics["solve_enabled"],
+        )
+        assert np.allclose(
+            loaded_cathode_result.cathode_diagnostics["floating"],
+            cathode_run_result.cathode_diagnostics["floating"],
         )
         assert np.allclose(
             loaded_cathode_result.cathode_diagnostics["beam_cross"],
@@ -1615,6 +1646,38 @@ def main():
     assert np.allclose(
         phase_cathode_result.phase_cathode_enabled,
         [1.0, 1.0, 1.0, 0.0, 0.0],
+    )
+    assert np.allclose(
+        phase_cathode_result.cathode_diagnostics["configured"],
+        [1.0, 1.0, 1.0, 1.0, 1.0],
+    )
+    assert np.allclose(
+        phase_cathode_result.cathode_diagnostics["phase_enabled"],
+        [1.0, 1.0, 1.0, 0.0, 0.0],
+    )
+    assert np.allclose(
+        phase_cathode_result.cathode_diagnostics["rhs_enabled"],
+        [1.0, 1.0, 1.0, 0.0, 0.0],
+    )
+    assert np.allclose(
+        phase_cathode_result.cathode_diagnostics["solve_enabled"],
+        [1.0, 1.0, 1.0, 1.0, 0.0],
+    )
+    assert np.allclose(
+        phase_cathode_result.cathode_diagnostics["floating"],
+        [0.0, 0.0, 0.0, 1.0, 0.0],
+    )
+    assert np.allclose(
+        phase_cathode_result.cathode_diagnostics["has_solution"],
+        [1.0, 1.0, 1.0, 1.0, 0.0],
+    )
+    assert np.allclose(
+        phase_cathode_result.rhs_terms["cathode_surface_loss"]["n"][3:],
+        0.0,
+    )
+    assert np.allclose(
+        phase_cathode_result.rhs_terms["beam_ionization_birth"]["n"][3:],
+        0.0,
     )
 
     neutral_phase_run_params = dict(no_source_params)
