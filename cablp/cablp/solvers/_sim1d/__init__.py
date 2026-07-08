@@ -179,6 +179,8 @@ class LAPDSim1D:
         self._time = 0.0
         self._t_prebreakdown_trigger = None
         self._t_breakdown_trigger = None
+        self._last_current_trigger_time = None
+        self._last_current_trigger_I_tot = None
         self._cathode_x0 = None
         self._cathode_x0_twin = None
         self._cathode_beam_cross = np.zeros(self._geometry.cells)
@@ -1036,6 +1038,31 @@ class LAPDSim1D:
             return 0.0
         return float(cathode_solve.beam_result.result.I_tot)
 
+    def _current_threshold_time(self, threshold, I_now):
+        previous_time = self._last_current_trigger_time
+        previous_I = self._last_current_trigger_I_tot
+        current_time = float(self._time)
+        threshold = float(threshold)
+        I_now = float(I_now)
+        if previous_time is None or previous_I is None:
+            return current_time
+        previous_time = float(previous_time)
+        previous_I = float(previous_I)
+        if not np.all(np.isfinite([previous_time, previous_I, current_time, I_now])):
+            return current_time
+        if (
+            previous_I < threshold <= I_now
+            and I_now > previous_I
+            and current_time > previous_time
+        ):
+            fraction = (threshold - previous_I) / (I_now - previous_I)
+            return previous_time + fraction * (current_time - previous_time)
+        return current_time
+
+    def _record_current_trigger_sample(self, I_now):
+        self._last_current_trigger_time = float(self._time)
+        self._last_current_trigger_I_tot = float(I_now)
+
     def _update_current_phase_triggers(self):
         if (
             self._phase_transition_mode() != "current"
@@ -1060,10 +1087,12 @@ class LAPDSim1D:
         if self._t_prebreakdown_trigger is None:
             first_threshold = I_prebreakdown if I_prebreakdown > 0.0 else I_breakdown
             if I_now >= first_threshold:
+                trigger_time = self._current_threshold_time(first_threshold, I_now)
                 if I_prebreakdown > 0.0:
-                    self._t_prebreakdown_trigger = self._time
+                    self._t_prebreakdown_trigger = trigger_time
                 else:
-                    self._t_breakdown_trigger = self._time
+                    self._t_breakdown_trigger = trigger_time
+                self._record_current_trigger_sample(I_now)
                 return
             if self._time >= tau_prebreakdown - time_tol:
                 raise BreakdownError(
@@ -1081,10 +1110,15 @@ class LAPDSim1D:
                     ),
                     tau_prebreakdown=float(tau_prebreakdown),
                 )
+            self._record_current_trigger_sample(I_now)
             return
 
         if I_now >= I_breakdown:
-            self._t_breakdown_trigger = self._time
+            self._t_breakdown_trigger = self._current_threshold_time(
+                I_breakdown,
+                I_now,
+            )
+            self._record_current_trigger_sample(I_now)
             return
         if self._time >= tau_prebreakdown - time_tol:
             raise BreakdownError(
@@ -1098,6 +1132,7 @@ class LAPDSim1D:
                 threshold_name="I_breakdown",
                 tau_prebreakdown=float(tau_prebreakdown),
             )
+        self._record_current_trigger_sample(I_now)
 
     def _energy_exchange_kwargs(self):
         return {

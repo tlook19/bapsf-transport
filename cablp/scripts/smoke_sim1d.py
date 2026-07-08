@@ -2156,6 +2156,44 @@ def main():
         "tau_discharge",
         "tau_afterglow",
     ]
+    current_sample_1 = current_phase_result.cathode_diagnostics["source_I_tot"][1]
+    current_sample_2 = current_phase_result.cathode_diagnostics["source_I_tot"][2]
+    assert current_sample_2 > current_sample_1
+    interpolated_current_phase_params = dict(current_phase_params)
+    interpolated_I_breakdown = 0.5 * (current_sample_1 + current_sample_2)
+    interpolated_current_phase_params["I_breakdown"] = interpolated_I_breakdown
+    interpolated_current_phase_sim = LAPDSim1D(
+        interpolated_current_phase_params,
+        current_phase_flags,
+    )
+    interpolated_current_phase_result = interpolated_current_phase_sim.run(
+        t_end=5.0e-10,
+        dt=1.0e-10,
+    )
+    expected_breakdown_time = 1.0e-10 + (
+        (interpolated_I_breakdown - current_sample_1)
+        / (current_sample_2 - current_sample_1)
+    ) * 1.0e-10
+    assert np.isclose(
+        interpolated_current_phase_result.t_prebreakdown_trigger,
+        1.0e-10,
+    )
+    assert np.isclose(
+        interpolated_current_phase_result.t_breakdown_trigger,
+        expected_breakdown_time,
+    )
+    assert np.allclose(
+        interpolated_current_phase_result.phase_events["time"],
+        [
+            0.0,
+            1.0e-10,
+            expected_breakdown_time,
+            expected_breakdown_time + current_phase_params["tau_discharge"],
+            expected_breakdown_time
+            + current_phase_params["tau_discharge"]
+            + current_phase_params["tau_afterglow"],
+        ],
+    )
     with tempfile.TemporaryDirectory() as tmpdir:
         current_phase_output = current_phase_sim.save_result(
             f"{tmpdir}/sim1d_current_phase_smoke.h5",
