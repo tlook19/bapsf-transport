@@ -2286,6 +2286,9 @@ def main():
             "threshold_name": exc.threshold_name,
             "tau_prebreakdown": exc.tau_prebreakdown,
         }
+        assert np.allclose(exc.phase_events["time"], [0.0])
+        assert list(exc.phase_events["phase"]) == ["pre_breakdown"]
+        assert list(exc.phase_events["reason"]) == ["initial"]
     else:
         raise AssertionError("expected current-triggered run to fail breakdown")
 
@@ -2305,6 +2308,15 @@ def main():
         assert exc.I_tot > 0.0
         assert np.isclose(exc.threshold, failed_breakdown_phase_params["I_breakdown"])
         assert exc.threshold_name == "I_breakdown"
+        assert np.allclose(exc.phase_events["time"], [0.0, 1.0e-10])
+        assert list(exc.phase_events["phase"]) == [
+            "pre_breakdown",
+            "breakdown",
+        ]
+        assert list(exc.phase_events["reason"]) == [
+            "initial",
+            "I_prebreakdown",
+        ]
     else:
         raise AssertionError("expected current-triggered breakdown phase to fail")
 

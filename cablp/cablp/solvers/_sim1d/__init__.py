@@ -99,6 +99,7 @@ class BreakdownError(RuntimeError):
         threshold=None,
         threshold_name=None,
         tau_prebreakdown=None,
+        phase_events=None,
     ):
         super().__init__(message)
         self.phase = phase
@@ -107,6 +108,7 @@ class BreakdownError(RuntimeError):
         self.threshold = threshold
         self.threshold_name = threshold_name
         self.tau_prebreakdown = tau_prebreakdown
+        self.phase_events = phase_events
         self.details = {
             "phase": phase,
             "time": time,
@@ -181,6 +183,7 @@ class LAPDSim1D:
         self._t_breakdown_trigger = None
         self._last_current_trigger_time = None
         self._last_current_trigger_I_tot = None
+        self._run_start_for_phase_events = 0.0
         self._cathode_x0 = None
         self._cathode_x0_twin = None
         self._cathode_beam_cross = np.zeros(self._geometry.cells)
@@ -365,6 +368,7 @@ class LAPDSim1D:
         t_last_save = -np.inf
         time_tol = max(1e-15, 1e-12 * max(abs(t_end), 1.0))
         run_start = float(self._time)
+        self._run_start_for_phase_events = run_start
 
         def should_save(t):
             if max_output_steps > 0 and len(saved) >= max_output_steps:
@@ -1109,6 +1113,10 @@ class LAPDSim1D:
                         else "I_breakdown"
                     ),
                     tau_prebreakdown=float(tau_prebreakdown),
+                    phase_events=self._phase_events(
+                        run_start=self._run_start_for_phase_events,
+                        final_time=float(self._time),
+                    ),
                 )
             self._record_current_trigger_sample(I_now)
             return
@@ -1131,6 +1139,10 @@ class LAPDSim1D:
                 threshold=float(I_breakdown),
                 threshold_name="I_breakdown",
                 tau_prebreakdown=float(tau_prebreakdown),
+                phase_events=self._phase_events(
+                    run_start=self._run_start_for_phase_events,
+                    final_time=float(self._time),
+                ),
             )
         self._record_current_trigger_sample(I_now)
 
