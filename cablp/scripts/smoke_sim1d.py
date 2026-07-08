@@ -1373,6 +1373,8 @@ def main():
     assert np.allclose(run_result.phase_cathode_enabled, 0.0)
     assert np.allclose(run_result.phase_gas_puff_enabled, 0.0)
     assert np.allclose(run_result.phase_floating, 0.0)
+    assert np.isnan(run_result.t_prebreakdown_trigger)
+    assert np.isnan(run_result.t_breakdown_trigger)
     assert run_result.y.shape == (4, run_before.size)
     assert run_result.n.shape == (4, geom.cells)
     assert len(run_result.diagnostics) == 3
@@ -1476,6 +1478,8 @@ def main():
             assert h5.attrs["solver"] == "LAPDSim1D"
             assert h5.attrs["steps"] == run_result.steps
             assert np.isclose(h5.attrs["final_time"], run_result.final_time)
+            assert np.isnan(h5.attrs["t_prebreakdown_trigger"])
+            assert np.isnan(h5.attrs["t_breakdown_trigger"])
             saved_params = json.loads(h5.attrs["params_json"])
             saved_flags = json.loads(h5.attrs["flags_json"])
             assert saved_params["dt_save"] == run_params["dt_save"]
@@ -1524,6 +1528,8 @@ def main():
             assert loaded.path == output_path
             assert loaded.steps == run_result.steps
             assert np.isclose(loaded.final_time, run_result.final_time)
+            assert np.isnan(loaded.t_prebreakdown_trigger)
+            assert np.isnan(loaded.t_breakdown_trigger)
             assert loaded.params["dt_save"] == run_params["dt_save"]
             assert loaded.flags["front_flux"] == flags["front_flux"]
             assert np.allclose(loaded.time, run_result.time)
@@ -1998,6 +2004,8 @@ def main():
     current_phase_result = current_phase_sim.run(t_end=5.0e-10, dt=1.0e-10)
     assert np.isclose(current_phase_sim._t_prebreakdown_trigger, 1.0e-10)
     assert np.isclose(current_phase_sim._t_breakdown_trigger, 2.0e-10)
+    assert np.isclose(current_phase_result.t_prebreakdown_trigger, 1.0e-10)
+    assert np.isclose(current_phase_result.t_breakdown_trigger, 2.0e-10)
     assert np.allclose(
         current_phase_result.time,
         [0.0, 1.0e-10, 2.0e-10, 3.0e-10, 4.0e-10, 5.0e-10],
@@ -2042,6 +2050,17 @@ def main():
         "main_discharge": 2,
         "pre_breakdown": 1,
     }
+    with tempfile.TemporaryDirectory() as tmpdir:
+        current_phase_output = current_phase_sim.save_result(
+            f"{tmpdir}/sim1d_current_phase_smoke.h5",
+            current_phase_result,
+        )
+        with h5py.File(current_phase_output, "r") as h5:
+            assert np.isclose(h5.attrs["t_prebreakdown_trigger"], 1.0e-10)
+            assert np.isclose(h5.attrs["t_breakdown_trigger"], 2.0e-10)
+        loaded_current_phase = load_result_hdf5(current_phase_output)
+        assert np.isclose(loaded_current_phase.t_prebreakdown_trigger, 1.0e-10)
+        assert np.isclose(loaded_current_phase.t_breakdown_trigger, 2.0e-10)
 
     direct_current_phase_params = dict(current_phase_params)
     direct_current_phase_params["I_prebreakdown"] = 0.0
@@ -2055,6 +2074,8 @@ def main():
     )
     assert direct_current_phase_sim._t_prebreakdown_trigger is None
     assert np.isclose(direct_current_phase_sim._t_breakdown_trigger, 1.0e-10)
+    assert np.isnan(direct_current_phase_result.t_prebreakdown_trigger)
+    assert np.isclose(direct_current_phase_result.t_breakdown_trigger, 1.0e-10)
     assert list(direct_current_phase_result.phase) == [
         "pre_breakdown",
         "main_discharge",
