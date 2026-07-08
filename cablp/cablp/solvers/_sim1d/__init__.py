@@ -1285,6 +1285,8 @@ class LAPDSim1D:
             if time < run_start - 1e-15 or time > final_time + 1e-15:
                 return
             if events and abs(events[-1][0] - time) <= 1e-15:
+                if events[-1][2] == "initial":
+                    return
                 events[-1] = (time, phase, reason)
                 return
             events.append((time, phase, reason))

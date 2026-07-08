@@ -1948,6 +1948,24 @@ def main():
         breakdown_result.phase_floating,
         [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
     )
+    assert np.allclose(
+        breakdown_result.phase_events["time"],
+        [0.0, 1.0e-10, 2.0e-10, 4.0e-10, 5.0e-10],
+    )
+    assert list(breakdown_result.phase_events["phase"]) == [
+        "pre_breakdown",
+        "breakdown",
+        "main_discharge",
+        "afterglow",
+        "post_afterglow",
+    ]
+    assert list(breakdown_result.phase_events["reason"]) == [
+        "initial",
+        "tau_prebreakdown",
+        "tau_breakdown",
+        "tau_discharge",
+        "tau_afterglow",
+    ]
     breakdown_summary = summarize_result(breakdown_result)
     assert breakdown_summary.phase_counts == {
         "afterglow": 1,
@@ -1984,6 +2002,30 @@ def main():
         breakdown_capped_result.phase_elapsed,
         [0.0, 0.0, 0.0, 0.0, 0.0],
     )
+    assert np.allclose(
+        breakdown_capped_result.phase_events["time"],
+        [0.0, 1.0e-10, 2.0e-10, 4.0e-10, 5.0e-10],
+    )
+
+    breakdown_mid_sim = LAPDSim1D(breakdown_params, flags)
+    breakdown_mid_sim.run(t_end=1.0e-10, dt=1.0e-10)
+    breakdown_mid_result = breakdown_mid_sim.run(t_end=5.0e-10, dt=1.0e-10)
+    assert np.allclose(
+        breakdown_mid_result.phase_events["time"],
+        [1.0e-10, 2.0e-10, 4.0e-10, 5.0e-10],
+    )
+    assert list(breakdown_mid_result.phase_events["phase"]) == [
+        "breakdown",
+        "main_discharge",
+        "afterglow",
+        "post_afterglow",
+    ]
+    assert list(breakdown_mid_result.phase_events["reason"]) == [
+        "initial",
+        "tau_breakdown",
+        "tau_discharge",
+        "tau_afterglow",
+    ]
 
     breakdown_cathode_flags = dict(flags)
     breakdown_cathode_flags["cathode_coupling"] = True
