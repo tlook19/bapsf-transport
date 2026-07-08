@@ -167,8 +167,17 @@ def _write_nested_fields(group, terms):
 
 
 def _write_field_arrays(group, fields):
+    str_dtype = h5py.string_dtype(encoding="utf-8")
     for field_name, values in fields.items():
-        group.create_dataset(field_name, data=np.asarray(values))
+        values = np.asarray(values)
+        if values.dtype.kind in {"U", "S", "O"}:
+            group.create_dataset(
+                field_name,
+                data=np.asarray(values, dtype=object),
+                dtype=str_dtype,
+            )
+        else:
+            group.create_dataset(field_name, data=values)
 
 
 def _write_term_arrays(group, terms):
@@ -206,7 +215,14 @@ def _read_nested_fields(group):
 
 
 def _read_field_arrays(group):
-    return {field_name: dataset[()] for field_name, dataset in group.items()}
+    return {
+        field_name: (
+            _read_string_array(dataset)
+            if h5py.check_string_dtype(dataset.dtype) is not None
+            else dataset[()]
+        )
+        for field_name, dataset in group.items()
+    }
 
 
 def _read_term_arrays(group):
