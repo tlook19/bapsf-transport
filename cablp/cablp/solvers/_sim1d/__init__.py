@@ -27,6 +27,7 @@ from .core.state import (
 from .core.timestep import suggest_timestep
 from .physics.conduction import heat_conduction_rhs, implicit_heat_conduction_step
 from .physics.cathode import (
+    beam_ionization_rhs,
     cathode_boundary_state,
     cathode_source_terms,
     solve_cathode_boundary,
@@ -172,6 +173,12 @@ class LAPDSim1D:
         state = self.state if y is None else unpack_state(y, self._geometry.cells)
         plasma_terms = self.plasma_flux_rhs_terms(state=state)
         reaction_terms = self.reaction_rhs_terms(state=state)
+        cathode_solve = None
+        if self._flags.get("cathode_coupling", False):
+            cathode_solve = self.solve_cathode_boundary(
+                state=state,
+                update_cache=True,
+            )
         terms = {
             "plasma_advective_flux": plasma_terms["plasma_advective_flux"],
             "plasma_front_flux": plasma_terms["plasma_front_flux"],
@@ -180,10 +187,17 @@ class LAPDSim1D:
             "electron_cooling": self.electron_cooling_rhs(state=state),
             "ion_charge_exchange": self.ion_charge_exchange_rhs(state=state),
             "surface_loss": self.surface_neutralization_rhs(state=state),
-            "cathode_surface_loss": self.cathode_source_terms(state=state).rhs,
+            "cathode_surface_loss": self.cathode_source_terms(
+                state=state,
+                cathode_solve=cathode_solve,
+            ).rhs,
             "neutral_exchange": self.neutral_exchange_rhs(state=state),
             "neutral_sources": self.neutral_source_sink_rhs(state=state),
             "ionization_birth": reaction_terms["ionization_birth"],
+            "beam_ionization_birth": self.beam_ionization_rhs(
+                state=state,
+                cathode_solve=cathode_solve,
+            ),
             "recombination_loss": reaction_terms["recombination_loss"],
             "heat_conduction": self._zero_rhs_state(),
         }
@@ -489,6 +503,25 @@ class LAPDSim1D:
                 update_cache=True,
             )
         return cathode_source_terms(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            geometry=self._geometry,
+            input_dict=self._input_dict,
+            input_flags=self._flags,
+            cathode_solve=cathode_solve,
+        )
+
+    def beam_ionization_rhs(self, y=None, state=None, cathode_solve=None):
+        """Return conservative beam ionization birth terms."""
+        if state is None:
+            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        if cathode_solve is None and self._flags.get("cathode_coupling", False):
+            cathode_solve = self.solve_cathode_boundary(
+                state=state,
+                update_cache=True,
+            )
+        return beam_ionization_rhs(
             state=state,
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,

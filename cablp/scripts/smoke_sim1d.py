@@ -279,11 +279,40 @@ def main():
         cathode_loss_terms.rhs.Ei[0],
         1.5 * ev_to_erg * params["Ti0"] * cathode_loss_terms.rhs.n[0],
     )
+    beam_birth_terms = cathode_sim.beam_ionization_rhs(
+        cathode_solve=cathode_solve,
+    )
+    assert np.all(beam_birth_terms.n >= 0.0)
+    assert np.any(beam_birth_terms.n > 0.0)
+    assert np.all(beam_birth_terms.nn <= 0.0)
+    assert np.allclose(beam_birth_terms.M, 0.0)
+    assert np.all(beam_birth_terms.Ee >= 0.0)
+    assert np.all(beam_birth_terms.Ei >= 0.0)
+    beam_inventory_scale = np.sum(
+        np.abs(beam_birth_terms.n * geom.plasma_volume_cm3)
+        + np.abs(beam_birth_terms.nn * geom.neutral_volume_cm3)
+    )
+    assert np.isclose(
+        particle_inventory_rate(beam_birth_terms, geom),
+        0.0,
+        atol=1e-12 * beam_inventory_scale,
+    )
+    assert np.allclose(
+        beam_birth_terms.Ee,
+        1.5 * ev_to_erg * params["Te0"] * beam_birth_terms.n,
+    )
+    assert np.allclose(
+        beam_birth_terms.Ei,
+        1.5 * ev_to_erg * params["Ti_floor"] * beam_birth_terms.n,
+    )
     cathode_rhs_terms = cathode_sim.rhs_terms(include_heat_conduction=False)
     assert "cathode_surface_loss" in cathode_rhs_terms
+    assert "beam_ionization_birth" in cathode_rhs_terms
     assert cathode_rhs_terms["cathode_surface_loss"].n[0] < 0.0
     assert cathode_rhs_terms["cathode_surface_loss"].nn[0] > 0.0
     assert np.allclose(cathode_rhs_terms["cathode_surface_loss"].n[1:], 0.0)
+    assert np.all(cathode_rhs_terms["beam_ionization_birth"].n >= 0.0)
+    assert np.any(cathode_rhs_terms["beam_ionization_birth"].n > 0.0)
     assert np.allclose(cathode_rhs_terms["surface_loss"].n[0], 0.0)
     assert np.allclose(cathode_rhs_terms["surface_loss"].nn[0], 0.0)
     assert cathode_rhs_terms["surface_loss"].n[-1] < 0.0
@@ -839,6 +868,7 @@ def main():
         "neutral_exchange",
         "neutral_sources",
         "ionization_birth",
+        "beam_ionization_birth",
         "recombination_loss",
         "heat_conduction",
     }
@@ -859,6 +889,7 @@ def main():
         full_rhs - nonheat_rhs,
     )
     assert np.allclose(pack_state(rhs_terms["cathode_surface_loss"]), 0.0)
+    assert np.allclose(pack_state(rhs_terms["beam_ionization_birth"]), 0.0)
 
     split_dt = min(1.0e-10, 0.1 * heat_dt.dt_heat_conduction)
     manual_explicit_y = ssprk2_step(
