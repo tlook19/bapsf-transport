@@ -1350,11 +1350,32 @@ def main():
     no_source_params["b_surface_loss"] = 0.0
     no_source_sim = LAPDSim1D(no_source_params, flags)
     y_before = no_source_sim.get_initial_snapshot().y.copy()
+    explicit_attempt = no_source_sim._attempt_step(dt=1e-10)
+    assert np.isclose(explicit_attempt.dt, 1e-10)
+    assert not explicit_attempt.operator_split
+    assert np.isclose(no_source_sim.time, 0.0)
+    assert np.allclose(no_source_sim.get_initial_snapshot().y, y_before)
+    explicit_attempt_after = no_source_sim._accept_step_attempt(explicit_attempt)
+    assert np.isclose(no_source_sim.time, 1e-10)
+    assert np.allclose(explicit_attempt_after.y, y_before, rtol=0.0, atol=1e-20)
+
+    no_source_sim = LAPDSim1D(no_source_params, flags)
+    y_before = no_source_sim.get_initial_snapshot().y.copy()
     stationary_after = no_source_sim.advance_one_step(1e-10)
     assert np.allclose(stationary_after.y, y_before, rtol=0.0, atol=1e-20)
 
     split_flags = dict(flags)
     split_flags["implicit_heat_conduction"] = True
+    no_source_split_sim = LAPDSim1D(no_source_params, split_flags)
+    split_before = no_source_split_sim.get_initial_snapshot().y.copy()
+    split_attempt = no_source_split_sim._attempt_step(dt=1e-10)
+    assert split_attempt.operator_split
+    assert np.isclose(no_source_split_sim.time, 0.0)
+    assert np.allclose(no_source_split_sim.get_initial_snapshot().y, split_before)
+    split_attempt_after = no_source_split_sim._accept_step_attempt(split_attempt)
+    assert np.isclose(no_source_split_sim.time, 1e-10)
+    assert np.allclose(split_attempt_after.y, split_before, rtol=0.0, atol=1e-20)
+
     no_source_split_sim = LAPDSim1D(no_source_params, split_flags)
     split_before = no_source_split_sim.get_initial_snapshot().y.copy()
     split_stationary_after = no_source_split_sim.advance_one_step(1e-10)
