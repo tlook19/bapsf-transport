@@ -638,9 +638,17 @@ class LAPDSim1D:
         diagnostics = []
         timestep_rejection_events = []
         t_last_save = -np.inf
+        previous_accepted_dt = None
         time_tol = max(1e-15, 1e-12 * max(abs(t_end), 1.0))
         run_start = float(self._time)
         self._run_start_for_phase_events = run_start
+        dt_growth_enabled = bool(self._input_dict.get("dt_growth_enabled", True))
+        dt_growth_factor = float(self._input_dict.get("dt_growth_factor", 1.25))
+        if dt_growth_enabled and dt_growth_factor <= 1.0:
+            raise ValueError(
+                "dt_growth_factor must be > 1 when dt growth is enabled "
+                f"(got {dt_growth_factor})"
+            )
 
         def should_save(t):
             if max_output_steps > 0 and len(saved) >= max_output_steps:
@@ -700,6 +708,13 @@ class LAPDSim1D:
             )
             step_dt = diag.dt if dt is None else float(dt)
             step_cap = diag.active_constraint if dt is None else "fixed_dt"
+            if dt is None and dt_growth_enabled and previous_accepted_dt is not None:
+                step_dt, step_cap = cap_step(
+                    step_dt,
+                    step_cap,
+                    previous_accepted_dt * dt_growth_factor,
+                    "dt_growth",
+                )
             step_dt, step_cap = cap_step(
                 step_dt,
                 step_cap,
@@ -743,6 +758,7 @@ class LAPDSim1D:
             self._update_current_phase_triggers()
             if retry_count:
                 step_cap = "retry"
+            previous_accepted_dt = float(attempt.dt)
             diagnostics.append(
                 replace(
                     diag,
