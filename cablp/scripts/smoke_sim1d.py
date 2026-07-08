@@ -1376,6 +1376,9 @@ def main():
     assert np.allclose(run_result.phase_floating, 0.0)
     assert np.isnan(run_result.t_prebreakdown_trigger)
     assert np.isnan(run_result.t_breakdown_trigger)
+    assert np.allclose(run_result.phase_events["time"], [0.0])
+    assert list(run_result.phase_events["phase"]) == ["pre_breakdown"]
+    assert list(run_result.phase_events["reason"]) == ["initial"]
     assert run_result.y.shape == (4, run_before.size)
     assert run_result.n.shape == (4, geom.cells)
     assert len(run_result.diagnostics) == 3
@@ -1491,6 +1494,9 @@ def main():
             assert h5["phase_cathode_enabled"].shape == run_result.phase.shape
             assert h5["phase_gas_puff_enabled"].shape == run_result.phase.shape
             assert h5["phase_floating"].shape == run_result.phase.shape
+            assert h5["phase_events/time"].shape == (1,)
+            assert h5["phase_events/phase"].shape == (1,)
+            assert h5["phase_events/reason"].shape == (1,)
             assert h5["cathode_diagnostics/solve_enabled"].shape == (4,)
             assert h5["cathode_diagnostics/floating"].shape == (4,)
             assert all(
@@ -1531,6 +1537,9 @@ def main():
             assert np.isclose(loaded.final_time, run_result.final_time)
             assert np.isnan(loaded.t_prebreakdown_trigger)
             assert np.isnan(loaded.t_breakdown_trigger)
+            assert np.allclose(loaded.phase_events["time"], [0.0])
+            assert list(loaded.phase_events["phase"]) == ["pre_breakdown"]
+            assert list(loaded.phase_events["reason"]) == ["initial"]
             assert loaded.params["dt_save"] == run_params["dt_save"]
             assert loaded.flags["front_flux"] == flags["front_flux"]
             assert np.allclose(loaded.time, run_result.time)
@@ -2051,6 +2060,24 @@ def main():
         "main_discharge": 2,
         "pre_breakdown": 1,
     }
+    assert np.allclose(
+        current_phase_result.phase_events["time"],
+        [0.0, 1.0e-10, 2.0e-10, 4.0e-10, 5.0e-10],
+    )
+    assert list(current_phase_result.phase_events["phase"]) == [
+        "pre_breakdown",
+        "breakdown",
+        "main_discharge",
+        "afterglow",
+        "post_afterglow",
+    ]
+    assert list(current_phase_result.phase_events["reason"]) == [
+        "initial",
+        "I_prebreakdown",
+        "I_breakdown",
+        "tau_discharge",
+        "tau_afterglow",
+    ]
     with tempfile.TemporaryDirectory() as tmpdir:
         current_phase_output = current_phase_sim.save_result(
             f"{tmpdir}/sim1d_current_phase_smoke.h5",
@@ -2059,9 +2086,22 @@ def main():
         with h5py.File(current_phase_output, "r") as h5:
             assert np.isclose(h5.attrs["t_prebreakdown_trigger"], 1.0e-10)
             assert np.isclose(h5.attrs["t_breakdown_trigger"], 2.0e-10)
+            assert h5["phase_events/time"].shape == (5,)
         loaded_current_phase = load_result_hdf5(current_phase_output)
         assert np.isclose(loaded_current_phase.t_prebreakdown_trigger, 1.0e-10)
         assert np.isclose(loaded_current_phase.t_breakdown_trigger, 2.0e-10)
+        assert np.allclose(
+            loaded_current_phase.phase_events["time"],
+            current_phase_result.phase_events["time"],
+        )
+        assert np.all(
+            loaded_current_phase.phase_events["phase"]
+            == current_phase_result.phase_events["phase"]
+        )
+        assert np.all(
+            loaded_current_phase.phase_events["reason"]
+            == current_phase_result.phase_events["reason"]
+        )
 
     direct_current_phase_params = dict(current_phase_params)
     direct_current_phase_params["I_prebreakdown"] = 0.0
@@ -2077,6 +2117,22 @@ def main():
     assert np.isclose(direct_current_phase_sim._t_breakdown_trigger, 1.0e-10)
     assert np.isnan(direct_current_phase_result.t_prebreakdown_trigger)
     assert np.isclose(direct_current_phase_result.t_breakdown_trigger, 1.0e-10)
+    assert np.allclose(
+        direct_current_phase_result.phase_events["time"],
+        [0.0, 1.0e-10, 3.0e-10, 4.0e-10],
+    )
+    assert list(direct_current_phase_result.phase_events["phase"]) == [
+        "pre_breakdown",
+        "main_discharge",
+        "afterglow",
+        "post_afterglow",
+    ]
+    assert list(direct_current_phase_result.phase_events["reason"]) == [
+        "initial",
+        "I_breakdown",
+        "tau_discharge",
+        "tau_afterglow",
+    ]
     assert list(direct_current_phase_result.phase) == [
         "pre_breakdown",
         "main_discharge",

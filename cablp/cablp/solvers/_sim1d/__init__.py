@@ -104,6 +104,14 @@ def summarize_result(result):
     return _summarize_result(result)
 
 
+def _phase_event_arrays(events):
+    return {
+        "time": np.asarray([event[0] for event in events], dtype=float),
+        "phase": np.asarray([event[1] for event in events], dtype=object),
+        "reason": np.asarray([event[2] for event in events], dtype=object),
+    }
+
+
 class LAPDSim1D:
     """Conservative axial 1D LAPD solver scaffold.
 
@@ -327,6 +335,7 @@ class LAPDSim1D:
         diagnostics = []
         t_last_save = -np.inf
         time_tol = max(1e-15, 1e-12 * max(abs(t_end), 1.0))
+        run_start = float(self._time)
 
         def should_save(t):
             if max_output_steps > 0 and len(saved) >= max_output_steps:
@@ -375,7 +384,12 @@ class LAPDSim1D:
                 saved.append(self._trajectory_snapshot(self._time))
                 t_last_save = self._time
 
-        return self._trajectory_result(saved=saved, diagnostics=diagnostics, steps=steps)
+        return self._trajectory_result(
+            saved=saved,
+            diagnostics=diagnostics,
+            steps=steps,
+            run_start=run_start,
+        )
 
     def save_result(self, path, result, params=None, flags=None):
         """Write a run result to HDF5 with this solver's config metadata."""
@@ -1161,7 +1175,7 @@ class LAPDSim1D:
             "cathode_diagnostics": self._cathode_diagnostic_snapshot(time=time),
         }
 
-    def _trajectory_result(self, saved, diagnostics, steps):
+    def _trajectory_result(self, saved, diagnostics, steps, run_start):
         cells = self._geometry.cells
 
         def stack(name):
@@ -1239,6 +1253,10 @@ class LAPDSim1D:
             volume_ratio=self._geometry.volume_ratio.copy(),
             rhs_terms=rhs_terms,
             cathode_diagnostics=cathode_diagnostics,
+            phase_events=self._phase_events(
+                run_start=run_start,
+                final_time=float(self._time),
+            ),
             total_rhs=total_rhs,
             electron_energy_terms_W_cm3=electron_energy_terms_W_cm3,
             ion_energy_terms_W_cm3=ion_energy_terms_W_cm3,
@@ -1256,6 +1274,69 @@ class LAPDSim1D:
                 else float(self._t_breakdown_trigger)
             ),
         )
+
+    def _phase_events(self, run_start, final_time):
+        run_start = float(run_start)
+        final_time = float(final_time)
+        events = []
+
+        def append_event(time, phase, reason):
+            time = float(time)
+            if time < run_start - 1e-15 or time > final_time + 1e-15:
+                return
+            if events and abs(events[-1][0] - time) <= 1e-15:
+                events[-1] = (time, phase, reason)
+                return
+            events.append((time, phase, reason))
+
+        append_event(run_start, self.phase_at_time(run_start), "initial")
+        if not self._flags.get("Plasma", True):
+            return _phase_event_arrays(events)
+
+        tau_prebreakdown = max(
+            float(self._input_dict.get("tau_prebreakdown", 0.0)),
+            0.0,
+        )
+        tau_breakdown = max(float(self._input_dict.get("tau_breakdown", 0.0)), 0.0)
+        tau_discharge = max(float(self._input_dict.get("tau_discharge", 0.0)), 0.0)
+        tau_afterglow = max(float(self._input_dict.get("tau_afterglow", 0.0)), 0.0)
+
+        if self._phase_transition_mode() == "current":
+            if self._t_prebreakdown_trigger is not None:
+                append_event(
+                    self._t_prebreakdown_trigger,
+                    "breakdown",
+                    "I_prebreakdown",
+                )
+            if self._t_breakdown_trigger is not None:
+                main_start = float(self._t_breakdown_trigger)
+                append_event(main_start, "main_discharge", "I_breakdown")
+                append_event(
+                    main_start + tau_discharge,
+                    "afterglow",
+                    "tau_discharge",
+                )
+                append_event(
+                    main_start + tau_discharge + tau_afterglow,
+                    "post_afterglow",
+                    "tau_afterglow",
+                )
+            return _phase_event_arrays(events)
+
+        breakdown_start = tau_prebreakdown
+        main_start = breakdown_start + tau_breakdown
+        if tau_breakdown > 0.0:
+            append_event(breakdown_start, "breakdown", "tau_prebreakdown")
+            append_event(main_start, "main_discharge", "tau_breakdown")
+        else:
+            append_event(main_start, "main_discharge", "tau_prebreakdown")
+        append_event(main_start + tau_discharge, "afterglow", "tau_discharge")
+        append_event(
+            main_start + tau_discharge + tau_afterglow,
+            "post_afterglow",
+            "tau_afterglow",
+        )
+        return _phase_event_arrays(events)
 
     def _stack_trajectory_rhs_terms(self, saved, cells):
         if not saved:

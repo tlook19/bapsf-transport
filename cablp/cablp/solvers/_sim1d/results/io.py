@@ -66,6 +66,8 @@ def save_result_hdf5(path, result, params=None, flags=None):
             result.ion_energy_terms_W_cm3,
         )
         _write_field_arrays(h5.create_group("total_rhs"), result.total_rhs)
+        if hasattr(result, "phase_events"):
+            _write_field_arrays(h5.create_group("phase_events"), result.phase_events)
         if hasattr(result, "cathode_diagnostics"):
             _write_field_arrays(
                 h5.create_group("cathode_diagnostics"),
@@ -131,6 +133,11 @@ def load_result_hdf5(path):
             **geometry,
             rhs_terms=_read_nested_fields(h5["rhs_terms"]),
             total_rhs=_read_field_arrays(h5["total_rhs"]),
+            phase_events=(
+                _read_field_arrays(h5["phase_events"])
+                if "phase_events" in h5
+                else _empty_phase_events()
+            ),
             cathode_diagnostics=(
                 _read_field_arrays(h5["cathode_diagnostics"])
                 if "cathode_diagnostics" in h5
@@ -294,6 +301,14 @@ def _read_float_attr(group, name, default):
     if name not in group.attrs:
         return float(default)
     return float(group.attrs[name])
+
+
+def _empty_phase_events():
+    return {
+        "time": np.asarray([], dtype=float),
+        "phase": np.asarray([], dtype=object),
+        "reason": np.asarray([], dtype=object),
+    }
 
 
 def _decode_string(value):
