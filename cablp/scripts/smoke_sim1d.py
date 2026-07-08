@@ -10,6 +10,7 @@ import numpy as np
 from cablp.funcs._heat import elec_par_heat_div, ion_par_heat_div
 from cablp.funcs._plasmaparams import c_log
 from cablp.solvers._sim1d import (
+    BreakdownError,
     LAPDSim1D,
     default_config,
     load_result_hdf5,
@@ -2083,6 +2084,20 @@ def main():
         "afterglow",
         "post_afterglow",
     ]
+
+    failed_current_phase_params = dict(current_phase_params)
+    failed_current_phase_params["I_prebreakdown"] = 1.0e30
+    failed_current_phase_params["I_breakdown"] = 1.0e30
+    failed_current_phase_sim = LAPDSim1D(
+        failed_current_phase_params,
+        current_phase_flags,
+    )
+    try:
+        failed_current_phase_sim.run(t_end=5.0e-10, dt=1.0e-10)
+    except BreakdownError as exc:
+        assert "plasma failed to break down" in str(exc)
+    else:
+        raise AssertionError("expected current-triggered run to fail breakdown")
 
     neutral_phase_run_params = dict(no_source_params)
     neutral_phase_run_params["dt_save"] = 0.0
