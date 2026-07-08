@@ -329,6 +329,42 @@ def beam_ionization_rhs(
     cathode_solve=None,
 ):
     """Return conservative beam ionization and beam electron energy terms."""
+    terms = beam_ionization_rhs_terms(
+        state=state,
+        floors=floors,
+        ion_mass_g=ion_mass_g,
+        geometry=geometry,
+        input_dict=input_dict,
+        input_flags=input_flags,
+        I_ion=I_ion,
+        cathode_solve=cathode_solve,
+    )
+    rhs = terms["beam_ionization_birth"]
+    for term in (
+        terms["beam_power_deposition"],
+        terms["beam_ionization_cost"],
+    ):
+        rhs = ConservativeState1D(
+            n=rhs.n + term.n,
+            nn=rhs.nn + term.nn,
+            M=rhs.M + term.M,
+            Ee=rhs.Ee + term.Ee,
+            Ei=rhs.Ei + term.Ei,
+        )
+    return rhs
+
+
+def beam_ionization_rhs_terms(
+    state,
+    floors,
+    ion_mass_g,
+    geometry,
+    input_dict,
+    input_flags,
+    I_ion,
+    cathode_solve=None,
+):
+    """Return split beam ionization particle, power, and cost terms."""
     boundary = cathode_boundary_state(
         state=state,
         floors=floors,
@@ -343,14 +379,52 @@ def beam_ionization_rhs(
         or cathode_solve is None
         or cathode_solve.beam_result is None
     ):
-        return ConservativeState1D(
+        return _zero_beam_terms(zeros)
+
+    S_beam, beam_power_density = _beam_ionization_sources(
+        state=state,
+        geometry=geometry,
+        cathode_solve=cathode_solve,
+        boundary=boundary,
+    )
+    volume_ratio = geometry.plasma_volume_cm3 / geometry.neutral_volume_cm3
+    Ti_birth = _birth_temperature(
+        input_dict.get("Ti_birth_ionization", "floor"),
+        derive_state(state, floors=floors, ion_mass_g=ion_mass_g).Ti,
+        floors["Ti"],
+    )
+    return {
+        "beam_ionization_birth": ConservativeState1D(
+            n=S_beam,
+            nn=-S_beam * volume_ratio,
+            M=zeros.copy(),
+            Ee=zeros.copy(),
+            Ei=1.5 * ev_to_erg * Ti_birth * S_beam,
+        ),
+        "beam_power_deposition": ConservativeState1D(
             n=zeros,
             nn=zeros.copy(),
             M=zeros.copy(),
-            Ee=zeros.copy(),
+            Ee=beam_power_density,
             Ei=zeros.copy(),
-        )
+        ),
+        "beam_ionization_cost": ConservativeState1D(
+            n=zeros,
+            nn=zeros.copy(),
+            M=zeros.copy(),
+            Ee=-I_ion * ev_to_erg * S_beam,
+            Ei=zeros.copy(),
+        ),
+    }
 
+
+def _beam_ionization_sources(
+    state,
+    geometry,
+    cathode_solve,
+    boundary,
+):
+    zeros = np.zeros(geometry.cells, dtype=float)
     beam_result = cathode_solve.beam_result
     S_beam = zeros.copy()
     beam_power_density = zeros.copy()
@@ -382,19 +456,33 @@ def beam_ionization_rhs(
             cathode_index=-1,
         )
 
-    volume_ratio = geometry.plasma_volume_cm3 / geometry.neutral_volume_cm3
-    Ti_birth = _birth_temperature(
-        input_dict.get("Ti_birth_ionization", "floor"),
-        derive_state(state, floors=floors, ion_mass_g=ion_mass_g).Ti,
-        floors["Ti"],
-    )
-    return ConservativeState1D(
-        n=S_beam,
-        nn=-S_beam * volume_ratio,
-        M=zeros.copy(),
-        Ee=beam_power_density - I_ion * ev_to_erg * S_beam,
-        Ei=1.5 * ev_to_erg * Ti_birth * S_beam,
-    )
+    return S_beam, beam_power_density
+
+
+def _zero_beam_terms(zeros):
+    return {
+        "beam_ionization_birth": ConservativeState1D(
+            n=zeros,
+            nn=zeros.copy(),
+            M=zeros.copy(),
+            Ee=zeros.copy(),
+            Ei=zeros.copy(),
+        ),
+        "beam_power_deposition": ConservativeState1D(
+            n=zeros.copy(),
+            nn=zeros.copy(),
+            M=zeros.copy(),
+            Ee=zeros.copy(),
+            Ei=zeros.copy(),
+        ),
+        "beam_ionization_cost": ConservativeState1D(
+            n=zeros.copy(),
+            nn=zeros.copy(),
+            M=zeros.copy(),
+            Ee=zeros.copy(),
+            Ei=zeros.copy(),
+        ),
+    }
 
 
 def _cell_state(index, state, derived, geometry):

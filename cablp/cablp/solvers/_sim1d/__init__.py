@@ -28,6 +28,7 @@ from .core.timestep import suggest_timestep
 from .physics.conduction import heat_conduction_rhs, implicit_heat_conduction_step
 from .physics.cathode import (
     beam_ionization_rhs,
+    beam_ionization_rhs_terms,
     cathode_boundary_state,
     cathode_source_terms,
     solve_cathode_boundary,
@@ -179,6 +180,10 @@ class LAPDSim1D:
                 state=state,
                 update_cache=True,
             )
+        beam_terms = self.beam_ionization_rhs_terms(
+            state=state,
+            cathode_solve=cathode_solve,
+        )
         terms = {
             "plasma_advective_flux": plasma_terms["plasma_advective_flux"],
             "plasma_front_flux": plasma_terms["plasma_front_flux"],
@@ -194,10 +199,9 @@ class LAPDSim1D:
             "neutral_exchange": self.neutral_exchange_rhs(state=state),
             "neutral_sources": self.neutral_source_sink_rhs(state=state),
             "ionization_birth": reaction_terms["ionization_birth"],
-            "beam_ionization_birth": self.beam_ionization_rhs(
-                state=state,
-                cathode_solve=cathode_solve,
-            ),
+            "beam_ionization_birth": beam_terms["beam_ionization_birth"],
+            "beam_power_deposition": beam_terms["beam_power_deposition"],
+            "beam_ionization_cost": beam_terms["beam_ionization_cost"],
             "recombination_loss": reaction_terms["recombination_loss"],
             "heat_conduction": self._zero_rhs_state(),
         }
@@ -522,6 +526,26 @@ class LAPDSim1D:
                 update_cache=True,
             )
         return beam_ionization_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            geometry=self._geometry,
+            input_dict=self._input_dict,
+            input_flags=self._flags,
+            I_ion=self._I_ion,
+            cathode_solve=cathode_solve,
+        )
+
+    def beam_ionization_rhs_terms(self, y=None, state=None, cathode_solve=None):
+        """Return split beam particle birth, deposited power, and ionization cost."""
+        if state is None:
+            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        if cathode_solve is None and self._flags.get("cathode_coupling", False):
+            cathode_solve = self.solve_cathode_boundary(
+                state=state,
+                update_cache=True,
+            )
+        return beam_ionization_rhs_terms(
             state=state,
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,

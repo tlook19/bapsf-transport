@@ -283,11 +283,44 @@ def main():
     beam_birth_terms = cathode_sim.beam_ionization_rhs(
         cathode_solve=cathode_solve,
     )
+    split_beam_terms = cathode_sim.beam_ionization_rhs_terms(
+        cathode_solve=cathode_solve,
+    )
+    assert set(split_beam_terms) == {
+        "beam_ionization_birth",
+        "beam_power_deposition",
+        "beam_ionization_cost",
+    }
+    split_beam_sum = np.zeros_like(pack_state(beam_birth_terms))
+    for split_term in split_beam_terms.values():
+        split_beam_sum = split_beam_sum + pack_state(split_term)
+    assert np.allclose(split_beam_sum, pack_state(beam_birth_terms))
     assert np.all(beam_birth_terms.n >= 0.0)
     assert np.any(beam_birth_terms.n > 0.0)
     assert np.all(beam_birth_terms.nn <= 0.0)
     assert np.allclose(beam_birth_terms.M, 0.0)
     assert np.all(beam_birth_terms.Ei >= 0.0)
+    assert np.allclose(
+        split_beam_terms["beam_ionization_birth"].n,
+        beam_birth_terms.n,
+    )
+    assert np.allclose(
+        split_beam_terms["beam_ionization_birth"].nn,
+        beam_birth_terms.nn,
+    )
+    assert np.allclose(split_beam_terms["beam_ionization_birth"].Ee, 0.0)
+    assert np.all(split_beam_terms["beam_power_deposition"].Ee >= 0.0)
+    assert np.any(split_beam_terms["beam_power_deposition"].Ee > 0.0)
+    assert np.all(split_beam_terms["beam_ionization_cost"].Ee <= 0.0)
+    assert np.any(split_beam_terms["beam_ionization_cost"].Ee < 0.0)
+    for zero_particle_term in (
+        split_beam_terms["beam_power_deposition"],
+        split_beam_terms["beam_ionization_cost"],
+    ):
+        assert np.allclose(zero_particle_term.n, 0.0)
+        assert np.allclose(zero_particle_term.nn, 0.0)
+        assert np.allclose(zero_particle_term.M, 0.0)
+        assert np.allclose(zero_particle_term.Ei, 0.0)
     beam_inventory_scale = np.sum(
         np.abs(beam_birth_terms.n * geom.plasma_volume_cm3)
         + np.abs(beam_birth_terms.nn * geom.neutral_volume_cm3)
@@ -312,21 +345,36 @@ def main():
         / geom.plasma_volume_cm3
     )
     assert np.allclose(
-        beam_birth_terms.Ee,
-        expected_beam_power_density - sim.I_ion * ev_to_erg * beam_birth_terms.n,
+        split_beam_terms["beam_power_deposition"].Ee,
+        expected_beam_power_density,
     )
     assert np.allclose(
-        beam_birth_terms.Ei,
+        split_beam_terms["beam_ionization_cost"].Ee,
+        -sim.I_ion * ev_to_erg * beam_birth_terms.n,
+    )
+    assert np.allclose(
+        beam_birth_terms.Ee,
+        (
+            split_beam_terms["beam_power_deposition"].Ee
+            + split_beam_terms["beam_ionization_cost"].Ee
+        ),
+    )
+    assert np.allclose(
+        split_beam_terms["beam_ionization_birth"].Ei,
         1.5 * ev_to_erg * params["Ti_floor"] * beam_birth_terms.n,
     )
     cathode_rhs_terms = cathode_sim.rhs_terms(include_heat_conduction=False)
     assert "cathode_surface_loss" in cathode_rhs_terms
     assert "beam_ionization_birth" in cathode_rhs_terms
+    assert "beam_power_deposition" in cathode_rhs_terms
+    assert "beam_ionization_cost" in cathode_rhs_terms
     assert cathode_rhs_terms["cathode_surface_loss"].n[0] < 0.0
     assert cathode_rhs_terms["cathode_surface_loss"].nn[0] > 0.0
     assert np.allclose(cathode_rhs_terms["cathode_surface_loss"].n[1:], 0.0)
     assert np.all(cathode_rhs_terms["beam_ionization_birth"].n >= 0.0)
     assert np.any(cathode_rhs_terms["beam_ionization_birth"].n > 0.0)
+    assert np.all(cathode_rhs_terms["beam_power_deposition"].Ee >= 0.0)
+    assert np.all(cathode_rhs_terms["beam_ionization_cost"].Ee <= 0.0)
     assert np.allclose(cathode_rhs_terms["surface_loss"].n[0], 0.0)
     assert np.allclose(cathode_rhs_terms["surface_loss"].nn[0], 0.0)
     assert cathode_rhs_terms["surface_loss"].n[-1] < 0.0
@@ -883,6 +931,8 @@ def main():
         "neutral_sources",
         "ionization_birth",
         "beam_ionization_birth",
+        "beam_power_deposition",
+        "beam_ionization_cost",
         "recombination_loss",
         "heat_conduction",
     }
@@ -904,6 +954,8 @@ def main():
     )
     assert np.allclose(pack_state(rhs_terms["cathode_surface_loss"]), 0.0)
     assert np.allclose(pack_state(rhs_terms["beam_ionization_birth"]), 0.0)
+    assert np.allclose(pack_state(rhs_terms["beam_power_deposition"]), 0.0)
+    assert np.allclose(pack_state(rhs_terms["beam_ionization_cost"]), 0.0)
 
     split_dt = min(1.0e-10, 0.1 * heat_dt.dt_heat_conduction)
     manual_explicit_y = ssprk2_step(
