@@ -206,10 +206,12 @@ class LAPDSim1D:
         state = self.state if y is None else unpack_state(y, self._geometry.cells)
         plasma_terms = self.plasma_flux_rhs_terms(state=state)
         reaction_terms = self.reaction_rhs_terms(state=state)
+        cathode_phase = self._cathode_phase_options()
         cathode_solve = None
-        if self._flags.get("cathode_coupling", False):
+        if cathode_phase["solve_enabled"]:
             cathode_solve = self.solve_cathode_boundary(
                 state=state,
+                floating=cathode_phase["floating"],
                 update_cache=True,
             )
         beam_terms = self.beam_ionization_rhs_terms(
@@ -597,13 +599,15 @@ class LAPDSim1D:
             input_flags=self._flags,
         )
 
-    def cathode_source_terms(self, y=None, state=None, cathode_solve=None):
+    def cathode_source_terms(self, y=None, state=None, cathode_solve=None, time=None):
         """Return opt-in cathode conservative source placeholders/terms."""
         if state is None:
             state = self.state if y is None else unpack_state(y, self._geometry.cells)
-        if cathode_solve is None and self._flags.get("cathode_coupling", False):
+        cathode_flags = self._effective_cathode_flags(time=time, active_only=True)
+        if cathode_solve is None and cathode_flags.get("cathode_coupling", False):
             cathode_solve = self.solve_cathode_boundary(
                 state=state,
+                time=time,
                 update_cache=True,
             )
         return cathode_source_terms(
@@ -612,17 +616,19 @@ class LAPDSim1D:
             ion_mass_g=self._ion_mass_g,
             geometry=self._geometry,
             input_dict=self._input_dict,
-            input_flags=self._flags,
+            input_flags=cathode_flags,
             cathode_solve=cathode_solve,
         )
 
-    def beam_ionization_rhs(self, y=None, state=None, cathode_solve=None):
+    def beam_ionization_rhs(self, y=None, state=None, cathode_solve=None, time=None):
         """Return conservative beam ionization birth terms."""
         if state is None:
             state = self.state if y is None else unpack_state(y, self._geometry.cells)
-        if cathode_solve is None and self._flags.get("cathode_coupling", False):
+        cathode_flags = self._effective_cathode_flags(time=time, active_only=True)
+        if cathode_solve is None and cathode_flags.get("cathode_coupling", False):
             cathode_solve = self.solve_cathode_boundary(
                 state=state,
+                time=time,
                 update_cache=True,
             )
         return beam_ionization_rhs(
@@ -631,18 +637,26 @@ class LAPDSim1D:
             ion_mass_g=self._ion_mass_g,
             geometry=self._geometry,
             input_dict=self._input_dict,
-            input_flags=self._flags,
+            input_flags=cathode_flags,
             I_ion=self._I_ion,
             cathode_solve=cathode_solve,
         )
 
-    def beam_ionization_rhs_terms(self, y=None, state=None, cathode_solve=None):
+    def beam_ionization_rhs_terms(
+        self,
+        y=None,
+        state=None,
+        cathode_solve=None,
+        time=None,
+    ):
         """Return split beam particle birth, deposited power, and ionization cost."""
         if state is None:
             state = self.state if y is None else unpack_state(y, self._geometry.cells)
-        if cathode_solve is None and self._flags.get("cathode_coupling", False):
+        cathode_flags = self._effective_cathode_flags(time=time, active_only=True)
+        if cathode_solve is None and cathode_flags.get("cathode_coupling", False):
             cathode_solve = self.solve_cathode_boundary(
                 state=state,
+                time=time,
                 update_cache=True,
             )
         return beam_ionization_rhs_terms(
@@ -651,7 +665,7 @@ class LAPDSim1D:
             ion_mass_g=self._ion_mass_g,
             geometry=self._geometry,
             input_dict=self._input_dict,
-            input_flags=self._flags,
+            input_flags=cathode_flags,
             I_ion=self._I_ion,
             cathode_solve=cathode_solve,
         )
@@ -660,12 +674,21 @@ class LAPDSim1D:
         self,
         y=None,
         state=None,
-        floating=False,
+        floating=None,
+        time=None,
         update_cache=True,
     ):
         """Run the opt-in cathode solver adapter without changing the RHS."""
         if state is None:
             state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        cathode_phase = self._cathode_phase_options(time=time)
+        if floating is None:
+            floating = cathode_phase["floating"]
+        input_flags = self._effective_cathode_flags(
+            time=time,
+            active_only=False,
+            floating=bool(floating),
+        )
         result = solve_cathode_boundary(
             state=state,
             floors=self._floors,
@@ -673,7 +696,7 @@ class LAPDSim1D:
             mu=self._mu,
             geometry=self._geometry,
             input_dict=self._input_dict,
-            input_flags=self._flags,
+            input_flags=input_flags,
             beam_cross_prev=self._cathode_beam_cross,
             I_ion=self._I_ion,
             gas_type=self._gas_type,
@@ -759,6 +782,30 @@ class LAPDSim1D:
             geometry=self._geometry,
             **self._reaction_kwargs(),
         )
+
+    def _cathode_phase_options(self, time=None):
+        if time is None:
+            time = self._time
+        switches = self.phase_switches_at_time(time)
+        configured = bool(self._flags.get("cathode_coupling", False))
+        cathode_enabled = configured and bool(switches["cathode_enabled"])
+        floating = configured and bool(switches["floating"])
+        return {
+            "configured": configured,
+            "cathode_enabled": cathode_enabled,
+            "floating": floating,
+            "solve_enabled": cathode_enabled or floating,
+        }
+
+    def _effective_cathode_flags(self, time=None, active_only=True, floating=None):
+        options = self._cathode_phase_options(time=time)
+        enabled = options["cathode_enabled"]
+        if not active_only:
+            use_floating = options["floating"] if floating is None else bool(floating)
+            enabled = enabled or (options["configured"] and use_floating)
+        flags = dict(self._flags)
+        flags["cathode_coupling"] = bool(enabled)
+        return flags
 
     def _neutral_source_kwargs(self, time=None):
         if time is None:
