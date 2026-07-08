@@ -1128,6 +1128,12 @@ def main():
     assert set(run_result.rhs_terms) == expected_rhs_terms
     assert set(run_result.electron_energy_terms_W_cm3) == expected_rhs_terms
     assert set(run_result.ion_energy_terms_W_cm3) == expected_rhs_terms
+    assert run_result.cathode_diagnostics["enabled"].shape == (4,)
+    assert np.allclose(run_result.cathode_diagnostics["enabled"], 0.0)
+    assert np.allclose(run_result.cathode_diagnostics["has_solution"], 0.0)
+    assert run_result.cathode_diagnostics["beam_cross"].shape == (4, geom.cells)
+    assert np.allclose(run_result.cathode_diagnostics["beam_cross"], 0.0)
+    assert np.all(np.isnan(run_result.cathode_diagnostics["source_phi_c"]))
     saved_term_sum = np.zeros_like(run_result.y)
     for term_name in expected_rhs_terms:
         term_fields = run_result.rhs_terms[term_name]
@@ -1221,6 +1227,10 @@ def main():
             assert np.all(loaded.cell_role == run_result.cell_role)
             assert set(loaded.rhs_terms) == expected_rhs_terms
             assert np.allclose(
+                loaded.cathode_diagnostics["has_solution"],
+                run_result.cathode_diagnostics["has_solution"],
+            )
+            assert np.allclose(
                 loaded.rhs_terms["pressure_work"]["Ee"],
                 run_result.rhs_terms["pressure_work"]["Ee"],
             )
@@ -1250,6 +1260,25 @@ def main():
     assert cathode_run_result.time.shape == (4,)
     assert np.all(np.isfinite(cathode_run_result.y))
     assert set(cathode_run_result.rhs_terms) == expected_rhs_terms
+    cathode_diag = cathode_run_result.cathode_diagnostics
+    assert cathode_diag["enabled"].shape == (4,)
+    assert np.allclose(cathode_diag["enabled"], 1.0)
+    assert np.allclose(cathode_diag["has_solution"], 1.0)
+    assert np.allclose(cathode_diag["has_twin_solution"], 0.0)
+    assert np.all(cathode_diag["source_phi_c"] > 0.0)
+    assert np.all(cathode_diag["source_I_i"] > 0.0)
+    assert np.all(cathode_diag["source_I_tot"] > 0.0)
+    assert np.all(cathode_diag["source_P_prim"] >= 0.0)
+    assert np.all(cathode_diag["source_P_ohmic"] >= 0.0)
+    assert np.all(cathode_diag["source_P_loss"] > 0.0)
+    assert np.all(np.isnan(cathode_diag["end_phi_c"]))
+    assert cathode_diag["beam_cross"].shape == (4, geom.cells)
+    assert np.all(cathode_diag["beam_cross"][:, 0] > 0.0)
+    assert np.allclose(cathode_diag["beam_cross"][:, 1:], 0.0)
+    assert np.all(cathode_diag["n_beam"][:, 0] > 0.0)
+    assert np.all(cathode_diag["v_beam"][:, 0] > 0.0)
+    assert np.all(cathode_diag["l_b_profile"] > 0.0)
+    assert np.allclose(cathode_diag["l_b_profile_twin"], 0.0)
     assert np.any(cathode_run_result.rhs_terms["cathode_surface_loss"]["n"] < 0.0)
     assert np.any(cathode_run_result.rhs_terms["cathode_surface_loss"]["nn"] > 0.0)
     assert np.any(cathode_run_result.rhs_terms["cathode_surface_loss"]["Ee"] < 0.0)
@@ -1306,6 +1335,13 @@ def main():
                 4,
                 geom.cells,
             )
+            assert h5["cathode_diagnostics/source_phi_c"].shape == (4,)
+            assert h5["cathode_diagnostics/beam_cross"].shape == (
+                4,
+                geom.cells,
+            )
+            assert np.all(h5["cathode_diagnostics/source_I_tot"][()] > 0.0)
+            assert np.all(h5["cathode_diagnostics/beam_cross"][()][:, 0] > 0.0)
             assert np.any(h5["rhs_terms/cathode_surface_loss/n"][()] < 0.0)
             assert np.any(h5["rhs_terms/beam_power_deposition/Ee"][()] > 0.0)
             assert np.any(h5["rhs_terms/beam_ionization_cost/Ee"][()] < 0.0)
@@ -1319,6 +1355,14 @@ def main():
         assert np.allclose(
             loaded_cathode_result.rhs_terms["beam_power_deposition"]["Ee"],
             cathode_run_result.rhs_terms["beam_power_deposition"]["Ee"],
+        )
+        assert np.allclose(
+            loaded_cathode_result.cathode_diagnostics["source_I_tot"],
+            cathode_run_result.cathode_diagnostics["source_I_tot"],
+        )
+        assert np.allclose(
+            loaded_cathode_result.cathode_diagnostics["beam_cross"],
+            cathode_run_result.cathode_diagnostics["beam_cross"],
         )
         assert np.allclose(
             loaded_cathode_result.electron_energy_terms_W_cm3[
