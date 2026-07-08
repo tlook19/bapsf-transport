@@ -275,6 +275,7 @@ class LAPDSim1D:
         self._cathode_x0_twin = None
         self._cathode_beam_cross = np.zeros(self._geometry.cells)
         self._cathode_solve = None
+        self._last_result = None
         if self._flags.get("debug_checks", False):
             assert_finite_state(self._state, self._derived)
 
@@ -623,8 +624,10 @@ class LAPDSim1D:
         """Advance by explicit non-heat terms then implicit heat conduction."""
         return self.advance_one_step(dt=dt, operator_split=True)
 
-    def run(self, t_end, dt=None, operator_split=None, max_steps=100000):
+    def run(self, t_end=None, dt=None, operator_split=None, max_steps=100000):
         """Advance to ``t_end`` and return sparse saved trajectory arrays."""
+        if t_end is None:
+            t_end = self.default_t_end()
         t_end = float(t_end)
         if t_end < self._time:
             raise ValueError(f"t_end must be >= current time ({t_end} < {self._time})")
@@ -775,13 +778,63 @@ class LAPDSim1D:
                 saved.append(self._trajectory_snapshot(self._time))
                 t_last_save = self._time
 
-        return self._trajectory_result(
+        result = self._trajectory_result(
             saved=saved,
             diagnostics=diagnostics,
             steps=steps,
             run_start=run_start,
             timestep_rejection_events=timestep_rejection_events,
         )
+        self._last_result = result
+        return result
+
+    def default_t_end(self):
+        """Return the configured end time used by ``start_simulation`` [s]."""
+        if not self._flags.get("Plasma", True):
+            cycles = int(self._input_dict.get("cycles", 1))
+            if cycles <= 0:
+                raise ValueError(f"cycles must be positive (got {cycles})")
+            tau_cycle = max(float(self._input_dict.get("tau_cycle", 0.0)), 0.0)
+            if tau_cycle <= 0.0:
+                tau_cycle = max(
+                    float(self._input_dict.get("tau_discharge", 0.0)),
+                    0.0,
+                )
+            return float(cycles) * tau_cycle
+
+        tau_prebreakdown = max(
+            float(self._input_dict.get("tau_prebreakdown", 0.0)),
+            0.0,
+        )
+        tau_breakdown = max(float(self._input_dict.get("tau_breakdown", 0.0)), 0.0)
+        tau_discharge = max(float(self._input_dict.get("tau_discharge", 0.0)), 0.0)
+        tau_afterglow = max(float(self._input_dict.get("tau_afterglow", 0.0)), 0.0)
+        return tau_prebreakdown + tau_breakdown + tau_discharge + tau_afterglow
+
+    def start_simulation(
+        self,
+        t_end=None,
+        dt=None,
+        operator_split=None,
+        max_steps=100000,
+    ):
+        """Run the solver and store the result for ``get_results``.
+
+        This mirrors the _sim3 entry-point style while preserving ``run(...)`` as
+        the direct result-returning API.
+        """
+        self._last_result = self.run(
+            t_end=t_end,
+            dt=dt,
+            operator_split=operator_split,
+            max_steps=max_steps,
+        )
+
+    def get_results(self):
+        """Return the most recent ``start_simulation``/``run`` result."""
+        if self._last_result is None:
+            raise RuntimeError("simulation has not been run yet")
+        return self._last_result
 
     def save_result(self, path, result, params=None, flags=None):
         """Write a run result to HDF5 with this solver's config metadata."""

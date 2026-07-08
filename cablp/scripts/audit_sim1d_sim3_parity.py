@@ -106,14 +106,14 @@ PARAM_AUDIT = {
         "Primitive temperature convection is replaced by conservative energy flux.",
     ),
     "b_source": AuditEntry(
-        MISSING,
+        NOT_APPLICABLE,
         "",
-        "No direct _sim1d scale for cathode/source electron heating yet.",
+        "Deferred to a deliberate _sim1d sensitivity-control layer.",
     ),
     "cycles": AuditEntry(
-        MISSING,
-        "",
-        "Neutral-only cycling currently uses t_end/tau_cycle rather than cycles.",
+        IMPLEMENTED,
+        "cycles",
+        "Neutral-only default run duration uses cycles * tau_cycle.",
     ),
     "tau_prebreakdown": AuditEntry(IMPLEMENTED, "tau_prebreakdown", "Phase timing."),
     "tau_discharge": AuditEntry(IMPLEMENTED, "tau_discharge", "Phase timing."),
@@ -222,9 +222,9 @@ PARAM_AUDIT = {
         "Related adaptive retry limits exist with different names and scope.",
     ),
     "debug_max_neighbor_ratio": AuditEntry(
-        MISSING,
+        NOT_APPLICABLE,
         "",
-        "No adjacent-cell ratio debug guard yet.",
+        "_sim1d debug checks should be conservative-state specific.",
     ),
     "v_atol_cs_fraction": AuditEntry(
         NOT_APPLICABLE,
@@ -237,14 +237,14 @@ PARAM_AUDIT = {
         "_sim1d does not use _sim3 RK component tolerances.",
     ),
     "debug_check_start_time": AuditEntry(
-        MISSING,
+        NOT_APPLICABLE,
         "",
-        "No delayed debug-check start time yet.",
+        "_sim1d debug checks should be conservative-state specific.",
     ),
     "debug_ignore_floor_neighbors": AuditEntry(
-        MISSING,
+        NOT_APPLICABLE,
         "",
-        "No adjacent-cell ratio debug guard yet.",
+        "_sim1d debug checks should be conservative-state specific.",
     ),
     "alpha_ne_sonic_flux": AuditEntry(
         IMPLEMENTED,
@@ -257,19 +257,19 @@ PARAM_AUDIT = {
         "Mapped to a single front-filling cap in _sim1d.",
     ),
     "hybrid_ne_taper_dn0": AuditEntry(
-        MISSING,
+        NOT_APPLICABLE,
         "",
-        "No density-contrast taper for front flux yet.",
+        "_sim1d front-filling behavior should be handled by the flux closure.",
     ),
     "hybrid_ne_taper_power": AuditEntry(
-        MISSING,
+        NOT_APPLICABLE,
         "",
-        "No density-contrast taper for front flux yet.",
+        "_sim1d front-filling behavior should be handled by the flux closure.",
     ),
     "hybrid_ne_taper_delay": AuditEntry(
-        MISSING,
+        NOT_APPLICABLE,
         "",
-        "No post-breakdown delay taper for front flux yet.",
+        "_sim1d front-filling behavior should be handled by the flux closure.",
     ),
     "ion_pressure_weight": AuditEntry(
         NOT_APPLICABLE,
@@ -312,9 +312,9 @@ FLAG_AUDIT = {
     ),
     "debug_checks": AuditEntry(IMPLEMENTED, "debug_checks", "Basic debug checks."),
     "debug_raise_on_guard": AuditEntry(
-        MISSING,
+        NOT_APPLICABLE,
         "",
-        "No separate raise-on-flooring guard yet.",
+        "_sim1d debug checks should be conservative-state specific.",
     ),
     "reject_floor_violations": AuditEntry(
         SCAFFOLD,

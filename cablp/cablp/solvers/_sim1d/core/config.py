@@ -45,6 +45,7 @@ input_dict_template_1d = {
     "tau_discharge": 20e-3,
     "tau_afterglow": 5e-3,
     "tau_cycle": 3.0,
+    "cycles": 1,
     "phase_transition_mode": "scheduled",
     "I_prebreakdown": 100.0,
     "I_breakdown": 1000.0,

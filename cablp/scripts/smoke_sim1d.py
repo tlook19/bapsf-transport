@@ -52,6 +52,7 @@ from cablp.vars._cons import en_factor, ev_to_erg, qe_SI
 
 def main():
     params, flags = default_config()
+    assert params["cycles"] == 1
     sim = LAPDSim1D(params, flags)
     snapshot = sim.get_initial_snapshot()
     geom = snapshot.geometry
@@ -1385,8 +1386,15 @@ def main():
     run_params = dict(no_source_params)
     run_params["dt_save"] = 0.0
     run_sim = LAPDSim1D(run_params, flags)
+    try:
+        run_sim.get_results()
+    except RuntimeError as exc:
+        assert "simulation has not been run yet" in str(exc)
+    else:
+        raise AssertionError("expected get_results before a run to fail")
     run_before = run_sim.get_initial_snapshot().y.copy()
     run_result = run_sim.run(t_end=3.0e-10, dt=1.0e-10)
+    assert run_sim.get_results() is run_result
     assert run_result.steps == 3
     assert np.isclose(run_result.final_time, 3.0e-10)
     assert run_result.time.shape == (4,)
@@ -1476,6 +1484,28 @@ def main():
     assert np.allclose(saved_term_sum, packed_total_rhs)
     assert np.allclose(run_result.y, run_before[None, :], rtol=0.0, atol=1e-20)
     assert np.allclose(run_result.time, [0.0, 1.0e-10, 2.0e-10, 3.0e-10])
+
+    entry_sim = LAPDSim1D(run_params, flags)
+    entry_sim.start_simulation(t_end=3.0e-10, dt=1.0e-10)
+    entry_result = entry_sim.get_results()
+    assert entry_result.steps == run_result.steps
+    assert np.isclose(entry_result.final_time, run_result.final_time)
+    assert np.allclose(entry_result.time, run_result.time)
+    assert np.allclose(entry_result.y, run_result.y, rtol=0.0, atol=1e-20)
+
+    default_end_params = dict(run_params)
+    default_end_params["tau_prebreakdown"] = 1.0e-10
+    default_end_params["tau_breakdown"] = 1.0e-10
+    default_end_params["tau_discharge"] = 1.0e-10
+    default_end_params["tau_afterglow"] = 1.0e-10
+    default_end_sim = LAPDSim1D(default_end_params, flags)
+    assert np.isclose(default_end_sim.default_t_end(), 4.0e-10)
+    default_end_result = default_end_sim.run(dt=1.0e-10)
+    assert np.isclose(default_end_result.final_time, 4.0e-10)
+    assert np.allclose(
+        default_end_result.time,
+        [0.0, 1.0e-10, 2.0e-10, 3.0e-10, 4.0e-10],
+    )
     run_summary = summarize_result(run_result)
     run_summary_from_solver = LAPDSim1D.summarize_result(run_result)
     for summary in (run_summary, run_summary_from_solver):
@@ -2566,6 +2596,7 @@ def main():
     neutral_phase_run_params["dt_save"] = 0.0
     neutral_phase_run_params["tau_discharge"] = 2.0e-10
     neutral_phase_run_params["tau_cycle"] = 5.0e-10
+    neutral_phase_run_params["cycles"] = 2
     neutral_phase_run_flags = dict(flags)
     neutral_phase_run_flags["Plasma"] = False
     neutral_phase_run_sim = LAPDSim1D(
@@ -2613,6 +2644,32 @@ def main():
     }
     assert neutral_phase_summary.current_trigger_sample_count == 0
     assert neutral_phase_summary.last_current_trigger_sample is None
+    neutral_cycles_sim = LAPDSim1D(
+        neutral_phase_run_params,
+        neutral_phase_run_flags,
+    )
+    assert np.isclose(neutral_cycles_sim.default_t_end(), 1.0e-9)
+    neutral_cycles_sim.start_simulation(dt=1.0e-9)
+    neutral_cycles_result = neutral_cycles_sim.get_results()
+    assert neutral_cycles_result.steps == 4
+    assert np.isclose(neutral_cycles_result.final_time, 1.0e-9)
+    assert np.allclose(
+        neutral_cycles_result.time,
+        [0.0, 2.0e-10, 5.0e-10, 7.0e-10, 1.0e-9],
+    )
+    assert [diag.step_cap for diag in neutral_cycles_result.diagnostics] == [
+        "phase_boundary",
+        "phase_boundary",
+        "phase_boundary",
+        "t_end",
+    ]
+    assert list(neutral_cycles_result.phase_events["reason"]) == [
+        "initial",
+        "tau_discharge",
+        "tau_cycle",
+        "tau_discharge",
+        "tau_cycle",
+    ]
     neutral_phase_capped_sim = LAPDSim1D(
         neutral_phase_run_params,
         neutral_phase_run_flags,
