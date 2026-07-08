@@ -490,12 +490,15 @@ class LAPDSim1D:
             float(self._input_dict.get("tau_prebreakdown", 0.0)),
             0.0,
         )
+        tau_breakdown = max(float(self._input_dict.get("tau_breakdown", 0.0)), 0.0)
         tau_discharge = max(float(self._input_dict.get("tau_discharge", 0.0)), 0.0)
         tau_afterglow = max(float(self._input_dict.get("tau_afterglow", 0.0)), 0.0)
+        main_start = tau_prebreakdown + tau_breakdown
         boundaries = [
             tau_prebreakdown,
-            tau_prebreakdown + tau_discharge,
-            tau_prebreakdown + tau_discharge + tau_afterglow,
+            main_start,
+            main_start + tau_discharge,
+            main_start + tau_discharge + tau_afterglow,
         ]
         gas_event = self._gas_puff_event_time()
         if gas_event is not None:
@@ -930,18 +933,20 @@ class LAPDSim1D:
             float(self._input_dict.get("tau_prebreakdown", 0.0)),
             0.0,
         )
+        tau_breakdown = max(float(self._input_dict.get("tau_breakdown", 0.0)), 0.0)
+        main_start = tau_prebreakdown + tau_breakdown
         tau_discharge = max(float(self._input_dict.get("tau_discharge", 0.0)), 0.0)
         mode = self._input_dict.get("gas_puff_mode", "decay_after_breakdown")
         if mode == "pulse_decay_to_level":
-            event = tau_prebreakdown + float(
+            event = main_start + float(
                 self._input_dict.get("tau_gp_pulse_duration", 0.0)
             )
         else:
             tau_after_breakdown = self._input_dict.get("tau_gp_after_breakdown", None)
             if tau_after_breakdown is None:
                 return None
-            event = tau_prebreakdown + float(tau_after_breakdown)
-        if event >= tau_prebreakdown + tau_discharge:
+            event = main_start + float(tau_after_breakdown)
+        if event >= main_start + tau_discharge:
             return None
         return event
 
@@ -1184,12 +1189,16 @@ class LAPDSim1D:
             float(self._input_dict.get("tau_prebreakdown", 0.0)),
             0.0,
         )
+        tau_breakdown = max(float(self._input_dict.get("tau_breakdown", 0.0)), 0.0)
         tau_afterglow = max(float(self._input_dict.get("tau_afterglow", 0.0)), 0.0)
-        main_start = tau_prebreakdown
+        breakdown_start = tau_prebreakdown
+        main_start = breakdown_start + tau_breakdown
         afterglow_start = main_start + tau_discharge
         post_afterglow_start = afterglow_start + tau_afterglow
-        if time < main_start:
+        if time < breakdown_start:
             return "pre_breakdown", time
+        if time < main_start:
+            return "breakdown", time - breakdown_start
         if time < afterglow_start:
             return "main_discharge", time - main_start
         if time < post_afterglow_start:
@@ -1197,7 +1206,7 @@ class LAPDSim1D:
         return "post_afterglow", time - post_afterglow_start
 
     def _phase_switches(self, phase):
-        discharge_phases = {"pre_breakdown", "main_discharge"}
+        discharge_phases = {"pre_breakdown", "breakdown", "main_discharge"}
         if phase == "equilibrium_puff":
             return {
                 "cathode_enabled": False,

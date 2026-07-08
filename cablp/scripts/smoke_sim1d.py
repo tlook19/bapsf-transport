@@ -1887,6 +1887,103 @@ def main():
         0.0,
     )
 
+    breakdown_params = dict(phase_params)
+    breakdown_params["tau_breakdown"] = 1.0e-10
+    breakdown_sim = LAPDSim1D(breakdown_params, flags)
+    assert breakdown_sim.phase_at_time(0.0) == "pre_breakdown"
+    assert breakdown_sim.phase_at_time(1.0e-10) == "breakdown"
+    assert breakdown_sim.phase_at_time(2.0e-10) == "main_discharge"
+    assert breakdown_sim.phase_at_time(4.0e-10) == "afterglow"
+    assert breakdown_sim.phase_at_time(5.0e-10) == "post_afterglow"
+    assert np.isclose(
+        breakdown_sim.next_phase_boundary_after(0.0),
+        1.0e-10,
+    )
+    assert np.isclose(
+        breakdown_sim.next_phase_boundary_after(1.0e-10),
+        2.0e-10,
+    )
+    breakdown_result = breakdown_sim.run(t_end=5.0e-10, dt=1.0e-10)
+    assert np.allclose(
+        breakdown_result.time,
+        [0.0, 1.0e-10, 2.0e-10, 3.0e-10, 4.0e-10, 5.0e-10],
+    )
+    assert list(breakdown_result.phase) == [
+        "pre_breakdown",
+        "breakdown",
+        "main_discharge",
+        "main_discharge",
+        "afterglow",
+        "post_afterglow",
+    ]
+    assert np.allclose(
+        breakdown_result.phase_elapsed,
+        [0.0, 0.0, 0.0, 1.0e-10, 0.0, 0.0],
+    )
+    assert np.allclose(
+        breakdown_result.phase_cathode_enabled,
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    )
+    assert np.allclose(
+        breakdown_result.phase_gas_puff_enabled,
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    )
+    assert np.allclose(
+        breakdown_result.phase_floating,
+        [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+    )
+    breakdown_summary = summarize_result(breakdown_result)
+    assert breakdown_summary.phase_counts == {
+        "afterglow": 1,
+        "breakdown": 1,
+        "main_discharge": 2,
+        "post_afterglow": 1,
+        "pre_breakdown": 1,
+    }
+    assert breakdown_summary.diagnostic_phase_counts == {
+        "afterglow": 1,
+        "breakdown": 1,
+        "main_discharge": 2,
+        "pre_breakdown": 1,
+    }
+
+    breakdown_capped_sim = LAPDSim1D(breakdown_params, flags)
+    breakdown_capped_result = breakdown_capped_sim.run(
+        t_end=5.0e-10,
+        dt=1.0e-9,
+    )
+    assert breakdown_capped_result.steps == 4
+    assert np.allclose(
+        breakdown_capped_result.time,
+        [0.0, 1.0e-10, 2.0e-10, 4.0e-10, 5.0e-10],
+    )
+    assert list(breakdown_capped_result.phase) == [
+        "pre_breakdown",
+        "breakdown",
+        "main_discharge",
+        "afterglow",
+        "post_afterglow",
+    ]
+    assert np.allclose(
+        breakdown_capped_result.phase_elapsed,
+        [0.0, 0.0, 0.0, 0.0, 0.0],
+    )
+
+    breakdown_cathode_flags = dict(flags)
+    breakdown_cathode_flags["cathode_coupling"] = True
+    breakdown_cathode_sim = LAPDSim1D(
+        breakdown_params,
+        breakdown_cathode_flags,
+    )
+    breakdown_cathode_result = breakdown_cathode_sim.run(
+        t_end=5.0e-10,
+        dt=1.0e-10,
+    )
+    assert np.allclose(
+        breakdown_cathode_result.phase_cathode_enabled,
+        [1.0, 1.0, 1.0, 1.0, 0.0, 0.0],
+    )
+
     neutral_phase_run_params = dict(no_source_params)
     neutral_phase_run_params["dt_save"] = 0.0
     neutral_phase_run_params["tau_discharge"] = 2.0e-10

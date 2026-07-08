@@ -41,6 +41,7 @@ input_dict_template_1d = {
     "pump_enabled": True,
     "gas_puff_valves": 2,
     "tau_prebreakdown": 0.05,
+    "tau_breakdown": 0.0,
     "tau_discharge": 20e-3,
     "tau_afterglow": 5e-3,
     "tau_cycle": 3.0,
