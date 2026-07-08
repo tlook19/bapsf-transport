@@ -225,6 +225,18 @@ def main():
         neutral_phase_sim.next_phase_boundary_after(2.0e-10),
         5.0e-10,
     )
+    neutral_puff_source = neutral_phase_sim.neutral_source_sink_rhs(time=0.0)
+    neutral_off_source = neutral_phase_sim.neutral_source_sink_rhs(time=3.0e-10)
+    neutral_geom = neutral_phase_sim.get_initial_snapshot().geometry
+    assert neutral_puff_source.nn[0] > neutral_off_source.nn[0]
+    assert np.isclose(
+        neutral_puff_source.nn[0] - neutral_off_source.nn[0],
+        puff_rate(
+            neutral_phase_params["S_gp"],
+            neutral_phase_params["gas_puff_valves"],
+            neutral_geom.neutral_volume_cm3[0],
+        ),
+    )
     assert sim.phase_switches_at_time(0.0) == {
         "cathode_enabled": False,
         "gas_puff_enabled": True,
@@ -576,6 +588,18 @@ def main():
         source_rhs.nn[-1],
         -pump_rate(params["S_pump_R"], geom.neutral_volume_cm3[-1]) * state.nn[-1],
     )
+    afterglow_source = sim.neutral_source_sink_rhs(
+        time=params["tau_prebreakdown"] + params["tau_discharge"]
+    )
+    assert np.isclose(
+        afterglow_source.nn[0],
+        -pump_rate(params["S_pump_L"], geom.neutral_volume_cm3[0]) * state.nn[0],
+    )
+    assert np.isclose(
+        source_rhs.nn[0] - afterglow_source.nn[0],
+        puff_rate(params["S_gp"], params["gas_puff_valves"], geom.neutral_volume_cm3[0]),
+    )
+    assert np.isclose(afterglow_source.nn[-1], source_rhs.nn[-1])
     assert np.allclose(source_rhs.n, 0.0)
     assert np.allclose(source_rhs.M, 0.0)
     assert np.allclose(source_rhs.Ee, 0.0)
