@@ -922,6 +922,7 @@ class LAPDSim1D:
             "l_b_profile_twin": np.zeros(cells, dtype=float),
         }
         for prefix in ("source", "end"):
+            diag[f"{prefix}_regime"] = "none"
             for key in _CATHODE_RESULT_KEYS:
                 diag[f"{prefix}_{key}"] = np.nan
             diag[f"{prefix}_long_mfp"] = np.nan
@@ -963,6 +964,7 @@ class LAPDSim1D:
     def _copy_cathode_result_diagnostics(self, diag, prefix, result):
         if result is None:
             return
+        diag[f"{prefix}_regime"] = str(result.regime)
         for key in _CATHODE_RESULT_KEYS:
             diag[f"{prefix}_{key}"] = float(getattr(result, key))
         diag[f"{prefix}_long_mfp"] = float(bool(result.long_mfp))
