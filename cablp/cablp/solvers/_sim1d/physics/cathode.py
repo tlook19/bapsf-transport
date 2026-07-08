@@ -197,7 +197,7 @@ def cathode_source_terms(
     input_flags,
     cathode_solve=None,
 ):
-    """Return cathode surface particle-loss sources in conservative units."""
+    """Return cathode surface particle and electron-power losses."""
     boundary = cathode_boundary_state(
         state=state,
         floors=floors,
@@ -246,12 +246,27 @@ def cathode_source_terms(
 
     plasma_loss_rate = dN_loss / geometry.plasma_volume_cm3
     neutral_gain_rate = dN_loss / geometry.neutral_volume_cm3
+    electron_power_loss_W = zeros.copy()
+    electron_power_loss_W[0] = _electron_power_loss_W(
+        cathode_solve.beam_result.result
+    )
+    if boundary.twin_cathode and cathode_solve.beam_result.result_twin is not None:
+        electron_power_loss_W[-1] = _electron_power_loss_W(
+            cathode_solve.beam_result.result_twin
+        )
+    # P_cathode_e and P_anode_e are colocated in the 0D source cell for now.
+    # A future resolved 1D source needs these split so each loss lands at the
+    # appropriate cathode/anode location.
+    electron_power_loss_density = electron_power_loss_W * 1.0e7 / (
+        geometry.plasma_volume_cm3
+    )
     return CathodeSourceTerms1D(
         rhs=ConservativeState1D(
             n=-plasma_loss_rate,
             nn=neutral_gain_rate,
             M=-ion_mass_g * derived.u * plasma_loss_rate,
-            Ee=-1.5 * ev_to_erg * derived.Te * plasma_loss_rate,
+            Ee=-1.5 * ev_to_erg * derived.Te * plasma_loss_rate
+            - electron_power_loss_density,
             Ei=-1.5 * ev_to_erg * derived.Ti * plasma_loss_rate,
         ),
         enabled=boundary.enabled,
@@ -265,6 +280,9 @@ def cathode_source_terms(
             "surface_particle_loss_s_inv": dN_loss,
             "source_surface_particle_loss_s_inv": float(dN_loss[0]),
             "end_surface_particle_loss_s_inv": float(dN_loss[-1]),
+            "electron_power_loss_W": electron_power_loss_W,
+            "source_electron_power_loss_W": float(electron_power_loss_W[0]),
+            "end_electron_power_loss_W": float(electron_power_loss_W[-1]),
         },
     )
 
@@ -304,6 +322,10 @@ def _circuit_placeholders(input_dict):
 
 def _cathode_particle_loss_rate(result, eta):
     return (1.0 + 2.0 * float(eta)) * result.I_i / qe_SI
+
+
+def _electron_power_loss_W(result):
+    return result.P_cathode_e + result.P_anode_e
 
 
 def _solver_result_metadata(result):

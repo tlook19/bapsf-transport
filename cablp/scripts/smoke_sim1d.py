@@ -254,6 +254,14 @@ def main():
         cathode_loss_terms.rhs.nn[0] * geom.neutral_volume_cm3[0],
         expected_cathode_loss,
     )
+    expected_electron_power_loss_W = (
+        cathode_solve.beam_result.result.P_cathode_e
+        + cathode_solve.beam_result.result.P_anode_e
+    )
+    assert np.isclose(
+        cathode_loss_terms.metadata["source_electron_power_loss_W"],
+        expected_electron_power_loss_W,
+    )
     cathode_inventory_scale = np.sum(
         np.abs(cathode_loss_terms.rhs.n * geom.plasma_volume_cm3)
         + np.abs(cathode_loss_terms.rhs.nn * geom.neutral_volume_cm3)
@@ -265,7 +273,8 @@ def main():
     )
     assert np.allclose(
         cathode_loss_terms.rhs.Ee[0],
-        1.5 * ev_to_erg * params["Te0"] * cathode_loss_terms.rhs.n[0],
+        1.5 * ev_to_erg * params["Te0"] * cathode_loss_terms.rhs.n[0]
+        - expected_electron_power_loss_W * 1.0e7 / geom.plasma_volume_cm3[0],
     )
     assert np.allclose(
         cathode_loss_terms.rhs.Ei[0],
