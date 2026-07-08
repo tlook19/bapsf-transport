@@ -190,6 +190,28 @@ def main():
     assert disabled_cathode_solve.beam_result is None
     assert disabled_cathode_solve.device_config is None
     assert disabled_cathode_solve.metadata["enabled"] is False
+    assert sim.phase_at_time(0.0) == "pre_breakdown"
+    assert sim.phase_at_time(params["tau_prebreakdown"]) == "main_discharge"
+    assert (
+        sim.phase_at_time(params["tau_prebreakdown"] + params["tau_discharge"])
+        == "afterglow"
+    )
+    assert (
+        sim.phase_at_time(
+            params["tau_prebreakdown"]
+            + params["tau_discharge"]
+            + params["tau_afterglow"]
+        )
+        == "post_afterglow"
+    )
+    neutral_phase_flags = dict(flags)
+    neutral_phase_flags["Plasma"] = False
+    neutral_phase_params = dict(params)
+    neutral_phase_params["tau_discharge"] = 2.0e-10
+    neutral_phase_params["tau_cycle"] = 5.0e-10
+    neutral_phase_sim = LAPDSim1D(neutral_phase_params, neutral_phase_flags)
+    assert neutral_phase_sim.phase_at_time(0.0) == "equilibrium_puff"
+    assert neutral_phase_sim.phase_at_time(3.0e-10) == "equilibrium_off"
 
     cathode_flags = dict(flags)
     cathode_flags["cathode_coupling"] = True
@@ -1122,6 +1144,9 @@ def main():
     assert run_result.steps == 3
     assert np.isclose(run_result.final_time, 3.0e-10)
     assert run_result.time.shape == (4,)
+    assert run_result.phase.shape == (4,)
+    assert np.all(run_result.phase == "pre_breakdown")
+    assert np.allclose(run_result.phase_elapsed, run_result.time)
     assert run_result.y.shape == (4, run_before.size)
     assert run_result.n.shape == (4, geom.cells)
     assert len(run_result.diagnostics) == 3
@@ -1194,6 +1219,12 @@ def main():
             assert saved_params["dt_save"] == run_params["dt_save"]
             assert saved_flags["front_flux"] == flags["front_flux"]
             assert h5["time"].shape == run_result.time.shape
+            assert h5["phase"].shape == run_result.phase.shape
+            assert h5["phase_elapsed"].shape == run_result.phase_elapsed.shape
+            assert all(
+                value.decode("utf-8") == "pre_breakdown"
+                for value in h5["phase"][()]
+            )
             assert h5["y"].shape == run_result.y.shape
             assert h5["n"].shape == run_result.n.shape
             assert h5["geometry/cell_role"].shape == (geom.cells,)
@@ -1223,6 +1254,8 @@ def main():
             assert loaded.params["dt_save"] == run_params["dt_save"]
             assert loaded.flags["front_flux"] == flags["front_flux"]
             assert np.allclose(loaded.time, run_result.time)
+            assert np.all(loaded.phase == run_result.phase)
+            assert np.allclose(loaded.phase_elapsed, run_result.phase_elapsed)
             assert np.allclose(loaded.y, run_result.y)
             assert np.allclose(loaded.n, run_result.n)
             assert np.allclose(loaded.Te, run_result.Te)
@@ -1407,6 +1440,48 @@ def main():
     assert split_run_result.steps == 2
     assert np.isclose(split_run_result.final_time, 2.0e-10)
     assert np.all(np.isfinite(split_run_result.y))
+
+    phase_params = dict(no_source_params)
+    phase_params["dt_save"] = 0.0
+    phase_params["tau_prebreakdown"] = 1.0e-10
+    phase_params["tau_discharge"] = 2.0e-10
+    phase_params["tau_afterglow"] = 1.0e-10
+    phase_sim = LAPDSim1D(phase_params, flags)
+    phase_result = phase_sim.run(t_end=4.0e-10, dt=1.0e-10)
+    assert np.allclose(
+        phase_result.time,
+        [0.0, 1.0e-10, 2.0e-10, 3.0e-10, 4.0e-10],
+    )
+    assert list(phase_result.phase) == [
+        "pre_breakdown",
+        "main_discharge",
+        "main_discharge",
+        "afterglow",
+        "post_afterglow",
+    ]
+    assert np.allclose(
+        phase_result.phase_elapsed,
+        [0.0, 0.0, 1.0e-10, 0.0, 0.0],
+    )
+
+    neutral_phase_run_params = dict(no_source_params)
+    neutral_phase_run_params["dt_save"] = 0.0
+    neutral_phase_run_params["tau_discharge"] = 2.0e-10
+    neutral_phase_run_params["tau_cycle"] = 5.0e-10
+    neutral_phase_run_flags = dict(flags)
+    neutral_phase_run_flags["Plasma"] = False
+    neutral_phase_run_sim = LAPDSim1D(
+        neutral_phase_run_params,
+        neutral_phase_run_flags,
+    )
+    neutral_phase_result = neutral_phase_run_sim.run(t_end=4.0e-10, dt=1.0e-10)
+    assert list(neutral_phase_result.phase) == [
+        "equilibrium_puff",
+        "equilibrium_puff",
+        "equilibrium_off",
+        "equilibrium_off",
+        "equilibrium_off",
+    ]
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
         cli_config = tmp_path / "sim1d_cli_config.toml"

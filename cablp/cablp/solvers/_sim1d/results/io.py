@@ -29,6 +29,8 @@ def save_result_hdf5(path, result, params=None, flags=None):
             result,
             (
                 "time",
+                "phase",
+                "phase_elapsed",
                 "y",
                 "n",
                 "nn",
@@ -79,6 +81,8 @@ def load_result_hdf5(path):
             h5,
             (
                 "time",
+                "phase",
+                "phase_elapsed",
                 "y",
                 "n",
                 "nn",
@@ -138,7 +142,7 @@ def load_result_hdf5(path):
 def _write_arrays(group, owner, names):
     for name in names:
         if hasattr(owner, name):
-            group.create_dataset(name, data=np.asarray(getattr(owner, name)))
+            _write_array_dataset(group, name, getattr(owner, name))
 
 
 def _write_geometry(group, result):
@@ -167,17 +171,20 @@ def _write_nested_fields(group, terms):
 
 
 def _write_field_arrays(group, fields):
-    str_dtype = h5py.string_dtype(encoding="utf-8")
     for field_name, values in fields.items():
-        values = np.asarray(values)
-        if values.dtype.kind in {"U", "S", "O"}:
-            group.create_dataset(
-                field_name,
-                data=np.asarray(values, dtype=object),
-                dtype=str_dtype,
-            )
-        else:
-            group.create_dataset(field_name, data=values)
+        _write_array_dataset(group, field_name, values)
+
+
+def _write_array_dataset(group, name, values):
+    values = np.asarray(values)
+    if values.dtype.kind in {"U", "S", "O"}:
+        group.create_dataset(
+            name,
+            data=np.asarray(values, dtype=object),
+            dtype=h5py.string_dtype(encoding="utf-8"),
+        )
+    else:
+        group.create_dataset(name, data=values)
 
 
 def _write_term_arrays(group, terms):
@@ -204,7 +211,7 @@ def _write_diagnostics(group, diagnostics):
 
 
 def _read_arrays(group, names):
-    return {name: group[name][()] for name in names if name in group}
+    return {name: _read_dataset(group[name]) for name in names if name in group}
 
 
 def _read_nested_fields(group):
@@ -216,17 +223,19 @@ def _read_nested_fields(group):
 
 def _read_field_arrays(group):
     return {
-        field_name: (
-            _read_string_array(dataset)
-            if h5py.check_string_dtype(dataset.dtype) is not None
-            else dataset[()]
-        )
+        field_name: _read_dataset(dataset)
         for field_name, dataset in group.items()
     }
 
 
 def _read_term_arrays(group):
     return {term_name: dataset[()] for term_name, dataset in group.items()}
+
+
+def _read_dataset(dataset):
+    if h5py.check_string_dtype(dataset.dtype) is not None:
+        return _read_string_array(dataset)
+    return dataset[()]
 
 
 def _read_diagnostics(group):

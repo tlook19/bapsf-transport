@@ -410,6 +410,10 @@ class LAPDSim1D:
             alpha_front=float(self._input_dict.get("alpha_front", 1.0)),
         )
 
+    def phase_at_time(self, time):
+        """Return the diagnostic runtime phase label for an absolute time [s]."""
+        return self._phase_info(float(time))[0]
+
     def plasma_flux_rhs(self, y=None, include_front=None):
         """Return the conservative plasma flux RHS for inspection/testing."""
         state = self.state if y is None else unpack_state(y, self._geometry.cells)
@@ -792,8 +796,11 @@ class LAPDSim1D:
         derived = self.derived
         assert_finite_state(state, derived)
         rhs_terms = self.rhs_terms(include_heat_conduction=True)
+        phase, phase_elapsed = self._phase_info(time)
         return {
             "time": float(time),
+            "phase": phase,
+            "phase_elapsed": float(phase_elapsed),
             "n": state.n.copy(),
             "nn": state.nn.copy(),
             "M": state.M.copy(),
@@ -854,6 +861,11 @@ class LAPDSim1D:
 
         return SimpleNamespace(
             time=np.asarray([snapshot["time"] for snapshot in saved], dtype=float),
+            phase=np.asarray([snapshot["phase"] for snapshot in saved], dtype=object),
+            phase_elapsed=np.asarray(
+                [snapshot["phase_elapsed"] for snapshot in saved],
+                dtype=float,
+            ),
             y=stack_y(),
             n=stack("n"),
             nn=stack("nn"),
@@ -901,6 +913,35 @@ class LAPDSim1D:
             }
             for term_name in term_names
         }
+
+    def _phase_info(self, time):
+        time = max(float(time), 0.0)
+        tau_discharge = max(float(self._input_dict.get("tau_discharge", 0.0)), 0.0)
+        if not self._flags.get("Plasma", True):
+            tau_cycle = max(float(self._input_dict.get("tau_cycle", 0.0)), 0.0)
+            if tau_cycle <= 0.0:
+                cycle_time = time
+            else:
+                cycle_time = time % tau_cycle
+            if cycle_time < tau_discharge:
+                return "equilibrium_puff", cycle_time
+            return "equilibrium_off", cycle_time - tau_discharge
+
+        tau_prebreakdown = max(
+            float(self._input_dict.get("tau_prebreakdown", 0.0)),
+            0.0,
+        )
+        tau_afterglow = max(float(self._input_dict.get("tau_afterglow", 0.0)), 0.0)
+        main_start = tau_prebreakdown
+        afterglow_start = main_start + tau_discharge
+        post_afterglow_start = afterglow_start + tau_afterglow
+        if time < main_start:
+            return "pre_breakdown", time
+        if time < afterglow_start:
+            return "main_discharge", time - main_start
+        if time < post_afterglow_start:
+            return "afterglow", time - afterglow_start
+        return "post_afterglow", time - post_afterglow_start
 
     def _cathode_diagnostic_snapshot(self):
         cells = self._geometry.cells
