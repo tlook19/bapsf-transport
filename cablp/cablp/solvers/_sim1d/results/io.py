@@ -55,6 +55,11 @@ def save_result_hdf5(path, result, params=None, flags=None):
             result.ion_energy_terms_W_cm3,
         )
         _write_field_arrays(h5.create_group("total_rhs"), result.total_rhs)
+        if hasattr(result, "cathode_diagnostics"):
+            _write_field_arrays(
+                h5.create_group("cathode_diagnostics"),
+                result.cathode_diagnostics,
+            )
         _write_diagnostics(h5.create_group("diagnostics"), result.diagnostics)
     return path
 
@@ -110,6 +115,11 @@ def load_result_hdf5(path):
             **geometry,
             rhs_terms=_read_nested_fields(h5["rhs_terms"]),
             total_rhs=_read_field_arrays(h5["total_rhs"]),
+            cathode_diagnostics=(
+                _read_field_arrays(h5["cathode_diagnostics"])
+                if "cathode_diagnostics" in h5
+                else {}
+            ),
             electron_energy_terms_W_cm3=_read_term_arrays(
                 h5["electron_energy_terms_W_cm3"]
             ),

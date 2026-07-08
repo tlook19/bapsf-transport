@@ -53,6 +53,38 @@ from .physics.sources import (
 from cablp.vars._cons import I_Ry, I_ion, m_He_cgs, m_p_cgs
 
 
+_CATHODE_RESULT_KEYS = (
+    "phi_c_plus",
+    "phi_c_minus",
+    "phi_c",
+    "phi_a",
+    "V_p",
+    "V_b",
+    "R_p",
+    "I_i",
+    "I_e",
+    "I_eth",
+    "I_eth_star",
+    "I_tot",
+    "P_wall",
+    "P_load",
+    "P_comp",
+    "P_prim",
+    "P_ohmic",
+    "P_cathode_e",
+    "P_cathode_i",
+    "P_cathode_i_pl",
+    "P_anode_e",
+    "P_anode_i",
+    "P_anode_i_pl",
+    "P_net",
+    "P_net2",
+    "P_loss",
+    "beam_bypass_fraction",
+    "l_b",
+)
+
+
 def load_result_hdf5(path):
     """Load a saved sim1d HDF5 result without constructing a solver."""
     from .results.io import load_result_hdf5 as _load_result_hdf5
@@ -781,6 +813,7 @@ class LAPDSim1D:
                 }
                 for term_name, term_rhs in rhs_terms.items()
             },
+            "cathode_diagnostics": self._cathode_diagnostic_snapshot(),
         }
 
     def _trajectory_result(self, saved, diagnostics, steps):
@@ -797,6 +830,9 @@ class LAPDSim1D:
             return np.stack([snapshot["y"] for snapshot in saved])
 
         rhs_terms = self._stack_trajectory_rhs_terms(saved=saved, cells=cells)
+        cathode_diagnostics = self._stack_trajectory_cathode_diagnostics(
+            saved=saved,
+        )
         total_rhs = {
             field_name: sum(
                 (
@@ -840,6 +876,7 @@ class LAPDSim1D:
             neutral_volume_cm3=self._geometry.neutral_volume_cm3.copy(),
             volume_ratio=self._geometry.volume_ratio.copy(),
             rhs_terms=rhs_terms,
+            cathode_diagnostics=cathode_diagnostics,
             total_rhs=total_rhs,
             electron_energy_terms_W_cm3=electron_energy_terms_W_cm3,
             ion_energy_terms_W_cm3=ion_energy_terms_W_cm3,
@@ -863,6 +900,82 @@ class LAPDSim1D:
                 for field_name in STATE_NAMES_1D
             }
             for term_name in term_names
+        }
+
+    def _cathode_diagnostic_snapshot(self):
+        cells = self._geometry.cells
+        diag = {
+            "enabled": float(bool(self._flags.get("cathode_coupling", False))),
+            "twin_cathode": float(bool(self._flags.get("TwinCathode", False))),
+            "has_solution": 0.0,
+            "has_twin_solution": 0.0,
+            "x0_next": np.nan,
+            "x0_twin_next": np.nan,
+            "v_beam": np.zeros(cells, dtype=float),
+            "n_beam": np.zeros(cells, dtype=float),
+            "beam_cross": np.zeros(cells, dtype=float),
+            "n_beam_ion": np.zeros(cells, dtype=float),
+            "A_ion_beam": np.zeros(cells, dtype=float),
+            "l_b": np.zeros(cells, dtype=float),
+            "p_beam": np.zeros(cells, dtype=float),
+            "l_b_profile": np.zeros(cells, dtype=float),
+            "l_b_profile_twin": np.zeros(cells, dtype=float),
+        }
+        for prefix in ("source", "end"):
+            for key in _CATHODE_RESULT_KEYS:
+                diag[f"{prefix}_{key}"] = np.nan
+            diag[f"{prefix}_long_mfp"] = np.nan
+
+        cathode_solve = self._cathode_solve
+        if cathode_solve is None or cathode_solve.beam_result is None:
+            return diag
+
+        beam_result = cathode_solve.beam_result
+        diag["has_solution"] = 1.0
+        diag["x0_next"] = _finite_or_nan(cathode_solve.x0_next)
+        diag["x0_twin_next"] = _finite_or_nan(cathode_solve.x0_twin_next)
+        for name in (
+            "v_beam",
+            "n_beam",
+            "beam_cross",
+            "n_beam_ion",
+            "A_ion_beam",
+            "l_b",
+            "p_beam",
+            "l_b_profile",
+            "l_b_profile_twin",
+        ):
+            diag[name] = np.asarray(getattr(beam_result, name), dtype=float).copy()
+        self._copy_cathode_result_diagnostics(
+            diag=diag,
+            prefix="source",
+            result=beam_result.result,
+        )
+        if beam_result.result_twin is not None:
+            diag["has_twin_solution"] = 1.0
+            self._copy_cathode_result_diagnostics(
+                diag=diag,
+                prefix="end",
+                result=beam_result.result_twin,
+            )
+        return diag
+
+    def _copy_cathode_result_diagnostics(self, diag, prefix, result):
+        if result is None:
+            return
+        for key in _CATHODE_RESULT_KEYS:
+            diag[f"{prefix}_{key}"] = float(getattr(result, key))
+        diag[f"{prefix}_long_mfp"] = float(bool(result.long_mfp))
+
+    def _stack_trajectory_cathode_diagnostics(self, saved):
+        if not saved:
+            return {}
+        names = saved[0]["cathode_diagnostics"].keys()
+        return {
+            name: np.stack(
+                [snapshot["cathode_diagnostics"][name] for snapshot in saved]
+            )
+            for name in names
         }
 
     def _zero_rhs_state(self):
@@ -905,3 +1018,9 @@ class LAPDSim1D:
         if gas_type == "H":
             return m_p_cgs, 1, 2, I_Ry
         raise ValueError(f"unsupported gas_type {gas_type!r}; expected 'He' or 'H'")
+
+
+def _finite_or_nan(value):
+    if value is None:
+        return np.nan
+    return float(value)
