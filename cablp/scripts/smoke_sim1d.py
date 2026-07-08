@@ -1239,6 +1239,96 @@ def main():
                 == run_result.diagnostics[0].active_constraint
             )
 
+    cathode_run_params = dict(no_source_params)
+    cathode_run_params["dt_save"] = 0.0
+    cathode_run_flags = dict(flags)
+    cathode_run_flags["cathode_coupling"] = True
+    cathode_run_sim = LAPDSim1D(cathode_run_params, cathode_run_flags)
+    cathode_run_result = cathode_run_sim.run(t_end=3.0e-10, dt=1.0e-10)
+    assert cathode_run_result.steps == 3
+    assert np.isclose(cathode_run_result.final_time, 3.0e-10)
+    assert cathode_run_result.time.shape == (4,)
+    assert np.all(np.isfinite(cathode_run_result.y))
+    assert set(cathode_run_result.rhs_terms) == expected_rhs_terms
+    assert np.any(cathode_run_result.rhs_terms["cathode_surface_loss"]["n"] < 0.0)
+    assert np.any(cathode_run_result.rhs_terms["cathode_surface_loss"]["nn"] > 0.0)
+    assert np.any(cathode_run_result.rhs_terms["cathode_surface_loss"]["Ee"] < 0.0)
+    assert np.any(cathode_run_result.rhs_terms["beam_ionization_birth"]["n"] > 0.0)
+    assert np.all(
+        cathode_run_result.rhs_terms["beam_power_deposition"]["Ee"] >= 0.0
+    )
+    assert np.any(
+        cathode_run_result.rhs_terms["beam_power_deposition"]["Ee"] > 0.0
+    )
+    assert np.all(cathode_run_result.rhs_terms["beam_ionization_cost"]["Ee"] <= 0.0)
+    assert np.any(cathode_run_result.rhs_terms["beam_ionization_cost"]["Ee"] < 0.0)
+    assert np.allclose(cathode_run_result.rhs_terms["surface_loss"]["n"][:, 0], 0.0)
+    cathode_saved_sum = np.zeros_like(cathode_run_result.y)
+    for term_name in expected_rhs_terms:
+        term_fields = cathode_run_result.rhs_terms[term_name]
+        assert np.allclose(
+            cathode_run_result.electron_energy_terms_W_cm3[term_name],
+            1.0e-7 * term_fields["Ee"],
+        )
+        cathode_saved_sum = cathode_saved_sum + np.concatenate(
+            [term_fields[field_name] for field_name in STATE_NAMES_1D],
+            axis=1,
+        )
+    cathode_packed_total_rhs = np.concatenate(
+        [
+            cathode_run_result.total_rhs[field_name]
+            for field_name in STATE_NAMES_1D
+        ],
+        axis=1,
+    )
+    assert np.allclose(cathode_saved_sum, cathode_packed_total_rhs)
+    cathode_run_summary = summarize_result(cathode_run_result)
+    assert cathode_run_summary.finite
+    assert cathode_run_summary.n_min >= cathode_run_params["ne_floor"]
+    assert cathode_run_summary.nn_min >= cathode_run_params["nn_floor"]
+    assert cathode_run_summary.Te_min >= cathode_run_params["Te_floor"]
+    assert cathode_run_summary.Ti_min >= cathode_run_params["Ti_floor"]
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_path = cathode_run_sim.save_result(
+            f"{tmpdir}/sim1d_cathode_smoke.h5",
+            cathode_run_result,
+        )
+        with h5py.File(output_path, "r") as h5:
+            assert h5.attrs["steps"] == cathode_run_result.steps
+            saved_flags = json.loads(h5.attrs["flags_json"])
+            assert saved_flags["cathode_coupling"]
+            assert h5["rhs_terms/cathode_surface_loss/n"].shape == (4, geom.cells)
+            assert h5["rhs_terms/beam_power_deposition/Ee"].shape == (
+                4,
+                geom.cells,
+            )
+            assert h5["rhs_terms/beam_ionization_cost/Ee"].shape == (
+                4,
+                geom.cells,
+            )
+            assert np.any(h5["rhs_terms/cathode_surface_loss/n"][()] < 0.0)
+            assert np.any(h5["rhs_terms/beam_power_deposition/Ee"][()] > 0.0)
+            assert np.any(h5["rhs_terms/beam_ionization_cost/Ee"][()] < 0.0)
+        loaded_cathode_result = load_result_hdf5(output_path)
+        assert loaded_cathode_result.flags["cathode_coupling"]
+        assert set(loaded_cathode_result.rhs_terms) == expected_rhs_terms
+        assert np.allclose(
+            loaded_cathode_result.rhs_terms["cathode_surface_loss"]["n"],
+            cathode_run_result.rhs_terms["cathode_surface_loss"]["n"],
+        )
+        assert np.allclose(
+            loaded_cathode_result.rhs_terms["beam_power_deposition"]["Ee"],
+            cathode_run_result.rhs_terms["beam_power_deposition"]["Ee"],
+        )
+        assert np.allclose(
+            loaded_cathode_result.electron_energy_terms_W_cm3[
+                "beam_ionization_cost"
+            ],
+            cathode_run_result.electron_energy_terms_W_cm3[
+                "beam_ionization_cost"
+            ],
+        )
+
     sparse_params = dict(no_source_params)
     sparse_params["dt_save"] = 1.0e-10
     sparse_params["t_save_start"] = 1.0e-10
