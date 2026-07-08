@@ -2177,6 +2177,18 @@ def main():
         neutral_phase_result.phase_gas_puff_enabled,
         [0.0, 0.0, 0.0, 0.0, 0.0],
     )
+    assert np.allclose(
+        neutral_phase_result.phase_events["time"],
+        [0.0, 2.0e-10],
+    )
+    assert list(neutral_phase_result.phase_events["phase"]) == [
+        "equilibrium_puff",
+        "equilibrium_off",
+    ]
+    assert list(neutral_phase_result.phase_events["reason"]) == [
+        "initial",
+        "tau_discharge",
+    ]
     neutral_phase_capped_sim = LAPDSim1D(
         neutral_phase_run_params,
         neutral_phase_run_flags,
@@ -2195,6 +2207,20 @@ def main():
         "equilibrium_off",
         "equilibrium_puff",
         "equilibrium_puff",
+    ]
+    assert np.allclose(
+        neutral_phase_capped_result.phase_events["time"],
+        [0.0, 2.0e-10, 5.0e-10],
+    )
+    assert list(neutral_phase_capped_result.phase_events["phase"]) == [
+        "equilibrium_puff",
+        "equilibrium_off",
+        "equilibrium_puff",
+    ]
+    assert list(neutral_phase_capped_result.phase_events["reason"]) == [
+        "initial",
+        "tau_discharge",
+        "tau_cycle",
     ]
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
