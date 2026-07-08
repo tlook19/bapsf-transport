@@ -19,6 +19,7 @@ from cablp.solvers._sim1d.physics.conduction import (
     heat_conduction_rhs,
     implicit_heat_conduction_step,
 )
+from cablp.solvers._sim1d.physics.cathode import beam_absorption_weights
 from cablp.solvers._sim1d.physics.energy import (
     electron_cooling_rhs,
     electron_ion_exchange_rhs,
@@ -286,7 +287,6 @@ def main():
     assert np.any(beam_birth_terms.n > 0.0)
     assert np.all(beam_birth_terms.nn <= 0.0)
     assert np.allclose(beam_birth_terms.M, 0.0)
-    assert np.all(beam_birth_terms.Ee >= 0.0)
     assert np.all(beam_birth_terms.Ei >= 0.0)
     beam_inventory_scale = np.sum(
         np.abs(beam_birth_terms.n * geom.plasma_volume_cm3)
@@ -297,9 +297,23 @@ def main():
         0.0,
         atol=1e-12 * beam_inventory_scale,
     )
+    beam_weights = beam_absorption_weights(
+        length_cm=geom.length_cm,
+        l_b_profile=cathode_solve.beam_result.l_b_profile,
+        cathode_index=0,
+    )
+    expected_beam_power_density = (
+        beam_weights
+        * (
+            cathode_solve.beam_result.result.P_prim
+            + cathode_solve.beam_result.result.P_ohmic
+        )
+        * 1.0e7
+        / geom.plasma_volume_cm3
+    )
     assert np.allclose(
         beam_birth_terms.Ee,
-        1.5 * ev_to_erg * params["Te0"] * beam_birth_terms.n,
+        expected_beam_power_density - sim.I_ion * ev_to_erg * beam_birth_terms.n,
     )
     assert np.allclose(
         beam_birth_terms.Ei,
