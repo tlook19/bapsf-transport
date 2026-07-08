@@ -97,6 +97,8 @@ input_dict_template_1d = {
     "adaptive_retries_enabled": True,
     "max_step_retries": 8,
     "dt_reject_factor": 0.5,
+    "dt_growth_enabled": True,
+    "dt_growth_factor": 1.25,
     "max_density_step_fraction": 0.0,
     "max_neutral_step_fraction": 0.0,
     "max_energy_step_fraction": 0.0,

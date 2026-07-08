@@ -1881,6 +1881,32 @@ def main():
     assert np.isclose(adaptive_summary.accepted_dt_min, 0.5e-10)
     assert np.isclose(adaptive_summary.accepted_dt_max, 1.0e-10)
 
+    growth_params = dict(no_source_params)
+    growth_params["dt_save"] = 0.0
+    growth_params["dt_max"] = 1.0e-6
+    growth_params["dt_growth_factor"] = 1.25
+    growth_params["tau_prebreakdown"] = 0.5e-6
+    growth_params["tau_discharge"] = 10.0e-6
+    growth_sim = LAPDSim1D(growth_params, flags)
+    growth_result = growth_sim.run(t_end=1.5e-6)
+    assert growth_result.steps == 3
+    assert np.allclose(growth_result.time, [0.0, 0.5e-6, 1.125e-6, 1.5e-6])
+    assert [diag.step_cap for diag in growth_result.diagnostics] == [
+        "phase_boundary",
+        "dt_growth",
+        "t_end",
+    ]
+    assert np.allclose(
+        [diag.accepted_dt for diag in growth_result.diagnostics],
+        [0.5e-6, 0.625e-6, 0.375e-6],
+    )
+    growth_summary = summarize_result(growth_result)
+    assert growth_summary.step_cap_counts == {
+        "dt_growth": 1,
+        "phase_boundary": 1,
+        "t_end": 1,
+    }
+
     retry_params = dict(params)
     retry_flags = dict(flags)
     retry_flags["Plasma"] = False
