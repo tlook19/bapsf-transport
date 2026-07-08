@@ -141,6 +141,13 @@ def _phase_event_arrays(events):
     }
 
 
+def _current_trigger_sample_arrays(samples):
+    return {
+        "time": np.asarray([sample[0] for sample in samples], dtype=float),
+        "I_tot": np.asarray([sample[1] for sample in samples], dtype=float),
+    }
+
+
 class LAPDSim1D:
     """Conservative axial 1D LAPD solver scaffold.
 
@@ -183,6 +190,7 @@ class LAPDSim1D:
         self._t_breakdown_trigger = None
         self._last_current_trigger_time = None
         self._last_current_trigger_I_tot = None
+        self._current_trigger_samples = []
         self._run_start_for_phase_events = 0.0
         self._cathode_x0 = None
         self._cathode_x0_twin = None
@@ -1066,6 +1074,9 @@ class LAPDSim1D:
     def _record_current_trigger_sample(self, I_now):
         self._last_current_trigger_time = float(self._time)
         self._last_current_trigger_I_tot = float(I_now)
+        self._current_trigger_samples.append(
+            (self._last_current_trigger_time, self._last_current_trigger_I_tot)
+        )
 
     def _update_current_phase_triggers(self):
         if (
@@ -1346,6 +1357,9 @@ class LAPDSim1D:
             phase_events=self._phase_events(
                 run_start=run_start,
                 final_time=float(self._time),
+            ),
+            current_trigger_samples=_current_trigger_sample_arrays(
+                self._current_trigger_samples
             ),
             total_rhs=total_rhs,
             electron_energy_terms_W_cm3=electron_energy_terms_W_cm3,
