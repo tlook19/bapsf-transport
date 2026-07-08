@@ -1,4 +1,4 @@
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
 import numpy as np
@@ -86,6 +86,14 @@ _CATHODE_RESULT_KEYS = (
 )
 
 
+@dataclass(frozen=True)
+class StepAttempt1D:
+    y: np.ndarray
+    dt: float
+    operator_split: bool
+    solver_cache: SimpleNamespace
+
+
 class BreakdownError(RuntimeError):
     """Raised when current-triggered plasma breakdown thresholds are missed."""
 
@@ -148,6 +156,14 @@ def _current_trigger_sample_arrays(samples):
         "time": np.asarray([sample[0] for sample in samples], dtype=float),
         "I_tot": np.asarray([sample[1] for sample in samples], dtype=float),
     }
+
+
+def _copy_cache_value(value):
+    if value is None:
+        return None
+    if hasattr(value, "copy"):
+        return value.copy()
+    return value
 
 
 class LAPDSim1D:
@@ -318,24 +334,66 @@ class LAPDSim1D:
             ion_mass_g=self._ion_mass_g,
         )
 
-    def advance_one_step(self, dt=None, operator_split=None):
-        """Advance the conservative state by one explicit or split step."""
+    def _step_cache_snapshot(self):
+        return SimpleNamespace(
+            cathode_x0=_copy_cache_value(self._cathode_x0),
+            cathode_x0_twin=_copy_cache_value(self._cathode_x0_twin),
+            cathode_beam_cross=self._cathode_beam_cross.copy(),
+            cathode_solve=self._cathode_solve,
+        )
+
+    def _restore_step_cache(self, snapshot):
+        self._cathode_x0 = _copy_cache_value(snapshot.cathode_x0)
+        self._cathode_x0_twin = _copy_cache_value(snapshot.cathode_x0_twin)
+        self._cathode_beam_cross = np.asarray(
+            snapshot.cathode_beam_cross,
+            dtype=float,
+        ).copy()
+        self._cathode_solve = snapshot.cathode_solve
+
+    def _attempt_step(self, dt=None, operator_split=None):
+        """Return a candidate step without committing state, time, or caches."""
         if operator_split is None:
             operator_split = self._flags.get("implicit_heat_conduction", False)
         if operator_split:
-            return self.advance_one_step_operator_split(dt=dt)
-        if dt is None:
+            if dt is None:
+                dt = self.suggest_timestep(include_heat_conduction=False).dt
+        elif dt is None:
             dt = self.suggest_timestep().dt
-        self._set_state_vector(
-            ssprk2_step(
-                y0=self._y,
-                dt=dt,
-                rhs_func=self.rhs,
-                floor_func=self.floor_state_vector,
-            )
+        dt = float(dt)
+
+        starting_cache = self._step_cache_snapshot()
+        try:
+            if operator_split:
+                y_next = self.operator_split_step(dt=dt)
+            else:
+                y_next = ssprk2_step(
+                    y0=self._y,
+                    dt=dt,
+                    rhs_func=self.rhs,
+                    floor_func=self.floor_state_vector,
+                )
+            candidate_cache = self._step_cache_snapshot()
+        finally:
+            self._restore_step_cache(starting_cache)
+        return StepAttempt1D(
+            y=np.asarray(y_next, dtype=float),
+            dt=dt,
+            operator_split=bool(operator_split),
+            solver_cache=candidate_cache,
         )
-        self._time += dt
+
+    def _accept_step_attempt(self, attempt):
+        self._restore_step_cache(attempt.solver_cache)
+        self._set_state_vector(attempt.y)
+        self._time += float(attempt.dt)
         return self.get_initial_snapshot()
+
+    def advance_one_step(self, dt=None, operator_split=None):
+        """Advance the conservative state by one explicit or split step."""
+        return self._accept_step_attempt(
+            self._attempt_step(dt=dt, operator_split=operator_split)
+        )
 
     def operator_split_step(self, y=None, dt=None):
         """Return one explicit-nonheat plus implicit-heat split step."""
@@ -356,11 +414,7 @@ class LAPDSim1D:
 
     def advance_one_step_operator_split(self, dt=None):
         """Advance by explicit non-heat terms then implicit heat conduction."""
-        if dt is None:
-            dt = self.suggest_timestep(include_heat_conduction=False).dt
-        self._set_state_vector(self.operator_split_step(dt=dt))
-        self._time += dt
-        return self.get_initial_snapshot()
+        return self.advance_one_step(dt=dt, operator_split=True)
 
     def run(self, t_end, dt=None, operator_split=None, max_steps=100000):
         """Advance to ``t_end`` and return sparse saved trajectory arrays."""
@@ -466,7 +520,8 @@ class LAPDSim1D:
                 )
             if step_dt <= 0.0:
                 raise RuntimeError(f"non-positive timestep selected ({step_dt})")
-            self.advance_one_step(dt=step_dt, operator_split=operator_split)
+            attempt = self._attempt_step(dt=step_dt, operator_split=operator_split)
+            self._accept_step_attempt(attempt)
             self._update_current_phase_triggers()
             diagnostics.append(
                 replace(diag, accepted_dt=float(step_dt), step_cap=step_cap)
