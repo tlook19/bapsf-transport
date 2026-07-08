@@ -1380,6 +1380,16 @@ def main():
             atol=1e-14,
         )
         assert np.isclose(summary.thermal_energy_relative_drift, 0.0, atol=1e-14)
+        assert summary.phase_counts == {"pre_breakdown": 4}
+        assert summary.diagnostic_phase_counts == {"pre_breakdown": 3}
+        assert summary.phase_switch_fractions == {
+            "cathode_enabled": 0.0,
+            "floating": 0.0,
+            "gas_puff_enabled": 0.0,
+        }
+        assert summary.cathode_diagnostic_fractions["configured"] == 0.0
+        assert summary.cathode_diagnostic_fractions["solve_enabled"] == 0.0
+        assert summary.cathode_diagnostic_fractions["has_solution"] == 0.0
         assert summary.constraint_counts == {"dt_max": 3}
     with tempfile.TemporaryDirectory() as tmpdir:
         output_path = run_sim.save_result(
@@ -1582,6 +1592,19 @@ def main():
     assert cathode_run_summary.nn_min >= cathode_run_params["nn_floor"]
     assert cathode_run_summary.Te_min >= cathode_run_params["Te_floor"]
     assert cathode_run_summary.Ti_min >= cathode_run_params["Ti_floor"]
+    assert cathode_run_summary.phase_counts == {"pre_breakdown": 4}
+    assert cathode_run_summary.diagnostic_phase_counts == {"pre_breakdown": 3}
+    assert cathode_run_summary.phase_switch_fractions == {
+        "cathode_enabled": 1.0,
+        "floating": 0.0,
+        "gas_puff_enabled": 0.0,
+    }
+    assert cathode_run_summary.cathode_diagnostic_fractions["configured"] == 1.0
+    assert cathode_run_summary.cathode_diagnostic_fractions["phase_enabled"] == 1.0
+    assert cathode_run_summary.cathode_diagnostic_fractions["rhs_enabled"] == 1.0
+    assert cathode_run_summary.cathode_diagnostic_fractions["solve_enabled"] == 1.0
+    assert cathode_run_summary.cathode_diagnostic_fractions["floating"] == 0.0
+    assert cathode_run_summary.cathode_diagnostic_fractions["has_solution"] == 1.0
     with tempfile.TemporaryDirectory() as tmpdir:
         output_path = cathode_run_sim.save_result(
             f"{tmpdir}/sim1d_cathode_smoke.h5",
@@ -1712,6 +1735,23 @@ def main():
         phase_result.phase_floating,
         [0.0, 0.0, 0.0, 1.0, 0.0],
     )
+    phase_summary = summarize_result(phase_result)
+    assert phase_summary.phase_counts == {
+        "afterglow": 1,
+        "main_discharge": 2,
+        "post_afterglow": 1,
+        "pre_breakdown": 1,
+    }
+    assert phase_summary.diagnostic_phase_counts == {
+        "afterglow": 1,
+        "main_discharge": 2,
+        "pre_breakdown": 1,
+    }
+    assert phase_summary.phase_switch_fractions == {
+        "cathode_enabled": 0.0,
+        "floating": 0.2,
+        "gas_puff_enabled": 0.0,
+    }
 
     phase_capped_sim = LAPDSim1D(phase_params, flags)
     phase_capped_result = phase_capped_sim.run(t_end=4.0e-10, dt=5.0e-10)
