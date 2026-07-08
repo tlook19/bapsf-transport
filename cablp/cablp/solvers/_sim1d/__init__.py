@@ -89,6 +89,33 @@ _CATHODE_RESULT_KEYS = (
 class BreakdownError(RuntimeError):
     """Raised when current-triggered plasma breakdown thresholds are missed."""
 
+    def __init__(
+        self,
+        message,
+        *,
+        phase=None,
+        time=None,
+        I_tot=None,
+        threshold=None,
+        threshold_name=None,
+        tau_prebreakdown=None,
+    ):
+        super().__init__(message)
+        self.phase = phase
+        self.time = time
+        self.I_tot = I_tot
+        self.threshold = threshold
+        self.threshold_name = threshold_name
+        self.tau_prebreakdown = tau_prebreakdown
+        self.details = {
+            "phase": phase,
+            "time": time,
+            "I_tot": I_tot,
+            "threshold": threshold,
+            "threshold_name": threshold_name,
+            "tau_prebreakdown": tau_prebreakdown,
+        }
+
 
 def load_result_hdf5(path):
     """Load a saved sim1d HDF5 result without constructing a solver."""
@@ -1042,7 +1069,17 @@ class LAPDSim1D:
                 raise BreakdownError(
                     "plasma failed to break down within "
                     f"tau_prebreakdown={tau_prebreakdown:.9e} s "
-                    f"(I_tot={I_now:.6g} A < threshold={first_threshold:.6g} A)"
+                    f"(I_tot={I_now:.6g} A < threshold={first_threshold:.6g} A)",
+                    phase="pre_breakdown",
+                    time=float(self._time),
+                    I_tot=float(I_now),
+                    threshold=float(first_threshold),
+                    threshold_name=(
+                        "I_prebreakdown"
+                        if I_prebreakdown > 0.0
+                        else "I_breakdown"
+                    ),
+                    tau_prebreakdown=float(tau_prebreakdown),
                 )
             return
 
@@ -1053,7 +1090,13 @@ class LAPDSim1D:
             raise BreakdownError(
                 "plasma failed to reach breakdown current within "
                 f"tau_prebreakdown={tau_prebreakdown:.9e} s "
-                f"(I_tot={I_now:.6g} A < I_breakdown={I_breakdown:.6g} A)"
+                f"(I_tot={I_now:.6g} A < I_breakdown={I_breakdown:.6g} A)",
+                phase="breakdown",
+                time=float(self._time),
+                I_tot=float(I_now),
+                threshold=float(I_breakdown),
+                threshold_name="I_breakdown",
+                tau_prebreakdown=float(tau_prebreakdown),
             )
 
     def _energy_exchange_kwargs(self):

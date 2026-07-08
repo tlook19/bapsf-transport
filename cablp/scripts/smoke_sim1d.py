@@ -2230,8 +2230,45 @@ def main():
         failed_current_phase_sim.run(t_end=5.0e-10, dt=1.0e-10)
     except BreakdownError as exc:
         assert "plasma failed to break down" in str(exc)
+        assert exc.phase == "pre_breakdown"
+        assert np.isclose(exc.time, failed_current_phase_params["tau_prebreakdown"])
+        assert np.isfinite(exc.I_tot)
+        assert exc.I_tot < failed_current_phase_params["I_prebreakdown"]
+        assert np.isclose(exc.threshold, failed_current_phase_params["I_prebreakdown"])
+        assert exc.threshold_name == "I_prebreakdown"
+        assert np.isclose(
+            exc.tau_prebreakdown,
+            failed_current_phase_params["tau_prebreakdown"],
+        )
+        assert exc.details == {
+            "phase": exc.phase,
+            "time": exc.time,
+            "I_tot": exc.I_tot,
+            "threshold": exc.threshold,
+            "threshold_name": exc.threshold_name,
+            "tau_prebreakdown": exc.tau_prebreakdown,
+        }
     else:
         raise AssertionError("expected current-triggered run to fail breakdown")
+
+    failed_breakdown_phase_params = dict(current_phase_params)
+    failed_breakdown_phase_params["I_prebreakdown"] = 1.0e-9
+    failed_breakdown_phase_params["I_breakdown"] = 1.0e30
+    failed_breakdown_phase_sim = LAPDSim1D(
+        failed_breakdown_phase_params,
+        current_phase_flags,
+    )
+    try:
+        failed_breakdown_phase_sim.run(t_end=5.0e-10, dt=1.0e-10)
+    except BreakdownError as exc:
+        assert "plasma failed to reach breakdown current" in str(exc)
+        assert exc.phase == "breakdown"
+        assert np.isclose(exc.time, failed_breakdown_phase_params["tau_prebreakdown"])
+        assert exc.I_tot > 0.0
+        assert np.isclose(exc.threshold, failed_breakdown_phase_params["I_breakdown"])
+        assert exc.threshold_name == "I_breakdown"
+    else:
+        raise AssertionError("expected current-triggered breakdown phase to fail")
 
     neutral_phase_run_params = dict(no_source_params)
     neutral_phase_run_params["dt_save"] = 0.0
