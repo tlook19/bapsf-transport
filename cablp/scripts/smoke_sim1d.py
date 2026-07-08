@@ -204,6 +204,14 @@ def main():
         )
         == "post_afterglow"
     )
+    assert np.isclose(
+        sim.next_phase_boundary_after(0.0),
+        params["tau_prebreakdown"],
+    )
+    assert np.isclose(
+        sim.next_phase_boundary_after(params["tau_prebreakdown"]),
+        params["tau_prebreakdown"] + params["tau_discharge"],
+    )
     neutral_phase_flags = dict(flags)
     neutral_phase_flags["Plasma"] = False
     neutral_phase_params = dict(params)
@@ -212,6 +220,11 @@ def main():
     neutral_phase_sim = LAPDSim1D(neutral_phase_params, neutral_phase_flags)
     assert neutral_phase_sim.phase_at_time(0.0) == "equilibrium_puff"
     assert neutral_phase_sim.phase_at_time(3.0e-10) == "equilibrium_off"
+    assert np.isclose(neutral_phase_sim.next_phase_boundary_after(0.0), 2.0e-10)
+    assert np.isclose(
+        neutral_phase_sim.next_phase_boundary_after(2.0e-10),
+        5.0e-10,
+    )
     assert sim.phase_switches_at_time(0.0) == {
         "cathode_enabled": False,
         "gas_puff_enabled": True,
@@ -1520,6 +1533,24 @@ def main():
         [0.0, 0.0, 0.0, 1.0, 0.0],
     )
 
+    phase_capped_sim = LAPDSim1D(phase_params, flags)
+    phase_capped_result = phase_capped_sim.run(t_end=4.0e-10, dt=5.0e-10)
+    assert phase_capped_result.steps == 3
+    assert np.allclose(
+        phase_capped_result.time,
+        [0.0, 1.0e-10, 3.0e-10, 4.0e-10],
+    )
+    assert list(phase_capped_result.phase) == [
+        "pre_breakdown",
+        "main_discharge",
+        "afterglow",
+        "post_afterglow",
+    ]
+    assert np.allclose(
+        phase_capped_result.phase_elapsed,
+        [0.0, 0.0, 0.0, 0.0],
+    )
+
     phase_cathode_flags = dict(flags)
     phase_cathode_flags["cathode_coupling"] = True
     phase_cathode_sim = LAPDSim1D(phase_params, phase_cathode_flags)
@@ -1551,6 +1582,25 @@ def main():
         neutral_phase_result.phase_gas_puff_enabled,
         [0.0, 0.0, 0.0, 0.0, 0.0],
     )
+    neutral_phase_capped_sim = LAPDSim1D(
+        neutral_phase_run_params,
+        neutral_phase_run_flags,
+    )
+    neutral_phase_capped_result = neutral_phase_capped_sim.run(
+        t_end=6.0e-10,
+        dt=1.0e-9,
+    )
+    assert neutral_phase_capped_result.steps == 3
+    assert np.allclose(
+        neutral_phase_capped_result.time,
+        [0.0, 2.0e-10, 5.0e-10, 6.0e-10],
+    )
+    assert list(neutral_phase_capped_result.phase) == [
+        "equilibrium_puff",
+        "equilibrium_off",
+        "equilibrium_puff",
+        "equilibrium_puff",
+    ]
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
         cli_config = tmp_path / "sim1d_cli_config.toml"
