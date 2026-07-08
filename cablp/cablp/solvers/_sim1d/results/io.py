@@ -19,6 +19,12 @@ def save_result_hdf5(path, result, params=None, flags=None):
         h5.attrs["solver"] = "LAPDSim1D"
         h5.attrs["steps"] = int(result.steps)
         h5.attrs["final_time"] = float(result.final_time)
+        h5.attrs["t_prebreakdown_trigger"] = float(
+            getattr(result, "t_prebreakdown_trigger", np.nan)
+        )
+        h5.attrs["t_breakdown_trigger"] = float(
+            getattr(result, "t_breakdown_trigger", np.nan)
+        )
         if params is not None:
             h5.attrs["params_json"] = _json_dumps(params)
         if flags is not None:
@@ -139,6 +145,16 @@ def load_result_hdf5(path):
             diagnostics=_read_diagnostics(h5["diagnostics"]),
             steps=int(h5.attrs["steps"]),
             final_time=float(h5.attrs["final_time"]),
+            t_prebreakdown_trigger=_read_float_attr(
+                h5,
+                "t_prebreakdown_trigger",
+                np.nan,
+            ),
+            t_breakdown_trigger=_read_float_attr(
+                h5,
+                "t_breakdown_trigger",
+                np.nan,
+            ),
             params=params,
             flags=flags,
             path=path,
@@ -272,6 +288,12 @@ def _read_json_attr(group, name):
     if name not in group.attrs:
         return None
     return json.loads(_decode_string(group.attrs[name]))
+
+
+def _read_float_attr(group, name, default):
+    if name not in group.attrs:
+        return float(default)
+    return float(group.attrs[name])
 
 
 def _decode_string(value):

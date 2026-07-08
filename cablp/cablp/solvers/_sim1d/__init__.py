@@ -1241,6 +1241,16 @@ class LAPDSim1D:
             diagnostics=list(diagnostics),
             steps=int(steps),
             final_time=float(self._time),
+            t_prebreakdown_trigger=(
+                np.nan
+                if self._t_prebreakdown_trigger is None
+                else float(self._t_prebreakdown_trigger)
+            ),
+            t_breakdown_trigger=(
+                np.nan
+                if self._t_breakdown_trigger is None
+                else float(self._t_breakdown_trigger)
+            ),
         )
 
     def _stack_trajectory_rhs_terms(self, saved, cells):
