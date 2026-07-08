@@ -283,12 +283,21 @@ def _read_diagnostics(group):
         return []
     diagnostics = []
     field_names = tuple(TimestepDiagnostics.__dataclass_fields__)
-    loaded = {field_name: group[field_name][()] for field_name in field_names}
+    loaded = {}
+    defaults = {
+        field_name: field.default
+        for field_name, field in TimestepDiagnostics.__dataclass_fields__.items()
+    }
+    for field_name in field_names:
+        if field_name in group:
+            loaded[field_name] = group[field_name][()]
+        else:
+            loaded[field_name] = [defaults[field_name]] * count
     for i in range(count):
         kwargs = {}
         for field_name, values in loaded.items():
             value = values[i]
-            if field_name in {"active_constraint", "phase"}:
+            if field_name in {"active_constraint", "phase", "step_cap"}:
                 value = _decode_string(value)
             else:
                 value = float(value)

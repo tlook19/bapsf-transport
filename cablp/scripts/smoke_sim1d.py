@@ -1389,6 +1389,12 @@ def main():
         "pre_breakdown",
         "pre_breakdown",
     ]
+    assert np.allclose([diag.accepted_dt for diag in run_result.diagnostics], 1.0e-10)
+    assert [diag.step_cap for diag in run_result.diagnostics] == [
+        "fixed_dt",
+        "fixed_dt",
+        "fixed_dt",
+    ]
     assert np.allclose(
         [diag.time for diag in run_result.diagnostics],
         [0.0, 1.0e-10, 2.0e-10],
@@ -1484,6 +1490,9 @@ def main():
         assert summary.cathode_diagnostic_fractions["solve_enabled"] == 0.0
         assert summary.cathode_diagnostic_fractions["has_solution"] == 0.0
         assert summary.constraint_counts == {"dt_max": 3}
+        assert summary.step_cap_counts == {"fixed_dt": 3}
+        assert np.isclose(summary.accepted_dt_min, 1.0e-10)
+        assert np.isclose(summary.accepted_dt_max, 1.0e-10)
     with tempfile.TemporaryDirectory() as tmpdir:
         output_path = run_sim.save_result(
             f"{tmpdir}/sim1d_smoke.h5",
@@ -1534,6 +1543,10 @@ def main():
             )
             assert h5["diagnostics"].attrs["count"] == len(run_result.diagnostics)
             assert h5["diagnostics/dt"].shape == (len(run_result.diagnostics),)
+            assert h5["diagnostics/accepted_dt"].shape == (
+                len(run_result.diagnostics),
+            )
+            assert h5["diagnostics/step_cap"].shape == (len(run_result.diagnostics),)
             assert h5["diagnostics/active_constraint"].shape == (
                 len(run_result.diagnostics),
             )
@@ -1605,6 +1618,11 @@ def main():
             )
             assert len(loaded.diagnostics) == len(run_result.diagnostics)
             assert np.isclose(loaded.diagnostics[0].dt, run_result.diagnostics[0].dt)
+            assert np.isclose(
+                loaded.diagnostics[0].accepted_dt,
+                run_result.diagnostics[0].accepted_dt,
+            )
+            assert loaded.diagnostics[0].step_cap == run_result.diagnostics[0].step_cap
             assert np.isclose(
                 loaded.diagnostics[0].time,
                 run_result.diagnostics[0].time,
@@ -1801,6 +1819,32 @@ def main():
     assert sparse_result.steps == 4
     assert sparse_result.time.shape == (2,)
     assert np.allclose(sparse_result.time, [1.0e-10, 2.0e-10])
+
+    adaptive_params = dict(no_source_params)
+    adaptive_params["dt_save"] = 1.0e-10
+    adaptive_sim = LAPDSim1D(adaptive_params, flags)
+    adaptive_result = adaptive_sim.run(t_end=2.5e-10)
+    assert adaptive_result.steps == 3
+    assert np.allclose(adaptive_result.time, [0.0, 1.0e-10, 2.0e-10, 2.5e-10])
+    assert [diag.active_constraint for diag in adaptive_result.diagnostics] == [
+        "dt_max",
+        "dt_max",
+        "dt_max",
+    ]
+    assert [diag.step_cap for diag in adaptive_result.diagnostics] == [
+        "save_time",
+        "save_time",
+        "t_end",
+    ]
+    assert np.allclose(
+        [diag.accepted_dt for diag in adaptive_result.diagnostics],
+        [1.0e-10, 1.0e-10, 0.5e-10],
+    )
+    adaptive_summary = summarize_result(adaptive_result)
+    assert adaptive_summary.constraint_counts == {"dt_max": 3}
+    assert adaptive_summary.step_cap_counts == {"save_time": 2, "t_end": 1}
+    assert np.isclose(adaptive_summary.accepted_dt_min, 0.5e-10)
+    assert np.isclose(adaptive_summary.accepted_dt_max, 1.0e-10)
 
     split_run_sim = LAPDSim1D(run_params, split_flags)
     split_run_result = split_run_sim.run(t_end=2.0e-10, dt=1.0e-10)

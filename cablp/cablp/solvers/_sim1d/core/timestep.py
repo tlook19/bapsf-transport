@@ -30,6 +30,8 @@ class TimestepDiagnostics:
     dt_heat_conduction: float
     dt_max: float
     active_constraint: str
+    accepted_dt: float = np.nan
+    step_cap: str = ""
     time: float = np.nan
     phase: str = ""
     phase_cathode_enabled: float = 0.0
