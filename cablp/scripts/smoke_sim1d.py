@@ -1984,6 +1984,85 @@ def main():
         [1.0, 1.0, 1.0, 1.0, 0.0, 0.0],
     )
 
+    current_phase_params = dict(no_source_params)
+    current_phase_params["dt_save"] = 0.0
+    current_phase_params["phase_transition_mode"] = "current"
+    current_phase_params["tau_prebreakdown"] = 5.0e-10
+    current_phase_params["tau_discharge"] = 2.0e-10
+    current_phase_params["tau_afterglow"] = 1.0e-10
+    current_phase_params["I_prebreakdown"] = 1.0e-9
+    current_phase_params["I_breakdown"] = 1.0e-9
+    current_phase_flags = dict(flags)
+    current_phase_flags["cathode_coupling"] = True
+    current_phase_sim = LAPDSim1D(current_phase_params, current_phase_flags)
+    current_phase_result = current_phase_sim.run(t_end=5.0e-10, dt=1.0e-10)
+    assert np.isclose(current_phase_sim._t_prebreakdown_trigger, 1.0e-10)
+    assert np.isclose(current_phase_sim._t_breakdown_trigger, 2.0e-10)
+    assert np.allclose(
+        current_phase_result.time,
+        [0.0, 1.0e-10, 2.0e-10, 3.0e-10, 4.0e-10, 5.0e-10],
+    )
+    assert list(current_phase_result.phase) == [
+        "pre_breakdown",
+        "breakdown",
+        "main_discharge",
+        "main_discharge",
+        "afterglow",
+        "post_afterglow",
+    ]
+    assert np.allclose(
+        current_phase_result.phase_elapsed,
+        [0.0, 0.0, 0.0, 1.0e-10, 0.0, 0.0],
+    )
+    assert np.allclose(
+        current_phase_result.phase_cathode_enabled,
+        [1.0, 1.0, 1.0, 1.0, 0.0, 0.0],
+    )
+    assert np.allclose(
+        current_phase_result.phase_floating,
+        [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+    )
+    assert np.all(
+        current_phase_result.cathode_diagnostics["source_I_tot"][:4] > 0.0
+    )
+    assert np.all(
+        np.isnan(current_phase_result.cathode_diagnostics["source_I_tot"][5:])
+    )
+    current_phase_summary = summarize_result(current_phase_result)
+    assert current_phase_summary.phase_counts == {
+        "afterglow": 1,
+        "breakdown": 1,
+        "main_discharge": 2,
+        "post_afterglow": 1,
+        "pre_breakdown": 1,
+    }
+    assert current_phase_summary.diagnostic_phase_counts == {
+        "afterglow": 1,
+        "breakdown": 1,
+        "main_discharge": 2,
+        "pre_breakdown": 1,
+    }
+
+    direct_current_phase_params = dict(current_phase_params)
+    direct_current_phase_params["I_prebreakdown"] = 0.0
+    direct_current_phase_sim = LAPDSim1D(
+        direct_current_phase_params,
+        current_phase_flags,
+    )
+    direct_current_phase_result = direct_current_phase_sim.run(
+        t_end=4.0e-10,
+        dt=1.0e-10,
+    )
+    assert direct_current_phase_sim._t_prebreakdown_trigger is None
+    assert np.isclose(direct_current_phase_sim._t_breakdown_trigger, 1.0e-10)
+    assert list(direct_current_phase_result.phase) == [
+        "pre_breakdown",
+        "main_discharge",
+        "main_discharge",
+        "afterglow",
+        "post_afterglow",
+    ]
+
     neutral_phase_run_params = dict(no_source_params)
     neutral_phase_run_params["dt_save"] = 0.0
     neutral_phase_run_params["tau_discharge"] = 2.0e-10
