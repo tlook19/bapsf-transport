@@ -86,6 +86,10 @@ _CATHODE_RESULT_KEYS = (
 )
 
 
+class BreakdownError(RuntimeError):
+    """Raised when current-triggered plasma breakdown thresholds are missed."""
+
+
 def load_result_hdf5(path):
     """Load a saved sim1d HDF5 result without constructing a solver."""
     from .results.io import load_result_hdf5 as _load_result_hdf5
@@ -1021,7 +1025,7 @@ class LAPDSim1D:
                     self._t_breakdown_trigger = self._time
                 return
             if self._time >= tau_prebreakdown - time_tol:
-                raise RuntimeError(
+                raise BreakdownError(
                     "plasma failed to break down within "
                     f"tau_prebreakdown={tau_prebreakdown:.9e} s "
                     f"(I_tot={I_now:.6g} A < threshold={first_threshold:.6g} A)"
@@ -1032,7 +1036,7 @@ class LAPDSim1D:
             self._t_breakdown_trigger = self._time
             return
         if self._time >= tau_prebreakdown - time_tol:
-            raise RuntimeError(
+            raise BreakdownError(
                 "plasma failed to reach breakdown current within "
                 f"tau_prebreakdown={tau_prebreakdown:.9e} s "
                 f"(I_tot={I_now:.6g} A < I_breakdown={I_breakdown:.6g} A)"
