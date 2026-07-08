@@ -19,6 +19,7 @@ def summarize_result(result):
         if getattr(diag, "phase", "")
     )
     phase_event_summary = _phase_event_summary(result)
+    current_trigger_summary = _current_trigger_sample_summary(result)
     return SimpleNamespace(
         finite=all(finite_fields.values()),
         finite_fields=finite_fields,
@@ -49,6 +50,8 @@ def summarize_result(result):
         phase_event_phase_counts=phase_event_summary["phase_counts"],
         phase_event_reason_counts=phase_event_summary["reason_counts"],
         last_phase_event=phase_event_summary["last_event"],
+        current_trigger_sample_count=current_trigger_summary["count"],
+        last_current_trigger_sample=current_trigger_summary["last_sample"],
         phase_switch_fractions=_phase_switch_fractions(result),
         cathode_diagnostic_fractions=_cathode_diagnostic_fractions(result),
         constraint_counts=dict(sorted(constraint_counts.items())),
@@ -137,6 +140,25 @@ def _phase_event_summary(result):
             "time": float(times[last_index]),
             "phase": str(phases[last_index]),
             "reason": str(reasons[last_index]),
+        },
+    }
+
+
+def _current_trigger_sample_summary(result):
+    samples = getattr(result, "current_trigger_samples", {})
+    times = np.asarray(samples.get("time", ()), dtype=float)
+    currents = np.asarray(samples.get("I_tot", ()), dtype=float)
+    if times.size == 0:
+        return {
+            "count": 0,
+            "last_sample": None,
+        }
+    last_index = times.size - 1
+    return {
+        "count": int(times.size),
+        "last_sample": {
+            "time": float(times[last_index]),
+            "I_tot": float(currents[last_index]),
         },
     }
 
