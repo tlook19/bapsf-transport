@@ -1291,6 +1291,27 @@ class LAPDSim1D:
 
         append_event(run_start, self.phase_at_time(run_start), "initial")
         if not self._flags.get("Plasma", True):
+            tau_discharge = max(
+                float(self._input_dict.get("tau_discharge", 0.0)),
+                0.0,
+            )
+            tau_cycle = max(float(self._input_dict.get("tau_cycle", 0.0)), 0.0)
+            if tau_cycle <= 0.0:
+                append_event(tau_discharge, "equilibrium_off", "tau_discharge")
+                return _phase_event_arrays(events)
+
+            cycle_index = np.floor(run_start / tau_cycle)
+            cycle_start = cycle_index * tau_cycle
+            while cycle_start <= final_time + 1e-15:
+                cycle_end = cycle_start + tau_cycle
+                if 0.0 < tau_discharge < tau_cycle:
+                    append_event(
+                        cycle_start + tau_discharge,
+                        "equilibrium_off",
+                        "tau_discharge",
+                    )
+                append_event(cycle_end, "equilibrium_puff", "tau_cycle")
+                cycle_start = cycle_end
             return _phase_event_arrays(events)
 
         tau_prebreakdown = max(
