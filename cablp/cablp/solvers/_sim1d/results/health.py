@@ -18,6 +18,7 @@ def summarize_result(result):
         for diag in getattr(result, "diagnostics", ())
         if getattr(diag, "phase", "")
     )
+    phase_event_summary = _phase_event_summary(result)
     return SimpleNamespace(
         finite=all(finite_fields.values()),
         finite_fields=finite_fields,
@@ -44,6 +45,10 @@ def summarize_result(result):
         thermal_energy_relative_drift=_relative_drift(thermal_energy),
         phase_counts=_value_counts(getattr(result, "phase", ())),
         diagnostic_phase_counts=dict(sorted(diagnostic_phase_counts.items())),
+        phase_event_count=phase_event_summary["count"],
+        phase_event_phase_counts=phase_event_summary["phase_counts"],
+        phase_event_reason_counts=phase_event_summary["reason_counts"],
+        last_phase_event=phase_event_summary["last_event"],
         phase_switch_fractions=_phase_switch_fractions(result),
         cathode_diagnostic_fractions=_cathode_diagnostic_fractions(result),
         constraint_counts=dict(sorted(constraint_counts.items())),
@@ -108,6 +113,31 @@ def _phase_switch_fractions(result):
         summary_name: _mean_fraction(getattr(result, field_name))
         for summary_name, field_name in names.items()
         if hasattr(result, field_name)
+    }
+
+
+def _phase_event_summary(result):
+    phase_events = getattr(result, "phase_events", {})
+    times = np.asarray(phase_events.get("time", ()), dtype=float)
+    phases = np.asarray(phase_events.get("phase", ()), dtype=object)
+    reasons = np.asarray(phase_events.get("reason", ()), dtype=object)
+    if times.size == 0:
+        return {
+            "count": 0,
+            "phase_counts": {},
+            "reason_counts": {},
+            "last_event": None,
+        }
+    last_index = times.size - 1
+    return {
+        "count": int(times.size),
+        "phase_counts": _value_counts(phases),
+        "reason_counts": _value_counts(reasons),
+        "last_event": {
+            "time": float(times[last_index]),
+            "phase": str(phases[last_index]),
+            "reason": str(reasons[last_index]),
+        },
     }
 
 

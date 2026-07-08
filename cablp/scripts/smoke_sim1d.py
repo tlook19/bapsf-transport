@@ -1463,6 +1463,14 @@ def main():
         assert np.isclose(summary.thermal_energy_relative_drift, 0.0, atol=1e-14)
         assert summary.phase_counts == {"pre_breakdown": 4}
         assert summary.diagnostic_phase_counts == {"pre_breakdown": 3}
+        assert summary.phase_event_count == 1
+        assert summary.phase_event_phase_counts == {"pre_breakdown": 1}
+        assert summary.phase_event_reason_counts == {"initial": 1}
+        assert summary.last_phase_event == {
+            "time": 0.0,
+            "phase": "pre_breakdown",
+            "reason": "initial",
+        }
         assert summary.phase_switch_fractions == {
             "cathode_enabled": 0.0,
             "floating": 0.0,
@@ -1980,6 +1988,26 @@ def main():
         "main_discharge": 2,
         "pre_breakdown": 1,
     }
+    assert breakdown_summary.phase_event_count == 5
+    assert breakdown_summary.phase_event_phase_counts == {
+        "afterglow": 1,
+        "breakdown": 1,
+        "main_discharge": 1,
+        "post_afterglow": 1,
+        "pre_breakdown": 1,
+    }
+    assert breakdown_summary.phase_event_reason_counts == {
+        "initial": 1,
+        "tau_afterglow": 1,
+        "tau_breakdown": 1,
+        "tau_discharge": 1,
+        "tau_prebreakdown": 1,
+    }
+    assert breakdown_summary.last_phase_event == {
+        "time": 5.0e-10,
+        "phase": "post_afterglow",
+        "reason": "tau_afterglow",
+    }
 
     breakdown_capped_sim = LAPDSim1D(breakdown_params, flags)
     breakdown_capped_result = breakdown_capped_sim.run(
@@ -2101,6 +2129,14 @@ def main():
         "breakdown": 1,
         "main_discharge": 2,
         "pre_breakdown": 1,
+    }
+    assert current_phase_summary.phase_event_count == 5
+    assert current_phase_summary.phase_event_reason_counts == {
+        "I_breakdown": 1,
+        "I_prebreakdown": 1,
+        "initial": 1,
+        "tau_afterglow": 1,
+        "tau_discharge": 1,
     }
     assert np.allclose(
         current_phase_result.phase_events["time"],
@@ -2231,6 +2267,21 @@ def main():
         "initial",
         "tau_discharge",
     ]
+    neutral_phase_summary = summarize_result(neutral_phase_result)
+    assert neutral_phase_summary.phase_event_count == 2
+    assert neutral_phase_summary.phase_event_phase_counts == {
+        "equilibrium_off": 1,
+        "equilibrium_puff": 1,
+    }
+    assert neutral_phase_summary.phase_event_reason_counts == {
+        "initial": 1,
+        "tau_discharge": 1,
+    }
+    assert neutral_phase_summary.last_phase_event == {
+        "time": 2.0e-10,
+        "phase": "equilibrium_off",
+        "reason": "tau_discharge",
+    }
     neutral_phase_capped_sim = LAPDSim1D(
         neutral_phase_run_params,
         neutral_phase_run_flags,
