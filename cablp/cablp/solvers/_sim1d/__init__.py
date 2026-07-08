@@ -389,6 +389,36 @@ class LAPDSim1D:
                 return True
             return t - t_last_save >= dt_save - time_tol or abs(t - t_end) <= time_tol
 
+        def next_save_time_after(t):
+            if max_output_steps > 0 and len(saved) >= max_output_steps:
+                return None
+            if dt_save <= 0.0:
+                return None
+            if t + time_tol < t_save_start:
+                return t_save_start
+            if np.isfinite(t_last_save):
+                next_save = t_last_save + dt_save
+            else:
+                next_save = max(t_save_start, t)
+            if next_save <= t + time_tol:
+                next_save = t + dt_save
+            if next_save <= t_end + time_tol:
+                return next_save
+            return None
+
+        def cap_step(step_dt, step_cap, candidate_dt, candidate_cap):
+            candidate_dt = float(candidate_dt)
+            cap_tol = max(
+                1e-15,
+                1e-12 * max(abs(step_dt), abs(candidate_dt), 1e-30),
+            )
+            if candidate_dt < step_dt:
+                previous_dt = step_dt
+                step_dt = candidate_dt
+                if candidate_dt < previous_dt - cap_tol:
+                    step_cap = candidate_cap
+            return step_dt, step_cap
+
         if should_save(self._time):
             saved.append(self._trajectory_snapshot(self._time))
             t_last_save = self._time
@@ -407,19 +437,40 @@ class LAPDSim1D:
                 )
             )
             step_dt = diag.dt if dt is None else float(dt)
-            step_dt = min(step_dt, t_end - self._time)
+            step_cap = diag.active_constraint if dt is None else "fixed_dt"
+            step_dt, step_cap = cap_step(
+                step_dt,
+                step_cap,
+                t_end - self._time,
+                "t_end",
+            )
             next_phase_boundary = self.next_phase_boundary_after(
                 self._time,
                 t_end=t_end,
                 time_tol=time_tol,
             )
             if next_phase_boundary is not None:
-                step_dt = min(step_dt, next_phase_boundary - self._time)
+                step_dt, step_cap = cap_step(
+                    step_dt,
+                    step_cap,
+                    next_phase_boundary - self._time,
+                    "phase_boundary",
+                )
+            next_save_time = next_save_time_after(self._time)
+            if dt is None and next_save_time is not None:
+                step_dt, step_cap = cap_step(
+                    step_dt,
+                    step_cap,
+                    next_save_time - self._time,
+                    "save_time",
+                )
             if step_dt <= 0.0:
                 raise RuntimeError(f"non-positive timestep selected ({step_dt})")
             self.advance_one_step(dt=step_dt, operator_split=operator_split)
             self._update_current_phase_triggers()
-            diagnostics.append(diag)
+            diagnostics.append(
+                replace(diag, accepted_dt=float(step_dt), step_cap=step_cap)
+            )
             steps += 1
             if self._progress_callback is not None and t_end > 0.0:
                 self._progress_callback(min(self._time / t_end, 1.0))

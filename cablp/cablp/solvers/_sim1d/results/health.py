@@ -18,6 +18,19 @@ def summarize_result(result):
         for diag in getattr(result, "diagnostics", ())
         if getattr(diag, "phase", "")
     )
+    step_cap_counts = Counter(
+        diag.step_cap
+        for diag in getattr(result, "diagnostics", ())
+        if getattr(diag, "step_cap", "")
+    )
+    accepted_dt = np.asarray(
+        [
+            diag.accepted_dt
+            for diag in getattr(result, "diagnostics", ())
+            if np.isfinite(getattr(diag, "accepted_dt", np.nan))
+        ],
+        dtype=float,
+    )
     phase_event_summary = _phase_event_summary(result)
     current_trigger_summary = _current_trigger_sample_summary(result)
     return SimpleNamespace(
@@ -46,6 +59,9 @@ def summarize_result(result):
         thermal_energy_relative_drift=_relative_drift(thermal_energy),
         phase_counts=_value_counts(getattr(result, "phase", ())),
         diagnostic_phase_counts=dict(sorted(diagnostic_phase_counts.items())),
+        accepted_dt_min=float(np.min(accepted_dt)) if accepted_dt.size else np.nan,
+        accepted_dt_max=float(np.max(accepted_dt)) if accepted_dt.size else np.nan,
+        step_cap_counts=dict(sorted(step_cap_counts.items())),
         phase_event_count=phase_event_summary["count"],
         phase_event_phase_counts=phase_event_summary["phase_counts"],
         phase_event_reason_counts=phase_event_summary["reason_counts"],
