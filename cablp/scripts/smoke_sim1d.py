@@ -44,7 +44,7 @@ from cablp.solvers._sim1d.core.state import (
     pack_state,
     unpack_state,
 )
-from cablp.vars._cons import en_factor, ev_to_erg
+from cablp.vars._cons import en_factor, ev_to_erg, qe_SI
 
 
 def main():
@@ -222,6 +222,54 @@ def main():
     assert np.isclose(
         cached_cathode_solve.metadata["result"]["I_tot"],
         cathode_solve.metadata["result"]["I_tot"],
+    )
+    cathode_loss_terms = cathode_sim.cathode_source_terms(
+        cathode_solve=cathode_solve,
+    )
+    assert cathode_loss_terms.enabled
+    assert cathode_loss_terms.mode == "disabled"
+    assert cathode_loss_terms.rhs.n[0] < 0.0
+    assert cathode_loss_terms.rhs.nn[0] > 0.0
+    assert np.allclose(cathode_loss_terms.rhs.n[1:], 0.0)
+    assert np.allclose(cathode_loss_terms.rhs.nn[1:], 0.0)
+    assert np.allclose(cathode_loss_terms.rhs.M, 0.0)
+    assert cathode_loss_terms.rhs.Ee[0] < 0.0
+    assert cathode_loss_terms.rhs.Ei[0] < 0.0
+    assert np.allclose(cathode_loss_terms.rhs.Ee[1:], 0.0)
+    assert np.allclose(cathode_loss_terms.rhs.Ei[1:], 0.0)
+    expected_cathode_loss = (
+        (1.0 + 2.0 * params["eta"])
+        * cathode_solve.beam_result.result.I_i
+        / qe_SI
+    )
+    assert np.isclose(
+        cathode_loss_terms.metadata["source_surface_particle_loss_s_inv"],
+        expected_cathode_loss,
+    )
+    assert np.isclose(
+        -cathode_loss_terms.rhs.n[0] * geom.plasma_volume_cm3[0],
+        expected_cathode_loss,
+    )
+    assert np.isclose(
+        cathode_loss_terms.rhs.nn[0] * geom.neutral_volume_cm3[0],
+        expected_cathode_loss,
+    )
+    cathode_inventory_scale = np.sum(
+        np.abs(cathode_loss_terms.rhs.n * geom.plasma_volume_cm3)
+        + np.abs(cathode_loss_terms.rhs.nn * geom.neutral_volume_cm3)
+    )
+    assert np.isclose(
+        particle_inventory_rate(cathode_loss_terms.rhs, geom),
+        0.0,
+        atol=1e-12 * cathode_inventory_scale,
+    )
+    assert np.allclose(
+        cathode_loss_terms.rhs.Ee[0],
+        1.5 * ev_to_erg * params["Te0"] * cathode_loss_terms.rhs.n[0],
+    )
+    assert np.allclose(
+        cathode_loss_terms.rhs.Ei[0],
+        1.5 * ev_to_erg * params["Ti0"] * cathode_loss_terms.rhs.n[0],
     )
 
     rhs = sim.plasma_flux_rhs(include_front=False)

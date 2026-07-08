@@ -478,10 +478,15 @@ class LAPDSim1D:
             input_flags=self._flags,
         )
 
-    def cathode_source_terms(self, y=None, state=None):
-        """Return disabled cathode conservative source placeholders."""
+    def cathode_source_terms(self, y=None, state=None, cathode_solve=None):
+        """Return opt-in cathode conservative source placeholders/terms."""
         if state is None:
             state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        if cathode_solve is None and self._flags.get("cathode_coupling", False):
+            cathode_solve = self.solve_cathode_boundary(
+                state=state,
+                update_cache=True,
+            )
         return cathode_source_terms(
             state=state,
             floors=self._floors,
@@ -489,6 +494,7 @@ class LAPDSim1D:
             geometry=self._geometry,
             input_dict=self._input_dict,
             input_flags=self._flags,
+            cathode_solve=cathode_solve,
         )
 
     def solve_cathode_boundary(
