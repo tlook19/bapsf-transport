@@ -68,6 +68,11 @@ def save_result_hdf5(path, result, params=None, flags=None):
         _write_field_arrays(h5.create_group("total_rhs"), result.total_rhs)
         if hasattr(result, "phase_events"):
             _write_field_arrays(h5.create_group("phase_events"), result.phase_events)
+        if hasattr(result, "timestep_rejection_events"):
+            _write_field_arrays(
+                h5.create_group("timestep_rejection_events"),
+                result.timestep_rejection_events,
+            )
         if hasattr(result, "current_trigger_samples"):
             _write_field_arrays(
                 h5.create_group("current_trigger_samples"),
@@ -142,6 +147,11 @@ def load_result_hdf5(path):
                 _read_field_arrays(h5["phase_events"])
                 if "phase_events" in h5
                 else _empty_phase_events()
+            ),
+            timestep_rejection_events=(
+                _read_field_arrays(h5["timestep_rejection_events"])
+                if "timestep_rejection_events" in h5
+                else _empty_timestep_rejection_events()
             ),
             current_trigger_samples=(
                 _read_field_arrays(h5["current_trigger_samples"])
@@ -339,6 +349,17 @@ def _empty_current_trigger_samples():
     return {
         "time": np.asarray([], dtype=float),
         "I_tot": np.asarray([], dtype=float),
+    }
+
+
+def _empty_timestep_rejection_events():
+    return {
+        "time": np.asarray([], dtype=float),
+        "attempted_dt": np.asarray([], dtype=float),
+        "retry_index": np.asarray([], dtype=float),
+        "reason": np.asarray([], dtype=object),
+        "phase": np.asarray([], dtype=object),
+        "active_constraint": np.asarray([], dtype=object),
     }
 
 
