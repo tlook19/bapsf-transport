@@ -32,6 +32,8 @@ class TimestepDiagnostics:
     active_constraint: str
     accepted_dt: float = np.nan
     step_cap: str = ""
+    retry_count: int = 0
+    rejection_reason: str = ""
     time: float = np.nan
     phase: str = ""
     phase_cathode_enabled: float = 0.0

@@ -51,7 +51,7 @@ from .physics.sources import (
     pressure_work_rhs,
     surface_neutralization_rhs,
 )
-from cablp.vars._cons import I_Ry, I_ion, m_He_cgs, m_p_cgs
+from cablp.vars._cons import I_Ry, I_ion, ev_to_erg, m_He_cgs, m_p_cgs
 
 
 _CATHODE_RESULT_KEYS = (
@@ -92,6 +92,40 @@ class StepAttempt1D:
     dt: float
     operator_split: bool
     solver_cache: SimpleNamespace
+
+
+class TimestepRejectionError(RuntimeError):
+    """Raised when a timestep cannot be accepted after bounded retries."""
+
+    def __init__(
+        self,
+        message,
+        *,
+        time=None,
+        attempted_dt=None,
+        retry_count=None,
+        reason=None,
+        dt_min=None,
+        phase=None,
+        active_constraint=None,
+    ):
+        super().__init__(message)
+        self.time = time
+        self.attempted_dt = attempted_dt
+        self.retry_count = retry_count
+        self.reason = reason
+        self.dt_min = dt_min
+        self.phase = phase
+        self.active_constraint = active_constraint
+        self.details = {
+            "time": time,
+            "attempted_dt": attempted_dt,
+            "retry_count": retry_count,
+            "reason": reason,
+            "dt_min": dt_min,
+            "phase": phase,
+            "active_constraint": active_constraint,
+        }
 
 
 class BreakdownError(RuntimeError):
@@ -164,6 +198,13 @@ def _copy_cache_value(value):
     if hasattr(value, "copy"):
         return value.copy()
     return value
+
+
+def _max_relative_change(before, after, scale_floor):
+    before = np.asarray(before, dtype=float)
+    after = np.asarray(after, dtype=float)
+    scale = np.maximum(np.abs(before), float(scale_floor))
+    return float(np.max(np.abs(after - before) / scale)) if before.size else 0.0
 
 
 class LAPDSim1D:
@@ -383,6 +424,136 @@ class LAPDSim1D:
             solver_cache=candidate_cache,
         )
 
+    def _step_rejection_reason(self, attempt, y0=None):
+        if y0 is None:
+            y0 = self._y
+        y1 = np.asarray(attempt.y, dtype=float)
+        if not np.all(np.isfinite(y1)):
+            return "nonfinite_state"
+
+        try:
+            state0 = unpack_state(y0, self._geometry.cells)
+            state1 = unpack_state(y1, self._geometry.cells)
+            derived1 = derive_state(state1, self._floors, self._ion_mass_g)
+        except Exception:
+            return "invalid_state"
+
+        for values in (
+            state1.n,
+            state1.nn,
+            state1.M,
+            state1.Ee,
+            state1.Ei,
+            derived1.u,
+            derived1.Te,
+            derived1.Ti,
+            derived1.pe,
+            derived1.pi,
+            derived1.p,
+        ):
+            if not np.all(np.isfinite(values)):
+                return "nonfinite_state"
+
+        if np.any(state1.n < 0.0) or np.any(state1.nn < 0.0):
+            return "negative_density"
+        if np.any(state1.Ee < 0.0) or np.any(state1.Ei < 0.0):
+            return "negative_energy"
+
+        density_limit = float(self._input_dict.get("max_density_step_fraction", 0.0))
+        if density_limit > 0.0 and _max_relative_change(
+            state0.n,
+            state1.n,
+            self._floors["n"],
+        ) > density_limit:
+            return "density_step_fraction"
+
+        neutral_limit = float(self._input_dict.get("max_neutral_step_fraction", 0.0))
+        if neutral_limit > 0.0 and _max_relative_change(
+            state0.nn,
+            state1.nn,
+            self._floors["nn"],
+        ) > neutral_limit:
+            return "neutral_step_fraction"
+
+        energy_limit = float(self._input_dict.get("max_energy_step_fraction", 0.0))
+        energy_floor = (
+            1.5
+            * self._floors["n"]
+            * min(self._floors["Te"], self._floors["Ti"])
+            * ev_to_erg
+        )
+        if energy_limit > 0.0 and max(
+            _max_relative_change(state0.Ee, state1.Ee, energy_floor),
+            _max_relative_change(state0.Ei, state1.Ei, energy_floor),
+        ) > energy_limit:
+            return "energy_step_fraction"
+
+        return ""
+
+    def _attempt_step_with_retries(self, dt, operator_split, diag):
+        dt_min = float(self._input_dict.get("dt_min", 1e-12))
+        max_retries = int(self._input_dict.get("max_step_retries", 8))
+        reject_factor = float(self._input_dict.get("dt_reject_factor", 0.5))
+        retries_enabled = bool(
+            self._input_dict.get("adaptive_retries_enabled", True)
+        )
+        if max_retries < 0:
+            raise ValueError(f"max_step_retries must be non-negative ({max_retries})")
+        if not 0.0 < reject_factor < 1.0:
+            raise ValueError(
+                "dt_reject_factor must be between 0 and 1 "
+                f"(got {reject_factor})"
+            )
+
+        attempted_dt = float(dt)
+        retry_count = 0
+        last_reason = ""
+        accepted_rejection_reason = ""
+        y0 = self._y.copy()
+        while True:
+            attempt = self._attempt_step(
+                dt=attempted_dt,
+                operator_split=operator_split,
+            )
+            last_reason = self._step_rejection_reason(attempt, y0=y0)
+            if not last_reason:
+                return attempt, retry_count, accepted_rejection_reason
+            accepted_rejection_reason = last_reason
+            if not retries_enabled or retry_count >= max_retries:
+                self._raise_timestep_rejection(
+                    attempted_dt=attempted_dt,
+                    retry_count=retry_count,
+                    reason=last_reason,
+                    dt_min=dt_min,
+                    diag=diag,
+                )
+            next_dt = attempted_dt * reject_factor
+            if next_dt < dt_min:
+                self._raise_timestep_rejection(
+                    attempted_dt=attempted_dt,
+                    retry_count=retry_count,
+                    reason=last_reason,
+                    dt_min=dt_min,
+                    diag=diag,
+                )
+            attempted_dt = next_dt
+            retry_count += 1
+
+    def _raise_timestep_rejection(self, attempted_dt, retry_count, reason, dt_min, diag):
+        raise TimestepRejectionError(
+            "failed to accept timestep "
+            f"at t={self._time:.9e} s after {retry_count} retries "
+            f"(attempted_dt={attempted_dt:.9e} s, reason={reason}, "
+            f"dt_min={dt_min:.9e} s)",
+            time=float(self._time),
+            attempted_dt=float(attempted_dt),
+            retry_count=int(retry_count),
+            reason=reason,
+            dt_min=float(dt_min),
+            phase=getattr(diag, "phase", ""),
+            active_constraint=getattr(diag, "active_constraint", ""),
+        )
+
     def _accept_step_attempt(self, attempt):
         self._restore_step_cache(attempt.solver_cache)
         self._set_state_vector(attempt.y)
@@ -520,11 +691,23 @@ class LAPDSim1D:
                 )
             if step_dt <= 0.0:
                 raise RuntimeError(f"non-positive timestep selected ({step_dt})")
-            attempt = self._attempt_step(dt=step_dt, operator_split=operator_split)
+            attempt, retry_count, rejection_reason = self._attempt_step_with_retries(
+                dt=step_dt,
+                operator_split=operator_split,
+                diag=diag,
+            )
             self._accept_step_attempt(attempt)
             self._update_current_phase_triggers()
+            if retry_count:
+                step_cap = "retry"
             diagnostics.append(
-                replace(diag, accepted_dt=float(step_dt), step_cap=step_cap)
+                replace(
+                    diag,
+                    accepted_dt=float(attempt.dt),
+                    step_cap=step_cap,
+                    retry_count=int(retry_count),
+                    rejection_reason=rejection_reason,
+                )
             )
             steps += 1
             if self._progress_callback is not None and t_end > 0.0:

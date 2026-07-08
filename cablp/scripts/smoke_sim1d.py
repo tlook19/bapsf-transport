@@ -12,6 +12,7 @@ from cablp.funcs._plasmaparams import c_log
 from cablp.solvers._sim1d import (
     BreakdownError,
     LAPDSim1D,
+    TimestepRejectionError,
     default_config,
     load_result_hdf5,
     summarize_result,
@@ -1866,6 +1867,43 @@ def main():
     assert adaptive_summary.step_cap_counts == {"save_time": 2, "t_end": 1}
     assert np.isclose(adaptive_summary.accepted_dt_min, 0.5e-10)
     assert np.isclose(adaptive_summary.accepted_dt_max, 1.0e-10)
+
+    retry_params = dict(params)
+    retry_flags = dict(flags)
+    retry_flags["Plasma"] = False
+    retry_params["dt_save"] = 0.0
+    retry_params["pump_enabled"] = False
+    retry_params["dt_max"] = 1.0e-6
+    retry_params["max_neutral_step_fraction"] = 2.0e-3
+    retry_sim = LAPDSim1D(retry_params, retry_flags)
+    retry_result = retry_sim.run(t_end=1.0e-6)
+    assert retry_result.steps == 2
+    assert np.allclose(retry_result.time, [0.0, 0.5e-6, 1.0e-6])
+    assert retry_result.diagnostics[0].retry_count == 1
+    assert retry_result.diagnostics[0].rejection_reason == "neutral_step_fraction"
+    assert retry_result.diagnostics[0].step_cap == "retry"
+    assert np.isclose(retry_result.diagnostics[0].accepted_dt, 0.5e-6)
+    assert retry_result.diagnostics[1].retry_count == 0
+
+    failed_retry_params = dict(retry_params)
+    failed_retry_params["max_neutral_step_fraction"] = 1.0e-30
+    failed_retry_params["max_step_retries"] = 1
+    failed_retry_sim = LAPDSim1D(failed_retry_params, retry_flags)
+    failed_retry_y0 = failed_retry_sim.get_initial_snapshot().y.copy()
+    try:
+        failed_retry_sim.run(t_end=1.0e-6)
+    except TimestepRejectionError as exc:
+        assert exc.reason == "neutral_step_fraction"
+        assert exc.retry_count == 1
+        assert np.isclose(exc.time, 0.0)
+        assert np.isclose(exc.attempted_dt, 0.5e-6)
+        assert np.isclose(exc.dt_min, failed_retry_params["dt_min"])
+        assert exc.phase == "equilibrium_puff"
+        assert exc.active_constraint == "dt_max"
+        assert np.isclose(failed_retry_sim.time, 0.0)
+        assert np.allclose(failed_retry_sim.get_initial_snapshot().y, failed_retry_y0)
+    else:
+        raise AssertionError("expected TimestepRejectionError")
 
     split_run_sim = LAPDSim1D(run_params, split_flags)
     split_run_result = split_run_sim.run(t_end=2.0e-10, dt=1.0e-10)
