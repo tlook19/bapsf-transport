@@ -108,6 +108,11 @@ def main():
     assert dt_default.dt > 0.0
     assert dt_default.dt <= params["dt_max"]
     assert dt_default.dt >= params["dt_min"]
+    assert np.isclose(dt_default.time, 0.0)
+    assert dt_default.phase == "pre_breakdown"
+    assert dt_default.phase_cathode_enabled == 0.0
+    assert dt_default.phase_gas_puff_enabled == 1.0
+    assert dt_default.phase_floating == 0.0
     assert dt_default.active_constraint in {
         "plasma_cfl",
         "front_density",
@@ -665,16 +670,24 @@ def main():
         include_heat_conduction=False,
         time=params["tau_prebreakdown"] + params["tau_discharge"],
     )
+    afterglow_dt_diag = sim.suggest_timestep(
+        time=params["tau_prebreakdown"] + params["tau_discharge"]
+    )
+    assert np.isclose(
+        afterglow_dt_diag.time,
+        params["tau_prebreakdown"] + params["tau_discharge"],
+    )
+    assert afterglow_dt_diag.phase == "afterglow"
+    assert afterglow_dt_diag.phase_cathode_enabled == 0.0
+    assert afterglow_dt_diag.phase_gas_puff_enabled == 0.0
+    assert afterglow_dt_diag.phase_floating == 1.0
     assert np.allclose(
         afterglow_source_terms["neutral_sources"].nn,
         afterglow_source.nn,
     )
     assert np.allclose(afterglow_source_terms["neutral_sources"].n, 0.0)
     assert (
-        sim.suggest_timestep(
-            time=params["tau_prebreakdown"] + params["tau_discharge"]
-        ).dt_neutral_sources
-        >= sim.suggest_timestep().dt_neutral_sources
+        afterglow_dt_diag.dt_neutral_sources >= sim.suggest_timestep().dt_neutral_sources
     )
     assert np.allclose(source_rhs.n, 0.0)
     assert np.allclose(source_rhs.M, 0.0)
@@ -1288,6 +1301,27 @@ def main():
     assert run_result.y.shape == (4, run_before.size)
     assert run_result.n.shape == (4, geom.cells)
     assert len(run_result.diagnostics) == 3
+    assert [diag.phase for diag in run_result.diagnostics] == [
+        "pre_breakdown",
+        "pre_breakdown",
+        "pre_breakdown",
+    ]
+    assert np.allclose(
+        [diag.time for diag in run_result.diagnostics],
+        [0.0, 1.0e-10, 2.0e-10],
+    )
+    assert np.allclose(
+        [diag.phase_cathode_enabled for diag in run_result.diagnostics],
+        0.0,
+    )
+    assert np.allclose(
+        [diag.phase_gas_puff_enabled for diag in run_result.diagnostics],
+        0.0,
+    )
+    assert np.allclose(
+        [diag.phase_floating for diag in run_result.diagnostics],
+        0.0,
+    )
     assert set(run_result.rhs_terms) == expected_rhs_terms
     assert set(run_result.electron_energy_terms_W_cm3) == expected_rhs_terms
     assert set(run_result.ion_energy_terms_W_cm3) == expected_rhs_terms
@@ -1393,6 +1427,12 @@ def main():
             assert h5["diagnostics/active_constraint"].shape == (
                 len(run_result.diagnostics),
             )
+            assert h5["diagnostics/time"].shape == (len(run_result.diagnostics),)
+            assert h5["diagnostics/phase"].shape == (len(run_result.diagnostics),)
+            assert all(
+                value.decode("utf-8") == "pre_breakdown"
+                for value in h5["diagnostics/phase"][()]
+            )
         loaded_result = load_result_hdf5(output_path)
         loaded_via_solver = LAPDSim1D.load_result(output_path)
         for loaded in (loaded_result, loaded_via_solver):
@@ -1448,6 +1488,15 @@ def main():
             )
             assert len(loaded.diagnostics) == len(run_result.diagnostics)
             assert np.isclose(loaded.diagnostics[0].dt, run_result.diagnostics[0].dt)
+            assert np.isclose(
+                loaded.diagnostics[0].time,
+                run_result.diagnostics[0].time,
+            )
+            assert loaded.diagnostics[0].phase == run_result.diagnostics[0].phase
+            assert np.isclose(
+                loaded.diagnostics[0].phase_gas_puff_enabled,
+                run_result.diagnostics[0].phase_gas_puff_enabled,
+            )
             assert (
                 loaded.diagnostics[0].active_constraint
                 == run_result.diagnostics[0].active_constraint

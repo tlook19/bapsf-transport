@@ -30,6 +30,11 @@ class TimestepDiagnostics:
     dt_heat_conduction: float
     dt_max: float
     active_constraint: str
+    time: float = np.nan
+    phase: str = ""
+    phase_cathode_enabled: float = 0.0
+    phase_gas_puff_enabled: float = 0.0
+    phase_floating: float = 0.0
 
 
 def suggest_timestep(
