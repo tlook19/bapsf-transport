@@ -1484,6 +1484,66 @@ def main():
     assert np.allclose(saved_term_sum, packed_total_rhs)
     assert np.allclose(run_result.y, run_before[None, :], rtol=0.0, atol=1e-20)
     assert np.allclose(run_result.time, [0.0, 1.0e-10, 2.0e-10, 3.0e-10])
+    for field_name in (
+        "ne",
+        "v_plasma",
+        "Ne_flux",
+        "Nn_flux",
+        "S_ion_bulk",
+        "S_ion_beam",
+        "S_rec_rad",
+        "S_rec_3b",
+        "Qie",
+        "Qei",
+        "Qen",
+        "Qcx",
+        "Qeb",
+        "Qib",
+        "cathode",
+        "cathode_twin",
+    ):
+        assert hasattr(run_result, field_name)
+    assert np.allclose(run_result.ne, run_result.n)
+    assert np.allclose(run_result.v_plasma, run_result.u)
+    assert run_result.Ne_flux.shape == run_result.n.shape
+    assert run_result.Nn_flux.shape == run_result.n.shape
+    assert run_result.S_ion_bulk.shape == run_result.n.shape
+    assert run_result.Qie.shape == run_result.n.shape
+    assert np.allclose(
+        run_result.Ne_flux,
+        (
+            run_result.rhs_terms["plasma_advective_flux"]["n"]
+            + run_result.rhs_terms["plasma_front_flux"]["n"]
+            + run_result.rhs_terms["surface_loss"]["n"]
+            + run_result.rhs_terms["cathode_surface_loss"]["n"]
+        ),
+    )
+    assert np.allclose(
+        run_result.Nn_flux,
+        (
+            run_result.rhs_terms["neutral_exchange"]["nn"]
+            + run_result.rhs_terms["surface_loss"]["nn"]
+            + run_result.rhs_terms["cathode_surface_loss"]["nn"]
+        ),
+    )
+    assert np.allclose(
+        run_result.S_ion_bulk,
+        run_result.rhs_terms["ionization_birth"]["n"],
+    )
+    assert np.allclose(
+        run_result.S_ion_beam,
+        run_result.rhs_terms["beam_ionization_birth"]["n"],
+    )
+    assert np.allclose(
+        run_result.S_rec_rad,
+        -run_result.rhs_terms["recombination_loss"]["n"],
+    )
+    assert np.allclose(run_result.S_rec_3b, 0.0)
+    assert np.allclose(run_result.Qen, 0.0)
+    assert run_result.sim3_compat_units["energy_terms"] == "W/cm^3"
+    assert "not split yet" in run_result.sim3_compat_notes["Qei"]
+    assert run_result.cathode.I_tot.shape == run_result.time.shape
+    assert np.all(np.isnan(run_result.cathode.I_tot))
 
     entry_sim = LAPDSim1D(run_params, flags)
     entry_sim.start_simulation(t_end=3.0e-10, dt=1.0e-10)
@@ -1650,6 +1710,13 @@ def main():
             assert np.allclose(loaded.phase_floating, run_result.phase_floating)
             assert np.allclose(loaded.y, run_result.y)
             assert np.allclose(loaded.n, run_result.n)
+            assert np.allclose(loaded.ne, run_result.ne)
+            assert np.allclose(loaded.v_plasma, run_result.v_plasma)
+            assert np.allclose(loaded.Ne_flux, run_result.Ne_flux)
+            assert np.allclose(loaded.S_ion_bulk, run_result.S_ion_bulk)
+            assert np.allclose(loaded.Qie, run_result.Qie)
+            assert np.allclose(loaded.Qeb, run_result.Qeb)
+            assert loaded.cathode.I_tot.shape == run_result.cathode.I_tot.shape
             assert np.allclose(loaded.Te, run_result.Te)
             assert np.all(loaded.cell_role == run_result.cell_role)
             assert set(loaded.rhs_terms) == expected_rhs_terms
@@ -1757,6 +1824,27 @@ def main():
     assert np.all(cathode_run_result.rhs_terms["beam_ionization_cost"]["Ee"] <= 0.0)
     assert np.any(cathode_run_result.rhs_terms["beam_ionization_cost"]["Ee"] < 0.0)
     assert np.allclose(cathode_run_result.rhs_terms["surface_loss"]["n"][:, 0], 0.0)
+    assert np.all(cathode_run_result.cathode.I_tot[:4] > 0.0)
+    assert np.allclose(
+        cathode_run_result.S_ion_beam,
+        cathode_run_result.rhs_terms["beam_ionization_birth"]["n"],
+    )
+    assert np.any(cathode_run_result.S_ion_beam > 0.0)
+    assert np.allclose(
+        cathode_run_result.Qeb,
+        (
+            cathode_run_result.electron_energy_terms_W_cm3[
+                "beam_power_deposition"
+            ]
+            + cathode_run_result.electron_energy_terms_W_cm3[
+                "beam_ionization_cost"
+            ]
+            + cathode_run_result.electron_energy_terms_W_cm3[
+                "cathode_surface_loss"
+            ]
+        ),
+    )
+    assert np.any(cathode_run_result.Qeb > 0.0)
     cathode_saved_sum = np.zeros_like(cathode_run_result.y)
     for term_name in expected_rhs_terms:
         term_fields = cathode_run_result.rhs_terms[term_name]
@@ -1849,6 +1937,18 @@ def main():
         assert np.allclose(
             loaded_cathode_result.cathode_diagnostics["source_I_tot"],
             cathode_run_result.cathode_diagnostics["source_I_tot"],
+        )
+        assert np.allclose(
+            loaded_cathode_result.cathode.I_tot,
+            cathode_run_result.cathode.I_tot,
+        )
+        assert np.allclose(
+            loaded_cathode_result.S_ion_beam,
+            cathode_run_result.S_ion_beam,
+        )
+        assert np.allclose(
+            loaded_cathode_result.Qeb,
+            cathode_run_result.Qeb,
         )
         assert np.allclose(
             loaded_cathode_result.cathode_diagnostics["solve_enabled"],

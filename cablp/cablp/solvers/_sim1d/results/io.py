@@ -6,6 +6,7 @@ import h5py
 import numpy as np
 
 from ..core.timestep import TimestepDiagnostics
+from .compat import add_sim3_compat_aliases
 
 
 RESULT_VERSION = "sim1d-hdf5-v1"
@@ -138,7 +139,7 @@ def load_result_hdf5(path):
         params = _read_json_attr(h5, "params_json")
         flags = _read_json_attr(h5, "flags_json")
 
-        return SimpleNamespace(
+        result = SimpleNamespace(
             **arrays,
             **geometry,
             rhs_terms=_read_nested_fields(h5["rhs_terms"]),
@@ -186,6 +187,7 @@ def load_result_hdf5(path):
             flags=flags,
             path=path,
         )
+        return add_sim3_compat_aliases(result)
 
 
 def _write_arrays(group, owner, names):
