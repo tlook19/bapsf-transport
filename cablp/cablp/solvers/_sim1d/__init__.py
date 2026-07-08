@@ -414,6 +414,11 @@ class LAPDSim1D:
         """Return the diagnostic runtime phase label for an absolute time [s]."""
         return self._phase_info(float(time))[0]
 
+    def phase_switches_at_time(self, time):
+        """Return diagnostic phase switches without changing RHS behavior."""
+        phase = self.phase_at_time(time)
+        return self._phase_switches(phase)
+
     def plasma_flux_rhs(self, y=None, include_front=None):
         """Return the conservative plasma flux RHS for inspection/testing."""
         state = self.state if y is None else unpack_state(y, self._geometry.cells)
@@ -797,10 +802,14 @@ class LAPDSim1D:
         assert_finite_state(state, derived)
         rhs_terms = self.rhs_terms(include_heat_conduction=True)
         phase, phase_elapsed = self._phase_info(time)
+        phase_switches = self._phase_switches(phase)
         return {
             "time": float(time),
             "phase": phase,
             "phase_elapsed": float(phase_elapsed),
+            "phase_cathode_enabled": float(phase_switches["cathode_enabled"]),
+            "phase_gas_puff_enabled": float(phase_switches["gas_puff_enabled"]),
+            "phase_floating": float(phase_switches["floating"]),
             "n": state.n.copy(),
             "nn": state.nn.copy(),
             "M": state.M.copy(),
@@ -864,6 +873,18 @@ class LAPDSim1D:
             phase=np.asarray([snapshot["phase"] for snapshot in saved], dtype=object),
             phase_elapsed=np.asarray(
                 [snapshot["phase_elapsed"] for snapshot in saved],
+                dtype=float,
+            ),
+            phase_cathode_enabled=np.asarray(
+                [snapshot["phase_cathode_enabled"] for snapshot in saved],
+                dtype=float,
+            ),
+            phase_gas_puff_enabled=np.asarray(
+                [snapshot["phase_gas_puff_enabled"] for snapshot in saved],
+                dtype=float,
+            ),
+            phase_floating=np.asarray(
+                [snapshot["phase_floating"] for snapshot in saved],
                 dtype=float,
             ),
             y=stack_y(),
@@ -942,6 +963,34 @@ class LAPDSim1D:
         if time < post_afterglow_start:
             return "afterglow", time - afterglow_start
         return "post_afterglow", time - post_afterglow_start
+
+    def _phase_switches(self, phase):
+        discharge_phases = {"pre_breakdown", "main_discharge"}
+        if phase == "equilibrium_puff":
+            return {
+                "cathode_enabled": False,
+                "gas_puff_enabled": bool(
+                    self._input_dict.get("gas_puff_enabled", True)
+                ),
+                "floating": False,
+            }
+        if phase == "equilibrium_off":
+            return {
+                "cathode_enabled": False,
+                "gas_puff_enabled": False,
+                "floating": False,
+            }
+        return {
+            "cathode_enabled": (
+                bool(self._flags.get("cathode_coupling", False))
+                and phase in discharge_phases
+            ),
+            "gas_puff_enabled": (
+                bool(self._input_dict.get("gas_puff_enabled", True))
+                and phase in discharge_phases
+            ),
+            "floating": phase == "afterglow",
+        }
 
     def _cathode_diagnostic_snapshot(self):
         cells = self._geometry.cells

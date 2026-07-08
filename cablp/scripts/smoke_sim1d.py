@@ -212,6 +212,28 @@ def main():
     neutral_phase_sim = LAPDSim1D(neutral_phase_params, neutral_phase_flags)
     assert neutral_phase_sim.phase_at_time(0.0) == "equilibrium_puff"
     assert neutral_phase_sim.phase_at_time(3.0e-10) == "equilibrium_off"
+    assert sim.phase_switches_at_time(0.0) == {
+        "cathode_enabled": False,
+        "gas_puff_enabled": True,
+        "floating": False,
+    }
+    assert sim.phase_switches_at_time(
+        params["tau_prebreakdown"] + params["tau_discharge"]
+    ) == {
+        "cathode_enabled": False,
+        "gas_puff_enabled": False,
+        "floating": True,
+    }
+    assert neutral_phase_sim.phase_switches_at_time(0.0) == {
+        "cathode_enabled": False,
+        "gas_puff_enabled": True,
+        "floating": False,
+    }
+    assert neutral_phase_sim.phase_switches_at_time(3.0e-10) == {
+        "cathode_enabled": False,
+        "gas_puff_enabled": False,
+        "floating": False,
+    }
 
     cathode_flags = dict(flags)
     cathode_flags["cathode_coupling"] = True
@@ -1147,6 +1169,9 @@ def main():
     assert run_result.phase.shape == (4,)
     assert np.all(run_result.phase == "pre_breakdown")
     assert np.allclose(run_result.phase_elapsed, run_result.time)
+    assert np.allclose(run_result.phase_cathode_enabled, 0.0)
+    assert np.allclose(run_result.phase_gas_puff_enabled, 0.0)
+    assert np.allclose(run_result.phase_floating, 0.0)
     assert run_result.y.shape == (4, run_before.size)
     assert run_result.n.shape == (4, geom.cells)
     assert len(run_result.diagnostics) == 3
@@ -1221,6 +1246,9 @@ def main():
             assert h5["time"].shape == run_result.time.shape
             assert h5["phase"].shape == run_result.phase.shape
             assert h5["phase_elapsed"].shape == run_result.phase_elapsed.shape
+            assert h5["phase_cathode_enabled"].shape == run_result.phase.shape
+            assert h5["phase_gas_puff_enabled"].shape == run_result.phase.shape
+            assert h5["phase_floating"].shape == run_result.phase.shape
             assert all(
                 value.decode("utf-8") == "pre_breakdown"
                 for value in h5["phase"][()]
@@ -1256,6 +1284,15 @@ def main():
             assert np.allclose(loaded.time, run_result.time)
             assert np.all(loaded.phase == run_result.phase)
             assert np.allclose(loaded.phase_elapsed, run_result.phase_elapsed)
+            assert np.allclose(
+                loaded.phase_cathode_enabled,
+                run_result.phase_cathode_enabled,
+            )
+            assert np.allclose(
+                loaded.phase_gas_puff_enabled,
+                run_result.phase_gas_puff_enabled,
+            )
+            assert np.allclose(loaded.phase_floating, run_result.phase_floating)
             assert np.allclose(loaded.y, run_result.y)
             assert np.allclose(loaded.n, run_result.n)
             assert np.allclose(loaded.Te, run_result.Te)
@@ -1299,6 +1336,9 @@ def main():
     assert cathode_run_result.time.shape == (4,)
     assert np.all(np.isfinite(cathode_run_result.y))
     assert set(cathode_run_result.rhs_terms) == expected_rhs_terms
+    assert np.allclose(cathode_run_result.phase_cathode_enabled, 1.0)
+    assert np.allclose(cathode_run_result.phase_gas_puff_enabled, 0.0)
+    assert np.allclose(cathode_run_result.phase_floating, 0.0)
     cathode_diag = cathode_run_result.cathode_diagnostics
     assert cathode_diag["enabled"].shape == (4,)
     assert np.allclose(cathode_diag["enabled"], 1.0)
@@ -1395,6 +1435,10 @@ def main():
             assert np.any(h5["rhs_terms/beam_ionization_cost/Ee"][()] < 0.0)
         loaded_cathode_result = load_result_hdf5(output_path)
         assert loaded_cathode_result.flags["cathode_coupling"]
+        assert np.allclose(
+            loaded_cathode_result.phase_cathode_enabled,
+            cathode_run_result.phase_cathode_enabled,
+        )
         assert set(loaded_cathode_result.rhs_terms) == expected_rhs_terms
         assert np.allclose(
             loaded_cathode_result.rhs_terms["cathode_surface_loss"]["n"],
@@ -1463,6 +1507,27 @@ def main():
         phase_result.phase_elapsed,
         [0.0, 0.0, 1.0e-10, 0.0, 0.0],
     )
+    assert np.allclose(
+        phase_result.phase_cathode_enabled,
+        [0.0, 0.0, 0.0, 0.0, 0.0],
+    )
+    assert np.allclose(
+        phase_result.phase_gas_puff_enabled,
+        [0.0, 0.0, 0.0, 0.0, 0.0],
+    )
+    assert np.allclose(
+        phase_result.phase_floating,
+        [0.0, 0.0, 0.0, 1.0, 0.0],
+    )
+
+    phase_cathode_flags = dict(flags)
+    phase_cathode_flags["cathode_coupling"] = True
+    phase_cathode_sim = LAPDSim1D(phase_params, phase_cathode_flags)
+    phase_cathode_result = phase_cathode_sim.run(t_end=4.0e-10, dt=1.0e-10)
+    assert np.allclose(
+        phase_cathode_result.phase_cathode_enabled,
+        [1.0, 1.0, 1.0, 0.0, 0.0],
+    )
 
     neutral_phase_run_params = dict(no_source_params)
     neutral_phase_run_params["dt_save"] = 0.0
@@ -1482,6 +1547,10 @@ def main():
         "equilibrium_off",
         "equilibrium_off",
     ]
+    assert np.allclose(
+        neutral_phase_result.phase_gas_puff_enabled,
+        [0.0, 0.0, 0.0, 0.0, 0.0],
+    )
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
         cli_config = tmp_path / "sim1d_cli_config.toml"
