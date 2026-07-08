@@ -689,6 +689,81 @@ def main():
     assert (
         afterglow_dt_diag.dt_neutral_sources >= sim.suggest_timestep().dt_neutral_sources
     )
+    decay_params = dict(params)
+    decay_params["pump_enabled"] = False
+    decay_params["tau_prebreakdown"] = 1.0e-10
+    decay_params["tau_discharge"] = 4.0e-10
+    decay_params["tau_afterglow"] = 1.0e-10
+    decay_params["tau_gp_after_breakdown"] = 1.0e-10
+    decay_params["tau_gp_decay_factor"] = 1.0
+    decay_sim = LAPDSim1D(decay_params, flags)
+    decay_geom = decay_sim.get_initial_snapshot().geometry
+    decay_main_start = decay_params["tau_prebreakdown"]
+    decay_event = decay_main_start + decay_params["tau_gp_after_breakdown"]
+    assert np.isclose(
+        decay_sim.next_phase_boundary_after(decay_main_start),
+        decay_event,
+    )
+    decay_on = decay_sim.neutral_source_sink_rhs(time=decay_event)
+    assert np.isclose(
+        decay_on.nn[0],
+        puff_rate(
+            decay_params["S_gp"],
+            decay_params["gas_puff_valves"],
+            decay_geom.neutral_volume_cm3[0],
+        ),
+    )
+    decay_time = decay_main_start + 2.0e-10
+    decay_tau = (
+        decay_params["tau_discharge"] - decay_params["tau_gp_after_breakdown"]
+    ) * decay_params["tau_gp_decay_factor"]
+    decay_factor = np.exp(-(decay_time - decay_event) / decay_tau)
+    decay_rhs = decay_sim.neutral_source_sink_rhs(time=decay_time)
+    assert np.isclose(
+        decay_rhs.nn[0],
+        puff_rate(
+            decay_params["S_gp"] * decay_factor,
+            decay_params["gas_puff_valves"],
+            decay_geom.neutral_volume_cm3[0],
+        ),
+    )
+
+    pulse_params = dict(decay_params)
+    pulse_params["gas_puff_mode"] = "pulse_decay_to_level"
+    pulse_params["S_gp_decay_target"] = 1000.0
+    pulse_params["tau_gp_pulse_duration"] = 1.0e-10
+    pulse_params["tau_gp_decay_duration"] = 2.0e-10
+    pulse_sim = LAPDSim1D(pulse_params, flags)
+    pulse_geom = pulse_sim.get_initial_snapshot().geometry
+    pulse_event = pulse_params["tau_prebreakdown"] + pulse_params["tau_gp_pulse_duration"]
+    assert np.isclose(
+        pulse_sim.next_phase_boundary_after(pulse_params["tau_prebreakdown"]),
+        pulse_event,
+    )
+    pulse_on = pulse_sim.neutral_source_sink_rhs(time=pulse_event)
+    assert np.isclose(
+        pulse_on.nn[0],
+        puff_rate(
+            pulse_params["S_gp"],
+            pulse_params["gas_puff_valves"],
+            pulse_geom.neutral_volume_cm3[0],
+        ),
+    )
+    pulse_time = pulse_event + 1.0e-10
+    pulse_decay = np.exp(-(pulse_time - pulse_event) / pulse_params["tau_gp_decay_duration"])
+    pulse_s_gp = (
+        pulse_params["S_gp_decay_target"]
+        + (pulse_params["S_gp"] - pulse_params["S_gp_decay_target"]) * pulse_decay
+    )
+    pulse_rhs = pulse_sim.neutral_source_sink_rhs(time=pulse_time)
+    assert np.isclose(
+        pulse_rhs.nn[0],
+        puff_rate(
+            pulse_s_gp,
+            pulse_params["gas_puff_valves"],
+            pulse_geom.neutral_volume_cm3[0],
+        ),
+    )
     assert np.allclose(source_rhs.n, 0.0)
     assert np.allclose(source_rhs.M, 0.0)
     assert np.allclose(source_rhs.Ee, 0.0)

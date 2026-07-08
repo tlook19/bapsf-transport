@@ -125,6 +125,7 @@ class LAPDSim1D:
             self._I_ion,
         ) = self._gas_constants(self._gas_type)
         self._geometry = build_geometry(self._input_dict)
+        self._validate_gas_puff_config()
         self._floors = {
             "n": float(self._input_dict["ne_floor"]),
             "nn": float(self._input_dict["nn_floor"]),
@@ -491,11 +492,15 @@ class LAPDSim1D:
         )
         tau_discharge = max(float(self._input_dict.get("tau_discharge", 0.0)), 0.0)
         tau_afterglow = max(float(self._input_dict.get("tau_afterglow", 0.0)), 0.0)
-        for boundary in (
+        boundaries = [
             tau_prebreakdown,
             tau_prebreakdown + tau_discharge,
             tau_prebreakdown + tau_discharge + tau_afterglow,
-        ):
+        ]
+        gas_event = self._gas_puff_event_time()
+        if gas_event is not None:
+            boundaries.append(gas_event)
+        for boundary in sorted(boundaries):
             if in_run_window(boundary):
                 return float(boundary)
         return None
@@ -831,9 +836,10 @@ class LAPDSim1D:
         if time is None:
             time = self._time
         phase_switches = self.phase_switches_at_time(time)
+        S_gp, Twin_S_gp = self._effective_gas_puff_sccm(time=time)
         return {
-            "S_gp": float(self._input_dict.get("S_gp", 0.0)),
-            "Twin_S_gp": float(self._input_dict.get("Twin_S_gp", 0.0)),
+            "S_gp": S_gp,
+            "Twin_S_gp": Twin_S_gp,
             "S_pump_L": float(self._input_dict.get("S_pump_L", 0.0)),
             "S_pump_R": float(self._input_dict.get("S_pump_R", 0.0)),
             "twin_cathode": self._flags.get("TwinCathode", False),
@@ -841,6 +847,103 @@ class LAPDSim1D:
             "pump_enabled": bool(self._input_dict.get("pump_enabled", True)),
             "gas_puff_valves": float(self._input_dict.get("gas_puff_valves", 2)),
         }
+
+    def _validate_gas_puff_config(self):
+        mode = self._input_dict.get("gas_puff_mode", "decay_after_breakdown")
+        if mode not in {"decay_after_breakdown", "pulse_decay_to_level"}:
+            raise ValueError(
+                "gas_puff_mode must be 'decay_after_breakdown' or "
+                f"'pulse_decay_to_level' (got {mode!r})"
+            )
+        tau_after_breakdown = self._input_dict.get("tau_gp_after_breakdown", None)
+        if tau_after_breakdown is not None and float(tau_after_breakdown) < 0.0:
+            raise ValueError(
+                "tau_gp_after_breakdown must be >= 0 s, or None to keep S_gp "
+                f"steady (got {tau_after_breakdown})"
+            )
+        tau_decay_factor = float(self._input_dict.get("tau_gp_decay_factor", 1.0))
+        if tau_decay_factor <= 0.0:
+            raise ValueError(
+                f"tau_gp_decay_factor must be > 0 (got {tau_decay_factor})"
+            )
+        tau_pulse_duration = float(self._input_dict.get("tau_gp_pulse_duration", 0.0))
+        if tau_pulse_duration < 0.0:
+            raise ValueError(
+                f"tau_gp_pulse_duration must be >= 0 (got {tau_pulse_duration})"
+            )
+        tau_decay_duration = float(self._input_dict.get("tau_gp_decay_duration", 1e-3))
+        if tau_decay_duration <= 0.0:
+            raise ValueError(
+                f"tau_gp_decay_duration must be > 0 (got {tau_decay_duration})"
+            )
+
+    def _effective_gas_puff_sccm(self, time=None):
+        if time is None:
+            time = self._time
+        phase, phase_elapsed = self._phase_info(time)
+        S_gp = float(self._input_dict.get("S_gp", 0.0))
+        Twin_S_gp = float(self._input_dict.get("Twin_S_gp", 0.0))
+        if not self._flags.get("Plasma", True):
+            return S_gp, Twin_S_gp
+        if phase in {"pre_breakdown", "breakdown"}:
+            return S_gp, Twin_S_gp
+        if phase != "main_discharge":
+            return 0.0, 0.0
+
+        mode = self._input_dict.get("gas_puff_mode", "decay_after_breakdown")
+        if mode == "pulse_decay_to_level":
+            pulse_duration = float(self._input_dict.get("tau_gp_pulse_duration", 0.0))
+            if phase_elapsed <= pulse_duration:
+                return S_gp, Twin_S_gp
+            decay_elapsed = phase_elapsed - pulse_duration
+            tau_decay = float(self._input_dict.get("tau_gp_decay_duration", 1e-3))
+            decay = float(np.exp(-decay_elapsed / tau_decay))
+            target = float(self._input_dict.get("S_gp_decay_target", 0.0))
+            twin_target = float(self._input_dict.get("Twin_S_gp_decay_target", 0.0))
+            return (
+                target + (S_gp - target) * decay,
+                twin_target + (Twin_S_gp - twin_target) * decay,
+            )
+
+        tau_after_breakdown = self._input_dict.get("tau_gp_after_breakdown", None)
+        if tau_after_breakdown is None:
+            return S_gp, Twin_S_gp
+        tau_after_breakdown = float(tau_after_breakdown)
+        if phase_elapsed <= tau_after_breakdown:
+            return S_gp, Twin_S_gp
+        tau_discharge = max(float(self._input_dict.get("tau_discharge", 0.0)), 0.0)
+        tau_decay = (tau_discharge - tau_after_breakdown) * float(
+            self._input_dict.get("tau_gp_decay_factor", 1.0)
+        )
+        if tau_decay <= 0.0:
+            return S_gp, Twin_S_gp
+        decay = float(np.exp(-(phase_elapsed - tau_after_breakdown) / tau_decay))
+        return decay * S_gp, decay * Twin_S_gp
+
+    def _gas_puff_event_time(self):
+        if not (
+            self._flags.get("Plasma", True)
+            and bool(self._input_dict.get("gas_puff_enabled", True))
+        ):
+            return None
+        tau_prebreakdown = max(
+            float(self._input_dict.get("tau_prebreakdown", 0.0)),
+            0.0,
+        )
+        tau_discharge = max(float(self._input_dict.get("tau_discharge", 0.0)), 0.0)
+        mode = self._input_dict.get("gas_puff_mode", "decay_after_breakdown")
+        if mode == "pulse_decay_to_level":
+            event = tau_prebreakdown + float(
+                self._input_dict.get("tau_gp_pulse_duration", 0.0)
+            )
+        else:
+            tau_after_breakdown = self._input_dict.get("tau_gp_after_breakdown", None)
+            if tau_after_breakdown is None:
+                return None
+            event = tau_prebreakdown + float(tau_after_breakdown)
+        if event >= tau_prebreakdown + tau_discharge:
+            return None
+        return event
 
     def _energy_exchange_kwargs(self):
         return {
