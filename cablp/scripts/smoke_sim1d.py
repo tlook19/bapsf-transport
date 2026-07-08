@@ -268,6 +268,7 @@ def main():
     assert cathode_solve.device_config is not None
     assert cathode_solve.beam_result is not None
     assert cathode_solve.metadata["enabled"] is True
+    assert cathode_solve.metadata["floating"] is False
     assert cathode_solve.metadata["result_twin"] is None
     assert cathode_solve.device_config.Twin == cathode_flags["TwinCathode"]
     assert np.isclose(cathode_solve.device_config.R_cath, params["R_cath"])
@@ -293,6 +294,26 @@ def main():
         cached_cathode_solve.metadata["result"]["I_tot"],
         cathode_solve.metadata["result"]["I_tot"],
     )
+    afterglow_time = params["tau_prebreakdown"] + params["tau_discharge"]
+    floating_cathode_solve = cathode_sim.solve_cathode_boundary(
+        time=afterglow_time,
+        update_cache=False,
+    )
+    assert floating_cathode_solve.boundary.enabled
+    assert floating_cathode_solve.metadata["enabled"] is True
+    assert floating_cathode_solve.metadata["floating"] is True
+    assert floating_cathode_solve.beam_result is not None
+    inactive_afterglow_solve = cathode_sim.solve_cathode_boundary(
+        time=afterglow_time,
+        floating=False,
+        update_cache=False,
+    )
+    assert not inactive_afterglow_solve.boundary.enabled
+    post_afterglow_solve = cathode_sim.solve_cathode_boundary(
+        time=afterglow_time + params["tau_afterglow"],
+        update_cache=False,
+    )
+    assert not post_afterglow_solve.boundary.enabled
     cathode_loss_terms = cathode_sim.cathode_source_terms(
         cathode_solve=cathode_solve,
     )
@@ -349,6 +370,12 @@ def main():
         cathode_loss_terms.rhs.Ei[0],
         1.5 * ev_to_erg * params["Ti0"] * cathode_loss_terms.rhs.n[0],
     )
+    afterglow_cathode_loss_terms = cathode_sim.cathode_source_terms(
+        cathode_solve=floating_cathode_solve,
+        time=afterglow_time,
+    )
+    assert not afterglow_cathode_loss_terms.enabled
+    assert np.allclose(pack_state(afterglow_cathode_loss_terms.rhs), 0.0)
     beam_birth_terms = cathode_sim.beam_ionization_rhs(
         cathode_solve=cathode_solve,
     )
@@ -432,6 +459,12 @@ def main():
         split_beam_terms["beam_ionization_birth"].Ei,
         1.5 * ev_to_erg * params["Ti_floor"] * beam_birth_terms.n,
     )
+    afterglow_beam_terms = cathode_sim.beam_ionization_rhs_terms(
+        cathode_solve=floating_cathode_solve,
+        time=afterglow_time,
+    )
+    for term in afterglow_beam_terms.values():
+        assert np.allclose(pack_state(term), 0.0)
     cathode_rhs_terms = cathode_sim.rhs_terms(include_heat_conduction=False)
     assert "cathode_surface_loss" in cathode_rhs_terms
     assert "beam_ionization_birth" in cathode_rhs_terms
