@@ -13,6 +13,11 @@ def summarize_result(result):
     constraint_counts = Counter(
         diag.active_constraint for diag in getattr(result, "diagnostics", ())
     )
+    diagnostic_phase_counts = Counter(
+        diag.phase
+        for diag in getattr(result, "diagnostics", ())
+        if getattr(diag, "phase", "")
+    )
     return SimpleNamespace(
         finite=all(finite_fields.values()),
         finite_fields=finite_fields,
@@ -37,6 +42,10 @@ def summarize_result(result):
             plasma_inventory + neutral_inventory
         ),
         thermal_energy_relative_drift=_relative_drift(thermal_energy),
+        phase_counts=_value_counts(getattr(result, "phase", ())),
+        diagnostic_phase_counts=dict(sorted(diagnostic_phase_counts.items())),
+        phase_switch_fractions=_phase_switch_fractions(result),
+        cathode_diagnostic_fractions=_cathode_diagnostic_fractions(result),
         constraint_counts=dict(sorted(constraint_counts.items())),
     )
 
@@ -79,3 +88,49 @@ def _relative_drift(values):
     reference = values[0]
     scale = max(abs(reference), 1.0)
     return float((values[-1] - reference) / scale)
+
+
+def _value_counts(values):
+    values = np.asarray(values, dtype=object)
+    if values.size == 0:
+        return {}
+    counts = Counter(str(value) for value in values)
+    return dict(sorted(counts.items()))
+
+
+def _phase_switch_fractions(result):
+    names = {
+        "cathode_enabled": "phase_cathode_enabled",
+        "gas_puff_enabled": "phase_gas_puff_enabled",
+        "floating": "phase_floating",
+    }
+    return {
+        summary_name: _mean_fraction(getattr(result, field_name))
+        for summary_name, field_name in names.items()
+        if hasattr(result, field_name)
+    }
+
+
+def _cathode_diagnostic_fractions(result):
+    diagnostics = getattr(result, "cathode_diagnostics", {})
+    names = (
+        "configured",
+        "phase_enabled",
+        "rhs_enabled",
+        "solve_enabled",
+        "floating",
+        "has_solution",
+        "has_twin_solution",
+    )
+    return {
+        name: _mean_fraction(diagnostics[name])
+        for name in names
+        if name in diagnostics
+    }
+
+
+def _mean_fraction(values):
+    values = np.asarray(values, dtype=float)
+    if values.size == 0:
+        return np.nan
+    return float(np.mean(values))
