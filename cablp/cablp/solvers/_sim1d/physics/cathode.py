@@ -265,8 +265,7 @@ def cathode_source_terms(
             n=-plasma_loss_rate,
             nn=neutral_gain_rate,
             M=-ion_mass_g * derived.u * plasma_loss_rate,
-            Ee=-1.5 * ev_to_erg * derived.Te * plasma_loss_rate
-            - electron_power_loss_density,
+            Ee=-electron_power_loss_density,
             Ei=-1.5 * ev_to_erg * derived.Ti * plasma_loss_rate,
         ),
         enabled=boundary.enabled,
