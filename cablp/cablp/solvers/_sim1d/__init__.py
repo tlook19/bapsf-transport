@@ -191,32 +191,35 @@ class LAPDSim1D:
             time=self._time,
         )
 
-    def rhs(self, y=None, include_heat_conduction=True):
+    def rhs(self, y=None, include_heat_conduction=True, time=None):
         """Return the packed explicit RHS for the current scaffold physics."""
         state_rhs = self._zero_rhs_state()
         for term in self.rhs_terms(
             y=y,
             include_heat_conduction=include_heat_conduction,
+            time=time,
         ).values():
             state_rhs = add_state_rhs(state_rhs, term)
         return pack_state(state_rhs)
 
-    def rhs_terms(self, y=None, include_heat_conduction=True):
+    def rhs_terms(self, y=None, include_heat_conduction=True, time=None):
         """Return named conservative RHS contributions for diagnostics."""
         state = self.state if y is None else unpack_state(y, self._geometry.cells)
         plasma_terms = self.plasma_flux_rhs_terms(state=state)
         reaction_terms = self.reaction_rhs_terms(state=state)
-        cathode_phase = self._cathode_phase_options()
+        cathode_phase = self._cathode_phase_options(time=time)
         cathode_solve = None
         if cathode_phase["solve_enabled"]:
             cathode_solve = self.solve_cathode_boundary(
                 state=state,
                 floating=cathode_phase["floating"],
+                time=time,
                 update_cache=True,
             )
         beam_terms = self.beam_ionization_rhs_terms(
             state=state,
             cathode_solve=cathode_solve,
+            time=time,
         )
         terms = {
             "plasma_advective_flux": plasma_terms["plasma_advective_flux"],
@@ -229,9 +232,13 @@ class LAPDSim1D:
             "cathode_surface_loss": self.cathode_source_terms(
                 state=state,
                 cathode_solve=cathode_solve,
+                time=time,
             ).rhs,
             "neutral_exchange": self.neutral_exchange_rhs(state=state),
-            "neutral_sources": self.neutral_source_sink_rhs(state=state),
+            "neutral_sources": self.neutral_source_sink_rhs(
+                state=state,
+                time=time,
+            ),
             "ionization_birth": reaction_terms["ionization_birth"],
             "beam_ionization_birth": beam_terms["beam_ionization_birth"],
             "beam_power_deposition": beam_terms["beam_power_deposition"],
@@ -382,7 +389,7 @@ class LAPDSim1D:
         """Return lightweight health diagnostics for a sim1d run result."""
         return summarize_result(result)
 
-    def suggest_timestep(self, y=None, include_heat_conduction=None):
+    def suggest_timestep(self, y=None, include_heat_conduction=None, time=None):
         """Return an explicit timestep suggestion and diagnostics."""
         state = self.state if y is None else unpack_state(y, self._geometry.cells)
         if include_heat_conduction is None:
@@ -396,7 +403,7 @@ class LAPDSim1D:
             mu=self._mu,
             geometry=self._geometry,
             neutral_exchange_coeff_cm3_s=self.neutral_exchange_coefficients(),
-            neutral_source_kwargs=self._neutral_source_kwargs(),
+            neutral_source_kwargs=self._neutral_source_kwargs(time=time),
             reaction_kwargs=self._reaction_kwargs(),
             energy_exchange_kwargs=self._energy_exchange_kwargs(),
             electron_cooling_kwargs=self._electron_cooling_kwargs(),
@@ -909,7 +916,7 @@ class LAPDSim1D:
         state = self.state
         derived = self.derived
         assert_finite_state(state, derived)
-        rhs_terms = self.rhs_terms(include_heat_conduction=True)
+        rhs_terms = self.rhs_terms(include_heat_conduction=True, time=time)
         phase, phase_elapsed = self._phase_info(time)
         phase_switches = self._phase_switches(phase)
         return {
