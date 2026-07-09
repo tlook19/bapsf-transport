@@ -482,7 +482,9 @@ class LAPDSim1D:
     def rhs_terms(self, y=None, include_heat_conduction=True, time=None):
         """Return named conservative RHS contributions for diagnostics."""
         state = self.state if y is None else unpack_state(y, self._geometry.cells)
-        if not self._flags.get("Plasma", True):
+        if not self._flags.get("Plasma", True) or self._neutral_prebreakdown_active(
+            time=time,
+        ):
             return {
                 "plasma_advective_flux": self._zero_rhs_state(),
                 "plasma_front_flux": self._zero_rhs_state(),
@@ -601,7 +603,7 @@ class LAPDSim1D:
 
         starting_cache = self._step_cache_snapshot()
         try:
-            if not self._flags.get("Plasma", True):
+            if not self._flags.get("Plasma", True) or self._neutral_prebreakdown_active():
                 y_next = pack_state(self._implicit_neutral_step(dt=dt))
             elif operator_split:
                 y_next = self.operator_split_step(dt=dt)
@@ -1242,7 +1244,13 @@ class LAPDSim1D:
         tau_breakdown = max(float(self._input_dict.get("tau_breakdown", 0.0)), 0.0)
         tau_discharge = max(float(self._input_dict.get("tau_discharge", 0.0)), 0.0)
         tau_afterglow = max(float(self._input_dict.get("tau_afterglow", 0.0)), 0.0)
-        return tau_prebreakdown + tau_breakdown + tau_discharge + tau_afterglow
+        return (
+            self._neutral_prebreakdown_duration()
+            + tau_prebreakdown
+            + tau_breakdown
+            + tau_discharge
+            + tau_afterglow
+        )
 
     def start_simulation(
         self,
@@ -1330,7 +1338,12 @@ class LAPDSim1D:
     def suggest_timestep(self, y=None, include_heat_conduction=None, time=None):
         """Return an explicit timestep suggestion and diagnostics."""
         state = self.state if y is None else unpack_state(y, self._geometry.cells)
-        plasma_enabled = self._flags.get("Plasma", True)
+        if time is None:
+            time = self._time
+        plasma_enabled = self._flags.get(
+            "Plasma",
+            True,
+        ) and not self._neutral_prebreakdown_active(time=time)
         if include_heat_conduction is None:
             include_heat_conduction = (
                 plasma_enabled
@@ -1401,8 +1414,6 @@ class LAPDSim1D:
                 dt_heat_conduction=np.inf,
                 active_constraint=active_constraint,
             )
-        if time is None:
-            time = self._time
         phase, _ = self._phase_info(time)
         switches = self._phase_switches(phase)
         return replace(
@@ -1422,6 +1433,23 @@ class LAPDSim1D:
         """Return diagnostic phase switches without changing RHS behavior."""
         phase = self.phase_at_time(time)
         return self._phase_switches(phase)
+
+    def _neutral_prebreakdown_duration(self):
+        if not (
+            self._flags.get("Plasma", True)
+            and self._flags.get("neutral_prebreakdown", False)
+        ):
+            return 0.0
+        return max(float(self._input_dict.get("tau_neutral_prebreakdown", 0.0)), 0.0)
+
+    def _neutral_prebreakdown_active(self, time=None):
+        if time is None:
+            time = self._time
+        duration = self._neutral_prebreakdown_duration()
+        return duration > 0.0 and float(time) < duration
+
+    def _plasma_phase_time_origin(self):
+        return self._neutral_prebreakdown_duration()
 
     def next_phase_boundary_after(self, time, t_end=None, time_tol=0.0):
         """Return the next diagnostic phase boundary after ``time`` [s]."""
@@ -1467,11 +1495,14 @@ class LAPDSim1D:
         tau_breakdown = max(float(self._input_dict.get("tau_breakdown", 0.0)), 0.0)
         tau_discharge = max(float(self._input_dict.get("tau_discharge", 0.0)), 0.0)
         tau_afterglow = max(float(self._input_dict.get("tau_afterglow", 0.0)), 0.0)
+        plasma_origin = self._plasma_phase_time_origin()
+        boundaries = []
+        if plasma_origin > 0.0:
+            boundaries.append(plasma_origin)
         if self._phase_transition_mode() == "current":
-            boundaries = []
             main_start = self._t_breakdown_trigger
             if main_start is None:
-                boundaries.append(tau_prebreakdown)
+                boundaries.append(plasma_origin + tau_prebreakdown)
             else:
                 boundaries.extend(
                     [
@@ -1480,13 +1511,16 @@ class LAPDSim1D:
                     ]
                 )
         else:
-            main_start = tau_prebreakdown + tau_breakdown
-            boundaries = [
-                tau_prebreakdown,
-                main_start,
-                main_start + tau_discharge,
-                main_start + tau_discharge + tau_afterglow,
-            ]
+            breakdown_start = plasma_origin + tau_prebreakdown
+            main_start = breakdown_start + tau_breakdown
+            boundaries.extend(
+                [
+                    breakdown_start,
+                    main_start,
+                    main_start + tau_discharge,
+                    main_start + tau_discharge + tau_afterglow,
+                ]
+            )
         gas_event = self._gas_puff_event_time()
         if gas_event is not None:
             boundaries.append(gas_event)
@@ -1892,12 +1926,13 @@ class LAPDSim1D:
     def _main_discharge_start_time(self):
         if self._phase_transition_mode() == "current":
             return self._t_breakdown_trigger
+        plasma_origin = self._plasma_phase_time_origin()
         tau_prebreakdown = max(
             float(self._input_dict.get("tau_prebreakdown", 0.0)),
             0.0,
         )
         tau_breakdown = max(float(self._input_dict.get("tau_breakdown", 0.0)), 0.0)
-        return tau_prebreakdown + tau_breakdown
+        return plasma_origin + tau_prebreakdown + tau_breakdown
 
     def _current_trigger_t_end(self):
         if (
@@ -1917,6 +1952,8 @@ class LAPDSim1D:
         S_gp = float(self._input_dict.get("S_gp", 0.0))
         Twin_S_gp = float(self._input_dict.get("Twin_S_gp", 0.0))
         if not self._flags.get("Plasma", True):
+            return S_gp, Twin_S_gp
+        if phase == "neutral_prebreakdown":
             return S_gp, Twin_S_gp
         if phase in {"pre_breakdown", "breakdown"}:
             return S_gp, Twin_S_gp
@@ -2015,6 +2052,7 @@ class LAPDSim1D:
         if (
             self._phase_transition_mode() != "current"
             or not self._flags.get("Plasma", True)
+            or self._neutral_prebreakdown_active()
         ):
             return
         cathode_phase = self._cathode_phase_options(time=self._time)
@@ -2029,6 +2067,8 @@ class LAPDSim1D:
         I_prebreakdown = float(self._input_dict.get("I_prebreakdown", 0.0))
         I_breakdown = float(self._input_dict.get("I_breakdown", 0.0))
         time_tol = max(1e-15, 1e-12 * max(abs(tau_prebreakdown), 1.0))
+        plasma_origin = self._plasma_phase_time_origin()
+        current_phase_elapsed = max(self._time - plasma_origin, 0.0)
 
         if self._t_breakdown_trigger is not None:
             return
@@ -2042,7 +2082,7 @@ class LAPDSim1D:
                     self._t_breakdown_trigger = trigger_time
                 self._record_current_trigger_sample(I_now)
                 return
-            if self._time >= tau_prebreakdown - time_tol:
+            if current_phase_elapsed >= tau_prebreakdown - time_tol:
                 raise BreakdownError(
                     "plasma failed to break down within "
                     f"tau_prebreakdown={tau_prebreakdown:.9e} s "
@@ -2075,7 +2115,7 @@ class LAPDSim1D:
             )
             self._record_current_trigger_sample(I_now)
             return
-        if self._time >= tau_prebreakdown - time_tol:
+        if current_phase_elapsed >= tau_prebreakdown - time_tol:
             raise BreakdownError(
                 "plasma failed to reach breakdown current within "
                 f"tau_prebreakdown={tau_prebreakdown:.9e} s "
@@ -2377,6 +2417,9 @@ class LAPDSim1D:
         tau_breakdown = max(float(self._input_dict.get("tau_breakdown", 0.0)), 0.0)
         tau_discharge = max(float(self._input_dict.get("tau_discharge", 0.0)), 0.0)
         tau_afterglow = max(float(self._input_dict.get("tau_afterglow", 0.0)), 0.0)
+        plasma_origin = self._plasma_phase_time_origin()
+        if plasma_origin > 0.0:
+            append_event(plasma_origin, "pre_breakdown", "tau_neutral_prebreakdown")
 
         if self._phase_transition_mode() == "current":
             if self._t_prebreakdown_trigger is not None:
@@ -2400,7 +2443,7 @@ class LAPDSim1D:
                 )
             return _phase_event_arrays(events)
 
-        breakdown_start = tau_prebreakdown
+        breakdown_start = plasma_origin + tau_prebreakdown
         main_start = breakdown_start + tau_breakdown
         if tau_breakdown > 0.0:
             append_event(breakdown_start, "breakdown", "tau_prebreakdown")
@@ -2451,6 +2494,9 @@ class LAPDSim1D:
         )
         tau_breakdown = max(float(self._input_dict.get("tau_breakdown", 0.0)), 0.0)
         tau_afterglow = max(float(self._input_dict.get("tau_afterglow", 0.0)), 0.0)
+        plasma_origin = self._plasma_phase_time_origin()
+        if plasma_origin > 0.0 and time < plasma_origin:
+            return "neutral_prebreakdown", time
         if self._phase_transition_mode() == "current":
             if self._t_breakdown_trigger is not None:
                 main_start = self._t_breakdown_trigger
@@ -2462,7 +2508,7 @@ class LAPDSim1D:
                         and time >= self._t_prebreakdown_trigger
                     ):
                         return "breakdown", time - self._t_prebreakdown_trigger
-                    return "pre_breakdown", time
+                    return "pre_breakdown", time - plasma_origin
                 if time < afterglow_start:
                     return "main_discharge", time - main_start
                 if time < post_afterglow_start:
@@ -2473,9 +2519,9 @@ class LAPDSim1D:
                 and time >= self._t_prebreakdown_trigger
             ):
                 return "breakdown", time - self._t_prebreakdown_trigger
-            return "pre_breakdown", time
+            return "pre_breakdown", time - plasma_origin
 
-        breakdown_start = tau_prebreakdown
+        breakdown_start = plasma_origin + tau_prebreakdown
         main_start = breakdown_start + tau_breakdown
         afterglow_start = main_start + tau_discharge
         post_afterglow_start = afterglow_start + tau_afterglow
@@ -2491,6 +2537,14 @@ class LAPDSim1D:
 
     def _phase_switches(self, phase):
         discharge_phases = {"pre_breakdown", "breakdown", "main_discharge"}
+        if phase == "neutral_prebreakdown":
+            return {
+                "cathode_enabled": False,
+                "gas_puff_enabled": bool(
+                    self._input_dict.get("gas_puff_enabled", True)
+                ),
+                "floating": False,
+            }
         if phase == "equilibrium_puff":
             return {
                 "cathode_enabled": False,
