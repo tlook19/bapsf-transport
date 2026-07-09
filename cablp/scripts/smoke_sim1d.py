@@ -1426,6 +1426,10 @@ def main():
     assert np.allclose(run_result.phase_floating, 0.0)
     assert np.isnan(run_result.t_prebreakdown_trigger)
     assert np.isnan(run_result.t_breakdown_trigger)
+    assert np.isnan(run_result.t_breakdown)
+    assert np.isnan(run_result.t_breakdown_ms)
+    assert np.allclose(run_result.time_since_breakdown, run_result.time)
+    assert np.allclose(run_result.time_ms_since_breakdown, 1.0e3 * run_result.time)
     assert np.allclose(run_result.phase_events["time"], [0.0])
     assert list(run_result.phase_events["phase"]) == ["pre_breakdown"]
     assert list(run_result.phase_events["reason"]) == ["initial"]
@@ -1585,7 +1589,9 @@ def main():
     assert np.allclose(run_result.e_perp_hl, 0.0)
     assert np.allclose(run_result.i_perp_hl, 0.0)
     assert run_result.sim3_compat_units["energy_terms"] == "W/cm^3"
+    assert run_result.sim3_compat_units["time_ms_since_breakdown"] == "ms"
     assert "power density" in run_result.sim3_compat_notes["Qei"]
+    assert "breakdown-relative" in run_result.sim3_compat_notes["time_since_breakdown"]
     assert run_result.cathode.I_tot.shape == run_result.time.shape
     assert np.all(np.isnan(run_result.cathode.I_tot))
 
@@ -1731,6 +1737,13 @@ def main():
             assert np.isclose(loaded.final_time, run_result.final_time)
             assert np.isnan(loaded.t_prebreakdown_trigger)
             assert np.isnan(loaded.t_breakdown_trigger)
+            assert np.isnan(loaded.t_breakdown)
+            assert np.isnan(loaded.t_breakdown_ms)
+            assert np.allclose(loaded.time_since_breakdown, loaded.time)
+            assert np.allclose(
+                loaded.time_ms_since_breakdown,
+                1.0e3 * loaded.time,
+            )
             assert np.allclose(loaded.phase_events["time"], [0.0])
             assert list(loaded.phase_events["phase"]) == ["pre_breakdown"]
             assert list(loaded.phase_events["reason"]) == ["initial"]
@@ -2461,9 +2474,19 @@ def main():
     assert np.isclose(current_phase_sim._t_breakdown_trigger, 2.0e-10)
     assert np.isclose(current_phase_result.t_prebreakdown_trigger, 1.0e-10)
     assert np.isclose(current_phase_result.t_breakdown_trigger, 2.0e-10)
+    assert np.isclose(current_phase_result.t_breakdown, 2.0e-10)
+    assert np.isclose(current_phase_result.t_breakdown_ms, 2.0e-7)
     assert np.allclose(
         current_phase_result.time,
         [0.0, 1.0e-10, 2.0e-10, 3.0e-10, 4.0e-10, 5.0e-10],
+    )
+    assert np.allclose(
+        current_phase_result.time_since_breakdown,
+        current_phase_result.time - 2.0e-10,
+    )
+    assert np.allclose(
+        current_phase_result.time_ms_since_breakdown,
+        1.0e3 * (current_phase_result.time - 2.0e-10),
     )
     assert list(current_phase_result.phase) == [
         "pre_breakdown",
@@ -2600,6 +2623,16 @@ def main():
         loaded_current_phase = load_result_hdf5(current_phase_output)
         assert np.isclose(loaded_current_phase.t_prebreakdown_trigger, 1.0e-10)
         assert np.isclose(loaded_current_phase.t_breakdown_trigger, 2.0e-10)
+        assert np.isclose(loaded_current_phase.t_breakdown, 2.0e-10)
+        assert np.isclose(loaded_current_phase.t_breakdown_ms, 2.0e-7)
+        assert np.allclose(
+            loaded_current_phase.time_since_breakdown,
+            current_phase_result.time_since_breakdown,
+        )
+        assert np.allclose(
+            loaded_current_phase.time_ms_since_breakdown,
+            current_phase_result.time_ms_since_breakdown,
+        )
         assert np.allclose(
             loaded_current_phase.phase_events["time"],
             current_phase_result.phase_events["time"],

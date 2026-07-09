@@ -51,6 +51,7 @@ def add_sim3_compat_aliases(result):
     result.n_beam = _diagnostic_or_zeros(cathode_diagnostics, "n_beam", result.n)
     result.cathode = _cathode_namespace(cathode_diagnostics, "source", result.time)
     result.cathode_twin = _cathode_namespace(cathode_diagnostics, "end", result.time)
+    _add_time_aliases(result)
 
     rhs_terms = getattr(result, "rhs_terms", {})
     result.Ne_flux = _sum_rhs_fields(
@@ -113,8 +114,16 @@ def add_sim3_compat_aliases(result):
         "energy_terms": "W/cm^3",
         "density_terms": "cm^-3 s^-1",
         "time": "s",
+        "time_ms_since_breakdown": "ms",
+        "t_breakdown": "s",
+        "t_breakdown_ms": "ms",
     }
     result.sim3_compat_notes = {
+        "time": "absolute _sim1d solver time; _sim3 shifts saved time to breakdown",
+        "time_since_breakdown": "breakdown-relative seconds for _sim3-style comparisons",
+        "time_ms_since_breakdown": "breakdown-relative milliseconds matching _sim3 saved time convention",
+        "t_breakdown": "absolute _sim1d breakdown trigger time in seconds",
+        "t_breakdown_ms": "absolute _sim1d breakdown trigger time in milliseconds",
         "Qei": "electron-ion inelastic/radiative cooling power density",
         "Qen": "electron-neutral inelastic cooling power density",
         "Qeb": "net electron beam/cathode power-density mapping",
@@ -127,6 +136,18 @@ def add_sim3_compat_aliases(result):
         "S_rec_3b": "three-body recombination particle sink",
     }
     return result
+
+
+def _add_time_aliases(result):
+    t_breakdown = float(getattr(result, "t_breakdown_trigger", np.nan))
+    result.t_breakdown = t_breakdown
+    result.t_breakdown_ms = 1.0e3 * t_breakdown if np.isfinite(t_breakdown) else np.nan
+
+    if np.isfinite(t_breakdown):
+        result.time_since_breakdown = np.asarray(result.time, dtype=float) - t_breakdown
+    else:
+        result.time_since_breakdown = np.asarray(result.time, dtype=float).copy()
+    result.time_ms_since_breakdown = 1.0e3 * result.time_since_breakdown
 
 
 def _sum_rhs_fields(rhs_terms, field_name, shape_like, term_names):
