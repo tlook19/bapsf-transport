@@ -2,7 +2,8 @@
 
 Brief outline of the numerical schemes used by `LAPDSim1D`
 (`cablp/solvers/_sim1d/`). This is a conservative, axially-resolved 1D LAPD
-transport model (1D interior with 0D boundary cells).
+transport model (1D interior with 0D boundary cells). For the continuous model
+equations these schemes discretize, see [`MODEL.md`](MODEL.md).
 
 ## State and discretization
 
