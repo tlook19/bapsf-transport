@@ -47,7 +47,7 @@ from cablp.solvers._sim1d.core.state import (
     pack_state,
     unpack_state,
 )
-from cablp.vars._cons import en_factor, ev_to_erg, qe_SI
+from cablp.vars._cons import I_Ry, en_factor, ev_to_erg, m_p_cgs, qe_SI
 
 
 def main():
@@ -1150,6 +1150,98 @@ def main():
         cx=True,
     )
     assert np.allclose(disabled_cx.Ei, 0.0)
+
+    hydrogen_params = dict(params)
+    hydrogen_params["gas_type"] = "H"
+    hydrogen_params["dt_save"] = 0.0
+    hydrogen_sim = LAPDSim1D(hydrogen_params, flags)
+    assert np.isclose(hydrogen_sim.ion_mass_g, m_p_cgs)
+    assert hydrogen_sim.mu == 1
+    assert hydrogen_sim._mu_neutral == 2
+    assert np.isclose(hydrogen_sim.I_ion, I_Ry)
+
+    hydrogen_state = conservative_from_primitives(
+        n=np.full(geom.cells, 1.0e12),
+        nn=np.full(geom.cells, 1.0e12),
+        u=np.zeros(geom.cells),
+        Te=np.full(geom.cells, 10.0),
+        Ti=np.full(geom.cells, 10.0),
+        ion_mass_g=hydrogen_sim.ion_mass_g,
+    )
+    hydrogen_rates = reaction_rates(
+        state=hydrogen_state,
+        floors=hydrogen_sim.floors,
+        ion_mass_g=hydrogen_sim.ion_mass_g,
+        gas_type="H",
+        I_ion=hydrogen_sim.I_ion,
+        b_ioniz=hydrogen_params["b_ioniz"],
+        b_rec_rad=hydrogen_params["b_rec_rad"],
+        b_rec_3b=hydrogen_params["b_rec_3b"],
+    )
+    for rate in hydrogen_rates:
+        assert np.all(np.isfinite(rate))
+        assert np.all(rate > 0.0)
+    hydrogen_reaction = hydrogen_sim.reaction_rhs(state=hydrogen_state)
+    for values in (
+        hydrogen_reaction.n,
+        hydrogen_reaction.nn,
+        hydrogen_reaction.M,
+        hydrogen_reaction.Ee,
+        hydrogen_reaction.Ei,
+    ):
+        assert np.all(np.isfinite(values))
+    hydrogen_inventory_scale = np.sum(
+        np.abs(hydrogen_reaction.n * geom.plasma_volume_cm3)
+        + np.abs(hydrogen_reaction.nn * geom.neutral_volume_cm3)
+    )
+    assert np.isclose(
+        particle_inventory_rate(hydrogen_reaction, geom),
+        0.0,
+        atol=1e-12 * hydrogen_inventory_scale,
+    )
+    hydrogen_cooling_terms = hydrogen_sim.electron_cooling_rhs_terms(
+        state=hydrogen_state,
+    )
+    assert np.any(hydrogen_cooling_terms["ionization_energy_cost"].Ee < 0.0)
+    assert np.any(hydrogen_cooling_terms["electron_ion_cooling"].Ee < 0.0)
+    assert np.any(hydrogen_cooling_terms["electron_neutral_cooling"].Ee < 0.0)
+    hydrogen_cx = hydrogen_sim.ion_charge_exchange_rhs(state=hydrogen_state)
+    assert np.all(np.isfinite(hydrogen_cx.Ei))
+    assert np.all(hydrogen_cx.Ei < 0.0)
+    hydrogen_warm_neutral_cx = ion_charge_exchange_rhs(
+        state=hydrogen_state,
+        floors=hydrogen_sim.floors,
+        ion_mass_g=hydrogen_sim.ion_mass_g,
+        gas_type="H",
+        Tn_fit=20.0,
+        b_Qcx=hydrogen_params["b_Qcx"],
+        cx=True,
+    )
+    assert np.all(hydrogen_warm_neutral_cx.Ei > 0.0)
+    hydrogen_dt = hydrogen_sim.suggest_timestep(y=pack_state(hydrogen_state))
+    assert np.isfinite(hydrogen_dt.dt_reactions)
+    assert np.isfinite(hydrogen_dt.dt_electron_cooling)
+    assert np.isfinite(hydrogen_dt.dt_ion_charge_exchange)
+    hydrogen_result = hydrogen_sim.run(t_end=1.0e-10, dt=1.0e-10)
+    assert hydrogen_result.steps == 1
+    assert np.all(np.isfinite(hydrogen_result.n))
+    assert np.all(np.isfinite(hydrogen_result.Te))
+    assert np.all(np.isfinite(hydrogen_result.Ti))
+
+    try:
+        ion_charge_exchange_rhs(
+            state=hydrogen_state,
+            floors=hydrogen_sim.floors,
+            ion_mass_g=hydrogen_sim.ion_mass_g,
+            gas_type="Ar",
+            Tn_fit=hydrogen_params["Tn_fit"],
+            b_Qcx=hydrogen_params["b_Qcx"],
+            cx=True,
+        )
+    except ValueError as exc:
+        assert "unsupported gas_type" in str(exc)
+    else:
+        raise AssertionError("expected unsupported gas_type to fail")
 
     heat_state = conservative_from_primitives(
         n=np.full(geom.cells, 1.0e12),
