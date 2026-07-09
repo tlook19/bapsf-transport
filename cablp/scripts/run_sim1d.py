@@ -98,8 +98,11 @@ def _parse_args(argv):
     parser.add_argument(
         "--max-steps",
         type=int,
-        default=100000,
-        help="Maximum accepted timesteps before aborting.",
+        default=None,
+        help=(
+            "Maximum accepted timesteps before aborting. "
+            "Defaults to config max_steps; 0 means unlimited."
+        ),
     )
     parser.add_argument(
         "--progress",

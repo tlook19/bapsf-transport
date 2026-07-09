@@ -381,6 +381,8 @@ def timestep_defaults():
         Minimum allowed timestep [s].
     dt_max:
         Maximum allowed timestep [s].
+    max_steps:
+        Maximum accepted timesteps for a run. Zero means unlimited.
     adaptive_retries_enabled:
         Enables retrying a rejected step with a smaller timestep.
     max_step_retries:
@@ -406,6 +408,7 @@ def timestep_defaults():
         "heat_dt_fraction": 0.25,
         "dt_min": 1e-10,
         "dt_max": 1e-4,
+        "max_steps": 0,
         "adaptive_retries_enabled": True,
         "max_step_retries": 8,
         "dt_reject_factor": 0.5,

@@ -822,7 +822,7 @@ class LAPDSim1D:
         t_end=None,
         dt=None,
         operator_split=None,
-        max_steps=100000,
+        max_steps=None,
         progress_callback=None,
         progress_tracker=None,
         progress_interval_s=None,
@@ -833,8 +833,10 @@ class LAPDSim1D:
         t_end = float(t_end)
         if t_end < self._time:
             raise ValueError(f"t_end must be >= current time ({t_end} < {self._time})")
-        if max_steps <= 0:
-            raise ValueError(f"max_steps must be positive (got {max_steps})")
+        if max_steps is None:
+            max_steps = int(self._input_dict.get("max_steps", 0))
+        max_steps = int(max_steps)
+        unlimited_steps = max_steps <= 0
 
         dt_save = float(self._input_dict.get("dt_save", 1e-5))
         t_save_start = float(self._input_dict.get("t_save_start", 0.0))
@@ -916,7 +918,7 @@ class LAPDSim1D:
         last_progress_time = -np.inf
         steps = 0
         while self._time < t_end - time_tol:
-            if steps >= max_steps:
+            if not unlimited_steps and steps >= max_steps:
                 raise RuntimeError(
                     f"max_steps={max_steps} reached before t_end={t_end:g} s"
                 )
@@ -1095,11 +1097,6 @@ class LAPDSim1D:
         params["dt_save"] = max(t_end, 0.0)
         params["t_save_start"] = 0.0
         params["max_output_steps"] = 0
-        if max_steps is None:
-            max_steps = 100000
-            if dt is not None and dt > 0.0:
-                max_steps = max(max_steps, int(np.ceil(t_end / dt)) + 10)
-
         sim = LAPDSim1D(
             params,
             flags,
@@ -1167,7 +1164,7 @@ class LAPDSim1D:
         t_end=None,
         dt=None,
         operator_split=None,
-        max_steps=100000,
+        max_steps=None,
         progress_callback=None,
         progress_tracker=None,
         progress_interval_s=None,
