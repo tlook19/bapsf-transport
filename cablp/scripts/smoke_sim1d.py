@@ -1,4 +1,5 @@
 import json
+from io import StringIO
 from pathlib import Path
 import subprocess
 import sys
@@ -13,6 +14,7 @@ from cablp.funcs._plasmaparams import c_log
 from cablp.solvers._sim1d import (
     BreakdownError,
     LAPDSim1D,
+    ProgressPrinter1D,
     SimulationProgress1D,
     TimestepRejectionError,
     default_config,
@@ -1744,6 +1746,33 @@ def main():
     assert progress_snapshots[-1].step == progress_result.steps
     assert progress_snapshots[-1].saved_samples == len(progress_result.time)
     assert progress_snapshots[-1].step_cap == "fixed_dt"
+    printer_stream = StringIO()
+    progress_printer = ProgressPrinter1D(
+        interval_fraction=0.0,
+        interval_steps=100,
+        stream=printer_stream,
+    )
+    progress_printer(progress_snapshots[-1])
+    progress_printer(
+        SimulationProgress1D(
+            fraction=0.25,
+            time=1.0e-10,
+            t_end=4.0e-10,
+            step=1,
+            max_steps=0,
+            accepted_dt=1.0e-10,
+            suggested_dt=1.0e-10,
+            step_cap="fixed_dt",
+            active_constraint="dt_max",
+            retry_count=0,
+            rejection_reason="",
+            phase="neutral_prebreakdown",
+            saved_samples=1,
+            wall_elapsed_s=0.0,
+            wall_remaining_s=0.0,
+        )
+    )
+    assert printer_stream.getvalue().count("sim1d progress:") == 2
     every_step_progress = []
     LAPDSim1D(run_params, flags).run(
         t_end=3.0e-10,

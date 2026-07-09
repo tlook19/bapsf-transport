@@ -132,7 +132,13 @@ class ProgressPrinter1D:
         self._last_fraction = -np.inf
         self._last_step = -self.interval_steps
 
+    def reset(self):
+        self._last_fraction = -np.inf
+        self._last_step = -self.interval_steps
+
     def __call__(self, progress):
+        if progress.step <= self._last_step or progress.fraction < self._last_fraction:
+            self.reset()
         fraction_due = (
             progress.fraction >= 1.0
             or progress.fraction - self._last_fraction >= self.interval_fraction
