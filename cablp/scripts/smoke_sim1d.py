@@ -2620,6 +2620,14 @@ def main():
     current_phase_flags["cathode_coupling"] = True
     current_phase_sim = LAPDSim1D(current_phase_params, current_phase_flags)
     current_phase_result = current_phase_sim.run(t_end=5.0e-10, dt=1.0e-10)
+    dynamic_current_phase_sim = LAPDSim1D(current_phase_params, current_phase_flags)
+    dynamic_current_phase_result = dynamic_current_phase_sim.run(dt=1.0e-10)
+    assert np.isclose(dynamic_current_phase_result.final_time, 5.0e-10)
+    assert np.isclose(dynamic_current_phase_result.t_breakdown_trigger, 2.0e-10)
+    assert np.allclose(
+        dynamic_current_phase_result.phase_events["time"],
+        [0.0, 1.0e-10, 2.0e-10, 4.0e-10, 5.0e-10],
+    )
     assert np.isclose(current_phase_sim._t_prebreakdown_trigger, 1.0e-10)
     assert np.isclose(current_phase_sim._t_breakdown_trigger, 2.0e-10)
     assert np.isclose(current_phase_result.t_prebreakdown_trigger, 1.0e-10)

@@ -828,6 +828,7 @@ class LAPDSim1D:
         progress_interval_s=None,
     ):
         """Advance to ``t_end`` and return sparse saved trajectory arrays."""
+        explicit_t_end = t_end is not None
         if t_end is None:
             t_end = self.default_t_end()
         t_end = float(t_end)
@@ -857,6 +858,11 @@ class LAPDSim1D:
                 "dt_growth_factor must be > 1 when dt growth is enabled "
                 f"(got {dt_growth_factor})"
             )
+        dynamic_current_t_end = (
+            not explicit_t_end
+            and self._flags.get("Plasma", True)
+            and self._phase_transition_mode() == "current"
+        )
 
         def should_save(t):
             if max_output_steps > 0 and len(saved) >= max_output_steps:
@@ -979,6 +985,11 @@ class LAPDSim1D:
             timestep_rejection_events.extend(step_rejection_events)
             self._accept_step_attempt(attempt)
             self._update_current_phase_triggers()
+            if dynamic_current_t_end:
+                current_t_end = self._current_trigger_t_end()
+                if current_t_end is not None and current_t_end < t_end:
+                    t_end = float(current_t_end)
+                    time_tol = max(1e-15, 1e-12 * max(abs(t_end), 1.0))
             if retry_count:
                 step_cap = "retry"
             previous_accepted_dt = float(attempt.dt)
@@ -1813,6 +1824,17 @@ class LAPDSim1D:
         )
         tau_breakdown = max(float(self._input_dict.get("tau_breakdown", 0.0)), 0.0)
         return tau_prebreakdown + tau_breakdown
+
+    def _current_trigger_t_end(self):
+        if (
+            not self._flags.get("Plasma", True)
+            or self._phase_transition_mode() != "current"
+            or self._t_breakdown_trigger is None
+        ):
+            return None
+        tau_discharge = max(float(self._input_dict.get("tau_discharge", 0.0)), 0.0)
+        tau_afterglow = max(float(self._input_dict.get("tau_afterglow", 0.0)), 0.0)
+        return float(self._t_breakdown_trigger) + tau_discharge + tau_afterglow
 
     def _effective_gas_puff_sccm(self, time=None):
         if time is None:
