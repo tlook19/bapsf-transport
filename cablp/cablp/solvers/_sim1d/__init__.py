@@ -36,6 +36,7 @@ from .physics.cathode import (
 )
 from .physics.energy import (
     electron_cooling_rhs,
+    electron_cooling_rhs_terms,
     electron_ion_exchange_rhs,
     ion_charge_exchange_rhs,
 )
@@ -345,6 +346,7 @@ class LAPDSim1D:
         state = self.state if y is None else unpack_state(y, self._geometry.cells)
         plasma_terms = self.plasma_flux_rhs_terms(state=state)
         reaction_terms = self.reaction_rhs_terms(state=state)
+        electron_cooling_terms = self.electron_cooling_rhs_terms(state=state)
         cathode_phase = self._cathode_phase_options(time=time)
         cathode_solve = None
         if cathode_phase["solve_enabled"]:
@@ -364,7 +366,15 @@ class LAPDSim1D:
             "plasma_front_flux": plasma_terms["plasma_front_flux"],
             "pressure_work": self.pressure_work_rhs(state=state),
             "ei_exchange": self.energy_exchange_rhs(state=state),
-            "electron_cooling": self.electron_cooling_rhs(state=state),
+            "ionization_energy_cost": electron_cooling_terms[
+                "ionization_energy_cost"
+            ],
+            "electron_ion_cooling": electron_cooling_terms[
+                "electron_ion_cooling"
+            ],
+            "electron_neutral_cooling": electron_cooling_terms[
+                "electron_neutral_cooling"
+            ],
             "ion_charge_exchange": self.ion_charge_exchange_rhs(state=state),
             "surface_loss": self.surface_neutralization_rhs(state=state),
             "cathode_surface_loss": self.cathode_source_terms(
@@ -381,7 +391,8 @@ class LAPDSim1D:
             "beam_ionization_birth": beam_terms["beam_ionization_birth"],
             "beam_power_deposition": beam_terms["beam_power_deposition"],
             "beam_ionization_cost": beam_terms["beam_ionization_cost"],
-            "recombination_loss": reaction_terms["recombination_loss"],
+            "recombination_rad_loss": reaction_terms["recombination_rad_loss"],
+            "recombination_3b_loss": reaction_terms["recombination_3b_loss"],
             "heat_conduction": self._zero_rhs_state(),
         }
         if include_heat_conduction:
@@ -1065,6 +1076,17 @@ class LAPDSim1D:
         if state is None:
             state = self.state if y is None else unpack_state(y, self._geometry.cells)
         return electron_cooling_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            **self._electron_cooling_kwargs(),
+        )
+
+    def electron_cooling_rhs_terms(self, y=None, state=None):
+        """Return split conservative electron cooling source terms."""
+        if state is None:
+            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        return electron_cooling_rhs_terms(
             state=state,
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,

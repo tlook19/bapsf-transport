@@ -76,15 +76,25 @@ def add_sim3_compat_aliases(result):
     )
     result.S_ion_bulk = _rhs_field(rhs_terms, "ionization_birth", "n", result.n)
     result.S_ion_beam = _rhs_field(rhs_terms, "beam_ionization_birth", "n", result.n)
-    result.S_rec_rad = -_rhs_field(rhs_terms, "recombination_loss", "n", result.n)
-    result.S_rec_3b = np.zeros_like(result.S_rec_rad)
+    result.S_rec_rad = -_rhs_field(
+        rhs_terms,
+        "recombination_rad_loss",
+        "n",
+        result.n,
+    )
+    result.S_rec_3b = -_rhs_field(
+        rhs_terms,
+        "recombination_3b_loss",
+        "n",
+        result.n,
+    )
 
     electron_terms = getattr(result, "electron_energy_terms_W_cm3", {})
     ion_terms = getattr(result, "ion_energy_terms_W_cm3", {})
     zeros = np.zeros_like(result.n, dtype=float)
     result.Qie = _term_or_zeros(ion_terms, "ei_exchange", zeros)
-    result.Qei = -_term_or_zeros(electron_terms, "electron_cooling", zeros)
-    result.Qen = np.zeros_like(result.Qei)
+    result.Qei = -_term_or_zeros(electron_terms, "electron_ion_cooling", zeros)
+    result.Qen = -_term_or_zeros(electron_terms, "electron_neutral_cooling", zeros)
     result.Qcx = -_term_or_zeros(ion_terms, "ion_charge_exchange", zeros)
     result.Qeb = (
         _term_or_zeros(electron_terms, "beam_power_deposition", zeros)
@@ -95,18 +105,26 @@ def add_sim3_compat_aliases(result):
         _term_or_zeros(ion_terms, "surface_loss", zeros)
         + _term_or_zeros(ion_terms, "cathode_surface_loss", zeros)
     )
+    result.e_par_flux = _term_or_zeros(electron_terms, "heat_conduction", zeros)
+    result.i_par_flux = _term_or_zeros(ion_terms, "heat_conduction", zeros)
+    result.e_perp_hl = np.zeros_like(result.e_par_flux)
+    result.i_perp_hl = np.zeros_like(result.i_par_flux)
     result.sim3_compat_units = {
         "energy_terms": "W/cm^3",
         "density_terms": "cm^-3 s^-1",
         "time": "s",
     }
     result.sim3_compat_notes = {
-        "Qei": "coarse electron_cooling sink; ion/neutral pieces are not split yet",
-        "Qen": "zero placeholder until electron_cooling is split by target",
+        "Qei": "electron-ion inelastic/radiative cooling power density",
+        "Qen": "electron-neutral inelastic cooling power density",
         "Qeb": "net electron beam/cathode power-density mapping",
         "Qib": "net ion surface/cathode loss power-density mapping",
-        "S_rec_rad": "combined recombination loss; rad/3body split is not saved yet",
-        "S_rec_3b": "zero placeholder until recombination split is saved",
+        "e_par_flux": "axial electron heat-conduction power density",
+        "i_par_flux": "axial ion heat-conduction power density",
+        "e_perp_hl": "zero placeholder; no perpendicular heat-loss model in 1D",
+        "i_perp_hl": "zero placeholder; no perpendicular heat-loss model in 1D",
+        "S_rec_rad": "radiative recombination particle sink",
+        "S_rec_3b": "three-body recombination particle sink",
     }
     return result
 

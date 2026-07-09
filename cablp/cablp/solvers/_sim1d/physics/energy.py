@@ -81,8 +81,60 @@ def electron_cooling_rhs(
     return eV-rate coefficients, so the accumulated loss is converted to
     conservative ``erg cm^-3 s^-1`` before being applied to ``Ee``.
     """
+    terms = electron_cooling_rhs_terms(
+        state=state,
+        floors=floors,
+        ion_mass_g=ion_mass_g,
+        gas_type=gas_type,
+        I_ion=I_ion,
+        b_ioniz=b_ioniz,
+        b_rec_rad=b_rec_rad,
+        b_rec_3b=b_rec_3b,
+        b_ionization_energy_cost=b_ionization_energy_cost,
+        b_Qei=b_Qei,
+        b_Qen=b_Qen,
+        ionization_energy_cost=ionization_energy_cost,
+        icool=icool,
+        ncool=ncool,
+        icool_recomb=icool_recomb,
+    )
+    rhs = terms["ionization_energy_cost"]
+    for term in (
+        terms["electron_ion_cooling"],
+        terms["electron_neutral_cooling"],
+    ):
+        rhs = ConservativeState1D(
+            n=rhs.n + term.n,
+            nn=rhs.nn + term.nn,
+            M=rhs.M + term.M,
+            Ee=rhs.Ee + term.Ee,
+            Ei=rhs.Ei + term.Ei,
+        )
+    return rhs
+
+
+def electron_cooling_rhs_terms(
+    state,
+    floors,
+    ion_mass_g,
+    gas_type,
+    I_ion,
+    b_ioniz=1.0,
+    b_rec_rad=1.0,
+    b_rec_3b=1.0,
+    b_ionization_energy_cost=1.0,
+    b_Qei=1.0,
+    b_Qen=1.0,
+    ionization_energy_cost=True,
+    icool=True,
+    ncool=True,
+    icool_recomb=False,
+):
+    """Return split conservative electron cooling source terms."""
     zeros = np.zeros_like(state.n, dtype=float)
-    cooling_eV = zeros.copy()
+    ionization_cost_eV = zeros.copy()
+    electron_ion_cooling_eV = zeros.copy()
+    electron_neutral_cooling_eV = zeros.copy()
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
 
     if ionization_energy_cost and b_ionization_energy_cost != 0.0:
@@ -96,10 +148,10 @@ def electron_cooling_rhs(
             b_rec_rad=b_rec_rad,
             b_rec_3b=b_rec_3b,
         )
-        cooling_eV = cooling_eV + float(b_ionization_energy_cost) * I_ion * S_ion
+        ionization_cost_eV = float(b_ionization_energy_cost) * I_ion * S_ion
 
     if icool and b_Qei != 0.0:
-        cooling_eV = cooling_eV + float(b_Qei) * _ion_inelastic_cooling_eV(
+        electron_ion_cooling_eV = float(b_Qei) * _ion_inelastic_cooling_eV(
             derived.Te,
             state.n,
             gas_type=gas_type,
@@ -107,18 +159,35 @@ def electron_cooling_rhs(
         )
 
     if ncool and b_Qen != 0.0:
-        cooling_eV = cooling_eV + float(b_Qen) * _neutral_inelastic_cooling_eV(
+        electron_neutral_cooling_eV = float(b_Qen) * _neutral_inelastic_cooling_eV(
             derived.Te,
             state.n,
             state.nn,
             gas_type=gas_type,
         )
 
+    return {
+        "ionization_energy_cost": _electron_energy_sink(
+            zeros,
+            ionization_cost_eV,
+        ),
+        "electron_ion_cooling": _electron_energy_sink(
+            zeros,
+            electron_ion_cooling_eV,
+        ),
+        "electron_neutral_cooling": _electron_energy_sink(
+            zeros,
+            electron_neutral_cooling_eV,
+        ),
+    }
+
+
+def _electron_energy_sink(zeros, loss_eV_cm3_s):
     return ConservativeState1D(
-        n=zeros,
+        n=zeros.copy(),
         nn=zeros.copy(),
         M=zeros.copy(),
-        Ee=-cooling_eV * ev_to_erg,
+        Ee=-loss_eV_cm3_s * ev_to_erg,
         Ei=zeros.copy(),
     )
 
