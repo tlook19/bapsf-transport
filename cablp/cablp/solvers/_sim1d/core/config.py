@@ -289,6 +289,10 @@ def fudge_factor_defaults():
         Ion pressure-work source scale factor.
     b_surface_loss:
         Plasma surface neutralization/loss scale factor.
+    b_ion_neutral_drag:
+        Ion-neutral drag (friction) momentum-sink scale factor.
+    sigma_in_cm2:
+        Ion-neutral momentum-transfer cross section [cm^2].
     alpha_isat:
         Ion-saturation/surface-loss coefficient.
     source_surface_area_scale:
@@ -312,6 +316,8 @@ def fudge_factor_defaults():
         "b_pressure_work_elec": 1.0,
         "b_pressure_work_ions": 1.0,
         "b_surface_loss": 1.0,
+        "b_ion_neutral_drag": 1.0,
+        "sigma_in_cm2": 5.0e-15,
         "alpha_isat": 0.6065306597126334,
         "source_surface_area_scale": 1.8,
         "end_surface_area_scale": 1.0,
@@ -455,6 +461,7 @@ input_flags_template_1d = {
     "front_flux": True,
     "source_surface_loss": True,
     "end_surface_loss": True,
+    "ion_neutral_drag": True,
     "cathode_coupling": True,
     "neutral_prebreakdown": True,
     "neutral_equilibration": False,
