@@ -7,8 +7,33 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.ticker import FuncFormatter
 
 from cablp.solvers._sim1d import load_result_hdf5
+
+
+_DENSE_MANTISSAS = np.array(
+    [
+        1.0,
+        1.125,
+        1.25,
+        1.375,
+        1.5,
+        1.75,
+        2.0,
+        2.25,
+        2.5,
+        2.75,
+        3.0,
+        3.5,
+        4.0,
+        4.5,
+        5.0,
+        6.25,
+        7.5,
+        8.75,
+    ]
+)
 
 
 def main(argv=None):
@@ -135,7 +160,10 @@ def _shifted_phase_events(result, time_origin, time_scale):
     phase_events = getattr(result, "phase_events", {})
     times = np.asarray(phase_events.get("time", ()), dtype=float)
     phases = np.asarray(phase_events.get("phase", ()), dtype=object)
-    return [(float((time - time_origin) * time_scale), str(phase)) for time, phase in zip(times, phases)]
+    return [
+        (float((time - time_origin) * time_scale), str(phase))
+        for time, phase in zip(times, phases)
+    ]
 
 
 def _plot_title(result):
@@ -196,9 +224,65 @@ def _sum_power(result, terms):
     return series
 
 
+def _log_tick_label(v, pos=None):
+    value = 10**v
+    if not np.isfinite(value) or value <= 0.0:
+        return ""
+    exp = int(np.floor(np.log10(value)))
+    pref = value / (10**exp)
+    if np.isclose(pref, 1.0):
+        return rf"$10^{{{exp}}}$"
+    return rf"${pref:.1f}\times10^{{{exp}}}$"
+
+
+def _ratio_tick_label(v, pos=None):
+    value = 10**v
+    if not np.isfinite(value):
+        return ""
+    return f"{value:g}" if value >= 1.0 else f"{value:.3g}"
+
+
+def _linear_tick_label(v, pos=None):
+    return f"{v:g}"
+
+
+def _nice_log_levels(vmin_log, vmax_log, mantissas=(1, 2, 5)):
+    emin = int(np.floor(vmin_log))
+    emax = int(np.ceil(vmax_log))
+    vals = []
+    for exp in range(emin, emax + 1):
+        for mantissa in mantissas:
+            value = np.log10(float(mantissa)) + exp
+            if vmin_log - 1.0e-9 <= value <= vmax_log + 1.0e-9:
+                vals.append(value)
+    return np.array(vals) if vals else np.linspace(vmin_log, vmax_log, 5)
+
+
+def _nice_linear_levels(vmin, vmax, target=16):
+    if vmax <= vmin:
+        return np.array([vmin, vmax])
+    raw_step = (vmax - vmin) / max(target - 1, 1)
+    exp = np.floor(np.log10(max(abs(raw_step), 1.0e-30)))
+    frac = raw_step / 10**exp
+    if frac <= 1.0:
+        nice_frac = 1.0
+    elif frac <= 2.0:
+        nice_frac = 2.0
+    elif frac <= 2.5:
+        nice_frac = 2.5
+    elif frac <= 5.0:
+        nice_frac = 5.0
+    else:
+        nice_frac = 10.0
+    step = nice_frac * 10**exp
+    start = np.floor(vmin / step) * step
+    stop = np.ceil(vmax / step) * step
+    return np.arange(start, stop + 0.5 * step, step)
+
+
 def _add_phase_lines(ax, phase_events, orientation="vertical"):
     for time, phase in phase_events:
-        if phase == "post_afterglow":
+        if phase not in {"main_discharge", "afterglow"}:
             continue
         if orientation == "horizontal":
             ax.axhline(time, color="0.55", lw=0.8, ls="--", alpha=0.65)
@@ -270,9 +354,27 @@ def _plot_densities(result, z_cm, t_plot, time_label, phase_events):
     with np.errstate(divide="ignore", invalid="ignore"):
         ratio = np.where(result.nn > 0.0, result.n / result.nn, np.nan)
     panels = (
-        ("Electron density", _positive_log10(result.n), "log10 ne [cm^-3]"),
-        ("Neutral density", _positive_log10(result.nn), "log10 nn [cm^-3]"),
-        ("Ionization fraction", _positive_log10(ratio), "log10 ne/nn"),
+        {
+            "title": "Electron density",
+            "values": _positive_log10(result.n),
+            "cbar": r"$n_e$ [cm$^{-3}$]",
+            "is_log": True,
+        },
+        {
+            "title": "Neutral density",
+            "values": _positive_log10(result.nn),
+            "cbar": r"$n_n$ [cm$^{-3}$]",
+            "is_log": True,
+        },
+        {
+            "title": "Ionization fraction",
+            "values": _positive_log10(ratio),
+            "cbar": r"$n_e/n_n$",
+            "is_log": True,
+            "is_ratio": True,
+            "vmin": -2.0,
+            "vmax": 2.0,
+        },
     )
     return _plot_contour_panels(
         panels,
@@ -286,8 +388,18 @@ def _plot_densities(result, z_cm, t_plot, time_label, phase_events):
 
 def _plot_temperatures(result, z_cm, t_plot, time_label, phase_events):
     panels = (
-        ("Electron temperature", _finite_2d(result.Te), "Te [eV]"),
-        ("Ion temperature", _finite_2d(result.Ti), "Ti [eV]"),
+        {
+            "title": "Electron temperature",
+            "values": _finite_2d(result.Te),
+            "cbar": "Te [eV]",
+            "is_log": False,
+        },
+        {
+            "title": "Ion temperature",
+            "values": _finite_2d(result.Ti),
+            "cbar": "Ti [eV]",
+            "is_log": False,
+        },
     )
     return _plot_contour_panels(
         panels,
@@ -302,7 +414,14 @@ def _plot_temperatures(result, z_cm, t_plot, time_label, phase_events):
 def _plot_velocity(result, z_cm, t_plot, time_label, phase_events):
     if not hasattr(result, "u"):
         return None
-    panels = (("Parallel velocity", _finite_2d(result.u) / 100.0, "u [m/s]"),)
+    panels = (
+        {
+            "title": "Parallel velocity",
+            "values": _finite_2d(result.u) / 100.0,
+            "cbar": "u [m/s]",
+            "is_log": False,
+        },
+    )
     return _plot_contour_panels(
         panels,
         z_cm,
@@ -324,20 +443,152 @@ def _plot_contour_panels(panels, z_cm, t_plot, time_label, phase_events, title):
         squeeze=False,
     )
     Z, T = np.meshgrid(z_cm, t_plot)
-    for ax, (panel_title, values, cbar_label) in zip(axes[0], panels):
-        finite = values[np.isfinite(values)]
-        if not finite.size:
-            ax.text(0.5, 0.5, "no finite data", transform=ax.transAxes, ha="center")
-            continue
-        mesh = ax.pcolormesh(Z, T, values, shading="auto")
-        cbar = fig.colorbar(mesh, ax=ax)
-        cbar.set_label(cbar_label)
-        ax.set_title(panel_title)
-        ax.set_xlabel("z [cm]")
-        ax.set_ylabel(time_label)
+    for ax, panel in zip(axes[0], panels):
+        _contour_panel(
+            ax,
+            fig,
+            Z,
+            T,
+            panel["values"],
+            panel["title"],
+            panel["cbar"],
+            is_log=panel.get("is_log", True),
+            is_ratio=panel.get("is_ratio", False),
+            vmin=panel.get("vmin"),
+            vmax=panel.get("vmax"),
+            xlabel="z [cm]",
+            ylabel=time_label,
+        )
         _add_phase_lines(ax, phase_events, orientation="horizontal")
     fig.suptitle(title, fontsize=11)
     return fig
+
+
+def _contour_panel(
+    ax,
+    fig,
+    Z_mesh,
+    T_mesh,
+    data,
+    title,
+    cbar_label,
+    is_log=True,
+    is_ratio=False,
+    vmin=None,
+    vmax=None,
+    xlabel="z [cm]",
+    ylabel="Time [ms]",
+):
+    finite = data[np.isfinite(data)]
+    if finite.size == 0:
+        ax.set_title(title)
+        ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha="center", va="center")
+        return
+
+    vmin_plot = float(np.floor(np.nanmin(finite))) if vmin is None else float(vmin)
+    vmax_plot = float(np.ceil(np.nanmax(finite))) if vmax is None else float(vmax)
+    if vmin_plot >= vmax_plot:
+        vmax_plot = vmin_plot + 1.0
+
+    levels = np.linspace(vmin_plot, vmax_plot, 100)
+
+    if is_ratio:
+        line_values = np.array(
+            [
+                0.01,
+                0.015,
+                0.02,
+                0.03,
+                0.05,
+                0.07,
+                0.1,
+                0.15,
+                0.2,
+                0.3,
+                0.5,
+                0.7,
+                1.0,
+                1.5,
+                2.0,
+                3.0,
+                5.0,
+                7.0,
+                10.0,
+                15.0,
+                20.0,
+                30.0,
+                50.0,
+                70.0,
+                100.0,
+            ]
+        )
+        label_values = np.array(
+            [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0]
+        )
+        line_levels = np.log10(line_values)
+        label_levels = np.log10(label_values)
+        cbar_ticks = label_levels
+        tick_fmt = FuncFormatter(_ratio_tick_label)
+    elif is_log:
+        line_levels = _nice_log_levels(vmin_plot, vmax_plot, _DENSE_MANTISSAS)
+        label_levels = _nice_log_levels(
+            vmin_plot,
+            vmax_plot,
+            (1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 7.5),
+        )
+        cbar_ticks = _nice_log_levels(vmin_plot, vmax_plot, (1, 1.5, 2, 3, 5, 7))
+        tick_fmt = FuncFormatter(_log_tick_label)
+    else:
+        line_levels = _nice_linear_levels(vmin_plot, vmax_plot, target=16)
+        label_levels = _nice_linear_levels(vmin_plot, vmax_plot, target=8)
+        label_levels = np.array(
+            [
+                level
+                for level in label_levels
+                if np.any(np.abs(level - line_levels) < 1.0e-10)
+            ]
+        )
+        cbar_ticks = label_levels
+        tick_fmt = FuncFormatter(_linear_tick_label)
+
+    line_levels = line_levels[
+        (line_levels >= vmin_plot) & (line_levels <= vmax_plot)
+    ]
+    label_levels = label_levels[
+        (label_levels >= vmin_plot) & (label_levels <= vmax_plot)
+    ]
+    cbar_ticks = cbar_ticks[(cbar_ticks >= vmin_plot) & (cbar_ticks <= vmax_plot)]
+
+    cf = ax.contourf(
+        Z_mesh,
+        T_mesh,
+        data,
+        levels=levels,
+        cmap="plasma",
+        extend="both",
+    )
+    if line_levels.size >= 2:
+        cs = ax.contour(
+            Z_mesh,
+            T_mesh,
+            data,
+            levels=line_levels,
+            colors="black",
+            linewidths=0.8,
+            alpha=0.9,
+        )
+        if label_levels.size:
+            ax.clabel(cs, levels=label_levels, inline=True, fontsize=6, fmt=tick_fmt)
+
+    ax.set_title(title)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+
+    cbar = fig.colorbar(cf, ax=ax)
+    cbar.set_label(cbar_label)
+    if cbar_ticks.size:
+        cbar.set_ticks(cbar_ticks)
+    cbar.ax.yaxis.set_major_formatter(tick_fmt)
 
 
 def _plot_energy_terms(result, t_plot, time_label, phase_events):
