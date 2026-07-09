@@ -3,6 +3,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 
 import h5py
 import numpy as np
@@ -2331,6 +2332,33 @@ def main():
         assert np.allclose(failed_retry_sim.get_initial_snapshot().y, failed_retry_y0)
     else:
         raise AssertionError("expected TimestepRejectionError")
+
+    nonfinite_retry_params = dict(run_params)
+    nonfinite_retry_params["max_step_retries"] = 1
+    nonfinite_retry_params["dt_min"] = 1.0e-12
+    nonfinite_retry_sim = LAPDSim1D(nonfinite_retry_params, flags)
+    nonfinite_y = nonfinite_retry_sim.get_initial_snapshot().y.copy()
+    nonfinite_index = STATE_NAMES_1D.index("Ee") * geom.cells + 2
+    nonfinite_y[nonfinite_index] = np.nan
+
+    def nonfinite_attempt(dt=None, operator_split=None):
+        return SimpleNamespace(
+            y=nonfinite_y.copy(),
+            dt=float(dt),
+            operator_split=bool(operator_split),
+            solver_cache=nonfinite_retry_sim._step_cache_snapshot(),
+        )
+
+    nonfinite_retry_sim._attempt_step = nonfinite_attempt
+    try:
+        nonfinite_retry_sim.run(t_end=1.0e-10, dt=1.0e-10)
+    except TimestepRejectionError as exc:
+        assert exc.reason == "nonfinite_state"
+        assert exc.rejection_detail["fields"]["Ee"]["indices"] == [2]
+        assert np.isnan(exc.rejection_detail["fields"]["Ee"]["values"][0])
+        assert "Ee" in str(exc)
+    else:
+        raise AssertionError("expected non-finite TimestepRejectionError")
 
     split_run_sim = LAPDSim1D(run_params, split_flags)
     split_run_result = split_run_sim.run(t_end=2.0e-10, dt=1.0e-10)

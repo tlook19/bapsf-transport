@@ -177,6 +177,7 @@ class TimestepRejectionError(RuntimeError):
         dt_min=None,
         phase=None,
         active_constraint=None,
+        rejection_detail=None,
     ):
         super().__init__(message)
         self.time = time
@@ -186,6 +187,7 @@ class TimestepRejectionError(RuntimeError):
         self.dt_min = dt_min
         self.phase = phase
         self.active_constraint = active_constraint
+        self.rejection_detail = rejection_detail or {}
         self.details = {
             "time": time,
             "attempted_dt": attempted_dt,
@@ -194,6 +196,7 @@ class TimestepRejectionError(RuntimeError):
             "dt_min": dt_min,
             "phase": phase,
             "active_constraint": active_constraint,
+            "rejection_detail": self.rejection_detail,
         }
 
 
@@ -317,6 +320,43 @@ def _max_relative_change(before, after, scale_floor):
     after = np.asarray(after, dtype=float)
     scale = np.maximum(np.abs(before), float(scale_floor))
     return float(np.max(np.abs(after - before) / scale)) if before.size else 0.0
+
+
+def _bad_array_summary(values, *, mode="nonfinite", max_indices=8):
+    values = np.asarray(values, dtype=float)
+    if mode == "negative":
+        mask = values < 0.0
+    else:
+        mask = ~np.isfinite(values)
+    bad = np.flatnonzero(mask)
+    if bad.size == 0:
+        return None
+    finite = values[np.isfinite(values)]
+    return {
+        "count": int(bad.size),
+        "indices": bad[:max_indices].astype(int).tolist(),
+        "values": values[bad[:max_indices]].astype(float).tolist(),
+        "nan_count": int(np.count_nonzero(np.isnan(values))),
+        "posinf_count": int(np.count_nonzero(np.isposinf(values))),
+        "neginf_count": int(np.count_nonzero(np.isneginf(values))),
+        "finite_min": float(np.min(finite)) if finite.size else np.nan,
+        "finite_max": float(np.max(finite)) if finite.size else np.nan,
+    }
+
+
+def _rejection_detail_text(detail):
+    if not detail:
+        return ""
+    fields = detail.get("fields", {})
+    if not fields:
+        message = detail.get("message", "")
+        return str(message) if message else ""
+    parts = []
+    for name, summary in fields.items():
+        indices = summary.get("indices", [])
+        count = summary.get("count", 0)
+        parts.append(f"{name}[count={count}, indices={indices}]")
+    return "; ".join(parts)
 
 
 class LAPDSim1D:
@@ -638,40 +678,57 @@ class LAPDSim1D:
             Ei=state.Ei.copy(),
         )
 
-    def _step_rejection_reason(self, attempt, y0=None):
+    def _step_rejection_info(self, attempt, y0=None):
         if y0 is None:
             y0 = self._y
         y1 = np.asarray(attempt.y, dtype=float)
-        if not np.all(np.isfinite(y1)):
-            return "nonfinite_state"
+        packed_summary = _bad_array_summary(y1)
 
         try:
             state0 = unpack_state(y0, self._geometry.cells)
             state1 = unpack_state(y1, self._geometry.cells)
             derived1 = derive_state(state1, self._floors, self._ion_mass_g)
-        except Exception:
-            return "invalid_state"
+        except Exception as exc:
+            if packed_summary is not None:
+                return "nonfinite_state", {"fields": {"packed_y": packed_summary}}
+            return "invalid_state", {"message": repr(exc)}
 
-        for values in (
-            state1.n,
-            state1.nn,
-            state1.M,
-            state1.Ee,
-            state1.Ei,
-            derived1.u,
-            derived1.Te,
-            derived1.Ti,
-            derived1.pe,
-            derived1.pi,
-            derived1.p,
-        ):
-            if not np.all(np.isfinite(values)):
-                return "nonfinite_state"
+        fields = {
+            "n": state1.n,
+            "nn": state1.nn,
+            "M": state1.M,
+            "Ee": state1.Ee,
+            "Ei": state1.Ei,
+            "u": derived1.u,
+            "Te": derived1.Te,
+            "Ti": derived1.Ti,
+            "pe": derived1.pe,
+            "pi": derived1.pi,
+            "p": derived1.p,
+        }
+        nonfinite_fields = {}
+        for name, values in fields.items():
+            summary = _bad_array_summary(values)
+            if summary is not None:
+                nonfinite_fields[name] = summary
+        if nonfinite_fields:
+            return "nonfinite_state", {"fields": nonfinite_fields}
 
-        if np.any(state1.n < 0.0) or np.any(state1.nn < 0.0):
-            return "negative_density"
-        if np.any(state1.Ee < 0.0) or np.any(state1.Ei < 0.0):
-            return "negative_energy"
+        negative_density_fields = {}
+        for name, values in (("n", state1.n), ("nn", state1.nn)):
+            summary = _bad_array_summary(values, mode="negative")
+            if summary is not None:
+                negative_density_fields[name] = summary
+        if negative_density_fields:
+            return "negative_density", {"fields": negative_density_fields}
+
+        negative_energy_fields = {}
+        for name, values in (("Ee", state1.Ee), ("Ei", state1.Ei)):
+            summary = _bad_array_summary(values, mode="negative")
+            if summary is not None:
+                negative_energy_fields[name] = summary
+        if negative_energy_fields:
+            return "negative_energy", {"fields": negative_energy_fields}
 
         density_limit = float(self._input_dict.get("max_density_step_fraction", 0.0))
         if density_limit > 0.0 and _max_relative_change(
@@ -679,7 +736,7 @@ class LAPDSim1D:
             state1.n,
             self._floors["n"],
         ) > density_limit:
-            return "density_step_fraction"
+            return "density_step_fraction", {}
 
         neutral_limit = float(self._input_dict.get("max_neutral_step_fraction", 0.0))
         if neutral_limit > 0.0 and _max_relative_change(
@@ -687,7 +744,7 @@ class LAPDSim1D:
             state1.nn,
             self._floors["nn"],
         ) > neutral_limit:
-            return "neutral_step_fraction"
+            return "neutral_step_fraction", {}
 
         energy_limit = float(self._input_dict.get("max_energy_step_fraction", 0.0))
         energy_floor = (
@@ -700,9 +757,12 @@ class LAPDSim1D:
             _max_relative_change(state0.Ee, state1.Ee, energy_floor),
             _max_relative_change(state0.Ei, state1.Ei, energy_floor),
         ) > energy_limit:
-            return "energy_step_fraction"
+            return "energy_step_fraction", {}
 
-        return ""
+        return "", {}
+
+    def _step_rejection_reason(self, attempt, y0=None):
+        return self._step_rejection_info(attempt, y0=y0)[0]
 
     def _attempt_step_with_retries(self, dt, operator_split, diag):
         dt_min = float(self._input_dict.get("dt_min", 1e-12))
@@ -722,6 +782,7 @@ class LAPDSim1D:
         attempted_dt = float(dt)
         retry_count = 0
         last_reason = ""
+        last_detail = {}
         accepted_rejection_reason = ""
         rejection_events = []
         y0 = self._y.copy()
@@ -730,7 +791,7 @@ class LAPDSim1D:
                 dt=attempted_dt,
                 operator_split=operator_split,
             )
-            last_reason = self._step_rejection_reason(attempt, y0=y0)
+            last_reason, last_detail = self._step_rejection_info(attempt, y0=y0)
             if not last_reason:
                 return (
                     attempt,
@@ -754,6 +815,7 @@ class LAPDSim1D:
                     attempted_dt=attempted_dt,
                     retry_count=retry_count,
                     reason=last_reason,
+                    rejection_detail=last_detail,
                     dt_min=dt_min,
                     diag=diag,
                 )
@@ -763,18 +825,29 @@ class LAPDSim1D:
                     attempted_dt=attempted_dt,
                     retry_count=retry_count,
                     reason=last_reason,
+                    rejection_detail=last_detail,
                     dt_min=dt_min,
                     diag=diag,
                 )
             attempted_dt = next_dt
             retry_count += 1
 
-    def _raise_timestep_rejection(self, attempted_dt, retry_count, reason, dt_min, diag):
+    def _raise_timestep_rejection(
+        self,
+        attempted_dt,
+        retry_count,
+        reason,
+        rejection_detail,
+        dt_min,
+        diag,
+    ):
+        detail_text = _rejection_detail_text(rejection_detail)
+        detail_suffix = f", detail={detail_text}" if detail_text else ""
         raise TimestepRejectionError(
             "failed to accept timestep "
             f"at t={self._time:.9e} s after {retry_count} retries "
             f"(attempted_dt={attempted_dt:.9e} s, reason={reason}, "
-            f"dt_min={dt_min:.9e} s)",
+            f"dt_min={dt_min:.9e} s{detail_suffix})",
             time=float(self._time),
             attempted_dt=float(attempted_dt),
             retry_count=int(retry_count),
@@ -782,6 +855,7 @@ class LAPDSim1D:
             dt_min=float(dt_min),
             phase=getattr(diag, "phase", ""),
             active_constraint=getattr(diag, "active_constraint", ""),
+            rejection_detail=rejection_detail,
         )
 
     def _accept_step_attempt(self, attempt):
