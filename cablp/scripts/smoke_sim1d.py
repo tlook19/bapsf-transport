@@ -2707,9 +2707,23 @@ def main():
         neutral_prebreakdown_result.n[0],
     )
     dynamic_current_phase_sim = LAPDSim1D(current_phase_params, current_phase_flags)
-    dynamic_current_phase_result = dynamic_current_phase_sim.run(dt=1.0e-10)
+    dynamic_progress_snapshots = []
+    dynamic_current_phase_initial_t_end = dynamic_current_phase_sim.default_t_end()
+    dynamic_current_phase_result = dynamic_current_phase_sim.run(
+        dt=1.0e-10,
+        progress_tracker=dynamic_progress_snapshots.append,
+        progress_interval_s=1.0,
+    )
     assert np.isclose(dynamic_current_phase_result.final_time, 5.0e-10)
     assert np.isclose(dynamic_current_phase_result.t_breakdown_trigger, 2.0e-10)
+    assert len(dynamic_progress_snapshots) == 3
+    assert np.isclose(
+        dynamic_progress_snapshots[0].t_end,
+        dynamic_current_phase_initial_t_end,
+    )
+    assert np.isclose(dynamic_progress_snapshots[1].time, 2.0e-10)
+    assert np.isclose(dynamic_progress_snapshots[1].t_end, 5.0e-10)
+    assert np.isclose(dynamic_progress_snapshots[-1].fraction, 1.0)
     assert np.allclose(
         dynamic_current_phase_result.phase_events["time"],
         [0.0, 1.0e-10, 2.0e-10, 4.0e-10, 5.0e-10],
