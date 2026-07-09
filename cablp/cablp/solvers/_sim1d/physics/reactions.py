@@ -65,13 +65,14 @@ def reaction_rhs(
         Ti_birth_ionization=Ti_birth_ionization,
     )
     ionization = terms["ionization_birth"]
-    recombination = terms["recombination_loss"]
+    recombination_rad = terms["recombination_rad_loss"]
+    recombination_3b = terms["recombination_3b_loss"]
     return ConservativeState1D(
-        n=ionization.n + recombination.n,
-        nn=ionization.nn + recombination.nn,
-        M=ionization.M + recombination.M,
-        Ee=ionization.Ee + recombination.Ee,
-        Ei=ionization.Ei + recombination.Ei,
+        n=ionization.n + recombination_rad.n + recombination_3b.n,
+        nn=ionization.nn + recombination_rad.nn + recombination_3b.nn,
+        M=ionization.M + recombination_rad.M + recombination_3b.M,
+        Ee=ionization.Ee + recombination_rad.Ee + recombination_3b.Ee,
+        Ei=ionization.Ei + recombination_rad.Ei + recombination_3b.Ei,
     )
 
 
@@ -100,7 +101,6 @@ def reaction_rhs_terms(
         b_rec_rad=b_rec_rad,
         b_rec_3b=b_rec_3b,
     )
-    S_rec = S_rec_rad + S_rec_3b
     volume_ratio = geometry.plasma_volume_cm3 / geometry.neutral_volume_cm3
 
     Te_birth = _birth_temperature(Te_birth_ionization, derived.Te, floors["Te"])
@@ -114,17 +114,31 @@ def reaction_rhs_terms(
         Ee=1.5 * ev_to_erg * Te_birth * S_ion,
         Ei=1.5 * ev_to_erg * Ti_birth * S_ion,
     )
-    recombination = ConservativeState1D(
+    return {
+        "ionization_birth": ionization,
+        "recombination_rad_loss": _recombination_loss(
+            S_rec_rad,
+            volume_ratio,
+            ion_mass_g,
+            derived,
+        ),
+        "recombination_3b_loss": _recombination_loss(
+            S_rec_3b,
+            volume_ratio,
+            ion_mass_g,
+            derived,
+        ),
+    }
+
+
+def _recombination_loss(S_rec, volume_ratio, ion_mass_g, derived):
+    return ConservativeState1D(
         n=-S_rec,
         nn=S_rec * volume_ratio,
         M=-ion_mass_g * derived.u * S_rec,
         Ee=-1.5 * ev_to_erg * derived.Te * S_rec,
         Ei=-1.5 * ev_to_erg * derived.Ti * S_rec,
     )
-    return {
-        "ionization_birth": ionization,
-        "recombination_loss": recombination,
-    }
 
 
 def particle_inventory_rate(rhs, geometry):

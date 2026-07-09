@@ -862,7 +862,11 @@ def main():
         atol=reaction_inventory_tol,
     )
     reaction_terms = sim.reaction_rhs_terms()
-    assert set(reaction_terms) == {"ionization_birth", "recombination_loss"}
+    assert set(reaction_terms) == {
+        "ionization_birth",
+        "recombination_rad_loss",
+        "recombination_3b_loss",
+    }
     reaction_term_sum = np.zeros_like(pack_state(reaction_rhs))
     for term in reaction_terms.values():
         for field_name in STATE_NAMES_1D:
@@ -1048,6 +1052,19 @@ def main():
         ion_mass_g=sim.ion_mass_g,
     )
     cooling_rhs = sim.electron_cooling_rhs(state=cooling_state)
+    cooling_terms = sim.electron_cooling_rhs_terms(state=cooling_state)
+    assert set(cooling_terms) == {
+        "ionization_energy_cost",
+        "electron_ion_cooling",
+        "electron_neutral_cooling",
+    }
+    cooling_term_sum = np.zeros_like(pack_state(cooling_rhs))
+    for term in cooling_terms.values():
+        cooling_term_sum = cooling_term_sum + pack_state(term)
+    assert np.allclose(cooling_term_sum, pack_state(cooling_rhs))
+    assert np.any(cooling_terms["ionization_energy_cost"].Ee < 0.0)
+    assert np.any(cooling_terms["electron_ion_cooling"].Ee < 0.0)
+    assert np.any(cooling_terms["electron_neutral_cooling"].Ee < 0.0)
     assert np.all(cooling_rhs.Ee < 0.0)
     assert np.allclose(cooling_rhs.n, 0.0)
     assert np.allclose(cooling_rhs.nn, 0.0)
@@ -1272,7 +1289,9 @@ def main():
         "plasma_front_flux",
         "pressure_work",
         "ei_exchange",
-        "electron_cooling",
+        "ionization_energy_cost",
+        "electron_ion_cooling",
+        "electron_neutral_cooling",
         "ion_charge_exchange",
         "surface_loss",
         "cathode_surface_loss",
@@ -1282,7 +1301,8 @@ def main():
         "beam_ionization_birth",
         "beam_power_deposition",
         "beam_ionization_cost",
-        "recombination_loss",
+        "recombination_rad_loss",
+        "recombination_3b_loss",
         "heat_conduction",
     }
     assert set(rhs_terms) == expected_rhs_terms
@@ -1499,6 +1519,10 @@ def main():
         "Qcx",
         "Qeb",
         "Qib",
+        "e_par_flux",
+        "i_par_flux",
+        "e_perp_hl",
+        "i_perp_hl",
         "cathode",
         "cathode_twin",
     ):
@@ -1536,12 +1560,32 @@ def main():
     )
     assert np.allclose(
         run_result.S_rec_rad,
-        -run_result.rhs_terms["recombination_loss"]["n"],
+        -run_result.rhs_terms["recombination_rad_loss"]["n"],
     )
-    assert np.allclose(run_result.S_rec_3b, 0.0)
-    assert np.allclose(run_result.Qen, 0.0)
+    assert np.allclose(
+        run_result.S_rec_3b,
+        -run_result.rhs_terms["recombination_3b_loss"]["n"],
+    )
+    assert np.allclose(
+        run_result.Qei,
+        -run_result.electron_energy_terms_W_cm3["electron_ion_cooling"],
+    )
+    assert np.allclose(
+        run_result.Qen,
+        -run_result.electron_energy_terms_W_cm3["electron_neutral_cooling"],
+    )
+    assert np.allclose(
+        run_result.e_par_flux,
+        run_result.electron_energy_terms_W_cm3["heat_conduction"],
+    )
+    assert np.allclose(
+        run_result.i_par_flux,
+        run_result.ion_energy_terms_W_cm3["heat_conduction"],
+    )
+    assert np.allclose(run_result.e_perp_hl, 0.0)
+    assert np.allclose(run_result.i_perp_hl, 0.0)
     assert run_result.sim3_compat_units["energy_terms"] == "W/cm^3"
-    assert "not split yet" in run_result.sim3_compat_notes["Qei"]
+    assert "power density" in run_result.sim3_compat_notes["Qei"]
     assert run_result.cathode.I_tot.shape == run_result.time.shape
     assert np.all(np.isnan(run_result.cathode.I_tot))
 
