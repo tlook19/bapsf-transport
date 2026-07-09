@@ -1399,6 +1399,7 @@ def main():
         "electron_ion_cooling",
         "electron_neutral_cooling",
         "ion_charge_exchange",
+        "ion_neutral_drag",
         "surface_loss",
         "cathode_surface_loss",
         "neutral_exchange",

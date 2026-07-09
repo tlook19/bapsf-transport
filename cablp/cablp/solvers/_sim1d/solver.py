@@ -54,6 +54,7 @@ from .physics.neutrals import (
 from .physics.reactions import reaction_rhs, reaction_rhs_terms
 from .physics.sources import (
     add_state_rhs,
+    ion_neutral_drag_rhs,
     pressure_work_rhs,
     surface_neutralization_rhs,
 )
@@ -338,6 +339,7 @@ def _timestep_limiters(diag, count=3):
         ("electron_cooling", diag.dt_electron_cooling),
         ("ion_charge_exchange", diag.dt_ion_charge_exchange),
         ("heat_conduction", diag.dt_heat_conduction),
+        ("ion_neutral_drag", diag.dt_ion_neutral_drag),
         ("dt_max", diag.dt_max),
     )
     finite = [
@@ -528,6 +530,7 @@ class LAPDSim1D:
                 "electron_ion_cooling": self._zero_rhs_state(),
                 "electron_neutral_cooling": self._zero_rhs_state(),
                 "ion_charge_exchange": self._zero_rhs_state(),
+                "ion_neutral_drag": self._zero_rhs_state(),
                 "surface_loss": self._zero_rhs_state(),
                 "cathode_surface_loss": self._zero_rhs_state(),
                 "neutral_exchange": self.neutral_exchange_rhs(state=state),
@@ -575,6 +578,7 @@ class LAPDSim1D:
                 "electron_neutral_cooling"
             ],
             "ion_charge_exchange": self.ion_charge_exchange_rhs(state=state),
+            "ion_neutral_drag": self.ion_neutral_drag_rhs(state=state),
             "surface_loss": self.surface_neutralization_rhs(state=state),
             "cathode_surface_loss": self.cathode_source_terms(
                 state=state,
@@ -1422,6 +1426,9 @@ class LAPDSim1D:
                 else None
             ),
             surface_loss_kwargs=self._surface_loss_kwargs() if plasma_enabled else None,
+            ion_neutral_drag_kwargs=(
+                self._ion_neutral_drag_kwargs() if plasma_enabled else None
+            ),
             cfl=float(self._input_dict.get("cfl", 0.4)),
             density_dt_fraction=float(
                 self._input_dict.get("density_dt_fraction", 0.25)
@@ -1430,6 +1437,7 @@ class LAPDSim1D:
                 self._input_dict.get("neutral_dt_fraction", 0.25)
             ),
             heat_dt_fraction=float(self._input_dict.get("heat_dt_fraction", 0.25)),
+            drag_dt_fraction=float(self._input_dict.get("drag_dt_fraction", 0.5)),
             dt_min=dt_min,
             dt_max=dt_max,
             include_front=plasma_enabled and self._flags.get("front_flux", True),
@@ -1459,6 +1467,7 @@ class LAPDSim1D:
                 dt_electron_cooling=np.inf,
                 dt_ion_charge_exchange=np.inf,
                 dt_heat_conduction=np.inf,
+                dt_ion_neutral_drag=np.inf,
                 active_constraint=active_constraint,
             )
         phase, _ = self._phase_info(time)
@@ -1633,6 +1642,17 @@ class LAPDSim1D:
             mu=self._mu,
             geometry=self._geometry,
             **self._surface_loss_kwargs(),
+        )
+
+    def ion_neutral_drag_rhs(self, y=None, state=None):
+        """Return the conservative ion-neutral drag momentum sink."""
+        if state is None:
+            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        return ion_neutral_drag_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            **self._ion_neutral_drag_kwargs(),
         )
 
     def energy_exchange_rhs(self, y=None, state=None):
@@ -2213,6 +2233,17 @@ class LAPDSim1D:
             ),
             "end_mode": self._input_dict.get("end_mode", "collector"),
             "b_surface_loss": float(self._input_dict.get("b_surface_loss", 1.0)),
+        }
+
+    def _ion_neutral_drag_kwargs(self):
+        drag_enabled = bool(self._flags.get("ion_neutral_drag", True))
+        return {
+            "sigma_in_cm2": float(self._input_dict.get("sigma_in_cm2", 5.0e-15)),
+            "b_ion_neutral_drag": (
+                float(self._input_dict.get("b_ion_neutral_drag", 1.0))
+                if drag_enabled
+                else 0.0
+            ),
         }
 
     def _electron_cooling_kwargs(self):

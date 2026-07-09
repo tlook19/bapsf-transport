@@ -33,14 +33,20 @@ $\partial_t n_n = \nabla\!\cdot(D_n\nabla n_n) - S_{iz} + S_{rr} + S_{3b}$ plus
 the gas-puff / pumping wall terms.
 
 **3. Momentum** (ion inertia, total-pressure gradient; `physics/flux.py`,
-`physics/reactions.py`)
+`physics/reactions.py`, `physics/sources.py`)
 
-$$m_i\,n\,\frac{D\mathbf{u}}{Dt} = -\,\nabla p \;-\; m_i\,\mathbf{u}\,S_{iz}$$
+$$m_i\,n\,\frac{D\mathbf{u}}{Dt} = -\,\nabla p \;-\; m_i\,\mathbf{u}\,S_{iz} \;-\; m_i\,\nu_{in}(T_i)\,n\,\mathbf{u}$$
 
-The $-m_i\mathbf{u}\,S_{iz}$ term is the **ion-loading drag**: neutrals ionize at
-rest, so newly created cold ions mass-load and slow the flow. (The recombination
-and wall-loss momentum sinks cancel identically against their continuity
-contributions when moved to convective form.)
+- $-m_i\mathbf{u}\,S_{iz}$ — **ion-loading drag**: neutrals ionize at rest, so
+  newly created cold ions mass-load and slow the flow. (The recombination and
+  wall-loss momentum sinks cancel identically against their continuity
+  contributions when moved to convective form.)
+- $-m_i\,\nu_{in}\,n\,\mathbf{u}$ — **ion-neutral collisional drag** (friction on
+  the flow from the neutral background), with momentum-transfer collision
+  frequency
+  $$\nu_{in}(T_i) = \frac{8}{3}\,n_n\,\sigma_{in}\,\sqrt{\frac{T_i}{\pi\,m_i}}, \qquad \sigma_{in} = 5\times10^{-15}\ \text{cm}^2.$$
+  Toggled by the `ion_neutral_drag` flag and scaled by `b_ion_neutral_drag`;
+  $\sigma_{in}$ is the `sigma_in_cm2` parameter.
 
 **4. Electron energy** (`physics/sources.py`, `physics/conduction.py`,
 `physics/energy.py`)
