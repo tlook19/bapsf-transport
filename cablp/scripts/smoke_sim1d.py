@@ -2648,6 +2648,32 @@ def main():
     current_phase_flags["cathode_coupling"] = True
     current_phase_sim = LAPDSim1D(current_phase_params, current_phase_flags)
     current_phase_result = current_phase_sim.run(t_end=5.0e-10, dt=1.0e-10)
+    neutral_prebreakdown_params = dict(current_phase_params)
+    neutral_prebreakdown_params["gas_puff_enabled"] = True
+    neutral_prebreakdown_params["tau_neutral_prebreakdown"] = 2.0e-10
+    neutral_prebreakdown_flags = dict(current_phase_flags)
+    neutral_prebreakdown_flags["neutral_prebreakdown"] = True
+    neutral_prebreakdown_sim = LAPDSim1D(
+        neutral_prebreakdown_params,
+        neutral_prebreakdown_flags,
+    )
+    neutral_prebreakdown_result = neutral_prebreakdown_sim.run(dt=1.0e-10)
+    assert np.isclose(neutral_prebreakdown_result.final_time, 6.0e-10)
+    assert np.isclose(
+        neutral_prebreakdown_result.t_prebreakdown_trigger,
+        2.0e-10,
+    )
+    assert np.isclose(neutral_prebreakdown_result.t_breakdown_trigger, 3.0e-10)
+    assert list(neutral_prebreakdown_result.phase[:2]) == [
+        "neutral_prebreakdown",
+        "neutral_prebreakdown",
+    ]
+    assert np.allclose(neutral_prebreakdown_result.phase_cathode_enabled[:2], 0.0)
+    assert np.allclose(neutral_prebreakdown_result.phase_gas_puff_enabled[:2], 1.0)
+    assert np.allclose(
+        neutral_prebreakdown_result.n[1],
+        neutral_prebreakdown_result.n[0],
+    )
     dynamic_current_phase_sim = LAPDSim1D(current_phase_params, current_phase_flags)
     dynamic_current_phase_result = dynamic_current_phase_sim.run(dt=1.0e-10)
     assert np.isclose(dynamic_current_phase_result.final_time, 5.0e-10)
