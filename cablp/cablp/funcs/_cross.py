@@ -536,5 +536,10 @@ def charge_ex_react(T, gas_type="He"):
     float or array
         Charge-exchange rate coefficient [cm³/s].
     """
-    table = _cx_He if gas_type == "He" else _cx_H
+    if gas_type == "He":
+        table = _cx_He
+    elif gas_type == "H":
+        table = _cx_H
+    else:
+        raise ValueError(f"unsupported gas_type {gas_type!r}; expected 'He' or 'H'")
     return np.interp(T, temps, table)
