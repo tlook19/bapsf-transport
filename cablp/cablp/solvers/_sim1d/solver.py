@@ -48,6 +48,8 @@ from .physics.neutrals import (
     neutral_exchange_coefficients,
     neutral_exchange_rhs,
     neutral_source_sink_rhs,
+    puff_rate,
+    pump_rate,
 )
 from .physics.reactions import reaction_rhs, reaction_rhs_terms
 from .physics.sources import (
@@ -337,7 +339,9 @@ class LAPDSim1D:
         self._flags = dict(input_flags)
         self._progress_callback = progress_callback
         self._progress_tracker = progress_tracker
-        self._progress_interval_s = progress_interval_s
+        self._progress_interval_s = (
+            1.0e-4 if progress_interval_s is None else progress_interval_s
+        )
         self._gas_type = self._input_dict.get("gas_type", "He")
         (
             self._ion_mass_g,
@@ -370,6 +374,8 @@ class LAPDSim1D:
         self._cathode_beam_cross = np.zeros(self._geometry.cells)
         self._cathode_solve = None
         self._last_result = None
+        self._last_neutral_equilibration_result = None
+        self._last_neutral_equilibration_summary = None
         if self._flags.get("debug_checks", False):
             assert_finite_state(self._state, self._derived)
 
@@ -436,6 +442,31 @@ class LAPDSim1D:
     def rhs_terms(self, y=None, include_heat_conduction=True, time=None):
         """Return named conservative RHS contributions for diagnostics."""
         state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        if not self._flags.get("Plasma", True):
+            return {
+                "plasma_advective_flux": self._zero_rhs_state(),
+                "plasma_front_flux": self._zero_rhs_state(),
+                "pressure_work": self._zero_rhs_state(),
+                "ei_exchange": self._zero_rhs_state(),
+                "ionization_energy_cost": self._zero_rhs_state(),
+                "electron_ion_cooling": self._zero_rhs_state(),
+                "electron_neutral_cooling": self._zero_rhs_state(),
+                "ion_charge_exchange": self._zero_rhs_state(),
+                "surface_loss": self._zero_rhs_state(),
+                "cathode_surface_loss": self._zero_rhs_state(),
+                "neutral_exchange": self.neutral_exchange_rhs(state=state),
+                "neutral_sources": self.neutral_source_sink_rhs(
+                    state=state,
+                    time=time,
+                ),
+                "ionization_birth": self._zero_rhs_state(),
+                "beam_ionization_birth": self._zero_rhs_state(),
+                "beam_power_deposition": self._zero_rhs_state(),
+                "beam_ionization_cost": self._zero_rhs_state(),
+                "recombination_rad_loss": self._zero_rhs_state(),
+                "recombination_3b_loss": self._zero_rhs_state(),
+                "heat_conduction": self._zero_rhs_state(),
+            }
         plasma_terms = self.plasma_flux_rhs_terms(state=state)
         reaction_terms = self.reaction_rhs_terms(state=state)
         electron_cooling_terms = self.electron_cooling_rhs_terms(state=state)
@@ -530,7 +561,9 @@ class LAPDSim1D:
 
         starting_cache = self._step_cache_snapshot()
         try:
-            if operator_split:
+            if not self._flags.get("Plasma", True):
+                y_next = pack_state(self._implicit_neutral_step(dt=dt))
+            elif operator_split:
                 y_next = self.operator_split_step(dt=dt)
             else:
                 y_next = ssprk2_step(
@@ -547,6 +580,62 @@ class LAPDSim1D:
             dt=dt,
             operator_split=bool(operator_split),
             solver_cache=candidate_cache,
+        )
+
+    def _implicit_neutral_step(self, dt, state=None, time=None):
+        """Return a backward-Euler neutral-only state update."""
+        if state is None:
+            state = self.state
+        if time is None:
+            time = self._time
+        geometry = self._geometry
+        source_kwargs = self._neutral_source_kwargs(time=time)
+        matrix = np.eye(geometry.cells, dtype=float)
+        rhs = np.asarray(state.nn, dtype=float).copy()
+
+        coeff = np.asarray(self.neutral_exchange_coefficients(), dtype=float)
+        for face, conductance in enumerate(coeff):
+            left = face
+            right = face + 1
+            left_rate = float(conductance) / float(geometry.neutral_volume_cm3[left])
+            right_rate = float(conductance) / float(
+                geometry.neutral_volume_cm3[right]
+            )
+            matrix[left, left] += dt * left_rate
+            matrix[left, right] -= dt * left_rate
+            matrix[right, right] += dt * right_rate
+            matrix[right, left] -= dt * right_rate
+
+        if source_kwargs["pump_enabled"]:
+            matrix[0, 0] += dt * pump_rate(
+                source_kwargs["S_pump_L"],
+                geometry.neutral_volume_cm3[0],
+            )
+            matrix[-1, -1] += dt * pump_rate(
+                source_kwargs["S_pump_R"],
+                geometry.neutral_volume_cm3[-1],
+            )
+
+        if source_kwargs["gas_puff_enabled"]:
+            rhs[0] += dt * puff_rate(
+                source_kwargs["S_gp"],
+                source_kwargs["gas_puff_valves"],
+                geometry.neutral_volume_cm3[0],
+            )
+            if source_kwargs["twin_cathode"]:
+                rhs[-1] += dt * puff_rate(
+                    source_kwargs["Twin_S_gp"],
+                    source_kwargs["gas_puff_valves"],
+                    geometry.neutral_volume_cm3[-1],
+                )
+
+        nn_next = np.linalg.solve(matrix, rhs)
+        return ConservativeState1D(
+            n=state.n.copy(),
+            nn=np.maximum(nn_next, self._floors["nn"]),
+            M=state.M.copy(),
+            Ee=state.Ee.copy(),
+            Ei=state.Ei.copy(),
         )
 
     def _step_rejection_reason(self, attempt, y0=None):
@@ -971,6 +1060,85 @@ class LAPDSim1D:
         if callback is not None:
             callback(progress.fraction)
 
+    def run_neutral_equilibration(
+        self,
+        cycles=None,
+        t_end=None,
+        dt=None,
+        max_steps=None,
+        progress_callback=None,
+        progress_tracker=None,
+        progress_interval_s=None,
+    ):
+        """Run a neutral-only puff/off equilibration and return its result."""
+        params, flags = self.get_config()
+        flags["Plasma"] = False
+        flags["cathode_coupling"] = False
+        flags["neutral_equilibration"] = False
+        flags["launch_plasma_after_equilibration"] = False
+        if cycles is None:
+            cycles = int(params.get("neutral_equilibration_cycles", params["cycles"]))
+        cycles = int(cycles)
+        if cycles <= 0:
+            raise ValueError(f"neutral equilibration cycles must be positive ({cycles})")
+        params["cycles"] = cycles
+        tau_cycle = max(float(params.get("tau_cycle", 0.0)), 0.0)
+        if tau_cycle <= 0.0:
+            tau_cycle = max(float(params.get("tau_discharge", 0.0)), 0.0)
+        if t_end is None:
+            t_end = cycles * tau_cycle
+        t_end = float(t_end)
+        if dt is None:
+            dt = params.get("neutral_equilibration_dt", None)
+        if dt is not None:
+            dt = float(dt)
+        params["dt_save"] = max(t_end, 0.0)
+        params["t_save_start"] = 0.0
+        params["max_output_steps"] = 0
+        if max_steps is None:
+            max_steps = 100000
+            if dt is not None and dt > 0.0:
+                max_steps = max(max_steps, int(np.ceil(t_end / dt)) + 10)
+
+        sim = LAPDSim1D(
+            params,
+            flags,
+            progress_callback=progress_callback,
+            progress_tracker=progress_tracker,
+            progress_interval_s=progress_interval_s,
+        )
+        result = sim.run(t_end=t_end, dt=dt, max_steps=max_steps)
+        summary = self._neutral_equilibration_summary(result, cycles=cycles)
+        result.neutral_equilibration_summary = summary
+        self._last_neutral_equilibration_result = result
+        self._last_neutral_equilibration_summary = summary
+        return result
+
+    def _neutral_equilibration_summary(self, result, cycles):
+        final_nn = np.asarray(result.nn[-1], dtype=float)
+        return SimpleNamespace(
+            cycles=int(cycles),
+            tau_cycle=float(self._input_dict.get("tau_cycle", 0.0)),
+            final_time=float(result.final_time),
+            mean_nn=float(np.mean(final_nn)),
+            std_nn=float(np.std(final_nn)),
+            min_nn=float(np.min(final_nn)),
+            max_nn=float(np.max(final_nn)),
+        )
+
+    def _apply_neutral_equilibration_result(self, result):
+        final_nn = np.asarray(result.nn[-1], dtype=float)
+        state = self.state
+        seeded = ConservativeState1D(
+            n=state.n.copy(),
+            nn=final_nn.copy(),
+            M=state.M.copy(),
+            Ee=state.Ee.copy(),
+            Ei=state.Ei.copy(),
+        )
+        self._set_state_vector(pack_state(seeded))
+        self._time = 0.0
+
     def default_t_end(self):
         """Return the configured end time used by ``start_simulation`` [s]."""
         if not self._flags.get("Plasma", True):
@@ -1009,6 +1177,17 @@ class LAPDSim1D:
         This mirrors the _sim3 entry-point style while preserving ``run(...)`` as
         the direct result-returning API.
         """
+        if self._flags.get("neutral_equilibration", False):
+            neutral_result = self.run_neutral_equilibration(
+                progress_callback=progress_callback,
+                progress_tracker=progress_tracker,
+                progress_interval_s=progress_interval_s,
+            )
+            if not self._flags.get("launch_plasma_after_equilibration", False):
+                self._last_result = neutral_result
+                return
+            self._apply_neutral_equilibration_result(neutral_result)
+
         self._last_result = self.run(
             t_end=t_end,
             dt=dt,
@@ -1018,12 +1197,31 @@ class LAPDSim1D:
             progress_tracker=progress_tracker,
             progress_interval_s=progress_interval_s,
         )
+        if self._last_neutral_equilibration_result is not None:
+            self._last_result.neutral_equilibration = (
+                self._last_neutral_equilibration_result
+            )
+            self._last_result.neutral_equilibration_summary = (
+                self._last_neutral_equilibration_summary
+            )
 
     def get_results(self):
         """Return the most recent ``start_simulation``/``run`` result."""
         if self._last_result is None:
             raise RuntimeError("simulation has not been run yet")
         return self._last_result
+
+    def get_neutral_equilibration_results(self):
+        """Return the most recent optional neutral pre-equilibration result."""
+        if self._last_neutral_equilibration_result is None:
+            raise RuntimeError("neutral equilibration has not been run yet")
+        return self._last_neutral_equilibration_result
+
+    def get_neutral_equilibration_summary(self):
+        """Return final neutral-density summary for the latest equilibration."""
+        if self._last_neutral_equilibration_summary is None:
+            raise RuntimeError("neutral equilibration has not been run yet")
+        return self._last_neutral_equilibration_summary
 
     def save_result(self, path, result, params=None, flags=None):
         """Write a run result to HDF5 with this solver's config metadata."""
@@ -1050,10 +1248,14 @@ class LAPDSim1D:
     def suggest_timestep(self, y=None, include_heat_conduction=None, time=None):
         """Return an explicit timestep suggestion and diagnostics."""
         state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        plasma_enabled = self._flags.get("Plasma", True)
         if include_heat_conduction is None:
-            include_heat_conduction = not self._flags.get(
-                "implicit_heat_conduction", False
+            include_heat_conduction = (
+                plasma_enabled
+                and not self._flags.get("implicit_heat_conduction", False)
             )
+        dt_min = float(self._input_dict.get("dt_min", 1e-12))
+        dt_max = float(self._input_dict.get("dt_max", 1e-6))
         diag = suggest_timestep(
             state=state,
             floors=self._floors,
@@ -1062,14 +1264,22 @@ class LAPDSim1D:
             geometry=self._geometry,
             neutral_exchange_coeff_cm3_s=self.neutral_exchange_coefficients(),
             neutral_source_kwargs=self._neutral_source_kwargs(time=time),
-            reaction_kwargs=self._reaction_kwargs(),
-            energy_exchange_kwargs=self._energy_exchange_kwargs(),
-            electron_cooling_kwargs=self._electron_cooling_kwargs(),
-            ion_charge_exchange_kwargs=self._ion_charge_exchange_kwargs(),
-            heat_conduction_kwargs=(
-                self._heat_conduction_kwargs() if include_heat_conduction else None
+            reaction_kwargs=self._reaction_kwargs() if plasma_enabled else None,
+            energy_exchange_kwargs=(
+                self._energy_exchange_kwargs() if plasma_enabled else None
             ),
-            surface_loss_kwargs=self._surface_loss_kwargs(),
+            electron_cooling_kwargs=(
+                self._electron_cooling_kwargs() if plasma_enabled else None
+            ),
+            ion_charge_exchange_kwargs=(
+                self._ion_charge_exchange_kwargs() if plasma_enabled else None
+            ),
+            heat_conduction_kwargs=(
+                self._heat_conduction_kwargs()
+                if plasma_enabled and include_heat_conduction
+                else None
+            ),
+            surface_loss_kwargs=self._surface_loss_kwargs() if plasma_enabled else None,
             cfl=float(self._input_dict.get("cfl", 0.4)),
             density_dt_fraction=float(
                 self._input_dict.get("density_dt_fraction", 0.25)
@@ -1078,11 +1288,37 @@ class LAPDSim1D:
                 self._input_dict.get("neutral_dt_fraction", 0.25)
             ),
             heat_dt_fraction=float(self._input_dict.get("heat_dt_fraction", 0.25)),
-            dt_min=float(self._input_dict.get("dt_min", 1e-12)),
-            dt_max=float(self._input_dict.get("dt_max", 1e-6)),
-            include_front=self._flags.get("front_flux", True),
+            dt_min=dt_min,
+            dt_max=dt_max,
+            include_front=plasma_enabled and self._flags.get("front_flux", True),
             alpha_front=float(self._input_dict.get("alpha_front", 1.0)),
         )
+        if not plasma_enabled:
+            neutral_candidates = {
+                "neutral_exchange": diag.dt_neutral_exchange,
+                "neutral_sources": diag.dt_neutral_sources,
+                "dt_max": diag.dt_max,
+            }
+            active_constraint, raw_dt = min(
+                neutral_candidates.items(),
+                key=lambda item: item[1],
+            )
+            neutral_dt = min(max(raw_dt, dt_min), dt_max)
+            if neutral_dt == dt_min and raw_dt < dt_min:
+                active_constraint = "dt_min"
+            diag = replace(
+                diag,
+                dt=float(neutral_dt),
+                dt_plasma_cfl=np.inf,
+                dt_front_density=np.inf,
+                dt_surface_loss=np.inf,
+                dt_reactions=np.inf,
+                dt_energy_exchange=np.inf,
+                dt_electron_cooling=np.inf,
+                dt_ion_charge_exchange=np.inf,
+                dt_heat_conduction=np.inf,
+                active_constraint=active_constraint,
+            )
         if time is None:
             time = self._time
         phase, _ = self._phase_info(time)

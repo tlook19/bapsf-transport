@@ -2978,6 +2978,36 @@ def main():
         "tau_discharge",
         "tau_cycle",
     ]
+    equilibration_params = dict(neutral_phase_run_params)
+    equilibration_params["neutral_equilibration_cycles"] = 2
+    equilibration_params["neutral_equilibration_dt"] = 1.0e-10
+    equilibration_flags = dict(flags)
+    equilibration_flags["neutral_equilibration"] = True
+    equilibration_flags["launch_plasma_after_equilibration"] = False
+    equilibration_sim = LAPDSim1D(equilibration_params, equilibration_flags)
+    equilibration_sim.start_simulation(dt=1.0e-10)
+    equilibration_result = equilibration_sim.get_results()
+    equilibration_summary = equilibration_sim.get_neutral_equilibration_summary()
+    assert equilibration_result is equilibration_sim.get_neutral_equilibration_results()
+    assert equilibration_result.neutral_equilibration_summary is equilibration_summary
+    assert equilibration_summary.cycles == 2
+    assert np.isclose(equilibration_summary.final_time, 1.0e-9)
+    assert np.isclose(equilibration_summary.mean_nn, np.mean(equilibration_result.nn[-1]))
+    assert np.isclose(equilibration_summary.std_nn, np.std(equilibration_result.nn[-1]))
+    assert not hasattr(equilibration_result, "neutral_equilibration")
+
+    launch_flags = dict(equilibration_flags)
+    launch_flags["launch_plasma_after_equilibration"] = True
+    launch_sim = LAPDSim1D(equilibration_params, launch_flags)
+    launch_sim.start_simulation(t_end=2.0e-10, dt=1.0e-10)
+    launch_result = launch_sim.get_results()
+    assert np.isclose(launch_result.final_time, 2.0e-10)
+    assert hasattr(launch_result, "neutral_equilibration")
+    assert launch_result.neutral_equilibration_summary.cycles == 2
+    assert np.allclose(
+        launch_result.nn[0],
+        launch_result.neutral_equilibration.nn[-1],
+    )
     neutral_phase_capped_sim = LAPDSim1D(
         neutral_phase_run_params,
         neutral_phase_run_flags,
