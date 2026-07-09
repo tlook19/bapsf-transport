@@ -4,6 +4,7 @@ from pathlib import Path
 
 from cablp.solvers._sim1d import (
     LAPDSim1D,
+    ProgressPrinter1D,
     default_config,
     load_config,
     summarize_result,
@@ -17,11 +18,18 @@ def main(argv=None):
         flags["implicit_heat_conduction"] = True
 
     sim = LAPDSim1D(params, flags)
+    progress_tracker = (
+        ProgressPrinter1D(interval_fraction=args.progress_interval)
+        if args.progress
+        else None
+    )
     result = sim.run(
         t_end=args.t_end,
         dt=args.dt,
         operator_split=args.operator_split,
         max_steps=args.max_steps,
+        progress_tracker=progress_tracker,
+        progress_interval_s=args.progress_interval_time,
     )
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -71,6 +79,23 @@ def _parse_args(argv):
         type=int,
         default=100000,
         help="Maximum accepted timesteps before aborting.",
+    )
+    parser.add_argument(
+        "--progress",
+        action="store_true",
+        help="Print lightweight accepted-step progress updates.",
+    )
+    parser.add_argument(
+        "--progress-interval",
+        type=float,
+        default=0.0,
+        help="Optional minimum progress fraction between printed updates.",
+    )
+    parser.add_argument(
+        "--progress-interval-time",
+        type=float,
+        default=1.0e-4,
+        help="Minimum simulation time between progress updates [s].",
     )
     return parser.parse_args(argv)
 

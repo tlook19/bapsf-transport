@@ -1,6 +1,7 @@
 """Solver implementation for the conservative axial 1D LAPD model."""
 
 from dataclasses import dataclass, replace
+from time import perf_counter
 from types import SimpleNamespace
 
 import numpy as np
@@ -96,6 +97,68 @@ class StepAttempt1D:
     dt: float
     operator_split: bool
     solver_cache: SimpleNamespace
+
+
+@dataclass(frozen=True)
+class SimulationProgress1D:
+    """Lightweight accepted-step progress snapshot for long-running simulations."""
+
+    fraction: float
+    time: float
+    t_end: float
+    step: int
+    max_steps: int
+    accepted_dt: float
+    suggested_dt: float
+    step_cap: str
+    active_constraint: str
+    retry_count: int
+    rejection_reason: str
+    phase: str
+    saved_samples: int
+    wall_elapsed_s: float
+    wall_remaining_s: float
+
+
+class ProgressPrinter1D:
+    """Simple callable progress reporter for scripts and notebooks."""
+
+    def __init__(self, interval_fraction=0.05, interval_steps=100, stream=None):
+        self.interval_fraction = max(float(interval_fraction), 0.0)
+        self.interval_steps = max(int(interval_steps), 1)
+        self.stream = stream
+        self._last_fraction = -np.inf
+        self._last_step = -self.interval_steps
+
+    def __call__(self, progress):
+        fraction_due = (
+            progress.fraction >= 1.0
+            or progress.fraction - self._last_fraction >= self.interval_fraction
+        )
+        step_due = progress.step - self._last_step >= self.interval_steps
+        if not (fraction_due or step_due):
+            return
+        self._last_fraction = progress.fraction
+        self._last_step = progress.step
+        stream = self.stream
+        message = (
+            "sim1d progress: "
+            f"{100.0 * progress.fraction:6.2f}% "
+            f"step={progress.step} "
+            f"t={progress.time:.6e}/{progress.t_end:.6e} s "
+            f"dt={progress.accepted_dt:.3e} "
+            f"elapsed={_format_duration(progress.wall_elapsed_s)} "
+            f"eta={_format_duration(progress.wall_remaining_s)} "
+            f"phase={progress.phase} "
+            f"cap={progress.step_cap} "
+            f"constraint={progress.active_constraint}"
+        )
+        if progress.retry_count:
+            message += (
+                f" retries={progress.retry_count}"
+                f" reason={progress.rejection_reason}"
+            )
+        print(message, file=stream, flush=True)
 
 
 class TimestepRejectionError(RuntimeError):
@@ -224,6 +287,29 @@ def _copy_cache_value(value):
     return value
 
 
+def _format_duration(seconds):
+    if not np.isfinite(seconds):
+        return "unknown"
+    seconds = max(float(seconds), 0.0)
+    if seconds < 60.0:
+        return f"{seconds:.1f}s"
+    minutes, seconds = divmod(seconds, 60.0)
+    if minutes < 60.0:
+        return f"{int(minutes)}m{seconds:02.0f}s"
+    hours, minutes = divmod(minutes, 60.0)
+    return f"{int(hours)}h{int(minutes):02d}m"
+
+
+def _estimate_wall_remaining(elapsed_s, fraction):
+    fraction = float(fraction)
+    elapsed_s = float(elapsed_s)
+    if fraction <= 0.0:
+        return np.inf
+    if fraction >= 1.0:
+        return 0.0
+    return elapsed_s * (1.0 - fraction) / fraction
+
+
 def _max_relative_change(before, after, scale_floor):
     before = np.asarray(before, dtype=float)
     after = np.asarray(after, dtype=float)
@@ -244,10 +330,14 @@ class LAPDSim1D:
         input_dict=input_dict_template_1d,
         input_flags=input_flags_template_1d,
         progress_callback=None,
+        progress_tracker=None,
+        progress_interval_s=1.0e-4,
     ):
         self._input_dict = dict(input_dict)
         self._flags = dict(input_flags)
         self._progress_callback = progress_callback
+        self._progress_tracker = progress_tracker
+        self._progress_interval_s = progress_interval_s
         self._gas_type = self._input_dict.get("gas_type", "He")
         (
             self._ion_mass_g,
@@ -638,7 +728,16 @@ class LAPDSim1D:
         """Advance by explicit non-heat terms then implicit heat conduction."""
         return self.advance_one_step(dt=dt, operator_split=True)
 
-    def run(self, t_end=None, dt=None, operator_split=None, max_steps=100000):
+    def run(
+        self,
+        t_end=None,
+        dt=None,
+        operator_split=None,
+        max_steps=100000,
+        progress_callback=None,
+        progress_tracker=None,
+        progress_interval_s=None,
+    ):
         """Advance to ``t_end`` and return sparse saved trajectory arrays."""
         if t_end is None:
             t_end = self.default_t_end()
@@ -658,6 +757,7 @@ class LAPDSim1D:
         previous_accepted_dt = None
         time_tol = max(1e-15, 1e-12 * max(abs(t_end), 1.0))
         run_start = float(self._time)
+        progress_wall_start = perf_counter()
         self._run_start_for_phase_events = run_start
         dt_growth_enabled = bool(self._input_dict.get("dt_growth_enabled", True))
         dt_growth_factor = float(self._input_dict.get("dt_growth_factor", 1.25))
@@ -710,6 +810,21 @@ class LAPDSim1D:
             saved.append(self._trajectory_snapshot(self._time))
             t_last_save = self._time
 
+        progress_callback = (
+            self._progress_callback
+            if progress_callback is None
+            else progress_callback
+        )
+        progress_tracker = (
+            self._progress_tracker if progress_tracker is None else progress_tracker
+        )
+        progress_interval_s = (
+            self._progress_interval_s
+            if progress_interval_s is None
+            else progress_interval_s
+        )
+        progress_interval_s = max(float(progress_interval_s), 0.0)
+        last_progress_time = -np.inf
         steps = 0
         while self._time < t_end - time_tol:
             if steps >= max_steps:
@@ -776,21 +891,35 @@ class LAPDSim1D:
             if retry_count:
                 step_cap = "retry"
             previous_accepted_dt = float(attempt.dt)
-            diagnostics.append(
-                replace(
-                    diag,
-                    accepted_dt=float(attempt.dt),
-                    step_cap=step_cap,
-                    retry_count=int(retry_count),
-                    rejection_reason=rejection_reason,
-                )
+            step_diag = replace(
+                diag,
+                accepted_dt=float(attempt.dt),
+                step_cap=step_cap,
+                retry_count=int(retry_count),
+                rejection_reason=rejection_reason,
             )
+            diagnostics.append(step_diag)
             steps += 1
-            if self._progress_callback is not None and t_end > 0.0:
-                self._progress_callback(min(self._time / t_end, 1.0))
             if should_save(self._time):
                 saved.append(self._trajectory_snapshot(self._time))
                 t_last_save = self._time
+            progress_due = (
+                self._time >= t_end - time_tol
+                or progress_interval_s == 0.0
+                or self._time - last_progress_time >= progress_interval_s
+            )
+            if progress_due:
+                self._emit_progress(
+                    callback=progress_callback,
+                    tracker=progress_tracker,
+                    diag=step_diag,
+                    t_end=t_end,
+                    step=steps,
+                    max_steps=max_steps,
+                    saved_samples=len(saved),
+                    wall_elapsed_s=perf_counter() - progress_wall_start,
+                )
+                last_progress_time = float(self._time)
 
         result = self._trajectory_result(
             saved=saved,
@@ -801,6 +930,46 @@ class LAPDSim1D:
         )
         self._last_result = result
         return result
+
+    def _emit_progress(
+        self,
+        callback,
+        tracker,
+        diag,
+        t_end,
+        step,
+        max_steps,
+        saved_samples,
+        wall_elapsed_s,
+    ):
+        if callback is None and tracker is None:
+            return
+        fraction = 1.0 if t_end <= 0.0 else min(max(self._time / t_end, 0.0), 1.0)
+        progress = SimulationProgress1D(
+            fraction=float(fraction),
+            time=float(self._time),
+            t_end=float(t_end),
+            step=int(step),
+            max_steps=int(max_steps),
+            accepted_dt=float(diag.accepted_dt),
+            suggested_dt=float(diag.dt),
+            step_cap=str(diag.step_cap),
+            active_constraint=str(diag.active_constraint),
+            retry_count=int(diag.retry_count),
+            rejection_reason=str(diag.rejection_reason),
+            phase=str(diag.phase),
+            saved_samples=int(saved_samples),
+            wall_elapsed_s=float(wall_elapsed_s),
+            wall_remaining_s=_estimate_wall_remaining(wall_elapsed_s, fraction),
+        )
+        if tracker is not None:
+            update = getattr(tracker, "update", None)
+            if update is not None:
+                update(progress)
+            else:
+                tracker(progress)
+        if callback is not None:
+            callback(progress.fraction)
 
     def default_t_end(self):
         """Return the configured end time used by ``start_simulation`` [s]."""
@@ -831,6 +1000,9 @@ class LAPDSim1D:
         dt=None,
         operator_split=None,
         max_steps=100000,
+        progress_callback=None,
+        progress_tracker=None,
+        progress_interval_s=None,
     ):
         """Run the solver and store the result for ``get_results``.
 
@@ -842,6 +1014,9 @@ class LAPDSim1D:
             dt=dt,
             operator_split=operator_split,
             max_steps=max_steps,
+            progress_callback=progress_callback,
+            progress_tracker=progress_tracker,
+            progress_interval_s=progress_interval_s,
         )
 
     def get_results(self):

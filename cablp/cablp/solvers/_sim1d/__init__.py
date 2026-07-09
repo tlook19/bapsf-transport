@@ -9,6 +9,8 @@ from .core.config import (
 from .solver import (
     BreakdownError,
     LAPDSim1D,
+    ProgressPrinter1D,
+    SimulationProgress1D,
     TimestepRejectionError,
     load_result_hdf5,
     summarize_result,
@@ -17,6 +19,8 @@ from .solver import (
 __all__ = [
     "BreakdownError",
     "LAPDSim1D",
+    "ProgressPrinter1D",
+    "SimulationProgress1D",
     "TimestepRejectionError",
     "default_config",
     "input_dict_template_1d",
