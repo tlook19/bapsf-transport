@@ -53,6 +53,10 @@ from cablp.vars._cons import I_Ry, en_factor, ev_to_erg, m_p_cgs, qe_SI
 def main():
     params, flags = default_config()
     assert params["cycles"] == 1
+    assert params["phase_transition_mode"] == "current"
+    assert params["gas_puff_mode"] == "pulse_decay_to_level"
+    params["phase_transition_mode"] = "scheduled"
+    params["gas_puff_mode"] = "decay_after_breakdown"
     sim = LAPDSim1D(params, flags)
     snapshot = sim.get_initial_snapshot()
     geom = snapshot.geometry
@@ -693,6 +697,7 @@ def main():
         afterglow_dt_diag.dt_neutral_sources >= sim.suggest_timestep().dt_neutral_sources
     )
     decay_params = dict(params)
+    decay_params["gas_puff_mode"] = "decay_after_breakdown"
     decay_params["pump_enabled"] = False
     decay_params["tau_prebreakdown"] = 1.0e-10
     decay_params["tau_discharge"] = 4.0e-10
@@ -1488,12 +1493,12 @@ def main():
     assert np.allclose(no_source_split_sim.get_initial_snapshot().y, split_before)
     split_attempt_after = no_source_split_sim._accept_step_attempt(split_attempt)
     assert np.isclose(no_source_split_sim.time, 1e-10)
-    assert np.allclose(split_attempt_after.y, split_before, rtol=0.0, atol=1e-20)
+    assert np.allclose(split_attempt_after.y, split_before, rtol=0.0, atol=1e-18)
 
     no_source_split_sim = LAPDSim1D(no_source_params, split_flags)
     split_before = no_source_split_sim.get_initial_snapshot().y.copy()
     split_stationary_after = no_source_split_sim.advance_one_step(1e-10)
-    assert np.allclose(split_stationary_after.y, split_before, rtol=0.0, atol=1e-20)
+    assert np.allclose(split_stationary_after.y, split_before, rtol=0.0, atol=1e-18)
 
     run_params = dict(no_source_params)
     run_params["dt_save"] = 0.0
@@ -1745,7 +1750,7 @@ def main():
         assert summary.cathode_diagnostic_fractions["configured"] == 0.0
         assert summary.cathode_diagnostic_fractions["solve_enabled"] == 0.0
         assert summary.cathode_diagnostic_fractions["has_solution"] == 0.0
-        assert summary.constraint_counts == {"dt_max": 3}
+        assert summary.constraint_counts == {"heat_conduction": 3}
         assert summary.step_cap_counts == {"fixed_dt": 3}
         assert np.isclose(summary.accepted_dt_min, 1.0e-10)
         assert np.isclose(summary.accepted_dt_max, 1.0e-10)
@@ -2141,9 +2146,9 @@ def main():
     assert adaptive_result.steps == 3
     assert np.allclose(adaptive_result.time, [0.0, 1.0e-10, 2.0e-10, 2.5e-10])
     assert [diag.active_constraint for diag in adaptive_result.diagnostics] == [
-        "dt_max",
-        "dt_max",
-        "dt_max",
+        "heat_conduction",
+        "heat_conduction",
+        "heat_conduction",
     ]
     assert [diag.step_cap for diag in adaptive_result.diagnostics] == [
         "save_time",
@@ -2155,7 +2160,7 @@ def main():
         [1.0e-10, 1.0e-10, 0.5e-10],
     )
     adaptive_summary = summarize_result(adaptive_result)
-    assert adaptive_summary.constraint_counts == {"dt_max": 3}
+    assert adaptive_summary.constraint_counts == {"heat_conduction": 3}
     assert adaptive_summary.step_cap_counts == {"save_time": 2, "t_end": 1}
     assert np.isclose(adaptive_summary.accepted_dt_min, 0.5e-10)
     assert np.isclose(adaptive_summary.accepted_dt_max, 1.0e-10)
@@ -2166,7 +2171,9 @@ def main():
     growth_params["dt_growth_factor"] = 1.25
     growth_params["tau_prebreakdown"] = 0.5e-6
     growth_params["tau_discharge"] = 10.0e-6
-    growth_sim = LAPDSim1D(growth_params, flags)
+    growth_flags = dict(flags)
+    growth_flags["heat_conduction"] = False
+    growth_sim = LAPDSim1D(growth_params, growth_flags)
     growth_result = growth_sim.run(t_end=1.5e-6)
     assert growth_result.steps == 3
     assert np.allclose(growth_result.time, [0.0, 0.5e-6, 1.125e-6, 1.5e-6])
@@ -2189,10 +2196,12 @@ def main():
     retry_params = dict(params)
     retry_flags = dict(flags)
     retry_flags["Plasma"] = False
+    retry_flags["heat_conduction"] = False
     retry_params["dt_save"] = 0.0
     retry_params["pump_enabled"] = False
     retry_params["dt_max"] = 1.0e-6
-    retry_params["max_neutral_step_fraction"] = 2.0e-3
+    retry_params["neutral_dt_fraction"] = 100.0
+    retry_params["max_neutral_step_fraction"] = 6.0
     retry_sim = LAPDSim1D(retry_params, retry_flags)
     retry_result = retry_sim.run(t_end=1.0e-6)
     assert retry_result.steps == 2

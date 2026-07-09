@@ -7,7 +7,8 @@ def initial_condition_defaults():
     """Return defaults for species and initial primitive state.
 
     gas_type:
-        Neutral/ion species selector. Supported values are "He" and "H".
+        Neutral/ion species selector. Options are ``"He"`` for helium atom/ion
+        conventions and ``"H"`` for hydrogen neutral/proton conventions.
     ne0:
         Uniform initial plasma/electron density [cm^-3].
     nn0:
@@ -24,8 +25,8 @@ def initial_condition_defaults():
     """
     return {
         "gas_type": "He",
-        "ne0": 1e10,
-        "nn0": None,
+        "ne0": 1e9,
+        "nn0": 1e9,
         "Tn_fit": 0.1,
         "Te0": 0.1,
         "Ti0": 0.1,
@@ -100,8 +101,11 @@ def neutral_source_defaults():
     Twin_S_gp:
         End-side gas puff flow used when ``TwinCathode`` is enabled [sccm].
     gas_puff_mode:
-        Phase-dependent gas-puff schedule. Supported modes are implemented by
-        the neutral source helper.
+        Phase-dependent gas-puff schedule. Options are
+        ``"decay_after_breakdown"`` for steady puffing until optional decay
+        after breakdown/main-discharge start, and
+        ``"pulse_decay_to_level"`` for a full-rate pulse followed by decay
+        toward the configured target flow.
     S_gp_decay_target:
         Source-side target puff level for pulse decay modes [sccm].
     Twin_S_gp_decay_target:
@@ -127,16 +131,16 @@ def neutral_source_defaults():
         Number of equivalent gas-puff valves used by the SCCM conversion.
     """
     return {
-        "S_gp": 8000,
-        "Twin_S_gp": 8000,
-        "gas_puff_mode": "decay_after_breakdown",
-        "S_gp_decay_target": 0.0,
+        "S_gp": 5500,
+        "Twin_S_gp": 5500,
+        "gas_puff_mode": "pulse_decay_to_level",
+        "S_gp_decay_target": 1500,
         "Twin_S_gp_decay_target": 0.0,
         "tau_gp_after_breakdown": None,
         "tau_gp_decay_factor": 1.0,
-        "tau_gp_pulse_duration": 0.0,
-        "tau_gp_decay_duration": 1e-3,
-        "S_pump_L": 4000,
+        "tau_gp_pulse_duration": 1e-3,
+        "tau_gp_decay_duration": 5e-3,
+        "S_pump_L": 2000,
         "S_pump_R": 4000,
         "gas_puff_enabled": True,
         "pump_enabled": True,
@@ -161,8 +165,8 @@ def timing_defaults():
     cycles:
         Number of neutral-only cycles used by the default run duration.
     phase_transition_mode:
-        Phase scheduler mode. ``"scheduled"`` uses configured times;
-        ``"current"`` uses cathode ``I_tot`` thresholds.
+        Phase scheduler mode. Options are ``"scheduled"`` to use configured
+        phase durations and ``"current"`` to use cathode ``I_tot`` thresholds.
     I_prebreakdown:
         Cathode total-current threshold for leaving pre-breakdown [A].
     I_breakdown:
@@ -175,8 +179,8 @@ def timing_defaults():
         "tau_afterglow": 5e-3,
         "tau_cycle": 3.0,
         "cycles": 1,
-        "phase_transition_mode": "scheduled",
-        "I_prebreakdown": 100.0,
+        "phase_transition_mode": "current",
+        "I_prebreakdown": 150.0,
         "I_breakdown": 1000.0,
     }
 
@@ -203,21 +207,31 @@ def model_mode_defaults():
     """Return string-valued model selector defaults.
 
     front_flux_model:
-        Axial plasma front-filling flux closure.
+        Axial plasma front-filling flux closure. The implemented option is
+        ``"sonic_relaxation"``; the ``front_flux`` flag enables or disables the
+        closure.
     D_amb_model:
-        Ambipolar diffusion coefficient model.
+        Ambipolar diffusion coefficient model. ``"cs_dz"`` is retained for
+        _sim3 compatibility; the current conservative flux closure does not
+        directly use this selector.
     end_mode:
-        End boundary behavior, such as collector behavior.
+        End boundary behavior. Options are ``"collector"`` and
+        ``"mirrored_source"``.
     cathode_model:
-        Cathode model selector retained for configuration compatibility.
+        Cathode model selector retained for configuration compatibility. The
+        current option is ``"disabled"``; actual cathode coupling is controlled
+        by the ``cathode_coupling`` flag.
     Te_birth_ionization:
-        Electron birth temperature model for ionization. ``"local"`` uses the
-        local electron temperature; numeric values are treated as eV.
+        Electron birth temperature model for ionization. Options are
+        ``"local"`` to use the local electron temperature, ``"floor"`` to use
+        the electron temperature floor, or a numeric eV value.
     Ti_birth_ionization:
-        Ion birth temperature model for ionization. ``"floor"`` uses the ion
-        temperature floor; numeric values are treated as eV.
+        Ion birth temperature model for ionization. Options are ``"local"`` to
+        use the local ion temperature, ``"floor"`` to use the ion temperature
+        floor, or a numeric eV value.
     neutral_exchange_model:
-        Neutral axial exchange model.
+        Neutral axial exchange model. Options are ``"constant"`` and
+        ``"molecular_flow"``.
     """
     return {
         "front_flux_model": "sonic_relaxation",
