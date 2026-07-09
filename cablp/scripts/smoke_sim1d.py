@@ -1555,6 +1555,22 @@ def main():
         [diag.time for diag in run_result.diagnostics],
         [0.0, 1.0e-10, 2.0e-10],
     )
+
+    capped_params = dict(run_params)
+    capped_params["max_steps"] = 2
+    capped_sim = LAPDSim1D(capped_params, flags)
+    try:
+        capped_sim.run(t_end=3.0e-10, dt=1.0e-10)
+    except RuntimeError as exc:
+        assert "max_steps=2 reached" in str(exc)
+    else:
+        raise AssertionError("expected configured max_steps cap to abort the run")
+
+    unlimited_params = dict(run_params)
+    unlimited_params["max_steps"] = 0
+    unlimited_sim = LAPDSim1D(unlimited_params, flags)
+    unlimited_result = unlimited_sim.run(t_end=3.0e-10, dt=1.0e-10)
+    assert unlimited_result.steps == 3
     assert np.allclose(
         [diag.phase_cathode_enabled for diag in run_result.diagnostics],
         0.0,
@@ -1695,7 +1711,10 @@ def main():
     assert run_result.cathode.I_tot.shape == run_result.time.shape
     assert np.all(np.isnan(run_result.cathode.I_tot))
 
-    entry_sim = LAPDSim1D(run_params, flags)
+    entry_flags = dict(flags)
+    entry_flags["neutral_equilibration"] = False
+    entry_flags["launch_plasma_after_equilibration"] = False
+    entry_sim = LAPDSim1D(run_params, entry_flags)
     entry_sim.start_simulation(t_end=3.0e-10, dt=1.0e-10)
     entry_result = entry_sim.get_results()
     assert entry_result.steps == run_result.steps
