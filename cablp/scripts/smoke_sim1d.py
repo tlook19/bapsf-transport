@@ -1746,6 +1746,12 @@ def main():
     assert progress_snapshots[-1].step == progress_result.steps
     assert progress_snapshots[-1].saved_samples == len(progress_result.time)
     assert progress_snapshots[-1].step_cap == "fixed_dt"
+    assert progress_snapshots[-1].timestep_limiters
+    assert len(progress_snapshots[-1].timestep_limiters) <= 3
+    assert all(
+        isinstance(name, str) and np.isfinite(dt)
+        for name, dt in progress_snapshots[-1].timestep_limiters
+    )
     printer_stream = StringIO()
     progress_printer = ProgressPrinter1D(
         interval_fraction=0.0,
@@ -1772,7 +1778,9 @@ def main():
             wall_remaining_s=0.0,
         )
     )
-    assert printer_stream.getvalue().count("sim1d progress:") == 2
+    printer_output = printer_stream.getvalue()
+    assert printer_output.count("sim1d progress:") == 2
+    assert "limiters=" in printer_output
     every_step_progress = []
     LAPDSim1D(run_params, flags).run(
         t_end=3.0e-10,

@@ -120,6 +120,7 @@ class SimulationProgress1D:
     saved_samples: int
     wall_elapsed_s: float
     wall_remaining_s: float
+    timestep_limiters: tuple = ()
 
 
 class ProgressPrinter1D:
@@ -161,6 +162,10 @@ class ProgressPrinter1D:
             f"cap={progress.step_cap} "
             f"constraint={progress.active_constraint}"
         )
+        if progress.timestep_limiters:
+            message += " limiters=" + ",".join(
+                f"{name}:{dt:.3e}" for name, dt in progress.timestep_limiters
+            )
         if progress.retry_count:
             message += (
                 f" retries={progress.retry_count}"
@@ -319,6 +324,29 @@ def _estimate_wall_remaining(elapsed_s, fraction):
     if fraction >= 1.0:
         return 0.0
     return elapsed_s * (1.0 - fraction) / fraction
+
+
+def _timestep_limiters(diag, count=3):
+    candidates = (
+        ("plasma_cfl", diag.dt_plasma_cfl),
+        ("front_density", diag.dt_front_density),
+        ("surface_loss", diag.dt_surface_loss),
+        ("neutral_exchange", diag.dt_neutral_exchange),
+        ("neutral_sources", diag.dt_neutral_sources),
+        ("reactions", diag.dt_reactions),
+        ("energy_exchange", diag.dt_energy_exchange),
+        ("electron_cooling", diag.dt_electron_cooling),
+        ("ion_charge_exchange", diag.dt_ion_charge_exchange),
+        ("heat_conduction", diag.dt_heat_conduction),
+        ("dt_max", diag.dt_max),
+    )
+    finite = [
+        (name, float(dt))
+        for name, dt in candidates
+        if np.isfinite(dt) and float(dt) >= 0.0
+    ]
+    finite.sort(key=lambda item: item[1])
+    return tuple(finite[: max(int(count), 0)])
 
 
 def _max_relative_change(before, after, scale_floor):
@@ -1157,6 +1185,7 @@ class LAPDSim1D:
             saved_samples=int(saved_samples),
             wall_elapsed_s=float(wall_elapsed_s),
             wall_remaining_s=_estimate_wall_remaining(wall_elapsed_s, fraction),
+            timestep_limiters=_timestep_limiters(diag),
         )
         if tracker is not None:
             update = getattr(tracker, "update", None)
