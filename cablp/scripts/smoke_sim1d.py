@@ -3255,6 +3255,25 @@ def main():
             0.0,
             atol=1e-14,
         )
+        cli_plot_dir = tmp_path / "sim1d_cli_plots"
+        cli_plot_run = subprocess.run(
+            [
+                sys.executable,
+                "scripts/plot_sim1d_run.py",
+                str(cli_output),
+                "--output-dir",
+                str(cli_plot_dir),
+                "--prefix",
+                "cli",
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert "sim1d plots written:" in cli_plot_run.stdout
+        assert (cli_plot_dir / "cli_summary.png").exists()
+        assert (cli_plot_dir / "cli_densities.png").exists()
 
     ramp_y0 = pack_state(ramp_state)
     ramp_y1 = ssprk2_step(
