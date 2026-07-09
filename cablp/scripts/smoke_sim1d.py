@@ -12,6 +12,7 @@ from cablp.funcs._plasmaparams import c_log
 from cablp.solvers._sim1d import (
     BreakdownError,
     LAPDSim1D,
+    SimulationProgress1D,
     TimestepRejectionError,
     default_config,
     load_result_hdf5,
@@ -57,6 +58,8 @@ def main():
     assert params["gas_puff_mode"] == "pulse_decay_to_level"
     params["phase_transition_mode"] = "scheduled"
     params["gas_puff_mode"] = "decay_after_breakdown"
+    flags["cathode_coupling"] = False
+    flags["implicit_heat_conduction"] = False
     sim = LAPDSim1D(params, flags)
     snapshot = sim.get_initial_snapshot()
     geom = snapshot.geometry
@@ -1699,6 +1702,33 @@ def main():
     assert np.isclose(entry_result.final_time, run_result.final_time)
     assert np.allclose(entry_result.time, run_result.time)
     assert np.allclose(entry_result.y, run_result.y, rtol=0.0, atol=1e-20)
+
+    progress_fractions = []
+    progress_snapshots = []
+    progress_sim = LAPDSim1D(run_params, flags)
+    progress_result = progress_sim.run(
+        t_end=3.0e-10,
+        dt=1.0e-10,
+        progress_callback=progress_fractions.append,
+        progress_tracker=progress_snapshots.append,
+    )
+    assert progress_result.steps == 3
+    assert np.allclose(progress_fractions, [1 / 3, 1.0])
+    assert len(progress_snapshots) == 2
+    assert all(isinstance(progress, SimulationProgress1D) for progress in progress_snapshots)
+    assert np.isclose(progress_snapshots[-1].fraction, 1.0)
+    assert np.isclose(progress_snapshots[-1].time, progress_result.final_time)
+    assert progress_snapshots[-1].step == progress_result.steps
+    assert progress_snapshots[-1].saved_samples == len(progress_result.time)
+    assert progress_snapshots[-1].step_cap == "fixed_dt"
+    every_step_progress = []
+    LAPDSim1D(run_params, flags).run(
+        t_end=3.0e-10,
+        dt=1.0e-10,
+        progress_callback=every_step_progress.append,
+        progress_interval_s=0.0,
+    )
+    assert np.allclose(every_step_progress, [1 / 3, 2 / 3, 1.0])
 
     default_end_params = dict(run_params)
     default_end_params["tau_prebreakdown"] = 1.0e-10
