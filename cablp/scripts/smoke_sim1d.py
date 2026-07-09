@@ -3177,7 +3177,24 @@ def main():
         "tau_cycle",
     ]
     with tempfile.TemporaryDirectory() as tmpdir:
+        from scripts.run_sim1d import _parse_args
+
         tmp_path = Path(tmpdir)
+        assert (
+            _parse_args(["--output", str(tmp_path / "default_operator_split.h5")])
+            .operator_split
+            is None
+        )
+        assert (
+            _parse_args(
+                [
+                    "--output",
+                    str(tmp_path / "forced_operator_split.h5"),
+                    "--operator-split",
+                ]
+            ).operator_split
+            is True
+        )
         cli_config = tmp_path / "sim1d_cli_config.toml"
         cli_output = tmp_path / "sim1d_cli_output.h5"
         cli_config.write_text(

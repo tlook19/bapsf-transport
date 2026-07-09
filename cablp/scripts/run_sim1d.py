@@ -93,6 +93,7 @@ def _parse_args(argv):
     parser.add_argument(
         "--operator-split",
         action="store_true",
+        default=None,
         help="Use explicit non-heat plus implicit heat-conduction splitting.",
     )
     parser.add_argument(
