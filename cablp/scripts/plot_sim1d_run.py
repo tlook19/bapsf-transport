@@ -44,9 +44,12 @@ def main(argv=None):
 
     time_origin = _time_origin(result, mode=args.time_origin)
     time_scale, time_label = _time_unit(args.time_unit)
-    t_plot = (np.asarray(result.time, dtype=float) - time_origin) * time_scale
+    shifted_time_s = np.asarray(result.time, dtype=float) - time_origin
+    t_plot = shifted_time_s * time_scale
+    t_slice_ms = shifted_time_s * 1.0e3
     z_cm = np.asarray(result.z_cm, dtype=float)
     phase_events = _shifted_phase_events(result, time_origin, time_scale)
+    phase_events_ms = _shifted_phase_events(result, time_origin, 1.0e3)
     prefix = args.prefix or Path(args.input).stem
 
     figures = {
@@ -74,9 +77,25 @@ def main(argv=None):
         written.append(path)
         plt.close(fig)
 
+    slice_written = []
+    if not args.no_time_slices:
+        slice_written = _write_main_discharge_slices(
+            result=result,
+            z_cm=z_cm,
+            t_ms=t_slice_ms,
+            phase_events_ms=phase_events_ms,
+            output_dir=output_dir / "time_slices",
+            prefix=prefix,
+            image_format=args.format,
+            dpi=args.dpi,
+            interval_ms=args.slice_interval_ms,
+        )
+        written.extend(slice_written)
+
     print(
         "sim1d plots written: "
         f"count={len(written)}, "
+        f"time_slices={len(slice_written)}, "
         f"time_origin={time_origin:.9e} s, "
         f"output_dir={output_dir}"
     )
@@ -123,6 +142,17 @@ def _parse_args(argv):
         default="ms",
         choices=("s", "ms"),
         help="Displayed time unit after applying the origin shift.",
+    )
+    parser.add_argument(
+        "--slice-interval-ms",
+        type=float,
+        default=1.0,
+        help="Main-discharge time-slice spacing [ms].",
+    )
+    parser.add_argument(
+        "--no-time-slices",
+        action="store_true",
+        help="Disable automatic 1D profile plots during main discharge.",
     )
     args = parser.parse_args(argv)
     if args.output_dir is None:
@@ -222,6 +252,123 @@ def _sum_power(result, terms):
             continue
         series[name] = np.nansum(values * volume[np.newaxis, :], axis=1)
     return series
+
+
+def _write_main_discharge_slices(
+    *,
+    result,
+    z_cm,
+    t_ms,
+    phase_events_ms,
+    output_dir,
+    prefix,
+    image_format,
+    dpi,
+    interval_ms,
+):
+    slice_times = _main_discharge_slice_times(
+        result,
+        phase_events_ms=phase_events_ms,
+        interval_ms=interval_ms,
+    )
+    if not slice_times:
+        return []
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    written = []
+    for slice_time_ms in slice_times:
+        fig = _plot_time_slice_summary(
+            result=result,
+            z_cm=z_cm,
+            t_ms=t_ms,
+            slice_time_ms=slice_time_ms,
+        )
+        label_ms = int(round(slice_time_ms))
+        path = output_dir / f"{prefix}_slice_{label_ms:03d}ms.{image_format}"
+        fig.savefig(path, dpi=dpi, bbox_inches="tight")
+        written.append(path)
+        plt.close(fig)
+    return written
+
+
+def _main_discharge_slice_times(result, *, phase_events_ms, interval_ms):
+    interval_ms = float(interval_ms)
+    if interval_ms <= 0.0:
+        raise ValueError(f"slice interval must be positive ({interval_ms})")
+
+    main_start = None
+    afterglow_start = None
+    for time_ms, phase in phase_events_ms:
+        if phase == "main_discharge" and main_start is None:
+            main_start = float(time_ms)
+        elif phase == "afterglow" and afterglow_start is None:
+            afterglow_start = float(time_ms)
+
+    if main_start is None:
+        return []
+    if afterglow_start is None:
+        params = getattr(result, "params", {}) or {}
+        afterglow_start = main_start + 1.0e3 * float(
+            params.get("tau_discharge", 0.0)
+        )
+    duration_ms = afterglow_start - main_start
+    if not np.isfinite(duration_ms) or duration_ms < 0.0:
+        return []
+
+    count = int(np.floor(duration_ms / interval_ms + 1.0e-9))
+    times = [main_start + index * interval_ms for index in range(count + 1)]
+    if times and times[-1] < afterglow_start - 1.0e-9:
+        times.append(afterglow_start)
+    elif not times:
+        times = [main_start]
+    return times
+
+
+def _plot_time_slice_summary(result, z_cm, t_ms, slice_time_ms):
+    idx = int(np.argmin(np.abs(t_ms - slice_time_ms)))
+    actual_ms = float(t_ms[idx])
+    title = _plot_title(result)
+    fig, axes = plt.subplots(2, 2, figsize=(11, 7), constrained_layout=True)
+
+    ne = _finite_2d(result.n)[idx]
+    nn = _finite_2d(result.nn)[idx]
+    axes[0, 0].plot(z_cm, ne, marker="o", markersize=3, label="ne")
+    axes[0, 0].plot(z_cm, nn, marker="o", markersize=3, label="nn")
+    axes[0, 0].set_yscale("log")
+    axes[0, 0].set_ylabel("Density [cm^-3]")
+    axes[0, 0].legend(loc="best")
+
+    axes[0, 1].plot(z_cm, _finite_2d(result.Te)[idx], marker="o", markersize=3, label="Te")
+    axes[0, 1].plot(z_cm, _finite_2d(result.Ti)[idx], marker="o", markersize=3, label="Ti")
+    axes[0, 1].set_ylabel("Temperature [eV]")
+    axes[0, 1].legend(loc="best")
+
+    if hasattr(result, "u"):
+        axes[1, 0].plot(z_cm, _finite_2d(result.u)[idx] / 100.0, marker="o", markersize=3)
+    axes[1, 0].axhline(0.0, color="k", lw=0.8)
+    axes[1, 0].set_ylabel("u [m/s]")
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ion_ratio = np.where(result.nn > 0.0, result.n / result.nn, np.nan)
+    axes[1, 1].plot(
+        z_cm,
+        _finite_2d(ion_ratio)[idx],
+        marker="o",
+        markersize=3,
+    )
+    axes[1, 1].set_yscale("log")
+    axes[1, 1].set_ylabel("ne/nn")
+
+    for ax in axes.ravel():
+        ax.set_xlabel("z [cm]")
+        ax.grid(True, alpha=0.3)
+
+    fig.suptitle(
+        f"Main Discharge Slice at {slice_time_ms:.3f} ms "
+        f"(nearest saved {actual_ms:.3f} ms)\n{title}",
+        fontsize=11,
+    )
+    return fig
 
 
 def _log_tick_label(v, pos=None):
