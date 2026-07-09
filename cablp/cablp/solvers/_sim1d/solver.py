@@ -1004,6 +1004,7 @@ class LAPDSim1D:
         )
         progress_interval_s = max(float(progress_interval_s), 0.0)
         last_progress_time = -np.inf
+        force_progress = False
         steps = 0
         while self._time < t_end - time_tol:
             if not unlimited_steps and steps >= max_steps:
@@ -1072,6 +1073,9 @@ class LAPDSim1D:
                 if current_t_end is not None and current_t_end < t_end:
                     t_end = float(current_t_end)
                     time_tol = max(1e-15, 1e-12 * max(abs(t_end), 1.0))
+                    self._reset_progress_tracker(progress_tracker)
+                    last_progress_time = -np.inf
+                    force_progress = True
             if retry_count:
                 step_cap = "retry"
             previous_accepted_dt = float(attempt.dt)
@@ -1088,7 +1092,8 @@ class LAPDSim1D:
                 saved.append(self._trajectory_snapshot(self._time))
                 t_last_save = self._time
             progress_due = (
-                self._time >= t_end - time_tol
+                force_progress
+                or self._time >= t_end - time_tol
                 or progress_interval_s == 0.0
                 or self._time - last_progress_time >= progress_interval_s
             )
@@ -1104,6 +1109,7 @@ class LAPDSim1D:
                     wall_elapsed_s=perf_counter() - progress_wall_start,
                 )
                 last_progress_time = float(self._time)
+                force_progress = False
 
         result = self._trajectory_result(
             saved=saved,
@@ -1114,6 +1120,12 @@ class LAPDSim1D:
         )
         self._last_result = result
         return result
+
+    @staticmethod
+    def _reset_progress_tracker(tracker):
+        reset = getattr(tracker, "reset", None)
+        if reset is not None:
+            reset()
 
     def _emit_progress(
         self,
