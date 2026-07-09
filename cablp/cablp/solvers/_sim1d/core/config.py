@@ -164,6 +164,12 @@ def timing_defaults():
         Neutral-only puff/off cycle duration [s].
     cycles:
         Number of neutral-only cycles used by the default run duration.
+    neutral_equilibration_cycles:
+        Number of puff/off cycles used by the optional neutral pre-equilibration
+        run.
+    neutral_equilibration_dt:
+        Fixed timestep for optional neutral pre-equilibration [s]. ``None`` uses
+        the adaptive timestep selector, which may be much slower.
     phase_transition_mode:
         Phase scheduler mode. Options are ``"scheduled"`` to use configured
         phase durations and ``"current"`` to use cathode ``I_tot`` thresholds.
@@ -179,6 +185,8 @@ def timing_defaults():
         "tau_afterglow": 5e-3,
         "tau_cycle": 3.0,
         "cycles": 1,
+        "neutral_equilibration_cycles": 100,
+        "neutral_equilibration_dt": 1e-2,
         "phase_transition_mode": "current",
         "I_prebreakdown": 150.0,
         "I_breakdown": 1000.0,
@@ -301,7 +309,7 @@ def fudge_factor_defaults():
         "b_pressure_work_ions": 1.0,
         "b_surface_loss": 1.0,
         "alpha_isat": 0.6065306597126334,
-        "source_surface_area_scale": 2.0,
+        "source_surface_area_scale": 1.8,
         "end_surface_area_scale": 1.0,
     }
 
@@ -328,7 +336,7 @@ def cathode_defaults():
     """
     return {
         "V_bank": 100.0,
-        "T_s": 1973.15,
+        "T_s": 2008,
         "phi_wf": 3.0,
         "C_R": 29.0,
         "R_comp": 0.004,
@@ -396,8 +404,8 @@ def timestep_defaults():
         "density_dt_fraction": 0.25,
         "neutral_dt_fraction": 0.25,
         "heat_dt_fraction": 0.25,
-        "dt_min": 1e-12,
-        "dt_max": 1e-6,
+        "dt_min": 1e-10,
+        "dt_max": 1e-4,
         "adaptive_retries_enabled": True,
         "max_step_retries": 8,
         "dt_reject_factor": 0.5,
@@ -436,11 +444,13 @@ input_flags_template_1d = {
     "Plasma": True,
     "TwinCathode": False,
     "heat_conduction": True,
-    "implicit_heat_conduction": False,
+    "implicit_heat_conduction": True,
     "front_flux": True,
     "source_surface_loss": True,
     "end_surface_loss": True,
-    "cathode_coupling": False,
+    "cathode_coupling": True,
+    "neutral_equilibration": False,
+    "launch_plasma_after_equilibration": False,
     "ionization_energy_cost": True,
     "icool": True,
     "ncool": True,

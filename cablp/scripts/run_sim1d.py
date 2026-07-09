@@ -16,6 +16,15 @@ def main(argv=None):
     params, flags = load_config(args.config) if args.config else default_config()
     if args.operator_split:
         flags["implicit_heat_conduction"] = True
+    if args.neutral_equilibration:
+        flags["neutral_equilibration"] = True
+    if args.launch_plasma_after_equilibration:
+        flags["neutral_equilibration"] = True
+        flags["launch_plasma_after_equilibration"] = True
+    if args.neutral_equilibration_cycles is not None:
+        params["neutral_equilibration_cycles"] = args.neutral_equilibration_cycles
+    if args.neutral_equilibration_dt is not None:
+        params["neutral_equilibration_dt"] = args.neutral_equilibration_dt
 
     sim = LAPDSim1D(params, flags)
     progress_tracker = (
@@ -23,7 +32,7 @@ def main(argv=None):
         if args.progress
         else None
     )
-    result = sim.run(
+    sim.start_simulation(
         t_end=args.t_end,
         dt=args.dt,
         operator_split=args.operator_split,
@@ -31,6 +40,7 @@ def main(argv=None):
         progress_tracker=progress_tracker,
         progress_interval_s=args.progress_interval_time,
     )
+    result = sim.get_results()
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     sim.save_result(output, result, params=params, flags=flags)
@@ -60,13 +70,24 @@ def main(argv=None):
         f"{summary.total_particle_inventory_relative_drift:.6e}, "
         f"thermal_drift={summary.thermal_energy_relative_drift:.6e}"
     )
+    if hasattr(result, "neutral_equilibration_summary"):
+        neutral_summary = result.neutral_equilibration_summary
+        print(
+            "sim1d neutral equilibration: "
+            f"cycles={neutral_summary.cycles}, "
+            f"final_time={neutral_summary.final_time:.6e} s, "
+            f"nn_mean={neutral_summary.mean_nn:.6e} cm^-3, "
+            f"nn_std={neutral_summary.std_nn:.6e} cm^-3, "
+            f"nn_min={neutral_summary.min_nn:.6e} cm^-3, "
+            f"nn_max={neutral_summary.max_nn:.6e} cm^-3"
+        )
     return 0
 
 
 def _parse_args(argv):
     parser = argparse.ArgumentParser(description="Run LAPDSim1D and save HDF5.")
     parser.add_argument("--output", required=True, help="Output HDF5 path.")
-    parser.add_argument("--t-end", type=float, required=True, help="Final time [s].")
+    parser.add_argument("--t-end", type=float, default=None, help="Final time [s].")
     parser.add_argument("--dt", type=float, default=None, help="Fixed timestep [s].")
     parser.add_argument("--config", default=None, help="Optional TOML config path.")
     parser.add_argument(
@@ -96,6 +117,28 @@ def _parse_args(argv):
         type=float,
         default=1.0e-4,
         help="Minimum simulation time between progress updates [s].",
+    )
+    parser.add_argument(
+        "--neutral-equilibration",
+        action="store_true",
+        help="Run the configured neutral-only equilibration before returning.",
+    )
+    parser.add_argument(
+        "--launch-plasma-after-equilibration",
+        action="store_true",
+        help="Seed plasma run with neutral equilibration final state.",
+    )
+    parser.add_argument(
+        "--neutral-equilibration-cycles",
+        type=int,
+        default=None,
+        help="Override neutral equilibration cycle count.",
+    )
+    parser.add_argument(
+        "--neutral-equilibration-dt",
+        type=float,
+        default=None,
+        help="Override neutral equilibration fixed timestep [s].",
     )
     return parser.parse_args(argv)
 
