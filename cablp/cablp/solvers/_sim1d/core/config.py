@@ -183,7 +183,7 @@ def timing_defaults():
     """
     return {
         "tau_prebreakdown": 0.05,
-        "tau_neutral_prebreakdown": 0.0,
+        "tau_neutral_prebreakdown": 0.002,
         "tau_breakdown": 0.0,
         "tau_discharge": 20e-3,
         "tau_afterglow": 5e-3,
@@ -456,7 +456,7 @@ input_flags_template_1d = {
     "source_surface_loss": True,
     "end_surface_loss": True,
     "cathode_coupling": True,
-    "neutral_prebreakdown": False,
+    "neutral_prebreakdown": True,
     "neutral_equilibration": False,
     "launch_plasma_after_equilibration": False,
     "ionization_energy_cost": True,

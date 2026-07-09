@@ -57,8 +57,11 @@ def main():
     assert params["cycles"] == 1
     assert params["phase_transition_mode"] == "current"
     assert params["gas_puff_mode"] == "pulse_decay_to_level"
+    assert params["tau_neutral_prebreakdown"] > 0.0
+    assert flags["neutral_prebreakdown"]
     params["phase_transition_mode"] = "scheduled"
     params["gas_puff_mode"] = "decay_after_breakdown"
+    flags["neutral_prebreakdown"] = False
     flags["cathode_coupling"] = False
     flags["implicit_heat_conduction"] = False
     sim = LAPDSim1D(params, flags)
