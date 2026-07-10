@@ -1,5 +1,6 @@
 import numpy as np
 
+from cablp.funcs._cross import charge_ex_react
 from cablp.vars._cons import ev_to_erg
 
 from .flux import ion_sound_speed
@@ -153,6 +154,129 @@ def ion_neutral_drag_rhs(
         M=drag,
         Ee=zeros.copy(),
         Ei=zeros.copy(),
+    )
+
+
+def ion_neutral_elastic_frequency(
+    nn,
+    Ti,
+    ion_mass_g,
+    gas_type,
+    sigma_in_cm2=5.0e-15,
+):
+    """Return the elastic (non-CX) ion-neutral momentum-transfer frequency [s^-1].
+
+    ``nu_el = max(nu_in - nu_cx, 0)`` where ``nu_in`` is the total (``sigma_in``)
+    momentum-transfer rate and ``nu_cx = nn * <sigma v>_cx`` is the resonant
+    charge-exchange rate shared with the ``Q_cx`` energy term.
+    """
+    nu_in = ion_neutral_collision_frequency(
+        nn=nn,
+        Ti=Ti,
+        ion_mass_g=ion_mass_g,
+        sigma_in_cm2=sigma_in_cm2,
+    )
+    nu_cx = np.asarray(nn, dtype=float) * charge_ex_react(Ti, gas_type)
+    return np.maximum(nu_in - nu_cx, 0.0)
+
+
+def ion_neutral_frictional_heating_rhs(
+    state,
+    floors,
+    ion_mass_g,
+    gas_type,
+    sigma_in_cm2=5.0e-15,
+    b_ion_neutral_drag=1.0,
+):
+    """Return the conservative ion frictional-heating energy source.
+
+    Elastic ion-neutral collisions thermalize the flow's directed energy; for
+    equal masses half of the dissipated drift energy heats the ions, giving the
+    ``Ei`` source ``+(1/2) m_i * nu_el(Ti) * n * u^2`` [erg cm^-3 s^-1]. The
+    charge-exchange fraction carries its energy off with the fast neutral and is
+    excluded via ``nu_el = nu_in - nu_cx``.
+    """
+    zeros = np.zeros_like(state.n, dtype=float)
+    if b_ion_neutral_drag == 0.0:
+        return ConservativeState1D(
+            n=zeros,
+            nn=zeros.copy(),
+            M=zeros.copy(),
+            Ee=zeros.copy(),
+            Ei=zeros.copy(),
+        )
+    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
+    nu_el = ion_neutral_elastic_frequency(
+        nn=state.nn,
+        Ti=derived.Ti,
+        ion_mass_g=ion_mass_g,
+        gas_type=gas_type,
+        sigma_in_cm2=sigma_in_cm2,
+    )
+    q_fric = (
+        0.5
+        * float(b_ion_neutral_drag)
+        * ion_mass_g
+        * nu_el
+        * state.n
+        * derived.u**2
+    )
+    return ConservativeState1D(
+        n=zeros,
+        nn=zeros.copy(),
+        M=zeros.copy(),
+        Ee=zeros.copy(),
+        Ei=q_fric,
+    )
+
+
+def ion_neutral_thermalization_rhs(
+    state,
+    floors,
+    ion_mass_g,
+    gas_type,
+    Tn_fit=0.1,
+    sigma_in_cm2=5.0e-15,
+    b_ion_neutral_drag=1.0,
+):
+    """Return the conservative elastic ion-neutral thermal-equilibration source.
+
+    Elastic collisions relax ``Ti`` toward the neutral temperature at the elastic
+    rate, giving the ``Ei`` source ``+(3/2) nu_el(Ti) * n * (Tn - Ti)``
+    [erg cm^-3 s^-1]. This is the elastic companion to the CX ``Q_cx`` cooling and
+    is gated separately by the ``ion_neutral_thermalization`` flag.
+    """
+    zeros = np.zeros_like(state.n, dtype=float)
+    if b_ion_neutral_drag == 0.0:
+        return ConservativeState1D(
+            n=zeros,
+            nn=zeros.copy(),
+            M=zeros.copy(),
+            Ee=zeros.copy(),
+            Ei=zeros.copy(),
+        )
+    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
+    nu_el = ion_neutral_elastic_frequency(
+        nn=state.nn,
+        Ti=derived.Ti,
+        ion_mass_g=ion_mass_g,
+        gas_type=gas_type,
+        sigma_in_cm2=sigma_in_cm2,
+    )
+    q_eq = (
+        1.5
+        * float(b_ion_neutral_drag)
+        * nu_el
+        * state.n
+        * (float(Tn_fit) - derived.Ti)
+        * ev_to_erg
+    )
+    return ConservativeState1D(
+        n=zeros,
+        nn=zeros.copy(),
+        M=zeros.copy(),
+        Ee=zeros.copy(),
+        Ei=q_eq,
     )
 
 
