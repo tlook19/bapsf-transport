@@ -1662,6 +1662,7 @@ class LAPDSim1D:
             state=state,
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
+            gas_type=self._gas_type,
             **self._ion_neutral_drag_kwargs(),
         )
 
@@ -2281,6 +2282,7 @@ class LAPDSim1D:
                 if drag_enabled
                 else 0.0
             ),
+            "cx_only": bool(self._flags.get("ion_neutral_drag_cx_only", False)),
         }
 
     def _electron_cooling_kwargs(self):
