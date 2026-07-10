@@ -56,7 +56,7 @@ $$\frac{3}{2}\,n\,\frac{DT_e}{Dt} = -\,p_e\,\nabla\!\cdot\mathbf{u} \;+\; \nabla
 **5. Ion energy** (`physics/sources.py`, `physics/conduction.py`,
 `physics/energy.py`)
 
-$$\frac{3}{2}\,n\,\frac{DT_i}{Dt} = -\,p_i\,\nabla\!\cdot\mathbf{u} \;+\; \nabla\!\cdot\!\big(\kappa_{\parallel i}\nabla T_i\big) \;+\; Q_{ie} \;-\; Q_{cx} \;+\; \tfrac{3}{2}\big(T_{i,\text{birth}} - T_i\big)S_{iz}$$
+$$\frac{3}{2}\,n\,\frac{DT_i}{Dt} = -\,p_i\,\nabla\!\cdot\mathbf{u} \;+\; \nabla\!\cdot\!\big(\kappa_{\parallel i}\nabla T_i\big) \;+\; Q_{ie} \;-\; Q_{cx} \;+\; Q_{\text{fric}} \;+\; Q_{\text{eq,el}} \;+\; \tfrac{3}{2}\big(T_{i,\text{birth}} - T_i\big)S_{iz}$$
 
 ## Energy source glossary
 
@@ -70,6 +70,16 @@ $$\frac{3}{2}\,n\,\frac{DT_i}{Dt} = -\,p_i\,\nabla\!\cdot\mathbf{u} \;+\; \nabla
   ($\propto n^2$).
 - $Q_{cx}$ — ion charge-exchange energy loss to neutrals (relaxes
   $T_i \to T_n$).
+- $Q_{\text{fric}} = \tfrac12 m_i\,\nu_{el}\,n\,u^2$ — **elastic ion-neutral
+  frictional heating**: for equal masses, half the drift energy dissipated by the
+  elastic collision fraction heats the ions (the charge-exchange fraction instead
+  carries its energy off with the fast neutral). Uses the elastic rate
+  $\nu_{el} = \max(\nu_{in} - \nu_{cx},\,0)$ with $\nu_{cx} = n_n\langle\sigma
+  v\rangle_{cx}$; shares the `ion_neutral_drag` flag and `b_ion_neutral_drag`
+  scale.
+- $Q_{\text{eq,el}} = \tfrac32\,\nu_{el}\,n\,(T_n - T_i)$ — **elastic thermal
+  equilibration** (the elastic companion to $Q_{cx}$), gated separately by the
+  `ion_neutral_thermalization` flag (default off).
 - $\tfrac32(T_\text{birth} - T)\,S_{iz}$ — thermal cost of injecting
   freshly-ionized particles at the birth temperature (vanishes for the default
   `birth="local"` electron choice).

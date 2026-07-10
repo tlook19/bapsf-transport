@@ -462,6 +462,7 @@ input_flags_template_1d = {
     "source_surface_loss": True,
     "end_surface_loss": True,
     "ion_neutral_drag": True,
+    "ion_neutral_thermalization": False,
     "cathode_coupling": True,
     "neutral_prebreakdown": True,
     "neutral_equilibration": False,

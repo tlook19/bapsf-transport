@@ -55,6 +55,8 @@ from .physics.reactions import reaction_rhs, reaction_rhs_terms
 from .physics.sources import (
     add_state_rhs,
     ion_neutral_drag_rhs,
+    ion_neutral_frictional_heating_rhs,
+    ion_neutral_thermalization_rhs,
     pressure_work_rhs,
     surface_neutralization_rhs,
 )
@@ -531,6 +533,8 @@ class LAPDSim1D:
                 "electron_neutral_cooling": self._zero_rhs_state(),
                 "ion_charge_exchange": self._zero_rhs_state(),
                 "ion_neutral_drag": self._zero_rhs_state(),
+                "ion_neutral_frictional_heating": self._zero_rhs_state(),
+                "ion_neutral_thermalization": self._zero_rhs_state(),
                 "surface_loss": self._zero_rhs_state(),
                 "cathode_surface_loss": self._zero_rhs_state(),
                 "neutral_exchange": self.neutral_exchange_rhs(state=state),
@@ -579,6 +583,12 @@ class LAPDSim1D:
             ],
             "ion_charge_exchange": self.ion_charge_exchange_rhs(state=state),
             "ion_neutral_drag": self.ion_neutral_drag_rhs(state=state),
+            "ion_neutral_frictional_heating": (
+                self.ion_neutral_frictional_heating_rhs(state=state)
+            ),
+            "ion_neutral_thermalization": (
+                self.ion_neutral_thermalization_rhs(state=state)
+            ),
             "surface_loss": self.surface_neutralization_rhs(state=state),
             "cathode_surface_loss": self.cathode_source_terms(
                 state=state,
@@ -1652,6 +1662,33 @@ class LAPDSim1D:
             state=state,
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
+            **self._ion_neutral_drag_kwargs(),
+        )
+
+    def ion_neutral_frictional_heating_rhs(self, y=None, state=None):
+        """Return the elastic ion-neutral frictional-heating energy source."""
+        if state is None:
+            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        return ion_neutral_frictional_heating_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            gas_type=self._gas_type,
+            **self._ion_neutral_drag_kwargs(),
+        )
+
+    def ion_neutral_thermalization_rhs(self, y=None, state=None):
+        """Return the elastic ion-neutral thermal-equilibration energy source."""
+        if state is None:
+            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        if not self._flags.get("ion_neutral_thermalization", False):
+            return self._zero_rhs_state()
+        return ion_neutral_thermalization_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            gas_type=self._gas_type,
+            Tn_fit=float(self._input_dict.get("Tn_fit", 0.1)),
             **self._ion_neutral_drag_kwargs(),
         )
 
