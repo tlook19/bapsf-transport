@@ -46,7 +46,11 @@ $$m_i\,n\,\frac{D\mathbf{u}}{Dt} = -\,\nabla p \;-\; m_i\,\mathbf{u}\,S_{iz} \;-
   frequency
   $$\nu_{in}(T_i) = \frac{8}{3}\,n_n\,\sigma_{in}\,\sqrt{\frac{T_i}{\pi\,m_i}}, \qquad \sigma_{in} = 5\times10^{-15}\ \text{cm}^2.$$
   Toggled by the `ion_neutral_drag` flag and scaled by `b_ion_neutral_drag`;
-  $\sigma_{in}$ is the `sigma_in_cm2` parameter.
+  $\sigma_{in}$ is the `sigma_in_cm2` parameter. Setting the
+  `ion_neutral_drag_cx_only` flag drives the drag with the resonant
+  charge-exchange rate $\nu_{cx} = n_n\langle\sigma v\rangle_{cx}$ instead of
+  $\nu_{in}$; in that mode the elastic fraction $\nu_{el}\to0$, so the
+  $Q_{\text{fric}}$ and $Q_{\text{eq,el}}$ ion-energy terms below vanish.
 
 **4. Electron energy** (`physics/sources.py`, `physics/conduction.py`,
 `physics/energy.py`)
