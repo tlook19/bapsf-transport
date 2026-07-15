@@ -659,8 +659,9 @@ class LAPDSim1D:
                 y_next = ssprk2_step(
                     y0=self._y,
                     dt=dt,
-                    rhs_func=self.rhs,
+                    rhs_func=lambda yy, tt: self.rhs(yy, time=tt),
                     floor_func=self.floor_state_vector,
+                    time=self._time,
                 )
             candidate_cache = self._step_cache_snapshot()
         finally:
@@ -931,8 +932,13 @@ class LAPDSim1D:
         explicit_y = ssprk2_step(
             y0=y0,
             dt=dt,
-            rhs_func=lambda yy: self.rhs(yy, include_heat_conduction=False),
+            rhs_func=lambda yy, tt: self.rhs(
+                yy,
+                include_heat_conduction=False,
+                time=tt,
+            ),
             floor_func=self.floor_state_vector,
+            time=self._time,
         )
         heat_state = self.implicit_heat_conduction_step(dt=dt, y=explicit_y)
         return self.floor_state_vector(pack_state(heat_state))
