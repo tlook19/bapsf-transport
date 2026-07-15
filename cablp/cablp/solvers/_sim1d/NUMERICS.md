@@ -51,15 +51,49 @@ Local (cell-wise) RHS contributions, all in `physics/`:
 
 - **Explicit path** (default, `core/integrator.py`): a **two-stage strong
   stability preserving Runge–Kutta (SSPRK2 / Heun)** step,
-  `y¹ = floor(y⁰ + Δt·L(y⁰))`,
-  `yⁿ⁺¹ = floor(½y⁰ + ½(y¹ + Δt·L(y¹)))`,
-  with floors applied at each stage.
+  `y¹ = floor(y⁰ + Δt·L(tⁿ, y⁰))`,
+  `yⁿ⁺¹ = floor(½y⁰ + ½(y¹ + Δt·L(tⁿ+Δt, y¹)))`,
+  with floors applied at each stage. The stages are evaluated at `tⁿ` and
+  `tⁿ+Δt`, which preserves second-order accuracy for explicitly time-dependent
+  forcing such as the gas-puff schedule. `ssprk2_step` freezes the forcing at
+  the step start when its `time` argument is omitted, which is only
+  first-order accurate in that forcing.
 - **Operator-split path** (optional, `implicit_heat_conduction` flag /
   `--operator-split`): Lie splitting — one explicit SSPRK2 step over all
-  **non-heat** terms, followed by a **backward-Euler** implicit heat-conduction
-  substep (`implicit_heat_conduction_step`) solved per species as a tridiagonal
-  system via `scipy.linalg.solve_banded`. This removes the stiff parabolic
+  **non-heat** terms, followed by an implicit heat-conduction substep
+  (`implicit_heat_conduction_step`) solved per species as a tridiagonal system
+  via `scipy.linalg.solve_banded`. This removes the stiff parabolic
   heat-conduction stability limit from the explicit timestep.
+
+  The substep is a **theta method**,
+  `(C + θ·Δt·K)·Tⁿ⁺¹ = C·Tⁿ − (1−θ)·Δt·K·Tⁿ`, selected by the
+  `implicit_heat_scheme` parameter:
+
+  | `implicit_heat_scheme` | θ | `R(−∞)` | substep order |
+  |------------------------|-----|--------|---------------|
+  | `backward_euler` (default) | 1   | 0    | 1 |
+  | `shifted`                  | 0.6 | −2/3 | 1 |
+  | `crank_nicolson`           | 0.5 | −1   | 2 |
+
+  The explicit half is assembled from `conductive_face_flux` /
+  `flux_divergence_rhs`, which is exactly `−K·Tⁿ` built from the same face
+  coefficients as the implicit operator, so both halves stay consistent by
+  construction. θ=1 keeps the right-hand side at the raw conservative energy
+  and reproduces the original backward-Euler solve bit-for-bit.
+
+  Only θ=1 is **L-stable**. There `C + Δt·K` is an M-matrix whose rows sum to
+  `C` (since `K·1 = 0`), giving a discrete maximum principle `Tⁿ⁺¹ ≥ min(Tⁿ)`:
+  backward Euler is unconditionally monotone and *cannot* undershoot the
+  temperature floors. For θ<1 the amplification factor tends to `−(1−θ)/θ` as
+  `Δt·λ → −∞`, so stiff modes ring — undamped at θ=1/2 — and can be clipped by
+  the floor, which silently injects energy. See
+  `scripts/audit_sim1d_floor_activation.py` for measuring whether that actually
+  happens for a given configuration.
+
+  Conductivity is frozen at the incoming state for every θ, and the splitting
+  is Lie rather than Strang, so the split step stays first-order overall no
+  matter which scheme is selected; θ<1 reduces the substep's error constant
+  rather than raising the global order.
 - **Neutral-only / prebreakdown path**: when plasma is disabled (or during
   neutral prebreakdown/equilibration), neutrals are advanced with an implicit
   (backward-Euler) linear solve over exchange, pumping, and gas-puff terms

@@ -1894,6 +1894,10 @@ class LAPDSim1D:
             mu=self._mu,
             geometry=self._geometry,
             dt=dt,
+            implicit_heat_scheme=self._input_dict.get(
+                "implicit_heat_scheme",
+                "backward_euler",
+            ),
             **self._heat_conduction_kwargs(),
         )
 
