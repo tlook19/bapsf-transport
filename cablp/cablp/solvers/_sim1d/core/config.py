@@ -244,6 +244,16 @@ def model_mode_defaults():
     neutral_exchange_model:
         Neutral axial exchange model. Options are ``"constant"`` and
         ``"molecular_flow"``.
+    implicit_heat_scheme:
+        Time-discretization of the implicit heat-conduction substep used by the
+        operator-split path (``implicit_heat_conduction`` flag). Options are
+        ``"backward_euler"`` (theta=1; the only L-stable choice, and
+        unconditionally monotone so it cannot undershoot the temperature
+        floors), ``"crank_nicolson"`` (theta=1/2; second-order in the substep
+        but leaves stiff modes ringing at undamped amplitude), and ``"shifted"``
+        (theta=0.6; first-order with roughly a fifth of backward Euler's error
+        constant, and damps ringing by ~2/3 per step). Ignored when the
+        operator-split path is disabled.
     """
     return {
         "front_flux_model": "sonic_relaxation",
@@ -253,6 +263,7 @@ def model_mode_defaults():
         "Te_birth_ionization": "local",
         "Ti_birth_ionization": "floor",
         "neutral_exchange_model": "molecular_flow",
+        "implicit_heat_scheme": "backward_euler",
     }
 
 
