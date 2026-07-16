@@ -65,15 +65,16 @@ Local (cell-wise) RHS contributions, all in `physics/`:
   via `scipy.linalg.solve_banded`. This removes the stiff parabolic
   heat-conduction stability limit from the explicit timestep.
 
-  The substep is a **theta method**,
-  `(C + θ·Δt·K)·Tⁿ⁺¹ = C·Tⁿ − (1−θ)·Δt·K·Tⁿ`, selected by the
-  `implicit_heat_scheme` parameter:
+  The substep discretization is selected by the `implicit_heat_scheme`
+  parameter. Three of the four are **theta methods**, solving
+  `(C + θ·Δt·K)·Tⁿ⁺¹ = C·Tⁿ − (1−θ)·Δt·K·Tⁿ`:
 
-  | `implicit_heat_scheme` | θ | `R(−∞)` | substep order |
-  |------------------------|-----|--------|---------------|
-  | `backward_euler` (default) | 1   | 0    | 1 |
-  | `shifted`                  | 0.6 | −2/3 | 1 |
-  | `crank_nicolson`           | 0.5 | −1   | 2 |
+  | `implicit_heat_scheme` | θ | `R(−∞)` | L-stable | solves | substep order |
+  |------------------------|-----|--------|----------|--------|---------------|
+  | `backward_euler` (default) | 1   | 0    | yes | 1 | 1 |
+  | `shifted`                  | 0.6 | −2/3 | no  | 1 | 1 |
+  | `crank_nicolson`           | 0.5 | −1   | no  | 1 | 2 |
+  | `tr_bdf2`                  | —   | 0    | yes | 2 | 2 |
 
   The explicit half is assembled from `conductive_face_flux` /
   `flux_divergence_rhs`, which is exactly `−K·Tⁿ` built from the same face
@@ -81,19 +82,40 @@ Local (cell-wise) RHS contributions, all in `physics/`:
   construction. θ=1 keeps the right-hand side at the raw conservative energy
   and reproduces the original backward-Euler solve bit-for-bit.
 
-  Only θ=1 is **L-stable**. There `C + Δt·K` is an M-matrix whose rows sum to
-  `C` (since `K·1 = 0`), giving a discrete maximum principle `Tⁿ⁺¹ ≥ min(Tⁿ)`:
-  backward Euler is unconditionally monotone and *cannot* undershoot the
-  temperature floors. For θ<1 the amplification factor tends to `−(1−θ)/θ` as
-  `Δt·λ → −∞`, so stiff modes ring — undamped at θ=1/2 — and can be clipped by
-  the floor, which silently injects energy. See
+  Among the theta methods only θ=1 is **L-stable**. There `C + Δt·K` is an
+  M-matrix whose rows sum to `C` (since `K·1 = 0`), giving a discrete maximum
+  principle `Tⁿ⁺¹ ≥ min(Tⁿ)`: backward Euler is unconditionally monotone and
+  *cannot* undershoot the temperature floors. For θ<1 the amplification factor
+  tends to `−(1−θ)/θ` as `Δt·λ → −∞`, so stiff modes ring — undamped at θ=1/2 —
+  and can be clipped by the floor, which silently injects energy. See
   `scripts/audit_sim1d_floor_activation.py` for measuring whether that actually
   happens for a given configuration.
 
-  Conductivity is frozen at the incoming state for every θ, and the splitting
-  is Lie rather than Strang, so the split step stays first-order overall no
-  matter which scheme is selected; θ<1 reduces the substep's error constant
-  rather than raising the global order.
+  `tr_bdf2` (Bank et al. 1985) is second-order *and* L-stable: a trapezoidal
+  stage out to `tⁿ + γΔt` followed by a BDF2 stage through `(Tⁿ, T_γ, Tⁿ⁺¹)`,
+  with `γ = 2 − √2`. That γ makes the two stages share an implicit coefficient
+  (`γ/2 = (1−γ)/(2−γ) ≈ 0.2929`) and hence one banded operator, so the cost is
+  two `solve_banded` calls against a single matrix. The trapezoidal stage rings
+  exactly as Crank–Nicolson does; the BDF2 stage annihilates what it leaves
+  behind. It is *not* monotone the way backward Euler is — it damps undershoot
+  rather than preventing it.
+
+  **Conductivity is frozen at the incoming state for every scheme, and this —
+  not the scheme — is what caps the substep at first order.** Measured
+  self-convergence of the substep, on a fixed conductivity versus the live
+  Braginskii `κ ∝ T^{5/2}`:
+
+  | scheme | order, κ fixed (linear) | order, κ frozen at `Tⁿ` |
+  |--------|------------------------|--------------------------|
+  | `backward_euler` | 1.02 | 1.03 |
+  | `shifted`        | 1.01 | 1.03 |
+  | `crank_nicolson` | 2.00 | 1.05 |
+  | `tr_bdf2`        | 2.02 | 1.06 |
+
+  So a second-order scheme buys a smaller error constant (~6× versus backward
+  Euler) but not a higher order until `κ` is evaluated at the midpoint, e.g. by
+  Picard iteration. The splitting is Lie rather than Strang, which is a second
+  independent first-order term at the whole-step level.
 - **Neutral-only / prebreakdown path**: when plasma is disabled (or during
   neutral prebreakdown/equilibration), neutrals are advanced with an implicit
   (backward-Euler) linear solve over exchange, pumping, and gas-puff terms

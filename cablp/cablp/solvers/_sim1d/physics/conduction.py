@@ -7,7 +7,11 @@ from cablp.vars._cons import ev_to_erg
 
 from ..core.state import ConservativeState1D, derive_state
 
-# Theta weights for the implicit heat substep. The substep solves
+# Named discretizations for the implicit heat substep, which advances
+#   C dT/dt = -K T
+# with the conductivity inside K frozen at the incoming state.
+#
+# Theta methods solve
 #   (C + theta*dt*K) T_new = C*T_old - (1 - theta)*dt*K*T_old
 # so theta=1 is backward Euler and theta=1/2 is Crank-Nicolson. Only theta=1 is
 # L-stable: the amplification factor tends to -(1 - theta)/theta as dt*lambda
@@ -20,9 +24,34 @@ IMPLICIT_HEAT_SCHEME_THETA = {
     "crank_nicolson": 0.5,
 }
 
+# TR-BDF2 (Bank, Coughran, Fichtner, Grosse, Rose & Smith 1985): a trapezoidal
+# stage out to t + gamma*dt, then a BDF2 stage through (T_old, T_gamma, T_new).
+# Second-order AND L-stable -- the trapezoidal stage rings exactly as
+# Crank-Nicolson does, and the BDF2 stage annihilates what it leaves behind, so
+# R(-inf) = 0 instead of -1. gamma = 2 - sqrt(2) is chosen to make the two
+# stages share an implicit coefficient, gamma/2 == (1 - gamma)/(2 - gamma), and
+# therefore share one banded operator.
+TR_BDF2 = "tr_bdf2"
+_TR_BDF2_GAMMA = 2.0 - np.sqrt(2.0)
+_TR_BDF2_IMPLICIT = _TR_BDF2_GAMMA / 2.0
+_TR_BDF2_A = 1.0 / (_TR_BDF2_GAMMA * (2.0 - _TR_BDF2_GAMMA))
+_TR_BDF2_B = -((1.0 - _TR_BDF2_GAMMA) ** 2) / (_TR_BDF2_GAMMA * (2.0 - _TR_BDF2_GAMMA))
+
+IMPLICIT_HEAT_SCHEMES = (*IMPLICIT_HEAT_SCHEME_THETA, TR_BDF2)
+
+
+def validate_implicit_heat_scheme(scheme):
+    """Return ``scheme`` unchanged if it names an implemented heat scheme."""
+    if scheme not in IMPLICIT_HEAT_SCHEMES:
+        raise ValueError(
+            "implicit_heat_scheme must be one of "
+            f"{sorted(IMPLICIT_HEAT_SCHEMES)} (got {scheme!r})"
+        )
+    return scheme
+
 
 def resolve_implicit_heat_theta(scheme):
-    """Return the theta weight for a named implicit heat-conduction scheme."""
+    """Return the theta weight for a named theta-method heat scheme."""
     try:
         return IMPLICIT_HEAT_SCHEME_THETA[scheme]
     except (KeyError, TypeError):
@@ -175,15 +204,16 @@ def implicit_heat_conduction_step(
 ):
     """Return a state after one frozen-conductivity implicit heat step.
 
-    ``implicit_heat_scheme`` selects the theta weight via
-    ``IMPLICIT_HEAT_SCHEME_THETA``. Conductivity is frozen at the incoming
-    state regardless of theta, so schemes below theta=1 improve the substep's
-    truncation error but do not by themselves make the split step second-order
-    accurate in time.
+    ``implicit_heat_scheme`` names one of ``IMPLICIT_HEAT_SCHEMES``: a theta
+    method (``backward_euler``, ``shifted``, ``crank_nicolson``) or ``tr_bdf2``.
+    Conductivity is frozen at the incoming state for every scheme, so a
+    higher-order substep improves that substep's truncation error but does not
+    by itself make the split step second-order accurate in time -- the frozen
+    conductivity and the Lie splitting are both first-order regardless.
     """
     if dt <= 0.0:
         raise ValueError(f"dt must be positive (got {dt})")
-    theta = resolve_implicit_heat_theta(implicit_heat_scheme)
+    scheme = validate_implicit_heat_scheme(implicit_heat_scheme)
     if not heat_conduction or (b_epara == 0.0 and b_ipara == 0.0):
         return ConservativeState1D(
             n=state.n.copy(),
@@ -212,7 +242,7 @@ def implicit_heat_conduction_step(
         * float(b_epara),
         geometry=geometry,
         dt=dt,
-        theta=theta,
+        scheme=scheme,
     )
     Ei = _implicit_species_energy(
         energy=state.Ei,
@@ -229,7 +259,7 @@ def implicit_heat_conduction_step(
         * float(b_ipara),
         geometry=geometry,
         dt=dt,
-        theta=theta,
+        scheme=scheme,
     )
     return ConservativeState1D(
         n=state.n.copy(),
@@ -264,42 +294,122 @@ def _implicit_species_energy(
     conductivity,
     geometry,
     dt,
-    theta=1.0,
+    scheme="backward_euler",
 ):
     energy = np.asarray(energy, dtype=float)
+    kwargs = dict(
+        energy=energy,
+        capacity=capacity,
+        temperature_floor=temperature_floor,
+        conductivity=conductivity,
+        geometry=geometry,
+        dt=dt,
+    )
+    if scheme == TR_BDF2:
+        temperature = _tr_bdf2_temperature(**kwargs)
+    else:
+        temperature = _theta_temperature(
+            theta=resolve_implicit_heat_theta(scheme),
+            **kwargs,
+        )
+    # The single point at which the floor is applied, for every scheme.
+    # scripts/audit_sim1d_floor_activation.py recovers the pre-clip temperature
+    # by calling this function with temperature_floor=-inf, which only stays
+    # valid while this remains the one place the floor is enforced.
+    temperature = np.maximum(temperature, temperature_floor)
+    return capacity * temperature
+
+
+def _theta_temperature(
+    energy,
+    capacity,
+    temperature_floor,
+    conductivity,
+    geometry,
+    dt,
+    theta,
+):
     # The implicit operator carries theta*dt; the remaining (1 - theta)*dt of
     # the conduction is applied explicitly on the right-hand side below.
+    banded = _banded_heat_operator(capacity, conductivity, geometry, theta * dt)
+    rhs = energy
+    if theta != 1.0:
+        # _conductive_divergence is exactly -K*T_old over the same face
+        # coefficients as the implicit operator, so the explicit and implicit
+        # halves stay consistent by construction. theta=1 keeps rhs as the raw
+        # conservative energy, reproducing the original backward-Euler solve
+        # bit-for-bit.
+        rhs = energy + (1.0 - theta) * dt * _conductive_divergence(
+            np.maximum(energy / capacity, temperature_floor),
+            conductivity,
+            geometry,
+        )
+    return solve_banded((1, 1), banded, rhs)
+
+
+def _tr_bdf2_temperature(
+    energy,
+    capacity,
+    temperature_floor,
+    conductivity,
+    geometry,
+    dt,
+):
+    old_temperature = np.maximum(energy / capacity, temperature_floor)
+    # Both stages share this operator -- that is what gamma = 2 - sqrt(2) buys.
+    banded = _banded_heat_operator(
+        capacity,
+        conductivity,
+        geometry,
+        _TR_BDF2_IMPLICIT * dt,
+    )
+    # Stage 1: trapezoidal rule out to t + gamma*dt, i.e. Crank-Nicolson over a
+    # step of gamma*dt, whose implicit weight is (gamma/2)*dt = _TR_BDF2_IMPLICIT*dt.
+    gamma_temperature = solve_banded(
+        (1, 1),
+        banded,
+        energy
+        + _TR_BDF2_IMPLICIT
+        * dt
+        * _conductive_divergence(old_temperature, conductivity, geometry),
+    )
+    # Stage 2: BDF2 through (T_old, T_gamma, T_new). The right-hand side needs
+    # no flux evaluation -- it is just a blend of two known temperatures, and
+    # _TR_BDF2_A + _TR_BDF2_B == 1 so a uniform temperature is preserved.
+    # T_gamma is deliberately left unfloored: clipping between stages would
+    # break the scheme's order, and the caller applies the floor once at the end.
+    return solve_banded(
+        (1, 1),
+        banded,
+        capacity * (_TR_BDF2_A * gamma_temperature + _TR_BDF2_B * old_temperature),
+    )
+
+
+def _banded_heat_operator(capacity, conductivity, geometry, dt):
+    """Return ``C + dt*K`` in scipy banded form."""
     lower, diagonal, upper = _implicit_heat_diagonals(
         capacity=capacity,
         conductivity=conductivity,
         geometry=geometry,
-        dt=theta * dt,
+        dt=dt,
     )
     banded = np.zeros((3, geometry.cells), dtype=float)
     banded[0, 1:] = upper
     banded[1, :] = diagonal
     banded[2, :-1] = lower
+    return banded
 
-    rhs = energy
-    if theta != 1.0:
-        # flux_divergence_rhs(conductive_face_flux(...)) is exactly -K*T_old,
-        # built from the same face coefficients as _implicit_heat_diagonals, so
-        # the explicit and implicit halves stay consistent by construction.
-        # theta=1 keeps rhs as the raw conservative energy, reproducing the
-        # previous backward-Euler solve bit-for-bit.
-        old_temperature = np.maximum(energy / capacity, temperature_floor)
-        rhs = energy + (1.0 - theta) * dt * flux_divergence_rhs(
-            conductive_face_flux(
-                temperature=old_temperature,
-                conductivity=conductivity,
-                geometry=geometry,
-            ),
-            geometry,
-        )
 
-    temperature = solve_banded((1, 1), banded, rhs)
-    temperature = np.maximum(temperature, temperature_floor)
-    return capacity * temperature
+def _conductive_divergence(temperature, conductivity, geometry):
+    """Return ``-K*T`` for the frozen-conductivity operator [erg cm^-3 s^-1]."""
+    return flux_divergence_rhs(
+        conductive_face_flux(
+            temperature=temperature,
+            conductivity=conductivity,
+            geometry=geometry,
+        ),
+        geometry,
+    )
 
 
 def _implicit_heat_diagonals(capacity, conductivity, geometry, dt):

@@ -247,13 +247,15 @@ def model_mode_defaults():
     implicit_heat_scheme:
         Time-discretization of the implicit heat-conduction substep used by the
         operator-split path (``implicit_heat_conduction`` flag). Options are
-        ``"backward_euler"`` (theta=1; the only L-stable choice, and
-        unconditionally monotone so it cannot undershoot the temperature
-        floors), ``"crank_nicolson"`` (theta=1/2; second-order in the substep
-        but leaves stiff modes ringing at undamped amplitude), and ``"shifted"``
-        (theta=0.6; first-order with roughly a fifth of backward Euler's error
-        constant, and damps ringing by ~2/3 per step). Ignored when the
-        operator-split path is disabled.
+        ``"backward_euler"`` (theta=1; unconditionally monotone, so it cannot
+        undershoot the temperature floors), ``"crank_nicolson"`` (theta=1/2;
+        second-order in the substep but leaves stiff modes ringing at undamped
+        amplitude), ``"shifted"`` (theta=0.6; first-order with roughly a fifth
+        of backward Euler's error constant, and damps ringing by ~2/3 per
+        step), and ``"tr_bdf2"`` (a trapezoidal stage followed by a BDF2 stage;
+        second-order *and* L-stable, so it rings far less than Crank-Nicolson
+        at twice the solve cost, though it is not monotone like backward
+        Euler). Ignored when the operator-split path is disabled.
     """
     return {
         "front_flux_model": "sonic_relaxation",
