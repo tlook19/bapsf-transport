@@ -32,7 +32,7 @@ import numpy as np
 import cablp.solvers._sim1d.core.state as state_mod
 import cablp.solvers._sim1d.physics.conduction as conduction_mod
 from cablp.solvers._sim1d import LAPDSim1D, ProgressPrinter1D, default_config
-from cablp.solvers._sim1d.physics.conduction import IMPLICIT_HEAT_SCHEME_THETA
+from cablp.solvers._sim1d.physics.conduction import IMPLICIT_HEAT_SCHEMES
 from cablp.vars._cons import ev_to_erg
 
 # Overrides mirroring scripts/sim1d_run_and_plot.ipynb (the production run).
@@ -313,7 +313,7 @@ def main(argv=None):
     parser.add_argument(
         "--scheme",
         default="backward_euler",
-        choices=sorted(IMPLICIT_HEAT_SCHEME_THETA),
+        choices=sorted(IMPLICIT_HEAT_SCHEMES),
         help="implicit_heat_scheme for the conduction substep",
     )
     args = parser.parse_args(argv)
