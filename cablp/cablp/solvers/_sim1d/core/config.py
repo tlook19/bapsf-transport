@@ -372,6 +372,19 @@ def cathode_defaults():
 def physics_fit_defaults():
     """Return auxiliary physical fit and neutral transport defaults.
 
+    heat_picard_iterations:
+        Picard iterations used to evaluate the conductivity in the implicit
+        heat-conduction substep. Zero freezes the Braginskii conductivity
+        (roughly proportional to T^2.5) at the incoming state, which is
+        first-order accurate in dt however accurate the substep scheme is, so
+        ``crank_nicolson`` and ``tr_bdf2`` cannot express their second order.
+        A positive value re-evaluates the conductivity at the scheme's own flux
+        evaluation point until the temperature converges, at the cost of one
+        extra banded solve per species per iteration. Note that Lie splitting
+        in the operator-split path is an independent first-order term, so a
+        converged Picard alone does not make the whole step second-order.
+    heat_picard_tol:
+        Relative temperature-change tolerance ending the Picard iteration early.
     ln_lambda_min:
         Minimum Coulomb logarithm used by transport and exchange estimates.
     Tn_K:
@@ -382,6 +395,8 @@ def physics_fit_defaults():
         Scale factor applied to molecular-flow Clausing conductance.
     """
     return {
+        "heat_picard_iterations": 0,
+        "heat_picard_tol": 1e-10,
         "ln_lambda_min": 1.0,
         "Tn_K": 300.0,
         "neutral_exchange_coeff_cm3_s": 1.0e5,

@@ -1898,6 +1898,10 @@ class LAPDSim1D:
                 "implicit_heat_scheme",
                 "backward_euler",
             ),
+            heat_picard_iterations=int(
+                self._input_dict.get("heat_picard_iterations", 0)
+            ),
+            heat_picard_tol=float(self._input_dict.get("heat_picard_tol", 1e-10)),
             **self._heat_conduction_kwargs(),
         )
 

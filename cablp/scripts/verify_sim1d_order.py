@@ -26,21 +26,27 @@ solution:
 A reference-based estimate against a much finer run is reported alongside it as
 a cross-check; the two should agree.
 
-What to expect, as of the frozen-conductivity Lie-split implementation:
+Measured so far, at 62 cells with t_end = 1e-6 s:
 
-    all schemes ~1.0    -- Lie splitting is O(dt) and kappa is frozen at t^n,
-                           so both cap the whole step at first order no matter
-                           how accurate the conduction substep is
-    + midpoint kappa    -- still ~1.0, now limited by Lie splitting alone
-    + Strang            -- ~2.0 for crank_nicolson and tr_bdf2, ~1.0 for
-                           backward_euler and shifted
+    --picard 0   backward_euler 0.97  shifted 1.01  crank_nicolson 1.01  tr_bdf2 1.02
+    --picard 4   backward_euler 0.97  shifted 1.00  crank_nicolson 1.01  tr_bdf2 1.02
 
-Reaching 2.0 for the second-order schemes is the acceptance test for the
-midpoint-kappa and Strang work. A scheme that fails to move is a bug in that
-work, which is the point of building this first.
+Picard does not move the whole step, and that is correct rather than a bug. It
+does fix the conduction substep -- measured on its own against the live
+Braginskii kappa, crank_nicolson goes 1.04 -> 2.00 and tr_bdf2 1.04 -> 2.01 --
+but Lie splitting in ``operator_split_step`` is an independent O(dt) term which
+now caps the step by itself.
+
+Still outstanding:
+
+    + Strang    -- expect ~2.0 for crank_nicolson and tr_bdf2 (with --picard on;
+                   they need both), and ~1.0 for backward_euler and shifted.
+                   Those last two are the negative control: neither can be
+                   second-order, so if either moves, the Strang work is wrong.
 
 Usage:
     python scripts/verify_sim1d_order.py
+    python scripts/verify_sim1d_order.py --picard 4
     python scripts/verify_sim1d_order.py --schemes crank_nicolson tr_bdf2
     python scripts/verify_sim1d_order.py --t-end 2e-6 --base-steps 8
 """
@@ -157,11 +163,12 @@ def seeded_state(sim, amplitude):
     return conservative_from_primitives(n, nn, u, Te, Ti, sim._ion_mass_g)
 
 
-def run_fixed_dt(scheme, nsteps, t_end, amplitude):
+def run_fixed_dt(scheme, nsteps, t_end, amplitude, picard=0):
     """Advance the split step nsteps times at fixed dt; return primitive fields."""
     params, flags = default_config()
     params.update(CLEAN_PARAMS)
     params["implicit_heat_scheme"] = scheme
+    params["heat_picard_iterations"] = picard
     flags.update(CLEAN_FLAGS)
 
     sim = LAPDSim1D(params, flags)
@@ -206,6 +213,12 @@ def main(argv=None):
     parser.add_argument("--base-steps", type=int, default=8)
     parser.add_argument("--amplitude", type=float, default=0.3)
     parser.add_argument(
+        "--picard",
+        type=int,
+        default=0,
+        help="heat_picard_iterations (0 = freeze kappa at the step start)",
+    )
+    parser.add_argument(
         "--ref-factor",
         type=int,
         default=32,
@@ -221,6 +234,7 @@ def main(argv=None):
     print("sim1d SPLIT-STEP TEMPORAL ORDER")
     print("=" * 76)
     print(f"t_end={args.t_end:.2e} s   steps={counts}   reference={ref_steps} steps")
+    print(f"heat_picard_iterations={args.picard}")
     print(f"dt from {args.t_end/counts[0]:.3e} s down to {args.t_end/counts[-1]:.3e} s")
     print("regime: fixed dt, floors inert, single phase, autonomous RHS, no cathode")
 
@@ -228,9 +242,13 @@ def main(argv=None):
     for scheme in args.schemes:
         runs, clips = {}, 0
         for n in counts:
-            runs[n], c = run_fixed_dt(scheme, n, args.t_end, args.amplitude)
+            runs[n], c = run_fixed_dt(
+                scheme, n, args.t_end, args.amplitude, args.picard
+            )
             clips += c
-        ref, c = run_fixed_dt(scheme, ref_steps, args.t_end, args.amplitude)
+        ref, c = run_fixed_dt(
+            scheme, ref_steps, args.t_end, args.amplitude, args.picard
+        )
         clips += c
 
         # Richardson triplet: needs no reference solution.
