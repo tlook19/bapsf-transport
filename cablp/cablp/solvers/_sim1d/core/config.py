@@ -131,7 +131,7 @@ def neutral_source_defaults():
         Number of equivalent gas-puff valves used by the SCCM conversion.
     """
     return {
-        "S_gp": 5500,
+        "S_gp": 6500,
         "Twin_S_gp": 5500,
         "gas_puff_mode": "pulse_decay_to_level",
         "S_gp_decay_target": 1500,
@@ -358,11 +358,11 @@ def cathode_defaults():
         Cathode radius used to compute cathode area [cm].
     """
     return {
-        "V_bank": 100.0,
-        "T_s": 2008,
+        "V_bank": 180.0,
+        "T_s": 1975,
         "phi_wf": 3.0,
         "C_R": 29.0,
-        "R_comp": 0.004,
+        "R_comp": 0.010,
         "eta": 0.358,
         "L_cath": 50.0,
         "R_cath": 18.0,
@@ -479,8 +479,8 @@ input_flags_template_1d = {
     "ion_neutral_thermalization": False,
     "cathode_coupling": True,
     "neutral_prebreakdown": True,
-    "neutral_equilibration": False,
-    "launch_plasma_after_equilibration": False,
+    "neutral_equilibration": True,
+    "launch_plasma_after_equilibration": True,
     "ionization_energy_cost": True,
     "icool": True,
     "ncool": True,
