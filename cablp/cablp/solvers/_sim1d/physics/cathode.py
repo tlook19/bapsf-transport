@@ -556,6 +556,13 @@ def _beam_power_deposition_density(
     solver_result,
     cathode_index,
 ):
+    """Return the beam/ohmic power deposition density [erg cm^-3 s^-1].
+
+    ``P_prim`` is carried into the column by the primary beam and so deposits
+    along the Beer-Lambert absorption profile. ``P_ohmic`` is the ohmic
+    dissipation at the cathode's own boundary cell and deposits there only,
+    rather than being spread along the beam path.
+    """
     beam_cross = beam_result.beam_cross[cathode_index]
     if beam_cross == 0.0:
         return np.zeros(geometry.cells, dtype=float)
@@ -569,12 +576,15 @@ def _beam_power_deposition_density(
         l_b_profile=l_b_profile,
         cathode_index=cathode_index,
     )
-    return (
-        weights
-        * (solver_result.P_prim + solver_result.P_ohmic)
-        * 1.0e7
-        / geometry.plasma_volume_cm3
+    density = (
+        weights * solver_result.P_prim * 1.0e7 / geometry.plasma_volume_cm3
     )
+    density[cathode_index] += (
+        solver_result.P_ohmic
+        * 1.0e7
+        / geometry.plasma_volume_cm3[cathode_index]
+    )
+    return density
 
 
 def _solver_result_metadata(result):
