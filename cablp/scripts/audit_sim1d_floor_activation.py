@@ -50,6 +50,10 @@ PARAM_OVERRIDES = {
     "Rp": 15.0,
     "R_cath": 15.0,
     "R_comp": 0.010,
+    # Mirrors the notebook's time-integration block.
+    "operator_splitting": "strang",
+    "heat_picard_iterations": 2,
+    "heat_picard_tol": 1e-10,
 }
 FLAG_OVERRIDES = {
     # The notebook lists ion_neutral_drag_cx_only under its parameter overrides,
@@ -66,6 +70,11 @@ FLAG_OVERRIDES = {
 # material clips; shallower ones are counted as "resting on the floor", which is
 # benign and physically expected wherever the solution is genuinely cold.
 FLOOR_RTOL = 1e-9
+
+# Injected energy below this fraction of the column thermal energy is reported
+# as negligible. A clip count on its own decides nothing -- what matters is how
+# much energy the clipping launders into the solution.
+NEGLIGIBLE_ENERGY_FRACTION = 1e-6
 
 
 class FloorRecorder:
@@ -300,8 +309,20 @@ def report(recorder, sim, result):
             print(f"  Conduction floor never binds under {scheme!r}.")
             print("  Ringing (if any) stays above the floor: no energy laundered.")
     else:
-        print(f"  Conduction floor DOES bind under {scheme!r}: ringing is being")
-        print("  clipped into a spurious energy source. Prefer a larger theta.")
+        clips = sum(cond["fields"].values())
+        injected = sum(cond["energy_erg"].values())
+        frac = abs(injected) / thermal if thermal else float("inf")
+        print(f"  Conduction floor binds under {scheme!r}: {clips} clips in")
+        print(f"  {cond['calls']} solves, injecting {injected:+.2e} erg")
+        print(f"  = {frac:.1e} of the column thermal energy.")
+        # A clip count alone says nothing about whether it matters: what the
+        # theta choice hinges on is how much energy the clipping launders.
+        if frac < NEGLIGIBLE_ENERGY_FRACTION:
+            print("  That is negligible. Ringing is being clipped, but the energy")
+            print("  it injects is far too small to affect the solution.")
+        else:
+            print("  That is large enough to matter. Prefer a larger theta, or")
+            print("  tr_bdf2, which is L-stable and does not sustain ringing.")
     print("-" * 78)
 
 
