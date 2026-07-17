@@ -263,6 +263,19 @@ def summarize_result(result):
     return _summarize_result(result)
 
 
+OPERATOR_SPLITTINGS = ("lie", "strang")
+
+
+def _validate_operator_splitting(splitting):
+    """Return ``splitting`` unchanged if it names an implemented composition."""
+    if splitting not in OPERATOR_SPLITTINGS:
+        raise ValueError(
+            "operator_splitting must be one of "
+            f"{sorted(OPERATOR_SPLITTINGS)} (got {splitting!r})"
+        )
+    return splitting
+
+
 def _phase_event_arrays(events):
     return {
         "time": np.asarray([event[0] for event in events], dtype=float),
@@ -921,27 +934,66 @@ class LAPDSim1D:
             self._attempt_step(dt=dt, operator_split=operator_split)
         )
 
-    def operator_split_step(self, y=None, dt=None):
-        """Return one explicit-nonheat plus implicit-heat split step."""
+    def operator_split_step(self, y=None, dt=None, splitting=None):
+        """Return one explicit-nonheat plus implicit-heat split step.
+
+        ``splitting`` selects how the non-heat operator A and the heat operator
+        B are composed over the step, defaulting to the ``operator_splitting``
+        parameter:
+
+        ``"lie"``
+            ``A(dt)`` then ``B(dt)``. First-order in dt regardless of how
+            accurate either sub-integrator is, because the splitting error goes
+            as dt*[A,B].
+        ``"strang"``
+            ``B(dt/2)``, ``A(dt)``, ``B(dt/2)``. The symmetry cancels the
+            leading commutator term, leaving O(dt^2). B is the halved operator
+            because it is the cheap one: two banded solves per species against
+            a tridiagonal matrix, versus A's reaction-rate evaluations. So
+            Strang costs one extra heat substep, not one extra explicit step.
+
+        Second-order overall additionally needs the conduction substep itself
+        to be second-order (``implicit_heat_scheme``) with a non-frozen
+        conductivity (``heat_picard_iterations``); Strang alone only removes
+        the splitting term.
+        """
         y0 = self._y if y is None else np.asarray(y, dtype=float)
         if dt is None:
             dt = self.suggest_timestep(
                 y=y0,
                 include_heat_conduction=False,
             ).dt
-        explicit_y = ssprk2_step(
-            y0=y0,
-            dt=dt,
-            rhs_func=lambda yy, tt: self.rhs(
-                yy,
-                include_heat_conduction=False,
-                time=tt,
-            ),
-            floor_func=self.floor_state_vector,
-            time=self._time,
+        if splitting is None:
+            splitting = self._operator_splitting()
+        else:
+            splitting = _validate_operator_splitting(splitting)
+
+        def heat(y_in, sub_dt):
+            state = self.implicit_heat_conduction_step(dt=sub_dt, y=y_in)
+            return self.floor_state_vector(pack_state(state))
+
+        def explicit(y_in, sub_dt):
+            return ssprk2_step(
+                y0=y_in,
+                dt=sub_dt,
+                rhs_func=lambda yy, tt: self.rhs(
+                    yy,
+                    include_heat_conduction=False,
+                    time=tt,
+                ),
+                floor_func=self.floor_state_vector,
+                time=self._time,
+            )
+
+        if splitting == "strang":
+            half = 0.5 * dt
+            return heat(explicit(heat(y0, half), dt), half)
+        return heat(explicit(y0, dt), dt)
+
+    def _operator_splitting(self):
+        return _validate_operator_splitting(
+            self._input_dict.get("operator_splitting", "lie")
         )
-        heat_state = self.implicit_heat_conduction_step(dt=dt, y=explicit_y)
-        return self.floor_state_vector(pack_state(heat_state))
 
     def advance_one_step_operator_split(self, dt=None):
         """Advance by explicit non-heat terms then implicit heat conduction."""

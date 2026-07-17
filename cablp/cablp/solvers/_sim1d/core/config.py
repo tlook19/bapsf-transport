@@ -244,6 +244,18 @@ def model_mode_defaults():
     neutral_exchange_model:
         Neutral axial exchange model. Options are ``"constant"`` and
         ``"molecular_flow"``.
+    operator_splitting:
+        How the operator-split path composes the explicit non-heat operator A
+        with the implicit heat operator B. ``"lie"`` does ``A(dt)`` then
+        ``B(dt)`` and is first-order in dt however accurate the two
+        sub-integrators are, because the splitting error goes as dt*[A,B].
+        ``"strang"`` does ``B(dt/2)``, ``A(dt)``, ``B(dt/2)``, whose symmetry
+        cancels that leading term and leaves O(dt^2), at the cost of one extra
+        heat substep per step -- B is halved rather than A because it is the
+        cheap operator. Second-order overall also requires a second-order
+        ``implicit_heat_scheme`` and a positive ``heat_picard_iterations``;
+        Strang alone only removes the splitting term. Ignored when the
+        operator-split path is disabled.
     implicit_heat_scheme:
         Time-discretization of the implicit heat-conduction substep used by the
         operator-split path (``implicit_heat_conduction`` flag). Options are
@@ -265,6 +277,7 @@ def model_mode_defaults():
         "Te_birth_ionization": "local",
         "Ti_birth_ionization": "floor",
         "neutral_exchange_model": "molecular_flow",
+        "operator_splitting": "lie",
         "implicit_heat_scheme": "backward_euler",
     }
 
