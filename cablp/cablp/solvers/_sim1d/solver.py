@@ -54,6 +54,9 @@ from .physics.neutrals import (
 from .physics.reactions import reaction_rhs, reaction_rhs_terms
 from .physics.sources import (
     add_state_rhs,
+    ion_neutral_drag_rhs,
+    ion_neutral_frictional_heating_rhs,
+    ion_neutral_thermalization_rhs,
     pressure_work_rhs,
     surface_neutralization_rhs,
 )
@@ -260,6 +263,19 @@ def summarize_result(result):
     return _summarize_result(result)
 
 
+OPERATOR_SPLITTINGS = ("lie", "strang")
+
+
+def _validate_operator_splitting(splitting):
+    """Return ``splitting`` unchanged if it names an implemented composition."""
+    if splitting not in OPERATOR_SPLITTINGS:
+        raise ValueError(
+            "operator_splitting must be one of "
+            f"{sorted(OPERATOR_SPLITTINGS)} (got {splitting!r})"
+        )
+    return splitting
+
+
 def _phase_event_arrays(events):
     return {
         "time": np.asarray([event[0] for event in events], dtype=float),
@@ -338,6 +354,7 @@ def _timestep_limiters(diag, count=3):
         ("electron_cooling", diag.dt_electron_cooling),
         ("ion_charge_exchange", diag.dt_ion_charge_exchange),
         ("heat_conduction", diag.dt_heat_conduction),
+        ("ion_neutral_drag", diag.dt_ion_neutral_drag),
         ("dt_max", diag.dt_max),
     )
     finite = [
@@ -528,6 +545,9 @@ class LAPDSim1D:
                 "electron_ion_cooling": self._zero_rhs_state(),
                 "electron_neutral_cooling": self._zero_rhs_state(),
                 "ion_charge_exchange": self._zero_rhs_state(),
+                "ion_neutral_drag": self._zero_rhs_state(),
+                "ion_neutral_frictional_heating": self._zero_rhs_state(),
+                "ion_neutral_thermalization": self._zero_rhs_state(),
                 "surface_loss": self._zero_rhs_state(),
                 "cathode_surface_loss": self._zero_rhs_state(),
                 "neutral_exchange": self.neutral_exchange_rhs(state=state),
@@ -575,6 +595,13 @@ class LAPDSim1D:
                 "electron_neutral_cooling"
             ],
             "ion_charge_exchange": self.ion_charge_exchange_rhs(state=state),
+            "ion_neutral_drag": self.ion_neutral_drag_rhs(state=state),
+            "ion_neutral_frictional_heating": (
+                self.ion_neutral_frictional_heating_rhs(state=state)
+            ),
+            "ion_neutral_thermalization": (
+                self.ion_neutral_thermalization_rhs(state=state)
+            ),
             "surface_loss": self.surface_neutralization_rhs(state=state),
             "cathode_surface_loss": self.cathode_source_terms(
                 state=state,
@@ -645,8 +672,9 @@ class LAPDSim1D:
                 y_next = ssprk2_step(
                     y0=self._y,
                     dt=dt,
-                    rhs_func=self.rhs,
+                    rhs_func=lambda yy, tt: self.rhs(yy, time=tt),
                     floor_func=self.floor_state_vector,
+                    time=self._time,
                 )
             candidate_cache = self._step_cache_snapshot()
         finally:
@@ -906,22 +934,66 @@ class LAPDSim1D:
             self._attempt_step(dt=dt, operator_split=operator_split)
         )
 
-    def operator_split_step(self, y=None, dt=None):
-        """Return one explicit-nonheat plus implicit-heat split step."""
+    def operator_split_step(self, y=None, dt=None, splitting=None):
+        """Return one explicit-nonheat plus implicit-heat split step.
+
+        ``splitting`` selects how the non-heat operator A and the heat operator
+        B are composed over the step, defaulting to the ``operator_splitting``
+        parameter:
+
+        ``"lie"``
+            ``A(dt)`` then ``B(dt)``. First-order in dt regardless of how
+            accurate either sub-integrator is, because the splitting error goes
+            as dt*[A,B].
+        ``"strang"``
+            ``B(dt/2)``, ``A(dt)``, ``B(dt/2)``. The symmetry cancels the
+            leading commutator term, leaving O(dt^2). B is the halved operator
+            because it is the cheap one: two banded solves per species against
+            a tridiagonal matrix, versus A's reaction-rate evaluations. So
+            Strang costs one extra heat substep, not one extra explicit step.
+
+        Second-order overall additionally needs the conduction substep itself
+        to be second-order (``implicit_heat_scheme``) with a non-frozen
+        conductivity (``heat_picard_iterations``); Strang alone only removes
+        the splitting term.
+        """
         y0 = self._y if y is None else np.asarray(y, dtype=float)
         if dt is None:
             dt = self.suggest_timestep(
                 y=y0,
                 include_heat_conduction=False,
             ).dt
-        explicit_y = ssprk2_step(
-            y0=y0,
-            dt=dt,
-            rhs_func=lambda yy: self.rhs(yy, include_heat_conduction=False),
-            floor_func=self.floor_state_vector,
+        if splitting is None:
+            splitting = self._operator_splitting()
+        else:
+            splitting = _validate_operator_splitting(splitting)
+
+        def heat(y_in, sub_dt):
+            state = self.implicit_heat_conduction_step(dt=sub_dt, y=y_in)
+            return self.floor_state_vector(pack_state(state))
+
+        def explicit(y_in, sub_dt):
+            return ssprk2_step(
+                y0=y_in,
+                dt=sub_dt,
+                rhs_func=lambda yy, tt: self.rhs(
+                    yy,
+                    include_heat_conduction=False,
+                    time=tt,
+                ),
+                floor_func=self.floor_state_vector,
+                time=self._time,
+            )
+
+        if splitting == "strang":
+            half = 0.5 * dt
+            return heat(explicit(heat(y0, half), dt), half)
+        return heat(explicit(y0, dt), dt)
+
+    def _operator_splitting(self):
+        return _validate_operator_splitting(
+            self._input_dict.get("operator_splitting", "lie")
         )
-        heat_state = self.implicit_heat_conduction_step(dt=dt, y=explicit_y)
-        return self.floor_state_vector(pack_state(heat_state))
 
     def advance_one_step_operator_split(self, dt=None):
         """Advance by explicit non-heat terms then implicit heat conduction."""
@@ -1422,6 +1494,9 @@ class LAPDSim1D:
                 else None
             ),
             surface_loss_kwargs=self._surface_loss_kwargs() if plasma_enabled else None,
+            ion_neutral_drag_kwargs=(
+                self._ion_neutral_drag_kwargs() if plasma_enabled else None
+            ),
             cfl=float(self._input_dict.get("cfl", 0.4)),
             density_dt_fraction=float(
                 self._input_dict.get("density_dt_fraction", 0.25)
@@ -1430,6 +1505,7 @@ class LAPDSim1D:
                 self._input_dict.get("neutral_dt_fraction", 0.25)
             ),
             heat_dt_fraction=float(self._input_dict.get("heat_dt_fraction", 0.25)),
+            drag_dt_fraction=float(self._input_dict.get("drag_dt_fraction", 0.5)),
             dt_min=dt_min,
             dt_max=dt_max,
             include_front=plasma_enabled and self._flags.get("front_flux", True),
@@ -1459,6 +1535,7 @@ class LAPDSim1D:
                 dt_electron_cooling=np.inf,
                 dt_ion_charge_exchange=np.inf,
                 dt_heat_conduction=np.inf,
+                dt_ion_neutral_drag=np.inf,
                 active_constraint=active_constraint,
             )
         phase, _ = self._phase_info(time)
@@ -1633,6 +1710,45 @@ class LAPDSim1D:
             mu=self._mu,
             geometry=self._geometry,
             **self._surface_loss_kwargs(),
+        )
+
+    def ion_neutral_drag_rhs(self, y=None, state=None):
+        """Return the conservative ion-neutral drag momentum sink."""
+        if state is None:
+            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        return ion_neutral_drag_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            gas_type=self._gas_type,
+            **self._ion_neutral_drag_kwargs(),
+        )
+
+    def ion_neutral_frictional_heating_rhs(self, y=None, state=None):
+        """Return the elastic ion-neutral frictional-heating energy source."""
+        if state is None:
+            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        return ion_neutral_frictional_heating_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            gas_type=self._gas_type,
+            **self._ion_neutral_drag_kwargs(),
+        )
+
+    def ion_neutral_thermalization_rhs(self, y=None, state=None):
+        """Return the elastic ion-neutral thermal-equilibration energy source."""
+        if state is None:
+            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        if not self._flags.get("ion_neutral_thermalization", False):
+            return self._zero_rhs_state()
+        return ion_neutral_thermalization_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            gas_type=self._gas_type,
+            Tn_fit=float(self._input_dict.get("Tn_fit", 0.1)),
+            **self._ion_neutral_drag_kwargs(),
         )
 
     def energy_exchange_rhs(self, y=None, state=None):
@@ -1830,6 +1946,14 @@ class LAPDSim1D:
             mu=self._mu,
             geometry=self._geometry,
             dt=dt,
+            implicit_heat_scheme=self._input_dict.get(
+                "implicit_heat_scheme",
+                "backward_euler",
+            ),
+            heat_picard_iterations=int(
+                self._input_dict.get("heat_picard_iterations", 0)
+            ),
+            heat_picard_tol=float(self._input_dict.get("heat_picard_tol", 1e-10)),
             **self._heat_conduction_kwargs(),
         )
 
@@ -2213,6 +2337,18 @@ class LAPDSim1D:
             ),
             "end_mode": self._input_dict.get("end_mode", "collector"),
             "b_surface_loss": float(self._input_dict.get("b_surface_loss", 1.0)),
+        }
+
+    def _ion_neutral_drag_kwargs(self):
+        drag_enabled = bool(self._flags.get("ion_neutral_drag", True))
+        return {
+            "sigma_in_cm2": float(self._input_dict.get("sigma_in_cm2", 5.0e-15)),
+            "b_ion_neutral_drag": (
+                float(self._input_dict.get("b_ion_neutral_drag", 1.0))
+                if drag_enabled
+                else 0.0
+            ),
+            "cx_only": bool(self._flags.get("ion_neutral_drag_cx_only", False)),
         }
 
     def _electron_cooling_kwargs(self):

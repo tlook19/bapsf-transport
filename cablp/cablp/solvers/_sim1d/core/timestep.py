@@ -11,7 +11,10 @@ from ..physics.energy import (
 from ..physics.flux import ion_sound_speed, plasma_flux_rhs
 from ..physics.neutrals import neutral_exchange_rhs, neutral_source_sink_rhs
 from ..physics.reactions import reaction_rhs
-from ..physics.sources import surface_neutralization_rhs
+from ..physics.sources import (
+    ion_neutral_collision_frequency,
+    surface_neutralization_rhs,
+)
 from .state import derive_state
 
 
@@ -28,6 +31,7 @@ class TimestepDiagnostics:
     dt_electron_cooling: float
     dt_ion_charge_exchange: float
     dt_heat_conduction: float
+    dt_ion_neutral_drag: float
     dt_max: float
     active_constraint: str
     accepted_dt: float = np.nan
@@ -55,10 +59,12 @@ def suggest_timestep(
     ion_charge_exchange_kwargs=None,
     heat_conduction_kwargs=None,
     surface_loss_kwargs=None,
+    ion_neutral_drag_kwargs=None,
     cfl=0.4,
     density_dt_fraction=0.25,
     neutral_dt_fraction=0.25,
     heat_dt_fraction=0.25,
+    drag_dt_fraction=0.5,
     dt_min=1e-12,
     dt_max=1e-6,
     include_front=True,
@@ -151,6 +157,13 @@ def suggest_timestep(
             heat_conduction_kwargs=heat_conduction_kwargs,
             heat_dt_fraction=heat_dt_fraction,
         ),
+        "ion_neutral_drag": ion_neutral_drag_timestep(
+            state=state,
+            floors=floors,
+            ion_mass_g=ion_mass_g,
+            ion_neutral_drag_kwargs=ion_neutral_drag_kwargs,
+            drag_dt_fraction=drag_dt_fraction,
+        ),
         "dt_max": float(dt_max),
     }
     active_constraint, raw_dt = min(dt_candidates.items(), key=lambda item: item[1])
@@ -169,6 +182,7 @@ def suggest_timestep(
         dt_electron_cooling=float(dt_candidates["electron_cooling"]),
         dt_ion_charge_exchange=float(dt_candidates["ion_charge_exchange"]),
         dt_heat_conduction=float(dt_candidates["heat_conduction"]),
+        dt_ion_neutral_drag=float(dt_candidates["ion_neutral_drag"]),
         dt_max=float(dt_max),
         active_constraint=active_constraint,
     )
@@ -258,6 +272,40 @@ def surface_loss_timestep(
         _fractional_timestep(state.Ee, rhs.Ee, density_dt_fraction, 0.0),
         _fractional_timestep(state.Ei, rhs.Ei, density_dt_fraction, 0.0),
     )
+
+
+def ion_neutral_drag_timestep(
+    state,
+    floors,
+    ion_mass_g,
+    ion_neutral_drag_kwargs=None,
+    drag_dt_fraction=0.5,
+):
+    """Return an explicit-stability timestep for ion-neutral drag damping.
+
+    The drag damps the flow at rate ``nu_in``; the accepted step keeps
+    ``dt * max(nu_in)`` below ``drag_dt_fraction``.
+    """
+    if ion_neutral_drag_kwargs is None:
+        return np.inf
+    if drag_dt_fraction <= 0.0:
+        raise ValueError(
+            f"drag_dt_fraction must be positive (got {drag_dt_fraction})"
+        )
+    b_ion_neutral_drag = ion_neutral_drag_kwargs.get("b_ion_neutral_drag", 1.0)
+    if b_ion_neutral_drag == 0.0:
+        return np.inf
+    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
+    nu_in = ion_neutral_collision_frequency(
+        nn=state.nn,
+        Ti=derived.Ti,
+        ion_mass_g=ion_mass_g,
+        sigma_in_cm2=ion_neutral_drag_kwargs.get("sigma_in_cm2", 5.0e-15),
+    )
+    nu_max = float(np.max(np.abs(nu_in))) * abs(float(b_ion_neutral_drag))
+    if nu_max <= 0.0:
+        return np.inf
+    return drag_dt_fraction / nu_max
 
 
 def neutral_exchange_timestep(

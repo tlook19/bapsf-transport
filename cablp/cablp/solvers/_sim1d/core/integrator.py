@@ -19,16 +19,32 @@ def add_scaled_vector(y, rhs, scale):
     return np.asarray(y, dtype=float) + scale * np.asarray(rhs, dtype=float)
 
 
-def ssprk2_step(y0, dt, rhs_func, floor_func):
-    """Advance one explicit SSPRK2 step with stage-end floor enforcement."""
+def _call_rhs(rhs_func, y, time):
+    """Evaluate ``rhs_func`` at ``y``, passing ``time`` only when supplied."""
+    if time is None:
+        return np.asarray(rhs_func(y), dtype=float)
+    return np.asarray(rhs_func(y, time), dtype=float)
+
+
+def ssprk2_step(y0, dt, rhs_func, floor_func, time=None):
+    """Advance one explicit SSPRK2 step with stage-end floor enforcement.
+
+    When ``time`` is given, the two Heun stages are evaluated at ``time`` and
+    ``time + dt`` and ``rhs_func`` is called as ``rhs_func(y, stage_time)``.
+    This keeps second-order accuracy for explicitly time-dependent forcing
+    (e.g. the gas-puff schedule). When ``time`` is ``None`` the stage time is
+    omitted and ``rhs_func`` is called as ``rhs_func(y)``, which freezes any
+    such forcing at the step start and is only first-order accurate in it.
+    """
     if dt <= 0.0:
         raise ValueError(f"dt must be positive (got {dt})")
 
     y0 = np.asarray(y0, dtype=float)
-    k0 = np.asarray(rhs_func(y0), dtype=float)
+    k0 = _call_rhs(rhs_func, y0, time)
     y1 = floor_func(add_scaled_vector(y0, k0, dt))
 
-    k1 = np.asarray(rhs_func(y1), dtype=float)
+    stage_time = None if time is None else float(time) + float(dt)
+    k1 = _call_rhs(rhs_func, y1, stage_time)
     y2_raw = 0.5 * y0 + 0.5 * add_scaled_vector(y1, k1, dt)
     return floor_func(y2_raw)
 

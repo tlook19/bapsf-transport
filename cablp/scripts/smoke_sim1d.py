@@ -452,18 +452,34 @@ def main():
         l_b_profile=cathode_solve.beam_result.l_b_profile,
         cathode_index=0,
     )
+    # P_prim is carried into the column by the beam and so follows the
+    # Beer-Lambert absorption profile. P_ohmic dissipates at the cathode's own
+    # boundary cell and deposits there only, rather than along the beam path.
     expected_beam_power_density = (
         beam_weights
-        * (
-            cathode_solve.beam_result.result.P_prim
-            + cathode_solve.beam_result.result.P_ohmic
-        )
+        * cathode_solve.beam_result.result.P_prim
         * 1.0e7
         / geom.plasma_volume_cm3
+    )
+    expected_beam_power_density[0] += (
+        cathode_solve.beam_result.result.P_ohmic
+        * 1.0e7
+        / geom.plasma_volume_cm3[0]
     )
     assert np.allclose(
         split_beam_terms["beam_power_deposition"].Ee,
         expected_beam_power_density,
+    )
+    # The ohmic power must be entirely in the source cell: away from it, the
+    # deposition is the beam profile alone.
+    assert np.allclose(
+        split_beam_terms["beam_power_deposition"].Ee[1:],
+        (
+            beam_weights[1:]
+            * cathode_solve.beam_result.result.P_prim
+            * 1.0e7
+            / geom.plasma_volume_cm3[1:]
+        ),
     )
     assert np.allclose(
         split_beam_terms["beam_ionization_cost"].Ee,
@@ -616,21 +632,36 @@ def main():
         l_b_profile=twin_cathode_solve.beam_result.l_b_profile_twin,
         cathode_index=-1,
     )
+    # Each cathode's P_prim follows its own Beer-Lambert profile; each
+    # cathode's P_ohmic lands only in that cathode's boundary cell -- the source
+    # cathode's in cell 0, the twin's in cell -1.
     expected_twin_beam_power_density = (
-        twin_source_weights
-        * (
-            twin_cathode_solve.beam_result.result.P_prim
-            + twin_cathode_solve.beam_result.result.P_ohmic
-        )
-        + twin_end_weights
-        * (
-            twin_cathode_solve.beam_result.result_twin.P_prim
-            + twin_cathode_solve.beam_result.result_twin.P_ohmic
-        )
+        twin_source_weights * twin_cathode_solve.beam_result.result.P_prim
+        + twin_end_weights * twin_cathode_solve.beam_result.result_twin.P_prim
     ) * 1.0e7 / geom.plasma_volume_cm3
+    expected_twin_beam_power_density[0] += (
+        twin_cathode_solve.beam_result.result.P_ohmic
+        * 1.0e7
+        / geom.plasma_volume_cm3[0]
+    )
+    expected_twin_beam_power_density[-1] += (
+        twin_cathode_solve.beam_result.result_twin.P_ohmic
+        * 1.0e7
+        / geom.plasma_volume_cm3[-1]
+    )
     assert np.allclose(
         twin_beam_terms["beam_power_deposition"].Ee,
         expected_twin_beam_power_density,
+    )
+    # Interior cells see only the two beam profiles, no ohmic contribution.
+    assert np.allclose(
+        twin_beam_terms["beam_power_deposition"].Ee[1:-1],
+        (
+            twin_source_weights[1:-1] * twin_cathode_solve.beam_result.result.P_prim
+            + twin_end_weights[1:-1] * twin_cathode_solve.beam_result.result_twin.P_prim
+        )
+        * 1.0e7
+        / geom.plasma_volume_cm3[1:-1],
     )
     assert np.allclose(
         twin_beam_terms["beam_ionization_cost"].Ee,
@@ -1399,6 +1430,9 @@ def main():
         "electron_ion_cooling",
         "electron_neutral_cooling",
         "ion_charge_exchange",
+        "ion_neutral_drag",
+        "ion_neutral_frictional_heating",
+        "ion_neutral_thermalization",
         "surface_loss",
         "cathode_surface_loss",
         "neutral_exchange",

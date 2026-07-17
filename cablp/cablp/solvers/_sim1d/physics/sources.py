@@ -1,5 +1,6 @@
 import numpy as np
 
+from cablp.funcs._cross import charge_ex_react
 from cablp.vars._cons import ev_to_erg
 
 from .flux import ion_sound_speed
@@ -104,6 +105,228 @@ def surface_neutralization_rhs(
 
 def _cell_surface_particle_loss(n, Te, mu, area_cm2, alpha_isat):
     return float(alpha_isat) * n * ion_sound_speed(Te, mu) * area_cm2
+
+
+def ion_neutral_collision_frequency(nn, Ti, ion_mass_g, sigma_in_cm2=5.0e-15):
+    """Return the ion-neutral momentum-transfer collision frequency [s^-1].
+
+    ``nu_in = (8/3) * nn * sigma_in * sqrt(Ti / (pi * m_i))`` with ``Ti`` in eV
+    (converted to erg here), ``m_i`` in grams, and ``sigma_in`` in cm^2, so the
+    thermal-speed factor is in cm/s and ``nu_in`` in s^-1.
+    """
+    v_thi = np.sqrt(np.asarray(Ti, dtype=float) * ev_to_erg / (np.pi * ion_mass_g))
+    return (8.0 / 3.0) * np.asarray(nn, dtype=float) * float(sigma_in_cm2) * v_thi
+
+
+def ion_neutral_cx_frequency(nn, Ti, gas_type):
+    """Return the resonant charge-exchange collision frequency [s^-1].
+
+    ``nu_cx = nn * <sigma v>_cx(Ti)`` using the same rate table as the ``Q_cx``
+    energy term.
+    """
+    return np.asarray(nn, dtype=float) * charge_ex_react(Ti, gas_type)
+
+
+def ion_neutral_momentum_frequency(
+    nn,
+    Ti,
+    ion_mass_g,
+    gas_type,
+    sigma_in_cm2=5.0e-15,
+    cx_only=False,
+):
+    """Return the ion-neutral momentum-transfer frequency [s^-1].
+
+    With ``cx_only=False`` this is the total rate ``nu_in`` from ``sigma_in``.
+    With ``cx_only=True`` the drag is driven purely by the resonant
+    charge-exchange rate ``nu_cx`` (the same rate the ``Q_cx`` energy term uses),
+    for which there is no elastic momentum transfer.
+    """
+    if cx_only:
+        return ion_neutral_cx_frequency(nn=nn, Ti=Ti, gas_type=gas_type)
+    return ion_neutral_collision_frequency(
+        nn=nn,
+        Ti=Ti,
+        ion_mass_g=ion_mass_g,
+        sigma_in_cm2=sigma_in_cm2,
+    )
+
+
+def ion_neutral_drag_rhs(
+    state,
+    floors,
+    ion_mass_g,
+    gas_type,
+    sigma_in_cm2=5.0e-15,
+    b_ion_neutral_drag=1.0,
+    cx_only=False,
+):
+    """Return the conservative ion-neutral drag momentum sink.
+
+    The drag force density is ``-m_i * nu(Ti) * n * u`` [g cm^-2 s^-2], a
+    friction on the plasma flow from collisions with the neutral background.
+    ``nu`` is the total momentum-transfer rate, or the charge-exchange-only rate
+    when ``cx_only`` is set. Only the momentum field is affected.
+    """
+    zeros = np.zeros_like(state.n, dtype=float)
+    if b_ion_neutral_drag == 0.0:
+        return ConservativeState1D(
+            n=zeros,
+            nn=zeros.copy(),
+            M=zeros.copy(),
+            Ee=zeros.copy(),
+            Ei=zeros.copy(),
+        )
+    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
+    nu = ion_neutral_momentum_frequency(
+        nn=state.nn,
+        Ti=derived.Ti,
+        ion_mass_g=ion_mass_g,
+        gas_type=gas_type,
+        sigma_in_cm2=sigma_in_cm2,
+        cx_only=cx_only,
+    )
+    drag = -float(b_ion_neutral_drag) * ion_mass_g * nu * state.n * derived.u
+    return ConservativeState1D(
+        n=zeros,
+        nn=zeros.copy(),
+        M=drag,
+        Ee=zeros.copy(),
+        Ei=zeros.copy(),
+    )
+
+
+def ion_neutral_elastic_frequency(
+    nn,
+    Ti,
+    ion_mass_g,
+    gas_type,
+    sigma_in_cm2=5.0e-15,
+    cx_only=False,
+):
+    """Return the elastic (non-CX) ion-neutral momentum-transfer frequency [s^-1].
+
+    ``nu_el = max(nu_in - nu_cx, 0)`` where ``nu_in`` is the total (``sigma_in``)
+    momentum-transfer rate and ``nu_cx = nn * <sigma v>_cx`` is the resonant
+    charge-exchange rate shared with the ``Q_cx`` energy term. When ``cx_only``
+    is set the drag carries no elastic fraction, so ``nu_el = 0``.
+    """
+    if cx_only:
+        return np.zeros_like(np.asarray(nn, dtype=float))
+    nu_in = ion_neutral_collision_frequency(
+        nn=nn,
+        Ti=Ti,
+        ion_mass_g=ion_mass_g,
+        sigma_in_cm2=sigma_in_cm2,
+    )
+    nu_cx = ion_neutral_cx_frequency(nn=nn, Ti=Ti, gas_type=gas_type)
+    return np.maximum(nu_in - nu_cx, 0.0)
+
+
+def ion_neutral_frictional_heating_rhs(
+    state,
+    floors,
+    ion_mass_g,
+    gas_type,
+    sigma_in_cm2=5.0e-15,
+    b_ion_neutral_drag=1.0,
+    cx_only=False,
+):
+    """Return the conservative ion frictional-heating energy source.
+
+    Elastic ion-neutral collisions thermalize the flow's directed energy; for
+    equal masses half of the dissipated drift energy heats the ions, giving the
+    ``Ei`` source ``+(1/2) m_i * nu_el(Ti) * n * u^2`` [erg cm^-3 s^-1]. The
+    charge-exchange fraction carries its energy off with the fast neutral and is
+    excluded via ``nu_el = nu_in - nu_cx``; when ``cx_only`` is set there is no
+    elastic fraction so this source vanishes.
+    """
+    zeros = np.zeros_like(state.n, dtype=float)
+    if b_ion_neutral_drag == 0.0:
+        return ConservativeState1D(
+            n=zeros,
+            nn=zeros.copy(),
+            M=zeros.copy(),
+            Ee=zeros.copy(),
+            Ei=zeros.copy(),
+        )
+    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
+    nu_el = ion_neutral_elastic_frequency(
+        nn=state.nn,
+        Ti=derived.Ti,
+        ion_mass_g=ion_mass_g,
+        gas_type=gas_type,
+        sigma_in_cm2=sigma_in_cm2,
+        cx_only=cx_only,
+    )
+    q_fric = (
+        0.5
+        * float(b_ion_neutral_drag)
+        * ion_mass_g
+        * nu_el
+        * state.n
+        * derived.u**2
+    )
+    return ConservativeState1D(
+        n=zeros,
+        nn=zeros.copy(),
+        M=zeros.copy(),
+        Ee=zeros.copy(),
+        Ei=q_fric,
+    )
+
+
+def ion_neutral_thermalization_rhs(
+    state,
+    floors,
+    ion_mass_g,
+    gas_type,
+    Tn_fit=0.1,
+    sigma_in_cm2=5.0e-15,
+    b_ion_neutral_drag=1.0,
+    cx_only=False,
+):
+    """Return the conservative elastic ion-neutral thermal-equilibration source.
+
+    Elastic collisions relax ``Ti`` toward the neutral temperature at the elastic
+    rate, giving the ``Ei`` source ``+(3/2) nu_el(Ti) * n * (Tn - Ti)``
+    [erg cm^-3 s^-1]. This is the elastic companion to the CX ``Q_cx`` cooling and
+    is gated separately by the ``ion_neutral_thermalization`` flag; when
+    ``cx_only`` is set there is no elastic fraction so this source vanishes.
+    """
+    zeros = np.zeros_like(state.n, dtype=float)
+    if b_ion_neutral_drag == 0.0:
+        return ConservativeState1D(
+            n=zeros,
+            nn=zeros.copy(),
+            M=zeros.copy(),
+            Ee=zeros.copy(),
+            Ei=zeros.copy(),
+        )
+    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
+    nu_el = ion_neutral_elastic_frequency(
+        nn=state.nn,
+        Ti=derived.Ti,
+        ion_mass_g=ion_mass_g,
+        gas_type=gas_type,
+        sigma_in_cm2=sigma_in_cm2,
+        cx_only=cx_only,
+    )
+    q_eq = (
+        1.5
+        * float(b_ion_neutral_drag)
+        * nu_el
+        * state.n
+        * (float(Tn_fit) - derived.Ti)
+        * ev_to_erg
+    )
+    return ConservativeState1D(
+        n=zeros,
+        nn=zeros.copy(),
+        M=zeros.copy(),
+        Ee=zeros.copy(),
+        Ei=q_eq,
+    )
 
 
 def add_state_rhs(left, right):

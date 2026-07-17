@@ -131,7 +131,7 @@ def neutral_source_defaults():
         Number of equivalent gas-puff valves used by the SCCM conversion.
     """
     return {
-        "S_gp": 5500,
+        "S_gp": 6500,
         "Twin_S_gp": 5500,
         "gas_puff_mode": "pulse_decay_to_level",
         "S_gp_decay_target": 1500,
@@ -244,6 +244,30 @@ def model_mode_defaults():
     neutral_exchange_model:
         Neutral axial exchange model. Options are ``"constant"`` and
         ``"molecular_flow"``.
+    operator_splitting:
+        How the operator-split path composes the explicit non-heat operator A
+        with the implicit heat operator B. ``"lie"`` does ``A(dt)`` then
+        ``B(dt)`` and is first-order in dt however accurate the two
+        sub-integrators are, because the splitting error goes as dt*[A,B].
+        ``"strang"`` does ``B(dt/2)``, ``A(dt)``, ``B(dt/2)``, whose symmetry
+        cancels that leading term and leaves O(dt^2), at the cost of one extra
+        heat substep per step -- B is halved rather than A because it is the
+        cheap operator. Second-order overall also requires a second-order
+        ``implicit_heat_scheme`` and a positive ``heat_picard_iterations``;
+        Strang alone only removes the splitting term. Ignored when the
+        operator-split path is disabled.
+    implicit_heat_scheme:
+        Time-discretization of the implicit heat-conduction substep used by the
+        operator-split path (``implicit_heat_conduction`` flag). Options are
+        ``"backward_euler"`` (theta=1; unconditionally monotone, so it cannot
+        undershoot the temperature floors), ``"crank_nicolson"`` (theta=1/2;
+        second-order in the substep but leaves stiff modes ringing at undamped
+        amplitude), ``"shifted"`` (theta=0.6; first-order with roughly a fifth
+        of backward Euler's error constant, and damps ringing by ~2/3 per
+        step), and ``"tr_bdf2"`` (a trapezoidal stage followed by a BDF2 stage;
+        second-order *and* L-stable, so it rings far less than Crank-Nicolson
+        at twice the solve cost, though it is not monotone like backward
+        Euler). Ignored when the operator-split path is disabled.
     """
     return {
         "front_flux_model": "sonic_relaxation",
@@ -253,6 +277,8 @@ def model_mode_defaults():
         "Te_birth_ionization": "local",
         "Ti_birth_ionization": "floor",
         "neutral_exchange_model": "molecular_flow",
+        "operator_splitting": "lie",
+        "implicit_heat_scheme": "backward_euler",
     }
 
 
@@ -289,6 +315,10 @@ def fudge_factor_defaults():
         Ion pressure-work source scale factor.
     b_surface_loss:
         Plasma surface neutralization/loss scale factor.
+    b_ion_neutral_drag:
+        Ion-neutral drag (friction) momentum-sink scale factor.
+    sigma_in_cm2:
+        Ion-neutral momentum-transfer cross section [cm^2].
     alpha_isat:
         Ion-saturation/surface-loss coefficient.
     source_surface_area_scale:
@@ -312,6 +342,8 @@ def fudge_factor_defaults():
         "b_pressure_work_elec": 1.0,
         "b_pressure_work_ions": 1.0,
         "b_surface_loss": 1.0,
+        "b_ion_neutral_drag": 1.0,
+        "sigma_in_cm2": 5.0e-15,
         "alpha_isat": 0.6065306597126334,
         "source_surface_area_scale": 1.8,
         "end_surface_area_scale": 1.0,
@@ -339,11 +371,11 @@ def cathode_defaults():
         Cathode radius used to compute cathode area [cm].
     """
     return {
-        "V_bank": 100.0,
-        "T_s": 2008,
+        "V_bank": 180.0,
+        "T_s": 1975,
         "phi_wf": 3.0,
         "C_R": 29.0,
-        "R_comp": 0.004,
+        "R_comp": 0.010,
         "eta": 0.358,
         "L_cath": 50.0,
         "R_cath": 18.0,
@@ -353,6 +385,19 @@ def cathode_defaults():
 def physics_fit_defaults():
     """Return auxiliary physical fit and neutral transport defaults.
 
+    heat_picard_iterations:
+        Picard iterations used to evaluate the conductivity in the implicit
+        heat-conduction substep. Zero freezes the Braginskii conductivity
+        (roughly proportional to T^2.5) at the incoming state, which is
+        first-order accurate in dt however accurate the substep scheme is, so
+        ``crank_nicolson`` and ``tr_bdf2`` cannot express their second order.
+        A positive value re-evaluates the conductivity at the scheme's own flux
+        evaluation point until the temperature converges, at the cost of one
+        extra banded solve per species per iteration. Note that Lie splitting
+        in the operator-split path is an independent first-order term, so a
+        converged Picard alone does not make the whole step second-order.
+    heat_picard_tol:
+        Relative temperature-change tolerance ending the Picard iteration early.
     ln_lambda_min:
         Minimum Coulomb logarithm used by transport and exchange estimates.
     Tn_K:
@@ -363,6 +408,8 @@ def physics_fit_defaults():
         Scale factor applied to molecular-flow Clausing conductance.
     """
     return {
+        "heat_picard_iterations": 0,
+        "heat_picard_tol": 1e-10,
         "ln_lambda_min": 1.0,
         "Tn_K": 300.0,
         "neutral_exchange_coeff_cm3_s": 1.0e5,
@@ -455,10 +502,13 @@ input_flags_template_1d = {
     "front_flux": True,
     "source_surface_loss": True,
     "end_surface_loss": True,
+    "ion_neutral_drag": True,
+    "ion_neutral_drag_cx_only": False,
+    "ion_neutral_thermalization": False,
     "cathode_coupling": True,
     "neutral_prebreakdown": True,
-    "neutral_equilibration": False,
-    "launch_plasma_after_equilibration": False,
+    "neutral_equilibration": True,
+    "launch_plasma_after_equilibration": True,
     "ionization_energy_cost": True,
     "icool": True,
     "ncool": True,
