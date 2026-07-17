@@ -26,27 +26,28 @@ solution:
 A reference-based estimate against a much finer run is reported alongside it as
 a cross-check; the two should agree.
 
-Measured so far, at 62 cells with t_end = 1e-6 s:
+Measured at 62 cells with t_end = 1e-6 s, dt from 1.25e-7 down to 3.13e-8:
 
-    --picard 0   backward_euler 0.97  shifted 1.01  crank_nicolson 1.01  tr_bdf2 1.02
-    --picard 4   backward_euler 0.97  shifted 1.00  crank_nicolson 1.01  tr_bdf2 1.02
+    picard  splitting   backward_euler  shifted  crank_nicolson  tr_bdf2
+    ------  ---------   --------------  -------  --------------  -------
+      0       lie            0.97         1.01        1.01         1.02
+      4       lie            0.97         1.00        1.01         1.02
+      0       strang         0.98         0.98        1.04         0.98
+      4       strang         0.99         0.96        1.99         2.00
 
-Picard does not move the whole step, and that is correct rather than a bug. It
-does fix the conduction substep -- measured on its own against the live
-Braginskii kappa, crank_nicolson goes 1.04 -> 2.00 and tr_bdf2 1.04 -> 2.01 --
-but Lie splitting in ``operator_split_step`` is an independent O(dt) term which
-now caps the step by itself.
+Second order needs all three of a second-order substep scheme, a non-frozen
+conductivity, and Strang splitting. Each of the first-order terms caps the step
+on its own, so knocking out only one changes nothing: --picard alone is still
+capped by Lie splitting, and --splitting strang alone is still capped by the
+frozen conductivity. Only the last row has none of them.
 
-Still outstanding:
-
-    + Strang    -- expect ~2.0 for crank_nicolson and tr_bdf2 (with --picard on;
-                   they need both), and ~1.0 for backward_euler and shifted.
-                   Those last two are the negative control: neither can be
-                   second-order, so if either moves, the Strang work is wrong.
+backward_euler and shifted staying at ~1.0 in every row is the negative
+control. Neither can be second-order at any dt, so if either reaches 2.0, the
+harness or the scheme is wrong rather than good.
 
 Usage:
     python scripts/verify_sim1d_order.py
-    python scripts/verify_sim1d_order.py --picard 4
+    python scripts/verify_sim1d_order.py --picard 4 --splitting strang
     python scripts/verify_sim1d_order.py --schemes crank_nicolson tr_bdf2
     python scripts/verify_sim1d_order.py --t-end 2e-6 --base-steps 8
 """
@@ -163,12 +164,13 @@ def seeded_state(sim, amplitude):
     return conservative_from_primitives(n, nn, u, Te, Ti, sim._ion_mass_g)
 
 
-def run_fixed_dt(scheme, nsteps, t_end, amplitude, picard=0):
+def run_fixed_dt(scheme, nsteps, t_end, amplitude, picard=0, splitting="lie"):
     """Advance the split step nsteps times at fixed dt; return primitive fields."""
     params, flags = default_config()
     params.update(CLEAN_PARAMS)
     params["implicit_heat_scheme"] = scheme
     params["heat_picard_iterations"] = picard
+    params["operator_splitting"] = splitting
     flags.update(CLEAN_FLAGS)
 
     sim = LAPDSim1D(params, flags)
@@ -218,6 +220,7 @@ def main(argv=None):
         default=0,
         help="heat_picard_iterations (0 = freeze kappa at the step start)",
     )
+    parser.add_argument("--splitting", default="lie", choices=("lie", "strang"))
     parser.add_argument(
         "--ref-factor",
         type=int,
@@ -234,7 +237,7 @@ def main(argv=None):
     print("sim1d SPLIT-STEP TEMPORAL ORDER")
     print("=" * 76)
     print(f"t_end={args.t_end:.2e} s   steps={counts}   reference={ref_steps} steps")
-    print(f"heat_picard_iterations={args.picard}")
+    print(f"heat_picard_iterations={args.picard}  operator_splitting={args.splitting}")
     print(f"dt from {args.t_end/counts[0]:.3e} s down to {args.t_end/counts[-1]:.3e} s")
     print("regime: fixed dt, floors inert, single phase, autonomous RHS, no cathode")
 
@@ -243,11 +246,12 @@ def main(argv=None):
         runs, clips = {}, 0
         for n in counts:
             runs[n], c = run_fixed_dt(
-                scheme, n, args.t_end, args.amplitude, args.picard
+                scheme, n, args.t_end, args.amplitude, args.picard, args.splitting
             )
             clips += c
         ref, c = run_fixed_dt(
-            scheme, ref_steps, args.t_end, args.amplitude, args.picard
+            scheme, ref_steps, args.t_end, args.amplitude, args.picard,
+            args.splitting,
         )
         clips += c
 

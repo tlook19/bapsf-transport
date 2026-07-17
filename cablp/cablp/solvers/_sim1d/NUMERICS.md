@@ -59,11 +59,19 @@ Local (cell-wise) RHS contributions, all in `physics/`:
   the step start when its `time` argument is omitted, which is only
   first-order accurate in that forcing.
 - **Operator-split path** (optional, `implicit_heat_conduction` flag /
-  `--operator-split`): Lie splitting — one explicit SSPRK2 step over all
-  **non-heat** terms, followed by an implicit heat-conduction substep
-  (`implicit_heat_conduction_step`) solved per species as a tridiagonal system
-  via `scipy.linalg.solve_banded`. This removes the stiff parabolic
-  heat-conduction stability limit from the explicit timestep.
+  `--operator-split`): an explicit SSPRK2 step over all **non-heat** terms
+  (operator `A`) composed with an implicit heat-conduction substep
+  (`implicit_heat_conduction_step`, operator `B`) solved per species as a
+  tridiagonal system via `scipy.linalg.solve_banded`. This removes the stiff
+  parabolic heat-conduction stability limit from the explicit timestep.
+
+  `operator_splitting` selects the composition: `"lie"` (default) does
+  `A(Δt)` then `B(Δt)` and is O(Δt), since the splitting error goes as
+  `Δt·[A,B]`; `"strang"` does `B(Δt/2) → A(Δt) → B(Δt/2)`, whose symmetry
+  cancels that leading commutator term and leaves O(Δt²). `B` is the halved
+  operator because it is the cheap one — banded solves against a tridiagonal
+  matrix, versus `A`'s reaction-rate evaluations — so Strang costs one extra
+  heat substep, not one extra explicit step.
 
   The substep discretization is selected by the `implicit_heat_scheme`
   parameter. Three of the four are **theta methods**, solving
@@ -113,9 +121,34 @@ Local (cell-wise) RHS contributions, all in `physics/`:
   | `tr_bdf2`        | 2.02 | 1.06 |
 
   So a second-order scheme buys a smaller error constant (~6× versus backward
-  Euler) but not a higher order until `κ` is evaluated at the midpoint, e.g. by
-  Picard iteration. The splitting is Lie rather than Strang, which is a second
-  independent first-order term at the whole-step level.
+  Euler) but not a higher order until `κ` is evaluated at the scheme's own flux
+  point, which `heat_picard_iterations` does.
+
+## Measured order of the whole split step
+
+`scripts/verify_sim1d_order.py` measures the observed temporal order of the
+split step by fixed-Δt Richardson refinement, in a deliberately clean regime
+(floors inert and watched, single phase, autonomous RHS, no cathode). At 62
+cells with `t_end = 1e-6 s`:
+
+| `heat_picard_iterations` | `operator_splitting` | `backward_euler` | `shifted` | `crank_nicolson` | `tr_bdf2` |
+|---|---|---|---|---|---|
+| 0 | `lie`    | 0.97 | 1.01 | 1.01 | 1.02 |
+| 4 | `lie`    | 0.97 | 1.00 | 1.01 | 1.02 |
+| 0 | `strang` | 0.98 | 0.98 | 1.04 | 0.98 |
+| 4 | `strang` | 0.99 | 0.96 | **1.99** | **2.00** |
+
+Second order requires **all three** of a second-order `implicit_heat_scheme`, a
+positive `heat_picard_iterations`, and `operator_splitting = "strang"`. The
+frozen conductivity and the Lie splitting are independent first-order terms, so
+each caps the step on its own and removing only one changes nothing.
+`backward_euler` and `shifted` staying at ~1.0 throughout is the negative
+control: neither can be second-order at any Δt.
+
+Note that a **production discharge will not show this**. Floors bind on ~42% of
+cell-visits there and phase transitions are threshold-triggered, so the step
+degrades to first order wherever those engage. The table above verifies the
+scheme, not the production path.
 - **Neutral-only / prebreakdown path**: when plasma is disabled (or during
   neutral prebreakdown/equilibration), neutrals are advanced with an implicit
   (backward-Euler) linear solve over exchange, pumping, and gas-puff terms
