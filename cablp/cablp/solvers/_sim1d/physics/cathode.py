@@ -6,7 +6,11 @@ import numpy as np
 from cablp.funcs._cathode_solver import DeviceConfig, solve_beam_system
 from cablp.vars._cons import ev_to_erg, qe_SI
 
-from ..core.geometry import gap_cell_indices
+from ..core.geometry import (
+    anode_flanking_cells,
+    cathode_adjacent_cells,
+    gap_cell_indices,
+)
 from ..core.state import ConservativeState1D, derive_state
 from .reactions import _birth_temperature
 
@@ -66,6 +70,27 @@ class CathodeSolve1D:
     metadata: dict
 
 
+def cathode_sample_indices(geometry):
+    """Return the ``(source, end)`` cells the cathode circuit samples.
+
+    The cathode solve builds its ion current from the plasma against the cathode
+    surface, so in resolved geometry it must read the *cathode-adjacent* cell --
+    cell ``[0]`` there is the plasma-dead plenum, whose floor density and
+    temperature would drive the circuit with garbage. Legacy geometry has no
+    cathode faces and keeps its source/end cells (§8).
+
+    A twin machine samples both cathodes; otherwise the ``end`` slot is the
+    collector, which is what ``end_mode`` describes.
+    """
+    cathode_cells = cathode_adjacent_cells(geometry)
+    if not cathode_cells:
+        return 0, geometry.cells - 1
+    source_index = int(cathode_cells[0])
+    if len(cathode_cells) > 1:
+        return source_index, int(cathode_cells[-1])
+    return source_index, geometry.cells - 1
+
+
 def cathode_boundary_state(
     state,
     floors,
@@ -76,9 +101,10 @@ def cathode_boundary_state(
 ):
     """Return finite source/end quantities for a future cathode solver adapter."""
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
+    source_index, end_index = cathode_sample_indices(geometry)
     return CathodeBoundaryState1D(
-        source=_cell_state(0, state, derived, geometry),
-        end=_cell_state(geometry.cells - 1, state, derived, geometry),
+        source=_cell_state(source_index, state, derived, geometry),
+        end=_cell_state(end_index, state, derived, geometry),
         enabled=bool(input_flags.get("cathode_coupling", False)),
         mode=input_dict.get("cathode_model", "disabled"),
         end_mode=input_dict.get("end_mode", "collector"),
@@ -260,17 +286,45 @@ def cathode_source_terms(
 
     plasma_loss_rate = dN_loss / geometry.plasma_volume_cm3
     neutral_gain_rate = dN_loss / geometry.neutral_volume_cm3
+    # Sheath electron power: P_cathode_e is lost at the cathode surface and
+    # P_anode_e at the anode mesh (§8). Legacy has neither resolved, so both stay
+    # colocated in its source cell exactly as before; resolved geometry lands each
+    # at its own electrode.
     electron_power_loss_W = zeros.copy()
-    electron_power_loss_W[0] = _electron_power_loss_W(
-        cathode_solve.beam_result.result
-    )
-    if boundary.twin_cathode and cathode_solve.beam_result.result_twin is not None:
-        electron_power_loss_W[-1] = _electron_power_loss_W(
-            cathode_solve.beam_result.result_twin
+    cathode_cells = cathode_adjacent_cells(geometry)
+    anode_pairs = anode_flanking_cells(geometry)
+    if cathode_cells:
+        _deposit_electrode_power(
+            electron_power_loss_W,
+            result=cathode_solve.beam_result.result,
+            cathode_cell=int(cathode_cells[0]),
+            anode_pair=anode_pairs[0] if anode_pairs else None,
+            state=state,
+            derived=derived,
         )
-    # P_cathode_e and P_anode_e are colocated in the 0D source cell for now.
-    # A future resolved 1D source needs these split so each loss lands at the
-    # appropriate cathode/anode location.
+        if (
+            boundary.twin_cathode
+            and cathode_solve.beam_result.result_twin is not None
+        ):
+            _deposit_electrode_power(
+                electron_power_loss_W,
+                result=cathode_solve.beam_result.result_twin,
+                cathode_cell=int(cathode_cells[-1]),
+                anode_pair=anode_pairs[-1] if len(anode_pairs) > 1 else None,
+                state=state,
+                derived=derived,
+            )
+    else:
+        electron_power_loss_W[0] = _electron_power_loss_W(
+            cathode_solve.beam_result.result
+        )
+        if (
+            boundary.twin_cathode
+            and cathode_solve.beam_result.result_twin is not None
+        ):
+            electron_power_loss_W[-1] = _electron_power_loss_W(
+                cathode_solve.beam_result.result_twin
+            )
     electron_power_loss_density = electron_power_loss_W * 1.0e7 / (
         geometry.plasma_volume_cm3
     )
@@ -300,8 +354,30 @@ def cathode_source_terms(
     )
 
 
-def beam_absorption_weights(length_cm, l_b_profile, cathode_index):
-    """Return Beer-Lambert absorbed beam fractions for one cathode."""
+def beam_launch(geometry, end=0):
+    """Return the ``(cell, direction)`` a cathode's beam is launched from.
+
+    The beam starts at the plasma cell against the cathode surface and travels
+    into the machine, so in resolved geometry it must not begin at cell ``[0]``
+    (the plenum) nor deposit into the cells behind the cathode.
+    """
+    cathode_cells = cathode_adjacent_cells(geometry)
+    if not cathode_cells:
+        return (0, 1) if end == 0 else (geometry.cells - 1, -1)
+    if end == 0:
+        return int(cathode_cells[0]), 1
+    return int(cathode_cells[-1]), -1
+
+
+def beam_absorption_weights(length_cm, l_b_profile, cathode_index, direction=None):
+    """Return Beer-Lambert absorbed beam fractions for one cathode.
+
+    The beam is launched from ``cathode_index`` and traverses away from it.
+    ``direction`` is +1 for a beam heading toward increasing z and -1 for the
+    other way; it is inferred for the legacy end cells. Cells *behind* the launch
+    point get zero weight -- in resolved geometry those are the plenum and the
+    obstruction, which the beam never enters (§5).
+    """
     length_cm = np.asarray(length_cm, dtype=float)
     l_b_profile = np.asarray(l_b_profile, dtype=float)
     cells = length_cm.size
@@ -309,14 +385,21 @@ def beam_absorption_weights(length_cm, l_b_profile, cathode_index):
         raise ValueError(
             f"l_b_profile must have shape ({cells},), got {l_b_profile.shape}"
         )
-    if cathode_index == 0:
-        order = np.arange(cells)
-    elif cathode_index in {-1, cells - 1}:
-        order = np.arange(cells - 1, -1, -1)
+    launch = int(cathode_index) % cells
+    if direction is None:
+        if launch == 0:
+            direction = 1
+        elif launch == cells - 1:
+            direction = -1
+        else:
+            raise ValueError(
+                "direction is required when the beam is not launched from an "
+                f"end cell (got cathode_index={cathode_index})"
+            )
+    if direction > 0:
+        order = np.arange(launch, cells)
     else:
-        raise ValueError(
-            f"cathode_index must be 0 or -1/{cells - 1}, got {cathode_index}"
-        )
+        order = np.arange(launch, -1, -1)
 
     l_b_ordered = l_b_profile[order]
     dx_ordered = length_cm[order]
@@ -448,14 +531,14 @@ def _beam_ionization_sources(
         state=state,
         geometry=geometry,
         beam_result=beam_result,
-        cathode_index=0,
+        end=0,
     )
     S_beam += source_profile
     beam_power_density += _beam_power_deposition_density(
         geometry=geometry,
         beam_result=beam_result,
         solver_result=beam_result.result,
-        cathode_index=0,
+        end=0,
         Te=Te,
     )
     if boundary.twin_cathode and beam_result.result_twin is not None:
@@ -463,14 +546,14 @@ def _beam_ionization_sources(
             state=state,
             geometry=geometry,
             beam_result=beam_result,
-            cathode_index=-1,
+            end=-1,
         )
         S_beam += twin_profile
         beam_power_density += _beam_power_deposition_density(
             geometry=geometry,
             beam_result=beam_result,
             solver_result=beam_result.result_twin,
-            cathode_index=-1,
+            end=-1,
             Te=Te,
         )
 
@@ -540,30 +623,64 @@ def _cathode_particle_loss_rate(result, eta):
     return (1.0 + 2.0 * float(eta)) * result.I_i / qe_SI
 
 
+def _deposit_electrode_power(
+    electron_power_loss_W, result, cathode_cell, anode_pair, state, derived
+):
+    """Land P_cathode_e at the cathode cell and P_anode_e at the anode mesh.
+
+    The anode collects on both mesh faces, so its sheath power is split between
+    the two flanking cells in proportion to each face's Bohm collection -- the
+    same weighting ``anode_collection_rhs`` uses, so power and particles are
+    removed on the same side. With no resolved anode the whole of P_anode_e falls
+    back to the cathode cell, which is where the lumped model puts it.
+    """
+    electron_power_loss_W[cathode_cell] += result.P_cathode_e
+    if anode_pair is None:
+        electron_power_loss_W[cathode_cell] += result.P_anode_e
+        return
+    gap_side, column_side = anode_pair
+    # Bohm collection ~ n * c_s, and c_s ~ sqrt(Te/mu) with the same mu on both
+    # sides, so mu cancels in the normalized split.
+    weights = np.array(
+        [
+            state.n[gap_side] * np.sqrt(derived.Te[gap_side]),
+            state.n[column_side] * np.sqrt(derived.Te[column_side]),
+        ],
+        dtype=float,
+    )
+    total = weights.sum()
+    if not np.isfinite(total) or total <= 0.0:
+        weights = np.full(2, 0.5)
+    else:
+        weights = weights / total
+    electron_power_loss_W[gap_side] += weights[0] * result.P_anode_e
+    electron_power_loss_W[column_side] += weights[1] * result.P_anode_e
+
+
 def _electron_power_loss_W(result):
     return result.P_cathode_e + result.P_anode_e
 
 
-def _beam_ionization_profile(state, geometry, beam_result, cathode_index):
-    beam_cross = beam_result.beam_cross[cathode_index]
+def _beam_ionization_profile(state, geometry, beam_result, end=0):
+    launch, direction = beam_launch(geometry, end=end)
+    beam_cross = beam_result.beam_cross[launch]
     if beam_cross == 0.0:
         return np.zeros(geometry.cells, dtype=float)
     l_b_profile = (
-        beam_result.l_b_profile
-        if cathode_index == 0
-        else beam_result.l_b_profile_twin
+        beam_result.l_b_profile if end == 0 else beam_result.l_b_profile_twin
     )
     p_beam = l_b_profile * beam_cross * state.nn
     weights = beam_absorption_weights(
         length_cm=geometry.length_cm,
         l_b_profile=l_b_profile,
-        cathode_index=cathode_index,
+        cathode_index=launch,
+        direction=direction,
     )
     return (
         weights
         * p_beam
-        * beam_result.n_beam[cathode_index]
-        * beam_result.v_beam[cathode_index]
+        * beam_result.n_beam[launch]
+        * beam_result.v_beam[launch]
         / geometry.length_cm
     )
 
@@ -572,7 +689,7 @@ def _beam_power_deposition_density(
     geometry,
     beam_result,
     solver_result,
-    cathode_index,
+    end=0,
     Te=None,
 ):
     """Return the beam/ohmic power deposition density [erg cm^-3 s^-1].
@@ -588,26 +705,23 @@ def _beam_power_deposition_density(
     Legacy geometry has no resolved gap, so the whole of ``P_ohmic`` still lands
     on the single source/end cell exactly as before.
     """
-    beam_cross = beam_result.beam_cross[cathode_index]
+    launch, direction = beam_launch(geometry, end=end)
+    beam_cross = beam_result.beam_cross[launch]
     if beam_cross == 0.0:
         return np.zeros(geometry.cells, dtype=float)
     l_b_profile = (
-        beam_result.l_b_profile
-        if cathode_index == 0
-        else beam_result.l_b_profile_twin
+        beam_result.l_b_profile if end == 0 else beam_result.l_b_profile_twin
     )
     weights = beam_absorption_weights(
         length_cm=geometry.length_cm,
         l_b_profile=l_b_profile,
-        cathode_index=cathode_index,
+        cathode_index=launch,
+        direction=direction,
     )
     density = (
         weights * solver_result.P_prim * 1.0e7 / geometry.plasma_volume_cm3
     )
-    gap = np.asarray(
-        gap_cell_indices(geometry, end=0 if cathode_index == 0 else -1),
-        dtype=int,
-    )
+    gap = np.asarray(gap_cell_indices(geometry, end=end), dtype=int)
     ohmic_weights = _ohmic_gap_weights(geometry, gap, Te)
     density[gap] += (
         ohmic_weights

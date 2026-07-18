@@ -26,7 +26,11 @@ from cablp.solvers._sim1d.physics.conduction import (
     heat_conduction_rhs,
     implicit_heat_conduction_step,
 )
-from cablp.solvers._sim1d.physics.cathode import beam_absorption_weights
+from cablp.solvers._sim1d.physics.cathode import (
+    beam_absorption_weights,
+    beam_launch,
+    cathode_sample_indices,
+)
 from cablp.solvers._sim1d.physics.energy import (
     electron_cooling_rhs,
     electron_ion_exchange_rhs,
@@ -423,6 +427,43 @@ def main():
         pack_state(resolved_sim.surface_neutralization_rhs(state=flowing_state)),
         0.0,
     )
+
+    # M4b: the cathode circuit samples the plasma against the cathode surface, not
+    # cell [0] -- which in resolved geometry is the plasma-dead plenum, and would
+    # drive the circuit off floor values.
+    assert cathode_sample_indices(geom) == (0, geom.cells - 1)
+    resolved_source_index, resolved_end_index = cathode_sample_indices(resolved_geom)
+    assert resolved_source_index == cathode_face
+    assert resolved_geom.cell_role[resolved_source_index] == "cathode"
+    assert resolved_end_index == resolved_geom.cells - 1
+    assert resolved_geom.cell_role[resolved_end_index] == "collector"
+    twin_source_index, twin_end_index = cathode_sample_indices(twin_resolved_geom)
+    assert twin_resolved_geom.cell_role[twin_source_index] == "cathode"
+    assert twin_resolved_geom.cell_role[twin_end_index] == "cathode"
+    assert twin_source_index != twin_end_index
+
+    # M4b: the beam launches from the cathode cell and never deposits behind it.
+    assert beam_launch(geom, end=0) == (0, 1)
+    assert beam_launch(geom, end=-1) == (geom.cells - 1, -1)
+    assert beam_launch(resolved_geom, end=0) == (cathode_face, 1)
+    resolved_beam_weights = beam_absorption_weights(
+        length_cm=resolved_geom.length_cm,
+        l_b_profile=np.full(resolved_geom.cells, 500.0),
+        cathode_index=cathode_face,
+        direction=1,
+    )
+    assert np.allclose(resolved_beam_weights[:cathode_face], 0.0)  # plenum untouched
+    assert resolved_beam_weights[cathode_face] > 0.0
+    assert np.all(resolved_beam_weights >= 0.0)
+    assert resolved_beam_weights.sum() <= 1.0 + 1e-12
+    # Legacy launch is unchanged, so the historical profile is preserved.
+    legacy_beam_weights = beam_absorption_weights(
+        length_cm=geom.length_cm,
+        l_b_profile=np.full(geom.cells, 500.0),
+        cathode_index=0,
+    )
+    assert legacy_beam_weights[0] > 0.0
+    assert np.argmax(legacy_beam_weights) == 0
 
     # M3: no parallel heat conduction crosses a cathode surface into the plenum.
     resolved_q = conductive_face_flux(

@@ -7,19 +7,17 @@ each milestone (do it *in the same commit* as the milestone's code).
 
 ## Current focus
 
-- **Milestone:** M4b — remaining term relocations (M4a done).
-- **Next action:** (1) split the cathode/anode neutralization — `_cathode_particle_loss_rate`
-  returns `(1 + 2*eta)*I_i/qe`, whose `2*eta` is the *anode's* and is already removed
-  by `anode_collection_rhs`; keep it lumped only when there are no anode faces
-  (legacy). (2) Relocate the cathode electron power loss off `[0]` to
-  `cathode_adjacent_cells()`. (3) Split `P_cathode_e` / `P_anode_e`, retiring the
-  TODO in `physics/cathode.py`; anode power to the two flanking cells in proportion
-  to each face's Bohm collection. (4) Generalize `beam_absorption_weights`, which
-  hard-rejects any launch index but `0`/`-1`, to an arbitrary launch cell plus
-  direction with zero weight behind the cathode surface. No open §11 decisions
-  remain for M4b.
-- **Blocked on:** nothing. Acceptance gate: `scripts/baseline_sim1d.py --verify`
-  stays bit-exact (switch off) and `smoke_sim1d.py` stays green.
+- **Milestone:** M5 — cathode solver split sampling — *blocked pending a decision
+  on the resolved breakdown failure (see notes).*
+- **Next action:** decide how to handle the mesh-dependent breakdown before M5.
+  M5 itself (§7 level a) is now small: the sheath sampling is already relocated, so
+  what remains is feeding the *anode* cell's `(n, Te)` into the anode-sheath block
+  for a distinct `I_i_a`, plus §11 #6 (asymmetric anode sheath). Remember M5 must
+  NOT re-add the anode particle sink — `anode_collection_rhs` owns it.
+- **Blocked on:** a decision on the mesh-dependent breakdown failure in resolved
+  mode (see the ⚠ note in Notes/scratch). Legacy is unaffected and both gates are
+  green: `scripts/baseline_sim1d.py --verify` stays bit-exact (switch off) and
+  `smoke_sim1d.py` passes.
 
 ## Milestones
 
@@ -78,8 +76,17 @@ the §13 legacy-equivalence assertion still holding.
     are superseded wherever a face absorbs, so nothing is neutralized twice. Ohmic
     gap distribution landed earlier. Golden **bit-exact**; resolved floor clips fell
     ~150x.
-  - [ ] **M4b — remaining relocations.** Cathode/anode neutralization split,
-    `P_cathode_e`/`P_anode_e` separation, beam launch anchoring.
+  - [x] **M4b — remaining relocations.** `cathode_sample_indices()` moves the
+    circuit's plasma sample off cell `[0]` (the plenum in resolved geometry) to the
+    cathode-adjacent cell; `P_cathode_e` lands at the cathode and `P_anode_e` is
+    split across the anode-flanking cells by each face's Bohm collection, retiring
+    the TODO in `physics/cathode.py`; `beam_launch()` + a `direction` argument
+    generalize `beam_absorption_weights`, which previously hard-rejected any launch
+    index but `0`/`-1`, so the beam starts at the cathode surface and deposits
+    nothing behind it. The cathode/anode `(1 + 2*eta)` split needed no code: M4a's
+    absorbing-face guard already suppresses the volumetric loss in resolved, where
+    `anode_collection_rhs` owns the `2*eta`. Golden **bit-exact**; smoke extended.
+    **Resolved now fails to break down — see the open note below.**
 - [ ] **M5 — Cathode solver split sampling (level a).** Distinct anode/cathode
   `(n, Te)` → distinct `I_i`; `P_cathode_e` / `P_anode_e` land at their own cells.
   Collapses to `I_i_a = 2·eta·I_i` when the sample cells coincide. (§7)
@@ -223,6 +230,31 @@ _(Running notes: surprises, dead ends, things the next session should know.)_
   therefore applies the loss one-sidedly to the live cell; closed faces stay
   wall-like for both neighbours. The smoke conservation assertion is what caught
   this — keep it.
+- **⚠ OPEN: the resolved run no longer reaches breakdown.** After M4b corrected the
+  cathode sampling, `--resolved` fails with `BreakdownError` (`I_tot = 0.89 A` vs
+  the 150 A threshold). This is not a regression to patch over — it is the first
+  honest resolved result. Every earlier resolved run "worked" only because
+  `cathode_boundary_state` was sampling cell `[0]`, which is the plasma-dead
+  **plenum**, so the circuit was driven off floor values (`n=1e9`, `Te=0.1`).
+  Cause, measured: the Bohm drain rate on the cathode-adjacent cell scales as
+  1/cell_length, since the same surface flux acts on a smaller volume —
+
+  | config | cathode cell | drain | tau |
+  |---|---|---|---|
+  | legacy | 100 cm | 3222/s | 310 us |
+  | resolved `nx_gap=5` | 10 cm | 9389/s | 107 us |
+  | resolved `nx_gap=1` | 50 cm | 1878/s | 533 us |
+
+  So the near-cathode density during pre-breakdown is **mesh-dependent**, and the
+  breakdown criterion (`I_tot > 150 A` within `tau_prebreakdown`) was tuned against
+  the lumped 100 cm source cell. Refining the gap makes breakdown harder to reach.
+  This is the coarse-mesh Bohm-boundary problem: the continuum has a sheath-edge
+  boundary layer the fluid model does not resolve, so the first cell's density
+  depends on how thick you make it. Options to weigh at M5/M6 — pick `nx_gap` so
+  the cathode cell is legacy-like; re-tune the breakdown trigger for resolved
+  geometry; or treat the trigger as the lumped-model artifact it arguably is.
+  **Do not tune this away silently** — it bears on what the thesis can claim about
+  breakdown.
 - **The sonic BC made the resolved run markedly healthier, not less stable.** Floor
   clips fell from 6.0%/6.6% of cell-visits (Te/Ti) to 0.041%/0.131%, injected energy
   from +0.02%/+0.15% to +0.0000%, cells clipped from 57/67 and 60/67 to 1/67 and
