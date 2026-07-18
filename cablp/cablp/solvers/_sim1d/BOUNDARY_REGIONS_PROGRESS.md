@@ -13,8 +13,10 @@ each milestone (do it *in the same commit* as the milestone's code).
   apply `heat_transmission` in `conduction.py` (walls already zero-flux by
   construction, so this must stay bit-exact), confirm inert plenum plasma with
   `audit_sim1d_floor_activation.py`, and model the anode as a partial obstruction
-  (collection-sink model, `heat_transmission = 1-eta`). Forces §11 **#5** (anode as
-  face vs cell) — carried over from M2 — and touches **#7** (subsonic regime).
+  (collection-sink model) — now unblocked, with `anode_face_indices` giving the face
+  to hang `heat_transmission = 1-eta` and the deferred `(1-eta)·πRm²` neutral
+  aperture on. §11 #5 is settled (face); **#7** (subsonic regime) is still open and
+  is where the collection-sink equivalence can break down.
 - **Blocked on:** nothing. Acceptance gate: `scripts/baseline_sim1d.py --verify`
   stays bit-exact (switch off) and `smoke_sim1d.py` stays green.
 
@@ -78,9 +80,10 @@ Open items are plan §11.
 | 2 | cathode solver level (a) now / (b) path-integral later | open | (a) at M5; (b) deferred |
 | 3 | cathode ion loss: volumetric vs Bohm face | open | volumetric recommended (M4) |
 | 4 | end default: collector vs mirror/twin | **resolved** | single-cathode collector default; the existing `TwinCathode` flag switches the far end to the symmetric plenum/cathode/anode mirror (no redundant knob). (M1) |
-| 5 | anode as face vs cell | open | linked to #6; decide at M3/M4. M2 deliberately deferred the anode *neutral* throttle too, so the mesh is still neutral-transparent — the puff→cathode back-path is not yet throttled. |
+| 5 | anode as face vs cell | **resolved** | **face**. Fixing the cathode surface at `z=0` and the anode at `z=50` makes both *surfaces*, which have a position but no length. The mesh throttle and the bilateral neutralization split get the face they wanted; the sheath samples the cells flanking each face, which is what §7's bilateral treatment needs anyway. Cell roles `cathode`/`gap`/`puff` carry the term anchoring; `cathode_face_indices`/`anode_face_indices` carry the surfaces. (geometry rework, pre-M3) |
 | — | pump mapping in resolved single-cathode | **resolved** | each end keeps its pump: `S_pump_L`→plenum (elbow-effective), `S_pump_R`→collector. Preserves today's total pumping speed; set `S_pump_R=0` for plenum-only. (M2) |
 | — | neutral face aperture: mean vs restricting | **resolved** | **restricting (min)** of the two adjacent cells — a conductance between a wide and a narrow duct is set by the narrow one; mean would under-throttle the annulus. Bit-identical to the old mean whenever adjacent radii match. (M2) |
+| — | resolved machine coordinates | **resolved** | cathode surface fixed at `z=0`, anode at `z=cathode_anode_gap_cm`=50. Two cell counts: `nx_gap`=5 across the gap (10 cm cells), `nx`=60 from anode to collector (1850 cm ⇒ 30.83 cm cells) — the old 100 cm source lump splits into the 50 cm gap plus 50 cm added to the column. `Lm` spans cathode→far end; plenum/obstruction sit at **negative z**, so total mesh > `Lm`. **Legacy geometry deliberately frozen** at 100/1800/100 so the golden stays bit-exact. (geometry rework, pre-M3) |
 | 6 | asymmetric anode sheath | open | investigate at M5 |
 | 7 | anode obstruction in subsonic regime | open | revisit if flow is subsonic at anode |
 | — | single code path vs duplicate legacy path | **resolved** | single role/face-driven **operator** path (no flag branch); geometry construction uses two builders behind the switch so the legacy builder stays numerically verbatim and keeps the golden bit-exact. (M1) |
@@ -141,7 +144,22 @@ _(Running notes: surprises, dead ends, things the next session should know.)_
   `Rcs` alone does nothing without a duct length.
 - **The anode is still neutral-transparent.** M2 deferred the mesh throttle
   (decision 3), so the central physics payoff — puffed gas leaking backward past the
-  anode to the pump (§1) — is NOT yet modeled. M3/M4 must deliver it alongside §11 #5.
+  anode to the pump (§1) — is NOT yet modeled. §11 #5 is now settled (anode = face),
+  so M3 has the face it needs: set the anode face's neutral aperture to
+  `(1-eta)·πRm²` and its `heat_transmission` to `(1-eta)`.
+- **Resolved geometry now uses machine coordinates** (cathode surface at `z=0`,
+  anode at `z=50`). Consequences to remember:
+  - `z_edges_cm` is **negative** behind the cathode. Anything assuming `z` starts at
+    0 (plot scripts, `z`-indexed post-processing) needs checking before resolved
+    results are plotted. Legacy is unaffected (`z_edges_cm[0] == 0`).
+  - `length_cm.sum() != Lm` in resolved mode — the plenum and obstruction are extra.
+    The invariant is `z_edges_cm[cathode_face] == 0` and the far end `== Lm`.
+  - The 10 cm gap cells are the **smallest in the mesh**, so they set the explicit
+    CFL (`center_distance_cm`, `timestep.py`). Resolved runs will take roughly 3x
+    the steps of legacy at `nx_gap=5`; raising `nx_gap` scales that cost directly.
+    The legacy golden verify is unaffected.
+  - `cathode_length_cm`/`anode_length_cm` were **removed** — surfaces have no
+    length. Anything referencing them is stale.
 
 ---
 

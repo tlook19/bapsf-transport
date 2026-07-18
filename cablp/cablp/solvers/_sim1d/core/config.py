@@ -63,12 +63,20 @@ def geometry_defaults():
     inert while that flag is off. Each defaults to its legacy limit so a resolved
     run with the obstruction/rod knobs at zero collapses toward the lump (§13).
 
+    In resolved mode the cathode surface defines the origin: it sits at ``z = 0``
+    and the anode at ``z = cathode_anode_gap_cm``, with the plenum (and any
+    obstruction) extending to *negative* z behind the cathode. ``Lm`` therefore
+    spans the cathode surface to the far machine end; total mesh length is
+    ``Lm + plenum_length_cm + Lcs``. Cathode and anode are **faces**, not cells
+    (plan §11 decision 5), so they have positions but no length.
+
     plenum_length_cm:
         Length of each neutral-only plenum cell behind a cathode [cm].
-    cathode_length_cm:
-        Length of each cathode boundary cell [cm].
-    anode_length_cm:
-        Length of each anode boundary cell [cm].
+    cathode_anode_gap_cm:
+        Cathode-surface-to-anode distance [cm]; the anode face sits here.
+    nx_gap:
+        Number of resolved cells across the cathode-anode gap. These are the
+        smallest cells in the mesh, so they set the explicit CFL timestep.
     collector_length_cm:
         Length of the collector cell at the non-cathode end (single-cathode
         layout only; the twin layout mirrors the source end instead) [cm].
@@ -96,8 +104,8 @@ def geometry_defaults():
         "end_Rp": None,
         # Resolved typed-segment geometry (inert while resolved_boundaries off).
         "plenum_length_cm": 100.0,
-        "cathode_length_cm": 30.0,
-        "anode_length_cm": 10.0,
+        "cathode_anode_gap_cm": 50.0,
+        "nx_gap": 5,
         "collector_length_cm": 100.0,
         "Rcs": 0.0,
         "Lcs": 0.0,

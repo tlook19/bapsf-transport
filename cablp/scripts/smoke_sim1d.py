@@ -34,6 +34,8 @@ from cablp.solvers._sim1d.physics.energy import (
 from cablp.solvers._sim1d.physics.flux import front_filling_fluxes
 from cablp.solvers._sim1d.core.integrator import ssprk2_step
 from cablp.solvers._sim1d.core.geometry import (
+    anode_flanking_cells,
+    cathode_adjacent_cells,
     is_plenum_cell,
     puff_cell_indices,
     pump_cell_indices,
@@ -121,49 +123,69 @@ def main():
         resolved_params, resolved_flags
     ).get_initial_snapshot().geometry
     assert resolved_geom.cells > resolved_params["nx"] + 2
-    assert np.isclose(resolved_geom.length_cm.sum(), resolved_params["Lm"])
     assert np.all(resolved_geom.plasma_volume_cm3 > 0.0)
     assert np.all(resolved_geom.neutral_volume_cm3 > resolved_geom.plasma_volume_cm3)
-    assert {"plenum", "cathode", "anode", "puff", "column", "collector"} <= set(
+    assert {"plenum", "cathode", "gap", "puff", "column", "collector"} <= set(
         resolved_geom.cell_role
     )
-    assert list(resolved_geom.cell_role[:3]) == ["plenum", "cathode", "anode"]
-    assert resolved_geom.cell_role[3] == "puff"
+    assert list(resolved_geom.cell_role[:2]) == ["plenum", "cathode"]
     assert resolved_geom.cell_role[-1] == "collector"
     assert not resolved_geom.plasma_open[0] and not resolved_geom.plasma_open[-1]
-    # The plenum<->cathode interior face is a plasma wall (§5) with no heat
-    # crossing; the single-cathode layout has exactly one such face.
-    cathode_walls = [
-        face
-        for face in range(1, resolved_geom.cells)
-        if {resolved_geom.cell_role[face - 1], resolved_geom.cell_role[face]}
-        == {"plenum", "cathode"}
-    ]
-    assert len(cathode_walls) == 1
-    for face in cathode_walls:
-        assert not resolved_geom.plasma_open[face]
-        assert resolved_geom.heat_transmission[face] == 0.0
+
+    # Cathode and anode are *surfaces* (plan §11 decision 5): the cathode surface
+    # is the origin and the anode sits one gap downstream. Lm is measured from the
+    # cathode surface, so the plenum lives at negative z and the mesh is longer.
+    (cathode_face,) = resolved_geom.cathode_face_indices
+    (anode_face,) = resolved_geom.anode_face_indices
+    assert np.isclose(resolved_geom.z_edges_cm[cathode_face], 0.0)
+    assert np.isclose(
+        resolved_geom.z_edges_cm[anode_face],
+        resolved_params["cathode_anode_gap_cm"],
+    )
+    assert np.isclose(resolved_geom.z_edges_cm[-1], resolved_params["Lm"])
+    assert resolved_geom.z_edges_cm[0] < 0.0
+    assert np.isclose(
+        resolved_geom.z_edges_cm[0], -resolved_params["plenum_length_cm"]
+    )
+    assert resolved_geom.length_cm.sum() > resolved_params["Lm"]
+    # Two cell counts: nx_gap across the gap, nx from the anode to the collector.
+    assert anode_face - cathode_face == resolved_params["nx_gap"]
+    gap_dz = resolved_params["cathode_anode_gap_cm"] / resolved_params["nx_gap"]
+    assert np.allclose(
+        resolved_geom.length_cm[cathode_face:anode_face], gap_dz
+    )
+    # The gap cells are the smallest in the mesh, so they set the explicit CFL.
+    assert np.isclose(resolved_geom.length_cm.min(), gap_dz)
+
+    # The cathode surface is a plasma wall; the anode face is interior and open.
+    assert not resolved_geom.plasma_open[cathode_face]
+    assert resolved_geom.heat_transmission[cathode_face] == 0.0
+    assert resolved_geom.plasma_open[anode_face]
+    assert cathode_adjacent_cells(resolved_geom) == (cathode_face,)
+    assert resolved_geom.cell_role[cathode_face] == "cathode"
+    assert anode_flanking_cells(resolved_geom) == ((anode_face - 1, anode_face),)
+    assert resolved_geom.cell_role[anode_face - 1] == "gap"
+    assert resolved_geom.cell_role[anode_face] == "puff"
     assert np.all(np.isnan(resolved_geom.neutral_face_conductance_cm3_s))
 
-    # Twin cathode mirrors the source end (plan §11 decision 4): plenum both ends.
+    # Twin cathode mirrors the source end (plan §11 decision 4): its cathode
+    # surface sits at z = Lm, with that plenum beyond it.
     twin_resolved_flags = dict(resolved_flags)
     twin_resolved_flags["TwinCathode"] = True
     twin_resolved_geom = LAPDSim1D(
         resolved_params, twin_resolved_flags
     ).get_initial_snapshot().geometry
-    assert list(twin_resolved_geom.cell_role[:3]) == ["plenum", "cathode", "anode"]
-    assert list(twin_resolved_geom.cell_role[-3:]) == ["anode", "cathode", "plenum"]
+    assert list(twin_resolved_geom.cell_role[:2]) == ["plenum", "cathode"]
+    assert list(twin_resolved_geom.cell_role[-2:]) == ["cathode", "plenum"]
     assert "collector" not in set(twin_resolved_geom.cell_role)
-    twin_cathode_walls = [
-        face
-        for face in range(1, twin_resolved_geom.cells)
-        if {
-            twin_resolved_geom.cell_role[face - 1],
-            twin_resolved_geom.cell_role[face],
-        }
-        == {"plenum", "cathode"}
-    ]
-    assert len(twin_cathode_walls) == 2
+    assert len(twin_resolved_geom.cathode_face_indices) == 2
+    assert len(twin_resolved_geom.anode_face_indices) == 2
+    twin_near, twin_far = twin_resolved_geom.cathode_face_indices
+    assert np.isclose(twin_resolved_geom.z_edges_cm[twin_near], 0.0)
+    assert np.isclose(twin_resolved_geom.z_edges_cm[twin_far], resolved_params["Lm"])
+    for face in twin_resolved_geom.cathode_face_indices:
+        assert not twin_resolved_geom.plasma_open[face]
+    assert len(cathode_adjacent_cells(twin_resolved_geom)) == 2
     # Twin puffs at both ends (legacy twin puffs at [0] and [-1]).
     assert list(twin_resolved_geom.cell_role).count("puff") == 2
 
@@ -198,16 +220,23 @@ def main():
     obstruction_geom = LAPDSim1D(
         obstruction_params, resolved_flags
     ).get_initial_snapshot().geometry
-    assert list(obstruction_geom.cell_role[:4]) == [
+    assert list(obstruction_geom.cell_role[:3]) == [
         "plenum",
         "obstruction",
         "cathode",
-        "anode",
     ]
     assert obstruction_geom.cells == resolved_geom.cells + 1
-    assert np.isclose(obstruction_geom.length_cm.sum(), obstruction_params["Lm"])
     obstruction_cell = 1
     assert np.isclose(obstruction_geom.length_cm[obstruction_cell], 25.0)
+    # The duct sits behind the cathode surface, so it occupies negative z and
+    # pushes the mesh further back without changing where the cathode sits.
+    (obstruction_cathode_face,) = obstruction_geom.cathode_face_indices
+    assert np.isclose(obstruction_geom.z_edges_cm[obstruction_cathode_face], 0.0)
+    assert np.isclose(obstruction_geom.z_edges_cm[-1], obstruction_params["Lm"])
+    assert np.isclose(
+        obstruction_geom.z_edges_cm[0],
+        -(obstruction_params["plenum_length_cm"] + 25.0),
+    )
     # Annular duct: open area and hydraulic radius reduce independently (§3).
     assert np.isclose(
         obstruction_geom.neutral_area_cm2[obstruction_cell],

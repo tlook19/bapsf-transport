@@ -53,6 +53,12 @@ class Sim1DGeometry:
     heat_transmission: np.ndarray
     neutral_face_conductance_cm3_s: np.ndarray
     center_distance_cm: np.ndarray
+    # Positions of the cathode and anode *surfaces* (plan §11 decision 5): face
+    # indices, empty in legacy geometry which has no resolved surfaces. The
+    # cathode faces are plasma walls at z = 0; the anode faces are interior and
+    # plasma-open, throttled for heat and neutrals in M3.
+    cathode_face_indices: np.ndarray
+    anode_face_indices: np.ndarray
 
     @property
     def cells(self):
@@ -104,6 +110,39 @@ def pump_cell_indices(geometry):
     left_index = int(left[0]) if left.size else 0
     right_index = int(right[-1]) if right.size else geometry.cells - 1
     return left_index, right_index
+
+
+def cathode_adjacent_cells(geometry):
+    """Return the plasma cell against each cathode surface.
+
+    The cathode surface is a face, so its surface terms (ion neutralization,
+    sheath electron loss, ohmic deposition -- §8) land on the plasma-side cell
+    next to it. Plasma is on the high-z side at the source cathode and the low-z
+    side at a twin cathode, so pick whichever neighbour is not plasma-dead.
+    """
+    roles = np.asarray(geometry.cell_role)
+    dead = np.asarray([role in PLASMA_DEAD_ROLES for role in roles], dtype=bool)
+    cells = []
+    for face in np.asarray(geometry.cathode_face_indices, dtype=int):
+        left, right = face - 1, face
+        if 0 <= right < roles.size and not dead[right]:
+            cells.append(int(right))
+        elif 0 <= left < roles.size and not dead[left]:
+            cells.append(int(left))
+    return tuple(cells)
+
+
+def anode_flanking_cells(geometry):
+    """Return ``(gap_side, column_side)`` cell pairs flanking each anode face.
+
+    The anode neutralizes collected ions on *both* mesh faces, so the resulting
+    neutrals are split across the two cells it separates (§7); the mesh throttles
+    flow between them, which is why the side matters.
+    """
+    pairs = []
+    for face in np.asarray(geometry.anode_face_indices, dtype=int):
+        pairs.append((int(face - 1), int(face)))
+    return tuple(pairs)
 
 
 def is_plenum_cell(geometry, index):
@@ -190,33 +229,43 @@ def _build_legacy_geometry(input_dict):
 def _build_resolved_geometry(input_dict, flags):
     """Build the resolved typed-segment machine (BOUNDARY_REGIONS_PLAN.md §3).
 
-    Single-cathode (default)::
+    The **cathode surface is the origin**: it sits at ``z = 0`` and the anode at
+    ``z = cathode_anode_gap_cm``. Both are *faces*, not cells (plan §11 decision
+    5) -- surfaces have a position but no length. The plenum and any obstruction
+    extend to negative z behind the cathode, so ``Lm`` spans the cathode surface
+    to the far machine end and the total mesh is longer than ``Lm``.
 
-        [plenum, (obstruction), cathode, anode, <column...>, collector]
+    Single-cathode (default), reading left to right::
+
+        [plenum, (obstruction)] |cathode  [cathode..gap x nx_gap]  anode|
+        [puff, column x (nx-1)] [collector]
 
     Twin cathode (``TwinCathode``) mirrors the source end instead of the collector
-    (plan §11 decision 4). The first column cell -- and the last, when twin --
-    carries the ``puff`` role (gas injected in front of the anode, §2).
+    (plan §11 decision 4), putting its cathode surface at ``z = Lm``. Column cells
+    adjacent to an anode face carry the ``puff`` role (gas enters in front of the
+    anode, §2); the plasma cell against a cathode surface carries the ``cathode``
+    role so cathode surface terms have somewhere to land (§8).
 
     The annular cathode-structure obstruction is a *real cell* of length ``Lcs``
     (plan §11 decision 1), so it holds gas and its inventory reaches the pump. It
     is omitted entirely when ``Lcs <= 0``, which is the legacy limit.
     """
     nx = int(input_dict.get("nx", 60))
+    nx_gap = int(input_dict.get("nx_gap", 5))
     if nx <= 0:
         raise ValueError(f"nx must be positive (got {nx})")
+    if nx_gap <= 0:
+        raise ValueError(f"nx_gap must be positive (got {nx_gap})")
 
     total_length = float(input_dict.get("Lm", 2000.0))
     twin = bool(flags.get("TwinCathode", False))
 
     plenum_length = float(input_dict.get("plenum_length_cm", 100.0))
-    cathode_length = float(input_dict.get("cathode_length_cm", 30.0))
-    anode_length = float(input_dict.get("anode_length_cm", 10.0))
+    gap_length = float(input_dict.get("cathode_anode_gap_cm", 50.0))
     collector_length = float(input_dict.get("collector_length_cm", 100.0))
     for name, value in (
         ("plenum_length_cm", plenum_length),
-        ("cathode_length_cm", cathode_length),
-        ("anode_length_cm", anode_length),
+        ("cathode_anode_gap_cm", gap_length),
     ):
         if value <= 0.0:
             raise ValueError(f"{name} must be positive (got {value})")
@@ -233,54 +282,71 @@ def _build_resolved_geometry(input_dict, flags):
 
     has_obstruction = Lcs > 0.0
 
-    # One cathode end: plenum, optional obstruction duct, cathode, anode.
-    end_roles = ["plenum"] + (["obstruction"] if has_obstruction else [])
-    end_roles += ["cathode", "anode"]
-    end_lengths = [plenum_length] + ([Lcs] if has_obstruction else [])
-    end_lengths += [cathode_length, anode_length]
-    end_span = sum(end_lengths)
+    # Behind the cathode surface (negative z): plenum, then the optional duct.
+    behind_roles = ["plenum"] + (["obstruction"] if has_obstruction else [])
+    behind_lengths = [plenum_length] + ([Lcs] if has_obstruction else [])
+
+    # Cathode surface -> anode: the plasma cell against the cathode carries the
+    # cathode role; the rest of the gap is plain gap.
+    gap_roles = ["cathode"] + ["gap"] * (nx_gap - 1)
+    gap_lengths = [gap_length / nx_gap] * nx_gap
 
     if twin:
-        column_length = total_length - 2.0 * end_span
+        column_length = total_length - 2.0 * gap_length
     else:
         if collector_length <= 0.0:
             raise ValueError(
                 f"collector_length_cm must be positive (got {collector_length})"
             )
-        column_length = total_length - end_span - collector_length
+        column_length = total_length - gap_length - collector_length
     if column_length <= 0.0:
         raise ValueError(
-            "resolved boundary cells exceed Lm; no room for the column "
+            "resolved boundary regions exceed Lm; no room for the column "
             f"(column_length={column_length} cm, Lm={total_length} cm)"
         )
-    dz = column_length / nx
 
-    roles = list(end_roles)
-    lengths = list(end_lengths)
-    # Column cells; the ends adjacent to an anode carry the puff role.
-    column_roles = ["column"] * nx
-    column_roles[0] = "puff"
+    column_roles = ["puff"] + ["column"] * (nx - 1)
     if twin:
         column_roles[-1] = "puff"
-    roles += column_roles
-    lengths += [dz] * nx
+    column_lengths = [column_length / nx] * nx
+
+    roles = behind_roles + gap_roles + column_roles
+    lengths = behind_lengths + gap_lengths + column_lengths
     if twin:
-        roles += list(reversed(end_roles))
-        lengths += list(reversed(end_lengths))
+        roles += list(reversed(gap_roles)) + list(reversed(behind_roles))
+        lengths += list(reversed(gap_lengths)) + list(reversed(behind_lengths))
     else:
         roles += ["collector"]
         lengths += [collector_length]
 
     length_cm = np.asarray(lengths, dtype=float)
-    if not np.isclose(length_cm.sum(), total_length):
-        raise ValueError(
-            "resolved segment lengths must sum to Lm "
-            f"(got {length_cm.sum()} cm vs {total_length} cm)"
-        )
     cell_role = np.asarray(roles, dtype=object)
     cells = length_cm.size
+
+    # Cathode and anode faces. Face f separates cell f-1 from cell f, so the
+    # cathode surface is the face just past the cells behind it.
+    cathode_face = len(behind_roles)
+    anode_face = cathode_face + nx_gap
+    cathode_faces = [cathode_face]
+    anode_faces = [anode_face]
+    if twin:
+        far_cathode_face = cells - len(behind_roles)
+        cathode_faces.append(far_cathode_face)
+        anode_faces.append(far_cathode_face - nx_gap)
+
+    # Shift the origin so the cathode surface lands exactly on z = 0.
     z_edges_cm = np.concatenate(([0.0], np.cumsum(length_cm)))
+    z_edges_cm = z_edges_cm - z_edges_cm[cathode_face]
     z_cm = 0.5 * (z_edges_cm[:-1] + z_edges_cm[1:])
+
+    far_end_z = (
+        z_edges_cm[cathode_faces[-1]] if twin else z_edges_cm[-1]
+    )
+    if not np.isclose(far_end_z, total_length):
+        raise ValueError(
+            "resolved geometry must span Lm from the cathode surface "
+            f"(got {far_end_z} cm vs {total_length} cm)"
+        )
 
     Rp_cm = np.full(cells, Rp, dtype=float)
     Rm_cm = np.full(cells, Rm, dtype=float)
@@ -324,6 +390,8 @@ def _build_resolved_geometry(input_dict, flags):
         neutral_volume_cm3=neutral_volume_cm3,
         volume_ratio=volume_ratio,
         center_distance_cm=center_distance_cm,
+        cathode_face_indices=np.asarray(cathode_faces, dtype=int),
+        anode_face_indices=np.asarray(anode_faces, dtype=int),
     )
 
 
@@ -343,6 +411,8 @@ def _assemble_geometry(
     neutral_volume_cm3,
     volume_ratio,
     center_distance_cm,
+    cathode_face_indices=None,
+    anode_face_indices=None,
 ):
     """Derive the face arrays from the cell arrays and pack a ``Sim1DGeometry``.
 
@@ -392,6 +462,16 @@ def _assemble_geometry(
         heat_transmission=heat_transmission,
         neutral_face_conductance_cm3_s=neutral_face_conductance_cm3_s,
         center_distance_cm=center_distance_cm,
+        cathode_face_indices=(
+            np.empty(0, dtype=int)
+            if cathode_face_indices is None
+            else np.asarray(cathode_face_indices, dtype=int)
+        ),
+        anode_face_indices=(
+            np.empty(0, dtype=int)
+            if anode_face_indices is None
+            else np.asarray(anode_face_indices, dtype=int)
+        ),
     )
 
 
