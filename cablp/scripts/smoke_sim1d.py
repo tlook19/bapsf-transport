@@ -465,6 +465,53 @@ def main():
     assert legacy_beam_weights[0] > 0.0
     assert np.argmax(legacy_beam_weights) == 0
 
+    # M5: the circuit's anode current is the same Bohm collection the fluid
+    # removes (§7), not `2*eta*I_i` scaled off the cathode cell.
+    resolved_cathode_flags = dict(resolved_flags)
+    resolved_cathode_flags["cathode_coupling"] = True
+    resolved_cathode_flags["neutral_prebreakdown"] = False
+    m5_sim = LAPDSim1D(resolved_params, resolved_cathode_flags)
+    m5_geom = m5_sim.get_initial_snapshot().geometry
+    m5_anode_face = int(m5_geom.anode_face_indices[0])
+    m5_n = np.full(m5_geom.cells, 1.0e12)
+    m5_n[:m5_anode_face] = 4.0e12
+    # Deplete the cathode cell: this is the regime the split exists for, where
+    # scaling the anode current off the cathode is badly wrong.
+    m5_n[cathode_face] = 1.0e11
+    m5_Te = np.full(m5_geom.cells, 3.0)
+    m5_Te[:m5_anode_face] = 6.0
+    m5_state = conservative_from_primitives(
+        n=m5_n,
+        nn=np.full(m5_geom.cells, 1.0e13),
+        u=np.zeros(m5_geom.cells),
+        Te=m5_Te,
+        Ti=np.full(m5_geom.cells, 1.0),
+        ion_mass_g=m5_sim.ion_mass_g,
+    )
+    m5_sim._set_state_vector(pack_state(m5_state))
+    m5_result = m5_sim.solve_cathode_boundary(state=m5_state).beam_result.result
+    m5_fluid_A = -float(
+        np.sum(
+            m5_sim.anode_collection_rhs(state=m5_state).n
+            * m5_geom.plasma_volume_cm3
+        )
+    ) * qe_SI
+    assert np.isclose(m5_result.I_i_a, m5_fluid_A, rtol=1e-12)
+    # The gap is hotter and denser than the column here, so the historical
+    # cathode-scaled estimate is far off -- which is the point of the split.
+    assert m5_result.I_i_a > 10.0 * (2.0 * resolved_params["eta"] * m5_result.I_i)
+    # Legacy has no anode face, so it keeps the historical relation exactly.
+    m5_legacy_flags = dict(flags)
+    m5_legacy_flags["cathode_coupling"] = True
+    m5_legacy_result = (
+        LAPDSim1D(params, m5_legacy_flags).solve_cathode_boundary().beam_result.result
+    )
+    assert np.isclose(
+        m5_legacy_result.I_i_a,
+        2.0 * params["eta"] * m5_legacy_result.I_i,
+        rtol=1e-12,
+    )
+
     # M3: no parallel heat conduction crosses a cathode surface into the plenum.
     resolved_q = conductive_face_flux(
         temperature=np.linspace(5.0, 1.0, resolved_geom.cells),

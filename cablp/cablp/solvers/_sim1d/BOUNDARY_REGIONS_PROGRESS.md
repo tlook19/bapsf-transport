@@ -7,20 +7,16 @@ each milestone (do it *in the same commit* as the milestone's code).
 
 ## Current focus
 
-- **Milestone:** M5 — cathode solver split sampling.
-- **Next action:** §7 level (a). `solve_beam_system` already takes an explicit
-  `cathode_index`, so M5 is now two concrete fixes, both recorded as ⚠ notes below:
-  1. Feed the *anode* cell's `(n, Te)` into the anode-sheath block for a distinct
-     `I_i_a`. The circuit currently assumes `2*eta*I_i` scaled from the cathode,
-     which measures **23.5x** off the fluid's anode collection.
-  2. Restore circuit/fluid agreement on the cathode current — the fluid drain now
-     carries `presheath_alpha` but `solve()` still uses the bare `exp(-1/2)`.
-  Cleanest route for both: an explicit sample override on `solve_beam_system`,
-  alongside the `cathode_index` parameter. Then §11 #6 (asymmetric anode sheath).
-  M5 must NOT re-add the anode particle sink — `anode_collection_rhs` owns it.
+- **Milestone:** M6 — validation & sensitivity.
+- **Next action:** smoke + `verify_sim1d_order.py`, the §13 legacy-equivalence
+  assertions, a sensitivity sweep over `Lcs`, `Rcs`, `Rsup`, `eta`, `nx_gap` and
+  pump speed, then re-baseline and update `manuscript/THESIS_NOTES.md` (§10). Two
+  specific things to measure: residual mesh-dependence across `nx_gap` now that
+  `presheath_alpha` is meant to remove it, and whether the anode's two sides
+  diverge enough to warrant a per-face sheath (§11 #6).
 - **Blocked on:** nothing. Both gates green: `scripts/baseline_sim1d.py --verify`
-  stays bit-exact (switch off) and `smoke_sim1d.py` passes. Resolved mode now runs
-  a full discharge.
+  stays bit-exact (switch off) and `smoke_sim1d.py` passes. Resolved mode runs a
+  full discharge (final thermal 5.25e6 erg, floor clips 0.012%/0.168%).
 
 ## Milestones
 
@@ -91,9 +87,17 @@ the §13 legacy-equivalence assertion still holding.
     `anode_collection_rhs` owns the `2*eta`. Golden **bit-exact**; smoke extended.
     (M4b initially broke resolved breakdown by moving the beam read off the index
     the solver writes to; fixed immediately after — see the notes.)
-- [ ] **M5 — Cathode solver split sampling (level a).** Distinct anode/cathode
+- [x] **M5 — Cathode solver split sampling (level a).** Distinct anode/cathode
   `(n, Te)` → distinct `I_i`; `P_cathode_e` / `P_anode_e` land at their own cells.
-  Collapses to `I_i_a = 2·eta·I_i` when the sample cells coincide. (§7)
+  Collapses to `I_i_a = 2·eta·I_i` when the sample cells coincide. (§7) —
+  `solve()`/`solve_beam_system` take optional `cathode_current_A`,
+  `anode_current_A`, `anode_T_e`; all default to `None`, so `_sim3` and legacy are
+  bit-for-bit unchanged. The anode drop is rescaled by `tau_a = Te_anode/Te_cathode`
+  in the residual (the loop equation is nondimensionalized in *cathode* `Te`, but
+  `phi_a` is a real voltage), and `phi_a` plus the anode powers are evaluated at
+  `Te_anode`. `I_i_a` is now the **same Bohm collection the fluid removes**, shared
+  rather than re-derived, so circuit and fluid agree exactly (ratio 1.000000, was
+  23.5). `SolverResult` gained `I_i_a` for diagnostics.
 - [ ] **M6 — Validation & sensitivity.** Smoke + order tests, legacy-equivalence
   assertions, sensitivity sweep (`Lcs`, `Rcs`, `Rsup`, `eta`, pump speed),
   re-baseline, update `manuscript/THESIS_NOTES.md`. (§10)
@@ -106,14 +110,14 @@ Open items are plan §11.
 | # | decision | status | choice / note |
 |---|---|---|---|
 | 1 | `Lcs` obstruction: face vs cell | **resolved** | **cell** — a real `Lcs`-long annular duct between plenum and cathode, so its gas inventory reaches the pump (`Lcs`~25 is comparable to the ~30 cm cell size). Omitted entirely when `Lcs<=0`, which is the legacy limit. (M2) |
-| 2 | cathode solver level (a) now / (b) path-integral later | open | (a) at M5; (b) deferred |
+| 2 | cathode solver level (a) now / (b) path-integral later | **resolved (a)** | level (a) done at M5: the anode sheath is driven by anode-local `(n, Te)`. Level (b) — replacing the single `R_p` from `L_cath` with a resistivity path integral over the resolved gap — remains deferred; `gap_cell_indices()` already returns the cells it would need, and `P_ohmic` is already distributed over them by `Te^-3/2`. |
 | 3 | cathode ion loss: volumetric vs Bohm face | **resolved** | **Bohm-flux absorbing face**, at the cathode *and* the collector, with **sonic outflow momentum** (leaves at `c_s` into the surface, not at the cell's drift `u`) so the loss drives flow toward the wall instead of deleting stationary plasma. Resolved cathode uses 1.0x face area; legacy keeps its 2.0 scale and its volumetric terms untouched. Implemented one-sidedly, not as a face flux — see notes. (M4a) |
 | 4 | end default: collector vs mirror/twin | **resolved** | single-cathode collector default; the existing `TwinCathode` flag switches the far end to the symmetric plenum/cathode/anode mirror (no redundant knob). (M1) |
 | 5 | anode as face vs cell | **resolved** | **face**. Fixing the cathode surface at `z=0` and the anode at `z=50` makes both *surfaces*, which have a position but no length. The mesh throttle and the bilateral neutralization split get the face they wanted; the sheath samples the cells flanking each face, which is what §7's bilateral treatment needs anyway. Cell roles `cathode`/`gap`/`puff` carry the term anchoring; `cathode_face_indices`/`anode_face_indices` carry the surfaces. (geometry rework, pre-M3) |
 | — | pump mapping in resolved single-cathode | **resolved** | each end keeps its pump: `S_pump_L`→plenum (elbow-effective), `S_pump_R`→collector. Preserves today's total pumping speed; set `S_pump_R=0` for plenum-only. (M2) |
 | — | neutral face aperture: mean vs restricting | **resolved** | **restricting (min)** of the two adjacent cells — a conductance between a wide and a narrow duct is set by the narrow one; mean would under-throttle the annulus. Bit-identical to the old mean whenever adjacent radii match. (M2) |
 | — | resolved machine coordinates | **resolved** | cathode surface fixed at `z=0`, anode at `z=cathode_anode_gap_cm`=50. Two cell counts: `nx_gap`=5 across the gap (10 cm cells), `nx`=60 from anode to collector (1850 cm ⇒ 30.83 cm cells) — the old 100 cm source lump splits into the 50 cm gap plus 50 cm added to the column. `Lm` spans cathode→far end; plenum/obstruction sit at **negative z**, so total mesh > `Lm`. **Legacy geometry deliberately frozen** at 100/1800/100 so the golden stays bit-exact. (geometry rework, pre-M3) |
-| 6 | asymmetric anode sheath | open | investigate at M5 |
+| 6 | asymmetric anode sheath | **partly addressed** | the *particle* half is done: each mesh face collects against its own side's plasma, and `P_anode_e` is split by that same weighting. The circuit still solves **one** `phi_a`, from a collection-weighted `Te_anode`. A genuinely per-face sheath (two `phi_a`) remains open — revisit if the gap and column sides diverge strongly in the M6 sweep. |
 | 7 | anode obstruction in subsonic regime | **resolved (revised)** | **Bohm collection only.** A sheath forms on every mesh wire, so ions arrive at `exp(-0.5)*n*c_s` set by the sheath, *not* by the bulk drift — a mesh in stagnant plasma still collects. The advective face therefore stays **open** (shrinking it too would remove the same particles twice, §5); `b_anode_advective_block` (default 0) can dial the `(1-eta)` reduction back in for a study, but it reflects rather than absorbs. Each mesh face is evaluated against its own side's `n`/`Te`, so collection is asymmetric — this also settles the *particle* half of #6. Supersedes the first pass, which used the intercepted directed flux `eta*n*u` and under-removed whenever the flow was subsonic. (M3, revised) |
 | — | single code path vs duplicate legacy path | **resolved** | single role/face-driven **operator** path (no flag branch); geometry construction uses two builders behind the switch so the legacy builder stays numerically verbatim and keeps the golden bit-exact. (M1) |
 | — | golden-baseline form (M0 tooling) | **resolved** | notebook production config (implicit tr_bdf2 + Strang + Picard, cathode on), full packed-`y` trajectory to the dynamic current-trigger end, stored as NPZ. Chosen over a compressed-timing or cathode-off run (both weaker: floor-collapsed / miss the cathode/anode terms M4–M5 relocate). Implicit split makes the real-timescale run cheap (~65 s). |
@@ -273,14 +277,13 @@ _(Running notes: surprises, dead ends, things the next session should know.)_
   is 1, and the full `exp(-1/2)` applies. Verified: anode collection is bit-identical
   at `b_presheath_length` 0 and 1 (-2.4381e16 both), while the cathode drain moves
   by the predicted 1.327x.
-- **⚠ OPEN for M5: the circuit's anode current is ~23x off the fluid's.** The
+- **~~OPEN for M5: the circuit's anode current is ~23x off the fluid's~~ — FIXED in M5.** The
   circuit still assumes `I_i_a = 2*eta*I_i` scaled from the *cathode* cell, while
   `anode_collection_rhs` computes the real thing from anode-local plasma. On a
   representative resolved state (depleted cathode cell, dense gap) that is
   8.49 A assumed vs 199.9 A actual — a factor 23.5. This is exactly what §7 level
   (a) exists to fix, and it is now the largest known inconsistency in resolved mode.
-- **⚠ OPEN for M5: circuit/fluid agreement on the cathode current is temporarily
-  broken.** M4a established that the absorbing face and the circuit compute the
+- **~~OPEN for M5: circuit/fluid agreement on the cathode current~~ — the hook is in place.** M4a established that the absorbing face and the circuit compute the
   same Bohm flux. The fluid drain now carries `presheath_alpha`, but the circuit's
   `solve()` still uses the bare `exp(-1/2)` on the raw cell density, so they differ
   by the attenuation factor (1.327x in the test case). Restore this when M5

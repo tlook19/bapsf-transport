@@ -172,6 +172,7 @@ class SolverResult:
     R_p: float
     # Currents [A]
     I_i: float
+    I_i_a: float
     I_e: float
     I_eth: float
     I_eth_star: float
@@ -318,6 +319,7 @@ def _residual(
     mu: float,
     J_i_a: float,
     beam_bypass_fraction: float = 0.0,
+    tau_a: float = 1.0,
 ) -> float:
     """Root equation for psi_c_plus (scaled positive cathode sheath drop).
 
@@ -359,12 +361,17 @@ def _residual(
     # Anode sheath argument; clamp to avoid log(≤0) in extreme bracketing
     anode_arg = max(1.0 + J_anode / J_i_a, 1e-300)
 
+    # The anode sheath drop is a real voltage, phi_a = Te_anode * psi_a, but this
+    # residual is nondimensionalized in units of the *cathode* Te, so it enters
+    # scaled by tau_a = Te_anode / Te_cathode. tau_a = 1 (the default, and the
+    # case where both electrodes see the same plasma) reduces this exactly to the
+    # single-temperature form.
     return (
         psi_c_plus
         - psi_minus
         + (1.0 + gamma) * J_tot
-        - Lambda
-        + math.log(anode_arg)
+        - tau_a * Lambda
+        + tau_a * math.log(anode_arg)
         - psi_bank
     )
 
@@ -463,6 +470,9 @@ def solve(
     plasma: PlasmaState,
     x0: float | None = None,
     floating: bool = False,
+    cathode_current_A: float | None = None,
+    anode_current_A: float | None = None,
+    anode_T_e: float | None = None,
 ) -> SolverResult:
     """Solve for all sheath potentials and currents given device config and plasma state.
 
@@ -510,7 +520,19 @@ def solve(
 
     # Ion saturation current [A]:  A_c [cm²] * e [C] * n_e [cm⁻³] * C_s [cm/s]
     I_i = config.A_c * _e_SI * n_e * C_s * math.exp(-0.5)
+    if cathode_current_A is not None:
+        # The fluid already computed this Bohm current, with presheath-correct
+        # local sampling; take it verbatim so the circuit and the fluid cannot
+        # disagree about how much current leaves the cathode.
+        I_i = float(cathode_current_A)
+    # Anode ion current. The historical form scales the cathode current by the
+    # mesh opacity on both faces, which assumes the anode sees the same plasma as
+    # the cathode -- exactly the assumption a resolved gap breaks (§7).
     I_i_a = 2 * config.eta * I_i
+    if anode_current_A is not None:
+        I_i_a = float(anode_current_A)
+    T_e_anode = T_e if anode_T_e is None else float(anode_T_e)
+    tau_a = T_e_anode / T_e
 
     # Electron saturation current [A]
     I_e = I_i * math.exp(config.Lambda + 0.5)
@@ -583,7 +605,7 @@ def solve(
         phi_c_plus = psi_c_plus * T_e
         phi_c_minus = psi_c_minus * T_e
         phi_c = phi_c_plus - phi_c_minus  # = T_e * Lambda by construction
-        phi_a = psi_a * T_e  # = T_e * Lambda
+        phi_a = psi_a * T_e_anode  # = T_e_anode * Lambda
 
         I_tot = 0.0
         I_eth_star = J_star * T_e / R_p
@@ -613,6 +635,7 @@ def solve(
                     mu,
                     J_i_a,
                     beam_bypass_fraction,
+                    tau_a,
                 )
             return f
 
@@ -678,7 +701,7 @@ def solve(
         phi_c_plus = psi_c_plus * T_e
         phi_c_minus = psi_c_minus * T_e
         phi_c = phi_c_plus - phi_c_minus
-        phi_a = psi_a * T_e
+        phi_a = psi_a * T_e_anode
 
         # Currents [A]
         I_tot = J_tot * T_e / R_p
@@ -697,9 +720,9 @@ def solve(
     P_cathode_e = _P_elec(phi_c, T_e, I_i, Lambda)
     P_cathode_i = _P_ion(phi_c, T_e, I_i)
     P_cathode_i_pl = _P_ion(phi_c, T_e, I_i_a, pl=True)
-    P_anode_e = _P_elec(phi_a, T_e, I_i_a, Lambda)
-    P_anode_i = _P_ion(phi_a, T_e, I_i_a)
-    P_anode_i_pl = _P_ion(phi_a, T_e, I_i_a, pl=True)
+    P_anode_e = _P_elec(phi_a, T_e_anode, I_i_a, Lambda)
+    P_anode_i = _P_ion(phi_a, T_e_anode, I_i_a)
+    P_anode_i_pl = _P_ion(phi_a, T_e_anode, I_i_a, pl=True)
     _P_beam_bypass = eta * beam_bypass_fraction * I_eth_star * V_b
     P_net = P_load - P_cathode_e - P_cathode_i - P_anode_e - P_anode_i - _P_beam_bypass
     P_net2 = P_prim + P_ohmic - P_cathode_e - P_cathode_i_pl - P_anode_e - P_anode_i_pl
@@ -714,6 +737,7 @@ def solve(
         V_b=V_b,
         R_p=R_p,
         I_i=I_i,
+        I_i_a=I_i_a,
         I_e=I_e,
         I_eth=I_eth,
         I_eth_star=I_eth_star,
@@ -758,6 +782,10 @@ def solve_beam_system(
     floating: bool = False,
     cathode_index: int = 0,
     twin_index: int = -1,
+    anode_current_A: float | None = None,
+    anode_T_e: float | None = None,
+    anode_current_twin_A: float | None = None,
+    anode_T_e_twin: float | None = None,
 ) -> BeamResult:
     """Solve cathode sheath(s) and compute beam quantities for all cells.
 
@@ -801,6 +829,8 @@ def solve_beam_system(
         ),
         x0=x0,
         floating=floating,
+        anode_current_A=anode_current_A,
+        anode_T_e=anode_T_e,
     )
     x0_next = result.phi_c_plus
     phi_c_0 = result.phi_c
@@ -826,6 +856,8 @@ def solve_beam_system(
             ),
             x0=x0_twin,
             floating=floating,
+            anode_current_A=anode_current_twin_A,
+            anode_T_e=anode_T_e_twin,
         )
         x0_twin_next = result_twin.phi_c_plus
         phi_c_1 = result_twin.phi_c

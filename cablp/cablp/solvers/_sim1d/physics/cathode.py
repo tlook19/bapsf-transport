@@ -12,6 +12,7 @@ from ..core.geometry import (
     gap_cell_indices,
 )
 from ..core.state import ConservativeState1D, derive_state
+from .flux import ion_sound_speed
 from .reactions import _birth_temperature
 
 
@@ -68,6 +69,45 @@ class CathodeSolve1D:
     x0_next: float | None
     x0_twin_next: float | None
     metadata: dict
+
+
+def anode_circuit_sample(state, derived, geometry, mu, input_dict, end=0):
+    """Return ``(I_i_a [A], Te_anode [eV])`` for one anode, or ``(None, None)``.
+
+    §7: the historical circuit takes ``I_i_a = 2*eta*I_i``, scaling the anode
+    current straight off the *cathode* cell, which assumes both electrodes see the
+    same plasma -- precisely what a resolved cathode-anode gap breaks.
+
+    The current handed back is the same Bohm collection
+    ``sources.anode_collection_rhs`` removes from the fluid, summed over both mesh
+    faces with each face sampled on its own side. Computing it once and sharing it
+    means the circuit and the fluid cannot disagree about the anode current, and it
+    is why M5 must not add a second anode particle sink.
+
+    The sheath temperature is collection-weighted across the two faces, matching
+    how ``P_anode_e`` is apportioned. Resolving a *separate* sheath per face is
+    §11 #6 and remains open.
+    """
+    anode_faces = np.asarray(getattr(geometry, "anode_face_indices", ()), dtype=int)
+    eta = float(input_dict.get("eta", 0.0))
+    if anode_faces.size == 0 or eta <= 0.0:
+        return None, None
+    face = int(anode_faces[0] if end == 0 else anode_faces[-1])
+    total = 0.0
+    weighted_Te = 0.0
+    for cell in (face - 1, face):
+        collected = (
+            np.exp(-0.5)
+            * state.n[cell]
+            * ion_sound_speed(derived.Te[cell], mu)
+            * eta
+            * float(geometry.plasma_area_cm2[cell])
+        )
+        total += collected
+        weighted_Te += collected * float(derived.Te[cell])
+    if total <= 0.0:
+        return None, None
+    return total * qe_SI, weighted_Te / total
 
 
 def cathode_sample_indices(geometry):
@@ -175,6 +215,12 @@ def solve_cathode_boundary(
         )
 
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
+    anode_source = anode_circuit_sample(
+        state, derived, geometry, mu, input_dict, end=0
+    )
+    anode_twin = anode_circuit_sample(
+        state, derived, geometry, mu, input_dict, end=-1
+    )
     device_config = cathode_device_config(input_dict, input_flags, mu)
     beam_cross_prev = np.asarray(beam_cross_prev, dtype=float)
     if beam_cross_prev.shape != (geometry.cells,):
@@ -199,6 +245,13 @@ def solve_cathode_boundary(
         # from -- otherwise the beam arrays are all zero where the caller looks.
         cathode_index=beam_launch(geometry, end=0)[0],
         twin_index=beam_launch(geometry, end=-1)[0],
+        # Hand the circuit the same anode Bohm current the fluid removes, so the
+        # two cannot disagree (§7). None in legacy geometry, which keeps the
+        # historical I_i_a = 2*eta*I_i.
+        anode_current_A=anode_source[0],
+        anode_T_e=anode_source[1],
+        anode_current_twin_A=anode_twin[0],
+        anode_T_e_twin=anode_twin[1],
     )
     return CathodeSolve1D(
         boundary=boundary,
