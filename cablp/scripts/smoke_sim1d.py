@@ -33,7 +33,13 @@ from cablp.solvers._sim1d.physics.energy import (
 )
 from cablp.solvers._sim1d.physics.flux import front_filling_fluxes
 from cablp.solvers._sim1d.core.integrator import ssprk2_step
+from cablp.solvers._sim1d.core.geometry import (
+    is_plenum_cell,
+    puff_cell_indices,
+    pump_cell_indices,
+)
 from cablp.solvers._sim1d.physics.neutrals import (
+    _effective_pump_speed,
     neutral_exchange_coefficients,
     neutral_inventory_rate,
     puff_rate,
@@ -158,6 +164,90 @@ def main():
         == {"plenum", "cathode"}
     ]
     assert len(twin_cathode_walls) == 2
+    # Twin puffs at both ends (legacy twin puffs at [0] and [-1]).
+    assert list(twin_resolved_geom.cell_role).count("puff") == 2
+
+    # M2: role anchors resolve to the legacy source/end cells, so the relocated
+    # puff/pump terms reproduce today's [0]/[-1] anchoring exactly.
+    assert puff_cell_indices(geom) == (0, geom.cells - 1)
+    assert pump_cell_indices(geom) == (0, geom.cells - 1)
+    assert not is_plenum_cell(geom, 0) and not is_plenum_cell(geom, geom.cells - 1)
+    # Resolved: puff moves off the boundary cell; pumps sit on plenum/collector.
+    resolved_puff, _ = puff_cell_indices(resolved_geom)
+    resolved_pump_left, resolved_pump_right = pump_cell_indices(resolved_geom)
+    assert resolved_geom.cell_role[resolved_puff] == "puff"
+    assert resolved_puff not in (0, resolved_geom.cells - 1)
+    assert resolved_geom.cell_role[resolved_pump_left] == "plenum"
+    assert resolved_geom.cell_role[resolved_pump_right] == "collector"
+    assert is_plenum_cell(resolved_geom, resolved_pump_left)
+    assert not is_plenum_cell(resolved_geom, resolved_pump_right)
+
+    # M2: the effective pump speed is a series conductance; no elbow (None or
+    # non-positive) returns the raw speed unchanged -- the legacy limit.
+    assert _effective_pump_speed(2000.0, None) == 2000.0
+    assert _effective_pump_speed(2000.0, 0.0) == 2000.0
+    assert np.isclose(_effective_pump_speed(2000.0, 2000.0), 1000.0)
+    assert _effective_pump_speed(2000.0, 1e12) < 2000.0
+
+    # M2: the cathode-structure obstruction is a real annular cell (decision 1),
+    # present only when Lcs > 0 so Lcs = 0 stays the legacy limit.
+    assert "obstruction" not in set(resolved_geom.cell_role)
+    obstruction_params = dict(resolved_params)
+    obstruction_params["Lcs"] = 25.0
+    obstruction_params["Rcs"] = 25.0
+    obstruction_geom = LAPDSim1D(
+        obstruction_params, resolved_flags
+    ).get_initial_snapshot().geometry
+    assert list(obstruction_geom.cell_role[:4]) == [
+        "plenum",
+        "obstruction",
+        "cathode",
+        "anode",
+    ]
+    assert obstruction_geom.cells == resolved_geom.cells + 1
+    assert np.isclose(obstruction_geom.length_cm.sum(), obstruction_params["Lm"])
+    obstruction_cell = 1
+    assert np.isclose(obstruction_geom.length_cm[obstruction_cell], 25.0)
+    # Annular duct: open area and hydraulic radius reduce independently (§3).
+    assert np.isclose(
+        obstruction_geom.neutral_area_cm2[obstruction_cell],
+        np.pi * (obstruction_params["Rm"] ** 2 - 25.0**2),
+    )
+    assert np.isclose(
+        obstruction_geom.neutral_hydraulic_radius_cm[obstruction_cell],
+        obstruction_params["Rm"] - 25.0,
+    )
+    # The plasma wall moves to the obstruction<->cathode face: everything behind
+    # the cathode is plasma-dead.
+    assert not obstruction_geom.plasma_open[2]
+    assert obstruction_geom.heat_transmission[2] == 0.0
+    assert obstruction_geom.plasma_open[1]  # plenum<->obstruction: both dead
+    # Restricting aperture: the face conductance sees the annulus, not the mean.
+    assert np.isclose(
+        obstruction_geom.neutral_face_area_cm2[obstruction_cell],
+        obstruction_geom.neutral_area_cm2[obstruction_cell],
+    )
+    obstruction_coeff = neutral_exchange_coefficients(
+        geometry=obstruction_geom,
+        model="molecular_flow",
+        constant_coeff_cm3_s=obstruction_params["neutral_exchange_coeff_cm3_s"],
+        Tn_K=obstruction_params["Tn_K"],
+        mu_neutral=4,
+        clausing_scale=obstruction_params["neutral_clausing_scale"],
+    )
+    assert np.all(np.isfinite(obstruction_coeff))
+    assert np.all(obstruction_coeff > 0.0)
+
+    # M2: support rods block plenum volume only, leaving the hydraulic radius.
+    rod_params = dict(resolved_params)
+    rod_params["Rsup"] = 10.0
+    rod_geom = LAPDSim1D(rod_params, resolved_flags).get_initial_snapshot().geometry
+    rod_plenum = int(np.flatnonzero(np.asarray(rod_geom.cell_role) == "plenum")[0])
+    assert np.isclose(
+        rod_geom.neutral_area_cm2[rod_plenum],
+        np.pi * (rod_params["Rm"] ** 2 - 10.0**2),
+    )
+    assert np.isclose(rod_geom.neutral_hydraulic_radius_cm[rod_plenum], rod_params["Rm"])
 
     for values in (
         state.n,

@@ -13,7 +13,12 @@ from .core.config import (
     load_config,
     resolve_nn0,
 )
-from .core.geometry import build_geometry
+from .core.geometry import (
+    build_geometry,
+    is_plenum_cell,
+    puff_cell_indices,
+    pump_cell_indices,
+)
 from .core.integrator import (
     floor_state_vector,
     ssprk2_step,
@@ -45,6 +50,7 @@ from .physics.energy import (
 )
 from .physics.flux import plasma_flux_rhs, plasma_flux_rhs_terms
 from .physics.neutrals import (
+    _effective_pump_speed,
     neutral_exchange_coefficients,
     neutral_exchange_rhs,
     neutral_source_sink_rhs,
@@ -710,27 +716,40 @@ class LAPDSim1D:
             matrix[right, right] += dt * right_rate
             matrix[right, left] -= dt * right_rate
 
+        # Anchored by role, matching neutrals.neutral_source_sink_rhs: these two
+        # paths must stay consistent or the neutral-equilibration path desyncs
+        # from the explicit one.
+        puff_index, puff_twin_index = puff_cell_indices(geometry)
+        pump_left_index, pump_right_index = pump_cell_indices(geometry)
+
         if source_kwargs["pump_enabled"]:
-            matrix[0, 0] += dt * pump_rate(
-                source_kwargs["S_pump_L"],
-                geometry.neutral_volume_cm3[0],
+            elbow = source_kwargs["pump_elbow_conductance_lps"]
+            matrix[pump_left_index, pump_left_index] += dt * pump_rate(
+                _effective_pump_speed(
+                    source_kwargs["S_pump_L"],
+                    elbow if is_plenum_cell(geometry, pump_left_index) else None,
+                ),
+                geometry.neutral_volume_cm3[pump_left_index],
             )
-            matrix[-1, -1] += dt * pump_rate(
-                source_kwargs["S_pump_R"],
-                geometry.neutral_volume_cm3[-1],
+            matrix[pump_right_index, pump_right_index] += dt * pump_rate(
+                _effective_pump_speed(
+                    source_kwargs["S_pump_R"],
+                    elbow if is_plenum_cell(geometry, pump_right_index) else None,
+                ),
+                geometry.neutral_volume_cm3[pump_right_index],
             )
 
         if source_kwargs["gas_puff_enabled"]:
-            rhs[0] += dt * puff_rate(
+            rhs[puff_index] += dt * puff_rate(
                 source_kwargs["S_gp"],
                 source_kwargs["gas_puff_valves"],
-                geometry.neutral_volume_cm3[0],
+                geometry.neutral_volume_cm3[puff_index],
             )
             if source_kwargs["twin_cathode"]:
-                rhs[-1] += dt * puff_rate(
+                rhs[puff_twin_index] += dt * puff_rate(
                     source_kwargs["Twin_S_gp"],
                     source_kwargs["gas_puff_valves"],
-                    geometry.neutral_volume_cm3[-1],
+                    geometry.neutral_volume_cm3[puff_twin_index],
                 )
 
         nn_next = np.linalg.solve(matrix, rhs)
@@ -2052,6 +2071,9 @@ class LAPDSim1D:
             "gas_puff_enabled": bool(phase_switches["gas_puff_enabled"]),
             "pump_enabled": bool(self._input_dict.get("pump_enabled", True)),
             "gas_puff_valves": float(self._input_dict.get("gas_puff_valves", 2)),
+            "pump_elbow_conductance_lps": self._input_dict.get(
+                "pump_elbow_conductance_lps"
+            ),
         }
 
     def _validate_gas_puff_config(self):

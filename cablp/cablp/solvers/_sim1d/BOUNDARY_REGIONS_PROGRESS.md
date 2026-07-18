@@ -7,13 +7,14 @@ each milestone (do it *in the same commit* as the milestone's code).
 
 ## Current focus
 
-- **Milestone:** M2 — neutral conductances from the schema.
-- **Next action:** plan M2 — generalized Clausing reading `neutral_face_area_cm2` +
-  `neutral_face_hydraulic_radius_cm` (already carried); prescribed apertures for the
-  cathode obstruction (`Rcs`/`Lcs`) and anode mesh (`eta`) via the
-  `neutral_face_conductance_cm3_s` sentinel field; pump relocated to the plenum with
-  an effective speed; puff moved to its cell. Forces §11 decision #1 (obstruction
-  face vs cell). Surface it before writing code.
+- **Milestone:** M3 — plasma faces & anode obstruction.
+- **Next action:** plan M3 — make `flux.py` consume the `plasma_open` array instead
+  of hard-coding walls at the two external faces ([flux.py:64-67](physics/flux.py)),
+  apply `heat_transmission` in `conduction.py` (walls already zero-flux by
+  construction, so this must stay bit-exact), confirm inert plenum plasma with
+  `audit_sim1d_floor_activation.py`, and model the anode as a partial obstruction
+  (collection-sink model, `heat_transmission = 1-eta`). Forces §11 **#5** (anode as
+  face vs cell) — carried over from M2 — and touches **#7** (subsonic regime).
 - **Blocked on:** nothing. Acceptance gate: `scripts/baseline_sim1d.py --verify`
   stays bit-exact (switch off) and `smoke_sim1d.py` stays green.
 
@@ -42,9 +43,16 @@ the §13 legacy-equivalence assertion still holding.
   `length_cm.size`. Golden `--verify` **bit-exact** with switch off; smoke covers
   both legacy schema defaults and resolved single/twin invariants. Operators not
   yet rewired (M2+).
-- [ ] **M2 — Neutral conductances** from the schema: generalized Clausing (area +
+- [x] **M2 — Neutral conductances** from the schema: generalized Clausing (area +
   hydraulic radius), prescribed apertures (cathode obstruction, anode mesh), pump
-  relocated to the plenum with an effective speed, puff moved to its cell. (§4)
+  relocated to the plenum with an effective speed, puff moved to its cell. (§4) —
+  Clausing now reads the carried face area + hydraulic radius (with a NaN-sentinel
+  direct-conductance escape hatch). Obstruction is a **real annular cell** (decision
+  1), so its throttle comes from its own geometry, not a prescribed face aperture;
+  `Rsup` blocks plenum volume only. Puff/pump anchored by role in **both** the
+  explicit RHS and the implicit neutral matrix. Effective pump speed
+  `1/S_eff = 1/S_pump + 1/C_elbow` on plenum pumps only. Anode mesh throttle
+  deferred to M3/M4 (decision 3). Golden `--verify` **bit-exact**; smoke extended.
 - [ ] **M3 — Plasma faces & anode obstruction.** Generalize reflecting faces to the
   `plasma_open` array (interior cathode face); `heat_transmission = 0` at walls;
   confirm inert plenum plasma. Anode as a partial obstruction (collection-sink
@@ -66,11 +74,13 @@ Open items are plan §11.
 
 | # | decision | status | choice / note |
 |---|---|---|---|
-| 1 | `Lcs` obstruction: face vs cell | open | decide at M2, from `Lcs` vs cell size |
+| 1 | `Lcs` obstruction: face vs cell | **resolved** | **cell** — a real `Lcs`-long annular duct between plenum and cathode, so its gas inventory reaches the pump (`Lcs`~25 is comparable to the ~30 cm cell size). Omitted entirely when `Lcs<=0`, which is the legacy limit. (M2) |
 | 2 | cathode solver level (a) now / (b) path-integral later | open | (a) at M5; (b) deferred |
 | 3 | cathode ion loss: volumetric vs Bohm face | open | volumetric recommended (M4) |
 | 4 | end default: collector vs mirror/twin | **resolved** | single-cathode collector default; the existing `TwinCathode` flag switches the far end to the symmetric plenum/cathode/anode mirror (no redundant knob). (M1) |
-| 5 | anode as face vs cell | open | linked to #6; decide at M3/M4 |
+| 5 | anode as face vs cell | open | linked to #6; decide at M3/M4. M2 deliberately deferred the anode *neutral* throttle too, so the mesh is still neutral-transparent — the puff→cathode back-path is not yet throttled. |
+| — | pump mapping in resolved single-cathode | **resolved** | each end keeps its pump: `S_pump_L`→plenum (elbow-effective), `S_pump_R`→collector. Preserves today's total pumping speed; set `S_pump_R=0` for plenum-only. (M2) |
+| — | neutral face aperture: mean vs restricting | **resolved** | **restricting (min)** of the two adjacent cells — a conductance between a wide and a narrow duct is set by the narrow one; mean would under-throttle the annulus. Bit-identical to the old mean whenever adjacent radii match. (M2) |
 | 6 | asymmetric anode sheath | open | investigate at M5 |
 | 7 | anode obstruction in subsonic regime | open | revisit if flow is subsonic at anode |
 | — | single code path vs duplicate legacy path | **resolved** | single role/face-driven **operator** path (no flag branch); geometry construction uses two builders behind the switch so the legacy builder stays numerically verbatim and keeps the golden bit-exact. (M1) |
@@ -115,6 +125,23 @@ _(Running notes: surprises, dead ends, things the next session should know.)_
 - **Degenerate-resolved == legacy is NOT yet a test.** Resolved adds cells, so it
   can't be bit-identical to the lump until operators stop indexing `[0]`/`[-1]`
   (M3+). M1's guarantee is the switch-OFF golden bit-exactness only.
+- **Puff/pump are anchored in TWO places — keep them in sync.** The explicit RHS
+  (`physics/neutrals.py:neutral_source_sink_rhs`) and the implicit backward-Euler
+  neutral matrix (`solver.py`, `_neutral_backward_euler_step`) both place the puff
+  and pump terms. M2 relocated both by role; editing only one silently desyncs the
+  neutral-equilibration path from the explicit one. Same trap likely applies to the
+  M4 term relocations.
+- **Neutral face apertures are now the restricting (min) of adjacent cells, not the
+  mean.** Bit-identical wherever adjacent radii match, so the golden is unaffected —
+  but a legacy config that sets `source_Rm`/`end_Rm` different from `Rm` will see
+  its two end-face conductances change. Nothing in-repo does that. A true series
+  combination of half-cell conductances would be the refinement if this matters.
+- **The obstruction cell only exists when `Lcs > 0`.** At the default `Lcs = 0` the
+  resolved layout is unchanged from M1, so all M1 resolved assertions still hold;
+  `Rcs` alone does nothing without a duct length.
+- **The anode is still neutral-transparent.** M2 deferred the mesh throttle
+  (decision 3), so the central physics payoff — puffed gas leaking backward past the
+  anode to the pump (§1) — is NOT yet modeled. M3/M4 must deliver it alongside §11 #5.
 
 ---
 

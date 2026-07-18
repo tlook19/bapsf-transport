@@ -2,6 +2,7 @@ import math
 
 import numpy as np
 
+from ..core.geometry import is_plenum_cell, puff_cell_indices, pump_cell_indices
 from ..core.state import ConservativeState1D
 from cablp.vars._cons import kb_cgs, m_p_cgs
 
@@ -26,17 +27,25 @@ def molecular_flow_coefficients(
         raise ValueError(f"clausing_scale must be non-negative (got {clausing_scale})")
     v_th_n = neutral_thermal_speed(Tn_K=Tn_K, mu_neutral=mu_neutral)
     L_eff = 0.5 * (geometry.length_cm[:-1] + geometry.length_cm[1:])
-    R_face = 0.5 * (geometry.Rm_cm[:-1] + geometry.Rm_cm[1:])
+    # Generalized Clausing (BOUNDARY_REGIONS_PLAN.md §4): the aperture area and
+    # the hydraulic radius are carried per face and may differ -- an annular
+    # obstruction reduces both, independently. On legacy geometry these reduce to
+    # today's pi*Rm^2 and 0.5*(Rm[:-1] + Rm[1:]).
+    R_face = geometry.neutral_face_hydraulic_radius_cm[1:-1]
     if np.any(R_face <= 0.0):
-        raise ValueError("neutral radii must be positive")
+        raise ValueError("neutral hydraulic radii must be positive")
     clausing = 1.0 / (1.0 + (3.0 / 8.0) * L_eff / R_face)
-    return (
+    coefficients = (
         float(clausing_scale)
         * 0.25
         * v_th_n
         * geometry.neutral_face_area_cm2[1:-1]
         * clausing
     )
+    # Escape hatch: a face whose conductance is known directly rather than
+    # geometrically overrides the computed value (NaN => keep the computed one).
+    prescribed = np.asarray(geometry.neutral_face_conductance_cm3_s[1:-1], dtype=float)
+    return np.where(np.isnan(prescribed), coefficients, prescribed)
 
 
 def neutral_exchange_coefficients(
@@ -102,18 +111,48 @@ def neutral_source_sink_rhs(
     gas_puff_enabled=True,
     pump_enabled=True,
     gas_puff_valves=2,
+    pump_elbow_conductance_lps=None,
 ):
-    """Return conservative RHS for neutral gas puff and pump terms."""
+    """Return conservative RHS for neutral gas puff and pump terms.
+
+    Both terms are anchored by ``cell_role`` (§8), not by ``[0]``/``[-1]``: the
+    puff lands on its puff cell and each pump on the plenum/collector at its end.
+    Legacy roles resolve to the source and end cells, reproducing today exactly.
+    """
     dnn = np.zeros(geometry.cells, dtype=float)
+    puff_index, puff_twin_index = puff_cell_indices(geometry)
+    pump_left_index, pump_right_index = pump_cell_indices(geometry)
     if gas_puff_enabled:
-        dnn[0] += puff_rate(S_gp, gas_puff_valves, geometry.neutral_volume_cm3[0])
+        dnn[puff_index] += puff_rate(
+            S_gp, gas_puff_valves, geometry.neutral_volume_cm3[puff_index]
+        )
         if twin_cathode:
-            dnn[-1] += puff_rate(
-                Twin_S_gp, gas_puff_valves, geometry.neutral_volume_cm3[-1]
+            dnn[puff_twin_index] += puff_rate(
+                Twin_S_gp,
+                gas_puff_valves,
+                geometry.neutral_volume_cm3[puff_twin_index],
             )
     if pump_enabled:
-        dnn[0] -= pump_rate(S_pump_L, geometry.neutral_volume_cm3[0]) * state.nn[0]
-        dnn[-1] -= pump_rate(S_pump_R, geometry.neutral_volume_cm3[-1]) * state.nn[-1]
+        # The unmodeled pump elbow folds into an effective speed on the plenum
+        # (§4); a collector-side pump has no elbow in front of it.
+        S_left = _effective_pump_speed(
+            S_pump_L,
+            pump_elbow_conductance_lps if is_plenum_cell(geometry, pump_left_index)
+            else None,
+        )
+        S_right = _effective_pump_speed(
+            S_pump_R,
+            pump_elbow_conductance_lps if is_plenum_cell(geometry, pump_right_index)
+            else None,
+        )
+        dnn[pump_left_index] -= (
+            pump_rate(S_left, geometry.neutral_volume_cm3[pump_left_index])
+            * state.nn[pump_left_index]
+        )
+        dnn[pump_right_index] -= (
+            pump_rate(S_right, geometry.neutral_volume_cm3[pump_right_index])
+            * state.nn[pump_right_index]
+        )
     zeros = np.zeros(geometry.cells, dtype=float)
     return ConservativeState1D(
         n=zeros.copy(),
@@ -129,6 +168,23 @@ def puff_rate(sccm, valves, chamber_vol):
     if chamber_vol <= 0.0:
         raise ValueError(f"chamber_vol must be positive (got {chamber_vol})")
     return 4.477962e17 * float(sccm) * float(valves) / float(chamber_vol)
+
+
+def _effective_pump_speed(lps, elbow_conductance_lps):
+    """Return the pump speed seen by the plenum after the unmodeled elbow [L/s].
+
+    Series conductance, ``1/S_eff = 1/S_pump + 1/C_elbow`` (§4). ``None`` or a
+    non-positive conductance means no elbow restriction and returns ``S_pump``
+    unchanged -- short-circuited rather than computed as ``1/(1/S + 1/inf)`` so
+    the legacy path stays bit-exact.
+    """
+    speed = float(lps)
+    if elbow_conductance_lps is None:
+        return speed
+    conductance = float(elbow_conductance_lps)
+    if conductance <= 0.0 or speed <= 0.0:
+        return speed
+    return 1.0 / (1.0 / speed + 1.0 / conductance)
 
 
 def pump_rate(lps, chamber_vol):

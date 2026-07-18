@@ -161,6 +161,12 @@ def neutral_source_defaults():
         Enables neutral pump sink terms.
     gas_puff_valves:
         Number of equivalent gas-puff valves used by the SCCM conversion.
+    pump_elbow_conductance_lps:
+        Conductance of the unmodeled pump elbow [L/s], combined in series with
+        the pump speed as ``1/S_eff = 1/S_pump + 1/C_elbow``
+        (BOUNDARY_REGIONS_PLAN.md §4). Applies only to a pump sitting on a plenum
+        cell, so it is inert in legacy geometry. ``None`` (default) or a
+        non-positive value means no elbow restriction -- the legacy limit.
     """
     return {
         "S_gp": 6500,
@@ -177,6 +183,7 @@ def neutral_source_defaults():
         "gas_puff_enabled": True,
         "pump_enabled": True,
         "gas_puff_valves": 2,
+        "pump_elbow_conductance_lps": None,
     }
 
 
