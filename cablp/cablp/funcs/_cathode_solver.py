@@ -756,11 +756,18 @@ def solve_beam_system(
     x0: float | None = None,
     x0_twin: float | None = None,
     floating: bool = False,
+    cathode_index: int = 0,
+    twin_index: int = -1,
 ) -> BeamResult:
     """Solve cathode sheath(s) and compute beam quantities for all cells.
 
-    Calls solve() for the primary cathode (index 0) and, when config.Twin is
-    True, also for the twin cathode (index -1).  Beam velocity, density, and
+    Calls solve() for the primary cathode at ``cathode_index`` and, when
+    config.Twin is True, also for the twin at ``twin_index``. Those default to
+    0 and -1, the end cells, which is where a lumped source/end geometry puts the
+    cathodes. A resolved geometry must pass the cell adjacent to each cathode
+    surface instead: cell 0 there is the plasma-dead plenum, and the beam
+    quantities written here have to land on the same cell the caller launches the
+    beam from.  Beam velocity, density, and
     EII cross section are computed from the sheath potential and stored in
     per-cell arrays (zero everywhere except at active cathode indices).
 
@@ -786,64 +793,78 @@ def solve_beam_system(
 
     result = solve(
         config,
-        PlasmaState(T_e=Te[0], n_e=ne[0], n_n=nn[0], sigma_b=beam_cross_prev[0]),
+        PlasmaState(
+            T_e=Te[cathode_index],
+            n_e=ne[cathode_index],
+            n_n=nn[cathode_index],
+            sigma_b=beam_cross_prev[cathode_index],
+        ),
         x0=x0,
         floating=floating,
     )
     x0_next = result.phi_c_plus
     phi_c_0 = result.phi_c
     if phi_c_0 > I_ion:
-        v_beam[0] = math.sqrt(2.0 * phi_c_0 * _erg_per_eV / _me_cgs)
+        v_beam[cathode_index] = math.sqrt(2.0 * phi_c_0 * _erg_per_eV / _me_cgs)
         _I_beam_0 = result.I_eth_star * (1.0 - config.eta * result.beam_bypass_fraction)
-        n_beam[0] = _I_beam_0 / (_e_SI * plasma_cross[0] * v_beam[0])
+        n_beam[cathode_index] = _I_beam_0 / (_e_SI * plasma_cross[cathode_index] * v_beam[cathode_index])
         if gas_type == "He":
-            beam_cross[0] = He_EII_cross_lkup(phi_c_0 / I_ion)
+            beam_cross[cathode_index] = He_EII_cross_lkup(phi_c_0 / I_ion)
         elif gas_type == "H":
-            beam_cross[0] = H_EII_cross_lkup(phi_c_0)
+            beam_cross[cathode_index] = H_EII_cross_lkup(phi_c_0)
 
     result_twin = None
     x0_twin_next = None
     if config.Twin:
         result_twin = solve(
             config,
-            PlasmaState(T_e=Te[-1], n_e=ne[-1], n_n=nn[-1], sigma_b=beam_cross_prev[-1]),
+            PlasmaState(
+                T_e=Te[twin_index],
+                n_e=ne[twin_index],
+                n_n=nn[twin_index],
+                sigma_b=beam_cross_prev[twin_index],
+            ),
             x0=x0_twin,
             floating=floating,
         )
         x0_twin_next = result_twin.phi_c_plus
         phi_c_1 = result_twin.phi_c
         if phi_c_1 > I_ion:
-            v_beam[-1] = math.sqrt(2.0 * phi_c_1 * _erg_per_eV / _me_cgs)
+            v_beam[twin_index] = math.sqrt(2.0 * phi_c_1 * _erg_per_eV / _me_cgs)
             _I_beam_1 = result_twin.I_eth_star * (
                 1.0 - config.eta * result_twin.beam_bypass_fraction
             )
-            n_beam[-1] = _I_beam_1 / (_e_SI * plasma_cross[-1] * v_beam[-1])
+            n_beam[twin_index] = _I_beam_1 / (_e_SI * plasma_cross[twin_index] * v_beam[twin_index])
             if gas_type == "He":
-                beam_cross[-1] = He_EII_cross_lkup(phi_c_1 / I_ion)
+                beam_cross[twin_index] = He_EII_cross_lkup(phi_c_1 / I_ion)
             elif gas_type == "H":
-                beam_cross[-1] = H_EII_cross_lkup(phi_c_1)
+                beam_cross[twin_index] = H_EII_cross_lkup(phi_c_1)
 
     n_beam_ion = n_beam * beam_cross * v_beam
     A_ion_beam = n_beam_ion * nn
 
     l_b = np.zeros(cells)
     p_beam = np.zeros(cells)
-    if beam_cross[0] != 0.0:
-        l_b[0] = result.l_b
-        p_beam[0] = l_b[0] * beam_cross[0] * nn[0]
-    if config.Twin and result_twin is not None and beam_cross[-1] != 0.0:
-        l_b[-1] = result_twin.l_b
-        p_beam[-1] = l_b[-1] * beam_cross[-1] * nn[-1]
+    if beam_cross[cathode_index] != 0.0:
+        l_b[cathode_index] = result.l_b
+        p_beam[cathode_index] = (
+            l_b[cathode_index] * beam_cross[cathode_index] * nn[cathode_index]
+        )
+    if config.Twin and result_twin is not None and beam_cross[twin_index] != 0.0:
+        l_b[twin_index] = result_twin.l_b
+        p_beam[twin_index] = (
+            l_b[twin_index] * beam_cross[twin_index] * nn[twin_index]
+        )
 
     l_b_profile = np.zeros(cells)
-    if beam_cross[0] != 0.0:
+    if beam_cross[cathode_index] != 0.0:
         for j in range(cells):
-            l_b_profile[j] = _compute_l_b(result.phi_c, Te[j], ne[j], nn[j], beam_cross[0])
+            l_b_profile[j] = _compute_l_b(result.phi_c, Te[j], ne[j], nn[j], beam_cross[cathode_index])
 
     l_b_profile_twin = np.zeros(cells)
-    if config.Twin and result_twin is not None and beam_cross[-1] != 0.0:
+    if config.Twin and result_twin is not None and beam_cross[twin_index] != 0.0:
         for j in range(cells):
-            l_b_profile_twin[j] = _compute_l_b(result_twin.phi_c, Te[j], ne[j], nn[j], beam_cross[-1])
+            l_b_profile_twin[j] = _compute_l_b(result_twin.phi_c, Te[j], ne[j], nn[j], beam_cross[twin_index])
 
     return BeamResult(
         result=result,

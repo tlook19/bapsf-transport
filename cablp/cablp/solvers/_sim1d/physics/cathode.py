@@ -194,6 +194,11 @@ def solve_cathode_boundary(
         x0=x0,
         x0_twin=x0_twin,
         floating=bool(floating),
+        # The solver samples the plasma at these cells *and* writes its beam
+        # quantities there, so they must be the same cells `beam_launch` reads
+        # from -- otherwise the beam arrays are all zero where the caller looks.
+        cathode_index=beam_launch(geometry, end=0)[0],
+        twin_index=beam_launch(geometry, end=-1)[0],
     )
     return CathodeSolve1D(
         boundary=boundary,
