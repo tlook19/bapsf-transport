@@ -7,14 +7,17 @@ each milestone (do it *in the same commit* as the milestone's code).
 
 ## Current focus
 
-- **Milestone:** M4 — term relocations via roles.
-- **Next action:** plan M4 — anchor surface neutralization, the cathode surface
-  terms (ion neutralization, sheath electron loss, ohmic) and the beam by
-  `cell_role` / face helpers rather than `[0]`/`[-1]` (§6, §8). `cathode_adjacent_cells`
-  and `anode_flanking_cells` are already in place. Forces §11 **#3** (cathode ion
-  loss: volumetric term vs Bohm-flux face). Watch the two-anchoring-sites trap that
-  bit M2. Note the anode's bilateral neutralization is **already handled** by M3's
-  interception sink, so M4 must not add it again.
+- **Milestone:** M4b — remaining term relocations (M4a done).
+- **Next action:** (1) split the cathode/anode neutralization — `_cathode_particle_loss_rate`
+  returns `(1 + 2*eta)*I_i/qe`, whose `2*eta` is the *anode's* and is already removed
+  by `anode_collection_rhs`; keep it lumped only when there are no anode faces
+  (legacy). (2) Relocate the cathode electron power loss off `[0]` to
+  `cathode_adjacent_cells()`. (3) Split `P_cathode_e` / `P_anode_e`, retiring the
+  TODO in `physics/cathode.py`; anode power to the two flanking cells in proportion
+  to each face's Bohm collection. (4) Generalize `beam_absorption_weights`, which
+  hard-rejects any launch index but `0`/`-1`, to an arbitrary launch cell plus
+  direction with zero weight behind the cathode surface. No open §11 decisions
+  remain for M4b.
 - **Blocked on:** nothing. Acceptance gate: `scripts/baseline_sim1d.py --verify`
   stays bit-exact (switch off) and `smoke_sim1d.py` stays green.
 
@@ -68,6 +71,15 @@ the §13 legacy-equivalence assertion still holding.
 - [ ] **M4 — Term relocations via roles.** Surface neutralization, cathode/anode
   source terms (incl. the bilateral anode neutralization split), beam anchoring,
   ohmic — all anchored by `cell_role`, not `[0]`/`[-1]`. (§6, §8)
+  - [x] **M4a — absorbing Bohm surfaces.** `plasma_absorbing` face array (empty in
+    legacy); cathode surfaces and the collector drain at the Bohm flux with sonic
+    outflow momentum via `sources.boundary_absorption_rhs`, applied one-sidedly.
+    The volumetric `surface_neutralization` and the cathode circuit's particle loss
+    are superseded wherever a face absorbs, so nothing is neutralized twice. Ohmic
+    gap distribution landed earlier. Golden **bit-exact**; resolved floor clips fell
+    ~150x.
+  - [ ] **M4b — remaining relocations.** Cathode/anode neutralization split,
+    `P_cathode_e`/`P_anode_e` separation, beam launch anchoring.
 - [ ] **M5 — Cathode solver split sampling (level a).** Distinct anode/cathode
   `(n, Te)` → distinct `I_i`; `P_cathode_e` / `P_anode_e` land at their own cells.
   Collapses to `I_i_a = 2·eta·I_i` when the sample cells coincide. (§7)
@@ -84,7 +96,7 @@ Open items are plan §11.
 |---|---|---|---|
 | 1 | `Lcs` obstruction: face vs cell | **resolved** | **cell** — a real `Lcs`-long annular duct between plenum and cathode, so its gas inventory reaches the pump (`Lcs`~25 is comparable to the ~30 cm cell size). Omitted entirely when `Lcs<=0`, which is the legacy limit. (M2) |
 | 2 | cathode solver level (a) now / (b) path-integral later | open | (a) at M5; (b) deferred |
-| 3 | cathode ion loss: volumetric vs Bohm face | open | volumetric recommended (M4) |
+| 3 | cathode ion loss: volumetric vs Bohm face | **resolved** | **Bohm-flux absorbing face**, at the cathode *and* the collector, with **sonic outflow momentum** (leaves at `c_s` into the surface, not at the cell's drift `u`) so the loss drives flow toward the wall instead of deleting stationary plasma. Resolved cathode uses 1.0x face area; legacy keeps its 2.0 scale and its volumetric terms untouched. Implemented one-sidedly, not as a face flux — see notes. (M4a) |
 | 4 | end default: collector vs mirror/twin | **resolved** | single-cathode collector default; the existing `TwinCathode` flag switches the far end to the symmetric plenum/cathode/anode mirror (no redundant knob). (M1) |
 | 5 | anode as face vs cell | **resolved** | **face**. Fixing the cathode surface at `z=0` and the anode at `z=50` makes both *surfaces*, which have a position but no length. The mesh throttle and the bilateral neutralization split get the face they wanted; the sheath samples the cells flanking each face, which is what §7's bilateral treatment needs anyway. Cell roles `cathode`/`gap`/`puff` carry the term anchoring; `cathode_face_indices`/`anode_face_indices` carry the surfaces. (geometry rework, pre-M3) |
 | — | pump mapping in resolved single-cathode | **resolved** | each end keeps its pump: `S_pump_L`→plenum (elbow-effective), `S_pump_R`→collector. Preserves today's total pumping speed; set `S_pump_R=0` for plenum-only. (M2) |
@@ -195,13 +207,28 @@ _(Running notes: surprises, dead ends, things the next session should know.)_
   --resolved`, backward_euler): final thermal 2.19e5 erg, Te floor clips 6.0% of
   cell-visits injecting +0.02% of final thermal, Ti 6.6% injecting +0.15%. Stable,
   not yet validated — that is M6.
-- **Plenum plasma is inert but its `n` floor DOES bind** (7826 clips, all in cell 0
-  at z=-50, **zero** energy injected; Ti never clips there at all). §5 predicted the
-  floors would never bind. They do, benignly: with no source and recombination still
-  running, plenum density decays below the floor and is pinned there — the floor
-  holding the plenum at "plasma sits at the floor", not the cathode face leaking.
-  It is a tiny unphysical *particle* source; worth a look if plenum inventory ever
-  matters to the pump balance.
+- **~~Plenum plasma is inert but its `n` floor DOES bind~~ — FIXED in M4a, and my
+  M3 diagnosis was wrong.** The 7826 `n` clips in cell 0 were not recombination
+  draining a source-free cell. They were the *mis-anchored cathode term*: with
+  `resolved_boundaries` on, cell `[0]` is the plenum, and `cathode_source_terms`
+  was still depositing its `[0]`-anchored particle loss there, draining a
+  plasma-dead cell onto its floor. Disabling that volumetric loss wherever an
+  absorbing face handles it removed the cause — the resolved run now has **zero**
+  `n` clips. A reminder that a floor binding is often a symptom of a misplaced
+  term, not of the floor being needed.
+- **An interior absorbing face cannot be a face flux.** The flux array telescopes,
+  so a cathode surface expressed as a face flux hands the plasma it removes to the
+  plenum *behind* it instead of out of the domain, and kicks that plasma-dead cell
+  with sonic momentum while its density sits on the floor. `boundary_absorption_rhs`
+  therefore applies the loss one-sidedly to the live cell; closed faces stay
+  wall-like for both neighbours. The smoke conservation assertion is what caught
+  this — keep it.
+- **The sonic BC made the resolved run markedly healthier, not less stable.** Floor
+  clips fell from 6.0%/6.6% of cell-visits (Te/Ti) to 0.041%/0.131%, injected energy
+  from +0.02%/+0.15% to +0.0000%, cells clipped from 57/67 and 60/67 to 1/67 and
+  23/67, and the step count *fell* (150276 -> 113771 state calls), so the feared CFL
+  tightening did not materialize. Expected in hindsight: the old form deleted plasma
+  that was not flowing anywhere, locally depleting cells onto the floor.
 - **The audit's conduction verdict is vacuous under backward_euler** (its maximum
   principle forbids clipping). Re-run `--resolved --scheme tr_bdf2` to say anything
   about the scheme the production baseline actually uses.

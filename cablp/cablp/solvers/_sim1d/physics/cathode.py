@@ -236,15 +236,27 @@ def cathode_source_terms(
 
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     dN_loss = zeros.copy()
-    dN_loss[0] = _cathode_particle_loss_rate(
-        cathode_solve.beam_result.result,
-        eta=input_dict["eta"],
+    # An absorbing cathode face already drains the plasma at the Bohm flux, which
+    # is the same criterion the circuit's I_i is built from (A_c*e*n*c_s*exp(-0.5)
+    # on this cell's n and Te), so the face and the circuit agree on the current.
+    # Applying this volumetric loss as well would remove it twice. The electron
+    # power loss below is a separate channel and still applies.
+    face_absorbs = bool(
+        np.any(np.asarray(getattr(geometry, "plasma_absorbing", ()), dtype=bool))
     )
-    if boundary.twin_cathode and cathode_solve.beam_result.result_twin is not None:
-        dN_loss[-1] = _cathode_particle_loss_rate(
-            cathode_solve.beam_result.result_twin,
+    if not face_absorbs:
+        dN_loss[0] = _cathode_particle_loss_rate(
+            cathode_solve.beam_result.result,
             eta=input_dict["eta"],
         )
+        if (
+            boundary.twin_cathode
+            and cathode_solve.beam_result.result_twin is not None
+        ):
+            dN_loss[-1] = _cathode_particle_loss_rate(
+                cathode_solve.beam_result.result_twin,
+                eta=input_dict["eta"],
+            )
 
     plasma_loss_rate = dN_loss / geometry.plasma_volume_cm3
     neutral_gain_rate = dN_loss / geometry.neutral_volume_cm3

@@ -76,11 +76,10 @@ def _rusanov_raw_faces(state, derived, mu, geometry):
 
 
 def _apply_face_conditions(faces, geometry, pressure):
-    """Apply partial-blocking transmission and reflecting walls to raw faces.
+    """Apply partial-blocking transmission and closed-face conditions to raw faces.
 
     Partially blocking faces (the anode mesh) transmit only their open fraction;
-    the intercepted remainder is removed by the interception term, so the mesh
-    absorbs rather than reflects. Fully open faces scale by exactly 1.0.
+    fully open faces scale by exactly 1.0.
     """
     transmission = geometry.plasma_transmission
     face_n = faces.n * transmission
@@ -99,14 +98,20 @@ def _apply_face_conditions(faces, geometry, pressure):
 
 
 def _apply_plasma_walls(geometry, pressure, face_n, face_M, face_Ee, face_Ei):
-    """Impose reflecting-wall conditions on every face with ``plasma_open`` False.
+    """Impose closed-face conditions on every face with ``plasma_open`` False.
 
-    A wall carries no particle or thermal-energy flux, but pressure acts on it so
-    a uniform stationary state still has zero divergence. This generalizes the
-    historical external-end-only walls (the plasma domain is now bounded *inside*
-    the neutral domain by the cathode surfaces, §5); the pressure is taken from
-    the live plasma cell, which for the external ends is cell 0 and cell -1
+    A closed face carries no particle or thermal-energy flux, but pressure acts on
+    it so a uniform stationary state still has zero divergence. This generalizes
+    the historical external-end-only walls (the plasma domain is now bounded
+    *inside* the neutral domain by the cathode surfaces, §5); the pressure comes
+    from the live plasma cell, which for the external ends is cell 0 and cell -1
     exactly as before.
+
+    Absorbing surfaces are closed here too, and their loss is applied one-sidedly
+    by ``sources.boundary_absorption_rhs``. It cannot be a face flux: the flux
+    array telescopes, so an *interior* absorbing face (a cathode surface) would
+    hand the plasma it removes to the plenum behind it instead of out of the
+    domain, and would kick a plasma-dead cell with sonic momentum.
     """
     roles = np.asarray(geometry.cell_role)
     dead = np.asarray([role in PLASMA_DEAD_ROLES for role in roles], dtype=bool)
@@ -233,6 +238,7 @@ def plasma_flux_rhs_terms(
     geometry,
     include_front=True,
     alpha_front=1.0,
+    alpha_isat=np.exp(-0.5),
 ):
     """Return separately named conservative RHS terms from plasma face fluxes."""
     rusanov = rusanov_fluxes(

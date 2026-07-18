@@ -52,7 +52,7 @@ from cablp.solvers._sim1d.physics.reactions import (
     particle_inventory_rate,
     reaction_rates,
 )
-from cablp.solvers._sim1d.physics.sources import velocity_divergence
+from cablp.solvers._sim1d.physics.sources import add_state_rhs, velocity_divergence
 from cablp.solvers._sim1d.core.state import (
     STATE_NAMES_1D,
     conservative_from_primitives,
@@ -376,6 +376,53 @@ def main():
         pack_state(transparent_sim.anode_collection_rhs(state=flowing_state)), 0.0
     )
     assert np.allclose(pack_state(sim.anode_collection_rhs(state=state)), 0.0)
+
+    # M4a: the cathode surface and the collector are absorbing Bohm faces (§11
+    # decision 3); legacy has none and keeps its volumetric surface terms.
+    assert not np.any(geom.plasma_absorbing)
+    assert resolved_geom.plasma_absorbing[cathode_face]
+    assert resolved_geom.plasma_absorbing[-1]  # collector outer face
+    assert not resolved_geom.plasma_absorbing[anode_face]
+    # Absorbing faces are still closed: nothing passes through to the far side.
+    assert not resolved_geom.plasma_open[cathode_face]
+    # A twin machine ends in plenums, whose closed back walls see no plasma.
+    assert not twin_resolved_geom.plasma_absorbing[0]
+    assert not twin_resolved_geom.plasma_absorbing[-1]
+    for face in twin_resolved_geom.cathode_face_indices:
+        assert twin_resolved_geom.plasma_absorbing[face]
+
+    # The absorbing face drains its live cell and returns the plasma as gas
+    # there, conserving particles.
+    absorbed = resolved_sim.boundary_absorption_rhs(state=flowing_state)
+    assert absorbed.n[cathode_face] < 0.0  # cathode cell drains to the surface
+    assert absorbed.nn[cathode_face] > 0.0
+    assert absorbed.n[-1] < 0.0  # collector drains too
+    # Momentum leaves at c_s directed INTO each surface: negative (toward -z) at
+    # the cathode, positive (toward +z) at the collector. This is what makes the
+    # sonic condition drive flow toward the wall rather than just delete plasma.
+    assert absorbed.M[cathode_face] > 0.0
+    assert absorbed.M[-1] < 0.0
+    # Plasma-dead cells are untouched: an interior absorbing face must not hand
+    # anything to the plenum behind it.
+    assert np.allclose(absorbed.n[0], 0.0)
+    assert np.allclose(absorbed.M[0], 0.0)
+    absorbed_scale = np.sum(
+        np.abs(absorbed.n * resolved_geom.plasma_volume_cm3)
+        + np.abs(absorbed.nn * resolved_geom.neutral_volume_cm3)
+    )
+    assert absorbed_scale > 0.0
+    assert np.isclose(
+        particle_inventory_rate(absorbed, resolved_geom),
+        0.0,
+        atol=1e-12 * absorbed_scale,
+    )
+    assert np.allclose(pack_state(sim.boundary_absorption_rhs(state=state)), 0.0)
+    # The volumetric surface term is superseded where a face absorbs, so the same
+    # plasma is not neutralized twice.
+    assert np.allclose(
+        pack_state(resolved_sim.surface_neutralization_rhs(state=flowing_state)),
+        0.0,
+    )
 
     # M3: no parallel heat conduction crosses a cathode surface into the plenum.
     resolved_q = conductive_face_flux(
@@ -1723,6 +1770,7 @@ def main():
     expected_rhs_terms = {
         "plasma_advective_flux",
         "plasma_front_flux",
+        "boundary_absorption",
         "pressure_work",
         "ei_exchange",
         "ionization_energy_cost",

@@ -50,6 +50,7 @@ class Sim1DGeometry:
     neutral_face_area_cm2: np.ndarray
     neutral_face_hydraulic_radius_cm: np.ndarray
     plasma_open: np.ndarray
+    plasma_absorbing: np.ndarray
     plasma_transmission: np.ndarray
     heat_transmission: np.ndarray
     neutral_face_conductance_cm3_s: np.ndarray
@@ -420,6 +421,12 @@ def _build_resolved_geometry(input_dict, flags):
         anode_advective_block=float(
             input_dict.get("b_anode_advective_block", 0.0)
         ),
+        # Plasma-terminating surfaces: every cathode, plus the collector's outer
+        # face when there is one (a twin machine ends in plenums instead, whose
+        # back walls are closed and see no plasma).
+        absorbing_face_indices=(
+            list(cathode_faces) if twin else list(cathode_faces) + [cells]
+        ),
     )
 
 
@@ -443,6 +450,7 @@ def _assemble_geometry(
     anode_face_indices=None,
     anode_transparency=1.0,
     anode_advective_block=0.0,
+    absorbing_face_indices=None,
 ):
     """Derive the face arrays from the cell arrays and pack a ``Sim1DGeometry``.
 
@@ -458,6 +466,16 @@ def _assemble_geometry(
     neutral_face_hydraulic_radius_cm = _face_min(neutral_hydraulic_radius_cm)
 
     dead = np.asarray([role in PLASMA_DEAD_ROLES for role in cell_role], dtype=bool)
+    # Absorbing faces are the plasma-terminating surfaces: the whole cross-section
+    # ends there, so the plasma goes sonic into the sheath and is neutralized
+    # (plan §11 decision 3). They are a *refinement* of walls -- nothing passes
+    # through to the far side -- and legacy geometry has none, keeping its
+    # historical volumetric surface terms.
+    plasma_absorbing = np.zeros(cells + 1, dtype=bool)
+    for face in np.asarray(
+        [] if absorbing_face_indices is None else absorbing_face_indices, dtype=int
+    ):
+        plasma_absorbing[face] = True
     plasma_open = np.ones(cells + 1, dtype=bool)
     plasma_transmission = np.ones(cells + 1, dtype=float)
     heat_transmission = np.ones(cells + 1, dtype=float)
@@ -519,6 +537,7 @@ def _assemble_geometry(
         neutral_face_area_cm2=neutral_face_area_cm2,
         neutral_face_hydraulic_radius_cm=neutral_face_hydraulic_radius_cm,
         plasma_open=plasma_open,
+        plasma_absorbing=plasma_absorbing,
         plasma_transmission=plasma_transmission,
         heat_transmission=heat_transmission,
         neutral_face_conductance_cm3_s=neutral_face_conductance_cm3_s,

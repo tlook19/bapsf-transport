@@ -4,6 +4,7 @@ from cablp.funcs._cross import charge_ex_react
 from cablp.vars._cons import ev_to_erg
 
 from .flux import ion_sound_speed
+from ..core.geometry import PLASMA_DEAD_ROLES
 from ..core.state import ConservativeState1D, derive_state
 
 
@@ -56,8 +57,22 @@ def surface_neutralization_rhs(
     end_mode="collector",
     b_surface_loss=1.0,
 ):
-    """Return conservative source/end surface plasma neutralization terms."""
+    """Return conservative source/end surface plasma neutralization terms.
+
+    Superseded wherever the geometry carries an absorbing face: a plasma-
+    terminating surface removes its plasma through the face itself (plan §11
+    decision 3), so applying this volumetric form as well would neutralize the
+    same plasma twice. Legacy geometry has no absorbing faces and is unaffected.
+    """
     zeros = np.zeros(geometry.cells, dtype=float)
+    if np.any(np.asarray(getattr(geometry, "plasma_absorbing", ()), dtype=bool)):
+        return ConservativeState1D(
+            n=zeros,
+            nn=zeros.copy(),
+            M=zeros.copy(),
+            Ee=zeros.copy(),
+            Ei=zeros.copy(),
+        )
     if b_surface_loss == 0.0:
         return ConservativeState1D(
             n=zeros,
@@ -98,6 +113,82 @@ def surface_neutralization_rhs(
         n=-plasma_loss_rate,
         nn=neutral_gain_rate,
         M=-ion_mass_g * derived.u * plasma_loss_rate,
+        Ee=-1.5 * ev_to_erg * derived.Te * plasma_loss_rate,
+        Ei=-1.5 * ev_to_erg * derived.Ti * plasma_loss_rate,
+    )
+
+
+def boundary_absorption_rhs(
+    state,
+    floors,
+    ion_mass_g,
+    mu,
+    geometry,
+    alpha_isat=np.exp(-0.5),
+    b_surface_loss=1.0,
+):
+    """Return the plasma absorbed by the plasma-terminating surfaces.
+
+    The cathode and collector surfaces end the plasma domain, so the Bohm
+    criterion applies to the face itself (plan §11 decision 3): plasma leaves at
+    the sound speed and is neutralized on the surface.
+
+    Applied one-sidedly to the live cell rather than as a face flux, because the
+    flux array telescopes: an *interior* absorbing face would otherwise hand the
+    plasma it removes to the plasma-dead plenum behind it, and kick that cell with
+    sonic momentum while its density sits on the floor.
+
+    The sonic condition is what distinguishes this from the historical volumetric
+    surface term: momentum leaves at ``c_s`` directed *into* the surface, not at
+    the cell's own drift ``u``, so the loss actually drives flow toward the wall
+    instead of deleting plasma that was never moving there. Legacy geometry has no
+    absorbing faces, so it keeps ``surface_neutralization_rhs`` unchanged.
+    """
+    zeros = np.zeros(geometry.cells, dtype=float)
+    absorbing = np.asarray(
+        getattr(geometry, "plasma_absorbing", np.zeros(0)), dtype=bool
+    )
+    if not np.any(absorbing) or b_surface_loss == 0.0:
+        return ConservativeState1D(
+            n=zeros,
+            nn=zeros.copy(),
+            M=zeros.copy(),
+            Ee=zeros.copy(),
+            Ei=zeros.copy(),
+        )
+
+    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
+    roles = np.asarray(geometry.cell_role)
+    dead = np.asarray([role in PLASMA_DEAD_ROLES for role in roles], dtype=bool)
+    cells = roles.size
+    dN_loss = np.zeros(cells, dtype=float)
+    sonic_momentum = np.zeros(cells, dtype=float)
+    for face in np.flatnonzero(absorbing):
+        face = int(face)
+        left, right = face - 1, face
+        live_is_right = left < 0 or (right < cells and not dead[right])
+        live = right if live_is_right else left
+        # Outward normal: plasma on the high-z side of the surface flows toward
+        # -z to reach it, and vice versa.
+        outward = -1.0 if live_is_right else 1.0
+        cs = ion_sound_speed(derived.Te[live], mu)
+        loss = _cell_surface_particle_loss(
+            n=state.n[live],
+            Te=derived.Te[live],
+            mu=mu,
+            area_cm2=float(geometry.plasma_face_area_cm2[face]),
+            alpha_isat=alpha_isat,
+        )
+        dN_loss[live] += loss
+        sonic_momentum[live] += ion_mass_g * outward * cs * loss
+    dN_loss *= float(b_surface_loss)
+    sonic_momentum *= float(b_surface_loss)
+
+    plasma_loss_rate = dN_loss / geometry.plasma_volume_cm3
+    return ConservativeState1D(
+        n=-plasma_loss_rate,
+        nn=dN_loss / geometry.neutral_volume_cm3,
+        M=-sonic_momentum / geometry.plasma_volume_cm3,
         Ee=-1.5 * ev_to_erg * derived.Te * plasma_loss_rate,
         Ei=-1.5 * ev_to_erg * derived.Ti * plasma_loss_rate,
     )

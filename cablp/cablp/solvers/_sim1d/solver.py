@@ -61,6 +61,7 @@ from .physics.reactions import reaction_rhs, reaction_rhs_terms
 from .physics.sources import (
     add_state_rhs,
     anode_collection_rhs,
+    boundary_absorption_rhs,
     ion_neutral_drag_rhs,
     ion_neutral_frictional_heating_rhs,
     ion_neutral_thermalization_rhs,
@@ -546,6 +547,7 @@ class LAPDSim1D:
             return {
                 "plasma_advective_flux": self._zero_rhs_state(),
                 "plasma_front_flux": self._zero_rhs_state(),
+                "boundary_absorption": self._zero_rhs_state(),
                 "pressure_work": self._zero_rhs_state(),
                 "ei_exchange": self._zero_rhs_state(),
                 "ionization_energy_cost": self._zero_rhs_state(),
@@ -591,6 +593,7 @@ class LAPDSim1D:
         terms = {
             "plasma_advective_flux": plasma_terms["plasma_advective_flux"],
             "plasma_front_flux": plasma_terms["plasma_front_flux"],
+            "boundary_absorption": self.boundary_absorption_rhs(state=state),
             "pressure_work": self.pressure_work_rhs(state=state),
             "ei_exchange": self.energy_exchange_rhs(state=state),
             "ionization_energy_cost": electron_cooling_terms[
@@ -1732,6 +1735,21 @@ class LAPDSim1D:
             mu=self._mu,
             geometry=self._geometry,
             **self._surface_loss_kwargs(),
+        )
+
+    def boundary_absorption_rhs(self, y=None, state=None):
+        """Return the Bohm absorption at the plasma-terminating surfaces."""
+        if state is None:
+            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        surface_kwargs = self._surface_loss_kwargs()
+        return boundary_absorption_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            mu=self._mu,
+            geometry=self._geometry,
+            alpha_isat=surface_kwargs["alpha_isat"],
+            b_surface_loss=surface_kwargs["b_surface_loss"],
         )
 
     def anode_collection_rhs(self, y=None, state=None):

@@ -212,7 +212,7 @@ def verify(baseline_path, rtol, atol, param_overrides=None, flag_overrides=None)
 
     diff = np.abs(fresh_y - golden_y)
     scale = np.abs(golden_y) + np.abs(fresh_y)
-    rel = np.where(scale > 0.0, 2.0 * diff / scale, 0.0)
+    rel = np.divide(2.0 * diff, scale, out=np.zeros_like(diff), where=scale > 0.0)
     max_abs = float(np.max(diff)) if diff.size else 0.0
     max_rel = float(np.max(rel)) if rel.size else 0.0
     exact = bool(np.array_equal(fresh_y, golden_y))
