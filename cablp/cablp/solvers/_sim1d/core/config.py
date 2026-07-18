@@ -364,6 +364,14 @@ def fudge_factor_defaults():
         Plasma surface neutralization/loss scale factor.
     b_ion_neutral_drag:
         Ion-neutral drag (friction) momentum-sink scale factor.
+    b_presheath_length:
+        Scale factor on the collisional presheath depth `c_s / nu_in` used to
+        sample the upstream density for the Bohm flux at plasma-terminating
+        surfaces (BOUNDARY_REGIONS_PLAN.md §11 decision 3). `alpha_isat` converts
+        the *presheath-entrance* density to the sheath edge, so it must be applied
+        to an upstream sample. `0` collapses the sample to the adjacent cell,
+        recovering the historical behaviour; `1` (default) uses the physical
+        depth. Inert in legacy geometry, which has no absorbing faces.
     sigma_in_cm2:
         Ion-neutral momentum-transfer cross section [cm^2].
     alpha_isat:
@@ -390,6 +398,7 @@ def fudge_factor_defaults():
         "b_pressure_work_ions": 1.0,
         "b_surface_loss": 1.0,
         "b_ion_neutral_drag": 1.0,
+        "b_presheath_length": 1.0,
         "sigma_in_cm2": 5.0e-15,
         "alpha_isat": 0.6065306597126334,
         "source_surface_area_scale": 1.8,

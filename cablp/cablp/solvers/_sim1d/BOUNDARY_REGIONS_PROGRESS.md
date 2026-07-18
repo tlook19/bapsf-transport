@@ -8,12 +8,16 @@ each milestone (do it *in the same commit* as the milestone's code).
 ## Current focus
 
 - **Milestone:** M5 — cathode solver split sampling.
-- **Next action:** §7 level (a) — `solve_beam_system` now takes an explicit
-  `cathode_index`, so the remaining work is feeding the *anode* cell's `(n, Te)`
-  into the anode-sheath block for a distinct `I_i_a`, plus §11 #6 (asymmetric anode
-  sheath). Remember M5 must NOT re-add the anode particle sink —
-  `anode_collection_rhs` owns it. Optional, no longer load-bearing: presheath-length
-  sampling for the Bohm flux (see the mesh-independence note).
+- **Next action:** §7 level (a). `solve_beam_system` already takes an explicit
+  `cathode_index`, so M5 is now two concrete fixes, both recorded as ⚠ notes below:
+  1. Feed the *anode* cell's `(n, Te)` into the anode-sheath block for a distinct
+     `I_i_a`. The circuit currently assumes `2*eta*I_i` scaled from the cathode,
+     which measures **23.5x** off the fluid's anode collection.
+  2. Restore circuit/fluid agreement on the cathode current — the fluid drain now
+     carries `presheath_alpha` but `solve()` still uses the bare `exp(-1/2)`.
+  Cleanest route for both: an explicit sample override on `solve_beam_system`,
+  alongside the `cathode_index` parameter. Then §11 #6 (asymmetric anode sheath).
+  M5 must NOT re-add the anode particle sink — `anode_collection_rhs` owns it.
 - **Blocked on:** nothing. Both gates green: `scripts/baseline_sim1d.py --verify`
   stays bit-exact (switch off) and `smoke_sim1d.py` passes. Resolved mode now runs
   a full discharge.
@@ -250,6 +254,38 @@ _(Running notes: surprises, dead ends, things the next session should know.)_
 - **Latent trap this exposed:** the cathode solver both *samples* and *writes* at
   the same index. Any future change to where the beam is read from must move the
   solver's index with it, or the beam silently vanishes rather than erroring.
+- **Presheath-attenuated sheath factor (`presheath_alpha`).** `alpha_isat` =
+  `exp(-1/2)` is the Boltzmann drop across the *whole* presheath, so it is only
+  valid applied to the presheath-*entrance* density. A cell buried inside the
+  presheath has already undergone part of that drop, so the factor applied to a
+  local sample is `alpha_isat ** (min(L_cell, L_ps) / L_ps)`, with
+  `L_ps = c_s / nu_in` computed from existing machinery. Limits:
+  presheath fits inside the cell -> full `exp(-1/2)`; presheath much longer than
+  the cell -> no correction (the cell already sits at the sheath edge). Measured
+  alphas at 10 cm cells: 0.6065 (dense/hot, L_ps=5.4 cm), 0.8046 (L_ps=23 cm),
+  0.9962 (cold/rarefied, L_ps=1300 cm). `b_presheath_length=0` recovers the old
+  constant. Self-limiting (factor <= 1, so no flux cap is needed) and
+  self-consistently mesh-independent: refine the cell and the local density falls
+  along the same Boltzmann profile the exponent compensates for.
+- **The anode is NOT presheath-attenuated, by the same rule rather than an
+  exception.** A mesh's presheath is *geometric* — set by the wire spacing,
+  sub-millimetre — not collisional, so it always fits inside a cell, the fraction
+  is 1, and the full `exp(-1/2)` applies. Verified: anode collection is bit-identical
+  at `b_presheath_length` 0 and 1 (-2.4381e16 both), while the cathode drain moves
+  by the predicted 1.327x.
+- **⚠ OPEN for M5: the circuit's anode current is ~23x off the fluid's.** The
+  circuit still assumes `I_i_a = 2*eta*I_i` scaled from the *cathode* cell, while
+  `anode_collection_rhs` computes the real thing from anode-local plasma. On a
+  representative resolved state (depleted cathode cell, dense gap) that is
+  8.49 A assumed vs 199.9 A actual — a factor 23.5. This is exactly what §7 level
+  (a) exists to fix, and it is now the largest known inconsistency in resolved mode.
+- **⚠ OPEN for M5: circuit/fluid agreement on the cathode current is temporarily
+  broken.** M4a established that the absorbing face and the circuit compute the
+  same Bohm flux. The fluid drain now carries `presheath_alpha`, but the circuit's
+  `solve()` still uses the bare `exp(-1/2)` on the raw cell density, so they differ
+  by the attenuation factor (1.327x in the test case). Restore this when M5
+  restructures the sampling — the cleanest route is an explicit sample override on
+  `solve_beam_system`, alongside the `cathode_index` parameter added there.
 - **The sonic BC made the resolved run markedly healthier, not less stable.** Floor
   clips fell from 6.0%/6.6% of cell-visits (Te/Ti) to 0.041%/0.131%, injected energy
   from +0.02%/+0.15% to +0.0000%, cells clipped from 57/67 and 60/67 to 1/67 and

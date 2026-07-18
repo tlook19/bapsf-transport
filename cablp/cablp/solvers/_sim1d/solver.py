@@ -1750,6 +1750,10 @@ class LAPDSim1D:
             geometry=self._geometry,
             alpha_isat=surface_kwargs["alpha_isat"],
             b_surface_loss=surface_kwargs["b_surface_loss"],
+            sigma_in_cm2=float(self._input_dict.get("sigma_in_cm2", 5.0e-15)),
+            b_presheath_length=float(
+                self._input_dict.get("b_presheath_length", 1.0)
+            ),
         )
 
     def anode_collection_rhs(self, y=None, state=None):

@@ -118,6 +118,53 @@ def surface_neutralization_rhs(
     )
 
 
+def presheath_length_cm(nn, Te, Ti, mu, ion_mass_g, sigma_in_cm2=5.0e-15):
+    """Return the collisional presheath depth in front of a surface [cm].
+
+    Ions are accelerated to ``c_s`` across the presheath, and cannot be freely
+    accelerated over more than an ion-neutral momentum-transfer mean free path,
+    so ``L_ps ~ c_s / nu_in``. In this device that runs from ~66 cm when the gas
+    is cold and rarefied to ~5 cm once the discharge is hot and dense, which is
+    what makes the sampling depth self-selecting rather than a tuned constant.
+    """
+    nu_in = ion_neutral_collision_frequency(
+        nn=nn, Ti=Ti, ion_mass_g=ion_mass_g, sigma_in_cm2=sigma_in_cm2
+    )
+    if nu_in <= 0.0 or not np.isfinite(nu_in):
+        return np.inf
+    return float(ion_sound_speed(Te, mu) / nu_in)
+
+
+def presheath_alpha(alpha_isat, cell_length_cm, presheath_cm):
+    """Return the sheath-edge conversion factor for a *locally* sampled density.
+
+    ``alpha_isat = exp(-1/2)`` is the Boltzmann drop across the whole presheath,
+    ``n_se = n_0 * exp(-1/2)``, so it is only correct when the sampled density is
+    the presheath-*entrance* density. Sampling at depth ``d`` inside the presheath
+    catches only part of that drop -- for a linear potential profile
+    ``n(d) = n_0 * exp(-(1/2)(1 - d/L_ps))`` -- leaving
+
+        n_se = n(d) * exp(-(1/2) * d / L_ps)
+
+    so the factor is ``alpha_isat ** (d / L_ps)`` with ``d`` capped at one
+    presheath depth. The two limits are the physical ones:
+
+    - presheath **fits inside** the cell (``L_ps <= d``): the cell average is the
+      upstream reservoir, so the full ``exp(-1/2)`` applies.
+    - presheath **much longer** than the cell: the cell already sits at the sheath
+      edge, so no further reduction applies and the factor tends to 1.
+
+    This is also self-consistently mesh-independent: refine the cell and the local
+    density falls along the same Boltzmann profile that the exponent compensates
+    for, leaving ``n_se`` unchanged. And since the factor never exceeds 1, the
+    flux can never exceed what the cell can deliver at the sound speed.
+    """
+    if not np.isfinite(presheath_cm) or presheath_cm <= 0.0:
+        return float(alpha_isat)
+    fraction = min(float(cell_length_cm), float(presheath_cm)) / float(presheath_cm)
+    return float(alpha_isat) ** fraction
+
+
 def boundary_absorption_rhs(
     state,
     floors,
@@ -126,6 +173,8 @@ def boundary_absorption_rhs(
     geometry,
     alpha_isat=np.exp(-0.5),
     b_surface_loss=1.0,
+    sigma_in_cm2=5.0e-15,
+    b_presheath_length=1.0,
 ):
     """Return the plasma absorbed by the plasma-terminating surfaces.
 
@@ -172,12 +221,29 @@ def boundary_absorption_rhs(
         # -z to reach it, and vice versa.
         outward = -1.0 if live_is_right else 1.0
         cs = ion_sound_speed(derived.Te[live], mu)
+        # Apply only the portion of the presheath drop that the cell actually
+        # spans: the full exp(-1/2) is valid when the presheath fits inside the
+        # cell, and tends to no correction when the cell is buried inside a
+        # presheath much longer than it.
+        presheath_cm = b_presheath_length * presheath_length_cm(
+            nn=state.nn[live],
+            Te=derived.Te[live],
+            Ti=derived.Ti[live],
+            mu=mu,
+            ion_mass_g=ion_mass_g,
+            sigma_in_cm2=sigma_in_cm2,
+        )
+        alpha_eff = presheath_alpha(
+            alpha_isat=alpha_isat,
+            cell_length_cm=geometry.length_cm[live],
+            presheath_cm=presheath_cm,
+        )
         loss = _cell_surface_particle_loss(
             n=state.n[live],
             Te=derived.Te[live],
             mu=mu,
             area_cm2=float(geometry.plasma_face_area_cm2[face]),
-            alpha_isat=alpha_isat,
+            alpha_isat=alpha_eff,
         )
         dN_loss[live] += loss
         sonic_momentum[live] += ion_mass_g * outward * cs * loss
@@ -219,6 +285,18 @@ def anode_collection_rhs(
     sampled locally. Neutrals are released on the side they were collected from,
     since a wire blocks the path to the other side and the mesh throttles neutral
     flow between them (§7).
+
+    The full ``alpha_isat`` applies here, and that is the *same* rule
+    ``boundary_absorption_rhs`` uses rather than an exception to it. The factor is
+    attenuated by how much of the presheath a cell spans (``presheath_alpha``),
+    and a mesh's presheath is **geometric**, not collisional: only ``eta`` of the
+    cross-section terminates and the rest streams past, so each wire carries its
+    own presheath on the scale of the wire spacing -- sub-millimetre, thousands of
+    times shorter than a cell. The presheath therefore always fits inside the
+    cell, the fraction is 1, and the factor is the undiminished ``exp(-1/2)``.
+    Equivalently: from the wires' point of view the cell average already *is* the
+    upstream reservoir. The depletion the mesh does cause is between its two
+    sides, which the grid resolves by sampling each flanking cell separately.
 
     Mass, momentum and thermal energy leave together as at any wall; the collected
     momentum is absorbed by the grounded anode structure rather than heating the
