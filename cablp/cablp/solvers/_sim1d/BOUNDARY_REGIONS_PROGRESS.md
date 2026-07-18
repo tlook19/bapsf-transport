@@ -7,10 +7,11 @@ each milestone (do it *in the same commit* as the milestone's code).
 
 ## Current focus
 
-- **Milestone:** M0 — baseline & scaffolding
-- **Next action:** capture the golden baseline (plan §12 step 0) — run the smoke
-  test and a representative `run_sim1d.py`, commit their outputs *before* any code
-  change.
+- **Milestone:** M1 — geometry schema behind the `resolved_boundaries` master switch.
+- **Next action:** plan M1 (typed segments, load-bearing `cell_role`, per-cell/face
+  `area` + `hydraulic_radius`, face-property arrays) and surface the schema decisions
+  it forces before writing code. The M0 golden baseline is now the acceptance gate:
+  `python scripts/baseline_sim1d.py --verify` must stay green (currently bit-exact).
 - **Blocked on:** nothing.
 
 ## Milestones
@@ -18,9 +19,14 @@ each milestone (do it *in the same commit* as the milestone's code).
 Each milestone ends with a commit, a passing `smoke_sim1d.py`, and (from M1 on)
 the §13 legacy-equivalence assertion still holding.
 
-- [ ] **M0 — Baseline & scaffolding.** Plan + this tracker + resume prompt
-  committed. Golden baseline (smoke trajectory + a `run_sim1d.py` output) captured
-  and committed *before* touching code (§12.0, §13).
+- [x] **M0 — Baseline & scaffolding.** Plan + this tracker + resume prompt
+  committed. Golden baseline captured and committed *before* touching code
+  (§12.0, §13): `scripts/baseline_sim1d.py` (`--capture`/`--verify`) plus the
+  fixture `scripts/baselines/notebook_discharge.npz` (+ `.json` sidecar). Baseline
+  = the production notebook config (implicit heat, tr_bdf2 + Strang + Picard,
+  cathode on) run to its dynamic current-trigger end (2793 saves, 16084 steps,
+  final_time = 2.7913e-2 s). Fresh re-run is **bit-exact**, and `smoke_sim1d.py`
+  passes at baseline.
 - [ ] **M1 — Geometry schema** behind the `resolved_boundaries` master switch
   (default off). Typed segments; `cell_role` load-bearing; per-cell/face `area` +
   `hydraulic_radius`; face-property arrays `plasma_open` / `neutral_conductance` /
@@ -58,12 +64,31 @@ Open items are plan §11.
 | 6 | asymmetric anode sheath | open | investigate at M5 |
 | 7 | anode obstruction in subsonic regime | open | revisit if flow is subsonic at anode |
 | — | single code path vs duplicate legacy path | open | plan §13 recommends single path |
+| — | golden-baseline form (M0 tooling) | **resolved** | notebook production config (implicit tr_bdf2 + Strang + Picard, cathode on), full packed-`y` trajectory to the dynamic current-trigger end, stored as NPZ. Chosen over a compressed-timing or cathode-off run (both weaker: floor-collapsed / miss the cathode/anode terms M4–M5 relocate). Implicit split makes the real-timescale run cheap (~65 s). |
 
 ## Notes / scratch
 
 _(Running notes: surprises, dead ends, things the next session should know.)_
 
-- —
+- **Golden baseline is bit-deterministic.** A fresh `--verify` reproduced the
+  captured trajectory exactly (`max_rel=0`, `max_abs=0`). So M1+ equivalence is a
+  hard target: a pure role-/face-driven refactor on legacy inputs should stay
+  bit-exact; any nonzero `max_rel` means real arithmetic changed and needs
+  explaining, not just tolerating.
+- **Baseline end time is dynamic, not `default_t_end`.** With
+  `phase_transition_mode="current"` (default) and no explicit `t_end`, `run()`
+  shortens `t_end` when the discharge-current trigger fires (`solver.py` ~1043,
+  1171), so the run ends at 2.79e-2 s, not the nominal 0.077 s. Deterministic
+  (state-driven), so fine for a fixture — but if M1's refactor shifts the trigger
+  step, trajectory length changes and `--verify` reports a shape mismatch rather
+  than a value diff. Watch for that.
+- **Fixture is 6.2 MB** (NPZ, full float64 packed trajectory). `*.h5`/`*.hdf5`
+  are gitignored but `*.npz` is not, so it commits cleanly. If repo size matters,
+  it can be slimmed to strided checkpoints + final state; kept full for now since
+  the run is bit-exact and full compare is the sharpest check.
+- **Keep `baseline_sim1d.py` in sync with `sim1d_run_and_plot.ipynb` cell 3.** The
+  baseline config is a hand-copy of the notebook overrides. A deliberate
+  re-baseline (re-`--capture`, reviewed) is the only correct way to change it.
 
 ---
 
