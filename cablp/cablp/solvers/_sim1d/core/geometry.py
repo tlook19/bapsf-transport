@@ -50,6 +50,7 @@ class Sim1DGeometry:
     neutral_face_area_cm2: np.ndarray
     neutral_face_hydraulic_radius_cm: np.ndarray
     plasma_open: np.ndarray
+    plasma_transmission: np.ndarray
     heat_transmission: np.ndarray
     neutral_face_conductance_cm3_s: np.ndarray
     center_distance_cm: np.ndarray
@@ -392,6 +393,7 @@ def _build_resolved_geometry(input_dict, flags):
         center_distance_cm=center_distance_cm,
         cathode_face_indices=np.asarray(cathode_faces, dtype=int),
         anode_face_indices=np.asarray(anode_faces, dtype=int),
+        anode_transparency=1.0 - float(input_dict.get("eta", 0.0)),
     )
 
 
@@ -413,6 +415,7 @@ def _assemble_geometry(
     center_distance_cm,
     cathode_face_indices=None,
     anode_face_indices=None,
+    anode_transparency=1.0,
 ):
     """Derive the face arrays from the cell arrays and pack a ``Sim1DGeometry``.
 
@@ -429,12 +432,31 @@ def _assemble_geometry(
 
     dead = np.asarray([role in PLASMA_DEAD_ROLES for role in cell_role], dtype=bool)
     plasma_open = np.ones(cells + 1, dtype=bool)
+    plasma_transmission = np.ones(cells + 1, dtype=float)
     heat_transmission = np.ones(cells + 1, dtype=float)
     walls = [0, cells]
     walls += [face for face in range(1, cells) if dead[face - 1] != dead[face]]
     for face in walls:
         plasma_open[face] = False
+        plasma_transmission[face] = 0.0
         heat_transmission[face] = 0.0
+
+    # The anode mesh is plasma-open but partially blocking, and the three
+    # transmissions are independent (§3): the solid fraction eta intercepts the
+    # directed plasma flux (§11 decision 7), blocks the same fraction of parallel
+    # conduction, and the neutral aperture is the transparency times the machine
+    # cross-section. eta = 0 recovers a fully transparent anode -- the legacy limit.
+    transparency = float(anode_transparency)
+    if not 0.0 <= transparency <= 1.0:
+        raise ValueError(
+            f"anode transparency must lie in [0, 1] (got {transparency})"
+        )
+    for face in np.asarray(
+        [] if anode_face_indices is None else anode_face_indices, dtype=int
+    ):
+        plasma_transmission[face] = transparency
+        heat_transmission[face] = transparency
+        neutral_face_area_cm2[face] = neutral_face_area_cm2[face] * transparency
 
     # No prescribed neutral apertures: NaN => derive the molecular-flow (Clausing)
     # conductance from the face area + hydraulic radius. Kept as an escape hatch
@@ -459,6 +481,7 @@ def _assemble_geometry(
         neutral_face_area_cm2=neutral_face_area_cm2,
         neutral_face_hydraulic_radius_cm=neutral_face_hydraulic_radius_cm,
         plasma_open=plasma_open,
+        plasma_transmission=plasma_transmission,
         heat_transmission=heat_transmission,
         neutral_face_conductance_cm3_s=neutral_face_conductance_cm3_s,
         center_distance_cm=center_distance_cm,

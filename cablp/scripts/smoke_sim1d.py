@@ -22,6 +22,7 @@ from cablp.solvers._sim1d import (
     summarize_result,
 )
 from cablp.solvers._sim1d.physics.conduction import (
+    conductive_face_flux,
     heat_conduction_rhs,
     implicit_heat_conduction_step,
 )
@@ -277,6 +278,91 @@ def main():
         np.pi * (rod_params["Rm"] ** 2 - 10.0**2),
     )
     assert np.isclose(rod_geom.neutral_hydraulic_radius_cm[rod_plenum], rod_params["Rm"])
+
+    # M3: the three anode transmissions are independent (§3) but all equal the
+    # transparency (1-eta); the cathode surface blocks everything.
+    transparency = 1.0 - resolved_params["eta"]
+    assert np.isclose(resolved_geom.plasma_transmission[anode_face], transparency)
+    assert np.isclose(resolved_geom.heat_transmission[anode_face], transparency)
+    assert np.isclose(
+        resolved_geom.neutral_face_area_cm2[anode_face],
+        transparency * np.pi * resolved_params["Rm"] ** 2,
+    )
+    assert resolved_geom.plasma_transmission[cathode_face] == 0.0
+    assert resolved_geom.heat_transmission[cathode_face] == 0.0
+    # Every other interior face is fully open, so legacy stays untouched.
+    open_faces = [
+        f
+        for f in range(1, resolved_geom.cells)
+        if f not in (cathode_face, anode_face)
+    ]
+    assert np.allclose(resolved_geom.plasma_transmission[open_faces], 1.0)
+    # Legacy: fully open everywhere except the two external walls, which block.
+    assert np.all(geom.plasma_transmission[1:-1] == 1.0)
+    assert geom.plasma_transmission[0] == 0.0
+    assert geom.plasma_transmission[-1] == 0.0
+
+    # M3: eta = 0 is the legacy limit -- a fully transparent anode.
+    transparent_params = dict(resolved_params)
+    transparent_params["eta"] = 0.0
+    transparent_geom = LAPDSim1D(
+        transparent_params, resolved_flags
+    ).get_initial_snapshot().geometry
+    assert transparent_geom.plasma_transmission[anode_face] == 1.0
+    assert transparent_geom.heat_transmission[anode_face] == 1.0
+
+    # M3: the anode absorbs the flux it blocks rather than reflecting it. Drive a
+    # flow across the mesh and check the sink removes plasma, makes neutrals, and
+    # conserves particles.
+    resolved_sim = LAPDSim1D(resolved_params, resolved_flags)
+    flowing_state = conservative_from_primitives(
+        n=np.full(resolved_geom.cells, 1.0e12),
+        nn=np.full(resolved_geom.cells, 1.0e12),
+        u=np.full(resolved_geom.cells, 1.0e5),
+        Te=np.full(resolved_geom.cells, 2.0),
+        Ti=np.full(resolved_geom.cells, 1.0),
+        ion_mass_g=resolved_sim.ion_mass_g,
+    )
+    intercept = resolved_sim.plasma_flux_rhs_terms(
+        state=flowing_state, include_front=True
+    )["anode_interception"]
+    assert intercept.n[anode_face - 1] < 0.0  # donor side loses plasma
+    assert intercept.M[anode_face - 1] < 0.0  # momentum absorbed, not thermalized
+    assert intercept.Ee[anode_face - 1] < 0.0
+    assert intercept.Ei[anode_face - 1] < 0.0
+    # Neutrals are split across both flanking cells: a wire has no memory of the
+    # side an ion arrived from, and the mesh throttles flow between the two.
+    assert intercept.nn[anode_face - 1] > 0.0
+    assert intercept.nn[anode_face] > 0.0
+    intercept_scale = np.sum(
+        np.abs(intercept.n * resolved_geom.plasma_volume_cm3)
+        + np.abs(intercept.nn * resolved_geom.neutral_volume_cm3)
+    )
+    assert intercept_scale > 0.0
+    assert np.isclose(
+        particle_inventory_rate(intercept, resolved_geom),
+        0.0,
+        atol=1e-12 * intercept_scale,
+    )
+    # A transparent anode intercepts nothing.
+    transparent_sim = LAPDSim1D(transparent_params, resolved_flags)
+    assert np.allclose(
+        pack_state(
+            transparent_sim.plasma_flux_rhs_terms(
+                state=flowing_state, include_front=True
+            )["anode_interception"]
+        ),
+        0.0,
+    )
+
+    # M3: no parallel heat conduction crosses a cathode surface into the plenum.
+    resolved_q = conductive_face_flux(
+        temperature=np.linspace(5.0, 1.0, resolved_geom.cells),
+        conductivity=np.full(resolved_geom.cells, 1.0e5),
+        geometry=resolved_geom,
+    )
+    assert resolved_q[cathode_face] == 0.0
+    assert np.isfinite(resolved_q).all()
 
     for values in (
         state.n,
@@ -1167,7 +1253,13 @@ def main():
         state=ramp_state,
         include_front=True,
     )
-    assert set(ramp_flux_terms) == {"plasma_advective_flux", "plasma_front_flux"}
+    assert set(ramp_flux_terms) == {
+        "plasma_advective_flux",
+        "plasma_front_flux",
+        "anode_interception",
+    }
+    # Legacy geometry has no partially blocking face, so interception is inert.
+    assert np.allclose(pack_state(ramp_flux_terms["anode_interception"]), 0.0)
     ramp_flux_sum = np.zeros_like(pack_state(ramp_rhs))
     for term in ramp_flux_terms.values():
         for field_name in STATE_NAMES_1D:

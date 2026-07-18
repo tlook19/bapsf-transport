@@ -7,16 +7,14 @@ each milestone (do it *in the same commit* as the milestone's code).
 
 ## Current focus
 
-- **Milestone:** M3 — plasma faces & anode obstruction.
-- **Next action:** plan M3 — make `flux.py` consume the `plasma_open` array instead
-  of hard-coding walls at the two external faces ([flux.py:64-67](physics/flux.py)),
-  apply `heat_transmission` in `conduction.py` (walls already zero-flux by
-  construction, so this must stay bit-exact), confirm inert plenum plasma with
-  `audit_sim1d_floor_activation.py`, and model the anode as a partial obstruction
-  (collection-sink model) — now unblocked, with `anode_face_indices` giving the face
-  to hang `heat_transmission = 1-eta` and the deferred `(1-eta)·πRm²` neutral
-  aperture on. §11 #5 is settled (face); **#7** (subsonic regime) is still open and
-  is where the collection-sink equivalence can break down.
+- **Milestone:** M4 — term relocations via roles.
+- **Next action:** plan M4 — anchor surface neutralization, the cathode surface
+  terms (ion neutralization, sheath electron loss, ohmic) and the beam by
+  `cell_role` / face helpers rather than `[0]`/`[-1]` (§6, §8). `cathode_adjacent_cells`
+  and `anode_flanking_cells` are already in place. Forces §11 **#3** (cathode ion
+  loss: volumetric term vs Bohm-flux face). Watch the two-anchoring-sites trap that
+  bit M2. Note the anode's bilateral neutralization is **already handled** by M3's
+  interception sink, so M4 must not add it again.
 - **Blocked on:** nothing. Acceptance gate: `scripts/baseline_sim1d.py --verify`
   stays bit-exact (switch off) and `smoke_sim1d.py` stays green.
 
@@ -55,10 +53,17 @@ the §13 legacy-equivalence assertion still holding.
   explicit RHS and the implicit neutral matrix. Effective pump speed
   `1/S_eff = 1/S_pump + 1/C_elbow` on plenum pumps only. Anode mesh throttle
   deferred to M3/M4 (decision 3). Golden `--verify` **bit-exact**; smoke extended.
-- [ ] **M3 — Plasma faces & anode obstruction.** Generalize reflecting faces to the
+- [x] **M3 — Plasma faces & anode obstruction.** Generalize reflecting faces to the
   `plasma_open` array (interior cathode face); `heat_transmission = 0` at walls;
   confirm inert plenum plasma. Anode as a partial obstruction (collection-sink
-  model) with `heat_transmission = (1−eta)`. (§5)
+  model) with `heat_transmission = (1−eta)`. (§5) — `flux.py` now imposes walls from
+  `plasma_open` (pressure taken from the live cell) and scales faces by
+  `plasma_transmission`; `conduction.py` applies `heat_transmission` at all three
+  face-conductance sites (explicit flux, implicit tridiagonal, dt bound). The anode
+  face carries all three throttles at `(1-eta)`, and the new `anode_interception`
+  term absorbs the blocked directed flux (decision 7) so the mesh absorbs rather
+  than reflects. Golden `--verify` **bit-exact**; smoke extended; first full
+  resolved discharge run and audited.
 - [ ] **M4 — Term relocations via roles.** Surface neutralization, cathode/anode
   source terms (incl. the bilateral anode neutralization split), beam anchoring,
   ohmic — all anchored by `cell_role`, not `[0]`/`[-1]`. (§6, §8)
@@ -85,7 +90,7 @@ Open items are plan §11.
 | — | neutral face aperture: mean vs restricting | **resolved** | **restricting (min)** of the two adjacent cells — a conductance between a wide and a narrow duct is set by the narrow one; mean would under-throttle the annulus. Bit-identical to the old mean whenever adjacent radii match. (M2) |
 | — | resolved machine coordinates | **resolved** | cathode surface fixed at `z=0`, anode at `z=cathode_anode_gap_cm`=50. Two cell counts: `nx_gap`=5 across the gap (10 cm cells), `nx`=60 from anode to collector (1850 cm ⇒ 30.83 cm cells) — the old 100 cm source lump splits into the 50 cm gap plus 50 cm added to the column. `Lm` spans cathode→far end; plenum/obstruction sit at **negative z**, so total mesh > `Lm`. **Legacy geometry deliberately frozen** at 100/1800/100 so the golden stays bit-exact. (geometry rework, pre-M3) |
 | 6 | asymmetric anode sheath | open | investigate at M5 |
-| 7 | anode obstruction in subsonic regime | open | revisit if flow is subsonic at anode |
+| 7 | anode obstruction in subsonic regime | **resolved** | **shrink the advective face now**: the anode transmits `(1-eta)` and the blocked directed flux is absorbed by the `anode_interception` sink (scaled to `eta*n*u`, not the Bohm flux, so nothing is double-counted). Valid subsonic as well as sonic. `eta=0` is the legacy limit. (M3) |
 | — | single code path vs duplicate legacy path | **resolved** | single role/face-driven **operator** path (no flag branch); geometry construction uses two builders behind the switch so the legacy builder stays numerically verbatim and keeps the golden bit-exact. (M1) |
 | — | golden-baseline form (M0 tooling) | **resolved** | notebook production config (implicit tr_bdf2 + Strang + Picard, cathode on), full packed-`y` trajectory to the dynamic current-trigger end, stored as NPZ. Chosen over a compressed-timing or cathode-off run (both weaker: floor-collapsed / miss the cathode/anode terms M4–M5 relocate). Implicit split makes the real-timescale run cheap (~65 s). |
 
@@ -160,6 +165,30 @@ _(Running notes: surprises, dead ends, things the next session should know.)_
     The legacy golden verify is unaffected.
   - `cathode_length_cm`/`anode_length_cm` were **removed** — surfaces have no
     length. Anything referencing them is stale.
+- **⚠ M5 must derive the anode current from the DIRECTED flux, not the Bohm flux.**
+  Decision 7 put the anode's plasma removal in `anode_interception` as
+  `eta * (incident directed flux)`. Adding the plan's `2*eta*I_i_a` Bohm collection
+  on top would double-count the same particles (§5 warns of exactly this). M5's job
+  at the anode is the *sheath* (`P_anode_e`, circuit current) only, and its current
+  should be consistent with what M3 already removes.
+- **The anode interception is conservative by construction, and smoke asserts it:**
+  the donor cell loses the full incident flux (transmitted + intercepted) while the
+  far side receives only the transmitted part, and the absorbed ions reappear as
+  neutrals split evenly across the two flanking cells. Particle inventory rate is 0.
+- **First full resolved discharge ran successfully** (`audit_sim1d_floor_activation.py
+  --resolved`, backward_euler): final thermal 2.19e5 erg, Te floor clips 6.0% of
+  cell-visits injecting +0.02% of final thermal, Ti 6.6% injecting +0.15%. Stable,
+  not yet validated — that is M6.
+- **Plenum plasma is inert but its `n` floor DOES bind** (7826 clips, all in cell 0
+  at z=-50, **zero** energy injected; Ti never clips there at all). §5 predicted the
+  floors would never bind. They do, benignly: with no source and recombination still
+  running, plenum density decays below the floor and is pinned there — the floor
+  holding the plenum at "plasma sits at the floor", not the cathode face leaking.
+  It is a tiny unphysical *particle* source; worth a look if plenum inventory ever
+  matters to the pump balance.
+- **The audit's conduction verdict is vacuous under backward_euler** (its maximum
+  principle forbids clipping). Re-run `--resolved --scheme tr_bdf2` to say anything
+  about the scheme the production baseline actually uses.
 
 ---
 

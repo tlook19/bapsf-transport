@@ -128,7 +128,10 @@ def conductive_face_flux(temperature, conductivity, geometry):
     q_face = np.zeros(geometry.cells + 1, dtype=float)
     k_face = 0.5 * (conductivity[:-1] + conductivity[1:])
     q_face[1:-1] = -k_face * np.diff(temperature) / geometry.center_distance_cm
-    return q_face
+    # Faces may throttle parallel conduction independently of the other transport
+    # channels (§3): 0 at a plasma wall, (1-eta) across the anode mesh, 1 on a
+    # normal interior face -- so legacy geometry is untouched.
+    return q_face * geometry.heat_transmission
 
 
 def flux_divergence_rhs(q_face, geometry):
@@ -354,6 +357,7 @@ def _species_heat_timestep(capacity, conductivity, geometry, fraction):
         geometry.plasma_face_area_cm2[1:-1]
         * k_face
         / geometry.center_distance_cm
+        * geometry.heat_transmission[1:-1]
     )
     cell_coeff = (face_coeff[:-1] + face_coeff[1:]) / (
         geometry.plasma_volume_cm3 * capacity
@@ -492,10 +496,13 @@ def _conductive_divergence(temperature, conductivity, geometry):
 def _implicit_heat_diagonals(capacity, conductivity, geometry, dt):
     face_coeff = np.zeros(geometry.cells + 1, dtype=float)
     k_face = 0.5 * (conductivity[:-1] + conductivity[1:])
+    # Must carry the same throttle as the explicit conductive_face_flux, or the
+    # implicit substep would conduct across walls the explicit path blocks.
     face_coeff[1:-1] = (
         geometry.plasma_face_area_cm2[1:-1]
         * k_face
         / geometry.center_distance_cm
+        * geometry.heat_transmission[1:-1]
     )
     left = dt * face_coeff[:-1] / geometry.plasma_volume_cm3
     right = dt * face_coeff[1:] / geometry.plasma_volume_cm3

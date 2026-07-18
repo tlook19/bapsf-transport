@@ -337,11 +337,23 @@ def main(argv=None):
         choices=sorted(IMPLICIT_HEAT_SCHEMES),
         help="implicit_heat_scheme for the conduction substep",
     )
+    parser.add_argument(
+        "--resolved",
+        action="store_true",
+        help=(
+            "enable the resolved_boundaries geometry. Use this to check that the "
+            "plasma-dead plenum behind the cathode stays inert: its cells sit at "
+            "the floor by construction, and floor clips there would mean the "
+            "reflecting cathode face is leaking."
+        ),
+    )
     args = parser.parse_args(argv)
 
     params, flags = default_config()
     params.update(PARAM_OVERRIDES)
     flags.update(FLAG_OVERRIDES)
+    if args.resolved:
+        flags["resolved_boundaries"] = True
     params["implicit_heat_scheme"] = args.scheme
 
     sim = LAPDSim1D(params, flags)
