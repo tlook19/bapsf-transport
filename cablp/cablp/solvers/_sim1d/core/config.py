@@ -57,6 +57,30 @@ def geometry_defaults():
     source_Rp, end_Rp:
         Optional plasma radii for source and end cells [cm]. ``None`` means use
         ``Rp``.
+
+    The keys below configure the *resolved* typed-segment geometry, selected by
+    the ``resolved_boundaries`` flag (BOUNDARY_REGIONS_PLAN.md §3). They are
+    inert while that flag is off. Each defaults to its legacy limit so a resolved
+    run with the obstruction/rod knobs at zero collapses toward the lump (§13).
+
+    plenum_length_cm:
+        Length of each neutral-only plenum cell behind a cathode [cm].
+    cathode_length_cm:
+        Length of each cathode boundary cell [cm].
+    anode_length_cm:
+        Length of each anode boundary cell [cm].
+    collector_length_cm:
+        Length of the collector cell at the non-cathode end (single-cathode
+        layout only; the twin layout mirrors the source end instead) [cm].
+    Rcs:
+        Inner radius of the annular cathode-structure obstruction between plenum
+        and cathode [cm]. ``0`` => full-bore (no obstruction). Consumed in M2.
+    Lcs:
+        Axial length of that obstruction [cm]. ``0`` => full aperture. Consumed
+        in M2.
+    Rsup:
+        Effective blockage radius of plenum support rods [cm]. ``0`` => none;
+        reduces plenum neutral volume only. Consumed in M2.
     """
     return {
         "Lm": 2000.0,
@@ -70,6 +94,14 @@ def geometry_defaults():
         "end_Rm": None,
         "source_Rp": None,
         "end_Rp": None,
+        # Resolved typed-segment geometry (inert while resolved_boundaries off).
+        "plenum_length_cm": 100.0,
+        "cathode_length_cm": 30.0,
+        "anode_length_cm": 10.0,
+        "collector_length_cm": 100.0,
+        "Rcs": 0.0,
+        "Lcs": 0.0,
+        "Rsup": 0.0,
     }
 
 
@@ -497,6 +529,10 @@ input_dict_template_1d = build_input_dict_template_1d()
 input_flags_template_1d = {
     "Plasma": True,
     "TwinCathode": False,
+    # Master switch for the resolved source/end boundary redesign
+    # (BOUNDARY_REGIONS_PLAN.md §13). Off => the legacy source/domain/end lump,
+    # reproducing today's behavior bit-for-bit. On => the typed-segment machine.
+    "resolved_boundaries": False,
     "heat_conduction": True,
     "implicit_heat_conduction": True,
     "front_flux": True,

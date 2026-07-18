@@ -440,7 +440,7 @@ class LAPDSim1D:
             self._mu_neutral,
             self._I_ion,
         ) = self._gas_constants(self._gas_type)
-        self._geometry = build_geometry(self._input_dict)
+        self._geometry = build_geometry(self._input_dict, self._flags)
         self._validate_phase_config()
         self._validate_gas_puff_config()
         self._floors = {

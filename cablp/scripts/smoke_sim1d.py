@@ -87,6 +87,78 @@ def main():
     assert np.all(geom.plasma_volume_cm3 > 0.0)
     assert np.all(geom.neutral_volume_cm3 > geom.plasma_volume_cm3)
 
+    # M1 schema arrays are present on the legacy geometry at their legacy
+    # defaults (BOUNDARY_REGIONS_PLAN.md §13): a future array-driven operator fed
+    # these reproduces today's behavior.
+    for face_array in (
+        geom.plasma_open,
+        geom.heat_transmission,
+        geom.neutral_face_hydraulic_radius_cm,
+        geom.neutral_face_conductance_cm3_s,
+    ):
+        assert face_array.shape == (geom.cells + 1,)
+    assert not geom.plasma_open[0] and not geom.plasma_open[-1]
+    assert np.all(geom.plasma_open[1:-1])
+    assert geom.heat_transmission[0] == 0.0 and geom.heat_transmission[-1] == 0.0
+    assert np.all(geom.heat_transmission[1:-1] == 1.0)
+    assert np.allclose(geom.neutral_hydraulic_radius_cm, geom.Rm_cm)
+    assert np.allclose(
+        geom.neutral_face_hydraulic_radius_cm[1:-1],
+        0.5 * (geom.Rm_cm[:-1] + geom.Rm_cm[1:]),
+    )
+    assert np.all(np.isnan(geom.neutral_face_conductance_cm3_s))
+
+    # M1 resolved typed-segment geometry: the master switch builds the machine.
+    resolved_params, resolved_flags = default_config()
+    resolved_flags["resolved_boundaries"] = True
+    resolved_geom = LAPDSim1D(
+        resolved_params, resolved_flags
+    ).get_initial_snapshot().geometry
+    assert resolved_geom.cells > resolved_params["nx"] + 2
+    assert np.isclose(resolved_geom.length_cm.sum(), resolved_params["Lm"])
+    assert np.all(resolved_geom.plasma_volume_cm3 > 0.0)
+    assert np.all(resolved_geom.neutral_volume_cm3 > resolved_geom.plasma_volume_cm3)
+    assert {"plenum", "cathode", "anode", "puff", "column", "collector"} <= set(
+        resolved_geom.cell_role
+    )
+    assert list(resolved_geom.cell_role[:3]) == ["plenum", "cathode", "anode"]
+    assert resolved_geom.cell_role[3] == "puff"
+    assert resolved_geom.cell_role[-1] == "collector"
+    assert not resolved_geom.plasma_open[0] and not resolved_geom.plasma_open[-1]
+    # The plenum<->cathode interior face is a plasma wall (§5) with no heat
+    # crossing; the single-cathode layout has exactly one such face.
+    cathode_walls = [
+        face
+        for face in range(1, resolved_geom.cells)
+        if {resolved_geom.cell_role[face - 1], resolved_geom.cell_role[face]}
+        == {"plenum", "cathode"}
+    ]
+    assert len(cathode_walls) == 1
+    for face in cathode_walls:
+        assert not resolved_geom.plasma_open[face]
+        assert resolved_geom.heat_transmission[face] == 0.0
+    assert np.all(np.isnan(resolved_geom.neutral_face_conductance_cm3_s))
+
+    # Twin cathode mirrors the source end (plan §11 decision 4): plenum both ends.
+    twin_resolved_flags = dict(resolved_flags)
+    twin_resolved_flags["TwinCathode"] = True
+    twin_resolved_geom = LAPDSim1D(
+        resolved_params, twin_resolved_flags
+    ).get_initial_snapshot().geometry
+    assert list(twin_resolved_geom.cell_role[:3]) == ["plenum", "cathode", "anode"]
+    assert list(twin_resolved_geom.cell_role[-3:]) == ["anode", "cathode", "plenum"]
+    assert "collector" not in set(twin_resolved_geom.cell_role)
+    twin_cathode_walls = [
+        face
+        for face in range(1, twin_resolved_geom.cells)
+        if {
+            twin_resolved_geom.cell_role[face - 1],
+            twin_resolved_geom.cell_role[face],
+        }
+        == {"plenum", "cathode"}
+    ]
+    assert len(twin_cathode_walls) == 2
+
     for values in (
         state.n,
         state.nn,

@@ -7,12 +7,15 @@ each milestone (do it *in the same commit* as the milestone's code).
 
 ## Current focus
 
-- **Milestone:** M1 — geometry schema behind the `resolved_boundaries` master switch.
-- **Next action:** plan M1 (typed segments, load-bearing `cell_role`, per-cell/face
-  `area` + `hydraulic_radius`, face-property arrays) and surface the schema decisions
-  it forces before writing code. The M0 golden baseline is now the acceptance gate:
-  `python scripts/baseline_sim1d.py --verify` must stay green (currently bit-exact).
-- **Blocked on:** nothing.
+- **Milestone:** M2 — neutral conductances from the schema.
+- **Next action:** plan M2 — generalized Clausing reading `neutral_face_area_cm2` +
+  `neutral_face_hydraulic_radius_cm` (already carried); prescribed apertures for the
+  cathode obstruction (`Rcs`/`Lcs`) and anode mesh (`eta`) via the
+  `neutral_face_conductance_cm3_s` sentinel field; pump relocated to the plenum with
+  an effective speed; puff moved to its cell. Forces §11 decision #1 (obstruction
+  face vs cell). Surface it before writing code.
+- **Blocked on:** nothing. Acceptance gate: `scripts/baseline_sim1d.py --verify`
+  stays bit-exact (switch off) and `smoke_sim1d.py` stays green.
 
 ## Milestones
 
@@ -27,11 +30,18 @@ the §13 legacy-equivalence assertion still holding.
   cathode on) run to its dynamic current-trigger end (2793 saves, 16084 steps,
   final_time = 2.7913e-2 s). Fresh re-run is **bit-exact**, and `smoke_sim1d.py`
   passes at baseline.
-- [ ] **M1 — Geometry schema** behind the `resolved_boundaries` master switch
+- [x] **M1 — Geometry schema** behind the `resolved_boundaries` master switch
   (default off). Typed segments; `cell_role` load-bearing; per-cell/face `area` +
   `hydraulic_radius`; face-property arrays `plasma_open` / `neutral_conductance` /
   `heat_transmission`. Legacy mode reproduces today (assert golden equivalence).
-  (§3, §13)
+  (§3, §13) — `Sim1DGeometry` extended with `neutral_hydraulic_radius_cm`,
+  `neutral_face_hydraulic_radius_cm`, `plasma_open`, `heat_transmission`,
+  `neutral_face_conductance_cm3_s`. `build_geometry(input_dict, flags)` dispatches
+  to `_build_legacy_geometry` (numeric lines verbatim) or `_build_resolved_geometry`
+  (typed segments, collector default / twin-mirror per decision 4). `cells` now =
+  `length_cm.size`. Golden `--verify` **bit-exact** with switch off; smoke covers
+  both legacy schema defaults and resolved single/twin invariants. Operators not
+  yet rewired (M2+).
 - [ ] **M2 — Neutral conductances** from the schema: generalized Clausing (area +
   hydraulic radius), prescribed apertures (cathode obstruction, anode mesh), pump
   relocated to the plenum with an effective speed, puff moved to its cell. (§4)
@@ -59,11 +69,11 @@ Open items are plan §11.
 | 1 | `Lcs` obstruction: face vs cell | open | decide at M2, from `Lcs` vs cell size |
 | 2 | cathode solver level (a) now / (b) path-integral later | open | (a) at M5; (b) deferred |
 | 3 | cathode ion loss: volumetric vs Bohm face | open | volumetric recommended (M4) |
-| 4 | end default: collector vs mirror/twin | open | single-cathode collector default |
+| 4 | end default: collector vs mirror/twin | **resolved** | single-cathode collector default; the existing `TwinCathode` flag switches the far end to the symmetric plenum/cathode/anode mirror (no redundant knob). (M1) |
 | 5 | anode as face vs cell | open | linked to #6; decide at M3/M4 |
 | 6 | asymmetric anode sheath | open | investigate at M5 |
 | 7 | anode obstruction in subsonic regime | open | revisit if flow is subsonic at anode |
-| — | single code path vs duplicate legacy path | open | plan §13 recommends single path |
+| — | single code path vs duplicate legacy path | **resolved** | single role/face-driven **operator** path (no flag branch); geometry construction uses two builders behind the switch so the legacy builder stays numerically verbatim and keeps the golden bit-exact. (M1) |
 | — | golden-baseline form (M0 tooling) | **resolved** | notebook production config (implicit tr_bdf2 + Strang + Picard, cathode on), full packed-`y` trajectory to the dynamic current-trigger end, stored as NPZ. Chosen over a compressed-timing or cathode-off run (both weaker: floor-collapsed / miss the cathode/anode terms M4–M5 relocate). Implicit split makes the real-timescale run cheap (~65 s). |
 
 ## Notes / scratch
@@ -89,6 +99,22 @@ _(Running notes: surprises, dead ends, things the next session should know.)_
 - **Keep `baseline_sim1d.py` in sync with `sim1d_run_and_plot.ipynb` cell 3.** The
   baseline config is a hand-copy of the notebook overrides. A deliberate
   re-baseline (re-`--capture`, reviewed) is the only correct way to change it.
+- **M1 schema fields carry legacy defaults so the OFF path is bit-exact and the
+  future array-driven operators are drop-in.** `plasma_open` = False only at the
+  two external ends (legacy) or also at plenum↔cathode faces (resolved);
+  `heat_transmission` 1 interior / 0 at plasma walls; `neutral_face_conductance_cm3_s`
+  = NaN sentinel meaning "derive Clausing" (M2 populates apertures);
+  `neutral_face_hydraulic_radius_cm[1:-1]` = today's `R_face`. No operator reads these
+  yet — M2 (neutrals), M3 (flux/conduction) do.
+- **Resolved geometry is structurally valid but physically provisional.** Per-role
+  cell lengths (`plenum/cathode/anode/collector_length_cm`) and the obstruction/rod
+  knobs (`Rcs`/`Lcs`/`Rsup`, default 0 = legacy limit) are placeholders; apertures
+  are not yet applied (all faces full-bore). Turning the switch on today runs the
+  *unrewired* index-based operators on the resolved grid → physically wrong, which is
+  why it stays off. `cells` = `length_cm.size`; nothing reads `geometry.nx` directly.
+- **Degenerate-resolved == legacy is NOT yet a test.** Resolved adds cells, so it
+  can't be bit-identical to the lump until operators stop indexing `[0]`/`[-1]`
+  (M3+). M1's guarantee is the switch-OFF golden bit-exactness only.
 
 ---
 
