@@ -134,6 +134,30 @@ Open items are plan §11.
 
 ## Notes / scratch
 
+- **⚠ The neutral exchange operator was not a consistent discretization of
+  diffusion, and this invalidates the M6 headline numbers.** `molecular_flow`
+  applies the Clausing *duct* formula to every face, implying an axial diffusivity
+  `D = 0.25*v_th*P(dz)*dz` that **goes to zero as the mesh refines** — refine it
+  and neutral transport disappears instead of converging. It only approaches the
+  physical free-molecular value when `dz >> Rm`, and with `Rm = 50` cm the model
+  ran at 19% of physical at 30.8 cm cells and 7% at 10 cm. Added
+  `neutral_exchange_model = "knudsen"`: Fickian with `D = (2/3)*v_th*R`, i.e.
+  `C = D*A/dz`, which is exactly mesh-independent (verified identical at nx = 60 /
+  185 / 370) and reproduces the textbook long-tube conductance
+  `(2*pi/3)*v_th*R^3/L`. Thin apertures (anode mesh) keep an orifice conductance
+  in series; the annular obstruction needs no special case since it is a real cell.
+  `molecular_flow` stays the default so the golden is bit-exact.
+- **⚠ M6's "resolved gives 2.1x peak Te vs legacy" was largely an artifact.** With
+  correct transport, resolved peak `Te` is 23.9 eV against legacy 24.5 eV — not
+  51.6 eV. The M6 sensitivity table was produced under the inconsistent transport
+  model and **must be regenerated** before any of it is quoted.
+- **⚠ Correcting the diffusivity did NOT make the solution mesh-converged.** Under
+  `knudsen`, nx = 60 vs 185: thermal +7.5%, `final_time` -3.5%, but **peak `Te`
+  23.9 -> 41.5 eV (+73%)**. Peak quantities are the worst case for convergence, but
+  73% is not usable. Resolved results are not converged in any useful sense yet;
+  integral quantities are the only ones worth quoting, and then only with a
+  ~10% bar.
+
 - **M6 headline: the resolved model is a different model, not a fix.** Peak `Te`
   51.6 eV vs legacy 24.5 eV (2.1x), final thermal -13%, discharge end +4.5%. That
   cannot be presented as a correction to previously published numbers.

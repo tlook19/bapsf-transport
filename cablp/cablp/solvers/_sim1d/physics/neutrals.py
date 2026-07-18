@@ -35,17 +35,78 @@ def molecular_flow_coefficients(
     if np.any(R_face <= 0.0):
         raise ValueError("neutral hydraulic radii must be positive")
     clausing = 1.0 / (1.0 + (3.0 / 8.0) * L_eff / R_face)
-    coefficients = (
+    return (
         float(clausing_scale)
         * 0.25
         * v_th_n
         * geometry.neutral_face_area_cm2[1:-1]
         * clausing
     )
-    # Escape hatch: a face whose conductance is known directly rather than
-    # geometrically overrides the computed value (NaN => keep the computed one).
-    prescribed = np.asarray(geometry.neutral_face_conductance_cm3_s[1:-1], dtype=float)
-    return np.where(np.isnan(prescribed), coefficients, prescribed)
+
+
+def knudsen_flow_coefficients(
+    geometry,
+    Tn_K,
+    mu_neutral,
+    clausing_scale=1.0,
+):
+    """Return internal-face conductances from Knudsen diffusion [cm^3/s].
+
+    ``molecular_flow`` applies the Clausing duct formula to every face, which is
+    the wrong object for cell-to-cell exchange *inside* a continuous tube: the
+    implied axial diffusivity is ``D = 0.25*v_th*P(dz)*dz``, which **vanishes as
+    the mesh is refined**. That is not a consistent discretization of diffusion --
+    refine it and neutral transport disappears rather than converging. It only
+    approaches the physical value when ``dz >> R``, so a 50 cm-radius machine
+    needs cells far longer than 50 cm for the historical model to be right.
+
+    Free-molecular transport along a long tube is Fickian with the Knudsen
+    diffusivity ``D = (2/3) * v_th * R``. Discretized over the centre-to-centre
+    distance this gives ``C = D * A / dz``, which is mesh-independent and, for a
+    circular tube, reproduces the textbook long-tube conductance
+    ``C = (2*pi/3) * v_th * R^3 / L`` exactly.
+
+    An anode mesh is a genuinely thin aperture rather than a tube segment, so it
+    keeps an orifice conductance ``0.25 * v_th * A_open`` combined in series with
+    the tube on either side. The annular obstruction needs no special case: it is
+    a real cell (§11 decision 1), so its own reduced area and hydraulic radius
+    flow through the tube formula naturally.
+    """
+    if clausing_scale < 0.0:
+        raise ValueError(f"clausing_scale must be non-negative (got {clausing_scale})")
+    v_th_n = neutral_thermal_speed(Tn_K=Tn_K, mu_neutral=mu_neutral)
+    R_face = np.asarray(geometry.neutral_face_hydraulic_radius_cm[1:-1], dtype=float)
+    if np.any(R_face <= 0.0):
+        raise ValueError("neutral hydraulic radii must be positive")
+
+    # Tube segment: the unrestricted cross-section, since any aperture restriction
+    # is applied separately below rather than folded into the tube area.
+    cell_area = np.asarray(geometry.neutral_area_cm2, dtype=float)
+    tube_area = np.minimum(cell_area[:-1], cell_area[1:])
+    diffusivity = (2.0 / 3.0) * v_th_n * R_face
+    coefficients = (
+        float(clausing_scale)
+        * diffusivity
+        * tube_area
+        / np.asarray(geometry.center_distance_cm, dtype=float)
+    )
+
+    # Thin apertures (the anode mesh) in series with the tube on either side.
+    face_area = np.asarray(geometry.neutral_face_area_cm2, dtype=float)
+    for face in np.asarray(
+        getattr(geometry, "anode_face_indices", ()), dtype=int
+    ):
+        interior = int(face) - 1
+        if not 0 <= interior < coefficients.size:
+            continue
+        orifice = float(clausing_scale) * 0.25 * v_th_n * face_area[int(face)]
+        if orifice <= 0.0:
+            coefficients[interior] = 0.0
+            continue
+        coefficients[interior] = 1.0 / (
+            1.0 / coefficients[interior] + 1.0 / orifice
+        )
+    return coefficients
 
 
 def neutral_exchange_coefficients(
@@ -60,16 +121,28 @@ def neutral_exchange_coefficients(
     if model == "constant":
         return _as_face_coefficients(constant_coeff_cm3_s, geometry)
     if model == "molecular_flow":
-        return molecular_flow_coefficients(
+        coefficients = molecular_flow_coefficients(
             geometry=geometry,
             Tn_K=Tn_K,
             mu_neutral=mu_neutral,
             clausing_scale=clausing_scale,
         )
-    raise ValueError(
-        "neutral_exchange_model must be 'constant' or 'molecular_flow' "
-        f"(got {model!r})"
-    )
+    elif model == "knudsen":
+        coefficients = knudsen_flow_coefficients(
+            geometry=geometry,
+            Tn_K=Tn_K,
+            mu_neutral=mu_neutral,
+            clausing_scale=clausing_scale,
+        )
+    else:
+        raise ValueError(
+            "neutral_exchange_model must be 'constant', 'molecular_flow' or "
+            f"'knudsen' (got {model!r})"
+        )
+    # Escape hatch: a face whose conductance is known directly rather than
+    # geometrically overrides the computed value (NaN => keep the computed one).
+    prescribed = np.asarray(geometry.neutral_face_conductance_cm3_s[1:-1], dtype=float)
+    return np.where(np.isnan(prescribed), coefficients, prescribed)
 
 
 def neutral_exchange_face_rates(nn, geometry, exchange_coeff_cm3_s):

@@ -289,7 +289,24 @@ def model_mode_defaults():
         use the local ion temperature, ``"floor"`` to use the ion temperature
         floor, or a numeric eV value.
     neutral_exchange_model:
-        Neutral axial exchange model. Options are ``"constant"`` and
+        Axial neutral transport model. ``"constant"`` uses a fixed coefficient.
+
+        ``"molecular_flow"`` (default, historical) applies the Clausing duct
+        formula to every face. Note this is **not a consistent discretization of
+        diffusion**: the implied axial diffusivity is ``0.25*v_th*P(dz)*dz``,
+        which goes to zero as the mesh is refined, and only approaches the
+        physical free-molecular value when ``dz >> Rm``. With ``Rm = 50`` cm that
+        needs cells much longer than 50 cm, so refining a run makes neutral
+        transport progressively too slow. Kept as the default so existing results
+        are reproducible.
+
+        ``"knudsen"`` treats cell-to-cell exchange as Fickian transport with the
+        Knudsen diffusivity ``D = (2/3)*v_th*R``, i.e. ``C = D*A/dz``. This is
+        mesh-independent and reproduces the textbook long-tube conductance
+        ``(2*pi/3)*v_th*R^3/L`` exactly. Thin apertures (the anode mesh) keep an
+        orifice conductance in series. Prefer this for resolved runs, where the
+        puff-to-pump back-path is the physics of interest and the historical model
+        under-predicts it by 2-14x depending on cell size.
         ``"molecular_flow"``.
     operator_splitting:
         How the operator-split path composes the explicit non-heat operator A

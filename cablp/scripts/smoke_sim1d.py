@@ -48,6 +48,7 @@ from cablp.solvers._sim1d.core.geometry import (
 from cablp.solvers._sim1d.physics.neutrals import (
     _effective_pump_speed,
     neutral_exchange_coefficients,
+    neutral_thermal_speed,
     neutral_inventory_rate,
     puff_rate,
     pump_rate,
@@ -511,6 +512,46 @@ def main():
         2.0 * params["eta"] * m5_legacy_result.I_i,
         rtol=1e-12,
     )
+
+    # Knudsen neutral transport is mesh-independent, which is the whole point:
+    # the historical molecular_flow model implies D = 0.25*v_th*P(dz)*dz, which
+    # goes to ZERO as the mesh refines rather than converging.
+    knudsen_D = []
+    molecular_D = []
+    for knudsen_nx in (60, 185):
+        knudsen_params = dict(resolved_params)
+        knudsen_params["nx"] = knudsen_nx
+        knudsen_geom = LAPDSim1D(
+            knudsen_params, resolved_flags
+        ).get_initial_snapshot().geometry
+        mid = knudsen_geom.cells // 2
+        for model, sink in (("knudsen", knudsen_D), ("molecular_flow", molecular_D)):
+            coeff = neutral_exchange_coefficients(
+                geometry=knudsen_geom,
+                model=model,
+                constant_coeff_cm3_s=knudsen_params["neutral_exchange_coeff_cm3_s"],
+                Tn_K=knudsen_params["Tn_K"],
+                mu_neutral=4,
+                clausing_scale=1.0,
+            )
+            # Implied axial diffusivity D = C*dz/A.
+            sink.append(
+                coeff[mid]
+                * knudsen_geom.length_cm[mid]
+                / knudsen_geom.neutral_area_cm2[mid]
+            )
+    # Knudsen: identical diffusivity at 30.8 cm and 10 cm cells, and it equals the
+    # physical free-molecular value (2/3)*v_th*R.
+    assert np.isclose(knudsen_D[0], knudsen_D[1], rtol=1e-12)
+    expected_D = (
+        (2.0 / 3.0)
+        * neutral_thermal_speed(Tn_K=resolved_params["Tn_K"], mu_neutral=4)
+        * resolved_params["Rm"]
+    )
+    assert np.isclose(knudsen_D[0], expected_D, rtol=1e-12)
+    # molecular_flow: diffusivity shrinks with the mesh, the defect being fixed.
+    assert molecular_D[1] < 0.5 * molecular_D[0]
+    assert molecular_D[0] < 0.25 * expected_D
 
     # M3: no parallel heat conduction crosses a cathode surface into the plenum.
     resolved_q = conductive_face_flux(
