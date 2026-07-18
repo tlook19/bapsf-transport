@@ -7,16 +7,18 @@ each milestone (do it *in the same commit* as the milestone's code).
 
 ## Current focus
 
-- **Milestone:** M6 — validation & sensitivity.
-- **Next action:** smoke + `verify_sim1d_order.py`, the §13 legacy-equivalence
-  assertions, a sensitivity sweep over `Lcs`, `Rcs`, `Rsup`, `eta`, `nx_gap` and
-  pump speed, then re-baseline and update `manuscript/THESIS_NOTES.md` (§10). Two
-  specific things to measure: residual mesh-dependence across `nx_gap` now that
-  `presheath_alpha` is meant to remove it, and whether the anode's two sides
-  diverge enough to warrant a per-face sheath (§11 #6).
+- **Milestone:** all of M0-M6 complete. `resolved_boundaries` still defaults OFF.
+- **Next action:** a decision, not code — whether resolved becomes the production
+  default. That needs publication gates #4 and #5 in `THESIS_NOTES.md` closed
+  first: is the ~2x peak `Te` vs legacy physical, and is the few-percent gap-mesh
+  uncertainty acceptable or to be converged away. Only then does a re-baseline
+  (re-`--capture` against a resolved config) make sense.
+- **Remaining known work:** §11 #6 per-face anode sheath (particle half done,
+  circuit still solves one `phi_a`); §7 level (b) resistivity path integral over
+  the gap; and the pre-existing `b_Q*` / `b_ion_neutral_drag` gates, which are
+  independent of this branch.
 - **Blocked on:** nothing. Both gates green: `scripts/baseline_sim1d.py --verify`
-  stays bit-exact (switch off) and `smoke_sim1d.py` passes. Resolved mode runs a
-  full discharge (final thermal 5.25e6 erg, floor clips 0.012%/0.168%).
+  bit-exact with the switch off, `smoke_sim1d.py` passes.
 
 ## Milestones
 
@@ -65,7 +67,7 @@ the §13 legacy-equivalence assertion still holding.
   mesh faces (decision 7, revised). `P_ohmic` now spreads along the gap weighted by
   `Te^-3/2` instead of piling into one cell. Golden `--verify` **bit-exact**; smoke
   extended; first full resolved discharge run and audited.
-- [ ] **M4 — Term relocations via roles.** Surface neutralization, cathode/anode
+- [x] **M4 — Term relocations via roles.** Surface neutralization, cathode/anode
   source terms (incl. the bilateral anode neutralization split), beam anchoring,
   ohmic — all anchored by `cell_role`, not `[0]`/`[-1]`. (§6, §8)
   - [x] **M4a — absorbing Bohm surfaces.** `plasma_absorbing` face array (empty in
@@ -98,9 +100,17 @@ the §13 legacy-equivalence assertion still holding.
   `Te_anode`. `I_i_a` is now the **same Bohm collection the fluid removes**, shared
   rather than re-derived, so circuit and fluid agree exactly (ratio 1.000000, was
   23.5). `SolverResult` gained `I_i_a` for diagnostics.
-- [ ] **M6 — Validation & sensitivity.** Smoke + order tests, legacy-equivalence
+- [x] **M6 — Validation & sensitivity.** Smoke + order tests, legacy-equivalence
   assertions, sensitivity sweep (`Lcs`, `Rcs`, `Rsup`, `eta`, pump speed),
-  re-baseline, update `manuscript/THESIS_NOTES.md`. (§10)
+  re-baseline, update `manuscript/THESIS_NOTES.md`. (§10) — new
+  `scripts/sweep_sim1d_resolved.py` (`--convergence`, `--sensitivity`). Order
+  unchanged (2.00 TR-BDF2 / 1.99 CN / 1.00 BE control, floors inert). Golden
+  bit-exact throughout. `THESIS_NOTES.md` §3 gained a resolved-boundary section
+  with the legacy-vs-resolved deltas, the sensitivity ranking and the mesh
+  uncertainty; two new publication gates (#4, #5) added. **No re-baseline
+  performed** — the golden is the *legacy* trajectory and is still bit-exact, so
+  there is nothing to re-capture until resolved becomes the production default,
+  which is a separate decision (see notes).
 
 ## Decisions log
 
@@ -123,6 +133,23 @@ Open items are plan §11.
 | — | golden-baseline form (M0 tooling) | **resolved** | notebook production config (implicit tr_bdf2 + Strang + Picard, cathode on), full packed-`y` trajectory to the dynamic current-trigger end, stored as NPZ. Chosen over a compressed-timing or cathode-off run (both weaker: floor-collapsed / miss the cathode/anode terms M4–M5 relocate). Implicit split makes the real-timescale run cheap (~65 s). |
 
 ## Notes / scratch
+
+- **M6 headline: the resolved model is a different model, not a fix.** Peak `Te`
+  51.6 eV vs legacy 24.5 eV (2.1x), final thermal -13%, discharge end +4.5%. That
+  cannot be presented as a correction to previously published numbers.
+- **`eta` and the pump path are strong new knobs** — `eta` 0.358->0.6 costs 49% of
+  the final thermal energy, a pump elbow 42%. Comparable in leverage to the
+  existing `b_Q*` factors, which is a caution: a model with two more strong knobs
+  fits data more easily and is correspondingly weaker as evidence.
+- **`eta = 0` was a broken reversibility path** and the sweep found it. The anode
+  sheath relation is singular at zero anode current (an anode that collects
+  nothing cannot close the circuit), so §13's "eta=0 -> transparent" limit holds
+  for the neutral/heat throttles only. Now raises an explanatory error instead of
+  an internal `-inf`. Pre-existing, not introduced by this branch.
+- **No re-baseline was done, deliberately.** The golden fixture is the *legacy*
+  trajectory and it is still bit-exact, so there is nothing to re-capture. A
+  re-baseline only becomes meaningful if resolved is promoted to the production
+  default.
 
 _(Running notes: surprises, dead ends, things the next session should know.)_
 
@@ -269,8 +296,29 @@ _(Running notes: surprises, dead ends, things the next session should know.)_
   alphas at 10 cm cells: 0.6065 (dense/hot, L_ps=5.4 cm), 0.8046 (L_ps=23 cm),
   0.9962 (cold/rarefied, L_ps=1300 cm). `b_presheath_length=0` recovers the old
   constant. Self-limiting (factor <= 1, so no flux cap is needed) and
-  self-consistently mesh-independent: refine the cell and the local density falls
-  along the same Boltzmann profile the exponent compensates for.
+  self-consistently mesh-independent in principle: refine the cell and the local
+  density falls along the same Boltzmann profile the exponent compensates for.
+  **Measured at M6, that claim holds only for what it targets** — see the gap
+  refinement note.
+- **⚠ Gap refinement (M6): the presheath correction helps the near-cathode
+  quantities it targets, and only those.** `sweep_sim1d_resolved.py --convergence`
+  over `nx_gap` = 5/10/20 (10 / 5 / 2.5 cm gap cells), max relative spread:
+
+  | metric | correction ON | historical constant |
+  |---|---|---|
+  | `Te_max` | **7.1%** | 15.9% |
+  | `n_max` | **1.5%** | 3.2% |
+  | `final_time` | 1.3% | **0.8%** |
+  | `thermal` | 5.0% | **3.7%** |
+
+  So it roughly halves the mesh sensitivity of the near-wall quantities (and the
+  OFF sweep shows the classic tell: `Te_max` sits at ~75 then collapses to 63.9 at
+  the finest mesh), but it does *not* improve the global integrals and slightly
+  worsens them. The earlier "self-consistently mesh-independent" claim was too
+  broad. **Neither configuration is converged below a few percent at these
+  resolutions**, so resolved results carry a few-percent mesh uncertainty at the
+  `nx_gap = 5` default — state that alongside any resolved number.
+  Cost scales as expected with the CFL: 21k / 37k / 69k steps, 90 / 154 / 281 s.
 - **The anode is NOT presheath-attenuated, by the same rule rather than an
   exception.** A mesh's presheath is *geometric* — set by the wire spacing,
   sub-millimetre — not collisional, so it always fits inside a cell, the fraction

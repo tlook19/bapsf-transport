@@ -534,6 +534,20 @@ def solve(
     T_e_anode = T_e if anode_T_e is None else float(anode_T_e)
     tau_a = T_e_anode / T_e
 
+    if not I_i_a > 0.0:
+        # The anode sheath relation is psi_a = Lambda - ln(1 + J_anode/J_i_a),
+        # which is singular at zero anode current: an anode that collects nothing
+        # cannot close the discharge circuit. This is a physical limit, not a
+        # numerical one, so it is reported rather than clamped. eta = 0 is a valid
+        # legacy limit for the anode's neutral and heat throttles, but not for the
+        # circuit -- turn off cathode_coupling instead.
+        raise ValueError(
+            "anode ion current is zero, so the discharge circuit cannot close "
+            f"(eta={config.eta}, I_i={I_i:.6g} A). eta = 0 is a valid limit for "
+            "the anode's neutral/heat throttles but not for the circuit; disable "
+            "cathode_coupling to model a machine with no anode collection."
+        )
+
     # Electron saturation current [A]
     I_e = I_i * math.exp(config.Lambda + 0.5)
 
