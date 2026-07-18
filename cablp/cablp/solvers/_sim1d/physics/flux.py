@@ -220,11 +220,8 @@ def plasma_flux_rhs(
         alpha_front=alpha_front,
     )
     return _add_state_rhs(
-        _add_state_rhs(
-            flux_terms["plasma_advective_flux"],
-            flux_terms["plasma_front_flux"],
-        ),
-        flux_terms["anode_interception"],
+        flux_terms["plasma_advective_flux"],
+        flux_terms["plasma_front_flux"],
     )
 
 
@@ -238,97 +235,27 @@ def plasma_flux_rhs_terms(
     alpha_front=1.0,
 ):
     """Return separately named conservative RHS terms from plasma face fluxes."""
-    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
-    raw = _rusanov_raw_faces(state, derived, mu, geometry)
-    rusanov = _apply_face_conditions(raw, geometry, derived.p)
-    raw_front = _zero_fluxes(geometry.cells)
-    front = raw_front
+    rusanov = rusanov_fluxes(
+        state=state,
+        floors=floors,
+        ion_mass_g=ion_mass_g,
+        mu=mu,
+        geometry=geometry,
+    )
+    front = _zero_fluxes(geometry.cells)
     if include_front:
-        raw_front, front = _front_fluxes(
+        front = front_filling_fluxes(
             state=state,
             floors=floors,
             ion_mass_g=ion_mass_g,
             mu=mu,
             geometry=geometry,
             alpha_front=alpha_front,
-            pressure=derived.p,
         )
-    # The anode intercepts whatever crosses it, advective and front alike, so the
-    # sink is driven by their combined incident particle flux.
     return {
         "plasma_advective_flux": _flux_rhs(rusanov, geometry),
         "plasma_front_flux": _flux_rhs(front, geometry),
-        "anode_interception": anode_interception_rhs(
-            raw_face_n=raw.n + raw_front.n,
-            derived=derived,
-            geometry=geometry,
-            ion_mass_g=ion_mass_g,
-        ),
     }
-
-
-def anode_interception_rhs(raw_face_n, derived, geometry, ion_mass_g):
-    """Return the plasma absorbed by a partially blocking face (the anode mesh).
-
-    Plan §11 decision 7: the anode's plasma effect is the *directed* flux it
-    intercepts, so the face transmits ``(1-eta)`` and the blocked ``eta`` fraction
-    is absorbed here rather than reflected. Removing it from the donor cell is
-    what makes the pair conservative -- the donor loses the full incident flux
-    (transmitted plus intercepted) while the far side receives only the
-    transmitted part.
-
-    The absorbed ions neutralize on the mesh and leave as gas. A wire has no
-    memory of which side an ion arrived from, so the neutrals are emitted to both
-    sides and are split evenly across the two flanking cells (§7); this matters
-    because the mesh throttles neutral flow, so the side a neutral is born on
-    decides whether it fuels the column or heads for the pump.
-
-    Mass, momentum and thermal energy are removed together exactly as
-    ``surface_neutralization_rhs`` does at a wall. The intercepted momentum is
-    absorbed by the grounded anode structure -- a sink, not ion heating (§5).
-    """
-    zeros = np.zeros(geometry.cells, dtype=float)
-    transmission = np.asarray(geometry.plasma_transmission, dtype=float)
-    blocking = np.flatnonzero(
-        np.asarray(geometry.plasma_open, dtype=bool) & (transmission < 1.0)
-    )
-    if blocking.size == 0:
-        return ConservativeState1D(
-            n=zeros,
-            nn=zeros.copy(),
-            M=zeros.copy(),
-            Ee=zeros.copy(),
-            Ei=zeros.copy(),
-        )
-
-    dN_loss = np.zeros(geometry.cells, dtype=float)
-    dN_gain = np.zeros(geometry.cells, dtype=float)
-    for face in blocking:
-        face = int(face)
-        flux = float(raw_face_n[face])
-        # Particles/s intercepted by the solid fraction of this face.
-        absorbed = (
-            abs(flux)
-            * (1.0 - transmission[face])
-            * float(geometry.plasma_face_area_cm2[face])
-        )
-        if absorbed == 0.0:
-            continue
-        # The donor is whichever side the flow comes from.
-        donor = face - 1 if flux > 0.0 else face
-        dN_loss[donor] += absorbed
-        dN_gain[face - 1] += 0.5 * absorbed
-        dN_gain[face] += 0.5 * absorbed
-
-    plasma_loss_rate = dN_loss / geometry.plasma_volume_cm3
-    neutral_gain_rate = dN_gain / geometry.neutral_volume_cm3
-    return ConservativeState1D(
-        n=-plasma_loss_rate,
-        nn=neutral_gain_rate,
-        M=-ion_mass_g * derived.u * plasma_loss_rate,
-        Ee=-1.5 * ev_to_erg * derived.Te * plasma_loss_rate,
-        Ei=-1.5 * ev_to_erg * derived.Ti * plasma_loss_rate,
-    )
 
 
 def _flux_rhs(fluxes, geometry):

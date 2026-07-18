@@ -60,10 +60,11 @@ the §13 legacy-equivalence assertion still holding.
   `plasma_open` (pressure taken from the live cell) and scales faces by
   `plasma_transmission`; `conduction.py` applies `heat_transmission` at all three
   face-conductance sites (explicit flux, implicit tridiagonal, dt bound). The anode
-  face carries all three throttles at `(1-eta)`, and the new `anode_interception`
-  term absorbs the blocked directed flux (decision 7) so the mesh absorbs rather
-  than reflects. Golden `--verify` **bit-exact**; smoke extended; first full
-  resolved discharge run and audited.
+  throttles heat and neutrals by `(1-eta)` while its advective face stays open, and
+  `sources.anode_collection_rhs` removes plasma at the **Bohm sheath flux** on both
+  mesh faces (decision 7, revised). `P_ohmic` now spreads along the gap weighted by
+  `Te^-3/2` instead of piling into one cell. Golden `--verify` **bit-exact**; smoke
+  extended; first full resolved discharge run and audited.
 - [ ] **M4 — Term relocations via roles.** Surface neutralization, cathode/anode
   source terms (incl. the bilateral anode neutralization split), beam anchoring,
   ohmic — all anchored by `cell_role`, not `[0]`/`[-1]`. (§6, §8)
@@ -90,7 +91,7 @@ Open items are plan §11.
 | — | neutral face aperture: mean vs restricting | **resolved** | **restricting (min)** of the two adjacent cells — a conductance between a wide and a narrow duct is set by the narrow one; mean would under-throttle the annulus. Bit-identical to the old mean whenever adjacent radii match. (M2) |
 | — | resolved machine coordinates | **resolved** | cathode surface fixed at `z=0`, anode at `z=cathode_anode_gap_cm`=50. Two cell counts: `nx_gap`=5 across the gap (10 cm cells), `nx`=60 from anode to collector (1850 cm ⇒ 30.83 cm cells) — the old 100 cm source lump splits into the 50 cm gap plus 50 cm added to the column. `Lm` spans cathode→far end; plenum/obstruction sit at **negative z**, so total mesh > `Lm`. **Legacy geometry deliberately frozen** at 100/1800/100 so the golden stays bit-exact. (geometry rework, pre-M3) |
 | 6 | asymmetric anode sheath | open | investigate at M5 |
-| 7 | anode obstruction in subsonic regime | **resolved** | **shrink the advective face now**: the anode transmits `(1-eta)` and the blocked directed flux is absorbed by the `anode_interception` sink (scaled to `eta*n*u`, not the Bohm flux, so nothing is double-counted). Valid subsonic as well as sonic. `eta=0` is the legacy limit. (M3) |
+| 7 | anode obstruction in subsonic regime | **resolved (revised)** | **Bohm collection only.** A sheath forms on every mesh wire, so ions arrive at `exp(-0.5)*n*c_s` set by the sheath, *not* by the bulk drift — a mesh in stagnant plasma still collects. The advective face therefore stays **open** (shrinking it too would remove the same particles twice, §5); `b_anode_advective_block` (default 0) can dial the `(1-eta)` reduction back in for a study, but it reflects rather than absorbs. Each mesh face is evaluated against its own side's `n`/`Te`, so collection is asymmetric — this also settles the *particle* half of #6. Supersedes the first pass, which used the intercepted directed flux `eta*n*u` and under-removed whenever the flow was subsonic. (M3, revised) |
 | — | single code path vs duplicate legacy path | **resolved** | single role/face-driven **operator** path (no flag branch); geometry construction uses two builders behind the switch so the legacy builder stays numerically verbatim and keeps the golden bit-exact. (M1) |
 | — | golden-baseline form (M0 tooling) | **resolved** | notebook production config (implicit tr_bdf2 + Strang + Picard, cathode on), full packed-`y` trajectory to the dynamic current-trigger end, stored as NPZ. Chosen over a compressed-timing or cathode-off run (both weaker: floor-collapsed / miss the cathode/anode terms M4–M5 relocate). Implicit split makes the real-timescale run cheap (~65 s). |
 
@@ -165,16 +166,31 @@ _(Running notes: surprises, dead ends, things the next session should know.)_
     The legacy golden verify is unaffected.
   - `cathode_length_cm`/`anode_length_cm` were **removed** — surfaces have no
     length. Anything referencing them is stale.
-- **⚠ M5 must derive the anode current from the DIRECTED flux, not the Bohm flux.**
-  Decision 7 put the anode's plasma removal in `anode_interception` as
-  `eta * (incident directed flux)`. Adding the plan's `2*eta*I_i_a` Bohm collection
-  on top would double-count the same particles (§5 warns of exactly this). M5's job
-  at the anode is the *sheath* (`P_anode_e`, circuit current) only, and its current
-  should be consistent with what M3 already removes.
-- **The anode interception is conservative by construction, and smoke asserts it:**
-  the donor cell loses the full incident flux (transmitted + intercepted) while the
-  far side receives only the transmitted part, and the absorbed ions reappear as
-  neutrals split evenly across the two flanking cells. Particle inventory rate is 0.
+- **⚠ M5 must NOT re-add the anode particle sink.** `physics/sources.anode_collection_rhs`
+  already removes `2*eta*I_i_a` worth of plasma — as two Bohm half-terms, each
+  sampled on its own side of the mesh. M5's remaining job at the anode is the
+  *sheath* (`P_anode_e`) and the circuit current, and that current should be the
+  one this term already implies, not a second independent estimate.
+- **Ion collection at a surface is set by the sheath, not the drift.** The first M3
+  pass removed the intercepted *directed* flux `eta*n*u`, which under-removes as
+  `u -> 0` (a mesh in stagnant plasma still collects at the Bohm flux), picks a
+  single donor by flux sign when a real mesh collects from both sides at once, and
+  ties collection to a bulk quantity the sheath makes irrelevant. Replaced by Bohm
+  collection reusing `_cell_surface_particle_loss`, the same primitive the cathode
+  and collector walls use. Smoke asserts the collection is unchanged when the bulk
+  flow is switched off — the property the old model got wrong.
+- **The anode collection is conservative and asserted:** each face's collected ions
+  reappear as neutrals *on the side they came from* (a wire blocks the path to the
+  other side, and the mesh throttles neutral flow between them, §7). Particle
+  inventory rate is 0.
+- **`P_ohmic` is spread along the cathode–anode gap, weighted by `Te^-3/2`.**
+  `I^2 R_p` is dissipated in the plasma *between* the electrodes, and with uniform
+  current density the power per unit length follows the local Spitzer resistivity,
+  so it concentrates where the gap is coldest. `gap_cell_indices()` returns the gap
+  cells (resolved) or the single source/end cell (legacy), so legacy deposition is
+  bit-identical — a one-cell gap normalizes to exactly 1.0. This is a partial step
+  toward §7 level (b), which replaces the single `R_p` with a path integral of
+  resistivity over the same cells.
 - **First full resolved discharge ran successfully** (`audit_sim1d_floor_activation.py
   --resolved`, backward_euler): final thermal 2.19e5 erg, Te floor clips 6.0% of
   cell-visits injecting +0.02% of final thermal, Ti 6.6% injecting +0.15%. Stable,

@@ -6,6 +6,7 @@ import numpy as np
 from cablp.funcs._cathode_solver import DeviceConfig, solve_beam_system
 from cablp.vars._cons import ev_to_erg, qe_SI
 
+from ..core.geometry import gap_cell_indices
 from ..core.state import ConservativeState1D, derive_state
 from .reactions import _birth_temperature
 
@@ -381,16 +382,18 @@ def beam_ionization_rhs_terms(
     ):
         return _zero_beam_terms(zeros)
 
+    beam_derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     S_beam, beam_power_density = _beam_ionization_sources(
         state=state,
         geometry=geometry,
         cathode_solve=cathode_solve,
         boundary=boundary,
+        Te=beam_derived.Te,
     )
     volume_ratio = geometry.plasma_volume_cm3 / geometry.neutral_volume_cm3
     Ti_birth = _birth_temperature(
         input_dict.get("Ti_birth_ionization", "floor"),
-        derive_state(state, floors=floors, ion_mass_g=ion_mass_g).Ti,
+        beam_derived.Ti,
         floors["Ti"],
     )
     return {
@@ -423,6 +426,7 @@ def _beam_ionization_sources(
     geometry,
     cathode_solve,
     boundary,
+    Te=None,
 ):
     zeros = np.zeros(geometry.cells, dtype=float)
     beam_result = cathode_solve.beam_result
@@ -440,6 +444,7 @@ def _beam_ionization_sources(
         beam_result=beam_result,
         solver_result=beam_result.result,
         cathode_index=0,
+        Te=Te,
     )
     if boundary.twin_cathode and beam_result.result_twin is not None:
         twin_profile = _beam_ionization_profile(
@@ -454,6 +459,7 @@ def _beam_ionization_sources(
             beam_result=beam_result,
             solver_result=beam_result.result_twin,
             cathode_index=-1,
+            Te=Te,
         )
 
     return S_beam, beam_power_density
@@ -555,13 +561,20 @@ def _beam_power_deposition_density(
     beam_result,
     solver_result,
     cathode_index,
+    Te=None,
 ):
     """Return the beam/ohmic power deposition density [erg cm^-3 s^-1].
 
     ``P_prim`` is carried into the column by the primary beam and so deposits
-    along the Beer-Lambert absorption profile. ``P_ohmic`` is the ohmic
-    dissipation at the cathode's own boundary cell and deposits there only,
-    rather than being spread along the beam path.
+    along the Beer-Lambert absorption profile.
+
+    ``P_ohmic = I^2 R_p`` is dissipated in the plasma *between* the cathode and
+    the anode, so it is spread over the cathode-anode gap rather than piled into
+    one boundary cell. The discharge current density is essentially uniform along
+    the gap, so the power per unit length follows the local Spitzer resistivity,
+    ``eta_sp ~ Te^-3/2``: dissipation concentrates wherever the gap is coldest.
+    Legacy geometry has no resolved gap, so the whole of ``P_ohmic`` still lands
+    on the single source/end cell exactly as before.
     """
     beam_cross = beam_result.beam_cross[cathode_index]
     if beam_cross == 0.0:
@@ -579,12 +592,38 @@ def _beam_power_deposition_density(
     density = (
         weights * solver_result.P_prim * 1.0e7 / geometry.plasma_volume_cm3
     )
-    density[cathode_index] += (
-        solver_result.P_ohmic
+    gap = np.asarray(
+        gap_cell_indices(geometry, end=0 if cathode_index == 0 else -1),
+        dtype=int,
+    )
+    ohmic_weights = _ohmic_gap_weights(geometry, gap, Te)
+    density[gap] += (
+        ohmic_weights
+        * solver_result.P_ohmic
         * 1.0e7
-        / geometry.plasma_volume_cm3[cathode_index]
+        / geometry.plasma_volume_cm3[gap]
     )
     return density
+
+
+def _ohmic_gap_weights(geometry, gap, Te):
+    """Return the normalized share of ``P_ohmic`` deposited in each gap cell.
+
+    ``P_cell = j^2 * eta_sp * V_cell``; with the current density uniform along
+    the gap this reduces to ``P_cell ~ eta_sp * length``, and Spitzer resistivity
+    gives ``eta_sp ~ Te^-3/2``. A single-cell gap normalizes to exactly 1.0, so
+    legacy deposition is bit-identical.
+    """
+    lengths = np.asarray(geometry.length_cm, dtype=float)[gap]
+    if Te is None or gap.size == 1:
+        weights = lengths
+    else:
+        Te_gap = np.maximum(np.asarray(Te, dtype=float)[gap], 1e-30)
+        weights = lengths * Te_gap**-1.5
+    total = weights.sum()
+    if not np.isfinite(total) or total <= 0.0:
+        return np.full(gap.size, 1.0 / gap.size)
+    return weights / total
 
 
 def _solver_result_metadata(result):

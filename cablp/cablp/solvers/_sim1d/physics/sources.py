@@ -103,6 +103,74 @@ def surface_neutralization_rhs(
     )
 
 
+def anode_collection_rhs(
+    state,
+    floors,
+    ion_mass_g,
+    mu,
+    geometry,
+    eta,
+    alpha_isat=np.exp(-0.5),
+    b_anode_collection=1.0,
+):
+    """Return the plasma the anode mesh collects and neutralizes.
+
+    A sheath forms on every mesh wire, so ions reach it at the **Bohm flux**
+    ``exp(-0.5) * n * c_s`` -- set by the sheath, not by the bulk drift. A mesh
+    sitting in stagnant plasma still collects; one in fast-flowing plasma does not
+    collect proportionally faster. This is why the collection cannot be written as
+    the intercepted directed flux ``eta * n * u``.
+
+    The wires present the solid fraction ``eta`` of the plasma cross-section to
+    *each* side, and each face is evaluated against the plasma actually on that
+    side, so a mesh separating hot gap plasma from cooler column plasma collects
+    asymmetrically -- the sum is the plan's ``2 * eta * I_i_a`` with each half
+    sampled locally. Neutrals are released on the side they were collected from,
+    since a wire blocks the path to the other side and the mesh throttles neutral
+    flow between them (§7).
+
+    Mass, momentum and thermal energy leave together as at any wall; the collected
+    momentum is absorbed by the grounded anode structure rather than heating the
+    ions (§5). ``eta = 0`` gives a transparent anode -- the legacy limit -- and
+    legacy geometry has no anode faces at all.
+    """
+    zeros = np.zeros(geometry.cells, dtype=float)
+    anode_faces = np.asarray(
+        getattr(geometry, "anode_face_indices", ()), dtype=int
+    )
+    if anode_faces.size == 0 or eta <= 0.0 or b_anode_collection == 0.0:
+        return ConservativeState1D(
+            n=zeros,
+            nn=zeros.copy(),
+            M=zeros.copy(),
+            Ee=zeros.copy(),
+            Ei=zeros.copy(),
+        )
+
+    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
+    dN_loss = np.zeros(geometry.cells, dtype=float)
+    for face in anode_faces:
+        for cell in (int(face) - 1, int(face)):
+            dN_loss[cell] += _cell_surface_particle_loss(
+                n=state.n[cell],
+                Te=derived.Te[cell],
+                mu=mu,
+                area_cm2=float(eta) * geometry.plasma_area_cm2[cell],
+                alpha_isat=alpha_isat,
+            )
+    dN_loss *= float(b_anode_collection)
+
+    plasma_loss_rate = dN_loss / geometry.plasma_volume_cm3
+    neutral_gain_rate = dN_loss / geometry.neutral_volume_cm3
+    return ConservativeState1D(
+        n=-plasma_loss_rate,
+        nn=neutral_gain_rate,
+        M=-ion_mass_g * derived.u * plasma_loss_rate,
+        Ee=-1.5 * ev_to_erg * derived.Te * plasma_loss_rate,
+        Ei=-1.5 * ev_to_erg * derived.Ti * plasma_loss_rate,
+    )
+
+
 def _cell_surface_particle_loss(n, Te, mu, area_cm2, alpha_isat):
     return float(alpha_isat) * n * ion_sound_speed(Te, mu) * area_cm2
 

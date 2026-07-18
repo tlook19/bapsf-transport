@@ -279,10 +279,12 @@ def main():
     )
     assert np.isclose(rod_geom.neutral_hydraulic_radius_cm[rod_plenum], rod_params["Rm"])
 
-    # M3: the three anode transmissions are independent (§3) but all equal the
-    # transparency (1-eta); the cathode surface blocks everything.
+    # M3: heat and neutrals are throttled by the transparency (1-eta), but the
+    # advective plasma face stays OPEN -- the anode removes plasma through the
+    # Bohm sheath flux at its wires, and shrinking the face too would remove the
+    # same particles twice (§5). The cathode surface blocks everything.
     transparency = 1.0 - resolved_params["eta"]
-    assert np.isclose(resolved_geom.plasma_transmission[anode_face], transparency)
+    assert resolved_geom.plasma_transmission[anode_face] == 1.0
     assert np.isclose(resolved_geom.heat_transmission[anode_face], transparency)
     assert np.isclose(
         resolved_geom.neutral_face_area_cm2[anode_face],
@@ -308,12 +310,22 @@ def main():
     transparent_geom = LAPDSim1D(
         transparent_params, resolved_flags
     ).get_initial_snapshot().geometry
-    assert transparent_geom.plasma_transmission[anode_face] == 1.0
     assert transparent_geom.heat_transmission[anode_face] == 1.0
+    assert np.isclose(
+        transparent_geom.neutral_face_area_cm2[anode_face],
+        np.pi * transparent_params["Rm"] ** 2,
+    )
+    # The advective-block knob dials the (1-eta) face reduction back in for a
+    # sensitivity study; it is 0 by default so the face stays open.
+    blocked_params = dict(resolved_params)
+    blocked_params["b_anode_advective_block"] = 1.0
+    blocked_geom = LAPDSim1D(
+        blocked_params, resolved_flags
+    ).get_initial_snapshot().geometry
+    assert np.isclose(blocked_geom.plasma_transmission[anode_face], transparency)
 
-    # M3: the anode absorbs the flux it blocks rather than reflecting it. Drive a
-    # flow across the mesh and check the sink removes plasma, makes neutrals, and
-    # conserves particles.
+    # M3: the anode collects plasma at the Bohm sheath flux on BOTH mesh faces,
+    # each sampling its own side, independent of the bulk drift.
     resolved_sim = LAPDSim1D(resolved_params, resolved_flags)
     flowing_state = conservative_from_primitives(
         n=np.full(resolved_geom.cells, 1.0e12),
@@ -323,37 +335,47 @@ def main():
         Ti=np.full(resolved_geom.cells, 1.0),
         ion_mass_g=resolved_sim.ion_mass_g,
     )
-    intercept = resolved_sim.plasma_flux_rhs_terms(
-        state=flowing_state, include_front=True
-    )["anode_interception"]
-    assert intercept.n[anode_face - 1] < 0.0  # donor side loses plasma
-    assert intercept.M[anode_face - 1] < 0.0  # momentum absorbed, not thermalized
-    assert intercept.Ee[anode_face - 1] < 0.0
-    assert intercept.Ei[anode_face - 1] < 0.0
-    # Neutrals are split across both flanking cells: a wire has no memory of the
-    # side an ion arrived from, and the mesh throttles flow between the two.
-    assert intercept.nn[anode_face - 1] > 0.0
-    assert intercept.nn[anode_face] > 0.0
-    intercept_scale = np.sum(
-        np.abs(intercept.n * resolved_geom.plasma_volume_cm3)
-        + np.abs(intercept.nn * resolved_geom.neutral_volume_cm3)
+    collected = resolved_sim.anode_collection_rhs(state=flowing_state)
+    for side in (anode_face - 1, anode_face):
+        assert collected.n[side] < 0.0
+        assert collected.M[side] < 0.0  # absorbed by the structure, not thermalized
+        assert collected.Ee[side] < 0.0
+        assert collected.Ei[side] < 0.0
+        assert collected.nn[side] > 0.0  # neutral born on the side it came from
+    # Only the two flanking cells are touched.
+    untouched = [
+        c for c in range(resolved_geom.cells) if c not in (anode_face - 1, anode_face)
+    ]
+    assert np.allclose(collected.n[untouched], 0.0)
+    collected_scale = np.sum(
+        np.abs(collected.n * resolved_geom.plasma_volume_cm3)
+        + np.abs(collected.nn * resolved_geom.neutral_volume_cm3)
     )
-    assert intercept_scale > 0.0
+    assert collected_scale > 0.0
     assert np.isclose(
-        particle_inventory_rate(intercept, resolved_geom),
+        particle_inventory_rate(collected, resolved_geom),
         0.0,
-        atol=1e-12 * intercept_scale,
+        atol=1e-12 * collected_scale,
     )
-    # A transparent anode intercepts nothing.
+    # Bohm collection is set by the sheath, not the drift: it is unchanged when
+    # the bulk flow is switched off, which the old directed-flux model got wrong.
+    still_state = conservative_from_primitives(
+        n=np.full(resolved_geom.cells, 1.0e12),
+        nn=np.full(resolved_geom.cells, 1.0e12),
+        u=np.zeros(resolved_geom.cells),
+        Te=np.full(resolved_geom.cells, 2.0),
+        Ti=np.full(resolved_geom.cells, 1.0),
+        ion_mass_g=resolved_sim.ion_mass_g,
+    )
+    still_collected = resolved_sim.anode_collection_rhs(state=still_state)
+    assert np.allclose(still_collected.n, collected.n)
+    assert still_collected.n[anode_face] < 0.0
+    # A transparent anode collects nothing, and legacy has no anode at all.
     transparent_sim = LAPDSim1D(transparent_params, resolved_flags)
     assert np.allclose(
-        pack_state(
-            transparent_sim.plasma_flux_rhs_terms(
-                state=flowing_state, include_front=True
-            )["anode_interception"]
-        ),
-        0.0,
+        pack_state(transparent_sim.anode_collection_rhs(state=flowing_state)), 0.0
     )
+    assert np.allclose(pack_state(sim.anode_collection_rhs(state=state)), 0.0)
 
     # M3: no parallel heat conduction crosses a cathode surface into the plenum.
     resolved_q = conductive_face_flux(
@@ -1253,13 +1275,7 @@ def main():
         state=ramp_state,
         include_front=True,
     )
-    assert set(ramp_flux_terms) == {
-        "plasma_advective_flux",
-        "plasma_front_flux",
-        "anode_interception",
-    }
-    # Legacy geometry has no partially blocking face, so interception is inert.
-    assert np.allclose(pack_state(ramp_flux_terms["anode_interception"]), 0.0)
+    assert set(ramp_flux_terms) == {"plasma_advective_flux", "plasma_front_flux"}
     ramp_flux_sum = np.zeros_like(pack_state(ramp_rhs))
     for term in ramp_flux_terms.values():
         for field_name in STATE_NAMES_1D:
@@ -1717,6 +1733,7 @@ def main():
         "ion_neutral_frictional_heating",
         "ion_neutral_thermalization",
         "surface_loss",
+        "anode_collection",
         "cathode_surface_loss",
         "neutral_exchange",
         "neutral_sources",

@@ -146,6 +146,29 @@ def anode_flanking_cells(geometry):
     return tuple(pairs)
 
 
+def gap_cell_indices(geometry, end=0):
+    """Return the cathode-anode gap cells at the given machine end.
+
+    Ohmic dissipation is I^2 R_p with R_p the plasma resistance *between* the
+    cathode and the anode, so the power is deposited along the gap rather than
+    piled into one boundary cell (§8). Legacy geometry has no resolved gap -- the
+    source lump is the whole cathode-anode region -- so this returns that single
+    cell and the historical deposition is unchanged.
+
+    ``end`` selects the machine end: ``0`` for the source cathode, ``-1`` for the
+    twin.
+    """
+    cathode_faces = np.asarray(geometry.cathode_face_indices, dtype=int)
+    anode_faces = np.asarray(geometry.anode_face_indices, dtype=int)
+    if cathode_faces.size == 0 or anode_faces.size == 0:
+        return (0 if end == 0 else geometry.cells - 1,)
+    which = 0 if end == 0 else -1
+    cathode_face = int(cathode_faces[which])
+    anode_face = int(anode_faces[which])
+    low, high = sorted((cathode_face, anode_face))
+    return tuple(range(low, high))
+
+
 def is_plenum_cell(geometry, index):
     """Return True when ``index`` is a plenum (pump-behind-cathode) cell."""
     return str(np.asarray(geometry.cell_role)[index]) == "plenum"
@@ -394,6 +417,9 @@ def _build_resolved_geometry(input_dict, flags):
         cathode_face_indices=np.asarray(cathode_faces, dtype=int),
         anode_face_indices=np.asarray(anode_faces, dtype=int),
         anode_transparency=1.0 - float(input_dict.get("eta", 0.0)),
+        anode_advective_block=float(
+            input_dict.get("b_anode_advective_block", 0.0)
+        ),
     )
 
 
@@ -416,6 +442,7 @@ def _assemble_geometry(
     cathode_face_indices=None,
     anode_face_indices=None,
     anode_transparency=1.0,
+    anode_advective_block=0.0,
 ):
     """Derive the face arrays from the cell arrays and pack a ``Sim1DGeometry``.
 
@@ -442,19 +469,30 @@ def _assemble_geometry(
         heat_transmission[face] = 0.0
 
     # The anode mesh is plasma-open but partially blocking, and the three
-    # transmissions are independent (§3): the solid fraction eta intercepts the
-    # directed plasma flux (§11 decision 7), blocks the same fraction of parallel
-    # conduction, and the neutral aperture is the transparency times the machine
-    # cross-section. eta = 0 recovers a fully transparent anode -- the legacy limit.
+    # transmissions are independent (§3). eta = 0 recovers a fully transparent
+    # anode -- the legacy limit.
+    #
+    # Heat and neutrals are throttled by the transparency (1-eta). The *advective*
+    # plasma flux is NOT: the anode removes plasma through the Bohm sheath flux at
+    # its wires (physics/sources.anode_collection_rhs), and shrinking the face as
+    # well would remove the same particles twice (§5). Mass that misses a wire
+    # simply streams through the holes. `b_anode_advective_block` (default 0)
+    # exists only to dial that blocking back in for a sensitivity study; note it
+    # *reflects* rather than absorbs, since the absorption is always Bohm.
     transparency = float(anode_transparency)
     if not 0.0 <= transparency <= 1.0:
         raise ValueError(
             f"anode transparency must lie in [0, 1] (got {transparency})"
         )
+    block = float(anode_advective_block)
+    if not 0.0 <= block <= 1.0:
+        raise ValueError(
+            f"b_anode_advective_block must lie in [0, 1] (got {block})"
+        )
     for face in np.asarray(
         [] if anode_face_indices is None else anode_face_indices, dtype=int
     ):
-        plasma_transmission[face] = transparency
+        plasma_transmission[face] = 1.0 - block * (1.0 - transparency)
         heat_transmission[face] = transparency
         neutral_face_area_cm2[face] = neutral_face_area_cm2[face] * transparency
 

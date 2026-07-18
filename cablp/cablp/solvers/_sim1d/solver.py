@@ -60,6 +60,7 @@ from .physics.neutrals import (
 from .physics.reactions import reaction_rhs, reaction_rhs_terms
 from .physics.sources import (
     add_state_rhs,
+    anode_collection_rhs,
     ion_neutral_drag_rhs,
     ion_neutral_frictional_heating_rhs,
     ion_neutral_thermalization_rhs,
@@ -555,6 +556,7 @@ class LAPDSim1D:
                 "ion_neutral_frictional_heating": self._zero_rhs_state(),
                 "ion_neutral_thermalization": self._zero_rhs_state(),
                 "surface_loss": self._zero_rhs_state(),
+                "anode_collection": self._zero_rhs_state(),
                 "cathode_surface_loss": self._zero_rhs_state(),
                 "neutral_exchange": self.neutral_exchange_rhs(state=state),
                 "neutral_sources": self.neutral_source_sink_rhs(
@@ -609,6 +611,7 @@ class LAPDSim1D:
                 self.ion_neutral_thermalization_rhs(state=state)
             ),
             "surface_loss": self.surface_neutralization_rhs(state=state),
+            "anode_collection": self.anode_collection_rhs(state=state),
             "cathode_surface_loss": self.cathode_source_terms(
                 state=state,
                 cathode_solve=cathode_solve,
@@ -1729,6 +1732,22 @@ class LAPDSim1D:
             mu=self._mu,
             geometry=self._geometry,
             **self._surface_loss_kwargs(),
+        )
+
+    def anode_collection_rhs(self, y=None, state=None):
+        """Return the Bohm-flux plasma collection at the anode mesh."""
+        if state is None:
+            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        return anode_collection_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            mu=self._mu,
+            geometry=self._geometry,
+            eta=float(self._input_dict.get("eta", 0.0)),
+            b_anode_collection=float(
+                self._input_dict.get("b_anode_collection", 1.0)
+            ),
         )
 
     def ion_neutral_drag_rhs(self, y=None, state=None):
