@@ -1,0 +1,160 @@
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{cablp-macros}[2026/07/06 CABLP manuscript equation macros]
+
+\RequirePackage{amsmath}
+\RequirePackage{amssymb}
+\RequirePackage{bm}
+\RequirePackage{mathtools}
+\RequirePackage{siunitx}
+\RequirePackage{xparse}
+
+% General math notation
+\providecommand{\dd}{\mathop{}\!\mathrm{d}}
+\providecommand{\ee}{\mathrm{e}}
+\providecommand{\ii}{\mathrm{i}}
+\providecommand{\half}{\frac{1}{2}}
+\providecommand{\third}{\frac{1}{3}}
+\providecommand{\twothirds}{\frac{2}{3}}
+\providecommand{\kB}{k_{\mathrm{B}}}
+\providecommand{\qe}{e}
+\providecommand{\me}{m_e}
+\providecommand{\mp}{m_p}
+\providecommand{\mi}{m_i}
+\providecommand{\epszero}{\epsilon_0}
+\providecommand{\clog}{\ln\Lambda}
+\providecommand{\sgv}{\langle\sigma v\rangle}
+
+\DeclareMathOperator{\erf}{erf}
+\DeclareMathOperator{\sgn}{sgn}
+
+\NewDocumentCommand{\deriv}{m m}{\frac{\dd #1}{\dd #2}}
+\NewDocumentCommand{\pderiv}{m m}{\frac{\partial #1}{\partial #2}}
+\NewDocumentCommand{\pderivtwo}{m m}{\frac{\partial^2 #1}{\partial #2^2}}
+\NewDocumentCommand{\avg}{m}{\left\langle #1 \right\rangle}
+\NewDocumentCommand{\abs}{m}{\left| #1 \right|}
+\NewDocumentCommand{\norm}{m}{\left\lVert #1 \right\rVert}
+\NewDocumentCommand{\evalat}{m m}{\left. #1 \right|_{#2}}
+\NewDocumentCommand{\paren}{m}{\left( #1 \right)}
+\NewDocumentCommand{\bracket}{m}{\left[ #1 \right]}
+\NewDocumentCommand{\set}{m}{\left\{ #1 \right\}}
+
+% Indices, faces, and finite-volume notation
+\NewDocumentCommand{\cell}{m m}{{#1}_{#2}}
+\NewDocumentCommand{\face}{m}{{#1+\half}}
+\NewDocumentCommand{\leftface}{m}{{#1-\half}}
+\NewDocumentCommand{\atcell}{m m}{{#1}_{#2}}
+\NewDocumentCommand{\atface}{m m}{{#1}_{#2+\half}}
+\NewDocumentCommand{\diff}{m m}{\Delta #1_{#2}}
+\NewDocumentCommand{\vol}{m}{V_{#1}}
+\NewDocumentCommand{\area}{m}{A_{#1}}
+
+% Species and common state variables
+\providecommand{\electrons}{\mathrm{e}}
+\providecommand{\ions}{\mathrm{i}}
+\providecommand{\neutrals}{\mathrm{n}}
+\providecommand{\beam}{\mathrm{b}}
+
+\providecommand{\ne}{n_e}
+\providecommand{\ni}{n_i}
+\providecommand{\nn}{n_n}
+\providecommand{\nb}{n_b}
+\providecommand{\Te}{T_e}
+\providecommand{\Ti}{T_i}
+\providecommand{\Tn}{T_n}
+\providecommand{\Ts}{T_s}
+\providecommand{\ve}{v_e}
+\providecommand{\vi}{v_i}
+\providecommand{\vn}{v_n}
+\providecommand{\vb}{v_b}
+\providecommand{\vplasma}{v}
+\providecommand{\cs}{c_s}
+\providecommand{\vthe}{v_{\mathrm{th},e}}
+\providecommand{\vthi}{v_{\mathrm{th},i}}
+\providecommand{\vthn}{v_{\mathrm{th},n}}
+\providecommand{\taue}{\tau_e}
+\providecommand{\taui}{\tau_i}
+\providecommand{\Ome}{\Omega_e}
+\providecommand{\Omi}{\Omega_i}
+
+% Geometry and fields
+\providecommand{\Lp}{L_p}
+\providecommand{\Lm}{L_m}
+\providecommand{\Lhf}{L_{\mathrm{hf}}}
+\providecommand{\Lcath}{L_{\mathrm{cath}}}
+\providecommand{\Rp}{R_p}
+\providecommand{\Rm}{R_m}
+\providecommand{\Rhf}{R_{\mathrm{hf}}}
+\providecommand{\Rcath}{R_{\mathrm{cath}}}
+\providecommand{\Bz}{B_z}
+\providecommand{\Ac}{A_c}
+\providecommand{\Ap}{A_p}
+
+% Fluxes, sources, and losses
+\providecommand{\Gammae}{\Gamma_e}
+\providecommand{\Gamman}{\Gamma_n}
+\providecommand{\Fluxne}{F_{\ne}}
+\providecommand{\Fluxnn}{F_{\nn}}
+\providecommand{\Sgp}{S_{\mathrm{gp}}}
+\providecommand{\Spump}{S_{\mathrm{pump}}}
+\providecommand{\Sion}{S_{\mathrm{ion}}}
+\providecommand{\Sionbulk}{S_{\mathrm{ion}}^{\mathrm{bulk}}}
+\providecommand{\Sionbeam}{S_{\mathrm{ion}}^{\mathrm{beam}}}
+\providecommand{\Srec}{S_{\mathrm{rec}}}
+\providecommand{\Srecrad}{S_{\mathrm{rec}}^{\mathrm{rad}}}
+\providecommand{\Srectb}{S_{\mathrm{rec}}^{3b}}
+\providecommand{\Kion}{K_{\mathrm{ion}}}
+
+\providecommand{\fE}{f_E}
+\providecommand{\Qepara}{Q_{e\parallel}}
+\providecommand{\Qipara}{Q_{i\parallel}}
+\providecommand{\Qeperp}{Q_{e\perp}}
+\providecommand{\Qiperp}{Q_{i\perp}}
+\providecommand{\Qie}{Q_{ie}}
+\providecommand{\Qei}{Q_{ei}}
+\providecommand{\Qen}{Q_{en}}
+\providecommand{\Qcx}{Q_{\mathrm{cx}}}
+\providecommand{\Qeb}{Q_{eb}}
+\providecommand{\Qib}{Q_{ib}}
+\providecommand{\Qconv}{Q_{\mathrm{conv}}}
+\providecommand{\Qdivv}{Q_{\nabla v}}
+
+% Transport coefficients
+\providecommand{\kepara}{\kappa_{e\parallel}}
+\providecommand{\kipara}{\kappa_{i\parallel}}
+\providecommand{\keperp}{\kappa_{e\perp}}
+\providecommand{\kiperp}{\kappa_{i\perp}}
+\providecommand{\kn}{\kappa_n}
+\providecommand{\mfp}{\ell}
+\providecommand{\mfpb}{\ell_b}
+\providecommand{\mfpbi}{\ell_{bi}}
+\providecommand{\mfpbn}{\ell_{bn}}
+
+% Cathode and circuit notation
+\providecommand{\Vbank}{V_{\mathrm{bank}}}
+\providecommand{\Rcomp}{R_{\mathrm{comp}}}
+\providecommand{\Rcircuit}{R}
+\providecommand{\phic}{\phi_c}
+\providecommand{\phia}{\phi_a}
+\providecommand{\phiwf}{\phi_{\mathrm{wf}}}
+\providecommand{\psic}{\psi_c}
+\providecommand{\psia}{\psi_a}
+\providecommand{\psibank}{\psi_{\mathrm{bank}}}
+\providecommand{\Ii}{I_i}
+\providecommand{\Ie}{I_e}
+\providecommand{\Ieth}{I_{\mathrm{eth}}}
+\providecommand{\Ibeam}{I_{\mathrm{beam}}}
+\providecommand{\Itot}{I_{\mathrm{tot}}}
+\providecommand{\Pprim}{P_{\mathrm{prim}}}
+\providecommand{\Pohmic}{P_{\mathrm{ohmic}}}
+\providecommand{\Pnet}{P_{\mathrm{net}}}
+\providecommand{\Ploss}{P_{\mathrm{loss}}}
+
+% Common units.  Use as, for example, \SI{1e12}{\percc} or \SI{5}{\ev}.
+\DeclareSIUnit{\ev}{eV}
+\DeclareSIUnit{\erg}{erg}
+\DeclareSIUnit{\gauss}{G}
+\DeclareSIUnit{\sccm}{sccm}
+\DeclareSIUnit{\slpm}{slpm}
+\DeclareSIUnit{\percc}{cm^{-3}}
+\DeclareSIUnit{\cms}{cm\,s^{-1}}
+\DeclareSIUnit{\cmps}{cm\,s^{-1}}

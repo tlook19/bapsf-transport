@@ -10,3 +10,12 @@ __pycache__/
 *.h5
 *.hdf5
 CLAUDE.md
+
+# LaTeX build outputs
+*.aux
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex.gz
+manuscript/*.pdf
