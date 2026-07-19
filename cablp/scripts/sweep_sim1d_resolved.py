@@ -61,12 +61,17 @@ FLAG_OVERRIDES = {
 }
 
 
-def run_case(param_overrides=None, resolved=True):
+def run_case(param_overrides=None, resolved=True, exchange_model="knudsen"):
     """Run one resolved (or legacy) discharge and return summary metrics."""
     params, flags = default_config()
     params.update(PARAM_OVERRIDES)
     flags.update(FLAG_OVERRIDES)
     flags["resolved_boundaries"] = bool(resolved)
+    if resolved:
+        # knudsen is the only mesh-consistent neutral transport; the historical
+        # molecular_flow option remains selectable to reproduce the superseded
+        # M6 table (BOUNDARY_REGIONS_PROGRESS.md notes).
+        params["neutral_exchange_model"] = exchange_model
     if param_overrides:
         params.update(param_overrides)
 
@@ -131,7 +136,7 @@ def _spread(rows):
     return out
 
 
-def convergence(nx_gaps):
+def convergence(nx_gaps, exchange_model="knudsen"):
     """Refine the gap with the presheath correction on and off."""
     for b_presheath in (1.0, 0.0):
         rows = []
@@ -140,7 +145,10 @@ def convergence(nx_gaps):
             rows.append(
                 (
                     label,
-                    run_case({"nx_gap": nx_gap, "b_presheath_length": b_presheath}),
+                    run_case(
+                        {"nx_gap": nx_gap, "b_presheath_length": b_presheath},
+                        exchange_model=exchange_model,
+                    ),
                 )
             )
         title = (
@@ -158,7 +166,7 @@ def convergence(nx_gaps):
     return 0
 
 
-def sensitivity():
+def sensitivity(exchange_model="knudsen"):
     """Vary the §10 knobs around the resolved default."""
     cases = [
         ("resolved default", {}),
@@ -169,9 +177,12 @@ def sensitivity():
         ("S_pump_L x2", {"S_pump_L": 4000.0}),
         ("pump elbow C=2000 L/s", {"pump_elbow_conductance_lps": 2000.0}),
     ]
-    rows = [(label, run_case(overrides)) for label, overrides in cases]
+    rows = [
+        (label, run_case(overrides, exchange_model=exchange_model))
+        for label, overrides in cases
+    ]
     rows.append(("legacy (reference)", run_case({}, resolved=False)))
-    _print_rows("resolved sensitivity sweep", rows)
+    _print_rows(f"resolved sensitivity sweep ({exchange_model})", rows)
     return 0
 
 
@@ -186,13 +197,20 @@ def main(argv=None):
         default=[5, 10, 20],
         help="gap cell counts for the convergence study",
     )
+    parser.add_argument(
+        "--exchange-model",
+        default="knudsen",
+        choices=("knudsen", "molecular_flow"),
+        help="resolved neutral transport (molecular_flow reproduces the "
+        "superseded M6 table only)",
+    )
     args = parser.parse_args(argv)
     if not (args.convergence or args.sensitivity):
         parser.error("choose --convergence and/or --sensitivity")
     if args.convergence:
-        convergence(args.nx_gap)
+        convergence(args.nx_gap, exchange_model=args.exchange_model)
     if args.sensitivity:
-        sensitivity()
+        sensitivity(exchange_model=args.exchange_model)
     return 0
 
 

@@ -1,12 +1,13 @@
 import numpy as np
 
+from cablp.funcs._adas import he_rates
 from cablp.funcs._fits import IAEA_exp1, IAEA_exp4, IAEA_exp6
 from cablp.funcs._heat import Q_cx_He, Q_ie
 from cablp.funcs._plasmaparams import c_log
 from cablp.vars._coeff import aHII, aHI, aHeI, aHeII
 from cablp.vars._cons import ev_to_erg
 
-from .reactions import reaction_rates
+from .reactions import _check_atomic_rate_model, reaction_rates
 from ..core.state import ConservativeState1D, derive_state
 
 
@@ -70,6 +71,10 @@ def electron_cooling_rhs(
     b_ionization_energy_cost=1.0,
     b_Qei=1.0,
     b_Qen=1.0,
+    b_Qei_Te_exp=0.0,
+    b_Qen_Te_exp=0.0,
+    b_Q_Te_ref_eV=5.0,
+    atomic_rate_model="janev",
     ionization_energy_cost=True,
     icool=True,
     ncool=True,
@@ -77,7 +82,7 @@ def electron_cooling_rhs(
 ):
     """Return conservative electron inelastic/radiative cooling sources.
 
-    Cooling terms are volumetric electron-energy sinks. The IAEA fit helpers
+    Cooling terms are volumetric electron-energy sinks. The rate helpers
     return eV-rate coefficients, so the accumulated loss is converted to
     conservative ``erg cm^-3 s^-1`` before being applied to ``Ee``.
     """
@@ -93,6 +98,10 @@ def electron_cooling_rhs(
         b_ionization_energy_cost=b_ionization_energy_cost,
         b_Qei=b_Qei,
         b_Qen=b_Qen,
+        b_Qei_Te_exp=b_Qei_Te_exp,
+        b_Qen_Te_exp=b_Qen_Te_exp,
+        b_Q_Te_ref_eV=b_Q_Te_ref_eV,
+        atomic_rate_model=atomic_rate_model,
         ionization_energy_cost=ionization_energy_cost,
         icool=icool,
         ncool=ncool,
@@ -125,46 +134,113 @@ def electron_cooling_rhs_terms(
     b_ionization_energy_cost=1.0,
     b_Qei=1.0,
     b_Qen=1.0,
+    b_Qei_Te_exp=0.0,
+    b_Qen_Te_exp=0.0,
+    b_Q_Te_ref_eV=5.0,
+    atomic_rate_model="janev",
     ionization_energy_cost=True,
     icool=True,
     ncool=True,
     icool_recomb=False,
 ):
-    """Return split conservative electron cooling source terms."""
+    """Return split conservative electron cooling source terms.
+
+    ``atomic_rate_model`` selects the cooling coefficients. ``"janev"`` (the
+    historical default) uses the IAEA fit expressions -- note the He I fit
+    *includes* the ionization-potential loss, so combined with the separate
+    ``ionization_energy_cost`` term it double-counts that channel unless
+    ``b_Qen`` compensates. ``"adas"`` uses the OPEN-ADAS radiated-power
+    coefficients (PLT; plus PRB for ``icool_recomb``), which are radiation
+    only and therefore consistent with the separate ionization-cost term.
+
+    The ``b_Qei``/``b_Qen`` scalars carry an optional Te-dependent shape:
+    a nonzero ``b_Q*_Te_exp`` multiplies the corresponding cooling term by
+    ``(Te / b_Q_Te_ref_eV) ** exp``, so the correction is ``b_Q*`` exactly at
+    the reference temperature. The IAEA fits are believed good to only a
+    factor ~2 at low Te, and a constant scalar cannot express an error that
+    varies over the 2-12 eV discharge range; the exponent hook lets a
+    literature- or decay-calibrated shape in without touching the fits. The
+    default exponent of 0 skips the factor entirely (bit-exact legacy).
+    """
+    _check_atomic_rate_model(atomic_rate_model, gas_type)
     zeros = np.zeros_like(state.n, dtype=float)
     ionization_cost_eV = zeros.copy()
     electron_ion_cooling_eV = zeros.copy()
     electron_neutral_cooling_eV = zeros.copy()
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
+    use_adas = atomic_rate_model == "adas"
 
-    if ionization_energy_cost and b_ionization_energy_cost != 0.0:
-        S_ion, _, _ = reaction_rates(
-            state=state,
-            floors=floors,
-            ion_mass_g=ion_mass_g,
-            gas_type=gas_type,
-            I_ion=I_ion,
-            b_ioniz=b_ioniz,
-            b_rec_rad=b_rec_rad,
-            b_rec_3b=b_rec_3b,
-        )
+    want_cost = ionization_energy_cost and b_ionization_energy_cost != 0.0
+    want_qei = icool and b_Qei != 0.0
+    want_qen = ncool and b_Qen != 0.0
+
+    adas = {}
+    if use_adas and (want_cost or want_qei or want_qen):
+        quantities = []
+        if want_cost:
+            quantities.append("scd")
+        if want_qei:
+            quantities.append("plt2")
+            if icool_recomb:
+                quantities.append("prb1")
+        if want_qen:
+            quantities.append("plt1")
+        n_safe = np.maximum(state.n, floors["n"])
+        adas = he_rates(n_safe, derived.Te, quantities)
+
+    if want_cost:
+        if use_adas:
+            # Must mirror reaction_rates' adas branch exactly: the cost is
+            # I_ion per particle actually created by the particle equation.
+            S_ion = float(b_ioniz) * state.n * state.nn * adas["scd"]
+        else:
+            S_ion, _, _ = reaction_rates(
+                state=state,
+                floors=floors,
+                ion_mass_g=ion_mass_g,
+                gas_type=gas_type,
+                I_ion=I_ion,
+                b_ioniz=b_ioniz,
+                b_rec_rad=b_rec_rad,
+                b_rec_3b=b_rec_3b,
+                atomic_rate_model=atomic_rate_model,
+            )
         ionization_cost_eV = float(b_ionization_energy_cost) * I_ion * S_ion
 
-    if icool and b_Qei != 0.0:
-        electron_ion_cooling_eV = float(b_Qei) * _ion_inelastic_cooling_eV(
-            derived.Te,
-            state.n,
-            gas_type=gas_type,
-            recomb=icool_recomb,
-        )
+    if want_qei:
+        if use_adas:
+            coeff = adas["plt2"]
+            if icool_recomb:
+                coeff = coeff + adas["prb1"]
+            electron_ion_cooling_eV = float(b_Qei) * coeff * state.n * state.n
+        else:
+            electron_ion_cooling_eV = float(b_Qei) * _ion_inelastic_cooling_eV(
+                derived.Te,
+                state.n,
+                gas_type=gas_type,
+                recomb=icool_recomb,
+            )
+        if b_Qei_Te_exp != 0.0:
+            electron_ion_cooling_eV = electron_ion_cooling_eV * (
+                derived.Te / float(b_Q_Te_ref_eV)
+            ) ** float(b_Qei_Te_exp)
 
-    if ncool and b_Qen != 0.0:
-        electron_neutral_cooling_eV = float(b_Qen) * _neutral_inelastic_cooling_eV(
-            derived.Te,
-            state.n,
-            state.nn,
-            gas_type=gas_type,
-        )
+    if want_qen:
+        if use_adas:
+            electron_neutral_cooling_eV = (
+                float(b_Qen) * adas["plt1"] * state.n * state.nn
+            )
+        else:
+            electron_neutral_cooling_eV = float(b_Qen) * _neutral_inelastic_cooling_eV(
+                derived.Te,
+                state.n,
+                state.nn,
+                gas_type=gas_type,
+            )
+        if b_Qen_Te_exp != 0.0:
+            electron_neutral_cooling_eV = electron_neutral_cooling_eV * (
+                derived.Te / float(b_Q_Te_ref_eV)
+            ) ** float(b_Qen_Te_exp)
 
     return {
         "ionization_energy_cost": _electron_energy_sink(

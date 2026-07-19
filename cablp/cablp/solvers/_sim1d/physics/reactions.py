@@ -2,6 +2,7 @@ import math
 
 import numpy as np
 
+from cablp.funcs._adas import he_rates
 from cablp.funcs._cross import He_ion_rate_lkup, alpha_3, alpha_r
 from cablp.funcs._fits import rate_coeff
 from cablp.vars._cons import ev_to_erg
@@ -10,6 +11,21 @@ from ..core.state import ConservativeState1D, derive_state
 
 
 H_ION_COEFF = (1e-5, 6.0)
+
+ATOMIC_RATE_MODELS = ("janev", "adas")
+
+
+def _check_atomic_rate_model(atomic_rate_model, gas_type):
+    if atomic_rate_model not in ATOMIC_RATE_MODELS:
+        raise ValueError(
+            f"atomic_rate_model must be one of {ATOMIC_RATE_MODELS} "
+            f"(got {atomic_rate_model!r})"
+        )
+    if atomic_rate_model == "adas" and gas_type != "He":
+        raise ValueError(
+            "atomic_rate_model='adas' is only wired for gas_type 'He' "
+            f"(got {gas_type!r})"
+        )
 
 
 def reaction_rates(
@@ -21,9 +37,30 @@ def reaction_rates(
     b_ioniz=1.0,
     b_rec_rad=1.0,
     b_rec_3b=1.0,
+    atomic_rate_model="janev",
 ):
-    """Return bulk ionization and recombination density rates [cm^-3 s^-1]."""
+    """Return bulk ionization and recombination density rates [cm^-3 s^-1].
+
+    ``atomic_rate_model`` selects the coefficient source. ``"janev"`` (the
+    historical default) uses the direct ground-state ionization rate and the
+    separate radiative/three-body recombination coefficients. ``"adas"`` uses
+    the OPEN-ADAS GCR effective coefficients (``cablp.funcs._adas``): SCD for
+    ionization -- which includes the stepwise/metastable channel the direct
+    rate lacks (up to ~3-6x at 3-5 eV, LAPD densities) -- and ACD for
+    recombination. ACD already contains three-body recombination at the
+    tabulated density, so in adas mode the whole sink is reported through the
+    ``S_rec_rad`` slot scaled by ``b_rec_rad``, and ``b_rec_3b`` is inert.
+    """
+    _check_atomic_rate_model(atomic_rate_model, gas_type)
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
+    if atomic_rate_model == "adas":
+        n_safe = np.maximum(state.n, floors["n"])
+        rates = he_rates(n_safe, derived.Te, ("scd", "acd"))
+        S_ion = float(b_ioniz) * state.n * state.nn * rates["scd"]
+        S_rec_rad = float(b_rec_rad) * state.n * state.n * rates["acd"]
+        S_rec_3b = np.zeros_like(state.n, dtype=float)
+        return S_ion, S_rec_rad, S_rec_3b
+
     if gas_type == "He":
         ion_rate = He_ion_rate_lkup(derived.Te)
     elif gas_type == "H":
@@ -47,6 +84,7 @@ def reaction_rhs(
     b_ioniz=1.0,
     b_rec_rad=1.0,
     b_rec_3b=1.0,
+    atomic_rate_model="janev",
     Te_birth_ionization="local",
     Ti_birth_ionization="floor",
 ):
@@ -61,6 +99,7 @@ def reaction_rhs(
         b_ioniz=b_ioniz,
         b_rec_rad=b_rec_rad,
         b_rec_3b=b_rec_3b,
+        atomic_rate_model=atomic_rate_model,
         Te_birth_ionization=Te_birth_ionization,
         Ti_birth_ionization=Ti_birth_ionization,
     )
@@ -86,6 +125,7 @@ def reaction_rhs_terms(
     b_ioniz=1.0,
     b_rec_rad=1.0,
     b_rec_3b=1.0,
+    atomic_rate_model="janev",
     Te_birth_ionization="local",
     Ti_birth_ionization="floor",
 ):
@@ -100,6 +140,7 @@ def reaction_rhs_terms(
         b_ioniz=b_ioniz,
         b_rec_rad=b_rec_rad,
         b_rec_3b=b_rec_3b,
+        atomic_rate_model=atomic_rate_model,
     )
     volume_ratio = geometry.plasma_volume_cm3 / geometry.neutral_volume_cm3
 

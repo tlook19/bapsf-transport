@@ -569,6 +569,7 @@ class LAPDSim1D:
                 "beam_ionization_birth": self._zero_rhs_state(),
                 "beam_power_deposition": self._zero_rhs_state(),
                 "beam_ionization_cost": self._zero_rhs_state(),
+                "beam_excitation_radiation": self._zero_rhs_state(),
                 "recombination_rad_loss": self._zero_rhs_state(),
                 "recombination_3b_loss": self._zero_rhs_state(),
                 "heat_conduction": self._zero_rhs_state(),
@@ -629,6 +630,7 @@ class LAPDSim1D:
             "beam_ionization_birth": beam_terms["beam_ionization_birth"],
             "beam_power_deposition": beam_terms["beam_power_deposition"],
             "beam_ionization_cost": beam_terms["beam_ionization_cost"],
+            "beam_excitation_radiation": beam_terms["beam_excitation_radiation"],
             "recombination_rad_loss": reaction_terms["recombination_rad_loss"],
             "recombination_3b_loss": reaction_terms["recombination_3b_loss"],
             "heat_conduction": self._zero_rhs_state(),
@@ -1754,6 +1756,10 @@ class LAPDSim1D:
             b_presheath_length=float(
                 self._input_dict.get("b_presheath_length", 1.0)
             ),
+            sigma_in_model=str(
+                self._input_dict.get("sigma_in_model", "constant")
+            ),
+            gas_type=self._gas_type,
         )
 
     def anode_collection_rhs(self, y=None, state=None):
@@ -1780,8 +1786,8 @@ class LAPDSim1D:
             state=state,
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
-            gas_type=self._gas_type,
             **self._ion_neutral_drag_kwargs(),
+            **self._slip_closure_kwargs(),
         )
 
     def ion_neutral_frictional_heating_rhs(self, y=None, state=None):
@@ -1792,8 +1798,8 @@ class LAPDSim1D:
             state=state,
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
-            gas_type=self._gas_type,
             **self._ion_neutral_drag_kwargs(),
+            **self._slip_closure_kwargs(),
         )
 
     def ion_neutral_thermalization_rhs(self, y=None, state=None):
@@ -1802,12 +1808,15 @@ class LAPDSim1D:
             state = self.state if y is None else unpack_state(y, self._geometry.cells)
         if not self._flags.get("ion_neutral_thermalization", False):
             return self._zero_rhs_state()
+        b_thermalization = self._input_dict.get("b_ion_neutral_thermalization")
         return ion_neutral_thermalization_rhs(
             state=state,
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
-            gas_type=self._gas_type,
             Tn_fit=float(self._input_dict.get("Tn_fit", 0.1)),
+            b_ion_neutral_thermalization=(
+                None if b_thermalization is None else float(b_thermalization)
+            ),
             **self._ion_neutral_drag_kwargs(),
         )
 
@@ -1992,7 +2001,9 @@ class LAPDSim1D:
             self._cathode_x0 = result.x0_next
             self._cathode_x0_twin = result.x0_twin_next
             if result.beam_result is not None:
-                self._cathode_beam_cross = result.beam_result.beam_cross.copy()
+                self._cathode_beam_cross = (
+                    result.beam_result.beam_atten_cross.copy()
+                )
         return result
 
     def implicit_heat_conduction_step(self, dt, y=None, state=None):
@@ -2405,13 +2416,30 @@ class LAPDSim1D:
     def _ion_neutral_drag_kwargs(self):
         drag_enabled = bool(self._flags.get("ion_neutral_drag", True))
         return {
+            "gas_type": self._gas_type,
             "sigma_in_cm2": float(self._input_dict.get("sigma_in_cm2", 5.0e-15)),
+            "sigma_in_model": str(
+                self._input_dict.get("sigma_in_model", "constant")
+            ),
             "b_ion_neutral_drag": (
                 float(self._input_dict.get("b_ion_neutral_drag", 1.0))
                 if drag_enabled
                 else 0.0
             ),
             "cx_only": bool(self._flags.get("ion_neutral_drag_cx_only", False)),
+        }
+
+    def _slip_closure_kwargs(self):
+        """Extra kwargs for the drag/frictional-heating slip closure."""
+        return {
+            "drag_model": str(
+                self._input_dict.get("ion_neutral_drag_model", "constant")
+            ),
+            "b_slip_entrainment": float(
+                self._input_dict.get("b_slip_entrainment", 1.0)
+            ),
+            "Rm_cm": self._geometry.Rm_cm,
+            "Tn_fit": float(self._input_dict.get("Tn_fit", 0.1)),
         }
 
     def _electron_cooling_kwargs(self):
@@ -2426,6 +2454,12 @@ class LAPDSim1D:
             ),
             "b_Qei": float(self._input_dict.get("b_Qei", 1.0)),
             "b_Qen": float(self._input_dict.get("b_Qen", 1.0)),
+            "b_Qei_Te_exp": float(self._input_dict.get("b_Qei_Te_exp", 0.0)),
+            "b_Qen_Te_exp": float(self._input_dict.get("b_Qen_Te_exp", 0.0)),
+            "b_Q_Te_ref_eV": float(self._input_dict.get("b_Q_Te_ref_eV", 5.0)),
+            "atomic_rate_model": str(
+                self._input_dict.get("atomic_rate_model", "janev")
+            ),
             "ionization_energy_cost": bool(
                 self._flags.get("ionization_energy_cost", True)
             ),
@@ -2457,6 +2491,9 @@ class LAPDSim1D:
             "b_ioniz": float(self._input_dict.get("b_ioniz", 1.0)),
             "b_rec_rad": float(self._input_dict.get("b_rec_rad", 1.0)),
             "b_rec_3b": float(self._input_dict.get("b_rec_3b", 1.0)),
+            "atomic_rate_model": str(
+                self._input_dict.get("atomic_rate_model", "janev")
+            ),
             "Te_birth_ionization": self._input_dict.get(
                 "Te_birth_ionization", "local"
             ),

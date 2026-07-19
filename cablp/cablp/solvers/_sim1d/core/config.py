@@ -353,18 +353,45 @@ def fudge_factor_defaults():
         Multiplier for the front-filling/sonic relaxation flux.
     D_amb:
         Constant ambipolar diffusion coefficient when selected [cm^2/s].
+    atomic_rate_model:
+        Source of the He atomic rate coefficients. ``"janev"`` (default, the
+        historical behaviour) uses the direct ground-state ionization rate,
+        the separate radiative/three-body recombination coefficients, and the
+        IAEA cooling fits. ``"adas"`` uses the OPEN-ADAS GCR '96 effective
+        coefficients (``cablp/vars/adas``, see its README): SCD ionization
+        (includes the stepwise/metastable channel the direct rate lacks --
+        up to ~3-6x at 3-5 eV, LAPD densities), ACD recombination (includes
+        three-body, so ``b_rec_3b`` is inert), and PLT/PRB radiated power for
+        the ``b_Qei``/``b_Qen`` cooling terms. The ADAS cooling coefficients
+        are radiation-only and therefore consistent with the separate
+        ``ionization_energy_cost`` term; the IAEA He I fit is not -- it
+        already contains the ionization-potential loss, which ``"janev"``
+        with ``b_Qen`` near 1 double-counts.
     b_ioniz:
         Bulk ionization particle source scale factor.
     b_rec_rad:
-        Radiative recombination particle sink scale factor.
+        Radiative recombination particle sink scale factor. Under
+        ``atomic_rate_model = "adas"`` this scales the whole (ACD) sink.
     b_rec_3b:
-        Three-body recombination particle sink scale factor.
+        Three-body recombination particle sink scale factor. Inert under
+        ``atomic_rate_model = "adas"`` (ACD already includes three-body).
     b_Qie:
         Electron-ion thermal exchange scale factor.
     b_Qei:
         Electron-ion inelastic/radiative cooling scale factor.
     b_Qen:
         Electron-neutral inelastic cooling scale factor.
+    b_Qei_Te_exp, b_Qen_Te_exp:
+        Optional Te-dependent shape for the corresponding correction: a nonzero
+        exponent multiplies the term by ``(Te / b_Q_Te_ref_eV) ** exp``. The
+        IAEA cooling fits carry a factor ~2 uncertainty across the 2-12 eV
+        discharge range, and a constant scalar cannot express an error that
+        varies over that range; this hook admits a literature- or
+        decay-calibrated shape without touching the fits. ``0`` (default)
+        skips the factor entirely.
+    b_Q_Te_ref_eV:
+        Reference temperature for the Te-dependent shape [eV]; the correction
+        equals the bare ``b_Q*`` scalar exactly at this Te.
     b_Qcx:
         Ion charge-exchange cooling scale factor.
     b_epara:
@@ -380,7 +407,32 @@ def fudge_factor_defaults():
     b_surface_loss:
         Plasma surface neutralization/loss scale factor.
     b_ion_neutral_drag:
-        Ion-neutral drag (friction) momentum-sink scale factor.
+        Ion-neutral drag (friction) momentum-sink scale factor. With the
+        ``constant`` drag model this is the whole neutral-flow closure,
+        asserting a fixed velocity slip ``u_n = (1 - b)*u`` everywhere; with
+        the ``slip`` model it remains as an overall multiplier (leave at 1
+        unless doing a sensitivity study).
+    ion_neutral_drag_model:
+        Closure for the neutral flow the drag acts against. ``"constant"``
+        (default) uses ``b_ion_neutral_drag`` alone. ``"slip"`` computes a
+        per-cell slip factor ``s = 1/(1 + E)`` from the entrainment balance
+        ``E = nu_ni * tau_wall`` (ions entrain neutrals at ``n*sigma_in*v_ti``;
+        neutrals lose the momentum to the wall in ``Rm / vbar_n``), so the slip
+        sweeps from ~1 in rarefied plasma to ~0 at full entrainment instead of
+        being asserted constant. Applies to the drag and frictional-heating
+        terms (the latter quadratically).
+    b_slip_entrainment:
+        Multiplier on the entrainment parameter ``E`` of the slip closure;
+        absorbs the O(1) geometric factors the balance ignores. Inert with the
+        ``constant`` drag model.
+    b_ion_neutral_thermalization:
+        Scale factor for the elastic ion-neutral thermal-equilibration term.
+        ``None`` (default) inherits ``b_ion_neutral_drag`` -- the historical
+        coupling, kept for reproducibility -- but that term relaxes
+        *temperature*, not momentum, so a slip-motivated drag scalar has no
+        physical business scaling it. Set explicitly (e.g. 1.0) to decouple;
+        an explicit value also frees the term from the ``ion_neutral_drag``
+        flag's zeroing.
     b_presheath_length:
         Scale factor on the collisional presheath depth `c_s / nu_in` used to
         sample the upstream density for the Bohm flux at plasma-terminating
@@ -390,7 +442,21 @@ def fudge_factor_defaults():
         recovering the historical behaviour; `1` (default) uses the physical
         depth. Inert in legacy geometry, which has no absorbing faces.
     sigma_in_cm2:
-        Ion-neutral momentum-transfer cross section [cm^2].
+        Ion-neutral momentum-transfer cross section [cm^2]. Only used by the
+        ``constant`` sigma_in_model.
+    sigma_in_model:
+        Source of the ion-neutral momentum-transfer rate, which feeds the
+        drag, the slip closure's entrainment, thermalization, the drag
+        timestep bound, and the presheath depth. ``"constant"`` (default, the
+        historical behaviour) uses ``sigma_in_cm2`` at the ion thermal speed.
+        ``"cx_derived"`` builds it from the same resonant charge-exchange
+        table the CX energy channel uses -- ``nu_in = nn * (2*<sigma v>_cx(Ti)
+        + k_Langevin)`` -- since for a symmetric pair each exchange transfers
+        essentially the full momentum (``sigma_mt ~ 2*sigma_cx``), plus the
+        velocity-independent Langevin polarization floor. This restores the
+        factor ~2 velocity dependence a constant cannot express: the constant
+        crosses the CX-derived curve near 0.5 eV (too small in the afterglow,
+        ~1.5-1.8x at 0.1 eV; too large in the warm column, ~1.3x at 5-10 eV).
     alpha_isat:
         Ion-saturation/surface-loss coefficient.
     source_surface_area_scale:
@@ -401,12 +467,16 @@ def fudge_factor_defaults():
     return {
         "alpha_front": 1.0,
         "D_amb": 0.0,
+        "atomic_rate_model": "janev",
         "b_ioniz": 1.0,
         "b_rec_rad": 1.0,
         "b_rec_3b": 1.0,
         "b_Qie": 1.0,
         "b_Qei": 1.0,
         "b_Qen": 1.0,
+        "b_Qei_Te_exp": 0.0,
+        "b_Qen_Te_exp": 0.0,
+        "b_Q_Te_ref_eV": 5.0,
         "b_Qcx": 1.0,
         "b_epara": 1.0,
         "b_ipara": 1.0,
@@ -415,8 +485,12 @@ def fudge_factor_defaults():
         "b_pressure_work_ions": 1.0,
         "b_surface_loss": 1.0,
         "b_ion_neutral_drag": 1.0,
+        "ion_neutral_drag_model": "constant",
+        "b_slip_entrainment": 1.0,
+        "b_ion_neutral_thermalization": None,
         "b_presheath_length": 1.0,
         "sigma_in_cm2": 5.0e-15,
+        "sigma_in_model": "constant",
         "alpha_isat": 0.6065306597126334,
         "source_surface_area_scale": 1.8,
         "end_surface_area_scale": 1.0,
@@ -442,6 +516,21 @@ def cathode_defaults():
         Cathode-to-anode distance used by the cathode solver [cm].
     R_cath:
         Cathode radius used to compute cathode area [cm].
+    b_beam_excitation:
+        Scale on the He 1^1S -> 2^1P excitation cross section added to the
+        primary beam's inelastic channels. ``0`` (default) is the historical
+        beam: ionization-only attenuation and every deposited eV heating the
+        plasma. Nonzero adds beam-driven neutral excitation, whose ~21 eV per
+        event radiates away promptly as He I light (the
+        ``beam_excitation_radiation`` term) and whose cross section shortens
+        the beam's inelastic deposition length. At beam energies the 2^1P
+        channel is 26-34% of the ionization cross section; ``1.0`` books that
+        channel alone, ``~1.4`` approximates the full singlet manifold
+        (2^1S, 3^1P, ...). Triplet/metastable excitation is exchange-driven
+        and collapses above ~50 eV, so it is deliberately absent. He-only.
+    beam_excitation_energy_eV:
+        Threshold and radiated energy per beam excitation event [eV]
+        (the 2^1P excitation energy).
     """
     return {
         "V_bank": 180.0,
@@ -452,6 +541,8 @@ def cathode_defaults():
         "eta": 0.358,
         "L_cath": 50.0,
         "R_cath": 18.0,
+        "b_beam_excitation": 0.0,
+        "beam_excitation_energy_eV": 21.218,
     }
 
 

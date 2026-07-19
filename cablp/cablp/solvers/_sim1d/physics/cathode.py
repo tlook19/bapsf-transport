@@ -252,6 +252,10 @@ def solve_cathode_boundary(
         anode_T_e=anode_source[1],
         anode_current_twin_A=anode_twin[0],
         anode_T_e_twin=anode_twin[1],
+        b_beam_excitation=float(input_dict.get("b_beam_excitation", 0.0)),
+        beam_excitation_energy_eV=float(
+            input_dict.get("beam_excitation_energy_eV", 21.218)
+        ),
     )
     return CathodeSolve1D(
         boundary=boundary,
@@ -536,7 +540,7 @@ def beam_ionization_rhs_terms(
         return _zero_beam_terms(zeros)
 
     beam_derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
-    S_beam, beam_power_density = _beam_ionization_sources(
+    S_beam, S_exc, beam_power_density = _beam_ionization_sources(
         state=state,
         geometry=geometry,
         cathode_solve=cathode_solve,
@@ -549,6 +553,7 @@ def beam_ionization_rhs_terms(
         beam_derived.Ti,
         floors["Ti"],
     )
+    E_exc = float(input_dict.get("beam_excitation_energy_eV", 21.218))
     return {
         "beam_ionization_birth": ConservativeState1D(
             n=S_beam,
@@ -571,6 +576,17 @@ def beam_ionization_rhs_terms(
             Ee=-I_ion * ev_to_erg * S_beam,
             Ei=zeros.copy(),
         ),
+        # Excited neutrals radiate their ~21 eV promptly (2^1P lifetime ~ns),
+        # so the excitation channel's energy leaves the plasma as He I light
+        # rather than heating it. The particle is unchanged: the neutral
+        # returns to ground state.
+        "beam_excitation_radiation": ConservativeState1D(
+            n=zeros.copy(),
+            nn=zeros.copy(),
+            M=zeros.copy(),
+            Ee=-E_exc * ev_to_erg * S_exc,
+            Ei=zeros.copy(),
+        ),
     }
 
 
@@ -584,6 +600,7 @@ def _beam_ionization_sources(
     zeros = np.zeros(geometry.cells, dtype=float)
     beam_result = cathode_solve.beam_result
     S_beam = zeros.copy()
+    S_exc = zeros.copy()
     beam_power_density = zeros.copy()
     source_profile = _beam_ionization_profile(
         state=state,
@@ -592,6 +609,13 @@ def _beam_ionization_sources(
         end=0,
     )
     S_beam += source_profile
+    S_exc += _beam_event_profile(
+        state=state,
+        geometry=geometry,
+        beam_result=beam_result,
+        event_cross=beam_result.beam_exc_cross,
+        end=0,
+    )
     beam_power_density += _beam_power_deposition_density(
         geometry=geometry,
         beam_result=beam_result,
@@ -607,6 +631,13 @@ def _beam_ionization_sources(
             end=-1,
         )
         S_beam += twin_profile
+        S_exc += _beam_event_profile(
+            state=state,
+            geometry=geometry,
+            beam_result=beam_result,
+            event_cross=beam_result.beam_exc_cross,
+            end=-1,
+        )
         beam_power_density += _beam_power_deposition_density(
             geometry=geometry,
             beam_result=beam_result,
@@ -615,7 +646,7 @@ def _beam_ionization_sources(
             Te=Te,
         )
 
-    return S_beam, beam_power_density
+    return S_beam, S_exc, beam_power_density
 
 
 def _zero_beam_terms(zeros):
@@ -635,6 +666,13 @@ def _zero_beam_terms(zeros):
             Ei=zeros.copy(),
         ),
         "beam_ionization_cost": ConservativeState1D(
+            n=zeros.copy(),
+            nn=zeros.copy(),
+            M=zeros.copy(),
+            Ee=zeros.copy(),
+            Ei=zeros.copy(),
+        ),
+        "beam_excitation_radiation": ConservativeState1D(
             n=zeros.copy(),
             nn=zeros.copy(),
             M=zeros.copy(),
@@ -719,15 +757,23 @@ def _electron_power_loss_W(result):
     return result.P_cathode_e + result.P_anode_e
 
 
-def _beam_ionization_profile(state, geometry, beam_result, end=0):
+def _beam_event_profile(state, geometry, beam_result, event_cross, end=0):
+    """Per-cell rate density of one beam collision channel [cm^-3 s^-1].
+
+    The beam attenuates along the Beer-Lambert profile set by the *total*
+    inelastic mean free path (``l_b_profile``); ``l_b * sigma_event * nn`` is
+    the fraction of absorbed primaries whose event is this channel, so the
+    channels split the same absorbed flux rather than each attenuating
+    independently.
+    """
     launch, direction = beam_launch(geometry, end=end)
-    beam_cross = beam_result.beam_cross[launch]
-    if beam_cross == 0.0:
+    cross = event_cross[launch]
+    if cross == 0.0 or beam_result.beam_cross[launch] == 0.0:
         return np.zeros(geometry.cells, dtype=float)
     l_b_profile = (
         beam_result.l_b_profile if end == 0 else beam_result.l_b_profile_twin
     )
-    p_beam = l_b_profile * beam_cross * state.nn
+    p_event = l_b_profile * cross * state.nn
     weights = beam_absorption_weights(
         length_cm=geometry.length_cm,
         l_b_profile=l_b_profile,
@@ -736,10 +782,20 @@ def _beam_ionization_profile(state, geometry, beam_result, end=0):
     )
     return (
         weights
-        * p_beam
+        * p_event
         * beam_result.n_beam[launch]
         * beam_result.v_beam[launch]
         / geometry.length_cm
+    )
+
+
+def _beam_ionization_profile(state, geometry, beam_result, end=0):
+    return _beam_event_profile(
+        state=state,
+        geometry=geometry,
+        beam_result=beam_result,
+        event_cross=beam_result.beam_cross,
+        end=end,
     )
 
 

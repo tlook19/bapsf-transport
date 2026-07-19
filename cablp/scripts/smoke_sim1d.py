@@ -33,6 +33,7 @@ from cablp.solvers._sim1d.physics.cathode import (
 )
 from cablp.solvers._sim1d.physics.energy import (
     electron_cooling_rhs,
+    electron_cooling_rhs_terms,
     electron_ion_exchange_rhs,
     ion_charge_exchange_rhs,
 )
@@ -57,7 +58,18 @@ from cablp.solvers._sim1d.physics.reactions import (
     particle_inventory_rate,
     reaction_rates,
 )
-from cablp.solvers._sim1d.physics.sources import add_state_rhs, velocity_divergence
+from cablp.solvers._sim1d.physics.sources import (
+    add_state_rhs,
+    ion_neutral_collision_frequency,
+    ion_neutral_cx_frequency,
+    ion_neutral_drag_rhs,
+    ion_neutral_elastic_frequency,
+    ion_neutral_frictional_heating_rhs,
+    ion_neutral_slip_factor,
+    ion_neutral_thermalization_rhs,
+    langevin_rate_cm3_s,
+    velocity_divergence,
+)
 from cablp.solvers._sim1d.core.state import (
     STATE_NAMES_1D,
     conservative_from_primitives,
@@ -882,7 +894,12 @@ def main():
         "beam_ionization_birth",
         "beam_power_deposition",
         "beam_ionization_cost",
+        "beam_excitation_radiation",
     }
+    # Excitation channel is off by default; the term exists but is zero.
+    assert np.allclose(
+        pack_state(split_beam_terms["beam_excitation_radiation"]), 0.0
+    )
     split_beam_sum = np.zeros_like(pack_state(beam_birth_terms))
     for split_term in split_beam_terms.values():
         split_beam_sum = split_beam_sum + pack_state(split_term)
@@ -922,6 +939,61 @@ def main():
         0.0,
         atol=1e-12 * beam_inventory_scale,
     )
+
+    # --- Beam excitation channel (b_beam_excitation, default 0 = historical).
+    from cablp.funcs._cathode_solver import beam_excitation_cross
+
+    sigma_exc_100 = beam_excitation_cross(100.0, 1.0, "He")
+    assert 5.0e-18 < sigma_exc_100 < 2.0e-17
+    assert beam_excitation_cross(100.0, 0.0, "He") == 0.0
+    assert beam_excitation_cross(10.0, 1.0, "He") == 0.0  # below threshold
+    try:
+        beam_excitation_cross(100.0, 1.0, "H")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for H beam excitation")
+
+    exc_params = dict(params)
+    exc_params["b_beam_excitation"] = 1.0
+    exc_sim = LAPDSim1D(exc_params, cathode_flags)
+    exc_solve = exc_sim.solve_cathode_boundary()
+    exc_beam = exc_solve.beam_result
+    base_beam = cathode_solve.beam_result
+    launch_idx = int(np.flatnonzero(exc_beam.beam_cross)[0])
+    assert exc_beam.beam_exc_cross[launch_idx] > 0.0
+    assert (
+        exc_beam.beam_atten_cross[launch_idx]
+        > exc_beam.beam_cross[launch_idx]
+    )
+    # Both first solves run from a zeroed sigma_b cache, so the circuit state
+    # is identical and the only difference is the attenuation cross section:
+    # the inelastic deposition length must be strictly shorter everywhere.
+    assert np.isclose(
+        exc_solve.beam_result.result.phi_c, base_beam.result.phi_c
+    )
+    positive = base_beam.l_b_profile > 0.0
+    assert np.all(
+        exc_beam.l_b_profile[positive] < base_beam.l_b_profile[positive]
+    )
+    exc_terms = exc_sim.beam_ionization_rhs_terms(cathode_solve=exc_solve)
+    exc_rad = exc_terms["beam_excitation_radiation"]
+    assert np.all(exc_rad.Ee <= 0.0)
+    assert np.any(exc_rad.Ee < 0.0)
+    for field_values in (exc_rad.n, exc_rad.nn, exc_rad.M, exc_rad.Ei):
+        assert np.allclose(field_values, 0.0)
+    # The channels split one absorbed flux: radiated events / ionizations =
+    # sigma_exc / sigma_ion, cell by cell.
+    exc_birth = exc_terms["beam_ionization_birth"]
+    birth_mask = exc_birth.n > 0.0
+    E_exc_erg = float(exc_params.get("beam_excitation_energy_eV", 21.218)) * ev_to_erg
+    event_ratio = (-exc_rad.Ee[birth_mask] / E_exc_erg) / exc_birth.n[birth_mask]
+    assert np.allclose(
+        event_ratio,
+        exc_beam.beam_exc_cross[launch_idx] / exc_beam.beam_cross[launch_idx],
+        rtol=1e-10,
+    )
+
     beam_weights = beam_absorption_weights(
         length_cm=geom.length_cm,
         l_b_profile=cathode_solve.beam_result.l_b_profile,
@@ -1918,6 +1990,7 @@ def main():
         "beam_ionization_birth",
         "beam_power_deposition",
         "beam_ionization_cost",
+        "beam_excitation_radiation",
         "recombination_rad_loss",
         "recombination_3b_loss",
         "heat_conduction",
@@ -3827,6 +3900,303 @@ def main():
     nn_ramp_state_1 = unpack_state(sim.floor_state_vector(nn_ramp_y1), geom.cells)
     assert np.all(np.isfinite(nn_ramp_state_1.nn))
     assert np.all(nn_ramp_state_1.nn >= params["nn_floor"])
+
+    # --- Ion-neutral closure knobs: slip drag model, thermalization scale
+    # decoupling, Te-shaped cooling corrections. All are default-off (the
+    # golden baseline guards the OFF path bit-exactly); these guard the ON
+    # paths and the documented limits.
+    knob_mass = 4.0 * m_p_cgs
+    knob_floors = {"n": 1e6, "nn": 1e8, "Te": 0.1, "Ti": 0.1}
+    knob_n = np.array([1e10, 1e12, 1e13])
+    knob_state = conservative_from_primitives(
+        n=knob_n,
+        nn=np.full(3, 1e13),
+        u=np.array([2e5, -1e5, 5e4]),
+        Te=np.array([6.0, 5.0, 3.0]),
+        Ti=np.array([1.0, 1.0, 2.0]),
+        ion_mass_g=knob_mass,
+    )
+    knob_Rm = np.full(3, 50.0)
+
+    # Slip factor: in (0, 1], -> 1 as the plasma rarefies, monotone
+    # decreasing with density (denser plasma entrains the neutrals harder).
+    slip = ion_neutral_slip_factor(
+        n=knob_n,
+        Ti=np.array([1.0, 1.0, 1.0]),
+        ion_mass_g=knob_mass,
+        Rm_cm=knob_Rm,
+    )
+    assert np.all((slip > 0.0) & (slip <= 1.0))
+    assert np.all(np.diff(slip) < 0.0)
+    assert slip[0] > 0.95
+    # b_slip_entrainment = 0 removes the correction exactly.
+    assert np.all(
+        ion_neutral_slip_factor(
+            n=knob_n,
+            Ti=np.array([1.0, 1.0, 1.0]),
+            ion_mass_g=knob_mass,
+            Rm_cm=knob_Rm,
+            b_slip_entrainment=0.0,
+        )
+        == 1.0
+    )
+
+    drag_kwargs = dict(
+        state=knob_state,
+        floors=knob_floors,
+        ion_mass_g=knob_mass,
+        gas_type="He",
+    )
+    # Reference slip factor at the state's own (derived) Ti, as the drag
+    # term computes it internally.
+    slip_state = ion_neutral_slip_factor(
+        n=knob_state.n,
+        Ti=derive_state(knob_state, floors=knob_floors, ion_mass_g=knob_mass).Ti,
+        ion_mass_g=knob_mass,
+        Rm_cm=knob_Rm,
+    )
+    drag_const = ion_neutral_drag_rhs(**drag_kwargs)
+    drag_slip = ion_neutral_drag_rhs(
+        **drag_kwargs, drag_model="slip", Rm_cm=knob_Rm
+    )
+    # Slip only weakens the drag, per cell, by exactly the slip factor.
+    assert np.allclose(drag_slip.M, drag_const.M * slip_state, rtol=1e-12)
+    assert np.all(np.abs(drag_slip.M) <= np.abs(drag_const.M))
+    # Zero-entrainment slip collapses to the constant model bit-exactly.
+    assert np.all(
+        ion_neutral_drag_rhs(
+            **drag_kwargs,
+            drag_model="slip",
+            Rm_cm=knob_Rm,
+            b_slip_entrainment=0.0,
+        ).M
+        == drag_const.M
+    )
+    # Frictional heating carries the slip quadratically.
+    heat_const = ion_neutral_frictional_heating_rhs(**drag_kwargs)
+    heat_slip = ion_neutral_frictional_heating_rhs(
+        **drag_kwargs, drag_model="slip", Rm_cm=knob_Rm
+    )
+    assert np.allclose(heat_slip.Ei, heat_const.Ei * slip_state**2, rtol=1e-12)
+    # Unknown model / missing radius fail loudly.
+    for bad_kwargs in (
+        {"drag_model": "nonsense", "Rm_cm": knob_Rm},
+        {"drag_model": "slip"},
+    ):
+        try:
+            ion_neutral_drag_rhs(**drag_kwargs, **bad_kwargs)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected ValueError for {bad_kwargs}")
+
+    # --- CX-derived momentum-transfer rate (sigma_in_model = "cx_derived"):
+    # nu_in = nn * (2*<sigma v>_cx + k_Langevin), consistent with the CX
+    # energy channel and carrying the velocity dependence the constant lacks.
+    k_L = langevin_rate_cm3_s("He", knob_mass)
+    assert 5.0e-10 < k_L < 1.0e-9  # ~7.5e-10 cm^3/s for He+ in He
+    nu_kwargs = dict(nn=1e13, ion_mass_g=knob_mass)
+    for Ti_probe, expect_side in ((0.1, "smaller"), (5.0, "larger")):
+        nu_const = ion_neutral_collision_frequency(Ti=Ti_probe, **nu_kwargs)
+        nu_cxd = ion_neutral_collision_frequency(
+            Ti=Ti_probe, sigma_in_model="cx_derived", gas_type="He", **nu_kwargs
+        )
+        assert np.isfinite(nu_cxd) and nu_cxd > 0.0
+        # the constant crosses the CX-derived curve near 0.5 eV
+        if expect_side == "smaller":
+            assert nu_const < nu_cxd
+        else:
+            assert nu_const > nu_cxd
+        # exact construction: 2*nu_cx + nn*k_L
+        nu_cx = ion_neutral_cx_frequency(nn=1e13, Ti=Ti_probe, gas_type="He")
+        assert np.isclose(nu_cxd, 2.0 * nu_cx + 1e13 * k_L, rtol=1e-12)
+        # elastic remainder is nu_cx + Langevin, strictly positive
+        nu_el = ion_neutral_elastic_frequency(
+            nn=1e13,
+            Ti=Ti_probe,
+            ion_mass_g=knob_mass,
+            gas_type="He",
+            sigma_in_model="cx_derived",
+        )
+        assert np.isclose(nu_el, nu_cx + 1e13 * k_L, rtol=1e-12)
+    for bad_call in (
+        dict(Ti=1.0, sigma_in_model="cx_derived", **nu_kwargs),  # no gas_type
+        dict(Ti=1.0, sigma_in_model="nonsense", gas_type="He", **nu_kwargs),
+    ):
+        try:
+            ion_neutral_collision_frequency(**bad_call)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected ValueError for {bad_call}")
+    # drag rhs accepts the model end-to-end and differs from the constant
+    drag_cxd = ion_neutral_drag_rhs(**drag_kwargs, sigma_in_model="cx_derived")
+    assert np.all(np.isfinite(drag_cxd.M))
+    assert not np.allclose(drag_cxd.M, drag_const.M)
+
+    # Thermalization scale: None inherits b_ion_neutral_drag (historical
+    # coupling), an explicit value decouples it.
+    therm_kwargs = dict(
+        state=knob_state,
+        floors=knob_floors,
+        ion_mass_g=knob_mass,
+        gas_type="He",
+    )
+    therm_inherit = ion_neutral_thermalization_rhs(
+        **therm_kwargs, b_ion_neutral_drag=0.5
+    )
+    therm_explicit = ion_neutral_thermalization_rhs(
+        **therm_kwargs,
+        b_ion_neutral_drag=0.5,
+        b_ion_neutral_thermalization=0.5,
+    )
+    assert np.all(therm_inherit.Ei == therm_explicit.Ei)
+    # Decoupled: survives a zeroed drag scalar and scales independently.
+    therm_decoupled = ion_neutral_thermalization_rhs(
+        **therm_kwargs,
+        b_ion_neutral_drag=0.0,
+        b_ion_neutral_thermalization=1.0,
+    )
+    assert np.allclose(therm_decoupled.Ei, 2.0 * therm_inherit.Ei, rtol=1e-12)
+    assert np.any(therm_decoupled.Ei != 0.0)
+
+    # Te-shaped cooling correction: identity at the reference temperature,
+    # and the (Te/Te_ref)^exp factor elsewhere.
+    shape_state = conservative_from_primitives(
+        n=np.full(3, 1e12),
+        nn=np.full(3, 1e13),
+        u=np.zeros(3),
+        Te=np.array([2.5, 5.0, 10.0]),
+        Ti=np.full(3, 1.0),
+        ion_mass_g=knob_mass,
+    )
+    cooling_kwargs = dict(
+        state=shape_state,
+        floors=knob_floors,
+        ion_mass_g=knob_mass,
+        gas_type="He",
+        I_ion=24.587,
+        ionization_energy_cost=False,
+    )
+    cool_flat = electron_cooling_rhs(**cooling_kwargs)
+    cool_shaped = electron_cooling_rhs(
+        **cooling_kwargs,
+        b_Qei_Te_exp=1.0,
+        b_Qen_Te_exp=1.0,
+        b_Q_Te_ref_eV=5.0,
+    )
+    shape_factor = np.array([0.5, 1.0, 2.0])
+    assert np.allclose(cool_shaped.Ee, cool_flat.Ee * shape_factor, rtol=1e-12)
+    assert cool_shaped.Ee[1] == cool_flat.Ee[1]
+
+    # --- ADAS atomic rate model (atomic_rate_model = "adas"): adf11 tables
+    # parse, grid nodes reproduce exactly, edges clamp, and the physics the
+    # switch exists for shows up (effective SCD ionization above the direct
+    # ground-state rate at low Te, radiation-only cooling below the IAEA fit).
+    from cablp.funcs import _adas
+    from cablp.funcs._cross import He_ion_rate_lkup
+    from cablp.funcs._fits import IAEA_exp1
+    from cablp.vars._coeff import aHeI
+
+    scd_ne, scd_te, scd_stages = _adas.read_adf11(_adas.ADAS_DIR / "scd96_he.dat")
+    assert scd_ne.shape == (24,) and scd_te.shape == (30,)
+    assert set(scd_stages) == {1, 2}
+    # Interpolation at a grid node returns the tabulated value exactly.
+    node = _adas.he_ionization_rate(10.0 ** scd_ne[10], 10.0 ** scd_te[15])
+    assert np.isclose(node, 10.0 ** scd_stages[1][15, 10], rtol=1e-12)
+    # Edge clamping: below/above the Te grid returns the edge value.
+    lo = _adas.he_ionization_rate(1e12, 10.0 ** scd_te[0])
+    assert np.isclose(_adas.he_ionization_rate(1e12, 0.05), lo, rtol=1e-12)
+    # Stepwise/metastable enhancement: effective SCD exceeds the direct
+    # ground-state rate at low Te and converges toward it at high Te.
+    assert _adas.he_ionization_rate(1e13, 5.0) > 2.0 * He_ion_rate_lkup(5.0)
+    assert np.isclose(
+        _adas.he_ionization_rate(1e12, 100.0), He_ion_rate_lkup(100.0), rtol=0.1
+    )
+    # Radiation-only cooling sits well below the IAEA fit (which carries the
+    # ionization-potential loss).
+    assert _adas.he_neutral_line_power(1e13, 8.0) < 0.5 * IAEA_exp1(8.0, aHeI)
+
+    # Fused lookup (he_rates): one coordinate solve, N table blends -- must be
+    # bit-identical to the single-table helpers, since both share the same
+    # blend arithmetic on the same (verified-identical) grid.
+    fuse_ne = 10.0 ** np.random.default_rng(1).uniform(8.0, 15.0, 64)
+    fuse_Te = 10.0 ** np.random.default_rng(2).uniform(-0.6, 3.5, 64)
+    fused = _adas.he_rates(fuse_ne, fuse_Te, ("scd", "acd", "plt1", "plt2", "prb1"))
+    for name, single in (
+        ("scd", _adas.he_ionization_rate),
+        ("acd", _adas.he_recombination_rate),
+        ("plt1", _adas.he_neutral_line_power),
+        ("plt2", _adas.he_ion_line_power),
+        ("prb1", _adas.he_recombination_power),
+    ):
+        assert np.all(fused[name] == single(fuse_ne, fuse_Te)), name
+
+    # The float port of the 2^1P excitation cross section matches mpmath.
+    from cablp.funcs._cathode_solver import _he_2p_excitation_cross_cm2
+    from cablp.funcs._cross import He_EIE_cross_DA
+    from cablp.vars._coeff import b_11s_21p as _b21p
+    for eps_probe in (1.5, 100.0 / 21.218, 8.0):
+        assert np.isclose(
+            _he_2p_excitation_cross_cm2(eps_probe),
+            float(He_EIE_cross_DA(eps_probe, _b21p)),
+            rtol=1e-12,
+        )
+
+    adas_reaction_kwargs = dict(
+        state=knob_state,
+        floors=knob_floors,
+        ion_mass_g=knob_mass,
+        gas_type="He",
+        I_ion=24.587,
+    )
+    S_ion_j, S_rad_j, S_3b_j = reaction_rates(**adas_reaction_kwargs)
+    S_ion_a, S_rad_a, S_3b_a = reaction_rates(
+        **adas_reaction_kwargs, atomic_rate_model="adas"
+    )
+    for values in (S_ion_a, S_rad_a):
+        assert np.all(np.isfinite(values)) and np.all(values >= 0.0)
+    assert np.all(S_ion_a > S_ion_j)  # SCD > direct at these (Te <= 6 eV) cells
+    # ACD carries the whole sink; the three-body slot is empty and its knob inert.
+    assert np.all(S_3b_a == 0.0)
+    S_ion_b3, S_rad_b3, S_3b_b3 = reaction_rates(
+        **adas_reaction_kwargs, atomic_rate_model="adas", b_rec_3b=7.0
+    )
+    assert np.all(S_ion_b3 == S_ion_a) and np.all(S_rad_b3 == S_rad_a)
+    assert np.all(S_3b_b3 == 0.0)
+    try:
+        reaction_rates(**adas_reaction_kwargs, atomic_rate_model="nonsense")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for unknown atomic_rate_model")
+
+    cool_adas = electron_cooling_rhs(**cooling_kwargs, atomic_rate_model="adas")
+    assert np.all(np.isfinite(cool_adas.Ee))
+    assert np.all(cool_adas.Ee <= 0.0)
+    # Radiation-only: strictly weaker electron cooling than the IAEA fits on
+    # the same state (the ionization-cost double count is what's removed).
+    assert np.all(np.abs(cool_adas.Ee) < np.abs(cool_flat.Ee))
+    # The cooling path's fused ionization cost must be bit-identical to
+    # I_ion * S_ion from reaction_rates -- the cost charges exactly the
+    # particles the particle equation creates.
+    cost_kwargs = dict(cooling_kwargs)
+    cost_kwargs["ionization_energy_cost"] = True
+    cost_terms = electron_cooling_rhs_terms(**cost_kwargs, atomic_rate_model="adas")
+    S_ion_ref, _, _ = reaction_rates(
+        state=shape_state,
+        floors=knob_floors,
+        ion_mass_g=knob_mass,
+        gas_type="He",
+        I_ion=24.587,
+        atomic_rate_model="adas",
+    )
+    assert np.allclose(
+        cost_terms["ionization_energy_cost"].Ee,
+        -24.587 * ev_to_erg * S_ion_ref,
+        rtol=1e-13,
+        atol=0.0,
+    )
 
     print(
         "sim1d smoke ok: "

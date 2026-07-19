@@ -10,11 +10,28 @@ Comparisons are made on the main-discharge clock, matching the notebook: model
 time is shifted so t = 0 is the start of the main discharge, which is what the
 experimental ``*_time_ms`` axes are referenced to.
 
+Three comparison stages, in tuning order (each scored independently):
+
+(i)   peak discharge current -- model ``source_I_tot`` vs the measured
+      discharge-trace peak. Peak only: the breakdown *rate* is shaped by
+      physics the model does not carry, so trace RMS is deliberately not a
+      target.
+(ii)  bulk Te and density at the five ES1 ports (the original comparison).
+(iii) afterglow decay -- per-port e-folding time of the model Isat proxy
+      ``n * sqrt(Te)`` against the measured Isat decay traces, over a fit
+      window on the main-discharge clock. The default run carries only
+      ``tau_afterglow = 5 ms`` past discharge end; use ``--tau-afterglow``
+      to extend it toward the measured 27.5 ms tail.
+
 Usage::
 
     python scripts/compare_sim1d_es1.py                      # resolved + knudsen
     python scripts/compare_sim1d_es1.py --legacy             # legacy geometry
     python scripts/compare_sim1d_es1.py --nx 185
+    python scripts/compare_sim1d_es1.py --save-h5 run.h5     # keep the run
+    python scripts/compare_sim1d_es1.py --from-h5 run.h5     # re-score, no run
+    python scripts/compare_sim1d_es1.py --tau-afterglow 0.0275 \
+        --decay-window 20.5 40.0
 """
 
 import argparse
@@ -26,7 +43,9 @@ from cablp.solvers._sim1d import (
     BreakdownError,
     LAPDSim1D,
     default_config,
+    load_result_hdf5,
 )
+from cablp.solvers._sim1d.results.io import save_result_hdf5
 
 OVERLAY = Path(__file__).resolve().parent / "data" / "es1_sim1d_overlay.npz"
 
@@ -37,7 +56,24 @@ PARAM_OVERRIDES = {
     "S_gp_decay_target": 2000,
     "tau_gp_pulse_duration": 1e-3,
     "tau_gp_decay_duration": 5e-3,
+    # Ion-neutral closure (2026-07-18 decision): constant drag at the
+    # calibrated 0.5 -- a stand-in for the missing neutral-momentum /
+    # radial channel, NOT validated physics (THESIS_NOTES gate #2; the
+    # "slip" closure is the physical alternative and under-confines).
+    # Thermalization is decoupled from the drag scalar, and the
+    # momentum-transfer rate is CX-derived rather than a constant sigma.
     "b_ion_neutral_drag": 0.5,
+    "ion_neutral_drag_model": "constant",
+    "b_ion_neutral_thermalization": 1.0,
+    "sigma_in_model": "cx_derived",
+    # ADAS GCR rates (see cablp/vars/adas/README.md): effective ionization/
+    # recombination and radiation-only cooling, consistent with the separate
+    # ionization-cost term. b_Q* = 1 is meaningful under this model.
+    "atomic_rate_model": "adas",
+    # Beam-driven neutral excitation: 1.0 books the 2^1P channel alone, the
+    # extra 0.4 approximates the rest of the singlet manifold. Radiates ~21 eV
+    # per event as He I light and shortens the beam deposition length.
+    "b_beam_excitation": 1.4,
     "b_Qei": 1,
     "b_Qen": 1,
     "b_Qcx": 1,
@@ -76,7 +112,7 @@ def run_model(resolved=True, nx=None, exchange_model="knudsen", extra=None):
         params.update(extra)
     sim = LAPDSim1D(params, flags)
     sim.start_simulation(t_end=None, dt=None, operator_split=None, max_steps=None)
-    return sim.get_results(), sim.geometry
+    return sim.get_results(), sim.geometry, params, flags
 
 
 def compare(result, geometry, overlay):
@@ -125,8 +161,127 @@ def compare(result, geometry, overlay):
     return rows
 
 
+def compare_peak_current(result, overlay):
+    """Return the stage (i) figure of merit: model vs measured peak current."""
+    diag = getattr(result, "cathode_diagnostics", None) or {}
+    I_model = np.asarray(diag.get("source_I_tot", ()), dtype=float)
+    t_model_ms = (
+        np.asarray(result.time, dtype=float) - _main_discharge_origin(result)
+    ) * 1.0e3
+    t_exp = np.asarray(overlay["discharge_time_ms"], dtype=float)
+    I_exp = np.asarray(overlay["discharge_current_mean_a"], dtype=float)
+    sem_exp = np.asarray(overlay["discharge_current_sem_a"], dtype=float)
+
+    out = {"model_peak_a": np.nan, "model_peak_t_ms": np.nan}
+    if I_model.size and np.any(np.isfinite(I_model)):
+        i_peak = int(np.nanargmax(I_model))
+        out["model_peak_a"] = float(I_model[i_peak])
+        out["model_peak_t_ms"] = float(t_model_ms[i_peak])
+    j_peak = int(np.nanargmax(I_exp))
+    out["exp_peak_a"] = float(I_exp[j_peak])
+    out["exp_peak_t_ms"] = float(t_exp[j_peak])
+    out["exp_peak_sem_a"] = float(sem_exp[j_peak])
+    out["ratio"] = out["model_peak_a"] / out["exp_peak_a"]
+    return out
+
+
+def _efold_time_ms(t_ms, y, floor=0.0):
+    """Return the log-linear e-folding decay time [ms] of ``y`` over ``t_ms``.
+
+    Positive for a decaying signal. NaN when fewer than 8 samples survive the
+    positivity/noise-floor mask, or when the fitted slope is not a decay.
+    """
+    t_ms = np.asarray(t_ms, dtype=float)
+    y = np.asarray(y, dtype=float)
+    good = np.isfinite(t_ms) & np.isfinite(y) & (y > max(floor, 0.0))
+    if np.count_nonzero(good) < 8:
+        return np.nan
+    slope = np.polyfit(t_ms[good], np.log(y[good]), 1)[0]
+    return -1.0 / slope if slope < 0.0 else np.nan
+
+
+def compare_decay(result, overlay, window_ms=(20.5, 25.0)):
+    """Return per-port stage (iii) rows: model vs measured Isat e-fold times.
+
+    The model Isat proxy is ``n * sqrt(Te)`` at the port cell (the Bohm-flux
+    scaling; constants cancel in an e-folding time). Both signals get the same
+    log-linear fit over the same window. The experimental noise floor is
+    estimated from the final 5 ms of each decay trace (5x its robust sigma).
+    """
+    t0, t1 = float(window_ms[0]), float(window_ms[1])
+    origin = _main_discharge_origin(result)
+    t_model_ms = (np.asarray(result.time, dtype=float) - origin) * 1.0e3
+    z_model = np.asarray(result.z_cm, dtype=float)
+    n_model = np.asarray(result.n, dtype=float)
+    Te_model = np.asarray(result.Te, dtype=float)
+
+    t_exp = np.asarray(overlay["isat_decay_time_ms"], dtype=float)
+    isat = np.asarray(overlay["isat_decay_mean_a"], dtype=float)
+    ports = np.asarray(overlay["isat_decay_port"])
+    z_ports = {
+        int(p): float(z)
+        for p, z in zip(np.asarray(overlay["port"]), overlay["z_cm"])
+    }
+
+    t1_model = min(t1, float(t_model_ms.max()))
+    rows = []
+    for p in range(ports.size):
+        z = z_ports.get(int(ports[p]))
+        if z is None:
+            continue
+        exp_window = (t_exp >= t0) & (t_exp <= t1)
+        tail = isat[p, t_exp >= t_exp.max() - 5.0]
+        noise = 5.0 * 1.4826 * np.nanmedian(np.abs(tail - np.nanmedian(tail)))
+        tau_exp = _efold_time_ms(t_exp[exp_window], isat[p, exp_window], noise)
+
+        iz = int(np.argmin(np.abs(z_model - z)))
+        model_window = (t_model_ms >= t0) & (t_model_ms <= t1_model)
+        proxy = n_model[model_window, iz] * np.sqrt(
+            np.maximum(Te_model[model_window, iz], 0.0)
+        )
+        tau_model = _efold_time_ms(t_model_ms[model_window], proxy)
+
+        rows.append(
+            {
+                "port": int(ports[p]),
+                "z": z,
+                "tau_exp_ms": tau_exp,
+                "tau_model_ms": tau_model,
+                "ratio": tau_model / tau_exp if np.isfinite(tau_exp) else np.nan,
+            }
+        )
+    return rows, (t0, t1_model)
+
+
+def _report_peak_current(peak):
+    print("\n--- stage (i): peak discharge current ---")
+    print(
+        f"  model {peak['model_peak_a']:8.4g} A at {peak['model_peak_t_ms']:+6.2f} ms"
+        f" | measured {peak['exp_peak_a']:8.4g} +/- {peak['exp_peak_sem_a']:.2g} A"
+        f" at {peak['exp_peak_t_ms']:+6.2f} ms | ratio {peak['ratio']:.3f}"
+    )
+
+
+def _report_decay(rows, window):
+    print(
+        f"\n--- stage (iii): Isat decay e-fold times, window "
+        f"{window[0]:.1f}-{window[1]:.1f} ms ---"
+    )
+    header = f"{'port':>6} {'z [cm]':>8} {'tau_model':>10} {'tau_exp':>9} {'ratio':>7}"
+    print(header)
+    print("-" * len(header))
+    for r in rows:
+        print(
+            f"{r['port']:>6} {r['z']:8.0f} {r['tau_model_ms']:9.2f}ms "
+            f"{r['tau_exp_ms']:8.2f}ms {r['ratio']:7.2f}"
+        )
+    ratios = [r["ratio"] for r in rows if np.isfinite(r["ratio"])]
+    if ratios:
+        print(f"  mean tau_model/tau_exp: {np.mean(ratios):.2f}")
+
+
 def _report(label, rows):
-    print(f"\n=== {label} ===")
+    print("\n--- stage (ii): bulk Te / density at the ES1 ports ---")
     header = (
         f"{'field':>5} {'port':>6} {'z [cm]':>8} {'model':>11} {'measured':>11} "
         f"{'ratio':>7} {'rms rel':>8} {'|dev|/SEM':>10}"
@@ -155,22 +310,67 @@ def main(argv=None):
     parser.add_argument(
         "--exchange-model", default="knudsen", choices=("knudsen", "molecular_flow")
     )
+    parser.add_argument(
+        "--tau-afterglow",
+        type=float,
+        default=None,
+        metavar="S",
+        help="override the afterglow duration [s] to cover more of the decay",
+    )
+    parser.add_argument(
+        "--decay-window",
+        type=float,
+        nargs=2,
+        default=(20.5, 25.0),
+        metavar=("T0", "T1"),
+        help="stage (iii) fit window on the main-discharge clock [ms]",
+    )
+    parser.add_argument(
+        "--save-h5",
+        type=Path,
+        default=None,
+        help="save the run result for later re-scoring",
+    )
+    parser.add_argument(
+        "--from-h5",
+        type=Path,
+        default=None,
+        help="score a saved result instead of running the model",
+    )
     args = parser.parse_args(argv)
 
     overlay = np.load(OVERLAY, allow_pickle=False)
-    label = (
-        "legacy"
-        if args.legacy
-        else f"resolved ({args.exchange_model}, nx={args.nx or 'default'})"
-    )
-    try:
-        result, geometry = run_model(
-            resolved=not args.legacy, nx=args.nx, exchange_model=args.exchange_model
+    if args.from_h5 is not None:
+        result = load_result_hdf5(args.from_h5)
+        geometry = None
+        label = f"saved run {args.from_h5}"
+    else:
+        label = (
+            "legacy"
+            if args.legacy
+            else f"resolved ({args.exchange_model}, nx={args.nx or 'default'})"
         )
-    except BreakdownError as error:
-        print(f"{label}: no breakdown (I_tot={error.I_tot:.4g} A)")
-        return 1
+        extra = {}
+        if args.tau_afterglow is not None:
+            extra["tau_afterglow"] = args.tau_afterglow
+        try:
+            result, geometry, params, flags = run_model(
+                resolved=not args.legacy,
+                nx=args.nx,
+                exchange_model=args.exchange_model,
+                extra=extra,
+            )
+        except BreakdownError as error:
+            print(f"{label}: no breakdown (I_tot={error.I_tot:.4g} A)")
+            return 1
+        if args.save_h5 is not None:
+            save_result_hdf5(args.save_h5, result, params=params, flags=flags)
+            print(f"saved result to {args.save_h5}")
+    print(f"\n=== {label} ===")
+    _report_peak_current(compare_peak_current(result, overlay))
     _report(label, compare(result, geometry, overlay))
+    decay_rows, window = compare_decay(result, overlay, window_ms=args.decay_window)
+    _report_decay(decay_rows, window)
     return 0
 
 

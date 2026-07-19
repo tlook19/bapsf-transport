@@ -34,6 +34,8 @@ import numpy as np
 from scipy.optimize import brentq
 
 from cablp.funcs._cross import He_EII_cross_lkup, H_EII_cross_lkup
+from cablp.vars._coeff import b_11s_21p
+from cablp.vars._cons import E_21p as _E_21p_eV, Ry_eV as _Ry_eV, atm_cross_cgs as _atm_cross_cgs
 
 # ---------------------------------------------------------------------------
 # Universal physical constants
@@ -213,6 +215,12 @@ class BeamResult:
     v_beam          : beam electron velocity [cm/s]
     n_beam          : beam electron density [cm⁻³]
     beam_cross      : EII cross section at beam energy [cm²]
+    beam_exc_cross  : neutral-excitation cross section at beam energy [cm²]
+                      (zero unless b_beam_excitation is set)
+    beam_atten_cross: total inelastic attenuation cross section
+                      = beam_cross + beam_exc_cross [cm²]; feed this back as
+                      ``beam_cross_prev`` so the sheath solve's MFP sees both
+                      channels
     n_beam_ion      : n_beam * beam_cross * v_beam  [s⁻¹]
     A_ion_beam      : n_beam_ion * nn  [cm⁻³ s⁻¹]
     l_b             : beam mean free path per cathode cell [cm]; 0 elsewhere
@@ -228,6 +236,8 @@ class BeamResult:
     v_beam: np.ndarray
     n_beam: np.ndarray
     beam_cross: np.ndarray
+    beam_exc_cross: np.ndarray
+    beam_atten_cross: np.ndarray
     n_beam_ion: np.ndarray
     A_ion_beam: np.ndarray
     l_b: np.ndarray
@@ -276,6 +286,56 @@ def _compute_beam_bypass_fraction(l_b: float, L_cath: float) -> float:
     if l_b <= 0.0 or L_cath <= 0.0:
         return 0.0
     return math.exp(-L_cath / l_b)
+
+
+_ATM_CROSS_CGS = float(_atm_cross_cgs)
+_RY_EV = float(_Ry_eV)
+_E21P_EV = float(_E_21p_eV)
+
+
+def _he_2p_excitation_cross_cm2(eps: float) -> float:
+    """Float port of ``He_EIE_cross_DA(eps, b_11s_21p)`` [cm^2].
+
+    The mpmath original costs ~20 us per scalar call and sits in the per-step
+    cathode solve; this is the same dipole-allowed formula in plain floats
+    (agreement asserted to 1e-12 in the smoke test).
+    """
+    a = b_11s_21p
+    factor1 = _ATM_CROSS_CGS * _RY_EV / (eps * _E21P_EV)
+    factor2 = a[0] * math.log(eps) + sum(
+        a[i] * eps ** (1 - i) for i in range(1, 5)
+    )
+    factor3 = (eps + 1.0) / (eps + a[5])
+    return factor1 * factor2 * factor3
+
+
+def beam_excitation_cross(
+    phi_c_eV: float,
+    b_beam_excitation: float,
+    gas_type: str,
+    threshold_eV: float = 21.218,
+) -> float:
+    """Neutral-excitation cross section [cm^2] for the primary beam.
+
+    The 1^1S -> 2^1P dipole-allowed cross section at the beam energy, scaled
+    by ``b_beam_excitation``. 2^1P is the dominant singlet channel at beam
+    energies (60-180 eV); the rest of the singlet manifold (2^1S, 3^1P, ...)
+    adds roughly another 30-50%, which the scale factor is meant to absorb
+    (``~1.4`` approximates the full manifold, ``1.0`` is 2^1P alone). Triplet
+    (metastable) excitation is exchange-driven and collapses above ~50 eV, so
+    it is deliberately not modeled. ``b_beam_excitation = 0`` (default)
+    disables the channel entirely and reproduces the historical beam.
+    """
+    if b_beam_excitation == 0.0 or phi_c_eV <= threshold_eV:
+        return 0.0
+    if gas_type != "He":
+        raise ValueError(
+            "b_beam_excitation != 0 is only wired for gas_type 'He' "
+            f"(got {gas_type!r}); the excitation cross section is helium's"
+        )
+    return float(b_beam_excitation) * _he_2p_excitation_cross_cm2(
+        phi_c_eV / threshold_eV
+    )
 
 
 def _j_eth_crit(psi: float, J_i: float, mu: float) -> float:
@@ -800,6 +860,8 @@ def solve_beam_system(
     anode_T_e: float | None = None,
     anode_current_twin_A: float | None = None,
     anode_T_e_twin: float | None = None,
+    b_beam_excitation: float = 0.0,
+    beam_excitation_energy_eV: float = 21.218,
 ) -> BeamResult:
     """Solve cathode sheath(s) and compute beam quantities for all cells.
 
@@ -832,6 +894,7 @@ def solve_beam_system(
     v_beam = np.zeros(cells)
     n_beam = np.zeros(cells)
     beam_cross = np.zeros(cells)
+    beam_exc_cross = np.zeros(cells)
 
     result = solve(
         config,
@@ -856,6 +919,12 @@ def solve_beam_system(
             beam_cross[cathode_index] = He_EII_cross_lkup(phi_c_0 / I_ion)
         elif gas_type == "H":
             beam_cross[cathode_index] = H_EII_cross_lkup(phi_c_0)
+        beam_exc_cross[cathode_index] = beam_excitation_cross(
+            phi_c_0,
+            b_beam_excitation,
+            gas_type,
+            threshold_eV=beam_excitation_energy_eV,
+        )
 
     result_twin = None
     x0_twin_next = None
@@ -885,7 +954,14 @@ def solve_beam_system(
                 beam_cross[twin_index] = He_EII_cross_lkup(phi_c_1 / I_ion)
             elif gas_type == "H":
                 beam_cross[twin_index] = H_EII_cross_lkup(phi_c_1)
+            beam_exc_cross[twin_index] = beam_excitation_cross(
+                phi_c_1,
+                b_beam_excitation,
+                gas_type,
+                threshold_eV=beam_excitation_energy_eV,
+            )
 
+    beam_atten_cross = beam_cross + beam_exc_cross
     n_beam_ion = n_beam * beam_cross * v_beam
     A_ion_beam = n_beam_ion * nn
 
@@ -902,15 +978,18 @@ def solve_beam_system(
             l_b[twin_index] * beam_cross[twin_index] * nn[twin_index]
         )
 
+    # Attenuation along the column uses the total inelastic cross section:
+    # an excitation collision degrades the primary as surely as an ionizing
+    # one, so with the excitation channel on the deposition length shortens.
     l_b_profile = np.zeros(cells)
     if beam_cross[cathode_index] != 0.0:
         for j in range(cells):
-            l_b_profile[j] = _compute_l_b(result.phi_c, Te[j], ne[j], nn[j], beam_cross[cathode_index])
+            l_b_profile[j] = _compute_l_b(result.phi_c, Te[j], ne[j], nn[j], beam_atten_cross[cathode_index])
 
     l_b_profile_twin = np.zeros(cells)
     if config.Twin and result_twin is not None and beam_cross[twin_index] != 0.0:
         for j in range(cells):
-            l_b_profile_twin[j] = _compute_l_b(result_twin.phi_c, Te[j], ne[j], nn[j], beam_cross[twin_index])
+            l_b_profile_twin[j] = _compute_l_b(result_twin.phi_c, Te[j], ne[j], nn[j], beam_atten_cross[twin_index])
 
     return BeamResult(
         result=result,
@@ -918,6 +997,8 @@ def solve_beam_system(
         v_beam=v_beam,
         n_beam=n_beam,
         beam_cross=beam_cross,
+        beam_exc_cross=beam_exc_cross,
+        beam_atten_cross=beam_atten_cross,
         n_beam_ion=n_beam_ion,
         A_ion_beam=A_ion_beam,
         l_b=l_b,

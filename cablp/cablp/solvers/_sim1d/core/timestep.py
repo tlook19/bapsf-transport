@@ -301,6 +301,8 @@ def ion_neutral_drag_timestep(
         Ti=derived.Ti,
         ion_mass_g=ion_mass_g,
         sigma_in_cm2=ion_neutral_drag_kwargs.get("sigma_in_cm2", 5.0e-15),
+        sigma_in_model=ion_neutral_drag_kwargs.get("sigma_in_model", "constant"),
+        gas_type=ion_neutral_drag_kwargs.get("gas_type"),
     )
     nu_max = float(np.max(np.abs(nu_in))) * abs(float(b_ion_neutral_drag))
     if nu_max <= 0.0:
