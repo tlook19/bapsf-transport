@@ -48,15 +48,20 @@ from cablp.solvers._sim1d.core.geometry import (
 )
 from cablp.solvers._sim1d.physics.neutrals import (
     _effective_pump_speed,
+    gas_puff_rate_profile,
     neutral_exchange_coefficients,
+    neutral_source_sink_rhs,
     neutral_thermal_speed,
     neutral_inventory_rate,
+    neutral_wind_advection_rhs,
     puff_rate,
     pump_rate,
 )
+from cablp.solvers._sim1d.core.timestep import neutral_wind_timestep
 from cablp.solvers._sim1d.physics.reactions import (
     particle_inventory_rate,
     reaction_rates,
+    reaction_rhs_terms,
 )
 from cablp.solvers._sim1d.physics.sources import (
     add_state_rhs,
@@ -68,16 +73,21 @@ from cablp.solvers._sim1d.physics.sources import (
     ion_neutral_slip_factor,
     ion_neutral_thermalization_rhs,
     langevin_rate_cm3_s,
+    neutral_momentum_wall_rhs,
+    neutral_wind_two_zone_factors,
+    neutral_wind_velocity,
     velocity_divergence,
 )
 from cablp.solvers._sim1d.core.state import (
     STATE_NAMES_1D,
+    ConservativeState1D,
+    apply_state_floors,
     conservative_from_primitives,
     derive_state,
     pack_state,
     unpack_state,
 )
-from cablp.vars._cons import I_Ry, en_factor, ev_to_erg, m_p_cgs, qe_SI
+from cablp.vars._cons import I_ion, en_factor, ev_to_erg, m_p_cgs, qe_SI
 
 
 def main():
@@ -525,6 +535,117 @@ def main():
         rtol=1e-12,
     )
 
+    # --- Resolved gap resistance (cathode_Rp_model="resolved_gap",
+    # CATHODE_IDRIVEN_PLAN.md M1): the historical R_p spreads the hot
+    # cathode-adjacent Spitzer sample over the whole 50 cm gap; the resolved
+    # model integrates dz/(sigma_par(Te)*A) over the gap profile and feeds
+    # it to the unmodified solver through an effective DeviceConfig.R_cath.
+    import warnings as _warnings
+
+    from cablp.solvers._sim1d.core.geometry import gap_cell_indices
+    from cablp.solvers._sim1d.physics.cathode import spitzer_sigma_par_ohm_cm
+
+    rgap_params = dict(resolved_params)
+    rgap_params["Rp"] = rgap_params["R_cath"]  # channel area == disc area
+    # The resolved gap spans exactly the solver's L_cath, so a uniform gap
+    # must reduce the integral to the single-sample formula.
+    assert np.isclose(
+        rgap_params["cathode_anode_gap_cm"], rgap_params["L_cath"]
+    )
+    rgap_resolved_params = dict(rgap_params, cathode_Rp_model="resolved_gap")
+    sim_rgap_sample = LAPDSim1D(rgap_params, resolved_cathode_flags)
+    sim_rgap = LAPDSim1D(rgap_resolved_params, resolved_cathode_flags)
+    rgap_geom = sim_rgap.get_initial_snapshot().geometry
+    rgap_gap = np.asarray(gap_cell_indices(rgap_geom), dtype=int)
+    assert spitzer_sigma_par_ohm_cm(4.0) == 14.6 * 4.0**1.5
+
+    def _rgap_state(Te):
+        return conservative_from_primitives(
+            n=np.full(rgap_geom.cells, 4.0e12),
+            nn=np.full(rgap_geom.cells, 1.0e13),
+            u=np.zeros(rgap_geom.cells),
+            Te=Te,
+            Ti=np.full(rgap_geom.cells, 1.0),
+            ion_mass_g=sim_rgap.ion_mass_g,
+        )
+
+    uni_state = _rgap_state(np.full(rgap_geom.cells, 6.0))
+    r_uni_s = sim_rgap_sample.solve_cathode_boundary(
+        state=uni_state, update_cache=False
+    ).beam_result.result
+    r_uni_solve = sim_rgap.solve_cathode_boundary(
+        state=uni_state, update_cache=False
+    )
+    r_uni_r = r_uni_solve.beam_result.result
+    assert r_uni_solve.metadata["cathode_Rp_model"] == "resolved_gap"
+    assert np.isclose(
+        r_uni_solve.metadata["R_p_gap_ohm"], r_uni_s.R_p, rtol=1e-12
+    )
+    for rgap_attr in ("R_p", "I_tot", "phi_c", "phi_a", "V_b", "I_eth_star"):
+        assert np.isclose(
+            getattr(r_uni_r, rgap_attr),
+            getattr(r_uni_s, rgap_attr),
+            rtol=1e-9,
+        ), (rgap_attr, getattr(r_uni_r, rgap_attr), getattr(r_uni_s, rgap_attr))
+
+    # Cold gap: heat only the sampled cathode-adjacent cell. The sample
+    # model spreads that hot conductivity over the whole gap (eta_Spitzer ~
+    # Te^-3/2 underestimates the colder remainder); the resolved integral
+    # must be larger, with a larger gap voltage drop and no more current.
+    rgap_cold_Te = np.full(rgap_geom.cells, 3.0)
+    rgap_cold_Te[rgap_gap[0]] = 12.0
+    cold_state = _rgap_state(rgap_cold_Te)
+    r_cold_s = sim_rgap_sample.solve_cathode_boundary(
+        state=cold_state, update_cache=False
+    ).beam_result.result
+    r_cold_r = sim_rgap.solve_cathode_boundary(
+        state=cold_state, update_cache=False
+    ).beam_result.result
+    # 1/5 of the gap at 12 eV, 4/5 at 3 eV: 0.2 + 0.8*(12/3)^1.5 = 6.6x.
+    assert np.isclose(r_cold_r.R_p, 6.6 * r_cold_s.R_p, rtol=1e-9)
+    assert r_cold_r.V_p > r_cold_s.V_p
+    assert r_cold_r.I_tot <= r_cold_s.I_tot * (1.0 + 1e-9)
+
+    # TwinCathode shares one DeviceConfig, so resolved_gap must refuse it
+    # at construction; unknown model strings fail the same way.
+    for rgap_bad_params, rgap_bad_flags in (
+        (rgap_resolved_params, dict(resolved_cathode_flags, TwinCathode=True)),
+        (dict(rgap_params, cathode_Rp_model="bogus"), resolved_cathode_flags),
+    ):
+        try:
+            LAPDSim1D(rgap_bad_params, rgap_bad_flags)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                f"expected ValueError for cathode_Rp_model config "
+                f"{rgap_bad_params.get('cathode_Rp_model')!r}"
+            )
+
+    # Legacy geometry has no resolved gap: falls back to "sample" with a
+    # warning and reproduces the historical solve bit-for-bit.
+    rgap_leg_sim = LAPDSim1D(
+        dict(params, cathode_Rp_model="resolved_gap"), m5_legacy_flags
+    )
+    with _warnings.catch_warnings(record=True) as rgap_caught:
+        _warnings.simplefilter("always")
+        rgap_leg_fb = rgap_leg_sim.solve_cathode_boundary(update_cache=False)
+    assert any("resolved_gap" in str(w.message) for w in rgap_caught)
+    assert rgap_leg_fb.metadata["cathode_Rp_model"] == "sample"
+    assert rgap_leg_fb.metadata["R_p_gap_ohm"] is None
+    rgap_leg_ref = LAPDSim1D(dict(params), m5_legacy_flags).solve_cathode_boundary(
+        update_cache=False
+    )
+    assert rgap_leg_fb.beam_result.result.R_p == rgap_leg_ref.beam_result.result.R_p
+    assert (
+        rgap_leg_fb.beam_result.result.I_tot
+        == rgap_leg_ref.beam_result.result.I_tot
+    )
+    assert (
+        rgap_leg_fb.beam_result.result.phi_c
+        == rgap_leg_ref.beam_result.result.phi_c
+    )
+
     # Knudsen neutral transport is mesh-independent, which is the whole point:
     # the historical molecular_flow model implies D = 0.25*v_th*P(dz)*dz, which
     # goes to ZERO as the mesh refines rather than converging.
@@ -938,6 +1059,462 @@ def main():
         particle_inventory_rate(beam_birth_terms, geom),
         0.0,
         atol=1e-12 * beam_inventory_scale,
+    )
+
+    # --- Parasitic inductance (L_parasitic_H): backward-Euler folds into the
+    # algebraic circuit as V_eff/R_eff; bank_connected=False is the afterglow
+    # freewheel tail. L=0 must return the identical config object.
+    from cablp.solvers._sim1d.physics.cathode import (
+        cathode_device_config,
+        inductive_circuit_config,
+    )
+
+    ind_cfg = cathode_device_config(params, cathode_flags, sim.mu)
+    assert inductive_circuit_config(ind_cfg, 0.0, 3000.0, 1e-6) is ind_cfg
+    eff = inductive_circuit_config(ind_cfg, 9.0e-6, 3000.0, 1.0e-6)
+    assert np.isclose(eff.V_bank, ind_cfg.V_bank + 9.0 * 3000.0, rtol=1e-14)
+    assert np.isclose(eff.R_comp, ind_cfg.R_comp + 9.0, rtol=1e-14)
+    tail_cfg = inductive_circuit_config(
+        ind_cfg, 9.0e-6, 3000.0, 1.0e-6, bank_connected=False
+    )
+    assert np.isclose(tail_cfg.V_bank, 9.0 * 3000.0, rtol=1e-14)  # EMF only
+    assert np.isclose(tail_cfg.R_comp, ind_cfg.R_comp + 9.0, rtol=1e-14)
+    # other device parameters untouched
+    assert tail_cfg.T_s == ind_cfg.T_s and tail_cfg.eta == ind_cfg.eta
+    # Finite bank: V_base comes from the drained capacitor and dt/C joins the
+    # effective resistance; the tail leaves the capacitor branch inert.
+    rc_cfg = inductive_circuit_config(
+        ind_cfg, 9.0e-6, 3000.0, 1.0e-6, C_bank_F=8.9, V_cap_prev=170.0
+    )
+    assert np.isclose(rc_cfg.V_bank, 170.0 + 9.0 * 3000.0, rtol=1e-14)
+    assert np.isclose(
+        rc_cfg.R_comp, ind_cfg.R_comp + 9.0 + 1.0e-6 / 8.9, rtol=1e-14
+    )
+    c_only = inductive_circuit_config(
+        ind_cfg, 0.0, 0.0, 1.0e-6, C_bank_F=8.9, V_cap_prev=170.0
+    )
+    assert np.isclose(c_only.V_bank, 170.0, rtol=1e-14)
+    assert np.isclose(c_only.R_comp, ind_cfg.R_comp + 1.0e-6 / 8.9, rtol=1e-14)
+    tail_rc = inductive_circuit_config(
+        ind_cfg, 9.0e-6, 3000.0, 1.0e-6,
+        bank_connected=False, C_bank_F=8.9, V_cap_prev=170.0,
+    )
+    assert np.isclose(tail_rc.V_bank, 9.0 * 3000.0, rtol=1e-14)
+    assert np.isclose(tail_rc.R_comp, ind_cfg.R_comp + 9.0, rtol=1e-14)
+    # Trapezoidal (Crank-Nicolson) fold: 2L/dt + old-time residual; falls
+    # back to backward Euler bit-exactly without a V_dis_prev; unknown
+    # schemes fail loudly.
+    cn_resid = ind_cfg.V_bank - 3000.0 * ind_cfg.R_comp - 100.0
+    cn_cfg = inductive_circuit_config(
+        ind_cfg, 9.0e-6, 3000.0, 1.0e-6,
+        scheme="trapezoidal", V_dis_prev=100.0,
+    )
+    assert np.isclose(
+        cn_cfg.V_bank, ind_cfg.V_bank + 18.0 * 3000.0 + cn_resid, rtol=1e-14
+    )
+    assert np.isclose(cn_cfg.R_comp, ind_cfg.R_comp + 18.0, rtol=1e-14)
+    cn_rc = inductive_circuit_config(
+        ind_cfg, 9.0e-6, 3000.0, 1.0e-6,
+        C_bank_F=8.9, V_cap_prev=170.0,
+        scheme="trapezoidal", V_dis_prev=100.0,
+    )
+    assert np.isclose(
+        cn_rc.V_bank,
+        170.0 + 18.0 * 3000.0
+        + (170.0 - 3000.0 * ind_cfg.R_comp - 100.0)
+        - (0.5e-6 / 8.9) * 3000.0,
+        rtol=1e-14,
+    )
+    assert np.isclose(
+        cn_rc.R_comp, ind_cfg.R_comp + 18.0 + 0.5e-6 / 8.9, rtol=1e-14
+    )
+    cn_tail = inductive_circuit_config(
+        ind_cfg, 9.0e-6, 3000.0, 1.0e-6,
+        bank_connected=False, scheme="trapezoidal", V_dis_prev=40.0,
+    )
+    assert np.isclose(
+        cn_tail.V_bank,
+        18.0 * 3000.0 + (0.0 - 3000.0 * ind_cfg.R_comp - 40.0),
+        rtol=1e-14,
+    )
+    cn_fallback = inductive_circuit_config(
+        ind_cfg, 9.0e-6, 3000.0, 1.0e-6, scheme="trapezoidal", V_dis_prev=None
+    )
+    assert cn_fallback.V_bank == eff.V_bank
+    assert cn_fallback.R_comp == eff.R_comp
+    try:
+        inductive_circuit_config(ind_cfg, 9.0e-6, 3000.0, 1.0e-6, scheme="cn")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for unknown circuit scheme")
+    # Against a linear load V_dis = k*I the solved CN operating point must
+    # equal the analytic trapezoid update of L dI/dt = V - I*(R + k).
+    cn_k = 0.04
+    cn_analytic = (
+        2.0 * ind_cfg.V_bank + 3000.0 * (18.0 - ind_cfg.R_comp - cn_k)
+    ) / (18.0 + ind_cfg.R_comp + cn_k)
+    # (uses V_dis_prev = k*I_prev for consistency of the old residual)
+    cn_cfg_lin = inductive_circuit_config(
+        ind_cfg, 9.0e-6, 3000.0, 1.0e-6,
+        scheme="trapezoidal", V_dis_prev=cn_k * 3000.0,
+    )
+    assert np.isclose(
+        cn_cfg_lin.V_bank / (cn_cfg_lin.R_comp + cn_k),
+        cn_analytic,
+        rtol=1e-12,
+    )
+
+    # --- Annular cathode emission profile (cathode_emission_profile):
+    # the uniform disc's ceiling is a razor wall; the measured radial
+    # footprint softens it into a ramp. Single warm annulus at the plasma
+    # footprint must reproduce the uniform solve; the gaussian profile must
+    # produce a monotone, softened V(I) knee.
+    from cablp.funcs._cathode_solver import PlasmaState, solve as cathode_solve_fn
+    from cablp.solvers._sim1d.physics.cathode import (
+        cathode_emission_annuli,
+    )
+    import dataclasses as _dc
+
+    knee_params, knee_flags = default_config()
+    knee_params.update({"V_bank": 173.6, "R_comp": 5.72e-3, "T_s": 2008.0,
+                        "R_cath": 15.0, "Rp": 15.0})
+    uni_cfg = cathode_device_config(knee_params, knee_flags, sim.mu)
+    plasma_probe = PlasmaState(T_e=8.0, n_e=4e12, n_n=1.5e13, sigma_b=4e-17)
+    # single annulus, fully wetted, at T_s: identical emission physics
+    one_annulus = _dc.replace(
+        uni_cfg,
+        emission_Ts_K=(knee_params["T_s"],),
+        emission_area_cm2=(uni_cfg.A_c,),
+        emission_plasma_frac=(1.0,),
+    )
+    r_uni = cathode_solve_fn(uni_cfg, plasma_probe, x0=None, floating=False)
+    r_one = cathode_solve_fn(one_annulus, plasma_probe, x0=None, floating=False)
+    assert np.isclose(r_one.I_tot, r_uni.I_tot, rtol=1e-10)
+    assert np.isclose(r_one.phi_c, r_uni.phi_c, rtol=1e-10)
+    assert np.isclose(one_annulus.I_eth, uni_cfg.I_eth, rtol=1e-12)
+
+    # gaussian profile: annuli temperatures fall monotonically from T_s,
+    # total emission below the uniform disc's, plasma fractions partition
+    gauss_params = dict(knee_params)
+    gauss_params.update({"R_cath": 19.0, "cathode_emission_profile": "gaussian",
+                         "cathode_Ts_fwhm_cm": 28.0})
+    Ts_k, area_k, frac_k = cathode_emission_annuli(gauss_params)
+    assert np.isclose(Ts_k[0], gauss_params["T_s"], rtol=2e-2)
+    assert np.all(np.diff(Ts_k) < 0.0)
+    assert Ts_k[0] - Ts_k[-1] > 100.0  # the knee-softening spread
+    assert np.isclose(np.sum(area_k), np.pi * 19.0**2, rtol=1e-12)
+    assert frac_k[0] == 1.0 and frac_k[-1] == 0.0
+    gauss_cfg = cathode_device_config(gauss_params, knee_flags, sim.mu)
+    assert gauss_cfg.I_eth < uni_cfg.I_eth * (np.pi * 19.0**2) / uni_cfg.A_c
+
+    # Soft knee: the ramp lives between first-annulus release and the disc's
+    # total emission, so probe with a peak T_s whose total comfortably exceeds
+    # the drive range (the knob's meaning under this profile: where on the
+    # staggered-release ramp the operating current falls). The uniform disc
+    # hard-saturates in this same range; the profile must ramp instead.
+    from cablp.solvers._sim1d.physics.cathode import inductive_circuit_config
+
+    hot_params = dict(gauss_params)
+    hot_params["T_s"] = 2110.0
+    hot_cfg = cathode_device_config(hot_params, knee_flags, sim.mu)
+    assert hot_cfg.I_eth > 4000.0  # total emission well above the drive range
+    I_at, phi_at = [], []
+    for I_drive in (2500.0, 3000.0, 3500.0, 4000.0):
+        cfgL = inductive_circuit_config(
+            hot_cfg, 6.6e-6, I_drive, 1e-6, C_bank_F=8.9, V_cap_prev=171.0
+        )
+        rr = cathode_solve_fn(cfgL, plasma_probe, x0=150.0, floating=False)
+        I_at.append(rr.I_tot)
+        phi_at.append(rr.phi_c)
+    assert np.all(np.diff(I_at) > 10.0), I_at  # ramps, no hard ceiling here
+    assert np.all(np.isfinite(phi_at)) and max(phi_at) < 600.0, phi_at
+
+    # --- Current-driven sheath solve (CATHODE_IDRIVEN_PLAN.md M2): given the
+    # V-driven solve's I_tot, solve_idriven must reproduce the same operating
+    # point -- phi_c/phi_a/I_eth_star/regime -- through the monotone device
+    # relation, with no warm windows and no bypass iteration. The M2 gate.
+    from cablp.funcs._cathode_solver_idriven import solve_idriven
+
+    id_sweep = []
+    id_plasmas = (
+        plasma_probe,
+        PlasmaState(T_e=3.0, n_e=5.0e11, n_n=2.0e13, sigma_b=0.0),
+        PlasmaState(T_e=12.0, n_e=1.0e13, n_n=5.0e12, sigma_b=4e-17),
+    )
+    for id_cfg in (uni_cfg, one_annulus, gauss_cfg, hot_cfg):
+        for id_pl in id_plasmas:
+            if id_cfg is gauss_cfg and id_pl is id_plasmas[1]:
+                # Degenerate flat-top corner: covered by its own test below,
+                # where psi is not recoverable from I within float precision.
+                continue
+            id_sweep.append((id_cfg, id_pl))
+    # One inductively folded config: the effective (V_eff, R_eff) is just
+    # another DeviceConfig, and the equivalence must hold there too.
+    id_sweep.append(
+        (
+            inductive_circuit_config(
+                hot_cfg, 6.6e-6, 3000.0, 6.0e-7, C_bank_F=8.9, V_cap_prev=171.0
+            ),
+            plasma_probe,
+        )
+    )
+    id_regimes = set()
+    for id_cfg, id_pl in id_sweep:
+        rv = cathode_solve_fn(id_cfg, id_pl, x0=None, floating=False)
+        ri = solve_idriven(id_cfg, id_pl, I_tot_A=rv.I_tot)
+        id_regimes.add(rv.regime)
+        assert ri.regime == rv.regime, (ri.regime, rv.regime)
+        for id_att in (
+            "phi_c",
+            "phi_c_plus",
+            "phi_c_minus",
+            "phi_a",
+            "I_eth_star",
+            "I_tot",
+            "V_p",
+            "beam_bypass_fraction",
+            "l_b",
+            "P_cathode_i",
+            "P_prim",
+        ):
+            assert np.isclose(
+                getattr(ri, id_att),
+                getattr(rv, id_att),
+                rtol=1e-8,
+                atol=1e-9,
+            ), (id_att, getattr(ri, id_att), getattr(rv, id_att))
+        # V_b contract: the I-driven V_b is the device voltage; the V-driven
+        # V_b equals it up to that solver's own root residual (~<=1e-3 V).
+        id_v_dev = rv.phi_c + rv.V_p - rv.phi_a
+        assert np.isclose(ri.V_b, id_v_dev, rtol=1e-8, atol=1e-8)
+        assert abs(rv.V_b - id_v_dev) < 1.0e-2, (rv.V_b, id_v_dev)
+    assert {"classical", "virtual_cathode"} <= id_regimes
+
+    # Degenerate emission-exhausted plateau (the I-driven formulation's
+    # mirror-image weak spot): at this corner every annulus is released and
+    # the electron tail has underflowed, so J_tot(psi) is numerically
+    # constant -- psi is NOT recoverable from I alone. The solve must stay
+    # deterministic (leading-edge selection), reproduce the *currents*, and
+    # never raise; the potentials legitimately disagree with the V-driven
+    # root there.
+    id_deg_rv = cathode_solve_fn(
+        gauss_cfg, id_plasmas[1], x0=None, floating=False
+    )
+    id_deg_ri = solve_idriven(gauss_cfg, id_plasmas[1], I_tot_A=id_deg_rv.I_tot)
+    assert id_deg_ri.regime in ("virtual_cathode", "capability_limited")
+    assert np.isfinite(id_deg_ri.phi_c) and np.isfinite(id_deg_ri.V_b)
+    assert np.isclose(id_deg_ri.I_tot, id_deg_rv.I_tot, rtol=1e-8)
+    assert np.isclose(id_deg_ri.I_eth_star, id_deg_rv.I_eth_star, rtol=1e-6)
+    id_deg_repeat = solve_idriven(
+        gauss_cfg, id_plasmas[1], I_tot_A=id_deg_rv.I_tot
+    )
+    assert id_deg_repeat.phi_c == id_deg_ri.phi_c  # deterministic
+
+    # Monotone by construction: deeper sheath carries more current, so the
+    # inverse map I -> phi is single-valued and increasing.
+    id_ref = cathode_solve_fn(uni_cfg, plasma_probe, x0=None, floating=False)
+    id_ceiling = id_ref.I_i + id_ref.I_eth
+    id_grid = np.linspace(10.0, 0.98 * id_ceiling, 25)
+    id_phis = [
+        solve_idriven(uni_cfg, plasma_probe, I_tot_A=float(I)).phi_c_plus
+        for I in id_grid
+    ]
+    assert np.all(np.diff(id_phis) > 0.0)
+
+    # Capability-limited: an imposed current beyond the sheath's ceiling
+    # returns the bracket-top solution, tagged, finite, at a large V_b --
+    # no exception, no fallback ladder (the M3 circuit ramps I down ~V/L).
+    id_cap = solve_idriven(
+        uni_cfg, plasma_probe, I_tot_A=1.05 * id_ceiling
+    )
+    assert id_cap.regime == "capability_limited"
+    assert np.isfinite(id_cap.V_b) and id_cap.V_b > id_ref.V_b
+    # The kick is always a back-EMF >= the ceiling and carries a
+    # non-negative current -- the clamp that prevents the measured
+    # capability-runaway (negative V_b read as forward EMF).
+    assert id_cap.V_b >= 1000.0
+    assert id_cap.I_tot >= 0.0
+    # The kick is reported *at* the net-sheath ceiling, not wherever the
+    # bracket expansion happened to land.
+    assert np.isclose(id_cap.phi_c, 1000.0, rtol=1e-9), id_cap.phi_c
+    try:
+        solve_idriven(uni_cfg, plasma_probe, I_tot_A=-1.0)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for negative imposed current")
+
+    # Schottky lowering (opt-in): the field-tilted emission ceiling gives the
+    # knee a finite dV/dI. Near the raw ceiling the enhanced curve must sit
+    # at lower voltage and with a much smaller maximum slope.
+    id_knee = np.linspace(0.90 * id_ceiling, 0.995 * id_ceiling, 12)
+    id_vb_off = np.array(
+        [
+            solve_idriven(uni_cfg, plasma_probe, float(I)).V_b
+            for I in id_knee
+        ]
+    )
+    id_vb_on = np.array(
+        [
+            solve_idriven(uni_cfg, plasma_probe, float(I), schottky=True).V_b
+            for I in id_knee
+        ]
+    )
+    assert np.all(np.isfinite(id_vb_off)) and np.all(np.isfinite(id_vb_on))
+    assert np.all(id_vb_on <= id_vb_off + 1e-9)
+    id_slope_off = np.max(np.abs(np.diff(id_vb_off) / np.diff(id_knee)))
+    id_slope_on = np.max(np.abs(np.diff(id_vb_on) / np.diff(id_knee)))
+    assert id_slope_on < 0.5 * id_slope_off, (id_slope_on, id_slope_off)
+
+    # --- Current-driven circuit integration (CATHODE_IDRIVEN_PLAN.md M3):
+    # TR-BDF2 stages as bracketed scalar root-finds against monotone
+    # V_dis(I). Gate 1: 2nd order on the analytic RLC decay with a linear
+    # V_dis(I) load (halve dt, error / ~4).
+    from cablp.solvers._sim1d.physics.cathode import (
+        advance_circuit_current_driven,
+        idriven_vdis_evaluator,
+        validate_cathode_solver_model,
+    )
+
+    m3_L, m3_R, m3_Rd, m3_V0d, m3_Vs = 6.6e-6, 5.72e-3, 5.0e-2, 120.0, 173.6
+    m3_lin = lambda I: m3_V0d + m3_Rd * I  # noqa: E731
+    m3_tau = m3_L / (m3_R + m3_Rd)
+    m3_Iinf = (m3_Vs - m3_V0d) / (m3_R + m3_Rd)
+    m3_T = 2.0e-4  # ~1.7 tau
+
+    def m3_integrate(nsteps):
+        I = 0.0
+        dt = m3_T / nsteps
+        for _ in range(nsteps):
+            I, _ = advance_circuit_current_driven(
+                I, dt, m3_Vs, m3_R, m3_L, m3_lin
+            )
+        return I
+
+    m3_exact = m3_Iinf * (1.0 - np.exp(-m3_T / m3_tau))
+    m3_e1 = abs(m3_integrate(40) - m3_exact)
+    m3_e2 = abs(m3_integrate(80) - m3_exact)
+    m3_order = np.log2(m3_e1 / m3_e2)
+    assert 1.8 < m3_order < 2.4, (m3_order, m3_e1, m3_e2)
+
+    # Gate 2: the plasma-diode clamp -- freewheel against a constant
+    # positive V_dis decays to exactly 0 and never goes negative.
+    m3_I = 500.0
+    for _ in range(400):
+        m3_I, _ = advance_circuit_current_driven(
+            m3_I, 2.0e-6, 0.0, m3_R, m3_L, lambda I: 50.0
+        )
+        assert m3_I >= 0.0
+    assert m3_I == 0.0
+
+    # Gate 3: the stiff wall (why the scheme is implicit -- plan §2c
+    # revision). A device curve with a 1 MOhm/A branch above I_ceil:
+    # explicit/frozen-V_dis needs dV/dI < 2L/dt ~ 22 mOhm and would
+    # sawtooth; the implicit stages must approach the wall monotonically,
+    # never overshoot it (L-stability), and pin there.
+    m3_Icl = 2000.0
+    m3_wall = lambda I: 150.0 + 1.0e6 * max(I - m3_Icl, 0.0)  # noqa: E731
+    # Equilibrium just above the knee: V_src - I R - 150 = 1e6 (I - Icl).
+    m3_Istar = (m3_Vs - 150.0 + 1.0e6 * m3_Icl) / (1.0e6 + m3_R)
+    m3_hist = [1800.0]
+    for _ in range(400):
+        m3_hist.append(
+            advance_circuit_current_driven(
+                m3_hist[-1], 6.0e-7, m3_Vs, m3_R, m3_L, m3_wall
+            )[0]
+        )
+    m3_hist = np.array(m3_hist)
+    assert np.all(np.diff(m3_hist) > -1e-9)  # monotone approach, no sawtooth
+    assert np.max(m3_hist) <= m3_Istar + 1e-6  # L-stable: never overshoots
+    assert abs(m3_hist[-1] - m3_Istar) < 0.1  # pinned at the wall
+    # Capacitor bookkeeping: trapezoidal drain, floored at zero.
+    m3_Iv, m3_Vc = advance_circuit_current_driven(
+        1000.0, 1.0e-6, 170.0, m3_R, m3_L, m3_lin,
+        C_bank_F=8.9, V_cap_prev_V=170.0,
+    )
+    assert 0.0 < m3_Vc < 170.0
+
+    # Gate 4: solver dispatch. A current-driven sim's solve is an
+    # evaluation at the frozen loop current; floating routes to the
+    # historical open-circuit branch; validation fails fast.
+    m3_params = dict(resolved_params)
+    m3_params.update(
+        {
+            "V_bank": 173.6,
+            "R_comp": 5.72e-3,
+            "L_parasitic_H": 6.6e-6,
+            "cathode_solver_model": "current_driven",
+            "dt_save": 0.0,
+        }
+    )
+    m3_sim = LAPDSim1D(m3_params, resolved_cathode_flags)
+    m3_sim._circuit_I_loop = 800.0
+    m3_solve = m3_sim.solve_cathode_boundary(update_cache=False)
+    assert m3_solve.metadata["cathode_solver_model"] == "current_driven"
+    assert np.isclose(
+        m3_solve.beam_result.result.I_tot, 800.0, rtol=1e-6
+    ) or m3_solve.beam_result.result.regime == "capability_limited"
+    assert m3_solve.beam_result.result_twin is None
+    m3_float = m3_sim.solve_cathode_boundary(floating=True, update_cache=False)
+    assert m3_float.beam_result.result.I_tot == 0.0
+    for m3_bad_params, m3_bad_flags in (
+        (dict(m3_params, cathode_solver_model="bogus"), resolved_cathode_flags),
+        (dict(m3_params, L_parasitic_H=0.0), resolved_cathode_flags),
+        (m3_params, dict(resolved_cathode_flags, TwinCathode=True)),
+    ):
+        try:
+            LAPDSim1D(m3_bad_params, m3_bad_flags)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "expected ValueError for "
+                f"{m3_bad_params.get('cathode_solver_model')}"
+            )
+    assert (
+        validate_cathode_solver_model(m3_params, resolved_cathode_flags)
+        == "current_driven"
+    )
+
+    # Gate 5: drive mini-run. The loop current starts at 0 and rises at
+    # ~(V_src - V_dis)/L; the per-step solve reports the *frozen* current
+    # (evaluation, not iteration).
+    m3_run_sim = LAPDSim1D(m3_params, resolved_cathode_flags)
+    m3_result = m3_run_sim.run(t_end=3.0e-10, dt=1.0e-10)
+    m3_diag = m3_result.cathode_diagnostics
+    m3_Iloop = np.asarray(m3_diag["circuit_I_loop"], float)
+    assert m3_Iloop[0] == 0.0
+    assert np.all(np.isfinite(m3_Iloop))
+    assert np.all(np.diff(m3_Iloop) > 0.0)  # rising from 0 under drive
+    assert m3_Iloop[-1] < 1.0  # 3e-10 s at ~2.6e7 A/s
+    # Saved diagnostics are refreshed post-accept, so the recorded solve
+    # is an evaluation at the *accepted* loop current of the same save.
+    for m3_k in (1, 2, 3):
+        assert np.isclose(
+            m3_diag["source_I_tot"][m3_k],
+            m3_Iloop[m3_k],
+            rtol=1e-6,
+            atol=1e-9,
+        ), (m3_k, m3_diag["source_I_tot"][m3_k], m3_Iloop[m3_k])
+    # The evaluator used by the circuit advance agrees with the dispatched
+    # solve's device voltage at the same state and current.
+    m3_vdis = idriven_vdis_evaluator(
+        state=m3_run_sim.state,
+        floors=m3_run_sim._floors,
+        ion_mass_g=m3_run_sim._ion_mass_g,
+        mu=m3_run_sim._mu,
+        geometry=m3_run_sim._geometry,
+        input_dict=m3_run_sim._input_dict,
+        input_flags=m3_run_sim._effective_cathode_flags(active_only=False),
+        beam_cross_prev=m3_run_sim._cathode_beam_cross,
+        T_s_override_K=m3_run_sim._cathode_Ts_K,
+    )
+    m3_direct = m3_run_sim.solve_cathode_boundary(update_cache=False)
+    assert np.isclose(
+        m3_vdis(m3_run_sim._circuit_I_loop),
+        m3_direct.beam_result.result.V_b,
+        rtol=1e-10,
     )
 
     # --- Beam excitation channel (b_beam_excitation, default 0 = historical).
@@ -1743,91 +2320,18 @@ def main():
     )
     assert np.allclose(disabled_cx.Ei, 0.0)
 
-    hydrogen_params = dict(params)
-    hydrogen_params["gas_type"] = "H"
-    hydrogen_params["dt_save"] = 0.0
-    hydrogen_sim = LAPDSim1D(hydrogen_params, flags)
-    assert np.isclose(hydrogen_sim.ion_mass_g, m_p_cgs)
-    assert hydrogen_sim.mu == 1
-    assert hydrogen_sim._mu_neutral == 2
-    assert np.isclose(hydrogen_sim.I_ion, I_Ry)
-
-    hydrogen_state = conservative_from_primitives(
-        n=np.full(geom.cells, 1.0e12),
-        nn=np.full(geom.cells, 1.0e12),
-        u=np.zeros(geom.cells),
-        Te=np.full(geom.cells, 10.0),
-        Ti=np.full(geom.cells, 10.0),
-        ion_mass_g=hydrogen_sim.ion_mass_g,
-    )
-    hydrogen_rates = reaction_rates(
-        state=hydrogen_state,
-        floors=hydrogen_sim.floors,
-        ion_mass_g=hydrogen_sim.ion_mass_g,
-        gas_type="H",
-        I_ion=hydrogen_sim.I_ion,
-        b_ioniz=hydrogen_params["b_ioniz"],
-        b_rec_rad=hydrogen_params["b_rec_rad"],
-        b_rec_3b=hydrogen_params["b_rec_3b"],
-    )
-    for rate in hydrogen_rates:
-        assert np.all(np.isfinite(rate))
-        assert np.all(rate > 0.0)
-    hydrogen_reaction = hydrogen_sim.reaction_rhs(state=hydrogen_state)
-    for values in (
-        hydrogen_reaction.n,
-        hydrogen_reaction.nn,
-        hydrogen_reaction.M,
-        hydrogen_reaction.Ee,
-        hydrogen_reaction.Ei,
-    ):
-        assert np.all(np.isfinite(values))
-    hydrogen_inventory_scale = np.sum(
-        np.abs(hydrogen_reaction.n * geom.plasma_volume_cm3)
-        + np.abs(hydrogen_reaction.nn * geom.neutral_volume_cm3)
-    )
-    assert np.isclose(
-        particle_inventory_rate(hydrogen_reaction, geom),
-        0.0,
-        atol=1e-12 * hydrogen_inventory_scale,
-    )
-    hydrogen_cooling_terms = hydrogen_sim.electron_cooling_rhs_terms(
-        state=hydrogen_state,
-    )
-    assert np.any(hydrogen_cooling_terms["ionization_energy_cost"].Ee < 0.0)
-    assert np.any(hydrogen_cooling_terms["electron_ion_cooling"].Ee < 0.0)
-    assert np.any(hydrogen_cooling_terms["electron_neutral_cooling"].Ee < 0.0)
-    hydrogen_cx = hydrogen_sim.ion_charge_exchange_rhs(state=hydrogen_state)
-    assert np.all(np.isfinite(hydrogen_cx.Ei))
-    assert np.all(hydrogen_cx.Ei < 0.0)
-    hydrogen_warm_neutral_cx = ion_charge_exchange_rhs(
-        state=hydrogen_state,
-        floors=hydrogen_sim.floors,
-        ion_mass_g=hydrogen_sim.ion_mass_g,
-        gas_type="H",
-        Tn_fit=20.0,
-        b_Qcx=hydrogen_params["b_Qcx"],
-        cx=True,
-    )
-    assert np.all(hydrogen_warm_neutral_cx.Ei > 0.0)
-    hydrogen_dt = hydrogen_sim.suggest_timestep(y=pack_state(hydrogen_state))
-    assert np.isfinite(hydrogen_dt.dt_reactions)
-    assert np.isfinite(hydrogen_dt.dt_electron_cooling)
-    assert np.isfinite(hydrogen_dt.dt_ion_charge_exchange)
-    hydrogen_result = hydrogen_sim.run(t_end=1.0e-10, dt=1.0e-10)
-    assert hydrogen_result.steps == 1
-    assert np.all(np.isfinite(hydrogen_result.n))
-    assert np.all(np.isfinite(hydrogen_result.Te))
-    assert np.all(np.isfinite(hydrogen_result.Ti))
-
+    # Hydrogen coverage removed 2026-07-20: the thesis scope is He-only (all
+    # experimental data is helium) and the adas rate default is wired for He.
+    # gas_type = "H" remains selectable with atomic_rate_model = "janev" but
+    # is no longer exercised here.
     try:
         ion_charge_exchange_rhs(
-            state=hydrogen_state,
-            floors=hydrogen_sim.floors,
-            ion_mass_g=hydrogen_sim.ion_mass_g,
+            state=hot_ion_cx_state,
+            floors=sim.floors,
+            ion_mass_g=sim.ion_mass_g,
             gas_type="Ar",
-            Tn_fit=hydrogen_params["Tn_fit"],
-            b_Qcx=hydrogen_params["b_Qcx"],
+            Tn_fit=params["Tn_fit"],
+            b_Qcx=params["b_Qcx"],
             cx=True,
         )
     except ValueError as exc:
@@ -1981,6 +2485,8 @@ def main():
         "ion_neutral_drag",
         "ion_neutral_frictional_heating",
         "ion_neutral_thermalization",
+        "neutral_momentum_wall",
+        "neutral_wind_advection",
         "surface_loss",
         "anode_collection",
         "cathode_surface_loss",
@@ -2633,6 +3139,174 @@ def main():
     )
     assert np.all(cathode_diag["end_regime"] == "none")
     assert cathode_diag["beam_cross"].shape == (4, geom.cells)
+    # Static T_s is reported as the configured value.
+    assert np.allclose(
+        cathode_diag["T_s_surface"], float(cathode_run_params["T_s"])
+    )
+
+    # --- Cathode warming (cathode_warming_model="ion_bombardment"): the
+    # surface relaxes from cathode_Ts_start_K toward the configured T_s at
+    # the rate set by the accepted solve's ion bombardment power; it can
+    # never overshoot the set point (per-step rate clamped at the full gap).
+    warm_params = dict(cathode_run_params)
+    warm_params["cathode_warming_model"] = "ion_bombardment"
+    warm_params["cathode_Ts_start_K"] = float(warm_params["T_s"]) - 50.0
+    warm_params["cathode_warming_energy_J"] = 1.0e-4
+    warm_sim = LAPDSim1D(warm_params, cathode_run_flags)
+    warm_result = warm_sim.run(t_end=3.0e-10, dt=1.0e-10)
+    warm_Ts = warm_result.cathode_diagnostics["T_s_surface"]
+    assert warm_Ts[0] == float(warm_params["cathode_Ts_start_K"])
+    assert np.all(np.diff(warm_Ts) > 0.0)
+    assert np.all(warm_Ts <= float(warm_params["T_s"]))
+    # A vanishing energy scale saturates the per-step rate clamp: the
+    # surface lands exactly on the set point and stays there.
+    snap_params = dict(warm_params)
+    snap_params["cathode_warming_energy_J"] = 1.0e-30
+    snap_sim = LAPDSim1D(snap_params, cathode_run_flags)
+    snap_result = snap_sim.run(t_end=3.0e-10, dt=1.0e-10)
+    snap_Ts = snap_result.cathode_diagnostics["T_s_surface"]
+    assert np.all(snap_Ts[1:] == float(snap_params["T_s"]))
+    for warm_bad in (
+        {"cathode_warming_model": "nonsense"},
+        {"cathode_warming_model": "ion_bombardment", "cathode_Ts_start_K": None},
+        {
+            "cathode_warming_model": "ion_bombardment",
+            "cathode_Ts_start_K": 1900.0,
+            "cathode_warming_energy_J": 0.0,
+        },
+        {"cathode_warming_model": "power_balance", "cathode_Ts_base_K": None},
+        {
+            "cathode_warming_model": "power_balance",
+            "cathode_Ts_base_K": 1900.0,
+            "cathode_heat_capacity_J_per_K": 0.0,
+        },
+        {
+            "cathode_warming_model": "power_balance",
+            "cathode_Ts_base_K": 1900.0,
+            "cathode_emissivity": 1.5,
+        },
+        {
+            "cathode_warming_model": "power_balance",
+            "cathode_Ts_base_K": 200.0,
+        },
+    ):
+        try:
+            LAPDSim1D(dict(cathode_run_params, **warm_bad), cathode_run_flags)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected ValueError for {warm_bad}")
+
+    # --- Power-balance warming (cathode_warming_model="power_balance",
+    # CATHODE_IDRIVEN_PLAN.md M1b): the surface energy budget replaces the
+    # imposed T_s asymptote. Heater pinned by standby equilibrium; emission
+    # cooling uses the actually emitted current.
+    from cablp.solvers._sim1d.physics.cathode import (
+        cathode_power_balance_terms_W,
+    )
+
+    pb_params = dict(cathode_run_params)
+    pb_params["cathode_warming_model"] = "power_balance"
+    pb_params["cathode_Ts_base_K"] = float(pb_params["T_s"]) - 110.0
+    pb_dict = pb_params
+    T_base = pb_dict["cathode_Ts_base_K"]
+    _pb_signs = ((0, 1), (1, 1), (2, -1), (3, -1), (4, -1))
+    # Standby: no discharge => exact equilibrium at T_base, by construction
+    # (conduction also vanishes there, so the heater pinning is unchanged).
+    ph, pi_, pr, pe, pc = cathode_power_balance_terms_W(
+        T_base, 0.0, 0.0, pb_dict
+    )
+    assert ph == pr and pi_ == 0.0 and pe == 0.0 and pc == 0.0
+    # Radiation restores: net power negative above standby, positive below.
+    assert sum(
+        cathode_power_balance_terms_W(T_base + 50.0, 0.0, 0.0, pb_dict)[i] * s
+        for i, s in _pb_signs
+    ) < 0.0
+    assert sum(
+        cathode_power_balance_terms_W(T_base - 50.0, 0.0, 0.0, pb_dict)[i] * s
+        for i, s in _pb_signs
+    ) > 0.0
+    # Magnitudes at the production point (the M1b design numbers): radiation
+    # ~60-70 kW at 2000 K over the disc, emission cooling ~10 kW at 3 kA.
+    _, _, pr2000, pe3ka, _ = cathode_power_balance_terms_W(
+        2000.0, 0.0, 3000.0, pb_dict
+    )
+    assert 3.0e4 < pr2000 < 1.2e5, pr2000
+    assert 9.0e3 < pe3ka < 1.15e4, pe3ka
+    # Substrate conduction is the strong restoring term (the pure-radiation
+    # balance measured unstable at the LAPD operating point): G_cond scales
+    # the excursion linearly and vanishes at standby.
+    pb_cond_dict = dict(pb_dict, cathode_conduction_W_per_K=2000.0)
+    assert cathode_power_balance_terms_W(
+        T_base + 100.0, 0.0, 0.0, pb_cond_dict
+    )[4] == 2000.0 * 100.0
+    assert cathode_power_balance_terms_W(
+        T_base, 0.0, 0.0, pb_cond_dict
+    )[4] == 0.0
+    # Emission cooling lowers the equilibrium: with the same drive power a
+    # cooling-on balance point sits below the cooling-off one.
+    drive_W = 5.0e4
+    def _pb_net(T, I_emis):
+        h, p, r, e, c = cathode_power_balance_terms_W(
+            T, drive_W, I_emis, pb_dict
+        )
+        return h + p - r - e - c
+    T_grid = np.linspace(T_base, T_base + 400.0, 4001)
+    eq_off = T_grid[np.argmin(np.abs([_pb_net(T, 0.0) for T in T_grid]))]
+    eq_on = T_grid[np.argmin(np.abs([_pb_net(T, 3000.0) for T in T_grid]))]
+    assert eq_on < eq_off
+    assert eq_off - T_base > 100.0  # ~50 kW drives an O(100 K) rise
+    # Mini-run: the saved trajectory must reproduce the semi-implicit update
+    # exactly from the saved solve diagnostics — including the emission
+    # cooling sign (this near-standby state is net *cooling*: ~1 A of
+    # emitted current outweighs ~3 W of bombardment).
+    pb_sim = LAPDSim1D(pb_params, cathode_run_flags)
+    pb_result = pb_sim.run(t_end=3.0e-10, dt=1.0e-10)
+    pb_diag = pb_result.cathode_diagnostics
+    pb_Ts = pb_diag["T_s_surface"]
+    assert pb_Ts[0] == T_base
+    assert np.all(np.isfinite(pb_Ts))
+    assert np.any(pb_Ts != T_base)  # the accepted-step update actually runs
+    assert np.allclose(pb_Ts, T_base, atol=1e-6)  # near standby, barely moves
+    _pb_sb, _pb_kb = 5.670374419e-12, 8.617333262e-5
+    _pb_area = np.pi * float(pb_params["R_cath"]) ** 2
+    _pb_eps = float(pb_params["cathode_emissivity"])
+    _pb_C = float(pb_params["cathode_heat_capacity_J_per_K"])
+    pb_T_prev = float(pb_Ts[0])
+    for pb_k in range(1, pb_Ts.size):
+        pb_I = (
+            0.0
+            if pb_diag["floating"][pb_k]
+            else max(float(pb_diag["source_I_eth_star"][pb_k]), 0.0)
+        )
+        pb_h, pb_p, pb_r, pb_e, pb_c = cathode_power_balance_terms_W(
+            pb_T_prev, pb_diag["source_P_cathode_i"][pb_k], pb_I, pb_dict
+        )
+        pb_G = (
+            4.0 * _pb_eps * _pb_sb * _pb_area * pb_T_prev**3
+            + pb_I * 2.0 * _pb_kb
+            + float(pb_params.get("cathode_conduction_W_per_K", 0.0))
+        )
+        pb_T_prev = max(
+            pb_T_prev
+            + 1.0e-10
+            * (pb_h + pb_p - pb_r - pb_e - pb_c)
+            / (_pb_C + 1.0e-10 * pb_G),
+            float(pb_params["cathode_env_T_K"]),
+        )
+        assert np.isclose(pb_Ts[pb_k], pb_T_prev, rtol=0.0, atol=1e-9), (
+            pb_k, pb_Ts[pb_k], pb_T_prev,
+        )
+    # Vanishing heat capacity: the semi-implicit update jumps to the
+    # linearized equilibrium instead of overshooting and ringing.
+    snap_pb_params = dict(pb_params)
+    snap_pb_params["cathode_heat_capacity_J_per_K"] = 1.0e-30
+    snap_pb_sim = LAPDSim1D(snap_pb_params, cathode_run_flags)
+    snap_pb_result = snap_pb_sim.run(t_end=3.0e-10, dt=1.0e-10)
+    snap_pb_Ts = snap_pb_result.cathode_diagnostics["T_s_surface"]
+    assert np.all(np.isfinite(snap_pb_Ts))
+    assert np.all(np.diff(snap_pb_Ts[1:]) >= -1.0)  # settles, no ringing
+    assert snap_pb_Ts[-1] < 4000.0  # bounded by the linearized-loss backstop
     assert np.all(cathode_diag["beam_cross"][:, 0] > 0.0)
     assert np.allclose(cathode_diag["beam_cross"][:, 1:], 0.0)
     assert np.all(cathode_diag["n_beam"][:, 0] > 0.0)
@@ -3990,6 +4664,802 @@ def main():
         else:
             raise AssertionError(f"expected ValueError for {bad_kwargs}")
 
+    # --- Neutral-momentum state foundations (NEUTRAL_MOMENTUM_PLAN.md M1):
+    # the optional M_n field must round-trip both packed layouts, pad-on-
+    # demand for term summation, refuse to silently drop, and pass floors
+    # through untouched.
+    mn_s5 = conservative_from_primitives(
+        np.full(4, 1e12), np.full(4, 1e13), np.zeros(4),
+        np.full(4, 5.0), np.ones(4), knob_mass,
+    )
+    assert mn_s5.M_n is None and pack_state(mn_s5).size == 20
+    mn_s6 = conservative_from_primitives(
+        np.full(4, 1e12), np.full(4, 1e13), np.zeros(4),
+        np.full(4, 5.0), np.ones(4), knob_mass, un=np.full(4, 1.0e4),
+    )
+    assert mn_s6.M_n is not None and pack_state(mn_s6).size == 24
+    assert unpack_state(pack_state(mn_s5), 4).M_n is None
+    mn_rt = unpack_state(pack_state(mn_s6), 4)
+    assert mn_rt.M_n is not None and np.all(mn_rt.M_n == mn_s6.M_n)
+    padded = pack_state(mn_s5, neutral_momentum=True)
+    assert padded.size == 24 and np.all(padded[20:] == 0.0)
+    try:
+        pack_state(mn_s6, neutral_momentum=False)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError dropping a present M_n")
+    mn_fl = apply_state_floors(mn_s6, knob_floors, knob_mass)
+    assert mn_fl.M_n is not None and np.all(mn_fl.M_n == mn_s6.M_n)
+    mn_sum = add_state_rhs(mn_s5, mn_s6)
+    assert mn_sum.M_n is not None and np.all(mn_sum.M_n == mn_s6.M_n)
+    assert add_state_rhs(mn_s5, mn_s5).M_n is None
+
+    # --- Neutral-momentum sources (NEUTRAL_MOMENTUM_PLAN.md M2): with M_n on
+    # the state, the drag and the reactions become species-conserving momentum
+    # exchanges, the wall and pump are the only named sinks, and the local
+    # steady state of drag-vs-wall reproduces the slip closure (with its
+    # entrainment scaled by Vp/Vm, since M_n is the chamber-mean wind).
+    mn_geom = SimpleNamespace(
+        plasma_volume_cm3=np.array([450.0, 900.0, 1800.0]) * 1.0e3,
+        neutral_volume_cm3=np.full(3, 5.0e6),
+    )
+    mn_geom.volume_ratio = (
+        mn_geom.plasma_volume_cm3 / mn_geom.neutral_volume_cm3
+    )
+    knob_u = np.array([2e5, -1e5, 5e4])
+    mn_state = conservative_from_primitives(
+        n=knob_n,
+        nn=np.full(3, 1e13),
+        u=knob_u,
+        Te=np.array([6.0, 5.0, 3.0]),
+        Ti=np.array([1.0, 1.0, 2.0]),
+        ion_mass_g=knob_mass,
+        un=0.3 * knob_u,
+    )
+    assert np.allclose(
+        neutral_wind_velocity(mn_state, knob_floors, knob_mass),
+        0.3 * knob_u,
+        rtol=1e-14,
+    )
+    assert np.all(
+        neutral_wind_velocity(knob_state, knob_floors, knob_mass) == 0.0
+    )
+
+    mn_drag_kwargs = dict(drag_kwargs, state=mn_state, geometry=mn_geom)
+    mn_drag = ion_neutral_drag_rhs(**mn_drag_kwargs)
+    # The exchange closes: what the plasma channel loses, the neutral channel
+    # gains, through the (Vp/Vm) volume conversion (to rounding: the float
+    # round-trip (Vp/Vm)*Vm is one ulp off Vp).
+    assert np.allclose(
+        mn_drag.M * mn_geom.plasma_volume_cm3,
+        -mn_drag.M_n * mn_geom.neutral_volume_cm3,
+        rtol=1e-12,
+    )
+    # The ion-side force is the constant-model drag on the relative velocity:
+    # u_n = 0.3*u everywhere makes it exactly 0.7x the u-based drag.
+    assert np.allclose(mn_drag.M, 0.7 * drag_const.M, rtol=1e-12)
+    # A zero wind reproduces the constant model bit-exactly on the ion side.
+    mn_state_rest = conservative_from_primitives(
+        n=knob_n,
+        nn=np.full(3, 1e13),
+        u=knob_u,
+        Te=np.array([6.0, 5.0, 3.0]),
+        Ti=np.array([1.0, 1.0, 2.0]),
+        ion_mass_g=knob_mass,
+        un=np.zeros(3),
+    )
+    assert np.all(
+        ion_neutral_drag_rhs(
+            **dict(drag_kwargs, state=mn_state_rest, geometry=mn_geom)
+        ).M
+        == drag_const.M
+    )
+    # slip closure and evolved wind are mutually exclusive; geometry is
+    # required for the volume conversion.
+    for mn_bad in (
+        {"drag_model": "slip", "Rm_cm": knob_Rm, "geometry": mn_geom},
+        {"geometry": None},
+    ):
+        try:
+            ion_neutral_drag_rhs(**dict(drag_kwargs, state=mn_state), **mn_bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected ValueError for {mn_bad}")
+    # Frictional heating dissipates the relative velocity quadratically:
+    # 0.7^2 = 0.49x the u-based heating, and bit-exact at zero wind.
+    assert np.allclose(
+        ion_neutral_frictional_heating_rhs(
+            **dict(drag_kwargs, state=mn_state)
+        ).Ei,
+        0.49 * heat_const.Ei,
+        rtol=1e-12,
+    )
+    assert np.all(
+        ion_neutral_frictional_heating_rhs(
+            **dict(drag_kwargs, state=mn_state_rest)
+        ).Ei
+        == heat_const.Ei
+    )
+
+    # Wall sink: -M_n / tau_wall on the momentum field only; inert without M_n.
+    mn_wall = neutral_momentum_wall_rhs(
+        state=mn_state,
+        floors=knob_floors,
+        ion_mass_g=knob_mass,
+        Rm_cm=knob_Rm,
+    )
+    mn_vbar = np.sqrt(8.0 * 0.1 * ev_to_erg / (np.pi * knob_mass))
+    assert np.allclose(
+        mn_wall.M_n, -mn_state.M_n * mn_vbar / knob_Rm, rtol=1e-14
+    )
+    for mn_field in STATE_NAMES_1D:
+        assert np.all(getattr(mn_wall, mn_field) == 0.0)
+    assert (
+        neutral_momentum_wall_rhs(
+            state=knob_state,
+            floors=knob_floors,
+            ion_mass_g=knob_mass,
+            Rm_cm=knob_Rm,
+        ).M_n
+        is None
+    )
+
+    # Reactions: ionization births ions drifting at u_n (taking that momentum
+    # out of the wind), recombination hands the ion's momentum to the wind;
+    # each term closes M*Vp + M_n*Vm exactly.
+    mn_reactions = reaction_rhs_terms(
+        state=mn_state,
+        floors=knob_floors,
+        ion_mass_g=knob_mass,
+        geometry=mn_geom,
+        gas_type="He",
+        I_ion=I_ion,
+    )
+    for mn_name in (
+        "ionization_birth",
+        "recombination_rad_loss",
+        "recombination_3b_loss",
+    ):
+        mn_term = mn_reactions[mn_name]
+        assert mn_term.M_n is not None
+        assert np.allclose(
+            mn_term.M * mn_geom.plasma_volume_cm3,
+            -mn_term.M_n * mn_geom.neutral_volume_cm3,
+            rtol=1e-12,
+        )
+    assert np.allclose(
+        mn_reactions["ionization_birth"].M,
+        knob_mass * 0.3 * knob_u * mn_reactions["ionization_birth"].n,
+        rtol=1e-12,
+    )
+    mn_rec = mn_reactions["recombination_rad_loss"]
+    mn_u = derive_state(mn_state, knob_floors, knob_mass).u
+    assert np.allclose(
+        mn_rec.M, knob_mass * mn_u * mn_rec.n, rtol=1e-12
+    )
+    # Without M_n the reaction terms stay 5-field with zero-drift birth.
+    assert reaction_rhs_terms(
+        state=knob_state,
+        floors=knob_floors,
+        ion_mass_g=knob_mass,
+        geometry=mn_geom,
+        gas_type="He",
+        I_ion=I_ion,
+    )["ionization_birth"].M_n is None
+
+    # Local steady state of drag reception vs. the wall sink IS the slip
+    # closure, with the entrainment scaled by the chamber-mean factor Vp/Vm.
+    mn_relax = np.zeros(3)
+    mn_dt = 1.0e-5
+    for _ in range(3000):
+        mn_st = ConservativeState1D(
+            n=mn_state.n,
+            nn=mn_state.nn,
+            M=mn_state.M,
+            Ee=mn_state.Ee,
+            Ei=mn_state.Ei,
+            M_n=mn_relax,
+        )
+        mn_relax = mn_relax + mn_dt * (
+            ion_neutral_drag_rhs(
+                **dict(drag_kwargs, state=mn_st, geometry=mn_geom)
+            ).M_n
+            + neutral_momentum_wall_rhs(
+                state=mn_st,
+                floors=knob_floors,
+                ion_mass_g=knob_mass,
+                Rm_cm=knob_Rm,
+            ).M_n
+        )
+    mn_un_ss = mn_relax / (knob_mass * mn_state.nn)
+    mn_Ti = derive_state(mn_state, knob_floors, knob_mass).Ti
+    mn_nu_ni = ion_neutral_collision_frequency(
+        nn=mn_state.n,
+        Ti=mn_Ti,
+        ion_mass_g=knob_mass,
+        gas_type="He",
+    )
+    mn_E = mn_geom.volume_ratio * mn_nu_ni * knob_Rm / mn_vbar
+    assert np.allclose(mn_un_ss / mn_u, mn_E / (1.0 + mn_E), rtol=1e-5)
+    for mn_i in range(3):
+        mn_slip = ion_neutral_slip_factor(
+            n=mn_state.n[mn_i],
+            Ti=mn_Ti[mn_i],
+            ion_mass_g=knob_mass,
+            Rm_cm=knob_Rm[mn_i],
+            b_slip_entrainment=mn_geom.volume_ratio[mn_i],
+        )
+        assert np.isclose(
+            1.0 - mn_un_ss[mn_i] / mn_u[mn_i], mn_slip, rtol=1e-5
+        )
+
+    # Pump sink: the wind leaves with the gas at the pump cells, so the
+    # pumped momentum fraction matches the pumped particle fraction there.
+    from cablp.solvers._sim1d.core.geometry import build_geometry
+
+    mn_pump_geom = build_geometry(*default_config())
+    mn_pump_cells = mn_pump_geom.cells
+    mn_pump_state = conservative_from_primitives(
+        n=np.full(mn_pump_cells, 1e12),
+        nn=np.full(mn_pump_cells, 1e13),
+        u=np.zeros(mn_pump_cells),
+        Te=np.full(mn_pump_cells, 5.0),
+        Ti=np.full(mn_pump_cells, 1.0),
+        ion_mass_g=knob_mass,
+        un=np.full(mn_pump_cells, 2.0e4),
+    )
+    mn_pump = neutral_source_sink_rhs(
+        state=mn_pump_state,
+        geometry=mn_pump_geom,
+        S_gp=0.0,
+        Twin_S_gp=0.0,
+        S_pump_L=500.0,
+        S_pump_R=500.0,
+        gas_puff_enabled=False,
+        pump_enabled=True,
+    )
+    mn_pump_mask = mn_pump.nn != 0.0
+    assert np.any(mn_pump_mask)
+    assert np.all(mn_pump.M_n[~mn_pump_mask] == 0.0)
+    assert np.allclose(
+        mn_pump.M_n[mn_pump_mask],
+        mn_pump.nn[mn_pump_mask]
+        * mn_pump_state.M_n[mn_pump_mask]
+        / mn_pump_state.nn[mn_pump_mask],
+        rtol=1e-12,
+    )
+    # Puff-only sources add cold gas: no momentum contribution at all.
+    assert np.all(
+        neutral_source_sink_rhs(
+            state=mn_pump_state,
+            geometry=mn_pump_geom,
+            S_gp=100.0,
+            Twin_S_gp=0.0,
+            S_pump_L=500.0,
+            S_pump_R=500.0,
+            gas_puff_enabled=True,
+            pump_enabled=False,
+        ).M_n
+        == 0.0
+    )
+
+    # Solver plumbing: the flag builds and carries the 6-field state, the
+    # wall term appears in the rhs, a run saves/loads the optional M_n and
+    # u_n trajectories, and the slip closure is rejected loudly.
+    mn_flags = dict(flags)
+    mn_flags["neutral_momentum"] = True
+    try:
+        LAPDSim1D(
+            dict(params, ion_neutral_drag_model="slip"), mn_flags
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected neutral_momentum x slip to fail")
+    mn_run_params = dict(run_params)
+    mn_sim = LAPDSim1D(mn_run_params, mn_flags)
+    assert mn_sim.state.M_n is not None
+    mn_cells = mn_sim.geometry.cells
+    assert mn_sim.get_initial_snapshot().y.size == 6 * mn_cells
+    mn_rhs_terms = mn_sim.rhs_terms()
+    assert set(mn_rhs_terms) == expected_rhs_terms
+    assert mn_sim.rhs().size == 6 * mn_cells
+    mn_result = mn_sim.run(t_end=3.0e-10, dt=1.0e-10)
+    assert mn_result.M_n.shape == (4, mn_cells)
+    assert mn_result.u_n.shape == (4, mn_cells)
+    assert np.all(np.isfinite(mn_result.M_n))
+    with tempfile.TemporaryDirectory() as mn_dir:
+        mn_path = Path(mn_dir) / "mn_smoke.h5"
+        mn_sim.save_result(mn_path, mn_result)
+        mn_loaded = load_result_hdf5(mn_path)
+        assert np.allclose(mn_loaded.M_n, mn_result.M_n)
+        assert np.allclose(mn_loaded.u_n, mn_result.u_n)
+
+    # Plasma-phase end-to-end: with a flowing plasma the drag pumps the wind
+    # up from zero through the full step machinery (explicit substep,
+    # implicit heat with the 6-field state, floors, step acceptance).
+    mn_plasma_flags = dict(mn_flags)
+    mn_plasma_flags["neutral_prebreakdown"] = False
+    mn_plasma_flags["neutral_equilibration"] = False
+    mn_plasma_params = dict(params)
+    mn_plasma_params["u0"] = 5.0e4
+    mn_plasma_sim = LAPDSim1D(mn_plasma_params, mn_plasma_flags)
+    mn_plasma_terms = mn_plasma_sim.rhs_terms()
+    assert mn_plasma_terms["ion_neutral_drag"].M_n is not None
+    assert np.any(mn_plasma_terms["ion_neutral_drag"].M_n != 0.0)
+    assert mn_plasma_sim.rhs().size == 6 * mn_plasma_sim.geometry.cells
+    for _ in range(5):
+        mn_plasma_sim.advance_one_step(dt=1.0e-9)
+    mn_plasma_state = mn_plasma_sim.state
+    assert mn_plasma_state.M_n is not None
+    assert np.all(np.isfinite(mn_plasma_state.M_n))
+    assert np.any(mn_plasma_state.M_n != 0.0)
+    # The wind chases the plasma flow: same sign where it has spun up.
+    mn_drive = mn_plasma_state.M_n * derive_state(
+        mn_plasma_state, mn_plasma_sim.floors, mn_plasma_sim.ion_mass_g
+    ).u
+    assert np.all(mn_drive[mn_plasma_state.M_n != 0.0] > 0.0)
+
+    # --- Two-zone radial closure (neutral_momentum_radial = "two_zone"): the
+    # drag samples the in-column wind, and only the slow annulus gas -- held
+    # back by diffuse wall reflection -- reaches the wall. The factors reduce
+    # to closed form: r = Rp/(Rp+Rm), c = 1/(f + (1-f) r) with f = (Rp/Rm)^2,
+    # W = vbar/(2 Rm) * r * c; a cell without an annulus (Rp >= Rm) falls
+    # back to the uniform closure.
+    tz_geom = SimpleNamespace(
+        Rp_cm=np.array([15.0, 18.0, 50.0]),
+        Rm_cm=np.full(3, 50.0),
+    )
+    tz_c, tz_W = neutral_wind_two_zone_factors(tz_geom, 0.1, knob_mass)
+    tz_f = (tz_geom.Rp_cm / tz_geom.Rm_cm) ** 2
+    tz_r = tz_geom.Rp_cm / (tz_geom.Rp_cm + tz_geom.Rm_cm)
+    tz_c_hand = 1.0 / (tz_f + (1.0 - tz_f) * tz_r)
+    tz_W_hand = mn_vbar / (2.0 * tz_geom.Rm_cm) * tz_r * tz_c_hand
+    assert np.allclose(tz_c[:2], tz_c_hand[:2], rtol=1e-13)
+    assert np.allclose(tz_W[:2], tz_W_hand[:2], rtol=1e-13)
+    assert tz_c[2] == 1.0
+    assert np.isclose(tz_W[2], mn_vbar / 50.0, rtol=1e-13)
+    # The column factor concentrates the wind (c > 1) yet the effective wall
+    # rate is *weaker* than uniform: the wall only sees the slow annulus.
+    assert np.all(tz_c[:2] > 1.0)
+    assert np.all(tz_W[:2] < mn_vbar / tz_geom.Rm_cm[:2])
+
+    # Drag with the column factor: the exchange still closes exactly, and the
+    # ion side sees u - c*u_n (u_n = 0.3*u here, so 1 - 0.3*c per cell --
+    # including a sign flip where the column wind overtakes the ions).
+    tz_factor = np.array([2.0, 3.0, 4.0])
+    tz_drag = ion_neutral_drag_rhs(
+        **dict(mn_drag_kwargs, wind_column_factor=tz_factor)
+    )
+    assert np.allclose(
+        tz_drag.M * mn_geom.plasma_volume_cm3,
+        -tz_drag.M_n * mn_geom.neutral_volume_cm3,
+        rtol=1e-12,
+    )
+    assert np.allclose(
+        tz_drag.M, (1.0 - 0.3 * tz_factor) * drag_const.M, rtol=1e-12
+    )
+    # Frictional heating carries the factor quadratically.
+    assert np.allclose(
+        ion_neutral_frictional_heating_rhs(
+            **dict(drag_kwargs, state=mn_state, wind_column_factor=tz_factor)
+        ).Ei,
+        (1.0 - 0.3 * tz_factor) ** 2 * heat_const.Ei,
+        rtol=1e-12,
+    )
+    # Wall sink with an explicit two-zone rate.
+    assert np.allclose(
+        neutral_momentum_wall_rhs(
+            state=mn_state,
+            floors=knob_floors,
+            ion_mass_g=knob_mass,
+            Rm_cm=knob_Rm,
+            wall_rate_1_s=tz_W,
+        ).M_n,
+        -mn_state.M_n * tz_W,
+        rtol=1e-13,
+    )
+    # Ionization birth samples the column wind: the ion-side momentum scales
+    # by the factor and the exchange still closes exactly.
+    tz_birth = reaction_rhs_terms(
+        state=mn_state,
+        floors=knob_floors,
+        ion_mass_g=knob_mass,
+        geometry=mn_geom,
+        gas_type="He",
+        I_ion=I_ion,
+        wind_column_factor=tz_factor,
+    )["ionization_birth"]
+    assert np.allclose(
+        tz_birth.M,
+        tz_factor * mn_reactions["ionization_birth"].M,
+        rtol=1e-12,
+    )
+    assert np.allclose(
+        tz_birth.M * mn_geom.plasma_volume_cm3,
+        -tz_birth.M_n * mn_geom.neutral_volume_cm3,
+        rtol=1e-12,
+    )
+
+    # Relaxed local steady state of drag-vs-wall under the two-zone factors
+    # matches the analytic balance u_mean = A*u / (W + c*A) with
+    # A = (Vp/Vm)*nu_ni (drag reception now pushes against c*u_mean).
+    tz_c3 = np.array([3.0, 2.5, 2.0])
+    tz_W3 = np.array([2.0e3, 1.5e3, 1.0e3])
+    tz_relax = np.zeros(3)
+    tz_dt = 2.5e-6
+    for _ in range(12000):
+        tz_st = ConservativeState1D(
+            n=mn_state.n,
+            nn=mn_state.nn,
+            M=mn_state.M,
+            Ee=mn_state.Ee,
+            Ei=mn_state.Ei,
+            M_n=tz_relax,
+        )
+        tz_relax = tz_relax + tz_dt * (
+            ion_neutral_drag_rhs(
+                **dict(
+                    drag_kwargs,
+                    state=tz_st,
+                    geometry=mn_geom,
+                    wind_column_factor=tz_c3,
+                )
+            ).M_n
+            + neutral_momentum_wall_rhs(
+                state=tz_st,
+                floors=knob_floors,
+                ion_mass_g=knob_mass,
+                Rm_cm=knob_Rm,
+                wall_rate_1_s=tz_W3,
+            ).M_n
+        )
+    tz_un_ss = tz_relax / (knob_mass * mn_state.nn)
+    tz_A = mn_geom.volume_ratio * mn_nu_ni
+    assert np.allclose(
+        tz_un_ss, tz_A * mn_u / (tz_W3 + tz_c3 * tz_A), rtol=1e-5
+    )
+
+    # Solver wiring: the config key is validated, requires the flag, and the
+    # two-zone wall rate shows up in the named rhs term.
+    for tz_bad_params, tz_bad_flags in (
+        (dict(run_params, neutral_momentum_radial="two_zone"), flags),
+        (dict(run_params, neutral_momentum_radial="bogus"), mn_flags),
+    ):
+        try:
+            LAPDSim1D(tz_bad_params, tz_bad_flags)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                f"expected ValueError for {tz_bad_params['neutral_momentum_radial']}"
+            )
+    tz_plasma_params = dict(mn_plasma_params, neutral_momentum_radial="two_zone")
+    tz_sim = LAPDSim1D(tz_plasma_params, mn_plasma_flags)
+    for _ in range(5):
+        tz_sim.advance_one_step(dt=1.0e-9)
+    tz_sim_state = tz_sim.state
+    assert np.all(np.isfinite(tz_sim_state.M_n))
+    assert np.any(tz_sim_state.M_n != 0.0)
+    tz_geo_c, tz_geo_W = neutral_wind_two_zone_factors(
+        tz_sim.geometry,
+        float(tz_plasma_params.get("Tn_fit", 0.1)),
+        tz_sim.ion_mass_g,
+    )
+    assert np.allclose(
+        tz_sim.rhs_terms()["neutral_momentum_wall"].M_n,
+        -tz_sim_state.M_n * tz_geo_W,
+        rtol=1e-12,
+    )
+    # Against the uniform closure from the same start the trajectories must
+    # differ (both the drag input and the wall sink change). No per-cell
+    # direction is asserted: the weaker two-zone wall sink can retain *more*
+    # momentum in cells where the sink dominates the (also weaker) input --
+    # only the local steady state (checked analytically above) is ordered.
+    tz_uniform_sim = LAPDSim1D(dict(mn_plasma_params), mn_plasma_flags)
+    for _ in range(5):
+        tz_uniform_sim.advance_one_step(dt=1.0e-9)
+    tz_nonzero = tz_sim_state.M_n != 0.0
+    assert np.any(tz_nonzero)
+    assert np.any(tz_sim_state.M_n != tz_uniform_sim.state.M_n)
+
+    # --- Neutral-wind advection (NEUTRAL_MOMENTUM_PLAN.md M3): donor-cell
+    # upwind of nn and M_n by u_n on the neutral faces, closed ends for
+    # particles, end-wall momentum accommodation, and a CFL guard.
+    mw_cells = 5
+    mw_geom = SimpleNamespace(
+        cells=mw_cells,
+        length_cm=np.full(mw_cells, 30.0),
+        neutral_volume_cm3=np.full(mw_cells, 2.0e5),
+        neutral_face_area_cm2=np.full(mw_cells + 1, 7.0e3),
+    )
+    mw_un = 2.0e4
+    mw_nn = np.array([1e13, 3e13, 2e13, 5e13, 4e13])
+    mw_state = conservative_from_primitives(
+        n=np.full(mw_cells, 1e12),
+        nn=mw_nn,
+        u=np.zeros(mw_cells),
+        Te=np.full(mw_cells, 5.0),
+        Ti=np.full(mw_cells, 1.0),
+        ion_mass_g=knob_mass,
+        un=np.full(mw_cells, mw_un),
+    )
+    # Without M_n the operator is inert and 5-field.
+    mw_off = neutral_wind_advection_rhs(
+        state=conservative_from_primitives(
+            n=np.full(mw_cells, 1e12),
+            nn=mw_nn,
+            u=np.zeros(mw_cells),
+            Te=np.full(mw_cells, 5.0),
+            Ti=np.full(mw_cells, 1.0),
+            ion_mass_g=knob_mass,
+        ),
+        floors=knob_floors,
+        ion_mass_g=knob_mass,
+        geometry=mw_geom,
+    )
+    assert mw_off.M_n is None and np.all(mw_off.nn == 0.0)
+
+    mw_adv = neutral_wind_advection_rhs(
+        state=mw_state,
+        floors=knob_floors,
+        ion_mass_g=knob_mass,
+        geometry=mw_geom,
+    )
+    # Hand-built donor-cell stencil for a uniform positive wind: each
+    # internal face carries u * nn_donor * A with the left cell as donor;
+    # the end faces pass no particles.
+    mw_flux = mw_un * mw_nn[:-1] * mw_geom.neutral_face_area_cm2[1:-1]
+    mw_expected = np.zeros(mw_cells)
+    mw_expected[:-1] -= mw_flux / mw_geom.neutral_volume_cm3[:-1]
+    mw_expected[1:] += mw_flux / mw_geom.neutral_volume_cm3[1:]
+    assert np.allclose(mw_adv.nn, mw_expected, rtol=1e-14)
+    # Particle inventory closes (to summation rounding): the ends are
+    # walls, not sinks.
+    mw_nn_scale = np.max(np.abs(mw_adv.nn * mw_geom.neutral_volume_cm3))
+    assert (
+        abs(np.sum(mw_adv.nn * mw_geom.neutral_volume_cm3))
+        < 1e-12 * mw_nn_scale
+    )
+    # Momentum inventory loses exactly the outward end-wall accommodation.
+    mw_Mn_end = mw_state.M_n[-1]
+    mw_end_sink = mw_un * mw_geom.neutral_face_area_cm2[-1] * mw_Mn_end
+    assert np.isclose(
+        np.sum(mw_adv.M_n * mw_geom.neutral_volume_cm3),
+        -mw_end_sink,
+        rtol=1e-12,
+    )
+    # A uniform field under a uniform wind does not change in the interior
+    # (pure translation); only the end cells feel the walls.
+    mw_uniform = conservative_from_primitives(
+        n=np.full(mw_cells, 1e12),
+        nn=np.full(mw_cells, 2e13),
+        u=np.zeros(mw_cells),
+        Te=np.full(mw_cells, 5.0),
+        Ti=np.full(mw_cells, 1.0),
+        ion_mass_g=knob_mass,
+        un=np.full(mw_cells, mw_un),
+    )
+    mw_uadv = neutral_wind_advection_rhs(
+        state=mw_uniform,
+        floors=knob_floors,
+        ion_mass_g=knob_mass,
+        geometry=mw_geom,
+    )
+    assert np.all(mw_uadv.nn[1:-1] == 0.0)
+    assert mw_uadv.nn[0] < 0.0 and mw_uadv.nn[-1] > 0.0
+    # An inward wind at both ends leaves no accommodation sink: the pure
+    # flux stencil accounts for the whole momentum change.
+    mw_in_un = np.array([1.0, 1.0, 0.0, -1.0, -1.0]) * mw_un
+    mw_inward = conservative_from_primitives(
+        n=np.full(mw_cells, 1e12),
+        nn=np.full(mw_cells, 2e13),
+        u=np.zeros(mw_cells),
+        Te=np.full(mw_cells, 5.0),
+        Ti=np.full(mw_cells, 1.0),
+        ion_mass_g=knob_mass,
+        un=mw_in_un,
+    )
+    mw_iadv = neutral_wind_advection_rhs(
+        state=mw_inward,
+        floors=knob_floors,
+        ion_mass_g=knob_mass,
+        geometry=mw_geom,
+    )
+    mw_Mn_scale = np.max(np.abs(mw_iadv.M_n * mw_geom.neutral_volume_cm3))
+    assert (
+        abs(np.sum(mw_iadv.M_n * mw_geom.neutral_volume_cm3))
+        < 1e-12 * mw_Mn_scale
+    )
+
+    # CFL guard: inf without a wind or at rest, cfl*min(dz/|u_n|) otherwise,
+    # and wired into the solver's suggestion once the wind has spun up.
+    assert neutral_wind_timestep(
+        state=knob_state,
+        floors=knob_floors,
+        ion_mass_g=knob_mass,
+        geometry=mw_geom,
+    ) == np.inf
+    assert np.isclose(
+        neutral_wind_timestep(
+            state=mw_state,
+            floors=knob_floors,
+            ion_mass_g=knob_mass,
+            geometry=mw_geom,
+            cfl=0.4,
+        ),
+        0.4 * 30.0 / mw_un,
+        rtol=1e-14,
+    )
+    mw_diag = mn_plasma_sim.suggest_timestep()
+    assert np.isfinite(mw_diag.dt_neutral_wind)
+    assert mw_diag.dt_neutral_wind > 0.0
+
+    # --- Gas-puff axial profile (gas_puff_profile): one shared implementation
+    # behind both puff sites; "cell" is bit-exact legacy, "gaussian" conserves
+    # the same total inflow over the main chamber.
+    from cablp.solvers._sim1d.core.geometry import build_geometry
+
+    puff_params, puff_flags = default_config()
+    puff_flags["resolved_boundaries"] = True
+    puff_geom = build_geometry(puff_params, puff_flags)
+    from cablp.solvers._sim1d.core.geometry import puff_cell_indices as _pci
+
+    puff_idx, _ = _pci(puff_geom)
+    cell_rate = gas_puff_rate_profile(puff_geom, 3000.0, 2)
+    assert cell_rate[puff_idx] == puff_rate(
+        3000.0, 2.0, puff_geom.neutral_volume_cm3[puff_idx]
+    )
+    assert np.count_nonzero(cell_rate) == 1
+    total_in = 4.477962e17 * 3000.0 * 2.0
+    for z0, sigma in ((None, 30.0), (600.0, 200.0), (1900.0, 100.0)):
+        gauss_rate = gas_puff_rate_profile(
+            puff_geom, 3000.0, 2, profile="gaussian", z_cm=z0, sigma_cm=sigma
+        )
+        assert np.all(gauss_rate >= 0.0)
+        # exact inflow conservation
+        assert np.isclose(
+            np.sum(gauss_rate * puff_geom.neutral_volume_cm3),
+            total_in,
+            rtol=1e-12,
+        )
+        # nothing lands behind the cathode or in the gap/collector
+        roles = np.asarray(puff_geom.cell_role)
+        forbidden = np.isin(
+            roles, ("plenum", "obstruction", "cathode", "gap", "collector")
+        )
+        assert np.all(gauss_rate[forbidden] == 0.0)
+    # narrow profile centred on the puff cell concentrates there
+    narrow = gas_puff_rate_profile(
+        puff_geom, 3000.0, 2, profile="gaussian", z_cm=None, sigma_cm=1.0
+    )
+    assert narrow[puff_idx] == narrow.max()
+    # cosine_pipe: the physical Lambertian-outlet lobe. Conserves inflow,
+    # peaks at its centre, and carries the heavier-than-Gaussian tails the
+    # [1 + ((z-z0)/d)^2]^-2 pattern implies.
+    pipe = gas_puff_rate_profile(
+        puff_geom, 3000.0, 2, profile="cosine_pipe", z_cm=60.0, throw_cm=100.0
+    )
+    assert np.isclose(
+        np.sum(pipe * puff_geom.neutral_volume_cm3), total_in, rtol=1e-12
+    )
+    z_centers = np.asarray(puff_geom.z_cm, dtype=float)
+    interior = pipe > 0.0
+    assert np.isclose(
+        z_centers[np.argmax(pipe)], 60.0, atol=puff_geom.length_cm.max()
+    )
+    # lobe shape check at one probe cell: weight ratio matches the formula
+    probe = np.flatnonzero(interior)[np.argmin(np.abs(z_centers[interior] - 260.0))]
+    peak_cell = int(np.argmax(pipe))
+    expected = (
+        (1.0 + ((z_centers[probe] - 60.0) / 100.0) ** 2) ** -2
+        / (1.0 + ((z_centers[peak_cell] - 60.0) / 100.0) ** 2) ** -2
+    )
+    measured = (pipe[probe] * puff_geom.neutral_volume_cm3[probe] / puff_geom.length_cm[probe]) / (
+        pipe[peak_cell] * puff_geom.neutral_volume_cm3[peak_cell] / puff_geom.length_cm[peak_cell]
+    )
+    assert np.isclose(measured, expected, rtol=1e-12)
+    try:
+        gas_puff_rate_profile(puff_geom, 3000.0, 2, profile="nonsense")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for unknown gas_puff_profile")
+
+    # --- Double-erf puff waveform (gas_puff_mode="double_erf"): valve-like
+    # erf rise 0 -> S_gp, plateau, erf drop S_gp -> S_gp_decay_target, on
+    # the scheduled main-discharge clock (rise before breakdown). Both puff
+    # sites share the value via _effective_gas_puff_sccm.
+    derf_params, derf_flags = default_config()
+    derf_flags["neutral_prebreakdown"] = False
+    derf_flags["neutral_equilibration"] = False
+    derf_params.update(
+        {
+            # scheduled phases so the afterglow assert sees the valve close
+            # (the waveform's clock is the scheduled main-discharge start
+            # either way)
+            "phase_transition_mode": "scheduled",
+            "gas_puff_mode": "double_erf",
+            "S_gp": 4000.0,
+            "S_gp_decay_target": 1500.0,
+            "Twin_S_gp": 1000.0,
+            "Twin_S_gp_decay_target": 250.0,
+            "tau_prebreakdown": 2.0e-3,
+            "tau_breakdown": 1.0e-3,
+            "tau_discharge": 20.0e-3,
+            "tau_gp_rise_center": -2.0e-3,
+            "tau_gp_rise_width": 0.3e-3,
+            "tau_gp_drop_center": 2.0e-3,
+            "tau_gp_drop_width": 0.5e-3,
+        }
+    )
+    derf_sim = LAPDSim1D(derf_params, derf_flags)
+    # well before the rise: essentially closed
+    assert derf_sim._effective_gas_puff_sccm(time=0.0)[0] < 0.01 * 4000.0
+    # rise center (t_rel = -2 ms, during pre_breakdown): half the plateau
+    derf_half = derf_sim._effective_gas_puff_sccm(time=1.0e-3)
+    assert np.isclose(derf_half[0], 2000.0, rtol=1e-3)
+    assert np.isclose(derf_half[1], 500.0, rtol=1e-3)
+    # plateau (main-discharge start)
+    assert np.isclose(
+        derf_sim._effective_gas_puff_sccm(time=3.0e-3)[0], 4000.0, rtol=1e-3
+    )
+    # drop center: plateau minus half the level difference
+    derf_mid = derf_sim._effective_gas_puff_sccm(time=5.0e-3)
+    assert np.isclose(derf_mid[0], 4000.0 - 0.5 * 2500.0, rtol=1e-3)
+    assert np.isclose(derf_mid[1], 1000.0 - 0.5 * 750.0, rtol=1e-3)
+    # held second level deep in the discharge
+    assert np.isclose(
+        derf_sim._effective_gas_puff_sccm(time=8.0e-3)[0], 1500.0, rtol=1e-3
+    )
+    # afterglow: valve closed
+    assert derf_sim._effective_gas_puff_sccm(time=24.5e-3) == (0.0, 0.0)
+    # monotone through each transition (to the other erf's far-tail scale,
+    # ~1e-5 sccm where the transitions' tails overlap)
+    derf_rise_ts = np.linspace(0.0, 3.0e-3, 40)
+    derf_rise_v = [derf_sim._effective_gas_puff_sccm(time=t)[0] for t in derf_rise_ts]
+    assert np.all(np.diff(derf_rise_v) >= -1e-3)
+    derf_drop_ts = np.linspace(3.5e-3, 8.0e-3, 40)
+    derf_drop_v = [derf_sim._effective_gas_puff_sccm(time=t)[0] for t in derf_drop_ts]
+    assert np.all(np.diff(derf_drop_v) <= 1e-3)
+    for derf_bad in (
+        {"gas_puff_mode": "triple_erf"},
+        {"gas_puff_mode": "double_erf", "tau_gp_rise_width": 0.0},
+        {"gas_puff_mode": "double_erf", "tau_gp_drop_width": -1.0},
+    ):
+        try:
+            LAPDSim1D(dict(derf_params, **derf_bad), derf_flags)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected ValueError for {derf_bad}")
+
+    # --- Anode disc radius (anode_radius_cm): opens the annulus around the
+    # mesh to neutrals only. None = historical (1 - eta); Ra < Rm gives
+    # 1 - eta*(Ra/Rm)^2; heat/Bohm keep the bare mesh values.
+    disc_params, disc_flags = default_config()
+    disc_params.update({"Rp": 15.0, "anode_radius_cm": 40.0})
+    disc_flags["resolved_boundaries"] = True
+    disc_geom = build_geometry(disc_params, disc_flags)
+    disc_face = int(disc_geom.anode_face_indices[0])
+    eta_cfg = disc_params["eta"]
+    assert np.isclose(
+        disc_geom.neutral_face_area_cm2[disc_face],
+        np.pi * 50.0**2 * (1.0 - eta_cfg * (40.0 / 50.0) ** 2),
+        rtol=1e-12,
+    )
+    assert disc_geom.heat_transmission[disc_face] == 1.0 - eta_cfg
+    try:
+        bad_params = dict(disc_params)
+        bad_params["anode_radius_cm"] = 10.0  # smaller than the plasma channel
+        build_geometry(bad_params, disc_flags)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for anode disc inside Rp")
+
     # --- CX-derived momentum-transfer rate (sigma_in_model = "cx_derived"):
     # nu_in = nn * (2*<sigma v>_cx + k_Langevin), consistent with the CX
     # energy channel and carrying the velocity dependence the constant lacks.
@@ -4142,6 +5612,65 @@ def main():
             float(He_EIE_cross_DA(eps_probe, _b21p)),
             rtol=1e-12,
         )
+
+    # --- A1: the He singlet manifold registry (BEAM_DEPOSITION_PLAN WP-A). ---
+    from cablp.funcs._cross import (
+        He_EIE_cross_manifold,
+        He_singlet_tail_cross,
+    )
+    from cablp.vars._coeff import He_singlet_manifold
+
+    # The 2^1P row is the provenance anchor: same list object as b_11s_21p,
+    # and the general evaluator reproduces the beam's float port (the ~7e-6
+    # slack is the legacy E_21p = 21.217848 vs the registry's NIST 21.2180).
+    assert He_singlet_manifold["21P"]["A"] is _b21p
+    for eps_probe in (1.5, 100.0 / 21.218, 8.0):
+        assert np.isclose(
+            He_EIE_cross_manifold(
+                eps_probe * He_singlet_manifold["21P"]["E_eV"],
+                He_singlet_manifold["21P"],
+            ),
+            _he_2p_excitation_cross_cm2(eps_probe),
+            rtol=1e-4,
+        )
+
+    # Every fitted level: zero at/below threshold, finite and non-negative
+    # from just above threshold through 1 keV.
+    manifold_probe_E = np.concatenate(
+        [np.linspace(24.0, 200.0, 45), np.array([500.0, 1000.0])]
+    )
+    for level_name, entry in He_singlet_manifold.items():
+        assert He_EIE_cross_manifold(entry["E_eV"], entry) == 0.0, level_name
+        assert He_EIE_cross_manifold(0.5 * entry["E_eV"], entry) == 0.0, level_name
+        for E_probe in manifold_probe_E:
+            sigma_probe = He_EIE_cross_manifold(float(E_probe), entry)
+            assert np.isfinite(sigma_probe) and sigma_probe >= 0.0, level_name
+        assert He_EIE_cross_manifold(100.0, entry) > 0.0, level_name
+
+    # The measured manifold multipliers at 100 eV (measure_beam_manifold.py,
+    # 2026-07-20): R_events = 1.670, R_power = 1.730 against the historical
+    # 2^1P-only booking. Loose bounds guard the transcribed coefficients
+    # against digit regressions without over-pinning the fit evaluation.
+    sigma_by_level = {
+        name: He_EIE_cross_manifold(100.0, entry)
+        for name, entry in He_singlet_manifold.items()
+    }
+    tail_sigma_100, tail_sigma_E_100 = He_singlet_tail_cross(100.0)
+    manifold_sigma_100 = sum(sigma_by_level.values()) + tail_sigma_100
+    manifold_sigma_E_100 = (
+        sum(
+            sigma_by_level[name] * He_singlet_manifold[name]["E_eV"]
+            for name in sigma_by_level
+        )
+        + tail_sigma_E_100
+    )
+    r_events_100 = manifold_sigma_100 / sigma_by_level["21P"]
+    r_power_100 = manifold_sigma_E_100 / (sigma_by_level["21P"] * 21.218)
+    assert 1.55 < r_events_100 < 1.80, r_events_100
+    assert 1.60 < r_power_100 < 1.85, r_power_100
+    # The Eq. (5) Rydberg tail sums to ~1.56x the 4^1P row (sum of (4/n)^3
+    # plus the small nS/nD/nF series and threshold shifts).
+    assert 1.3 < tail_sigma_100 / sigma_by_level["41P"] < 2.0
 
     adas_reaction_kwargs = dict(
         state=knob_state,

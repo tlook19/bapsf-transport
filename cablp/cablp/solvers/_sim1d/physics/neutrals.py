@@ -4,6 +4,7 @@ import numpy as np
 
 from ..core.geometry import is_plenum_cell, puff_cell_indices, pump_cell_indices
 from ..core.state import ConservativeState1D
+from .sources import neutral_wind_velocity
 from cablp.vars._cons import kb_cgs, m_p_cgs
 
 
@@ -173,6 +174,73 @@ def neutral_exchange_rhs(state, geometry, exchange_coeff_cm3_s):
     )
 
 
+def neutral_wind_advection_rhs(state, floors, ion_mass_g, geometry):
+    """Return conservative upwind advection of ``nn`` and ``M_n`` by the wind.
+
+    The drag-driven neutral wind ``u_n = M_n / (m nn)`` carries gas and its
+    own momentum along the axis (NEUTRAL_MOMENTUM_PLAN.md M3), on top of the
+    diffusive Knudsen exchange that carries the thermal transport. First-order
+    donor-cell upwind on the internal neutral faces: the face velocity is the
+    adjacent-cell average, the donor is the upwind cell, and the face area is
+    the restricting ``neutral_face_area_cm2`` (so constrictions throttle the
+    wind exactly as they throttle the diffusive exchange). Interior fluxes
+    cancel in the inventory exactly.
+
+    End faces pass no particles -- the end wall re-emits impinging gas
+    thermally in place (pumping is a separate, named sink) -- but the
+    momentum an *outward* wind carries into an end wall accommodates there:
+    a sink ``-max(+/-u_n, 0) * A_end / V_end * M_n`` on the end cells, the
+    same free-molecular accommodation the radial wall term applies. A state
+    without ``M_n`` gets zeros.
+    """
+    zeros = np.zeros(geometry.cells, dtype=float)
+    if state.M_n is None:
+        return ConservativeState1D(
+            n=zeros,
+            nn=zeros.copy(),
+            M=zeros.copy(),
+            Ee=zeros.copy(),
+            Ei=zeros.copy(),
+        )
+    u_n = neutral_wind_velocity(state, floors=floors, ion_mass_g=ion_mass_g)
+    nn = np.asarray(state.nn, dtype=float)
+    M_n = np.asarray(state.M_n, dtype=float)
+    u_face = 0.5 * (u_n[:-1] + u_n[1:])
+    donor_nn = np.where(u_face > 0.0, nn[:-1], nn[1:])
+    donor_M_n = np.where(u_face > 0.0, M_n[:-1], M_n[1:])
+    area = geometry.neutral_face_area_cm2[1:-1]
+    flux_nn = u_face * donor_nn * area
+    flux_M_n = u_face * donor_M_n * area
+    dnn = zeros.copy()
+    dM_n = np.zeros(geometry.cells, dtype=float)
+    dnn[:-1] -= flux_nn / geometry.neutral_volume_cm3[:-1]
+    dnn[1:] += flux_nn / geometry.neutral_volume_cm3[1:]
+    dM_n[:-1] -= flux_M_n / geometry.neutral_volume_cm3[:-1]
+    dM_n[1:] += flux_M_n / geometry.neutral_volume_cm3[1:]
+    # u_n and M_n share a sign, so these sinks only ever relax M_n toward
+    # zero; an inward wind at an end face contributes nothing.
+    dM_n[0] -= (
+        max(-u_n[0], 0.0)
+        * geometry.neutral_face_area_cm2[0]
+        * M_n[0]
+        / geometry.neutral_volume_cm3[0]
+    )
+    dM_n[-1] -= (
+        max(u_n[-1], 0.0)
+        * geometry.neutral_face_area_cm2[-1]
+        * M_n[-1]
+        / geometry.neutral_volume_cm3[-1]
+    )
+    return ConservativeState1D(
+        n=zeros,
+        nn=dnn,
+        M=np.zeros(geometry.cells, dtype=float),
+        Ee=np.zeros(geometry.cells, dtype=float),
+        Ei=np.zeros(geometry.cells, dtype=float),
+        M_n=dM_n,
+    )
+
+
 def neutral_source_sink_rhs(
     state,
     geometry,
@@ -185,25 +253,41 @@ def neutral_source_sink_rhs(
     pump_enabled=True,
     gas_puff_valves=2,
     pump_elbow_conductance_lps=None,
+    gas_puff_profile="cell",
+    gas_puff_z_cm=None,
+    gas_puff_sigma_cm=50.0,
+    gas_puff_throw_cm=100.0,
 ):
     """Return conservative RHS for neutral gas puff and pump terms.
 
     Both terms are anchored by ``cell_role`` (§8), not by ``[0]``/``[-1]``: the
     puff lands on its puff cell and each pump on the plenum/collector at its end.
     Legacy roles resolve to the source and end cells, reproducing today exactly.
+    The puff's axial shape comes from ``gas_puff_rate_profile``.
     """
     dnn = np.zeros(geometry.cells, dtype=float)
-    puff_index, puff_twin_index = puff_cell_indices(geometry)
     pump_left_index, pump_right_index = pump_cell_indices(geometry)
     if gas_puff_enabled:
-        dnn[puff_index] += puff_rate(
-            S_gp, gas_puff_valves, geometry.neutral_volume_cm3[puff_index]
+        dnn += gas_puff_rate_profile(
+            geometry,
+            S_gp,
+            gas_puff_valves,
+            profile=gas_puff_profile,
+            z_cm=gas_puff_z_cm,
+            sigma_cm=gas_puff_sigma_cm,
+            throw_cm=gas_puff_throw_cm,
+            end=0,
         )
         if twin_cathode:
-            dnn[puff_twin_index] += puff_rate(
+            dnn += gas_puff_rate_profile(
+                geometry,
                 Twin_S_gp,
                 gas_puff_valves,
-                geometry.neutral_volume_cm3[puff_twin_index],
+                profile=gas_puff_profile,
+                z_cm=gas_puff_z_cm,
+                sigma_cm=gas_puff_sigma_cm,
+                throw_cm=gas_puff_throw_cm,
+                end=-1,
             )
     if pump_enabled:
         # The unmodeled pump elbow folds into an effective speed on the plenum
@@ -218,21 +302,30 @@ def neutral_source_sink_rhs(
             pump_elbow_conductance_lps if is_plenum_cell(geometry, pump_right_index)
             else None,
         )
-        dnn[pump_left_index] -= (
-            pump_rate(S_left, geometry.neutral_volume_cm3[pump_left_index])
-            * state.nn[pump_left_index]
+        rate_left = pump_rate(S_left, geometry.neutral_volume_cm3[pump_left_index])
+        rate_right = pump_rate(
+            S_right, geometry.neutral_volume_cm3[pump_right_index]
         )
-        dnn[pump_right_index] -= (
-            pump_rate(S_right, geometry.neutral_volume_cm3[pump_right_index])
-            * state.nn[pump_right_index]
-        )
+        dnn[pump_left_index] -= rate_left * state.nn[pump_left_index]
+        dnn[pump_right_index] -= rate_right * state.nn[pump_right_index]
     zeros = np.zeros(geometry.cells, dtype=float)
+    # An evolved neutral wind (state carries M_n) leaves through the pump at
+    # the same rate as the gas, so the pumped-out neutrals take their
+    # momentum with them and u_n does not inflate at the pump cells. The
+    # puff needs no companion: cold gas arrives with zero directed momentum.
+    dM_n = None
+    if state.M_n is not None:
+        dM_n = zeros.copy()
+        if pump_enabled:
+            dM_n[pump_left_index] -= rate_left * state.M_n[pump_left_index]
+            dM_n[pump_right_index] -= rate_right * state.M_n[pump_right_index]
     return ConservativeState1D(
         n=zeros.copy(),
         nn=dnn,
         M=zeros.copy(),
         Ee=zeros.copy(),
         Ei=zeros.copy(),
+        M_n=dM_n,
     )
 
 
@@ -241,6 +334,108 @@ def puff_rate(sccm, valves, chamber_vol):
     if chamber_vol <= 0.0:
         raise ValueError(f"chamber_vol must be positive (got {chamber_vol})")
     return 4.477962e17 * float(sccm) * float(valves) / float(chamber_vol)
+
+
+# Roles a distributed gas puff may land on: the main plasma chamber, not the
+# plenum/obstruction behind the cathode, the cathode-anode gap, or the
+# collector region.
+_PUFF_ELIGIBLE_ROLES = frozenset({"puff", "column", "source", "domain", "end"})
+
+
+def gas_puff_rate_profile(
+    geometry,
+    sccm,
+    valves,
+    profile="cell",
+    z_cm=None,
+    sigma_cm=50.0,
+    throw_cm=100.0,
+    end=0,
+):
+    """Return the per-cell puff source rate array [cm^-3 s^-1].
+
+    This is the single implementation behind BOTH puff sites -- the explicit
+    RHS (``neutral_source_sink_rhs``) and the implicit backward-Euler neutral
+    matrix in the solver -- so the two cannot desync (the historical trap; see
+    BOUNDARY_REGIONS_PROGRESS.md notes).
+
+    ``profile = "cell"`` (default) reproduces the historical behaviour
+    bit-exactly: the whole flow lands in the role-tagged puff cell.
+
+    ``profile = "cosine_pipe"`` is the physical source: a small pipe at the
+    chamber wall pointing radially inward with a Lambertian (cosine) outlet.
+    Its first-flight deposition along the wall is the standard cosine-lobe
+    illumination ``[1 + ((z - z0)/d)^2]^-2`` with throw distance ``d``
+    (``throw_cm``) of order the chord across the chamber (~2*Rm), after which
+    the neutral transport model does the spreading. Centre and width both
+    come from geometry, so this adds no free shape parameter.
+
+    ``profile = "gaussian"`` is the generic tunable shape,
+    ``exp(-(z - z0)^2 / (2 sigma^2))``.
+
+    All distributed profiles weight by cell length, land only on
+    main-chamber cells, and are normalized to conserve the total inflow
+    exactly. ``z_cm = None`` centres on the puff cell; ``end = -1`` selects
+    the twin puff cell and mirrors an explicit centre through the machine
+    midpoint.
+    """
+    dnn = np.zeros(geometry.cells, dtype=float)
+    puff_index, puff_twin_index = puff_cell_indices(geometry)
+    index = puff_twin_index if end == -1 else puff_index
+    if profile == "cell":
+        dnn[index] = puff_rate(
+            sccm, valves, geometry.neutral_volume_cm3[index]
+        )
+        return dnn
+    if profile not in ("gaussian", "cosine_pipe"):
+        raise ValueError(
+            "gas_puff_profile must be 'cell', 'gaussian', or 'cosine_pipe' "
+            f"(got {profile!r})"
+        )
+
+    roles = np.asarray(geometry.cell_role)
+    eligible = np.asarray(
+        [role in _PUFF_ELIGIBLE_ROLES for role in roles], dtype=bool
+    )
+    z_centers = np.asarray(geometry.z_cm, dtype=float)
+    if z_cm is None:
+        z0 = float(z_centers[index])
+    else:
+        z0 = float(z_cm)
+        if end == -1:
+            z_lo = float(np.min(z_centers[eligible]))
+            z_hi = float(np.max(z_centers[eligible]))
+            z0 = z_lo + z_hi - z0  # mirror through the chamber midpoint
+
+    weights = np.zeros(geometry.cells, dtype=float)
+    if profile == "gaussian":
+        sigma = float(sigma_cm)
+        if sigma <= 0.0:
+            raise ValueError(f"gas_puff_sigma_cm must be positive (got {sigma})")
+        shape = np.exp(-0.5 * ((z_centers[eligible] - z0) / sigma) ** 2)
+    else:  # cosine_pipe
+        throw = float(throw_cm)
+        if throw <= 0.0:
+            raise ValueError(f"gas_puff_throw_cm must be positive (got {throw})")
+        shape = 1.0 / (1.0 + ((z_centers[eligible] - z0) / throw) ** 2) ** 2
+    weights[eligible] = shape * np.asarray(
+        geometry.length_cm, dtype=float
+    )[eligible]
+    total_weight = weights.sum()
+    if total_weight <= 0.0:
+        # Profile centred far outside the chamber: fall back to the puff cell
+        # rather than silently deleting the fueling.
+        dnn[index] = puff_rate(
+            sccm, valves, geometry.neutral_volume_cm3[index]
+        )
+        return dnn
+    total_particles_per_s = 4.477962e17 * float(sccm) * float(valves)
+    dnn = (
+        total_particles_per_s
+        * (weights / total_weight)
+        / geometry.neutral_volume_cm3
+    )
+    return dnn
 
 
 def _effective_pump_speed(lps, elbow_conductance_lps):

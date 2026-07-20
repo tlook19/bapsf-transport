@@ -1,5 +1,6 @@
 """Solver implementation for the conservative axial 1D LAPD model."""
 
+import math
 from dataclasses import dataclass, replace
 from time import perf_counter
 from types import SimpleNamespace
@@ -39,8 +40,15 @@ from .physics.cathode import (
     beam_ionization_rhs,
     beam_ionization_rhs_terms,
     cathode_boundary_state,
+    cathode_power_balance_terms_W,
     cathode_source_terms,
     solve_cathode_boundary,
+    validate_cathode_Rp_model,
+    validate_cathode_solver_model,
+)
+from .physics.cathode import (
+    advance_circuit_current_driven,
+    idriven_vdis_evaluator,
 )
 from .physics.energy import (
     electron_cooling_rhs,
@@ -50,10 +58,12 @@ from .physics.energy import (
 )
 from .physics.flux import plasma_flux_rhs, plasma_flux_rhs_terms
 from .physics.neutrals import (
+    gas_puff_rate_profile,
     _effective_pump_speed,
     neutral_exchange_coefficients,
     neutral_exchange_rhs,
     neutral_source_sink_rhs,
+    neutral_wind_advection_rhs,
     puff_rate,
     pump_rate,
 )
@@ -65,6 +75,9 @@ from .physics.sources import (
     ion_neutral_drag_rhs,
     ion_neutral_frictional_heating_rhs,
     ion_neutral_thermalization_rhs,
+    neutral_momentum_wall_rhs,
+    neutral_wind_two_zone_factors,
+    neutral_wind_velocity,
     pressure_work_rhs,
     surface_neutralization_rhs,
 )
@@ -451,6 +464,46 @@ class LAPDSim1D:
         self._geometry = build_geometry(self._input_dict, self._flags)
         self._validate_phase_config()
         self._validate_gas_puff_config()
+        self._neutral_momentum = bool(self._flags.get("neutral_momentum", False))
+        if (
+            self._neutral_momentum
+            and self._input_dict.get("ion_neutral_drag_model", "constant")
+            == "slip"
+        ):
+            raise ValueError(
+                "neutral_momentum is mutually exclusive with "
+                "ion_neutral_drag_model='slip': the slip closure is the "
+                "evolved M_n equation's own local steady state"
+            )
+        self._neutral_momentum_radial = str(
+            self._input_dict.get("neutral_momentum_radial", "uniform")
+        )
+        if self._neutral_momentum_radial not in ("uniform", "two_zone"):
+            raise ValueError(
+                "neutral_momentum_radial must be 'uniform' or 'two_zone' "
+                f"(got {self._neutral_momentum_radial!r})"
+            )
+        if self._neutral_momentum_radial == "two_zone" and not self._neutral_momentum:
+            raise ValueError(
+                "neutral_momentum_radial='two_zone' requires the "
+                "neutral_momentum flag: it closes the radial profile of the "
+                "evolved wind"
+            )
+        # Geometry and Tn_fit are fixed for the run, so the two-zone factors
+        # are computed once here; None selects the uniform (legacy) closure
+        # in every consumer.
+        if self._neutral_momentum_radial == "two_zone":
+            (
+                self._wind_column_factor,
+                self._wind_wall_rate,
+            ) = neutral_wind_two_zone_factors(
+                geometry=self._geometry,
+                Tn_eV=float(self._input_dict.get("Tn_fit", 0.1)),
+                ion_mass_g=self._ion_mass_g,
+            )
+        else:
+            self._wind_column_factor = None
+            self._wind_wall_rate = None
         self._floors = {
             "n": float(self._input_dict["ne_floor"]),
             "nn": float(self._input_dict["nn_floor"]),
@@ -471,6 +524,80 @@ class LAPDSim1D:
         self._cathode_x0 = None
         self._cathode_x0_twin = None
         self._cathode_beam_cross = np.zeros(self._geometry.cells)
+        # Inductive-circuit state (physics/cathode.inductive_circuit_config):
+        # last accepted step's loop current and dt.
+        self._circuit_I_prev = 0.0
+        self._circuit_dt_prev = None
+        self._circuit_V_cap = None  # lazily V_bank; drains when C_bank_F set
+        # Trapezoidal circuit fold state: the previous accepted operating
+        # point's discharge voltage (solve V_b) and phase key. None / a phase
+        # change force a backward-Euler step (no old residual to average).
+        self._circuit_V_dis_prev = None
+        self._circuit_phase_key_prev = None
+        # Fail at construction, not at the first cathode solve mid-run:
+        # unknown model strings and the unsupported TwinCathode combination.
+        validate_cathode_Rp_model(self._input_dict, self._flags)
+        self._cathode_solver_model = validate_cathode_solver_model(
+            self._input_dict, self._flags
+        )
+        # Current-driven circuit state: the loop current, integrated once
+        # per accepted step (plan §2c). Distinct from _circuit_I_prev,
+        # which is the voltage-driven fold's history term.
+        self._circuit_I_loop = 0.0
+        # Cathode warming state: the evolving emitter surface temperature [K]
+        # (config cathode_warming_model). None = static T_s (historical).
+        warming_model = str(
+            self._input_dict.get("cathode_warming_model", "none")
+        )
+        if warming_model not in ("none", "ion_bombardment", "power_balance"):
+            raise ValueError(
+                "cathode_warming_model must be 'none', 'ion_bombardment', "
+                f"or 'power_balance' (got {warming_model!r})"
+            )
+        self._cathode_warming_model = warming_model
+        self._cathode_Ts_K = None
+        if warming_model == "ion_bombardment":
+            Ts_start = self._input_dict.get("cathode_Ts_start_K")
+            if Ts_start is None:
+                raise ValueError(
+                    "cathode_warming_model='ion_bombardment' requires "
+                    "cathode_Ts_start_K (the heater-only surface temperature)"
+                )
+            if float(self._input_dict.get("cathode_warming_energy_J", 300.0)) <= 0.0:
+                raise ValueError("cathode_warming_energy_J must be positive")
+            self._cathode_Ts_K = float(Ts_start)
+        elif warming_model == "power_balance":
+            Ts_base = self._input_dict.get("cathode_Ts_base_K")
+            if Ts_base is None:
+                raise ValueError(
+                    "cathode_warming_model='power_balance' requires "
+                    "cathode_Ts_base_K (the heater-maintained standby "
+                    "surface temperature)"
+                )
+            if float(
+                self._input_dict.get("cathode_heat_capacity_J_per_K", 3.0)
+            ) <= 0.0:
+                raise ValueError(
+                    "cathode_heat_capacity_J_per_K must be positive"
+                )
+            eps = float(self._input_dict.get("cathode_emissivity", 0.7))
+            if not 0.0 < eps <= 1.0:
+                raise ValueError(
+                    f"cathode_emissivity must be in (0, 1] (got {eps})"
+                )
+            if float(
+                self._input_dict.get("cathode_conduction_W_per_K", 0.0)
+            ) < 0.0:
+                raise ValueError(
+                    "cathode_conduction_W_per_K must be non-negative"
+                )
+            if float(Ts_base) <= float(
+                self._input_dict.get("cathode_env_T_K", 300.0)
+            ):
+                raise ValueError(
+                    "cathode_Ts_base_K must exceed cathode_env_T_K"
+                )
+            self._cathode_Ts_K = float(Ts_base)
         self._cathode_solve = None
         self._last_result = None
         self._last_neutral_equilibration_result = None
@@ -536,7 +663,12 @@ class LAPDSim1D:
             time=time,
         ).values():
             state_rhs = add_state_rhs(state_rhs, term)
-        return pack_state(state_rhs)
+        # In neutral_momentum mode the packed RHS must always be 6-field to
+        # match the state vector, even when no term touched M_n (pads zeros).
+        return pack_state(
+            state_rhs,
+            neutral_momentum=True if self._neutral_momentum else None,
+        )
 
     def rhs_terms(self, y=None, include_heat_conduction=True, time=None):
         """Return named conservative RHS contributions for diagnostics."""
@@ -557,6 +689,8 @@ class LAPDSim1D:
                 "ion_neutral_drag": self._zero_rhs_state(),
                 "ion_neutral_frictional_heating": self._zero_rhs_state(),
                 "ion_neutral_thermalization": self._zero_rhs_state(),
+                "neutral_momentum_wall": self._zero_rhs_state(),
+                "neutral_wind_advection": self._zero_rhs_state(),
                 "surface_loss": self._zero_rhs_state(),
                 "anode_collection": self._zero_rhs_state(),
                 "cathode_surface_loss": self._zero_rhs_state(),
@@ -614,6 +748,8 @@ class LAPDSim1D:
             "ion_neutral_thermalization": (
                 self.ion_neutral_thermalization_rhs(state=state)
             ),
+            "neutral_momentum_wall": self.neutral_momentum_wall_rhs(state=state),
+            "neutral_wind_advection": self.neutral_wind_advection_rhs(state=state),
             "surface_loss": self.surface_neutralization_rhs(state=state),
             "anode_collection": self.anode_collection_rhs(state=state),
             "cathode_surface_loss": self.cathode_source_terms(
@@ -748,25 +884,38 @@ class LAPDSim1D:
             )
 
         if source_kwargs["gas_puff_enabled"]:
-            rhs[puff_index] += dt * puff_rate(
+            rhs += dt * gas_puff_rate_profile(
+                geometry,
                 source_kwargs["S_gp"],
                 source_kwargs["gas_puff_valves"],
-                geometry.neutral_volume_cm3[puff_index],
+                profile=source_kwargs["gas_puff_profile"],
+                z_cm=source_kwargs["gas_puff_z_cm"],
+                sigma_cm=source_kwargs["gas_puff_sigma_cm"],
+                throw_cm=source_kwargs["gas_puff_throw_cm"],
+                end=0,
             )
             if source_kwargs["twin_cathode"]:
-                rhs[puff_twin_index] += dt * puff_rate(
+                rhs += dt * gas_puff_rate_profile(
+                    geometry,
                     source_kwargs["Twin_S_gp"],
                     source_kwargs["gas_puff_valves"],
-                    geometry.neutral_volume_cm3[puff_twin_index],
+                    profile=source_kwargs["gas_puff_profile"],
+                    z_cm=source_kwargs["gas_puff_z_cm"],
+                    sigma_cm=source_kwargs["gas_puff_sigma_cm"],
+                    throw_cm=source_kwargs["gas_puff_throw_cm"],
+                    end=-1,
                 )
 
         nn_next = np.linalg.solve(matrix, rhs)
+        # M_n passes through untouched: this step runs pre-plasma, where
+        # there is no drag to drive a wind (NEUTRAL_MOMENTUM_PLAN.md).
         return ConservativeState1D(
             n=state.n.copy(),
             nn=np.maximum(nn_next, self._floors["nn"]),
             M=state.M.copy(),
             Ee=state.Ee.copy(),
             Ei=state.Ei.copy(),
+            M_n=None if state.M_n is None else state.M_n.copy(),
         )
 
     def _step_rejection_info(self, attempt, y0=None):
@@ -797,6 +946,8 @@ class LAPDSim1D:
             "pi": derived1.pi,
             "p": derived1.p,
         }
+        if state1.M_n is not None:
+            fields["M_n"] = state1.M_n
         nonfinite_fields = {}
         for name, values in fields.items():
             summary = _bad_array_summary(values)
@@ -953,6 +1104,182 @@ class LAPDSim1D:
         self._restore_step_cache(attempt.solver_cache)
         self._set_state_vector(attempt.y)
         self._time += float(attempt.dt)
+        # Advance the inductive-circuit state from the accepted step's solve;
+        # with no solve (cathode unconfigured/disabled phases) the loop
+        # current is zero.
+        solve = self._cathode_solve
+        if solve is not None and solve.beam_result is not None:
+            # Clamp the loop-current state to a generous physical ceiling
+            # (~5x the dead-short bank current): the sheath solve has a
+            # pathological huge-phi_c branch under inflated effective EMFs,
+            # and an unclamped I_prev lets that branch feed a multiplicative
+            # runaway (seen: I_prev -> 5e22 A). Real loop currents sit ~50x
+            # below this ceiling, so the clamp is inert in normal operation.
+            I_ceiling = 5.0 * float(
+                self._input_dict.get("V_bank", 0.0)
+            ) / max(float(self._input_dict.get("R_comp", 1.0)), 1e-6)
+            self._circuit_I_prev = min(
+                max(float(solve.beam_result.result.I_tot), 0.0),
+                max(I_ceiling, 0.0),
+            )
+            # Cache the accepted operating point's discharge voltage and the
+            # circuit phase in effect *during* the step (its start time) for
+            # the trapezoidal fold's old-time residual -- a step that crossed
+            # a phase boundary then mismatches the next step's key and the
+            # fold takes backward Euler across the discontinuity.
+            self._circuit_V_dis_prev = float(solve.beam_result.result.V_b)
+            accepted_phase = self._cathode_phase_options(
+                time=self._time - float(attempt.dt)
+            )
+            self._circuit_phase_key_prev = (
+                bool(accepted_phase.get("inductive_tail", False)),
+                bool(accepted_phase.get("floating", False)),
+            )
+        else:
+            self._circuit_I_prev = 0.0
+            self._circuit_V_dis_prev = None
+            self._circuit_phase_key_prev = None
+        # Cathode warming, accepted steps only (rejected attempts never move
+        # the surface temperature).
+        if (
+            self._cathode_Ts_K is not None
+            and solve is not None
+            and solve.beam_result is not None
+        ):
+            if self._cathode_warming_model == "ion_bombardment":
+                # Close the gap toward the configured T_s at the rate set by
+                # the accepted solve's ion bombardment power
+                # (dT/dt = (T_set - T) * P_i / E_warm).
+                P_ion_W = max(
+                    float(solve.beam_result.result.P_cathode_i), 0.0
+                )
+                if P_ion_W > 0.0:
+                    T_set = float(self._input_dict["T_s"])
+                    E_warm = float(
+                        self._input_dict.get("cathode_warming_energy_J", 300.0)
+                    )
+                    rate = min(float(attempt.dt) * P_ion_W / E_warm, 1.0)
+                    self._cathode_Ts_K += (T_set - self._cathode_Ts_K) * rate
+            elif self._cathode_warming_model == "power_balance":
+                result = solve.beam_result.result
+                # Floating phases: emitted electrons return to the surface,
+                # so net evaporative cooling vanishes with the net current.
+                floating = bool(solve.metadata.get("floating", False))
+                I_emis = 0.0 if floating else float(result.I_eth_star)
+                P_heat, P_ion, P_rad, P_emis, P_cond = (
+                    cathode_power_balance_terms_W(
+                        T_s_K=self._cathode_Ts_K,
+                        P_ion_W=float(result.P_cathode_i),
+                        I_eth_star_A=I_emis,
+                        input_dict=self._input_dict,
+                    )
+                )
+                C_th = float(
+                    self._input_dict.get("cathode_heat_capacity_J_per_K", 3.0)
+                )
+                # Semi-implicit in the linearized loss: dT = dt*P_net/(C_th
+                # + dt*dP_loss/dT). At production dt/tau ~ 5e-5 this is the
+                # explicit update to 4 decimal places; for tiny C_th it
+                # cannot overshoot the radiative equilibrium and ring.
+                eps = float(self._input_dict.get("cathode_emissivity", 0.7))
+                area = self._input_dict.get("cathode_rad_area_cm2")
+                if area is None:
+                    area = math.pi * float(self._input_dict["R_cath"]) ** 2
+                G_lin = (
+                    4.0
+                    * eps
+                    * 5.670374419e-12
+                    * float(area)
+                    * self._cathode_Ts_K**3
+                    + max(I_emis, 0.0) * 2.0 * 8.617333262e-5
+                    + float(
+                        self._input_dict.get(
+                            "cathode_conduction_W_per_K", 0.0
+                        )
+                    )
+                )
+                dT = (
+                    float(attempt.dt)
+                    * (P_heat + P_ion - P_rad - P_emis - P_cond)
+                    / (C_th + float(attempt.dt) * G_lin)
+                )
+                self._cathode_Ts_K = max(
+                    self._cathode_Ts_K + dT,
+                    float(self._input_dict.get("cathode_env_T_K", 300.0)),
+                )
+        self._circuit_dt_prev = float(attempt.dt)
+        # Current-driven circuit: advance the loop current by one TR-BDF2
+        # step against V_dis(I) evaluated at the accepted end-of-step state
+        # (and post-warming T_s). Accepted steps only, exactly like the
+        # other circuit state. The capacitor is advanced inside the same
+        # call (trapezoidal), so the voltage-driven drain block below is
+        # bypassed in this mode.
+        if self._cathode_solver_model == "current_driven":
+            step_phase = self._cathode_phase_options(
+                time=self._time - float(attempt.dt)
+            )
+            if not step_phase["solve_enabled"] or step_phase["floating"]:
+                # Open circuit: no loop, and the stored inductor energy is
+                # dropped (the same documented simplification as the
+                # voltage-driven bank disconnect).
+                self._circuit_I_loop = 0.0
+            else:
+                C_bank_id = self._input_dict.get("C_bank_F")
+                bank_off = bool(step_phase.get("inductive_tail", False))
+                if bank_off:
+                    V_src = 0.0
+                elif C_bank_id is not None and float(C_bank_id) > 0.0:
+                    if self._circuit_V_cap is None:
+                        self._circuit_V_cap = float(
+                            self._input_dict.get("V_bank", 0.0)
+                        )
+                    V_src = float(self._circuit_V_cap)
+                else:
+                    V_src = float(self._input_dict.get("V_bank", 0.0))
+                vdis = idriven_vdis_evaluator(
+                    state=self.state,
+                    floors=self._floors,
+                    ion_mass_g=self._ion_mass_g,
+                    mu=self._mu,
+                    geometry=self._geometry,
+                    input_dict=self._input_dict,
+                    input_flags=self._effective_cathode_flags(
+                        active_only=False, floating=False
+                    ),
+                    beam_cross_prev=self._cathode_beam_cross,
+                    T_s_override_K=self._cathode_Ts_K,
+                )
+                I_new, V_cap_new = advance_circuit_current_driven(
+                    I_prev_A=self._circuit_I_loop,
+                    dt_s=float(attempt.dt),
+                    V_src_V=V_src,
+                    R_comp_ohm=float(self._input_dict.get("R_comp", 0.0)),
+                    L_H=float(self._input_dict.get("L_parasitic_H", 0.0)),
+                    vdis_of_I=vdis,
+                    C_bank_F=None if bank_off else C_bank_id,
+                    V_cap_prev_V=self._circuit_V_cap,
+                )
+                self._circuit_I_loop = I_new
+                if V_cap_new is not None:
+                    self._circuit_V_cap = V_cap_new
+        # Finite bank: drain the capacitor by the accepted step's charge while
+        # the transistors conduct (drive phases only -- the tail and floating
+        # phases have the bank branch open, and the float-charge supply is
+        # negligible within a shot).
+        C_bank = self._input_dict.get("C_bank_F")
+        if (
+            self._cathode_solver_model != "current_driven"
+            and C_bank is not None
+            and float(C_bank) > 0.0
+        ):
+            if self._circuit_V_cap is None:
+                self._circuit_V_cap = float(self._input_dict.get("V_bank", 0.0))
+            if self._cathode_phase_options()["cathode_enabled"]:
+                self._circuit_V_cap = max(
+                    self._circuit_V_cap
+                    - float(attempt.dt) * self._circuit_I_prev / float(C_bank),
+                    0.0,
+                )
         return self.get_initial_snapshot()
 
     def advance_one_step(self, dt=None, operator_split=None):
@@ -1365,6 +1692,7 @@ class LAPDSim1D:
             M=state.M.copy(),
             Ee=state.Ee.copy(),
             Ei=state.Ei.copy(),
+            M_n=None if state.M_n is None else state.M_n.copy(),
         )
         self._set_state_vector(pack_state(seeded))
         self._time = 0.0
@@ -1779,15 +2107,41 @@ class LAPDSim1D:
         )
 
     def ion_neutral_drag_rhs(self, y=None, state=None):
-        """Return the conservative ion-neutral drag momentum sink."""
+        """Return the conservative ion-neutral drag momentum exchange."""
         if state is None:
             state = self.state if y is None else unpack_state(y, self._geometry.cells)
         return ion_neutral_drag_rhs(
             state=state,
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
+            geometry=self._geometry,
+            wind_column_factor=self._wind_column_factor,
             **self._ion_neutral_drag_kwargs(),
             **self._slip_closure_kwargs(),
+        )
+
+    def neutral_momentum_wall_rhs(self, y=None, state=None):
+        """Return the neutral-wind wall-accommodation momentum sink."""
+        if state is None:
+            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        return neutral_momentum_wall_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            Rm_cm=self._geometry.Rm_cm,
+            Tn_fit=float(self._input_dict.get("Tn_fit", 0.1)),
+            wall_rate_1_s=self._wind_wall_rate,
+        )
+
+    def neutral_wind_advection_rhs(self, y=None, state=None):
+        """Return upwind advection of nn and M_n by the neutral wind."""
+        if state is None:
+            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        return neutral_wind_advection_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            geometry=self._geometry,
         )
 
     def ion_neutral_frictional_heating_rhs(self, y=None, state=None):
@@ -1798,6 +2152,7 @@ class LAPDSim1D:
             state=state,
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
+            wind_column_factor=self._wind_column_factor,
             **self._ion_neutral_drag_kwargs(),
             **self._slip_closure_kwargs(),
         )
@@ -1995,6 +2350,32 @@ class LAPDSim1D:
             x0=self._cathode_x0,
             x0_twin=self._cathode_x0_twin,
             floating=floating,
+            circuit_I_prev_A=self._circuit_I_prev,
+            circuit_dt_s=self._circuit_dt_prev,
+            circuit_bank_off=cathode_phase.get("inductive_tail", False),
+            circuit_V_cap_prev=(
+                self._circuit_V_cap
+                if self._circuit_V_cap is not None
+                else float(self._input_dict.get("V_bank", 0.0))
+            ),
+            circuit_scheme=str(
+                self._input_dict.get("circuit_scheme", "backward_euler")
+            ),
+            # The trapezoidal fold averages across the step, so the old-time
+            # residual is only valid when the circuit topology did not change
+            # under it; on a phase change (drive <-> tail <-> floating) this
+            # passes None and the fold takes a backward-Euler step.
+            circuit_V_dis_prev=(
+                self._circuit_V_dis_prev
+                if self._circuit_phase_key_prev
+                == (
+                    bool(cathode_phase.get("inductive_tail", False)),
+                    bool(floating),
+                )
+                else None
+            ),
+            T_s_override_K=self._cathode_Ts_K,
+            circuit_I_loop_A=self._circuit_I_loop,
         )
         if update_cache:
             self._cathode_solve = result
@@ -2092,16 +2473,36 @@ class LAPDSim1D:
         configured = bool(self._flags.get("cathode_coupling", False))
         cathode_enabled = configured and bool(switches["cathode_enabled"])
         floating = configured and bool(switches["floating"])
+        # Inductive tail: after the bank transistors open (the "floating"
+        # afterglow phase), a nonzero parasitic inductance keeps the loop
+        # driven at zero bank volts until its current has decayed -- the
+        # measured ~0.5 ms discharge-current tail. Below 1 A (~0.03% of
+        # peak, negligible stored energy) the historical floating solution
+        # resumes so the late-afterglow sheath physics is unchanged.
+        inductive_tail = (
+            configured
+            and floating
+            and float(self._input_dict.get("L_parasitic_H", 0.0)) > 0.0
+            and self._circuit_I_prev > 1.0
+        )
+        if inductive_tail:
+            floating = False
         return {
             "configured": configured,
             "cathode_enabled": cathode_enabled,
             "floating": floating,
-            "solve_enabled": cathode_enabled or floating,
+            "inductive_tail": inductive_tail,
+            "solve_enabled": cathode_enabled or floating or inductive_tail,
         }
 
     def _effective_cathode_flags(self, time=None, active_only=True, floating=None):
         options = self._cathode_phase_options(time=time)
-        enabled = options["cathode_enabled"]
+        # The inductive tail keeps the loop electrically active after the bank
+        # opens: its solve is a driven (V=0) circuit, so it counts as enabled
+        # for both the solve and the source terms it feeds.
+        enabled = options["cathode_enabled"] or options.get(
+            "inductive_tail", False
+        )
         if not active_only:
             use_floating = options["floating"] if floating is None else bool(floating)
             enabled = enabled or (options["configured"] and use_floating)
@@ -2126,15 +2527,34 @@ class LAPDSim1D:
             "pump_elbow_conductance_lps": self._input_dict.get(
                 "pump_elbow_conductance_lps"
             ),
+            "gas_puff_profile": str(
+                self._input_dict.get("gas_puff_profile", "cell")
+            ),
+            "gas_puff_z_cm": self._input_dict.get("gas_puff_z_cm"),
+            "gas_puff_sigma_cm": float(
+                self._input_dict.get("gas_puff_sigma_cm", 50.0)
+            ),
+            "gas_puff_throw_cm": float(
+                self._input_dict.get("gas_puff_throw_cm", 100.0)
+            ),
         }
 
     def _validate_gas_puff_config(self):
         mode = self._input_dict.get("gas_puff_mode", "decay_after_breakdown")
-        if mode not in {"decay_after_breakdown", "pulse_decay_to_level"}:
+        if mode not in {
+            "decay_after_breakdown",
+            "pulse_decay_to_level",
+            "double_erf",
+        }:
             raise ValueError(
-                "gas_puff_mode must be 'decay_after_breakdown' or "
-                f"'pulse_decay_to_level' (got {mode!r})"
+                "gas_puff_mode must be 'decay_after_breakdown', "
+                f"'pulse_decay_to_level', or 'double_erf' (got {mode!r})"
             )
+        if mode == "double_erf":
+            for key in ("tau_gp_rise_width", "tau_gp_drop_width"):
+                width = float(self._input_dict.get(key, 1e-3))
+                if width <= 0.0:
+                    raise ValueError(f"{key} must be positive (got {width})")
         tau_after_breakdown = self._input_dict.get("tau_gp_after_breakdown", None)
         if tau_after_breakdown is not None and float(tau_after_breakdown) < 0.0:
             raise ValueError(
@@ -2198,6 +2618,48 @@ class LAPDSim1D:
         Twin_S_gp = float(self._input_dict.get("Twin_S_gp", 0.0))
         if not self._flags.get("Plasma", True):
             return S_gp, Twin_S_gp
+        mode = self._input_dict.get("gas_puff_mode", "decay_after_breakdown")
+        if mode == "double_erf":
+            # Valve-like waveform: an erf rise 0 -> S_gp and an erf drop
+            # S_gp -> S_gp_decay_target, both on the *scheduled*
+            # main-discharge clock so the rise can sit at negative times
+            # (a real valve opens before breakdown). Smooth everywhere, so
+            # no event capture is needed. The other modes' full-rate
+            # prebreakdown behaviour is replaced by the waveform itself.
+            if phase not in {
+                "neutral_prebreakdown",
+                "pre_breakdown",
+                "breakdown",
+                "main_discharge",
+            }:
+                return 0.0, 0.0
+            plasma_origin = self._plasma_phase_time_origin()
+            main_start = (
+                plasma_origin
+                + max(float(self._input_dict.get("tau_prebreakdown", 0.0)), 0.0)
+                + max(float(self._input_dict.get("tau_breakdown", 0.0)), 0.0)
+            )
+            t_rel = float(time) - main_start
+            rise = 0.5 * (
+                1.0
+                + math.erf(
+                    (t_rel - float(self._input_dict.get("tau_gp_rise_center", -5e-3)))
+                    / float(self._input_dict.get("tau_gp_rise_width", 1e-3))
+                )
+            )
+            drop = 0.5 * (
+                1.0
+                + math.erf(
+                    (t_rel - float(self._input_dict.get("tau_gp_drop_center", 1e-3)))
+                    / float(self._input_dict.get("tau_gp_drop_width", 1e-3))
+                )
+            )
+            target = float(self._input_dict.get("S_gp_decay_target", 0.0))
+            twin_target = float(self._input_dict.get("Twin_S_gp_decay_target", 0.0))
+            return (
+                max(S_gp * rise - (S_gp - target) * drop, 0.0),
+                max(Twin_S_gp * rise - (Twin_S_gp - twin_target) * drop, 0.0),
+            )
         if phase == "neutral_prebreakdown":
             return S_gp, Twin_S_gp
         if phase in {"pre_breakdown", "breakdown"}:
@@ -2205,7 +2667,6 @@ class LAPDSim1D:
         if phase != "main_discharge":
             return 0.0, 0.0
 
-        mode = self._input_dict.get("gas_puff_mode", "decay_after_breakdown")
         if mode == "pulse_decay_to_level":
             pulse_duration = float(self._input_dict.get("tau_gp_pulse_duration", 0.0))
             if phase_elapsed <= pulse_duration:
@@ -2500,6 +2961,7 @@ class LAPDSim1D:
             "Ti_birth_ionization": self._input_dict.get(
                 "Ti_birth_ionization", "floor"
             ),
+            "wind_column_factor": self._wind_column_factor,
         }
 
     def _trajectory_snapshot(self, time):
@@ -2509,7 +2971,16 @@ class LAPDSim1D:
         rhs_terms = self.rhs_terms(include_heat_conduction=True, time=time)
         phase, phase_elapsed = self._phase_info(time)
         phase_switches = self._phase_switches(phase)
+        wind = {}
+        if state.M_n is not None:
+            wind = {
+                "M_n": state.M_n.copy(),
+                "u_n": neutral_wind_velocity(
+                    state, floors=self._floors, ion_mass_g=self._ion_mass_g
+                ),
+            }
         return {
+            **wind,
             "time": float(time),
             "phase": phase,
             "phase_elapsed": float(phase_elapsed),
@@ -2650,6 +3121,9 @@ class LAPDSim1D:
                 else float(self._t_breakdown_trigger)
             ),
         )
+        if saved and "M_n" in saved[0]:
+            result.M_n = stack("M_n")
+            result.u_n = stack("u_n")
         return add_sim3_compat_aliases(result)
 
     def _phase_events(self, run_start, final_time):
@@ -2859,7 +3333,17 @@ class LAPDSim1D:
         cathode_phase = self._cathode_phase_options(time=time)
         diag = {
             "enabled": float(bool(self._flags.get("cathode_coupling", False))),
+            # Instantaneous emitter surface temperature [K]: the configured
+            # T_s, or the evolving value under cathode_warming_model.
+            "T_s_surface": float(
+                self._cathode_Ts_K
+                if self._cathode_Ts_K is not None
+                else float(self._input_dict.get("T_s", 0.0))
+            ),
             "configured": float(cathode_phase["configured"]),
+            # Current-driven circuit state (0.0 under the voltage-driven
+            # solver, whose loop current lives in source_I_tot).
+            "circuit_I_loop": float(self._circuit_I_loop),
             "phase_enabled": float(cathode_phase["cathode_enabled"]),
             "rhs_enabled": float(cathode_phase["cathode_enabled"]),
             "solve_enabled": float(cathode_phase["solve_enabled"]),
@@ -2973,6 +3457,7 @@ class LAPDSim1D:
             Te=Te0,
             Ti=Ti0,
             ion_mass_g=self._ion_mass_g,
+            un=np.zeros(cells) if self._neutral_momentum else None,
         )
 
     @staticmethod

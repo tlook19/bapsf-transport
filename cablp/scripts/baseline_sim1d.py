@@ -57,6 +57,9 @@ BASELINE_PARAM_OVERRIDES = {
     "b_Qei": 1,
     "b_Qen": 1,
     "b_Qcx": 1,
+    # The golden fixture is a janev-era artifact; pin the rate model so the
+    # config default (adas since 2026-07-20) cannot silently change it.
+    "atomic_rate_model": "janev",
     "Rp": 15.0,
     "R_cath": 15.0,
     "R_comp": 0.010,

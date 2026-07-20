@@ -251,6 +251,34 @@ def _build_legacy_geometry(input_dict):
     )
 
 
+def _anode_neutral_transparency(input_dict):
+    """Return the anode face's open-area fraction for neutrals.
+
+    The anode is a mesh disc of radius ``anode_radius_cm`` in a chamber of
+    radius ``Rm``. Neutrals pass through the annulus around the disc freely
+    and through the disc itself with the mesh transparency ``1 - eta``, so
+    the open fraction is ``1 - eta * (Ra/Rm)^2`` -- exactly ``1 - eta`` when
+    the disc spans the chamber (``anode_radius_cm = None``, the historical
+    default). Heat transmission and Bohm collection keep the bare ``1 - eta``
+    / ``eta``: the disc must still cover the plasma channel (``Ra >= Rp``),
+    so the plasma-side physics does not see the annulus.
+    """
+    Ra = input_dict.get("anode_radius_cm")
+    eta = float(input_dict.get("eta", 0.0))
+    if Ra is None:
+        return 1.0 - eta
+    Ra = float(Ra)
+    Rm = float(input_dict.get("Rm", 50.0))
+    Rp = float(input_dict.get("Rp", 18.0))
+    if not Rp <= Ra <= Rm:
+        raise ValueError(
+            f"anode_radius_cm must satisfy Rp <= Ra <= Rm "
+            f"(got Ra={Ra}, Rp={Rp}, Rm={Rm}); an anode smaller than the "
+            "plasma channel would invalidate the collection/heat treatment"
+        )
+    return 1.0 - eta * (Ra / Rm) ** 2
+
+
 def _build_resolved_geometry(input_dict, flags):
     """Build the resolved typed-segment machine (BOUNDARY_REGIONS_PLAN.md §3).
 
@@ -418,6 +446,7 @@ def _build_resolved_geometry(input_dict, flags):
         cathode_face_indices=np.asarray(cathode_faces, dtype=int),
         anode_face_indices=np.asarray(anode_faces, dtype=int),
         anode_transparency=1.0 - float(input_dict.get("eta", 0.0)),
+        anode_neutral_transparency=_anode_neutral_transparency(input_dict),
         anode_advective_block=float(
             input_dict.get("b_anode_advective_block", 0.0)
         ),
@@ -449,6 +478,7 @@ def _assemble_geometry(
     cathode_face_indices=None,
     anode_face_indices=None,
     anode_transparency=1.0,
+    anode_neutral_transparency=None,
     anode_advective_block=0.0,
     absorbing_face_indices=None,
 ):
@@ -507,12 +537,24 @@ def _assemble_geometry(
         raise ValueError(
             f"b_anode_advective_block must lie in [0, 1] (got {block})"
         )
+    neutral_transparency = (
+        transparency
+        if anode_neutral_transparency is None
+        else float(anode_neutral_transparency)
+    )
+    if not 0.0 <= neutral_transparency <= 1.0:
+        raise ValueError(
+            "anode neutral transparency must lie in [0, 1] "
+            f"(got {neutral_transparency})"
+        )
     for face in np.asarray(
         [] if anode_face_indices is None else anode_face_indices, dtype=int
     ):
         plasma_transmission[face] = 1.0 - block * (1.0 - transparency)
         heat_transmission[face] = transparency
-        neutral_face_area_cm2[face] = neutral_face_area_cm2[face] * transparency
+        neutral_face_area_cm2[face] = (
+            neutral_face_area_cm2[face] * neutral_transparency
+        )
 
     # No prescribed neutral apertures: NaN => derive the molecular-flow (Clausing)
     # conductance from the face area + hydraulic radius. Kept as an escape hatch

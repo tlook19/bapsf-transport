@@ -50,7 +50,20 @@ from cablp.solvers._sim1d.results.io import save_result_hdf5
 OVERLAY = Path(__file__).resolve().parent / "data" / "es1_sim1d_overlay.npz"
 
 PARAM_OVERRIDES = {
-    "V_bank": 180.0,
+    # Discharge circuit fitted from the ES1 trace itself (0.14 V rms;
+    # scripts/fit_es1_circuit.py): Thevenin V0/R/L/C_eff. Supersedes the
+    # nominal V_bank=180 / inferred R_comp=0.010; C_eff carries a hardware
+    # caveat (nominal bank <= 4 F) documented in THESIS_NOTES section 2.
+    "V_bank": 173.6,
+    "R_comp": 5.72e-3,
+    "L_parasitic_H": 6.6e-6,
+    "C_bank_F": 8.9,
+    # Second-order circuit fold (now also the config default): the BE fold
+    # is dt-unconverged at production dt (peak +6%, plateau +1% under dt
+    # halving); trapezoidal recovers the dt->0 trace at identical cost.
+    # NB pre-2026-07-19 saved runs (incl. the sweep-4 drag A/B) used BE:
+    # their plateau sits ~1.8% low against runs made with this config.
+    "circuit_scheme": "trapezoidal",
     "T_s": 273.15 + 1725,
     "S_gp": 3000,
     "S_gp_decay_target": 2000,
@@ -79,7 +92,6 @@ PARAM_OVERRIDES = {
     "b_Qcx": 1,
     "Rp": 15.0,
     "R_cath": 15.0,
-    "R_comp": 0.010,
     "implicit_heat_scheme": "tr_bdf2",
     "operator_splitting": "strang",
     "heat_picard_iterations": 2,
@@ -99,7 +111,14 @@ def _main_discharge_origin(result):
     return float(times[hits[0]]) if hits.size else float(times[0])
 
 
-def run_model(resolved=True, nx=None, exchange_model="knudsen", extra=None):
+def run_model(
+    resolved=True,
+    nx=None,
+    exchange_model="knudsen",
+    extra=None,
+    drag_closure=None,
+    Rp_model=None,
+):
     params, flags = default_config()
     params.update(PARAM_OVERRIDES)
     flags.update(FLAG_OVERRIDES)
@@ -108,6 +127,31 @@ def run_model(resolved=True, nx=None, exchange_model="knudsen", extra=None):
         params["neutral_exchange_model"] = exchange_model
     if nx is not None:
         params["nx"] = nx
+    # A/B instrument for THESIS_NOTES gate #2 (NEUTRAL_MOMENTUM_PLAN.md M4):
+    # swap the drag closure without touching the rest of the production
+    # config. "constant" is PARAM_OVERRIDES as-is (the calibrated 0.5);
+    # "slip" is the entrainment closure; "neutral_momentum" evolves M_n with
+    # the honest b = 1 (the field replaces the compensation constant).
+    if drag_closure == "slip":
+        params["ion_neutral_drag_model"] = "slip"
+        params["b_ion_neutral_drag"] = 1.0
+    elif drag_closure == "neutral_momentum":
+        params["ion_neutral_drag_model"] = "constant"
+        params["b_ion_neutral_drag"] = 1.0
+        flags["neutral_momentum"] = True
+    elif drag_closure == "neutral_momentum_two_zone":
+        params["ion_neutral_drag_model"] = "constant"
+        params["b_ion_neutral_drag"] = 1.0
+        params["neutral_momentum_radial"] = "two_zone"
+        flags["neutral_momentum"] = True
+    elif drag_closure not in (None, "constant"):
+        raise ValueError(f"unknown drag_closure {drag_closure!r}")
+    # A/B instrument for CATHODE_IDRIVEN_PLAN.md M1: profile-integrated
+    # cathode-anode gap resistance vs the historical single-sample R_p.
+    # With the production Rp == R_cath the geometric component vanishes, so
+    # this isolates the Te-profile effect on V_dis(t).
+    if Rp_model is not None:
+        params["cathode_Rp_model"] = Rp_model
     if extra:
         params.update(extra)
     sim = LAPDSim1D(params, flags)
@@ -182,6 +226,18 @@ def compare_peak_current(result, overlay):
     out["exp_peak_t_ms"] = float(t_exp[j_peak])
     out["exp_peak_sem_a"] = float(sem_exp[j_peak])
     out["ratio"] = out["model_peak_a"] / out["exp_peak_a"]
+
+    # Late-window plateau (15-19.5 ms): the model's early transient carries a
+    # known V_dis(t)-trajectory artifact (THESIS_NOTES section 2), so the
+    # established current scale is better read from the end of the drive.
+    late = (15.0, 19.5)
+    m_model = (t_model_ms >= late[0]) & (t_model_ms <= late[1])
+    m_exp = (t_exp >= late[0]) & (t_exp <= late[1])
+    out["model_late_a"] = (
+        float(np.nanmean(I_model[m_model])) if np.any(m_model) else np.nan
+    )
+    out["exp_late_a"] = float(np.nanmean(I_exp[m_exp])) if np.any(m_exp) else np.nan
+    out["late_ratio"] = out["model_late_a"] / out["exp_late_a"]
     return out
 
 
@@ -254,11 +310,15 @@ def compare_decay(result, overlay, window_ms=(20.5, 25.0)):
 
 
 def _report_peak_current(peak):
-    print("\n--- stage (i): peak discharge current ---")
+    print("\n--- stage (i): discharge current ---")
     print(
-        f"  model {peak['model_peak_a']:8.4g} A at {peak['model_peak_t_ms']:+6.2f} ms"
+        f"  peak:    model {peak['model_peak_a']:8.4g} A at {peak['model_peak_t_ms']:+6.2f} ms"
         f" | measured {peak['exp_peak_a']:8.4g} +/- {peak['exp_peak_sem_a']:.2g} A"
         f" at {peak['exp_peak_t_ms']:+6.2f} ms | ratio {peak['ratio']:.3f}"
+    )
+    print(
+        f"  plateau: model {peak['model_late_a']:8.4g} A (15-19.5 ms mean)"
+        f" | measured {peak['exp_late_a']:8.4g} A | ratio {peak['late_ratio']:.3f}"
     )
 
 
@@ -301,6 +361,18 @@ def _report(label, rows):
                 f"mean rms rel {np.mean([r['rms_rel'] for r in sub]):.2f}, "
                 f"mean |dev|/SEM {np.mean([r['sigma'] for r in sub]):.1f}"
             )
+        if len(sub) >= 2:
+            # Axial-gradient figure of merit: far-port / near-port ratio.
+            # 1.00 means the model's axial falloff matches the measured one
+            # regardless of overall magnitude.
+            first, last = sub[0], sub[-1]
+            grad_model = last["model"] / first["model"]
+            grad_exp = last["exp"] / first["exp"]
+            print(
+                f"  {field} axial gradient (z={last['z']:.0f}/{first['z']:.0f}): "
+                f"model {grad_model:.2f} vs measured {grad_exp:.2f} "
+                f"(ratio {grad_model / grad_exp:.2f})"
+            )
 
 
 def main(argv=None):
@@ -337,6 +409,32 @@ def main(argv=None):
         default=None,
         help="score a saved result instead of running the model",
     )
+    parser.add_argument(
+        "--drag-closure",
+        default=None,
+        choices=(
+            "constant",
+            "slip",
+            "neutral_momentum",
+            "neutral_momentum_two_zone",
+        ),
+        help=(
+            "swap the ion-neutral drag closure for the gate-#2 A/B: "
+            "constant (production 0.5), slip (entrainment closure, b=1), "
+            "neutral_momentum (evolved M_n wind, b=1), or "
+            "neutral_momentum_two_zone (M_n wind + two-zone radial closure)"
+        ),
+    )
+    parser.add_argument(
+        "--Rp-model",
+        default=None,
+        choices=("sample", "resolved_gap"),
+        help=(
+            "cathode gap-resistance model for the M1 A/B "
+            "(CATHODE_IDRIVEN_PLAN.md): sample (historical one-cell "
+            "Spitzer) or resolved_gap (profile-integrated over the gap)"
+        ),
+    )
     args = parser.parse_args(argv)
 
     overlay = np.load(OVERLAY, allow_pickle=False)
@@ -350,6 +448,10 @@ def main(argv=None):
             if args.legacy
             else f"resolved ({args.exchange_model}, nx={args.nx or 'default'})"
         )
+        if args.drag_closure is not None:
+            label += f" [drag={args.drag_closure}]"
+        if args.Rp_model is not None:
+            label += f" [Rp={args.Rp_model}]"
         extra = {}
         if args.tau_afterglow is not None:
             extra["tau_afterglow"] = args.tau_afterglow
@@ -359,6 +461,8 @@ def main(argv=None):
                 nx=args.nx,
                 exchange_model=args.exchange_model,
                 extra=extra,
+                drag_closure=args.drag_closure,
+                Rp_model=args.Rp_model,
             )
         except BreakdownError as error:
             print(f"{label}: no breakdown (I_tot={error.I_tot:.4g} A)")

@@ -13,6 +13,7 @@ from ..physics.neutrals import neutral_exchange_rhs, neutral_source_sink_rhs
 from ..physics.reactions import reaction_rhs
 from ..physics.sources import (
     ion_neutral_collision_frequency,
+    neutral_wind_velocity,
     surface_neutralization_rhs,
 )
 from .state import derive_state
@@ -34,6 +35,9 @@ class TimestepDiagnostics:
     dt_ion_neutral_drag: float
     dt_max: float
     active_constraint: str
+    # Defaulted so results written before the neutral wind existed still
+    # load; inf whenever the state carries no M_n (the historical case).
+    dt_neutral_wind: float = np.inf
     accepted_dt: float = np.nan
     step_cap: str = ""
     retry_count: int = 0
@@ -164,6 +168,13 @@ def suggest_timestep(
             ion_neutral_drag_kwargs=ion_neutral_drag_kwargs,
             drag_dt_fraction=drag_dt_fraction,
         ),
+        "neutral_wind": neutral_wind_timestep(
+            state=state,
+            floors=floors,
+            ion_mass_g=ion_mass_g,
+            geometry=geometry,
+            cfl=cfl,
+        ),
         "dt_max": float(dt_max),
     }
     active_constraint, raw_dt = min(dt_candidates.items(), key=lambda item: item[1])
@@ -185,6 +196,7 @@ def suggest_timestep(
         dt_ion_neutral_drag=float(dt_candidates["ion_neutral_drag"]),
         dt_max=float(dt_max),
         active_constraint=active_constraint,
+        dt_neutral_wind=float(dt_candidates["neutral_wind"]),
     )
 
 
@@ -308,6 +320,28 @@ def ion_neutral_drag_timestep(
     if nu_max <= 0.0:
         return np.inf
     return drag_dt_fraction / nu_max
+
+
+def neutral_wind_timestep(state, floors, ion_mass_g, geometry, cfl=0.4):
+    """Return the CFL bound for neutral-wind advection.
+
+    ``cfl * min(dz / |u_n|)`` over cells with a moving wind; infinite when
+    the state carries no ``M_n`` (the historical case) or the wind is
+    everywhere still. The wind is deeply subsonic in practice (~1e-4 s
+    against dt <= 1e-6), so this guard exists for pathological transients,
+    not the design point.
+    """
+    if state.M_n is None:
+        return np.inf
+    speed = np.abs(
+        neutral_wind_velocity(state, floors=floors, ion_mass_g=ion_mass_g)
+    )
+    moving = speed > 0.0
+    if not np.any(moving):
+        return np.inf
+    return float(cfl) * float(
+        np.min(geometry.length_cm[moving] / speed[moving])
+    )
 
 
 def neutral_exchange_timestep(

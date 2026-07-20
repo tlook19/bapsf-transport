@@ -1,3 +1,5 @@
+import math
+
 import mpmath as mp
 import numpy as np
 from pathlib import Path
@@ -168,6 +170,96 @@ def He_EIE_cross_DA(eps, A):
     )
     factor3 = mp.fdiv(mp.fadd(eps, 1), mp.fadd(eps, A[5]))
     return mp.fprod([factor1, factor2, factor3])
+
+
+_ATM_CROSS_CGS_F = float(atm_cross_cgs)
+_RY_EV_F = float(Ry_eV)
+
+
+def He_EIE_omega_allowed(eps, A):
+    """Dipole-allowed collision strength Omega(x) [dimensionless], float.
+
+    Eq. (2) of Ralchenko et al., ADNDT 94 (2008) 603: 6-coefficient fit,
+    eps = E / E_threshold > 1. Same formula as the mpmath ``He_EIE_cross_DA``
+    without the cross-section conversion factor (which that function ties to
+    the 2^1P threshold).
+    """
+    return (
+        A[0] * math.log(eps) + sum(A[i] * eps ** (1 - i) for i in range(1, 5))
+    ) * (eps + 1.0) / (eps + A[5])
+
+
+def He_EIE_omega_forbidden(eps, A):
+    """Dipole-forbidden collision strength Omega(x) [dimensionless], float.
+
+    Eq. (3) of Ralchenko et al., ADNDT 94 (2008) 603: 5-coefficient fit,
+    eps = E / E_threshold > 1.
+    """
+    return sum(A[i] * eps ** (-i) for i in range(4)) * eps**2 / (eps**2 + A[4])
+
+
+def He_EIE_cross_manifold(E_eV, entry):
+    """Excitation cross section [cm^2] from He 1^1S at electron energy E_eV.
+
+    ``entry`` is a value of ``vars._coeff.He_singlet_manifold``:
+    ``{"E_eV": threshold, "form": "allowed"|"forbidden", "A": [...]}``.
+    Conversion per the paper's Eq. (1) with g_i = 1:
+    sigma = pi*a0^2 * Ry / E * Omega(E/E_th). Returns 0.0 at or below
+    threshold; any near-threshold negative wiggle of the fitted Omega is
+    clamped to zero.
+    """
+    E_th = entry["E_eV"]
+    if E_eV <= E_th:
+        return 0.0
+    eps = E_eV / E_th
+    if entry["form"] == "allowed":
+        omega = He_EIE_omega_allowed(eps, entry["A"])
+    elif entry["form"] == "forbidden":
+        omega = He_EIE_omega_forbidden(eps, entry["A"])
+    else:
+        raise ValueError(f"unknown manifold fit form {entry['form']!r}")
+    return _ATM_CROSS_CGS_F * _RY_EV_F / E_eV * max(omega, 0.0)
+
+
+def He_singlet_tail_levels(n_max=20):
+    """The n >= 5 singlet Rydberg levels for the Eq. (5) tail, per series.
+
+    Yields ``(series, n, E_th_eV, scale)`` where ``scale = (4/n)^3`` and
+    E_th = E_lim - Ry/(n - delta)^2 with the per-series quantum defect
+    (``vars._coeff.He_singlet_quantum_defect``). The n^-3 sum truncated at
+    ``n_max = 20`` leaves < 0.1% of the summed tail uncounted.
+    """
+    from ..vars._coeff import He_ionization_limit_eV, He_singlet_quantum_defect
+
+    for series in ("S", "P", "D", "F"):
+        delta = He_singlet_quantum_defect[series]
+        for n in range(5, n_max + 1):
+            E_th = He_ionization_limit_eV - _RY_EV_F / (n - delta) ** 2
+            yield series, n, E_th, (4.0 / n) ** 3
+
+
+def He_singlet_tail_cross(E_eV, n_max=20):
+    """Summed n >= 5 singlet-excitation tail from He 1^1S: (sigma, sigma*E).
+
+    Applies the paper's Eq. (5) scaling to the n = 4 rows of the manifold:
+    sigma(1^1S -> n^1L, E) = (4/n)^3 * sigma(1^1S -> 4^1L, E/eps_tilde) with
+    eps_tilde = E_th(n)/E_th(4). Born-derived for the allowed series,
+    classical for the forbidden ones — a stated remainder estimate, not a
+    fitted cross section. Returns ``(sigma_tot_cm2, sigma_E_tot_cm2_eV)``
+    where the second entry books each level's threshold as radiated energy.
+    """
+    from ..vars._coeff import He_singlet_manifold
+
+    base = {s: He_singlet_manifold[f"41{s}"] for s in ("S", "P", "D", "F")}
+    sigma_tot = 0.0
+    sigma_E_tot = 0.0
+    for series, _n, E_th, scale in He_singlet_tail_levels(n_max):
+        b = base[series]
+        eps_tilde = E_th / b["E_eV"]
+        sigma = scale * He_EIE_cross_manifold(E_eV / eps_tilde, b)
+        sigma_tot += sigma
+        sigma_E_tot += sigma * E_th
+    return sigma_tot, sigma_E_tot
 
 
 def int_factor(I):

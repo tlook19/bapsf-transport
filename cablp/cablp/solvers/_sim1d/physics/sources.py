@@ -543,6 +543,68 @@ def _resolve_slip_factor(
     )
 
 
+def neutral_wind_velocity(state, floors, ion_mass_g):
+    """Return the neutral drift ``u_n = M_n / (m * nn)`` [cm/s], or zeros.
+
+    ``nn`` is floored before dividing, matching ``derive_state``'s treatment
+    of the plasma velocity; a state without ``M_n`` has no wind.
+    """
+    if state.M_n is None:
+        return np.zeros_like(np.asarray(state.nn, dtype=float))
+    nn_safe = np.maximum(np.asarray(state.nn, dtype=float), floors["nn"])
+    return np.asarray(state.M_n, dtype=float) / (ion_mass_g * nn_safe)
+
+
+def neutral_wind_two_zone_factors(geometry, Tn_eV, ion_mass_g):
+    """Return per-cell ``(column_factor, wall_rate_1_s)`` for the two-zone closure.
+
+    The chamber-mean ``M_n`` hides the radial structure of the wind: drag acts
+    only inside the plasma column (radius ``Rp``), and the annulus gas outside
+    it is held slow by diffuse wall reflection. Two well-mixed zones exchanging
+    free-molecularly close that structure algebraically (no new state):
+
+    - a column neutral escapes the column in ``1/nu_p``, ``nu_p = vbar/(2 Rp)``
+      (flux ``n vbar/4`` through the lateral surface ``2 pi Rp`` per column
+      area ``pi Rp^2``);
+    - an annulus neutral thermalizes on the outer wall in ``1/nu_w``,
+      ``nu_w = vbar Rm / (2 (Rm^2 - Rp^2))`` (same flux argument on the shell).
+
+    Quasi-steady annulus momentum balance (``f = (Rp/Rm)^2`` the column volume
+    fraction) gives the annulus/column wind ratio and the column enhancement
+    over the chamber mean::
+
+        r = f nu_p / (f nu_p + (1 - f) nu_w)      u_a = r * u_c
+        c = 1 / (f + (1 - f) r)                   u_c = c * u_mean
+
+    and the wall only sees annulus gas, so the sink on the chamber-mean
+    momentum is ``-W M_n`` with ``W = (1 - f) r nu_w c``. On the production
+    geometry (Rp 15, Rm 50, Tn 0.1 eV He) this gives ``c ~ 3.3`` and
+    ``W ~ 1.9e3 1/s`` versus the uniform closure's ``vbar/Rm ~ 4.9e3 1/s``:
+    the drag input shrinks (the column gas already rides near ``u_i``) far
+    more than the sink weakens, so the chamber-mean wind slows.
+
+    Cells without a genuine annulus (``Rp >= Rm``) fall back to the uniform
+    closure: ``c = 1`` and ``W = vbar/Rm``.
+    """
+    vbar_n = np.sqrt(8.0 * float(Tn_eV) * ev_to_erg / (np.pi * ion_mass_g))
+    Rp = np.asarray(geometry.Rp_cm, dtype=float)
+    Rm = np.asarray(geometry.Rm_cm, dtype=float)
+    if np.any(Rp <= 0.0) or np.any(Rm <= 0.0):
+        raise ValueError("two-zone closure requires positive Rp_cm and Rm_cm")
+    column_factor = np.ones_like(Rm)
+    wall_rate = vbar_n / Rm
+    mask = Rp < Rm
+    if np.any(mask):
+        f = (Rp[mask] / Rm[mask]) ** 2
+        nu_p = vbar_n / (2.0 * Rp[mask])
+        nu_w = vbar_n * Rm[mask] / (2.0 * (Rm[mask] ** 2 - Rp[mask] ** 2))
+        r = f * nu_p / (f * nu_p + (1.0 - f) * nu_w)
+        c = 1.0 / (f + (1.0 - f) * r)
+        column_factor[mask] = c
+        wall_rate[mask] = (1.0 - f) * r * nu_w * c
+    return column_factor, wall_rate
+
+
 def ion_neutral_drag_rhs(
     state,
     floors,
@@ -556,19 +618,32 @@ def ion_neutral_drag_rhs(
     Rm_cm=None,
     Tn_fit=0.1,
     sigma_in_model="constant",
+    geometry=None,
+    wind_column_factor=None,
 ):
-    """Return the conservative ion-neutral drag momentum sink.
+    """Return the conservative ion-neutral drag momentum exchange.
 
     The drag force density is ``-m_i * nu(Ti) * n * (u - u_n)`` [g cm^-2 s^-2],
     a friction on the plasma flow from collisions with the neutral background.
     ``nu`` is the total momentum-transfer rate, or the charge-exchange-only rate
-    when ``cx_only`` is set. Only the momentum field is affected.
+    when ``cx_only`` is set.
 
-    With ``drag_model="constant"`` the neutral flow is closed by the constant
-    ``b_ion_neutral_drag`` (asserting ``u_n = (1 - b)*u`` everywhere). With
-    ``drag_model="slip"`` the relative velocity is closed per cell by
-    ``ion_neutral_slip_factor`` instead, and ``b_ion_neutral_drag`` remains an
-    overall multiplier (leave it at 1 unless doing a sensitivity study).
+    The neutral flow ``u_n`` comes from one of three closures. With
+    ``drag_model="constant"`` it is the constant ``b_ion_neutral_drag``
+    (asserting ``u_n = (1 - b)*u`` everywhere); with ``drag_model="slip"`` the
+    relative velocity is closed per cell by ``ion_neutral_slip_factor``, and
+    ``b_ion_neutral_drag`` remains an overall multiplier. When the state
+    carries the evolved neutral momentum ``M_n`` (the ``neutral_momentum``
+    flag) there is no closure at all: ``u_n = M_n / (m nn)`` is the chamber-
+    mean wind, the plasma sink is ``-m nu n (u - u_n)``, and the same
+    momentum lands in ``M_n`` through the ``(Vp/Vm)`` volume conversion --
+    conserved between species exactly like particles. That mode requires
+    ``geometry`` and rejects ``drag_model="slip"`` (whose closure is this
+    exchange's own steady state against the wall sink). A non-``None``
+    ``wind_column_factor`` (``neutral_wind_two_zone_factors``) scales the
+    chamber-mean wind up to the in-column wind the drag actually pushes
+    against; the species exchange stays exactly conservative because only
+    the sampled velocity changes, not the transfer bookkeeping.
     """
     zeros = np.zeros_like(state.n, dtype=float)
     if b_ion_neutral_drag == 0.0:
@@ -589,6 +664,35 @@ def ion_neutral_drag_rhs(
         cx_only=cx_only,
         sigma_in_model=sigma_in_model,
     )
+    if state.M_n is not None:
+        if drag_model == "slip":
+            raise ValueError(
+                "neutral_momentum is mutually exclusive with "
+                "ion_neutral_drag_model='slip'"
+            )
+        if geometry is None:
+            raise ValueError(
+                "drag with an evolved M_n requires geometry for the "
+                "plasma/neutral volume conversion"
+            )
+        u_n = neutral_wind_velocity(state, floors=floors, ion_mass_g=ion_mass_g)
+        if wind_column_factor is not None:
+            u_n = wind_column_factor * u_n
+        drag = (
+            -float(b_ion_neutral_drag)
+            * ion_mass_g
+            * nu
+            * state.n
+            * (derived.u - u_n)
+        )
+        return ConservativeState1D(
+            n=zeros,
+            nn=zeros.copy(),
+            M=drag,
+            Ee=zeros.copy(),
+            Ei=zeros.copy(),
+            M_n=-drag * geometry.volume_ratio,
+        )
     slip = _resolve_slip_factor(
         state=state,
         derived=derived,
@@ -656,6 +760,7 @@ def ion_neutral_frictional_heating_rhs(
     Rm_cm=None,
     Tn_fit=0.1,
     sigma_in_model="constant",
+    wind_column_factor=None,
 ):
     """Return the conservative ion frictional-heating energy source.
 
@@ -668,7 +773,11 @@ def ion_neutral_frictional_heating_rhs(
 
     With ``drag_model="slip"`` the relative velocity is ``u * s`` from
     ``ion_neutral_slip_factor``, so the dissipated power carries ``s**2``
-    (it is quadratic in the slip, where the drag force is linear).
+    (it is quadratic in the slip, where the drag force is linear). With an
+    evolved ``M_n`` on the state the relative velocity is ``u - u_n``
+    directly, no closure. Either way only the ion half of the dissipated
+    drift energy is booked; the neutral half has no energy equation to land
+    in and is dropped, as ever.
     """
     zeros = np.zeros_like(state.n, dtype=float)
     if b_ion_neutral_drag == 0.0:
@@ -689,25 +798,32 @@ def ion_neutral_frictional_heating_rhs(
         cx_only=cx_only,
         sigma_in_model=sigma_in_model,
     )
-    slip = _resolve_slip_factor(
-        state=state,
-        derived=derived,
-        ion_mass_g=ion_mass_g,
-        drag_model=drag_model,
-        Rm_cm=Rm_cm,
-        Tn_fit=Tn_fit,
-        sigma_in_cm2=sigma_in_cm2,
-        b_slip_entrainment=b_slip_entrainment,
-        sigma_in_model=sigma_in_model,
-        gas_type=gas_type,
-    )
+    if state.M_n is not None:
+        u_n = neutral_wind_velocity(state, floors=floors, ion_mass_g=ion_mass_g)
+        if wind_column_factor is not None:
+            u_n = wind_column_factor * u_n
+        u_rel = derived.u - u_n
+    else:
+        slip = _resolve_slip_factor(
+            state=state,
+            derived=derived,
+            ion_mass_g=ion_mass_g,
+            drag_model=drag_model,
+            Rm_cm=Rm_cm,
+            Tn_fit=Tn_fit,
+            sigma_in_cm2=sigma_in_cm2,
+            b_slip_entrainment=b_slip_entrainment,
+            sigma_in_model=sigma_in_model,
+            gas_type=gas_type,
+        )
+        u_rel = derived.u * slip
     q_fric = (
         0.5
         * float(b_ion_neutral_drag)
         * ion_mass_g
         * nu_el
         * state.n
-        * (derived.u * slip) ** 2
+        * u_rel**2
     )
     return ConservativeState1D(
         n=zeros,
@@ -787,12 +903,126 @@ def ion_neutral_thermalization_rhs(
     )
 
 
+def radial_recycling_rhs(
+    state,
+    floors,
+    ion_mass_g,
+    geometry,
+    tau_s=None,
+):
+    """Return the radial-loss + wall-recycling proxy source terms.
+
+    **This is a documented stand-in for radial physics the 1D model lacks**
+    (THESIS_NOTES section 3): plasma is lost radially at ``-n / tau_s``, the
+    wall neutralizes it, and the neutral returns *locally* as cold gas. Per
+    cell, with ``S = n/tau``: the plasma channel loses particles, momentum,
+    and thermal energy (the wall keeps all three -- this is a radial energy
+    loss channel too), and the neutral inventory gains ``S * Vp/Vm``. Total
+    particle inventory is conserved exactly; the returned gas is cold, so no
+    energy comes back.
+
+    The tuning campaign's motivation (ES1_TUNING.md section 4): the model's
+    mid-column neutral burnout canyon has no refill channel, because the
+    physical refill -- wall recycling of radially-lost plasma, a
+    *distributed* neutral source -- is radial. This term is that channel
+    through one named knob. Its honesty test: LAPD radial confinement is of
+    order 5-25 ms, so a fitted ``tau_s`` in the low-ms range is plausible
+    compensation, and anything far outside is a documented failure.
+
+    ``tau_s = None`` or ``<= 0`` disables the term (the default; the golden
+    baseline never sees it). The implicit neutral-only step deliberately
+    omits this term: it runs only before plasma launch, where ``n`` sits on
+    its floor and the term is ~1e-7 of the gas inventory.
+    """
+    zeros = np.zeros_like(state.n, dtype=float)
+    if tau_s is None or float(tau_s) <= 0.0:
+        return ConservativeState1D(
+            n=zeros,
+            nn=zeros.copy(),
+            M=zeros.copy(),
+            Ee=zeros.copy(),
+            Ei=zeros.copy(),
+        )
+    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
+    S = state.n / float(tau_s)
+    volume_ratio = geometry.plasma_volume_cm3 / geometry.neutral_volume_cm3
+    return ConservativeState1D(
+        n=-S,
+        nn=S * volume_ratio,
+        M=-ion_mass_g * derived.u * S,
+        Ee=-1.5 * ev_to_erg * derived.Te * S,
+        Ei=-1.5 * ev_to_erg * derived.Ti * S,
+    )
+
+
+def neutral_momentum_wall_rhs(
+    state,
+    floors,
+    ion_mass_g,
+    Rm_cm,
+    Tn_fit=0.1,
+    wall_rate_1_s=None,
+):
+    """Return the neutral-wind wall-accommodation momentum sink.
+
+    A free-molecular neutral carries its directed momentum to the chamber
+    wall and thermalizes there in ``tau_wall = Rm / vbar_n(Tn)`` -- the same
+    accommodation time the ``slip`` closure balances against, because the
+    local steady state of drag reception vs. this sink *is* that closure
+    (NEUTRAL_MOMENTUM_PLAN.md). The rhs is ``-M_n / tau_wall`` on the
+    neutral-momentum field only; a state without ``M_n`` gets zeros.
+
+    A non-``None`` ``wall_rate_1_s`` (``neutral_wind_two_zone_factors``)
+    replaces ``1/tau_wall`` with the two-zone effective rate, in which only
+    the slow annulus gas touches the wall.
+    """
+    zeros = np.zeros_like(state.nn, dtype=float)
+    if state.M_n is None:
+        return ConservativeState1D(
+            n=zeros,
+            nn=zeros.copy(),
+            M=zeros.copy(),
+            Ee=zeros.copy(),
+            Ei=zeros.copy(),
+        )
+    if wall_rate_1_s is None:
+        vbar_n = np.sqrt(8.0 * float(Tn_fit) * ev_to_erg / (np.pi * ion_mass_g))
+        tau_wall = np.asarray(Rm_cm, dtype=float) / vbar_n
+        dM_n = -np.asarray(state.M_n, dtype=float) / tau_wall
+    else:
+        dM_n = -np.asarray(state.M_n, dtype=float) * np.asarray(
+            wall_rate_1_s, dtype=float
+        )
+    return ConservativeState1D(
+        n=zeros,
+        nn=zeros.copy(),
+        M=zeros.copy(),
+        Ee=zeros.copy(),
+        Ei=zeros.copy(),
+        M_n=dM_n,
+    )
+
+
 def add_state_rhs(left, right):
-    """Return the sum of two conservative RHS bundles."""
+    """Return the sum of two conservative RHS bundles.
+
+    A missing ``M_n`` on either side counts as zeros when the other side
+    carries one (most RHS terms do not touch neutral momentum); both missing
+    keeps the historical 5-field result.
+    """
+    if left.M_n is None and right.M_n is None:
+        M_n = None
+    elif left.M_n is None:
+        M_n = right.M_n
+    elif right.M_n is None:
+        M_n = left.M_n
+    else:
+        M_n = left.M_n + right.M_n
     return ConservativeState1D(
         n=left.n + right.n,
         nn=left.nn + right.nn,
         M=left.M + right.M,
         Ee=left.Ee + right.Ee,
         Ei=left.Ei + right.Ei,
+        M_n=M_n,
     )

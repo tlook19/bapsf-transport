@@ -1,9 +1,21 @@
+import dataclasses
 from dataclasses import dataclass
 import math
+import warnings
 
 import numpy as np
 
-from cablp.funcs._cathode_solver import DeviceConfig, solve_beam_system
+from scipy.optimize import brentq
+
+from cablp.funcs._cathode_solver import (
+    DeviceConfig,
+    PlasmaState,
+    solve_beam_system,
+)
+from cablp.funcs._cathode_solver_idriven import (
+    solve_beam_system_idriven,
+    solve_idriven,
+)
 from cablp.vars._cons import ev_to_erg, qe_SI
 
 from ..core.geometry import (
@@ -153,9 +165,62 @@ def cathode_boundary_state(
     )
 
 
+def cathode_emission_annuli(input_dict, n_annuli=10):
+    """Return ``(Ts_K, area_cm2, plasma_frac)`` tuples for the emission profile.
+
+    The measured plasma Te(x) footprint (FWHM ~ 28-29 cm at the first ES1
+    port, slightly broadened en route from the cathode) is read as the
+    field-line-mapped emission-current footprint of the real cathode disc:
+    ``j(r) = j0 * exp(-4 ln2 r^2 / FWHM^2)``. Inverting Richardson gives the
+    local surface temperature ``1/T(r) = 1/T_s - (kB/phi_wf) ln(j/j0)`` with
+    ``T_s`` the peak. The center-to-edge drop this implies (~150-200 K) is
+    what softens the emission knee from a razor wall into a stable ramp.
+
+    ``plasma_frac`` is each annulus's overlap with the plasma footprint
+    (``r < Rp``): annuli beyond it collect no ion current and are
+    space-charge choked, which the solver handles naturally.
+    """
+    R_cath = float(input_dict["R_cath"])
+    Rp = float(input_dict.get("Rp", R_cath))
+    T_s = float(input_dict["T_s"])
+    phi_wf = float(input_dict["phi_wf"])
+    fwhm = float(input_dict.get("cathode_Ts_fwhm_cm", 28.0))
+    if fwhm <= 0.0:
+        raise ValueError(f"cathode_Ts_fwhm_cm must be positive (got {fwhm})")
+    kB_over_e = 8.617333262e-5  # eV/K
+    edges = np.linspace(0.0, R_cath, int(n_annuli) + 1)
+    Ts_k, area_k, frac_k = [], [], []
+    for r0, r1 in zip(edges[:-1], edges[1:]):
+        r_mid = 0.5 * (r0 + r1)
+        ln_j = -4.0 * math.log(2.0) * r_mid**2 / fwhm**2
+        inv_T = 1.0 / T_s - (kB_over_e / phi_wf) * ln_j
+        Ts_k.append(1.0 / inv_T)
+        area_k.append(math.pi * (r1**2 - r0**2))
+        if r1 <= Rp:
+            frac_k.append(1.0)
+        elif r0 >= Rp:
+            frac_k.append(0.0)
+        else:
+            frac_k.append((Rp**2 - r0**2) / (r1**2 - r0**2))
+    return tuple(Ts_k), tuple(area_k), tuple(frac_k)
+
+
 def cathode_device_config(input_dict, input_flags, mu):
     """Build the existing cathode solver's static device configuration."""
     R_cath = float(input_dict["R_cath"])
+    profile = str(input_dict.get("cathode_emission_profile", "uniform"))
+    if profile == "uniform":
+        annuli = ((), (), ())
+    elif profile == "gaussian":
+        annuli = cathode_emission_annuli(
+            input_dict,
+            n_annuli=int(input_dict.get("cathode_emission_annuli", 10)),
+        )
+    else:
+        raise ValueError(
+            "cathode_emission_profile must be 'uniform' or 'gaussian' "
+            f"(got {profile!r})"
+        )
     return DeviceConfig(
         A_c=math.pi * R_cath**2,
         mu=mu,
@@ -168,6 +233,458 @@ def cathode_device_config(input_dict, input_flags, mu):
         Twin=bool(input_flags.get("TwinCathode", False)),
         L_cath=float(input_dict["L_cath"]),
         R_cath=R_cath,
+        emission_Ts_K=annuli[0],
+        emission_area_cm2=annuli[1],
+        emission_plasma_frac=annuli[2],
+    )
+
+
+_SIGMA_SB_W_CM2_K4 = 5.670374419e-12
+_KB_EV_PER_K = 8.617333262e-5
+
+
+def cathode_power_balance_terms_W(T_s_K, P_ion_W, I_eth_star_A, input_dict):
+    """Return ``(P_heater, P_ion, P_rad, P_emis, P_cond)`` [W] for warming.
+
+    The ``cathode_warming_model = "power_balance"`` surface energy budget
+    (CATHODE_IDRIVEN_PLAN.md M1b):
+
+    - ``P_heater`` is pinned by the standby equilibrium at
+      ``cathode_Ts_base_K`` -- open circuit means no net emission and no
+      substrate gradient, so the heater exactly balances radiation there
+      and is not a free parameter.
+    - ``P_ion`` is the accepted solve's ion bombardment power.
+    - ``P_rad`` is gray-body radiation from the emitting face.
+    - ``P_emis`` is evaporative emission cooling: each *actually emitted*
+      electron removes ``phi_wf + 2 k_B T_s`` (work function plus the mean
+      thermal energy over the barrier). Pass the accepted solve's
+      ``I_eth_star`` -- the space-charge-released current, not the
+      Richardson ceiling -- and 0 for floating phases, where emitted
+      electrons return to the surface and the net cooling vanishes.
+    - ``P_cond`` is conduction from the emitting skin layer into the
+      heater-held substrate, ``G_cond * (T_s - T_base)`` -- the
+      "heater maintains the lower end" restoring term. It vanishes at
+      standby by construction, so the heater pinning is unchanged.
+      **Without it the balance is unstable at the LAPD operating point**
+      (measured 2026-07-20, `es1_nx120_pb_demo.h5`): the bombardment
+      feedback gain d(P_ion)/dT through the emission loop exceeds the
+      ~230 W/K radiation+emission stiffness, and the current runs to
+      12.9 kA before the sheath saturates the loop.
+
+    The net rate is ``(P_heater + P_ion - P_rad - P_emis - P_cond) /
+    C_th``; the caller owns the time discretization.
+    """
+    area = input_dict.get("cathode_rad_area_cm2")
+    if area is None:
+        area = math.pi * float(input_dict["R_cath"]) ** 2
+    eps = float(input_dict.get("cathode_emissivity", 0.7))
+    T_env = float(input_dict.get("cathode_env_T_K", 300.0))
+    T_base = float(input_dict["cathode_Ts_base_K"])
+
+    def _rad(T):
+        return eps * _SIGMA_SB_W_CM2_K4 * float(area) * (T**4 - T_env**4)
+
+    P_emis = max(float(I_eth_star_A), 0.0) * (
+        float(input_dict["phi_wf"]) + 2.0 * _KB_EV_PER_K * float(T_s_K)
+    )
+    P_cond = float(input_dict.get("cathode_conduction_W_per_K", 0.0)) * (
+        float(T_s_K) - T_base
+    )
+    return (
+        _rad(T_base),
+        max(float(P_ion_W), 0.0),
+        _rad(float(T_s_K)),
+        P_emis,
+        P_cond,
+    )
+
+
+def spitzer_sigma_par_ohm_cm(Te_eV):
+    """Parallel Spitzer conductivity [Ohm^-1 cm^-1], as the cathode solver's.
+
+    Must match the internal ``sigma_par = 14.6 * T_e**1.5`` (fixed Coulomb
+    logarithm) in ``_cathode_solver.solve`` so the ``"resolved_gap"`` R_p
+    model reduces exactly to ``"sample"`` over a uniform gap. Follow-up on
+    record (Tom, 2026-07-20): derive sigma_par from the electron-ion
+    collision frequency nu_ei -- lnLambda(Te, n) via ``funcs._plasmaparams``
+    (``c_log``, ``time_elec_coll``) -- instead of this fixed-lnLambda fit.
+    That has to move in lockstep with the voltage-driven solver's internal
+    formula (or land only on the current-driven path), so it is a deliberate
+    separate change, not a drive-by here.
+    """
+    return 14.6 * np.asarray(Te_eV, dtype=float) ** 1.5
+
+
+def resolved_gap_resistance_ohm(Te, geometry):
+    """Return the profile-integrated cathode-anode gap resistance [Ohm].
+
+    ``R_p = sum_k dz_k / (sigma_par(Te_k) * A_k)`` over the resolved gap
+    cells, with each cell's own plasma-channel area -- the series resistance
+    of the actual column the discharge current crosses, and the same
+    per-cell Spitzer weighting ``_ohmic_gap_weights`` deposits P_ohmic with.
+    The historical single-sample formula spreads the hot cathode-adjacent
+    conductivity over the whole gap and so underestimates a colder gap
+    (eta_Spitzer ~ Te^-3/2). Returns ``None`` in legacy geometry, which has
+    no resolved gap to integrate.
+    """
+    if not cathode_adjacent_cells(geometry):
+        return None
+    gap = np.asarray(gap_cell_indices(geometry, end=0), dtype=int)
+    dz = np.asarray(geometry.length_cm, dtype=float)[gap]
+    area = np.asarray(geometry.plasma_area_cm2, dtype=float)[gap]
+    sigma = spitzer_sigma_par_ohm_cm(np.asarray(Te, dtype=float)[gap])
+    return float(np.sum(dz / (sigma * area)))
+
+
+def validate_cathode_solver_model(input_dict, input_flags):
+    """Validate and return the ``cathode_solver_model`` selection."""
+    model = str(input_dict.get("cathode_solver_model", "voltage_driven"))
+    if model not in ("voltage_driven", "current_driven"):
+        raise ValueError(
+            "cathode_solver_model must be 'voltage_driven' or "
+            f"'current_driven' (got {model!r})"
+        )
+    if model == "current_driven":
+        if bool(input_flags.get("TwinCathode", False)):
+            raise ValueError(
+                "cathode_solver_model='current_driven' does not support "
+                "TwinCathode (single-cathode first pass; route twin "
+                "machines through the voltage-driven solver)"
+            )
+        if float(input_dict.get("L_parasitic_H", 0.0)) <= 0.0:
+            raise ValueError(
+                "cathode_solver_model='current_driven' requires "
+                "L_parasitic_H > 0: with no inductor the loop current is "
+                "algebraic and the voltage-driven solver is the right tool"
+            )
+    return model
+
+
+def apply_cathode_Rp_model(device_config, derived, geometry, input_dict, input_flags):
+    """Apply ``cathode_Rp_model`` to the device config (M1 feed-in).
+
+    Returns ``(device_config, applied_model, R_p_gap_ohm)``; see
+    ``resolved_gap_resistance_ohm`` and the ``cathode_Rp_model`` config
+    docs. Shared by the per-step solve dispatch and the current-driven
+    circuit's V_dis(I) evaluator so the two cannot disagree about R_p.
+    """
+    Rp_model = validate_cathode_Rp_model(input_dict, input_flags)
+    R_p_gap_ohm = None
+    if Rp_model == "resolved_gap":
+        R_p_gap_ohm = resolved_gap_resistance_ohm(derived.Te, geometry)
+        if R_p_gap_ohm is None:
+            warnings.warn(
+                "cathode_Rp_model='resolved_gap' requires resolved geometry "
+                "(no cathode-anode gap cells here); falling back to the "
+                "historical single-sample R_p",
+                stacklevel=2,
+            )
+            Rp_model = "sample"
+        else:
+            # Feed the integrated gap resistance to the *unmodified*
+            # voltage-driven solver: R_cath appears in exactly one place in
+            # its solve, R_p = L_cath / (pi R_cath^2 sigma_par(Te_sample)),
+            # so an effective R_cath inverts that formula to reproduce
+            # R_p_gap exactly (A_c, Lambda, I_eth are all independent of
+            # R_cath). Te_sample must be the same cell solve_beam_system
+            # hands to the solve. device_config.R_cath is an effective
+            # value from here on, not the disc radius.
+            Te_sample = float(derived.Te[beam_launch(geometry, end=0)[0]])
+            sigma_sample = float(spitzer_sigma_par_ohm_cm(Te_sample))
+            device_config = dataclasses.replace(
+                device_config,
+                R_cath=math.sqrt(
+                    device_config.L_cath
+                    / (math.pi * sigma_sample * R_p_gap_ohm)
+                ),
+            )
+    return device_config, Rp_model, R_p_gap_ohm
+
+
+def idriven_vdis_evaluator(
+    state,
+    floors,
+    ion_mass_g,
+    mu,
+    geometry,
+    input_dict,
+    input_flags,
+    beam_cross_prev,
+    T_s_override_K=None,
+):
+    """Return a ``V_dis(I) [V]`` evaluator at this frozen plasma state.
+
+    Used by the current-driven circuit advance: each implicit stage
+    root-finds the loop current against the monotone device voltage, so it
+    needs many cheap sheath evaluations at the *accepted* end-of-step state
+    with only I varying. Builds the same device config (T_s substitution,
+    ``cathode_Rp_model`` feed-in, anode sample) as the per-step dispatch,
+    via the same helpers, so the circuit and the solve cannot disagree.
+    """
+    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
+    anode_A, anode_Te = anode_circuit_sample(
+        state, derived, geometry, mu, input_dict, end=0
+    )
+    if T_s_override_K is not None:
+        input_dict = {**input_dict, "T_s": float(T_s_override_K)}
+    device_config = cathode_device_config(input_dict, input_flags, mu)
+    device_config, _, _ = apply_cathode_Rp_model(
+        device_config, derived, geometry, input_dict, input_flags
+    )
+    idx = beam_launch(geometry, end=0)[0]
+    beam_cross_prev = np.asarray(beam_cross_prev, dtype=float)
+    plasma = PlasmaState(
+        T_e=float(derived.Te[idx]),
+        n_e=float(state.n[idx]),
+        n_n=float(state.nn[idx]),
+        sigma_b=float(beam_cross_prev[idx]),
+    )
+    schottky = bool(input_flags.get("cathode_schottky", False))
+    cap = float(input_dict.get("cathode_phi_c_cap_V", 1000.0))
+
+    def vdis(I_A):
+        return solve_idriven(
+            device_config,
+            plasma,
+            I_tot_A=max(float(I_A), 0.0),
+            anode_current_A=anode_A,
+            anode_T_e=anode_Te,
+            schottky=schottky,
+            phi_c_cap_V=cap,
+        ).V_b
+
+    return vdis
+
+
+def advance_circuit_current_driven(
+    I_prev_A,
+    dt_s,
+    V_src_V,
+    R_comp_ohm,
+    L_H,
+    vdis_of_I,
+    C_bank_F=None,
+    V_cap_prev_V=None,
+):
+    """TR-BDF2 advance of the loop current against a monotone V_dis(I).
+
+    Integrates ``dI/dt = (V_src - I*R - V_dis(I)) / L`` over one accepted
+    step. The stage residual ``g(I) = I - rhs - a*f(I)`` has
+    ``g' = 1 + a*(R + dV_dis/dI)/L >= 1`` because the current-driven device
+    voltage is monotone in I, so each stage is a bracketed scalar brentq --
+    unconditionally well-posed however steep V_dis(I) gets. This is the
+    load-bearing design decision (plan §2c, revised 2026-07-20): a
+    frozen-V_dis explicit step needs ``dV/dI < 2L/dt ~ 22 mOhm`` at
+    production dt, and the measured device slope near the emission ceiling
+    is 0.2 Ohm-0.75 MOhm -- explicit would sawtooth exactly where this
+    machine operates. TR-BDF2 because the RLC gate demands 2nd order and
+    TR alone would ring against the near-vertical branch (L-stability, the
+    same argument as the heat-conduction scheme choice).
+
+    ``I >= 0`` is enforced per stage (the plasma-diode stand-in, plan
+    §2c): a stage whose unconstrained root is negative clamps to 0.
+    ``V_src_V`` is held constant over the step (drive: bank/capacitor
+    voltage; tail: 0); the capacitor, when present, is frozen for the I
+    stages (droop ~2e-4 V/step) and then advanced trapezoidally. Returns
+    ``(I_new_A, V_cap_new_V_or_None)``.
+    """
+    L = float(L_H)
+    if L <= 0.0:
+        raise ValueError(f"L_H must be positive (got {L_H})")
+    dt = float(dt_s)
+    I_n = max(float(I_prev_A), 0.0)
+
+    def f(I):
+        return (float(V_src_V) - I * float(R_comp_ohm) - vdis_of_I(I)) / L
+
+    def stage_solve(rhs_const, a_coef):
+        def g(I):
+            return I - rhs_const - a_coef * f(I)
+
+        if g(0.0) >= 0.0:
+            return 0.0
+        hi = max(I_n, 1.0)
+        for _ in range(200):
+            hi *= 2.0
+            if g(hi) > 0.0:
+                break
+        else:
+            raise RuntimeError(
+                "circuit stage bracket did not close "
+                f"(I_n={I_n:.6g} A, rhs={rhs_const:.6g})"
+            )
+        return brentq(g, 0.0, hi, xtol=1e-10, rtol=1e-12, full_output=False)
+
+    gamma = 2.0 - math.sqrt(2.0)
+    f_n = f(I_n)
+    # TR stage to t + gamma*dt: I_g = I_n + (gamma*dt/2)*(f_n + f(I_g))
+    a1 = 0.5 * gamma * dt
+    I_g = stage_solve(I_n + a1 * f_n, a1)
+    # BDF2 stage to t + dt:
+    #   I_1 = I_g/(gamma*(2-gamma)) - I_n*(1-gamma)^2/(gamma*(2-gamma))
+    #         + dt*(1-gamma)/(2-gamma) * f(I_1)
+    denom = gamma * (2.0 - gamma)
+    a2 = dt * (1.0 - gamma) / (2.0 - gamma)
+    I_new = stage_solve(
+        I_g / denom - I_n * (1.0 - gamma) ** 2 / denom, a2
+    )
+
+    V_cap_new = None
+    if C_bank_F is not None and float(C_bank_F) > 0.0:
+        V_cap_prev = (
+            float(V_cap_prev_V) if V_cap_prev_V is not None else 0.0
+        )
+        V_cap_new = max(
+            V_cap_prev - dt * 0.5 * (I_n + I_new) / float(C_bank_F), 0.0
+        )
+    return I_new, V_cap_new
+
+
+def validate_cathode_Rp_model(input_dict, input_flags):
+    """Validate and return the ``cathode_Rp_model`` selection."""
+    model = str(input_dict.get("cathode_Rp_model", "sample"))
+    if model not in ("sample", "resolved_gap"):
+        raise ValueError(
+            "cathode_Rp_model must be 'sample' or 'resolved_gap' "
+            f"(got {model!r})"
+        )
+    if model == "resolved_gap" and bool(input_flags.get("TwinCathode", False)):
+        raise ValueError(
+            "cathode_Rp_model='resolved_gap' does not support TwinCathode: "
+            "both cathodes share one DeviceConfig, so a single effective "
+            "R_cath cannot carry two gaps sampled at different Te. Use "
+            "cathode_Rp_model='sample' for twin configurations."
+        )
+    return model
+
+
+def inductive_circuit_config(
+    device_config,
+    L_H,
+    I_prev_A,
+    dt_s,
+    bank_connected=True,
+    C_bank_F=None,
+    V_cap_prev=None,
+    scheme="backward_euler",
+    V_dis_prev=None,
+):
+    """Fold a series parasitic inductance into the algebraic circuit solve.
+
+    Backward-Euler discretization of ``V_bank = V_dis + I*R_comp + L*dI/dt``
+    rearranges to the solver's existing algebraic form with
+
+        V_eff = V_base + (L/dt) * I_prev
+        R_eff = R_comp + L/dt
+
+    so the cathode solver itself needs no changes. ``V_base`` is the bank
+    voltage while the transistors conduct and **0 after they open**
+    (``bank_connected=False``, the afterglow): the ``(L/dt)*I_prev`` history
+    term is then the only EMF, and the loop current decays on
+    ``tau = L/R_loop`` -- the measured ~0.5 ms discharge-current tail, which
+    releases the stored ``L*I^2/2`` into the plasma through the existing
+    sheath/ohmic channels. ``L_H <= 0`` returns the config unchanged
+    (bit-exact legacy). Unconditionally stable; at ``tau_L >> dt`` the
+    per-step accuracy of using the previous accepted step's ``dt`` is
+    negligible. R_comp is kept in the tail loop; the L fitted to the
+    measured tail time constant absorbs whether the physical compliance
+    resistor sits inside or outside the freewheel path.
+
+    The finite bank (``C_bank_F``, with ``V_cap_prev`` the bank voltage after
+    the previous accepted step) adds droop the same way: backward-Euler
+    ``V_cap_new = V_cap_prev - (dt/C)*I`` puts one more ``dt/C`` term on the
+    effective resistance. ``C_bank_F = None`` is the historical infinite
+    bank. The <=120 A float-charge supply is measured negligible within a
+    shot (scripts/fit_es1_circuit.py) and is not modeled. In the tail
+    (``bank_connected=False``) the bank branch is open and the capacitor is
+    inert.
+
+    ``scheme="trapezoidal"`` upgrades the fold to Crank-Nicolson, which is
+    second order and needs only the previous accepted operating point's
+    discharge voltage ``V_dis_prev`` (the solve's ``V_b``) -- still one
+    sheath solve per call, same algebraic structure:
+
+        V_eff = V_base + (2L/dt)*I_prev + resid_prev - (dt/2C)*I_prev
+        R_eff = R_comp + 2L/dt + dt/(2C)
+        resid_prev = V_base - I_prev*R_comp - V_dis_prev
+
+    Measured motivation: at production dt the backward-Euler trace is not
+    dt-converged (halving dt moved the ES1 peak +6% and the plateau +1%,
+    which is ~1 K of T_s bias). At these dt the circuit mode is deeply
+    resolved (dt << L/R and << the coupled-oscillation period), so CN's
+    marginal stiff-mode damping is irrelevant here -- the stiff-mode
+    caution that applies to heat conduction does not transfer. With
+    ``V_dis_prev=None`` (first step, or a phase discontinuity where the
+    old-time residual would straddle the transistor cutoff) the fold falls
+    back to backward Euler for that step.
+    """
+    if scheme not in ("backward_euler", "trapezoidal"):
+        raise ValueError(
+            "circuit scheme must be 'backward_euler' or 'trapezoidal' "
+            f"(got {scheme!r})"
+        )
+    L = float(L_H)
+    finite_C = C_bank_F is not None and float(C_bank_F) > 0.0
+    if L <= 0.0 and not finite_C:
+        return device_config
+    dt = float(dt_s) if dt_s else 1.0e-6
+    if dt <= 0.0:
+        dt = 1.0e-6
+    # Floor the discretization dt: the run loop accepts sliver steps that
+    # land exactly on save/trigger boundaries, and an unbounded L/dt both
+    # inflates the effective EMF into regimes where the sheath solve has a
+    # pathological branch (tiny current, enormous phi_c) and feeds a
+    # multiplicative circuit runaway. At tau_L = L/R ~ 1 ms, treating a
+    # sub-100-ns sliver as 100 ns costs a bounded few-amp error on a state
+    # that barely moves in that time.
+    dt = max(dt, 1.0e-7)
+    trapezoidal = scheme == "trapezoidal" and V_dis_prev is not None
+    # CN halves the effective substep of both storage elements: L/dt -> 2L/dt
+    # and dt/C -> dt/2C, plus the known old-time residual on the EMF.
+    L_over_dt = ((2.0 if trapezoidal else 1.0) * L / dt) if L > 0.0 else 0.0
+    cap_dt = (0.5 if trapezoidal else 1.0) * dt
+    I_prev = float(I_prev_A)
+    if not bank_connected:
+        V_base = 0.0
+        R_extra = L_over_dt
+        cap_active = False
+    else:
+        if finite_C and V_cap_prev is not None:
+            V_base = float(V_cap_prev)
+            R_extra = L_over_dt + cap_dt / float(C_bank_F)
+            cap_active = True
+        else:
+            V_base = device_config.V_bank
+            R_extra = L_over_dt
+            cap_active = False
+    if R_extra == 0.0 and V_base == device_config.V_bank:
+        return device_config
+    V_eff = V_base + L_over_dt * I_prev
+    if trapezoidal:
+        # Old-time residual L*dI/dt|_prev = V_base - I*R - V_dis at the
+        # previous accepted operating point; the caller guarantees V_base is
+        # continuous across the step (phase transitions fall back to BE).
+        # Clamped to the physical EMF scale: a residual beyond +/- V_bank
+        # means the previous step was a transient the trapezoid has no
+        # business extrapolating (an unclamped negative residual can drive
+        # V_eff negative and push the sheath bracket into overflow).
+        resid = V_base - I_prev * device_config.R_comp - float(V_dis_prev)
+        V_scale = abs(float(device_config.V_bank))
+        V_eff += min(max(resid, -V_scale), V_scale)
+        if cap_active:
+            # Trapezoidal capacitor: V_cap,1 = V_cap,0 - (dt/2C)*(I0 + I1);
+            # the I1 half sits in R_extra, the I0 half shifts the EMF.
+            V_eff -= (cap_dt / float(C_bank_F)) * I_prev
+        V_eff = max(V_eff, 0.0)
+    return dataclasses.replace(
+        device_config,
+        V_bank=V_eff,
+        R_comp=device_config.R_comp + R_extra,
+        # The sheath drop is bounded by the *physical* EMF scale, not the
+        # backward-Euler effective one: without this ceiling the root bracket
+        # scales with V_eff (~kV-GV) and exposes pathological far roots
+        # (phi_c ~ V_eff at ~zero current) that flap the solve.
+        phi_sheath_max=1.5 * device_config.V_bank,
     )
 
 
@@ -185,6 +702,14 @@ def solve_cathode_boundary(
     x0=None,
     x0_twin=None,
     floating=False,
+    circuit_I_prev_A=0.0,
+    circuit_dt_s=None,
+    circuit_bank_off=False,
+    circuit_V_cap_prev=None,
+    circuit_scheme="backward_euler",
+    circuit_V_dis_prev=None,
+    T_s_override_K=None,
+    circuit_I_loop_A=0.0,
 ):
     """Call the cathode/beam solver and return raw diagnostics only."""
     boundary = cathode_boundary_state(
@@ -221,42 +746,92 @@ def solve_cathode_boundary(
     anode_twin = anode_circuit_sample(
         state, derived, geometry, mu, input_dict, end=-1
     )
+    if T_s_override_K is not None:
+        # cathode_warming_model: substitute the evolving surface temperature
+        # at the single point every emission path (uniform Richardson and the
+        # annular profile, whose peak re-anchors) reads T_s from.
+        input_dict = {**input_dict, "T_s": float(T_s_override_K)}
     device_config = cathode_device_config(input_dict, input_flags, mu)
+    device_config, Rp_model, R_p_gap_ohm = apply_cathode_Rp_model(
+        device_config, derived, geometry, input_dict, input_flags
+    )
+    solver_model = validate_cathode_solver_model(input_dict, input_flags)
     beam_cross_prev = np.asarray(beam_cross_prev, dtype=float)
     if beam_cross_prev.shape != (geometry.cells,):
         raise ValueError(
             "beam_cross_prev must have shape "
             f"({geometry.cells},), got {beam_cross_prev.shape}"
         )
-    beam_result = solve_beam_system(
-        config=device_config,
-        Te=derived.Te,
-        ne=state.n,
-        nn=state.nn,
-        beam_cross_prev=beam_cross_prev,
-        plasma_cross=geometry.plasma_area_cm2,
-        I_ion=I_ion,
-        gas_type=gas_type,
-        x0=x0,
-        x0_twin=x0_twin,
-        floating=bool(floating),
-        # The solver samples the plasma at these cells *and* writes its beam
-        # quantities there, so they must be the same cells `beam_launch` reads
-        # from -- otherwise the beam arrays are all zero where the caller looks.
-        cathode_index=beam_launch(geometry, end=0)[0],
-        twin_index=beam_launch(geometry, end=-1)[0],
-        # Hand the circuit the same anode Bohm current the fluid removes, so the
-        # two cannot disagree (§7). None in legacy geometry, which keeps the
-        # historical I_i_a = 2*eta*I_i.
-        anode_current_A=anode_source[0],
-        anode_T_e=anode_source[1],
-        anode_current_twin_A=anode_twin[0],
-        anode_T_e_twin=anode_twin[1],
-        b_beam_excitation=float(input_dict.get("b_beam_excitation", 0.0)),
-        beam_excitation_energy_eV=float(
-            input_dict.get("beam_excitation_energy_eV", 21.218)
-        ),
-    )
+    if solver_model == "current_driven" and not floating:
+        # The circuit is explicit solver state: no inductive fold, no
+        # warm start -- the solve is a well-posed evaluation at the frozen
+        # loop current. Floating phases fall through to the historical
+        # open-circuit solve below (its Boltzmann-suppressed emission
+        # branch is not the same limit as I_tot = 0 here).
+        beam_result = solve_beam_system_idriven(
+            config=device_config,
+            Te=derived.Te,
+            ne=state.n,
+            nn=state.nn,
+            beam_cross_prev=beam_cross_prev,
+            plasma_cross=geometry.plasma_area_cm2,
+            I_ion=I_ion,
+            gas_type=gas_type,
+            I_tot_A=max(float(circuit_I_loop_A), 0.0),
+            cathode_index=beam_launch(geometry, end=0)[0],
+            anode_current_A=anode_source[0],
+            anode_T_e=anode_source[1],
+            b_beam_excitation=float(
+                input_dict.get("b_beam_excitation", 0.0)
+            ),
+            beam_excitation_energy_eV=float(
+                input_dict.get("beam_excitation_energy_eV", 21.218)
+            ),
+            schottky=bool(input_flags.get("cathode_schottky", False)),
+            phi_c_cap_V=float(input_dict.get("cathode_phi_c_cap_V", 1000.0)),
+        )
+    else:
+        device_config = inductive_circuit_config(
+            device_config,
+            L_H=float(input_dict.get("L_parasitic_H", 0.0)),
+            I_prev_A=circuit_I_prev_A,
+            dt_s=circuit_dt_s,
+            bank_connected=not circuit_bank_off,
+            C_bank_F=input_dict.get("C_bank_F"),
+            V_cap_prev=circuit_V_cap_prev,
+            scheme=circuit_scheme,
+            V_dis_prev=circuit_V_dis_prev,
+        )
+        beam_result = solve_beam_system(
+            config=device_config,
+            Te=derived.Te,
+            ne=state.n,
+            nn=state.nn,
+            beam_cross_prev=beam_cross_prev,
+            plasma_cross=geometry.plasma_area_cm2,
+            I_ion=I_ion,
+            gas_type=gas_type,
+            x0=x0,
+            x0_twin=x0_twin,
+            floating=bool(floating),
+            # The solver samples the plasma at these cells *and* writes its
+            # beam quantities there, so they must be the same cells
+            # `beam_launch` reads from -- otherwise the beam arrays are all
+            # zero where the caller looks.
+            cathode_index=beam_launch(geometry, end=0)[0],
+            twin_index=beam_launch(geometry, end=-1)[0],
+            # Hand the circuit the same anode Bohm current the fluid
+            # removes, so the two cannot disagree (§7). None in legacy
+            # geometry, which keeps the historical I_i_a = 2*eta*I_i.
+            anode_current_A=anode_source[0],
+            anode_T_e=anode_source[1],
+            anode_current_twin_A=anode_twin[0],
+            anode_T_e_twin=anode_twin[1],
+            b_beam_excitation=float(input_dict.get("b_beam_excitation", 0.0)),
+            beam_excitation_energy_eV=float(
+                input_dict.get("beam_excitation_energy_eV", 21.218)
+            ),
+        )
     return CathodeSolve1D(
         boundary=boundary,
         beam_result=beam_result,
@@ -272,6 +847,9 @@ def solve_cathode_boundary(
             "end_mode": boundary.end_mode,
             "twin_cathode": boundary.twin_cathode,
             "circuit": dict(boundary.circuit),
+            "cathode_Rp_model": Rp_model,
+            "R_p_gap_ohm": R_p_gap_ohm,
+            "cathode_solver_model": solver_model,
             "result": _solver_result_metadata(beam_result.result),
             "result_twin": _solver_result_metadata(beam_result.result_twin),
         },

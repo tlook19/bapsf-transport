@@ -240,6 +240,7 @@ def implicit_heat_conduction_step(
             M=state.M.copy(),
             Ee=state.Ee.copy(),
             Ei=state.Ei.copy(),
+            M_n=None if state.M_n is None else state.M_n.copy(),
         )
 
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
@@ -258,6 +259,14 @@ def implicit_heat_conduction_step(
     for _ in range(iterations + 1):
         Te_eval = weight * Te_guess + (1.0 - weight) * Te_old
         Ti_eval = weight * Ti_guess + (1.0 - weight) * Ti_old
+        # Overflow guard, not physics: kappa ~ T^2.5 overflows to inf on the
+        # extreme transients a bad step can produce (e.g. circuit-driven
+        # power spikes), which crashes the banded solve *inside* the attempt
+        # before the step-rejection machinery can see and reject the state.
+        # 10 keV is far beyond anything physical here, so the clamp is inert
+        # on healthy runs and merely keeps bad steps finite and rejectable.
+        Te_eval = np.minimum(Te_eval, 1.0e4)
+        Ti_eval = np.minimum(Ti_eval, 1.0e4)
         conductivity_e, conductivity_i = _parallel_conductivities(
             Te=Te_eval,
             Ti=Ti_eval,
@@ -299,6 +308,7 @@ def implicit_heat_conduction_step(
         M=state.M.copy(),
         Ee=Ee,
         Ei=Ei,
+        M_n=None if state.M_n is None else state.M_n.copy(),
     )
 
 

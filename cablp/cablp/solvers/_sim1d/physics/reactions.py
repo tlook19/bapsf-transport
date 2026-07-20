@@ -8,6 +8,7 @@ from cablp.funcs._fits import rate_coeff
 from cablp.vars._cons import ev_to_erg
 
 from ..core.state import ConservativeState1D, derive_state
+from .sources import neutral_wind_velocity
 
 
 H_ION_COEFF = (1e-5, 6.0)
@@ -87,6 +88,7 @@ def reaction_rhs(
     atomic_rate_model="janev",
     Te_birth_ionization="local",
     Ti_birth_ionization="floor",
+    wind_column_factor=None,
 ):
     """Return conservative source terms for local bulk plasma reactions."""
     terms = reaction_rhs_terms(
@@ -102,6 +104,7 @@ def reaction_rhs(
         atomic_rate_model=atomic_rate_model,
         Te_birth_ionization=Te_birth_ionization,
         Ti_birth_ionization=Ti_birth_ionization,
+        wind_column_factor=wind_column_factor,
     )
     ionization = terms["ionization_birth"]
     recombination_rad = terms["recombination_rad_loss"]
@@ -128,6 +131,7 @@ def reaction_rhs_terms(
     atomic_rate_model="janev",
     Te_birth_ionization="local",
     Ti_birth_ionization="floor",
+    wind_column_factor=None,
 ):
     """Return ionization and recombination conservative source terms."""
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
@@ -148,13 +152,31 @@ def reaction_rhs_terms(
     Ti_birth = _birth_temperature(Ti_birth_ionization, derived.Ti, floors["Ti"])
 
     zeros = np.zeros_like(state.n, dtype=float)
+    # With an evolved neutral wind (state carries M_n), reactions exchange
+    # momentum between the species: an ionized neutral is born drifting at
+    # u_n (fixing the historical zero-drift birth), and a recombined ion
+    # hands its momentum to the wind. Both close M*Vp + M_n*Vm exactly
+    # through the same (Vp/Vm) conversion the particles use. Ionization only
+    # ever consumes *column* gas, so the two-zone closure's column factor
+    # (when given) scales the sampled wind up from the chamber mean.
+    if state.M_n is not None:
+        u_n = neutral_wind_velocity(state, floors=floors, ion_mass_g=ion_mass_g)
+        if wind_column_factor is not None:
+            u_n = wind_column_factor * u_n
+        M_birth = ion_mass_g * u_n * S_ion
+        M_n_birth = -M_birth * volume_ratio
+    else:
+        M_birth = zeros
+        M_n_birth = None
     ionization = ConservativeState1D(
         n=S_ion,
         nn=-S_ion * volume_ratio,
-        M=zeros,
+        M=M_birth,
         Ee=1.5 * ev_to_erg * Te_birth * S_ion,
         Ei=1.5 * ev_to_erg * Ti_birth * S_ion,
+        M_n=M_n_birth,
     )
+    with_wind = state.M_n is not None
     return {
         "ionization_birth": ionization,
         "recombination_rad_loss": _recombination_loss(
@@ -162,23 +184,27 @@ def reaction_rhs_terms(
             volume_ratio,
             ion_mass_g,
             derived,
+            with_wind=with_wind,
         ),
         "recombination_3b_loss": _recombination_loss(
             S_rec_3b,
             volume_ratio,
             ion_mass_g,
             derived,
+            with_wind=with_wind,
         ),
     }
 
 
-def _recombination_loss(S_rec, volume_ratio, ion_mass_g, derived):
+def _recombination_loss(S_rec, volume_ratio, ion_mass_g, derived, with_wind=False):
+    M_loss = -ion_mass_g * derived.u * S_rec
     return ConservativeState1D(
         n=-S_rec,
         nn=S_rec * volume_ratio,
-        M=-ion_mass_g * derived.u * S_rec,
+        M=M_loss,
         Ee=-1.5 * ev_to_erg * derived.Te * S_rec,
         Ei=-1.5 * ev_to_erg * derived.Ti * S_rec,
+        M_n=(-M_loss * volume_ratio) if with_wind else None,
     )
 
 

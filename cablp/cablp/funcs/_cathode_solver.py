@@ -84,6 +84,23 @@ class DeviceConfig:
     Twin: bool = False
     L_cath: float = 50.0
     R_cath: float = 18.0
+    # Physical ceiling on the sheath drop phi_c [V]; None = no ceiling (the
+    # historical behaviour, where the root bracket scales with V_bank). Set by
+    # the inductive-circuit wrapper: the backward-Euler effective V_bank can be
+    # orders of magnitude above the physical EMF, and letting the root bracket
+    # scale with it exposes pathological far roots (phi_c ~ V_eff at ~zero
+    # current) that flap the solve and can run the coupled circuit away.
+    phi_sheath_max: float | None = None
+    # Annular emission profile (empty tuples = the historical uniform disc).
+    # A real cathode's surface temperature falls off radially, so its emission
+    # ceiling is a soft ramp, not a razor wall: as the sheath pulls harder the
+    # virtual-cathode clamp releases progressively cooler annuli. Each annulus
+    # carries its own Richardson emission (T_k over area_k), its own share of
+    # the ion current (its overlap with the plasma footprint), and its own
+    # space-charge clamp; all share one equipotential psi_c_plus.
+    emission_Ts_K: tuple = ()
+    emission_area_cm2: tuple = ()
+    emission_plasma_frac: tuple = ()
 
     # Derived constants computed once at construction
     # (stored as slots; frozen prevents reassignment)
@@ -97,12 +114,21 @@ class DeviceConfig:
         object.__setattr__(self, "Lambda", lam)
 
         # I_eth = thermionic emission current [A] (static; depends only on T_s)
-        i_eth = (
-            self.A_c
-            * self.C_R
-            * self.T_s**2
-            * math.exp(-_e_SI * self.phi_wf / (_kB_SI * self.T_s))
-        )
+        if self.emission_Ts_K:
+            i_eth = sum(
+                area
+                * self.C_R
+                * T_k**2
+                * math.exp(-_e_SI * self.phi_wf / (_kB_SI * T_k))
+                for T_k, area in zip(self.emission_Ts_K, self.emission_area_cm2)
+            )
+        else:
+            i_eth = (
+                self.A_c
+                * self.C_R
+                * self.T_s**2
+                * math.exp(-_e_SI * self.phi_wf / (_kB_SI * self.T_s))
+            )
         object.__setattr__(self, "I_eth", i_eth)
 
 
@@ -253,6 +279,17 @@ class BeamResult:
 # ---------------------------------------------------------------------------
 
 
+def _exp_clamped(x: float) -> float:
+    """``math.exp`` with the argument capped at 700 (just under overflow).
+
+    Bit-exact for any argument below the cap; above it, returns a finite
+    ~1e304 so extreme root-bracket probes (seen under transient effective
+    circuit EMFs) yield a huge finite residual the solver can reject,
+    instead of an OverflowError that kills the whole run.
+    """
+    return math.exp(min(x, 700.0))
+
+
 def _c_log_ei(T_e: float, n_e: float) -> float:
     """Electron-ion Coulomb logarithm (NRL 2019, eqs. 2-3/2-4)."""
     if T_e > 10.0:
@@ -266,6 +303,75 @@ def _psi_c_minus(psi_c_plus: float, J_i: float, J_eth: float, mu: float, delta: 
     if J_eth <= 0.0 or J_eth <= J_crit:
         return 0.0
     return delta * math.log(J_eth / J_crit)
+
+
+def _annular_emission_state(
+    psi_c_plus: float,
+    J_i: float,
+    mu: float,
+    J_eth_k: tuple,
+    delta_k: tuple,
+    ion_frac_k: tuple,
+) -> tuple[float, float, bool]:
+    """Return ``(J_star_total, psi_minus_eff, any_clamped)`` for the annuli.
+
+    Each annulus sees its own space-charge limit from its share of the ion
+    current (``_j_eth_crit`` is linear in ``J_i``); an annulus outside the
+    plasma footprint (``ion_frac 0``) is fully choked. All annuli share the
+    equipotential ``psi_c_plus``; the loop equation's effective
+    virtual-cathode drop is the emission-weighted mean of the local barriers,
+    which reduces exactly to the uniform expression for a single annulus.
+    """
+    J_star_total = 0.0
+    weighted_pm = 0.0
+    any_clamped = False
+    for J_eth_a, delta_a, frac_a in zip(J_eth_k, delta_k, ion_frac_k):
+        if J_eth_a <= 0.0:
+            continue
+        J_crit_a = _j_eth_crit(psi_c_plus, J_i * frac_a, mu) if frac_a > 0.0 else 0.0
+        if J_eth_a <= J_crit_a:
+            J_star_total += J_eth_a
+            continue
+        any_clamped = True
+        if J_crit_a <= 0.0:
+            continue  # fully choked annulus emits nothing
+        pm_a = delta_a * math.log(J_eth_a / J_crit_a)
+        J_star_total += J_crit_a
+        weighted_pm += J_crit_a * pm_a
+    psi_minus_eff = weighted_pm / J_star_total if J_star_total > 0.0 else 0.0
+    return J_star_total, psi_minus_eff, any_clamped
+
+
+def _residual_annular(
+    psi_c_plus: float,
+    J_i: float,
+    Lambda: float,
+    gamma: float,
+    eta: float,
+    psi_bank: float,
+    mu: float,
+    J_i_a: float,
+    J_eth_k: tuple,
+    delta_k: tuple,
+    ion_frac_k: tuple,
+    beam_bypass_fraction: float = 0.0,
+    tau_a: float = 1.0,
+) -> float:
+    """Annular-emission variant of ``_residual`` (same loop equation)."""
+    J_star, psi_minus, _ = _annular_emission_state(
+        psi_c_plus, J_i, mu, J_eth_k, delta_k, ion_frac_k
+    )
+    J_tot = J_i * (1.0 - _exp_clamped(Lambda - psi_c_plus)) + J_star
+    J_anode = J_tot - eta * beam_bypass_fraction * J_star
+    anode_arg = max(1.0 + J_anode / J_i_a, 1e-300)
+    return (
+        psi_c_plus
+        - psi_minus
+        + (1.0 + gamma) * J_tot
+        - tau_a * Lambda
+        + tau_a * math.log(anode_arg)
+        - psi_bank
+    )
 
 
 def _compute_l_b(phi_c: float, T_e: float, n_e: float, n_n: float, sigma_b: float) -> float:
@@ -412,7 +518,7 @@ def _residual(
         J_star = J_crit
         psi_minus = delta * math.log(J_eth / J_crit)
 
-    J_tot = J_i * (1.0 - math.exp(Lambda - psi_c_plus)) + J_star
+    J_tot = J_i * (1.0 - _exp_clamped(Lambda - psi_c_plus)) + J_star
 
     # A fraction of the thermionic beam can reach the anode without a
     # plasma collision/ionization event.
@@ -441,19 +547,24 @@ class ConvergenceError(RuntimeError):
 
 
 def _find_bracket(
-    f, a: float, b: float, max_doublings: int = 15
+    f, a: float, b: float, max_doublings: int = 15, b_max: float | None = None
 ) -> tuple[float, float]:
     """Return (a, b) such that f(a) and f(b) have opposite signs.
 
     Doubles `b` up to `max_doublings` times if the initial bracket does not
-    contain a sign change.
+    contain a sign change. ``b_max`` (when given) caps the expansion so the
+    search cannot wander past a physical ceiling.
     """
+    if b_max is not None:
+        b = min(b, b_max)
     fa = f(a)
     fb = f(b)
     if fa * fb < 0.0:
         return a, b
     for _ in range(max_doublings):
-        b *= 2.0
+        if b_max is not None and b >= b_max:
+            break
+        b = b * 2.0 if b_max is None else min(b * 2.0, b_max)
         fb = f(b)
         if fa * fb < 0.0:
             return a, b
@@ -631,6 +742,29 @@ def solve(
     eta = config.eta
     mu = config.mu
 
+    # Annular emission profile (empty = historical uniform disc).
+    annular = bool(config.emission_Ts_K)
+    if annular:
+        I_eth_k = tuple(
+            area
+            * config.C_R
+            * T_k**2
+            * math.exp(-_e_SI * config.phi_wf / (_kB_SI * T_k))
+            for T_k, area in zip(config.emission_Ts_K, config.emission_area_cm2)
+        )
+        J_eth_k = tuple(i * R_p / T_e for i in I_eth_k)
+        delta_k = tuple(
+            _kB_SI * T_k / (_e_SI * T_e) for T_k in config.emission_Ts_K
+        )
+        wetted = sum(
+            a * f
+            for a, f in zip(config.emission_area_cm2, config.emission_plasma_frac)
+        )
+        ion_frac_k = tuple(
+            (a * f / wetted) if wetted > 0.0 else 0.0
+            for a, f in zip(config.emission_area_cm2, config.emission_plasma_frac)
+        )
+
     # ------------------------------------------------------------------
     # Root-find psi_c_plus
     # ------------------------------------------------------------------
@@ -660,7 +794,7 @@ def solve(
             regime = "virtual_cathode"
 
             def f_float(x: float) -> float:
-                return J_i * (1.0 - math.exp(Lambda - x)) - J_eth * math.exp(
+                return J_i * (1.0 - _exp_clamped(Lambda - x)) - J_eth * _exp_clamped(
                     -(x - Lambda) / delta
                 )
 
@@ -696,6 +830,25 @@ def solve(
     else:
 
         def _make_f(beam_bypass_fraction: float = 0.0):
+            if annular:
+                def f(x: float) -> float:
+                    return _residual_annular(
+                        x,
+                        J_i,
+                        Lambda,
+                        gamma,
+                        eta,
+                        psi_bank,
+                        mu,
+                        J_i_a,
+                        J_eth_k,
+                        delta_k,
+                        ion_frac_k,
+                        beam_bypass_fraction,
+                        tau_a,
+                    )
+                return f
+
             def f(x: float) -> float:
                 return _residual(
                     x,
@@ -713,20 +866,52 @@ def solve(
                 )
             return f
 
+        def _psi_minus_at(x: float) -> float:
+            if annular:
+                return _annular_emission_state(
+                    x, J_i, mu, J_eth_k, delta_k, ion_frac_k
+                )[1]
+            return _psi_c_minus(x, J_i, J_eth, mu, delta)
+
         def _do_solve(f) -> float:
             nonlocal x0
+            psi_cap = None
+            if config.phi_sheath_max is not None:
+                psi_cap = config.phi_sheath_max / T_e + Lambda + 2.0
             if x0 is not None:
                 x0_psi = x0 / T_e
-                a_w = max(1.0e-8, x0_psi * 0.5)
-                b_w = x0_psi * 2.0
-                try:
-                    a_w, b_w = _find_bracket(f, a_w, b_w, max_doublings=4)
-                    return brentq(f, a_w, b_w, xtol=1.0e-8, rtol=1.0e-6, full_output=False)
-                except ConvergenceError:
-                    x0 = None
+                # Two-stage warm window around the previous root: the narrow
+                # window first, then a wider one, so a root that drifted
+                # moderately is still tracked by continuity instead of the
+                # solve jumping to a far root through the full bracket (the
+                # jump is what flaps phi_c between branches step to step).
+                for lo, hi in ((0.5, 2.0), (0.125, 8.0)):
+                    a_w = max(1.0e-8, x0_psi * lo)
+                    b_w = x0_psi * hi
+                    try:
+                        a_w, b_w = _find_bracket(
+                            f, a_w, b_w, max_doublings=2, b_max=psi_cap
+                        )
+                        return brentq(
+                            f, a_w, b_w, xtol=1.0e-8, rtol=1.0e-6, full_output=False
+                        )
+                    except ConvergenceError:
+                        continue
+                x0 = None
             a = 1.0e-8
             b = psi_bank + Lambda + 2.0
-            a, b = _find_bracket(f, a, b)
+            if psi_cap is not None:
+                b = min(b, psi_cap)
+            try:
+                a, b = _find_bracket(f, a, b, b_max=psi_cap)
+            except ConvergenceError:
+                if psi_cap is None:
+                    raise
+                # No root under the physical ceiling: the load cannot carry
+                # the loop current at physical voltages, i.e. a genuine
+                # inductive kick. Admit it through the unconstrained bracket;
+                # the circuit-state guards bound how far it can run.
+                a, b = _find_bracket(f, 1.0e-8, psi_bank + Lambda + 2.0)
             return brentq(f, a, b, xtol=1.0e-8, rtol=1.0e-6, full_output=False)
 
         # Solve self-consistently for the sheath with a continuous beam-bypass
@@ -737,7 +922,7 @@ def solve(
         l_b = 0.0
         psi_c_plus = _do_solve(_make_f(beam_bypass_fraction))
         for _ in range(4):
-            _pm = _psi_c_minus(psi_c_plus, J_i, J_eth, mu, delta)
+            _pm = _psi_minus_at(psi_c_plus)
             l_b = _compute_l_b((psi_c_plus - _pm) * T_e, T_e, n_e, plasma.n_n, plasma.sigma_b)
             next_bypass = _compute_beam_bypass_fraction(l_b, config.L_cath)
             if abs(next_bypass - beam_bypass_fraction) < 1e-4:
@@ -745,7 +930,7 @@ def solve(
                 break
             beam_bypass_fraction = next_bypass
             psi_c_plus = _do_solve(_make_f(beam_bypass_fraction))
-        _pm = _psi_c_minus(psi_c_plus, J_i, J_eth, mu, delta)
+        _pm = _psi_minus_at(psi_c_plus)
         l_b = _compute_l_b((psi_c_plus - _pm) * T_e, T_e, n_e, plasma.n_n, plasma.sigma_b)
         beam_bypass_fraction = _compute_beam_bypass_fraction(l_b, config.L_cath)
         long_mfp = l_b > 0.0 and l_b > config.L_cath
@@ -754,22 +939,31 @@ def solve(
         # Recover all quantities at the solution
         # ------------------------------------------------------------------
 
-        J_crit = _j_eth_crit(psi_c_plus, J_i, mu)
-
-        if J_eth <= 0.0 or J_eth <= J_crit:
-            regime: Literal["classical", "virtual_cathode"] = "classical"
-            J_star = J_eth if J_eth > 0.0 else 0.0
-            psi_c_minus = 0.0
+        if annular:
+            J_star, psi_c_minus, _clamped = _annular_emission_state(
+                psi_c_plus, J_i, mu, J_eth_k, delta_k, ion_frac_k
+            )
+            regime: Literal["classical", "virtual_cathode"] = (
+                "virtual_cathode" if _clamped else "classical"
+            )
         else:
-            regime = "virtual_cathode"
-            J_star = J_crit
-            psi_c_minus = delta * math.log(J_eth / J_crit)
+            J_crit = _j_eth_crit(psi_c_plus, J_i, mu)
 
-        J_tot = J_i * (1.0 - math.exp(Lambda - psi_c_plus)) + J_star
+            if J_eth <= 0.0 or J_eth <= J_crit:
+                regime = "classical"
+                J_star = J_eth if J_eth > 0.0 else 0.0
+                psi_c_minus = 0.0
+            else:
+                regime = "virtual_cathode"
+                J_star = J_crit
+                psi_c_minus = delta * math.log(J_eth / J_crit)
+
+        J_tot = J_i * (1.0 - _exp_clamped(Lambda - psi_c_plus)) + J_star
 
         J_anode = J_tot - eta * beam_bypass_fraction * J_star
-        # Scaled anode sheath potential
-        psi_a = Lambda - math.log(1.0 + J_anode / J_i_a)
+        # Scaled anode sheath potential; clamp mirrors the residual's guard
+        # (extreme-emission roots can land at a marginally negative argument).
+        psi_a = Lambda - math.log(max(1.0 + J_anode / J_i_a, 1e-300))
 
         # Physical potentials [V]
         phi_c_plus = psi_c_plus * T_e

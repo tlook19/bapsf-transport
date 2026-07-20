@@ -143,9 +143,28 @@ def neutral_source_defaults():
     gas_puff_mode:
         Phase-dependent gas-puff schedule. Options are
         ``"decay_after_breakdown"`` for steady puffing until optional decay
-        after breakdown/main-discharge start, and
+        after breakdown/main-discharge start,
         ``"pulse_decay_to_level"`` for a full-rate pulse followed by decay
-        toward the configured target flow.
+        toward the configured target flow, and ``"double_erf"`` for a
+        valve-like waveform: an erf (S-shaped) rise ``0 -> S_gp``, a
+        plateau, then an erf drop ``S_gp -> S_gp_decay_target`` which is
+        held for the rest of the discharge. Both transitions sit on the
+        *scheduled* main-discharge clock (centers may be negative, i.e.
+        during prebreakdown -- a real valve opens before breakdown), and
+        the waveform replaces the other modes' full-rate prebreakdown
+        behaviour. The twin puff shares the timing with its own levels.
+        Smooth everywhere; clamped at zero if the transitions are set to
+        overlap pathologically.
+    tau_gp_rise_center:
+        ``double_erf`` rise-transition center [s], relative to the
+        scheduled main-discharge start (negative = before breakdown).
+    tau_gp_rise_width:
+        ``double_erf`` rise erf width scale [s]; the 10-90% rise time is
+        ~1.81x this value.
+    tau_gp_drop_center:
+        ``double_erf`` drop-transition center [s], same clock as the rise.
+    tau_gp_drop_width:
+        ``double_erf`` drop erf width scale [s].
     S_gp_decay_target:
         Source-side target puff level for pulse decay modes [sccm].
     Twin_S_gp_decay_target:
@@ -169,6 +188,28 @@ def neutral_source_defaults():
         Enables neutral pump sink terms.
     gas_puff_valves:
         Number of equivalent gas-puff valves used by the SCCM conversion.
+    gas_puff_profile:
+        Axial shape of the puff. ``"cell"`` (default, the historical
+        behaviour) puts the whole flow in the role-tagged puff cell (in front
+        of the anode in resolved geometry). ``"cosine_pipe"`` is the physical
+        source -- a small pipe at the chamber wall ~10 cm in front of the
+        anode, pointing radially inward with a Lambertian (cosine) outlet;
+        its first-flight axial deposition is the cosine-lobe pattern
+        ``[1 + ((z - z0)/d)^2]^-2`` with throw ``d ~ 2*Rm``, so centre and
+        width both come from geometry rather than tuning. ``"gaussian"`` is
+        the generic tunable shape. All distributed profiles conserve the
+        total inflow exactly, and one shared implementation feeds both the
+        explicit RHS and the implicit neutral matrix, so the two sites
+        cannot desync.
+    gas_puff_z_cm:
+        Distributed-puff centre [cm, machine coordinates]. ``None`` (default)
+        centres on the puff cell; the physical pipe sits at ~60 cm (anode
+        + 10). Mirrored through the chamber midpoint for the twin puff.
+    gas_puff_sigma_cm:
+        Gaussian puff axial width [cm].
+    gas_puff_throw_cm:
+        Cosine-pipe throw distance ``d`` [cm], of order the chord across the
+        chamber (~2*Rm). Sets the lobe's HWHM = 0.64*d.
     pump_elbow_conductance_lps:
         Conductance of the unmodeled pump elbow [L/s], combined in series with
         the pump speed as ``1/S_eff = 1/S_pump + 1/C_elbow``
@@ -186,12 +227,20 @@ def neutral_source_defaults():
         "tau_gp_decay_factor": 1.0,
         "tau_gp_pulse_duration": 1e-3,
         "tau_gp_decay_duration": 5e-3,
+        "tau_gp_rise_center": -5e-3,
+        "tau_gp_rise_width": 1e-3,
+        "tau_gp_drop_center": 1e-3,
+        "tau_gp_drop_width": 1e-3,
         "S_pump_L": 2000,
         "S_pump_R": 4000,
         "gas_puff_enabled": True,
         "pump_enabled": True,
         "gas_puff_valves": 2,
         "pump_elbow_conductance_lps": None,
+        "gas_puff_profile": "cell",
+        "gas_puff_z_cm": None,
+        "gas_puff_sigma_cm": 50.0,
+        "gas_puff_throw_cm": 100.0,
     }
 
 
@@ -354,10 +403,9 @@ def fudge_factor_defaults():
     D_amb:
         Constant ambipolar diffusion coefficient when selected [cm^2/s].
     atomic_rate_model:
-        Source of the He atomic rate coefficients. ``"janev"`` (default, the
-        historical behaviour) uses the direct ground-state ionization rate,
-        the separate radiative/three-body recombination coefficients, and the
-        IAEA cooling fits. ``"adas"`` uses the OPEN-ADAS GCR '96 effective
+        Source of the He atomic rate coefficients. ``"adas"`` (default as of
+        2026-07-20 -- the rates are trusted, citable inputs and are not to be
+        tuned; see THESIS_NOTES §2) uses the OPEN-ADAS GCR '96 effective
         coefficients (``cablp/vars/adas``, see its README): SCD ionization
         (includes the stepwise/metastable channel the direct rate lacks --
         up to ~3-6x at 3-5 eV, LAPD densities), ACD recombination (includes
@@ -366,7 +414,13 @@ def fudge_factor_defaults():
         are radiation-only and therefore consistent with the separate
         ``ionization_energy_cost`` term; the IAEA He I fit is not -- it
         already contains the ionization-potential loss, which ``"janev"``
-        with ``b_Qen`` near 1 double-counts.
+        with ``b_Qen`` near 1 double-counts. ``"janev"`` (the historical
+        behaviour, and the default before 2026-07-20) uses the direct
+        ground-state ionization rate, the separate radiative/three-body
+        recombination coefficients, and the IAEA cooling fits; the golden
+        baseline pins it explicitly (``scripts/baseline_sim1d.py``).
+        ``"adas"`` is wired for ``gas_type = "He"`` only -- hydrogen configs
+        must set ``"janev"`` or the solver raises at construction.
     b_ioniz:
         Bulk ionization particle source scale factor.
     b_rec_rad:
@@ -420,11 +474,28 @@ def fudge_factor_defaults():
         neutrals lose the momentum to the wall in ``Rm / vbar_n``), so the slip
         sweeps from ~1 in rarefied plasma to ~0 at full entrainment instead of
         being asserted constant. Applies to the drag and frictional-heating
-        terms (the latter quadratically).
+        terms (the latter quadratically). The ``neutral_momentum`` flag
+        replaces both closures with an evolved neutral wind and is mutually
+        exclusive with ``"slip"`` (which is that equation's own steady state).
     b_slip_entrainment:
         Multiplier on the entrainment parameter ``E`` of the slip closure;
         absorbs the O(1) geometric factors the balance ignores. Inert with the
         ``constant`` drag model.
+    neutral_momentum_radial:
+        Radial closure for the evolved neutral wind (requires the
+        ``neutral_momentum`` flag; inert without it and errors if set to
+        ``"two_zone"`` while the flag is off). ``"uniform"`` (default, the
+        original M2 behaviour) treats ``M_n`` as radially uniform: the drag
+        pushes against the chamber-mean wind and the wall sink is
+        ``vbar_n/Rm``. ``"two_zone"`` closes the radial profile
+        algebraically (``neutral_wind_two_zone_factors``): drag acts only in
+        the plasma column, whose gas is entrained faster than it can escape
+        radially, while the annulus gas is held slow by diffuse wall
+        reflection -- so the drag, frictional heating, and ionization birth
+        sample the *column* wind (chamber mean times ~3.3 on production
+        geometry) and only the slow annulus gas reaches the wall (effective
+        sink ~1.9e3 1/s vs the uniform 4.9e3 1/s). Net effect: less drag
+        input, slower chamber-mean wind.
     b_ion_neutral_thermalization:
         Scale factor for the elastic ion-neutral thermal-equilibration term.
         ``None`` (default) inherits ``b_ion_neutral_drag`` -- the historical
@@ -467,7 +538,7 @@ def fudge_factor_defaults():
     return {
         "alpha_front": 1.0,
         "D_amb": 0.0,
-        "atomic_rate_model": "janev",
+        "atomic_rate_model": "adas",
         "b_ioniz": 1.0,
         "b_rec_rad": 1.0,
         "b_rec_3b": 1.0,
@@ -487,6 +558,7 @@ def fudge_factor_defaults():
         "b_ion_neutral_drag": 1.0,
         "ion_neutral_drag_model": "constant",
         "b_slip_entrainment": 1.0,
+        "neutral_momentum_radial": "uniform",
         "b_ion_neutral_thermalization": None,
         "b_presheath_length": 1.0,
         "sigma_in_cm2": 5.0e-15,
@@ -512,10 +584,216 @@ def cathode_defaults():
         External/compliance resistance [Ohm].
     eta:
         Anode-to-cathode area ratio.
+    anode_radius_cm:
+        Radius of the anode mesh disc [cm]. ``None`` (default) spans the
+        chamber, giving the historical neutral transparency ``1 - eta``. A
+        smaller disc opens the annulus around it to free neutral flow, so
+        the face's neutral open fraction becomes ``1 - eta*(Ra/Rm)^2``.
+        Heat transmission and Bohm collection keep the bare ``1 - eta`` /
+        ``eta``; the disc must still cover the plasma channel (``Ra >= Rp``).
+        Resolved geometry only.
     L_cath:
         Cathode-to-anode distance used by the cathode solver [cm].
     R_cath:
         Cathode radius used to compute cathode area [cm].
+    C_bank_F:
+        Effective capacitance of the discharge bank [F]. ``None`` (default)
+        is the historical infinite bank. When set, the bank voltage starts at
+        ``V_bank`` and drains by the drawn charge during drive phases
+        (backward-Euler, folded into the circuit solve as a ``dt/C`` term on
+        the effective resistance); the tail and floating phases leave it
+        inert. NB the ES1 trace fit (scripts/fit_es1_circuit.py) demands an
+        *effective* ~8.9 F even though the hardware bank is nominally <= 4 F
+        with a <= 120 A float supply -- the discrepancy (~7 V of slow EMF
+        recovery, transistor V_CE drift a candidate) is unresolved; the
+        fitted value is the Thevenin equivalent the plasma actually sees.
+    L_parasitic_H:
+        Parasitic series inductance in the discharge circuit [H], in series
+        with ``R_comp``. Discretized backward-Euler per step, which folds
+        into the existing algebraic circuit solve as effective parameters
+        ``V_eff = V_bank + (L/dt)*I_prev`` and ``R_eff = R_comp + L/dt`` --
+        unconditionally stable, no new solver structure. ``0`` (default)
+        disables the term bit-exactly. Physics: limits the discharge-current
+        rise on the ``L/R_loop`` timescale (loop resistance ~0.02-0.06 Ohm,
+        so a 5-15 ms rise implies L ~ 100-500 uH -- bank + busbar + cable
+        inductance). Known simplifications: the BE term uses the previous
+        accepted step's dt; the stored inductor energy is dropped when the
+        phase machinery disconnects the cathode (real banks crowbar); a twin
+        cathode shares the primary loop's effective circuit.
+    circuit_scheme:
+        Time discretization of the L/C circuit fold. ``"trapezoidal"``
+        (default, 2026-07-19) is the Crank-Nicolson fold -- second order,
+        still one sheath solve per call, using the previous accepted
+        operating point's discharge voltage as the old-time residual; phase
+        transitions (drive/tail/floating) automatically take a
+        backward-Euler step across the discontinuity. Measured motivation:
+        the first-order ``"backward_euler"`` fold (the historical choice,
+        kept for reference) leaves the current trace dt-unconverged at
+        production dt -- halving dt moves the ES1 peak +6% and the plateau
+        +1% (~1 K of hidden T_s bias) -- while the trapezoidal fold lands
+        within ~9 A of the Richardson dt->0 plateau at identical cost. At
+        production dt the circuit mode is deeply resolved (dt << L/R), so
+        CN's weak stiff-mode damping is not a concern here. Inert when both
+        ``L_parasitic_H = 0`` and ``C_bank_F = None`` -- in particular the
+        legacy/golden configuration never sees it.
+    cathode_warming_model:
+        Slow evolution of the emitter surface temperature within a shot.
+        ``"none"`` (default, historical) holds ``T_s`` constant, so the
+        emission ceiling -- and with it the discharge current -- saturates
+        on the circuit timescale (~1-2 ms), where the measured current rises
+        for ~15-20 ms. ``"ion_bombardment"`` evolves the surface as
+
+            dT_s/dt = (T_s - T_surf) * P_cathode_i / cathode_warming_energy_J
+
+        starting from ``cathode_Ts_start_K``: the warming rate is set by the
+        ion bombardment power actually landing on the cathode (the solve's
+        ``P_cathode_i``) and by the remaining gap, so the surface asymptotes
+        to the configured ``T_s`` exactly -- ``T_s`` keeps its meaning as
+        the peak-current calibration. This is the bootstrap loop: warmer
+        surface -> more emission -> more current -> more bombardment ->
+        faster warming, i.e. a slow sigmoidal current ramp. Phenomenological:
+        the linear-in-gap form stands in for thermal mass + radiative/heater
+        balance; both new parameters are hand-tuned. Updates on accepted
+        steps only; the uniform and annular emission profiles both see the
+        warmed value (the annular profile re-anchors its peak).
+
+        ``"power_balance"`` (CATHODE_IDRIVEN_PLAN.md M1b) replaces the
+        imposed asymptote with the surface energy balance
+
+            C_th dT_s/dt = P_heater + P_cathode_i
+                           - eps*sigma*A*(T_s^4 - T_env^4)
+                           - (I_eth_star/e)*(phi_wf + 2 k_B T_s)
+
+        The last term is the emission cooling the relaxation model lacks:
+        each *actually emitted* electron (``I_eth_star`` from the accepted
+        solve, not the Richardson ceiling) carries away the work function
+        plus its ~2kT_s of thermal energy. Space-charge clamping therefore
+        suppresses cooling early (faster warm-up) and releases it near the
+        ceiling (harder cap). ``P_heater`` is pinned by the pre-discharge
+        equilibrium ``P_heater = eps*sigma*A*(T_base^4 - T_env^4)`` (open
+        circuit => no net emission), so the heater is not a free parameter.
+        The steady state -- and with it the plateau current -- becomes an
+        *output* of the balance, independent of ``C_th``; the configured
+        ``T_s`` is no longer an asymptote and only sets the static-model
+        fallback. During floating phases the emitted electrons return to
+        the surface, so the emission-cooling term is dropped there. The
+        update is semi-implicit in the linearized loss (unconditionally
+        stable for any ``C_th``), floored at ``cathode_env_T_K``, accepted
+        steps only.
+    cathode_Ts_base_K:
+        Heater-maintained standby surface temperature [K] for
+        ``cathode_warming_model = "power_balance"`` -- the temperature the
+        cathode sits at before the discharge, i.e. an operational machine
+        setpoint, not a fit parameter in principle. Required when that
+        model is on; also its initial condition.
+    cathode_heat_capacity_J_per_K:
+        Effective thermal mass of the *emitting layer* [J/K] for
+        ``"power_balance"``. NB this is the ~20 ms thermal skin depth
+        (sqrt(alpha*t) ~ 0.3-0.5 mm of LaB6, a few J/K), not the disc's
+        bulk heat capacity (~hundreds of J/K) -- it shapes only the ramp
+        timescale and stays hand-tuned; the steady state is independent of
+        it. Default 3.0 (the effective scale the tuned "ion_bombardment"
+        demo implied: 300 J over a ~110 K gap).
+    cathode_emissivity:
+        Total hemispherical emissivity of the emitting surface for the
+        radiation term (LaB6 ~0.7).
+    cathode_rad_area_cm2:
+        Radiating area [cm^2] for ``"power_balance"``. ``None`` (default)
+        uses the cathode disc area ``pi*R_cath^2``.
+    cathode_env_T_K:
+        Environment temperature [K] the surface radiates against
+        (chamber walls); negligible against T_s^4, kept for completeness.
+    cathode_conduction_W_per_K:
+        Conductance [W/K] from the emitting skin layer into the
+        heater-held substrate at ``cathode_Ts_base_K`` -- the "heater
+        maintains the lower end" restoring term,
+        ``P_cond = G_cond*(T_s - T_base)``. Vanishes at standby, so the
+        heater pinning is unchanged. **This term is what stabilizes the
+        balance at the LAPD operating point**: without it (0, the
+        pure-radiation limit) the bombardment feedback gain
+        d(P_ion)/dT_s (~O(kW/K) through the emission loop, P_cathode_i
+        ~250 kW at the 2.8 kA plateau) exceeds the ~230 W/K
+        radiation+emission stiffness and the discharge runs away to
+        ~13 kA (measured 2026-07-20, ``es1_nx120_pb_demo.h5``).
+        Physical scale: quasi-static ``kappa*A/delta`` for LaB6 is
+        ~10 kW/K at a 0.4 mm skin depth; the effective value for a
+        ~20 ms transient is lower and hand-tuned. ~2000 sets the
+        observed ~110 K plateau rise at the measured bombardment power;
+        the plateau *current* then follows from the balance.
+    cathode_Ts_start_K:
+        Initial (heater-only) emitter surface temperature [K] for
+        ``cathode_warming_model = "ion_bombardment"``. Required when that
+        model is on. NB emission is exponential in T_s (~1%/K on current),
+        so a few tens of K of warming spans the observed current rise.
+    cathode_warming_energy_J:
+        Ion-bombardment energy scale [J] closing the temperature gap: the
+        remaining gap decays with time constant
+        ``cathode_warming_energy_J / P_cathode_i``. At P_cathode_i ~ 50 kW,
+        300 J gives ~6 ms.
+    cathode_emission_profile:
+        Radial structure of the thermionic emitter. ``"uniform"`` (default,
+        historical) is a single-temperature disc, whose emission ceiling is a
+        razor wall in the discharge V(I) curve -- the operating point riding
+        that wall is what makes the circuit-coupled current/voltage noisy.
+        ``"gaussian"`` gives the cathode the measured radial falloff: the
+        emission-current footprint ``exp(-4 ln2 r^2/FWHM^2)`` (the ES1
+        port-11 Te profile mapped along field lines, slightly steepened for
+        en-route spreading), Richardson-inverted into a local surface
+        temperature profile. The implied ~150-200 K centre-to-edge drop
+        softens the ceiling into a stable, tunable ramp. Use with the real
+        ``R_cath`` (19 cm) and keep ``Rp`` at the plasma-channel value.
+    cathode_Ts_fwhm_cm:
+        Emission-footprint FWHM [cm] for the gaussian profile. Measured
+        28.8-31.2 cm at the ES1 ports; back-extrapolating the axial
+        broadening to the cathode gives ~27.8, with radial transport arguing
+        for the steeper end. Default 28.
+    cathode_emission_annuli:
+        Number of annuli discretizing the profile.
+    cathode_solver_model:
+        Which cathode/circuit formulation drives the discharge
+        (CATHODE_IDRIVEN_PLAN.md). ``"voltage_driven"`` (default,
+        historical) solves the loop equation for the sheath given the
+        (inductively folded) bank voltage — ill-conditioned near the
+        emission ceiling, where the device curve is near-vertical.
+        ``"current_driven"`` carries the loop current ``I_loop`` (and the
+        bank voltage when ``C_bank_F`` is set) as explicit solver state,
+        advanced once per *accepted* step by a TR-BDF2 step of
+        ``dI/dt = (V_src − I·R_comp − V_dis(I))/L``; each stage is a
+        bracketed scalar root-find over the monotone current-driven sheath
+        solve (`solve_idriven`), which is well-posed at the ceiling.
+        Within a step every RHS call sees the frozen ``I_loop``. Requires
+        ``L_parasitic_H > 0`` (with no inductor the current is algebraic
+        and the voltage-driven solver is the right tool) and a single
+        cathode (``TwinCathode`` raises). Floating phases route to the
+        historical open-circuit solve. The trapezoidal circuit fold and
+        its guards are inert in this mode.
+    cathode_phi_c_cap_V:
+        Physical ceiling [V] on the *net* cathode sheath drop in the
+        current-driven solve. An imposed current the sheath cannot carry
+        below it returns the ceiling solution tagged
+        ``regime = "capability_limited"`` with the correspondingly large
+        V_dis, and the circuit ramps the current down at ~V/L — the
+        well-posed version of the inductive kick.
+    cathode_Rp_model:
+        How the cathode solver's parallel plasma (gap) resistance ``R_p`` is
+        built. ``"sample"`` (default, historical) is the solver's internal
+        ``R_p = L_cath / (pi R_cath^2 sigma_par(Te_sample))`` with the
+        Spitzer conductivity evaluated at the *one* cathode-adjacent sampled
+        cell -- which underestimates the resistance of a gap colder than
+        that sample (eta_Spitzer ~ Te^-3/2), a candidate contributor to the
+        recorded ~8 V V_dis(t) drift over the discharge.
+        ``"resolved_gap"`` integrates ``R_p = sum_k dz_k / (sigma_par(Te_k)
+        * A_k)`` over the resolved cathode-anode gap cells with each cell's
+        own Te and plasma-channel area -- the same per-cell weighting the
+        ohmic deposition already uses. Fed to the *unmodified* voltage-driven
+        solver through an effective ``DeviceConfig.R_cath`` chosen so the
+        solver's internal formula reproduces the integrated value exactly
+        (``R_cath`` is used nowhere else in the solve). Requires resolved
+        geometry (legacy falls back to ``"sample"`` with a warning) and a
+        single cathode (``TwinCathode`` raises: one shared DeviceConfig
+        cannot carry two gaps sampled at different Te). NB with ``Rp !=
+        R_cath`` the two models differ even for a uniform gap -- conduction
+        through the plasma channel, not the cathode disc.
     b_beam_excitation:
         Scale on the He 1^1S -> 2^1P excitation cross section added to the
         primary beam's inelastic channels. ``0`` (default) is the historical
@@ -538,11 +816,30 @@ def cathode_defaults():
         "phi_wf": 3.0,
         "C_R": 29.0,
         "R_comp": 0.010,
+        "L_parasitic_H": 0.0,
+        "C_bank_F": None,
+        "circuit_scheme": "trapezoidal",
         "eta": 0.358,
+        "anode_radius_cm": None,
         "L_cath": 50.0,
         "R_cath": 18.0,
         "b_beam_excitation": 0.0,
         "beam_excitation_energy_eV": 21.218,
+        "cathode_warming_model": "none",
+        "cathode_Ts_start_K": None,
+        "cathode_warming_energy_J": 300.0,
+        "cathode_Ts_base_K": None,
+        "cathode_heat_capacity_J_per_K": 3.0,
+        "cathode_emissivity": 0.7,
+        "cathode_rad_area_cm2": None,
+        "cathode_env_T_K": 300.0,
+        "cathode_conduction_W_per_K": 0.0,
+        "cathode_emission_profile": "uniform",
+        "cathode_Ts_fwhm_cm": 28.0,
+        "cathode_emission_annuli": 10,
+        "cathode_Rp_model": "sample",
+        "cathode_solver_model": "voltage_driven",
+        "cathode_phi_c_cap_V": 1000.0,
     }
 
 
@@ -672,8 +969,21 @@ input_flags_template_1d = {
     "end_surface_loss": True,
     "ion_neutral_drag": True,
     "ion_neutral_drag_cx_only": False,
+    # Evolve axial neutral momentum M_n as a sixth conservative field
+    # (NEUTRAL_MOMENTUM_PLAN.md): the drag deposits its momentum into the
+    # neutral wind instead of a closure, ionization/recombination exchange
+    # momentum between species, and the wall/pump remove it. Mutually
+    # exclusive with ion_neutral_drag_model="slip", whose closure is this
+    # equation's own local steady state. Off => historical 5-field state.
+    "neutral_momentum": False,
     "ion_neutral_thermalization": False,
     "cathode_coupling": True,
+    # Schottky barrier lowering in the *current-driven* sheath solve only
+    # (CATHODE_IDRIVEN_PLAN.md §2b): the extracting sheath field lowers the
+    # effective work function, tilting the emission ceiling into a sloped
+    # line. Ignored by the voltage-driven solver (which is frozen). Any
+    # phi_wf fit must state this flag's value (plan §3b).
+    "cathode_schottky": False,
     "neutral_prebreakdown": True,
     "neutral_equilibration": True,
     "launch_plasma_after_equilibration": True,
