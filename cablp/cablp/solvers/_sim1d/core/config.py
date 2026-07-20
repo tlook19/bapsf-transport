@@ -795,20 +795,40 @@ def cathode_defaults():
         R_cath`` the two models differ even for a uniform gap -- conduction
         through the plasma channel, not the cathode disc.
     b_beam_excitation:
-        Scale on the He 1^1S -> 2^1P excitation cross section added to the
-        primary beam's inelastic channels. ``0`` (default) is the historical
-        beam: ionization-only attenuation and every deposited eV heating the
-        plasma. Nonzero adds beam-driven neutral excitation, whose ~21 eV per
-        event radiates away promptly as He I light (the
+        Scale on the neutral-excitation cross section added to the primary
+        beam's inelastic channels. ``0`` (default) is the historical beam:
+        ionization-only attenuation and every deposited eV heating the
+        plasma. Nonzero adds beam-driven neutral excitation, whose ~21-22 eV
+        per event radiates away promptly as He I light (the
         ``beam_excitation_radiation`` term) and whose cross section shortens
-        the beam's inelastic deposition length. At beam energies the 2^1P
-        channel is 26-34% of the ionization cross section; ``1.0`` books that
-        channel alone, ``~1.4`` approximates the full singlet manifold
-        (2^1S, 3^1P, ...). Triplet/metastable excitation is exchange-driven
-        and collapses above ~50 eV, so it is deliberately absent. He-only.
+        the beam's inelastic deposition length. What the scale multiplies
+        depends on ``beam_excitation_model``: under ``"2p_scalar"`` it scales
+        the 2^1P cross section alone (``1.0`` books that channel, ``~1.4``
+        was the historical estimate of the full singlet manifold); under
+        ``"manifold"`` it scales the measured manifold sum, so it is a pure
+        sensitivity multiplier whose benchmark value is ``1.0``.
+        Triplet/metastable excitation is exchange-driven and collapses above
+        ~50 eV, so it is deliberately absent. He-only.
+    beam_excitation_model:
+        Which cross-section set the beam's excitation channel uses.
+        ``"2p_scalar"`` (default, historical): the single 2^1P cross section
+        with ``beam_excitation_energy_eV`` radiated per event.
+        ``"manifold"``: the summed Ralchenko et al. (2008) singlet manifold
+        (fitted n <= 4 levels plus the Eq. (5) n >= 5 tail,
+        ``vars._coeff.He_singlet_manifold``) with the energy-weighted mean
+        radiated energy per event computed at the beam energy —
+        the measured replacement for the 1.4 estimate
+        (BEAM_DEPOSITION_PLAN WP-A: manifold/2^1P = 1.65-1.75 in events,
+        1.71-1.81 in radiated power, over 60-180 eV). Both cathode
+        formulations consume the same channel
+        (``beam_excitation_channel``); NB the voltage-driven ES1 config is
+        unstable above ~1.5x-equivalent excitation power (THESIS_NOTES
+        item 11) — manifold runs belong on the current-driven solver.
     beam_excitation_energy_eV:
         Threshold and radiated energy per beam excitation event [eV]
-        (the 2^1P excitation energy).
+        (the 2^1P excitation energy). Used by ``"2p_scalar"`` only; under
+        ``"manifold"`` the thresholds and radiated energies come from the
+        manifold registry and this key is inert.
     """
     return {
         "V_bank": 180.0,
@@ -824,6 +844,7 @@ def cathode_defaults():
         "L_cath": 50.0,
         "R_cath": 18.0,
         "b_beam_excitation": 0.0,
+        "beam_excitation_model": "2p_scalar",
         "beam_excitation_energy_eV": 21.218,
         "cathode_warming_model": "none",
         "cathode_Ts_start_K": None,

@@ -262,6 +262,37 @@ def He_singlet_tail_cross(E_eV, n_max=20):
     return sigma_tot, sigma_E_tot
 
 
+def He_beam_excitation_channel(E_eV, n_max=20):
+    """Summed He singlet excitation channel for a monoenergetic beam.
+
+    Returns ``(sigma_tot_cm2, E_rad_mean_eV)``: the total 1^1S excitation
+    cross section over the fitted n <= 4 manifold plus the Eq. (5) n >= 5
+    tail, and the energy-weighted mean radiated energy per event
+    (each event books its threshold E_k as prompt line radiation; the 2^1S
+    metastable caveat is documented on ``vars._coeff.He_singlet_manifold``).
+    ``(0.0, 0.0)`` below the lowest threshold (2^1S, 20.6158 eV).
+
+    This is the measured replacement for the historical
+    ``b_beam_excitation = 1.4`` estimate (BEAM_DEPOSITION_PLAN WP-A):
+    sigma_tot / sigma_2P = 1.65-1.75 and E_rad_mean = 21.95-21.98 eV over
+    the 60-180 eV beam range (``scripts/measure_beam_manifold.py``).
+    """
+    from ..vars._coeff import He_singlet_manifold
+
+    sigma_tot = 0.0
+    sigma_E_tot = 0.0
+    for entry in He_singlet_manifold.values():
+        sigma = He_EIE_cross_manifold(E_eV, entry)
+        sigma_tot += sigma
+        sigma_E_tot += sigma * entry["E_eV"]
+    tail_sigma, tail_sigma_E = He_singlet_tail_cross(E_eV, n_max=n_max)
+    sigma_tot += tail_sigma
+    sigma_E_tot += tail_sigma_E
+    if sigma_tot <= 0.0:
+        return 0.0, 0.0
+    return sigma_tot, sigma_E_tot / sigma_tot
+
+
 def int_factor(I):
     return mp.fprod(
         [mp.power(I, 2), mp.sqrt(mp.fdiv(8, mp.fmul(M_e_eV, mp.pi))), c_cgs]

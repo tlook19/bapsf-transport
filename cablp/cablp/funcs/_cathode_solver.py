@@ -33,7 +33,11 @@ from typing import Literal
 import numpy as np
 from scipy.optimize import brentq
 
-from cablp.funcs._cross import He_EII_cross_lkup, H_EII_cross_lkup
+from cablp.funcs._cross import (
+    He_EII_cross_lkup,
+    H_EII_cross_lkup,
+    He_beam_excitation_channel,
+)
 from cablp.vars._coeff import b_11s_21p
 from cablp.vars._cons import E_21p as _E_21p_eV, Ry_eV as _Ry_eV, atm_cross_cgs as _atm_cross_cgs
 
@@ -255,6 +259,11 @@ class BeamResult:
     l_b_profile_twin: per-cell MFP for the twin beam [cm]; zeros if no twin or beam_cross[-1]==0
     x0_next         : warm-start hint for the next primary solve [V]
     x0_twin_next    : warm-start hint for the next twin solve [V], or None
+    beam_exc_energy_eV: radiated energy per excitation event [eV] at the
+                      cathode cells (constant threshold under "2p_scalar",
+                      energy-weighted manifold mean under "manifold"), or
+                      None from a builder that predates the manifold model
+                      (consumers fall back to ``beam_excitation_energy_eV``)
     """
 
     result: SolverResult
@@ -272,6 +281,7 @@ class BeamResult:
     l_b_profile_twin: np.ndarray
     x0_next: float
     x0_twin_next: float | None
+    beam_exc_energy_eV: np.ndarray | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -441,6 +451,48 @@ def beam_excitation_cross(
         )
     return float(b_beam_excitation) * _he_2p_excitation_cross_cm2(
         phi_c_eV / threshold_eV
+    )
+
+
+def beam_excitation_channel(
+    phi_c_eV: float,
+    b_beam_excitation: float,
+    gas_type: str,
+    model: str = "2p_scalar",
+    threshold_eV: float = 21.218,
+) -> tuple[float, float]:
+    """Beam excitation channel: ``(sigma_cm2, E_rad_eV_per_event)``.
+
+    ``model = "2p_scalar"`` (historical): sigma from
+    ``beam_excitation_cross`` (b x the 2^1P cross section) and the constant
+    ``threshold_eV`` radiated per event — the pre-manifold booking, byte-for-
+    byte. ``model = "manifold"``: the measured Ralchenko singlet manifold sum
+    (``He_beam_excitation_channel``: fitted n <= 4 levels + Eq. (5) tail)
+    with the energy-weighted mean radiated energy; ``b_beam_excitation``
+    survives as a pure sensitivity multiplier on the cross section (benchmark
+    value 1.0), and ``threshold_eV`` is ignored — thresholds live in the
+    manifold registry. He-only, like the scalar path.
+    """
+    if model == "2p_scalar":
+        return (
+            beam_excitation_cross(
+                phi_c_eV, b_beam_excitation, gas_type, threshold_eV=threshold_eV
+            ),
+            threshold_eV,
+        )
+    if model == "manifold":
+        if b_beam_excitation == 0.0:
+            return 0.0, 0.0
+        if gas_type != "He":
+            raise ValueError(
+                "b_beam_excitation != 0 is only wired for gas_type 'He' "
+                f"(got {gas_type!r}); the excitation manifold is helium's"
+            )
+        sigma, E_rad = He_beam_excitation_channel(phi_c_eV)
+        return float(b_beam_excitation) * sigma, E_rad
+    raise ValueError(
+        f"unknown beam_excitation_model {model!r}; "
+        "expected '2p_scalar' or 'manifold'"
     )
 
 
@@ -1056,6 +1108,7 @@ def solve_beam_system(
     anode_T_e_twin: float | None = None,
     b_beam_excitation: float = 0.0,
     beam_excitation_energy_eV: float = 21.218,
+    beam_excitation_model: str = "2p_scalar",
 ) -> BeamResult:
     """Solve cathode sheath(s) and compute beam quantities for all cells.
 
@@ -1089,6 +1142,7 @@ def solve_beam_system(
     n_beam = np.zeros(cells)
     beam_cross = np.zeros(cells)
     beam_exc_cross = np.zeros(cells)
+    beam_exc_energy = np.zeros(cells)
 
     result = solve(
         config,
@@ -1113,10 +1167,14 @@ def solve_beam_system(
             beam_cross[cathode_index] = He_EII_cross_lkup(phi_c_0 / I_ion)
         elif gas_type == "H":
             beam_cross[cathode_index] = H_EII_cross_lkup(phi_c_0)
-        beam_exc_cross[cathode_index] = beam_excitation_cross(
+        (
+            beam_exc_cross[cathode_index],
+            beam_exc_energy[cathode_index],
+        ) = beam_excitation_channel(
             phi_c_0,
             b_beam_excitation,
             gas_type,
+            model=beam_excitation_model,
             threshold_eV=beam_excitation_energy_eV,
         )
 
@@ -1148,10 +1206,14 @@ def solve_beam_system(
                 beam_cross[twin_index] = He_EII_cross_lkup(phi_c_1 / I_ion)
             elif gas_type == "H":
                 beam_cross[twin_index] = H_EII_cross_lkup(phi_c_1)
-            beam_exc_cross[twin_index] = beam_excitation_cross(
+            (
+                beam_exc_cross[twin_index],
+                beam_exc_energy[twin_index],
+            ) = beam_excitation_channel(
                 phi_c_1,
                 b_beam_excitation,
                 gas_type,
+                model=beam_excitation_model,
                 threshold_eV=beam_excitation_energy_eV,
             )
 
@@ -1201,4 +1263,5 @@ def solve_beam_system(
         l_b_profile_twin=l_b_profile_twin,
         x0_next=x0_next,
         x0_twin_next=x0_twin_next,
+        beam_exc_energy_eV=beam_exc_energy,
     )

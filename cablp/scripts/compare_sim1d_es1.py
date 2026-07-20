@@ -435,6 +435,29 @@ def main(argv=None):
             "Spitzer) or resolved_gap (profile-integrated over the gap)"
         ),
     )
+    parser.add_argument(
+        "--beam-excitation",
+        default=None,
+        choices=("scalar14", "manifold"),
+        help=(
+            "beam excitation channel for the WP-A A/B "
+            "(BEAM_DEPOSITION_PLAN.md A3): scalar14 (production 2p_scalar "
+            "with the historical b=1.4 estimate) or manifold (measured "
+            "Ralchenko singlet sum, b=1.0)"
+        ),
+    )
+    parser.add_argument(
+        "--solver-model",
+        default=None,
+        choices=("voltage_driven", "current_driven"),
+        help=(
+            "cathode solver formulation (CATHODE_IDRIVEN_PLAN.md): "
+            "voltage_driven (historical) or current_driven (well-posed at "
+            "the emission ceiling; requires the config's L_parasitic_H > 0). "
+            "The manifold excitation channel is only stable current-driven "
+            "(THESIS_NOTES item 11)"
+        ),
+    )
     args = parser.parse_args(argv)
 
     overlay = np.load(OVERLAY, allow_pickle=False)
@@ -452,9 +475,22 @@ def main(argv=None):
             label += f" [drag={args.drag_closure}]"
         if args.Rp_model is not None:
             label += f" [Rp={args.Rp_model}]"
+        if args.beam_excitation is not None:
+            label += f" [beam_exc={args.beam_excitation}]"
+        if args.solver_model is not None:
+            label += f" [solver={args.solver_model}]"
         extra = {}
         if args.tau_afterglow is not None:
             extra["tau_afterglow"] = args.tau_afterglow
+        # A/B instrument for BEAM_DEPOSITION_PLAN.md A3: the measured singlet
+        # manifold vs the retired 1.4 estimate. "scalar14" is PARAM_OVERRIDES
+        # as-is; "manifold" swaps the cross-section set and drops b to the
+        # pure-multiplier benchmark value.
+        if args.beam_excitation == "manifold":
+            extra["beam_excitation_model"] = "manifold"
+            extra["b_beam_excitation"] = 1.0
+        if args.solver_model is not None:
+            extra["cathode_solver_model"] = args.solver_model
         try:
             result, geometry, params, flags = run_model(
                 resolved=not args.legacy,

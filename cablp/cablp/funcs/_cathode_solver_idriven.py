@@ -95,7 +95,7 @@ from cablp.funcs._cathode_solver import (
     _kB_SI,
     _me_cgs,
     _mp_cgs,
-    beam_excitation_cross,
+    beam_excitation_channel,
 )
 from cablp.funcs._cross import H_EII_cross_lkup, He_EII_cross_lkup
 
@@ -537,6 +537,7 @@ def solve_beam_system_idriven(
     anode_T_e: float | None = None,
     b_beam_excitation: float = 0.0,
     beam_excitation_energy_eV: float = 21.218,
+    beam_excitation_model: str = "2p_scalar",
     schottky: bool = False,
     phi_c_cap_V: float = 1000.0,
 ) -> BeamResult:
@@ -556,6 +557,7 @@ def solve_beam_system_idriven(
     n_beam = np.zeros(cells)
     beam_cross = np.zeros(cells)
     beam_exc_cross = np.zeros(cells)
+    beam_exc_energy = np.zeros(cells)
 
     result = solve_idriven(
         config,
@@ -584,10 +586,14 @@ def solve_beam_system_idriven(
             beam_cross[cathode_index] = He_EII_cross_lkup(phi_c_0 / I_ion)
         elif gas_type == "H":
             beam_cross[cathode_index] = H_EII_cross_lkup(phi_c_0)
-        beam_exc_cross[cathode_index] = beam_excitation_cross(
+        (
+            beam_exc_cross[cathode_index],
+            beam_exc_energy[cathode_index],
+        ) = beam_excitation_channel(
             phi_c_0,
             b_beam_excitation,
             gas_type,
+            model=beam_excitation_model,
             threshold_eV=beam_excitation_energy_eV,
         )
 
@@ -627,4 +633,5 @@ def solve_beam_system_idriven(
         l_b_profile_twin=np.zeros(cells),
         x0_next=result.phi_c_plus,
         x0_twin_next=None,
+        beam_exc_energy_eV=beam_exc_energy,
     )

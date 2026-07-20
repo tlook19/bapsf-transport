@@ -787,6 +787,9 @@ def solve_cathode_boundary(
             beam_excitation_energy_eV=float(
                 input_dict.get("beam_excitation_energy_eV", 21.218)
             ),
+            beam_excitation_model=str(
+                input_dict.get("beam_excitation_model", "2p_scalar")
+            ),
             schottky=bool(input_flags.get("cathode_schottky", False)),
             phi_c_cap_V=float(input_dict.get("cathode_phi_c_cap_V", 1000.0)),
         )
@@ -830,6 +833,9 @@ def solve_cathode_boundary(
             b_beam_excitation=float(input_dict.get("b_beam_excitation", 0.0)),
             beam_excitation_energy_eV=float(
                 input_dict.get("beam_excitation_energy_eV", 21.218)
+            ),
+            beam_excitation_model=str(
+                input_dict.get("beam_excitation_model", "2p_scalar")
             ),
         )
     return CathodeSolve1D(
@@ -1118,12 +1124,14 @@ def beam_ionization_rhs_terms(
         return _zero_beam_terms(zeros)
 
     beam_derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
-    S_beam, S_exc, beam_power_density = _beam_ionization_sources(
+    E_exc = float(input_dict.get("beam_excitation_energy_eV", 21.218))
+    S_beam, S_exc, S_exc_E, beam_power_density = _beam_ionization_sources(
         state=state,
         geometry=geometry,
         cathode_solve=cathode_solve,
         boundary=boundary,
         Te=beam_derived.Te,
+        exc_energy_fallback_eV=E_exc,
     )
     volume_ratio = geometry.plasma_volume_cm3 / geometry.neutral_volume_cm3
     Ti_birth = _birth_temperature(
@@ -1131,7 +1139,15 @@ def beam_ionization_rhs_terms(
         beam_derived.Ti,
         floors["Ti"],
     )
-    E_exc = float(input_dict.get("beam_excitation_energy_eV", 21.218))
+    exc_model = str(input_dict.get("beam_excitation_model", "2p_scalar"))
+    if exc_model == "2p_scalar":
+        # Historical booking: the constant per-event energy factored out of
+        # the summed event profile — kept byte-for-byte.
+        exc_Ee = -E_exc * ev_to_erg * S_exc
+    else:
+        # Manifold booking: each ray radiates its own energy-weighted mean
+        # per event, set by that cathode's phi_c at solve time.
+        exc_Ee = -ev_to_erg * S_exc_E
     return {
         "beam_ionization_birth": ConservativeState1D(
             n=S_beam,
@@ -1154,15 +1170,16 @@ def beam_ionization_rhs_terms(
             Ee=-I_ion * ev_to_erg * S_beam,
             Ei=zeros.copy(),
         ),
-        # Excited neutrals radiate their ~21 eV promptly (2^1P lifetime ~ns),
-        # so the excitation channel's energy leaves the plasma as He I light
-        # rather than heating it. The particle is unchanged: the neutral
-        # returns to ground state.
+        # Excited neutrals radiate their ~21-22 eV promptly (2^1P lifetime
+        # ~ns; the 2^1S metastable share is booked as radiated too, caveat on
+        # the manifold registry), so the excitation channel's energy leaves
+        # the plasma as He I light rather than heating it. The particle is
+        # unchanged: the neutral returns to ground state.
         "beam_excitation_radiation": ConservativeState1D(
             n=zeros.copy(),
             nn=zeros.copy(),
             M=zeros.copy(),
-            Ee=-E_exc * ev_to_erg * S_exc,
+            Ee=exc_Ee,
             Ei=zeros.copy(),
         ),
     }
@@ -1174,12 +1191,23 @@ def _beam_ionization_sources(
     cathode_solve,
     boundary,
     Te=None,
+    exc_energy_fallback_eV=21.218,
 ):
     zeros = np.zeros(geometry.cells, dtype=float)
     beam_result = cathode_solve.beam_result
     S_beam = zeros.copy()
     S_exc = zeros.copy()
+    S_exc_E = zeros.copy()
     beam_power_density = zeros.copy()
+
+    def _exc_energy_at(launch_index):
+        # Per-ray radiated energy per event [eV]: the solve's per-cell value
+        # when the builder provides it, else the legacy constant.
+        energies = beam_result.beam_exc_energy_eV
+        if energies is None:
+            return exc_energy_fallback_eV
+        return float(energies[launch_index])
+
     source_profile = _beam_ionization_profile(
         state=state,
         geometry=geometry,
@@ -1187,13 +1215,15 @@ def _beam_ionization_sources(
         end=0,
     )
     S_beam += source_profile
-    S_exc += _beam_event_profile(
+    exc_profile = _beam_event_profile(
         state=state,
         geometry=geometry,
         beam_result=beam_result,
         event_cross=beam_result.beam_exc_cross,
         end=0,
     )
+    S_exc += exc_profile
+    S_exc_E += exc_profile * _exc_energy_at(beam_launch(geometry, end=0)[0])
     beam_power_density += _beam_power_deposition_density(
         geometry=geometry,
         beam_result=beam_result,
@@ -1209,12 +1239,16 @@ def _beam_ionization_sources(
             end=-1,
         )
         S_beam += twin_profile
-        S_exc += _beam_event_profile(
+        exc_profile_twin = _beam_event_profile(
             state=state,
             geometry=geometry,
             beam_result=beam_result,
             event_cross=beam_result.beam_exc_cross,
             end=-1,
+        )
+        S_exc += exc_profile_twin
+        S_exc_E += exc_profile_twin * _exc_energy_at(
+            beam_launch(geometry, end=-1)[0]
         )
         beam_power_density += _beam_power_deposition_density(
             geometry=geometry,
@@ -1224,7 +1258,7 @@ def _beam_ionization_sources(
             Te=Te,
         )
 
-    return S_beam, S_exc, beam_power_density
+    return S_beam, S_exc, S_exc_E, beam_power_density
 
 
 def _zero_beam_terms(zeros):

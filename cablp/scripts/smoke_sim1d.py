@@ -1476,6 +1476,37 @@ def main():
         validate_cathode_solver_model(m3_params, resolved_cathode_flags)
         == "current_driven"
     )
+    # The manifold excitation channel is consumed by the current-driven
+    # builder too (A2 adoption): same dispatch, per-cell mean radiated
+    # energy filled, cross section wider than the 2^1P-only channel at the
+    # same solve.
+    m3_exc_params = dict(m3_params, b_beam_excitation=1.0)
+    m3_exc_sim = LAPDSim1D(m3_exc_params, resolved_cathode_flags)
+    m3_exc_sim._circuit_I_loop = 800.0
+    m3_exc_solve = m3_exc_sim.solve_cathode_boundary(update_cache=False)
+    m3_mfd_params = dict(
+        m3_exc_params, beam_excitation_model="manifold"
+    )
+    m3_mfd_sim = LAPDSim1D(m3_mfd_params, resolved_cathode_flags)
+    m3_mfd_sim._circuit_I_loop = 800.0
+    m3_mfd_solve = m3_mfd_sim.solve_cathode_boundary(update_cache=False)
+    m3_launch = int(
+        np.flatnonzero(m3_mfd_solve.beam_result.beam_cross)[0]
+    )
+    assert (
+        m3_mfd_solve.beam_result.beam_exc_cross[m3_launch]
+        > m3_exc_solve.beam_result.beam_exc_cross[m3_launch]
+        > 0.0
+    )
+    assert (
+        21.5
+        < float(m3_mfd_solve.beam_result.beam_exc_energy_eV[m3_launch])
+        < 22.5
+    )
+    assert (
+        float(m3_exc_solve.beam_result.beam_exc_energy_eV[m3_launch])
+        == 21.218
+    )
 
     # Gate 5: drive mini-run. The loop current starts at 0 and rises at
     # ~(V_src - V_dis)/L; the per-step solve reports the *frozen* current
@@ -1568,6 +1599,74 @@ def main():
     assert np.allclose(
         event_ratio,
         exc_beam.beam_exc_cross[launch_idx] / exc_beam.beam_cross[launch_idx],
+        rtol=1e-10,
+    )
+
+    # --- A2: the manifold excitation model (BEAM_DEPOSITION_PLAN WP-A).
+    from cablp.funcs._cathode_solver import beam_excitation_channel
+    from cablp.funcs._cross import (
+        He_beam_excitation_channel as _He_manifold_channel,
+    )
+
+    # Dispatch: the scalar path reproduces the historical function
+    # byte-for-byte; the manifold path matches the _cross helper with
+    # b_beam_excitation as a pure multiplier on the cross section only.
+    assert beam_excitation_channel(100.0, 1.4, "He") == (
+        beam_excitation_cross(100.0, 1.4, "He"),
+        21.218,
+    )
+    _mf_sigma, _mf_E = beam_excitation_channel(100.0, 1.0, "He", model="manifold")
+    assert (_mf_sigma, _mf_E) == _He_manifold_channel(100.0)
+    _mf_sigma_h, _mf_E_h = beam_excitation_channel(
+        100.0, 0.5, "He", model="manifold"
+    )
+    assert np.isclose(_mf_sigma_h, 0.5 * _mf_sigma) and _mf_E_h == _mf_E
+    assert beam_excitation_channel(100.0, 0.0, "He", model="manifold") == (0.0, 0.0)
+    # Below the lowest manifold threshold (2^1S, 20.6158 eV).
+    assert beam_excitation_channel(15.0, 1.0, "He", model="manifold") == (0.0, 0.0)
+    # The measured manifold vs the historical 2^1P channel at 100 eV
+    # (measure_beam_manifold.py, 2026-07-20): 1.67x the events, mean
+    # radiated energy 21.98 eV — within the retired estimate's 1.4 +- 0.4.
+    assert 1.55 < _mf_sigma / beam_excitation_cross(100.0, 1.0, "He") < 1.80
+    assert 21.5 < _mf_E < 22.5
+    for bad_call in (
+        lambda: beam_excitation_channel(100.0, 1.0, "He", model="bogus"),
+        lambda: beam_excitation_channel(100.0, 1.0, "H", model="manifold"),
+    ):
+        try:
+            bad_call()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("expected ValueError from excitation channel")
+
+    # Solver-level: manifold mode widens the excitation cross section at the
+    # same first-solve phi_c (zeroed sigma_b cache on both rigs) and books
+    # the per-ray energy-weighted mean per event; the split-flux ratio
+    # assertion holds with the manifold values in place of the constants.
+    mfd_params = dict(exc_params)
+    mfd_params["beam_excitation_model"] = "manifold"
+    mfd_sim = LAPDSim1D(mfd_params, cathode_flags)
+    mfd_solve = mfd_sim.solve_cathode_boundary()
+    mfd_beam = mfd_solve.beam_result
+    assert np.isclose(mfd_beam.result.phi_c, exc_beam.result.phi_c)
+    assert (
+        mfd_beam.beam_exc_cross[launch_idx] > exc_beam.beam_exc_cross[launch_idx]
+    )
+    _mf_E_launch = float(mfd_beam.beam_exc_energy_eV[launch_idx])
+    assert 21.5 < _mf_E_launch < 22.5
+    # The 2p_scalar rig reports the constant threshold as its per-event energy.
+    assert float(exc_beam.beam_exc_energy_eV[launch_idx]) == 21.218
+    mfd_terms = mfd_sim.beam_ionization_rhs_terms(cathode_solve=mfd_solve)
+    mfd_rad = mfd_terms["beam_excitation_radiation"]
+    mfd_birth = mfd_terms["beam_ionization_birth"]
+    mfd_mask = mfd_birth.n > 0.0
+    mfd_ratio = (
+        -mfd_rad.Ee[mfd_mask] / (_mf_E_launch * ev_to_erg)
+    ) / mfd_birth.n[mfd_mask]
+    assert np.allclose(
+        mfd_ratio,
+        mfd_beam.beam_exc_cross[launch_idx] / mfd_beam.beam_cross[launch_idx],
         rtol=1e-10,
     )
 
@@ -5671,6 +5770,75 @@ def main():
     # The Eq. (5) Rydberg tail sums to ~1.56x the 4^1P row (sum of (4/n)^3
     # plus the small nS/nD/nF series and threshold shifts).
     assert 1.3 < tail_sigma_100 / sigma_by_level["41P"] < 2.0
+
+    # --- B1: the standalone CSDA beam-deposition module
+    # (BEAM_DEPOSITION_PLAN B1; full acceptance in
+    # scripts/verify_beam_deposition.py — this is the fast subset).
+    from cablp.funcs._beam_deposition import (
+        beam_speed_cm_s,
+        coulomb_stopping_eV_per_cm,
+        deposit_beam,
+        quasilinear_relaxation_length_cm,
+    )
+
+    b1_cells = 30
+    b1_col = dict(
+        nn=np.full(b1_cells, 3.0e14),
+        ne=np.full(b1_cells, 1.0e10),
+        Te=np.full(b1_cells, 1.0),
+        launch=0,
+        direction=1,
+        dz_cm=np.full(b1_cells, 100.0),
+    )
+    b1_res = deposit_beam(150.0, 1.0e22, **b1_col)
+    b1_budget = 1.0e22 * 150.0 * 1.602176634e-12
+    b1_total = (
+        b1_res.plasma_heating_erg_s.sum()
+        + b1_res.radiated_erg_s.sum()
+        + b1_res.ionization_cost_erg_s.sum()
+        + b1_res.transmitted_flux
+        * b1_res.transmitted_energy_eV
+        * 1.602176634e-12
+    )
+    assert abs(b1_total - b1_budget) / b1_budget < 1e-10
+    # Breakdown conditions: several inelastic events per primary (the
+    # single-event Beer-Lambert booking caps at 1 — THESIS_NOTES item 10).
+    b1_events = (
+        b1_res.ionization_events.sum() + b1_res.excitation_events.sum()
+    ) / 1.0e22
+    assert 2.0 < b1_events < 6.0, b1_events
+    # Ray discipline: nothing behind the launch cell, direction respected.
+    b1_res_rev = deposit_beam(
+        150.0, 1.0e22, **{**b1_col, "launch": b1_cells - 1, "direction": -1}
+    )
+    assert np.allclose(
+        b1_res_rev.ionization_events, b1_res.ionization_events[::-1]
+    )
+    # Closure ordering at production conditions (item 12): quasilinear <<
+    # legacy tau_ei "Coulomb" << classical fast-electron stopping.
+    b1_nb = 1.0e22 / (700.0 * beam_speed_cm_s(150.0))
+    b1_lql = quasilinear_relaxation_length_cm(150.0, 5.0e12, b1_nb)
+    b1_llegacy = 150.0 / coulomb_stopping_eV_per_cm(
+        150.0, 5.0e12, 8.0, "legacy_tau_ei"
+    )
+    b1_lfast = 150.0 / coulomb_stopping_eV_per_cm(
+        150.0, 5.0e12, 8.0, "fast_electron"
+    )
+    assert b1_lql < b1_llegacy < b1_lfast
+    # Sub-threshold source passes through untouched; bad closures raise.
+    b1_sub = deposit_beam(15.0, 1.0e22, **b1_col)
+    assert b1_sub.transmitted_flux == 1.0e22
+    assert b1_sub.plasma_heating_erg_s.sum() == 0.0
+    for b1_bad in (
+        lambda: deposit_beam(150.0, 1e22, **b1_col, coulomb_model="bogus"),
+        lambda: deposit_beam(150.0, 1e22, **b1_col, anomalous_model="quasilinear"),
+    ):
+        try:
+            b1_bad()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("expected ValueError from deposit_beam")
 
     adas_reaction_kwargs = dict(
         state=knob_state,
