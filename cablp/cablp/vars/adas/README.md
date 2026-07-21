@@ -1,8 +1,15 @@
-# ADAS adf11 data for helium
+# ADAS adf11 data for helium, carbon, oxygen, boron, molybdenum, and tungsten
 
-Iso-nuclear master files from OPEN-ADAS (https://open.adas.ac.uk), ADAS
-"GCR project" '96 series, unresolved (stage-to-stage) form. Retrieved
-2026-07-18 from `https://open.adas.ac.uk/download/adf11/<class>96/<class>96_he.dat`.
+Iso-nuclear master files from OPEN-ADAS (https://open.adas.ac.uk),
+unresolved (stage-to-stage) form, from
+`https://open.adas.ac.uk/download/adf11/<class><yy>/<class><yy>_<element>.dat`.
+Helium ('96 GCR series) retrieved 2026-07-18; carbon/oxygen ('96) and
+boron/molybdenum/tungsten ('89 Abels-van Maanen series — no '96 files
+exist for these) retrieved 2026-07-21. The '89 series is older average-ion-era
+data; treat it as order-of-magnitude at LAPD temperatures. Lanthanum
+(the other LaB6 constituent) has NO adf11 data on OPEN-ADAS in any
+series; tungsten is kept as the heavy-element analog for La-class
+radiators.
 
 | file | class | quantity | units | normalization |
 |---|---|---|---|---|
@@ -14,6 +21,17 @@ Iso-nuclear master files from OPEN-ADAS (https://open.adas.ac.uk), ADAS
 For helium (Z = 2) each file carries stages z1 = 1, 2. The transport model
 uses z1 = 1 of SCD/ACD/PLT/PRB (He0 ionization, He+ recombination, He0 line
 power, He+ recombination power) and z1 = 2 of PLT (He+ line power).
+
+The carbon (`*96_c.dat`, z1 = 1-6), oxygen (`*96_o.dat`, z1 = 1-8), boron
+(`*89_b.dat`, z1 = 1-5), molybdenum (`*89_mo.dat`, z1 = 1-42), and
+tungsten (`*89_w.dat`, z1 = 1-74) files were
+added for the impurity-radiation scoping study
+(`scripts/scope_impurity_radiation.py`): equilibrium stage balance from
+SCD/ACD, total radiated power L_z from PLT+PRB. No model path consumes them
+as of 2026-07-21 — the scoping verdict (required n_z/n_e ~ 4-10 % at
+equilibrium for every species tested >> the ppm hypothesis;
+CATHODE_IDRIVEN_PLAN.md §5b) stopped the campaign before any sink term was
+wired in.
 
 These are generalized collisional-radiative (GCR) coefficients: they are
 tabulated on a log10(n_e) x log10(T_e) grid (24 x 30; 5e7-2e15 cm^-3,
