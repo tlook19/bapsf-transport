@@ -1040,7 +1040,13 @@ input_flags_template_1d = {
     # effective work function, tilting the emission ceiling into a sloped
     # line. Ignored by the voltage-driven solver (which is frozen). Any
     # phi_wf fit must state this flag's value (plan §3b).
-    "cathode_schottky": False,
+    # Default ON since 2026-07-20 (Tom): the knee probes measured it
+    # collapsing the per-solve V_b two-state chatter to a steady band at
+    # the measured scale (p5/p50/p95 = 112/134/152 V vs measured ~151 V)
+    # while restoring the current the gaussian edge-cooling costs
+    # (`es1_nx120_knee_gauss_schottky.h5`). Inert for the golden baseline
+    # (voltage-driven ignores it).
+    "cathode_schottky": True,
     "neutral_prebreakdown": True,
     "neutral_equilibration": True,
     "launch_plasma_after_equilibration": True,

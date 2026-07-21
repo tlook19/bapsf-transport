@@ -470,9 +470,27 @@ def main(argv=None):
             "(THESIS_NOTES item 11)"
         ),
     )
+    parser.add_argument(
+        "--es",
+        type=int,
+        choices=(1, 2, 3),
+        default=1,
+        help=(
+            "which experiment-set overlay to score against "
+            "(data/es{N}_sim1d_overlay.npz; ES1-3 share fueling and differ "
+            "only in heater current and bank voltage — the drive-side "
+            "ladder, THESIS_NOTES §2). NB the model config must match the "
+            "campaign's operating point; this flag only selects the data."
+        ),
+    )
     args = parser.parse_args(argv)
 
-    overlay = np.load(OVERLAY, allow_pickle=False)
+    overlay_path = (
+        OVERLAY
+        if args.es == 1
+        else OVERLAY.parent / f"es{args.es}_sim1d_overlay.npz"
+    )
+    overlay = np.load(overlay_path, allow_pickle=False)
     if args.from_h5 is not None:
         result = load_result_hdf5(args.from_h5)
         geometry = None
