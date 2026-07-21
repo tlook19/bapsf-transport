@@ -1367,6 +1367,87 @@ def main():
     id_slope_on = np.max(np.abs(np.diff(id_vb_on) / np.diff(id_knee)))
     assert id_slope_on < 0.5 * id_slope_off, (id_slope_on, id_slope_off)
 
+    # Thermal bridge (opt-in, chatter diagnosis 2026-07-21): the kT_s-width
+    # C1 blend across the SCL<->classical release corner. Kernel first:
+    # exact hard branches outside the window, continuous slope across the
+    # edges, J_star <= min(J_eff, J_crit) everywhere, both outputs monotone.
+    from cablp.funcs._cathode_solver_idriven import (
+        _BRIDGE_HALF_WIDTH,
+        _bridge_release,
+    )
+
+    br_w = _BRIDGE_HALF_WIDTH
+    for br_x in (-5.0, -br_w - 1e-12):
+        br_J, br_b = _bridge_release(float(np.exp(br_x)), 1.0)
+        assert br_J == float(np.exp(br_x)) and br_b == 0.0, br_x
+    for br_x in (br_w + 1e-12, 5.0):
+        br_J, br_b = _bridge_release(float(np.exp(br_x)), 1.0)
+        assert np.isclose(br_J, 1.0, rtol=1e-12) and np.isclose(br_b, br_x)
+    br_xs = np.linspace(-2.0 * br_w, 2.0 * br_w, 401)
+    br_pairs = [_bridge_release(float(np.exp(x)), 1.0) for x in br_xs]
+    br_Js = np.array([p[0] for p in br_pairs])
+    br_bs = np.array([p[1] for p in br_pairs])
+    assert np.all(br_Js <= np.minimum(np.exp(br_xs), 1.0) + 1e-15)
+    assert np.all(np.diff(br_Js) >= -1e-15)  # released current monotone
+    assert np.all(np.diff(br_bs) >= -1e-15)  # barrier monotone
+    br_slope = np.diff(br_bs) / np.diff(br_xs)
+    # C1: slope increments stay at the quadratic's own scale (a hard corner
+    # would jump O(1) between adjacent samples).
+    assert np.all(np.abs(np.diff(br_slope)) < 0.02)
+
+    # Solve level: bridge off is the default hard path (bit-identical);
+    # bridge on stays finite, carries the imposed current, and -- since the
+    # blend only ever *adds* barrier -- sits at least as deep in psi at
+    # fixed current. Monotonicity of the I -> phi map (the architecture's
+    # load-bearing property) must survive bridge x schottky.
+    for br_cfg in (uni_cfg, gauss_cfg):
+        for br_I in (0.05 * id_ceiling, 0.5 * id_ceiling, 0.95 * id_ceiling):
+            br_hard = solve_idriven(br_cfg, plasma_probe, I_tot_A=float(br_I))
+            br_dflt = solve_idriven(br_cfg, plasma_probe, I_tot_A=float(br_I),
+                                    bridge=False)
+            assert br_dflt.phi_c_plus == br_hard.phi_c_plus
+            br_on = solve_idriven(br_cfg, plasma_probe, I_tot_A=float(br_I),
+                                  bridge=True)
+            assert np.isfinite(br_on.V_b) and np.isfinite(br_on.phi_c)
+            # id_ceiling is the *uniform* config's; the gaussian's own
+            # ceiling is lower (edge-cooled annuli), so the top current
+            # may legitimately land capability-limited -- in lockstep
+            # with the hard solve.
+            assert (
+                np.isclose(br_on.I_tot, br_I, rtol=1e-9)
+                or br_on.regime == "capability_limited"
+            )
+            assert (br_on.regime == "capability_limited") == (
+                br_hard.regime == "capability_limited"
+            )
+            assert br_on.phi_c_plus >= br_hard.phi_c_plus - 1e-9
+            br_rep = solve_idriven(br_cfg, plasma_probe, I_tot_A=float(br_I),
+                                   bridge=True)
+            assert br_rep.phi_c_plus == br_on.phi_c_plus  # deterministic
+    for br_sch in (False, True):
+        br_phis = np.array([
+            solve_idriven(uni_cfg, plasma_probe, I_tot_A=float(I),
+                          schottky=br_sch, bridge=True).phi_c_plus
+            for I in id_grid
+        ])
+        assert np.all(np.diff(br_phis) > 0.0), f"schottky={br_sch}"
+        br_vbs = np.array([
+            solve_idriven(uni_cfg, plasma_probe, I_tot_A=float(I),
+                          schottky=br_sch, bridge=True).V_b
+            for I in id_grid
+        ])
+        assert np.all(np.diff(br_vbs) > -1e-9), f"schottky={br_sch}"
+    # Exact reduction outside the window, both sides (measured x positions:
+    # released classical at 1000 A has x = ln(J_eth/J_crit) ~ -1.14; the
+    # cold plasma at 20 A is a deep virtual cathode with x ~ +2).
+    for br_pl, br_I in ((plasma_probe, 1000.0), (id_plasmas[1], 20.0)):
+        br_deep_on = solve_idriven(uni_cfg, br_pl, I_tot_A=br_I, bridge=True)
+        br_deep_off = solve_idriven(uni_cfg, br_pl, I_tot_A=br_I)
+        assert np.isclose(br_deep_on.phi_c_plus, br_deep_off.phi_c_plus,
+                          rtol=1e-11), br_I
+        assert np.isclose(br_deep_on.phi_c_minus, br_deep_off.phi_c_minus,
+                          rtol=1e-11, atol=1e-13), br_I
+
     # --- Current-driven circuit integration (CATHODE_IDRIVEN_PLAN.md M3):
     # TR-BDF2 stages as bracketed scalar root-finds against monotone
     # V_dis(I). Gate 1: 2nd order on the analytic RLC decay with a linear
@@ -1387,7 +1468,7 @@ def main():
         I = 0.0
         dt = m3_T / nsteps
         for _ in range(nsteps):
-            I, _ = advance_circuit_current_driven(
+            I, _, _ = advance_circuit_current_driven(
                 I, dt, m3_Vs, m3_R, m3_L, m3_lin
             )
         return I
@@ -1402,10 +1483,11 @@ def main():
     # positive V_dis decays to exactly 0 and never goes negative.
     m3_I = 500.0
     for _ in range(400):
-        m3_I, _ = advance_circuit_current_driven(
+        m3_I, _, m3_Vstep = advance_circuit_current_driven(
             m3_I, 2.0e-6, 0.0, m3_R, m3_L, lambda I: 50.0
         )
         assert m3_I >= 0.0
+        assert np.isfinite(m3_Vstep)
     assert m3_I == 0.0
 
     # Gate 3: the stiff wall (why the scheme is implicit -- plan §2c
@@ -1429,11 +1511,29 @@ def main():
     assert np.max(m3_hist) <= m3_Istar + 1e-6  # L-stable: never overshoots
     assert abs(m3_hist[-1] - m3_Istar) < 0.1  # pinned at the wall
     # Capacitor bookkeeping: trapezoidal drain, floored at zero.
-    m3_Iv, m3_Vc = advance_circuit_current_driven(
+    m3_Iv, m3_Vc, _ = advance_circuit_current_driven(
         1000.0, 1.0e-6, 170.0, m3_R, m3_L, m3_lin,
         C_bank_F=8.9, V_cap_prev_V=170.0,
     )
     assert 0.0 < m3_Vc < 170.0
+
+    # Step-integrated V_dis (the inductor's view). At the linear-load
+    # equilibrium the current is stationary, so the loop identity closes
+    # exactly: <V_dis> = V_src - R*I_inf, and it must equal the device
+    # value V_dis(I_inf). Off equilibrium it must sit inside the step's
+    # V_dis range (monotone device, monotone I trajectory).
+    m3_Ieq, _, m3_Veq = advance_circuit_current_driven(
+        m3_Iinf, 6.0e-7, m3_Vs, m3_R, m3_L, m3_lin
+    )
+    assert abs(m3_Ieq - m3_Iinf) < 1e-6 * m3_Iinf
+    assert abs(m3_Veq - (m3_Vs - m3_R * m3_Iinf)) < 1e-6
+    assert abs(m3_Veq - m3_lin(m3_Iinf)) < 1e-6
+    m3_Ir, _, m3_Vr = advance_circuit_current_driven(
+        0.5 * m3_Iinf, 6.0e-7, m3_Vs, m3_R, m3_L, m3_lin
+    )
+    m3_Vlo = min(m3_lin(0.5 * m3_Iinf), m3_lin(m3_Ir))
+    m3_Vhi = max(m3_lin(0.5 * m3_Iinf), m3_lin(m3_Ir))
+    assert m3_Vlo - 1e-9 <= m3_Vr <= m3_Vhi + 1e-9, (m3_Vlo, m3_Vr, m3_Vhi)
 
     # Gate 4: solver dispatch. A current-driven sim's solve is an
     # evaluation at the frozen loop current; floating routes to the
@@ -1539,6 +1639,85 @@ def main():
     assert np.all(np.isfinite(m3_Iloop))
     assert np.all(np.diff(m3_Iloop) > 0.0)  # rising from 0 under drive
     assert m3_Iloop[-1] < 1.0  # 3e-10 s at ~2.6e7 A/s
+    # Step-integrated V_dis diagnostic: 0.0 before any circuit advance,
+    # then the inductor's-view average -- reconstructable from the loop
+    # identity save-to-save (fixed dt run, saves every step).
+    m3_Vstep = np.asarray(m3_diag["circuit_V_dis_step"], float)
+    assert m3_Vstep.shape == m3_Iloop.shape
+    assert m3_Vstep[0] == 0.0
+    assert np.all(np.isfinite(m3_Vstep))
+    m3_recon = (
+        m3_params["V_bank"]
+        - 6.6e-6 * np.diff(m3_Iloop) / 1.0e-10
+        - m3_params["R_comp"] * 0.5 * (m3_Iloop[1:] + m3_Iloop[:-1])
+    )
+    assert np.allclose(m3_Vstep[1:], m3_recon, atol=0.5), (
+        m3_Vstep[1:], m3_recon
+    )
+    # Power-balance warming under current_driven must feed on the HONEST
+    # accepted-state solve, not the RHS cache: the cache holds the step's
+    # last internal-stage solve, measured at 4.6-7.5x the accepted-state
+    # P_cathode_i at the same frozen current (2026-07-21). Spy on the
+    # evaluator the warming branch uses and require the energy ledger to
+    # integrate exactly the honest values it returned.
+    import cablp.solvers._sim1d.solver as _solver_mod
+
+    pbh_calls = []
+    _pbh_orig = _solver_mod.idriven_result_evaluator
+
+    def _pbh_spy(**kw):
+        f = _pbh_orig(**kw)
+
+        def g(I):
+            res = f(I)
+            pbh_calls.append((float(I), float(res.P_cathode_i)))
+            return res
+
+        return g
+
+    _solver_mod.idriven_result_evaluator = _pbh_spy
+    try:
+        pbh_sim = LAPDSim1D(
+            dict(
+                m3_params,
+                cathode_warming_model="power_balance",
+                T_s=1910.0,
+                cathode_Ts_base_K=1910.0,
+                cathode_heat_capacity_J_per_K=120.0,
+                cathode_conduction_W_per_K=1200.0,
+            ),
+            resolved_cathode_flags,
+        )
+        pbh_result = pbh_sim.run(t_end=3.0e-10, dt=1.0e-10)
+    finally:
+        _solver_mod.idriven_result_evaluator = _pbh_orig
+    assert len(pbh_calls) == 3, len(pbh_calls)  # one per accepted step
+    pbh_E_ion = float(
+        np.asarray(
+            pbh_result.cathode_diagnostics["warming_E_ion_J"], float
+        )[-1]
+    )
+    assert np.isclose(
+        pbh_E_ion,
+        sum(1.0e-10 * max(p, 0.0) for _, p in pbh_calls),
+        rtol=1e-12,
+        atol=0.0,
+    ), (pbh_E_ion, pbh_calls)
+
+    # The bridge flag rides the dispatch (input_flags namespace, like
+    # cathode_schottky): a bridged current-driven solve is finite and
+    # carries the frozen loop current.
+    m3_br_sim = LAPDSim1D(
+        m3_params, dict(resolved_cathode_flags, cathode_emission_bridge=True)
+    )
+    m3_br_sim._circuit_I_loop = 800.0
+    m3_br_solve = m3_br_sim.solve_cathode_boundary(update_cache=False)
+    m3_br_res = m3_br_solve.beam_result.result
+    assert np.isfinite(m3_br_res.V_b) and np.isfinite(m3_br_res.phi_c)
+    assert (
+        np.isclose(m3_br_res.I_tot, 800.0, rtol=1e-6)
+        or m3_br_res.regime == "capability_limited"
+    )
     # Saved diagnostics are refreshed post-accept, so the recorded solve
     # is an evaluation at the *accepted* loop current of the same save.
     for m3_k in (1, 2, 3):
@@ -1659,6 +1838,29 @@ def main():
             pass
         else:
             raise AssertionError("expected ValueError from excitation channel")
+
+    # Lookup-table front end (deposit_beam's hot path, 2026-07-21): exact
+    # at the table nodes by construction; between nodes the interp error
+    # must stay below the physics-irrelevant level, and the domain edges
+    # must reproduce the exact function's contract.
+    from cablp.funcs._cross import He_beam_excitation_channel_lkup
+
+    _lk_rng = np.random.default_rng(20260721)
+    _lk_Es = np.concatenate([
+        _lk_rng.uniform(20.7, 25.0, 40),   # threshold cluster
+        _lk_rng.uniform(25.0, 180.0, 40),  # beam operating range
+        _lk_rng.uniform(180.0, 1500.0, 20),
+    ])
+    for _lk_E in _lk_Es:
+        _lk_s, _lk_e = He_beam_excitation_channel_lkup(float(_lk_E))
+        _ex_s, _ex_e = _He_manifold_channel(float(_lk_E))
+        assert abs(_lk_s - _ex_s) <= 1e-4 * _ex_s + 1e-21, (_lk_E, _lk_s, _ex_s)
+        if _ex_s > 0.0:
+            assert abs(_lk_e - _ex_e) <= 1e-4 * _ex_e, (_lk_E, _lk_e, _ex_e)
+    assert He_beam_excitation_channel_lkup(15.0) == (0.0, 0.0)
+    assert He_beam_excitation_channel_lkup(20.0) == (0.0, 0.0)
+    # Above the table span: exact fallback, identical values.
+    assert He_beam_excitation_channel_lkup(2500.0) == _He_manifold_channel(2500.0)
 
     # Solver-level: manifold mode widens the excitation cross section at the
     # same first-solve phi_c (zeroed sigma_b cache on both rigs) and books

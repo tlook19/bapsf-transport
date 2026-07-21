@@ -1,0 +1,108 @@
+"""Run the candidate config with a chosen warming mechanism across the ladder.
+
+Mechanism-campaign driver (CATHODE_IDRIVEN_PLAN.md §5b/§7b): candidate
+config = current_driven + manifold-era csda_ql deposition + gaussian
+emission profile + Schottky (flag default), with per-campaign inputs
+restricted to the MEASURED pair (open-circuit V0; Fig-10 standby T_s) --
+transfer across the ladder is the test, so everything else is frozen at
+the ES1 calibration.
+
+    python scripts/run_mechanism_ladder.py --es 1 --warming power_balance \
+        --phi-wf 2.87 --g-cond 1500 --c-th 120 --save-h5 out.h5
+"""
+
+import argparse
+
+from compare_sim1d_es1 import run_model
+from cablp.solvers._sim1d.results.io import save_result_hdf5
+
+# Measured per-campaign operating points (THESIS_NOTES §2): fitted/nominal
+# open-circuit V0 and the Fig-10 digitized standby surface temperature.
+ES_OPERATING = {
+    1: {"V_bank": 173.6, "Ts_standby_K": 1910.0},
+    2: {"V_bank": 138.4, "Ts_standby_K": 1949.0},
+    3: {"V_bank": 99.0, "Ts_standby_K": 1972.0},
+}
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser()
+    p.add_argument("--es", type=int, choices=(1, 2, 3), required=True)
+    p.add_argument("--nx", type=int, default=120)
+    p.add_argument(
+        "--warming",
+        choices=("none", "ion_bombardment", "power_balance"),
+        default="power_balance",
+    )
+    p.add_argument("--phi-wf", type=float, default=None,
+                   help="shared work function [eV] (emission, Schottky, "
+                        "cooling, gaussian inversion -- one constant)")
+    p.add_argument("--g-cond", type=float, default=1500.0,
+                   help="skin->substrate conduction [W/K] (the one fitted "
+                        "knob; frozen after ES1)")
+    p.add_argument("--c-th", type=float, default=120.0,
+                   help="skin-layer heat capacity [J/K] (honest >=120, "
+                        "THESIS_NOTES §2 energy budget)")
+    p.add_argument("--emissivity", type=float, default=0.7)
+    p.add_argument("--T-set", type=float, default=None,
+                   help="ion_bombardment asymptote T_s [K] (that arm only)")
+    p.add_argument("--warming-energy-J", type=float, default=300.0)
+    p.add_argument("--annuli", type=int, default=None,
+                   help="cathode_emission_annuli override (10 -> 30 A/B)")
+    p.add_argument("--standby-offset-K", type=float, default=0.0,
+                   help="offset added to the measured standby T_s [K] "
+                        "(the +-8 K trim-quantum stability-derivative "
+                        "probe; NOT a tuning knob)")
+    p.add_argument("--bridge", action="store_true",
+                   help="enable the kT_s emission-release thermal bridge")
+    p.add_argument("--save-h5", required=True)
+    args = p.parse_args(argv)
+
+    op = dict(ES_OPERATING[args.es])
+    op["Ts_standby_K"] = op["Ts_standby_K"] + float(args.standby_offset_K)
+    extra = {
+        "nx": args.nx,
+        "V_bank": op["V_bank"],
+        "cathode_solver_model": "current_driven",
+        "beam_deposition_model": "csda",
+        "beam_anomalous_model": "quasilinear",
+        "cathode_emission_profile": "gaussian",
+        "cathode_warming_model": args.warming,
+    }
+    if args.warming == "power_balance":
+        extra.update({
+            "T_s": op["Ts_standby_K"],
+            "cathode_Ts_base_K": op["Ts_standby_K"],
+            "cathode_heat_capacity_J_per_K": args.c_th,
+            "cathode_conduction_W_per_K": args.g_cond,
+            "cathode_emissivity": args.emissivity,
+        })
+    elif args.warming == "ion_bombardment":
+        if args.T_set is None:
+            raise SystemExit("--T-set is required for ion_bombardment")
+        extra.update({
+            "T_s": args.T_set,
+            "cathode_Ts_start_K": op["Ts_standby_K"],
+            "cathode_warming_energy_J": args.warming_energy_J,
+        })
+    else:
+        extra["T_s"] = op["Ts_standby_K"]
+    if args.phi_wf is not None:
+        extra["phi_wf"] = args.phi_wf
+    if args.annuli is not None:
+        extra["cathode_emission_annuli"] = args.annuli
+
+    flags_extra = {}
+    if args.bridge:
+        flags_extra["cathode_emission_bridge"] = True
+
+    result, geometry, params, flags = run_model(
+        resolved=True, nx=args.nx, extra=extra, flags_extra=flags_extra or None
+    )
+    save_result_hdf5(args.save_h5, result, params=params, flags=flags)
+    print(f"saved {args.save_h5}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

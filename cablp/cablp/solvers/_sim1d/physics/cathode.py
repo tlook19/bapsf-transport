@@ -406,7 +406,7 @@ def apply_cathode_Rp_model(device_config, derived, geometry, input_dict, input_f
     return device_config, Rp_model, R_p_gap_ohm
 
 
-def idriven_vdis_evaluator(
+def idriven_result_evaluator(
     state,
     floors,
     ion_mass_g,
@@ -417,14 +417,17 @@ def idriven_vdis_evaluator(
     beam_cross_prev,
     T_s_override_K=None,
 ):
-    """Return a ``V_dis(I) [V]`` evaluator at this frozen plasma state.
+    """Return an ``I [A] -> SolverResult`` evaluator at this frozen state.
 
-    Used by the current-driven circuit advance: each implicit stage
-    root-finds the loop current against the monotone device voltage, so it
-    needs many cheap sheath evaluations at the *accepted* end-of-step state
-    with only I varying. Builds the same device config (T_s substitution,
-    ``cathode_Rp_model`` feed-in, anode sample) as the per-step dispatch,
-    via the same helpers, so the circuit and the solve cannot disagree.
+    Builds the same device config (T_s substitution, ``cathode_Rp_model``
+    feed-in, anode sample) as the per-step dispatch, via the same helpers,
+    so its consumers and the dispatched solve cannot disagree. Two
+    consumers: the circuit advance (through ``idriven_vdis_evaluator``)
+    and the power-balance warming update, which needs *accepted-state*
+    P_cathode_i / I_eth_star -- the RHS cache ``_cathode_solve`` holds the
+    last internal-stage solve of the step, whose P_cathode_i was measured
+    at 4.6-7.5x the accepted-state value at the same frozen current
+    (2026-07-21; the stage state sits on the other side of the knee).
     """
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     anode_A, anode_Te = anode_circuit_sample(
@@ -445,9 +448,10 @@ def idriven_vdis_evaluator(
         sigma_b=float(beam_cross_prev[idx]),
     )
     schottky = bool(input_flags.get("cathode_schottky", False))
+    bridge = bool(input_flags.get("cathode_emission_bridge", False))
     cap = float(input_dict.get("cathode_phi_c_cap_V", 1000.0))
 
-    def vdis(I_A):
+    def solve_at(I_A):
         return solve_idriven(
             device_config,
             plasma,
@@ -455,8 +459,45 @@ def idriven_vdis_evaluator(
             anode_current_A=anode_A,
             anode_T_e=anode_Te,
             schottky=schottky,
+            bridge=bridge,
             phi_c_cap_V=cap,
-        ).V_b
+        )
+
+    return solve_at
+
+
+def idriven_vdis_evaluator(
+    state,
+    floors,
+    ion_mass_g,
+    mu,
+    geometry,
+    input_dict,
+    input_flags,
+    beam_cross_prev,
+    T_s_override_K=None,
+):
+    """Return a ``V_dis(I) [V]`` evaluator at this frozen plasma state.
+
+    Used by the current-driven circuit advance: each implicit stage
+    root-finds the loop current against the monotone device voltage, so it
+    needs many cheap sheath evaluations at the *accepted* end-of-step state
+    with only I varying. Thin wrapper over ``idriven_result_evaluator``.
+    """
+    solve_at = idriven_result_evaluator(
+        state=state,
+        floors=floors,
+        ion_mass_g=ion_mass_g,
+        mu=mu,
+        geometry=geometry,
+        input_dict=input_dict,
+        input_flags=input_flags,
+        beam_cross_prev=beam_cross_prev,
+        T_s_override_K=T_s_override_K,
+    )
+
+    def vdis(I_A):
+        return solve_at(I_A).V_b
 
     return vdis
 
@@ -491,7 +532,16 @@ def advance_circuit_current_driven(
     ``V_src_V`` is held constant over the step (drive: bank/capacitor
     voltage; tail: 0); the capacitor, when present, is frozen for the I
     stages (droop ~2e-4 V/step) and then advanced trapezoidally. Returns
-    ``(I_new_A, V_cap_new_V_or_None)``.
+    ``(I_new_A, V_cap_new_V_or_None, V_dis_step_V)``.
+
+    ``V_dis_step_V`` is the step-integrated discharge voltage -- the
+    *inductor's view*, from the integrated loop equation over the step:
+    ``<V_dis> = V_src - R*<I> - L*(I_new - I_prev)/dt`` with ``<I>`` the
+    piecewise-trapezoidal average through the TR stage. This is the honest
+    smooth V_dis trace (chatter diagnosis, 2026-07-21): the per-solve
+    ``V_b`` inherits the boundary cell's per-step Te wobble through the
+    knee, but the circuit only ever integrates V_dis against L, so the
+    step average is the physically meaningful instantaneous voltage.
     """
     L = float(L_H)
     if L <= 0.0:
@@ -534,6 +584,16 @@ def advance_circuit_current_driven(
         I_g / denom - I_n * (1.0 - gamma) ** 2 / denom, a2
     )
 
+    # Step-integrated V_dis from the loop identity (see docstring). <I> is
+    # the trapezoidal average through the internal TR stage -- second-order
+    # consistent with the current trajectory the scheme just committed to.
+    I_avg = 0.5 * (gamma * (I_n + I_g) + (1.0 - gamma) * (I_g + I_new))
+    V_dis_step = (
+        float(V_src_V)
+        - float(R_comp_ohm) * I_avg
+        - L * (I_new - I_n) / dt
+    )
+
     V_cap_new = None
     if C_bank_F is not None and float(C_bank_F) > 0.0:
         V_cap_prev = (
@@ -542,7 +602,7 @@ def advance_circuit_current_driven(
         V_cap_new = max(
             V_cap_prev - dt * 0.5 * (I_n + I_new) / float(C_bank_F), 0.0
         )
-    return I_new, V_cap_new
+    return I_new, V_cap_new, V_dis_step
 
 
 def validate_cathode_Rp_model(input_dict, input_flags):
@@ -796,6 +856,7 @@ def solve_cathode_boundary(
                 input_dict.get("beam_excitation_model", "2p_scalar")
             ),
             schottky=bool(input_flags.get("cathode_schottky", False)),
+            bridge=bool(input_flags.get("cathode_emission_bridge", False)),
             phi_c_cap_V=float(input_dict.get("cathode_phi_c_cap_V", 1000.0)),
         )
     else:

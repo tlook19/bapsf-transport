@@ -120,6 +120,132 @@ _J_PLATEAU_TOL_REL = 64.0 * sys.float_info.epsilon
 # Schottky constant: dphi[eV] = sqrt(e * E / (4 pi eps0)) with E in V/m.
 _SCHOTTKY_EV_PER_SQRT_V_M = 3.7946865e-5
 
+# Thermal-bridge half-width, in units of kT_s of would-be barrier depth
+# (CATHODE_IDRIVEN_PLAN.md, chatter diagnosis 2026-07-21). The emitted
+# Maxwellian has energy spread kT_s, so the SCL<->classical release corner
+# is physically smooth over ~kT_s of barrier -- the transition variable is
+# x = ln(J_eff/J_crit) = (would-be barrier)/kT_s, and the corner max(0, x)
+# is blended over |x| < w. Fixed at 1 (the physical scale), deliberately
+# not exposed as a tuning key.
+_BRIDGE_HALF_WIDTH = 1.0
+
+
+def _bridge_release(J_eff: float, J_crit: float) -> tuple[float, float]:
+    """Smooth SCL<->classical release: ``(J_star, barrier/kT_s)``.
+
+    Replaces the razor corner ``J_star = min(J_eff, J_crit)`` /
+    ``psi_minus = delta * max(0, ln(J_eff/J_crit))`` with a C1 blend of
+    ``max(0, x)`` over the window ``|x| < w`` in ``x = ln(J_eff/J_crit)``:
+
+        b(x) = 0            (x <= -w, exact classical branch)
+             = (x+w)^2/4w   (|x| < w, quadratic bridge)
+             = x            (x >= +w, exact space-charge branch)
+
+    with ``J_star = J_eff * exp(-b)``. Properties (asserted in smoke):
+    exact hard-branch reduction outside the window, so calibrated
+    operating points away from the knee are untouched; ``J_star <=
+    min(J_eff, J_crit)`` everywhere (the blend only ever *adds* barrier);
+    and monotonicity of J_tot(psi) is preserved analytically -- writing
+    a = dlnJ_eff/dpsi >= 0, c = dlnJ_crit/dpsi >= 0, the blended slope is
+    dlnJ_star/dpsi = (1-s)*a + s*c with s = b'(x) in [0, 1], a convex
+    combination of the two (nonnegative) branch slopes. The architecture
+    rests on that monotonicity.
+
+    Returns the barrier in kT_s units (``psi_minus = delta * b``); the
+    caller owns the delta scaling because annuli carry per-annulus deltas.
+    """
+    if J_eff <= 0.0:
+        return 0.0, 0.0
+    if J_crit <= 0.0:
+        # Fully choked channel (mirrors the hard branches' J_crit <= 0
+        # handling: no current, no reported barrier).
+        return 0.0, 0.0
+    w = _BRIDGE_HALF_WIDTH
+    x = math.log(J_eff / J_crit)
+    if x <= -w:
+        return J_eff, 0.0
+    if x >= w:
+        return J_crit, x
+    b = (x + w) ** 2 / (4.0 * w)
+    return J_eff * math.exp(-b), b
+
+
+def _uniform_state_bridge(
+    psi: float,
+    J_i: float,
+    J_eth: float,
+    mu: float,
+    delta: float,
+    T_e: float,
+    n_e: float,
+    schottky: bool,
+) -> tuple[float, float, bool]:
+    """Uniform-disc ``(J_star, psi_minus, clamped)`` with the thermal bridge.
+
+    With Schottky on, the enhanced ``J_eff`` feeds the bridge directly and
+    the three-branch choke rule collapses into the smooth kernel: deep in
+    the clamp ``J_star -> J_crit`` becomes insensitive to ``J_eff``, so the
+    field enhancement self-attenuates without an explicit surface-field
+    cutoff. (Divergence from the hard Schottky branches, documented: the
+    deep-clamp barrier is referenced to ``J_eff`` rather than ``J_eth`` --
+    a ~dphi/T_e difference in the reported psi_minus, order 0.1 V.)
+    """
+    if J_eth <= 0.0:
+        return 0.0, 0.0, False
+    J_eff = J_eth
+    if schottky:
+        dphi = _schottky_lowering_eV(psi * T_e, T_e, n_e)
+        if dphi > 0.0:
+            J_eff = J_eth * math.exp(dphi / (delta * T_e))
+    J_crit = _j_eth_crit(psi, J_i, mu)
+    if J_crit <= 0.0:
+        return 0.0, 0.0, True
+    J_star, b = _bridge_release(J_eff, J_crit)
+    return J_star, delta * b, J_eff > J_crit
+
+
+def _annular_state_bridge(
+    psi: float,
+    J_i: float,
+    mu: float,
+    J_eth_k: tuple,
+    delta_k: tuple,
+    ion_frac_k: tuple,
+    T_e: float,
+    n_e: float,
+    schottky: bool,
+) -> tuple[float, float, bool]:
+    """Annular ``(J_star, psi_minus_eff, any_clamped)`` with the bridge.
+
+    Same equipotential-annuli structure as ``_annular_emission_state``;
+    each annulus passes through the smooth kernel with its own delta, and
+    the effective barrier is the emission-weighted mean over *all* annuli
+    carrying a (possibly partial, in-window) barrier -- the hard model's
+    weighting with the clamped-only restriction lifted, to which it
+    reduces when every annulus sits outside its bridge window.
+    """
+    dphi = _schottky_lowering_eV(psi * T_e, T_e, n_e) if schottky else 0.0
+    J_star_total = 0.0
+    weighted_pm = 0.0
+    any_clamped = False
+    for J_eth_a, delta_a, frac_a in zip(J_eth_k, delta_k, ion_frac_k):
+        if J_eth_a <= 0.0:
+            continue
+        J_crit_a = _j_eth_crit(psi, J_i * frac_a, mu) if frac_a > 0.0 else 0.0
+        J_eff_a = J_eth_a
+        if dphi > 0.0:
+            J_eff_a = J_eth_a * math.exp(dphi / (delta_a * T_e))
+        if J_crit_a <= 0.0:
+            any_clamped = True
+            continue
+        if J_eff_a > J_crit_a:
+            any_clamped = True
+        J_star_a, b_a = _bridge_release(J_eff_a, J_crit_a)
+        J_star_total += J_star_a
+        weighted_pm += J_star_a * delta_a * b_a
+    psi_minus_eff = weighted_pm / J_star_total if J_star_total > 0.0 else 0.0
+    return J_star_total, psi_minus_eff, any_clamped
+
 
 def _schottky_lowering_eV(phi_c_V: float, T_e: float, n_e: float) -> float:
     """Work-function lowering [eV] from the classical sheath's surface field.
@@ -213,6 +339,7 @@ def solve_idriven(
     anode_current_A: float | None = None,
     anode_T_e: float | None = None,
     schottky: bool = False,
+    bridge: bool = False,
     phi_c_cap_V: float = 1000.0,
 ) -> SolverResult:
     """Solve the cathode sheath for an *imposed* loop current.
@@ -225,6 +352,9 @@ def solve_idriven(
     ``phi_c_cap_V`` is the fixed physical bracket ceiling on the classical
     sheath drop; a current the sheath cannot carry below it returns the
     bracket-top solution tagged ``regime="capability_limited"``.
+    ``bridge`` enables the kT_s-width thermal bridge across the
+    SCL<->classical release corner (``_bridge_release``); off reproduces
+    the hard branches bit-for-bit (the M2 equivalence gate's condition).
 
     Returns a ``SolverResult`` field-for-field compatible with the
     voltage-driven solver's (see the module docstring for the ``V_b`` and
@@ -300,6 +430,15 @@ def solve_idriven(
     # The monotone device relation and its single bracketed root
     # ------------------------------------------------------------------
     def _emission_state(psi: float) -> tuple[float, float, bool]:
+        if bridge:
+            if annular:
+                return _annular_state_bridge(
+                    psi, J_i, mu, J_eth_k, delta_k, ion_frac_k,
+                    T_e, n_e, schottky,
+                )
+            return _uniform_state_bridge(
+                psi, J_i, J_eth, mu, delta, T_e, n_e, schottky
+            )
         if annular:
             if schottky:
                 return _annular_state_schottky(
@@ -539,6 +678,7 @@ def solve_beam_system_idriven(
     beam_excitation_energy_eV: float = 21.218,
     beam_excitation_model: str = "2p_scalar",
     schottky: bool = False,
+    bridge: bool = False,
     phi_c_cap_V: float = 1000.0,
 ) -> BeamResult:
     """Current-driven, single-cathode counterpart of ``solve_beam_system``.
@@ -571,6 +711,7 @@ def solve_beam_system_idriven(
         anode_current_A=anode_current_A,
         anode_T_e=anode_T_e,
         schottky=schottky,
+        bridge=bridge,
         phi_c_cap_V=phi_c_cap_V,
     )
     phi_c_0 = result.phi_c

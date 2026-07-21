@@ -48,6 +48,7 @@ from .physics.cathode import (
 )
 from .physics.cathode import (
     advance_circuit_current_driven,
+    idriven_result_evaluator,
     idriven_vdis_evaluator,
 )
 from .physics.energy import (
@@ -544,6 +545,17 @@ class LAPDSim1D:
         # per accepted step (plan §2c). Distinct from _circuit_I_prev,
         # which is the voltage-driven fold's history term.
         self._circuit_I_loop = 0.0
+        # Step-integrated discharge voltage (the inductor's view) from the
+        # last accepted circuit advance; 0.0 under voltage-driven / open
+        # circuit, for diagnostic key parity.
+        self._circuit_V_dis_step = 0.0
+        # Running time integral of V_dis_step [V*s] over accepted circuit
+        # steps. The per-save instantaneous V_dis_step is dt-BIASED: saves
+        # land on dt-capped steps, which systematically sample the low
+        # state of the knee sawtooth (measured 2026-07-21: saved median
+        # 116 V vs 158 V loop-required average). Differencing this
+        # integral between saves gives the honest dt-weighted average.
+        self._circuit_V_dis_time_integral = 0.0
         # Cathode warming state: the evolving emitter surface temperature [K]
         # (config cathode_warming_model). None = static T_s (historical).
         warming_model = str(
@@ -598,6 +610,16 @@ class LAPDSim1D:
                     "cathode_Ts_base_K must exceed cathode_env_T_K"
                 )
             self._cathode_Ts_K = float(Ts_base)
+        # Per-shot surface energy ledger [J] (power_balance only): running
+        # integrals of the balance terms over accepted steps. The net
+        # (heater + ion - rad - emis - cond) is the shot's unreturned
+        # energy into the emitting skin; cond is what the heater-held
+        # substrate absorbed -- the quantity Tom's open-loop-heater drift
+        # hypothesis makes checkable against the ES1 trim cadence
+        # (THESIS_NOTES §2: ~sub-kW net imbalance <-> ±8 K per 20-30 min).
+        self._cathode_energy_ledger_J = {
+            "heater": 0.0, "ion": 0.0, "rad": 0.0, "emis": 0.0, "cond": 0.0,
+        }
         self._cathode_solve = None
         self._last_result = None
         self._last_neutral_equilibration_result = None
@@ -1165,6 +1187,34 @@ class LAPDSim1D:
                 # Floating phases: emitted electrons return to the surface,
                 # so net evaporative cooling vanishes with the net current.
                 floating = bool(solve.metadata.get("floating", False))
+                # Honest accepted-state inputs (current-driven only): the
+                # RHS cache above is the step's LAST internal-stage solve,
+                # whose P_cathode_i was measured at 4.6-7.5x the
+                # accepted-state value at the same frozen current
+                # (2026-07-21) -- the stage state sits across the knee.
+                # One cheap re-solve at the accepted state and the step's
+                # frozen loop current replaces it. ion_bombardment keeps
+                # the historical cache read on purpose: its tuned energy
+                # scale absorbed the inflation and its saved runs are
+                # citable evidence (CATHODE_IDRIVEN_PLAN.md §5b).
+                if (
+                    self._cathode_solver_model == "current_driven"
+                    and not floating
+                ):
+                    honest = idriven_result_evaluator(
+                        state=self.state,
+                        floors=self._floors,
+                        ion_mass_g=self._ion_mass_g,
+                        mu=self._mu,
+                        geometry=self._geometry,
+                        input_dict=self._input_dict,
+                        input_flags=self._effective_cathode_flags(
+                            active_only=False, floating=False
+                        ),
+                        beam_cross_prev=self._cathode_beam_cross,
+                        T_s_override_K=self._cathode_Ts_K,
+                    )
+                    result = honest(self._circuit_I_loop)
                 I_emis = 0.0 if floating else float(result.I_eth_star)
                 P_heat, P_ion, P_rad, P_emis, P_cond = (
                     cathode_power_balance_terms_W(
@@ -1207,6 +1257,12 @@ class LAPDSim1D:
                     self._cathode_Ts_K + dT,
                     float(self._input_dict.get("cathode_env_T_K", 300.0)),
                 )
+                ledger = self._cathode_energy_ledger_J
+                ledger["heater"] += float(attempt.dt) * P_heat
+                ledger["ion"] += float(attempt.dt) * P_ion
+                ledger["rad"] += float(attempt.dt) * P_rad
+                ledger["emis"] += float(attempt.dt) * P_emis
+                ledger["cond"] += float(attempt.dt) * P_cond
         self._circuit_dt_prev = float(attempt.dt)
         # Current-driven circuit: advance the loop current by one TR-BDF2
         # step against V_dis(I) evaluated at the accepted end-of-step state
@@ -1223,6 +1279,7 @@ class LAPDSim1D:
                 # dropped (the same documented simplification as the
                 # voltage-driven bank disconnect).
                 self._circuit_I_loop = 0.0
+                self._circuit_V_dis_step = 0.0
             else:
                 C_bank_id = self._input_dict.get("C_bank_F")
                 bank_off = bool(step_phase.get("inductive_tail", False))
@@ -1249,7 +1306,7 @@ class LAPDSim1D:
                     beam_cross_prev=self._cathode_beam_cross,
                     T_s_override_K=self._cathode_Ts_K,
                 )
-                I_new, V_cap_new = advance_circuit_current_driven(
+                I_new, V_cap_new, V_dis_step = advance_circuit_current_driven(
                     I_prev_A=self._circuit_I_loop,
                     dt_s=float(attempt.dt),
                     V_src_V=V_src,
@@ -1260,6 +1317,10 @@ class LAPDSim1D:
                     V_cap_prev_V=self._circuit_V_cap,
                 )
                 self._circuit_I_loop = I_new
+                self._circuit_V_dis_step = float(V_dis_step)
+                self._circuit_V_dis_time_integral += (
+                    float(attempt.dt) * float(V_dis_step)
+                )
                 if V_cap_new is not None:
                     self._circuit_V_cap = V_cap_new
         # Finite bank: drain the capacitor by the accepted step's charge while
@@ -3344,6 +3405,23 @@ class LAPDSim1D:
             # Current-driven circuit state (0.0 under the voltage-driven
             # solver, whose loop current lives in source_I_tot).
             "circuit_I_loop": float(self._circuit_I_loop),
+            # Step-integrated V_dis (the inductor's view) from the last
+            # accepted circuit advance -- the honest smooth discharge
+            # voltage; the per-solve source_V_b carries boundary-cell Te
+            # noise through the knee. 0.0 under voltage-driven.
+            "circuit_V_dis_step": float(self._circuit_V_dis_step),
+            # Running \int V_dis dt [V*s]: difference between saves for the
+            # dt-weighted (unbiased) average -- the per-save instantaneous
+            # value above samples the knee sawtooth's low state.
+            "circuit_V_dis_dt_integral": float(
+                self._circuit_V_dis_time_integral
+            ),
+            # Cumulative surface energy ledger [J] (power_balance warming
+            # only; zeros otherwise). See _cathode_energy_ledger_J.
+            **{
+                f"warming_E_{k}_J": float(v)
+                for k, v in self._cathode_energy_ledger_J.items()
+            },
             "phase_enabled": float(cathode_phase["cathode_enabled"]),
             "rhs_enabled": float(cathode_phase["cathode_enabled"]),
             "solve_enabled": float(cathode_phase["solve_enabled"]),

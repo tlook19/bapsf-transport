@@ -1047,6 +1047,16 @@ input_flags_template_1d = {
     # (`es1_nx120_knee_gauss_schottky.h5`). Inert for the golden baseline
     # (voltage-driven ignores it).
     "cathode_schottky": True,
+    # kT_s-width thermal bridge across the SCL<->classical emission-release
+    # corner, *current-driven* sheath solve only (CATHODE_IDRIVEN_PLAN.md,
+    # chatter diagnosis 2026-07-21): the emitted Maxwellian's kT_s energy
+    # spread smooths the razor min(J_eth, J_crit) corner that turns
+    # boundary-cell Te noise into V_b chatter (x10 annuli). C1 blend with
+    # exact hard-branch reduction outside the window, monotonicity of
+    # J_tot(psi) preserved by construction (convex combination of branch
+    # slopes -- see funcs._cathode_solver_idriven._bridge_release). Off =>
+    # bit-exact hard branches (the M2 equivalence gate's condition).
+    "cathode_emission_bridge": False,
     "neutral_prebreakdown": True,
     "neutral_equilibration": True,
     "launch_plasma_after_equilibration": True,

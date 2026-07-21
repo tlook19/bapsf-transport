@@ -118,10 +118,13 @@ def run_model(
     extra=None,
     drag_closure=None,
     Rp_model=None,
+    flags_extra=None,
 ):
     params, flags = default_config()
     params.update(PARAM_OVERRIDES)
     flags.update(FLAG_OVERRIDES)
+    if flags_extra:
+        flags.update(flags_extra)
     flags["resolved_boundaries"] = bool(resolved)
     if resolved:
         params["neutral_exchange_model"] = exchange_model

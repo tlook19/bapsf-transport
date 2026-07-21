@@ -293,6 +293,61 @@ def He_beam_excitation_channel(E_eV, n_max=20):
     return sigma_tot, sigma_E_tot / sigma_tot
 
 
+# Lookup-table front end for the summed singlet channel. Profiling
+# (2026-07-21, nx=120 csda_ql production config) put the scalar manifold
+# sums at ~80% of total step time via deposit_beam's per-substep calls
+# (~240 channel calls x 73 scalar level evaluations per step). The table
+# is built lazily ONCE from the exact function above, so its nodes are
+# exactly the reference values; between nodes it is linear interpolation
+# on (sigma, sigma*E) -- interpolating the pair keeps the recovered
+# E_rad = sigmaE/sigma inside the physical threshold range. Grid: 2 meV
+# spacing across the threshold cluster (20-25 eV, where the curve kinks
+# at each level), log-spaced (0.15% steps) on the smooth 25-2000 eV
+# decay; measured relative error ~1e-6 away from thresholds. Callers
+# above the table span fall back to the exact function. The frozen
+# voltage-driven solver keeps calling the exact function directly --
+# only the deposition hot loop opts in (deliberate: the frozen path
+# stays bit-stable).
+_HE_BEAM_EXC_TABLE = None
+
+
+def _he_beam_excitation_table(n_max=20):
+    global _HE_BEAM_EXC_TABLE
+    if _HE_BEAM_EXC_TABLE is None or _HE_BEAM_EXC_TABLE[0] != n_max:
+        E_grid = np.concatenate(
+            [
+                np.linspace(20.0, 25.0, 2501),
+                np.geomspace(25.0, 2000.0, 3000)[1:],
+            ]
+        )
+        sigma = np.empty_like(E_grid)
+        sigma_E = np.empty_like(E_grid)
+        for k, e in enumerate(E_grid):
+            s, e_rad = He_beam_excitation_channel(float(e), n_max=n_max)
+            sigma[k] = s
+            sigma_E[k] = s * e_rad
+        _HE_BEAM_EXC_TABLE = (int(n_max), E_grid, sigma, sigma_E)
+    return _HE_BEAM_EXC_TABLE
+
+
+def He_beam_excitation_channel_lkup(E_eV, n_max=20):
+    """Interpolated ``He_beam_excitation_channel``: same contract, ~100x faster.
+
+    ``(0.0, 0.0)`` at or below the 20 eV table floor (below every singlet
+    threshold); exact-function fallback above the 2000 eV table ceiling.
+    """
+    _, E_grid, sigma, sigma_E = _he_beam_excitation_table(n_max)
+    E = float(E_eV)
+    if E <= E_grid[0]:
+        return 0.0, 0.0
+    if E >= E_grid[-1]:
+        return He_beam_excitation_channel(E, n_max=n_max)
+    s = float(np.interp(E, E_grid, sigma))
+    if s <= 0.0:
+        return 0.0, 0.0
+    return s, float(np.interp(E, E_grid, sigma_E)) / s
+
+
 def int_factor(I):
     return mp.fprod(
         [mp.power(I, 2), mp.sqrt(mp.fdiv(8, mp.fmul(M_e_eV, mp.pi))), c_cgs]

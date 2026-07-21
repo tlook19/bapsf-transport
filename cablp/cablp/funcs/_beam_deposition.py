@@ -73,7 +73,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from ._cathode_solver import _c_log_ei
-from ._cross import He_EII_cross_lkup, He_beam_excitation_channel
+from ._cross import He_EII_cross_lkup, He_beam_excitation_channel_lkup
 
 _ERG_PER_EV = 1.602176634e-12
 _ME_CGS = 9.1093837015e-28  # electron mass [g]
@@ -258,7 +258,11 @@ def deposit_beam(
             sigma_i = (
                 He_EII_cross_lkup(E / I_ion_eV) if E > I_ion_eV else 0.0
             )
-            sigma_x, E_rad = He_beam_excitation_channel(E)
+            # Table-interpolated manifold channel (see _cross docstring):
+            # exact-node table, ~1e-6 relative interp error, ~100x cheaper
+            # than the scalar sums this loop used to spend ~80% of total
+            # step time in (2026-07-21).
+            sigma_x, E_rad = He_beam_excitation_channel_lkup(E)
             W_sec = he_mean_secondary_energy_eV(E, I_ion_eV=I_ion_eV)
             # channel loss rates [eV/cm]
             L_pot = nn_c * sigma_i * I_ion_eV
