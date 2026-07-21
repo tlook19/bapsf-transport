@@ -829,6 +829,39 @@ def cathode_defaults():
         (the 2^1P excitation energy). Used by ``"2p_scalar"`` only; under
         ``"manifold"`` the thresholds and radiated energies come from the
         manifold registry and this key is inert.
+    beam_deposition_model:
+        How the primary beam deposits along the column.
+        ``"beer_lambert"`` (default, historical): single-event absorption
+        over the mixed Coulomb/inelastic profile (``l_b_profile`` +
+        ``beam_absorption_weights``). ``"csda"``: the deterministic
+        slowing-down module (``funcs/_beam_deposition.deposit_beam``, a pure
+        function of the beam and the column — BEAM_DEPOSITION_PLAN B2):
+        primaries survive multiple inelastic events, per-cell ionization/
+        excitation/heating/radiation come from the integrated ray, and the
+        sheath solve's bypass fraction is driven by the module's gap
+        transmission through an effective attenuation cross section at the
+        launch cell (exact when the transmission is at or below the frozen
+        solve's Coulomb-only ceiling ``exp(-L_cath/l_bi)``; clamped to the
+        ceiling otherwise). Under ``"csda"`` the ``b_beam_excitation`` and
+        ``beam_excitation_model`` knobs are inert — the module always uses
+        the measured manifold, knob-free. He-only.
+    beam_coulomb_model:
+        Coulomb drag closure for the CSDA module (inert under
+        ``"beer_lambert"``). ``"fast_electron"`` (default): the physical
+        stopping power ``dE/dx = 2 pi e^4 n_e lnL / E`` (~30 m e-fold at
+        150 eV, n_e = 5e12). ``"legacy_tau_ei"``: the historical
+        ``v(E) tau_ei(Te)`` form (~1 m; overestimates classical drag ~30x —
+        THESIS_NOTES item 12). Both parameter-free.
+    beam_anomalous_model:
+        Anomalous (beam-plasma instability) drag for the CSDA module (inert
+        under ``"beer_lambert"``). ``"none"`` (default) or
+        ``"quasilinear"``: mean-energy relaxation over
+        ``l_QL = (n_e/n_b)(v_b/w_pe) ln(n_e/n_b)`` (~5-10 cm at production
+        parameters), energy to local electron heating — the
+        Langmuir-turbulence picture behind primaries not surviving
+        downstream. Weak-beam domain only (returns no drag when
+        ``n_b >= n_e/10``); parameter-free; per-closure presentation
+        required (THESIS_NOTES item 12).
     """
     return {
         "V_bank": 180.0,
@@ -846,6 +879,9 @@ def cathode_defaults():
         "b_beam_excitation": 0.0,
         "beam_excitation_model": "2p_scalar",
         "beam_excitation_energy_eV": 21.218,
+        "beam_deposition_model": "beer_lambert",
+        "beam_coulomb_model": "fast_electron",
+        "beam_anomalous_model": "none",
         "cathode_warming_model": "none",
         "cathode_Ts_start_K": None,
         "cathode_warming_energy_J": 300.0,

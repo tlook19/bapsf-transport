@@ -1507,6 +1507,26 @@ def main():
         float(m3_exc_solve.beam_result.beam_exc_energy_eV[m3_launch])
         == 21.218
     )
+    # B2: the CSDA deposition rides the current-driven dispatch too (the
+    # solver-agnostic interface's second consumer).
+    m3_csda_params = dict(m3_exc_params, beam_deposition_model="csda")
+    m3_csda_sim = LAPDSim1D(m3_csda_params, resolved_cathode_flags)
+    m3_csda_sim._circuit_I_loop = 800.0
+    m3_csda_solve = m3_csda_sim.solve_cathode_boundary(update_cache=False)
+    assert m3_csda_solve.beam_deposition is not None
+    m3_csda_dep = m3_csda_solve.beam_deposition[0]
+    assert m3_csda_dep is not None
+    m3_csda_res = m3_csda_solve.beam_result.result
+    m3_csda_budget = m3_csda_res.I_eth_star * m3_csda_res.phi_c * 1.0e7
+    m3_csda_total = (
+        m3_csda_dep.plasma_heating_erg_s.sum()
+        + m3_csda_dep.radiated_erg_s.sum()
+        + m3_csda_dep.ionization_cost_erg_s.sum()
+        + m3_csda_dep.transmitted_flux
+        * m3_csda_dep.transmitted_energy_eV
+        * ev_to_erg
+    )
+    assert abs(m3_csda_total - m3_csda_budget) / m3_csda_budget < 1e-9
 
     # Gate 5: drive mini-run. The loop current starts at 0 and rises at
     # ~(V_src - V_dis)/L; the per-step solve reports the *frozen* current
@@ -1670,6 +1690,65 @@ def main():
         rtol=1e-10,
     )
 
+    # --- B2: the CSDA deposition model wired behind beam_deposition_model.
+    csda_params = dict(exc_params)
+    csda_params["beam_deposition_model"] = "csda"
+    csda_sim = LAPDSim1D(csda_params, cathode_flags)
+    csda_solve = csda_sim.solve_cathode_boundary()
+    assert csda_solve.beam_deposition is not None
+    csda_dep = csda_solve.beam_deposition[0]
+    assert csda_dep is not None
+    # Per-ray energy conservation through the module at solver conditions:
+    # Gamma0*E0 = I_eth_star*phi_c (W -> erg/s is exactly 1e7).
+    csda_res = csda_solve.beam_result.result
+    csda_budget = csda_res.I_eth_star * csda_res.phi_c * 1.0e7
+    csda_total = (
+        csda_dep.plasma_heating_erg_s.sum()
+        + csda_dep.radiated_erg_s.sum()
+        + csda_dep.ionization_cost_erg_s.sum()
+        + csda_dep.transmitted_flux
+        * csda_dep.transmitted_energy_eV
+        * ev_to_erg
+    )
+    assert abs(csda_total - csda_budget) / csda_budget < 1e-9
+    # The solver's four-term booking reproduces the module's split: the
+    # power-deposition term carries heating + radiated + cost (plus the
+    # historical gap-weighted P_ohmic), and the cost/radiation sinks
+    # subtract back to the module's net heating.
+    csda_terms = csda_sim.beam_ionization_rhs_terms(cathode_solve=csda_solve)
+    csda_Vp = geom.plasma_volume_cm3
+    csda_power_sum = float(
+        (csda_terms["beam_power_deposition"].Ee * csda_Vp).sum()
+    )
+    csda_module_sum = float(
+        csda_dep.plasma_heating_erg_s.sum()
+        + csda_dep.radiated_erg_s.sum()
+        + csda_dep.ionization_cost_erg_s.sum()
+    )
+    assert np.isclose(
+        csda_power_sum - csda_res.P_ohmic * 1.0e7, csda_module_sum, rtol=1e-9
+    )
+    assert np.isclose(
+        float((-csda_terms["beam_excitation_radiation"].Ee * csda_Vp).sum()),
+        float(csda_dep.radiated_erg_s.sum()),
+        rtol=1e-9,
+    )
+    assert np.isclose(
+        float((-csda_terms["beam_ionization_cost"].Ee * csda_Vp).sum()),
+        float(csda_dep.ionization_cost_erg_s.sum()),
+        rtol=1e-9,
+    )
+    # CSDA primaries survive multiple events: ionization spreads over
+    # several cells rather than one launch cell.
+    assert np.count_nonzero(csda_dep.ionization_events) >= 2
+    # The bypass adapter wrote a finite effective attenuation cross section
+    # for the next solve's Beer-Lambert bypass.
+    csda_launch = int(np.flatnonzero(csda_solve.beam_result.beam_cross)[0])
+    csda_sigma_eff = float(
+        csda_solve.beam_result.beam_atten_cross[csda_launch]
+    )
+    assert np.isfinite(csda_sigma_eff) and csda_sigma_eff >= 0.0
+
     beam_weights = beam_absorption_weights(
         length_cm=geom.length_cm,
         l_b_profile=cathode_solve.beam_result.l_b_profile,
@@ -1817,6 +1896,35 @@ def main():
         twin_cathode_loss_terms.metadata["end_surface_particle_loss_s_inv"],
         expected_twin_end_loss,
     )
+    # B2: twin cathodes each get their own CSDA ray (opposite directions),
+    # both conserving energy against their own solve.
+    twin_csda_params = dict(params)
+    twin_csda_params["b_beam_excitation"] = 1.0
+    twin_csda_params["beam_deposition_model"] = "csda"
+    twin_csda_sim = LAPDSim1D(twin_csda_params, twin_cathode_flags)
+    twin_csda_solve = twin_csda_sim.solve_cathode_boundary()
+    assert twin_csda_solve.beam_deposition is not None
+    for twin_end, twin_res in (
+        (0, twin_csda_solve.beam_result.result),
+        (-1, twin_csda_solve.beam_result.result_twin),
+    ):
+        twin_dep = twin_csda_solve.beam_deposition[twin_end]
+        assert twin_dep is not None, twin_end
+        twin_budget = twin_res.I_eth_star * twin_res.phi_c * 1.0e7
+        twin_total = (
+            twin_dep.plasma_heating_erg_s.sum()
+            + twin_dep.radiated_erg_s.sum()
+            + twin_dep.ionization_cost_erg_s.sum()
+            + twin_dep.transmitted_flux
+            * twin_dep.transmitted_energy_eV
+            * ev_to_erg
+        )
+        assert abs(twin_total - twin_budget) / twin_budget < 1e-9, twin_end
+    # Opposite rays: the primary deposits from cell 0 rightward, the twin
+    # from the far end leftward.
+    assert twin_csda_solve.beam_deposition[0].E_entry_eV[0] > 0.0
+    assert twin_csda_solve.beam_deposition[-1].E_entry_eV[-1] > 0.0
+
     twin_inventory_scale = np.sum(
         np.abs(twin_cathode_loss_terms.rhs.n * geom.plasma_volume_cm3)
         + np.abs(twin_cathode_loss_terms.rhs.nn * geom.neutral_volume_cm3)

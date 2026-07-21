@@ -447,6 +447,18 @@ def main(argv=None):
         ),
     )
     parser.add_argument(
+        "--beam-deposition",
+        default=None,
+        choices=("beer_lambert", "csda", "csda_ql"),
+        help=(
+            "beam deposition model for the WP-B B3 A/B "
+            "(BEAM_DEPOSITION_PLAN.md): beer_lambert (historical "
+            "single-event absorption), csda (slowing-down module, classical "
+            "fast-electron Coulomb), or csda_ql (csda + quasilinear "
+            "beam-plasma drag)"
+        ),
+    )
+    parser.add_argument(
         "--solver-model",
         default=None,
         choices=("voltage_driven", "current_driven"),
@@ -489,6 +501,14 @@ def main(argv=None):
         if args.beam_excitation == "manifold":
             extra["beam_excitation_model"] = "manifold"
             extra["b_beam_excitation"] = 1.0
+        if args.beam_deposition is not None:
+            label += f" [dep={args.beam_deposition}]"
+            extra["beam_deposition_model"] = (
+                "csda" if args.beam_deposition.startswith("csda")
+                else "beer_lambert"
+            )
+            if args.beam_deposition == "csda_ql":
+                extra["beam_anomalous_model"] = "quasilinear"
         if args.solver_model is not None:
             extra["cathode_solver_model"] = args.solver_model
         try:

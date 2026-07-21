@@ -7,9 +7,11 @@ import numpy as np
 
 from scipy.optimize import brentq
 
+from cablp.funcs._beam_deposition import deposit_beam
 from cablp.funcs._cathode_solver import (
     DeviceConfig,
     PlasmaState,
+    _compute_l_b,
     solve_beam_system,
 )
 from cablp.funcs._cathode_solver_idriven import (
@@ -81,6 +83,9 @@ class CathodeSolve1D:
     x0_next: float | None
     x0_twin_next: float | None
     metadata: dict
+    # Per-end CSDA deposition results ({0: primary, -1: twin}), present only
+    # under beam_deposition_model = "csda"; None keys mean no active beam.
+    beam_deposition: dict | None = None
 
 
 def anode_circuit_sample(state, derived, geometry, mu, input_dict, end=0):
@@ -838,6 +843,18 @@ def solve_cathode_boundary(
                 input_dict.get("beam_excitation_model", "2p_scalar")
             ),
         )
+    beam_deposition = None
+    if str(input_dict.get("beam_deposition_model", "beer_lambert")) == "csda":
+        beam_deposition = _csda_beam_deposition(
+            beam_result=beam_result,
+            state=state,
+            derived=derived,
+            geometry=geometry,
+            device_config=device_config,
+            input_dict=input_dict,
+            I_ion=I_ion,
+            twin=boundary.twin_cathode,
+        )
     return CathodeSolve1D(
         boundary=boundary,
         beam_result=beam_result,
@@ -859,7 +876,101 @@ def solve_cathode_boundary(
             "result": _solver_result_metadata(beam_result.result),
             "result_twin": _solver_result_metadata(beam_result.result_twin),
         },
+        beam_deposition=beam_deposition,
     )
+
+
+def _csda_beam_deposition(
+    beam_result,
+    state,
+    derived,
+    geometry,
+    device_config,
+    input_dict,
+    I_ion,
+    twin=False,
+):
+    """Run the CSDA module for each active cathode ray (B2 wiring).
+
+    Returns ``{0: BeamDepositionResult | None, -1: ...}`` and rewrites
+    ``beam_result.beam_atten_cross`` at each launch cell with the effective
+    attenuation cross section that makes the frozen sheath solve's
+    Beer-Lambert bypass reproduce the module's cathode-anode gap
+    transmission on the *next* solve (the same one-step lag the historical
+    ``sigma_b`` feedback has). The frozen solve computes
+    ``bypass = exp(-L_cath / l_b)`` with ``1/l_b = 1/l_bi + sigma*nn``, so
+    the adapter solves for sigma and clamps at 0 — transmissions above the
+    solve's Coulomb-only ceiling ``exp(-L_cath/l_bi)`` saturate there
+    (stated limitation; exact for transmissions at or below the ceiling,
+    including the quasilinear closure's ~0).
+    """
+    coulomb_model = str(input_dict.get("beam_coulomb_model", "fast_electron"))
+    anomalous_model = str(input_dict.get("beam_anomalous_model", "none"))
+    L_cath = float(device_config.L_cath)
+    deposition = {}
+    ends = (0, -1) if twin else (0,)
+    for end in ends:
+        result = beam_result.result if end == 0 else beam_result.result_twin
+        if result is None or result.phi_c <= I_ion:
+            deposition[end] = None
+            continue
+        launch, direction = beam_launch(geometry, end=end)
+        Gamma0 = result.I_eth_star / qe_SI
+        ray_kwargs = dict(
+            nn=state.nn,
+            ne=state.n,
+            Te=derived.Te,
+            launch=launch,
+            direction=direction,
+            I_ion_eV=float(I_ion),
+            coulomb_model=coulomb_model,
+            anomalous_model=anomalous_model,
+        )
+        if anomalous_model != "none":
+            ray_kwargs["beam_area_cm2"] = geometry.plasma_area_cm2
+        dep = deposit_beam(
+            result.phi_c, Gamma0, dz_cm=geometry.length_cm, **ray_kwargs
+        )
+        deposition[end] = dep
+        # Gap transmission: a second, gap-clipped ray (unit flux). CSDA
+        # conserves flux until the stop point, so this is 1 if the range
+        # exceeds L_cath and 0 otherwise.
+        gap_dz = _clip_ray_length(
+            geometry.length_cm, launch, direction, L_cath
+        )
+        gap = deposit_beam(result.phi_c, 1.0, dz_cm=gap_dz, **ray_kwargs)
+        transmission = min(max(gap.transmitted_flux, 1.0e-6), 1.0)
+        nn_launch = float(state.nn[launch])
+        l_bi = _compute_l_b(
+            result.phi_c,
+            float(derived.Te[launch]),
+            float(state.n[launch]),
+            0.0,
+            0.0,
+        )
+        sigma_eff = 0.0
+        if nn_launch > 0.0 and L_cath > 0.0 and l_bi > 0.0:
+            sigma_eff = max(
+                0.0,
+                (-math.log(transmission) / L_cath - 1.0 / l_bi) / nn_launch,
+            )
+        beam_result.beam_atten_cross[launch] = sigma_eff
+    return deposition
+
+
+def _clip_ray_length(length_cm, launch, direction, L_cath):
+    """dz array truncated so the ray's total path is at most ``L_cath``."""
+    dz = np.zeros_like(np.asarray(length_cm, dtype=float))
+    remaining = float(L_cath)
+    cells = dz.size
+    order = range(launch, cells) if direction > 0 else range(launch, -1, -1)
+    for cell in order:
+        if remaining <= 0.0:
+            break
+        step = min(float(length_cm[cell]), remaining)
+        dz[cell] = step
+        remaining -= step
+    return dz
 
 
 def cathode_source_terms(
@@ -1140,13 +1251,16 @@ def beam_ionization_rhs_terms(
         floors["Ti"],
     )
     exc_model = str(input_dict.get("beam_excitation_model", "2p_scalar"))
-    if exc_model == "2p_scalar":
+    csda_active = getattr(cathode_solve, "beam_deposition", None) is not None
+    if exc_model == "2p_scalar" and not csda_active:
         # Historical booking: the constant per-event energy factored out of
         # the summed event profile — kept byte-for-byte.
         exc_Ee = -E_exc * ev_to_erg * S_exc
     else:
         # Manifold booking: each ray radiates its own energy-weighted mean
-        # per event, set by that cathode's phi_c at solve time.
+        # per event, set by that cathode's phi_c at solve time; the CSDA
+        # module's radiated bank uses the same channel per E(z), so it
+        # always books through this path.
         exc_Ee = -ev_to_erg * S_exc_E
     return {
         "beam_ionization_birth": ConservativeState1D(
@@ -1199,6 +1313,36 @@ def _beam_ionization_sources(
     S_exc = zeros.copy()
     S_exc_E = zeros.copy()
     beam_power_density = zeros.copy()
+
+    deposition = getattr(cathode_solve, "beam_deposition", None)
+    if deposition is not None:
+        # CSDA path (B2): the module already integrated each ray; convert
+        # its per-cell totals to densities. ``beam_power_deposition`` carries
+        # the whole per-cell beam energy (heating + radiated + cost) so the
+        # separate cost and radiation sinks subtract to the module's net
+        # heating, keeping the four-term decomposition meaningful. P_ohmic
+        # keeps its historical gap-weighted booking.
+        Vp = geometry.plasma_volume_cm3
+        for end, dep in deposition.items():
+            if dep is None:
+                continue
+            S_beam += dep.ionization_events / Vp
+            S_exc += dep.excitation_events / Vp
+            S_exc_E += dep.radiated_erg_s / Vp / ev_to_erg
+            beam_power_density += (
+                dep.plasma_heating_erg_s
+                + dep.radiated_erg_s
+                + dep.ionization_cost_erg_s
+            ) / Vp
+            solver_result = (
+                beam_result.result if end == 0 else beam_result.result_twin
+            )
+            gap = np.asarray(gap_cell_indices(geometry, end=end), dtype=int)
+            ohmic_weights = _ohmic_gap_weights(geometry, gap, Te)
+            beam_power_density[gap] += (
+                ohmic_weights * solver_result.P_ohmic * 1.0e7 / Vp[gap]
+            )
+        return S_beam, S_exc, S_exc_E, beam_power_density
 
     def _exc_energy_at(launch_index):
         # Per-ray radiated energy per event [eV]: the solve's per-cell value
