@@ -610,6 +610,44 @@ class LAPDSim1D:
                     "cathode_Ts_base_K must exceed cathode_env_T_K"
                 )
             self._cathode_Ts_K = float(Ts_base)
+        # Surface-state coverage (cathode_surface_model="ads_des",
+        # CATHODE_IDRIVEN_PLAN.md M5a): theta in [0, 1] is the contaminant
+        # coverage raising the effective work function,
+        # phi_eff = phi_clean + (phi_wf - phi_clean) * theta, evolving as
+        #   dtheta/dt = k_ads (1-theta) - [nu0 e^(-E_des/kT_s) + sigma Gamma_i] theta
+        # (adsorption / thermal desorption / ion-stimulated desorption).
+        # In-shot the ion term dominates (M5a: the fluence-cleaning limit);
+        # the other channels are carried for the M5b cycle map and default
+        # to zero. None = static phi_wf (historical).
+        surface_model = str(
+            self._input_dict.get("cathode_surface_model", "none")
+        )
+        if surface_model not in ("none", "ads_des"):
+            raise ValueError(
+                "cathode_surface_model must be 'none' or 'ads_des' "
+                f"(got {surface_model!r})"
+            )
+        self._cathode_theta = None
+        if surface_model == "ads_des":
+            clean = self._input_dict.get("cathode_phiwf_clean_eV")
+            if clean is None:
+                raise ValueError(
+                    "cathode_surface_model='ads_des' requires "
+                    "cathode_phiwf_clean_eV (the per-shot-accessible floor)"
+                )
+            if not float(clean) < float(self._input_dict["phi_wf"]):
+                raise ValueError(
+                    "cathode_phiwf_clean_eV must be below phi_wf (the "
+                    "contaminated shot-start value)"
+                )
+            for _sk in (
+                "cathode_cleaning_sigma_cm2",
+                "cathode_ads_rate_per_s",
+                "cathode_desorption_prefactor_per_s",
+            ):
+                if float(self._input_dict.get(_sk, 0.0)) < 0.0:
+                    raise ValueError(f"{_sk} must be non-negative")
+            self._cathode_theta = 1.0
         # Per-shot surface energy ledger [J] (power_balance only): running
         # integrals of the balance terms over accepted steps. The net
         # (heater + ion - rad - emis - cond) is the shot's unreturned
@@ -1122,6 +1160,21 @@ class LAPDSim1D:
             rejection_detail=rejection_detail,
         )
 
+    def _cathode_phi_wf_eff(self):
+        """Effective work function [eV] under cathode_surface_model; None off."""
+        if self._cathode_theta is None:
+            return None
+        clean = float(self._input_dict["cathode_phiwf_clean_eV"])
+        dirty = float(self._input_dict["phi_wf"])
+        return clean + (dirty - clean) * float(self._cathode_theta)
+
+    def _surface_effective_input_dict(self):
+        """input_dict with the evolving phi_wf substituted (shared-constant rule)."""
+        eff = self._cathode_phi_wf_eff()
+        if eff is None:
+            return self._input_dict
+        return {**self._input_dict, "phi_wf": eff}
+
     def _accept_step_attempt(self, attempt):
         self._restore_step_cache(attempt.solver_cache)
         self._set_state_vector(attempt.y)
@@ -1161,6 +1214,37 @@ class LAPDSim1D:
             self._circuit_I_prev = 0.0
             self._circuit_V_dis_prev = None
             self._circuit_phase_key_prev = None
+        # Shared honest accepted-state solve for the surface updates
+        # (power_balance warming and the coverage model): one re-solve at
+        # the accepted state, the step's frozen I_loop, and the CURRENT
+        # (pre-update) T_s / phi_wf_eff. The RHS cache is the step's last
+        # internal-stage solve and must not feed state evolution (measured
+        # 4.6-7.5x P_cathode_i inflation, 2026-07-21).
+        honest_result = None
+        if (
+            solve is not None
+            and solve.beam_result is not None
+            and self._cathode_solver_model == "current_driven"
+            and not bool(solve.metadata.get("floating", False))
+            and (
+                self._cathode_warming_model == "power_balance"
+                or self._cathode_theta is not None
+            )
+        ):
+            honest_result = idriven_result_evaluator(
+                state=self.state,
+                floors=self._floors,
+                ion_mass_g=self._ion_mass_g,
+                mu=self._mu,
+                geometry=self._geometry,
+                input_dict=self._input_dict,
+                input_flags=self._effective_cathode_flags(
+                    active_only=False, floating=False
+                ),
+                beam_cross_prev=self._cathode_beam_cross,
+                T_s_override_K=self._cathode_Ts_K,
+                phi_wf_override_eV=self._cathode_phi_wf_eff(),
+            )(self._circuit_I_loop)
         # Cathode warming, accepted steps only (rejected attempts never move
         # the surface temperature).
         if (
@@ -1187,41 +1271,22 @@ class LAPDSim1D:
                 # Floating phases: emitted electrons return to the surface,
                 # so net evaporative cooling vanishes with the net current.
                 floating = bool(solve.metadata.get("floating", False))
-                # Honest accepted-state inputs (current-driven only): the
-                # RHS cache above is the step's LAST internal-stage solve,
-                # whose P_cathode_i was measured at 4.6-7.5x the
-                # accepted-state value at the same frozen current
-                # (2026-07-21) -- the stage state sits across the knee.
-                # One cheap re-solve at the accepted state and the step's
-                # frozen loop current replaces it. ion_bombardment keeps
+                # Honest accepted-state inputs (current-driven only; see
+                # the shared honest_result above -- ion_bombardment keeps
                 # the historical cache read on purpose: its tuned energy
-                # scale absorbed the inflation and its saved runs are
-                # citable evidence (CATHODE_IDRIVEN_PLAN.md §5b).
-                if (
-                    self._cathode_solver_model == "current_driven"
-                    and not floating
-                ):
-                    honest = idriven_result_evaluator(
-                        state=self.state,
-                        floors=self._floors,
-                        ion_mass_g=self._ion_mass_g,
-                        mu=self._mu,
-                        geometry=self._geometry,
-                        input_dict=self._input_dict,
-                        input_flags=self._effective_cathode_flags(
-                            active_only=False, floating=False
-                        ),
-                        beam_cross_prev=self._cathode_beam_cross,
-                        T_s_override_K=self._cathode_Ts_K,
-                    )
-                    result = honest(self._circuit_I_loop)
+                # scale absorbed the stale-solve inflation and its saved
+                # runs are citable evidence, CATHODE_IDRIVEN_PLAN.md §5b).
+                if honest_result is not None:
+                    result = honest_result
                 I_emis = 0.0 if floating else float(result.I_eth_star)
+                # Emission cooling books the EVOLVING work function when
+                # the surface model is on (one shared constant, §3b).
                 P_heat, P_ion, P_rad, P_emis, P_cond = (
                     cathode_power_balance_terms_W(
                         T_s_K=self._cathode_Ts_K,
                         P_ion_W=float(result.P_cathode_i),
                         I_eth_star_A=I_emis,
-                        input_dict=self._input_dict,
+                        input_dict=self._surface_effective_input_dict(),
                     )
                 )
                 C_th = float(
@@ -1263,6 +1328,76 @@ class LAPDSim1D:
                 ledger["rad"] += float(attempt.dt) * P_rad
                 ledger["emis"] += float(attempt.dt) * P_emis
                 ledger["cond"] += float(attempt.dt) * P_cond
+        # Surface-state coverage, accepted steps only. Ion flux from the
+        # honest accepted-state solve where available (drive phases); the
+        # cached solve's I_i otherwise (floating/afterglow -- low stakes).
+        # Backward-Euler is exact-form for this linear ODE: theta stays in
+        # [0, 1] and cannot overshoot the ads/des equilibrium.
+        if (
+            self._cathode_theta is not None
+            and solve is not None
+            and solve.beam_result is not None
+        ):
+            surf_res = (
+                honest_result
+                if honest_result is not None
+                else solve.beam_result.result
+            )
+            I_i_A = max(float(surf_res.I_i), 0.0)
+            # 0D pairing with the solver's own I_i = A_c e n c_s: the flux
+            # density is Gamma_i = I_i / (e A_c) = n c_s e^{-1/2}.
+            area_cm2 = math.pi * float(self._input_dict["R_cath"]) ** 2
+            Gamma_i = I_i_A / (1.602176634e-19 * area_cm2)
+            sigma_cl = float(
+                self._input_dict.get("cathode_cleaning_sigma_cm2", 0.0)
+            )
+            # Energy-dependent ion-stimulated desorption yield (M5a',
+            # Tom-approved with literature backing 2026-07-21): the
+            # near-threshold Bohdansky factor
+            #   f(E) = (1 - (E_th/E)^(2/3)) * (1 - E_th/E)^2
+            # (Bohdansky 1984; Garcia-Rosales 1995 revised formulae) with
+            # E the honest mean deposited energy per ion, P_cathode_i/I_i
+            # [eV] -- the sheath drop plus its presheath/thermal riders,
+            # from the same accepted-state solve driving the flux. He->O
+            # kinematics (gamma = 0.64) puts E_th = E_B/(gamma(1-gamma))
+            # ~ 18-26 eV for chemisorbed O. None = energy-independent
+            # (the M5a fluence limit, bit-exact).
+            E_th = self._input_dict.get("cathode_cleaning_E_th_eV")
+            if E_th is not None and I_i_A > 0.0:
+                E_ion_eV = max(float(surf_res.P_cathode_i), 0.0) / I_i_A
+                E_th = float(E_th)
+                if E_ion_eV <= E_th:
+                    sigma_cl = 0.0
+                else:
+                    r = E_th / E_ion_eV
+                    sigma_cl *= (1.0 - r ** (2.0 / 3.0)) * (1.0 - r) ** 2
+            k_ads = float(
+                self._input_dict.get("cathode_ads_rate_per_s", 0.0)
+            )
+            nu0 = float(
+                self._input_dict.get(
+                    "cathode_desorption_prefactor_per_s", 0.0
+                )
+            )
+            nu_th = 0.0
+            if nu0 > 0.0:
+                T_des = (
+                    float(self._cathode_Ts_K)
+                    if self._cathode_Ts_K is not None
+                    else float(self._input_dict.get("T_s", 300.0))
+                )
+                nu_th = nu0 * math.exp(
+                    -float(
+                        self._input_dict.get(
+                            "cathode_desorption_energy_eV", 3.0
+                        )
+                    )
+                    / (8.617333262e-5 * max(T_des, 1.0))
+                )
+            loss = nu_th + sigma_cl * Gamma_i
+            self._cathode_theta = (
+                self._cathode_theta + float(attempt.dt) * k_ads
+            ) / (1.0 + float(attempt.dt) * (k_ads + loss))
         self._circuit_dt_prev = float(attempt.dt)
         # Current-driven circuit: advance the loop current by one TR-BDF2
         # step against V_dis(I) evaluated at the accepted end-of-step state
@@ -1305,6 +1440,7 @@ class LAPDSim1D:
                     ),
                     beam_cross_prev=self._cathode_beam_cross,
                     T_s_override_K=self._cathode_Ts_K,
+                    phi_wf_override_eV=self._cathode_phi_wf_eff(),
                 )
                 I_new, V_cap_new, V_dis_step = advance_circuit_current_driven(
                     I_prev_A=self._circuit_I_loop,
@@ -2436,6 +2572,7 @@ class LAPDSim1D:
                 else None
             ),
             T_s_override_K=self._cathode_Ts_K,
+            phi_wf_override_eV=self._cathode_phi_wf_eff(),
             circuit_I_loop_A=self._circuit_I_loop,
         )
         if update_cache:
@@ -3422,6 +3559,18 @@ class LAPDSim1D:
                 f"warming_E_{k}_J": float(v)
                 for k, v in self._cathode_energy_ledger_J.items()
             },
+            # Surface-state coverage and the effective work function
+            # (cathode_surface_model; 1.0 / static phi_wf when off).
+            "surface_theta": float(
+                self._cathode_theta
+                if self._cathode_theta is not None
+                else 1.0
+            ),
+            "phi_wf_eff": float(
+                self._cathode_phi_wf_eff()
+                if self._cathode_theta is not None
+                else float(self._input_dict.get("phi_wf", 0.0))
+            ),
             "phase_enabled": float(cathode_phase["cathode_enabled"]),
             "rhs_enabled": float(cathode_phase["cathode_enabled"]),
             "solve_enabled": float(cathode_phase["solve_enabled"]),

@@ -1704,6 +1704,119 @@ def main():
         atol=0.0,
     ), (pbh_E_ion, pbh_calls)
 
+    # Surface-state coverage model (cathode_surface_model="ads_des",
+    # CATHODE_IDRIVEN_PLAN.md M5a). Validation fails fast; the coverage
+    # update must reproduce the backward-Euler form exactly from the spy's
+    # honest I_i; phi_eff must actually reach the solve (a cleaner surface
+    # emits more at fixed T_s and imposed current => shallower sheath).
+    for sf_bad in (
+        {"cathode_surface_model": "bogus"},
+        {"cathode_surface_model": "ads_des"},  # missing clean floor
+        {"cathode_surface_model": "ads_des",
+         "cathode_phiwf_clean_eV": 99.0},  # floor above phi_wf
+        {"cathode_surface_model": "ads_des",
+         "cathode_phiwf_clean_eV": 2.75,
+         "cathode_cleaning_sigma_cm2": -1.0},
+    ):
+        try:
+            LAPDSim1D(dict(m3_params, **sf_bad), resolved_cathode_flags)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected ValueError for {sf_bad}")
+    sf_params = dict(
+        m3_params,
+        cathode_surface_model="ads_des",
+        cathode_phiwf_clean_eV=2.75,
+        cathode_cleaning_sigma_cm2=1.0e-16,
+    )
+    sf_calls = []
+    _sf_orig = _solver_mod.idriven_result_evaluator
+
+    def _sf_spy(**kw):
+        f = _sf_orig(**kw)
+
+        def g(I):
+            res = f(I)
+            sf_calls.append(float(res.I_i))
+            return res
+
+        return g
+
+    _solver_mod.idriven_result_evaluator = _sf_spy
+    try:
+        sf_sim = LAPDSim1D(sf_params, resolved_cathode_flags)
+        assert sf_sim._cathode_theta == 1.0
+        sf_sim._circuit_I_loop = 800.0
+        sf_result = sf_sim.run(t_end=3.0e-10, dt=1.0e-10)
+    finally:
+        _solver_mod.idriven_result_evaluator = _sf_orig
+    sf_theta = np.asarray(
+        sf_result.cathode_diagnostics["surface_theta"], float
+    )
+    sf_phieff = np.asarray(
+        sf_result.cathode_diagnostics["phi_wf_eff"], float
+    )
+    assert np.all(np.isfinite(sf_theta)) and np.all(sf_theta <= 1.0)
+    assert np.all(np.diff(sf_theta) <= 0.0)  # cleaning only, k_ads = 0
+    # Reproduce the backward-Euler update exactly from the spy's honest
+    # I_i sequence (run() starts I_loop at 0, so the accepted honest
+    # solves carry the near-floating I_i -- the form is what's tested).
+    sf_area = np.pi * float(sf_params["R_cath"]) ** 2
+    sf_th = 1.0
+    for sf_Ii in sf_calls:
+        sf_G = max(sf_Ii, 0.0) / (1.602176634e-19 * sf_area)
+        sf_loss = 0.0 + 1.0e-16 * sf_G
+        sf_th = (sf_th + 1.0e-10 * 0.0) / (1.0 + 1.0e-10 * (0.0 + sf_loss))
+    assert np.isclose(sf_theta[-1], sf_th, rtol=0.0, atol=1e-15), (
+        sf_theta[-1], sf_th
+    )
+    assert np.allclose(
+        sf_phieff,
+        2.75 + (float(sf_params["phi_wf"]) - 2.75) * sf_theta,
+        rtol=1e-12,
+    )
+    # phi_eff reaches the solve: the dispatched device config's Richardson
+    # ceiling must grow as the surface cleans (regime-independent -- a
+    # deep-SCL solve's phi_c legitimately ignores emission capability, so
+    # the ceiling is the right plumbing observable). Ratio check against
+    # the Richardson exponent at the config T_s.
+    sf_sim2 = LAPDSim1D(sf_params, resolved_cathode_flags)
+    sf_sim2._circuit_I_loop = 800.0
+    sf_hi = sf_sim2.solve_cathode_boundary(update_cache=False)
+    sf_sim2._cathode_theta = 0.2
+    sf_lo = sf_sim2.solve_cathode_boundary(update_cache=False)
+    assert sf_lo.device_config.I_eth > sf_hi.device_config.I_eth
+    sf_dphi = 0.8 * (float(sf_params["phi_wf"]) - 2.75)
+    sf_kT = 8.617333262e-5 * float(sf_params["T_s"])
+    assert np.isclose(
+        sf_lo.device_config.I_eth / sf_hi.device_config.I_eth,
+        np.exp(sf_dphi / sf_kT),
+        rtol=1e-9,
+    )
+
+    # M5a' energy-dependent yield: with cathode_cleaning_E_th_eV set, the
+    # coverage update scales sigma by the Bohdansky near-threshold factor
+    # at E = P_cathode_i/I_i. Below threshold nothing cleans (theta
+    # frozen); with E_th = None the M5a fluence limit is reproduced
+    # bit-for-bit (default-compat gate).
+    sfE_params = dict(sf_params, cathode_cleaning_E_th_eV=1.0e6)
+    sfE_sim = LAPDSim1D(sfE_params, resolved_cathode_flags)
+    sfE_sim._circuit_I_loop = 800.0
+    sfE_result = sfE_sim.run(t_end=3.0e-10, dt=1.0e-10)
+    sfE_theta = np.asarray(
+        sfE_result.cathode_diagnostics["surface_theta"], float
+    )
+    assert np.all(sfE_theta == 1.0), sfE_theta  # far below threshold
+    sfN_params = dict(sf_params, cathode_cleaning_E_th_eV=None)
+    sfN_sim = LAPDSim1D(sfN_params, resolved_cathode_flags)
+    sfN_sim._circuit_I_loop = 800.0
+    sfN_result = sfN_sim.run(t_end=3.0e-10, dt=1.0e-10)
+    assert np.array_equal(
+        np.asarray(sfN_result.cathode_diagnostics["surface_theta"], float),
+        sf_theta,
+    )
+
     # The bridge flag rides the dispatch (input_flags namespace, like
     # cathode_schottky): a bridged current-driven solve is finite and
     # carries the frozen loop current.

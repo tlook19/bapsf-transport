@@ -416,6 +416,7 @@ def idriven_result_evaluator(
     input_flags,
     beam_cross_prev,
     T_s_override_K=None,
+    phi_wf_override_eV=None,
 ):
     """Return an ``I [A] -> SolverResult`` evaluator at this frozen state.
 
@@ -435,6 +436,8 @@ def idriven_result_evaluator(
     )
     if T_s_override_K is not None:
         input_dict = {**input_dict, "T_s": float(T_s_override_K)}
+    if phi_wf_override_eV is not None:
+        input_dict = {**input_dict, "phi_wf": float(phi_wf_override_eV)}
     device_config = cathode_device_config(input_dict, input_flags, mu)
     device_config, _, _ = apply_cathode_Rp_model(
         device_config, derived, geometry, input_dict, input_flags
@@ -476,6 +479,7 @@ def idriven_vdis_evaluator(
     input_flags,
     beam_cross_prev,
     T_s_override_K=None,
+    phi_wf_override_eV=None,
 ):
     """Return a ``V_dis(I) [V]`` evaluator at this frozen plasma state.
 
@@ -494,6 +498,7 @@ def idriven_vdis_evaluator(
         input_flags=input_flags,
         beam_cross_prev=beam_cross_prev,
         T_s_override_K=T_s_override_K,
+        phi_wf_override_eV=phi_wf_override_eV,
     )
 
     def vdis(I_A):
@@ -774,6 +779,7 @@ def solve_cathode_boundary(
     circuit_scheme="backward_euler",
     circuit_V_dis_prev=None,
     T_s_override_K=None,
+    phi_wf_override_eV=None,
     circuit_I_loop_A=0.0,
 ):
     """Call the cathode/beam solver and return raw diagnostics only."""
@@ -816,6 +822,14 @@ def solve_cathode_boundary(
         # at the single point every emission path (uniform Richardson and the
         # annular profile, whose peak re-anchors) reads T_s from.
         input_dict = {**input_dict, "T_s": float(T_s_override_K)}
+    if phi_wf_override_eV is not None:
+        # cathode_surface_model: substitute the evolving effective work
+        # function at the single point every phi_wf consumer reads from --
+        # Richardson/DeviceConfig, the Schottky reference barrier, the
+        # gaussian profile's Richardson inversion, and (via the same dict
+        # in the solver) the power-balance emission-cooling term. One
+        # shared constant, changed in one place (plan §3b).
+        input_dict = {**input_dict, "phi_wf": float(phi_wf_override_eV)}
     device_config = cathode_device_config(input_dict, input_flags, mu)
     device_config, Rp_model, R_p_gap_ohm = apply_cathode_Rp_model(
         device_config, derived, geometry, input_dict, input_flags

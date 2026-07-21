@@ -135,6 +135,12 @@ def report(path):
         )
         print(f"T_s: start {Ts[drive][0]:.0f} K, +5ms {Ts5:.0f} K, "
               f"end {Ts[drive][-1]:.0f} K | end slope {ts_slope:+.3f} K/ms")
+    th = np.asarray(diag.get("surface_theta", np.ones_like(I)), float)
+    if np.any(th < 1.0):
+        pe = np.asarray(diag.get("phi_wf_eff", np.zeros_like(I)), float)
+        th5 = float(np.interp(5.0, t_ms, th))
+        print(f"theta: +5ms {th5:.3f}, end {th[drive][-1]:.3f} | "
+              f"phi_eff: start {pe[drive][0]:.3f} -> end {pe[drive][-1]:.3f} eV")
     Pi = np.asarray(diag.get("source_P_cathode_i", np.zeros_like(I)), float)
     if np.any(Pi != 0.0):
         print(f"P_cathode_i: early(1-5ms) {np.median(Pi[early]) / 1e3:.1f} kW, "

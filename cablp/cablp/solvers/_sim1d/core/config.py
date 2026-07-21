@@ -897,6 +897,30 @@ def cathode_defaults():
         "cathode_Rp_model": "sample",
         "cathode_solver_model": "voltage_driven",
         "cathode_phi_c_cap_V": 1000.0,
+        # Surface-state coverage model (CATHODE_IDRIVEN_PLAN.md M5a):
+        # "ads_des" evolves contaminant coverage theta with
+        # dtheta/dt = k_ads(1-theta) - [nu0 e^(-E_des/kTs) + sigma Gamma_i] theta
+        # and substitutes phi_eff = phi_clean + (phi_wf - phi_clean)*theta
+        # everywhere phi_wf is read (emission, Schottky, cooling, gaussian
+        # inversion -- the §3b shared-constant rule). phi_wf keeps its
+        # meaning as the contaminated SHOT-START value; the clean floor is
+        # the per-shot-accessible depth of the re-adsorbed layer, not the
+        # literature clean-LaB6 value. In-shot the ion-stimulated term
+        # dominates (fluence-cleaning limit); adsorption and thermal
+        # desorption are carried for the M5b between-shot cycle map and
+        # default to zero (inert).
+        "cathode_surface_model": "none",
+        "cathode_phiwf_clean_eV": None,
+        "cathode_cleaning_sigma_cm2": 0.0,
+        # Ion-stimulated desorption threshold [eV] (M5a'): scales sigma by
+        # the near-threshold Bohdansky factor (1-(Eth/E)^(2/3))(1-Eth/E)^2
+        # at the honest per-ion energy E = P_cathode_i/I_i. He->O
+        # kinematics gives ~18-26 eV for chemisorbed O. None = the
+        # energy-independent fluence limit.
+        "cathode_cleaning_E_th_eV": None,
+        "cathode_ads_rate_per_s": 0.0,
+        "cathode_desorption_prefactor_per_s": 0.0,
+        "cathode_desorption_energy_eV": 3.0,
     }
 
 

@@ -53,6 +53,17 @@ def main(argv=None):
                    help="offset added to the measured standby T_s [K] "
                         "(the +-8 K trim-quantum stability-derivative "
                         "probe; NOT a tuning knob)")
+    p.add_argument("--surface", action="store_true",
+                   help="enable cathode_surface_model='ads_des' (M5a: "
+                        "in-shot fluence-cleaning limit)")
+    p.add_argument("--phiwf-clean", type=float, default=None,
+                   help="per-shot-accessible clean floor phi_clean [eV] "
+                        "(required with --surface)")
+    p.add_argument("--sigma-clean", type=float, default=0.0,
+                   help="ion-stimulated desorption cross section [cm^2]")
+    p.add_argument("--E-th", type=float, default=None,
+                   help="desorption threshold [eV] (M5a' Bohdansky yield "
+                        "factor; omit for the energy-independent limit)")
     p.add_argument("--bridge", action="store_true",
                    help="enable the kT_s emission-release thermal bridge")
     p.add_argument("--save-h5", required=True)
@@ -91,6 +102,16 @@ def main(argv=None):
         extra["phi_wf"] = args.phi_wf
     if args.annuli is not None:
         extra["cathode_emission_annuli"] = args.annuli
+    if args.surface:
+        if args.phiwf_clean is None:
+            raise SystemExit("--surface requires --phiwf-clean")
+        extra.update({
+            "cathode_surface_model": "ads_des",
+            "cathode_phiwf_clean_eV": args.phiwf_clean,
+            "cathode_cleaning_sigma_cm2": args.sigma_clean,
+        })
+        if args.E_th is not None:
+            extra["cathode_cleaning_E_th_eV"] = args.E_th
 
     flags_extra = {}
     if args.bridge:
