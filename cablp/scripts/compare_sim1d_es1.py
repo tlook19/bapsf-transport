@@ -23,6 +23,19 @@ Three comparison stages, in tuning order (each scored independently):
       ``tau_afterglow = 5 ms`` past discharge end; use ``--tau-afterglow``
       to extend it toward the measured 27.5 ms tail.
 
+Separately, ``--beta-collapse`` runs the simulation-informed sweep-bias
+diagnostic (CATHODE_IDRIVEN_PLAN.md section 5b, HYPOTHESIS ON RECORD
+2026-07-22 plus its two addenda) over a set of saved reference runs: per
+(port, ES rung, window) residual vectors (dlnTe, dln n) are decomposed
+against the (1, -1/2) sweep-inversion manifold, per-rung probe-area
+drift (pure n direction), and whatever z/regime structure is left (model
+error). Kinetic (k4*) runs are scored in the plateau window only; the
+afterglow lives on the Isat decay traces. When the overlay carries the
+raw inter-sweep drive Isat (``isat_drive_*``, schema v4; exporter brief
+CATHODE_IDRIVEN_PLAN.md 7h) the area guard runs in its within-shot
+native form and a model-free sweep-chain consistency check is added.
+beta and a_{p,r} are hypothesis-test outputs, never data corrections.
+
 Usage::
 
     python scripts/compare_sim1d_es1.py                      # resolved + knudsen
@@ -31,9 +44,12 @@ Usage::
     python scripts/compare_sim1d_es1.py --from-h5 run.h5     # re-score, no run
     python scripts/compare_sim1d_es1.py --tau-afterglow 0.0275 \
         --decay-window 20.5 40.0
+    python scripts/compare_sim1d_es1.py --beta-collapse      # canonical run set
+    python scripts/compare_sim1d_es1.py --beta-collapse run_es1.h5 run_es2.h5
 """
 
 import argparse
+import re
 from pathlib import Path
 
 import numpy as np
@@ -372,6 +388,760 @@ def compare_decay(result, overlay, window_ms=(20.5, 25.0)):
     return rows, (t0, t1_model)
 
 
+# --- beta-collapse diagnostic (CATHODE_IDRIVEN_PLAN.md section 5b,
+# HYPOTHESIS ON RECORD 2026-07-22 + two addenda).  Where the model agrees
+# in Isat space (n*sqrt(Te), sweep-inversion systematics cancel), it is
+# licensed as a reference to test whether the residual Te/n disagreements
+# are a sweep-analysis systematic: a Te bias beta forces measured
+# n = true/sqrt(beta), so residuals must collapse onto the (1, -1/2)
+# manifold in the (dlnTe, dln n) plane.  Three identifiable components:
+#   (1) sweep bias: moves ALONG (1, -1/2); condition-dependent
+#       fingerprints discriminate the pathology (~Te => fit-window/EEDF
+#       tail; ~Isat magnitude => circuit series R; ~density => sheath
+#       expansion; day-to-day => probe surface);
+#   (2) per-rung probe-area drift a_{p,r} (rotation/deposition): PURE n
+#       direction, constant within a rung -- the sweep shape is area-free
+#       so Te is never touched.  GUARD: an area nuisance must shift
+#       plateau and afterglow identically (nothing rotates or deposits in
+#       25 ms);
+#   (3) model error: whatever carries physics z/regime structure.
+# First-addendum consequences baked in below: each probe's area was
+# individually calibrated against the interferometer WITH sweep Te, so a
+# constant Te bias is invisible (absorbed into A_p) -- the diagnostic
+# constrains beta(z,t)/beta_cal and per-rung area JUMPS only, and the
+# cleanest lever arm is the ES ladder at fixed port (same probe, baked-in
+# bias cancels, large Te/n swing).  Hierarchy: n axial shape is
+# interferometer-anchored (solid); Isat axial shape carries the per-port
+# beta_cal spread (demoted); within-shot time structure is fully robust.
+#
+# Error algebra (from the measurement error model above): the Te
+# systematic and its anti-correlated n propagation lie ALONG the
+# manifold by construction, so
+#   ln beta_hat = dlnTe            carries SEM-only noise, while
+#   ln a_hat    = dln n + dlnTe/2  (the manifold-perpendicular, pure-n
+#       component) carries n SEM (+) interferometer cal (+) Te SEM/2.
+# The sweep-space Isat license budget adds the probe-area transfer term
+# from the first addendum (~0.5 * fractional Te bias at calibration) on
+# top of SEM + cal -- it is NOT just SEM + 10%.
+#
+# Coverage: swept Te/n exist only in the drive plateau; the afterglow is
+# the Isat decay trace (absolute amps, unknown per-port unit constant vs
+# the model proxy).  The area guard is therefore CROSS-RUNG per port:
+# the per-rung jump of ln a_hat (plateau) must equal the per-rung jump of
+# the afterglow Isat residual (per-port constants cancel when centered
+# across rungs).  Because (1, -1/2) and the n direction span the plane,
+# that guard residual IS the collapse test after the afterglow-pinned
+# area correction -- one number, both roles.
+#
+# beta and a_{p,r} are HYPOTHESIS-TEST outputs, never data corrections,
+# pending independent corroboration (cheapest: re-fit raw sweeps with
+# varied windows).  Kinetic (k4*) runs are licensed in the plateau only
+# (quasi-static kinetic neutrals; afterglow unscored).
+
+BETA_PLATEAU_MS = (15.0, 19.5)
+BETA_AFTERGLOW_MS = (20.5, 25.0)
+BETA_LICENSE_SIGMA = 2.0
+BETA_ISAT_AREA_FRAC = 0.5 * TE_SYS_FRAC  # addendum (ii): probe-area term
+BETA_CANONICAL_FAMILIES = ("2zbase", "2z", "k4t")
+BETA_CANONICAL_PATTERN = "es1_nx120_m6_sq3400_{family}_es{rung}.h5"
+
+
+def _parse_beta_run(spec):
+    """Parse a --beta-collapse run spec into (path, rung, kind).
+
+    Rung and kind are read from the file name (``..._es<N>.h5``; any
+    ``_k4*`` token means kinetic) and can be overridden with
+    ``PATH:es=N`` / ``PATH:kind=kinetic|moment``.
+    """
+    parts = str(spec).split(":")
+    path = Path(parts[0])
+    rung = None
+    kind = None
+    for token in parts[1:]:
+        if token.startswith("es="):
+            rung = int(token[3:])
+        elif token.startswith("kind="):
+            kind = token[5:]
+        else:
+            raise ValueError(f"unknown beta-collapse run option {token!r}")
+    stem = path.stem
+    if rung is None:
+        hits = re.findall(r"_es(\d+)", stem)
+        if not hits:
+            raise ValueError(
+                f"cannot read the ES rung from {path.name!r}; pass PATH:es=N"
+            )
+        rung = int(hits[-1])
+    if kind is None:
+        kind = "kinetic" if re.search(r"_k4[a-z0-9]*(_|$)", stem) else "moment"
+    if kind not in ("kinetic", "moment"):
+        raise ValueError(f"unknown beta-collapse run kind {kind!r}")
+    return path, rung, kind
+
+
+def _beta_sweep_points(result, overlay, window_ms):
+    """Per-port (dlnTe, dln n, dlnIsat) window means with log-sigmas.
+
+    Window means of the pointwise log residual ln(exp/model); the
+    systematics are coherent within a window, so log-sigmas are window
+    means of the fractional errors (no sqrt(N) reduction).
+    """
+    t0, t1 = float(window_ms[0]), float(window_ms[1])
+    origin = _main_discharge_origin(result)
+    t_model_ms = (np.asarray(result.time, dtype=float) - origin) * 1.0e3
+    z_model = np.asarray(result.z_cm, dtype=float)
+    te_2d = np.asarray(result.Te, dtype=float)
+    n_2d = np.asarray(result.n, dtype=float)
+    t1 = min(t1, float(t_model_ms.max()))
+
+    te_t = np.asarray(overlay["te_time_ms"], dtype=float)
+    te_mean = np.asarray(overlay["te_mean_ev"], dtype=float)
+    te_sem = np.asarray(overlay["te_sem_ev"], dtype=float)
+    n_t = np.asarray(overlay["density_time_ms"], dtype=float)
+    n_mean = np.asarray(overlay["density_mean_cm3"], dtype=float)
+    n_sem = np.asarray(overlay["density_total_sem_cm3"], dtype=float)
+
+    points = []
+    for p, (z, port) in enumerate(zip(overlay["z_cm"], overlay["port"])):
+        iz = int(np.argmin(np.abs(z_model - z)))
+
+        w_te = (te_t >= max(t0, t_model_ms.min())) & (te_t <= t1)
+        te_exp = te_mean[p, w_te]
+        te_model = np.interp(te_t[w_te], t_model_ms, te_2d[:, iz])
+        good_te = (
+            np.isfinite(te_exp) & np.isfinite(te_model)
+            & (te_exp > 0) & (te_model > 0)
+        )
+        w_n = (n_t >= max(t0, t_model_ms.min())) & (n_t <= t1)
+        n_exp = n_mean[p, w_n]
+        n_model = np.interp(n_t[w_n], t_model_ms, n_2d[:, iz])
+        te_model_n = np.interp(n_t[w_n], t_model_ms, te_2d[:, iz])
+        te_exp_n = np.interp(n_t[w_n], te_t, te_mean[p])
+        good_n = (
+            np.isfinite(n_exp) & np.isfinite(n_model)
+            & (n_exp > 0) & (n_model > 0)
+            & (te_exp_n > 0) & (te_model_n > 0)
+        )
+        if np.count_nonzero(good_te) < 2 or np.count_nonzero(good_n) < 2:
+            continue
+
+        dlnte = float(np.mean(np.log(te_exp[good_te] / te_model[good_te])))
+        s_te_sem = float(np.mean(te_sem[p, w_te][good_te] / te_exp[good_te]))
+        s_te_sys = float(
+            np.mean(_sigma_sys("Te", te_exp[good_te]) / te_exp[good_te])
+        )
+        dlnn = float(np.mean(np.log(n_exp[good_n] / n_model[good_n])))
+        s_n_sem = float(np.mean(n_sem[p, w_n][good_n] / n_exp[good_n]))
+
+        # Sweep-space Isat (n*sqrt(Te) both sides): the inversion cancels.
+        dlnisat = float(
+            np.mean(
+                np.log(n_exp[good_n] * np.sqrt(te_exp_n[good_n]))
+                - np.log(n_model[good_n] * np.sqrt(te_model_n[good_n]))
+            )
+        )
+        s_isat = float(
+            np.sqrt(
+                s_n_sem**2
+                + (0.5 * s_te_sem) ** 2
+                + N_CAL_FRAC**2
+                + BETA_ISAT_AREA_FRAC**2
+            )
+        )
+        points.append(
+            {
+                "port": int(port),
+                "z": float(z),
+                "dlnte": dlnte,
+                "s_te_sem": s_te_sem,
+                "s_te_tot": float(np.hypot(s_te_sem, s_te_sys)),
+                "dlnn": dlnn,
+                "s_n_sem": s_n_sem,
+                "dlnisat": dlnisat,
+                "s_isat": s_isat,
+                "licensed": bool(abs(dlnisat) <= BETA_LICENSE_SIGMA * s_isat),
+                # decomposition (see error algebra note above)
+                "ln_beta": dlnte,
+                "s_beta": s_te_sem,
+                "ln_a": dlnn + 0.5 * dlnte,
+                "s_a": float(
+                    np.sqrt(s_n_sem**2 + N_CAL_FRAC**2 + (0.5 * s_te_sem) ** 2)
+                ),
+                # Condition variables for the fingerprints, evaluated on
+                # the licensed REFERENCE side: beta_hat contains
+                # lnTe_exp, so correlating against measured conditions
+                # would be self-correlated by construction.
+                "te_ref": float(np.mean(te_model[good_te])),
+                "n_ref": float(np.mean(n_model[good_n])),
+                "isat_ref": float(
+                    np.mean(n_model[good_n] * np.sqrt(te_model_n[good_n]))
+                ),
+            }
+        )
+    return points
+
+
+def _beta_trace_points(
+    result, overlay, window_ms, prefix="isat_decay", min_samples=8
+):
+    """Per-port raw-Isat log residual ln(exp/model proxy) over a window.
+
+    ``prefix`` selects the trace family: ``isat_decay`` (afterglow,
+    schema v2) or ``isat_drive`` (inter-sweep dead-time cells during the
+    drive, schema v4 -- see the augmenter in bapsf-lapd-data-analysis and
+    CATHODE_IDRIVEN_PLAN.md 7h).  Both are in amps from the swept
+    probe's own channel with NO area factor anywhere in the chain, and
+    the model proxy n*sqrt(Te) is not in amps, so each value carries an
+    unknown per-port unit constant.  Within one rung the constant is
+    identical for drive and decay (same channel, zero offsets and shot
+    ensemble -- the exporter must guarantee this), so the WITHIN-SHOT
+    difference is meaningful in absolute terms; across rungs at fixed
+    port, differences are meaningful too (same probe/hardware).
+    Returns None when the trace family is not in the overlay.
+    """
+    if f"{prefix}_time_ms" not in overlay:
+        return None
+    t0, t1 = float(window_ms[0]), float(window_ms[1])
+    origin = _main_discharge_origin(result)
+    t_model_ms = (np.asarray(result.time, dtype=float) - origin) * 1.0e3
+    z_model = np.asarray(result.z_cm, dtype=float)
+    n_2d = np.asarray(result.n, dtype=float)
+    te_2d = np.asarray(result.Te, dtype=float)
+    t1 = min(t1, float(t_model_ms.max()))
+
+    t_exp = np.asarray(overlay[f"{prefix}_time_ms"], dtype=float)
+    isat = np.asarray(overlay[f"{prefix}_mean_a"], dtype=float)
+    sem = np.asarray(overlay[f"{prefix}_sem_a"], dtype=float)
+    ports = np.asarray(overlay[f"{prefix}_port"])
+    z_ports = {
+        int(p): float(z)
+        for p, z in zip(np.asarray(overlay["port"]), overlay["z_cm"])
+    }
+
+    points = []
+    for p in range(ports.size):
+        z = z_ports.get(int(ports[p]))
+        if z is None:
+            continue
+        iz = int(np.argmin(np.abs(z_model - z)))
+        window = (t_exp >= t0) & (t_exp <= t1)
+        exp_t = isat[p, window]
+        sem_t = sem[p, window]
+        model_t = np.interp(
+            t_exp[window],
+            t_model_ms,
+            n_2d[:, iz] * np.sqrt(np.maximum(te_2d[:, iz], 0.0)),
+        )
+        good = (
+            np.isfinite(exp_t) & np.isfinite(model_t)
+            & (exp_t > 0) & (model_t > 0)
+        )
+        if np.count_nonzero(good) < min_samples:
+            continue
+        ln_ratio = np.log(exp_t[good] / model_t[good])
+        t_good = t_exp[window][good]
+        # Slope of ln(exp/model) across the window [1/ms]: a pure
+        # area/unit offset is flat; a model decay-rate (tau) error is
+        # sloped and leaks into the window mean -- the within-shot guard
+        # reports it so tau-confounded failures are identifiable.
+        slope = (
+            float(np.polyfit(t_good, ln_ratio, 1)[0])
+            if np.ptp(t_good) > 0
+            else np.nan
+        )
+        points.append(
+            {
+                "port": int(ports[p]),
+                "z": z,
+                "ln_r": float(np.mean(ln_ratio)),
+                "s_r": float(np.mean(sem_t[good] / exp_t[good])),
+                "dln_r_dt": slope,
+            }
+        )
+    return points
+
+
+def _beta_sweep_vs_raw(overlay, window_ms):
+    """MODEL-FREE sweep-chain consistency: ln(n*sqrt(Te)) - ln(raw Isat).
+
+    If the sweep analysis were exactly the algebraic Isat inversion,
+    n_exp*sqrt(Te_exp) would equal Isat_raw/(const_p) with const_p a
+    per-port constant (geometry, e, sqrt(M), the calibrated A_p) -- so
+    q_p = <ln(n_exp*sqrt(Te_exp)) - ln(Isat_raw)> over the plateau
+    window must be RUNG-INDEPENDENT at fixed port.  Cross-rung structure
+    in q_p is a condition-dependent pathology of the sweep chain itself
+    (sheath expansion, fit window, circuit), diagnosed with no model in
+    the loop -- independent corroboration in the pre-registered sense.
+    Returns None when the raw drive trace is absent (schema < v3).
+    """
+    if "isat_drive_time_ms" not in overlay:
+        return None
+    t0, t1 = float(window_ms[0]), float(window_ms[1])
+    t_raw = np.asarray(overlay["isat_drive_time_ms"], dtype=float)
+    raw = np.asarray(overlay["isat_drive_mean_a"], dtype=float)
+    raw_sem = np.asarray(overlay["isat_drive_sem_a"], dtype=float)
+    raw_ports = list(np.asarray(overlay["isat_drive_port"], dtype=int))
+    te_t = np.asarray(overlay["te_time_ms"], dtype=float)
+    te_mean = np.asarray(overlay["te_mean_ev"], dtype=float)
+    te_sem = np.asarray(overlay["te_sem_ev"], dtype=float)
+    n_t = np.asarray(overlay["density_time_ms"], dtype=float)
+    n_mean = np.asarray(overlay["density_mean_cm3"], dtype=float)
+    n_sem = np.asarray(overlay["density_total_sem_cm3"], dtype=float)
+
+    points = []
+    for p, port in enumerate(np.asarray(overlay["port"], dtype=int)):
+        if port not in raw_ports:
+            continue
+        pr = raw_ports.index(port)
+        window = (
+            (n_t >= max(t0, t_raw.min())) & (n_t <= min(t1, t_raw.max()))
+        )
+        n_exp = n_mean[p, window]
+        te_exp = np.interp(n_t[window], te_t, te_mean[p])
+        te_sem_w = np.interp(n_t[window], te_t, te_sem[p])
+        raw_w = np.interp(n_t[window], t_raw, raw[pr])
+        raw_sem_w = np.interp(n_t[window], t_raw, raw_sem[pr])
+        good = (
+            np.isfinite(n_exp) & np.isfinite(te_exp) & np.isfinite(raw_w)
+            & (n_exp > 0) & (te_exp > 0) & (raw_w > 0)
+        )
+        if np.count_nonzero(good) < 3:
+            continue
+        q = float(
+            np.mean(
+                np.log(n_exp[good] * np.sqrt(te_exp[good]))
+                - np.log(raw_w[good])
+            )
+        )
+        s_q = float(
+            np.sqrt(
+                np.mean(n_sem[p, window][good] / n_exp[good]) ** 2
+                + (0.5 * np.mean(te_sem_w[good] / te_exp[good])) ** 2
+                + np.mean(raw_sem_w[good] / raw_w[good]) ** 2
+            )
+        )
+        points.append({"port": int(port), "q": q, "s_q": s_q})
+    return points
+
+
+def _centered(values):
+    values = np.asarray(values, dtype=float)
+    return values - np.mean(values)
+
+
+def _beta_fingerprints(points):
+    """Pearson r of centered ln beta_hat against the condition variables.
+
+    Points must already be centered per (family, port) -- the ES-ladder-
+    at-fixed-port lever: everything constant (probe, area, baked-in
+    beta_cal) cancels, so only condition-dependent pathologies survive.
+    """
+    out = []
+    lb = np.asarray([p["c_ln_beta"] for p in points], dtype=float)
+    if lb.size < 3 or np.allclose(lb.std(), 0.0):
+        return out
+    for key, pathology in (
+        ("te_ref", "fit-window / EEDF tail"),
+        ("isat_ref", "circuit series resistance"),
+        ("n_ref", "sheath expansion"),
+    ):
+        x = np.asarray([p["c_" + key] for p in points], dtype=float)
+        if np.allclose(x.std(), 0.0):
+            continue
+        r = float(np.corrcoef(x, lb)[0, 1])
+        out.append((key, pathology, r, lb.size))
+    return out
+
+
+def _report_beta_collapse(runs, svr_by_rung=None):
+    print(
+        "\n=== beta-collapse diagnostic "
+        "(CATHODE_IDRIVEN_PLAN.md 5b, 2026-07-22 + addenda) ==="
+    )
+    print(
+        "  beta and a_{p,r} are hypothesis-test outputs, NEVER data\n"
+        "  corrections, pending independent corroboration (re-fit raw\n"
+        "  sweeps, varied windows). Constant Te bias is invisible (absorbed\n"
+        "  by the per-port area calibration): this constrains\n"
+        "  beta(z,t)/beta_cal and per-rung area jumps only.\n"
+        "  Hierarchy: n axial shape interferometer-anchored (solid); Isat\n"
+        "  axial shape carries per-port beta_cal spread (demoted);\n"
+        "  within-shot taus fully robust (stage (iii))."
+    )
+
+    # --- Table 1: plateau sweep-window residual decomposition -------------
+    print(
+        "\n--- plateau sweep residuals per (run, rung, port); "
+        "lic = Isat row within "
+        f"{BETA_LICENSE_SIGMA:.0f} sigma (SEM (+) cal (+) area budget) ---"
+    )
+    header = (
+        f"{'run':>8} {'rung':>4} {'port':>4} {'z':>6} "
+        f"{'dlnTe':>7} {'dlnn':>7} {'dlnIsat':>8} {'+/-':>5} {'lic':>3} "
+        f"{'ln_beta':>8} {'+/-':>5} {'ln_a':>7} {'+/-':>5}"
+    )
+    print(header)
+    print("-" * len(header))
+    for run in runs:
+        for pt in run["sweep"]:
+            print(
+                f"{run['short']:>8} {run['rung']:>4} {pt['port']:>4} "
+                f"{pt['z']:6.0f} {pt['dlnte']:7.3f} {pt['dlnn']:7.3f} "
+                f"{pt['dlnisat']:8.3f} {pt['s_isat']:5.3f} "
+                f"{'y' if pt['licensed'] else 'n':>3} "
+                f"{pt['ln_beta']:8.3f} {pt['s_beta']:5.3f} "
+                f"{pt['ln_a']:7.3f} {pt['s_a']:5.3f}"
+            )
+        if run["kind"] == "kinetic":
+            print(f"{run['short']:>8}      (kinetic: afterglow unscored)")
+    print(
+        "  ln_beta = dlnTe (SEM-only noise: the Te systematic IS beta);\n"
+        "  ln_a = dlnn + dlnTe/2, the manifold-perpendicular pure-n\n"
+        "  component (area drift + model n error). Cross-port structure in\n"
+        "  ln_a tests the model n axial shape (interferometer-anchored);\n"
+        "  cross-port structure in ln_beta mixes model Te error with\n"
+        "  per-port beta_cal spread and is NOT interpreted alone."
+    )
+    for run in runs:
+        sw = run["sweep"]
+        if len(sw) >= 2:
+            lnb = np.asarray([p["ln_beta"] for p in sw])
+            lna = np.asarray([p["ln_a"] for p in sw])
+            print(
+                f"  {run['short']} es{run['rung']}: cross-port spread "
+                f"ln_beta std {lnb.std():.3f}, ln_a std {lna.std():.3f} "
+                f"(vs typical sigma "
+                f"{np.mean([p['s_beta'] for p in sw]):.3f} / "
+                f"{np.mean([p['s_a'] for p in sw]):.3f})"
+            )
+
+    # --- Table 2: afterglow Isat residuals (moment runs) ------------------
+    aft_runs = [r for r in runs if r["aft"]]
+    if aft_runs:
+        print(
+            "\n--- afterglow Isat residuals ln(exp/model proxy) "
+            "(per-port unit constant arbitrary; cross-rung differences "
+            "meaningful) ---"
+        )
+        header = f"{'run':>8} {'rung':>4} " + " ".join(
+            f"p{pt['port']:>2}:{'ln_r':>6}" for pt in aft_runs[0]["aft"]
+        )
+        print(header)
+        for run in aft_runs:
+            row = f"{run['short']:>8} {run['rung']:>4} "
+            row += " ".join(
+                f"{pt['ln_r']:9.3f}+/-{pt['s_r']:.3f}" for pt in run["aft"]
+            )
+            print(row)
+
+    # --- Within-shot guard (addendum-2 native form) ------------------------
+    # Raw drive Isat and the decay trace come from the SAME channel, zero
+    # offsets and shot ensemble (exporter contract, 7h), so the per-port
+    # unit constant cancels exactly in g_shot = ln r(drive) - ln r(aft):
+    # an area nuisance a_{p,r} must give g_shot = 0 within errors, per
+    # rung, with no ladder needed.  Any condition dependence -- sweep
+    # pathology or model regime error -- fails it.
+    ws_runs = [r for r in runs if r.get("drive") and r.get("aft")]
+    if ws_runs:
+        print(
+            "\n--- guard (within-shot, native form): raw drive Isat vs "
+            "afterglow, per (run, rung, port) ---"
+        )
+        header = (
+            f"{'run':>8} {'rung':>4} {'port':>5} {'ln_r_drv':>8} "
+            f"{'ln_r_aft':>8} {'g_shot':>7} {'+/-':>5} {'g/sig':>6} "
+            f"{'aftslope':>8}  verdict"
+        )
+        print(header)
+        print("-" * len(header))
+        for run in ws_runs:
+            aft = {pt["port"]: pt for pt in run["aft"]}
+            lic = {pt["port"]: pt["licensed"] for pt in run["sweep"]}
+            for pt in run["drive"]:
+                a_pt = aft.get(pt["port"])
+                if a_pt is None:
+                    continue
+                g = float(pt["ln_r"] - a_pt["ln_r"])
+                s_g = float(np.hypot(pt["s_r"], a_pt["s_r"]))
+                nsig = abs(g) / s_g if s_g > 0 else np.inf
+                verdict = "PASS" if nsig <= 2.0 else "FAIL"
+                # A sloped afterglow residual means the model decay rate
+                # is off (stage (iii) tau error) and its accumulated
+                # drift, not an area/condition offset, may carry g_shot:
+                # flag rows where the drift over the window covers g.
+                drift = abs(a_pt.get("dln_r_dt", 0.0)) * (
+                    BETA_AFTERGLOW_MS[1] - BETA_AFTERGLOW_MS[0]
+                )
+                if verdict == "FAIL" and drift >= abs(g):
+                    verdict = "FAIL (tau-confounded)"
+                if not lic.get(pt["port"], False):
+                    verdict += " (unlicensed)"
+                print(
+                    f"{run['short']:>8} {run['rung']:>4} {pt['port']:>5} "
+                    f"{pt['ln_r']:8.3f} {a_pt['ln_r']:8.3f} "
+                    f"{g:7.3f} {s_g:5.3f} {nsig:6.1f} "
+                    f"{a_pt['dln_r_dt']:8.3f}  {verdict}"
+                )
+        print(
+            "  aftslope = d ln(exp/model)/dt [1/ms] in the afterglow: a\n"
+            "  pure area/unit offset is flat; a nonzero slope is the model\n"
+            "  decay-rate error leaking into the window mean, and FAILs\n"
+            "  whose g is covered by that drift are marked tau-confounded."
+        )
+    else:
+        print(
+            "\n--- guard (within-shot): awaiting raw drive Isat "
+            "(isat_drive_*, overlay schema v4; exporter brief 7h) -- "
+            "falling back to the cross-rung form ---"
+        )
+
+    # --- Model-free sweep-chain consistency (raw vs sweep-synth Isat) -----
+    svr_by_rung = {
+        rung: pts for rung, pts in (svr_by_rung or {}).items() if pts
+    }
+    if svr_by_rung:
+        print(
+            "\n--- sweep-chain consistency, MODEL-FREE: "
+            "q = <ln(n_exp*sqrt(Te_exp)) - ln(Isat_raw)>, plateau ---"
+        )
+        print(
+            "  q_p is a per-port constant if the sweep analysis is\n"
+            "  algebraically consistent; cross-rung structure in q_p is a\n"
+            "  condition-dependent sweep pathology with NO model in the\n"
+            "  loop (per-port constants cancel when centered)."
+        )
+        rungs = sorted(svr_by_rung)
+        ports = sorted(
+            {pt["port"] for pts in svr_by_rung.values() for pt in pts}
+        )
+        for port in ports:
+            vals = {
+                rung: next(
+                    (p for p in svr_by_rung[rung] if p["port"] == port), None
+                )
+                for rung in rungs
+            }
+            have = [r for r in rungs if vals[r] is not None]
+            if len(have) < 2:
+                continue
+            c_q = _centered([vals[r]["q"] for r in have])
+            txt = ", ".join(
+                f"es{r}: {cq:+.3f}+/-{vals[r]['s_q']:.3f}"
+                for r, cq in zip(have, c_q)
+            )
+            worst = float(
+                np.max([abs(cq) / vals[r]["s_q"] for r, cq in zip(have, c_q)])
+            )
+            verdict = "consistent" if worst <= 2.0 else "CONDITION-DEPENDENT"
+            print(f"  port {port}: centered q ({txt}) -> {verdict}")
+
+    # --- Guard / collapse test: ES ladder at fixed port -------------------
+    # Group moment runs by family; need >= 2 rungs for the centered test.
+    families = {}
+    for run in runs:
+        families.setdefault((run["family"], run["kind"]), []).append(run)
+    tested_any = False
+    fingerprint_points = []
+    for (family, kind), members in sorted(families.items()):
+        members = sorted(members, key=lambda r: r["rung"])
+        short = members[0]["short"]
+        # Collect (port -> per-rung plateau/afterglow values).
+        per_port = {}
+        for run in members:
+            aft = {pt["port"]: pt for pt in run["aft"] or []}
+            for pt in run["sweep"]:
+                a_pt = aft.get(pt["port"])
+                per_port.setdefault(pt["port"], []).append(
+                    (run["rung"], pt, a_pt)
+                )
+        # Fingerprint points: centered per (family, port) across rungs,
+        # licensed plateau points only.
+        for port, entries in per_port.items():
+            lic = [(r, pt) for r, pt, _ in entries if pt["licensed"]]
+            if len(lic) >= 2:
+                for key in ("ln_beta",):
+                    vals = _centered([pt[key] for _, pt in lic])
+                    for (rung, pt), v in zip(lic, vals):
+                        rec = {"c_ln_beta": v, "rung": rung, "port": port}
+                        for ckey in ("te_ref", "isat_ref", "n_ref"):
+                            rec["c_" + ckey] = np.log(pt[ckey]) - np.mean(
+                                [np.log(q[ckey]) for _, q in lic]
+                            )
+                        fingerprint_points.append(rec)
+        if kind == "kinetic":
+            continue
+        complete = {
+            port: entries
+            for port, entries in per_port.items()
+            if len(entries) >= 2 and all(a is not None for _, _, a in entries)
+        }
+        if not complete:
+            continue
+        tested_any = True
+        print(
+            f"\n--- guard / collapse (cross-rung form): {short} ladder at "
+            "fixed port (centered across rungs) ---"
+        )
+        print(
+            "  g = centered ln_a(plateau) - centered ln_r(afterglow): an\n"
+            "  area jump a_{p,r} must shift both identically, so g ~ 0\n"
+            "  within errors PASSES (sweep bias + area drift suffice);\n"
+            "  after the afterglow-pinned area correction g is ALSO the\n"
+            "  collapse residual perpendicular to the (1,-1/2) manifold --\n"
+            "  z/regime structure in g is the model-error component."
+        )
+        header = (
+            f"{'port':>5} {'rung':>4} {'c_ln_a':>7} {'c_ln_r':>7} "
+            f"{'g':>7} {'+/-':>5} {'g/sig':>6}  verdict"
+        )
+        print(header)
+        print("-" * len(header))
+        for port in sorted(complete):
+            entries = sorted(complete[port], key=lambda e: e[0])
+            c_a = _centered([pt["ln_a"] for _, pt, _ in entries])
+            c_r = _centered([a["ln_r"] for _, _, a in entries])
+            for (rung, pt, a_pt), ca, cr in zip(entries, c_a, c_r):
+                g = float(ca - cr)
+                s_g = float(np.hypot(pt["s_a"], a_pt["s_r"]))
+                nsig = abs(g) / s_g if s_g > 0 else np.inf
+                verdict = "PASS" if nsig <= 2.0 else "FAIL"
+                if not pt["licensed"]:
+                    verdict += " (unlicensed)"
+                print(
+                    f"{port:>5} {rung:>4} {ca:7.3f} {cr:7.3f} "
+                    f"{g:7.3f} {s_g:5.3f} {nsig:6.1f}  {verdict}"
+                )
+    if not tested_any:
+        print(
+            "\n--- guard / collapse: skipped (needs a moment-run family on "
+            ">= 2 ES rungs with afterglow coverage) ---"
+        )
+
+    # --- Beta fingerprints -------------------------------------------------
+    print("\n--- beta fingerprints (centered per family x port, licensed) ---")
+    fps = _beta_fingerprints(fingerprint_points)
+    if not fps:
+        print("  skipped: needs >= 3 licensed cross-rung points")
+    else:
+        for key, pathology, r, npts in fps:
+            print(
+                f"  corr(ln beta, ln {key:<8}) = {r:+5.2f}  (N={npts})"
+                f"  -> {pathology}"
+            )
+        # The ES ladder moves Te, n and Isat together; when the condition
+        # variables are themselves collinear the fingerprints cannot
+        # separate the pathologies -- say so rather than invite
+        # over-reading.
+        conds = np.asarray(
+            [
+                [p["c_te_ref"], p["c_isat_ref"], p["c_n_ref"]]
+                for p in fingerprint_points
+            ]
+        )
+        if conds.shape[0] >= 3:
+            cc = np.corrcoef(conds.T)
+            pair_min = float(
+                np.min(np.abs(cc[np.triu_indices_from(cc, k=1)]))
+            )
+            if pair_min > 0.8:
+                print(
+                    "  CAVEAT: the condition variables are mutually "
+                    f"collinear across the ladder (min |corr| {pair_min:.2f});"
+                    "\n  the fingerprints above do NOT discriminate the "
+                    "pathologies. Discrimination needs variation that\n"
+                    "  breaks the ladder degeneracy: varied fit-window "
+                    "re-fits of the raw sweeps (the pre-registered\n"
+                    "  corroboration path) or within-window time structure."
+                )
+        rungs = sorted({p["rung"] for p in fingerprint_points})
+        if len(rungs) >= 2:
+            means = [
+                (
+                    rung,
+                    float(
+                        np.mean(
+                            [
+                                p["c_ln_beta"]
+                                for p in fingerprint_points
+                                if p["rung"] == rung
+                            ]
+                        )
+                    ),
+                )
+                for rung in rungs
+            ]
+            txt = ", ".join(f"es{r}: {m:+.3f}" for r, m in means)
+            print(f"  per-rung mean centered ln beta ({txt}) -> day-to-day/"
+                  "surface if structured")
+
+
+def beta_collapse_main(specs, plateau_ms, afterglow_ms):
+    script_dir = Path(__file__).resolve().parent
+    if not specs:
+        specs = []
+        for family in BETA_CANONICAL_FAMILIES:
+            for rung in (1, 2, 3):
+                cand = script_dir / BETA_CANONICAL_PATTERN.format(
+                    family=family, rung=rung
+                )
+                if cand.exists():
+                    specs.append(str(cand))
+        if not specs:
+            print("beta-collapse: no canonical runs found in scripts/")
+            return 1
+    runs = []
+    svr_by_rung = {}
+    for spec in specs:
+        path, rung, kind = _parse_beta_run(spec)
+        if not path.exists():
+            print(f"beta-collapse: missing run {path}")
+            return 1
+        overlay = np.load(
+            OVERLAY.parent / f"es{rung}_sim1d_overlay.npz", allow_pickle=False
+        )
+        result = load_result_hdf5(path)
+        family = re.sub(r"_es\d+$", "", path.stem)
+        runs.append(
+            {
+                "path": path,
+                "family": family,
+                "short": family.rsplit("_", 1)[-1],
+                "rung": rung,
+                "kind": kind,
+                "sweep": _beta_sweep_points(result, overlay, plateau_ms),
+                # kinetic afterglow unscored (quasi-static kinetic neutrals)
+                "aft": (
+                    None
+                    if kind == "kinetic"
+                    else _beta_trace_points(
+                        result, overlay, afterglow_ms, "isat_decay"
+                    )
+                ),
+                # Raw inter-sweep Isat during the drive (schema v4, no
+                # area factor; None until the exporter lands, 7h brief).
+                # Coarse cell cadence, so a low sample floor.
+                "drive": _beta_trace_points(
+                    result, overlay, plateau_ms, "isat_drive", min_samples=3
+                ),
+            }
+        )
+        svr_by_rung.setdefault(
+            rung, _beta_sweep_vs_raw(overlay, plateau_ms)
+        )
+    print(
+        "beta-collapse reference runs: "
+        + ", ".join(
+            f"{r['short']} es{r['rung']} ({r['kind']})" for r in runs
+        )
+    )
+    print(
+        f"  plateau window {plateau_ms[0]:.1f}-{plateau_ms[1]:.1f} ms, "
+        f"afterglow window {afterglow_ms[0]:.1f}-{afterglow_ms[1]:.1f} ms"
+    )
+    _report_beta_collapse(runs, svr_by_rung)
+    return 0
+
+
 def _report_peak_current(peak):
     print("\n--- stage (i): discharge current ---")
     print(
@@ -537,7 +1307,42 @@ def main(argv=None):
             "campaign's operating point; this flag only selects the data."
         ),
     )
+    parser.add_argument(
+        "--beta-collapse",
+        nargs="*",
+        default=None,
+        metavar="RUN.h5[:es=N][:kind=kinetic|moment]",
+        help=(
+            "run the sweep-bias beta-collapse diagnostic over saved "
+            "reference runs (CATHODE_IDRIVEN_PLAN.md 5b + addenda) instead "
+            "of scoring a single run; rung/kind parse from the file name. "
+            "With no arguments, picks up the canonical "
+            "es1_nx120_m6_sq3400_{2zbase,2z,k4t}_es{1,2,3}.h5 set as "
+            "available. Kinetic runs are scored in the plateau only."
+        ),
+    )
+    parser.add_argument(
+        "--beta-plateau",
+        type=float,
+        nargs=2,
+        default=BETA_PLATEAU_MS,
+        metavar=("T0", "T1"),
+        help="beta-collapse plateau window on the main-discharge clock [ms]",
+    )
+    parser.add_argument(
+        "--beta-afterglow",
+        type=float,
+        nargs=2,
+        default=BETA_AFTERGLOW_MS,
+        metavar=("T0", "T1"),
+        help="beta-collapse afterglow window on the main-discharge clock [ms]",
+    )
     args = parser.parse_args(argv)
+
+    if args.beta_collapse is not None:
+        return beta_collapse_main(
+            args.beta_collapse, args.beta_plateau, args.beta_afterglow
+        )
 
     overlay_path = (
         OVERLAY
