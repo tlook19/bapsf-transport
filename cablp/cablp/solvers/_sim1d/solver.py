@@ -37,6 +37,11 @@ from .core.state import (
 )
 from .core.timestep import suggest_timestep
 from .physics.conduction import heat_conduction_rhs, implicit_heat_conduction_step
+from .physics.kinetic_neutrals import (
+    KN2ZoneJump,
+    KineticEngineFast,
+    _inflow as _kinetic_inflow,
+)
 from .physics.cathode import (
     beam_ionization_rhs,
     beam_ionization_rhs_terms,
@@ -93,7 +98,9 @@ from .physics.sources import (
     pressure_work_rhs,
 )
 from .results.compat import add_sim3_compat_aliases
-from cablp.vars._cons import I_Ry, I_ion, ev_to_erg, m_He_cgs, m_p_cgs
+from cablp.funcs._adas import he_rates
+from cablp.funcs._cross import charge_ex_react
+from cablp.vars._cons import I_Ry, I_ion, ev_to_erg, kb_cgs, m_He_cgs, m_p_cgs
 
 
 _CATHODE_RESULT_KEYS = (
@@ -528,6 +535,44 @@ class LAPDSim1D:
             self._zone_volumes = None
             self._zone_exchange_cm3_s = None
             self._zone_axial_coeffs = None
+        self._neutral_model = str(
+            self._input_dict.get("neutral_model", "moment")
+        )
+        if self._neutral_model not in ("moment", "kinetic"):
+            raise ValueError(
+                "neutral_model must be 'moment' or 'kinetic' "
+                f"(got {self._neutral_model!r})"
+            )
+        if self._neutral_model == "kinetic":
+            if not self._neutral_two_zone:
+                raise ValueError(
+                    "neutral_model='kinetic' rides on the two-zone state: "
+                    "set the neutral_two_zone flag"
+                )
+            # K4a bookkeeping (KINETIC_TWOZONE_PLAN.md): targets and
+            # per-cell relaxation times are produced by refresh-cadence
+            # kinetic solves at step ACCEPTANCE (never inside trial RHS
+            # evaluations); before the first refresh the moment terms
+            # carry the neutrals (the pre-breakdown fill stays moment).
+            self._kinetic = SimpleNamespace(
+                engine=None,
+                target_col=None,
+                target_ann=None,
+                tau_col=None,
+                tau_ann=None,
+                next_refresh_s=0.0,
+                refresh_s=float(
+                    self._input_dict.get("neutral_kinetic_refresh_s", 5e-4)
+                ),
+                nvz=int(self._input_dict.get("neutral_kinetic_nvz", 48)),
+                nvp=int(self._input_dict.get("neutral_kinetic_nvp", 12)),
+            )
+            if self._kinetic.refresh_s <= 0.0:
+                raise ValueError(
+                    "neutral_kinetic_refresh_s must be positive"
+                )
+        else:
+            self._kinetic = None
         self._neutral_momentum_radial = str(
             self._input_dict.get("neutral_momentum_radial", "uniform")
         )
@@ -821,8 +866,14 @@ class LAPDSim1D:
         if not self._flags.get("Plasma", True) or self._neutral_prebreakdown_active(
             time=time,
         ):
+            kinetic_terms = {}
+            if self._kinetic is not None:
+                kinetic_terms["neutral_kinetic_relaxation"] = (
+                    self.neutral_kinetic_relaxation_rhs(state)
+                )
             return {
                 **zone_terms,
+                **kinetic_terms,
                 "plasma_advective_flux": self._zero_rhs_state(),
                 "plasma_front_flux": self._zero_rhs_state(),
                 "boundary_absorption": self._zero_rhs_state(),
@@ -927,6 +978,20 @@ class LAPDSim1D:
         }
         if include_heat_conduction:
             terms["heat_conduction"] = self.heat_conduction_rhs(state=state)
+        if self._kinetic is not None:
+            # K4a supersession: once targets exist, every term's neutral
+            # rows are carried by the kinetic relaxation instead (plasma
+            # rows keep their exact forms). The relaxation key is present
+            # from the start (zeros before the first refresh) so the saved
+            # rhs_terms structure is stable across the run.
+            if self._kinetic.target_col is not None and state.nn_a is not None:
+                terms = {
+                    name: self._strip_neutral_rows(term)
+                    for name, term in terms.items()
+                }
+            terms["neutral_kinetic_relaxation"] = (
+                self.neutral_kinetic_relaxation_rhs(state)
+            )
         return terms
 
     def floor_state_vector(self, y):
@@ -1402,6 +1467,20 @@ class LAPDSim1D:
         # Electrode sample smoothing: fold the newly accepted state into the
         # supply-average EMA before any accepted-state consumer reads it.
         self._update_sample_smoothing(attempt.dt)
+        # K4a refresh (KINETIC_TWOZONE_PLAN.md): kinetic target solves run
+        # only at ACCEPTED states -- deterministic across step retries --
+        # and only once the plasma phase is live (the pre-breakdown fill
+        # stays moment).
+        if (
+            self._kinetic is not None
+            and self._flags.get("Plasma", True)
+            and not self._neutral_prebreakdown_active()
+            and (
+                self._kinetic.target_col is None
+                or self._time >= self._kinetic.next_refresh_s
+            )
+        ):
+            self._kinetic_refresh(self._time)
         # Retain the accepted solve current for the measured-tail phase gate.
         solve = self._cathode_solve
         if solve is not None and solve.beam_result is not None:
@@ -4181,6 +4260,164 @@ class LAPDSim1D:
             )
             for name in names
         }
+
+    def _kinetic_refresh(self, time):
+        """Run one refresh-cadence kinetic solve (K4a) at an ACCEPTED state.
+
+        Builds the engine background from the live fields, extracts the
+        source menu from the solver's own physics terms (the same rates the
+        superseded moment rows would have applied -- ledger-consistent by
+        construction), solves the compiled jump engine, and stores the
+        target profiles plus per-cell relaxation times.
+        """
+        state = self.state
+        derived = self.derived
+        geometry = self._geometry
+        kin = self._kinetic
+        n_safe = np.maximum(state.n, 1e6)
+        Te_safe = np.maximum(derived.Te, 0.2)
+        rates = he_rates(n_safe, Te_safe, ("scd",))
+        nu_ion = state.n * rates["scd"]
+        nu_cx = state.n * charge_ex_react(np.maximum(derived.Ti, 0.05), "He")
+        T_s = float(self._input_dict.get("T_s", 1910.0))
+        cd = getattr(self, "_cathode_solve", None)
+        anode_faces = np.asarray(
+            getattr(geometry, "anode_face_indices", ()), dtype=int
+        )
+        bg = {
+            "z_edges": np.concatenate(
+                ([0.0], np.cumsum(geometry.length_cm))
+            ),
+            "Rp": np.asarray(geometry.Rp_cm, dtype=float),
+            "Rm": np.asarray(geometry.Rm_cm, dtype=float),
+            "nu_ion": np.asarray(nu_ion, dtype=float),
+            "nu_cx": np.asarray(nu_cx, dtype=float),
+            "Ti": np.asarray(derived.Ti, dtype=float),
+            "u": np.asarray(derived.u, dtype=float),
+            "T_s": T_s,
+            "S_pump_L": float(self._input_dict.get("S_pump_L", 0.0)),
+            "S_pump_R": float(self._input_dict.get("S_pump_R", 0.0)),
+            "eta": float(self._input_dict.get("eta", 0.358)),
+            "mesh_edge": int(anode_faces[0]) if anode_faces.size else -999,
+            "sources": {},
+        }
+        jump = KN2ZoneJump(
+            bg, nvz=kin.nvz, nvp=kin.nvp, verbose=False, max_gen=600
+        )
+        if kin.engine is None:
+            kin.engine = KineticEngineFast(jump)
+        else:
+            # geometry is fixed for the run: reuse the compiled flight
+            # kernels, swap in the fresh rates/spectra
+            kin.engine.j = jump
+        g = jump.g
+        nz = jump.nz
+        V_col, V_ann = self._zone_volumes
+        # --- source menu from the solver's own terms (positive nn rows) ---
+        ba = self.boundary_absorption_rhs(state=state)
+        recycle = np.clip(ba.nn, 0.0, None) * V_col
+        cath_rate = float(recycle[0] + recycle[1])  # plenum-adjacent + cathode
+        coll_rate = float(recycle[-1])
+        reaction_terms = self.reaction_rhs_terms(state=state)
+        rec_cell = np.clip(
+            reaction_terms["recombination_rad_loss"].nn
+            + reaction_terms["recombination_3b_loss"].nn,
+            0.0,
+            None,
+        ) * V_col
+        an = self.anode_collection_rhs(state=state)
+        an_gain = np.clip(an.nn, 0.0, None) * V_col
+        if an.nn_a is not None:
+            an_gain = an_gain + np.clip(an.nn_a, 0.0, None) * V_ann
+        anode_left = float(an_gain[: bg["mesh_edge"]].sum()) if anode_faces.size else 0.0
+        anode_right = float(an_gain[bg["mesh_edge"]:].sum()) if anode_faces.size else 0.0
+        src_kwargs = self._neutral_source_kwargs(time=time)
+        puff_rate_cells = np.zeros(nz)
+        if src_kwargs["gas_puff_enabled"]:
+            puff_prof = gas_puff_rate_profile(
+                geometry,
+                src_kwargs["S_gp"],
+                src_kwargs["gas_puff_valves"],
+                profile=src_kwargs["gas_puff_profile"],
+                z_cm=src_kwargs["gas_puff_z_cm"],
+                sigma_cm=src_kwargs["gas_puff_sigma_cm"],
+                throw_cm=src_kwargs["gas_puff_throw_cm"],
+            )
+            puff_rate_cells = puff_prof * np.asarray(
+                geometry.neutral_volume_cm3, dtype=float
+            )
+        # --- engine inputs ---
+        Sc = np.zeros((nz, g.nvz, g.nvp))
+        for i in np.flatnonzero(rec_cell > 0):
+            Sc[i] += rec_cell[i] / jump.V_col[i] * jump.M_cx[i]
+        for rate, sign in ((anode_left, -1), (anode_right, +1)):
+            if rate <= 0 or not anode_faces.size:
+                continue
+            j = bg["mesh_edge"] - 1 if sign < 0 else bg["mesh_edge"]
+            j = min(max(j, 0), nz - 1)
+            Sc[j] += rate / jump.V_col[j] * g.half_flux_spectrum(300.0, sign)
+        Fc_in_L = _kinetic_inflow(
+            cath_rate, g.half_flux_spectrum(T_s, +1), jump.A_col[0], g
+        )
+        Fc_in_R = _kinetic_inflow(
+            coll_rate, g.half_flux_spectrum(300.0, -1), jump.A_col[-1], g
+        )
+        res = kin.engine.solve(Sc, Fc_in_L, Fc_in_R, puff_rate_cells)
+        kin.target_col = np.maximum(res["nn_col"], self._floors["nn"])
+        kin.target_ann = np.maximum(res["nn_ann"], self._floors["nn"])
+        # relaxation times: column at the local absorption+escape rate;
+        # annulus at the K0-honest inventory/throughput per cell
+        vbar = np.sqrt(
+            8.0 * kb_cgs * 300.0 / (np.pi * self._mu_neutral * m_p_cgs)
+        )
+        esc = vbar / (2.0 * np.maximum(bg["Rp"], 1e-6))
+        kin.tau_col = np.clip(
+            1.0 / np.maximum(nu_ion + nu_cx + esc, 1e-6), 1e-5, 0.1
+        )
+        inv_ann = kin.target_ann * np.maximum(V_ann, 1e-6)
+        arr = np.maximum(res["ann_arrival"], 1e-30)
+        kin.tau_ann = np.clip(inv_ann / arr, 1e-4, 0.05)
+        kin.next_refresh_s = float(time) + kin.refresh_s
+
+    @staticmethod
+    def _strip_neutral_rows(term):
+        """Return the term with its nn / nn_a rows zeroed (K4a supersession).
+
+        The plasma-side rows keep their exact forms -- the neutral rows are
+        carried by the kinetic relaxation instead. M_n rows pass through
+        (the wind stays a moment field in K4a).
+        """
+        zeros = np.zeros_like(np.asarray(term.nn, dtype=float))
+        return ConservativeState1D(
+            n=term.n,
+            nn=zeros,
+            M=term.M,
+            Ee=term.Ee,
+            Ei=term.Ei,
+            M_n=term.M_n,
+            nn_a=None if term.nn_a is None else zeros.copy(),
+        )
+
+    def neutral_kinetic_relaxation_rhs(self, state):
+        """Return the K4a relaxation term: (nn* - nn)/tau per zone."""
+        kin = self._kinetic
+        zeros = np.zeros(self._geometry.cells, dtype=float)
+        if kin is None or kin.target_col is None or state.nn_a is None:
+            return ConservativeState1D(
+                n=zeros,
+                nn=zeros.copy(),
+                M=zeros.copy(),
+                Ee=zeros.copy(),
+                Ei=zeros.copy(),
+            )
+        return ConservativeState1D(
+            n=zeros,
+            nn=(kin.target_col - state.nn) / kin.tau_col,
+            M=zeros.copy(),
+            Ee=zeros.copy(),
+            Ei=zeros.copy(),
+            nn_a=(kin.target_ann - state.nn_a) / kin.tau_ann,
+        )
 
     def _zero_rhs_state(self):
         zeros = np.zeros(self._geometry.cells, dtype=float)

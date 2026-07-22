@@ -5355,6 +5355,65 @@ def main():
         p2z_loaded = load_result_hdf5(p2z_path)
         assert np.allclose(p2z_loaded.nn_a, p2z_result.nn_a)
 
+    # --- K4a kinetic neutrals (KINETIC_TWOZONE_PLAN.md): the refresh-
+    # cadence relaxation architecture. The flag requires the two-zone
+    # state; targets appear at the first accepted plasma step; every
+    # superseded term's neutral rows are zeroed while its plasma rows
+    # keep their exact forms; the relaxation key is present from the
+    # start so the saved ledger structure is stable.
+    try:
+        LAPDSim1D(
+            dict(p2z_params, neutral_model="kinetic"),
+            dict(p2z_flags, neutral_two_zone=False),
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected kinetic-without-two-zone to fail")
+    k4_params = dict(p2z_params)
+    k4_params["neutral_model"] = "kinetic"
+    k4_params["neutral_kinetic_refresh_s"] = 2e-4
+    k4_params["neutral_kinetic_nvz"] = 24
+    k4_params["neutral_kinetic_nvp"] = 8
+    k4_flags = dict(p2z_flags)
+    k4_flags["neutral_prebreakdown"] = False
+    k4_flags["neutral_equilibration"] = False
+    k4_sim = LAPDSim1D(k4_params, k4_flags)
+    # pre-refresh: relaxation key exists and is all-zero (stable ledger)
+    k4_pre = k4_sim.rhs_terms()
+    assert "neutral_kinetic_relaxation" in k4_pre
+    assert np.all(k4_pre["neutral_kinetic_relaxation"].nn == 0.0)
+    for _ in range(3):
+        k4_sim.advance_one_step(dt=1.0e-9)
+    kin = k4_sim._kinetic
+    assert kin.target_col is not None and kin.target_ann is not None
+    assert np.all(np.isfinite(kin.target_col))
+    assert np.all(np.isfinite(kin.target_ann))
+    assert np.all(kin.tau_col > 0.0) and np.all(kin.tau_ann > 0.0)
+    k4_terms = k4_sim.rhs_terms()
+    k4_relax = k4_terms["neutral_kinetic_relaxation"]
+    assert np.all(np.isfinite(k4_relax.nn))
+    assert k4_relax.nn_a is not None and np.all(np.isfinite(k4_relax.nn_a))
+    assert np.any(k4_relax.nn != 0.0) or np.any(k4_relax.nn_a != 0.0)
+    for k4_name in (
+        "ionization_birth",
+        "neutral_exchange",
+        "neutral_zone_exchange",
+        "boundary_absorption",
+        "neutral_sources",
+    ):
+        k4_term = k4_terms[k4_name]
+        assert np.all(k4_term.nn == 0.0), k4_name
+        if k4_term.nn_a is not None:
+            assert np.all(k4_term.nn_a == 0.0), k4_name
+    # plasma rows keep their forms (ionization still births plasma)
+    assert np.any(k4_terms["ionization_birth"].n != 0.0)
+    k4_state = k4_sim.state
+    assert np.all(np.isfinite(k4_state.nn))
+    assert np.all(np.isfinite(k4_state.nn_a))
+    # flag-off ledgers carry no relaxation key
+    assert "neutral_kinetic_relaxation" not in p2z_sim.rhs_terms()
+
     # --- Neutral-wind advection (NEUTRAL_MOMENTUM_PLAN.md M3): donor-cell
     # upwind of nn and M_n by u_n on the neutral faces, closed ends for
     # particles, end-wall momentum accommodation, and a CFL guard.

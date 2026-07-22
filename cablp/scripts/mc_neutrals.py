@@ -103,11 +103,37 @@ def load_background(path, window_ms):
                 bg["nncol_model"] * Vp_sel + bg["nna_model"] * Va_sel
             ) / Vm_sel
         Vm_full = g["neutral_volume_cm3"][:]
+        Vp_full = g["plasma_volume_cm3"][:]
         ba = np.mean(f["rhs_terms/boundary_absorption/nn"][:][m], axis=0) * Vm_full
         an = np.mean(f["rhs_terms/anode_collection/nn"][:][m], axis=0) * Vm_full
         ns = np.mean(
             np.clip(f["rhs_terms/neutral_sources/nn"][:][m], 0.0, None), axis=0
         ) * Vm_full
+        if not np.any(ba) and "nn_a" in f:
+            # K4a kinetic run: the neutral ledger rows are superseded
+            # (zeroed) -- rebuild the source menu from the PLASMA-side
+            # rows, which keep their exact forms: the recycle source is
+            # the boundary plasma loss, the anode source its collection,
+            # and the puff comes from the configured waveform.
+            ba = -np.mean(
+                f["rhs_terms/boundary_absorption/n"][:][m], axis=0
+            ) * Vp_full
+            an = -np.mean(
+                f["rhs_terms/anode_collection/n"][:][m], axis=0
+            ) * Vp_full
+            params_k = __import__("json").loads(f.attrs["params_json"])
+            sccm = float(params_k.get("S_gp", 0.0))
+            valves = float(params_k.get("gas_puff_valves", 2))
+            ns = np.zeros_like(ba)
+            # square waveform at plateau: full flow into the puff cell
+            roles_full = [
+                r.decode() if isinstance(r, bytes) else str(r)
+                for r in g["cell_role"][:]
+            ]
+            puff_idx = (
+                roles_full.index("puff") if "puff" in roles_full else 0
+            )
+            ns[puff_idx] = 4.477962e17 * sccm * valves
         # Volume-recombination birth (n^2 * ACD via the run's own ledger --
         # identical to recomputing from the frozen fields, and closed by
         # construction): an nn gain everywhere the plasma recombines. The
@@ -116,10 +142,15 @@ def load_background(path, window_ms):
         rec = np.zeros(len(roles))
         for term in ("recombination_rad_loss", "recombination_3b_loss"):
             key = f"rhs_terms/{term}/nn"
-            if key in f:
+            if key in f and np.any(f[key][:][m]):
                 rec += np.mean(
                     np.clip(f[key][:][m], 0.0, None), axis=0
                 ) * Vm_full
+            elif f"rhs_terms/{term}/n" in f:
+                rec += np.mean(
+                    np.clip(-f[f"rhs_terms/{term}/n"][:][m], 0.0, None),
+                    axis=0,
+                ) * Vp_full
         cd = f["cathode_diagnostics"]
         phi_c = float(np.nanmean(cd["source_phi_c"][:][m]))
         T_s = float(np.mean(cd["T_s_surface"][:][m]))

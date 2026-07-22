@@ -570,6 +570,7 @@ class KineticEngineFast:
         g = j.g
         nz = j.nz
         tal_t = np.zeros(nz)
+        arr = np.zeros(nz)  # per-cell annulus launch turnover (tau source)
         F_tot_c = np.zeros((nz, g.nvz, g.nvp))
         wall_rate = wall_rate0.copy()
         inner = np.zeros((nz, g.nvz, g.nvp))
@@ -610,6 +611,7 @@ class KineticEngineFast:
                 (1.0 - j.s_R) * out_R, spec_R, j.A_col[-1], g
             )
             w = wall_rate
+            arr += w
             wall_rate = np.zeros(nz)
             il = inner
             inner = np.zeros_like(il)
@@ -676,6 +678,10 @@ class KineticEngineFast:
             "nn_col": F_tot_c.sum(axis=(1, 2)),
             "nn_ann": tal_t,
             "un_col": _drift_engine(F_tot_c, g),
+            # cumulative wall-launch turnover per cell [atoms/s summed over
+            # generations] -- at steady state the per-cell throughput, so
+            # tau_ann = inventory / arrival is the K0-honest buildup time
+            "ann_arrival": arr,
         }
 
 
