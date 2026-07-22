@@ -17,34 +17,6 @@ def neutral_thermal_speed(Tn_K, mu_neutral):
     return np.sqrt(8.0 * kb_cgs * Tn_K / (np.pi * mu_neutral * m_p_cgs))
 
 
-def molecular_flow_coefficients(
-    geometry,
-    Tn_K,
-    mu_neutral,
-    clausing_scale=1.0,
-):
-    """Return internal-face molecular-flow conductances [cm^3/s]."""
-    if clausing_scale < 0.0:
-        raise ValueError(f"clausing_scale must be non-negative (got {clausing_scale})")
-    v_th_n = neutral_thermal_speed(Tn_K=Tn_K, mu_neutral=mu_neutral)
-    L_eff = 0.5 * (geometry.length_cm[:-1] + geometry.length_cm[1:])
-    # Generalized Clausing (BOUNDARY_REGIONS_PLAN.md §4): the aperture area and
-    # the hydraulic radius are carried per face and may differ -- an annular
-    # obstruction reduces both, independently. On legacy geometry these reduce to
-    # today's pi*Rm^2 and 0.5*(Rm[:-1] + Rm[1:]).
-    R_face = geometry.neutral_face_hydraulic_radius_cm[1:-1]
-    if np.any(R_face <= 0.0):
-        raise ValueError("neutral hydraulic radii must be positive")
-    clausing = 1.0 / (1.0 + (3.0 / 8.0) * L_eff / R_face)
-    return (
-        float(clausing_scale)
-        * 0.25
-        * v_th_n
-        * geometry.neutral_face_area_cm2[1:-1]
-        * clausing
-    )
-
-
 def knudsen_flow_coefficients(
     geometry,
     Tn_K,
@@ -121,14 +93,7 @@ def neutral_exchange_coefficients(
     """Return internal-face neutral exchange coefficients [cm^3/s]."""
     if model == "constant":
         return _as_face_coefficients(constant_coeff_cm3_s, geometry)
-    if model == "molecular_flow":
-        coefficients = molecular_flow_coefficients(
-            geometry=geometry,
-            Tn_K=Tn_K,
-            mu_neutral=mu_neutral,
-            clausing_scale=clausing_scale,
-        )
-    elif model == "knudsen":
+    if model == "knudsen":
         coefficients = knudsen_flow_coefficients(
             geometry=geometry,
             Tn_K=Tn_K,
@@ -137,8 +102,10 @@ def neutral_exchange_coefficients(
         )
     else:
         raise ValueError(
-            "neutral_exchange_model must be 'constant', 'molecular_flow' or "
-            f"'knudsen' (got {model!r})"
+            "neutral_exchange_model must be 'constant' or 'knudsen' "
+            f"(got {model!r}); 'molecular_flow' was removed at "
+            "DEPRECATION_PLAN D2 and remains available at tag "
+            "legacy-final-2026-07-22"
         )
     # Escape hatch: a face whose conductance is known directly rather than
     # geometrically overrides the computed value (NaN => keep the computed one).

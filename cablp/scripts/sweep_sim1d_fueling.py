@@ -60,7 +60,7 @@ def run_point(scale: float, out_dir: Path, save_h5: bool = True) -> dict:
     try:
         overlay = np.load(cmp.OVERLAY, allow_pickle=False)
         result, geometry, params, flags = cmp.run_model(
-            resolved=True, nx=NX, extra=extra
+            nx=NX, extra=extra
         )
     except BreakdownError as error:
         metrics["status"] = f"no_breakdown (I_tot={error.I_tot:.4g} A)"

@@ -13,24 +13,13 @@ PLASMA_DEAD_ROLES = frozenset({"plenum", "obstruction"})
 class Sim1DGeometry:
     """Axial layout for conservative 1D state arrays.
 
-    Two modes populate the *same* fields (BOUNDARY_REGIONS_PLAN.md §13):
-
-    - **legacy** (default): the historical 0D-source, 1D-domain, 0D-end lump.
-    - **resolved** (``resolved_boundaries`` flag): the typed-segment machine of
-      §3 -- plenum / obstruction / cathode / anode / puff / column / collector.
-
-    Operators read the fields, never the mode, so "off" is legacy inputs flowing
-    through one code path rather than a parallel branch.
-
-    ``nx`` is the number of column/domain cells; ``cells`` is the true cell count
-    (``nx + 2`` in legacy, larger in resolved), so index-agnostic consumers keep
-    working in both modes.
+    The resolved typed-segment machine contains plenum / obstruction / cathode /
+    anode / puff / column / collector regions. ``nx`` is the number of column
+    cells and ``cells`` is the full typed-segment cell count.
 
     Neutral face quantities are *restricting* apertures (the minimum of the two
     adjacent cells), not arithmetic means: a conductance between a wide and a
-    narrow duct is set by the narrow one. This is bit-identical to the historical
-    mean whenever adjacent cells share a radius, which is every legacy config that
-    does not override ``source_Rm``/``end_Rm``.
+    narrow duct is set by the narrow one.
     """
 
     nx: int
@@ -56,9 +45,8 @@ class Sim1DGeometry:
     neutral_face_conductance_cm3_s: np.ndarray
     center_distance_cm: np.ndarray
     # Positions of the cathode and anode *surfaces* (plan §11 decision 5): face
-    # indices, empty in legacy geometry which has no resolved surfaces. The
-    # cathode faces are plasma walls at z = 0; the anode faces are interior and
-    # plasma-open, throttled for heat and neutrals in M3.
+    # indices. The cathode faces are plasma walls at z = 0; the anode faces are
+    # interior and plasma-open, throttled for heat and neutrals in M3.
     cathode_face_indices: np.ndarray
     anode_face_indices: np.ndarray
 
@@ -73,38 +61,56 @@ class Sim1DGeometry:
 
 
 def build_geometry(input_dict, flags=None):
-    """Build the axial geometry, dispatching on the ``resolved_boundaries`` flag.
+    """Build the resolved typed-segment machine geometry.
 
-    Off (default) => the legacy source/domain/end lump; on => the resolved
-    typed-segment machine. Geometry construction is the *only* place the flag is
-    read: everything downstream keys off the returned arrays (§13).
+    ``resolved_boundaries=False`` was removed at DEPRECATION_PLAN D2. Keep a
+    construction-time error for stale configurations so they cannot silently
+    change geometry; historical results remain reproducible at
+    ``legacy-final-2026-07-22``.
     """
-    resolved = bool((flags or {}).get("resolved_boundaries", False))
-    if resolved:
-        return _build_resolved_geometry(input_dict, flags or {})
-    return _build_legacy_geometry(input_dict)
+    removed_keys = {
+        "Lz",
+        "source_length_cm",
+        "end_length_cm",
+        "source_Rm",
+        "end_Rm",
+        "source_Rp",
+        "end_Rp",
+    }
+    stale = sorted(removed_keys.intersection(input_dict))
+    if stale:
+        raise ValueError(
+            "legacy geometry keys were removed at DEPRECATION_PLAN D2: "
+            + ", ".join(stale)
+            + "; reproduce that configuration at tag legacy-final-2026-07-22"
+        )
+    flags = flags or {}
+    if not bool(flags.get("resolved_boundaries", True)):
+        raise ValueError(
+            "resolved_boundaries=False was removed at DEPRECATION_PLAN D2; "
+            "use resolved typed-segment geometry or reproduce the historical "
+            "configuration at tag legacy-final-2026-07-22"
+        )
+    return _build_resolved_geometry(input_dict, flags)
 
 
 def puff_cell_indices(geometry):
     """Return ``(primary, twin)`` cell indices carrying the gas puff.
 
-    Resolved geometry tags column cells with the ``puff`` role; legacy anchors the
-    puff at the source cell (and the end cell for a twin cathode), so this returns
-    ``(0, cells-1)`` there -- one code path, legacy limit included (§13).
+    Resolved geometry tags column cells with the ``puff`` role.
     """
     puff = np.flatnonzero(np.asarray(geometry.cell_role) == "puff")
-    if puff.size:
-        return int(puff[0]), int(puff[-1])
-    return 0, geometry.cells - 1
+    if not puff.size:
+        raise ValueError("resolved geometry has no puff cells")
+    return int(puff[0]), int(puff[-1])
 
 
 def pump_cell_indices(geometry):
     """Return ``(left, right)`` cell indices carrying the pump sinks.
 
     The pump belongs on the plenum behind a cathode (§4); the non-cathode end
-    keeps its own pump on the collector. In every layout built here -- legacy,
-    resolved single-cathode, resolved twin -- those are the first and last cells,
-    but resolving by role keeps this correct if the layout changes.
+    keeps its own pump on the collector. Resolving by role keeps this correct if
+    the layout changes.
     """
     roles = np.asarray(geometry.cell_role)
     left = np.flatnonzero(roles == "plenum")
@@ -152,9 +158,7 @@ def gap_cell_indices(geometry, end=0):
 
     Ohmic dissipation is I^2 R_p with R_p the plasma resistance *between* the
     cathode and the anode, so the power is deposited along the gap rather than
-    piled into one boundary cell (§8). Legacy geometry has no resolved gap -- the
-    source lump is the whole cathode-anode region -- so this returns that single
-    cell and the historical deposition is unchanged.
+    piled into one boundary cell (§8).
 
     ``end`` selects the machine end: ``0`` for the source cathode, ``-1`` for the
     twin.
@@ -162,7 +166,7 @@ def gap_cell_indices(geometry, end=0):
     cathode_faces = np.asarray(geometry.cathode_face_indices, dtype=int)
     anode_faces = np.asarray(geometry.anode_face_indices, dtype=int)
     if cathode_faces.size == 0 or anode_faces.size == 0:
-        return (0 if end == 0 else geometry.cells - 1,)
+        raise ValueError("resolved geometry must define cathode and anode faces")
     which = 0 if end == 0 else -1
     cathode_face = int(cathode_faces[which])
     anode_face = int(anode_faces[which])
@@ -173,82 +177,6 @@ def gap_cell_indices(geometry, end=0):
 def is_plenum_cell(geometry, index):
     """Return True when ``index`` is a plenum (pump-behind-cathode) cell."""
     return str(np.asarray(geometry.cell_role)[index]) == "plenum"
-
-
-def _build_legacy_geometry(input_dict):
-    """Build the default hybrid 0D-source, 1D-domain, 0D-end geometry.
-
-    The numeric lines below are unchanged from the historical ``build_geometry``;
-    only the schema arrays are appended, at legacy defaults. Keep them verbatim so
-    the golden baseline stays bit-exact with the master switch off.
-    """
-    nx = int(input_dict.get("nx", 60))
-    if nx <= 0:
-        raise ValueError(f"nx must be positive (got {nx})")
-
-    source_length = float(input_dict.get("source_length_cm", 100.0))
-    end_length = float(input_dict.get("end_length_cm", 100.0))
-    total_length = float(input_dict.get("Lm", 2000.0))
-    resolved_length = float(
-        input_dict.get("Lz", total_length - source_length - end_length)
-    )
-
-    if source_length <= 0 or end_length <= 0 or resolved_length <= 0:
-        raise ValueError("source, resolved, and end lengths must all be positive")
-
-    tiled_length = source_length + resolved_length + end_length
-    if not np.isclose(tiled_length, total_length):
-        raise ValueError(
-            "source_length_cm + Lz + end_length_cm must equal Lm "
-            f"(got {tiled_length} cm vs {total_length} cm)"
-        )
-
-    dz = resolved_length / nx
-    length_cm = np.concatenate(([source_length], np.full(nx, dz), [end_length]))
-    z_edges_cm = np.concatenate(([0.0], np.cumsum(length_cm)))
-    z_cm = 0.5 * (z_edges_cm[:-1] + z_edges_cm[1:])
-
-    cell_role = np.empty(nx + 2, dtype=object)
-    cell_role[0] = "source"
-    cell_role[1:-1] = "domain"
-    cell_role[-1] = "end"
-
-    Rp = float(input_dict.get("Rp", 18.0))
-    Rm = float(input_dict.get("Rm", 50.0))
-    Rp_cm = np.full(nx + 2, Rp, dtype=float)
-    Rm_cm = np.full(nx + 2, Rm, dtype=float)
-    Rp_cm[0] = float(input_dict.get("source_Rp") or Rp)
-    Rp_cm[-1] = float(input_dict.get("end_Rp") or Rp)
-    Rm_cm[0] = float(input_dict.get("source_Rm") or Rm)
-    Rm_cm[-1] = float(input_dict.get("end_Rm") or Rm)
-
-    plasma_area_cm2 = np.pi * Rp_cm**2
-    neutral_area_cm2 = np.pi * Rm_cm**2
-    plasma_volume_cm3 = plasma_area_cm2 * length_cm
-    neutral_volume_cm3 = neutral_area_cm2 * length_cm
-    volume_ratio = plasma_volume_cm3 / neutral_volume_cm3
-
-    center_distance_cm = np.diff(z_cm)
-
-    # Legacy schema defaults: neutral hydraulic radius = Rm (one-radius model);
-    # plasma reflecting walls only at the two external ends.
-    neutral_hydraulic_radius_cm = Rm_cm.copy()
-    return _assemble_geometry(
-        nx=nx,
-        length_cm=length_cm,
-        z_edges_cm=z_edges_cm,
-        z_cm=z_cm,
-        cell_role=cell_role,
-        Rp_cm=Rp_cm,
-        Rm_cm=Rm_cm,
-        neutral_hydraulic_radius_cm=neutral_hydraulic_radius_cm,
-        plasma_area_cm2=plasma_area_cm2,
-        neutral_area_cm2=neutral_area_cm2,
-        plasma_volume_cm3=plasma_volume_cm3,
-        neutral_volume_cm3=neutral_volume_cm3,
-        volume_ratio=volume_ratio,
-        center_distance_cm=center_distance_cm,
-    )
 
 
 def _anode_neutral_transparency(input_dict):

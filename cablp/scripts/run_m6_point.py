@@ -86,7 +86,7 @@ def main(argv=None):
             extra[k] = v
 
     result, geometry, params, flags = run_model(
-        resolved=True, nx=args.nx, extra=extra,
+        nx=args.nx, extra=extra,
         flags_extra=flags_extra or None,
     )
     save_result_hdf5(args.save_h5, result, params=params, flags=flags)

@@ -31,7 +31,7 @@ def main(argv=None):
     p.add_argument("--nx", type=int, default=120)
     p.add_argument(
         "--warming",
-        choices=("none", "ion_bombardment", "power_balance"),
+        choices=("none", "power_balance"),
         default="power_balance",
     )
     p.add_argument("--phi-wf", type=float, default=None,
@@ -44,9 +44,6 @@ def main(argv=None):
                    help="skin-layer heat capacity [J/K] (honest >=120, "
                         "THESIS_NOTES §2 energy budget)")
     p.add_argument("--emissivity", type=float, default=0.7)
-    p.add_argument("--T-set", type=float, default=None,
-                   help="ion_bombardment asymptote T_s [K] (that arm only)")
-    p.add_argument("--warming-energy-J", type=float, default=300.0)
     p.add_argument("--annuli", type=int, default=None,
                    help="cathode_emission_annuli override (10 -> 30 A/B)")
     p.add_argument("--standby-offset-K", type=float, default=0.0,
@@ -127,14 +124,6 @@ def main(argv=None):
             "cathode_conduction_W_per_K": args.g_cond,
             "cathode_emissivity": args.emissivity,
         })
-    elif args.warming == "ion_bombardment":
-        if args.T_set is None:
-            raise SystemExit("--T-set is required for ion_bombardment")
-        extra.update({
-            "T_s": args.T_set,
-            "cathode_Ts_start_K": op["Ts_standby_K"],
-            "cathode_warming_energy_J": args.warming_energy_J,
-        })
     else:
         extra["T_s"] = op["Ts_standby_K"]
     if args.phi_wf is not None:
@@ -191,7 +180,7 @@ def main(argv=None):
         extra["cathode_sample_smoothing"] = "presheath"
 
     result, geometry, params, flags = run_model(
-        resolved=True, nx=args.nx, extra=extra, flags_extra=flags_extra or None
+        nx=args.nx, extra=extra, flags_extra=flags_extra or None
     )
     save_result_hdf5(args.save_h5, result, params=params, flags=flags)
     print(f"saved {args.save_h5}")

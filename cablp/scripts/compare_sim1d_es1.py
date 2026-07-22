@@ -26,7 +26,6 @@ Three comparison stages, in tuning order (each scored independently):
 Usage::
 
     python scripts/compare_sim1d_es1.py                      # resolved + knudsen
-    python scripts/compare_sim1d_es1.py --legacy             # legacy geometry
     python scripts/compare_sim1d_es1.py --nx 185
     python scripts/compare_sim1d_es1.py --save-h5 run.h5     # keep the run
     python scripts/compare_sim1d_es1.py --from-h5 run.h5     # re-score, no run
@@ -58,12 +57,6 @@ PARAM_OVERRIDES = {
     "R_comp": 5.72e-3,
     "L_parasitic_H": 6.6e-6,
     "C_bank_F": 8.9,
-    # Second-order circuit fold (now also the config default): the BE fold
-    # is dt-unconverged at production dt (peak +6%, plateau +1% under dt
-    # halving); trapezoidal recovers the dt->0 trace at identical cost.
-    # NB pre-2026-07-19 saved runs (incl. the sweep-4 drag A/B) used BE:
-    # their plateau sits ~1.8% low against runs made with this config.
-    "circuit_scheme": "trapezoidal",
     "T_s": 273.15 + 1725,
     "S_gp": 3000,
     "S_gp_decay_target": 2000,
@@ -112,7 +105,6 @@ def _main_discharge_origin(result):
 
 
 def run_model(
-    resolved=True,
     nx=None,
     exchange_model="knudsen",
     extra=None,
@@ -125,9 +117,7 @@ def run_model(
     flags.update(FLAG_OVERRIDES)
     if flags_extra:
         flags.update(flags_extra)
-    flags["resolved_boundaries"] = bool(resolved)
-    if resolved:
-        params["neutral_exchange_model"] = exchange_model
+    params["neutral_exchange_model"] = exchange_model
     if nx is not None:
         params["nx"] = nx
     # A/B instrument for THESIS_NOTES gate #2 (NEUTRAL_MOMENTUM_PLAN.md M4):
@@ -162,6 +152,41 @@ def run_model(
     return sim.get_results(), sim.geometry, params, flags
 
 
+# --- Measurement error model (adopted 2026-07-22, conservative per Tom:
+# "assume experimental errors can be on the large side").  Shot-to-shot SEM
+# measures precision only; the sweep systematics dominate:
+#   sigma_Te,sys = 0.25*Te + 0.20 eV   (fit-window, EEDF tail, sheath
+#       expansion, magnetization, fluctuation smearing, surface drift --
+#       added generously; Te < 1 eV is flagged SEMI-QUANTITATIVE, where the
+#       transition spans < 1 V and the budget approaches order unity)
+#   sigma_n,sys  = n * sqrt((0.5*sigma_Te/Te)^2 + 0.10^2)   (the c_s
+#       inversion propagates half the fractional Te error, anti-correlated;
+#       10 % interferometer calibration + transfer)
+# Deviations are reported against sigma_tot = sqrt(SEM^2 + sigma_sys^2).
+# NB the dominant biases push LP Te HIGH and hence inverted n LOW -- the
+# model-hot / model-underdense residuals are, if anything, understated.
+# The "Isat" rows compare in I_sat space (n*sqrt(Te), both sides), where
+# the sweep inversion cancels identically -- the systematics-robust
+# magnitude/shape observable (the stage-(iii) tau metric already lives
+# there by design).
+TE_SYS_FRAC = 0.25
+TE_SYS_FLOOR_EV = 0.20
+TE_SEMIQUANT_EV = 1.0
+N_CAL_FRAC = 0.10
+
+
+def _sigma_sys(field, exp_values):
+    exp_values = np.asarray(exp_values, dtype=float)
+    if field == "Te":
+        return TE_SYS_FRAC * np.abs(exp_values) + TE_SYS_FLOOR_EV
+    if field == "n":
+        # 0.5 * sigma_Te/Te with sigma_Te evaluated at the measured Te is
+        # applied by the caller (needs the Te trace); this is the
+        # calibration part only.
+        return N_CAL_FRAC * np.abs(exp_values)
+    return np.zeros_like(exp_values)
+
+
 def compare(result, geometry, overlay):
     """Return per-port deviation of model Te and density from the ES1 means."""
     z_probe = np.asarray(overlay["z_cm"], dtype=float)
@@ -170,28 +195,62 @@ def compare(result, geometry, overlay):
     t_model_ms = (np.asarray(result.time, dtype=float) - origin) * 1.0e3
     z_model = np.asarray(result.z_cm, dtype=float)
 
+    # Interpolate measured Te onto each field's own time base for the
+    # systematic-error propagation (n's sigma_sys needs Te) and the
+    # I_sat-space synthesis.
+    te_t = np.asarray(overlay["te_time_ms"], dtype=float)
+    te_mean_2d = np.asarray(overlay["te_mean_ev"], dtype=float)
+
     rows = []
     for field, t_key, mean_key, sem_key, unit in (
         ("Te", "te_time_ms", "te_mean_ev", "te_sem_ev", "eV"),
         ("n", "density_time_ms", "density_mean_cm3", "density_total_sem_cm3", "cm^-3"),
+        # I_sat space: n*sqrt(Te) on both sides -- the sweep inversion
+        # cancels identically on the measured side, so this row carries
+        # only SEM + the interferometer calibration.
+        ("Isat", "density_time_ms", "density_mean_cm3", "density_total_sem_cm3", "a.u."),
     ):
         t_exp = np.asarray(overlay[t_key], dtype=float)
         mean = np.asarray(overlay[mean_key], dtype=float)
         sem = np.asarray(overlay[sem_key], dtype=float)
-        model_2d = np.asarray(getattr(result, field), dtype=float)
+        if field == "Isat":
+            model_2d = np.asarray(result.n, dtype=float) * np.sqrt(
+                np.maximum(np.asarray(result.Te, dtype=float), 0.0)
+            )
+        else:
+            model_2d = np.asarray(getattr(result, field), dtype=float)
         # Only compare where the experiment has data and the model has run.
         window = (t_exp >= t_model_ms.min()) & (t_exp <= t_model_ms.max())
         for p, (z, port) in enumerate(zip(z_probe, ports)):
             iz = int(np.argmin(np.abs(z_model - z)))
             model_t = np.interp(t_exp[window], t_model_ms, model_2d[:, iz])
             exp_t = mean[p, window]
-            err = sem[p, window]
+            sem_t = sem[p, window]
+            te_exp_t = np.interp(t_exp[window], te_t, te_mean_2d[p])
+            te_safe = np.maximum(np.abs(te_exp_t), 1e-3)
+            if field == "Isat":
+                exp_t = exp_t * np.sqrt(te_safe)
+                # SEM propagated; systematics: calibration only (the
+                # c_s inversion cancels in n*sqrt(Te)).
+                sem_t = sem_t * np.sqrt(te_safe)
+                sys_t = N_CAL_FRAC * np.abs(exp_t)
+            elif field == "Te":
+                sys_t = _sigma_sys("Te", exp_t)
+            else:
+                sig_te = _sigma_sys("Te", te_exp_t)
+                sys_t = np.abs(exp_t) * np.sqrt(
+                    (0.5 * sig_te / te_safe) ** 2 + N_CAL_FRAC**2
+                )
+            err_tot = np.sqrt(sem_t**2 + sys_t**2)
             good = np.isfinite(exp_t) & np.isfinite(model_t) & (exp_t != 0.0)
             if not np.any(good):
                 continue
             ratio = float(np.mean(model_t[good] / exp_t[good]))
             rel = float(np.sqrt(np.mean(((model_t - exp_t)[good] / exp_t[good]) ** 2)))
-            sigma = float(np.mean(np.abs((model_t - exp_t)[good] / err[good])))
+            sigma = float(np.mean(np.abs((model_t - exp_t)[good] / err_tot[good])))
+            semiquant = field in ("Te", "n") and float(
+                np.mean(te_exp_t[good])
+            ) < TE_SEMIQUANT_EV
             rows.append(
                 {
                     "field": field,
@@ -203,6 +262,7 @@ def compare(result, geometry, overlay):
                     "ratio": ratio,
                     "rms_rel": rel,
                     "sigma": sigma,
+                    "semiquant": bool(semiquant),
                 }
             )
     return rows
@@ -345,24 +405,28 @@ def _report_decay(rows, window):
 
 def _report(label, rows):
     print("\n--- stage (ii): bulk Te / density at the ES1 ports ---")
+    print("  (sigma = |dev|/sigma_tot, SEM (+) sweep systematics; '~' marks")
+    print("   semi-quantitative rows where measured Te < 1 eV)")
     header = (
         f"{'field':>5} {'port':>6} {'z [cm]':>8} {'model':>11} {'measured':>11} "
-        f"{'ratio':>7} {'rms rel':>8} {'|dev|/SEM':>10}"
+        f"{'ratio':>7} {'rms rel':>8} {'|dev|/sig':>10}"
     )
     print(header)
     print("-" * len(header))
     for r in rows:
+        flag = "~" if r.get("semiquant") else " "
         print(
             f"{r['field']:>5} {r['port']:>6} {r['z']:8.0f} {r['model']:11.4g} "
-            f"{r['exp']:11.4g} {r['ratio']:7.2f} {r['rms_rel']:8.2f} {r['sigma']:10.1f}"
+            f"{r['exp']:11.4g} {r['ratio']:7.2f} {r['rms_rel']:8.2f} "
+            f"{r['sigma']:9.1f}{flag}"
         )
-    for field in ("Te", "n"):
+    for field in ("Te", "n", "Isat"):
         sub = [r for r in rows if r["field"] == field]
         if sub:
             print(
                 f"  {field}: mean ratio {np.mean([r['ratio'] for r in sub]):.2f}, "
                 f"mean rms rel {np.mean([r['rms_rel'] for r in sub]):.2f}, "
-                f"mean |dev|/SEM {np.mean([r['sigma'] for r in sub]):.1f}"
+                f"mean |dev|/sig {np.mean([r['sigma'] for r in sub]):.1f}"
             )
         if len(sub) >= 2:
             # Axial-gradient figure of merit: far-port / near-port ratio.
@@ -380,10 +444,9 @@ def _report(label, rows):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--legacy", action="store_true")
     parser.add_argument("--nx", type=int, default=None)
     parser.add_argument(
-        "--exchange-model", default="knudsen", choices=("knudsen", "molecular_flow")
+        "--exchange-model", default="knudsen", choices=("knudsen", "constant")
     )
     parser.add_argument(
         "--tau-afterglow",
@@ -462,18 +525,6 @@ def main(argv=None):
         ),
     )
     parser.add_argument(
-        "--solver-model",
-        default=None,
-        choices=("voltage_driven", "current_driven"),
-        help=(
-            "cathode solver formulation (CATHODE_IDRIVEN_PLAN.md): "
-            "voltage_driven (historical) or current_driven (well-posed at "
-            "the emission ceiling; requires the config's L_parasitic_H > 0). "
-            "The manifold excitation channel is only stable current-driven "
-            "(THESIS_NOTES item 11)"
-        ),
-    )
-    parser.add_argument(
         "--es",
         type=int,
         choices=(1, 2, 3),
@@ -499,19 +550,13 @@ def main(argv=None):
         geometry = None
         label = f"saved run {args.from_h5}"
     else:
-        label = (
-            "legacy"
-            if args.legacy
-            else f"resolved ({args.exchange_model}, nx={args.nx or 'default'})"
-        )
+        label = f"resolved ({args.exchange_model}, nx={args.nx or 'default'})"
         if args.drag_closure is not None:
             label += f" [drag={args.drag_closure}]"
         if args.Rp_model is not None:
             label += f" [Rp={args.Rp_model}]"
         if args.beam_excitation is not None:
             label += f" [beam_exc={args.beam_excitation}]"
-        if args.solver_model is not None:
-            label += f" [solver={args.solver_model}]"
         extra = {}
         if args.tau_afterglow is not None:
             extra["tau_afterglow"] = args.tau_afterglow
@@ -530,11 +575,8 @@ def main(argv=None):
             )
             if args.beam_deposition == "csda_ql":
                 extra["beam_anomalous_model"] = "quasilinear"
-        if args.solver_model is not None:
-            extra["cathode_solver_model"] = args.solver_model
         try:
             result, geometry, params, flags = run_model(
-                resolved=not args.legacy,
                 nx=args.nx,
                 exchange_model=args.exchange_model,
                 extra=extra,

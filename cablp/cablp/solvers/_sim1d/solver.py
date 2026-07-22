@@ -1,7 +1,6 @@
 """Solver implementation for the conservative axial 1D LAPD model."""
 
 import math
-import warnings
 from dataclasses import dataclass, replace
 from time import perf_counter
 from types import SimpleNamespace
@@ -92,7 +91,6 @@ from .physics.sources import (
     neutral_wind_two_zone_factors,
     neutral_wind_velocity,
     pressure_work_rhs,
-    surface_neutralization_rhs,
 )
 from .results.compat import add_sim3_compat_aliases
 from cablp.vars._cons import I_Ry, I_ion, ev_to_erg, m_He_cgs, m_p_cgs
@@ -475,8 +473,17 @@ class LAPDSim1D:
             self._I_ion,
         ) = self._gas_constants(self._gas_type)
         self._geometry = build_geometry(self._input_dict, self._flags)
+        exchange_model = str(
+            self._input_dict.get("neutral_exchange_model", "knudsen")
+        )
+        if exchange_model not in ("constant", "knudsen"):
+            raise ValueError(
+                "neutral_exchange_model='molecular_flow' was removed at "
+                "DEPRECATION_PLAN D2; use 'constant' or 'knudsen', or "
+                "reproduce it at tag legacy-final-2026-07-22 "
+                f"(got {exchange_model!r})"
+            )
         self._validate_phase_config()
-        self._warn_deprecated_modes()
         self._validate_gas_puff_config()
         self._neutral_momentum = bool(self._flags.get("neutral_momentum", False))
         if (
@@ -492,13 +499,13 @@ class LAPDSim1D:
         self._neutral_two_zone = bool(self._flags.get("neutral_two_zone", False))
         if self._neutral_two_zone:
             if (
-                str(self._input_dict.get("neutral_exchange_model", "molecular_flow"))
+                str(self._input_dict.get("neutral_exchange_model", "knudsen"))
                 != "knudsen"
             ):
                 raise ValueError(
                     "neutral_two_zone requires neutral_exchange_model="
                     "'knudsen': the per-zone conductances have no "
-                    "molecular_flow/constant counterpart"
+                    "constant counterpart"
                 )
             # Geometry and Tn are fixed for the run: the zone volumes, the
             # radial exchange conductance, and the per-zone axial Knudsen
@@ -591,16 +598,10 @@ class LAPDSim1D:
         self._cathode_x0 = None
         self._cathode_x0_twin = None
         self._cathode_beam_cross = np.zeros(self._geometry.cells)
-        # Inductive-circuit state (physics/cathode.inductive_circuit_config):
-        # last accepted step's loop current and dt.
+        # Last accepted sheath solve's current, used only by the measured-tail
+        # phase gate. The evolved loop state itself is _circuit_I_loop.
         self._circuit_I_prev = 0.0
-        self._circuit_dt_prev = None
         self._circuit_V_cap = None  # lazily V_bank; drains when C_bank_F set
-        # Trapezoidal circuit fold state: the previous accepted operating
-        # point's discharge voltage (solve V_b) and phase key. None / a phase
-        # change force a backward-Euler step (no old residual to average).
-        self._circuit_V_dis_prev = None
-        self._circuit_phase_key_prev = None
         # Fail at construction, not at the first cathode solve mid-run:
         # unknown model strings and the unsupported TwinCathode combination.
         validate_cathode_Rp_model(self._input_dict, self._flags)
@@ -608,12 +609,10 @@ class LAPDSim1D:
             self._input_dict, self._flags
         )
         # Current-driven circuit state: the loop current, integrated once
-        # per accepted step (plan §2c). Distinct from _circuit_I_prev,
-        # which is the voltage-driven fold's history term.
+        # per accepted step (plan §2c).
         self._circuit_I_loop = 0.0
         # Step-integrated discharge voltage (the inductor's view) from the
-        # last accepted circuit advance; 0.0 under voltage-driven / open
-        # circuit, for diagnostic key parity.
+        # last accepted circuit advance; 0.0 under open circuit.
         self._circuit_V_dis_step = 0.0
         # Running time integral of V_dis_step [V*s] over accepted circuit
         # steps. The per-step instantaneous value is dt-BIASED as a saved
@@ -627,28 +626,20 @@ class LAPDSim1D:
         self._circuit_V_dis_time_integral = 0.0
         self._circuit_V_dis_prev_save = None
         # Cathode warming state: the evolving emitter surface temperature [K]
-        # (config cathode_warming_model). None = static T_s (historical).
+        # (config cathode_warming_model). None = static T_s.
         warming_model = str(
             self._input_dict.get("cathode_warming_model", "none")
         )
-        if warming_model not in ("none", "ion_bombardment", "power_balance"):
+        if warming_model not in ("none", "power_balance"):
             raise ValueError(
-                "cathode_warming_model must be 'none', 'ion_bombardment', "
-                f"or 'power_balance' (got {warming_model!r})"
+                "cathode_warming_model='ion_bombardment' was removed at "
+                "DEPRECATION_PLAN D2; use 'none' or 'power_balance', or "
+                "reproduce it at tag legacy-final-2026-07-22 "
+                f"(got {warming_model!r})"
             )
         self._cathode_warming_model = warming_model
         self._cathode_Ts_K = None
-        if warming_model == "ion_bombardment":
-            Ts_start = self._input_dict.get("cathode_Ts_start_K")
-            if Ts_start is None:
-                raise ValueError(
-                    "cathode_warming_model='ion_bombardment' requires "
-                    "cathode_Ts_start_K (the heater-only surface temperature)"
-                )
-            if float(self._input_dict.get("cathode_warming_energy_J", 300.0)) <= 0.0:
-                raise ValueError("cathode_warming_energy_J must be positive")
-            self._cathode_Ts_K = float(Ts_start)
-        elif warming_model == "power_balance":
+        if warming_model == "power_balance":
             Ts_base = self._input_dict.get("cathode_Ts_base_K")
             if Ts_base is None:
                 raise ValueError(
@@ -908,7 +899,7 @@ class LAPDSim1D:
             ),
             "neutral_momentum_wall": self.neutral_momentum_wall_rhs(state=state),
             "neutral_wind_advection": self.neutral_wind_advection_rhs(state=state),
-            "surface_loss": self.surface_neutralization_rhs(state=state),
+            "surface_loss": self._zero_rhs_state(),
             "anode_collection": self.anode_collection_rhs(
                 state=state, cathode_solve=cathode_solve, time=time
             ),
@@ -1411,9 +1402,7 @@ class LAPDSim1D:
         # Electrode sample smoothing: fold the newly accepted state into the
         # supply-average EMA before any accepted-state consumer reads it.
         self._update_sample_smoothing(attempt.dt)
-        # Advance the inductive-circuit state from the accepted step's solve;
-        # with no solve (cathode unconfigured/disabled phases) the loop
-        # current is zero.
+        # Retain the accepted solve current for the measured-tail phase gate.
         solve = self._cathode_solve
         if solve is not None and solve.beam_result is not None:
             # Clamp the loop-current state to a generous physical ceiling
@@ -1429,23 +1418,8 @@ class LAPDSim1D:
                 max(float(solve.beam_result.result.I_tot), 0.0),
                 max(I_ceiling, 0.0),
             )
-            # Cache the accepted operating point's discharge voltage and the
-            # circuit phase in effect *during* the step (its start time) for
-            # the trapezoidal fold's old-time residual -- a step that crossed
-            # a phase boundary then mismatches the next step's key and the
-            # fold takes backward Euler across the discontinuity.
-            self._circuit_V_dis_prev = float(solve.beam_result.result.V_b)
-            accepted_phase = self._cathode_phase_options(
-                time=self._time - float(attempt.dt)
-            )
-            self._circuit_phase_key_prev = (
-                bool(accepted_phase.get("inductive_tail", False)),
-                bool(accepted_phase.get("floating", False)),
-            )
         else:
             self._circuit_I_prev = 0.0
-            self._circuit_V_dis_prev = None
-            self._circuit_phase_key_prev = None
         # Shared honest accepted-state solve for the surface updates
         # (power_balance warming and the coverage model): one re-solve at
         # the accepted state, the step's frozen I_loop, and the CURRENT
@@ -1456,7 +1430,6 @@ class LAPDSim1D:
         if (
             solve is not None
             and solve.beam_result is not None
-            and self._cathode_solver_model == "current_driven"
             and not bool(solve.metadata.get("floating", False))
             and (
                 self._cathode_warming_model == "power_balance"
@@ -1484,30 +1457,12 @@ class LAPDSim1D:
             and solve is not None
             and solve.beam_result is not None
         ):
-            if self._cathode_warming_model == "ion_bombardment":
-                # Close the gap toward the configured T_s at the rate set by
-                # the accepted solve's ion bombardment power
-                # (dT/dt = (T_set - T) * P_i / E_warm).
-                P_ion_W = max(
-                    float(solve.beam_result.result.P_cathode_i), 0.0
-                )
-                if P_ion_W > 0.0:
-                    T_set = float(self._input_dict["T_s"])
-                    E_warm = float(
-                        self._input_dict.get("cathode_warming_energy_J", 300.0)
-                    )
-                    rate = min(float(attempt.dt) * P_ion_W / E_warm, 1.0)
-                    self._cathode_Ts_K += (T_set - self._cathode_Ts_K) * rate
-            elif self._cathode_warming_model == "power_balance":
+            if self._cathode_warming_model == "power_balance":
                 result = solve.beam_result.result
                 # Floating phases: emitted electrons return to the surface,
                 # so net evaporative cooling vanishes with the net current.
                 floating = bool(solve.metadata.get("floating", False))
-                # Honest accepted-state inputs (current-driven only; see
-                # the shared honest_result above -- ion_bombardment keeps
-                # the historical cache read on purpose: its tuned energy
-                # scale absorbed the stale-solve inflation and its saved
-                # runs are citable evidence, CATHODE_IDRIVEN_PLAN.md §5b).
+                # Honest accepted-state inputs (see the shared result above).
                 if honest_result is not None:
                     result = honest_result
                 I_emis = 0.0 if floating else float(result.I_eth_star)
@@ -1634,85 +1589,62 @@ class LAPDSim1D:
             self._cathode_theta = (
                 self._cathode_theta + float(attempt.dt) * k_ads
             ) / (1.0 + float(attempt.dt) * (k_ads + loss))
-        self._circuit_dt_prev = float(attempt.dt)
         # Current-driven circuit: advance the loop current by one TR-BDF2
         # step against V_dis(I) evaluated at the accepted end-of-step state
         # (and post-warming T_s). Accepted steps only, exactly like the
         # other circuit state. The capacitor is advanced inside the same
-        # call (trapezoidal), so the voltage-driven drain block below is
-        # bypassed in this mode.
-        if self._cathode_solver_model == "current_driven":
-            step_phase = self._cathode_phase_options(
-                time=self._time - float(attempt.dt)
-            )
-            if not step_phase["solve_enabled"] or step_phase["floating"]:
-                # Open circuit: no loop, and the stored inductor energy is
-                # dropped (the same documented simplification as the
-                # voltage-driven bank disconnect).
-                self._circuit_I_loop = 0.0
-                self._circuit_V_dis_step = 0.0
+        # call (trapezoidal).
+        step_phase = self._cathode_phase_options(
+            time=self._time - float(attempt.dt)
+        )
+        if not step_phase["solve_enabled"] or step_phase["floating"]:
+            # Open circuit: no loop; the stored inductor energy is dropped.
+            self._circuit_I_loop = 0.0
+            self._circuit_V_dis_step = 0.0
+        else:
+            C_bank_id = self._input_dict.get("C_bank_F")
+            bank_off = bool(step_phase.get("inductive_tail", False))
+            if bank_off:
+                V_src = 0.0
+            elif C_bank_id is not None and float(C_bank_id) > 0.0:
+                if self._circuit_V_cap is None:
+                    self._circuit_V_cap = float(
+                        self._input_dict.get("V_bank", 0.0)
+                    )
+                V_src = float(self._circuit_V_cap)
             else:
-                C_bank_id = self._input_dict.get("C_bank_F")
-                bank_off = bool(step_phase.get("inductive_tail", False))
-                if bank_off:
-                    V_src = 0.0
-                elif C_bank_id is not None and float(C_bank_id) > 0.0:
-                    if self._circuit_V_cap is None:
-                        self._circuit_V_cap = float(
-                            self._input_dict.get("V_bank", 0.0)
-                        )
-                    V_src = float(self._circuit_V_cap)
-                else:
-                    V_src = float(self._input_dict.get("V_bank", 0.0))
-                vdis = idriven_vdis_evaluator(
-                    state=self.state,
-                    floors=self._floors,
-                    ion_mass_g=self._ion_mass_g,
-                    mu=self._mu,
-                    geometry=self._geometry,
-                    input_dict=self._input_dict,
-                    input_flags=self._effective_cathode_flags(
-                        active_only=False, floating=False
-                    ),
-                    beam_cross_prev=self._cathode_beam_cross,
-                    T_s_override_K=self._cathode_Ts_K,
-                    phi_wf_override_eV=self._cathode_phi_wf_eff(),
-                )
-                I_new, V_cap_new, V_dis_step = advance_circuit_current_driven(
-                    I_prev_A=self._circuit_I_loop,
-                    dt_s=float(attempt.dt),
-                    V_src_V=V_src,
-                    R_comp_ohm=float(self._input_dict.get("R_comp", 0.0)),
-                    L_H=float(self._input_dict.get("L_parasitic_H", 0.0)),
-                    vdis_of_I=vdis,
-                    C_bank_F=None if bank_off else C_bank_id,
-                    V_cap_prev_V=self._circuit_V_cap,
-                )
-                self._circuit_I_loop = I_new
-                self._circuit_V_dis_step = float(V_dis_step)
-                self._circuit_V_dis_time_integral += (
-                    float(attempt.dt) * float(V_dis_step)
-                )
-                if V_cap_new is not None:
-                    self._circuit_V_cap = V_cap_new
-        # Finite bank: drain the capacitor by the accepted step's charge while
-        # the transistors conduct (drive phases only -- the tail and floating
-        # phases have the bank branch open, and the float-charge supply is
-        # negligible within a shot).
-        C_bank = self._input_dict.get("C_bank_F")
-        if (
-            self._cathode_solver_model != "current_driven"
-            and C_bank is not None
-            and float(C_bank) > 0.0
-        ):
-            if self._circuit_V_cap is None:
-                self._circuit_V_cap = float(self._input_dict.get("V_bank", 0.0))
-            if self._cathode_phase_options()["cathode_enabled"]:
-                self._circuit_V_cap = max(
-                    self._circuit_V_cap
-                    - float(attempt.dt) * self._circuit_I_prev / float(C_bank),
-                    0.0,
-                )
+                V_src = float(self._input_dict.get("V_bank", 0.0))
+            vdis = idriven_vdis_evaluator(
+                state=self.state,
+                floors=self._floors,
+                ion_mass_g=self._ion_mass_g,
+                mu=self._mu,
+                geometry=self._geometry,
+                input_dict=self._input_dict,
+                input_flags=self._effective_cathode_flags(
+                    active_only=False, floating=False
+                ),
+                beam_cross_prev=self._cathode_beam_cross,
+                T_s_override_K=self._cathode_Ts_K,
+                phi_wf_override_eV=self._cathode_phi_wf_eff(),
+            )
+            I_new, V_cap_new, V_dis_step = advance_circuit_current_driven(
+                I_prev_A=self._circuit_I_loop,
+                dt_s=float(attempt.dt),
+                V_src_V=V_src,
+                R_comp_ohm=float(self._input_dict.get("R_comp", 0.0)),
+                L_H=float(self._input_dict.get("L_parasitic_H", 0.0)),
+                vdis_of_I=vdis,
+                C_bank_F=None if bank_off else C_bank_id,
+                V_cap_prev_V=self._circuit_V_cap,
+            )
+            self._circuit_I_loop = I_new
+            self._circuit_V_dis_step = float(V_dis_step)
+            self._circuit_V_dis_time_integral += float(attempt.dt) * float(
+                V_dis_step
+            )
+            if V_cap_new is not None:
+                self._circuit_V_cap = V_cap_new
         return self.get_initial_snapshot()
 
     def advance_one_step(self, dt=None, operator_split=None):
@@ -2290,7 +2222,6 @@ class LAPDSim1D:
                 if plasma_enabled and include_heat_conduction
                 else None
             ),
-            surface_loss_kwargs=self._surface_loss_kwargs() if plasma_enabled else None,
             ion_neutral_drag_kwargs=(
                 self._ion_neutral_drag_kwargs() if plasma_enabled else None
             ),
@@ -2494,19 +2425,6 @@ class LAPDSim1D:
             geometry=self._geometry,
             electron_scale=float(self._input_dict.get("b_pressure_work_elec", 1.0)),
             ion_scale=float(self._input_dict.get("b_pressure_work_ions", 1.0)),
-        )
-
-    def surface_neutralization_rhs(self, y=None, state=None):
-        """Return conservative source/end surface neutralization terms."""
-        if state is None:
-            state = self.state if y is None else self._unpack(y)
-        return surface_neutralization_rhs(
-            state=state,
-            floors=self._floors,
-            ion_mass_g=self._ion_mass_g,
-            mu=self._mu,
-            geometry=self._geometry,
-            **self._surface_loss_kwargs(),
         )
 
     def _jet_cathode_solve(self, cathode_solve, jet_enabled, time):
@@ -2862,30 +2780,6 @@ class LAPDSim1D:
             x0=self._cathode_x0,
             x0_twin=self._cathode_x0_twin,
             floating=floating,
-            circuit_I_prev_A=self._circuit_I_prev,
-            circuit_dt_s=self._circuit_dt_prev,
-            circuit_bank_off=cathode_phase.get("inductive_tail", False),
-            circuit_V_cap_prev=(
-                self._circuit_V_cap
-                if self._circuit_V_cap is not None
-                else float(self._input_dict.get("V_bank", 0.0))
-            ),
-            circuit_scheme=str(
-                self._input_dict.get("circuit_scheme", "backward_euler")
-            ),
-            # The trapezoidal fold averages across the step, so the old-time
-            # residual is only valid when the circuit topology did not change
-            # under it; on a phase change (drive <-> tail <-> floating) this
-            # passes None and the fold takes a backward-Euler step.
-            circuit_V_dis_prev=(
-                self._circuit_V_dis_prev
-                if self._circuit_phase_key_prev
-                == (
-                    bool(cathode_phase.get("inductive_tail", False)),
-                    bool(floating),
-                )
-                else None
-            ),
             T_s_override_K=self._cathode_Ts_K,
             phi_wf_override_eV=self._cathode_phi_wf_eff(),
             circuit_I_loop_A=self._circuit_I_loop,
@@ -2960,7 +2854,7 @@ class LAPDSim1D:
         """Return internal-face neutral exchange coefficients [cm^3/s]."""
         return neutral_exchange_coefficients(
             geometry=self._geometry,
-            model=self._input_dict.get("neutral_exchange_model", "molecular_flow"),
+            model=self._input_dict.get("neutral_exchange_model", "knudsen"),
             constant_coeff_cm3_s=float(
                 self._input_dict.get("neutral_exchange_coeff_cm3_s", 1.0e5)
             ),
@@ -4325,54 +4219,6 @@ class LAPDSim1D:
             # value inertly.
             nn_a=nn0.copy() if self._neutral_two_zone else None,
         )
-
-    def _warn_deprecated_modes(self):
-        """Warn on superseded legacy modes (DEPRECATION_PLAN.md D1).
-
-        These modes are runnable but no longer maintained-forward: every
-        logged result stays reproducible at the ``legacy-final-2026-07-22``
-        tag (+ env lockfiles). The warnings exist to smoke out consumers
-        before the D2 deletion; live A/B closure instruments are NOT
-        deprecated and never warn.
-        """
-        deprecated = []
-        if (
-            str(self._input_dict.get("cathode_solver_model", "voltage_driven"))
-            == "voltage_driven"
-            and bool(self._flags.get("cathode_coupling", False))
-        ):
-            deprecated.append(
-                "cathode_solver_model='voltage_driven' (superseded by "
-                "'current_driven'; ill-posed at the emission ceiling)"
-            )
-        if not bool(self._flags.get("resolved_boundaries", False)):
-            deprecated.append(
-                "resolved_boundaries=False legacy geometry (superseded by "
-                "resolved typed segments)"
-            )
-        if (
-            str(self._input_dict.get("neutral_exchange_model", "molecular_flow"))
-            == "molecular_flow"
-        ):
-            deprecated.append(
-                "neutral_exchange_model='molecular_flow' (superseded by "
-                "'knudsen'; mesh-inconsistent per its own docstring)"
-            )
-        if (
-            str(self._input_dict.get("cathode_warming_model", ""))
-            == "ion_bombardment"
-        ):
-            deprecated.append(
-                "cathode_warming_model='ion_bombardment' (superseded by "
-                "'power_balance')"
-            )
-        for message in deprecated:
-            warnings.warn(
-                f"{message}; reproduce legacy results at tag "
-                "legacy-final-2026-07-22 (DEPRECATION_PLAN.md)",
-                DeprecationWarning,
-                stacklevel=3,
-            )
 
     @staticmethod
     def _gas_constants(gas_type):

@@ -14,7 +14,6 @@ from ..physics.reactions import reaction_rhs
 from ..physics.sources import (
     ion_neutral_collision_frequency,
     neutral_wind_velocity,
-    surface_neutralization_rhs,
 )
 from .state import derive_state
 
@@ -62,7 +61,6 @@ def suggest_timestep(
     electron_cooling_kwargs=None,
     ion_charge_exchange_kwargs=None,
     heat_conduction_kwargs=None,
-    surface_loss_kwargs=None,
     ion_neutral_drag_kwargs=None,
     cfl=0.4,
     density_dt_fraction=0.25,
@@ -101,15 +99,10 @@ def suggest_timestep(
             include_front=include_front,
             alpha_front=alpha_front,
         ),
-        "surface_loss": surface_loss_timestep(
-            state=state,
-            floors=floors,
-            ion_mass_g=ion_mass_g,
-            mu=mu,
-            geometry=geometry,
-            surface_loss_kwargs=surface_loss_kwargs,
-            density_dt_fraction=density_dt_fraction,
-        ),
+        # Retain the diagnostic key for result-schema compatibility. The
+        # legacy volumetric endpoint loss was deleted with legacy geometry;
+        # resolved boundary absorption carries the live surface sink.
+        "surface_loss": np.inf,
         "neutral_exchange": neutral_exchange_timestep(
             state=state,
             geometry=geometry,
@@ -252,38 +245,6 @@ def front_density_timestep(
     )
     dn_front = rhs_with_front.n - rhs_without_front.n
     return _fractional_timestep(state.n, dn_front, density_dt_fraction, floors["n"])
-
-
-def surface_loss_timestep(
-    state,
-    floors,
-    ion_mass_g,
-    mu,
-    geometry,
-    surface_loss_kwargs=None,
-    density_dt_fraction=0.25,
-):
-    """Return a fractional timestep for surface neutralization losses."""
-    if surface_loss_kwargs is None:
-        return np.inf
-    if density_dt_fraction <= 0.0:
-        raise ValueError(
-            f"density_dt_fraction must be positive (got {density_dt_fraction})"
-        )
-    rhs = surface_neutralization_rhs(
-        state=state,
-        floors=floors,
-        ion_mass_g=ion_mass_g,
-        mu=mu,
-        geometry=geometry,
-        **surface_loss_kwargs,
-    )
-    return min(
-        _fractional_timestep(state.n, rhs.n, density_dt_fraction, floors["n"]),
-        _fractional_timestep(state.nn, rhs.nn, density_dt_fraction, 0.0),
-        _fractional_timestep(state.Ee, rhs.Ee, density_dt_fraction, 0.0),
-        _fractional_timestep(state.Ei, rhs.Ei, density_dt_fraction, 0.0),
-    )
 
 
 def ion_neutral_drag_timestep(

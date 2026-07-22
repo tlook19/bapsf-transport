@@ -35,33 +35,18 @@ def initial_condition_defaults():
 
 
 def geometry_defaults():
-    """Return defaults for the 1D axial source-domain-end geometry.
+    """Return defaults for the resolved 1D typed-segment geometry.
 
     Lm:
         Total machine length represented by the 1D mesh [cm].
-    Lz:
-        Resolved axial domain length between the source and end cells [cm].
-    source_length_cm:
-        Length of the lumped source/cathode boundary cell [cm].
-    end_length_cm:
-        Length of the lumped end/anode or collector boundary cell [cm].
     nx:
-        Number of resolved axial cells between source and end cells.
+        Number of resolved column cells between anode and collector.
     Rm:
         Default neutral/machine radius [cm].
     Rp:
         Default plasma radius [cm].
-    source_Rm, end_Rm:
-        Optional neutral/machine radii for source and end cells [cm]. ``None``
-        means use ``Rm``.
-    source_Rp, end_Rp:
-        Optional plasma radii for source and end cells [cm]. ``None`` means use
-        ``Rp``.
-
-    The keys below configure the *resolved* typed-segment geometry, selected by
-    the ``resolved_boundaries`` flag (BOUNDARY_REGIONS_PLAN.md §3). They are
-    inert while that flag is off. Each defaults to its legacy limit so a resolved
-    run with the obstruction/rod knobs at zero collapses toward the lump (§13).
+    The remaining keys configure the resolved typed-segment geometry
+    (BOUNDARY_REGIONS_PLAN.md §3). D2 removed the legacy lumped geometry.
 
     In resolved mode the cathode surface defines the origin: it sits at ``z = 0``
     and the anode at ``z = cathode_anode_gap_cm``, with the plenum (and any
@@ -92,17 +77,9 @@ def geometry_defaults():
     """
     return {
         "Lm": 2000.0,
-        "Lz": 1800.0,
-        "source_length_cm": 100.0,
-        "end_length_cm": 100.0,
         "nx": 60,
         "Rm": 50.0,
         "Rp": 18.0,
-        "source_Rm": None,
-        "end_Rm": None,
-        "source_Rp": None,
-        "end_Rp": None,
-        # Resolved typed-segment geometry (inert while resolved_boundaries off).
         "plenum_length_cm": 100.0,
         "cathode_anode_gap_cm": 50.0,
         "nx_gap": 5,
@@ -355,23 +332,13 @@ def model_mode_defaults():
     neutral_exchange_model:
         Axial neutral transport model. ``"constant"`` uses a fixed coefficient.
 
-        ``"molecular_flow"`` (default, historical) applies the Clausing duct
-        formula to every face. Note this is **not a consistent discretization of
-        diffusion**: the implied axial diffusivity is ``0.25*v_th*P(dz)*dz``,
-        which goes to zero as the mesh is refined, and only approaches the
-        physical free-molecular value when ``dz >> Rm``. With ``Rm = 50`` cm that
-        needs cells much longer than 50 cm, so refining a run makes neutral
-        transport progressively too slow. Kept as the default so existing results
-        are reproducible.
-
-        ``"knudsen"`` treats cell-to-cell exchange as Fickian transport with the
+        ``"knudsen"`` (default) treats cell-to-cell exchange as Fickian transport with the
         Knudsen diffusivity ``D = (2/3)*v_th*R``, i.e. ``C = D*A/dz``. This is
         mesh-independent and reproduces the textbook long-tube conductance
         ``(2*pi/3)*v_th*R^3/L`` exactly. Thin apertures (the anode mesh) keep an
         orifice conductance in series. Prefer this for resolved runs, where the
         puff-to-pump back-path is the physics of interest and the historical model
         under-predicts it by 2-14x depending on cell size.
-        ``"molecular_flow"``.
     operator_splitting:
         How the operator-split path composes the explicit non-heat operator A
         with the implicit heat operator B. ``"lie"`` does ``A(dt)`` then
@@ -404,7 +371,7 @@ def model_mode_defaults():
         "cathode_model": "disabled",
         "Te_birth_ionization": "local",
         "Ti_birth_ionization": "floor",
-        "neutral_exchange_model": "molecular_flow",
+        "neutral_exchange_model": "knudsen",
         "operator_splitting": "lie",
         "implicit_heat_scheme": "backward_euler",
     }
@@ -639,56 +606,16 @@ def cathode_defaults():
         recovery, transistor V_CE drift a candidate) is unresolved; the
         fitted value is the Thevenin equivalent the plasma actually sees.
     L_parasitic_H:
-        Parasitic series inductance in the discharge circuit [H], in series
-        with ``R_comp``. Discretized backward-Euler per step, which folds
-        into the existing algebraic circuit solve as effective parameters
-        ``V_eff = V_bank + (L/dt)*I_prev`` and ``R_eff = R_comp + L/dt`` --
-        unconditionally stable, no new solver structure. ``0`` (default)
-        disables the term bit-exactly. Physics: limits the discharge-current
-        rise on the ``L/R_loop`` timescale (loop resistance ~0.02-0.06 Ohm,
-        so a 5-15 ms rise implies L ~ 100-500 uH -- bank + busbar + cable
-        inductance). Known simplifications: the BE term uses the previous
-        accepted step's dt; the stored inductor energy is dropped when the
-        phase machinery disconnects the cathode (real banks crowbar); a twin
-        cathode shares the primary loop's effective circuit.
-    circuit_scheme:
-        Time discretization of the L/C circuit fold. ``"trapezoidal"``
-        (default, 2026-07-19) is the Crank-Nicolson fold -- second order,
-        still one sheath solve per call, using the previous accepted
-        operating point's discharge voltage as the old-time residual; phase
-        transitions (drive/tail/floating) automatically take a
-        backward-Euler step across the discontinuity. Measured motivation:
-        the first-order ``"backward_euler"`` fold (the historical choice,
-        kept for reference) leaves the current trace dt-unconverged at
-        production dt -- halving dt moves the ES1 peak +6% and the plateau
-        +1% (~1 K of hidden T_s bias) -- while the trapezoidal fold lands
-        within ~9 A of the Richardson dt->0 plateau at identical cost. At
-        production dt the circuit mode is deeply resolved (dt << L/R), so
-        CN's weak stiff-mode damping is not a concern here. Inert when both
-        ``L_parasitic_H = 0`` and ``C_bank_F = None`` -- in particular the
-        legacy/golden configuration never sees it.
+        Parasitic series inductance in the current-driven discharge circuit
+        [H], in series with ``R_comp``. The loop current is advanced once per
+        accepted step by TR-BDF2. It must be positive when cathode coupling is
+        enabled; the default is the ES1 measured-fit value 8.1 uH.
     cathode_warming_model:
         Slow evolution of the emitter surface temperature within a shot.
-        ``"none"`` (default, historical) holds ``T_s`` constant, so the
+        ``"none"`` (default) holds ``T_s`` constant, so the
         emission ceiling -- and with it the discharge current -- saturates
         on the circuit timescale (~1-2 ms), where the measured current rises
-        for ~15-20 ms. ``"ion_bombardment"`` evolves the surface as
-
-            dT_s/dt = (T_s - T_surf) * P_cathode_i / cathode_warming_energy_J
-
-        starting from ``cathode_Ts_start_K``: the warming rate is set by the
-        ion bombardment power actually landing on the cathode (the solve's
-        ``P_cathode_i``) and by the remaining gap, so the surface asymptotes
-        to the configured ``T_s`` exactly -- ``T_s`` keeps its meaning as
-        the peak-current calibration. This is the bootstrap loop: warmer
-        surface -> more emission -> more current -> more bombardment ->
-        faster warming, i.e. a slow sigmoidal current ramp. Phenomenological:
-        the linear-in-gap form stands in for thermal mass + radiative/heater
-        balance; both new parameters are hand-tuned. Updates on accepted
-        steps only; the uniform and annular emission profiles both see the
-        warmed value (the annular profile re-anchors its peak).
-
-        ``"power_balance"`` (CATHODE_IDRIVEN_PLAN.md M1b) replaces the
+        for ~15-20 ms. ``"power_balance"`` (CATHODE_IDRIVEN_PLAN.md M1b) uses
         imposed asymptote with the surface energy balance
 
             C_th dT_s/dt = P_heater + P_cathode_i
@@ -723,8 +650,7 @@ def cathode_defaults():
         (sqrt(alpha*t) ~ 0.3-0.5 mm of LaB6, a few J/K), not the disc's
         bulk heat capacity (~hundreds of J/K) -- it shapes only the ramp
         timescale and stays hand-tuned; the steady state is independent of
-        it. Default 3.0 (the effective scale the tuned "ion_bombardment"
-        demo implied: 300 J over a ~110 K gap).
+        it. Default 3.0.
     cathode_emissivity:
         Total hemispherical emissivity of the emitting surface for the
         radiation term (LaB6 ~0.7).
@@ -751,16 +677,6 @@ def cathode_defaults():
         ~20 ms transient is lower and hand-tuned. ~2000 sets the
         observed ~110 K plateau rise at the measured bombardment power;
         the plateau *current* then follows from the balance.
-    cathode_Ts_start_K:
-        Initial (heater-only) emitter surface temperature [K] for
-        ``cathode_warming_model = "ion_bombardment"``. Required when that
-        model is on. NB emission is exponential in T_s (~1%/K on current),
-        so a few tens of K of warming spans the observed current rise.
-    cathode_warming_energy_J:
-        Ion-bombardment energy scale [J] closing the temperature gap: the
-        remaining gap decays with time constant
-        ``cathode_warming_energy_J / P_cathode_i``. At P_cathode_i ~ 50 kW,
-        300 J gives ~6 ms.
     cathode_emission_profile:
         Radial structure of the thermionic emitter. ``"uniform"`` (default,
         historical) is a single-temperature disc, whose emission ceiling is a
@@ -781,20 +697,15 @@ def cathode_defaults():
     cathode_emission_annuli:
         Number of annuli discretizing the profile.
     cathode_solver_model:
-        Which cathode/circuit formulation drives the discharge
-        (CATHODE_IDRIVEN_PLAN.md). ``"voltage_driven"`` (default,
-        historical) solves the loop equation for the sheath given the
-        (inductively folded) bank voltage — ill-conditioned near the
-        emission ceiling, where the device curve is near-vertical.
-        ``"current_driven"`` carries the loop current ``I_loop`` (and the
+        The live ``"current_driven"`` formulation carries the loop current
+        ``I_loop`` (and the
         bank voltage when ``C_bank_F`` is set) as explicit solver state,
         advanced once per *accepted* step by a TR-BDF2 step of
         ``dI/dt = (V_src − I·R_comp − V_dis(I))/L``; each stage is a
         bracketed scalar root-find over the monotone current-driven sheath
         solve (`solve_idriven`), which is well-posed at the ceiling.
         Within a step every RHS call sees the frozen ``I_loop``. Requires
-        ``L_parasitic_H > 0`` (with no inductor the current is algebraic
-        and the voltage-driven solver is the right tool) and a single
+        ``L_parasitic_H > 0`` and a single
         cathode (``TwinCathode`` raises). Floating phases route to the
         historical open-circuit solve. The trapezoidal circuit fold and
         its guards are inert in this mode.
@@ -816,12 +727,11 @@ def cathode_defaults():
         ``"resolved_gap"`` integrates ``R_p = sum_k dz_k / (sigma_par(Te_k)
         * A_k)`` over the resolved cathode-anode gap cells with each cell's
         own Te and plasma-channel area -- the same per-cell weighting the
-        ohmic deposition already uses. Fed to the *unmodified* voltage-driven
-        solver through an effective ``DeviceConfig.R_cath`` chosen so the
+        ohmic deposition already uses. Fed to the sheath evaluator through an
+        effective ``DeviceConfig.R_cath`` chosen so the
         solver's internal formula reproduces the integrated value exactly
-        (``R_cath`` is used nowhere else in the solve). Requires resolved
-        geometry (legacy falls back to ``"sample"`` with a warning) and a
-        single cathode (``TwinCathode`` raises: one shared DeviceConfig
+        (``R_cath`` is used nowhere else in the solve). Requires a single
+        cathode (``TwinCathode`` raises: one shared DeviceConfig
         cannot carry two gaps sampled at different Te). NB with ``Rp !=
         R_cath`` the two models differ even for a uniform gap -- conduction
         through the plasma channel, not the cathode disc.
@@ -850,11 +760,8 @@ def cathode_defaults():
         radiated energy per event computed at the beam energy —
         the measured replacement for the 1.4 estimate
         (BEAM_DEPOSITION_PLAN WP-A: manifold/2^1P = 1.65-1.75 in events,
-        1.71-1.81 in radiated power, over 60-180 eV). Both cathode
-        formulations consume the same channel
-        (``beam_excitation_channel``); NB the voltage-driven ES1 config is
-        unstable above ~1.5x-equivalent excitation power (THESIS_NOTES
-        item 11) — manifold runs belong on the current-driven solver.
+        1.71-1.81 in radiated power, over 60-180 eV). The current-driven
+        sheath consumes the channel through ``beam_excitation_channel``.
     beam_excitation_energy_eV:
         Threshold and radiated energy per beam excitation event [eV]
         (the 2^1P excitation energy). Used by ``"2p_scalar"`` only; under
@@ -900,9 +807,8 @@ def cathode_defaults():
         "phi_wf": 3.0,
         "C_R": 29.0,
         "R_comp": 0.010,
-        "L_parasitic_H": 0.0,
+        "L_parasitic_H": 8.1e-6,
         "C_bank_F": None,
-        "circuit_scheme": "trapezoidal",
         "eta": 0.358,
         "anode_radius_cm": None,
         "L_cath": 50.0,
@@ -914,8 +820,6 @@ def cathode_defaults():
         "beam_coulomb_model": "fast_electron",
         "beam_anomalous_model": "none",
         "cathode_warming_model": "none",
-        "cathode_Ts_start_K": None,
-        "cathode_warming_energy_J": 300.0,
         "cathode_Ts_base_K": None,
         "cathode_heat_capacity_J_per_K": 3.0,
         "cathode_emissivity": 0.7,
@@ -926,7 +830,7 @@ def cathode_defaults():
         "cathode_Ts_fwhm_cm": 28.0,
         "cathode_emission_annuli": 10,
         "cathode_Rp_model": "sample",
-        "cathode_solver_model": "voltage_driven",
+        "cathode_solver_model": "current_driven",
         "cathode_phi_c_cap_V": 1000.0,
         # Surface-state coverage model (CATHODE_IDRIVEN_PLAN.md M5a):
         # "ads_des" evolves contaminant coverage theta with
@@ -1119,10 +1023,8 @@ input_dict_template_1d = build_input_dict_template_1d()
 input_flags_template_1d = {
     "Plasma": True,
     "TwinCathode": False,
-    # Master switch for the resolved source/end boundary redesign
-    # (BOUNDARY_REGIONS_PLAN.md §13). Off => the legacy source/domain/end lump,
-    # reproducing today's behavior bit-for-bit. On => the typed-segment machine.
-    "resolved_boundaries": False,
+    # Retained as a stale-config guard through D2; False raises at construction.
+    "resolved_boundaries": True,
     "heat_conduction": True,
     "implicit_heat_conduction": True,
     "front_flux": True,
@@ -1135,7 +1037,7 @@ input_flags_template_1d = {
     # neutral wind instead of a closure, ionization/recombination exchange
     # momentum between species, and the wall/pump remove it. Mutually
     # exclusive with ion_neutral_drag_model="slip", whose closure is this
-    # equation's own local steady state. Off => historical 5-field state.
+    # equation's own local steady state. Off => the production 5-field state.
     "neutral_momentum": False,
     # Split the neutral density into plasma-column and annulus zones
     # (NEUTRAL_TWOZONE_PLAN.md): an optional conservative field nn_a
@@ -1144,7 +1046,7 @@ input_flags_template_1d = {
     # zones exchange free-molecularly at the column surface, and the
     # plasma only ever absorbs column gas. Requires
     # neutral_exchange_model="knudsen" (the per-zone conductances have no
-    # molecular_flow/constant counterpart). Off => historical single-field
+    # constant counterpart). Off => single-field
     # chamber-mean nn.
     "neutral_two_zone": False,
     "ion_neutral_thermalization": False,
@@ -1152,14 +1054,12 @@ input_flags_template_1d = {
     # Schottky barrier lowering in the *current-driven* sheath solve only
     # (CATHODE_IDRIVEN_PLAN.md §2b): the extracting sheath field lowers the
     # effective work function, tilting the emission ceiling into a sloped
-    # line. Ignored by the voltage-driven solver (which is frozen). Any
-    # phi_wf fit must state this flag's value (plan §3b).
+    # line. Any phi_wf fit must state this flag's value (plan §3b).
     # Default ON since 2026-07-20 (Tom): the knee probes measured it
     # collapsing the per-solve V_b two-state chatter to a steady band at
     # the measured scale (p5/p50/p95 = 112/134/152 V vs measured ~151 V)
     # while restoring the current the gaussian edge-cooling costs
-    # (`es1_nx120_knee_gauss_schottky.h5`). Inert for the golden baseline
-    # (voltage-driven ignores it).
+    # (`es1_nx120_knee_gauss_schottky.h5`).
     "cathode_schottky": True,
     # kT_s-width thermal bridge across the SCL<->classical emission-release
     # corner, *current-driven* sheath solve only (CATHODE_IDRIVEN_PLAN.md,

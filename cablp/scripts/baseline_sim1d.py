@@ -1,11 +1,8 @@
 """Golden baseline capture/verify for the 1D source-boundary redesign.
 
-This is the reversibility guarantee from ``BOUNDARY_REGIONS_PLAN.md`` §13: a
-committed reference trajectory produced by *today's* solver, plus a checker that
-re-runs the solver and asserts it still reproduces that trajectory to tight
-tolerance. Every milestone from M1 on must keep ``--verify`` green, and the
-``resolved_boundaries`` master switch (default off) plus the degenerate
-legacy-limit resolved config must both reproduce it.
+This is the production reversibility guarantee: a committed reference trajectory
+plus a checker that re-runs the solver and asserts bit-exact reproduction. Every
+change under ``_sim1d`` must keep ``--verify`` green without recapture.
 
 The baseline config is the PRODUCTION configuration (DEPRECATION_PLAN.md
 D1, 2026-07-22): current-driven cathode + resolved boundaries + ADAS rates +
@@ -103,9 +100,8 @@ BASELINE_RUN_KWARGS = {
 def build_baseline_config(param_overrides=None, flag_overrides=None):
     """Return ``(params, flags)`` for the baseline, with optional extra overrides.
 
-    ``param_overrides`` / ``flag_overrides`` layer on top of the baseline (used
-    from M1 on to build the degenerate legacy-limit *resolved* config that must
-    also reproduce the golden trajectory).
+    ``param_overrides`` / ``flag_overrides`` layer on top of the baseline for an
+    explicitly requested production variant.
     """
     params, flags = default_config()
     params.update(BASELINE_PARAM_OVERRIDES)
