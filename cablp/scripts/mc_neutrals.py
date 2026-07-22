@@ -89,12 +89,37 @@ def load_background(path, window_ms):
         }
         if "u_n" in f:
             bg["un_model"] = np.mean(f["u_n"][:][m], axis=0)[sel]
+        if "nn_a" in f:
+            # Two-zone run (NEUTRAL_TWOZONE_PLAN.md): the nn dataset is the
+            # COLUMN density and nn_a the annulus -- exactly the TPMC's
+            # per-zone tallies. nn_model is rebuilt as the chamber mean for
+            # the headline table; the per-zone comparison prints separately.
+            bg["nna_model"] = np.mean(f["nn_a"][:][m], axis=0)[sel]
+            bg["nncol_model"] = bg["nn_model"]
+            Vp_sel = g["plasma_volume_cm3"][:][sel]
+            Vm_sel = g["neutral_volume_cm3"][:][sel]
+            Va_sel = np.maximum(Vm_sel - Vp_sel, 0.0)
+            bg["nn_model"] = (
+                bg["nncol_model"] * Vp_sel + bg["nna_model"] * Va_sel
+            ) / Vm_sel
         Vm_full = g["neutral_volume_cm3"][:]
         ba = np.mean(f["rhs_terms/boundary_absorption/nn"][:][m], axis=0) * Vm_full
         an = np.mean(f["rhs_terms/anode_collection/nn"][:][m], axis=0) * Vm_full
         ns = np.mean(
             np.clip(f["rhs_terms/neutral_sources/nn"][:][m], 0.0, None), axis=0
         ) * Vm_full
+        # Volume-recombination birth (n^2 * ACD via the run's own ledger --
+        # identical to recomputing from the frozen fields, and closed by
+        # construction): an nn gain everywhere the plasma recombines. The
+        # plenum cell's share falls outside the TPMC domain (no plenum
+        # volume; documented simplification) and is dropped from the menu.
+        rec = np.zeros(len(roles))
+        for term in ("recombination_rad_loss", "recombination_3b_loss"):
+            key = f"rhs_terms/{term}/nn"
+            if key in f:
+                rec += np.mean(
+                    np.clip(f[key][:][m], 0.0, None), axis=0
+                ) * Vm_full
         cd = f["cathode_diagnostics"]
         phi_c = float(np.nanmean(cd["source_phi_c"][:][m]))
         T_s = float(np.mean(cd["T_s_surface"][:][m]))
@@ -109,7 +134,9 @@ def load_background(path, window_ms):
         "anode_right": float(an[an.nonzero()[0][-1]]) if an.any() else 0.0,
         "puff": float(ns.sum()),
         "puff_z": float(zc[np.argmax(ns)] - edges[first]),
+        "vol_rec": float(rec[first:].sum()),
     }
+    bg["rec_cell"] = rec[first:]
     bg["phi_c"] = phi_c
     bg["T_s"] = T_s
     bg["eta"] = float(params.get("eta", 0.358))
@@ -158,7 +185,7 @@ def maxwellian(rng, N, Ti_eV, u_drift):
 
 
 def run_mc(bg, n_particles, jet, rng, r_n=(0.5, 0.5), r_e=(0.2, 0.25),
-           max_iter=20000):
+           max_iter=20000, report_times_s=()):
     ze = bg["z_edges"]
     ncell = ze.size - 1
     Rp, Rm = bg["Rp"], bg["Rm"]
@@ -208,6 +235,18 @@ def run_mc(bg, n_particles, jet, rng, r_n=(0.5, 0.5), r_e=(0.2, 0.25),
                 vel = vel * sc[:, None]
             else:
                 vel = cosine_emit(rng, N, T_s if at_start else T_WALL_K, sign)
+        elif name == "vol_rec":
+            # Recombination birth: in-column, at the local ion Maxwellian +
+            # drift (the recombined ion hands its momentum over -- the same
+            # convention as the solver's handover and the CX resample here).
+            w_cell = bg["rec_cell"] / bg["rec_cell"].sum()
+            icell = rng.choice(w_cell.size, size=N, p=w_cell)
+            rad = Rp[icell] * np.sqrt(rng.random(N))
+            th = rng.random(N) * 2 * np.pi
+            pos[:, 0] = rad * np.cos(th)
+            pos[:, 1] = rad * np.sin(th)
+            pos[:, 2] = ze[icell] + rng.random(N) * (ze[icell + 1] - ze[icell])
+            vel = maxwellian(rng, N, bg["Ti"][icell], bg["u"][icell])
         elif name in ("anode_left", "anode_right"):
             left = name == "anode_left"
             icell = mesh_edge - 1 if left else mesh_edge
@@ -236,7 +275,8 @@ def run_mc(bg, n_particles, jet, rng, r_n=(0.5, 0.5), r_e=(0.2, 0.25),
         return pos, vel
 
     names = [k for k in ("puff", "cathode_face", "collector_face",
-                         "anode_left", "anode_right") if src.get(k, 0.0) > 0]
+                         "anode_left", "anode_right", "vol_rec")
+             if src.get(k, 0.0) > 0]
     rates = np.array([src[k] for k in names])
     frac = rates / rates.sum()
     counts = np.maximum((frac * n_particles).astype(int), 1)
@@ -246,11 +286,20 @@ def run_mc(bg, n_particles, jet, rng, r_n=(0.5, 0.5), r_e=(0.2, 0.25),
     tal_t = np.zeros((ncell, 2))       # residence [atom-s per s] col/ann
     tal_tv = np.zeros((ncell, 2))      # sum w*dt*vz
     tal_ion = np.zeros(ncell)          # ionization sink [atoms/s]
+    # Time-dependent buildup tallies (KINETIC_TWOZONE_PLAN.md K0): for
+    # stationary sources switched on into an EMPTY box at t = 0, the density
+    # at time T is exactly the steady residence tally restricted to
+    # particle age < T -- so each segment contributes
+    # wgt * clip(T - age, 0, dt) to the report-time-T tally. Exact (no age
+    # binning error); the steady tally is the T -> inf member.
+    report_times = np.asarray(report_times_s, dtype=float)
+    tal_t_time = np.zeros((report_times.size, ncell, 2))
     lost = {"ion": 0.0, "pump": 0.0, "stuck": 0.0}
 
     for name, N, w in zip(names, counts, w_each):
         pos, vel = launch(name, int(N))
         wgt = np.full(int(N), w)
+        age = np.zeros(int(N))
         for _ in range(max_iter):
             n_act = wgt.size
             if n_act == 0:
@@ -305,6 +354,14 @@ def run_mc(bg, n_particles, jet, rng, r_n=(0.5, 0.5), r_e=(0.2, 0.25),
             zone = np.where(in_col, 0, 1)
             np.add.at(tal_t, (icell, zone), wgt * dt)
             np.add.at(tal_tv, (icell, zone), wgt * dt * vel[:, 2])
+            if report_times.size:
+                min_age = float(age.min())
+                for k, T in enumerate(report_times):
+                    if T <= min_age:
+                        continue  # every particle already older than T
+                    w_dt = wgt * np.clip(T - age, 0.0, dt)
+                    np.add.at(tal_t_time[k], (icell, zone), w_dt)
+                age = age + dt
             # advance; overshoot 0.1 um along the ray so no boundary (z-edge
             # or the Rp surface) can alias into zero-length loops
             pos = pos + vel * (dt[:, None] * 1.0)
@@ -380,6 +437,7 @@ def run_mc(bg, n_particles, jet, rng, r_n=(0.5, 0.5), r_e=(0.2, 0.25),
                 # interior crossings just continue
             alive = ~kill
             pos, vel, wgt = pos[alive], vel[alive], wgt[alive]
+            age = age[alive]
         else:
             # max_iter exhausted: report separately -- a nonzero fraction
             # here means the transport is under-resolved, not pumped.
@@ -396,11 +454,17 @@ def run_mc(bg, n_particles, jet, rng, r_n=(0.5, 0.5), r_e=(0.2, 0.25),
     un_mean = np.where(
         tal_t.sum(axis=1) > 0, tal_tv.sum(axis=1) / tal_t.sum(axis=1), 0.0
     )
-    return {
+    out = {
         "nn_col": nn_col, "nn_ann": nn_ann, "nn_mean": nn_mean,
         "un_col": un_col, "un_ann": un_ann, "un_mean": un_mean,
         "S_ion": tal_ion, "lost": lost, "rates": dict(zip(names, rates)),
     }
+    if report_times.size:
+        out["report_times_s"] = report_times
+        out["nn_col_t"] = tal_t_time[:, :, 0] / np.maximum(V_col, 1e-9)
+        out["nn_ann_t"] = tal_t_time[:, :, 1] / np.maximum(V_ann, 1e-9)
+        out["nn_mean_t"] = tal_t_time.sum(axis=2) / (V_col + V_ann)
+    return out
 
 
 def main(argv=None):
@@ -409,14 +473,26 @@ def main(argv=None):
     ap.add_argument("-n", "--n-particles", type=int, default=200000)
     ap.add_argument("--jet", choices=("none", "cathode", "both"),
                     default="none")
+    ap.add_argument("--no-vol-rec", action="store_true",
+                    help="drop the volume-recombination birth source")
+    ap.add_argument("--report-ms", default="1,2,3,5,8,12,17,25,40",
+                    help="comma-separated buildup report times [ms] "
+                         "(KINETIC_TWOZONE_PLAN.md K0); empty string "
+                         "disables the time-dependent tallies")
     ap.add_argument("--window", nargs=2, type=float, default=(5.0, 19.5))
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--out", default=None)
     args = ap.parse_args(argv)
 
     bg = load_background(args.run, tuple(args.window))
+    if args.no_vol_rec:
+        bg["sources"]["vol_rec"] = 0.0
+    report_times = tuple(
+        float(x) * 1e-3 for x in args.report_ms.split(",") if x.strip()
+    )
     rng = np.random.default_rng(args.seed)
-    res = run_mc(bg, args.n_particles, args.jet, rng)
+    res = run_mc(bg, args.n_particles, args.jet, rng,
+                 report_times_s=report_times)
 
     tot = sum(res["rates"].values())
     print(f"sources [atoms/s]: " + ", ".join(
@@ -439,10 +515,66 @@ def main(argv=None):
               f"{ca:8.2f} {res['un_mean'][i] / 1e5:11.2f} "
               f"{un_model[i] / 1e5 if np.isfinite(un_model[i]) else np.nan:9.2f}")
 
+    if "nna_model" in bg:
+        # Per-zone comparison: the model's split fields against the MC's
+        # per-zone tallies -- the M4 gate of NEUTRAL_TWOZONE_PLAN.md.
+        print(f"\n{'z[cm]':>7} {'col_model':>10} {'col_MC':>10} {'r_col':>7} "
+              f"{'ann_model':>10} {'ann_MC':>10} {'r_ann':>7}")
+        for i in range(0, zc.size, max(1, zc.size // 18)):
+            print(f"{zc[i]:7.0f} {bg['nncol_model'][i]:10.3g} "
+                  f"{res['nn_col'][i]:10.3g} "
+                  f"{res['nn_col'][i] / max(bg['nncol_model'][i], 1e-3):7.2f} "
+                  f"{bg['nna_model'][i]:10.3g} {res['nn_ann'][i]:10.3g} "
+                  f"{res['nn_ann'][i] / max(bg['nna_model'][i], 1e-3):7.2f}")
+
+    if "report_times_s" in res:
+        # K0 deliverable (KINETIC_TWOZONE_PLAN.md): the annulus reservoir's
+        # buildup from an empty start against the ~20 ms drive. The steady
+        # tallies are the infinite-time limit and an UPPER BOUND for
+        # in-shot conditions; closure gates should compare like-for-like
+        # at the model's own time.
+        mid = (zc >= 500.0) & (zc <= 1000.0)
+        ann_steady = float(np.mean(res["nn_ann"][mid]))
+        col_steady = float(np.mean(res["nn_col"][mid]))
+        print("\nK0 buildup (mid-machine z=500-1000 mean; fraction of "
+              "steady):")
+        print(f"{'t[ms]':>6} {'nn_ann':>10} {'f_ann':>6} "
+              f"{'nn_col':>10} {'f_col':>6}")
+        for k, T in enumerate(res["report_times_s"]):
+            ann_T = float(np.mean(res["nn_ann_t"][k][mid]))
+            col_T = float(np.mean(res["nn_col_t"][k][mid]))
+            print(f"{T * 1e3:6.1f} {ann_T:10.3g} "
+                  f"{ann_T / max(ann_steady, 1e-30):6.3f} "
+                  f"{col_T:10.3g} {col_T / max(col_steady, 1e-30):6.3f}")
+
+    # NBL observable (validation target for the two-zone particle channel):
+    # peak location, width, and magnitude of the far-end neutral
+    # accumulation. Peak location is reported as an observation, not a
+    # gate (an off-wall peak was an impression from earlier runs, not a
+    # requirement -- Tom, 2026-07-21). The physics content is detachment:
+    # the NBL is the layer through which the incoming column plasma cools
+    # and recombines, so only a fraction of the column flux reaches the
+    # wall as ions (divertor-like physics on LAPD); the vol_rec /
+    # collector_face source-rate ratio above is the ledger's own
+    # detachment fraction.
+    half = zc.size // 2
+    for label, prof in (("MC", res["nn_mean"]), ("model", bg["nn_model"])):
+        far = prof[half:]
+        ipk = half + int(np.argmax(far))
+        peak = prof[ipk]
+        above = np.flatnonzero(prof[half:] >= 0.5 * peak) + half
+        width = ze[above[-1] + 1] - ze[above[0]]
+        wall = prof[-1]
+        print(f"NBL[{label}]: peak {peak:.3g} at z={zc[ipk]:.0f} "
+              f"({'off-wall' if ipk < zc.size - 1 else 'wall cell'}), "
+              f"peak/wall {peak / max(wall, 1e-3):.2f}, FWHM {width:.0f} cm")
+
     out = args.out or (Path(args.run).stem + f"_mc_{args.jet}")
     np.savez(
         Path(args.run).parent / f"{out}.npz",
-        z=zc, nn_model=bg["nn_model"], un_model=un_model, **{
+        z=zc, nn_model=bg["nn_model"], un_model=un_model,
+        **{k: bg[k] for k in ("nncol_model", "nna_model") if k in bg},
+        **{
             k: v for k, v in res.items() if isinstance(v, np.ndarray)
         },
     )

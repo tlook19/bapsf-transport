@@ -29,6 +29,10 @@ def main(argv=None):
     p.add_argument("--g-cond", type=float, default=1200.0)
     p.add_argument("--c-th", type=float, default=120.0)
     p.add_argument("--mn", action="store_true")
+    p.add_argument("--two-zone", action="store_true",
+                   help="neutral_two_zone particle channel "
+                        "(NEUTRAL_TWOZONE_PLAN.md): nn becomes the column "
+                        "density, nn_a the annulus")
     p.add_argument("--no-smooth", action="store_true")
     p.add_argument("--extra", nargs="*", default=(),
                    help="additional k=v param overrides (JSON-parsed values)")
@@ -64,6 +68,8 @@ def main(argv=None):
     if args.L is not None:
         extra["L_parasitic_H"] = args.L
     flags_extra = {}
+    if args.two_zone:
+        flags_extra["neutral_two_zone"] = True
     if args.mn:
         extra.update({
             "ion_neutral_drag_model": "constant",
