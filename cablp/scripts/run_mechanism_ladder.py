@@ -22,6 +22,9 @@ ES_OPERATING = {
     1: {"V_bank": 173.6, "Ts_standby_K": 1910.0},
     2: {"V_bank": 138.4, "Ts_standby_K": 1949.0},
     3: {"V_bank": 99.0, "Ts_standby_K": 1972.0},
+    # ES4 (detachment-exacerbation): heater and bank identical to ES3;
+    # only the puff drive differs (110 V vs the ladder's 76.4 V).
+    4: {"V_bank": 99.0, "Ts_standby_K": 1972.0},
 }
 
 

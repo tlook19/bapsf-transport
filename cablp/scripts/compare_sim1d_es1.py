@@ -527,7 +527,7 @@ def main(argv=None):
     parser.add_argument(
         "--es",
         type=int,
-        choices=(1, 2, 3),
+        choices=(1, 2, 3, 4),
         default=1,
         help=(
             "which experiment-set overlay to score against "
