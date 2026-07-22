@@ -15,6 +15,7 @@ from .core.config import (
     resolve_nn0,
 )
 from .core.geometry import (
+    _anode_neutral_transparency,
     build_geometry,
     is_plenum_cell,
     puff_cell_indices,
@@ -41,6 +42,7 @@ from .physics.cathode import (
     beam_ionization_rhs_terms,
     cathode_boundary_state,
     cathode_power_balance_terms_W,
+    cathode_sample_indices,
     cathode_source_terms,
     solve_cathode_boundary,
     validate_cathode_Rp_model,
@@ -57,7 +59,7 @@ from .physics.energy import (
     electron_ion_exchange_rhs,
     ion_charge_exchange_rhs,
 )
-from .physics.flux import plasma_flux_rhs, plasma_flux_rhs_terms
+from .physics.flux import ion_sound_speed, plasma_flux_rhs, plasma_flux_rhs_terms
 from .physics.neutrals import (
     gas_puff_rate_profile,
     _effective_pump_speed,
@@ -68,7 +70,11 @@ from .physics.neutrals import (
     puff_rate,
     pump_rate,
 )
-from .physics.reactions import reaction_rhs, reaction_rhs_terms
+from .physics.reactions import (
+    reaction_rhs,
+    reaction_rhs_terms,
+    recombination_energy_return_rhs,
+)
 from .physics.sources import (
     add_state_rhs,
     anode_collection_rhs,
@@ -505,6 +511,26 @@ class LAPDSim1D:
         else:
             self._wind_column_factor = None
             self._wind_wall_rate = None
+        self._validate_neutral_jet_config()
+        self._recombination_energy_return = bool(
+            self._input_dict.get("recombination_energy_return", False)
+        )
+        if self._recombination_energy_return:
+            if (
+                str(self._input_dict.get("atomic_rate_model", "janev"))
+                != "adas"
+            ):
+                raise ValueError(
+                    "recombination_energy_return requires "
+                    "atomic_rate_model='adas' (the PRB radiated-power "
+                    "booking has no janev counterpart)"
+                )
+            if bool(self._flags.get("icool_recomb", False)):
+                raise ValueError(
+                    "recombination_energy_return already charges the full "
+                    "PRB; combining it with icool_recomb double-charges "
+                    "the recombination photons"
+                )
         self._floors = {
             "n": float(self._input_dict["ne_floor"]),
             "nn": float(self._input_dict["nn_floor"]),
@@ -513,6 +539,7 @@ class LAPDSim1D:
         }
         self._state = self._initial_state()
         self._state = apply_state_floors(self._state, self._floors, self._ion_mass_g)
+        self._init_sample_smoothing()
         self._y = pack_state(self._state)
         self._derived = derive_state(self._state, self._floors, self._ion_mass_g)
         self._time = 0.0
@@ -550,12 +577,16 @@ class LAPDSim1D:
         # circuit, for diagnostic key parity.
         self._circuit_V_dis_step = 0.0
         # Running time integral of V_dis_step [V*s] over accepted circuit
-        # steps. The per-save instantaneous V_dis_step is dt-BIASED: saves
-        # land on dt-capped steps, which systematically sample the low
-        # state of the knee sawtooth (measured 2026-07-21: saved median
-        # 116 V vs 158 V loop-required average). Differencing this
-        # integral between saves gives the honest dt-weighted average.
+        # steps. The per-step instantaneous value is dt-BIASED as a saved
+        # trace: saves land on dt-capped steps, which systematically sample
+        # the low state of the knee sawtooth (measured 2026-07-21 on
+        # es1_nx120_m6_sq3500: saved plateau mean 126 V vs 151 V dt-weighted
+        # average, with V_b and the loop reconstruction both at 151 V).
+        # The saved circuit_V_dis_step diagnostic is therefore the
+        # save-interval average of this integral, not the raw sample; the
+        # (time, integral) pair at the previous trajectory save anchors it.
         self._circuit_V_dis_time_integral = 0.0
+        self._circuit_V_dis_prev_save = None
         # Cathode warming state: the evolving emitter surface temperature [K]
         # (config cathode_warming_model). None = static T_s (historical).
         warming_model = str(
@@ -788,7 +819,9 @@ class LAPDSim1D:
         terms = {
             "plasma_advective_flux": plasma_terms["plasma_advective_flux"],
             "plasma_front_flux": plasma_terms["plasma_front_flux"],
-            "boundary_absorption": self.boundary_absorption_rhs(state=state),
+            "boundary_absorption": self.boundary_absorption_rhs(
+                state=state, cathode_solve=cathode_solve, time=time
+            ),
             "pressure_work": self.pressure_work_rhs(state=state),
             "ei_exchange": self.energy_exchange_rhs(state=state),
             "ionization_energy_cost": electron_cooling_terms[
@@ -811,7 +844,9 @@ class LAPDSim1D:
             "neutral_momentum_wall": self.neutral_momentum_wall_rhs(state=state),
             "neutral_wind_advection": self.neutral_wind_advection_rhs(state=state),
             "surface_loss": self.surface_neutralization_rhs(state=state),
-            "anode_collection": self.anode_collection_rhs(state=state),
+            "anode_collection": self.anode_collection_rhs(
+                state=state, cathode_solve=cathode_solve, time=time
+            ),
             "cathode_surface_loss": self.cathode_source_terms(
                 state=state,
                 cathode_solve=cathode_solve,
@@ -829,6 +864,9 @@ class LAPDSim1D:
             "beam_excitation_radiation": beam_terms["beam_excitation_radiation"],
             "recombination_rad_loss": reaction_terms["recombination_rad_loss"],
             "recombination_3b_loss": reaction_terms["recombination_3b_loss"],
+            "recombination_energy_return": (
+                self.recombination_energy_return_rhs(state=state)
+            ),
             "heat_conduction": self._zero_rhs_state(),
         }
         if include_heat_conduction:
@@ -1179,6 +1217,9 @@ class LAPDSim1D:
         self._restore_step_cache(attempt.solver_cache)
         self._set_state_vector(attempt.y)
         self._time += float(attempt.dt)
+        # Electrode sample smoothing: fold the newly accepted state into the
+        # supply-average EMA before any accepted-state consumer reads it.
+        self._update_sample_smoothing(attempt.dt)
         # Advance the inductive-circuit state from the accepted step's solve;
         # with no solve (cathode unconfigured/disabled phases) the loop
         # current is zero.
@@ -1232,7 +1273,7 @@ class LAPDSim1D:
             )
         ):
             honest_result = idriven_result_evaluator(
-                state=self.state,
+                state=self._smoothed_sample_state(self.state),
                 floors=self._floors,
                 ion_mass_g=self._ion_mass_g,
                 mu=self._mu,
@@ -1281,10 +1322,14 @@ class LAPDSim1D:
                 I_emis = 0.0 if floating else float(result.I_eth_star)
                 # Emission cooling books the EVOLVING work function when
                 # the surface model is on (one shared constant, §3b).
+                # The surface keeps (1 - R_E) of the ion power when the jet's
+                # reflected-energy debit sensitivity arm is on (retention is
+                # 1.0 otherwise -- the M5a' calibration convention).
                 P_heat, P_ion, P_rad, P_emis, P_cond = (
                     cathode_power_balance_terms_W(
                         T_s_K=self._cathode_Ts_K,
-                        P_ion_W=float(result.P_cathode_i),
+                        P_ion_W=float(result.P_cathode_i)
+                        * self._cathode_surface_ion_retention,
                         I_eth_star_A=I_emis,
                         input_dict=self._surface_effective_input_dict(),
                     )
@@ -2264,11 +2309,70 @@ class LAPDSim1D:
             **self._surface_loss_kwargs(),
         )
 
-    def boundary_absorption_rhs(self, y=None, state=None):
+    def _jet_cathode_solve(self, cathode_solve, jet_enabled, time):
+        """Return the solve the jet terms ride, re-solving like the other
+        cathode consumers only when a jet needs it and none was passed."""
+        if cathode_solve is not None or not jet_enabled:
+            return cathode_solve
+        cathode_flags = self._effective_cathode_flags(time=time, active_only=True)
+        if not cathode_flags.get("cathode_coupling", False):
+            return None
+        return self.solve_cathode_boundary(
+            state=self.state,
+            time=time,
+            update_cache=True,
+        )
+
+    def _cathode_jet_spec(self, cathode_solve):
+        """Return the cathode-jet parameters from the current solve, or None."""
+        if (
+            not self._cathode_jet_enabled
+            or cathode_solve is None
+            or cathode_solve.beam_result is None
+        ):
+            return None
+        phi_c = float(cathode_solve.beam_result.result.phi_c)
+        if not np.isfinite(phi_c):
+            return None
+        T_s = float(
+            self._cathode_Ts_K
+            if self._cathode_Ts_K is not None
+            else float(self._input_dict.get("T_s", 0.0))
+        )
+        return {
+            "R_N": self._cathode_jet_R_N,
+            "R_E": self._cathode_jet_R_E,
+            "phi_c_V": max(phi_c, 0.0),
+            "T_s_K": max(T_s, 0.0),
+        }
+
+    def _anode_jet_spec(self, cathode_solve):
+        """Return the anode-jet parameters from the current solve, or None."""
+        if (
+            not self._anode_jet_enabled
+            or cathode_solve is None
+            or cathode_solve.beam_result is None
+        ):
+            return None
+        phi_a = float(cathode_solve.beam_result.result.phi_a)
+        if not np.isfinite(phi_a):
+            return None
+        return {
+            "R_N": self._anode_jet_R_N,
+            "R_E": self._anode_jet_R_E,
+            "phi_a_V": phi_a,
+        }
+
+    def boundary_absorption_rhs(
+        self, y=None, state=None, cathode_solve=None, time=None
+    ):
         """Return the Bohm absorption at the plasma-terminating surfaces."""
         if state is None:
             state = self.state if y is None else unpack_state(y, self._geometry.cells)
         surface_kwargs = self._surface_loss_kwargs()
+        cathode_solve = self._jet_cathode_solve(
+            cathode_solve, self._cathode_jet_enabled, time
+        )
         return boundary_absorption_rhs(
             state=state,
             floors=self._floors,
@@ -2285,12 +2389,18 @@ class LAPDSim1D:
                 self._input_dict.get("sigma_in_model", "constant")
             ),
             gas_type=self._gas_type,
+            cathode_jet=self._cathode_jet_spec(cathode_solve),
         )
 
-    def anode_collection_rhs(self, y=None, state=None):
+    def anode_collection_rhs(
+        self, y=None, state=None, cathode_solve=None, time=None
+    ):
         """Return the Bohm-flux plasma collection at the anode mesh."""
         if state is None:
             state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        cathode_solve = self._jet_cathode_solve(
+            cathode_solve, self._anode_jet_enabled, time
+        )
         return anode_collection_rhs(
             state=state,
             floors=self._floors,
@@ -2301,6 +2411,7 @@ class LAPDSim1D:
             b_anode_collection=float(
                 self._input_dict.get("b_anode_collection", 1.0)
             ),
+            anode_jet=self._anode_jet_spec(cathode_solve),
         )
 
     def ion_neutral_drag_rhs(self, y=None, state=None):
@@ -2339,6 +2450,8 @@ class LAPDSim1D:
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
             geometry=self._geometry,
+            mesh_faces=self._mesh_faces,
+            mesh_blocked_area_cm2=self._mesh_blocked_area_cm2,
         )
 
     def ion_neutral_frictional_heating_rhs(self, y=None, state=None):
@@ -2525,6 +2638,7 @@ class LAPDSim1D:
         """Run the opt-in cathode solver adapter without changing the RHS."""
         if state is None:
             state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        state = self._smoothed_sample_state(state)
         cathode_phase = self._cathode_phase_options(time=time)
         if floating is None:
             floating = cathode_phase["floating"]
@@ -2652,6 +2766,23 @@ class LAPDSim1D:
             **self._reaction_kwargs(),
         )
 
+    def recombination_energy_return_rhs(self, y=None, state=None):
+        """Return the GCR-consistent recombination energy pair (Ee only)."""
+        if state is None:
+            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        return recombination_energy_return_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            gas_type=self._gas_type,
+            I_ion=self._I_ion,
+            b_rec_rad=float(self._input_dict.get("b_rec_rad", 1.0)),
+            atomic_rate_model=str(
+                self._input_dict.get("atomic_rate_model", "janev")
+            ),
+            enabled=self._recombination_energy_return,
+        )
+
     def reaction_rhs_terms(self, y=None, state=None):
         """Return split ionization and recombination conservative sources."""
         if state is None:
@@ -2743,11 +2874,22 @@ class LAPDSim1D:
             "decay_after_breakdown",
             "pulse_decay_to_level",
             "double_erf",
+            "square",
         }:
             raise ValueError(
                 "gas_puff_mode must be 'decay_after_breakdown', "
-                f"'pulse_decay_to_level', or 'double_erf' (got {mode!r})"
+                "'pulse_decay_to_level', 'double_erf', or 'square' "
+                f"(got {mode!r})"
             )
+        if mode == "square":
+            for key in ("gas_puff_rise_width_s",):
+                width = float(self._input_dict.get(key, 5.0e-4))
+                if width <= 0.0:
+                    raise ValueError(f"{key} must be positive (got {width})")
+            for key in ("gas_puff_rise_center_s", "gas_puff_close_lag_s"):
+                value = float(self._input_dict.get(key, 5.0e-4))
+                if value < 0.0:
+                    raise ValueError(f"{key} must be >= 0 (got {value})")
         if mode == "double_erf":
             for key in ("tau_gp_rise_width", "tau_gp_drop_width"):
                 width = float(self._input_dict.get(key, 1e-3))
@@ -2774,6 +2916,188 @@ class LAPDSim1D:
             raise ValueError(
                 f"tau_gp_decay_duration must be > 0 (got {tau_decay_duration})"
             )
+
+    def _init_sample_smoothing(self):
+        """Parse and seed the electrode sample-smoothing EMA (config.py).
+
+        Tracked cells: the cathode sample cell and the first anode face's
+        two flanking cells -- every (n, Te) the sheath solve reads. The EMA
+        is seeded from the initial state (deterministic) and updated on
+        accepted steps only, so dt-retries never move it.
+        """
+        raw = self._input_dict.get("cathode_sample_smoothing", None)
+        self._sample_smoothing = None
+        self._sample_ema = None
+        self._sample_smooth_cells = ()
+        if raw is None:
+            return
+        if isinstance(raw, str):
+            if raw != "presheath":
+                raise ValueError(
+                    "cathode_sample_smoothing must be None, 'presheath', or "
+                    f"a positive time constant in seconds (got {raw!r})"
+                )
+            self._sample_smoothing = "presheath"
+        else:
+            tau = float(raw)
+            if tau <= 0.0:
+                raise ValueError(
+                    "cathode_sample_smoothing time constant must be positive "
+                    f"(got {tau})"
+                )
+            self._sample_smoothing = tau
+        cells = [cathode_sample_indices(self._geometry)[0]]
+        anode_faces = np.asarray(
+            getattr(self._geometry, "anode_face_indices", ()), dtype=int
+        )
+        if anode_faces.size:
+            face = int(anode_faces[0])
+            cells += [face - 1, face]
+        self._sample_smooth_cells = tuple(dict.fromkeys(int(c) for c in cells))
+        derived = derive_state(self._state, self._floors, self._ion_mass_g)
+        self._sample_ema = {
+            c: [float(self._state.n[c]), float(derived.Te[c])]
+            for c in self._sample_smooth_cells
+        }
+
+    def _update_sample_smoothing(self, dt):
+        """Blend the accepted state into the electrode sample EMA."""
+        if self._sample_ema is None:
+            return
+        derived = derive_state(self._state, self._floors, self._ion_mass_g)
+        for c in self._sample_smooth_cells:
+            n_ema, Te_ema = self._sample_ema[c]
+            if self._sample_smoothing == "presheath":
+                # Ion transit across the sampled cell at the (smoothed)
+                # sound speed: the physical supply-averaging time.
+                cs = ion_sound_speed(max(Te_ema, self._floors["Te"]), self._mu)
+                tau = float(self._geometry.length_cm[c]) / max(cs, 1.0)
+            else:
+                tau = float(self._sample_smoothing)
+            alpha = 1.0 - math.exp(-float(dt) / tau)
+            self._sample_ema[c] = [
+                n_ema + alpha * (float(self._state.n[c]) - n_ema),
+                Te_ema + alpha * (float(derived.Te[c]) - Te_ema),
+            ]
+
+    def _smoothed_sample_state(self, state):
+        """Return ``state`` with the sampled electrode cells' (n, Te)
+        replaced by their supply-averaged EMA values (config.py:
+        cathode_sample_smoothing). Off (the default) returns ``state``
+        unchanged -- the golden path is bit-exact."""
+        if self._sample_ema is None:
+            return state
+        n = np.asarray(state.n, dtype=float).copy()
+        Ee = np.asarray(state.Ee, dtype=float).copy()
+        for c in self._sample_smooth_cells:
+            n_ema, Te_ema = self._sample_ema[c]
+            n[c] = n_ema
+            Ee[c] = 1.5 * n_ema * Te_ema * ev_to_erg
+        return ConservativeState1D(
+            n=n,
+            nn=state.nn,
+            M=state.M,
+            Ee=Ee,
+            Ei=state.Ei,
+            M_n=state.M_n,
+        )
+
+    def _validate_neutral_jet_config(self):
+        """Validate and cache the directed-recycle-jet configuration (§8).
+
+        The jets and the mesh accommodation are M_n physics: they require the
+        neutral_momentum flag, and each channel requires the geometry feature
+        it rides on (an absorbing cathode face; anode faces with eta > 0), so
+        a misconfigured jet fails loudly instead of silently never firing.
+        """
+        p = self._input_dict
+        self._cathode_jet_enabled = bool(p.get("cathode_neutral_jet", False))
+        self._anode_jet_enabled = bool(p.get("anode_neutral_jet", False))
+        self._mesh_accommodation = bool(
+            p.get("neutral_mesh_accommodation", False)
+        )
+        surface_debit = bool(p.get("cathode_jet_surface_debit", False))
+        for prefix, enabled in (
+            ("cathode_jet", self._cathode_jet_enabled),
+            ("anode_jet", self._anode_jet_enabled),
+        ):
+            R_N = float(p.get(f"{prefix}_R_N", 0.0))
+            R_E = float(p.get(f"{prefix}_R_E", 0.0))
+            if enabled and not (0.0 <= R_N <= 1.0 and 0.0 <= R_E <= 1.0):
+                raise ValueError(
+                    f"{prefix}_R_N and {prefix}_R_E are particle/energy "
+                    "reflection coefficients and must lie in [0, 1] "
+                    f"(got R_N={R_N}, R_E={R_E})"
+                )
+            setattr(self, f"_{prefix}_R_N", R_N)
+            setattr(self, f"_{prefix}_R_E", R_E)
+        needs_mn = (
+            self._cathode_jet_enabled
+            or self._anode_jet_enabled
+            or self._mesh_accommodation
+        )
+        if needs_mn and not self._neutral_momentum:
+            raise ValueError(
+                "cathode_neutral_jet / anode_neutral_jet / "
+                "neutral_mesh_accommodation are M_n momentum physics and "
+                "require the neutral_momentum flag"
+            )
+        roles = np.asarray(self._geometry.cell_role)
+        absorbing = np.asarray(
+            getattr(self._geometry, "plasma_absorbing", np.zeros(0)),
+            dtype=bool,
+        )
+        if self._cathode_jet_enabled and not (
+            np.any(absorbing) and np.any(roles == "cathode")
+        ):
+            raise ValueError(
+                "cathode_neutral_jet requires an absorbing cathode face "
+                "(resolved_boundaries geometry): the jet rides the "
+                "boundary-absorption recycle flux"
+            )
+        anode_faces = np.asarray(
+            getattr(self._geometry, "anode_face_indices", ()), dtype=int
+        )
+        eta = float(p.get("eta", 0.0))
+        if (self._anode_jet_enabled or self._mesh_accommodation) and (
+            anode_faces.size == 0 or eta <= 0.0
+        ):
+            raise ValueError(
+                "anode_neutral_jet / neutral_mesh_accommodation require "
+                "anode faces with eta > 0 (resolved geometry with a mesh)"
+            )
+        if surface_debit and not self._cathode_jet_enabled:
+            raise ValueError(
+                "cathode_jet_surface_debit reads the cathode jet's R_E and "
+                "requires cathode_neutral_jet"
+            )
+        # Reflected-energy retention for the surface power balance:
+        # (1 - R_E) of the ion bombardment power stays in the surface when
+        # the debit sensitivity arm is on; 1.0 (the M5a' calibration
+        # convention) otherwise.
+        self._cathode_surface_ion_retention = (
+            1.0 - self._cathode_jet_R_E if surface_debit else 1.0
+        )
+        # Blocked mesh area for the wind's momentum accommodation: the open
+        # fraction T = 1 - eta*(Ra/Rm)^2 already lives in the face area, so
+        # A_blocked = A_open * (1 - T) / T.
+        if self._mesh_accommodation:
+            transparency = _anode_neutral_transparency(p)
+            if transparency <= 0.0:
+                raise ValueError(
+                    "neutral_mesh_accommodation requires a mesh with open "
+                    f"neutral area (transparency {transparency})"
+                )
+            open_area = np.asarray(
+                self._geometry.neutral_face_area_cm2, dtype=float
+            )[anode_faces]
+            self._mesh_faces = anode_faces
+            self._mesh_blocked_area_cm2 = (
+                open_area * (1.0 - transparency) / transparency
+            )
+        else:
+            self._mesh_faces = None
+            self._mesh_blocked_area_cm2 = None
 
     def _validate_phase_config(self):
         mode = self._phase_transition_mode()
@@ -2817,6 +3141,52 @@ class LAPDSim1D:
         if not self._flags.get("Plasma", True):
             return S_gp, Twin_S_gp
         mode = self._input_dict.get("gas_puff_mode", "decay_after_breakdown")
+        if mode == "square":
+            # Measured valve behaviour (Tom, 2026-07-21): the piezo is driven
+            # by a SQUARE voltage pulse fired by the SAME trigger that closes
+            # the cathode circuit, held for the discharge duration. The
+            # supply side is hydraulically stiff (1/4" line at 45 PSI has
+            # ~1e6-sccm-class conductance and ~270 shots of stored inventory,
+            # so no sag can develop at ~6e3 sccm delivery; the downstream
+            # 10 cm stub is at chamber vacuum, so no burst either) -- the
+            # delivery is therefore FLAT at S_gp, with erf rise/close set by
+            # the piezo opening + entry transit (~0.5-1 ms, boxed by
+            # hardware, not fit). Rise anchors on circuit-on (the end of the
+            # neutral-prebreakdown phase = the model's trigger instant);
+            # close anchors on drive end + the same lag, and its tail runs
+            # into the afterglow (a real valve keeps delivering while it
+            # closes). No prebreakdown full-rate flow: breakdown rides the
+            # inter-shot residual fill, as in the machine.
+            rise_center = float(
+                self._input_dict.get("gas_puff_rise_center_s", 5.0e-4)
+            )
+            rise_width = float(
+                self._input_dict.get("gas_puff_rise_width_s", 5.0e-4)
+            )
+            close_lag = float(
+                self._input_dict.get("gas_puff_close_lag_s", 5.0e-4)
+            )
+            t_on = self._plasma_phase_time_origin() + rise_center
+            rise = 0.5 * (1.0 + math.erf((float(time) - t_on) / rise_width))
+            tau_discharge = max(
+                float(self._input_dict.get("tau_discharge", 0.0)), 0.0
+            )
+            if self._phase_transition_mode() == "current":
+                main_start = self._t_breakdown_trigger
+            else:
+                main_start = (
+                    self._plasma_phase_time_origin()
+                    + max(float(self._input_dict.get("tau_prebreakdown", 0.0)), 0.0)
+                    + max(float(self._input_dict.get("tau_breakdown", 0.0)), 0.0)
+                )
+            fall = 0.0
+            if main_start is not None:
+                t_close = float(main_start) + tau_discharge + close_lag
+                fall = 0.5 * (
+                    1.0 + math.erf((float(time) - t_close) / rise_width)
+                )
+            envelope = max(rise - fall, 0.0)
+            return S_gp * envelope, Twin_S_gp * envelope
         if mode == "double_erf":
             # Valve-like waveform: an erf rise 0 -> S_gp and an erf drop
             # S_gp -> S_gp_decay_target, both on the *scheduled*
@@ -3521,7 +3891,16 @@ class LAPDSim1D:
             ),
             "gas_puff_enabled": (
                 bool(self._input_dict.get("gas_puff_enabled", True))
-                and phase in discharge_phases
+                and (
+                    phase in discharge_phases
+                    # The square valve keeps delivering through its erf
+                    # closing tail after the drive ends (~ms); the waveform
+                    # envelope, not the phase switch, closes the flow.
+                    or (
+                        phase == "afterglow"
+                        and self._input_dict.get("gas_puff_mode") == "square"
+                    )
+                )
             ),
             "floating": phase == "afterglow",
         }
@@ -3529,6 +3908,27 @@ class LAPDSim1D:
     def _cathode_diagnostic_snapshot(self, time=None):
         cells = self._geometry.cells
         cathode_phase = self._cathode_phase_options(time=time)
+        # Discharge voltage over the save interval: the dt-weighted average
+        # of the running \int V_dis dt since the previous trajectory save.
+        # The raw last-step sample is dt-biased (saves land on dt-capped
+        # steps that sample the knee sawtooth's low state; measured
+        # 2026-07-21: 126 V saved plateau mean vs 151 V true average, with
+        # V_b and the loop reconstruction both at 151 V), so the saved
+        # trace averages the integral instead. The first save and repeated
+        # save times fall back to the last-step value (0.0 at t=0).
+        # Mutates the prev-save anchor: call once per trajectory save only.
+        t_now = float(self._time if time is None else time)
+        V_dis_save = float(self._circuit_V_dis_step)
+        if self._circuit_V_dis_prev_save is not None:
+            t_prev, int_prev = self._circuit_V_dis_prev_save
+            if t_now > t_prev:
+                V_dis_save = (
+                    self._circuit_V_dis_time_integral - int_prev
+                ) / (t_now - t_prev)
+        self._circuit_V_dis_prev_save = (
+            t_now,
+            float(self._circuit_V_dis_time_integral),
+        )
         diag = {
             "enabled": float(bool(self._flags.get("cathode_coupling", False))),
             # Instantaneous emitter surface temperature [K]: the configured
@@ -3542,14 +3942,17 @@ class LAPDSim1D:
             # Current-driven circuit state (0.0 under the voltage-driven
             # solver, whose loop current lives in source_I_tot).
             "circuit_I_loop": float(self._circuit_I_loop),
-            # Step-integrated V_dis (the inductor's view) from the last
-            # accepted circuit advance -- the honest smooth discharge
-            # voltage; the per-solve source_V_b carries boundary-cell Te
-            # noise through the knee. 0.0 under voltage-driven.
-            "circuit_V_dis_step": float(self._circuit_V_dis_step),
-            # Running \int V_dis dt [V*s]: difference between saves for the
-            # dt-weighted (unbiased) average -- the per-save instantaneous
-            # value above samples the knee sawtooth's low state.
+            # Discharge voltage [V] (the inductor's view): dt-weighted
+            # average of the step-integrated V_dis over the save interval
+            # (see above) -- the honest discharge-voltage trace, agreeing
+            # with per-solve source_V_b and the loop reconstruction on the
+            # plateau. 0.0 under voltage-driven. Runs saved before
+            # 2026-07-21 store the biased last-step sample under this key
+            # (~25 V low on the ES1 plateau).
+            "circuit_V_dis_step": V_dis_save,
+            # Running \int V_dis dt [V*s]: difference between saves
+            # reproduces the dt-weighted average independently of the
+            # snapshot cadence (and on pre-fix files).
             "circuit_V_dis_dt_integral": float(
                 self._circuit_V_dis_time_integral
             ),

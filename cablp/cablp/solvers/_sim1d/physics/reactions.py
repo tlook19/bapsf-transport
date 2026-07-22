@@ -208,6 +208,65 @@ def _recombination_loss(S_rec, volume_ratio, ion_mass_g, derived, with_wind=Fals
     )
 
 
+def recombination_energy_return_rhs(
+    state,
+    floors,
+    ion_mass_g,
+    gas_type,
+    I_ion,
+    b_rec_rad=1.0,
+    atomic_rate_model="janev",
+    enabled=False,
+):
+    """Return the GCR-consistent recombination energy pair (electron fluid).
+
+    Per recombination event the electron fluid is credited the binding
+    energy ``I_ion`` (paid at ionization via ``I_ion * S_ion`` and never
+    returned in the standard booking) and charged the full ADAS PRB --
+    the photons that actually leave (recombination radiation,
+    bremsstrahlung, cascade). Net per event ``I_ion - E_rad``: heating in
+    the recombining afterglow (ADAS says E_rad ~ 18 of 24.6 eV at LAPD
+    afterglow conditions -- three-body capture into Rydberg states with
+    partial radiative cascade), a small extra sink in the ionizing plateau
+    (E_rad/event > I_ion there). The ``3/2 Te S_rec`` capture-KE loss in
+    the recombination terms stays booked -- it cancels in the net; this
+    pair adds ``I_ion*S_rec - P_PRB`` on top. The PAIR is the consistent
+    unit (PRB alone double-charges -- the ``icool_recomb`` audit); both
+    halves scale with ``b_rec_rad`` so the credit tracks the particle
+    equation's actual sink. ADAS ('adas' rate model) only: the janev path
+    has no PRB booking. Grid lookups clamp at the adf11 edges (0.2 eV Te
+    floor), nearest-edge.
+    """
+    zeros = np.zeros_like(state.n, dtype=float)
+    if not enabled:
+        return ConservativeState1D(
+            n=zeros,
+            nn=zeros.copy(),
+            M=zeros.copy(),
+            Ee=zeros.copy(),
+            Ei=zeros.copy(),
+        )
+    if atomic_rate_model != "adas":
+        raise ValueError(
+            "recombination_energy_return requires atomic_rate_model='adas' "
+            "(the PRB radiated-power booking has no janev counterpart)"
+        )
+    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
+    n_safe = np.maximum(state.n, floors["n"])
+    rates = he_rates(n_safe, derived.Te, ("acd", "prb1"))
+    # Mirror reaction_rates' adas branch exactly: the credit is I_ion per
+    # particle the particle equation actually recombines.
+    S_rec = float(b_rec_rad) * state.n * state.n * rates["acd"]
+    P_prb_eV = float(b_rec_rad) * state.n * state.n * rates["prb1"]
+    return ConservativeState1D(
+        n=zeros,
+        nn=zeros.copy(),
+        M=zeros.copy(),
+        Ee=ev_to_erg * (I_ion * S_rec - P_prb_eV),
+        Ei=zeros.copy(),
+    )
+
+
 def particle_inventory_rate(rhs, geometry):
     """Return total plasma-plus-neutral particle inventory rate [particles/s]."""
     terms = rhs.n * geometry.plasma_volume_cm3 + rhs.nn * geometry.neutral_volume_cm3

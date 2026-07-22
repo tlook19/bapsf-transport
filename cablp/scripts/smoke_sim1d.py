@@ -1639,9 +1639,10 @@ def main():
     assert np.all(np.isfinite(m3_Iloop))
     assert np.all(np.diff(m3_Iloop) > 0.0)  # rising from 0 under drive
     assert m3_Iloop[-1] < 1.0  # 3e-10 s at ~2.6e7 A/s
-    # Step-integrated V_dis diagnostic: 0.0 before any circuit advance,
-    # then the inductor's-view average -- reconstructable from the loop
-    # identity save-to-save (fixed dt run, saves every step).
+    # Discharge-voltage diagnostic: 0.0 before any circuit advance, then
+    # the save-interval dt-weighted average of the inductor's-view V_dis
+    # (here identical to the per-step value: fixed dt, saves every step)
+    # -- reconstructable from the loop identity save-to-save.
     m3_Vstep = np.asarray(m3_diag["circuit_V_dis_step"], float)
     assert m3_Vstep.shape == m3_Iloop.shape
     assert m3_Vstep[0] == 0.0
@@ -3021,6 +3022,7 @@ def main():
         "beam_excitation_radiation",
         "recombination_rad_loss",
         "recombination_3b_loss",
+        "recombination_energy_return",
         "heat_conduction",
     }
     assert set(rhs_terms) == expected_rhs_terms
@@ -6317,6 +6319,378 @@ def main():
         rtol=1e-13,
         atol=0.0,
     )
+
+    # --- Directed recycle jets (CATHODE_IDRIVEN_PLAN.md §8): cathode-face
+    # backscatter + effusion and anode-mesh backscatter ride the SAME terms
+    # that rebirth the recycle particles, as M_n sources; the mesh
+    # accommodates the wind momentum its wires intercept. Validation fails
+    # fast; magnitudes must reproduce the step-1 scoping arithmetic exactly
+    # from each term's own rebirthed flux (particle/momentum consistency).
+    jet_flags = dict(resolved_cathode_flags)
+    jet_flags["neutral_momentum"] = True
+    for jet_bad_params, jet_bad_flags in (
+        # M_n physics without the neutral_momentum flag
+        (dict(m3_params, cathode_neutral_jet=True), resolved_cathode_flags),
+        (dict(m3_params, anode_neutral_jet=True), resolved_cathode_flags),
+        (dict(m3_params, neutral_mesh_accommodation=True),
+         resolved_cathode_flags),
+        # reflection coefficients outside [0, 1]
+        (dict(m3_params, cathode_neutral_jet=True, cathode_jet_R_E=1.5),
+         jet_flags),
+        (dict(m3_params, anode_neutral_jet=True, anode_jet_R_N=-0.1),
+         jet_flags),
+        # the debit reads the jet's R_E
+        (dict(m3_params, cathode_jet_surface_debit=True), jet_flags),
+    ):
+        try:
+            LAPDSim1D(jet_bad_params, jet_bad_flags)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected ValueError for {jet_bad_params}")
+    # Legacy geometry has no absorbing cathode face -- the jet must refuse.
+    jet_legacy_flags = dict(flags)
+    jet_legacy_flags["neutral_momentum"] = True
+    try:
+        LAPDSim1D(dict(params, cathode_neutral_jet=True), jet_legacy_flags)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for legacy-geometry jet")
+
+    jet_params = dict(
+        m3_params,
+        cathode_neutral_jet=True,
+        anode_neutral_jet=True,
+        neutral_mesh_accommodation=True,
+    )
+    jet_sim = LAPDSim1D(jet_params, jet_flags)
+    jet_sim._circuit_I_loop = 800.0
+    jet_solve = jet_sim.solve_cathode_boundary(update_cache=True)
+    jet_res = jet_solve.beam_result.result
+    jet_geom = jet_sim.geometry
+    jet_roles = np.asarray(jet_geom.cell_role)
+    jet_m = jet_sim.ion_mass_g
+    jet_derived = derive_state(jet_sim.state, jet_sim.floors, jet_m)
+    jet_kb = 1.380649e-16
+
+    # Cathode channel: momentum only at the cathode cell, directed into the
+    # column (+z at the source end), and the volume-integrated M_n source
+    # equals m * v_mix * (the term's own rebirthed flux) exactly.
+    jet_ba = jet_sim.boundary_absorption_rhs(cathode_solve=jet_solve)
+    jet_cath = int(np.flatnonzero(jet_roles == "cathode")[0])
+    assert jet_ba.M_n is not None
+    assert np.array_equal(np.flatnonzero(jet_ba.M_n), [jet_cath])
+    assert jet_ba.M_n[jet_cath] > 0.0
+    jet_RN = float(jet_params.get("cathode_jet_R_N", 0.5))
+    jet_RE = float(jet_params.get("cathode_jet_R_E", 0.2))
+    jet_Ts = float(jet_params["T_s"])
+    jet_veff = np.sqrt(np.pi * jet_kb * jet_Ts / (2.0 * jet_m))
+    jet_vback = np.sqrt(
+        2.0 * jet_RE
+        * (max(jet_res.phi_c, 0.0) + jet_derived.Ti[jet_cath])
+        * ev_to_erg / jet_m
+    )
+    jet_vmix = jet_RN * jet_vback + (1.0 - jet_RN) * jet_veff
+    jet_flux = jet_ba.nn[jet_cath] * jet_geom.neutral_volume_cm3[jet_cath]
+    assert np.isclose(
+        jet_ba.M_n[jet_cath] * jet_geom.neutral_volume_cm3[jet_cath],
+        jet_m * jet_vmix * jet_flux,
+        rtol=1e-12,
+        atol=0.0,
+    )
+
+    # Anode channel: backscatter only, per collected side, directed away
+    # from the mesh (-z gap side, +z column side), at the solve's phi_a.
+    jet_ac = jet_sim.anode_collection_rhs(cathode_solve=jet_solve)
+    jet_aface = int(jet_geom.anode_face_indices[0])
+    assert jet_ac.M_n is not None
+    assert np.array_equal(
+        np.flatnonzero(jet_ac.M_n), [jet_aface - 1, jet_aface]
+    )
+    assert jet_ac.M_n[jet_aface - 1] < 0.0 < jet_ac.M_n[jet_aface]
+    jet_aRN = float(jet_params.get("anode_jet_R_N", 0.5))
+    jet_aRE = float(jet_params.get("anode_jet_R_E", 0.25))
+    for jet_cell in (jet_aface - 1, jet_aface):
+        jet_vb = np.sqrt(
+            2.0 * jet_aRE
+            * max(jet_res.phi_a + jet_derived.Ti[jet_cell], 0.0)
+            * ev_to_erg / jet_m
+        )
+        jet_side_flux = (
+            jet_ac.nn[jet_cell] * jet_geom.neutral_volume_cm3[jet_cell]
+        )
+        assert np.isclose(
+            abs(jet_ac.M_n[jet_cell]) * jet_geom.neutral_volume_cm3[jet_cell],
+            jet_aRN * jet_m * jet_vb * jet_side_flux,
+            rtol=1e-12,
+            atol=0.0,
+        )
+
+    # Floating (afterglow) solve: the jet rides the floating sheath drop --
+    # tiny but finite, never NaN.
+    jet_float = jet_sim.solve_cathode_boundary(
+        floating=True, update_cache=False
+    )
+    jet_ba_float = jet_sim.boundary_absorption_rhs(cathode_solve=jet_float)
+    assert np.all(np.isfinite(jet_ba_float.M_n))
+    assert np.all(jet_ba_float.M_n >= 0.0)
+
+    # Presence gating: flags off -> the terms stay 5-field even with M_n on
+    # the state (the golden path can never construct a jet).
+    jet_off_sim = LAPDSim1D(dict(m3_params), jet_flags)
+    jet_off_sim._circuit_I_loop = 800.0
+    jet_off_solve = jet_off_sim.solve_cathode_boundary(update_cache=True)
+    assert jet_off_sim.boundary_absorption_rhs(
+        cathode_solve=jet_off_solve
+    ).M_n is None
+    assert jet_off_sim.anode_collection_rhs(
+        cathode_solve=jet_off_solve
+    ).M_n is None
+
+    # Mesh momentum accommodation: hand-built stencil -- the wind flowing
+    # INTO the mesh loses -|u| * A_blocked / V * M_n on its own side only;
+    # sign-safe (relaxes M_n toward zero) for either wind direction.
+    mesh_cells = 5
+    mesh_geom = SimpleNamespace(
+        cells=mesh_cells,
+        length_cm=np.full(mesh_cells, 30.0),
+        neutral_volume_cm3=np.full(mesh_cells, 2.0e5),
+        neutral_face_area_cm2=np.full(mesh_cells + 1, 7.0e3),
+    )
+    mesh_floors = {"n": 1e8, "nn": 1e8, "Te": 0.1, "Ti": 0.02}
+    mesh_kw = dict(
+        n=np.full(mesh_cells, 1e12),
+        nn=np.full(mesh_cells, 2e13),
+        u=np.zeros(mesh_cells),
+        Te=np.full(mesh_cells, 5.0),
+        Ti=np.full(mesh_cells, 1.0),
+        ion_mass_g=knob_mass,
+    )
+    for mesh_un, mesh_hit, mesh_dry in ((2.0e4, 1, 2), (-2.0e4, 2, 1)):
+        mesh_state = conservative_from_primitives(
+            un=np.full(mesh_cells, mesh_un), **mesh_kw
+        )
+        mesh_base = neutral_wind_advection_rhs(
+            state=mesh_state,
+            floors=mesh_floors,
+            ion_mass_g=knob_mass,
+            geometry=mesh_geom,
+        )
+        mesh_with = neutral_wind_advection_rhs(
+            state=mesh_state,
+            floors=mesh_floors,
+            ion_mass_g=knob_mass,
+            geometry=mesh_geom,
+            mesh_faces=[2],
+            mesh_blocked_area_cm2=[3.0e3],
+        )
+        mesh_diff = mesh_with.M_n - mesh_base.M_n
+        assert np.isclose(
+            mesh_diff[mesh_hit],
+            -abs(mesh_un) * 3.0e3 * mesh_state.M_n[mesh_hit] / 2.0e5,
+            rtol=1e-13,
+        )
+        # The sink always relaxes M_n toward zero.
+        assert mesh_diff[mesh_hit] * mesh_state.M_n[mesh_hit] < 0.0
+        assert mesh_diff[mesh_dry] == 0.0
+        # Particle fluxes are untouched -- accommodation is momentum-only.
+        assert np.array_equal(mesh_with.nn, mesh_base.nn)
+    # Solver wiring: blocked area reconstructs the full face through the
+    # open fraction T = 1 - eta (Ra = None), A_blocked = A_open * (1-T)/T.
+    jet_eta = float(jet_params["eta"])
+    jet_T = 1.0 - jet_eta
+    assert np.allclose(
+        jet_sim._mesh_blocked_area_cm2,
+        np.asarray(jet_geom.neutral_face_area_cm2, dtype=float)[
+            np.asarray(jet_geom.anode_face_indices, dtype=int)
+        ] * jet_eta / jet_T,
+        rtol=1e-13,
+    )
+
+    # Surface-debit sensitivity arm: power_balance receives (1 - R_E) * P_i
+    # when on; exactly 1.0 * P_i (the M5a' calibration convention) when off.
+    assert jet_sim._cathode_surface_ion_retention == 1.0
+    jet_debit_sim = LAPDSim1D(
+        dict(jet_params, cathode_jet_surface_debit=True), jet_flags
+    )
+    assert np.isclose(
+        jet_debit_sim._cathode_surface_ion_retention,
+        1.0 - float(jet_params.get("cathode_jet_R_E", 0.2)),
+        rtol=1e-13,
+    )
+
+    # --- GCR-consistent recombination energy pair
+    # (recombination_energy_return): +I_ion*S_rec - P_PRB on the electron
+    # fluid, adas-only, mutually exclusive with icool_recomb (double-charge).
+    from cablp.funcs._adas import he_rates as _rer_he_rates
+    from cablp.solvers._sim1d.physics.reactions import (
+        recombination_energy_return_rhs,
+    )
+
+    for rer_bad_params, rer_bad_flags in (
+        (dict(m3_params, recombination_energy_return=True,
+              atomic_rate_model="janev"), resolved_cathode_flags),
+        (dict(m3_params, recombination_energy_return=True,
+              atomic_rate_model="adas"),
+         dict(resolved_cathode_flags, icool_recomb=True)),
+    ):
+        try:
+            LAPDSim1D(rer_bad_params, rer_bad_flags)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected ValueError for {rer_bad_params}")
+    rer_sim = LAPDSim1D(
+        dict(m3_params, recombination_energy_return=True,
+             atomic_rate_model="adas"),
+        resolved_cathode_flags,
+    )
+    rer_state = rer_sim.state
+    rer_term = rer_sim.recombination_energy_return_rhs()
+    rer_derived = derive_state(rer_state, rer_sim.floors, rer_sim.ion_mass_g)
+    rer_rates = _rer_he_rates(
+        np.maximum(rer_state.n, rer_sim.floors["n"]),
+        rer_derived.Te,
+        ("acd", "prb1"),
+    )
+    rer_I_ion = float(rer_sim._I_ion)
+    rer_hand = ev_to_erg * rer_state.n * rer_state.n * (
+        rer_I_ion * rer_rates["acd"] - rer_rates["prb1"]
+    )
+    assert np.allclose(rer_term.Ee, rer_hand, rtol=1e-12, atol=0.0)
+    assert np.all(rer_term.n == 0.0) and np.all(rer_term.Ei == 0.0)
+    # Present in the ledger; identically zero when the key is off (the
+    # golden path sums an exact zero term).
+    assert "recombination_energy_return" in rer_sim.rhs_terms()
+    rer_off = LAPDSim1D(
+        dict(m3_params, atomic_rate_model="adas"), resolved_cathode_flags
+    )
+    assert np.all(rer_off.recombination_energy_return_rhs().Ee == 0.0)
+    # Direction: heating (I_ion > E_rad/event) at the clamped afterglow
+    # floor (Te = 0.2 eV, the adf11 grid edge, where E_rad/event ~ 15 eV),
+    # net sink in the hot ionizing plateau (PRB's bremsstrahlung/cascade
+    # keeps radiating while ACD collapses, so E_rad/event >> I_ion there).
+    rer_cold = _rer_he_rates(
+        np.full(1, 1.0e13), np.full(1, 0.2), ("acd", "prb1")
+    )
+    rer_hot = _rer_he_rates(
+        np.full(1, 5.0e12), np.full(1, 8.0), ("acd", "prb1")
+    )
+    assert rer_I_ion * rer_cold["acd"][0] > rer_cold["prb1"][0]
+    assert rer_I_ion * rer_hot["acd"][0] < rer_hot["prb1"][0]
+
+    # --- Square gas-puff waveform (the measured piezo/supply behaviour):
+    # erf rise anchored on circuit-on, flat at S_gp through the drive,
+    # erf close after drive end with a tail into the afterglow.
+    for sq_bad in (
+        {"gas_puff_mode": "square", "gas_puff_rise_width_s": 0.0},
+        {"gas_puff_mode": "square", "gas_puff_close_lag_s": -1e-3},
+    ):
+        try:
+            LAPDSim1D(dict(m3_params, **sq_bad), resolved_cathode_flags)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected ValueError for {sq_bad}")
+    sq_sim = LAPDSim1D(
+        dict(m3_params, gas_puff_mode="square"), resolved_cathode_flags
+    )
+    sq_t0 = sq_sim._plasma_phase_time_origin()
+    sq_Sgp = float(sq_sim._input_dict["S_gp"])
+    # Before circuit-on the envelope is (nearly) closed; well after the rise
+    # it is flat at S_gp; mid-drive stays flat (no decay-to-level).
+    assert sq_sim._effective_gas_puff_sccm(time=0.0)[0] < 0.1 * sq_Sgp
+    assert np.isclose(
+        sq_sim._effective_gas_puff_sccm(time=sq_t0 + 5e-3)[0], sq_Sgp,
+        rtol=1e-6,
+    )
+    # Emulate a triggered breakdown to exercise the close anchor: the flow
+    # still runs at S_gp late in the drive, decays through the close lag,
+    # and is shut well inside the afterglow.
+    sq_sim._t_prebreakdown_trigger = sq_t0 + 1.0e-3
+    sq_sim._t_breakdown_trigger = sq_t0 + 1.2e-3
+    sq_tau_dis = float(sq_sim._input_dict["tau_discharge"])
+    sq_end = sq_sim._t_breakdown_trigger + sq_tau_dis
+    assert np.isclose(
+        sq_sim._effective_gas_puff_sccm(time=sq_end - 2e-3)[0], sq_Sgp,
+        rtol=1e-6,
+    )
+    sq_mid_close = sq_sim._effective_gas_puff_sccm(
+        time=sq_end + float(sq_sim._input_dict.get("gas_puff_close_lag_s", 5e-4))
+    )[0]
+    assert 0.3 * sq_Sgp < sq_mid_close < 0.7 * sq_Sgp
+    assert sq_sim._effective_gas_puff_sccm(time=sq_end + 4e-3)[0] < 1e-3 * sq_Sgp
+    # The afterglow phase switch stays open for the square tail only.
+    assert sq_sim._phase_switches("afterglow")["gas_puff_enabled"]
+    assert not LAPDSim1D(dict(m3_params), resolved_cathode_flags)._phase_switches(
+        "afterglow"
+    )["gas_puff_enabled"]
+
+    # --- Electrode sample smoothing (cathode_sample_smoothing): EMA of the
+    # sampled cathode/anode-flank (n, Te) at the presheath transit time,
+    # accepted-steps only; the solve reads the smoothed state.
+    for ss_bad in ({"cathode_sample_smoothing": "bogus"},
+                   {"cathode_sample_smoothing": -1.0}):
+        try:
+            LAPDSim1D(dict(m3_params, **ss_bad), resolved_cathode_flags)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected ValueError for {ss_bad}")
+    ss_sim = LAPDSim1D(
+        dict(m3_params, cathode_sample_smoothing="presheath"),
+        resolved_cathode_flags,
+    )
+    ss_cath = cathode_sample_indices(ss_sim.geometry)[0]
+    ss_aface = int(ss_sim.geometry.anode_face_indices[0])
+    assert set(ss_sim._sample_smooth_cells) == {ss_cath, ss_aface - 1, ss_aface}
+    # Seeded from the initial state: the patched state is initially identical.
+    ss_state0 = ss_sim.state
+    ss_patched0 = ss_sim._smoothed_sample_state(ss_state0)
+    assert np.allclose(ss_patched0.n, ss_state0.n, rtol=1e-14)
+    # Hand-check the EMA blend: perturb the state, accept one step, verify
+    # ema' = ema + (1 - exp(-dt/tau)) * (x - ema) with tau = l / c_s(Te_ema).
+    ss_n_old, ss_Te_old = ss_sim._sample_ema[ss_cath]
+    ss_state_p = ss_sim.state
+    ss_n_new = float(ss_state_p.n[ss_cath]) * 2.0
+    ss_sim._state.n[ss_cath] = ss_n_new
+    ss_dt = 1.0e-6
+    ss_sim._update_sample_smoothing(ss_dt)
+    from cablp.solvers._sim1d.physics.flux import ion_sound_speed as _ss_cs
+    ss_tau = float(ss_sim.geometry.length_cm[ss_cath]) / _ss_cs(
+        max(ss_Te_old, ss_sim.floors["Te"]), ss_sim._mu
+    )
+    ss_alpha = 1.0 - np.exp(-ss_dt / ss_tau)
+    assert np.isclose(
+        ss_sim._sample_ema[ss_cath][0],
+        ss_n_old + ss_alpha * (ss_n_new - ss_n_old),
+        rtol=1e-12,
+    )
+    # The solve consumes the smoothed sample: with the EMA pinned at the
+    # unperturbed density, doubling the instantaneous cathode-cell density
+    # must NOT move the solve, and forcing the EMA must move it.
+    ss_sim._circuit_I_loop = 800.0
+    ss_sim._sample_ema[ss_cath][0] = ss_n_old  # pin the EMA
+    ss_res_b = ss_sim.solve_cathode_boundary(update_cache=False)
+    ss_sim._state.n[ss_cath] = ss_n_new * 4.0  # instantaneous state ignored
+    ss_res_b2 = ss_sim.solve_cathode_boundary(update_cache=False)
+    assert np.isclose(
+        ss_res_b2.beam_result.result.I_i,
+        ss_res_b.beam_result.result.I_i,
+        rtol=1e-12,
+    )
+    ss_sim._sample_ema[ss_cath][0] = ss_n_old * 3.0  # the EMA moves the solve
+    ss_res_c = ss_sim.solve_cathode_boundary(update_cache=False)
+    assert np.isclose(
+        ss_res_c.beam_result.result.I_i,
+        3.0 * ss_res_b.beam_result.result.I_i,
+        rtol=1e-9,
+    )
+    # Off (default) is the identity: same object back, no copies.
+    ss_off = LAPDSim1D(dict(m3_params), resolved_cathode_flags)
+    ss_off_state = ss_off.state
+    assert ss_off._smoothed_sample_state(ss_off_state) is ss_off_state
 
     print(
         "sim1d smoke ok: "

@@ -1,7 +1,7 @@
 import numpy as np
 
 from cablp.funcs._cross import charge_ex_react
-from cablp.vars._cons import ev_to_erg
+from cablp.vars._cons import ev_to_erg, kb_cgs
 
 from .flux import ion_sound_speed
 from ..core.geometry import PLASMA_DEAD_ROLES
@@ -191,8 +191,26 @@ def boundary_absorption_rhs(
     b_presheath_length=1.0,
     sigma_in_model="constant",
     gas_type=None,
+    cathode_jet=None,
 ):
     """Return the plasma absorbed by the plasma-terminating surfaces.
+
+    ``cathode_jet`` (CATHODE_IDRIVEN_PLAN.md §8): when given (a dict with
+    ``R_N``, ``R_E``, ``phi_c_V``, ``T_s_K``) and the state carries ``M_n``,
+    the recycle flux rebirthed at a *cathode* face is a directed jet instead
+    of gas at rest: the reflected fraction ``R_N`` backscatters at
+    ``v_back = sqrt(2 R_E (phi_c + Ti)/m)`` and the implanted remainder
+    ``1 - R_N`` desorbs as a directed effusive flux off the hot disc at
+    ``v_eff = sqrt(pi k T_s / (2 m))`` (the per-particle directed momentum
+    of a cosine-law effusive flux). The momentum rides in the SAME term
+    that rebirths the particles, so the two are consistent by construction;
+    the surface absorbs the difference between the incoming sonic momentum
+    and the re-emitted jet momentum, as any wall does. Collector faces stay
+    momentum-free (their sheath is the ~Te-scale ambipolar drop, not the
+    cathode fall). The reflected atoms' kinetic energy beyond the mean-flow
+    momentum is NOT booked -- neutrals carry no energy field (the standing
+    M2 convention); see the campaign log for the surface-debit sensitivity
+    arm that bounds the omission.
 
     The cathode and collector surfaces end the plasma domain, so the Bohm
     criterion applies to the face itself (plan §11 decision 3): plasma leaves at
@@ -228,6 +246,15 @@ def boundary_absorption_rhs(
     cells = roles.size
     dN_loss = np.zeros(cells, dtype=float)
     sonic_momentum = np.zeros(cells, dtype=float)
+    jet_active = cathode_jet is not None and state.M_n is not None
+    jet_M_n = np.zeros(cells, dtype=float) if jet_active else None
+    if jet_active:
+        # Directed effusive desorption off the hot disc: per-particle
+        # momentum of a cosine-law effusive flux at the surface temperature.
+        v_eff = np.sqrt(
+            np.pi * kb_cgs * max(float(cathode_jet["T_s_K"]), 0.0)
+            / (2.0 * ion_mass_g)
+        )
     for face in np.flatnonzero(absorbing):
         face = int(face)
         left, right = face - 1, face
@@ -265,8 +292,30 @@ def boundary_absorption_rhs(
         )
         dN_loss[live] += loss
         sonic_momentum[live] += ion_mass_g * outward * cs * loss
+        if jet_active and roles[live] == "cathode":
+            v_back = np.sqrt(
+                2.0
+                * float(cathode_jet["R_E"])
+                * max(
+                    float(cathode_jet["phi_c_V"]) + derived.Ti[live], 0.0
+                )
+                * ev_to_erg
+                / ion_mass_g
+            )
+            R_N = float(cathode_jet["R_N"])
+            v_mix = R_N * v_back + (1.0 - R_N) * v_eff
+            # Directed into the plasma: opposite the face's outward normal.
+            jet_M_n[live] += (
+                -outward
+                * ion_mass_g
+                * v_mix
+                * loss
+                / geometry.neutral_volume_cm3[live]
+            )
     dN_loss *= float(b_surface_loss)
     sonic_momentum *= float(b_surface_loss)
+    if jet_active:
+        jet_M_n *= float(b_surface_loss)
 
     plasma_loss_rate = dN_loss / geometry.plasma_volume_cm3
     return ConservativeState1D(
@@ -275,6 +324,7 @@ def boundary_absorption_rhs(
         M=-sonic_momentum / geometry.plasma_volume_cm3,
         Ee=-1.5 * ev_to_erg * derived.Te * plasma_loss_rate,
         Ei=-1.5 * ev_to_erg * derived.Ti * plasma_loss_rate,
+        M_n=jet_M_n,
     )
 
 
@@ -287,8 +337,22 @@ def anode_collection_rhs(
     eta,
     alpha_isat=np.exp(-0.5),
     b_anode_collection=1.0,
+    anode_jet=None,
 ):
     """Return the plasma the anode mesh collects and neutralizes.
+
+    ``anode_jet`` (CATHODE_IDRIVEN_PLAN.md §8, anode addendum): when given
+    (a dict with ``R_N``, ``R_E``, ``phi_a_V``) and the state carries
+    ``M_n``, the backscattered fraction ``R_N`` of each side's collected
+    flux re-emits as a directed jet AWAY from the mesh on the side it was
+    collected from, at ``v_back = sqrt(2 R_E (phi_a + Ti)/m)`` -- the ions
+    fall through the ion-attracting anode sheath ``phi_a`` before striking
+    the wires. Unlike the cathode disc, the implanted-then-desorbed
+    remainder ``1 - R_N`` re-emits from thin cylindrical wires with no net
+    axial direction, so it stays momentum-free (gas at rest, as before).
+    The gap-side jet points at the cathode (-z) and the column-side jet
+    downstream (+z); each rides in the same term that rebirths its
+    particles, so flux and momentum stay consistent per side.
 
     A sheath forms on every mesh wire, so ions reach it at the **Bohm flux**
     ``exp(-0.5) * n * c_s`` -- set by the sheath, not by the bulk drift. A mesh
@@ -336,16 +400,42 @@ def anode_collection_rhs(
 
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     dN_loss = np.zeros(geometry.cells, dtype=float)
+    jet_active = anode_jet is not None and state.M_n is not None
+    jet_M_n = np.zeros(geometry.cells, dtype=float) if jet_active else None
     for face in anode_faces:
         for cell in (int(face) - 1, int(face)):
-            dN_loss[cell] += _cell_surface_particle_loss(
+            loss = _cell_surface_particle_loss(
                 n=state.n[cell],
                 Te=derived.Te[cell],
                 mu=mu,
                 area_cm2=float(eta) * geometry.plasma_area_cm2[cell],
                 alpha_isat=alpha_isat,
             )
+            dN_loss[cell] += loss
+            if jet_active:
+                # Away from the mesh, on the side the ion was collected
+                # from: -z for the low-z flanking cell, +z for the high-z.
+                direction = -1.0 if cell == int(face) - 1 else 1.0
+                v_back = np.sqrt(
+                    2.0
+                    * float(anode_jet["R_E"])
+                    * max(
+                        float(anode_jet["phi_a_V"]) + derived.Ti[cell], 0.0
+                    )
+                    * ev_to_erg
+                    / ion_mass_g
+                )
+                jet_M_n[cell] += (
+                    direction
+                    * float(anode_jet["R_N"])
+                    * ion_mass_g
+                    * v_back
+                    * loss
+                    / geometry.neutral_volume_cm3[cell]
+                )
     dN_loss *= float(b_anode_collection)
+    if jet_active:
+        jet_M_n *= float(b_anode_collection)
 
     plasma_loss_rate = dN_loss / geometry.plasma_volume_cm3
     neutral_gain_rate = dN_loss / geometry.neutral_volume_cm3
@@ -355,6 +445,7 @@ def anode_collection_rhs(
         M=-ion_mass_g * derived.u * plasma_loss_rate,
         Ee=-1.5 * ev_to_erg * derived.Te * plasma_loss_rate,
         Ei=-1.5 * ev_to_erg * derived.Ti * plasma_loss_rate,
+        M_n=jet_M_n,
     )
 
 

@@ -227,6 +227,21 @@ def neutral_source_defaults():
         "tau_gp_decay_factor": 1.0,
         "tau_gp_pulse_duration": 1e-3,
         "tau_gp_decay_duration": 5e-3,
+        # "square" waveform (the measured valve behaviour, 2026-07-21): the
+        # piezo is driven by a square voltage pulse from the SAME trigger
+        # that closes the cathode circuit, held for the discharge; the
+        # 45 PSI 1/4" supply line is hydraulically stiff (conductance and
+        # stored inventory orders beyond the delivery), so the flow is FLAT
+        # at S_gp with only the piezo-opening/entry-transit erf edges.
+        # Rise center/width and close lag are hardware-boxed (~0.5-1 ms),
+        # NOT fit knobs; S_gp is the one calibration constant (sccm-vs-
+        # drive-voltage is uncalibrated). The close tail runs into the
+        # afterglow. Rise anchors on circuit-on (end of the neutral-
+        # prebreakdown phase); breakdown rides the inter-shot residual
+        # fill, matching the machine sequencing.
+        "gas_puff_rise_center_s": 5e-4,
+        "gas_puff_rise_width_s": 5e-4,
+        "gas_puff_close_lag_s": 5e-4,
         "tau_gp_rise_center": -5e-3,
         "tau_gp_rise_width": 1e-3,
         "tau_gp_drop_center": 1e-3,
@@ -539,6 +554,22 @@ def fudge_factor_defaults():
         "alpha_front": 1.0,
         "D_amb": 0.0,
         "atomic_rate_model": "adas",
+        # GCR-consistent recombination energy booking (CATHODE_IDRIVEN_PLAN
+        # §5b shelf item, wired 2026-07-21): per recombination event, credit
+        # the binding energy I_ion to the electron fluid (paid at ionization
+        # via I_ion*S_ion and never returned) AND charge the full ADAS PRB
+        # (what actually leaves as photons: recombination radiation +
+        # bremsstrahlung + cascade). Net per event = I_ion - E_rad --
+        # heating in the afterglow (E_rad ~ 18 of 24.6 eV there), a small
+        # extra sink in the ionizing plateau (E_rad/event > I_ion). The
+        # 3/2*Te*S_rec capture-KE loss stays booked separately (it cancels
+        # in the net; this pair adds on top). The PAIR is the consistent
+        # unit: enabling PRB alone double-charges (that is why
+        # icool_recomb stays off) -- construction refuses the combination,
+        # and requires atomic_rate_model="adas" (no PRB booking exists on
+        # the janev path). adf11 grid bottoms at 0.2 eV; lookups clamp
+        # there (nearest-edge, no extrapolation).
+        "recombination_energy_return": False,
         "b_ioniz": 1.0,
         "b_rec_rad": 1.0,
         "b_rec_3b": 1.0,
@@ -921,6 +952,55 @@ def cathode_defaults():
         "cathode_ads_rate_per_s": 0.0,
         "cathode_desorption_prefactor_per_s": 0.0,
         "cathode_desorption_energy_eV": 3.0,
+        # Directed neutral recycle jets (CATHODE_IDRIVEN_PLAN.md §8): with
+        # the neutral_momentum flag on, the surface recycle fluxes carry
+        # directed momentum into M_n instead of rebirthing at rest.
+        # Momentum-only first pass -- the reflected atoms' kinetic energy
+        # is not booked (neutrals have no energy field; standing M2
+        # convention). (R_N, R_E) are literature-boxed particle/energy
+        # reflection coefficients (Eckstein/Thomas class), NOT fit knobs:
+        # cathode defaults are the plan-§8 mid box for He->LaB6 (the
+        # B-rich vs La surface-termination bracket is the honest
+        # uncertainty); anode defaults sit at the He->Mo heavy-target
+        # corner class. The cathode channel splits R_N fast backscatter at
+        # sqrt(2 R_E (phi_c + Ti)/m) + (1-R_N) directed effusion at the
+        # surface T_s; the anode channel is backscatter-only (wire
+        # re-emission has no net axial direction), per collected side, at
+        # the solve's phi_a.
+        "cathode_neutral_jet": False,
+        "cathode_jet_R_N": 0.5,
+        "cathode_jet_R_E": 0.2,
+        "anode_neutral_jet": False,
+        "anode_jet_R_N": 0.5,
+        "anode_jet_R_E": 0.25,
+        # Step-3 sensitivity arm: debit the cathode surface's ion heating
+        # by the reflected-energy fraction (power_balance receives
+        # (1 - R_E) * P_cathode_i). Off by default: the M5a' thermal tier
+        # was calibrated with the full P_i, and the jet's first pass is
+        # momentum-only. Requires cathode_neutral_jet.
+        "cathode_jet_surface_debit": False,
+        # Mesh momentum accommodation for the evolved wind: the momentum
+        # the anode wires intercept lands on the anode structure instead
+        # of staying in the gas (the open-area throttle alone leaves the
+        # gap recirculation artificially elastic). Requires
+        # neutral_momentum and anode faces.
+        "neutral_mesh_accommodation": False,
+        # Electrode sample smoothing (2026-07-21): the sheath solve's inputs
+        # are the instantaneous cathode-cell and anode-flank (n, Te) cell
+        # averages, which carry grid-level explicit-step noise the physical
+        # supply integrates over -- the presheath delivers flux averaged
+        # over an ion transit time tau ~ l_cell/c_s (~5 us at production
+        # parameters). Because V(I) is nearly flat, that sampling noise
+        # amplifies into per-solve V_b (sigma 0.8 V constant-drag, 12.5 V
+        # under the M_n closure) and leaks into physics through the beam
+        # energy (phi_c per solve) and the trapezoidal fold's EMF residual
+        # (§3c). The anode sample matters equally: J_i_a and Te_anode enter
+        # the residual through tau_a*ln(1 + J_anode/J_i_a), so anode-side
+        # noise flaps phi_a and drags phi_c with it. "presheath" computes
+        # tau = l_cell/c_s(Te_ema) per sampled cell (a boxed physical
+        # timescale, not a knob); a float is a fixed tau [s]; None (default)
+        # disables bit-exactly. EMA updates on accepted steps only.
+        "cathode_sample_smoothing": None,
     }
 
 

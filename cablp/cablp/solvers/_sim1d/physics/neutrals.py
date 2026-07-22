@@ -174,7 +174,14 @@ def neutral_exchange_rhs(state, geometry, exchange_coeff_cm3_s):
     )
 
 
-def neutral_wind_advection_rhs(state, floors, ion_mass_g, geometry):
+def neutral_wind_advection_rhs(
+    state,
+    floors,
+    ion_mass_g,
+    geometry,
+    mesh_faces=None,
+    mesh_blocked_area_cm2=None,
+):
     """Return conservative upwind advection of ``nn`` and ``M_n`` by the wind.
 
     The drag-driven neutral wind ``u_n = M_n / (m nn)`` carries gas and its
@@ -192,6 +199,16 @@ def neutral_wind_advection_rhs(state, floors, ion_mass_g, geometry):
     a sink ``-max(+/-u_n, 0) * A_end / V_end * M_n`` on the end cells, the
     same free-molecular accommodation the radial wall term applies. A state
     without ``M_n`` gets zeros.
+
+    ``mesh_faces`` / ``mesh_blocked_area_cm2`` (CATHODE_IDRIVEN_PLAN.md §8,
+    anode addendum): the anode mesh's *open* area already throttles what the
+    wind carries across, but the momentum the wires intercept has to land on
+    the anode structure, not stay in the gas -- without this sink the gap
+    recirculation set up by opposing surface jets is artificially elastic.
+    For each listed face, the wind flowing INTO the mesh from either flanking
+    cell accommodates on the blocked area: ``-max(+/-u_n, 0) * A_blocked / V
+    * M_n``, the exact form of the end-wall sink (sign-safe because ``u_n``
+    and ``M_n`` share a sign).
     """
     zeros = np.zeros(geometry.cells, dtype=float)
     if state.M_n is None:
@@ -231,6 +248,24 @@ def neutral_wind_advection_rhs(state, floors, ion_mass_g, geometry):
         * M_n[-1]
         / geometry.neutral_volume_cm3[-1]
     )
+    if mesh_faces is not None:
+        for face, blocked in zip(
+            np.asarray(mesh_faces, dtype=int),
+            np.asarray(mesh_blocked_area_cm2, dtype=float),
+        ):
+            left, right = int(face) - 1, int(face)
+            dM_n[left] -= (
+                max(u_n[left], 0.0)
+                * blocked
+                * M_n[left]
+                / geometry.neutral_volume_cm3[left]
+            )
+            dM_n[right] -= (
+                max(-u_n[right], 0.0)
+                * blocked
+                * M_n[right]
+                / geometry.neutral_volume_cm3[right]
+            )
     return ConservativeState1D(
         n=zeros,
         nn=dnn,

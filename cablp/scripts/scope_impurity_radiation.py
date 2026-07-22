@@ -47,7 +47,13 @@ from cablp.funcs._adas import ADAS_DIR, _interp_blend, _interp_coords, read_adf1
 PLATEAU_MS = (5.0, 19.5)
 
 # adf11 series year per element: '96 GCR where it exists, '89 otherwise.
-SERIES = {"he": "96", "c": "96", "o": "96", "b": "89", "w": "89", "mo": "89"}
+SERIES = {
+    "he": "96", "c": "96", "o": "96",
+    "b": "89", "w": "89", "mo": "89",
+    # Stainless species ('89 Abels-van Maanen, added 2026-07-21): the last
+    # untested radiators for the stage-(ii) fixed-fraction hypothesis.
+    "fe": "89", "cr": "89", "ni": "89",
+}
 
 
 def _load_element(el):
