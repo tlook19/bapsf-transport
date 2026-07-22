@@ -492,6 +492,392 @@ def _drift(F, g):
         )
 
 
+class KN2ZoneJump(KN2Zone):
+    """K1b: bounded-chord (jump) annulus kernel.
+
+    The rate-based annulus operators give EXPONENTIAL flight-time
+    distributions; the measured chord statistics of the annular duct
+    (cosine emission, 2D perpendicular projection) are ten times narrower
+    (wall->wall mean^2/var ~ 10, wall->inner ~ 200) -- the exponential's
+    long-flight tail is fictitious and over-carries the duct. Here annulus
+    flights are DETERMINISTIC jumps at the class-mean chords, all derived
+    numerically from the local (Rp, Rm) -- no free parameters:
+
+      wall -> {inner: view factor Rp/Rm, else wall}, chords c_wi / c_ww
+      inner (column escapes) -> wall, chord c_io
+
+    Axial displacement per flight: dz = v_z * c/v_perp. Residence is
+    apportioned along the traversed cells; end-plane crossings clip, stick
+    with the pump probability, and re-emit thermally. The column keeps the
+    rate treatment (its gas is volume-mixed by CX).
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # per-cell chord classes from the local geometry, cosine-weighted
+        nz = self.nz
+        self.F_inner = self.Rp / self.Rm
+        s = np.linspace(0.0, 1.0, 20001)
+        self.c_ww = np.empty(nz)
+        self.c_wi = np.empty(nz)
+        self.c_io = np.empty(nz)
+        for i in range(nz):
+            mu = self.F_inner[i]
+            Rm = self.Rm[i]
+            Rp = self.Rp[i]
+            outer = s >= mu
+            cw = 2.0 * Rm * np.sqrt(1.0 - s[outer] ** 2)
+            self.c_ww[i] = cw.mean() if cw.size else 2.0 * (Rm - Rp)
+            si = s[~outer]
+            if si.size:
+                ci = Rm * np.sqrt(1.0 - si**2) - np.sqrt(
+                    np.maximum(Rp**2 - (Rm * si) ** 2, 0.0)
+                )
+                self.c_wi[i] = ci.mean()
+            else:
+                self.c_wi[i] = Rm - Rp
+            # inner surface, outward cosine: c = sqrt(Rm^2 - Rp^2 s^2) - Rp sqrt(1-s^2)...
+            # parameterize by emission angle: chord to the outer circle
+            cio = np.sqrt(Rm**2 - (Rp * s) ** 2) - Rp * np.sqrt(1.0 - s**2)
+            self.c_io[i] = cio.mean()
+        self.z_edges = self.bg["z_edges"]
+        self.zc = 0.5 * (self.z_edges[:-1] + self.z_edges[1:])
+
+    def _fly(self, launch, chord_cm, tal_t, tal_tv):
+        """Propagate one flight class. ``launch``: (nz, nvz, nvp) rates
+        [atoms/s]. Returns (landing rates per cell (nz, nvz, nvp), end
+        losses dict) and accumulates annulus residence tallies."""
+        g = self.g
+        nz = self.nz
+        land = np.zeros_like(launch)
+        end_L = np.zeros((g.nvz, g.nvp))
+        end_R = np.zeros((g.nvz, g.nvp))
+        ze = self.z_edges
+        with np.errstate(divide="ignore", invalid="ignore"):
+            tof = chord_cm[:, None, None] / np.maximum(g.VP[None, :, :], 1e-30)
+        dz = g.VZ[None, :, :] * tof  # (nz, nvz, nvp)
+        for i in range(nz):
+            rates = launch[i]
+            if not np.any(rates):
+                continue
+            z0 = self.zc[i]
+            z1 = np.clip(z0 + dz[i], ze[0], ze[-1])
+            crossed_L = (z0 + dz[i]) < ze[0]
+            crossed_R = (z0 + dz[i]) > ze[-1]
+            # residence: uniform along [min(z0,z1), max(z0,z1)] at speed --
+            # time in cell j = overlap_j / |vz| (clipped path)
+            lo = np.minimum(z0, z1)
+            hi = np.maximum(z0, z1)
+            # overlaps: (nvz, nvp, nz)
+            ov = np.clip(
+                np.minimum(hi[..., None], ze[1:][None, None, :])
+                - np.maximum(lo[..., None], ze[:-1][None, None, :]),
+                0.0,
+                None,
+            )
+            with np.errstate(divide="ignore", invalid="ignore"):
+                t_cell = ov / np.maximum(np.abs(g.VZ[..., None]), 1e-30)
+            w = rates[..., None] * t_cell  # atom-seconds per cell
+            tal_t += w.sum(axis=(0, 1)) / np.maximum(self.V_ann, 1e-30)
+            tal_tv += (w * g.VZ[..., None]).sum(axis=(0, 1)) / np.maximum(
+                self.V_ann, 1e-30
+            )
+            interior = ~(crossed_L | crossed_R)
+            if np.any(interior):
+                j = np.clip(np.searchsorted(ze, z1) - 1, 0, nz - 1)
+                idx = np.nonzero(interior)
+                np.add.at(land, (j[idx], idx[0], idx[1]), rates[idx])
+            end_L += np.where(crossed_L, rates, 0.0)
+            end_R += np.where(crossed_R, rates, 0.0)
+        return land, end_L, end_R
+
+    def solve(self):
+        g = self.g
+        nz = self.nz
+        bgs = self.bg["sources"]
+        T_s = self.bg["T_s"]
+        wall_spec = self.M_wall  # cosine-wall spectrum (vp^2-weighted)
+
+        def inflow(rate, spectrum, area):
+            with np.errstate(divide="ignore", invalid="ignore"):
+                dens = np.where(
+                    np.abs(g.VZ) > 0, spectrum / (np.abs(g.VZ) * area), 0.0
+                )
+            return rate * dens
+
+        # column boundary inflows (faces are column-radius discs)
+        Fc_in_L = inflow(
+            bgs.get("cathode_face", 0.0),
+            g.half_flux_spectrum(T_s, +1),
+            self.A_col[0],
+        )
+        Fc_in_R = inflow(
+            bgs.get("collector_face", 0.0),
+            g.half_flux_spectrum(T_WALL_K, -1),
+            self.A_col[-1],
+        )
+        Sc = np.zeros((nz, g.nvz, g.nvp))
+        rec = self.bg.get("rec_cell")
+        if rec is not None and rec.sum() > 0:
+            scale = bgs.get("vol_rec", rec.sum()) / rec.sum()
+            for i in range(nz):
+                if rec[i] > 0:
+                    Sc[i] += scale * rec[i] / self.V_col[i] * self.M_cx[i]
+        for name, sign in (("anode_left", -1), ("anode_right", +1)):
+            rate = bgs.get(name, 0.0)
+            if rate <= 0:
+                continue
+            j = self.mesh_face - 1 if sign < 0 else self.mesh_face
+            j = min(max(j, 0), nz - 1)
+            Sc[j] += (
+                rate / self.V_col[j] * g.half_flux_spectrum(T_WALL_K, sign)
+            )
+        # annulus wall-launch rates [atoms/s per bin]: the puff
+        wall_launch = np.zeros((nz, g.nvz, g.nvp))
+        if bgs.get("puff", 0.0) > 0:
+            iz = int(np.searchsorted(self.z_edges, bgs["puff_z"]) - 1)
+            iz = min(max(iz, 0), nz - 1)
+            wall_launch[iz] += bgs["puff"] * wall_spec
+        inner_launch = np.zeros_like(wall_launch)  # column escapes
+
+        tal_t = np.zeros(nz)
+        tal_tv = np.zeros(nz)
+        F_tot_c = np.zeros((nz, g.nvz, g.nvp))
+        inv_tot = 0.0
+        gen = 0
+        while gen < self.max_gen:
+            inv = 0.0
+            # ---- column: 1-zone implicit sweep (no annulus rate coupling)
+            Fc = np.zeros((nz, g.nvz, g.nvp))
+            for direction in (+1, -1):
+                order = range(nz) if direction > 0 else range(nz - 1, -1, -1)
+                sel = g.vz > 0 if direction > 0 else g.vz < 0
+                F_prev = (Fc_in_L if direction > 0 else Fc_in_R)[sel]
+                vz = np.abs(g.vz[sel])[:, None]
+                for i in order:
+                    face = i if direction > 0 else i + 1
+                    if face == self.mesh_face:
+                        F_prev = self.transparency * F_prev
+                    lam = vz / self.dz[i]
+                    denom = lam + (
+                        self.nu_ion[i] + self.nu_cx[i] + self.nux[i][None, :]
+                    )
+                    fc = (Sc[i][sel] + lam * F_prev) / denom
+                    Fc[i][sel] = fc
+                    F_prev = fc
+            F_tot_c += Fc
+            inv += float((Fc.sum(axis=(1, 2)) * self.V_col).sum())
+            # column escapes -> annulus inner-launches (bin-preserving)
+            esc = Fc * self.nux[:, None, :] * self.V_col[:, None, None]
+            inner_launch += esc
+            # CX relay -> next column generation
+            R_cx = self.nu_cx * Fc.sum(axis=(1, 2))
+            Sc = R_cx[:, None, None] * self.M_cx
+            # column end outgoing -> re-emit with sticking
+            Fc_in_L = np.zeros_like(Fc_in_L)
+            Fc_in_R = np.zeros_like(Fc_in_R)
+            out_L = self.outgoing_flux(Fc, self.A_col, -1)
+            out_R = self.outgoing_flux(Fc, self.A_col, +1)
+            Fc_in_L += inflow(
+                (1.0 - self.s_L) * out_L,
+                g.half_flux_spectrum(T_s, +1),
+                self.A_col[0],
+            )
+            Fc_in_R += inflow(
+                (1.0 - self.s_R) * out_R,
+                g.half_flux_spectrum(T_WALL_K, -1),
+                self.A_col[-1],
+            )
+            # ---- annulus flights this generation
+            wl, il = wall_launch, inner_launch
+            wall_launch = np.zeros_like(wl)
+            inner_launch = np.zeros_like(il)
+            inv_flight = float(wl.sum() + il.sum())
+            # wall launches branch: F_inner -> inner (chord c_wi), rest -> wall
+            landings_w = np.zeros((nz, g.nvz, g.nvp))
+            for launch, chord, to_inner in (
+                (wl * (1.0 - self.F_inner)[:, None, None], self.c_ww, False),
+                (wl * self.F_inner[:, None, None], self.c_wi, True),
+                (il, self.c_io, False),
+            ):
+                if not np.any(launch):
+                    continue
+                land, end_L, end_R = self._fly(launch, chord, tal_t, tal_tv)
+                if to_inner:
+                    # entering the column: bin-preserving volume source
+                    Sc += land / self.V_col[:, None, None]
+                else:
+                    landings_w += land
+                # end crossings: stick or thermally re-emit into the annulus
+                back_L = (1.0 - self.s_L) * end_L.sum()
+                back_R = (1.0 - self.s_R) * end_R.sum()
+                if back_L > 0:
+                    wall_launch[0] += back_L * g.half_flux_spectrum(T_s, +1)
+                if back_R > 0:
+                    wall_launch[-1] += back_R * g.half_flux_spectrum(
+                        T_WALL_K, -1
+                    )
+            # landed wall atoms re-emit next generation, cosine-wall spectrum
+            wall_launch += landings_w.sum(axis=(1, 2))[:, None, None] * wall_spec
+            inv_tot += max(inv, 0.0)
+            gen += 1
+            next_launch = float(wall_launch.sum() + inner_launch.sum())
+            if gen == 1:
+                self._launch_peak = max(inv_flight, next_launch, 1e-300)
+            else:
+                self._launch_peak = max(self._launch_peak, next_launch)
+            if self.verbose and (gen <= 3 or gen % 25 == 0):
+                print(f"  gen {gen:3d}: column inventory {inv:.3e} "
+                      f"(total {inv_tot:.3e}), next flights {next_launch:.3e}")
+            if (
+                gen > 5
+                and inv <= self.truncate * max(inv_tot, 1e-300)
+                and next_launch <= self.truncate * self._launch_peak
+            ):
+                break
+        nn_ann = tal_t
+        with np.errstate(invalid="ignore", divide="ignore"):
+            un_ann = np.where(tal_t > 0, tal_tv / np.maximum(tal_t, 1e-300), 0.0)
+        return {
+            "Fc": F_tot_c,
+            "generations": gen,
+            "nn_col": F_tot_c.sum(axis=(1, 2)),
+            "nn_ann": nn_ann,
+            "un_col": _drift(F_tot_c, self.g),
+            "un_ann": un_ann,
+        }
+
+
+def build_hop_kernels(kn):
+    """Return the K2 hop-matrix closure pieces from a ``KN2ZoneJump``.
+
+    All from geometry + the 300 K wall spectrum (no free parameters):
+
+      C_hop  (nz, nz)  symmetric pairwise annulus conductances [cm^3/s];
+                       net annulus flow i->j = C_hop_ij (n_i - n_j).
+      T_in   (nz, nz)  annulus->column transfer [cm^3/s]: flow into column
+                       cell j per unit annulus density in i. Columns are
+                       normalized so sum_i T_in_ij equals the local K_r_j
+                       exactly -- uniform equal densities stay stationary,
+                       and the total reduces to the moment model's K_r
+                       identically (Rm * F = Rp).
+
+    End-clipped flights fold into the end cells (the solver's ends
+    re-emit in place; pumping remains the separate named sink), keeping
+    both kernels conservative on the domain.
+    """
+    g = kn.g
+    nz = kn.nz
+    wall_spec = kn.M_wall
+    P_ww = np.zeros((nz, nz))
+    P_in = np.zeros((nz, nz))
+    dummy_t = np.zeros(nz)
+    dummy_tv = np.zeros(nz)
+    for i in range(nz):
+        for P, chord, frac in (
+            (P_ww, kn.c_ww, 1.0 - kn.F_inner[i]),
+            (P_in, kn.c_wi, kn.F_inner[i]),
+        ):
+            if frac <= 0:
+                continue
+            launch = np.zeros((nz, g.nvz, g.nvp))
+            launch[i] = frac * wall_spec
+            land, end_L, end_R = kn._fly(launch, chord, dummy_t, dummy_tv)
+            row = land.sum(axis=(1, 2))
+            row[0] += float(end_L.sum())
+            row[-1] += float(end_R.sum())
+            total = row.sum()
+            if total > 0:
+                # row sums to the branch mass (frac) up to numeric leakage;
+                # renormalize so the kernels are exactly conservative.
+                P[i] = row * (frac / total)
+    vbar = np.sqrt(8.0 * KB * T_WALL_K / (np.pi * M_HE))
+    gamma = 0.25 * vbar * 2.0 * np.pi * kn.Rm * kn.dz  # wall flux per density
+    C = gamma[:, None] * P_ww  # includes the (1-F) branch mass already
+    C_hop = 0.5 * (C + C.T)  # enforce reciprocity exactly
+    np.fill_diagonal(C_hop, 0.0)
+    T_in = gamma[:, None] * P_in
+    # column normalization: sum_i T_in_ij == K_r_j exactly
+    K_r = 0.25 * vbar * 2.0 * np.pi * kn.Rp * kn.dz
+    col_sum = T_in.sum(axis=0)
+    scale = np.where(col_sum > 0, K_r / np.maximum(col_sum, 1e-300), 0.0)
+    T_in = T_in * scale[None, :]
+    return C_hop, T_in, K_r
+
+
+def moment_hop_steady(kn, C_hop, T_in, K_r):
+    """Solve the frozen-plasma steady moment system with the hop closure.
+
+    Unknowns [nn (column), nn_a]; column axial transport keeps its Fickian
+    conductances (collisional gas), the annulus uses the hop matrix; the
+    exchange is K_r (column->annulus, local) vs T_in (annulus->column,
+    kernel-spread); ionization is the column sink; ledger sources routed
+    as in the solver (faces/vol_rec -> column, puff -> annulus); pumping
+    at the chamber rate on both zones at the end cells (TPMC sticking
+    equivalent). Returns (nn_col, nn_ann).
+    """
+    nz = kn.nz
+    bgs = kn.bg["sources"]
+    A = np.zeros((2 * nz, 2 * nz))
+    b = np.zeros(2 * nz)
+    V_col, V_ann = kn.V_col, kn.V_ann
+    # column axial: Fickian tube conductances (2/3 vbar Rp A / dz)
+    vbar = np.sqrt(8.0 * KB * T_WALL_K / (np.pi * M_HE))
+    Rp_f = 0.5 * (kn.Rp[:-1] + kn.Rp[1:])
+    A_col_f = np.pi * np.minimum(kn.Rp[:-1], kn.Rp[1:]) ** 2
+    dzc = 0.5 * (kn.dz[:-1] + kn.dz[1:])
+    C_col = (2.0 / 3.0) * vbar * Rp_f * A_col_f / dzc
+    if 0 <= kn.mesh_face - 1 < C_col.size:
+        C_col[kn.mesh_face - 1] *= kn.transparency
+    for f, c in enumerate(C_col):
+        A[f, f] -= c
+        A[f, f + 1] += c
+        A[f + 1, f + 1] -= c
+        A[f + 1, f] += c
+    # annulus hops
+    for i in range(nz):
+        for j in range(nz):
+            c = C_hop[i, j]
+            if c <= 0:
+                continue
+            A[nz + i, nz + i] -= c
+            A[nz + i, nz + j] += c
+    # exchange: column -K_r n_c +T_in^T n_a ; annulus +K_r n_c (local) ...
+    for i in range(nz):
+        A[i, i] -= K_r[i]
+        A[nz + i, i] += K_r[i]
+        for j in range(nz):
+            t = T_in[i, j]
+            if t <= 0:
+                continue
+            A[j, nz + i] += t
+            A[nz + i, nz + i] -= t
+    # ionization sink (column)
+    for i in range(nz):
+        A[i, i] -= kn.nu_ion[i] * V_col[i]
+    # pumping: chamber-rate sink on both zones at the end cells
+    Vm = V_col + V_ann
+    for idx, S in ((0, kn.bg["S_pump_L"]), (nz - 1, kn.bg["S_pump_R"])):
+        rate = S * 1e3 / Vm[idx]
+        A[idx, idx] -= rate * V_col[idx]
+        A[nz + idx, nz + idx] -= rate * V_ann[idx]
+    # sources [atoms/s]
+    b[0] -= bgs.get("cathode_face", 0.0)
+    b[nz - 1] -= bgs.get("collector_face", 0.0)
+    rec = kn.bg.get("rec_cell")
+    if rec is not None:
+        scale = bgs.get("vol_rec", rec.sum()) / max(rec.sum(), 1e-300)
+        b[:nz] -= scale * rec
+    for name, off in (("anode_left", -1), ("anode_right", 0)):
+        j = min(max(kn.mesh_face + off, 0), nz - 1)
+        b[j] -= bgs.get(name, 0.0)
+    if bgs.get("puff", 0.0) > 0:
+        iz = int(np.searchsorted(kn.z_edges, bgs["puff_z"]) - 1)
+        b[nz + min(max(iz, 0), nz - 1)] -= bgs["puff"]
+    x = np.linalg.solve(A, b)
+    return x[:nz], x[nz:]
+
+
 # ---------------------------------------------------------------- self-tests
 
 
@@ -599,7 +985,14 @@ def main(argv=None):
     ap.add_argument("--nvz", type=int, default=80)
     ap.add_argument("--nvp", type=int, default=24)
     ap.add_argument("--zone-rates", choices=("cauchy", "flux"),
-                    default="cauchy")
+                    default="flux")
+    ap.add_argument("--kernel", choices=("rate", "jump"), default="rate",
+                    help="annulus transport: exponential rates or "
+                         "bounded-chord jumps (K1b)")
+    ap.add_argument("--moment-hop", action="store_true",
+                    help="K2 offline gate: solve the frozen-plasma steady "
+                         "MOMENT system with the hop-matrix closure and "
+                         "compare against the kinetic solution")
     ap.add_argument("--truncate", type=float, default=1e-3)
     ap.add_argument("--max-gen", type=int, default=400)
     ap.add_argument("--out", default=None)
@@ -607,13 +1000,16 @@ def main(argv=None):
 
     if args.selftest:
         sys.exit(selftest())
+    if args.moment_hop and args.kernel != "jump":
+        ap.error("--moment-hop requires --kernel jump (the K1b instrument)")
     if args.run is None:
         ap.error("RUN.h5 required unless --selftest")
 
     bg = load_background(args.run, tuple(args.window))
     bg["zone_rates"] = args.zone_rates
-    kn = KN2Zone(bg, nvz=args.nvz, nvp=args.nvp, truncate=args.truncate,
-                 max_gen=args.max_gen)
+    cls = KN2ZoneJump if args.kernel == "jump" else KN2Zone
+    kn = cls(bg, nvz=args.nvz, nvp=args.nvp, truncate=args.truncate,
+             max_gen=args.max_gen)
     res = kn.solve()
     print(f"converged in {res['generations']} generations")
 
@@ -625,6 +1021,21 @@ def main(argv=None):
         print(f"{zc[i]:7.0f} {res['nn_col'][i]:10.3g} "
               f"{res['nn_ann'][i]:10.3g} {res['un_col'][i]/1e5:12.2f} "
               f"{res['un_ann'][i]/1e5:8.2f}")
+
+    if args.moment_hop:
+        C_hop, T_in, K_r = build_hop_kernels(kn)
+        m_col, m_ann = moment_hop_steady(kn, C_hop, T_in, K_r)
+        print("\n=== K2 offline gate: hop-matrix MOMENT model vs K1b kinetic ===")
+        print(f"{'z[cm]':>7} {'ann_moment':>11} {'ann_kinetic':>11} {'ratio':>6} "
+              f"{'col ratio':>9}")
+        for i in range(0, zc.size, max(1, zc.size // 16)):
+            print(f"{zc[i]:7.0f} {m_ann[i]:11.3g} {res['nn_ann'][i]:11.3g} "
+                  f"{m_ann[i] / max(res['nn_ann'][i], 1e-3):6.2f} "
+                  f"{m_col[i] / max(res['nn_col'][i], 1e-3):9.2f}")
+        mid = (zc >= 500.0) & (zc <= 1000.0)
+        print("mid-machine moment/kinetic: ann %.2f  col %.2f" % (
+            m_ann[mid].mean() / res["nn_ann"][mid].mean(),
+            m_col[mid].mean() / res["nn_col"][mid].mean()))
 
     out = args.out or (Path(args.run).stem + "_kn2zone")
     np.savez(
