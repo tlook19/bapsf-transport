@@ -39,6 +39,7 @@ def reaction_rates(
     b_rec_rad=1.0,
     b_rec_3b=1.0,
     atomic_rate_model="janev",
+    adas_low_te_extension=False,
 ):
     """Return bulk ionization and recombination density rates [cm^-3 s^-1].
 
@@ -56,7 +57,10 @@ def reaction_rates(
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     if atomic_rate_model == "adas":
         n_safe = np.maximum(state.n, floors["n"])
-        rates = he_rates(n_safe, derived.Te, ("scd", "acd"))
+        rates = he_rates(
+            n_safe, derived.Te, ("scd", "acd"),
+            low_te_extension=adas_low_te_extension,
+        )
         S_ion = float(b_ioniz) * state.n * state.nn * rates["scd"]
         S_rec_rad = float(b_rec_rad) * state.n * state.n * rates["acd"]
         S_rec_3b = np.zeros_like(state.n, dtype=float)
@@ -86,6 +90,7 @@ def reaction_rhs(
     b_rec_rad=1.0,
     b_rec_3b=1.0,
     atomic_rate_model="janev",
+    adas_low_te_extension=False,
     Te_birth_ionization="local",
     Ti_birth_ionization="floor",
     wind_column_factor=None,
@@ -102,6 +107,7 @@ def reaction_rhs(
         b_rec_rad=b_rec_rad,
         b_rec_3b=b_rec_3b,
         atomic_rate_model=atomic_rate_model,
+        adas_low_te_extension=adas_low_te_extension,
         Te_birth_ionization=Te_birth_ionization,
         Ti_birth_ionization=Ti_birth_ionization,
         wind_column_factor=wind_column_factor,
@@ -129,6 +135,7 @@ def reaction_rhs_terms(
     b_rec_rad=1.0,
     b_rec_3b=1.0,
     atomic_rate_model="janev",
+    adas_low_te_extension=False,
     Te_birth_ionization="local",
     Ti_birth_ionization="floor",
     wind_column_factor=None,
@@ -145,6 +152,7 @@ def reaction_rhs_terms(
         b_rec_rad=b_rec_rad,
         b_rec_3b=b_rec_3b,
         atomic_rate_model=atomic_rate_model,
+        adas_low_te_extension=adas_low_te_extension,
     )
     volume_ratio = geometry.plasma_volume_cm3 / geometry.neutral_volume_cm3
     # On a two-zone state (NEUTRAL_TWOZONE_PLAN.md) nn is the COLUMN density
@@ -233,6 +241,7 @@ def recombination_energy_return_rhs(
     b_rec_rad=1.0,
     atomic_rate_model="janev",
     enabled=False,
+    adas_low_te_extension=False,
 ):
     """Return the GCR-consistent recombination energy pair (electron fluid).
 
@@ -269,7 +278,10 @@ def recombination_energy_return_rhs(
         )
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     n_safe = np.maximum(state.n, floors["n"])
-    rates = he_rates(n_safe, derived.Te, ("acd", "prb1"))
+    rates = he_rates(
+        n_safe, derived.Te, ("acd", "prb1"),
+        low_te_extension=adas_low_te_extension,
+    )
     # Mirror reaction_rates' adas branch exactly: the credit is I_ion per
     # particle the particle equation actually recombines.
     S_rec = float(b_rec_rad) * state.n * state.n * rates["acd"]

@@ -376,6 +376,10 @@ def model_mode_defaults():
     # the moment neutral transport with refresh-cadence solves of the
     # compiled jump-kernel engine; requires the neutral_two_zone flag.
     # Golden path: "moment" (bit-exact).
+    # Extend ACD/PRB below the adf11 0.2 eV Te edge with the in-repo
+    # janev shape anchored at the edge (detachment-regime recombination;
+    # §5b afterglow ledger audit 2026-07-22). Default off, bit-exact.
+    "adas_low_te_extension": False,
     "neutral_model": "moment",
     "neutral_kinetic_refresh_s": 5e-4,
     "neutral_kinetic_refresh_tol": 0.2,

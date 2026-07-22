@@ -36,6 +36,8 @@ def main(argv=None):
     p.add_argument("--no-smooth", action="store_true")
     p.add_argument("--extra", nargs="*", default=(),
                    help="additional k=v param overrides (JSON-parsed values)")
+    p.add_argument("--extra-flag", nargs="*", default=(),
+                   help="additional k=v input_flags overrides (JSON-parsed)")
     p.add_argument("--save-h5", required=True)
     args = p.parse_args(argv)
 
@@ -84,6 +86,12 @@ def main(argv=None):
             extra[k] = json.loads(v)
         except json.JSONDecodeError:
             extra[k] = v
+    for kv in args.extra_flag:
+        k, v = kv.split("=", 1)
+        try:
+            flags_extra[k] = json.loads(v)
+        except json.JSONDecodeError:
+            flags_extra[k] = v
 
     result, geometry, params, flags = run_model(
         nx=args.nx, extra=extra,

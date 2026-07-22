@@ -167,7 +167,7 @@ def _shared_grid_tables():
     return axes, tables
 
 
-def he_rates(ne_cm3, Te_eV, quantities):
+def he_rates(ne_cm3, Te_eV, quantities, low_te_extension=False):
     """Fused lookup of several He coefficients at one (ne, Te).
 
     Computes the bilinear grid coordinates once and blends each requested
@@ -176,6 +176,23 @@ def he_rates(ne_cm3, Te_eV, quantities):
     drawn from {"scd", "acd", "plt1", "plt2", "prb1"}; returns a dict in the
     same units as the corresponding single-table helpers (bit-identical
     values -- both paths share the same blend arithmetic).
+
+    ``low_te_extension`` (default False, bit-exact off): below the adf11
+    Te grid edge (0.2 eV) the standard lookup clamps nearest-edge, which
+    freezes ACD exactly where the detachment-regime recombination
+    explodes (three-body ~ Te^-9/2 * ne). With the extension on, "acd"
+    (and "prb1", holding the per-event radiated energy at its edge
+    value) are scaled below the edge by the in-repo janev shape anchored
+    continuously at the edge:
+
+        R(Te, ne) = [alpha_r(Te) + ne*alpha_3(Te)]
+                    / [alpha_r(edge) + ne*alpha_3(edge)]
+
+    -- the model's own radiative + classical three-body coefficients, so
+    the extension carries the known power laws with no new data and no
+    free parameters (KINETIC_TWOZONE_PLAN/§5b afterglow ledger audit,
+    2026-07-22). Quantities other than acd/prb1 keep the clamp (SCD at
+    sub-edge Te is exponentially dead regardless).
     """
     (log_ne_grid, log_te_grid), tables = _shared_grid_tables()
     ne = np.asarray(ne_cm3, dtype=float)
@@ -190,6 +207,25 @@ def he_rates(ne_cm3, Te_eV, quantities):
         table, unit = tables[name]
         value = 10.0 ** _interp_blend(table, ix, iy, fx, fy)
         out[name] = value / qe_SI if unit == "power" else value
+    if low_te_extension:
+        te_edge = 10.0 ** log_te_grid[0]
+        below = Te < te_edge
+        if np.any(below):
+            from cablp.funcs._cross import alpha_3, alpha_r
+
+            I_he = 24.587
+            ne_b = np.maximum(ne, 1.0)
+            alpha_lo = alpha_r(Te, I=I_he) + ne_b * alpha_3(Te)
+            alpha_edge = (
+                alpha_r(np.full_like(Te, te_edge), I=I_he)
+                + ne_b * alpha_3(np.full_like(Te, te_edge))
+            )
+            ratio = np.where(
+                below, alpha_lo / np.maximum(alpha_edge, 1e-300), 1.0
+            )
+            for name in ("acd", "prb1"):
+                if name in out:
+                    out[name] = out[name] * ratio
     return out
 
 

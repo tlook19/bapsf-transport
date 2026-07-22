@@ -3011,6 +3011,9 @@ class LAPDSim1D:
                 self._input_dict.get("atomic_rate_model", "janev")
             ),
             enabled=self._recombination_energy_return,
+            adas_low_te_extension=bool(
+                self._input_dict.get("adas_low_te_extension", False)
+            ),
         )
 
     def reaction_rhs_terms(self, y=None, state=None):
@@ -3752,6 +3755,9 @@ class LAPDSim1D:
             "b_rec_3b": float(self._input_dict.get("b_rec_3b", 1.0)),
             "atomic_rate_model": str(
                 self._input_dict.get("atomic_rate_model", "janev")
+            ),
+            "adas_low_te_extension": bool(
+                self._input_dict.get("adas_low_te_extension", False)
             ),
             "Te_birth_ionization": self._input_dict.get(
                 "Te_birth_ionization", "local"
