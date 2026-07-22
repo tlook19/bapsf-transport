@@ -147,6 +147,14 @@ def reaction_rhs_terms(
         atomic_rate_model=atomic_rate_model,
     )
     volume_ratio = geometry.plasma_volume_cm3 / geometry.neutral_volume_cm3
+    # On a two-zone state (NEUTRAL_TWOZONE_PLAN.md) nn is the COLUMN density
+    # on the column volume, which IS the plasma volume -- the Vp/V_col
+    # conversion on the neutral-density rows is exactly unity, and the rates
+    # above (n * nn * <sv>) already sample column gas by construction. The
+    # M_n exchanges keep Vp/Vm: the wind stays a chamber-mean field.
+    nn_ratio = (
+        np.ones_like(volume_ratio) if state.nn_a is not None else volume_ratio
+    )
 
     Te_birth = _birth_temperature(Te_birth_ionization, derived.Te, floors["Te"])
     Ti_birth = _birth_temperature(Ti_birth_ionization, derived.Ti, floors["Ti"])
@@ -160,7 +168,9 @@ def reaction_rhs_terms(
     # ever consumes *column* gas, so the two-zone closure's column factor
     # (when given) scales the sampled wind up from the chamber mean.
     if state.M_n is not None:
-        u_n = neutral_wind_velocity(state, floors=floors, ion_mass_g=ion_mass_g)
+        u_n = neutral_wind_velocity(
+            state, floors=floors, ion_mass_g=ion_mass_g, geometry=geometry
+        )
         if wind_column_factor is not None:
             u_n = wind_column_factor * u_n
         M_birth = ion_mass_g * u_n * S_ion
@@ -170,7 +180,7 @@ def reaction_rhs_terms(
         M_n_birth = None
     ionization = ConservativeState1D(
         n=S_ion,
-        nn=-S_ion * volume_ratio,
+        nn=-S_ion * nn_ratio,
         M=M_birth,
         Ee=1.5 * ev_to_erg * Te_birth * S_ion,
         Ei=1.5 * ev_to_erg * Ti_birth * S_ion,
@@ -185,6 +195,7 @@ def reaction_rhs_terms(
             ion_mass_g,
             derived,
             with_wind=with_wind,
+            nn_ratio=nn_ratio,
         ),
         "recombination_3b_loss": _recombination_loss(
             S_rec_3b,
@@ -192,15 +203,20 @@ def reaction_rhs_terms(
             ion_mass_g,
             derived,
             with_wind=with_wind,
+            nn_ratio=nn_ratio,
         ),
     }
 
 
-def _recombination_loss(S_rec, volume_ratio, ion_mass_g, derived, with_wind=False):
+def _recombination_loss(
+    S_rec, volume_ratio, ion_mass_g, derived, with_wind=False, nn_ratio=None
+):
     M_loss = -ion_mass_g * derived.u * S_rec
+    if nn_ratio is None:
+        nn_ratio = volume_ratio
     return ConservativeState1D(
         n=-S_rec,
-        nn=S_rec * volume_ratio,
+        nn=S_rec * nn_ratio,
         M=M_loss,
         Ee=-1.5 * ev_to_erg * derived.Te * S_rec,
         Ei=-1.5 * ev_to_erg * derived.Ti * S_rec,

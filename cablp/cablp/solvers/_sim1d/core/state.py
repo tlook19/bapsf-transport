@@ -11,6 +11,10 @@ STATE_NAMES_1D = ("n", "nn", "M", "Ee", "Ei")
 # stays the 5-field tuple because it anchors the historical packed layout,
 # the golden fixture, and the HDF5 format.
 NEUTRAL_MOMENTUM_NAME = "M_n"
+# The optional annulus neutral density (NEUTRAL_TWOZONE_PLAN.md): present only
+# when the `neutral_two_zone` flag builds it, and `nn` is then the COLUMN
+# density. Packed after M_n in flag-introduction order.
+NEUTRAL_ANNULUS_NAME = "nn_a"
 
 
 @dataclass(frozen=True)
@@ -24,6 +28,9 @@ class ConservativeState1D:
     # the field is absent (the historical 5-field state). Every existing
     # 5-argument constructor call remains valid.
     M_n: np.ndarray | None = None
+    # Annulus neutral density [cm^-3] on the annulus volume Vm - Vp; None
+    # means the field is absent and `nn` keeps its chamber-mean meaning.
+    nn_a: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -36,59 +43,96 @@ class DerivedState1D:
     p: np.ndarray
 
 
-def pack_state(state, neutral_momentum=None):
+def pack_state(state, neutral_momentum=None, neutral_two_zone=None):
     """Pack conservative state arrays into a flat solver vector.
 
-    The vector is ``5*cells`` long historically and ``6*cells`` with the
-    optional neutral-momentum field. ``neutral_momentum=None`` follows the
-    state (pack ``M_n`` iff present); ``True`` forces the 6-field layout,
-    padding a missing ``M_n`` with zeros (used when summing per-term RHS
-    states, most of which do not touch neutral momentum); ``False`` forces
-    the historical 5-field layout (and requires the state not to carry
-    ``M_n``, so information is never silently dropped).
+    The vector is ``5*cells`` long historically, plus one row per present
+    optional field, packed in flag-introduction order: ``M_n`` (neutral
+    momentum), then ``nn_a`` (annulus density). For each optional field the
+    corresponding keyword follows the same contract: ``None`` follows the
+    state (pack iff present); ``True`` forces the row, padding a missing
+    field with zeros (used when summing per-term RHS states, most of which
+    do not touch the optional fields); ``False`` forces it out and requires
+    the state not to carry it, so information is never silently dropped.
     """
     rows = [state.n, state.nn, state.M, state.Ee, state.Ei]
-    include = state.M_n is not None if neutral_momentum is None else bool(neutral_momentum)
-    if include:
-        rows.append(
-            state.M_n
-            if state.M_n is not None
-            else np.zeros_like(np.asarray(state.n, dtype=float))
-        )
-    elif state.M_n is not None:
-        raise ValueError(
-            "pack_state(neutral_momentum=False) would drop a present M_n field"
-        )
+    for name, value, flag in (
+        (NEUTRAL_MOMENTUM_NAME, state.M_n, neutral_momentum),
+        (NEUTRAL_ANNULUS_NAME, state.nn_a, neutral_two_zone),
+    ):
+        include = value is not None if flag is None else bool(flag)
+        if include:
+            rows.append(
+                value
+                if value is not None
+                else np.zeros_like(np.asarray(state.n, dtype=float))
+            )
+        elif value is not None:
+            raise ValueError(
+                f"pack_state({name}=False) would drop a present "
+                f"{name} field"
+            )
     return np.vstack(rows).ravel()
 
 
-def unpack_state(y, cells):
+def unpack_state(y, cells, neutral_momentum=None, neutral_two_zone=None):
     """Unpack a flat solver vector into conservative state arrays.
 
-    Infers the field count from the vector length: ``5*cells`` is the
-    historical layout, ``6*cells`` carries the optional neutral momentum.
+    The optional fields make bare width inference ambiguous at 6 fields
+    (``5 + M_n`` vs ``5 + nn_a``), so the keywords declare which optional
+    fields the layout carries (the solver passes its own flags). ``None``
+    means "infer": a bare 6-field vector keeps its HISTORICAL meaning of
+    ``M_n`` — every pre-two-zone call site reads exactly as before — so a
+    two-zone-only vector is only reachable by passing
+    ``neutral_two_zone=True``. 5- and 7-field vectors are unambiguous.
     """
     y = np.asarray(y, dtype=float)
     cells = int(cells)
-    if y.size == len(STATE_NAMES_1D) * cells:
-        arr = y.reshape((len(STATE_NAMES_1D), cells))
-        return ConservativeState1D(*(row.copy() for row in arr))
-    if y.size == (len(STATE_NAMES_1D) + 1) * cells:
-        arr = y.reshape((len(STATE_NAMES_1D) + 1, cells))
-        return ConservativeState1D(
-            *(row.copy() for row in arr[:-1]), M_n=arr[-1].copy()
+    base = len(STATE_NAMES_1D)
+    if y.size % cells:
+        raise ValueError(
+            f"state vector of size {y.size} is not a multiple of "
+            f"{cells} cells"
         )
-    raise ValueError(
-        f"state vector of size {y.size} does not match 5 or 6 fields of "
-        f"{cells} cells"
+    fields = y.size // cells
+    candidates = [
+        (has_mn, has_2z)
+        for has_mn in (False, True)
+        for has_2z in (False, True)
+        if (neutral_momentum is None or has_mn == bool(neutral_momentum))
+        and (neutral_two_zone is None or has_2z == bool(neutral_two_zone))
+        and base + has_mn + has_2z == fields
+    ]
+    if not candidates:
+        raise ValueError(
+            f"state vector of size {y.size} does not match the declared "
+            f"optional fields for {cells} cells"
+        )
+    if len(candidates) > 1:
+        # Only reachable at 6 fields with both hints None: the historical
+        # reading is M_n.
+        candidates = [(True, False)]
+    has_mn, has_2z = candidates[0]
+    arr = y.reshape((fields, cells))
+    optional = {}
+    row = base
+    if has_mn:
+        optional["M_n"] = arr[row].copy()
+        row += 1
+    if has_2z:
+        optional["nn_a"] = arr[row].copy()
+    return ConservativeState1D(
+        *(r.copy() for r in arr[:base]), **optional
     )
 
 
-def conservative_from_primitives(n, nn, u, Te, Ti, ion_mass_g, un=None):
+def conservative_from_primitives(n, nn, u, Te, Ti, ion_mass_g, un=None, nn_a=None):
     """Build conservative variables from primitive CGS/eV quantities.
 
     ``un`` (neutral drift [cm/s]) attaches the optional neutral-momentum
-    field; ``None`` keeps the historical 5-field state.
+    field; ``nn_a`` (annulus density [cm^-3]) attaches the optional
+    two-zone field (``nn`` is then the column density); ``None`` keeps
+    each absent.
     """
     n = np.asarray(n, dtype=float)
     nn = np.asarray(nn, dtype=float)
@@ -102,7 +146,13 @@ def conservative_from_primitives(n, nn, u, Te, Ti, ion_mass_g, un=None):
     if un is not None:
         M_n = ion_mass_g * nn * np.asarray(un, dtype=float)
     return ConservativeState1D(
-        n=n.copy(), nn=nn.copy(), M=M, Ee=Ee, Ei=Ei, M_n=M_n
+        n=n.copy(),
+        nn=nn.copy(),
+        M=M,
+        Ee=Ee,
+        Ei=Ei,
+        M_n=M_n,
+        nn_a=None if nn_a is None else np.asarray(nn_a, dtype=float).copy(),
     )
 
 
@@ -112,6 +162,7 @@ def apply_state_floors(state, floors, ion_mass_g):
     ``M_n`` has no floor and passes through unchanged (momentum may carry
     either sign); flooring ``nn`` upward leaves the momentum untouched, which
     slightly *reduces* the implied ``u_n`` there -- the conservative choice.
+    ``nn_a`` is a density and takes the ``nn`` floor.
     """
     n = np.maximum(np.asarray(state.n, dtype=float), floors["n"])
     nn = np.maximum(np.asarray(state.nn, dtype=float), floors["nn"])
@@ -120,7 +171,7 @@ def apply_state_floors(state, floors, ion_mass_g):
     Te = np.maximum(derived.Te, floors["Te"])
     Ti = np.maximum(derived.Ti, floors["Ti"])
     floored = conservative_from_primitives(n, nn, u, Te, Ti, ion_mass_g)
-    if state.M_n is None:
+    if state.M_n is None and state.nn_a is None:
         return floored
     return ConservativeState1D(
         n=floored.n,
@@ -128,7 +179,18 @@ def apply_state_floors(state, floors, ion_mass_g):
         M=floored.M,
         Ee=floored.Ee,
         Ei=floored.Ei,
-        M_n=np.asarray(state.M_n, dtype=float).copy(),
+        M_n=(
+            None
+            if state.M_n is None
+            else np.asarray(state.M_n, dtype=float).copy()
+        ),
+        nn_a=(
+            None
+            if state.nn_a is None
+            else np.maximum(
+                np.asarray(state.nn_a, dtype=float), floors["nn"]
+            )
+        ),
     )
 
 
@@ -157,6 +219,8 @@ def assert_finite_state(state, derived=None):
             raise ValueError(f"non-finite values in state field {name!r}")
     if state.M_n is not None and not np.all(np.isfinite(state.M_n)):
         raise ValueError("non-finite values in state field 'M_n'")
+    if state.nn_a is not None and not np.all(np.isfinite(state.nn_a)):
+        raise ValueError("non-finite values in state field 'nn_a'")
     if derived is None:
         return
     for name in ("u", "Te", "Ti", "pe", "pi", "p"):

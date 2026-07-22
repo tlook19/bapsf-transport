@@ -334,7 +334,9 @@ def neutral_wind_timestep(state, floors, ion_mass_g, geometry, cfl=0.4):
     if state.M_n is None:
         return np.inf
     speed = np.abs(
-        neutral_wind_velocity(state, floors=floors, ion_mass_g=ion_mass_g)
+        neutral_wind_velocity(
+            state, floors=floors, ion_mass_g=ion_mass_g, geometry=geometry
+        )
     )
     moving = speed > 0.0
     if not np.any(moving):

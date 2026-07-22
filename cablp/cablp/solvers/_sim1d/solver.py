@@ -65,10 +65,15 @@ from .physics.neutrals import (
     _effective_pump_speed,
     neutral_exchange_coefficients,
     neutral_exchange_rhs,
+    neutral_exchange_two_zone_rhs,
     neutral_source_sink_rhs,
     neutral_wind_advection_rhs,
+    neutral_zone_exchange_conductance,
+    neutral_zone_exchange_rhs,
+    neutral_zone_volumes,
     puff_rate,
     pump_rate,
+    two_zone_knudsen_coefficients,
 )
 from .physics.reactions import (
     reaction_rhs,
@@ -482,6 +487,38 @@ class LAPDSim1D:
                 "ion_neutral_drag_model='slip': the slip closure is the "
                 "evolved M_n equation's own local steady state"
             )
+        self._neutral_two_zone = bool(self._flags.get("neutral_two_zone", False))
+        if self._neutral_two_zone:
+            if (
+                str(self._input_dict.get("neutral_exchange_model", "molecular_flow"))
+                != "knudsen"
+            ):
+                raise ValueError(
+                    "neutral_two_zone requires neutral_exchange_model="
+                    "'knudsen': the per-zone conductances have no "
+                    "molecular_flow/constant counterpart"
+                )
+            # Geometry and Tn are fixed for the run: the zone volumes, the
+            # radial exchange conductance, and the per-zone axial Knudsen
+            # conductances are computed once here.
+            self._zone_volumes = neutral_zone_volumes(self._geometry)
+            self._zone_exchange_cm3_s = neutral_zone_exchange_conductance(
+                geometry=self._geometry,
+                Tn_K=float(self._input_dict.get("Tn_K", 300.0)),
+                mu_neutral=self._mu_neutral,
+            )
+            self._zone_axial_coeffs = two_zone_knudsen_coefficients(
+                geometry=self._geometry,
+                Tn_K=float(self._input_dict.get("Tn_K", 300.0)),
+                mu_neutral=self._mu_neutral,
+                clausing_scale=float(
+                    self._input_dict.get("neutral_clausing_scale", 1.0)
+                ),
+            )
+        else:
+            self._zone_volumes = None
+            self._zone_exchange_cm3_s = None
+            self._zone_axial_coeffs = None
         self._neutral_momentum_radial = str(
             self._input_dict.get("neutral_momentum_radial", "uniform")
         )
@@ -700,9 +737,23 @@ class LAPDSim1D:
     def geometry(self):
         return self._geometry
 
+    def _unpack(self, y):
+        """Unpack a packed vector with this run's declared optional fields.
+
+        The explicit hints resolve the 6-field width ambiguity (``M_n`` vs
+        ``nn_a``) and make a layout/flag desync a loud error instead of a
+        silent misread.
+        """
+        return unpack_state(
+            y,
+            self._geometry.cells,
+            neutral_momentum=self._neutral_momentum,
+            neutral_two_zone=self._neutral_two_zone,
+        )
+
     @property
     def state(self):
-        return unpack_state(self._y, self._geometry.cells)
+        return self._unpack(self._y)
 
     @property
     def derived(self):
@@ -754,20 +805,31 @@ class LAPDSim1D:
             time=time,
         ).values():
             state_rhs = add_state_rhs(state_rhs, term)
-        # In neutral_momentum mode the packed RHS must always be 6-field to
-        # match the state vector, even when no term touched M_n (pads zeros).
+        # With optional fields on, the packed RHS must always match the
+        # state vector's width, even when no term touched them (pads zeros).
         return pack_state(
             state_rhs,
             neutral_momentum=True if self._neutral_momentum else None,
+            neutral_two_zone=True if self._neutral_two_zone else None,
         )
 
     def rhs_terms(self, y=None, include_heat_conduction=True, time=None):
         """Return named conservative RHS contributions for diagnostics."""
-        state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        state = self.state if y is None else self._unpack(y)
+        # The zone-exchange term exists only in two-zone runs, so the term
+        # ledger (and the saved rhs_terms structure) is unchanged when the
+        # flag is off. It is pure free-molecular mixing, so it runs in the
+        # neutral-only phases too.
+        zone_terms = {}
+        if self._neutral_two_zone:
+            zone_terms["neutral_zone_exchange"] = self.neutral_zone_exchange_rhs(
+                state=state
+            )
         if not self._flags.get("Plasma", True) or self._neutral_prebreakdown_active(
             time=time,
         ):
             return {
+                **zone_terms,
                 "plasma_advective_flux": self._zero_rhs_state(),
                 "plasma_front_flux": self._zero_rhs_state(),
                 "boundary_absorption": self._zero_rhs_state(),
@@ -817,6 +879,7 @@ class LAPDSim1D:
             time=time,
         )
         terms = {
+            **zone_terms,
             "plasma_advective_flux": plasma_terms["plasma_advective_flux"],
             "plasma_front_flux": plasma_terms["plasma_front_flux"],
             "boundary_absorption": self.boundary_absorption_rhs(
@@ -880,6 +943,8 @@ class LAPDSim1D:
             cells=self._geometry.cells,
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
+            neutral_momentum=self._neutral_momentum,
+            neutral_two_zone=self._neutral_two_zone,
         )
 
     def _step_cache_snapshot(self):
@@ -940,6 +1005,10 @@ class LAPDSim1D:
             state = self.state
         if time is None:
             time = self._time
+        if self._neutral_two_zone and state.nn_a is not None:
+            return self._implicit_neutral_step_two_zone(
+                dt=dt, state=state, time=time
+            )
         geometry = self._geometry
         source_kwargs = self._neutral_source_kwargs(time=time)
         matrix = np.eye(geometry.cells, dtype=float)
@@ -1016,6 +1085,124 @@ class LAPDSim1D:
             M_n=None if state.M_n is None else state.M_n.copy(),
         )
 
+    def _implicit_neutral_step_two_zone(self, dt, state, time):
+        """Backward-Euler neutral-only update on the split (nn, nn_a) system.
+
+        The 2N x 2N block system: per-zone axial Knudsen exchange on the
+        diagonal blocks, the radial zone-exchange conductance coupling the
+        blocks within each cell. The puff and pumps keep their M2 (column)
+        routing here -- the M3 source-routing milestone moves them -- and
+        must stay consistent with ``neutral_source_sink_rhs`` exactly as
+        the single-zone path's comment demands.
+        """
+        geometry = self._geometry
+        cells = geometry.cells
+        source_kwargs = self._neutral_source_kwargs(time=time)
+        V_col, V_ann = self._zone_volumes
+        matrix = np.eye(2 * cells, dtype=float)
+        rhs = np.concatenate(
+            (
+                np.asarray(state.nn, dtype=float),
+                np.asarray(state.nn_a, dtype=float),
+            )
+        )
+
+        column_coeff, annulus_coeff = self._zone_axial_coeffs
+        for offset, coeff, volumes in (
+            (0, np.asarray(column_coeff, dtype=float), V_col),
+            (cells, np.asarray(annulus_coeff, dtype=float), V_ann),
+        ):
+            for face, conductance in enumerate(coeff):
+                if conductance <= 0.0:
+                    continue
+                left = offset + face
+                right = offset + face + 1
+                left_rate = float(conductance) / float(volumes[face])
+                right_rate = float(conductance) / float(volumes[face + 1])
+                matrix[left, left] += dt * left_rate
+                matrix[left, right] -= dt * left_rate
+                matrix[right, right] += dt * right_rate
+                matrix[right, left] -= dt * right_rate
+
+        for cell, conductance in enumerate(
+            np.asarray(self._zone_exchange_cm3_s, dtype=float)
+        ):
+            if conductance <= 0.0:
+                continue
+            col_rate = float(conductance) / float(V_col[cell])
+            ann_rate = float(conductance) / float(V_ann[cell])
+            matrix[cell, cell] += dt * col_rate
+            matrix[cell, cells + cell] -= dt * col_rate
+            matrix[cells + cell, cells + cell] += dt * ann_rate
+            matrix[cells + cell, cell] -= dt * ann_rate
+
+        puff_index, puff_twin_index = puff_cell_indices(geometry)
+        pump_left_index, pump_right_index = pump_cell_indices(geometry)
+
+        if source_kwargs["pump_enabled"]:
+            # The pump coefficient keeps its chamber-volume normalization
+            # (S/Vm) applied to BOTH zone densities: at the well-mixed
+            # equilibrium the removed flux equals the single-zone S*n_port
+            # exactly.
+            elbow = source_kwargs["pump_elbow_conductance_lps"]
+            for index, speed in (
+                (pump_left_index, source_kwargs["S_pump_L"]),
+                (pump_right_index, source_kwargs["S_pump_R"]),
+            ):
+                rate = pump_rate(
+                    _effective_pump_speed(
+                        speed,
+                        elbow if is_plenum_cell(geometry, index) else None,
+                    ),
+                    geometry.neutral_volume_cm3[index],
+                )
+                matrix[index, index] += dt * rate
+                matrix[cells + index, cells + index] += dt * rate
+
+        if source_kwargs["gas_puff_enabled"]:
+            # Same routing as neutral_source_sink_rhs: the puff feeds the
+            # annulus (re-normalized from the profile's chamber volume so
+            # the inflow is conserved), falling back to the column where no
+            # annulus exists.
+            puff = np.zeros(cells, dtype=float)
+            for end, sccm in (
+                (0, source_kwargs["S_gp"]),
+                (-1, source_kwargs["Twin_S_gp"]),
+            ):
+                if end == -1 and not source_kwargs["twin_cathode"]:
+                    continue
+                puff += gas_puff_rate_profile(
+                    geometry,
+                    sccm,
+                    source_kwargs["gas_puff_valves"],
+                    profile=source_kwargs["gas_puff_profile"],
+                    z_cm=source_kwargs["gas_puff_z_cm"],
+                    sigma_cm=source_kwargs["gas_puff_sigma_cm"],
+                    throw_cm=source_kwargs["gas_puff_throw_cm"],
+                    end=end,
+                )
+            particles = puff * np.asarray(
+                geometry.neutral_volume_cm3, dtype=float
+            )
+            into_annulus = V_ann > 0.0
+            rhs[cells:] += dt * np.where(
+                into_annulus, particles / np.maximum(V_ann, 1e-300), 0.0
+            )
+            rhs[:cells] += dt * np.where(
+                into_annulus, 0.0, particles / np.maximum(V_col, 1e-300)
+            )
+
+        solution = np.linalg.solve(matrix, rhs)
+        return ConservativeState1D(
+            n=state.n.copy(),
+            nn=np.maximum(solution[:cells], self._floors["nn"]),
+            M=state.M.copy(),
+            Ee=state.Ee.copy(),
+            Ei=state.Ei.copy(),
+            M_n=None if state.M_n is None else state.M_n.copy(),
+            nn_a=np.maximum(solution[cells:], self._floors["nn"]),
+        )
+
     def _step_rejection_info(self, attempt, y0=None):
         if y0 is None:
             y0 = self._y
@@ -1023,8 +1210,8 @@ class LAPDSim1D:
         packed_summary = _bad_array_summary(y1)
 
         try:
-            state0 = unpack_state(y0, self._geometry.cells)
-            state1 = unpack_state(y1, self._geometry.cells)
+            state0 = self._unpack(y0)
+            state1 = self._unpack(y1)
             derived1 = derive_state(state1, self._floors, self._ion_mass_g)
         except Exception as exc:
             if packed_summary is not None:
@@ -1046,6 +1233,8 @@ class LAPDSim1D:
         }
         if state1.M_n is not None:
             fields["M_n"] = state1.M_n
+        if state1.nn_a is not None:
+            fields["nn_a"] = state1.nn_a
         nonfinite_fields = {}
         for name, values in fields.items():
             summary = _bad_array_summary(values)
@@ -1928,6 +2117,14 @@ class LAPDSim1D:
     def _apply_neutral_equilibration_result(self, result):
         final_nn = np.asarray(result.nn[-1], dtype=float)
         state = self.state
+        final_nn_a = None
+        if state.nn_a is not None:
+            saved_nn_a = getattr(result, "nn_a", None)
+            final_nn_a = (
+                np.asarray(saved_nn_a[-1], dtype=float).copy()
+                if saved_nn_a is not None
+                else state.nn_a.copy()
+            )
         seeded = ConservativeState1D(
             n=state.n.copy(),
             nn=final_nn.copy(),
@@ -1935,6 +2132,7 @@ class LAPDSim1D:
             Ee=state.Ee.copy(),
             Ei=state.Ei.copy(),
             M_n=None if state.M_n is None else state.M_n.copy(),
+            nn_a=final_nn_a,
         )
         self._set_state_vector(pack_state(seeded))
         self._time = 0.0
@@ -2053,7 +2251,7 @@ class LAPDSim1D:
 
     def suggest_timestep(self, y=None, include_heat_conduction=None, time=None):
         """Return an explicit timestep suggestion and diagnostics."""
-        state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        state = self.state if y is None else self._unpack(y)
         if time is None:
             time = self._time
         plasma_enabled = self._flags.get(
@@ -2252,7 +2450,7 @@ class LAPDSim1D:
 
     def plasma_flux_rhs(self, y=None, include_front=None):
         """Return the conservative plasma flux RHS for inspection/testing."""
-        state = self.state if y is None else unpack_state(y, self._geometry.cells)
+        state = self.state if y is None else self._unpack(y)
         use_front = self._flags.get("front_flux", True)
         if include_front is not None:
             use_front = include_front
@@ -2269,7 +2467,7 @@ class LAPDSim1D:
     def plasma_flux_rhs_terms(self, y=None, state=None, include_front=None):
         """Return split conservative plasma face-flux RHS terms."""
         if state is None:
-            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+            state = self.state if y is None else self._unpack(y)
         use_front = self._flags.get("front_flux", True)
         if include_front is not None:
             use_front = include_front
@@ -2286,7 +2484,7 @@ class LAPDSim1D:
     def pressure_work_rhs(self, y=None, state=None):
         """Return conservative pressure-work energy sources."""
         if state is None:
-            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+            state = self.state if y is None else self._unpack(y)
         return pressure_work_rhs(
             state=state,
             floors=self._floors,
@@ -2299,7 +2497,7 @@ class LAPDSim1D:
     def surface_neutralization_rhs(self, y=None, state=None):
         """Return conservative source/end surface neutralization terms."""
         if state is None:
-            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+            state = self.state if y is None else self._unpack(y)
         return surface_neutralization_rhs(
             state=state,
             floors=self._floors,
@@ -2368,7 +2566,7 @@ class LAPDSim1D:
     ):
         """Return the Bohm absorption at the plasma-terminating surfaces."""
         if state is None:
-            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+            state = self.state if y is None else self._unpack(y)
         surface_kwargs = self._surface_loss_kwargs()
         cathode_solve = self._jet_cathode_solve(
             cathode_solve, self._cathode_jet_enabled, time
@@ -2397,7 +2595,7 @@ class LAPDSim1D:
     ):
         """Return the Bohm-flux plasma collection at the anode mesh."""
         if state is None:
-            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+            state = self.state if y is None else self._unpack(y)
         cathode_solve = self._jet_cathode_solve(
             cathode_solve, self._anode_jet_enabled, time
         )
@@ -2417,7 +2615,7 @@ class LAPDSim1D:
     def ion_neutral_drag_rhs(self, y=None, state=None):
         """Return the conservative ion-neutral drag momentum exchange."""
         if state is None:
-            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+            state = self.state if y is None else self._unpack(y)
         return ion_neutral_drag_rhs(
             state=state,
             floors=self._floors,
@@ -2431,7 +2629,7 @@ class LAPDSim1D:
     def neutral_momentum_wall_rhs(self, y=None, state=None):
         """Return the neutral-wind wall-accommodation momentum sink."""
         if state is None:
-            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+            state = self.state if y is None else self._unpack(y)
         return neutral_momentum_wall_rhs(
             state=state,
             floors=self._floors,
@@ -2444,7 +2642,7 @@ class LAPDSim1D:
     def neutral_wind_advection_rhs(self, y=None, state=None):
         """Return upwind advection of nn and M_n by the neutral wind."""
         if state is None:
-            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+            state = self.state if y is None else self._unpack(y)
         return neutral_wind_advection_rhs(
             state=state,
             floors=self._floors,
@@ -2457,12 +2655,13 @@ class LAPDSim1D:
     def ion_neutral_frictional_heating_rhs(self, y=None, state=None):
         """Return the elastic ion-neutral frictional-heating energy source."""
         if state is None:
-            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+            state = self.state if y is None else self._unpack(y)
         return ion_neutral_frictional_heating_rhs(
             state=state,
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
             wind_column_factor=self._wind_column_factor,
+            geometry=self._geometry,
             **self._ion_neutral_drag_kwargs(),
             **self._slip_closure_kwargs(),
         )
@@ -2470,7 +2669,7 @@ class LAPDSim1D:
     def ion_neutral_thermalization_rhs(self, y=None, state=None):
         """Return the elastic ion-neutral thermal-equilibration energy source."""
         if state is None:
-            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+            state = self.state if y is None else self._unpack(y)
         if not self._flags.get("ion_neutral_thermalization", False):
             return self._zero_rhs_state()
         b_thermalization = self._input_dict.get("b_ion_neutral_thermalization")
@@ -2488,7 +2687,7 @@ class LAPDSim1D:
     def energy_exchange_rhs(self, y=None, state=None):
         """Return conservative electron-ion thermal exchange sources."""
         if state is None:
-            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+            state = self.state if y is None else self._unpack(y)
         return electron_ion_exchange_rhs(
             state=state,
             floors=self._floors,
@@ -2500,7 +2699,7 @@ class LAPDSim1D:
     def electron_cooling_rhs(self, y=None, state=None):
         """Return conservative electron inelastic/radiative cooling sources."""
         if state is None:
-            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+            state = self.state if y is None else self._unpack(y)
         return electron_cooling_rhs(
             state=state,
             floors=self._floors,
@@ -2511,7 +2710,7 @@ class LAPDSim1D:
     def electron_cooling_rhs_terms(self, y=None, state=None):
         """Return split conservative electron cooling source terms."""
         if state is None:
-            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+            state = self.state if y is None else self._unpack(y)
         return electron_cooling_rhs_terms(
             state=state,
             floors=self._floors,
@@ -2522,7 +2721,7 @@ class LAPDSim1D:
     def ion_charge_exchange_rhs(self, y=None, state=None):
         """Return conservative ion charge-exchange cooling sources."""
         if state is None:
-            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+            state = self.state if y is None else self._unpack(y)
         return ion_charge_exchange_rhs(
             state=state,
             floors=self._floors,
@@ -2533,7 +2732,7 @@ class LAPDSim1D:
     def heat_conduction_rhs(self, y=None, state=None):
         """Return conservative axial heat-conduction energy sources."""
         if state is None:
-            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+            state = self.state if y is None else self._unpack(y)
         return heat_conduction_rhs(
             state=state,
             floors=self._floors,
@@ -2546,7 +2745,7 @@ class LAPDSim1D:
     def cathode_boundary_state(self, y=None, state=None):
         """Return source/end primitive state for future cathode coupling."""
         if state is None:
-            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+            state = self.state if y is None else self._unpack(y)
         return cathode_boundary_state(
             state=state,
             floors=self._floors,
@@ -2559,7 +2758,7 @@ class LAPDSim1D:
     def cathode_source_terms(self, y=None, state=None, cathode_solve=None, time=None):
         """Return opt-in cathode conservative source placeholders/terms."""
         if state is None:
-            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+            state = self.state if y is None else self._unpack(y)
         cathode_flags = self._effective_cathode_flags(time=time, active_only=True)
         if cathode_solve is None and cathode_flags.get("cathode_coupling", False):
             cathode_solve = self.solve_cathode_boundary(
@@ -2580,7 +2779,7 @@ class LAPDSim1D:
     def beam_ionization_rhs(self, y=None, state=None, cathode_solve=None, time=None):
         """Return conservative beam ionization birth terms."""
         if state is None:
-            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+            state = self.state if y is None else self._unpack(y)
         cathode_flags = self._effective_cathode_flags(time=time, active_only=True)
         if cathode_solve is None and cathode_flags.get("cathode_coupling", False):
             cathode_solve = self.solve_cathode_boundary(
@@ -2608,7 +2807,7 @@ class LAPDSim1D:
     ):
         """Return split beam particle birth, deposited power, and ionization cost."""
         if state is None:
-            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+            state = self.state if y is None else self._unpack(y)
         cathode_flags = self._effective_cathode_flags(time=time, active_only=True)
         if cathode_solve is None and cathode_flags.get("cathode_coupling", False):
             cathode_solve = self.solve_cathode_boundary(
@@ -2637,7 +2836,7 @@ class LAPDSim1D:
     ):
         """Run the opt-in cathode solver adapter without changing the RHS."""
         if state is None:
-            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+            state = self.state if y is None else self._unpack(y)
         state = self._smoothed_sample_state(state)
         cathode_phase = self._cathode_phase_options(time=time)
         if floating is None:
@@ -2702,7 +2901,7 @@ class LAPDSim1D:
     def implicit_heat_conduction_step(self, dt, y=None, state=None):
         """Return state after one frozen-conductivity implicit heat substep."""
         if state is None:
-            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+            state = self.state if y is None else self._unpack(y)
         return implicit_heat_conduction_step(
             state=state,
             floors=self._floors,
@@ -2722,13 +2921,37 @@ class LAPDSim1D:
         )
 
     def neutral_exchange_rhs(self, y=None, state=None):
-        """Return conservative pairwise neutral-exchange sources."""
+        """Return conservative pairwise neutral-exchange sources.
+
+        In two-zone mode the axial exchange runs per zone on the
+        precomputed column/annulus Knudsen conductances; the radial
+        column/annulus mixing is the separate named
+        ``neutral_zone_exchange`` term.
+        """
         if state is None:
-            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+            state = self.state if y is None else self._unpack(y)
+        if self._neutral_two_zone and state.nn_a is not None:
+            column_coeff, annulus_coeff = self._zone_axial_coeffs
+            return neutral_exchange_two_zone_rhs(
+                state=state,
+                geometry=self._geometry,
+                column_coeff_cm3_s=column_coeff,
+                annulus_coeff_cm3_s=annulus_coeff,
+            )
         return neutral_exchange_rhs(
             state=state,
             geometry=self._geometry,
             exchange_coeff_cm3_s=self.neutral_exchange_coefficients(),
+        )
+
+    def neutral_zone_exchange_rhs(self, y=None, state=None):
+        """Return the conservative column/annulus free-molecular exchange."""
+        if state is None:
+            state = self.state if y is None else self._unpack(y)
+        return neutral_zone_exchange_rhs(
+            state=state,
+            geometry=self._geometry,
+            conductance_cm3_s=self._zone_exchange_cm3_s,
         )
 
     def neutral_exchange_coefficients(self):
@@ -2747,7 +2970,7 @@ class LAPDSim1D:
     def neutral_source_sink_rhs(self, y=None, state=None, time=None):
         """Return conservative neutral gas puff and pump sources."""
         if state is None:
-            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+            state = self.state if y is None else self._unpack(y)
         return neutral_source_sink_rhs(
             state=state,
             geometry=self._geometry,
@@ -2757,7 +2980,7 @@ class LAPDSim1D:
     def reaction_rhs(self, y=None, state=None):
         """Return conservative bulk reaction sources."""
         if state is None:
-            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+            state = self.state if y is None else self._unpack(y)
         return reaction_rhs(
             state=state,
             floors=self._floors,
@@ -2769,7 +2992,7 @@ class LAPDSim1D:
     def recombination_energy_return_rhs(self, y=None, state=None):
         """Return the GCR-consistent recombination energy pair (Ee only)."""
         if state is None:
-            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+            state = self.state if y is None else self._unpack(y)
         return recombination_energy_return_rhs(
             state=state,
             floors=self._floors,
@@ -2786,7 +3009,7 @@ class LAPDSim1D:
     def reaction_rhs_terms(self, y=None, state=None):
         """Return split ionization and recombination conservative sources."""
         if state is None:
-            state = self.state if y is None else unpack_state(y, self._geometry.cells)
+            state = self.state if y is None else self._unpack(y)
         return reaction_rhs_terms(
             state=state,
             floors=self._floors,
@@ -3544,9 +3767,14 @@ class LAPDSim1D:
             wind = {
                 "M_n": state.M_n.copy(),
                 "u_n": neutral_wind_velocity(
-                    state, floors=self._floors, ion_mass_g=self._ion_mass_g
+                    state,
+                    floors=self._floors,
+                    ion_mass_g=self._ion_mass_g,
+                    geometry=self._geometry,
                 ),
             }
+        if state.nn_a is not None:
+            wind["nn_a"] = state.nn_a.copy()
         return {
             **wind,
             "time": float(time),
@@ -3692,6 +3920,8 @@ class LAPDSim1D:
         if saved and "M_n" in saved[0]:
             result.M_n = stack("M_n")
             result.u_n = stack("u_n")
+        if saved and "nn_a" in saved[0]:
+            result.nn_a = stack("nn_a")
         return add_sim3_compat_aliases(result)
 
     def _phase_events(self, run_start, final_time):
@@ -4068,7 +4298,7 @@ class LAPDSim1D:
 
     def _set_state_vector(self, y):
         self._y = self.floor_state_vector(y)
-        self._state = unpack_state(self._y, self._geometry.cells)
+        self._state = self._unpack(self._y)
         self._derived = derive_state(self._state, self._floors, self._ion_mass_g)
         if self._flags.get("debug_checks", False):
             assert_finite_state(self._state, self._derived)
@@ -4088,6 +4318,10 @@ class LAPDSim1D:
             Ti=Ti0,
             ion_mass_g=self._ion_mass_g,
             un=np.zeros(cells) if self._neutral_momentum else None,
+            # Both zones start at the same fill density -- the free-molecular
+            # equilibrium of the zone exchange; annulus-free cells carry the
+            # value inertly.
+            nn_a=nn0.copy() if self._neutral_two_zone else None,
         )
 
     @staticmethod

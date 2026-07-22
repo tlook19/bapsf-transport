@@ -108,7 +108,13 @@ def surface_neutralization_rhs(
     dN_loss *= float(b_surface_loss)
 
     plasma_loss_rate = dN_loss / geometry.plasma_volume_cm3
-    neutral_gain_rate = dN_loss / geometry.neutral_volume_cm3
+    # Two-zone state: the source/end surfaces are recycle faces, and
+    # recycle faces feed the COLUMN (NEUTRAL_TWOZONE_PLAN.md).
+    neutral_gain_rate = dN_loss / (
+        geometry.plasma_volume_cm3
+        if state.nn_a is not None
+        else geometry.neutral_volume_cm3
+    )
     return ConservativeState1D(
         n=-plasma_loss_rate,
         nn=neutral_gain_rate,
@@ -318,9 +324,16 @@ def boundary_absorption_rhs(
         jet_M_n *= float(b_surface_loss)
 
     plasma_loss_rate = dN_loss / geometry.plasma_volume_cm3
+    # Two-zone state: the cathode disc and collector are recycle faces and
+    # feed the COLUMN (the jet momentum stays chamber-mean on M_n).
     return ConservativeState1D(
         n=-plasma_loss_rate,
-        nn=dN_loss / geometry.neutral_volume_cm3,
+        nn=dN_loss
+        / (
+            geometry.plasma_volume_cm3
+            if state.nn_a is not None
+            else geometry.neutral_volume_cm3
+        ),
         M=-sonic_momentum / geometry.plasma_volume_cm3,
         Ee=-1.5 * ev_to_erg * derived.Te * plasma_loss_rate,
         Ei=-1.5 * ev_to_erg * derived.Ti * plasma_loss_rate,
@@ -438,14 +451,32 @@ def anode_collection_rhs(
         jet_M_n *= float(b_anode_collection)
 
     plasma_loss_rate = dN_loss / geometry.plasma_volume_cm3
-    neutral_gain_rate = dN_loss / geometry.neutral_volume_cm3
+    # Two-zone state: the mesh feeds the ANNULUS (walls and the mesh feed
+    # the annulus, NEUTRAL_TWOZONE_PLAN.md), falling back to the column in
+    # annulus-free cells; the jet momentum stays chamber-mean on M_n.
+    if state.nn_a is not None:
+        V_col = np.asarray(geometry.plasma_volume_cm3, dtype=float)
+        V_ann = np.maximum(
+            np.asarray(geometry.neutral_volume_cm3, dtype=float) - V_col, 0.0
+        )
+        into_annulus = V_ann > 0.0
+        nn_gain = np.where(
+            into_annulus, 0.0, dN_loss / np.maximum(V_col, 1e-300)
+        )
+        nn_a_gain = np.where(
+            into_annulus, dN_loss / np.maximum(V_ann, 1e-300), 0.0
+        )
+    else:
+        nn_gain = dN_loss / geometry.neutral_volume_cm3
+        nn_a_gain = None
     return ConservativeState1D(
         n=-plasma_loss_rate,
-        nn=neutral_gain_rate,
+        nn=nn_gain,
         M=-ion_mass_g * derived.u * plasma_loss_rate,
         Ee=-1.5 * ev_to_erg * derived.Te * plasma_loss_rate,
         Ei=-1.5 * ev_to_erg * derived.Ti * plasma_loss_rate,
         M_n=jet_M_n,
+        nn_a=nn_a_gain,
     )
 
 
@@ -634,15 +665,32 @@ def _resolve_slip_factor(
     )
 
 
-def neutral_wind_velocity(state, floors, ion_mass_g):
+def neutral_wind_velocity(state, floors, ion_mass_g, geometry=None):
     """Return the neutral drift ``u_n = M_n / (m * nn)`` [cm/s], or zeros.
 
     ``nn`` is floored before dividing, matching ``derive_state``'s treatment
     of the plasma velocity; a state without ``M_n`` has no wind.
+
+    ``M_n`` is a CHAMBER-MEAN momentum density, so on a two-zone state
+    (``nn_a`` present, NEUTRAL_TWOZONE_PLAN.md) the divisor must be the
+    chamber-mean density ``(nn V_col + nn_a V_ann) / Vm`` -- dividing by
+    the column ``nn`` alone would inflate the wind wherever the annulus
+    holds the gas. That path requires ``geometry`` for the zone volumes.
     """
     if state.M_n is None:
         return np.zeros_like(np.asarray(state.nn, dtype=float))
-    nn_safe = np.maximum(np.asarray(state.nn, dtype=float), floors["nn"])
+    nn = np.asarray(state.nn, dtype=float)
+    if state.nn_a is not None:
+        if geometry is None:
+            raise ValueError(
+                "neutral_wind_velocity on a two-zone state requires "
+                "geometry for the chamber-mean density"
+            )
+        V_col = np.asarray(geometry.plasma_volume_cm3, dtype=float)
+        Vm = np.asarray(geometry.neutral_volume_cm3, dtype=float)
+        V_ann = np.maximum(Vm - V_col, 0.0)
+        nn = (nn * V_col + np.asarray(state.nn_a, dtype=float) * V_ann) / Vm
+    nn_safe = np.maximum(nn, floors["nn"])
     return np.asarray(state.M_n, dtype=float) / (ion_mass_g * nn_safe)
 
 
@@ -766,7 +814,9 @@ def ion_neutral_drag_rhs(
                 "drag with an evolved M_n requires geometry for the "
                 "plasma/neutral volume conversion"
             )
-        u_n = neutral_wind_velocity(state, floors=floors, ion_mass_g=ion_mass_g)
+        u_n = neutral_wind_velocity(
+            state, floors=floors, ion_mass_g=ion_mass_g, geometry=geometry
+        )
         if wind_column_factor is not None:
             u_n = wind_column_factor * u_n
         drag = (
@@ -852,6 +902,7 @@ def ion_neutral_frictional_heating_rhs(
     Tn_fit=0.1,
     sigma_in_model="constant",
     wind_column_factor=None,
+    geometry=None,
 ):
     """Return the conservative ion frictional-heating energy source.
 
@@ -890,7 +941,9 @@ def ion_neutral_frictional_heating_rhs(
         sigma_in_model=sigma_in_model,
     )
     if state.M_n is not None:
-        u_n = neutral_wind_velocity(state, floors=floors, ion_mass_g=ion_mass_g)
+        u_n = neutral_wind_velocity(
+            state, floors=floors, ion_mass_g=ion_mass_g, geometry=geometry
+        )
         if wind_column_factor is not None:
             u_n = wind_column_factor * u_n
         u_rel = derived.u - u_n
@@ -1037,12 +1090,31 @@ def radial_recycling_rhs(
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     S = state.n / float(tau_s)
     volume_ratio = geometry.plasma_volume_cm3 / geometry.neutral_volume_cm3
+    # Two-zone state: this term IS wall recycling, so the returned gas
+    # lands in the ANNULUS (falling back to the column where none exists).
+    if state.nn_a is not None:
+        V_col = np.asarray(geometry.plasma_volume_cm3, dtype=float)
+        V_ann = np.maximum(
+            np.asarray(geometry.neutral_volume_cm3, dtype=float) - V_col, 0.0
+        )
+        particles = S * V_col
+        into_annulus = V_ann > 0.0
+        nn_gain = np.where(
+            into_annulus, 0.0, particles / np.maximum(V_col, 1e-300)
+        )
+        nn_a_gain = np.where(
+            into_annulus, particles / np.maximum(V_ann, 1e-300), 0.0
+        )
+    else:
+        nn_gain = S * volume_ratio
+        nn_a_gain = None
     return ConservativeState1D(
         n=-S,
-        nn=S * volume_ratio,
+        nn=nn_gain,
         M=-ion_mass_g * derived.u * S,
         Ee=-1.5 * ev_to_erg * derived.Te * S,
         Ei=-1.5 * ev_to_erg * derived.Ti * S,
+        nn_a=nn_a_gain,
     )
 
 
@@ -1094,26 +1166,30 @@ def neutral_momentum_wall_rhs(
     )
 
 
+def _add_optional_rows(a, b):
+    """Sum two optional RHS rows, treating a missing side as zeros."""
+    if a is None and b is None:
+        return None
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return a + b
+
+
 def add_state_rhs(left, right):
     """Return the sum of two conservative RHS bundles.
 
-    A missing ``M_n`` on either side counts as zeros when the other side
-    carries one (most RHS terms do not touch neutral momentum); both missing
-    keeps the historical 5-field result.
+    A missing optional field (``M_n``, ``nn_a``) on either side counts as
+    zeros when the other side carries one (most RHS terms do not touch
+    them); both missing keeps the historical 5-field result.
     """
-    if left.M_n is None and right.M_n is None:
-        M_n = None
-    elif left.M_n is None:
-        M_n = right.M_n
-    elif right.M_n is None:
-        M_n = left.M_n
-    else:
-        M_n = left.M_n + right.M_n
     return ConservativeState1D(
         n=left.n + right.n,
         nn=left.nn + right.nn,
         M=left.M + right.M,
         Ee=left.Ee + right.Ee,
         Ei=left.Ei + right.Ei,
-        M_n=M_n,
+        M_n=_add_optional_rows(left.M_n, right.M_n),
+        nn_a=_add_optional_rows(left.nn_a, right.nn_a),
     )

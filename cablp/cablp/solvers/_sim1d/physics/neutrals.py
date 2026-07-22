@@ -146,6 +146,201 @@ def neutral_exchange_coefficients(
     return np.where(np.isnan(prescribed), coefficients, prescribed)
 
 
+def neutral_zone_volumes(geometry):
+    """Return per-cell ``(V_col, V_ann)`` zone volumes [cm^3].
+
+    The column IS the plasma volume (``pi Rp^2 dz``), so the column neutral
+    field lives on the same volume as the plasma and the ionization
+    bookkeeping's ``Vp/V_col`` conversion is exactly unity. The annulus is
+    whatever neutral volume remains; cells without one (``V_ann = 0``)
+    carry an inert ``nn_a``.
+    """
+    V_col = np.asarray(geometry.plasma_volume_cm3, dtype=float)
+    V_ann = np.maximum(
+        np.asarray(geometry.neutral_volume_cm3, dtype=float) - V_col, 0.0
+    )
+    return V_col, V_ann
+
+
+def neutral_zone_exchange_conductance(geometry, Tn_K, mu_neutral):
+    """Return the per-cell column/annulus exchange conductance [cm^3/s].
+
+    Free-molecular exchange through the column's lateral surface
+    (NEUTRAL_TWOZONE_PLAN.md): one symmetric conductance
+
+        K_r = (vbar / 4) * 2 pi Rp dz
+
+    so ``K_r (nn_a - nn)`` is the net particle flow into the column. Equal
+    densities give zero net flux -- exact detailed balance, the
+    free-molecular equilibrium -- and the implied rates reproduce the M5
+    momentum-closure geometry (``nu_c->a = vbar/(2 Rp)``,
+    ``nu_a->c = vbar Rp / (2 (Rm^2 - Rp^2))``). Cells without an annulus
+    get zero (nothing to exchange with).
+    """
+    v_th_n = neutral_thermal_speed(Tn_K=Tn_K, mu_neutral=mu_neutral)
+    Rp = np.asarray(geometry.Rp_cm, dtype=float)
+    length = np.asarray(geometry.length_cm, dtype=float)
+    _, V_ann = neutral_zone_volumes(geometry)
+    conductance = 0.25 * v_th_n * 2.0 * np.pi * Rp * length
+    return np.where(V_ann > 0.0, conductance, 0.0)
+
+
+def neutral_zone_exchange_rhs(state, geometry, conductance_cm3_s):
+    """Return the conservative column/annulus free-molecular exchange.
+
+    A state without ``nn_a`` gets zeros (the term is presence-gated, like
+    every optional-field term).
+    """
+    zeros = np.zeros(geometry.cells, dtype=float)
+    if state.nn_a is None:
+        return ConservativeState1D(
+            n=zeros,
+            nn=zeros.copy(),
+            M=zeros.copy(),
+            Ee=zeros.copy(),
+            Ei=zeros.copy(),
+        )
+    V_col, V_ann = neutral_zone_volumes(geometry)
+    flow = np.asarray(conductance_cm3_s, dtype=float) * (
+        np.asarray(state.nn_a, dtype=float) - np.asarray(state.nn, dtype=float)
+    )
+    dnn = np.where(V_col > 0.0, flow / np.maximum(V_col, 1e-300), 0.0)
+    dnn_a = np.where(V_ann > 0.0, -flow / np.maximum(V_ann, 1e-300), 0.0)
+    return ConservativeState1D(
+        n=zeros,
+        nn=dnn,
+        M=zeros.copy(),
+        Ee=zeros.copy(),
+        Ei=zeros.copy(),
+        nn_a=dnn_a,
+    )
+
+
+def _zone_face_average(values):
+    values = np.asarray(values, dtype=float)
+    return 0.5 * (values[:-1] + values[1:])
+
+
+def two_zone_knudsen_coefficients(geometry, Tn_K, mu_neutral, clausing_scale=1.0):
+    """Return per-zone internal-face Knudsen conductances [cm^3/s].
+
+    The column channel diffuses at ``D = (2/3) v_th Rp`` through the plasma
+    cross-section; the annulus channel at ``D = (2/3) v_th (Rm - Rp)`` (its
+    hydraulic radius ``2A/P``) through the annulus cross-section -- the
+    same mesh-independent ``C = D A / dz`` form as
+    ``knudsen_flow_coefficients``, split by zone.
+
+    The anode mesh keeps its series orifice with the open-area budget the
+    single-field geometry already carries (``_anode_neutral_transparency``):
+    the disc must cover the plasma channel, so the column's open area is
+    ``(1 - eta_face) A_col`` with ``eta_face`` inferred from the stored
+    open face area, and the annulus gets the REMAINDER of the stored open
+    area -- the two zones together conserve the existing budget exactly,
+    and an annulus outside a column-sized disc is free, as the geometry
+    docstring promises. A prescribed face conductance
+    (``neutral_face_conductance_cm3_s``) is split between the zones in
+    proportion to their computed conductances.
+
+    Faces where a zone pinches off (zero area or radius) get zero
+    conductance in that zone.
+    """
+    if clausing_scale < 0.0:
+        raise ValueError(f"clausing_scale must be non-negative (got {clausing_scale})")
+    v_th_n = neutral_thermal_speed(Tn_K=Tn_K, mu_neutral=mu_neutral)
+    Rp = np.asarray(geometry.Rp_cm, dtype=float)
+    Rm = np.asarray(geometry.Rm_cm, dtype=float)
+    area_col = np.asarray(geometry.plasma_area_cm2, dtype=float)
+    area_ann = np.maximum(
+        np.asarray(geometry.neutral_area_cm2, dtype=float) - area_col, 0.0
+    )
+    distance = np.asarray(geometry.center_distance_cm, dtype=float)
+
+    R_col = _zone_face_average(Rp)
+    R_ann = np.maximum(_zone_face_average(Rm) - R_col, 0.0)
+    tube_col = np.minimum(area_col[:-1], area_col[1:])
+    tube_ann = np.minimum(area_ann[:-1], area_ann[1:])
+    coeff_col = (
+        float(clausing_scale) * (2.0 / 3.0) * v_th_n * R_col * tube_col / distance
+    )
+    coeff_ann = (
+        float(clausing_scale) * (2.0 / 3.0) * v_th_n * R_ann * tube_ann / distance
+    )
+
+    face_area = np.asarray(geometry.neutral_face_area_cm2, dtype=float)
+    for face in np.asarray(getattr(geometry, "anode_face_indices", ()), dtype=int):
+        interior = int(face) - 1
+        if not 0 <= interior < coeff_col.size:
+            continue
+        # Chamber cross-section and column cross-section at the face; the
+        # stored face area is the OPEN area (chamber area times the open
+        # fraction), from which the disc's opacity is recovered.
+        chamber = np.pi * _zone_face_average(Rm)[interior] ** 2
+        col = np.pi * R_col[interior] ** 2
+        open_total = face_area[int(face)]
+        if chamber <= 0.0 or col <= 0.0:
+            continue
+        eta_face = np.clip((chamber - open_total) / chamber, 0.0, 1.0)
+        # The disc covers the plasma channel: the column sees 1 - eta of
+        # its own area, the annulus keeps whatever open area remains.
+        open_col = np.clip((1.0 - eta_face) * col, 0.0, col)
+        open_ann = np.clip(open_total - open_col, 0.0, None)
+        for coeffs, open_area in ((coeff_col, open_col), (coeff_ann, open_ann)):
+            if coeffs[interior] <= 0.0:
+                continue
+            orifice = float(clausing_scale) * 0.25 * v_th_n * open_area
+            if orifice <= 0.0:
+                coeffs[interior] = 0.0
+                continue
+            coeffs[interior] = 1.0 / (1.0 / coeffs[interior] + 1.0 / orifice)
+
+    prescribed = np.asarray(
+        geometry.neutral_face_conductance_cm3_s[1:-1], dtype=float
+    )
+    override = np.isfinite(prescribed)
+    if np.any(override):
+        total = coeff_col + coeff_ann
+        share_col = np.where(total > 0.0, coeff_col / np.maximum(total, 1e-300), 1.0)
+        coeff_col = np.where(override, prescribed * share_col, coeff_col)
+        coeff_ann = np.where(override, prescribed * (1.0 - share_col), coeff_ann)
+    return coeff_col, coeff_ann
+
+
+def neutral_exchange_two_zone_rhs(state, geometry, column_coeff_cm3_s, annulus_coeff_cm3_s):
+    """Return conservative per-zone axial Knudsen exchange.
+
+    The same pairwise-face form as ``neutral_exchange_rhs``, run
+    independently per zone on the zone's own volumes. Faces where a zone's
+    conductance is zero pass nothing (a pinched-off channel).
+    """
+    if state.nn_a is None:
+        raise ValueError(
+            "neutral_exchange_two_zone_rhs requires a state carrying nn_a"
+        )
+    V_col, V_ann = neutral_zone_volumes(geometry)
+    zeros = np.zeros(geometry.cells, dtype=float)
+    dnn = zeros.copy()
+    dnn_a = zeros.copy()
+    for coeff, values, volumes, out in (
+        (column_coeff_cm3_s, state.nn, V_col, dnn),
+        (annulus_coeff_cm3_s, state.nn_a, V_ann, dnn_a),
+    ):
+        face_rates = np.asarray(coeff, dtype=float) * (
+            np.asarray(values[:-1], dtype=float)
+            - np.asarray(values[1:], dtype=float)
+        )
+        safe = np.maximum(volumes, 1e-300)
+        out[:-1] -= np.where(volumes[:-1] > 0.0, face_rates / safe[:-1], 0.0)
+        out[1:] += np.where(volumes[1:] > 0.0, face_rates / safe[1:], 0.0)
+    return ConservativeState1D(
+        n=zeros,
+        nn=dnn,
+        M=zeros.copy(),
+        Ee=zeros.copy(),
+        Ei=zeros.copy(),
+        nn_a=dnn_a,
+    )
+
+
 def neutral_exchange_face_rates(nn, geometry, exchange_coeff_cm3_s):
     """Return neutral inventory rates across internal faces [particles/s]."""
     coeff = _as_face_coefficients(exchange_coeff_cm3_s, geometry)
@@ -219,19 +414,31 @@ def neutral_wind_advection_rhs(
             Ee=zeros.copy(),
             Ei=zeros.copy(),
         )
-    u_n = neutral_wind_velocity(state, floors=floors, ion_mass_g=ion_mass_g)
+    u_n = neutral_wind_velocity(
+        state, floors=floors, ion_mass_g=ion_mass_g, geometry=geometry
+    )
     nn = np.asarray(state.nn, dtype=float)
     M_n = np.asarray(state.M_n, dtype=float)
     u_face = 0.5 * (u_n[:-1] + u_n[1:])
     donor_nn = np.where(u_face > 0.0, nn[:-1], nn[1:])
     donor_M_n = np.where(u_face > 0.0, M_n[:-1], M_n[1:])
     area = geometry.neutral_face_area_cm2[1:-1]
-    flux_nn = u_face * donor_nn * area
+    # Two-zone state: the drag-driven wind lives in the column (the M5
+    # radial argument), so it advects the COLUMN gas through the plasma
+    # face area on the column volumes. M_n stays a chamber-mean field on
+    # the chamber areas/volumes.
+    if state.nn_a is not None:
+        area_nn = geometry.plasma_face_area_cm2[1:-1]
+        volume_nn = geometry.plasma_volume_cm3
+    else:
+        area_nn = area
+        volume_nn = geometry.neutral_volume_cm3
+    flux_nn = u_face * donor_nn * area_nn
     flux_M_n = u_face * donor_M_n * area
     dnn = zeros.copy()
     dM_n = np.zeros(geometry.cells, dtype=float)
-    dnn[:-1] -= flux_nn / geometry.neutral_volume_cm3[:-1]
-    dnn[1:] += flux_nn / geometry.neutral_volume_cm3[1:]
+    dnn[:-1] -= flux_nn / volume_nn[:-1]
+    dnn[1:] += flux_nn / volume_nn[1:]
     dM_n[:-1] -= flux_M_n / geometry.neutral_volume_cm3[:-1]
     dM_n[1:] += flux_M_n / geometry.neutral_volume_cm3[1:]
     # u_n and M_n share a sign, so these sinks only ever relax M_n toward
@@ -299,11 +506,21 @@ def neutral_source_sink_rhs(
     puff lands on its puff cell and each pump on the plenum/collector at its end.
     Legacy roles resolve to the source and end cells, reproducing today exactly.
     The puff's axial shape comes from ``gas_puff_rate_profile``.
+
+    On a two-zone state (``nn_a`` present, NEUTRAL_TWOZONE_PLAN.md) the puff
+    feeds the ANNULUS first -- the pipe enters at the wall -- re-normalized
+    from the profile's chamber volume to the annulus volume so the total
+    inflow is conserved exactly (annulus-free cells fall back to the
+    column). The pumps keep their chamber-volume rate coefficient applied
+    to BOTH zone densities, which reproduces the single-zone ``S * n_port``
+    exactly at the well-mixed equilibrium.
     """
     dnn = np.zeros(geometry.cells, dtype=float)
+    two_zone = state.nn_a is not None
+    dnn_a = np.zeros(geometry.cells, dtype=float) if two_zone else None
     pump_left_index, pump_right_index = pump_cell_indices(geometry)
     if gas_puff_enabled:
-        dnn += gas_puff_rate_profile(
+        puff = gas_puff_rate_profile(
             geometry,
             S_gp,
             gas_puff_valves,
@@ -314,7 +531,7 @@ def neutral_source_sink_rhs(
             end=0,
         )
         if twin_cathode:
-            dnn += gas_puff_rate_profile(
+            puff = puff + gas_puff_rate_profile(
                 geometry,
                 Twin_S_gp,
                 gas_puff_valves,
@@ -324,6 +541,20 @@ def neutral_source_sink_rhs(
                 throw_cm=gas_puff_throw_cm,
                 end=-1,
             )
+        if two_zone:
+            V_col, V_ann = neutral_zone_volumes(geometry)
+            particles = puff * np.asarray(
+                geometry.neutral_volume_cm3, dtype=float
+            )
+            into_annulus = V_ann > 0.0
+            dnn_a += np.where(
+                into_annulus, particles / np.maximum(V_ann, 1e-300), 0.0
+            )
+            dnn += np.where(
+                into_annulus, 0.0, particles / np.maximum(V_col, 1e-300)
+            )
+        else:
+            dnn += puff
     if pump_enabled:
         # The unmodeled pump elbow folds into an effective speed on the plenum
         # (§4); a collector-side pump has no elbow in front of it.
@@ -343,6 +574,11 @@ def neutral_source_sink_rhs(
         )
         dnn[pump_left_index] -= rate_left * state.nn[pump_left_index]
         dnn[pump_right_index] -= rate_right * state.nn[pump_right_index]
+        if two_zone:
+            dnn_a[pump_left_index] -= rate_left * state.nn_a[pump_left_index]
+            dnn_a[pump_right_index] -= (
+                rate_right * state.nn_a[pump_right_index]
+            )
     zeros = np.zeros(geometry.cells, dtype=float)
     # An evolved neutral wind (state carries M_n) leaves through the pump at
     # the same rate as the gas, so the pumped-out neutrals take their
@@ -361,6 +597,7 @@ def neutral_source_sink_rhs(
         Ee=zeros.copy(),
         Ei=zeros.copy(),
         M_n=dM_n,
+        nn_a=dnn_a,
     )
 
 

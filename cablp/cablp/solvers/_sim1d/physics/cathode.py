@@ -1117,7 +1117,13 @@ def cathode_source_terms(
             )
 
     plasma_loss_rate = dN_loss / geometry.plasma_volume_cm3
-    neutral_gain_rate = dN_loss / geometry.neutral_volume_cm3
+    # Recycle at the cathode surface feeds the COLUMN on a two-zone state
+    # (recycle faces feed the column, NEUTRAL_TWOZONE_PLAN.md).
+    neutral_gain_rate = dN_loss / (
+        geometry.plasma_volume_cm3
+        if state.nn_a is not None
+        else geometry.neutral_volume_cm3
+    )
     # Sheath electron power: P_cathode_e is lost at the cathode surface and
     # P_anode_e at the anode mesh (§8). Legacy has neither resolved, so both stay
     # colocated in its source cell exactly as before; resolved geometry lands each
@@ -1320,6 +1326,11 @@ def beam_ionization_rhs_terms(
         exc_energy_fallback_eV=E_exc,
     )
     volume_ratio = geometry.plasma_volume_cm3 / geometry.neutral_volume_cm3
+    # Two-zone state (NEUTRAL_TWOZONE_PLAN.md): nn is the column density on
+    # the plasma volume, so the beam's neutral debit converts by exactly 1
+    # (the beam attenuates on column gas by construction).
+    if state.nn_a is not None:
+        volume_ratio = np.ones_like(volume_ratio)
     Ti_birth = _birth_temperature(
         input_dict.get("Ti_birth_ionization", "floor"),
         beam_derived.Ti,

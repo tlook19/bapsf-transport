@@ -1137,6 +1137,16 @@ input_flags_template_1d = {
     # exclusive with ion_neutral_drag_model="slip", whose closure is this
     # equation's own local steady state. Off => historical 5-field state.
     "neutral_momentum": False,
+    # Split the neutral density into plasma-column and annulus zones
+    # (NEUTRAL_TWOZONE_PLAN.md): an optional conservative field nn_a
+    # carries the annulus density and nn becomes the COLUMN density. Axial
+    # Knudsen transport runs per zone (the annulus is a free conduit), the
+    # zones exchange free-molecularly at the column surface, and the
+    # plasma only ever absorbs column gas. Requires
+    # neutral_exchange_model="knudsen" (the per-zone conductances have no
+    # molecular_flow/constant counterpart). Off => historical single-field
+    # chamber-mean nn.
+    "neutral_two_zone": False,
     "ion_neutral_thermalization": False,
     "cathode_coupling": True,
     # Schottky barrier lowering in the *current-driven* sheath solve only

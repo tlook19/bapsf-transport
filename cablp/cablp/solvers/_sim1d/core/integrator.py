@@ -49,10 +49,22 @@ def ssprk2_step(y0, dt, rhs_func, floor_func, time=None):
     return floor_func(y2_raw)
 
 
-def floor_state_vector(y, cells, floors, ion_mass_g):
-    """Apply density and temperature floors to a packed conservative vector."""
+def floor_state_vector(
+    y, cells, floors, ion_mass_g, neutral_momentum=None, neutral_two_zone=None
+):
+    """Apply density and temperature floors to a packed conservative vector.
+
+    The optional-field hints resolve the packed-width ambiguity exactly as
+    in ``unpack_state`` (a bare 6-field vector reads as ``M_n``); the solver
+    passes its own flags.
+    """
     from .state import apply_state_floors
 
-    state = unpack_state(y, cells)
+    state = unpack_state(
+        y,
+        cells,
+        neutral_momentum=neutral_momentum,
+        neutral_two_zone=neutral_two_zone,
+    )
     floored = apply_state_floors(state, floors=floors, ion_mass_g=ion_mass_g)
     return pack_state(floored)

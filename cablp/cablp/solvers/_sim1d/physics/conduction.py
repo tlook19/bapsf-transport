@@ -241,6 +241,7 @@ def implicit_heat_conduction_step(
             Ee=state.Ee.copy(),
             Ei=state.Ei.copy(),
             M_n=None if state.M_n is None else state.M_n.copy(),
+            nn_a=None if state.nn_a is None else state.nn_a.copy(),
         )
 
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
@@ -309,6 +310,7 @@ def implicit_heat_conduction_step(
         Ee=Ee,
         Ei=Ei,
         M_n=None if state.M_n is None else state.M_n.copy(),
+        nn_a=None if state.nn_a is None else state.nn_a.copy(),
     )
 
 

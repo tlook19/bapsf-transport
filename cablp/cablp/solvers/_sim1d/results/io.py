@@ -54,11 +54,13 @@ def save_result_hdf5(path, result, params=None, flags=None):
                 "pe",
                 "pi",
                 "p",
-                # Optional neutral-wind fields, present only when the run
-                # evolved M_n (the neutral_momentum flag); readers tolerate
-                # their absence, so the 5-field format is unchanged.
+                # Optional fields, present only when the run evolved them
+                # (the neutral_momentum / neutral_two_zone flags); readers
+                # tolerate their absence, so the 5-field format is
+                # unchanged. With nn_a present, nn is the COLUMN density.
                 "M_n",
                 "u_n",
+                "nn_a",
             ),
         )
         _write_geometry(h5.create_group("geometry"), result)
@@ -128,6 +130,7 @@ def load_result_hdf5(path):
                 "p",
                 "M_n",
                 "u_n",
+                "nn_a",
             ),
         )
         geometry = _read_arrays(

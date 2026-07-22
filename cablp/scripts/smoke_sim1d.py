@@ -50,12 +50,17 @@ from cablp.solvers._sim1d.physics.neutrals import (
     _effective_pump_speed,
     gas_puff_rate_profile,
     neutral_exchange_coefficients,
+    neutral_exchange_two_zone_rhs,
     neutral_source_sink_rhs,
     neutral_thermal_speed,
     neutral_inventory_rate,
     neutral_wind_advection_rhs,
+    neutral_zone_exchange_conductance,
+    neutral_zone_exchange_rhs,
+    neutral_zone_volumes,
     puff_rate,
     pump_rate,
+    two_zone_knudsen_coefficients,
 )
 from cablp.solvers._sim1d.core.timestep import neutral_wind_timestep
 from cablp.solvers._sim1d.physics.reactions import (
@@ -5219,6 +5224,77 @@ def main():
     assert mn_sum.M_n is not None and np.all(mn_sum.M_n == mn_s6.M_n)
     assert add_state_rhs(mn_s5, mn_s5).M_n is None
 
+    # --- Two-zone neutral state foundations (NEUTRAL_TWOZONE_PLAN.md M1):
+    # the optional nn_a field must round-trip its packed layouts, resolve
+    # the 6-field width ambiguity by declared hints (bare 6-field keeps its
+    # historical M_n meaning), pad-on-demand, refuse to silently drop, and
+    # take the nn floor.
+    tz_nn_a = np.full(4, 3.0e12)
+    tz_s6 = conservative_from_primitives(
+        np.full(4, 1e12), np.full(4, 1e13), np.zeros(4),
+        np.full(4, 5.0), np.ones(4), knob_mass, nn_a=tz_nn_a,
+    )
+    assert tz_s6.nn_a is not None and tz_s6.M_n is None
+    tz_packed = pack_state(tz_s6)
+    assert tz_packed.size == 24
+    # Bare 6-field inference keeps the historical M_n reading...
+    tz_bare = unpack_state(tz_packed, 4)
+    assert tz_bare.M_n is not None and tz_bare.nn_a is None
+    # ...and the declared hint recovers the two-zone layout exactly.
+    tz_rt = unpack_state(tz_packed, 4, neutral_two_zone=True)
+    assert tz_rt.M_n is None and np.all(tz_rt.nn_a == tz_s6.nn_a)
+    tz_rt2 = unpack_state(
+        tz_packed, 4, neutral_momentum=False, neutral_two_zone=True
+    )
+    assert tz_rt2.M_n is None and np.all(tz_rt2.nn_a == tz_s6.nn_a)
+    # 7-field (both optionals) round-trips without hints: unambiguous.
+    tz_s7 = conservative_from_primitives(
+        np.full(4, 1e12), np.full(4, 1e13), np.zeros(4),
+        np.full(4, 5.0), np.ones(4), knob_mass,
+        un=np.full(4, 1.0e4), nn_a=tz_nn_a,
+    )
+    tz_p7 = pack_state(tz_s7)
+    assert tz_p7.size == 28
+    tz_rt7 = unpack_state(tz_p7, 4)
+    assert np.all(tz_rt7.M_n == tz_s7.M_n)
+    assert np.all(tz_rt7.nn_a == tz_s7.nn_a)
+    # Field order is (..., M_n, nn_a): the last row of the 7-field pack is
+    # the annulus density.
+    assert np.all(tz_p7[24:] == tz_nn_a)
+    # Pad-on-demand for term summation, in both flag combinations.
+    tz_pad = pack_state(mn_s5, neutral_two_zone=True)
+    assert tz_pad.size == 24 and np.all(tz_pad[20:] == 0.0)
+    tz_pad7 = pack_state(mn_s6, neutral_two_zone=True)
+    assert tz_pad7.size == 28 and np.all(tz_pad7[24:] == 0.0)
+    # Refuse to silently drop a present field.
+    try:
+        pack_state(tz_s6, neutral_two_zone=False)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError dropping a present nn_a")
+    # A wrong declared layout is an error, not a silent misread.
+    try:
+        unpack_state(pack_state(mn_s5), 4, neutral_two_zone=True)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for impossible layout")
+    # nn_a is a density: it takes the nn floor; M_n still passes through.
+    tz_low = conservative_from_primitives(
+        np.full(4, 1e12), np.full(4, 1e13), np.zeros(4),
+        np.full(4, 5.0), np.ones(4), knob_mass,
+        un=np.full(4, 1.0e4), nn_a=np.zeros(4),
+    )
+    tz_fl = apply_state_floors(tz_low, knob_floors, knob_mass)
+    assert np.all(tz_fl.nn_a == knob_floors["nn"])
+    assert np.all(tz_fl.M_n == tz_low.M_n)
+    # Add semantics: missing-side-as-zeros, independently per optional field.
+    tz_sum = add_state_rhs(mn_s6, tz_s6)
+    assert np.all(tz_sum.M_n == mn_s6.M_n)
+    assert np.all(tz_sum.nn_a == tz_s6.nn_a)
+    assert add_state_rhs(mn_s5, mn_s5).nn_a is None
+
     # --- Neutral-momentum sources (NEUTRAL_MOMENTUM_PLAN.md M2): with M_n on
     # the state, the drag and the reactions become species-conserving momentum
     # exchanges, the wall and pump are the only named sinks, and the local
@@ -5688,6 +5764,233 @@ def main():
     tz_nonzero = tz_sim_state.M_n != 0.0
     assert np.any(tz_nonzero)
     assert np.any(tz_sim_state.M_n != tz_uniform_sim.state.M_n)
+
+    # --- Two-zone PARTICLE channel, M2 carriage and transport
+    # (NEUTRAL_TWOZONE_PLAN.md): the solver carries the split (nn, nn_a)
+    # state, runs per-zone axial Knudsen exchange plus the radial
+    # column/annulus conductance, and both close inventory exactly with
+    # detailed balance at equal densities. The flag requires the knudsen
+    # exchange model.
+    p2z_params = dict(mn_plasma_params)
+    p2z_params["neutral_exchange_model"] = "knudsen"
+    p2z_flags = dict(mn_plasma_flags)
+    p2z_flags["neutral_momentum"] = False
+    p2z_flags["neutral_two_zone"] = True
+    try:
+        LAPDSim1D(dict(mn_plasma_params), p2z_flags)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(
+            "expected ValueError: neutral_two_zone without knudsen exchange"
+        )
+    p2z_sim = LAPDSim1D(p2z_params, p2z_flags)
+    p2z_state = p2z_sim.state
+    assert p2z_state.nn_a is not None and p2z_state.M_n is None
+    assert p2z_sim.rhs().size == 6 * p2z_sim.geometry.cells
+    p2z_Vc, p2z_Va = neutral_zone_volumes(p2z_sim.geometry)
+    assert np.allclose(
+        p2z_Vc + p2z_Va, p2z_sim.geometry.neutral_volume_cm3, rtol=1e-13
+    )
+    # Conductance arithmetic against the closed forms.
+    p2z_vth = neutral_thermal_speed(
+        float(p2z_params.get("Tn_K", 300.0)), p2z_sim.mu
+    )
+    p2z_geom = p2z_sim.geometry
+    p2z_mid = p2z_geom.cells // 2
+    assert np.isclose(
+        neutral_zone_exchange_conductance(
+            p2z_geom, float(p2z_params.get("Tn_K", 300.0)), p2z_sim.mu
+        )[p2z_mid],
+        0.25
+        * p2z_vth
+        * 2.0
+        * np.pi
+        * p2z_geom.Rp_cm[p2z_mid]
+        * p2z_geom.length_cm[p2z_mid],
+        rtol=1e-13,
+    )
+    p2z_cc, p2z_ca = two_zone_knudsen_coefficients(
+        p2z_geom, float(p2z_params.get("Tn_K", 300.0)), p2z_sim.mu
+    )
+    p2z_Rcol = 0.5 * (p2z_geom.Rp_cm[p2z_mid] + p2z_geom.Rp_cm[p2z_mid + 1])
+    p2z_Rann = 0.5 * (
+        p2z_geom.Rm_cm[p2z_mid] + p2z_geom.Rm_cm[p2z_mid + 1]
+    ) - p2z_Rcol
+    assert np.isclose(
+        p2z_cc[p2z_mid],
+        (2.0 / 3.0)
+        * p2z_vth
+        * p2z_Rcol
+        * min(
+            p2z_geom.plasma_area_cm2[p2z_mid],
+            p2z_geom.plasma_area_cm2[p2z_mid + 1],
+        )
+        / p2z_geom.center_distance_cm[p2z_mid],
+        rtol=1e-13,
+    )
+    p2z_ann_area = (
+        p2z_geom.neutral_area_cm2 - p2z_geom.plasma_area_cm2
+    )
+    assert np.isclose(
+        p2z_ca[p2z_mid],
+        (2.0 / 3.0)
+        * p2z_vth
+        * p2z_Rann
+        * min(p2z_ann_area[p2z_mid], p2z_ann_area[p2z_mid + 1])
+        / p2z_geom.center_distance_cm[p2z_mid],
+        rtol=1e-13,
+    )
+    # Detailed balance: the uniform initial state gives exactly zero for
+    # both exchange terms.
+    assert np.all(p2z_sim.neutral_zone_exchange_rhs(state=p2z_state).nn == 0.0)
+    assert np.all(
+        p2z_sim.neutral_zone_exchange_rhs(state=p2z_state).nn_a == 0.0
+    )
+    # Perturbed: exact inventory closure per term, and the net flux refills
+    # the depleted column from the annulus.
+    p2z_nn = p2z_state.nn.copy()
+    p2z_nn[p2z_mid] *= 0.5
+    p2z_pert = ConservativeState1D(
+        p2z_state.n,
+        p2z_nn,
+        p2z_state.M,
+        p2z_state.Ee,
+        p2z_state.Ei,
+        nn_a=p2z_state.nn_a.copy(),
+    )
+    p2z_zx = p2z_sim.neutral_zone_exchange_rhs(state=p2z_pert)
+    assert (
+        abs(float((p2z_zx.nn * p2z_Vc + p2z_zx.nn_a * p2z_Va).sum())) == 0.0
+    )
+    assert p2z_zx.nn[p2z_mid] > 0.0 and p2z_zx.nn_a[p2z_mid] < 0.0
+    p2z_ax = p2z_sim.neutral_exchange_rhs(state=p2z_pert)
+    assert abs(float((p2z_ax.nn * p2z_Vc).sum())) <= 1e-12 * float(
+        np.abs(p2z_ax.nn * p2z_Vc).max()
+    )
+    assert np.all(p2z_ax.nn_a == 0.0)  # annulus still uniform
+    # The pre-plasma implicit step conserves inventory exactly with the
+    # pump off and the puff's BE deposit accounted, and preserves the
+    # uniform equilibrium.
+    p2z_eq_params = dict(p2z_params)
+    p2z_eq_params["pump_enabled"] = False
+    p2z_eq_flags = dict(p2z_flags)
+    p2z_eq_flags["Plasma"] = False
+    p2z_eq_sim = LAPDSim1D(p2z_eq_params, p2z_eq_flags)
+    p2z_eq_state = p2z_eq_sim.state
+    p2z_eq_Vc, p2z_eq_Va = neutral_zone_volumes(p2z_eq_sim.geometry)
+    p2z_dt = 1.0e-5
+    p2z_next = p2z_eq_sim._implicit_neutral_step(
+        dt=p2z_dt, state=p2z_eq_state, time=0.0
+    )
+    p2z_src = p2z_eq_sim._neutral_source_kwargs(time=0.0)
+    p2z_inflow = 0.0
+    if p2z_src["gas_puff_enabled"]:
+        p2z_inflow = float(
+            np.sum(
+                gas_puff_rate_profile(
+                    p2z_eq_sim.geometry,
+                    p2z_src["S_gp"],
+                    p2z_src["gas_puff_valves"],
+                    profile=p2z_src["gas_puff_profile"],
+                    z_cm=p2z_src["gas_puff_z_cm"],
+                    sigma_cm=p2z_src["gas_puff_sigma_cm"],
+                    throw_cm=p2z_src["gas_puff_throw_cm"],
+                )
+                * p2z_eq_sim.geometry.neutral_volume_cm3
+            )
+        )
+    p2z_inv0 = float(
+        (p2z_eq_state.nn * p2z_eq_Vc + p2z_eq_state.nn_a * p2z_eq_Va).sum()
+    )
+    p2z_inv1 = float(
+        (p2z_next.nn * p2z_eq_Vc + p2z_next.nn_a * p2z_eq_Va).sum()
+    )
+    assert np.isclose(p2z_inv1 - p2z_inv0, p2z_dt * p2z_inflow, rtol=1e-9)
+    # Plasma-phase e2e through the full step machinery, two-zone alone and
+    # combined with the evolved wind (7-field state).
+    for _ in range(5):
+        p2z_sim.advance_one_step(dt=1.0e-9)
+    p2z_after = p2z_sim.state
+    assert p2z_after.nn_a is not None
+    assert np.all(np.isfinite(p2z_after.nn_a))
+    p2z_both_flags = dict(p2z_flags)
+    p2z_both_flags["neutral_momentum"] = True
+    p2z_both_sim = LAPDSim1D(p2z_params, p2z_both_flags)
+    assert p2z_both_sim.rhs().size == 7 * p2z_both_sim.geometry.cells
+    for _ in range(5):
+        p2z_both_sim.advance_one_step(dt=1.0e-9)
+    p2z_both_state = p2z_both_sim.state
+    assert p2z_both_state.M_n is not None
+    assert p2z_both_state.nn_a is not None
+    assert np.all(np.isfinite(p2z_both_state.M_n))
+    assert np.all(np.isfinite(p2z_both_state.nn_a))
+    # M3 source/sink routing: with nn the column density on V_col == Vp,
+    # every species-exchange term closes the TOTAL particle inventory
+    # n*Vp + nn*V_col + nn_a*V_ann exactly (the ionization/recombination
+    # conversion is unity; recycle faces feed the column; the puff feeds
+    # the annulus; the pump drains both zones).
+    p2z_terms = p2z_sim.rhs_terms()
+    assert np.all(
+        p2z_terms["ionization_birth"].nn == -p2z_terms["ionization_birth"].n
+    )
+    def p2z_inventory(term):
+        total = term.n * p2z_sim.geometry.plasma_volume_cm3 + term.nn * p2z_Vc
+        if term.nn_a is not None:
+            total = total + term.nn_a * p2z_Va
+        return float(np.sum(total))
+    for p2z_name in (
+        "ionization_birth",
+        "recombination_rad_loss",
+        "recombination_3b_loss",
+        "surface_loss",
+        "neutral_exchange",
+        "neutral_zone_exchange",
+    ):
+        p2z_term = p2z_terms[p2z_name]
+        p2z_scale = float(
+            np.abs(p2z_term.n * p2z_sim.geometry.plasma_volume_cm3).max()
+            + np.abs(p2z_term.nn * p2z_Vc).max()
+        )
+        assert abs(p2z_inventory(p2z_term)) <= 1e-10 * max(p2z_scale, 1.0), (
+            p2z_name
+        )
+    # The term ledger gains exactly the one new named term, and the nn_a
+    # trajectory round-trips through HDF5.
+    p2z_run_params = dict(run_params)
+    p2z_run_params["neutral_exchange_model"] = "knudsen"
+    p2z_run_flags = dict(flags)
+    p2z_run_flags["neutral_two_zone"] = True
+    p2z_run_sim = LAPDSim1D(p2z_run_params, p2z_run_flags)
+    assert set(p2z_run_sim.rhs_terms()) == expected_rhs_terms | {
+        "neutral_zone_exchange"
+    }
+    # Resolved geometry + operator-split implicit heat + both optional
+    # fields: the heat substep must pass nn_a through (the strict unpack
+    # hints turn a dropped field into a loud error -- this caught a real
+    # 7->6-field truncation in implicit_heat_conduction_step).
+    p2z_res_params = dict(p2z_params)
+    p2z_res_flags = dict(p2z_flags)
+    p2z_res_flags["neutral_momentum"] = True
+    p2z_res_flags["resolved_boundaries"] = True
+    p2z_res_flags["implicit_heat_conduction"] = True
+    p2z_res_sim = LAPDSim1D(p2z_res_params, p2z_res_flags)
+    for _ in range(3):
+        p2z_res_sim.advance_one_step(dt=1.0e-9)
+    p2z_res_state = p2z_res_sim.state
+    assert p2z_res_state.nn_a is not None and p2z_res_state.M_n is not None
+    assert np.all(np.isfinite(p2z_res_state.nn_a))
+    assert np.all(np.isfinite(p2z_res_state.M_n))
+
+    p2z_result = p2z_run_sim.run(t_end=3.0e-10, dt=1.0e-10)
+    p2z_run_cells = p2z_run_sim.geometry.cells
+    assert p2z_result.nn_a.shape == (4, p2z_run_cells)
+    assert np.all(np.isfinite(p2z_result.nn_a))
+    with tempfile.TemporaryDirectory() as p2z_dir:
+        p2z_path = Path(p2z_dir) / "p2z_smoke.h5"
+        p2z_run_sim.save_result(p2z_path, p2z_result)
+        p2z_loaded = load_result_hdf5(p2z_path)
+        assert np.allclose(p2z_loaded.nn_a, p2z_result.nn_a)
 
     # --- Neutral-wind advection (NEUTRAL_MOMENTUM_PLAN.md M3): donor-cell
     # upwind of nn and M_n by u_n on the neutral faces, closed ends for
