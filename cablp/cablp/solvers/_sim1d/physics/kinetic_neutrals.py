@@ -91,7 +91,15 @@ class VGrid:
         f = wz[:, None] * wp[None, :]
         total = f.sum()
         if total <= 0:
-            raise ValueError("empty Maxwellian projection; widen the grid")
+            # drift beyond the grid edge: clamp to the boundary half-space
+            # rather than dying mid-run (the grid should be sized to make
+            # this unreachable; the clamp keeps a pathological transient
+            # cell from killing a discharge)
+            edge = self.vz_edges[-2] if u_drift > 0 else self.vz_edges[1]
+            ez = (self.vz_edges - edge) / (s * np.sqrt(2.0))
+            wz = 0.5 * np.diff(np.array([erf(x) for x in ez]))
+            f = wz[:, None] * wp[None, :]
+            total = f.sum()
         f /= total
         if not exact_moments:
             return f
@@ -176,7 +184,7 @@ class VGrid:
 
 class KN2Zone:
     def __init__(self, bg, nvz=80, nvp=24, truncate=1e-3, max_gen=400,
-                 verbose=True):
+                 verbose=True, grid=None):
         self.bg = bg
         self.truncate = truncate
         self.max_gen = max_gen
@@ -192,10 +200,18 @@ class KN2Zone:
         self.V_ann = self.A_ann * self.dz
         self.nu_ion = bg["nu_ion"]
         self.nu_cx = bg["nu_cx"]
-        Ti_max = float(np.max(bg["Ti"]))
-        vmax = 4.0 * np.sqrt(max(Ti_max, 0.5) * EV / M_HE)
-        v_fine = 0.25 * np.sqrt(KB * T_WALL_K / M_HE)
-        self.g = VGrid(vmax, vmax, nvz, nvp, v_fine)
+        if grid is not None:
+            # frozen shared grid (K4a-t: the compiled flight kernels bind
+            # to the grid, so refreshes must reuse it)
+            self.g = grid
+        else:
+            # size from BOTH the thermal spread and the drift: a sonic
+            # CX-source cell must project inside the grid
+            Ti_max = float(np.max(bg["Ti"]))
+            u_max = float(np.max(np.abs(bg["u"]))) if "u" in bg else 0.0
+            vmax = 4.0 * np.sqrt(max(Ti_max, 0.5) * EV / M_HE) + 1.5 * u_max
+            v_fine = 0.25 * np.sqrt(KB * T_WALL_K / M_HE)
+            self.g = VGrid(vmax, vmax, nvz, nvp, v_fine)
         g = self.g
         # Velocity-dependent zone rates, (nz, nvp). Two closed geometric
         # operator sets, no free parameters in either:

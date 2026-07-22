@@ -38,8 +38,12 @@ from .core.state import (
 from .core.timestep import suggest_timestep
 from .physics.conduction import heat_conduction_rhs, implicit_heat_conduction_step
 from .physics.kinetic_neutrals import (
+    EV as _KIN_EV,
+    KB as _KIN_KB,
+    M_HE as _KIN_M_HE,
     KN2ZoneJump,
     KineticEngineFast,
+    VGrid as _KineticVGrid,
     _inflow as _kinetic_inflow,
 )
 from .physics.cathode import (
@@ -560,10 +564,19 @@ class LAPDSim1D:
                 target_ann=None,
                 tau_col=None,
                 tau_ann=None,
+                responses=None,       # per-channel unit-rate G_k (K4a-t)
+                shapes=None,          # frozen channel shapes at refresh
+                nu_ref=None,          # absorption field at last refresh
+                grid=None,            # frozen shared velocity grid
                 next_refresh_s=0.0,
+                next_update_s=0.0,
                 refresh_s=float(
                     self._input_dict.get("neutral_kinetic_refresh_s", 5e-4)
                 ),
+                refresh_tol=float(
+                    self._input_dict.get("neutral_kinetic_refresh_tol", 0.2)
+                ),
+                update_s=1.0e-5,
                 nvz=int(self._input_dict.get("neutral_kinetic_nvz", 48)),
                 nvp=int(self._input_dict.get("neutral_kinetic_nvp", 12)),
             )
@@ -1475,12 +1488,31 @@ class LAPDSim1D:
             self._kinetic is not None
             and self._flags.get("Plasma", True)
             and not self._neutral_prebreakdown_active()
-            and (
-                self._kinetic.target_col is None
-                or self._time >= self._kinetic.next_refresh_s
-            )
         ):
-            self._kinetic_refresh(self._time)
+            kin = self._kinetic
+            if kin.responses is None or self._time >= kin.next_refresh_s:
+                self._kinetic_refresh(self._time)
+            elif self._time >= kin.next_update_s:
+                # cheap continuous update; escalate to a full refresh when
+                # the absorption field has moved past the tolerance (the
+                # response functions' only staleness channel)
+                state = self.state
+                derived = self.derived
+                nu_ion, nu_cx = self._kinetic_absorption_fields(
+                    state, derived
+                )
+                scale = np.maximum(np.abs(kin.nu_ref), 1e2)
+                if float(
+                    np.max(np.abs(nu_ion - kin.nu_ref) / scale)
+                ) > kin.refresh_tol:
+                    self._kinetic_refresh(self._time)
+                else:
+                    self._kinetic_update_targets(
+                        self._time,
+                        state=state,
+                        derived=derived,
+                        nu_pair=(nu_ion, nu_cx),
+                    )
         # Retain the accepted solve current for the measured-tail phase gate.
         solve = self._cathode_solve
         if solve is not None and solve.beam_result is not None:
@@ -4261,65 +4293,20 @@ class LAPDSim1D:
             for name in names
         }
 
-    def _kinetic_refresh(self, time):
-        """Run one refresh-cadence kinetic solve (K4a) at an ACCEPTED state.
+    def _kinetic_channel_rates(self, state, derived, time):
+        """Return the current source-channel rates and shapes (K4a-t).
 
-        Builds the engine background from the live fields, extracts the
-        source menu from the solver's own physics terms (the same rates the
-        superseded moment rows would have applied -- ledger-consistent by
-        construction), solves the compiled jump engine, and stores the
-        target profiles plus per-cell relaxation times.
+        Cheap (pure numpy on the live fields); called every target update
+        so the kinetic targets track source transients continuously --
+        the recycle channels collapse WITH the plasma, which is what
+        removes the afterglow flood.
         """
-        state = self.state
-        derived = self.derived
         geometry = self._geometry
-        kin = self._kinetic
-        n_safe = np.maximum(state.n, 1e6)
-        Te_safe = np.maximum(derived.Te, 0.2)
-        rates = he_rates(n_safe, Te_safe, ("scd",))
-        nu_ion = state.n * rates["scd"]
-        nu_cx = state.n * charge_ex_react(np.maximum(derived.Ti, 0.05), "He")
-        T_s = float(self._input_dict.get("T_s", 1910.0))
-        cd = getattr(self, "_cathode_solve", None)
-        anode_faces = np.asarray(
-            getattr(geometry, "anode_face_indices", ()), dtype=int
-        )
-        bg = {
-            "z_edges": np.concatenate(
-                ([0.0], np.cumsum(geometry.length_cm))
-            ),
-            "Rp": np.asarray(geometry.Rp_cm, dtype=float),
-            "Rm": np.asarray(geometry.Rm_cm, dtype=float),
-            "nu_ion": np.asarray(nu_ion, dtype=float),
-            "nu_cx": np.asarray(nu_cx, dtype=float),
-            "Ti": np.asarray(derived.Ti, dtype=float),
-            "u": np.asarray(derived.u, dtype=float),
-            "T_s": T_s,
-            "S_pump_L": float(self._input_dict.get("S_pump_L", 0.0)),
-            "S_pump_R": float(self._input_dict.get("S_pump_R", 0.0)),
-            "eta": float(self._input_dict.get("eta", 0.358)),
-            "mesh_edge": int(anode_faces[0]) if anode_faces.size else -999,
-            "sources": {},
-        }
-        jump = KN2ZoneJump(
-            bg, nvz=kin.nvz, nvp=kin.nvp, verbose=False, max_gen=600
-        )
-        if kin.engine is None:
-            kin.engine = KineticEngineFast(jump)
-        else:
-            # geometry is fixed for the run: reuse the compiled flight
-            # kernels, swap in the fresh rates/spectra
-            kin.engine.j = jump
-        g = jump.g
-        nz = jump.nz
         V_col, V_ann = self._zone_volumes
-        # --- source menu from the solver's own terms (positive nn rows) ---
         ba = self.boundary_absorption_rhs(state=state)
         recycle = np.clip(ba.nn, 0.0, None) * V_col
-        cath_rate = float(recycle[0] + recycle[1])  # plenum-adjacent + cathode
-        coll_rate = float(recycle[-1])
         reaction_terms = self.reaction_rhs_terms(state=state)
-        rec_cell = np.clip(
+        rec_cells = np.clip(
             reaction_terms["recombination_rad_loss"].nn
             + reaction_terms["recombination_3b_loss"].nn,
             0.0,
@@ -4329,12 +4316,10 @@ class LAPDSim1D:
         an_gain = np.clip(an.nn, 0.0, None) * V_col
         if an.nn_a is not None:
             an_gain = an_gain + np.clip(an.nn_a, 0.0, None) * V_ann
-        anode_left = float(an_gain[: bg["mesh_edge"]].sum()) if anode_faces.size else 0.0
-        anode_right = float(an_gain[bg["mesh_edge"]:].sum()) if anode_faces.size else 0.0
         src_kwargs = self._neutral_source_kwargs(time=time)
-        puff_rate_cells = np.zeros(nz)
+        puff_cells = np.zeros(geometry.cells)
         if src_kwargs["gas_puff_enabled"]:
-            puff_prof = gas_puff_rate_profile(
+            puff_cells = gas_puff_rate_profile(
                 geometry,
                 src_kwargs["S_gp"],
                 src_kwargs["gas_puff_valves"],
@@ -4342,42 +4327,189 @@ class LAPDSim1D:
                 z_cm=src_kwargs["gas_puff_z_cm"],
                 sigma_cm=src_kwargs["gas_puff_sigma_cm"],
                 throw_cm=src_kwargs["gas_puff_throw_cm"],
-            )
-            puff_rate_cells = puff_prof * np.asarray(
-                geometry.neutral_volume_cm3, dtype=float
-            )
-        # --- engine inputs ---
-        Sc = np.zeros((nz, g.nvz, g.nvp))
-        for i in np.flatnonzero(rec_cell > 0):
-            Sc[i] += rec_cell[i] / jump.V_col[i] * jump.M_cx[i]
-        for rate, sign in ((anode_left, -1), (anode_right, +1)):
-            if rate <= 0 or not anode_faces.size:
+            ) * np.asarray(geometry.neutral_volume_cm3, dtype=float)
+        return {
+            "cath": float(recycle[0] + recycle[1]),
+            "coll": float(recycle[-1]),
+            "puff": puff_cells,
+            "rec": rec_cells,
+            "anode": an_gain,
+        }
+
+    def _kinetic_absorption_fields(self, state, derived):
+        n_safe = np.maximum(state.n, 1e6)
+        Te_safe = np.maximum(derived.Te, 0.2)
+        rates = he_rates(n_safe, Te_safe, ("scd",))
+        nu_ion = state.n * rates["scd"]
+        nu_cx = state.n * charge_ex_react(
+            np.maximum(derived.Ti, 0.05), "He"
+        )
+        return np.asarray(nu_ion, dtype=float), np.asarray(nu_cx, dtype=float)
+
+    def _kinetic_refresh(self, time):
+        """Recompute the per-channel unit-rate responses (K4a-t).
+
+        One engine solve per source channel (the kinetic steady solve is
+        LINEAR in the sources at frozen plasma), so between refreshes the
+        targets are formed as sum(rate_k * G_k) with the LIVE rates. The
+        channel shapes (puff profile, recombination profile, anode split)
+        are frozen here and rescaled by magnitude in between.
+        """
+        state = self.state
+        derived = self.derived
+        geometry = self._geometry
+        kin = self._kinetic
+        nu_ion, nu_cx = self._kinetic_absorption_fields(state, derived)
+        T_s = float(self._input_dict.get("T_s", 1910.0))
+        anode_faces = np.asarray(
+            getattr(geometry, "anode_face_indices", ()), dtype=int
+        )
+        bg = {
+            "z_edges": np.concatenate(
+                ([0.0], np.cumsum(geometry.length_cm))
+            ),
+            "Rp": np.asarray(geometry.Rp_cm, dtype=float),
+            "Rm": np.asarray(geometry.Rm_cm, dtype=float),
+            "nu_ion": nu_ion,
+            "nu_cx": nu_cx,
+            "Ti": np.asarray(derived.Ti, dtype=float),
+            "u": np.asarray(derived.u, dtype=float),
+            "T_s": T_s,
+            "S_pump_L": float(self._input_dict.get("S_pump_L", 0.0)),
+            "S_pump_R": float(self._input_dict.get("S_pump_R", 0.0)),
+            "eta": float(self._input_dict.get("eta", 0.358)),
+            "mesh_edge": int(anode_faces[0]) if anode_faces.size else -999,
+            "sources": {},
+        }
+        if getattr(kin, "grid", None) is None:
+            # freeze one generous shared grid for the whole run: the
+            # compiled kernels bind to it, and it must hold any discharge
+            # state (10 eV CX tails + 2e6 cm/s drifts)
+            Ti_cap = max(float(np.max(derived.Ti)), 10.0)
+            u_cap = max(float(np.max(np.abs(derived.u))), 2.0e6)
+            vmax = 4.0 * np.sqrt(Ti_cap * _KIN_EV / _KIN_M_HE) + 1.5 * u_cap
+            v_fine = 0.25 * np.sqrt(_KIN_KB * 300.0 / _KIN_M_HE)
+            kin.grid = _KineticVGrid(vmax, vmax, kin.nvz, kin.nvp, v_fine)
+        jump = KN2ZoneJump(
+            bg, nvz=kin.nvz, nvp=kin.nvp, verbose=False, max_gen=600,
+            grid=kin.grid,
+        )
+        if kin.engine is None:
+            kin.engine = KineticEngineFast(jump)
+        else:
+            kin.engine.j = jump
+        g = jump.g
+        nz = jump.nz
+        rates_now = self._kinetic_channel_rates(state, derived, time)
+        zero_Sc = np.zeros((nz, g.nvz, g.nvp))
+        zero_in = np.zeros((g.nvz, g.nvp))
+        zero_wall = np.zeros(nz)
+
+        def shape_of(cells):
+            total = float(np.sum(cells))
+            if total <= 0:
+                return None, 0.0
+            return np.asarray(cells, dtype=float) / total, total
+
+        puff_shape, _ = shape_of(rates_now["puff"])
+        rec_shape, _ = shape_of(rates_now["rec"])
+        anode_shape, _ = shape_of(rates_now["anode"])
+        responses = {}
+        shapes = {"puff": puff_shape, "rec": rec_shape, "anode": anode_shape}
+        for name in ("cath", "coll", "puff", "rec", "anode"):
+            Sc = zero_Sc.copy()
+            Fc_in_L = zero_in
+            Fc_in_R = zero_in
+            wall0 = zero_wall.copy()
+            if name == "cath":
+                Fc_in_L = _kinetic_inflow(
+                    1.0, g.half_flux_spectrum(T_s, +1), jump.A_col[0], g
+                )
+            elif name == "coll":
+                Fc_in_R = _kinetic_inflow(
+                    1.0, g.half_flux_spectrum(300.0, -1), jump.A_col[-1], g
+                )
+            elif name == "puff":
+                if puff_shape is None:
+                    continue
+                wall0 = puff_shape.copy()
+            elif name == "rec":
+                if rec_shape is None:
+                    continue
+                for i in np.flatnonzero(rec_shape > 0):
+                    Sc[i] = Sc[i] + (
+                        rec_shape[i] / jump.V_col[i]
+                    ) * jump.M_cx[i]
+            elif name == "anode":
+                if anode_shape is None or not anode_faces.size:
+                    continue
+                for i in np.flatnonzero(anode_shape > 0):
+                    sign = -1 if i < bg["mesh_edge"] else +1
+                    Sc[i] = Sc[i] + (
+                        anode_shape[i] / jump.V_col[i]
+                    ) * g.half_flux_spectrum(300.0, sign)
+            res = kin.engine.solve(Sc, Fc_in_L, Fc_in_R, wall0)
+            responses[name] = {
+                "col": res["nn_col"],
+                "ann": res["nn_ann"],
+                "arr": res["ann_arrival"],
+            }
+        kin.responses = responses
+        kin.shapes = shapes
+        kin.nu_ref = nu_ion
+        kin.next_refresh_s = float(time) + kin.refresh_s
+        self._kinetic_update_targets(time, state=state, derived=derived,
+                                     rates=rates_now, nu_pair=(nu_ion, nu_cx))
+
+    def _kinetic_update_targets(self, time, state=None, derived=None,
+                                rates=None, nu_pair=None):
+        """Combine the unit responses with the LIVE channel rates (K4a-t)."""
+        kin = self._kinetic
+        if kin.responses is None:
+            return
+        if state is None:
+            state = self.state
+        if derived is None:
+            derived = self.derived
+        if rates is None:
+            rates = self._kinetic_channel_rates(state, derived, time)
+        if nu_pair is None:
+            nu_pair = self._kinetic_absorption_fields(state, derived)
+        nu_ion, nu_cx = nu_pair
+        V_col, V_ann = self._zone_volumes
+        scalars = {
+            "cath": rates["cath"],
+            "coll": rates["coll"],
+            "puff": float(np.sum(rates["puff"])),
+            "rec": float(np.sum(rates["rec"])),
+            "anode": float(np.sum(rates["anode"])),
+        }
+        target_col = np.zeros(self._geometry.cells)
+        target_ann = np.zeros(self._geometry.cells)
+        arr = np.zeros(self._geometry.cells)
+        for name, resp in kin.responses.items():
+            s = scalars.get(name, 0.0)
+            if s <= 0:
                 continue
-            j = bg["mesh_edge"] - 1 if sign < 0 else bg["mesh_edge"]
-            j = min(max(j, 0), nz - 1)
-            Sc[j] += rate / jump.V_col[j] * g.half_flux_spectrum(300.0, sign)
-        Fc_in_L = _kinetic_inflow(
-            cath_rate, g.half_flux_spectrum(T_s, +1), jump.A_col[0], g
-        )
-        Fc_in_R = _kinetic_inflow(
-            coll_rate, g.half_flux_spectrum(300.0, -1), jump.A_col[-1], g
-        )
-        res = kin.engine.solve(Sc, Fc_in_L, Fc_in_R, puff_rate_cells)
-        kin.target_col = np.maximum(res["nn_col"], self._floors["nn"])
-        kin.target_ann = np.maximum(res["nn_ann"], self._floors["nn"])
-        # relaxation times: column at the local absorption+escape rate;
-        # annulus at the K0-honest inventory/throughput per cell
+            target_col = target_col + s * resp["col"]
+            target_ann = target_ann + s * resp["ann"]
+            arr = arr + s * resp["arr"]
+        kin.target_col = np.maximum(target_col, self._floors["nn"])
+        kin.target_ann = np.maximum(target_ann, self._floors["nn"])
         vbar = np.sqrt(
             8.0 * kb_cgs * 300.0 / (np.pi * self._mu_neutral * m_p_cgs)
         )
-        esc = vbar / (2.0 * np.maximum(bg["Rp"], 1e-6))
+        esc = vbar / (
+            2.0 * np.maximum(np.asarray(self._geometry.Rp_cm), 1e-6)
+        )
         kin.tau_col = np.clip(
             1.0 / np.maximum(nu_ion + nu_cx + esc, 1e-6), 1e-5, 0.1
         )
         inv_ann = kin.target_ann * np.maximum(V_ann, 1e-6)
-        arr = np.maximum(res["ann_arrival"], 1e-30)
-        kin.tau_ann = np.clip(inv_ann / arr, 1e-4, 0.05)
-        kin.next_refresh_s = float(time) + kin.refresh_s
+        kin.tau_ann = np.clip(
+            inv_ann / np.maximum(arr, 1e-30), 1e-4, 0.05
+        )
+        kin.next_update_s = float(time) + kin.update_s
 
     @staticmethod
     def _strip_neutral_rows(term):

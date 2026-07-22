@@ -378,6 +378,7 @@ def model_mode_defaults():
     # Golden path: "moment" (bit-exact).
     "neutral_model": "moment",
     "neutral_kinetic_refresh_s": 5e-4,
+    "neutral_kinetic_refresh_tol": 0.2,
     "neutral_kinetic_nvz": 48,
     "neutral_kinetic_nvp": 12,
         "operator_splitting": "lie",
