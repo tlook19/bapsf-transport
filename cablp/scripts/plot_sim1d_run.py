@@ -775,14 +775,52 @@ def _plot_cathode(result, t_plot, time_label, phase_events):
     fig, axes = plt.subplots(2, 1, figsize=(8.5, 6), constrained_layout=True, sharex=True)
     if i_tot is not None:
         axes[0].plot(t_plot[: len(i_tot)], i_tot, label="source I_tot [A]", color="tab:blue")
-    if v_b is not None:
+    # Discharge voltage. Primary trace: per-solve V_b -- with electrode
+    # sample smoothing on (cathode_sample_smoothing) this IS the clean
+    # physical operating point (measured 2026-07-21: sigma 2.5 V, tracking
+    # the ES1 plateau decline at the right absolute level); unsmoothed
+    # M_n-closure runs show its sampling hash instead. circuit_V_dis_step
+    # (since 2026-07-21 the save-interval dt-weighted average, agreeing
+    # with V_b and the loop reconstruction on the plateau) is shown
+    # 0.3-ms-averaged and faint to tame its per-save chatter. Runs saved
+    # BEFORE 2026-07-21 store the biased last-step sample under the same
+    # key (~25 V low on the ES1 plateau) -- do not read absolute levels
+    # from the faint trace on old files.
+    v_step = _field(cathode, "circuit_V_dis_step")
+    if v_step is not None and not np.any(np.isfinite(v_step) & (v_step != 0.0)):
+        v_step = None
+    if v_b is not None or v_step is not None:
         ax_v = axes[0].twinx()
-        ax_v.plot(t_plot[: len(v_b)], v_b, label="source V_b [V]", color="tab:orange")
-        ax_v.set_ylabel("V_b [V]", color="tab:orange")
+        if v_step is not None:
+            width = 31
+            kernel = np.ones(width) / width
+            v_avg = np.convolve(
+                np.nan_to_num(v_step, nan=float(np.nanmedian(v_step))),
+                kernel,
+                mode="same",
+            )
+            ax_v.plot(
+                t_plot[: len(v_avg)],
+                v_avg,
+                label="circuit V_dis, 0.3 ms avg",
+                color="tab:red",
+                alpha=0.4,
+                lw=0.9,
+            )
+        if v_b is not None:
+            ax_v.plot(
+                t_plot[: len(v_b)],
+                v_b,
+                label="per-solve V_b [V]",
+                color="tab:orange",
+                lw=1.2,
+            )
+        ax_v.set_ylabel("V [V]", color="tab:orange")
         ax_v.tick_params(axis="y", labelcolor="tab:orange")
+        ax_v.legend(loc="lower right", fontsize=7)
     axes[0].set_ylabel("I_tot [A]", color="tab:blue")
     axes[0].tick_params(axis="y", labelcolor="tab:blue")
-    axes[0].set_title("Cathode current and beam voltage")
+    axes[0].set_title("Cathode current and discharge voltage")
     _add_phase_lines(axes[0], phase_events)
     axes[0].grid(True, alpha=0.25)
 

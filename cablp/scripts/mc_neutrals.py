@@ -1,0 +1,453 @@
+"""Frozen-field test-particle Monte Carlo for LAPD neutrals (TPMC).
+
+Adjudicates the solver's neutral closures against a kinetic reference on the
+SAME plasma background: reads a saved sim1d run, plateau-averages its plasma
+fields, and transports test atoms through them with the model's own atomic
+data (ADAS SCD ionization, the CX table) -- so any disagreement with the
+solver's nn / u_n is closure error, not input error.
+
+Physics: axisymmetric cylinder r < Rm(z), z in [0, Lm]; plasma column
+r < Rp(z) carries the 1D fields (n, Te, Ti, u_i). Free-molecular neutrals
+(no neutral-neutral collisions -- Kn >~ 1): free flight + null-collision
+events. Events: electron-impact ionization (absorb), resonant CX (resample
+velocity from the local ion Maxwellian + drift: the relay). Boundaries:
+diffuse 300 K re-emission at the radial wall and collector; the anode mesh
+plane intercepts with probability 1 - T (T = 1 - eta) and re-emits on the
+incident side; the cathode disc re-emits either thermally (the solver's
+at-rest convention) or as the directed jet (--jet); end pumps are sticking
+probabilities s = S_pump / (A vbar / 4). Sources and their absolute rates
+come from the run's own ledger (puff cell, cathode/collector faces, anode
+mesh), so tallies are absolute densities.
+
+Track-length estimators per z-cell, split column / annulus: nn and mean
+axial drift, i.e. exactly the quantities the two-zone closure and the M_n
+wind claim to predict.
+
+Simplifications (documented): elastic (Langevin) scattering folded into CX
+resampling is omitted -- CX dominates momentum transfer for He+/He; radial
+plasma profile is the 1D model's own top-hat; no plenum volume behind the
+cathode plane (its pump becomes a z=0 annulus sticking coefficient).
+
+Usage:
+    python scripts/mc_neutrals.py RUN.h5 [-n 200000] [--jet {none,cathode,both}]
+        [--window 5 19.5] [--seed 1] [--out PREFIX]
+"""
+
+import argparse
+import sys
+from pathlib import Path
+
+import h5py
+import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from cablp.funcs._adas import he_rates
+from cablp.funcs._cross import charge_ex_react
+
+EV = 1.602176634e-12
+KB = 1.380649e-16
+M_HE = 4.002602 * 1.66053907e-24
+E_CHARGE = 1.602176634e-19
+T_WALL_K = 300.0
+
+
+def vt_cm_s(T_eV):
+    return np.sqrt(T_eV * EV / M_HE)
+
+
+def load_background(path, window_ms):
+    with h5py.File(path, "r") as f:
+        t0 = float(f.attrs["t_breakdown_trigger"])
+        t = (f["time"][:] - t0) * 1e3
+        m = (t >= window_ms[0]) & (t <= window_ms[1])
+        g = f["geometry"]
+        roles = [
+            r.decode() if isinstance(r, bytes) else str(r)
+            for r in g["cell_role"][:]
+        ]
+        # Domain: cathode face (first non-plenum cell edge) to the far end.
+        first = roles.index("cathode") if "cathode" in roles else 0
+        length = g["length_cm"][:]
+        z_lo = np.concatenate(([0.0], np.cumsum(length)))  # provisional
+        # rebuild absolute edges from z centers
+        zc = g["z_cm"][:]
+        edges = np.concatenate((zc - 0.5 * length, [zc[-1] + 0.5 * length[-1]]))
+        sel = slice(first, len(roles))
+        bg = {
+            "z_edges": edges[first : len(roles) + 1] - edges[first],
+            "Rp": g["Rp_cm"][:][sel],
+            "Rm": g["Rm_cm"][:][sel],
+            "roles": roles[first:],
+            "Vp": g["plasma_volume_cm3"][:][sel],
+            "Vm": g["neutral_volume_cm3"][:][sel],
+            "n": np.mean(f["n"][:][m], axis=0)[sel],
+            "Te": np.mean(f["Te"][:][m], axis=0)[sel],
+            "Ti": np.mean(f["Ti"][:][m], axis=0)[sel],
+            "u": np.mean(f["u"][:][m], axis=0)[sel],
+            "nn_model": np.mean(f["nn"][:][m], axis=0)[sel],
+        }
+        if "u_n" in f:
+            bg["un_model"] = np.mean(f["u_n"][:][m], axis=0)[sel]
+        Vm_full = g["neutral_volume_cm3"][:]
+        ba = np.mean(f["rhs_terms/boundary_absorption/nn"][:][m], axis=0) * Vm_full
+        an = np.mean(f["rhs_terms/anode_collection/nn"][:][m], axis=0) * Vm_full
+        ns = np.mean(
+            np.clip(f["rhs_terms/neutral_sources/nn"][:][m], 0.0, None), axis=0
+        ) * Vm_full
+        cd = f["cathode_diagnostics"]
+        phi_c = float(np.nanmean(cd["source_phi_c"][:][m]))
+        T_s = float(np.mean(cd["T_s_surface"][:][m]))
+        params = __import__("json").loads(f.attrs["params_json"])
+    cath_cell = roles.index("cathode")
+    coll_cell = len(roles) - 1
+    anode_cells = [i for i, r in enumerate(roles) if r == "gap"][-1:]  # gap side
+    bg["sources"] = {
+        "cathode_face": float(ba[cath_cell]),
+        "collector_face": float(ba[coll_cell]),
+        "anode_left": float(an[an.nonzero()[0][0]]) if an.any() else 0.0,
+        "anode_right": float(an[an.nonzero()[0][-1]]) if an.any() else 0.0,
+        "puff": float(ns.sum()),
+        "puff_z": float(zc[np.argmax(ns)] - edges[first]),
+    }
+    bg["phi_c"] = phi_c
+    bg["T_s"] = T_s
+    bg["eta"] = float(params.get("eta", 0.358))
+    bg["S_pump_L"] = float(params.get("S_pump_L", 2000.0))
+    bg["S_pump_R"] = float(params.get("S_pump_R", 4000.0))
+    bg["R_cath"] = float(params.get("R_cath", 15.0))
+    # anode mesh plane: boundary between gap and puff cells
+    gap_last = max(i for i, r in enumerate(bg["roles"]) if r == "gap")
+    bg["mesh_edge"] = gap_last + 1  # index into z_edges
+    # collision rates per cell (column only)
+    n_safe = np.maximum(bg["n"], 1e6)
+    rates = he_rates(n_safe, np.maximum(bg["Te"], 0.2), ("scd",))
+    bg["nu_ion"] = bg["n"] * rates["scd"]
+    bg["nu_cx"] = bg["n"] * charge_ex_react(np.maximum(bg["Ti"], 0.05), "He")
+    return bg
+
+
+def cosine_emit(rng, N, T_K, sign_z):
+    """Diffuse (cosine-flux) emission from a z-normal surface at T_K."""
+    vt = np.sqrt(KB * T_K / M_HE)
+    vz = sign_z * vt * np.sqrt(-2.0 * np.log(rng.random(N)))
+    vx = rng.normal(0.0, vt, N)
+    vy = rng.normal(0.0, vt, N)
+    return np.column_stack((vx, vy, vz))
+
+
+def wall_emit_inward(rng, x, y, T_K):
+    """Diffuse emission from the radial wall, normal pointing inward."""
+    N = x.size
+    vt = np.sqrt(KB * T_WALL_K / M_HE) if T_K is None else np.sqrt(KB * T_K / M_HE)
+    r = np.sqrt(x**2 + y**2)
+    nx, ny = -x / r, -y / r  # inward normal
+    vn = vt * np.sqrt(-2.0 * np.log(rng.random(N)))
+    vt1 = rng.normal(0.0, vt, N)  # tangential in-plane (t = (-ny, nx))
+    vz = rng.normal(0.0, vt, N)
+    vx = vn * nx - vt1 * ny
+    vy = vn * ny + vt1 * nx
+    return np.column_stack((vx, vy, vz))
+
+
+def maxwellian(rng, N, Ti_eV, u_drift):
+    s = vt_cm_s(np.maximum(Ti_eV, 0.02))
+    v = rng.normal(0.0, 1.0, (N, 3)) * s[:, None]
+    v[:, 2] += u_drift
+    return v
+
+
+def run_mc(bg, n_particles, jet, rng, r_n=(0.5, 0.5), r_e=(0.2, 0.25),
+           max_iter=20000):
+    ze = bg["z_edges"]
+    ncell = ze.size - 1
+    Rp, Rm = bg["Rp"], bg["Rm"]
+    nu_ion, nu_cx = bg["nu_ion"], bg["nu_cx"]
+    nu_tot = nu_ion + nu_cx
+    nu_max = float(nu_tot.max())
+    mesh_edge = bg["mesh_edge"]
+    transparency = 1.0 - bg["eta"]
+    vbar = np.sqrt(8.0 * KB * T_WALL_K / (np.pi * M_HE))
+    A_end = np.pi * Rm[-1] ** 2
+    s_R = bg["S_pump_R"] * 1e3 / (A_end * vbar / 4.0)
+    s_L = bg["S_pump_L"] * 1e3 / (A_end * vbar / 4.0)
+
+    # ---- source menu: (rate, launcher) ----
+    src = bg["sources"]
+    T_s, phi_c = bg["T_s"], bg["phi_c"]
+    R_cath = bg["R_cath"]
+
+    def launch(name, N):
+        pos = np.zeros((N, 3))
+        if name == "puff":
+            zc = src["puff_z"]
+            icell = np.searchsorted(ze, zc) - 1
+            th = rng.random(N) * 2 * np.pi
+            pos[:, 0] = Rm[icell] * 0.999 * np.cos(th)
+            pos[:, 1] = Rm[icell] * 0.999 * np.sin(th)
+            pos[:, 2] = zc
+            vel = wall_emit_inward(rng, pos[:, 0], pos[:, 1], T_WALL_K)
+        elif name in ("cathode_face", "collector_face"):
+            at_start = name == "cathode_face"
+            rad = (R_cath if at_start else Rp[-1]) * np.sqrt(rng.random(N))
+            th = rng.random(N) * 2 * np.pi
+            pos[:, 0] = rad * np.cos(th)
+            pos[:, 1] = rad * np.sin(th)
+            pos[:, 2] = 1e-6 if at_start else ze[-1] - 1e-6
+            sign = 1.0 if at_start else -1.0
+            if at_start and jet in ("cathode", "both"):
+                RN, RE = r_n[0], r_e[0]
+                fast = rng.random(N) < RN
+                v_back = np.sqrt(2.0 * RE * (max(phi_c, 0.0) + 1.0) * EV / M_HE)
+                vel = cosine_emit(rng, N, T_s, sign)
+                sc = np.where(
+                    fast,
+                    v_back / np.maximum(np.linalg.norm(vel, axis=1), 1.0),
+                    1.0,
+                )
+                vel = vel * sc[:, None]
+            else:
+                vel = cosine_emit(rng, N, T_s if at_start else T_WALL_K, sign)
+        elif name in ("anode_left", "anode_right"):
+            left = name == "anode_left"
+            icell = mesh_edge - 1 if left else mesh_edge
+            rad = Rp[icell] * np.sqrt(rng.random(N))
+            th = rng.random(N) * 2 * np.pi
+            pos[:, 0] = rad * np.cos(th)
+            pos[:, 1] = rad * np.sin(th)
+            pos[:, 2] = ze[mesh_edge] + (-1e-6 if left else 1e-6)
+            sign = -1.0 if left else 1.0
+            if jet == "both":
+                RN, RE = r_n[1], r_e[1]
+                fast = rng.random(N) < RN
+                # phi_a ~ from the solve would be better; use 0.4*phi_c class
+                v_back = np.sqrt(2.0 * RE * (0.45 * max(phi_c, 0.0)) * EV / M_HE)
+                vel = cosine_emit(rng, N, T_WALL_K, sign)
+                sc = np.where(
+                    fast,
+                    v_back / np.maximum(np.linalg.norm(vel, axis=1), 1.0),
+                    1.0,
+                )
+                vel = vel * sc[:, None]
+            else:
+                vel = cosine_emit(rng, N, T_WALL_K, sign)
+        else:
+            raise ValueError(name)
+        return pos, vel
+
+    names = [k for k in ("puff", "cathode_face", "collector_face",
+                         "anode_left", "anode_right") if src.get(k, 0.0) > 0]
+    rates = np.array([src[k] for k in names])
+    frac = rates / rates.sum()
+    counts = np.maximum((frac * n_particles).astype(int), 1)
+    w_each = rates / counts  # atoms/s per history
+
+    # tallies
+    tal_t = np.zeros((ncell, 2))       # residence [atom-s per s] col/ann
+    tal_tv = np.zeros((ncell, 2))      # sum w*dt*vz
+    tal_ion = np.zeros(ncell)          # ionization sink [atoms/s]
+    lost = {"ion": 0.0, "pump": 0.0, "stuck": 0.0}
+
+    for name, N, w in zip(names, counts, w_each):
+        pos, vel = launch(name, int(N))
+        wgt = np.full(int(N), w)
+        for _ in range(max_iter):
+            n_act = wgt.size
+            if n_act == 0:
+                break
+            speed = np.linalg.norm(vel, axis=1)
+            speed = np.maximum(speed, 1.0)
+            icell = np.clip(np.searchsorted(ze, pos[:, 2]) - 1, 0, ncell - 1)
+            # distance to next z-edge along vz
+            with np.errstate(divide="ignore"):
+                d_z = np.where(
+                    vel[:, 2] > 0,
+                    (ze[icell + 1] - pos[:, 2]) / vel[:, 2],
+                    np.where(
+                        vel[:, 2] < 0,
+                        (ze[icell] - pos[:, 2]) / vel[:, 2],
+                        np.inf,
+                    ),
+                ) * speed  # convert time to path length
+            # distance to radial wall |xy + t*vxy| = Rm(icell)
+            vxy2 = vel[:, 0] ** 2 + vel[:, 1] ** 2
+            b = pos[:, 0] * vel[:, 0] + pos[:, 1] * vel[:, 1]
+            r2 = pos[:, 0] ** 2 + pos[:, 1] ** 2
+            Rw = Rm[icell]
+            disc = b**2 + vxy2 * (Rw**2 - r2)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                t_wall = (-b + np.sqrt(np.maximum(disc, 0.0))) / np.where(
+                    vxy2 > 0, vxy2, np.inf
+                )
+            d_wall = np.where(vxy2 > 0, t_wall * speed, np.inf)
+            # distance to the column surface r = Rp (both directions), so no
+            # segment ever spans the column boundary -- otherwise a chord
+            # through the column would skip collision testing (a transparent
+            # column artifactually inflates annulus lifetimes).
+            Rp_here = Rp[icell]
+            disc_p = b**2 + vxy2 * (Rp_here**2 - r2)
+            sq_p = np.sqrt(np.maximum(disc_p, 0.0))
+            inside = r2 < Rp_here**2
+            with np.errstate(divide="ignore", invalid="ignore"):
+                t_exit = (-b + sq_p) / np.where(vxy2 > 0, vxy2, np.inf)
+                t_enter = (-b - sq_p) / np.where(vxy2 > 0, vxy2, np.inf)
+            t_rp = np.where(inside, t_exit, np.where(t_enter > 0, t_enter, np.inf))
+            d_rp = np.where(
+                (vxy2 > 0) & (disc_p > 0) & (t_rp > 1e-12), t_rp * speed, np.inf
+            )
+            # null-collision distance
+            d_coll = -np.log(rng.random(n_act)) * speed / nu_max
+            d = np.minimum(np.minimum(d_z, d_wall), np.minimum(d_coll, d_rp))
+            d = np.minimum(d, 1e6)
+            dt = d / speed
+            # tally the segment (entirely inside icell)
+            in_col = r2 < Rp[icell] ** 2  # start-of-segment zone (approx)
+            zone = np.where(in_col, 0, 1)
+            np.add.at(tal_t, (icell, zone), wgt * dt)
+            np.add.at(tal_tv, (icell, zone), wgt * dt * vel[:, 2])
+            # advance; overshoot 0.1 um along the ray so no boundary (z-edge
+            # or the Rp surface) can alias into zero-length loops
+            pos = pos + vel * (dt[:, None] * 1.0)
+            pos = pos + (vel / speed[:, None]) * 1e-7
+            kill = np.zeros(n_act, dtype=bool)
+            # --- collision events
+            hit_c = d_coll <= np.minimum(np.minimum(d_z, d_wall), d_rp)
+            if hit_c.any():
+                ic = icell[hit_c]
+                real = rng.random(hit_c.sum()) < (nu_tot[ic] / nu_max) * (
+                    r2[hit_c] < Rp[ic] ** 2
+                )
+                idx = np.flatnonzero(hit_c)[real]
+                if idx.size:
+                    ii = icell[idx]
+                    ionz = rng.random(idx.size) < nu_ion[ii] / nu_tot[ii]
+                    ion_idx = idx[ionz]
+                    np.add.at(tal_ion, icell[ion_idx], wgt[ion_idx])
+                    lost["ion"] += float(wgt[ion_idx].sum())
+                    kill[ion_idx] = True
+                    cx_idx = idx[~ionz]
+                    if cx_idx.size:
+                        ii = icell[cx_idx]
+                        vel[cx_idx] = maxwellian(
+                            rng, cx_idx.size, bg["Ti"][ii], bg["u"][ii]
+                        )
+            # --- radial wall
+            hit_w = (~hit_c) & (d_wall <= np.minimum(d_z, d_rp))
+            if hit_w.any():
+                idx = np.flatnonzero(hit_w)
+                r_now = np.sqrt(pos[idx, 0] ** 2 + pos[idx, 1] ** 2)
+                shrink = (Rm[icell[idx]] * 0.9999) / np.maximum(r_now, 1e-9)
+                pos[idx, 0] *= shrink
+                pos[idx, 1] *= shrink
+                vel[idx] = wall_emit_inward(rng, pos[idx, 0], pos[idx, 1], None)
+            # --- z-edge crossings (Rp-surface crossings need no handler:
+            # the segment split plus the ray overshoot is the whole event)
+            hit_z = (~hit_c) & (~hit_w) & (d_z <= d_rp)
+            if hit_z.any():
+                idx = np.flatnonzero(hit_z)
+                zdir = np.sign(vel[idx, 2])
+                edge = np.where(zdir > 0, icell[idx] + 1, icell[idx])
+                # ends
+                at_L = edge == 0
+                at_R = edge == ncell
+                atm = edge == mesh_edge
+                # pump sticking at ends, else diffuse re-emit
+                for at_end, sign, s_stick, T_emit in (
+                    (at_L, 1.0, s_L, T_s),
+                    (at_R, -1.0, s_R, T_WALL_K),
+                ):
+                    eidx = idx[at_end]
+                    if eidx.size == 0:
+                        continue
+                    stick = rng.random(eidx.size) < s_stick
+                    kill[eidx[stick]] = True
+                    lost["pump"] += float(wgt[eidx[stick]].sum())
+                    keep = eidx[~stick]
+                    if keep.size:
+                        vel[keep] = cosine_emit(rng, keep.size, T_emit, sign)
+                        pos[keep, 2] = np.clip(
+                            pos[keep, 2], 1e-6, ze[-1] - 1e-6
+                        )
+                # mesh interception
+                midx = idx[atm & ~at_L & ~at_R]
+                if midx.size:
+                    blocked = rng.random(midx.size) > transparency
+                    bidx = midx[blocked]
+                    if bidx.size:
+                        sign = -np.sign(vel[bidx, 2])
+                        vel[bidx] = cosine_emit(rng, bidx.size, T_WALL_K, sign)
+                        pos[bidx, 2] = ze[mesh_edge] + sign * 1e-6
+                # interior crossings just continue
+            alive = ~kill
+            pos, vel, wgt = pos[alive], vel[alive], wgt[alive]
+        else:
+            # max_iter exhausted: report separately -- a nonzero fraction
+            # here means the transport is under-resolved, not pumped.
+            lost["stuck"] += float(wgt.sum())
+
+    V_col = np.pi * Rp**2 * np.diff(ze)
+    V_ann = np.pi * (Rm**2 - Rp**2) * np.diff(ze)
+    nn_col = tal_t[:, 0] / np.maximum(V_col, 1e-9)
+    nn_ann = tal_t[:, 1] / np.maximum(V_ann, 1e-9)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        un_col = np.where(tal_t[:, 0] > 0, tal_tv[:, 0] / tal_t[:, 0], 0.0)
+        un_ann = np.where(tal_t[:, 1] > 0, tal_tv[:, 1] / tal_t[:, 1], 0.0)
+    nn_mean = (tal_t.sum(axis=1)) / (V_col + V_ann)
+    un_mean = np.where(
+        tal_t.sum(axis=1) > 0, tal_tv.sum(axis=1) / tal_t.sum(axis=1), 0.0
+    )
+    return {
+        "nn_col": nn_col, "nn_ann": nn_ann, "nn_mean": nn_mean,
+        "un_col": un_col, "un_ann": un_ann, "un_mean": un_mean,
+        "S_ion": tal_ion, "lost": lost, "rates": dict(zip(names, rates)),
+    }
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser()
+    ap.add_argument("run")
+    ap.add_argument("-n", "--n-particles", type=int, default=200000)
+    ap.add_argument("--jet", choices=("none", "cathode", "both"),
+                    default="none")
+    ap.add_argument("--window", nargs=2, type=float, default=(5.0, 19.5))
+    ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--out", default=None)
+    args = ap.parse_args(argv)
+
+    bg = load_background(args.run, tuple(args.window))
+    rng = np.random.default_rng(args.seed)
+    res = run_mc(bg, args.n_particles, args.jet, rng)
+
+    tot = sum(res["rates"].values())
+    print(f"sources [atoms/s]: " + ", ".join(
+        f"{k}={v:.3g}" for k, v in res["rates"].items()))
+    print(f"sinks: ionization {res['lost']['ion']:.3g}, "
+          f"pump {res['lost']['pump']:.3g}, "
+          f"stuck {res['lost']['stuck']:.3g}, total {tot:.3g} "
+          f"(closure {sum(res['lost'].values()) / tot:.3f})")
+
+    ze = bg["z_edges"]
+    zc = 0.5 * (ze[:-1] + ze[1:])
+    print(f"\n{'z[cm]':>7} {'nn_model':>10} {'nn_MC':>10} {'ratio':>6} "
+          f"{'col/ann':>8} {'un_MC[km/s]':>11} {'un_model':>9}")
+    un_model = bg.get("un_model", np.full_like(zc, np.nan))
+    for i in range(0, zc.size, max(1, zc.size // 18)):
+        ca = res["nn_col"][i] / max(res["nn_ann"][i], 1e-3)
+        print(f"{zc[i]:7.0f} {bg['nn_model'][i]:10.3g} "
+              f"{res['nn_mean'][i]:10.3g} "
+              f"{res['nn_mean'][i] / max(bg['nn_model'][i], 1e-3):6.2f} "
+              f"{ca:8.2f} {res['un_mean'][i] / 1e5:11.2f} "
+              f"{un_model[i] / 1e5 if np.isfinite(un_model[i]) else np.nan:9.2f}")
+
+    out = args.out or (Path(args.run).stem + f"_mc_{args.jet}")
+    np.savez(
+        Path(args.run).parent / f"{out}.npz",
+        z=zc, nn_model=bg["nn_model"], un_model=un_model, **{
+            k: v for k, v in res.items() if isinstance(v, np.ndarray)
+        },
+    )
+    print(f"\nsaved {out}.npz")
+
+
+if __name__ == "__main__":
+    main()
