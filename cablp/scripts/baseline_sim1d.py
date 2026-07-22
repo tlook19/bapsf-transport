@@ -7,11 +7,15 @@ tolerance. Every milestone from M1 on must keep ``--verify`` green, and the
 ``resolved_boundaries`` master switch (default off) plus the degenerate
 legacy-limit resolved config must both reproduce it.
 
-The baseline config mirrors the production notebook
-``cablp/scripts/sim1d_run_and_plot.ipynb`` (implicit heat + tr_bdf2 + Strang +
-Picard, cathode coupling on, real timescales). Keep the two in sync: if the
-notebook's overrides change, re-capture the baseline deliberately (a re-baseline
-is an explicit, reviewed step, per §10/§13).
+The baseline config is the PRODUCTION configuration (DEPRECATION_PLAN.md
+D1, 2026-07-22): current-driven cathode + resolved boundaries + ADAS rates +
+knudsen exchange + the measured square fueling waveform + the M6 candidate
+constants, IMPORTED from the campaign drivers (compare_sim1d_es1 /
+run_mechanism_ladder) so the gate cannot drift from the production stance.
+The pre-D1 legacy fixture is archived under
+``baselines/legacy-final-2026-07-22/`` and remains reproducible at the tag
+of the same name (plus env lockfiles); a re-baseline stays an explicit,
+reviewed step.
 
 Usage::
 
@@ -30,6 +34,7 @@ loading the NPZ.
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -42,37 +47,48 @@ from cablp.solvers._sim1d import (
 
 # Default location of the committed golden fixture (NPZ) and its JSON sidecar.
 SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_BASELINE = SCRIPT_DIR / "baselines" / "notebook_discharge.npz"
+DEFAULT_BASELINE = SCRIPT_DIR / "baselines" / "production_discharge.npz"
 
-# --- Baseline config: mirrors sim1d_run_and_plot.ipynb cell 3 ---------------
-# input_dict (parameter) overrides.
+# --- Baseline config: the production stance, imported (no drift) -----------
+sys.path.insert(0, str(SCRIPT_DIR))
+from compare_sim1d_es1 import (  # noqa: E402
+    FLAG_OVERRIDES as PRODUCTION_FLAG_OVERRIDES,
+    PARAM_OVERRIDES as PRODUCTION_PARAM_OVERRIDES,
+)
+from run_mechanism_ladder import ES_OPERATING  # noqa: E402
+
+# The M6 candidate constants (run_m6_point.py, ES1 rung): square waveform at
+# sq3400, fitted loop inductance, drive tier, frozen M5a' surface tier,
+# presheath sample smoothing. nx stays at the config default so the gate
+# keeps its per-change runtime.
 BASELINE_PARAM_OVERRIDES = {
-    "V_bank": 180.0,
-    "T_s": 273.15 + 1725,
-    "S_gp": 3000,
-    "S_gp_decay_target": 2000,
-    "tau_gp_pulse_duration": 1e-3,
-    "tau_gp_decay_duration": 5e-3,
-    "b_ion_neutral_drag": 0.5,
-    "b_Qei": 1,
-    "b_Qen": 1,
-    "b_Qcx": 1,
-    # The golden fixture is a janev-era artifact; pin the rate model so the
-    # config default (adas since 2026-07-20) cannot silently change it.
-    "atomic_rate_model": "janev",
-    "Rp": 15.0,
-    "R_cath": 15.0,
-    "R_comp": 0.010,
-    # Second-order operator-split time integration (all three knobs needed).
-    "implicit_heat_scheme": "tr_bdf2",
-    "operator_splitting": "strang",
-    "heat_picard_iterations": 2,
-    "heat_picard_tol": 1e-10,
+    **PRODUCTION_PARAM_OVERRIDES,
+    "V_bank": ES_OPERATING[1]["V_bank"],
+    "cathode_solver_model": "current_driven",
+    "beam_deposition_model": "csda",
+    "beam_anomalous_model": "quasilinear",
+    "cathode_emission_profile": "gaussian",
+    "cathode_warming_model": "power_balance",
+    "T_s": ES_OPERATING[1]["Ts_standby_K"],
+    "cathode_Ts_base_K": ES_OPERATING[1]["Ts_standby_K"],
+    "cathode_heat_capacity_J_per_K": 120.0,
+    "cathode_conduction_W_per_K": 1200.0,
+    "cathode_emissivity": 0.7,
+    "phi_wf": 2.869,
+    "cathode_surface_model": "ads_des",
+    "cathode_phiwf_clean_eV": 2.809,
+    "cathode_cleaning_sigma_cm2": 3.5e-16,
+    "cathode_cleaning_E_th_eV": 20.0,
+    "gas_puff_mode": "square",
+    "S_gp": 3400,
+    "L_parasitic_H": 8.1e-6,
+    "cathode_sample_smoothing": "presheath",
+    "neutral_exchange_model": "knudsen",
 }
 # input_flags overrides.
 BASELINE_FLAG_OVERRIDES = {
-    "ion_neutral_drag_cx_only": False,
-    "ion_neutral_thermalization": True,
+    **PRODUCTION_FLAG_OVERRIDES,
+    "resolved_boundaries": True,
 }
 # Run controls: None => LAPDSim1D defaults (adaptive dt, dynamic current-trigger
 # t_end, unlimited steps -- the notebook's own settings).
@@ -156,9 +172,9 @@ def capture(baseline_path):
     sidecar = baseline_path.with_suffix(".json")
     payload = {
         "description": (
-            "Golden baseline for the 1D source-boundary redesign "
-            "(BOUNDARY_REGIONS_PLAN.md §13). Produced by baseline_sim1d.py "
-            "--capture with the sim1d_run_and_plot.ipynb production config."
+            "Golden baseline at the PRODUCTION configuration "
+            "(DEPRECATION_PLAN.md D1): current-driven + resolved + adas + "
+            "knudsen + square waveform + M6 candidate constants."
         ),
         "result_format": "sim1d packed conservative trajectory y[saves, 5*cells]",
         "cells": int(trajectory["y"].shape[1] // 5),

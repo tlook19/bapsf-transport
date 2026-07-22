@@ -1,6 +1,7 @@
 """Solver implementation for the conservative axial 1D LAPD model."""
 
 import math
+import warnings
 from dataclasses import dataclass, replace
 from time import perf_counter
 from types import SimpleNamespace
@@ -475,6 +476,7 @@ class LAPDSim1D:
         ) = self._gas_constants(self._gas_type)
         self._geometry = build_geometry(self._input_dict, self._flags)
         self._validate_phase_config()
+        self._warn_deprecated_modes()
         self._validate_gas_puff_config()
         self._neutral_momentum = bool(self._flags.get("neutral_momentum", False))
         if (
@@ -4323,6 +4325,54 @@ class LAPDSim1D:
             # value inertly.
             nn_a=nn0.copy() if self._neutral_two_zone else None,
         )
+
+    def _warn_deprecated_modes(self):
+        """Warn on superseded legacy modes (DEPRECATION_PLAN.md D1).
+
+        These modes are runnable but no longer maintained-forward: every
+        logged result stays reproducible at the ``legacy-final-2026-07-22``
+        tag (+ env lockfiles). The warnings exist to smoke out consumers
+        before the D2 deletion; live A/B closure instruments are NOT
+        deprecated and never warn.
+        """
+        deprecated = []
+        if (
+            str(self._input_dict.get("cathode_solver_model", "voltage_driven"))
+            == "voltage_driven"
+            and bool(self._flags.get("cathode_coupling", False))
+        ):
+            deprecated.append(
+                "cathode_solver_model='voltage_driven' (superseded by "
+                "'current_driven'; ill-posed at the emission ceiling)"
+            )
+        if not bool(self._flags.get("resolved_boundaries", False)):
+            deprecated.append(
+                "resolved_boundaries=False legacy geometry (superseded by "
+                "resolved typed segments)"
+            )
+        if (
+            str(self._input_dict.get("neutral_exchange_model", "molecular_flow"))
+            == "molecular_flow"
+        ):
+            deprecated.append(
+                "neutral_exchange_model='molecular_flow' (superseded by "
+                "'knudsen'; mesh-inconsistent per its own docstring)"
+            )
+        if (
+            str(self._input_dict.get("cathode_warming_model", ""))
+            == "ion_bombardment"
+        ):
+            deprecated.append(
+                "cathode_warming_model='ion_bombardment' (superseded by "
+                "'power_balance')"
+            )
+        for message in deprecated:
+            warnings.warn(
+                f"{message}; reproduce legacy results at tag "
+                "legacy-final-2026-07-22 (DEPRECATION_PLAN.md)",
+                DeprecationWarning,
+                stacklevel=3,
+            )
 
     @staticmethod
     def _gas_constants(gas_type):

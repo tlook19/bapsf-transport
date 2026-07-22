@@ -96,6 +96,50 @@ from cablp.vars._cons import I_ion, en_factor, ev_to_erg, m_p_cgs, qe_SI
 
 
 def main():
+    # --- Deprecation warnings (DEPRECATION_PLAN.md D1): each superseded
+    # legacy mode must warn on construction -- the smoke-out mechanism for
+    # consumers ahead of the D2 deletion. Asserted here, then suppressed
+    # for the remainder of the run: the suite still exercises legacy
+    # constructions until the D1 re-scope pass removes them (at which
+    # point this suppression goes too).
+    import warnings as _warnings
+
+    _dep_params, _dep_flags = default_config()
+    for _dep_p, _dep_f in (
+        ({}, {}),  # bare defaults: legacy geometry + molecular_flow warn
+        (
+            {
+                "cathode_warming_model": "ion_bombardment",
+                "cathode_Ts_start_K": 1900.0,
+            },
+            {},
+        ),
+    ):
+        with _warnings.catch_warnings(record=True) as _caught:
+            _warnings.simplefilter("always")
+            LAPDSim1D(
+                {**_dep_params, **_dep_p}, {**_dep_flags, **_dep_f}
+            )
+        assert any(
+            issubclass(w.category, DeprecationWarning) for w in _caught
+        ), f"expected DeprecationWarning for {_dep_p or 'defaults'}"
+    # The production stance must construct warning-free.
+    with _warnings.catch_warnings(record=True) as _caught:
+        _warnings.simplefilter("always")
+        LAPDSim1D(
+            {
+                **_dep_params,
+                "cathode_solver_model": "current_driven",
+                "L_parasitic_H": 8.1e-6,
+                "neutral_exchange_model": "knudsen",
+            },
+            {**_dep_flags, "resolved_boundaries": True},
+        )
+    assert not any(
+        issubclass(w.category, DeprecationWarning) for w in _caught
+    ), "production configuration must not raise DeprecationWarning"
+    _warnings.filterwarnings("ignore", category=DeprecationWarning)
+
     params, flags = default_config()
     assert params["cycles"] == 1
     assert params["phase_transition_mode"] == "current"
