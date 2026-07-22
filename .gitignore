@@ -19,3 +19,9 @@ CLAUDE.md
 *.out
 *.synctex.gz
 manuscript/*.pdf
+
+# sim1d run outputs written next to the scripts (baselines/ and data/
+# subdirectories stay tracked; *.h5 is already ignored above)
+cablp/scripts/*.npz
+cablp/scripts/*.json
+cablp/scripts/*.png
