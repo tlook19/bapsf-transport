@@ -8,10 +8,10 @@ overlays at fixed fueling):
       still evolving at end of drive
   peak timing (~+19.8 ms, end-of-drive class), t90, plateau level
 
-V_dis uses the step-integrated diagnostic ``circuit_V_dis_step`` (the
-inductor's view) when the run carries it; otherwise the loop
-reconstruction ``V0 - Q/C - I*R - L*dI/dt`` from the smooth I(t), the
-same definition the measurement used. Also reports the T_s trajectory,
+V_dis uses the dt-weighted average differenced from the running
+``circuit_V_dis_dt_integral`` (the inductor's view) when the run carries
+it; otherwise the loop reconstruction ``V0 - Q/C - I*R - L*dI/dt`` from
+the smooth I(t), the same definition the measurement used. Also reports the T_s trajectory,
 honest P_cathode_i, and the power-balance energy ledger when present.
 
 Usage::
@@ -69,12 +69,13 @@ def report(path):
 
     # --- V_dis, best available honest reading, in preference order:
     # (1) the dt-weighted average from the running \int V_dis dt (bias-free
-    # by construction); (2) the loop reconstruction from the smooth
-    # circuit_I_loop state. The instantaneous circuit_V_dis_step is NOT
-    # used: saves land on dt-capped steps that sample the low state of
-    # the knee sawtooth (measured: saved median 116 V vs 158 V required
-    # loop average), and per-solve source_I_tot is chattery (L*dI/dt of
-    # it fabricates +-10 V).
+    # by construction, and vintage-proof: on runs saved before 2026-07-21
+    # circuit_V_dis_step held the last-step sample, which is dt-biased --
+    # saves land on dt-capped steps that sample the low state of the knee
+    # sawtooth, measured ~25 V low on the ES1 plateau; since then the key
+    # itself stores this same interval average); (2) the loop
+    # reconstruction from the smooth circuit_I_loop state. Per-solve
+    # source_I_tot is chattery (L*dI/dt of it fabricates +-10 V).
     tsec_all = np.asarray(result.time, float)
     Vint = np.asarray(
         diag.get("circuit_V_dis_dt_integral", np.zeros_like(I)), float
