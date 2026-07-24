@@ -159,9 +159,16 @@ def reaction_rhs_terms(
     # on the column volume, which IS the plasma volume -- the Vp/V_col
     # conversion on the neutral-density rows is exactly unity, and the rates
     # above (n * nn * <sv>) already sample column gas by construction. The
-    # M_n exchanges keep Vp/Vm: the wind stays a chamber-mean field.
+    # M_n exchanges keep Vp/Vm for the historical chamber-mean wind. In the
+    # two-momentum reduction M_n is a column field on Vp, so that conversion
+    # is exactly unity too.
     nn_ratio = (
         np.ones_like(volume_ratio) if state.nn_a is not None else volume_ratio
+    )
+    momentum_ratio = (
+        np.ones_like(volume_ratio)
+        if state.M_n_a is not None
+        else volume_ratio
     )
 
     Te_birth = _birth_temperature(Te_birth_ionization, derived.Te, floors["Te"])
@@ -182,7 +189,7 @@ def reaction_rhs_terms(
         if wind_column_factor is not None:
             u_n = wind_column_factor * u_n
         M_birth = ion_mass_g * u_n * S_ion
-        M_n_birth = -M_birth * volume_ratio
+        M_n_birth = -M_birth * momentum_ratio
     else:
         M_birth = zeros
         M_n_birth = None
@@ -199,7 +206,7 @@ def reaction_rhs_terms(
         "ionization_birth": ionization,
         "recombination_rad_loss": _recombination_loss(
             S_rec_rad,
-            volume_ratio,
+            momentum_ratio,
             ion_mass_g,
             derived,
             with_wind=with_wind,
@@ -207,7 +214,7 @@ def reaction_rhs_terms(
         ),
         "recombination_3b_loss": _recombination_loss(
             S_rec_3b,
-            volume_ratio,
+            momentum_ratio,
             ion_mass_g,
             derived,
             with_wind=with_wind,

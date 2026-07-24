@@ -1163,6 +1163,22 @@ def beam_ionization_rhs_terms(
     # (the beam attenuates on column gas by construction).
     if state.nn_a is not None:
         volume_ratio = np.ones_like(volume_ratio)
+    # In the kinetic-derived two-momentum reduction, beam ionization removes
+    # a column neutral carrying u_c and births the ion with that same directed
+    # momentum. Presence-gate on M_n_a so all historical M_n closures remain
+    # bit-for-bit unchanged.
+    if state.M_n_a is not None:
+        u_birth = np.asarray(state.M_n, dtype=float) / (
+            ion_mass_g
+            * np.maximum(np.asarray(state.nn, dtype=float), floors["nn"])
+        )
+        beam_M_birth = ion_mass_g * u_birth * S_beam
+        beam_Mn_debit = -beam_M_birth
+        beam_Mna = np.zeros_like(state.M_n_a)
+    else:
+        beam_M_birth = zeros.copy()
+        beam_Mn_debit = None
+        beam_Mna = None
     Ti_birth = _birth_temperature(
         input_dict.get("Ti_birth_ionization", "floor"),
         beam_derived.Ti,
@@ -1184,9 +1200,16 @@ def beam_ionization_rhs_terms(
         "beam_ionization_birth": ConservativeState1D(
             n=S_beam,
             nn=-S_beam * volume_ratio,
-            M=zeros.copy(),
+            M=beam_M_birth,
             Ee=zeros.copy(),
             Ei=1.5 * ev_to_erg * Ti_birth * S_beam,
+            M_n=beam_Mn_debit,
+            nn_a=(
+                np.zeros_like(state.nn_a)
+                if state.nn_a is not None
+                else None
+            ),
+            M_n_a=beam_Mna,
         ),
         "beam_power_deposition": ConservativeState1D(
             n=zeros,

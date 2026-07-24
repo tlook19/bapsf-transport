@@ -79,6 +79,27 @@ def knudsen_flow_coefficients(
         coefficients[interior] = 1.0 / (
             1.0 / coefficients[interior] + 1.0 / orifice
         )
+    # Thin annular baffles leave the central plasma channel open but restrict
+    # the full neutral field to the stored circular aperture. Their zero axial
+    # thickness is a series orifice, not a narrowed finite-length tube.
+    for face in np.asarray(
+        getattr(geometry, "neutral_baffle_face_indices", ()), dtype=int
+    ):
+        interior = int(face) - 1
+        if not 0 <= interior < coefficients.size:
+            continue
+        orifice = (
+            float(clausing_scale)
+            * 0.25
+            * v_th_n
+            * face_area[int(face)]
+        )
+        if orifice <= 0.0:
+            coefficients[interior] = 0.0
+            continue
+        coefficients[interior] = 1.0 / (
+            1.0 / coefficients[interior] + 1.0 / orifice
+        )
     return coefficients
 
 
@@ -260,6 +281,31 @@ def two_zone_knudsen_coefficients(geometry, Tn_K, mu_neutral, clausing_scale=1.0
                 continue
             coeffs[interior] = 1.0 / (1.0 / coeffs[interior] + 1.0 / orifice)
 
+    # A vessel-wall baffle blocks only the outer annulus: its clear radius is
+    # at least the local plasma radius, so the column conductance is unchanged.
+    # The open annulus is the ring Rp < r < R_clear and enters as a thin
+    # series-orifice resistance.
+    baffle_faces = np.asarray(
+        getattr(geometry, "neutral_baffle_face_indices", ()), dtype=int
+    )
+    baffle_radii = np.asarray(
+        getattr(geometry, "neutral_baffle_clear_radius_cm", ()), dtype=float
+    )
+    if baffle_faces.shape != baffle_radii.shape:
+        raise ValueError("neutral baffle face and radius arrays must match")
+    for face, clear in zip(baffle_faces, baffle_radii):
+        interior = int(face) - 1
+        if not 0 <= interior < coeff_ann.size:
+            continue
+        open_ann = np.pi * max(float(clear) ** 2 - R_col[interior] ** 2, 0.0)
+        orifice = float(clausing_scale) * 0.25 * v_th_n * open_ann
+        if orifice <= 0.0:
+            coeff_ann[interior] = 0.0
+            continue
+        coeff_ann[interior] = 1.0 / (
+            1.0 / coeff_ann[interior] + 1.0 / orifice
+        )
+
     prescribed = np.asarray(
         geometry.neutral_face_conductance_cm3_s[1:-1], dtype=float
     )
@@ -380,6 +426,120 @@ def neutral_wind_advection_rhs(
             M=zeros.copy(),
             Ee=zeros.copy(),
             Ei=zeros.copy(),
+        )
+    if state.M_n_a is not None:
+        if state.nn_a is None:
+            raise ValueError("M_n_a requires nn_a")
+        Vc = np.asarray(geometry.plasma_volume_cm3, dtype=float)
+        Va = np.maximum(
+            np.asarray(geometry.neutral_volume_cm3, dtype=float) - Vc, 0.0
+        )
+        Mc = np.asarray(state.M_n, dtype=float)
+        Ma = np.asarray(state.M_n_a, dtype=float)
+        nn_c = np.asarray(state.nn, dtype=float)
+        nn_a = np.asarray(state.nn_a, dtype=float)
+        uc = Mc / (
+            ion_mass_g * np.maximum(nn_c, floors["nn"])
+        )
+        ua = Ma / (
+            ion_mass_g * np.maximum(nn_a, floors["nn"])
+        )
+
+        def advect_zone(density, momentum, velocity, face_area, volume):
+            u_face = 0.5 * (velocity[:-1] + velocity[1:])
+            donor_n = np.where(u_face > 0.0, density[:-1], density[1:])
+            donor_M = np.where(u_face > 0.0, momentum[:-1], momentum[1:])
+            flux_n = u_face * donor_n * face_area[1:-1]
+            flux_M = u_face * donor_M * face_area[1:-1]
+            dn = np.zeros_like(density)
+            dM = np.zeros_like(momentum)
+            live = volume > 0.0
+            dn[:-1] -= np.where(
+                live[:-1], flux_n / np.maximum(volume[:-1], 1e-300), 0.0
+            )
+            dn[1:] += np.where(
+                live[1:], flux_n / np.maximum(volume[1:], 1e-300), 0.0
+            )
+            dM[:-1] -= np.where(
+                live[:-1], flux_M / np.maximum(volume[:-1], 1e-300), 0.0
+            )
+            dM[1:] += np.where(
+                live[1:], flux_M / np.maximum(volume[1:], 1e-300), 0.0
+            )
+            dM[0] -= (
+                max(-velocity[0], 0.0)
+                * face_area[0]
+                * momentum[0]
+                / max(volume[0], 1e-300)
+            )
+            dM[-1] -= (
+                max(velocity[-1], 0.0)
+                * face_area[-1]
+                * momentum[-1]
+                / max(volume[-1], 1e-300)
+            )
+            return dn, dM
+
+        area_c = np.asarray(geometry.plasma_face_area_cm2, dtype=float)
+        area_a = np.maximum(
+            np.asarray(geometry.neutral_face_area_cm2, dtype=float) - area_c,
+            0.0,
+        )
+        dnn, dMc = advect_zone(nn_c, Mc, uc, area_c, Vc)
+        dnn_a, dMa = advect_zone(nn_a, Ma, ua, area_a, Va)
+
+        # A thin annular baffle keeps the plasma aperture open, throttles the
+        # annulus flux through its clear area above Rp, and diffusely
+        # accommodates momentum intercepted by the blocked ring. The 300-K
+        # incident flux vbar/4 makes this a sign-safe local loss.
+        vbar_n = np.sqrt(
+            8.0 * 300.0 * kb_cgs / (np.pi * ion_mass_g)
+        )
+        for face in np.asarray(
+            geometry.neutral_baffle_face_indices, dtype=int
+        ):
+            left, right = int(face) - 1, int(face)
+            full_area = min(
+                np.pi * geometry.Rm_cm[left] ** 2,
+                np.pi * geometry.Rm_cm[right] ** 2,
+            )
+            blocked = max(
+                full_area - geometry.neutral_face_area_cm2[int(face)], 0.0
+            )
+            for cell in (left, right):
+                if Va[cell] > 0.0:
+                    dMa[cell] -= (
+                        0.25 * vbar_n * blocked / Va[cell] * Ma[cell]
+                    )
+        if mesh_faces is not None:
+            for face, blocked in zip(
+                np.asarray(mesh_faces, dtype=int),
+                np.asarray(mesh_blocked_area_cm2, dtype=float),
+            ):
+                left, right = int(face) - 1, int(face)
+                if Va[left] > 0.0:
+                    dMa[left] -= (
+                        max(ua[left], 0.0)
+                        * blocked
+                        * Ma[left]
+                        / Va[left]
+                    )
+                if Va[right] > 0.0:
+                    dMa[right] -= (
+                        max(-ua[right], 0.0)
+                        * blocked
+                        * Ma[right]
+                        / Va[right]
+                    )
+        return ConservativeState1D(
+            n=zeros,
+            nn=dnn,
+            M=zeros.copy(),
+            Ee=zeros.copy(),
+            Ei=zeros.copy(),
+            M_n=dMc,
+            nn_a=dnn_a,
+            M_n_a=dMa,
         )
     u_n = neutral_wind_velocity(
         state, floors=floors, ion_mass_g=ion_mass_g, geometry=geometry
@@ -552,11 +712,21 @@ def neutral_source_sink_rhs(
     # momentum with them and u_n does not inflate at the pump cells. The
     # puff needs no companion: cold gas arrives with zero directed momentum.
     dM_n = None
+    dM_n_a = None
     if state.M_n is not None:
         dM_n = zeros.copy()
         if pump_enabled:
             dM_n[pump_left_index] -= rate_left * state.M_n[pump_left_index]
             dM_n[pump_right_index] -= rate_right * state.M_n[pump_right_index]
+    if state.M_n_a is not None:
+        dM_n_a = zeros.copy()
+        if pump_enabled:
+            dM_n_a[pump_left_index] -= (
+                rate_left * state.M_n_a[pump_left_index]
+            )
+            dM_n_a[pump_right_index] -= (
+                rate_right * state.M_n_a[pump_right_index]
+            )
     return ConservativeState1D(
         n=zeros.copy(),
         nn=dnn,
@@ -565,6 +735,7 @@ def neutral_source_sink_rhs(
         Ei=zeros.copy(),
         M_n=dM_n,
         nn_a=dnn_a,
+        M_n_a=dM_n_a,
     )
 
 

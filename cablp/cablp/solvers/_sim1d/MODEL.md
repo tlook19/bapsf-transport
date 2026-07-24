@@ -27,15 +27,58 @@ $$\frac{Dn}{Dt} = -\,n\,\nabla\!\cdot\mathbf{u} \;+\; S_{iz} \;-\; \big(S_{rr} +
 
 $$\frac{D_n n_n}{Dt} = -\,n_n\,\nabla\!\cdot\mathbf{u}_n \;-\; S_{iz} \;+\; \big(S_{rr} + S_{3b}\big)$$
 
-The neutral flow is not solved dynamically — $\mathbf{u}_n$ is closed by
-**molecular (Clausing) free-flow diffusion**, so in practice this reduces to
-$\partial_t n_n = \nabla\!\cdot(D_n\nabla n_n) - S_{iz} + S_{rr} + S_{3b}$ plus
-the gas-puff / pumping wall terms.
+By default the directed neutral flow is not solved dynamically: thermal
+transport uses **molecular (Clausing) free-flow diffusion**. The default-off
+`neutral_momentum` selector additionally evolves directed axial momentum on
+top of that thermal transport.
+
+Optional thin annular baffles are neutral-transport surfaces, not plasma
+boundaries. A baffle with clear radius $R_b\ge R_p$ leaves the plasma channel
+and its fluxes unchanged while adding the free-molecular series-orifice
+conductance $(\bar v_n/4)\,\pi R_b^2$ to the single neutral channel. In the
+two-zone closure it leaves the column conductance unchanged and adds only the
+annulus orifice $(\bar v_n/4)\,\pi(R_b^2-R_p^2)$. Positions and clear radii are
+presence-gated by the default-off `neutral_baffles` selector.
+
+The default-off
+`neutral_momentum_radial="kinetic_two_moment"` reduction requires both
+`neutral_momentum` and `neutral_two_zone`. It evolves column and annulus
+momenta $M_c=m_i n_c u_c$ and $M_a=m_i n_a u_a$. Ion-neutral drag transfers
+momentum to $M_c$ exactly. Radial transfer is
+
+$$
+\begin{aligned}
+\dot M_c|_r&=-\nu_{ca}M_c+\frac{V_a}{V_c}\nu_{ac}M_a,\\
+\dot M_a|_r&=\frac{V_c}{V_a}\nu_{ca}M_c-\nu_{ac}M_a-\nu_wM_a,
+\end{aligned}
+$$
+
+with $\nu_{ca}=\bar v(T_i)/(2R_p)$,
+$\nu_{ac}=\bar v(300\,\mathrm{K})R_p/[2(R_m^2-R_p^2)]$, and
+$\nu_w=\bar v(300\,\mathrm{K})R_m/[2(R_m^2-R_p^2)]$. Thus the radial exchange
+conserves $V_cM_c+V_aM_a$ and only the annulus deposits directed momentum on
+the vessel. Baffles restrict annulus advection to their open annular aperture
+and add the diffuse blocked-area loss $(\bar v/4)A_{\rm blocked}M_a/V_a$ on
+their adjacent cells. There is no fitted coefficient and no added neutral
+pressure term; the existing Clausing operator continues to carry thermal
+transport.
 
 **3. Momentum** (ion inertia, total-pressure gradient; `physics/flux.py`,
 `physics/reactions.py`, `physics/sources.py`)
 
 $$m_i\,n\,\frac{D\mathbf{u}}{Dt} = -\,\nabla p \;-\; m_i\,\mathbf{u}\,S_{iz} \;-\; m_i\,\nu_{in}(T_i)\,n\,\mathbf{u}$$
+
+For the optional variable-area flux-tube geometry, the implemented
+quasi-1D conservative form is
+
+$$\partial_t(A\rho u)+\partial_z[A(\rho u^2+p)]
+  =p\,\partial_z A+A S_M.$$
+
+The geometric pressure source is required to preserve a uniform stationary
+plasma exactly. This closure represents area divergence only; it does not
+include pressure anisotropy or an explicit magnetic-mirror force, so parallel
+acceleration through an end-solenoid flare is an observable rather than an
+imposed result.
 
 - $-m_i\mathbf{u}\,S_{iz}$ — **ion-loading drag**: neutrals ionize at rest, so
   newly created cold ions mass-load and slow the flow. (The recombination and

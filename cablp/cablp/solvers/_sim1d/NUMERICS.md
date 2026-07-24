@@ -10,7 +10,10 @@ equations these schemes discretize, see [`MODEL.md`](MODEL.md).
 - **Conservative variables** (`core/state.py`, `ConservativeState1D`): electron
   density `n`, neutral density `nn`, parallel momentum density `M`, and electron
   and ion energy densities `Ee`, `Ei`. Primitive quantities (`Te`, `Ti`, `v`)
-  are recovered by `derive_state`.
+  are recovered by `derive_state`. Default-off neutral reductions append
+  optional rows in introduction order: column/chamber neutral momentum `M_n`,
+  annulus density `nn_a`, and (only for `kinetic_two_moment`) annulus momentum
+  `M_n_a`. Existing 5-, 6-, and 7-row layouts are unchanged.
 - **Grid** (`core/geometry.py`): finite-volume cells along the axial (`z`)
   coordinate with cell-centered states and face-based fluxes. Plasma and neutral
   fields carry separate face areas and cell volumes so inventory
@@ -31,6 +34,25 @@ equations these schemes discretize, see [`MODEL.md`](MODEL.md).
   cells, added alongside the Rusanov flux.
 - **Flux divergence**: RHS terms are formed as
   `−Δ(area·F)/volume` per cell (`_flux_divergence`).
+- **Optional flux-tube expansion**: the default-off expanded-end geometry
+  supplies resolved plasma face areas and cell volumes. The momentum ledger
+  gains `flux_tube_geometry = p·ΔA/V`, which exactly cancels the area change
+  in the pressure flux for a uniform stationary state. No mirror-force or
+  pressure-anisotropy closure is implied.
+- **Optional thin annular baffles**: requested axial positions map to the
+  nearest existing interior face. Knudsen transport combines the adjacent
+  tube conductance and the zero-thickness aperture conductance in series. In
+  two-zone mode only the annulus coefficient changes; plasma and column-neutral
+  transport remain identical to the unbaffled geometry. The selector is
+  default off and incomplete or flag-off parameter sets fail at construction.
+- **Kinetic-derived two-momentum neutral advection**: column density/momentum
+  use plasma face areas and volumes; annulus density/momentum use
+  `neutral_face_area - plasma_face_area` and annulus volumes. Each zone uses
+  first-order donor-cell upwinding with its own drift. Interior face
+  inventories cancel pairwise. Radial column/annulus momentum transfer is a
+  local conservative RHS; annulus wall and baffle accommodation are
+  sign-safe sinks. The thermal two-zone Knudsen operator is retained and no
+  pressure flux is duplicated.
 - **Heat conduction** (`physics/conduction.py`): conductive face fluxes
   `q = −κ ∇T` differenced to a conservative flux divergence, with
   frozen-conductivity coefficients for the implicit path.

@@ -97,8 +97,10 @@ from .physics.sources import (
     ion_neutral_frictional_heating_rhs,
     ion_neutral_thermalization_rhs,
     neutral_momentum_wall_rhs,
+    neutral_momentum_two_zone_rhs,
     neutral_wind_two_zone_factors,
     neutral_wind_velocity,
+    flux_tube_geometry_rhs,
     pressure_work_rhs,
 )
 from .results.compat import add_sim3_compat_aliases
@@ -589,16 +591,33 @@ class LAPDSim1D:
         self._neutral_momentum_radial = str(
             self._input_dict.get("neutral_momentum_radial", "uniform")
         )
-        if self._neutral_momentum_radial not in ("uniform", "two_zone"):
+        if self._neutral_momentum_radial not in (
+            "uniform",
+            "two_zone",
+            "kinetic_two_moment",
+        ):
             raise ValueError(
-                "neutral_momentum_radial must be 'uniform' or 'two_zone' "
+                "neutral_momentum_radial must be 'uniform', 'two_zone', "
+                "or 'kinetic_two_moment' "
                 f"(got {self._neutral_momentum_radial!r})"
             )
-        if self._neutral_momentum_radial == "two_zone" and not self._neutral_momentum:
+        if (
+            self._neutral_momentum_radial in ("two_zone", "kinetic_two_moment")
+            and not self._neutral_momentum
+        ):
             raise ValueError(
-                "neutral_momentum_radial='two_zone' requires the "
+                f"neutral_momentum_radial={self._neutral_momentum_radial!r} "
+                "requires the "
                 "neutral_momentum flag: it closes the radial profile of the "
                 "evolved wind"
+            )
+        self._neutral_two_momentum = (
+            self._neutral_momentum_radial == "kinetic_two_moment"
+        )
+        if self._neutral_two_momentum and not self._neutral_two_zone:
+            raise ValueError(
+                "neutral_momentum_radial='kinetic_two_moment' requires "
+                "neutral_two_zone"
             )
         # Geometry and Tn_fit are fixed for the run, so the two-zone factors
         # are computed once here; None selects the uniform (legacy) closure
@@ -800,6 +819,7 @@ class LAPDSim1D:
             self._geometry.cells,
             neutral_momentum=self._neutral_momentum,
             neutral_two_zone=self._neutral_two_zone,
+            neutral_annulus_momentum=self._neutral_two_momentum,
         )
 
     @property
@@ -862,6 +882,9 @@ class LAPDSim1D:
             state_rhs,
             neutral_momentum=True if self._neutral_momentum else None,
             neutral_two_zone=True if self._neutral_two_zone else None,
+            neutral_annulus_momentum=(
+                True if self._neutral_two_momentum else None
+            ),
         )
 
     def rhs_terms(self, y=None, include_heat_conduction=True, time=None):
@@ -876,6 +899,14 @@ class LAPDSim1D:
             zone_terms["neutral_zone_exchange"] = self.neutral_zone_exchange_rhs(
                 state=state
             )
+        geometry_terms = {}
+        if self._flags.get("end_expansion_geometry", False):
+            geometry_terms["flux_tube_geometry"] = (
+                self._zero_rhs_state()
+                if not self._flags.get("Plasma", True)
+                or self._neutral_prebreakdown_active(time=time)
+                else self.flux_tube_geometry_rhs(state=state)
+            )
         if not self._flags.get("Plasma", True) or self._neutral_prebreakdown_active(
             time=time,
         ):
@@ -886,6 +917,7 @@ class LAPDSim1D:
                 )
             return {
                 **zone_terms,
+                **geometry_terms,
                 **kinetic_terms,
                 "plasma_advective_flux": self._zero_rhs_state(),
                 "plasma_front_flux": self._zero_rhs_state(),
@@ -937,6 +969,7 @@ class LAPDSim1D:
         )
         terms = {
             **zone_terms,
+            **geometry_terms,
             "plasma_advective_flux": plasma_terms["plasma_advective_flux"],
             "plasma_front_flux": plasma_terms["plasma_front_flux"],
             "boundary_absorption": self.boundary_absorption_rhs(
@@ -962,6 +995,15 @@ class LAPDSim1D:
                 self.ion_neutral_thermalization_rhs(state=state)
             ),
             "neutral_momentum_wall": self.neutral_momentum_wall_rhs(state=state),
+            **(
+                {
+                    "neutral_momentum_radial": (
+                        self.neutral_momentum_two_zone_rhs(state=state)
+                    )
+                }
+                if self._neutral_two_momentum
+                else {}
+            ),
             "neutral_wind_advection": self.neutral_wind_advection_rhs(state=state),
             "surface_loss": self._zero_rhs_state(),
             "anode_collection": self.anode_collection_rhs(
@@ -1016,6 +1058,7 @@ class LAPDSim1D:
             ion_mass_g=self._ion_mass_g,
             neutral_momentum=self._neutral_momentum,
             neutral_two_zone=self._neutral_two_zone,
+            neutral_annulus_momentum=self._neutral_two_momentum,
         )
 
     def _step_cache_snapshot(self):
@@ -1154,6 +1197,8 @@ class LAPDSim1D:
             Ee=state.Ee.copy(),
             Ei=state.Ei.copy(),
             M_n=None if state.M_n is None else state.M_n.copy(),
+            nn_a=None if state.nn_a is None else state.nn_a.copy(),
+            M_n_a=None if state.M_n_a is None else state.M_n_a.copy(),
         )
 
     def _implicit_neutral_step_two_zone(self, dt, state, time):
@@ -1272,6 +1317,7 @@ class LAPDSim1D:
             Ei=state.Ei.copy(),
             M_n=None if state.M_n is None else state.M_n.copy(),
             nn_a=np.maximum(solution[cells:], self._floors["nn"]),
+            M_n_a=None if state.M_n_a is None else state.M_n_a.copy(),
         )
 
     def _step_rejection_info(self, attempt, y0=None):
@@ -2178,6 +2224,7 @@ class LAPDSim1D:
             Ei=state.Ei.copy(),
             M_n=None if state.M_n is None else state.M_n.copy(),
             nn_a=final_nn_a,
+            M_n_a=None if state.M_n_a is None else state.M_n_a.copy(),
         )
         self._set_state_vector(pack_state(seeded))
         self._time = 0.0
@@ -2538,6 +2585,17 @@ class LAPDSim1D:
             ion_scale=float(self._input_dict.get("b_pressure_work_ions", 1.0)),
         )
 
+    def flux_tube_geometry_rhs(self, y=None, state=None):
+        """Return the variable-area quasi-1D momentum-pressure source."""
+        if state is None:
+            state = self.state if y is None else self._unpack(y)
+        return flux_tube_geometry_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            geometry=self._geometry,
+        )
+
     def _jet_cathode_solve(self, cathode_solve, jet_enabled, time):
         """Return the solve the jet terms ride, re-solving like the other
         cathode consumers only when a jet needs it and none was passed."""
@@ -2668,6 +2726,18 @@ class LAPDSim1D:
             Rm_cm=self._geometry.Rm_cm,
             Tn_fit=float(self._input_dict.get("Tn_fit", 0.1)),
             wall_rate_1_s=self._wind_wall_rate,
+        )
+
+    def neutral_momentum_two_zone_rhs(self, y=None, state=None):
+        """Return kinetic-derived column/annulus momentum coupling."""
+        if state is None:
+            state = self.state if y is None else self._unpack(y)
+        return neutral_momentum_two_zone_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            geometry=self._geometry,
+            Tn_K=float(self._input_dict.get("Tn_K", 300.0)),
         )
 
     def neutral_wind_advection_rhs(self, y=None, state=None):
@@ -3233,6 +3303,8 @@ class LAPDSim1D:
             Ee=Ee,
             Ei=state.Ei,
             M_n=state.M_n,
+            nn_a=state.nn_a,
+            M_n_a=state.M_n_a,
         )
 
     def _validate_neutral_jet_config(self):
@@ -3788,6 +3860,12 @@ class LAPDSim1D:
             }
         if state.nn_a is not None:
             wind["nn_a"] = state.nn_a.copy()
+        if state.M_n_a is not None:
+            wind["M_n_a"] = state.M_n_a.copy()
+            wind["u_n_a"] = state.M_n_a / (
+                self._ion_mass_g
+                * np.maximum(state.nn_a, self._floors["nn"])
+            )
         return {
             **wind,
             "time": float(time),
@@ -3935,6 +4013,9 @@ class LAPDSim1D:
             result.u_n = stack("u_n")
         if saved and "nn_a" in saved[0]:
             result.nn_a = stack("nn_a")
+        if saved and "M_n_a" in saved[0]:
+            result.M_n_a = stack("M_n_a")
+            result.u_n_a = stack("u_n_a")
         return add_sim3_compat_aliases(result)
 
     def _phase_events(self, run_start, final_time):
@@ -4534,6 +4615,7 @@ class LAPDSim1D:
             Ei=term.Ei,
             M_n=term.M_n,
             nn_a=None if term.nn_a is None else zeros.copy(),
+            M_n_a=term.M_n_a,
         )
 
     def neutral_kinetic_relaxation_rhs(self, state):
@@ -4593,6 +4675,7 @@ class LAPDSim1D:
             # equilibrium of the zone exchange; annulus-free cells carry the
             # value inertly.
             nn_a=nn0.copy() if self._neutral_two_zone else None,
+            un_a=np.zeros(cells) if self._neutral_two_momentum else None,
         )
 
     @staticmethod

@@ -43,6 +43,39 @@ def pressure_work_rhs(
     )
 
 
+def flux_tube_geometry_rhs(state, floors, ion_mass_g, geometry):
+    """Return the quasi-1D pressure force for a variable-area flux tube.
+
+    The conservative momentum equation is
+
+        d(A rho u)/dt + d[A(rho u^2 + p)]/dz = p dA/dz + A S_M.
+
+    ``physics.flux`` already carries the area-weighted flux divergence. This
+    source supplies the matching ``p dA/dz`` term. Its discrete form exactly
+    cancels the pressure-flux divergence for a uniform stationary plasma, so a
+    geometric flare cannot create momentum from a constant-pressure state.
+    """
+    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
+    zeros = np.zeros(geometry.cells, dtype=float)
+    area = np.asarray(geometry.plasma_face_area_cm2, dtype=float)
+    # Keep the same multiply-then-subtract ordering as the pressure-flux
+    # divergence. That makes the uniform-state balance bit-exact instead of
+    # merely algebraically equivalent up to roundoff.
+    dM = (
+        derived.p * area[1:] - derived.p * area[:-1]
+    ) / np.asarray(geometry.plasma_volume_cm3, dtype=float)
+    return ConservativeState1D(
+        n=zeros.copy(),
+        nn=zeros.copy(),
+        M=dM,
+        Ee=zeros.copy(),
+        Ei=zeros.copy(),
+        M_n=np.zeros_like(state.M_n) if state.M_n is not None else None,
+        nn_a=np.zeros_like(state.nn_a) if state.nn_a is not None else None,
+        M_n_a=np.zeros_like(state.M_n_a) if state.M_n_a is not None else None,
+    )
+
+
 def presheath_length_cm(
     nn,
     Te,
@@ -235,7 +268,11 @@ def boundary_absorption_rhs(
                 * ion_mass_g
                 * v_mix
                 * loss
-                / geometry.neutral_volume_cm3[live]
+                / (
+                    geometry.plasma_volume_cm3[live]
+                    if state.M_n_a is not None
+                    else geometry.neutral_volume_cm3[live]
+                )
             )
     dN_loss *= float(b_surface_loss)
     sonic_momentum *= float(b_surface_loss)
@@ -357,13 +394,20 @@ def anode_collection_rhs(
                     * ev_to_erg
                     / ion_mass_g
                 )
+                jet_volume = geometry.neutral_volume_cm3[cell]
+                if state.M_n_a is not None:
+                    jet_volume = max(
+                        geometry.neutral_volume_cm3[cell]
+                        - geometry.plasma_volume_cm3[cell],
+                        1e-300,
+                    )
                 jet_M_n[cell] += (
                     direction
                     * float(anode_jet["R_N"])
                     * ion_mass_g
                     * v_back
                     * loss
-                    / geometry.neutral_volume_cm3[cell]
+                    / jet_volume
                 )
     dN_loss *= float(b_anode_collection)
     if jet_active:
@@ -394,8 +438,9 @@ def anode_collection_rhs(
         M=-ion_mass_g * derived.u * plasma_loss_rate,
         Ee=-1.5 * ev_to_erg * derived.Te * plasma_loss_rate,
         Ei=-1.5 * ev_to_erg * derived.Ti * plasma_loss_rate,
-        M_n=jet_M_n,
+        M_n=None if state.M_n_a is not None else jet_M_n,
         nn_a=nn_a_gain,
+        M_n_a=jet_M_n if state.M_n_a is not None else None,
     )
 
 
@@ -590,7 +635,9 @@ def neutral_wind_velocity(state, floors, ion_mass_g, geometry=None):
     ``nn`` is floored before dividing, matching ``derive_state``'s treatment
     of the plasma velocity; a state without ``M_n`` has no wind.
 
-    ``M_n`` is a CHAMBER-MEAN momentum density, so on a two-zone state
+    When ``M_n_a`` is present, ``M_n`` is the COLUMN momentum density and
+    divides by the column density directly. Otherwise ``M_n`` is a
+    CHAMBER-MEAN momentum density, so on a two-zone state
     (``nn_a`` present, NEUTRAL_TWOZONE_PLAN.md) the divisor must be the
     chamber-mean density ``(nn V_col + nn_a V_ann) / Vm`` -- dividing by
     the column ``nn`` alone would inflate the wind wherever the annulus
@@ -599,7 +646,7 @@ def neutral_wind_velocity(state, floors, ion_mass_g, geometry=None):
     if state.M_n is None:
         return np.zeros_like(np.asarray(state.nn, dtype=float))
     nn = np.asarray(state.nn, dtype=float)
-    if state.nn_a is not None:
+    if state.nn_a is not None and state.M_n_a is None:
         if geometry is None:
             raise ValueError(
                 "neutral_wind_velocity on a two-zone state requires "
@@ -751,7 +798,18 @@ def ion_neutral_drag_rhs(
             M=drag,
             Ee=zeros.copy(),
             Ei=zeros.copy(),
-            M_n=-drag * geometry.volume_ratio,
+            # In the kinetic-derived two-momentum mode M_n lives on the
+            # plasma/column volume, so no Vp/Vm conversion is needed.
+            M_n=(
+                -drag
+                if state.M_n_a is not None
+                else -drag * geometry.volume_ratio
+            ),
+            M_n_a=(
+                np.zeros_like(state.M_n_a)
+                if state.M_n_a is not None
+                else None
+            ),
         )
     slip = _resolve_slip_factor(
         state=state,
@@ -1067,6 +1125,19 @@ def neutral_momentum_wall_rhs(
             Ee=zeros.copy(),
             Ei=zeros.copy(),
         )
+    if state.M_n_a is not None:
+        # The kinetic-derived operator books its annulus wall loss together
+        # with the exactly conservative radial transfer.
+        return ConservativeState1D(
+            n=zeros,
+            nn=zeros.copy(),
+            M=zeros.copy(),
+            Ee=zeros.copy(),
+            Ei=zeros.copy(),
+            M_n=zeros.copy(),
+            nn_a=zeros.copy(),
+            M_n_a=zeros.copy(),
+        )
     if wall_rate_1_s is None:
         vbar_n = np.sqrt(8.0 * float(Tn_fit) * ev_to_erg / (np.pi * ion_mass_g))
         tau_wall = np.asarray(Rm_cm, dtype=float) / vbar_n
@@ -1085,6 +1156,70 @@ def neutral_momentum_wall_rhs(
     )
 
 
+def neutral_momentum_two_zone_rhs(
+    state,
+    floors,
+    ion_mass_g,
+    geometry,
+    Tn_K=300.0,
+):
+    """Return conservative column/annulus radial momentum exchange and wall loss.
+
+    This operator exists only when ``M_n_a`` is present. Column momentum
+    escapes radially at the fast-ion thermal crossing rate
+    ``vbar(Ti)/(2 Rp)``; cold annulus momentum returns at the 300-K
+    free-molecular rate. Equal and opposite volume-integrated transfers make
+    the radial exchange exact. Only annulus momentum accommodates on the
+    vessel wall.
+    """
+    zeros = np.zeros_like(state.nn, dtype=float)
+    if state.M_n_a is None:
+        return ConservativeState1D(
+            n=zeros,
+            nn=zeros.copy(),
+            M=zeros.copy(),
+            Ee=zeros.copy(),
+            Ei=zeros.copy(),
+        )
+    if state.M_n is None or state.nn_a is None:
+        raise ValueError("M_n_a requires both M_n and nn_a")
+    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
+    Rp = np.asarray(geometry.Rp_cm, dtype=float)
+    Rm = np.asarray(geometry.Rm_cm, dtype=float)
+    Vc = np.asarray(geometry.plasma_volume_cm3, dtype=float)
+    Va = np.maximum(
+        np.asarray(geometry.neutral_volume_cm3, dtype=float) - Vc, 0.0
+    )
+    live = Va > 0.0
+    vbar_i = np.sqrt(
+        8.0 * np.asarray(derived.Ti, dtype=float) * ev_to_erg
+        / (np.pi * ion_mass_g)
+    )
+    vbar_n = np.sqrt(
+        8.0 * float(Tn_K) * kb_cgs / (np.pi * ion_mass_g)
+    )
+    nu_ca = np.where(live, vbar_i / (2.0 * Rp), 0.0)
+    ann_area = np.maximum(Rm**2 - Rp**2, 1e-300)
+    nu_ac = np.where(live, vbar_n * Rp / (2.0 * ann_area), 0.0)
+    nu_wall = np.where(live, vbar_n * Rm / (2.0 * ann_area), 0.0)
+    Mc = np.asarray(state.M_n, dtype=float)
+    Ma = np.asarray(state.M_n_a, dtype=float)
+    transfer = -Vc * nu_ca * Mc + Va * nu_ac * Ma
+    dMc = transfer / np.maximum(Vc, 1e-300)
+    dMa = -transfer / np.maximum(Va, 1e-300) - nu_wall * Ma
+    dMa = np.where(live, dMa, 0.0)
+    return ConservativeState1D(
+        n=zeros,
+        nn=zeros.copy(),
+        M=zeros.copy(),
+        Ee=zeros.copy(),
+        Ei=zeros.copy(),
+        M_n=dMc,
+        nn_a=zeros.copy(),
+        M_n_a=dMa,
+    )
+
+
 def _add_optional_rows(a, b):
     """Sum two optional RHS rows, treating a missing side as zeros."""
     if a is None and b is None:
@@ -1099,7 +1234,7 @@ def _add_optional_rows(a, b):
 def add_state_rhs(left, right):
     """Return the sum of two conservative RHS bundles.
 
-    A missing optional field (``M_n``, ``nn_a``) on either side counts as
+    A missing optional field (``M_n``, ``nn_a``, ``M_n_a``) on either side counts as
     zeros when the other side carries one (most RHS terms do not touch
     them); both missing keeps the historical 5-field result.
     """
@@ -1111,4 +1246,5 @@ def add_state_rhs(left, right):
         Ei=left.Ei + right.Ei,
         M_n=_add_optional_rows(left.M_n, right.M_n),
         nn_a=_add_optional_rows(left.nn_a, right.nn_a),
+        M_n_a=_add_optional_rows(left.M_n_a, right.M_n_a),
     )

@@ -77,6 +77,7 @@ from cablp.solvers._sim1d.physics.sources import (
     ion_neutral_slip_factor,
     ion_neutral_thermalization_rhs,
     langevin_rate_cm3_s,
+    neutral_momentum_two_zone_rhs,
     neutral_momentum_wall_rhs,
     neutral_wind_two_zone_factors,
     neutral_wind_velocity,
@@ -214,6 +215,287 @@ def main():
     assert resolved_geom.cell_role[anode_face - 1] == "gap"
     assert resolved_geom.cell_role[anode_face] == "puff"
     assert np.all(np.isnan(resolved_geom.neutral_face_conductance_cm3_s))
+
+    # G1: default-off expanded end geometry. The provisional hardware arm
+    # resolves a 150 cm, Rm=100 cm collector region in ten cells. Plasma area
+    # is either unchanged (vessel-only) or smoothly flared; the source/end
+    # params are presence-gated so incomplete or flag-off configs fail loudly.
+    assert not resolved_flags["end_expansion_geometry"]
+    assert resolved_params["end_expansion_cells"] is None
+    assert resolved_params["end_expansion_machine_radius_cm"] is None
+    assert resolved_params["end_expansion_plasma_radius_cm"] is None
+    assert not resolved_flags["neutral_baffles"]
+    assert resolved_params["neutral_baffle_positions_cm"] is None
+    assert resolved_params["neutral_baffle_clear_radii_cm"] is None
+
+    # CAD-pending thin annular baffles are default-off, presence-gated
+    # neutral apertures. A 40 cm clear radius leaves the 18 cm plasma column
+    # exactly unchanged and adds a series orifice only to neutral transport.
+    baffle_params = dict(resolved_params)
+    baffle_params.update(
+        {
+            "neutral_baffle_positions_cm": [150.0],
+            "neutral_baffle_clear_radii_cm": [40.0],
+        }
+    )
+    baffle_flags = {**resolved_flags, "neutral_baffles": True}
+    baffle_geom = LAPDSim1D(
+        baffle_params, baffle_flags
+    ).get_initial_snapshot().geometry
+    assert baffle_geom.neutral_baffle_face_indices.shape == (1,)
+    assert np.allclose(baffle_geom.neutral_baffle_clear_radius_cm, [40.0])
+    baffle_face = int(baffle_geom.neutral_baffle_face_indices[0])
+    baffle_interior = baffle_face - 1
+    assert abs(baffle_geom.z_edges_cm[baffle_face] - 150.0) <= (
+        0.5
+        * min(
+            baffle_geom.length_cm[baffle_face - 1],
+            baffle_geom.length_cm[baffle_face],
+        )
+    )
+    assert np.isclose(
+        baffle_geom.neutral_face_area_cm2[baffle_face], np.pi * 40.0**2
+    )
+    for name in (
+        "plasma_area_cm2",
+        "plasma_volume_cm3",
+        "plasma_face_area_cm2",
+        "plasma_open",
+        "plasma_transmission",
+        "heat_transmission",
+    ):
+        assert np.array_equal(
+            getattr(baffle_geom, name), getattr(resolved_geom, name)
+        ), name
+
+    base_single = neutral_exchange_coefficients(
+        geometry=resolved_geom,
+        model="knudsen",
+        constant_coeff_cm3_s=resolved_params["neutral_exchange_coeff_cm3_s"],
+        Tn_K=resolved_params["Tn_K"],
+        mu_neutral=4.0,
+        clausing_scale=resolved_params["neutral_clausing_scale"],
+    )
+    baffle_single = neutral_exchange_coefficients(
+        geometry=baffle_geom,
+        model="knudsen",
+        constant_coeff_cm3_s=baffle_params["neutral_exchange_coeff_cm3_s"],
+        Tn_K=baffle_params["Tn_K"],
+        mu_neutral=4.0,
+        clausing_scale=baffle_params["neutral_clausing_scale"],
+    )
+    baffle_vbar = neutral_thermal_speed(
+        baffle_params["Tn_K"], 4.0
+    )
+    baffle_orifice = (
+        0.25
+        * baffle_vbar
+        * np.pi
+        * 40.0**2
+        * baffle_params["neutral_clausing_scale"]
+    )
+    expected_single = 1.0 / (
+        1.0 / base_single[baffle_interior] + 1.0 / baffle_orifice
+    )
+    assert np.isclose(baffle_single[baffle_interior], expected_single)
+    assert np.allclose(
+        np.delete(baffle_single, baffle_interior),
+        np.delete(base_single, baffle_interior),
+    )
+
+    base_col, base_ann = two_zone_knudsen_coefficients(
+        resolved_geom,
+        Tn_K=resolved_params["Tn_K"],
+        mu_neutral=4.0,
+        clausing_scale=resolved_params["neutral_clausing_scale"],
+    )
+    baffle_col, baffle_ann = two_zone_knudsen_coefficients(
+        baffle_geom,
+        Tn_K=baffle_params["Tn_K"],
+        mu_neutral=4.0,
+        clausing_scale=baffle_params["neutral_clausing_scale"],
+    )
+    assert np.array_equal(baffle_col, base_col)
+    open_annulus = np.pi * (40.0**2 - resolved_params["Rp"] ** 2)
+    annulus_orifice = (
+        0.25
+        * baffle_vbar
+        * open_annulus
+        * baffle_params["neutral_clausing_scale"]
+    )
+    expected_annulus = 1.0 / (
+        1.0 / base_ann[baffle_interior] + 1.0 / annulus_orifice
+    )
+    assert np.isclose(baffle_ann[baffle_interior], expected_annulus)
+    assert np.allclose(
+        np.delete(baffle_ann, baffle_interior),
+        np.delete(base_ann, baffle_interior),
+    )
+
+    for bad_params, bad_flags, expected in (
+        (
+            baffle_params,
+            resolved_flags,
+            "require the default-off",
+        ),
+        (
+            resolved_params,
+            baffle_flags,
+            "requires positions and clear radii",
+        ),
+        (
+            {
+                **resolved_params,
+                "neutral_baffle_positions_cm": [150.0],
+                "neutral_baffle_clear_radii_cm": [10.0],
+            },
+            baffle_flags,
+            "Rp <= R_clear < Rm",
+        ),
+        (
+            {
+                **resolved_params,
+                "neutral_baffle_positions_cm": [150.0, 981.25],
+                "neutral_baffle_clear_radii_cm": [40.0],
+            },
+            baffle_flags,
+            "equal lengths",
+        ),
+    ):
+        try:
+            LAPDSim1D(bad_params, bad_flags)
+        except ValueError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError("invalid neutral-baffle configuration constructed")
+
+    expansion_params = dict(resolved_params)
+    expansion_params.update(
+        {
+            "Lm": 2125.85,
+            "collector_length_cm": 150.0,
+            "end_expansion_cells": 10,
+            "end_expansion_machine_radius_cm": 100.0,
+            "end_expansion_plasma_radius_cm": 50.0,
+        }
+    )
+    expansion_flags = dict(resolved_flags)
+    expansion_flags.update(
+        {
+            "end_expansion_geometry": True,
+            "cathode_coupling": False,
+            "neutral_prebreakdown": False,
+            "implicit_heat_conduction": False,
+        }
+    )
+    expansion_params["phase_transition_mode"] = "scheduled"
+    expansion_params["tau_prebreakdown"] = 0.0
+    expansion_params["tau_breakdown"] = 0.0
+    expansion_sim = LAPDSim1D(expansion_params, expansion_flags)
+    expansion_geom = expansion_sim.get_initial_snapshot().geometry
+    end_cells = np.flatnonzero(
+        np.isin(expansion_geom.cell_role, np.asarray(["end", "collector"]))
+    )
+    assert end_cells.size == 10
+    assert np.array_equal(end_cells, np.arange(expansion_geom.cells - 10, expansion_geom.cells))
+    assert list(expansion_geom.cell_role[-10:-1]) == ["end"] * 9
+    assert expansion_geom.cell_role[-1] == "collector"
+    assert expansion_geom.cells == resolved_geom.cells + 9
+    assert np.allclose(expansion_geom.length_cm[end_cells], 15.0)
+    start_face = int(end_cells[0])
+    assert np.isclose(expansion_geom.z_edges_cm[start_face], 1975.85)
+    assert np.isclose(expansion_geom.z_edges_cm[-1], 2125.85)
+    assert np.allclose(expansion_geom.Rm_cm[end_cells], 100.0)
+    assert np.allclose(
+        expansion_geom.neutral_area_cm2[end_cells], np.pi * 100.0**2
+    )
+    # The abrupt vessel entrance retains the upstream Rm=50 cm throat.
+    assert np.isclose(
+        expansion_geom.neutral_face_area_cm2[start_face], np.pi * 50.0**2
+    )
+    # The flux-tube area starts at Rp=18 cm, ends at the declared Rp=50 cm,
+    # and widens monotonically across the end region.
+    end_face_area = expansion_geom.plasma_face_area_cm2[start_face:]
+    assert np.isclose(end_face_area[0], np.pi * 18.0**2)
+    assert np.isclose(end_face_area[-1], np.pi * 50.0**2)
+    assert np.all(np.diff(end_face_area) > 0.0)
+    assert np.all(expansion_geom.Rp_cm[end_cells] < expansion_geom.Rm_cm[end_cells])
+
+    vessel_params = dict(expansion_params)
+    vessel_params["end_expansion_plasma_radius_cm"] = vessel_params["Rp"]
+    vessel_geom = LAPDSim1D(
+        vessel_params, expansion_flags
+    ).get_initial_snapshot().geometry
+    assert np.allclose(vessel_geom.plasma_area_cm2, np.pi * vessel_params["Rp"] ** 2)
+    assert np.allclose(
+        vessel_geom.plasma_face_area_cm2, np.pi * vessel_params["Rp"] ** 2
+    )
+
+    for bad_params, bad_flags, expected in (
+        (
+            {**resolved_params, "end_expansion_cells": 10},
+            resolved_flags,
+            "require the default-off",
+        ),
+        (
+            resolved_params,
+            {**resolved_flags, "end_expansion_geometry": True},
+            "requires all",
+        ),
+        (
+            {
+                **expansion_params,
+                "end_expansion_plasma_radius_cm": 101.0,
+            },
+            expansion_flags,
+            "Rp <= Rp_end <= Rm_end",
+        ),
+        (
+            expansion_params,
+            {
+                **expansion_flags,
+                "TwinCathode": True,
+            },
+            "single-cathode",
+        ),
+    ):
+        try:
+            LAPDSim1D(bad_params, bad_flags)
+        except ValueError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError("invalid expanded-end configuration constructed")
+
+    # The quasi-1D p*dA/dz source cancels the area-weighted pressure flux
+    # bit-for-bit for a uniform stationary plasma. Test only the end block:
+    # the anode's deliberate partial transmission breaks uniform equilibrium
+    # elsewhere for unrelated physical reasons.
+    uniform_expansion = conservative_from_primitives(
+        n=np.full(expansion_geom.cells, 1.0e12),
+        nn=np.full(expansion_geom.cells, 1.0e12),
+        u=np.zeros(expansion_geom.cells),
+        Te=np.full(expansion_geom.cells, 2.0),
+        Ti=np.full(expansion_geom.cells, 1.0),
+        ion_mass_g=expansion_sim.ion_mass_g,
+    )
+    expansion_advective = expansion_sim.plasma_flux_rhs_terms(
+        state=uniform_expansion, include_front=False
+    )["plasma_advective_flux"]
+    expansion_geometric = expansion_sim.flux_tube_geometry_rhs(
+        state=uniform_expansion
+    )
+    assert np.array_equal(
+        (expansion_advective.M + expansion_geometric.M)[end_cells],
+        np.zeros(end_cells.size),
+    )
+    assert np.allclose(expansion_geometric.n, 0.0)
+    assert np.allclose(expansion_geometric.Ee, 0.0)
+    assert np.allclose(expansion_geometric.Ei, 0.0)
+    expansion_attempt = expansion_sim._attempt_step(
+        dt=1.0e-9, operator_split=False
+    )
+    assert np.all(np.isfinite(expansion_attempt.y))
+    assert expansion_attempt.y.shape == expansion_sim.get_initial_snapshot().y.shape
 
     # Twin cathode mirrors the source end (plan §11 decision 4): its cathode
     # surface sits at z = Lm, with that plenum beyond it.
@@ -5288,6 +5570,128 @@ def main():
     assert p2z_both_state.nn_a is not None
     assert np.all(np.isfinite(p2z_both_state.M_n))
     assert np.all(np.isfinite(p2z_both_state.nn_a))
+
+    # --- Kinetic-derived two-momentum reduction (M6): the selector is
+    # default-off and requires both optional parent fields. The eighth packed
+    # row is annulus momentum; radial exchange closes Mc*Vc + Ma*Va exactly,
+    # drag closes M*Vp + Mc*Vc exactly, and a short full-solver trajectory
+    # keeps the optional layout finite.
+    for m6_bad_params, m6_bad_flags in (
+        (
+            dict(
+                p2z_params,
+                neutral_momentum_radial="kinetic_two_moment",
+            ),
+            p2z_flags,
+        ),
+        (
+            dict(
+                mn_plasma_params,
+                neutral_momentum_radial="kinetic_two_moment",
+            ),
+            mn_plasma_flags,
+        ),
+    ):
+        try:
+            LAPDSim1D(m6_bad_params, m6_bad_flags)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "expected kinetic_two_moment parent-field guard"
+            )
+    m6_params = dict(
+        p2z_params,
+        neutral_momentum_radial="kinetic_two_moment",
+    )
+    m6_flags = dict(p2z_both_flags)
+    m6_sim = LAPDSim1D(m6_params, m6_flags)
+    m6_state0 = m6_sim.state
+    assert m6_state0.M_n_a is not None
+    assert m6_sim.rhs().size == 8 * m6_sim.geometry.cells
+    m6_roundtrip = unpack_state(
+        pack_state(m6_state0),
+        m6_sim.geometry.cells,
+        neutral_momentum=True,
+        neutral_two_zone=True,
+        neutral_annulus_momentum=True,
+    )
+    assert np.array_equal(m6_roundtrip.M_n_a, m6_state0.M_n_a)
+    m6_Mc = np.full(m6_sim.geometry.cells, 2.0e-8)
+    m6_exchange_state = ConservativeState1D(
+        n=m6_state0.n,
+        nn=m6_state0.nn,
+        M=m6_state0.M,
+        Ee=m6_state0.Ee,
+        Ei=m6_state0.Ei,
+        M_n=m6_Mc,
+        nn_a=m6_state0.nn_a,
+        M_n_a=np.zeros_like(m6_Mc),
+    )
+    m6_radial = neutral_momentum_two_zone_rhs(
+        state=m6_exchange_state,
+        floors=m6_sim.floors,
+        ion_mass_g=m6_sim.ion_mass_g,
+        geometry=m6_sim.geometry,
+        Tn_K=float(m6_params.get("Tn_K", 300.0)),
+    )
+    m6_Vc, m6_Va = neutral_zone_volumes(m6_sim.geometry)
+    m6_radial_inventory = (
+        m6_radial.M_n * m6_Vc + m6_radial.M_n_a * m6_Va
+    )
+    m6_radial_scale = np.max(np.abs(m6_radial.M_n * m6_Vc))
+    assert np.max(np.abs(m6_radial_inventory)) <= 1e-14 * m6_radial_scale
+    m6_drag = m6_sim.ion_neutral_drag_rhs(state=m6_exchange_state)
+    assert np.array_equal(
+        m6_drag.M * m6_Vc + m6_drag.M_n * m6_Vc,
+        np.zeros_like(m6_Vc),
+    )
+    m6_beam_base = cathode_sim.state
+    m6_beam_Mc = cathode_sim.ion_mass_g * m6_beam_base.nn * 1.0e5
+    m6_beam_state = ConservativeState1D(
+        n=m6_beam_base.n,
+        nn=m6_beam_base.nn,
+        M=m6_beam_base.M,
+        Ee=m6_beam_base.Ee,
+        Ei=m6_beam_base.Ei,
+        M_n=m6_beam_Mc,
+        nn_a=m6_beam_base.nn.copy(),
+        M_n_a=np.zeros_like(m6_beam_Mc),
+    )
+    m6_beam_birth = cathode_sim.beam_ionization_rhs_terms(
+        state=m6_beam_state,
+        cathode_solve=cathode_solve,
+    )["beam_ionization_birth"]
+    assert np.any(m6_beam_birth.n > 0.0)
+    m6_beam_Vc = cathode_sim.geometry.plasma_volume_cm3
+    assert np.allclose(
+        m6_beam_birth.M * m6_beam_Vc
+        + m6_beam_birth.M_n * m6_beam_Vc,
+        0.0,
+        rtol=1e-14,
+        atol=0.0,
+    )
+    assert np.all(m6_beam_birth.M_n_a == 0.0)
+    assert np.all(
+        m6_sim.neutral_momentum_wall_rhs(
+            state=m6_exchange_state
+        ).M_n == 0.0
+    )
+    for _ in range(5):
+        m6_sim.advance_one_step(dt=1.0e-9)
+    assert np.all(np.isfinite(m6_sim.state.M_n))
+    assert np.all(np.isfinite(m6_sim.state.M_n_a))
+    m6_io_sim = LAPDSim1D(m6_params, m6_flags)
+    m6_result = m6_io_sim.run(t_end=3.0e-10, dt=1.0e-10)
+    assert m6_result.M_n_a.shape[1] == m6_io_sim.geometry.cells
+    assert m6_result.M_n_a.shape[0] >= 2
+    assert np.all(np.isfinite(m6_result.u_n_a))
+    with tempfile.TemporaryDirectory() as m6_dir:
+        m6_path = Path(m6_dir) / "m6_smoke.h5"
+        m6_io_sim.save_result(m6_path, m6_result)
+        m6_loaded = load_result_hdf5(m6_path)
+        assert np.allclose(m6_loaded.M_n_a, m6_result.M_n_a)
+        assert np.allclose(m6_loaded.u_n_a, m6_result.u_n_a)
     # M3 source/sink routing: with nn the column density on V_col == Vp,
     # every species-exchange term closes the TOTAL particle inventory
     # n*Vp + nn*V_col + nn_a*V_ann exactly (the ionization/recombination

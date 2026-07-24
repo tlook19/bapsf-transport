@@ -15,6 +15,10 @@ NEUTRAL_MOMENTUM_NAME = "M_n"
 # when the `neutral_two_zone` flag builds it, and `nn` is then the COLUMN
 # density. Packed after M_n in flag-introduction order.
 NEUTRAL_ANNULUS_NAME = "nn_a"
+# Optional annulus axial momentum for the kinetic-derived two-momentum
+# reduction. It is packed last so every existing 5/6/7-field layout remains
+# byte-for-byte unchanged.
+NEUTRAL_ANNULUS_MOMENTUM_NAME = "M_n_a"
 
 
 @dataclass(frozen=True)
@@ -31,6 +35,9 @@ class ConservativeState1D:
     # Annulus neutral density [cm^-3] on the annulus volume Vm - Vp; None
     # means the field is absent and `nn` keeps its chamber-mean meaning.
     nn_a: np.ndarray | None = None
+    # Annulus axial neutral momentum [g cm^-2 s^-1] on Vm - Vp. Presence
+    # requires both M_n (then the column momentum) and nn_a.
+    M_n_a: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -43,7 +50,12 @@ class DerivedState1D:
     p: np.ndarray
 
 
-def pack_state(state, neutral_momentum=None, neutral_two_zone=None):
+def pack_state(
+    state,
+    neutral_momentum=None,
+    neutral_two_zone=None,
+    neutral_annulus_momentum=None,
+):
     """Pack conservative state arrays into a flat solver vector.
 
     The vector is ``5*cells`` long historically, plus one row per present
@@ -59,6 +71,11 @@ def pack_state(state, neutral_momentum=None, neutral_two_zone=None):
     for name, value, flag in (
         (NEUTRAL_MOMENTUM_NAME, state.M_n, neutral_momentum),
         (NEUTRAL_ANNULUS_NAME, state.nn_a, neutral_two_zone),
+        (
+            NEUTRAL_ANNULUS_MOMENTUM_NAME,
+            state.M_n_a,
+            neutral_annulus_momentum,
+        ),
     ):
         include = value is not None if flag is None else bool(flag)
         if include:
@@ -75,7 +92,13 @@ def pack_state(state, neutral_momentum=None, neutral_two_zone=None):
     return np.vstack(rows).ravel()
 
 
-def unpack_state(y, cells, neutral_momentum=None, neutral_two_zone=None):
+def unpack_state(
+    y,
+    cells,
+    neutral_momentum=None,
+    neutral_two_zone=None,
+    neutral_annulus_momentum=None,
+):
     """Unpack a flat solver vector into conservative state arrays.
 
     The optional fields make bare width inference ambiguous at 6 fields
@@ -96,12 +119,18 @@ def unpack_state(y, cells, neutral_momentum=None, neutral_two_zone=None):
         )
     fields = y.size // cells
     candidates = [
-        (has_mn, has_2z)
+        (has_mn, has_2z, has_mna)
         for has_mn in (False, True)
         for has_2z in (False, True)
+        for has_mna in (False, True)
         if (neutral_momentum is None or has_mn == bool(neutral_momentum))
         and (neutral_two_zone is None or has_2z == bool(neutral_two_zone))
-        and base + has_mn + has_2z == fields
+        and (
+            neutral_annulus_momentum is None
+            or has_mna == bool(neutral_annulus_momentum)
+        )
+        and (not has_mna or (has_mn and has_2z))
+        and base + has_mn + has_2z + has_mna == fields
     ]
     if not candidates:
         raise ValueError(
@@ -111,8 +140,8 @@ def unpack_state(y, cells, neutral_momentum=None, neutral_two_zone=None):
     if len(candidates) > 1:
         # Only reachable at 6 fields with both hints None: the historical
         # reading is M_n.
-        candidates = [(True, False)]
-    has_mn, has_2z = candidates[0]
+        candidates = [(True, False, False)]
+    has_mn, has_2z, has_mna = candidates[0]
     arr = y.reshape((fields, cells))
     optional = {}
     row = base
@@ -121,12 +150,25 @@ def unpack_state(y, cells, neutral_momentum=None, neutral_two_zone=None):
         row += 1
     if has_2z:
         optional["nn_a"] = arr[row].copy()
+        row += 1
+    if has_mna:
+        optional["M_n_a"] = arr[row].copy()
     return ConservativeState1D(
         *(r.copy() for r in arr[:base]), **optional
     )
 
 
-def conservative_from_primitives(n, nn, u, Te, Ti, ion_mass_g, un=None, nn_a=None):
+def conservative_from_primitives(
+    n,
+    nn,
+    u,
+    Te,
+    Ti,
+    ion_mass_g,
+    un=None,
+    nn_a=None,
+    un_a=None,
+):
     """Build conservative variables from primitive CGS/eV quantities.
 
     ``un`` (neutral drift [cm/s]) attaches the optional neutral-momentum
@@ -145,6 +187,8 @@ def conservative_from_primitives(n, nn, u, Te, Ti, ion_mass_g, un=None, nn_a=Non
     M_n = None
     if un is not None:
         M_n = ion_mass_g * nn * np.asarray(un, dtype=float)
+    if un_a is not None and nn_a is None:
+        raise ValueError("un_a requires nn_a")
     return ConservativeState1D(
         n=n.copy(),
         nn=nn.copy(),
@@ -153,6 +197,13 @@ def conservative_from_primitives(n, nn, u, Te, Ti, ion_mass_g, un=None, nn_a=Non
         Ei=Ei,
         M_n=M_n,
         nn_a=None if nn_a is None else np.asarray(nn_a, dtype=float).copy(),
+        M_n_a=(
+            None
+            if un_a is None
+            else ion_mass_g
+            * np.asarray(nn_a, dtype=float)
+            * np.asarray(un_a, dtype=float)
+        ),
     )
 
 
@@ -171,7 +222,7 @@ def apply_state_floors(state, floors, ion_mass_g):
     Te = np.maximum(derived.Te, floors["Te"])
     Ti = np.maximum(derived.Ti, floors["Ti"])
     floored = conservative_from_primitives(n, nn, u, Te, Ti, ion_mass_g)
-    if state.M_n is None and state.nn_a is None:
+    if state.M_n is None and state.nn_a is None and state.M_n_a is None:
         return floored
     return ConservativeState1D(
         n=floored.n,
@@ -190,6 +241,11 @@ def apply_state_floors(state, floors, ion_mass_g):
             else np.maximum(
                 np.asarray(state.nn_a, dtype=float), floors["nn"]
             )
+        ),
+        M_n_a=(
+            None
+            if state.M_n_a is None
+            else np.asarray(state.M_n_a, dtype=float).copy()
         ),
     )
 
@@ -221,6 +277,8 @@ def assert_finite_state(state, derived=None):
         raise ValueError("non-finite values in state field 'M_n'")
     if state.nn_a is not None and not np.all(np.isfinite(state.nn_a)):
         raise ValueError("non-finite values in state field 'nn_a'")
+    if state.M_n_a is not None and not np.all(np.isfinite(state.M_n_a)):
+        raise ValueError("non-finite values in state field 'M_n_a'")
     if derived is None:
         return
     for name in ("u", "Te", "Ti", "pe", "pi", "p"):

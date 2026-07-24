@@ -61,6 +61,8 @@ def save_result_hdf5(path, result, params=None, flags=None):
                 "M_n",
                 "u_n",
                 "nn_a",
+                "M_n_a",
+                "u_n_a",
             ),
         )
         _write_geometry(h5.create_group("geometry"), result)
@@ -131,6 +133,8 @@ def load_result_hdf5(path):
                 "M_n",
                 "u_n",
                 "nn_a",
+                "M_n_a",
+                "u_n_a",
             ),
         )
         geometry = _read_arrays(

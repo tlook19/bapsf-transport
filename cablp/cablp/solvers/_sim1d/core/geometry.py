@@ -49,6 +49,11 @@ class Sim1DGeometry:
     # interior and plasma-open, throttled for heat and neutrals in M3.
     cathode_face_indices: np.ndarray
     anode_face_indices: np.ndarray
+    # Optional thin annular baffles. Each clear radius is paired with the face
+    # at the same array index; the aperture leaves the plasma channel open and
+    # restricts only the surrounding neutral annulus.
+    neutral_baffle_face_indices: np.ndarray
+    neutral_baffle_clear_radius_cm: np.ndarray
 
     @property
     def cells(self):
@@ -240,6 +245,7 @@ def _build_resolved_geometry(input_dict, flags):
 
     total_length = float(input_dict.get("Lm", 2000.0))
     twin = bool(flags.get("TwinCathode", False))
+    end_expansion = _end_expansion_spec(input_dict, flags, twin=twin)
 
     plenum_length = float(input_dict.get("plenum_length_cm", 100.0))
     gap_length = float(input_dict.get("cathode_anode_gap_cm", 50.0))
@@ -297,8 +303,9 @@ def _build_resolved_geometry(input_dict, flags):
         roles += list(reversed(gap_roles)) + list(reversed(behind_roles))
         lengths += list(reversed(gap_lengths)) + list(reversed(behind_lengths))
     else:
-        roles += ["collector"]
-        lengths += [collector_length]
+        end_cells = 1 if end_expansion is None else end_expansion["cells"]
+        roles += ["end"] * (end_cells - 1) + ["collector"]
+        lengths += [collector_length / end_cells] * end_cells
 
     length_cm = np.asarray(lengths, dtype=float)
     cell_role = np.asarray(roles, dtype=object)
@@ -337,6 +344,43 @@ def _build_resolved_geometry(input_dict, flags):
     plasma_area_cm2 = np.pi * Rp_cm**2
     neutral_area_cm2 = np.pi * Rm_cm**2
     neutral_hydraulic_radius_cm = Rm_cm.copy()
+    plasma_face_area_override = None
+
+    if end_expansion is not None:
+        end = np.flatnonzero(
+            np.isin(cell_role, np.asarray(["end", "collector"], dtype=object))
+        )
+        n_end = int(end_expansion["cells"])
+        if end.size != n_end or not np.array_equal(
+            end, np.arange(cells - n_end, cells)
+        ):
+            raise ValueError("expanded end cells must be one contiguous terminal block")
+
+        # The vessel makes an abrupt step to its larger radius at the end-cell
+        # entrance. Neutral faces remain restricting apertures, so that entrance
+        # still sees the upstream bore while the downstream volume is enlarged.
+        Rm_end = float(end_expansion["machine_radius_cm"])
+        Rm_cm[end] = Rm_end
+        neutral_area_cm2[end] = np.pi * Rm_end**2
+        neutral_hydraulic_radius_cm[end] = Rm_end
+
+        # Resolve a smooth *area* flare. Area is the flux-tube variable
+        # (A*B=const); the half-cosine has zero slope at both ends and is an
+        # explicit provisional closure until measured B(z) is supplied.
+        A0 = np.pi * Rp**2
+        A1 = np.pi * float(end_expansion["plasma_radius_cm"]) ** 2
+        xi_face = np.linspace(0.0, 1.0, n_end + 1)
+        smooth = 0.5 - 0.5 * np.cos(np.pi * xi_face)
+        end_face_area = A0 + (A1 - A0) * smooth
+        end_cell_area = 0.5 * (end_face_area[:-1] + end_face_area[1:])
+        plasma_area_cm2[end] = end_cell_area
+        Rp_cm[end] = np.sqrt(end_cell_area / np.pi)
+
+        plasma_face_area_override = _face_area(plasma_area_cm2)
+        start_face = int(end[0])
+        plasma_face_area_override[
+            start_face : start_face + n_end + 1
+        ] = end_face_area
 
     # Obstruction cells are an annular duct: reduced open area AND a reduced
     # hydraulic radius (Rm - Rcs), the two differing independently (§3 keystone).
@@ -350,6 +394,16 @@ def _build_resolved_geometry(input_dict, flags):
     if Rsup > 0.0:
         plenum = cell_role == "plenum"
         neutral_area_cm2[plenum] = np.pi * (Rm**2 - Rsup**2)
+
+    baffle_faces, baffle_radii = _neutral_baffle_spec(
+        input_dict=input_dict,
+        flags=flags,
+        z_edges_cm=z_edges_cm,
+        Rp_cm=Rp_cm,
+        Rm_cm=Rm_cm,
+        cathode_face_indices=cathode_faces,
+        anode_face_indices=anode_faces,
+    )
 
     plasma_volume_cm3 = plasma_area_cm2 * length_cm
     neutral_volume_cm3 = neutral_area_cm2 * length_cm
@@ -373,6 +427,8 @@ def _build_resolved_geometry(input_dict, flags):
         center_distance_cm=center_distance_cm,
         cathode_face_indices=np.asarray(cathode_faces, dtype=int),
         anode_face_indices=np.asarray(anode_faces, dtype=int),
+        neutral_baffle_face_indices=baffle_faces,
+        neutral_baffle_clear_radius_cm=baffle_radii,
         anode_transparency=1.0 - float(input_dict.get("eta", 0.0)),
         anode_neutral_transparency=_anode_neutral_transparency(input_dict),
         anode_advective_block=float(
@@ -384,7 +440,147 @@ def _build_resolved_geometry(input_dict, flags):
         absorbing_face_indices=(
             list(cathode_faces) if twin else list(cathode_faces) + [cells]
         ),
+        plasma_face_area_override=plasma_face_area_override,
     )
+
+
+def _end_expansion_spec(input_dict, flags, *, twin):
+    """Validate and return the optional expanded-end geometry specification."""
+    keys = (
+        "end_expansion_cells",
+        "end_expansion_machine_radius_cm",
+        "end_expansion_plasma_radius_cm",
+    )
+    raw = {key: input_dict.get(key) for key in keys}
+    provided = {key: value is not None for key, value in raw.items()}
+    enabled = bool(flags.get("end_expansion_geometry", False))
+    if not enabled:
+        stale = [key for key, present in provided.items() if present]
+        if stale:
+            raise ValueError(
+                "end expansion parameters require the default-off "
+                "end_expansion_geometry flag: " + ", ".join(stale)
+            )
+        return None
+    missing = [key for key, present in provided.items() if not present]
+    if missing:
+        raise ValueError(
+            "end_expansion_geometry requires all end expansion parameters; "
+            "missing " + ", ".join(missing)
+        )
+    if twin:
+        raise ValueError(
+            "end_expansion_geometry is defined only for the single-cathode "
+            "collector end"
+        )
+
+    cells_float = float(raw["end_expansion_cells"])
+    cells = int(cells_float)
+    if cells_float != cells or cells < 2:
+        raise ValueError(
+            "end_expansion_cells must be an integer >= 2 "
+            f"(got {raw['end_expansion_cells']!r})"
+        )
+    Rm = float(input_dict.get("Rm", 50.0))
+    Rp = float(input_dict.get("Rp", 18.0))
+    Rm_end = float(raw["end_expansion_machine_radius_cm"])
+    Rp_end = float(raw["end_expansion_plasma_radius_cm"])
+    if not np.isfinite(Rm_end) or Rm_end < Rm:
+        raise ValueError(
+            "end_expansion_machine_radius_cm must be finite and >= Rm "
+            f"(got {Rm_end} vs Rm={Rm})"
+        )
+    if not np.isfinite(Rp_end) or not Rp <= Rp_end <= Rm_end:
+        raise ValueError(
+            "end_expansion_plasma_radius_cm must satisfy "
+            f"Rp <= Rp_end <= Rm_end (got {Rp_end}, Rp={Rp}, Rm_end={Rm_end})"
+        )
+    return {
+        "cells": cells,
+        "machine_radius_cm": Rm_end,
+        "plasma_radius_cm": Rp_end,
+    }
+
+
+def _neutral_baffle_spec(
+    *,
+    input_dict,
+    flags,
+    z_edges_cm,
+    Rp_cm,
+    Rm_cm,
+    cathode_face_indices,
+    anode_face_indices,
+):
+    """Validate and map optional thin annular baffles onto mesh faces."""
+    keys = ("neutral_baffle_positions_cm", "neutral_baffle_clear_radii_cm")
+    raw = {key: input_dict.get(key) for key in keys}
+    provided = {key: value is not None for key, value in raw.items()}
+    enabled = bool(flags.get("neutral_baffles", False))
+    if not enabled:
+        stale = [key for key, present in provided.items() if present]
+        if stale:
+            raise ValueError(
+                "neutral baffle parameters require the default-off "
+                "neutral_baffles flag: " + ", ".join(stale)
+            )
+        return np.empty(0, dtype=int), np.empty(0, dtype=float)
+    missing = [key for key, present in provided.items() if not present]
+    if missing:
+        raise ValueError(
+            "neutral_baffles requires positions and clear radii; missing "
+            + ", ".join(missing)
+        )
+
+    def as_vector(name, value):
+        array = np.asarray(value, dtype=float)
+        if array.ndim == 0:
+            array = array.reshape(1)
+        if array.ndim != 1 or array.size == 0 or not np.all(np.isfinite(array)):
+            raise ValueError(f"{name} must be a finite non-empty scalar or sequence")
+        return array
+
+    positions = as_vector(keys[0], raw[keys[0]])
+    radii = as_vector(keys[1], raw[keys[1]])
+    if positions.shape != radii.shape:
+        raise ValueError(
+            "neutral baffle positions and clear radii must have equal lengths"
+        )
+
+    z_edges = np.asarray(z_edges_cm, dtype=float)
+    Rp = np.asarray(Rp_cm, dtype=float)
+    Rm = np.asarray(Rm_cm, dtype=float)
+    faces = np.asarray(
+        [int(np.argmin(np.abs(z_edges - position))) for position in positions],
+        dtype=int,
+    )
+    if np.any((faces <= 0) | (faces >= Rp.size)):
+        raise ValueError("neutral baffles must map to interior mesh faces")
+    if np.unique(faces).size != faces.size:
+        raise ValueError("neutral baffle positions must map to distinct mesh faces")
+    forbidden = set(np.asarray(cathode_face_indices, dtype=int))
+    forbidden.update(np.asarray(anode_face_indices, dtype=int))
+    if any(int(face) in forbidden for face in faces):
+        raise ValueError("neutral baffles cannot coincide with cathode or anode faces")
+
+    for requested, face, clear in zip(positions, faces, radii):
+        Rp_face = max(float(Rp[face - 1]), float(Rp[face]))
+        Rm_face = min(float(Rm[face - 1]), float(Rm[face]))
+        if not Rp_face <= float(clear) < Rm_face:
+            raise ValueError(
+                "neutral baffle clear radius must satisfy local "
+                f"Rp <= R_clear < Rm (got {clear}, Rp={Rp_face}, Rm={Rm_face})"
+            )
+        half_spacing = 0.5 * min(
+            float(z_edges[face] - z_edges[face - 1]),
+            float(z_edges[face + 1] - z_edges[face]),
+        )
+        if abs(float(z_edges[face]) - float(requested)) > half_spacing + 1e-12:
+            raise ValueError(
+                "neutral baffle position is too far from its nearest mesh face"
+            )
+    order = np.argsort(faces)
+    return faces[order], radii[order]
 
 
 def _assemble_geometry(
@@ -405,10 +601,13 @@ def _assemble_geometry(
     center_distance_cm,
     cathode_face_indices=None,
     anode_face_indices=None,
+    neutral_baffle_face_indices=None,
+    neutral_baffle_clear_radius_cm=None,
     anode_transparency=1.0,
     anode_neutral_transparency=None,
     anode_advective_block=0.0,
     absorbing_face_indices=None,
+    plasma_face_area_override=None,
 ):
     """Derive the face arrays from the cell arrays and pack a ``Sim1DGeometry``.
 
@@ -419,6 +618,16 @@ def _assemble_geometry(
     """
     cells = length_cm.size
     plasma_face_area_cm2 = _face_area(plasma_area_cm2)
+    if plasma_face_area_override is not None:
+        override = np.asarray(plasma_face_area_override, dtype=float)
+        if override.shape != (cells + 1,) or not np.all(
+            np.isfinite(override) & (override > 0.0)
+        ):
+            raise ValueError(
+                "plasma_face_area_override must be finite and positive with "
+                f"shape {(cells + 1,)}"
+            )
+        plasma_face_area_cm2 = override.copy()
     # Restricting apertures for the neutral conductance (see class docstring).
     neutral_face_area_cm2 = _face_min(neutral_area_cm2)
     neutral_face_hydraulic_radius_cm = _face_min(neutral_hydraulic_radius_cm)
@@ -484,6 +693,23 @@ def _assemble_geometry(
             neutral_face_area_cm2[face] * neutral_transparency
         )
 
+    baffle_faces = np.asarray(
+        [] if neutral_baffle_face_indices is None else neutral_baffle_face_indices,
+        dtype=int,
+    )
+    baffle_radii = np.asarray(
+        []
+        if neutral_baffle_clear_radius_cm is None
+        else neutral_baffle_clear_radius_cm,
+        dtype=float,
+    )
+    if baffle_faces.shape != baffle_radii.shape:
+        raise ValueError("neutral baffle face and radius arrays must have equal shape")
+    for face, clear in zip(baffle_faces, baffle_radii):
+        if not 0 < int(face) < cells:
+            raise ValueError("neutral baffle faces must be interior")
+        neutral_face_area_cm2[int(face)] = np.pi * float(clear) ** 2
+
     # No prescribed neutral apertures: NaN => derive the molecular-flow (Clausing)
     # conductance from the face area + hydraulic radius. Kept as an escape hatch
     # for a face whose conductance is known directly rather than geometrically.
@@ -522,6 +748,8 @@ def _assemble_geometry(
             if anode_face_indices is None
             else np.asarray(anode_face_indices, dtype=int)
         ),
+        neutral_baffle_face_indices=baffle_faces,
+        neutral_baffle_clear_radius_cm=baffle_radii,
     )
 
 

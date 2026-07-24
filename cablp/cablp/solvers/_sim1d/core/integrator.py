@@ -11,6 +11,31 @@ def add_scaled_state(state, rhs, scale):
         M=state.M + scale * rhs.M,
         Ee=state.Ee + scale * rhs.Ee,
         Ei=state.Ei + scale * rhs.Ei,
+        M_n=(
+            None
+            if state.M_n is None
+            else state.M_n
+            + scale
+            * (np.zeros_like(state.M_n) if rhs.M_n is None else rhs.M_n)
+        ),
+        nn_a=(
+            None
+            if state.nn_a is None
+            else state.nn_a
+            + scale
+            * (np.zeros_like(state.nn_a) if rhs.nn_a is None else rhs.nn_a)
+        ),
+        M_n_a=(
+            None
+            if state.M_n_a is None
+            else state.M_n_a
+            + scale
+            * (
+                np.zeros_like(state.M_n_a)
+                if rhs.M_n_a is None
+                else rhs.M_n_a
+            )
+        ),
     )
 
 
@@ -50,7 +75,13 @@ def ssprk2_step(y0, dt, rhs_func, floor_func, time=None):
 
 
 def floor_state_vector(
-    y, cells, floors, ion_mass_g, neutral_momentum=None, neutral_two_zone=None
+    y,
+    cells,
+    floors,
+    ion_mass_g,
+    neutral_momentum=None,
+    neutral_two_zone=None,
+    neutral_annulus_momentum=None,
 ):
     """Apply density and temperature floors to a packed conservative vector.
 
@@ -65,6 +96,7 @@ def floor_state_vector(
         cells,
         neutral_momentum=neutral_momentum,
         neutral_two_zone=neutral_two_zone,
+        neutral_annulus_momentum=neutral_annulus_momentum,
     )
     floored = apply_state_floors(state, floors=floors, ion_mass_g=ion_mass_g)
     return pack_state(floored)

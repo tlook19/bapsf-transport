@@ -74,6 +74,25 @@ def geometry_defaults():
     Rsup:
         Effective blockage radius of plenum support rods [cm]. ``0`` => none;
         reduces plenum neutral volume only. Consumed in M2.
+    end_expansion_cells:
+        Number of cells resolving the collector/end expansion when the
+        ``end_expansion_geometry`` flag is enabled. ``None`` when off.
+    end_expansion_machine_radius_cm:
+        Vessel/neutral radius [cm] throughout the expanded end region.
+        Requires ``end_expansion_geometry``.
+    end_expansion_plasma_radius_cm:
+        Terminal plasma flux-tube radius [cm] at the end wall. The plasma
+        cross-sectional area expands smoothly across the end region from
+        ``Rp`` to this value. Setting it equal to ``Rp`` gives the
+        vessel-only arm. Requires ``end_expansion_geometry``.
+    neutral_baffle_positions_cm:
+        Axial positions [cm] of optional thin annular baffles, measured from
+        the cathode surface. A scalar or sequence is accepted. Requires the
+        default-off ``neutral_baffles`` flag and matching clear radii.
+    neutral_baffle_clear_radii_cm:
+        Clear aperture radii [cm] for ``neutral_baffle_positions_cm``. Each
+        aperture must leave the local plasma channel fully open and lie inside
+        the local vessel radius. A scalar or sequence is accepted.
     """
     return {
         "Lm": 2000.0,
@@ -87,6 +106,11 @@ def geometry_defaults():
         "Rcs": 0.0,
         "Lcs": 0.0,
         "Rsup": 0.0,
+        "end_expansion_cells": None,
+        "end_expansion_machine_radius_cm": None,
+        "end_expansion_plasma_radius_cm": None,
+        "neutral_baffle_positions_cm": None,
+        "neutral_baffle_clear_radii_cm": None,
     }
 
 
@@ -490,7 +514,12 @@ def fudge_factor_defaults():
         sample the *column* wind (chamber mean times ~3.3 on production
         geometry) and only the slow annulus gas reaches the wall (effective
         sink ~1.9e3 1/s vs the uniform 4.9e3 1/s). Net effect: less drag
-        input, slower chamber-mean wind.
+        input, slower chamber-mean wind. ``"kinetic_two_moment"`` requires
+        ``neutral_two_zone`` and evolves separate column and annulus
+        momenta. Their radial exchange rates are fixed by the fast-ion and
+        300-K free-molecular crossing times; annulus momentum alone reaches
+        the vessel and optional baffles. This selector has no fitted
+        coefficient.
     b_ion_neutral_thermalization:
         Scale factor for the elastic ion-neutral thermal-equilibration term.
         ``None`` (default) inherits ``b_ion_neutral_drag`` -- the historical
@@ -1038,6 +1067,13 @@ input_flags_template_1d = {
     "TwinCathode": False,
     # Retained as a stale-config guard through D2; False raises at construction.
     "resolved_boundaries": True,
+    # Provisional CAD-pending end-vessel / magnetic-flare geometry. Presence
+    # gated in core.geometry: all three end_expansion_* parameters are required
+    # when on and forbidden when off. The production geometry is bit-exact off.
+    "end_expansion_geometry": False,
+    # CAD-pending thin annular apertures. Positions and clear radii are required
+    # together when on and forbidden when off; the plasma channel stays open.
+    "neutral_baffles": False,
     "heat_conduction": True,
     "implicit_heat_conduction": True,
     "front_flux": True,

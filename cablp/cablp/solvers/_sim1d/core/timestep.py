@@ -299,6 +299,17 @@ def neutral_wind_timestep(state, floors, ion_mass_g, geometry, cfl=0.4):
             state, floors=floors, ion_mass_g=ion_mass_g, geometry=geometry
         )
     )
+    if state.M_n_a is not None:
+        if state.nn_a is None:
+            raise ValueError("M_n_a requires nn_a")
+        speed = np.maximum(
+            speed,
+            np.abs(state.M_n_a)
+            / (
+                ion_mass_g
+                * np.maximum(np.asarray(state.nn_a, dtype=float), floors["nn"])
+            ),
+        )
     moving = speed > 0.0
     if not np.any(moving):
         return np.inf
