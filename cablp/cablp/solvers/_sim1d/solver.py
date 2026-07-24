@@ -101,6 +101,7 @@ from .physics.sources import (
     neutral_wind_two_zone_factors,
     neutral_wind_velocity,
     flux_tube_geometry_rhs,
+    hyperbolic_energy_correction_rhs,
     pressure_work_rhs,
 )
 from .results.compat import add_sim3_compat_aliases
@@ -550,6 +551,12 @@ class LAPDSim1D:
         self._raw_stage_validation = bool(
             self._flags.get("raw_stage_validation", False)
         )
+        self._hyperbolic_wave_speed = str(
+            self._input_dict.get("hyperbolic_wave_speed", "isothermal")
+        )
+        self._hyperbolic_energy_consistent = bool(
+            self._flags.get("hyperbolic_energy_consistent", False)
+        )
         self._validate_r1_configuration_presence()
         exchange_model = str(
             self._input_dict.get("neutral_exchange_model", "knudsen")
@@ -941,6 +948,11 @@ class LAPDSim1D:
                     f"{name} must be 'local', 'floor', or a finite "
                     f"non-negative numeric eV value (got {value!r})"
                 )
+        if self._hyperbolic_wave_speed not in {"isothermal", "adiabatic"}:
+            raise ValueError(
+                "hyperbolic_wave_speed must be 'isothermal' or 'adiabatic' "
+                f"(got {self._hyperbolic_wave_speed!r})"
+            )
         if self._raw_stage_validation and self._flags.get("Plasma", True):
             for initial_name, floor_name in (
                 ("Te0", "Te_floor"),
@@ -1075,6 +1087,7 @@ class LAPDSim1D:
                 "plasma_front_flux": self._zero_rhs_state(),
                 "boundary_absorption": self._zero_rhs_state(),
                 "pressure_work": self._zero_rhs_state(),
+                "hyperbolic_energy_correction": self._zero_rhs_state(),
                 "ei_exchange": self._zero_rhs_state(),
                 "ionization_energy_cost": self._zero_rhs_state(),
                 "electron_ion_cooling": self._zero_rhs_state(),
@@ -1129,6 +1142,11 @@ class LAPDSim1D:
                 state=state, cathode_solve=cathode_solve, time=time
             ),
             "pressure_work": self.pressure_work_rhs(state=state),
+            "hyperbolic_energy_correction": (
+                self.hyperbolic_energy_correction_rhs(state=state)
+                if self._hyperbolic_energy_consistent
+                else self._zero_rhs_state()
+            ),
             "ei_exchange": self.energy_exchange_rhs(state=state),
             "ionization_energy_cost": electron_cooling_terms[
                 "ionization_energy_cost"
@@ -2856,6 +2874,7 @@ class LAPDSim1D:
                 else None
             ),
             active_plasma_topology=self._active_plasma_topology,
+            wave_speed=self._hyperbolic_wave_speed,
         )
         if not plasma_enabled:
             neutral_candidates = {
@@ -3047,6 +3066,8 @@ class LAPDSim1D:
             include_front=use_front,
             alpha_front=float(self._input_dict.get("alpha_front", 1.0)),
             active_plasma_topology=self._active_plasma_topology,
+            wave_speed=self._hyperbolic_wave_speed,
+            energy_consistent=self._hyperbolic_energy_consistent,
         )
 
     def plasma_flux_rhs_terms(self, y=None, state=None, include_front=None):
@@ -3065,6 +3086,8 @@ class LAPDSim1D:
             include_front=use_front,
             alpha_front=float(self._input_dict.get("alpha_front", 1.0)),
             active_plasma_topology=self._active_plasma_topology,
+            wave_speed=self._hyperbolic_wave_speed,
+            energy_consistent=self._hyperbolic_energy_consistent,
         )
 
     def pressure_work_rhs(self, y=None, state=None):
@@ -3079,6 +3102,24 @@ class LAPDSim1D:
             electron_scale=float(self._input_dict.get("b_pressure_work_elec", 1.0)),
             ion_scale=float(self._input_dict.get("b_pressure_work_ions", 1.0)),
             active_plasma_topology=self._active_plasma_topology,
+        )
+
+    def hyperbolic_energy_correction_rhs(self, y=None, state=None):
+        """Return the R2 KEP energy-consistency correction (Ee, Ei sources)."""
+        if state is None:
+            state = self.state if y is None else self._unpack(y)
+        return hyperbolic_energy_correction_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            mu=self._mu,
+            geometry=self._geometry,
+            wave_speed=self._hyperbolic_wave_speed,
+            active_plasma_topology=self._active_plasma_topology,
+            electron_scale=float(
+                self._input_dict.get("b_pressure_work_elec", 1.0)
+            ),
+            ion_scale=float(self._input_dict.get("b_pressure_work_ions", 1.0)),
         )
 
     def flux_tube_geometry_rhs(self, y=None, state=None):

@@ -338,6 +338,13 @@ def model_mode_defaults():
         Axial plasma front-filling flux closure. The implemented option is
         ``"sonic_relaxation"``; the ``front_flux`` flag enables or disables the
         closure.
+    hyperbolic_wave_speed:
+        Signal speed used by both the Rusanov dissipation ``a_max`` and the
+        plasma CFL. ``"isothermal"`` (default) is the historical gamma=1 Bohm
+        speed ``sqrt(Te/m_i)``; ``"adiabatic"`` is the exact linear acoustic
+        speed of the implemented gamma=5/3 two-species ideal-gas energy system,
+        ``sqrt((5/3)(Te+Ti)/m_i)`` (audit A3 / R2 spectral-radius repair). The
+        historical golden pins ``"isothermal"`` and stays bit-exact.
     D_amb_model:
         Ambipolar diffusion coefficient model. ``"cs_dz"`` is retained for
         _sim3 compatibility; the current conservative flux closure does not
@@ -394,6 +401,7 @@ def model_mode_defaults():
     """
     return {
         "front_flux_model": "sonic_relaxation",
+        "hyperbolic_wave_speed": "isothermal",
         "D_amb_model": "cs_dz",
         "end_mode": "collector",
         "cathode_model": "disabled",
@@ -1110,6 +1118,13 @@ input_flags_template_1d = {
     "heat_conduction": True,
     "implicit_heat_conduction": True,
     "front_flux": True,
+    # R2 conservative hyperbolic core (SIM1D_MODEL_AUDIT_PLAN R2, audit A2):
+    # kinetic-energy-preserving convective momentum flux, plus deposit of the
+    # Rusanov (n,M) numerical kinetic-energy dissipation into ion internal
+    # energy, plus a KEP pressure-work discretization -- so the closed-domain
+    # total plasma energy K+Ee+Ei is conserved to machine precision. Default
+    # off; the historical golden stays bit-exact.
+    "hyperbolic_energy_consistent": False,
     "source_surface_loss": True,
     "end_surface_loss": True,
     "ion_neutral_drag": True,

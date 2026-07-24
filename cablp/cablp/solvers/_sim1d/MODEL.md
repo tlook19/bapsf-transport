@@ -189,3 +189,28 @@ below the lower edge, the active minimum `Te`, and first whole-run and
 afterglow crossings. This is a validity annotation: rates still follow their
 selected clamping/extension policy, and a below-grid sample is not silently
 promoted to validated atomic physics.
+
+## R2 conservative hyperbolic core (2026-07-24)
+
+The default-off `hyperbolic_energy_consistent` selector makes the discrete
+hyperbolic operator conserve the total plasma energy `K + Ee + Ei` (kinetic
+plus electron and ion internal) to machine precision on a closed domain. It
+combines three compatible pieces:
+
+- a kinetic-energy-preserving convective momentum flux (the divergence-form
+  `0.5(M_L u_L + M_R u_R)` becomes `{u}{M}`, Jameson 2008);
+- deposit of the Rusanov `(n, M)` numerical kinetic-energy dissipation into the
+  ion internal energy `Ei`. This is a numerical (scheme) viscosity, distinct
+  from the physical ion-neutral drag (A7/R4); the model carries no physical ion
+  viscous stress $\nabla\!\cdot\pi$.
+- a kinetic-energy-preserving pressure-work discretization, `-u dM_press` per
+  species, replacing `-p_s \nabla\!\cdot u`.
+
+The signal speed used by the Rusanov dissipation and the CFL is the exact
+linear acoustic speed of the implemented $\gamma=5/3$ two-species energy
+system, `c = sqrt((5/3)(Te+Ti)/m_i)` (selector
+`hyperbolic_wave_speed="adiabatic"`); the historical `sqrt(Te/m_i)`
+under-bounded it. The sonic front-filling flux is retired from the repaired
+stance (a mesh-vanishing diffusion). All three are default-off and the
+checkpoint golden is bit-exact; the deliberate repaired stance is selected only
+after the R3/R4 boundary and source ledgers close.

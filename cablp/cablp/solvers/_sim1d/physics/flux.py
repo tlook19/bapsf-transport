@@ -22,6 +22,26 @@ def ion_sound_speed(Te, mu):
     return v_ion_speed(Te, mu)
 
 
+def plasma_wave_speed(Te, Ti, mu, wave_speed="isothermal"):
+    """Return the plasma signal speed [cm/s] for the Rusanov a_max and CFL.
+
+    ``"isothermal"`` is the historical gamma=1 electron-pressure Bohm speed
+    ``sqrt(Te/m_i)`` used by both the Rusanov dissipation and the plasma CFL;
+    this branch is a bit-exact passthrough of ``ion_sound_speed``.
+    ``"adiabatic"`` is the exact linear acoustic speed of the implemented
+    gamma=5/3 two-species ideal-gas energy system,
+    ``sqrt((5/3)(Te+Ti)/m_i)`` -- the R2 spectral-radius repair (audit A3),
+    which also restores the wave bound Rusanov positivity relies on.
+    """
+    if wave_speed == "isothermal":
+        return ion_sound_speed(Te, mu)
+    if wave_speed == "adiabatic":
+        return v_ion_speed(Te + Ti, mu, gamma=5.0 / 3.0)
+    raise ValueError(
+        f"wave_speed must be 'isothermal' or 'adiabatic' (got {wave_speed!r})"
+    )
+
+
 def physical_fluxes(state, derived):
     """Return cell-centered physical fluxes for the conservative plasma fields."""
     return PlasmaFaceFluxes1D(
@@ -33,11 +53,15 @@ def physical_fluxes(state, derived):
 
 
 def rusanov_fluxes(
-    state, floors, ion_mass_g, mu, geometry, active_plasma_topology=False
+    state, floors, ion_mass_g, mu, geometry, active_plasma_topology=False,
+    wave_speed="isothermal", energy_consistent=False,
 ):
     """Build closed-boundary Rusanov fluxes for plasma conservative variables."""
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
-    raw = _rusanov_raw_faces(state, derived, mu, geometry)
+    raw = _rusanov_raw_faces(
+        state, derived, mu, geometry, wave_speed=wave_speed,
+        energy_consistent=energy_consistent,
+    )
     return _apply_face_conditions(
         raw,
         geometry,
@@ -46,7 +70,10 @@ def rusanov_fluxes(
     )
 
 
-def _rusanov_raw_faces(state, derived, mu, geometry):
+def _rusanov_raw_faces(
+    state, derived, mu, geometry, wave_speed="isothermal",
+    energy_consistent=False,
+):
     """Return interior Rusanov faces *before* transmission or wall conditions.
 
     Kept separate because the intercepted (blocked) part of the raw flux is what
@@ -60,7 +87,7 @@ def _rusanov_raw_faces(state, derived, mu, geometry):
     face_Ee = np.zeros(cells + 1, dtype=float)
     face_Ei = np.zeros(cells + 1, dtype=float)
 
-    cs = ion_sound_speed(derived.Te, mu)
+    cs = plasma_wave_speed(derived.Te, derived.Ti, mu, wave_speed)
     amax = np.maximum(
         np.abs(derived.u[:-1]) + cs[:-1],
         np.abs(derived.u[1:]) + cs[1:],
@@ -69,9 +96,21 @@ def _rusanov_raw_faces(state, derived, mu, geometry):
     face_n[1:-1] = _rusanov_face(
         cell_flux.n[:-1], cell_flux.n[1:], state.n[:-1], state.n[1:], amax
     )
-    face_M[1:-1] = _rusanov_face(
-        cell_flux.M[:-1], cell_flux.M[1:], state.M[:-1], state.M[1:], amax
-    )
+    if energy_consistent:
+        # Kinetic-energy-preserving convective momentum flux (Jameson 2008):
+        # the convective part {u}{M} = 0.25(u_L+u_R)(M_L+M_R) replaces the
+        # divergence-form 0.5(M_L u_L + M_R u_R). The pressure {p} and the
+        # Rusanov dissipation are unchanged. This makes the discrete advective
+        # kinetic energy conserved; the R2 energy-correction term then closes
+        # the total-energy identity (deposit + KEP pressure work).
+        u = derived.u
+        conv = 0.25 * (u[:-1] + u[1:]) * (state.M[:-1] + state.M[1:])
+        pbar = 0.5 * (derived.p[:-1] + derived.p[1:])
+        face_M[1:-1] = conv + pbar - 0.5 * amax * (state.M[1:] - state.M[:-1])
+    else:
+        face_M[1:-1] = _rusanov_face(
+            cell_flux.M[:-1], cell_flux.M[1:], state.M[:-1], state.M[1:], amax
+        )
     face_Ee[1:-1] = _rusanov_face(
         cell_flux.Ee[:-1], cell_flux.Ee[1:], state.Ee[:-1], state.Ee[1:], amax
     )
@@ -237,6 +276,8 @@ def plasma_flux_rhs(
     include_front=True,
     alpha_front=1.0,
     active_plasma_topology=False,
+    wave_speed="isothermal",
+    energy_consistent=False,
 ):
     """Return finite-volume RHS from conservative plasma face fluxes."""
     flux_terms = plasma_flux_rhs_terms(
@@ -248,6 +289,8 @@ def plasma_flux_rhs(
         include_front=include_front,
         alpha_front=alpha_front,
         active_plasma_topology=active_plasma_topology,
+        wave_speed=wave_speed,
+        energy_consistent=energy_consistent,
     )
     return _add_state_rhs(
         flux_terms["plasma_advective_flux"],
@@ -265,6 +308,8 @@ def plasma_flux_rhs_terms(
     alpha_front=1.0,
     alpha_isat=np.exp(-0.5),
     active_plasma_topology=False,
+    wave_speed="isothermal",
+    energy_consistent=False,
 ):
     """Return separately named conservative RHS terms from plasma face fluxes."""
     rusanov = rusanov_fluxes(
@@ -274,6 +319,8 @@ def plasma_flux_rhs_terms(
         mu=mu,
         geometry=geometry,
         active_plasma_topology=active_plasma_topology,
+        wave_speed=wave_speed,
+        energy_consistent=energy_consistent,
     )
     front = _zero_fluxes(geometry.cells)
     if include_front:

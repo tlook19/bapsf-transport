@@ -10,7 +10,7 @@ from ..physics.energy import (
     electron_ion_exchange_rhs,
     ion_charge_exchange_rhs,
 )
-from ..physics.flux import ion_sound_speed, plasma_flux_rhs
+from ..physics.flux import ion_sound_speed, plasma_flux_rhs, plasma_wave_speed
 from ..physics.neutrals import neutral_exchange_rhs, neutral_source_sink_rhs
 from ..physics.reactions import reaction_rhs
 from ..physics.sources import (
@@ -76,6 +76,7 @@ def suggest_timestep(
     alpha_front=1.0,
     plasma_active=None,
     active_plasma_topology=False,
+    wave_speed="isothermal",
 ):
     """Return a bounded explicit timestep and diagnostics."""
     if dt_min <= 0.0:
@@ -94,6 +95,7 @@ def suggest_timestep(
             geometry=geometry,
             cfl=cfl,
             plasma_active=plasma_active,
+            wave_speed=wave_speed,
         ),
         "front_density": front_density_timestep(
             state=state,
@@ -214,13 +216,14 @@ def suggest_timestep(
 
 
 def plasma_cfl_timestep(
-    state, floors, ion_mass_g, mu, geometry, cfl=0.4, plasma_active=None
+    state, floors, ion_mass_g, mu, geometry, cfl=0.4, plasma_active=None,
+    wave_speed="isothermal",
 ):
     """Return the plasma wave CFL timestep [s]."""
     if cfl <= 0.0:
         raise ValueError(f"cfl must be positive (got {cfl})")
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
-    cs = ion_sound_speed(derived.Te, mu)
+    cs = plasma_wave_speed(derived.Te, derived.Ti, mu, wave_speed)
     face_speed = 0.5 * (
         np.abs(derived.u[:-1])
         + np.abs(derived.u[1:])

@@ -2730,6 +2730,7 @@ def main():
         "plasma_front_flux",
         "boundary_absorption",
         "pressure_work",
+        "hyperbolic_energy_correction",
         "ei_exchange",
         "ionization_energy_cost",
         "electron_ion_cooling",

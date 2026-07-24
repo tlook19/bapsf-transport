@@ -251,3 +251,30 @@ ADF11 `Te` bounds, active-cell/volume below-grid fractions versus time, active
 minimum `Te`, and first whole-run/afterglow crossings. Plotting tools use the
 claim-port crossing for a vertical dashed afterglow-validity marker rather
 than stopping on an unrelated cold cell.
+
+## R2 conservative hyperbolic core (2026-07-24)
+
+Two default-off selectors make the plasma hyperbolic update discretely
+total-energy conservative; the checkpoint golden pins the old stance and stays
+bit-exact.
+
+- `hyperbolic_wave_speed`: `"isothermal"` (default, `sqrt(Te/m_i)`) or
+  `"adiabatic"` (`sqrt((5/3)(Te+Ti)/m_i)`, the exact spectral radius of the
+  γ=5/3 two-species system). It sets the Rusanov `a_max` and the plasma CFL —
+  the dissipation strength and stability bound, not the physical wave speed,
+  which the pressure flux already sets.
+- `hyperbolic_energy_consistent`: replaces the convective momentum flux with
+  the kinetic-energy-preserving `{u}{M}` form (Jameson 2008), and adds the
+  `hyperbolic_energy_correction` RHS term that deposits the Rusanov `(n,M)`
+  numerical kinetic-energy dissipation into `Ei` and applies a KEP pressure-work
+  discretization. With it on, `Σ V (K+Ee+Ei)` is conserved by the semi-discrete
+  flux + pressure-work operator to machine precision; explicit SSPRK2 leaves an
+  `O(Δt²)` time-integration drift of the nonlinear kinetic energy (verified by
+  Δt refinement).
+
+The sonic `front_flux` is retired from the repaired stance: its L1 transport
+activity vanishes under mesh refinement (a density diffusion with `D ~ c_s·dz`
+layered on top of Rusanov's own). Rusanov/LLF is retained; a contact-restoring
+(HLLC) or higher-order (MUSCL) scheme is a deferred follow-up gated on the G7
+numerical-diffusion evidence. The pre-registered gate suite G1–G7 lives in
+`scripts/verify_sim1d_r2_hyperbolic.py`.

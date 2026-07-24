@@ -3,7 +3,7 @@ import numpy as np
 from cablp.funcs._cross import charge_ex_react
 from cablp.vars._cons import ev_to_erg, kb_cgs
 
-from .flux import ion_sound_speed
+from .flux import ion_sound_speed, plasma_wave_speed, _flux_divergence
 from ..core.state import ConservativeState1D, derive_state
 
 
@@ -47,6 +47,102 @@ def pressure_work_rhs(
         M=zeros.copy(),
         Ee=-float(electron_scale) * derived.pe * div_u,
         Ei=-float(ion_scale) * derived.pi * div_u,
+    )
+
+
+def _pressure_flux_divergence(p, geometry, active_plasma_topology):
+    """Divergence of the momentum pressure flux {p} for one species pressure.
+
+    Interior faces carry the arithmetic-mean pressure ``0.5*(p_L+p_R)``; closed
+    faces carry the live-side cell pressure, matching
+    ``flux._apply_plasma_walls`` for the momentum row. Transmission is applied on
+    partially blocked (anode-mesh) faces.
+    """
+    p = np.asarray(p, dtype=float)
+    cells = geometry.cells
+    face = np.zeros(cells + 1, dtype=float)
+    face[1:-1] = 0.5 * (p[:-1] + p[1:])
+    face = face * np.asarray(geometry.plasma_transmission, dtype=float)
+    dead = ~np.asarray(geometry.plasma_active, dtype=bool)
+    for f in np.flatnonzero(~np.asarray(geometry.plasma_open, dtype=bool)):
+        f = int(f)
+        if active_plasma_topology:
+            live = int(geometry.plasma_face_live_cell[f])
+            face[f] = 0.0 if live < 0 else p[live]
+        else:
+            left, right = f - 1, f
+            live_is_right = left < 0 or (right < cells and not dead[right])
+            live = right if live_is_right else left
+            face[f] = p[live]
+    return _flux_divergence(face, geometry)
+
+
+def hyperbolic_energy_correction_rhs(
+    state,
+    floors,
+    ion_mass_g,
+    mu,
+    geometry,
+    wave_speed="isothermal",
+    active_plasma_topology=False,
+    electron_scale=1.0,
+    ion_scale=1.0,
+):
+    """Return the R2 kinetic-energy-preserving energy-consistency correction.
+
+    Added on top of the plasma advective flux and the ``-p div u`` pressure
+    work, this term (i) deposits the Rusanov ``(n, M)`` numerical kinetic-energy
+    dissipation into the ion internal energy and (ii) converts the electron and
+    ion pressure work from ``-p_s div u`` to the kinetic-energy-preserving
+    ``-u dM_press_s`` form. Combined with the KEP convective momentum flux
+    (``flux._rusanov_raw_faces(energy_consistent=True)``) the flux plus
+    pressure-work operator then conserves the closed-domain total plasma energy
+    ``K + Ee + Ei`` to machine precision. Off-path callers never build it, so
+    the historical golden stays bit-exact.
+    """
+    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
+    u = derived.u
+    cells = geometry.cells
+    n = np.asarray(state.n, dtype=float)
+    M = np.asarray(state.M, dtype=float)
+
+    cs = plasma_wave_speed(derived.Te, derived.Ti, mu, wave_speed)
+    amax = np.maximum(np.abs(u[:-1]) + cs[:-1], np.abs(u[1:]) + cs[1:])
+    open_faces = np.asarray(geometry.plasma_open, dtype=bool)
+    transmission = np.asarray(geometry.plasma_transmission, dtype=float)
+
+    def _dissipative_divergence(field):
+        face = np.zeros(cells + 1, dtype=float)
+        face[1:-1] = -0.5 * amax * (field[1:] - field[:-1])
+        face = face * transmission
+        face[~open_faces] = 0.0
+        return _flux_divergence(face, geometry)
+
+    dn_diss = _dissipative_divergence(n)
+    dM_diss = _dissipative_divergence(M)
+    dK_diss = u * dM_diss - 0.5 * ion_mass_g * u**2 * dn_diss
+
+    dK_press_e = u * _pressure_flux_divergence(
+        derived.pe, geometry, active_plasma_topology
+    )
+    dK_press_i = u * _pressure_flux_divergence(
+        derived.pi, geometry, active_plasma_topology
+    )
+
+    div_u = velocity_divergence(
+        state, floors, ion_mass_g, geometry,
+        active_plasma_topology=active_plasma_topology,
+    )
+
+    zeros = np.zeros(cells, dtype=float)
+    d_Ee = float(electron_scale) * (derived.pe * div_u - dK_press_e)
+    d_Ei = float(ion_scale) * (derived.pi * div_u - dK_press_i) - dK_diss
+    return ConservativeState1D(
+        n=zeros.copy(),
+        nn=zeros.copy(),
+        M=zeros.copy(),
+        Ee=d_Ee,
+        Ei=d_Ei,
     )
 
 
