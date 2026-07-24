@@ -167,6 +167,13 @@ def _shared_grid_tables():
     return axes, tables
 
 
+def he_rate_temperature_range_eV():
+    """Return the exact shared He ADF11 temperature-grid bounds [eV]."""
+    (log_ne, log_te), _ = _shared_grid_tables()
+    del log_ne
+    return float(10.0 ** log_te[0]), float(10.0 ** log_te[-1])
+
+
 def he_rates(ne_cm3, Te_eV, quantities, low_te_extension=False):
     """Fused lookup of several He coefficients at one (ne, Te).
 

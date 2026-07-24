@@ -21,6 +21,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from baseline_sim1d import build_baseline_config
+from cablp.funcs._adas import he_rate_temperature_range_eV
 from cablp.solvers._sim1d import LAPDSim1D
 from cablp.solvers._sim1d.core.geometry import PLASMA_DEAD_ROLES
 from cablp.vars._cons import ev_to_erg
@@ -98,6 +99,14 @@ def _phase_lines(axes) -> None:
         ax.grid(alpha=0.2)
 
 
+def _first_afterglow_low_te_ms(data, indices) -> float:
+    te_min_eV, _ = he_rate_temperature_range_eV()
+    afterglow = np.asarray(data["phase"]) == "afterglow"
+    below = np.any(np.asarray(data["Te"])[:, indices] < te_min_eV, axis=1)
+    crossing = np.flatnonzero(afterglow & below)
+    return float(data["time_ms"][crossing[0]]) if crossing.size else np.nan
+
+
 def _plot_timeseries(data):
     t = data["time_ms"]
     z = np.asarray(data["geometry"].z_cm, dtype=float)
@@ -141,6 +150,21 @@ def _plot_timeseries(data):
     for ax in axes.ravel():
         ax.legend(frameon=False, fontsize=8)
     _phase_lines(axes)
+    low_te_time = _first_afterglow_low_te_ms(data, idx)
+    if np.isfinite(low_te_time):
+        for ax in axes.ravel():
+            ax.axvline(low_te_time, color="C3", lw=1.1, ls="--", alpha=0.8)
+        axes[0, 1].text(
+            low_te_time,
+            0.98,
+            r"$T_e$ below ADF11 grid",
+            transform=axes[0, 1].get_xaxis_transform(),
+            rotation=90,
+            ha="right",
+            va="top",
+            color="C3",
+            fontsize=8,
+        )
     axes[0, 0].text(
         0.01,
         0.97,

@@ -1,10 +1,12 @@
 """Public API for the conservative axial 1D LAPD solver package."""
 
 from .core.config import (
+    config_manifest,
     default_config,
     input_dict_template_1d,
     input_flags_template_1d,
     load_config,
+    resolve_config,
 )
 from .solver import (
     BreakdownError,
@@ -22,10 +24,12 @@ __all__ = [
     "ProgressPrinter1D",
     "SimulationProgress1D",
     "TimestepRejectionError",
+    "config_manifest",
     "default_config",
     "input_dict_template_1d",
     "input_flags_template_1d",
     "load_config",
     "load_result_hdf5",
+    "resolve_config",
     "summarize_result",
 ]

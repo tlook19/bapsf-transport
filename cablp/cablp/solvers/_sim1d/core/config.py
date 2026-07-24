@@ -28,8 +28,12 @@ def initial_condition_defaults():
         "ne0": 1e9,
         "nn0": 1e9,
         "Tn_fit": 0.1,
-        "Te0": 0.1,
-        "Ti0": 0.1,
+        # Repaired R1 startup stance: electrons begin just above the exact
+        # bundled He ADF11 edge (~0.200092 eV), while ions carry one standard
+        # 25% timestep-margin above the unchanged numerical floor. The latter
+        # is a provisional seed, not a neutral-temperature assertion.
+        "Te0": 0.21,
+        "Ti0": 0.125,
         "u0": 0.0,
     }
 
@@ -558,6 +562,13 @@ def fudge_factor_defaults():
         Surface-loss area multiplier for the source boundary cell.
     end_surface_area_scale:
         Surface-loss area multiplier for the end boundary cell.
+    b_anode_collection:
+        Multiplier on the resolved anode collection sink. This was formerly
+        available only through an unregistered ``dict.get`` fallback.
+    b_anode_advective_block:
+        Fraction of the anode face treated as blocked by the mesh for
+        advective transport. This was formerly available only through an
+        unregistered ``dict.get`` fallback.
     """
     return {
         "alpha_front": 1.0,
@@ -606,6 +617,8 @@ def fudge_factor_defaults():
         "alpha_isat": 0.6065306597126334,
         "source_surface_area_scale": 1.8,
         "end_surface_area_scale": 1.0,
+        "b_anode_collection": 1.0,
+        "b_anode_advective_block": 0.0,
     }
 
 
@@ -1019,6 +1032,10 @@ def timestep_defaults():
     max_energy_step_fraction:
         Optional accepted-step thermal-energy fractional-change guard. Zero
         disables it.
+    drag_dt_fraction:
+        Maximum ion-neutral drag relaxation fraction per explicit step.
+        This was formerly available only through an unregistered
+        ``dict.get`` fallback.
     """
     return {
         "cfl": 0.4,
@@ -1036,26 +1053,37 @@ def timestep_defaults():
         "max_density_step_fraction": 0.0,
         "max_neutral_step_fraction": 0.0,
         "max_energy_step_fraction": 0.0,
+        "drag_dt_fraction": 0.5,
     }
+
+
+_PARAMETER_DEFAULT_GROUPS = (
+    initial_condition_defaults,
+    geometry_defaults,
+    floor_defaults,
+    neutral_source_defaults,
+    timing_defaults,
+    output_defaults,
+    model_mode_defaults,
+    fudge_factor_defaults,
+    cathode_defaults,
+    physics_fit_defaults,
+    timestep_defaults,
+)
 
 
 def build_input_dict_template_1d():
     """Compose the public flat input-default dictionary from grouped defaults."""
     input_dict = {}
-    for defaults in (
-        initial_condition_defaults,
-        geometry_defaults,
-        floor_defaults,
-        neutral_source_defaults,
-        timing_defaults,
-        output_defaults,
-        model_mode_defaults,
-        fudge_factor_defaults,
-        cathode_defaults,
-        physics_fit_defaults,
-        timestep_defaults,
-    ):
-        input_dict.update(defaults())
+    for defaults in _PARAMETER_DEFAULT_GROUPS:
+        group = defaults()
+        duplicate = set(input_dict).intersection(group)
+        if duplicate:
+            raise RuntimeError(
+                f"duplicate LAPDSim1D defaults in {defaults.__name__}: "
+                f"{sorted(duplicate)}"
+            )
+        input_dict.update(group)
     return input_dict
 
 
@@ -1065,6 +1093,11 @@ input_dict_template_1d = build_input_dict_template_1d()
 input_flags_template_1d = {
     "Plasma": True,
     "TwinCathode": False,
+    # R1 repaired live stance. The historical checkpoint golden explicitly
+    # pins these selectors off; new constructions use typed plasma topology
+    # and reject raw invalid stages before any floor projection.
+    "active_plasma_topology": True,
+    "raw_stage_validation": True,
     # Retained as a stale-config guard through D2; False raises at construction.
     "resolved_boundaries": True,
     # Provisional CAD-pending end-vessel / magnetic-flare geometry. Presence
@@ -1141,14 +1174,68 @@ def load_config(path):
     """
     with open(path, "rb") as f:
         raw = tomllib.load(f)
-    input_dict = {**input_dict_template_1d, **raw.get("params", {})}
-    input_flags = {**input_flags_template_1d, **raw.get("flags", {})}
-    return input_dict, input_flags
+    return resolve_config(raw.get("params", {}), raw.get("flags", {}))
 
 
 def default_config():
     """Return copies of the default 1D input dictionary and flags."""
     return dict(input_dict_template_1d), dict(input_flags_template_1d)
+
+
+def resolve_config(params=None, flags=None):
+    """Resolve caller overrides against the one authoritative default registry.
+
+    Unknown keys fail at this boundary so misspelled or retired campaign
+    controls cannot survive as silent metadata-only settings.
+    """
+    supplied_params = {} if params is None else dict(params)
+    supplied_flags = {} if flags is None else dict(flags)
+    if "Lz" in supplied_params:
+        raise ValueError(
+            "Lz belongs to the geometry retired at DEPRECATION_PLAN D2; "
+            "use the resolved geometry, or reproduce it at tag "
+            "legacy-final-2026-07-22"
+        )
+    unknown_params = sorted(set(supplied_params) - set(input_dict_template_1d))
+    unknown_flags = sorted(set(supplied_flags) - set(input_flags_template_1d))
+    if unknown_params or unknown_flags:
+        details = []
+        if unknown_params:
+            details.append(f"params={unknown_params}")
+        if unknown_flags:
+            details.append(f"flags={unknown_flags}")
+        raise ValueError(
+            "unknown LAPDSim1D configuration keys (silent/inert controls are "
+            f"forbidden): {', '.join(details)}"
+        )
+    resolved_params = dict(input_dict_template_1d)
+    resolved_params.update(supplied_params)
+    resolved_flags = dict(input_flags_template_1d)
+    resolved_flags.update(supplied_flags)
+    return resolved_params, resolved_flags
+
+
+def config_manifest():
+    """Return a machine-readable manifest of every registered default."""
+    parameters = {}
+    for defaults in _PARAMETER_DEFAULT_GROUPS:
+        for name, value in defaults().items():
+            parameters[name] = {
+                "default": value,
+                "source": defaults.__name__,
+            }
+    flags = {
+        name: {
+            "default": value,
+            "source": "input_flags_template_1d",
+        }
+        for name, value in input_flags_template_1d.items()
+    }
+    return {
+        "schema": "lapdsim1d-config-manifest-v1",
+        "parameters": parameters,
+        "flags": flags,
+    }
 
 
 def resolve_nn0(input_dict, input_flags):

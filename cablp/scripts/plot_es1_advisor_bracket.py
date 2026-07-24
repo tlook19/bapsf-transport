@@ -17,6 +17,8 @@ from pathlib import Path
 import h5py
 import numpy as np
 
+from cablp.funcs._adas import he_rate_temperature_range_eV
+
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_OVERLAY = SCRIPT_DIR / "data" / "es1_sim1d_overlay.npz"
@@ -79,6 +81,15 @@ def port_index(run: Run, port_index_: int) -> int:
 
 def window_mask(time_ms: np.ndarray, lo: float, hi: float) -> np.ndarray:
     return (time_ms >= lo) & (time_ms <= hi)
+
+
+def first_low_te_time_ms(run: Run, port_index_: int, afterglow_start_ms=20.0):
+    """Return the first post-drive port sample below the ADF11 Te grid."""
+    te_min_eV, _ = he_rate_temperature_range_eV()
+    iz = port_index(run, port_index_)
+    below = (run.time_ms >= afterglow_start_ms) & (run.Te[:, iz] < te_min_eV)
+    indices = np.flatnonzero(below)
+    return float(run.time_ms[indices[0]]) if indices.size else np.nan
 
 
 def te_total_sigma(te: np.ndarray, sem: np.ndarray) -> np.ndarray:
@@ -309,6 +320,15 @@ def main(argv=None) -> int:
             ref = float(np.interp(20.0, run.time_ms, proxy))
             mask = window_mask(run.time_ms, 20.0, 25.0)
             ax.semilogy(run.time_ms[mask], np.maximum(proxy[mask] / ref, 1e-4), color=color, ls=ls, label=run.label)
+            low_te_time = first_low_te_time_ms(run, p)
+            if np.isfinite(low_te_time):
+                ax.axvline(
+                    low_te_time,
+                    color=color,
+                    ls="--",
+                    lw=1.2,
+                    alpha=0.75,
+                )
         t_exp = overlay["isat_decay_time_ms"]
         exp = overlay["isat_decay_mean_a"][p]
         sem = overlay["isat_decay_sem_a"][p]
@@ -321,6 +341,16 @@ def main(argv=None) -> int:
         ax.set_xlabel("time after breakdown [ms]")
         ax.set_ylabel(r"normalized $I_{sat}$ proxy")
         ax.text(0.04, 0.10, f"port {port}", transform=ax.transAxes, weight="bold")
+        ax.text(
+            0.98,
+            0.96,
+            "dashed: $T_e$ below ADF11 grid",
+            transform=ax.transAxes,
+            ha="right",
+            va="top",
+            fontsize=10,
+            color="0.35",
+        )
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="outside upper center", ncol=4, fontsize=14)
     generated.append(save_figure(fs, fig, args.output_dir, "es1-advisor-bracket-afterglow.png"))

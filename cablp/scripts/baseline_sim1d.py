@@ -60,6 +60,10 @@ from run_mechanism_ladder import ES_OPERATING  # noqa: E402
 # keeps its per-change runtime.
 BASELINE_PARAM_OVERRIDES = {
     **PRODUCTION_PARAM_OVERRIDES,
+    # Historical checkpoint seed. The repaired live defaults are intentionally
+    # different; this unchanged fixture remains an off-path regression anchor.
+    "Te0": 0.1,
+    "Ti0": 0.1,
     "V_bank": ES_OPERATING[1]["V_bank"],
     "cathode_solver_model": "current_driven",
     "beam_deposition_model": "csda",
@@ -76,6 +80,10 @@ BASELINE_PARAM_OVERRIDES = {
     "cathode_phiwf_clean_eV": 2.809,
     "cathode_cleaning_sigma_cm2": 3.5e-16,
     "cathode_cleaning_E_th_eV": 20.0,
+    # The committed fixture records "local". Pin that historical stance
+    # explicitly; R1e must not silently change a physical default to make an
+    # old result look like a floor-birth run.
+    "Te_birth_ionization": "local",
     "gas_puff_mode": "square",
     "S_gp": 3400,
     "L_parasitic_H": 8.1e-6,
@@ -85,6 +93,10 @@ BASELINE_PARAM_OVERRIDES = {
 # input_flags overrides.
 BASELINE_FLAG_OVERRIDES = {
     **PRODUCTION_FLAG_OVERRIDES,
+    # Historical R1-off stance, pinned so the checkpoint remains reproducible
+    # without making it the future production configuration.
+    "active_plasma_topology": False,
+    "raw_stage_validation": False,
     "resolved_boundaries": True,
 }
 # Run controls: None => LAPDSim1D defaults (adaptive dt, dynamic current-trigger

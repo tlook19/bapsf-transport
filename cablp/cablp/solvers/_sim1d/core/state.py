@@ -50,6 +50,18 @@ class DerivedState1D:
     p: np.ndarray
 
 
+def state_field_names(state):
+    """Return packed conservative field names in their exact row order."""
+    names = list(STATE_NAMES_1D)
+    if state.M_n is not None:
+        names.append(NEUTRAL_MOMENTUM_NAME)
+    if state.nn_a is not None:
+        names.append(NEUTRAL_ANNULUS_NAME)
+    if state.M_n_a is not None:
+        names.append(NEUTRAL_ANNULUS_MOMENTUM_NAME)
+    return tuple(names)
+
+
 def pack_state(
     state,
     neutral_momentum=None,

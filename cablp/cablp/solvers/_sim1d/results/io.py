@@ -14,6 +14,20 @@ RESULT_VERSION = "sim1d-hdf5-v1"
 
 def save_result_hdf5(path, result, params=None, flags=None):
     """Write a ``LAPDSim1D.run`` result namespace to an HDF5 file."""
+    result_params = getattr(result, "params", None)
+    result_flags = getattr(result, "flags", None)
+    if result_params is not None:
+        if params is not None and dict(params) != dict(result_params):
+            raise ValueError(
+                "params metadata differs from the constructed LAPDSim1D config"
+            )
+        params = result_params
+    if result_flags is not None:
+        if flags is not None and dict(flags) != dict(result_flags):
+            raise ValueError(
+                "flags metadata differs from the constructed LAPDSim1D config"
+            )
+        flags = result_flags
     path = Path(path)
     with h5py.File(path, "w") as h5:
         h5.attrs["format"] = RESULT_VERSION
@@ -76,6 +90,15 @@ def save_result_hdf5(path, result, params=None, flags=None):
             result.ion_energy_terms_W_cm3,
         )
         _write_field_arrays(h5.create_group("total_rhs"), result.total_rhs)
+        if hasattr(result, "floor_ledger"):
+            _write_field_arrays(
+                h5.create_group("floor_ledger"), result.floor_ledger
+            )
+        if hasattr(result, "atomic_rate_domain"):
+            _write_field_arrays(
+                h5.create_group("atomic_rate_domain"),
+                result.atomic_rate_domain,
+            )
         if hasattr(result, "phase_events"):
             _write_field_arrays(h5.create_group("phase_events"), result.phase_events)
         if hasattr(result, "timestep_rejection_events"):
@@ -147,6 +170,7 @@ def load_result_hdf5(path):
                 "plasma_volume_cm3",
                 "neutral_volume_cm3",
                 "volume_ratio",
+                "plasma_active",
             ),
         )
         geometry["cell_role"] = _read_string_array(h5["geometry/cell_role"])
@@ -158,6 +182,16 @@ def load_result_hdf5(path):
             **geometry,
             rhs_terms=_read_nested_fields(h5["rhs_terms"]),
             total_rhs=_read_field_arrays(h5["total_rhs"]),
+            floor_ledger=(
+                _read_field_arrays(h5["floor_ledger"])
+                if "floor_ledger" in h5
+                else {}
+            ),
+            atomic_rate_domain=(
+                _read_field_arrays(h5["atomic_rate_domain"])
+                if "atomic_rate_domain" in h5
+                else {}
+            ),
             phase_events=(
                 _read_field_arrays(h5["phase_events"])
                 if "phase_events" in h5
@@ -219,6 +253,7 @@ def _write_geometry(group, result):
         "plasma_volume_cm3",
         "neutral_volume_cm3",
         "volume_ratio",
+        "plasma_active",
     )
     _write_arrays(group, result, numeric_names)
     str_dtype = h5py.string_dtype(encoding="utf-8")

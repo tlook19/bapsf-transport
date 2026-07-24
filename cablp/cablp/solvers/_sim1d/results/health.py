@@ -7,9 +7,46 @@ import numpy as np
 def summarize_result(result):
     """Return lightweight health diagnostics for a saved sim1d trajectory."""
     finite_fields = _finite_fields(result)
-    plasma_inventory = _inventory(result.n, result.plasma_volume_cm3)
-    neutral_inventory = _inventory(result.nn, result.neutral_volume_cm3)
-    thermal_energy = _inventory(result.Ee + result.Ei, result.plasma_volume_cm3)
+    plasma_active = _plasma_active(result)
+    plasma_volume = np.asarray(result.plasma_volume_cm3, dtype=float) * plasma_active
+    plasma_inventory = _inventory(result.n, plasma_volume)
+    if hasattr(result, "nn_a"):
+        column_volume = np.asarray(result.plasma_volume_cm3, dtype=float)
+        annulus_volume = (
+            np.asarray(result.neutral_volume_cm3, dtype=float) - column_volume
+        )
+        neutral_column_inventory = _inventory(result.nn, column_volume)
+        neutral_annulus_inventory = _inventory(result.nn_a, annulus_volume)
+        neutral_inventory = (
+            neutral_column_inventory + neutral_annulus_inventory
+        )
+    else:
+        neutral_column_inventory = _inventory(
+            result.nn, result.neutral_volume_cm3
+        )
+        neutral_annulus_inventory = np.zeros_like(neutral_column_inventory)
+        neutral_inventory = neutral_column_inventory
+    thermal_energy = _inventory(result.Ee + result.Ei, plasma_volume)
+    neutral_momentum_column_inventory = np.zeros_like(neutral_inventory)
+    neutral_momentum_annulus_inventory = np.zeros_like(neutral_inventory)
+    if hasattr(result, "M_n"):
+        if hasattr(result, "M_n_a"):
+            neutral_momentum_column_inventory = _inventory(
+                result.M_n, result.plasma_volume_cm3
+            )
+            neutral_momentum_annulus_inventory = _inventory(
+                result.M_n_a,
+                np.asarray(result.neutral_volume_cm3, dtype=float)
+                - np.asarray(result.plasma_volume_cm3, dtype=float),
+            )
+        else:
+            neutral_momentum_column_inventory = _inventory(
+                result.M_n, result.neutral_volume_cm3
+            )
+    neutral_momentum_inventory = (
+        neutral_momentum_column_inventory
+        + neutral_momentum_annulus_inventory
+    )
     constraint_counts = Counter(
         diag.active_constraint for diag in getattr(result, "diagnostics", ())
     )
@@ -62,6 +99,11 @@ def summarize_result(result):
         Ti_max=float(np.max(result.Ti)) if result.Ti.size else np.nan,
         plasma_inventory=plasma_inventory,
         neutral_inventory=neutral_inventory,
+        neutral_column_inventory=neutral_column_inventory,
+        neutral_annulus_inventory=neutral_annulus_inventory,
+        neutral_momentum_inventory=neutral_momentum_inventory,
+        neutral_momentum_column_inventory=neutral_momentum_column_inventory,
+        neutral_momentum_annulus_inventory=neutral_momentum_annulus_inventory,
         total_particle_inventory=plasma_inventory + neutral_inventory,
         thermal_energy=thermal_energy,
         plasma_inventory_relative_drift=_relative_drift(plasma_inventory),
@@ -111,12 +153,26 @@ def _finite_fields(result):
         "pe",
         "pi",
         "p",
+        "M_n",
+        "u_n",
+        "nn_a",
+        "M_n_a",
+        "u_n_a",
     )
     return {
         name: bool(np.all(np.isfinite(np.asarray(getattr(result, name)))))
         for name in names
         if hasattr(result, name)
     }
+
+
+def _plasma_active(result):
+    if hasattr(result, "plasma_active"):
+        return np.asarray(result.plasma_active, dtype=bool)
+    roles = np.asarray(getattr(result, "cell_role", ()), dtype=object)
+    if roles.size:
+        return ~np.isin(roles, ("plenum", "obstruction"))
+    return np.ones(np.asarray(result.plasma_volume_cm3).shape, dtype=bool)
 
 
 def _inventory(density, volume):

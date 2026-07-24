@@ -20,6 +20,10 @@ equations these schemes discretize, see [`MODEL.md`](MODEL.md).
   (`area × flux`, `volume × density`) is tracked consistently.
 - **Floors**: density and temperature floors are enforced after every stage
   (`floor_state_vector` / `apply_state_floors`) to keep the state physical.
+  They are numerical admissibility limits, not initial conditions: the live
+  repaired seeds are `Te0=0.21 eV` and `Ti0=0.125 eV`, strictly above the
+  unchanged `0.1 eV` floors. A raw-validation config rejects floor-bound
+  initial temperatures at construction.
 
 ## Spatial discretization (finite volume)
 
@@ -188,6 +192,12 @@ physically-motivated candidate bounds, then clamps to `[dt_min, dt_max]`:
   field by more than a set fraction per step: surface loss, neutral exchange,
   neutral sources, reactions, energy exchange, electron cooling, ion
   charge-exchange, and (explicit path only) heat conduction.
+- **Resolved electrode/source margin** (`surface_loss` diagnostic key): with
+  raw-stage validation active, the combined cathode/sheath, anode collection,
+  and boundary absorption bundle is bounded against `n-n_floor` and the exact
+  conservative temperature margins
+  `Ee-3/2 n Te_floor` / `Ei-3/2 n Ti_floor`. The corresponding rates include
+  the change in floor energy when density changes.
 
 `TimestepDiagnostics` records every candidate, the `active_constraint` that set
 Δt, and per-step accept/reject bookkeeping.
@@ -201,6 +211,22 @@ state the step is **rejected and retried with a reduced Δt** (`retry_count`,
 unrecoverable breakdown conditions. Rejection events and constraint histories
 are stored for post-run diagnostics.
 
+The R1 `raw_stage_validation` repair additionally inspects both
+SSPRK candidates and implicit heat/neutral candidates *before* floors are
+applied. It covers `n`, `nn`, optional `nn_a`, `Ee`, and `Ei`; a failed
+candidate carries its raw rejection evidence but cannot mutate accepted state,
+circuit/surface caches, kinetic targets, time, or the cumulative floor ledger.
+Each accepted repair records the exact extensive debit in
+`floor_ledger`: plasma/neutral particles added and electron/ion energy added,
+using `V_p`, `V_col=V_p`, and `V_ann=V_m-V_p` as appropriate. Healthy focused
+five-/six-/seven-/eight-row trajectories have an exactly zero ledger.
+
+The repaired live stance selects raw-stage validation. Its resolved-source
+timestep candidate prevents the audited launch candidate from crossing a
+floor, while raw rejection remains the backstop. The unchanged checkpoint
+golden explicitly pins the historical selector-off path and remains bit-exact;
+no baseline was captured or updated.
+
 ## Output
 
 Results are written to HDF5 (`results/io.py`, format `sim1d-hdf5-v1`) including
@@ -209,3 +235,19 @@ time series, axial profiles, and per-step diagnostics. `results/compat.py` adds
 conservation drift (particle inventory, thermal energy). See
 `scripts/run_sim1d.py` (drive/save) and `scripts/plot_sim1d_run.py` (contour and
 time-slice plots).
+
+R1 makes `rhs_terms`, `total_rhs`, finiteness, and inventory output follow the
+actual packed five-/six-/seven-/eight-row state while retaining absent-dataset
+compatibility for older H5 files. Every run result also carries the exact
+constructed `params` and `flags`. `save_result_hdf5` writes those resolved
+values to `params_json`/`flags_json` and rejects caller metadata that differs
+from the constructed solver. `scripts/audit_sim1d_configs.py` verifies
+reviewed SHA-256 snapshots for the production golden and every config-complete
+campaign driver without running a campaign point.
+
+The optional HDF5 `atomic_rate_domain` group is written on new results and
+read as an empty mapping from older files. It contains the exact bundled He
+ADF11 `Te` bounds, active-cell/volume below-grid fractions versus time, active
+minimum `Te`, and first whole-run/afterglow crossings. Plotting tools use the
+claim-port crossing for a vertical dashed afterglow-validity marker rather
+than stopping on an unrelated cold cell.

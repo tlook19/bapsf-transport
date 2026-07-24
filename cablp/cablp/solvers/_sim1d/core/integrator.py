@@ -51,7 +51,14 @@ def _call_rhs(rhs_func, y, time):
     return np.asarray(rhs_func(y, time), dtype=float)
 
 
-def ssprk2_step(y0, dt, rhs_func, floor_func, time=None):
+def ssprk2_step(
+    y0,
+    dt,
+    rhs_func,
+    floor_func,
+    time=None,
+    raw_stage_func=None,
+):
     """Advance one explicit SSPRK2 step with stage-end floor enforcement.
 
     When ``time`` is given, the two Heun stages are evaluated at ``time`` and
@@ -66,11 +73,16 @@ def ssprk2_step(y0, dt, rhs_func, floor_func, time=None):
 
     y0 = np.asarray(y0, dtype=float)
     k0 = _call_rhs(rhs_func, y0, time)
-    y1 = floor_func(add_scaled_vector(y0, k0, dt))
+    y1_raw = add_scaled_vector(y0, k0, dt)
+    if raw_stage_func is not None:
+        raw_stage_func(y1_raw, "ssprk_stage_1")
+    y1 = floor_func(y1_raw)
 
     stage_time = None if time is None else float(time) + float(dt)
     k1 = _call_rhs(rhs_func, y1, stage_time)
     y2_raw = 0.5 * y0 + 0.5 * add_scaled_vector(y1, k1, dt)
+    if raw_stage_func is not None:
+        raw_stage_func(y2_raw, "ssprk_stage_2")
     return floor_func(y2_raw)
 
 

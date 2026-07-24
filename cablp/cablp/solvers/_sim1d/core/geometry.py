@@ -38,6 +38,12 @@ class Sim1DGeometry:
     plasma_face_area_cm2: np.ndarray
     neutral_face_area_cm2: np.ndarray
     neutral_face_hydraulic_radius_cm: np.ndarray
+    # Authoritative plasma topology derived once from typed cell roles.
+    # ``plasma_active`` is true only where plasma state/operators are live.
+    # ``plasma_face_live_cell`` gives the one active cell adjacent to a
+    # closed face, or -1 when that face bounds no active plasma.
+    plasma_active: np.ndarray
+    plasma_face_live_cell: np.ndarray
     plasma_open: np.ndarray
     plasma_absorbing: np.ndarray
     plasma_transmission: np.ndarray
@@ -633,6 +639,7 @@ def _assemble_geometry(
     neutral_face_hydraulic_radius_cm = _face_min(neutral_hydraulic_radius_cm)
 
     dead = np.asarray([role in PLASMA_DEAD_ROLES for role in cell_role], dtype=bool)
+    plasma_active = ~dead
     # Absorbing faces are the plasma-terminating surfaces: the whole cross-section
     # ends there, so the plasma goes sonic into the sheath and is neutralized
     # (plan §11 decision 3). They are a *refinement* of walls -- nothing passes
@@ -652,6 +659,19 @@ def _assemble_geometry(
         plasma_open[face] = False
         plasma_transmission[face] = 0.0
         heat_transmission[face] = 0.0
+    plasma_face_live_cell = np.full(cells + 1, -1, dtype=int)
+    for face in np.flatnonzero(~plasma_open):
+        adjacent = []
+        if face > 0 and plasma_active[face - 1]:
+            adjacent.append(face - 1)
+        if face < cells and plasma_active[face]:
+            adjacent.append(face)
+        if len(adjacent) > 1:
+            raise ValueError(
+                f"closed plasma face {face} has active cells on both sides"
+            )
+        if adjacent:
+            plasma_face_live_cell[face] = int(adjacent[0])
 
     # The anode mesh is plasma-open but partially blocking, and the three
     # transmissions are independent (§3). eta = 0 recovers a fully transparent
@@ -732,6 +752,8 @@ def _assemble_geometry(
         plasma_face_area_cm2=plasma_face_area_cm2,
         neutral_face_area_cm2=neutral_face_area_cm2,
         neutral_face_hydraulic_radius_cm=neutral_face_hydraulic_radius_cm,
+        plasma_active=plasma_active,
+        plasma_face_live_cell=plasma_face_live_cell,
         plasma_open=plasma_open,
         plasma_absorbing=plasma_absorbing,
         plasma_transmission=plasma_transmission,

@@ -27,6 +27,8 @@ ES_OPERATING = {
     4: {"V_bank": 99.0, "Ts_standby_K": 1972.0},
 }
 
+ELECTRON_BIRTH_POLICY = "floor"
+
 
 def main(argv=None):
     p = argparse.ArgumentParser()
@@ -118,6 +120,9 @@ def main(argv=None):
         "beam_anomalous_model": "quasilinear",
         "cathode_emission_profile": "gaussian",
         "cathode_warming_model": args.warming,
+        # Explicit campaign choice restored after the notebook override was
+        # omitted by 0451c97's shared-config migration.
+        "Te_birth_ionization": ELECTRON_BIRTH_POLICY,
     }
     if args.warming == "power_balance":
         extra.update({

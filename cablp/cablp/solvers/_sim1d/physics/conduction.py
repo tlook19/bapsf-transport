@@ -151,6 +151,7 @@ def heat_conduction_timestep_bound(
     heat_conduction=True,
     ln_lambda_min=1.0,
     heat_dt_fraction=0.25,
+    active_cells=None,
 ):
     """Return an explicit diffusion timestep bound for heat conduction."""
     if heat_dt_fraction <= 0.0:
@@ -174,6 +175,7 @@ def heat_conduction_timestep_bound(
         * float(b_epara),
         geometry=geometry,
         fraction=heat_dt_fraction,
+        active_cells=active_cells,
     )
     dt_i = _species_heat_timestep(
         capacity=capacity,
@@ -188,6 +190,7 @@ def heat_conduction_timestep_bound(
         * float(b_ipara),
         geometry=geometry,
         fraction=heat_dt_fraction,
+        active_cells=active_cells,
     )
     return min(dt_e, dt_i)
 
@@ -364,7 +367,9 @@ def _picard_converged(new, old, tol):
     return bool(np.max(np.abs(new - old)) <= tol * scale)
 
 
-def _species_heat_timestep(capacity, conductivity, geometry, fraction):
+def _species_heat_timestep(
+    capacity, conductivity, geometry, fraction, active_cells=None
+):
     face_coeff = np.zeros(geometry.cells + 1, dtype=float)
     k_face = 0.5 * (conductivity[:-1] + conductivity[1:])
     face_coeff[1:-1] = (
@@ -377,6 +382,8 @@ def _species_heat_timestep(capacity, conductivity, geometry, fraction):
         geometry.plasma_volume_cm3 * capacity
     )
     active = cell_coeff > 0.0
+    if active_cells is not None:
+        active &= np.asarray(active_cells, dtype=bool)
     if not np.any(active):
         return np.inf
     return float(fraction / np.max(cell_coeff[active]))

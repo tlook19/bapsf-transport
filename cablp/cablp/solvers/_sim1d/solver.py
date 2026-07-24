@@ -9,9 +9,8 @@ import numpy as np
 
 from .core.config import (
     default_config,
-    input_dict_template_1d,
-    input_flags_template_1d,
     load_config,
+    resolve_config,
     resolve_nn0,
 )
 from .core.geometry import (
@@ -33,6 +32,7 @@ from .core.state import (
     conservative_from_primitives,
     derive_state,
     pack_state,
+    state_field_names,
     unpack_state,
 )
 from .core.timestep import suggest_timestep
@@ -104,7 +104,7 @@ from .physics.sources import (
     pressure_work_rhs,
 )
 from .results.compat import add_sim3_compat_aliases
-from cablp.funcs._adas import he_rates
+from cablp.funcs._adas import he_rate_temperature_range_eV, he_rates
 from cablp.funcs._cross import charge_ex_react
 from cablp.vars._cons import I_Ry, I_ion, ev_to_erg, kb_cgs, m_He_cgs, m_p_cgs
 
@@ -147,6 +147,65 @@ class StepAttempt1D:
     dt: float
     operator_split: bool
     solver_cache: SimpleNamespace
+    floor_ledger: dict
+    raw_rejection_reason: str = ""
+    raw_rejection_detail: dict | None = None
+
+
+class _RawStageError(ValueError):
+    def __init__(self, y, stage, reason, detail):
+        super().__init__(f"{stage}: {reason}")
+        self.y = np.asarray(y, dtype=float).copy()
+        self.stage = str(stage)
+        self.reason = str(reason)
+        self.detail = dict(detail)
+
+
+def _atomic_rate_domain(result):
+    """Return saved active-plasma coverage of the bundled He ADF11 grid."""
+    te_min_eV, te_max_eV = he_rate_temperature_range_eV()
+    atomic_rate_model = str(
+        getattr(result, "params", {}).get("atomic_rate_model", "adas")
+    )
+    Te = np.asarray(result.Te, dtype=float)
+    active = np.asarray(result.plasma_active, dtype=bool)
+    time = np.asarray(result.time, dtype=float)
+    phase = np.asarray(result.phase, dtype=str)
+    if atomic_rate_model != "adas":
+        count_fraction = np.full(time.shape, np.nan, dtype=float)
+        volume_fraction = np.full(time.shape, np.nan, dtype=float)
+        active_min = np.full(time.shape, np.nan, dtype=float)
+    elif not np.any(active):
+        count_fraction = np.zeros(time.shape, dtype=float)
+        volume_fraction = np.zeros(time.shape, dtype=float)
+        active_min = np.full(time.shape, np.nan, dtype=float)
+    else:
+        active_Te = Te[:, active]
+        below = active_Te < te_min_eV
+        count_fraction = np.mean(below, axis=1)
+        volumes = np.asarray(result.plasma_volume_cm3, dtype=float)[active]
+        volume_fraction = np.sum(below * volumes[None, :], axis=1) / np.sum(
+            volumes
+        )
+        active_min = np.min(active_Te, axis=1)
+
+    below_any = count_fraction > 0.0
+    below_afterglow = below_any & (phase == "afterglow")
+
+    def first_time(mask):
+        indices = np.flatnonzero(mask)
+        return float(time[indices[0]]) if indices.size else np.nan
+
+    return {
+        "table_applies": atomic_rate_model == "adas",
+        "table_Te_min_eV": te_min_eV,
+        "table_Te_max_eV": te_max_eV,
+        "active_cell_fraction_below": count_fraction,
+        "active_volume_fraction_below": volume_fraction,
+        "active_Te_min_eV": active_min,
+        "first_below_time_s": first_time(below_any),
+        "first_afterglow_below_time_s": first_time(below_afterglow),
+    }
 
 
 @dataclass(frozen=True)
@@ -465,14 +524,13 @@ class LAPDSim1D:
 
     def __init__(
         self,
-        input_dict=input_dict_template_1d,
-        input_flags=input_flags_template_1d,
+        input_dict=None,
+        input_flags=None,
         progress_callback=None,
         progress_tracker=None,
         progress_interval_s=1.0e-4,
     ):
-        self._input_dict = dict(input_dict)
-        self._flags = dict(input_flags)
+        self._input_dict, self._flags = resolve_config(input_dict, input_flags)
         self._progress_callback = progress_callback
         self._progress_tracker = progress_tracker
         self._progress_interval_s = (
@@ -486,6 +544,13 @@ class LAPDSim1D:
             self._I_ion,
         ) = self._gas_constants(self._gas_type)
         self._geometry = build_geometry(self._input_dict, self._flags)
+        self._active_plasma_topology = bool(
+            self._flags.get("active_plasma_topology", False)
+        )
+        self._raw_stage_validation = bool(
+            self._flags.get("raw_stage_validation", False)
+        )
+        self._validate_r1_configuration_presence()
         exchange_model = str(
             self._input_dict.get("neutral_exchange_model", "knudsen")
         )
@@ -640,7 +705,7 @@ class LAPDSim1D:
         )
         if self._recombination_energy_return:
             if (
-                str(self._input_dict.get("atomic_rate_model", "janev"))
+                str(self._input_dict.get("atomic_rate_model", "adas"))
                 != "adas"
             ):
                 raise ValueError(
@@ -660,8 +725,14 @@ class LAPDSim1D:
             "Te": float(self._input_dict["Te_floor"]),
             "Ti": float(self._input_dict["Ti_floor"]),
         }
-        self._state = self._initial_state()
-        self._state = apply_state_floors(self._state, self._floors, self._ion_mass_g)
+        self._floor_ledger = self._empty_floor_ledger()
+        initial_raw = self._initial_state()
+        self._state = apply_state_floors(
+            initial_raw, self._floors, self._ion_mass_g
+        )
+        self._accumulate_floor_ledger(
+            self._floor_additions(initial_raw, self._state)
+        )
         self._init_sample_smoothing()
         self._y = pack_state(self._state)
         self._derived = derive_state(self._state, self._floors, self._ion_mass_g)
@@ -803,6 +874,87 @@ class LAPDSim1D:
         if self._flags.get("debug_checks", False):
             assert_finite_state(self._state, self._derived)
 
+    def _validate_r1_configuration_presence(self):
+        """Reject R1-audited controls that would otherwise be silent no-ops."""
+        frozen_controls = {
+            "source_surface_loss": (
+                bool(self._flags.get("source_surface_loss", True)),
+                True,
+            ),
+            "end_surface_loss": (
+                bool(self._flags.get("end_surface_loss", True)),
+                True,
+            ),
+            "source_surface_area_scale": (
+                float(self._input_dict.get("source_surface_area_scale", 1.8)),
+                1.8,
+            ),
+            "end_surface_area_scale": (
+                float(self._input_dict.get("end_surface_area_scale", 1.0)),
+                1.0,
+            ),
+            "front_flux_model": (
+                str(self._input_dict.get("front_flux_model")),
+                "sonic_relaxation",
+            ),
+            "D_amb_model": (
+                str(self._input_dict.get("D_amb_model")),
+                "cs_dz",
+            ),
+            "D_amb": (
+                float(self._input_dict.get("D_amb")),
+                0.0,
+            ),
+            "cathode_model": (
+                str(self._input_dict.get("cathode_model")),
+                "disabled",
+            ),
+        }
+        changed = [
+            name
+            for name, (actual, canonical) in frozen_controls.items()
+            if actual != canonical
+        ]
+        if changed:
+            raise ValueError(
+                "R1-audited compatibility/boundary controls are frozen at "
+                "their checkpoint values until their owning repair supplies "
+                "a replacement operator; noncanonical values would be silent "
+                "no-ops: "
+                + ", ".join(changed)
+            )
+        for name in ("Te_birth_ionization", "Ti_birth_ionization"):
+            value = self._input_dict.get(name)
+            if isinstance(value, str):
+                if value not in {"local", "floor"}:
+                    raise ValueError(
+                        f"{name} must be 'local', 'floor', or a finite "
+                        f"non-negative numeric eV value (got {value!r})"
+                    )
+                continue
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                numeric = np.nan
+            if not np.isfinite(numeric) or numeric < 0.0:
+                raise ValueError(
+                    f"{name} must be 'local', 'floor', or a finite "
+                    f"non-negative numeric eV value (got {value!r})"
+                )
+        if self._raw_stage_validation and self._flags.get("Plasma", True):
+            for initial_name, floor_name in (
+                ("Te0", "Te_floor"),
+                ("Ti0", "Ti_floor"),
+            ):
+                initial = float(self._input_dict[initial_name])
+                floor = float(self._input_dict[floor_name])
+                if not initial > floor:
+                    raise ValueError(
+                        f"{initial_name} must be strictly greater than "
+                        f"{floor_name} when raw_stage_validation=True "
+                        f"(got {initial} <= {floor})"
+                    )
+
     @property
     def geometry(self):
         return self._geometry
@@ -915,7 +1067,7 @@ class LAPDSim1D:
                 kinetic_terms["neutral_kinetic_relaxation"] = (
                     self.neutral_kinetic_relaxation_rhs(state)
                 )
-            return {
+            terms = {
                 **zone_terms,
                 **geometry_terms,
                 **kinetic_terms,
@@ -950,6 +1102,7 @@ class LAPDSim1D:
                 "recombination_3b_loss": self._zero_rhs_state(),
                 "heat_conduction": self._zero_rhs_state(),
             }
+            return self._apply_active_plasma_topology(terms)
         plasma_terms = self.plasma_flux_rhs_terms(state=state)
         reaction_terms = self.reaction_rhs_terms(state=state)
         electron_cooling_terms = self.electron_cooling_rhs_terms(state=state)
@@ -1047,7 +1200,54 @@ class LAPDSim1D:
             terms["neutral_kinetic_relaxation"] = (
                 self.neutral_kinetic_relaxation_rhs(state)
             )
-        return terms
+        return self._apply_active_plasma_topology(terms)
+
+    def _apply_active_plasma_topology(self, terms):
+        """Mask plasma-coupled terms on typed plasma-dead cells."""
+        if not self._active_plasma_topology:
+            return terms
+        neutral_only = {
+            "neutral_zone_exchange",
+            "neutral_momentum_wall",
+            "neutral_wind_advection",
+            "neutral_exchange",
+            "neutral_sources",
+            "neutral_kinetic_relaxation",
+        }
+        return {
+            name: (
+                term
+                if name in neutral_only
+                else self._mask_inactive_rhs(term, include_neutral=True)
+            )
+            for name, term in terms.items()
+        }
+
+    def _mask_inactive_rhs(self, term, include_neutral):
+        active = np.asarray(self._geometry.plasma_active, dtype=bool)
+
+        def masked(values):
+            if values is None:
+                return None
+            return np.where(active, np.asarray(values, dtype=float), 0.0)
+
+        def copied(values):
+            if values is None:
+                return None
+            return np.asarray(values, dtype=float).copy()
+
+        return ConservativeState1D(
+            n=masked(term.n),
+            nn=masked(term.nn) if include_neutral else copied(term.nn),
+            M=masked(term.M),
+            Ee=masked(term.Ee),
+            Ei=masked(term.Ei),
+            M_n=masked(term.M_n) if include_neutral else copied(term.M_n),
+            nn_a=masked(term.nn_a) if include_neutral else copied(term.nn_a),
+            M_n_a=(
+                masked(term.M_n_a) if include_neutral else copied(term.M_n_a)
+            ),
+        )
 
     def floor_state_vector(self, y):
         """Apply configured density and temperature floors to a packed vector."""
@@ -1060,6 +1260,156 @@ class LAPDSim1D:
             neutral_two_zone=self._neutral_two_zone,
             neutral_annulus_momentum=self._neutral_two_momentum,
         )
+
+    @staticmethod
+    def _empty_floor_ledger():
+        return {
+            "n_particles_added": 0.0,
+            "nn_particles_added": 0.0,
+            "nn_a_particles_added": 0.0,
+            "Ee_energy_added_erg": 0.0,
+            "Ei_energy_added_erg": 0.0,
+        }
+
+    def _floor_additions(self, raw, floored):
+        Vp = np.asarray(self._geometry.plasma_volume_cm3, dtype=float)
+        Vm = np.asarray(self._geometry.neutral_volume_cm3, dtype=float)
+        n_delta = np.where(
+            np.asarray(raw.n) < self._floors["n"],
+            np.asarray(floored.n) - np.asarray(raw.n),
+            0.0,
+        )
+        nn_delta = np.where(
+            np.asarray(raw.nn) < self._floors["nn"],
+            np.asarray(floored.nn) - np.asarray(raw.nn),
+            0.0,
+        )
+        n_safe = np.maximum(np.asarray(raw.n), self._floors["n"])
+        Ee_floor = 1.5 * n_safe * self._floors["Te"] * ev_to_erg
+        Ei_floor = 1.5 * n_safe * self._floors["Ti"] * ev_to_erg
+        Ee_delta = np.where(
+            np.asarray(raw.Ee) < Ee_floor,
+            np.asarray(floored.Ee) - np.asarray(raw.Ee),
+            0.0,
+        )
+        Ei_delta = np.where(
+            np.asarray(raw.Ei) < Ei_floor,
+            np.asarray(floored.Ei) - np.asarray(raw.Ei),
+            0.0,
+        )
+        if raw.nn_a is None:
+            Vnn = Vm
+            nn_a_added = 0.0
+        else:
+            Vnn = Vp
+            Vann = np.maximum(Vm - Vp, 0.0)
+            nn_a_added = float(
+                np.sum(
+                    np.where(
+                        np.asarray(raw.nn_a) < self._floors["nn"],
+                        np.asarray(floored.nn_a) - np.asarray(raw.nn_a),
+                        0.0,
+                    )
+                    * Vann
+                )
+            )
+        return {
+            "n_particles_added": float(
+                np.sum(n_delta * Vp)
+            ),
+            "nn_particles_added": float(
+                np.sum(nn_delta * Vnn)
+            ),
+            "nn_a_particles_added": nn_a_added,
+            "Ee_energy_added_erg": float(
+                np.sum(Ee_delta * Vp)
+            ),
+            "Ei_energy_added_erg": float(
+                np.sum(Ei_delta * Vp)
+            ),
+        }
+
+    def _floor_vector_with_ledger(self, y):
+        raw = self._unpack(y)
+        floored_y = self.floor_state_vector(y)
+        floored = self._unpack(floored_y)
+        return floored_y, self._floor_additions(raw, floored)
+
+    def _accumulate_floor_ledger(self, additions):
+        for name in self._floor_ledger:
+            self._floor_ledger[name] += float(additions.get(name, 0.0))
+
+    def _validate_raw_stage(self, y, stage):
+        """Reject non-finite/negative raw candidates before floor clipping."""
+        packed_summary = _bad_array_summary(y)
+        if packed_summary is not None:
+            raise _RawStageError(
+                y,
+                stage,
+                "nonfinite_state",
+                {"stage": stage, "fields": {"packed_y": packed_summary}},
+            )
+        state = self._unpack(y)
+        fields = {
+            "n": state.n,
+            "nn": state.nn,
+            "M": state.M,
+            "Ee": state.Ee,
+            "Ei": state.Ei,
+        }
+        if state.M_n is not None:
+            fields["M_n"] = state.M_n
+        if state.nn_a is not None:
+            fields["nn_a"] = state.nn_a
+        if state.M_n_a is not None:
+            fields["M_n_a"] = state.M_n_a
+        nonfinite = {
+            name: summary
+            for name, values in fields.items()
+            if (summary := _bad_array_summary(values)) is not None
+        }
+        if nonfinite:
+            raise _RawStageError(
+                y,
+                stage,
+                "nonfinite_state",
+                {"stage": stage, "fields": nonfinite},
+            )
+        negative_density = {
+            name: summary
+            for name, values in (
+                ("n", state.n),
+                ("nn", state.nn),
+                ("nn_a", state.nn_a),
+            )
+            if values is not None
+            and (
+                summary := _bad_array_summary(values, mode="negative")
+            )
+            is not None
+        }
+        if negative_density:
+            raise _RawStageError(
+                y,
+                stage,
+                "negative_density",
+                {"stage": stage, "fields": negative_density},
+            )
+        negative_energy = {
+            name: summary
+            for name, values in (("Ee", state.Ee), ("Ei", state.Ei))
+            if (
+                summary := _bad_array_summary(values, mode="negative")
+            )
+            is not None
+        }
+        if negative_energy:
+            raise _RawStageError(
+                y,
+                stage,
+                "negative_energy",
+                {"stage": stage, "fields": negative_energy},
+            )
 
     def _step_cache_snapshot(self):
         return SimpleNamespace(
@@ -1090,19 +1440,59 @@ class LAPDSim1D:
         dt = float(dt)
 
         starting_cache = self._step_cache_snapshot()
+        attempt_floor_ledger = self._empty_floor_ledger()
+
+        def floor_with_ledger(y):
+            floored, additions = self._floor_vector_with_ledger(y)
+            for name in attempt_floor_ledger:
+                attempt_floor_ledger[name] += float(additions[name])
+            return floored
+
+        raw_rejection_reason = ""
+        raw_rejection_detail = {}
         try:
-            if not self._flags.get("Plasma", True) or self._neutral_prebreakdown_active():
-                y_next = pack_state(self._implicit_neutral_step(dt=dt))
-            elif operator_split:
-                y_next = self.operator_split_step(dt=dt)
-            else:
-                y_next = ssprk2_step(
-                    y0=self._y,
-                    dt=dt,
-                    rhs_func=lambda yy, tt: self.rhs(yy, time=tt),
-                    floor_func=self.floor_state_vector,
-                    time=self._time,
-                )
+            try:
+                if (
+                    not self._flags.get("Plasma", True)
+                    or self._neutral_prebreakdown_active()
+                ):
+                    if self._raw_stage_validation:
+                        raw_next = pack_state(
+                            self._implicit_neutral_step(
+                                dt=dt, apply_density_floor=False
+                            )
+                        )
+                        self._validate_raw_stage(raw_next, "implicit_neutral")
+                        y_next = floor_with_ledger(raw_next)
+                    else:
+                        y_next = pack_state(self._implicit_neutral_step(dt=dt))
+                elif operator_split:
+                    y_next = self.operator_split_step(
+                        dt=dt,
+                        floor_func=floor_with_ledger,
+                        raw_stage_func=(
+                            self._validate_raw_stage
+                            if self._raw_stage_validation
+                            else None
+                        ),
+                    )
+                else:
+                    y_next = ssprk2_step(
+                        y0=self._y,
+                        dt=dt,
+                        rhs_func=lambda yy, tt: self.rhs(yy, time=tt),
+                        floor_func=floor_with_ledger,
+                        time=self._time,
+                        raw_stage_func=(
+                            self._validate_raw_stage
+                            if self._raw_stage_validation
+                            else None
+                        ),
+                    )
+            except _RawStageError as error:
+                y_next = error.y
+                raw_rejection_reason = error.reason
+                raw_rejection_detail = error.detail
             candidate_cache = self._step_cache_snapshot()
         finally:
             self._restore_step_cache(starting_cache)
@@ -1111,9 +1501,14 @@ class LAPDSim1D:
             dt=dt,
             operator_split=bool(operator_split),
             solver_cache=candidate_cache,
+            floor_ledger=attempt_floor_ledger,
+            raw_rejection_reason=raw_rejection_reason,
+            raw_rejection_detail=raw_rejection_detail,
         )
 
-    def _implicit_neutral_step(self, dt, state=None, time=None):
+    def _implicit_neutral_step(
+        self, dt, state=None, time=None, apply_density_floor=True
+    ):
         """Return a backward-Euler neutral-only state update."""
         if state is None:
             state = self.state
@@ -1121,7 +1516,10 @@ class LAPDSim1D:
             time = self._time
         if self._neutral_two_zone and state.nn_a is not None:
             return self._implicit_neutral_step_two_zone(
-                dt=dt, state=state, time=time
+                dt=dt,
+                state=state,
+                time=time,
+                apply_density_floor=apply_density_floor,
             )
         geometry = self._geometry
         source_kwargs = self._neutral_source_kwargs(time=time)
@@ -1192,7 +1590,11 @@ class LAPDSim1D:
         # there is no drag to drive a wind (NEUTRAL_MOMENTUM_PLAN.md).
         return ConservativeState1D(
             n=state.n.copy(),
-            nn=np.maximum(nn_next, self._floors["nn"]),
+            nn=(
+                np.maximum(nn_next, self._floors["nn"])
+                if apply_density_floor
+                else nn_next
+            ),
             M=state.M.copy(),
             Ee=state.Ee.copy(),
             Ei=state.Ei.copy(),
@@ -1201,7 +1603,9 @@ class LAPDSim1D:
             M_n_a=None if state.M_n_a is None else state.M_n_a.copy(),
         )
 
-    def _implicit_neutral_step_two_zone(self, dt, state, time):
+    def _implicit_neutral_step_two_zone(
+        self, dt, state, time, apply_density_floor=True
+    ):
         """Backward-Euler neutral-only update on the split (nn, nn_a) system.
 
         The 2N x 2N block system: per-zone axial Knudsen exchange on the
@@ -1311,18 +1715,32 @@ class LAPDSim1D:
         solution = np.linalg.solve(matrix, rhs)
         return ConservativeState1D(
             n=state.n.copy(),
-            nn=np.maximum(solution[:cells], self._floors["nn"]),
+            nn=(
+                np.maximum(solution[:cells], self._floors["nn"])
+                if apply_density_floor
+                else solution[:cells]
+            ),
             M=state.M.copy(),
             Ee=state.Ee.copy(),
             Ei=state.Ei.copy(),
             M_n=None if state.M_n is None else state.M_n.copy(),
-            nn_a=np.maximum(solution[cells:], self._floors["nn"]),
+            nn_a=(
+                np.maximum(solution[cells:], self._floors["nn"])
+                if apply_density_floor
+                else solution[cells:]
+            ),
             M_n_a=None if state.M_n_a is None else state.M_n_a.copy(),
         )
 
     def _step_rejection_info(self, attempt, y0=None):
         if y0 is None:
             y0 = self._y
+        raw_reason = getattr(attempt, "raw_rejection_reason", "")
+        if raw_reason:
+            return (
+                raw_reason,
+                dict(getattr(attempt, "raw_rejection_detail", None) or {}),
+            )
         y1 = np.asarray(attempt.y, dtype=float)
         packed_summary = _bad_array_summary(y1)
 
@@ -1361,7 +1779,13 @@ class LAPDSim1D:
             return "nonfinite_state", {"fields": nonfinite_fields}
 
         negative_density_fields = {}
-        for name, values in (("n", state1.n), ("nn", state1.nn)):
+        for name, values in (
+            ("n", state1.n),
+            ("nn", state1.nn),
+            ("nn_a", state1.nn_a),
+        ):
+            if values is None:
+                continue
             summary = _bad_array_summary(values, mode="negative")
             if summary is not None:
                 negative_density_fields[name] = summary
@@ -1522,6 +1946,9 @@ class LAPDSim1D:
     def _accept_step_attempt(self, attempt):
         self._restore_step_cache(attempt.solver_cache)
         self._set_state_vector(attempt.y)
+        self._accumulate_floor_ledger(
+            getattr(attempt, "floor_ledger", self._empty_floor_ledger())
+        )
         self._time += float(attempt.dt)
         # Electrode sample smoothing: fold the newly accepted state into the
         # supply-average EMA before any accepted-state consumer reads it.
@@ -1806,11 +2233,23 @@ class LAPDSim1D:
 
     def advance_one_step(self, dt=None, operator_split=None):
         """Advance the conservative state by one explicit or split step."""
-        return self._accept_step_attempt(
-            self._attempt_step(dt=dt, operator_split=operator_split)
-        )
+        attempt = self._attempt_step(dt=dt, operator_split=operator_split)
+        reason, detail = self._step_rejection_info(attempt)
+        if reason:
+            raise ValueError(
+                f"step candidate rejected before acceptance: {reason}; "
+                f"{_rejection_detail_text(detail)}"
+            )
+        return self._accept_step_attempt(attempt)
 
-    def operator_split_step(self, y=None, dt=None, splitting=None):
+    def operator_split_step(
+        self,
+        y=None,
+        dt=None,
+        splitting=None,
+        floor_func=None,
+        raw_stage_func=None,
+    ):
         """Return one explicit-nonheat plus implicit-heat split step.
 
         ``splitting`` selects how the non-heat operator A and the heat operator
@@ -1843,10 +2282,17 @@ class LAPDSim1D:
             splitting = self._operator_splitting()
         else:
             splitting = _validate_operator_splitting(splitting)
+        if floor_func is None:
+            floor_func = self.floor_state_vector
+        if raw_stage_func is None and self._raw_stage_validation:
+            raw_stage_func = self._validate_raw_stage
 
         def heat(y_in, sub_dt):
             state = self.implicit_heat_conduction_step(dt=sub_dt, y=y_in)
-            return self.floor_state_vector(pack_state(state))
+            raw = pack_state(state)
+            if raw_stage_func is not None:
+                raw_stage_func(raw, "implicit_heat")
+            return floor_func(raw)
 
         def explicit(y_in, sub_dt):
             return ssprk2_step(
@@ -1857,8 +2303,9 @@ class LAPDSim1D:
                     include_heat_conduction=False,
                     time=tt,
                 ),
-                floor_func=self.floor_state_vector,
+                floor_func=floor_func,
                 time=self._time,
+                raw_stage_func=raw_stage_func,
             )
 
         if splitting == "strang":
@@ -2357,6 +2804,12 @@ class LAPDSim1D:
             )
         dt_min = float(self._input_dict.get("dt_min", 1e-12))
         dt_max = float(self._input_dict.get("dt_max", 1e-6))
+        plasma_source_rhs = None
+        if plasma_enabled and self._raw_stage_validation:
+            plasma_source_rhs = self._plasma_source_timestep_rhs(
+                state=state,
+                time=time,
+            )
         diag = suggest_timestep(
             state=state,
             floors=self._floors,
@@ -2383,6 +2836,7 @@ class LAPDSim1D:
             ion_neutral_drag_kwargs=(
                 self._ion_neutral_drag_kwargs() if plasma_enabled else None
             ),
+            plasma_source_rhs=plasma_source_rhs,
             cfl=float(self._input_dict.get("cfl", 0.4)),
             density_dt_fraction=float(
                 self._input_dict.get("density_dt_fraction", 0.25)
@@ -2396,6 +2850,12 @@ class LAPDSim1D:
             dt_max=dt_max,
             include_front=plasma_enabled and self._flags.get("front_flux", True),
             alpha_front=float(self._input_dict.get("alpha_front", 1.0)),
+            plasma_active=(
+                self._geometry.plasma_active
+                if self._active_plasma_topology
+                else None
+            ),
+            active_plasma_topology=self._active_plasma_topology,
         )
         if not plasma_enabled:
             neutral_candidates = {
@@ -2433,6 +2893,39 @@ class LAPDSim1D:
             phase_cathode_enabled=float(switches["cathode_enabled"]),
             phase_gas_puff_enabled=float(switches["gas_puff_enabled"]),
             phase_floating=float(switches["floating"]),
+        )
+
+    def _plasma_source_timestep_rhs(self, state, time):
+        """Return the resolved electrode/source bundle used by its dt bound."""
+        cathode_phase = self._cathode_phase_options(time=time)
+        cathode_solve = None
+        if cathode_phase["solve_enabled"]:
+            cathode_solve = self.solve_cathode_boundary(
+                state=state,
+                floating=cathode_phase["floating"],
+                time=time,
+                update_cache=False,
+            )
+        rhs = self.boundary_absorption_rhs(
+            state=state,
+            cathode_solve=cathode_solve,
+            time=time,
+        )
+        rhs = add_state_rhs(
+            rhs,
+            self.anode_collection_rhs(
+                state=state,
+                cathode_solve=cathode_solve,
+                time=time,
+            ),
+        )
+        return add_state_rhs(
+            rhs,
+            self.cathode_source_terms(
+                state=state,
+                cathode_solve=cathode_solve,
+                time=time,
+            ).rhs,
         )
 
     def phase_at_time(self, time):
@@ -2553,6 +3046,7 @@ class LAPDSim1D:
             geometry=self._geometry,
             include_front=use_front,
             alpha_front=float(self._input_dict.get("alpha_front", 1.0)),
+            active_plasma_topology=self._active_plasma_topology,
         )
 
     def plasma_flux_rhs_terms(self, y=None, state=None, include_front=None):
@@ -2570,6 +3064,7 @@ class LAPDSim1D:
             geometry=self._geometry,
             include_front=use_front,
             alpha_front=float(self._input_dict.get("alpha_front", 1.0)),
+            active_plasma_topology=self._active_plasma_topology,
         )
 
     def pressure_work_rhs(self, y=None, state=None):
@@ -2583,6 +3078,7 @@ class LAPDSim1D:
             geometry=self._geometry,
             electron_scale=float(self._input_dict.get("b_pressure_work_elec", 1.0)),
             ion_scale=float(self._input_dict.get("b_pressure_work_ions", 1.0)),
+            active_plasma_topology=self._active_plasma_topology,
         )
 
     def flux_tube_geometry_rhs(self, y=None, state=None):
@@ -3078,7 +3574,7 @@ class LAPDSim1D:
             I_ion=self._I_ion,
             b_rec_rad=float(self._input_dict.get("b_rec_rad", 1.0)),
             atomic_rate_model=str(
-                self._input_dict.get("atomic_rate_model", "janev")
+                self._input_dict.get("atomic_rate_model", "adas")
             ),
             enabled=self._recombination_energy_return,
             adas_low_te_extension=bool(
@@ -3734,7 +4230,7 @@ class LAPDSim1D:
         return {
             "alpha_isat": float(self._input_dict.get("alpha_isat", np.exp(-0.5))),
             "source_surface_area_scale": float(
-                self._input_dict.get("source_surface_area_scale", 2.0)
+                self._input_dict.get("source_surface_area_scale", 1.8)
             ),
             "end_surface_area_scale": float(
                 self._input_dict.get("end_surface_area_scale", 1.0)
@@ -3792,7 +4288,7 @@ class LAPDSim1D:
             "b_Qen_Te_exp": float(self._input_dict.get("b_Qen_Te_exp", 0.0)),
             "b_Q_Te_ref_eV": float(self._input_dict.get("b_Q_Te_ref_eV", 5.0)),
             "atomic_rate_model": str(
-                self._input_dict.get("atomic_rate_model", "janev")
+                self._input_dict.get("atomic_rate_model", "adas")
             ),
             "ionization_energy_cost": bool(
                 self._flags.get("ionization_energy_cost", True)
@@ -3826,7 +4322,7 @@ class LAPDSim1D:
             "b_rec_rad": float(self._input_dict.get("b_rec_rad", 1.0)),
             "b_rec_3b": float(self._input_dict.get("b_rec_3b", 1.0)),
             "atomic_rate_model": str(
-                self._input_dict.get("atomic_rate_model", "janev")
+                self._input_dict.get("atomic_rate_model", "adas")
             ),
             "adas_low_te_extension": bool(
                 self._input_dict.get("adas_low_te_extension", False)
@@ -3845,6 +4341,7 @@ class LAPDSim1D:
         derived = self.derived
         assert_finite_state(state, derived)
         rhs_terms = self.rhs_terms(include_heat_conduction=True, time=time)
+        packed_fields = state_field_names(state)
         phase, phase_elapsed = self._phase_info(time)
         phase_switches = self._phase_switches(phase)
         wind = {}
@@ -3888,8 +4385,14 @@ class LAPDSim1D:
             "y": pack_state(state),
             "rhs_terms": {
                 term_name: {
-                    field_name: getattr(term_rhs, field_name).copy()
-                    for field_name in STATE_NAMES_1D
+                    field_name: (
+                        np.zeros(self._geometry.cells, dtype=float)
+                        if getattr(term_rhs, field_name) is None
+                        else np.asarray(
+                            getattr(term_rhs, field_name), dtype=float
+                        ).copy()
+                    )
+                    for field_name in packed_fields
                 }
                 for term_name, term_rhs in rhs_terms.items()
             },
@@ -3928,7 +4431,11 @@ class LAPDSim1D:
                 ),
                 np.zeros((len(saved), cells), dtype=float),
             )
-            for field_name in STATE_NAMES_1D
+            for field_name in (
+                tuple(saved[0]["rhs_terms"][next(iter(rhs_terms))])
+                if saved and rhs_terms
+                else STATE_NAMES_1D
+            )
         }
         electron_energy_terms_W_cm3 = {
             term_name: term_fields["Ee"] * 1.0e-7
@@ -3940,6 +4447,8 @@ class LAPDSim1D:
         }
 
         result = SimpleNamespace(
+            params=dict(self._input_dict),
+            flags=dict(self._flags),
             time=np.asarray([snapshot["time"] for snapshot in saved], dtype=float),
             phase=np.asarray([snapshot["phase"] for snapshot in saved], dtype=object),
             phase_elapsed=np.asarray(
@@ -3979,6 +4488,7 @@ class LAPDSim1D:
             plasma_volume_cm3=self._geometry.plasma_volume_cm3.copy(),
             neutral_volume_cm3=self._geometry.neutral_volume_cm3.copy(),
             volume_ratio=self._geometry.volume_ratio.copy(),
+            plasma_active=self._geometry.plasma_active.copy(),
             rhs_terms=rhs_terms,
             cathode_diagnostics=cathode_diagnostics,
             phase_events=self._phase_events(
@@ -3992,6 +4502,7 @@ class LAPDSim1D:
                 self._current_trigger_samples
             ),
             total_rhs=total_rhs,
+            floor_ledger=dict(self._floor_ledger),
             electron_energy_terms_W_cm3=electron_energy_terms_W_cm3,
             ion_energy_terms_W_cm3=ion_energy_terms_W_cm3,
             diagnostics=list(diagnostics),
@@ -4016,6 +4527,7 @@ class LAPDSim1D:
         if saved and "M_n_a" in saved[0]:
             result.M_n_a = stack("M_n_a")
             result.u_n_a = stack("u_n_a")
+        result.atomic_rate_domain = _atomic_rate_domain(result)
         return add_sim3_compat_aliases(result)
 
     def _phase_events(self, run_start, final_time):
@@ -4111,6 +4623,9 @@ class LAPDSim1D:
         if not saved:
             return {}
         term_names = saved[0]["rhs_terms"].keys()
+        field_names = tuple(
+            saved[0]["rhs_terms"][next(iter(term_names))].keys()
+        )
         return {
             term_name: {
                 field_name: np.stack(
@@ -4119,7 +4634,7 @@ class LAPDSim1D:
                         for snapshot in saved
                     ]
                 )
-                for field_name in STATE_NAMES_1D
+                for field_name in field_names
             }
             for term_name in term_names
         }

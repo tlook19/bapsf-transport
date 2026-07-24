@@ -4,15 +4,20 @@ from cablp.funcs._cross import charge_ex_react
 from cablp.vars._cons import ev_to_erg, kb_cgs
 
 from .flux import ion_sound_speed
-from ..core.geometry import PLASMA_DEAD_ROLES
 from ..core.state import ConservativeState1D, derive_state
 
 
-def velocity_divergence(state, floors, ion_mass_g, geometry):
+def velocity_divergence(
+    state, floors, ion_mass_g, geometry, active_plasma_topology=False
+):
     """Return finite-volume axial velocity divergence [s^-1]."""
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     face_u = np.zeros(geometry.cells + 1, dtype=float)
     face_u[1:-1] = 0.5 * (derived.u[:-1] + derived.u[1:])
+    if active_plasma_topology:
+        for face in np.flatnonzero(~np.asarray(geometry.plasma_open, dtype=bool)):
+            live = int(geometry.plasma_face_live_cell[face])
+            face_u[face] = 0.0 if live < 0 else derived.u[live]
     inventory_rate = geometry.plasma_face_area_cm2 * face_u
     return (inventory_rate[1:] - inventory_rate[:-1]) / geometry.plasma_volume_cm3
 
@@ -24,6 +29,7 @@ def pressure_work_rhs(
     geometry,
     electron_scale=1.0,
     ion_scale=1.0,
+    active_plasma_topology=False,
 ):
     """Return conservative electron/ion pressure-work energy sources."""
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
@@ -32,6 +38,7 @@ def pressure_work_rhs(
         floors=floors,
         ion_mass_g=ion_mass_g,
         geometry=geometry,
+        active_plasma_topology=active_plasma_topology,
     )
     zeros = np.zeros(geometry.cells, dtype=float)
     return ConservativeState1D(
@@ -200,7 +207,7 @@ def boundary_absorption_rhs(
 
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     roles = np.asarray(geometry.cell_role)
-    dead = np.asarray([role in PLASMA_DEAD_ROLES for role in roles], dtype=bool)
+    active = np.asarray(geometry.plasma_active, dtype=bool)
     cells = roles.size
     dN_loss = np.zeros(cells, dtype=float)
     sonic_momentum = np.zeros(cells, dtype=float)
@@ -215,9 +222,10 @@ def boundary_absorption_rhs(
         )
     for face in np.flatnonzero(absorbing):
         face = int(face)
-        left, right = face - 1, face
-        live_is_right = left < 0 or (right < cells and not dead[right])
-        live = right if live_is_right else left
+        live = int(geometry.plasma_face_live_cell[face])
+        if live < 0:
+            continue
+        live_is_right = live == face
         # Outward normal: plasma on the high-z side of the surface flows toward
         # -z to reach it, and vice versa.
         outward = -1.0 if live_is_right else 1.0

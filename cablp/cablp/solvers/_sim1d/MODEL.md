@@ -28,7 +28,7 @@ $$\frac{Dn}{Dt} = -\,n\,\nabla\!\cdot\mathbf{u} \;+\; S_{iz} \;-\; \big(S_{rr} +
 $$\frac{D_n n_n}{Dt} = -\,n_n\,\nabla\!\cdot\mathbf{u}_n \;-\; S_{iz} \;+\; \big(S_{rr} + S_{3b}\big)$$
 
 By default the directed neutral flow is not solved dynamically: thermal
-transport uses **molecular (Clausing) free-flow diffusion**. The default-off
+transport uses the **Knudsen/Clausing conductance closure**. The default-off
 `neutral_momentum` selector additionally evolves directed axial momentum on
 top of that thermal transport.
 
@@ -138,3 +138,54 @@ and $\mathbf{u}\times\mathbf{B}$ forces and diamagnetic/drift heat fluxes, and
 perpendicular conduction — only the parallel (axial) dynamics are retained. Wall
 and end losses (surface neutralization, gas puff, pumping) are folded in as 0D
 boundary-cell source terms rather than bulk 3D terms.
+
+## R1 audited topology and configuration contract (2026-07-23)
+
+Typed geometry now owns one authoritative plasma topology:
+`plasma_active[cell]` and `plasma_face_live_cell[face]`. The live
+`active_plasma_topology` stance uses that map at the assembled-operator
+boundary. Plasma-dead plenum/obstruction rows are invariant,
+plasma-coupled source rows and diagnostic reductions are zero there, timestep
+bounds exclude them, and a closed internal face takes velocity/pressure only
+from its live side. Pure neutral transport remains active in those volumes.
+The unchanged checkpoint golden explicitly pins the historical selector-off
+path and remains bit-exact; it is a regression anchor, not the live stance.
+
+The repaired startup defaults are `Te0=0.21 eV` and provisional
+`Ti0=0.125 eV`, both strictly above their unchanged `0.1 eV` numerical
+floors. The electron seed is just above the exact bundled He ADF11 lower edge
+(`0.200092... eV`). The ion seed is a numerical margin, not a neutral
+temperature claim; the model still separately uses `Tn_K=300 K` and the
+audited `Tn_fit=0.1 eV` collision temperature pending the A8/R4 repair.
+
+Optional neutral states use their actual packed layout throughout evidence:
+five rows for `(n, nn, M, Ee, Ei)`, then optional `M_n`, `nn_a`, and `M_n_a`.
+For two-zone runs the column and annulus inventories are
+`nn*V_col + nn_a*V_ann`, with `V_col=V_p` and `V_ann=V_m-V_p`; `nn*V_m` is
+never reported as a two-zone inventory. The same volume split applies to the
+two neutral-momentum rows, and internal radial/zone transfers close exactly.
+
+Configuration is resolved once at construction from the shared registry.
+Unknown keys raise `ValueError`; `config_manifest()` exposes all 184 parameter
+defaults and 29 flags with their defining groups. The live but formerly
+unregistered controls `drag_dt_fraction`, `b_anode_collection`, and
+`b_anode_advective_block` are now registered at their pre-audit fallback
+values. The disconnected source/end absorption enables/scales and the
+compatibility-only `front_flux_model`, `D_amb_model`, `D_amb`, and
+`cathode_model` accept only their checkpoint values; noncanonical values fail
+at construction rather than acting as silent no-ops. Their replacement
+operators belong to R2/R3, not R1.
+
+The historical shared electron-birth default remains
+`Te_birth_ionization="local"`, and the committed production golden pins that
+recorded stance explicitly. The config-complete M6 and mechanism-ladder
+drivers now explicitly select `"floor"` so they cannot accidentally inherit
+`"local"`. This is provenance repair, not endorsement of either physical
+moment: the unified ionization particle/momentum/energy derivation remains R4.
+
+Every saved result now carries an `atomic_rate_domain` ledger derived from the
+actual bundled ADF11 grid. It records active-cell and active-volume fractions
+below the lower edge, the active minimum `Te`, and first whole-run and
+afterglow crossings. This is a validity annotation: rates still follow their
+selected clamping/extension policy, and a below-grid sample is not silently
+promoted to validated atomic physics.

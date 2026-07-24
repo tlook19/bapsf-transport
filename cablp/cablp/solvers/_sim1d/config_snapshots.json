@@ -1,0 +1,24 @@
+{
+  "cases": {
+    "compare_sim1d_es1": {
+      "Te_birth_ionization": "local",
+      "sha256": "e331f1543a1a5b1ba2a01d0e32206dbfa982408367f086787f5e8517c418c3d4"
+    },
+    "production_golden": {
+      "Te_birth_ionization": "local",
+      "sha256": "825411327a4f542681631016366ae270ed90d2de3be5045de7ccccbbe01c19bd"
+    },
+    "run_m6_point_es1_sgp3400_defaults": {
+      "Te_birth_ionization": "floor",
+      "sha256": "31f3507b99deffec6dc452b2f7775ac18b9011a282d9c2bac40809c055758f50"
+    },
+    "run_mechanism_ladder_es1_defaults": {
+      "Te_birth_ionization": "floor",
+      "sha256": "d5d0083156b513b141c2783ab0cebab21f4db743cecb53203d1b2391e31b896a"
+    }
+  },
+  "flag_count": 29,
+  "manifest_sha256": "92b87b40e7fd417f6dd736033505c5fa14e0fcc23894c1b004dd409f12738df1",
+  "parameter_count": 184,
+  "schema": "lapdsim1d-resolved-config-snapshots-v1"
+}

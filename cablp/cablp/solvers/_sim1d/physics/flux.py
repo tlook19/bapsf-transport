@@ -3,7 +3,6 @@ from dataclasses import dataclass
 import numpy as np
 
 from cablp.funcs._plasmaparams import v_ion_speed
-from ..core.geometry import PLASMA_DEAD_ROLES
 from ..core.state import ConservativeState1D, derive_state
 from cablp.vars._cons import ev_to_erg
 
@@ -33,11 +32,18 @@ def physical_fluxes(state, derived):
     )
 
 
-def rusanov_fluxes(state, floors, ion_mass_g, mu, geometry):
+def rusanov_fluxes(
+    state, floors, ion_mass_g, mu, geometry, active_plasma_topology=False
+):
     """Build closed-boundary Rusanov fluxes for plasma conservative variables."""
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     raw = _rusanov_raw_faces(state, derived, mu, geometry)
-    return _apply_face_conditions(raw, geometry, derived.p)
+    return _apply_face_conditions(
+        raw,
+        geometry,
+        derived.p,
+        active_plasma_topology=active_plasma_topology,
+    )
 
 
 def _rusanov_raw_faces(state, derived, mu, geometry):
@@ -75,7 +81,9 @@ def _rusanov_raw_faces(state, derived, mu, geometry):
     return PlasmaFaceFluxes1D(n=face_n, M=face_M, Ee=face_Ee, Ei=face_Ei)
 
 
-def _apply_face_conditions(faces, geometry, pressure):
+def _apply_face_conditions(
+    faces, geometry, pressure, active_plasma_topology=False
+):
     """Apply partial-blocking transmission and closed-face conditions to raw faces.
 
     Partially blocking faces (the anode mesh) transmit only their open fraction;
@@ -93,11 +101,20 @@ def _apply_face_conditions(faces, geometry, pressure):
         face_M=face_M,
         face_Ee=face_Ee,
         face_Ei=face_Ei,
+        active_plasma_topology=active_plasma_topology,
     )
     return PlasmaFaceFluxes1D(n=face_n, M=face_M, Ee=face_Ee, Ei=face_Ei)
 
 
-def _apply_plasma_walls(geometry, pressure, face_n, face_M, face_Ee, face_Ei):
+def _apply_plasma_walls(
+    geometry,
+    pressure,
+    face_n,
+    face_M,
+    face_Ee,
+    face_Ei,
+    active_plasma_topology=False,
+):
     """Impose closed-face conditions on every face with ``plasma_open`` False.
 
     A closed face carries no particle or thermal-energy flux, but pressure acts on
@@ -113,18 +130,24 @@ def _apply_plasma_walls(geometry, pressure, face_n, face_M, face_Ee, face_Ei):
     hand the plasma it removes to the plenum behind it instead of out of the
     domain, and would kick a plasma-dead cell with sonic momentum.
     """
-    roles = np.asarray(geometry.cell_role)
-    dead = np.asarray([role in PLASMA_DEAD_ROLES for role in roles], dtype=bool)
-    cells = roles.size
+    cells = geometry.cells
     for face in np.flatnonzero(~np.asarray(geometry.plasma_open, dtype=bool)):
         face = int(face)
-        left, right = face - 1, face
-        live_is_right = left < 0 or (right < cells and not dead[right])
-        live = right if live_is_right else left
         face_n[face] = 0.0
         face_Ee[face] = 0.0
         face_Ei[face] = 0.0
-        face_M[face] = pressure[live]
+        if active_plasma_topology:
+            live = int(geometry.plasma_face_live_cell[face])
+            face_M[face] = 0.0 if live < 0 else pressure[live]
+        else:
+            # Historical selection retained exactly while the R1 topology
+            # repair is default off.
+            roles = np.asarray(geometry.cell_role)
+            dead = ~np.asarray(geometry.plasma_active, dtype=bool)
+            left, right = face - 1, face
+            live_is_right = left < 0 or (right < cells and not dead[right])
+            live = right if live_is_right else left
+            face_M[face] = pressure[live]
 
 
 def front_filling_fluxes(state, floors, ion_mass_g, mu, geometry, alpha_front=1.0):
@@ -213,6 +236,7 @@ def plasma_flux_rhs(
     geometry,
     include_front=True,
     alpha_front=1.0,
+    active_plasma_topology=False,
 ):
     """Return finite-volume RHS from conservative plasma face fluxes."""
     flux_terms = plasma_flux_rhs_terms(
@@ -223,6 +247,7 @@ def plasma_flux_rhs(
         geometry=geometry,
         include_front=include_front,
         alpha_front=alpha_front,
+        active_plasma_topology=active_plasma_topology,
     )
     return _add_state_rhs(
         flux_terms["plasma_advective_flux"],
@@ -239,6 +264,7 @@ def plasma_flux_rhs_terms(
     include_front=True,
     alpha_front=1.0,
     alpha_isat=np.exp(-0.5),
+    active_plasma_topology=False,
 ):
     """Return separately named conservative RHS terms from plasma face fluxes."""
     rusanov = rusanov_fluxes(
@@ -247,6 +273,7 @@ def plasma_flux_rhs_terms(
         ion_mass_g=ion_mass_g,
         mu=mu,
         geometry=geometry,
+        active_plasma_topology=active_plasma_topology,
     )
     front = _zero_fluxes(geometry.cells)
     if include_front:

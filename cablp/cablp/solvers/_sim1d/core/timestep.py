@@ -2,6 +2,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from cablp.vars._cons import ev_to_erg
+
 from ..physics.conduction import heat_conduction_timestep_bound
 from ..physics.energy import (
     electron_cooling_rhs,
@@ -62,6 +64,7 @@ def suggest_timestep(
     ion_charge_exchange_kwargs=None,
     heat_conduction_kwargs=None,
     ion_neutral_drag_kwargs=None,
+    plasma_source_rhs=None,
     cfl=0.4,
     density_dt_fraction=0.25,
     neutral_dt_fraction=0.25,
@@ -71,6 +74,8 @@ def suggest_timestep(
     dt_max=1e-6,
     include_front=True,
     alpha_front=1.0,
+    plasma_active=None,
+    active_plasma_topology=False,
 ):
     """Return a bounded explicit timestep and diagnostics."""
     if dt_min <= 0.0:
@@ -88,6 +93,7 @@ def suggest_timestep(
             mu=mu,
             geometry=geometry,
             cfl=cfl,
+            plasma_active=plasma_active,
         ),
         "front_density": front_density_timestep(
             state=state,
@@ -98,11 +104,19 @@ def suggest_timestep(
             density_dt_fraction=density_dt_fraction,
             include_front=include_front,
             alpha_front=alpha_front,
+            plasma_active=plasma_active,
+            active_plasma_topology=active_plasma_topology,
         ),
-        # Retain the diagnostic key for result-schema compatibility. The
-        # legacy volumetric endpoint loss was deleted with legacy geometry;
-        # resolved boundary absorption carries the live surface sink.
-        "surface_loss": np.inf,
+        # Retain the historical diagnostic key while assigning it to the live
+        # resolved electrode/source bundle. The old volumetric endpoint loss
+        # no longer exists.
+        "surface_loss": plasma_source_timestep(
+            state=state,
+            source_rhs=plasma_source_rhs,
+            floors=floors,
+            fraction=density_dt_fraction,
+            plasma_active=plasma_active,
+        ),
         "neutral_exchange": neutral_exchange_timestep(
             state=state,
             geometry=geometry,
@@ -122,6 +136,7 @@ def suggest_timestep(
             geometry=geometry,
             reaction_kwargs=reaction_kwargs,
             density_dt_fraction=density_dt_fraction,
+            plasma_active=plasma_active,
         ),
         "energy_exchange": energy_exchange_timestep(
             state=state,
@@ -130,6 +145,7 @@ def suggest_timestep(
             mu=mu,
             energy_exchange_kwargs=energy_exchange_kwargs,
             density_dt_fraction=density_dt_fraction,
+            plasma_active=plasma_active,
         ),
         "electron_cooling": electron_cooling_timestep(
             state=state,
@@ -137,6 +153,7 @@ def suggest_timestep(
             ion_mass_g=ion_mass_g,
             electron_cooling_kwargs=electron_cooling_kwargs,
             density_dt_fraction=density_dt_fraction,
+            plasma_active=plasma_active,
         ),
         "ion_charge_exchange": ion_charge_exchange_timestep(
             state=state,
@@ -144,6 +161,7 @@ def suggest_timestep(
             ion_mass_g=ion_mass_g,
             ion_charge_exchange_kwargs=ion_charge_exchange_kwargs,
             density_dt_fraction=density_dt_fraction,
+            plasma_active=plasma_active,
         ),
         "heat_conduction": heat_conduction_timestep(
             state=state,
@@ -153,6 +171,7 @@ def suggest_timestep(
             geometry=geometry,
             heat_conduction_kwargs=heat_conduction_kwargs,
             heat_dt_fraction=heat_dt_fraction,
+            plasma_active=plasma_active,
         ),
         "ion_neutral_drag": ion_neutral_drag_timestep(
             state=state,
@@ -160,6 +179,7 @@ def suggest_timestep(
             ion_mass_g=ion_mass_g,
             ion_neutral_drag_kwargs=ion_neutral_drag_kwargs,
             drag_dt_fraction=drag_dt_fraction,
+            plasma_active=plasma_active,
         ),
         "neutral_wind": neutral_wind_timestep(
             state=state,
@@ -193,7 +213,9 @@ def suggest_timestep(
     )
 
 
-def plasma_cfl_timestep(state, floors, ion_mass_g, mu, geometry, cfl=0.4):
+def plasma_cfl_timestep(
+    state, floors, ion_mass_g, mu, geometry, cfl=0.4, plasma_active=None
+):
     """Return the plasma wave CFL timestep [s]."""
     if cfl <= 0.0:
         raise ValueError(f"cfl must be positive (got {cfl})")
@@ -205,7 +227,65 @@ def plasma_cfl_timestep(state, floors, ion_mass_g, mu, geometry, cfl=0.4):
         + cs[:-1]
         + cs[1:]
     )
+    if plasma_active is not None:
+        active = np.asarray(plasma_active, dtype=bool)
+        face_active = (
+            active[:-1]
+            & active[1:]
+            & np.asarray(geometry.plasma_open[1:-1], dtype=bool)
+        )
+        face_speed = np.where(face_active, face_speed, 0.0)
     return _distance_timestep(geometry.center_distance_cm, face_speed, cfl)
+
+
+def plasma_source_timestep(
+    state,
+    source_rhs,
+    floors,
+    fraction=0.25,
+    plasma_active=None,
+):
+    """Bound resolved plasma sources against density/temperature floors.
+
+    Electron and ion margins are formed in the conservative variables,
+    including the change in the floor energy when ``n`` changes:
+
+    ``d(E - 3/2 n T_floor)/dt = dE/dt - 3/2 T_floor dn/dt``.
+    """
+    if source_rhs is None:
+        return np.inf
+    if fraction <= 0.0:
+        raise ValueError(f"fraction must be positive (got {fraction})")
+    active = (
+        np.ones_like(np.asarray(state.n), dtype=bool)
+        if plasma_active is None
+        else np.asarray(plasma_active, dtype=bool)
+    )
+    n = np.asarray(state.n, dtype=float)
+    dn = np.asarray(source_rhs.n, dtype=float)
+    candidates = [
+        _negative_margin_timestep(
+            n - float(floors["n"]),
+            dn,
+            fraction,
+            active,
+        )
+    ]
+    for energy_name, floor_name in (("Ee", "Te"), ("Ei", "Ti")):
+        energy = np.asarray(getattr(state, energy_name), dtype=float)
+        denergy = np.asarray(getattr(source_rhs, energy_name), dtype=float)
+        floor_energy_per_particle = (
+            1.5 * float(floors[floor_name]) * ev_to_erg
+        )
+        candidates.append(
+            _negative_margin_timestep(
+                energy - floor_energy_per_particle * n,
+                denergy - floor_energy_per_particle * dn,
+                fraction,
+                active,
+            )
+        )
+    return float(min(candidates))
 
 
 def front_density_timestep(
@@ -217,6 +297,8 @@ def front_density_timestep(
     density_dt_fraction=0.25,
     include_front=True,
     alpha_front=1.0,
+    plasma_active=None,
+    active_plasma_topology=False,
 ):
     """Return a fractional density-change timestep for front filling."""
     if not include_front:
@@ -233,6 +315,7 @@ def front_density_timestep(
         geometry=geometry,
         include_front=True,
         alpha_front=alpha_front,
+        active_plasma_topology=active_plasma_topology,
     )
     rhs_without_front = plasma_flux_rhs(
         state=state,
@@ -242,9 +325,16 @@ def front_density_timestep(
         geometry=geometry,
         include_front=False,
         alpha_front=alpha_front,
+        active_plasma_topology=active_plasma_topology,
     )
     dn_front = rhs_with_front.n - rhs_without_front.n
-    return _fractional_timestep(state.n, dn_front, density_dt_fraction, floors["n"])
+    return _fractional_timestep(
+        state.n,
+        dn_front,
+        density_dt_fraction,
+        floors["n"],
+        active_mask=plasma_active,
+    )
 
 
 def ion_neutral_drag_timestep(
@@ -253,6 +343,7 @@ def ion_neutral_drag_timestep(
     ion_mass_g,
     ion_neutral_drag_kwargs=None,
     drag_dt_fraction=0.5,
+    plasma_active=None,
 ):
     """Return an explicit-stability timestep for ion-neutral drag damping.
 
@@ -277,7 +368,12 @@ def ion_neutral_drag_timestep(
         sigma_in_model=ion_neutral_drag_kwargs.get("sigma_in_model", "constant"),
         gas_type=ion_neutral_drag_kwargs.get("gas_type"),
     )
-    nu_max = float(np.max(np.abs(nu_in))) * abs(float(b_ion_neutral_drag))
+    active = _active_values(nu_in, plasma_active)
+    nu_max = (
+        float(np.max(np.abs(active))) * abs(float(b_ion_neutral_drag))
+        if active.size
+        else 0.0
+    )
     if nu_max <= 0.0:
         return np.inf
     return drag_dt_fraction / nu_max
@@ -365,6 +461,7 @@ def reaction_timestep(
     geometry,
     reaction_kwargs=None,
     density_dt_fraction=0.25,
+    plasma_active=None,
 ):
     """Return a fractional density timestep for local plasma reactions."""
     if reaction_kwargs is None:
@@ -381,8 +478,20 @@ def reaction_timestep(
         **reaction_kwargs,
     )
     return min(
-        _fractional_timestep(state.n, rhs.n, density_dt_fraction, floors["n"]),
-        _fractional_timestep(state.nn, rhs.nn, density_dt_fraction, 0.0),
+        _fractional_timestep(
+            state.n,
+            rhs.n,
+            density_dt_fraction,
+            floors["n"],
+            active_mask=plasma_active,
+        ),
+        _fractional_timestep(
+            state.nn,
+            rhs.nn,
+            density_dt_fraction,
+            0.0,
+            active_mask=plasma_active,
+        ),
     )
 
 
@@ -393,6 +502,7 @@ def energy_exchange_timestep(
     mu,
     energy_exchange_kwargs=None,
     density_dt_fraction=0.25,
+    plasma_active=None,
 ):
     """Return a fractional energy timestep for electron-ion exchange."""
     if energy_exchange_kwargs is None:
@@ -409,8 +519,20 @@ def energy_exchange_timestep(
         **energy_exchange_kwargs,
     )
     return min(
-        _fractional_timestep(state.Ee, rhs.Ee, density_dt_fraction, 0.0),
-        _fractional_timestep(state.Ei, rhs.Ei, density_dt_fraction, 0.0),
+        _fractional_timestep(
+            state.Ee,
+            rhs.Ee,
+            density_dt_fraction,
+            0.0,
+            active_mask=plasma_active,
+        ),
+        _fractional_timestep(
+            state.Ei,
+            rhs.Ei,
+            density_dt_fraction,
+            0.0,
+            active_mask=plasma_active,
+        ),
     )
 
 
@@ -420,6 +542,7 @@ def electron_cooling_timestep(
     ion_mass_g,
     electron_cooling_kwargs=None,
     density_dt_fraction=0.25,
+    plasma_active=None,
 ):
     """Return a fractional electron-energy timestep for cooling losses."""
     if electron_cooling_kwargs is None:
@@ -434,7 +557,13 @@ def electron_cooling_timestep(
         ion_mass_g=ion_mass_g,
         **electron_cooling_kwargs,
     )
-    return _fractional_timestep(state.Ee, rhs.Ee, density_dt_fraction, 0.0)
+    return _fractional_timestep(
+        state.Ee,
+        rhs.Ee,
+        density_dt_fraction,
+        0.0,
+        active_mask=plasma_active,
+    )
 
 
 def ion_charge_exchange_timestep(
@@ -443,6 +572,7 @@ def ion_charge_exchange_timestep(
     ion_mass_g,
     ion_charge_exchange_kwargs=None,
     density_dt_fraction=0.25,
+    plasma_active=None,
 ):
     """Return a fractional ion-energy timestep for charge exchange."""
     if ion_charge_exchange_kwargs is None:
@@ -457,7 +587,13 @@ def ion_charge_exchange_timestep(
         ion_mass_g=ion_mass_g,
         **ion_charge_exchange_kwargs,
     )
-    return _fractional_timestep(state.Ei, rhs.Ei, density_dt_fraction, 0.0)
+    return _fractional_timestep(
+        state.Ei,
+        rhs.Ei,
+        density_dt_fraction,
+        0.0,
+        active_mask=plasma_active,
+    )
 
 
 def heat_conduction_timestep(
@@ -468,6 +604,7 @@ def heat_conduction_timestep(
     geometry,
     heat_conduction_kwargs=None,
     heat_dt_fraction=0.25,
+    plasma_active=None,
 ):
     """Return an explicit diffusion timestep bound for heat conduction."""
     if heat_conduction_kwargs is None:
@@ -479,6 +616,7 @@ def heat_conduction_timestep(
         mu=mu,
         geometry=geometry,
         heat_dt_fraction=heat_dt_fraction,
+        active_cells=plasma_active,
         **heat_conduction_kwargs,
     )
 
@@ -490,7 +628,32 @@ def _distance_timestep(distance, speed, fraction):
     return float(fraction * np.min(distance[active] / speed[active]))
 
 
-def _fractional_timestep(values, rates, fraction, floor):
+def _active_values(values, active_mask):
+    values = np.asarray(values, dtype=float)
+    if active_mask is None:
+        return values
+    return values[np.asarray(active_mask, dtype=bool)]
+
+
+def _negative_margin_timestep(margin, rate, fraction, active_mask):
+    margin = np.asarray(margin, dtype=float)[active_mask]
+    rate = np.asarray(rate, dtype=float)[active_mask]
+    draining = rate < 0.0
+    if not np.any(draining):
+        return np.inf
+    draining_margin = margin[draining]
+    if np.any(draining_margin <= 0.0):
+        return 0.0
+    return float(fraction * np.min(draining_margin / -rate[draining]))
+
+
+def _fractional_timestep(values, rates, fraction, floor, active_mask=None):
+    values = np.asarray(values, dtype=float)
+    rates = np.asarray(rates, dtype=float)
+    if active_mask is not None:
+        active_cells = np.asarray(active_mask, dtype=bool)
+        values = values[active_cells]
+        rates = rates[active_cells]
     active = np.abs(rates) > 0.0
     if not np.any(active):
         return np.inf

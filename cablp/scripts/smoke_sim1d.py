@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import h5py
 import numpy as np
 
+from cablp.funcs._adas import he_rate_temperature_range_eV
 from cablp.funcs._plasmaparams import c_log
 from cablp.solvers._sim1d import (
     BreakdownError,
@@ -90,6 +91,7 @@ from cablp.solvers._sim1d.core.state import (
     conservative_from_primitives,
     derive_state,
     pack_state,
+    state_field_names,
     unpack_state,
 )
 from cablp.vars._cons import I_ion, en_factor, ev_to_erg, m_p_cgs, qe_SI
@@ -132,6 +134,10 @@ def main():
     flags["neutral_prebreakdown"] = False
     flags["cathode_coupling"] = False
     flags["implicit_heat_conduction"] = False
+    # The long-standing operator algebra below isolates the historical
+    # all-cells path; dedicated R1 blocks exercise the repaired live defaults.
+    flags["active_plasma_topology"] = False
+    flags["raw_stage_validation"] = False
     sim = LAPDSim1D(params, flags)
     snapshot = sim.get_initial_snapshot()
     geom = snapshot.geometry
@@ -2475,7 +2481,15 @@ def main():
     assert np.all(hot_i_exchange.Ei < 0.0)
     assert np.allclose(hot_i_exchange.Ee + hot_i_exchange.Ei, 0.0)
 
-    equal_temp_exchange = sim.energy_exchange_rhs()
+    equal_temp_state = conservative_from_primitives(
+        n=np.full(geom.cells, params["ne0"]),
+        nn=state.nn,
+        u=np.zeros(geom.cells),
+        Te=np.full(geom.cells, 0.5),
+        Ti=np.full(geom.cells, 0.5),
+        ion_mass_g=sim.ion_mass_g,
+    )
+    equal_temp_exchange = sim.energy_exchange_rhs(state=equal_temp_state)
     assert np.allclose(equal_temp_exchange.Ee, 0.0, atol=1e-30)
     assert np.allclose(equal_temp_exchange.Ei, 0.0, atol=1e-30)
     disabled_exchange = electron_ion_exchange_rhs(
@@ -6810,6 +6824,569 @@ def main():
     ss_off = LAPDSim1D(dict(m3_params), resolved_cathode_flags)
     ss_off_state = ss_off.state
     assert ss_off._smoothed_sample_state(ss_off_state) is ss_off_state
+
+    # R1a: one authoritative active-plasma topology. Every closed face has at
+    # most one live-side cell, pressure work is invariant to the dead-side
+    # velocity, and plasma rows in plenum/obstruction cells are bit-invariant
+    # through multiple accepted steps when the default-off repair is enabled.
+    r1a_params, r1a_flags = default_config()
+    r1a_params.update(
+        {
+            "nx": 8,
+            "nx_gap": 2,
+            "ne0": 2.0e10,
+            "nn0": 2.0e12,
+            "Te0": 1.0,
+            "Ti0": 0.5,
+            "phase_transition_mode": "scheduled",
+            "tau_prebreakdown": 0.0,
+            "tau_breakdown": 0.0,
+            "tau_discharge": 1.0e-6,
+        }
+    )
+    r1a_flags.update(
+        {
+            "active_plasma_topology": True,
+            "cathode_coupling": False,
+            "neutral_prebreakdown": False,
+            "neutral_equilibration": False,
+            "launch_plasma_after_equilibration": False,
+        }
+    )
+    r1a_sim = LAPDSim1D(r1a_params, r1a_flags)
+    r1a_geom = r1a_sim.geometry
+    r1a_active = np.asarray(r1a_geom.plasma_active, dtype=bool)
+    r1a_dead = ~r1a_active
+    assert np.any(r1a_dead)
+    for r1a_face in np.flatnonzero(~r1a_geom.plasma_open):
+        adjacent = []
+        if r1a_face > 0 and r1a_active[r1a_face - 1]:
+            adjacent.append(r1a_face - 1)
+        if r1a_face < r1a_geom.cells and r1a_active[r1a_face]:
+            adjacent.append(r1a_face)
+        expected_live = adjacent[0] if adjacent else -1
+        assert int(r1a_geom.plasma_face_live_cell[r1a_face]) == expected_live
+
+    r1a_state = r1a_sim.state
+    r1a_M_perturbed = r1a_state.M.copy()
+    r1a_M_perturbed[r1a_dead] = 1.0e6
+    r1a_dead_fast = ConservativeState1D(
+        n=r1a_state.n.copy(),
+        nn=r1a_state.nn.copy(),
+        M=r1a_M_perturbed,
+        Ee=r1a_state.Ee.copy(),
+        Ei=r1a_state.Ei.copy(),
+    )
+    div_reference = velocity_divergence(
+        r1a_state,
+        r1a_sim.floors,
+        r1a_sim.ion_mass_g,
+        r1a_geom,
+        active_plasma_topology=True,
+    )
+    div_dead_fast = velocity_divergence(
+        r1a_dead_fast,
+        r1a_sim.floors,
+        r1a_sim.ion_mass_g,
+        r1a_geom,
+        active_plasma_topology=True,
+    )
+    assert np.array_equal(div_reference[r1a_active], div_dead_fast[r1a_active])
+
+    r1a_initial = r1a_sim.state
+    r1a_dead_initial = {
+        name: getattr(r1a_initial, name)[r1a_dead].copy()
+        for name in ("n", "M", "Ee", "Ei")
+    }
+    for _ in range(4):
+        r1a_sim.advance_one_step(dt=1.0e-10, operator_split=False)
+    r1a_final = r1a_sim.state
+    for name, initial_values in r1a_dead_initial.items():
+        assert np.array_equal(getattr(r1a_final, name)[r1a_dead], initial_values)
+    for term_name, term in r1a_sim.rhs_terms().items():
+        if term_name in {
+            "neutral_zone_exchange",
+            "neutral_momentum_wall",
+            "neutral_wind_advection",
+            "neutral_exchange",
+            "neutral_sources",
+            "neutral_kinetic_relaxation",
+        }:
+            continue
+        for field_name in ("n", "nn", "M", "Ee", "Ei"):
+            assert np.array_equal(
+                getattr(term, field_name)[r1a_dead],
+                np.zeros(np.count_nonzero(r1a_dead)),
+            )
+
+    # R1b: the saved evidence follows the actual packed state for the stable
+    # five-, six-, seven-, and eight-row layouts. Two-zone density inventory
+    # uses V_col=V_p and V_ann=V_m-V_p; the two-momentum radial transfer is
+    # exactly internal under those same volumes.
+    r1b_layouts = (
+        ("five", {}, {}),
+        ("six", {}, {"neutral_momentum": True}),
+        (
+            "seven",
+            {},
+            {"neutral_momentum": True, "neutral_two_zone": True},
+        ),
+        (
+            "eight",
+            {"neutral_momentum_radial": "kinetic_two_moment"},
+            {"neutral_momentum": True, "neutral_two_zone": True},
+        ),
+    )
+    with tempfile.TemporaryDirectory() as r1b_tmp:
+        for expected_rows, (label, param_extra, flag_extra) in zip(
+            (5, 6, 7, 8), r1b_layouts
+        ):
+            layout_params = dict(r1a_params, **param_extra)
+            layout_flags = dict(r1a_flags, **flag_extra)
+            layout_sim = LAPDSim1D(layout_params, layout_flags)
+            layout_result = layout_sim.run(
+                t_end=2.0e-10,
+                dt=1.0e-10,
+                operator_split=False,
+                max_steps=4,
+            )
+            expected_fields = state_field_names(layout_sim.state)
+            assert layout_result.y.shape[1] == expected_rows * layout_sim.geometry.cells
+            assert tuple(layout_result.total_rhs) == expected_fields
+            for term_fields in layout_result.rhs_terms.values():
+                assert tuple(term_fields) == expected_fields
+                for values in term_fields.values():
+                    assert values.shape == (
+                        len(layout_result.time),
+                        layout_sim.geometry.cells,
+                    )
+
+            layout_path = Path(r1b_tmp) / f"{label}.h5"
+            layout_sim.save_result(layout_path, layout_result)
+            loaded_layout = load_result_hdf5(layout_path)
+            assert loaded_layout.y.shape == layout_result.y.shape
+            assert set(loaded_layout.total_rhs) == set(expected_fields)
+            for term_fields in loaded_layout.rhs_terms.values():
+                assert set(term_fields) == set(expected_fields)
+
+            layout_health = summarize_result(loaded_layout)
+            Vp = np.asarray(loaded_layout.plasma_volume_cm3, dtype=float)
+            Vm = np.asarray(loaded_layout.neutral_volume_cm3, dtype=float)
+            if hasattr(loaded_layout, "nn_a"):
+                expected_column = np.sum(
+                    loaded_layout.nn * Vp[None, :], axis=1
+                )
+                expected_annulus = np.sum(
+                    loaded_layout.nn_a * (Vm - Vp)[None, :],
+                    axis=1,
+                )
+                expected_neutral = expected_column + expected_annulus
+                assert np.array_equal(
+                    layout_health.neutral_column_inventory,
+                    expected_column,
+                )
+                assert np.array_equal(
+                    layout_health.neutral_annulus_inventory,
+                    expected_annulus,
+                )
+            else:
+                expected_neutral = np.sum(
+                    loaded_layout.nn * Vm[None, :], axis=1
+                )
+            assert np.array_equal(
+                layout_health.neutral_inventory, expected_neutral
+            )
+            assert layout_health.finite
+            assert set(loaded_layout.floor_ledger) == {
+                "n_particles_added",
+                "nn_particles_added",
+                "nn_a_particles_added",
+                "Ee_energy_added_erg",
+                "Ei_energy_added_erg",
+            }
+            assert all(
+                float(value) == 0.0
+                for value in loaded_layout.floor_ledger.values()
+            )
+
+            if layout_sim.state.nn_a is not None:
+                exchange = layout_sim.neutral_zone_exchange_rhs()
+                exchange_residual = (
+                    exchange.nn * Vp + exchange.nn_a * (Vm - Vp)
+                )
+                exchange_scale = max(
+                    float(np.max(np.abs(exchange.nn * Vp))), 1.0
+                )
+                assert (
+                    float(np.max(np.abs(exchange_residual)))
+                    <= 1.0e-14 * exchange_scale
+                )
+
+    # R1c: raw candidates are rejected before clipping, including every
+    # optional density and both energy rows. Trial failures leave accepted
+    # state/time/circuit/cache and the accepted-only floor ledger unchanged.
+    r1c_params = dict(
+        r1a_params,
+        neutral_momentum_radial="kinetic_two_moment",
+    )
+    r1c_flags = dict(
+        r1a_flags,
+        neutral_momentum=True,
+        neutral_two_zone=True,
+        raw_stage_validation=True,
+    )
+    r1c_dt = 1.0e-10
+    for bad_field in ("n", "nn", "nn_a", "Ee", "Ei"):
+        reject_sim = LAPDSim1D(r1c_params, r1c_flags)
+        before_y = reject_sim._y.copy()
+        before_time = reject_sim.time
+        before_loop = reject_sim._circuit_I_loop
+        before_cache = reject_sim._step_cache_snapshot()
+        before_ledger = dict(reject_sim._floor_ledger)
+        field_names = state_field_names(reject_sim.state)
+        bad_row = field_names.index(bad_field)
+        cells = reject_sim.geometry.cells
+
+        def bad_rhs(y, time=None, _row=bad_row, _cells=cells):
+            rhs = np.zeros_like(y)
+            start = _row * _cells
+            rhs[start : start + _cells] = (
+                -2.0 * np.asarray(y)[start : start + _cells] / r1c_dt
+            )
+            return rhs
+
+        reject_sim.rhs = bad_rhs
+        rejected = reject_sim._attempt_step(
+            dt=r1c_dt, operator_split=False
+        )
+        reason, detail = reject_sim._step_rejection_info(
+            rejected, y0=before_y
+        )
+        assert reason == (
+            "negative_energy" if bad_field in {"Ee", "Ei"}
+            else "negative_density"
+        )
+        assert bad_field in detail["fields"]
+        assert np.array_equal(reject_sim._y, before_y)
+        assert reject_sim.time == before_time
+        assert reject_sim._circuit_I_loop == before_loop
+        assert reject_sim._cathode_x0 == before_cache.cathode_x0
+        assert reject_sim._cathode_x0_twin == before_cache.cathode_x0_twin
+        assert np.array_equal(
+            reject_sim._cathode_beam_cross,
+            before_cache.cathode_beam_cross,
+        )
+        assert reject_sim._floor_ledger == before_ledger
+        assert all(value == 0.0 for value in rejected.floor_ledger.values())
+
+    # The implicit heat candidate uses the same pre-floor validation hook.
+    implicit_reject_sim = LAPDSim1D(r1c_params, r1c_flags)
+    implicit_before = implicit_reject_sim._y.copy()
+    implicit_original = implicit_reject_sim.implicit_heat_conduction_step
+
+    def bad_implicit(*args, **kwargs):
+        state = implicit_original(*args, **kwargs)
+        return ConservativeState1D(
+            n=state.n,
+            nn=state.nn,
+            M=state.M,
+            Ee=-np.abs(state.Ee),
+            Ei=state.Ei,
+            M_n=state.M_n,
+            nn_a=state.nn_a,
+            M_n_a=state.M_n_a,
+        )
+
+    implicit_reject_sim.implicit_heat_conduction_step = bad_implicit
+    try:
+        implicit_reject_sim.operator_split_step(
+            dt=r1c_dt, splitting="strang"
+        )
+    except ValueError as error:
+        assert "negative_energy" in str(error)
+    else:
+        raise AssertionError("expected raw implicit-energy rejection")
+    assert np.array_equal(implicit_reject_sim._y, implicit_before)
+
+    # Exact floor debit: particles use each field's physical inventory
+    # volume and energy uses the plasma volume. A direct probe does not
+    # mutate the accepted-only cumulative ledger.
+    debit_sim = LAPDSim1D(r1c_params, r1c_flags)
+    debit_state = debit_sim.state
+    debit_cell = int(np.flatnonzero(debit_sim.geometry.plasma_active)[0])
+    raw_n = debit_state.n.copy()
+    raw_nn = debit_state.nn.copy()
+    raw_nn_a = debit_state.nn_a.copy()
+    raw_Ee = debit_state.Ee.copy()
+    raw_Ei = debit_state.Ei.copy()
+    raw_n[debit_cell] = 0.0
+    raw_nn[debit_cell] = 0.0
+    raw_nn_a[debit_cell] = 0.0
+    raw_Ee[debit_cell] = 0.0
+    raw_Ei[debit_cell] = 0.0
+    debit_raw = ConservativeState1D(
+        n=raw_n,
+        nn=raw_nn,
+        M=debit_state.M,
+        Ee=raw_Ee,
+        Ei=raw_Ei,
+        M_n=debit_state.M_n,
+        nn_a=raw_nn_a,
+        M_n_a=debit_state.M_n_a,
+    )
+    ledger_before_probe = dict(debit_sim._floor_ledger)
+    _, debit = debit_sim._floor_vector_with_ledger(pack_state(debit_raw))
+    Vp_cell = debit_sim.geometry.plasma_volume_cm3[debit_cell]
+    Vann_cell = (
+        debit_sim.geometry.neutral_volume_cm3[debit_cell]
+        - debit_sim.geometry.plasma_volume_cm3[debit_cell]
+    )
+    assert debit["n_particles_added"] == debit_sim.floors["n"] * Vp_cell
+    assert debit["nn_particles_added"] == debit_sim.floors["nn"] * Vp_cell
+    assert (
+        debit["nn_a_particles_added"]
+        == debit_sim.floors["nn"] * Vann_cell
+    )
+    assert debit["Ee_energy_added_erg"] == (
+        1.5
+        * debit_sim.floors["n"]
+        * debit_sim.floors["Te"]
+        * ev_to_erg
+        * Vp_cell
+    )
+    assert debit["Ei_energy_added_erg"] == (
+        1.5
+        * debit_sim.floors["n"]
+        * debit_sim.floors["Ti"]
+        * ev_to_erg
+        * Vp_cell
+    )
+    assert debit_sim._floor_ledger == ledger_before_probe
+
+    # R1d configuration presence: valid R1 selectors perturb their intended
+    # operator, while the disconnected resolved-boundary controls are frozen
+    # and rejected rather than accepted as silent no-ops pending R3.
+    for stale_param in (
+        {"source_surface_area_scale": 1.7},
+        {"end_surface_area_scale": 0.9},
+        {"front_flux_model": "unregistered"},
+        {"D_amb_model": "constant"},
+        {"D_amb": 1.0},
+        {"cathode_model": "enabled"},
+    ):
+        try:
+            LAPDSim1D(dict(r1a_params, **stale_param), r1a_flags)
+        except ValueError as error:
+            assert "silent no-ops" in str(error)
+        else:
+            raise AssertionError(
+                f"expected frozen surface-control rejection: {stale_param}"
+            )
+    for stale_flag in (
+        {"source_surface_loss": False},
+        {"end_surface_loss": False},
+    ):
+        try:
+            LAPDSim1D(r1a_params, dict(r1a_flags, **stale_flag))
+        except ValueError as error:
+            assert "silent no-ops" in str(error)
+        else:
+            raise AssertionError(
+                f"expected frozen surface-control rejection: {stale_flag}"
+            )
+    for birth_name, bad_value in (
+        ("Te_birth_ionization", "bogus"),
+        ("Ti_birth_ionization", -1.0),
+        ("Te_birth_ionization", np.inf),
+    ):
+        try:
+            LAPDSim1D(
+                dict(r1a_params, **{birth_name: bad_value}), r1a_flags
+            )
+        except ValueError as error:
+            assert birth_name in str(error)
+        else:
+            raise AssertionError(
+                f"expected birth-selector rejection: {birth_name}={bad_value}"
+            )
+
+    topo_off = LAPDSim1D(
+        r1a_params, dict(r1a_flags, active_plasma_topology=False)
+    )
+    topo_on = LAPDSim1D(r1a_params, r1a_flags)
+    topo_dead = ~topo_on.geometry.plasma_active
+    assert np.any(
+        topo_off.reaction_rhs_terms()["ionization_birth"].n[topo_dead] != 0.0
+    )
+    assert np.all(
+        topo_on.rhs_terms()["ionization_birth"].n[topo_dead] == 0.0
+    )
+
+    birth_local = LAPDSim1D(
+        dict(r1a_params, Te_birth_ionization="local"), r1a_flags
+    )
+    birth_floor = LAPDSim1D(
+        dict(r1a_params, Te_birth_ionization="floor"), r1a_flags
+    )
+    local_Ee = birth_local.reaction_rhs_terms()["ionization_birth"].Ee
+    floor_Ee = birth_floor.reaction_rhs_terms()["ionization_birth"].Ee
+    assert np.any(local_Ee[birth_local.geometry.plasma_active] != floor_Ee[
+        birth_floor.geometry.plasma_active
+    ])
+
+    raw_off = LAPDSim1D(
+        r1c_params, dict(r1c_flags, raw_stage_validation=False)
+    )
+    raw_off_fields = state_field_names(raw_off.state)
+    raw_off_row = raw_off_fields.index("nn_a")
+    raw_off_cells = raw_off.geometry.cells
+
+    def raw_off_rhs(y, time=None):
+        rhs = np.zeros_like(y)
+        start = raw_off_row * raw_off_cells
+        rhs[start : start + raw_off_cells] = (
+            -2.0 * np.asarray(y)[start : start + raw_off_cells] / r1c_dt
+        )
+        return rhs
+
+    raw_off.rhs = raw_off_rhs
+    raw_off_attempt = raw_off._attempt_step(
+        dt=r1c_dt, operator_split=False
+    )
+    assert raw_off_attempt.raw_rejection_reason == ""
+    assert raw_off_attempt.floor_ledger["nn_a_particles_added"] > 0.0
+
+    # R1e exact resolved-config evidence: the machine-readable manifest
+    # covers the authoritative registry, every config-complete campaign
+    # driver matches its reviewed digest, and constructed config metadata
+    # survives HDF5 exactly. No campaign integration is performed.
+    from audit_sim1d_configs import config_cases, verify_snapshots
+    from cablp.solvers._sim1d import config_manifest
+    from cablp.solvers._sim1d.results.io import save_result_hdf5
+
+    r1e_snapshots = verify_snapshots()
+    r1e_manifest = config_manifest()
+    r1e_default_params, r1e_default_flags = default_config()
+    assert set(r1e_manifest["parameters"]) == set(r1e_default_params)
+    assert set(r1e_manifest["flags"]) == set(r1e_default_flags)
+    assert r1e_snapshots["parameter_count"] == len(r1e_default_params)
+    assert r1e_snapshots["flag_count"] == len(r1e_default_flags)
+    for unknown_params, unknown_flags in (
+        ({"misspelled_campaign_knob": 1.0}, {}),
+        ({}, {"inert_campaign_flag": True}),
+    ):
+        try:
+            LAPDSim1D(unknown_params, unknown_flags)
+        except ValueError as error:
+            assert "silent/inert controls are forbidden" in str(error)
+        else:
+            raise AssertionError("unknown config key constructed silently")
+
+    with tempfile.TemporaryDirectory() as r1e_dir:
+        for case_name, (case_params, case_flags) in config_cases().items():
+            case_sim = LAPDSim1D(case_params, case_flags)
+            resolved_params, resolved_flags = case_sim.get_config()
+            assert resolved_params == case_params
+            assert resolved_flags == case_flags
+            case_result = case_sim.run(t_end=0.0)
+            case_path = Path(r1e_dir) / f"{case_name}.h5"
+            save_result_hdf5(
+                case_path,
+                case_result,
+                params=case_params,
+                flags=case_flags,
+            )
+            case_loaded = load_result_hdf5(case_path)
+            assert case_loaded.params == resolved_params
+            assert case_loaded.flags == resolved_flags
+            with h5py.File(case_path, "r") as case_h5:
+                assert json.loads(case_h5.attrs["params_json"]) == resolved_params
+                assert json.loads(case_h5.attrs["flags_json"]) == resolved_flags
+
+        mismatch_params = dict(case_params)
+        mismatch_params["Te_birth_ionization"] = (
+            "local"
+            if case_params["Te_birth_ionization"] == "floor"
+            else "floor"
+        )
+        try:
+            save_result_hdf5(
+                Path(r1e_dir) / "metadata_mismatch.h5",
+                case_result,
+                params=mismatch_params,
+                flags=case_flags,
+            )
+        except ValueError as error:
+            assert "constructed LAPDSim1D config" in str(error)
+        else:
+            raise AssertionError("mismatched HDF5 config metadata was accepted")
+
+    # R1 startup/rate-domain follow-up: the repaired live defaults are above
+    # their hard floors and the exact bundled ADF11 edge. The proactive
+    # resolved-source bound makes raw rejection a backstop and leaves the
+    # accepted-only floor ledger exactly null through plasma launch.
+    repaired_params, repaired_flags = default_config()
+    adas_te_min, adas_te_max = he_rate_temperature_range_eV()
+    assert repaired_flags["active_plasma_topology"] is True
+    assert repaired_flags["raw_stage_validation"] is True
+    assert repaired_params["Te0"] == 0.21
+    assert repaired_params["Ti0"] == 0.125
+    assert repaired_params["Te0"] > adas_te_min
+    assert adas_te_max > repaired_params["Te0"]
+    for bad_seed in (
+        {"Te0": repaired_params["Te_floor"]},
+        {"Ti0": repaired_params["Ti_floor"]},
+    ):
+        try:
+            LAPDSim1D(dict(repaired_params, **bad_seed), repaired_flags)
+        except ValueError as error:
+            assert "strictly greater" in str(error)
+        else:
+            raise AssertionError(
+                f"raw-stage repaired config accepted floor-bound seed {bad_seed}"
+            )
+
+    startup_params, startup_flags = config_cases()["compare_sim1d_es1"]
+    startup_sim = LAPDSim1D(startup_params, startup_flags)
+    startup_result = startup_sim.run(t_end=2.03e-3)
+    assert len(startup_result.timestep_rejection_events["time"]) == 0
+    assert all(value == 0.0 for value in startup_result.floor_ledger.values())
+    source_bounds = [
+        diag.dt_surface_loss
+        for diag in startup_result.diagnostics
+        if diag.time >= startup_params["tau_neutral_prebreakdown"]
+    ]
+    assert source_bounds
+    assert np.all(np.isfinite(source_bounds))
+    assert any(
+        diag.active_constraint == "surface_loss"
+        for diag in startup_result.diagnostics
+    )
+    rate_domain = startup_result.atomic_rate_domain
+    assert rate_domain["table_Te_min_eV"] == adas_te_min
+    assert rate_domain["table_Te_max_eV"] == adas_te_max
+    assert np.all(rate_domain["active_cell_fraction_below"] == 0.0)
+    assert np.all(rate_domain["active_volume_fraction_below"] == 0.0)
+
+    with tempfile.TemporaryDirectory() as rate_dir:
+        rate_path = Path(rate_dir) / "rate-domain.h5"
+        save_result_hdf5(rate_path, startup_result)
+        loaded_rate = load_result_hdf5(rate_path)
+        assert set(loaded_rate.atomic_rate_domain) == set(rate_domain)
+        for name, expected in rate_domain.items():
+            loaded_value = np.asarray(loaded_rate.atomic_rate_domain[name])
+            expected_value = np.asarray(expected)
+            if expected_value.dtype.kind in {"U", "S", "O"}:
+                assert np.array_equal(loaded_value, expected_value)
+            else:
+                assert np.array_equal(
+                    loaded_value,
+                    expected_value,
+                    equal_nan=True,
+                )
+        with h5py.File(rate_path, "a") as rate_h5:
+            del rate_h5["atomic_rate_domain"]
+        assert load_result_hdf5(rate_path).atomic_rate_domain == {}
 
     print(
         "sim1d smoke ok: "

@@ -18,6 +18,9 @@ from run_mechanism_ladder import ES_OPERATING
 from cablp.solvers._sim1d.results.io import save_result_hdf5
 
 
+ELECTRON_BIRTH_POLICY = "floor"
+
+
 def main(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("--es", type=int, choices=(1, 2, 3), required=True)
@@ -60,6 +63,10 @@ def main(argv=None):
         "cathode_phiwf_clean_eV": 2.809,
         "cathode_cleaning_sigma_cm2": 3.5e-16,
         "cathode_cleaning_E_th_eV": 20.0,
+        # Explicit campaign choice. The notebook carried this override until
+        # 0451c97 replaced its local config with the shared production config;
+        # never inherit the shared "local" default here again.
+        "Te_birth_ionization": ELECTRON_BIRTH_POLICY,
         "gas_puff_mode": "square",
         "S_gp": args.sgp,
     }
