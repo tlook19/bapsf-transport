@@ -3,7 +3,12 @@ import numpy as np
 from cablp.funcs._cross import charge_ex_react
 from cablp.vars._cons import ev_to_erg, kb_cgs
 
-from .flux import ion_sound_speed, plasma_wave_speed, _flux_divergence
+from .flux import (
+    ion_sound_speed,
+    plasma_wave_speed,
+    _flux_divergence,
+    kep_rusanov_face_scalar,
+)
 from ..core.state import ConservativeState1D, derive_state
 
 
@@ -240,6 +245,48 @@ def presheath_alpha(alpha_isat, cell_length_cm, presheath_cm):
     return float(alpha_isat) ** fraction
 
 
+def electrode_sheath_alpha(
+    nn,
+    Te,
+    Ti,
+    cell_length_cm,
+    mu,
+    ion_mass_g,
+    alpha_isat=np.exp(-0.5),
+    b_presheath_length=1.0,
+    sigma_in_cm2=5.0e-15,
+    sigma_in_model="constant",
+    gas_type=None,
+):
+    """Return the mesh-independent sheath-edge factor ``n_se/n`` at one cell.
+
+    The single source of truth for the collisional-presheath sampling
+    (R3.2, SIM1D_MODEL_AUDIT_PLAN A16 "one mesh-independent sheath-edge density
+    n_se ... SHARED by the fluid sink, the circuit current, and the power terms").
+    Both the fluid characteristic boundary (``characteristic_boundary_rhs``) and
+    the circuit's cathode current (``funcs._cathode_solver_idriven.solve_idriven``
+    via the cathode adapter) call this so they cannot disagree about ``n_se``.
+    The anode mesh is NOT sampled here: its presheath is geometric and always
+    fits inside a cell, so its factor is the flat ``exp(-1/2)`` used unchanged by
+    both ``anode_collection_rhs`` and ``anode_circuit_sample``.
+    """
+    presheath_cm = b_presheath_length * presheath_length_cm(
+        nn=nn,
+        Te=Te,
+        Ti=Ti,
+        mu=mu,
+        ion_mass_g=ion_mass_g,
+        sigma_in_cm2=sigma_in_cm2,
+        sigma_in_model=sigma_in_model,
+        gas_type=gas_type,
+    )
+    return presheath_alpha(
+        alpha_isat=alpha_isat,
+        cell_length_cm=cell_length_cm,
+        presheath_cm=presheath_cm,
+    )
+
+
 def boundary_absorption_rhs(
     state,
     floors,
@@ -397,6 +444,227 @@ def boundary_absorption_rhs(
         M=-sonic_momentum / geometry.plasma_volume_cm3,
         Ee=-1.5 * ev_to_erg * derived.Te * plasma_loss_rate,
         Ei=-1.5 * ev_to_erg * derived.Ti * plasma_loss_rate,
+        M_n=jet_M_n,
+    )
+
+
+def characteristic_boundary_rhs(
+    state,
+    floors,
+    ion_mass_g,
+    mu,
+    geometry,
+    alpha_isat=np.exp(-0.5),
+    b_surface_loss=1.0,
+    sigma_in_cm2=5.0e-15,
+    b_presheath_length=1.0,
+    sigma_in_model="constant",
+    gas_type=None,
+    cathode_jet=None,
+    wave_speed="isothermal",
+    energy_consistent=False,
+    sheath_energy_routing=False,
+):
+    """Return the R3.1 characteristic ghost-cell Bohm outflow at absorbing faces.
+
+    R3.1 (SIM1D_MODEL_AUDIT_PLAN "R3.1 boundary approach: ghost-cell Bohm
+    outflow"; audit A1/A16) replaces the closed-reflecting-face + one-sided
+    volumetric sink of ``boundary_absorption_rhs``. At each plasma-terminating
+    (absorbing) face a ghost state is set to the Bohm outflow condition
+
+        n_se = n * presheath_alpha,  u = c_s directed into the wall,  Te, Ti
+
+    and the committed R2 KEP/Rusanov flux (``flux.kep_rusanov_face_scalar``) is
+    evaluated between the interior live cell and the ghost. Unlike the historical
+    volumetric sink -- which removed outward momentum at ``c_s`` from a cell that
+    was already flowing outward and so drove ``u`` further outward, booking the
+    absorbing wall as a net kinetic SOURCE (the A1/A16 ``+18.5 kW``) -- the ghost
+    flux DRIVES the interior toward the Bohm state and is a net energy sink.
+
+    The flux is applied **one-sidedly to the live cell**, exactly as the old sink
+    was: the shared face-flux array telescopes, so an interior absorbing face
+    would otherwise hand the removed plasma to the plasma-dead plenum behind it.
+    When the flag is on the advective flux carries nothing at these faces
+    (``flux._apply_plasma_walls`` zeroes them), so the ghost flux -- which
+    includes its own pressure term ``M_g u_g + p_g`` -- is the complete face
+    condition, not an addition to the reflecting wall pressure.
+
+    The neutral return and the cathode jet are booked exactly as in
+    ``boundary_absorption_rhs``. The sheath-``phi`` -> electrode-surface power
+    routing and the circuit's read of the same ``n_se`` are the R3.2 control-
+    surface ledger, layered on top of this term. Default off; golden bit-exact.
+    """
+    cells = geometry.cells
+    zeros = np.zeros(cells, dtype=float)
+    absorbing = np.asarray(
+        getattr(geometry, "plasma_absorbing", np.zeros(0)), dtype=bool
+    )
+    if not np.any(absorbing) or b_surface_loss == 0.0:
+        return ConservativeState1D(
+            n=zeros,
+            nn=zeros.copy(),
+            M=zeros.copy(),
+            Ee=zeros.copy(),
+            Ei=zeros.copy(),
+        )
+
+    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
+    roles = np.asarray(geometry.cell_role)
+    Vp = np.asarray(geometry.plasma_volume_cm3, dtype=float)
+    area = np.asarray(geometry.plasma_face_area_cm2, dtype=float)
+
+    d_n = np.zeros(cells, dtype=float)
+    d_M = np.zeros(cells, dtype=float)
+    d_Ee = np.zeros(cells, dtype=float)
+    d_Ei = np.zeros(cells, dtype=float)
+    loss_abs = np.zeros(cells, dtype=float)  # particles/s removed per cell
+
+    jet_active = cathode_jet is not None and state.M_n is not None
+    jet_M_n = np.zeros(cells, dtype=float) if jet_active else None
+    if jet_active:
+        v_eff = np.sqrt(
+            np.pi * kb_cgs * max(float(cathode_jet["T_s_K"]), 0.0)
+            / (2.0 * ion_mass_g)
+        )
+
+    for face in np.flatnonzero(absorbing):
+        face = int(face)
+        live = int(geometry.plasma_face_live_cell[face])
+        if live < 0:
+            continue
+        live_is_right = live == face
+        # Outward normal: plasma on the high-z side of the surface flows toward
+        # -z to reach it (source cathode), and +z otherwise (collector).
+        outward = -1.0 if live_is_right else 1.0
+
+        Te_l = float(derived.Te[live])
+        Ti_l = float(derived.Ti[live])
+        cs = float(ion_sound_speed(Te_l, mu))
+
+        # Shared mesh-independent sheath-edge sampling (presheath_alpha): the
+        # SAME factor the circuit reads in R3.2 (via electrode_sheath_alpha).
+        alpha_eff = electrode_sheath_alpha(
+            nn=state.nn[live],
+            Te=Te_l,
+            Ti=Ti_l,
+            cell_length_cm=float(geometry.length_cm[live]),
+            mu=mu,
+            ion_mass_g=ion_mass_g,
+            alpha_isat=alpha_isat,
+            b_presheath_length=b_presheath_length,
+            sigma_in_cm2=sigma_in_cm2,
+            sigma_in_model=sigma_in_model,
+            gas_type=gas_type,
+        )
+
+        n_se = alpha_eff * float(state.n[live])
+        u_g = outward * cs
+        p_g = n_se * (Te_l + Ti_l) * ev_to_erg
+        ghost = {
+            "n": n_se,
+            "M": ion_mass_g * n_se * u_g,
+            "Ee": 1.5 * n_se * Te_l * ev_to_erg,
+            "Ei": 1.5 * n_se * Ti_l * ev_to_erg,
+            "u": u_g,
+            "p": p_g,
+            "Te": Te_l,
+            "Ti": Ti_l,
+        }
+        interior = {
+            "n": float(state.n[live]),
+            "M": float(state.M[live]),
+            "Ee": float(state.Ee[live]),
+            "Ei": float(state.Ei[live]),
+            "u": float(derived.u[live]),
+            "p": float(derived.p[live]),
+            "Te": Te_l,
+            "Ti": Ti_l,
+        }
+        # Assemble the +z-oriented face: the interior sits on whichever side the
+        # live cell occupies, the ghost (the surface) on the other.
+        if live_is_right:
+            left_state, right_state, signL = ghost, interior, 1.0
+        else:
+            left_state, right_state, signL = interior, ghost, -1.0
+
+        f_n, f_M, f_Ee, f_Ei = kep_rusanov_face_scalar(
+            left_state,
+            right_state,
+            mu=mu,
+            ion_mass_g=ion_mass_g,
+            wave_speed=wave_speed,
+            energy_consistent=energy_consistent,
+        )
+        # One-sided divergence on the live cell (the plenum keeps its closed
+        # face and never receives this flux).
+        scale = signL * area[face] / Vp[live]
+        d_n[live] += scale * f_n
+        d_M[live] += scale * f_M
+        d_Ei[live] += scale * f_Ei
+        # Electron energy row. R3.1: the ghost enthalpy flux (~3/2 Te). R3.2/A16
+        # sheath-transmission routing (SIM1D_MODEL_AUDIT_PLAN "R3 physics map"):
+        # the electron wall loss is the flux-weighted sheath value 2 Te, and the
+        # sheath-fall phi is electrode energy (never the plasma thermal store).
+        # At DRIVEN electrodes (cathode) the circuit owns it -- it is booked once
+        # by cathode_source_terms as P_cathode_e_thermal, so the boundary adds
+        # nothing here (removing the R3.1 electron double-book). At the COLLECTOR
+        # (floating zero-net-current exhaust, no circuit branch) the boundary IS
+        # the electron sheath: 2 Te per electron at the Bohm flux (electron flux =
+        # ion flux), the missing collector electron sheath power.
+        if sheath_energy_routing:
+            if roles[live] == "collector":
+                d_Ee[live] += 2.0 * Te_l * ev_to_erg * (scale * f_n)
+            # cathode / other driven electrode: electron energy owned by circuit.
+        else:
+            d_Ee[live] += scale * f_Ee
+
+        # Particles/s leaving through this face (density sink-rate x cell volume).
+        cell_loss = -scale * f_n * Vp[live]
+        loss_abs[live] += cell_loss
+        if jet_active and roles[live] == "cathode":
+            v_back = np.sqrt(
+                2.0
+                * float(cathode_jet["R_E"])
+                * max(float(cathode_jet["phi_c_V"]) + Ti_l, 0.0)
+                * ev_to_erg
+                / ion_mass_g
+            )
+            R_N = float(cathode_jet["R_N"])
+            v_mix = R_N * v_back + (1.0 - R_N) * v_eff
+            jet_M_n[live] += (
+                -outward
+                * ion_mass_g
+                * v_mix
+                * cell_loss
+                / (
+                    geometry.plasma_volume_cm3[live]
+                    if state.M_n_a is not None
+                    else geometry.neutral_volume_cm3[live]
+                )
+            )
+
+    scale_b = float(b_surface_loss)
+    d_n *= scale_b
+    d_M *= scale_b
+    d_Ee *= scale_b
+    d_Ei *= scale_b
+    loss_abs *= scale_b
+    if jet_active:
+        jet_M_n *= scale_b
+
+    # Neutral return: the absorbed plasma flux is rebirthed as neutrals on the
+    # column (two-zone) or chamber-mean volume, exactly as boundary_absorption.
+    nn_return = loss_abs / (
+        geometry.plasma_volume_cm3
+        if state.nn_a is not None
+        else geometry.neutral_volume_cm3
+    )
+    return ConservativeState1D(
+        n=d_n,
+        nn=nn_return,
+        M=d_M,
+        Ee=d_Ee,
+        Ei=d_Ei,
         M_n=jet_M_n,
     )
 

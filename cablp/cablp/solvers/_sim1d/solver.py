@@ -1,6 +1,7 @@
 """Solver implementation for the conservative axial 1D LAPD model."""
 
 import math
+import warnings
 from dataclasses import dataclass, replace
 from time import perf_counter
 from types import SimpleNamespace
@@ -93,6 +94,7 @@ from .physics.sources import (
     add_state_rhs,
     anode_collection_rhs,
     boundary_absorption_rhs,
+    characteristic_boundary_rhs,
     ion_neutral_drag_rhs,
     ion_neutral_frictional_heating_rhs,
     ion_neutral_thermalization_rhs,
@@ -557,6 +559,9 @@ class LAPDSim1D:
         self._hyperbolic_energy_consistent = bool(
             self._flags.get("hyperbolic_energy_consistent", False)
         )
+        self._characteristic_boundary = bool(
+            self._flags.get("characteristic_boundary", False)
+        )
         self._validate_r1_configuration_presence()
         exchange_model = str(
             self._input_dict.get("neutral_exchange_model", "knudsen")
@@ -884,22 +889,6 @@ class LAPDSim1D:
     def _validate_r1_configuration_presence(self):
         """Reject R1-audited controls that would otherwise be silent no-ops."""
         frozen_controls = {
-            "source_surface_loss": (
-                bool(self._flags.get("source_surface_loss", True)),
-                True,
-            ),
-            "end_surface_loss": (
-                bool(self._flags.get("end_surface_loss", True)),
-                True,
-            ),
-            "source_surface_area_scale": (
-                float(self._input_dict.get("source_surface_area_scale", 1.8)),
-                1.8,
-            ),
-            "end_surface_area_scale": (
-                float(self._input_dict.get("end_surface_area_scale", 1.0)),
-                1.0,
-            ),
             "front_flux_model": (
                 str(self._input_dict.get("front_flux_model")),
                 "sonic_relaxation",
@@ -930,6 +919,47 @@ class LAPDSim1D:
                 "no-ops: "
                 + ", ".join(changed)
             )
+        # A13 (R3.3, 2026-07-24): the resolved-boundary surface-loss controls are
+        # DEPRECATED 0D artifacts. In the lumped model they stood in for I_sat
+        # that could not be separated between the cathode and anode; the resolved
+        # geometry measures the Bohm I_sat to each electrode face directly (the
+        # characteristic ghost-cell boundary / anode collection), so the area
+        # scales and enables have NO operator to control and are never consumed.
+        # Their owning repair (R3.3) retires them rather than wiring a 0D fudge
+        # into the resolved boundary. Loud on non-default use (no silent no-op).
+        deprecated_surface_controls = {
+            "source_surface_loss": (
+                bool(self._flags.get("source_surface_loss", True)), True,
+            ),
+            "end_surface_loss": (
+                bool(self._flags.get("end_surface_loss", True)), True,
+            ),
+            "source_surface_area_scale": (
+                float(self._input_dict.get("source_surface_area_scale", 1.8)),
+                1.8,
+            ),
+            "end_surface_area_scale": (
+                float(self._input_dict.get("end_surface_area_scale", 1.0)),
+                1.0,
+            ),
+        }
+        deprecated = [
+            name
+            for name, (actual, default) in deprecated_surface_controls.items()
+            if actual != default
+        ]
+        if deprecated:
+            warnings.warn(
+                "resolved-boundary surface-loss controls "
+                + ", ".join(deprecated)
+                + " are DEPRECATED 0D artifacts (they stood in for un-separated "
+                "cathode/anode I_sat); the resolved geometry measures the Bohm "
+                "I_sat to each electrode face directly, so they have no effect. "
+                "Remove them; reproduce 0D-scaled runs at tag "
+                "legacy-final-2026-07-22.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         for name in ("Te_birth_ionization", "Ti_birth_ionization"):
             value = self._input_dict.get(name)
             if isinstance(value, str):
@@ -953,6 +983,22 @@ class LAPDSim1D:
                 "hyperbolic_wave_speed must be 'isothermal' or 'adiabatic' "
                 f"(got {self._hyperbolic_wave_speed!r})"
             )
+        if self._characteristic_boundary:
+            # R3.1 characteristic ghost-cell Bohm outflow (audit A1/A16). It acts
+            # only on plasma-terminating (absorbing) faces, which exist only in
+            # the resolved geometry; without them the flag would be a silent
+            # no-op (R1d discipline).
+            absorbing = np.asarray(
+                getattr(self._geometry, "plasma_absorbing", np.zeros(0)),
+                dtype=bool,
+            )
+            if not np.any(absorbing):
+                raise ValueError(
+                    "characteristic_boundary requires plasma-terminating "
+                    "(absorbing) faces, which exist only in the resolved "
+                    "geometry (resolved_boundaries=True); it would otherwise be "
+                    "a silent no-op"
+                )
         if self._raw_stage_validation and self._flags.get("Plasma", True):
             for initial_name, floor_name in (
                 ("Te0", "Te_floor"),
@@ -1086,6 +1132,7 @@ class LAPDSim1D:
                 "plasma_advective_flux": self._zero_rhs_state(),
                 "plasma_front_flux": self._zero_rhs_state(),
                 "boundary_absorption": self._zero_rhs_state(),
+                "characteristic_boundary": self._zero_rhs_state(),
                 "pressure_work": self._zero_rhs_state(),
                 "hyperbolic_energy_correction": self._zero_rhs_state(),
                 "ei_exchange": self._zero_rhs_state(),
@@ -1138,8 +1185,19 @@ class LAPDSim1D:
             **geometry_terms,
             "plasma_advective_flux": plasma_terms["plasma_advective_flux"],
             "plasma_front_flux": plasma_terms["plasma_front_flux"],
-            "boundary_absorption": self.boundary_absorption_rhs(
-                state=state, cathode_solve=cathode_solve, time=time
+            "boundary_absorption": (
+                self._zero_rhs_state()
+                if self._characteristic_boundary
+                else self.boundary_absorption_rhs(
+                    state=state, cathode_solve=cathode_solve, time=time
+                )
+            ),
+            "characteristic_boundary": (
+                self.characteristic_boundary_rhs(
+                    state=state, cathode_solve=cathode_solve, time=time
+                )
+                if self._characteristic_boundary
+                else self._zero_rhs_state()
             ),
             "pressure_work": self.pressure_work_rhs(state=state),
             "hyperbolic_energy_correction": (
@@ -3068,6 +3126,7 @@ class LAPDSim1D:
             active_plasma_topology=self._active_plasma_topology,
             wave_speed=self._hyperbolic_wave_speed,
             energy_consistent=self._hyperbolic_energy_consistent,
+            characteristic_boundary=self._characteristic_boundary,
         )
 
     def plasma_flux_rhs_terms(self, y=None, state=None, include_front=None):
@@ -3088,6 +3147,7 @@ class LAPDSim1D:
             active_plasma_topology=self._active_plasma_topology,
             wave_speed=self._hyperbolic_wave_speed,
             energy_consistent=self._hyperbolic_energy_consistent,
+            characteristic_boundary=self._characteristic_boundary,
         )
 
     def pressure_work_rhs(self, y=None, state=None):
@@ -3214,6 +3274,49 @@ class LAPDSim1D:
             ),
             gas_type=self._gas_type,
             cathode_jet=self._cathode_jet_spec(cathode_solve),
+        )
+
+    def characteristic_boundary_rhs(
+        self, y=None, state=None, cathode_solve=None, time=None
+    ):
+        """Return the R3.1 characteristic ghost-cell Bohm outflow (audit A1/A16).
+
+        Replaces ``boundary_absorption_rhs`` when the ``characteristic_boundary``
+        flag is on: a one-sided ghost-cell KEP/Rusanov flux against the Bohm
+        outflow state at each absorbing face. Reads the same surface kwargs and
+        cathode jet, and follows the interior's momentum-flux form and wave speed
+        so a repaired stance stays consistent.
+        """
+        if state is None:
+            state = self.state if y is None else self._unpack(y)
+        surface_kwargs = self._surface_loss_kwargs()
+        cathode_solve = self._jet_cathode_solve(
+            cathode_solve, self._cathode_jet_enabled, time
+        )
+        return characteristic_boundary_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            mu=self._mu,
+            geometry=self._geometry,
+            alpha_isat=surface_kwargs["alpha_isat"],
+            b_surface_loss=surface_kwargs["b_surface_loss"],
+            sigma_in_cm2=float(self._input_dict.get("sigma_in_cm2", 5.0e-15)),
+            b_presheath_length=float(
+                self._input_dict.get("b_presheath_length", 1.0)
+            ),
+            sigma_in_model=str(
+                self._input_dict.get("sigma_in_model", "constant")
+            ),
+            gas_type=self._gas_type,
+            cathode_jet=self._cathode_jet_spec(cathode_solve),
+            wave_speed=self._hyperbolic_wave_speed,
+            energy_consistent=self._hyperbolic_energy_consistent,
+            # R3.2/A16: this term runs only in the repaired stance, so it always
+            # routes electrode energy through the one control surface (electron
+            # sheath transmission; driven electrodes owned by the circuit,
+            # collector floating).
+            sheath_energy_routing=True,
         )
 
     def anode_collection_rhs(
@@ -4259,27 +4362,14 @@ class LAPDSim1D:
         }
 
     def _surface_loss_kwargs(self):
-        cathode_coupled = bool(self._flags.get("cathode_coupling", False))
-        source_surface_loss_enabled = bool(
-            self._flags.get("source_surface_loss", True)
-        )
-        if cathode_coupled:
-            # The cathode solver returns the combined cathode/anode collection
-            # current used by _sim3.py. A future 1D source model will need the
-            # cathode solver to expose separate cathode and anode currents.
-            source_surface_loss_enabled = False
+        # The resolved boundary terms read only ``alpha_isat`` and
+        # ``b_surface_loss``. The former per-face source/end enables and area
+        # scales were A13 no-ops (never consumed) and are DEPRECATED 0D artifacts
+        # (R3.3): the resolved geometry measures the Bohm I_sat to each electrode
+        # face directly. ``_validate_r1_configuration_presence`` warns on their
+        # non-default use.
         return {
             "alpha_isat": float(self._input_dict.get("alpha_isat", np.exp(-0.5))),
-            "source_surface_area_scale": float(
-                self._input_dict.get("source_surface_area_scale", 1.8)
-            ),
-            "end_surface_area_scale": float(
-                self._input_dict.get("end_surface_area_scale", 1.0)
-            ),
-            "source_surface_loss_enabled": source_surface_loss_enabled,
-            "end_surface_loss_enabled": bool(
-                self._flags.get("end_surface_loss", True)
-            ),
             "end_mode": self._input_dict.get("end_mode", "collector"),
             "b_surface_loss": float(self._input_dict.get("b_surface_loss", 1.0)),
         }

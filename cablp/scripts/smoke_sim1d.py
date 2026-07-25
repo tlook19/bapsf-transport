@@ -2729,6 +2729,7 @@ def main():
         "plasma_advective_flux",
         "plasma_front_flux",
         "boundary_absorption",
+        "characteristic_boundary",
         "pressure_work",
         "hyperbolic_energy_correction",
         "ei_exchange",
@@ -7165,11 +7166,10 @@ def main():
     assert debit_sim._floor_ledger == ledger_before_probe
 
     # R1d configuration presence: valid R1 selectors perturb their intended
-    # operator, while the disconnected resolved-boundary controls are frozen
-    # and rejected rather than accepted as silent no-ops pending R3.
+    # operator; the still-frozen compatibility controls are rejected as silent
+    # no-ops pending their owning repair.
+    import warnings as _dep_warnings
     for stale_param in (
-        {"source_surface_area_scale": 1.7},
-        {"end_surface_area_scale": 0.9},
         {"front_flux_model": "unregistered"},
         {"D_amb_model": "constant"},
         {"D_amb": 1.0},
@@ -7183,18 +7183,23 @@ def main():
             raise AssertionError(
                 f"expected frozen surface-control rejection: {stale_param}"
             )
-    for stale_flag in (
-        {"source_surface_loss": False},
-        {"end_surface_loss": False},
+    # A13 (R3.3): the resolved-boundary surface-loss controls are now DEPRECATED
+    # 0D artifacts -- non-default use warns loudly (no longer frozen, never a
+    # silent no-op) because the resolved geometry measures per-electrode I_sat.
+    for dep_params, dep_flags in (
+        (dict(r1a_params, source_surface_area_scale=1.7), r1a_flags),
+        (dict(r1a_params, end_surface_area_scale=0.9), r1a_flags),
+        (r1a_params, dict(r1a_flags, source_surface_loss=False)),
+        (r1a_params, dict(r1a_flags, end_surface_loss=False)),
     ):
-        try:
-            LAPDSim1D(r1a_params, dict(r1a_flags, **stale_flag))
-        except ValueError as error:
-            assert "silent no-ops" in str(error)
-        else:
-            raise AssertionError(
-                f"expected frozen surface-control rejection: {stale_flag}"
-            )
+        with _dep_warnings.catch_warnings(record=True) as _caught_dep:
+            _dep_warnings.simplefilter("always")
+            LAPDSim1D(dict(dep_params), dict(dep_flags))
+        assert any(
+            issubclass(w.category, DeprecationWarning)
+            and "DEPRECATED 0D artifacts" in str(w.message)
+            for w in _caught_dep
+        ), f"expected A13 deprecation warning for {dep_params}/{dep_flags}"
     for birth_name, bad_value in (
         ("Te_birth_ionization", "bogus"),
         ("Ti_birth_ionization", -1.0),

@@ -230,6 +230,60 @@ class SolverResult:
     beam_bypass_fraction: float = 0.0
     # Beam mean free path [cm]; 0.0 if beam parameters not provided
     l_b: float = 0.0
+    # R3.2 (SIM1D_MODEL_AUDIT_PLAN A16) one-control-surface split. Each electrode
+    # power splits into a PLASMA-THERMAL part (Te/2 per ion, 2Te per electron --
+    # sourced from the plasma thermal store) and a SHEATH-FALL phi part (sourced
+    # from the sheath field / circuit, deposited on the electrode, never through
+    # the plasma thermal store). ``*_thermal + *_phi == P_*_e/_i`` by construction.
+    # These are the values the repaired fluid boundary reads so fluid == circuit.
+    # P_net/P_net2/P_loss above are the DEPRECATED unclosed scalars, kept only so
+    # the R1-R4 golden stays bit-exact; the useful closed audit is below.
+    P_cathode_e_thermal: float = 0.0
+    P_cathode_e_phi: float = 0.0
+    P_cathode_i_thermal: float = 0.0
+    P_cathode_i_phi: float = 0.0
+    P_anode_e_thermal: float = 0.0
+    P_anode_e_phi: float = 0.0
+    P_anode_i_thermal: float = 0.0
+    P_anode_i_phi: float = 0.0
+    # Closed surface-resolved audit [W] (Tom 2026-07-24, replaces P_net/P_net2):
+    # net power heating the plasma vs power onto each electrode surface.
+    P_plasma_thermal_loss: float = 0.0   # total plasma-thermal loss to electrodes
+    P_into_plasma: float = 0.0           # P_prim + P_ohmic - plasma-thermal loss
+    P_cathode_surface: float = 0.0       # plasma power onto the cathode (thermal+phi)
+    P_anode_surface: float = 0.0         # plasma power onto the anode (thermal+phi)
+    # Measurement-plane bookkeeping aliases (Tom 2026-07-24). The Poulos names
+    # I_tot / V_b are the MODEL LOAD quantities and are kept as-is; these alias to
+    # the three-plane convention so a future effective-load change diverges
+    # predictably without renaming. All divergences are identically zero until
+    # THESIS_NOTES items 24 (parallel branch) / 25 (series impedance) land:
+    #   V_dis = V_b + V_series     (measured terminal/discharge voltage)
+    #   I_bank = I_plasma + I_parallel   (measured bank/terminal current, I_dis)
+    #   I_plasma == I_tot now      (current conducted through the plasma load)
+    # so today V_dis == V_b, I_bank == I_plasma == I_tot, and every V*I product
+    # coincides: P_load = V_b*I_tot = V_dis*I_bank. The closure is referenced to
+    # P_load (power across the load), NOT the terminal product.
+    V_series: float = 0.0      # hidden series-impedance drop [V] (item 25); 0 now
+    I_parallel: float = 0.0    # stray/parallel branch current [A] (item 24); 0 now
+    V_dis: float = 0.0         # measured terminal voltage [V] = V_b + V_series
+    I_plasma: float = 0.0      # plasma-conducted current [A] = I_tot now
+    I_bank: float = 0.0        # measured bank current [A] = I_plasma + I_parallel
+    # Load-power closure diagnostic (Tom 2026-07-24). The circuit does I_tot*V_b
+    # of NET field work across the load; by the potential ladder V_b = phi_c + V_p
+    # - phi_a and Kirchhoff (the same net loop current threads each region), that
+    # is the per-region field work, and each region decomposes per species with
+    # the current DIRECTIONS respected -- at the cathode the emission and ion
+    # collection deliver field energy while the RETURNING plasma-electron current
+    # recovers it: I_tot = I_eth_star + I_i - I_e_ret. The sheath phi work is drawn
+    # from the CIRCUIT (it circulates: the cathode sheath accelerates carriers, the
+    # anode recovers), NOT from the plasma thermal store -- which is exactly why
+    # R3.2 routes phi to the electrode book and 2Te/Te/2 to the plasma book. The
+    # beam plasma deposition P_prim and the bulk-current ohmic are a SEPARATE
+    # plasma-heating book, not the circuit field work.
+    I_e_ret: float = 0.0           # returning plasma-electron current to cathode [A]
+    P_load_ledger: float = 0.0     # per-region net-current field work [W]
+    P_load_residual: float = 0.0   # P_load - P_load_ledger [W] (~0 by closure)
+    I_cathode_kirchhoff_residual: float = 0.0  # (I_eth_star+I_i-I_e_ret) - I_tot [A]
 
 
 @dataclass(slots=True)

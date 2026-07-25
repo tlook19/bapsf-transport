@@ -55,6 +55,7 @@ def physical_fluxes(state, derived):
 def rusanov_fluxes(
     state, floors, ion_mass_g, mu, geometry, active_plasma_topology=False,
     wave_speed="isothermal", energy_consistent=False,
+    characteristic_boundary=False,
 ):
     """Build closed-boundary Rusanov fluxes for plasma conservative variables."""
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
@@ -67,6 +68,7 @@ def rusanov_fluxes(
         geometry,
         derived.p,
         active_plasma_topology=active_plasma_topology,
+        characteristic_boundary=characteristic_boundary,
     )
 
 
@@ -121,7 +123,8 @@ def _rusanov_raw_faces(
 
 
 def _apply_face_conditions(
-    faces, geometry, pressure, active_plasma_topology=False
+    faces, geometry, pressure, active_plasma_topology=False,
+    characteristic_boundary=False,
 ):
     """Apply partial-blocking transmission and closed-face conditions to raw faces.
 
@@ -141,6 +144,7 @@ def _apply_face_conditions(
         face_Ee=face_Ee,
         face_Ei=face_Ei,
         active_plasma_topology=active_plasma_topology,
+        characteristic_boundary=characteristic_boundary,
     )
     return PlasmaFaceFluxes1D(n=face_n, M=face_M, Ee=face_Ee, Ei=face_Ei)
 
@@ -153,6 +157,7 @@ def _apply_plasma_walls(
     face_Ee,
     face_Ei,
     active_plasma_topology=False,
+    characteristic_boundary=False,
 ):
     """Impose closed-face conditions on every face with ``plasma_open`` False.
 
@@ -187,6 +192,24 @@ def _apply_plasma_walls(
             live_is_right = left < 0 or (right < cells and not dead[right])
             live = right if live_is_right else left
             face_M[face] = pressure[live]
+    if characteristic_boundary:
+        # R3.1 (SIM1D_MODEL_AUDIT_PLAN "R3.1 boundary approach"): the plasma-
+        # terminating (absorbing) faces are handled by the one-sided
+        # characteristic ghost-cell Bohm outflow (sources.characteristic_
+        # boundary_rhs), which supplies the particle, momentum, and energy flux
+        # AND its own pressure term ``M_g u_g + p_g``. So the advective flux must
+        # carry NOTHING here -- keeping the reflecting closed-wall pressure
+        # ``pressure[live]`` on top would double-count the wall momentum. Default
+        # off => the closed-wall condition above stands and the golden is exact.
+        absorbing = np.asarray(
+            getattr(geometry, "plasma_absorbing", np.zeros(0)), dtype=bool
+        )
+        for face in np.flatnonzero(absorbing):
+            face = int(face)
+            face_n[face] = 0.0
+            face_M[face] = 0.0
+            face_Ee[face] = 0.0
+            face_Ei[face] = 0.0
 
 
 def front_filling_fluxes(state, floors, ion_mass_g, mu, geometry, alpha_front=1.0):
@@ -278,6 +301,7 @@ def plasma_flux_rhs(
     active_plasma_topology=False,
     wave_speed="isothermal",
     energy_consistent=False,
+    characteristic_boundary=False,
 ):
     """Return finite-volume RHS from conservative plasma face fluxes."""
     flux_terms = plasma_flux_rhs_terms(
@@ -291,6 +315,7 @@ def plasma_flux_rhs(
         active_plasma_topology=active_plasma_topology,
         wave_speed=wave_speed,
         energy_consistent=energy_consistent,
+        characteristic_boundary=characteristic_boundary,
     )
     return _add_state_rhs(
         flux_terms["plasma_advective_flux"],
@@ -310,6 +335,7 @@ def plasma_flux_rhs_terms(
     active_plasma_topology=False,
     wave_speed="isothermal",
     energy_consistent=False,
+    characteristic_boundary=False,
 ):
     """Return separately named conservative RHS terms from plasma face fluxes."""
     rusanov = rusanov_fluxes(
@@ -321,6 +347,7 @@ def plasma_flux_rhs_terms(
         active_plasma_topology=active_plasma_topology,
         wave_speed=wave_speed,
         energy_consistent=energy_consistent,
+        characteristic_boundary=characteristic_boundary,
     )
     front = _zero_fluxes(geometry.cells)
     if include_front:
@@ -375,3 +402,42 @@ def _add_state_rhs(left, right):
         Ee=left.Ee + right.Ee,
         Ei=left.Ei + right.Ei,
     )
+
+
+def kep_rusanov_face_scalar(
+    left,
+    right,
+    mu,
+    ion_mass_g,
+    wave_speed="isothermal",
+    energy_consistent=False,
+):
+    """Return the R2 KEP/Rusanov face flux (F_n, F_M, F_Ee, F_Ei) for one face.
+
+    ``left`` and ``right`` are dicts with the conservative and derived scalars of
+    the two states bracketing the face (``n, M, Ee, Ei, u, p, Te, Ti``), the L
+    (low-z) and R (high-z) states of a +z-oriented face. The formula is the exact
+    per-face expression of ``_rusanov_raw_faces`` (KEP convective momentum flux
+    when ``energy_consistent`` else the divergence form; ``plasma_wave_speed`` for
+    the dissipation ``a_max``), factored so the R3.1 characteristic ghost-cell
+    boundary (``sources.characteristic_boundary_rhs``) reuses the committed R2
+    machinery instead of re-deriving the flux.
+    """
+    nL, ML, EeL, EiL = left["n"], left["M"], left["Ee"], left["Ei"]
+    nR, MR, EeR, EiR = right["n"], right["M"], right["Ee"], right["Ei"]
+    uL, pL = left["u"], left["p"]
+    uR, pR = right["u"], right["p"]
+
+    csL = plasma_wave_speed(left["Te"], left["Ti"], mu, wave_speed)
+    csR = plasma_wave_speed(right["Te"], right["Ti"], mu, wave_speed)
+    amax = max(abs(uL) + csL, abs(uR) + csR)
+
+    f_n = 0.5 * (nL * uL + nR * uR) - 0.5 * amax * (nR - nL)
+    if energy_consistent:
+        conv = 0.25 * (uL + uR) * (ML + MR)
+    else:
+        conv = 0.5 * (ML * uL + MR * uR)
+    f_M = conv + 0.5 * (pL + pR) - 0.5 * amax * (MR - ML)
+    f_Ee = 0.5 * (EeL * uL + EeR * uR) - 0.5 * amax * (EeR - EeL)
+    f_Ei = 0.5 * (EiL * uL + EiR * uR) - 0.5 * amax * (EiR - EiL)
+    return f_n, f_M, f_Ee, f_Ei

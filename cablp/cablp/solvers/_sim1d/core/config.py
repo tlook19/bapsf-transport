@@ -567,9 +567,13 @@ def fudge_factor_defaults():
     alpha_isat:
         Ion-saturation/surface-loss coefficient.
     source_surface_area_scale:
-        Surface-loss area multiplier for the source boundary cell.
+        DEPRECATED (A13/R3.3, 2026-07-24): 0D artifact that stood in for
+        un-separated cathode/anode I_sat. The resolved geometry measures the
+        Bohm I_sat to each electrode face directly, so this multiplier has no
+        operator to control and is never consumed; non-default use warns.
     end_surface_area_scale:
-        Surface-loss area multiplier for the end boundary cell.
+        DEPRECATED (A13/R3.3, 2026-07-24): 0D artifact, see
+        ``source_surface_area_scale``.
     b_anode_collection:
         Multiplier on the resolved anode collection sink. This was formerly
         available only through an unregistered ``dict.get`` fallback.
@@ -1125,6 +1129,20 @@ input_flags_template_1d = {
     # total plasma energy K+Ee+Ei is conserved to machine precision. Default
     # off; the historical golden stays bit-exact.
     "hyperbolic_energy_consistent": False,
+    # R3.1 characteristic material boundaries (SIM1D_MODEL_AUDIT_PLAN R3, audit
+    # A1/A16): replace the closed-reflecting-face + one-sided volumetric absorber
+    # at the plasma-terminating (cathode/collector) surfaces with a one-sided
+    # characteristic ghost-cell Bohm outflow -- the committed R2 KEP/Rusanov flux
+    # evaluated against a Bohm ghost state (n_se = n*presheath_alpha, u = c_s into
+    # the wall, Te, Ti). Fixes the A1 wrong-sign momentum so the wall is a net
+    # energy sink instead of the +18.5 kW kinetic source. Requires resolved
+    # geometry (absorbing faces); rejects at construction otherwise. Default off;
+    # the historical golden stays bit-exact.
+    "characteristic_boundary": False,
+    # DEPRECATED (A13/R3.3, 2026-07-24): 0D-artifact per-electrode surface-loss
+    # enables. The resolved geometry's plasma-terminating (absorbing) faces are a
+    # geometry fact, not a config toggle; these are never consumed and non-default
+    # use warns. Retained at their canonical True so production is warning-free.
     "source_surface_loss": True,
     "end_surface_loss": True,
     "ion_neutral_drag": True,

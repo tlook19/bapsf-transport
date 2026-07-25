@@ -341,6 +341,8 @@ def solve_idriven(
     schottky: bool = False,
     bridge: bool = False,
     phi_c_cap_V: float = 1000.0,
+    alpha_sheath: float | None = None,
+    alpha_sheath_anode: float | None = None,
 ) -> SolverResult:
     """Solve the cathode sheath for an *imposed* loop current.
 
@@ -378,7 +380,36 @@ def solve_idriven(
     sigma_par = 14.6 * T_e**1.5
     R_p = config.L_cath / (math.pi * config.R_cath**2 * sigma_par)
     C_s = math.sqrt(T_e * _e_SI * 1.0e7 / (config.mu * _mp_cgs))
-    I_i = config.A_c * _e_SI * n_e * C_s * math.exp(-0.5)
+    # Sheath-edge sampling (R3.2, SIM1D_MODEL_AUDIT_PLAN A16): the ion Bohm
+    # current is drawn at the sheath-edge density n_se = alpha_sheath * n_e. The
+    # historical flat exp(-1/2) is the Boltzmann drop across a presheath that
+    # fits inside the cell; the fluid boundary instead uses the mesh-independent
+    # ``sources.presheath_alpha``. R3.2 lets the caller pass that SAME factor so
+    # the circuit current and the fluid sink read one n_se. Electron saturation
+    # stays at the bulk density (the ``lam_shift`` that lifts electrons back to
+    # n_e is -ln(alpha_sheath), = +0.5 for the flat default). ``None`` keeps the
+    # exact +0.5 so the golden and the M2 equivalence gate are bit-exact.
+    #
+    # The cathode and the anode are DISTINCT sheaths sampled on different
+    # presheaths (the cathode's long collisional presheath vs the anode mesh's
+    # short geometric one), so each carries its own factor: ``alpha_sheath`` /
+    # ``lam_shift`` for the cathode ion current, the cathode floating balance,
+    # and P_cathode_e; ``alpha_sheath_anode`` / ``lam_shift_anode`` for the anode
+    # floating potential (``psi_a``) and P_anode_e. The anode ION current
+    # ``I_i_a`` is sampled on its own side by ``anode_circuit_sample`` and passed
+    # in via ``anode_current_A`` -- never let one electrode's presheath leak into
+    # the other's Lambda.
+    def _sheath_factors(alpha):
+        if alpha is None:
+            return math.exp(-0.5), 0.5
+        alpha = float(alpha)
+        if not alpha > 0.0:
+            raise ValueError(f"alpha_sheath must be positive (got {alpha})")
+        return alpha, -math.log(alpha)
+
+    alpha_eff, lam_shift = _sheath_factors(alpha_sheath)
+    _alpha_eff_anode, lam_shift_anode = _sheath_factors(alpha_sheath_anode)
+    I_i = config.A_c * _e_SI * n_e * C_s * alpha_eff
     if cathode_current_A is not None:
         I_i = float(cathode_current_A)
     I_i_a = 2 * config.eta * I_i
@@ -392,10 +423,11 @@ def solve_idriven(
             "cathode_coupling to model a machine with no anode collection."
         )
 
-    I_e = I_i * math.exp(config.Lambda + 0.5)
+    I_e = I_i * math.exp(config.Lambda + lam_shift)
     I_eth = config.I_eth
     delta = _kB_SI * config.T_s / (_e_SI * T_e)
-    Lambda = config.Lambda + 0.5
+    Lambda = config.Lambda + lam_shift
+    Lambda_anode = config.Lambda + lam_shift_anode
     eta = config.eta
     mu = config.mu
 
@@ -558,7 +590,8 @@ def solve_idriven(
     long_mfp = l_b > 0.0 and l_b > config.L_cath
 
     J_anode = J_tot - eta * beam_bypass_fraction * J_star
-    psi_a = Lambda - math.log(max(1.0 + J_anode / J_i_a, 1e-300))
+    # Anode floating potential: the anode's own sheath, on its own presheath.
+    psi_a = Lambda_anode - math.log(max(1.0 + J_anode / J_i_a, 1e-300))
     phi_a = psi_a * T_e_anode
 
     I_tot = J_tot * T_e / R_p
@@ -601,21 +634,39 @@ def solve_idriven(
     # bit-for-bit to the historical formulas in the classical repelling
     # regime (phi_minus = 0, phi_a >= 0), which is where the M2 equivalence
     # gate lives.
+    # Electron flux factors: the fraction of electron saturation actually
+    # reaching each electrode across its repelling sheath. The plasma-thermal
+    # (2Te) and sheath-fall (phi) parts ride the SAME flux, so each electrode
+    # power splits cleanly into ``_thermal + _phi`` (R3.2 / A16 routing).
+    fe_c = _exp_clamped(Lambda - max(phi_c_plus, 0.0) / T_e)
+    fe_a = _exp_clamped(Lambda_anode - max(phi_a, 0.0) / T_e_anode)
+    # P_*_e / P_*_i keep their EXACT historical expressions (they feed the golden
+    # via the fluid deposit and the cathode warming); the split derives the phi
+    # part as the remainder so ``_thermal + _phi == P_*`` holds to machine zero.
     P_cathode_e = (
         I_i
         * (2.0 * T_e + phi_c)
-        * _exp_clamped(Lambda - max(phi_c_plus, 0.0) / T_e)
+        * fe_c
     )
+    P_cathode_e_thermal = I_i * (2.0 * T_e) * fe_c
+    P_cathode_e_phi = P_cathode_e - P_cathode_e_thermal
     P_cathode_i = _P_ion(phi_c, T_e, I_i)
+    P_cathode_i_thermal = I_i * (T_e / 2.0)
+    P_cathode_i_phi = P_cathode_i - P_cathode_i_thermal
     P_cathode_i_pl = _P_ion(phi_c, T_e, I_i_a, pl=True)
     P_anode_e = (
         I_i_a
         * (2.0 * T_e_anode + phi_a)
-        * _exp_clamped(Lambda - max(phi_a, 0.0) / T_e_anode)
+        * fe_a
     )
+    P_anode_e_thermal = I_i_a * (2.0 * T_e_anode) * fe_a
+    P_anode_e_phi = P_anode_e - P_anode_e_thermal
     P_anode_i = _P_ion(phi_a, T_e_anode, I_i_a)
+    P_anode_i_thermal = I_i_a * (T_e_anode / 2.0)
+    P_anode_i_phi = P_anode_i - P_anode_i_thermal
     P_anode_i_pl = _P_ion(phi_a, T_e_anode, I_i_a, pl=True)
     _P_beam_bypass = eta * beam_bypass_fraction * I_eth_star * V_b
+    # DEPRECATED unclosed scalars (kept bit-exact for the R1-R4 golden only).
     P_net = (
         P_load - P_cathode_e - P_cathode_i - P_anode_e - P_anode_i
         - _P_beam_bypass
@@ -625,6 +676,40 @@ def solve_idriven(
         - P_anode_i_pl
     )
     P_loss = P_cathode_e + P_cathode_i_pl + P_anode_e + P_anode_i_pl
+    # Closed surface-resolved audit (replaces P_net/P_net2). Only the PLASMA-
+    # THERMAL parts leave the plasma thermal store; the phi parts are sheath-field
+    # energy deposited on the electrodes. The collector (floating) exhaust is
+    # booked separately on the fluid side (no circuit branch).
+    P_plasma_thermal_loss = (
+        P_cathode_e_thermal + P_cathode_i_thermal
+        + P_anode_e_thermal + P_anode_i_thermal
+    )
+    P_into_plasma = P_prim + P_ohmic - P_plasma_thermal_loss
+    P_cathode_surface = P_cathode_e + P_cathode_i
+    P_anode_surface = P_anode_e + P_anode_i
+    # Measurement-plane aliases (see SolverResult): keep I_tot / V_b (Poulos), and
+    # alias to the three-plane convention with the item-24/25 divergences pinned
+    # to zero so P_load = V_b*I_tot = V_dis*I_bank today.
+    V_series = 0.0
+    I_parallel = 0.0
+    I_plasma = I_tot
+    I_bank = I_plasma + I_parallel
+    V_dis = V_b + V_series
+    # Load-power closure (current-resolved; see SolverResult). Per-region net
+    # field work I_tot*drop, with the cathode decomposed per species so the
+    # returning plasma-electron current recovers energy (minus sign):
+    #   cathode:  I_eth_star*phi_c + P_cathode_i_phi - P_cathode_e_phi  (= I_tot*phi_c)
+    #   gap:      P_ohmic  (= I_tot*V_p)
+    #   anode:    I_tot*phi_a  (net; the model's per-species anode terms carry only
+    #             the Bohm ion current, not the full loop current -- A15 anode
+    #             interception is R4 -- so the anode region uses the ladder value).
+    # I_e_ret = P_cathode_e_phi / phi_c is the returning-electron current; the
+    # cathode Kirchhoff (I_eth_star + I_i - I_e_ret == I_tot) is the real check.
+    I_e_ret = P_cathode_e_phi / phi_c if phi_c != 0.0 else 0.0
+    cathode_field_work = I_eth_star * phi_c + P_cathode_i_phi - P_cathode_e_phi
+    P_load_ledger = cathode_field_work + P_ohmic - I_tot * phi_a
+    P_load_residual = P_load - P_load_ledger
+    I_cathode_kirchhoff_residual = (I_eth_star + I_i - I_e_ret) - I_tot
 
     return SolverResult(
         phi_c_plus=phi_c_plus,
@@ -654,6 +739,27 @@ def solve_idriven(
         P_net=P_net,
         P_net2=P_net2,
         P_loss=P_loss,
+        P_cathode_e_thermal=P_cathode_e_thermal,
+        P_cathode_e_phi=P_cathode_e_phi,
+        P_cathode_i_thermal=P_cathode_i_thermal,
+        P_cathode_i_phi=P_cathode_i_phi,
+        P_anode_e_thermal=P_anode_e_thermal,
+        P_anode_e_phi=P_anode_e_phi,
+        P_anode_i_thermal=P_anode_i_thermal,
+        P_anode_i_phi=P_anode_i_phi,
+        P_plasma_thermal_loss=P_plasma_thermal_loss,
+        P_into_plasma=P_into_plasma,
+        P_cathode_surface=P_cathode_surface,
+        P_anode_surface=P_anode_surface,
+        V_series=V_series,
+        I_parallel=I_parallel,
+        V_dis=V_dis,
+        I_plasma=I_plasma,
+        I_bank=I_bank,
+        I_e_ret=I_e_ret,
+        P_load_ledger=P_load_ledger,
+        P_load_residual=P_load_residual,
+        I_cathode_kirchhoff_residual=I_cathode_kirchhoff_residual,
         regime=regime,
         long_mfp=long_mfp,
         beam_bypass_fraction=beam_bypass_fraction,
@@ -680,6 +786,8 @@ def solve_beam_system_idriven(
     schottky: bool = False,
     bridge: bool = False,
     phi_c_cap_V: float = 1000.0,
+    alpha_sheath: float | None = None,
+    alpha_sheath_anode: float | None = None,
 ) -> BeamResult:
     """Current-driven, single-cathode counterpart of ``solve_beam_system``.
 
@@ -713,6 +821,8 @@ def solve_beam_system_idriven(
         schottky=schottky,
         bridge=bridge,
         phi_c_cap_V=phi_c_cap_V,
+        alpha_sheath=alpha_sheath,
+        alpha_sheath_anode=alpha_sheath_anode,
     )
     phi_c_0 = result.phi_c
     if phi_c_0 > I_ion:

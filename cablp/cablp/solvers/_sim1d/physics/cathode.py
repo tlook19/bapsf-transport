@@ -27,6 +27,7 @@ from ..core.geometry import (
 from ..core.state import ConservativeState1D, derive_state
 from .flux import ion_sound_speed
 from .reactions import _birth_temperature
+from .sources import electrode_sheath_alpha
 
 
 @dataclass(frozen=True)
@@ -144,6 +145,37 @@ def cathode_sample_indices(geometry):
     if len(cathode_cells) > 1:
         return source_index, int(cathode_cells[-1])
     return source_index, geometry.cells - 1
+
+
+def cathode_circuit_alpha_sheath(
+    state, derived, geometry, cathode_index, mu, ion_mass_g, input_dict, input_flags
+):
+    """Return the cathode sheath-edge factor ``n_se/n`` for the circuit, or None.
+
+    R3.2 (SIM1D_MODEL_AUDIT_PLAN A16): under the unified-sampling stance
+    (``characteristic_boundary``), the circuit's cathode ion current must be
+    drawn at the SAME sheath-edge density the fluid boundary uses, so both call
+    ``sources.electrode_sheath_alpha`` on the same cathode-adjacent cell (verified
+    identical: ``beam_launch(geometry)[0]`` == the source cathode's live cell).
+    Returns ``None`` off-stance so ``solve_idriven`` keeps its exact flat
+    ``exp(-1/2)`` and the golden / M2 equivalence gate stay bit-exact. The anode
+    is not sampled here -- its geometric mesh presheath stays flat ``exp(-1/2)``.
+    """
+    if not bool(input_flags.get("characteristic_boundary", False)):
+        return None
+    return electrode_sheath_alpha(
+        nn=float(state.nn[cathode_index]),
+        Te=float(derived.Te[cathode_index]),
+        Ti=float(derived.Ti[cathode_index]),
+        cell_length_cm=float(geometry.length_cm[cathode_index]),
+        mu=mu,
+        ion_mass_g=ion_mass_g,
+        alpha_isat=float(input_dict.get("alpha_isat", math.exp(-0.5))),
+        b_presheath_length=float(input_dict.get("b_presheath_length", 1.0)),
+        sigma_in_cm2=float(input_dict.get("sigma_in_cm2", 5.0e-15)),
+        sigma_in_model=str(input_dict.get("sigma_in_model", "constant")),
+        gas_type=input_dict.get("gas_type", "He"),
+    )
 
 
 def cathode_boundary_state(
@@ -433,6 +465,9 @@ def idriven_result_evaluator(
     schottky = bool(input_flags.get("cathode_schottky", False))
     bridge = bool(input_flags.get("cathode_emission_bridge", False))
     cap = float(input_dict.get("cathode_phi_c_cap_V", 1000.0))
+    alpha_sheath = cathode_circuit_alpha_sheath(
+        state, derived, geometry, idx, mu, ion_mass_g, input_dict, input_flags
+    )
 
     def solve_at(I_A):
         return solve_idriven(
@@ -444,6 +479,7 @@ def idriven_result_evaluator(
             schottky=schottky,
             bridge=bridge,
             phi_c_cap_V=cap,
+            alpha_sheath=alpha_sheath,
         )
 
     return solve_at
@@ -704,6 +740,10 @@ def solve_cathode_boundary(
             cathode_index=beam_launch(geometry, end=0)[0],
             anode_current_A=anode_source[0],
             anode_T_e=anode_source[1],
+            alpha_sheath=cathode_circuit_alpha_sheath(
+                state, derived, geometry, beam_launch(geometry, end=0)[0],
+                mu, ion_mass_g, input_dict, input_flags,
+            ),
             b_beam_excitation=float(
                 input_dict.get("b_beam_excitation", 0.0)
             ),
@@ -963,6 +1003,9 @@ def cathode_source_terms(
     electron_power_loss_W = zeros.copy()
     cathode_cells = cathode_adjacent_cells(geometry)
     anode_pairs = anode_flanking_cells(geometry)
+    # R3.2/A16: under the repaired boundary stance, route only the plasma-thermal
+    # electron power to the plasma; the sheath-fall phi is booked on the electrode.
+    thermal_only = bool(input_flags.get("characteristic_boundary", False))
     if cathode_cells:
         _deposit_electrode_power(
             electron_power_loss_W,
@@ -971,6 +1014,7 @@ def cathode_source_terms(
             anode_pair=anode_pairs[0] if anode_pairs else None,
             state=state,
             derived=derived,
+            thermal_only=thermal_only,
         )
         if (
             boundary.twin_cathode
@@ -983,6 +1027,7 @@ def cathode_source_terms(
                 anode_pair=anode_pairs[-1] if len(anode_pairs) > 1 else None,
                 state=state,
                 derived=derived,
+                thermal_only=thermal_only,
             )
     else:
         electron_power_loss_W[0] = _electron_power_loss_W(
@@ -1417,7 +1462,8 @@ def _cathode_particle_loss_rate(result, eta):
 
 
 def _deposit_electrode_power(
-    electron_power_loss_W, result, cathode_cell, anode_pair, state, derived
+    electron_power_loss_W, result, cathode_cell, anode_pair, state, derived,
+    thermal_only=False,
 ):
     """Land P_cathode_e at the cathode cell and P_anode_e at the anode mesh.
 
@@ -1426,10 +1472,17 @@ def _deposit_electrode_power(
     same weighting ``anode_collection_rhs`` uses, so power and particles are
     removed on the same side. With no resolved anode the whole of P_anode_e falls
     back to the cathode cell, which is where the lumped model puts it.
+
+    ``thermal_only`` (R3.2/A16 routing, the repaired stance): deposit only the
+    PLASMA-THERMAL part (2Te per electron), leaving the sheath-fall ``phi`` on the
+    electrode/circuit surface instead of removing it from the plasma thermal
+    store. Off (the golden default) deposits the full historical P_*_e.
     """
-    electron_power_loss_W[cathode_cell] += result.P_cathode_e
+    p_cathode_e = result.P_cathode_e_thermal if thermal_only else result.P_cathode_e
+    p_anode_e = result.P_anode_e_thermal if thermal_only else result.P_anode_e
+    electron_power_loss_W[cathode_cell] += p_cathode_e
     if anode_pair is None:
-        electron_power_loss_W[cathode_cell] += result.P_anode_e
+        electron_power_loss_W[cathode_cell] += p_anode_e
         return
     gap_side, column_side = anode_pair
     # Bohm collection ~ n * c_s, and c_s ~ sqrt(Te/mu) with the same mu on both
@@ -1446,8 +1499,8 @@ def _deposit_electrode_power(
         weights = np.full(2, 0.5)
     else:
         weights = weights / total
-    electron_power_loss_W[gap_side] += weights[0] * result.P_anode_e
-    electron_power_loss_W[column_side] += weights[1] * result.P_anode_e
+    electron_power_loss_W[gap_side] += weights[0] * p_anode_e
+    electron_power_loss_W[column_side] += weights[1] * p_anode_e
 
 
 def _electron_power_loss_W(result):

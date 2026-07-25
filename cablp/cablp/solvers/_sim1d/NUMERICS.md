@@ -278,3 +278,38 @@ layered on top of Rusanov's own). Rusanov/LLF is retained; a contact-restoring
 (HLLC) or higher-order (MUSCL) scheme is a deferred follow-up gated on the G7
 numerical-diffusion evidence. The pre-registered gate suite G1–G7 lives in
 `scripts/verify_sim1d_r2_hyperbolic.py`.
+
+## R3 characteristic material boundaries (2026-07-24)
+
+The default-off `characteristic_boundary` selector changes how the plasma-
+terminating faces are discretized; default-off is golden bit-exact.
+
+- **Boundary flux.** At each absorbing face a ghost state is set to the Bohm
+  outflow (`n_se = n·presheath_alpha`, `u = c_s` into the wall, `Te`, `Ti`) and
+  the same R2 KEP/Rusanov single-face flux (`flux.kep_rusanov_face_scalar`,
+  following the interior's `hyperbolic_energy_consistent` / `hyperbolic_wave_speed`
+  choice) is evaluated between the interior cell and the ghost. It is applied as a
+  **one-sided divergence on the live cell only** (`± area·F / V`), because the
+  shared telescoping face array would hand the removed plasma to the plasma-dead
+  plenum; correspondingly the advective-flux path carries zero at these faces when
+  the selector is on (no double-count of the reflecting wall pressure).
+- **Sheath-edge sampling.** `sources.electrode_sheath_alpha` is the single source
+  of the mesh-independent factor `n_se/n = presheath_alpha` (`τ`-independent; a
+  cell-length/presheath-depth exponent), called by both the fluid boundary and the
+  circuit (cathode) so they cannot disagree. In `funcs._cathode_solver_idriven`
+  the flat `exp(-1/2)` becomes a passed `alpha_sheath`, with the electron lift
+  `Λ → Λ − ln(α)` (`= Λ + 1/2` at `α = exp(-1/2)`, kept exact via a sentinel so the
+  golden and the M2 equivalence gate are bit-exact). The cathode and anode carry
+  **independent** presheath factors (`Λ` vs `Λ_anode`) — the anode mesh's short
+  geometric presheath keeps flat `exp(-1/2)`.
+- **Energy routing.** The circuit power split (`P_*_e/i_thermal + _phi`) derives
+  the `phi` part as the remainder, so the historical `P_*` expressions that feed
+  the golden are byte-for-byte unchanged; the fluid electrode energy is booked
+  once (cathode electron via the circuit thermal part, collector via a floating
+  `2 Te` sheath in the boundary term). Gate: `scripts/verify_sim1d_r3_routing.py`
+  (split exactness, boxed γ, load-power closure to machine zero + cathode
+  Kirchhoff). Boundary gates: `..._boundary.py` (unit) and `..._boundary_startup.py`
+  (run: `u → c_s`, net sink). A11 coupling gate: `..._a11.py` (fixed-`dt`
+  refinement at the current-gated knee; failure logged, fix deferred to R5).
+- **A13 controls.** The 0D surface-loss area scales / per-face enables are
+  deprecated (never consumed by the resolved boundary); non-default use warns.

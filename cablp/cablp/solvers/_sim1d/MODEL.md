@@ -214,3 +214,57 @@ under-bounded it. The sonic front-filling flux is retired from the repaired
 stance (a mesh-vanishing diffusion). All three are default-off and the
 checkpoint golden is bit-exact; the deliberate repaired stance is selected only
 after the R3/R4 boundary and source ledgers close.
+
+## R3 characteristic material boundaries + closed circuit power balance (2026-07-24)
+
+The default-off `characteristic_boundary` selector rebuilds the plasma-terminating
+(cathode/collector) surfaces as one control surface feeding both the fluid sink
+and the circuit. Default-off is golden bit-exact; the audit findings are A1, A13,
+A16 (plus the A11 convergence gate).
+
+**R3.1 -- characteristic ghost-cell Bohm outflow (A1).** The closed reflecting
+face plus one-sided volumetric absorber is replaced by a ghost-cell Bohm outflow
+computed with the committed R2 KEP/Rusanov flux against a ghost state
+(`n_se = n*presheath_alpha`, `u = c_s` into the wall, `Te`, `Ti`). The flux is
+applied one-sidedly to the live cell (the shared face array would telescope the
+removed plasma into the dead plenum), the advective flux carries nothing at those
+faces (the ghost flux supplies `M u + p`), and the neutral return + cathode jet
+are booked as before. This fixes the A1 wrong-sign momentum: the edge establishes
+`u -> c_s` into the wall (a net energy sink) instead of the historical `+18.5 kW`
+reconstructed-kinetic source.
+
+**R3.2 -- one control-surface power balance (A16).** Electrode energy is booked to
+three distinct sources: (1) the *circuit field-work* book -- the sheath-fall `phi`
+and work function, sourced from the bank maintaining the potentials against the
+loop current, deposited on the electrode, never through the plasma thermal store;
+(2) the *plasma-thermal* book -- `2 Te` per electron and `Te/2` per ion (the
+boxed transmission coefficients `gamma_e = 2 + phi/Te`, `gamma_i = 1/2 + phi/Te`,
+Stangeby; the existing `_P_elec`/`_P_ion` forms), from the plasma; (3) the *plasma-
+heating* book -- the beam `P_prim` and gap ohmic, into the plasma. The fluid
+boundary removes only the plasma-thermal part; the sheath fall goes to the
+electrode; both the fluid sink and the circuit read one mesh-independent
+sheath-edge density `n_se` (`presheath_alpha`, shared; the circuit's flat
+`exp(-1/2)` is upgraded, with the electron lift generalized `Lambda -> Lambda -
+ln(alpha)`; the anode mesh keeps `exp(-1/2)`). The collector gains its own
+floating `2 Te` electron sheath (previously absent). The load-power balance
+`P_load = I_tot V_b = cathode + gap + anode field work` closes to machine
+precision via the cathode Kirchhoff `I_tot = I_eth* + I_i - I_e_ret` (returning
+electrons with a minus); the never-closing `P_net`/`P_net2` scalars are demoted to
+deprecated. Measurement-plane aliases (`V_dis = V_b + V_series`, `I_bank =
+I_plasma + I_parallel`, divergences zero now) set up the future effective-load
+work (THESIS items 24/25). Honest limits: the anode uses the net-current ladder
+(per-species anode is A15/R4), and the bracket-capped regime clamps `V_b` off the
+ladder (a reported residual). Full derivation: THESIS_NOTES "The circuit power
+balance that closes."
+
+**R3.3 -- A13 controls deprecated.** The resolved-boundary surface-loss area
+scales and per-face enables were 0D artifacts (they stood in for I_sat that the
+lumped model could not separate between cathode and anode); the resolved geometry
+measures the Bohm I_sat to each electrode face directly, so they are retired
+(loud `DeprecationWarning` on non-default use), not wired.
+
+**A11 (convergence gate, deferred).** The fluid SSPRK stages run at a loop current
+frozen over the step; the fixed-`dt` refinement gate (`verify_sim1d_r3_a11.py`)
+shows the coupled sheath observables `V_b`/`phi_c` do not converge cleanly at the
+emission knee. The fix (a gated fluid<->circuit Picard iteration) is deferred to
+R5's coupled-circuit-convergence validation.
