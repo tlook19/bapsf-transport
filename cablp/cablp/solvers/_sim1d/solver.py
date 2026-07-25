@@ -562,6 +562,9 @@ class LAPDSim1D:
         self._characteristic_boundary = bool(
             self._flags.get("characteristic_boundary", False)
         )
+        self._beam_anode_interception = bool(
+            self._flags.get("beam_anode_interception", False)
+        )
         self._validate_r1_configuration_presence()
         exchange_model = str(
             self._input_dict.get("neutral_exchange_model", "knudsen")
@@ -978,6 +981,14 @@ class LAPDSim1D:
                     f"{name} must be 'local', 'floor', or a finite "
                     f"non-negative numeric eV value (got {value!r})"
                 )
+        birth_energy_model = str(
+            self._input_dict.get("ionization_birth_energy_model", "legacy")
+        )
+        if birth_energy_model not in {"legacy", "conservative"}:
+            raise ValueError(
+                "ionization_birth_energy_model must be 'legacy' or "
+                f"'conservative' (got {birth_energy_model!r})"
+            )
         if self._hyperbolic_wave_speed not in {"isothermal", "adiabatic"}:
             raise ValueError(
                 "hyperbolic_wave_speed must be 'isothermal' or 'adiabatic' "
@@ -998,6 +1009,27 @@ class LAPDSim1D:
                     "(absorbing) faces, which exist only in the resolved "
                     "geometry (resolved_boundaries=True); it would otherwise be "
                     "a silent no-op"
+                )
+        if self._beam_anode_interception:
+            # R4.1 anode-mesh beam interception (audit A15). It intercepts part
+            # of the CSDA beam ray at the anode face, so it is meaningless
+            # without the CSDA deposition model or without a resolved anode; the
+            # off path (beer_lambert) never calls the module. Reject rather than
+            # silently no-op (R1d discipline).
+            if str(self._input_dict.get("beam_deposition_model", "beer_lambert")) != "csda":
+                raise ValueError(
+                    "beam_anode_interception requires "
+                    "beam_deposition_model='csda' (the interception acts on the "
+                    "CSDA beam ray; beer_lambert never launches it)"
+                )
+            anode_faces = np.asarray(
+                getattr(self._geometry, "anode_face_indices", ()), dtype=int
+            )
+            if anode_faces.size == 0:
+                raise ValueError(
+                    "beam_anode_interception requires resolved geometry with "
+                    "anode faces (resolved_boundaries=True); it would otherwise "
+                    "be a silent no-op"
                 )
         if self._raw_stage_validation and self._flags.get("Plasma", True):
             for initial_name, floor_name in (
@@ -4463,6 +4495,9 @@ class LAPDSim1D:
             ),
             "Ti_birth_ionization": self._input_dict.get(
                 "Ti_birth_ionization", "floor"
+            ),
+            "ionization_birth_energy_model": str(
+                self._input_dict.get("ionization_birth_energy_model", "legacy")
             ),
             "wind_column_factor": self._wind_column_factor,
         }

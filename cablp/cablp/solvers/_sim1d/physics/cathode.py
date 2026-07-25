@@ -801,6 +801,9 @@ def solve_cathode_boundary(
             input_dict=input_dict,
             I_ion=I_ion,
             twin=boundary.twin_cathode,
+            anode_interception=bool(
+                input_flags.get("beam_anode_interception", False)
+            ),
         )
     return CathodeSolve1D(
         boundary=boundary,
@@ -836,6 +839,7 @@ def _csda_beam_deposition(
     input_dict,
     I_ion,
     twin=False,
+    anode_interception=False,
 ):
     """Run the CSDA module for each active cathode ray (B2 wiring).
 
@@ -850,10 +854,21 @@ def _csda_beam_deposition(
     solve's Coulomb-only ceiling ``exp(-L_cath/l_bi)`` saturate there
     (stated limitation; exact for transmissions at or below the ceiling,
     including the quasilinear closure's ~0).
+
+    ``anode_interception`` (R4.1, audit A15): when set, the mesh solid fraction
+    ``device_config.eta`` of the beam surviving the gap is intercepted at the
+    anode-face crossing (``deposit_beam(anode_cross_index=..., anode_eta=...)``),
+    so the fluid stops depositing the ~164 kW long-mfp beam the circuit already
+    books as never entering the plasma. The gap-transmission diagnostic ray is
+    unaffected (it measures gap survival, which feeds the circuit bypass).
     """
     coulomb_model = str(input_dict.get("beam_coulomb_model", "fast_electron"))
     anomalous_model = str(input_dict.get("beam_anomalous_model", "none"))
     L_cath = float(device_config.L_cath)
+    eta = float(device_config.eta)
+    anode_faces = np.asarray(
+        getattr(geometry, "anode_face_indices", ()), dtype=int
+    )
     deposition = {}
     ends = (0, -1) if twin else (0,)
     for end in ends:
@@ -875,8 +890,19 @@ def _csda_beam_deposition(
         )
         if anomalous_model != "none":
             ray_kwargs["beam_area_cm2"] = geometry.plasma_area_cm2
+        interception_kwargs = {}
+        if anode_interception and eta > 0.0 and anode_faces.size > 0:
+            # The ray crosses the anode face between cell ``f-1`` and cell ``f``;
+            # the first cell on the far (column) side along the ray is the
+            # cross cell (``f`` when heading +z, ``f-1`` when heading -z).
+            anode_face = int(anode_faces[0] if end == 0 else anode_faces[-1])
+            cross_cell = anode_face if direction > 0 else anode_face - 1
+            interception_kwargs = dict(
+                anode_cross_index=cross_cell, anode_eta=eta
+            )
         dep = deposit_beam(
-            result.phi_c, Gamma0, dz_cm=geometry.length_cm, **ray_kwargs
+            result.phi_c, Gamma0, dz_cm=geometry.length_cm,
+            **ray_kwargs, **interception_kwargs,
         )
         deposition[end] = dep
         # Gap transmission: a second, gap-clipped ray (unit flux). CSDA
@@ -1221,6 +1247,8 @@ def beam_ionization_rhs_terms(
         beam_Mn_debit = -beam_M_birth
         beam_Mna = np.zeros_like(state.M_n_a)
     else:
+        # Historical zero-drift beam birth: the ion is born at rest.
+        u_birth = zeros.copy()
         beam_M_birth = zeros.copy()
         beam_Mn_debit = None
         beam_Mna = None
@@ -1229,6 +1257,18 @@ def beam_ionization_rhs_terms(
         beam_derived.Ti,
         floors["Ti"],
     )
+    # A14 (R4.2): the beam electron birth already uses the defensible Ee=0
+    # convention; under "conservative" reconcile the ion energy too by booking
+    # the mass-loading relative-drift mixing energy to Ei (the beam ion is born
+    # at u_birth and joins the bulk flow at u_i), matching the bulk birth.
+    birth_energy_model = str(
+        input_dict.get("ionization_birth_energy_model", "legacy")
+    )
+    beam_Ei = 1.5 * ev_to_erg * Ti_birth * S_beam
+    if birth_energy_model == "conservative":
+        beam_Ei = beam_Ei + 0.5 * ion_mass_g * (
+            beam_derived.u - u_birth
+        ) ** 2 * S_beam
     exc_model = str(input_dict.get("beam_excitation_model", "2p_scalar"))
     csda_active = getattr(cathode_solve, "beam_deposition", None) is not None
     if exc_model == "2p_scalar" and not csda_active:
@@ -1247,7 +1287,7 @@ def beam_ionization_rhs_terms(
             nn=-S_beam * volume_ratio,
             M=beam_M_birth,
             Ee=zeros.copy(),
-            Ei=1.5 * ev_to_erg * Ti_birth * S_beam,
+            Ei=beam_Ei,
             M_n=beam_Mn_debit,
             nn_a=(
                 np.zeros_like(state.nn_a)

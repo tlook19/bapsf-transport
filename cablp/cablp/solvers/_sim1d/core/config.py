@@ -364,6 +364,23 @@ def model_mode_defaults():
         Ion birth temperature model for ionization. Options are ``"local"`` to
         use the local ion temperature, ``"floor"`` to use the ion temperature
         floor, or a numeric eV value.
+    ionization_birth_energy_model:
+        How ionization births book their energy moments (SIM1D_MODEL_AUDIT_PLAN
+        R4, audit A14). ``"legacy"`` (default, historical): the electron birth
+        adds ``3/2 Te_birth S_ion`` to ``Ee`` and the ion birth adds
+        ``3/2 Ti_birth S_ion`` to ``Ei``; under ``Te_birth_ionization="local"``
+        the electron term creates ``3 Te/2`` of thermal energy per new electron
+        (+43.1 kW on the settled artifact), cancelling 92% of the ionization
+        potential cost -- unphysical (a new electron carries no kinetic energy).
+        ``"conservative"``: reconciles bulk (and beam) births to the defensible
+        ``Ee = 0`` convention the beam already uses -- the new electron is born
+        cold, so ``Te`` falls by dilution -- and books the ion mass-loading
+        relative-drift mixing energy ``1/2 m (u_i - u_n)^2 S_ion`` to ``Ei``
+        explicitly, so ion total energy (internal + kinetic) closes to the
+        consumed neutral's energy instead of losing the drift energy through the
+        bulk kinetic derivative. Under ``"conservative"`` the
+        ``Te_birth_ionization`` selector is inert (the electron birth energy is
+        physically zero). Default ``"legacy"`` keeps the golden bit-exact.
     neutral_exchange_model:
         Axial neutral transport model. ``"constant"`` uses a fixed coefficient.
 
@@ -407,6 +424,7 @@ def model_mode_defaults():
         "cathode_model": "disabled",
         "Te_birth_ionization": "local",
         "Ti_birth_ionization": "floor",
+        "ionization_birth_energy_model": "legacy",
         "neutral_exchange_model": "knudsen",
     # K4a kinetic neutrals (KINETIC_TWOZONE_PLAN.md): "kinetic" supersedes
     # the moment neutral transport with refresh-cadence solves of the
@@ -1139,6 +1157,18 @@ input_flags_template_1d = {
     # geometry (absorbing faces); rejects at construction otherwise. Default off;
     # the historical golden stays bit-exact.
     "characteristic_boundary": False,
+    # R4.1 anode-mesh beam interception (SIM1D_MODEL_AUDIT_PLAN R4, audit A15):
+    # the CSDA beam ray launches the full emitted flux Gamma0 = I_eth_star/e
+    # through the whole column, so the fluid deposits the entire emitted beam
+    # (~470 kW on the settled artifact) while the circuit books only the
+    # (1 - eta*beam_bypass_fraction) fraction into the plasma. This adds the
+    # missing interception event at the anode-face crossing: the mesh solid
+    # fraction eta of the flux surviving the gap is removed (booked to the
+    # anode, not the plasma) and only (1 - eta) transmits downstream. Requires
+    # beam_deposition_model="csda" and resolved geometry with anode faces;
+    # rejects at construction otherwise. Default off; golden bit-exact (the
+    # golden runs beer_lambert, which never calls the CSDA module).
+    "beam_anode_interception": False,
     # DEPRECATED (A13/R3.3, 2026-07-24): 0D-artifact per-electrode surface-loss
     # enables. The resolved geometry's plasma-terminating (absorbing) faces are a
     # geometry fact, not a config toggle; these are never consumed and non-default

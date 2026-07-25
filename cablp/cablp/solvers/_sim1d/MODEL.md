@@ -268,3 +268,84 @@ frozen over the step; the fixed-`dt` refinement gate (`verify_sim1d_r3_a11.py`)
 shows the coupled sheath observables `V_b`/`phi_c` do not converge cleanly at the
 emission knee. The fix (a gated fluid<->circuit Picard iteration) is deferred to
 R5's coupled-circuit-convergence validation.
+
+## R4.1 anode-mesh beam interception (2026-07-24)
+
+The default-off `beam_anode_interception` selector adds the missing anode-mesh
+interception event to the CSDA beam ray (audit A15). Without it the CSDA adapter
+launches the full emitted flux `Gamma0 = I_eth_star/e` through the whole column, so
+the fluid deposits the entire emitted beam (~470 kW on the settled artifact) while
+the current-driven circuit books only `P_prim = (1 - eta*beam_bypass_fraction)
+* I_eth_star * phi_c` into the plasma (~307 kW) plus the bypass power
+`eta*beam_bypass_fraction*I_eth_star*V_b` on the anode. The ~164 kW difference is
+the long-mean-free-path beam the anode mesh intercepts, which the fluid was
+wrongly depositing downstream.
+
+With the selector on, `deposit_beam` carries a running flux `gamma` (initially
+`Gamma0`); at the anode-face crossing the mesh solid fraction `eta` of the flux
+still streaming there is intercepted -- booked to the anode surface
+(`anode_intercepted_erg_s`), NOT to `plasma_heating_erg_s` -- and only `(1 - eta)`
+transmits downstream, carrying the reduced flux through all subsequent deposition
+and ionization. A ray that stops in the gap never reaches the face and intercepts
+nothing, so exactly the survived (bypass) fraction is removed, consistent with the
+circuit's `eta*beam_bypass_fraction`. Per-ray energy still closes to roundoff:
+
+$$\Gamma_0 E_0 = \text{heating} + \text{radiated} + \text{cost}
+  + \text{anode-intercepted} + \gamma_{\text{exit}} E_{\text{exit}}.$$
+
+Requires `beam_deposition_model="csda"` and resolved geometry with anode faces;
+rejects at construction otherwise (it would be a silent no-op on the beer_lambert
+path). Default off; the production golden runs beer_lambert (which never launches
+the CSDA module) and stays bit-exact. This removes the +164 kW item-21 anode-
+interception error; the paired +43.1 kW ionization birth energy (A14) is R4.2, and
+the item-21 ledger re-check follows once both land.
+
+`anode_intercepted_erg_s` is the beam energy *removed from the plasma* (the launch
+energy `phi_c` the fluid was over-depositing downstream), NOT the anode heat: the
+intercepted electron decelerates through the anode sheath `phi_a` and strikes the
+mesh with its arrival KE `V_b = phi_c + V_p - phi_a`, so the anode *surface* takes
+`I_bypass*V_b` while `I_bypass*phi_a` returns to the anode-sheath field (circuit).
+The total anode power loss is already booked by the current-driven circuit at `V_b`
+(`_P_beam_bypass`, inside the R3.2 closed ledger `P_load = I_tot*V_b`); this term
+only ensures the fluid stops depositing that beam into the column. The
+plasma-removed / anode-heat / sheath split (settled artifact: 163.56 = 123.26 +
+40.43 kW, residual ~0.1 kW = `V_p`) is what a scheme-efficiency analysis
+(plasma-useful vs electrode-lost power) across I/V-ratio operating points will use.
+
+## R4.2 unified ionization birth energy moments (2026-07-24)
+
+The default-off `ionization_birth_energy_model` selector re-derives the bulk (and
+beam) ionization birth energy moments from one particle/momentum/energy balance
+(audit A14). Under the historical `"legacy"` booking the bulk electron birth adds
+$\tfrac32 T_{e,\text{birth}} S_{iz}$ to $E_e$; with `Te_birth_ionization="local"`
+this creates $\tfrac32 T_e$ of thermal energy per new electron (+43.1 kW on the
+settled artifact), cancelling 92% of the ionization-potential cost $I_\text{ion}
+S_{iz}$ -- unphysical, since a newly ionized electron carries no kinetic energy.
+
+Under `"conservative"` the electron birth energy is **zero** (reconciled to the
+beam's standing $E_e=0$ convention): the new electron is born cold, so $T_e =
+E_e/\tfrac32 n$ falls by dilution as $n$ rises, on top of the unchanged potential
+($-I_\text{ion} S_{iz}$) and radiation sinks. The ion mass-loading **mixing
+energy** is booked explicitly to $E_i$: a neutral consumed at drift $u_n$ becomes
+an ion that joins the bulk flow at $u_i$, dissipating
+
+$$Q_\text{mix} = \tfrac12 m_i\,(u_i - u_n)^2\,S_{iz}$$
+
+per unit volume. With the reconstructed bulk kinetic change $dK = u_i\,dM -
+\tfrac12 m_i u_i^2\,dn$ (from the birth momentum $dM = m_i u_n S_{iz}$ and
+$dn = S_{iz}$), the ion total energy then closes to the consumed neutral's energy,
+
+$$dE_i + dK = \tfrac32 T_{i,\text{birth}} S_{iz} + \tfrac12 m_i u_n^2 S_{iz},$$
+
+to machine precision -- the drift energy that `"legacy"` lost through the bulk
+kinetic derivative is retained as ion heat. The beam ion birth (electron already
+$E_e=0$) gains the same $Q_\text{mix}$ with its own $u_n$ (the two-momentum column
+wind, or zero for the historical rest-birth). Under `"conservative"` the
+`Te_birth_ionization` selector is inert (the electron birth energy is physically
+zero regardless). Default `"legacy"` keeps the golden bit-exact.
+
+With A15 (R4.1) and A14 (R4.2) both booked, the two item-21 structural errors
+(+164 kW anode interception, +43.1 kW electron birth) that partially concealed one
+another on the settled artifact are each in their correct book; the item-21 power
+ledger can now be re-checked on that artifact. The `Te_birth_ionization=local`
+caveat in the energy-source glossary above applies only to the `"legacy"` booking.

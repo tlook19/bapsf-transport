@@ -152,8 +152,14 @@ class BeamDepositionResult:
     radiated_erg_s      : excitation line radiation [erg/s]
     ionization_cost_erg_s: I_ion * ionization events [erg/s] (kept separate
                           to map onto the solver's beam_ionization_cost term)
-    transmitted_flux    : primary flux leaving the far end [1/s]
+    transmitted_flux    : primary flux leaving the far end [1/s] (reduced by
+                          the anode-mesh interception, if any)
     transmitted_energy_eV: mean primary energy at exit [eV] (0 if absorbed)
+    anode_intercepted_erg_s: energy the anode mesh intercepts at the anode-face
+                          crossing [erg/s] (audit A15). This leaves the plasma
+                          (booked to the electrode, NOT plasma_heating_erg_s);
+                          0 when no interception is requested or the ray stops
+                          before the anode face.
     E_entry_eV          : diagnostic: primary energy entering each cell [eV]
                           (0 for cells the ray never reaches)
     """
@@ -165,6 +171,7 @@ class BeamDepositionResult:
     ionization_cost_erg_s: np.ndarray
     transmitted_flux: float
     transmitted_energy_eV: float
+    anode_intercepted_erg_s: float
     E_entry_eV: np.ndarray
 
 
@@ -184,6 +191,8 @@ def deposit_beam(
     anomalous_model: str = "none",
     beam_area_cm2: np.ndarray | float | None = None,
     max_energy_fraction_per_substep: float = 0.02,
+    anode_cross_index: int | None = None,
+    anode_eta: float = 0.0,
 ) -> BeamDepositionResult:
     """Deposit one monoenergetic beam ray through the column (He only).
 
@@ -195,12 +204,43 @@ def deposit_beam(
 
     ``anomalous_model``: ``"none"`` (default) or ``"quasilinear"``
     (requires ``beam_area_cm2``, scalar or per-cell, to form n_b).
+
+    **Anode-mesh interception (audit A15).** ``anode_cross_index`` is the first
+    cell on the far (column) side of the anode face along the ray; when it is
+    given with ``anode_eta`` in ``[0, 1)`` the mesh intercepts the solid
+    fraction ``anode_eta`` of the flux STILL STREAMING when the ray reaches
+    that face (i.e. the long-mean-free-path beam that survived the gap). The
+    intercepted power ``anode_eta * gamma * E`` is booked to
+    ``anode_intercepted_erg_s`` (it leaves the plasma, landing on the anode,
+    NOT in ``plasma_heating_erg_s``), and the surviving flux is reduced to
+    ``(1 - anode_eta) * gamma`` for all subsequent deposition and ionization.
+    A ray that stops in the gap never reaches the face and intercepts nothing,
+    so only the survived (bypass) fraction is removed -- consistent with the
+    circuit's ``eta * beam_bypass_fraction``. Per-ray energy still closes to
+    roundoff::
+
+        Gamma0*E0 = heating + radiated + cost + anode_intercepted + transmitted
+
+    Off (``anode_cross_index is None`` or ``anode_eta == 0``) the running flux
+    is the constant ``Gamma0_per_s`` throughout, so every bank is byte-for-byte
+    the historical result.
     """
+    if anode_eta != 0.0 and not (0.0 <= anode_eta < 1.0):
+        raise ValueError(
+            f"anode_eta must be in [0, 1) (got {anode_eta})"
+        )
     nn = np.asarray(nn, dtype=float)
     ne = np.asarray(ne, dtype=float)
     Te = np.asarray(Te, dtype=float)
     dz_cm = np.asarray(dz_cm, dtype=float)
     cells = dz_cm.size
+    if anode_cross_index is not None:
+        anode_cross_index = int(anode_cross_index)
+        if not 0 <= anode_cross_index < cells:
+            raise ValueError(
+                "anode_cross_index must index a cell in [0, cells) "
+                f"(got {anode_cross_index}, cells={cells})"
+            )
     if nn.shape != (cells,) or ne.shape != (cells,) or Te.shape != (cells,):
         raise ValueError("nn, ne, Te, dz_cm must share one shape (cells,)")
     if direction not in (-1, 1):
@@ -233,6 +273,12 @@ def deposit_beam(
     order = range(launch, cells) if direction > 0 else range(launch, -1, -1)
     E = float(E0_eV)
     absorbed = False
+    # Running flux [1/s]. Constant Gamma0 unless the anode mesh intercepts part
+    # of the surviving beam at its face (audit A15); every bank below multiplies
+    # by this, so the off path is bit-for-bit the historical constant-flux result.
+    gamma = float(Gamma0_per_s)
+    anode_intercepted = 0.0  # erg/s booked to the anode, not the plasma
+    intercept_active = anode_cross_index is not None and anode_eta > 0.0
 
     if E <= E_stop_eV:
         # Sub-threshold source: nothing inelastic can happen; the module's
@@ -245,10 +291,20 @@ def deposit_beam(
             ionization_cost_erg_s=ionization_cost,
             transmitted_flux=float(Gamma0_per_s),
             transmitted_energy_eV=E,
+            anode_intercepted_erg_s=0.0,
             E_entry_eV=E_entry,
         )
 
     for cell in order:
+        # Anode-mesh interception (A15): the ray reaches the anode face only if
+        # it survived the gap (a stopped beam breaks out before this cell), so
+        # removing eta of the flux HERE removes exactly the long-mfp/bypass beam.
+        # Book the intercepted primaries' remaining energy to the anode and carry
+        # the reduced flux downstream.
+        if intercept_active and cell == anode_cross_index:
+            anode_intercepted += anode_eta * gamma * E * _ERG_PER_EV
+            gamma *= 1.0 - anode_eta
+            intercept_active = False
         E_entry[cell] = E
         remaining = float(dz_cm[cell])
         nn_c = float(nn[cell])
@@ -273,7 +329,7 @@ def deposit_beam(
             )
             L_anom = 0.0
             if anomalous_model == "quasilinear":
-                n_b = Gamma0_per_s / (
+                n_b = gamma / (
                     float(area[cell]) * beam_speed_cm_s(E)
                 )
                 l_ql = quasilinear_relaxation_length_cm(E, ne_c, n_b)
@@ -288,7 +344,7 @@ def deposit_beam(
                 dz_sub = (E - E_stop_eV) / L_tot
             if dz_sub <= 0.0:
                 # E sits at E_stop to roundoff: absorb the residual here.
-                heating[cell] += Gamma0_per_s * E * _ERG_PER_EV
+                heating[cell] += gamma * E * _ERG_PER_EV
                 E = 0.0
                 absorbed = True
                 break
@@ -299,18 +355,18 @@ def deposit_beam(
             d_exc = L_exc * dz_sub
             d_coul = L_coul * dz_sub
             d_anom = L_anom * dz_sub
-            ionization_cost[cell] += Gamma0_per_s * d_pot * _ERG_PER_EV
-            heating[cell] += Gamma0_per_s * (d_sec + d_coul + d_anom) * _ERG_PER_EV
-            radiated[cell] += Gamma0_per_s * d_exc * _ERG_PER_EV
-            ionization_events[cell] += Gamma0_per_s * nn_c * sigma_i * dz_sub
-            excitation_events[cell] += Gamma0_per_s * nn_c * sigma_x * dz_sub
+            ionization_cost[cell] += gamma * d_pot * _ERG_PER_EV
+            heating[cell] += gamma * (d_sec + d_coul + d_anom) * _ERG_PER_EV
+            radiated[cell] += gamma * d_exc * _ERG_PER_EV
+            ionization_events[cell] += gamma * nn_c * sigma_i * dz_sub
+            excitation_events[cell] += gamma * nn_c * sigma_x * dz_sub
             E -= d_pot + d_sec + d_exc + d_coul + d_anom
             remaining -= dz_sub
             if E <= E_stop_eV:
                 # Sub-threshold residual: the primary can only Coulomb-drag
                 # from here; bank the remainder as local plasma heating
                 # (plan B1's stated closure) and end the ray.
-                heating[cell] += Gamma0_per_s * E * _ERG_PER_EV
+                heating[cell] += gamma * E * _ERG_PER_EV
                 E = 0.0
                 absorbed = True
                 break
@@ -323,7 +379,8 @@ def deposit_beam(
         plasma_heating_erg_s=heating,
         radiated_erg_s=radiated,
         ionization_cost_erg_s=ionization_cost,
-        transmitted_flux=0.0 if absorbed else float(Gamma0_per_s),
+        transmitted_flux=0.0 if absorbed else gamma,
         transmitted_energy_eV=0.0 if absorbed else E,
+        anode_intercepted_erg_s=anode_intercepted,
         E_entry_eV=E_entry,
     )

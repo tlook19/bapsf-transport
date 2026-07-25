@@ -2119,6 +2119,74 @@ def main():
     )
     assert np.isfinite(csda_sigma_eff) and csda_sigma_eff >= 0.0
 
+    # --- R4.1 (audit A15): anode-mesh beam interception. Default-off is
+    # bit-identical to the plain csda run; on, it removes the long-mfp beam
+    # from the fluid (less deposited power) while per-ray energy still closes.
+    intc_params = dict(csda_params)
+    intc_flags = dict(cathode_flags)
+    intc_flags["beam_anode_interception"] = True
+    intc_sim = LAPDSim1D(intc_params, intc_flags)
+    intc_sim._circuit_I_loop = 3000.0
+    intc_solve = intc_sim.solve_cathode_boundary()
+    intc_dep = intc_solve.beam_deposition[0]
+    assert intc_dep is not None
+    # Perturbs the operator: interception is active and books anode energy.
+    assert float(intc_dep.anode_intercepted_erg_s) > 0.0
+    # Per-ray energy still conserves, now including the anode-intercepted book.
+    intc_res = intc_solve.beam_result.result
+    intc_budget = intc_res.I_eth_star * intc_res.phi_c * 1.0e7
+    intc_total = (
+        intc_dep.plasma_heating_erg_s.sum()
+        + intc_dep.radiated_erg_s.sum()
+        + intc_dep.ionization_cost_erg_s.sum()
+        + float(intc_dep.anode_intercepted_erg_s)
+        + intc_dep.transmitted_flux * intc_dep.transmitted_energy_eV * ev_to_erg
+    )
+    assert abs(intc_total - intc_budget) / intc_budget < 1e-9
+    # The fluid deposits strictly LESS power than the non-intercepting run:
+    # the intercepted beam no longer heats the plasma downstream of the anode.
+    intc_terms = intc_sim.beam_ionization_rhs_terms(cathode_solve=intc_solve)
+    intc_power_sum = float((intc_terms["beam_power_deposition"].Ee * csda_Vp).sum())
+    assert intc_power_sum < csda_power_sum
+    # Presence-gate: the flag rejects at construction without the csda model
+    # (it would otherwise be a silent no-op on the beer_lambert path).
+    try:
+        LAPDSim1D(dict(exc_params), intc_flags)  # exc_params is beer_lambert
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(
+            "beam_anode_interception must reject beam_deposition_model!='csda'"
+        )
+
+    # --- R4.2 (audit A14): ionization_birth_energy_model. Default-off ("legacy")
+    # is the historical booking; "conservative" zeroes the bulk electron
+    # birth energy (no 3Te/2 creation) and adds the ion mixing energy, and the
+    # beam ion birth gains the same mixing energy (its electron Ee is already 0).
+    cons_params = dict(csda_params)
+    cons_params["ionization_birth_energy_model"] = "conservative"
+    cons_sim = LAPDSim1D(cons_params, cathode_flags)
+    cons_sim._circuit_I_loop = 3000.0
+    cons_solve = cons_sim.solve_cathode_boundary()
+    cons_terms = cons_sim.beam_ionization_rhs_terms(cathode_solve=cons_solve)
+    leg_react = csda_sim.reaction_rhs_terms()["ionization_birth"]
+    cons_react = cons_sim.reaction_rhs_terms()["ionization_birth"]
+    # Bulk electron birth is zeroed; particle & momentum rows are untouched.
+    assert np.all(cons_react.Ee == 0.0)
+    assert np.array_equal(cons_react.n, leg_react.n)
+    assert np.array_equal(cons_react.M, leg_react.M)
+    # Beam ion birth gains the (non-negative) mixing energy over legacy.
+    leg_beam_Ei = csda_terms["beam_ionization_birth"].Ei
+    cons_beam_Ei = cons_terms["beam_ionization_birth"].Ei
+    assert np.all(cons_beam_Ei >= leg_beam_Ei - 1e-30)
+    # Invalid selector rejects at construction.
+    try:
+        LAPDSim1D(dict(csda_params, ionization_birth_energy_model="x"), cathode_flags)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("ionization_birth_energy_model must reject unknown values")
+
     rhs = sim.plasma_flux_rhs(include_front=False)
     for values in (rhs.n, rhs.nn, rhs.M, rhs.Ee, rhs.Ei):
         assert np.allclose(values, 0.0, atol=1e-20)

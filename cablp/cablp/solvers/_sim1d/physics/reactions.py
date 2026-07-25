@@ -93,6 +93,7 @@ def reaction_rhs(
     adas_low_te_extension=False,
     Te_birth_ionization="local",
     Ti_birth_ionization="floor",
+    ionization_birth_energy_model="legacy",
     wind_column_factor=None,
 ):
     """Return conservative source terms for local bulk plasma reactions."""
@@ -110,6 +111,7 @@ def reaction_rhs(
         adas_low_te_extension=adas_low_te_extension,
         Te_birth_ionization=Te_birth_ionization,
         Ti_birth_ionization=Ti_birth_ionization,
+        ionization_birth_energy_model=ionization_birth_energy_model,
         wind_column_factor=wind_column_factor,
     )
     ionization = terms["ionization_birth"]
@@ -138,9 +140,15 @@ def reaction_rhs_terms(
     adas_low_te_extension=False,
     Te_birth_ionization="local",
     Ti_birth_ionization="floor",
+    ionization_birth_energy_model="legacy",
     wind_column_factor=None,
 ):
     """Return ionization and recombination conservative source terms."""
+    if ionization_birth_energy_model not in ("legacy", "conservative"):
+        raise ValueError(
+            "ionization_birth_energy_model must be 'legacy' or 'conservative' "
+            f"(got {ionization_birth_energy_model!r})"
+        )
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     S_ion, S_rec_rad, S_rec_3b = reaction_rates(
         state=state,
@@ -190,15 +198,33 @@ def reaction_rhs_terms(
             u_n = wind_column_factor * u_n
         M_birth = ion_mass_g * u_n * S_ion
         M_n_birth = -M_birth * momentum_ratio
+        u_birth = u_n
     else:
+        # Historical zero-drift birth: the ion is born at rest.
         M_birth = zeros
         M_n_birth = None
+        u_birth = zeros
+    # A14 (R4.2) energy moments. "legacy": the historical booking that adds
+    # 3/2 Te_birth to Ee (creating electron thermal energy per new electron) and
+    # 3/2 Ti_birth to Ei. "conservative": the new electron carries no kinetic
+    # energy (Ee birth = 0, reconciled to the beam Ee=0 convention; Te falls by
+    # dilution), and the ion mass-loading relative-drift mixing energy
+    # 1/2 m (u_i - u_birth)^2 S_ion is booked to Ei, so ion total energy closes
+    # to the consumed neutral's energy instead of vanishing through the bulk
+    # kinetic derivative.
+    if ionization_birth_energy_model == "conservative":
+        Ee_birth = zeros.copy()
+        mixing = 0.5 * ion_mass_g * (derived.u - u_birth) ** 2 * S_ion
+        Ei_birth = 1.5 * ev_to_erg * Ti_birth * S_ion + mixing
+    else:
+        Ee_birth = 1.5 * ev_to_erg * Te_birth * S_ion
+        Ei_birth = 1.5 * ev_to_erg * Ti_birth * S_ion
     ionization = ConservativeState1D(
         n=S_ion,
         nn=-S_ion * nn_ratio,
         M=M_birth,
-        Ee=1.5 * ev_to_erg * Te_birth * S_ion,
-        Ei=1.5 * ev_to_erg * Ti_birth * S_ion,
+        Ee=Ee_birth,
+        Ei=Ei_birth,
         M_n=M_n_birth,
     )
     with_wind = state.M_n is not None
