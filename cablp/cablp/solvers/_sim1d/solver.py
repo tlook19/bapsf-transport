@@ -712,6 +712,18 @@ class LAPDSim1D:
             # is below the trigger at production dt).
             self._picard_triggered_steps = 0
             self._picard_extra_solves = 0
+        # R5.2 / audit A9: flux-limited electron heat conduction (default off).
+        self._electron_heat_flux_limit = bool(
+            self._flags.get("electron_heat_flux_limit", False)
+        )
+        self._heat_flux_limiter_f = float(
+            self._input_dict.get("heat_flux_limiter_f", 0.3)
+        )
+        if self._electron_heat_flux_limit and self._heat_flux_limiter_f <= 0.0:
+            raise ValueError(
+                "heat_flux_limiter_f must be > 0 when electron_heat_flux_limit "
+                f"is on (got {self._heat_flux_limiter_f})"
+            )
         self._neutral_momentum_radial = str(
             self._input_dict.get("neutral_momentum_radial", "uniform")
         )
@@ -4659,6 +4671,8 @@ class LAPDSim1D:
             "b_ipara": float(self._input_dict.get("b_ipara", 1.0)),
             "heat_conduction": bool(self._flags.get("heat_conduction", True)),
             "ln_lambda_min": float(self._input_dict.get("ln_lambda_min", 1.0)),
+            "electron_heat_flux_limit": self._electron_heat_flux_limit,
+            "heat_flux_limiter_f": self._heat_flux_limiter_f,
         }
 
     def _reaction_kwargs(self):

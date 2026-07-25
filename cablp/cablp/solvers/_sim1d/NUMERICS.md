@@ -340,3 +340,23 @@ sequential); the coupling sensitivity is confined to the internal sheath potenti
 `V_b`/`φ_c` (the SCL-corner regime), while `I_tot` (~3%) and `T_s` are robust.
 Retained as a **default-off diagnostic**; sequential stays production. See
 `SIM1D_MODEL_AUDIT_PLAN.md` R5.1.
+
+## R5.2 electron heat-flux limiter (default off, audit A9)
+
+The default electron conduction is classical Spitzer–Härm (`q = -κ_e ∇Te`), a
+local law valid only where `λ_mfp ≪ L_T`. A9 measured `q_SH` reaching 1.7–3.3×
+(static probe: ~4× median) the free-streaming ceiling `n·Te·v_the` at the resolved
+gap faces — the constitutive law leaving its validity domain. The default-off
+`electron_heat_flux_limit` flag scales `κ_e` per cell by the harmonic
+(Cowie–McKee) limiter `λ = q_sat/(q_sat + q_SH)`, `q_sat = f·n·Te·v_the`
+(`f = heat_flux_limiter_f`), so the flux caps at free-streaming where gradients are
+steep and recovers Spitzer where they are shallow (`flux_limited_electron_conductivity`,
+applied in both the explicit and implicit paths at the frozen incoming `Te`, so the
+operator stays a conservative flux divergence). Identities
+(`verify_sim1d_r5_heatflux.py`): Spitzer limit at large `f`, saturation cap
+`κ_eff|∇Te| ≤ q_sat`, closed-domain energy conservation. Default off (golden
+bit-exact); a declared A9 closure-family bracket — `f=1` targets only the ~gap
+cells (flux → ~42%), `f=0.1` suppresses conduction globally. The static
+engagement bracket is `probe_sim1d_r5_heatflux_bracket.py`; the dynamic
+scored-observable bracket (runs at each `f`) is deferred. See
+`SIM1D_MODEL_AUDIT_PLAN.md` R5.2.

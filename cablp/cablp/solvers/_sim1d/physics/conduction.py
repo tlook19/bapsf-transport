@@ -3,7 +3,7 @@ from scipy.linalg import solve_banded
 
 from cablp.funcs._heat import kappa_par_elec, kappa_par_ion
 from cablp.funcs._plasmaparams import c_log
-from cablp.vars._cons import ev_to_erg
+from cablp.vars._cons import ev_to_erg, m_e_cgs
 
 from ..core.state import ConservativeState1D, derive_state
 
@@ -71,6 +71,8 @@ def heat_conduction_rhs(
     b_ipara=1.0,
     heat_conduction=True,
     ln_lambda_min=1.0,
+    electron_heat_flux_limit=False,
+    heat_flux_limiter_f=0.3,
 ):
     """Return conservative axial heat-conduction energy sources."""
     zeros = np.zeros_like(state.n, dtype=float)
@@ -87,16 +89,18 @@ def heat_conduction_rhs(
     n = np.maximum(state.n, floors["n"])
     ln_lambda = np.maximum(c_log(derived.Te, n, kind="ei"), ln_lambda_min)
 
+    conductivity_e = (
+        kappa_par_elec(derived.Te, n, ln_lambda, per_particle=False)
+        * ev_to_erg
+        * float(b_epara)
+    )
+    if electron_heat_flux_limit:
+        conductivity_e = flux_limited_electron_conductivity(
+            conductivity_e, derived.Te, n, geometry, heat_flux_limiter_f
+        )
     qe_face = conductive_face_flux(
         temperature=derived.Te,
-        conductivity=kappa_par_elec(
-            derived.Te,
-            n,
-            ln_lambda,
-            per_particle=False,
-        )
-        * ev_to_erg
-        * float(b_epara),
+        conductivity=conductivity_e,
         geometry=geometry,
     )
     qi_face = conductive_face_flux(
@@ -119,6 +123,34 @@ def heat_conduction_rhs(
         Ee=flux_divergence_rhs(qe_face, geometry),
         Ei=flux_divergence_rhs(qi_face, geometry),
     )
+
+
+def flux_limited_electron_conductivity(conductivity_e, Te_eV, n, geometry, f):
+    """Scale the electron conductivity per cell by the Cowie-McKee flux limiter.
+
+    The classical (Spitzer-Harm) parallel flux ``q_SH = kappa_e |dTe/dz|`` is
+    capped toward the free-streaming ceiling ``q_sat = f n Te v_the`` (with
+    ``Te`` in erg and ``v_the = sqrt(Te/m_e)``) via the smooth harmonic form
+
+        lambda = q_sat / (q_sat + q_SH),   kappa_eff = lambda * kappa_e
+
+    so ``lambda -> 1`` (recovers Spitzer) where ``q_SH << q_sat`` and
+    ``kappa_eff |dTe/dz| -> q_sat`` (the flux saturates at free-streaming) where
+    ``q_SH >> q_sat``. Reducing the conductivity keeps the operator a conservative
+    flux divergence. Frozen at the incoming ``Te`` like ``kappa`` itself. Audit A9
+    / R5.2; ``conductivity_e`` is the already-scaled volumetric conductivity
+    (``* ev_to_erg * b_epara``) the operator uses, so ``q_SH`` matches its flux.
+    """
+    conductivity_e = np.asarray(conductivity_e, dtype=float)
+    Te_eV = np.asarray(Te_eV, dtype=float)
+    Te_erg = Te_eV * ev_to_erg
+    v_the = np.sqrt(np.maximum(Te_erg, 0.0) / m_e_cgs)  # cm/s
+    q_sat = float(f) * np.asarray(n, dtype=float) * Te_erg * v_the  # erg cm^-2 s^-1
+    grad = np.gradient(Te_eV, np.asarray(geometry.z_cm, dtype=float))  # eV/cm
+    q_SH = np.abs(conductivity_e) * np.abs(grad)  # erg cm^-2 s^-1
+    denom = q_sat + q_SH
+    lam = np.where(denom > 0.0, q_sat / np.where(denom > 0.0, denom, 1.0), 1.0)
+    return conductivity_e * lam
 
 
 def conductive_face_flux(temperature, conductivity, geometry):
@@ -152,8 +184,17 @@ def heat_conduction_timestep_bound(
     ln_lambda_min=1.0,
     heat_dt_fraction=0.25,
     active_cells=None,
+    electron_heat_flux_limit=False,
+    heat_flux_limiter_f=0.3,
 ):
-    """Return an explicit diffusion timestep bound for heat conduction."""
+    """Return an explicit diffusion timestep bound for heat conduction.
+
+    The R5.2/A9 flux limiter (``electron_heat_flux_limit``) only REDUCES the
+    electron conductivity, so the unlimited-conductivity bound computed here is a
+    conservative (tighter) over-estimate of the limited operator's stiffness --
+    accepted and ignored so the shared ``_heat_conduction_kwargs`` fits.
+    """
+    del electron_heat_flux_limit, heat_flux_limiter_f  # conservative: see above
     if heat_dt_fraction <= 0.0:
         raise ValueError(f"heat_dt_fraction must be positive (got {heat_dt_fraction})")
     if not heat_conduction or (b_epara == 0.0 and b_ipara == 0.0):
@@ -209,6 +250,8 @@ def implicit_heat_conduction_step(
     implicit_heat_scheme="backward_euler",
     heat_picard_iterations=0,
     heat_picard_tol=1e-10,
+    electron_heat_flux_limit=False,
+    heat_flux_limiter_f=0.3,
 ):
     """Return a state after one implicit heat step.
 
@@ -281,6 +324,10 @@ def implicit_heat_conduction_step(
             b_epara=b_epara,
             b_ipara=b_ipara,
         )
+        if electron_heat_flux_limit:
+            conductivity_e = flux_limited_electron_conductivity(
+                conductivity_e, Te_eval, n, geometry, heat_flux_limiter_f
+            )
         Ee = _implicit_species_energy(
             energy=state.Ee,
             capacity=capacity,

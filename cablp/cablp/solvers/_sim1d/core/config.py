@@ -632,6 +632,10 @@ def fudge_factor_defaults():
         "b_Qcx": 1.0,
         "b_epara": 1.0,
         "b_ipara": 1.0,
+        # R5.2/A9 electron heat-flux limiter (only read when the
+        # electron_heat_flux_limit flag is on): the free-streaming fraction f in
+        # q_sat = f*n*Te*v_the, the harmonic (Cowie-McKee) saturation cap.
+        "heat_flux_limiter_f": 0.3,
         "b_ionization_energy_cost": 1.0,
         "b_pressure_work_elec": 1.0,
         "b_pressure_work_ions": 1.0,
@@ -1144,6 +1148,15 @@ input_flags_template_1d = {
     "neutral_baffles": False,
     "heat_conduction": True,
     "implicit_heat_conduction": True,
+    # R5.2 / audit A9 (2026-07-25): flux-limited electron heat conduction. The
+    # classical Spitzer-Harm flux reaches 1.7-3.3x the free-streaming scale
+    # n*Te*v_the at resolved gap faces, exceeding the physical ceiling. When ON,
+    # the electron conductivity is scaled per cell by lambda = q_sat/(q_sat+q_SH)
+    # (harmonic Cowie-McKee), q_sat = heat_flux_limiter_f * n * Te * v_the -- so
+    # the flux caps at free-streaming where gradients are steep and recovers
+    # Spitzer where they are shallow. Electron only; ion conduction unchanged.
+    # Default OFF (golden bit-exact); a declared A9 closure-family A/B instrument.
+    "electron_heat_flux_limit": False,
     "front_flux": True,
     # R2 conservative hyperbolic core (SIM1D_MODEL_AUDIT_PLAN R2, audit A2):
     # kinetic-energy-preserving convective momentum flux, plus deposit of the
