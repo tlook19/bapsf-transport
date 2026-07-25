@@ -79,6 +79,7 @@ def electron_cooling_rhs(
     icool=True,
     ncool=True,
     icool_recomb=False,
+    adas_low_te_extension=False,
 ):
     """Return conservative electron inelastic/radiative cooling sources.
 
@@ -106,6 +107,7 @@ def electron_cooling_rhs(
         icool=icool,
         ncool=ncool,
         icool_recomb=icool_recomb,
+        adas_low_te_extension=adas_low_te_extension,
     )
     rhs = terms["ionization_energy_cost"]
     for term in (
@@ -142,6 +144,7 @@ def electron_cooling_rhs_terms(
     icool=True,
     ncool=True,
     icool_recomb=False,
+    adas_low_te_extension=False,
 ):
     """Return split conservative electron cooling source terms.
 
@@ -186,7 +189,14 @@ def electron_cooling_rhs_terms(
         if want_qen:
             quantities.append("plt1")
         n_safe = np.maximum(state.n, floors["n"])
-        adas = he_rates(n_safe, derived.Te, quantities)
+        # A18/R5.3: honor the low-Te extension here too, so prb1 (recombination
+        # radiated power) matches acd (recombination rate, particle path) below
+        # the 0.2 eV edge -- one consistent low-Te package. No effect off, or
+        # unless prb1 is requested (icool_recomb) at sub-edge Te.
+        adas = he_rates(
+            n_safe, derived.Te, quantities,
+            low_te_extension=adas_low_te_extension,
+        )
 
     if want_cost:
         if use_adas:

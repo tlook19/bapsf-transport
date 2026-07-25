@@ -4655,6 +4655,12 @@ class LAPDSim1D:
             "icool": bool(self._flags.get("icool", True)),
             "ncool": bool(self._flags.get("ncool", True)),
             "icool_recomb": bool(self._flags.get("icool_recomb", False)),
+            # A18/R5.3: the low-Te extension defines ONE consistent atomic
+            # package -- the electron-cooling prb1 honors it just like the
+            # particle-rate acd. Default off => golden bit-exact.
+            "adas_low_te_extension": bool(
+                self._input_dict.get("adas_low_te_extension", False)
+            ),
         }
 
     def _ion_charge_exchange_kwargs(self):
