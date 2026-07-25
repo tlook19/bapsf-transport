@@ -316,6 +316,27 @@ terminating faces are discretized; default-off is golden bit-exact.
   (split exactness, boxed γ, load-power closure to machine zero + cathode
   Kirchhoff). Boundary gates: `..._boundary.py` (unit) and `..._boundary_startup.py`
   (run: `u → c_s`, net sink). A11 coupling gate: `..._a11.py` (fixed-`dt`
-  refinement at the current-gated knee; failure logged, fix deferred to R5).
+  refinement at the current-gated knee; `--picard`/`--picard-tol` toggle the R5.1
+  fix).
 - **A13 controls.** The 0D surface-loss area scales / per-face enables are
   deprecated (never consumed by the resolved boundary); non-default use warns.
+
+## R5.1 gated fluid<->circuit Picard (default off, audit A11)
+
+The accepted step is sequential: the fluid stages run at a loop current frozen
+over the step, then `T_s` and the circuit advance from the accepted plasma
+(`_accept_step_attempt`). The default-off `coupled_circuit_picard` flag wraps both
+step entry points (`_accept_step_with_picard`) and, in a driven phase, re-runs the
+accepted step (`<= circuit_picard_max_iter`) with the frozen loop current updated
+to the previous iteration's result until the current a step produces matches the
+one it ran at (relative `circuit_picard_tol_rel`). `_picard_snapshot`/
+`_picard_restore` capture and exactly restore every step-mutated attribute (the
+persistent step cache is the four cathode fields), so a rejected iteration leaves
+no trace — validated bit-exactly by `verify_sim1d_r5_picard.py` (H1 round-trip, N1
+no-op, P1 knee perturbation, G1 default-off + K4a guard). It is a strict no-op
+where the trigger does not fire (golden bit-exact). **R5.1 finding:** at production
+`dt` the per-step loop-current change is below the trigger (Picard-1% ≈
+sequential); the coupling sensitivity is confined to the internal sheath potential
+`V_b`/`φ_c` (the SCL-corner regime), while `I_tot` (~3%) and `T_s` are robust.
+Retained as a **default-off diagnostic**; sequential stays production. See
+`SIM1D_MODEL_AUDIT_PLAN.md` R5.1.

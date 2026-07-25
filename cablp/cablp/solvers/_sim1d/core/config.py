@@ -894,6 +894,11 @@ def cathode_defaults():
         "R_comp": 0.010,
         "L_parasitic_H": 8.1e-6,
         "C_bank_F": None,
+        # R5.1/A11 gated fluid<->circuit Picard (only read when the
+        # coupled_circuit_picard flag is on): relative loop-current change that
+        # triggers a re-run, and the iteration cap.
+        "circuit_picard_tol_rel": 1.0e-2,
+        "circuit_picard_max_iter": 3,
         "eta": 0.358,
         "anode_radius_cm": None,
         "L_cath": 50.0,
@@ -1209,6 +1214,17 @@ input_flags_template_1d = {
     # single cold-gas Tn_K (300 K) for the neutral temperature, ending the
     # Tn_K/Tn_fit term-by-term mix. See notes/SIM1D_MODEL_AUDIT_PLAN.md R4.3.
     "ion_neutral_moment_closure": False,
+    # R5.1 / audit A11 (2026-07-25): gated fluid<->circuit Picard. The fluid step
+    # runs at a loop current frozen over the step, then the circuit advances from
+    # the accepted plasma -- a frozen-current lag that the A11 gate measured
+    # failing to converge at the emission knee. When ON, the accepted step is
+    # re-run (<= circuit_picard_max_iter times) with the updated loop current
+    # whenever |dI/dt| is large (a driven phase and the loop current moved more
+    # than circuit_picard_tol_rel), so fluid+T_s+circuit share one self-consistent
+    # I_loop. Default OFF and a strict no-op where the trigger does not fire (one
+    # pass == the sequential advance, bit-exact). Incompatible with the K4a
+    # kinetic engine. See notes/SIM1D_MODEL_AUDIT_PLAN.md R5.1.
+    "coupled_circuit_picard": False,
     "cathode_coupling": True,
     # Schottky barrier lowering in the *current-driven* sheath solve only
     # (CATHODE_IDRIVEN_PLAN.md §2b): the extracting sheath field lowers the

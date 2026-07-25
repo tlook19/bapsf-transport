@@ -680,6 +680,38 @@ class LAPDSim1D:
                 )
         else:
             self._kinetic = None
+        # R5.1 / audit A11: gated fluid<->circuit Picard coupling (default off).
+        self._coupled_circuit_picard = bool(
+            self._flags.get("coupled_circuit_picard", False)
+        )
+        if self._coupled_circuit_picard:
+            if self._kinetic is not None:
+                raise ValueError(
+                    "coupled_circuit_picard is incompatible with the K4a kinetic "
+                    "engine: the Picard re-run would double-trigger a kinetic "
+                    "refresh, whose state the step snapshot does not restore"
+                )
+            self._circuit_picard_tol_rel = float(
+                self._input_dict.get("circuit_picard_tol_rel", 1.0e-2)
+            )
+            self._circuit_picard_max_iter = int(
+                self._input_dict.get("circuit_picard_max_iter", 3)
+            )
+            if self._circuit_picard_tol_rel <= 0.0:
+                raise ValueError(
+                    "circuit_picard_tol_rel must be > 0 "
+                    f"(got {self._circuit_picard_tol_rel})"
+                )
+            if self._circuit_picard_max_iter < 1:
+                raise ValueError(
+                    "circuit_picard_max_iter must be >= 1 "
+                    f"(got {self._circuit_picard_max_iter})"
+                )
+            # Diagnostics: how many accepted steps triggered a Picard re-run, and
+            # the total extra fluid re-solves (a null shows the frozen-current lag
+            # is below the trigger at production dt).
+            self._picard_triggered_steps = 0
+            self._picard_extra_solves = 0
         self._neutral_momentum_radial = str(
             self._input_dict.get("neutral_momentum_radial", "uniform")
         )
@@ -2341,16 +2373,121 @@ class LAPDSim1D:
                 self._circuit_V_cap = V_cap_new
         return self.get_initial_snapshot()
 
+    # Every attribute one accepted step mutates (fluid attempt cathode cache +
+    # accept), for the R5.1/A11 Picard snapshot. The persistent step cache is
+    # exactly the four cathode fields (`_restore_step_cache`), so restoring them
+    # restores it.
+    _PICARD_DIRECT_ATTRS = (
+        "_time",
+        "_circuit_I_loop",
+        "_circuit_I_prev",
+        "_circuit_V_dis_step",
+        "_circuit_V_dis_time_integral",
+        "_circuit_V_cap",
+        "_cathode_Ts_K",
+        "_cathode_theta",
+        "_cathode_solve",
+    )
+
+    def _picard_snapshot(self):
+        """Capture the pre-step coupled state for a Picard re-run (R5.1/A11)."""
+        snap = {a: getattr(self, a) for a in self._PICARD_DIRECT_ATTRS}
+        snap["_y"] = self._y.copy()
+        snap["_cathode_x0"] = _copy_cache_value(self._cathode_x0)
+        snap["_cathode_x0_twin"] = _copy_cache_value(self._cathode_x0_twin)
+        bc = self._cathode_beam_cross
+        snap["_cathode_beam_cross"] = (
+            None if bc is None else np.asarray(bc, dtype=float).copy()
+        )
+        snap["_floor_ledger"] = dict(self._floor_ledger)
+        snap["_cathode_energy_ledger_J"] = dict(self._cathode_energy_ledger_J)
+        ema = self._sample_ema
+        snap["_sample_ema"] = (
+            None if ema is None else {c: list(v) for c, v in ema.items()}
+        )
+        return snap
+
+    def _picard_restore(self, snap):
+        """Restore exactly the state ``_picard_snapshot`` captured."""
+        for a in self._PICARD_DIRECT_ATTRS:
+            setattr(self, a, snap[a])
+        self._cathode_x0 = _copy_cache_value(snap["_cathode_x0"])
+        self._cathode_x0_twin = _copy_cache_value(snap["_cathode_x0_twin"])
+        bc = snap["_cathode_beam_cross"]
+        self._cathode_beam_cross = (
+            None if bc is None else np.asarray(bc, dtype=float).copy()
+        )
+        self._floor_ledger = dict(snap["_floor_ledger"])
+        self._cathode_energy_ledger_J = dict(snap["_cathode_energy_ledger_J"])
+        ema = snap["_sample_ema"]
+        self._sample_ema = (
+            None if ema is None else {c: list(v) for c, v in ema.items()}
+        )
+        # Restore _y EXACTLY (the snapshot is the accepted, already-floored state);
+        # do NOT route through _set_state_vector, whose re-flooring is not
+        # guaranteed idempotent and would make a Picard re-run start from a
+        # perturbed state.
+        self._y = snap["_y"].copy()
+        self._state = self._unpack(self._y)
+        self._derived = derive_state(
+            self._state, self._floors, self._ion_mass_g
+        )
+
+    def _accept_step_with_picard(self, generate_attempt):
+        """Accept one step, Picard-iterating the loop current at the knee (A11).
+
+        ``generate_attempt() -> (attempt, extra)``; returns
+        ``(accept_result, attempt, extra)``. With ``coupled_circuit_picard`` off
+        this is exactly one attempt + accept. On, and in a driven phase, the step
+        is re-run (<= ``circuit_picard_max_iter``) with the frozen loop current
+        set to the previous iteration's result until the loop current a step
+        produces matches the one it was run at (relative ``circuit_picard_tol_rel``),
+        so fluid + T_s + circuit share one self-consistent ``I_loop``. Rejected
+        iterations restore the snapshot exactly, mutating no accepted-step state.
+        """
+        if not self._coupled_circuit_picard:
+            attempt, extra = generate_attempt()
+            return self._accept_step_attempt(attempt), attempt, extra
+        snap = self._picard_snapshot()
+        t_start = self._time
+        phase = self._cathode_phase_options(time=t_start)
+        driven = bool(phase["solve_enabled"]) and not bool(phase["floating"])
+        I_frozen = float(self._circuit_I_loop)
+        last = None
+        for iteration in range(self._circuit_picard_max_iter):
+            if iteration > 0:
+                self._picard_restore(snap)
+                self._circuit_I_loop = I_frozen
+                self._picard_extra_solves += 1
+            attempt, extra = generate_attempt()
+            result = self._accept_step_attempt(attempt)
+            last = (result, attempt, extra)
+            if not driven:
+                break
+            I_new = float(self._circuit_I_loop)
+            if abs(I_new - I_frozen) <= self._circuit_picard_tol_rel * max(
+                abs(I_new), 1.0
+            ):
+                break
+            I_frozen = I_new
+            if iteration == 0:
+                self._picard_triggered_steps += 1
+        return last
+
     def advance_one_step(self, dt=None, operator_split=None):
         """Advance the conservative state by one explicit or split step."""
-        attempt = self._attempt_step(dt=dt, operator_split=operator_split)
-        reason, detail = self._step_rejection_info(attempt)
-        if reason:
-            raise ValueError(
-                f"step candidate rejected before acceptance: {reason}; "
-                f"{_rejection_detail_text(detail)}"
-            )
-        return self._accept_step_attempt(attempt)
+        def _generate():
+            attempt = self._attempt_step(dt=dt, operator_split=operator_split)
+            reason, detail = self._step_rejection_info(attempt)
+            if reason:
+                raise ValueError(
+                    f"step candidate rejected before acceptance: {reason}; "
+                    f"{_rejection_detail_text(detail)}"
+                )
+            return attempt, None
+
+        result, _attempt, _extra = self._accept_step_with_picard(_generate)
+        return result
 
     def operator_split_step(
         self,
@@ -2588,18 +2725,19 @@ class LAPDSim1D:
                 )
             if step_dt <= 0.0:
                 raise RuntimeError(f"non-positive timestep selected ({step_dt})")
-            (
-                attempt,
-                retry_count,
-                rejection_reason,
-                step_rejection_events,
-            ) = self._attempt_step_with_retries(
-                dt=step_dt,
-                operator_split=operator_split,
-                diag=diag,
+            def _generate_run_attempt():
+                a, rc, rr, ev = self._attempt_step_with_retries(
+                    dt=step_dt,
+                    operator_split=operator_split,
+                    diag=diag,
+                )
+                return a, (rc, rr, ev)
+
+            _result, attempt, _extra = self._accept_step_with_picard(
+                _generate_run_attempt
             )
+            retry_count, rejection_reason, step_rejection_events = _extra
             timestep_rejection_events.extend(step_rejection_events)
-            self._accept_step_attempt(attempt)
             self._update_current_phase_triggers()
             if dynamic_current_t_end:
                 current_t_end = self._current_trigger_t_end()
