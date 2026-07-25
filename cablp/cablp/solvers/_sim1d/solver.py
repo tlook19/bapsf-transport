@@ -4766,7 +4766,13 @@ class LAPDSim1D:
                 }
                 for term_name, term_rhs in rhs_terms.items()
             },
-            "cathode_diagnostics": self._cathode_diagnostic_snapshot(time=time),
+            "cathode_diagnostics": {
+                **self._cathode_diagnostic_snapshot(time=time),
+                # R5.4: collector surface-power ledger line (diagnostic-only).
+                "collector_surface_power_W": self._collector_surface_power_W(
+                    rhs_terms, derived
+                ),
+            },
         }
 
     def _trajectory_result(
@@ -5113,6 +5119,40 @@ class LAPDSim1D:
             ),
             "floating": phase == "afterglow",
         }
+
+    def _collector_surface_power_W(self, rhs_terms, derived):
+        """Return the power [W] the plasma deposits on the floating collector.
+
+        R5.4 (R3 tail): completes the power ledger with the collector
+        surface-power line. The plasma-terminating boundary term (the active
+        `characteristic_boundary` or legacy `boundary_absorption`) removes
+        electron (2Te sheath), ion internal, and reconstructed kinetic energy at
+        the collector cell; the negative of that removal is the surface power the
+        collector receives. Diagnostic-only (no state change). It is an ambient
+        plasma Bohm-outflow loss -- regime-dependent (small in the high-density/
+        detached ES runs, significant in low-puff/attached runs), independent of
+        whether any beam survives downstream.
+        """
+        roles = np.asarray(self._geometry.cell_role)
+        collector = roles == "collector"
+        if not np.any(collector):
+            return 0.0
+        Vp = np.asarray(self._geometry.plasma_volume_cm3, dtype=float)
+        u = np.asarray(derived.u, dtype=float)
+        m = self._ion_mass_g
+        total = 0.0
+        for name in ("characteristic_boundary", "boundary_absorption"):
+            term = rhs_terms.get(name)
+            if term is None:
+                continue
+            Ee = np.asarray(term.Ee, dtype=float)
+            Ei = np.asarray(term.Ei, dtype=float)
+            M = np.zeros_like(Ee) if term.M is None else np.asarray(term.M, dtype=float)
+            n = np.zeros_like(Ee) if term.n is None else np.asarray(term.n, dtype=float)
+            dK = u * M - 0.5 * m * u**2 * n  # reconstructed kinetic removal
+            p_cell = -(Ee + Ei + dK) * Vp * 1.0e-7  # erg/s -> W; sink -> surface gain
+            total += float(np.sum(p_cell[collector]))
+        return total
 
     def _cathode_diagnostic_snapshot(self, time=None):
         cells = self._geometry.cells
