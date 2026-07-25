@@ -71,8 +71,7 @@ $$m_i\,n\,\frac{D\mathbf{u}}{Dt} = -\,\nabla p \;-\; m_i\,\mathbf{u}\,S_{iz} \;-
 For the optional variable-area flux-tube geometry, the implemented
 quasi-1D conservative form is
 
-$$\partial_t(A\rho u)+\partial_z[A(\rho u^2+p)]
-  =p\,\partial_z A+A S_M.$$
+$$\partial_t(A\rho u)+\partial_z[A(\rho u^2+p)] = p\,\partial_z A+A S_M.$$
 
 The geometric pressure source is required to preserve a uniform stationary
 plasma exactly. This closure represents area divergence only; it does not
@@ -133,6 +132,67 @@ $$\frac{3}{2}\,n\,\frac{DT_i}{Dt} = -\,p_i\,\nabla\!\cdot\mathbf{u} \;+\; \nabla
 - $\tfrac32(T_\text{birth} - T)\,S_{iz}$ — thermal cost of injecting
   freshly-ionized particles at the birth temperature (vanishes for the default
   `birth="local"` electron choice).
+
+## Conservative form: where the convective derivatives go
+
+The equations above are written in **material-derivative** form
+$D/Dt = \partial_t + \mathbf{u}\cdot\nabla$ for physical readability, but
+`LAPDSim1D` never discretizes a $\mathbf{u}\cdot\nabla$ term. It integrates the
+algebraically-equivalent **conservative** form
+
+$$\partial_t U + \nabla\!\cdot\mathbf{F}(U) = S,\qquad U\in\{n,\,M,\,E_e,\,E_i\},$$
+
+in which each convective derivative is fused with its compression partner inside
+a single flux divergence and evaluated as one Rusanov/LLF face flux (see
+[`NUMERICS.md`](NUMERICS.md)). The bridge between the two forms is the
+product-rule identity
+
+$$\nabla\!\cdot(U\mathbf{u}) = \underbrace{\mathbf{u}\cdot\nabla U}_{\text{convective}} \;+\; \underbrace{U\,\nabla\!\cdot\mathbf{u}}_{\text{compression}},$$
+
+applied once per advected field. **Continuity** is the archetype: the code's
+$\partial_t n + \nabla\!\cdot(n\mathbf{u}) = S$ carries the whole divergence in
+$F_n = n u$; moving the convective half onto the LHS to build $Dn/Dt$ leaves the
+compression half $-n\,\nabla\!\cdot\mathbf{u}$ on the RHS, which is the term
+printed in Eq. 1. The two are the same object split down the middle, so there is
+nothing to grep for — $\mathbf{u}\cdot\nabla n$ exists only welded to
+$n\,\nabla\!\cdot\mathbf{u}$ inside the flux.
+
+The mapping for every advected field (`physics/flux.py`, `physical_fluxes`):
+
+| material-derivative piece | fused into flux |
+|---|---|
+| $\mathbf{u}\cdot\nabla n$ | $F_n = n u$ |
+| $\mathbf{u}\cdot\nabla\mathbf{u}$ (in $D\mathbf{u}/Dt$) | $F_M = M u + p$ (convective part) |
+| $\mathbf{u}\cdot\nabla E_e$ | $F_{Ee} = E_e u$ |
+| $\mathbf{u}\cdot\nabla E_i$ | $F_{Ei} = E_i u$ |
+
+Conversely, three RHS terms in Eqs. 1–5 are **residues of the change of form**,
+not independent physics — they are what does *not* cancel when the conservative
+densities are expanded back into material-derivative form:
+
+- $-n\,\nabla\!\cdot\mathbf{u}$ and $-p_{s}\,\nabla\!\cdot\mathbf{u}$ — the
+  compression partners just described. The plasma one rides inside $F_n$; the
+  **pressure work** $-p_s\,\nabla\!\cdot\mathbf{u}$ is instead a *separate* local
+  source (`sources.pressure_work_rhs`), because the advected energy flux is the
+  internal-energy flux $E_s u$, not the enthalpy flux $(E_s+p_s)u$ — the missing
+  $p_s u$ is added back explicitly. (R2's `hyperbolic_energy_consistent` folds it
+  into a KEP $-u\,dM_{\text{press}}$ form instead.)
+- $-m_i\mathbf{u}\,S_{iz}$ (momentum, ion loading) — because $M = m_i n u$,
+  expanding $\partial_t M + \nabla\!\cdot(Mu)$ produces
+  $m_i\mathbf{u}\,[\partial_t n + \nabla\!\cdot(n u)] = m_i\mathbf{u}\,S_n$;
+  moving it to the RHS gives the mass-loading drag. It is a bookkeeping
+  consequence of evolving a conservative momentum density over a source-carrying
+  continuity, not a distinct force.
+- $-\nabla p$ (momentum) — stays inside the flux as the $+p$ of $M u + p$; it is
+  not discretized as a separate gradient stencil.
+
+Two numerical consequences follow directly. First, convective transport and
+compression cannot be tuned apart: they share one flux and therefore the same
+Rusanov numerical diffusion $\sim\tfrac12 a_{\max}\Delta z$. Second, a reflecting
+wall zeroes the convective half only — the closed face carries
+$F_n = F_{Ee} = F_{Ei} = 0$ but keeps $F_M = p_{\text{live}}$ — the discrete
+statement of "no flux through the wall, but the wall still pushes back"
+(`flux._apply_plasma_walls`).
 
 ## Reductions relative to full 3D Braginskii
 
@@ -298,8 +358,7 @@ and ionization. A ray that stops in the gap never reaches the face and intercept
 nothing, so exactly the survived (bypass) fraction is removed, consistent with the
 circuit's `eta*beam_bypass_fraction`. Per-ray energy still closes to roundoff:
 
-$$\Gamma_0 E_0 = \text{heating} + \text{radiated} + \text{cost}
-  + \text{anode-intercepted} + \gamma_{\text{exit}} E_{\text{exit}}.$$
+$$\Gamma_0 E_0 = \text{heating} + \text{radiated} + \text{cost} + \text{anode-intercepted} + \gamma_{\text{exit}} E_{\text{exit}}.$$
 
 Active under `beam_deposition_model="csda"` with resolved anode faces; inert
 otherwise (no construction error -- a csda control, like the beam Coulomb/anomalous
@@ -395,8 +454,7 @@ $$\nu_{mt} = n_n\big[\,k_b(T_\text{eff}) + \tfrac12 k_\text{iso}(T_\text{eff})\,
 $\mu/m_i$ factors). That one frequency governs momentum, frictional heating, and
 thermal equilibration:
 
-$$\frac{dM}{dt} = -m_i\,n\,\nu_{mt}\,(u-u_n),\qquad
-\frac{dE_i}{dt} = \tfrac12 m_i\,n\,\nu_{mt}\,(u-u_n)^2 + \tfrac32\,n\,\nu_{mt}\,(T_n-T_i).$$
+$$\frac{dM}{dt} = -m_i\,n\,\nu_{mt}\,(u-u_n),\qquad \frac{dE_i}{dt} = \tfrac12 m_i\,n\,\nu_{mt}\,(u-u_n)^2 + \tfrac32\,n\,\nu_{mt}\,(T_n-T_i).$$
 
 The neutral takes the exact mirror momentum source ($M_n$ through the plasma/neutral
 volume ratio when the state carries it), so ion-neutral momentum exchange is

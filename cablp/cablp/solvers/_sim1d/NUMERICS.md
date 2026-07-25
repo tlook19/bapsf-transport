@@ -37,7 +37,11 @@ equations these schemes discretize, see [`MODEL.md`](MODEL.md).
   (`front_filling_fluxes`, `alpha_front`) models plasma filling into unfilled
   cells, added alongside the Rusanov flux.
 - **Flux divergence**: RHS terms are formed as
-  `−Δ(area·F)/volume` per cell (`_flux_divergence`).
+  `−Δ(area·F)/volume` per cell (`_flux_divergence`). The `u·∇` convective
+  derivatives of the material-derivative model are never discretized separately:
+  each is fused with its compression partner inside one Rusanov face flux via
+  `∇·(Uu) = u·∇U + U∇·u`. See [`MODEL.md`](MODEL.md) "Conservative form: where the
+  convective derivatives go" for the term-by-term map.
 - **Optional flux-tube expansion**: the default-off expanded-end geometry
   supplies resolved plasma face areas and cell volumes. The momentum ledger
   gains `flux_tube_geometry = p·ΔA/V`, which exactly cancels the area change
