@@ -1200,6 +1200,15 @@ input_flags_template_1d = {
     # chamber-mean nn.
     "neutral_two_zone": False,
     "ion_neutral_thermalization": False,
+    # R4.3 / audit A7+A8 (2026-07-25): replace the drag + frictional-heating +
+    # elastic thermalization + CX-cooling quartet with ONE moment-closed reduced
+    # ion-neutral collision operator (Phelps He+/He isotropic+backscatter rates,
+    # T_eff=(Ti+Tn)/2). Default OFF and presence-gated: when ON the four legacy
+    # ion-neutral terms are forced to zero and this single operator runs; when OFF
+    # it is a strict no-op so the golden stays bit-exact. He-only. A8: uses the
+    # single cold-gas Tn_K (300 K) for the neutral temperature, ending the
+    # Tn_K/Tn_fit term-by-term mix. See notes/SIM1D_MODEL_AUDIT_PLAN.md R4.3.
+    "ion_neutral_moment_closure": False,
     "cathode_coupling": True,
     # Schottky barrier lowering in the *current-driven* sheath solve only
     # (CATHODE_IDRIVEN_PLAN.md §2b): the extracting sheath field lowers the

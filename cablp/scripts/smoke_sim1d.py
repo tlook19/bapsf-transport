@@ -2799,6 +2799,7 @@ def main():
         "ion_neutral_drag",
         "ion_neutral_frictional_heating",
         "ion_neutral_thermalization",
+        "ion_neutral_collision",
         "neutral_momentum_wall",
         "neutral_wind_advection",
         "surface_loss",

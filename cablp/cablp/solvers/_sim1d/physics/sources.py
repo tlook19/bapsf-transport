@@ -1,6 +1,11 @@
 import numpy as np
 
-from cablp.funcs._cross import charge_ex_react
+from cablp.funcs._cross import (
+    charge_ex_react,
+    phelps_cx_rate_cm3_s,
+    phelps_iso_rate_cm3_s,
+    phelps_momentum_transfer_rate_cm3_s,
+)
 from cablp.vars._cons import ev_to_erg, kb_cgs
 
 from .flux import (
@@ -1393,6 +1398,107 @@ def ion_neutral_thermalization_rhs(
         M=zeros.copy(),
         Ee=zeros.copy(),
         Ei=q_eq,
+    )
+
+
+def ion_neutral_collision_rhs(
+    state,
+    floors,
+    ion_mass_g,
+    gas_type,
+    Tn_eV,
+    b_ion_neutral_drag=1.0,
+    geometry=None,
+    wind_column_factor=None,
+):
+    """Return the R4.3 moment-closed reduced ion-neutral collision operator.
+
+    Replaces the drag + frictional-heating + elastic-thermalization + CX-cooling
+    quartet with ONE equal-mass (He⁺/He) Braginskii momentum-transfer operator
+    built from the Phelps isotropic + backscatter rate coefficients (audit A7).
+    With the momentum-transfer frequency
+
+        nu_mt = nn * (k_b(T_eff) + 0.5*k_iso(T_eff)),   T_eff = (Ti + Tn)/2
+
+    where ``k_b = <Qb v_rel>`` is the charge-exchange (backscatter) rate and
+    ``k_iso = <Qi v_rel>`` the isotropic-elastic rate, the single frequency governs
+    momentum, frictional heating, AND thermal equilibration (both channels reduce
+    to the same 1/2 and 3/2 coefficients when expressed through their own nu_mt):
+
+        dM/dt  = -m n nu_mt (u - u_n)                              [momentum sink]
+        dEi/dt = 0.5 m n nu_mt (u - u_n)^2 + 1.5 n nu_mt (Tn - Ti) [friction + thermal]
+
+    The neutral receives the exact mirror momentum source (``M_n`` when the state
+    carries it, through the plasma/neutral volume ratio, exactly as the legacy
+    drag), so ion-neutral momentum exchange is antisymmetric. The neutral has no
+    energy field, so the neutral-side collisional energy is dropped as ever; the
+    CX-sized frictional-heating residual the exact swap moment requires is present
+    inside the single ``0.5 m n nu_mt (u-u_n)^2`` term (it is not restricted to the
+    elastic fraction, unlike the legacy ``Q_fric``).
+
+    ``Tn_eV`` is the single cold-gas neutral temperature (audit A8; 300 K feed/wall
+    for production), used consistently in both ``(Tn - Ti)`` and ``T_eff``.
+    """
+    zeros = np.zeros_like(state.n, dtype=float)
+    if b_ion_neutral_drag == 0.0:
+        return ConservativeState1D(
+            n=zeros,
+            nn=zeros.copy(),
+            M=zeros.copy(),
+            Ee=zeros.copy(),
+            Ei=zeros.copy(),
+        )
+    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
+    Tn = float(Tn_eV)
+    T_eff = 0.5 * (derived.Ti + Tn)
+    nu_mt = np.asarray(state.nn, dtype=float) * phelps_momentum_transfer_rate_cm3_s(
+        T_eff, gas_type=gas_type
+    )
+    if state.M_n is not None:
+        if geometry is None:
+            raise ValueError(
+                "ion_neutral_collision_rhs with an evolved M_n requires geometry "
+                "for the plasma/neutral volume conversion"
+            )
+        u_n = neutral_wind_velocity(
+            state, floors=floors, ion_mass_g=ion_mass_g, geometry=geometry
+        )
+        if wind_column_factor is not None:
+            u_n = wind_column_factor * u_n
+    else:
+        u_n = np.zeros_like(derived.u)
+    u_rel = derived.u - u_n
+    scale = float(b_ion_neutral_drag)
+    drag = -scale * ion_mass_g * nu_mt * state.n * u_rel
+    q_fric = 0.5 * scale * ion_mass_g * nu_mt * state.n * u_rel**2
+    q_therm = 1.5 * scale * nu_mt * state.n * (Tn - derived.Ti) * ev_to_erg
+    if state.M_n is not None:
+        # Mirror momentum source into the neutral wind (exactly conservative).
+        # In the kinetic-derived two-momentum mode M_n lives on the plasma/column
+        # volume, so no Vp/Vm conversion; otherwise convert by the volume ratio.
+        return ConservativeState1D(
+            n=zeros,
+            nn=zeros.copy(),
+            M=drag,
+            Ee=zeros.copy(),
+            Ei=q_fric + q_therm,
+            M_n=(
+                -drag
+                if state.M_n_a is not None
+                else -drag * geometry.volume_ratio
+            ),
+            M_n_a=(
+                np.zeros_like(state.M_n_a)
+                if state.M_n_a is not None
+                else None
+            ),
+        )
+    return ConservativeState1D(
+        n=zeros,
+        nn=zeros.copy(),
+        M=drag,
+        Ee=zeros.copy(),
+        Ei=q_fric + q_therm,
     )
 
 

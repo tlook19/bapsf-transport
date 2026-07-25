@@ -95,6 +95,7 @@ from .physics.sources import (
     anode_collection_rhs,
     boundary_absorption_rhs,
     characteristic_boundary_rhs,
+    ion_neutral_collision_rhs,
     ion_neutral_drag_rhs,
     ion_neutral_frictional_heating_rhs,
     ion_neutral_thermalization_rhs,
@@ -565,6 +566,17 @@ class LAPDSim1D:
         self._beam_anode_interception = bool(
             self._flags.get("beam_anode_interception", True)
         )
+        # R4.3 / audit A7+A8: the moment-closed reduced ion-neutral collision
+        # operator (Phelps He+/He). Presence-gated -- when on it replaces the
+        # four legacy ion-neutral terms; when off it is a strict no-op. He-only.
+        self._ion_neutral_moment_closure = bool(
+            self._flags.get("ion_neutral_moment_closure", False)
+        )
+        if self._ion_neutral_moment_closure and self._gas_type != "He":
+            raise ValueError(
+                "ion_neutral_moment_closure uses the Phelps He+/He cross "
+                f"sections and requires gas_type='He' (got {self._gas_type!r})"
+            )
         self._validate_r1_configuration_presence()
         exchange_model = str(
             self._input_dict.get("neutral_exchange_model", "knudsen")
@@ -1161,6 +1173,7 @@ class LAPDSim1D:
                 "ion_neutral_drag": self._zero_rhs_state(),
                 "ion_neutral_frictional_heating": self._zero_rhs_state(),
                 "ion_neutral_thermalization": self._zero_rhs_state(),
+                "ion_neutral_collision": self._zero_rhs_state(),
                 "neutral_momentum_wall": self._zero_rhs_state(),
                 "neutral_wind_advection": self._zero_rhs_state(),
                 "surface_loss": self._zero_rhs_state(),
@@ -1240,6 +1253,9 @@ class LAPDSim1D:
             ),
             "ion_neutral_thermalization": (
                 self.ion_neutral_thermalization_rhs(state=state)
+            ),
+            "ion_neutral_collision": (
+                self.ion_neutral_collision_rhs(state=state)
             ),
             "neutral_momentum_wall": self.neutral_momentum_wall_rhs(state=state),
             **(
@@ -3363,6 +3379,9 @@ class LAPDSim1D:
         """Return the conservative ion-neutral drag momentum exchange."""
         if state is None:
             state = self.state if y is None else self._unpack(y)
+        if self._ion_neutral_moment_closure:
+            # Replaced by the moment-closed ion_neutral_collision term.
+            return self._zero_rhs_state()
         return ion_neutral_drag_rhs(
             state=state,
             floors=self._floors,
@@ -3415,6 +3434,9 @@ class LAPDSim1D:
         """Return the elastic ion-neutral frictional-heating energy source."""
         if state is None:
             state = self.state if y is None else self._unpack(y)
+        if self._ion_neutral_moment_closure:
+            # Replaced by the moment-closed ion_neutral_collision term.
+            return self._zero_rhs_state()
         return ion_neutral_frictional_heating_rhs(
             state=state,
             floors=self._floors,
@@ -3429,6 +3451,9 @@ class LAPDSim1D:
         """Return the elastic ion-neutral thermal-equilibration energy source."""
         if state is None:
             state = self.state if y is None else self._unpack(y)
+        if self._ion_neutral_moment_closure:
+            # Replaced by the moment-closed ion_neutral_collision term.
+            return self._zero_rhs_state()
         if not self._flags.get("ion_neutral_thermalization", False):
             return self._zero_rhs_state()
         b_thermalization = self._input_dict.get("b_ion_neutral_thermalization")
@@ -3441,6 +3466,37 @@ class LAPDSim1D:
                 None if b_thermalization is None else float(b_thermalization)
             ),
             **self._ion_neutral_drag_kwargs(),
+        )
+
+    def ion_neutral_collision_rhs(self, y=None, state=None):
+        """Return the R4.3 moment-closed reduced ion-neutral collision operator.
+
+        Active only under the ``ion_neutral_moment_closure`` flag; a strict no-op
+        otherwise (the four legacy ion-neutral terms carry the physics then). A8:
+        the single cold-gas neutral temperature is ``Tn_K`` (300 K feed/wall),
+        converted to eV, used for both ``(Tn-Ti)`` and ``T_eff=(Ti+Tn)/2`` -- the
+        legacy ``Tn_fit`` is not consulted on this path.
+        """
+        if state is None:
+            state = self.state if y is None else self._unpack(y)
+        if not self._ion_neutral_moment_closure:
+            return self._zero_rhs_state()
+        drag_enabled = bool(self._flags.get("ion_neutral_drag", True))
+        Tn_K = float(self._input_dict.get("Tn_K", 300.0))
+        Tn_eV = Tn_K * kb_cgs / ev_to_erg
+        return ion_neutral_collision_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            gas_type=self._gas_type,
+            Tn_eV=Tn_eV,
+            b_ion_neutral_drag=(
+                float(self._input_dict.get("b_ion_neutral_drag", 1.0))
+                if drag_enabled
+                else 0.0
+            ),
+            geometry=self._geometry,
+            wind_column_factor=self._wind_column_factor,
         )
 
     def energy_exchange_rhs(self, y=None, state=None):
@@ -3481,6 +3537,10 @@ class LAPDSim1D:
         """Return conservative ion charge-exchange cooling sources."""
         if state is None:
             state = self.state if y is None else self._unpack(y)
+        if self._ion_neutral_moment_closure:
+            # CX cooling is folded into the moment-closed ion_neutral_collision
+            # term (its (3/2) n nu_mt (Tn-Ti) thermal channel).
+            return self._zero_rhs_state()
         return ion_charge_exchange_rhs(
             state=state,
             floors=self._floors,

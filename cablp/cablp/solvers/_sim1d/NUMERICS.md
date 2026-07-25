@@ -70,7 +70,13 @@ Local (cell-wise) RHS contributions, all in `physics/`:
   gas-puff sources, and pumping sinks.
 - `energy.py` — electron cooling, electron–ion energy exchange, ion
   charge-exchange energy loss.
-- `sources.py` — surface neutralization.
+- `sources.py` — surface neutralization; ion-neutral drag / frictional heating /
+  thermalization, and (default-off `ion_neutral_moment_closure`, audit A7/A8) the
+  moment-closed reduced ion-neutral collision operator that replaces that quartet
+  with one Phelps-rate equal-mass Braginskii momentum-transfer term (MODEL.md
+  R4.3). The Phelps He⁺/He rate coefficients are built once at import in
+  `funcs/_cross.py` (Maxwellian averages of the analytic isotropic + backscatter
+  cross sections vs `T_eff`), analogous to the IAEA `charge_ex_react` table.
 - `cathode.py` — cathode/sheath boundary physics.
 
 ## Time integration

@@ -126,7 +126,10 @@ $$\frac{3}{2}\,n\,\frac{DT_i}{Dt} = -\,p_i\,\nabla\!\cdot\mathbf{u} \;+\; \nabla
   scale.
 - $Q_{\text{eq,el}} = \tfrac32\,\nu_{el}\,n\,(T_n - T_i)$ — **elastic thermal
   equilibration** (the elastic companion to $Q_{cx}$), gated separately by the
-  `ion_neutral_thermalization` flag (default off).
+  `ion_neutral_thermalization` flag (default off). The drag, $Q_{cx}$,
+  $Q_{\text{fric}}$, and $Q_{\text{eq,el}}$ quartet is **replaced together** by
+  one moment-closed operator under the default-off `ion_neutral_moment_closure`
+  flag (audit A7/A8; see the R4.3 section below).
 - $\tfrac32(T_\text{birth} - T)\,S_{iz}$ — thermal cost of injecting
   freshly-ionized particles at the birth temperature (vanishes for the default
   `birth="local"` electron choice).
@@ -354,3 +357,68 @@ With A15 (R4.1) and A14 (R4.2) both booked, the two item-21 structural errors
 another on the settled artifact are each in their correct book; the item-21 power
 ledger can now be re-checked on that artifact. The `Te_birth_ionization=local`
 caveat in the energy-source glossary above applies only to the `"legacy"` booking.
+
+## R4.3 moment-closed ion-neutral collision operator (2026-07-25)
+
+The default-off `ion_neutral_moment_closure` flag replaces the drag +
+$Q_{\text{fric}}$ + $Q_{\text{eq,el}}$ + $Q_{cx}$ quartet with ONE moment-closed
+reduced ion-neutral collision operator (audit A7 + A8). The legacy
+`sigma_in_model="cx_derived"` applied $2\langle\sigma v\rangle_{cx}+k_L$ directly
+as the lab drag frequency -- dropping the equal-mass reduced-mass factor
+$\mu/m_i=\tfrac12$, so the CX drag was doubled -- and split the energy into $Q_{cx}$
+(coefficient $1\,K_{cx}$) plus an elastic $Q_{\text{fric}}/Q_{\text{eq,el}}$ at
+$\nu_{el}=\nu_{in}-\nu_{cx}=n_n(K_{cx}+K_L)$, mislabelling a full extra CX-rate
+equivalent as elastic. The present thermal cooling was $1.51$--$2.02\times$ the
+reduced-operator bracket, and the CX-sized frictional-heating residual the exact
+swap moment requires was dropped.
+
+**Rates (Phelps He$^+$/He, boxed literature).** The reduced operator uses the
+Phelps database He$^+$-in-He isotropic + backscatter cross sections (Phelps
+database, www.lxcat.net, retrieved on July 25, 2026; see
+`funcs/_cross.py` for the full citation and `vars/he_ion_neutral_phelps_lxcat.txt`
+for the archived download). They map to $\sigma_{cx}=Q_b$ (backscatter = charge
+exchange) and $\sigma_{mt}=Q_i+2Q_b$ (momentum transfer: isotropic contributes
+$\int(1-\cos\theta)=Q_i$, backscatter $180^\circ$ contributes $2Q_b$), and are
+valid to thermal energies (no 0.1 eV clamp, unlike the IAEA `A_R531` table). The
+isotropic rate is velocity-independent ($Q_i\propto E^{-1/2}$) and equals the
+classic Langevin capture rate to 0.1% -- the ad-hoc additive Langevin was a good
+proxy, now rigorous.
+
+**Operator (equal mass).** With $k_b(T_\text{eff})=\langle Q_b v_\text{rel}\rangle$
+and $k_\text{iso}(T_\text{eff})=\langle Q_i v_\text{rel}\rangle$ Maxwellian-averaged
+at $T_\text{eff}=(T_i+T_n)/2$ (reduced mass $\mu=m_i/2$), both channels reduce to
+the same Braginskii form through a single momentum-transfer frequency
+
+$$\nu_{mt} = n_n\big[\,k_b(T_\text{eff}) + \tfrac12 k_\text{iso}(T_\text{eff})\,\big]$$
+
+(the $\tfrac12$ on $k_\text{iso}$ and the CX $2Q_b\!\to\!k_b$ are the equal-mass
+$\mu/m_i$ factors). That one frequency governs momentum, frictional heating, and
+thermal equilibration:
+
+$$\frac{dM}{dt} = -m_i\,n\,\nu_{mt}\,(u-u_n),\qquad
+\frac{dE_i}{dt} = \tfrac12 m_i\,n\,\nu_{mt}\,(u-u_n)^2 + \tfrac32\,n\,\nu_{mt}\,(T_n-T_i).$$
+
+The neutral takes the exact mirror momentum source ($M_n$ through the plasma/neutral
+volume ratio when the state carries it), so ion-neutral momentum exchange is
+antisymmetric. The frictional term at the full $\nu_{mt}$ carries the CX-sized
+residual the swap moment requires (it is not restricted to the elastic fraction).
+At zero drift the operator is pure equilibration $\tfrac32 n\,\nu_{mt}(T_n-T_i)$ --
+the CX thermal coefficient is $\tfrac32 K_{cx}$, ending the legacy $2.5\,K_{cx}$
+double-count. The neutral carries no energy field, so the neutral-side collisional
+energy is dropped (as before).
+
+**A8 (neutral temperature).** The single cold-gas $T_n$ is the 300 K feed/wall
+temperature (`Tn_K`), used consistently in both $(T_n-T_i)$ and $T_\text{eff}$; the
+legacy `Tn_fit`$=0.1$ eV is not consulted on this path, ending the term-by-term
+$T_{n,K}/T_{n,\text{fit}}$ mix.
+
+Presence-gated: when on, the four legacy ion-neutral terms return zero and this
+single term runs; when off it is a strict no-op (golden bit-exact). He-only (loud
+`ValueError` at construction otherwise). The legacy `sigma_in_model` arms
+(`"constant"`, `"cx_derived"`) remain live A/B instruments. Analytic identities
+(`verify_sim1d_r4_collision.py`: momentum antisymmetry, friction $=-\tfrac12
+u_\text{rel}\,dM$, zero-drift thermal) hold to roundoff. On the settled matched-M6
+artifact (`probe_sim1d_r4_collision_bracket.py`) the operator's thermal cooling is
+$-28.2$ kW -- inside the IAEA-based pre-registration bracket $[-30.40,-22.67]$ kW
+and reduced from the present $-46.0$ kW, with no rate tuning (Phelps supersedes the
+IAEA rate set; the bracket is a cross-check).

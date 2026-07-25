@@ -14,6 +14,8 @@ from ..vars._cons import (
     I_21p,
     I_double,
     c_cgs,
+    ev_to_erg,
+    m_He_cgs,
 )
 
 a215 = [
@@ -721,3 +723,138 @@ def charge_ex_react(T, gas_type="He"):
     else:
         raise ValueError(f"unsupported gas_type {gas_type!r}; expected 'He' or 'H'")
     return np.interp(T, temps, table)
+
+
+# ── Phelps He+/He ion-neutral scattering cross sections (audit A7, R4.3) ──────
+#
+# REQUIRED CITATION (LXCat terms of use -- cite ALL of the following):
+#   (1) Site + retrieval date (identifies the data via the LXCat Time Machine):
+#         Phelps database, www.lxcat.net, retrieved on July 25, 2026.
+#   (2) Contributor "How to reference" (Phelps database header):
+#         http://jilawww.colorado.edu/~avp/
+#   (3) Data-group provenance: He+ in He, A.V. Phelps and collaborators
+#         (private communication; no journal reference given in the dataset).
+#   (4) LXCat platform: Pitchford et al., Plasma Process. Polym. 14, 1600098 (2017).
+# The retrieval date above is present in the header of the archived raw download
+# ``vars/he_ion_neutral_phelps_lxcat.txt`` and MUST be reproduced in any
+# publication. The database gives two analytic
+# center-of-mass differential-scatter components for He+ in He (E = relative
+# collision energy in eV, sigma in m^2 in the source; converted to cm^2 here):
+#
+#   backscatter (180 deg = symmetric charge exchange):
+#       Qb = 1e-19 * (E/1000)^-0.15 * (1+E/1000)^-0.25 * (1+5/E)^-0.15   [m^2]
+#   isotropic (polarization elastic):
+#       Qi = 7.63e-20 * E^-0.5                                          [m^2]
+#
+# Moment mapping used by the R4.3 reduced ion-neutral collision operator:
+#   sigma_cx = Qb                     (charge-exchange cross section)
+#   sigma_mt = Qi + 2*Qb              (momentum transfer: isotropic contributes
+#                                      int(1-cos th)=Qi, backscatter contributes
+#                                      (1-cos 180)=2 per unit -> 2*Qb)
+# See notes/SIM1D_MODEL_AUDIT_PLAN.md "R4.3 rate closure -- Phelps He+/He".
+
+_M2_TO_CM2 = 1.0e4
+_PHELPS_MU_G = 0.5 * m_He_cgs  # equal-mass He+/He reduced mass [g]
+
+
+def phelps_he_backscatter_cm2(E_eV):
+    """Phelps He+/He backscatter (charge-exchange) cross section [cm^2].
+
+    ``E_eV`` is the relative collision energy in eV. Analytic form (exact to the
+    archived LXCat table, verified in ``verify_sim1d_r4_collision.py``); the
+    ``1+5/E`` factor makes it approach a finite ~2.21e-15 cm^2 floor as E->0, so
+    it is well defined to thermal energies (no low-energy clamp).
+    """
+    E = np.asarray(E_eV, dtype=float)
+    Qb_m2 = (
+        1.0e-19
+        * (E / 1000.0) ** -0.15
+        * (1.0 + E / 1000.0) ** -0.25
+        * (1.0 + 5.0 / E) ** -0.15
+    )
+    return Qb_m2 * _M2_TO_CM2
+
+
+def phelps_he_isotropic_cm2(E_eV):
+    """Phelps He+/He isotropic (polarization-elastic) cross section [cm^2].
+
+    ``E_eV`` is the relative collision energy in eV. ``Qi = 7.63e-20 * E^-0.5``
+    m^2 -- the ``sigma ~ 1/v`` polarization law, so ``sigma*v`` is
+    velocity-independent and its Maxwellian rate coefficient is constant.
+    """
+    E = np.asarray(E_eV, dtype=float)
+    Qi_m2 = 7.63e-20 * E ** -0.5
+    return Qi_m2 * _M2_TO_CM2
+
+
+def _maxwellian_rate_cm3_s(sigma_cm2_of_eV, T_eV, mu_g, n_energy=2000, e_max_kT=60.0):
+    """Return ``<sigma v_rel>`` [cm^3/s] over a relative-velocity Maxwellian.
+
+    ``k(T) = sqrt(8/(pi mu)) (kT)^-3/2 \\int_0^inf sigma(E) E exp(-E/kT) dE`` with
+    ``E`` the relative collision energy and ``mu`` the reduced mass. ``sigma`` is
+    supplied as a function of ``E`` in eV returning cm^2; the integral is done in
+    erg so the returned rate is in cm^3/s.
+    """
+    T_eV = float(T_eV)
+    E_eV = np.linspace(1.0e-9, e_max_kT * T_eV, int(n_energy))
+    sigma = np.asarray(sigma_cm2_of_eV(E_eV), dtype=float)
+    E_erg = E_eV * ev_to_erg
+    kT = T_eV * ev_to_erg
+    prefactor = np.sqrt(8.0 / (np.pi * mu_g)) * kT ** -1.5
+    integrand = sigma * E_erg * np.exp(-E_erg / kT)
+    return prefactor * np.trapezoid(integrand, E_erg)
+
+
+# Pre-computed rate-coefficient tables vs the effective (relative-velocity)
+# temperature T_eff, built once at import over 1e-3..1e4 eV (300 K ~ 0.0259 eV
+# is well inside the grid). Interpolated by ``phelps_*_rate_cm3_s`` below.
+_phelps_Teff = np.logspace(-3, 4, 400)
+_phelps_kb = np.array(
+    [_maxwellian_rate_cm3_s(phelps_he_backscatter_cm2, T, _PHELPS_MU_G)
+     for T in _phelps_Teff]
+)
+_phelps_kiso = np.array(
+    [_maxwellian_rate_cm3_s(phelps_he_isotropic_cm2, T, _PHELPS_MU_G)
+     for T in _phelps_Teff]
+)
+
+
+def phelps_cx_rate_cm3_s(T_eff, gas_type="He"):
+    """He+/He charge-exchange rate coefficient ``<Qb v_rel>`` [cm^3/s].
+
+    ``T_eff`` is the effective relative-velocity temperature ``(Ti+Tn)/2`` in eV.
+    Grows ~sqrt(T_eff) at low temperature (no flat clamp), unlike the IAEA
+    ``charge_ex_react`` table whose 0.1 eV floor holds the rate constant below it.
+    """
+    if gas_type != "He":
+        raise ValueError(
+            f"Phelps ion-neutral cross sections are He-only (got {gas_type!r})"
+        )
+    return np.interp(T_eff, _phelps_Teff, _phelps_kb)
+
+
+def phelps_iso_rate_cm3_s(T_eff, gas_type="He"):
+    """He+/He isotropic-elastic rate coefficient ``<Qi v_rel>`` [cm^3/s].
+
+    ``T_eff`` in eV. Velocity-independent (``Qi ~ 1/v``), so this is essentially
+    constant (~7.49e-10 cm^3/s), matching the classic Langevin capture rate.
+    """
+    if gas_type != "He":
+        raise ValueError(
+            f"Phelps ion-neutral cross sections are He-only (got {gas_type!r})"
+        )
+    return np.interp(T_eff, _phelps_Teff, _phelps_kiso)
+
+
+def phelps_momentum_transfer_rate_cm3_s(T_eff, gas_type="He"):
+    """He+/He total momentum-transfer rate ``<sigma_mt v_rel>`` scaled by the
+    equal-mass reduced-mass factor: ``k_b + 0.5*k_iso`` [cm^3/s].
+
+    This is ``nu_mt / nn`` for the R4.3 reduced drag operator
+    ``dM/dt = -m n nu_mt (u - u_n)``. The ``0.5`` on ``k_iso`` and the implicit
+    ``2*Qb -> k_b`` are the equal-mass ``mu/m_i = 1/2`` lab-frame factors.
+    """
+    return (
+        phelps_cx_rate_cm3_s(T_eff, gas_type)
+        + 0.5 * phelps_iso_rate_cm3_s(T_eff, gas_type)
+    )
