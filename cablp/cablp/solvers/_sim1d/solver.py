@@ -577,6 +577,16 @@ class LAPDSim1D:
                 "ion_neutral_moment_closure uses the Phelps He+/He cross "
                 f"sections and requires gas_type='He' (got {self._gas_type!r})"
             )
+        # R5 stance flip: the "phelps" presheath sigma_in model (default) shares
+        # the He-only Phelps cross section; hydrogen configs must select
+        # "constant" or "cx_derived".
+        _sigma_in_model = str(self._input_dict.get("sigma_in_model", "phelps"))
+        if _sigma_in_model == "phelps" and self._gas_type != "He":
+            raise ValueError(
+                "sigma_in_model='phelps' uses the Phelps He+/He cross section "
+                f"and requires gas_type='He' (got {self._gas_type!r}); select "
+                "'constant' or 'cx_derived' for other gases"
+            )
         self._validate_r1_configuration_presence()
         exchange_model = str(
             self._input_dict.get("neutral_exchange_model", "knudsen")
@@ -1016,6 +1026,47 @@ class LAPDSim1D:
                 "I_sat to each electrode face directly, so they have no effect. "
                 "Remove them; reproduce 0D-scaled runs at tag "
                 "legacy-final-2026-07-22.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        # R5 stance flip (2026-07-25) deprecations. These paths remain runnable
+        # (A/B arms + tag reproducibility) but are superseded by the repaired
+        # production baseline; a non-default/active use warns.
+        if not self._ion_neutral_moment_closure:
+            warnings.warn(
+                "the legacy ion-neutral drag/CX/thermalization path "
+                "(ion_neutral_moment_closure=False, with sigma_in_model "
+                "'constant'/'cx_derived', b_ion_neutral_drag, "
+                "ion_neutral_drag_model, b_ion_neutral_thermalization, and the "
+                "Tn_fit collision temperature) is DEPRECATED: the Phelps "
+                "moment-closed operator (ion_neutral_moment_closure) is the "
+                "production drag baseline. Still runnable as an A/B arm and for "
+                "reproducing old results at tag legacy-final-2026-07-22.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        _gp_mode = str(self._input_dict.get("gas_puff_mode", "square"))
+        if _gp_mode in ("pulse_decay_to_level", "decay_after_breakdown", "double_erf"):
+            warnings.warn(
+                f"gas_puff_mode={_gp_mode!r} is DEPRECATED (the measured "
+                "waveform is 'square'); retained runnable only for the frozen "
+                "waveform-comparison figures.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        _deprecated_selectors = {
+            "D_amb_model": (str(self._input_dict.get("D_amb_model", "cs_dz")), "cs_dz"),
+            "cathode_model": (
+                str(self._input_dict.get("cathode_model", "disabled")), "disabled",
+            ),
+        }
+        _sel = [n for n, (a, d) in _deprecated_selectors.items() if a != d]
+        if _sel:
+            warnings.warn(
+                "legacy-compat selectors " + ", ".join(_sel) + " are DEPRECATED "
+                "and never consumed by the conservative solver (D_amb_model was "
+                "a _sim3-compat knob; cathode_model is superseded by the "
+                "cathode_coupling flag).",
                 DeprecationWarning,
                 stacklevel=2,
             )
@@ -3343,8 +3394,10 @@ class LAPDSim1D:
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
             geometry=self._geometry,
-            electron_scale=float(self._input_dict.get("b_pressure_work_elec", 1.0)),
-            ion_scale=float(self._input_dict.get("b_pressure_work_ions", 1.0)),
+            # b_pressure_work_elec/ions removed as config knobs (R5 stance flip):
+            # must be 1 for conservative pressure-work booking (hardwired).
+            electron_scale=1.0,
+            ion_scale=1.0,
             active_plasma_topology=self._active_plasma_topology,
         )
 
@@ -3360,10 +3413,8 @@ class LAPDSim1D:
             geometry=self._geometry,
             wave_speed=self._hyperbolic_wave_speed,
             active_plasma_topology=self._active_plasma_topology,
-            electron_scale=float(
-                self._input_dict.get("b_pressure_work_elec", 1.0)
-            ),
-            ion_scale=float(self._input_dict.get("b_pressure_work_ions", 1.0)),
+            electron_scale=1.0,  # b_pressure_work_elec removed (hardwired 1.0)
+            ion_scale=1.0,       # b_pressure_work_ions removed (hardwired 1.0)
         )
 
     def flux_tube_geometry_rhs(self, y=None, state=None):
@@ -4638,9 +4689,10 @@ class LAPDSim1D:
             "b_ioniz": float(self._input_dict.get("b_ioniz", 1.0)),
             "b_rec_rad": float(self._input_dict.get("b_rec_rad", 1.0)),
             "b_rec_3b": float(self._input_dict.get("b_rec_3b", 1.0)),
-            "b_ionization_energy_cost": float(
-                self._input_dict.get("b_ionization_energy_cost", 1.0)
-            ),
+            # b_ionization_energy_cost removed as a config knob (R5 stance flip):
+            # must be 1 for conservative energy booking, and the on/off is the
+            # ionization_energy_cost flag. Hardwired 1.0.
+            "b_ionization_energy_cost": 1.0,
             "b_Qei": float(self._input_dict.get("b_Qei", 1.0)),
             "b_Qen": float(self._input_dict.get("b_Qen", 1.0)),
             "b_Qei_Te_exp": float(self._input_dict.get("b_Qei_Te_exp", 0.0)),

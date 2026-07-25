@@ -89,6 +89,24 @@ BASELINE_PARAM_OVERRIDES = {
     "L_parasitic_H": 8.1e-6,
     "cathode_sample_smoothing": "presheath",
     "neutral_exchange_model": "knudsen",
+    # R5 STANCE FLIP (2026-07-25): the production defaults moved to conservative
+    # ionization birth + the Phelps ion-neutral operator. Pin the historical
+    # legacy stance (the ad-hoc constant-0.5 / cx_derived drag + thermalization,
+    # now removed from the ES production config) so this checkpoint stays
+    # bit-exact.
+    "ionization_birth_energy_model": "legacy",
+    "b_ion_neutral_drag": 0.5,
+    "ion_neutral_drag_model": "constant",
+    "sigma_in_model": "cx_derived",
+    "b_ion_neutral_thermalization": 1.0,
+    # R5 STANCE FLIP part 2 (2026-07-25): the config walkthrough flipped more
+    # live defaults. Pin every one the historical fixture ran at its OLD default
+    # (and that neither PRODUCTION_PARAM_OVERRIDES nor the pins above cover) so
+    # the anchor stays bit-exact:
+    "Ti_floor": 0.1,                       # default relaxed to 300 K (0.02585)
+    "S_pump_L": 2000,                      # default now matches R (4000)
+    "gas_puff_profile": "cell",            # default now "cosine_pipe"
+    "hyperbolic_wave_speed": "isothermal",  # default now "adiabatic" (A3)
 }
 # input_flags overrides.
 BASELINE_FLAG_OVERRIDES = {
@@ -103,6 +121,17 @@ BASELINE_FLAG_OVERRIDES = {
     # trajectory stays reproducible (same pattern as the R1 selectors above; the
     # baseline NPZ is never recaptured to hide a repaired-physics change).
     "beam_anode_interception": False,
+    # R5 STANCE FLIP (2026-07-25): the R2/R3/R4.3 repairs are now production
+    # defaults. Pin them to their historical-off values here so this checkpoint
+    # (which predates the flip) stays bit-exact -- the anchor never recaptures.
+    "hyperbolic_energy_consistent": False,
+    "characteristic_boundary": False,
+    "ion_neutral_moment_closure": False,
+    # the historical golden ran the legacy ion-neutral thermalization arm
+    "ion_neutral_thermalization": True,
+    # R5 STANCE FLIP part 2 (2026-07-25): front_flux default is now False (R2 G7
+    # retired the sonic front); the fixture ran it on.
+    "front_flux": True,
 }
 # Run controls: None => LAPDSim1D defaults (adaptive dt, dynamic current-trigger
 # t_end, unlimited steps -- the notebook's own settings).

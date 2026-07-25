@@ -78,16 +78,13 @@ PARAM_OVERRIDES = {
     "S_gp_decay_target": 2000,
     "tau_gp_pulse_duration": 1e-3,
     "tau_gp_decay_duration": 5e-3,
-    # Ion-neutral closure (2026-07-18 decision): constant drag at the
-    # calibrated 0.5 -- a stand-in for the missing neutral-momentum /
-    # radial channel, NOT validated physics (THESIS_NOTES gate #2; the
-    # "slip" closure is the physical alternative and under-confines).
-    # Thermalization is decoupled from the drag scalar, and the
-    # momentum-transfer rate is CX-derived rather than a constant sigma.
-    "b_ion_neutral_drag": 0.5,
-    "ion_neutral_drag_model": "constant",
-    "b_ion_neutral_thermalization": 1.0,
-    "sigma_in_model": "cx_derived",
+    # Ion-neutral closure: R5 STANCE FLIP (2026-07-25) -- the ad-hoc constant
+    # drag / cx_derived stance (b=0.5, constant, cx_derived, thermalization) is
+    # RETIRED in favour of the R4.3 Phelps moment operator
+    # (ion_neutral_moment_closure, now the config.py production default;
+    # first-principles drag+CX+thermal, no knob). The legacy drag keys are
+    # DEPRECATED and no longer set here; the historical golden pins them back
+    # (baseline_sim1d BASELINE_PARAM_OVERRIDES) to stay bit-exact.
     # ADAS GCR rates (see cablp/vars/adas/README.md): effective ionization/
     # recombination and radiation-only cooling, consistent with the separate
     # ionization-cost term. b_Q* = 1 is meaningful under this model.
@@ -107,8 +104,9 @@ PARAM_OVERRIDES = {
     "heat_picard_tol": 1e-10,
 }
 FLAG_OVERRIDES = {
+    # R5 stance flip: the legacy ion-neutral thermalization arm is subsumed by
+    # the Phelps moment operator (config.py default); no longer set here.
     "ion_neutral_drag_cx_only": False,
-    "ion_neutral_thermalization": True,
 }
 
 

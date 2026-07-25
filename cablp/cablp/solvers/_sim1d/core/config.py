@@ -14,27 +14,36 @@ def initial_condition_defaults():
     nn0:
         Uniform initial neutral density [cm^-3]. If ``None``, the value is
         looked up from the gas-puff table via ``resolve_nn0``.
-    Tn_fit:
-        Neutral temperature used in reaction-rate fits [eV].
     Te0:
         Uniform initial electron temperature [eV].
     Ti0:
         Uniform initial ion temperature [eV].
     u0:
         Uniform initial axial plasma velocity [cm/s].
+    Tn_fit:
+        DEPRECATED (R5 stance flip, 2026-07-25; superseded by the single
+        cold-gas ``Tn_K`` = 300 K, audit A8). Was the fitted neutral collision
+        temperature used by the legacy IAEA reaction-rate fits and the legacy
+        ion-neutral drag/thermalization/CX quartet -- all now retired under the
+        Phelps ``ion_neutral_moment_closure`` baseline. Dead on the production
+        path; the deferred M_n wall accommodation should read ``Tn_K``.
     """
     return {
+        # --- ACTIVE (production) ---
         "gas_type": "He",
         "ne0": 1e9,
         "nn0": 1e9,
-        "Tn_fit": 0.1,
-        # Repaired R1 startup stance: electrons begin just above the exact
-        # bundled He ADF11 edge (~0.200092 eV), while ions carry one standard
-        # 25% timestep-margin above the unchanged numerical floor. The latter
-        # is a provisional seed, not a neutral-temperature assertion.
+        # Repaired startup stance: electrons begin just above the exact bundled
+        # He ADF11 edge (~0.200092 eV); ions begin cold at ~300 K, essentially
+        # the fill temperature (R5 stance flip), consistent with the
+        # Ti_floor=300 K and the single cold-gas Tn_K. A hair above the floor so
+        # the raw-stage validator's strict Ti0 > Ti_floor holds (the floor is a
+        # numerical positivity floor, not a temperature assertion).
         "Te0": 0.21,
-        "Ti0": 0.125,
+        "Ti0": 0.026,
         "u0": 0.0,
+        # --- DEPRECATED ---
+        "Tn_fit": 0.1,
     }
 
 
@@ -102,7 +111,9 @@ def geometry_defaults():
         "Lm": 2000.0,
         "nx": 60,
         "Rm": 50.0,
-        "Rp": 18.0,
+        # Measured LAPD plasma-column radius (R5 stance flip: default now matches
+        # the ES production value, ending a silent per-run override).
+        "Rp": 15.0,
         "plenum_length_cm": 100.0,
         "cathode_anode_gap_cm": 50.0,
         "nx_gap": 5,
@@ -129,13 +140,33 @@ def floor_defaults():
         Minimum electron temperature recovered from conservative energy [eV].
     Ti_floor:
         Minimum ion temperature recovered from conservative energy [eV].
+        R5 stance flip (2026-07-25): relaxed to 300 K (0.02585 eV). The Phelps
+        ``ion_neutral_moment_closure`` collision operator is thermal-valid with
+        no 0.1 eV clamp; the only 0.1-eV-requiring consumer was the retired
+        legacy IAEA CX table (audit R5.3 Ti-floor audit). All remaining Ti
+        consumers (kappa_par_ion, pressure, sound speed) need only Ti > 0.
+    Te_floor:
+        Minimum electron temperature recovered from conservative energy [eV].
+        Kept at 0.1 (below the ADF11 0.2 eV edge so the afterglow can cool; the
+        electron floor is governed by A18, not the CX fix). The exploratory
+        deep-afterglow recipe lowers it to 300 K -- see the module note.
     """
     return {
         "ne_floor": 1e8,
         "nn_floor": 1e8,
         "Te_floor": 0.1,
-        "Ti_floor": 0.1,
+        "Ti_floor": 0.02585,
     }
+
+
+# Exploratory deep-afterglow low-Te recipe (R5.3/A18, documented 2026-07-25):
+# to run the electron floor down to the neutral-gas temperature, set
+#   Te_floor = 0.02585  +  flags adas_low_te_extension=True, icool_recomb=True
+# The R5.3 fix makes acd (recombination) AND prb1 (recombination radiation)
+# extend consistently below the 0.2 eV ADF11 edge; scd (ionization) and plt
+# (line power) still clamp there but are exponentially dead at <0.2 eV, so a
+# recombining 300 K afterglow is well represented. This is also the vehicle for
+# the deferred A18b (time-dependent CR-memory) bracket.
 
 
 def neutral_source_defaults():
@@ -146,7 +177,11 @@ def neutral_source_defaults():
     Twin_S_gp:
         End-side gas puff flow used when ``TwinCathode`` is enabled [sccm].
     gas_puff_mode:
-        Phase-dependent gas-puff schedule. Options are
+        Phase-dependent gas-puff schedule. ``"square"`` (default, R5 stance
+        flip) is the measured valve waveform: flat at ``S_gp`` between
+        hardware-boxed erf edges (see below). The remaining modes are
+        DEPRECATED (retained runnable for the frozen waveform-comparison
+        figures; non-default use warns):
         ``"decay_after_breakdown"`` for steady puffing until optional decay
         after breakdown/main-discharge start,
         ``"pulse_decay_to_level"`` for a full-rate pulse followed by decay
@@ -223,15 +258,13 @@ def neutral_source_defaults():
         non-positive value means no elbow restriction -- the legacy limit.
     """
     return {
-        "S_gp": 6500,
-        "Twin_S_gp": 5500,
-        "gas_puff_mode": "pulse_decay_to_level",
-        "S_gp_decay_target": 1500,
-        "Twin_S_gp_decay_target": 0.0,
-        "tau_gp_after_breakdown": None,
-        "tau_gp_decay_factor": 1.0,
-        "tau_gp_pulse_duration": 1e-3,
-        "tau_gp_decay_duration": 5e-3,
+        # --- ACTIVE (production: square waveform + pump) ---
+        # S_gp is the one puff calibration constant; default = the M6/baseline
+        # value. NB the ES1 refit co-tunes S_gp with the cathode power balance
+        # (S_gp -> ne -> discharge current feedback).
+        "S_gp": 3400,
+        "Twin_S_gp": 3400,
+        "gas_puff_mode": "square",
         # "square" waveform (the measured valve behaviour, 2026-07-21): the
         # piezo is driven by a square voltage pulse from the SAME trigger
         # that closes the cathode circuit, held for the discharge; the
@@ -247,20 +280,32 @@ def neutral_source_defaults():
         "gas_puff_rise_center_s": 5e-4,
         "gas_puff_rise_width_s": 5e-4,
         "gas_puff_close_lag_s": 5e-4,
-        "tau_gp_rise_center": -5e-3,
-        "tau_gp_rise_width": 1e-3,
-        "tau_gp_drop_center": 1e-3,
-        "tau_gp_drop_width": 1e-3,
-        "S_pump_L": 2000,
+        # S_pump_L matches S_pump_R (R5 stance flip): the plenum aperture, not
+        # the pump speed, throttles the source-side rate.
+        "S_pump_L": 4000,
         "S_pump_R": 4000,
         "gas_puff_enabled": True,
         "pump_enabled": True,
         "gas_puff_valves": 2,
         "pump_elbow_conductance_lps": None,
-        "gas_puff_profile": "cell",
+        # Physical Lambertian pipe source ~10 cm in front of the anode
+        # (geometry-derived, no tuning) -- default and production.
+        "gas_puff_profile": "cosine_pipe",
         "gas_puff_z_cm": None,
         "gas_puff_sigma_cm": 50.0,
         "gas_puff_throw_cm": 100.0,
+        # --- DEPRECATED (only read by the retired pulse/decay/double_erf puff
+        # modes; kept runnable for the frozen waveform-comparison figures) ---
+        "S_gp_decay_target": 1500,
+        "Twin_S_gp_decay_target": 0.0,
+        "tau_gp_after_breakdown": None,
+        "tau_gp_decay_factor": 1.0,
+        "tau_gp_pulse_duration": 1e-3,
+        "tau_gp_decay_duration": 5e-3,
+        "tau_gp_rise_center": -5e-3,
+        "tau_gp_rise_width": 1e-3,
+        "tau_gp_drop_center": 1e-3,
+        "tau_gp_drop_width": 1e-3,
     }
 
 
@@ -417,30 +462,44 @@ def model_mode_defaults():
         Euler). Ignored when the operator-split path is disabled.
     """
     return {
+        # --- ACTIVE (production) ---
         "front_flux_model": "sonic_relaxation",
-        "hyperbolic_wave_speed": "isothermal",
-        "D_amb_model": "cs_dz",
+        # R5 STANCE FLIP (2026-07-25): "adiabatic" is now the default -- the A3
+        # spectral-radius repair that PAIRS with hyperbolic_energy_consistent
+        # (R2). Historical golden pins "isothermal".
+        "hyperbolic_wave_speed": "adiabatic",
         "end_mode": "collector",
-        "cathode_model": "disabled",
-        "Te_birth_ionization": "local",
         "Ti_birth_ionization": "floor",
-        "ionization_birth_energy_model": "legacy",
+        # R5 STANCE FLIP (2026-07-25): "conservative" is now the production
+        # default (audit A14 correctness fix -- no spurious 3Te/2 electron birth;
+        # ion mass-loading mixing energy booked). Historical golden pins "legacy".
+        "ionization_birth_energy_model": "conservative",
         "neutral_exchange_model": "knudsen",
-    # K4a kinetic neutrals (KINETIC_TWOZONE_PLAN.md): "kinetic" supersedes
-    # the moment neutral transport with refresh-cadence solves of the
-    # compiled jump-kernel engine; requires the neutral_two_zone flag.
-    # Golden path: "moment" (bit-exact).
-    # Extend ACD/PRB below the adf11 0.2 eV Te edge with the in-repo
-    # janev shape anchored at the edge (detachment-regime recombination;
-    # §5b afterglow ledger audit 2026-07-22). Default off, bit-exact.
-    "adas_low_te_extension": False,
-    "neutral_model": "moment",
-    "neutral_kinetic_refresh_s": 5e-4,
-    "neutral_kinetic_refresh_tol": 0.2,
-    "neutral_kinetic_nvz": 48,
-    "neutral_kinetic_nvp": 12,
-        "operator_splitting": "lie",
-        "implicit_heat_scheme": "backward_euler",
+        "neutral_model": "moment",
+        # R5 STANCE FLIP (2026-07-25): 2nd-order operator-split defaults (pair
+        # with heat_picard_iterations=2). Historical golden pins lie /
+        # backward_euler.
+        "operator_splitting": "strang",
+        "implicit_heat_scheme": "tr_bdf2",
+        # --- INERT on the production path (kept for the A/B arms) ---
+        # Dead under ionization_birth_energy_model="conservative" (electron
+        # birth energy is physically zero):
+        "Te_birth_ionization": "local",
+        # Dead under neutral_model="moment" (the K4a kinetic engine, gated on
+        # neutral_two_zone, is the only consumer):
+        "neutral_kinetic_refresh_s": 5e-4,
+        "neutral_kinetic_refresh_tol": 0.2,
+        "neutral_kinetic_nvz": 48,
+        "neutral_kinetic_nvp": 12,
+        # Bucket-2 default-off closure instrument (low-Te ADAS extension; only
+        # active with icool_recomb, sub-0.2 eV):
+        "adas_low_te_extension": False,
+        # --- DEPRECATED (legacy-compat selectors; superseded, non-default
+        # warns; retained for reproducibility at the tag) ---
+        # D_amb_model: _sim3-compat; the conservative flux closure never uses it.
+        "D_amb_model": "cs_dz",
+        # cathode_model: compat only; actual coupling is the cathode_coupling flag.
+        "cathode_model": "disabled",
     }
 
 
@@ -600,59 +659,76 @@ def fudge_factor_defaults():
         advective transport. This was formerly available only through an
         unregistered ``dict.get`` fallback.
     """
+    # R5 stance flip (2026-07-25): the atomic-rate / cooling / conduction scale
+    # factors are rendered INERT (superseded -- ADAS and the Phelps operator are
+    # definitive, and a single uniform multiplier is not a physical knob; the
+    # Te-dependent b_Q*_Te_exp hooks are the honest correction and stay off).
+    # They remain READABLE via the solver's .get(key, 1.0) so the "janev" A/B
+    # arm, the historical golden, and the =0 disable diagnostics still work;
+    # deprecation is deferred to the post-ES1 cleanup. The must-be-1 STRUCTURAL
+    # constants (b_pressure_work_elec/ions, b_ionization_energy_cost) are REMOVED
+    # entirely -- the solver hardwires 1.0; exposing a knob that must be 1 is a
+    # footgun. See notes/R5_STANCE_FLIP_HANDOFF.md.
     return {
-        "alpha_front": 1.0,
-        "D_amb": 0.0,
+        # --- ACTIVE (production coefficients) ---
         "atomic_rate_model": "adas",
-        # GCR-consistent recombination energy booking (CATHODE_IDRIVEN_PLAN
-        # §5b shelf item, wired 2026-07-21): per recombination event, credit
-        # the binding energy I_ion to the electron fluid (paid at ionization
-        # via I_ion*S_ion and never returned) AND charge the full ADAS PRB
-        # (what actually leaves as photons: recombination radiation +
-        # bremsstrahlung + cascade). Net per event = I_ion - E_rad --
-        # heating in the afterglow (E_rad ~ 18 of 24.6 eV there), a small
-        # extra sink in the ionizing plateau (E_rad/event > I_ion). The
-        # 3/2*Te*S_rec capture-KE loss stays booked separately (it cancels
-        # in the net; this pair adds on top). The PAIR is the consistent
-        # unit: enabling PRB alone double-charges (that is why
-        # icool_recomb stays off) -- construction refuses the combination,
-        # and requires atomic_rate_model="adas" (no PRB booking exists on
-        # the janev path). adf11 grid bottoms at 0.2 eV; lookups clamp
-        # there (nearest-edge, no extrapolation).
-        "recombination_energy_return": False,
+        "b_surface_loss": 1.0,      # functional: =0 disables the R3.1 boundary sink
+        "b_presheath_length": 1.0,  # R3.1 presheath depth (load-bearing)
+        "alpha_isat": 0.6065306597126334,
+        "b_anode_collection": 1.0,
+        "b_anode_advective_block": 0.0,
+        # alpha_front is ACTIVE only if the front_flux flag is on; front_flux is
+        # now OFF by default (R2 G7), so this is effectively inert.
+        "alpha_front": 1.0,
+        # Ion-neutral momentum-transfer rate feeding the R3.1 presheath depth
+        # (electrode_sheath_alpha). R5 stance flip: "phelps" (the definitive
+        # cross section, same physics as ion_neutral_moment_closure, He-only)
+        # is the default; "constant"/"cx_derived" are legacy A/B arms and
+        # sigma_in_cm2 is inert on production. Historical golden pins cx_derived.
+        "sigma_in_cm2": 5.0e-15,
+        "sigma_in_model": "phelps",
+        # --- INERT: superseded rate/cooling/conduction scales, locked at 1
+        # (kept readable for the janev A/B, historical golden, and =0 disable) ---
         "b_ioniz": 1.0,
         "b_rec_rad": 1.0,
-        "b_rec_3b": 1.0,
+        "b_rec_3b": 1.0,       # also: ACD already includes three-body under adas
         "b_Qie": 1.0,
         "b_Qei": 1.0,
         "b_Qen": 1.0,
-        "b_Qei_Te_exp": 0.0,
+        "b_Qcx": 1.0,          # also dead under ion_neutral_moment_closure
+        "b_Qei_Te_exp": 0.0,   # the honest Te-dependent hooks, off
         "b_Qen_Te_exp": 0.0,
         "b_Q_Te_ref_eV": 5.0,
-        "b_Qcx": 1.0,
-        "b_epara": 1.0,
+        "b_epara": 1.0,        # real conduction knob is the R5.2 flux limiter
         "b_ipara": 1.0,
-        # R5.2/A9 electron heat-flux limiter (only read when the
-        # electron_heat_flux_limit flag is on): the free-streaming fraction f in
+        "D_amb": 0.0,          # dead with the deprecated D_amb_model
+        # GCR-consistent recombination energy booking (default-off closure
+        # instrument; only active with icool_recomb, sub-0.2 eV). Per
+        # recombination event, credit the binding energy I_ion to the electron
+        # fluid (paid at ionization via I_ion*S_ion and never returned) AND
+        # charge the full ADAS PRB (recombination radiation + bremsstrahlung +
+        # cascade). Net = I_ion - E_rad. The PAIR is the consistent unit;
+        # enabling PRB alone double-charges (why icool_recomb stays off) --
+        # construction refuses the combination and requires atomic_rate_model=
+        # "adas". adf11 grid bottoms at 0.2 eV; lookups clamp there.
+        "recombination_energy_return": False,
+        # --- INERT: default-off instruments / neutral ladder ---
+        # R5.2/A9 electron heat-flux limiter (read only when the
+        # electron_heat_flux_limit flag is on): free-streaming fraction f in
         # q_sat = f*n*Te*v_the, the harmonic (Cowie-McKee) saturation cap.
         "heat_flux_limiter_f": 0.3,
-        "b_ionization_energy_cost": 1.0,
-        "b_pressure_work_elec": 1.0,
-        "b_pressure_work_ions": 1.0,
-        "b_surface_loss": 1.0,
+        # Radial closure for the evolved neutral wind (needs the
+        # neutral_momentum flag; the deferred ladder).
+        "neutral_momentum_radial": "uniform",
+        # --- DEPRECATED: legacy ion-neutral drag (superseded by the Phelps
+        # ion_neutral_moment_closure baseline) + A13 area scales. Warn on
+        # non-default/active use; retained runnable for reproducibility. ---
         "b_ion_neutral_drag": 1.0,
         "ion_neutral_drag_model": "constant",
         "b_slip_entrainment": 1.0,
-        "neutral_momentum_radial": "uniform",
         "b_ion_neutral_thermalization": None,
-        "b_presheath_length": 1.0,
-        "sigma_in_cm2": 5.0e-15,
-        "sigma_in_model": "constant",
-        "alpha_isat": 0.6065306597126334,
         "source_surface_area_scale": 1.8,
         "end_surface_area_scale": 1.0,
-        "b_anode_collection": 1.0,
-        "b_anode_advective_block": 0.0,
     }
 
 
@@ -890,14 +966,29 @@ def cathode_defaults():
         ``n_b >= n_e/10``); parameter-free; per-closure presentation
         required (THESIS_NOTES item 12).
     """
+    # R5 stance flip (2026-07-25): the config defaults now promote the FULL
+    # validated M6 production cathode stack (previously reached only through the
+    # run drivers / golden overrides): power_balance warming, CSDA beam +
+    # quasilinear anomalous drag, gaussian emission profile, ads_des surface
+    # state, and presheath sample smoothing. The historical golden pins every
+    # value it needs, so it stays bit-exact. Circuit hardware: V_bank is the
+    # 180 V supply setpoint; R_comp/L/C are provisional pending the V_bank=180
+    # refit (co-tuned with S_gp + the power-balance params -- see
+    # notes/R5_STANCE_FLIP_HANDOFF.md). Rp_model stays "sample" (resolved_gap
+    # not folded).
     return {
+        # --- ACTIVE: circuit hardware (V_bank = setpoint; R/L/C provisional
+        # pending the refit) ---
         "V_bank": 180.0,
-        "T_s": 1975,
-        "phi_wf": 3.0,
+        # T_s is only the static-model fallback under power_balance (the input
+        # is cathode_Ts_base_K); kept at the ES setpoint.
+        "T_s": 1998.15,
+        # phi_wf is the contaminated SHOT-START work function read by ads_des.
+        "phi_wf": 2.869,
         "C_R": 29.0,
-        "R_comp": 0.010,
-        "L_parasitic_H": 8.1e-6,
-        "C_bank_F": None,
+        "R_comp": 5.72e-3,
+        "L_parasitic_H": 6.6e-6,
+        "C_bank_F": 8.4,
         # R5.1/A11 gated fluid<->circuit Picard (only read when the
         # coupled_circuit_picard flag is on): relative loop-current change that
         # triggers a re-run, and the iteration cap.
@@ -906,21 +997,30 @@ def cathode_defaults():
         "eta": 0.358,
         "anode_radius_cm": None,
         "L_cath": 50.0,
-        "R_cath": 18.0,
+        "R_cath": 15.0,
+        # --- ACTIVE: beam deposition (CSDA production stack; b_beam_excitation
+        # + beam_excitation_model are INERT under csda -- the module uses the
+        # measured manifold, knob-free -- and matter only for the beer_lambert
+        # A/B arm) ---
+        "beam_deposition_model": "csda",
+        "beam_coulomb_model": "fast_electron",
+        "beam_anomalous_model": "quasilinear",
         "b_beam_excitation": 0.0,
         "beam_excitation_model": "2p_scalar",
         "beam_excitation_energy_eV": 21.218,
-        "beam_deposition_model": "beer_lambert",
-        "beam_coulomb_model": "fast_electron",
-        "beam_anomalous_model": "none",
-        "cathode_warming_model": "none",
-        "cathode_Ts_base_K": None,
-        "cathode_heat_capacity_J_per_K": 3.0,
+        # --- ACTIVE: cathode warming (power_balance; Ts_base_K = ES1 standby,
+        # heat_capacity + conduction are op-point-dependent hand-tuned values
+        # pending the heater-current fit -- conduction 1200 is the golden/M6
+        # value, audit-ES1 explored 1500) ---
+        "cathode_warming_model": "power_balance",
+        "cathode_Ts_base_K": 1910.0,
+        "cathode_heat_capacity_J_per_K": 120.0,
+        "cathode_conduction_W_per_K": 1200.0,
         "cathode_emissivity": 0.7,
         "cathode_rad_area_cm2": None,
         "cathode_env_T_K": 300.0,
-        "cathode_conduction_W_per_K": 0.0,
-        "cathode_emission_profile": "uniform",
+        # --- ACTIVE: gaussian emission profile (measured radial falloff) ---
+        "cathode_emission_profile": "gaussian",
         "cathode_Ts_fwhm_cm": 28.0,
         "cathode_emission_annuli": 10,
         "cathode_Rp_model": "sample",
@@ -938,15 +1038,18 @@ def cathode_defaults():
         # dominates (fluence-cleaning limit); adsorption and thermal
         # desorption are carried for the M5b between-shot cycle map and
         # default to zero (inert).
-        "cathode_surface_model": "none",
-        "cathode_phiwf_clean_eV": None,
-        "cathode_cleaning_sigma_cm2": 0.0,
+        # --- ACTIVE: ads_des surface state (M5a; in-shot ion-stimulated
+        # cleaning. The between-shot ads/desorption params default to zero,
+        # inert -- the M5b cycle map). ---
+        "cathode_surface_model": "ads_des",
+        "cathode_phiwf_clean_eV": 2.809,
+        "cathode_cleaning_sigma_cm2": 3.5e-16,
         # Ion-stimulated desorption threshold [eV] (M5a'): scales sigma by
         # the near-threshold Bohdansky factor (1-(Eth/E)^(2/3))(1-Eth/E)^2
         # at the honest per-ion energy E = P_cathode_i/I_i. He->O
         # kinematics gives ~18-26 eV for chemisorbed O. None = the
         # energy-independent fluence limit.
-        "cathode_cleaning_E_th_eV": None,
+        "cathode_cleaning_E_th_eV": 20.0,
         "cathode_ads_rate_per_s": 0.0,
         "cathode_desorption_prefactor_per_s": 0.0,
         "cathode_desorption_energy_eV": 3.0,
@@ -996,9 +1099,10 @@ def cathode_defaults():
         # the residual through tau_a*ln(1 + J_anode/J_i_a), so anode-side
         # noise flaps phi_a and drags phi_c with it. "presheath" computes
         # tau = l_cell/c_s(Te_ema) per sampled cell (a boxed physical
-        # timescale, not a knob); a float is a fixed tau [s]; None (default)
-        # disables bit-exactly. EMA updates on accepted steps only.
-        "cathode_sample_smoothing": None,
+        # timescale, not a knob); a float is a fixed tau [s]; None disables
+        # bit-exactly. EMA updates on accepted steps only. R5 stance flip:
+        # "presheath" is now the production default.
+        "cathode_sample_smoothing": "presheath",
     }
 
 
@@ -1028,11 +1132,19 @@ def physics_fit_defaults():
         Scale factor applied to molecular-flow Clausing conductance.
     """
     return {
-        "heat_picard_iterations": 0,
+        # --- ACTIVE ---
+        # R5 stance flip (2026-07-25): 2 Picard iterations -- the third leg of
+        # the 2nd-order operator-split defaults (tr_bdf2 + strang). Historical
+        # golden pins 0 (frozen kappa).
+        "heat_picard_iterations": 2,
         "heat_picard_tol": 1e-10,
         "ln_lambda_min": 1.0,
-        "Tn_K": 300.0,
+        "Tn_K": 300.0,  # A8 single cold-gas neutral temperature (Phelps T_eff)
+        # --- INERT on the production path ---
+        # Only the "constant" neutral_exchange_model reads this (production is
+        # "knudsen"):
         "neutral_exchange_coeff_cm3_s": 1.0e5,
+        # molecular-flow Clausing conductance -- molecular_flow is D1-deprecated:
         "neutral_clausing_scale": 1.0,
     }
 
@@ -1157,14 +1269,20 @@ input_flags_template_1d = {
     # Spitzer where they are shallow. Electron only; ion conduction unchanged.
     # Default OFF (golden bit-exact); a declared A9 closure-family A/B instrument.
     "electron_heat_flux_limit": False,
-    "front_flux": True,
+    # R5 STANCE FLIP (2026-07-25): OFF by default. R2's G7 mesh A/B concluded
+    # the sonic front is a numerical artifact (its L1 activity and Rusanov
+    # numerical diffusion vanish under refinement); turning it off completes the
+    # R2 repaired stance and renders alpha_front inert. Historical golden pins
+    # True.
+    "front_flux": False,
     # R2 conservative hyperbolic core (SIM1D_MODEL_AUDIT_PLAN R2, audit A2):
     # kinetic-energy-preserving convective momentum flux, plus deposit of the
     # Rusanov (n,M) numerical kinetic-energy dissipation into ion internal
     # energy, plus a KEP pressure-work discretization -- so the closed-domain
-    # total plasma energy K+Ee+Ei is conserved to machine precision. Default
-    # off; the historical golden stays bit-exact.
-    "hyperbolic_energy_consistent": False,
+    # total plasma energy K+Ee+Ei is conserved to machine precision. R5 STANCE
+    # FLIP (2026-07-25): now the PRODUCTION DEFAULT (a correctness fix); the
+    # historical golden pins it False (baseline_sim1d BASELINE_FLAG_OVERRIDES).
+    "hyperbolic_energy_consistent": True,
     # R3.1 characteristic material boundaries (SIM1D_MODEL_AUDIT_PLAN R3, audit
     # A1/A16): replace the closed-reflecting-face + one-sided volumetric absorber
     # at the plasma-terminating (cathode/collector) surfaces with a one-sided
@@ -1172,9 +1290,10 @@ input_flags_template_1d = {
     # evaluated against a Bohm ghost state (n_se = n*presheath_alpha, u = c_s into
     # the wall, Te, Ti). Fixes the A1 wrong-sign momentum so the wall is a net
     # energy sink instead of the +18.5 kW kinetic source. Requires resolved
-    # geometry (absorbing faces); rejects at construction otherwise. Default off;
-    # the historical golden stays bit-exact.
-    "characteristic_boundary": False,
+    # geometry (absorbing faces); rejects at construction otherwise. R5 STANCE
+    # FLIP (2026-07-25): now the PRODUCTION DEFAULT; the historical golden pins it
+    # False (baseline_sim1d BASELINE_FLAG_OVERRIDES).
+    "characteristic_boundary": True,
     # R4.1 anode-mesh beam interception (SIM1D_MODEL_AUDIT_PLAN R4, audit A15):
     # the CSDA beam ray launches the full emitted flux Gamma0 = I_eth_star/e
     # through the whole column, so without this the fluid deposits the entire
@@ -1226,7 +1345,11 @@ input_flags_template_1d = {
     # it is a strict no-op so the golden stays bit-exact. He-only. A8: uses the
     # single cold-gas Tn_K (300 K) for the neutral temperature, ending the
     # Tn_K/Tn_fit term-by-term mix. See notes/SIM1D_MODEL_AUDIT_PLAN.md R4.3.
-    "ion_neutral_moment_closure": False,
+    # R5 STANCE FLIP (2026-07-25): now the PRODUCTION DEFAULT drag/collision
+    # baseline (Phelps, first-principles) -- the ad-hoc b_ion_neutral_drag /
+    # sigma_in constant/cx_derived / slip are DEPRECATED (superseded). The
+    # historical golden pins it False.
+    "ion_neutral_moment_closure": True,
     # R5.1 / audit A11 (2026-07-25): gated fluid<->circuit Picard. The fluid step
     # runs at a loop current frozen over the step, then the circuit advances from
     # the accepted plasma -- a frozen-current lag that the A11 gate measured

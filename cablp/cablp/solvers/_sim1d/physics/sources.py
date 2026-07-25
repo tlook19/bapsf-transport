@@ -854,24 +854,42 @@ def ion_neutral_collision_frequency(
     sigma_in_cm2=5.0e-15,
     sigma_in_model="constant",
     gas_type=None,
+    Tn_eV=0.025851,
 ):
     """Return the ion-neutral momentum-transfer collision frequency [s^-1].
 
-    ``sigma_in_model = "constant"`` (default, historical): ``nu_in = (8/3) *
+    ``sigma_in_model = "phelps"`` (default as of the R5 stance flip): the
+    DEFINITIVE momentum-transfer rate -- the same Phelps He+/He isotropic +
+    backscatter cross section the ``ion_neutral_moment_closure`` operator uses,
+    ``nu_in = nn * (k_b + 1/2 k_iso)(T_eff)`` with ``T_eff = (Ti + Tn)/2`` (A8
+    single cold-gas ``Tn`` = ``Tn_eV``, 300 K by default). Ties the R3.1
+    presheath sampling to the same collision physics as the drag, so
+    ``sigma_in_cm2`` / the legacy ``constant`` / ``cx_derived`` arms are inert
+    on the production path. He-only (gated at construction).
+
+    ``sigma_in_model = "constant"`` (legacy A/B): ``nu_in = (8/3) *
     nn * sigma_in * sqrt(Ti / (pi * m_i))`` with ``Ti`` in eV (converted to
     erg here), ``m_i`` in grams, and ``sigma_in`` in cm^2, so the
     thermal-speed factor is in cm/s and ``nu_in`` in s^-1.
 
-    ``sigma_in_model = "cx_derived"``: for a symmetric resonant pair the
-    momentum transfer is dominated by charge exchange, each event handing over
-    essentially the full momentum, so ``sigma_mt ~ 2*sigma_cx``. The rate is
-    built from the same CX table the energy channel uses --
-    ``nu_in = nn * (2*<sigma v>_cx(Ti) + k_Langevin)`` -- making the momentum
-    and energy channels consistent by construction and giving the factor ~2
-    velocity dependence a constant cannot have (the constant crosses the CX
-    curve near 0.5 eV: too small below, too large above). The Langevin term is
+    ``sigma_in_model = "cx_derived"`` (legacy A/B): for a symmetric resonant
+    pair the momentum transfer is dominated by charge exchange, each event
+    handing over essentially the full momentum, so ``sigma_mt ~ 2*sigma_cx``.
+    The rate is built from the same CX table the energy channel uses --
+    ``nu_in = nn * (2*<sigma v>_cx(Ti) + k_Langevin)``. The Langevin term is
     the velocity-independent polarization-elastic floor. Requires ``gas_type``.
+
+    NB the presheath ``Tn`` is taken as the fixed A8 cold-gas value (Tn_eV);
+    callers do not thread the config ``Tn_K`` because it is a fixed constant,
+    not a tuned knob (thread it here if that ever changes).
     """
+    if sigma_in_model == "phelps":
+        if gas_type is None:
+            raise ValueError("sigma_in_model='phelps' requires gas_type")
+        T_eff = 0.5 * (np.asarray(Ti, dtype=float) + float(Tn_eV))
+        return np.asarray(nn, dtype=float) * phelps_momentum_transfer_rate_cm3_s(
+            T_eff, gas_type=gas_type
+        )
     if sigma_in_model == "constant":
         v_thi = np.sqrt(
             np.asarray(Ti, dtype=float) * ev_to_erg / (np.pi * ion_mass_g)
@@ -887,7 +905,7 @@ def ion_neutral_collision_frequency(
             + langevin_rate_cm3_s(gas_type, ion_mass_g)
         )
     raise ValueError(
-        "sigma_in_model must be 'constant' or 'cx_derived' "
+        "sigma_in_model must be 'phelps', 'constant', or 'cx_derived' "
         f"(got {sigma_in_model!r})"
     )
 
