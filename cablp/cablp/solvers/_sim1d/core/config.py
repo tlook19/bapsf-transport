@@ -1159,16 +1159,21 @@ input_flags_template_1d = {
     "characteristic_boundary": False,
     # R4.1 anode-mesh beam interception (SIM1D_MODEL_AUDIT_PLAN R4, audit A15):
     # the CSDA beam ray launches the full emitted flux Gamma0 = I_eth_star/e
-    # through the whole column, so the fluid deposits the entire emitted beam
-    # (~470 kW on the settled artifact) while the circuit books only the
-    # (1 - eta*beam_bypass_fraction) fraction into the plasma. This adds the
+    # through the whole column, so without this the fluid deposits the entire
+    # emitted beam (~470 kW on the settled artifact) while the circuit books only
+    # the (1 - eta*beam_bypass_fraction) fraction into the plasma. This adds the
     # missing interception event at the anode-face crossing: the mesh solid
-    # fraction eta of the flux surviving the gap is removed (booked to the
-    # anode, not the plasma) and only (1 - eta) transmits downstream. Requires
-    # beam_deposition_model="csda" and resolved geometry with anode faces;
-    # rejects at construction otherwise. Default off; golden bit-exact (the
-    # golden runs beer_lambert, which never calls the CSDA module).
-    "beam_anode_interception": False,
+    # fraction eta of the flux surviving the gap is removed (the anode surface
+    # takes I_bypass*V_b, the sheath returns I_bypass*phi_a to the circuit) and
+    # only (1 - eta) transmits downstream. It is the CORRECT csda physics, so it
+    # is the PRODUCTION DEFAULT (True); like beam_coulomb_model /
+    # beam_anomalous_model it is a csda control and is inert under
+    # beam_deposition_model="beer_lambert" (which never launches the CSDA module)
+    # and where the resolved geometry has no anode faces. The historical csda
+    # checkpoint golden PINS this off explicitly (baseline_sim1d.py, same pattern
+    # as the R1 selectors) so its pre-A15 trajectory stays bit-exact. Set False
+    # for the with/without-interception A/B.
+    "beam_anode_interception": True,
     # DEPRECATED (A13/R3.3, 2026-07-24): 0D-artifact per-electrode surface-loss
     # enables. The resolved geometry's plasma-terminating (absorbing) faces are a
     # geometry fact, not a config toggle; these are never consumed and non-default

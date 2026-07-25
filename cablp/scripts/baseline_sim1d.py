@@ -98,6 +98,11 @@ BASELINE_FLAG_OVERRIDES = {
     "active_plasma_topology": False,
     "raw_stage_validation": False,
     "resolved_boundaries": True,
+    # R4.1/A15 anode-mesh beam interception is now the production default (on),
+    # but this csda checkpoint fixture predates it -- pin it off so the historical
+    # trajectory stays reproducible (same pattern as the R1 selectors above; the
+    # baseline NPZ is never recaptured to hide a repaired-physics change).
+    "beam_anode_interception": False,
 }
 # Run controls: None => LAPDSim1D defaults (adaptive dt, dynamic current-trigger
 # t_end, unlimited steps -- the notebook's own settings).

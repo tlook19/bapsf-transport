@@ -1673,6 +1673,9 @@ def main():
         m3_csda_dep.plasma_heating_erg_s.sum()
         + m3_csda_dep.radiated_erg_s.sum()
         + m3_csda_dep.ionization_cost_erg_s.sum()
+        # R4.1 anode interception is the production default, so the anode-removed
+        # energy is part of the per-ray budget.
+        + float(m3_csda_dep.anode_intercepted_erg_s)
         + m3_csda_dep.transmitted_flux
         * m3_csda_dep.transmitted_energy_eV
         * ev_to_erg
@@ -2076,6 +2079,9 @@ def main():
         csda_dep.plasma_heating_erg_s.sum()
         + csda_dep.radiated_erg_s.sum()
         + csda_dep.ionization_cost_erg_s.sum()
+        # R4.1 anode interception is the production default (csda), so the
+        # anode-removed energy is part of the per-ray budget.
+        + float(csda_dep.anode_intercepted_erg_s)
         + csda_dep.transmitted_flux
         * csda_dep.transmitted_energy_eV
         * ev_to_erg
@@ -2119,45 +2125,30 @@ def main():
     )
     assert np.isfinite(csda_sigma_eff) and csda_sigma_eff >= 0.0
 
-    # --- R4.1 (audit A15): anode-mesh beam interception. Default-off is
-    # bit-identical to the plain csda run; on, it removes the long-mfp beam
-    # from the fluid (less deposited power) while per-ray energy still closes.
-    intc_params = dict(csda_params)
-    intc_flags = dict(cathode_flags)
-    intc_flags["beam_anode_interception"] = True
-    intc_sim = LAPDSim1D(intc_params, intc_flags)
-    intc_sim._circuit_I_loop = 3000.0
-    intc_solve = intc_sim.solve_cathode_boundary()
-    intc_dep = intc_solve.beam_deposition[0]
-    assert intc_dep is not None
-    # Perturbs the operator: interception is active and books anode energy.
-    assert float(intc_dep.anode_intercepted_erg_s) > 0.0
-    # Per-ray energy still conserves, now including the anode-intercepted book.
-    intc_res = intc_solve.beam_result.result
-    intc_budget = intc_res.I_eth_star * intc_res.phi_c * 1.0e7
-    intc_total = (
-        intc_dep.plasma_heating_erg_s.sum()
-        + intc_dep.radiated_erg_s.sum()
-        + intc_dep.ionization_cost_erg_s.sum()
-        + float(intc_dep.anode_intercepted_erg_s)
-        + intc_dep.transmitted_flux * intc_dep.transmitted_energy_eV * ev_to_erg
-    )
-    assert abs(intc_total - intc_budget) / intc_budget < 1e-9
-    # The fluid deposits strictly LESS power than the non-intercepting run:
-    # the intercepted beam no longer heats the plasma downstream of the anode.
-    intc_terms = intc_sim.beam_ionization_rhs_terms(cathode_solve=intc_solve)
-    intc_power_sum = float((intc_terms["beam_power_deposition"].Ee * csda_Vp).sum())
-    assert intc_power_sum < csda_power_sum
-    # Presence-gate: the flag rejects at construction without the csda model
-    # (it would otherwise be a silent no-op on the beer_lambert path).
-    try:
-        LAPDSim1D(dict(exc_params), intc_flags)  # exc_params is beer_lambert
-    except ValueError:
-        pass
-    else:
-        raise AssertionError(
-            "beam_anode_interception must reject beam_deposition_model!='csda'"
-        )
+    # --- R4.1 (audit A15): anode-mesh beam interception is the PRODUCTION DEFAULT
+    # (correct csda physics), so csda_sim above already has it on -- the anode
+    # books energy and it is part of the csda per-ray budget checked earlier.
+    assert float(csda_dep.anode_intercepted_erg_s) > 0.0
+    # A/B off: setting the flag False restores the old (over-depositing) csda run,
+    # which deposits strictly MORE power into the plasma and intercepts nothing.
+    noint_flags = dict(cathode_flags)
+    noint_flags["beam_anode_interception"] = False
+    noint_sim = LAPDSim1D(dict(csda_params), noint_flags)
+    noint_sim._circuit_I_loop = 3000.0
+    noint_solve = noint_sim.solve_cathode_boundary()
+    noint_dep = noint_solve.beam_deposition[0]
+    assert float(noint_dep.anode_intercepted_erg_s) == 0.0
+    noint_terms = noint_sim.beam_ionization_rhs_terms(cathode_solve=noint_solve)
+    noint_power_sum = float((noint_terms["beam_power_deposition"].Ee * csda_Vp).sum())
+    assert csda_power_sum < noint_power_sum
+    # csda control: the flag is inert (not an error) under beer_lambert, which
+    # never launches the CSDA module -- exactly like beam_coulomb_model /
+    # beam_anomalous_model. Construction succeeds and there is no CSDA deposition.
+    bl_flags = dict(cathode_flags)
+    bl_flags["beam_anode_interception"] = True
+    bl_sim = LAPDSim1D(dict(exc_params), bl_flags)  # exc_params is beer_lambert
+    bl_sim._circuit_I_loop = 3000.0
+    assert bl_sim.solve_cathode_boundary().beam_deposition is None
 
     # --- R4.2 (audit A14): ionization_birth_energy_model. Default-off ("legacy")
     # is the historical booking; "conservative" zeroes the bulk electron

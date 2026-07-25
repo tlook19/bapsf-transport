@@ -271,15 +271,20 @@ R5's coupled-circuit-convergence validation.
 
 ## R4.1 anode-mesh beam interception (2026-07-24)
 
-The default-off `beam_anode_interception` selector adds the missing anode-mesh
-interception event to the CSDA beam ray (audit A15). Without it the CSDA adapter
-launches the full emitted flux `Gamma0 = I_eth_star/e` through the whole column, so
-the fluid deposits the entire emitted beam (~470 kW on the settled artifact) while
-the current-driven circuit books only `P_prim = (1 - eta*beam_bypass_fraction)
-* I_eth_star * phi_c` into the plasma (~307 kW) plus the bypass power
-`eta*beam_bypass_fraction*I_eth_star*V_b` on the anode. The ~164 kW difference is
-the long-mean-free-path beam the anode mesh intercepts, which the fluid was
-wrongly depositing downstream.
+The `beam_anode_interception` selector adds the missing anode-mesh interception
+event to the CSDA beam ray (audit A15). It is the correct csda physics, so it is
+the **production default (on)**; like `beam_coulomb_model` / `beam_anomalous_model`
+it is a csda control -- inert under `beam_deposition_model="beer_lambert"` (which
+never launches the CSDA module) and where the resolved geometry has no anode faces.
+The historical csda checkpoint golden pins it off explicitly (`baseline_sim1d.py`,
+the R1 pattern) so its pre-A15 trajectory stays bit-exact. Set it `False` for the
+with/without-interception A/B. Without it the CSDA adapter launches the full emitted flux
+`Gamma0 = I_eth_star/e` through the whole column, so the fluid deposits the entire
+emitted beam (~470 kW on the settled artifact) while the current-driven circuit
+books only `P_prim = (1 - eta*beam_bypass_fraction) * I_eth_star * phi_c` into the
+plasma (~307 kW) plus the bypass power `eta*beam_bypass_fraction*I_eth_star*V_b` on
+the anode. The ~164 kW difference is the long-mean-free-path beam the anode mesh
+intercepts, which the fluid was wrongly depositing downstream.
 
 With the selector on, `deposit_beam` carries a running flux `gamma` (initially
 `Gamma0`); at the anode-face crossing the mesh solid fraction `eta` of the flux
@@ -293,12 +298,12 @@ circuit's `eta*beam_bypass_fraction`. Per-ray energy still closes to roundoff:
 $$\Gamma_0 E_0 = \text{heating} + \text{radiated} + \text{cost}
   + \text{anode-intercepted} + \gamma_{\text{exit}} E_{\text{exit}}.$$
 
-Requires `beam_deposition_model="csda"` and resolved geometry with anode faces;
-rejects at construction otherwise (it would be a silent no-op on the beer_lambert
-path). Default off; the production golden runs beer_lambert (which never launches
-the CSDA module) and stays bit-exact. This removes the +164 kW item-21 anode-
-interception error; the paired +43.1 kW ionization birth energy (A14) is R4.2, and
-the item-21 ledger re-check follows once both land.
+Active under `beam_deposition_model="csda"` with resolved anode faces; inert
+otherwise (no construction error -- a csda control, like the beam Coulomb/anomalous
+selectors). Production default on; the csda checkpoint golden pins it off
+(`baseline_sim1d.py`) so its pre-A15 trajectory stays bit-exact. This removes the
++164 kW item-21 anode-interception error; the paired +43.1 kW ionization birth
+energy (A14) is R4.2.
 
 `anode_intercepted_erg_s` is the beam energy *removed from the plasma* (the launch
 energy `phi_c` the fluid was over-depositing downstream), NOT the anode heat: the
