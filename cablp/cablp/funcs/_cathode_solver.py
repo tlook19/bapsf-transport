@@ -84,6 +84,15 @@ class DeviceConfig:
     phi_wf: float = 3.0
     C_R: float = 29.0
     R_comp: float = 0.004
+    # Voltage-probe partition of R_comp + separate anode-mesh R (R5 ES1 tuning
+    # pass, 2026-07-26). R_external = R_comp_partition*R_comp is bank-side of the
+    # probe (in V_dis = V_bank - I*R_external); R_internal = (1-x)*R_comp and
+    # R_mesh_ohm are probe->plasma (invisible to the V_dis formula) so the idriven
+    # circuit integrates the device voltage V_b + I*((1-x)*R_comp + R_mesh_ohm).
+    # They lower the current, which raises V_dis. Defaults (x=1, R_mesh=0) are
+    # bit-exact. Only the idriven wrapper reads them; V-driven paths never do.
+    R_comp_partition: float = 1.0
+    R_mesh_ohm: float = 0.0
     eta: float = 0.358
     Twin: bool = False
     L_cath: float = 50.0

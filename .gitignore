@@ -25,3 +25,6 @@ manuscript/*.pdf
 cablp/scripts/*.npz
 cablp/scripts/*.json
 cablp/scripts/*.png
+
+# R5 neutral-seed database (derived, auto-populated per neutral-flow config)
+cablp/scripts/neutral_seed_db/

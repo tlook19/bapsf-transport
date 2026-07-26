@@ -264,6 +264,8 @@ def cathode_device_config(input_dict, input_flags, mu):
         phi_wf=float(input_dict["phi_wf"]),
         C_R=float(input_dict["C_R"]),
         R_comp=float(input_dict["R_comp"]),
+        R_comp_partition=float(input_dict.get("R_comp_partition", 1.0)),
+        R_mesh_ohm=float(input_dict.get("R_mesh_ohm", 0.0)),
         eta=float(input_dict["eta"]),
         Twin=bool(input_flags.get("TwinCathode", False)),
         L_cath=float(input_dict["L_cath"]),
@@ -517,8 +519,23 @@ def idriven_vdis_evaluator(
         phi_wf_override_eV=phi_wf_override_eV,
     )
 
+    # Internal series drop on the plasma side of the V_dis probe (R5 ES1 tuning
+    # pass, 2026-07-26). R_comp is split by the probe: R_external = x*R_comp
+    # (bank side, in V_dis) and R_internal = (1-x)*R_comp (probe->plasma), plus a
+    # separate anode-mesh R_mesh_ohm also on the plasma side. The circuit
+    # integrates the DEVICE voltage V_b + I*(R_internal + R_mesh), while V_dis =
+    # V_bank - I*R_external (see advance_circuit's R_comp_ohm = x*R_comp). The
+    # internal drop lowers the current, which RAISES V_dis (fewer volts across
+    # R_external); it never enters the V_dis formula. Defaults (x=1, R_mesh=0)
+    # give R_internal_total = 0 -> device voltage = V_b, bit-exact.
+    x = float(input_dict.get("R_comp_partition", 1.0))
+    R_comp = float(input_dict.get("R_comp", 0.0))
+    R_internal_total = (1.0 - x) * R_comp + float(
+        input_dict.get("R_mesh_ohm", 0.0)
+    )
+
     def vdis(I_A):
-        return solve_at(I_A).V_b
+        return solve_at(I_A).V_b + I_A * R_internal_total
 
     return vdis
 

@@ -368,11 +368,20 @@ def output_defaults():
         Earliest simulation time to start saving trajectory samples [s].
     max_output_steps:
         Maximum number of saved trajectory samples. Zero means unlimited.
+    neutral_seed_cache_dir:
+        Directory of the neutral-equilibration seed DATABASE used when the
+        ``use_cached_neutral_seed`` flag is on. Each distinct neutral-flow
+        configuration (geometry / puffing / pumping / neutral physics) gets one
+        entry ``neutral_seed_<signature>.npz``, auto-populated on first use and
+        reused thereafter (a browsable fill-rate table). ``None`` (default) means
+        no database is configured. See ``core/neutral_seed_cache.py`` and
+        ``scripts/build_neutral_seed_cache.py``.
     """
     return {
         "dt_save": 1e-5,
         "t_save_start": 0.0,
         "max_output_steps": 0,
+        "neutral_seed_cache_dir": None,
     }
 
 
@@ -744,7 +753,27 @@ def cathode_defaults():
     C_R:
         Richardson constant [A cm^-2 K^-2].
     R_comp:
-        External/compliance resistance [Ohm].
+        External/compliance resistance [Ohm]. The full loop series resistance;
+        it sets the discharge current.
+    R_comp_partition:
+        Voltage-probe partition fraction ``x`` of ``R_comp`` (R5 ES1 tuning pass,
+        2026-07-26). ``R_comp`` is split into an external part ``x*R_comp`` (bank
+        side of the probe) and an internal part ``(1-x)*R_comp`` (probe->plasma).
+        The measured ``V_dis = V_bank - I*(x*R_comp) - L*dI/dt``; the plasma sees
+        ``V_b = V_dis - I*((1-x)*R_comp + R_mesh)``. So the internal part and
+        ``R_mesh`` are INVISIBLE to the V_dis formula but lower the current, which
+        RAISES ``V_dis``. Fit ``R_comp`` for the current at ES1, then derive ``x``
+        from the measured V_dis and transfer both unchanged to ES2/ES3. Default
+        ``1.0`` (all external, internal part 0) is bit-exact with the historical
+        behaviour. Must be in ``[0, 1]``.
+    R_mesh_ohm:
+        Anode-mesh series resistance [Ohm] (R5 ES1 tuning pass), separate from
+        ``R_comp`` and on the internal (plasma) side of the probe, so it is
+        invisible to the V_dis formula. Physically the 0.64 mm Mo anode-mesh wire
+        (2.58 mm pitch), ~0.5-1.5 mOhm, RISING with anode temperature (Stage 2:
+        ``R_mesh(T_anode)`` from an anode standby+deposited-power balance, so it
+        compresses the high-current sets more). Stage 1 uses a constant value.
+        Default ``0.0`` is bit-exact. Must be ``>= 0``.
     eta:
         Anode-to-cathode area ratio.
     anode_radius_cm:
@@ -987,6 +1016,8 @@ def cathode_defaults():
         "phi_wf": 2.869,
         "C_R": 29.0,
         "R_comp": 5.72e-3,
+        "R_comp_partition": 1.0,
+        "R_mesh_ohm": 0.0,
         "L_parasitic_H": 6.6e-6,
         "C_bank_F": 8.4,
         # R5.1/A11 gated fluid<->circuit Picard (only read when the
@@ -1385,6 +1416,14 @@ input_flags_template_1d = {
     "neutral_prebreakdown": True,
     "neutral_equilibration": True,
     "launch_plasma_after_equilibration": True,
+    # R5 ES1 tuning pass (2026-07-26): reuse a cached neutral-equilibration seed
+    # (the equilibrated nn/nn_a profile) instead of re-running the ~1-min
+    # 100-cycle equilibration every run. Default OFF (golden bit-exact off).
+    # When ON, requires neutral_equilibration + launch_plasma_after_equilibration
+    # ON and a neutral_seed_cache_dir (the signature-keyed seed DATABASE):
+    # a miss (new neutral-flow config) equilibrates once and stores it. See
+    # core/neutral_seed_cache.py and scripts/build_neutral_seed_cache.py.
+    "use_cached_neutral_seed": False,
     "ionization_energy_cost": True,
     "icool": True,
     "ncool": True,

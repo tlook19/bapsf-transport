@@ -107,6 +107,17 @@ BASELINE_PARAM_OVERRIDES = {
     "S_pump_L": 2000,                      # default now matches R (4000)
     "gas_puff_profile": "cell",            # default now "cosine_pipe"
     "hyperbolic_wave_speed": "isothermal",  # default now "adiabatic" (A3)
+    # R5 ES1 tuning pass (2026-07-26): the ES production config
+    # (PRODUCTION_PARAM_OVERRIDES, inherited above) gained the end-expansion
+    # machine geometry (Rcs=40/Lcs=25/Rsup=0 + end_expansion_geometry). The
+    # historical golden was captured at the geometry_defaults (Rcs=Lcs=Rsup=0,
+    # no end-expansion, 67 cells); pin those back so this anchor stays
+    # bit-exact and does NOT track the live ES geometry. (The end_expansion_*
+    # params inherited from production are popped in build_baseline_config when
+    # the flag is off, since they are presence-gated on it.)
+    "Rcs": 0.0,
+    "Lcs": 0.0,
+    "Rsup": 0.0,
 }
 # input_flags overrides.
 BASELINE_FLAG_OVERRIDES = {
@@ -132,6 +143,10 @@ BASELINE_FLAG_OVERRIDES = {
     # R5 STANCE FLIP part 2 (2026-07-25): front_flux default is now False (R2 G7
     # retired the sonic front); the fixture ran it on.
     "front_flux": True,
+    # R5 ES1 tuning pass (2026-07-26): the ES production config gained the
+    # end-expansion geometry; the historical golden ran without it. Pin off
+    # (paired with the Rcs/Lcs/Rsup=0 pins above) so the anchor stays 67 cells.
+    "end_expansion_geometry": False,
 }
 # Run controls: None => LAPDSim1D defaults (adaptive dt, dynamic current-trigger
 # t_end, unlimited steps -- the notebook's own settings).
@@ -156,6 +171,13 @@ def build_baseline_config(param_overrides=None, flag_overrides=None):
         params.update(param_overrides)
     if flag_overrides:
         flags.update(flag_overrides)
+    # The end-expansion params are presence-gated on the flag; the historical
+    # anchor pins the flag off, so drop the params inherited from the ES
+    # production overrides (else construction raises a loud ValueError).
+    if not flags.get("end_expansion_geometry", False):
+        for _k in ("end_expansion_cells", "end_expansion_machine_radius_cm",
+                   "end_expansion_plasma_radius_cm"):
+            params.pop(_k, None)
     return params, flags
 
 

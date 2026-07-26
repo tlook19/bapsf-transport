@@ -690,7 +690,15 @@ def solve_idriven(
     # Measurement-plane aliases (see SolverResult): keep I_tot / V_b (Poulos), and
     # alias to the three-plane convention with the item-24/25 divergences pinned
     # to zero so P_load = V_b*I_tot = V_dis*I_bank today.
-    V_series = 0.0
+    # Internal series drop on the plasma side of the V_dis probe (R5 ES1 tuning
+    # pass, 2026-07-26): R_internal = (1-x)*R_comp plus the separate anode mesh
+    # R_mesh_ohm. The device voltage the circuit integrates is V_b + I*R_internal;
+    # the measured V_dis = V_bank - I*(x*R_comp) uses the external part only, so
+    # the internal drop is invisible to the V_dis formula but lowers the current
+    # (raising V_dis). Defaults (x=1, R_mesh=0) -> V_series = 0, bit-exact.
+    V_series = I_tot * (
+        (1.0 - config.R_comp_partition) * config.R_comp + config.R_mesh_ohm
+    )
     I_parallel = 0.0
     I_plasma = I_tot
     I_bank = I_plasma + I_parallel

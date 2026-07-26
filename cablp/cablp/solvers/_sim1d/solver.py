@@ -588,6 +588,18 @@ class LAPDSim1D:
                 "'constant' or 'cx_derived' for other gases"
             )
         self._validate_r1_configuration_presence()
+        self._validate_neutral_seed_cache_config()
+        _x = float(self._input_dict.get("R_comp_partition", 1.0))
+        if not (0.0 <= _x <= 1.0):
+            raise ValueError(
+                "R_comp_partition (the external fraction of R_comp) must be in "
+                f"[0, 1] (got {_x})"
+            )
+        _R_mesh = float(self._input_dict.get("R_mesh_ohm", 0.0))
+        if _R_mesh < 0.0:
+            raise ValueError(
+                f"R_mesh_ohm (anode-mesh resistance) must be >= 0 (got {_R_mesh})"
+            )
         exchange_model = str(
             self._input_dict.get("neutral_exchange_model", "knudsen")
         )
@@ -1137,6 +1149,37 @@ class LAPDSim1D:
                         f"{floor_name} when raw_stage_validation=True "
                         f"(got {initial} <= {floor})"
                     )
+
+    def _validate_neutral_seed_cache_config(self):
+        """Reject an incoherent cached-neutral-seed configuration (loud, at build).
+
+        ``use_cached_neutral_seed`` replaces the live neutral equilibration with a
+        cached seed, so it requires the equilibration pipeline to be selected
+        (``neutral_equilibration`` + ``launch_plasma_after_equilibration``) and a
+        cache path. A missing path or a contradictory flag would otherwise be a
+        silent no-op.
+        """
+        if not self._flags.get("use_cached_neutral_seed", False):
+            return
+        problems = []
+        if not self._flags.get("neutral_equilibration", False):
+            problems.append(
+                "neutral_equilibration must be ON (the cache seeds that pipeline)"
+            )
+        if not self._flags.get("launch_plasma_after_equilibration", False):
+            problems.append(
+                "launch_plasma_after_equilibration must be ON (nothing to seed "
+                "otherwise)"
+            )
+        if not self._input_dict.get("neutral_seed_cache_dir"):
+            problems.append(
+                "neutral_seed_cache_dir must be set to the seed-database directory"
+            )
+        if problems:
+            raise ValueError(
+                "use_cached_neutral_seed is ON but the configuration is "
+                "incoherent: " + "; ".join(problems)
+            )
 
     @property
     def geometry(self):
@@ -2421,7 +2464,12 @@ class LAPDSim1D:
                 I_prev_A=self._circuit_I_loop,
                 dt_s=float(attempt.dt),
                 V_src_V=V_src,
-                R_comp_ohm=float(self._input_dict.get("R_comp", 0.0)),
+                # R_external = x*R_comp: only the external partition appears in
+                # V_dis = V_bank - I*R_external - L*dI/dt. The internal part and
+                # R_mesh are folded into the device voltage (vdis_of_I) instead,
+                # so they lower the current without entering the V_dis formula.
+                R_comp_ohm=float(self._input_dict.get("R_comp", 0.0))
+                * float(self._input_dict.get("R_comp_partition", 1.0)),
                 L_H=float(self._input_dict.get("L_parasitic_H", 0.0)),
                 vdis_of_I=vdis,
                 C_bank_F=None if bank_off else C_bank_id,
@@ -2974,6 +3022,28 @@ class LAPDSim1D:
                 if saved_nn_a is not None
                 else state.nn_a.copy()
             )
+        self._seed_neutral_state(final_nn, final_nn_a)
+
+    def _seed_neutral_state(self, nn, nn_a):
+        """Inject an equilibrated neutral profile into the fresh plasma IC.
+
+        Only nn (and the annulus nn_a) come from the equilibration; n, M, Ee, Ei,
+        and the neutral momenta stay at the fresh initial condition. Shared by the
+        live-equilibration and cached-seed paths so both seed identically.
+        """
+        state = self.state
+        final_nn = np.asarray(nn, dtype=float)
+        if final_nn.shape[0] != state.nn.shape[0]:
+            raise ValueError(
+                f"neutral seed has {final_nn.shape[0]} cells, state has "
+                f"{state.nn.shape[0]}"
+            )
+        final_nn_a = None
+        if state.nn_a is not None:
+            final_nn_a = (
+                state.nn_a.copy() if nn_a is None
+                else np.asarray(nn_a, dtype=float).copy()
+            )
         seeded = ConservativeState1D(
             n=state.n.copy(),
             nn=final_nn.copy(),
@@ -2986,6 +3056,46 @@ class LAPDSim1D:
         )
         self._set_state_vector(pack_state(seeded))
         self._time = 0.0
+
+    def _lookup_cached_neutral_seed(self):
+        """Return ``(nn, nn_a)`` from the seed database for this config, else None.
+
+        Non-raising database lookup keyed by the neutral-flow signature. A miss
+        (new neutral-flow config) returns None so the caller equilibrates and
+        stores.
+        """
+        from .core.neutral_seed_cache import seed_db_path, try_load_neutral_seed
+
+        cache_dir = self._input_dict.get("neutral_seed_cache_dir")
+        params, flags = self.get_config()
+        path = seed_db_path(cache_dir, params, flags)
+        return try_load_neutral_seed(
+            path, params, flags, expected_cells=self._geometry.cells
+        )
+
+    def _store_cached_neutral_seed(self, neutral_result):
+        """Store an equilibration result in the seed database (keyed by signature)."""
+        import os
+
+        from .core.neutral_seed_cache import (
+            fill_rate_meta,
+            save_neutral_seed,
+            seed_db_path,
+        )
+
+        cache_dir = self._input_dict.get("neutral_seed_cache_dir")
+        os.makedirs(str(cache_dir), exist_ok=True)
+        params, flags = self.get_config()
+        final_nn = np.asarray(neutral_result.nn[-1], dtype=float)
+        saved_nn_a = getattr(neutral_result, "nn_a", None)
+        final_nn_a = None if saved_nn_a is None else np.asarray(
+            saved_nn_a[-1], dtype=float
+        )
+        path = seed_db_path(cache_dir, params, flags)
+        save_neutral_seed(
+            path, final_nn, final_nn_a, params, flags,
+            meta=fill_rate_meta(params, final_nn),
+        )
 
     def default_t_end(self):
         """Return the configured end time used by ``start_simulation`` [s]."""
@@ -3032,15 +3142,27 @@ class LAPDSim1D:
         the direct result-returning API.
         """
         if self._flags.get("neutral_equilibration", False):
-            neutral_result = self.run_neutral_equilibration(
-                progress_callback=progress_callback,
-                progress_tracker=progress_tracker,
-                progress_interval_s=progress_interval_s,
-            )
-            if not self._flags.get("launch_plasma_after_equilibration", False):
-                self._last_result = neutral_result
-                return
-            self._apply_neutral_equilibration_result(neutral_result)
+            use_db = self._flags.get("use_cached_neutral_seed", False)
+            seed = self._lookup_cached_neutral_seed() if use_db else None
+            if seed is not None:
+                # Database HIT: reuse the equilibrated neutral seed (bit-identical
+                # to running the 100-cycle equilibration for this config).
+                self._seed_neutral_state(seed[0], seed[1])
+            else:
+                # Live equilibration; on a database MISS (a new neutral-flow
+                # config = a new fill rate), store the result so the next run at
+                # this config reuses it.
+                neutral_result = self.run_neutral_equilibration(
+                    progress_callback=progress_callback,
+                    progress_tracker=progress_tracker,
+                    progress_interval_s=progress_interval_s,
+                )
+                if use_db:
+                    self._store_cached_neutral_seed(neutral_result)
+                if not self._flags.get("launch_plasma_after_equilibration", False):
+                    self._last_result = neutral_result
+                    return
+                self._apply_neutral_equilibration_result(neutral_result)
 
         self._last_result = self.run(
             t_end=t_end,

@@ -102,11 +102,24 @@ PARAM_OVERRIDES = {
     "operator_splitting": "strang",
     "heat_picard_iterations": 2,
     "heat_picard_tol": 1e-10,
+    # ES production machine geometry (R5 ES1 tuning pass, 2026-07-25, Tom's
+    # decision; provisional pending the 2D model). End vessel expands to a 1 m
+    # machine (neutral) radius over 10 cells with NO plasma flare (plasma stays
+    # at Rp=15); plenum-choke obstruction Rcs=40/Lcs=25 (no support rods); no
+    # baffles; collector length unchanged (100 cm default).
+    "end_expansion_cells": 10,
+    "end_expansion_machine_radius_cm": 100.0,
+    "end_expansion_plasma_radius_cm": 15.0,
+    "Rcs": 40.0,
+    "Lcs": 25.0,
+    "Rsup": 0.0,
 }
 FLAG_OVERRIDES = {
     # R5 stance flip: the legacy ion-neutral thermalization arm is subsumed by
     # the Phelps moment operator (config.py default); no longer set here.
     "ion_neutral_drag_cx_only": False,
+    # R5 ES1 tuning pass: the end-vessel expansion geometry above.
+    "end_expansion_geometry": True,
 }
 
 
