@@ -2958,6 +2958,7 @@ def main():
         "cathode_surface_loss",
         "neutral_exchange",
         "neutral_sources",
+        "gas_puff_local_ionization",
         "ionization_birth",
         "beam_ionization_birth",
         "beam_power_deposition",

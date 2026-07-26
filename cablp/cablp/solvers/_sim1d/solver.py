@@ -86,6 +86,7 @@ from .physics.neutrals import (
     two_zone_knudsen_coefficients,
 )
 from .physics.reactions import (
+    gas_puff_local_ionization_rhs as _gas_puff_local_ionization_rhs,
     reaction_rhs,
     reaction_rhs_terms,
     recombination_energy_return_rhs,
@@ -746,6 +747,14 @@ class LAPDSim1D:
                 "heat_flux_limiter_f must be > 0 when electron_heat_flux_limit "
                 f"is on (got {self._heat_flux_limiter_f})"
             )
+        self._heat_flux_limiter_exponent = float(
+            self._input_dict.get("heat_flux_limiter_exponent", 1.0)
+        )
+        if self._electron_heat_flux_limit and self._heat_flux_limiter_exponent <= 0.0:
+            raise ValueError(
+                "heat_flux_limiter_exponent must be > 0 when "
+                f"electron_heat_flux_limit is on (got {self._heat_flux_limiter_exponent})"
+            )
         self._neutral_momentum_radial = str(
             self._input_dict.get("neutral_momentum_radial", "uniform")
         )
@@ -960,6 +969,31 @@ class LAPDSim1D:
         self._cathode_energy_ledger_J = {
             "heater": 0.0, "ion": 0.0, "rad": 0.0, "emis": 0.0, "cond": 0.0,
         }
+        if float(self._input_dict.get("beam_deposition_smoothing_cm", 0.0)) < 0.0:
+            raise ValueError(
+                "beam_deposition_smoothing_cm must be >= 0 (got "
+                f"{self._input_dict.get('beam_deposition_smoothing_cm')})"
+            )
+        _fc = float(self._input_dict.get("beam_clump_fraction", 0.0))
+        if not 0.0 <= _fc < 1.0:
+            raise ValueError(
+                f"beam_clump_fraction must be in [0, 1) (got {_fc})"
+            )
+        if float(self._input_dict.get("beam_clump_enhancement", 1.0)) < 1.0:
+            raise ValueError(
+                "beam_clump_enhancement must be >= 1 (got "
+                f"{self._input_dict.get('beam_clump_enhancement')})"
+            )
+        _fli = float(self._input_dict.get("gas_puff_local_ionization_fraction", 0.0))
+        if not 0.0 <= _fli < 1.0:
+            raise ValueError(
+                f"gas_puff_local_ionization_fraction must be in [0, 1) (got {_fli})"
+            )
+        if _fli > 0.0 and self._flags.get("neutral_two_zone", False):
+            raise ValueError(
+                "gas_puff_local_ionization_fraction is not supported with "
+                "neutral_two_zone (annulus puff routing); disable one"
+            )
         self._cathode_solve = None
         self._last_result = None
         self._last_neutral_equilibration_result = None
@@ -1322,6 +1356,7 @@ class LAPDSim1D:
                     state=state,
                     time=time,
                 ),
+                "gas_puff_local_ionization": self._zero_rhs_state(),
                 "ionization_birth": self._zero_rhs_state(),
                 "beam_ionization_birth": self._zero_rhs_state(),
                 "beam_power_deposition": self._zero_rhs_state(),
@@ -1417,6 +1452,10 @@ class LAPDSim1D:
             ).rhs,
             "neutral_exchange": self.neutral_exchange_rhs(state=state),
             "neutral_sources": self.neutral_source_sink_rhs(
+                state=state,
+                time=time,
+            ),
+            "gas_puff_local_ionization": self.gas_puff_local_ionization_rhs(
                 state=state,
                 time=time,
             ),
@@ -4095,6 +4134,51 @@ class LAPDSim1D:
             **self._neutral_source_kwargs(time=time),
         )
 
+    def gas_puff_local_ionization_rhs(self, y=None, state=None, time=None):
+        """Return the fresh-puff clump local-ionization source (default off)."""
+        if state is None:
+            state = self.state if y is None else self._unpack(y)
+        f = float(self._input_dict.get("gas_puff_local_ionization_fraction", 0.0))
+        if f <= 0.0:
+            return self._zero_rhs_state()
+        nk = self._neutral_source_kwargs(time=time)
+        if not nk["gas_puff_enabled"]:
+            return self._zero_rhs_state()
+        puff = gas_puff_rate_profile(
+            self._geometry, nk["S_gp"], nk["gas_puff_valves"],
+            profile=nk["gas_puff_profile"], z_cm=nk["gas_puff_z_cm"],
+            sigma_cm=nk["gas_puff_sigma_cm"], throw_cm=nk["gas_puff_throw_cm"],
+            end=0,
+        )
+        if nk["twin_cathode"]:
+            puff = puff + gas_puff_rate_profile(
+                self._geometry, nk["Twin_S_gp"], nk["gas_puff_valves"],
+                profile=nk["gas_puff_profile"], z_cm=nk["gas_puff_z_cm"],
+                sigma_cm=nk["gas_puff_sigma_cm"], throw_cm=nk["gas_puff_throw_cm"],
+                end=-1,
+            )
+        return _gas_puff_local_ionization_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            geometry=self._geometry,
+            puff_profile=puff,
+            fraction=f,
+            I_ion=self._I_ion,
+            Te_birth_ionization=self._input_dict.get(
+                "Te_birth_ionization", "local"
+            ),
+            Ti_birth_ionization=self._input_dict.get(
+                "Ti_birth_ionization", "floor"
+            ),
+            ionization_birth_energy_model=str(
+                self._input_dict.get("ionization_birth_energy_model", "legacy")
+            ),
+            b_ionization_energy_cost=float(
+                self._input_dict.get("b_ionization_energy_cost", 1.0)
+            ),
+        )
+
     def reaction_rhs(self, y=None, state=None):
         """Return conservative bulk reaction sources."""
         if state is None:
@@ -4853,6 +4937,7 @@ class LAPDSim1D:
             "ln_lambda_min": float(self._input_dict.get("ln_lambda_min", 1.0)),
             "electron_heat_flux_limit": self._electron_heat_flux_limit,
             "heat_flux_limiter_f": self._heat_flux_limiter_f,
+            "heat_flux_limiter_exponent": self._heat_flux_limiter_exponent,
         }
 
     def _reaction_kwargs(self):

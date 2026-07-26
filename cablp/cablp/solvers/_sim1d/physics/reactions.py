@@ -334,6 +334,72 @@ def particle_inventory_rate(rhs, geometry):
     return math.fsum(terms.tolist())
 
 
+def gas_puff_local_ionization_rhs(
+    state,
+    floors,
+    ion_mass_g,
+    geometry,
+    puff_profile,
+    fraction,
+    I_ion,
+    Te_birth_ionization="local",
+    Ti_birth_ionization="floor",
+    ionization_birth_energy_model="legacy",
+    b_ionization_energy_cost=1.0,
+):
+    """Local ionization of the fresh dense gas-puff clumps (fractional coverage).
+
+    The fresh puff is a dense SPOTTY jet (hardware: 45 psi line -> 1/4" choke ->
+    KF40 jet -> ~1-2e15 cm^-3 near the source, boxed). Its beam/bulk ionization
+    mean free path is short (l_b ~ tens of cm), so a fraction ``f`` of the
+    localized puff neutral source is ionized IN PLACE -- burning to a localized
+    plasma seed that launches the sonic accumulation front -- instead of
+    spreading into the background nn (which the radially-uniform model would
+    otherwise do, filling the mid column instantly and missing the front). The
+    diverted neutral particles are removed from the puff's neutral source and
+    booked with the SAME birth (+ ``I_ion`` cost) as the bulk-reaction ionization
+    channel, so particle and energy inventories close exactly. It is automatically
+    localized and puff-enveloped (relaxing with the ~1 ms feed) because it rides
+    the ``puff_profile`` shape/waveform. Single-zone only (the two-zone annulus
+    puff routing is a separate closure). Default off (``fraction=0``, bit-exact).
+    """
+    zeros = np.zeros_like(state.n, dtype=float)
+    f = float(fraction)
+    if f <= 0.0:
+        return ConservativeState1D(
+            n=zeros, nn=zeros.copy(), M=zeros.copy(),
+            Ee=zeros.copy(), Ei=zeros.copy(),
+        )
+    if state.nn_a is not None:
+        raise ValueError(
+            "gas_puff_local_ionization_fraction is not supported with "
+            "neutral_two_zone (annulus puff routing); disable one"
+        )
+    volume_ratio = geometry.plasma_volume_cm3 / geometry.neutral_volume_cm3
+    puff = np.asarray(puff_profile, dtype=float)  # neutral-density rate [cm^-3/s]
+    nn_sink = f * puff                            # neutral density removed from nn
+    # plasma-density source: same particles, converted V_neutral -> V_plasma
+    S_li = nn_sink / np.maximum(volume_ratio, 1e-300)
+    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
+    Te_birth = _birth_temperature(Te_birth_ionization, derived.Te, floors["Te"])
+    Ti_birth = _birth_temperature(Ti_birth_ionization, derived.Ti, floors["Ti"])
+    if ionization_birth_energy_model == "conservative":
+        Ee_birth = zeros.copy()
+        mixing = 0.5 * ion_mass_g * derived.u ** 2 * S_li  # born at rest, u_birth=0
+        Ei_birth = 1.5 * ev_to_erg * Ti_birth * S_li + mixing
+    else:
+        Ee_birth = 1.5 * ev_to_erg * Te_birth * S_li
+        Ei_birth = 1.5 * ev_to_erg * Ti_birth * S_li
+    cost = float(b_ionization_energy_cost) * I_ion * ev_to_erg * S_li
+    return ConservativeState1D(
+        n=S_li,
+        nn=-nn_sink,
+        M=zeros.copy(),      # fresh cold puff born at rest
+        Ee=Ee_birth - cost,
+        Ei=Ei_birth,
+    )
+
+
 def _birth_temperature(value, local_temperature, floor_temperature):
     if isinstance(value, str):
         if value == "local":

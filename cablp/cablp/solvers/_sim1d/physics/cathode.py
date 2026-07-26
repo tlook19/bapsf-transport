@@ -6,7 +6,7 @@ import numpy as np
 
 from scipy.optimize import brentq
 
-from cablp.funcs._beam_deposition import deposit_beam
+from cablp.funcs._beam_deposition import deposit_beam, BeamDepositionResult
 from cablp.funcs._cathode_solver import (
     DeviceConfig,
     PlasmaState,
@@ -847,6 +847,33 @@ def solve_cathode_boundary(
     )
 
 
+def _sum_beam_deposition(a, b):
+    """Sum two CSDA beam rays (fractional-coverage: gap + clump).
+
+    Per-cell deposition arrays add; the beam is energy-limited per ray so the
+    combined totals stay bounded by ``Gamma0*E0``. Scalar exit diagnostics are
+    flux-combined (unused downstream, kept coherent).
+    """
+    tf = float(a.transmitted_flux) + float(b.transmitted_flux)
+    if tf > 0.0:
+        te = (a.transmitted_flux * a.transmitted_energy_eV
+              + b.transmitted_flux * b.transmitted_energy_eV) / tf
+    else:
+        te = 0.0
+    return BeamDepositionResult(
+        ionization_events=a.ionization_events + b.ionization_events,
+        excitation_events=a.excitation_events + b.excitation_events,
+        plasma_heating_erg_s=a.plasma_heating_erg_s + b.plasma_heating_erg_s,
+        radiated_erg_s=a.radiated_erg_s + b.radiated_erg_s,
+        ionization_cost_erg_s=a.ionization_cost_erg_s + b.ionization_cost_erg_s,
+        transmitted_flux=tf,
+        transmitted_energy_eV=te,
+        anode_intercepted_erg_s=(float(a.anode_intercepted_erg_s)
+                                 + float(b.anode_intercepted_erg_s)),
+        E_entry_eV=np.maximum(a.E_entry_eV, b.E_entry_eV),
+    )
+
+
 def _csda_beam_deposition(
     beam_result,
     state,
@@ -881,6 +908,12 @@ def _csda_beam_deposition(
     """
     coulomb_model = str(input_dict.get("beam_coulomb_model", "fast_electron"))
     anomalous_model = str(input_dict.get("beam_anomalous_model", "none"))
+    # Fractional-coverage beam-neutral closure (default off/uniform, bit-exact):
+    # split the ray into a clump fraction (short l_b against nn*chi -> local seed)
+    # and a gap fraction (background nn -> penetration). See config docstrings.
+    f_clump = float(input_dict.get("beam_clump_fraction", 0.0))
+    chi_clump = float(input_dict.get("beam_clump_enhancement", 1.0))
+    clumping = f_clump > 0.0 and chi_clump > 1.0
     L_cath = float(device_config.L_cath)
     eta = float(device_config.eta)
     anode_faces = np.asarray(
@@ -917,10 +950,26 @@ def _csda_beam_deposition(
             interception_kwargs = dict(
                 anode_cross_index=cross_cell, anode_eta=eta
             )
-        dep = deposit_beam(
-            result.phi_c, Gamma0, dz_cm=geometry.length_cm,
-            **ray_kwargs, **interception_kwargs,
-        )
+        if clumping:
+            # Gap ray: background nn, penetrates (the fast far-end pedestal).
+            gap_ray = deposit_beam(
+                result.phi_c, (1.0 - f_clump) * Gamma0,
+                dz_cm=geometry.length_cm,
+                **ray_kwargs, **interception_kwargs,
+            )
+            # Clump ray: enhanced nn -> short l_b -> local deposit (front seed).
+            clump_kwargs = {**ray_kwargs, "nn": np.asarray(state.nn) * chi_clump}
+            clump_ray = deposit_beam(
+                result.phi_c, f_clump * Gamma0,
+                dz_cm=geometry.length_cm,
+                **clump_kwargs, **interception_kwargs,
+            )
+            dep = _sum_beam_deposition(gap_ray, clump_ray)
+        else:
+            dep = deposit_beam(
+                result.phi_c, Gamma0, dz_cm=geometry.length_cm,
+                **ray_kwargs, **interception_kwargs,
+            )
         deposition[end] = dep
         # Gap transmission: a second, gap-clipped ray (unit flux). CSDA
         # conserves flux until the stop point, so this is 1 if the range
@@ -1244,6 +1293,7 @@ def beam_ionization_rhs_terms(
         boundary=boundary,
         Te=beam_derived.Te,
         exc_energy_fallback_eV=E_exc,
+        smoothing_cm=float(input_dict.get("beam_deposition_smoothing_cm", 0.0)),
     )
     volume_ratio = geometry.plasma_volume_cm3 / geometry.neutral_volume_cm3
     # Two-zone state (NEUTRAL_TWOZONE_PLAN.md): nn is the column density on
@@ -1342,6 +1392,51 @@ def beam_ionization_rhs_terms(
     }
 
 
+_BEAM_SMOOTH_CACHE = {}
+
+
+def _beam_smoothing_matrix(geometry, sigma_cm):
+    """Conservative Gaussian redistribution matrix over the live plasma cells.
+
+    ``W[i, j]`` is the fraction of cell ``j``'s beam deposition moved to cell
+    ``i``; columns sum to 1 over the live cells, so ``W @ ext`` conserves the
+    total (extensive) deposition. The width is a fixed length in cm, so the
+    smoothed profile is mesh-convergent. Cached per (geometry, width) -- both
+    fixed for a run -- so the matrix is built once.
+    """
+    key = (id(geometry), round(float(sigma_cm), 8))
+    W = _BEAM_SMOOTH_CACHE.get(key)
+    if W is not None:
+        return W
+    z = np.asarray(geometry.z_cm, dtype=float)
+    Vp = np.asarray(geometry.plasma_volume_cm3, dtype=float)
+    live = np.where(Vp > 0.0)[0]
+    n = z.size
+    W = np.zeros((n, n), dtype=float)
+    if live.size:
+        d = z[live][:, None] - z[live][None, :]
+        G = np.exp(-0.5 * (d / float(sigma_cm)) ** 2)
+        G /= G.sum(axis=0, keepdims=True)  # column-normalize -> conserves totals
+        W[np.ix_(live, live)] = G
+    _BEAM_SMOOTH_CACHE[key] = W
+    return W
+
+
+def _smooth_beam_density(W, density, Vp):
+    """Apply the conservative matrix to a per-cell density (events/power / cm^3).
+
+    Works in extensive units (density * Vp) so the deposited total is preserved
+    exactly; dead cells (Vp <= 0) carry nothing and stay zero.
+    """
+    Vp = np.asarray(Vp, dtype=float)
+    ext = np.asarray(density, dtype=float) * Vp
+    ext_s = W @ ext
+    out = np.zeros_like(ext_s)
+    live = Vp > 0.0
+    out[live] = ext_s[live] / Vp[live]
+    return out
+
+
 def _beam_ionization_sources(
     state,
     geometry,
@@ -1349,6 +1444,7 @@ def _beam_ionization_sources(
     boundary,
     Te=None,
     exc_energy_fallback_eV=21.218,
+    smoothing_cm=0.0,
 ):
     zeros = np.zeros(geometry.cells, dtype=float)
     beam_result = cathode_solve.beam_result
@@ -1358,13 +1454,19 @@ def _beam_ionization_sources(
     beam_power_density = zeros.copy()
 
     deposition = getattr(cathode_solve, "beam_deposition", None)
-    if deposition is not None:
-        # CSDA path (B2): the module already integrated each ray; convert
-        # its per-cell totals to densities. ``beam_power_deposition`` carries
-        # the whole per-cell beam energy (heating + radiated + cost) so the
-        # separate cost and radiation sinks subtract to the module's net
-        # heating, keeping the four-term decomposition meaningful. P_ohmic
-        # keeps its historical gap-weighted booking.
+    smoothing_cm = float(smoothing_cm)
+    if smoothing_cm < 0.0:
+        raise ValueError(
+            f"beam_deposition_smoothing_cm must be >= 0 (got {smoothing_cm})"
+        )
+    if deposition is not None and not (smoothing_cm > 0.0):
+        # CSDA path (B2), historical UNSMOOTHED branch (bit-exact): the module
+        # already integrated each ray; convert its per-cell totals to densities.
+        # ``beam_power_deposition`` carries the whole per-cell beam energy
+        # (heating + radiated + cost) so the separate cost and radiation sinks
+        # subtract to the module's net heating, keeping the four-term
+        # decomposition meaningful. P_ohmic keeps its historical gap-weighted
+        # booking.
         Vp = geometry.plasma_volume_cm3
         for end, dep in deposition.items():
             if dep is None:
@@ -1385,6 +1487,42 @@ def _beam_ionization_sources(
             beam_power_density[gap] += (
                 ohmic_weights * solver_result.P_ohmic * 1.0e7 / Vp[gap]
             )
+        return S_beam, S_exc, S_exc_E, beam_power_density
+    if deposition is not None:
+        # CSDA path with conservative deposition smoothing (default-off; the
+        # branch above is bit-exact when smoothing is 0). The beam deposition
+        # densities are smoothed over a fixed physical width BEFORE the ohmic
+        # gap booking is added, so only the beam-range deposition is spread and
+        # the totals are conserved (ES1_TUNING §4e; removes the mesh-scale
+        # sheath kick where the beam range crosses a cell boundary).
+        Vp = geometry.plasma_volume_cm3
+        beam_dep_power = zeros.copy()
+        ohmic_power = zeros.copy()
+        for end, dep in deposition.items():
+            if dep is None:
+                continue
+            S_beam += dep.ionization_events / Vp
+            S_exc += dep.excitation_events / Vp
+            S_exc_E += dep.radiated_erg_s / Vp / ev_to_erg
+            beam_dep_power += (
+                dep.plasma_heating_erg_s
+                + dep.radiated_erg_s
+                + dep.ionization_cost_erg_s
+            ) / Vp
+            solver_result = (
+                beam_result.result if end == 0 else beam_result.result_twin
+            )
+            gap = np.asarray(gap_cell_indices(geometry, end=end), dtype=int)
+            ohmic_weights = _ohmic_gap_weights(geometry, gap, Te)
+            ohmic_power[gap] += (
+                ohmic_weights * solver_result.P_ohmic * 1.0e7 / Vp[gap]
+            )
+        W = _beam_smoothing_matrix(geometry, smoothing_cm)
+        S_beam = _smooth_beam_density(W, S_beam, Vp)
+        S_exc = _smooth_beam_density(W, S_exc, Vp)
+        S_exc_E = _smooth_beam_density(W, S_exc_E, Vp)
+        beam_dep_power = _smooth_beam_density(W, beam_dep_power, Vp)
+        beam_power_density = beam_dep_power + ohmic_power
         return S_beam, S_exc, S_exc_E, beam_power_density
 
     def _exc_energy_at(launch_index):

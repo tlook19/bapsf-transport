@@ -73,6 +73,7 @@ def heat_conduction_rhs(
     ln_lambda_min=1.0,
     electron_heat_flux_limit=False,
     heat_flux_limiter_f=0.3,
+    heat_flux_limiter_exponent=1.0,
 ):
     """Return conservative axial heat-conduction energy sources."""
     zeros = np.zeros_like(state.n, dtype=float)
@@ -96,7 +97,8 @@ def heat_conduction_rhs(
     )
     if electron_heat_flux_limit:
         conductivity_e = flux_limited_electron_conductivity(
-            conductivity_e, derived.Te, n, geometry, heat_flux_limiter_f
+            conductivity_e, derived.Te, n, geometry, heat_flux_limiter_f,
+            exponent=heat_flux_limiter_exponent,
         )
     qe_face = conductive_face_flux(
         temperature=derived.Te,
@@ -125,7 +127,9 @@ def heat_conduction_rhs(
     )
 
 
-def flux_limited_electron_conductivity(conductivity_e, Te_eV, n, geometry, f):
+def flux_limited_electron_conductivity(
+    conductivity_e, Te_eV, n, geometry, f, exponent=1.0
+):
     """Scale the electron conductivity per cell by the Cowie-McKee flux limiter.
 
     The classical (Spitzer-Harm) parallel flux ``q_SH = kappa_e |dTe/dz|`` is
@@ -140,6 +144,14 @@ def flux_limited_electron_conductivity(conductivity_e, Te_eV, n, geometry, f):
     flux divergence. Frozen at the incoming ``Te`` like ``kappa`` itself. Audit A9
     / R5.2; ``conductivity_e`` is the already-scaled volumetric conductivity
     (``* ev_to_erg * b_epara``) the operator uses, so ``q_SH`` matches its flux.
+
+    ``exponent`` p (default 1 = the harmonic A9, bit-exact) generalizes to a
+    NON-LOCAL Knudsen suppression ``lambda = 1 / (1 + (q_SH/q_sat)^p)``. The ratio
+    ``q_SH/q_sat`` is the Knudsen number ``Kn ~ lambda_e/L_T``; ``p > 1`` suppresses
+    the steep-gradient (high-Kn, non-local) startup flux MUCH harder while leaving
+    the shallow-gradient (low-Kn, ``Kn^p -> 0``) established column near-Spitzer --
+    the "cap the front pre-heating, spare the established plasma" behaviour a
+    single free-streaming factor cannot separate.
     """
     conductivity_e = np.asarray(conductivity_e, dtype=float)
     Te_eV = np.asarray(Te_eV, dtype=float)
@@ -148,8 +160,15 @@ def flux_limited_electron_conductivity(conductivity_e, Te_eV, n, geometry, f):
     q_sat = float(f) * np.asarray(n, dtype=float) * Te_erg * v_the  # erg cm^-2 s^-1
     grad = np.gradient(Te_eV, np.asarray(geometry.z_cm, dtype=float))  # eV/cm
     q_SH = np.abs(conductivity_e) * np.abs(grad)  # erg cm^-2 s^-1
-    denom = q_sat + q_SH
-    lam = np.where(denom > 0.0, q_sat / np.where(denom > 0.0, denom, 1.0), 1.0)
+    p = float(exponent)
+    if p == 1.0:
+        # Harmonic A9 (bit-exact with the pre-exponent form).
+        denom = q_sat + q_SH
+        lam = np.where(denom > 0.0, q_sat / np.where(denom > 0.0, denom, 1.0), 1.0)
+    else:
+        # Non-local: lambda = 1 / (1 + (q_SH/q_sat)^p).
+        ratio = np.where(q_sat > 0.0, q_SH / np.where(q_sat > 0.0, q_sat, 1.0), 0.0)
+        lam = np.where(q_sat > 0.0, 1.0 / (1.0 + ratio ** p), 1.0)
     return conductivity_e * lam
 
 
@@ -186,6 +205,7 @@ def heat_conduction_timestep_bound(
     active_cells=None,
     electron_heat_flux_limit=False,
     heat_flux_limiter_f=0.3,
+    heat_flux_limiter_exponent=1.0,
 ):
     """Return an explicit diffusion timestep bound for heat conduction.
 
@@ -195,6 +215,7 @@ def heat_conduction_timestep_bound(
     accepted and ignored so the shared ``_heat_conduction_kwargs`` fits.
     """
     del electron_heat_flux_limit, heat_flux_limiter_f  # conservative: see above
+    del heat_flux_limiter_exponent
     if heat_dt_fraction <= 0.0:
         raise ValueError(f"heat_dt_fraction must be positive (got {heat_dt_fraction})")
     if not heat_conduction or (b_epara == 0.0 and b_ipara == 0.0):
@@ -252,6 +273,7 @@ def implicit_heat_conduction_step(
     heat_picard_tol=1e-10,
     electron_heat_flux_limit=False,
     heat_flux_limiter_f=0.3,
+    heat_flux_limiter_exponent=1.0,
 ):
     """Return a state after one implicit heat step.
 
@@ -326,7 +348,8 @@ def implicit_heat_conduction_step(
         )
         if electron_heat_flux_limit:
             conductivity_e = flux_limited_electron_conductivity(
-                conductivity_e, Te_eval, n, geometry, heat_flux_limiter_f
+                conductivity_e, Te_eval, n, geometry, heat_flux_limiter_f,
+                exponent=heat_flux_limiter_exponent,
             )
         Ee = _implicit_species_energy(
             energy=state.Ee,

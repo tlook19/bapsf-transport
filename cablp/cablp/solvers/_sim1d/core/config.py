@@ -294,6 +294,17 @@ def neutral_source_defaults():
         "gas_puff_z_cm": None,
         "gas_puff_sigma_cm": 50.0,
         "gas_puff_throw_cm": 100.0,
+        # Fresh-puff fractional-coverage local ionization (default 0 = OFF,
+        # bit-exact). Fraction of the localized gas-puff neutral source that is
+        # ionized IN PLACE (the dense spotty jet -- 45 psi line / 1/4" choke /
+        # KF40 jet -> ~1-2e15 cm^-3, boxed -- has a short beam/bulk mfp, so it
+        # burns to a localized plasma seed that launches the sonic accumulation
+        # front) instead of spreading into the background nn. The diverted
+        # neutrals are debited from the puff and booked as ionization with the
+        # bulk-reaction birth + I_ion cost (mass/energy conserving); it rides the
+        # puff shape+waveform so it is auto-localized and relaxes with the ~1 ms
+        # feed. Single-zone only (loud error with neutral_two_zone). In [0, 1).
+        "gas_puff_local_ionization_fraction": 0.0,
         # --- DEPRECATED (only read by the retired pulse/decay/double_erf puff
         # modes; kept runnable for the frozen waveform-comparison figures) ---
         "S_gp_decay_target": 1500,
@@ -726,6 +737,14 @@ def fudge_factor_defaults():
         # electron_heat_flux_limit flag is on): free-streaming fraction f in
         # q_sat = f*n*Te*v_the, the harmonic (Cowie-McKee) saturation cap.
         "heat_flux_limiter_f": 0.3,
+        # Non-local Knudsen exponent p for the A9 electron heat-flux limiter
+        # (read only when electron_heat_flux_limit is on). lambda = 1/(1+Kn^p)
+        # with Kn = q_SH/q_sat. p=1.0 (default) is the harmonic Cowie-McKee A9,
+        # bit-exact. p>1 suppresses the steep-gradient (high-Kn, non-local)
+        # startup flux much harder while leaving the shallow-gradient established
+        # column near-Spitzer -- the startup-front pre-heating vs established-
+        # column trade a single free-streaming factor cannot separate.
+        "heat_flux_limiter_exponent": 1.0,
         # Radial closure for the evolved neutral wind (needs the
         # neutral_momentum flag; the deferred ladder).
         "neutral_momentum_radial": "uniform",
@@ -994,6 +1013,40 @@ def cathode_defaults():
         downstream. Weak-beam domain only (returns no drag when
         ``n_b >= n_e/10``); parameter-free; per-closure presentation
         required (THESIS_NOTES item 12).
+    beam_clump_fraction:
+        Fractional-coverage beam-neutral closure (default 0.0 = OFF, bit-exact).
+        The fresh gas puff is a dense, SPOTTY cloud sitting on the uniform
+        equilibration seed (the residual inter-shot background), so the beam is
+        BIMODAL: a fraction ``f`` of its flux meets dense clumps (short l_b ->
+        deposits locally near the source, seeding the sonic accumulation front)
+        while ``1-f`` streams through the thin gaps at the background density
+        (long l_b -> penetrates to the far end, the fast interferometer
+        "pedestal"). The radially-uniform single-l_b deposition is neither. When
+        ``f>0`` (and ``beam_clump_enhancement>1``) the CSDA ray is split into a
+        clump ray (flux ``f*Gamma0`` against ``nn*chi``) and a gap ray (flux
+        ``(1-f)*Gamma0`` against the background ``nn``), and the two per-cell
+        depositions are summed; the beam stays energy-limited so totals are
+        bounded. ``f`` is a physical cloud area-coverage fraction, ``[0,1)``.
+    beam_clump_enhancement:
+        Clump neutral-density enhancement ``chi`` over the local background for
+        the clump ray (default 1.0 = OFF). ``nn_clump = chi*nn`` shortens the
+        clump-ray l_b, controlling how LOCALIZED the clump deposition is (higher
+        chi -> shorter deposition -> stronger front seed). Represents the fresh
+        puff's density above the equilibration seed; ``>= 1``. Requires
+        ``beam_clump_fraction>0`` to act (both default to the off/uniform value).
+    beam_deposition_smoothing_cm:
+        Physical Gaussian width [cm] for a conservative spatial smoothing of the
+        CSDA beam source terms (ionization, excitation, radiated, and heating
+        densities) before they enter the fluid. ``0.0`` (default) is OFF and
+        bit-exact. A nonzero width redistributes each cell's beam deposition to
+        its axial neighbours with a mass/energy-conserving column-normalized
+        Gaussian over the live plasma cells, so the deposited totals are
+        unchanged. Because the width is a FIXED length (not a cell count) the
+        deposition profile is mesh-convergent, which removes the grid-scale
+        current-step artifact where the beam range crossing a cell boundary
+        kicks the sheath solve (the beam-side "deposition-kernel spreading";
+        ES1_TUNING §4e). CSDA only (inert under ``beer_lambert``). Must be
+        ``>= 0``.
     """
     # R5 stance flip (2026-07-25): the config defaults now promote the FULL
     # validated M6 production cathode stack (previously reached only through the
@@ -1036,6 +1089,9 @@ def cathode_defaults():
         "beam_deposition_model": "csda",
         "beam_coulomb_model": "fast_electron",
         "beam_anomalous_model": "quasilinear",
+        "beam_clump_fraction": 0.0,
+        "beam_clump_enhancement": 1.0,
+        "beam_deposition_smoothing_cm": 0.0,
         "b_beam_excitation": 0.0,
         "beam_excitation_model": "2p_scalar",
         "beam_excitation_energy_eV": 21.218,

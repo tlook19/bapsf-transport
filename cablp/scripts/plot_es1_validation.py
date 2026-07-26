@@ -8,7 +8,9 @@ panels with the adopted sigma_tot error bars:
   (2) Te(z) and ne(z) at t=15 and 19 ms, model line vs measured port points
       (sigma_tot bars), with vertical dashed lines at the probe/port locations;
   (3) Isat(z) = n*sqrt(Te) (systematics-robust) model vs measured ports, plus
-      nn(z)/Ti(z) profiles.
+      nn(z)/Ti(z) profiles;
+  (4) per-port Te(t) and ne(t) time series, model line vs measured mean with a
+      sigma_tot band, one colour per ES port.
 
 Model V_dis is the dt-integrated circuit voltage (the inductor's view, the
 honest smooth trace). Times are on the main-discharge clock (t=0 at discharge
@@ -88,7 +90,7 @@ def main():
     zc = np.asarray(ov["z_cm"], float)
     ports = np.asarray(ov["port"])
 
-    fig, axes = plt.subplots(3, 2, figsize=(13, 13))
+    fig, axes = plt.subplots(4, 2, figsize=(13, 17))
     fig.suptitle(f"ES{args.es} validation: {Path(args.from_h5).name}", fontsize=12)
 
     # (1a) discharge current
@@ -160,7 +162,34 @@ def main():
     ax.set_yscale("log"); ax.set_xlabel("z [cm]"); ax.set_ylabel("nn [cm^-3] / Ti[eV]*1e12")
     ax.set_title("nn(z), Ti(z)"); ax.legend(fontsize=7); ax.grid(alpha=0.3)
 
-    fig.tight_layout(rect=[0, 0, 1, 0.98])
+    # (4) per-port time series: Te(t) and ne(t), model line vs measured
+    # mean with a sigma_tot band, one colour per ES port.
+    ax_tet, ax_net = axes[3, 0], axes[3, 1]
+    port_colors = plt.cm.viridis(np.linspace(0, 0.9, len(zc)))
+    for p, (zp, port) in enumerate(zip(zc, ports)):
+        c = port_colors[p]
+        iz = int(np.argmin(np.abs(z - zp)))
+        lbl = f"p{port} z{zp:.0f}"
+        # Te(t)
+        te_sys = TE_SYS_FRAC * np.abs(te_m[p]) + TE_SYS_FLOOR_EV
+        te_band = np.sqrt(te_s[p] ** 2 + te_sys ** 2)
+        ax_tet.fill_between(te_t, te_m[p] - te_band, te_m[p] + te_band, color=c, alpha=0.15)
+        ax_tet.plot(te_t, te_m[p], "--", color=c, lw=1.0)
+        ax_tet.plot(t_ms, Te[:, iz], "-", color=c, lw=1.4, label=lbl)
+        # ne(t)
+        te_on_de = np.interp(de_t, te_t, te_m[p])
+        ne_band = _n_sigma_tot(de_m[p], te_on_de, de_s[p])
+        ax_net.fill_between(de_t, de_m[p] - ne_band, de_m[p] + ne_band, color=c, alpha=0.15)
+        ax_net.plot(de_t, de_m[p], "--", color=c, lw=1.0)
+        ax_net.plot(t_ms, n[:, iz], "-", color=c, lw=1.4, label=lbl)
+    for ax, ttl, yl in ((ax_tet, "Te(t) per port", "Te [eV]"),
+                        (ax_net, "ne(t) per port", "n [cm^-3]")):
+        ax.set_xlim(0, 22); ax.set_xlabel("t [ms] (main-discharge)")
+        ax.set_ylabel(yl); ax.set_title(ttl)
+        ax.legend(fontsize=7, ncol=2, title="solid=model  dashed=meas")
+        ax.grid(alpha=0.3)
+
+    fig.tight_layout(rect=[0, 0, 1, 0.985])
     out = args.out or str(Path(args.from_h5).with_suffix("")) + "_validation.png"
     fig.savefig(out, dpi=110)
     print(f"# wrote {out}")
