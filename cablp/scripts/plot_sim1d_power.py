@@ -1281,8 +1281,8 @@ def make_efficiency_figure(d, ledger, window, stage2, profile):
     thermal_note = ("thermal bar broken out by CSDA channel"
                     if d["have_beam_channels"] else "thermal bar lumped")
     ax_b.set_xlabel("stage 2 — % of ABSORBED beam power\n"
-                    f"(fate by collision outcome, at beam turn-on; "
-                    f"{thermal_note})\n"
+                    "(fate by collision outcome, at beam turn-on)\n"
+                    f"{thermal_note}\n"
                     f"window {s2_label}   [{s2_lo:.2f} – {s2_hi:.2f} ms]")
 
     # --- stage 3: the plasma-book budget of the thermal energy --------------
@@ -1570,6 +1570,18 @@ def main(argv=None):
         chan_resid = E_beam_thermal - sum(chan.values())
         print(f"beam_thermal_breakout_closure_kJ={chan_resid / 1e3:.3e} "
               f"rel={abs(chan_resid) / E_beam_thermal:.3e}")
+        if abs(chan_resid) > 0.01 * E_beam_thermal:
+            # MEASURED, not assumed. The channels are the CSDA module's own
+            # banks for the cached cathode solve; the term is the RHS row the
+            # fluid integrated. They are built from the same quantities, so a
+            # systematic offset is a real disagreement between the diagnostic
+            # solve and the deposited RHS, not a plotting artifact -- reported
+            # here rather than normalized away.
+            print("beam_thermal_breakout_WARNING=channel sum does NOT "
+                  f"reproduce beam_power_deposition (channels/term="
+                  f"{sum(chan.values()) / E_beam_thermal:.4f}); the breakout "
+                  "bars are the module's banks, the lumped bar is the RHS row "
+                  "(reported, not fixed here)")
         # Per-window mechanism shift: the number the turn-on window is for.
         for key, _, lo, hi, mask in windows:
             def Ew(y, m=mask):
