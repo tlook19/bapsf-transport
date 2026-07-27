@@ -40,6 +40,11 @@ def save_result_hdf5(path, result, params=None, flags=None):
         h5.attrs["t_breakdown_trigger"] = float(
             getattr(result, "t_breakdown_trigger", np.nan)
         )
+        # Present only on opt-in max_steps_action="stop" runs; default runs
+        # never carry it, keeping their files byte-identical to before.
+        run_status = getattr(result, "run_status", None)
+        if run_status is not None:
+            h5.attrs["run_status"] = str(run_status)
         if params is not None:
             h5.attrs["params_json"] = _json_dumps(params)
         if flags is not None:
@@ -235,6 +240,8 @@ def load_result_hdf5(path):
             flags=flags,
             path=path,
         )
+        if "run_status" in h5.attrs:
+            result.run_status = _decode_string(h5.attrs["run_status"])
         return add_sim3_compat_aliases(result)
 
 
