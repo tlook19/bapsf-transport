@@ -165,7 +165,8 @@ def floor_defaults():
         Minimum electron temperature recovered from conservative energy [eV].
         Kept at 0.1 (below the ADF11 0.2 eV edge so the afterglow can cool; the
         electron floor is governed by A18, not the CX fix). The exploratory
-        deep-afterglow recipe lowers it to 300 K -- see the module note.
+        deep-afterglow recipe lowered it to 300 K, but that recipe is RETIRED
+        (Tom, 2026-07-27) -- see the module note below for why.
     """
     return {
         "ne_floor": 1e8,
@@ -183,6 +184,16 @@ def floor_defaults():
 # (line power) still clamp there but are exponentially dead at <0.2 eV, so a
 # recombining 300 K afterglow is well represented. This is also the vehicle for
 # the deferred A18b (time-dependent CR-memory) bracket.
+#
+# RECIPE RETIRED (Tom, 2026-07-27). DO NOT RUN icool_recomb TOGETHER WITH
+# adas_low_te_extension. The two compose destructively: icool_recomb charges
+# bare PRB (the double-charge warned about at recombination_energy_return
+# below), and adas_low_te_extension amplifies the sub-edge PRB by ~9,300x, so
+# the electron fluid runs away thermally to the floor and the electron_cooling
+# timestep bound collapses permanently (diagnostician, campaign log
+# 2026-07-27). The consistent net booking (I_ion*S_rec - P_PRB) that would
+# have made the pair sound was NOT built -- the recipe was retired instead.
+# The afterglow validity-window stance is Te > 0.2 eV (the ADF11 edge).
 
 
 def neutral_source_defaults():
@@ -747,6 +758,16 @@ def fudge_factor_defaults():
         # enabling PRB alone double-charges (why icool_recomb stays off) --
         # construction refuses the combination and requires atomic_rate_model=
         # "adas". adf11 grid bottoms at 0.2 eV; lookups clamp there.
+        #
+        # RETIRED (Tom, 2026-07-27): the consistent net booking
+        # (I_ion*S_rec - P_PRB) was never built, so icool_recomb still charges
+        # bare PRB. Paired with adas_low_te_extension -- which amplifies the
+        # sub-edge PRB by ~9,300x -- that double-charge drives a thermal
+        # runaway to the Te floor and a permanent electron_cooling
+        # timestep-bound collapse (diagnostician, campaign log 2026-07-27).
+        # DO NOT RUN icool_recomb TOGETHER WITH adas_low_te_extension; the
+        # deep-afterglow recipe that combined them is retired and the afterglow
+        # validity-window stance is Te > 0.2 eV.
         "recombination_energy_return": False,
         # --- INERT: default-off instruments / neutral ladder ---
         # R5.2/A9 electron heat-flux limiter (read only when the
