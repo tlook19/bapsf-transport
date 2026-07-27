@@ -27,6 +27,7 @@ from cablp.solvers._sim1d.physics.conduction import (
     implicit_heat_conduction_step,
 )
 from cablp.solvers._sim1d.physics.cathode import (
+    _beam_smoothing_matrix,
     beam_absorption_weights,
     beam_launch,
     cathode_sample_indices,
@@ -2463,6 +2464,107 @@ def main():
     bl_sim = LAPDSim1D(dict(exc_params), bl_flags)  # exc_params is beer_lambert
     bl_sim._circuit_I_loop = 3000.0
     assert bl_sim.solve_cathode_boundary().beam_deposition is None
+
+    # --- Beam-deposition smoothing CONSERVES the deposit over the live plasma.
+    # The Gaussian redistribution kernel must place ZERO weight on the typed
+    # plasma-dead cells (plenum/obstruction) behind the cathode face, because
+    # the RHS mask ``_apply_active_plasma_topology`` zeroes exactly those rows:
+    # anything the kernel spreads back there is silently DELETED, and it takes
+    # beam power, beam ionization, excitation and the neutral debit with it
+    # (all four channels share this one kernel). ``plasma_volume_cm3 > 0`` does
+    # NOT identify those cells -- the dead cells have a finite plasma volume --
+    # so the support has to come from ``plasma_active``.
+    #
+    # Checked on BOTH a uniform and a non-uniform (source_fixed_grid) mesh: the
+    # kernel is weighted by cell length, and without that weighting a refined
+    # region is over-weighted per cm, which makes the smoothing operator itself
+    # mesh-dependent even where it happens to conserve.
+    smooth_sigma_cm = 50.0
+    smoothing_meshes = (
+        ("uniform", dict(csda_params), dict(cathode_flags)),
+        (
+            "source_fixed_grid",
+            {
+                **csda_params,
+                "source_region_length_cm": 100.0,
+                "source_region_dz_cm": 10.0,
+                "gas_puff_z_cm": 60.0,
+            },
+            {**cathode_flags, "source_fixed_grid": True},
+        ),
+    )
+    for mesh_label, smooth_base, smooth_flags in smoothing_meshes:
+        smooth_off_sim = LAPDSim1D(dict(smooth_base), smooth_flags)
+        smooth_on_sim = LAPDSim1D(
+            {**smooth_base, "beam_deposition_smoothing_cm": smooth_sigma_cm},
+            smooth_flags,
+        )
+        smooth_off_sim._circuit_I_loop = 3000.0
+        smooth_on_sim._circuit_I_loop = 3000.0
+        smooth_geom = smooth_on_sim.get_initial_snapshot().geometry
+        smooth_active = np.asarray(smooth_geom.plasma_active, dtype=bool)
+        smooth_Vp = np.asarray(smooth_geom.plasma_volume_cm3, dtype=float)
+        smooth_dz = np.asarray(smooth_geom.length_cm, dtype=float)
+        # The premise of the test: there ARE dead cells to leak into, and the
+        # old ``Vp > 0`` support could not have found them.
+        assert not smooth_active.all(), mesh_label
+        assert (smooth_Vp > 0.0).all(), mesh_label
+        if mesh_label == "source_fixed_grid":
+            assert np.unique(np.round(smooth_dz[smooth_active], 9)).size > 1
+
+        # (a) The kernel itself: no weight on any row the RHS mask will zero,
+        # and every source column normalized to exactly 1 over the live support.
+        smooth_W = _beam_smoothing_matrix(smooth_geom, smooth_sigma_cm)
+        assert np.count_nonzero(smooth_W[~smooth_active, :]) == 0, mesh_label
+        smooth_colsum = smooth_W[smooth_active, :].sum(axis=0)
+        assert np.allclose(smooth_colsum, 1.0, rtol=0.0, atol=1e-12), (
+            mesh_label,
+            float(smooth_colsum.min()),
+            float(smooth_colsum.max()),
+        )
+
+        # (b) The deposited RHS: smoothed-then-masked total == unsmoothed total,
+        # channel by channel. Both sims are driven from the SAME cathode solve,
+        # so the only difference between them is the smoothing operator.
+        smooth_state = smooth_on_sim.state
+        smooth_solve = smooth_on_sim.solve_cathode_boundary(
+            state=smooth_state, update_cache=False
+        )
+        assert smooth_solve.beam_deposition is not None, mesh_label
+        smooth_off_terms = smooth_off_sim.beam_ionization_rhs_terms(
+            state=smooth_state, cathode_solve=smooth_solve
+        )
+        smooth_on_terms = smooth_on_sim.beam_ionization_rhs_terms(
+            state=smooth_state, cathode_solve=smooth_solve
+        )
+        for smooth_term, smooth_field in (
+            ("beam_ionization_birth", "n"),
+            ("beam_ionization_birth", "nn"),
+            ("beam_power_deposition", "Ee"),
+            ("beam_ionization_cost", "Ee"),
+            ("beam_excitation_radiation", "Ee"),
+        ):
+            off_row = np.asarray(
+                getattr(smooth_off_terms[smooth_term], smooth_field), dtype=float
+            )
+            on_row = np.asarray(
+                getattr(smooth_on_terms[smooth_term], smooth_field), dtype=float
+            )
+            off_total = float((off_row * smooth_Vp)[smooth_active].sum())
+            on_total = float((on_row * smooth_Vp)[smooth_active].sum())
+            # A zero channel would make the conservation check vacuous.
+            assert abs(off_total) > 0.0, (mesh_label, smooth_term, smooth_field)
+            assert abs(on_total - off_total) <= 1e-12 * abs(off_total), (
+                mesh_label,
+                smooth_term,
+                smooth_field,
+                on_total,
+                off_total,
+                on_total / off_total,
+            )
+            # ...and the kernel is not quietly the identity: it MOVED the
+            # deposit, so the conservation above is a real statement.
+            assert not np.allclose(on_row, off_row), (mesh_label, smooth_term)
 
     # --- R4.2 (audit A14): ionization_birth_energy_model. Default-off ("legacy")
     # is the historical booking; "conservative" zeroes the bulk electron
