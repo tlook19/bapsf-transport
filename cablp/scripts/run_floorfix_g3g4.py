@@ -32,6 +32,13 @@ class WallTracker:
         self.samples.append(
             (progress.wall_elapsed_s, progress.time, progress.step)
         )
+        if len(self.samples) % 25 == 0:
+            print(
+                f"## progress t={progress.time*1e3:.3f} ms "
+                f"step={progress.step} wall={progress.wall_elapsed_s:.0f} s "
+                f"dt={progress.accepted_dt:.3e} cap={progress.step_cap}",
+                flush=True,
+            )
 
     def reset(self):
         pass
