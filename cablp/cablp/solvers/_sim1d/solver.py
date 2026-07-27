@@ -3048,6 +3048,14 @@ class LAPDSim1D:
         flags["cathode_coupling"] = False
         flags["neutral_equilibration"] = False
         flags["launch_plasma_after_equilibration"] = False
+        # The inner sim IS the equilibration -- it must never consult the seed
+        # database itself. Leaving this ON contradicts the two flags just
+        # cleared, so _validate_neutral_seed_cache_config would reject the inner
+        # config and a database MISS would raise instead of equilibrating and
+        # populating the database (the caller stores the result). The cache-
+        # control flags are inert to the seed signature, so clearing this here
+        # cannot change the stored entry's key or content.
+        flags["use_cached_neutral_seed"] = False
         if cycles is None:
             cycles = int(params.get("neutral_equilibration_cycles", params["cycles"]))
         cycles = int(cycles)
