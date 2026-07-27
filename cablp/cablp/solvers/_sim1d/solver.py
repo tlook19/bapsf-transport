@@ -755,6 +755,37 @@ class LAPDSim1D:
                 "heat_flux_limiter_exponent must be > 0 when "
                 f"electron_heat_flux_limit is on (got {self._heat_flux_limiter_exponent})"
             )
+        # Floor-aware drain exemption on the "surface_loss" dt bound (default
+        # off; presence-gated: None disables the exemption branch entirely so
+        # the off path is bit-exact historical behavior).
+        _surface_loss_floor_exempt = bool(
+            self._flags.get("surface_loss_floor_exempt", False)
+        )
+        _surface_loss_floor_exempt_rtol = float(
+            self._input_dict.get("surface_loss_floor_exempt_rtol", 1e-3)
+        )
+        if _surface_loss_floor_exempt and not (
+            0.0 < _surface_loss_floor_exempt_rtol < 1.0
+        ):
+            raise ValueError(
+                "surface_loss_floor_exempt_rtol must be in (0, 1) when "
+                "surface_loss_floor_exempt is on "
+                f"(got {_surface_loss_floor_exempt_rtol})"
+            )
+        self._surface_loss_floor_exempt_rtol = (
+            _surface_loss_floor_exempt_rtol
+            if _surface_loss_floor_exempt
+            else None
+        )
+        _max_steps_action = str(
+            self._input_dict.get("max_steps_action", "raise")
+        )
+        if _max_steps_action not in ("raise", "stop"):
+            raise ValueError(
+                "max_steps_action must be 'raise' or 'stop' "
+                f"(got {_max_steps_action!r})"
+            )
+        self._max_steps_action = _max_steps_action
         self._neutral_momentum_radial = str(
             self._input_dict.get("neutral_momentum_radial", "uniform")
         )
@@ -2826,8 +2857,14 @@ class LAPDSim1D:
         last_progress_time = -np.inf
         force_progress = False
         steps = 0
+        max_steps_stopped = False
         while self._time < t_end - time_tol:
             if not unlimited_steps and steps >= max_steps:
+                if self._max_steps_action == "stop":
+                    # Opt-in graceful stop: keep the partial trajectory and
+                    # mark the result instead of raising.
+                    max_steps_stopped = True
+                    break
                 raise RuntimeError(
                     f"max_steps={max_steps} reached before t_end={t_end:g} s"
                 )
@@ -2939,6 +2976,12 @@ class LAPDSim1D:
             run_start=run_start,
             timestep_rejection_events=timestep_rejection_events,
         )
+        if self._max_steps_action == "stop":
+            # Only the opt-in path carries the attribute so default results
+            # (and their saved HDF5 files) are byte-identical to before.
+            result.run_status = (
+                "max_steps_reached" if max_steps_stopped else "completed"
+            )
         self._last_result = result
         return result
 
@@ -3309,6 +3352,7 @@ class LAPDSim1D:
                 self._ion_neutral_drag_kwargs() if plasma_enabled else None
             ),
             plasma_source_rhs=plasma_source_rhs,
+            source_floor_exempt_rtol=self._surface_loss_floor_exempt_rtol,
             cfl=float(self._input_dict.get("cfl", 0.4)),
             density_dt_fraction=float(
                 self._input_dict.get("density_dt_fraction", 0.25)

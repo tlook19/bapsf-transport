@@ -65,6 +65,7 @@ def suggest_timestep(
     heat_conduction_kwargs=None,
     ion_neutral_drag_kwargs=None,
     plasma_source_rhs=None,
+    source_floor_exempt_rtol=None,
     cfl=0.4,
     density_dt_fraction=0.25,
     neutral_dt_fraction=0.25,
@@ -118,6 +119,7 @@ def suggest_timestep(
             floors=floors,
             fraction=density_dt_fraction,
             plasma_active=plasma_active,
+            floor_exempt_rtol=source_floor_exempt_rtol,
         ),
         "neutral_exchange": neutral_exchange_timestep(
             state=state,
@@ -247,6 +249,7 @@ def plasma_source_timestep(
     floors,
     fraction=0.25,
     plasma_active=None,
+    floor_exempt_rtol=None,
 ):
     """Bound resolved plasma sources against density/temperature floors.
 
@@ -254,6 +257,18 @@ def plasma_source_timestep(
     including the change in the floor energy when ``n`` changes:
 
     ``d(E - 3/2 n T_floor)/dt = dE/dt - 3/2 T_floor dn/dt``.
+
+    ``floor_exempt_rtol`` (default ``None`` = historical behavior) is the
+    floor-aware drain exemption for the energy channels: a cell whose energy
+    margin above its floor is at most ``floor_exempt_rtol`` times the per-cell
+    floor energy ``3/2 n T_floor`` is excluded from THIS bound. Rationale: the
+    accept-time floor clip resets a floor-pinned cell's margin to float
+    residue every step, so a persistent drain re-trips this bound forever and
+    pins dt at dt_min while the floor (not this bound) is what actually holds
+    the cell. The exemption is one-sided (this drain bound only; every other
+    bound still governs the cell) and knife-edge (recomputed from the current
+    margin each call, no hysteresis: any margin above the threshold re-admits
+    the cell immediately). The density channel is never exempted.
     """
     if source_rhs is None:
         return np.inf
@@ -280,12 +295,23 @@ def plasma_source_timestep(
         floor_energy_per_particle = (
             1.5 * float(floors[floor_name]) * ev_to_erg
         )
+        margin = energy - floor_energy_per_particle * n
+        channel_active = active
+        if floor_exempt_rtol is not None:
+            # Floor-pinned exemption: exclude cells sitting (to within the
+            # relative threshold) at the per-cell floor energy. Exempted
+            # cells cannot set dt_surface_loss, so an exempted cell is never
+            # reported as this bound's active constraint.
+            channel_active = active & (
+                margin
+                > float(floor_exempt_rtol) * floor_energy_per_particle * n
+            )
         candidates.append(
             _negative_margin_timestep(
-                energy - floor_energy_per_particle * n,
+                margin,
                 denergy - floor_energy_per_particle * dn,
                 fraction,
-                active,
+                channel_active,
             )
         )
     return float(min(candidates))

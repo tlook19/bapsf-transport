@@ -1253,6 +1253,37 @@ def timestep_defaults():
         Maximum allowed timestep [s].
     max_steps:
         Maximum accepted timesteps for a run. Zero means unlimited.
+    max_steps_action:
+        What ``run()`` does when ``max_steps`` is reached before ``t_end``.
+        ``"raise"`` (default, historical behavior) raises RuntimeError and the
+        in-progress trajectory is lost; ``"stop"`` ends the run cleanly and
+        returns the partial trajectory with ``run_status =
+        "max_steps_reached"`` (a completed opt-in run carries ``run_status =
+        "completed"``) so the caller can inspect and save it.
+    surface_loss_floor_exempt_rtol:
+        Relative threshold for the floor-aware drain exemption on the
+        "surface_loss" (resolved electrode/source bundle) timestep bound,
+        active only when the ``surface_loss_floor_exempt`` flag is on. A cell
+        whose electron (ion) energy margin above the per-cell floor energy
+        ``3/2 n Te_floor`` (``3/2 n Ti_floor``) is at most this fraction OF
+        that floor energy is excluded from the drain-margin bound: the
+        accept-time floor clip re-pins the cell every step while the sink
+        keeps draining, so the bound re-trips forever and dt collapses (the
+        diagnosed afterglow crawl). The threshold is relative to the floor
+        energy, not an absolute magnitude. Scale rationale (measured on the
+        es1_r5_f01_ag26ms.h5 crawl state, 22.335 ms, boundary cell 2): a
+        pinned cell HOVERS at a small positive relative margin -- the clip
+        plus one step of re-heating residue, ~5e-6 relative there, not float
+        round-off -- while every healthy drained cell sampled across the
+        drive and afterglow sits at >= ~2e1 relative. The default 1e-3
+        splits those scales by >2 decades on each side; physically it means
+        Te within 0.1% of Te_floor, far below any meaningful margin. A cell
+        whose drain dominates its heating self-drives its hover margin below
+        any fixed threshold within a few steps (hover ~ heating*dt shrinks
+        with dt), so the exemption engages exactly for genuinely pinned
+        cells. Readmission is knife-edge: any margin above the threshold
+        re-admits the cell immediately (no hysteresis). Must be in (0, 1)
+        when the flag is on.
     adaptive_retries_enabled:
         Enables retrying a rejected step with a smaller timestep.
     max_step_retries:
@@ -1283,6 +1314,8 @@ def timestep_defaults():
         "dt_min": 1e-10,
         "dt_max": 1e-4,
         "max_steps": 0,
+        "max_steps_action": "raise",
+        "surface_loss_floor_exempt_rtol": 1e-3,
         "adaptive_retries_enabled": True,
         "max_step_retries": 8,
         "dt_reject_factor": 0.5,
@@ -1480,6 +1513,16 @@ input_flags_template_1d = {
     # a miss (new neutral-flow config) equilibrates once and stores it. See
     # core/neutral_seed_cache.py and scripts/build_neutral_seed_cache.py.
     "use_cached_neutral_seed": False,
+    # Floor-aware drain exemption on the "surface_loss" timestep bound
+    # (afterglow dt-collapse fix, 2026-07-26): cells pinned at the Te/Ti floor
+    # (energy margin within surface_loss_floor_exempt_rtol of the per-cell
+    # floor energy) are excluded from the drain-margin bound ONLY -- the
+    # accept-time floor clip resets their margin to float residue every step,
+    # so a persistent drain otherwise pins dt at dt_min indefinitely. One-sided
+    # (all other bounds still govern the cell) and knife-edge (any real margin
+    # re-admits the cell immediately). Default OFF: the off path is bit-exact
+    # historical behavior (golden unaffected).
+    "surface_loss_floor_exempt": False,
     "ionization_energy_cost": True,
     "icool": True,
     "ncool": True,
