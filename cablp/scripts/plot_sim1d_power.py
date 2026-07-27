@@ -45,7 +45,11 @@ current-resolved circuit power ledger (R3.2 / audit A16, see
   losses (with the same Coulomb transfer shown as the heating-source context
   bar, excluded from the loss total).
 * ``<stem>_breakout``   -- percent contributions WITHIN the radiation group
-  and WITHIN the surface/sheath group.
+  and WITHIN the surface/sheath group. As of v6 the radiation panel covers
+  ALL radiated light -- line radiation from ions AND from neutrals, plus
+  recombination and beam-excitation radiation -- so its denominator is the
+  complete radiated bank rather than the power figure's "radiation" grouping
+  (which draws the neutral line separately for time-series legibility).
 
 A channel-to-``b_Q*``-name dictionary for the treacherously named cooling
 channels (``ei_exchange`` / ``electron_ion_cooling`` /
@@ -316,7 +320,7 @@ OHMIC_REFERENCE_HATCH = "///"
 # span); all three are printed and drawn side by side in <stem>_beam_windows.
 #
 # KNEE DETECTOR -- THE configuration point, nothing about it is hardcoded in
-# plot logic. Definition (chosen 2026-07-27, subject to Tom's confirmation):
+# plot logic. Definition CONFIRMED by Tom 2026-07-27 (no longer provisional):
 #
 #   plateau level  = median of the boxcar-smoothed discharge current I_tot
 #                    over the trailing `plateau_window_frac` of
@@ -324,16 +328,34 @@ OHMIC_REFERENCE_HATCH = "///"
 #   knee time      = the FIRST active sample at or after t_breakdown where
 #                    the smoothed I_tot reaches `knee_frac` * plateau level
 #
-# `plateau_window_frac = 1.0` is the literal "plateau median after
-# breakdown"; shrinking it toward 0 measures the level on the true plateau
-# instead (which raises the level, and so delays the knee). Smoothing is
-# applied so a single rippled sample cannot set the knee; on
+# `plateau_window_frac = 0.25` is the CHOSEN value (Tom, 2026-07-27),
+# replacing the provisional 1.0. The choice is made on the requirement that
+# the detector MEAN THE SAME THING on the measured trace and on the model
+# trace, which is what makes a model-vs-experiment knee comparison legitimate:
+#
+#   * On the MEASURED ES1 current the knee is frac-INSENSITIVE below ~0.5 --
+#     4.12 ms at frac=0.5 vs 4.16 ms at frac=0.25, breakdown-aligned. The
+#     experimental plateau is genuinely flat, so its median does not care how
+#     much of the trailing window is averaged.
+#   * On the MODEL trace it is not insensitive: a late thermal ramp keeps
+#     lifting the current after the knee, so a frac=1.0 median averages that
+#     ramp in, LOWERS the plateau level, lowers the 0.90 threshold, and drags
+#     the detected knee early (measured on es1_r5_f01_floorfix_26ms:
+#     5.16 ms at frac=1.0 vs 6.40 ms at frac=0.25, plateau 2831.8 A vs
+#     2951.9 A).
+#
+# frac=0.25 is therefore the regime where both traces are read off their true
+# plateaus and the comparison is like-for-like. Evidence figures (main
+# checkout scripts/): es1_r5_f01_floorfix_knee_sensitivity.* and
+# es1_r5_f01_floorfix_knee_vs_es1.*.
+#
+# Smoothing is applied so a single rippled sample cannot set the knee; on
 # es1_r5_f01_ag26ms the knee moves by 0.01 ms between raw and smoothed.
 # -----------------------------------------------------------------------------
 KNEE_DETECT = {
-    "smooth_ms": 0.2,           # boxcar applied to I_tot before detection
-    "plateau_window_frac": 1.0,  # trailing fraction of [breakdown, drive end]
-    "knee_frac": 0.90,          # fraction of the plateau level defining the knee
+    "smooth_ms": 0.2,            # boxcar applied to I_tot before detection
+    "plateau_window_frac": 0.25,  # trailing fraction of [breakdown, drive end]
+    "knee_frac": 0.90,           # fraction of the plateau level defining the knee
 }
 WINDOW_KEYS = ("a_launch_to_breakdown", "b_breakdown_to_knee",
                "c_knee_to_drive_end")
@@ -564,17 +586,42 @@ PLASMA_FLOOR_W = 10.0  # activity/axis floor for the loss panel [W]
 # a sub-component of one plasma-book group; percentages are of the group's
 # own energy-integrated total over the main-discharge window.
 RADIATION_BREAKOUT = {
-    # Membership is UNCHANGED from v3 (only the label is new): this panel
-    # normalizes the same "radiation" group the power figure draws, and
-    # "line radiation (neutrals)" is a separate group there by v3
-    # construction, so it is deliberately not folded in here.
+    # v6 MEMBERSHIP CHANGE (Tom confirmed, 2026-07-27): "line radiation
+    # (neutrals)" is now FOLDED IN, so this panel is ALL radiated light --
+    # ions + recombination + beam excitation + neutrals. Through v5 it was
+    # deliberately excluded, on the grounds that the power figure draws
+    # electron_neutral_cooling as its own PLASMA_LOSS_GROUPS line rather than
+    # inside the "radiation" group. That grouping is a drawing choice about
+    # which lines stay separable in the time-series panel; it is not a claim
+    # that He0 light is not radiation. Per the channel dictionary above BOTH
+    # *_cooling channels are line radiation and differ only in the collision
+    # partner, so a panel labeled "% of radiation losses" that omitted one of
+    # the two was normalizing against an incomplete denominator.
+    #
+    # Consequence for reading v5 numbers next to v6 ones: the DENOMINATOR
+    # grows (neutrals dominate it -- He0 light is ~5x the He+ line radiation
+    # on es1_r5_csda_demo6ms), so every pre-existing bar's percentage drops.
+    # Their proportions RELATIVE TO EACH OTHER are untouched, since no term
+    # moved into or out of the other three entries.
     "line radiation (ions)": {
         "terms": ("electron_ion_cooling",), "color": "#0072B2"},
     "recombination radiation": {
         "terms": ("recombination_rad_loss", "recombination_3b_loss"),
         "color": "#56B4E9"},
+    # v6 RECOLOR, forced by the fold-in: #CC79A7 is the established
+    # cross-figure identity of "line radiation (neutrals)" (PLASMA_LOSS_GROUPS,
+    # THERMAL_BUDGET and _LOSS_COLORS all use it for that channel), so the two
+    # entries would have collided in this panel. The neutral line keeps the
+    # color; beam excitation moves to #F0E442, which is the one Okabe-Ito
+    # color used by NEITHER panel of this figure and is already
+    # beam_excitation_radiation's color in BEAM_THERMAL_CHANNELS -- so the
+    # recolor also makes that channel more self-consistent across figures,
+    # not less. (BEAM_FATE still draws it #CC79A7 in the efficiency figure;
+    # that pre-existing inconsistency is out of scope here.)
     "beam excitation radiation": {
-        "terms": ("beam_excitation_radiation",), "color": "#CC79A7"},
+        "terms": ("beam_excitation_radiation",), "color": "#F0E442"},
+    "line radiation (neutrals)": {
+        "terms": ("electron_neutral_cooling",), "color": "#CC79A7"},
 }
 SURFACE_BREAKOUT = {
     # v5: cathode_surface_loss is the ELECTRODE SHEATH electron power, 2Te per
