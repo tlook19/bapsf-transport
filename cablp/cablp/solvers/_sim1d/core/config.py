@@ -1267,17 +1267,23 @@ def timestep_defaults():
         whose electron (ion) energy margin above the per-cell floor energy
         ``3/2 n Te_floor`` (``3/2 n Ti_floor``) is at most this fraction OF
         that floor energy is excluded from the drain-margin bound: the
-        accept-time floor clip resets a pinned cell's margin to float residue
-        every step, so a persistent drain otherwise re-trips the bound and
-        pins dt at dt_min indefinitely (the diagnosed afterglow crawl). The
-        threshold is relative to the floor energy, not an absolute magnitude:
-        measured pin margins are <= ~1e-13 erg/cm^3 against floor energies
-        >= ~2.4e-5 erg/cm^3 (n >= ne_floor at Te_floor = 0.1 eV), i.e.
-        <= ~4e-9 relative, so the default 1e-6 has ~3 decades of headroom
-        over clip residue while staying ~6 decades below any order-unity
-        physical margin. Readmission is knife-edge: any margin above the
-        threshold re-admits the cell immediately (no hysteresis). Must be in
-        (0, 1) when the flag is on.
+        accept-time floor clip re-pins the cell every step while the sink
+        keeps draining, so the bound re-trips forever and dt collapses (the
+        diagnosed afterglow crawl). The threshold is relative to the floor
+        energy, not an absolute magnitude. Scale rationale (measured on the
+        es1_r5_f01_ag26ms.h5 crawl state, 22.335 ms, boundary cell 2): a
+        pinned cell HOVERS at a small positive relative margin -- the clip
+        plus one step of re-heating residue, ~5e-6 relative there, not float
+        round-off -- while every healthy drained cell sampled across the
+        drive and afterglow sits at >= ~2e1 relative. The default 1e-3
+        splits those scales by >2 decades on each side; physically it means
+        Te within 0.1% of Te_floor, far below any meaningful margin. A cell
+        whose drain dominates its heating self-drives its hover margin below
+        any fixed threshold within a few steps (hover ~ heating*dt shrinks
+        with dt), so the exemption engages exactly for genuinely pinned
+        cells. Readmission is knife-edge: any margin above the threshold
+        re-admits the cell immediately (no hysteresis). Must be in (0, 1)
+        when the flag is on.
     adaptive_retries_enabled:
         Enables retrying a rejected step with a smaller timestep.
     max_step_retries:
@@ -1309,7 +1315,7 @@ def timestep_defaults():
         "dt_max": 1e-4,
         "max_steps": 0,
         "max_steps_action": "raise",
-        "surface_loss_floor_exempt_rtol": 1e-6,
+        "surface_loss_floor_exempt_rtol": 1e-3,
         "adaptive_retries_enabled": True,
         "max_step_retries": 8,
         "dt_reject_factor": 0.5,

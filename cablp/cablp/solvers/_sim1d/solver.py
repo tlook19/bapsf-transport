@@ -762,7 +762,7 @@ class LAPDSim1D:
             self._flags.get("surface_loss_floor_exempt", False)
         )
         _surface_loss_floor_exempt_rtol = float(
-            self._input_dict.get("surface_loss_floor_exempt_rtol", 1e-6)
+            self._input_dict.get("surface_loss_floor_exempt_rtol", 1e-3)
         )
         if _surface_loss_floor_exempt and not (
             0.0 < _surface_loss_floor_exempt_rtol < 1.0
