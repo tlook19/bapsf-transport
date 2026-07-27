@@ -40,6 +40,7 @@ from cablp.solvers._sim1d.physics.energy import (
 from cablp.solvers._sim1d.physics.flux import front_filling_fluxes
 from cablp.solvers._sim1d.core.integrator import ssprk2_step
 from cablp.solvers._sim1d.core.geometry import (
+    _source_fixed_grid_spec,
     anode_flanking_cells,
     cathode_adjacent_cells,
     is_plenum_cell,
@@ -426,6 +427,180 @@ def main():
             assert expected in str(exc)
         else:
             raise AssertionError("invalid neutral-baffle configuration constructed")
+
+    # Fixed-cell-size source region (default-off ``source_fixed_grid``). Without
+    # it, nx uniform column cells span anode face to collector start, so a
+    # refinement study moves every near-source cell edge -- including the puff
+    # cell, whose centre anchors the default cosine puff profile. With it on the
+    # column from the anode face (50 cm) to source_region_length_cm is meshed at
+    # exactly source_region_dz_cm regardless of nx, and the puff role follows
+    # gas_puff_z_cm.
+    #
+    # (d) The production default takes NO new branch: flag off, both keys None,
+    # and the spec helper returns None for the resolved default config.
+    assert not resolved_flags["source_fixed_grid"]
+    assert resolved_params["source_region_length_cm"] is None
+    assert resolved_params["source_region_dz_cm"] is None
+    assert (
+        _source_fixed_grid_spec(
+            resolved_params,
+            resolved_flags,
+            gap_length=resolved_params["cathode_anode_gap_cm"],
+            total_length=resolved_params["Lm"],
+            collector_length=resolved_params["collector_length_cm"],
+            twin=False,
+        )
+        is None
+    )
+
+    srcgrid_flags = {**resolved_flags, "source_fixed_grid": True}
+
+    def _srcgrid_params(nx):
+        params = dict(resolved_params)
+        params.update(
+            {
+                "nx": nx,
+                "source_region_length_cm": 100.0,
+                "source_region_dz_cm": 10.0,
+                "gas_puff_z_cm": 60.0,
+            }
+        )
+        return params
+
+    def _srcgrid_geometry(nx):
+        return (
+            LAPDSim1D(_srcgrid_params(nx), srcgrid_flags)
+            .get_initial_snapshot()
+            .geometry
+        )
+
+    # (a) Feature-on mesh at the production intent: 50 cm gap, a 50 cm source
+    # region in five 10 cm cells, puff pipe at 60 cm.
+    srcgrid_geom = _srcgrid_geometry(60)
+    (srcgrid_cathode_face,) = srcgrid_geom.cathode_face_indices
+    (srcgrid_anode_face,) = srcgrid_geom.anode_face_indices
+    srcgrid_n_fixed = 5
+    srcgrid_region_end_face = srcgrid_anode_face + srcgrid_n_fixed
+    # Anode face and region end land EXACTLY on cell edges (not merely close).
+    assert srcgrid_geom.z_edges_cm[srcgrid_cathode_face] == 0.0
+    assert srcgrid_geom.z_edges_cm[srcgrid_anode_face] == 50.0
+    assert srcgrid_geom.z_edges_cm[srcgrid_region_end_face] == 100.0
+    assert np.all(
+        srcgrid_geom.length_cm[srcgrid_anode_face:srcgrid_region_end_face] == 10.0
+    )
+    # nx meshes only the far column, from the region end to the collector.
+    assert srcgrid_geom.cells == resolved_geom.cells + srcgrid_n_fixed
+    srcgrid_puff, srcgrid_puff_twin = puff_cell_indices(srcgrid_geom)
+    assert srcgrid_puff == srcgrid_puff_twin
+    # The puff role went to the fixed-region cell CONTAINING 60 cm, not the
+    # first column cell -- which is now plain column.
+    assert srcgrid_puff == srcgrid_anode_face + 1
+    assert srcgrid_geom.cell_role[srcgrid_anode_face] == "column"
+    assert srcgrid_geom.z_edges_cm[srcgrid_puff] <= 60.0
+    assert srcgrid_geom.z_edges_cm[srcgrid_puff + 1] > 60.0
+    assert list(srcgrid_geom.cell_role).count("puff") == 1
+
+    # (b) nx-invariance: doubling nx must not move a single edge at or inside
+    # the source region, and must not move the puff cell.
+    srcgrid_geom_2x = _srcgrid_geometry(120)
+    srcgrid_puff_2x, _ = puff_cell_indices(srcgrid_geom_2x)
+    assert srcgrid_puff_2x == srcgrid_puff
+    for _edges in (srcgrid_geom.z_edges_cm, srcgrid_geom_2x.z_edges_cm):
+        assert _edges[srcgrid_region_end_face + 1] > 100.0
+    srcgrid_inside = srcgrid_geom.z_edges_cm[
+        srcgrid_cathode_face : srcgrid_region_end_face + 1
+    ]
+    srcgrid_inside_2x = srcgrid_geom_2x.z_edges_cm[
+        srcgrid_cathode_face : srcgrid_region_end_face + 1
+    ]
+    # Exact float equality, not allclose: this is the whole point of the mode.
+    assert np.array_equal(srcgrid_inside, srcgrid_inside_2x)
+    assert np.array_equal(
+        srcgrid_geom.z_edges_cm[
+            (srcgrid_geom.z_edges_cm >= 0.0) & (srcgrid_geom.z_edges_cm <= 100.0)
+        ],
+        srcgrid_geom_2x.z_edges_cm[
+            (srcgrid_geom_2x.z_edges_cm >= 0.0)
+            & (srcgrid_geom_2x.z_edges_cm <= 100.0)
+        ],
+    )
+    assert (
+        srcgrid_geom.z_edges_cm[srcgrid_puff]
+        == srcgrid_geom_2x.z_edges_cm[srcgrid_puff_2x]
+    )
+    assert (
+        srcgrid_geom.z_edges_cm[srcgrid_puff + 1]
+        == srcgrid_geom_2x.z_edges_cm[srcgrid_puff_2x + 1]
+    )
+
+    # (c) Every misconfiguration raises loudly at construction; none falls back.
+    srcgrid_twin_params = _srcgrid_params(60)
+    srcgrid_twin_params["collector_length_cm"] = 100.0
+    for bad_params, bad_flags, expected in (
+        (
+            {**_srcgrid_params(60), "source_region_length_cm": None},
+            srcgrid_flags,
+            "requires all source region parameters",
+        ),
+        (
+            {**_srcgrid_params(60), "source_region_dz_cm": None},
+            srcgrid_flags,
+            "requires all source region parameters",
+        ),
+        (
+            _srcgrid_params(60),
+            resolved_flags,
+            "require the default-off",
+        ),
+        (
+            {**resolved_params, "source_region_dz_cm": 10.0},
+            resolved_flags,
+            "require the default-off",
+        ),
+        (
+            {**_srcgrid_params(60), "source_region_length_cm": 50.0},
+            srcgrid_flags,
+            "strictly beyond the anode face",
+        ),
+        (
+            {**_srcgrid_params(60), "source_region_length_cm": 1900.0},
+            srcgrid_flags,
+            "strictly before the collector",
+        ),
+        (
+            {**_srcgrid_params(60), "source_region_dz_cm": 7.0},
+            srcgrid_flags,
+            "integer number of",
+        ),
+        (
+            {**_srcgrid_params(60), "gas_puff_z_cm": None},
+            srcgrid_flags,
+            "requires an explicit gas_puff_z_cm",
+        ),
+        (
+            {**_srcgrid_params(60), "gas_puff_z_cm": 40.0},
+            srcgrid_flags,
+            "gas_puff_z_cm must lie in",
+        ),
+        (
+            {**_srcgrid_params(60), "gas_puff_z_cm": 100.0},
+            srcgrid_flags,
+            "gas_puff_z_cm must lie in",
+        ),
+        (
+            srcgrid_twin_params,
+            {**srcgrid_flags, "TwinCathode": True},
+            "single-cathode layout",
+        ),
+    ):
+        try:
+            LAPDSim1D(bad_params, bad_flags)
+        except ValueError as exc:
+            assert expected in str(exc), (expected, str(exc))
+        else:
+            raise AssertionError(
+                "invalid source_fixed_grid configuration constructed"
+            )
 
     expansion_params = dict(resolved_params)
     expansion_params.update(

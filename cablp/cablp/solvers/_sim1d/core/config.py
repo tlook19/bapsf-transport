@@ -53,7 +53,9 @@ def geometry_defaults():
     Lm:
         Total machine length represented by the 1D mesh [cm].
     nx:
-        Number of resolved column cells between anode and collector.
+        Number of resolved column cells between anode and collector. With the
+        default-off ``source_fixed_grid`` flag on it counts only the *far*
+        column cells, between the source region end and the collector.
     Rm:
         Default neutral/machine radius [cm].
     Rp:
@@ -106,6 +108,18 @@ def geometry_defaults():
         Clear aperture radii [cm] for ``neutral_baffle_positions_cm``. Each
         aperture must leave the local plasma channel fully open and lie inside
         the local vessel radius. A scalar or sequence is accepted.
+    source_region_length_cm:
+        End of the fixed-cell-size source region [cm, measured from the cathode
+        surface]; the region runs from the anode face at ``cathode_anode_gap_cm``
+        to here and must lie strictly between the anode face and the collector
+        block (``Lm - collector_length_cm``). ``None`` when off. Requires the
+        default-off ``source_fixed_grid`` flag. Production intent is 100.0, an
+        interim geometry pending CAD.
+    source_region_dz_cm:
+        Cell size [cm] inside that source region, held fixed independently of
+        ``nx``; the region length minus the anode gap must be an integer
+        multiple of it (1e-9 relative tolerance). ``None`` when off. Requires
+        the default-off ``source_fixed_grid`` flag.
     """
     return {
         "Lm": 2000.0,
@@ -126,6 +140,8 @@ def geometry_defaults():
         "end_expansion_plasma_radius_cm": None,
         "neutral_baffle_positions_cm": None,
         "neutral_baffle_clear_radii_cm": None,
+        "source_region_length_cm": None,
+        "source_region_dz_cm": None,
     }
 
 
@@ -1378,6 +1394,15 @@ input_flags_template_1d = {
     # CAD-pending thin annular apertures. Positions and clear radii are required
     # together when on and forbidden when off; the plasma channel stays open.
     "neutral_baffles": False,
+    # Fixed-cell-size source region, so a mesh refinement study is not
+    # self-confounding: the column between the anode face and
+    # source_region_length_cm is meshed at exactly source_region_dz_cm
+    # regardless of nx, which then refines only the far column, and the puff
+    # role follows gas_puff_z_cm instead of the first column cell. Presence
+    # gated in core.geometry in both directions (both parameters required when
+    # on, forbidden when off) and incompatible with TwinCathode. Default OFF;
+    # the production geometry is structurally untouched and bit-exact off.
+    "source_fixed_grid": False,
     "heat_conduction": True,
     "implicit_heat_conduction": True,
     # R5.2 / audit A9 (2026-07-25): flux-limited electron heat conduction. The

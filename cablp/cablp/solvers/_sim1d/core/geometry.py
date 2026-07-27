@@ -241,6 +241,12 @@ def _build_resolved_geometry(input_dict, flags):
     The annular cathode-structure obstruction is a *real cell* of length ``Lcs``
     (plan §11 decision 1), so it holds gas and its inventory reaches the pump. It
     is omitted entirely when ``Lcs <= 0``, which is the legacy limit.
+
+    The default-off ``source_fixed_grid`` flag replaces the uniform column with a
+    fixed-cell source region plus an ``nx``-refined far column, so a refinement
+    study no longer moves the near-source cell edges (see
+    ``_source_fixed_grid_spec``). With it on, ``nx`` counts the far-column cells
+    only and the ``puff`` role follows ``gas_puff_z_cm``.
     """
     nx = int(input_dict.get("nx", 60))
     nx_gap = int(input_dict.get("nx_gap", 5))
@@ -298,10 +304,36 @@ def _build_resolved_geometry(input_dict, flags):
             f"(column_length={column_length} cm, Lm={total_length} cm)"
         )
 
-    column_roles = ["puff"] + ["column"] * (nx - 1)
-    if twin:
-        column_roles[-1] = "puff"
-    column_lengths = [column_length / nx] * nx
+    source_grid = _source_fixed_grid_spec(
+        input_dict,
+        flags,
+        gap_length=gap_length,
+        total_length=total_length,
+        collector_length=collector_length,
+        twin=twin,
+    )
+    if source_grid is None:
+        column_roles = ["puff"] + ["column"] * (nx - 1)
+        if twin:
+            column_roles[-1] = "puff"
+        column_lengths = [column_length / nx] * nx
+    else:
+        # Fixed-cell source region: the first ``n_fixed`` column cells have a
+        # prescribed length independent of ``nx``, which then meshes only the
+        # remaining far column. The puff role follows gas_puff_z_cm rather than
+        # the first column cell, so the fueling centre stops moving with nx.
+        n_fixed = source_grid["cells"]
+        outer_length = column_length - source_grid["span_cm"]
+        if outer_length <= 0.0:
+            raise ValueError(
+                "source_fixed_grid leaves no far column between the source "
+                f"region and the collector (outer_length={outer_length} cm)"
+            )
+        column_roles = ["column"] * (n_fixed + nx)
+        column_roles[source_grid["puff_offset"]] = "puff"
+        column_lengths = [source_grid["dz_cm"]] * n_fixed + [
+            outer_length / nx
+        ] * nx
 
     roles = behind_roles + gap_roles + column_roles
     lengths = behind_lengths + gap_lengths + column_lengths
@@ -448,6 +480,107 @@ def _build_resolved_geometry(input_dict, flags):
         ),
         plasma_face_area_override=plasma_face_area_override,
     )
+
+
+def _source_fixed_grid_spec(
+    input_dict, flags, *, gap_length, total_length, collector_length, twin
+):
+    """Validate and return the optional fixed-cell source-region specification.
+
+    Resolution studies on the default mesh are self-confounding: ``nx`` uniform
+    column cells span anode face to collector start, so refining ``nx`` moves
+    every cell edge -- including the puff cell, whose centre anchors the default
+    cosine puff profile. This default-off mode pins the column between the anode
+    face and ``source_region_length_cm`` to cells of exactly
+    ``source_region_dz_cm``, leaving ``nx`` to refine only the far column.
+
+    Presence-gated in both directions (the ``input_dict`` / ``input_flags``
+    silent-namespace trap): the two parameters are required when the flag is on
+    and forbidden when it is off. Returns ``None`` when off, which is the only
+    path the production geometry takes.
+    """
+    keys = ("source_region_length_cm", "source_region_dz_cm")
+    raw = {key: input_dict.get(key) for key in keys}
+    provided = {key: value is not None for key, value in raw.items()}
+    enabled = bool(flags.get("source_fixed_grid", False))
+    if not enabled:
+        stale = [key for key, present in provided.items() if present]
+        if stale:
+            raise ValueError(
+                "source region parameters require the default-off "
+                "source_fixed_grid flag: " + ", ".join(stale)
+            )
+        return None
+    missing = [key for key, present in provided.items() if not present]
+    if missing:
+        raise ValueError(
+            "source_fixed_grid requires all source region parameters; missing "
+            + ", ".join(missing)
+        )
+    if twin:
+        raise ValueError(
+            "source_fixed_grid is defined only for the single-cathode layout; "
+            "mirroring the fixed source region onto a TwinCathode end is not "
+            "implemented"
+        )
+
+    region_length = float(raw["source_region_length_cm"])
+    dz = float(raw["source_region_dz_cm"])
+    if not np.isfinite(region_length) or not np.isfinite(dz) or dz <= 0.0:
+        raise ValueError(
+            "source_region_length_cm and source_region_dz_cm must be finite "
+            f"with a positive cell size (got {region_length}, {dz})"
+        )
+    if region_length <= gap_length:
+        raise ValueError(
+            "source_region_length_cm must lie strictly beyond the anode face "
+            f"(got {region_length} cm vs cathode_anode_gap_cm={gap_length} cm)"
+        )
+    column_end = total_length - collector_length
+    if region_length >= column_end:
+        raise ValueError(
+            "source_region_length_cm must lie strictly before the collector "
+            f"block (got {region_length} cm vs Lm - collector_length_cm = "
+            f"{column_end} cm)"
+        )
+
+    span = region_length - gap_length
+    cells_float = span / dz
+    cells = int(round(cells_float))
+    if cells < 1 or abs(cells_float - cells) > 1e-9 * max(cells_float, 1.0):
+        raise ValueError(
+            "the source region must be an integer number of "
+            f"source_region_dz_cm cells (got {span} cm / {dz} cm = "
+            f"{cells_float})"
+        )
+
+    puff_z = input_dict.get("gas_puff_z_cm")
+    if puff_z is None:
+        raise ValueError(
+            "source_fixed_grid requires an explicit gas_puff_z_cm: the puff "
+            "role follows the fueling position instead of the first column "
+            "cell, so it cannot be left to the mesh"
+        )
+    puff_z = float(puff_z)
+    if not gap_length <= puff_z < region_length:
+        raise ValueError(
+            "gas_puff_z_cm must lie in [cathode_anode_gap_cm, "
+            f"source_region_length_cm) (got {puff_z} cm, region "
+            f"[{gap_length}, {region_length}) cm)"
+        )
+    offset = int(np.floor((puff_z - gap_length) / dz))
+    if not 0 <= offset < cells:
+        raise ValueError(
+            f"gas_puff_z_cm={puff_z} cm maps outside the fixed source region "
+            f"cells (offset {offset} of {cells})"
+        )
+    return {
+        "cells": cells,
+        "dz_cm": dz,
+        "span_cm": span,
+        "region_length_cm": region_length,
+        "puff_offset": offset,
+    }
 
 
 def _end_expansion_spec(input_dict, flags, *, twin):
