@@ -1,3 +1,4 @@
+import dataclasses
 import json
 from io import StringIO
 from pathlib import Path
@@ -27,6 +28,7 @@ from cablp.solvers._sim1d.physics.conduction import (
     implicit_heat_conduction_step,
 )
 from cablp.solvers._sim1d.physics.cathode import (
+    _beam_smoothing_key,
     _beam_smoothing_matrix,
     beam_absorption_weights,
     beam_launch,
@@ -2565,6 +2567,77 @@ def main():
             # ...and the kernel is not quietly the identity: it MOVED the
             # deposit, so the conservation above is a real statement.
             assert not np.allclose(on_row, off_row), (mesh_label, smooth_term)
+
+    # --- The smoothing-matrix cache is keyed on geometry CONTENT, not address.
+    # ``id(geometry)`` is unique only among LIVE objects: CPython reuses the
+    # address of a collected geometry, so a freed mesh followed by a
+    # differently meshed allocation at the same address used to return the OLD
+    # mesh's matrix. A cell-count mismatch would raise at the matmul; the
+    # silent case is two meshes with the SAME cell count and different
+    # positions -- exactly what an nx-matched source_region_dz_cm refinement
+    # sweep builds.
+    smoothkey_flags = {**cathode_flags, "source_fixed_grid": True}
+    smoothkey_base = dict(
+        csda_params,
+        source_region_length_cm=100.0,
+        gas_puff_z_cm=60.0,
+    )
+
+    def _smoothkey_geometry(dz_cm, nx):
+        sim = LAPDSim1D(
+            dict(smoothkey_base, source_region_dz_cm=dz_cm, nx=nx),
+            smoothkey_flags,
+        )
+        return sim.get_initial_snapshot().geometry
+
+    # Halving the fixed source cell size doubles the fixed-region cells; nx is
+    # cut by the same amount so the two meshes have IDENTICAL cell counts.
+    smoothkey_geom_a = _smoothkey_geometry(10.0, 40)
+    smoothkey_geom_b = _smoothkey_geometry(5.0, 35)
+    smoothkey_geom_a2 = _smoothkey_geometry(10.0, 40)
+    # Premises: same cell count, genuinely different meshes, distinct objects.
+    assert smoothkey_geom_a.length_cm.size == smoothkey_geom_b.length_cm.size, (
+        smoothkey_geom_a.length_cm.size,
+        smoothkey_geom_b.length_cm.size,
+    )
+    assert not np.array_equal(smoothkey_geom_a.z_cm, smoothkey_geom_b.z_cm)
+    assert smoothkey_geom_a is not smoothkey_geom_a2
+    assert smoothkey_geom_a.length_cm.size == smoothkey_geom_a2.length_cm.size
+
+    # (a)/(c) The regression: same cells, different spacing must NOT alias.
+    assert _beam_smoothing_key(
+        smoothkey_geom_a, smooth_sigma_cm
+    ) != _beam_smoothing_key(smoothkey_geom_b, smooth_sigma_cm)
+    smoothkey_W_a = _beam_smoothing_matrix(smoothkey_geom_a, smooth_sigma_cm)
+    smoothkey_W_b = _beam_smoothing_matrix(smoothkey_geom_b, smooth_sigma_cm)
+    assert smoothkey_W_a is not smoothkey_W_b
+    assert not np.allclose(smoothkey_W_a, smoothkey_W_b)
+
+    # (b) The cache still caches: two DISTINCT geometry objects with identical
+    # content share the single O(cells^2) build. Guards the performance
+    # property -- a key that accidentally never hits would run the build on
+    # every RHS evaluation.
+    smoothkey_W_a2 = _beam_smoothing_matrix(smoothkey_geom_a2, smooth_sigma_cm)
+    assert smoothkey_W_a2 is smoothkey_W_a
+
+    # The active-support term of the key is load-bearing: since the kernel is
+    # built over ``plasma_active``, two meshes agreeing in z/lengths/faces but
+    # differing in cell ROLES build different matrices and must not collide.
+    smoothkey_active = np.asarray(
+        smoothkey_geom_a.plasma_active, dtype=bool
+    ).copy()
+    smoothkey_active[-2] = not smoothkey_active[-2]
+    smoothkey_geom_roles = dataclasses.replace(
+        smoothkey_geom_a, plasma_active=smoothkey_active
+    )
+    assert _beam_smoothing_key(
+        smoothkey_geom_a, smooth_sigma_cm
+    ) != _beam_smoothing_key(smoothkey_geom_roles, smooth_sigma_cm)
+    smoothkey_W_roles = _beam_smoothing_matrix(
+        smoothkey_geom_roles, smooth_sigma_cm
+    )
+    assert smoothkey_W_roles is not smoothkey_W_a
+    assert not np.allclose(smoothkey_W_roles, smoothkey_W_a)
 
     # --- R4.2 (audit A14): ionization_birth_energy_model. Default-off ("legacy")
     # is the historical booking; "conservative" zeroes the bulk electron
