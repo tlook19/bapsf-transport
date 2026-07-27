@@ -138,6 +138,7 @@ def run_model(
     drag_closure=None,
     Rp_model=None,
     flags_extra=None,
+    t_end=None,
 ):
     params, flags = default_config()
     params.update(PARAM_OVERRIDES)
@@ -175,7 +176,11 @@ def run_model(
     if extra:
         params.update(extra)
     sim = LAPDSim1D(params, flags)
-    sim.start_simulation(t_end=None, dt=None, operator_split=None, max_steps=None)
+    # t_end=None (default) keeps the historical dynamic end time derived from
+    # the tau_* budget; an explicit t_end caps run cost WITHOUT deforming the
+    # hardware drive length (the loop terminates at t_end regardless of
+    # tau_discharge), as run_floorfix_g3g4.py already relies on.
+    sim.start_simulation(t_end=t_end, dt=None, operator_split=None, max_steps=None)
     return sim.get_results(), sim.geometry, params, flags
 
 
