@@ -7,10 +7,10 @@ current-resolved circuit power ledger (R3.2 / audit A16, see
 * ``<stem>_power``      -- the gross-outflow ledger stack with the net P_load
   line and the hatched round-trip (returned-to-circuit) slice, the measured
   closure residual |P_load - sum(ledger)| on its own axis, and the
-  plasma-book volumetric loss groups (line radiation, other radiation,
-  ionization cost, surface/sheath sinks, e-n cooling).
-* ``<stem>_efficiency`` -- a three-stage cascade over the main-discharge
-  window: source -> absorbed beam power and its fate -> thermal budget.
+  plasma-book volumetric loss groups (line radiation from ions and from
+  neutrals, other radiation, ionization cost, surface/sheath sinks).
+* ``<stem>_efficiency`` -- a three-stage cascade: source -> absorbed beam
+  power and its fate -> thermal budget.
   Stage 1: the GROSS (unnetted) circuit components against two denominators,
   shares of E_wall (includes the compliance dissipation P_comp) and shares
   of E_load, with the round trip drawn as its own hatched NEGATIVE slice so
@@ -22,15 +22,33 @@ current-resolved circuit power ledger (R3.2 / audit A16, see
   anode convected-2Te return-current channel broken out and a residual bar
   closing the budget. The same numbers are printed as ``key=value`` lines
   for later per-ES-set comparison.
-* ``<stem>_breakout``   -- percent contributions WITHIN the electron cooling
-  channels (with the Coulomb e->i equilibration shown for scale but excluded
-  from the loss total), WITHIN the radiation group, and WITHIN the
-  surface/sheath group.
+
+  v4 amendment (Tom, 2026-07-27): stages 1 and 3 keep the main-discharge
+  window, but stage 2 is evaluated at BEAM TURN-ON -- window (a),
+  plasma launch -> breakdown -- because that is when the absorption fate
+  matters; the whole-discharge integral averages the turn-on transient away.
+* ``<stem>_beam_windows`` -- the same stage-2 decomposition over all three
+  discharge windows ((a) launch -> breakdown, (b) breakdown -> current knee,
+  (c) knee -> drive end), so the drift of the unreconciled CSDA-vs-circuit
+  remainder across the discharge is readable at a glance. The knee is
+  detected on the discharge-current trace by ``KNEE_DETECT``.
+* ``<stem>_losses``     -- three separately normalized loss graphs (v4):
+  the ELECTRON-book losses (the Coulomb e->i transfer included, since it is
+  one of the main Te sinks), the ION-book losses (with the same Coulomb
+  transfer shown as the heating-source context bar, excluded from the loss
+  total), and the COMBINED plasma losses, where the antisymmetric Coulomb
+  booking cancels identically and the channel therefore does not appear.
+* ``<stem>_breakout``   -- percent contributions WITHIN the radiation group
+  and WITHIN the surface/sheath group.
 
 A channel-to-``b_Q*``-name dictionary for the treacherously named cooling
 channels (``ei_exchange`` / ``electron_ion_cooling`` /
 ``electron_neutral_cooling``) is kept as a comment block above
-``PLASMA_LOSS_GROUPS`` -- read it before touching the cooling groups.
+``PLASMA_LOSS_GROUPS`` -- read it before touching the cooling groups. Per
+that dictionary the two ``*_cooling`` channels are BOTH line radiation and
+differ only in the collision partner, so v4 labels them as the parallel pair
+"line radiation (ions)" / "line radiation (neutrals)" on every figure; the
+code channel names survive in the config comments only.
 
 The ledger is RECONSTRUCTED from saved scalars only -- nothing is assumed:
 
@@ -58,6 +76,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
+import re
 import sys
 from pathlib import Path
 
@@ -200,6 +220,49 @@ OHMIC_REFERENCE_LABEL = "bulk ohmic (pure thermal, not beam)"
 OHMIC_REFERENCE_COLOR = "#56B4E9"
 OHMIC_REFERENCE_HATCH = "///"
 
+# -----------------------------------------------------------------------------
+# STAGE-2 TIME WINDOWS (v4, Tom 2026-07-27).
+#
+# The whole-discharge stage-2 integral is misleading: absorption fate matters
+# at BEAM TURN-ON, and averaging over 19.5 ms of plateau hides the transient.
+# Stage 2 is therefore evaluated over three disjoint windows spanning launch
+# to drive end:
+#
+#   (a) launch -> breakdown   first active circuit frame (= plasma launch,
+#                             `launch_plasma_after_equilibration`) to the
+#                             saved `t_breakdown_trigger` attribute
+#   (b) breakdown -> knee     the current rise
+#   (c) knee -> drive end     the plateau; drive end = t_breakdown +
+#                             tau_discharge (params_json), i.e. the standard
+#                             "discharge clock + t_breakdown offset"
+#                             convention used across scripts/
+#
+# The MAIN efficiency figure displays window (a) only (labeled with its
+# span); all three are printed and drawn side by side in <stem>_beam_windows.
+#
+# KNEE DETECTOR -- THE configuration point, nothing about it is hardcoded in
+# plot logic. Definition (chosen 2026-07-27, subject to Tom's confirmation):
+#
+#   plateau level  = median of the boxcar-smoothed discharge current I_tot
+#                    over the trailing `plateau_window_frac` of
+#                    [t_breakdown, drive end], active frames only
+#   knee time      = the FIRST active sample at or after t_breakdown where
+#                    the smoothed I_tot reaches `knee_frac` * plateau level
+#
+# `plateau_window_frac = 1.0` is the literal "plateau median after
+# breakdown"; shrinking it toward 0 measures the level on the true plateau
+# instead (which raises the level, and so delays the knee). Smoothing is
+# applied so a single rippled sample cannot set the knee; on
+# es1_r5_f01_ag26ms the knee moves by 0.01 ms between raw and smoothed.
+# -----------------------------------------------------------------------------
+KNEE_DETECT = {
+    "smooth_ms": 0.2,           # boxcar applied to I_tot before detection
+    "plateau_window_frac": 1.0,  # trailing fraction of [breakdown, drive end]
+    "knee_frac": 0.90,          # fraction of the plateau level defining the knee
+}
+WINDOW_KEYS = ("a_launch_to_breakdown", "b_breakdown_to_knee",
+               "c_knee_to_drive_end")
+
 # =============================================================================
 # STAGE-3 -- the plasma-book budget OF THE THERMAL ENERGY.
 #
@@ -234,7 +297,10 @@ THERMAL_BUDGET = {
         "terms": ("anode_collection",),
         "collector_scalar": False, "color": "#E69F00",
     },
-    "line radiation (icool)": {
+    # v4: the two *_cooling channels are the parallel line-radiation pair
+    # (electron_ion_cooling <- b_Qei is He+ light, electron_neutral_cooling
+    # <- b_Qen is He0 light); see the channel dictionary below.
+    "line radiation (ions)": {
         "terms": ("electron_ion_cooling",),
         "collector_scalar": False, "color": "#0072B2",
     },
@@ -247,7 +313,7 @@ THERMAL_BUDGET = {
         "terms": ("ionization_energy_cost",),
         "collector_scalar": False, "color": "#009E73",
     },
-    "e-n cooling": {
+    "line radiation (neutrals)": {
         "terms": ("electron_neutral_cooling",),
         "collector_scalar": False, "color": "#CC79A7",
     },
@@ -295,9 +361,19 @@ RESIDUAL_COLOR = "#B0B0B0"
 #
 # Consequence for the production `atomic_rate_model = "adas"` stance: BOTH
 # cooling channels are line radiation and differ only in the collision
-# partner (He+ vs He0); b_Qie alone is the Coulomb equilibration. The
-# "e-n cooling" line below is therefore also radiated light, kept under its
-# historical name.
+# partner (He+ vs He0); b_Qie alone is the Coulomb equilibration.
+#
+# v4 (Tom, 2026-07-27) ACTS on that consequence: the two channels are labeled
+# as a parallel pair on every figure, legend and breakout --
+#
+#     electron_ion_cooling      ->  "line radiation (ions)"
+#     electron_neutral_cooling  ->  "line radiation (neutrals)"
+#
+# -- retiring the v3 labels "line radiation (icool)" and "e-n cooling", which
+# named the flag and the historical abbreviation rather than the physics. The
+# code channel names live on in these config comments (and only here), and
+# ei_exchange is labeled "Coulomb transfer e->i (Qie)" so the three are never
+# again confusable on a figure.
 #
 # Supporting channels used by the breakouts:
 #   recombination_rad_loss / recombination_3b_loss (reactions.py ::
@@ -328,7 +404,7 @@ PLASMA_LOSS_GROUPS = {
     # electron_ion_cooling <- b_Qei, He+ line radiation. It carried ~99.7% of
     # the old lumped "radiation" group, and the old label "(e-i cooling)"
     # collided with the Coulomb-equilibration naming (b_Qie / ei_exchange).
-    "line radiation (icool)": {
+    "line radiation (ions)": {
         "terms": ("electron_ion_cooling",),
         "collector_scalar": False,
         "color": "#0072B2", "ls": (0, (4, 1.6)),
@@ -346,7 +422,9 @@ PLASMA_LOSS_GROUPS = {
         "collector_scalar": False,
         "color": "#009E73", "ls": (0, (6, 1.4, 1.4, 1.4)),
     },
-    "e-n cooling": {
+    # The other half of the line-radiation pair: electron_neutral_cooling
+    # <- b_Qen, He0 light (v3 called this "e-n cooling").
+    "line radiation (neutrals)": {
         "terms": ("electron_neutral_cooling",),
         "collector_scalar": False,
         "color": "#CC79A7", "ls": (0, (1.2, 1.2)),
@@ -358,7 +436,11 @@ PLASMA_FLOOR_W = 10.0  # activity/axis floor for the loss panel [W]
 # a sub-component of one plasma-book group; percentages are of the group's
 # own energy-integrated total over the main-discharge window.
 RADIATION_BREAKOUT = {
-    "line radiation (icool)": {
+    # Membership is UNCHANGED from v3 (only the label is new): this panel
+    # normalizes the same "radiation" group the power figure draws, and
+    # "line radiation (neutrals)" is a separate group there by v3
+    # construction, so it is deliberately not folded in here.
+    "line radiation (ions)": {
         "terms": ("electron_ion_cooling",), "color": "#0072B2"},
     "recombination radiation": {
         "terms": ("recombination_rad_loss", "recombination_3b_loss"),
@@ -378,36 +460,137 @@ SURFACE_BREAKOUT = {
         "terms": ("surface_loss", "characteristic_boundary"),
         "collector_scalar": True, "color": "#009E73"},
 }
-# Electron-book cooling breakout (v3, third panel of the breakout figure):
-# the individual electron cooling channels as percent of THEIR OWN sum.
-# Read from the ELECTRON BOOK ONLY -- per the dictionary above, ei_exchange
-# cancels to exactly zero when the two books are summed, and the
-# recombination channels' ion-book part is ion thermal energy, not an
-# electron loss. The ionization cost is deliberately not here: it is a
-# separate plasma-book group, not a cooling channel.
-COOLING_BREAKOUT = {
-    "line radiation (icool)": {
-        "terms": ("electron_ion_cooling",), "color": "#0072B2"},
-    "e-n cooling (ncool)": {
-        "terms": ("electron_neutral_cooling",), "color": "#CC79A7"},
-    "recombination (rad + 3b)": {
-        "terms": ("recombination_rad_loss", "recombination_3b_loss"),
-        "color": "#56B4E9"},
-    "beam excitation radiation": {
-        "terms": ("beam_excitation_radiation",), "color": "#E69F00"},
+# =============================================================================
+# THE THREE NORMALIZED LOSS GRAPHS (v4, Tom 2026-07-27) -- <stem>_losses.
+#
+# These REPLACE the v3 single "cooling breakout" panel. Each graph is a
+# separate normalization of the SAME saved terms read from a different book,
+# and the point of showing all three is the Coulomb channel's booking:
+#
+#   ei_exchange books Ee = -q AND Ei = +q (energy.py ::
+#   electron_ion_exchange_rhs). It is therefore
+#     * a genuine SINK of the electron book -- one of the main Te sinks, and
+#       so it is INSIDE the electron graph's normalization;
+#     * a genuine SOURCE of the ion book -- shown there as context below the
+#       divider, EXCLUDED from the ion loss total (a loss-only denominator);
+#     * identically ZERO in the summed book -- so it cannot and does not
+#       appear in the combined graph. main() prints the cancellation as a
+#       measured number rather than asserting it.
+#
+# BOOK SPLIT CAVEAT: the floating-collector surface line is a saved SCALAR
+# (collector_surface_power_W) with no per-book split, so `collector_scalar`
+# is declared on the COMBINED graph only -- keeping that graph the complete
+# plasma-side ledger, consistent with PLASMA_LOSS_GROUPS and THERMAL_BUDGET.
+# electron + ion therefore reconcile to combined only up to that one line
+# (0.007 kJ, ~0.4% of the combined surface group on es1_r5_f01_ag26ms);
+# main() prints the reconciliation so the gap is never silent.
+#
+# `pressure_work` is deliberately in none of the three: it is reversible
+# compressional work against the flow, not a sink, and v3 excluded it too.
+# =============================================================================
+_COULOMB_E_LABEL = "Coulomb transfer e$\\rightarrow$i (Qie)"
+_COULOMB_I_LABEL = "Coulomb transfer e$\\rightarrow$i (Qie)\n— heating SOURCE, not a loss"
+_LOSS_COLORS = {
+    "surface": "#D55E00", "anode": "#E69F00", "line_ion": "#0072B2",
+    "line_neutral": "#CC79A7", "ioniz": "#009E73", "coulomb": "#666666",
+    "in_coll": "#8E63A6", "other_rad": "#56B4E9",
 }
-# Drawn alongside COOLING_BREAKOUT for scale but NEVER summed into its
-# denominator: the Coulomb equilibration moves energy from the electron book
-# to the ion book and never leaves the plasma. Hatched + gray + below a
-# divider so it cannot be misread as one of the loss bars.
-COOLING_REFERENCE = {
-    # Wrapped: as one line this tick label is the widest text in the figure
-    # and squeezes the bottom-row panels into their own x-labels on `slide`.
-    "label": "internal transfer e$\\rightarrow$i\n(not a loss)",
+# (i) ELECTRON book. ei_exchange is INSIDE the normalization.
+ELECTRON_LOSS_GROUPS = {
+    "surface/sheath (cathode + end)": {
+        "terms": ("cathode_surface_loss", "surface_loss",
+                  "characteristic_boundary"),
+        "color": _LOSS_COLORS["surface"]},
+    "line radiation (ions)": {
+        "terms": ("electron_ion_cooling",), "color": _LOSS_COLORS["line_ion"]},
+    "ionization cost (bulk)": {
+        "terms": ("ionization_energy_cost",), "color": _LOSS_COLORS["ioniz"]},
+    "line radiation (neutrals)": {
+        "terms": ("electron_neutral_cooling",),
+        "color": _LOSS_COLORS["line_neutral"]},
+    _COULOMB_E_LABEL: {
+        "terms": ("ei_exchange",), "color": _LOSS_COLORS["coulomb"]},
+    "anode convected 2Te (return current)": {
+        "terms": ("anode_collection",), "color": _LOSS_COLORS["anode"]},
+    "other radiation": {
+        "terms": ("recombination_rad_loss", "recombination_3b_loss",
+                  "beam_excitation_radiation"),
+        "color": _LOSS_COLORS["other_rad"]},
+}
+# (ii) ION book. The ion-neutral collisional channel dominates; ei_exchange
+# is the excluded context bar (see ION_LOSS_REFERENCE).
+ION_LOSS_GROUPS = {
+    "ion–neutral collisional (cx + elastic)": {
+        "terms": ("ion_neutral_collision", "ion_charge_exchange",
+                  "ion_neutral_drag", "ion_neutral_frictional_heating",
+                  "ion_neutral_thermalization"),
+        "color": _LOSS_COLORS["in_coll"]},
+    "surface/sheath (cathode + end)": {
+        "terms": ("cathode_surface_loss", "surface_loss",
+                  "characteristic_boundary"),
+        "color": _LOSS_COLORS["surface"]},
+    "anode convected 2Te (return current)": {
+        "terms": ("anode_collection",), "color": _LOSS_COLORS["anode"]},
+    # beam_excitation_radiation books Ee only, so the ion side of "other
+    # radiation" is the recombination pair alone.
+    "other radiation": {
+        "terms": ("recombination_rad_loss", "recombination_3b_loss"),
+        "color": _LOSS_COLORS["other_rad"]},
+}
+ION_LOSS_REFERENCE = {
+    "label": _COULOMB_I_LABEL,
     "terms": ("ei_exchange",),
-    "color": "#666666",
+    # ei_exchange books +q on the ion side, so this bar is the SOURCE part;
+    # clipping it to the sink part (the default) would render it as 0.0%.
+    "part": "source",
+    "color": _LOSS_COLORS["coulomb"],
     "hatch": "////",
 }
+# (iii) COMBINED book (electron + ion). ei_exchange cancels identically and
+# is absent by construction, so every bar here is energy that actually LEFT
+# the plasma.
+COMBINED_LOSS_GROUPS = {
+    "surface/sheath (cathode + end)": {
+        "terms": ("cathode_surface_loss", "surface_loss",
+                  "characteristic_boundary"),
+        "collector_scalar": True, "color": _LOSS_COLORS["surface"]},
+    "line radiation (ions)": {
+        "terms": ("electron_ion_cooling",), "color": _LOSS_COLORS["line_ion"]},
+    "ionization cost (bulk)": {
+        "terms": ("ionization_energy_cost",), "color": _LOSS_COLORS["ioniz"]},
+    "line radiation (neutrals)": {
+        "terms": ("electron_neutral_cooling",),
+        "color": _LOSS_COLORS["line_neutral"]},
+    "ion–neutral collisional (cx + elastic)": {
+        "terms": ("ion_neutral_collision", "ion_charge_exchange",
+                  "ion_neutral_drag", "ion_neutral_frictional_heating",
+                  "ion_neutral_thermalization"),
+        "color": _LOSS_COLORS["in_coll"]},
+    "anode convected 2Te (return current)": {
+        "terms": ("anode_collection",), "color": _LOSS_COLORS["anode"]},
+    "other radiation": {
+        "terms": ("recombination_rad_loss", "recombination_3b_loss",
+                  "beam_excitation_radiation"),
+        "color": _LOSS_COLORS["other_rad"]},
+}
+# The three graphs in drawing order: (console key, book, groups, reference
+# spec or None, x-axis label). `reference` bars are drawn below a divider and
+# are NOT part of the normalization.
+#
+# Keep each x-label LINE under ~46 characters: the y tick labels eat the left
+# third of the panel, so a longer line is wider than its own axes and clips
+# at the figure edge on `slide` (measured, not guessed).
+LOSS_GRAPHS = (
+    ("electron", "electron", ELECTRON_LOSS_GROUPS, None,
+     "% of ELECTRON-book losses  (main discharge)\n"
+     "Coulomb transfer INCLUDED — a real $T_e$ sink"),
+    ("ion", "ion", ION_LOSS_GROUPS, ION_LOSS_REFERENCE,
+     "% of ION-book losses  (main discharge)\n"
+     "Coulomb transfer excluded from the total"),
+    ("combined", "total", COMBINED_LOSS_GROUPS, None,
+     "% of COMBINED plasma losses  (main discharge)\n"
+     "Coulomb transfer cancels between the books"),
+)
 
 # Fractions are blanked where P_load falls below this fraction of its
 # main-discharge median (the ratio is meaningless with no drive).
@@ -454,6 +637,17 @@ def load_run(path):
         data["phase_events"] = list(
             zip(np.asarray(pe["phase"]).astype(str), np.asarray(pe["time"], dtype=float))
         )
+        # Discharge-clock anchors for the stage-2 windows (v4). The abs-time
+        # convention is the one used across scripts/: discharge clock zero is
+        # `t_breakdown_trigger`, and the drive ends tau_discharge later.
+        data["t_breakdown_ms"] = 1e3 * float(
+            f.attrs.get("t_breakdown_trigger", np.nan))
+        params = {}
+        if "params_json" in f.attrs:
+            params = json.loads(f.attrs["params_json"])
+        tau = params.get("tau_discharge", np.nan)
+        data["tau_discharge_ms"] = 1e3 * float(
+            tau if tau is not None else np.nan)
         cd = f["cathode_diagnostics"]
         for name in (
             "P_load", "P_wall", "P_comp", "P_prim", "P_ohmic",
@@ -471,24 +665,28 @@ def load_run(path):
             np.asarray(cd["collector_surface_power_W"], dtype=float), nan=0.0
         ) if "collector_surface_power_W" in cd else np.zeros(n)
         # Volume-integrated plasma-book terms for every term any configured
-        # group or breakout references. Two views are kept:
+        # group or breakout references. Three views are kept:
         #   plasma_terms          -- electron + ion books (the plasma total)
         #   plasma_terms_electron -- electron book only
-        # Both are needed: the electron-only view is the correct one for the
-        # cooling breakout, because ei_exchange books -q to Ee and +q to Ei
-        # and so cancels to EXACTLY zero in the summed view.
+        #   plasma_terms_ion      -- ion book only
+        # All three are needed for the v4 loss graphs: ei_exchange books -q to
+        # Ee and +q to Ei, so it is a sink in the electron view, a source in
+        # the ion view, and EXACTLY zero in the summed view.
         Vp = np.asarray(f["geometry/plasma_volume_cm3"], dtype=float)
         wanted = set()
         for cfg in (PLASMA_LOSS_GROUPS, RADIATION_BREAKOUT, SURFACE_BREAKOUT,
-                    COOLING_BREAKOUT, THERMAL_BUDGET, BEAM_FATE):
+                    THERMAL_BUDGET, BEAM_FATE, ELECTRON_LOSS_GROUPS,
+                    ION_LOSS_GROUPS, COMBINED_LOSS_GROUPS):
             for spec in cfg.values():
                 wanted.update(spec["terms"])
-        wanted.update(COOLING_REFERENCE["terms"])
+        wanted.update(ION_LOSS_REFERENCE["terms"])
         terms = {}
         terms_e = {}
+        terms_i = {}
         for term in sorted(wanted):
             total = np.zeros(n)
             electron = np.zeros(n)
+            ion = np.zeros(n)
             for book in ("electron_energy_terms_W_cm3", "ion_energy_terms_W_cm3"):
                 if book in f and term in f[book]:
                     contrib = np.sum(
@@ -497,19 +695,54 @@ def load_run(path):
                     total += contrib
                     if book.startswith("electron"):
                         electron += contrib
+                    else:
+                        ion += contrib
             terms[term] = total
             terms_e[term] = electron
+            terms_i[term] = ion
         data["plasma_terms"] = terms
         data["plasma_terms_electron"] = terms_e
+        data["plasma_terms_ion"] = terms_i
     return data
 
 
-def plasma_group_sum(d, spec):
-    """Signed sum of a plasma-book group's terms [W] (+ collector if declared)."""
-    total = sum(d["plasma_terms"][term] for term in spec["terms"])
-    if spec.get("collector_scalar"):
+_BOOK_VIEW = {
+    "total": "plasma_terms",
+    "electron": "plasma_terms_electron",
+    "ion": "plasma_terms_ion",
+}
+
+
+def plasma_group_sum(d, spec, book="total"):
+    """Signed sum of a plasma-book group's terms [W] (+ collector if declared).
+
+    `book` selects the electron-only, ion-only or summed view. The saved
+    collector surface line has no per-book split, so `collector_scalar` is
+    honored on the summed view only (it is declared only there).
+    """
+    view = d[_BOOK_VIEW[book]]
+    total = sum(view[term] for term in spec["terms"])
+    if spec.get("collector_scalar") and book == "total":
         total = total - d["collector_surface_W"]
     return total
+
+
+def loss_group_energy(d, spec, book, sel, t_s):
+    """Integrated one-signed magnitude [J] of one group in one book.
+
+    Signed group sum first, then clipped -- the same convention the v3 groups
+    use, and the reason the Coulomb channel vanishes from the combined book
+    rather than appearing twice with opposite signs. ``spec["part"] ==
+    "source"`` takes the POSITIVE part instead of the sink part; the ion
+    book's Coulomb context bar needs it, since ei_exchange books +q there and
+    would otherwise clip to exactly zero.
+    """
+    y = plasma_group_sum(d, spec, book)
+    if spec.get("part") == "source":
+        mag = np.clip(y, 0.0, None)
+    else:
+        mag = np.abs(np.minimum(y, 0.0))
+    return np.trapezoid(np.where(sel, mag, 0.0), t_s)
 
 
 def build_ledger(d):
@@ -533,9 +766,16 @@ def build_ledger(d):
 
 
 def _scalar_key(label):
-    """Console `key=value` name from a (possibly hard-wrapped) figure label."""
-    flat = label.replace("\n", " ").split(" (")[0].strip()
-    return flat.replace(" ", "_").replace("-", "_").replace("/", "_")
+    """Console `key=value` name from a (possibly hard-wrapped) figure label.
+
+    v4 keeps the PARENTHETICAL. v3 truncated the label at " (", which the
+    new parallel line-radiation naming makes ambiguous: "line radiation
+    (ions)" and "line radiation (neutrals)" would both collapse to
+    `line_radiation` and silently overwrite each other in the printed
+    scalars. Inline LaTeX is dropped first so keys stay plain identifiers.
+    """
+    flat = re.sub(r"\$[^$]*\$", " ", label.replace("\n", " "))
+    return re.sub(r"[^0-9A-Za-z]+", "_", flat).strip("_")
 
 
 def gross_series(ledger):
@@ -549,6 +789,91 @@ def gross_series(ledger):
 def circulation_series(ledger):
     """The round-trip return [W], negative (energy handed back to the circuit)."""
     return sum(ledger[ch] for ch in CIRCULATION_CHANNELS)
+
+
+# =============================================================================
+# Stage-2 discharge windows (v4)
+# =============================================================================
+def find_current_knee(d, t_bd_ms, t_end_ms):
+    """Knee time [ms] on the discharge-current trace, per ``KNEE_DETECT``.
+
+    Returns ``(t_knee_ms, plateau_A, threshold_A)``. The definition is stated
+    in full in the KNEE_DETECT comment block; briefly, the knee is the first
+    active sample at or after breakdown whose boxcar-smoothed I_tot reaches
+    ``knee_frac`` of the plateau median. Falls back to the drive end (with a
+    printed warning) if the threshold is never reached.
+    """
+    t = d["time_ms"]
+    act = d["active"]
+    dt_ms = float(np.median(np.diff(t)))
+    width = max(1, int(round(KNEE_DETECT["smooth_ms"] / dt_ms)))
+    I = _boxcar(np.where(act, d["I_tot"], np.nan), width)
+
+    frac = float(KNEE_DETECT["plateau_window_frac"])
+    plateau_lo = t_end_ms - frac * (t_end_ms - t_bd_ms)
+    in_plateau = act & (t >= plateau_lo) & (t <= t_end_ms)
+    if not in_plateau.any():
+        raise SystemExit("knee detection: no active frames in the plateau "
+                         f"window [{plateau_lo:.3f}, {t_end_ms:.3f}] ms")
+    plateau = float(np.nanmedian(I[in_plateau]))
+    threshold = KNEE_DETECT["knee_frac"] * plateau
+
+    reached = act & (t >= t_bd_ms) & (t <= t_end_ms) & (I >= threshold)
+    if not reached.any():
+        print("knee_WARNING=discharge current never reaches "
+              f"{KNEE_DETECT['knee_frac']:.2f} of the plateau median; "
+              "knee falls back to the drive end")
+        return t_end_ms, plateau, threshold
+    return float(t[reached][0]), plateau, threshold
+
+
+def discharge_windows(d):
+    """The three stage-2 windows as ``(key, label, lo_ms, hi_ms, mask)``.
+
+    (a) plasma launch -> breakdown, (b) breakdown -> current knee,
+    (c) knee -> drive end. "Plasma launch" is taken as the first ACTIVE
+    circuit frame: the cathode circuit only solves once the plasma exists, so
+    that sample is the launch under `launch_plasma_after_equilibration`.
+    """
+    t = d["time_ms"]
+    act = d["active"]
+    t_launch = float(t[act][0])
+
+    t_bd = d["t_breakdown_ms"]
+    if not np.isfinite(t_bd):
+        # Fall back to the recorded phase transition if the attribute is
+        # absent/NaN (e.g. a run that never triggered breakdown).
+        events = [1e3 * ts for name, ts in d["phase_events"]
+                  if name == "main_discharge"]
+        if not events:
+            raise SystemExit("no t_breakdown_trigger attribute and no "
+                             "main_discharge phase event: cannot build the "
+                             "stage-2 windows")
+        t_bd = float(events[0])
+
+    t_end = t_bd + d["tau_discharge_ms"]
+    if not np.isfinite(t_end):
+        events = [1e3 * ts for name, ts in d["phase_events"]
+                  if name == "afterglow"]
+        t_end = float(events[0]) if events else float(t[act][-1])
+    t_end = min(t_end, float(t[act][-1]))
+
+    t_knee, plateau, threshold = find_current_knee(d, t_bd, t_end)
+    d["knee_ms"] = t_knee
+    d["knee_plateau_A"] = plateau
+    d["knee_threshold_A"] = threshold
+    d["t_breakdown_used_ms"] = t_bd
+    d["t_drive_end_ms"] = t_end
+    d["t_launch_ms"] = t_launch
+
+    bounds = ((t_launch, t_bd), (t_bd, t_knee), (t_knee, t_end))
+    labels = ("(a) launch → breakdown", "(b) breakdown → knee",
+              "(c) knee → drive end")
+    out = []
+    for key, label, (lo, hi) in zip(WINDOW_KEYS, labels, bounds):
+        mask = act & (t >= lo) & (t <= hi)
+        out.append((key, label, lo, hi, mask))
+    return out
 
 
 
@@ -712,7 +1037,29 @@ def beam_fate_energies(d, E):
     }
 
 
-def make_efficiency_figure(d, ledger, window, profile):
+def beam_fate_items(d, ledger, sel, t_s):
+    """Stage-2 bar items over an arbitrary window mask.
+
+    Returns ``(items, E_prim, E_ohmic, E_resid)`` where `items` is ready for
+    ``_share_barh`` with ONE trailing excluded entry (the ohmic reference).
+    """
+    def E(y):
+        return np.trapezoid(np.where(sel, y, 0.0), t_s)
+
+    E_prim = E(ledger["P_prim"])
+    E_ohmic = E(ledger["P_ohmic"])
+    fate = beam_fate_energies(d, E)
+    items = [(label, 100.0 * Ei / E_prim, BEAM_FATE[label]["color"])
+             for label, Ei in fate.items()]
+    E_resid = E_prim - sum(fate.values())
+    items.append((BEAM_RESIDUAL_LABEL, 100.0 * E_resid / E_prim,
+                  BEAM_RESIDUAL_COLOR, BEAM_RESIDUAL_HATCH))
+    items.append((OHMIC_REFERENCE_LABEL, 100.0 * E_ohmic / E_prim,
+                  OHMIC_REFERENCE_COLOR, OHMIC_REFERENCE_HATCH))
+    return items, E_prim, E_ohmic, E_resid
+
+
+def make_efficiency_figure(d, ledger, window, stage2, profile):
     """Three-stage cascade: source -> absorbed & its fate -> thermal budget.
 
     STAGE 1 (top row, two denominators): the GROSS circuit components, with
@@ -723,13 +1070,19 @@ def make_efficiency_figure(d, ledger, window, profile):
     slice (it returns energy to the circuit), so each chart's bars sum
     algebraically to exactly 100% of its denominator.
 
-    STAGE 2 (bottom left): the fate of the absorbed beam power int(P_prim)dt
-    by collision outcome -- thermal / ionization consumption / prompt
-    radiation -- with the unreconciled CSDA-vs-circuit remainder as its own
-    labeled bar, and the ohmic delivery alongside (excluded from the
-    partition) so the total thermal input is readable.
+    STAGE 2 (middle): the fate of the absorbed beam power int(P_prim)dt by
+    collision outcome -- thermal / ionization consumption / prompt radiation
+    -- with the unreconciled CSDA-vs-circuit remainder as its own labeled
+    bar, and the ohmic delivery alongside (excluded from the partition) so
+    the total thermal input is readable.
 
-    STAGE 3 (bottom right): where that thermal energy goes -- the plasma-book
+    v4: stage 2 is integrated over `stage2` -- window (a), plasma launch to
+    breakdown -- NOT the main-discharge window, because absorption fate
+    matters at beam turn-on and the whole-discharge integral averages the
+    transient away. The window's span is written into the axis label, and
+    <stem>_beam_windows shows all three windows side by side.
+
+    STAGE 3 (bottom): where that thermal energy goes -- the plasma-book
     loss groups with the anode convected-2Te return-current channel broken
     out, plus an explicit residual so the budget closes.
     """
@@ -737,6 +1090,7 @@ def make_efficiency_figure(d, ledger, window, profile):
     sel = window & act
     t_s = d["time_ms"] * 1e-3
     journal = profile == "journal"
+    _, s2_label, s2_lo, s2_hi, s2_mask = stage2
 
     def E(y):
         return np.trapezoid(np.where(sel, y, 0.0), t_s)
@@ -751,6 +1105,9 @@ def make_efficiency_figure(d, ledger, window, profile):
     roles = {GROSS_GROUPS[name]["role"]: Ei for name, Ei, _ in comps}
     E_prim, E_ohmic = roles["absorbed"], roles["ohmic"]
 
+    # Stage 3's denominator stays on the MAIN-DISCHARGE window (it is the
+    # budget of the thermal energy the discharge actually delivered); only
+    # stage 2's own partition moves to the turn-on window.
     fate = beam_fate_energies(d, E)
     E_beam_thermal = fate[next(iter(BEAM_FATE))]  # first entry = thermal bank
     E_thermal = E_beam_thermal + E_ohmic
@@ -785,16 +1142,12 @@ def make_efficiency_figure(d, ledger, window, profile):
         ax.set_xlabel(xlabel)
 
     # --- stage 2: fate of the absorbed beam power (partition of P_prim) -----
-    items = [(label, 100.0 * Ei / E_prim, BEAM_FATE[label]["color"])
-             for label, Ei in fate.items()]
-    beam_resid = E_prim - sum(fate.values())
-    items.append((BEAM_RESIDUAL_LABEL, 100.0 * beam_resid / E_prim,
-                  BEAM_RESIDUAL_COLOR, BEAM_RESIDUAL_HATCH))
-    items.append((OHMIC_REFERENCE_LABEL, 100.0 * E_ohmic / E_prim,
-                  OHMIC_REFERENCE_COLOR, OHMIC_REFERENCE_HATCH))
+    # Integrated over the TURN-ON window only (v4); see the docstring.
+    items, _, _, _ = beam_fate_items(d, ledger, s2_mask, t_s)
     _share_barh(ax_b, items, n_excluded=1)
     ax_b.set_xlabel("stage 2 — % of ABSORBED beam power\n"
-                    "(fate by collision outcome)")
+                    "(fate by collision outcome, at beam turn-on)\n"
+                    f"window {s2_label}   [{s2_lo:.2f} – {s2_hi:.2f} ms]")
 
     # --- stage 3: the plasma-book budget of the thermal energy --------------
     budget = []
@@ -811,18 +1164,77 @@ def make_efficiency_figure(d, ledger, window, profile):
     return fig
 
 
+def make_beam_windows_figure(d, ledger, windows, profile):
+    """Stage-2 decomposition over all three discharge windows, stacked.
+
+    One ``_share_barh`` panel per window, same channels and colors as the
+    efficiency figure's stage 2, each normalized by its OWN window's
+    int(P_prim)dt. The comparison is the point: the unreconciled
+    CSDA-vs-circuit remainder is largest at turn-on and shrinks as the
+    discharge settles, which the single whole-discharge integral hides.
+    """
+    t_s = d["time_ms"] * 1e-3
+    journal = profile == "journal"
+    if journal:
+        figsize = (fs.JOURNAL_WIDTHS["aip_double"], 6.6)
+    else:
+        figsize = (12.9, 10.4)
+    fig, axes = plt.subplots(3, 1, figsize=figsize, constrained_layout=True)
+    for ax, (_, label, lo, hi, mask) in zip(axes, windows):
+        items, E_prim, _, _ = beam_fate_items(d, ledger, mask, t_s)
+        _share_barh(ax, items, n_excluded=1)
+        # Two lines: as one, this label is wider than its own axes and clips
+        # at the figure edge on `slide`.
+        ax.set_xlabel(
+            f"{label}   [{lo:.2f} – {hi:.2f} ms]\n"
+            f"% of $E_\\mathrm{{prim}}$ = {E_prim / 1e3:.3f} kJ")
+    return fig
+
+
+def make_losses_figure(d, window, profile):
+    """The three normalized loss graphs (v4): electron, ion, combined books.
+
+    Each panel normalizes by its OWN book's summed loss total over the
+    main-discharge window, so the three are read as three separate
+    accountings rather than one split. The Coulomb transfer ei_exchange is
+    inside the electron total, drawn as an excluded context bar on the ion
+    panel, and absent from the combined panel where it cancels identically
+    (see the LOSS_GRAPHS comment block).
+    """
+    sel = window
+    t_s = d["time_ms"] * 1e-3
+    journal = profile == "journal"
+
+    if journal:
+        figsize = (fs.JOURNAL_WIDTHS["aip_double"], 7.6)
+    else:
+        figsize = (12.9, 12.4)
+    fig, axes = plt.subplots(3, 1, figsize=figsize, constrained_layout=True)
+    for ax, (_, book, groups, reference, xlabel) in zip(axes, LOSS_GRAPHS):
+        energies = {label: loss_group_energy(d, spec, book, sel, t_s)
+                    for label, spec in groups.items()}
+        total = sum(energies.values())
+        items = [(label, 100.0 * Ei / total if total > 0 else 0.0,
+                  groups[label]["color"]) for label, Ei in energies.items()]
+        n_excluded = 0
+        if reference is not None:
+            ref = loss_group_energy(d, reference, book, sel, t_s)
+            items.append((reference["label"],
+                          100.0 * ref / total if total > 0 else 0.0,
+                          reference["color"], reference["hatch"]))
+            n_excluded = 1
+        _share_barh(ax, items, n_excluded=n_excluded)
+        ax.set_xlabel(xlabel)
+    return fig
+
+
 def make_breakout_figure(d, window, profile):
-    """Percent breakouts WITHIN the cooling, radiation and surface groups.
+    """Percent breakouts WITHIN the radiation and surface/sheath groups.
 
-    Top panel (v3): the electron-book cooling channels individually, each as
-    a percent of the summed electron cooling losses, with the Coulomb
-    equilibration ei_exchange drawn alongside for scale but excluded from
-    that total (it is an internal e->i transfer, not a loss -- see the
-    channel dictionary at the top of this file).
-
-    Bottom panels: sub-components of the radiation and surface/sheath groups,
-    each normalized by its own group total. All energies are integrated sink
-    magnitudes over the main-discharge window.
+    Sub-components of each group, normalized by its own group total; all
+    energies are integrated sink magnitudes over the main-discharge window.
+    (The v3 electron-cooling panel that used to sit above these is superseded
+    by the three loss graphs in <stem>_losses.)
     """
     sel = window
     t_s = d["time_ms"] * 1e-3
@@ -833,37 +1245,12 @@ def make_breakout_figure(d, window, profile):
         mag = np.abs(np.minimum(y, 0.0))  # sink part only
         return np.trapezoid(np.where(sel, mag, 0.0), t_s)
 
-    def E_sink_electron(terms):
-        """Electron-book-only integrated sink magnitude [J] for `terms`."""
-        y = sum(d["plasma_terms_electron"][term] for term in terms)
-        mag = np.abs(np.minimum(y, 0.0))
-        return np.trapezoid(np.where(sel, mag, 0.0), t_s)
-
     if journal:
-        figsize = (fs.JOURNAL_WIDTHS["aip_double"], 4.3)
+        figsize = (fs.JOURNAL_WIDTHS["aip_double"], 2.6)
     else:
-        figsize = (12.9, 7.4)
-    fig = plt.figure(figsize=figsize, constrained_layout=True)
-    gs = fig.add_gridspec(2, 2, height_ratios=[1.45, 1.0])
-    ax_c = fig.add_subplot(gs[0, :])
-    ax_r = fig.add_subplot(gs[1, 0])
-    ax_s = fig.add_subplot(gs[1, 1])
-
-    # --- cooling breakout: percent of the summed electron cooling losses ---
-    cool_E = {label: E_sink_electron(spec["terms"])
-              for label, spec in COOLING_BREAKOUT.items()}
-    cool_total = sum(cool_E.values())
-    cool_items = [(label, 100.0 * Ei / cool_total if cool_total > 0 else 0.0,
-                   COOLING_BREAKOUT[label]["color"])
-                  for label, Ei in cool_E.items()]
-    ref_E = E_sink_electron(COOLING_REFERENCE["terms"])
-    cool_items.append((
-        COOLING_REFERENCE["label"],
-        100.0 * ref_E / cool_total if cool_total > 0 else 0.0,
-        COOLING_REFERENCE["color"], COOLING_REFERENCE["hatch"],
-    ))
-    _share_barh(ax_c, cool_items, n_excluded=1)
-    ax_c.set_xlabel("% of summed electron cooling losses\n(main discharge)")
+        figsize = (12.9, 4.2)
+    fig, (ax_r, ax_s) = plt.subplots(1, 2, figsize=figsize,
+                                     constrained_layout=True)
 
     for ax, breakout, xlabel in (
         (ax_r, RADIATION_BREAKOUT, "% of radiation losses\n(main discharge)"),
@@ -909,10 +1296,12 @@ def main(argv=None):
     )
     parser.add_argument(
         "--smooth-ms", type=float, default=0.2,
-        help="boxcar width [ms] applied to the PLOTTED series only, and "
-        "annotated on the figure (the per-solve circuit scalars carry real "
+        help="boxcar width [ms] applied to the PLOTTED time series of the "
+        "power figure only (the per-solve circuit scalars carry real "
         "high-frequency ripple that buries the plateau lines); the closure "
-        "residual and every printed scalar always use the raw data. "
+        "residual and every printed scalar always use the raw data, and the "
+        "bar figures are always integrated from the raw data. The knee "
+        "detector has its own independent smoothing in KNEE_DETECT. "
         "Pass 0 for raw plots (default: 0.2)",
     )
     args = parser.parse_args(argv)
@@ -944,6 +1333,8 @@ def main(argv=None):
     window = d["phase"] == "main_discharge"
     sel = window & act
     t_s = d["time_ms"] * 1e-3
+    # Stage-2 windows (v4); also records the knee scalars onto `d`.
+    windows = discharge_windows(d)
     if sel.any():
         w = (t_s[sel][0] * 1e3, t_s[sel][-1] * 1e3)
         print(f"window=main_discharge t0_ms={w[0]:.3f} t1_ms={w[1]:.3f}")
@@ -1012,6 +1403,62 @@ def main(argv=None):
               "independent calculations and disagree by the residual above "
               "(reported, not fixed here)")
 
+    # --- STAGE 2 BY WINDOW (v4): the whole-discharge integral above is the
+    # main-discharge average and hides the turn-on transient. -----------------
+    print("stage2_windows_def=(a) plasma launch (first active circuit frame) "
+          "-> t_breakdown_trigger; (b) breakdown -> current knee; "
+          "(c) knee -> drive end (= t_breakdown + tau_discharge)")
+    print(f"knee_def=first active sample at/after breakdown where the "
+          f"{KNEE_DETECT['smooth_ms']:.2f} ms boxcar-smoothed I_tot reaches "
+          f"{KNEE_DETECT['knee_frac']:.2f} of the median I_tot over the "
+          f"trailing {KNEE_DETECT['plateau_window_frac']:.2f} of "
+          f"[breakdown, drive end]")
+    print(f"knee_plateau_A={d['knee_plateau_A']:.1f} "
+          f"knee_threshold_A={d['knee_threshold_A']:.1f}")
+    print(f"t_launch_ms={d['t_launch_ms']:.4f} "
+          f"t_breakdown_ms={d['t_breakdown_used_ms']:.4f} "
+          f"t_knee_ms={d['knee_ms']:.4f} "
+          f"t_drive_end_ms={d['t_drive_end_ms']:.4f}")
+    for key, label, lo, hi, mask in windows:
+        items, Ew_prim, Ew_ohmic, Ew_resid = beam_fate_items(
+            d, ledger, mask, t_s)
+        print(f"window_{key}=[{lo:.4f},{hi:.4f}]ms span_ms={hi - lo:.4f} "
+              f"E_prim_kJ={Ew_prim / 1e3:.4f} E_ohmic_kJ={Ew_ohmic / 1e3:.4f}")
+        for item in items[:-2]:
+            print(f"  window_{key}_{_scalar_key(item[0])}_pct={item[1]:.2f}")
+        print(f"  window_{key}_residual_kJ={Ew_resid / 1e3:.4f} "
+              f"pct={100.0 * Ew_resid / Ew_prim:.2f}")
+
+    # --- v4 loss graphs: shares per book over the main-discharge window ------
+    print("loss_graphs_def=electron book (Coulomb transfer INSIDE the "
+          "normalization), ion book (Coulomb transfer excluded, shown as the "
+          "heating-source context bar), combined book (Coulomb transfer "
+          "cancels identically); pressure_work excluded from all three")
+    for gkey, book, groups, reference, _ in LOSS_GRAPHS:
+        energies = {label: loss_group_energy(d, spec, book, sel, t_s)
+                    for label, spec in groups.items()}
+        total = sum(energies.values())
+        print(f"loss_{gkey}_total_kJ={total / 1e3:.4f}")
+        for label, Ei in energies.items():
+            print(f"  loss_{gkey}_{_scalar_key(label)}_kJ={Ei / 1e3:.4f} "
+                  f"pct={100.0 * Ei / total:.2f}")
+        if reference is not None:
+            ref = loss_group_energy(d, reference, book, sel, t_s)
+            print(f"  loss_{gkey}_reference_{_scalar_key(reference['label'])}"
+                  f"_kJ={ref / 1e3:.4f} pct_of_total={100.0 * ref / total:.2f} "
+                  "(EXCLUDED from the total)")
+    # The combined book's Coulomb cancellation is MEASURED, not asserted.
+    ei_cancel = E(d["plasma_terms"]["ei_exchange"])
+    ei_electron = E(np.abs(np.minimum(
+        d["plasma_terms_electron"]["ei_exchange"], 0.0)))
+    print(f"loss_combined_ei_exchange_cancellation_kJ={ei_cancel / 1e3:.3e} "
+          f"rel_to_electron_book={abs(ei_cancel) / ei_electron:.3e}")
+    # electron + ion reconcile to combined up to the un-split collector line.
+    E_collector = E(np.abs(d["collector_surface_W"]))
+    print(f"loss_collector_line_kJ={E_collector / 1e3:.4f} "
+          "(saved scalar, no per-book split; carried in the COMBINED graph "
+          "only, so electron+ion reconcile to combined up to this line)")
+
     # --- STAGE 3: plasma-book budget of the thermal energy ------------------
     E_thermal = E_beam_thermal + E_ohmic
     print(f"E_thermal_kJ={E_thermal / 1e3:.3f} "
@@ -1050,8 +1497,13 @@ def main(argv=None):
     written = []
     fig = make_power_figure(d, ledger, residual, args.profile, smooth)
     written += save_figure(fig, out_dir, f"{stem}_power", args.profile)
-    fig = make_efficiency_figure(d, ledger, window, args.profile)
+    # Stage 2 of the main efficiency figure shows window (a) only.
+    fig = make_efficiency_figure(d, ledger, window, windows[0], args.profile)
     written += save_figure(fig, out_dir, f"{stem}_efficiency", args.profile)
+    fig = make_beam_windows_figure(d, ledger, windows, args.profile)
+    written += save_figure(fig, out_dir, f"{stem}_beam_windows", args.profile)
+    fig = make_losses_figure(d, window, args.profile)
+    written += save_figure(fig, out_dir, f"{stem}_losses", args.profile)
     fig = make_breakout_figure(d, window, args.profile)
     written += save_figure(fig, out_dir, f"{stem}_breakout", args.profile)
     for p in written:
