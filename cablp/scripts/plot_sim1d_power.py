@@ -4,14 +4,17 @@ Reads a saved LAPDSim1D HDF5 result and renders two figures from the
 current-resolved circuit power ledger (R3.2 / audit A16, see
 ``~/bapsf/docs/manuscripts/evidence/circuit_power_balance_r32.md``):
 
-* ``<stem>_power``      -- the P_load ledger as a signed stacked area (every
-  field-work line the bank funds), the measured closure residual
-  |P_load - sum(ledger)| on its own axis, and the plasma-book volumetric
-  loss channels (radiation, ionization cost, sheath/surface sinks).
-* ``<stem>_efficiency`` -- time-resolved fraction of P_load per channel
-  group, plus the energy-integrated share of each group over the
-  main-discharge window (the per-run scalar summary, also printed as
-  ``key=value`` lines for later per-ES-set comparison).
+* ``<stem>_power``      -- the gross-outflow ledger stack with the net P_load
+  line and the hatched round-trip (returned-to-circuit) slice, the measured
+  closure residual |P_load - sum(ledger)| on its own axis, and the
+  plasma-book volumetric loss groups (radiation, ionization cost,
+  surface/sheath sinks, e-n cooling).
+* ``<stem>_efficiency`` -- two bar charts of the NET (all-positive) power
+  components over the main-discharge window: shares of E_wall (includes the
+  compliance dissipation P_comp) and shares of E_load. The same numbers are
+  printed as ``key=value`` lines for later per-ES-set comparison.
+* ``<stem>_breakout``   -- percent contributions WITHIN the radiation group
+  and WITHIN the surface/sheath group.
 
 The ledger is RECONSTRUCTED from saved scalars only -- nothing is assumed:
 
@@ -58,69 +61,123 @@ except ImportError as exc:  # pragma: no cover
     ) from exc
 
 # =============================================================================
-# CHANNEL GROUPING (delivered vs loss) -- the "useful power" definition.
+# CHANNEL GROUPING -- the NET (all-positive) power components.
 #
-# This dict is THE configuration point: the efficiency figure and the printed
-# per-run scalars are computed from it, never hardcoded in plot logic. Each
-# group lists reconstructed ledger channels (defined in build_ledger) and a
-# role:
-#   "delivered" -- power entering the plasma heating book (the useful power)
-#   "loss"      -- power the load consumes that never heats the plasma
-#   "recovered" -- field work returned to the circuit (negative lines; not
-#                  dissipated in the load at all)
-# The groups partition the ledger exactly: sum over all groups == P_load.
+# This dict is THE configuration point: the efficiency bar charts and the
+# printed per-run scalars are computed from it, never hardcoded in plot
+# logic. Each component lists reconstructed ledger channels (defined in
+# build_ledger); the components partition P_load exactly.
+#
+# NET bookkeeping (Tom, 2026-07-27): the round-trip/returned field work is
+# folded back into its source component so every displayed component is a
+# positive net flow and nothing is negative:
+#   * the returning-electron recovery (-I_e_ret*phi_c) nets against the
+#     cathode sheath cost (the returning electrons hand cathode-sheath field
+#     energy back at the cathode);
+#   * the anode return, taken per the potential ladder (-I_tot*phi_a), nets
+#     against the DELIVERED component -- the carriers that hand energy back
+#     at the anode drew it from the plasma column, which the delivered
+#     channels feed; the ion sheath fall and the bypass deposit on surfaces
+#     and cannot come back.
+# The round trip itself is still displayed on the POWER figure (hatched
+# slice) and printed as returned_* scalars for the record.
 # =============================================================================
 CHANNEL_GROUPS = {
-    "delivered to plasma": {
-        "channels": ("P_prim", "P_ohmic"),
+    "delivered to plasma (net of anode return)": {
+        "channels": ("P_prim", "P_ohmic", "P_anode_field"),
         "role": "delivered",
     },
-    "cathode surface (ion sheath fall)": {
-        "channels": ("P_cathode_ion_phi",),
+    "cathode sheath cost (net of returning e-)": {
+        "channels": ("P_cathode_ion_phi", "P_electron_return"),
         "role": "loss",
     },
     "beam bypass (uncoupled primaries)": {
         "channels": ("P_beam_bypass",),
         "role": "loss",
     },
-    "returned to circuit (anode + returning e-)": {
-        "channels": ("P_anode_field", "P_electron_return"),
-        "role": "recovered",
-    },
 }
+# Compliance/mesh resistor dissipation: a component of E_wall only
+# (P_wall = P_load + P_comp); drawn from the saved P_comp scalar.
+COMP_LABEL = "compliance resistor (P_comp)"
+COMP_COLOR = "#999999"
 
-# Ledger channel display order, labels, and colors (Okabe-Ito, print-safe).
+# Positive outflow channels: stack order (bottom -> top), labels, colors.
 LEDGER_STYLE = {
     "P_prim": ("beam primaries into column", "#0072B2"),
     "P_ohmic": ("bulk ohmic", "#56B4E9"),
     "P_cathode_ion_phi": ("cathode ion sheath fall", "#D55E00"),
     "P_beam_bypass": ("beam bypass", "#E69F00"),
-    "P_anode_field": ("anode field work (net)", "#009E73"),
-    "P_electron_return": ("returning-electron recovery", "#CC79A7"),
 }
+# The round-trip overlay (gross-stack top down to the P_load line).
+RETURNED_LABEL = ("returned to circuit (round trip: out via cathode sheath,\n"
+                  "back via anode + returning electrons)")
+RETURNED_COLOR = "#009E73"
+RETURNED_HATCH = "////"
 
 GROUP_COLORS = {
-    "delivered to plasma": "#0072B2",
-    "cathode surface (ion sheath fall)": "#D55E00",
+    "delivered to plasma (net of anode return)": "#0072B2",
+    "cathode sheath cost (net of returning e-)": "#D55E00",
     "beam bypass (uncoupled primaries)": "#E69F00",
-    "returned to circuit (anode + returning e-)": "#009E73",
 }
 
-# Plasma-book volumetric loss channels: volume-integrated (electron + ion)
-# energy terms [W/cm^3 * cm^3]. All are sinks in this model; magnitudes are
-# drawn on a log axis and channels that never exceed PLASMA_FLOOR_W are
-# dropped from the legend as inactive.
-PLASMA_LOSS_CHANNELS = {
-    "e-i cooling (line radiation)": ("electron_ion_cooling",),
-    "e-n cooling": ("electron_neutral_cooling",),
-    "ionization cost": ("ionization_energy_cost",),
-    "recombination radiation": ("recombination_rad_loss", "recombination_3b_loss"),
-    "beam excitation radiation": ("beam_excitation_radiation",),
-    "cathode/anode sheath (plasma book)": ("cathode_surface_loss",),
-    "anode collection": ("anode_collection",),
-    "end/surface loss": ("surface_loss", "characteristic_boundary"),
+# Plasma-book volumetric loss groups: volume-integrated (electron + ion)
+# energy terms [W/cm^3 * cm^3], summed per semantic group (signed sum, then
+# clipped to the sink part). Each group carries an explicit color AND dash
+# pattern so adjacent lines stay distinguishable in grayscale. Groups that
+# never exceed PLASMA_FLOOR_W are dropped as inactive.
+PLASMA_LOSS_GROUPS = {
+    "surface/sheath losses": {
+        # cathode+anode sheath deposits, end/characteristic outflow, and the
+        # floating collector surface line (scalar channel).
+        "terms": ("cathode_surface_loss", "anode_collection", "surface_loss",
+                  "characteristic_boundary"),
+        "collector_scalar": True,
+        "color": "#D55E00", "ls": "-",
+    },
+    "radiation": {
+        # line radiation (e-i cooling) + recombination + beam excitation
+        "terms": ("electron_ion_cooling", "recombination_rad_loss",
+                  "recombination_3b_loss", "beam_excitation_radiation"),
+        "collector_scalar": False,
+        "color": "#0072B2", "ls": (0, (4, 1.6)),
+    },
+    "ionization cost": {
+        "terms": ("ionization_energy_cost",),
+        "collector_scalar": False,
+        "color": "#009E73", "ls": (0, (6, 1.4, 1.4, 1.4)),
+    },
+    "e-n cooling": {
+        "terms": ("electron_neutral_cooling",),
+        "collector_scalar": False,
+        "color": "#CC79A7", "ls": (0, (1.2, 1.2)),
+    },
 }
-PLASMA_FLOOR_W = 10.0  # legend/axis floor for the loss panel [W]
+PLASMA_FLOOR_W = 10.0  # activity/axis floor for the loss panel [W]
+
+# WITHIN-group percent breakouts (the <stem>_breakout figure): each entry is
+# a sub-component of one plasma-book group; percentages are of the group's
+# own energy-integrated total over the main-discharge window.
+RADIATION_BREAKOUT = {
+    "line radiation (e-i cooling)": {
+        "terms": ("electron_ion_cooling",), "color": "#0072B2"},
+    "recombination radiation": {
+        "terms": ("recombination_rad_loss", "recombination_3b_loss"),
+        "color": "#56B4E9"},
+    "beam excitation radiation": {
+        "terms": ("beam_excitation_radiation",), "color": "#CC79A7"},
+}
+SURFACE_BREAKOUT = {
+    # cathode_surface_loss is the cathode-boundary fluid deposit;
+    # anode_collection is the anode-mesh interception sink (R4);
+    # the end/characteristic outflow + floating collector are the far end.
+    "cathode boundary": {
+        "terms": ("cathode_surface_loss",), "color": "#D55E00"},
+    "anode (mesh collection)": {
+        "terms": ("anode_collection",), "color": "#E69F00"},
+    "collector / end": {
+        "terms": ("surface_loss", "characteristic_boundary"),
+        "collector_scalar": True, "color": "#009E73"},
+}
 
 # Fractions are blanked where P_load falls below this fraction of its
 # main-discharge median (the ratio is meaningless with no drive).
@@ -183,20 +240,33 @@ def load_run(path):
         data["collector_surface_W"] = np.nan_to_num(
             np.asarray(cd["collector_surface_power_W"], dtype=float), nan=0.0
         ) if "collector_surface_power_W" in cd else np.zeros(n)
-        # Volume-integrated plasma-book channels (electron + ion books).
+        # Volume-integrated plasma-book terms (electron + ion books) for every
+        # term any configured group or breakout references; groups sum these
+        # (signed) and may fold in the collector surface scalar as a sink.
         Vp = np.asarray(f["geometry/plasma_volume_cm3"], dtype=float)
-        plasma = {}
-        for label, terms in PLASMA_LOSS_CHANNELS.items():
+        wanted = set()
+        for cfg in (PLASMA_LOSS_GROUPS, RADIATION_BREAKOUT, SURFACE_BREAKOUT):
+            for spec in cfg.values():
+                wanted.update(spec["terms"])
+        terms = {}
+        for term in sorted(wanted):
             total = np.zeros(n)
-            for term in terms:
-                for book in ("electron_energy_terms_W_cm3", "ion_energy_terms_W_cm3"):
-                    if book in f and term in f[book]:
-                        total += np.sum(
-                            np.asarray(f[book][term], dtype=float) * Vp[None, :], axis=1
-                        )
-            plasma[label] = total
-        data["plasma_losses"] = plasma
+            for book in ("electron_energy_terms_W_cm3", "ion_energy_terms_W_cm3"):
+                if book in f and term in f[book]:
+                    total += np.sum(
+                        np.asarray(f[book][term], dtype=float) * Vp[None, :], axis=1
+                    )
+            terms[term] = total
+        data["plasma_terms"] = terms
     return data
+
+
+def plasma_group_sum(d, spec):
+    """Signed sum of a plasma-book group's terms [W] (+ collector if declared)."""
+    total = sum(d["plasma_terms"][term] for term in spec["terms"])
+    if spec.get("collector_scalar"):
+        total = total - d["collector_surface_W"]
+    return total
 
 
 def build_ledger(d):
@@ -220,11 +290,13 @@ def build_ledger(d):
 
 
 def group_series(ledger):
-    """Sum ledger channels into the configured groups [W]."""
+    """Sum ledger channels into the configured NET groups [W]."""
     return {
         name: sum(ledger[ch] for ch in spec["channels"])
         for name, spec in CHANNEL_GROUPS.items()
     }
+
+
 
 
 # =============================================================================
@@ -237,19 +309,16 @@ def _phase_lines(ax, phase_events, t0_ms):
             ax.axvline(t_ms, color="0.75", lw=0.6, ls=(0, (2, 2)), zorder=1)
 
 
-def _signed_stack(ax, t, series, styles):
-    """Stack signed channels: positive parts up, negative parts down."""
-    pos = np.zeros_like(t)
-    neg = np.zeros_like(t)
+def _positive_stack(ax, t, series, styles):
+    """Stack strictly-upward bands; returns the running (gross) top."""
+    top = np.zeros_like(t)
     for key, y in series.items():
         label, color = styles[key]
         yp = np.clip(y, 0.0, None)
-        yn = np.clip(y, None, 0.0)
-        ax.fill_between(t, pos, pos + yp, color=color, lw=0.0, alpha=0.85,
+        ax.fill_between(t, top, top + yp, color=color, lw=0.0, alpha=0.85,
                         label=label, zorder=2)
-        ax.fill_between(t, neg, neg + yn, color=color, lw=0.0, alpha=0.85, zorder=2)
-        pos = pos + yp
-        neg = neg + yn
+        top = top + yp
+    return top
 
 
 def make_power_figure(d, ledger, residual, profile, smooth):
@@ -270,20 +339,27 @@ def make_power_figure(d, ledger, residual, profile, smooth):
     )
     ax_led, ax_res, ax_pla = axes
 
-    # --- panel A: the P_load ledger, signed stacked area + P_load overlay ---
+    # --- panel A: gross-outflow stack, P_load overlay, hatched round trip ---
+    # The four positive outflow lines stack to the gross circuit outflow
+    # P_gross = P_load + P_returned; the P_load line sits below the stack top
+    # by exactly the returned power, and that gap is hatched: gross outflow
+    # above, net P_load line, hatched slice = energy returned to the circuit.
     series = {
-        k: _boxcar(np.where(act, v, np.nan), smooth) * kW
-        for k, v in ledger.items()
+        k: _boxcar(np.where(act, ledger[k], np.nan), smooth) * kW
+        for k in LEDGER_STYLE
     }
-    _signed_stack(ax_led, t, series, LEDGER_STYLE)
-    ax_led.plot(t, _boxcar(np.where(act, d["P_load"], np.nan), smooth) * kW,
-                color="#1A1A1A", lw=1.0 if journal else 2.2,
-                label=r"$P_\mathrm{load} = I_\mathrm{tot} V_b$", zorder=4)
+    gross_top = _positive_stack(ax_led, t, series, LEDGER_STYLE)
+    P_load_s = _boxcar(np.where(act, d["P_load"], np.nan), smooth) * kW
+    ax_led.fill_between(t, P_load_s, gross_top, facecolor="none",
+                        edgecolor=RETURNED_COLOR, hatch=RETURNED_HATCH,
+                        lw=0.0, label=RETURNED_LABEL, zorder=3)
+    ax_led.plot(t, P_load_s, color="#1A1A1A", lw=1.2 if journal else 2.4,
+                label=r"$P_\mathrm{load} = I_\mathrm{tot} V_b$ (net)", zorder=4)
     ax_led.plot(t, _boxcar(np.where(act, d["P_wall"], np.nan), smooth) * kW,
                 color="#444A52", lw=0.8 if journal else 1.6, ls=(0, (4, 2)),
                 label=r"$P_\mathrm{wall}$ $(= P_\mathrm{load} + P_\mathrm{comp})$",
                 zorder=4)
-    ax_led.axhline(0.0, color="0.6", lw=0.6, zorder=3)
+    ax_led.set_ylim(bottom=0.0)
     ax_led.set_ylabel("power [kW]")
     # Legend above the figure (reserved space) so it never collides with data.
     handles, labels = ax_led.get_legend_handles_labels()
@@ -307,123 +383,126 @@ def make_power_figure(d, ledger, residual, profile, smooth):
         color="#444A52", fontsize="small")
     _phase_lines(ax_res, d["phase_events"], t0)
 
-    # --- panel C: plasma-book volumetric losses (magnitudes, log axis) ---
-    cycle = [c for c in fs.palette("journal" if journal else "slide")
-             if c.lower() not in ("#000000", "#1a1a1a")]
-    losses = dict(d["plasma_losses"])
-    losses["collector surface"] = -d["collector_surface_W"]
+    # --- panel C: plasma-book loss groups (magnitudes, log axis) ---
+    # Few semantic lines (config: PLASMA_LOSS_GROUPS), each with its own color
+    # AND dash pattern (grayscale-safe). Direct right-edge labels were tried
+    # and rejected: radiation and ionization cost sit within ~5% of each other
+    # on this run, so adjacent labels cannot be tied to their lines; the
+    # compact legend lives in the empty decade at lower right instead.
     xlim = (max(0.0, t0 - 0.5), t[-1])
     in_x = (t >= xlim[0]) & (t <= xlim[1])
     top = PLASMA_FLOOR_W
-    ci = 0
-    for label, y in losses.items():
-        mag = np.abs(np.minimum(_boxcar(y, smooth), 0.0))  # sinks, magnitude
+    for label, spec in PLASMA_LOSS_GROUPS.items():
+        y = plasma_group_sum(d, spec)
+        mag = np.abs(np.minimum(_boxcar(y, smooth), 0.0))  # sink part, magnitude
         if np.nanmax(mag[in_x]) < PLASMA_FLOOR_W:
-            continue  # inactive channel for this run
+            continue  # inactive group for this run
         top = max(top, np.nanmax(mag[in_x]))
-        # More channels than palette colors: dash the second cycle pass so no
-        # two channels share an identical line.
-        ls = "-" if ci < len(cycle) else (0, (3, 1.5))
-        ax_pla.plot(t, mag * kW, color=cycle[ci % len(cycle)], ls=ls,
-                    lw=1.0 if journal else 2.2, label=label)
-        ci += 1
+        ax_pla.plot(t, mag * kW, color=spec["color"], ls=spec["ls"],
+                    lw=1.1 if journal else 2.4, label=label)
     ax_pla.set_yscale("log")
-    ax_pla.set_ylim(PLASMA_FLOOR_W * kW, 4.0 * top * kW)
+    ax_pla.set_ylim(PLASMA_FLOOR_W * kW * 1e-1, 4.0 * top * kW)
+    ax_pla.legend(loc="lower right", ncol=2, handlelength=1.8,
+                  columnspacing=1.0, fontsize="small", borderaxespad=0.4)
     ax_pla.set_ylabel("plasma-book\nloss [kW]")
     ax_pla.set_xlabel("time [ms]")
-    # Legend in its own column to the right of the panel.
-    ax_pla.legend(loc="center left", bbox_to_anchor=(1.01, 0.5), ncol=1,
-                  handlelength=1.2, borderaxespad=0.0, fontsize="small")
     _phase_lines(ax_pla, d["phase_events"], t0)
 
     ax_led.set_xlim(*xlim)
-    if smooth > 1:
-        dt_ms = float(np.median(np.diff(t)))
-        ax_led.annotate(f"{smooth * dt_ms:.2f} ms boxcar", xy=(0.02, 0.97),
-                        xycoords="axes fraction", ha="left", va="top",
-                        color="#444A52", fontsize="small")
     return fig
 
 
-def make_efficiency_figure(d, ledger, window, profile, smooth):
-    """Fraction of P_load per group vs time + energy-integrated shares."""
+def _share_barh(ax, items):
+    """Horizontal percent bars: items = [(label, share_pct, color), ...]."""
+    ypos = np.arange(len(items))[::-1]
+    for yp, (label, s, color) in zip(ypos, items):
+        ax.barh(yp, s, height=0.62, facecolor=color)
+        ax.annotate(f"{s:.1f}%", xy=(max(s, 0.0), yp), xytext=(4, 0),
+                    textcoords="offset points", ha="left", va="center")
+    ax.axvline(0.0, color="0.4", lw=0.8)
+    ax.set_yticks(ypos, [label for label, _, _ in items])
+    hi = max(s for _, s, _ in items)
+    lo = min(0.0, min(s for _, s, _ in items))
+    ax.set_xlim(lo, hi + 0.24 * (hi - lo))
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+
+def make_efficiency_figure(d, ledger, window, profile):
+    """Two bar charts of the NET power components (main-discharge energies).
+
+    Left: shares of E_wall = int(I_tot*V_bank)dt -- this denominator includes
+    the compliance/mesh resistor dissipation, so P_comp appears as an
+    explicit component. Right: the same components as shares of
+    E_load = int(I_tot*V_b)dt (no P_comp component). All components are
+    positive NET flows (round trip folded back -- see CHANNEL_GROUPS) and
+    each chart sums to 100% of its denominator.
+    """
     act = d["active"]
-    t = d["time_ms"]
-    t0 = t[act][0] if act.any() else t[0]
-    groups = group_series(ledger)
-    P_load = d["P_load"]
+    sel = window & act
+    t_s = d["time_ms"] * 1e-3
     journal = profile == "journal"
 
-    sel = window & act
-    floor = EFF_PLOAD_FLOOR_FRAC * np.median(P_load[sel]) if sel.any() else np.inf
-    # Numerator and denominator get the SAME boxcar so the ratio is the ratio
-    # of the plotted (smoothed) series, not a mixed raw/smoothed quantity.
-    P_load_s = _boxcar(np.where(act, P_load, np.nan), smooth)
-    denom = np.where(act & (P_load > floor), P_load_s, np.nan)
+    def E(y):
+        return np.trapezoid(np.where(sel, y, 0.0), t_s)
+
+    E_load = E(d["P_load"])
+    E_wall = E(d["P_wall"])
+    E_comp = E(d["P_comp"])
+    comps = [(name.split(" (")[0], E(y), GROUP_COLORS[name])
+             for name, y in group_series(ledger).items()]
 
     if journal:
-        figsize = (fs.JOURNAL_WIDTHS["aip_double"], 3.0)
+        figsize = (fs.JOURNAL_WIDTHS["aip_double"], 2.4)
     else:
-        figsize = (12.9, 5.6)
-    fig, (ax_t, ax_b) = plt.subplots(
-        1, 2, figsize=figsize, constrained_layout=True,
-        gridspec_kw={"width_ratios": [1.75, 1.0]},
-    )
+        figsize = (12.9, 4.6)
+    fig, (ax_w, ax_l) = plt.subplots(
+        1, 2, figsize=figsize, constrained_layout=True)
 
-    # --- panel A: time-resolved group fraction of P_load ---
-    lo, hi = 0.0, 100.0
-    for name, y in groups.items():
-        role = CHANNEL_GROUPS[name]["role"]
-        frac = 100.0 * _boxcar(np.where(act, y, np.nan), smooth) / denom
-        ax_t.plot(t, frac, color=GROUP_COLORS[name],
-                  lw=(1.8 if role == "delivered" else 1.0) if journal
-                  else (3.6 if role == "delivered" else 2.0),
-                  label=name)
-        if sel.any():  # scale the axis from the in-window values only, so
-            fw = frac[sel]  # startup/ramp-down blowups clip out of view
-            lo = min(lo, np.nanmin(fw))
-            hi = max(hi, np.nanmax(fw))
-    ax_t.axhline(0.0, color="0.6", lw=0.6)
-    ax_t.axhline(100.0, color="0.8", lw=0.6, ls=(0, (2, 2)))
-    ax_t.set_xlim(left=max(0.0, t0 - 0.5), right=t[-1])
-    ax_t.set_ylim(lo - 12.0, hi + 12.0)
-    ax_t.set_xlabel("time [ms]")
-    ax_t.set_ylabel(r"share of $P_\mathrm{load}$ [%]")
-    # Legend above the figure (reserved space) so it never collides with data.
-    handles, labels = ax_t.get_legend_handles_labels()
-    fig.legend(handles, labels, loc="outside upper center", ncol=2,
-               handlelength=1.2, columnspacing=1.0, handletextpad=0.5,
-               fontsize="small")
-    if smooth > 1:
-        dt_ms = float(np.median(np.diff(t)))
-        ax_t.annotate(f"{smooth * dt_ms:.2f} ms boxcar", xy=(0.99, 0.02),
-                      xycoords="axes fraction", ha="right", va="bottom",
-                      color="#444A52", fontsize="small")
-    _phase_lines(ax_t, d["phase_events"], t0)
+    wall_items = [(lab, 100.0 * Ei / E_wall, c) for lab, Ei, c in comps]
+    wall_items.append((COMP_LABEL.split(" (")[0], 100.0 * E_comp / E_wall,
+                       COMP_COLOR))
+    _share_barh(ax_w, wall_items)
+    ax_w.set_xlabel("share of $E_\\mathrm{wall}$ [%]\n(main discharge)")
 
-    # --- panel B: energy-integrated share over the main-discharge window ---
+    load_items = [(lab, 100.0 * Ei / E_load, c) for lab, Ei, c in comps]
+    _share_barh(ax_l, load_items)
+    ax_l.set_xlabel("share of $E_\\mathrm{load}$ [%]\n(main discharge)")
+    return fig
+
+
+def make_breakout_figure(d, window, profile):
+    """Percent contributions WITHIN the radiation and surface/sheath groups.
+
+    Each panel normalizes its sub-components (energy-integrated sink
+    magnitudes over the main-discharge window) by the group's own total.
+    """
+    sel = window
     t_s = d["time_ms"] * 1e-3
-    E_load = np.trapezoid(np.where(sel, P_load, 0.0), t_s)
-    shares, labels, colors = [], [], []
-    for name, y in groups.items():
-        E = np.trapezoid(np.where(sel, y, 0.0), t_s)
-        shares.append(100.0 * E / E_load)
-        labels.append(name.split(" (")[0])
-        colors.append(GROUP_COLORS[name])
-    ypos = np.arange(len(shares))[::-1]
-    ax_b.barh(ypos, shares, color=colors, height=0.62)
-    ax_b.axvline(0.0, color="0.4", lw=0.8)
-    for yp, s in zip(ypos, shares):
-        # Positive bars: label just past the bar end. Negative bars: label to
-        # the right of the zero line, clear of the bar and the tick labels.
-        ax_b.annotate(f"{s:.1f}%", xy=(max(s, 0.0), yp), xytext=(4, 0),
-                      textcoords="offset points", ha="left", va="center")
-    ax_b.set_yticks(ypos, labels)
-    ax_b.set_xlabel("share of $E_\\mathrm{load}$ [%]\n(main discharge)")
-    lo_b, hi_b = min(0.0, min(shares)), max(shares)
-    ax_b.set_xlim(lo_b - 0.06 * (hi_b - lo_b), hi_b + 0.24 * (hi_b - lo_b))
-    ax_b.spines["top"].set_visible(False)
-    ax_b.spines["right"].set_visible(False)
+    journal = profile == "journal"
+
+    def E_sink(spec):
+        y = plasma_group_sum(d, spec)
+        mag = np.abs(np.minimum(y, 0.0))  # sink part only
+        return np.trapezoid(np.where(sel, mag, 0.0), t_s)
+
+    if journal:
+        figsize = (fs.JOURNAL_WIDTHS["aip_double"], 2.2)
+    else:
+        figsize = (12.9, 4.2)
+    fig, (ax_r, ax_s) = plt.subplots(
+        1, 2, figsize=figsize, constrained_layout=True)
+
+    for ax, breakout, xlabel in (
+        (ax_r, RADIATION_BREAKOUT, "% of radiation losses\n(main discharge)"),
+        (ax_s, SURFACE_BREAKOUT, "% of surface/sheath losses\n(main discharge)"),
+    ):
+        energies = {label: E_sink(spec) for label, spec in breakout.items()}
+        total = sum(energies.values())
+        items = [(label, 100.0 * Ei / total if total > 0 else 0.0,
+                  breakout[label]["color"]) for label, Ei in energies.items()]
+        _share_barh(ax, items)
+        ax.set_xlabel(xlabel)
     return fig
 
 
@@ -491,19 +570,43 @@ def main(argv=None):
     window = d["phase"] == "main_discharge"
     sel = window & act
     t_s = d["time_ms"] * 1e-3
-    E_load = np.trapezoid(np.where(sel, d["P_load"], 0.0), t_s)
     if sel.any():
         w = (t_s[sel][0] * 1e3, t_s[sel][-1] * 1e3)
         print(f"window=main_discharge t0_ms={w[0]:.3f} t1_ms={w[1]:.3f}")
+    print(f"smooth_ms={args.smooth_ms}")
+
+    def E(y):
+        return np.trapezoid(np.where(sel, y, 0.0), t_s)
+
+    # Denominator definitions (kept off-figure by request):
+    print("E_wall_def=integral(P_wall)dt=integral(I_tot*V_bank)dt over the "
+          "main-discharge window; includes the compliance/mesh resistor "
+          "dissipation P_comp")
+    print("E_load_def=integral(P_load)dt=integral(I_tot*V_b)dt over the "
+          "main-discharge window; power across the plasma load, no P_comp")
+    E_load = E(d["P_load"])
+    E_wall = E(d["P_wall"])
+    E_comp = E(d["P_comp"])
+    print(f"E_wall_kJ={E_wall / 1e3:.3f}")
     print(f"E_load_kJ={E_load / 1e3:.3f}")
+    print(f"E_comp_kJ={E_comp / 1e3:.3f} frac_wall={E_comp / E_wall:.4f}")
+    # NET all-positive components (round trip folded back; see CHANNEL_GROUPS).
     delivered_frac = None
     for name, y in group_series(ledger).items():
-        E = np.trapezoid(np.where(sel, y, 0.0), t_s)
+        Ei = E(y)
         key = name.split(" (")[0].replace(" ", "_").replace("-", "_")
-        print(f"group_{key}_E_kJ={E / 1e3:.3f} frac={E / E_load:.4f}")
+        print(f"net_{key}_E_kJ={Ei / 1e3:.3f} frac_load={Ei / E_load:.4f} "
+              f"frac_wall={Ei / E_wall:.4f}")
         if CHANNEL_GROUPS[name]["role"] == "delivered":
-            delivered_frac = E / E_load
-    print(f"efficiency_delivered_frac={delivered_frac:.4f}")
+            delivered_frac = Ei / E_load
+    print(f"efficiency_delivered_net_frac_load={delivered_frac:.4f}")
+    # Round-trip record (folded into the net components above, displayed only
+    # as the hatched slice on the power figure):
+    E_anode_ret = E(-ledger["P_anode_field"])
+    E_eret = E(-ledger["P_electron_return"])
+    print(f"returned_total_kJ={(E_anode_ret + E_eret) / 1e3:.3f}")
+    print(f"returned_anode_kJ={E_anode_ret / 1e3:.3f}")
+    print(f"returned_electron_kJ={E_eret / 1e3:.3f}")
 
     # --- figures ---
     dt_ms = float(np.median(np.diff(d["time_ms"])))
@@ -512,8 +615,10 @@ def main(argv=None):
     written = []
     fig = make_power_figure(d, ledger, residual, args.profile, smooth)
     written += save_figure(fig, out_dir, f"{stem}_power", args.profile)
-    fig = make_efficiency_figure(d, ledger, window, args.profile, smooth)
+    fig = make_efficiency_figure(d, ledger, window, args.profile)
     written += save_figure(fig, out_dir, f"{stem}_efficiency", args.profile)
+    fig = make_breakout_figure(d, window, args.profile)
+    written += save_figure(fig, out_dir, f"{stem}_breakout", args.profile)
     for p in written:
         print(f"wrote {p}")
     return 0
