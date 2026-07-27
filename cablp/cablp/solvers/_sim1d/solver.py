@@ -5544,7 +5544,32 @@ class LAPDSim1D:
             "p_beam": np.zeros(cells, dtype=float),
             "l_b_profile": np.zeros(cells, dtype=float),
             "l_b_profile_twin": np.zeros(cells, dtype=float),
+            # --- CSDA deposition channel breakout (diagnostic only) ---------
+            # Per-cell power [W] delivered to the electron pool by each of the
+            # four physically distinct channels the module's lumped
+            # ``plasma_heating_erg_s`` bank contains, summed over the active
+            # rays exactly as ``beam_power_deposition`` sums them. Present
+            # (all zero) on every run; ``beam_csda_active`` is the marker that
+            # says the numbers are real -- a Beer-Lambert run books its
+            # deposition through a different path and leaves these at zero.
+            # Under ``beam_deposition_smoothing_cm > 0`` the RHS profile is
+            # redistributed but its total is conserved, so the COLUMN SUM of
+            # these arrays still matches the smoothed term; the per-cell
+            # profile is the unsmoothed one.
+            "beam_csda_active": 0.0,
+            "beam_heat_coulomb_W": np.zeros(cells, dtype=float),
+            "beam_heat_anomalous_W": np.zeros(cells, dtype=float),
+            "beam_heat_secondary_W": np.zeros(cells, dtype=float),
+            "beam_heat_terminal_W": np.zeros(cells, dtype=float),
         }
+        for prefix in ("source", "end"):
+            # Per-ray exit ledger [W]: power the anode mesh intercepts at the
+            # anode-face crossing, and power streaming out of the far end.
+            # Both are computed by the CSDA ray today and had no consumer and
+            # no saved record; they are the unbooked bypass termination.
+            diag[f"{prefix}_beam_anode_intercepted_W"] = 0.0
+            diag[f"{prefix}_beam_transmitted_W"] = 0.0
+            diag[f"{prefix}_beam_transmitted_flux_per_s"] = 0.0
         for prefix in ("source", "end"):
             diag[f"{prefix}_regime"] = "none"
             for key in _CATHODE_RESULT_KEYS:
@@ -5587,7 +5612,46 @@ class LAPDSim1D:
                 prefix="end",
                 result=beam_result.result_twin,
             )
+        self._copy_beam_deposition_diagnostics(diag, cathode_solve)
         return diag
+
+    @staticmethod
+    def _copy_beam_deposition_diagnostics(diag, cathode_solve):
+        """Record the CSDA ray's internal channels (diagnostic only).
+
+        Reads the deposition results the cathode solve already produced --
+        nothing here is recomputed and nothing feeds the RHS, so the saved
+        trajectory is unchanged apart from the added datasets. Erg/s -> W.
+        """
+        deposition = getattr(cathode_solve, "beam_deposition", None)
+        if not deposition:
+            return
+        prefixes = {0: "source", -1: "end"}
+        for end, dep in deposition.items():
+            if dep is None:
+                continue
+            diag["beam_csda_active"] = 1.0
+            diag["beam_heat_coulomb_W"] += dep.heating_coulomb_erg_s * 1.0e-7
+            diag["beam_heat_anomalous_W"] += (
+                dep.heating_anomalous_erg_s * 1.0e-7
+            )
+            diag["beam_heat_secondary_W"] += (
+                dep.heating_secondary_erg_s * 1.0e-7
+            )
+            diag["beam_heat_terminal_W"] += dep.heating_terminal_erg_s * 1.0e-7
+            prefix = prefixes[int(end)]
+            diag[f"{prefix}_beam_anode_intercepted_W"] = (
+                float(dep.anode_intercepted_erg_s) * 1.0e-7
+            )
+            diag[f"{prefix}_beam_transmitted_flux_per_s"] = float(
+                dep.transmitted_flux
+            )
+            diag[f"{prefix}_beam_transmitted_W"] = (
+                float(dep.transmitted_flux)
+                * float(dep.transmitted_energy_eV)
+                * ev_to_erg
+                * 1.0e-7
+            )
 
     def _copy_cathode_result_diagnostics(self, diag, prefix, result):
         if result is None:

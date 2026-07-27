@@ -210,6 +210,59 @@ BEAM_FATE = {
     "immediately radiated (beam excitation)": {
         "terms": ("beam_excitation_radiation",), "color": "#CC79A7"},
 }
+# -----------------------------------------------------------------------------
+# STAGE-2 THERMAL BREAKOUT (2026-07-27) -- what is actually INSIDE the
+# "delivered as thermal" bar.
+#
+# `beam_power_deposition` is a LUMP. Read off physics/cathode.py
+# `_beam_ionization_sources`, its Ee row is
+#
+#   beam_power_deposition = (plasma_heating + radiated + ionization_cost)/Vp
+#                           + P_ohmic deposited over the cathode-anode gap
+#
+# and `funcs/_beam_deposition.py` in turn splits `plasma_heating` into four
+# physically distinct deliveries, which the solver now saves per cell
+# (`cathode_diagnostics/beam_heat_*_W`, marker `beam_csda_active`):
+#
+#   Coulomb drag      continuous slowing-down on the bulk electrons
+#   anomalous drag    quasilinear beam-plasma relaxation (0 unless selected)
+#   event residue     <W_sec> per ionization, i.e. the energy dumped into the
+#                     newborn secondary ABOVE the I_ion potential cost -- the
+#                     "premature dump"
+#   terminal dump     the sub-threshold residual banked whole where the
+#                     primary's energy crosses E_stop (end of range)
+#
+# The last two groups below are the radiated and ionization-cost banks, which
+# ride INSIDE this bar and are ALSO drawn as their own stage-2 bars: the RHS
+# books them positive here and subtracts them again through the separate
+# `beam_ionization_cost` / `beam_excitation_radiation` sinks. Showing them
+# inside the breakout is deliberate -- the partition is exact only with them,
+# and the overlap is a property of the booking, not of this figure.
+#
+# Each spec names exactly one source:
+#   "diag"   per-cell CSDA channel power [W] summed over the column
+#   "terms"  volume-integrated plasma-book terms (sink magnitude)
+#   "ledger" a reconstructed circuit ledger line
+# -----------------------------------------------------------------------------
+BEAM_THERMAL_CHANNELS = {
+    "Coulomb drag on bulk electrons (continuous)": {
+        "diag": ("beam_heat_coulomb_W",), "color": "#0072B2"},
+    "anomalous (quasilinear) drag": {
+        "diag": ("beam_heat_anomalous_W",), "color": "#56B4E9"},
+    "inelastic-event residue (secondary birth above $I_\\mathrm{ion}$)": {
+        "diag": ("beam_heat_secondary_W",), "color": "#E69F00"},
+    "primary terminal dump (end of range / sub-threshold)": {
+        "diag": ("beam_heat_terminal_W",), "color": "#D55E00"},
+    "bulk ohmic booked into this term (gap deposition)": {
+        "ledger": ("P_ohmic",), "color": "#009E73"},
+    "ionization cost carried inside this term (also its own bar)": {
+        "terms": ("beam_ionization_cost",), "color": "#CC79A7"},
+    "excitation radiation carried inside this term (also its own bar)": {
+        "terms": ("beam_excitation_radiation",), "color": "#F0E442"},
+}
+# Written into the bar labels so a breakout figure is never mistaken for the
+# lumped one, and printed when the breakout is unavailable.
+BEAM_THERMAL_LUMPED_LABEL = next(iter(BEAM_FATE))
 BEAM_RESIDUAL_LABEL = "unreconciled (CSDA > circuit $P_\\mathrm{prim}$)"
 BEAM_RESIDUAL_COLOR = "#888888"
 BEAM_RESIDUAL_HATCH = "xxx"
@@ -664,6 +717,35 @@ def load_run(path):
         data["collector_surface_W"] = np.nan_to_num(
             np.asarray(cd["collector_surface_power_W"], dtype=float), nan=0.0
         ) if "collector_surface_power_W" in cd else np.zeros(n)
+        # --- CSDA channel breakout (2026-07-27) -----------------------------
+        # Per-cell channel power [W] -> column totals [W]. Absent on runs
+        # saved before the instrumentation, and present-but-zero on runs whose
+        # deposition did not go through the CSDA module, so the marker (not
+        # mere key presence) decides whether the breakout is meaningful.
+        channels = {}
+        for name in ("beam_heat_coulomb_W", "beam_heat_anomalous_W",
+                     "beam_heat_secondary_W", "beam_heat_terminal_W"):
+            if name in cd:
+                channels[name] = np.nan_to_num(
+                    np.asarray(cd[name], dtype=float), nan=0.0
+                ).sum(axis=1)
+        data["beam_channels"] = channels
+        data["beam_csda_active"] = (
+            np.nan_to_num(np.asarray(cd["beam_csda_active"], dtype=float),
+                          nan=0.0)
+            if "beam_csda_active" in cd else np.zeros(n)
+        )
+        data["have_beam_channels"] = bool(
+            len(channels) == 4 and np.any(data["beam_csda_active"] > 0.0)
+        )
+        # Exit ledger of the ray: intercepted at the anode mesh, and streaming
+        # out of the far end. Neither has an RHS consumer (see main()).
+        for name in ("beam_anode_intercepted_W", "beam_transmitted_W",
+                     "beam_transmitted_flux_per_s"):
+            data[name] = _sum_sides(cd, name, n)
+        data["have_beam_exit_ledger"] = any(
+            f"{side}_beam_anode_intercepted_W" in cd for side in SIDES
+        )
         # Volume-integrated plasma-book terms for every term any configured
         # group or breakout references. Three views are kept:
         #   plasma_terms          -- electron + ion books (the plasma total)
@@ -675,10 +757,13 @@ def load_run(path):
         Vp = np.asarray(f["geometry/plasma_volume_cm3"], dtype=float)
         wanted = set()
         for cfg in (PLASMA_LOSS_GROUPS, RADIATION_BREAKOUT, SURFACE_BREAKOUT,
-                    THERMAL_BUDGET, BEAM_FATE, ELECTRON_LOSS_GROUPS,
-                    ION_LOSS_GROUPS, COMBINED_LOSS_GROUPS):
+                    THERMAL_BUDGET, BEAM_FATE, BEAM_THERMAL_CHANNELS,
+                    ELECTRON_LOSS_GROUPS, ION_LOSS_GROUPS,
+                    COMBINED_LOSS_GROUPS):
             for spec in cfg.values():
-                wanted.update(spec["terms"])
+                # BEAM_THERMAL_CHANNELS specs may source from "diag"/"ledger"
+                # instead, so "terms" is optional here.
+                wanted.update(spec.get("terms", ()))
         wanted.update(ION_LOSS_REFERENCE["terms"])
         terms = {}
         terms_e = {}
@@ -1037,11 +1122,41 @@ def beam_fate_energies(d, E):
     }
 
 
+def beam_channel_series(d, spec):
+    """Series [W] for one BEAM_THERMAL_CHANNELS spec, whichever source it names."""
+    if "diag" in spec:
+        return sum(d["beam_channels"][k] for k in spec["diag"])
+    if "ledger" in spec:
+        return sum(d[k] for k in spec["ledger"])
+    return sum(d["plasma_terms"][t] for t in spec["terms"])
+
+
+def beam_thermal_channel_energies(d, E):
+    """Breakout of the stage-2 thermal bar [J], or ``None`` on old/non-CSDA runs.
+
+    The channels partition ``int(beam_power_deposition)dt`` exactly (see
+    BEAM_THERMAL_CHANNELS); the caller checks that closure rather than
+    assuming it.
+    """
+    if not d["have_beam_channels"]:
+        return None
+    return {
+        label: abs(E(beam_channel_series(d, spec)))
+        for label, spec in BEAM_THERMAL_CHANNELS.items()
+    }
+
+
 def beam_fate_items(d, ledger, sel, t_s):
     """Stage-2 bar items over an arbitrary window mask.
 
     Returns ``(items, E_prim, E_ohmic, E_resid)`` where `items` is ready for
     ``_share_barh`` with ONE trailing excluded entry (the ohmic reference).
+
+    When the run carries the CSDA channel instrumentation, the single
+    "delivered as thermal" bar is replaced by its BEAM_THERMAL_CHANNELS
+    breakout; the bars it replaces sum to the same energy, so the P_prim
+    partition, the residual and every other bar are unchanged. Runs without
+    it keep the lumped bar (main() prints the reason once).
     """
     def E(y):
         return np.trapezoid(np.where(sel, y, 0.0), t_s)
@@ -1049,8 +1164,17 @@ def beam_fate_items(d, ledger, sel, t_s):
     E_prim = E(ledger["P_prim"])
     E_ohmic = E(ledger["P_ohmic"])
     fate = beam_fate_energies(d, E)
-    items = [(label, 100.0 * Ei / E_prim, BEAM_FATE[label]["color"])
-             for label, Ei in fate.items()]
+    channels = beam_thermal_channel_energies(d, E)
+    items = []
+    for label, Ei in fate.items():
+        if label == BEAM_THERMAL_LUMPED_LABEL and channels is not None:
+            items += [
+                (f"{sub} [thermal]", 100.0 * Esub / E_prim,
+                 BEAM_THERMAL_CHANNELS[sub]["color"])
+                for sub, Esub in channels.items()
+            ]
+            continue
+        items.append((label, 100.0 * Ei / E_prim, BEAM_FATE[label]["color"]))
     E_resid = E_prim - sum(fate.values())
     items.append((BEAM_RESIDUAL_LABEL, 100.0 * E_resid / E_prim,
                   BEAM_RESIDUAL_COLOR, BEAM_RESIDUAL_HATCH))
@@ -1074,7 +1198,11 @@ def make_efficiency_figure(d, ledger, window, stage2, profile):
     collision outcome -- thermal / ionization consumption / prompt radiation
     -- with the unreconciled CSDA-vs-circuit remainder as its own labeled
     bar, and the ohmic delivery alongside (excluded from the partition) so
-    the total thermal input is readable.
+    the total thermal input is readable. On instrumented runs the thermal
+    entry is drawn as its BEAM_THERMAL_CHANNELS breakout (Coulomb drag /
+    anomalous drag / inelastic-event residue / terminal dump, plus the ohmic
+    and cost/radiation banks that ride inside the same term) instead of one
+    lumped bar; the bars it replaces sum to the same energy.
 
     v4: stage 2 is integrated over `stage2` -- window (a), plasma launch to
     breakdown -- NOT the main-discharge window, because absorption fate
@@ -1115,12 +1243,18 @@ def make_efficiency_figure(d, ledger, window, stage2, profile):
     # Stage 1's two denominators pair naturally side by side (their labels are
     # short); stages 2 and 3 take the full width, which is what keeps their
     # long channel names and x-labels from colliding at either profile.
+    # The breakout adds rows to stage 2, so its panel and the figure grow with
+    # the bar count instead of squeezing the same box.
+    items_b, _, _, _ = beam_fate_items(d, ledger, s2_mask, t_s)
+    extra_rows = max(0, len(items_b) - 5)
     if journal:
-        figsize = (fs.JOURNAL_WIDTHS["aip_double"], 8.2)
+        figsize = (fs.JOURNAL_WIDTHS["aip_double"], 8.2 + 0.30 * extra_rows)
     else:
-        figsize = (12.9, 13.2)
+        figsize = (12.9, 13.2 + 0.45 * extra_rows)
     fig = plt.figure(figsize=figsize, constrained_layout=True)
-    gs = fig.add_gridspec(3, 2, height_ratios=[1.0, 0.9, 1.15])
+    gs = fig.add_gridspec(
+        3, 2, height_ratios=[1.0, 0.9 + 0.18 * extra_rows, 1.15]
+    )
     ax_w = fig.add_subplot(gs[0, 0])
     ax_l = fig.add_subplot(gs[0, 1])
     ax_b = fig.add_subplot(gs[1, :])
@@ -1143,10 +1277,12 @@ def make_efficiency_figure(d, ledger, window, stage2, profile):
 
     # --- stage 2: fate of the absorbed beam power (partition of P_prim) -----
     # Integrated over the TURN-ON window only (v4); see the docstring.
-    items, _, _, _ = beam_fate_items(d, ledger, s2_mask, t_s)
-    _share_barh(ax_b, items, n_excluded=1)
+    _share_barh(ax_b, items_b, n_excluded=1)
+    thermal_note = ("thermal bar broken out by CSDA channel"
+                    if d["have_beam_channels"] else "thermal bar lumped")
     ax_b.set_xlabel("stage 2 — % of ABSORBED beam power\n"
-                    "(fate by collision outcome, at beam turn-on)\n"
+                    f"(fate by collision outcome, at beam turn-on; "
+                    f"{thermal_note})\n"
                     f"window {s2_label}   [{s2_lo:.2f} – {s2_hi:.2f} ms]")
 
     # --- stage 3: the plasma-book budget of the thermal energy --------------
@@ -1172,16 +1308,25 @@ def make_beam_windows_figure(d, ledger, windows, profile):
     int(P_prim)dt. The comparison is the point: the unreconciled
     CSDA-vs-circuit remainder is largest at turn-on and shrinks as the
     discharge settles, which the single whole-discharge integral hides.
+
+    On instrumented runs each panel carries the CSDA thermal breakout, so the
+    window comparison also shows how the deposition MECHANISM shifts across
+    the discharge (drag vs event residue vs terminal dump), not just how much
+    lands as heat.
     """
     t_s = d["time_ms"] * 1e-3
     journal = profile == "journal"
+    per_window = [beam_fate_items(d, ledger, mask, t_s)
+                  for (_, _, _, _, mask) in windows]
+    extra_rows = max(0, max(len(it[0]) for it in per_window) - 5)
     if journal:
-        figsize = (fs.JOURNAL_WIDTHS["aip_double"], 6.6)
+        figsize = (fs.JOURNAL_WIDTHS["aip_double"], 6.6 + 0.85 * extra_rows)
     else:
-        figsize = (12.9, 10.4)
+        figsize = (12.9, 10.4 + 1.25 * extra_rows)
     fig, axes = plt.subplots(3, 1, figsize=figsize, constrained_layout=True)
-    for ax, (_, label, lo, hi, mask) in zip(axes, windows):
-        items, E_prim, _, _ = beam_fate_items(d, ledger, mask, t_s)
+    for ax, (_, label, lo, hi, _), (items, E_prim, _, _) in zip(
+        axes, windows, per_window
+    ):
         _share_barh(ax, items, n_excluded=1)
         # Two lines: as one, this label is wider than its own axes and clips
         # at the figure edge on `slide`.
@@ -1403,6 +1548,41 @@ def main(argv=None):
               "independent calculations and disagree by the residual above "
               "(reported, not fixed here)")
 
+    # --- STAGE 2 THERMAL BREAKOUT: what is inside beam_power_deposition -----
+    print("beam_thermal_breakout_def=beam_power_deposition="
+          "coulomb_drag+anomalous_drag+event_residue+terminal_dump"
+          "+ionization_cost+excitation_radiation+P_ohmic; the cost and "
+          "radiation banks ride inside this term AND are subtracted again by "
+          "their own sinks, so they appear twice in stage 2 by construction")
+    if not d["have_beam_channels"]:
+        print("beam_thermal_breakout=UNAVAILABLE (no CSDA channel "
+              "instrumentation in this file: either it predates the saved "
+              "cathode_diagnostics/beam_heat_*_W channels, or its deposition "
+              "did not run through the CSDA module); stage 2 keeps the "
+              "LUMPED thermal bar")
+    else:
+        chan = beam_thermal_channel_energies(d, E)
+        for label, Ei in chan.items():
+            print(f"beam_thermal_{_scalar_key(label)}_kJ={Ei / 1e3:.4f} "
+                  f"frac_thermal={Ei / E_beam_thermal:.4f} "
+                  f"frac_P_prim={Ei / E_prim:.4f}")
+        # The partition is CHECKED against the term it claims to decompose.
+        chan_resid = E_beam_thermal - sum(chan.values())
+        print(f"beam_thermal_breakout_closure_kJ={chan_resid / 1e3:.3e} "
+              f"rel={abs(chan_resid) / E_beam_thermal:.3e}")
+        # Per-window mechanism shift: the number the turn-on window is for.
+        for key, _, lo, hi, mask in windows:
+            def Ew(y, m=mask):
+                return np.trapezoid(np.where(m, y, 0.0), t_s)
+
+            wchan = beam_thermal_channel_energies(d, Ew)
+            wtot = sum(wchan.values())
+            print(f"beam_thermal_window_{key}=[{lo:.4f},{hi:.4f}]ms "
+                  f"E_thermal_kJ={wtot / 1e3:.4f}")
+            for label, Ei in wchan.items():
+                print(f"  beam_thermal_window_{key}_"
+                      f"{_scalar_key(label)}_pct={100.0 * Ei / wtot:.2f}")
+
     # --- STAGE 2 BY WINDOW (v4): the whole-discharge integral above is the
     # main-discharge average and hides the turn-on transient. -----------------
     print("stage2_windows_def=(a) plasma launch (first active circuit frame) "
@@ -1480,15 +1660,36 @@ def main(argv=None):
     # funcs/_beam_deposition.py: the bypass is CIRCUIT-booked only. The A15
     # anode-mesh interception removes anode_eta*gamma*E from the ray into
     # BeamDepositionResult.anode_intercepted_erg_s, explicitly NOT into
-    # plasma_heating_erg_s -- and that field has no consumer anywhere in
-    # cablp/solvers (only the twin-cathode summation in cathode.py:871-872),
-    # no RHS channel and no saved diagnostic. The far-end `transmitted_flux`
-    # is likewise never deposited on the collector/end books. So the bypass
-    # primaries' terminal deposit is UNBOOKED on the plasma/surface side.
+    # plasma_heating_erg_s -- and that field still has no RHS consumer. The
+    # far-end `transmitted_flux` is likewise never deposited on the
+    # collector/end books. So the bypass primaries' terminal deposit remains
+    # UNBOOKED on the plasma/surface side. Both are now SAVED, so the size of
+    # the unbooked stream is on record rather than inferred.
     print("bypass_termination=circuit_booked_only; A15 interception -> "
-          "BeamDepositionResult.anode_intercepted_erg_s has no RHS consumer "
-          "and no saved diagnostic; far-end transmitted_flux is not deposited "
-          "on the collector/end books (reported, not fixed here)")
+          "BeamDepositionResult.anode_intercepted_erg_s still has no RHS "
+          "consumer; far-end transmitted_flux is not deposited on the "
+          "collector/end books (reported, not fixed here)")
+    if not d["have_beam_exit_ledger"]:
+        print("bypass_scalars=UNAVAILABLE (this file predates the saved "
+              "beam exit ledger)")
+    else:
+        E_intercept = E(d["beam_anode_intercepted_W"])
+        E_transmit = E(d["beam_transmitted_W"])
+        print(f"bypass_anode_intercepted_kJ={E_intercept / 1e3:.4f} "
+              f"frac_P_prim={E_intercept / E_prim:.4f} (leaves the ray, "
+              "lands on the anode mesh, booked nowhere in the plasma)")
+        print(f"bypass_transmitted_kJ={E_transmit / 1e3:.4f} "
+              f"frac_P_prim={E_transmit / E_prim:.4f} (primaries streaming "
+              "out of the far end, never deposited)")
+        for key, _, lo, hi, mask in windows:
+            def Ew(y, m=mask):
+                return np.trapezoid(np.where(m, y, 0.0), t_s)
+
+            print(f"  bypass_window_{key}=[{lo:.4f},{hi:.4f}]ms "
+                  f"anode_intercepted_kJ="
+                  f"{Ew(d['beam_anode_intercepted_W']) / 1e3:.4f} "
+                  f"transmitted_kJ="
+                  f"{Ew(d['beam_transmitted_W']) / 1e3:.4f}")
 
     # --- figures ---
     dt_ms = float(np.median(np.diff(d["time_ms"])))

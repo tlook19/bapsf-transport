@@ -63,6 +63,12 @@ in the crossing cell. Per-ray energy conservation
 ``Gamma0*E0 = heating + radiated + ionization cost + transmitted`` holds to
 accumulated roundoff by construction (the energy decrement and the channel
 banks are the same floating-point sums).
+
+``plasma_heating_erg_s`` lumps four physically distinct deliveries, so the
+result also carries them separately as DIAGNOSTIC arrays (``heating_coulomb``
+/ ``heating_anomalous`` / ``heating_secondary`` / ``heating_terminal``). These
+are bookkeeping only -- they re-add products the energy decrement already
+formed, and the lumped bank the RHS consumes is untouched.
 """
 
 from __future__ import annotations
@@ -149,6 +155,28 @@ class BeamDepositionResult:
     excitation_events   : excitation events [1/s]
     plasma_heating_erg_s: Coulomb + anomalous drag + secondary-electron
                           energy + sub-threshold residual [erg/s]
+    heating_coulomb_erg_s   : DIAGNOSTIC split of ``plasma_heating_erg_s`` --
+                          the continuous Coulomb drag on plasma electrons
+                          [erg/s]
+    heating_anomalous_erg_s : DIAGNOSTIC split -- the anomalous (quasilinear
+                          beam-plasma) drag [erg/s]; identically zero under
+                          ``anomalous_model="none"``
+    heating_secondary_erg_s : DIAGNOSTIC split -- the inelastic-EVENT thermal
+                          residue, i.e. the mean secondary-electron energy
+                          <W_sec> carried away per ionization ABOVE the
+                          ``I_ion`` potential cost [erg/s]
+    heating_terminal_erg_s  : DIAGNOSTIC split -- the primary's end-of-range
+                          terminal dump: the sub-threshold residual banked
+                          whole in the cell where E crosses ``E_stop`` [erg/s]
+
+    The four ``heating_*`` arrays are pure BOOKKEEPING of products the energy
+    decrement already forms; they are accumulated alongside, never in place
+    of, ``plasma_heating_erg_s``, which keeps its exact historical value and
+    is the only one the solver RHS consumes. Their sum reproduces
+    ``plasma_heating_erg_s`` to floating-point associativity only (the lumped
+    bank adds the three per-substep pieces before multiplying), so compare
+    them with a relative tolerance, never with ``==``.
+
     radiated_erg_s      : excitation line radiation [erg/s]
     ionization_cost_erg_s: I_ion * ionization events [erg/s] (kept separate
                           to map onto the solver's beam_ionization_cost term)
@@ -173,6 +201,10 @@ class BeamDepositionResult:
     transmitted_energy_eV: float
     anode_intercepted_erg_s: float
     E_entry_eV: np.ndarray
+    heating_coulomb_erg_s: np.ndarray
+    heating_anomalous_erg_s: np.ndarray
+    heating_secondary_erg_s: np.ndarray
+    heating_terminal_erg_s: np.ndarray
 
 
 def deposit_beam(
@@ -269,6 +301,12 @@ def deposit_beam(
     radiated = np.zeros(cells)
     ionization_cost = np.zeros(cells)
     E_entry = np.zeros(cells)
+    # Diagnostic splits of `heating` (see BeamDepositionResult). Accumulated
+    # from the SAME products the lumped bank uses; nothing here feeds the RHS.
+    heat_coulomb = np.zeros(cells)
+    heat_anomalous = np.zeros(cells)
+    heat_secondary = np.zeros(cells)
+    heat_terminal = np.zeros(cells)
 
     order = range(launch, cells) if direction > 0 else range(launch, -1, -1)
     E = float(E0_eV)
@@ -293,6 +331,10 @@ def deposit_beam(
             transmitted_energy_eV=E,
             anode_intercepted_erg_s=0.0,
             E_entry_eV=E_entry,
+            heating_coulomb_erg_s=heat_coulomb,
+            heating_anomalous_erg_s=heat_anomalous,
+            heating_secondary_erg_s=heat_secondary,
+            heating_terminal_erg_s=heat_terminal,
         )
 
     for cell in order:
@@ -345,6 +387,7 @@ def deposit_beam(
             if dz_sub <= 0.0:
                 # E sits at E_stop to roundoff: absorb the residual here.
                 heating[cell] += gamma * E * _ERG_PER_EV
+                heat_terminal[cell] += gamma * E * _ERG_PER_EV
                 E = 0.0
                 absorbed = True
                 break
@@ -357,6 +400,9 @@ def deposit_beam(
             d_anom = L_anom * dz_sub
             ionization_cost[cell] += gamma * d_pot * _ERG_PER_EV
             heating[cell] += gamma * (d_sec + d_coul + d_anom) * _ERG_PER_EV
+            heat_secondary[cell] += gamma * d_sec * _ERG_PER_EV
+            heat_coulomb[cell] += gamma * d_coul * _ERG_PER_EV
+            heat_anomalous[cell] += gamma * d_anom * _ERG_PER_EV
             radiated[cell] += gamma * d_exc * _ERG_PER_EV
             ionization_events[cell] += gamma * nn_c * sigma_i * dz_sub
             excitation_events[cell] += gamma * nn_c * sigma_x * dz_sub
@@ -367,6 +413,7 @@ def deposit_beam(
                 # from here; bank the remainder as local plasma heating
                 # (plan B1's stated closure) and end the ray.
                 heating[cell] += gamma * E * _ERG_PER_EV
+                heat_terminal[cell] += gamma * E * _ERG_PER_EV
                 E = 0.0
                 absorbed = True
                 break
@@ -383,4 +430,8 @@ def deposit_beam(
         transmitted_energy_eV=0.0 if absorbed else E,
         anode_intercepted_erg_s=anode_intercepted,
         E_entry_eV=E_entry,
+        heating_coulomb_erg_s=heat_coulomb,
+        heating_anomalous_erg_s=heat_anomalous,
+        heating_secondary_erg_s=heat_secondary,
+        heating_terminal_erg_s=heat_terminal,
     )

@@ -871,6 +871,15 @@ def _sum_beam_deposition(a, b):
         anode_intercepted_erg_s=(float(a.anode_intercepted_erg_s)
                                  + float(b.anode_intercepted_erg_s)),
         E_entry_eV=np.maximum(a.E_entry_eV, b.E_entry_eV),
+        # Diagnostic heating splits add like the lumped bank they partition.
+        heating_coulomb_erg_s=(a.heating_coulomb_erg_s
+                               + b.heating_coulomb_erg_s),
+        heating_anomalous_erg_s=(a.heating_anomalous_erg_s
+                                 + b.heating_anomalous_erg_s),
+        heating_secondary_erg_s=(a.heating_secondary_erg_s
+                                 + b.heating_secondary_erg_s),
+        heating_terminal_erg_s=(a.heating_terminal_erg_s
+                                + b.heating_terminal_erg_s),
     )
 
 
