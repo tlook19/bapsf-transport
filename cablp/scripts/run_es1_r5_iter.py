@@ -118,10 +118,21 @@ def main(argv=None):
         "S_gp": args.sgp,
         "cathode_Ts_base_K": ts_base,
         "density_dt_fraction": args.density_dt_fraction,
-        # Cap the run just past the discharge (dodge the ~50-min afterglow crawl):
-        # breakdown ~2.5 ms + tau_discharge -> t_end.
-        "tau_discharge": max(args.t_end - 2.5e-3, 1e-3),
+        # tau_discharge is HARDWARE, not a cost knob: the config.py default
+        # 20 ms matches the measured drive (19.97/20.04/20.01 ms on ES1/2/3).
+        # It was previously back-derived as max(t_end-2.5e-3, 1e-3), which
+        # silently shortened the drive by 0.5 ms (diagnostician, 2026-07-27);
+        # run cost is now capped by the explicit t_end passed to run_model.
+        "tau_discharge": 20e-3,
         "tau_afterglow": 0.0,
+        # Pin the puff to its hardware location: "the physical pipe sits at
+        # ~60 cm (anode + 10)" (config.py neutral_defaults docstring). The
+        # solver default (None) anchors the cosine_pipe centre to the puff CELL
+        # centre, which moves with nx. Pinned at the driver level only -- the
+        # solver-default change is deferred to the stance-promotion batch
+        # (golden recapture moment). Interim: fixed-cell source region
+        # 0-100 cm + pinned puff per Tom 2026-07-27, pending CAD.
+        "gas_puff_z_cm": 60.0,
     }
     if args.R_comp is not None:
         extra["R_comp"] = args.R_comp
@@ -180,7 +191,7 @@ def main(argv=None):
           f"baffles={args.baffle_z} r={args.baffle_r} -> {args.out}")
     t0 = _walltime.time()
     result, geometry, params, flags = run_model(
-        nx=args.nx, extra=extra, flags_extra=flags_extra)
+        nx=args.nx, extra=extra, flags_extra=flags_extra, t_end=args.t_end)
     wall = _walltime.time() - t0
 
     t_ms = np.asarray(result.time, float) * 1e3
