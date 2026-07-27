@@ -1412,21 +1412,51 @@ def _beam_smoothing_matrix(geometry, sigma_cm):
     total (extensive) deposition. The width is a fixed length in cm, so the
     smoothed profile is mesh-convergent. Cached per (geometry, width) -- both
     fixed for a run -- so the matrix is built once.
+
+    The support is ``geometry.plasma_active``, NOT ``plasma_volume_cm3 > 0``.
+    The typed plasma-dead cells behind the cathode face (plenum, obstruction)
+    carry a finite plasma volume, so a ``Vp > 0`` support puts weight on rows
+    that ``_apply_active_plasma_topology`` then zeroes -- silently deleting
+    that share of the deposit (~19% at the cathode cell) from every channel
+    this kernel serves.
+
+    The cathode surface is a REFLECTING boundary: the Gaussian tail that would
+    fall behind an emitting face is folded forward about that face (image
+    source at ``2*z_face - z_j``) instead of being discarded, which is what
+    keeps the deposit near the cathode physical rather than merely normalized.
+    Both faces reflect under ``TwinCathode``. The far machine end needs no
+    special handling -- every cell there is active, and normalization absorbs
+    the residual tail past the end.
+
+    Each weight is multiplied by the target cell length (a cell-integrated
+    approximation) before the column is normalized, so a refined region is not
+    over-weighted per cm and the operator is mesh-independent, not just
+    conservative. Normalization remains the exact conservation guarantee.
     """
     key = (id(geometry), round(float(sigma_cm), 8))
     W = _BEAM_SMOOTH_CACHE.get(key)
     if W is not None:
         return W
     z = np.asarray(geometry.z_cm, dtype=float)
-    Vp = np.asarray(geometry.plasma_volume_cm3, dtype=float)
-    live = np.where(Vp > 0.0)[0]
+    dz = np.asarray(geometry.length_cm, dtype=float)
+    z_edges = np.asarray(geometry.z_edges_cm, dtype=float)
+    active = np.asarray(geometry.plasma_active, dtype=bool)
+    live = np.flatnonzero(active)
     n = z.size
     W = np.zeros((n, n), dtype=float)
     if live.size:
-        d = z[live][:, None] - z[live][None, :]
-        G = np.exp(-0.5 * (d / float(sigma_cm)) ** 2)
-        G /= G.sum(axis=0, keepdims=True)  # column-normalize -> conserves totals
-        W[np.ix_(live, live)] = G
+        sigma = float(sigma_cm)
+        z_live = z[live][:, None]
+        G = np.exp(-0.5 * ((z_live - z[None, :]) / sigma) ** 2)
+        for face in np.asarray(geometry.cathode_face_indices, dtype=int):
+            z_face = float(z_edges[face])
+            G += np.exp(-0.5 * ((z_live + z[None, :] - 2.0 * z_face) / sigma) ** 2)
+        G *= dz[live][:, None]
+        colsum = G.sum(axis=0)
+        # A column whose weights all underflow keeps no deposit to rescale; it
+        # cannot occur for an active column (which always contains itself).
+        G /= np.where(colsum > 0.0, colsum, 1.0)
+        W[live, :] = G
     _BEAM_SMOOTH_CACHE[key] = W
     return W
 
