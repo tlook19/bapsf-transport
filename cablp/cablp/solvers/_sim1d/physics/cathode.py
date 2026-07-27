@@ -1,5 +1,6 @@
 import dataclasses
 from dataclasses import dataclass
+import hashlib
 import math
 
 import numpy as np
@@ -1404,14 +1405,55 @@ def beam_ionization_rhs_terms(
 _BEAM_SMOOTH_CACHE = {}
 
 
+def _array_fingerprint(values, dtype):
+    """Content fingerprint of an array, canonicalized to the consumed dtype.
+
+    Returned as ``(shape, digest)``; the digest is taken over the exact bytes
+    ``_beam_smoothing_matrix`` reads, so two arrays that differ anywhere the
+    kernel looks produce different keys.
+    """
+    arr = np.ascontiguousarray(values, dtype=dtype)
+    digest = hashlib.blake2b(arr.tobytes(), digest_size=16).digest()
+    return arr.shape, digest
+
+
+def _beam_smoothing_key(geometry, sigma_cm):
+    """Cache key for :func:`_beam_smoothing_matrix`, by CONTENT not address.
+
+    ``id(geometry)`` is unique only among LIVE objects: CPython reuses an
+    address once the old geometry is collected, so a freed geometry followed
+    by a differently meshed allocation at the same address would return the
+    OLD mesh's matrix. A shape mismatch would raise at the matmul, but two
+    geometries with the same cell count and different positions/lengths/roles
+    (a ``source_fixed_grid`` A/B, an nx-matched ``source_region_dz_cm`` sweep)
+    would silently smooth with the wrong kernel.
+
+    Every geometry input the matrix build reads is in the key: ``z_cm`` and
+    ``length_cm`` (centres and the cell-length weighting), ``z_edges_cm`` and
+    ``cathode_face_indices`` (the reflecting image sources), and
+    ``plasma_active`` (the support -- two meshes agreeing in z/lengths/faces
+    but differing in cell ROLES build different matrices).
+    """
+    return (
+        round(float(sigma_cm), 8),
+        _array_fingerprint(geometry.z_cm, float),
+        _array_fingerprint(geometry.length_cm, float),
+        _array_fingerprint(geometry.z_edges_cm, float),
+        _array_fingerprint(geometry.plasma_active, bool),
+        tuple(int(i) for i in np.asarray(geometry.cathode_face_indices, dtype=int)),
+    )
+
+
 def _beam_smoothing_matrix(geometry, sigma_cm):
     """Conservative Gaussian redistribution matrix over the live plasma cells.
 
     ``W[i, j]`` is the fraction of cell ``j``'s beam deposition moved to cell
     ``i``; columns sum to 1 over the live cells, so ``W @ ext`` conserves the
     total (extensive) deposition. The width is a fixed length in cm, so the
-    smoothed profile is mesh-convergent. Cached per (geometry, width) -- both
-    fixed for a run -- so the matrix is built once.
+    smoothed profile is mesh-convergent. The O(cells^2) build is cached on the
+    geometry CONTENT and the width (see :func:`_beam_smoothing_key`) -- both
+    fixed for a run -- so the matrix is built once per run rather than once per
+    RHS evaluation, and two distinct meshes can never share an entry.
 
     The support is ``geometry.plasma_active``, NOT ``plasma_volume_cm3 > 0``.
     The typed plasma-dead cells behind the cathode face (plenum, obstruction)
@@ -1433,7 +1475,7 @@ def _beam_smoothing_matrix(geometry, sigma_cm):
     over-weighted per cm and the operator is mesh-independent, not just
     conservative. Normalization remains the exact conservation guarantee.
     """
-    key = (id(geometry), round(float(sigma_cm), 8))
+    key = _beam_smoothing_key(geometry, sigma_cm)
     W = _BEAM_SMOOTH_CACHE.get(key)
     if W is not None:
         return W
