@@ -19,7 +19,7 @@ current-resolved circuit power ledger (R3.2 / audit A16, see
   ionization consumption / prompt radiation), with the unreconciled
   CSDA-vs-circuit remainder as an explicit bar and the ohmic delivery shown
   alongside. Stage 3: the plasma-book budget of the thermal energy, with the
-  anode convected-2Te return-current channel broken out and a residual bar
+  anode convected-3/2-T return-current channel broken out and a residual bar
   closing the budget. The same numbers are printed as ``key=value`` lines
   for later per-ES-set comparison.
 
@@ -32,12 +32,18 @@ current-resolved circuit power ledger (R3.2 / audit A16, see
   (c) knee -> drive end), so the drift of the unreconciled CSDA-vs-circuit
   remainder across the discharge is readable at a glance. The knee is
   detected on the discharge-current trace by ``KNEE_DETECT``.
-* ``<stem>_losses``     -- three separately normalized loss graphs (v4):
-  the ELECTRON-book losses (the Coulomb e->i transfer included, since it is
-  one of the main Te sinks), the ION-book losses (with the same Coulomb
-  transfer shown as the heating-source context bar, excluded from the loss
-  total), and the COMBINED plasma losses, where the antisymmetric Coulomb
-  booking cancels identically and the channel therefore does not appear.
+* ``<stem>_beam_two_windows`` -- (v5) the ALTERNATE simple split of the same
+  stage-2 decomposition: beam turn-on (launch -> knee, i.e. windows (a) and
+  (b) merged) against the rest of the discharge (knee -> drive end). Both
+  this and the three-window figure are produced; the knee is the one
+  ``KNEE_DETECT`` boundary, regrouped, not a second detection.
+* ``<stem>_losses``     -- three separately normalized loss graphs (v4), in
+  v5 panel order COMBINED / electron / ion: the COMBINED plasma losses, where
+  the antisymmetric Coulomb booking cancels identically and the channel
+  therefore does not appear; the ELECTRON-book losses (the Coulomb e->i
+  transfer included, since it is one of the main Te sinks); and the ION-book
+  losses (with the same Coulomb transfer shown as the heating-source context
+  bar, excluded from the loss total).
 * ``<stem>_breakout``   -- percent contributions WITHIN the radiation group
   and WITHIN the surface/sheath group.
 
@@ -63,6 +69,16 @@ The ledger is RECONSTRUCTED from saved scalars only -- nothing is assumed:
 so the closure P_load == sum(lines) is verified and its residual displayed,
 not assumed. In the bracket-capped regime V_b is clamped off the ladder and
 the residual is nonzero BY DESIGN (reported, never hidden).
+
+v5 amendment (Tom, 2026-07-27): the ``_losses`` panels are reordered
+COMBINED / electron / ion; EVERY bar chart in every figure is sorted by
+descending magnitude (context bars below a divider keep their configured
+order); the stage-1 and stage-3 axis labels name the main-discharge window
+explicitly; the alternate two-window beam chart above is added. Three labels
+that mis-stated the physics were corrected against the RHS code -- see the
+"v5 LABEL AUDIT" block below for the receipts. No channel membership, no
+grouping and no arithmetic changed, so every previously plotted number is
+unchanged.
 
 Styling comes from the house ``figstyle`` module (journal profile: Okabe-Ito,
 column sizing, vector PDF; slide profile via ``--profile slide``). Each figure
@@ -203,7 +219,13 @@ RETURNED_HATCH = "////"
 # Labels are single-line: stage 2 gets the full figure width, so wrapping
 # them only crowds the rows vertically at slide scale.
 BEAM_FATE = {
-    "delivered as thermal (to electron pool)": {
+    # v5: NOT "delivered as thermal". _beam_ionization_sources builds this
+    # channel as plasma_heating + radiated + ionization_cost + the ohmic gap
+    # booking, so it is the WHOLE CSDA deposit and already contains the two
+    # bars below it (v5 label audit item 4). The overlap is 0.05% of the
+    # channel on es1_r5_f01_ag26ms, so the bars are still readable as a
+    # partition -- but the label no longer claims one.
+    "CSDA ray deposit (heating + cost + radiated + ohmic)": {
         "terms": ("beam_power_deposition",), "color": "#0072B2"},
     "consumed in ionization (beam $I_\\mathrm{ion}$ cost)": {
         "terms": ("beam_ionization_cost",), "color": "#009E73"},
@@ -216,7 +238,7 @@ BEAM_RESIDUAL_HATCH = "xxx"
 # Shown alongside (excluded from the P_prim partition) so the TOTAL thermal
 # input to the plasma is readable off the same panel: the ohmic channel is
 # pure thermal delivery and is what stage 3 adds to the beam thermal bank.
-OHMIC_REFERENCE_LABEL = "bulk ohmic (pure thermal, not beam)"
+OHMIC_REFERENCE_LABEL = "bulk ohmic (pure thermal; already inside the CSDA bar)"
 OHMIC_REFERENCE_COLOR = "#56B4E9"
 OHMIC_REFERENCE_HATCH = "///"
 
@@ -276,8 +298,11 @@ WINDOW_KEYS = ("a_launch_to_breakdown", "b_breakdown_to_knee",
 # the real plasma-side cost of the return current). It is the Bohm-flux
 # collection at the anode mesh -- physics/sources.py :: anode_collection_rhs,
 # "Mass, momentum and thermal energy leave together as at any wall" -- i.e.
-# the convected ~2Te-per-pair sink over the mesh solid fraction eta, NOT the
-# beam-mesh interception (see the bypass-termination note in main()).
+# the convected 3/2 Te (electrons) + 3/2 Ti (ions) per-pair sink over the mesh
+# solid fraction eta, NOT the beam-mesh interception (see the
+# bypass-termination note in main()). v5 corrected "~2Te" here: the RHS books
+# 1.5*Te and 1.5*Ti, and the anode's 2Te ELECTRON SHEATH power is a different
+# channel that rides in cathode_surface_loss (v5 label audit, item 1 and 2).
 #
 # "ionization cost (bulk)" is the BULK reaction channel and is deliberately
 # distinct from stage 2's beam ionization cost: different channels, different
@@ -288,12 +313,12 @@ WINDOW_KEYS = ("a_launch_to_breakdown", "b_breakdown_to_knee",
 # is an explicit residual bar so the budget visibly closes to 100%.
 # =============================================================================
 THERMAL_BUDGET = {
-    "surface/sheath (cathode + end)": {
+    "surface/sheath (cathode + anode + end)": {
         "terms": ("cathode_surface_loss", "surface_loss",
                   "characteristic_boundary"),
         "collector_scalar": True, "color": "#D55E00",
     },
-    "anode convected 2Te (return current)": {
+    "anode mesh convected 3/2 T (return current)": {
         "terms": ("anode_collection",),
         "collector_scalar": False, "color": "#E69F00",
     },
@@ -386,6 +411,56 @@ RESIDUAL_COLOR = "#B0B0B0"
 #       beam-impact excitation event, radiated promptly as He I light.
 # =============================================================================
 
+# =============================================================================
+# v5 LABEL AUDIT (Tom, 2026-07-27) -- read off the RHS code, receipts below.
+# Three v4 labels MIS-STATED the physics. Only the labels changed here; no
+# channel membership, no grouping and no arithmetic was touched.
+#
+# 1. "anode convected 2Te" -> "anode mesh convected 3/2 T".
+#    physics/sources.py :: anode_collection_rhs returns
+#        Ee = -1.5 * ev_to_erg * derived.Te * plasma_loss_rate
+#        Ei = -1.5 * ev_to_erg * derived.Ti * plasma_loss_rate
+#    i.e. 3/2 Te per electron and 3/2 Ti per ion -- the convected INTERNAL
+#    energy of the collected pair, never 2Te. Measured on es1_r5_f01_ag26ms
+#    (main discharge): electron -0.2933 kJ, ion -0.0206 kJ; the ~14x split is
+#    the Te/Ti ratio, exactly as 3/2 T predicts and 2Te does not.
+#
+# 2. "surface/sheath (cathode + end)" -> "(cathode + anode + end)" on the
+#    ELECTRON and COMBINED books. The group's `cathode_surface_loss` channel
+#    is NOT cathode-only: physics/cathode.py :: _deposit_electrode_power lands
+#    BOTH P_cathode_e_thermal AND P_anode_e_thermal into electron_power_loss_W
+#    (the anode share split across the two mesh-flanking cells), and
+#    cathode_source_terms books that whole sum as Ee. So the anode mesh's 2Te
+#    ELECTRON sheath power lives in the sheath group while the anode's 3/2 T
+#    CONVECTED loss is the separate `anode_collection` line -- two different
+#    channels at the same electrode, NOT a double count of one quantity.
+#    The ION panel keeps "(cathode + end)": in this stance
+#    cathode_surface_loss books nothing to the ion book at all (receipt 3).
+#
+# 3. Ion-book surface content. cathode_source_terms gates its particle sink on
+#    `face_absorbs` -- with resolved absorbing faces (production) dN_loss stays
+#    zero, so its Ei = -1.5 Ti * plasma_loss_rate is IDENTICALLY ZERO and the
+#    channel is electron-only. Measured: cathode_surface_loss ion = 0.0000 kJ.
+#    NOTHING 2Te-like is ever charged to the ion book. The only 2Te terms in
+#    the code are both ELECTRON-book: the electrode sheath above, and
+#    sources.py:621 (collector, `sheath_energy_routing`, off in this run).
+#    The Te-flavoured ion quantity that exists -- P_cathode_i_thermal =
+#    I_i * (Te/2) in _cathode_solver_idriven.py -- is a CIRCUIT-side audit
+#    scalar with no RHS consumer anywhere in cablp/solvers.
+#
+# 4. Stage 2's "delivered as thermal" -> "CSDA ray deposit". physics/cathode.py
+#    :: _beam_ionization_sources builds the channel as
+#        plasma_heating + radiated + ionization_cost   (+ the ohmic gap term)
+#    so `beam_power_deposition` is the WHOLE deposit, not the thermal part:
+#    it already contains the other two stage-2 bars and P_ohmic. Measured over
+#    the main discharge: of the 5.1334 kJ channel, 0.0107 kJ (0.21%) is
+#    P_ohmic, 0.0018 kJ (0.035%) is the ionization cost and 0.0008 kJ (0.016%)
+#    the radiated bank. The three stage-2 bars are therefore NOT disjoint --
+#    numerically negligible here (0.05%), but the label must not claim a
+#    partition the channel does not provide. Reported, not repaired: fixing it
+#    would change the plotted numbers, which is out of scope for v5.
+# =============================================================================
+
 # Plasma-book volumetric loss groups: volume-integrated (electron + ion)
 # energy terms [W/cm^3 * cm^3], summed per semantic group (signed sum, then
 # clipped to the sink part). Each group carries an explicit color AND dash
@@ -449,12 +524,18 @@ RADIATION_BREAKOUT = {
         "terms": ("beam_excitation_radiation",), "color": "#CC79A7"},
 }
 SURFACE_BREAKOUT = {
-    # cathode_surface_loss is the cathode-boundary fluid deposit;
-    # anode_collection is the anode-mesh interception sink (R4);
+    # v5: cathode_surface_loss is the ELECTRODE SHEATH electron power, 2Te per
+    # electron, and it covers the cathode disc AND the anode mesh together
+    # (P_cathode_e_thermal + P_anode_e_thermal; v5 label audit item 2) -- it is
+    # not a cathode-only "boundary" line, which is what the v4 label implied.
+    # anode_collection is the separate 3/2 T convected collection sink (R4);
     # the end/characteristic outflow + floating collector are the far end.
-    "cathode boundary": {
+    # Kept short: this is a HALF-width panel, and a longer y-tick label pushes
+    # the axes right until the x-label clips at the figure edge on `slide`
+    # (measured with "cathode + anode sheath (2Te, electrons)").
+    "cathode + anode sheath (2Te)": {
         "terms": ("cathode_surface_loss",), "color": "#D55E00"},
-    "anode (mesh collection)": {
+    "anode mesh collection (3/2 T)": {
         "terms": ("anode_collection",), "color": "#E69F00"},
     "collector / end": {
         "terms": ("surface_loss", "characteristic_boundary"),
@@ -497,7 +578,9 @@ _LOSS_COLORS = {
 }
 # (i) ELECTRON book. ei_exchange is INSIDE the normalization.
 ELECTRON_LOSS_GROUPS = {
-    "surface/sheath (cathode + end)": {
+    # Includes the anode mesh's 2Te electron sheath power, which rides in
+    # cathode_surface_loss via P_anode_e_thermal (v5 label audit item 2).
+    "surface/sheath 2Te (cathode + anode + end)": {
         "terms": ("cathode_surface_loss", "surface_loss",
                   "characteristic_boundary"),
         "color": _LOSS_COLORS["surface"]},
@@ -510,7 +593,9 @@ ELECTRON_LOSS_GROUPS = {
         "color": _LOSS_COLORS["line_neutral"]},
     _COULOMB_E_LABEL: {
         "terms": ("ei_exchange",), "color": _LOSS_COLORS["coulomb"]},
-    "anode convected 2Te (return current)": {
+    # Plain "Te"/"Ti" rather than inline LaTeX: _scalar_key drops $...$, so the
+    # electron and ion variants would otherwise collapse to the same key.
+    "anode mesh convected 3/2 Te (return current)": {
         "terms": ("anode_collection",), "color": _LOSS_COLORS["anode"]},
     "other radiation": {
         "terms": ("recombination_rad_loss", "recombination_3b_loss",
@@ -525,11 +610,15 @@ ION_LOSS_GROUPS = {
                   "ion_neutral_drag", "ion_neutral_frictional_heating",
                   "ion_neutral_thermalization"),
         "color": _LOSS_COLORS["in_coll"]},
+    # Ion-book only: cathode_surface_loss contributes NOTHING here (its Ei is
+    # identically zero with resolved absorbing faces -- v5 label audit item 3),
+    # so this group is the characteristic-boundary outflow at the cathode and
+    # collector faces. No anode content, hence no anode in the label.
     "surface/sheath (cathode + end)": {
         "terms": ("cathode_surface_loss", "surface_loss",
                   "characteristic_boundary"),
         "color": _LOSS_COLORS["surface"]},
-    "anode convected 2Te (return current)": {
+    "anode mesh convected 3/2 Ti (return current)": {
         "terms": ("anode_collection",), "color": _LOSS_COLORS["anode"]},
     # beam_excitation_radiation books Ee only, so the ion side of "other
     # radiation" is the recombination pair alone.
@@ -550,7 +639,7 @@ ION_LOSS_REFERENCE = {
 # is absent by construction, so every bar here is energy that actually LEFT
 # the plasma.
 COMBINED_LOSS_GROUPS = {
-    "surface/sheath (cathode + end)": {
+    "surface/sheath (cathode + anode + end)": {
         "terms": ("cathode_surface_loss", "surface_loss",
                   "characteristic_boundary"),
         "collector_scalar": True, "color": _LOSS_COLORS["surface"]},
@@ -566,7 +655,7 @@ COMBINED_LOSS_GROUPS = {
                   "ion_neutral_drag", "ion_neutral_frictional_heating",
                   "ion_neutral_thermalization"),
         "color": _LOSS_COLORS["in_coll"]},
-    "anode convected 2Te (return current)": {
+    "anode mesh convected 3/2 T (return current)": {
         "terms": ("anode_collection",), "color": _LOSS_COLORS["anode"]},
     "other radiation": {
         "terms": ("recombination_rad_loss", "recombination_3b_loss",
@@ -580,16 +669,21 @@ COMBINED_LOSS_GROUPS = {
 # Keep each x-label LINE under ~46 characters: the y tick labels eat the left
 # third of the panel, so a longer line is wider than its own axes and clips
 # at the figure edge on `slide` (measured, not guessed).
+#
+# v5 PANEL ORDER (Tom, 2026-07-27): COMBINED first, then electron, then ion.
+# The combined book is the only one of the three that is a complete statement
+# of energy that actually LEFT the plasma, so it reads as the headline and the
+# two per-book decompositions below it explain how that total is split.
 LOSS_GRAPHS = (
+    ("combined", "total", COMBINED_LOSS_GROUPS, None,
+     "% of COMBINED plasma losses  (main discharge)\n"
+     "Coulomb transfer cancels between the books"),
     ("electron", "electron", ELECTRON_LOSS_GROUPS, None,
      "% of ELECTRON-book losses  (main discharge)\n"
      "Coulomb transfer INCLUDED — a real $T_e$ sink"),
     ("ion", "ion", ION_LOSS_GROUPS, ION_LOSS_REFERENCE,
      "% of ION-book losses  (main discharge)\n"
      "Coulomb transfer excluded from the total"),
-    ("combined", "total", COMBINED_LOSS_GROUPS, None,
-     "% of COMBINED plasma losses  (main discharge)\n"
-     "Coulomb transfer cancels between the books"),
 )
 
 # Fractions are blanked where P_load falls below this fraction of its
@@ -876,6 +970,38 @@ def discharge_windows(d):
     return out
 
 
+def two_window_split(windows):
+    """The ALTERNATE simple two-window split (v5, Tom 2026-07-27).
+
+    Tom may prefer this over the three-window version, so both are produced.
+    It merges (a) and (b) into a single "beam turn-on" window running from
+    plasma launch to the current knee, and keeps (c) as "the rest of the
+    discharge":
+
+        turn-on   launch -> knee     (the whole rise: pre-breakdown fill,
+                                      breakdown, and the current ramp)
+        rest      knee  -> drive end (the plateau)
+
+    The knee is the same ``KNEE_DETECT`` boundary the three-window figure
+    uses, so the two charts are two groupings of ONE detection, not two
+    different detections. Returned in the same
+    ``(key, label, lo_ms, hi_ms, mask)`` shape as ``discharge_windows`` so
+    ``make_beam_windows_figure`` renders either without a special case.
+    """
+    (_, _, a_lo, _, a_mask), (_, _, _, b_hi, b_mask), c = windows
+    _, _, c_lo, c_hi, c_mask = c
+    # Labels are kept SHORT: make_beam_windows_figure appends the "[lo - hi
+    # ms]" span to the same line, and on the `slide` profile a label much past
+    # ~45 characters is wider than its own axes and clips at the figure edge
+    # (measured -- "rest of discharge: knee → drive end" did exactly that).
+    return [
+        ("turn_on_launch_to_knee", "beam turn-on: launch → knee",
+         a_lo, b_hi, a_mask | b_mask),
+        ("rest_knee_to_drive_end", "rest: knee → drive end",
+         c_lo, c_hi, c_mask),
+    ]
+
+
 
 
 # =============================================================================
@@ -1001,7 +1127,21 @@ def _share_barh(ax, items, n_excluded=0):
     A 4th tuple element draws the bar hatched-and-outlined instead of solid.
     The last ``n_excluded`` items are drawn for scale but are NOT part of the
     total the percentages normalize; a dashed divider separates them.
+
+    v5 (Tom, 2026-07-27): every bar chart in every figure is sorted by
+    DESCENDING MAGNITUDE. This is the single rendering choke point, so the
+    ordering is applied here once rather than at each call site and the
+    configuration dicts keep their semantic (documentation) order. |value| is
+    the sort key, not the signed value, so the negative slices that are real
+    and large -- stage 1's round-trip circulation, stage 2's unreconciled
+    CSDA remainder -- rank by how much of the denominator they move rather
+    than sinking to the bottom. The trailing ``n_excluded`` context bars are
+    NOT sorted against the loss bars: they stay in their configured order
+    below the divider, since they are a different kind of quantity.
     """
+    n_sorted = len(items) - n_excluded
+    items = (sorted(items[:n_sorted], key=lambda it: -abs(it[1]))
+             + list(items[n_sorted:]))
     ypos = np.arange(len(items))[::-1]
     for yp, item in zip(ypos, items):
         label, s, color = item[:3]
@@ -1083,7 +1223,7 @@ def make_efficiency_figure(d, ledger, window, stage2, profile):
     <stem>_beam_windows shows all three windows side by side.
 
     STAGE 3 (bottom): where that thermal energy goes -- the plasma-book
-    loss groups with the anode convected-2Te return-current channel broken
+    loss groups with the anode convected-3/2-T return-current channel broken
     out, plus an explicit residual so the budget closes.
     """
     act = d["active"]
@@ -1127,11 +1267,21 @@ def make_efficiency_figure(d, ledger, window, stage2, profile):
     ax_t = fig.add_subplot(gs[2, :])
 
     # --- stage 1: gross components + the circulation slice, two denominators
+    # v5 (Tom, v4 review flag): stages 1 and 3 say "(main discharge)" on the
+    # axis. Only stage 2 moved to the turn-on window in v4, and without the
+    # window named on every panel the figure reads as if all three shared one.
+    # These are HALF-WIDTH panels whose long y-tick labels ("beam bypass (to
+    # surfaces, ...)") push the axes right, so the centered x-label overruns
+    # the figure edge easily -- the same failure the stage-2 and breakout
+    # labels are already wrapped against. Each line is kept under ~15
+    # characters, which is what the `slide` profile's larger type needs; the
+    # 3-line and 2-line variants both clipped on slide when measured, so the
+    # denominator, its role and the window each get their own line.
     for ax, denom, with_comp, xlabel in (
         (ax_w, E_wall, True,
-         "stage 1 — % of $E_\\mathrm{wall}$\n(bank source)"),
+         "stage 1 — % of\n$E_\\mathrm{wall}$\n(bank source)\nmain discharge"),
         (ax_l, E_load, False,
-         "stage 1 — % of $E_\\mathrm{load}$\n(load source)"),
+         "stage 1 — % of\n$E_\\mathrm{load}$\n(load source)\nmain discharge"),
     ):
         items = [(lab, 100.0 * Ei / denom, c) for lab, Ei, c in comps]
         if with_comp:
@@ -1160,26 +1310,36 @@ def make_efficiency_figure(d, ledger, window, stage2, profile):
     items = [(lab, 100.0 * Ei / E_thermal, c) for lab, Ei, c in budget]
     _share_barh(ax_t, items)
     ax_t.set_xlabel("stage 3 — % of THERMAL input\n"
-                    "(where the thermal energy goes)")
+                    "(where the thermal energy goes, main discharge)")
     return fig
 
 
 def make_beam_windows_figure(d, ledger, windows, profile):
-    """Stage-2 decomposition over all three discharge windows, stacked.
+    """Stage-2 decomposition over a list of discharge windows, stacked.
 
     One ``_share_barh`` panel per window, same channels and colors as the
     efficiency figure's stage 2, each normalized by its OWN window's
     int(P_prim)dt. The comparison is the point: the unreconciled
     CSDA-vs-circuit remainder is largest at turn-on and shrinks as the
     discharge settles, which the single whole-discharge integral hides.
+
+    v5: the panel count follows ``len(windows)``, so this renders both the
+    three-window figure and the alternate two-window split
+    (``two_window_split``) with no special case. Panel height is held fixed
+    per window rather than dividing a fixed figure height, so the bars keep
+    the same scale in both.
     """
     t_s = d["time_ms"] * 1e-3
     journal = profile == "journal"
+    n_win = len(windows)
+    per_panel = 2.2 if journal else 3.47
     if journal:
-        figsize = (fs.JOURNAL_WIDTHS["aip_double"], 6.6)
+        figsize = (fs.JOURNAL_WIDTHS["aip_double"], per_panel * n_win)
     else:
-        figsize = (12.9, 10.4)
-    fig, axes = plt.subplots(3, 1, figsize=figsize, constrained_layout=True)
+        figsize = (12.9, per_panel * n_win)
+    fig, axes = plt.subplots(n_win, 1, figsize=figsize,
+                             constrained_layout=True, squeeze=False)
+    axes = axes[:, 0]
     for ax, (_, label, lo, hi, mask) in zip(axes, windows):
         items, E_prim, _, _ = beam_fate_items(d, ledger, mask, t_s)
         _share_barh(ax, items, n_excluded=1)
@@ -1429,6 +1589,21 @@ def main(argv=None):
         print(f"  window_{key}_residual_kJ={Ew_resid / 1e3:.4f} "
               f"pct={100.0 * Ew_resid / Ew_prim:.2f}")
 
+    # --- ALTERNATE two-window split (v5): turn-on vs the rest ---------------
+    two = two_window_split(windows)
+    print("two_window_def=(turn-on) plasma launch -> current knee, i.e. windows "
+          "(a)+(b) merged; (rest) knee -> drive end, i.e. window (c). Same "
+          "KNEE_DETECT boundary as the three-window split, regrouped")
+    for key, label, lo, hi, mask in two:
+        items, Ew_prim, Ew_ohmic, Ew_resid = beam_fate_items(
+            d, ledger, mask, t_s)
+        print(f"two_window_{key}=[{lo:.4f},{hi:.4f}]ms span_ms={hi - lo:.4f} "
+              f"E_prim_kJ={Ew_prim / 1e3:.4f} E_ohmic_kJ={Ew_ohmic / 1e3:.4f}")
+        for item in items[:-2]:
+            print(f"  two_window_{key}_{_scalar_key(item[0])}_pct={item[1]:.2f}")
+        print(f"  two_window_{key}_residual_kJ={Ew_resid / 1e3:.4f} "
+              f"pct={100.0 * Ew_resid / Ew_prim:.2f}")
+
     # --- v4 loss graphs: shares per book over the main-discharge window ------
     print("loss_graphs_def=electron book (Coulomb transfer INSIDE the "
           "normalization), ion book (Coulomb transfer excluded, shown as the "
@@ -1502,6 +1677,10 @@ def main(argv=None):
     written += save_figure(fig, out_dir, f"{stem}_efficiency", args.profile)
     fig = make_beam_windows_figure(d, ledger, windows, args.profile)
     written += save_figure(fig, out_dir, f"{stem}_beam_windows", args.profile)
+    # v5: the alternate simple split, produced alongside the three-window one.
+    fig = make_beam_windows_figure(d, ledger, two, args.profile)
+    written += save_figure(fig, out_dir, f"{stem}_beam_two_windows",
+                           args.profile)
     fig = make_losses_figure(d, window, args.profile)
     written += save_figure(fig, out_dir, f"{stem}_losses", args.profile)
     fig = make_breakout_figure(d, window, args.profile)
