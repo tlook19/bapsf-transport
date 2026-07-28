@@ -231,10 +231,24 @@ BEAM_FATE = {
     # partition -- but the label no longer claims one.
     "CSDA ray deposit (heating + cost + radiated + ohmic)": {
         "terms": ("beam_power_deposition",), "color": "#0072B2"},
+    # v7 RECOLOR (2026-07-27). These two entries name the SAME channels the
+    # BEAM_THERMAL_CHANNELS breakout draws as its cost and radiation banks,
+    # and on an instrumented run stage 2 draws both sets in ONE panel -- so
+    # they must carry the breakout's colors rather than their own. The cost of
+    # not doing so is measured, not hypothetical: on es1_r5_csda_demo6ms
+    # window (a) each pair comes out at an IDENTICAL value (cost 0.96% twice,
+    # radiation 2.50% twice) and the twins sort adjacent, so two colors on one
+    # number read as four separate channels instead of two drawn twice.
+    # beam_ionization_cost keeps #009E73, already "ionization cost" in
+    # _LOSS_COLORS and THERMAL_BUDGET; beam_excitation_radiation moves off
+    # #CC79A7 to #F0E442, matching RADIATION_BREAKOUT and
+    # BEAM_THERMAL_CHANNELS and returning #CC79A7 to its single cross-figure
+    # owner, electron_neutral_cooling. The labels, not the colors, carry the
+    # "same bank drawn twice" disambiguation.
     "consumed in ionization (beam $I_\\mathrm{ion}$ cost)": {
         "terms": ("beam_ionization_cost",), "color": "#009E73"},
     "immediately radiated (beam excitation)": {
-        "terms": ("beam_excitation_radiation",), "color": "#CC79A7"},
+        "terms": ("beam_excitation_radiation",), "color": "#F0E442"},
 }
 # -----------------------------------------------------------------------------
 # STAGE-2 THERMAL BREAKOUT (2026-07-27) -- what is actually INSIDE the
@@ -273,19 +287,70 @@ BEAM_FATE = {
 BEAM_THERMAL_CHANNELS = {
     "Coulomb drag on bulk electrons (continuous)": {
         "diag": ("beam_heat_coulomb_W",), "color": "#0072B2"},
+    # v7: #56B4E9 -> #000000. Sky blue is P_ohmic's identity in
+    # LEDGER_COMPONENTS -- stage 1 of THIS figure -- and in
+    # OHMIC_REFERENCE_COLOR, so it had to go back to the two ohmic rows below.
+    # This channel is the one entry in the panel with no cross-figure identity
+    # to protect (beam_heat_anomalous_W is drawn here and nowhere else), which
+    # makes it the cheapest thing to move; black is the last unclaimed
+    # Okabe-Ito entry and is used nowhere else in this script. It is NOT a
+    # token bar being hidden in ink: on es1_r5_csda_demo6ms window (a)
+    # quasilinear drag is 112.7% of P_prim, the largest bar in the panel, and
+    # it is nonzero in the production csda_ql closure -- it has to be
+    # unambiguous, not merely distinguishable. _share_barh annotates the
+    # percentage OUTSIDE the bar, so a solid black bar costs no legibility.
     "anomalous (quasilinear) drag": {
-        "diag": ("beam_heat_anomalous_W",), "color": "#56B4E9"},
+        "diag": ("beam_heat_anomalous_W",), "color": "#000000"},
     "inelastic-event residue (secondary birth above $I_\\mathrm{ion}$)": {
         "diag": ("beam_heat_secondary_W",), "color": "#E69F00"},
     "primary terminal dump (end of range / sub-threshold)": {
         "diag": ("beam_heat_terminal_W",), "color": "#D55E00"},
+    # v7: the three banks below are DUPLICATE draws of channels that also get
+    # their own bar in the same panel -- ohmic as OHMIC_REFERENCE, cost and
+    # radiation as the two BEAM_FATE entries. Each now takes its own-bar
+    # color, so within stage 2 color means CHANNEL and nothing else; the
+    # "booked into this term" / "(also its own bar)" labels and the reference
+    # bars' hatching carry the distinction instead. Before this, every one of
+    # the three disagreed with its twin (#009E73 vs #56B4E9, #CC79A7 vs
+    # #009E73, #F0E442 vs #CC79A7) and the panel spent six colors on three
+    # channels while two DIFFERENT channels shared #CC79A7 and another two
+    # shared #009E73.
     "bulk ohmic booked into this term (gap deposition)": {
-        "ledger": ("P_ohmic",), "color": "#009E73"},
+        "ledger": ("P_ohmic",), "color": "#56B4E9"},
     "ionization cost carried inside this term (also its own bar)": {
-        "terms": ("beam_ionization_cost",), "color": "#CC79A7"},
+        "terms": ("beam_ionization_cost",), "color": "#009E73"},
     "excitation radiation carried inside this term (also its own bar)": {
         "terms": ("beam_excitation_radiation",), "color": "#F0E442"},
 }
+# -----------------------------------------------------------------------------
+# STAGE-2 COLOR LEDGER (v7, 2026-07-27) -- the panel's complete assignment.
+#
+# Stage 2 on an instrumented run is the most crowded panel in the script: the
+# seven BEAM_THERMAL_CHANNELS breakout rows, the two standalone BEAM_FATE
+# banks, the residual and the ohmic reference all share one axis. That is
+# eleven bars over EIGHT distinct channels, because three channels are drawn
+# twice by construction (see above). The invariant this ledger records:
+#
+#   one color per CHANNEL, and no color shared by two different channels.
+#
+#   #0072B2  Coulomb drag on bulk electrons
+#   #000000  anomalous (quasilinear) drag
+#   #E69F00  inelastic-event residue
+#   #D55E00  primary terminal dump
+#   #56B4E9  P_ohmic              -- breakout row + OHMIC_REFERENCE (///)
+#   #009E73  beam_ionization_cost -- breakout row + BEAM_FATE bar
+#   #F0E442  beam_excitation_radiation -- breakout row + BEAM_FATE bar
+#   #888888  unreconciled residual (xxx) -- a closure gap, not a channel, and
+#            the one non-Okabe-Ito entry: deliberately neutral grey so it
+#            never reads as physics
+#
+# All seven channel colors are Okabe-Ito, and the palette is now EXHAUSTED for
+# this panel -- #CC79A7 is the only entry left, and it is reserved for
+# electron_neutral_cooling (PLASMA_LOSS_GROUPS / THERMAL_BUDGET /
+# RADIATION_BREAKOUT / _LOSS_COLORS). An eighth stage-2 channel cannot be
+# added by picking another color; it would force a hatch/pattern axis or a
+# regrouping, and that is the decision to make at the time, not silently.
+# -----------------------------------------------------------------------------
 # Written into the bar labels so a breakout figure is never mistaken for the
 # lumped one, and printed when the breakout is unavailable.
 BEAM_THERMAL_LUMPED_LABEL = next(iter(BEAM_FATE))
@@ -616,8 +681,11 @@ RADIATION_BREAKOUT = {
     # color used by NEITHER panel of this figure and is already
     # beam_excitation_radiation's color in BEAM_THERMAL_CHANNELS -- so the
     # recolor also makes that channel more self-consistent across figures,
-    # not less. (BEAM_FATE still draws it #CC79A7 in the efficiency figure;
-    # that pre-existing inconsistency is out of scope here.)
+    # not less. v7 (2026-07-27) finished the job: BEAM_FATE drew the same
+    # channel #CC79A7 until stage 2's breakout put both entries in a single
+    # panel, and now carries #F0E442 as well, so beam_excitation_radiation is
+    # one color everywhere it is drawn and #CC79A7 belongs to
+    # electron_neutral_cooling alone.
     "beam excitation radiation": {
         "terms": ("beam_excitation_radiation",), "color": "#F0E442"},
     "line radiation (neutrals)": {
