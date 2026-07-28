@@ -82,7 +82,8 @@ def config_cases():
             "T_s": m6_op["Ts_standby_K"],
             "cathode_Ts_base_K": m6_op["Ts_standby_K"],
             "cathode_heat_capacity_J_per_K": 120.0,
-            "cathode_conduction_W_per_K": 1200.0,
+            # cathode_conduction_W_per_K is deliberately absent: --g-cond now
+            # defaults to None and defers to the shared production config (7c).
             "cathode_emissivity": 0.7,
             "phi_wf": 2.869,
             "cathode_surface_model": "ads_des",
