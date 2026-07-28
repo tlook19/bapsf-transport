@@ -75,6 +75,10 @@ BASELINE_PARAM_OVERRIDES = {
     "cathode_solver_model": "current_driven",
     "beam_deposition_model": "csda",
     "beam_anomalous_model": "quasilinear",
+    # WP-D product transport: the fixture was captured with local (birth-cell)
+    # product deposition. Pin it so a future default promotion to "nonlocal"
+    # cannot silently move this anchor (same rule as Te_birth_ionization above).
+    "beam_product_transport": "local",
     "cathode_emission_profile": "gaussian",
     "cathode_warming_model": "power_balance",
     "T_s": ES_OPERATING[1]["Ts_standby_K"],
