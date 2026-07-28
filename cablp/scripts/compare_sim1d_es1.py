@@ -139,6 +139,19 @@ PARAM_OVERRIDES = {
     # combines harmonically (Cowie-McKee) with the Braginskii flux at
     # heat_flux_limiter_exponent=1, which is already the config default.
     "heat_flux_limiter_f": 0.1,
+    # Fixed-cell-size source region (7a, approved 2026-07-27), enumerated from
+    # es1_r5_srcgrid_shakedown.h5 and cross-checked against
+    # es1_r5_srcgrid_nx240.h5 -- the two agree on every key except nx, which is
+    # what makes the pair a clean resolution study. The 100 cm column in front
+    # of the anode is meshed at exactly 10 cm regardless of nx, so refining nx
+    # refines only the FAR column and no longer moves the source cells or the
+    # puff cell underneath the source terms. Interim geometry, pending the 2D
+    # model. Presence-gated BOTH ways against the flag below, so these three
+    # must always travel together.
+    "source_region_length_cm": 100.0,
+    "source_region_dz_cm": 10.0,
+    # NB nx_gap is NOT promoted: both artifacts ran it at 5, which is already
+    # the config.py default, so it never appears in the delta.
 }
 FLAG_OVERRIDES = {
     # R5 stance flip: the legacy ion-neutral thermalization arm is subsumed by
@@ -149,6 +162,10 @@ FLAG_OVERRIDES = {
     # f=0.1 PRODUCTION STANCE (2026-07-27): the electron heat-flux limiter is
     # ON in production, at heat_flux_limiter_f=0.1 above.
     "electron_heat_flux_limit": True,
+    # Fixed-cell-size source region (7a): pairs with source_region_length_cm /
+    # source_region_dz_cm above; the geometry raises loudly if either side is
+    # set without the other.
+    "source_fixed_grid": True,
 }
 
 
