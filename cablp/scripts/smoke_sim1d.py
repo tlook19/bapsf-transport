@@ -1,5 +1,6 @@
 import dataclasses
 import json
+import math
 from io import StringIO
 from pathlib import Path
 import subprocess
@@ -11,6 +12,10 @@ import h5py
 import numpy as np
 
 from cablp.funcs._adas import he_rate_temperature_range_eV
+# main() re-imports deposit_beam locally further down (B1 block), which makes
+# the bare name local to the whole function -- alias it for the item-35 block.
+from cablp.funcs._beam_deposition import deposit_beam as _deposit_beam_ray
+from cablp.funcs._cathode_solver import _compute_l_b
 from cablp.funcs._plasmaparams import c_log
 from cablp.solvers._sim1d import (
     BreakdownError,
@@ -30,6 +35,7 @@ from cablp.solvers._sim1d.physics.conduction import (
 from cablp.solvers._sim1d.physics.cathode import (
     _beam_smoothing_key,
     _beam_smoothing_matrix,
+    _clip_ray_length,
     beam_absorption_weights,
     beam_launch,
     cathode_sample_indices,
@@ -2441,6 +2447,93 @@ def main():
         csda_solve.beam_result.beam_atten_cross[csda_launch]
     )
     assert np.isfinite(csda_sigma_eff) and csda_sigma_eff >= 0.0
+
+    # --- Item 35: the gap-transmission probe is launched at the REAL emitted
+    # flux, not unit flux, so flux-DEPENDENT stopping reaches the circuit.
+    #
+    # (a) The property the fix rests on, at the module: with flux-INDEPENDENT
+    # stopping the surviving FRACTION does not depend on the launched flux, so
+    # the flux-faithful probe reproduces the historical unit-flux probe
+    # bit-for-bit; with the quasilinear closure it does depend on it (the
+    # relaxation length runs on n_b ~ Gamma0/(A v_b)), which is exactly the
+    # signal the unit-flux probe could not see.
+    _fx_cells = 40
+    _fx_dz = np.full(_fx_cells, 5.0)
+    _fx_kwargs = dict(
+        nn=np.full(_fx_cells, 1.0e13),
+        ne=np.full(_fx_cells, 1.0e12),
+        Te=np.full(_fx_cells, 3.0),
+        dz_cm=_fx_dz,
+        launch=0,
+        direction=1,
+        I_ion_eV=float(I_ion),
+    )
+    # Weak-beam domain (n_b < 0.1*ne), where the quasilinear closure is
+    # defined; above it the module returns an infinite relaxation length by
+    # design and the ray free-streams again.
+    _fx_flux = 1.0e20
+    _fx_lin = [
+        _deposit_beam_ray(200.0, g, anomalous_model="none", **_fx_kwargs)
+        for g in (1.0, _fx_flux)
+    ]
+    assert (
+        float(_fx_lin[1].transmitted_flux) / _fx_flux
+        == float(_fx_lin[0].transmitted_flux)
+    )
+    _fx_ql = [
+        _deposit_beam_ray(
+            200.0, g, anomalous_model="quasilinear",
+            beam_area_cm2=100.0, **_fx_kwargs,
+        )
+        for g in (1.0, _fx_flux)
+    ]
+    # Unit flux streams through; the real flux is stopped by its own QL drag.
+    assert float(_fx_ql[0].transmitted_flux) == 1.0
+    assert float(_fx_ql[1].transmitted_flux) == 0.0
+
+    # (b) The same statement through the solver: this csda config runs
+    # anomalous_model="none", so the sigma_eff the adapter wrote must equal an
+    # independent re-derivation from the HISTORICAL unit-flux probe. A
+    # regression that made the flux-faithful probe non-flux-linear on the off
+    # arm would move the golden's off-path arms and fail here.
+    csda_state = csda_sim.state
+    csda_derived = derive_state(
+        csda_state, csda_sim._floors, csda_sim._ion_mass_g
+    )
+    csda_L_cath = float(csda_solve.device_config.L_cath)
+    csda_dir = beam_launch(csda_sim._geometry, end=0)[1]
+    csda_unit = _deposit_beam_ray(
+        csda_res.phi_c,
+        1.0,
+        nn=csda_state.nn,
+        ne=csda_state.n,
+        Te=csda_derived.Te,
+        dz_cm=_clip_ray_length(
+            csda_sim._geometry.length_cm, csda_launch, csda_dir, csda_L_cath
+        ),
+        launch=csda_launch,
+        direction=csda_dir,
+        I_ion_eV=float(csda_sim._I_ion),
+        coulomb_model=str(
+            csda_params.get("beam_coulomb_model", "fast_electron")
+        ),
+        anomalous_model="none",
+    )
+    csda_unit_T = min(max(float(csda_unit.transmitted_flux), 1.0e-6), 1.0)
+    csda_nn_launch = float(csda_state.nn[csda_launch])
+    csda_l_bi = _compute_l_b(
+        csda_res.phi_c,
+        float(csda_derived.Te[csda_launch]),
+        float(csda_state.n[csda_launch]),
+        0.0,
+        0.0,
+    )
+    csda_sigma_unit = max(
+        0.0,
+        (-math.log(csda_unit_T) / csda_L_cath - 1.0 / csda_l_bi)
+        / csda_nn_launch,
+    )
+    assert csda_sigma_eff == csda_sigma_unit
 
     # --- R4.1 (audit A15): anode-mesh beam interception is the PRODUCTION DEFAULT
     # (correct csda physics), so csda_sim above already has it on -- the anode

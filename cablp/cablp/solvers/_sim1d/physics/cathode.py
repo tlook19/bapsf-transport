@@ -909,11 +909,22 @@ def _csda_beam_deposition(
     (stated limitation; exact for transmissions at or below the ceiling,
     including the quasilinear closure's ~0).
 
+    The gap-transmission probe is FLUX-FAITHFUL: it launches the same total
+    flux as the deposition rays above, split the same way when clumping is
+    active, so flux-dependent stopping (the quasilinear closure, whose
+    relaxation length runs on n_b ~ Gamma0/(A v_b)) is felt by the probe
+    exactly as the deposition ray feels it. Transmission is then the ratio of
+    total transmitted to total launched flux. It was historically launched at
+    unit flux, which made the quasilinear closure invisible to the circuit:
+    transmission read 1, ``sigma_eff`` wrote 0, and the circuit kept booking
+    ``eta * f_bypass`` of the emitted beam power as never-coupling while the
+    real ray stopped inside the gap (item 35).
+
     ``anode_interception`` (R4.1, audit A15): when set, the mesh solid fraction
     ``device_config.eta`` of the beam surviving the gap is intercepted at the
     anode-face crossing (``deposit_beam(anode_cross_index=..., anode_eta=...)``),
     so the fluid stops depositing the ~164 kW long-mfp beam the circuit already
-    books as never entering the plasma. The gap-transmission diagnostic ray is
+    books as never entering the plasma. The gap-transmission probe is
     unaffected (it measures gap survival, which feeds the circuit bypass).
     """
     coulomb_model = str(input_dict.get("beam_coulomb_model", "fast_electron"))
@@ -960,6 +971,11 @@ def _csda_beam_deposition(
             interception_kwargs = dict(
                 anode_cross_index=cross_cell, anode_eta=eta
             )
+        clump_kwargs = (
+            {**ray_kwargs, "nn": np.asarray(state.nn) * chi_clump}
+            if clumping
+            else None
+        )
         if clumping:
             # Gap ray: background nn, penetrates (the fast far-end pedestal).
             gap_ray = deposit_beam(
@@ -968,7 +984,6 @@ def _csda_beam_deposition(
                 **ray_kwargs, **interception_kwargs,
             )
             # Clump ray: enhanced nn -> short l_b -> local deposit (front seed).
-            clump_kwargs = {**ray_kwargs, "nn": np.asarray(state.nn) * chi_clump}
             clump_ray = deposit_beam(
                 result.phi_c, f_clump * Gamma0,
                 dz_cm=geometry.length_cm,
@@ -981,14 +996,57 @@ def _csda_beam_deposition(
                 **ray_kwargs, **interception_kwargs,
             )
         deposition[end] = dep
-        # Gap transmission: a second, gap-clipped ray (unit flux). CSDA
-        # conserves flux until the stop point, so this is 1 if the range
-        # exceeds L_cath and 0 otherwise.
+        # Gap transmission: gap-clipped probe rays MIRRORING the deposition
+        # above -- same launched fluxes, same clump split, same nn per ray --
+        # truncated at L_cath. Launching at the real Gamma0 (rather than the
+        # historical unit flux) is what makes flux-DEPENDENT stopping visible
+        # to the circuit: the quasilinear relaxation length runs on the beam
+        # density n_b ~ Gamma0/(A v_b), so a unit-flux probe feels no
+        # anomalous drag, reads transmission 1, writes sigma_eff = 0, and
+        # leaves the circuit booking a bypass the real ray never enjoys
+        # (item 35, root-caused 2026-07-27). Under flux-INDEPENDENT stopping
+        # (Coulomb CSDA, anomalous_model="none") the ray is flux-linear, so
+        # the ratio below is bit-for-bit the historical unit-flux value.
         gap_dz = _clip_ray_length(
             geometry.length_cm, launch, direction, L_cath
         )
-        gap = deposit_beam(result.phi_c, 1.0, dz_cm=gap_dz, **ray_kwargs)
-        transmission = min(max(gap.transmitted_flux, 1.0e-6), 1.0)
+        if Gamma0 > 0.0:
+            if clumping:
+                gap_launch = (1.0 - f_clump) * Gamma0
+                clump_launch = f_clump * Gamma0
+                transmitted = (
+                    float(deposit_beam(
+                        result.phi_c, gap_launch,
+                        dz_cm=gap_dz, **ray_kwargs,
+                    ).transmitted_flux)
+                    + float(deposit_beam(
+                        result.phi_c, clump_launch,
+                        dz_cm=gap_dz, **clump_kwargs,
+                    ).transmitted_flux)
+                )
+                # Sum the LAUNCHED fluxes the same way the transmitted ones
+                # are summed, so a fully-transmitting split lands on exactly
+                # 1.0 instead of (1-f)+f rounding a ulp off it.
+                launched = gap_launch + clump_launch
+            else:
+                transmitted = float(
+                    deposit_beam(
+                        result.phi_c, Gamma0, dz_cm=gap_dz, **ray_kwargs
+                    ).transmitted_flux
+                )
+                launched = Gamma0
+            survival = transmitted / launched
+        else:
+            # No emission this frame: the flux-weighted ratio is 0/0. The
+            # Gamma0 -> 0 limit of any flux-dependent stopping is the
+            # flux-INDEPENDENT transmission, which is exactly what the
+            # historical unit-flux probe measures, so keep it verbatim here.
+            survival = float(
+                deposit_beam(
+                    result.phi_c, 1.0, dz_cm=gap_dz, **ray_kwargs
+                ).transmitted_flux
+            )
+        transmission = min(max(survival, 1.0e-6), 1.0)
         nn_launch = float(state.nn[launch])
         l_bi = _compute_l_b(
             result.phi_c,
