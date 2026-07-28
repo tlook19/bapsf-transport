@@ -75,6 +75,11 @@ INERT_PARAM_KEYS = frozenset({
     "adas_low_te_extension",
     # --- plasma initial condition + plasma floors ---
     "ne0", "Te0", "Ti0", "u0", "ne_floor", "Te_floor", "Ti_floor",
+    # nn0 is the DIRECT-RUN neutral fill. run_neutral_equilibration pins its
+    # inner sim's start at 1e8 regardless of it, so nn0 cannot reach a seed and
+    # cannot change one. This is the one neutral-side key that is provably
+    # inert; every other neutral knob stays in the hash.
+    "nn0",
     # --- plasma-run numerics (equil uses fixed neutral_equilibration_dt) ---
     "cfl", "density_dt_fraction", "drag_dt_fraction", "heat_dt_fraction",
     "implicit_heat_scheme", "operator_splitting", "heat_picard_iterations",
@@ -252,7 +257,10 @@ def fill_rate_meta(params, nn):
     nn = np.asarray(nn, dtype=float)
     keys = (
         "S_gp", "Twin_S_gp", "gas_puff_mode", "gas_puff_profile", "S_pump_L",
-        "S_pump_R", "gas_type", "nn0", "Tn_K", "nx",
+        # nn0 is deliberately absent: it is the direct-run fill, not the
+        # equilibration's start (which is pinned at 1e8), so recording it here
+        # would mislabel the entry's provenance.
+        "S_pump_R", "gas_type", "Tn_K", "nx",
         "neutral_equilibration_cycles",
     )
     meta = {k: params.get(k) for k in keys}

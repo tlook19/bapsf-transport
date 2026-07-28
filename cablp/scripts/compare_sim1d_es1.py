@@ -73,7 +73,11 @@ PARAM_OVERRIDES = {
     "R_comp": 5.72e-3,
     "L_parasitic_H": 6.6e-6,
     "C_bank_F": 8.9,
-    "T_s": 273.15 + 1725,
+    # NB the constant-T_s era ended here (f=0.1 stance promotion, 2026-07-27):
+    # the retired "T_s": 273.15 + 1725 pin is gone. T_s is now only the INITIAL
+    # surface temperature -- cathode_warming_model="power_balance" (a config
+    # default) evolves it from cathode_Ts_base_K -- and its config default is
+    # the identical 1998.15 K, so dropping the pin changes nothing numerically.
     "S_gp": 3000,
     "S_gp_decay_target": 2000,
     "tau_gp_pulse_duration": 1e-3,
@@ -113,6 +117,41 @@ PARAM_OVERRIDES = {
     "Rcs": 40.0,
     "Lcs": 25.0,
     "Rsup": 0.0,
+    # --- f=0.1 PRODUCTION STANCE (promoted 2026-07-27) --------------------
+    # Enumerated by config-diffing es1_r5_f01_rev20ms.h5 against
+    # default_config() + these overrides, so what lands here is exactly the
+    # stack that run carried. Its RUN-COST settings (tau_afterglow=6 ms,
+    # max_steps_action="stop", density_dt_fraction=0.5) are deliberately NOT
+    # promoted -- they buy runtime, not physics, and belong on the command
+    # line of the run that wants them.
+    #
+    # Cathode power balance, co-tuned with S_gp at the ES1 rung: the standby
+    # sits 70 K below the ES_OPERATING measurement (1910 K) and the
+    # skin->substrate conduction is the one fitted knob, frozen after ES1.
+    "cathode_Ts_base_K": 1840.0,
+    "cathode_conduction_W_per_K": 8000.0,
+    # Beam deposition smoothed over 50 cm. The CSDA range profile is sharp on
+    # the mesh scale; this spreads it over the physical straggling width so
+    # the deposited power does not follow cell edges.
+    "beam_deposition_smoothing_cm": 50.0,
+    # Free-streaming cap on the parallel electron heat flux (the flag below).
+    # f=0.1 is the flux-limiter coefficient this stance is NAMED for; it
+    # combines harmonically (Cowie-McKee) with the Braginskii flux at
+    # heat_flux_limiter_exponent=1, which is already the config default.
+    "heat_flux_limiter_f": 0.1,
+    # Fixed-cell-size source region (7a, approved 2026-07-27), enumerated from
+    # es1_r5_srcgrid_shakedown.h5 and cross-checked against
+    # es1_r5_srcgrid_nx240.h5 -- the two agree on every key except nx, which is
+    # what makes the pair a clean resolution study. The 100 cm column in front
+    # of the anode is meshed at exactly 10 cm regardless of nx, so refining nx
+    # refines only the FAR column and no longer moves the source cells or the
+    # puff cell underneath the source terms. Interim geometry, pending the 2D
+    # model. Presence-gated BOTH ways against the flag below, so these three
+    # must always travel together.
+    "source_region_length_cm": 100.0,
+    "source_region_dz_cm": 10.0,
+    # NB nx_gap is NOT promoted: both artifacts ran it at 5, which is already
+    # the config.py default, so it never appears in the delta.
 }
 FLAG_OVERRIDES = {
     # R5 stance flip: the legacy ion-neutral thermalization arm is subsumed by
@@ -120,6 +159,13 @@ FLAG_OVERRIDES = {
     "ion_neutral_drag_cx_only": False,
     # R5 ES1 tuning pass: the end-vessel expansion geometry above.
     "end_expansion_geometry": True,
+    # f=0.1 PRODUCTION STANCE (2026-07-27): the electron heat-flux limiter is
+    # ON in production, at heat_flux_limiter_f=0.1 above.
+    "electron_heat_flux_limit": True,
+    # Fixed-cell-size source region (7a): pairs with source_region_length_cm /
+    # source_region_dz_cm above; the geometry raises loudly if either side is
+    # set without the other.
+    "source_fixed_grid": True,
 }
 
 
@@ -131,8 +177,16 @@ def _main_discharge_origin(result):
     return float(times[hits[0]]) if hits.size else float(times[0])
 
 
+# Production axial resolution (stance promotion, 2026-07-27). This is a
+# DRIVER-level default, deliberately not a config.py default: the golden
+# baseline is a regression scaffold, not a production claim, and pins its own
+# nx (baseline_sim1d BASELINE_PARAM_OVERRIDES) so the reviewer gate keeps its
+# runtime.
+PRODUCTION_NX = 240
+
+
 def run_model(
-    nx=None,
+    nx=PRODUCTION_NX,
     exchange_model="knudsen",
     extra=None,
     drag_closure=None,
@@ -1230,7 +1284,7 @@ def _report(label, rows):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--nx", type=int, default=None)
+    parser.add_argument("--nx", type=int, default=PRODUCTION_NX)
     parser.add_argument(
         "--exchange-model", default="knudsen", choices=("knudsen", "constant")
     )

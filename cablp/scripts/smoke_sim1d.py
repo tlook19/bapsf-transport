@@ -4321,6 +4321,14 @@ def main():
     retry_params["dt_max"] = 1.0e-6
     retry_params["neutral_dt_fraction"] = 100.0
     retry_params["max_neutral_step_fraction"] = 6.0
+    # This scenario needs a near-vacuum start: the retry it exercises fires
+    # when one puff step moves nn by more than max_neutral_step_fraction, which
+    # is only possible against a tiny background. It used to inherit that from
+    # the nn0 default; nn0 is now the realistic direct-run fill (2e13), against
+    # which the same puff is a ~1e-4 fractional step and nothing is ever
+    # rejected. Pin the initial condition the scenario is built on, alongside
+    # the other limiter constants it already sets.
+    retry_params["nn0"] = 1.0e9
     retry_sim = LAPDSim1D(retry_params, retry_flags)
     retry_result = retry_sim.run(t_end=1.0e-6)
     assert retry_result.steps >= 2
@@ -7339,8 +7347,17 @@ def main():
             pass
         else:
             raise AssertionError(f"expected ValueError for {ss_bad}")
+    # The I_i-vs-n proportionality asserted below at rtol=1e-9 holds only in
+    # the near-vacuum limit: _compute_l_b harmonically combines the beam's
+    # electron-ion MFP (l_bi ~ 1/n_e) with its electron-NEUTRAL MFP
+    # (l_bn = 1/(sigma_b*n_n)). While n_n is negligible l_b is a pure 1/n_e
+    # power law and the self-consistent phi_c leaves I_i exactly linear in n;
+    # at the realistic direct-run nn0 (2e13) the neutral leg is comparable, so
+    # I_i departs from exact linearity (measured ratio 3.00077 instead of 3).
+    # That coupling is physical -- pin the low fill this identity is stated in
+    # rather than loosening the tolerance.
     ss_sim = LAPDSim1D(
-        dict(m3_params, cathode_sample_smoothing="presheath"),
+        dict(m3_params, cathode_sample_smoothing="presheath", nn0=1.0e9),
         resolved_cathode_flags,
     )
     ss_cath = cathode_sample_indices(ss_sim.geometry)[0]
@@ -8040,6 +8057,50 @@ def main():
         with h5py.File(rate_path, "a") as rate_h5:
             del rate_h5["atomic_rate_domain"]
         assert load_result_hdf5(rate_path).atomic_rate_domain == {}
+
+    # --- direct run() with neutral_equilibration ON warns loudly -------------
+    # The equilibration fires only from start_simulation(); a direct run()
+    # silently started from the nn0 fill instead. That is a warning, never an
+    # error -- existing direct-run scripts must keep working.
+    import warnings as _eq_warnings
+
+    _eq_params, _eq_flags = default_config()
+    assert _eq_flags["neutral_equilibration"], "expected the flag on by default"
+    _eq_params["nx"] = 12
+    _eq_sim = LAPDSim1D(_eq_params, _eq_flags)
+    with _eq_warnings.catch_warnings(record=True) as _eq_caught:
+        _eq_warnings.simplefilter("always")
+        _eq_direct = _eq_sim.run(t_end=0.0)
+    _eq_hits = [
+        w for w in _eq_caught if "run() was called directly" in str(w.message)
+    ]
+    assert len(_eq_hits) == 1, (
+        "direct run() with neutral_equilibration ON must warn exactly once, "
+        f"got {[str(w.message) for w in _eq_caught]}"
+    )
+    _eq_text = str(_eq_hits[0].message)
+    assert "start_simulation" in _eq_text
+    assert "nn0" in _eq_text
+    assert _eq_direct is not None, "the warning must not abort the run"
+    # ... and the equilibration-aware entry point stays silent.
+    _eq_sim2 = LAPDSim1D(_eq_params, {**_eq_flags, "neutral_equilibration": False})
+    with _eq_warnings.catch_warnings(record=True) as _eq_quiet:
+        _eq_warnings.simplefilter("always")
+        _eq_sim2.run(t_end=0.0)
+    assert not [
+        w for w in _eq_quiet if "run() was called directly" in str(w.message)
+    ], "the warning must be gated on the neutral_equilibration flag"
+    # ... and the run() start_simulation() drives is silent even with the flag
+    # on (exercises the guard directly; a full equilibration costs ~1 minute).
+    _eq_sim3 = LAPDSim1D(_eq_params, _eq_flags)
+    _eq_sim3._run_via_start_simulation = True
+    with _eq_warnings.catch_warnings(record=True) as _eq_inner:
+        _eq_warnings.simplefilter("always")
+        _eq_sim3.run(t_end=0.0)
+    assert not [
+        w for w in _eq_inner if "run() was called directly" in str(w.message)
+    ], "start_simulation()'s own run() must not warn"
+    assert _eq_sim3._run_via_start_simulation, "run() must not clear the guard"
 
     print(
         "sim1d smoke ok: "

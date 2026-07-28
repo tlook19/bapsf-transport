@@ -14,6 +14,16 @@ def initial_condition_defaults():
     nn0:
         Uniform initial neutral density [cm^-3]. If ``None``, the value is
         looked up from the gas-puff table via ``resolve_nn0``.
+
+        This is the DIRECT-RUN fill only. The default (2e13) is a realistic
+        pre-shot background, so a bare ``LAPDSim1D(...).run()`` starts from a
+        physical fill instead of the near-vacuum 1e9 that only ever made sense
+        as a seed for the neutral equilibration. The equilibrated path
+        (``neutral_equilibration`` via ``start_simulation``) does NOT read this
+        value: ``run_neutral_equilibration`` pins its inner sim's start at the
+        nn_table generator's 1e8 and overwrites nn with the equilibrated
+        profile, so the two paths are decoupled and this default can move
+        without disturbing any equilibrated run.
     Te0:
         Uniform initial electron temperature [eV].
     Ti0:
@@ -32,7 +42,9 @@ def initial_condition_defaults():
         # --- ACTIVE (production) ---
         "gas_type": "He",
         "ne0": 1e9,
-        "nn0": 1e9,
+        # Realistic pre-shot neutral background for DIRECT runs (2026-07-27).
+        # The equilibrated path never reads this (see the docstring above).
+        "nn0": 2.0e13,
         # Repaired startup stance: electrons begin just above the exact bundled
         # He ADF11 edge (~0.200092 eV); ions begin cold at ~300 K, essentially
         # the fill temperature (R5 stance flip), consistent with the
@@ -269,9 +281,14 @@ def neutral_source_defaults():
         explicit RHS and the implicit neutral matrix, so the two sites
         cannot desync.
     gas_puff_z_cm:
-        Distributed-puff centre [cm, machine coordinates]. ``None`` (default)
-        centres on the puff cell; the physical pipe sits at ~60 cm (anode
-        + 10). Mirrored through the chamber midpoint for the twin puff.
+        Distributed-puff centre [cm, machine coordinates]. Defaults to the
+        physical pipe position, 60 cm (anode + 10); ``None`` falls back to
+        whichever cell currently holds the ``puff`` role. Mirrored through the
+        chamber midpoint for the twin puff. Pinning it in machine coordinates
+        (f=0.1 stance, 2026-07-27) is what makes an nx refinement a resolution
+        study: with ``None`` the source centre follows the puff cell's centre,
+        so changing nx silently moves the source. Ignored by the ``"cell"``
+        profile, which puts the whole flow in the role-tagged cell.
     gas_puff_sigma_cm:
         Gaussian puff axial width [cm].
     gas_puff_throw_cm:
@@ -318,7 +335,9 @@ def neutral_source_defaults():
         # Physical Lambertian pipe source ~10 cm in front of the anode
         # (geometry-derived, no tuning) -- default and production.
         "gas_puff_profile": "cosine_pipe",
-        "gas_puff_z_cm": None,
+        # The physical pipe position, in machine coordinates so it does not
+        # move with nx (f=0.1 stance, 2026-07-27).
+        "gas_puff_z_cm": 60.0,
         "gas_puff_sigma_cm": 50.0,
         "gas_puff_throw_cm": 100.0,
         # Fresh-puff fractional-coverage local ionization (default 0 = OFF,
@@ -1566,9 +1585,11 @@ input_flags_template_1d = {
     # accept-time floor clip resets their margin to float residue every step,
     # so a persistent drain otherwise pins dt at dt_min indefinitely. One-sided
     # (all other bounds still govern the cell) and knife-edge (any real margin
-    # re-admits the cell immediately). Default OFF: the off path is bit-exact
-    # historical behavior (golden unaffected).
-    "surface_loss_floor_exempt": False,
+    # re-admits the cell immediately). PROMOTED to the default (f=0.1 stance,
+    # 2026-07-27): every production run needs it to reach the afterglow in
+    # finite time, so it is the stance rather than an opt-in. Set it False to
+    # recover the historical bound.
+    "surface_loss_floor_exempt": True,
     "ionization_energy_cost": True,
     "icool": True,
     "ncool": True,

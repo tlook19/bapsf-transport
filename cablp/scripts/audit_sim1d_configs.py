@@ -16,6 +16,7 @@ from cablp.solvers._sim1d import config_manifest, default_config, resolve_config
 
 from baseline_sim1d import build_baseline_config
 from compare_sim1d_es1 import FLAG_OVERRIDES, PARAM_OVERRIDES
+from compare_sim1d_es1 import PRODUCTION_NX
 from run_m6_point import ELECTRON_BIRTH_POLICY as M6_ELECTRON_BIRTH_POLICY
 from run_mechanism_ladder import (
     ELECTRON_BIRTH_POLICY as LADDER_ELECTRON_BIRTH_POLICY,
@@ -70,7 +71,8 @@ def config_cases():
     m6_op = ES_OPERATING[1]
     m6_params.update(
         {
-            "nx": 120,
+            # run_m6_point --nx default, promoted to the production resolution.
+            "nx": PRODUCTION_NX,
             "V_bank": m6_op["V_bank"],
             "cathode_solver_model": "current_driven",
             "beam_deposition_model": "csda",
@@ -80,7 +82,8 @@ def config_cases():
             "T_s": m6_op["Ts_standby_K"],
             "cathode_Ts_base_K": m6_op["Ts_standby_K"],
             "cathode_heat_capacity_J_per_K": 120.0,
-            "cathode_conduction_W_per_K": 1200.0,
+            # cathode_conduction_W_per_K is deliberately absent: --g-cond now
+            # defaults to None and defers to the shared production config (7c).
             "cathode_emissivity": 0.7,
             "phi_wf": 2.869,
             "cathode_surface_model": "ads_des",

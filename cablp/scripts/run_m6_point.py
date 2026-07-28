@@ -13,7 +13,7 @@ Usage:
 import argparse
 import json
 
-from compare_sim1d_es1 import run_model
+from compare_sim1d_es1 import PRODUCTION_NX, run_model
 from run_mechanism_ladder import ES_OPERATING
 from cablp.solvers._sim1d.results.io import save_result_hdf5
 
@@ -24,12 +24,15 @@ ELECTRON_BIRTH_POLICY = "floor"
 def main(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("--es", type=int, choices=(1, 2, 3), required=True)
-    p.add_argument("--nx", type=int, default=120)
+    p.add_argument("--nx", type=int, default=PRODUCTION_NX)
     p.add_argument("--sgp", type=float, required=True)
     p.add_argument("--close-lag", type=float, default=None)
     p.add_argument("--L", type=float, default=None,
                    help="loop inductance override [H]")
-    p.add_argument("--g-cond", type=float, default=1200.0)
+    p.add_argument("--g-cond", type=float, default=None,
+                   help="skin->substrate conduction [W/K]; default None = "
+                        "defer to the shared production config "
+                        "(compare_sim1d_es1.PARAM_OVERRIDES)")
     p.add_argument("--c-th", type=float, default=120.0)
     p.add_argument("--mn", action="store_true")
     p.add_argument("--two-zone", action="store_true",
@@ -56,7 +59,6 @@ def main(argv=None):
         "T_s": op["Ts_standby_K"],
         "cathode_Ts_base_K": op["Ts_standby_K"],
         "cathode_heat_capacity_J_per_K": args.c_th,
-        "cathode_conduction_W_per_K": args.g_cond,
         "cathode_emissivity": 0.7,
         "phi_wf": 2.869,
         "cathode_surface_model": "ads_des",
@@ -70,6 +72,12 @@ def main(argv=None):
         "gas_puff_mode": "square",
         "S_gp": args.sgp,
     }
+    # Passthrough overrides: absent => inherit the shared production config
+    # rather than silently reimposing a stale driver default (7c, 2026-07-27 --
+    # the old --g-cond default of 1200 overrode the promoted stance value of
+    # 8000 on every run that did not pass the flag).
+    if args.g_cond is not None:
+        extra["cathode_conduction_W_per_K"] = args.g_cond
     if not args.no_smooth:
         extra["cathode_sample_smoothing"] = "presheath"
     if args.close_lag is not None:
