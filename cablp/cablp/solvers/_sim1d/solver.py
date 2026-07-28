@@ -25,7 +25,6 @@ from .core.ignition import (
     IGNITION_BEAM_END_LOSS_KEYS,
     IGNITION_DIAGNOSTIC_FIELDS,
     IGNITION_POWER_GROUPS,
-    IGNITION_STALL_WINDOW_S,
     IgnitionMonitor,
     empty_ignition_diagnostics,
 )
@@ -5463,12 +5462,10 @@ class LAPDSim1D:
         record["joint_negative"] = 1.0 if rates["joint_negative"] else 0.0
 
         if armed:
-            grouped = set()
             total_W = 0.0
             for group, term_names in IGNITION_POWER_GROUPS.items():
                 power = 0.0
                 for term_name in term_names:
-                    grouped.add(term_name)
                     power += self._electron_term_power_W(
                         rhs_terms, term_name, plasma_volume
                     )
