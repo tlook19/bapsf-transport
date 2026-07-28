@@ -73,7 +73,11 @@ PARAM_OVERRIDES = {
     "R_comp": 5.72e-3,
     "L_parasitic_H": 6.6e-6,
     "C_bank_F": 8.9,
-    "T_s": 273.15 + 1725,
+    # NB the constant-T_s era ended here (f=0.1 stance promotion, 2026-07-27):
+    # the retired "T_s": 273.15 + 1725 pin is gone. T_s is now only the INITIAL
+    # surface temperature -- cathode_warming_model="power_balance" (a config
+    # default) evolves it from cathode_Ts_base_K -- and its config default is
+    # the identical 1998.15 K, so dropping the pin changes nothing numerically.
     "S_gp": 3000,
     "S_gp_decay_target": 2000,
     "tau_gp_pulse_duration": 1e-3,
@@ -113,6 +117,28 @@ PARAM_OVERRIDES = {
     "Rcs": 40.0,
     "Lcs": 25.0,
     "Rsup": 0.0,
+    # --- f=0.1 PRODUCTION STANCE (promoted 2026-07-27) --------------------
+    # Enumerated by config-diffing es1_r5_f01_rev20ms.h5 against
+    # default_config() + these overrides, so what lands here is exactly the
+    # stack that run carried. Its RUN-COST settings (tau_afterglow=6 ms,
+    # max_steps_action="stop", density_dt_fraction=0.5) are deliberately NOT
+    # promoted -- they buy runtime, not physics, and belong on the command
+    # line of the run that wants them.
+    #
+    # Cathode power balance, co-tuned with S_gp at the ES1 rung: the standby
+    # sits 70 K below the ES_OPERATING measurement (1910 K) and the
+    # skin->substrate conduction is the one fitted knob, frozen after ES1.
+    "cathode_Ts_base_K": 1840.0,
+    "cathode_conduction_W_per_K": 8000.0,
+    # Beam deposition smoothed over 50 cm. The CSDA range profile is sharp on
+    # the mesh scale; this spreads it over the physical straggling width so
+    # the deposited power does not follow cell edges.
+    "beam_deposition_smoothing_cm": 50.0,
+    # Free-streaming cap on the parallel electron heat flux (the flag below).
+    # f=0.1 is the flux-limiter coefficient this stance is NAMED for; it
+    # combines harmonically (Cowie-McKee) with the Braginskii flux at
+    # heat_flux_limiter_exponent=1, which is already the config default.
+    "heat_flux_limiter_f": 0.1,
 }
 FLAG_OVERRIDES = {
     # R5 stance flip: the legacy ion-neutral thermalization arm is subsumed by
@@ -120,6 +146,9 @@ FLAG_OVERRIDES = {
     "ion_neutral_drag_cx_only": False,
     # R5 ES1 tuning pass: the end-vessel expansion geometry above.
     "end_expansion_geometry": True,
+    # f=0.1 PRODUCTION STANCE (2026-07-27): the electron heat-flux limiter is
+    # ON in production, at heat_flux_limiter_f=0.1 above.
+    "electron_heat_flux_limit": True,
 }
 
 
