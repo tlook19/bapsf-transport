@@ -56,10 +56,17 @@ from run_mechanism_ladder import ES_OPERATING  # noqa: E402
 
 # The M6 candidate constants (run_m6_point.py, ES1 rung): square waveform at
 # sq3400, fitted loop inductance, drive tier, frozen M5a' surface tier,
-# presheath sample smoothing. nx stays at the config default so the gate
-# keeps its per-change runtime.
+# presheath sample smoothing.
 BASELINE_PARAM_OVERRIDES = {
     **PRODUCTION_PARAM_OVERRIDES,
+    # Axial resolution PINNED (stance promotion, 2026-07-27). The campaign
+    # drivers promoted their default nx to 240 (compare_sim1d_es1.PRODUCTION_NX,
+    # run_m6_point --nx); this gate must NOT inherit it. The golden is a
+    # regression scaffold, not a production claim, and quadrupling the cell
+    # count would multiply every reviewer gate's runtime. 60 is the value this
+    # fixture was captured at (config default at capture time) -- pinned here
+    # explicitly so a future config.py nx change cannot move it either.
+    "nx": 60,
     # Historical checkpoint seed. The repaired live defaults are intentionally
     # different; this unchanged fixture remains an off-path regression anchor.
     "Te0": 0.1,

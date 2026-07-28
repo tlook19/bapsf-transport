@@ -131,8 +131,16 @@ def _main_discharge_origin(result):
     return float(times[hits[0]]) if hits.size else float(times[0])
 
 
+# Production axial resolution (stance promotion, 2026-07-27). This is a
+# DRIVER-level default, deliberately not a config.py default: the golden
+# baseline is a regression scaffold, not a production claim, and pins its own
+# nx (baseline_sim1d BASELINE_PARAM_OVERRIDES) so the reviewer gate keeps its
+# runtime.
+PRODUCTION_NX = 240
+
+
 def run_model(
-    nx=None,
+    nx=PRODUCTION_NX,
     exchange_model="knudsen",
     extra=None,
     drag_closure=None,
@@ -1230,7 +1238,7 @@ def _report(label, rows):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--nx", type=int, default=None)
+    parser.add_argument("--nx", type=int, default=PRODUCTION_NX)
     parser.add_argument(
         "--exchange-model", default="knudsen", choices=("knudsen", "constant")
     )

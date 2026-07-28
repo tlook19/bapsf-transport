@@ -13,7 +13,7 @@ Usage:
 import argparse
 import json
 
-from compare_sim1d_es1 import run_model
+from compare_sim1d_es1 import PRODUCTION_NX, run_model
 from run_mechanism_ladder import ES_OPERATING
 from cablp.solvers._sim1d.results.io import save_result_hdf5
 
@@ -24,7 +24,7 @@ ELECTRON_BIRTH_POLICY = "floor"
 def main(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("--es", type=int, choices=(1, 2, 3), required=True)
-    p.add_argument("--nx", type=int, default=120)
+    p.add_argument("--nx", type=int, default=PRODUCTION_NX)
     p.add_argument("--sgp", type=float, required=True)
     p.add_argument("--close-lag", type=float, default=None)
     p.add_argument("--L", type=float, default=None,
