@@ -3056,6 +3056,17 @@ class LAPDSim1D:
         # control flags are inert to the seed signature, so clearing this here
         # cannot change the stored entry's key or content.
         flags["use_cached_neutral_seed"] = False
+        # The equilibration OWNS its neutral start; it must not inherit the
+        # outer run's nn0. nn0 is the direct-run fill (a realistic pre-shot
+        # background), whereas this inner sim accumulates the fill from
+        # near-vacuum over `cycles` puff/off cycles -- exactly what the
+        # cablp/vars/_nn_table.py generator did, at nn0_init = 1e8. Pinning it
+        # here decouples the two paths, so the direct-run default can move
+        # without perturbing any equilibrated run. (The 100-cycle accumulation
+        # forgets its start entirely: pumping decays the initial inventory
+        # below the last bit of the equilibrated nn, so 1e8 and the former
+        # inherited 1e9 seed BIT-IDENTICAL profiles at the production config.)
+        params["nn0"] = 1e8
         if cycles is None:
             cycles = int(params.get("neutral_equilibration_cycles", params["cycles"]))
         cycles = int(cycles)

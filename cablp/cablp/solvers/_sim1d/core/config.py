@@ -14,6 +14,16 @@ def initial_condition_defaults():
     nn0:
         Uniform initial neutral density [cm^-3]. If ``None``, the value is
         looked up from the gas-puff table via ``resolve_nn0``.
+
+        This is the DIRECT-RUN fill only. The default (2e13) is a realistic
+        pre-shot background, so a bare ``LAPDSim1D(...).run()`` starts from a
+        physical fill instead of the near-vacuum 1e9 that only ever made sense
+        as a seed for the neutral equilibration. The equilibrated path
+        (``neutral_equilibration`` via ``start_simulation``) does NOT read this
+        value: ``run_neutral_equilibration`` pins its inner sim's start at the
+        nn_table generator's 1e8 and overwrites nn with the equilibrated
+        profile, so the two paths are decoupled and this default can move
+        without disturbing any equilibrated run.
     Te0:
         Uniform initial electron temperature [eV].
     Ti0:
@@ -32,7 +42,9 @@ def initial_condition_defaults():
         # --- ACTIVE (production) ---
         "gas_type": "He",
         "ne0": 1e9,
-        "nn0": 1e9,
+        # Realistic pre-shot neutral background for DIRECT runs (2026-07-27).
+        # The equilibrated path never reads this (see the docstring above).
+        "nn0": 2.0e13,
         # Repaired startup stance: electrons begin just above the exact bundled
         # He ADF11 edge (~0.200092 eV); ions begin cold at ~300 K, essentially
         # the fill temperature (R5 stance flip), consistent with the
