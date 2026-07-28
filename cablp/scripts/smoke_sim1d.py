@@ -5241,9 +5241,13 @@ def main():
         "post_afterglow",
     ]
 
+    # The historical raise-on-timeout arm, now selected explicitly. Every
+    # assertion below is the pre-existing BreakdownError contract, unchanged;
+    # the switch-open default is covered by its own block further down.
     failed_current_phase_params = dict(current_phase_params)
     failed_current_phase_params["I_prebreakdown"] = 1.0e30
     failed_current_phase_params["I_breakdown"] = 1.0e30
+    failed_current_phase_params["prebreakdown_timeout_action"] = "raise"
     failed_current_phase_sim = LAPDSim1D(
         failed_current_phase_params,
         current_phase_flags,
@@ -5286,6 +5290,7 @@ def main():
     failed_breakdown_phase_params = dict(current_phase_params)
     failed_breakdown_phase_params["I_prebreakdown"] = 1.0e-9
     failed_breakdown_phase_params["I_breakdown"] = 1.0e30
+    failed_breakdown_phase_params["prebreakdown_timeout_action"] = "raise"
     failed_breakdown_phase_sim = LAPDSim1D(
         failed_breakdown_phase_params,
         current_phase_flags,
@@ -5317,6 +5322,282 @@ def main():
         assert exc.current_trigger_samples["I_tot"][-1] == exc.I_tot
     else:
         raise AssertionError("expected current-triggered breakdown phase to fail")
+
+    # --- Ignition-failure diagnostics and guards -------------------------
+    #
+    # (i) the joint-condition logic on synthetic histories, (ii) the
+    # switch-open firing on a synthetic no-trigger path, (iii) the scorer
+    # hard-fail on a non-ignited fixture and its silence on an ignited one.
+    # main() binds save_result_hdf5 as a local further down (R1e block), so
+    # alias it here rather than relying on that later binding.
+    from cablp.solvers._sim1d.results.io import (
+        save_result_hdf5 as _save_result_hdf5_ignition,
+    )
+    from cablp.solvers._sim1d.core.ignition import (
+        IGNITION_DIAGNOSTIC_FIELDS,
+        IGNITION_RATE_WINDOW_S,
+        IGNITION_STALL_MIN_SAMPLES,
+        IGNITION_STALL_WINDOW_S,
+        IgnitionMonitor,
+        longest_joint_negative_span,
+    )
+
+    # Loud construction errors on an unusable window.
+    for bad_kwargs in (
+        {"window_s": 0.0},
+        {"window_s": -1.0e-3},
+        {"window_s": float("inf")},
+        {"rate_window_s": 0.0},
+        {"rate_window_s": 2.0 * IGNITION_STALL_WINDOW_S},
+        {"min_samples": 1},
+    ):
+        try:
+            IgnitionMonitor(**bad_kwargs)
+        except ValueError as error:
+            assert "IgnitionMonitor" in str(error)
+        else:
+            raise AssertionError(
+                f"expected IgnitionMonitor({bad_kwargs}) to raise"
+            )
+
+    def _stall_trip_time(N_of_t, Ee_of_t, samples=1400, dt=1.0e-5):
+        """Drive a fresh monitor through a synthetic history; return trip t."""
+        monitor = IgnitionMonitor()
+        for index in range(samples):
+            t = index * dt
+            record = monitor.record(
+                time=t,
+                N_plasma=N_of_t(t),
+                N_neutral=1.0e18,
+                Ee_total=Ee_of_t(t),
+                armed=True,
+            )
+            if record["stalled"]:
+                return t
+        return None
+
+    def _spike_trough_climb(t):
+        # beam-turn-on spike -> initial-inventory-burn trough -> puff-restored
+        # climb: the healthy start-up shape the detector must NOT kill.
+        if t < 1.0e-3:
+            return 1.0e12 * math.exp(60.0 * t)
+        if t < 5.0e-3:
+            return 1.0e12 * math.exp(0.06) * math.exp(-400.0 * (t - 1.0e-3))
+        return (
+            1.0e12
+            * math.exp(0.06)
+            * math.exp(-400.0 * 4.0e-3)
+            * math.exp(900.0 * (t - 5.0e-3))
+        )
+
+    # Healthy: density spikes, troughs, then climbs while Ee rises. NO trip.
+    assert (
+        _stall_trip_time(_spike_trough_climb, lambda t: 1.0e3 * (1.0 + 50.0 * t))
+        is None
+    ), "spike/trough/climb with rising Ee must not trip"
+    # The same trough with Ee merely holding/rising is the settled rationale:
+    # density falling alone is never enough.
+    assert (
+        _stall_trip_time(
+            lambda t: 1.0e12 * math.exp(-300.0 * t),
+            lambda t: 1.0e3 * math.exp(10.0 * t),
+        )
+        is None
+    ), "falling density with rising Ee must not trip"
+    # Slow-positive growth with a slowly cooling electron pool: ambiguous, so
+    # it must fall through untripped.
+    assert (
+        _stall_trip_time(
+            lambda t: 1.0e12 * math.exp(5.0 * t),
+            lambda t: 1.0e3 * math.exp(-50.0 * t),
+        )
+        is None
+    ), "slow-positive gamma_N must not trip"
+    # Oscillating about flat: ambiguous, untripped.
+    assert (
+        _stall_trip_time(
+            lambda t: 1.0e12 * (1.0 + 0.2 * math.sin(2.0 * math.pi * t / 6.0e-4)),
+            lambda t: 1.0e3 * (1.0 + 0.2 * math.sin(2.0 * math.pi * t / 6.0e-4)),
+        )
+        is None
+    ), "an oscillating history must not trip"
+    # Joint decay for LESS than the window, then recovery: untripped.
+    assert (
+        _stall_trip_time(
+            lambda t: (
+                1.0e12 * math.exp(-200.0 * t)
+                if t < 2.2e-3
+                else 1.0e12 * math.exp(-200.0 * 2.2e-3) * math.exp(500.0 * (t - 2.2e-3))
+            ),
+            lambda t: (
+                1.0e3 * math.exp(-150.0 * t)
+                if t < 2.2e-3
+                else 1.0e3 * math.exp(-150.0 * 2.2e-3) * math.exp(400.0 * (t - 2.2e-3))
+            ),
+        )
+        is None
+    ), "a joint-negative stretch shorter than the window must not trip"
+    # Sustained joint decay: MUST trip, and only once the window plus one
+    # rate window has actually elapsed.
+    stall_trip = _stall_trip_time(
+        lambda t: 1.0e12 * math.exp(-200.0 * t),
+        lambda t: 1.0e3 * math.exp(-150.0 * t),
+    )
+    assert stall_trip is not None, "sustained joint decay must trip"
+    assert np.isclose(
+        stall_trip,
+        IGNITION_STALL_WINDOW_S + IGNITION_RATE_WINDOW_S,
+        atol=2.0e-5,
+    ), stall_trip
+    # Disarming clears the buffer, so a window can never straddle beam-off.
+    straddle_monitor = IgnitionMonitor()
+    for index in range(1400):
+        t = index * 1.0e-5
+        straddle_record = straddle_monitor.record(
+            time=t,
+            N_plasma=1.0e12 * math.exp(-200.0 * t),
+            N_neutral=1.0e18,
+            Ee_total=1.0e3 * math.exp(-150.0 * t),
+            armed=(index % 200) != 0,
+        )
+        assert not straddle_record["stalled"]
+    # The offline replay metric agrees with the trip logic's own bookkeeping.
+    assert longest_joint_negative_span([0.0, 1.0, 2.0], [-1.0, -1.0, 1.0],
+                                       [-1.0, -1.0, -1.0]) == 1.0
+    assert longest_joint_negative_span([0.0, 1.0, 2.0], [-1.0, -1.0, -1.0],
+                                       [-1.0, -1.0, -1.0],
+                                       armed=[1, 0, 1]) == 0.0
+    assert longest_joint_negative_span([0.0, 1.0], [np.nan, -1.0],
+                                       [-1.0, -1.0]) == 0.0
+
+    # The switch-open on a synthetic no-trigger path: the current can never
+    # reach the thresholds, so tau_prebreakdown fires the hardware guard.
+    timeout_params = dict(current_phase_params)
+    timeout_params["I_prebreakdown"] = 1.0e30
+    timeout_params["I_breakdown"] = 1.0e30
+    timeout_params["tau_prebreakdown"] = 3.0e-10
+    timeout_sim = LAPDSim1D(timeout_params, current_phase_flags)
+    assert np.isclose(timeout_sim.default_t_end(), 6.0e-10)
+    with warnings.catch_warnings(record=True) as timeout_warnings:
+        warnings.simplefilter("always")
+        timeout_result = timeout_sim.run(dt=1.0e-10)
+    assert any(
+        "ignition aborted" in str(entry.message)
+        and "prebreakdown_timeout" in str(entry.message)
+        for entry in timeout_warnings
+    ), [str(entry.message) for entry in timeout_warnings]
+    # It is a real phase transition, not an exception: the run winds down
+    # through the ordinary afterglow and STOPS at abort + tau_afterglow.
+    assert np.isclose(timeout_result.final_time, 4.0e-10)
+    assert list(timeout_result.phase_events["reason"]) == [
+        "initial",
+        "prebreakdown_timeout",
+        "tau_afterglow",
+    ]
+    assert list(timeout_result.phase_events["phase"]) == [
+        "pre_breakdown",
+        "afterglow",
+        "post_afterglow",
+    ]
+    assert np.allclose(
+        timeout_result.phase_events["time"], [0.0, 3.0e-10, 4.0e-10]
+    )
+    assert "main_discharge" not in set(timeout_result.phase)
+    assert list(timeout_result.phase) == [
+        "pre_breakdown",
+        "pre_breakdown",
+        "pre_breakdown",
+        "afterglow",
+        "post_afterglow",
+    ]
+    # The switch is OPEN: the drive is off from the abort instant onwards.
+    assert np.array_equal(
+        timeout_result.phase_cathode_enabled, [1.0, 1.0, 1.0, 0.0, 0.0]
+    )
+    # The cathode floats through the afterglow sample and is simply dead by
+    # post_afterglow -- the ordinary end-of-discharge switch state.
+    assert np.array_equal(timeout_result.phase_floating, [0.0, 0.0, 0.0, 1.0, 0.0])
+    assert timeout_result.ignition_abort["reason"] == "prebreakdown_timeout"
+    assert np.isclose(timeout_result.ignition_abort["time_s"], 3.0e-10)
+    assert np.isclose(
+        timeout_result.ignition_abort["window_s"], IGNITION_STALL_WINDOW_S
+    )
+    assert timeout_result.ignition_abort["threshold_name"] == "I_prebreakdown"
+    assert np.isclose(timeout_result.ignition_abort["threshold_A"], 1.0e30)
+    for power_key in (
+        "P_beam_W",
+        "P_conduction_W",
+        "P_cooling_W",
+        "P_ionization_W",
+        "P_transport_W",
+        "P_beam_end_loss_W",
+    ):
+        assert power_key in timeout_result.ignition_abort
+    assert set(timeout_result.ignition_diagnostics) == set(
+        IGNITION_DIAGNOSTIC_FIELDS
+    )
+    for values in timeout_result.ignition_diagnostics.values():
+        assert values.shape == timeout_result.time.shape
+    # Armed while the drive is on and pre-ignition; disarmed once aborted.
+    assert np.array_equal(
+        timeout_result.ignition_diagnostics["armed"], [1.0, 1.0, 1.0, 0.0, 0.0]
+    )
+    assert np.all(
+        np.isfinite(timeout_result.ignition_diagnostics["N_plasma"][:3])
+    )
+    assert np.all(np.isnan(timeout_result.ignition_diagnostics["P_beam_W"][3:]))
+    # The abort survives the HDF5 round trip; a run without one carries none.
+    with tempfile.TemporaryDirectory() as ignition_dir:
+        ignition_path = Path(ignition_dir) / "timeout.h5"
+        _save_result_hdf5_ignition(ignition_path, timeout_result)
+        loaded_timeout = load_result_hdf5(ignition_path)
+        assert loaded_timeout.ignition_abort["reason"] == "prebreakdown_timeout"
+        assert np.isclose(loaded_timeout.ignition_abort["time_s"], 3.0e-10)
+        assert set(loaded_timeout.ignition_diagnostics) == set(
+            IGNITION_DIAGNOSTIC_FIELDS
+        )
+        assert np.array_equal(
+            loaded_timeout.ignition_diagnostics["armed"],
+            timeout_result.ignition_diagnostics["armed"],
+        )
+        ignited_path = Path(ignition_dir) / "ignited.h5"
+        _save_result_hdf5_ignition(ignited_path, direct_current_phase_result)
+        loaded_ignited = load_result_hdf5(ignited_path)
+        assert not hasattr(loaded_ignited, "ignition_abort")
+
+    # An igniting run is untouched: no guard event, no abort record, and the
+    # detector never armed a full window inside it.
+    assert not hasattr(current_phase_result, "ignition_abort")
+    assert not hasattr(direct_current_phase_result, "ignition_abort")
+    assert not set(direct_current_phase_result.phase_events["reason"]) & {
+        "ignition_stalled",
+        "prebreakdown_timeout",
+    }
+    assert np.all(direct_current_phase_result.ignition_diagnostics["stalled"] == 0.0)
+    assert IGNITION_STALL_MIN_SAMPLES >= 2
+
+    # Scorer hard-fail (scripts): a non-ignited run must raise, an ignited one
+    # must score its origin from the first main_discharge sample.
+    import compare_sim1d_es1 as _cmp_es1
+    import fingerprints_sim1d as _fingerprints
+
+    for origin_fn, caller in (
+        (_cmp_es1._main_discharge_origin, "compare_sim1d_es1"),
+        (_fingerprints._origin_s, "fingerprints_sim1d"),
+    ):
+        try:
+            origin_fn(timeout_result)
+        except RuntimeError as error:
+            message = str(error)
+            assert "NON-IGNITED RUN" in message, message
+            assert "post_afterglow" in message, message
+            assert "prebreakdown_timeout" in message, message
+        else:
+            raise AssertionError(
+                f"{caller} must refuse to score a non-ignited run"
+            )
+        ignited_origin = origin_fn(direct_current_phase_result)
+        assert np.isclose(ignited_origin, 1.0e-10), (caller, ignited_origin)
 
     neutral_phase_run_params = dict(no_source_params)
     neutral_phase_run_params["dt_save"] = 0.0
