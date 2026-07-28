@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import h5py
 import numpy as np
 
+from ..core.config import resolve_config
 from ..core.timestep import TimestepDiagnostics
 from .compat import add_sim3_compat_aliases
 
@@ -12,21 +13,56 @@ from .compat import add_sim3_compat_aliases
 RESULT_VERSION = "sim1d-hdf5-v1"
 
 
+def _resolve_config_namespace(kind, supplied):
+    """Resolve one namespace the way ``LAPDSim1D.__init__`` resolves it.
+
+    ``resolve_config`` owns both namespaces; the untouched one falls back to
+    its template and is discarded here, so ``params`` and ``flags`` stay
+    independent.
+    """
+    if kind == "params":
+        return resolve_config(params=supplied)[0]
+    return resolve_config(flags=supplied)[1]
+
+
+def _check_config_metadata(kind, supplied, constructed):
+    """Raise unless ``supplied`` would construct ``constructed``'s config.
+
+    Callers naturally hold the PRE-resolution override mapping they passed to
+    ``LAPDSim1D``, while ``result.params``/``result.flags`` are the resolved
+    config. Compare post-resolution so any input that would build the same
+    solver config passes, and a genuinely different one still raises.
+    """
+    supplied = dict(supplied)
+    constructed = dict(constructed)
+    if supplied == constructed:
+        return
+    resolved_supplied = _resolve_config_namespace(kind, supplied)
+    resolved_constructed = _resolve_config_namespace(kind, constructed)
+    if resolved_supplied == resolved_constructed:
+        return
+    differing = sorted(
+        key
+        for key in set(resolved_supplied) | set(resolved_constructed)
+        if resolved_supplied.get(key) != resolved_constructed.get(key)
+    )
+    raise ValueError(
+        f"{kind} metadata differs from the constructed LAPDSim1D config "
+        f"after resolution; differing keys: {differing}"
+    )
+
+
 def save_result_hdf5(path, result, params=None, flags=None):
     """Write a ``LAPDSim1D.run`` result namespace to an HDF5 file."""
     result_params = getattr(result, "params", None)
     result_flags = getattr(result, "flags", None)
     if result_params is not None:
-        if params is not None and dict(params) != dict(result_params):
-            raise ValueError(
-                "params metadata differs from the constructed LAPDSim1D config"
-            )
+        if params is not None:
+            _check_config_metadata("params", params, result_params)
         params = result_params
     if result_flags is not None:
-        if flags is not None and dict(flags) != dict(result_flags):
-            raise ValueError(
-                "flags metadata differs from the constructed LAPDSim1D config"
-            )
+        if flags is not None:
+            _check_config_metadata("flags", flags, result_flags)
         flags = result_flags
     path = Path(path)
     with h5py.File(path, "w") as h5:
