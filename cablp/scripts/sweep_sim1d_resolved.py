@@ -54,6 +54,10 @@ PARAM_OVERRIDES = {
     "operator_splitting": "strang",
     "heat_picard_iterations": 2,
     "heat_picard_tol": 1e-10,
+    # This sweep classifies a point FROM the BreakdownError in run_case, so it
+    # keeps the historical raise-on-timeout behavior rather than the
+    # switch-open default (which would return an unignited result instead).
+    "prebreakdown_timeout_action": "raise",
 }
 FLAG_OVERRIDES = {
     "ion_neutral_drag_cx_only": False,

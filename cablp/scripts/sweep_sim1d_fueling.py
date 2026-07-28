@@ -55,6 +55,11 @@ def run_point(scale: float, out_dir: Path, save_h5: bool = True) -> dict:
         "beam_excitation_model": "manifold",
         "b_beam_excitation": 1.0,
         "cathode_solver_model": "current_driven",
+        # This sweep classifies a point FROM the BreakdownError below, so it
+        # keeps the historical raise-on-timeout behavior rather than the
+        # switch-open default (which would return an unignited result and
+        # trip the scorer instead).
+        "prebreakdown_timeout_action": "raise",
     }
     metrics: dict = {"scale": scale, "S_gp": extra["S_gp"]}
     try:

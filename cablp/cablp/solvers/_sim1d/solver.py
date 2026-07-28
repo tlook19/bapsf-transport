@@ -896,6 +896,7 @@ class LAPDSim1D:
         self._t_ignition_abort = None
         self._ignition_abort_reason = None
         self._ignition_abort_context = None
+        self._ignition_abort_threshold_name = None
         self._last_ignition_record = None
         self._cathode_x0 = None
         self._cathode_x0_twin = None
@@ -4737,9 +4738,18 @@ class LAPDSim1D:
                 "phase_transition_mode must be 'scheduled' or 'current' "
                 f"(got {mode!r})"
             )
+        action = self._prebreakdown_timeout_action()
+        if action not in {"switch_open", "raise"}:
+            raise ValueError(
+                "prebreakdown_timeout_action must be 'switch_open' or "
+                f"'raise' (got {action!r})"
+            )
 
     def _phase_transition_mode(self):
         return self._input_dict.get("phase_transition_mode", "scheduled")
+
+    def _prebreakdown_timeout_action(self):
+        return self._input_dict.get("prebreakdown_timeout_action", "switch_open")
 
     def _main_discharge_start_time(self):
         if self._phase_transition_mode() == "current":
@@ -5001,6 +5011,50 @@ class LAPDSim1D:
         )
         return True
 
+    def _prebreakdown_timeout_switch_open(
+        self,
+        threshold,
+        threshold_name,
+        I_now,
+        tau_prebreakdown,
+    ):
+        """Open the switch at the ``tau_prebreakdown`` hardware guard.
+
+        The real LAPD opens the cathode switch if the discharge has not broken
+        down by ``tau_prebreakdown`` (0.05 s, hardware-boxed). This mirrors it
+        as a real phase transition rather than an exception, so the run leaves
+        an artifact that states what the drive was doing when the guard fired.
+        """
+        context = dict(self._ignition_abort_context or {})
+        context.update(
+            {
+                "I_tot_A": float(I_now),
+                "threshold_A": float(threshold),
+                "tau_prebreakdown_s": float(tau_prebreakdown),
+            }
+        )
+        last = self._last_ignition_record or {}
+        for key in (
+            "gamma_N_per_s",
+            "gamma_nn_per_s",
+            "dEe_total_W",
+            "P_beam_W",
+            "P_conduction_W",
+            "P_cooling_W",
+            "P_ionization_W",
+            "P_transport_W",
+            "P_beam_end_loss_W",
+        ):
+            if key in last:
+                context[key] = float(last[key])
+        self._open_ignition_switch(
+            time=float(self._time),
+            reason="prebreakdown_timeout",
+            context=context,
+        )
+        self._ignition_abort_threshold_name = str(threshold_name)
+        self._record_current_trigger_sample(I_now)
+
     def _ignition_abort_t_end(self):
         """Return the wind-down end time [s] after a switch-open abort."""
         if self._t_ignition_abort is None:
@@ -5052,6 +5106,18 @@ class LAPDSim1D:
                 self._record_current_trigger_sample(I_now)
                 return
             if current_phase_elapsed >= tau_prebreakdown - time_tol:
+                if self._prebreakdown_timeout_action() == "switch_open":
+                    self._prebreakdown_timeout_switch_open(
+                        threshold=first_threshold,
+                        threshold_name=(
+                            "I_prebreakdown"
+                            if I_prebreakdown > 0.0
+                            else "I_breakdown"
+                        ),
+                        I_now=I_now,
+                        tau_prebreakdown=tau_prebreakdown,
+                    )
+                    return
                 raise BreakdownError(
                     "plasma failed to break down within "
                     f"tau_prebreakdown={tau_prebreakdown:.9e} s "
@@ -5085,6 +5151,14 @@ class LAPDSim1D:
             self._record_current_trigger_sample(I_now)
             return
         if current_phase_elapsed >= tau_prebreakdown - time_tol:
+            if self._prebreakdown_timeout_action() == "switch_open":
+                self._prebreakdown_timeout_switch_open(
+                    threshold=I_breakdown,
+                    threshold_name="I_breakdown",
+                    I_now=I_now,
+                    tau_prebreakdown=tau_prebreakdown,
+                )
+                return
             raise BreakdownError(
                 "plasma failed to reach breakdown current within "
                 f"tau_prebreakdown={tau_prebreakdown:.9e} s "
@@ -5572,6 +5646,7 @@ class LAPDSim1D:
                 "time_s": float(self._t_ignition_abort),
                 "window_s": float(self._ignition_monitor.window_s),
                 "rate_window_s": float(self._ignition_monitor.rate_window_s),
+                "threshold_name": str(self._ignition_abort_threshold_name or ""),
                 **{
                     key: float(value)
                     for key, value in (self._ignition_abort_context or {}).items()
