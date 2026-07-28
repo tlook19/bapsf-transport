@@ -1069,6 +1069,30 @@ def cathode_defaults():
         downstream. Weak-beam domain only (returns no drag when
         ``n_b >= n_e/10``); parameter-free; per-closure presentation
         required (THESIS_NOTES item 12).
+    beam_product_transport:
+        Where the CSDA ray's event PRODUCTS deposit (inert under
+        ``"beer_lambert"``, which never launches the module; selecting the
+        non-default value there raises). ``"local"`` (default, historical,
+        bit-exact): the mean secondary energy ``<W_sec>`` per ionization and
+        the primary's terminal sub-threshold residual are banked as plasma
+        heating in the cell where the event happened — perfect local
+        confinement. ``"nonlocal"`` (BEAM_DEPOSITION_PLAN WP-D): each product
+        instead walks along B from its birth cell on its own mini-CSDA
+        Coulomb slowing integral (the SAME ``beam_coulomb_model`` the primary
+        uses), depositing until it thermalizes at the local Maxwellian mean
+        ``1.5*Te`` or leaves an end, where its remaining energy is booked to
+        the new END LEDGER and leaves the system. Secondaries split 50/50
+        into +z/-z half-weight walks (broadly isotropic OPB emission);
+        the terminal residual keeps the primary's direction. Motivation: at
+        breakdown both products sit BELOW every He inelastic threshold and
+        Coulomb-couple at ~1 eV per machine pass (n_e ~ 1e10), i.e. they are
+        near-collisionless along B exactly where ``"local"`` assumes perfect
+        confinement. The end ledger also books the transmitted PRIMARY's
+        ``Gamma_t*E_t``, closing a standing hole (computed since B1, never
+        banked). Parameter-free; no pitch-angle diffusion and no elastic
+        e-He channel (~5 meV/collision) — stated limitations. ENERGY-ONLY in
+        v1: ionization events, the particle rows and the circuit currents are
+        identical in both modes. Per-closure presentation required.
     beam_clump_fraction:
         Fractional-coverage beam-neutral closure (default 0.0 = OFF, bit-exact).
         The fresh gas puff is a dense, SPOTTY cloud sitting on the uniform
@@ -1145,6 +1169,8 @@ def cathode_defaults():
         "beam_deposition_model": "csda",
         "beam_coulomb_model": "fast_electron",
         "beam_anomalous_model": "quasilinear",
+        # WP-D non-local product transport: DEFAULT OFF (bit-exact).
+        "beam_product_transport": "local",
         "beam_clump_fraction": 0.0,
         "beam_clump_enhancement": 1.0,
         "beam_deposition_smoothing_cm": 0.0,

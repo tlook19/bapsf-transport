@@ -1007,6 +1007,27 @@ class LAPDSim1D:
                 "beam_deposition_smoothing_cm must be >= 0 (got "
                 f"{self._input_dict.get('beam_deposition_smoothing_cm')})"
             )
+        # WP-D non-local beam-product transport. String selector; the module
+        # validates it too, but a bad value must fail at CONSTRUCTION rather
+        # than on the first cathode solve. Selecting "nonlocal" under
+        # beer_lambert is an INCOMPLETE configuration -- that path never
+        # launches the CSDA module, so the requested physics could not act --
+        # and raises rather than silently doing nothing.
+        _bpt = str(self._input_dict.get("beam_product_transport", "local"))
+        if _bpt not in ("local", "nonlocal"):
+            raise ValueError(
+                "beam_product_transport must be 'local' or 'nonlocal' "
+                f"(got {_bpt!r})"
+            )
+        if _bpt == "nonlocal" and str(
+            self._input_dict.get("beam_deposition_model", "beer_lambert")
+        ) != "csda":
+            raise ValueError(
+                "beam_product_transport='nonlocal' requires "
+                "beam_deposition_model='csda' (the products it transports "
+                "are the CSDA ray's; under beer_lambert it would be a "
+                "silent no-op)"
+            )
         _fc = float(self._input_dict.get("beam_clump_fraction", 0.0))
         if not 0.0 <= _fc < 1.0:
             raise ValueError(
@@ -5670,6 +5691,17 @@ class LAPDSim1D:
             diag[f"{prefix}_beam_anode_intercepted_W"] = 0.0
             diag[f"{prefix}_beam_transmitted_W"] = 0.0
             diag[f"{prefix}_beam_transmitted_flux_per_s"] = 0.0
+            # WP-D end ledger [W]: beam energy that LEAVES the column through
+            # each axial end -- product walks that escape without
+            # thermalizing, plus the transmitted primary's Gamma_t*E_t (which
+            # the module has computed since B1 and nothing ever banked). This
+            # is a loss channel, not a heating one: it is never added to
+            # plasma_heating_erg_s and never enters an RHS row. Identically
+            # zero under beam_product_transport="local" (the default), so on
+            # every run to date these read 0.0; runs saved before 2026-07-28
+            # lack the datasets entirely and readers must default them.
+            diag[f"{prefix}_beam_end_loss_low_W"] = 0.0
+            diag[f"{prefix}_beam_end_loss_high_W"] = 0.0
             # Item-35 gap-survival ledger: three views of the fraction of the
             # emitted beam that crosses the cathode-anode gap, which must
             # agree. ``_probe`` is the gap-clipped probe that feeds sigma_eff,
@@ -5771,6 +5803,12 @@ class LAPDSim1D:
                 * float(dep.transmitted_energy_eV)
                 * ev_to_erg
                 * 1.0e-7
+            )
+            diag[f"{prefix}_beam_end_loss_low_W"] = (
+                float(dep.end_loss_low_erg_s) * 1.0e-7
+            )
+            diag[f"{prefix}_beam_end_loss_high_W"] = (
+                float(dep.end_loss_high_erg_s) * 1.0e-7
             )
 
     def _copy_cathode_result_diagnostics(self, diag, prefix, result):

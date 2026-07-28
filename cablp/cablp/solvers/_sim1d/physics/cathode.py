@@ -878,6 +878,14 @@ def _sum_beam_deposition(a, b):
         transmitted_energy_eV=te,
         anode_intercepted_erg_s=(float(a.anode_intercepted_erg_s)
                                  + float(b.anode_intercepted_erg_s)),
+        # End ledger (WP-D): both rays leave through the same two ends, so
+        # the escaping powers add like every other per-ray bank.
+        end_loss_low_erg_s=(float(a.end_loss_low_erg_s)
+                            + float(b.end_loss_low_erg_s)),
+        end_loss_high_erg_s=(float(a.end_loss_high_erg_s)
+                             + float(b.end_loss_high_erg_s)),
+        end_loss_transmitted_erg_s=(float(a.end_loss_transmitted_erg_s)
+                                    + float(b.end_loss_transmitted_erg_s)),
         E_entry_eV=np.maximum(a.E_entry_eV, b.E_entry_eV),
         # Diagnostic heating splits add like the lumped bank they partition.
         heating_coulomb_erg_s=(a.heating_coulomb_erg_s
@@ -937,9 +945,30 @@ def _csda_beam_deposition(
     so the fluid stops depositing the ~164 kW long-mfp beam the circuit already
     books as never entering the plasma. The gap-transmission probe is
     unaffected (it measures gap survival, which feeds the circuit bypass).
+
+    ``beam_product_transport`` (WP-D) is threaded to the DEPOSITION rays only,
+    and only when it is not the default ``"local"``. The probe rays keep the
+    historical argument list: they are transmission instruments whose single
+    output is the ratio of transmitted to launched PRIMARY flux, which product
+    walks cannot change (v1 moves product energy, never primary flux), so
+    walking their products would be pure cost. For the same reason
+    ``_ray_gap_breakout`` and the item-35 tripwire are unaffected -- both read
+    ``transmitted_flux`` and ``E_entry_eV``, which are primary-flux
+    quantities the walks never touch.
     """
     coulomb_model = str(input_dict.get("beam_coulomb_model", "fast_electron"))
     anomalous_model = str(input_dict.get("beam_anomalous_model", "none"))
+    # WP-D product transport. Presence-gated: only the DEPOSITION rays get the
+    # keyword, and only when it is not the default, so the off path enters
+    # deposit_beam with the identical argument list it always had. The
+    # gap-transmission PROBE rays below deliberately never receive it -- they
+    # are transmission instruments whose only output is a primary-flux ratio,
+    # so walking their products would be wasted work and would not change the
+    # number they report.
+    product_kwargs = {}
+    product_transport = str(input_dict.get("beam_product_transport", "local"))
+    if product_transport != "local":
+        product_kwargs["product_transport"] = product_transport
     # Fractional-coverage beam-neutral closure (default off/uniform, bit-exact):
     # split the ray into a clump fraction (short l_b against nn*chi -> local seed)
     # and a gap fraction (background nn -> penetration). See config docstrings.
@@ -998,13 +1027,13 @@ def _csda_beam_deposition(
             gap_ray = deposit_beam(
                 result.phi_c, (1.0 - f_clump) * Gamma0,
                 dz_cm=geometry.length_cm,
-                **ray_kwargs, **interception_kwargs,
+                **ray_kwargs, **interception_kwargs, **product_kwargs,
             )
             # Clump ray: enhanced nn -> short l_b -> local deposit (front seed).
             clump_ray = deposit_beam(
                 result.phi_c, f_clump * Gamma0,
                 dz_cm=geometry.length_cm,
-                **clump_kwargs, **interception_kwargs,
+                **clump_kwargs, **interception_kwargs, **product_kwargs,
             )
             dep = _sum_beam_deposition(gap_ray, clump_ray)
             # Breakout is per-ray: the clump ray can die in the gap while the
@@ -1020,7 +1049,7 @@ def _csda_beam_deposition(
         else:
             dep = deposit_beam(
                 result.phi_c, Gamma0, dz_cm=geometry.length_cm,
-                **ray_kwargs, **interception_kwargs,
+                **ray_kwargs, **interception_kwargs, **product_kwargs,
             )
             ray_survival = _ray_gap_breakout(dep, gap_dz, launch, direction)
         deposition[end] = dep
