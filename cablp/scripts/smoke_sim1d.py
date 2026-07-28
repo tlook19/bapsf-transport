@@ -7898,6 +7898,71 @@ def main():
         else:
             raise AssertionError("mismatched HDF5 config metadata was accepted")
 
+    # Save-path config guard (2026-07-27): callers hold the PRE-resolution
+    # override mapping they handed to LAPDSim1D, while result.params is the
+    # POST-resolution config. The guard resolves both sides, so an equivalent
+    # override set saves cleanly and a genuinely different one still raises.
+    with tempfile.TemporaryDirectory() as guard_dir:
+        guard_params = {"Te0": 0.22}
+        guard_flags = {"cx": False}
+        guard_sim = LAPDSim1D(guard_params, guard_flags)
+        guard_resolved_params, guard_resolved_flags = guard_sim.get_config()
+        assert guard_resolved_params != guard_params
+        assert guard_resolved_flags != guard_flags
+        guard_result = guard_sim.run(t_end=0.0)
+
+        # (a) the pre-resolution inputs that produced the run must not raise,
+        # and the resolved config is still what gets written.
+        guard_path = Path(guard_dir) / "pre_resolution.h5"
+        save_result_hdf5(
+            guard_path,
+            guard_result,
+            params=guard_params,
+            flags=guard_flags,
+        )
+        with h5py.File(guard_path, "r") as guard_h5:
+            assert json.loads(guard_h5.attrs["params_json"]) == guard_resolved_params
+            assert json.loads(guard_h5.attrs["flags_json"]) == guard_resolved_flags
+
+        # (b) a genuinely different config still raises, in either namespace,
+        # and names the differing key.
+        for guard_kind, bad_params, bad_flags in (
+            ("params", {"Te0": 0.23}, guard_flags),
+            ("flags", guard_params, {"cx": True}),
+        ):
+            try:
+                save_result_hdf5(
+                    Path(guard_dir) / f"guard_mismatch_{guard_kind}.h5",
+                    guard_result,
+                    params=bad_params,
+                    flags=bad_flags,
+                )
+            except ValueError as error:
+                assert f"{guard_kind} metadata differs" in str(error)
+                assert ("Te0" if guard_kind == "params" else "cx") in str(error)
+            else:
+                raise AssertionError(
+                    f"differing {guard_kind} metadata was accepted on save"
+                )
+
+        # (c) the params=None / flags=None pass-through is unchanged: the
+        # constructed config is written without any caller-side comparison.
+        guard_none_path = Path(guard_dir) / "pass_through.h5"
+        save_result_hdf5(guard_none_path, guard_result)
+        with h5py.File(guard_none_path, "r") as guard_h5:
+            assert json.loads(guard_h5.attrs["params_json"]) == guard_resolved_params
+            assert json.loads(guard_h5.attrs["flags_json"]) == guard_resolved_flags
+        save_result_hdf5(
+            Path(guard_dir) / "params_only.h5",
+            guard_result,
+            params=guard_params,
+        )
+        save_result_hdf5(
+            Path(guard_dir) / "flags_only.h5",
+            guard_result,
+            flags=guard_flags,
+        )
+
     # R1 startup/rate-domain follow-up: the repaired live defaults are above
     # their hard floors and the exact bundled ADF11 edge. The proactive
     # resolved-source bound makes raw rejection a backstop and leaves the
