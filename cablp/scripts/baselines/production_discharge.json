@@ -1,5 +1,5 @@
 {
-  "cells": 67,
+  "cells": 72,
   "description": "Golden baseline at the PRODUCTION configuration (DEPRECATION_PLAN.md D1): current-driven + resolved + adas + knudsen + square waveform + M6 candidate constants.",
   "flags": {
     "Plasma": true,
@@ -36,7 +36,7 @@
     "neutral_two_zone": false,
     "raw_stage_validation": false,
     "resolved_boundaries": true,
-    "source_fixed_grid": false,
+    "source_fixed_grid": true,
     "source_surface_loss": true,
     "surface_loss_floor_exempt": true,
     "use_cached_neutral_seed": false
@@ -217,8 +217,8 @@
     "recombination_energy_return": false,
     "sigma_in_cm2": 5e-15,
     "sigma_in_model": "cx_derived",
-    "source_region_dz_cm": null,
-    "source_region_length_cm": null,
+    "source_region_dz_cm": 10.0,
+    "source_region_length_cm": 100.0,
     "source_surface_area_scale": 1.8,
     "surface_loss_floor_exempt_rtol": 0.001,
     "t_save_start": 0.0,
@@ -239,23 +239,23 @@
     "u0": 0.0
   },
   "result_format": "sim1d packed conservative trajectory y[saves, 5*cells]",
-  "saves": 2745,
+  "saves": 2741,
   "summary": {
-    "Te_max": 299.45506040900784,
+    "Te_max": 393.7145266248845,
     "Te_min": 0.1,
-    "Ti_max": 474.4608784905995,
+    "Ti_max": 625.2165757662399,
     "Ti_min": 0.1,
-    "final_time": 0.027433596704925105,
+    "final_time": 0.02739272948541594,
     "finite": true,
-    "n_max": 33436205283002.594,
+    "n_max": 33528543355453.996,
     "n_min": 100000000.0,
-    "neutral_inventory_relative_drift": 1.6893904283723018,
-    "nn_max": 28516423524214.36,
-    "nn_min": 308388131.5812135,
-    "plasma_inventory_relative_drift": 2200.1399550528986,
-    "samples": 2745,
-    "steps": 42819,
-    "thermal_energy_relative_drift": 3539.7386503262187,
-    "total_particle_inventory_relative_drift": 1.7826017750709933
+    "neutral_inventory_relative_drift": 1.6857959802814257,
+    "nn_max": 28433024199032.46,
+    "nn_min": 308680058.97709465,
+    "plasma_inventory_relative_drift": 2200.33053811913,
+    "samples": 2741,
+    "steps": 43751,
+    "thermal_energy_relative_drift": 3606.1165267420915,
+    "total_particle_inventory_relative_drift": 1.7790182370902667
   }
 }
