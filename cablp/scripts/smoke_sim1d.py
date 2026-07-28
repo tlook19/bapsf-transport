@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import warnings
 from types import SimpleNamespace
 
 import h5py
@@ -37,6 +38,7 @@ from cablp.solvers._sim1d.physics.cathode import (
     _beam_smoothing_matrix,
     _clip_ray_length,
     beam_absorption_weights,
+    beam_gap_ledger_mismatch,
     beam_launch,
     cathode_sample_indices,
 )
@@ -2534,6 +2536,62 @@ def main():
         / csda_nn_launch,
     )
     assert csda_sigma_eff == csda_sigma_unit
+
+    # --- Item 35 ledger tripwire: the gap survival the CSDA ray delivers and
+    # the beam-bypass fraction the circuit reconstructs from the written
+    # sigma_eff are two views of the SAME gap, and nothing else in the model
+    # notices when they disagree (each side is internally consistent). On a
+    # healthy config they agree and no warning fires.
+    csda_ledger = csda_solve.beam_gap_ledger
+    csda_eta = float(csda_solve.device_config.eta)
+    assert set(csda_ledger) == {0}
+    csda_actual, csda_booked = csda_ledger[0]
+    assert 0.0 < csda_actual <= 1.0 and 0.0 < csda_booked <= 1.0
+    assert beam_gap_ledger_mismatch(csda_ledger, csda_eta) is None
+    # This healthy config sits ON the benign floor the tolerance is chosen to
+    # clear: the ray fully transmits, which the Beer-Lambert solve cannot
+    # represent above its Coulomb-only ceiling, so the clamp saturates and
+    # leaves a little unbooked. It must stay a small fraction of emitted beam
+    # power -- item 35 was 35% -- or the warning becomes noise.
+    assert csda_actual == 1.0
+    assert 0.0 < csda_eta * (csda_actual - csda_booked) < 0.02
+    # The tripwire is a comparison, not an assertion about one side: an
+    # injected divergence must be caught and reported as the worst offender.
+    csda_trip = beam_gap_ledger_mismatch(
+        {0: (csda_actual, 0.5 * csda_actual)}, csda_eta
+    )
+    assert csda_trip is not None
+    assert csda_trip[0] == 0
+    assert np.isclose(csda_trip[3], 0.5 * csda_eta * csda_actual)
+    # ... and the warning it drives is emitted once per run, not per step.
+    # The injected ledger is the item-35 signature: the ray stopped inside the
+    # gap while the circuit booked ~full survival.
+    csda_broken = SimpleNamespace(
+        beam_gap_ledger={0: (1.0e-6, 0.965)},
+        device_config=SimpleNamespace(eta=csda_eta),
+    )
+    with warnings.catch_warnings(record=True) as csda_warned:
+        warnings.simplefilter("always")
+        csda_sim._beam_gap_ledger_warned = False
+        for _ in range(3):
+            csda_sim._warn_beam_gap_ledger(csda_broken)
+    csda_msgs = [
+        w for w in csda_warned if "beam gap ledger" in str(w.message)
+    ]
+    assert len(csda_msgs) == 1
+    csda_sim._beam_gap_ledger_warned = False
+    # Both sides are recorded as cathode diagnostics, defaulted on every run
+    # so a beer_lambert run (and an old file, which has neither dataset)
+    # stays readable.
+    csda_diag = csda_sim._cathode_diagnostic_snapshot()
+    assert csda_diag["source_beam_gap_survival_ray"] == csda_actual
+    assert csda_diag["source_beam_gap_survival_circuit"] == csda_booked
+    assert np.isnan(csda_diag["end_beam_gap_survival_ray"])
+    bl_diag = LAPDSim1D(
+        dict(exc_params), dict(cathode_flags)
+    )._cathode_diagnostic_snapshot()
+    assert np.isnan(bl_diag["source_beam_gap_survival_ray"])
+    assert np.isnan(bl_diag["source_beam_gap_survival_circuit"])
 
     # --- R4.1 (audit A15): anode-mesh beam interception is the PRODUCTION DEFAULT
     # (correct csda physics), so csda_sim above already has it on -- the anode

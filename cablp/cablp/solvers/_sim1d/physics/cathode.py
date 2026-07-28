@@ -11,6 +11,7 @@ from cablp.funcs._beam_deposition import deposit_beam, BeamDepositionResult
 from cablp.funcs._cathode_solver import (
     DeviceConfig,
     PlasmaState,
+    _compute_beam_bypass_fraction,
     _compute_l_b,
     solve_beam_system,
 )
@@ -87,6 +88,10 @@ class CathodeSolve1D:
     # Per-end CSDA deposition results ({0: primary, -1: twin}), present only
     # under beam_deposition_model = "csda"; None keys mean no active beam.
     beam_deposition: dict | None = None
+    # Per-end ``(actual, booked)`` gap survival for the item-35 ledger
+    # tripwire; keyed only for ends with an active CSDA ray. See
+    # ``beam_gap_ledger_mismatch``.
+    beam_gap_ledger: dict | None = None
 
 
 def anode_circuit_sample(state, derived, geometry, mu, input_dict, end=0):
@@ -809,8 +814,9 @@ def solve_cathode_boundary(
             ),
         )
     beam_deposition = None
+    beam_gap_ledger = None
     if str(input_dict.get("beam_deposition_model", "beer_lambert")) == "csda":
-        beam_deposition = _csda_beam_deposition(
+        beam_deposition, beam_gap_ledger = _csda_beam_deposition(
             beam_result=beam_result,
             state=state,
             derived=derived,
@@ -845,6 +851,7 @@ def solve_cathode_boundary(
             "result_twin": _solver_result_metadata(beam_result.result_twin),
         },
         beam_deposition=beam_deposition,
+        beam_gap_ledger=beam_gap_ledger,
     )
 
 
@@ -897,7 +904,11 @@ def _csda_beam_deposition(
 ):
     """Run the CSDA module for each active cathode ray (B2 wiring).
 
-    Returns ``{0: BeamDepositionResult | None, -1: ...}`` and rewrites
+    Returns ``(deposition, gap_ledger)``. ``deposition`` is
+    ``{0: BeamDepositionResult | None, -1: ...}``; ``gap_ledger`` maps each
+    end with an active ray to ``(actual, booked)`` gap survival for the
+    item-35 tripwire (see ``beam_gap_ledger_mismatch``). The call also
+    rewrites
     ``beam_result.beam_atten_cross`` at each launch cell with the effective
     attenuation cross section that makes the frozen sheath solve's
     Beer-Lambert bypass reproduce the module's cathode-anode gap
@@ -941,6 +952,7 @@ def _csda_beam_deposition(
         getattr(geometry, "anode_face_indices", ()), dtype=int
     )
     deposition = {}
+    gap_ledger = {}
     ends = (0, -1) if twin else (0,)
     for end in ends:
         result = beam_result.result if end == 0 else beam_result.result_twin
@@ -1062,7 +1074,74 @@ def _csda_beam_deposition(
                 (-math.log(transmission) / L_cath - 1.0 / l_bi) / nn_launch,
             )
         beam_result.beam_atten_cross[launch] = sigma_eff
-    return deposition
+        # --- Ledger tripwire (item 35) ---------------------------------
+        # The gap survival the ray actually delivers and the gap survival the
+        # circuit will reconstruct from the sigma_eff just written must be the
+        # same number. Reconstruct the circuit side with the CIRCUIT's own
+        # functions (not the adapter algebra inverted), so this is a real
+        # cross-check: it diverges exactly when the ``sigma_eff >= 0`` clamp
+        # saturates -- a transmission above the Coulomb-only ceiling
+        # ``exp(-L_cath/l_bi)``, which Beer-Lambert cannot represent -- or
+        # when a guard above leaves sigma_eff at 0. That is the silent state
+        # item 35 sat in: the circuit booked ~97% gap survival while the ray
+        # delivered ~0.
+        gap_ledger[end] = (
+            transmission,
+            _compute_beam_bypass_fraction(
+                _compute_l_b(
+                    result.phi_c,
+                    float(derived.Te[launch]),
+                    float(state.n[launch]),
+                    nn_launch,
+                    sigma_eff,
+                ),
+                L_cath,
+            ),
+        )
+    return deposition, gap_ledger
+
+
+# Tripwire tolerance, as a fraction of EMITTED BEAM POWER (see
+# ``beam_gap_ledger_mismatch``): 5%, roughly a decade above the benign
+# Coulomb-ceiling floor and a decade below the item-35 break.
+BEAM_GAP_LEDGER_POWER_ATOL = 0.05
+
+
+def beam_gap_ledger_mismatch(gap_ledger, eta, atol=BEAM_GAP_LEDGER_POWER_ATOL):
+    """Worst CSDA gap-survival ledger divergence, or ``None`` if all agree.
+
+    ``gap_ledger`` maps each active cathode end to ``(actual, booked)``: the
+    gap survival the CSDA deposition ray delivers, and the beam-bypass
+    fraction the circuit reconstructs from the ``sigma_eff`` written for the
+    next solve. Returns ``(end, actual, booked, power_fraction)`` for the
+    worst offender.
+
+    The tolerance is stated on the quantity that matters rather than on the
+    survival fractions themselves. The circuit debits
+    ``eta * f_bypass * I_eth_star * V_b``, so ``eta * |booked - actual|`` is
+    the fraction of emitted beam power booked to a bypass the fluid never
+    loses (or vice versa) -- the ledger hole itself.
+
+    A small benign floor is unavoidable and must stay below ``atol``: a
+    fully-transmitting ray cannot be represented above the Beer-Lambert
+    solve's Coulomb-only ceiling ``exp(-L_cath/l_bi)``, so the
+    ``sigma_eff >= 0`` clamp leaves ``eta * (1 - exp(-L_cath/l_bi))``
+    unbooked. That floor is self-limiting -- saturation needs a transmitting
+    ray, which needs a long ``l_bi``, which makes the ceiling shortfall
+    small -- and measures 0.3-1.3% of emitted beam power across the
+    campaign's long-mfp states. Item 35 sat at 35%.
+    """
+    eta = float(eta)
+    worst = None
+    for end, entry in (gap_ledger or {}).items():
+        if entry is None:
+            continue
+        actual = float(entry[0])
+        booked = float(entry[1])
+        power = eta * abs(booked - actual)
+        if power > atol and (worst is None or power > worst[3]):
+            worst = (int(end), actual, booked, power)
+    return worst
 
 
 def _clip_ray_length(length_cm, launch, direction, L_cath):

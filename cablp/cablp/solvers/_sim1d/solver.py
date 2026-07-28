@@ -48,6 +48,8 @@ from .physics.kinetic_neutrals import (
     _inflow as _kinetic_inflow,
 )
 from .physics.cathode import (
+    BEAM_GAP_LEDGER_POWER_ATOL,
+    beam_gap_ledger_mismatch,
     beam_ionization_rhs,
     beam_ionization_rhs_terms,
     cathode_boundary_state,
@@ -1026,6 +1028,8 @@ class LAPDSim1D:
                 "neutral_two_zone (annulus puff routing); disable one"
             )
         self._cathode_solve = None
+        # Item-35 ledger tripwire: latched so the warning fires once per run.
+        self._beam_gap_ledger_warned = False
         self._last_result = None
         self._last_neutral_equilibration_result = None
         self._last_neutral_equilibration_summary = None
@@ -2764,6 +2768,7 @@ class LAPDSim1D:
         progress_interval_s=None,
     ):
         """Advance to ``t_end`` and return sparse saved trajectory arrays."""
+        self._beam_gap_ledger_warned = False
         if (
             self._flags.get("neutral_equilibration", False)
             and not self._run_via_start_simulation
@@ -4131,6 +4136,7 @@ class LAPDSim1D:
             circuit_I_loop_A=self._circuit_I_loop,
         )
         if update_cache:
+            self._warn_beam_gap_ledger(result)
             self._cathode_solve = result
             self._cathode_x0 = result.x0_next
             self._cathode_x0_twin = result.x0_twin_next
@@ -4139,6 +4145,44 @@ class LAPDSim1D:
                     result.beam_result.beam_atten_cross.copy()
                 )
         return result
+
+    def _warn_beam_gap_ledger(self, cathode_solve):
+        """Warn ONCE per run if the CSDA beam gap ledger stops closing.
+
+        The circuit charges ``eta * f_bypass`` of the emitted beam power to a
+        beam it believes crosses the cathode-anode gap without coupling; the
+        fluid deposits whatever the CSDA ray actually delivers. Those two
+        views of the same gap must agree, and they disagree silently -- no
+        conservation check sees it, because each side is internally
+        consistent. This is the state item 35 sat in.
+        """
+        if self._beam_gap_ledger_warned:
+            return
+        device_config = getattr(cathode_solve, "device_config", None)
+        if device_config is None:
+            return
+        worst = beam_gap_ledger_mismatch(
+            getattr(cathode_solve, "beam_gap_ledger", None),
+            device_config.eta,
+        )
+        if worst is None:
+            return
+        end, actual, booked, power = worst
+        self._beam_gap_ledger_warned = True
+        warnings.warn(
+            "CSDA beam gap ledger does not close at cathode end "
+            f"{end}: the deposition ray delivers gap survival {actual:.6g}, "
+            f"but the circuit books a beam-bypass fraction of {booked:.6g}. "
+            f"That mis-books {100.0 * power:.3g}% of the emitted beam power "
+            f"(tolerance {100.0 * BEAM_GAP_LEDGER_POWER_ATOL:g}%) -- the "
+            "circuit is debiting beam power the fluid does not lose, or vice "
+            "versa, and no conservation check sees it because each side is "
+            "internally consistent. The usual cause is a gap transmission "
+            "above the Beer-Lambert solve's Coulomb-only ceiling "
+            "exp(-L_cath/l_bi), where the sigma_eff >= 0 clamp saturates and "
+            "the adapter cannot represent the ray. Warned once per run.",
+            stacklevel=2,
+        )
 
     def implicit_heat_conduction_step(self, dt, y=None, state=None):
         """Return state after one frozen-conductivity implicit heat substep."""
@@ -5611,6 +5655,14 @@ class LAPDSim1D:
             diag[f"{prefix}_beam_anode_intercepted_W"] = 0.0
             diag[f"{prefix}_beam_transmitted_W"] = 0.0
             diag[f"{prefix}_beam_transmitted_flux_per_s"] = 0.0
+            # Item-35 gap-survival ledger, the two views of the same gap that
+            # must agree: what the CSDA deposition ray delivers past L_cath
+            # (``_ray``) and what the circuit's Beer-Lambert bypass books from
+            # the sigma_eff written for the next solve (``_circuit``). NaN
+            # where no CSDA ray ran; runs saved before 2026-07-28 have neither
+            # dataset (readers must default).
+            diag[f"{prefix}_beam_gap_survival_ray"] = np.nan
+            diag[f"{prefix}_beam_gap_survival_circuit"] = np.nan
         for prefix in ("source", "end"):
             diag[f"{prefix}_regime"] = "none"
             for key in _CATHODE_RESULT_KEYS:
@@ -5664,10 +5716,18 @@ class LAPDSim1D:
         nothing here is recomputed and nothing feeds the RHS, so the saved
         trajectory is unchanged apart from the added datasets. Erg/s -> W.
         """
+        prefixes = {0: "source", -1: "end"}
+        for end, entry in (
+            getattr(cathode_solve, "beam_gap_ledger", None) or {}
+        ).items():
+            if entry is None:
+                continue
+            prefix = prefixes[int(end)]
+            diag[f"{prefix}_beam_gap_survival_ray"] = float(entry[0])
+            diag[f"{prefix}_beam_gap_survival_circuit"] = float(entry[1])
         deposition = getattr(cathode_solve, "beam_deposition", None)
         if not deposition:
             return
-        prefixes = {0: "source", -1: "end"}
         for end, dep in deposition.items():
             if dep is None:
                 continue
