@@ -2651,6 +2651,89 @@ def main():
     bl_sim._circuit_I_loop = 3000.0
     assert bl_sim.solve_cathode_boundary().beam_deposition is None
 
+    # --- WP-D through the solver: beam_product_transport routes the CSDA
+    # ray's event products (see the module block for the physics and the
+    # per-ray identity). Unit level only -- the flag's effect on the ignition
+    # timeline is a campaign run, not a smoke scenario.
+    # Misconfiguration is loud at CONSTRUCTION, including the incomplete
+    # configuration where the selection could only be a silent no-op.
+    for wpd_bad in (
+        dict(csda_params, beam_product_transport="bogus"),
+        dict(csda_params, beam_product_transport="nonlocal",
+             beam_deposition_model="beer_lambert"),
+    ):
+        try:
+            LAPDSim1D(wpd_bad, dict(cathode_flags))
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "expected ValueError for beam_product_transport"
+            )
+    # The default is bit-exact through the solver too: naming "local"
+    # explicitly reproduces the deposition csda_sim already produced.
+    wpd_off_sim = LAPDSim1D(
+        dict(csda_params, beam_product_transport="local"), dict(cathode_flags)
+    )
+    wpd_off_sim._circuit_I_loop = 3000.0
+    wpd_off_dep = wpd_off_sim.solve_cathode_boundary().beam_deposition[0]
+    assert np.array_equal(
+        wpd_off_dep.plasma_heating_erg_s, csda_dep.plasma_heating_erg_s
+    )
+    assert wpd_off_dep.end_loss_low_erg_s == 0.0
+    assert wpd_off_dep.end_loss_high_erg_s == 0.0
+    # On: energy leaves through the ends, the plasma keeps less, and the
+    # per-ray budget still closes with the ledger in it.
+    wpd_on_sim = LAPDSim1D(
+        dict(csda_params, beam_product_transport="nonlocal"),
+        dict(cathode_flags),
+    )
+    wpd_on_sim._circuit_I_loop = 3000.0
+    wpd_on_solve = wpd_on_sim.solve_cathode_boundary()
+    wpd_on_dep = wpd_on_solve.beam_deposition[0]
+    wpd_on_total = (
+        wpd_on_dep.plasma_heating_erg_s.sum()
+        + wpd_on_dep.radiated_erg_s.sum()
+        + wpd_on_dep.ionization_cost_erg_s.sum()
+        + float(wpd_on_dep.anode_intercepted_erg_s)
+        + wpd_on_dep.end_loss_low_erg_s
+        + wpd_on_dep.end_loss_high_erg_s
+    )
+    assert abs(wpd_on_total - csda_budget) / csda_budget < 1e-9
+    assert (
+        wpd_on_dep.end_loss_low_erg_s + wpd_on_dep.end_loss_high_erg_s > 0.0
+    )
+    assert (
+        wpd_on_dep.plasma_heating_erg_s.sum()
+        < csda_dep.plasma_heating_erg_s.sum()
+    )
+    # Energy-only in v1: the particle rows the fluid and circuit read are
+    # untouched.
+    assert np.array_equal(
+        wpd_on_dep.ionization_events, csda_dep.ionization_events
+    )
+    # The gap-transmission PROBE and the item-35 tripwire are primary-flux
+    # instruments and must be blind to product transport: all three ledger
+    # views are unchanged, so sigma_eff and the circuit bypass are too.
+    assert wpd_on_solve.beam_gap_ledger[0] == csda_ledger[0]
+    assert (
+        wpd_on_solve.beam_result.beam_atten_cross[csda_launch]
+        == csda_sigma_eff
+    )
+    assert beam_gap_ledger_mismatch(wpd_on_solve.beam_gap_ledger, csda_eta) is None
+    # The ledger is recorded as cathode diagnostics, zero-defaulted so
+    # beer_lambert runs and pre-WP-D files stay readable.
+    wpd_on_diag = wpd_on_sim._cathode_diagnostic_snapshot()
+    assert wpd_on_diag["source_beam_end_loss_low_W"] == (
+        wpd_on_dep.end_loss_low_erg_s * 1.0e-7
+    )
+    assert wpd_on_diag["source_beam_end_loss_high_W"] == (
+        wpd_on_dep.end_loss_high_erg_s * 1.0e-7
+    )
+    assert wpd_on_diag["end_beam_end_loss_low_W"] == 0.0
+    for _bl_key in ("low", "high"):
+        assert bl_diag[f"source_beam_end_loss_{_bl_key}_W"] == 0.0
+
     # --- Beam-deposition smoothing CONSERVES the deposit over the live plasma.
     # The Gaussian redistribution kernel must place ZERO weight on the typed
     # plasma-dead cells (plenum/obstruction) behind the cathode face, because
@@ -7113,6 +7196,8 @@ def main():
     # (BEAM_DEPOSITION_PLAN B1; full acceptance in
     # scripts/verify_beam_deposition.py — this is the fast subset).
     from cablp.funcs._beam_deposition import (
+        _COULOMB_STOPPING_EXPONENT,
+        _coulomb_stopping_coefficient,
         beam_speed_cm_s,
         coulomb_stopping_eV_per_cm,
         deposit_beam,
@@ -7177,6 +7262,161 @@ def main():
             pass
         else:
             raise AssertionError("expected ValueError from deposit_beam")
+
+    # --- WP-D: non-local transport of the beam's EVENT PRODUCTS
+    # (product_transport). At breakdown the secondary electrons and the
+    # primary's terminal sub-threshold residual are below every He inelastic
+    # threshold and Coulomb-couple at ~1 eV per machine pass, so banking them
+    # in their birth cell is the wrong limit; "nonlocal" walks them along B
+    # and books what escapes an end to the new end ledger.
+
+    # (a) DEFAULT OFF IS BIT-EXACT. Passing the default explicitly and
+    # omitting the key must give byte-identical arrays, and the end ledger
+    # must be identically zero -- nothing is booked that was not booked
+    # before, which is what keeps the production golden bit-exact.
+    wpd_local = deposit_beam(150.0, 1.0e22, **b1_col, product_transport="local")
+    for wpd_field in (
+        "ionization_events", "excitation_events", "plasma_heating_erg_s",
+        "radiated_erg_s", "ionization_cost_erg_s", "E_entry_eV",
+        "heating_coulomb_erg_s", "heating_anomalous_erg_s",
+        "heating_secondary_erg_s", "heating_terminal_erg_s",
+    ):
+        assert np.array_equal(
+            getattr(wpd_local, wpd_field), getattr(b1_res, wpd_field)
+        ), wpd_field
+    assert wpd_local.transmitted_flux == b1_res.transmitted_flux
+    assert wpd_local.end_loss_low_erg_s == 0.0
+    assert wpd_local.end_loss_high_erg_s == 0.0
+    assert wpd_local.end_loss_transmitted_erg_s == 0.0
+
+    # The walk integrates the module's OWN stopping power in closed form
+    # rather than substepping it, which is exact only because both closures
+    # are pure power laws in W (lnLambda depends on ne and Te alone). This
+    # guards that identity: if coulomb_stopping_eV_per_cm ever stops being
+    # A(ne,Te)*W**p, the walk silently stops matching the primary's drag.
+    for wpd_model, wpd_p in _COULOMB_STOPPING_EXPONENT.items():
+        wpd_A = _coulomb_stopping_coefficient([2.0e12], [4.0], wpd_model)[0]
+        for wpd_W in (0.2, 3.0, 40.0, 150.0):
+            wpd_ref = coulomb_stopping_eV_per_cm(
+                wpd_W, 2.0e12, 4.0, model=wpd_model
+            )
+            assert abs(wpd_A * wpd_W**wpd_p - wpd_ref) <= 1e-12 * wpd_ref, (
+                wpd_model, wpd_W
+            )
+
+    # (b) THE EXTENDED CONSERVATION IDENTITY. On a column where the walks do
+    # BOTH things -- the backward halves born at the launch cell leave the low
+    # end immediately, the forward ones run ~11 m and thermalize inside the
+    # 20 m domain -- per-ray energy still closes to roundoff with the end
+    # ledger carrying what left:
+    #     Gamma0*E0 = heating + radiated + cost + anode + end_loss
+    wpd_cells = 40
+    wpd_col = dict(
+        nn=np.full(wpd_cells, 2.0e14),
+        ne=np.full(wpd_cells, 1.0e11),
+        Te=np.full(wpd_cells, 1.0),
+        launch=0,
+        direction=1,
+        dz_cm=np.full(wpd_cells, 50.0),
+    )
+    wpd_ref_local = deposit_beam(150.0, 1.0e22, **wpd_col)
+    wpd_nl = deposit_beam(150.0, 1.0e22, **wpd_col, product_transport="nonlocal")
+    wpd_budget = 1.0e22 * 150.0 * 1.602176634e-12
+    wpd_total = (
+        wpd_nl.plasma_heating_erg_s.sum()
+        + wpd_nl.radiated_erg_s.sum()
+        + wpd_nl.ionization_cost_erg_s.sum()
+        + float(wpd_nl.anode_intercepted_erg_s)
+        + wpd_nl.end_loss_low_erg_s
+        + wpd_nl.end_loss_high_erg_s
+    )
+    assert abs(wpd_total - wpd_budget) / wpd_budget < 1e-12
+    assert wpd_nl.end_loss_low_erg_s > 0.0  # escaped backwards
+    assert wpd_nl.end_loss_high_erg_s > 0.0  # escaped forwards
+    assert wpd_nl.heating_secondary_erg_s.sum() > 0.0  # and some thermalized
+    assert wpd_nl.heating_terminal_erg_s.sum() > 0.0
+    # This ray is absorbed, so nothing in the ledger is the transmitted
+    # primary -- all of it is walked product.
+    assert wpd_nl.transmitted_flux == 0.0
+    assert wpd_nl.end_loss_transmitted_erg_s == 0.0
+    # Energy MOVED, it was not created: the plasma keeps strictly less.
+    assert (
+        wpd_nl.plasma_heating_erg_s.sum()
+        < wpd_ref_local.plasma_heating_erg_s.sum()
+    )
+    # v1 is ENERGY-ONLY routing: the particle rows (and everything downstream
+    # of them -- n, the circuit currents) are identical in both modes.
+    assert np.array_equal(
+        wpd_nl.ionization_events, wpd_ref_local.ionization_events
+    )
+    assert np.array_equal(
+        wpd_nl.excitation_events, wpd_ref_local.excitation_events
+    )
+
+    # (c) THE LOCAL LIMIT. Raise n_e until the product range collapses far
+    # below one cell and "nonlocal" must reproduce "local": every walk
+    # thermalizes in its birth cell and nothing reaches an end. The tolerance
+    # is roundoff (rtol 1e-12), not a convergence tolerance -- in this limit
+    # the two bookings are the same sum in a different order, so anything
+    # larger would mean a real leak rather than an unconverged walk.
+    wpd_dense = dict(b1_col, ne=np.full(b1_cells, 1.0e13))
+    wpd_dense_local = deposit_beam(150.0, 1.0e22, **wpd_dense)
+    wpd_dense_nl = deposit_beam(
+        150.0, 1.0e22, **wpd_dense, product_transport="nonlocal"
+    )
+    assert np.allclose(
+        wpd_dense_nl.plasma_heating_erg_s,
+        wpd_dense_local.plasma_heating_erg_s,
+        rtol=1e-12,
+        atol=0.0,
+    )
+    assert wpd_dense_nl.end_loss_low_erg_s == 0.0
+    assert wpd_dense_nl.end_loss_high_erg_s == 0.0
+
+    # (d) THE DIRECTION SPLIT. Secondaries leave broadly isotropically, so
+    # each birth cell emits two half-weight walks, +z and -z. Confine the
+    # neutrals to a single cell at the exact centre of an otherwise uniform
+    # column: the two halves then see identical columns and identical
+    # distances to their ends, so their escapes must match and the deposited
+    # secondary profile must be mirror-symmetric about the birth cell. (The
+    # primary streams on through the vacuum and transmits, so the high end
+    # additionally carries its Gamma_t*E_t -- the ledger's other member,
+    # subtracted out here through its own diagnostic split.)
+    wpd_sym_cells = 41
+    wpd_sym_mid = 20
+    wpd_sym_nn = np.zeros(wpd_sym_cells)
+    wpd_sym_nn[wpd_sym_mid] = 5.0e14
+    wpd_sym = deposit_beam(
+        150.0, 1.0e21,
+        nn=wpd_sym_nn,
+        ne=np.full(wpd_sym_cells, 3.0e10),
+        Te=np.full(wpd_sym_cells, 1.0),
+        launch=wpd_sym_mid,
+        direction=1,
+        dz_cm=np.full(wpd_sym_cells, 40.0),
+        product_transport="nonlocal",
+    )
+    assert wpd_sym.transmitted_flux > 0.0
+    assert wpd_sym.end_loss_transmitted_erg_s > 0.0
+    assert np.isclose(
+        wpd_sym.end_loss_high_erg_s - wpd_sym.end_loss_transmitted_erg_s,
+        wpd_sym.end_loss_low_erg_s,
+        rtol=1e-12,
+        atol=0.0,
+    )
+    wpd_sym_heat = wpd_sym.heating_secondary_erg_s
+    assert np.array_equal(
+        wpd_sym_heat[wpd_sym_mid + 1:], wpd_sym_heat[:wpd_sym_mid][::-1]
+    )
+
+    # (e) MISCONFIGURATION is loud at the module boundary too (the solver
+    # raises at construction; see the WP-D block in the R4/csda section).
+    try:
+        deposit_beam(150.0, 1e22, **b1_col, product_transport="bogus")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for product_transport")
 
     adas_reaction_kwargs = dict(
         state=knob_state,
