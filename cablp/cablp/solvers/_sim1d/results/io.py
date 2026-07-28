@@ -162,6 +162,16 @@ def save_result_hdf5(path, result, params=None, flags=None):
                 h5.create_group("ignition_diagnostics"),
                 result.ignition_diagnostics,
             )
+        # Present only on a run whose cathode switch was opened by an ignition
+        # guard; a normal run never carries it, so its file is unchanged.
+        ignition_abort = getattr(result, "ignition_abort", None)
+        if ignition_abort is not None:
+            group = h5.create_group("ignition_abort")
+            for key, value in ignition_abort.items():
+                if isinstance(value, str):
+                    group.attrs[key] = value
+                else:
+                    group.attrs[key] = float(value)
         _write_diagnostics(h5.create_group("diagnostics"), result.diagnostics)
     return path
 
@@ -293,6 +303,15 @@ def load_result_hdf5(path):
         )
         if "run_status" in h5.attrs:
             result.run_status = _decode_string(h5.attrs["run_status"])
+        if "ignition_abort" in h5:
+            result.ignition_abort = {
+                key: (
+                    _decode_string(value)
+                    if isinstance(value, (bytes, str))
+                    else float(value)
+                )
+                for key, value in h5["ignition_abort"].attrs.items()
+            }
         return add_sim3_compat_aliases(result)
 
 

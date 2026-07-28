@@ -25,6 +25,7 @@ from .core.ignition import (
     IGNITION_BEAM_END_LOSS_KEYS,
     IGNITION_DIAGNOSTIC_FIELDS,
     IGNITION_POWER_GROUPS,
+    IGNITION_STALL_WINDOW_S,
     IgnitionMonitor,
     empty_ignition_diagnostics,
 )
@@ -885,10 +886,16 @@ class LAPDSim1D:
         self._last_current_trigger_I_tot = None
         self._current_trigger_samples = []
         self._run_start_for_phase_events = 0.0
-        # Breakdown-progress diagnostics. Always on; armed only while the
-        # cathode drive is active in pre_breakdown/breakdown, so a run that
-        # reaches main_discharge records nothing but NaN defaults.
+        # Ignition-failure guards. The monitor is always on and is armed only
+        # while the cathode drive is active in pre_breakdown/breakdown, so it
+        # is inert on any run that reaches main_discharge (BY CONSTRUCTION,
+        # not by tuning). ``_t_ignition_abort`` is the shared switch-open
+        # instant used by both the stall trip and the tau_prebreakdown
+        # hardware-guard timeout.
         self._ignition_monitor = IgnitionMonitor()
+        self._t_ignition_abort = None
+        self._ignition_abort_reason = None
+        self._ignition_abort_context = None
         self._last_ignition_record = None
         self._cathode_x0 = None
         self._cathode_x0_twin = None
@@ -2852,6 +2859,10 @@ class LAPDSim1D:
             and self._flags.get("Plasma", True)
             and self._phase_transition_mode() == "current"
         )
+        # A switch-open abort shortens t_end the same way a breakdown trigger
+        # does, in EITHER phase-transition mode, so an aborted run winds down
+        # and stops instead of crawling to the configured end time.
+        dynamic_t_end = not explicit_t_end and self._flags.get("Plasma", True)
 
         def should_save(t):
             if max_output_steps > 0 and len(saved) >= max_output_steps:
@@ -2982,8 +2993,8 @@ class LAPDSim1D:
             retry_count, rejection_reason, step_rejection_events = _extra
             timestep_rejection_events.extend(step_rejection_events)
             self._update_current_phase_triggers()
-            if dynamic_current_t_end:
-                current_t_end = self._current_trigger_t_end()
+            if dynamic_t_end:
+                current_t_end = self._dynamic_t_end(dynamic_current_t_end)
                 if current_t_end is not None and current_t_end < t_end:
                     t_end = float(current_t_end)
                     time_tol = max(1e-15, 1e-12 * max(abs(t_end), 1.0))
@@ -3598,6 +3609,19 @@ class LAPDSim1D:
         boundaries = []
         if plasma_origin > 0.0:
             boundaries.append(plasma_origin)
+        if self._t_ignition_abort is not None:
+            # After a switch-open abort the scheduled/current boundaries no
+            # longer apply: only the wind-down remains.
+            boundaries.extend(
+                [
+                    float(self._t_ignition_abort),
+                    float(self._t_ignition_abort) + tau_afterglow,
+                ]
+            )
+            for boundary in sorted(boundaries):
+                if in_run_window(boundary):
+                    return float(boundary)
+            return None
         if self._phase_transition_mode() == "current":
             main_start = self._t_breakdown_trigger
             if main_start is None:
@@ -4929,6 +4953,70 @@ class LAPDSim1D:
             (self._last_current_trigger_time, self._last_current_trigger_I_tot)
         )
 
+    def _open_ignition_switch(self, time, reason, context=None):
+        """Open the cathode switch and route the run into the afterglow.
+
+        The single abort action shared by the ignition-stall trip and the
+        ``tau_prebreakdown`` hardware-guard timeout. It mirrors what the
+        machine does: the switch opens, the drive stops, and what plasma there
+        is decays. Mechanically it re-anchors the phase scheduler -- from
+        ``time`` on, ``_phase_info`` reports ``afterglow`` (cathode drive off,
+        cathode floating, the square valve's closing tail still delivering)
+        and then ``post_afterglow``, and ``run`` shortens ``t_end`` to
+        ``time + tau_afterglow`` so the run winds down physically and STOPS
+        instead of crawling to ``tau_prebreakdown`` at a collapsed timestep.
+        No state vector is touched; the abort is a phase transition.
+        """
+        if self._t_ignition_abort is not None:
+            return False
+        self._t_ignition_abort = float(time)
+        self._ignition_abort_reason = str(reason)
+        self._ignition_abort_context = {
+            key: float(value) for key, value in dict(context or {}).items()
+        }
+        detail = ""
+        if self._ignition_abort_context:
+            detail = " | " + " ".join(
+                f"{key}={self._ignition_abort_context[key]:.4g}"
+                for key in (
+                    "gamma_N_per_s",
+                    "gamma_nn_per_s",
+                    "dEe_total_W",
+                    "P_beam_W",
+                    "P_conduction_W",
+                    "P_cooling_W",
+                    "P_ionization_W",
+                    "P_transport_W",
+                    "P_beam_end_loss_W",
+                )
+                if key in self._ignition_abort_context
+            )
+        warnings.warn(
+            f"ignition aborted at t={self._t_ignition_abort:.6e} s "
+            f"(reason={self._ignition_abort_reason}): the cathode switch is "
+            "OPEN and the run winds down through the afterglow. This run did "
+            "NOT ignite -- it has no main_discharge phase and must not be "
+            f"scored{detail}",
+            stacklevel=2,
+        )
+        return True
+
+    def _ignition_abort_t_end(self):
+        """Return the wind-down end time [s] after a switch-open abort."""
+        if self._t_ignition_abort is None:
+            return None
+        tau_afterglow = max(float(self._input_dict.get("tau_afterglow", 0.0)), 0.0)
+        return float(self._t_ignition_abort) + tau_afterglow
+
+    def _dynamic_t_end(self, current_trigger_enabled):
+        """Return the shortest dynamically-determined end time [s], or None."""
+        candidates = []
+        if current_trigger_enabled:
+            candidates.append(self._current_trigger_t_end())
+        candidates.append(self._ignition_abort_t_end())
+        finite = [value for value in candidates if value is not None]
+        return min(finite) if finite else None
+
     def _update_current_phase_triggers(self):
         if (
             self._phase_transition_mode() != "current"
@@ -5232,6 +5320,8 @@ class LAPDSim1D:
         """
         if phase not in {"pre_breakdown", "breakdown"}:
             return False
+        if self._t_ignition_abort is not None:
+            return False
         return bool(self._cathode_phase_options(time=time)["cathode_enabled"])
 
     def _ignition_diagnostic_snapshot(
@@ -5323,7 +5413,15 @@ class LAPDSim1D:
                 )
             )
 
+        stalled = bool(rates["stalled"]) and self._t_ignition_abort is None
+        record["stalled"] = 1.0 if stalled else 0.0
         self._last_ignition_record = dict(record)
+        if stalled:
+            self._open_ignition_switch(
+                time=float(time),
+                reason="ignition_stalled",
+                context=record,
+            )
         return record
 
     @staticmethod
@@ -5464,6 +5562,21 @@ class LAPDSim1D:
                 else float(self._t_breakdown_trigger)
             ),
         )
+        if self._t_ignition_abort is not None:
+            # Present ONLY on a run that aborted, so normal results (and their
+            # saved HDF5 files) are unchanged. This is the event context the
+            # artifact must carry: why the switch opened, in the electron
+            # power ledger's own terms.
+            result.ignition_abort = {
+                "reason": str(self._ignition_abort_reason),
+                "time_s": float(self._t_ignition_abort),
+                "window_s": float(self._ignition_monitor.window_s),
+                "rate_window_s": float(self._ignition_monitor.rate_window_s),
+                **{
+                    key: float(value)
+                    for key, value in (self._ignition_abort_context or {}).items()
+                },
+            }
         if saved and "M_n" in saved[0]:
             result.M_n = stack("M_n")
             result.u_n = stack("u_n")
@@ -5527,6 +5640,7 @@ class LAPDSim1D:
         if plasma_origin > 0.0:
             append_event(plasma_origin, "pre_breakdown", "tau_neutral_prebreakdown")
 
+        abort = self._t_ignition_abort
         if self._phase_transition_mode() == "current":
             if self._t_prebreakdown_trigger is not None:
                 append_event(
@@ -5534,6 +5648,14 @@ class LAPDSim1D:
                     "breakdown",
                     "I_prebreakdown",
                 )
+            if abort is not None:
+                append_event(abort, "afterglow", self._ignition_abort_reason)
+                append_event(
+                    abort + tau_afterglow,
+                    "post_afterglow",
+                    "tau_afterglow",
+                )
+                return _phase_event_arrays(events)
             if self._t_breakdown_trigger is not None:
                 main_start = float(self._t_breakdown_trigger)
                 append_event(main_start, "main_discharge", "I_breakdown")
@@ -5551,6 +5673,16 @@ class LAPDSim1D:
 
         breakdown_start = plasma_origin + tau_prebreakdown
         main_start = breakdown_start + tau_breakdown
+        if abort is not None:
+            if tau_breakdown > 0.0 and breakdown_start < abort:
+                append_event(breakdown_start, "breakdown", "tau_prebreakdown")
+            append_event(abort, "afterglow", self._ignition_abort_reason)
+            append_event(
+                abort + tau_afterglow,
+                "post_afterglow",
+                "tau_afterglow",
+            )
+            return _phase_event_arrays(events)
         if tau_breakdown > 0.0:
             append_event(breakdown_start, "breakdown", "tau_prebreakdown")
             append_event(main_start, "main_discharge", "tau_breakdown")
@@ -5606,6 +5738,16 @@ class LAPDSim1D:
         plasma_origin = self._plasma_phase_time_origin()
         if plasma_origin > 0.0 and time < plasma_origin:
             return "neutral_prebreakdown", time
+        # Switch-open abort (ignition_stalled / prebreakdown_timeout): from the
+        # abort instant the run is in the ordinary afterglow -- drive off,
+        # cathode floating -- and then post_afterglow. Inert (None) on every
+        # run that ignites, which is what keeps the golden bit-exact.
+        abort = self._t_ignition_abort
+        if abort is not None and time >= abort:
+            post_afterglow_start = abort + tau_afterglow
+            if time < post_afterglow_start:
+                return "afterglow", time - abort
+            return "post_afterglow", time - post_afterglow_start
         if self._phase_transition_mode() == "current":
             if self._t_breakdown_trigger is not None:
                 main_start = self._t_breakdown_trigger
