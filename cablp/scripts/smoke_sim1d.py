@@ -68,6 +68,7 @@ from cablp.solvers._sim1d.physics.neutrals import (
 )
 from cablp.solvers._sim1d.core.timestep import neutral_wind_timestep
 from cablp.solvers._sim1d.physics.reactions import (
+    gas_puff_local_ionization_rhs,
     particle_inventory_rate,
     reaction_rates,
     reaction_rhs_terms,
@@ -8101,6 +8102,249 @@ def main():
         w for w in _eq_inner if "run() was called directly" in str(w.message)
     ], "start_simulation()'s own run() must not warn"
     assert _eq_sim3._run_via_start_simulation, "run() must not clear the guard"
+
+    # --- S_gp is born at rest (NEUTRAL_MOMENTUM_PLAN.md, 2026-07-28) --------
+    # The gas puff is a source of ZERO-parallel-momentum particles: cold gas
+    # arrives through the pipe with no directed axial momentum, so S_gp adds
+    # nn (and nn_a) and must NEVER add M_n / M_n_a. The only momentum the
+    # source/sink term carries is the PUMP sink, which removes the wind that
+    # leaves with the gas it is attached to. This invariant is the premise of
+    # the neutral-momentum campaign thread -- the flow observable is only
+    # evidence if the puff cannot manufacture wind -- and it lives at four
+    # sites that must stay consistent: the explicit source/sink RHS (both
+    # zone layouts), the two implicit neutral-equilibration steps, and the
+    # local gas-puff ionization channel. All four are pinned below.
+    from cablp.solvers._sim1d.core.geometry import build_geometry as _sgp_build
+
+    sgp_params, sgp_flags = default_config()
+    sgp_geom = _sgp_build(sgp_params, sgp_flags)
+    sgp_cells = sgp_geom.cells
+    sgp_ref_sim = LAPDSim1D(dict(sgp_params, nx=12), sgp_flags)
+    sgp_mass = sgp_ref_sim.ion_mass_g
+    # A puff level well onto the M6 square plateau, and the production
+    # profile/valve count, so the profile under test is the one that runs.
+    sgp_sccm = 3400.0
+    sgp_valves = 2.0
+    sgp_profile = "cosine_pipe"
+    sgp_pump_lps = 4000.0
+    sgp_puff = gas_puff_rate_profile(
+        sgp_geom, sgp_sccm, sgp_valves, profile=sgp_profile, end=0
+    )
+    assert np.any(sgp_puff > 0.0), "the puff profile under test must be live"
+    sgp_kwargs = dict(
+        geometry=sgp_geom,
+        S_gp=sgp_sccm,
+        Twin_S_gp=0.0,
+        S_pump_L=sgp_pump_lps,
+        S_pump_R=sgp_pump_lps,
+        gas_puff_valves=sgp_valves,
+        gas_puff_profile=sgp_profile,
+    )
+    sgp_zeros = np.zeros(sgp_cells, dtype=float)
+    # A state carrying a real wind everywhere, so a spurious puff momentum
+    # source could not hide behind an M_n that happens to be zero.
+    sgp_state = conservative_from_primitives(
+        n=np.full(sgp_cells, 1e12),
+        nn=np.full(sgp_cells, 1e13),
+        u=np.zeros(sgp_cells),
+        Te=np.full(sgp_cells, 5.0),
+        Ti=np.full(sgp_cells, 1.0),
+        ion_mass_g=sgp_mass,
+        un=np.full(sgp_cells, 3.0e4),
+    )
+    assert sgp_state.M_n is not None and np.all(sgp_state.M_n != 0.0)
+
+    sgp_pump_i_left, sgp_pump_i_right = pump_cell_indices(sgp_geom)
+    sgp_pump_mask = np.zeros(sgp_cells, dtype=bool)
+    sgp_pump_mask[[sgp_pump_i_left, sgp_pump_i_right]] = True
+
+    def _sgp_expected_pump_sink(momentum):
+        """Return the pump-only momentum sink -rate * momentum per cell."""
+        sink = np.zeros(sgp_cells, dtype=float)
+        for sgp_idx, sgp_speed in (
+            (sgp_pump_i_left, sgp_pump_lps),
+            (sgp_pump_i_right, sgp_pump_lps),
+        ):
+            sgp_rate = pump_rate(
+                _effective_pump_speed(sgp_speed, None),
+                sgp_geom.neutral_volume_cm3[sgp_idx],
+            )
+            sink[sgp_idx] -= sgp_rate * momentum[sgp_idx]
+        return sink
+
+    # Site 1, single zone, puff ON / pumps OFF: the puff is the WHOLE nn
+    # source and contributes exactly nothing to M_n. Bit-exact, not a
+    # tolerance -- there is no momentum arithmetic to round.
+    sgp_puff_only = neutral_source_sink_rhs(
+        state=sgp_state, gas_puff_enabled=True, pump_enabled=False, **sgp_kwargs
+    )
+    assert np.array_equal(sgp_puff_only.M_n, sgp_zeros), (
+        "S_gp must add no neutral momentum"
+    )
+    assert np.array_equal(sgp_puff_only.nn, sgp_puff)
+    assert sgp_puff_only.M_n_a is None and sgp_puff_only.nn_a is None
+    assert np.array_equal(sgp_puff_only.M, sgp_zeros)
+
+    # Site 1, single zone, puff ON / pumps ON: the only nonzero dM_n cells are
+    # the two pump cells, and there dM_n is exactly -pump_rate * M_n. Adding
+    # the puff on top leaves that untouched.
+    sgp_both = neutral_source_sink_rhs(
+        state=sgp_state, gas_puff_enabled=True, pump_enabled=True, **sgp_kwargs
+    )
+    assert np.all(sgp_both.M_n[~sgp_pump_mask] == 0.0)
+    assert np.all(sgp_both.M_n[sgp_pump_mask] != 0.0)
+    assert np.array_equal(
+        sgp_both.M_n, _sgp_expected_pump_sink(sgp_state.M_n)
+    )
+    # ... and the pump-on/pump-off dM_n difference is the pump sink alone,
+    # i.e. the puff term is identical in both calls.
+    assert np.array_equal(
+        sgp_both.M_n - sgp_puff_only.M_n, _sgp_expected_pump_sink(sgp_state.M_n)
+    )
+
+    # Site 1, two zone (nn_a and M_n_a present): the puff feeds the ANNULUS
+    # where one exists -- and still adds no momentum to either zone.
+    sgp_V_col, sgp_V_ann = neutral_zone_volumes(sgp_geom)
+    assert np.all(sgp_V_ann > 0.0), "expected an annulus on every cell here"
+    sgp_tz_state = ConservativeState1D(
+        n=sgp_state.n,
+        nn=sgp_state.nn,
+        M=sgp_state.M,
+        Ee=sgp_state.Ee,
+        Ei=sgp_state.Ei,
+        M_n=sgp_state.M_n,
+        nn_a=np.full(sgp_cells, 2.0e13),
+        M_n_a=np.full(sgp_cells, 4.0e-9),
+    )
+    sgp_tz_puff = neutral_source_sink_rhs(
+        state=sgp_tz_state,
+        gas_puff_enabled=True,
+        pump_enabled=False,
+        **sgp_kwargs,
+    )
+    assert np.array_equal(sgp_tz_puff.M_n, sgp_zeros)
+    assert np.array_equal(sgp_tz_puff.M_n_a, sgp_zeros)
+    # The gas lands in the annulus, and the annulus-volume re-normalization
+    # conserves the inflow exactly against the single-zone chamber form.
+    assert np.any(sgp_tz_puff.nn_a > 0.0)
+    assert np.array_equal(sgp_tz_puff.nn, sgp_zeros)
+    assert np.allclose(
+        sgp_tz_puff.nn_a * sgp_V_ann + sgp_tz_puff.nn * sgp_V_col,
+        sgp_puff * np.asarray(sgp_geom.neutral_volume_cm3, dtype=float),
+        rtol=1e-13,
+        atol=0.0,
+    )
+    # With the pumps on, BOTH zone momenta carry pump sinks and nothing else.
+    sgp_tz_both = neutral_source_sink_rhs(
+        state=sgp_tz_state,
+        gas_puff_enabled=True,
+        pump_enabled=True,
+        **sgp_kwargs,
+    )
+    assert np.array_equal(
+        sgp_tz_both.M_n, _sgp_expected_pump_sink(sgp_tz_state.M_n)
+    )
+    assert np.array_equal(
+        sgp_tz_both.M_n_a, _sgp_expected_pump_sink(sgp_tz_state.M_n_a)
+    )
+    assert np.all(sgp_tz_both.M_n[~sgp_pump_mask] == 0.0)
+    assert np.all(sgp_tz_both.M_n_a[~sgp_pump_mask] == 0.0)
+
+    # Site 4: the local gas-puff ionization channel diverts a fraction of the
+    # puff straight to plasma. Those particles are born AT REST too -- the M
+    # row is identically zero -- while n gains exactly the neutrals nn loses.
+    sgp_li_geom = sgp_ref_sim.geometry
+    sgp_li_cells = sgp_li_geom.cells
+    sgp_li_state = conservative_from_primitives(
+        n=np.full(sgp_li_cells, 1e12),
+        nn=np.full(sgp_li_cells, 1e13),
+        u=np.full(sgp_li_cells, 1.0e5),
+        Te=np.full(sgp_li_cells, 5.0),
+        Ti=np.full(sgp_li_cells, 1.0),
+        ion_mass_g=sgp_mass,
+    )
+    sgp_li_puff = gas_puff_rate_profile(
+        sgp_li_geom, sgp_sccm, sgp_valves, profile=sgp_profile, end=0
+    )
+    assert np.any(sgp_li_puff > 0.0)
+    sgp_li_kwargs = dict(
+        state=sgp_li_state,
+        floors=sgp_ref_sim.floors,
+        ion_mass_g=sgp_mass,
+        geometry=sgp_li_geom,
+        puff_profile=sgp_li_puff,
+        I_ion=I_ion,
+    )
+    sgp_li = gas_puff_local_ionization_rhs(fraction=0.3, **sgp_li_kwargs)
+    assert np.array_equal(
+        sgp_li.M, np.zeros(sgp_li_cells, dtype=float)
+    ), "the diverted puff must be born at rest (no momentum source)"
+    assert np.any(sgp_li.n > 0.0)
+    assert np.all(sgp_li.nn <= 0.0) and np.any(sgp_li.nn < 0.0)
+    sgp_li_scale = float(np.max(np.abs(sgp_li.n * sgp_li_geom.plasma_volume_cm3)))
+    assert abs(particle_inventory_rate(sgp_li, sgp_li_geom)) <= (
+        1e-12 * sgp_li_scale
+    ), "the diverted particles must close plasma-plus-neutral inventory"
+    # Default off is bit-exact, and the two-zone combination is rejected loudly.
+    sgp_li_off = gas_puff_local_ionization_rhs(fraction=0.0, **sgp_li_kwargs)
+    for sgp_field in STATE_NAMES_1D:
+        assert np.all(getattr(sgp_li_off, sgp_field) == 0.0)
+    try:
+        gas_puff_local_ionization_rhs(
+            **dict(sgp_li_kwargs, state=sgp_tz_state, fraction=0.3)
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(
+            "expected gas_puff_local_ionization x neutral_two_zone to fail"
+        )
+
+    # Sites 2 and 3: the implicit neutral-equilibration steps. The puff enters
+    # the nn (and nn_a) linear solve only; M_n and M_n_a pass through bit-exact.
+    sgp_eq_sim = LAPDSim1D(dict(sgp_params, nx=12), sgp_flags)
+    sgp_eq_cells = sgp_eq_sim.geometry.cells
+    sgp_eq_base = sgp_eq_sim.state
+    sgp_eq_Mn = np.full(sgp_eq_cells, 5.0e-9)
+    sgp_eq_state = ConservativeState1D(
+        n=sgp_eq_base.n,
+        nn=sgp_eq_base.nn,
+        M=sgp_eq_base.M,
+        Ee=sgp_eq_base.Ee,
+        Ei=sgp_eq_base.Ei,
+        M_n=sgp_eq_Mn.copy(),
+    )
+    # t on the M6 plateau, so the puff really is driving the solve.
+    sgp_eq_next = sgp_eq_sim._implicit_neutral_step(1.0e-5, sgp_eq_state, 5.0e-3)
+    assert np.any(sgp_eq_next.nn > sgp_eq_state.nn), "the puff must be feeding"
+    assert np.array_equal(sgp_eq_next.M_n, sgp_eq_Mn)
+    sgp_tzq_sim = LAPDSim1D(
+        dict(sgp_params, nx=12, neutral_exchange_model="knudsen"),
+        dict(sgp_flags, neutral_two_zone=True),
+    )
+    sgp_tzq_cells = sgp_tzq_sim.geometry.cells
+    sgp_tzq_base = sgp_tzq_sim.state
+    assert sgp_tzq_base.nn_a is not None
+    sgp_tzq_Mn = np.full(sgp_tzq_cells, 5.0e-9)
+    sgp_tzq_Mna = np.full(sgp_tzq_cells, 7.0e-9)
+    sgp_tzq_state = ConservativeState1D(
+        n=sgp_tzq_base.n,
+        nn=sgp_tzq_base.nn,
+        M=sgp_tzq_base.M,
+        Ee=sgp_tzq_base.Ee,
+        Ei=sgp_tzq_base.Ei,
+        M_n=sgp_tzq_Mn.copy(),
+        nn_a=sgp_tzq_base.nn_a,
+        M_n_a=sgp_tzq_Mna.copy(),
+    )
+    sgp_tzq_next = sgp_tzq_sim._implicit_neutral_step_two_zone(
+        1.0e-5, sgp_tzq_state, 5.0e-3
+    )
+    assert np.any(sgp_tzq_next.nn_a > sgp_tzq_state.nn_a), (
+        "the two-zone puff must be feeding the annulus"
+    )
+    assert np.array_equal(sgp_tzq_next.M_n, sgp_tzq_Mn)
+    assert np.array_equal(sgp_tzq_next.M_n_a, sgp_tzq_Mna)
 
     print(
         "sim1d smoke ok: "
