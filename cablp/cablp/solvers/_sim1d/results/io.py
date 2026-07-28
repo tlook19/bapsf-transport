@@ -157,6 +157,11 @@ def save_result_hdf5(path, result, params=None, flags=None):
                 h5.create_group("cathode_diagnostics"),
                 result.cathode_diagnostics,
             )
+        if hasattr(result, "ignition_diagnostics"):
+            _write_field_arrays(
+                h5.create_group("ignition_diagnostics"),
+                result.ignition_diagnostics,
+            )
         _write_diagnostics(h5.create_group("diagnostics"), result.diagnostics)
     return path
 
@@ -252,6 +257,16 @@ def load_result_hdf5(path):
                 _read_field_arrays(h5["cathode_diagnostics"])
                 if "cathode_diagnostics" in h5
                 else {}
+            ),
+            # Defaulted dataset: runs saved before 2026-07-28 have no
+            # ignition_diagnostics group and load with NaN/zero-defaulted
+            # per-sample records of the right length.
+            ignition_diagnostics=(
+                _read_field_arrays(h5["ignition_diagnostics"])
+                if "ignition_diagnostics" in h5
+                else _empty_ignition_diagnostics(
+                    len(_read_dataset(h5["time"]))
+                )
             ),
             electron_energy_terms_W_cm3=_read_term_arrays(
                 h5["electron_energy_terms_W_cm3"]
@@ -436,6 +451,19 @@ def _empty_phase_events():
         "time": np.asarray([], dtype=float),
         "phase": np.asarray([], dtype=object),
         "reason": np.asarray([], dtype=object),
+    }
+
+
+def _empty_ignition_diagnostics(samples):
+    """Return NaN/zero-defaulted ignition diagnostics for a pre-2026-07-28 file."""
+    from ..core.ignition import IGNITION_DIAGNOSTIC_FIELDS
+
+    zero_fields = {"armed", "joint_negative", "stalled"}
+    return {
+        name: np.zeros(samples, dtype=float)
+        if name in zero_fields
+        else np.full(samples, np.nan, dtype=float)
+        for name in IGNITION_DIAGNOSTIC_FIELDS
     }
 
 

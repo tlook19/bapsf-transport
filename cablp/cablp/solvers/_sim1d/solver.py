@@ -21,6 +21,13 @@ from .core.geometry import (
     puff_cell_indices,
     pump_cell_indices,
 )
+from .core.ignition import (
+    IGNITION_BEAM_END_LOSS_KEYS,
+    IGNITION_DIAGNOSTIC_FIELDS,
+    IGNITION_POWER_GROUPS,
+    IgnitionMonitor,
+    empty_ignition_diagnostics,
+)
 from .core.integrator import (
     floor_state_vector,
     ssprk2_step,
@@ -878,6 +885,11 @@ class LAPDSim1D:
         self._last_current_trigger_I_tot = None
         self._current_trigger_samples = []
         self._run_start_for_phase_events = 0.0
+        # Breakdown-progress diagnostics. Always on; armed only while the
+        # cathode drive is active in pre_breakdown/breakdown, so a run that
+        # reaches main_discharge records nothing but NaN defaults.
+        self._ignition_monitor = IgnitionMonitor()
+        self._last_ignition_record = None
         self._cathode_x0 = None
         self._cathode_x0_twin = None
         self._cathode_beam_cross = np.zeros(self._geometry.cells)
@@ -5157,6 +5169,20 @@ class LAPDSim1D:
                 self._ion_mass_g
                 * np.maximum(state.nn_a, self._floors["nn"])
             )
+        cathode_diagnostics = {
+            **self._cathode_diagnostic_snapshot(time=time),
+            # R5.4: collector surface-power ledger line (diagnostic-only).
+            "collector_surface_power_W": self._collector_surface_power_W(
+                rhs_terms, derived
+            ),
+        }
+        ignition_diagnostics = self._ignition_diagnostic_snapshot(
+            time=time,
+            phase=phase,
+            state=state,
+            rhs_terms=rhs_terms,
+            cathode_diagnostics=cathode_diagnostics,
+        )
         return {
             **wind,
             "time": float(time),
@@ -5190,14 +5216,126 @@ class LAPDSim1D:
                 }
                 for term_name, term_rhs in rhs_terms.items()
             },
-            "cathode_diagnostics": {
-                **self._cathode_diagnostic_snapshot(time=time),
-                # R5.4: collector surface-power ledger line (diagnostic-only).
-                "collector_surface_power_W": self._collector_surface_power_W(
-                    rhs_terms, derived
-                ),
-            },
+            "cathode_diagnostics": cathode_diagnostics,
+            "ignition_diagnostics": ignition_diagnostics,
         }
+
+    def _ignition_armed(self, time, phase):
+        """Return whether breakdown-progress diagnostics are live right now.
+
+        Structural, not clock-based: the cathode drive must actually be on
+        (``cathode_coupling`` configured AND the phase switches enabling it --
+        this is "beam-on") and the run must still be pre-ignition. Once a run
+        reaches ``main_discharge`` -- or is already winding down after an abort
+        -- the monitor is disarmed and its buffer cleared, so the stall
+        detector cannot fire on a run that ignited.
+        """
+        if phase not in {"pre_breakdown", "breakdown"}:
+            return False
+        return bool(self._cathode_phase_options(time=time)["cathode_enabled"])
+
+    def _ignition_diagnostic_snapshot(
+        self,
+        time,
+        phase,
+        state,
+        rhs_terms,
+        cathode_diagnostics,
+    ):
+        """Return the per-save breakdown-progress record (see core/ignition).
+
+        Pure reads: inventories from the accepted state, the electron power
+        split from the RHS rows this snapshot already built, and the WP-D end
+        ledger from the cathode diagnostics. Nothing here feeds an RHS row.
+        Outside the armed phases every rate/power field is NaN-defaulted.
+        """
+        record = empty_ignition_diagnostics()
+        armed = self._ignition_armed(time=time, phase=phase)
+        record["armed"] = 1.0 if armed else 0.0
+
+        plasma_active = np.asarray(self._geometry.plasma_active, dtype=float)
+        plasma_volume = (
+            np.asarray(self._geometry.plasma_volume_cm3, dtype=float)
+            * plasma_active
+        )
+        neutral_volume = np.asarray(
+            self._geometry.neutral_volume_cm3, dtype=float
+        )
+        N_plasma = float(np.sum(np.asarray(state.n, dtype=float) * plasma_volume))
+        if state.nn_a is None:
+            N_neutral = float(
+                np.sum(np.asarray(state.nn, dtype=float) * neutral_volume)
+            )
+        else:
+            # Two-zone: nn is the column density, nn_a the annulus (health.py
+            # convention).
+            column_volume = np.asarray(
+                self._geometry.plasma_volume_cm3, dtype=float
+            )
+            N_neutral = float(
+                np.sum(np.asarray(state.nn, dtype=float) * column_volume)
+                + np.sum(
+                    np.asarray(state.nn_a, dtype=float)
+                    * (neutral_volume - column_volume)
+                )
+            )
+        Ee_total = float(
+            np.sum(np.asarray(state.Ee, dtype=float) * plasma_volume)
+        )
+        record["N_plasma"] = N_plasma
+        record["N_neutral"] = N_neutral
+        record["Ee_total_erg"] = Ee_total
+
+        rates = self._ignition_monitor.record(
+            time=float(time),
+            N_plasma=N_plasma,
+            N_neutral=N_neutral,
+            Ee_total=Ee_total,
+            armed=armed,
+        )
+        record["gamma_N_per_s"] = float(rates["gamma_N_per_s"])
+        record["gamma_nn_per_s"] = float(rates["gamma_nn_per_s"])
+        record["dEe_total_W"] = float(rates["dEe_total_erg_per_s"]) * 1.0e-7
+        record["joint_negative"] = 1.0 if rates["joint_negative"] else 0.0
+
+        if armed:
+            grouped = set()
+            total_W = 0.0
+            for group, term_names in IGNITION_POWER_GROUPS.items():
+                power = 0.0
+                for term_name in term_names:
+                    grouped.add(term_name)
+                    power += self._electron_term_power_W(
+                        rhs_terms, term_name, plasma_volume
+                    )
+                record[group] = power
+            for term_name in rhs_terms:
+                total_W += self._electron_term_power_W(
+                    rhs_terms, term_name, plasma_volume
+                )
+            record["P_transport_W"] = total_W - sum(
+                record[group] for group in IGNITION_POWER_GROUPS
+            )
+            record["P_beam_end_loss_W"] = float(
+                sum(
+                    float(cathode_diagnostics.get(key, 0.0))
+                    for key in IGNITION_BEAM_END_LOSS_KEYS
+                )
+            )
+
+        self._last_ignition_record = dict(record)
+        return record
+
+    @staticmethod
+    def _electron_term_power_W(rhs_terms, term_name, plasma_volume):
+        """Volume-integrated electron power [W] of one named RHS term."""
+        term = rhs_terms.get(term_name)
+        if term is None:
+            return 0.0
+        Ee = getattr(term, "Ee", None)
+        if Ee is None:
+            return 0.0
+        return float(np.sum(np.asarray(Ee, dtype=float) * plasma_volume)) * 1.0e-7
 
     def _trajectory_result(
         self,
@@ -5291,6 +5429,13 @@ class LAPDSim1D:
             plasma_active=self._geometry.plasma_active.copy(),
             rhs_terms=rhs_terms,
             cathode_diagnostics=cathode_diagnostics,
+            ignition_diagnostics={
+                name: np.asarray(
+                    [snapshot["ignition_diagnostics"][name] for snapshot in saved],
+                    dtype=float,
+                )
+                for name in IGNITION_DIAGNOSTIC_FIELDS
+            },
             phase_events=self._phase_events(
                 run_start=run_start,
                 final_time=float(self._time),
