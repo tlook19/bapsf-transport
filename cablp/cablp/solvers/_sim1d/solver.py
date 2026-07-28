@@ -1029,6 +1029,9 @@ class LAPDSim1D:
         self._last_result = None
         self._last_neutral_equilibration_result = None
         self._last_neutral_equilibration_summary = None
+        # Set only while start_simulation drives run(); lets run() tell a direct
+        # call from the equilibration-aware entry point (see run()).
+        self._run_via_start_simulation = False
         if self._flags.get("debug_checks", False):
             assert_finite_state(self._state, self._derived)
 
@@ -2761,6 +2764,21 @@ class LAPDSim1D:
         progress_interval_s=None,
     ):
         """Advance to ``t_end`` and return sparse saved trajectory arrays."""
+        if (
+            self._flags.get("neutral_equilibration", False)
+            and not self._run_via_start_simulation
+        ):
+            warnings.warn(
+                "neutral_equilibration is ON but run() was called directly, so "
+                "NO equilibration happens: only start_simulation() runs the "
+                "puff/off accumulation and seeds nn from it. This run starts "
+                "from the direct nn0 fill "
+                f"({resolve_nn0(self._input_dict, self._flags):.3g} cm^-3) "
+                "instead of an equilibrated profile. Call start_simulation() "
+                "for the equilibrated result, or clear the flag to silence "
+                "this.",
+                stacklevel=2,
+            )
         explicit_t_end = t_end is not None
         if t_end is None:
             t_end = self.default_t_end()
@@ -3265,15 +3283,19 @@ class LAPDSim1D:
                     return
                 self._apply_neutral_equilibration_result(neutral_result)
 
-        self._last_result = self.run(
-            t_end=t_end,
-            dt=dt,
-            operator_split=operator_split,
-            max_steps=max_steps,
-            progress_callback=progress_callback,
-            progress_tracker=progress_tracker,
-            progress_interval_s=progress_interval_s,
-        )
+        self._run_via_start_simulation = True
+        try:
+            self._last_result = self.run(
+                t_end=t_end,
+                dt=dt,
+                operator_split=operator_split,
+                max_steps=max_steps,
+                progress_callback=progress_callback,
+                progress_tracker=progress_tracker,
+                progress_interval_s=progress_interval_s,
+            )
+        finally:
+            self._run_via_start_simulation = False
         if self._last_neutral_equilibration_result is not None:
             self._last_result.neutral_equilibration = (
                 self._last_neutral_equilibration_result
