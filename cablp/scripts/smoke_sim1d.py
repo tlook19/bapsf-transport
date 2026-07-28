@@ -1,16 +1,22 @@
 import dataclasses
 import json
+import math
 from io import StringIO
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import warnings
 from types import SimpleNamespace
 
 import h5py
 import numpy as np
 
 from cablp.funcs._adas import he_rate_temperature_range_eV
+# main() re-imports deposit_beam locally further down (B1 block), which makes
+# the bare name local to the whole function -- alias it for the item-35 block.
+from cablp.funcs._beam_deposition import deposit_beam as _deposit_beam_ray
+from cablp.funcs._cathode_solver import _compute_l_b
 from cablp.funcs._plasmaparams import c_log
 from cablp.solvers._sim1d import (
     BreakdownError,
@@ -30,7 +36,10 @@ from cablp.solvers._sim1d.physics.conduction import (
 from cablp.solvers._sim1d.physics.cathode import (
     _beam_smoothing_key,
     _beam_smoothing_matrix,
+    _clip_ray_length,
+    _ray_gap_breakout,
     beam_absorption_weights,
+    beam_gap_ledger_mismatch,
     beam_launch,
     cathode_sample_indices,
 )
@@ -2442,6 +2451,180 @@ def main():
         csda_solve.beam_result.beam_atten_cross[csda_launch]
     )
     assert np.isfinite(csda_sigma_eff) and csda_sigma_eff >= 0.0
+
+    # --- Item 35: the gap-transmission probe is launched at the REAL emitted
+    # flux, not unit flux, so flux-DEPENDENT stopping reaches the circuit.
+    #
+    # (a) The property the fix rests on, at the module: with flux-INDEPENDENT
+    # stopping the surviving FRACTION does not depend on the launched flux, so
+    # the flux-faithful probe reproduces the historical unit-flux probe
+    # bit-for-bit; with the quasilinear closure it does depend on it (the
+    # relaxation length runs on n_b ~ Gamma0/(A v_b)), which is exactly the
+    # signal the unit-flux probe could not see.
+    _fx_cells = 40
+    _fx_dz = np.full(_fx_cells, 5.0)
+    _fx_kwargs = dict(
+        nn=np.full(_fx_cells, 1.0e13),
+        ne=np.full(_fx_cells, 1.0e12),
+        Te=np.full(_fx_cells, 3.0),
+        dz_cm=_fx_dz,
+        launch=0,
+        direction=1,
+        I_ion_eV=float(I_ion),
+    )
+    # Weak-beam domain (n_b < 0.1*ne), where the quasilinear closure is
+    # defined; above it the module returns an infinite relaxation length by
+    # design and the ray free-streams again.
+    _fx_flux = 1.0e20
+    _fx_lin = [
+        _deposit_beam_ray(200.0, g, anomalous_model="none", **_fx_kwargs)
+        for g in (1.0, _fx_flux)
+    ]
+    assert (
+        float(_fx_lin[1].transmitted_flux) / _fx_flux
+        == float(_fx_lin[0].transmitted_flux)
+    )
+    _fx_ql = [
+        _deposit_beam_ray(
+            200.0, g, anomalous_model="quasilinear",
+            beam_area_cm2=100.0, **_fx_kwargs,
+        )
+        for g in (1.0, _fx_flux)
+    ]
+    # Unit flux streams through; the real flux is stopped by its own QL drag.
+    assert float(_fx_ql[0].transmitted_flux) == 1.0
+    assert float(_fx_ql[1].transmitted_flux) == 0.0
+    # The probe-independent witness reads those same rays off their OWN
+    # bookkeeping, with no reference to the probe -- this is what makes an
+    # item-35-class probe defect visible without trusting the probe. The
+    # QL-stopped ray above dies 75 cm in, so where it lands relative to the
+    # gap is what decides breakout:
+    _fx_gap_short = _clip_ray_length(_fx_dz, 0, 1, 50.0)   # ray dies past it
+    _fx_gap_long = _clip_ray_length(_fx_dz, 0, 1, 100.0)   # ray dies inside it
+    assert _ray_gap_breakout(_fx_ql[1], _fx_gap_short, 0, 1) == 1.0
+    assert _ray_gap_breakout(_fx_ql[1], _fx_gap_long, 0, 1) == 0.0
+    # Rays that leave the far end cleared the gap by definition (the
+    # transmitted-flux shortcut, which also covers a sub-threshold ray whose
+    # E_entry profile is all zeros).
+    assert _ray_gap_breakout(_fx_ql[0], _fx_gap_long, 0, 1) == 1.0
+    assert _ray_gap_breakout(_fx_lin[1], _fx_gap_long, 0, 1) == 1.0
+    # Gap covering the whole path: no cell beyond it to sample, and the ray
+    # did not leave the far end either, so it died inside.
+    assert _ray_gap_breakout(
+        _fx_ql[1], _clip_ray_length(_fx_dz, 0, 1, 1.0e4), 0, 1
+    ) == 0.0
+
+    # (b) The same statement through the solver: this csda config runs
+    # anomalous_model="none", so the sigma_eff the adapter wrote must equal an
+    # independent re-derivation from the HISTORICAL unit-flux probe. A
+    # regression that made the flux-faithful probe non-flux-linear on the off
+    # arm would move the golden's off-path arms and fail here.
+    csda_state = csda_sim.state
+    csda_derived = derive_state(
+        csda_state, csda_sim._floors, csda_sim._ion_mass_g
+    )
+    csda_L_cath = float(csda_solve.device_config.L_cath)
+    csda_dir = beam_launch(csda_sim._geometry, end=0)[1]
+    csda_unit = _deposit_beam_ray(
+        csda_res.phi_c,
+        1.0,
+        nn=csda_state.nn,
+        ne=csda_state.n,
+        Te=csda_derived.Te,
+        dz_cm=_clip_ray_length(
+            csda_sim._geometry.length_cm, csda_launch, csda_dir, csda_L_cath
+        ),
+        launch=csda_launch,
+        direction=csda_dir,
+        I_ion_eV=float(csda_sim._I_ion),
+        coulomb_model=str(
+            csda_params.get("beam_coulomb_model", "fast_electron")
+        ),
+        anomalous_model="none",
+    )
+    csda_unit_T = min(max(float(csda_unit.transmitted_flux), 1.0e-6), 1.0)
+    csda_nn_launch = float(csda_state.nn[csda_launch])
+    csda_l_bi = _compute_l_b(
+        csda_res.phi_c,
+        float(csda_derived.Te[csda_launch]),
+        float(csda_state.n[csda_launch]),
+        0.0,
+        0.0,
+    )
+    csda_sigma_unit = max(
+        0.0,
+        (-math.log(csda_unit_T) / csda_L_cath - 1.0 / csda_l_bi)
+        / csda_nn_launch,
+    )
+    assert csda_sigma_eff == csda_sigma_unit
+
+    # --- Item 35 ledger tripwire: probe, deposition ray and circuit are three
+    # views of the SAME gap crossing, and nothing else in the model notices
+    # when they disagree (each side is internally consistent). On a healthy
+    # config all three agree and no warning fires.
+    csda_ledger = csda_solve.beam_gap_ledger
+    csda_eta = float(csda_solve.device_config.eta)
+    assert set(csda_ledger) == {0}
+    csda_probe, csda_ray, csda_booked = csda_ledger[0]
+    assert 0.0 < csda_probe <= 1.0 and 0.0 < csda_booked <= 1.0
+    assert beam_gap_ledger_mismatch(csda_ledger, csda_eta) is None
+    # The deposition ray's breakout is read off its OWN bookkeeping, so it is
+    # an independent witness: here the ray clears the gap and the probe agrees.
+    assert csda_ray == 1.0
+    assert csda_probe == csda_ray
+    # This healthy config sits ON the benign floor the tolerance is chosen to
+    # clear: the ray fully transmits, which the Beer-Lambert solve cannot
+    # represent above its Coulomb-only ceiling, so the clamp saturates and
+    # leaves a little unbooked. It must stay a small fraction of emitted beam
+    # power -- item 35 was 35% -- or the warning becomes noise.
+    assert 0.0 < csda_eta * (csda_ray - csda_booked) < 0.02
+    # The tripwire is a comparison, not an assertion about one side: an
+    # injected divergence must be caught and reported as the worst offender.
+    csda_trip = beam_gap_ledger_mismatch(
+        {0: (csda_probe, csda_ray, 0.5 * csda_ray)}, csda_eta
+    )
+    assert csda_trip is not None
+    assert csda_trip[0] == 0 and csda_trip[1] == "ray_vs_circuit"
+    assert np.isclose(csda_trip[4], 0.5 * csda_eta * csda_ray)
+    # A defect INSIDE the probe -- the item-35 class -- is caught by the
+    # probe-vs-ray leg even though the circuit faithfully tracks the (wrong)
+    # probe, which is exactly the configuration that stayed silent before.
+    # Pre-fix this ledger read probe=1.0 with the ray at 0.0.
+    csda_probe_defect = beam_gap_ledger_mismatch(
+        {0: (1.0, 0.0, 0.96529)}, csda_eta
+    )
+    assert csda_probe_defect is not None
+    assert csda_probe_defect[1] == "probe_vs_ray"
+    assert np.isclose(csda_probe_defect[4], csda_eta)
+    # ... and the warning it drives is emitted once per run, not per step.
+    csda_broken = SimpleNamespace(
+        beam_gap_ledger={0: (1.0, 0.0, 0.96529)},
+        device_config=SimpleNamespace(eta=csda_eta),
+    )
+    with warnings.catch_warnings(record=True) as csda_warned:
+        warnings.simplefilter("always")
+        csda_sim._beam_gap_ledger_warned = False
+        for _ in range(3):
+            csda_sim._warn_beam_gap_ledger(csda_broken)
+    csda_msgs = [
+        w for w in csda_warned if "beam gap ledger" in str(w.message)
+    ]
+    assert len(csda_msgs) == 1
+    assert "probe_vs_ray" in str(csda_msgs[0].message)
+    csda_sim._beam_gap_ledger_warned = False
+    # All three views are recorded as cathode diagnostics, defaulted on every
+    # run so a beer_lambert run (and an old file, which has none of the three
+    # datasets) stays readable.
+    csda_diag = csda_sim._cathode_diagnostic_snapshot()
+    assert csda_diag["source_beam_gap_survival_probe"] == csda_probe
+    assert csda_diag["source_beam_gap_survival_ray"] == csda_ray
+    assert csda_diag["source_beam_gap_survival_circuit"] == csda_booked
+    assert np.isnan(csda_diag["end_beam_gap_survival_ray"])
+    bl_diag = LAPDSim1D(
+        dict(exc_params), dict(cathode_flags)
+    )._cathode_diagnostic_snapshot()
+    for _bl_key in ("probe", "ray", "circuit"):
+        assert np.isnan(bl_diag[f"source_beam_gap_survival_{_bl_key}"])
 
     # --- R4.1 (audit A15): anode-mesh beam interception is the PRODUCTION DEFAULT
     # (correct csda physics), so csda_sim above already has it on -- the anode
