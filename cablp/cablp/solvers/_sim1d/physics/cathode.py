@@ -88,7 +88,7 @@ class CathodeSolve1D:
     # Per-end CSDA deposition results ({0: primary, -1: twin}), present only
     # under beam_deposition_model = "csda"; None keys mean no active beam.
     beam_deposition: dict | None = None
-    # Per-end ``(actual, booked)`` gap survival for the item-35 ledger
+    # Per-end ``(probe, ray, circuit)`` gap survival for the item-35 ledger
     # tripwire; keyed only for ends with an active CSDA ray. See
     # ``beam_gap_ledger_mismatch``.
     beam_gap_ledger: dict | None = None
@@ -906,7 +906,7 @@ def _csda_beam_deposition(
 
     Returns ``(deposition, gap_ledger)``. ``deposition`` is
     ``{0: BeamDepositionResult | None, -1: ...}``; ``gap_ledger`` maps each
-    end with an active ray to ``(actual, booked)`` gap survival for the
+    end with an active ray to ``(probe, ray, circuit)`` gap survival for the
     item-35 tripwire (see ``beam_gap_ledger_mismatch``). The call also
     rewrites
     ``beam_result.beam_atten_cross`` at each launch cell with the effective
@@ -988,6 +988,11 @@ def _csda_beam_deposition(
             if clumping
             else None
         )
+        # The gap's per-cell path length, shared by the probe below and by the
+        # deposition ray's own breakout test.
+        gap_dz = _clip_ray_length(
+            geometry.length_cm, launch, direction, L_cath
+        )
         if clumping:
             # Gap ray: background nn, penetrates (the fast far-end pedestal).
             gap_ray = deposit_beam(
@@ -1002,11 +1007,22 @@ def _csda_beam_deposition(
                 **clump_kwargs, **interception_kwargs,
             )
             dep = _sum_beam_deposition(gap_ray, clump_ray)
+            # Breakout is per-ray: the clump ray can die in the gap while the
+            # gap ray penetrates, so the split's gap survival is the
+            # flux-weighted mean. (`dep` cannot answer this -- it carries the
+            # elementwise MAX of the two E_entry profiles.)
+            ray_survival = (
+                (1.0 - f_clump)
+                * _ray_gap_breakout(gap_ray, gap_dz, launch, direction)
+                + f_clump
+                * _ray_gap_breakout(clump_ray, gap_dz, launch, direction)
+            )
         else:
             dep = deposit_beam(
                 result.phi_c, Gamma0, dz_cm=geometry.length_cm,
                 **ray_kwargs, **interception_kwargs,
             )
+            ray_survival = _ray_gap_breakout(dep, gap_dz, launch, direction)
         deposition[end] = dep
         # Gap transmission: gap-clipped probe rays MIRRORING the deposition
         # above -- same launched fluxes, same clump split, same nn per ray --
@@ -1019,9 +1035,6 @@ def _csda_beam_deposition(
         # (item 35, root-caused 2026-07-27). Under flux-INDEPENDENT stopping
         # (Coulomb CSDA, anomalous_model="none") the ray is flux-linear, so
         # the ratio below is bit-for-bit the historical unit-flux value.
-        gap_dz = _clip_ray_length(
-            geometry.length_cm, launch, direction, L_cath
-        )
         if Gamma0 > 0.0:
             if clumping:
                 gap_launch = (1.0 - f_clump) * Gamma0
@@ -1075,18 +1088,27 @@ def _csda_beam_deposition(
             )
         beam_result.beam_atten_cross[launch] = sigma_eff
         # --- Ledger tripwire (item 35) ---------------------------------
-        # The gap survival the ray actually delivers and the gap survival the
-        # circuit will reconstruct from the sigma_eff just written must be the
-        # same number. Reconstruct the circuit side with the CIRCUIT's own
-        # functions (not the adapter algebra inverted), so this is a real
-        # cross-check: it diverges exactly when the ``sigma_eff >= 0`` clamp
-        # saturates -- a transmission above the Coulomb-only ceiling
-        # ``exp(-L_cath/l_bi)``, which Beer-Lambert cannot represent -- or
-        # when a guard above leaves sigma_eff at 0. That is the silent state
-        # item 35 sat in: the circuit booked ~97% gap survival while the ray
-        # delivered ~0.
+        # Three views of ONE number -- the fraction of the emitted beam that
+        # crosses the cathode-anode gap -- which must agree, and which nothing
+        # else in the model compares:
+        #
+        #   probe    the gap-clipped probe's transmission (feeds sigma_eff)
+        #   ray      the DEPOSITION ray's own breakout, read off its internal
+        #            bookkeeping and completely independent of the probe
+        #   circuit  what the circuit reconstructs from the sigma_eff just
+        #            written, built with the CIRCUIT's own functions rather
+        #            than by inverting the adapter's algebra
+        #
+        # ``probe`` vs ``ray`` catches a defect INSIDE the probe -- the
+        # item-35 class, where the probe misreports the ray it is supposed to
+        # mirror. ``ray`` vs ``circuit`` catches the circuit failing to
+        # represent the ray, whatever the cause: adapter clamp saturation, or
+        # a broken probe that the adapter faithfully propagated. Item 35 sat
+        # silently in the second: the circuit booked ~97% gap survival while
+        # the deposition ray delivered 0.
         gap_ledger[end] = (
             transmission,
+            ray_survival,
             _compute_beam_bypass_fraction(
                 _compute_l_b(
                     result.phi_c,
@@ -1101,6 +1123,39 @@ def _csda_beam_deposition(
     return deposition, gap_ledger
 
 
+def _ray_gap_breakout(dep, gap_dz, launch, direction):
+    """Fraction of a CSDA ray's flux that crosses the gap: 1.0 or 0.0.
+
+    Probe-independent: it reads only the deposition ray's own bookkeeping.
+    A CSDA ray carries its flux unattenuated until it stops (the anode mesh
+    is the one exception, and it sits past the gap), so a single ray either
+    crosses the gap whole or dies inside it -- there is no partial survival
+    to measure. Fractional survival across the clumping split is handled by
+    the caller, which weights the two rays' breakouts by their launched flux.
+
+    ``dep.E_entry_eV`` is written for every cell the ray ENTERS and left at
+    zero for cells it never reached, so a positive entry energy in the first
+    cell beyond the gap means the ray got out. Reading entry energy (rather
+    than deposited energy) is what makes this exact even when the gap ends
+    mid-cell: entry energy is sampled before any of that cell's path is
+    consumed, so truncating the last gap cell cannot perturb it.
+    """
+    # Reached the far end of the domain, so it certainly cleared the gap.
+    # Also covers the sub-threshold ray, which passes through untouched and
+    # leaves E_entry all zeros.
+    if float(dep.transmitted_flux) > 0.0:
+        return 1.0
+    E_entry = np.asarray(dep.E_entry_eV, dtype=float)
+    cells = gap_dz.size
+    order = range(launch, cells) if direction > 0 else range(launch, -1, -1)
+    for cell in order:
+        if gap_dz[cell] <= 0.0:
+            return 1.0 if E_entry[cell] > 0.0 else 0.0
+    # The gap runs to the domain edge, so there is no cell beyond it to test;
+    # the ray did not leave the far end either, so it died inside the gap.
+    return 0.0
+
+
 # Tripwire tolerance, as a fraction of EMITTED BEAM POWER (see
 # ``beam_gap_ledger_mismatch``): 5%, roughly a decade above the benign
 # Coulomb-ceiling floor and a decade below the item-35 break.
@@ -1110,17 +1165,27 @@ BEAM_GAP_LEDGER_POWER_ATOL = 0.05
 def beam_gap_ledger_mismatch(gap_ledger, eta, atol=BEAM_GAP_LEDGER_POWER_ATOL):
     """Worst CSDA gap-survival ledger divergence, or ``None`` if all agree.
 
-    ``gap_ledger`` maps each active cathode end to ``(actual, booked)``: the
-    gap survival the CSDA deposition ray delivers, and the beam-bypass
-    fraction the circuit reconstructs from the ``sigma_eff`` written for the
-    next solve. Returns ``(end, actual, booked, power_fraction)`` for the
-    worst offender.
+    ``gap_ledger`` maps each active cathode end to ``(probe, ray, circuit)``
+    gap survival (see ``_csda_beam_deposition``). Two comparisons are made:
+
+    ``probe`` vs ``ray``
+        The probe must reproduce the deposition ray it mirrors. This is the
+        item-35 class: a probe that misreports the ray corrupts ``sigma_eff``
+        and therefore the circuit, and every internally-consistent check
+        downstream still passes.
+    ``ray`` vs ``circuit``
+        The circuit must be able to represent the ray. Fails on adapter clamp
+        saturation, and again -- independently -- whenever a broken probe has
+        been propagated into ``sigma_eff``.
+
+    Returns ``(end, kind, left, right, power_fraction)`` for the worst
+    offender, where ``kind`` is ``"probe_vs_ray"`` or ``"ray_vs_circuit"``.
 
     The tolerance is stated on the quantity that matters rather than on the
     survival fractions themselves. The circuit debits
-    ``eta * f_bypass * I_eth_star * V_b``, so ``eta * |booked - actual|`` is
-    the fraction of emitted beam power booked to a bypass the fluid never
-    loses (or vice versa) -- the ledger hole itself.
+    ``eta * f_bypass * I_eth_star * V_b``, so ``eta * |left - right|`` is the
+    fraction of emitted beam power booked to a bypass the fluid never loses
+    (or vice versa) -- the ledger hole itself.
 
     A small benign floor is unavoidable and must stay below ``atol``: a
     fully-transmitting ray cannot be represented above the Beer-Lambert
@@ -1129,18 +1194,22 @@ def beam_gap_ledger_mismatch(gap_ledger, eta, atol=BEAM_GAP_LEDGER_POWER_ATOL):
     unbooked. That floor is self-limiting -- saturation needs a transmitting
     ray, which needs a long ``l_bi``, which makes the ceiling shortfall
     small -- and measures 0.3-1.3% of emitted beam power across the
-    campaign's long-mfp states. Item 35 sat at 35%.
+    campaign's long-mfp states. Item 35 reads 35.8% on ``probe_vs_ray`` and
+    34.6% on ``ray_vs_circuit``.
     """
     eta = float(eta)
     worst = None
     for end, entry in (gap_ledger or {}).items():
         if entry is None:
             continue
-        actual = float(entry[0])
-        booked = float(entry[1])
-        power = eta * abs(booked - actual)
-        if power > atol and (worst is None or power > worst[3]):
-            worst = (int(end), actual, booked, power)
+        probe, ray, circuit = (float(v) for v in entry)
+        for kind, left, right in (
+            ("probe_vs_ray", probe, ray),
+            ("ray_vs_circuit", ray, circuit),
+        ):
+            power = eta * abs(left - right)
+            if power > atol and (worst is None or power > worst[4]):
+                worst = (int(end), kind, left, right, power)
     return worst
 
 

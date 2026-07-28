@@ -4151,10 +4151,10 @@ class LAPDSim1D:
 
         The circuit charges ``eta * f_bypass`` of the emitted beam power to a
         beam it believes crosses the cathode-anode gap without coupling; the
-        fluid deposits whatever the CSDA ray actually delivers. Those two
-        views of the same gap must agree, and they disagree silently -- no
-        conservation check sees it, because each side is internally
-        consistent. This is the state item 35 sat in.
+        fluid deposits whatever the CSDA ray actually delivers. Those views of
+        the same gap must agree, and they disagree silently -- no conservation
+        check sees it, because each side is internally consistent. This is the
+        state item 35 sat in.
         """
         if self._beam_gap_ledger_warned:
             return
@@ -4167,20 +4167,35 @@ class LAPDSim1D:
         )
         if worst is None:
             return
-        end, actual, booked, power = worst
+        end, kind, left, right, power = worst
+        cause = {
+            "probe_vs_ray": (
+                "the gap probe reads {left:.6g} while the deposition ray it "
+                "is supposed to mirror delivers {right:.6g}. The probe is "
+                "misreporting the ray, so the sigma_eff it writes -- and "
+                "every circuit quantity downstream of it -- is wrong. This is "
+                "the item-35 signature; suspect a launched flux, clump split "
+                "or stopping model that the probe and the deposition ray no "
+                "longer share"
+            ),
+            "ray_vs_circuit": (
+                "the deposition ray delivers gap survival {left:.6g} while "
+                "the circuit books a beam-bypass fraction of {right:.6g}. The "
+                "usual cause is a gap transmission above the Beer-Lambert "
+                "solve's Coulomb-only ceiling exp(-L_cath/l_bi), where the "
+                "sigma_eff >= 0 clamp saturates and the adapter cannot "
+                "represent the ray"
+            ),
+        }[kind].format(left=left, right=right)
         self._beam_gap_ledger_warned = True
         warnings.warn(
-            "CSDA beam gap ledger does not close at cathode end "
-            f"{end}: the deposition ray delivers gap survival {actual:.6g}, "
-            f"but the circuit books a beam-bypass fraction of {booked:.6g}. "
-            f"That mis-books {100.0 * power:.3g}% of the emitted beam power "
-            f"(tolerance {100.0 * BEAM_GAP_LEDGER_POWER_ATOL:g}%) -- the "
-            "circuit is debiting beam power the fluid does not lose, or vice "
-            "versa, and no conservation check sees it because each side is "
-            "internally consistent. The usual cause is a gap transmission "
-            "above the Beer-Lambert solve's Coulomb-only ceiling "
-            "exp(-L_cath/l_bi), where the sigma_eff >= 0 clamp saturates and "
-            "the adapter cannot represent the ray. Warned once per run.",
+            f"CSDA beam gap ledger does not close at cathode end {end} "
+            f"({kind}): {cause}. That mis-books {100.0 * power:.3g}% of the "
+            f"emitted beam power (tolerance "
+            f"{100.0 * BEAM_GAP_LEDGER_POWER_ATOL:g}%) -- the circuit is "
+            "debiting beam power the fluid does not lose, or vice versa, and "
+            "no conservation check sees it because each side is internally "
+            "consistent. Warned once per run.",
             stacklevel=2,
         )
 
@@ -5655,12 +5670,15 @@ class LAPDSim1D:
             diag[f"{prefix}_beam_anode_intercepted_W"] = 0.0
             diag[f"{prefix}_beam_transmitted_W"] = 0.0
             diag[f"{prefix}_beam_transmitted_flux_per_s"] = 0.0
-            # Item-35 gap-survival ledger, the two views of the same gap that
-            # must agree: what the CSDA deposition ray delivers past L_cath
-            # (``_ray``) and what the circuit's Beer-Lambert bypass books from
-            # the sigma_eff written for the next solve (``_circuit``). NaN
-            # where no CSDA ray ran; runs saved before 2026-07-28 have neither
-            # dataset (readers must default).
+            # Item-35 gap-survival ledger: three views of the fraction of the
+            # emitted beam that crosses the cathode-anode gap, which must
+            # agree. ``_probe`` is the gap-clipped probe that feeds sigma_eff,
+            # ``_ray`` is the deposition ray's own breakout (independent of
+            # the probe), ``_circuit`` is what the Beer-Lambert bypass books
+            # from the sigma_eff written for the next solve. NaN where no CSDA
+            # ray ran; runs saved before 2026-07-28 have none of the three
+            # datasets (readers must default).
+            diag[f"{prefix}_beam_gap_survival_probe"] = np.nan
             diag[f"{prefix}_beam_gap_survival_ray"] = np.nan
             diag[f"{prefix}_beam_gap_survival_circuit"] = np.nan
         for prefix in ("source", "end"):
@@ -5723,8 +5741,9 @@ class LAPDSim1D:
             if entry is None:
                 continue
             prefix = prefixes[int(end)]
-            diag[f"{prefix}_beam_gap_survival_ray"] = float(entry[0])
-            diag[f"{prefix}_beam_gap_survival_circuit"] = float(entry[1])
+            diag[f"{prefix}_beam_gap_survival_probe"] = float(entry[0])
+            diag[f"{prefix}_beam_gap_survival_ray"] = float(entry[1])
+            diag[f"{prefix}_beam_gap_survival_circuit"] = float(entry[2])
         deposition = getattr(cathode_solve, "beam_deposition", None)
         if not deposition:
             return
