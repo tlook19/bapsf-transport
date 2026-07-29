@@ -383,6 +383,23 @@ def timing_defaults():
         Afterglow duration after the main discharge [s].
     tau_cycle:
         Neutral-only puff/off cycle duration [s].
+    equilibration_gas_puff_on_s:
+        Per-cycle gas-puff ON window of the neutral-equilibration inner sim [s].
+        ``None`` (the default) keeps the historical behaviour exactly: the
+        window is ``tau_discharge``, i.e. the equilibration inherits the
+        MAIN-DISCHARGE duration as its puff width.
+
+        That inheritance is a double duty with no physical basis. The measured
+        hardware quantity (Tom, 2026-07-29, boxed): the ES1-4 total gas-puff
+        pulse width was ~25 ms -- the operator fires the valve, waits out the
+        machine breakdown delay (~4-6 ms), holds 20 ms from 1 kA, and rounds
+        up. It is measurable from the V_dis traces, so this number is
+        refinable, not fitted.
+
+        Read ONLY by the ``Plasma=False`` equilibration inner sim; the main
+        run's puff is closed by its own waveform envelope, never by this
+        window. Must be > 0 and (when ``tau_cycle`` > 0) <= ``tau_cycle``;
+        anything else raises at construction.
     cycles:
         Number of neutral-only cycles used by the default run duration.
     neutral_equilibration_cycles:
@@ -419,6 +436,7 @@ def timing_defaults():
         "tau_discharge": 20e-3,
         "tau_afterglow": 5e-3,
         "tau_cycle": 3.0,
+        "equilibration_gas_puff_on_s": None,
         "cycles": 1,
         "neutral_equilibration_cycles": 100,
         "neutral_equilibration_dt": 1e-2,

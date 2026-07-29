@@ -599,6 +599,7 @@ class LAPDSim1D:
             )
         self._validate_r1_configuration_presence()
         self._validate_neutral_seed_cache_config()
+        self._validate_equilibration_gas_puff_on()
         _x = float(self._input_dict.get("R_comp_partition", 1.0))
         if not (0.0 <= _x <= 1.0):
             raise ValueError(
@@ -1261,6 +1262,40 @@ class LAPDSim1D:
                         f"{floor_name} when raw_stage_validation=True "
                         f"(got {initial} <= {floor})"
                     )
+
+    def _validate_equilibration_gas_puff_on(self):
+        """Reject a nonsense equilibration puff width (loud, at construction).
+
+        ``equilibration_gas_puff_on_s`` overrides the neutral-equilibration
+        inner sim's per-cycle puff-ON window. ``None`` means "unset" (fall back
+        to ``tau_discharge``); anything else must be a real, finite, positive
+        duration that fits inside one puff/off cycle. A zero, negative, or
+        longer-than-the-cycle value would silently produce a 0% or >100% duty
+        instead of the measured window.
+        """
+        raw = self._input_dict.get("equilibration_gas_puff_on_s", None)
+        if raw is None:
+            return
+        try:
+            puff_on = float(raw)
+        except (TypeError, ValueError):
+            raise ValueError(
+                "equilibration_gas_puff_on_s (the equilibration puff-ON window "
+                f"[s]) must be a number or None (got {raw!r})"
+            ) from None
+        if not np.isfinite(puff_on) or puff_on <= 0.0:
+            raise ValueError(
+                "equilibration_gas_puff_on_s (the equilibration puff-ON window "
+                f"[s]) must be finite and > 0 (got {puff_on!r}); use None to "
+                "fall back to tau_discharge"
+            )
+        tau_cycle = float(self._input_dict.get("tau_cycle", 0.0))
+        if tau_cycle > 0.0 and puff_on > tau_cycle:
+            raise ValueError(
+                "equilibration_gas_puff_on_s (the equilibration puff-ON window "
+                f"[s]) must fit inside one puff/off cycle: got {puff_on!r} > "
+                f"tau_cycle={tau_cycle!r}"
+            )
 
     def _validate_neutral_seed_cache_config(self):
         """Reject an incoherent cached-neutral-seed configuration (loud, at build).
@@ -3561,6 +3596,73 @@ class LAPDSim1D:
     def _plasma_phase_time_origin(self):
         return self._neutral_prebreakdown_duration()
 
+    def _equilibration_puff_on_duration(self):
+        """Per-cycle gas-puff ON window [s] of the neutral-equilibration sim.
+
+        Only the ``Plasma=False`` equilibration inner sim reads this; the main
+        run's puff is closed by its own waveform envelope, not by this window.
+
+        ``equilibration_gas_puff_on_s`` unset (``None``) falls back to
+        ``tau_discharge`` -- the historical double duty, kept bit-exact.
+        """
+        override = self._input_dict.get("equilibration_gas_puff_on_s", None)
+        if override is None:
+            return max(float(self._input_dict.get("tau_discharge", 0.0)), 0.0)
+        return float(override)
+
+    def _equilibration_puff_on_reason(self):
+        """Name of the quantity that closes the equilibration puff window."""
+        if self._input_dict.get("equilibration_gas_puff_on_s", None) is None:
+            return "tau_discharge"
+        return "equilibration_gas_puff_on_s"
+
+    def _equilibration_cycle_position(self, time):
+        """Return ``(cycle_index, cycle_time)`` on the equilibration puff lattice.
+
+        The SINGLE source of truth for where an absolute time sits inside the
+        neutral-equilibration puff/off cycle. Both ``_phase_info`` (which phase
+        is this?) and ``next_phase_boundary_after`` (which instant does the run
+        loop step to?) read it, so the two cannot disagree about the puff-off
+        instant.
+
+        A ``time`` that sits a hair BELOW a lattice point -- the ordinary result
+        of stepping exactly onto a boundary in floating point -- is snapped UP
+        onto it.
+
+        Item 37 (nn-IC diagnostician, 2026-07-27): before this was shared,
+        ``next_phase_boundary_after`` dropped the puff-off boundary whenever it
+        fell inside the run loop's ``time_tol``, while the untolerated modulo in
+        ``_phase_info`` still read "puff" -- so the puff stayed ON for one whole
+        extra step and the equilibration over-fuelled relative to its configured
+        duty (measured at the default schedule, dt=1e-2, 100 cycles: +12.0% for
+        tau_discharge=20 ms, +41.0% for 0.0195, +105.3% for 0.0075). The
+        tolerance below is relative to the lattice and the elapsed time, and is
+        deliberately NOT the run loop's ``t_end``-scaled ``time_tol``: both
+        readers must apply the SAME rule, and that rule must not depend on how
+        long the run happens to be.
+        """
+        time = max(float(time), 0.0)
+        tau_cycle = max(float(self._input_dict.get("tau_cycle", 0.0)), 0.0)
+        puff_on = self._equilibration_puff_on_duration()
+        tol = 1e-12 * max(time, tau_cycle, puff_on)
+        if tau_cycle <= 0.0:
+            cycle_index = 0.0
+            cycle_time = time
+        else:
+            cycle_index = float(np.floor(time / tau_cycle))
+            cycle_time = time - cycle_index * tau_cycle
+            if cycle_time < 0.0:
+                # the division rounded up onto the next cycle
+                cycle_index -= 1.0
+                cycle_time = time - cycle_index * tau_cycle
+            if cycle_time >= tau_cycle - tol:
+                # a hair below the cycle end IS the next cycle's start
+                cycle_index += 1.0
+                cycle_time = 0.0
+        if 0.0 < puff_on and cycle_time < puff_on <= cycle_time + tol:
+            cycle_time = puff_on
+        return cycle_index, cycle_time
+
     def next_phase_boundary_after(self, time, t_end=None, time_tol=0.0):
         """Return the next diagnostic phase boundary after ``time`` [s]."""
         time = max(float(time), 0.0)
@@ -3573,28 +3675,37 @@ class LAPDSim1D:
             return t_end is None or boundary <= t_end + time_tol
 
         if not self._flags.get("Plasma", True):
-            tau_discharge = max(
-                float(self._input_dict.get("tau_discharge", 0.0)),
-                0.0,
-            )
+            # Equilibration lattice: read the cycle position from the SHARED
+            # helper and compare boundaries against that snapped position. The
+            # run loop's t_end-scaled ``time_tol`` governs only the t_end
+            # window here -- it must NOT decide the puff-off instant, because
+            # ``_phase_info`` cannot see it (item 37, see
+            # ``_equilibration_cycle_position``).
+            def in_end_window(boundary):
+                return t_end is None or boundary <= t_end + time_tol
+
+            puff_on = self._equilibration_puff_on_duration()
             tau_cycle = max(float(self._input_dict.get("tau_cycle", 0.0)), 0.0)
+            cycle_index, cycle_time = self._equilibration_cycle_position(time)
             if tau_cycle <= 0.0:
-                if in_run_window(tau_discharge):
-                    return tau_discharge
+                # One puff window, never repeated: its close is the only
+                # boundary, and only while the puff is still open.
+                if cycle_time < puff_on and in_end_window(puff_on):
+                    return float(puff_on)
                 return None
 
-            cycle_index = np.floor(time / tau_cycle)
             cycle_start = cycle_index * tau_cycle
+            snapped = cycle_start + cycle_time
             cycle_end = cycle_start + tau_cycle
             boundaries = []
-            if 0.0 < tau_discharge < tau_cycle:
-                boundaries.append(cycle_start + tau_discharge)
+            if 0.0 < puff_on < tau_cycle:
+                boundaries.append(cycle_start + puff_on)
             boundaries.append(cycle_end)
-            if 0.0 < tau_discharge < tau_cycle:
-                boundaries.append(cycle_end + tau_discharge)
+            if 0.0 < puff_on < tau_cycle:
+                boundaries.append(cycle_end + puff_on)
             boundaries.append(cycle_end + tau_cycle)
             for boundary in boundaries:
-                if in_run_window(boundary):
+                if boundary > snapped and in_end_window(boundary):
                     return float(boundary)
             return None
 
@@ -5678,24 +5789,23 @@ class LAPDSim1D:
 
         append_event(run_start, self.phase_at_time(run_start), "initial")
         if not self._flags.get("Plasma", True):
-            tau_discharge = max(
-                float(self._input_dict.get("tau_discharge", 0.0)),
-                0.0,
-            )
+            # Same window the run loop actually delivers (item 37).
+            puff_on = self._equilibration_puff_on_duration()
+            puff_reason = self._equilibration_puff_on_reason()
             tau_cycle = max(float(self._input_dict.get("tau_cycle", 0.0)), 0.0)
             if tau_cycle <= 0.0:
-                append_event(tau_discharge, "equilibrium_off", "tau_discharge")
+                append_event(puff_on, "equilibrium_off", puff_reason)
                 return _phase_event_arrays(events)
 
-            cycle_index = np.floor(run_start / tau_cycle)
+            cycle_index, _ = self._equilibration_cycle_position(run_start)
             cycle_start = cycle_index * tau_cycle
             while cycle_start <= final_time + 1e-15:
                 cycle_end = cycle_start + tau_cycle
-                if 0.0 < tau_discharge < tau_cycle:
+                if 0.0 < puff_on < tau_cycle:
                     append_event(
-                        cycle_start + tau_discharge,
+                        cycle_start + puff_on,
                         "equilibrium_off",
-                        "tau_discharge",
+                        puff_reason,
                     )
                 append_event(cycle_end, "equilibrium_puff", "tau_cycle")
                 cycle_start = cycle_end
@@ -5792,14 +5902,11 @@ class LAPDSim1D:
         time = max(float(time), 0.0)
         tau_discharge = max(float(self._input_dict.get("tau_discharge", 0.0)), 0.0)
         if not self._flags.get("Plasma", True):
-            tau_cycle = max(float(self._input_dict.get("tau_cycle", 0.0)), 0.0)
-            if tau_cycle <= 0.0:
-                cycle_time = time
-            else:
-                cycle_time = time % tau_cycle
-            if cycle_time < tau_discharge:
+            puff_on = self._equilibration_puff_on_duration()
+            _, cycle_time = self._equilibration_cycle_position(time)
+            if cycle_time < puff_on:
                 return "equilibrium_puff", cycle_time
-            return "equilibrium_off", cycle_time - tau_discharge
+            return "equilibrium_off", cycle_time - puff_on
 
         tau_prebreakdown = max(
             float(self._input_dict.get("tau_prebreakdown", 0.0)),
