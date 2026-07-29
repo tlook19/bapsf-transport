@@ -178,6 +178,30 @@ FLAG_OVERRIDES = {
 }
 
 
+# WP-D beam product transport (BEAM_DEPOSITION_PLAN). "local" is the
+# production stance and the config.py default, so it is deliberately absent
+# from PARAM_OVERRIDES; "nonlocal" is an A/B arm that must travel with the run
+# it scored. Reported as a delta only -- a production (local) artifact scores
+# byte-identically to its recorded _scores.txt, and a nonlocal one says so.
+BEAM_PRODUCT_TRANSPORT_DEFAULT = "local"
+
+
+def beam_product_transport_note(params):
+    """Return a label suffix naming a non-default beam_product_transport.
+
+    Empty string on the production stance (and on a run too old to carry the
+    key), so this only ever ADDS a line where the stance actually differs.
+    """
+    value = str(
+        (params or {}).get(
+            "beam_product_transport", BEAM_PRODUCT_TRANSPORT_DEFAULT
+        )
+    )
+    if value == BEAM_PRODUCT_TRANSPORT_DEFAULT:
+        return ""
+    return f" [beam_product_transport={value}]"
+
+
 def non_ignited_message(result, caller):
     """Return the NON-IGNITED diagnosis for a run with no main_discharge.
 
@@ -1415,6 +1439,19 @@ def main(argv=None):
         ),
     )
     parser.add_argument(
+        "--beam-product-transport",
+        default=None,
+        choices=("local", "nonlocal"),
+        help=(
+            "beam product transport for the WP-D A/B "
+            "(BEAM_DEPOSITION_PLAN.md): local (production stance and "
+            "config default -- products thermalize where they are born) or "
+            "nonlocal (products walk, and the escape ledger is live). "
+            "nonlocal requires the CSDA deposition module and raises at "
+            "construction under --beam-deposition beer_lambert"
+        ),
+    )
+    parser.add_argument(
         "--es",
         type=int,
         choices=(1, 2, 3, 4),
@@ -1474,6 +1511,9 @@ def main(argv=None):
         result = load_result_hdf5(args.from_h5)
         geometry = None
         label = f"saved run {args.from_h5}"
+        # The artifact's own config is the authority on which arm it is; a
+        # nonlocal run must not be scored under a production-stance label.
+        label += beam_product_transport_note(getattr(result, "params", None))
     else:
         label = f"resolved ({args.exchange_model}, nx={args.nx or 'default'})"
         if args.drag_closure is not None:
@@ -1500,6 +1540,12 @@ def main(argv=None):
             )
             if args.beam_deposition == "csda_ql":
                 extra["beam_anomalous_model"] = "quasilinear"
+        # WP-D arm. Lands in `extra`, which run_model applies LAST, so it wins
+        # over PARAM_OVERRIDES; PARAM_OVERRIDES itself never sets the key, so
+        # omitting the flag reproduces the production stance exactly.
+        if args.beam_product_transport is not None:
+            extra["beam_product_transport"] = args.beam_product_transport
+            label += beam_product_transport_note(extra)
         try:
             result, geometry, params, flags = run_model(
                 nx=args.nx,

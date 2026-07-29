@@ -90,7 +90,12 @@ def report(path):
     plateau = (t_ms >= 15.0) & (t_ms <= min(19.5, t_end))
     early = (t_ms >= 1.0) & (t_ms <= 5.0)
 
-    print(f"\n=== {path} (drive end +{t_end:.2f} ms) ===")
+    # WP-D arm marker. Printed as a delta only: "local" is the production
+    # stance and the config default, so a production artifact's fingerprint
+    # output is unchanged and a nonlocal one cannot be mistaken for one.
+    bpt = str(params.get("beam_product_transport", "local"))
+    bpt_note = "" if bpt == "local" else f" [beam_product_transport={bpt}]"
+    print(f"\n=== {path} (drive end +{t_end:.2f} ms){bpt_note} ===")
     Ipk = float(np.max(I[drive]))
     tpk = float(t_ms[drive][np.argmax(I[drive])])
     Iplat = float(np.median(I[plateau])) if plateau.any() else np.nan
