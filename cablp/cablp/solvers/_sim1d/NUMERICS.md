@@ -217,9 +217,25 @@ physically-motivated candidate bounds, then clamps to `[dt_min, dt_max]`:
 The solver attempts a candidate step without committing state
 (`_attempt_step`), then validates it. On a **non-finite** or otherwise invalid
 state the step is **rejected and retried with a reduced Δt** (`retry_count`,
-`rejection_reason`, `TimestepRejectionError`). `BreakdownError` is raised for
-unrecoverable breakdown conditions. Rejection events and constraint histories
-are stored for post-run diagnostics.
+`rejection_reason`, `TimestepRejectionError`). Rejection events and constraint
+histories are stored for post-run diagnostics.
+
+A run that fails to IGNITE is not a step rejection but a phase transition. Two
+guards, both armed only while the cathode drive is on and the run is still
+pre-ignition, open the cathode switch and route the run through the ordinary
+afterglow to a finite end time (`core/ignition.py`):
+
+- the **stall detector** — `gamma_N <= 0` AND `d(Ee_total)/dt <= 0` for every
+  saved sample across a 2.5 ms sustained window (a structural joint condition
+  with no tuned rates and no clock in the verdict), phase event reason
+  `ignition_stalled`;
+- the **`tau_prebreakdown` timeout** — the machine's own 50 ms hardware guard,
+  phase event reason `prebreakdown_timeout`. `prebreakdown_timeout_action`
+  selects between this (`"switch_open"`, default) and the historical
+  `BreakdownError` (`"raise"`, which loses the in-progress trajectory).
+
+Both leave the run without a `main_discharge` phase, and the ES scorers refuse
+to score such a run.
 
 The R1 `raw_stage_validation` repair additionally inspects both
 SSPRK candidates and implicit heat/neutral candidates *before* floors are

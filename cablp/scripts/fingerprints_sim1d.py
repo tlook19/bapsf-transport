@@ -26,11 +26,49 @@ import numpy as np
 from cablp.solvers._sim1d import load_result_hdf5
 
 
+def non_ignited_message(result, caller):
+    """Return the NON-IGNITED diagnosis for a run with no main_discharge.
+
+    Every fingerprint is defined relative to the main-discharge origin. A run
+    that never reached that phase has no origin, and the old ``times[0]``
+    fallback silently reported pre-breakdown noise as drive-phase
+    fingerprints. Fail loudly instead, naming the terminal phase and any
+    ignition guard that fired.
+    """
+    phases = np.asarray(getattr(result, "phase", ()), dtype=str)
+    terminal = str(phases[-1]) if phases.size else "<no samples>"
+    events = getattr(result, "phase_events", None) or {}
+    reasons = [str(reason) for reason in np.asarray(events.get("reason", ()))]
+    times = np.asarray(events.get("time", ()), dtype=float)
+    guards = [
+        f"{reason} at t={time:.6e} s"
+        for time, reason in zip(times, reasons)
+        if reason in {"ignition_stalled", "prebreakdown_timeout"}
+    ]
+    abort = getattr(result, "ignition_abort", None)
+    guard_text = "; ".join(guards) if guards else "no ignition-guard event"
+    abort_text = ""
+    if abort:
+        abort_text = " | ignition_abort: " + " ".join(
+            f"{key}={abort[key]}" for key in sorted(abort)
+        )
+    return (
+        f"NON-IGNITED RUN: {caller} found no sample in the 'main_discharge' "
+        f"phase, so this run has no discharge origin and CANNOT be "
+        f"fingerprinted. Terminal phase: {terminal!r}. Ignition guards: "
+        f"{guard_text}{abort_text}"
+    )
+
+
 def _origin_s(result):
     phases = np.asarray(getattr(result, "phase", ()), dtype=str)
     times = np.asarray(result.time, dtype=float)
     hits = np.flatnonzero(phases == "main_discharge")
-    return float(times[hits[0]]) if hits.size else float(times[0])
+    if not hits.size:
+        raise RuntimeError(
+            non_ignited_message(result, "fingerprints_sim1d._origin_s")
+        )
+    return float(times[hits[0]])
 
 
 def _drive_end_ms(t_ms, phases):

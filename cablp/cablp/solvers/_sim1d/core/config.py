@@ -398,6 +398,19 @@ def timing_defaults():
         Cathode total-current threshold for leaving pre-breakdown [A].
     I_breakdown:
         Cathode total-current threshold for entering main discharge [A].
+    prebreakdown_timeout_action:
+        What happens when ``tau_prebreakdown`` elapses without a breakdown
+        trigger. ``"switch_open"`` (default) mirrors the machine's own hardware
+        guard: the cathode switch OPENS, a ``"prebreakdown_timeout"`` phase
+        event is recorded, and the run winds down through the existing
+        afterglow machinery to a finite end time instead of crawling at a
+        collapsed timestep. ``"raise"`` is the historical behavior -- a
+        ``BreakdownError`` is raised and the in-progress trajectory is lost;
+        it is retained for the sweep drivers that classify a point from that
+        exception. Only consulted under
+        ``phase_transition_mode="current"`` (the scheduled scheduler has no
+        breakdown trigger to miss). The 0.05 s ``tau_prebreakdown`` value
+        itself is hardware-boxed and is not a knob.
     """
     return {
         "tau_prebreakdown": 0.05,
@@ -412,6 +425,7 @@ def timing_defaults():
         "phase_transition_mode": "current",
         "I_prebreakdown": 150.0,
         "I_breakdown": 1000.0,
+        "prebreakdown_timeout_action": "switch_open",
     }
 
 
