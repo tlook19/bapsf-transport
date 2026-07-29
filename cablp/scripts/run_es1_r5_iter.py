@@ -6,8 +6,10 @@ config (compare_sim1d_es1.run_model -> PARAM_OVERRIDES: end-expansion geometry,
 tr_bdf2/strang, ADAS, R_comp=5.72 mOhm) with the R5 circuit/thermal overrides:
 
   --sgp        gas-puff source; raises MID-port density AND current
-  --ts-base    cathode standby temperature (cathode_Ts_base_K); the PRIMARY
-               current lever (~29 A/K). Default = ES standby - 70 K.
+  --ts-base    cathode standby temperature (cathode_Ts_base_K); a ~29 A/K
+               current derivative, but MEASURED, not a tuning knob (the ES
+               calibration lives on the effective C_R since 2026-07-29).
+               Default = the measured ES standby, no offset.
   --R-comp     TOTAL loop series resistance [Ohm] (sets current)
   --x          R_comp_partition: R_external=x*R_comp (in V_dis),
                R_internal=(1-x)*R_comp (probe->plasma, invisible to V_dis)
@@ -48,7 +50,8 @@ def main(argv=None):
     ap.add_argument("--nx", type=int, default=60)
     ap.add_argument("--sgp", type=float, required=True)
     ap.add_argument("--ts-base", type=float, default=None,
-                    help="cathode_Ts_base_K; default = ES standby - 70 K")
+                    help="cathode_Ts_base_K; default = the MEASURED ES "
+                         "standby (no offset)")
     ap.add_argument("--R-comp", type=float, default=None,
                     help="total loop R [Ohm]; default PARAM_OVERRIDES 5.72e-3")
     ap.add_argument("--x", type=float, default=None,
@@ -111,7 +114,13 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     op = ES_OPERATING[args.es]
-    ts_base = args.ts_base if args.ts_base is not None else op["Ts_standby_K"] - 70.0
+    # Default = the MEASURED standby, no offset (cathode calibration
+    # reparameterized 2026-07-29: the retired -70 K default reproduced the
+    # calibrated stance that now lives on the effective C_R, so leaving it
+    # here would double-count the same flat direction on every run that did
+    # not pass --ts-base). --ts-base remains available as the explicit
+    # stability-derivative probe.
+    ts_base = args.ts_base if args.ts_base is not None else op["Ts_standby_K"]
 
     extra = {
         "V_bank": op["V_bank"],

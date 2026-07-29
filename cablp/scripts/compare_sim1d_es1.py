@@ -133,11 +133,58 @@ PARAM_OVERRIDES = {
     # promoted -- they buy runtime, not physics, and belong on the command
     # line of the run that wants them.
     #
-    # Cathode power balance, co-tuned with S_gp at the ES1 rung: the standby
-    # sits 70 K below the ES_OPERATING measurement (1910 K) and the
+    # Cathode power balance, co-tuned with S_gp at the ES1 rung: the
     # skin->substrate conduction is the one fitted knob, frozen after ES1.
-    "cathode_Ts_base_K": 1840.0,
     "cathode_conduction_W_per_K": 8000.0,
+    # --- CATHODE CALIBRATION REPARAMETERIZED (Tom, 2026-07-29) ------------
+    # The retired stance carried the calibration on the standby temperature
+    # ("cathode_Ts_base_K": 1840.0 here, 70 K below the measurement). That
+    # mislabelled a MEASURED quantity as a fit: the ES1 standby is the
+    # Fig-10 digitized 1910 K (ES_OPERATING[1]["Ts_standby_K"], also the
+    # config.py default), so the pin is GONE and the stance inherits it.
+    #
+    # The same calibration now sits on C_R, which the cathode literature
+    # already treats as an EFFECTIVE emission constant (surface state,
+    # patch fields, non-ideal emitting fraction), not the 120 A/cm^2/K^2
+    # Richardson-Dushman universal. Its value is DERIVED, not refitted, by
+    # matching the emission at the operating point in the code's own
+    # expression J = C_R T^2 exp(-e phi/(kB T)):
+    #
+    #   J(C_R_eff, T + dT) = J(29.0, T)
+    #   =>  C_R_eff = 29.0 * (T/(T+dT))^2 * exp(-(e phi/kB)(1/T - 1/(T+dT)))
+    #
+    #   T   = 1859.02 K   plateau T_s_surface, mean over 15-19.5 ms on the
+    #                     main-discharge clock of the reference production
+    #                     run es1_prod_25ms_nx240.h5
+    #   dT  = +70 K       the base-temperature move (1910 - 1840), taken to
+    #                     propagate ~1:1 into the plateau at fixed heater
+    #                     power (the warming balance's restoring term is
+    #                     G_cond*(T_s - T_base), so a rigid base shift
+    #                     translates the operating point). ASSUMPTION -- the
+    #                     revalidation run is what tests it.
+    #   phi = 2.809 eV    the work function the emission actually evaluates
+    #                     at the plateau: cathode_phiwf_clean_eV, since the
+    #                     ads_des surface is fully cleaned there
+    #                     (recorded phi_wf_eff = 2.809, theta ~ 1e-19).
+    #                     The uncleaned shot-start phi_wf = 2.869 would give
+    #                     14.06, a 1.4% difference well inside the residual
+    #                     below.
+    #
+    # => C_R_eff = 14.2546 -> 14.25 adopted (14.3 to 3 s.f.; the extra digit
+    #    keeps the point-emission match at 0.03%, inside the 0.1% the
+    #    derivation was pre-registered to hit).
+    #
+    # This is a stance promotion, NOT a flagged feature: nothing here is
+    # bit-exact with the retired stance. The match is exact only at the
+    # plateau point; the flat direction (~103 K per e-fold of emission,
+    # recorded) is not perfectly flat, so residual dynamics shifts of order
+    # the ~10% ramp-gain slope across it are ACCEPTED and revalidated by
+    # run, not tuned away. Standby emission is not matched exactly either
+    # (1910 K on C_R_eff vs 1840 K on 29.0 emits 1.4% more at phi = 2.809,
+    # 2.8% at 2.869) -- the ln J curvature between 1840 K and the 1859 K
+    # matching point, i.e. the same flat-direction residual seen off the
+    # operating point.
+    "C_R": 14.25,
     # Beam deposition smoothed over 50 cm. The CSDA range profile is sharp on
     # the mesh scale; this spreads it over the physical straggling width so
     # the deposited power does not follow cell edges.

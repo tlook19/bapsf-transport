@@ -42,7 +42,7 @@
     "use_cached_neutral_seed": false
   },
   "params": {
-    "C_R": 29.0,
+    "C_R": 14.25,
     "C_bank_F": 8.9,
     "D_amb": 0.0,
     "D_amb_model": "cs_dz",
@@ -242,23 +242,23 @@
     "u0": 0.0
   },
   "result_format": "sim1d packed conservative trajectory y[saves, 5*cells]",
-  "saves": 2741,
+  "saves": 2747,
   "summary": {
-    "Te_max": 404.64594897860445,
+    "Te_max": 467.4216904427103,
     "Te_min": 0.1,
-    "Ti_max": 615.9747884980619,
+    "Ti_max": 747.3012153687621,
     "Ti_min": 0.1,
-    "final_time": 0.027395009526153858,
+    "final_time": 0.027454444170188445,
     "finite": true,
-    "n_max": 31481484619736.984,
-    "n_min": 100000000.0,
-    "neutral_inventory_relative_drift": 1.694157877084828,
-    "nn_max": 25094894035128.28,
-    "nn_min": 431912669.9615722,
-    "plasma_inventory_relative_drift": 2322.511437361902,
-    "samples": 2741,
-    "steps": 45613,
-    "thermal_energy_relative_drift": 3576.7500550220793,
-    "total_particle_inventory_relative_drift": 1.7929043842823364
+    "n_max": 27542759496126.508,
+    "n_min": 160903341.46081674,
+    "neutral_inventory_relative_drift": 1.6987257646774443,
+    "nn_max": 17204305632309.75,
+    "nn_min": 5126005986.385539,
+    "plasma_inventory_relative_drift": 2774.219760537482,
+    "samples": 2747,
+    "steps": 41098,
+    "thermal_energy_relative_drift": 3621.7466617070904,
+    "total_particle_inventory_relative_drift": 1.8166914359672623
   }
 }
