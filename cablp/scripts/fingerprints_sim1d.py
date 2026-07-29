@@ -29,6 +29,11 @@ from cablp.solvers._sim1d import load_result_hdf5
 def non_ignited_message(result, caller):
     """Return the NON-IGNITED diagnosis for a run with no main_discharge.
 
+    DUPLICATED, deliberately, from ``compare_sim1d_es1.non_ignited_message``:
+    this tool stays standalone, and importing the scorer for a 20-line numpy
+    helper would hand it the whole driver. Both copies are exercised together
+    by smoke_sim1d, so they cannot drift silently -- keep them in step.
+
     Every fingerprint is defined relative to the main-discharge origin. A run
     that never reached that phase has no origin, and the old ``times[0]``
     fallback silently reported pre-breakdown noise as drive-phase

@@ -55,7 +55,6 @@ from pathlib import Path
 import numpy as np
 
 from cablp.solvers._sim1d import (
-    BreakdownError,
     LAPDSim1D,
     default_config,
     load_result_hdf5,
@@ -204,6 +203,12 @@ def beam_product_transport_note(params):
 
 def non_ignited_message(result, caller):
     """Return the NON-IGNITED diagnosis for a run with no main_discharge.
+
+    DUPLICATED, deliberately, in ``fingerprints_sim1d.non_ignited_message``:
+    that tool is standalone by design and importing this module for a 20-line
+    numpy helper would hand it the whole scorer driver. Both copies are
+    exercised together by smoke_sim1d, so they cannot drift silently -- keep
+    them in step.
 
     Every scoring stage is defined relative to the main-discharge origin. A
     run that never reached that phase has no origin, and the old ``times[0]``
@@ -1546,17 +1551,19 @@ def main(argv=None):
         if args.beam_product_transport is not None:
             extra["beam_product_transport"] = args.beam_product_transport
             label += beam_product_transport_note(extra)
-        try:
-            result, geometry, params, flags = run_model(
-                nx=args.nx,
-                exchange_model=args.exchange_model,
-                extra=extra,
-                drag_closure=args.drag_closure,
-                Rp_model=args.Rp_model,
-            )
-        except BreakdownError as error:
-            print(f"{label}: no breakdown (I_tot={error.I_tot:.4g} A)")
-            return 1
+        # No BreakdownError handler here: this driver never sets
+        # prebreakdown_timeout_action, so it always runs the "switch_open"
+        # default, under which a failed breakdown ends as an OPENED SWITCH
+        # (a scorable non-ignited trajectory that _main_discharge_origin
+        # rejects by name) and never as an exception. The dead handler used
+        # to imply the "raise" mode was reachable from here; it is not.
+        result, geometry, params, flags = run_model(
+            nx=args.nx,
+            exchange_model=args.exchange_model,
+            extra=extra,
+            drag_closure=args.drag_closure,
+            Rp_model=args.Rp_model,
+        )
         if args.save_h5 is not None:
             save_result_hdf5(args.save_h5, result, params=params, flags=flags)
             print(f"saved result to {args.save_h5}")
