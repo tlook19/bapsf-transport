@@ -484,7 +484,18 @@ def _efold_time_ms(t_ms, y, floor=0.0):
     return -1.0 / slope if slope < 0.0 else np.nan
 
 
-def compare_decay(result, overlay, window_ms=(20.5, 25.0)):
+# Stage (iii) fit window on the main-discharge clock [ms]. The discharge ends
+# at trigger + tau_discharge = 20 ms, so this is the first 1.5 ms OF THE
+# AFTERGLOW -- the early, transport-dominated decay that both the model and
+# the Isat traces actually resolve. It matches DECAY_WINDOW_MS = (0.0, 1.5) in
+# the deck's afterglow decay figure, so the scored number and the plotted
+# number are the same number. Moved here from the historical (20.5, 25.0)
+# (Tom, 2026-07-29): that band started 0.5 ms late and ran 5 ms out, so it
+# scored tail structure rather than the decay the figure is about.
+DECAY_WINDOW_MS = (20.0, 21.5)
+
+
+def compare_decay(result, overlay, window_ms=DECAY_WINDOW_MS):
     """Return per-port stage (iii) rows: model vs measured Isat e-fold times.
 
     The model Isat proxy is ``n * sqrt(Te)`` at the port cell (the Bohm-flux
@@ -1378,7 +1389,7 @@ def main(argv=None):
         "--decay-window",
         type=float,
         nargs=2,
-        default=(20.5, 25.0),
+        default=DECAY_WINDOW_MS,
         metavar=("T0", "T1"),
         help="stage (iii) fit window on the main-discharge clock [ms]",
     )
