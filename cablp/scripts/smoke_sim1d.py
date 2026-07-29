@@ -5740,6 +5740,47 @@ def main():
         "tau_discharge",
         "tau_cycle",
     ]
+    # --- item 37: the equilibration delivers its CONFIGURED puff duty --------
+    # tau_cycle / tau_discharge / dt chosen so a step lands a hair BELOW the
+    # puff-off instant (t=6e-10 is 1 ulp short of cycle_start + tau_discharge).
+    # The phase-boundary schedule used to DROP that boundary inside the run
+    # loop's time_tol while the untolerated modulo in _phase_info still read
+    # "puff", so the puff ran one whole extra step: this exact case delivered
+    # 4.5e-10 s of puff against a configured 2.0e-10 s (+125%). Both readers now
+    # share _equilibration_cycle_position, so the delivered ON-time is exact.
+    duty_params = dict(neutral_phase_run_params)
+    duty_params["tau_cycle"] = 5.0e-10
+    duty_params["tau_discharge"] = 1.0e-10
+    duty_params["cycles"] = 2
+    duty_params["dt_save"] = 0.0
+    duty_sim = LAPDSim1D(duty_params, dict(neutral_phase_run_flags))
+    duty_result = duty_sim.run(t_end=1.0e-9, dt=2.5e-10)
+    duty_times = np.asarray(duty_result.time, dtype=float)
+    duty_phases = np.asarray(duty_result.phase, dtype=str)
+    assert list(duty_phases) == [
+        "equilibrium_puff",
+        "equilibrium_off",
+        "equilibrium_off",
+        "equilibrium_puff",
+        "equilibrium_off",
+        "equilibrium_off",
+        "equilibrium_puff",
+    ], list(duty_phases)
+    duty_on = float(
+        np.sum(np.diff(duty_times)[duty_phases[:-1] == "equilibrium_puff"])
+    )
+    assert np.isclose(duty_on, 2.0 * 1.0e-10, rtol=1e-12), duty_on
+    # Same assertion where the period DOES divide the step: 1e-10 windows on a
+    # 5e-10 cycle stepped at exactly 1e-10 must not lose or gain a step either.
+    duty_div_params = dict(duty_params)
+    duty_div_sim = LAPDSim1D(duty_div_params, dict(neutral_phase_run_flags))
+    duty_div_result = duty_div_sim.run(t_end=1.0e-9, dt=1.0e-10)
+    duty_div_times = np.asarray(duty_div_result.time, dtype=float)
+    duty_div_phases = np.asarray(duty_div_result.phase, dtype=str)
+    duty_div_on = float(
+        np.sum(np.diff(duty_div_times)[duty_div_phases[:-1] == "equilibrium_puff"])
+    )
+    assert np.isclose(duty_div_on, 2.0 * 1.0e-10, rtol=1e-12), duty_div_on
     with tempfile.TemporaryDirectory() as tmpdir:
         from scripts.run_sim1d import _parse_args
 
