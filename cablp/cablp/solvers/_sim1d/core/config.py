@@ -858,7 +858,18 @@ def cathode_defaults():
     phi_wf:
         Cathode work function [eV].
     C_R:
-        Richardson constant [A cm^-2 K^-2].
+        EFFECTIVE Richardson emission constant [A cm^-2 K^-2] in
+        ``J = C_R T^2 exp(-e phi_wf/(kB T))``. Not the Richardson-Dushman
+        universal (120): the cathode literature treats this prefactor as an
+        effective constant absorbing surface state, patch fields and the
+        non-ideal emitting fraction, and the default ``29`` is the nominal
+        LaB6 value in that sense. **This is where the ES cathode calibration
+        lives** (reparameterized 2026-07-29): the production stance
+        (``compare_sim1d_es1.PARAM_OVERRIDES``) carries a derived effective
+        value, and ``cathode_Ts_base_K`` is held at its measured number.
+        See that comment block for the derivation -- the two are the same
+        flat direction (~100 K of standby per e-fold of emission, §3b), so
+        do NOT calibrate both.
     R_comp:
         External/compliance resistance [Ohm]. The full loop series resistance;
         it sets the discharge current.
@@ -943,8 +954,16 @@ def cathode_defaults():
         Heater-maintained standby surface temperature [K] for
         ``cathode_warming_model = "power_balance"`` -- the temperature the
         cathode sits at before the discharge, i.e. an operational machine
-        setpoint, not a fit parameter in principle. Required when that
-        model is on; also its initial condition.
+        setpoint, not a fit parameter. Required when that model is on; also
+        its initial condition. MEASURED and **not to be tuned** (2026-07-29):
+        the default ``1910`` is the ES1 Fig-10 digitized standby
+        (``run_mechanism_ladder.ES_OPERATING[es]["Ts_standby_K"]`` carries
+        the per-campaign values). The production stance used to pin a
+        calibrated 1840 here; that calibration moved onto the effective
+        ``C_R`` above, which is the same §3b flat direction (~100 K of
+        standby per e-fold of emission) parameterized on the constant the
+        cathode literature already treats as effective. Calibrate that one,
+        not this one.
     cathode_heat_capacity_J_per_K:
         Effective thermal mass of the *emitting layer* [J/K] for
         ``"power_balance"``. NB this is the ~20 ms thermal skin depth
