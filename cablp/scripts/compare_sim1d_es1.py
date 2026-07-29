@@ -135,7 +135,7 @@ PARAM_OVERRIDES = {
     #
     # Cathode power balance, co-tuned with S_gp at the ES1 rung: the
     # skin->substrate conduction is the one fitted knob, frozen after ES1.
-    #
+    "cathode_conduction_W_per_K": 8000.0,
     # --- CATHODE CALIBRATION REPARAMETERIZED (Tom, 2026-07-29) ------------
     # The retired stance carried the calibration on the standby temperature
     # ("cathode_Ts_base_K": 1840.0 here, 70 K below the measurement). That
@@ -184,7 +184,6 @@ PARAM_OVERRIDES = {
     # 2.8% at 2.869) -- the ln J curvature between 1840 K and the 1859 K
     # matching point, i.e. the same flat-direction residual seen off the
     # operating point.
-    "cathode_conduction_W_per_K": 8000.0,
     "C_R": 14.25,
     # Beam deposition smoothed over 50 cm. The CSDA range profile is sharp on
     # the mesh scale; this spreads it over the physical straggling width so
