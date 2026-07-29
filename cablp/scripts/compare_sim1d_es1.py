@@ -55,7 +55,6 @@ from pathlib import Path
 import numpy as np
 
 from cablp.solvers._sim1d import (
-    BreakdownError,
     LAPDSim1D,
     default_config,
     load_result_hdf5,
@@ -178,8 +177,38 @@ FLAG_OVERRIDES = {
 }
 
 
+# WP-D beam product transport (BEAM_DEPOSITION_PLAN). "local" is the
+# production stance and the config.py default, so it is deliberately absent
+# from PARAM_OVERRIDES; "nonlocal" is an A/B arm that must travel with the run
+# it scored. Reported as a delta only -- a production (local) artifact scores
+# byte-identically to its recorded _scores.txt, and a nonlocal one says so.
+BEAM_PRODUCT_TRANSPORT_DEFAULT = "local"
+
+
+def beam_product_transport_note(params):
+    """Return a label suffix naming a non-default beam_product_transport.
+
+    Empty string on the production stance (and on a run too old to carry the
+    key), so this only ever ADDS a line where the stance actually differs.
+    """
+    value = str(
+        (params or {}).get(
+            "beam_product_transport", BEAM_PRODUCT_TRANSPORT_DEFAULT
+        )
+    )
+    if value == BEAM_PRODUCT_TRANSPORT_DEFAULT:
+        return ""
+    return f" [beam_product_transport={value}]"
+
+
 def non_ignited_message(result, caller):
     """Return the NON-IGNITED diagnosis for a run with no main_discharge.
+
+    DUPLICATED, deliberately, in ``fingerprints_sim1d.non_ignited_message``:
+    that tool is standalone by design and importing this module for a 20-line
+    numpy helper would hand it the whole scorer driver. Both copies are
+    exercised together by smoke_sim1d, so they cannot drift silently -- keep
+    them in step.
 
     Every scoring stage is defined relative to the main-discharge origin. A
     run that never reached that phase has no origin, and the old ``times[0]``
@@ -455,7 +484,18 @@ def _efold_time_ms(t_ms, y, floor=0.0):
     return -1.0 / slope if slope < 0.0 else np.nan
 
 
-def compare_decay(result, overlay, window_ms=(20.5, 25.0)):
+# Stage (iii) fit window on the main-discharge clock [ms]. The discharge ends
+# at trigger + tau_discharge = 20 ms, so this is the first 1.5 ms OF THE
+# AFTERGLOW -- the early, transport-dominated decay that both the model and
+# the Isat traces actually resolve. It matches DECAY_WINDOW_MS = (0.0, 1.5) in
+# the deck's afterglow decay figure, so the scored number and the plotted
+# number are the same number. Moved here from the historical (20.5, 25.0)
+# (Tom, 2026-07-29): that band started 0.5 ms late and ran 5 ms out, so it
+# scored tail structure rather than the decay the figure is about.
+DECAY_WINDOW_MS = (20.0, 21.5)
+
+
+def compare_decay(result, overlay, window_ms=DECAY_WINDOW_MS):
     """Return per-port stage (iii) rows: model vs measured Isat e-fold times.
 
     The model Isat proxy is ``n * sqrt(Te)`` at the port cell (the Bohm-flux
@@ -1349,7 +1389,7 @@ def main(argv=None):
         "--decay-window",
         type=float,
         nargs=2,
-        default=(20.5, 25.0),
+        default=DECAY_WINDOW_MS,
         metavar=("T0", "T1"),
         help="stage (iii) fit window on the main-discharge clock [ms]",
     )
@@ -1415,6 +1455,19 @@ def main(argv=None):
         ),
     )
     parser.add_argument(
+        "--beam-product-transport",
+        default=None,
+        choices=("local", "nonlocal"),
+        help=(
+            "beam product transport for the WP-D A/B "
+            "(BEAM_DEPOSITION_PLAN.md): local (production stance and "
+            "config default -- products thermalize where they are born) or "
+            "nonlocal (products walk, and the escape ledger is live). "
+            "nonlocal requires the CSDA deposition module and raises at "
+            "construction under --beam-deposition beer_lambert"
+        ),
+    )
+    parser.add_argument(
         "--es",
         type=int,
         choices=(1, 2, 3, 4),
@@ -1474,6 +1527,9 @@ def main(argv=None):
         result = load_result_hdf5(args.from_h5)
         geometry = None
         label = f"saved run {args.from_h5}"
+        # The artifact's own config is the authority on which arm it is; a
+        # nonlocal run must not be scored under a production-stance label.
+        label += beam_product_transport_note(getattr(result, "params", None))
     else:
         label = f"resolved ({args.exchange_model}, nx={args.nx or 'default'})"
         if args.drag_closure is not None:
@@ -1500,17 +1556,25 @@ def main(argv=None):
             )
             if args.beam_deposition == "csda_ql":
                 extra["beam_anomalous_model"] = "quasilinear"
-        try:
-            result, geometry, params, flags = run_model(
-                nx=args.nx,
-                exchange_model=args.exchange_model,
-                extra=extra,
-                drag_closure=args.drag_closure,
-                Rp_model=args.Rp_model,
-            )
-        except BreakdownError as error:
-            print(f"{label}: no breakdown (I_tot={error.I_tot:.4g} A)")
-            return 1
+        # WP-D arm. Lands in `extra`, which run_model applies LAST, so it wins
+        # over PARAM_OVERRIDES; PARAM_OVERRIDES itself never sets the key, so
+        # omitting the flag reproduces the production stance exactly.
+        if args.beam_product_transport is not None:
+            extra["beam_product_transport"] = args.beam_product_transport
+            label += beam_product_transport_note(extra)
+        # No BreakdownError handler here: this driver never sets
+        # prebreakdown_timeout_action, so it always runs the "switch_open"
+        # default, under which a failed breakdown ends as an OPENED SWITCH
+        # (a scorable non-ignited trajectory that _main_discharge_origin
+        # rejects by name) and never as an exception. The dead handler used
+        # to imply the "raise" mode was reachable from here; it is not.
+        result, geometry, params, flags = run_model(
+            nx=args.nx,
+            exchange_model=args.exchange_model,
+            extra=extra,
+            drag_closure=args.drag_closure,
+            Rp_model=args.Rp_model,
+        )
         if args.save_h5 is not None:
             save_result_hdf5(args.save_h5, result, params=params, flags=flags)
             print(f"saved result to {args.save_h5}")

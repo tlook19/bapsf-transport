@@ -162,6 +162,11 @@ def save_result_hdf5(path, result, params=None, flags=None):
                 h5.create_group("ignition_diagnostics"),
                 result.ignition_diagnostics,
             )
+        if hasattr(result, "gas_puff_diagnostics"):
+            _write_field_arrays(
+                h5.create_group("gas_puff_diagnostics"),
+                result.gas_puff_diagnostics,
+            )
         # Present only on a run whose cathode switch was opened by an ignition
         # guard; a normal run never carries it, so its file is unchanged.
         ignition_abort = getattr(result, "ignition_abort", None)
@@ -275,6 +280,16 @@ def load_result_hdf5(path):
                 _read_field_arrays(h5["ignition_diagnostics"])
                 if "ignition_diagnostics" in h5
                 else _empty_ignition_diagnostics(
+                    len(_read_dataset(h5["time"]))
+                )
+            ),
+            # Defaulted dataset: runs saved before 2026-07-29 have no
+            # gas_puff_diagnostics group and load with NaN-defaulted
+            # per-sample records of the right length.
+            gas_puff_diagnostics=(
+                _read_field_arrays(h5["gas_puff_diagnostics"])
+                if "gas_puff_diagnostics" in h5
+                else _empty_gas_puff_diagnostics(
                     len(_read_dataset(h5["time"]))
                 )
             ),
@@ -483,6 +498,20 @@ def _empty_ignition_diagnostics(samples):
         if name in zero_fields
         else np.full(samples, np.nan, dtype=float)
         for name in IGNITION_DIAGNOSTIC_FIELDS
+    }
+
+
+def _empty_gas_puff_diagnostics(samples):
+    """Return NaN-defaulted puff waveform records for a pre-2026-07-29 file.
+
+    NaN, not zero: an old file does not record that the puff was off, it
+    records nothing, and a reader must not read that silence as no fuel.
+    """
+    from ..physics.neutrals import GAS_PUFF_DIAGNOSTIC_FIELDS
+
+    return {
+        name: np.full(samples, np.nan, dtype=float)
+        for name in GAS_PUFF_DIAGNOSTIC_FIELDS
     }
 
 

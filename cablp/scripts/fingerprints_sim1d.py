@@ -29,6 +29,11 @@ from cablp.solvers._sim1d import load_result_hdf5
 def non_ignited_message(result, caller):
     """Return the NON-IGNITED diagnosis for a run with no main_discharge.
 
+    DUPLICATED, deliberately, from ``compare_sim1d_es1.non_ignited_message``:
+    this tool stays standalone, and importing the scorer for a 20-line numpy
+    helper would hand it the whole driver. Both copies are exercised together
+    by smoke_sim1d, so they cannot drift silently -- keep them in step.
+
     Every fingerprint is defined relative to the main-discharge origin. A run
     that never reached that phase has no origin, and the old ``times[0]``
     fallback silently reported pre-breakdown noise as drive-phase
@@ -90,7 +95,12 @@ def report(path):
     plateau = (t_ms >= 15.0) & (t_ms <= min(19.5, t_end))
     early = (t_ms >= 1.0) & (t_ms <= 5.0)
 
-    print(f"\n=== {path} (drive end +{t_end:.2f} ms) ===")
+    # WP-D arm marker. Printed as a delta only: "local" is the production
+    # stance and the config default, so a production artifact's fingerprint
+    # output is unchanged and a nonlocal one cannot be mistaken for one.
+    bpt = str(params.get("beam_product_transport", "local"))
+    bpt_note = "" if bpt == "local" else f" [beam_product_transport={bpt}]"
+    print(f"\n=== {path} (drive end +{t_end:.2f} ms){bpt_note} ===")
     Ipk = float(np.max(I[drive]))
     tpk = float(t_ms[drive][np.argmax(I[drive])])
     Iplat = float(np.median(I[plateau])) if plateau.any() else np.nan

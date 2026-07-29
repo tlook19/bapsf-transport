@@ -3,6 +3,7 @@ import json
 import math
 from io import StringIO
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -60,6 +61,7 @@ from cablp.solvers._sim1d.core.geometry import (
     pump_cell_indices,
 )
 from cablp.solvers._sim1d.physics.neutrals import (
+    GAS_PUFF_DIAGNOSTIC_FIELDS,
     _effective_pump_speed,
     gas_puff_rate_profile,
     neutral_exchange_coefficients,
@@ -3089,6 +3091,75 @@ def main():
             pulse_geom.neutral_volume_cm3[pulse_puff],
         ),
     )
+    # --- saved effective S_gp(t) waveform (gas_puff_diagnostics) ------------
+    # The recorded waveform must be the APPLIED one, not the configured level:
+    # decay_after_breakdown shapes it down through the main discharge and the
+    # phase gate shuts it off in the afterglow. Every other neutral channel is
+    # switched off (pump, reactions, anode recycling) so the puff is the ONLY
+    # nn source and the delivered fuel is unambiguous.
+    puffdiag_params = dict(decay_params)
+    puffdiag_params["dt_save"] = 0.0
+    puffdiag_params["tau_afterglow"] = 3.0e-10
+    puffdiag_params["pump_enabled"] = False
+    puffdiag_params["b_anode_collection"] = 0.0
+    # nn0 well below the delivered fuel, so the inventory difference below is
+    # not swamped by float64 cancellation against a large standing fill.
+    puffdiag_params["nn0"] = 1.0e5
+    for _puffdiag_key in (
+        "b_ioniz", "b_rec_rad", "b_rec_3b", "b_Qei", "b_Qen", "b_Qcx",
+        "b_surface_loss",
+    ):
+        puffdiag_params[_puffdiag_key] = 0.0
+    puffdiag_flags = dict(flags)
+    puffdiag_flags["neutral_equilibration"] = False
+    puffdiag_sim = LAPDSim1D(puffdiag_params, puffdiag_flags)
+    puffdiag_geom = puffdiag_sim.get_initial_snapshot().geometry
+    puffdiag_result = puffdiag_sim.run(t_end=8.0e-10, dt=1.0e-10)
+    puffdiag = puffdiag_result.gas_puff_diagnostics
+    assert set(puffdiag) == set(GAS_PUFF_DIAGNOSTIC_FIELDS), sorted(puffdiag)
+    for _puffdiag_values in puffdiag.values():
+        assert _puffdiag_values.shape == puffdiag_result.time.shape
+        assert np.all(np.isfinite(_puffdiag_values))
+    puffdiag_gate = np.asarray(
+        puffdiag_result.phase_gas_puff_enabled, dtype=float
+    ) > 0.0
+    assert puffdiag_gate.any() and not puffdiag_gate.all(), puffdiag_gate
+    # On: a real rate that has been shaped BELOW the configured level by the
+    # end of the discharge. Off: identically zero, not the configured level.
+    assert np.all(puffdiag["S_gp_sccm"][puffdiag_gate] > 0.0)
+    assert np.all(puffdiag["puff_particles_per_s"][puffdiag_gate] > 0.0)
+    assert puffdiag["S_gp_sccm"][puffdiag_gate][-1] < puffdiag_params["S_gp"]
+    for _puffdiag_values in puffdiag.values():
+        assert np.all(_puffdiag_values[~puffdiag_gate] == 0.0)
+    # No twin cathode here, so the twin entry stays zero throughout.
+    assert np.all(puffdiag["Twin_S_gp_sccm"] == 0.0)
+    # The recorded rate IS the applied puff row: with pumping off the
+    # neutral_sources term carries nothing else.
+    puffdiag_vol = np.asarray(
+        puffdiag_geom.neutral_volume_cm3, dtype=float
+    )
+    puffdiag_row = (
+        np.asarray(
+            puffdiag_result.rhs_terms["neutral_sources"]["nn"], dtype=float
+        )
+        @ puffdiag_vol
+    )
+    assert np.allclose(
+        puffdiag_row, puffdiag["puff_particles_per_s"], rtol=1e-12, atol=0.0
+    ), (puffdiag_row, puffdiag["puff_particles_per_s"])
+    # ... and its time integral is the fuel the run actually banked. SSPRK2 on
+    # a state-independent source is the explicit trapezoid, and every step is
+    # saved (dt_save = 0), so this closes to roundoff rather than to O(dt).
+    puffdiag_N_n = np.asarray(puffdiag_result.nn, dtype=float) @ puffdiag_vol
+    assert np.isclose(
+        puffdiag_N_n[-1] - puffdiag_N_n[0],
+        np.trapezoid(
+            puffdiag["puff_particles_per_s"], puffdiag_result.time
+        ),
+        rtol=1e-11,
+        atol=0.0,
+    ), (puffdiag_N_n[-1] - puffdiag_N_n[0], puffdiag["puff_particles_per_s"])
+
     assert np.allclose(source_rhs.n, 0.0)
     assert np.allclose(source_rhs.M, 0.0)
     assert np.allclose(source_rhs.Ee, 0.0)
@@ -4058,6 +4129,8 @@ def main():
             assert h5["current_trigger_samples/I_tot"].shape == (0,)
             assert h5["cathode_diagnostics/solve_enabled"].shape == (4,)
             assert h5["cathode_diagnostics/floating"].shape == (4,)
+            for _gp_field in GAS_PUFF_DIAGNOSTIC_FIELDS:
+                assert h5[f"gas_puff_diagnostics/{_gp_field}"].shape == (4,)
             assert all(
                 value.decode("utf-8") == "pre_breakdown"
                 for value in h5["phase"][()]
@@ -4128,6 +4201,14 @@ def main():
                 run_result.phase_gas_puff_enabled,
             )
             assert np.allclose(loaded.phase_floating, run_result.phase_floating)
+            assert set(loaded.gas_puff_diagnostics) == set(
+                GAS_PUFF_DIAGNOSTIC_FIELDS
+            )
+            for _gp_field in GAS_PUFF_DIAGNOSTIC_FIELDS:
+                assert np.array_equal(
+                    loaded.gas_puff_diagnostics[_gp_field],
+                    run_result.gas_puff_diagnostics[_gp_field],
+                ), _gp_field
             assert np.allclose(loaded.y, run_result.y)
             assert np.allclose(loaded.n, run_result.n)
             assert np.allclose(loaded.ne, run_result.ne)
@@ -4188,6 +4269,22 @@ def main():
                 loaded.diagnostics[0].active_constraint
                 == run_result.diagnostics[0].active_constraint
             )
+        # A file written before the waveform diagnostic existed still loads:
+        # the group is absent and the reader NaN-defaults it to the right
+        # length rather than raising or inventing zeros.
+        legacy_path = f"{tmpdir}/sim1d_smoke_legacy.h5"
+        shutil.copyfile(output_path, legacy_path)
+        with h5py.File(legacy_path, "r+") as h5:
+            del h5["gas_puff_diagnostics"]
+        legacy_loaded = load_result_hdf5(legacy_path)
+        assert set(legacy_loaded.gas_puff_diagnostics) == set(
+            GAS_PUFF_DIAGNOSTIC_FIELDS
+        )
+        for _gp_field in GAS_PUFF_DIAGNOSTIC_FIELDS:
+            legacy_values = legacy_loaded.gas_puff_diagnostics[_gp_field]
+            assert legacy_values.shape == run_result.time.shape
+            assert np.all(np.isnan(legacy_values)), _gp_field
+        assert np.allclose(legacy_loaded.y, run_result.y)
 
     cathode_run_params = dict(no_source_params)
     cathode_run_params["dt_save"] = 0.0
