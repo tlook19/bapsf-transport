@@ -739,6 +739,24 @@ def neutral_source_sink_rhs(
     )
 
 
+# --- Saved per-sample gas-puff waveform fields ------------------------------
+# The EFFECTIVE puff the solver actually applied at each save: the configured
+# S_gp after waveform shaping (``gas_puff_mode``) AND the phase gate, not the
+# nominal input_dict level. Recording it removes the need to reconstruct the
+# waveform from the phase switch plus the mode's formula after the fact
+# (BEAM_DEPOSITION_PLAN ergonomics item). Pure recording -- nothing here feeds
+# an RHS row.
+GAS_PUFF_DIAGNOSTIC_FIELDS = (
+    # Source-end and twin-end valve rates [sccm] as applied; zero whenever the
+    # phase gate is shut, and the twin entry is zero without TwinCathode.
+    "S_gp_sccm",
+    "Twin_S_gp_sccm",
+    # Volume-integrated particle influx [s^-1] of the same instant's puff
+    # profile -- the quantity whose time integral is the delivered fuel.
+    "puff_particles_per_s",
+)
+
+
 def puff_rate(sccm, valves, chamber_vol):
     """Return gas puff source rate [cm^-3 s^-1] using _sim3 conversion."""
     if chamber_vol <= 0.0:

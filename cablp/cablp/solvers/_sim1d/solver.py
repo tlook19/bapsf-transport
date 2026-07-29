@@ -80,6 +80,7 @@ from .physics.energy import (
 )
 from .physics.flux import ion_sound_speed, plasma_flux_rhs, plasma_flux_rhs_terms
 from .physics.neutrals import (
+    GAS_PUFF_DIAGNOSTIC_FIELDS,
     gas_puff_rate_profile,
     _effective_pump_speed,
     neutral_exchange_coefficients,
@@ -5490,6 +5491,48 @@ class LAPDSim1D:
             },
             "cathode_diagnostics": cathode_diagnostics,
             "ignition_diagnostics": ignition_diagnostics,
+            "gas_puff_diagnostics": self._gas_puff_diagnostic_snapshot(time=time),
+        }
+
+    def _gas_puff_diagnostic_snapshot(self, time):
+        """Return the per-save EFFECTIVE gas-puff waveform record.
+
+        Pure recording (see ``GAS_PUFF_DIAGNOSTIC_FIELDS``): it reads the very
+        kwargs ``neutral_source_sink_rhs`` is handed at this instant and folds
+        them through the same ``gas_puff_rate_profile``, so the recorded rate
+        is the applied one by construction rather than a parallel formula that
+        could drift. Nothing here mutates state or feeds an RHS row.
+        """
+        nk = self._neutral_source_kwargs(time=time)
+        gated = bool(nk["gas_puff_enabled"])
+        twin = bool(nk["twin_cathode"])
+        if not gated:
+            # The gate zeroes the whole puff term, so the applied rate is zero
+            # regardless of where the waveform sits.
+            return {name: 0.0 for name in GAS_PUFF_DIAGNOSTIC_FIELDS}
+        puff = gas_puff_rate_profile(
+            self._geometry, nk["S_gp"], nk["gas_puff_valves"],
+            profile=nk["gas_puff_profile"], z_cm=nk["gas_puff_z_cm"],
+            sigma_cm=nk["gas_puff_sigma_cm"], throw_cm=nk["gas_puff_throw_cm"],
+            end=0,
+        )
+        if twin:
+            puff = puff + gas_puff_rate_profile(
+                self._geometry, nk["Twin_S_gp"], nk["gas_puff_valves"],
+                profile=nk["gas_puff_profile"], z_cm=nk["gas_puff_z_cm"],
+                sigma_cm=nk["gas_puff_sigma_cm"],
+                throw_cm=nk["gas_puff_throw_cm"],
+                end=-1,
+            )
+        return {
+            "S_gp_sccm": float(nk["S_gp"]),
+            "Twin_S_gp_sccm": float(nk["Twin_S_gp"]) if twin else 0.0,
+            "puff_particles_per_s": float(
+                np.sum(
+                    puff
+                    * np.asarray(self._geometry.neutral_volume_cm3, dtype=float)
+                )
+            ),
         }
 
     def _ignition_armed(self, time, phase):
@@ -5715,6 +5758,13 @@ class LAPDSim1D:
                     dtype=float,
                 )
                 for name in IGNITION_DIAGNOSTIC_FIELDS
+            },
+            gas_puff_diagnostics={
+                name: np.asarray(
+                    [snapshot["gas_puff_diagnostics"][name] for snapshot in saved],
+                    dtype=float,
+                )
+                for name in GAS_PUFF_DIAGNOSTIC_FIELDS
             },
             phase_events=self._phase_events(
                 run_start=run_start,
