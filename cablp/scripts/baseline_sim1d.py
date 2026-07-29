@@ -129,6 +129,13 @@ BASELINE_PARAM_OVERRIDES = {
     "Rcs": 0.0,
     "Lcs": 0.0,
     "Rsup": 0.0,
+    # Measured 25 ms equilibration puff width (2026-07-29): the ES production
+    # config (PRODUCTION_PARAM_OVERRIDES, inherited above) adopted it, but this
+    # fixture was captured with the equilibration inheriting tau_discharge as
+    # its puff window. Pin the historical stance back (None = the
+    # tau_discharge-derived window) so the anchor does NOT track the live ES
+    # puff width -- same rule as every pin above.
+    "equilibration_gas_puff_on_s": None,
 }
 # input_flags overrides.
 BASELINE_FLAG_OVERRIDES = {

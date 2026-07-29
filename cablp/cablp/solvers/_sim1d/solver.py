@@ -599,6 +599,7 @@ class LAPDSim1D:
             )
         self._validate_r1_configuration_presence()
         self._validate_neutral_seed_cache_config()
+        self._validate_equilibration_gas_puff_on()
         _x = float(self._input_dict.get("R_comp_partition", 1.0))
         if not (0.0 <= _x <= 1.0):
             raise ValueError(
@@ -1261,6 +1262,40 @@ class LAPDSim1D:
                         f"{floor_name} when raw_stage_validation=True "
                         f"(got {initial} <= {floor})"
                     )
+
+    def _validate_equilibration_gas_puff_on(self):
+        """Reject a nonsense equilibration puff width (loud, at construction).
+
+        ``equilibration_gas_puff_on_s`` overrides the neutral-equilibration
+        inner sim's per-cycle puff-ON window. ``None`` means "unset" (fall back
+        to ``tau_discharge``); anything else must be a real, finite, positive
+        duration that fits inside one puff/off cycle. A zero, negative, or
+        longer-than-the-cycle value would silently produce a 0% or >100% duty
+        instead of the measured window.
+        """
+        raw = self._input_dict.get("equilibration_gas_puff_on_s", None)
+        if raw is None:
+            return
+        try:
+            puff_on = float(raw)
+        except (TypeError, ValueError):
+            raise ValueError(
+                "equilibration_gas_puff_on_s (the equilibration puff-ON window "
+                f"[s]) must be a number or None (got {raw!r})"
+            ) from None
+        if not np.isfinite(puff_on) or puff_on <= 0.0:
+            raise ValueError(
+                "equilibration_gas_puff_on_s (the equilibration puff-ON window "
+                f"[s]) must be finite and > 0 (got {puff_on!r}); use None to "
+                "fall back to tau_discharge"
+            )
+        tau_cycle = float(self._input_dict.get("tau_cycle", 0.0))
+        if tau_cycle > 0.0 and puff_on > tau_cycle:
+            raise ValueError(
+                "equilibration_gas_puff_on_s (the equilibration puff-ON window "
+                f"[s]) must fit inside one puff/off cycle: got {puff_on!r} > "
+                f"tau_cycle={tau_cycle!r}"
+            )
 
     def _validate_neutral_seed_cache_config(self):
         """Reject an incoherent cached-neutral-seed configuration (loud, at build).
@@ -3566,12 +3601,20 @@ class LAPDSim1D:
 
         Only the ``Plasma=False`` equilibration inner sim reads this; the main
         run's puff is closed by its own waveform envelope, not by this window.
+
+        ``equilibration_gas_puff_on_s`` unset (``None``) falls back to
+        ``tau_discharge`` -- the historical double duty, kept bit-exact.
         """
-        return max(float(self._input_dict.get("tau_discharge", 0.0)), 0.0)
+        override = self._input_dict.get("equilibration_gas_puff_on_s", None)
+        if override is None:
+            return max(float(self._input_dict.get("tau_discharge", 0.0)), 0.0)
+        return float(override)
 
     def _equilibration_puff_on_reason(self):
         """Name of the quantity that closes the equilibration puff window."""
-        return "tau_discharge"
+        if self._input_dict.get("equilibration_gas_puff_on_s", None) is None:
+            return "tau_discharge"
+        return "equilibration_gas_puff_on_s"
 
     def _equilibration_cycle_position(self, time):
         """Return ``(cycle_index, cycle_time)`` on the equilibration puff lattice.

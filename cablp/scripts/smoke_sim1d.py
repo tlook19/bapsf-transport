@@ -5781,6 +5781,82 @@ def main():
         np.sum(np.diff(duty_div_times)[duty_div_phases[:-1] == "equilibrium_puff"])
     )
     assert np.isclose(duty_div_on, 2.0 * 1.0e-10, rtol=1e-12), duty_div_on
+    # --- measured equilibration puff width (equilibration_gas_puff_on_s) -----
+    # Default None == the historical tau_discharge-derived window, BIT-exact
+    # through the real equilibration path (start_simulation -> the inner sim).
+    # NB built on neutral_phase_params, NOT the no_source_* family: the puff
+    # has to be ENABLED for the window to be observable in the seed at all.
+    puffw_base_params = dict(neutral_phase_params)
+    puffw_base_params["neutral_equilibration_cycles"] = 2
+    puffw_base_params["neutral_equilibration_dt"] = 1.0e-10
+
+    def _puffw_seed(puff_on, drop=False):
+        puffw_params = dict(puffw_base_params)
+        if drop:
+            puffw_params.pop("equilibration_gas_puff_on_s", None)
+        else:
+            puffw_params["equilibration_gas_puff_on_s"] = puff_on
+        puffw_sim = LAPDSim1D(puffw_params, dict(equilibration_flags))
+        puffw_sim.start_simulation(dt=1.0e-10)
+        return np.asarray(puffw_sim.get_results().nn[-1], dtype=float)
+
+    puffw_none_nn = _puffw_seed(None)
+    assert np.array_equal(_puffw_seed(None, drop=True), puffw_none_nn)
+    # Setting it explicitly to tau_discharge must reproduce the fallback too.
+    assert np.array_equal(
+        _puffw_seed(puffw_base_params["tau_discharge"]), puffw_none_nn
+    )
+    # ... and a HALVED window must measurably starve the equilibration.
+    puffw_half_nn = _puffw_seed(1.0e-10)
+    assert np.mean(puffw_half_nn) < np.mean(puffw_none_nn), (
+        float(np.mean(puffw_half_nn)), float(np.mean(puffw_none_nn))
+    )
+    # The window itself moved: the phase flips at the new width, and the
+    # recorded phase event names the key that closed it.
+    puffw_phase_params = dict(neutral_phase_run_params)
+    puffw_phase_params["equilibration_gas_puff_on_s"] = 1.0e-10
+    puffw_phase_sim = LAPDSim1D(
+        puffw_phase_params, dict(neutral_phase_run_flags)
+    )
+    assert puffw_phase_sim.phase_at_time(0.5e-10) == "equilibrium_puff"
+    assert puffw_phase_sim.phase_at_time(1.0e-10) == "equilibrium_off"
+    assert np.isclose(puffw_phase_sim.next_phase_boundary_after(0.0), 1.0e-10)
+    puffw_phase_result = puffw_phase_sim.run(t_end=4.0e-10, dt=1.0e-10)
+    assert list(puffw_phase_result.phase) == [
+        "equilibrium_puff",
+        "equilibrium_off",
+        "equilibrium_off",
+        "equilibrium_off",
+        "equilibrium_off",
+    ], list(puffw_phase_result.phase)
+    assert list(puffw_phase_result.phase_events["reason"]) == [
+        "initial",
+        "equilibration_gas_puff_on_s",
+    ]
+    # It is NOT inert to the neutral-seed signature: setting it must re-key.
+    from cablp.solvers._sim1d.core.neutral_seed_cache import (
+        neutral_seed_signature,
+    )
+
+    assert neutral_seed_signature(
+        {**puffw_base_params, "equilibration_gas_puff_on_s": 1.0e-10},
+        equilibration_flags,
+    ) != neutral_seed_signature(
+        {**puffw_base_params, "equilibration_gas_puff_on_s": None},
+        equilibration_flags,
+    )
+    # Loud ValueError on a nonsense window, at CONSTRUCTION time.
+    for bad_puff_on in (0.0, -1.0e-10, 1.0e-9, "twenty-five"):
+        bad_puffw_params = dict(puffw_base_params)
+        bad_puffw_params["equilibration_gas_puff_on_s"] = bad_puff_on
+        try:
+            LAPDSim1D(bad_puffw_params, dict(equilibration_flags))
+        except ValueError as exc:
+            assert "equilibration_gas_puff_on_s" in str(exc), str(exc)
+        else:
+            raise AssertionError(
+                f"equilibration_gas_puff_on_s={bad_puff_on!r} did not raise"
+            )
     with tempfile.TemporaryDirectory() as tmpdir:
         from scripts.run_sim1d import _parse_args
 

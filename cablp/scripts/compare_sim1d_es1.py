@@ -78,6 +78,15 @@ PARAM_OVERRIDES = {
     # surface temperature -- cathode_warming_model="power_balance" (a config
     # default) evolves it from cathode_Ts_base_K -- and its config default is
     # the identical 1998.15 K, so dropping the pin changes nothing numerically.
+    # Neutral-equilibration puff width, MEASURED (Tom, 2026-07-29, boxed).
+    # The ES1-4 total gas-puff pulse width was ~25 ms: operator practice is to
+    # fire the valve, wait out the machine breakdown delay (~4-6 ms), hold
+    # 20 ms from 1 kA, and round up. Refinable from the V_dis traces, not
+    # fitted. Without this the equilibration inherits tau_discharge (20 ms) as
+    # its per-cycle puff window -- a double duty with no physical basis. This
+    # changes the SCORER's runs (the equilibrated seed rises ~x1.25 in
+    # delivered fuel) and NOT the golden, which pins the key back to None.
+    "equilibration_gas_puff_on_s": 25e-3,
     "S_gp": 3000,
     "S_gp_decay_target": 2000,
     "tau_gp_pulse_duration": 1e-3,

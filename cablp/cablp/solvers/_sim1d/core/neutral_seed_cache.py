@@ -61,7 +61,9 @@ INERT_PARAM_KEYS = frozenset({
     # exactly the silent stale-seed reuse this signature exists to prevent.
     # It stays in the hash unconditionally (fail-closed: when in doubt, leave
     # a key OUT of this set); the cost is one unnecessary re-equilibration for
-    # configs that do override the window.
+    # configs that do override the window. Its override,
+    # equilibration_gas_puff_on_s, is likewise absent from this list and so is
+    # hashed -- setting it MUST re-key, it changes the fill directly.
     "tau_prebreakdown", "tau_breakdown", "tau_afterglow",
     "tau_neutral_prebreakdown", "phase_transition_mode",
     # --- cathode / emission / warming / surface (no cathode during equil) ---
