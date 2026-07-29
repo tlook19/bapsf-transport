@@ -364,6 +364,20 @@ OHMIC_REFERENCE_LABEL = "bulk ohmic (pure thermal; already inside the CSDA bar)"
 OHMIC_REFERENCE_COLOR = "#56B4E9"
 OHMIC_REFERENCE_HATCH = "///"
 
+# Efficiency-figure WIDTH growth per extra stage-2 breakout row [inches].
+#
+# The breakout rows are the ones carrying the long channel names ("excitation
+# radiation carried inside this term (also its own bar) [thermal]", ~70
+# characters). Their label column is taken out of the figure width, and the
+# figure height already grew with the row count while the width did NOT: on
+# the 11-row production breakout constrained_layout ran out of horizontal
+# room, warned "axes sizes collapsed to zero", bailed out of the layout
+# entirely and let the panels spill past the right edge -- stage 1's
+# right-hand E_load panel first, since it sits furthest right. Measured on
+# that 11-row figure (extra_rows = 6), not guessed. Zero at extra_rows = 0,
+# so the historical 5-row figure is unchanged to the pixel.
+EFFICIENCY_WIDTH_PER_EXTRA_ROW_IN = {"slide": 0.90, "journal": 0.55}
+
 # -----------------------------------------------------------------------------
 # STAGE-2 TIME WINDOWS (v4, Tom 2026-07-27).
 #
@@ -1499,13 +1513,17 @@ def make_efficiency_figure(d, ledger, window, stage2, profile):
     # short); stages 2 and 3 take the full width, which is what keeps their
     # long channel names and x-labels from colliding at either profile.
     # The breakout adds rows to stage 2, so its panel and the figure grow with
-    # the bar count instead of squeezing the same box.
+    # the bar count instead of squeezing the same box -- in BOTH directions
+    # (see EFFICIENCY_WIDTH_PER_EXTRA_ROW_IN; the width term was missing and
+    # the 11-row breakout ran off the right edge).
     items_b, _, _, _ = beam_fate_items(d, ledger, s2_mask, t_s)
     extra_rows = max(0, len(items_b) - 5)
+    per_row_w = EFFICIENCY_WIDTH_PER_EXTRA_ROW_IN[profile]
     if journal:
-        figsize = (fs.JOURNAL_WIDTHS["aip_double"], 8.2 + 0.30 * extra_rows)
+        figsize = (fs.JOURNAL_WIDTHS["aip_double"] + per_row_w * extra_rows,
+                   8.2 + 0.30 * extra_rows)
     else:
-        figsize = (12.9, 13.2 + 0.45 * extra_rows)
+        figsize = (12.9 + per_row_w * extra_rows, 13.2 + 0.45 * extra_rows)
     fig = plt.figure(figsize=figsize, constrained_layout=True)
     gs = fig.add_gridspec(
         3, 2, height_ratios=[1.0, 0.9 + 0.18 * extra_rows, 1.15]
