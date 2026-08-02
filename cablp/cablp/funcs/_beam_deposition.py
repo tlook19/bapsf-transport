@@ -127,6 +127,73 @@ new is booked, and the identity stays exactly the historical
 ``ionization_events`` / ``excitation_events``, the fluid ``n`` rows they feed,
 and the circuit currents are identical in both modes. Only where the product
 ENERGY lands moves.
+
+QL heating locality (``anomalous_transport``, WP-E)
+---------------------------------------------------
+
+The anomalous channel above banks its drag as INSTANTANEOUS LOCAL bulk
+heating: the Langmuir turbulence is Landau-damped near where it is driven, so
+its energy is handed to the background electrons in the cell that drove it.
+That is the right picture for the wave energy, but not for the electrons the
+wave heats. Quasilinear diffusion does not warm a Maxwellian in place — it
+fills a fast-tail PLATEAU first, and at breakdown densities a tail electron is
+collisionally decoupled (Coulomb range ~km at n_e ~ 1e10, hundreds of machine
+lengths) and free-streams along B. The bulk only sees the power once those
+tail electrons slow down, wherever that happens to be.
+
+``anomalous_transport="tail_walk"`` carries that step explicitly. The
+per-cell anomalous power ``P_QL(z)`` is WITHHELD from its birth cell and
+re-expressed as a population of tail electrons at a single energy
+``tail_energy_eV`` (``E_tail``), i.e. an equivalent tail flux
+``P_QL(z) / E_tail`` launched from that cell, split 50/50 along +B and -B
+(the QL plateau is driven along B and the bump-on-tail resonance is
+one-sided, but the plateau electrons themselves scatter both ways — a stated
+approximation, matching the secondaries' treatment above). Each population is
+then walked with the SAME closed-form Coulomb machinery the WP-D products use
+-- the module's own ``coulomb_stopping_eV_per_cm`` under the ray's own
+``coulomb_model``, the same ``1.5*Te`` thermalization floor -- and deposits
+into ``plasma_heating_erg_s`` where it actually slows. **No new physics
+parameters beyond E_tail:** the walk introduces nothing the primary's drag law
+does not already contain.
+
+``E_tail`` cannot be pinned by a fluid model (the plateau energy is a kinetic
+quantity), so per campaign policy it is an ASSUMPTION value and the BRACKET is
+the claim: the registered central arm is 75 eV, with 30 and 150 eV as the
+bracket arms, all three reported together and none of them ever fitted.
+
+Energy that reaches a domain end still hot is booked to a SEPARATE end-surface
+ledger, ``end_loss_tail_low_erg_s`` / ``end_loss_tail_high_erg_s``, and leaves
+the system. It is deliberately NOT mixed into the WP-D ``end_loss_*`` fields:
+those are documented, smoke-pinned, and already MEASURED (WP-D D2/D4) as the
+escape of the two EVENT products, they are identically zero under
+``product_transport="local"``, and the two closures switch independently — so
+sharing one pair of fields would both break that invariant and silently
+contaminate the WP-D diverted-fraction readout whenever both are on. The
+per-ray identity under ``"tail_walk"`` gains two terms and nothing else::
+
+    Gamma0*E0 = heating + radiated + ionization_cost + anode_intercepted
+                + transmitted (or the WP-D end ledger)
+                + end_loss_tail_low + end_loss_tail_high
+
+The CONSERVATION IDENTITY the smoke suite pins is the sharper local statement:
+the ray integration is bit-identical in both modes (``L_anom`` depends only on
+the beam and the column, never on where its energy is banked), so the
+anomalous power the ``"local"`` arm banks equals, to roundoff, what the
+``"tail_walk"`` arm deposits along the walks plus what it books to the tail end
+ledger.
+
+``heating_anomalous_erg_s`` keeps its meaning as "the anomalous channel's
+delivery to the electrons", so under ``"tail_walk"`` it reports the WALKED
+deposition profile rather than the birth profile — the same convention WP-D
+uses for ``heating_secondary`` / ``heating_terminal``.
+
+Like WP-D this is ENERGY-ONLY: the tail electrons are an energy-transport
+bookkeeping device, not a new particle species. ``ionization_events``,
+``excitation_events``, every fluid particle row and every circuit current are
+identical in both modes. Stated limitations, inherited from the walk: straight
+lines along B, no pitch-angle diffusion, one mean energy rather than a plateau
+distribution, and no sheath/ambipolar throttle at the ends — so ``"tail_walk"``
+is a FREE-ESCAPE bound and the pair {local, tail_walk} brackets the truth.
 """
 
 from __future__ import annotations
@@ -329,7 +396,10 @@ class BeamDepositionResult:
                           [erg/s]
     heating_anomalous_erg_s : DIAGNOSTIC split -- the anomalous (quasilinear
                           beam-plasma) drag [erg/s]; identically zero under
-                          ``anomalous_model="none"``
+                          ``anomalous_model="none"``. Under
+                          ``anomalous_transport="tail_walk"`` this is the
+                          WALKED deposition profile (where the tail electrons
+                          actually slowed), not the birth profile.
     heating_secondary_erg_s : DIAGNOSTIC split -- the inelastic-EVENT thermal
                           residue, i.e. the mean secondary-electron energy
                           <W_sec> carried away per ionization ABOVE the
@@ -374,6 +444,19 @@ class BeamDepositionResult:
                           ``end_loss_low + end_loss_high`` is the transmitted
                           primary rather than walked products. 0.0 under
                           ``"local"``.
+    end_loss_tail_low_erg_s : WP-E TAIL END LEDGER, low-index end [erg/s].
+                          Identically 0.0 under
+                          ``anomalous_transport="local"`` (the default). Under
+                          ``"tail_walk"`` it books the energy of QL tail
+                          electrons that reach that end without thermalizing.
+                          A SIBLING of ``end_loss_low_erg_s``, deliberately
+                          kept separate so the WP-D product ledger keeps its
+                          documented meaning and its measured values while the
+                          two closures switch independently. Like the WP-D
+                          ledger this energy LEAVES the system and must not
+                          enter any RHS row.
+    end_loss_tail_high_erg_s: WP-E TAIL END LEDGER, high-index end [erg/s];
+                          same content.
     """
 
     ionization_events: np.ndarray
@@ -392,6 +475,8 @@ class BeamDepositionResult:
     end_loss_low_erg_s: float = 0.0
     end_loss_high_erg_s: float = 0.0
     end_loss_transmitted_erg_s: float = 0.0
+    end_loss_tail_low_erg_s: float = 0.0
+    end_loss_tail_high_erg_s: float = 0.0
 
 
 def deposit_beam(
@@ -413,6 +498,8 @@ def deposit_beam(
     anode_cross_index: int | None = None,
     anode_eta: float = 0.0,
     product_transport: str = "local",
+    anomalous_transport: str = "local",
+    tail_energy_eV: float | None = None,
 ) -> BeamDepositionResult:
     """Deposit one monoenergetic beam ray through the column (He only).
 
@@ -455,11 +542,30 @@ def deposit_beam(
     the end ledger. Energy-only: ``ionization_events`` and
     ``excitation_events`` -- and therefore every particle and circuit row
     downstream -- are identical in both modes.
+
+    **QL heating locality (WP-E).** ``anomalous_transport`` is ``"local"``
+    (default) or ``"tail_walk"``; see the module docstring for the physics.
+    Off, no branch below changes and the result is byte-for-byte the
+    historical one with ``end_loss_tail_*`` identically zero. On, the
+    anomalous channel's power is withheld from its birth cell, re-expressed as
+    tail electrons at ``tail_energy_eV`` (required, finite, > 0) launched
+    50/50 along +-B, and walked on the same Coulomb machinery as the WP-D
+    products; escapes go to the SEPARATE tail end ledger. ``"tail_walk"``
+    requires an active anomalous channel (``anomalous_model="quasilinear"``) --
+    with no anomalous drag there is no power to carry and the setting would be
+    a silent no-op. Energy-only, exactly like WP-D. The two closures are
+    independent and compose: with both on, the event products walk on the WP-D
+    ledger and the QL tails on the WP-E one.
     """
     if product_transport not in ("local", "nonlocal"):
         raise ValueError(
             f"unknown product_transport {product_transport!r}; "
             "expected 'local' or 'nonlocal'"
+        )
+    if anomalous_transport not in ("local", "tail_walk"):
+        raise ValueError(
+            f"unknown anomalous_transport {anomalous_transport!r}; "
+            "expected 'local' or 'tail_walk'"
         )
     if anode_eta != 0.0 and not (0.0 <= anode_eta < 1.0):
         raise ValueError(
@@ -492,6 +598,30 @@ def deposit_beam(
         area = np.broadcast_to(
             np.asarray(beam_area_cm2, dtype=float), (cells,)
         )
+    walk_tail = anomalous_transport == "tail_walk"
+    E_tail = 0.0
+    if walk_tail:
+        # There must BE an anomalous channel for the walk to carry; without one
+        # the setting is a silent no-op, which is exactly what the presence
+        # gating exists to prevent.
+        if anomalous_model == "none":
+            raise ValueError(
+                "anomalous_transport='tail_walk' requires an active anomalous "
+                "channel (anomalous_model='quasilinear'); with no anomalous "
+                "drag there is no power to carry and the setting would do "
+                "nothing"
+            )
+        if tail_energy_eV is None:
+            raise ValueError(
+                "anomalous_transport='tail_walk' needs tail_energy_eV (the "
+                "QL plateau energy the tail electrons are launched at)"
+            )
+        E_tail = float(tail_energy_eV)
+        if not math.isfinite(E_tail) or E_tail <= 0.0:
+            raise ValueError(
+                "tail_energy_eV must be finite and > 0 (got "
+                f"{tail_energy_eV})"
+            )
     frac = float(max_energy_fraction_per_substep)
     if not 0.0 < frac < 1.0:
         raise ValueError(
@@ -525,6 +655,14 @@ def deposit_beam(
         terminal_cell = -1
         terminal_flux = 0.0
         terminal_E = 0.0
+    # --- QL heating locality (WP-E) --------------------------------------
+    # Under "tail_walk" the anomalous drag is WITHHELD from its birth cell and
+    # accumulated here [eV/s], then carried by tail electrons at E_tail after
+    # the ray is done. Under "local" none of this is touched or allocated.
+    end_loss_tail_low = 0.0
+    end_loss_tail_high = 0.0
+    if walk_tail:
+        anom_power_eV = np.zeros(cells)
 
     order = range(launch, cells) if direction > 0 else range(launch, -1, -1)
     E = float(E0_eV)
@@ -566,6 +704,10 @@ def deposit_beam(
             end_loss_low_erg_s=end_loss_low,
             end_loss_high_erg_s=end_loss_high,
             end_loss_transmitted_erg_s=end_loss_transmitted,
+            # A sub-threshold source drives no anomalous drag, so the tail
+            # ledger has nothing to book on this path either.
+            end_loss_tail_low_erg_s=end_loss_tail_low,
+            end_loss_tail_high_erg_s=end_loss_tail_high,
         )
 
     for cell in order:
@@ -635,19 +777,35 @@ def deposit_beam(
             d_coul = L_coul * dz_sub
             d_anom = L_anom * dz_sub
             ionization_cost[cell] += gamma * d_pot * _ERG_PER_EV
+            # WP-E: under "tail_walk" the anomalous decrement is withheld from
+            # every local bank in this cell (both the lumped one and the
+            # diagnostic split) and accumulated for the tail walks below.
+            # `d_anom_local` is `d_anom` when the walk is OFF, so the two
+            # expressions below are then literally the historical ones --
+            # which is what makes the default path bit-exact. The ray's own
+            # energy decrement further down is UNCHANGED in both modes, so the
+            # trajectory, the transmitted flux and every other channel are
+            # bit-identical: only the destination of this one bank moves.
+            if walk_tail:
+                anom_power_eV[cell] += gamma * d_anom
+                d_anom_local = 0.0
+            else:
+                d_anom_local = d_anom
             if walk_products:
                 # Withhold the secondary bank from this cell; accumulate the
                 # population (flux and energy) for the walks below. The flux
                 # is the SAME product `ionization_events` uses, so the
                 # particle rows are untouched by construction.
-                heating[cell] += gamma * (d_coul + d_anom) * _ERG_PER_EV
+                heating[cell] += gamma * (d_coul + d_anom_local) * _ERG_PER_EV
                 sec_flux[cell] += gamma * nn_c * sigma_i * dz_sub
                 sec_power_eV[cell] += gamma * d_sec
             else:
-                heating[cell] += gamma * (d_sec + d_coul + d_anom) * _ERG_PER_EV
+                heating[cell] += (
+                    gamma * (d_sec + d_coul + d_anom_local) * _ERG_PER_EV
+                )
                 heat_secondary[cell] += gamma * d_sec * _ERG_PER_EV
             heat_coulomb[cell] += gamma * d_coul * _ERG_PER_EV
-            heat_anomalous[cell] += gamma * d_anom * _ERG_PER_EV
+            heat_anomalous[cell] += gamma * d_anom_local * _ERG_PER_EV
             radiated[cell] += gamma * d_exc * _ERG_PER_EV
             ionization_events[cell] += gamma * nn_c * sigma_i * dz_sub
             excitation_events[cell] += gamma * nn_c * sigma_x * dz_sub
@@ -671,32 +829,45 @@ def deposit_beam(
         if absorbed:
             break
 
-    if walk_products:
-        # --- Product walks (WP-D) ---------------------------------------
-        # One stopping-power coefficient per cell, taken from the module's own
-        # coulomb_stopping_eV_per_cm, plus the closure's energy exponent; see
-        # _walk_products_forward for the closed-form integration.
+    if walk_products or walk_tail:
+        # --- Product walks (WP-D) and QL tail walks (WP-E) ---------------
+        # ONE set of walk machinery serves both closures: the same per-cell
+        # stopping-power coefficient taken from the module's own
+        # coulomb_stopping_eV_per_cm, the same closure energy exponent, and
+        # the same thermalization floor; see _walk_products_forward for the
+        # closed-form integration. WP-E introduces no walk physics of its own
+        # -- only a different population to walk (see the module docstring).
         q = 1.0 - _COULOMB_STOPPING_EXPONENT[coulomb_model]
         coeff = _coulomb_stopping_coefficient(ne, Te, coulomb_model)
         floor_eV = np.maximum(
             _PRODUCT_FLOOR_TE_MULTIPLE * Te, _PRODUCT_FLOOR_MIN_EV
         )
 
-        def _bank_walk(W0, flux, walk_direction, split):
-            """Walk one product population and book its deposit and escape."""
-            nonlocal end_loss_low, end_loss_high
+        def _walk_and_deposit(W0, flux, walk_direction, split):
+            """Walk one population; deposit it and RETURN the escaping power.
+
+            The caller books the escape to its own end ledger -- WP-D products
+            to ``end_loss_*``, WP-E tails to ``end_loss_tail_*`` -- which is
+            what keeps the two ledgers independently readable.
+            """
             dep_eV, exit_eV = _walk_products(
                 W0, flux, walk_direction, coeff, dz_cm, floor_eV, q
             )
             dep_erg = dep_eV * _ERG_PER_EV
             heating[:] += dep_erg
             split[:] += dep_erg
-            if walk_direction > 0:
-                end_loss_high += exit_eV * _ERG_PER_EV
-            else:
-                end_loss_low += exit_eV * _ERG_PER_EV
+            return exit_eV * _ERG_PER_EV
 
-        if np.any(sec_flux > 0.0):
+        def _bank_walk(W0, flux, walk_direction, split):
+            """Walk one product population and book its deposit and escape."""
+            nonlocal end_loss_low, end_loss_high
+            exit_erg = _walk_and_deposit(W0, flux, walk_direction, split)
+            if walk_direction > 0:
+                end_loss_high += exit_erg
+            else:
+                end_loss_low += exit_erg
+
+        if walk_products and np.any(sec_flux > 0.0):
             # Flux-weighted mean secondary energy per birth cell (the module
             # carries mean energies, not distributions -- stated limitation),
             # emitted 50/50 along +z and -z (OPB emission is broadly
@@ -707,14 +878,37 @@ def deposit_beam(
             half = 0.5 * sec_flux
             for walk_direction in (1, -1):
                 _bank_walk(W_sec_cell, half, walk_direction, heat_secondary)
-        if terminal_flux > 0.0 and terminal_E > 0.0:
+        if walk_products and terminal_flux > 0.0 and terminal_E > 0.0:
             # The terminal residual keeps the primary's direction.
             term_flux = np.zeros(cells)
             term_W = np.zeros(cells)
             term_flux[terminal_cell] = terminal_flux
             term_W[terminal_cell] = terminal_E
             _bank_walk(term_W, term_flux, direction, heat_terminal)
-        if not absorbed and gamma > 0.0 and E > 0.0:
+        if walk_tail and np.any(anom_power_eV > 0.0):
+            # WP-E: re-express each cell's withheld anomalous POWER as a flux
+            # of tail electrons at the single plateau energy E_tail
+            # (flux = P / E_tail, so flux*E_tail returns the power to
+            # roundoff), split 50/50 along +-B, and walk them on the shared
+            # machinery above. The escape goes to the tail-only ledger, and
+            # the deposition profile becomes the anomalous diagnostic split --
+            # heating_anomalous now reports where the QL energy LANDS.
+            #
+            # This self-limits exactly like the WP-D walks: once n_e is high
+            # the slowing length falls below a cell, the walker thermalizes in
+            # its birth cell, and the closure collapses onto the local banking
+            # it replaced.
+            tail_W = np.full(cells, E_tail)
+            half_flux = 0.5 * (anom_power_eV / E_tail)
+            for walk_direction in (1, -1):
+                exit_erg = _walk_and_deposit(
+                    tail_W, half_flux, walk_direction, heat_anomalous
+                )
+                if walk_direction > 0:
+                    end_loss_tail_high += exit_erg
+                else:
+                    end_loss_tail_low += exit_erg
+        if walk_products and not absorbed and gamma > 0.0 and E > 0.0:
             # The transmitted primary: computed since B1, never banked. It
             # leaves through the end the ray was heading for.
             end_loss_transmitted = gamma * E * _ERG_PER_EV
@@ -740,4 +934,6 @@ def deposit_beam(
         end_loss_low_erg_s=end_loss_low,
         end_loss_high_erg_s=end_loss_high,
         end_loss_transmitted_erg_s=end_loss_transmitted,
+        end_loss_tail_low_erg_s=end_loss_tail_low,
+        end_loss_tail_high_erg_s=end_loss_tail_high,
     )

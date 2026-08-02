@@ -2768,6 +2768,186 @@ def main():
     for _bl_key in ("low", "high"):
         assert bl_diag[f"source_beam_end_loss_{_bl_key}_W"] == 0.0
 
+    # --- WP-E through the solver: heating_anomalous_transport routes the CSDA
+    # ray's ANOMALOUS (quasilinear) heating onto tail electrons at E_tail (see
+    # the module block for the physics and the conservation identity). Unit
+    # level only -- the flag's effect on the ignition timeline is a campaign
+    # run, not a smoke scenario.
+    # The scenario must actually drive the anomalous channel, or the routing
+    # has nothing to carry and every assertion below is vacuous.
+    assert float(csda_dep.heating_anomalous_erg_s.sum()) > 0.0
+    # Misconfiguration is loud at CONSTRUCTION, including every incomplete
+    # configuration in which the selection could only be a silent no-op: no
+    # CSDA module to deposit, no anomalous channel to carry, or a tail energy
+    # the walk cannot launch at.
+    for wpe_bad in (
+        dict(csda_params, heating_anomalous_transport="bogus"),
+        dict(csda_params, heating_anomalous_transport="tail_walk",
+             beam_deposition_model="beer_lambert"),
+        dict(csda_params, heating_anomalous_transport="tail_walk",
+             beam_anomalous_model="none"),
+        dict(csda_params, heating_anomalous_transport="tail_walk",
+             heating_anomalous_tail_energy_eV=0.0),
+        dict(csda_params, heating_anomalous_transport="tail_walk",
+             heating_anomalous_tail_energy_eV=-75.0),
+        dict(csda_params, heating_anomalous_transport="tail_walk",
+             heating_anomalous_tail_energy_eV=float("nan")),
+        dict(csda_params, heating_anomalous_transport="tail_walk",
+             heating_anomalous_tail_energy_eV=float("inf")),
+    ):
+        try:
+            LAPDSim1D(wpe_bad, dict(cathode_flags))
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "expected ValueError for heating_anomalous_transport"
+            )
+    # A BAD TAIL ENERGY UNDER "local" IS NOT AN ERROR: the key is documented as
+    # read only under tail_walk, so it must stay inert (this pins the "read
+    # ONLY under tail_walk" contract, not just the guard).
+    LAPDSim1D(
+        dict(csda_params, heating_anomalous_tail_energy_eV=-1.0),
+        dict(cathode_flags),
+    )
+    # Default-path bit-exactness sentinel: naming "local" explicitly reproduces
+    # the deposition csda_sim already produced, byte for byte, on every array.
+    wpe_off_sim = LAPDSim1D(
+        dict(csda_params, heating_anomalous_transport="local"),
+        dict(cathode_flags),
+    )
+    wpe_off_sim._circuit_I_loop = 3000.0
+    wpe_off_dep = wpe_off_sim.solve_cathode_boundary().beam_deposition[0]
+    for _wpe_arr in (
+        "plasma_heating_erg_s", "heating_anomalous_erg_s",
+        "heating_coulomb_erg_s", "heating_secondary_erg_s",
+        "heating_terminal_erg_s", "radiated_erg_s",
+        "ionization_cost_erg_s", "ionization_events", "E_entry_eV",
+    ):
+        assert np.array_equal(
+            getattr(wpe_off_dep, _wpe_arr), getattr(csda_dep, _wpe_arr)
+        ), _wpe_arr
+    assert wpe_off_dep.end_loss_tail_low_erg_s == 0.0
+    assert wpe_off_dep.end_loss_tail_high_erg_s == 0.0
+    # On: the QL power is carried away from its birth cells, so the plasma
+    # keeps less of it, and the per-ray budget still closes with the tail
+    # ledger in it.
+    wpe_on_sim = LAPDSim1D(
+        dict(csda_params, heating_anomalous_transport="tail_walk"),
+        dict(cathode_flags),
+    )
+    wpe_on_sim._circuit_I_loop = 3000.0
+    wpe_on_solve = wpe_on_sim.solve_cathode_boundary()
+    wpe_on_dep = wpe_on_solve.beam_deposition[0]
+    wpe_tail_ledger = (
+        float(wpe_on_dep.end_loss_tail_low_erg_s)
+        + float(wpe_on_dep.end_loss_tail_high_erg_s)
+    )
+    wpe_on_total = (
+        wpe_on_dep.plasma_heating_erg_s.sum()
+        + wpe_on_dep.radiated_erg_s.sum()
+        + wpe_on_dep.ionization_cost_erg_s.sum()
+        + float(wpe_on_dep.anode_intercepted_erg_s)
+        + wpe_on_dep.transmitted_flux
+        * wpe_on_dep.transmitted_energy_eV
+        * ev_to_erg
+        + wpe_tail_ledger
+    )
+    assert abs(wpe_on_total - csda_budget) / csda_budget < 1e-9
+    assert wpe_tail_ledger > 0.0
+    assert (
+        wpe_on_dep.plasma_heating_erg_s.sum()
+        < csda_dep.plasma_heating_erg_s.sum()
+    )
+    # THE CONSERVATION IDENTITY, at solver conditions: the anomalous power the
+    # "local" arm banks locally equals what the "tail_walk" arm deposits along
+    # the walks plus what it books to the tail end ledger. This is exact-to-
+    # roundoff and not merely a budget statement, because the ray integration
+    # itself is bit-identical in both modes -- L_anom depends on the beam and
+    # the column, never on where its energy is banked.
+    wpe_removed = float(csda_dep.heating_anomalous_erg_s.sum())
+    wpe_delivered = (
+        float(wpe_on_dep.heating_anomalous_erg_s.sum()) + wpe_tail_ledger
+    )
+    assert abs(wpe_delivered - wpe_removed) / wpe_removed < 1e-12, (
+        wpe_removed, wpe_delivered
+    )
+    # The other three heating channels are untouched: only the anomalous bank
+    # moved, so the whole difference in plasma heating IS the tail ledger.
+    for _wpe_arr in (
+        "heating_coulomb_erg_s", "heating_secondary_erg_s",
+        "heating_terminal_erg_s",
+    ):
+        assert np.array_equal(
+            getattr(wpe_on_dep, _wpe_arr), getattr(csda_dep, _wpe_arr)
+        ), _wpe_arr
+    assert abs(
+        (csda_dep.plasma_heating_erg_s.sum()
+         - wpe_on_dep.plasma_heating_erg_s.sum())
+        - wpe_tail_ledger
+    ) / wpe_tail_ledger < 1e-9
+    # Energy-only, exactly like WP-D: the particle rows the fluid and circuit
+    # read are untouched, and the WP-D ledger stays identically zero -- the two
+    # closures switch independently and do not share a ledger.
+    assert np.array_equal(
+        wpe_on_dep.ionization_events, csda_dep.ionization_events
+    )
+    assert wpe_on_dep.end_loss_low_erg_s == 0.0
+    assert wpe_on_dep.end_loss_high_erg_s == 0.0
+    # The gap-transmission PROBE and the item-35 tripwire are primary-flux
+    # instruments and must be blind to heating transport too.
+    assert wpe_on_solve.beam_gap_ledger[0] == csda_ledger[0]
+    assert (
+        wpe_on_solve.beam_result.beam_atten_cross[csda_launch]
+        == csda_sigma_eff
+    )
+    # The tail ledger is recorded as cathode diagnostics, zero-defaulted so
+    # beer_lambert runs and pre-WP-E files stay readable.
+    wpe_on_diag = wpe_on_sim._cathode_diagnostic_snapshot()
+    assert wpe_on_diag["source_beam_end_loss_tail_low_W"] == (
+        wpe_on_dep.end_loss_tail_low_erg_s * 1.0e-7
+    )
+    assert wpe_on_diag["source_beam_end_loss_tail_high_W"] == (
+        wpe_on_dep.end_loss_tail_high_erg_s * 1.0e-7
+    )
+    assert wpe_on_diag["end_beam_end_loss_tail_low_W"] == 0.0
+    for _bl_key in ("low", "high"):
+        assert bl_diag[f"source_beam_end_loss_tail_{_bl_key}_W"] == 0.0
+    # The two closures COMPOSE: with both on, each ledger books its own
+    # population and neither is empty.
+    wpe_both_sim = LAPDSim1D(
+        dict(csda_params, heating_anomalous_transport="tail_walk",
+             beam_product_transport="nonlocal"),
+        dict(cathode_flags),
+    )
+    wpe_both_sim._circuit_I_loop = 3000.0
+    wpe_both_dep = wpe_both_sim.solve_cathode_boundary().beam_deposition[0]
+    assert (
+        wpe_both_dep.end_loss_low_erg_s + wpe_both_dep.end_loss_high_erg_s
+        > 0.0
+    )
+    assert (
+        wpe_both_dep.end_loss_tail_low_erg_s
+        + wpe_both_dep.end_loss_tail_high_erg_s
+        > 0.0
+    )
+    # WP-D's own ledger is unchanged by WP-E being on alongside it: the tail
+    # power never lands in the product channels (this is the reason the two
+    # ledgers are siblings rather than one shared pair of fields).
+    assert wpe_both_dep.end_loss_low_erg_s == wpd_on_dep.end_loss_low_erg_s
+    assert wpe_both_dep.end_loss_high_erg_s == wpd_on_dep.end_loss_high_erg_s
+    wpe_both_total = (
+        wpe_both_dep.plasma_heating_erg_s.sum()
+        + wpe_both_dep.radiated_erg_s.sum()
+        + wpe_both_dep.ionization_cost_erg_s.sum()
+        + float(wpe_both_dep.anode_intercepted_erg_s)
+        + wpe_both_dep.end_loss_low_erg_s
+        + wpe_both_dep.end_loss_high_erg_s
+        + wpe_both_dep.end_loss_tail_low_erg_s
+        + wpe_both_dep.end_loss_tail_high_erg_s
+    )
+    assert abs(wpe_both_total - csda_budget) / csda_budget < 1e-9
+
     # --- Beam-deposition smoothing CONSERVES the deposit over the live plasma.
     # The Gaussian redistribution kernel must place ZERO weight on the typed
     # plasma-dead cells (plenum/obstruction) behind the cathode face, because
@@ -8080,6 +8260,206 @@ def main():
         pass
     else:
         raise AssertionError("expected ValueError for product_transport")
+
+    # --- WP-E: QL heating locality (anomalous_transport). The anomalous
+    # channel banks its drag as instantaneous LOCAL bulk heating; kinetically
+    # QL fills a fast-tail plateau first, and at breakdown densities a tail
+    # electron is collisionally decoupled and free-streams along B. Under
+    # "tail_walk" the QL power is carried by tail electrons at E_tail on the
+    # SAME closed-form Coulomb walk the WP-D products use.
+    #
+    # The column needs an ACTIVE anomalous channel, so the beam must be weak
+    # enough for quasilinear theory to apply (n_b < n_e/10) -- b1_col's
+    # 1e22 beam is not, and runs with anomalous_model="none" by default.
+    wpe_cells = 60
+    wpe_thin = dict(
+        nn=np.full(wpe_cells, 1.0e12),
+        ne=np.full(wpe_cells, 1.0e10),
+        Te=np.full(wpe_cells, 2.0),
+        launch=0,
+        direction=1,
+        dz_cm=np.full(wpe_cells, 30.0),
+        anomalous_model="quasilinear",
+        beam_area_cm2=100.0,
+    )
+    wpe_G0 = 1.0e18
+    wpe_E0 = 150.0
+    wpe_budget = wpe_G0 * wpe_E0 * 1.602176634e-12
+    wpe_local = deposit_beam(wpe_E0, wpe_G0, **wpe_thin)
+    assert wpe_local.heating_anomalous_erg_s.sum() > 0.0  # channel is live
+    wpe_walk = deposit_beam(
+        wpe_E0, wpe_G0, **wpe_thin,
+        anomalous_transport="tail_walk", tail_energy_eV=75.0,
+    )
+
+    # (a) THE RAY IS BIT-IDENTICAL. L_anom depends on the beam and the column,
+    # never on where its energy is banked, so the trajectory, the primary flux
+    # and every non-anomalous channel are byte-for-byte the same. This is what
+    # makes the conservation identity below exact rather than approximate.
+    for _wpe_arr in (
+        "E_entry_eV", "ionization_events", "excitation_events",
+        "radiated_erg_s", "ionization_cost_erg_s", "heating_coulomb_erg_s",
+        "heating_secondary_erg_s", "heating_terminal_erg_s",
+    ):
+        assert np.array_equal(
+            getattr(wpe_walk, _wpe_arr), getattr(wpe_local, _wpe_arr)
+        ), _wpe_arr
+    assert wpe_walk.transmitted_flux == wpe_local.transmitted_flux
+    assert wpe_walk.transmitted_energy_eV == wpe_local.transmitted_energy_eV
+
+    # (b) THE CONSERVATION IDENTITY: banking removed = walked deposition +
+    # end losses, to roundoff. The tolerance is roundoff (1e-12), not a
+    # convergence tolerance -- the walk is closed-form and telescopes, so
+    # anything larger would be a real leak.
+    wpe_removed = float(wpe_local.heating_anomalous_erg_s.sum())
+    wpe_ledger = (
+        float(wpe_walk.end_loss_tail_low_erg_s)
+        + float(wpe_walk.end_loss_tail_high_erg_s)
+    )
+    wpe_delivered = float(wpe_walk.heating_anomalous_erg_s.sum()) + wpe_ledger
+    assert abs(wpe_delivered - wpe_removed) / wpe_removed < 1e-12, (
+        wpe_removed, wpe_delivered
+    )
+    # ... and the whole per-ray budget closes with the tail ledger in it.
+    wpe_total = (
+        wpe_walk.plasma_heating_erg_s.sum()
+        + wpe_walk.radiated_erg_s.sum()
+        + wpe_walk.ionization_cost_erg_s.sum()
+        + float(wpe_walk.anode_intercepted_erg_s)
+        + wpe_walk.transmitted_flux
+        * wpe_walk.transmitted_energy_eV
+        * 1.602176634e-12
+        + wpe_ledger
+    )
+    assert abs(wpe_total - wpe_budget) / wpe_budget < 1e-9
+
+    # (c) THE THIN/HOT LIMIT: at breakdown-like n_e = 1e10 a 75 eV tail
+    # electron's Coulomb range is hundreds of machine lengths, so nearly all
+    # of the QL power leaves through the ends instead of heating the column.
+    assert wpe_ledger / wpe_removed > 0.9
+    assert (
+        wpe_walk.plasma_heating_erg_s.sum()
+        < wpe_local.plasma_heating_erg_s.sum()
+    )
+
+    # (d) THE LOCAL LIMIT (the D1 self-limiting pattern): raise n_e until the
+    # tail range collapses below one cell and "tail_walk" must reproduce
+    # "local" -- every walker thermalizes in its birth cell and nothing
+    # reaches an end. The closure confines itself to the low-density phase.
+    wpe_dense = dict(wpe_thin, ne=np.full(wpe_cells, 1.0e14))
+    wpe_dense_local = deposit_beam(wpe_E0, wpe_G0, **wpe_dense)
+    wpe_dense_walk = deposit_beam(
+        wpe_E0, wpe_G0, **wpe_dense,
+        anomalous_transport="tail_walk", tail_energy_eV=75.0,
+    )
+    assert wpe_dense_walk.end_loss_tail_low_erg_s == 0.0
+    assert wpe_dense_walk.end_loss_tail_high_erg_s == 0.0
+    assert np.allclose(
+        wpe_dense_walk.plasma_heating_erg_s,
+        wpe_dense_local.plasma_heating_erg_s,
+        rtol=1e-9,
+        atol=0.0,
+    )
+
+    # (e) E_tail SETS THE RANGE, NOT THE POWER. The equivalent tail flux is
+    # P_QL/E_tail, so the power carried is independent of E_tail (conservation
+    # holds at every bracket arm) while a hotter tail travels further and
+    # exports more. This pins the one thing the bracket arms vary.
+    wpe_prev_escape = -1.0
+    for wpe_E_tail in (30.0, 75.0, 150.0):
+        wpe_arm = deposit_beam(
+            wpe_E0, wpe_G0, **wpe_thin,
+            anomalous_transport="tail_walk", tail_energy_eV=wpe_E_tail,
+        )
+        wpe_arm_ledger = (
+            float(wpe_arm.end_loss_tail_low_erg_s)
+            + float(wpe_arm.end_loss_tail_high_erg_s)
+        )
+        wpe_arm_delivered = (
+            float(wpe_arm.heating_anomalous_erg_s.sum()) + wpe_arm_ledger
+        )
+        assert abs(wpe_arm_delivered - wpe_removed) / wpe_removed < 1e-12
+        assert wpe_arm_ledger > wpe_prev_escape
+        wpe_prev_escape = wpe_arm_ledger
+
+    # (f) THE DIRECTION SPLIT. The tails leave 50/50 along +-B, so a QL source
+    # confined to the exact centre of an otherwise uniform column must produce
+    # matching escapes at the two ends and a mirror-symmetric deposit.
+    #
+    # Confining it needs the per-cell ``beam_area_cm2`` rather than the
+    # single-cell ``nn`` trick the WP-D split test uses: unlike the event
+    # products, the anomalous drag is CONTINUOUS along the ray and is born in
+    # every cell the primary crosses. A tiny area drives n_b above the
+    # weak-beam ceiling n_e/10, where the quasilinear closure returns no drag
+    # at all, so widening it in one cell selects that cell as the only source.
+    wpe_sym_cells = 41
+    wpe_sym_mid = 20
+    wpe_sym_nn = np.zeros(wpe_sym_cells)
+    wpe_sym_nn[wpe_sym_mid] = 1.0e13
+    wpe_sym_area = np.full(wpe_sym_cells, 1.0e-2)
+    wpe_sym_area[wpe_sym_mid] = 100.0
+    wpe_sym_col = dict(
+        nn=wpe_sym_nn,
+        ne=np.full(wpe_sym_cells, 3.0e11),
+        Te=np.full(wpe_sym_cells, 1.0),
+        launch=wpe_sym_mid,
+        direction=1,
+        dz_cm=np.full(wpe_sym_cells, 40.0),
+        anomalous_model="quasilinear",
+        beam_area_cm2=wpe_sym_area,
+    )
+    wpe_sym_local = deposit_beam(wpe_E0, wpe_G0, **wpe_sym_col)
+    assert np.array_equal(
+        np.flatnonzero(wpe_sym_local.heating_anomalous_erg_s),
+        np.array([wpe_sym_mid]),
+    )
+    wpe_sym = deposit_beam(
+        wpe_E0, wpe_G0, **wpe_sym_col,
+        anomalous_transport="tail_walk", tail_energy_eV=75.0,
+    )
+    assert wpe_sym.end_loss_tail_low_erg_s > 0.0
+    # The two halves see identical columns and identical distances to their
+    # ends, so this is an EQUALITY, not a tolerance.
+    assert (
+        wpe_sym.end_loss_tail_high_erg_s == wpe_sym.end_loss_tail_low_erg_s
+    )
+    wpe_sym_heat = wpe_sym.heating_anomalous_erg_s
+    assert np.array_equal(
+        wpe_sym_heat[wpe_sym_mid + 1:], wpe_sym_heat[:wpe_sym_mid][::-1]
+    )
+    assert wpe_sym.end_loss_low_erg_s == 0.0  # WP-D ledger untouched
+    assert wpe_sym.end_loss_high_erg_s == 0.0
+
+    # (g) MISCONFIGURATION is loud at the module boundary too (the solver
+    # raises at construction; see the WP-E block in the R4/csda section).
+    for wpe_bad_call in (
+        lambda: deposit_beam(
+            wpe_E0, wpe_G0, **wpe_thin, anomalous_transport="bogus"
+        ),
+        # tail_walk with no tail energy to launch at
+        lambda: deposit_beam(
+            wpe_E0, wpe_G0, **wpe_thin, anomalous_transport="tail_walk"
+        ),
+        lambda: deposit_beam(
+            wpe_E0, wpe_G0, **wpe_thin,
+            anomalous_transport="tail_walk", tail_energy_eV=0.0,
+        ),
+        lambda: deposit_beam(
+            wpe_E0, wpe_G0, **wpe_thin,
+            anomalous_transport="tail_walk", tail_energy_eV=float("inf"),
+        ),
+        # tail_walk with no anomalous channel to carry: a silent no-op
+        lambda: deposit_beam(
+            wpe_E0, wpe_G0, **dict(wpe_thin, anomalous_model="none"),
+            anomalous_transport="tail_walk", tail_energy_eV=75.0,
+        ),
+    ):
+        try:
+            wpe_bad_call()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("expected ValueError for anomalous_transport")
 
     adas_reaction_kwargs = dict(
         state=knob_state,
