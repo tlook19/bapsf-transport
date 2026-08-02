@@ -1144,6 +1144,46 @@ def cathode_defaults():
         e-He channel (~5 meV/collision) — stated limitations. ENERGY-ONLY in
         v1: ionization events, the particle rows and the circuit currents are
         identical in both modes. Per-closure presentation required.
+    heating_anomalous_transport:
+        Where the CSDA ray's ANOMALOUS (quasilinear) heating lands (inert
+        under ``"beer_lambert"``, and requires an active anomalous channel;
+        selecting the non-default value without either raises). ``"local"``
+        (default, historical, bit-exact): the QL drag is banked as
+        instantaneous local bulk electron heating in the cell that drove it —
+        the Langmuir turbulence Landau-damps near where it grows, so its
+        energy is handed to the background there. ``"tail_walk"``
+        (BEAM_DEPOSITION_PLAN WP-E): quasilinear diffusion does not warm a
+        Maxwellian in place, it fills a fast-tail plateau first, and at
+        breakdown densities a tail electron is collisionally decoupled
+        (Coulomb range ~km at n_e ~ 1e10, hundreds of machine lengths) and
+        free-streams along B. Under ``"tail_walk"`` each cell's QL power is
+        withheld and carried by tail electrons at
+        ``heating_anomalous_tail_energy_eV``, launched 50/50 along +-B and
+        walked on the SAME closed-form Coulomb machinery the WP-D product
+        walks use (the ray's own ``beam_coulomb_model``, the same ``1.5*Te``
+        thermalization floor) — no new physics parameters beyond the tail
+        energy. Energy still hot at a domain end goes to a SEPARATE tail end
+        ledger (kept apart from the WP-D product ledger so both stay readable
+        when the two closures are on together) and leaves the system.
+        Motivation: this is an effective heating lag plus an end loss during
+        exactly the e-folds that set the avalanche growth rate — a candidate
+        for the loop-gain gap (gamma_model ~4-6x the machine). ``"tail_walk"``
+        is the FREE-ESCAPE bound (no sheath/ambipolar throttle), so
+        {local, tail_walk} is a bracket, not a prediction. ENERGY-ONLY:
+        ionization events, the particle rows and the circuit currents are
+        identical in both modes. Per-closure presentation required.
+    heating_anomalous_tail_energy_eV:
+        QL plateau energy ``E_tail`` [eV] the tail electrons are launched at
+        (default 75.0). **Read ONLY under
+        ``heating_anomalous_transport="tail_walk"``** — inert otherwise. Must
+        be finite and > 0. It sets the walkers' Coulomb range and therefore
+        how far the QL power travels before thermalizing; the equivalent tail
+        flux is ``P_QL / E_tail``, so the power carried is independent of it.
+        This is an ASSUMPTION value, NEVER a fitted one: the plateau energy is
+        a kinetic quantity a fluid model cannot pin, so per campaign policy
+        the BRACKET is the claim — the registered central arm is 75 eV (the
+        decoupling example) with 30 and 150 eV as the bracket arms, all three
+        reported together.
     beam_clump_fraction:
         Fractional-coverage beam-neutral closure (default 0.0 = OFF, bit-exact).
         The fresh gas puff is a dense, SPOTTY cloud sitting on the uniform
@@ -1222,6 +1262,10 @@ def cathode_defaults():
         "beam_anomalous_model": "quasilinear",
         # WP-D non-local product transport: DEFAULT OFF (bit-exact).
         "beam_product_transport": "local",
+        # WP-E QL heating locality: DEFAULT OFF (bit-exact). The tail energy is
+        # inert under "local" and is a boxed ASSUMPTION value, never fitted.
+        "heating_anomalous_transport": "local",
+        "heating_anomalous_tail_energy_eV": 75.0,
         "beam_clump_fraction": 0.0,
         "beam_clump_enhancement": 1.0,
         "beam_deposition_smoothing_cm": 0.0,

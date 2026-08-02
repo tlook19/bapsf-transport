@@ -1050,6 +1050,46 @@ class LAPDSim1D:
                 "are the CSDA ray's; under beer_lambert it would be a "
                 "silent no-op)"
             )
+        # WP-E QL heating locality. Same discipline as WP-D above: the module
+        # validates too, but a misconfiguration must fail at CONSTRUCTION, and
+        # every combination in which the walk machinery could not act is an
+        # INCOMPLETE configuration rather than a silent no-op. The walk needs
+        # (a) the CSDA module to be the thing depositing, and (b) an anomalous
+        # channel actually producing the power it carries.
+        _hat = str(self._input_dict.get("heating_anomalous_transport", "local"))
+        if _hat not in ("local", "tail_walk"):
+            raise ValueError(
+                "heating_anomalous_transport must be 'local' or 'tail_walk' "
+                f"(got {_hat!r})"
+            )
+        if _hat == "tail_walk":
+            if str(
+                self._input_dict.get("beam_deposition_model", "beer_lambert")
+            ) != "csda":
+                raise ValueError(
+                    "heating_anomalous_transport='tail_walk' requires "
+                    "beam_deposition_model='csda' (the anomalous heating it "
+                    "transports is the CSDA ray's; under beer_lambert it "
+                    "would be a silent no-op)"
+                )
+            if str(
+                self._input_dict.get("beam_anomalous_model", "none")
+            ) == "none":
+                raise ValueError(
+                    "heating_anomalous_transport='tail_walk' requires an "
+                    "active anomalous channel "
+                    "(beam_anomalous_model='quasilinear'); with no anomalous "
+                    "drag there is no power to carry and the setting would "
+                    "be a silent no-op"
+                )
+            _tail_eV = float(
+                self._input_dict.get("heating_anomalous_tail_energy_eV", 75.0)
+            )
+            if not math.isfinite(_tail_eV) or _tail_eV <= 0.0:
+                raise ValueError(
+                    "heating_anomalous_tail_energy_eV must be finite and > 0 "
+                    f"(got {self._input_dict.get('heating_anomalous_tail_energy_eV')})"
+                )
         _fc = float(self._input_dict.get("beam_clump_fraction", 0.0))
         if not 0.0 <= _fc < 1.0:
             raise ValueError(
@@ -6226,6 +6266,16 @@ class LAPDSim1D:
             # lack the datasets entirely and readers must default them.
             diag[f"{prefix}_beam_end_loss_low_W"] = 0.0
             diag[f"{prefix}_beam_end_loss_high_W"] = 0.0
+            # WP-E tail end ledger [W]: QL heating that leaves the column as
+            # fast tail electrons through each axial end without thermalizing.
+            # A SIBLING of the WP-D pair above, kept separate so the product
+            # ledger keeps its measured meaning while the two closures switch
+            # independently. Same status: a loss channel, never in an RHS row.
+            # Identically zero under heating_anomalous_transport="local" (the
+            # default), so on every run to date these read 0.0; runs saved
+            # before 2026-08-02 lack the datasets and readers must default.
+            diag[f"{prefix}_beam_end_loss_tail_low_W"] = 0.0
+            diag[f"{prefix}_beam_end_loss_tail_high_W"] = 0.0
             # Item-35 gap-survival ledger: three views of the fraction of the
             # emitted beam that crosses the cathode-anode gap, which must
             # agree. ``_probe`` is the gap-clipped probe that feeds sigma_eff,
@@ -6333,6 +6383,12 @@ class LAPDSim1D:
             )
             diag[f"{prefix}_beam_end_loss_high_W"] = (
                 float(dep.end_loss_high_erg_s) * 1.0e-7
+            )
+            diag[f"{prefix}_beam_end_loss_tail_low_W"] = (
+                float(dep.end_loss_tail_low_erg_s) * 1.0e-7
+            )
+            diag[f"{prefix}_beam_end_loss_tail_high_W"] = (
+                float(dep.end_loss_tail_high_erg_s) * 1.0e-7
             )
 
     def _copy_cathode_result_diagnostics(self, diag, prefix, result):

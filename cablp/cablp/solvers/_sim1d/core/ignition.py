@@ -115,14 +115,23 @@ IGNITION_POWER_GROUPS = {
     ),
 }
 
-# WP-D end ledger keys (cathode diagnostics). Beam energy that leaves the
-# column axially without thermalizing; never booked into any RHS row, and
-# identically zero under beam_product_transport="local".
+# WP-D / WP-E end ledger keys (cathode diagnostics). Beam energy that leaves
+# the column axially without thermalizing; never booked into any RHS row.
+# The first four are the WP-D event-product ledger (identically zero under
+# beam_product_transport="local"); the last four are the WP-E QL tail ledger
+# (identically zero under heating_anomalous_transport="local"). Both defaults
+# are the off value, so P_beam_end_loss_W is exactly 0.0 on every run that
+# enables neither, and adding the tail terms cannot perturb a WP-D-only run
+# (adding 0.0 is exact).
 IGNITION_BEAM_END_LOSS_KEYS = (
     "source_beam_end_loss_low_W",
     "source_beam_end_loss_high_W",
     "end_beam_end_loss_low_W",
     "end_beam_end_loss_high_W",
+    "source_beam_end_loss_tail_low_W",
+    "source_beam_end_loss_tail_high_W",
+    "end_beam_end_loss_tail_low_W",
+    "end_beam_end_loss_tail_high_W",
 )
 
 
