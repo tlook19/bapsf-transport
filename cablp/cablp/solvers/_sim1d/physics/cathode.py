@@ -1082,6 +1082,59 @@ def _csda_beam_deposition(
         # (item 35, root-caused 2026-07-27). Under flux-INDEPENDENT stopping
         # (Coulomb CSDA, anomalous_model="none") the ray is flux-linear, so
         # the ratio below is bit-for-bit the historical unit-flux value.
+        #
+        # --- Probe skip (cost read 2026-08-02, restructure A) --------------
+        # The probe is a SECOND full CSDA march and measures ~50% of the whole
+        # deposit_beam subsystem, yet in the main discharge it re-derives an
+        # answer ``_ray_gap_breakout`` has already given from the deposition
+        # ray's own bookkeeping. When that reads 0.0 the ray was ABSORBED
+        # inside the gap, and the probe -- the same ray over the same per-cell
+        # path lengths, merely stopped at L_cath -- is absorbed at the same
+        # point, so ``BeamDepositionResult.transmitted_flux`` is the literal
+        # float ``0.0`` (``0.0 if absorbed else gamma``). ``survival`` is then
+        # ``0.0 / launched``, exactly 0.0 for any finite positive launch, and
+        # ``transmission`` the 1e-6 clamp below. This is an EXACT-ZERO
+        # argument, not a tolerance: the skipped branch writes the same floats
+        # the probe would have returned, so every downstream number --
+        # sigma_eff, the ledger, the tripwire -- is bit-identical.
+        #
+        # Three conditions break the identity, and under any of them the probe
+        # runs exactly as it always has:
+        #
+        #   clumping     the split launches TWO probes with two different nn
+        #                profiles and sums their transmitted fluxes, while
+        #                ``ray_survival`` is the flux-weighted mean of two
+        #                per-ray breakouts. A zero mean does imply both rays
+        #                died, but the two-ray path is left untouched rather
+        #                than re-argued: it is off in production.
+        #   partial clip ``_clip_ray_length`` truncates the cell L_cath ends
+        #                in when the gap does not end on a cell face. The
+        #                deposition ray then has MORE path in that cell than
+        #                the probe and can die inside it while the probe runs
+        #                out of dz and transmits. Production has
+        #                ``5 x 10 cm == L_cath`` exactly, so this never binds
+        #                there, but the guard is on the general geometry.
+        #   anode in gap anode-mesh interception scales the DEPOSITION ray's
+        #                flux at the anode-face crossing and the probe's not
+        #                at all, so under flux-DEPENDENT stopping (the
+        #                quasilinear closure) the two trajectories would part
+        #                company. The anode sits past the gap in every
+        #                campaign geometry -- the guard is free there -- but
+        #                nothing in this function enforces that.
+        #
+        # The ``Gamma0 == 0`` unit-flux probe is a DIFFERENT measurement (the
+        # flux-independent limit; item 35) with no deposition ray behind it to
+        # read, so it sits outside this branch and keeps running verbatim.
+        probe_transmits_exact_zero = (
+            not clumping
+            and ray_survival == 0.0
+            and _gap_clip_is_face_aligned(gap_dz, geometry.length_cm)
+            and not (
+                interception_kwargs
+                and float(gap_dz[interception_kwargs["anode_cross_index"]])
+                > 0.0
+            )
+        )
         if Gamma0 > 0.0:
             if clumping:
                 gap_launch = (1.0 - f_clump) * Gamma0
@@ -1100,6 +1153,12 @@ def _csda_beam_deposition(
                 # are summed, so a fully-transmitting split lands on exactly
                 # 1.0 instead of (1-f)+f rounding a ulp off it.
                 launched = gap_launch + clump_launch
+            elif probe_transmits_exact_zero:
+                # The probe would be absorbed exactly where the deposition ray
+                # was; skip the march and take the float it would have
+                # returned. (Not an approximation of the probe -- its value.)
+                transmitted = 0.0
+                launched = Gamma0
             else:
                 transmitted = float(
                     deposit_beam(
@@ -1273,6 +1332,24 @@ def _clip_ray_length(length_cm, launch, direction, L_cath):
         dz[cell] = step
         remaining -= step
     return dz
+
+
+def _gap_clip_is_face_aligned(gap_dz, length_cm):
+    """True when the ``L_cath`` clip landed on a cell face.
+
+    ``_clip_ray_length`` gives each cell along the ray either its full length,
+    zero, or -- in the single cell where ``L_cath`` runs out mid-cell -- a
+    partial length. That partial cell is the ONLY place a gap-clipped probe
+    has less path available than the deposition ray it mirrors, and therefore
+    the only place the two can disagree about where the ray stopped: the
+    deposition ray can be absorbed inside it while the probe runs out of dz
+    first and transmits. Everywhere else the clip is a prefix of the same
+    per-cell path lengths. Used by the probe skip in
+    ``_csda_beam_deposition``; see the comment there.
+    """
+    dz = np.asarray(gap_dz, dtype=float)
+    full = np.asarray(length_cm, dtype=float)
+    return not bool(np.any((dz > 0.0) & (dz < full)))
 
 
 def cathode_source_terms(

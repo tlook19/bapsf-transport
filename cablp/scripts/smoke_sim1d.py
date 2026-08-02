@@ -42,6 +42,8 @@ from cablp.solvers._sim1d.physics.cathode import (
     _beam_smoothing_key,
     _beam_smoothing_matrix,
     _clip_ray_length,
+    _csda_beam_deposition,
+    _gap_clip_is_face_aligned,
     _ray_gap_breakout,
     beam_absorption_weights,
     beam_gap_ledger_mismatch,
@@ -2659,6 +2661,107 @@ def main():
     )._cathode_diagnostic_snapshot()
     for _bl_key in ("probe", "ray", "circuit"):
         assert np.isnan(bl_diag[f"source_beam_gap_survival_{_bl_key}"])
+
+    # --- Probe skip (cost read 2026-08-02, restructure A) ------------------
+    # When the deposition ray died inside the gap, the gap-transmission probe
+    # is not launched at all: its transmitted flux is then the EXACT float
+    # 0.0. The claim is checked HERE against the probe itself -- the pre-change
+    # call, run verbatim -- on a state from each regime, so the skip is
+    # demonstrated equal to the work it replaces rather than argued to be.
+    _pskip_geom = csda_sim._geometry
+    _pskip_gap = _clip_ray_length(
+        _pskip_geom.length_cm, csda_launch, csda_dir, csda_L_cath
+    )
+    _pskip_Gamma0 = csda_res.I_eth_star / qe_SI
+    _pskip_ray_kwargs = dict(
+        launch=csda_launch,
+        direction=csda_dir,
+        I_ion_eV=float(csda_sim._I_ion),
+        coulomb_model=str(
+            csda_params.get("beam_coulomb_model", "fast_electron")
+        ),
+        anomalous_model=str(
+            csda_params.get("beam_anomalous_model", "none")
+        ),
+    )
+    if _pskip_ray_kwargs["anomalous_model"] != "none":
+        _pskip_ray_kwargs["beam_area_cm2"] = _pskip_geom.plasma_area_cm2
+
+    def _pskip_adapter(nn):
+        """(beam_result, gap_ledger) from the real adapter on a doctored nn."""
+        _beam = SimpleNamespace(
+            result=csda_res,
+            result_twin=None,
+            beam_atten_cross=np.zeros(_pskip_geom.cells),
+        )
+        _, _ledger = _csda_beam_deposition(
+            _beam,
+            SimpleNamespace(nn=nn, n=csda_state.n),
+            SimpleNamespace(Te=csda_derived.Te),
+            _pskip_geom,
+            csda_solve.device_config,
+            csda_params,
+            float(csda_sim._I_ion),
+            anode_interception=True,
+        )
+        return _beam, _ledger
+
+    def _pskip_probe(nn):
+        """Transmitted flux of the probe the pre-change code always launched."""
+        return float(
+            _deposit_beam_ray(
+                csda_res.phi_c, _pskip_Gamma0, dz_cm=_pskip_gap,
+                nn=nn, ne=csda_state.n, Te=csda_derived.Te,
+                **_pskip_ray_kwargs,
+            ).transmitted_flux
+        )
+
+    # Production geometry: the gap is 5 x 10 cm and L_cath is 50 cm, so the
+    # clip lands on a cell face and the anode crossing sits past the gap --
+    # both structural guards are inactive here, which is the case the skip
+    # exists for.
+    assert _gap_clip_is_face_aligned(_pskip_gap, _pskip_geom.length_cm)
+    assert float(_pskip_gap[int(_pskip_geom.anode_face_indices[0])]) == 0.0
+    for _pskip_scale, _pskip_ray_expect in ((1.0, 1.0), (1.0e3, 0.0)):
+        _pskip_nn = np.asarray(csda_state.nn, dtype=float) * _pskip_scale
+        _pskip_beam, _pskip_ledger = _pskip_adapter(_pskip_nn)
+        _pskip_T, _pskip_ray, _pskip_circuit = _pskip_ledger[0]
+        assert _pskip_ray == _pskip_ray_expect, (_pskip_scale, _pskip_ray)
+        # The probe, launched for real, must reproduce the branch taken --
+        # bit-for-bit, not to a tolerance.
+        _pskip_ref = min(
+            max(_pskip_probe(_pskip_nn) / _pskip_Gamma0, 1.0e-6), 1.0
+        )
+        assert _pskip_T == _pskip_ref, (_pskip_scale, _pskip_T, _pskip_ref)
+        # All three ledger channels stay written from the values they always
+        # came from -- the skip removes a computation, not a diagnostic.
+        for _pskip_v in (_pskip_T, _pskip_ray, _pskip_circuit):
+            assert np.isfinite(_pskip_v), (_pskip_scale, _pskip_ledger)
+        assert 0.0 < _pskip_T <= 1.0 and 0.0 < _pskip_circuit <= 1.0
+        assert np.isfinite(_pskip_beam.beam_atten_cross[csda_launch])
+        # ... and the tripwire still reads the same three views: probe and ray
+        # agree on the skip arm (0.0 vs the 1e-6 clamp) exactly as they do on
+        # the transmitting arm, so no divergence is manufactured.
+        assert beam_gap_ledger_mismatch(_pskip_ledger, csda_eta) is None
+    # The dead-ray arm is the one the skip fires on, and its probe really does
+    # transmit the exact float zero (the value the branch substitutes).
+    assert _pskip_probe(np.asarray(csda_state.nn, dtype=float) * 1.0e3) == 0.0
+    # Guard: a clip that ends mid-cell truncates the stop cell, so the probe
+    # could run out of path where the deposition ray still had some. The skip
+    # must see that and stand down.
+    assert not _gap_clip_is_face_aligned(
+        _clip_ray_length(_pskip_geom.length_cm, csda_launch, csda_dir, 45.0),
+        _pskip_geom.length_cm,
+    )
+    assert _gap_clip_is_face_aligned(
+        _clip_ray_length(_pskip_geom.length_cm, csda_launch, csda_dir, 40.0),
+        _pskip_geom.length_cm,
+    )
+    # A clip longer than the whole path leaves every cell at its full length.
+    assert _gap_clip_is_face_aligned(
+        _clip_ray_length(_pskip_geom.length_cm, csda_launch, csda_dir, 1.0e6),
+        _pskip_geom.length_cm,
+    )
 
     # --- R4.1 (audit A15): anode-mesh beam interception is the PRODUCTION DEFAULT
     # (correct csda physics), so csda_sim above already has it on -- the anode
