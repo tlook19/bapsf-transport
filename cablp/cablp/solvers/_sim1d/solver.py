@@ -121,6 +121,7 @@ from .physics.sources import (
 from .results.compat import add_sim3_compat_aliases
 from cablp.funcs._adas import he_rate_temperature_range_eV, he_rates
 from cablp.funcs._cross import charge_ex_react
+from cablp.funcs._kernels import PROVENANCE as KERNEL_PROVENANCE
 from cablp.vars._cons import I_Ry, I_ion, ev_to_erg, kb_cgs, m_He_cgs, m_p_cgs
 
 
@@ -5710,6 +5711,13 @@ class LAPDSim1D:
         result = SimpleNamespace(
             params=dict(self._input_dict),
             flags=dict(self._flags),
+            # Which arithmetic produced this trajectory (D3/D4). Deliberately
+            # NOT a params entry: the kernel path is a fact about the process,
+            # not a physics parameter, and params_json is round-trip checked
+            # against the constructed config. "pure" is the default and the
+            # historical behaviour; an artifact with no compiled_kernels
+            # attribute at all predates the selector and is also pure.
+            compiled_kernels=KERNEL_PROVENANCE,
             time=np.asarray([snapshot["time"] for snapshot in saved], dtype=float),
             phase=np.asarray([snapshot["phase"] for snapshot in saved], dtype=object),
             phase_elapsed=np.asarray(

@@ -38,6 +38,7 @@ from cablp.funcs._cross import (
     H_EII_cross_lkup,
     He_beam_excitation_channel,
 )
+from cablp.funcs._kernels import COMPILED_KERNELS as _COMPILED_KERNELS
 from cablp.vars._coeff import b_11s_21p
 from cablp.vars._cons import E_21p as _E_21p_eV, Ry_eV as _Ry_eV, atm_cross_cgs as _atm_cross_cgs
 
@@ -586,6 +587,23 @@ def _j_eth_crit(psi: float, J_i: float, mu: float) -> float:
         * (math.exp(-psi) + math.sqrt(1.0 + 2.0 * psi) - 2.0)
         / math.sqrt(2.0 * psi)
     )
+
+
+# The pure-Python kernel stays reachable under its own name so the compiled
+# path can be compared against it (equivalence sweeps, microbenchmarks) inside
+# a process that has opted in.
+_j_eth_crit_pure = _j_eth_crit
+
+# Compiled-kernel selection (D3/D4). Rebinding the module global HERE, right
+# after the definition and before anything imports the name, is what makes the
+# hot path free: callers -- including `_cathode_solver_idriven`, which
+# from-imports `_j_eth_crit` and is the production (current-driven) path --
+# resolve one plain function object with no per-call branch. On the default
+# pure path this block is a single `is None` test at import and the name is
+# the untouched original, so the arithmetic is bit-for-bit historical.
+if _COMPILED_KERNELS is not None:
+    _COMPILED_KERNELS.check_constants(_pemr)
+    _j_eth_crit = _COMPILED_KERNELS.j_eth_crit
 
 
 def _residual(

@@ -42,8 +42,12 @@ class Sim1DGeometry:
     # ``plasma_active`` is true only where plasma state/operators are live.
     # ``plasma_face_live_cell`` gives the one active cell adjacent to a
     # closed face, or -1 when that face bounds no active plasma.
+    # ``cathode_cell_indices`` is the same kind of derived topology: the plasma
+    # cell against each cathode surface, resolved once at construction (see
+    # ``cathode_adjacent_cells``).
     plasma_active: np.ndarray
     plasma_face_live_cell: np.ndarray
+    cathode_cell_indices: tuple
     plasma_open: np.ndarray
     plasma_absorbing: np.ndarray
     plasma_transmission: np.ndarray
@@ -131,24 +135,50 @@ def pump_cell_indices(geometry):
     return left_index, right_index
 
 
-def cathode_adjacent_cells(geometry):
-    """Return the plasma cell against each cathode surface.
+def _derive_cathode_adjacent_cells(cell_role, cathode_face_indices):
+    """Resolve the plasma cell against each cathode surface, from scratch.
 
     The cathode surface is a face, so its surface terms (ion neutralization,
     sheath electron loss, ohmic deposition -- §8) land on the plasma-side cell
     next to it. Plasma is on the high-z side at the source cathode and the low-z
     side at a twin cathode, so pick whichever neighbour is not plasma-dead.
+
+    This is the authoritative definition. It runs ONCE, at geometry
+    construction; ``cathode_adjacent_cells`` reads the stored answer. Kept
+    public-ish (module-private but importable) so tests can recompute a fresh
+    reference and check the stored value against it.
     """
-    roles = np.asarray(geometry.cell_role)
+    roles = np.asarray(cell_role)
     dead = np.asarray([role in PLASMA_DEAD_ROLES for role in roles], dtype=bool)
     cells = []
-    for face in np.asarray(geometry.cathode_face_indices, dtype=int):
+    for face in np.asarray(cathode_face_indices, dtype=int):
         left, right = face - 1, face
         if 0 <= right < roles.size and not dead[right]:
             cells.append(int(right))
         elif 0 <= left < roles.size and not dead[left]:
             cells.append(int(left))
     return tuple(cells)
+
+
+def cathode_adjacent_cells(geometry):
+    """Return the plasma cell against each cathode surface.
+
+    A pure function of run-constant topology (``cell_role`` and
+    ``cathode_face_indices``), so it is resolved once by
+    ``_derive_cathode_adjacent_cells`` at construction and stored on the
+    geometry as ``cathode_cell_indices`` -- the same treatment the sibling
+    derived-topology fields ``plasma_active`` and ``plasma_face_live_cell``
+    already get. It used to rebuild two arrays and run a Python comprehension
+    over ``cell_role`` on every call, and the cathode/beam/circuit paths call
+    it ~24x per accepted step (2.28M times in a production run).
+
+    Deliberately NOT an id()- or content-keyed lookaside cache: ``Sim1DGeometry``
+    is a frozen dataclass built at exactly one site, so storing the derivation
+    as a field makes staleness structurally impossible rather than merely
+    unlikely. The value cannot disagree with the geometry it came from because
+    there is no second copy to disagree with.
+    """
+    return geometry.cathode_cell_indices
 
 
 def anode_flanking_cells(geometry):
@@ -756,6 +786,11 @@ def _assemble_geometry(
     exactly today's behavior.
     """
     cells = length_cm.size
+    cathode_faces = (
+        np.empty(0, dtype=int)
+        if cathode_face_indices is None
+        else np.asarray(cathode_face_indices, dtype=int)
+    )
     plasma_face_area_cm2 = _face_area(plasma_area_cm2)
     if plasma_face_area_override is not None:
         override = np.asarray(plasma_face_area_override, dtype=float)
@@ -887,17 +922,18 @@ def _assemble_geometry(
         neutral_face_hydraulic_radius_cm=neutral_face_hydraulic_radius_cm,
         plasma_active=plasma_active,
         plasma_face_live_cell=plasma_face_live_cell,
+        # Derived once here, for the same reason plasma_active is: the cathode/
+        # beam/circuit paths ask for it ~24x per accepted step.
+        cathode_cell_indices=_derive_cathode_adjacent_cells(
+            cell_role, cathode_faces
+        ),
         plasma_open=plasma_open,
         plasma_absorbing=plasma_absorbing,
         plasma_transmission=plasma_transmission,
         heat_transmission=heat_transmission,
         neutral_face_conductance_cm3_s=neutral_face_conductance_cm3_s,
         center_distance_cm=center_distance_cm,
-        cathode_face_indices=(
-            np.empty(0, dtype=int)
-            if cathode_face_indices is None
-            else np.asarray(cathode_face_indices, dtype=int)
-        ),
+        cathode_face_indices=cathode_faces,
         anode_face_indices=(
             np.empty(0, dtype=int)
             if anode_face_indices is None

@@ -1,6 +1,7 @@
 import dataclasses
 import json
 import math
+import os
 from io import StringIO
 from pathlib import Path
 import shutil
@@ -13,6 +14,9 @@ from types import SimpleNamespace
 import h5py
 import numpy as np
 
+from cablp.funcs import _kernels as _kernel_selector
+from cablp.funcs import _cathode_solver as _cathode_solver_mod
+from cablp.funcs import _cathode_solver_idriven as _cathode_solver_idriven_mod
 from cablp.funcs._adas import he_rate_temperature_range_eV
 # main() re-imports deposit_beam locally further down (B1 block), which makes
 # the bare name local to the whole function -- alias it for the item-35 block.
@@ -53,6 +57,7 @@ from cablp.solvers._sim1d.physics.energy import (
 from cablp.solvers._sim1d.physics.flux import front_filling_fluxes
 from cablp.solvers._sim1d.core.integrator import ssprk2_step
 from cablp.solvers._sim1d.core.geometry import (
+    _derive_cathode_adjacent_cells,
     _source_fixed_grid_spec,
     anode_flanking_cells,
     cathode_adjacent_cells,
@@ -285,6 +290,25 @@ def main():
     assert resolved_geom.plasma_open[anode_face]
     assert cathode_adjacent_cells(resolved_geom) == (cathode_face,)
     assert resolved_geom.cell_role[cathode_face] == "cathode"
+    # cathode_adjacent_cells is now a stored derivation, not a recomputation
+    # (it is called ~24x per accepted step). The stored value must equal a
+    # fresh derivation from the geometry's own topology arrays, element for
+    # element and type for type.
+    _fresh = _derive_cathode_adjacent_cells(
+        resolved_geom.cell_role, resolved_geom.cathode_face_indices
+    )
+    assert resolved_geom.cathode_cell_indices == _fresh
+    assert cathode_adjacent_cells(resolved_geom) == _fresh
+    assert np.array_equal(
+        np.asarray(cathode_adjacent_cells(resolved_geom), dtype=int),
+        np.asarray(_fresh, dtype=int),
+    )
+    assert all(type(c) is int for c in cathode_adjacent_cells(resolved_geom))
+    # Repeated reads return the identical object -- there is one copy, so
+    # nothing can go stale relative to anything else.
+    assert cathode_adjacent_cells(resolved_geom) is (
+        cathode_adjacent_cells(resolved_geom)
+    )
     assert anode_flanking_cells(resolved_geom) == ((anode_face - 1, anode_face),)
     assert resolved_geom.cell_role[anode_face - 1] == "gap"
     assert resolved_geom.cell_role[anode_face] == "puff"
@@ -790,6 +814,14 @@ def main():
     for face in twin_resolved_geom.cathode_face_indices:
         assert not twin_resolved_geom.plasma_open[face]
     assert len(cathode_adjacent_cells(twin_resolved_geom)) == 2
+    # Same equality check on the two-cathode layout, where the derivation
+    # actually exercises the low-z branch.
+    assert cathode_adjacent_cells(twin_resolved_geom) == (
+        _derive_cathode_adjacent_cells(
+            twin_resolved_geom.cell_role,
+            twin_resolved_geom.cathode_face_indices,
+        )
+    )
     # Twin puffs at both ends (legacy twin puffs at [0] and [-1]).
     assert list(twin_resolved_geom.cell_role).count("puff") == 2
 
@@ -4165,9 +4197,92 @@ def main():
                 value.decode("utf-8") == "pre_breakdown"
                 for value in h5["diagnostics/phase"][()]
             )
+        # D3/D4 kernel provenance: every artifact names the arithmetic that
+        # produced it, and the default is the pure Python path.
+        with h5py.File(output_path, "r") as h5:
+            assert h5.attrs["compiled_kernels"] == _kernel_selector.PROVENANCE
+        assert run_result.compiled_kernels == _kernel_selector.PROVENANCE
+        assert not _kernel_selector.compiled_kernels_requested()
+        assert _kernel_selector.COMPILED_KERNELS is None
+        assert _kernel_selector.PROVENANCE == _kernel_selector.PURE_PROVENANCE
+        # The default path binds the untouched pure kernel object -- no
+        # wrapper, no per-call branch, so the arithmetic is bit-for-bit
+        # historical.
+        assert _cathode_solver_mod._j_eth_crit is (
+            _cathode_solver_mod._j_eth_crit_pure
+        )
+        assert _cathode_solver_idriven_mod._j_eth_crit is (
+            _cathode_solver_mod._j_eth_crit_pure
+        )
+        # A typo'd opt-in must never read as "off".
+        _saved_env = os.environ.get(_kernel_selector.ENV_VAR)
+        try:
+            os.environ[_kernel_selector.ENV_VAR] = "maybe"
+            try:
+                _kernel_selector.compiled_kernels_requested()
+            except ValueError as error:
+                assert _kernel_selector.ENV_VAR in str(error), error
+            else:
+                raise AssertionError(
+                    "an unrecognised CABLP_COMPILED_KERNELS value must raise"
+                )
+            for _off in ("0", "false", "off", ""):
+                os.environ[_kernel_selector.ENV_VAR] = _off
+                assert not _kernel_selector.compiled_kernels_requested(), _off
+            for _on in ("1", "TRUE", "Yes", "on"):
+                os.environ[_kernel_selector.ENV_VAR] = _on
+                assert _kernel_selector.compiled_kernels_requested(), _on
+        finally:
+            if _saved_env is None:
+                os.environ.pop(_kernel_selector.ENV_VAR, None)
+            else:
+                os.environ[_kernel_selector.ENV_VAR] = _saved_env
+
+        # D4 equivalence: wherever the extension has been BUILT, the compiled
+        # kernel must be bit-identical to the pure one over the operating
+        # range -- checked whether or not this process opted in to running it,
+        # because the comparison is the point. Skipped (not failed) on a
+        # checkout with no compiled extension: it is optional by design.
+        # scripts/spike_cython_kernels.py is the full-resolution version.
+        try:
+            import importlib as _importlib
+
+            _cy = _importlib.import_module("cablp.funcs._cathode_kernels_cy")
+        except ImportError:
+            _cy = None
+        if _cy is not None:
+            assert _cy.pemr() == _cathode_solver_mod._pemr
+            _psi_sweep = np.concatenate(
+                [
+                    np.array([-1.0, 0.0, 1e-3]),
+                    np.logspace(-12.0, 3.0, 400),
+                    np.linspace(1e-6, 5.0e-3, 200),   # Taylor branch
+                    np.linspace(5.0e-3, 150.0, 300),  # closed form
+                ]
+            )
+            _n_taylor = 0
+            _n_closed = 0
+            for _mu in (1.0, 4.0, 40.0):  # He (the thesis gas) is mu = 4
+                for _J_i in (1.0e-4, 1.0, 1.0e4):
+                    for _psi in _psi_sweep:
+                        _pure = _cathode_solver_mod._j_eth_crit_pure(
+                            float(_psi), _J_i, _mu
+                        )
+                        _comp = _cy.j_eth_crit(float(_psi), _J_i, _mu)
+                        # Bit-exact, not merely close: the golden baseline
+                        # verifies exact on the compiled path, so anything
+                        # looser here would be a weaker claim than the gate.
+                        assert _pure == _comp, (_psi, _J_i, _mu, _pure, _comp)
+                        if 0.0 < _psi < 1e-3:
+                            _n_taylor += 1
+                        elif _psi >= 1e-3:
+                            _n_closed += 1
+            assert _n_taylor > 1000 and _n_closed > 1000, (_n_taylor, _n_closed)
+
         loaded_result = load_result_hdf5(output_path)
         loaded_via_solver = LAPDSim1D.load_result(output_path)
         for loaded in (loaded_result, loaded_via_solver):
+            assert loaded.compiled_kernels == _kernel_selector.PROVENANCE
             assert loaded.path == output_path
             assert loaded.steps == run_result.steps
             assert np.isclose(loaded.final_time, run_result.final_time)
@@ -5695,6 +5810,59 @@ def main():
             )
         ignited_origin = origin_fn(direct_current_phase_result)
         assert np.isclose(ignited_origin, 1.0e-10), (caller, ignited_origin)
+
+    # Scorer hard-fail (scripts), stage (iii): a run whose trace ends before
+    # the decay window closes must RAISE, not have the window quietly clipped
+    # to whatever it covers. A clipped fit is a different measurement wearing
+    # the campaign metric's name, and is not comparable run to run.
+    def _decay_case(end_ms):
+        """Synthetic scorable result + overlay whose trace ends at end_ms."""
+        t_s = np.arange(0.0, end_ms * 1.0e-3 + 1.0e-9, 1.0e-4)
+        z = np.array([0.0, 500.0, 1000.0])
+        decay = np.exp(-t_s * 1.0e3)[:, None] * np.ones(z.size)[None, :]
+        synthetic = SimpleNamespace(
+            time=t_s,
+            phase=np.array(["main_discharge"] * t_s.size),
+            z_cm=z,
+            n=1.0e12 * decay,
+            Te=3.0 * decay,
+            params={"tau_afterglow": end_ms * 1.0e-3 - 0.020, "tau_discharge": 0.020},
+        )
+        t_exp = np.linspace(20.0, 30.0, 101)
+        overlay_stub = {
+            "port": np.array([20]),
+            "z_cm": np.array([500.0]),
+            "isat_decay_port": np.array([20]),
+            "isat_decay_time_ms": t_exp,
+            "isat_decay_mean_a": np.exp(-(t_exp - 20.0))[None, :],
+        }
+        return synthetic, overlay_stub
+
+    short_result, short_overlay = _decay_case(20.8)
+    try:
+        _cmp_es1.compare_decay(short_result, short_overlay)
+    except RuntimeError as error:
+        message = str(error)
+        assert "SHORT AFTERGLOW" in message, message
+        # Names the configured window, the available extent, and tau_afterglow.
+        assert "(20, 21.5) ms" in message, message
+        assert "20.8" in message, message
+        assert "tau_afterglow" in message, message
+    else:
+        raise AssertionError(
+            "compare_decay must refuse to score a run whose trace ends "
+            "before the stage (iii) window closes"
+        )
+
+    # A trace that covers the window scores normally and reports the FULL
+    # configured window back, unclipped.
+    long_result, long_overlay = _decay_case(26.0)
+    decay_rows, decay_window = _cmp_es1.compare_decay(long_result, long_overlay)
+    assert decay_window == _cmp_es1.DECAY_WINDOW_MS, decay_window
+    assert len(decay_rows) == 1, decay_rows
+    # The reference 6 ms afterglow and the planned 2 ms probe default both
+    # clear the (20.0, 21.5) window; only sub-1.5 ms afterglows trip the guard.
+    assert _cmp_es1.DECAY_WINDOW_MS[1] - 20.0 <= 1.5
 
     neutral_phase_run_params = dict(no_source_params)
     neutral_phase_run_params["dt_save"] = 0.0
