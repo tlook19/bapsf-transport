@@ -542,6 +542,59 @@ def _efold_time_ms(t_ms, y, floor=0.0):
 DECAY_WINDOW_MS = (20.0, 21.5)
 
 
+def short_afterglow_message(result, window_ms, t_model_ms):
+    """Return the SHORT-AFTERGLOW diagnosis for a run that cannot be scored.
+
+    Same philosophy as ``non_ignited_message`` and the retired ``times[0]``
+    fallback: a clamp that silently shortens a scoring window produces a
+    number that LOOKS like the scored quantity and is not. ``min(t1,
+    t_model_ms.max())`` did exactly that -- a run whose afterglow ended before
+    the stage (iii) window closed got its e-fold time fitted over whatever
+    fraction of the window it happened to cover, and the fit was reported with
+    no indication that it answered a different question from every other run
+    in the campaign. Two runs scored against DIFFERENT windows are not
+    comparable, and comparability across runs is the whole point of stage
+    (iii).
+
+    Fail instead, and say what would have to change: the configured window,
+    what the run actually covers, and the ``tau_afterglow`` that decides it.
+    """
+    t0, t1 = float(window_ms[0]), float(window_ms[1])
+    t_model_ms = np.asarray(t_model_ms, dtype=float)
+    model_start, model_end = float(t_model_ms.min()), float(t_model_ms.max())
+    params = getattr(result, "params", None) or {}
+    tau = params.get("tau_afterglow")
+    tau_text = (
+        f"{float(tau):.6g} s ({float(tau) * 1.0e3:.4g} ms)"
+        if tau is not None
+        else "<absent from this run's params>"
+    )
+    # What the window demands of the afterglow: the window closes t1 ms after
+    # the main-discharge origin, and the discharge itself occupies
+    # tau_discharge of that, so the afterglow must run for the remainder.
+    tau_discharge = params.get("tau_discharge")
+    needed_text = ""
+    if tau_discharge is not None:
+        needed_ms = t1 - float(tau_discharge) * 1.0e3
+        needed_text = (
+            f" With tau_discharge={float(tau_discharge):.6g} s, closing this "
+            f"window needs tau_afterglow >= {needed_ms * 1.0e-3:.6g} s "
+            f"({needed_ms:.4g} ms)."
+        )
+    return (
+        f"SHORT AFTERGLOW: the stage (iii) decay window is "
+        f"({t0:.4g}, {t1:.4g}) ms on the main-discharge clock, but this run's "
+        f"trace only spans ({model_start:.4g}, {model_end:.4g}) ms -- it ends "
+        f"{t1 - model_end:.4g} ms before the window closes, so the decay fit "
+        f"CANNOT be computed over the campaign's window and this run cannot "
+        f"be scored on stage (iii). Run tau_afterglow={tau_text}."
+        f"{needed_text} Extend the run, or score it with an explicit "
+        f"--decay-window that its trace covers -- but a window that differs "
+        f"from {DECAY_WINDOW_MS} is not comparable to the campaign's other "
+        f"stage (iii) numbers."
+    )
+
+
 def compare_decay(result, overlay, window_ms=DECAY_WINDOW_MS):
     """Return per-port stage (iii) rows: model vs measured Isat e-fold times.
 
@@ -549,6 +602,10 @@ def compare_decay(result, overlay, window_ms=DECAY_WINDOW_MS):
     scaling; constants cancel in an e-folding time). Both signals get the same
     log-linear fit over the same window. The experimental noise floor is
     estimated from the final 5 ms of each decay trace (5x its robust sigma).
+
+    Raises ``RuntimeError`` when the model trace ends before the window closes
+    -- see ``short_afterglow_message``. The window is never silently shortened
+    to fit the run.
     """
     t0, t1 = float(window_ms[0]), float(window_ms[1])
     origin = _main_discharge_origin(result)
@@ -565,7 +622,9 @@ def compare_decay(result, overlay, window_ms=DECAY_WINDOW_MS):
         for p, z in zip(np.asarray(overlay["port"]), overlay["z_cm"])
     }
 
-    t1_model = min(t1, float(t_model_ms.max()))
+    model_end_ms = float(t_model_ms.max())
+    if model_end_ms < t1:
+        raise RuntimeError(short_afterglow_message(result, (t0, t1), t_model_ms))
     rows = []
     for p in range(ports.size):
         z = z_ports.get(int(ports[p]))
@@ -577,7 +636,7 @@ def compare_decay(result, overlay, window_ms=DECAY_WINDOW_MS):
         tau_exp = _efold_time_ms(t_exp[exp_window], isat[p, exp_window], noise)
 
         iz = int(np.argmin(np.abs(z_model - z)))
-        model_window = (t_model_ms >= t0) & (t_model_ms <= t1_model)
+        model_window = (t_model_ms >= t0) & (t_model_ms <= t1)
         proxy = n_model[model_window, iz] * np.sqrt(
             np.maximum(Te_model[model_window, iz], 0.0)
         )
@@ -592,7 +651,7 @@ def compare_decay(result, overlay, window_ms=DECAY_WINDOW_MS):
                 "ratio": tau_model / tau_exp if np.isfinite(tau_exp) else np.nan,
             }
         )
-    return rows, (t0, t1_model)
+    return rows, (t0, t1)
 
 
 # --- beta-collapse diagnostic (CATHODE_IDRIVEN_PLAN.md section 5b,

@@ -5724,6 +5724,59 @@ def main():
         ignited_origin = origin_fn(direct_current_phase_result)
         assert np.isclose(ignited_origin, 1.0e-10), (caller, ignited_origin)
 
+    # Scorer hard-fail (scripts), stage (iii): a run whose trace ends before
+    # the decay window closes must RAISE, not have the window quietly clipped
+    # to whatever it covers. A clipped fit is a different measurement wearing
+    # the campaign metric's name, and is not comparable run to run.
+    def _decay_case(end_ms):
+        """Synthetic scorable result + overlay whose trace ends at end_ms."""
+        t_s = np.arange(0.0, end_ms * 1.0e-3 + 1.0e-9, 1.0e-4)
+        z = np.array([0.0, 500.0, 1000.0])
+        decay = np.exp(-t_s * 1.0e3)[:, None] * np.ones(z.size)[None, :]
+        synthetic = SimpleNamespace(
+            time=t_s,
+            phase=np.array(["main_discharge"] * t_s.size),
+            z_cm=z,
+            n=1.0e12 * decay,
+            Te=3.0 * decay,
+            params={"tau_afterglow": end_ms * 1.0e-3 - 0.020, "tau_discharge": 0.020},
+        )
+        t_exp = np.linspace(20.0, 30.0, 101)
+        overlay_stub = {
+            "port": np.array([20]),
+            "z_cm": np.array([500.0]),
+            "isat_decay_port": np.array([20]),
+            "isat_decay_time_ms": t_exp,
+            "isat_decay_mean_a": np.exp(-(t_exp - 20.0))[None, :],
+        }
+        return synthetic, overlay_stub
+
+    short_result, short_overlay = _decay_case(20.8)
+    try:
+        _cmp_es1.compare_decay(short_result, short_overlay)
+    except RuntimeError as error:
+        message = str(error)
+        assert "SHORT AFTERGLOW" in message, message
+        # Names the configured window, the available extent, and tau_afterglow.
+        assert "(20, 21.5) ms" in message, message
+        assert "20.8" in message, message
+        assert "tau_afterglow" in message, message
+    else:
+        raise AssertionError(
+            "compare_decay must refuse to score a run whose trace ends "
+            "before the stage (iii) window closes"
+        )
+
+    # A trace that covers the window scores normally and reports the FULL
+    # configured window back, unclipped.
+    long_result, long_overlay = _decay_case(26.0)
+    decay_rows, decay_window = _cmp_es1.compare_decay(long_result, long_overlay)
+    assert decay_window == _cmp_es1.DECAY_WINDOW_MS, decay_window
+    assert len(decay_rows) == 1, decay_rows
+    # The reference 6 ms afterglow and the planned 2 ms probe default both
+    # clear the (20.0, 21.5) window; only sub-1.5 ms afterglows trip the guard.
+    assert _cmp_es1.DECAY_WINDOW_MS[1] - 20.0 <= 1.5
+
     neutral_phase_run_params = dict(no_source_params)
     neutral_phase_run_params["dt_save"] = 0.0
     neutral_phase_run_params["tau_discharge"] = 2.0e-10
