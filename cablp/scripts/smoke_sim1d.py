@@ -53,6 +53,7 @@ from cablp.solvers._sim1d.physics.energy import (
 from cablp.solvers._sim1d.physics.flux import front_filling_fluxes
 from cablp.solvers._sim1d.core.integrator import ssprk2_step
 from cablp.solvers._sim1d.core.geometry import (
+    _derive_cathode_adjacent_cells,
     _source_fixed_grid_spec,
     anode_flanking_cells,
     cathode_adjacent_cells,
@@ -285,6 +286,25 @@ def main():
     assert resolved_geom.plasma_open[anode_face]
     assert cathode_adjacent_cells(resolved_geom) == (cathode_face,)
     assert resolved_geom.cell_role[cathode_face] == "cathode"
+    # cathode_adjacent_cells is now a stored derivation, not a recomputation
+    # (it is called ~24x per accepted step). The stored value must equal a
+    # fresh derivation from the geometry's own topology arrays, element for
+    # element and type for type.
+    _fresh = _derive_cathode_adjacent_cells(
+        resolved_geom.cell_role, resolved_geom.cathode_face_indices
+    )
+    assert resolved_geom.cathode_cell_indices == _fresh
+    assert cathode_adjacent_cells(resolved_geom) == _fresh
+    assert np.array_equal(
+        np.asarray(cathode_adjacent_cells(resolved_geom), dtype=int),
+        np.asarray(_fresh, dtype=int),
+    )
+    assert all(type(c) is int for c in cathode_adjacent_cells(resolved_geom))
+    # Repeated reads return the identical object -- there is one copy, so
+    # nothing can go stale relative to anything else.
+    assert cathode_adjacent_cells(resolved_geom) is (
+        cathode_adjacent_cells(resolved_geom)
+    )
     assert anode_flanking_cells(resolved_geom) == ((anode_face - 1, anode_face),)
     assert resolved_geom.cell_role[anode_face - 1] == "gap"
     assert resolved_geom.cell_role[anode_face] == "puff"
@@ -790,6 +810,14 @@ def main():
     for face in twin_resolved_geom.cathode_face_indices:
         assert not twin_resolved_geom.plasma_open[face]
     assert len(cathode_adjacent_cells(twin_resolved_geom)) == 2
+    # Same equality check on the two-cathode layout, where the derivation
+    # actually exercises the low-z branch.
+    assert cathode_adjacent_cells(twin_resolved_geom) == (
+        _derive_cathode_adjacent_cells(
+            twin_resolved_geom.cell_role,
+            twin_resolved_geom.cathode_face_indices,
+        )
+    )
     # Twin puffs at both ends (legacy twin puffs at [0] and [-1]).
     assert list(twin_resolved_geom.cell_role).count("puff") == 2
 
