@@ -6,6 +6,12 @@ scripts/*
 __pycache__/
 *.py[cod]
 
+# Cython build products. The .pyx sources are tracked; the C that Cython
+# generates and the compiled extension are derived and machine-specific.
+cablp/cablp/funcs/*.c
+*.so
+build/
+
 # Data files
 *.h5
 *.hdf5

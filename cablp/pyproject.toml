@@ -14,11 +14,25 @@ dependencies = [
 ]
 
 [build-system]
-requires = ["poetry-core>=2.0.0,<3.0.0"]
+# Cython and setuptools are BUILD-time only: they compile the optional
+# cablp.funcs._cathode_kernels_cy extension (D4 spike). The runtime never
+# needs them -- the compiled kernels are opt-in via CABLP_COMPILED_KERNELS and
+# the default path is pure Python whether or not the extension was built.
+requires = ["poetry-core>=2.0.0,<3.0.0", "Cython>=3.0", "setuptools>=68"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 package-mode = true
 name = "cablp"
 packages = [{include = "cablp"}]
+# The compiled extension is gitignored (derived, machine-specific), and
+# poetry honours VCS ignores when collecting `packages`, so the built .so
+# must be named explicitly or it is silently left out of the wheel -- giving
+# a platform-tagged wheel with no extension in it. Wheel only: an sdist
+# ships the .pyx and rebuilds.
+include = [{ path = "cablp/funcs/*.so", format = "wheel" }]
+
+[tool.poetry.build]
+script = "build_ext.py"
+generate-setup-file = false
 

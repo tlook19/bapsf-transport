@@ -5,6 +5,8 @@ from types import SimpleNamespace
 import h5py
 import numpy as np
 
+from cablp.funcs._kernels import PURE_PROVENANCE as PURE_KERNEL_PROVENANCE
+
 from ..core.config import resolve_config
 from ..core.timestep import TimestepDiagnostics
 from .compat import add_sim3_compat_aliases
@@ -81,6 +83,15 @@ def save_result_hdf5(path, result, params=None, flags=None):
         run_status = getattr(result, "run_status", None)
         if run_status is not None:
             h5.attrs["run_status"] = str(run_status)
+        # Kernel provenance (D3/D4): which arithmetic produced this
+        # trajectory -- "pure" for the default Python path, otherwise the
+        # compiled kernel module's own id. Written whenever the result carries
+        # it, so no new artifact is anonymous about its kernel path; an
+        # artifact with NO compiled_kernels attribute predates the selector
+        # and is pure by construction.
+        compiled_kernels = getattr(result, "compiled_kernels", None)
+        if compiled_kernels is not None:
+            h5.attrs["compiled_kernels"] = str(compiled_kernels)
         if params is not None:
             h5.attrs["params_json"] = _json_dumps(params)
         if flags is not None:
@@ -318,6 +329,13 @@ def load_result_hdf5(path):
         )
         if "run_status" in h5.attrs:
             result.run_status = _decode_string(h5.attrs["run_status"])
+        # Absent on artifacts written before the kernel selector existed;
+        # those ran the pure path, which is what the default resolves to.
+        result.compiled_kernels = (
+            _decode_string(h5.attrs["compiled_kernels"])
+            if "compiled_kernels" in h5.attrs
+            else PURE_KERNEL_PROVENANCE
+        )
         if "ignition_abort" in h5:
             result.ignition_abort = {
                 key: (

@@ -1,6 +1,7 @@
 import dataclasses
 import json
 import math
+import os
 from io import StringIO
 from pathlib import Path
 import shutil
@@ -13,6 +14,9 @@ from types import SimpleNamespace
 import h5py
 import numpy as np
 
+from cablp.funcs import _kernels as _kernel_selector
+from cablp.funcs import _cathode_solver as _cathode_solver_mod
+from cablp.funcs import _cathode_solver_idriven as _cathode_solver_idriven_mod
 from cablp.funcs._adas import he_rate_temperature_range_eV
 # main() re-imports deposit_beam locally further down (B1 block), which makes
 # the bare name local to the whole function -- alias it for the item-35 block.
@@ -4193,9 +4197,92 @@ def main():
                 value.decode("utf-8") == "pre_breakdown"
                 for value in h5["diagnostics/phase"][()]
             )
+        # D3/D4 kernel provenance: every artifact names the arithmetic that
+        # produced it, and the default is the pure Python path.
+        with h5py.File(output_path, "r") as h5:
+            assert h5.attrs["compiled_kernels"] == _kernel_selector.PROVENANCE
+        assert run_result.compiled_kernels == _kernel_selector.PROVENANCE
+        assert not _kernel_selector.compiled_kernels_requested()
+        assert _kernel_selector.COMPILED_KERNELS is None
+        assert _kernel_selector.PROVENANCE == _kernel_selector.PURE_PROVENANCE
+        # The default path binds the untouched pure kernel object -- no
+        # wrapper, no per-call branch, so the arithmetic is bit-for-bit
+        # historical.
+        assert _cathode_solver_mod._j_eth_crit is (
+            _cathode_solver_mod._j_eth_crit_pure
+        )
+        assert _cathode_solver_idriven_mod._j_eth_crit is (
+            _cathode_solver_mod._j_eth_crit_pure
+        )
+        # A typo'd opt-in must never read as "off".
+        _saved_env = os.environ.get(_kernel_selector.ENV_VAR)
+        try:
+            os.environ[_kernel_selector.ENV_VAR] = "maybe"
+            try:
+                _kernel_selector.compiled_kernels_requested()
+            except ValueError as error:
+                assert _kernel_selector.ENV_VAR in str(error), error
+            else:
+                raise AssertionError(
+                    "an unrecognised CABLP_COMPILED_KERNELS value must raise"
+                )
+            for _off in ("0", "false", "off", ""):
+                os.environ[_kernel_selector.ENV_VAR] = _off
+                assert not _kernel_selector.compiled_kernels_requested(), _off
+            for _on in ("1", "TRUE", "Yes", "on"):
+                os.environ[_kernel_selector.ENV_VAR] = _on
+                assert _kernel_selector.compiled_kernels_requested(), _on
+        finally:
+            if _saved_env is None:
+                os.environ.pop(_kernel_selector.ENV_VAR, None)
+            else:
+                os.environ[_kernel_selector.ENV_VAR] = _saved_env
+
+        # D4 equivalence: wherever the extension has been BUILT, the compiled
+        # kernel must be bit-identical to the pure one over the operating
+        # range -- checked whether or not this process opted in to running it,
+        # because the comparison is the point. Skipped (not failed) on a
+        # checkout with no compiled extension: it is optional by design.
+        # scripts/spike_cython_kernels.py is the full-resolution version.
+        try:
+            import importlib as _importlib
+
+            _cy = _importlib.import_module("cablp.funcs._cathode_kernels_cy")
+        except ImportError:
+            _cy = None
+        if _cy is not None:
+            assert _cy.pemr() == _cathode_solver_mod._pemr
+            _psi_sweep = np.concatenate(
+                [
+                    np.array([-1.0, 0.0, 1e-3]),
+                    np.logspace(-12.0, 3.0, 400),
+                    np.linspace(1e-6, 5.0e-3, 200),   # Taylor branch
+                    np.linspace(5.0e-3, 150.0, 300),  # closed form
+                ]
+            )
+            _n_taylor = 0
+            _n_closed = 0
+            for _mu in (1.0, 4.0, 40.0):  # He (the thesis gas) is mu = 4
+                for _J_i in (1.0e-4, 1.0, 1.0e4):
+                    for _psi in _psi_sweep:
+                        _pure = _cathode_solver_mod._j_eth_crit_pure(
+                            float(_psi), _J_i, _mu
+                        )
+                        _comp = _cy.j_eth_crit(float(_psi), _J_i, _mu)
+                        # Bit-exact, not merely close: the golden baseline
+                        # verifies exact on the compiled path, so anything
+                        # looser here would be a weaker claim than the gate.
+                        assert _pure == _comp, (_psi, _J_i, _mu, _pure, _comp)
+                        if 0.0 < _psi < 1e-3:
+                            _n_taylor += 1
+                        elif _psi >= 1e-3:
+                            _n_closed += 1
+            assert _n_taylor > 1000 and _n_closed > 1000, (_n_taylor, _n_closed)
+
         loaded_result = load_result_hdf5(output_path)
         loaded_via_solver = LAPDSim1D.load_result(output_path)
         for loaded in (loaded_result, loaded_via_solver):
+            assert loaded.compiled_kernels == _kernel_selector.PROVENANCE
             assert loaded.path == output_path
             assert loaded.steps == run_result.steps
             assert np.isclose(loaded.final_time, run_result.final_time)
