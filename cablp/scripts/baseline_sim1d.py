@@ -79,6 +79,10 @@ BASELINE_PARAM_OVERRIDES = {
     # product deposition. Pin it so a future default promotion to "nonlocal"
     # cannot silently move this anchor (same rule as Te_birth_ionization above).
     "beam_product_transport": "local",
+    # WP-E QL heating locality: same rule as beam_product_transport above --
+    # the fixture banks the anomalous drag locally; pin it so a future default
+    # promotion to "tail_walk" cannot silently move this anchor.
+    "heating_anomalous_transport": "local",
     "cathode_emission_profile": "gaussian",
     "cathode_warming_model": "power_balance",
     "T_s": ES_OPERATING[1]["Ts_standby_K"],
