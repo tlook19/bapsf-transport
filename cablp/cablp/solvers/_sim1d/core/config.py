@@ -1008,22 +1008,67 @@ def cathode_defaults():
         Parasitic series inductance in the current-driven discharge circuit
         [H], in series with ``R_comp``. The loop current is advanced once per
         accepted step by TR-BDF2. It must be positive when cathode coupling is
-        enabled. Default ``6.6e-6``. (An earlier docstring claimed "the ES1
-        measured-fit value 8.1 uH" and contradicted the code; corrected
-        2026-08-03.)
+        enabled. Default ``8.1e-6``.
 
-        L is the one circuit constant still FITTED and it is WEAKLY IDENTIFIED
-        from V_dis: the plateau is nearly L-blind (dI/dt ~ 0 there) and the
-        fitted value ranges 2.1-9.4 uH with the fit window. The V0-pinned
-        four-rung refit prefers 8.06 uH; the better-posed edge fit
-        (``scripts/fit_circuit_edges.py``, which drives the loop ODE with the
-        measured V_dis over the current rise and fall) boxes 15-25 uH. L is
-        owned by the edge fit, not by the plateau fit, and is left at 6.6e-6
-        pending it (deliberate, Tom 2026-08-03). This means the adopted circuit
-        triple (C = 9.5187 F, R = 7.2244 mOhm, L = 8.057 uH from the joint fit)
-        is INTERNALLY INCONSISTENT IN ITS THIRD COMPONENT. The inconsistency is
-        confined to the current EDGES, where no plateau result lives -- it is
-        flagged, not silently resolved.
+        DERIVED FROM MEASUREMENT, bracket 7.6-8.4 uH -- reclassified from
+        FITTED on 2026-08-03. Two instruments with disjoint time windows and
+        no shared fitted parameters agree at ~8 uH:
+
+        - the flyback VOLT-SECOND BALANCE over the current fall,
+          ``L = int V dt / dI``, giving 7.2-8.4 uH. The switch hardware paper
+          (Pribyl & Gekelman, RSI 75, 669 (2004)) confirms the fall is a real
+          freewheel, and this arm is INVARIANT to the circuit constants: the
+          fall branch of ``scripts/fit_circuit_edges.py`` drives the loop with
+          ``emf = -V_meas`` and touches neither V0, R nor C. Its fall-only
+          answer (~8.2 uH) is unchanged, to better than the scan resolution,
+          across the 2026-08-03 circuit correction -- the strongest single
+          number here.
+        - the edge ODE fit over the current RISE (same script, driven by the
+          measured V_dis with the corrected V0/R/C): 7.6 uH at 38 A rms, the
+          sharpest constraint in the campaign. Joint rise+fall 8.2 uH, +10%-rms
+          band 7.9-8.5 uH.
+
+        The V0-pinned four-rung plateau refit independently prefers 8.06 uH,
+        though the plateau is nearly L-blind (dI/dt ~ 0 there) so its jackknife
+        bar is wide (6.7 +- 2.5 uH) and the fitted value ranges 2.1-9.4 uH with
+        the window. The instruments cannot discriminate 8.06/8.1/8.23, so
+        ``8.1e-6`` is adopted: it is the value the golden fixture
+        (``scripts/baseline_sim1d.py``), the pre-``9ece533`` config default and
+        the thesis evidence file already carry, and adopting it collapses three
+        distinct recorded L values to one.
+
+        RETRACTION (2026-08-03): an earlier version of this docstring said
+        6.6e-6 was left "pending" a better-posed edge fit that "boxes
+        15-25 uH". BOTH HALVES WERE FALSE. 15-25 uH was never the edge fit's
+        answer -- it is ``L = tau_fall * R_load`` with the plasma treated as a
+        CONSTANT RESISTOR, and the measured V_dis collapses 16x within 0.2 ms
+        during the fall (88.8 -> 15.5 -> 9.3 -> 5.3 V at
+        t = 20.0/20.2/20.5/21.0 ms), so a constant ~50 mOhm load is off by an
+        order of magnitude. The estimate was RETRACTED on 2026-07-21, the day
+        ``fit_circuit_edges.py`` was written to test it and refuted it; the
+        edge instrument excludes 15-25 uH at 4.6-7.1x its minimum residual.
+
+        CORRECTION OF A CORRECTION (2026-08-03): a note added earlier the same
+        day said an earlier docstring "claimed 8.1 uH and contradicted the
+        code; corrected 2026-08-03". That resolved the contradiction in the
+        WRONG DIRECTION. The docstring was right and the code was wrong: the
+        default was 8.1e-6 from 2026-07-22 (``7f7457b``) and was overwritten to
+        6.6e-6 on 2026-07-25 by ``9ece533`` (the R5 stance flip), in the same
+        three-line hunk that installed the since-corrected ``R_comp`` 5.72e-3
+        and ``C_bank_F`` 8.4. 6.6e-6 was the orphan of the retracted,
+        near-singular ``fit_es1_circuit.py`` free fit -- a regression, never a
+        considered choice -- and the docstring was the surviving true record of
+        the pre-``9ece533`` default.
+
+        HONEST LIMIT: 6.6e-6 is still INSIDE the plateau refit's jackknife bar
+        (6.7 +- 2.5 uH). The claim is that 6.6 has no evidence behind it while
+        8.1 has two independent lines -- NOT that 6.6 is excluded. The move is
+        a CONSISTENCY AND PROVENANCE correction, not a physics correction: L is
+        inert for every sigma-scored campaign quantity (the plateau inductive
+        term moves 0.055 V mean against a -5.7 V fingerprint signal, under 1%),
+        and the measurable consequences are confined to unscored, reported
+        fingerprints -- t90 +0.05 to +0.11 ms and ignition +0.02 to +0.07 ms,
+        both toward the measurement.
     cathode_warming_model:
         Slow evolution of the emitter surface temperature within a shot.
         ``"none"`` (default) holds ``T_s`` constant, so the
@@ -1343,9 +1388,13 @@ def cathode_defaults():
     #
     #   R_comp   5.72e-3 -> 7.2244e-3  MEASURED (7.213 +- 0.043 mOhm jackknife)
     #   C_bank_F 8.4     -> 9.5        MEASURED, hardware-bounded [7.56, 12.60] F
-    #   L        6.6e-6     unchanged  FITTED, weakly identified -- see the
-    #                                  L_parasitic_H docstring for why the
-    #                                  joint fit's 8.06 uH is NOT adopted
+    #   L        6.6e-6  -> 8.1e-6     DERIVED from measurement, 7.6-8.4 uH --
+    #                                  see the L_parasitic_H docstring. Completed
+    #                                  2026-08-03: 6.6e-6 was the fourth member
+    #                                  of the same retracted fit and was left
+    #                                  behind by the first pass on the strength
+    #                                  of a "15-25 uH box" that had itself been
+    #                                  retracted on 2026-07-21.
     #
     # R_comp and C_bank_F are ONE joint fit and move together (see their
     # docstrings). These defaults are mirrored EXACTLY by the campaign stance in
@@ -1372,7 +1421,7 @@ def cathode_defaults():
         "R_comp": 7.2244e-3,
         "R_comp_partition": 1.0,
         "R_mesh_ohm": 0.0,
-        "L_parasitic_H": 6.6e-6,
+        "L_parasitic_H": 8.1e-6,
         "C_bank_F": 9.5,
         # R5.1/A11 gated fluid<->circuit Picard (only read when the
         # coupled_circuit_picard flag is on): relative loop-current change that

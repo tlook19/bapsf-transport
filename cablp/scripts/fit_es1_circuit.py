@@ -50,10 +50,17 @@ Hardware caveats this fit was once said to adjudicate, as they now stand:
   be superseded by the fitted 5.7 mOhm. That was NOT an adjudication. The
   measured value is 7.22 mOhm, and the discarded 10 mOhm was CLOSER to right
   than the fit that replaced it.
-- The independent tail measurement (e-fold ~0.6 ms at ~10-18 mOhm loop)
-  and the 18 V early-rise sag at measured dI/dt both give L ~ 7-10 uH.
-  L remains the one genuinely open constant; it is owned by
-  ``fit_circuit_edges.py`` (which boxes 15-25 uH), not by this fit.
+- This fit's L = 6.6 uH is SUPERSEDED, and was the last of the four to be
+  retired (2026-08-03). The independent tail measurement (e-fold ~0.6 ms at
+  ~10-18 mOhm loop) and the 18 V early-rise sag at measured dI/dt both give
+  L ~ 7-10 uH; L is owned by ``fit_circuit_edges.py``, whose fall (flyback
+  volt-second) arm gives 7.2-8.4 uH independently of any circuit constant and
+  whose rise arm gives 7.6 uH. Production is now 8.1e-6. This bullet used to
+  end by deferring instead to a "15-25 uH" box -- contradicting, in the same
+  sentence, the two 7-10 uH estimates it had just cited. That box was never
+  ``fit_circuit_edges.py``'s answer and was RETRACTED on 2026-07-21 (it assumed
+  a constant-R freewheel, which the measured collapsing V_dis falsifies); see
+  the retraction recorded in that script's module docstring.
 
 Usage::
 

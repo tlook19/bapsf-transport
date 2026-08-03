@@ -28,8 +28,27 @@ the allowed total is [7.56, 12.60] F and 8.40 F is a near-FLOOR. Nominal
 8.40 F, allowed [7.56, 12.60] F, MEASURED 9.5 F.
 
 This script is the instrument that OWNS L (the plateau is nearly L-blind;
-the edges are where L lives), so its answer is expected to move with the
-inputs and is deliberately not fed back into the production L.
+the edges are where L lives). Its rise arm moves with the inputs above; its
+FALL arm does not -- the flyback branch uses ``emf = -V_meas`` and touches
+neither V0, R nor C, so the fall-only answer (~8.2 uH) is the same before and
+after the 2026-08-03 circuit correction and is the strongest single number in
+the campaign. Production adopted L = 8.1e-6 on 2026-08-03 on the strength of
+this arm plus the V0-pinned plateau refit's 8.06 uH; the instruments cannot
+discriminate 8.06/8.1/8.23 (+10%-rms band 7.9-8.5 uH).
+
+RETRACTION, recorded at its origin: this script's own ``print`` statement used
+to advertise a "hardware box from fall/rise arithmetic: 15-25 uH". That box is
+NOT hardware -- there is no geometry, loop-area or busbar estimate of L
+anywhere in the campaign. It is ``L = tau_fall * R_load`` with the plasma
+treated as a CONSTANT RESISTOR (0.43 ms x 50.6 mOhm = 21.7 uH). The assumption
+is measurably false: the measured V_dis collapses 16x within 0.2 ms of the
+fall (88.8 -> 15.5 -> 9.3 -> 5.3 V at t = 20.0/20.2/20.5/21.0 ms) while the
+current is still near I0. This script was WRITTEN to test that estimate and
+REFUTED it on the day it was written (2026-07-21), and the campaign log
+retracted it the same day -- the text nonetheless survived here and propagated
+into the config docstring and PARAM_OVERRIDES, where it was later cited as the
+reason to keep L at the superseded 6.6 uH. The edge instrument EXCLUDES
+15-25 uH at 4.6-7.1x its minimum residual (and puts 6.6 uH at 2.0x).
 
 Usage:
     python scripts/fit_circuit_edges.py
@@ -92,12 +111,13 @@ def main():
     L_best = float(Ls2[int(np.argmin(costs2))])
     cost, I_sim = edge_cost(L_best, t, I, V)
 
-    # The V0-pinned four-rung V_dis refit prefers 8.06 uH -- between the 6.6 uH
-    # production value and this script's 15-25 uH hardware box -- but it is a
-    # plateau fit and the plateau is nearly L-blind, so the edge answer governs.
-    print(f"edge-fit L = {L_best * 1e6:.1f} uH  (current model: 6.6 uH; "
-          f"plateau refit: 8.06 uH; "
-          f"hardware box from fall/rise arithmetic: 15-25 uH)")
+    # The V0-pinned four-rung V_dis refit independently prefers 8.06 uH, but it
+    # is a plateau fit and the plateau is nearly L-blind, so the edge answer
+    # governs. Production adopted 8.1e-6 on 2026-08-03 (see the L_parasitic_H
+    # docstring in core/config.py); the instruments cannot discriminate
+    # 8.06/8.1/8.23.
+    print(f"edge-fit L = {L_best * 1e6:.1f} uH  (production: 8.1 uH; "
+          f"plateau refit: 8.06 uH)")
     for label, (lo, hi) in (("rise", RISE_WIN), ("fall", FALL_WIN)):
         mm = (t >= lo) & (t <= hi)
         rms = np.sqrt(np.mean((I_sim[mm] - I[mm]) ** 2))
