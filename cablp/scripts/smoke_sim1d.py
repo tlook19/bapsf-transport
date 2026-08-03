@@ -8209,6 +8209,271 @@ def main():
         else:
             raise AssertionError("expected ValueError from deposit_beam")
 
+    # --- Per-cell float accumulators (cost read 2026-08-02, restructure B) ---
+    # deposit_beam banks each substep's channels in local Python floats and
+    # flushes them to their arrays once, at cell exit, instead of doing eight
+    # `arr[cell] += scalar` fancy-index stores per substep (14.5% of a
+    # substep). The claim is bit-exactness, and it is checked here against a
+    # reference march that keeps the OLD per-substep stores.
+    #
+    # The reference duplicates only the LOOP STRUCTURE -- the thing that
+    # changed. Every physics leaf (the cross-section lookups, the stopping
+    # powers, the secondary energy) is the module's own function, so a change
+    # to the physics moves both sides together and only a change to the
+    # marching/banking structure can make this fire. If that happens, this
+    # reference must be re-derived from the module (or retired), never
+    # loosened.
+    from cablp.funcs._beam_deposition import (
+        _ERG_PER_EV as _b2_ERG,
+        HE_E_STOP_EV as _b2_E_STOP,
+        HE_I_ION_EV as _b2_I_ION,
+        he_mean_secondary_energy_eV as _b2_W_sec,
+    )
+    from cablp.funcs._cross import (
+        He_EII_cross_lkup as _b2_sigma_i,
+        He_beam_excitation_channel_lkup as _b2_sigma_x,
+    )
+
+    def _b2_reference_march(
+        E0_eV, Gamma0_per_s, nn, ne, Te, launch, direction, dz_cm,
+        I_ion_eV=_b2_I_ION, E_stop_eV=_b2_E_STOP,
+        coulomb_model="fast_electron", anomalous_model="none",
+        beam_area_cm2=None, max_energy_fraction_per_substep=0.02,
+        anode_cross_index=None, anode_eta=0.0,
+        product_transport="local", anomalous_transport="local",
+        tail_energy_eV=None,
+    ):
+        """The pre-restructure-B march: every bank written per SUBSTEP.
+
+        Returns a dict of the per-cell arrays and the trajectory scalars.
+        """
+        cells = int(np.asarray(dz_cm).size)
+        banks = {
+            name: np.zeros(cells)
+            for name in (
+                "ionization_events", "excitation_events", "heating",
+                "radiated", "ionization_cost", "E_entry", "heat_coulomb",
+                "heat_anomalous", "heat_secondary", "heat_terminal",
+                "sec_flux", "sec_power_eV", "anom_power_eV",
+            )
+        }
+        walk_products = product_transport == "nonlocal"
+        walk_tail = anomalous_transport == "tail_walk"
+        area = np.broadcast_to(
+            np.asarray(
+                0.0 if beam_area_cm2 is None else beam_area_cm2, dtype=float
+            ),
+            (cells,),
+        )
+        frac = float(max_energy_fraction_per_substep)
+        order = (
+            range(launch, cells) if direction > 0 else range(launch, -1, -1)
+        )
+        E = float(E0_eV)
+        gamma = float(Gamma0_per_s)
+        absorbed = False
+        anode_intercepted = 0.0
+        terminal = (-1, 0.0, 0.0)
+        intercept_active = anode_cross_index is not None and anode_eta > 0.0
+        if E <= E_stop_eV:
+            return dict(banks, transmitted_flux=gamma, transmitted_E=E,
+                        anode_intercepted=0.0, terminal=terminal)
+        for cell in order:
+            if intercept_active and cell == anode_cross_index:
+                anode_intercepted += anode_eta * gamma * E * _b2_ERG
+                gamma *= 1.0 - anode_eta
+                intercept_active = False
+            banks["E_entry"][cell] = E
+            remaining = float(dz_cm[cell])
+            nn_c = float(nn[cell])
+            ne_c = float(ne[cell])
+            Te_c = float(Te[cell])
+            while remaining > 0.0:
+                sigma_i = (
+                    _b2_sigma_i(E / I_ion_eV) if E > I_ion_eV else 0.0
+                )
+                sigma_x, E_rad = _b2_sigma_x(E)
+                W_sec = _b2_W_sec(E, I_ion_eV=I_ion_eV)
+                L_pot = nn_c * sigma_i * I_ion_eV
+                L_sec = nn_c * sigma_i * W_sec
+                L_exc = nn_c * sigma_x * E_rad
+                L_coul = coulomb_stopping_eV_per_cm(
+                    E, ne_c, Te_c, model=coulomb_model
+                )
+                L_anom = 0.0
+                if anomalous_model == "quasilinear":
+                    n_b = gamma / (float(area[cell]) * beam_speed_cm_s(E))
+                    l_ql = quasilinear_relaxation_length_cm(E, ne_c, n_b)
+                    if math.isfinite(l_ql) and l_ql > 0.0:
+                        L_anom = E / l_ql
+                L_tot = L_pot + L_sec + L_exc + L_coul + L_anom
+                if L_tot <= 0.0:
+                    break
+                dz_sub = min(remaining, frac * E / L_tot)
+                if E - L_tot * dz_sub <= E_stop_eV:
+                    dz_sub = (E - E_stop_eV) / L_tot
+                if dz_sub <= 0.0:
+                    if walk_products:
+                        terminal = (cell, gamma, E)
+                    else:
+                        banks["heating"][cell] += gamma * E * _b2_ERG
+                        banks["heat_terminal"][cell] += gamma * E * _b2_ERG
+                    E = 0.0
+                    absorbed = True
+                    break
+                d_pot = L_pot * dz_sub
+                d_sec = L_sec * dz_sub
+                d_exc = L_exc * dz_sub
+                d_coul = L_coul * dz_sub
+                d_anom = L_anom * dz_sub
+                banks["ionization_cost"][cell] += gamma * d_pot * _b2_ERG
+                if walk_tail:
+                    banks["anom_power_eV"][cell] += gamma * d_anom
+                    d_anom_local = 0.0
+                else:
+                    d_anom_local = d_anom
+                if walk_products:
+                    banks["heating"][cell] += (
+                        gamma * (d_coul + d_anom_local) * _b2_ERG
+                    )
+                    banks["sec_flux"][cell] += gamma * nn_c * sigma_i * dz_sub
+                    banks["sec_power_eV"][cell] += gamma * d_sec
+                else:
+                    banks["heating"][cell] += (
+                        gamma * (d_sec + d_coul + d_anom_local) * _b2_ERG
+                    )
+                    banks["heat_secondary"][cell] += gamma * d_sec * _b2_ERG
+                banks["heat_coulomb"][cell] += gamma * d_coul * _b2_ERG
+                banks["heat_anomalous"][cell] += gamma * d_anom_local * _b2_ERG
+                banks["radiated"][cell] += gamma * d_exc * _b2_ERG
+                banks["ionization_events"][cell] += (
+                    gamma * nn_c * sigma_i * dz_sub
+                )
+                banks["excitation_events"][cell] += (
+                    gamma * nn_c * sigma_x * dz_sub
+                )
+                E -= d_pot + d_sec + d_exc + d_coul + d_anom
+                remaining -= dz_sub
+                if E <= E_stop_eV:
+                    if walk_products:
+                        terminal = (cell, gamma, E)
+                    else:
+                        banks["heating"][cell] += gamma * E * _b2_ERG
+                        banks["heat_terminal"][cell] += gamma * E * _b2_ERG
+                    E = 0.0
+                    absorbed = True
+                    break
+            if absorbed:
+                break
+        return dict(
+            banks,
+            transmitted_flux=0.0 if absorbed else gamma,
+            transmitted_E=0.0 if absorbed else E,
+            anode_intercepted=anode_intercepted,
+            terminal=terminal,
+        )
+
+    # The banks the reference and the module must agree on, per cell. The
+    # WP-D/WP-E withholding banks are not on the result object, so they are
+    # compared through the arrays they end up in ("local" arms) and through
+    # the walk products they drive ("nonlocal"/"tail_walk" arms).
+    _b2_fields = (
+        ("ionization_events", "ionization_events"),
+        ("excitation_events", "excitation_events"),
+        ("heating", "plasma_heating_erg_s"),
+        ("radiated", "radiated_erg_s"),
+        ("ionization_cost", "ionization_cost_erg_s"),
+        ("E_entry", "E_entry_eV"),
+        ("heat_coulomb", "heating_coulomb_erg_s"),
+        ("heat_anomalous", "heating_anomalous_erg_s"),
+        ("heat_secondary", "heating_secondary_erg_s"),
+        ("heat_terminal", "heating_terminal_erg_s"),
+    )
+    # Representative states: the b1 breakdown column (ray absorbed mid-column,
+    # many substeps per cell), a thin column the ray crosses whole
+    # (transmitting, one substep-limited pass per cell), the quasilinear
+    # closure (flux-dependent stopping), and the anode-mesh interception that
+    # changes gamma mid-ray.
+    _b2_thin = dict(
+        nn=np.full(b1_cells, 1.0e12),
+        ne=np.full(b1_cells, 1.0e10),
+        Te=np.full(b1_cells, 3.0),
+        launch=0, direction=1, dz_cm=np.full(b1_cells, 20.0),
+    )
+    _b2_cases = (
+        ("absorbed", (150.0, 1.0e22), dict(b1_col)),
+        ("transmitted", (150.0, 1.0e22), dict(_b2_thin)),
+        ("reverse", (150.0, 1.0e22),
+         {**b1_col, "launch": b1_cells - 1, "direction": -1}),
+        ("quasilinear", (300.0, 1.0e20),
+         {**_b2_thin, "anomalous_model": "quasilinear",
+          "beam_area_cm2": 700.0}),
+        ("anode", (150.0, 1.0e22),
+         {**_b2_thin, "anode_cross_index": 5, "anode_eta": 0.358}),
+    )
+    for _b2_name, _b2_args, _b2_kw in _b2_cases:
+        _b2_got = deposit_beam(*_b2_args, **_b2_kw)
+        _b2_ref = _b2_reference_march(*_b2_args, **_b2_kw)
+        for _b2_key, _b2_attr in _b2_fields:
+            assert np.array_equal(
+                getattr(_b2_got, _b2_attr), _b2_ref[_b2_key]
+            ), (_b2_name, _b2_attr)
+        assert _b2_got.transmitted_flux == _b2_ref["transmitted_flux"], _b2_name
+        assert (
+            _b2_got.transmitted_energy_eV == _b2_ref["transmitted_E"]
+        ), _b2_name
+        assert (
+            float(_b2_got.anode_intercepted_erg_s)
+            == _b2_ref["anode_intercepted"]
+        ), _b2_name
+        # A case that banks nothing would pass vacuously; every case must
+        # actually deposit, and the absorbed ones must reach a terminal bank.
+        assert _b2_ref["heating"].sum() > 0.0, _b2_name
+    # The two withholding closures get their own arms, so the WP-D/WP-E banks
+    # (flushed under their own `if` at cell exit) are exercised too, not just
+    # the always-on eight. The tail arm needs the weak-beam domain
+    # n_b < 0.1 n_e, or the QL relaxation length is infinite by design and
+    # there is no anomalous power to withhold.
+    _b2_weak = dict(
+        nn=np.full(b1_cells, 1.0e13),
+        ne=np.full(b1_cells, 1.0e12),
+        Te=np.full(b1_cells, 3.0),
+        launch=0, direction=1, dz_cm=np.full(b1_cells, 20.0),
+    )
+    for _b2_name, _b2_args, _b2_kw, _b2_transport in (
+        ("wpd-absorbed", (150.0, 1.0e22), dict(b1_col),
+         {"product_transport": "nonlocal"}),
+        ("wpd-thin", (150.0, 1.0e22), dict(_b2_thin),
+         {"product_transport": "nonlocal"}),
+        ("wpe-weak", (200.0, 1.0e20), dict(_b2_weak),
+         {"anomalous_transport": "tail_walk", "tail_energy_eV": 75.0,
+          "anomalous_model": "quasilinear", "beam_area_cm2": 100.0}),
+    ):
+        _b2_full = {**_b2_kw, **_b2_transport}
+        _b2_got = deposit_beam(*_b2_args, **_b2_full)
+        _b2_ref = _b2_reference_march(*_b2_args, **_b2_full)
+        # The walks run after the march and add to `heating`, so the
+        # comparable per-cell banks here are the ones the march alone
+        # writes plus the withheld populations themselves.
+        for _b2_key, _b2_attr in (
+            ("ionization_events", "ionization_events"),
+            ("excitation_events", "excitation_events"),
+            ("ionization_cost", "ionization_cost_erg_s"),
+            ("radiated", "radiated_erg_s"),
+            ("E_entry", "E_entry_eV"),
+            ("heat_coulomb", "heating_coulomb_erg_s"),
+        ):
+            assert np.array_equal(
+                getattr(_b2_got, _b2_attr), _b2_ref[_b2_key]
+            ), (_b2_name, _b2_transport, _b2_attr)
+        assert (
+            _b2_got.transmitted_flux == _b2_ref["transmitted_flux"]
+        ), (_b2_name, _b2_transport)
+        if "product_transport" in _b2_transport:
+            assert _b2_ref["sec_flux"].sum() > 0.0
+        else:
+            assert _b2_ref["anom_power_eV"].sum() > 0.0
+
     # --- WP-D: non-local transport of the beam's EVENT PRODUCTS
     # (product_transport). At breakdown the secondary electrons and the
     # primary's terminal sub-threshold residual are below every He inelastic
