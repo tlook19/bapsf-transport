@@ -58,10 +58,14 @@ VARIANTS = {
         {"ionization_birth_energy_model": "legacy", "S_gp": 3400},
         {"characteristic_boundary": False},
     ),
-    # Control: skip the 100-cycle neutral pre-equilibration (bare plasma run,
-    # only the in-run tau_neutral_prebreakdown=2 ms accumulation). Tests whether
-    # the diagnosed ~4.0e8 stuck seed was an artifact of a probe that did not
-    # equilibrate the neutral inventory first.
+    # Control: skip the 100-cycle neutral pre-equilibration, so the run starts
+    # from the bare nn0 seed and builds its fill only from the in-run puff.
+    # Tests whether the diagnosed ~4.0e8 stuck seed was an artifact of a probe
+    # that did not equilibrate the neutral inventory first.
+    # NB this control used to ALSO carry the in-run tau_neutral_prebreakdown
+    # = 2 ms neutral-only accumulation. That window is gone (the default is now
+    # 0.0 -- the machine has no pre-drive window, 2026-08-03), so there is no
+    # pre-phase accumulation left to fall back on here.
     "no_equil": (dict(), {"neutral_equilibration": False}),
     # Control: the pre-WIP ES geometry (no end-expansion). The end-expansion
     # geometry (Rcs=40/Lcs=25 + expand-to-1m + collector behind 9 "end" cells)

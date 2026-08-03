@@ -195,7 +195,14 @@ def main():
     assert params["cycles"] == 1
     assert params["phase_transition_mode"] == "current"
     assert params["gas_puff_mode"] == "square"
-    assert params["tau_neutral_prebreakdown"] > 0.0
+    # No pre-drive window: the machine fires one global trigger, so the bank
+    # connects as the puff starts and neutrals never accumulate with the drive
+    # withheld (2026-08-03; see timing_defaults). Asserted EXACTLY, not as
+    # ">= 0", so a reintroduced pre-phase fails here. The flag stays on and
+    # gates the machinery -- the duration alone opts back in, which is what the
+    # dedicated neutral_prebreakdown block below does (it pins its own
+    # tau_neutral_prebreakdown, so that feature test does not read this default).
+    assert params["tau_neutral_prebreakdown"] == 0.0
     assert flags["neutral_prebreakdown"]
     params["phase_transition_mode"] = "scheduled"
     params["gas_puff_mode"] = "decay_after_breakdown"
@@ -10170,14 +10177,29 @@ def main():
 
     startup_params, startup_flags = config_cases()["compare_sim1d_es1"]
     startup_sim = LAPDSim1D(startup_params, startup_flags)
-    startup_result = startup_sim.run(t_end=2.03e-3)
+    # 0.03 ms on the PLASMA clock. This was t_end=2.03e-3 while the stance ran
+    # a 2.000 ms tau_neutral_prebreakdown, i.e. 2 ms of neutral-only dead time
+    # plus the 0.03 ms of startup actually under test. The pre-phase is gone
+    # (the machine has no pre-drive window, 2026-08-03), so the window drops by
+    # exactly that dead time and this case still measures the same 0.03 ms of
+    # startup it always did. NB the bounds below are UNCHANGED -- they pass at
+    # their original values, which is the check that this is a window fix and
+    # not a weakened test. Left at 2.03e-3 the case would instead run through
+    # ignition (~0.06 ms here) into main_discharge and fail on main-discharge
+    # physics it was never written to bound: 8.7e6 erg of Ee floor clipping
+    # against the 1e4 erg startup bound, and 0.775/0.830 rate-domain
+    # below-table fractions against the ==0 assertions. Startup itself is
+    # unchanged -- the Ei floor term is bit-identical either way.
+    startup_result = startup_sim.run(t_end=0.03e-3)
     # Pristine-startup assertions (0 rejections, 0 floor activity) DEFERRED to
     # the ES1 tuning pass (R5 stance flip, 2026-07-25). Under the repaired stance
     # the compare_sim1d_es1 startup shows minor, EXPECTED activity: a couple of
     # timestep rejections (the 2nd-order strang/tr_bdf2 split + Phelps presheath)
     # and small Ei-floor clipping (the Ti floor was relaxed to 300 K, so Ti can
     # now reach it near the cold Ti0 -- impossible at the old 0.1 eV floor). Both
-    # are negligible (~2 rejections, ~17 erg Ei over 2 ms). The ES config is not
+    # are negligible (measured on the window above, 2026-08-03: 0 rejections,
+    # 0.047 erg Ei; the old note's "~2 rejections, ~17 erg Ei over 2 ms" was
+    # quoted over the retired pre-phase-padded window). The ES config is not
     # finalized (geometry + V_bank=180 circuit refit deferred), and startup
     # cleanliness is validated there. Soft-bound here so it does not regress
     # badly. See R5_STANCE_FLIP_HANDOFF.md.
