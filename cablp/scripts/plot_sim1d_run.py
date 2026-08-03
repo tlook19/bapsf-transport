@@ -688,9 +688,17 @@ def _contour_panel(
     else:
         line_levels = _nice_linear_levels(vmin_plot, vmax_plot, target=16)
         label_levels = _nice_linear_levels(vmin_plot, vmax_plot, target=8)
+        # Keep the matching LINE level, not the label one. clabel() requires
+        # exact membership in the contour set's levels, while the two
+        # _nice_linear_levels calls above reach the same level by different
+        # step arithmetic -- a symmetric range renders zero as 0.0 at target=8
+        # but as -2.2e-16 at target=16. Selecting approximately and then
+        # passing the label value back raised "Specified levels don't match
+        # available levels" on any panel whose data straddled zero evenly
+        # (e.g. an all-but-zero velocity field).
         label_levels = np.array(
             [
-                level
+                line_levels[int(np.argmin(np.abs(level - line_levels)))]
                 for level in label_levels
                 if np.any(np.abs(level - line_levels) < 1.0e-10)
             ]
@@ -791,8 +799,14 @@ def _plot_cathode(result, t_plot, time_label, phase_events):
         v_step = None
     if v_b is not None or v_step is not None:
         ax_v = axes[0].twinx()
-        if v_step is not None:
-            width = 31
+        width = 31
+        # A "0.3 ms average" needs at least a kernel's worth of samples. Below
+        # that np.convolve(mode="same") returns the KERNEL's length, not the
+        # trace's, and the plot call fails on mismatched x/y -- reachable only
+        # on very short debug runs (a production trace is orders of magnitude
+        # longer than 31 saves), and only since the drive became live from
+        # t = 0, which is what first made this trace nonzero there.
+        if v_step is not None and len(v_step) >= width:
             kernel = np.ones(width) / width
             v_avg = np.convolve(
                 np.nan_to_num(v_step, nan=float(np.nanmedian(v_step))),
