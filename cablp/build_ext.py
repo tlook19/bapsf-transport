@@ -1,7 +1,8 @@
 """Poetry build script: compile the optional Cython scalar kernels.
 
-Scope (D4, extended to the Tier A cathode unit 2026-08-02): ONE extension
-module, ``cablp.funcs._cathode_kernels_cy``. Nothing imports it unless
+Scope (D4, extended to the Tier A cathode unit and then to the CSDA beam
+march, 2026-08-02): ONE extension module,
+``cablp.funcs._cathode_kernels_cy``. Nothing imports it unless
 ``CABLP_COMPILED_KERNELS`` opts in (``cablp.funcs._kernels``), so the pure
 Python path is unaffected whether or not the extension is present.
 
@@ -41,6 +42,12 @@ PYX = "cablp/funcs/_cathode_kernels_cy.pyx"
 # ``1.0 + 2.0*psi`` once instead of twice and put the compiled kernel a ULP
 # away from CPython's arithmetic. It is the opposite of a fastmath flag; no
 # fastmath, reassociation, or unsafe-math option is used anywhere.
+#
+# It also has to be OFF for the one place the kernels must contract: numpy's
+# own ``arr_interp`` is built WITH contraction, so its lerp is a single
+# rounding, and ``_interp_scalar`` reproduces that with an explicit ``fma()``
+# call. With contraction left on the compiler's discretion, "is this
+# expression fused?" would stop being a property of the source.
 SAFE_FP_ARGS = ["-ffp-contract=off"]
 
 
