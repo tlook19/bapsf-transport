@@ -98,6 +98,7 @@ from cablp.funcs._cathode_solver import (
     beam_excitation_channel,
 )
 from cablp.funcs._cross import H_EII_cross_lkup, He_EII_cross_lkup
+from cablp.funcs._kernels import COMPILED_KERNELS as _COMPILED_KERNELS
 
 __all__ = ["solve_idriven", "solve_beam_system_idriven"]
 
@@ -331,6 +332,29 @@ def _annular_state_schottky(
     return J_star_total, psi_minus_eff, any_clamped
 
 
+# The pure-Python kernels stay reachable under their own names so the compiled
+# path can be compared against them (equivalence sweeps, microbenchmarks)
+# inside a process that has opted in.
+_schottky_lowering_eV_pure = _schottky_lowering_eV
+_annular_state_schottky_pure = _annular_state_schottky
+
+# Compiled-kernel selection (Tier A, 2026-08-02). Same contract as
+# ``_cathode_solver``'s block: one rebinding site per name, at module scope,
+# before any caller resolves it, so the hot path is a plain function object
+# with no per-call branch. ``_COMPILED_ROOT`` is the whole root find for the
+# PRODUCTION branch (annular + Schottky, no thermal bridge) -- the bracket
+# ladder plus brentq with the residual evaluated in C, which is what removes
+# the ~50-100 Python round-trips per solve. It is ``None`` on every other
+# branch and on the default pure path, and ``solve_idriven`` then runs the
+# historical Python ladder verbatim.
+_COMPILED_ROOT = None
+if _COMPILED_KERNELS is not None:
+    _COMPILED_KERNELS.check_constants_idriven(_SCHOTTKY_EV_PER_SQRT_V_M)
+    _schottky_lowering_eV = _COMPILED_KERNELS.schottky_lowering_eV
+    _annular_state_schottky = _COMPILED_KERNELS.annular_state_schottky
+    _COMPILED_ROOT = _COMPILED_KERNELS.solve_psi_annular_schottky
+
+
 def solve_idriven(
     config: DeviceConfig,
     plasma: PlasmaState,
@@ -512,60 +536,76 @@ def solve_idriven(
     # mis-select -- not the voltage-driven path's root-hunting ladder.
     psi_lo = 1.0e-8
     psi_top = max(phi_c_cap_V / T_e, Lambda + 2.0)
-    capability_limited = False
-    # Stage 1: the exact target. Well-conditioned operating points resolve
-    # here and the equivalence with the voltage-driven solve is pristine.
-    J_target = J_imposed
-    for _ in range(200):
-        if _J_tot(psi_top) >= J_target:
-            break
-        if _net_phi_c(psi_top) >= phi_c_cap_V:
-            capability_limited = True
-            break
-        psi_top *= 2.0
+    # Compiled root find (Tier A, 2026-08-02). The ladder and brentq below
+    # evaluate `_J_tot` / `_net_phi_c` ~50-100 times per solve, and each one is
+    # a Python round-trip through `_emission_state` and its per-annulus loop.
+    # On the PRODUCTION branch -- annular emission with Schottky lowering and
+    # no thermal bridge -- the compiled unit runs the identical ladder with the
+    # identical residual in C, using SciPy's own C brentq (the same
+    # Zeros/brentq.c the Python `brentq` wraps, at the same xtol/rtol/maxiter),
+    # and hands back the same `psi_c_plus`. Every other branch, and the default
+    # pure path, falls through to the Python ladder unchanged.
+    if _COMPILED_ROOT is not None and annular and schottky and not bridge:
+        psi_c_plus, capability_limited, _ = _COMPILED_ROOT(
+            J_i, mu, Lambda, T_e, n_e,
+            J_eth_k, delta_k, ion_frac_k,
+            J_imposed, phi_c_cap_V, psi_lo, psi_top, _J_PLATEAU_TOL_REL,
+        )
     else:
-        capability_limited = True
-
-    if capability_limited and _J_tot(psi_top) >= J_imposed - (
-        _J_PLATEAU_TOL_REL * abs(J_imposed)
-    ):
-        # Stage 2: the imposed current is carriable to within float noise
-        # but the exact target is unreachable -- the sub-ulp-flat plateau
-        # (see _J_PLATEAU_TOL_REL). Deterministic leading-edge selection
-        # against the margined target.
         capability_limited = False
-        J_target = J_imposed - _J_PLATEAU_TOL_REL * abs(J_imposed)
+        # Stage 1: the exact target. Well-conditioned operating points resolve
+        # here and the equivalence with the voltage-driven solve is pristine.
+        J_target = J_imposed
+        for _ in range(200):
+            if _J_tot(psi_top) >= J_target:
+                break
+            if _net_phi_c(psi_top) >= phi_c_cap_V:
+                capability_limited = True
+                break
+            psi_top *= 2.0
+        else:
+            capability_limited = True
 
-    if capability_limited:
-        # A genuine inductive kick: the sheath cannot carry the imposed
-        # current at physical net voltages. Return the solution *at* the
-        # ceiling -- net phi_c = phi_c_cap_V, located by a bracketed solve
-        # on the monotone net-sheath map so the reported kick voltage does
-        # not depend on where the doubling happened to land -- and let the
-        # circuit ramp I down at ~V/L per step.
-        if _net_phi_c(psi_top) > phi_c_cap_V:
+        if capability_limited and _J_tot(psi_top) >= J_imposed - (
+            _J_PLATEAU_TOL_REL * abs(J_imposed)
+        ):
+            # Stage 2: the imposed current is carriable to within float noise
+            # but the exact target is unreachable -- the sub-ulp-flat plateau
+            # (see _J_PLATEAU_TOL_REL). Deterministic leading-edge selection
+            # against the margined target.
+            capability_limited = False
+            J_target = J_imposed - _J_PLATEAU_TOL_REL * abs(J_imposed)
+
+        if capability_limited:
+            # A genuine inductive kick: the sheath cannot carry the imposed
+            # current at physical net voltages. Return the solution *at* the
+            # ceiling -- net phi_c = phi_c_cap_V, located by a bracketed solve
+            # on the monotone net-sheath map so the reported kick voltage does
+            # not depend on where the doubling happened to land -- and let the
+            # circuit ramp I down at ~V/L per step.
+            if _net_phi_c(psi_top) > phi_c_cap_V:
+                psi_c_plus = brentq(
+                    lambda x: _net_phi_c(x) - phi_c_cap_V,
+                    psi_lo,
+                    psi_top,
+                    xtol=1.0e-12,
+                    rtol=1.0e-14,
+                    full_output=False,
+                )
+            else:
+                psi_c_plus = psi_top
+        else:
+            # f(psi_lo) ~ -J_i*exp(Lambda) < 0 <= J_target, so the bracket is
+            # valid by construction; brentq is run tight because it is the only
+            # root-find in the module and costs microseconds.
             psi_c_plus = brentq(
-                lambda x: _net_phi_c(x) - phi_c_cap_V,
+                lambda x: _J_tot(x) - J_target,
                 psi_lo,
                 psi_top,
                 xtol=1.0e-12,
                 rtol=1.0e-14,
                 full_output=False,
             )
-        else:
-            psi_c_plus = psi_top
-    else:
-        # f(psi_lo) ~ -J_i*exp(Lambda) < 0 <= J_target, so the bracket is
-        # valid by construction; brentq is run tight because it is the only
-        # root-find in the module and costs microseconds.
-        psi_c_plus = brentq(
-            lambda x: _J_tot(x) - J_target,
-            psi_lo,
-            psi_top,
-            xtol=1.0e-12,
-            rtol=1.0e-14,
-            full_output=False,
-        )
 
     # ------------------------------------------------------------------
     # Everything else follows explicitly from the solved psi

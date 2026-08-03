@@ -1,8 +1,9 @@
 """Opt-in selection of compiled scalar kernels, with loud provenance.
 
-Decision D3/D4 (Tom, 2026-08-02). The compiled path is a SPIKE: it exists to
-answer whether a Cython transcription of the cathode scalar kernel reproduces
-the golden bit-exactly. It is therefore off by default and stays off unless a
+Decision D3/D4 (Tom, 2026-08-02), extended the same day to the Tier A cathode
+unit. The compiled path answers whether a Cython transcription of the cathode
+scalar kernels -- and of the sheath root find built on them -- reproduces the
+golden bit-exactly. It is therefore off by default and stays off unless a
 caller says otherwise, in as few words as possible:
 
     CABLP_COMPILED_KERNELS=1 python scripts/baseline_sim1d.py --verify

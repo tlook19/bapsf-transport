@@ -1,7 +1,7 @@
 """Poetry build script: compile the optional Cython scalar kernels.
 
-Scope (D4 spike, 2026-08-02): ONE extension module,
-``cablp.funcs._cathode_kernels_cy``. Nothing imports it unless
+Scope (D4, extended to the Tier A cathode unit 2026-08-02): ONE extension
+module, ``cablp.funcs._cathode_kernels_cy``. Nothing imports it unless
 ``CABLP_COMPILED_KERNELS`` opts in (``cablp.funcs._kernels``), so the pure
 Python path is unaffected whether or not the extension is present.
 

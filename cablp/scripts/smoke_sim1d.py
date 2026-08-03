@@ -17,6 +17,7 @@ import numpy as np
 from cablp.funcs import _kernels as _kernel_selector
 from cablp.funcs import _cathode_solver as _cathode_solver_mod
 from cablp.funcs import _cathode_solver_idriven as _cathode_solver_idriven_mod
+from cablp.funcs import _beam_deposition as _beam_deposition_mod
 from cablp.funcs._adas import he_rate_temperature_range_eV
 # main() re-imports deposit_beam locally further down (B1 block), which makes
 # the bare name local to the whole function -- alias it for the item-35 block.
@@ -4528,6 +4529,27 @@ def main():
         assert _cathode_solver_idriven_mod._j_eth_crit is (
             _cathode_solver_mod._j_eth_crit_pure
         )
+        # Tier A (2026-08-02): the same contract for the rest of the unit --
+        # one rebinding site per name, and the two solver modules resolve the
+        # SAME object (idriven from-imports the shared ones from
+        # _cathode_solver, which rebinds before that import runs).
+        for _ta_name in ("_c_log_ei", "_compute_l_b"):
+            assert getattr(_cathode_solver_mod, _ta_name) is getattr(
+                _cathode_solver_mod, _ta_name + "_pure"
+            ), _ta_name
+        assert _cathode_solver_idriven_mod._compute_l_b is (
+            _cathode_solver_mod._compute_l_b_pure
+        )
+        assert _beam_deposition_mod._c_log_ei is (
+            _cathode_solver_mod._c_log_ei_pure
+        )
+        for _ta_name in ("_schottky_lowering_eV", "_annular_state_schottky"):
+            assert getattr(_cathode_solver_idriven_mod, _ta_name) is getattr(
+                _cathode_solver_idriven_mod, _ta_name + "_pure"
+            ), _ta_name
+        # The compiled root find is opt-in only; on the default path
+        # solve_idriven runs its historical Python bracket ladder.
+        assert _cathode_solver_idriven_mod._COMPILED_ROOT is None
         # A typo'd opt-in must never read as "off".
         _saved_env = os.environ.get(_kernel_selector.ENV_VAR)
         try:
@@ -4592,6 +4614,228 @@ def main():
                         elif _psi >= 1e-3:
                             _n_closed += 1
             assert _n_taylor > 1000 and _n_closed > 1000, (_n_taylor, _n_closed)
+
+            # --- Tier A: the rest of the compiled cathode unit -------------
+            # Every constant the compiled unit duplicates, checked against the
+            # authoritative Python value the way the bind-time guards do.
+            _cy.check_constants(
+                _cathode_solver_mod._pemr,
+                _cathode_solver_mod._erg_per_eV,
+                _cathode_solver_mod._me_cgs,
+            )
+            _cy.check_constants_idriven(
+                _cathode_solver_idriven_mod._SCHOTTKY_EV_PER_SQRT_V_M
+            )
+            for _ta_bad in (
+                lambda: _cy.check_constants(
+                    _cathode_solver_mod._pemr * (1.0 + 1e-15),
+                    _cathode_solver_mod._erg_per_eV,
+                    _cathode_solver_mod._me_cgs,
+                ),
+                lambda: _cy.check_constants_idriven(3.7946866e-5),
+            ):
+                try:
+                    _ta_bad()
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError("a drifted constant must raise")
+            # Operating-range sweeps, exact equality. Te spans the 0.1 eV floor
+            # to the breakdown excursion; ne the pre-breakdown fill to the
+            # plateau; phi_c the whole sheath range including the 1000 V cap.
+            _ta_Te = np.concatenate([
+                np.logspace(-1.0, 2.5, 120),
+                np.array([9.999, 10.0, 10.001]),  # the c_log_ei branch corner
+            ])
+            _ta_ne = np.logspace(8.0, 15.0, 40)
+            _ta_n = 0
+            for _Te in _ta_Te:
+                for _ne in _ta_ne:
+                    _ta_n += 1
+                    assert _cathode_solver_mod._c_log_ei_pure(
+                        float(_Te), float(_ne)
+                    ) == _cy.c_log_ei(float(_Te), float(_ne)), (_Te, _ne)
+            assert _ta_n > 4000, _ta_n
+            _ta_n = 0
+            for _phi in (-1.0, 0.0, 1e-9, 1.0, 25.0, 180.0, 1000.0, 5.0e3):
+                for _Te in (0.1, 1.0, 3.0, 12.0, 60.0, 300.0):
+                    for _ne in (1.0e8, 1.0e10, 1.0e12, 1.0e14):
+                        assert _cathode_solver_idriven_mod.\
+                            _schottky_lowering_eV_pure(
+                                float(_phi), float(_Te), float(_ne)
+                            ) == _cy.schottky_lowering_eV(
+                                float(_phi), float(_Te), float(_ne)
+                            ), (_phi, _Te, _ne)
+                        for _nn in (0.0, 1.0e12, 1.0e15):
+                            for _sb in (0.0, 1.0e-17, 1.0e-15):
+                                _ta_n += 1
+                                # _compute_l_b_pure calls the module-global
+                                # _c_log_ei, which IS the compiled one in an
+                                # opted-in process -- so this leg alone would
+                                # not catch a bad c_log_ei. The sweep above
+                                # does, independently, which is what closes it.
+                                assert _cathode_solver_mod._compute_l_b_pure(
+                                    float(_phi), float(_Te), float(_ne),
+                                    float(_nn), float(_sb),
+                                ) == _cy.compute_l_b(
+                                    float(_phi), float(_Te), float(_ne),
+                                    float(_nn), float(_sb),
+                                ), (_phi, _Te, _ne, _nn, _sb)
+            assert _ta_n > 1500, _ta_n
+            # The annular Schottky emission state -- the residual's body --
+            # over randomised annuli covering the released, partially clamped
+            # and fully choked regimes.
+            _ta_rng = np.random.default_rng(20260802)
+            _ta_seen = {True: 0, False: 0}
+            for _ta_draw in range(200):
+                _Te = float(10.0 ** _ta_rng.uniform(-1.0, 1.7))
+                _ne = float(10.0 ** _ta_rng.uniform(9.0, 14.0))
+                _J_i = float(10.0 ** _ta_rng.uniform(-4.0, 2.0))
+                _Jk = tuple(
+                    float(10.0 ** _ta_rng.uniform(-6.0, 3.0)) for _ in range(10)
+                )
+                _dk = tuple(
+                    float(_ta_rng.uniform(0.01, 2.0)) for _ in range(10)
+                )
+                _fk = tuple(float(_ta_rng.uniform(0.0, 1.0)) for _ in range(10))
+                # Zero-emission and zero-footprint annuli are real states (a
+                # cold outer ring, a ring outside the plasma), so pin them into
+                # half the draws. Only half, because a zero-footprint annulus
+                # has J_crit = 0 and therefore always reports clamped, which
+                # would hide the fully-released branch from the coverage count.
+                if _ta_draw % 2:
+                    _Jk = (0.0,) + _Jk[1:]
+                    _fk = _fk[:5] + (0.0,) + _fk[6:]
+                # Two emission scales per draw: as drawn (space-charge
+                # clamped almost everywhere) and 1e-12 weaker (fully released,
+                # so the un-clamped branch and the Schottky enhancement leg
+                # are exercised too).
+                for _ta_scale in (1.0, 1.0e-12):
+                    _Jks = tuple(_ta_scale * _j for _j in _Jk)
+                    for _psi in (1e-8, 1e-4, 0.3, 3.0, 25.0, 400.0):
+                        _ta_pure = _cathode_solver_idriven_mod.\
+                            _annular_state_schottky_pure(
+                                _psi, _J_i, 4.0, _Jks, _dk, _fk, _Te, _ne
+                            )
+                        _ta_comp = _cy.annular_state_schottky(
+                            _psi, _J_i, 4.0, _Jks, _dk, _fk, _Te, _ne
+                        )
+                        assert _ta_pure == _ta_comp, (
+                            _psi, _ta_scale, _ta_pure, _ta_comp
+                        )
+                        _ta_seen[_ta_pure[2]] += 1
+            assert _ta_seen[True] > 100 and _ta_seen[False] > 100, _ta_seen
+            # Mismatched annulus lengths are a loud failure, not a zip-truncated
+            # silent physics change.
+            try:
+                _cy.annular_state_schottky(
+                    1.0, 1.0, 4.0, (1.0, 2.0), (0.1,), (0.5, 0.5), 3.0, 1e12
+                )
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("ragged annuli must raise")
+
+            # --- Tier A: the compiled ROOT FIND ----------------------------
+            # The compiled unit runs the whole bracket ladder plus brentq in C.
+            # The reference here is the Python ladder verbatim -- the block in
+            # solve_idriven -- built on the module's own pure emission state and
+            # scipy's Python brentq, so only the ladder/root-find transcription
+            # is under test. Bit-equality of the located psi is the claim.
+            from scipy.optimize import brentq as _ta_brentq
+
+            def _ta_python_ladder(
+                J_i, mu, Lambda, T_e, n_e, J_eth_k, delta_k, ion_frac_k,
+                J_imposed, phi_c_cap_V, psi_lo, psi_top, plateau_tol_rel,
+            ):
+                def _state(psi):
+                    return _cathode_solver_idriven_mod.\
+                        _annular_state_schottky_pure(
+                            psi, J_i, mu, J_eth_k, delta_k, ion_frac_k,
+                            T_e, n_e,
+                        )
+
+                def _J_tot(psi):
+                    return (
+                        J_i
+                        * (1.0 - _cathode_solver_mod._exp_clamped(Lambda - psi))
+                        + _state(psi)[0]
+                    )
+
+                def _net_phi_c(psi):
+                    return (psi - _state(psi)[1]) * T_e
+
+                capability_limited = False
+                J_target = J_imposed
+                for _ in range(200):
+                    if _J_tot(psi_top) >= J_target:
+                        break
+                    if _net_phi_c(psi_top) >= phi_c_cap_V:
+                        capability_limited = True
+                        break
+                    psi_top *= 2.0
+                else:
+                    capability_limited = True
+                if capability_limited and _J_tot(psi_top) >= J_imposed - (
+                    plateau_tol_rel * abs(J_imposed)
+                ):
+                    capability_limited = False
+                    J_target = J_imposed - plateau_tol_rel * abs(J_imposed)
+                if capability_limited:
+                    if _net_phi_c(psi_top) > phi_c_cap_V:
+                        return _ta_brentq(
+                            lambda x: _net_phi_c(x) - phi_c_cap_V,
+                            psi_lo, psi_top, xtol=1.0e-12, rtol=1.0e-14,
+                            full_output=False,
+                        ), True
+                    return psi_top, True
+                return _ta_brentq(
+                    lambda x: _J_tot(x) - J_target,
+                    psi_lo, psi_top, xtol=1.0e-12, rtol=1.0e-14,
+                    full_output=False,
+                ), False
+
+            _ta_tol = _cathode_solver_idriven_mod._J_PLATEAU_TOL_REL
+            _ta_lam = math.log(math.sqrt(4.0 * _cathode_solver_mod._pemr
+                                         / (2.0 * math.pi)))
+            _ta_cap_seen = {True: 0, False: 0}
+            _ta_cases = 0
+            for _Te in (0.3, 1.5, 4.0, 15.0):
+                for _ne in (1.0e10, 5.0e11, 1.0e13):
+                    for _J_i in (1.0e-3, 0.2, 5.0):
+                        _Jk = tuple(
+                            _J_i * 10.0 ** (2.0 - 0.4 * _a) for _a in range(10)
+                        )
+                        _dk = tuple(0.05 + 0.01 * _a for _a in range(10))
+                        _fk = tuple(1.0 - 0.1 * _a for _a in range(10))
+                        for _Jimp in (0.0, 1.0e-3, 0.5, 20.0, 1.0e4):
+                            _ta_psi_top = max(1000.0 / _Te, _ta_lam + 2.0)
+                            _ta_args = (
+                                _J_i, 4.0, _ta_lam, _Te, _ne,
+                                _Jk, _dk, _fk, _Jimp, 1000.0, 1.0e-8,
+                                _ta_psi_top, _ta_tol,
+                            )
+                            _ta_ref, _ta_ref_cap = _ta_python_ladder(*_ta_args)
+                            _ta_got, _ta_cap, _ta_iters = (
+                                _cy.solve_psi_annular_schottky(*_ta_args)
+                            )
+                            assert _ta_cap == _ta_ref_cap, (
+                                _ta_args[:5], _Jimp, _ta_cap, _ta_ref_cap
+                            )
+                            # Bit-equal, not close: the golden verifies exact
+                            # on the compiled path, so a looser claim here
+                            # would be weaker than the gate. A divergence must
+                            # be reported with both roots and the iteration
+                            # count, never absorbed by a tolerance.
+                            assert _ta_got == _ta_ref, (
+                                _ta_args[:5], _Jimp,
+                                float(_ta_got).hex(), float(_ta_ref).hex(),
+                                _ta_iters,
+                            )
+                            _ta_cap_seen[bool(_ta_cap)] += 1
+                            _ta_cases += 1
+            assert _ta_cases >= 180, _ta_cases
+            assert _ta_cap_seen[False] > 20, _ta_cap_seen
 
         loaded_result = load_result_hdf5(output_path)
         loaded_via_solver = LAPDSim1D.load_result(output_path)
