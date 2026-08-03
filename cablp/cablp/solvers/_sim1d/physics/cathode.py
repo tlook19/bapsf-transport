@@ -534,10 +534,21 @@ def idriven_vdis_evaluator(
     # (bank side, in V_dis) and R_internal = (1-x)*R_comp (probe->plasma), plus a
     # separate anode-mesh R_mesh_ohm also on the plasma side. The circuit
     # integrates the DEVICE voltage V_b + I*(R_internal + R_mesh), while V_dis =
-    # V_bank - I*R_external (see advance_circuit's R_comp_ohm = x*R_comp). The
-    # internal drop lowers the current, which RAISES V_dis (fewer volts across
-    # R_external); it never enters the V_dis formula. Defaults (x=1, R_mesh=0)
-    # give R_internal_total = 0 -> device voltage = V_b, bit-exact.
+    # V_bank - I*R_external (see advance_circuit's R_comp_ohm = x*R_comp).
+    #
+    # CORRECTION (2026-08-03): this comment used to say the internal drop
+    # "lowers the current, which RAISES V_dis". That is FALSE for the
+    # (1-x)*R_comp part -- x CANCELS IDENTICALLY from the loop equation.
+    # advance_circuit_current_driven integrates
+    #     f(I) = (V_src - I*x*R_comp - vdis_of_I(I)) / L
+    #          = (V_src - I*R_comp - V_b(I) - I*R_mesh) / L,
+    # so the current sees only the TOTAL R_comp plus R_mesh; x is gone. What x
+    # changes is the REPORTED V_dis, relabelling the same drop between the
+    # external and internal books (dV_dis/dx = -I*R_comp). The claim IS true of
+    # R_mesh, which is genuinely additional series resistance -- so real
+    # internal resistance goes in R_mesh_ohm, never in the partition. Defaults
+    # (x=1, R_mesh=0) give R_internal_total = 0 -> device voltage = V_b,
+    # bit-exact.
     x = float(input_dict.get("R_comp_partition", 1.0))
     R_comp = float(input_dict.get("R_comp", 0.0))
     R_internal_total = (1.0 - x) * R_comp + float(
