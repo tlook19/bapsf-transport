@@ -96,15 +96,28 @@ PARAM_OVERRIDES = {
     #   ceiling. 8.9 F was inside tolerance all along -- no historical run is
     #   invalidated. See the C_bank_F docstring in core/config.py.
     # R_comp and C_bank_F are ONE joint fit and must move together.
-    # L_parasitic_H: UNCHANGED and still FITTED -- weakly identified from V_dis
-    #   (window range 2.1-9.4 uH). The joint fit prefers 8.06 uH but the
-    #   better-posed edge fit (fit_circuit_edges.py) boxes 15-25 uH, and L is
-    #   owned by that measurement. Deliberately left inconsistent with the
-    #   adopted (C, R) pair; the inconsistency is confined to the current edges,
-    #   where no plateau result lives.
+    # L_parasitic_H: 6.6e-6 -> 8.1e-6 (2026-08-03), DERIVED from measurement,
+    #   bracket 7.6-8.4 uH. Two instruments with disjoint windows and no shared
+    #   fitted parameters agree at ~8 uH: the flyback volt-second balance over
+    #   the fall (7.2-8.4 uH; INVARIANT to this circuit correction, since the
+    #   fall branch of fit_circuit_edges.py uses emf = -V_meas and touches no
+    #   circuit constant) and the rise-edge ODE fit (7.6 uH at 38 A rms). The
+    #   plateau refit's own point estimate is 8.06 uH. The "15-25 uH box" that
+    #   this comment previously deferred to is RETRACTED: it is L = tau_fall *
+    #   R_load with the plasma as a CONSTANT RESISTOR, falsified by the measured
+    #   V_dis collapsing 16x within 0.2 ms of the fall, and retracted 2026-07-21
+    #   by the very script it was attributed to. 6.6e-6 was the orphaned fourth
+    #   member of the same retracted free fit as the old R_comp/C_bank_F, not a
+    #   considered stance. Honest limit: 6.6e-6 is still inside the refit's
+    #   jackknife bar (6.7 +- 2.5 uH) -- it has no evidence behind it, but it is
+    #   not excluded. L is inert for every sigma-scored row; consequences are
+    #   confined to the unscored reported fingerprints (t90 +0.05..0.11 ms,
+    #   ignition +0.02..0.07 ms, both toward the measurement). This restores the
+    #   value the golden fixture has pinned all along (baseline_sim1d.py:104),
+    #   so the golden is bit-exact across the change.
     "V_bank": 177.843,
     "R_comp": 7.2244e-3,
-    "L_parasitic_H": 6.6e-6,
+    "L_parasitic_H": 8.1e-6,
     "C_bank_F": 9.5,
     # NB the constant-T_s era ended here (f=0.1 stance promotion, 2026-07-27):
     # the retired "T_s": 273.15 + 1725 pin is gone. T_s is now only the INITIAL
