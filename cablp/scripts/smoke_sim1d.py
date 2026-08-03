@@ -195,7 +195,14 @@ def main():
     assert params["cycles"] == 1
     assert params["phase_transition_mode"] == "current"
     assert params["gas_puff_mode"] == "square"
-    assert params["tau_neutral_prebreakdown"] > 0.0
+    # No pre-drive window: the machine fires one global trigger, so the bank
+    # connects as the puff starts and neutrals never accumulate with the drive
+    # withheld (2026-08-03; see timing_defaults). Asserted EXACTLY, not as
+    # ">= 0", so a reintroduced pre-phase fails here. The flag stays on and
+    # gates the machinery -- the duration alone opts back in, which is what the
+    # dedicated neutral_prebreakdown block below does (it pins its own
+    # tau_neutral_prebreakdown, so that feature test does not read this default).
+    assert params["tau_neutral_prebreakdown"] == 0.0
     assert flags["neutral_prebreakdown"]
     params["phase_transition_mode"] = "scheduled"
     params["gas_puff_mode"] = "decay_after_breakdown"

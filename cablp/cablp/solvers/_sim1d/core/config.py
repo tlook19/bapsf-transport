@@ -372,8 +372,40 @@ def timing_defaults():
     tau_prebreakdown:
         Maximum pre-breakdown duration or scheduled pre-breakdown phase [s].
     tau_neutral_prebreakdown:
-        Optional neutral-only accumulation duration before plasma/cathode
-        current-triggered phases begin [s].
+        Neutral-only accumulation duration before the plasma/cathode
+        current-triggered phases begin [s]. The plasma clock starts at the end
+        of this window, so a positive value delays the whole discharge by
+        exactly that much.
+
+        DEFAULT 0.0 -- THE MACHINE HAS NO PRE-DRIVE WINDOW (Tom, hardware
+        authority, 2026-08-03, boxed). The LAPD fires ONE global trigger: the
+        capacitor bank is connected and the gas puff starts at the same
+        instant, and the bank-connect step is directly visible in all 64 shots
+        as a single-sample 0 -> full-bank voltage step. There is no interval
+        in which neutrals accumulate with the drive withheld, so the model
+        must not run one either. This is a statement about the DEVICE, which
+        is why it lives here with the other measured/physical values and NOT
+        in the campaign's stance overrides -- ``compare_sim1d_es1`` inherits
+        it and carries no pin, exactly as it inherits the measured
+        ``cathode_Ts_base_K``.
+
+        The previous 0.002 default was a run-sequencing artifact with no
+        hardware counterpart, and it sat at the scale of a whole bracket step
+        in the WP-E timing comparison. It was also measurably INERT on the
+        production reference -- across those 2 ms the neutral inventory built
+        0.031% and the plasma changed 0.000% (it sits at the ``ne0`` = 1e9
+        seed), because the 25 ms neutral equilibration had already made the
+        fill -- so removing it is a pure 2 ms sequencing shift. Validated at
+        ``es1_seqfix_local_nx240``: ignition 2.5913 -> 0.5968 ms against a
+        pre-registered 0.591 +/- 0.010 ms gate, with the scorer identical on
+        every stage row except peak current 3017 -> 3016 A (ratio unchanged
+        at 1.000).
+
+        A POSITIVE VALUE IS AN OPT-IN for studies that specifically want a
+        neutral-only accumulation phase; it is not the production stance. Zero
+        disables the pre-phase entirely. The ``neutral_prebreakdown`` flag
+        stays on by default and gates the machinery, so setting this duration
+        alone is enough to get the phase back.
     tau_breakdown:
         Scheduled breakdown duration before main discharge when not using
         current-triggered transitions [s].
@@ -431,7 +463,9 @@ def timing_defaults():
     """
     return {
         "tau_prebreakdown": 0.05,
-        "tau_neutral_prebreakdown": 0.002,
+        # 0.0 = no pre-drive window; the machine's single global trigger
+        # starts the puff and connects the bank together. See the docstring.
+        "tau_neutral_prebreakdown": 0.0,
         "tau_breakdown": 0.0,
         "tau_discharge": 20e-3,
         "tau_afterglow": 5e-3,
@@ -1688,6 +1722,15 @@ input_flags_template_1d = {
     # slopes -- see funcs._cathode_solver_idriven._bridge_release). Off =>
     # bit-exact hard branches (the M2 equivalence gate's condition).
     "cathode_emission_bridge": False,
+    # Gates the neutral-only pre-drive phase. DELIBERATELY LEFT ON after
+    # tau_neutral_prebreakdown dropped to 0.0 (2026-08-03): the duration alone
+    # decides whether the phase runs, so ON + zero duration is already inert
+    # (`_neutral_prebreakdown_duration` returns 0.0 either way, which is why
+    # flipping this to False would be bit-exact today and buys nothing). What
+    # it would cost is the opt-in: a study that sets a positive
+    # tau_neutral_prebreakdown would then get NO phase and no error -- exactly
+    # the silent fallback the house rules forbid. Keeping it True leaves the
+    # duration as the single sufficient control.
     "neutral_prebreakdown": True,
     "neutral_equilibration": True,
     "launch_plasma_after_equilibration": True,
