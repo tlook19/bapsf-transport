@@ -204,7 +204,14 @@ from dataclasses import dataclass
 import numpy as np
 
 from ._cathode_solver import _c_log_ei
-from ._cross import He_EII_cross_lkup, He_beam_excitation_channel_lkup
+from ._cross import (
+    _HE_LOG_EPS,
+    _HE_LOG_SIGMA,
+    He_EII_cross_lkup,
+    He_beam_excitation_channel_lkup,
+    _he_beam_excitation_table,
+)
+from ._kernels import COMPILED_KERNELS as _COMPILED_KERNELS
 
 _ERG_PER_EV = 1.602176634e-12
 _ME_CGS = 9.1093837015e-28  # electron mass [g]
@@ -234,6 +241,48 @@ _PRODUCT_FLOOR_MIN_EV = 0.1
 # Both closures are exact power laws in W -- lnLambda depends only on (ne, Te)
 # -- which is what makes the product walk integrable in closed form below.
 _COULOMB_STOPPING_EXPONENT = {"fast_electron": -1.0, "legacy_tau_ei": 0.5}
+
+# --- Compiled CSDA march (opt-in; see cablp.funcs._kernels) ------------------
+# The cost read of 2026-08-02 measured the substep march at ~61% numpy SCALAR
+# dispatch and Python call overhead -- ~873 sub-calls per ``deposit_beam``
+# call -- so the compiled unit's boundary encloses the WHOLE double loop
+# rather than any leaf. Nothing here changes on the default pure path: the
+# module-level bind is one ``is None`` test at import, and ``deposit_beam``
+# keeps its Python march verbatim as the fallback and the equivalence target.
+#
+# Model selectors are integers across the boundary because the transcription
+# cannot raise ``coulomb_stopping_eV_per_cm``'s ValueError from the place the
+# Python raises it; an unrecognised model is simply not offered to the kernel
+# and takes the Python march, which raises exactly as it always did.
+_COULOMB_MODEL_CODE = {"fast_electron": 0, "legacy_tau_ei": 1}
+
+_CSDA_MARCH = None
+if _COMPILED_KERNELS is not None:
+    _COMPILED_KERNELS.check_constants_beam(
+        _ERG_PER_EV, _ME_CGS, _E4_CGS, _OMEGA_PE_COEFF, math.pi
+    )
+    _CSDA_MARCH = _COMPILED_KERNELS.csda_march
+
+_CSDA_TABLES = None
+_CSDA_TABLES_SRC = None
+
+
+def _csda_tables():
+    """The compiled march's view of the three cross-section tables.
+
+    Rebuilt only when ``_cross``'s lazily-built excitation table is replaced
+    (it is cached there and only rebuilt for a different ``n_max``, which
+    ``deposit_beam`` never asks for), so the steady state is an identity test.
+    The log-log EII table is a module constant in ``_cross`` and never moves.
+    """
+    global _CSDA_TABLES, _CSDA_TABLES_SRC
+    src = _he_beam_excitation_table(20)
+    if _CSDA_TABLES_SRC is not src:
+        _CSDA_TABLES = _COMPILED_KERNELS.CsdaTables(
+            _HE_LOG_EPS, _HE_LOG_SIGMA, src[1], src[2], src[3]
+        )
+        _CSDA_TABLES_SRC = src
+    return _CSDA_TABLES
 
 
 def _coulomb_stopping_coefficient(ne, Te, model):
@@ -729,6 +778,81 @@ def deposit_beam(
             end_loss_tail_low_erg_s=end_loss_tail_low,
             end_loss_tail_high_erg_s=end_loss_tail_high,
         )
+
+    # --- Compiled CSDA march (opt-in) ------------------------------------
+    # Runs the whole double loop below in C and then leaves ``order`` empty so
+    # the Python march is skipped. Deliberately shaped as an INSERTION rather
+    # than an ``else:`` wrapped around the loop: the Python march is the
+    # equivalence target and has to stay byte-for-byte reviewable, and an
+    # added indent level would touch every one of its ~170 lines.
+    #
+    # The four preconditions are the cases the transcription does not
+    # reproduce, each routed back to Python so it behaves exactly as it always
+    # has: an out-of-range ``launch`` (Python's ``range`` walks negative
+    # indices or raises), ``I_ion_eV == 0`` (ZeroDivisionError), an unknown
+    # coulomb model (ValueError from ``coulomb_stopping_eV_per_cm``), and a
+    # beam above the excitation table's ceiling (where the lookup falls back
+    # to the exact manifold sum). ``E`` only ever decreases along the march,
+    # so testing the launch energy settles the ceiling for the whole ray.
+    _csda_ctx = None
+    if (
+        _CSDA_MARCH is not None
+        and 0 <= launch < cells
+        and I_ion_eV != 0.0
+        and coulomb_model in _COULOMB_MODEL_CODE
+    ):
+        _csda_ctx = _csda_tables()
+        if not E < _csda_ctx.exc_top:
+            _csda_ctx = None
+    if _csda_ctx is not None:
+        (
+            E,
+            gamma,
+            absorbed,
+            anode_intercepted,
+            _terminal_cell,
+            _terminal_flux,
+            _terminal_E,
+        ) = _CSDA_MARCH(
+            _csda_ctx,
+            E,
+            gamma,
+            nn,
+            ne,
+            Te,
+            dz_cm,
+            launch,
+            direction,
+            I_ion_eV,
+            E_stop_eV,
+            frac,
+            HE_OPB_EBAR_EV,
+            _COULOMB_MODEL_CODE[coulomb_model],
+            anomalous_model == "quasilinear",
+            area if anomalous_model == "quasilinear" else None,
+            anode_cross_index if intercept_active else -1,
+            anode_eta,
+            walk_products,
+            walk_tail,
+            ionization_events,
+            excitation_events,
+            heating,
+            radiated,
+            ionization_cost,
+            E_entry,
+            heat_coulomb,
+            heat_anomalous,
+            heat_secondary,
+            heat_terminal,
+            sec_flux if walk_products else None,
+            sec_power_eV if walk_products else None,
+            anom_power_eV if walk_tail else None,
+        )
+        if walk_products:
+            terminal_cell = _terminal_cell
+            terminal_flux = _terminal_flux
+            terminal_E = _terminal_E
+        order = ()
 
     for cell in order:
         # Anode-mesh interception (A15): the ray reaches the anode face only if
