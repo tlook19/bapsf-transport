@@ -589,21 +589,27 @@ def _j_eth_crit(psi: float, J_i: float, mu: float) -> float:
     )
 
 
-# The pure-Python kernel stays reachable under its own name so the compiled
-# path can be compared against it (equivalence sweeps, microbenchmarks) inside
-# a process that has opted in.
+# The pure-Python kernels stay reachable under their own names so the compiled
+# path can be compared against them (equivalence sweeps, microbenchmarks)
+# inside a process that has opted in.
 _j_eth_crit_pure = _j_eth_crit
+_c_log_ei_pure = _c_log_ei
+_compute_l_b_pure = _compute_l_b
 
-# Compiled-kernel selection (D3/D4). Rebinding the module global HERE, right
-# after the definition and before anything imports the name, is what makes the
-# hot path free: callers -- including `_cathode_solver_idriven`, which
-# from-imports `_j_eth_crit` and is the production (current-driven) path --
-# resolve one plain function object with no per-call branch. On the default
-# pure path this block is a single `is None` test at import and the name is
-# the untouched original, so the arithmetic is bit-for-bit historical.
+# Compiled-kernel selection (D3/D4, extended to the Tier A unit 2026-08-02).
+# Rebinding the module globals HERE, right after the definitions and before
+# anything imports the names, is what makes the hot path free: callers --
+# including `_cathode_solver_idriven`, which from-imports these and is the
+# production (current-driven) path -- resolve one plain function object with no
+# per-call branch. On the default pure path this block is a single `is None`
+# test at import and the names are the untouched originals, so the arithmetic
+# is bit-for-bit historical. Each name is rebound in exactly ONE place, the
+# module that defines it; `_cathode_solver_idriven` owns its own three.
 if _COMPILED_KERNELS is not None:
-    _COMPILED_KERNELS.check_constants(_pemr)
+    _COMPILED_KERNELS.check_constants(_pemr, _erg_per_eV, _me_cgs)
     _j_eth_crit = _COMPILED_KERNELS.j_eth_crit
+    _c_log_ei = _COMPILED_KERNELS.c_log_ei
+    _compute_l_b = _COMPILED_KERNELS.compute_l_b
 
 
 def _residual(

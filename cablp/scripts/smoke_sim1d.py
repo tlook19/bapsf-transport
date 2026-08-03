@@ -17,6 +17,7 @@ import numpy as np
 from cablp.funcs import _kernels as _kernel_selector
 from cablp.funcs import _cathode_solver as _cathode_solver_mod
 from cablp.funcs import _cathode_solver_idriven as _cathode_solver_idriven_mod
+from cablp.funcs import _beam_deposition as _beam_deposition_mod
 from cablp.funcs._adas import he_rate_temperature_range_eV
 # main() re-imports deposit_beam locally further down (B1 block), which makes
 # the bare name local to the whole function -- alias it for the item-35 block.
@@ -42,6 +43,8 @@ from cablp.solvers._sim1d.physics.cathode import (
     _beam_smoothing_key,
     _beam_smoothing_matrix,
     _clip_ray_length,
+    _csda_beam_deposition,
+    _gap_clip_is_face_aligned,
     _ray_gap_breakout,
     beam_absorption_weights,
     beam_gap_ledger_mismatch,
@@ -2660,6 +2663,107 @@ def main():
     for _bl_key in ("probe", "ray", "circuit"):
         assert np.isnan(bl_diag[f"source_beam_gap_survival_{_bl_key}"])
 
+    # --- Probe skip (cost read 2026-08-02, restructure A) ------------------
+    # When the deposition ray died inside the gap, the gap-transmission probe
+    # is not launched at all: its transmitted flux is then the EXACT float
+    # 0.0. The claim is checked HERE against the probe itself -- the pre-change
+    # call, run verbatim -- on a state from each regime, so the skip is
+    # demonstrated equal to the work it replaces rather than argued to be.
+    _pskip_geom = csda_sim._geometry
+    _pskip_gap = _clip_ray_length(
+        _pskip_geom.length_cm, csda_launch, csda_dir, csda_L_cath
+    )
+    _pskip_Gamma0 = csda_res.I_eth_star / qe_SI
+    _pskip_ray_kwargs = dict(
+        launch=csda_launch,
+        direction=csda_dir,
+        I_ion_eV=float(csda_sim._I_ion),
+        coulomb_model=str(
+            csda_params.get("beam_coulomb_model", "fast_electron")
+        ),
+        anomalous_model=str(
+            csda_params.get("beam_anomalous_model", "none")
+        ),
+    )
+    if _pskip_ray_kwargs["anomalous_model"] != "none":
+        _pskip_ray_kwargs["beam_area_cm2"] = _pskip_geom.plasma_area_cm2
+
+    def _pskip_adapter(nn):
+        """(beam_result, gap_ledger) from the real adapter on a doctored nn."""
+        _beam = SimpleNamespace(
+            result=csda_res,
+            result_twin=None,
+            beam_atten_cross=np.zeros(_pskip_geom.cells),
+        )
+        _, _ledger = _csda_beam_deposition(
+            _beam,
+            SimpleNamespace(nn=nn, n=csda_state.n),
+            SimpleNamespace(Te=csda_derived.Te),
+            _pskip_geom,
+            csda_solve.device_config,
+            csda_params,
+            float(csda_sim._I_ion),
+            anode_interception=True,
+        )
+        return _beam, _ledger
+
+    def _pskip_probe(nn):
+        """Transmitted flux of the probe the pre-change code always launched."""
+        return float(
+            _deposit_beam_ray(
+                csda_res.phi_c, _pskip_Gamma0, dz_cm=_pskip_gap,
+                nn=nn, ne=csda_state.n, Te=csda_derived.Te,
+                **_pskip_ray_kwargs,
+            ).transmitted_flux
+        )
+
+    # Production geometry: the gap is 5 x 10 cm and L_cath is 50 cm, so the
+    # clip lands on a cell face and the anode crossing sits past the gap --
+    # both structural guards are inactive here, which is the case the skip
+    # exists for.
+    assert _gap_clip_is_face_aligned(_pskip_gap, _pskip_geom.length_cm)
+    assert float(_pskip_gap[int(_pskip_geom.anode_face_indices[0])]) == 0.0
+    for _pskip_scale, _pskip_ray_expect in ((1.0, 1.0), (1.0e3, 0.0)):
+        _pskip_nn = np.asarray(csda_state.nn, dtype=float) * _pskip_scale
+        _pskip_beam, _pskip_ledger = _pskip_adapter(_pskip_nn)
+        _pskip_T, _pskip_ray, _pskip_circuit = _pskip_ledger[0]
+        assert _pskip_ray == _pskip_ray_expect, (_pskip_scale, _pskip_ray)
+        # The probe, launched for real, must reproduce the branch taken --
+        # bit-for-bit, not to a tolerance.
+        _pskip_ref = min(
+            max(_pskip_probe(_pskip_nn) / _pskip_Gamma0, 1.0e-6), 1.0
+        )
+        assert _pskip_T == _pskip_ref, (_pskip_scale, _pskip_T, _pskip_ref)
+        # All three ledger channels stay written from the values they always
+        # came from -- the skip removes a computation, not a diagnostic.
+        for _pskip_v in (_pskip_T, _pskip_ray, _pskip_circuit):
+            assert np.isfinite(_pskip_v), (_pskip_scale, _pskip_ledger)
+        assert 0.0 < _pskip_T <= 1.0 and 0.0 < _pskip_circuit <= 1.0
+        assert np.isfinite(_pskip_beam.beam_atten_cross[csda_launch])
+        # ... and the tripwire still reads the same three views: probe and ray
+        # agree on the skip arm (0.0 vs the 1e-6 clamp) exactly as they do on
+        # the transmitting arm, so no divergence is manufactured.
+        assert beam_gap_ledger_mismatch(_pskip_ledger, csda_eta) is None
+    # The dead-ray arm is the one the skip fires on, and its probe really does
+    # transmit the exact float zero (the value the branch substitutes).
+    assert _pskip_probe(np.asarray(csda_state.nn, dtype=float) * 1.0e3) == 0.0
+    # Guard: a clip that ends mid-cell truncates the stop cell, so the probe
+    # could run out of path where the deposition ray still had some. The skip
+    # must see that and stand down.
+    assert not _gap_clip_is_face_aligned(
+        _clip_ray_length(_pskip_geom.length_cm, csda_launch, csda_dir, 45.0),
+        _pskip_geom.length_cm,
+    )
+    assert _gap_clip_is_face_aligned(
+        _clip_ray_length(_pskip_geom.length_cm, csda_launch, csda_dir, 40.0),
+        _pskip_geom.length_cm,
+    )
+    # A clip longer than the whole path leaves every cell at its full length.
+    assert _gap_clip_is_face_aligned(
+        _clip_ray_length(_pskip_geom.length_cm, csda_launch, csda_dir, 1.0e6),
+        _pskip_geom.length_cm,
+    )
+
     # --- R4.1 (audit A15): anode-mesh beam interception is the PRODUCTION DEFAULT
     # (correct csda physics), so csda_sim above already has it on -- the anode
     # books energy and it is part of the csda per-ray budget checked earlier.
@@ -2901,6 +3005,37 @@ def main():
         wpe_on_solve.beam_result.beam_atten_cross[csda_launch]
         == csda_sigma_eff
     )
+    # Hoisted stopping coefficient (cost read 2026-08-02, restructure C): the
+    # adapter now builds the walks' per-cell A once and hands it to every
+    # deposition ray instead of letting each ray rebuild it. Bit-exactness of
+    # the hoist is checked at the SOLVER, against the same ray launched with
+    # the coefficient left to the module -- the pre-change call.
+    _b3_solver_ray = _deposit_beam_ray(
+        csda_res.phi_c, _pskip_Gamma0, dz_cm=_pskip_geom.length_cm,
+        nn=csda_state.nn, ne=csda_state.n, Te=csda_derived.Te,
+        anode_cross_index=int(_pskip_geom.anode_face_indices[0]),
+        anode_eta=csda_eta,
+        anomalous_transport="tail_walk",
+        tail_energy_eV=float(
+            csda_params.get("heating_anomalous_tail_energy_eV", 75.0)
+        ),
+        **_pskip_ray_kwargs,
+    )
+    for _b3_arr in (
+        "plasma_heating_erg_s", "heating_anomalous_erg_s",
+        "heating_coulomb_erg_s", "heating_secondary_erg_s",
+        "heating_terminal_erg_s", "radiated_erg_s",
+        "ionization_cost_erg_s", "ionization_events", "excitation_events",
+        "E_entry_eV",
+    ):
+        assert np.array_equal(
+            getattr(wpe_on_dep, _b3_arr), getattr(_b3_solver_ray, _b3_arr)
+        ), _b3_arr
+    for _b3_sc in (
+        "end_loss_tail_low_erg_s", "end_loss_tail_high_erg_s",
+        "transmitted_flux", "transmitted_energy_eV",
+    ):
+        assert getattr(wpe_on_dep, _b3_sc) == getattr(_b3_solver_ray, _b3_sc)
     # The tail ledger is recorded as cathode diagnostics, zero-defaulted so
     # beer_lambert runs and pre-WP-E files stay readable.
     wpe_on_diag = wpe_on_sim._cathode_diagnostic_snapshot()
@@ -4394,6 +4529,27 @@ def main():
         assert _cathode_solver_idriven_mod._j_eth_crit is (
             _cathode_solver_mod._j_eth_crit_pure
         )
+        # Tier A (2026-08-02): the same contract for the rest of the unit --
+        # one rebinding site per name, and the two solver modules resolve the
+        # SAME object (idriven from-imports the shared ones from
+        # _cathode_solver, which rebinds before that import runs).
+        for _ta_name in ("_c_log_ei", "_compute_l_b"):
+            assert getattr(_cathode_solver_mod, _ta_name) is getattr(
+                _cathode_solver_mod, _ta_name + "_pure"
+            ), _ta_name
+        assert _cathode_solver_idriven_mod._compute_l_b is (
+            _cathode_solver_mod._compute_l_b_pure
+        )
+        assert _beam_deposition_mod._c_log_ei is (
+            _cathode_solver_mod._c_log_ei_pure
+        )
+        for _ta_name in ("_schottky_lowering_eV", "_annular_state_schottky"):
+            assert getattr(_cathode_solver_idriven_mod, _ta_name) is getattr(
+                _cathode_solver_idriven_mod, _ta_name + "_pure"
+            ), _ta_name
+        # The compiled root find is opt-in only; on the default path
+        # solve_idriven runs its historical Python bracket ladder.
+        assert _cathode_solver_idriven_mod._COMPILED_ROOT is None
         # A typo'd opt-in must never read as "off".
         _saved_env = os.environ.get(_kernel_selector.ENV_VAR)
         try:
@@ -4458,6 +4614,228 @@ def main():
                         elif _psi >= 1e-3:
                             _n_closed += 1
             assert _n_taylor > 1000 and _n_closed > 1000, (_n_taylor, _n_closed)
+
+            # --- Tier A: the rest of the compiled cathode unit -------------
+            # Every constant the compiled unit duplicates, checked against the
+            # authoritative Python value the way the bind-time guards do.
+            _cy.check_constants(
+                _cathode_solver_mod._pemr,
+                _cathode_solver_mod._erg_per_eV,
+                _cathode_solver_mod._me_cgs,
+            )
+            _cy.check_constants_idriven(
+                _cathode_solver_idriven_mod._SCHOTTKY_EV_PER_SQRT_V_M
+            )
+            for _ta_bad in (
+                lambda: _cy.check_constants(
+                    _cathode_solver_mod._pemr * (1.0 + 1e-15),
+                    _cathode_solver_mod._erg_per_eV,
+                    _cathode_solver_mod._me_cgs,
+                ),
+                lambda: _cy.check_constants_idriven(3.7946866e-5),
+            ):
+                try:
+                    _ta_bad()
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError("a drifted constant must raise")
+            # Operating-range sweeps, exact equality. Te spans the 0.1 eV floor
+            # to the breakdown excursion; ne the pre-breakdown fill to the
+            # plateau; phi_c the whole sheath range including the 1000 V cap.
+            _ta_Te = np.concatenate([
+                np.logspace(-1.0, 2.5, 120),
+                np.array([9.999, 10.0, 10.001]),  # the c_log_ei branch corner
+            ])
+            _ta_ne = np.logspace(8.0, 15.0, 40)
+            _ta_n = 0
+            for _Te in _ta_Te:
+                for _ne in _ta_ne:
+                    _ta_n += 1
+                    assert _cathode_solver_mod._c_log_ei_pure(
+                        float(_Te), float(_ne)
+                    ) == _cy.c_log_ei(float(_Te), float(_ne)), (_Te, _ne)
+            assert _ta_n > 4000, _ta_n
+            _ta_n = 0
+            for _phi in (-1.0, 0.0, 1e-9, 1.0, 25.0, 180.0, 1000.0, 5.0e3):
+                for _Te in (0.1, 1.0, 3.0, 12.0, 60.0, 300.0):
+                    for _ne in (1.0e8, 1.0e10, 1.0e12, 1.0e14):
+                        assert _cathode_solver_idriven_mod.\
+                            _schottky_lowering_eV_pure(
+                                float(_phi), float(_Te), float(_ne)
+                            ) == _cy.schottky_lowering_eV(
+                                float(_phi), float(_Te), float(_ne)
+                            ), (_phi, _Te, _ne)
+                        for _nn in (0.0, 1.0e12, 1.0e15):
+                            for _sb in (0.0, 1.0e-17, 1.0e-15):
+                                _ta_n += 1
+                                # _compute_l_b_pure calls the module-global
+                                # _c_log_ei, which IS the compiled one in an
+                                # opted-in process -- so this leg alone would
+                                # not catch a bad c_log_ei. The sweep above
+                                # does, independently, which is what closes it.
+                                assert _cathode_solver_mod._compute_l_b_pure(
+                                    float(_phi), float(_Te), float(_ne),
+                                    float(_nn), float(_sb),
+                                ) == _cy.compute_l_b(
+                                    float(_phi), float(_Te), float(_ne),
+                                    float(_nn), float(_sb),
+                                ), (_phi, _Te, _ne, _nn, _sb)
+            assert _ta_n > 1500, _ta_n
+            # The annular Schottky emission state -- the residual's body --
+            # over randomised annuli covering the released, partially clamped
+            # and fully choked regimes.
+            _ta_rng = np.random.default_rng(20260802)
+            _ta_seen = {True: 0, False: 0}
+            for _ta_draw in range(200):
+                _Te = float(10.0 ** _ta_rng.uniform(-1.0, 1.7))
+                _ne = float(10.0 ** _ta_rng.uniform(9.0, 14.0))
+                _J_i = float(10.0 ** _ta_rng.uniform(-4.0, 2.0))
+                _Jk = tuple(
+                    float(10.0 ** _ta_rng.uniform(-6.0, 3.0)) for _ in range(10)
+                )
+                _dk = tuple(
+                    float(_ta_rng.uniform(0.01, 2.0)) for _ in range(10)
+                )
+                _fk = tuple(float(_ta_rng.uniform(0.0, 1.0)) for _ in range(10))
+                # Zero-emission and zero-footprint annuli are real states (a
+                # cold outer ring, a ring outside the plasma), so pin them into
+                # half the draws. Only half, because a zero-footprint annulus
+                # has J_crit = 0 and therefore always reports clamped, which
+                # would hide the fully-released branch from the coverage count.
+                if _ta_draw % 2:
+                    _Jk = (0.0,) + _Jk[1:]
+                    _fk = _fk[:5] + (0.0,) + _fk[6:]
+                # Two emission scales per draw: as drawn (space-charge
+                # clamped almost everywhere) and 1e-12 weaker (fully released,
+                # so the un-clamped branch and the Schottky enhancement leg
+                # are exercised too).
+                for _ta_scale in (1.0, 1.0e-12):
+                    _Jks = tuple(_ta_scale * _j for _j in _Jk)
+                    for _psi in (1e-8, 1e-4, 0.3, 3.0, 25.0, 400.0):
+                        _ta_pure = _cathode_solver_idriven_mod.\
+                            _annular_state_schottky_pure(
+                                _psi, _J_i, 4.0, _Jks, _dk, _fk, _Te, _ne
+                            )
+                        _ta_comp = _cy.annular_state_schottky(
+                            _psi, _J_i, 4.0, _Jks, _dk, _fk, _Te, _ne
+                        )
+                        assert _ta_pure == _ta_comp, (
+                            _psi, _ta_scale, _ta_pure, _ta_comp
+                        )
+                        _ta_seen[_ta_pure[2]] += 1
+            assert _ta_seen[True] > 100 and _ta_seen[False] > 100, _ta_seen
+            # Mismatched annulus lengths are a loud failure, not a zip-truncated
+            # silent physics change.
+            try:
+                _cy.annular_state_schottky(
+                    1.0, 1.0, 4.0, (1.0, 2.0), (0.1,), (0.5, 0.5), 3.0, 1e12
+                )
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("ragged annuli must raise")
+
+            # --- Tier A: the compiled ROOT FIND ----------------------------
+            # The compiled unit runs the whole bracket ladder plus brentq in C.
+            # The reference here is the Python ladder verbatim -- the block in
+            # solve_idriven -- built on the module's own pure emission state and
+            # scipy's Python brentq, so only the ladder/root-find transcription
+            # is under test. Bit-equality of the located psi is the claim.
+            from scipy.optimize import brentq as _ta_brentq
+
+            def _ta_python_ladder(
+                J_i, mu, Lambda, T_e, n_e, J_eth_k, delta_k, ion_frac_k,
+                J_imposed, phi_c_cap_V, psi_lo, psi_top, plateau_tol_rel,
+            ):
+                def _state(psi):
+                    return _cathode_solver_idriven_mod.\
+                        _annular_state_schottky_pure(
+                            psi, J_i, mu, J_eth_k, delta_k, ion_frac_k,
+                            T_e, n_e,
+                        )
+
+                def _J_tot(psi):
+                    return (
+                        J_i
+                        * (1.0 - _cathode_solver_mod._exp_clamped(Lambda - psi))
+                        + _state(psi)[0]
+                    )
+
+                def _net_phi_c(psi):
+                    return (psi - _state(psi)[1]) * T_e
+
+                capability_limited = False
+                J_target = J_imposed
+                for _ in range(200):
+                    if _J_tot(psi_top) >= J_target:
+                        break
+                    if _net_phi_c(psi_top) >= phi_c_cap_V:
+                        capability_limited = True
+                        break
+                    psi_top *= 2.0
+                else:
+                    capability_limited = True
+                if capability_limited and _J_tot(psi_top) >= J_imposed - (
+                    plateau_tol_rel * abs(J_imposed)
+                ):
+                    capability_limited = False
+                    J_target = J_imposed - plateau_tol_rel * abs(J_imposed)
+                if capability_limited:
+                    if _net_phi_c(psi_top) > phi_c_cap_V:
+                        return _ta_brentq(
+                            lambda x: _net_phi_c(x) - phi_c_cap_V,
+                            psi_lo, psi_top, xtol=1.0e-12, rtol=1.0e-14,
+                            full_output=False,
+                        ), True
+                    return psi_top, True
+                return _ta_brentq(
+                    lambda x: _J_tot(x) - J_target,
+                    psi_lo, psi_top, xtol=1.0e-12, rtol=1.0e-14,
+                    full_output=False,
+                ), False
+
+            _ta_tol = _cathode_solver_idriven_mod._J_PLATEAU_TOL_REL
+            _ta_lam = math.log(math.sqrt(4.0 * _cathode_solver_mod._pemr
+                                         / (2.0 * math.pi)))
+            _ta_cap_seen = {True: 0, False: 0}
+            _ta_cases = 0
+            for _Te in (0.3, 1.5, 4.0, 15.0):
+                for _ne in (1.0e10, 5.0e11, 1.0e13):
+                    for _J_i in (1.0e-3, 0.2, 5.0):
+                        _Jk = tuple(
+                            _J_i * 10.0 ** (2.0 - 0.4 * _a) for _a in range(10)
+                        )
+                        _dk = tuple(0.05 + 0.01 * _a for _a in range(10))
+                        _fk = tuple(1.0 - 0.1 * _a for _a in range(10))
+                        for _Jimp in (0.0, 1.0e-3, 0.5, 20.0, 1.0e4):
+                            _ta_psi_top = max(1000.0 / _Te, _ta_lam + 2.0)
+                            _ta_args = (
+                                _J_i, 4.0, _ta_lam, _Te, _ne,
+                                _Jk, _dk, _fk, _Jimp, 1000.0, 1.0e-8,
+                                _ta_psi_top, _ta_tol,
+                            )
+                            _ta_ref, _ta_ref_cap = _ta_python_ladder(*_ta_args)
+                            _ta_got, _ta_cap, _ta_iters = (
+                                _cy.solve_psi_annular_schottky(*_ta_args)
+                            )
+                            assert _ta_cap == _ta_ref_cap, (
+                                _ta_args[:5], _Jimp, _ta_cap, _ta_ref_cap
+                            )
+                            # Bit-equal, not close: the golden verifies exact
+                            # on the compiled path, so a looser claim here
+                            # would be weaker than the gate. A divergence must
+                            # be reported with both roots and the iteration
+                            # count, never absorbed by a tolerance.
+                            assert _ta_got == _ta_ref, (
+                                _ta_args[:5], _Jimp,
+                                float(_ta_got).hex(), float(_ta_ref).hex(),
+                                _ta_iters,
+                            )
+                            _ta_cap_seen[bool(_ta_cap)] += 1
+                            _ta_cases += 1
+            assert _ta_cases >= 180, _ta_cases
+            assert _ta_cap_seen[False] > 20, _ta_cap_seen
 
         loaded_result = load_result_hdf5(output_path)
         loaded_via_solver = LAPDSim1D.load_result(output_path)
@@ -8105,6 +8483,324 @@ def main():
             pass
         else:
             raise AssertionError("expected ValueError from deposit_beam")
+
+    # --- Per-cell float accumulators (cost read 2026-08-02, restructure B) ---
+    # deposit_beam banks each substep's channels in local Python floats and
+    # flushes them to their arrays once, at cell exit, instead of doing eight
+    # `arr[cell] += scalar` fancy-index stores per substep (14.5% of a
+    # substep). The claim is bit-exactness, and it is checked here against a
+    # reference march that keeps the OLD per-substep stores.
+    #
+    # The reference duplicates only the LOOP STRUCTURE -- the thing that
+    # changed. Every physics leaf (the cross-section lookups, the stopping
+    # powers, the secondary energy) is the module's own function, so a change
+    # to the physics moves both sides together and only a change to the
+    # marching/banking structure can make this fire. If that happens, this
+    # reference must be re-derived from the module (or retired), never
+    # loosened.
+    from cablp.funcs._beam_deposition import (
+        _ERG_PER_EV as _b2_ERG,
+        HE_E_STOP_EV as _b2_E_STOP,
+        HE_I_ION_EV as _b2_I_ION,
+        he_mean_secondary_energy_eV as _b2_W_sec,
+    )
+    from cablp.funcs._cross import (
+        He_EII_cross_lkup as _b2_sigma_i,
+        He_beam_excitation_channel_lkup as _b2_sigma_x,
+    )
+
+    def _b2_reference_march(
+        E0_eV, Gamma0_per_s, nn, ne, Te, launch, direction, dz_cm,
+        I_ion_eV=_b2_I_ION, E_stop_eV=_b2_E_STOP,
+        coulomb_model="fast_electron", anomalous_model="none",
+        beam_area_cm2=None, max_energy_fraction_per_substep=0.02,
+        anode_cross_index=None, anode_eta=0.0,
+        product_transport="local", anomalous_transport="local",
+        tail_energy_eV=None,
+    ):
+        """The pre-restructure-B march: every bank written per SUBSTEP.
+
+        Returns a dict of the per-cell arrays and the trajectory scalars.
+        """
+        cells = int(np.asarray(dz_cm).size)
+        banks = {
+            name: np.zeros(cells)
+            for name in (
+                "ionization_events", "excitation_events", "heating",
+                "radiated", "ionization_cost", "E_entry", "heat_coulomb",
+                "heat_anomalous", "heat_secondary", "heat_terminal",
+                "sec_flux", "sec_power_eV", "anom_power_eV",
+            )
+        }
+        walk_products = product_transport == "nonlocal"
+        walk_tail = anomalous_transport == "tail_walk"
+        area = np.broadcast_to(
+            np.asarray(
+                0.0 if beam_area_cm2 is None else beam_area_cm2, dtype=float
+            ),
+            (cells,),
+        )
+        frac = float(max_energy_fraction_per_substep)
+        order = (
+            range(launch, cells) if direction > 0 else range(launch, -1, -1)
+        )
+        E = float(E0_eV)
+        gamma = float(Gamma0_per_s)
+        absorbed = False
+        anode_intercepted = 0.0
+        terminal = (-1, 0.0, 0.0)
+        intercept_active = anode_cross_index is not None and anode_eta > 0.0
+        if E <= E_stop_eV:
+            return dict(banks, transmitted_flux=gamma, transmitted_E=E,
+                        anode_intercepted=0.0, terminal=terminal)
+        for cell in order:
+            if intercept_active and cell == anode_cross_index:
+                anode_intercepted += anode_eta * gamma * E * _b2_ERG
+                gamma *= 1.0 - anode_eta
+                intercept_active = False
+            banks["E_entry"][cell] = E
+            remaining = float(dz_cm[cell])
+            nn_c = float(nn[cell])
+            ne_c = float(ne[cell])
+            Te_c = float(Te[cell])
+            while remaining > 0.0:
+                sigma_i = (
+                    _b2_sigma_i(E / I_ion_eV) if E > I_ion_eV else 0.0
+                )
+                sigma_x, E_rad = _b2_sigma_x(E)
+                W_sec = _b2_W_sec(E, I_ion_eV=I_ion_eV)
+                L_pot = nn_c * sigma_i * I_ion_eV
+                L_sec = nn_c * sigma_i * W_sec
+                L_exc = nn_c * sigma_x * E_rad
+                L_coul = coulomb_stopping_eV_per_cm(
+                    E, ne_c, Te_c, model=coulomb_model
+                )
+                L_anom = 0.0
+                if anomalous_model == "quasilinear":
+                    n_b = gamma / (float(area[cell]) * beam_speed_cm_s(E))
+                    l_ql = quasilinear_relaxation_length_cm(E, ne_c, n_b)
+                    if math.isfinite(l_ql) and l_ql > 0.0:
+                        L_anom = E / l_ql
+                L_tot = L_pot + L_sec + L_exc + L_coul + L_anom
+                if L_tot <= 0.0:
+                    break
+                dz_sub = min(remaining, frac * E / L_tot)
+                if E - L_tot * dz_sub <= E_stop_eV:
+                    dz_sub = (E - E_stop_eV) / L_tot
+                if dz_sub <= 0.0:
+                    if walk_products:
+                        terminal = (cell, gamma, E)
+                    else:
+                        banks["heating"][cell] += gamma * E * _b2_ERG
+                        banks["heat_terminal"][cell] += gamma * E * _b2_ERG
+                    E = 0.0
+                    absorbed = True
+                    break
+                d_pot = L_pot * dz_sub
+                d_sec = L_sec * dz_sub
+                d_exc = L_exc * dz_sub
+                d_coul = L_coul * dz_sub
+                d_anom = L_anom * dz_sub
+                banks["ionization_cost"][cell] += gamma * d_pot * _b2_ERG
+                if walk_tail:
+                    banks["anom_power_eV"][cell] += gamma * d_anom
+                    d_anom_local = 0.0
+                else:
+                    d_anom_local = d_anom
+                if walk_products:
+                    banks["heating"][cell] += (
+                        gamma * (d_coul + d_anom_local) * _b2_ERG
+                    )
+                    banks["sec_flux"][cell] += gamma * nn_c * sigma_i * dz_sub
+                    banks["sec_power_eV"][cell] += gamma * d_sec
+                else:
+                    banks["heating"][cell] += (
+                        gamma * (d_sec + d_coul + d_anom_local) * _b2_ERG
+                    )
+                    banks["heat_secondary"][cell] += gamma * d_sec * _b2_ERG
+                banks["heat_coulomb"][cell] += gamma * d_coul * _b2_ERG
+                banks["heat_anomalous"][cell] += gamma * d_anom_local * _b2_ERG
+                banks["radiated"][cell] += gamma * d_exc * _b2_ERG
+                banks["ionization_events"][cell] += (
+                    gamma * nn_c * sigma_i * dz_sub
+                )
+                banks["excitation_events"][cell] += (
+                    gamma * nn_c * sigma_x * dz_sub
+                )
+                E -= d_pot + d_sec + d_exc + d_coul + d_anom
+                remaining -= dz_sub
+                if E <= E_stop_eV:
+                    if walk_products:
+                        terminal = (cell, gamma, E)
+                    else:
+                        banks["heating"][cell] += gamma * E * _b2_ERG
+                        banks["heat_terminal"][cell] += gamma * E * _b2_ERG
+                    E = 0.0
+                    absorbed = True
+                    break
+            if absorbed:
+                break
+        return dict(
+            banks,
+            transmitted_flux=0.0 if absorbed else gamma,
+            transmitted_E=0.0 if absorbed else E,
+            anode_intercepted=anode_intercepted,
+            terminal=terminal,
+        )
+
+    # The banks the reference and the module must agree on, per cell. The
+    # WP-D/WP-E withholding banks are not on the result object, so they are
+    # compared through the arrays they end up in ("local" arms) and through
+    # the walk products they drive ("nonlocal"/"tail_walk" arms).
+    _b2_fields = (
+        ("ionization_events", "ionization_events"),
+        ("excitation_events", "excitation_events"),
+        ("heating", "plasma_heating_erg_s"),
+        ("radiated", "radiated_erg_s"),
+        ("ionization_cost", "ionization_cost_erg_s"),
+        ("E_entry", "E_entry_eV"),
+        ("heat_coulomb", "heating_coulomb_erg_s"),
+        ("heat_anomalous", "heating_anomalous_erg_s"),
+        ("heat_secondary", "heating_secondary_erg_s"),
+        ("heat_terminal", "heating_terminal_erg_s"),
+    )
+    # Representative states: the b1 breakdown column (ray absorbed mid-column,
+    # many substeps per cell), a thin column the ray crosses whole
+    # (transmitting, one substep-limited pass per cell), the quasilinear
+    # closure (flux-dependent stopping), and the anode-mesh interception that
+    # changes gamma mid-ray.
+    _b2_thin = dict(
+        nn=np.full(b1_cells, 1.0e12),
+        ne=np.full(b1_cells, 1.0e10),
+        Te=np.full(b1_cells, 3.0),
+        launch=0, direction=1, dz_cm=np.full(b1_cells, 20.0),
+    )
+    _b2_cases = (
+        ("absorbed", (150.0, 1.0e22), dict(b1_col)),
+        ("transmitted", (150.0, 1.0e22), dict(_b2_thin)),
+        ("reverse", (150.0, 1.0e22),
+         {**b1_col, "launch": b1_cells - 1, "direction": -1}),
+        ("quasilinear", (300.0, 1.0e20),
+         {**_b2_thin, "anomalous_model": "quasilinear",
+          "beam_area_cm2": 700.0}),
+        ("anode", (150.0, 1.0e22),
+         {**_b2_thin, "anode_cross_index": 5, "anode_eta": 0.358}),
+    )
+    for _b2_name, _b2_args, _b2_kw in _b2_cases:
+        _b2_got = deposit_beam(*_b2_args, **_b2_kw)
+        _b2_ref = _b2_reference_march(*_b2_args, **_b2_kw)
+        for _b2_key, _b2_attr in _b2_fields:
+            assert np.array_equal(
+                getattr(_b2_got, _b2_attr), _b2_ref[_b2_key]
+            ), (_b2_name, _b2_attr)
+        assert _b2_got.transmitted_flux == _b2_ref["transmitted_flux"], _b2_name
+        assert (
+            _b2_got.transmitted_energy_eV == _b2_ref["transmitted_E"]
+        ), _b2_name
+        assert (
+            float(_b2_got.anode_intercepted_erg_s)
+            == _b2_ref["anode_intercepted"]
+        ), _b2_name
+        # A case that banks nothing would pass vacuously; every case must
+        # actually deposit, and the absorbed ones must reach a terminal bank.
+        assert _b2_ref["heating"].sum() > 0.0, _b2_name
+    # The two withholding closures get their own arms, so the WP-D/WP-E banks
+    # (flushed under their own `if` at cell exit) are exercised too, not just
+    # the always-on eight. The tail arm needs the weak-beam domain
+    # n_b < 0.1 n_e, or the QL relaxation length is infinite by design and
+    # there is no anomalous power to withhold.
+    _b2_weak = dict(
+        nn=np.full(b1_cells, 1.0e13),
+        ne=np.full(b1_cells, 1.0e12),
+        Te=np.full(b1_cells, 3.0),
+        launch=0, direction=1, dz_cm=np.full(b1_cells, 20.0),
+    )
+    for _b2_name, _b2_args, _b2_kw, _b2_transport in (
+        ("wpd-absorbed", (150.0, 1.0e22), dict(b1_col),
+         {"product_transport": "nonlocal"}),
+        ("wpd-thin", (150.0, 1.0e22), dict(_b2_thin),
+         {"product_transport": "nonlocal"}),
+        ("wpe-weak", (200.0, 1.0e20), dict(_b2_weak),
+         {"anomalous_transport": "tail_walk", "tail_energy_eV": 75.0,
+          "anomalous_model": "quasilinear", "beam_area_cm2": 100.0}),
+    ):
+        _b2_full = {**_b2_kw, **_b2_transport}
+        _b2_got = deposit_beam(*_b2_args, **_b2_full)
+        _b2_ref = _b2_reference_march(*_b2_args, **_b2_full)
+        # The walks run after the march and add to `heating`, so the
+        # comparable per-cell banks here are the ones the march alone
+        # writes plus the withheld populations themselves.
+        for _b2_key, _b2_attr in (
+            ("ionization_events", "ionization_events"),
+            ("excitation_events", "excitation_events"),
+            ("ionization_cost", "ionization_cost_erg_s"),
+            ("radiated", "radiated_erg_s"),
+            ("E_entry", "E_entry_eV"),
+            ("heat_coulomb", "heating_coulomb_erg_s"),
+        ):
+            assert np.array_equal(
+                getattr(_b2_got, _b2_attr), _b2_ref[_b2_key]
+            ), (_b2_name, _b2_transport, _b2_attr)
+        assert (
+            _b2_got.transmitted_flux == _b2_ref["transmitted_flux"]
+        ), (_b2_name, _b2_transport)
+        if "product_transport" in _b2_transport:
+            assert _b2_ref["sec_flux"].sum() > 0.0
+        else:
+            assert _b2_ref["anom_power_eV"].sum() > 0.0
+
+    # --- Hoisted stopping coefficient (cost read 2026-08-02, restructure C) --
+    # The walks' per-cell A in dE/dx = A W**p is a 262-iteration Python
+    # listcomp costing ~100 us -- half the entire WP-E per-call surcharge --
+    # and it depends only on (ne, Te, model). deposit_beam now accepts it from
+    # the caller so several rays, or a future WP-F's energy groups, pay for it
+    # once. Supplying it must be bit-identical to letting the module build it.
+    _b3_kw = {
+        **_b2_weak, "anomalous_transport": "tail_walk",
+        "tail_energy_eV": 75.0, "anomalous_model": "quasilinear",
+        "beam_area_cm2": 100.0,
+    }
+    _b3_coeff = _coulomb_stopping_coefficient(
+        _b2_weak["ne"], _b2_weak["Te"], "fast_electron"
+    )
+    _b3_auto = deposit_beam(200.0, 1.0e20, **_b3_kw)
+    _b3_given = deposit_beam(
+        200.0, 1.0e20, **_b3_kw, stopping_coefficient=_b3_coeff
+    )
+    for _b3_field in (
+        "ionization_events", "excitation_events", "plasma_heating_erg_s",
+        "radiated_erg_s", "ionization_cost_erg_s", "E_entry_eV",
+        "heating_coulomb_erg_s", "heating_anomalous_erg_s",
+        "heating_secondary_erg_s", "heating_terminal_erg_s",
+    ):
+        assert np.array_equal(
+            getattr(_b3_auto, _b3_field), getattr(_b3_given, _b3_field)
+        ), _b3_field
+    for _b3_scalar in (
+        "transmitted_flux", "transmitted_energy_eV",
+        "end_loss_tail_low_erg_s", "end_loss_tail_high_erg_s",
+    ):
+        assert getattr(_b3_auto, _b3_scalar) == getattr(_b3_given, _b3_scalar)
+    # Non-vacuous: the tail walk actually carried power on this state.
+    assert _b3_auto.heating_anomalous_erg_s.sum() > 0.0
+    assert float(_b3_auto.end_loss_tail_high_erg_s) > 0.0
+    # Presence gating: the default is None and behaves as it always did.
+    assert np.array_equal(
+        deposit_beam(
+            150.0, 1.0e22, **b1_col, stopping_coefficient=None
+        ).plasma_heating_erg_s,
+        b1_res.plasma_heating_erg_s,
+    )
+    # A wrong-length coefficient is a loud failure at the call, never a silent
+    # mis-walk against the wrong cells.
+    try:
+        deposit_beam(
+            200.0, 1.0e20, **_b3_kw, stopping_coefficient=_b3_coeff[:-1]
+        )
+    except ValueError as _b3_err:
+        assert "stopping_coefficient" in str(_b3_err), _b3_err
+    else:
+        raise AssertionError("a short stopping_coefficient must raise")
 
     # --- WP-D: non-local transport of the beam's EVENT PRODUCTS
     # (product_transport). At breakdown the secondary electrons and the

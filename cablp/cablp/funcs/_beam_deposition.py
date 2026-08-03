@@ -500,6 +500,7 @@ def deposit_beam(
     product_transport: str = "local",
     anomalous_transport: str = "local",
     tail_energy_eV: float | None = None,
+    stopping_coefficient: np.ndarray | None = None,
 ) -> BeamDepositionResult:
     """Deposit one monoenergetic beam ray through the column (He only).
 
@@ -556,6 +557,18 @@ def deposit_beam(
     a silent no-op. Energy-only, exactly like WP-D. The two closures are
     independent and compose: with both on, the event products walk on the WP-D
     ledger and the QL tails on the WP-E one.
+
+    ``stopping_coefficient`` (cost read 2026-08-02, restructure C) is the
+    per-cell ``A`` of ``dE/dx = A W**p`` that the walks below need, HOISTED to
+    the caller. Left ``None`` -- the default, and every historical call -- it
+    is built here by ``_coulomb_stopping_coefficient`` exactly as before.
+    Supplied, it is used verbatim, so a caller that launches several rays or
+    (under WP-F) several energy groups over the SAME ``(ne, Te, model)`` pays
+    for the 262-iteration Python listcomp once instead of once per ray: it is
+    100 us, half of the entire WP-E per-call surcharge. Bit-exact either way --
+    the caller is expected to build it with this module's own
+    ``_coulomb_stopping_coefficient``, and it is only read when a walk closure
+    is active, so the default path never touches it.
     """
     if product_transport not in ("local", "nonlocal"):
         raise ValueError(
@@ -621,6 +634,13 @@ def deposit_beam(
             raise ValueError(
                 "tail_energy_eV must be finite and > 0 (got "
                 f"{tail_energy_eV})"
+            )
+    if stopping_coefficient is not None:
+        stopping_coefficient = np.asarray(stopping_coefficient, dtype=float)
+        if stopping_coefficient.shape != (cells,):
+            raise ValueError(
+                "stopping_coefficient must have shape (cells,) = "
+                f"{(cells,)} (got {stopping_coefficient.shape})"
             )
     frac = float(max_energy_fraction_per_substep)
     if not 0.0 < frac < 1.0:
@@ -725,6 +745,40 @@ def deposit_beam(
         nn_c = float(nn[cell])
         ne_c = float(ne[cell])
         Te_c = float(Te[cell])
+        # --- Per-cell banks, as Python floats (cost read 2026-08-02,
+        # restructure B) ------------------------------------------------
+        # The substep loop below used to write each bank straight into its
+        # array: eight ``arr[cell] += scalar`` fancy-index stores per substep,
+        # 0.825 us of a 5.70 us substep (14.5%), against ~0.01 us for a local
+        # float. They accumulate here instead and are flushed once, at cell
+        # exit.
+        #
+        # BIT-EXACT BY CONSTRUCTION, not by tolerance: ``for cell in order``
+        # visits every cell EXACTLY once (a strictly monotone range) and every
+        # target array starts at 0.0, so
+        #
+        #     arr[cell] += x1 ; arr[cell] += x2 ; ... ; arr[cell] += xn
+        #
+        # and
+        #
+        #     acc = 0.0 ; acc += x1 ; ... ; acc += xn ; arr[cell] += acc
+        #
+        # are the identical sequence of float64 additions from the identical
+        # starting value. The flush stays a ``+=`` rather than a ``=`` so the
+        # signed-zero case lands on the historical ``0.0`` too.
+        acc_ionization_events = 0.0
+        acc_excitation_events = 0.0
+        acc_heating = 0.0
+        acc_radiated = 0.0
+        acc_ionization_cost = 0.0
+        acc_heat_coulomb = 0.0
+        acc_heat_anomalous = 0.0
+        acc_heat_secondary = 0.0
+        acc_heat_terminal = 0.0
+        # WP-D / WP-E withholding banks; inert unless their closure is on.
+        acc_sec_flux = 0.0
+        acc_sec_power_eV = 0.0
+        acc_anom_power_eV = 0.0
         while remaining > 0.0:
             sigma_i = (
                 He_EII_cross_lkup(E / I_ion_eV) if E > I_ion_eV else 0.0
@@ -764,8 +818,8 @@ def deposit_beam(
                     terminal_flux = gamma
                     terminal_E = E
                 else:
-                    heating[cell] += gamma * E * _ERG_PER_EV
-                    heat_terminal[cell] += gamma * E * _ERG_PER_EV
+                    acc_heating += gamma * E * _ERG_PER_EV
+                    acc_heat_terminal += gamma * E * _ERG_PER_EV
                 E = 0.0
                 absorbed = True
                 break
@@ -776,7 +830,7 @@ def deposit_beam(
             d_exc = L_exc * dz_sub
             d_coul = L_coul * dz_sub
             d_anom = L_anom * dz_sub
-            ionization_cost[cell] += gamma * d_pot * _ERG_PER_EV
+            acc_ionization_cost += gamma * d_pot * _ERG_PER_EV
             # WP-E: under "tail_walk" the anomalous decrement is withheld from
             # every local bank in this cell (both the lumped one and the
             # diagnostic split) and accumulated for the tail walks below.
@@ -787,7 +841,7 @@ def deposit_beam(
             # trajectory, the transmitted flux and every other channel are
             # bit-identical: only the destination of this one bank moves.
             if walk_tail:
-                anom_power_eV[cell] += gamma * d_anom
+                acc_anom_power_eV += gamma * d_anom
                 d_anom_local = 0.0
             else:
                 d_anom_local = d_anom
@@ -796,19 +850,19 @@ def deposit_beam(
                 # population (flux and energy) for the walks below. The flux
                 # is the SAME product `ionization_events` uses, so the
                 # particle rows are untouched by construction.
-                heating[cell] += gamma * (d_coul + d_anom_local) * _ERG_PER_EV
-                sec_flux[cell] += gamma * nn_c * sigma_i * dz_sub
-                sec_power_eV[cell] += gamma * d_sec
+                acc_heating += gamma * (d_coul + d_anom_local) * _ERG_PER_EV
+                acc_sec_flux += gamma * nn_c * sigma_i * dz_sub
+                acc_sec_power_eV += gamma * d_sec
             else:
-                heating[cell] += (
+                acc_heating += (
                     gamma * (d_sec + d_coul + d_anom_local) * _ERG_PER_EV
                 )
-                heat_secondary[cell] += gamma * d_sec * _ERG_PER_EV
-            heat_coulomb[cell] += gamma * d_coul * _ERG_PER_EV
-            heat_anomalous[cell] += gamma * d_anom_local * _ERG_PER_EV
-            radiated[cell] += gamma * d_exc * _ERG_PER_EV
-            ionization_events[cell] += gamma * nn_c * sigma_i * dz_sub
-            excitation_events[cell] += gamma * nn_c * sigma_x * dz_sub
+                acc_heat_secondary += gamma * d_sec * _ERG_PER_EV
+            acc_heat_coulomb += gamma * d_coul * _ERG_PER_EV
+            acc_heat_anomalous += gamma * d_anom_local * _ERG_PER_EV
+            acc_radiated += gamma * d_exc * _ERG_PER_EV
+            acc_ionization_events += gamma * nn_c * sigma_i * dz_sub
+            acc_excitation_events += gamma * nn_c * sigma_x * dz_sub
             E -= d_pot + d_sec + d_exc + d_coul + d_anom
             remaining -= dz_sub
             if E <= E_stop_eV:
@@ -821,11 +875,29 @@ def deposit_beam(
                     terminal_flux = gamma
                     terminal_E = E
                 else:
-                    heating[cell] += gamma * E * _ERG_PER_EV
-                    heat_terminal[cell] += gamma * E * _ERG_PER_EV
+                    acc_heating += gamma * E * _ERG_PER_EV
+                    acc_heat_terminal += gamma * E * _ERG_PER_EV
                 E = 0.0
                 absorbed = True
                 break
+        # Flush this cell's banks (see the accumulator note above). Reached on
+        # every exit from the substep loop -- the vacuum-cell break, both
+        # absorption breaks, and running the cell's path out -- so no cell can
+        # leave its banks unwritten.
+        ionization_events[cell] += acc_ionization_events
+        excitation_events[cell] += acc_excitation_events
+        heating[cell] += acc_heating
+        radiated[cell] += acc_radiated
+        ionization_cost[cell] += acc_ionization_cost
+        heat_coulomb[cell] += acc_heat_coulomb
+        heat_anomalous[cell] += acc_heat_anomalous
+        heat_secondary[cell] += acc_heat_secondary
+        heat_terminal[cell] += acc_heat_terminal
+        if walk_products:
+            sec_flux[cell] += acc_sec_flux
+            sec_power_eV[cell] += acc_sec_power_eV
+        if walk_tail:
+            anom_power_eV[cell] += acc_anom_power_eV
         if absorbed:
             break
 
@@ -838,7 +910,13 @@ def deposit_beam(
         # closed-form integration. WP-E introduces no walk physics of its own
         # -- only a different population to walk (see the module docstring).
         q = 1.0 - _COULOMB_STOPPING_EXPONENT[coulomb_model]
-        coeff = _coulomb_stopping_coefficient(ne, Te, coulomb_model)
+        # Restructure C: the caller may have built this already and be sharing
+        # it across several rays / energy groups over the same (ne, Te, model).
+        coeff = (
+            _coulomb_stopping_coefficient(ne, Te, coulomb_model)
+            if stopping_coefficient is None
+            else stopping_coefficient
+        )
         floor_eV = np.maximum(
             _PRODUCT_FLOOR_TE_MULTIPLE * Te, _PRODUCT_FLOOR_MIN_EV
         )
