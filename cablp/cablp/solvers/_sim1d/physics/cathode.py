@@ -7,7 +7,11 @@ import numpy as np
 
 from scipy.optimize import brentq
 
-from cablp.funcs._beam_deposition import deposit_beam, BeamDepositionResult
+from cablp.funcs._beam_deposition import (
+    deposit_beam,
+    BeamDepositionResult,
+    _coulomb_stopping_coefficient,
+)
 from cablp.funcs._cathode_solver import (
     DeviceConfig,
     PlasmaState,
@@ -986,6 +990,22 @@ def _csda_beam_deposition(
         # the solver validated it at construction time.
         transport_kwargs["tail_energy_eV"] = float(
             input_dict.get("heating_anomalous_tail_energy_eV", 75.0)
+        )
+    if transport_kwargs:
+        # Hoisted stopping coefficient (cost read 2026-08-02, restructure C).
+        # The walks' per-cell A in dE/dx = A W**p is a 262-iteration Python
+        # listcomp costing ~100 us -- half the whole WP-E per-call surcharge --
+        # and it depends only on (ne, Te, model), which are the SAME for every
+        # deposition ray in this call: both cathode ends under TwinCathode,
+        # both halves of the clumping split (which varies nn alone), and every
+        # energy group a future WP-F build adds. Build it once here rather than
+        # once per ray. Bit-exact: it is the module's own function on the same
+        # inputs, and it is presence-gated behind an active walk closure, so a
+        # default-stance run never reaches this line.
+        transport_kwargs["stopping_coefficient"] = (
+            _coulomb_stopping_coefficient(
+                state.n, derived.Te, coulomb_model
+            )
         )
     # Fractional-coverage beam-neutral closure (default off/uniform, bit-exact):
     # split the ray into a clump fraction (short l_b against nn*chi -> local seed)

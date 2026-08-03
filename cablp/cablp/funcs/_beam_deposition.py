@@ -500,6 +500,7 @@ def deposit_beam(
     product_transport: str = "local",
     anomalous_transport: str = "local",
     tail_energy_eV: float | None = None,
+    stopping_coefficient: np.ndarray | None = None,
 ) -> BeamDepositionResult:
     """Deposit one monoenergetic beam ray through the column (He only).
 
@@ -556,6 +557,18 @@ def deposit_beam(
     a silent no-op. Energy-only, exactly like WP-D. The two closures are
     independent and compose: with both on, the event products walk on the WP-D
     ledger and the QL tails on the WP-E one.
+
+    ``stopping_coefficient`` (cost read 2026-08-02, restructure C) is the
+    per-cell ``A`` of ``dE/dx = A W**p`` that the walks below need, HOISTED to
+    the caller. Left ``None`` -- the default, and every historical call -- it
+    is built here by ``_coulomb_stopping_coefficient`` exactly as before.
+    Supplied, it is used verbatim, so a caller that launches several rays or
+    (under WP-F) several energy groups over the SAME ``(ne, Te, model)`` pays
+    for the 262-iteration Python listcomp once instead of once per ray: it is
+    100 us, half of the entire WP-E per-call surcharge. Bit-exact either way --
+    the caller is expected to build it with this module's own
+    ``_coulomb_stopping_coefficient``, and it is only read when a walk closure
+    is active, so the default path never touches it.
     """
     if product_transport not in ("local", "nonlocal"):
         raise ValueError(
@@ -621,6 +634,13 @@ def deposit_beam(
             raise ValueError(
                 "tail_energy_eV must be finite and > 0 (got "
                 f"{tail_energy_eV})"
+            )
+    if stopping_coefficient is not None:
+        stopping_coefficient = np.asarray(stopping_coefficient, dtype=float)
+        if stopping_coefficient.shape != (cells,):
+            raise ValueError(
+                "stopping_coefficient must have shape (cells,) = "
+                f"{(cells,)} (got {stopping_coefficient.shape})"
             )
     frac = float(max_energy_fraction_per_substep)
     if not 0.0 < frac < 1.0:
@@ -890,7 +910,13 @@ def deposit_beam(
         # closed-form integration. WP-E introduces no walk physics of its own
         # -- only a different population to walk (see the module docstring).
         q = 1.0 - _COULOMB_STOPPING_EXPONENT[coulomb_model]
-        coeff = _coulomb_stopping_coefficient(ne, Te, coulomb_model)
+        # Restructure C: the caller may have built this already and be sharing
+        # it across several rays / energy groups over the same (ne, Te, model).
+        coeff = (
+            _coulomb_stopping_coefficient(ne, Te, coulomb_model)
+            if stopping_coefficient is None
+            else stopping_coefficient
+        )
         floor_eV = np.maximum(
             _PRODUCT_FLOOR_TE_MULTIPLE * Te, _PRODUCT_FLOOR_MIN_EV
         )

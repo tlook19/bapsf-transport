@@ -3004,6 +3004,37 @@ def main():
         wpe_on_solve.beam_result.beam_atten_cross[csda_launch]
         == csda_sigma_eff
     )
+    # Hoisted stopping coefficient (cost read 2026-08-02, restructure C): the
+    # adapter now builds the walks' per-cell A once and hands it to every
+    # deposition ray instead of letting each ray rebuild it. Bit-exactness of
+    # the hoist is checked at the SOLVER, against the same ray launched with
+    # the coefficient left to the module -- the pre-change call.
+    _b3_solver_ray = _deposit_beam_ray(
+        csda_res.phi_c, _pskip_Gamma0, dz_cm=_pskip_geom.length_cm,
+        nn=csda_state.nn, ne=csda_state.n, Te=csda_derived.Te,
+        anode_cross_index=int(_pskip_geom.anode_face_indices[0]),
+        anode_eta=csda_eta,
+        anomalous_transport="tail_walk",
+        tail_energy_eV=float(
+            csda_params.get("heating_anomalous_tail_energy_eV", 75.0)
+        ),
+        **_pskip_ray_kwargs,
+    )
+    for _b3_arr in (
+        "plasma_heating_erg_s", "heating_anomalous_erg_s",
+        "heating_coulomb_erg_s", "heating_secondary_erg_s",
+        "heating_terminal_erg_s", "radiated_erg_s",
+        "ionization_cost_erg_s", "ionization_events", "excitation_events",
+        "E_entry_eV",
+    ):
+        assert np.array_equal(
+            getattr(wpe_on_dep, _b3_arr), getattr(_b3_solver_ray, _b3_arr)
+        ), _b3_arr
+    for _b3_sc in (
+        "end_loss_tail_low_erg_s", "end_loss_tail_high_erg_s",
+        "transmitted_flux", "transmitted_energy_eV",
+    ):
+        assert getattr(wpe_on_dep, _b3_sc) == getattr(_b3_solver_ray, _b3_sc)
     # The tail ledger is recorded as cathode diagnostics, zero-defaulted so
     # beer_lambert runs and pre-WP-E files stay readable.
     wpe_on_diag = wpe_on_sim._cathode_diagnostic_snapshot()
@@ -8473,6 +8504,59 @@ def main():
             assert _b2_ref["sec_flux"].sum() > 0.0
         else:
             assert _b2_ref["anom_power_eV"].sum() > 0.0
+
+    # --- Hoisted stopping coefficient (cost read 2026-08-02, restructure C) --
+    # The walks' per-cell A in dE/dx = A W**p is a 262-iteration Python
+    # listcomp costing ~100 us -- half the entire WP-E per-call surcharge --
+    # and it depends only on (ne, Te, model). deposit_beam now accepts it from
+    # the caller so several rays, or a future WP-F's energy groups, pay for it
+    # once. Supplying it must be bit-identical to letting the module build it.
+    _b3_kw = {
+        **_b2_weak, "anomalous_transport": "tail_walk",
+        "tail_energy_eV": 75.0, "anomalous_model": "quasilinear",
+        "beam_area_cm2": 100.0,
+    }
+    _b3_coeff = _coulomb_stopping_coefficient(
+        _b2_weak["ne"], _b2_weak["Te"], "fast_electron"
+    )
+    _b3_auto = deposit_beam(200.0, 1.0e20, **_b3_kw)
+    _b3_given = deposit_beam(
+        200.0, 1.0e20, **_b3_kw, stopping_coefficient=_b3_coeff
+    )
+    for _b3_field in (
+        "ionization_events", "excitation_events", "plasma_heating_erg_s",
+        "radiated_erg_s", "ionization_cost_erg_s", "E_entry_eV",
+        "heating_coulomb_erg_s", "heating_anomalous_erg_s",
+        "heating_secondary_erg_s", "heating_terminal_erg_s",
+    ):
+        assert np.array_equal(
+            getattr(_b3_auto, _b3_field), getattr(_b3_given, _b3_field)
+        ), _b3_field
+    for _b3_scalar in (
+        "transmitted_flux", "transmitted_energy_eV",
+        "end_loss_tail_low_erg_s", "end_loss_tail_high_erg_s",
+    ):
+        assert getattr(_b3_auto, _b3_scalar) == getattr(_b3_given, _b3_scalar)
+    # Non-vacuous: the tail walk actually carried power on this state.
+    assert _b3_auto.heating_anomalous_erg_s.sum() > 0.0
+    assert float(_b3_auto.end_loss_tail_high_erg_s) > 0.0
+    # Presence gating: the default is None and behaves as it always did.
+    assert np.array_equal(
+        deposit_beam(
+            150.0, 1.0e22, **b1_col, stopping_coefficient=None
+        ).plasma_heating_erg_s,
+        b1_res.plasma_heating_erg_s,
+    )
+    # A wrong-length coefficient is a loud failure at the call, never a silent
+    # mis-walk against the wrong cells.
+    try:
+        deposit_beam(
+            200.0, 1.0e20, **_b3_kw, stopping_coefficient=_b3_coeff[:-1]
+        )
+    except ValueError as _b3_err:
+        assert "stopping_coefficient" in str(_b3_err), _b3_err
+    else:
+        raise AssertionError("a short stopping_coefficient must raise")
 
     # --- WP-D: non-local transport of the beam's EVENT PRODUCTS
     # (product_transport). At breakdown the secondary electrons and the
