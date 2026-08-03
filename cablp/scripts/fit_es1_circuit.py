@@ -1,26 +1,59 @@
 """Fit the discharge-circuit constants from the ES1 current/voltage trace.
 
-The Kirchhoff loop ``V_dis(t) = V0 - Q(t)/C - I*R - L*dI/dt`` holds
-identically for the true circuit whatever the plasma does, so an ordinary
-least-squares fit over the drive phase recovers the Thevenin-equivalent
-circuit the plasma actually sees. The plasma physics only chooses the
-trajectory along this constraint.
+*** SUPERSEDED, 2026-08-03. This script's result is NO LONGER the production ***
+*** circuit stance, and its numbers below are kept only as a record of what  ***
+*** was replaced. Do not re-adopt them; do not "refresh" them in place.      ***
 
-Reference result (2026-07-19, rms residual 0.14 V over 0.3-19.8 ms):
+Why it was superseded: the four-parameter FREE fit performed here is
+NEAR-SINGULAR. The design columns ``[1, -Q, -I, -dI/dt]`` are near-collinear
+because I is nearly constant over the plateau and Q is nearly linear in t,
+giving ``corr(V0, R) = 0.997``. The fit therefore recovers a DEGENERATE
+DIRECTION, not the circuit, and its 0.14 V rms is in-sample. Window
+sensitivity makes this concrete: R = 5.71 / 4.42 / 4.27 / 1.94 mOhm as the
+start of the window moves 0.3 -> 1 -> 5 -> 10 ms. The formal +-0.079 mOhm bar
+this fit reports is meaningless.
+
+The defect was INVISIBLE AT ES1 -- it only surfaced on ladder transfer.
+Reconstructing measured plateau V_dis, this parameterization leaves residuals
+-0.136 / +6.329 / +5.677 / +5.786 V at ES1/2/3/4.
+
+What replaced it: a CONSTRAINED refit with V0 PINNED per rung to its measured
+pre-shot reading and C, R, L shared across four rungs (N = 1952, window
+0.3-19.8 ms). Conditioning drops 89.3 -> 4.7; residuals become
++0.010 / +0.139 / -0.053 / -0.309 V. Adopted stance: V_bank 177.843 V (ES1),
+R_comp 7.2244 mOhm, C_bank_F 9.5 F (jackknife R = 7.213 +- 0.043 mOhm,
+C = 9.56 +- 0.66 F). See ``compare_sim1d_es1.PARAM_OVERRIDES`` and the
+circuit docstrings in ``cablp/solvers/_sim1d/core/config.py``.
+
+The Kirchhoff loop ``V_dis(t) = V0 - Q(t)/C - I*R - L*dI/dt`` holds
+identically for the true circuit whatever the plasma does, so a least-squares
+fit over the drive phase constrains the Thevenin-equivalent circuit. The
+plasma physics only chooses the trajectory along this constraint. That much
+is still true -- what fails is leaving all four parameters free on one rung.
+
+Reference result (2026-07-19, rms residual 0.14 V over 0.3-19.8 ms), SUPERSEDED:
 
     V0 = 173.6 V   C_eff = 8.9 F   R = 5.7 mOhm   L = 6.6 uH
 
-Hardware caveats this fit adjudicated (see THESIS_NOTES.md section 2):
+Hardware caveats this fit was once said to adjudicate, as they now stand:
 
-- C = 4 F (the bank's nominal maximum) is REJECTED: it demands either
-  negative resistance or ~1.6 kA of float-supply recharge against a 120 A
-  limit. The effective ~8.9 F implies ~7 V of unexplained slow EMF recovery
-  (transistor V_CE drift with junction temperature is a candidate).
-- R_comp = 10 mOhm (previously inferred from the peak I/V ratio) is
-  superseded by the fitted 5.7 mOhm.
+- C = 4 F is REJECTED, and that conclusion SURVIVES -- now doubly, at
+  5 sigma on the fit and by being below the hardware band floor. But
+  "the bank's nominal maximum" was wrong twice over: the nominal is 8.40 F
+  (10 switches x 2 minibanks x 35 cans = 700 Chemi-Con 36DY at 12,000 uF),
+  and with a -10/+50% per-can tolerance the allowed total is
+  [7.56, 12.60] F -- so 8.40 F is a near-FLOOR, not a maximum. The
+  "~7 V of unexplained slow EMF recovery" that the effective 8.9 F was said
+  to imply DISSOLVES: it was an artifact of leaving V0 free here. There was
+  never a capacitance anomaly.
+- R_comp = 10 mOhm (previously inferred from the peak I/V ratio) was said to
+  be superseded by the fitted 5.7 mOhm. That was NOT an adjudication. The
+  measured value is 7.22 mOhm, and the discarded 10 mOhm was CLOSER to right
+  than the fit that replaced it.
 - The independent tail measurement (e-fold ~0.6 ms at ~10-18 mOhm loop)
-  and the 18 V early-rise sag at measured dI/dt both give L ~ 7-10 uH,
-  consistent with the fit.
+  and the 18 V early-rise sag at measured dI/dt both give L ~ 7-10 uH.
+  L remains the one genuinely open constant; it is owned by
+  ``fit_circuit_edges.py`` (which boxes 15-25 uH), not by this fit.
 
 Usage::
 

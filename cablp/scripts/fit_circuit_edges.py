@@ -10,11 +10,26 @@ constraints. Method: integrate the loop ODE
 
 driving it with the MEASURED discharge-voltage trace (no plasma model at
 all), and score the resulting I(t) against the measured current over the
-rise (t in [-0.5, 4] ms) and fall (t in [19.9, 22] ms) windows. R_comp, C,
-and V0 keep their trace-fit values (C is hardware-confirmed at 8.4 F within
-electrolytic tolerance of the fitted 8.9). During the fall the switch is
-open and the flyback path carries I through the plasma alone:
-L dI/dt = -V_dis_meas(t).
+rise (t in [-0.5, 4] ms) and fall (t in [19.9, 22] ms) windows. During the
+fall the switch is open and the flyback path carries I through the plasma
+alone: L dI/dt = -V_dis_meas(t).
+
+V0, R_comp and C below are the CORRECTED production circuit stance
+(2026-08-03): V0 measured pre-shot, R_comp and C from the V0-pinned four-rung
+constrained refit. They supersede the near-singular ES1-only free fit
+(173.6 V / 5.72 mOhm / 8.9 F) this script previously drove itself with; see
+the PARAM_OVERRIDES comment in compare_sim1d_es1.py.
+
+On the bank capacitance: this file used to say C was "hardware-confirmed at
+8.4 F within electrolytic tolerance of the fitted 8.9" -- right to name 8.40 F
+as the nominal and right to invoke electrolytic tolerance, but wrong to treat
+8.40 F as a target to reconcile to. The tolerance is -10/+50% on 700 cans, so
+the allowed total is [7.56, 12.60] F and 8.40 F is a near-FLOOR. Nominal
+8.40 F, allowed [7.56, 12.60] F, MEASURED 9.5 F.
+
+This script is the instrument that OWNS L (the plateau is nearly L-blind;
+the edges are where L lives), so its answer is expected to move with the
+inputs and is deliberately not fed back into the production L.
 
 Usage:
     python scripts/fit_circuit_edges.py
@@ -25,9 +40,9 @@ from pathlib import Path
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
-V0 = 173.6
-R_COMP = 5.72e-3
-C_BANK = 8.9
+V0 = 177.843
+R_COMP = 7.2244e-3
+C_BANK = 9.5
 T_DRIVE_END_MS = 19.99
 
 RISE_WIN = (-0.5, 4.0)
@@ -77,7 +92,11 @@ def main():
     L_best = float(Ls2[int(np.argmin(costs2))])
     cost, I_sim = edge_cost(L_best, t, I, V)
 
+    # The V0-pinned four-rung V_dis refit prefers 8.06 uH -- between the 6.6 uH
+    # production value and this script's 15-25 uH hardware box -- but it is a
+    # plateau fit and the plateau is nearly L-blind, so the edge answer governs.
     print(f"edge-fit L = {L_best * 1e6:.1f} uH  (current model: 6.6 uH; "
+          f"plateau refit: 8.06 uH; "
           f"hardware box from fall/rise arithmetic: 15-25 uH)")
     for label, (lo, hi) in (("rise", RISE_WIN), ("fall", FALL_WIN)):
         mm = (t >= lo) & (t <= hi)

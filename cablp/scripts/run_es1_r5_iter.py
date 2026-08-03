@@ -3,7 +3,7 @@
 Iteration-grade: nx=60, density_dt_fraction=0.5, t_end=22 ms (discharge only --
 the afterglow crawls and stages i+ii don't need it). Uses the ES production
 config (compare_sim1d_es1.run_model -> PARAM_OVERRIDES: end-expansion geometry,
-tr_bdf2/strang, ADAS, R_comp=5.72 mOhm) with the R5 circuit/thermal overrides:
+tr_bdf2/strang, ADAS, R_comp=7.2244 mOhm) with the R5 circuit/thermal overrides:
 
   --sgp        gas-puff source; raises MID-port density AND current
   --ts-base    cathode standby temperature (cathode_Ts_base_K); a ~29 A/K
@@ -29,7 +29,7 @@ import time as _walltime
 
 import numpy as np
 
-from compare_sim1d_es1 import run_model
+from compare_sim1d_es1 import PARAM_OVERRIDES, run_model
 from run_mechanism_ladder import ES_OPERATING
 from cablp.solvers._sim1d.results.io import save_result_hdf5
 
@@ -53,7 +53,7 @@ def main(argv=None):
                     help="cathode_Ts_base_K; default = the MEASURED ES "
                          "standby (no offset)")
     ap.add_argument("--R-comp", type=float, default=None,
-                    help="total loop R [Ohm]; default PARAM_OVERRIDES 5.72e-3")
+                    help="total loop R [Ohm]; default PARAM_OVERRIDES 7.2244e-3")
     ap.add_argument("--x", type=float, default=None,
                     help="R_comp_partition (probe fraction); default 1.0")
     ap.add_argument("--R-mesh", type=float, default=None,
@@ -191,7 +191,9 @@ def main(argv=None):
         flags_extra["use_cached_neutral_seed"] = True
         extra["neutral_seed_cache_dir"] = args.seed_db
 
-    R_comp = extra.get("R_comp", 5.72e-3)
+    # Follow the production stance rather than a literal (2026-08-03): this is
+    # the same R_comp run_model will actually use when --R-comp is not given.
+    R_comp = extra.get("R_comp", PARAM_OVERRIDES["R_comp"])
     print(f"# ES{args.es} V_bank={op['V_bank']} S_gp={args.sgp} "
           f"Ts_base={ts_base:.0f} K R_comp={R_comp:.4g} "
           f"x={extra.get('R_comp_partition', 1.0)} "
@@ -218,6 +220,11 @@ def main(argv=None):
     # Derive the probe partition x that a target V_dis would imply:
     #   V_dis = V_bank - I*(x*R_comp) - L*dI/dt  ->  ignoring L at plateau,
     #   x = (V_bank - V_dis) / (I * R_comp)
+    # NB (2026-08-03) x has ZERO DYNAMICAL EFFECT -- it cancels identically from
+    # the loop-current equation (see the R_comp_partition docstring in
+    # core/config.py). This derivation only RELABELS the reported V_dis; it
+    # cannot move the current or any plasma quantity. Any real internal
+    # resistance must be encoded in R_mesh_ohm, NEVER in the partition.
     if Iplat and Iplat == Iplat:
         for vtgt in (151.0, 153.0, 155.0):
             xneed = (op["V_bank"] - vtgt) / (Iplat * R_comp)

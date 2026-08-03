@@ -2660,8 +2660,12 @@ class LAPDSim1D:
                 V_src_V=V_src,
                 # R_external = x*R_comp: only the external partition appears in
                 # V_dis = V_bank - I*R_external - L*dI/dt. The internal part and
-                # R_mesh are folded into the device voltage (vdis_of_I) instead,
-                # so they lower the current without entering the V_dis formula.
+                # R_mesh are folded into the device voltage (vdis_of_I) instead.
+                # NB x cancels identically from the loop current (corrected
+                # 2026-08-03; see the R_comp_partition docstring in
+                # core/config.py): the x*R_comp subtracted here and the
+                # (1-x)*R_comp inside vdis_of_I sum back to the total R_comp.
+                # Only R_mesh genuinely lowers the current.
                 R_comp_ohm=float(self._input_dict.get("R_comp", 0.0))
                 * float(self._input_dict.get("R_comp_partition", 1.0)),
                 L_H=float(self._input_dict.get("L_parasitic_H", 0.0)),

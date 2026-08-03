@@ -16,15 +16,26 @@ import argparse
 from compare_sim1d_es1 import run_model
 from cablp.solvers._sim1d.results.io import save_result_hdf5
 
-# Measured per-campaign operating points (THESIS_NOTES §2): fitted/nominal
-# open-circuit V0 and the Fig-10 digitized standby surface temperature.
+# Per-campaign operating points: the open-circuit bank voltage V0 and the
+# Fig-10 digitized standby surface temperature.
+#
+# V_bank provenance, corrected 2026-08-03: all four are MEASURED pre-shot
+# open-circuit readings on the same probe channel as V_dis (+-0.03 V SEM, with
+# a +-1.2% multiplicative instrumental systematic that is unresolved between
+# supply regulation and probe gain). The previous comment here called them
+# "fitted/nominal" in one breath and mixed conventions: ES1's old 173.6 was
+# FITTED (from the near-singular ES1-only circuit fit -- see the PARAM_OVERRIDES
+# comment in compare_sim1d_es1.py), while ES2/ES3's were measured. They are now
+# uniformly measured. NB ES3 and ES4 previously shared the literal 99.0 and now
+# DIFFER -- ES4's reading is window-corrected; do not re-collapse them.
 ES_OPERATING = {
-    1: {"V_bank": 173.6, "Ts_standby_K": 1910.0},
-    2: {"V_bank": 138.4, "Ts_standby_K": 1949.0},
-    3: {"V_bank": 99.0, "Ts_standby_K": 1972.0},
-    # ES4 (detachment-exacerbation): heater and bank identical to ES3;
-    # only the puff drive differs (110 V vs the ladder's 76.4 V).
-    4: {"V_bank": 99.0, "Ts_standby_K": 1972.0},
+    1: {"V_bank": 177.843, "Ts_standby_K": 1910.0},
+    2: {"V_bank": 138.303, "Ts_standby_K": 1949.0},
+    3: {"V_bank": 98.814, "Ts_standby_K": 1972.0},
+    # ES4 (detachment-exacerbation): heater identical to ES3 and the bank set
+    # to the same dial; only the puff drive differs (110 V vs the ladder's
+    # 76.4 V). The measured V0 differs from ES3 by 0.164 V.
+    4: {"V_bank": 98.978, "Ts_standby_K": 1972.0},
 }
 
 ELECTRON_BIRTH_POLICY = "floor"

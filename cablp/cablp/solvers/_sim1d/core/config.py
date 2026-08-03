@@ -905,19 +905,45 @@ def cathode_defaults():
         flat direction (~100 K of standby per e-fold of emission, §3b), so
         do NOT calibrate both.
     R_comp:
-        External/compliance resistance [Ohm]. The full loop series resistance;
-        it sets the discharge current.
+        External/compliance resistance [Ohm]. The full loop series resistance.
+        It does NOT set the discharge current: at the ES1 production point
+        ``dlnI/dlnR_comp = -0.0034`` frozen and -0.017 coupled -- the emission
+        ceiling sets the current, and ``R_comp`` sets the voltage headroom.
+        MEASURED (2026-08-03), not fitted: a V0-pinned four-rung constrained
+        refit over ES1-ES4 gives ``7.2244e-3`` Ohm (rungs agreeing to 1.8%),
+        superseding the near-singular ES1-only free fit that gave 5.72e-3
+        (see ``scripts/fit_es1_circuit.py``, now annotated as superseded).
+        ``R_comp`` and ``C_bank_F`` come from ONE joint fit and must move
+        together: 7.2244 mOhm is the value self-consistent with C = 9.5187 F.
+        (Pinning C = 8.40 F instead would pair with R = 7.079 mOhm.)
     R_comp_partition:
         Voltage-probe partition fraction ``x`` of ``R_comp`` (R5 ES1 tuning pass,
         2026-07-26). ``R_comp`` is split into an external part ``x*R_comp`` (bank
         side of the probe) and an internal part ``(1-x)*R_comp`` (probe->plasma).
         The measured ``V_dis = V_bank - I*(x*R_comp) - L*dI/dt``; the plasma sees
-        ``V_b = V_dis - I*((1-x)*R_comp + R_mesh)``. So the internal part and
-        ``R_mesh`` are INVISIBLE to the V_dis formula but lower the current, which
-        RAISES ``V_dis``. Fit ``R_comp`` for the current at ES1, then derive ``x``
-        from the measured V_dis and transfer both unchanged to ES2/ES3. Default
-        ``1.0`` (all external, internal part 0) is bit-exact with the historical
-        behaviour. Must be in ``[0, 1]``.
+        ``V_b = V_dis - I*((1-x)*R_comp + R_mesh)``.
+
+        ``x`` IS DYNAMICALLY INERT -- it cancels identically from the loop
+        equation (correction, 2026-08-03; an earlier version of this docstring
+        claimed the internal part "lowers the current, which RAISES V_dis", and
+        that is FALSE). The circuit is handed ``R_comp_ohm = x*R_comp``
+        (``solver.py``) while ``vdis_of_I(I) = V_b(I) + I*((1-x)*R_comp +
+        R_mesh)`` (``cathode.py``), so the integrand
+
+            f(I) = (V_src - I*x*R_comp - vdis_of_I(I)) / L
+                 = (V_src - I*R_comp - V_b(I) - I*R_mesh) / L
+
+        has no ``x`` in it. The loop current depends only on the TOTAL
+        ``R_comp`` plus ``R_mesh``. What ``x`` does change is the REPORTED
+        ``V_dis`` -- it relabels one and the same drop between the external and
+        internal books, with ``dV_dis/dx = -I*R_comp``. The "lowers the current"
+        claim IS true of ``R_mesh``, which is genuinely additional resistance;
+        any real internal resistance therefore belongs in ``R_mesh_ohm`` and
+        NEVER in the partition. Correspondingly there is no "fit R_comp for the
+        current, then derive x" recipe: ``V_dis`` pins the product ``x*R_comp``,
+        the current pins the emission, and ``R_int`` is bounded by the ES2/ES3
+        voltage budget. Default ``1.0`` (all external, internal part 0) is
+        bit-exact with the historical behaviour. Must be in ``[0, 1]``.
     R_mesh_ohm:
         Anode-mesh series resistance [Ohm] (R5 ES1 tuning pass), separate from
         ``R_comp`` and on the internal (plasma) side of the probe, so it is
@@ -925,7 +951,11 @@ def cathode_defaults():
         (2.58 mm pitch), ~0.5-1.5 mOhm, RISING with anode temperature (Stage 2:
         ``R_mesh(T_anode)`` from an anode standby+deposited-power balance, so it
         compresses the high-current sets more). Stage 1 uses a constant value.
-        Default ``0.0`` is bit-exact. Must be ``>= 0``.
+        Unlike ``R_comp_partition`` this is a real series resistance and does
+        reach the loop current. The MEASURED bound at the production stance is
+        ``R_int = (V_dis_meas - V_b)/I = 0.0 +- 0.3 mOhm`` (2026-08-03):
+        consistent with zero and BELOW the 0.5-1.5 mOhm Mo-mesh bracket. Stage 2
+        was declined (2026-07-26). Default ``0.0`` is bit-exact. Must be ``>= 0``.
     eta:
         Anode-to-cathode area ratio.
     anode_radius_cm:
@@ -946,16 +976,54 @@ def cathode_defaults():
         ``V_bank`` and drains by the drawn charge during drive phases
         (backward-Euler, folded into the circuit solve as a ``dt/C`` term on
         the effective resistance); the tail and floating phases leave it
-        inert. NB the ES1 trace fit (scripts/fit_es1_circuit.py) demands an
-        *effective* ~8.9 F even though the hardware bank is nominally <= 4 F
-        with a <= 120 A float supply -- the discrepancy (~7 V of slow EMF
-        recovery, transistor V_CE drift a candidate) is unresolved; the
-        fitted value is the Thevenin equivalent the plasma actually sees.
+        inert.
+
+        MEASURED at ``9.5 F`` (V0-pinned four-rung constrained refit,
+        2026-08-03: C_eff = 9.5187 +- 0.66 F), and HARDWARE-BOUNDED. Record the
+        full hardware reasoning here so it is never re-litigated:
+
+            10 IGBT switches x 2 minibanks x 35 Nippon Chemi-Con 36DY cans
+            (12,000 uF, 200 V) = 700 cans, NOMINAL 8.40 F. Per-can tolerance
+            -10/+50%, so the allowed total is [7.56, 12.60] F and the nominal
+            sits near the FLOOR, not a ceiling. With N = 700 the random part of
+            the sum is only 0.65% (0.055 F), so the bank capacitance is
+            well-defined and the trace measures it ~12x more precisely than the
+            nameplate bounds it.
+
+        RETRACTION (2026-08-03): an earlier version of this docstring asserted
+        that the fit's effective ~8.9 F was anomalous "even though the hardware
+        bank is nominally <= 4 F", and attributed the gap to ~7 V of unexplained
+        slow EMF recovery. **There was never an anomaly.** The 4.2 F figure
+        counted one minibank per switch (a factor-of-2 miscount), and the 8.40 F
+        nominal it was then compared against is a near-floor, not a limit. 9.5 F
+        is an ordinary interior value of the allowed band (39th percentile);
+        4.2 F is excluded twice over (5 sigma by the fit, and below the band
+        floor). The "~7 V of slow EMF recovery" was an artifact of leaving V0
+        free in a near-singular fit and dissolves once V0 is pinned to its
+        measured pre-shot value. The historical 8.9 F was inside tolerance all
+        along, so no past run is invalidated. There is no caveat to carry.
+
+        Moves jointly with ``R_comp`` -- one fit, one pair.
     L_parasitic_H:
         Parasitic series inductance in the current-driven discharge circuit
         [H], in series with ``R_comp``. The loop current is advanced once per
         accepted step by TR-BDF2. It must be positive when cathode coupling is
-        enabled; the default is the ES1 measured-fit value 8.1 uH.
+        enabled. Default ``6.6e-6``. (An earlier docstring claimed "the ES1
+        measured-fit value 8.1 uH" and contradicted the code; corrected
+        2026-08-03.)
+
+        L is the one circuit constant still FITTED and it is WEAKLY IDENTIFIED
+        from V_dis: the plateau is nearly L-blind (dI/dt ~ 0 there) and the
+        fitted value ranges 2.1-9.4 uH with the fit window. The V0-pinned
+        four-rung refit prefers 8.06 uH; the better-posed edge fit
+        (``scripts/fit_circuit_edges.py``, which drives the loop ODE with the
+        measured V_dis over the current rise and fall) boxes 15-25 uH. L is
+        owned by the edge fit, not by the plateau fit, and is left at 6.6e-6
+        pending it (deliberate, Tom 2026-08-03). This means the adopted circuit
+        triple (C = 9.5187 F, R = 7.2244 mOhm, L = 8.057 uH from the joint fit)
+        is INTERNALLY INCONSISTENT IN ITS THIRD COMPONENT. The inconsistency is
+        confined to the current EDGES, where no plateau result lives -- it is
+        flagged, not silently resolved.
     cathode_warming_model:
         Slow evolution of the emitter surface temperature within a shot.
         ``"none"`` (default) holds ``T_s`` constant, so the
@@ -1258,14 +1326,42 @@ def cathode_defaults():
     # run drivers / golden overrides): power_balance warming, CSDA beam +
     # quasilinear anomalous drag, gaussian emission profile, ads_des surface
     # state, and presheath sample smoothing. The historical golden pins every
-    # value it needs, so it stays bit-exact. Circuit hardware: V_bank is the
-    # 180 V supply setpoint; R_comp/L/C are provisional pending the V_bank=180
-    # refit (co-tuned with S_gp + the power-balance params -- see
-    # notes/R5_STANCE_FLIP_HANDOFF.md). Rp_model stays "sample" (resolved_gap
-    # not folded).
+    # value it needs, so it stays bit-exact. Rp_model stays "sample"
+    # (resolved_gap not folded).
+    #
+    # CIRCUIT STANCE CORRECTION (2026-08-03). The "R_comp/L/C are provisional
+    # pending the V_bank=180 refit" framing that stood here is retired: the
+    # refit has happened. It is a V0-PINNED CONSTRAINED refit -- V0 fixed per
+    # rung at its measured pre-shot reading, with C, R and L shared across four
+    # rungs (ES1-ES4, N = 1952, window 0.3-19.8 ms) -- which dropped the design
+    # conditioning from 89.3 to 4.7 and replaced the near-singular ES1-only free
+    # fit (corr(V0,R) = 0.997; R swung 1.9-5.7 mOhm with the window, so its
+    # formal +-0.079 mOhm bar was meaningless). The defect was INVISIBLE AT ES1
+    # and showed up only on ladder transfer: reconstructing measured plateau
+    # V_dis, the old parameterization left residuals -0.136/+6.329/+5.677/+5.786
+    # V at ES1/2/3/4 against +0.010/+0.139/-0.053/-0.309 V for the corrected one.
+    #
+    #   R_comp   5.72e-3 -> 7.2244e-3  MEASURED (7.213 +- 0.043 mOhm jackknife)
+    #   C_bank_F 8.4     -> 9.5        MEASURED, hardware-bounded [7.56, 12.60] F
+    #   L        6.6e-6     unchanged  FITTED, weakly identified -- see the
+    #                                  L_parasitic_H docstring for why the
+    #                                  joint fit's 8.06 uH is NOT adopted
+    #
+    # R_comp and C_bank_F are ONE joint fit and move together (see their
+    # docstrings). These defaults are mirrored EXACTLY by the campaign stance in
+    # ``scripts/compare_sim1d_es1.PARAM_OVERRIDES``; the duplication is
+    # deliberate (that dict is the campaign stance record, and removing the pins
+    # would change resolution order for the other run drivers).
     return {
-        # --- ACTIVE: circuit hardware (V_bank = setpoint; R/L/C provisional
-        # pending the refit) ---
+        # --- ACTIVE: circuit hardware ---
+        # V_bank here is the SUPPLY SETPOINT (180 V), which is a DIFFERENT
+        # QUANTITY from the measured pre-shot open-circuit bank voltage and is
+        # deliberately NOT replaced by it. The measured per-rung V0s --
+        # 177.843 / 138.303 / 98.814 / 98.978 V for ES1-ES4, +-0.03 V SEM with a
+        # +-1.2% multiplicative instrumental systematic -- are the campaign
+        # operating points and live in ``scripts/run_mechanism_ladder.ES_OPERATING``
+        # (and, for ES1, in PARAM_OVERRIDES). Any run that means the machine
+        # rather than the dial must set V_bank from one of those.
         "V_bank": 180.0,
         # T_s is only the static-model fallback under power_balance (the input
         # is cathode_Ts_base_K); kept at the ES setpoint.
@@ -1273,11 +1369,11 @@ def cathode_defaults():
         # phi_wf is the contaminated SHOT-START work function read by ads_des.
         "phi_wf": 2.869,
         "C_R": 29.0,
-        "R_comp": 5.72e-3,
+        "R_comp": 7.2244e-3,
         "R_comp_partition": 1.0,
         "R_mesh_ohm": 0.0,
         "L_parasitic_H": 6.6e-6,
-        "C_bank_F": 8.4,
+        "C_bank_F": 9.5,
         # R5.1/A11 gated fluid<->circuit Picard (only read when the
         # coupled_circuit_picard flag is on): relative loop-current change that
         # triggers a re-run, and the iteration cap.

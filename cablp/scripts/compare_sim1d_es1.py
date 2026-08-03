@@ -64,14 +64,48 @@ from cablp.solvers._sim1d.results.io import save_result_hdf5
 OVERLAY = Path(__file__).resolve().parent / "data" / "es1_sim1d_overlay.npz"
 
 PARAM_OVERRIDES = {
-    # Discharge circuit fitted from the ES1 trace itself (0.14 V rms;
-    # scripts/fit_es1_circuit.py): Thevenin V0/R/L/C_eff. Supersedes the
-    # nominal V_bank=180 / inferred R_comp=0.010; C_eff carries a hardware
-    # caveat (nominal bank <= 4 F) documented in THESIS_NOTES section 2.
-    "V_bank": 173.6,
-    "R_comp": 5.72e-3,
+    # DISCHARGE CIRCUIT -- corrected stance, 2026-08-03 (Tom's call). These
+    # mirror the config defaults EXACTLY (core/config.py active_defaults); the
+    # duplication is deliberate -- this dict is the campaign stance record, and
+    # dropping the pins would change resolution order for the other drivers.
+    #
+    # What this replaces: the previous values came from a FREE 4-parameter fit
+    # to the ES1 trace alone (scripts/fit_es1_circuit.py, "0.14 V rms"). That
+    # fit is NEAR-SINGULAR -- corr(V0, R) = 0.997, and R swings 1.9-5.7 mOhm
+    # with the fit window, so the quoted +-0.079 mOhm was meaningless and the
+    # 0.14 V rms was in-sample. The error was INVISIBLE AT ES1 and appeared
+    # only on LADDER TRANSFER: reconstructing measured plateau V_dis, the old
+    # parameterization gave residuals -0.136/+6.329/+5.677/+5.786 V at
+    # ES1/2/3/4; the corrected one gives +0.010/+0.139/-0.053/-0.309 V.
+    #
+    # The replacement is a CONSTRAINED refit: V0 PINNED per rung at its measured
+    # pre-shot reading, with C, R, L shared across four rungs (N = 1952, window
+    # 0.3-19.8 ms). Conditioning fell 89.3 -> 4.7. Jackknife bars:
+    # R = 7.213 +- 0.043 mOhm, C = 9.56 +- 0.66 F, L = 6.7 +- 2.5 uH.
+    #
+    # V_bank: MEASURED pre-shot open-circuit bank voltage at ES1, same probe
+    #   channel as V_dis. +-0.03 V SEM; +-1.2% instrumental MULTIPLICATIVE
+    #   systematic, unresolved between supply regulation and probe gain. This is
+    #   NOT the 180 V supply setpoint (config.py's default), which is a
+    #   different quantity. Per-rung values live in run_mechanism_ladder.
+    # R_comp: MEASURED across four rungs (2965-4411 A) agreeing to 1.8%.
+    # C_bank_F: MEASURED, and HARDWARE-BOUNDED to [7.56, 12.60] F by the bank
+    #   spec (700 Chemi-Con 36DY cans, nominal 8.40 F, tolerance -10/+50%).
+    #   The old "nominal bank <= 4 F" caveat is RETRACTED, not restated: it
+    #   miscounted the bank by 2x and then read a near-FLOOR nominal as a
+    #   ceiling. 8.9 F was inside tolerance all along -- no historical run is
+    #   invalidated. See the C_bank_F docstring in core/config.py.
+    # R_comp and C_bank_F are ONE joint fit and must move together.
+    # L_parasitic_H: UNCHANGED and still FITTED -- weakly identified from V_dis
+    #   (window range 2.1-9.4 uH). The joint fit prefers 8.06 uH but the
+    #   better-posed edge fit (fit_circuit_edges.py) boxes 15-25 uH, and L is
+    #   owned by that measurement. Deliberately left inconsistent with the
+    #   adopted (C, R) pair; the inconsistency is confined to the current edges,
+    #   where no plateau result lives.
+    "V_bank": 177.843,
+    "R_comp": 7.2244e-3,
     "L_parasitic_H": 6.6e-6,
-    "C_bank_F": 8.9,
+    "C_bank_F": 9.5,
     # NB the constant-T_s era ended here (f=0.1 stance promotion, 2026-07-27):
     # the retired "T_s": 273.15 + 1725 pin is gone. T_s is now only the INITIAL
     # surface temperature -- cathode_warming_model="power_balance" (a config

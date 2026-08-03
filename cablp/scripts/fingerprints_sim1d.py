@@ -140,8 +140,13 @@ def report(path):
     else:
         V = np.zeros_like(I)
         v_label = "V_loop_recon"
-        V0 = float(params.get("V_bank", 173.6))
-        R = float(params.get("R_comp", 5.72e-3))
+        # Fallbacks track the corrected production stance
+        # (compare_sim1d_es1.PARAM_OVERRIDES, 2026-08-03). These are only
+        # reached for a result whose saved params omit the key; a stale value
+        # here would silently reconstruct the loop voltage against a circuit
+        # the run never used.
+        V0 = float(params.get("V_bank", 177.843))
+        R = float(params.get("R_comp", 7.2244e-3))
         L = float(params.get("L_parasitic_H", 6.6e-6))
         C = params.get("C_bank_F")
         tsec = np.asarray(result.time, float)
