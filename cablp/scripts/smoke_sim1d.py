@@ -10581,6 +10581,145 @@ def main():
     assert np.array_equal(sgp_tzq_next.M_n, sgp_tzq_Mn)
     assert np.array_equal(sgp_tzq_next.M_n_a, sgp_tzq_Mna)
 
+    # --- Compiled-kernel END-TO-END equivalence (D3/D4, opt-in) -----------
+    # The suite itself runs on the pure path (asserted above), and the D4
+    # block compares each compiled kernel against its pure twin one function
+    # at a time. Neither answers the end-to-end question: does a SOLVER
+    # driven through the compiled kernels reach the same state? The kernel
+    # binding happens once, at import, so the two paths cannot coexist in one
+    # process -- each is a subprocess carrying its own CABLP_COMPILED_KERNELS.
+    #
+    # Gated on the extension being BUILT, not on this process having opted
+    # in: the parent smoke deliberately runs pure (line ~4573 asserts it), so
+    # keying this off the parent's env var would leave the section dead in
+    # every gate invocation. On a checkout with no extension it SKIPS and
+    # never fails -- the compiled path is opt-in by design and a pure
+    # checkout must stay green.
+    _ck_expected_kernel_id = "cython/_cathode_kernels_cy/tierA+csda"
+    try:
+        import importlib as _ck_importlib
+
+        _ck_module = _ck_importlib.import_module(
+            "cablp.funcs._cathode_kernels_cy"
+        )
+    except ImportError:
+        _ck_module = None
+    if _ck_module is None:
+        print(
+            "compiled-kernel equivalence: SKIPPED -- "
+            "cablp.funcs._cathode_kernels_cy is not built "
+            "(`python build_ext.py --inplace` enables it)"
+        )
+    else:
+        assert _ck_module.KERNEL_ID == _ck_expected_kernel_id, (
+            _ck_module.KERNEL_ID
+        )
+        # A short current-driven discharge on the production stance: the
+        # cathode sheath solve (Tier A) runs on every sample and the CSDA ray
+        # fires, so both halves of "tierA+csda" are on the hot path.
+        _ck_child_source = '''
+import json
+
+import numpy as np
+
+from cablp.funcs import _kernels as K
+from cablp.solvers._sim1d import LAPDSim1D, default_config
+
+params, flags = default_config()
+params.update({
+    "nx": 24,
+    "dt_save": 0.0,
+    "phase_transition_mode": "scheduled",
+    "tau_neutral_prebreakdown": 0.0,
+    "tau_prebreakdown": 0.0,
+    "tau_breakdown": 0.0,
+    "tau_discharge": 1.0,
+    "tau_afterglow": 0.0,
+})
+result = LAPDSim1D(params, flags).run(t_end=2.0e-6, dt=1.0e-7)
+diag = result.cathode_diagnostics
+print(json.dumps({
+    "provenance": K.PROVENANCE,
+    "kernel_id": (
+        None if K.COMPILED_KERNELS is None
+        else str(K.COMPILED_KERNELS.KERNEL_ID)
+    ),
+    "requested": bool(K.compiled_kernels_requested()),
+    "steps": int(result.steps),
+    "solve_enabled": float(np.min(diag["solve_enabled"])),
+    "has_solution": float(np.min(diag["has_solution"])),
+    "beam_csda_active": float(np.max(diag["beam_csda_active"])),
+    "I_tot": float(diag["source_I_tot"][-1]),
+    "phi_c": float(diag["source_phi_c"][-1]),
+    "y": np.ascontiguousarray(result.y[-1], dtype=float).tobytes().hex(),
+}))
+'''
+        _ck_results = {}
+        with tempfile.TemporaryDirectory() as _ck_tmpdir:
+            _ck_script = Path(_ck_tmpdir) / "compiled_equivalence_child.py"
+            _ck_script.write_text(_ck_child_source)
+            for _ck_tag, _ck_optin in (("pure", None), ("compiled", "1")):
+                # Inherit the environment (PYTHONPATH decides WHICH checkout
+                # the child imports) and override only the opt-in.
+                _ck_env = dict(os.environ)
+                if _ck_optin is None:
+                    _ck_env.pop(_kernel_selector.ENV_VAR, None)
+                else:
+                    _ck_env[_kernel_selector.ENV_VAR] = _ck_optin
+                _ck_proc = subprocess.run(
+                    [sys.executable, str(_ck_script)],
+                    env=_ck_env,
+                    capture_output=True,
+                    text=True,
+                )
+                assert _ck_proc.returncode == 0, (
+                    _ck_tag,
+                    _ck_proc.returncode,
+                    _ck_proc.stderr[-2000:],
+                )
+                # Warnings go to stderr; the JSON is the last stdout line.
+                _ck_results[_ck_tag] = json.loads(
+                    _ck_proc.stdout.strip().splitlines()[-1]
+                )
+        _ck_pure = _ck_results["pure"]
+        _ck_compiled = _ck_results["compiled"]
+        # Each child really took the path it was asked for -- an opt-in that
+        # silently ran pure would make the comparison meaningless.
+        assert _ck_pure["requested"] is False, _ck_pure
+        assert _ck_pure["kernel_id"] is None, _ck_pure
+        assert _ck_pure["provenance"] == _kernel_selector.PURE_PROVENANCE, (
+            _ck_pure
+        )
+        assert _ck_compiled["requested"] is True, _ck_compiled
+        assert _ck_compiled["kernel_id"] == _ck_expected_kernel_id, _ck_compiled
+        assert _ck_compiled["provenance"] == _ck_expected_kernel_id, (
+            _ck_compiled
+        )
+        # ...and the kernels were actually exercised. Without this the state
+        # comparison could pass vacuously on a run that never solved.
+        for _ck_tag, _ck_res in _ck_results.items():
+            assert _ck_res["steps"] == 20, (_ck_tag, _ck_res["steps"])
+            assert _ck_res["solve_enabled"] == 1.0, _ck_tag
+            assert _ck_res["has_solution"] == 1.0, _ck_tag
+            assert _ck_res["beam_csda_active"] == 1.0, _ck_tag
+        # Bit-identical, not merely close: the compiled path is a faithful
+        # transcription, so the raw state bytes must match exactly -- the
+        # same standard the golden holds on the compiled path.
+        assert _ck_compiled["y"] == _ck_pure["y"], (
+            "compiled and pure solver states differ at the bit level"
+        )
+        assert _ck_compiled["I_tot"] == _ck_pure["I_tot"], (
+            _ck_compiled["I_tot"], _ck_pure["I_tot"]
+        )
+        assert _ck_compiled["phi_c"] == _ck_pure["phi_c"], (
+            _ck_compiled["phi_c"], _ck_pure["phi_c"]
+        )
+        print(
+            "compiled-kernel equivalence: ok "
+            f"({_ck_compiled['provenance']}, {_ck_pure['steps']} steps, "
+            "final state bit-identical)"
+        )
+
     print(
         "sim1d smoke ok: "
         f"cells={geom.cells}, dz={geom.dz_cm:g} cm, "

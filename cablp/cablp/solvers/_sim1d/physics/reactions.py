@@ -345,7 +345,6 @@ def gas_puff_local_ionization_rhs(
     Te_birth_ionization="local",
     Ti_birth_ionization="floor",
     ionization_birth_energy_model="legacy",
-    b_ionization_energy_cost=1.0,
 ):
     """Local ionization of the fresh dense gas-puff clumps (fractional coverage).
 
@@ -390,7 +389,7 @@ def gas_puff_local_ionization_rhs(
     else:
         Ee_birth = 1.5 * ev_to_erg * Te_birth * S_li
         Ei_birth = 1.5 * ev_to_erg * Ti_birth * S_li
-    cost = float(b_ionization_energy_cost) * I_ion * ev_to_erg * S_li
+    cost = I_ion * ev_to_erg * S_li
     return ConservativeState1D(
         n=S_li,
         nn=-nn_sink,
