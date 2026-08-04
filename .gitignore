@@ -11,6 +11,10 @@ cablp/cablp/funcs/*.c
 *.so
 build/
 
+# Poetry build output. Wheels/sdists are derived from the tracked sources and
+# go stale the moment a module moves; nothing consumes them from the repo.
+cablp/dist/
+
 # Data files
 *.h5
 *.hdf5
