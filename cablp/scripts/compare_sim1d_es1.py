@@ -508,25 +508,34 @@ TE_SYS_FLOOR_EV = 0.20
 TE_SEMIQUANT_EV = 1.0
 N_CAL_FRAC = 0.10
 
-# PRIMARY semi-quantitative criterion for the Te rows: the measured
-# fit-window refit SPREAD, carried per port as `te_window_spread_frac` by
-# schema-v6+ overlays. It is the fractional variation of the fitted Te across
-# the analysis re-fit windows -- a DIRECT measurement of how well the sweep
-# pins Te at that port -- so it supersedes `Te < 1 eV`, which was only a proxy
-# for the same doubt. The old criterion is retained as the SECONDARY label:
-# the two are a union, so no row that was flagged before can lose its mark.
+# PRIMARY semi-quantitative criterion: the measured fit-window refit SPREAD,
+# carried per port as `te_window_spread_frac` by schema-v6+ overlays. It is
+# the fractional variation of the fitted Te across the analysis re-fit windows
+# -- a DIRECT measurement of how well the sweep pins Te at that port -- so it
+# supersedes `Te < 1 eV`, which was only a proxy for the same doubt. The old
+# criterion is retained as the SECONDARY label: the two are a union, so no row
+# that was flagged before can lose its mark.
 #
 # A NaN spread is UNDETERMINED, never "not flagged": the row keeps whatever
 # the Te-criterion said and is marked explicitly. This is load-bearing --
 # the ES3 port-50 refit failed and ES4 has no refit product at all, and port
 # 50 is the worst-scoring row in the file.
 #
-# PROVISIONAL VALUE -- pending Tom's registration at review. 0.50 is read off
-# the measured separation rather than fitted: the stable ports sit at
-# 10-25 % and the unstable ones at 70-167 %, with nothing in between, so any
-# threshold in the gap selects the same set.
-TE_SPREAD_SEMIQUANT_FRAC = 0.50  # PROVISIONAL, not yet registered
+# REGISTERED (Tom, 2026-08-04). 0.50 is read off the measured separation
+# rather than fitted: the stable ports sit at 10-25 % and the unstable ones at
+# 70-167 %, with nothing in between, so any threshold in the gap selects the
+# same set.
+TE_SPREAD_SEMIQUANT_FRAC = 0.50  # registered (Tom, 2026-08-04)
 TE_SPREAD_FIELD = "te_window_spread_frac"
+
+# Half-strength propagation of the Te spread onto the n rows, against the SAME
+# registered threshold. n ~ Isat/sqrt(Te), so a fractional Te spread S maps to
+# a fractional n spread ~ S/2. The n rows are therefore flagged when
+# S/2 > TE_SPREAD_SEMIQUANT_FRAC, not when S itself exceeds it. A NaN Te
+# spread is inherited as UNDETERMINED exactly as on the Te rows. The Isat rows
+# take no spread criterion at all: n*sqrt(Te) is the sweep-inversion-cancelling
+# observable, which is the whole point of that row.
+N_SPREAD_FROM_TE_SPREAD = 0.5
 
 
 def _sigma_sys(field, exp_values):
@@ -636,22 +645,23 @@ def compare(result, geometry, overlay):
             te_low = field in ("Te", "n") and float(
                 np.mean(te_exp_t[good])
             ) < TE_SEMIQUANT_EV
-            # Primary criterion: the refit-window spread. Te rows only --
-            # the field measures the stability of the Te fit itself.
-            spread_p = (
-                float(spread_frac[p])
-                if spread_frac is not None and field == "Te"
-                else np.nan
+            # Primary criterion: the refit-window spread. The Te rows take it
+            # at full strength; the n rows at half, since n ~ Isat/sqrt(Te)
+            # maps a fractional Te spread S onto a fractional n spread ~ S/2.
+            # Both are tested against the same registered threshold.
+            spread_applies = spread_frac is not None and field in ("Te", "n")
+            spread_te = float(spread_frac[p]) if spread_applies else np.nan
+            spread_eff = spread_te * (
+                N_SPREAD_FROM_TE_SPREAD if field == "n" else 1.0
             )
             spread_high = bool(
-                np.isfinite(spread_p) and spread_p > TE_SPREAD_SEMIQUANT_FRAC
+                np.isfinite(spread_eff) and spread_eff > TE_SPREAD_SEMIQUANT_FRAC
             )
             # UNDETERMINED: spread was expected for this row but is NaN. The
-            # verdict falls back to te_low; it is never silently cleared.
+            # verdict falls back to te_low; it is never silently cleared. The
+            # n rows inherit the Te row's NaN, since they inherit its spread.
             spread_undetermined = bool(
-                spread_frac is not None
-                and field == "Te"
-                and not np.isfinite(spread_p)
+                spread_applies and not np.isfinite(spread_te)
             )
             rows.append(
                 {
@@ -1664,9 +1674,9 @@ def _report(label, rows):
         pct = 100.0 * TE_SPREAD_SEMIQUANT_FRAC
         print("  (sigma = |dev|/sigma_tot, SEM (+) sweep systematics;")
         print(f"   semi-quantitative marks: '~' Te refit-window spread > {pct:.0f}%")
-        print("   [PROVISIONAL threshold, primary], '*' measured Te < 1 eV")
-        print("   [secondary], '?' spread unavailable -> UNDETERMINED, the row")
-        print("   keeps its Te-criterion verdict)")
+        print("   [primary; n rows at half strength, n ~ Isat/sqrt(Te)],")
+        print("   '*' measured Te < 1 eV [secondary], '?' spread unavailable")
+        print("   -> UNDETERMINED, the row keeps its Te-criterion verdict)")
     else:
         print("  (sigma = |dev|/sigma_tot, SEM (+) sweep systematics; '~' marks")
         print("   semi-quantitative rows where measured Te < 1 eV)")
