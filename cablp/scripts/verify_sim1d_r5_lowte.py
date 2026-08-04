@@ -22,6 +22,7 @@ import numpy as np
 
 from cablp.solvers._sim1d import LAPDSim1D, default_config
 from cablp.solvers._sim1d.core.state import conservative_from_primitives
+from cablp.solvers._sim1d.physics.energy import electron_cooling_rhs_terms
 from cablp.funcs._adas import he_rates
 
 CLEAN_PARAMS = {
@@ -79,18 +80,47 @@ def gate_c1():
 
 
 def gate_c2():
-    on = _sim(low_te=True, icool_recomb=True)
-    off = _sim(low_te=False, icool_recomb=True)
+    """Cooling wiring, exercised BELOW the solver's construction guard.
+
+    ``LAPDSim1D`` refuses ``adas_low_te_extension`` together with
+    ``icool_recomb`` at construction: the pair composes destructively --
+    icool_recomb charges bare PRB and the extension amplifies the sub-edge
+    PRB by ~9,300x, so the electron fluid runs away thermally to the Te
+    floor and the electron_cooling timestep bound collapses permanently.
+
+    This gate tests SUB-SOLVER WIRING -- that prb1 honors the extension
+    inside ``electron_cooling_rhs_terms`` -- and not the integrated system.
+    It evaluates the term once on a hand-built state and never advances
+    time, so it cannot provoke the runaway the guard exists to prevent.
+    It therefore builds the cooling kwargs from a LEGALLY constructed sim
+    (icool_recomb on, extension off) and overrides the single extension
+    kwarg on the physics call. Sourcing the kwargs from the solver rather
+    than restating them keeps this gate from drifting out of step with the
+    solver's own configuration. Assertion targets are unchanged.
+    """
+    sim = _sim(low_te=False, icool_recomb=True)
+    kw = sim._electron_cooling_kwargs()
+    assert kw["icool_recomb"] is True
+    assert kw["adas_low_te_extension"] is False
+
+    def _cool(state, low_te):
+        return electron_cooling_rhs_terms(
+            state=state,
+            floors=sim._floors,
+            ion_mass_g=sim._ion_mass_g,
+            **{**kw, "adas_low_te_extension": low_te},
+        )["electron_ion_cooling"]
+
     # sub-edge state (Te between the 0.1 floor and 0.2 edge)
-    st_lo = _state(on, 0.15)
-    t_on = on.electron_cooling_rhs_terms(state=st_lo)["electron_ion_cooling"]
-    t_off = off.electron_cooling_rhs_terms(state=st_lo)["electron_ion_cooling"]
-    d_below = float(np.max(np.abs(t_on.Ee - t_off.Ee)))
+    st_lo = _state(sim, 0.15)
+    d_below = float(
+        np.max(np.abs(_cool(st_lo, True).Ee - _cool(st_lo, False).Ee))
+    )
     # above-edge state: extension inert -> identical
-    st_hi = _state(on, 5.0)
-    a_on = on.electron_cooling_rhs_terms(state=st_hi)["electron_ion_cooling"]
-    a_off = off.electron_cooling_rhs_terms(state=st_hi)["electron_ion_cooling"]
-    above_same = np.array_equal(a_on.Ee, a_off.Ee)
+    st_hi = _state(sim, 5.0)
+    above_same = np.array_equal(
+        _cool(st_hi, True).Ee, _cool(st_hi, False).Ee
+    )
     ok = d_below > 0.0 and above_same
     return "C2 cooling wiring: extension moves prb1 cooling sub-edge only", ok, (
         f"max|dEe| sub-edge = {d_below:.2e}; above-edge identical = {above_same}"
