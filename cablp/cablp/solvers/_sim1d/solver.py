@@ -4528,9 +4528,6 @@ class LAPDSim1D:
             ionization_birth_energy_model=str(
                 self._input_dict.get("ionization_birth_energy_model", "legacy")
             ),
-            b_ionization_energy_cost=float(
-                self._input_dict.get("b_ionization_energy_cost", 1.0)
-            ),
         )
 
     def reaction_rhs(self, y=None, state=None):
