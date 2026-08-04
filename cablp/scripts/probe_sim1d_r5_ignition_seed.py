@@ -367,7 +367,8 @@ def main():
 
     variants = [v.strip() for v in args.variants.split(",") if v.strip()]
     print(f"# R5 ignition-seed isolation probe  nx={args.nx}  t_probe={args.t_probe*1e3:.3f} ms")
-    print(f"# historical reference n_col ~ 9.8e8 (ignites); repaired-ES ~ 4.0e8 (below threshold)")
+    print(f"# anchors (measured 2026-08-04): baseline n_col 2.558e9, n_b/n_e 0.106; "
+          f"the 9.8e8 / 4.0e8 pair is SUPERSEDED history, not a target")
     print("# QL cutoff read at the beam launch cell: binds when "
           "n_b/n_e >= 0.1 (no anomalous drag)")
     hdr = ("variant", "phase", "main?", "I[A]", "Imax[A]", "n_col", "n_col/base",
