@@ -256,6 +256,65 @@ def main():
     assert resolved_geom.cell_role[-1] == "collector"
     assert not resolved_geom.plasma_open[0] and not resolved_geom.plasma_open[-1]
 
+    # Selector validity. Each of these keys accepts a CLOSED set of values and
+    # must reject anything else LOUDLY, at construction. The probe value is
+    # garbage ('zzz'), not a retired selector, so what is tested is validity
+    # rejection rather than removal narration. The assertions check that the
+    # error fires, that it NAMES the key, and that it states what the key
+    # accepts -- deliberately NOT the full message string. Pinning the exact
+    # text is what made the previous version of this block impossible to
+    # reword without rewriting the test.
+    def _construction_error(param_overrides, flag_overrides):
+        """Return the ValueError text LAPDSim1D raises for a bad selector."""
+        p, f = default_config()
+        p.update(param_overrides)
+        f.update(flag_overrides)
+        try:
+            LAPDSim1D(p, f)
+        except ValueError as exc:
+            return str(exc)
+        raise AssertionError(
+            "expected a ValueError at construction for "
+            f"{param_overrides or flag_overrides}"
+        )
+
+    _sel = _construction_error({"cathode_solver_model": "zzz"}, {})
+    assert "cathode_solver_model" in _sel and "current_driven" in _sel, _sel
+    _sel = _construction_error({"neutral_exchange_model": "zzz"}, {})
+    assert "neutral_exchange_model" in _sel, _sel
+    assert "constant" in _sel and "knudsen" in _sel, _sel
+    _sel = _construction_error({"cathode_warming_model": "zzz"}, {})
+    assert "cathode_warming_model" in _sel, _sel
+    assert "none" in _sel and "power_balance" in _sel, _sel
+    # resolved_boundaries is a BOOLEAN flag, read through bool(): a garbage
+    # string is truthy and passes, so False is its only invalid value and the
+    # one the guard exists for (a stale config still asking for the retired
+    # geometry). Probed with False for that reason, not with 'zzz'.
+    _sel = _construction_error({}, {"resolved_boundaries": False})
+    assert "resolved_boundaries" in _sel and "True" in _sel, _sel
+
+    # The else-raise inside physics.neutrals is DOUBLE-GUARDED: the solver
+    # rejects a bad neutral_exchange_model at construction (just above), so
+    # this branch is unreachable through LAPDSim1D and is exercised on the
+    # helper directly instead.
+    try:
+        neutral_exchange_coefficients(
+            geometry=resolved_geom,
+            model="zzz",
+            constant_coeff_cm3_s=resolved_params["neutral_exchange_coeff_cm3_s"],
+            Tn_K=resolved_params["Tn_K"],
+            mu_neutral=4.0,
+            clausing_scale=resolved_params["neutral_clausing_scale"],
+        )
+    except ValueError as exc:
+        _sel = str(exc)
+        assert "neutral_exchange_model" in _sel, _sel
+        assert "constant" in _sel and "knudsen" in _sel, _sel
+    else:
+        raise AssertionError(
+            "neutral_exchange_coefficients accepted an unknown model"
+        )
+
     # Cathode and anode are *surfaces*: the cathode surface
     # is the origin and the anode sits one gap downstream. Lm is measured from the
     # cathode surface, so the plenum lives at negative z and the mesh is longer.
