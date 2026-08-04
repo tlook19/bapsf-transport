@@ -9446,6 +9446,29 @@ def main():
         rtol=1e-13,
     )
 
+    # --- Retired deep-afterglow low-Te recipe: adas_low_te_extension with
+    # icool_recomb composes destructively (bare PRB charged, sub-edge PRB
+    # amplified ~9,300x -> thermal runaway to the Te floor and a permanent
+    # electron_cooling dt collapse). Construction must refuse the pair.
+    try:
+        LAPDSim1D(
+            dict(m3_params, adas_low_te_extension=True),
+            dict(resolved_cathode_flags, icool_recomb=True),
+        )
+    except ValueError as exc:
+        assert "adas_low_te_extension" in str(exc)
+        assert "icool_recomb" in str(exc)
+    else:
+        raise AssertionError(
+            "expected ValueError for adas_low_te_extension + icool_recomb"
+        )
+    # Either flag ALONE stays constructible -- the guard is on the pair only,
+    # and the recombination_energy_return guard's behavior is unchanged.
+    LAPDSim1D(
+        dict(m3_params, adas_low_te_extension=True), resolved_cathode_flags
+    )
+    LAPDSim1D(m3_params, dict(resolved_cathode_flags, icool_recomb=True))
+
     # --- GCR-consistent recombination energy pair
     # (recombination_energy_return): +I_ion*S_rec - P_PRB on the electron
     # fluid, adas-only, mutually exclusive with icool_recomb (double-charge).

@@ -862,6 +862,21 @@ class LAPDSim1D:
                     "PRB; combining it with icool_recomb double-charges "
                     "the recombination photons"
                 )
+        if bool(
+            self._input_dict.get("adas_low_te_extension", False)
+        ) and bool(self._flags.get("icool_recomb", False)):
+            raise ValueError(
+                "adas_low_te_extension must not be combined with "
+                "icool_recomb: icool_recomb charges bare PRB, and "
+                "adas_low_te_extension amplifies the sub-edge PRB by "
+                "~9,300x, so the electron fluid runs away thermally to the "
+                "Te floor and the electron_cooling timestep bound collapses "
+                "permanently. The consistent net booking "
+                "(I_ion*S_rec - P_PRB) that would make the pair sound is "
+                "not built. The deep-afterglow low-Te recipe that paired "
+                "them is RETIRED; without that booking the afterglow "
+                "validity window is Te > 0.2 eV (the ADF11 edge)"
+            )
         self._floors = {
             "n": float(self._input_dict["ne_floor"]),
             "nn": float(self._input_dict["nn_floor"]),
