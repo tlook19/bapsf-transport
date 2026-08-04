@@ -228,6 +228,23 @@ def neutral_source_defaults():
         behaviour. The twin puff shares the timing with its own levels.
         Smooth everywhere; clamped at zero if the transitions are set to
         overlap pathologically.
+    gas_puff_rise_center_s:
+        ``"square"`` opening-edge center [s], measured from the end of the
+        neutral-prebreakdown phase (the instant the cathode circuit closes),
+        so the opening edge does not wait for breakdown. Must be ``>= 0``.
+    gas_puff_rise_width_s:
+        Erf width scale [s] shared by BOTH ``"square"`` edges -- the opening
+        edge and the closing edge are built with this one width. The 10-90%
+        transition time is ~1.81x this value. Must be positive.
+    gas_puff_close_lag_s:
+        Delay [s] from the end of the main discharge (``tau_discharge`` after
+        the main-discharge start) to the ``"square"`` closing-edge center, so
+        the closing tail runs on past the drive. Must be ``>= 0``.
+
+        The three ``"square"`` timings above are read and validated only in
+        that mode; a bad value raises at construction. The envelope is
+        ``max(rise - fall, 0)``, so edges configured to overlap clamp at zero
+        flow rather than going negative.
     tau_gp_rise_center:
         ``double_erf`` rise-transition center [s], relative to the
         scheduled main-discharge start (negative = before breakdown).
@@ -287,6 +304,20 @@ def neutral_source_defaults():
     gas_puff_throw_cm:
         Cosine-pipe throw distance ``d`` [cm], of order the chord across the
         chamber (~2*Rm). Sets the lobe's HWHM = 0.64*d.
+    gas_puff_local_ionization_fraction:
+        Fraction of the gas-puff neutral source ionized IN PLACE rather than
+        added to the background neutral density. The diverted neutrals are
+        debited from the puff and booked as an ionization source under the
+        same birth-temperature and ionization-cost conventions as bulk
+        ionization (``Te_birth_ionization``, ``Ti_birth_ionization``,
+        ``ionization_birth_energy_model``), so the term conserves mass and
+        energy. It is built from the configured puff shape and waveform, so
+        it is localized wherever the puff is and follows the same time
+        dependence. Must be in ``[0, 1)``; ``0`` returns a zero source
+        without evaluating the term. Raises at construction outside that
+        range, or if the ``neutral_two_zone`` flag is on (which routes the
+        puff through the annulus zone instead). Inert while the gas puff is
+        disabled.
     pump_elbow_conductance_lps:
         Conductance of the unmodeled pump elbow [L/s], combined in series with
         the pump speed as ``1/S_eff = 1/S_pump + 1/C_elbow``. Applies only to a
@@ -536,6 +567,50 @@ def model_mode_defaults():
         orifice conductance in series. Prefer this for resolved runs, where the
         puff-to-pump back-path is the physics of interest and the historical model
         under-predicts it by 2-14x depending on cell size.
+    neutral_model:
+        Which engine carries the neutral population. ``"moment"`` integrates
+        the fluid neutral density (and, with the ``neutral_momentum`` flag,
+        its momentum) directly from the conservative RHS terms.
+        ``"kinetic"`` drives the neutrals toward per-cell targets and
+        relaxation times produced by a velocity-space kinetic solve of the
+        two-zone neutral state. Those solves run at step ACCEPTANCE only --
+        never inside a trial RHS evaluation, so step retries are
+        deterministic -- and only once the plasma phase is live; the
+        neutral-prebreakdown fill is carried by the moment terms in both
+        settings, as is the whole run until the first refresh completes.
+        ``"kinetic"`` rides on the two-zone neutral state and so requires the
+        ``neutral_two_zone`` flag. Any other value, or ``"kinetic"`` without
+        that flag, raises at construction.
+    neutral_kinetic_refresh_s:
+        Maximum interval [s] between full kinetic solves under
+        ``neutral_model = "kinetic"``. Between full refreshes the targets are
+        updated from the response functions frozen at the last one. Must be
+        positive; raises at construction otherwise. Inert under ``"moment"``.
+    neutral_kinetic_refresh_tol:
+        Relative drift in the neutral absorption field that forces a full
+        refresh early, ahead of ``neutral_kinetic_refresh_s``. The absorption
+        field is the response functions' only staleness channel; the test is
+        the maximum over cells of ``|nu_ion - nu_ref| / max(|nu_ref|, 1e2)``
+        against this value, so a larger tolerance permits staler response
+        functions between refreshes. Inert under ``"moment"``.
+    neutral_kinetic_nvz:
+        Number of axial-velocity (``v_z``) bins in the kinetic engine's
+        shared velocity grid. The axis is signed and stretched, placing bins
+        finely near zero. Inert under ``"moment"``.
+    neutral_kinetic_nvp:
+        Number of perpendicular-speed (``v_perp``) bins in that same grid.
+        This axis is positive-only -- it carries the 2D perpendicular speed
+        measure -- and is likewise stretched. Inert under ``"moment"``.
+    adas_low_te_extension:
+        Extends the ADAS ``acd`` (recombination) and ``prb1`` (recombination
+        radiated power) coefficients consistently below the bundled ADF11
+        low-Te edge at 0.2 eV, where the lookups otherwise clamp to the edge
+        value. ``False`` keeps the clamp. Read by the reaction and energy
+        terms only under ``atomic_rate_model = "adas"``; ``scd`` (ionization)
+        and ``plt`` (line power) clamp at the edge either way. Nothing
+        guards the combination with the ``icool_recomb`` flag at
+        construction, and the two must not be run together -- see the module
+        note above ``neutral_source_defaults``.
     operator_splitting:
         How the operator-split path composes the explicit non-heat operator A
         with the implicit heat operator B. ``"lie"`` does ``A(dt)`` then
@@ -633,6 +708,23 @@ def fudge_factor_defaults():
     b_rec_3b:
         Three-body recombination particle sink scale factor. Inert under
         ``atomic_rate_model = "adas"`` (ACD already includes three-body).
+    recombination_energy_return:
+        Books the GCR-consistent recombination energy PAIR on the electron
+        fluid: per recombination event credit the binding energy ``I_ion``
+        (paid at ionization via ``I_ion*S_ion`` and never returned by the
+        standard booking) and charge the full ADAS ``prb1`` radiated power,
+        adding ``I_ion*S_rec - P_PRB`` to ``Ee`` on top of the ordinary
+        recombination terms. Both halves scale with ``b_rec_rad``, so the
+        credit tracks the sink the particle equation actually applies; the
+        ``3/2 Te S_rec`` capture-kinetic-energy loss stays booked where it is
+        and cancels in the net. The sign of the net follows the conditions --
+        heating where the radiated energy per event is below ``I_ion``, an
+        extra sink where it is above. ``False`` returns a zero source without
+        evaluating the term. Requires ``atomic_rate_model = "adas"`` (the
+        janev path has no PRB booking) and raises otherwise; the pair is the
+        consistent unit, so it also raises when combined with the
+        ``icool_recomb`` flag, which charges PRB on its own. Lookups clamp at
+        the ADF11 grid edges.
     b_Qie:
         Electron-ion thermal exchange scale factor.
     b_Qei:
@@ -656,6 +748,28 @@ def fudge_factor_defaults():
         Electron axial heat-conduction scale factor.
     b_ipara:
         Ion axial heat-conduction scale factor.
+    heat_flux_limiter_f:
+        Free-streaming fraction ``f`` setting the electron heat-flux
+        saturation ceiling ``q_sat = f n Te v_the`` (``Te`` in erg,
+        ``v_the = sqrt(Te/m_e)``), against which the classical Spitzer-Harm
+        parallel flux ``q_SH`` is capped. The limiter scales the conductivity
+        per cell, so the operator stays a conservative flux divergence, and
+        is frozen at the incoming ``Te`` like ``kappa`` itself. A smaller
+        ``f`` lowers the ceiling and suppresses more. Read only when the
+        ``electron_heat_flux_limit`` flag is on, where it must be ``> 0``;
+        raises at construction otherwise.
+    heat_flux_limiter_exponent:
+        Knudsen exponent ``p`` in that limiter's suppression factor
+        ``lambda = 1/(1 + (q_SH/q_sat)^p)``, applied as
+        ``kappa_eff = lambda*kappa_e``. The ratio ``q_SH/q_sat`` plays the
+        role of a Knudsen number. ``1.0`` is the harmonic Cowie-McKee form
+        ``lambda = q_sat/(q_sat + q_SH)`` and takes its own code branch, so
+        it is bit-exact with the pre-exponent limiter. ``p > 1`` suppresses
+        the steep-gradient (high-ratio, non-local) flux much harder while
+        leaving the shallow-gradient limit near-Spitzer -- a separation a
+        single free-streaming fraction cannot express. Read only when the
+        ``electron_heat_flux_limit`` flag is on, where it must be ``> 0``;
+        raises at construction otherwise.
     b_surface_loss:
         Plasma surface neutralization/loss scale factor.
     b_ion_neutral_drag:
@@ -968,6 +1082,23 @@ def cathode_defaults():
         L is inert for the sigma-scored discharge quantities and shows up in
         the current-rise shape and the ignition time. Value, bracket and
         provenance: ``config_defaults_provenance.md``.
+    circuit_picard_tol_rel:
+        Relative convergence tolerance on the loop current for the
+        fluid<->circuit Picard iteration. A step is re-run when
+        ``|I_new - I_frozen| > tol * max(|I_new|, 1)``, until the current a
+        step PRODUCES matches the frozen one it was RUN at -- so the fluid,
+        the surface temperature and the circuit end the step sharing one
+        self-consistent ``I_loop`` instead of the fluid seeing a lagged
+        current. Re-runs restore an exact snapshot first, so discarded
+        iterations mutate no accepted-step state. Read only when the
+        ``coupled_circuit_picard`` flag is on, where it must be ``> 0``;
+        raises at construction otherwise.
+    circuit_picard_max_iter:
+        Cap on those re-runs per step; ``1`` permits a single attempt and so
+        reproduces the uniterated behaviour. Only driven phases iterate --
+        floating phases break after the first attempt regardless. Read only
+        when the ``coupled_circuit_picard`` flag is on, where it must be
+        ``>= 1``; raises at construction otherwise.
     cathode_warming_model:
         Slow evolution of the emitter surface temperature within a shot.
         ``"none"`` holds ``T_s`` constant, so the
@@ -1052,6 +1183,69 @@ def cathode_defaults():
         measured range: ``config_defaults_provenance.md``.
     cathode_emission_annuli:
         Number of annuli discretizing the profile.
+    cathode_surface_model:
+        Whether the cathode work function evolves with the coverage of the
+        contaminant layer. ``"none"`` holds ``phi_wf`` static for the shot.
+        ``"ads_des"`` carries a coverage ``theta`` in ``[0, 1]``, initialized
+        fully covered (``theta = 1``, so the shot starts at ``phi_wf``
+        exactly), evolving as
+
+            dtheta/dt = k_ads (1 - theta)
+                        - [nu_th + sigma_cl Gamma_i] theta
+
+        (adsorption, thermal desorption, ion-stimulated desorption), and
+        substitutes ``phi_eff = phi_clean + (phi_wf - phi_clean)*theta``
+        wherever the work function is read -- Richardson emission, Schottky
+        lowering, emission cooling and the gaussian profile's Richardson
+        inversion all take the one substituted value, never a mix of
+        ``phi_eff`` and ``phi_wf``. ``theta`` advances by a backward-Euler
+        update on accepted steps only. Any other value raises at
+        construction. Under ``"ads_des"``, ``phi_wf`` keeps its meaning as
+        the fully-covered shot-start work function.
+    cathode_phiwf_clean_eV:
+        Work function [eV] of the fully cleaned surface -- the ``theta -> 0``
+        floor of ``phi_eff``, i.e. the per-shot-accessible depth of the
+        removable layer rather than a literature clean-surface value.
+        REQUIRED under ``cathode_surface_model = "ads_des"`` and must be
+        strictly below ``phi_wf``; raises at construction when missing or not
+        below it. Inert under ``"none"``.
+    cathode_cleaning_sigma_cm2:
+        Ion-stimulated desorption cross section [cm^2] in the coverage loss
+        term ``sigma_cl*Gamma_i``, where the ion flux density onto the
+        cathode is ``Gamma_i = I_i/(e*pi*R_cath^2)`` taken from the
+        accepted-state sheath solve. Must be non-negative; raises at
+        construction otherwise. ``0`` removes the ion-stimulated channel.
+        Inert unless ``cathode_surface_model = "ads_des"``.
+    cathode_cleaning_E_th_eV:
+        Threshold energy [eV] for that desorption cross section. When set,
+        ``cathode_cleaning_sigma_cm2`` is scaled by the near-threshold
+        Bohdansky factor ``(1 - (E_th/E)^(2/3))*(1 - E_th/E)^2`` at the mean
+        deposited energy per ion ``E = P_cathode_i/I_i`` from the same
+        accepted-state solve, and the channel is switched off entirely for
+        ``E <= E_th``. ``None`` leaves the cross section energy-independent
+        (the pure fluence limit). Inert unless
+        ``cathode_surface_model = "ads_des"``.
+    cathode_ads_rate_per_s:
+        Adsorption rate constant ``k_ads`` [1/s] re-covering the clean
+        fraction -- the ``k_ads (1 - theta)`` gain term, which is the only
+        channel that can raise the coverage back up. Must be non-negative;
+        raises at construction otherwise. ``0`` removes it, leaving the
+        coverage monotonically non-increasing through the shot. Inert unless
+        ``cathode_surface_model = "ads_des"``.
+    cathode_desorption_prefactor_per_s:
+        Arrhenius prefactor ``nu0`` [1/s] of the THERMAL desorption channel,
+        whose rate is ``nu_th = nu0 exp(-E_des/(k_B T_s))`` at the current
+        surface temperature (the evolving one under ``"power_balance"``, else
+        the static ``T_s``). Must be non-negative; raises at construction
+        otherwise. ``0`` removes the channel -- ``nu_th`` is set to zero
+        without evaluating the exponential, leaving
+        ``cathode_desorption_energy_eV`` unread. Inert unless
+        ``cathode_surface_model = "ads_des"``.
+    cathode_desorption_energy_eV:
+        Activation energy ``E_des`` [eV] in that Arrhenius rate; larger
+        values suppress thermal desorption more strongly at a given surface
+        temperature. Read only when
+        ``cathode_desorption_prefactor_per_s > 0``.
     cathode_solver_model:
         The live ``"current_driven"`` formulation carries the loop current
         ``I_loop`` (and the
@@ -1252,6 +1446,86 @@ def cathode_defaults():
         current-step artifact where the beam range crossing a cell boundary
         kicks the sheath solve. CSDA only (inert under ``beer_lambert``). Must
         be ``>= 0``.
+    cathode_neutral_jet:
+        Gives the neutral flux recycled at an absorbing CATHODE face directed
+        axial momentum instead of rebirthing it at rest: a fraction
+        ``cathode_jet_R_N`` backscatters and the implanted remainder desorbs
+        as a directed effusive flux off the hot surface. The momentum rides
+        in the SAME term that rebirths the particles, so the two are
+        consistent by construction, and the surface absorbs the difference
+        between the incoming sonic momentum and the re-emitted jet momentum.
+        Collector faces stay momentum-free. ``False`` rebirths at rest.
+        Requires the ``neutral_momentum`` flag (there is no ``M_n`` field for
+        the momentum to land in otherwise) and a geometry with an absorbing
+        cathode face; raises at construction otherwise. The reflected atoms'
+        kinetic energy beyond the mean-flow momentum is NOT booked --
+        neutrals carry no energy field.
+    cathode_jet_R_N:
+        Particle reflection coefficient of the cathode surface: the
+        backscattered fraction, leaving at
+        ``v_back = sqrt(2 R_E (phi_c + Ti)/m)``. The remaining ``1 - R_N`` is
+        implanted and re-emitted effusively at
+        ``v_eff = sqrt(pi k_B T_s/(2 m))``, the per-particle directed
+        momentum of a cosine-law effusive flux, so the mixed jet speed is
+        ``R_N*v_back + (1 - R_N)*v_eff``. Must lie in ``[0, 1]`` when
+        ``cathode_neutral_jet`` is on; raises at construction otherwise.
+        Inert when that jet is off.
+    cathode_jet_R_E:
+        Energy reflection coefficient of the cathode surface, setting the
+        backscatter speed ``v_back`` above. Must lie in ``[0, 1]`` when
+        ``cathode_neutral_jet`` is on; raises at construction otherwise. Also
+        read by ``cathode_jet_surface_debit``.
+    anode_neutral_jet:
+        The same directed-recycle treatment at the ANODE faces, applied per
+        collected side: the backscattered fraction ``anode_jet_R_N`` is
+        re-emitted back toward the side it was collected from, at
+        ``v_back = sqrt(2 R_E (phi_a + Ti)/m)`` off the solve's anode drop.
+        The remaining ``1 - R_N`` re-emits from thin cylindrical wires with
+        no net axial direction, so the anode channel is backscatter-only.
+        ``False`` rebirths at rest. Requires the ``neutral_momentum`` flag
+        and anode faces with ``eta > 0``; raises at construction otherwise.
+    anode_jet_R_N:
+        Particle reflection coefficient of the anode surface -- the
+        backscattered fraction. Must lie in ``[0, 1]`` when
+        ``anode_neutral_jet`` is on; raises at construction otherwise. Inert
+        when that jet is off.
+    anode_jet_R_E:
+        Energy reflection coefficient of the anode surface, setting the anode
+        backscatter speed. Must lie in ``[0, 1]`` when ``anode_neutral_jet``
+        is on; raises at construction otherwise.
+    cathode_jet_surface_debit:
+        Debits the cathode surface energy balance by the reflected-energy
+        fraction: the warming model receives
+        ``(1 - cathode_jet_R_E)*P_cathode_i`` in place of the full ion
+        bombardment power, so the energy carried off by reflected atoms stops
+        heating the surface. ``False`` retains all of it. Requires
+        ``cathode_neutral_jet`` (it reads that jet's ``R_E``); raises at
+        construction otherwise.
+    neutral_mesh_accommodation:
+        Accommodates the evolved neutral wind's momentum on the anode mesh
+        WIRES. The mesh's open area already throttles what the wind carries
+        across, but the momentum the wires intercept has to land on the anode
+        structure rather than stay in the gas; without this sink the gap
+        recirculation set up by opposing surface jets is artificially
+        elastic. For each anode face, wind flowing INTO the mesh from either
+        flanking cell loses ``-max(+/-u_n, 0)*A_blocked/V*M_n`` -- the same
+        free-molecular form the end walls use -- with
+        ``A_blocked = A_open*(1 - T)/T`` for neutral transparency ``T``.
+        ``False`` is off. Requires the ``neutral_momentum`` flag and anode
+        faces with ``eta > 0`` and positive neutral transparency; raises at
+        construction otherwise.
+    cathode_sample_smoothing:
+        Exponential-moving-average smoothing of the ``(n, Te)`` the sheath
+        solve samples, covering the cathode sample cell and the two cells
+        flanking the first anode face -- every cell the solve reads. The EMA
+        is seeded from the initial state and advances on accepted steps only,
+        so dt-retries never move it, and the sampled ``Ee`` is rebuilt from
+        the smoothed pair. ``"presheath"`` derives the time constant per cell
+        as the ion transit across it, ``tau = l_cell/c_s(Te_ema)``, so it is
+        a local physical timescale rather than a configured number; a float
+        is a fixed ``tau`` [s] and must be positive; ``None`` disables the
+        smoothing bit-exactly, passing the raw state through. Any other
+        string, or a non-positive float, raises at construction.
 
     Values and their provenance: ``config_defaults_provenance.md``.
     """
