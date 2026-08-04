@@ -193,14 +193,14 @@ def floor_defaults():
 # clamp there but are exponentially dead at <0.2 eV, so a recombining 300 K
 # afterglow would be well represented.
 #
-# DO NOT RUN icool_recomb TOGETHER WITH adas_low_te_extension. The two compose
-# destructively: icool_recomb charges bare PRB (the double-charge warned about
-# at recombination_energy_return below), and adas_low_te_extension amplifies
-# the sub-edge PRB by ~9,300x, so the electron fluid runs away thermally to the
-# floor and the electron_cooling timestep bound collapses permanently. The
-# consistent net booking (I_ion*S_rec - P_PRB) that would make the pair sound
-# is NOT built. Without it the afterglow validity window is Te > 0.2 eV (the
-# ADF11 edge).
+# icool_recomb TOGETHER WITH adas_low_te_extension RAISES at construction. The
+# two compose destructively: icool_recomb charges bare PRB (the double-charge
+# warned about at recombination_energy_return below), and adas_low_te_extension
+# amplifies the sub-edge PRB by ~9,300x, so the electron fluid runs away
+# thermally to the floor and the electron_cooling timestep bound collapses
+# permanently. The consistent net booking (I_ion*S_rec - P_PRB) that would make
+# the pair sound is NOT built. Without it the afterglow validity window is
+# Te > 0.2 eV (the ADF11 edge).
 
 
 def neutral_source_defaults():
@@ -607,10 +607,10 @@ def model_mode_defaults():
         low-Te edge at 0.2 eV, where the lookups otherwise clamp to the edge
         value. ``False`` keeps the clamp. Read by the reaction and energy
         terms only under ``atomic_rate_model = "adas"``; ``scd`` (ionization)
-        and ``plt`` (line power) clamp at the edge either way. Nothing
-        guards the combination with the ``icool_recomb`` flag at
-        construction, and the two must not be run together -- see the module
-        note above ``neutral_source_defaults``.
+        and ``plt`` (line power) clamp at the edge either way. Raises at
+        construction when combined with the ``icool_recomb`` flag: the two
+        compose destructively -- see the module note above
+        ``neutral_source_defaults``.
     operator_splitting:
         How the operator-split path composes the explicit non-heat operator A
         with the implicit heat operator B. ``"lie"`` does ``A(dt)`` then
@@ -932,9 +932,10 @@ def fudge_factor_defaults():
         # icool_recomb still charges bare PRB. Paired with
         # adas_low_te_extension -- which amplifies the sub-edge PRB by
         # ~9,300x -- that double-charge drives a thermal runaway to the Te
-        # floor and a permanent electron_cooling timestep-bound collapse. DO
-        # NOT RUN icool_recomb TOGETHER WITH adas_low_te_extension; see the
-        # retired recipe in the module note above.
+        # floor and a permanent electron_cooling timestep-bound collapse.
+        # Construction refuses icool_recomb TOGETHER WITH
+        # adas_low_te_extension; see the retired recipe in the module note
+        # above.
         "recombination_energy_return": False,
         # --- INERT: default-off instruments / neutral ladder ---
         # Electron heat-flux limiter (read only when the
