@@ -1,36 +1,58 @@
-"""R5 ES1 ignition-threshold isolation probe (2026-07-25).
+"""R5 ES1 ignition-seed isolation probe (2026-07-25; rule re-registered 2026-08-04).
 
-Diagnosed blocker -- the ES1 ignition-threshold shift:
-the repaired-stance ES config never ignites -- it sits in ``pre_breakdown`` at
-``source_I_tot`` ~ 2.76 A (needs 150 A to leave prebreakdown) because the
-prebreakdown SEED is ~2.5x below the historical config that ignites. Measured at
-t = 0.2 ms, nx = 120: historical/golden collector density n_col ~ 9.8e8 (ignites)
-vs repaired-ES n_col ~ 4.0e8 (below threshold). Root cause is under-confinement of
-the seed; the fix is a FUELING / seed-retention lever, not raising T_s (I_loop is
-plasma-limited, invariant to T_s).
+HISTORY -- the 2026-07-25 ignition diagnosis (SUPERSEDED; kept as the record of
+what this probe was originally built to answer, NOT as a live target). The
+repaired-stance ES config sat in ``pre_breakdown`` at ``source_I_tot`` ~ 2.76 A,
+and the diagnosis compared, at t = 0.2 ms and nx = 120, a historical/golden
+collector density n_col ~ 9.8e8 (ignites) against a repaired-ES n_col ~ 4.0e8.
+That reference pair is retired for two independent reasons:
+
+  * It was CONFOUNDED. The failing run had not equilibrated the neutral
+    inventory -- it started from the bare ``nn0`` seed, which is precisely the
+    condition the ``no_equil`` variant below exists to mimic. The
+    9.8e8-vs-4.0e8 gap therefore mixed stance effects with a fill difference,
+    and the two were never separated.
+  * It is MOOT. The current stance ignites at the sequencing-predicted time,
+    so there is no ignition failure left to attribute.
 
 PRE-REGISTERED ISOLATION (this script). Metric: collector-cell plasma density
 n_col at t = 0.2 ms (the seed), with source_I_tot and phase as ignition proxies.
-From the repaired-ES baseline, single-toggle each named suspect and add an
-all-three positive control that reverts toward the historical stance:
+From the ES baseline, single-toggle each named suspect and add an all-three
+positive control that reverts toward the historical stance:
 
-  baseline      repaired ES stance as-is                (expect ~4.0e8, ~2.76 A)
-  char_off      characteristic_boundary = False         (R3.1 Bohm outflow off)
+  baseline      ES stance as-is                          (see ANCHORS below)
+  char_off      characteristic_boundary = False          (R3.1 Bohm outflow off)
   birth_legacy  ionization_birth_energy_model = legacy   (hot legacy birth)
   sgp3400       S_gp = 3400 (config default; ES override is 3000)
   all3          char_off + birth_legacy + sgp3400        (positive control)
+  no_equil      neutral_equilibration = False            (historical control)
 
-DECISION RULE (fixed before running): the toggle that lifts n_col closest to the
-historical ~9.8e8 identifies the dominant seed-depletion lever and hence the fix
-family:
-  * char_off dominant  -> R3.1 Bohm outflow over-drains the seed. It is a
-    correctness repair we KEEP, so the fix is fueling / seed retention, not a
-    revert.
-  * birth_legacy dominant -> conservative cold-electron birth suppresses the
-    ionization multiplication that builds the seed.
-  * sgp3400 dominant   -> fueling-limited; raise the fill.
-  * none alone (only all3 recovers) -> combined under-confinement; a
-    fueling / seed-retention lever is needed regardless.
+DECISION RULE (RE-REGISTERED 2026-08-04, fixed before the re-measurement runs;
+supersedes the retired rule above). Three registered questions:
+
+  PRIMARY -- seed-conditionality of the early-avalanche deposition closure.
+    If ANY physically-plausible seed variant CROSSES n_b/n_e = 0.1 before
+    ignition -- that is, the QL-cutoff diagnostic reports RELEASE where the
+    baseline BINDS, or BINDING where the baseline releases -- then the
+    early-avalanche deposition physics is seed-conditional, and the WP-E and
+    foot-shape claims must carry a SEED bracket. If no variant crosses, the
+    QL-off early avalanche is stated flat.
+
+  SECONDARY -- ignition-time shift per decade of seed at the current stance.
+    The loop-gain expectation on record is ~252 us per two decades (delay
+    logarithmic in the seed); this measurement confirms or refutes it.
+
+  CONTROL -- ``no_equil`` is the historical-attribution control, and its
+    expected outcome is pre-stated: a LARGE n_col collapse under ``no_equil``
+    confirms that the 2026-07-25 non-ignition was predominantly the missing
+    neutral equilibration rather than a stance effect.
+
+ANCHORS (measured 2026-08-04, nx = 120, t_probe = 0.2 ms):
+  baseline n_col   = 2.558e9
+  baseline n_b/n_e = 0.106 -- the QL cutoff BINDS on ~95% of the pre-ignition
+                     window and never releases on baseline; the ~5% complement
+                     is saves carrying no ray at all, not releases.
+  char_off and all3 both release the QL cutoff at t = 0.020 ms.
 
 SAMPLING TIME. ``--t-probe`` is model time measured from t = 0, and under the
 sequencing stance -- ``tau_neutral_prebreakdown = 0.0``, the config default --
@@ -83,10 +105,13 @@ VARIANTS = {
         {"ionization_birth_energy_model": "legacy", "S_gp": 3400},
         {"characteristic_boundary": False},
     ),
-    # Control: skip the 100-cycle neutral pre-equilibration, so the run starts
-    # from the bare nn0 seed and builds its fill only from the in-run puff.
-    # Tests whether the diagnosed ~4.0e8 stuck seed was an artifact of a probe
-    # that did not equilibrate the neutral inventory first.
+    # CONTROL for historical attribution (see the re-registered DECISION RULE in
+    # the module docstring): skip the 100-cycle neutral pre-equilibration, so
+    # the run starts from the bare nn0 seed and builds its fill only from the
+    # in-run puff -- exactly the condition the confounded 2026-07-25 diagnosis
+    # ran under. Pre-stated expectation: a LARGE n_col collapse here confirms
+    # that the 2026-07-25 non-ignition was predominantly the missing neutral
+    # equilibration, not a stance effect.
     # NB this control used to ALSO carry the in-run tau_neutral_prebreakdown
     # = 2 ms neutral-only accumulation. That window is gone (the default is now
     # 0.0 -- the machine has no pre-drive window, 2026-08-03), so there is no
@@ -342,7 +367,8 @@ def main():
 
     variants = [v.strip() for v in args.variants.split(",") if v.strip()]
     print(f"# R5 ignition-seed isolation probe  nx={args.nx}  t_probe={args.t_probe*1e3:.3f} ms")
-    print(f"# historical reference n_col ~ 9.8e8 (ignites); repaired-ES ~ 4.0e8 (below threshold)")
+    print(f"# anchors (measured 2026-08-04): baseline n_col 2.558e9, n_b/n_e 0.106; "
+          f"the 9.8e8 / 4.0e8 pair is SUPERSEDED history, not a target")
     print("# QL cutoff read at the beam launch cell: binds when "
           "n_b/n_e >= 0.1 (no anomalous drag)")
     hdr = ("variant", "phase", "main?", "I[A]", "Imax[A]", "n_col", "n_col/base",
