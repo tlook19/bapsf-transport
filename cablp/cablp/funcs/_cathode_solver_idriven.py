@@ -1,4 +1,4 @@
-"""Current-driven cathode sheath solve (CATHODE_IDRIVEN_PLAN.md M2).
+"""Current-driven cathode sheath solve (M2).
 
 The voltage-driven solver (``_cathode_solver.solve``) finds the intersection
 of the device curve with a Thevenin load line; under an inductive circuit
@@ -122,7 +122,7 @@ _J_PLATEAU_TOL_REL = 64.0 * sys.float_info.epsilon
 _SCHOTTKY_EV_PER_SQRT_V_M = 3.7946865e-5
 
 # Thermal-bridge half-width, in units of kT_s of would-be barrier depth
-# (CATHODE_IDRIVEN_PLAN.md, chatter diagnosis 2026-07-21). The emitted
+# (chatter diagnosis, 2026-07-21). The emitted
 # Maxwellian has energy spread kT_s, so the SCL<->classical release corner
 # is physically smooth over ~kT_s of barrier -- the transition variable is
 # x = ln(J_eff/J_crit) = (would-be barrier)/kT_s, and the corner max(0, x)
@@ -404,7 +404,7 @@ def solve_idriven(
     sigma_par = 14.6 * T_e**1.5
     R_p = config.L_cath / (math.pi * config.R_cath**2 * sigma_par)
     C_s = math.sqrt(T_e * _e_SI * 1.0e7 / (config.mu * _mp_cgs))
-    # Sheath-edge sampling (R3.2, SIM1D_MODEL_AUDIT_PLAN A16): the ion Bohm
+    # Sheath-edge sampling (R3.2 / A16): the ion Bohm
     # current is drawn at the sheath-edge density n_se = alpha_sheath * n_e. The
     # historical flat exp(-1/2) is the Boltzmann drop across a presheath that
     # fits inside the cell; the fluid boundary instead uses the mesh-independent

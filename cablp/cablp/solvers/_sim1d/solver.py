@@ -618,8 +618,8 @@ class LAPDSim1D:
         )
         if exchange_model not in ("constant", "knudsen"):
             raise ValueError(
-                "neutral_exchange_model='molecular_flow' was removed at "
-                "DEPRECATION_PLAN D2; use 'constant' or 'knudsen', or "
+                "neutral_exchange_model='molecular_flow' has been removed; "
+                "use 'constant' or 'knudsen', or "
                 "reproduce it at tag legacy-final-2026-07-22 "
                 f"(got {exchange_model!r})"
             )
@@ -682,7 +682,7 @@ class LAPDSim1D:
                     "neutral_model='kinetic' rides on the two-zone state: "
                     "set the neutral_two_zone flag"
                 )
-            # K4a bookkeeping (KINETIC_TWOZONE_PLAN.md): targets and
+            # K4a bookkeeping: targets and
             # per-cell relaxation times are produced by refresh-cadence
             # kinetic solves at step ACCEPTANCE (never inside trial RHS
             # evaluations); before the first refresh the moment terms
@@ -937,8 +937,8 @@ class LAPDSim1D:
         )
         if warming_model not in ("none", "power_balance"):
             raise ValueError(
-                "cathode_warming_model='ion_bombardment' was removed at "
-                "DEPRECATION_PLAN D2; use 'none' or 'power_balance', or "
+                "cathode_warming_model='ion_bombardment' has been removed; "
+                "use 'none' or 'power_balance', or "
                 "reproduce it at tag legacy-final-2026-07-22 "
                 f"(got {warming_model!r})"
             )
@@ -977,7 +977,7 @@ class LAPDSim1D:
                 )
             self._cathode_Ts_K = float(Ts_base)
         # Surface-state coverage (cathode_surface_model="ads_des",
-        # CATHODE_IDRIVEN_PLAN.md M5a): theta in [0, 1] is the contaminant
+        # M5a): theta in [0, 1] is the contaminant
         # coverage raising the effective work function,
         # phi_eff = phi_clean + (phi_wf - phi_clean) * theta, evolving as
         #   dtheta/dt = k_ads (1-theta) - [nu0 e^(-E_des/kT_s) + sigma Gamma_i] theta
@@ -1020,7 +1020,7 @@ class LAPDSim1D:
         # energy into the emitting skin; cond is what the heater-held
         # substrate absorbed -- the quantity Tom's open-loop-heater drift
         # hypothesis makes checkable against the ES1 trim cadence
-        # (THESIS_NOTES §2: ~sub-kW net imbalance <-> ±8 K per 20-30 min).
+        # (a ~sub-kW net imbalance corresponds to ±8 K per 20-30 min).
         self._cathode_energy_ledger_J = {
             "heater": 0.0, "ion": 0.0, "rad": 0.0, "emis": 0.0, "cond": 0.0,
         }
@@ -2029,7 +2029,7 @@ class LAPDSim1D:
 
         nn_next = np.linalg.solve(matrix, rhs)
         # M_n passes through untouched: this step runs pre-plasma, where
-        # there is no drag to drive a wind (NEUTRAL_MOMENTUM_PLAN.md).
+        # there is no drag to drive a wind.
         return ConservativeState1D(
             n=state.n.copy(),
             nn=(
@@ -2395,7 +2395,7 @@ class LAPDSim1D:
         # Electrode sample smoothing: fold the newly accepted state into the
         # supply-average EMA before any accepted-state consumer reads it.
         self._update_sample_smoothing(attempt.dt)
-        # K4a refresh (KINETIC_TWOZONE_PLAN.md): kinetic target solves run
+        # K4a refresh: kinetic target solves run
         # only at ACCEPTED states -- deterministic across step retries --
         # and only once the plasma phase is live (the pre-breakdown fill
         # stays moment).

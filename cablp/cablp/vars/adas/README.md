@@ -29,9 +29,8 @@ added for the impurity-radiation scoping study
 (`scripts/scope_impurity_radiation.py`): equilibrium stage balance from
 SCD/ACD, total radiated power L_z from PLT+PRB. No model path consumes them
 as of 2026-07-21 — the scoping verdict (required n_z/n_e ~ 4-10 % at
-equilibrium for every species tested >> the ppm hypothesis;
-CATHODE_IDRIVEN_PLAN.md §5b) stopped the campaign before any sink term was
-wired in.
+equilibrium for every species tested >> the ppm hypothesis) stopped the
+campaign before any sink term was wired in.
 
 These are generalized collisional-radiative (GCR) coefficients: they are
 tabulated on a log10(n_e) x log10(T_e) grid (24 x 30; 5e7-2e15 cm^-3,

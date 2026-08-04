@@ -124,9 +124,8 @@ def neutral_exchange_coefficients(
     else:
         raise ValueError(
             "neutral_exchange_model must be 'constant' or 'knudsen' "
-            f"(got {model!r}); 'molecular_flow' was removed at "
-            "DEPRECATION_PLAN D2 and remains available at tag "
-            "legacy-final-2026-07-22"
+            f"(got {model!r}); 'molecular_flow' has been removed and "
+            "remains available at tag legacy-final-2026-07-22"
         )
     # Escape hatch: a face whose conductance is known directly rather than
     # geometrically overrides the computed value (NaN => keep the computed one).
@@ -153,8 +152,8 @@ def neutral_zone_volumes(geometry):
 def neutral_zone_exchange_conductance(geometry, Tn_K, mu_neutral):
     """Return the per-cell column/annulus exchange conductance [cm^3/s].
 
-    Free-molecular exchange through the column's lateral surface
-    (NEUTRAL_TWOZONE_PLAN.md): one symmetric conductance
+    Free-molecular exchange through the column's lateral surface: one
+    symmetric conductance
 
         K_r = (vbar / 4) * 2 pi Rp dz
 
@@ -393,7 +392,7 @@ def neutral_wind_advection_rhs(
     """Return conservative upwind advection of ``nn`` and ``M_n`` by the wind.
 
     The drag-driven neutral wind ``u_n = M_n / (m nn)`` carries gas and its
-    own momentum along the axis (NEUTRAL_MOMENTUM_PLAN.md M3), on top of the
+    own momentum along the axis (M3), on top of the
     diffusive Knudsen exchange that carries the thermal transport. First-order
     donor-cell upwind on the internal neutral faces: the face velocity is the
     adjacent-cell average, the donor is the upwind cell, and the face area is
@@ -408,8 +407,8 @@ def neutral_wind_advection_rhs(
     same free-molecular accommodation the radial wall term applies. A state
     without ``M_n`` gets zeros.
 
-    ``mesh_faces`` / ``mesh_blocked_area_cm2`` (CATHODE_IDRIVEN_PLAN.md §8,
-    anode addendum): the anode mesh's *open* area already throttles what the
+    ``mesh_faces`` / ``mesh_blocked_area_cm2``: the anode mesh's *open* area
+    already throttles what the
     wind carries across, but the momentum the wires intercept has to land on
     the anode structure, not stay in the gas -- without this sink the gap
     recirculation set up by opposing surface jets is artificially elastic.
@@ -629,12 +628,12 @@ def neutral_source_sink_rhs(
 ):
     """Return conservative RHS for neutral gas puff and pump terms.
 
-    Both terms are anchored by ``cell_role`` (§8), not by ``[0]``/``[-1]``: the
+    Both terms are anchored by ``cell_role``, not by ``[0]``/``[-1]``: the
     puff lands on its puff cell and each pump on the plenum/collector at its end.
     Legacy roles resolve to the source and end cells, reproducing today exactly.
     The puff's axial shape comes from ``gas_puff_rate_profile``.
 
-    On a two-zone state (``nn_a`` present, NEUTRAL_TWOZONE_PLAN.md) the puff
+    On a two-zone state (``nn_a`` present) the puff
     feeds the ANNULUS first -- the pipe enters at the wall -- re-normalized
     from the profile's chamber volume to the annulus volume so the total
     inflow is conserved exactly (annulus-free cells fall back to the
@@ -743,9 +742,8 @@ def neutral_source_sink_rhs(
 # The EFFECTIVE puff the solver actually applied at each save: the configured
 # S_gp after waveform shaping (``gas_puff_mode``) AND the phase gate, not the
 # nominal input_dict level. Recording it removes the need to reconstruct the
-# waveform from the phase switch plus the mode's formula after the fact
-# (BEAM_DEPOSITION_PLAN ergonomics item). Pure recording -- nothing here feeds
-# an RHS row.
+# waveform from the phase switch plus the mode's formula after the fact.
+# Pure recording -- nothing here feeds an RHS row.
 GAS_PUFF_DIAGNOSTIC_FIELDS = (
     # Source-end and twin-end valve rates [sccm] as applied; zero whenever the
     # phase gate is shut, and the twin entry is zero without TwinCathode.
@@ -784,8 +782,8 @@ def gas_puff_rate_profile(
 
     This is the single implementation behind BOTH puff sites -- the explicit
     RHS (``neutral_source_sink_rhs``) and the implicit backward-Euler neutral
-    matrix in the solver -- so the two cannot desync (the historical trap; see
-    BOUNDARY_REGIONS_PROGRESS.md notes).
+    matrix in the solver -- so the two cannot desync (the historical trap was
+    two independently maintained copies of this shape).
 
     ``profile = "cell"`` (default) reproduces the historical behaviour
     bit-exactly: the whole flow lands in the role-tagged puff cell.

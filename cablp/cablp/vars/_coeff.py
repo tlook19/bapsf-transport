@@ -39,10 +39,10 @@ b_11s_21p = [7.087e-1, -9.347e-2, -1.598e0, 2.986e0, -1.293e0, 3.086e-1]
 # _cons.py differs in the 5th decimal and is left untouched). 2^1S is
 # metastable (~20 ms two-photon lifetime), but at column densities electron
 # collisions transfer it to 2^1P long before the beam-heating timescales
-# care; its 20.6 eV is booked as radiated (see BEAM_DEPOSITION_PLAN WP-A).
+# care; its 20.6 eV is booked as radiated (WP-A).
 #
 # Triplet levels are deliberately absent: exchange-driven excitation
-# collapses above ~50 eV, below the 60-180 eV beam range (THESIS_NOTES §3).
+# collapses above ~50 eV, below the 60-180 eV beam range.
 # The n >= 5 nP/nS/nD Rydberg tail is not in this registry; it is computed
 # from the n = 4 rows by the paper's Eq. (5) scaling in
 # funcs._cross.He_singlet_tail_cross.

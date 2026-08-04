@@ -162,7 +162,7 @@ def cathode_circuit_alpha_sheath(
 ):
     """Return the cathode sheath-edge factor ``n_se/n`` for the circuit, or None.
 
-    R3.2 (SIM1D_MODEL_AUDIT_PLAN A16): under the unified-sampling stance
+    R3.2 (A16): under the unified-sampling stance
     (``characteristic_boundary``), the circuit's cathode ion current must be
     drawn at the SAME sheath-edge density the fluid boundary uses, so both call
     ``sources.electrode_sheath_alpha`` on the same cathode-adjacent cell (verified
@@ -294,7 +294,7 @@ def cathode_power_balance_terms_W(T_s_K, P_ion_W, I_eth_star_A, input_dict):
     """Return ``(P_heater, P_ion, P_rad, P_emis, P_cond)`` [W] for warming.
 
     The ``cathode_warming_model = "power_balance"`` surface energy budget
-    (CATHODE_IDRIVEN_PLAN.md M1b):
+    (M1b):
 
     - ``P_heater`` is pinned by the standby equilibrium at
       ``cathode_Ts_base_K`` -- open circuit means no net emission and no
@@ -385,8 +385,8 @@ def validate_cathode_solver_model(input_dict, input_flags):
     model = str(input_dict.get("cathode_solver_model", "current_driven"))
     if model != "current_driven":
         raise ValueError(
-            "cathode_solver_model='voltage_driven' was removed at "
-            "DEPRECATION_PLAN D2; use 'current_driven' or reproduce the "
+            "cathode_solver_model='voltage_driven' has been removed; "
+            "use 'current_driven' or reproduce the "
             "historical path at tag legacy-final-2026-07-22 "
             f"(got {model!r})"
         )
@@ -1452,8 +1452,7 @@ def cathode_source_terms(
             )
 
     plasma_loss_rate = dN_loss / geometry.plasma_volume_cm3
-    # Recycle at the cathode surface feeds the COLUMN on a two-zone state
-    # (recycle faces feed the column, NEUTRAL_TWOZONE_PLAN.md).
+    # Recycle at the cathode surface feeds the COLUMN on a two-zone state.
     neutral_gain_rate = dN_loss / (
         geometry.plasma_volume_cm3
         if state.nn_a is not None
@@ -1667,7 +1666,7 @@ def beam_ionization_rhs_terms(
         smoothing_cm=float(input_dict.get("beam_deposition_smoothing_cm", 0.0)),
     )
     volume_ratio = geometry.plasma_volume_cm3 / geometry.neutral_volume_cm3
-    # Two-zone state (NEUTRAL_TWOZONE_PLAN.md): nn is the column density on
+    # Two-zone state: nn is the column density on
     # the plasma volume, so the beam's neutral debit converts by exactly 1
     # (the beam attenuates on column gas by construction).
     if state.nn_a is not None:
@@ -1935,8 +1934,8 @@ def _beam_ionization_sources(
         # branch above is bit-exact when smoothing is 0). The beam deposition
         # densities are smoothed over a fixed physical width BEFORE the ohmic
         # gap booking is added, so only the beam-range deposition is spread and
-        # the totals are conserved (ES1_TUNING §4e; removes the mesh-scale
-        # sheath kick where the beam range crosses a cell boundary).
+        # the totals are conserved (this removes the mesh-scale sheath kick
+        # where the beam range crosses a cell boundary).
         Vp = geometry.plasma_volume_cm3
         beam_dep_power = zeros.copy()
         ohmic_power = zeros.copy()

@@ -1,10 +1,10 @@
-"""Solver-agnostic beam deposition along a ray (BEAM_DEPOSITION_PLAN B1).
+"""Solver-agnostic beam deposition along a ray (B1).
 
 Deterministic CSDA (continuous-slowing-down) integration of a monoenergetic
 primary-electron beam through the column. **Pure function of the beam and the
 column** — ``(E0, Gamma0, nn, ne, Te, ray)`` — with no solver state, so both
 the voltage-driven and current-driven cathode formulations can consume it at
-the same call sites (plan §2).
+the same call sites.
 
 Energy channels, per unit path length [eV/cm]:
 
@@ -31,8 +31,7 @@ Coulomb closures (both parameter-free):
 - ``"legacy_tau_ei"``: ``dE/dx = E / (v(E) tau_ei(Te, ne))`` with the
   *thermal* NRL collision time — the historical `_cathode_solver._compute_l_b`
   form (~1.1 m at the same conditions). Provided for continuity experiments;
-  its "Coulomb" label overestimates the classical drag ~30x (THESIS_NOTES
-  item 12).
+  its "Coulomb" label overestimates the classical drag ~30x.
 
 Anomalous closure:
 
@@ -53,8 +52,7 @@ Anomalous closure:
   deliberately stays collisional. Requires ``beam_area_cm2`` to form
   ``n_b = Gamma0 / (A v_b)``. Order-of-magnitude closure: density-gradient
   detuning and saturation physics can lengthen it substantially; results
-  using it must be presented per closure, like the drag story
-  (THESIS_NOTES §3).
+  using it must be presented per closure, like the drag story.
 
 The primary is followed until it exits the domain (transmitted) or its
 energy crosses ``E_stop`` (default: the lowest inelastic threshold, He 2^1S

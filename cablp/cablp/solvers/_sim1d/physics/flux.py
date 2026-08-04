@@ -193,7 +193,7 @@ def _apply_plasma_walls(
             live = right if live_is_right else left
             face_M[face] = pressure[live]
     if characteristic_boundary:
-        # R3.1 (SIM1D_MODEL_AUDIT_PLAN "R3.1 boundary approach"): the plasma-
+        # R3.1 boundary approach: the plasma-
         # terminating (absorbing) faces are handled by the one-sided
         # characteristic ghost-cell Bohm outflow (sources.characteristic_
         # boundary_rhs), which supplies the particle, momentum, and energy flux

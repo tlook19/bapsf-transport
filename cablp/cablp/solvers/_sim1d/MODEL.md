@@ -315,10 +315,13 @@ precision via the cathode Kirchhoff `I_tot = I_eth* + I_i - I_e_ret` (returning
 electrons with a minus); the never-closing `P_net`/`P_net2` scalars are demoted to
 deprecated. Measurement-plane aliases (`V_dis = V_b + V_series`, `I_bank =
 I_plasma + I_parallel`, divergences zero now) set up the future effective-load
-work (THESIS items 24/25). Honest limits: the anode uses the net-current ladder
+work (items 24/25). Honest limits: the anode uses the net-current ladder
 (per-species anode is A15/R4), and the bracket-capped regime clamps `V_b` off the
-ladder (a reported residual). Full derivation: THESIS_NOTES "The circuit power
-balance that closes."
+ladder (a reported residual). The identity asserted here is not taken on faith:
+`scripts/verify_sim1d_r3_routing.py` gate G6 evaluates the residual
+`P_load - (cathode + gap + anode field work)` directly against the solver's own
+terms and requires it below `1e-6 * P_load`, alongside the cathode Kirchhoff sum
+the derivation rests on.
 
 **R3.3 -- A13 controls deprecated.** The resolved-boundary surface-loss area
 scales and per-face enables were 0D artifacts (they stood in for I_sat that the

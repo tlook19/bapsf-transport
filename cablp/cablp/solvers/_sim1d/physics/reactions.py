@@ -163,7 +163,7 @@ def reaction_rhs_terms(
         adas_low_te_extension=adas_low_te_extension,
     )
     volume_ratio = geometry.plasma_volume_cm3 / geometry.neutral_volume_cm3
-    # On a two-zone state (NEUTRAL_TWOZONE_PLAN.md) nn is the COLUMN density
+    # On a two-zone state nn is the COLUMN density
     # on the column volume, which IS the plasma volume -- the Vp/V_col
     # conversion on the neutral-density rows is exactly unity, and the rates
     # above (n * nn * <sv>) already sample column gas by construction. The

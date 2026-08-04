@@ -275,7 +275,7 @@ def He_beam_excitation_channel(E_eV, n_max=20):
     ``(0.0, 0.0)`` below the lowest threshold (2^1S, 20.6158 eV).
 
     This is the measured replacement for the historical
-    ``b_beam_excitation = 1.4`` estimate (BEAM_DEPOSITION_PLAN WP-A):
+    ``b_beam_excitation = 1.4`` estimate (WP-A):
     sigma_tot / sigma_2P = 1.65-1.75 and E_rad_mean = 21.95-21.98 eV over
     the 60-180 eV beam range (``scripts/measure_beam_manifold.py``).
     """
@@ -746,12 +746,14 @@ def charge_ex_react(T, gas_type="He"):
 #   isotropic (polarization elastic):
 #       Qi = 7.63e-20 * E^-0.5                                          [m^2]
 #
-# Moment mapping used by the R4.3 reduced ion-neutral collision operator:
+# Moment mapping used by the R4.3 reduced ion-neutral collision operator. Both
+# rows are the transport (momentum-transfer) moment int (1 - cos th) dsigma of
+# the two components above -- nothing is fitted, and no constant enters that is
+# not on this page:
 #   sigma_cx = Qb                     (charge-exchange cross section)
 #   sigma_mt = Qi + 2*Qb              (momentum transfer: isotropic contributes
 #                                      int(1-cos th)=Qi, backscatter contributes
 #                                      (1-cos 180)=2 per unit -> 2*Qb)
-# See notes/SIM1D_MODEL_AUDIT_PLAN.md "R4.3 rate closure -- Phelps He+/He".
 
 _M2_TO_CM2 = 1.0e4
 _PHELPS_MU_G = 0.5 * m_He_cgs  # equal-mass He+/He reduced mass [g]
