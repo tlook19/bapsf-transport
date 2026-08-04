@@ -4,13 +4,13 @@ Diagnosed blocker -- the ES1 ignition-threshold shift:
 the repaired-stance ES config never ignites -- it sits in ``pre_breakdown`` at
 ``source_I_tot`` ~ 2.76 A (needs 150 A to leave prebreakdown) because the
 prebreakdown SEED is ~2.5x below the historical config that ignites. Measured at
-t = 2.2 ms, nx = 120: historical/golden collector density n_col ~ 9.8e8 (ignites)
+t = 0.2 ms, nx = 120: historical/golden collector density n_col ~ 9.8e8 (ignites)
 vs repaired-ES n_col ~ 4.0e8 (below threshold). Root cause is under-confinement of
 the seed; the fix is a FUELING / seed-retention lever, not raising T_s (I_loop is
 plasma-limited, invariant to T_s).
 
 PRE-REGISTERED ISOLATION (this script). Metric: collector-cell plasma density
-n_col at t = 2.2 ms (the seed), with source_I_tot and phase as ignition proxies.
+n_col at t = 0.2 ms (the seed), with source_I_tot and phase as ignition proxies.
 From the repaired-ES baseline, single-toggle each named suspect and add an
 all-three positive control that reverts toward the historical stance:
 
@@ -32,19 +32,44 @@ family:
   * none alone (only all3 recovers) -> combined under-confinement; a
     fueling / seed-retention lever is needed regardless.
 
+SAMPLING TIME. ``--t-probe`` is model time measured from t = 0, and under the
+sequencing stance -- ``tau_neutral_prebreakdown = 0.0``, the config default --
+t = 0 is DRIVE-ON: nothing is prepended in front of the plasma clock, so the
+metric samples the state 0.2 ms after the drive turns on. A nonzero
+``tau_neutral_prebreakdown`` inserts a neutral-only window ahead of drive-on and
+translates this axis by exactly that duration (``timing_defaults`` in
+core/config.py), so the metric time must move with it to keep naming the same
+physical point.
+
+QL-CUTOFF DIAGNOSTIC (secondary output, read-only). The CSDA beam's quasilinear
+drag channel is domain-limited: ``quasilinear_relaxation_length_cm`` returns inf
+-- no anomalous drag at all -- unless the beam is weak,
+``0 < n_b < 0.1 * n_e`` (cablp/funcs/_beam_deposition.py). Because the seed sets
+n_e, it can decide whether that channel exists during the early avalanche, so
+the probe reports when the cutoff releases and how much of the pre-ignition
+window sits under it. See ``ql_launch_cutoff`` for the exact quantity, which
+cell it is evaluated at, and what it does NOT cover.
+
 This is a diagnostic, not a solver change: no _sim1d/ edit, no gate, no baseline
 touch. Run from <repo>/cablp with the fenicsx-env interpreter.
 """
 
 import argparse
+import math
 import sys
 import time as _walltime
 
 import numpy as np
 
+from cablp.funcs._beam_deposition import (
+    beam_speed_cm_s,
+    quasilinear_relaxation_length_cm,
+)
 from cablp.solvers._sim1d import LAPDSim1D, default_config
+from cablp.solvers._sim1d.physics.cathode import beam_launch
 from cablp.solvers._sim1d.solver import ProgressPrinter1D
 from cablp.solvers._sim1d.results.io import save_result_hdf5
+from cablp.vars._cons import qe_SI
 
 # Reuse the REAL ES config so the probe cannot drift from the benchmark driver.
 from compare_sim1d_es1 import PARAM_OVERRIDES, FLAG_OVERRIDES
@@ -94,6 +119,84 @@ def build_config(variant, nx):
     return params, flags
 
 
+def ql_launch_cutoff(sim, res):
+    """Per-save quasilinear-cutoff state at the beam launch cell (READ-ONLY).
+
+    The CSDA module gives the beam an anomalous (quasilinear) drag channel only
+    inside the weak-beam domain: ``quasilinear_relaxation_length_cm(E, n_e,
+    n_b)`` returns ``inf`` -- i.e. NO anomalous drag -- unless ``n_e > 0`` and
+    ``0 < n_b < 0.1 * n_e``. This evaluates that condition, using the module's
+    own function so the constant is never restated here, at the LAUNCH cell of
+    the source-end ray, where the ray's flux and energy are exactly the cathode
+    solve's own recorded ``I_eth_star`` and ``phi_c``::
+
+        n_b = (source_I_eth_star / qe_SI) / (plasma_area_cm2[launch] * v_b(phi_c))
+
+    Nothing is re-solved: every input is read from the saved trajectory and the
+    geometry the run already built.
+
+    Returns ``(has_ray, released, nb_over_ne)``, each of length ``n_saves``:
+
+    has_ray     : a source-end CSDA ray was launched on that save (the solve
+                  ran, ``beam_csda_active``, and both recorded ray quantities
+                  are finite and positive). ``False`` means the QL question is
+                  moot on that save, not that the cutoff bound.
+    released    : ``has_ray`` AND the cutoff is RELEASED (l_QL finite, so the
+                  QL channel is live). ``has_ray and not released`` is the
+                  cutoff BINDING.
+    nb_over_ne  : n_b / n_e at the launch cell (NaN where ``has_ray`` is
+                  False); the cutoff binds at and above 0.1.
+
+    NOT COVERED, by construction: (i) cells downstream of the launch point --
+    the ray's energy decays through the march and the per-cell ``E_entry_eV``
+    is not among the saved datasets, so only the entry condition is
+    recoverable; (ii) the twin/end ray; (iii) the clumped beam
+    (``beam_clump_fraction > 0`` launches two rays carrying fractions of
+    Gamma0, which lowers each ray's n_b) -- clumping is off in every variant
+    this probe builds.
+    """
+    diag = res.cathode_diagnostics
+    launch = beam_launch(sim.geometry, end=0)[0]
+    area = float(np.asarray(sim.geometry.plasma_area_cm2, float)[launch])
+    phi_c = np.asarray(diag["source_phi_c"], float)
+    I_eth_star = np.asarray(diag["source_I_eth_star"], float)
+    csda = np.asarray(diag["beam_csda_active"], float)
+    ne = np.asarray(res.n, float)[:, launch]
+
+    n_saves = phi_c.size
+    has_ray = np.zeros(n_saves, dtype=bool)
+    released = np.zeros(n_saves, dtype=bool)
+    nb_over_ne = np.full(n_saves, np.nan)
+    for k in range(n_saves):
+        E0 = float(phi_c[k])
+        I0 = float(I_eth_star[k])
+        if csda[k] != 1.0 or not (math.isfinite(E0) and E0 > 0.0):
+            continue
+        if not (math.isfinite(I0) and I0 > 0.0):
+            continue
+        has_ray[k] = True
+        n_b = (I0 / qe_SI) / (area * beam_speed_cm_s(E0))
+        ne_k = float(ne[k])
+        nb_over_ne[k] = n_b / ne_k if ne_k > 0.0 else np.inf
+        released[k] = math.isfinite(
+            quasilinear_relaxation_length_cm(E0, ne_k, n_b)
+        )
+    return has_ray, released, nb_over_ne
+
+
+def pre_ignition_mask(phases):
+    """Boolean mask of the saves BEFORE the first ``main_discharge`` sample.
+
+    All-True when the run never reaches main_discharge, which is the expected
+    case for a probe truncated inside the seed window.
+    """
+    hits = np.flatnonzero(np.asarray(phases, dtype=str) == "main_discharge")
+    mask = np.ones(np.asarray(phases).size, dtype=bool)
+    if hits.size:
+        mask[hits[0]:] = False
+    return mask
+
+
 def probe(variant, nx, t_probe):
     params, flags = build_config(variant, nx)
     sim = LAPDSim1D(params, flags)
@@ -116,6 +219,14 @@ def probe(variant, nx, t_probe):
     phases = np.asarray(res.phase, dtype=str)
     t = np.asarray(res.time, float)
 
+    # QL-cutoff state over the pre-ignition window (read-only; see
+    # ql_launch_cutoff for exactly what is and is not covered).
+    has_ray, released, nb_over_ne = ql_launch_cutoff(sim, res)
+    pre = pre_ignition_mask(phases)
+    n_pre = int(np.count_nonzero(pre))
+    rel_hits = np.flatnonzero(released)
+    binding = pre & has_ray & ~released
+
     return {
         "variant": variant,
         "wall_s": wall,
@@ -129,6 +240,28 @@ def probe(variant, nx, t_probe):
         "n_col_max_cell": float(np.max(n[-1, col_mask])),
         "nn_col": nn[-1, col],
         "Te_col": Te[-1, col],
+        # --- QL cutoff at the beam launch cell -------------------------------
+        # Earliest save time [ms] at which the QL condition RELEASES (l_QL
+        # finite, anomalous channel live); NaN if it never releases in the run.
+        "ql_t_release_ms": (
+            float(t[rel_hits[0]] * 1e3) if rel_hits.size else float("nan")
+        ),
+        # Fraction of PRE-IGNITION saves on which a ray was launched and the
+        # cutoff BOUND (weak-beam domain violated -> no anomalous drag).
+        "ql_cutoff_frac": (
+            float(np.count_nonzero(binding)) / n_pre if n_pre else float("nan")
+        ),
+        # Fraction of pre-ignition saves with NO source ray at all -- the
+        # complement that keeps the cutoff fraction readable (a save with no
+        # ray is not "under cutoff", the QL question simply does not arise).
+        "ql_noray_frac": (
+            float(np.count_nonzero(pre & ~has_ray)) / n_pre
+            if n_pre
+            else float("nan")
+        ),
+        # n_b / n_e at the launch cell on the last save; the cutoff binds at
+        # and above 0.1. NaN when no ray was launched there.
+        "ql_nb_over_ne_last": float(nb_over_ne[-1]),
     }
 
 
@@ -192,8 +325,9 @@ def trace(variant, nx, out_h5, cached_path=None):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--nx", type=int, default=120)
-    ap.add_argument("--t-probe", type=float, default=2.2e-3,
-                    help="model (plasma) time to stop at [s]")
+    ap.add_argument("--t-probe", type=float, default=2.0e-4,
+                    help="model time to stop at [s], measured from drive-on "
+                         "when tau_neutral_prebreakdown = 0 (the default)")
     ap.add_argument("--variants", default="baseline,char_off,birth_legacy,sgp3400,all3")
     ap.add_argument("--trace", metavar="VARIANT", default=None,
                     help="run VARIANT to completion with progress instead of probing")
@@ -209,9 +343,13 @@ def main():
     variants = [v.strip() for v in args.variants.split(",") if v.strip()]
     print(f"# R5 ignition-seed isolation probe  nx={args.nx}  t_probe={args.t_probe*1e3:.3f} ms")
     print(f"# historical reference n_col ~ 9.8e8 (ignites); repaired-ES ~ 4.0e8 (below threshold)")
+    print("# QL cutoff read at the beam launch cell: binds when "
+          "n_b/n_e >= 0.1 (no anomalous drag)")
     hdr = ("variant", "phase", "main?", "I[A]", "Imax[A]", "n_col", "n_col/base",
-           "n_puff", "ncolmx", "nn_col", "Te_col", "wall[s]")
-    print(("{:<13}{:<14}{:<6}{:>9}{:>9}{:>11}{:>11}{:>11}{:>11}{:>11}{:>9}{:>9}").format(*hdr))
+           "n_puff", "ncolmx", "nn_col", "Te_col", "wall[s]",
+           "qlrel[ms]", "qlcutf", "qlnoray", "nb/ne")
+    print(("{:<13}{:<14}{:<6}{:>9}{:>9}{:>11}{:>11}{:>11}{:>11}{:>11}{:>9}{:>9}"
+           "{:>11}{:>8}{:>9}{:>11}").format(*hdr))
     sys.stdout.flush()
 
     base_ncol = None
@@ -221,10 +359,13 @@ def main():
             base_ncol = r["n_col"]
         ratio = r["n_col"] / base_ncol if base_ncol else float("nan")
         print(("{:<13}{:<14}{:<6}{:>9.2f}{:>9.2f}{:>11.3e}{:>11.2f}"
-               "{:>11.3e}{:>11.3e}{:>11.3e}{:>9.3f}{:>9.1f}").format(
+               "{:>11.3e}{:>11.3e}{:>11.3e}{:>9.3f}{:>9.1f}"
+               "{:>11.3f}{:>8.3f}{:>9.3f}{:>11.3e}").format(
             r["variant"], r["phase"], "Y" if r["ever_main"] else "n",
             r["I_A"], r["I_max_A"], r["n_col"], ratio, r["n_puff"],
-            r["n_col_max_cell"], r["nn_col"], r["Te_col"], r["wall_s"]))
+            r["n_col_max_cell"], r["nn_col"], r["Te_col"], r["wall_s"],
+            r["ql_t_release_ms"], r["ql_cutoff_frac"], r["ql_noray_frac"],
+            r["ql_nb_over_ne_last"]))
         sys.stdout.flush()
 
 
