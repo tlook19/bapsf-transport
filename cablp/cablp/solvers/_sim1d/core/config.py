@@ -15,15 +15,14 @@ def initial_condition_defaults():
         Uniform initial neutral density [cm^-3]. If ``None``, the value is
         looked up from the gas-puff table via ``resolve_nn0``.
 
-        This is the DIRECT-RUN fill only. The default (2e13) is a realistic
-        pre-shot background, so a bare ``LAPDSim1D(...).run()`` starts from a
-        physical fill instead of the near-vacuum 1e9 that only ever made sense
-        as a seed for the neutral equilibration. The equilibrated path
+        This is the DIRECT-RUN fill only. The equilibrated path
         (``neutral_equilibration`` via ``start_simulation``) does NOT read this
         value: ``run_neutral_equilibration`` pins its inner sim's start at the
         nn_table generator's 1e8 and overwrites nn with the equilibrated
         profile, so the two paths are decoupled and this default can move
         without disturbing any equilibrated run.
+
+        Provenance of the shipped value: ``config_defaults_provenance.md``.
     Te0:
         Uniform initial electron temperature [eV].
     Ti0:
@@ -31,25 +30,23 @@ def initial_condition_defaults():
     u0:
         Uniform initial axial plasma velocity [cm/s].
     Tn_fit:
-        DEPRECATED (R5 stance flip, 2026-07-25; superseded by the single
-        cold-gas ``Tn_K`` = 300 K, audit A8). Was the fitted neutral collision
-        temperature used by the legacy IAEA reaction-rate fits and the legacy
-        ion-neutral drag/thermalization/CX quartet -- all now retired under the
-        Phelps ``ion_neutral_moment_closure`` baseline. Dead on the production
-        path; the deferred M_n wall accommodation should read ``Tn_K``.
+        DEPRECATED; superseded by the single cold-gas ``Tn_K``. Was the neutral
+        collision temperature used by the legacy IAEA reaction-rate fits and the
+        legacy ion-neutral drag/thermalization/CX quartet -- all retired under
+        the Phelps ``ion_neutral_moment_closure`` baseline, so it is inert
+        whenever that flag is on. The deferred M_n wall accommodation should
+        read ``Tn_K``.
     """
     return {
         # --- ACTIVE (production) ---
         "gas_type": "He",
         "ne0": 1e9,
-        # Realistic pre-shot neutral background for DIRECT runs (2026-07-27).
-        # The equilibrated path never reads this (see the docstring above).
+        # Pre-shot neutral background for DIRECT runs. The equilibrated path
+        # never reads this (see the docstring above).
         "nn0": 2.0e13,
-        # Repaired startup stance: electrons begin just above the exact bundled
-        # He ADF11 edge (~0.200092 eV); ions begin cold at ~300 K, essentially
-        # the fill temperature (R5 stance flip), consistent with the
-        # Ti_floor=300 K and the single cold-gas Tn_K. A hair above the floor so
-        # the raw-stage validator's strict Ti0 > Ti_floor holds (the floor is a
+        # Te0 sits just above the bundled He ADF11 low-Te edge (~0.200092 eV),
+        # below which the rate lookups clamp. Ti0 sits a hair above Ti_floor so
+        # the raw-stage validator's strict Ti0 > Ti_floor holds (that floor is a
         # numerical positivity floor, not a temperature assertion).
         "Te0": 0.21,
         "Ti0": 0.026,
@@ -125,8 +122,8 @@ def geometry_defaults():
         surface]; the region runs from the anode face at ``cathode_anode_gap_cm``
         to here and must lie strictly between the anode face and the collector
         block (``Lm - collector_length_cm``). ``None`` when off. Requires the
-        default-off ``source_fixed_grid`` flag. Production intent is 100.0, an
-        interim geometry pending CAD.
+        default-off ``source_fixed_grid`` flag. For the value the campaign
+        stance sets, see ``scripts/production_stance_provenance.md``.
     source_region_dz_cm:
         Cell size [cm] inside that source region, held fixed independently of
         ``nx``; the region length minus the anode gap must be an integer
@@ -137,8 +134,6 @@ def geometry_defaults():
         "Lm": 2000.0,
         "nx": 60,
         "Rm": 50.0,
-        # Measured LAPD plasma-column radius (R5 stance flip: default now matches
-        # the ES production value, ending a silent per-run override).
         "Rp": 15.0,
         "plenum_length_cm": 100.0,
         "cathode_anode_gap_cm": 50.0,
@@ -168,17 +163,18 @@ def floor_defaults():
         Minimum electron temperature recovered from conservative energy [eV].
     Ti_floor:
         Minimum ion temperature recovered from conservative energy [eV].
-        R5 stance flip (2026-07-25): relaxed to 300 K (0.02585 eV). The Phelps
-        ``ion_neutral_moment_closure`` collision operator is thermal-valid with
-        no 0.1 eV clamp; the only 0.1-eV-requiring consumer was the retired
-        legacy IAEA CX table (audit R5.3 Ti-floor audit). All remaining Ti
-        consumers (kappa_par_ion, pressure, sound speed) need only Ti > 0.
+        The Phelps ``ion_neutral_moment_closure`` collision operator is
+        thermal-valid with no 0.1 eV clamp; the only consumer that required
+        0.1 eV was the retired legacy IAEA CX table. All remaining Ti consumers
+        (kappa_par_ion, pressure, sound speed) need only Ti > 0.
     Te_floor:
         Minimum electron temperature recovered from conservative energy [eV].
-        Kept at 0.1 (below the ADF11 0.2 eV edge so the afterglow can cool; the
-        electron floor is governed by A18, not the CX fix). The exploratory
-        deep-afterglow recipe lowered it to 300 K, but that recipe is RETIRED
-        (Tom, 2026-07-27) -- see the module note below for why.
+        Sits below the ADF11 0.2 eV edge so the afterglow can cool. Lowering it
+        toward the neutral-gas temperature is only meaningful together with the
+        sub-edge ADAS extension -- see the RETIRED recipe in the module note
+        below, which must not be run.
+
+    Values and their provenance: ``config_defaults_provenance.md``.
     """
     return {
         "ne_floor": 1e8,
@@ -188,24 +184,23 @@ def floor_defaults():
     }
 
 
-# Exploratory deep-afterglow low-Te recipe (R5.3/A18, documented 2026-07-25):
-# to run the electron floor down to the neutral-gas temperature, set
-#   Te_floor = 0.02585  +  flags adas_low_te_extension=True, icool_recomb=True
-# The R5.3 fix makes acd (recombination) AND prb1 (recombination radiation)
-# extend consistently below the 0.2 eV ADF11 edge; scd (ionization) and plt
-# (line power) still clamp there but are exponentially dead at <0.2 eV, so a
-# recombining 300 K afterglow is well represented. This is also the vehicle for
-# the deferred A18b (time-dependent CR-memory) bracket.
+# Deep-afterglow low-Te recipe -- RETIRED, DO NOT RUN.
 #
-# RECIPE RETIRED (Tom, 2026-07-27). DO NOT RUN icool_recomb TOGETHER WITH
-# adas_low_te_extension. The two compose destructively: icool_recomb charges
-# bare PRB (the double-charge warned about at recombination_energy_return
-# below), and adas_low_te_extension amplifies the sub-edge PRB by ~9,300x, so
-# the electron fluid runs away thermally to the floor and the electron_cooling
-# timestep bound collapses permanently (diagnostician, campaign log
-# 2026-07-27). The consistent net booking (I_ion*S_rec - P_PRB) that would
-# have made the pair sound was NOT built -- the recipe was retired instead.
-# The afterglow validity-window stance is Te > 0.2 eV (the ADF11 edge).
+# The recipe was: lower Te_floor to the neutral-gas temperature (0.02585) and
+# set flags adas_low_te_extension=True, icool_recomb=True. The extension makes
+# acd (recombination) and prb1 (recombination radiation) extend consistently
+# below the 0.2 eV ADF11 edge; scd (ionization) and plt (line power) still
+# clamp there but are exponentially dead at <0.2 eV, so a recombining 300 K
+# afterglow would be well represented.
+#
+# DO NOT RUN icool_recomb TOGETHER WITH adas_low_te_extension. The two compose
+# destructively: icool_recomb charges bare PRB (the double-charge warned about
+# at recombination_energy_return below), and adas_low_te_extension amplifies
+# the sub-edge PRB by ~9,300x, so the electron fluid runs away thermally to the
+# floor and the electron_cooling timestep bound collapses permanently. The
+# consistent net booking (I_ion*S_rec - P_PRB) that would make the pair sound
+# is NOT built. Without it the afterglow validity window is Te > 0.2 eV (the
+# ADF11 edge).
 
 
 def neutral_source_defaults():
@@ -216,11 +211,10 @@ def neutral_source_defaults():
     Twin_S_gp:
         End-side gas puff flow used when ``TwinCathode`` is enabled [sccm].
     gas_puff_mode:
-        Phase-dependent gas-puff schedule. ``"square"`` (default, R5 stance
-        flip) is the measured valve waveform: flat at ``S_gp`` between
-        hardware-boxed erf edges (see below). The remaining modes are
-        DEPRECATED (retained runnable for the frozen waveform-comparison
-        figures; non-default use warns):
+        Phase-dependent gas-puff schedule. ``"square"`` (default) holds the
+        flow flat at ``S_gp`` between an opening and a closing erf edge (see
+        below). The remaining modes are DEPRECATED (retained runnable for the
+        frozen waveform-comparison figures; non-default use warns):
         ``"decay_after_breakdown"`` for steady puffing until optional decay
         after breakdown/main-discharge start,
         ``"pulse_decay_to_level"`` for a full-rate pulse followed by decay
@@ -281,14 +275,13 @@ def neutral_source_defaults():
         explicit RHS and the implicit neutral matrix, so the two sites
         cannot desync.
     gas_puff_z_cm:
-        Distributed-puff centre [cm, machine coordinates]. Defaults to the
-        physical pipe position, 60 cm (anode + 10); ``None`` falls back to
-        whichever cell currently holds the ``puff`` role. Mirrored through the
-        chamber midpoint for the twin puff. Pinning it in machine coordinates
-        (f=0.1 stance, 2026-07-27) is what makes an nx refinement a resolution
-        study: with ``None`` the source centre follows the puff cell's centre,
-        so changing nx silently moves the source. Ignored by the ``"cell"``
-        profile, which puts the whole flow in the role-tagged cell.
+        Distributed-puff centre [cm, machine coordinates]; ``None`` falls back
+        to whichever cell currently holds the ``puff`` role. Mirrored through
+        the chamber midpoint for the twin puff. Pinning it in machine
+        coordinates is what makes an nx refinement a resolution study: with
+        ``None`` the source centre follows the puff cell's centre, so changing
+        nx silently moves the source. Ignored by the ``"cell"`` profile, which
+        puts the whole flow in the role-tagged cell.
     gas_puff_sigma_cm:
         Gaussian puff axial width [cm].
     gas_puff_throw_cm:
@@ -300,52 +293,50 @@ def neutral_source_defaults():
         (BOUNDARY_REGIONS_PLAN.md §4). Applies only to a pump sitting on a plenum
         cell, so it is inert in legacy geometry. ``None`` (default) or a
         non-positive value means no elbow restriction -- the legacy limit.
+
+    Values and their provenance: ``config_defaults_provenance.md``.
     """
     return {
-        # --- ACTIVE (production: square waveform + pump) ---
-        # S_gp is the one puff calibration constant; default = the M6/baseline
-        # value. NB the ES1 refit co-tunes S_gp with the cathode power balance
-        # (S_gp -> ne -> discharge current feedback).
+        # --- ACTIVE (square waveform + pump) ---
+        # S_gp is the one free constant of the puff model; every other quantity
+        # in the waveform is a hardware timing. It feeds back on the discharge
+        # through S_gp -> ne -> current.
         "S_gp": 3400,
         "Twin_S_gp": 3400,
         "gas_puff_mode": "square",
-        # "square" waveform (the measured valve behaviour, 2026-07-21): the
-        # piezo is driven by a square voltage pulse from the SAME trigger
-        # that closes the cathode circuit, held for the discharge; the
-        # 45 PSI 1/4" supply line is hydraulically stiff (conductance and
-        # stored inventory orders beyond the delivery), so the flow is FLAT
-        # at S_gp with only the piezo-opening/entry-transit erf edges.
-        # Rise center/width and close lag are hardware-boxed (~0.5-1 ms),
-        # NOT fit knobs; S_gp is the one calibration constant (sccm-vs-
-        # drive-voltage is uncalibrated). The close tail runs into the
-        # afterglow. Rise anchors on circuit-on (end of the neutral-
-        # prebreakdown phase); breakdown rides the inter-shot residual
-        # fill, matching the machine sequencing.
+        # "square" waveform edge timings. The piezo is driven by a square
+        # voltage pulse from the SAME trigger that closes the cathode circuit
+        # and is held for the discharge, so the flow is FLAT at S_gp with only
+        # the piezo-opening/entry-transit erf edges. The rise ANCHORS ON
+        # circuit-on (the end of the neutral-prebreakdown phase), not on
+        # breakdown, so breakdown rides the inter-shot residual fill; the close
+        # lag delays the closing edge past the end of the main discharge, so
+        # the close tail runs into the afterglow. These three are hardware
+        # timings, not fit knobs.
         "gas_puff_rise_center_s": 5e-4,
         "gas_puff_rise_width_s": 5e-4,
         "gas_puff_close_lag_s": 5e-4,
-        # S_pump_L matches S_pump_R (R5 stance flip): the plenum aperture, not
-        # the pump speed, throttles the source-side rate.
+        # S_pump_L matches S_pump_R: the plenum aperture, not the pump speed,
+        # throttles the source-side rate.
         "S_pump_L": 4000,
         "S_pump_R": 4000,
         "gas_puff_enabled": True,
         "pump_enabled": True,
         "gas_puff_valves": 2,
         "pump_elbow_conductance_lps": None,
-        # Physical Lambertian pipe source ~10 cm in front of the anode
-        # (geometry-derived, no tuning) -- default and production.
+        # Physical Lambertian pipe source ~10 cm in front of the anode; its
+        # centre and width are geometry-derived, not tunable.
         "gas_puff_profile": "cosine_pipe",
-        # The physical pipe position, in machine coordinates so it does not
-        # move with nx (f=0.1 stance, 2026-07-27).
+        # The pipe position, in machine coordinates so it does not move with nx.
         "gas_puff_z_cm": 60.0,
         "gas_puff_sigma_cm": 50.0,
         "gas_puff_throw_cm": 100.0,
         # Fresh-puff fractional-coverage local ionization (default 0 = OFF,
         # bit-exact). Fraction of the localized gas-puff neutral source that is
-        # ionized IN PLACE (the dense spotty jet -- 45 psi line / 1/4" choke /
-        # KF40 jet -> ~1-2e15 cm^-3, boxed -- has a short beam/bulk mfp, so it
-        # burns to a localized plasma seed that launches the sonic accumulation
-        # front) instead of spreading into the background nn. The diverted
+        # ionized IN PLACE (the dense spotty jet has a short beam/bulk mfp, so
+        # it burns to a localized plasma seed that launches the sonic
+        # accumulation front) instead of spreading into the background nn. The
+        # diverted
         # neutrals are debited from the puff and booked as ionization with the
         # bulk-reaction birth + I_ion cost (mass/energy conserving); it rides the
         # puff shape+waveform so it is auto-localized and relaxes with the ~1 ms
@@ -377,35 +368,14 @@ def timing_defaults():
         of this window, so a positive value delays the whole discharge by
         exactly that much.
 
-        DEFAULT 0.0 -- THE MACHINE HAS NO PRE-DRIVE WINDOW (Tom, hardware
-        authority, 2026-08-03, boxed). The LAPD fires ONE global trigger: the
-        capacitor bank is connected and the gas puff starts at the same
-        instant, and the bank-connect step is directly visible in all 64 shots
-        as a single-sample 0 -> full-bank voltage step. There is no interval
-        in which neutrals accumulate with the drive withheld, so the model
-        must not run one either. This is a statement about the DEVICE, which
-        is why it lives here with the other measured/physical values and NOT
-        in the campaign's stance overrides -- ``compare_sim1d_es1`` inherits
-        it and carries no pin, exactly as it inherits the measured
-        ``cathode_Ts_base_K``.
-
-        The previous 0.002 default was a run-sequencing artifact with no
-        hardware counterpart, and it sat at the scale of a whole bracket step
-        in the WP-E timing comparison. It was also measurably INERT on the
-        production reference -- across those 2 ms the neutral inventory built
-        0.031% and the plasma changed 0.000% (it sits at the ``ne0`` = 1e9
-        seed), because the 25 ms neutral equilibration had already made the
-        fill -- so removing it is a pure 2 ms sequencing shift. Validated at
-        ``es1_seqfix_local_nx240``: ignition 2.5913 -> 0.5968 ms against a
-        pre-registered 0.591 +/- 0.010 ms gate, with the scorer identical on
-        every stage row except peak current 3017 -> 3016 A (ratio unchanged
-        at 1.000).
-
         A POSITIVE VALUE IS AN OPT-IN for studies that specifically want a
-        neutral-only accumulation phase; it is not the production stance. Zero
-        disables the pre-phase entirely. The ``neutral_prebreakdown`` flag
-        stays on by default and gates the machinery, so setting this duration
-        alone is enough to get the phase back.
+        neutral-only accumulation phase. Zero disables the pre-phase entirely.
+        The ``neutral_prebreakdown`` flag stays on by default and gates the
+        machinery, so setting this duration alone is enough to get the phase
+        back.
+
+        For why the default is what it is, see
+        ``config_defaults_provenance.md``.
     tau_breakdown:
         Scheduled breakdown duration before main discharge when not using
         current-triggered transitions [s].
@@ -421,12 +391,11 @@ def timing_defaults():
         window is ``tau_discharge``, i.e. the equilibration inherits the
         MAIN-DISCHARGE duration as its puff width.
 
-        That inheritance is a double duty with no physical basis. The measured
-        hardware quantity (Tom, 2026-07-29, boxed): the ES1-4 total gas-puff
-        pulse width was ~25 ms -- the operator fires the valve, waits out the
-        machine breakdown delay (~4-6 ms), holds 20 ms from 1 kA, and rounds
-        up. It is measurable from the V_dis traces, so this number is
-        refinable, not fitted.
+        That inheritance is a double duty with no physical basis: the
+        equilibration's puff window is the machine's total gas-puff pulse
+        width, an independent hardware quantity. Set it explicitly to decouple
+        the two (see ``scripts/production_stance_provenance.md`` for the value
+        the campaign stance uses).
 
         Read ONLY by the ``Plasma=False`` equilibration inner sim; the main
         run's puff is closed by its own waveform envelope, never by this
@@ -458,13 +427,13 @@ def timing_defaults():
         it is retained for the sweep drivers that classify a point from that
         exception. Only consulted under
         ``phase_transition_mode="current"`` (the scheduled scheduler has no
-        breakdown trigger to miss). The 0.05 s ``tau_prebreakdown`` value
-        itself is hardware-boxed and is not a knob.
+        breakdown trigger to miss).
+
+    Values and their provenance: ``config_defaults_provenance.md``.
     """
     return {
         "tau_prebreakdown": 0.05,
-        # 0.0 = no pre-drive window; the machine's single global trigger
-        # starts the puff and connects the bank together. See the docstring.
+        # 0.0 disables the neutral-only pre-drive window entirely.
         "tau_neutral_prebreakdown": 0.0,
         "tau_breakdown": 0.0,
         "tau_discharge": 20e-3,
@@ -517,11 +486,10 @@ def model_mode_defaults():
         closure.
     hyperbolic_wave_speed:
         Signal speed used by both the Rusanov dissipation ``a_max`` and the
-        plasma CFL. ``"isothermal"`` (default) is the historical gamma=1 Bohm
-        speed ``sqrt(Te/m_i)``; ``"adiabatic"`` is the exact linear acoustic
-        speed of the implemented gamma=5/3 two-species ideal-gas energy system,
-        ``sqrt((5/3)(Te+Ti)/m_i)`` (audit A3 / R2 spectral-radius repair). The
-        historical golden pins ``"isothermal"`` and stays bit-exact.
+        plasma CFL. ``"isothermal"`` is the historical gamma=1 Bohm
+        speed ``sqrt(Te/m_i)``; ``"adiabatic"`` (default) is the exact linear
+        acoustic speed of the implemented gamma=5/3 two-species ideal-gas
+        energy system, ``sqrt((5/3)(Te+Ti)/m_i)``.
     D_amb_model:
         Ambipolar diffusion coefficient model. ``"cs_dz"`` is retained for
         _sim3 compatibility; the current conservative flux closure does not
@@ -542,14 +510,14 @@ def model_mode_defaults():
         use the local ion temperature, ``"floor"`` to use the ion temperature
         floor, or a numeric eV value.
     ionization_birth_energy_model:
-        How ionization births book their energy moments (SIM1D_MODEL_AUDIT_PLAN
-        R4, audit A14). ``"legacy"`` (default, historical): the electron birth
-        adds ``3/2 Te_birth S_ion`` to ``Ee`` and the ion birth adds
-        ``3/2 Ti_birth S_ion`` to ``Ei``; under ``Te_birth_ionization="local"``
-        the electron term creates ``3 Te/2`` of thermal energy per new electron
-        (+43.1 kW on the settled artifact), cancelling 92% of the ionization
+        How ionization births book their energy moments. ``"legacy"``
+        (historical): the electron birth adds ``3/2 Te_birth S_ion`` to ``Ee``
+        and the ion birth adds ``3/2 Ti_birth S_ion`` to ``Ei``; under
+        ``Te_birth_ionization="local"`` the electron term creates ``3 Te/2`` of
+        thermal energy per new electron, cancelling most of the ionization
         potential cost -- unphysical (a new electron carries no kinetic energy).
-        ``"conservative"``: reconciles bulk (and beam) births to the defensible
+        ``"conservative"`` (default): reconciles bulk (and beam) births to the
+        defensible
         ``Ee = 0`` convention the beam already uses -- the new electron is born
         cold, so ``Te`` falls by dilution -- and books the ion mass-loading
         relative-drift mixing energy ``1/2 m (u_i - u_n)^2 S_ion`` to ``Ei``
@@ -557,7 +525,7 @@ def model_mode_defaults():
         consumed neutral's energy instead of losing the drift energy through the
         bulk kinetic derivative. Under ``"conservative"`` the
         ``Te_birth_ionization`` selector is inert (the electron birth energy is
-        physically zero). Default ``"legacy"`` keeps the golden bit-exact.
+        physically zero).
     neutral_exchange_model:
         Axial neutral transport model. ``"constant"`` uses a fixed coefficient.
 
@@ -592,28 +560,27 @@ def model_mode_defaults():
         second-order *and* L-stable, so it rings far less than Crank-Nicolson
         at twice the solve cost, though it is not monotone like backward
         Euler). Ignored when the operator-split path is disabled.
+
+    Values and their provenance: ``config_defaults_provenance.md``.
     """
     return {
-        # --- ACTIVE (production) ---
+        # --- ACTIVE ---
         "front_flux_model": "sonic_relaxation",
-        # R5 STANCE FLIP (2026-07-25): "adiabatic" is now the default -- the A3
-        # spectral-radius repair that PAIRS with hyperbolic_energy_consistent
-        # (R2). Historical golden pins "isothermal".
+        # "adiabatic" PAIRS with hyperbolic_energy_consistent: same gamma=5/3
+        # energy system, so the signal speed matches the flux.
         "hyperbolic_wave_speed": "adiabatic",
         "end_mode": "collector",
         "Ti_birth_ionization": "floor",
-        # R5 STANCE FLIP (2026-07-25): "conservative" is now the production
-        # default (audit A14 correctness fix -- no spurious 3Te/2 electron birth;
-        # ion mass-loading mixing energy booked). Historical golden pins "legacy".
+        # "conservative": no spurious 3Te/2 electron birth energy; ion
+        # mass-loading mixing energy booked explicitly.
         "ionization_birth_energy_model": "conservative",
         "neutral_exchange_model": "knudsen",
         "neutral_model": "moment",
-        # R5 STANCE FLIP (2026-07-25): 2nd-order operator-split defaults (pair
-        # with heat_picard_iterations=2). Historical golden pins lie /
-        # backward_euler.
+        # 2nd-order operator-split pair; both are needed together with
+        # heat_picard_iterations > 0 for the step to reach second order.
         "operator_splitting": "strang",
         "implicit_heat_scheme": "tr_bdf2",
-        # --- INERT on the production path (kept for the A/B arms) ---
+        # --- INERT under these defaults (kept for the A/B arms) ---
         # Dead under ionization_birth_energy_model="conservative" (electron
         # birth energy is physically zero):
         "Te_birth_ionization": "local",
@@ -643,9 +610,8 @@ def fudge_factor_defaults():
     D_amb:
         Constant ambipolar diffusion coefficient when selected [cm^2/s].
     atomic_rate_model:
-        Source of the He atomic rate coefficients. ``"adas"`` (default as of
-        2026-07-20 -- the rates are trusted, citable inputs and are not to be
-        tuned; see THESIS_NOTES §2) uses the OPEN-ADAS GCR '96 effective
+        Source of the He atomic rate coefficients. ``"adas"`` (default) uses
+        the OPEN-ADAS GCR '96 effective
         coefficients (``cablp/vars/adas``, see its README): SCD ionization
         (includes the stepwise/metastable channel the direct rate lacks --
         up to ~3-6x at 3-5 eV, LAPD densities), ACD recombination (includes
@@ -655,12 +621,10 @@ def fudge_factor_defaults():
         ``ionization_energy_cost`` term; the IAEA He I fit is not -- it
         already contains the ionization-potential loss, which ``"janev"``
         with ``b_Qen`` near 1 double-counts. ``"janev"`` (the historical
-        behaviour, and the default before 2026-07-20) uses the direct
-        ground-state ionization rate, the separate radiative/three-body
-        recombination coefficients, and the IAEA cooling fits; the golden
-        baseline pins it explicitly (``scripts/baseline_sim1d.py``).
-        ``"adas"`` is wired for ``gas_type = "He"`` only -- hydrogen configs
-        must set ``"janev"`` or the solver raises at construction.
+        behaviour) uses the direct ground-state ionization rate, the separate
+        radiative/three-body recombination coefficients, and the IAEA cooling
+        fits. ``"adas"`` is wired for ``gas_type = "He"`` only -- hydrogen
+        configs must set ``"janev"`` or the solver raises at construction.
     b_ioniz:
         Bulk ionization particle source scale factor.
     b_rec_rad:
@@ -692,12 +656,6 @@ def fudge_factor_defaults():
         Electron axial heat-conduction scale factor.
     b_ipara:
         Ion axial heat-conduction scale factor.
-    b_ionization_energy_cost:
-        Electron energy cost scale for ionization potential losses.
-    b_pressure_work_elec:
-        Electron pressure-work source scale factor.
-    b_pressure_work_ions:
-        Ion pressure-work source scale factor.
     b_surface_loss:
         Plasma surface neutralization/loss scale factor.
     b_ion_neutral_drag:
@@ -776,13 +734,12 @@ def fudge_factor_defaults():
     alpha_isat:
         Ion-saturation/surface-loss coefficient.
     source_surface_area_scale:
-        DEPRECATED (A13/R3.3, 2026-07-24): 0D artifact that stood in for
-        un-separated cathode/anode I_sat. The resolved geometry measures the
-        Bohm I_sat to each electrode face directly, so this multiplier has no
-        operator to control and is never consumed; non-default use warns.
+        DEPRECATED: 0D artifact that stood in for un-separated cathode/anode
+        I_sat. The resolved geometry measures the Bohm I_sat to each electrode
+        face directly, so this multiplier has no operator to control and is
+        never consumed; non-default use warns.
     end_surface_area_scale:
-        DEPRECATED (A13/R3.3, 2026-07-24): 0D artifact, see
-        ``source_surface_area_scale``.
+        DEPRECATED: 0D artifact, see ``source_surface_area_scale``.
     b_anode_collection:
         Multiplier on the resolved anode collection sink. This was formerly
         available only through an unregistered ``dict.get`` fallback.
@@ -790,37 +747,39 @@ def fudge_factor_defaults():
         Fraction of the anode face treated as blocked by the mesh for
         advective transport. This was formerly available only through an
         unregistered ``dict.get`` fallback.
+
+    Values and their provenance: ``config_defaults_provenance.md``.
     """
-    # R5 stance flip (2026-07-25): the atomic-rate / cooling / conduction scale
-    # factors are rendered INERT (superseded -- ADAS and the Phelps operator are
-    # definitive, and a single uniform multiplier is not a physical knob; the
-    # Te-dependent b_Q*_Te_exp hooks are the honest correction and stay off).
-    # They remain READABLE via the solver's .get(key, 1.0) so the "janev" A/B
-    # arm, the historical golden, and the =0 disable diagnostics still work;
-    # deprecation is deferred to the post-ES1 cleanup. The must-be-1 STRUCTURAL
-    # constants (b_pressure_work_elec/ions, b_ionization_energy_cost) are REMOVED
-    # entirely -- the solver hardwires 1.0; exposing a knob that must be 1 is a
-    # footgun. See notes/R5_STANCE_FLIP_HANDOFF.md.
+    # The atomic-rate / cooling / conduction scale factors are INERT under the
+    # shipped defaults: ADAS and the Phelps collision operator supply those
+    # channels directly, and a single uniform multiplier is not a physical
+    # knob (the Te-dependent b_Q*_Te_exp hooks are the honest correction and
+    # ship off). They remain READABLE via the solver's .get(key, 1.0), so the
+    # "janev" A/B arm and the "=0 to disable a term" diagnostics still work.
+    #
+    # The must-be-1 STRUCTURAL constants (b_pressure_work_elec,
+    # b_pressure_work_ions, b_ionization_energy_cost) are NOT registered at
+    # all -- the solver hardwires 1.0, and resolve_config rejects them as
+    # unknown keys. Exposing a knob that must be 1 is a footgun.
     return {
-        # --- ACTIVE (production coefficients) ---
+        # --- ACTIVE coefficients ---
         "atomic_rate_model": "adas",
-        "b_surface_loss": 1.0,      # functional: =0 disables the R3.1 boundary sink
-        "b_presheath_length": 1.0,  # R3.1 presheath depth (load-bearing)
+        "b_surface_loss": 1.0,      # functional: =0 disables the boundary sink
+        "b_presheath_length": 1.0,  # presheath depth (load-bearing)
         "alpha_isat": 0.6065306597126334,
         "b_anode_collection": 1.0,
         "b_anode_advective_block": 0.0,
-        # alpha_front is ACTIVE only if the front_flux flag is on; front_flux is
-        # now OFF by default (R2 G7), so this is effectively inert.
+        # alpha_front is ACTIVE only if the front_flux flag is on; front_flux
+        # ships OFF, so this is inert by default.
         "alpha_front": 1.0,
-        # Ion-neutral momentum-transfer rate feeding the R3.1 presheath depth
-        # (electrode_sheath_alpha). R5 stance flip: "phelps" (the definitive
-        # cross section, same physics as ion_neutral_moment_closure, He-only)
-        # is the default; "constant"/"cx_derived" are legacy A/B arms and
-        # sigma_in_cm2 is inert on production. Historical golden pins cx_derived.
+        # Ion-neutral momentum-transfer rate, which also feeds the presheath
+        # depth (electrode_sheath_alpha). "phelps" is the same cross section
+        # ion_neutral_moment_closure uses (He-only); "constant"/"cx_derived"
+        # are the A/B arms, and sigma_in_cm2 is read by "constant" only.
         "sigma_in_cm2": 5.0e-15,
         "sigma_in_model": "phelps",
         # --- INERT: superseded rate/cooling/conduction scales, locked at 1
-        # (kept readable for the janev A/B, historical golden, and =0 disable) ---
+        # (kept readable for the janev A/B and the =0 disable diagnostics) ---
         "b_ioniz": 1.0,
         "b_rec_rad": 1.0,
         "b_rec_3b": 1.0,       # also: ACD already includes three-body under adas
@@ -831,7 +790,7 @@ def fudge_factor_defaults():
         "b_Qei_Te_exp": 0.0,   # the honest Te-dependent hooks, off
         "b_Qen_Te_exp": 0.0,
         "b_Q_Te_ref_eV": 5.0,
-        "b_epara": 1.0,        # real conduction knob is the R5.2 flux limiter
+        "b_epara": 1.0,        # the real conduction knob is the flux limiter
         "b_ipara": 1.0,
         "D_amb": 0.0,          # dead with the deprecated D_amb_model
         # GCR-consistent recombination energy booking (default-off closure
@@ -844,25 +803,23 @@ def fudge_factor_defaults():
         # construction refuses the combination and requires atomic_rate_model=
         # "adas". adf11 grid bottoms at 0.2 eV; lookups clamp there.
         #
-        # RETIRED (Tom, 2026-07-27): the consistent net booking
-        # (I_ion*S_rec - P_PRB) was never built, so icool_recomb still charges
-        # bare PRB. Paired with adas_low_te_extension -- which amplifies the
-        # sub-edge PRB by ~9,300x -- that double-charge drives a thermal
-        # runaway to the Te floor and a permanent electron_cooling
-        # timestep-bound collapse (diagnostician, campaign log 2026-07-27).
-        # DO NOT RUN icool_recomb TOGETHER WITH adas_low_te_extension; the
-        # deep-afterglow recipe that combined them is retired and the afterglow
-        # validity-window stance is Te > 0.2 eV.
+        # NOT BUILT: the consistent net booking (I_ion*S_rec - P_PRB), so
+        # icool_recomb still charges bare PRB. Paired with
+        # adas_low_te_extension -- which amplifies the sub-edge PRB by
+        # ~9,300x -- that double-charge drives a thermal runaway to the Te
+        # floor and a permanent electron_cooling timestep-bound collapse. DO
+        # NOT RUN icool_recomb TOGETHER WITH adas_low_te_extension; see the
+        # retired recipe in the module note above.
         "recombination_energy_return": False,
         # --- INERT: default-off instruments / neutral ladder ---
-        # R5.2/A9 electron heat-flux limiter (read only when the
+        # Electron heat-flux limiter (read only when the
         # electron_heat_flux_limit flag is on): free-streaming fraction f in
         # q_sat = f*n*Te*v_the, the harmonic (Cowie-McKee) saturation cap.
         "heat_flux_limiter_f": 0.3,
-        # Non-local Knudsen exponent p for the A9 electron heat-flux limiter
-        # (read only when electron_heat_flux_limit is on). lambda = 1/(1+Kn^p)
-        # with Kn = q_SH/q_sat. p=1.0 (default) is the harmonic Cowie-McKee A9,
-        # bit-exact. p>1 suppresses the steep-gradient (high-Kn, non-local)
+        # Non-local Knudsen exponent p for that limiter (read only when
+        # electron_heat_flux_limit is on). lambda = 1/(1+Kn^p)
+        # with Kn = q_SH/q_sat. p=1.0 (default) is the harmonic Cowie-McKee
+        # form. p>1 suppresses the steep-gradient (high-Kn, non-local)
         # startup flux much harder while leaving the shallow-gradient established
         # column near-Spitzer -- the startup-front pre-heating vs established-
         # column trade a single free-streaming factor cannot separate.
@@ -871,7 +828,7 @@ def fudge_factor_defaults():
         # neutral_momentum flag; the deferred ladder).
         "neutral_momentum_radial": "uniform",
         # --- DEPRECATED: legacy ion-neutral drag (superseded by the Phelps
-        # ion_neutral_moment_closure baseline) + A13 area scales. Warn on
+        # ion_neutral_moment_closure) + the 0D area scales. Warn on
         # non-default/active use; retained runnable for reproducibility. ---
         "b_ion_neutral_drag": 1.0,
         "ion_neutral_drag_model": "constant",
@@ -896,66 +853,75 @@ def cathode_defaults():
         ``J = C_R T^2 exp(-e phi_wf/(kB T))``. Not the Richardson-Dushman
         universal (120): the cathode literature treats this prefactor as an
         effective constant absorbing surface state, patch fields and the
-        non-ideal emitting fraction, and the default ``29`` is the nominal
-        LaB6 value in that sense. **This is where the ES cathode calibration
-        lives** (reparameterized 2026-07-29): the production stance
-        (``compare_sim1d_es1.PARAM_OVERRIDES``) carries a derived effective
-        value, and ``cathode_Ts_base_K`` is held at its measured number.
-        See that comment block for the derivation -- the two are the same
-        flat direction (~100 K of standby per e-fold of emission, §3b), so
-        do NOT calibrate both.
+        non-ideal emitting fraction.
+
+        ``C_R`` and ``cathode_Ts_base_K`` are DEGENERATE in this expression --
+        a change in the prefactor trades against a change in surface
+        temperature along one flat direction -- so a configuration must not
+        move both to represent the same emission. Values and their provenance:
+        ``config_defaults_provenance.md`` and, for the campaign stance,
+        ``scripts/production_stance_provenance.md``.
     R_comp:
         External/compliance resistance [Ohm]. The full loop series resistance.
-        It does NOT set the discharge current: at the ES1 production point
-        ``dlnI/dlnR_comp = -0.0034`` frozen and -0.017 coupled -- the emission
-        ceiling sets the current, and ``R_comp`` sets the voltage headroom.
-        MEASURED (2026-08-03), not fitted: a V0-pinned four-rung constrained
-        refit over ES1-ES4 gives ``7.2244e-3`` Ohm (rungs agreeing to 1.8%),
-        superseding the near-singular ES1-only free fit that gave 5.72e-3
-        (see ``scripts/fit_es1_circuit.py``, now annotated as superseded).
-        ``R_comp`` and ``C_bank_F`` come from ONE joint fit and must move
-        together: 7.2244 mOhm is the value self-consistent with C = 9.5187 F.
-        (Pinning C = 8.40 F instead would pair with R = 7.079 mOhm.)
+        It does NOT set the discharge current -- the emission ceiling does;
+        ``R_comp`` sets the voltage headroom, and the loop current is only
+        weakly sensitive to it. ``R_comp`` and ``C_bank_F`` are jointly
+        determined and must move together; see
+        ``config_defaults_provenance.md``.
     R_comp_partition:
-        Voltage-probe partition fraction ``x`` of ``R_comp`` (R5 ES1 tuning pass,
-        2026-07-26). ``R_comp`` is split into an external part ``x*R_comp`` (bank
-        side of the probe) and an internal part ``(1-x)*R_comp`` (probe->plasma).
-        The measured ``V_dis = V_bank - I*(x*R_comp) - L*dI/dt``; the plasma sees
+        Voltage-probe partition fraction ``x`` of ``R_comp``. ``R_comp`` is
+        split into an external part ``x*R_comp`` (bank side of the probe) and
+        an internal part ``(1-x)*R_comp`` (probe->plasma). The reported
+        ``V_dis = V_bank - I*(x*R_comp) - L*dI/dt``; the plasma sees
         ``V_b = V_dis - I*((1-x)*R_comp + R_mesh)``.
 
-        ``x`` IS DYNAMICALLY INERT -- it cancels identically from the loop
-        equation (correction, 2026-08-03; an earlier version of this docstring
-        claimed the internal part "lowers the current, which RAISES V_dis", and
-        that is FALSE). The circuit is handed ``R_comp_ohm = x*R_comp``
-        (``solver.py``) while ``vdis_of_I(I) = V_b(I) + I*((1-x)*R_comp +
-        R_mesh)`` (``cathode.py``), so the integrand
+        This parameter is DYNAMICALLY INERT, OBSERVATIONALLY ACTIVE, and
+        therefore a calibration knob. Read all three together -- the first
+        alone reads as "ignore this parameter", and it is not ignorable.
 
-            f(I) = (V_src - I*x*R_comp - vdis_of_I(I)) / L
-                 = (V_src - I*R_comp - V_b(I) - I*R_mesh) / L
+        1. DYNAMICALLY INERT. ``x`` cancels identically from the loop
+           equation. The circuit is handed ``R_comp_ohm = x*R_comp``
+           (``solver.py``) while ``vdis_of_I(I) = V_b(I) + I*((1-x)*R_comp +
+           R_mesh)`` (``cathode.py``), so the integrand that
+           ``advance_circuit_current_driven`` integrates,
 
-        has no ``x`` in it. The loop current depends only on the TOTAL
-        ``R_comp`` plus ``R_mesh``. What ``x`` does change is the REPORTED
-        ``V_dis`` -- it relabels one and the same drop between the external and
-        internal books, with ``dV_dis/dx = -I*R_comp``. The "lowers the current"
-        claim IS true of ``R_mesh``, which is genuinely additional resistance;
-        any real internal resistance therefore belongs in ``R_mesh_ohm`` and
-        NEVER in the partition. Correspondingly there is no "fit R_comp for the
-        current, then derive x" recipe: ``V_dis`` pins the product ``x*R_comp``,
-        the current pins the emission, and ``R_int`` is bounded by the ES2/ES3
-        voltage budget. Default ``1.0`` (all external, internal part 0) is
-        bit-exact with the historical behaviour. Must be in ``[0, 1]``.
+               f(I) = (V_src - I*x*R_comp - vdis_of_I(I)) / L
+                    = (V_src - I*R_comp - V_b(I) - I*R_mesh) / L
+
+           contains no ``x``. The loop current responds only to the TOTAL
+           ``R_comp`` plus ``R_mesh``, and nothing physical consumes the
+           REPORTED ``V_dis`` (the beam energy comes from ``phi_c``, off the
+           cathode solve). The loop current, ``V_b``, ``phi_c``, the beam
+           deposition and the whole plasma trajectory are all x-independent.
+        2. OBSERVATIONALLY ACTIVE. ``x`` does set the REPORTED ``V_dis``, at
+           ``dV_dis/dx = -I*R_comp``, and reported ``V_dis`` is a scored
+           observable. So ``x`` changes what a run reports without changing
+           what it simulates.
+        3. THEREFORE A CALIBRATION KNOB. It decouples the total series
+           resistance from the reported ``V_dis``, which is what lets the
+           total ``R_comp`` -- which genuinely does throttle the current --
+           change while the ``V_dis`` comparison stays matched.
+
+        Do NOT use it to represent real internal resistance. Resistance
+        between the probe and the plasma does lower the current, and that is
+        ``R_mesh_ohm``, which is genuinely additional resistance rather than a
+        relabelling of ``R_comp``. Correspondingly there is no "fit
+        ``R_comp`` for the current, then derive ``x``" recipe: ``V_dis`` pins
+        the product ``x*R_comp``, the current pins the emission, and the
+        internal resistance is bounded independently.
+
+        Default ``1.0`` (all external, internal part 0) is bit-exact with the
+        historical behaviour. Must be in ``[0, 1]``. Adopted values:
+        ``scripts/production_stance_provenance.md``.
     R_mesh_ohm:
-        Anode-mesh series resistance [Ohm] (R5 ES1 tuning pass), separate from
-        ``R_comp`` and on the internal (plasma) side of the probe, so it is
-        invisible to the V_dis formula. Physically the 0.64 mm Mo anode-mesh wire
-        (2.58 mm pitch), ~0.5-1.5 mOhm, RISING with anode temperature (Stage 2:
-        ``R_mesh(T_anode)`` from an anode standby+deposited-power balance, so it
-        compresses the high-current sets more). Stage 1 uses a constant value.
+        Anode-mesh series resistance [Ohm], separate from ``R_comp`` and on the
+        internal (plasma) side of the probe, so it is invisible to the V_dis
+        formula. Physically the Mo anode-mesh wire, order 1 mOhm and rising
+        with anode temperature; only a CONSTANT value is implemented, so any
+        ``R_mesh(T_anode)`` dependence must be approximated by that constant.
         Unlike ``R_comp_partition`` this is a real series resistance and does
-        reach the loop current. The MEASURED bound at the production stance is
-        ``R_int = (V_dis_meas - V_b)/I = 0.0 +- 0.3 mOhm`` (2026-08-03):
-        consistent with zero and BELOW the 0.5-1.5 mOhm Mo-mesh bracket. Stage 2
-        was declined (2026-07-26). Default ``0.0`` is bit-exact. Must be ``>= 0``.
+        reach the loop current. Default ``0.0`` is bit-exact. Must be ``>= 0``.
+        Measured bounds: ``config_defaults_provenance.md``.
     eta:
         Anode-to-cathode area ratio.
     anode_radius_cm:
@@ -978,97 +944,18 @@ def cathode_defaults():
         the effective resistance); the tail and floating phases leave it
         inert.
 
-        MEASURED at ``9.5 F`` (V0-pinned four-rung constrained refit,
-        2026-08-03: C_eff = 9.5187 +- 0.66 F), and HARDWARE-BOUNDED. Record the
-        full hardware reasoning here so it is never re-litigated:
-
-            10 IGBT switches x 2 minibanks x 35 Nippon Chemi-Con 36DY cans
-            (12,000 uF, 200 V) = 700 cans, NOMINAL 8.40 F. Per-can tolerance
-            -10/+50%, so the allowed total is [7.56, 12.60] F and the nominal
-            sits near the FLOOR, not a ceiling. With N = 700 the random part of
-            the sum is only 0.65% (0.055 F), so the bank capacitance is
-            well-defined and the trace measures it ~12x more precisely than the
-            nameplate bounds it.
-
-        RETRACTION (2026-08-03): an earlier version of this docstring asserted
-        that the fit's effective ~8.9 F was anomalous "even though the hardware
-        bank is nominally <= 4 F", and attributed the gap to ~7 V of unexplained
-        slow EMF recovery. **There was never an anomaly.** The 4.2 F figure
-        counted one minibank per switch (a factor-of-2 miscount), and the 8.40 F
-        nominal it was then compared against is a near-floor, not a limit. 9.5 F
-        is an ordinary interior value of the allowed band (39th percentile);
-        4.2 F is excluded twice over (5 sigma by the fit, and below the band
-        floor). The "~7 V of slow EMF recovery" was an artifact of leaving V0
-        free in a near-singular fit and dissolves once V0 is pinned to its
-        measured pre-shot value. The historical 8.9 F was inside tolerance all
-        along, so no past run is invalidated. There is no caveat to carry.
-
-        Moves jointly with ``R_comp`` -- one fit, one pair.
+        Moves jointly with ``R_comp``: the two are determined together, so a
+        configuration must not change one alone. Value, hardware bounds and
+        provenance: ``config_defaults_provenance.md``.
     L_parasitic_H:
         Parasitic series inductance in the current-driven discharge circuit
         [H], in series with ``R_comp``. The loop current is advanced once per
         accepted step by TR-BDF2. It must be positive when cathode coupling is
-        enabled. Default ``8.1e-6``.
+        enabled.
 
-        DERIVED FROM MEASUREMENT, bracket 7.6-8.4 uH -- reclassified from
-        FITTED on 2026-08-03. Two instruments with disjoint time windows and
-        no shared fitted parameters agree at ~8 uH:
-
-        - the flyback VOLT-SECOND BALANCE over the current fall,
-          ``L = int V dt / dI``, giving 7.2-8.4 uH. The switch hardware paper
-          (Pribyl & Gekelman, RSI 75, 669 (2004)) confirms the fall is a real
-          freewheel, and this arm is INVARIANT to the circuit constants: the
-          fall branch of ``scripts/fit_circuit_edges.py`` drives the loop with
-          ``emf = -V_meas`` and touches neither V0, R nor C. Its fall-only
-          answer (~8.2 uH) is unchanged, to better than the scan resolution,
-          across the 2026-08-03 circuit correction -- the strongest single
-          number here.
-        - the edge ODE fit over the current RISE (same script, driven by the
-          measured V_dis with the corrected V0/R/C): 7.6 uH at 38 A rms, the
-          sharpest constraint in the campaign. Joint rise+fall 8.2 uH, +10%-rms
-          band 7.9-8.5 uH.
-
-        The V0-pinned four-rung plateau refit independently prefers 8.06 uH,
-        though the plateau is nearly L-blind (dI/dt ~ 0 there) so its jackknife
-        bar is wide (6.7 +- 2.5 uH) and the fitted value ranges 2.1-9.4 uH with
-        the window. The instruments cannot discriminate 8.06/8.1/8.23, so
-        ``8.1e-6`` is adopted: it is the value the golden fixture
-        (``scripts/baseline_sim1d.py``), the pre-``9ece533`` config default and
-        the thesis evidence file already carry, and adopting it collapses three
-        distinct recorded L values to one.
-
-        RETRACTION (2026-08-03): an earlier version of this docstring said
-        6.6e-6 was left "pending" a better-posed edge fit that "boxes
-        15-25 uH". BOTH HALVES WERE FALSE. 15-25 uH was never the edge fit's
-        answer -- it is ``L = tau_fall * R_load`` with the plasma treated as a
-        CONSTANT RESISTOR, and the measured V_dis collapses 16x within 0.2 ms
-        during the fall (88.8 -> 15.5 -> 9.3 -> 5.3 V at
-        t = 20.0/20.2/20.5/21.0 ms), so a constant ~50 mOhm load is off by an
-        order of magnitude. The estimate was RETRACTED on 2026-07-21, the day
-        ``fit_circuit_edges.py`` was written to test it and refuted it; the
-        edge instrument excludes 15-25 uH at 4.6-7.1x its minimum residual.
-
-        CORRECTION OF A CORRECTION (2026-08-03): a note added earlier the same
-        day said an earlier docstring "claimed 8.1 uH and contradicted the
-        code; corrected 2026-08-03". That resolved the contradiction in the
-        WRONG DIRECTION. The docstring was right and the code was wrong: the
-        default was 8.1e-6 from 2026-07-22 (``7f7457b``) and was overwritten to
-        6.6e-6 on 2026-07-25 by ``9ece533`` (the R5 stance flip), in the same
-        three-line hunk that installed the since-corrected ``R_comp`` 5.72e-3
-        and ``C_bank_F`` 8.4. 6.6e-6 was the orphan of the retracted,
-        near-singular ``fit_es1_circuit.py`` free fit -- a regression, never a
-        considered choice -- and the docstring was the surviving true record of
-        the pre-``9ece533`` default.
-
-        HONEST LIMIT: 6.6e-6 is still INSIDE the plateau refit's jackknife bar
-        (6.7 +- 2.5 uH). The claim is that 6.6 has no evidence behind it while
-        8.1 has two independent lines -- NOT that 6.6 is excluded. The move is
-        a CONSISTENCY AND PROVENANCE correction, not a physics correction: L is
-        inert for every sigma-scored campaign quantity (the plateau inductive
-        term moves 0.055 V mean against a -5.7 V fingerprint signal, under 1%),
-        and the measurable consequences are confined to unscored, reported
-        fingerprints -- t90 +0.05 to +0.11 ms and ignition +0.02 to +0.07 ms,
-        both toward the measurement.
+        L is inert for the sigma-scored discharge quantities and shows up in
+        the current-rise shape and the ignition time. Value, bracket and
+        provenance: ``config_defaults_provenance.md``.
     cathode_warming_model:
         Slow evolution of the emitter surface temperature within a shot.
         ``"none"`` (default) holds ``T_s`` constant, so the
@@ -1101,23 +988,17 @@ def cathode_defaults():
         Heater-maintained standby surface temperature [K] for
         ``cathode_warming_model = "power_balance"`` -- the temperature the
         cathode sits at before the discharge, i.e. an operational machine
-        setpoint, not a fit parameter. Required when that model is on; also
-        its initial condition. MEASURED and **not to be tuned** (2026-07-29):
-        the default ``1910`` is the ES1 Fig-10 digitized standby
-        (``run_mechanism_ladder.ES_OPERATING[es]["Ts_standby_K"]`` carries
-        the per-campaign values). The production stance used to pin a
-        calibrated 1840 here; that calibration moved onto the effective
-        ``C_R`` above, which is the same §3b flat direction (~100 K of
-        standby per e-fold of emission) parameterized on the constant the
-        cathode literature already treats as effective. Calibrate that one,
-        not this one.
+        setpoint. Required when that model is on; also its initial condition.
+        Per-run operating points live in
+        ``run_mechanism_ladder.ES_OPERATING[es]["Ts_standby_K"]``. Note the
+        degeneracy with ``C_R`` documented above: the two describe one flat
+        direction, so a configuration must not move both.
     cathode_heat_capacity_J_per_K:
         Effective thermal mass of the *emitting layer* [J/K] for
-        ``"power_balance"``. NB this is the ~20 ms thermal skin depth
-        (sqrt(alpha*t) ~ 0.3-0.5 mm of LaB6, a few J/K), not the disc's
+        ``"power_balance"``. NB this is the thermal skin depth reached over
+        the discharge (sqrt(alpha*t) ~ 0.3-0.5 mm of LaB6), not the disc's
         bulk heat capacity (~hundreds of J/K) -- it shapes only the ramp
-        timescale and stays hand-tuned; the steady state is independent of
-        it. Default 3.0.
+        timescale; the steady state is independent of it.
     cathode_emissivity:
         Total hemispherical emissivity of the emitting surface for the
         radiation term (LaB6 ~0.7).
@@ -1134,33 +1015,29 @@ def cathode_defaults():
         ``P_cond = G_cond*(T_s - T_base)``. Vanishes at standby, so the
         heater pinning is unchanged. **This term is what stabilizes the
         balance at the LAPD operating point**: without it (0, the
-        pure-radiation limit) the bombardment feedback gain
-        d(P_ion)/dT_s (~O(kW/K) through the emission loop, P_cathode_i
-        ~250 kW at the 2.8 kA plateau) exceeds the ~230 W/K
-        radiation+emission stiffness and the discharge runs away to
-        ~13 kA (measured 2026-07-20, ``es1_nx120_pb_demo.h5``).
-        Physical scale: quasi-static ``kappa*A/delta`` for LaB6 is
-        ~10 kW/K at a 0.4 mm skin depth; the effective value for a
-        ~20 ms transient is lower and hand-tuned. ~2000 sets the
-        observed ~110 K plateau rise at the measured bombardment power;
-        the plateau *current* then follows from the balance.
+        pure-radiation limit) the bombardment feedback gain d(P_ion)/dT_s
+        through the emission loop exceeds the radiation+emission stiffness and
+        the discharge runs away to several times the physical current.
+        Physical scale: quasi-static ``kappa*A/delta`` for LaB6 is ~10 kW/K at
+        a 0.4 mm skin depth; the effective value over a ~20 ms transient is
+        lower. This term sets the plateau surface-temperature rise, and the
+        plateau *current* then follows from the balance. Adopted values:
+        ``config_defaults_provenance.md`` and
+        ``scripts/production_stance_provenance.md``.
     cathode_emission_profile:
         Radial structure of the thermionic emitter. ``"uniform"`` (default,
         historical) is a single-temperature disc, whose emission ceiling is a
         razor wall in the discharge V(I) curve -- the operating point riding
         that wall is what makes the circuit-coupled current/voltage noisy.
-        ``"gaussian"`` gives the cathode the measured radial falloff: the
-        emission-current footprint ``exp(-4 ln2 r^2/FWHM^2)`` (the ES1
-        port-11 Te profile mapped along field lines, slightly steepened for
-        en-route spreading), Richardson-inverted into a local surface
-        temperature profile. The implied ~150-200 K centre-to-edge drop
-        softens the ceiling into a stable, tunable ramp. Use with the real
-        ``R_cath`` (19 cm) and keep ``Rp`` at the plasma-channel value.
+        ``"gaussian"`` gives the cathode a radial falloff: the
+        emission-current footprint ``exp(-4 ln2 r^2/FWHM^2)``,
+        Richardson-inverted into a local surface temperature profile. The
+        implied centre-to-edge temperature drop of order 150-200 K softens the
+        ceiling into a stable ramp. Use with the physical cathode ``R_cath``
+        and keep ``Rp`` at the plasma-channel value.
     cathode_Ts_fwhm_cm:
-        Emission-footprint FWHM [cm] for the gaussian profile. Measured
-        28.8-31.2 cm at the ES1 ports; back-extrapolating the axial
-        broadening to the cathode gives ~27.8, with radial transport arguing
-        for the steeper end. Default 28.
+        Emission-footprint FWHM [cm] for the gaussian profile. Value and
+        measured range: ``config_defaults_provenance.md``.
     cathode_emission_annuli:
         Number of annuli discretizing the profile.
     cathode_solver_model:
@@ -1189,8 +1066,8 @@ def cathode_defaults():
         ``R_p = L_cath / (pi R_cath^2 sigma_par(Te_sample))`` with the
         Spitzer conductivity evaluated at the *one* cathode-adjacent sampled
         cell -- which underestimates the resistance of a gap colder than
-        that sample (eta_Spitzer ~ Te^-3/2), a candidate contributor to the
-        recorded ~8 V V_dis(t) drift over the discharge.
+        that sample (eta_Spitzer ~ Te^-3/2), and so can bias V_dis(t) over a
+        discharge in which the gap cools away from the sampled cell.
         ``"resolved_gap"`` integrates ``R_p = sum_k dz_k / (sigma_par(Te_k)
         * A_k)`` over the resolved cathode-anode gap cells with each cell's
         own Te and plasma-channel area -- the same per-cell weighting the
@@ -1211,8 +1088,8 @@ def cathode_defaults():
         ``beam_excitation_radiation`` term) and whose cross section shortens
         the beam's inelastic deposition length. What the scale multiplies
         depends on ``beam_excitation_model``: under ``"2p_scalar"`` it scales
-        the 2^1P cross section alone (``1.0`` books that channel, ``~1.4``
-        was the historical estimate of the full singlet manifold); under
+        the 2^1P cross section alone, so ``1.0`` books that channel and a
+        larger value stands in for the rest of the singlet manifold; under
         ``"manifold"`` it scales the measured manifold sum, so it is a pure
         sensitivity multiplier whose benchmark value is ``1.0``.
         Triplet/metastable excitation is exchange-driven and collapses above
@@ -1224,11 +1101,12 @@ def cathode_defaults():
         ``"manifold"``: the summed Ralchenko et al. (2008) singlet manifold
         (fitted n <= 4 levels plus the Eq. (5) n >= 5 tail,
         ``vars._coeff.He_singlet_manifold``) with the energy-weighted mean
-        radiated energy per event computed at the beam energy —
-        the measured replacement for the 1.4 estimate
-        (BEAM_DEPOSITION_PLAN WP-A: manifold/2^1P = 1.65-1.75 in events,
-        1.71-1.81 in radiated power, over 60-180 eV). The current-driven
-        sheath consumes the channel through ``beam_excitation_channel``.
+        radiated energy per event computed at the beam energy. Over 60-180 eV
+        the manifold gives 1.65-1.75x the 2^1P events and 1.71-1.81x its
+        radiated power, so it is knob-free where ``"2p_scalar"`` needs
+        ``b_beam_excitation`` to stand in for the missing levels. The
+        current-driven sheath consumes the channel through
+        ``beam_excitation_channel``.
     beam_excitation_energy_eV:
         Threshold and radiated energy per beam excitation event [eV]
         (the 2^1P excitation energy). Used by ``"2p_scalar"`` only; under
@@ -1255,8 +1133,8 @@ def cathode_defaults():
         ``"beer_lambert"``). ``"fast_electron"`` (default): the physical
         stopping power ``dE/dx = 2 pi e^4 n_e lnL / E`` (~30 m e-fold at
         150 eV, n_e = 5e12). ``"legacy_tau_ei"``: the historical
-        ``v(E) tau_ei(Te)`` form (~1 m; overestimates classical drag ~30x —
-        THESIS_NOTES item 12). Both parameter-free.
+        ``v(E) tau_ei(Te)`` form (~1 m; overestimates classical drag ~30x).
+        Both parameter-free.
     beam_anomalous_model:
         Anomalous (beam-plasma instability) drag for the CSDA module (inert
         under ``"beer_lambert"``). ``"none"`` (default) or
@@ -1265,8 +1143,7 @@ def cathode_defaults():
         parameters), energy to local electron heating — the
         Langmuir-turbulence picture behind primaries not surviving
         downstream. Weak-beam domain only (returns no drag when
-        ``n_b >= n_e/10``); parameter-free; per-closure presentation
-        required (THESIS_NOTES item 12).
+        ``n_b >= n_e/10``); parameter-free.
     beam_product_transport:
         Where the CSDA ray's event PRODUCTS deposit (inert under
         ``"beer_lambert"``, which never launches the module; selecting the
@@ -1274,7 +1151,7 @@ def cathode_defaults():
         bit-exact): the mean secondary energy ``<W_sec>`` per ionization and
         the primary's terminal sub-threshold residual are banked as plasma
         heating in the cell where the event happened — perfect local
-        confinement. ``"nonlocal"`` (BEAM_DEPOSITION_PLAN WP-D): each product
+        confinement. ``"nonlocal"``: each product
         instead walks along B from its birth cell on its own mini-CSDA
         Coulomb slowing integral (the SAME ``beam_coulomb_model`` the primary
         uses), depositing until it thermalizes at the local Maxwellian mean
@@ -1290,7 +1167,8 @@ def cathode_defaults():
         banked). Parameter-free; no pitch-angle diffusion and no elastic
         e-He channel (~5 meV/collision) — stated limitations. ENERGY-ONLY in
         v1: ionization events, the particle rows and the circuit currents are
-        identical in both modes. Per-closure presentation required.
+        identical in both modes. The two settings are a bracket, not a
+        prediction, so a result must state which one it used.
     heating_anomalous_transport:
         Where the CSDA ray's ANOMALOUS (quasilinear) heating lands (inert
         under ``"beer_lambert"``, and requires an active anomalous channel;
@@ -1298,39 +1176,37 @@ def cathode_defaults():
         (default, historical, bit-exact): the QL drag is banked as
         instantaneous local bulk electron heating in the cell that drove it —
         the Langmuir turbulence Landau-damps near where it grows, so its
-        energy is handed to the background there. ``"tail_walk"``
-        (BEAM_DEPOSITION_PLAN WP-E): quasilinear diffusion does not warm a
+        energy is handed to the background there. ``"tail_walk"``:
+        quasilinear diffusion does not warm a
         Maxwellian in place, it fills a fast-tail plateau first, and at
         breakdown densities a tail electron is collisionally decoupled
         (Coulomb range ~km at n_e ~ 1e10, hundreds of machine lengths) and
         free-streams along B. Under ``"tail_walk"`` each cell's QL power is
         withheld and carried by tail electrons at
         ``heating_anomalous_tail_energy_eV``, launched 50/50 along +-B and
-        walked on the SAME closed-form Coulomb machinery the WP-D product
-        walks use (the ray's own ``beam_coulomb_model``, the same ``1.5*Te``
-        thermalization floor) — no new physics parameters beyond the tail
-        energy. Energy still hot at a domain end goes to a SEPARATE tail end
-        ledger (kept apart from the WP-D product ledger so both stay readable
-        when the two closures are on together) and leaves the system.
+        walked on the SAME closed-form Coulomb machinery the
+        ``beam_product_transport`` product walks use (the ray's own
+        ``beam_coulomb_model``, the same ``1.5*Te`` thermalization floor) — no
+        new physics parameters beyond the tail energy. Energy still hot at a
+        domain end goes to a SEPARATE tail end ledger (kept apart from the
+        product ledger so both stay readable when the two closures are on
+        together) and leaves the system.
         Motivation: this is an effective heating lag plus an end loss during
-        exactly the e-folds that set the avalanche growth rate — a candidate
-        for the loop-gain gap (gamma_model ~4-6x the machine). ``"tail_walk"``
+        exactly the e-folds that set the avalanche growth rate. ``"tail_walk"``
         is the FREE-ESCAPE bound (no sheath/ambipolar throttle), so
-        {local, tail_walk} is a bracket, not a prediction. ENERGY-ONLY:
-        ionization events, the particle rows and the circuit currents are
-        identical in both modes. Per-closure presentation required.
+        {local, tail_walk} is a bracket, not a prediction, and a result must
+        state which one it used. ENERGY-ONLY: ionization events, the particle
+        rows and the circuit currents are identical in both modes.
     heating_anomalous_tail_energy_eV:
-        QL plateau energy ``E_tail`` [eV] the tail electrons are launched at
-        (default 75.0). **Read ONLY under
-        ``heating_anomalous_transport="tail_walk"``** — inert otherwise. Must
-        be finite and > 0. It sets the walkers' Coulomb range and therefore
-        how far the QL power travels before thermalizing; the equivalent tail
-        flux is ``P_QL / E_tail``, so the power carried is independent of it.
-        This is an ASSUMPTION value, NEVER a fitted one: the plateau energy is
-        a kinetic quantity a fluid model cannot pin, so per campaign policy
-        the BRACKET is the claim — the registered central arm is 75 eV (the
-        decoupling example) with 30 and 150 eV as the bracket arms, all three
-        reported together.
+        QL plateau energy ``E_tail`` [eV] the tail electrons are launched at.
+        **Read ONLY under ``heating_anomalous_transport="tail_walk"``** --
+        inert otherwise. Must be finite and > 0. It sets the walkers' Coulomb
+        range and therefore how far the QL power travels before thermalizing;
+        the equivalent tail flux is ``P_QL / E_tail``, so the power carried is
+        independent of it. The plateau energy is a kinetic quantity a fluid
+        model cannot pin, so this is an ASSUMED value and a run that uses it
+        must report a bracket rather than a single number. Arms and values:
+        ``config_defaults_provenance.md``.
     beam_clump_fraction:
         Fractional-coverage beam-neutral closure (default 0.0 = OFF, bit-exact).
         The fresh gas puff is a dense, SPOTTY cloud sitting on the uniform
@@ -1362,58 +1238,30 @@ def cathode_defaults():
         unchanged. Because the width is a FIXED length (not a cell count) the
         deposition profile is mesh-convergent, which removes the grid-scale
         current-step artifact where the beam range crossing a cell boundary
-        kicks the sheath solve (the beam-side "deposition-kernel spreading";
-        ES1_TUNING §4e). CSDA only (inert under ``beer_lambert``). Must be
-        ``>= 0``.
+        kicks the sheath solve. CSDA only (inert under ``beer_lambert``). Must
+        be ``>= 0``.
+
+    Values and their provenance: ``config_defaults_provenance.md``.
     """
-    # R5 stance flip (2026-07-25): the config defaults now promote the FULL
-    # validated M6 production cathode stack (previously reached only through the
-    # run drivers / golden overrides): power_balance warming, CSDA beam +
-    # quasilinear anomalous drag, gaussian emission profile, ads_des surface
-    # state, and presheath sample smoothing. The historical golden pins every
-    # value it needs, so it stays bit-exact. Rp_model stays "sample"
-    # (resolved_gap not folded).
+    # These defaults ship the full cathode stack: power_balance warming, CSDA
+    # beam + quasilinear anomalous drag, gaussian emission profile, ads_des
+    # surface state, and presheath sample smoothing. Rp_model stays "sample".
     #
-    # CIRCUIT STANCE CORRECTION (2026-08-03). The "R_comp/L/C are provisional
-    # pending the V_bank=180 refit" framing that stood here is retired: the
-    # refit has happened. It is a V0-PINNED CONSTRAINED refit -- V0 fixed per
-    # rung at its measured pre-shot reading, with C, R and L shared across four
-    # rungs (ES1-ES4, N = 1952, window 0.3-19.8 ms) -- which dropped the design
-    # conditioning from 89.3 to 4.7 and replaced the near-singular ES1-only free
-    # fit (corr(V0,R) = 0.997; R swung 1.9-5.7 mOhm with the window, so its
-    # formal +-0.079 mOhm bar was meaningless). The defect was INVISIBLE AT ES1
-    # and showed up only on ladder transfer: reconstructing measured plateau
-    # V_dis, the old parameterization left residuals -0.136/+6.329/+5.677/+5.786
-    # V at ES1/2/3/4 against +0.010/+0.139/-0.053/-0.309 V for the corrected one.
-    #
-    #   R_comp   5.72e-3 -> 7.2244e-3  MEASURED (7.213 +- 0.043 mOhm jackknife)
-    #   C_bank_F 8.4     -> 9.5        MEASURED, hardware-bounded [7.56, 12.60] F
-    #   L        6.6e-6  -> 8.1e-6     DERIVED from measurement, 7.6-8.4 uH --
-    #                                  see the L_parasitic_H docstring. Completed
-    #                                  2026-08-03: 6.6e-6 was the fourth member
-    #                                  of the same retracted fit and was left
-    #                                  behind by the first pass on the strength
-    #                                  of a "15-25 uH box" that had itself been
-    #                                  retracted on 2026-07-21.
-    #
-    # R_comp and C_bank_F are ONE joint fit and move together (see their
-    # docstrings). These defaults are mirrored EXACTLY by the campaign stance in
+    # The circuit values here are mirrored EXACTLY by the campaign stance in
     # ``scripts/compare_sim1d_es1.PARAM_OVERRIDES``; the duplication is
-    # deliberate (that dict is the campaign stance record, and removing the pins
-    # would change resolution order for the other run drivers).
+    # deliberate (that dict is the campaign stance record, and removing the
+    # pins would change resolution order for the other run drivers). Values,
+    # provenance classes and bars: config_defaults_provenance.md.
     return {
         # --- ACTIVE: circuit hardware ---
-        # V_bank here is the SUPPLY SETPOINT (180 V), which is a DIFFERENT
-        # QUANTITY from the measured pre-shot open-circuit bank voltage and is
-        # deliberately NOT replaced by it. The measured per-rung V0s --
-        # 177.843 / 138.303 / 98.814 / 98.978 V for ES1-ES4, +-0.03 V SEM with a
-        # +-1.2% multiplicative instrumental systematic -- are the campaign
-        # operating points and live in ``scripts/run_mechanism_ladder.ES_OPERATING``
-        # (and, for ES1, in PARAM_OVERRIDES). Any run that means the machine
-        # rather than the dial must set V_bank from one of those.
+        # V_bank here is the SUPPLY SETPOINT, which is a DIFFERENT QUANTITY
+        # from the measured pre-shot open-circuit bank voltage and is
+        # deliberately NOT replaced by it. The per-run open-circuit readings
+        # live in ``scripts/run_mechanism_ladder.ES_OPERATING``; any run that
+        # means the machine rather than the dial must set V_bank from there.
         "V_bank": 180.0,
         # T_s is only the static-model fallback under power_balance (the input
-        # is cathode_Ts_base_K); kept at the ES setpoint.
+        # is cathode_Ts_base_K).
         "T_s": 1998.15,
         # phi_wf is the contaminated SHOT-START work function read by ads_des.
         "phi_wf": 2.869,
@@ -1423,7 +1271,7 @@ def cathode_defaults():
         "R_mesh_ohm": 0.0,
         "L_parasitic_H": 8.1e-6,
         "C_bank_F": 9.5,
-        # R5.1/A11 gated fluid<->circuit Picard (only read when the
+        # Gated fluid<->circuit Picard (only read when the
         # coupled_circuit_picard flag is on): relative loop-current change that
         # triggers a re-run, and the iteration cap.
         "circuit_picard_tol_rel": 1.0e-2,
@@ -1439,10 +1287,10 @@ def cathode_defaults():
         "beam_deposition_model": "csda",
         "beam_coulomb_model": "fast_electron",
         "beam_anomalous_model": "quasilinear",
-        # WP-D non-local product transport: DEFAULT OFF (bit-exact).
+        # Non-local product transport: DEFAULT OFF (bit-exact).
         "beam_product_transport": "local",
-        # WP-E QL heating locality: DEFAULT OFF (bit-exact). The tail energy is
-        # inert under "local" and is a boxed ASSUMPTION value, never fitted.
+        # QL heating locality: DEFAULT OFF (bit-exact). The tail energy is
+        # inert under "local".
         "heating_anomalous_transport": "local",
         "heating_anomalous_tail_energy_eV": 75.0,
         "beam_clump_fraction": 0.0,
@@ -1451,10 +1299,7 @@ def cathode_defaults():
         "b_beam_excitation": 0.0,
         "beam_excitation_model": "2p_scalar",
         "beam_excitation_energy_eV": 21.218,
-        # --- ACTIVE: cathode warming (power_balance; Ts_base_K = ES1 standby,
-        # heat_capacity + conduction are op-point-dependent hand-tuned values
-        # pending the heater-current fit -- conduction 1200 is the golden/M6
-        # value, audit-ES1 explored 1500) ---
+        # --- ACTIVE: cathode warming (power_balance) ---
         "cathode_warming_model": "power_balance",
         "cathode_Ts_base_K": 1910.0,
         "cathode_heat_capacity_J_per_K": 120.0,
@@ -1462,14 +1307,14 @@ def cathode_defaults():
         "cathode_emissivity": 0.7,
         "cathode_rad_area_cm2": None,
         "cathode_env_T_K": 300.0,
-        # --- ACTIVE: gaussian emission profile (measured radial falloff) ---
+        # --- ACTIVE: gaussian emission profile (radial falloff) ---
         "cathode_emission_profile": "gaussian",
         "cathode_Ts_fwhm_cm": 28.0,
         "cathode_emission_annuli": 10,
         "cathode_Rp_model": "sample",
         "cathode_solver_model": "current_driven",
         "cathode_phi_c_cap_V": 1000.0,
-        # Surface-state coverage model (CATHODE_IDRIVEN_PLAN.md M5a):
+        # Surface-state coverage model (CATHODE_IDRIVEN_PLAN.md §5a):
         # "ads_des" evolves contaminant coverage theta with
         # dtheta/dt = k_ads(1-theta) - [nu0 e^(-E_des/kTs) + sigma Gamma_i] theta
         # and substitutes phi_eff = phi_clean + (phi_wf - phi_clean)*theta
@@ -1479,19 +1324,17 @@ def cathode_defaults():
         # the per-shot-accessible depth of the re-adsorbed layer, not the
         # literature clean-LaB6 value. In-shot the ion-stimulated term
         # dominates (fluence-cleaning limit); adsorption and thermal
-        # desorption are carried for the M5b between-shot cycle map and
-        # default to zero (inert).
-        # --- ACTIVE: ads_des surface state (M5a; in-shot ion-stimulated
-        # cleaning. The between-shot ads/desorption params default to zero,
-        # inert -- the M5b cycle map). ---
+        # desorption are carried for the between-shot cycle map and default to
+        # zero (inert).
+        # --- ACTIVE: ads_des surface state (in-shot ion-stimulated cleaning;
+        # the between-shot ads/desorption params default to zero, inert) ---
         "cathode_surface_model": "ads_des",
         "cathode_phiwf_clean_eV": 2.809,
         "cathode_cleaning_sigma_cm2": 3.5e-16,
-        # Ion-stimulated desorption threshold [eV] (M5a'): scales sigma by
-        # the near-threshold Bohdansky factor (1-(Eth/E)^(2/3))(1-Eth/E)^2
-        # at the honest per-ion energy E = P_cathode_i/I_i. He->O
-        # kinematics gives ~18-26 eV for chemisorbed O. None = the
-        # energy-independent fluence limit.
+        # Ion-stimulated desorption threshold [eV]: scales sigma by the
+        # near-threshold Bohdansky factor (1-(Eth/E)^(2/3))(1-Eth/E)^2 at the
+        # per-ion energy E = P_cathode_i/I_i. None = the energy-independent
+        # fluence limit.
         "cathode_cleaning_E_th_eV": 20.0,
         "cathode_ads_rate_per_s": 0.0,
         "cathode_desorption_prefactor_per_s": 0.0,
@@ -1501,12 +1344,11 @@ def cathode_defaults():
         # directed momentum into M_n instead of rebirthing at rest.
         # Momentum-only first pass -- the reflected atoms' kinetic energy
         # is not booked (neutrals have no energy field; standing M2
-        # convention). (R_N, R_E) are literature-boxed particle/energy
-        # reflection coefficients (Eckstein/Thomas class), NOT fit knobs:
-        # cathode defaults are the plan-§8 mid box for He->LaB6 (the
-        # B-rich vs La surface-termination bracket is the honest
-        # uncertainty); anode defaults sit at the He->Mo heavy-target
-        # corner class. The cathode channel splits R_N fast backscatter at
+        # convention). (R_N, R_E) are the particle and energy reflection
+        # coefficients of the surface -- literature quantities, not fit knobs
+        # (cathode = He->LaB6, anode = He->Mo; see
+        # config_defaults_provenance.md for the values and their brackets).
+        # The cathode channel splits R_N fast backscatter at
         # sqrt(2 R_E (phi_c + Ti)/m) + (1-R_N) directed effusion at the
         # surface T_s; the anode channel is backscatter-only (wire
         # re-emission has no net axial direction), per collected side, at
@@ -1517,11 +1359,10 @@ def cathode_defaults():
         "anode_neutral_jet": False,
         "anode_jet_R_N": 0.5,
         "anode_jet_R_E": 0.25,
-        # Step-3 sensitivity arm: debit the cathode surface's ion heating
-        # by the reflected-energy fraction (power_balance receives
-        # (1 - R_E) * P_cathode_i). Off by default: the M5a' thermal tier
-        # was calibrated with the full P_i, and the jet's first pass is
-        # momentum-only. Requires cathode_neutral_jet.
+        # Sensitivity arm: debit the cathode surface's ion heating by the
+        # reflected-energy fraction (power_balance receives
+        # (1 - R_E) * P_cathode_i). Off by default, since the jet's first pass
+        # is momentum-only. Requires cathode_neutral_jet.
         "cathode_jet_surface_debit": False,
         # Mesh momentum accommodation for the evolved wind: the momentum
         # the anode wires intercept lands on the anode structure instead
@@ -1529,22 +1370,19 @@ def cathode_defaults():
         # gap recirculation artificially elastic). Requires
         # neutral_momentum and anode faces.
         "neutral_mesh_accommodation": False,
-        # Electrode sample smoothing (2026-07-21): the sheath solve's inputs
-        # are the instantaneous cathode-cell and anode-flank (n, Te) cell
-        # averages, which carry grid-level explicit-step noise the physical
-        # supply integrates over -- the presheath delivers flux averaged
-        # over an ion transit time tau ~ l_cell/c_s (~5 us at production
-        # parameters). Because V(I) is nearly flat, that sampling noise
-        # amplifies into per-solve V_b (sigma 0.8 V constant-drag, 12.5 V
-        # under the M_n closure) and leaks into physics through the beam
-        # energy (phi_c per solve) and the trapezoidal fold's EMF residual
-        # (§3c). The anode sample matters equally: J_i_a and Te_anode enter
-        # the residual through tau_a*ln(1 + J_anode/J_i_a), so anode-side
+        # Electrode sample smoothing: the sheath solve's inputs are the
+        # instantaneous cathode-cell and anode-flank (n, Te) cell averages,
+        # which carry grid-level explicit-step noise the physical supply
+        # integrates over -- the presheath delivers flux averaged over an ion
+        # transit time tau ~ l_cell/c_s. Because V(I) is nearly flat, that
+        # sampling noise amplifies into per-solve V_b and leaks into physics
+        # through the beam energy (phi_c per solve) and the trapezoidal fold's
+        # EMF residual. The anode sample matters equally: J_i_a and Te_anode
+        # enter the residual through tau_a*ln(1 + J_anode/J_i_a), so anode-side
         # noise flaps phi_a and drags phi_c with it. "presheath" computes
-        # tau = l_cell/c_s(Te_ema) per sampled cell (a boxed physical
-        # timescale, not a knob); a float is a fixed tau [s]; None disables
-        # bit-exactly. EMA updates on accepted steps only. R5 stance flip:
-        # "presheath" is now the production default.
+        # tau = l_cell/c_s(Te_ema) per sampled cell, so it is a derived
+        # physical timescale rather than a knob; a float is a fixed tau [s];
+        # None disables bit-exactly. EMA updates on accepted steps only.
         "cathode_sample_smoothing": "presheath",
     }
 
@@ -1573,21 +1411,22 @@ def physics_fit_defaults():
         Constant neutral exchange coefficient for the constant model [cm^3/s].
     neutral_clausing_scale:
         Scale factor applied to molecular-flow Clausing conductance.
+
+    Values and their provenance: ``config_defaults_provenance.md``.
     """
     return {
         # --- ACTIVE ---
-        # R5 stance flip (2026-07-25): 2 Picard iterations -- the third leg of
-        # the 2nd-order operator-split defaults (tr_bdf2 + strang). Historical
-        # golden pins 0 (frozen kappa).
+        # The third leg of the 2nd-order operator-split defaults: a positive
+        # value is required for tr_bdf2 + strang to express second order.
         "heat_picard_iterations": 2,
         "heat_picard_tol": 1e-10,
         "ln_lambda_min": 1.0,
-        "Tn_K": 300.0,  # A8 single cold-gas neutral temperature (Phelps T_eff)
-        # --- INERT on the production path ---
-        # Only the "constant" neutral_exchange_model reads this (production is
+        "Tn_K": 300.0,  # single cold-gas neutral temperature (Phelps T_eff)
+        # --- INERT under these defaults ---
+        # Only the "constant" neutral_exchange_model reads this (the default is
         # "knudsen"):
         "neutral_exchange_coeff_cm3_s": 1.0e5,
-        # molecular-flow Clausing conductance -- molecular_flow is D1-deprecated:
+        # molecular-flow Clausing conductance -- molecular_flow is deprecated:
         "neutral_clausing_scale": 1.0,
     }
 
@@ -1626,14 +1465,10 @@ def timestep_defaults():
         accept-time floor clip re-pins the cell every step while the sink
         keeps draining, so the bound re-trips forever and dt collapses (the
         diagnosed afterglow crawl). The threshold is relative to the floor
-        energy, not an absolute magnitude. Scale rationale (measured on the
-        es1_r5_f01_ag26ms.h5 crawl state, 22.335 ms, boundary cell 2): a
+        energy, not an absolute magnitude. The scale it has to separate: a
         pinned cell HOVERS at a small positive relative margin -- the clip
-        plus one step of re-heating residue, ~5e-6 relative there, not float
-        round-off -- while every healthy drained cell sampled across the
-        drive and afterglow sits at >= ~2e1 relative. The default 1e-3
-        splits those scales by >2 decades on each side; physically it means
-        Te within 0.1% of Te_floor, far below any meaningful margin. A cell
+        plus one step of re-heating residue, not float round-off -- while a
+        healthy drained cell sits orders of magnitude above that. A cell
         whose drain dominates its heating self-drives its hover margin below
         any fixed threshold within a few steps (hover ~ heating*dt shrinks
         with dt), so the exemption engages exactly for genuinely pinned
@@ -1661,6 +1496,8 @@ def timestep_defaults():
         Maximum ion-neutral drag relaxation fraction per explicit step.
         This was formerly available only through an unregistered
         ``dict.get`` fallback.
+
+    Values and their provenance: ``config_defaults_provenance.md``.
     """
     return {
         "cfl": 0.4,
@@ -1717,22 +1554,24 @@ def build_input_dict_template_1d():
 input_dict_template_1d = build_input_dict_template_1d()
 
 
+# Flag defaults. Which flags a specific committed configuration pins, and why,
+# is recorded in config_defaults_provenance.md and the per-config notes under
+# scripts/.
 input_flags_template_1d = {
     "Plasma": True,
     "TwinCathode": False,
-    # R1 repaired live stance. The historical checkpoint golden explicitly
-    # pins these selectors off; new constructions use typed plasma topology
-    # and reject raw invalid stages before any floor projection.
+    # Typed plasma topology, and rejection of raw invalid stages before any
+    # floor projection.
     "active_plasma_topology": True,
     "raw_stage_validation": True,
-    # Retained as a stale-config guard through D2; False raises at construction.
+    # Retained as a stale-config guard; False raises at construction.
     "resolved_boundaries": True,
-    # Provisional CAD-pending end-vessel / magnetic-flare geometry. Presence
-    # gated in core.geometry: all three end_expansion_* parameters are required
-    # when on and forbidden when off. The production geometry is bit-exact off.
+    # End-vessel / magnetic-flare geometry. Presence gated in core.geometry:
+    # all three end_expansion_* parameters are required when on and forbidden
+    # when off. Bit-exact off.
     "end_expansion_geometry": False,
-    # CAD-pending thin annular apertures. Positions and clear radii are required
-    # together when on and forbidden when off; the plasma channel stays open.
+    # Thin annular apertures. Positions and clear radii are required together
+    # when on and forbidden when off; the plasma channel stays open.
     "neutral_baffles": False,
     # Fixed-cell-size source region, so a mesh refinement study is not
     # self-confounding: the column between the anode face and
@@ -1740,66 +1579,56 @@ input_flags_template_1d = {
     # regardless of nx, which then refines only the far column, and the puff
     # role follows gas_puff_z_cm instead of the first column cell. Presence
     # gated in core.geometry in both directions (both parameters required when
-    # on, forbidden when off) and incompatible with TwinCathode. Default OFF;
-    # the production geometry is structurally untouched and bit-exact off.
+    # on, forbidden when off) and incompatible with TwinCathode. Default OFF
+    # and structurally bit-exact off.
     "source_fixed_grid": False,
     "heat_conduction": True,
     "implicit_heat_conduction": True,
-    # R5.2 / audit A9 (2026-07-25): flux-limited electron heat conduction. The
-    # classical Spitzer-Harm flux reaches 1.7-3.3x the free-streaming scale
-    # n*Te*v_the at resolved gap faces, exceeding the physical ceiling. When ON,
-    # the electron conductivity is scaled per cell by lambda = q_sat/(q_sat+q_SH)
-    # (harmonic Cowie-McKee), q_sat = heat_flux_limiter_f * n * Te * v_the -- so
-    # the flux caps at free-streaming where gradients are steep and recovers
-    # Spitzer where they are shallow. Electron only; ion conduction unchanged.
-    # Default OFF (golden bit-exact); a declared A9 closure-family A/B instrument.
+    # Flux-limited electron heat conduction. The classical Spitzer-Harm flux
+    # can exceed the free-streaming scale n*Te*v_the at resolved gap faces,
+    # i.e. exceed the physical ceiling. When ON, the electron conductivity is
+    # scaled per cell by lambda = q_sat/(q_sat+q_SH) (harmonic Cowie-McKee),
+    # q_sat = heat_flux_limiter_f * n * Te * v_the -- so the flux caps at
+    # free-streaming where gradients are steep and recovers Spitzer where they
+    # are shallow. Electron only; ion conduction unchanged. Default OFF and
+    # bit-exact off; a declared closure-family A/B instrument.
     "electron_heat_flux_limit": False,
-    # R5 STANCE FLIP (2026-07-25): OFF by default. R2's G7 mesh A/B concluded
-    # the sonic front is a numerical artifact (its L1 activity and Rusanov
-    # numerical diffusion vanish under refinement); turning it off completes the
-    # R2 repaired stance and renders alpha_front inert. Historical golden pins
-    # True.
+    # Sonic front-filling closure, OFF by default: the mesh A/B found the front
+    # to be a numerical artifact (its L1 activity and Rusanov numerical
+    # diffusion vanish under refinement). OFF renders alpha_front inert.
     "front_flux": False,
-    # R2 conservative hyperbolic core (SIM1D_MODEL_AUDIT_PLAN R2, audit A2):
+    # Conservative hyperbolic core (SIM1D_MODEL_AUDIT_PLAN R2):
     # kinetic-energy-preserving convective momentum flux, plus deposit of the
     # Rusanov (n,M) numerical kinetic-energy dissipation into ion internal
     # energy, plus a KEP pressure-work discretization -- so the closed-domain
-    # total plasma energy K+Ee+Ei is conserved to machine precision. R5 STANCE
-    # FLIP (2026-07-25): now the PRODUCTION DEFAULT (a correctness fix); the
-    # historical golden pins it False (baseline_sim1d BASELINE_FLAG_OVERRIDES).
+    # total plasma energy K+Ee+Ei is conserved to machine precision.
     "hyperbolic_energy_consistent": True,
-    # R3.1 characteristic material boundaries (SIM1D_MODEL_AUDIT_PLAN R3, audit
-    # A1/A16): replace the closed-reflecting-face + one-sided volumetric absorber
-    # at the plasma-terminating (cathode/collector) surfaces with a one-sided
-    # characteristic ghost-cell Bohm outflow -- the committed R2 KEP/Rusanov flux
-    # evaluated against a Bohm ghost state (n_se = n*presheath_alpha, u = c_s into
-    # the wall, Te, Ti). Fixes the A1 wrong-sign momentum so the wall is a net
-    # energy sink instead of the +18.5 kW kinetic source. Requires resolved
-    # geometry (absorbing faces); rejects at construction otherwise. R5 STANCE
-    # FLIP (2026-07-25): now the PRODUCTION DEFAULT; the historical golden pins it
-    # False (baseline_sim1d BASELINE_FLAG_OVERRIDES).
+    # Characteristic material boundaries (SIM1D_MODEL_AUDIT_PLAN R3): replace
+    # the closed-reflecting-face + one-sided volumetric absorber at the
+    # plasma-terminating (cathode/collector) surfaces with a one-sided
+    # characteristic ghost-cell Bohm outflow -- the KEP/Rusanov flux evaluated
+    # against a Bohm ghost state (n_se = n*presheath_alpha, u = c_s into the
+    # wall, Te, Ti). Fixes a wrong-sign momentum so the wall is a net energy
+    # sink instead of a kinetic source. Requires resolved geometry (absorbing
+    # faces); rejects at construction otherwise.
     "characteristic_boundary": True,
-    # R4.1 anode-mesh beam interception (SIM1D_MODEL_AUDIT_PLAN R4, audit A15):
-    # the CSDA beam ray launches the full emitted flux Gamma0 = I_eth_star/e
-    # through the whole column, so without this the fluid deposits the entire
-    # emitted beam (~470 kW on the settled artifact) while the circuit books only
-    # the (1 - eta*beam_bypass_fraction) fraction into the plasma. This adds the
-    # missing interception event at the anode-face crossing: the mesh solid
-    # fraction eta of the flux surviving the gap is removed (the anode surface
-    # takes I_bypass*V_b, the sheath returns I_bypass*phi_a to the circuit) and
-    # only (1 - eta) transmits downstream. It is the CORRECT csda physics, so it
-    # is the PRODUCTION DEFAULT (True); like beam_coulomb_model /
-    # beam_anomalous_model it is a csda control and is inert under
-    # beam_deposition_model="beer_lambert" (which never launches the CSDA module)
-    # and where the resolved geometry has no anode faces. The historical csda
-    # checkpoint golden PINS this off explicitly (baseline_sim1d.py, same pattern
-    # as the R1 selectors) so its pre-A15 trajectory stays bit-exact. Set False
-    # for the with/without-interception A/B.
+    # Anode-mesh beam interception (SIM1D_MODEL_AUDIT_PLAN R4): the CSDA beam
+    # ray launches the full emitted flux Gamma0 = I_eth_star/e through the
+    # whole column, so without this the fluid deposits the entire emitted beam
+    # while the circuit books only the (1 - eta*beam_bypass_fraction) fraction
+    # into the plasma. This adds the missing interception event at the
+    # anode-face crossing: the mesh solid fraction eta of the flux surviving
+    # the gap is removed (the anode surface takes I_bypass*V_b, the sheath
+    # returns I_bypass*phi_a to the circuit) and only (1 - eta) transmits
+    # downstream. Like beam_coulomb_model / beam_anomalous_model it is a csda
+    # control: inert under beam_deposition_model="beer_lambert" (which never
+    # launches the CSDA module) and where the resolved geometry has no anode
+    # faces. Set False for the with/without-interception A/B.
     "beam_anode_interception": True,
-    # DEPRECATED (A13/R3.3, 2026-07-24): 0D-artifact per-electrode surface-loss
-    # enables. The resolved geometry's plasma-terminating (absorbing) faces are a
-    # geometry fact, not a config toggle; these are never consumed and non-default
-    # use warns. Retained at their canonical True so production is warning-free.
+    # DEPRECATED: 0D-artifact per-electrode surface-loss enables. The resolved
+    # geometry's plasma-terminating (absorbing) faces are a geometry fact, not
+    # a config toggle; these are never consumed and non-default use warns.
+    # Retained at their canonical True so a default run is warning-free.
     "source_surface_loss": True,
     "end_surface_loss": True,
     "ion_neutral_drag": True,
@@ -1809,7 +1638,7 @@ input_flags_template_1d = {
     # neutral wind instead of a closure, ionization/recombination exchange
     # momentum between species, and the wall/pump remove it. Mutually
     # exclusive with ion_neutral_drag_model="slip", whose closure is this
-    # equation's own local steady state. Off => the production 5-field state.
+    # equation's own local steady state. Off => the 5-field state.
     "neutral_momentum": False,
     # Split the neutral density into plasma-column and annulus zones
     # (NEUTRAL_TWOZONE_PLAN.md): an optional conservative field nn_a
@@ -1822,82 +1651,76 @@ input_flags_template_1d = {
     # chamber-mean nn.
     "neutral_two_zone": False,
     "ion_neutral_thermalization": False,
-    # R4.3 / audit A7+A8 (2026-07-25): replace the drag + frictional-heating +
-    # elastic thermalization + CX-cooling quartet with ONE moment-closed reduced
-    # ion-neutral collision operator (Phelps He+/He isotropic+backscatter rates,
-    # T_eff=(Ti+Tn)/2). Default OFF and presence-gated: when ON the four legacy
-    # ion-neutral terms are forced to zero and this single operator runs; when OFF
-    # it is a strict no-op so the golden stays bit-exact. He-only. A8: uses the
-    # single cold-gas Tn_K (300 K) for the neutral temperature, ending the
-    # Tn_K/Tn_fit term-by-term mix. See notes/SIM1D_MODEL_AUDIT_PLAN.md R4.3.
-    # R5 STANCE FLIP (2026-07-25): now the PRODUCTION DEFAULT drag/collision
-    # baseline (Phelps, first-principles) -- the ad-hoc b_ion_neutral_drag /
-    # sigma_in constant/cx_derived / slip are DEPRECATED (superseded). The
-    # historical golden pins it False.
+    # Replace the drag + frictional-heating + elastic thermalization +
+    # CX-cooling quartet with ONE moment-closed reduced ion-neutral collision
+    # operator (Phelps He+/He isotropic+backscatter rates, T_eff=(Ti+Tn)/2).
+    # Presence-gated: when ON the four legacy ion-neutral terms are forced to
+    # zero and this single operator runs; when OFF it is a strict no-op.
+    # He-only. Uses the single cold-gas Tn_K for the neutral temperature,
+    # ending the Tn_K/Tn_fit term-by-term mix. With this ON the ad-hoc
+    # b_ion_neutral_drag / sigma_in constant/cx_derived / slip closures are
+    # superseded and DEPRECATED. See SIM1D_MODEL_AUDIT_PLAN.md R4.3.
     "ion_neutral_moment_closure": True,
-    # R5.1 / audit A11 (2026-07-25): gated fluid<->circuit Picard. The fluid step
-    # runs at a loop current frozen over the step, then the circuit advances from
-    # the accepted plasma -- a frozen-current lag that the A11 gate measured
-    # failing to converge at the emission knee. When ON, the accepted step is
-    # re-run (<= circuit_picard_max_iter times) with the updated loop current
-    # whenever |dI/dt| is large (a driven phase and the loop current moved more
-    # than circuit_picard_tol_rel), so fluid+T_s+circuit share one self-consistent
-    # I_loop. Default OFF and a strict no-op where the trigger does not fire (one
-    # pass == the sequential advance, bit-exact). Incompatible with the K4a
-    # kinetic engine. See notes/SIM1D_MODEL_AUDIT_PLAN.md R5.1.
+    # Gated fluid<->circuit Picard. The fluid step runs at a loop current
+    # frozen over the step, then the circuit advances from the accepted plasma
+    # -- a frozen-current lag that can fail to converge at the emission knee.
+    # When ON, the accepted step is re-run (<= circuit_picard_max_iter times)
+    # with the updated loop current whenever |dI/dt| is large (a driven phase
+    # and the loop current moved more than circuit_picard_tol_rel), so
+    # fluid+T_s+circuit share one self-consistent I_loop. Default OFF and a
+    # strict no-op where the trigger does not fire (one pass == the sequential
+    # advance, bit-exact). Incompatible with the kinetic neutral engine. See
+    # SIM1D_MODEL_AUDIT_PLAN.md R5.1.
     "coupled_circuit_picard": False,
     "cathode_coupling": True,
     # Schottky barrier lowering in the *current-driven* sheath solve only
     # (CATHODE_IDRIVEN_PLAN.md §2b): the extracting sheath field lowers the
     # effective work function, tilting the emission ceiling into a sloped
-    # line. Any phi_wf fit must state this flag's value (plan §3b).
-    # Default ON since 2026-07-20 (Tom): the knee probes measured it
-    # collapsing the per-solve V_b two-state chatter to a steady band at
-    # the measured scale (p5/p50/p95 = 112/134/152 V vs measured ~151 V)
-    # while restoring the current the gaussian edge-cooling costs
-    # (`es1_nx120_knee_gauss_schottky.h5`).
+    # line. It collapses the per-solve V_b two-state chatter into a steady
+    # band and restores current that the gaussian emission profile's edge
+    # cooling costs. Because it shifts the effective barrier, phi_wf and this
+    # flag are only meaningful together: a configuration quoting phi_wf must
+    # state this flag's value (plan §3b).
     "cathode_schottky": True,
     # kT_s-width thermal bridge across the SCL<->classical emission-release
-    # corner, *current-driven* sheath solve only (CATHODE_IDRIVEN_PLAN.md,
-    # chatter diagnosis 2026-07-21): the emitted Maxwellian's kT_s energy
-    # spread smooths the razor min(J_eth, J_crit) corner that turns
-    # boundary-cell Te noise into V_b chatter (x10 annuli). C1 blend with
-    # exact hard-branch reduction outside the window, monotonicity of
-    # J_tot(psi) preserved by construction (convex combination of branch
-    # slopes -- see funcs._cathode_solver_idriven._bridge_release). Off =>
-    # bit-exact hard branches (the M2 equivalence gate's condition).
+    # corner, *current-driven* sheath solve only (CATHODE_IDRIVEN_PLAN.md):
+    # the emitted Maxwellian's kT_s energy spread smooths the razor
+    # min(J_eth, J_crit) corner that turns boundary-cell Te noise into V_b
+    # chatter. C1 blend with exact hard-branch reduction outside the window,
+    # monotonicity of J_tot(psi) preserved by construction (convex combination
+    # of branch slopes -- see funcs._cathode_solver_idriven._bridge_release).
+    # Off => bit-exact hard branches.
     "cathode_emission_bridge": False,
-    # Gates the neutral-only pre-drive phase. DELIBERATELY LEFT ON after
-    # tau_neutral_prebreakdown dropped to 0.0 (2026-08-03): the duration alone
-    # decides whether the phase runs, so ON + zero duration is already inert
+    # Gates the neutral-only pre-drive phase. DELIBERATELY LEFT ON while
+    # tau_neutral_prebreakdown defaults to 0.0: the duration alone decides
+    # whether the phase runs, so ON + zero duration is already inert
     # (`_neutral_prebreakdown_duration` returns 0.0 either way, which is why
-    # flipping this to False would be bit-exact today and buys nothing). What
-    # it would cost is the opt-in: a study that sets a positive
+    # flipping this to False would be bit-exact and buys nothing). What it
+    # would cost is the opt-in: a study that sets a positive
     # tau_neutral_prebreakdown would then get NO phase and no error -- exactly
     # the silent fallback the house rules forbid. Keeping it True leaves the
     # duration as the single sufficient control.
     "neutral_prebreakdown": True,
     "neutral_equilibration": True,
     "launch_plasma_after_equilibration": True,
-    # R5 ES1 tuning pass (2026-07-26): reuse a cached neutral-equilibration seed
-    # (the equilibrated nn/nn_a profile) instead of re-running the ~1-min
-    # 100-cycle equilibration every run. Default OFF (golden bit-exact off).
+    # Reuse a cached neutral-equilibration seed (the equilibrated nn/nn_a
+    # profile) instead of re-running the ~1-min 100-cycle equilibration every
+    # run. Default OFF and bit-exact off.
     # When ON, requires neutral_equilibration + launch_plasma_after_equilibration
     # ON and a neutral_seed_cache_dir (the signature-keyed seed DATABASE):
     # a miss (new neutral-flow config) equilibrates once and stores it. See
     # core/neutral_seed_cache.py and scripts/build_neutral_seed_cache.py.
     "use_cached_neutral_seed": False,
     # Floor-aware drain exemption on the "surface_loss" timestep bound
-    # (afterglow dt-collapse fix, 2026-07-26): cells pinned at the Te/Ti floor
+    # (the afterglow dt-collapse fix): cells pinned at the Te/Ti floor
     # (energy margin within surface_loss_floor_exempt_rtol of the per-cell
     # floor energy) are excluded from the drain-margin bound ONLY -- the
     # accept-time floor clip resets their margin to float residue every step,
     # so a persistent drain otherwise pins dt at dt_min indefinitely. One-sided
     # (all other bounds still govern the cell) and knife-edge (any real margin
-    # re-admits the cell immediately). PROMOTED to the default (f=0.1 stance,
-    # 2026-07-27): every production run needs it to reach the afterglow in
-    # finite time, so it is the stance rather than an opt-in. Set it False to
-    # recover the historical bound.
+    # re-admits the cell immediately). ON by default because a run that reaches
+    # a floor-pinned afterglow otherwise cannot finish in finite time. Set it
+    # False to recover the historical bound.
     "surface_loss_floor_exempt": True,
     "ionization_energy_cost": True,
     "icool": True,
