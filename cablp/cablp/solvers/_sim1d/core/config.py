@@ -69,15 +69,15 @@ def geometry_defaults():
         Default neutral/machine radius [cm].
     Rp:
         Default plasma radius [cm].
-    The remaining keys configure the resolved typed-segment geometry
-    (BOUNDARY_REGIONS_PLAN.md §3). D2 removed the legacy lumped geometry.
+    The remaining keys configure the resolved typed-segment geometry.
+    D2 removed the legacy lumped geometry.
 
     In resolved mode the cathode surface defines the origin: it sits at ``z = 0``
     and the anode at ``z = cathode_anode_gap_cm``, with the plenum (and any
     obstruction) extending to *negative* z behind the cathode. ``Lm`` therefore
     spans the cathode surface to the far machine end; total mesh length is
-    ``Lm + plenum_length_cm + Lcs``. Cathode and anode are **faces**, not cells
-    (plan §11 decision 5), so they have positions but no length.
+    ``Lm + plenum_length_cm + Lcs``. Cathode and anode are **faces**, not
+    cells, so they have positions but no length.
 
     plenum_length_cm:
         Length of each neutral-only plenum cell behind a cathode [cm].
@@ -289,9 +289,9 @@ def neutral_source_defaults():
         chamber (~2*Rm). Sets the lobe's HWHM = 0.64*d.
     pump_elbow_conductance_lps:
         Conductance of the unmodeled pump elbow [L/s], combined in series with
-        the pump speed as ``1/S_eff = 1/S_pump + 1/C_elbow``
-        (BOUNDARY_REGIONS_PLAN.md §4). Applies only to a pump sitting on a plenum
-        cell, so it is inert in legacy geometry. ``None`` (default) or a
+        the pump speed as ``1/S_eff = 1/S_pump + 1/C_elbow``. Applies only to a
+        pump sitting on a plenum cell, so it is inert in legacy geometry.
+        ``None`` (default) or a
         non-positive value means no elbow restriction -- the legacy limit.
 
     Values and their provenance: ``config_defaults_provenance.md``.
@@ -710,7 +710,7 @@ def fudge_factor_defaults():
     b_presheath_length:
         Scale factor on the collisional presheath depth `c_s / nu_in` used to
         sample the upstream density for the Bohm flux at plasma-terminating
-        surfaces (BOUNDARY_REGIONS_PLAN.md §11 decision 3). `alpha_isat` converts
+        surfaces. `alpha_isat` converts
         the *presheath-entrance* density to the sheath edge, so it must be applied
         to an upstream sample. `0` collapses the sample to the adjacent cell,
         recovering the historical behaviour; `1` (default) uses the physical
@@ -961,7 +961,7 @@ def cathode_defaults():
         ``"none"`` (default) holds ``T_s`` constant, so the
         emission ceiling -- and with it the discharge current -- saturates
         on the circuit timescale (~1-2 ms), where the measured current rises
-        for ~15-20 ms. ``"power_balance"`` (CATHODE_IDRIVEN_PLAN.md M1b) uses
+        for ~15-20 ms. ``"power_balance"`` (M1b) uses
         imposed asymptote with the surface energy balance
 
             C_th dT_s/dt = P_heater + P_cathode_i
@@ -1118,7 +1118,7 @@ def cathode_defaults():
         over the mixed Coulomb/inelastic profile (``l_b_profile`` +
         ``beam_absorption_weights``). ``"csda"``: the deterministic
         slowing-down module (``funcs/_beam_deposition.deposit_beam``, a pure
-        function of the beam and the column — BEAM_DEPOSITION_PLAN B2):
+        function of the beam and the column — B2):
         primaries survive multiple inelastic events, per-cell ionization/
         excitation/heating/radiation come from the integrated ray, and the
         sheath solve's bypass fraction is driven by the module's gap
@@ -1314,12 +1314,13 @@ def cathode_defaults():
         "cathode_Rp_model": "sample",
         "cathode_solver_model": "current_driven",
         "cathode_phi_c_cap_V": 1000.0,
-        # Surface-state coverage model (CATHODE_IDRIVEN_PLAN.md §5a):
+        # Surface-state coverage model:
         # "ads_des" evolves contaminant coverage theta with
         # dtheta/dt = k_ads(1-theta) - [nu0 e^(-E_des/kTs) + sigma Gamma_i] theta
         # and substitutes phi_eff = phi_clean + (phi_wf - phi_clean)*theta
         # everywhere phi_wf is read (emission, Schottky, cooling, gaussian
-        # inversion -- the §3b shared-constant rule). phi_wf keeps its
+        # inversion -- every consumer reads the one substituted
+        # value, never a mix of phi_eff and phi_wf). phi_wf keeps its
         # meaning as the contaminated SHOT-START value; the clean floor is
         # the per-shot-accessible depth of the re-adsorbed layer, not the
         # literature clean-LaB6 value. In-shot the ion-stimulated term
@@ -1339,7 +1340,7 @@ def cathode_defaults():
         "cathode_ads_rate_per_s": 0.0,
         "cathode_desorption_prefactor_per_s": 0.0,
         "cathode_desorption_energy_eV": 3.0,
-        # Directed neutral recycle jets (CATHODE_IDRIVEN_PLAN.md §8): with
+        # Directed neutral recycle jets: with
         # the neutral_momentum flag on, the surface recycle fluxes carry
         # directed momentum into M_n instead of rebirthing at rest.
         # Momentum-only first pass -- the reflected atoms' kinetic energy
@@ -1597,13 +1598,13 @@ input_flags_template_1d = {
     # to be a numerical artifact (its L1 activity and Rusanov numerical
     # diffusion vanish under refinement). OFF renders alpha_front inert.
     "front_flux": False,
-    # Conservative hyperbolic core (SIM1D_MODEL_AUDIT_PLAN R2):
+    # Conservative hyperbolic core (R2):
     # kinetic-energy-preserving convective momentum flux, plus deposit of the
     # Rusanov (n,M) numerical kinetic-energy dissipation into ion internal
     # energy, plus a KEP pressure-work discretization -- so the closed-domain
     # total plasma energy K+Ee+Ei is conserved to machine precision.
     "hyperbolic_energy_consistent": True,
-    # Characteristic material boundaries (SIM1D_MODEL_AUDIT_PLAN R3): replace
+    # Characteristic material boundaries (R3): replace
     # the closed-reflecting-face + one-sided volumetric absorber at the
     # plasma-terminating (cathode/collector) surfaces with a one-sided
     # characteristic ghost-cell Bohm outflow -- the KEP/Rusanov flux evaluated
@@ -1612,7 +1613,7 @@ input_flags_template_1d = {
     # sink instead of a kinetic source. Requires resolved geometry (absorbing
     # faces); rejects at construction otherwise.
     "characteristic_boundary": True,
-    # Anode-mesh beam interception (SIM1D_MODEL_AUDIT_PLAN R4): the CSDA beam
+    # Anode-mesh beam interception (R4): the CSDA beam
     # ray launches the full emitted flux Gamma0 = I_eth_star/e through the
     # whole column, so without this the fluid deposits the entire emitted beam
     # while the circuit books only the (1 - eta*beam_bypass_fraction) fraction
@@ -1633,15 +1634,15 @@ input_flags_template_1d = {
     "end_surface_loss": True,
     "ion_neutral_drag": True,
     "ion_neutral_drag_cx_only": False,
-    # Evolve axial neutral momentum M_n as a sixth conservative field
-    # (NEUTRAL_MOMENTUM_PLAN.md): the drag deposits its momentum into the
+    # Evolve axial neutral momentum M_n as a sixth conservative field:
+    # the drag deposits its momentum into the
     # neutral wind instead of a closure, ionization/recombination exchange
     # momentum between species, and the wall/pump remove it. Mutually
     # exclusive with ion_neutral_drag_model="slip", whose closure is this
     # equation's own local steady state. Off => the 5-field state.
     "neutral_momentum": False,
-    # Split the neutral density into plasma-column and annulus zones
-    # (NEUTRAL_TWOZONE_PLAN.md): an optional conservative field nn_a
+    # Split the neutral density into plasma-column and annulus zones:
+    # an optional conservative field nn_a
     # carries the annulus density and nn becomes the COLUMN density. Axial
     # Knudsen transport runs per zone (the annulus is a free conduit), the
     # zones exchange free-molecularly at the column surface, and the
@@ -1659,7 +1660,7 @@ input_flags_template_1d = {
     # He-only. Uses the single cold-gas Tn_K for the neutral temperature,
     # ending the Tn_K/Tn_fit term-by-term mix. With this ON the ad-hoc
     # b_ion_neutral_drag / sigma_in constant/cx_derived / slip closures are
-    # superseded and DEPRECATED. See SIM1D_MODEL_AUDIT_PLAN.md R4.3.
+    # superseded and DEPRECATED.
     "ion_neutral_moment_closure": True,
     # Gated fluid<->circuit Picard. The fluid step runs at a loop current
     # frozen over the step, then the circuit advances from the accepted plasma
@@ -1669,21 +1670,20 @@ input_flags_template_1d = {
     # and the loop current moved more than circuit_picard_tol_rel), so
     # fluid+T_s+circuit share one self-consistent I_loop. Default OFF and a
     # strict no-op where the trigger does not fire (one pass == the sequential
-    # advance, bit-exact). Incompatible with the kinetic neutral engine. See
-    # SIM1D_MODEL_AUDIT_PLAN.md R5.1.
+    # advance, bit-exact). Incompatible with the kinetic neutral engine.
     "coupled_circuit_picard": False,
     "cathode_coupling": True,
-    # Schottky barrier lowering in the *current-driven* sheath solve only
-    # (CATHODE_IDRIVEN_PLAN.md §2b): the extracting sheath field lowers the
+    # Schottky barrier lowering in the *current-driven* sheath solve only:
+    # the extracting sheath field lowers the
     # effective work function, tilting the emission ceiling into a sloped
     # line. It collapses the per-solve V_b two-state chatter into a steady
     # band and restores current that the gaussian emission profile's edge
     # cooling costs. Because it shifts the effective barrier, phi_wf and this
     # flag are only meaningful together: a configuration quoting phi_wf must
-    # state this flag's value (plan §3b).
+    # state this flag's value.
     "cathode_schottky": True,
     # kT_s-width thermal bridge across the SCL<->classical emission-release
-    # corner, *current-driven* sheath solve only (CATHODE_IDRIVEN_PLAN.md):
+    # corner, *current-driven* sheath solve only:
     # the emitted Maxwellian's kT_s energy spread smooths the razor
     # min(J_eth, J_crit) corner that turns boundary-cell Te noise into V_b
     # chatter. C1 blend with exact hard-branch reduction outside the window,
@@ -1758,9 +1758,9 @@ def resolve_config(params=None, flags=None):
     supplied_flags = {} if flags is None else dict(flags)
     if "Lz" in supplied_params:
         raise ValueError(
-            "Lz belongs to the geometry retired at DEPRECATION_PLAN D2; "
-            "use the resolved geometry, or reproduce it at tag "
-            "legacy-final-2026-07-22"
+            "Lz belongs to the legacy lumped geometry, which has been "
+            "removed; use the resolved geometry, or reproduce the old "
+            "behaviour at tag legacy-final-2026-07-22"
         )
     unknown_params = sorted(set(supplied_params) - set(input_dict_template_1d))
     unknown_flags = sorted(set(supplied_flags) - set(input_flags_template_1d))
