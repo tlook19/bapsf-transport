@@ -486,7 +486,7 @@ def model_mode_defaults():
         closure.
     hyperbolic_wave_speed:
         Signal speed used by both the Rusanov dissipation ``a_max`` and the
-        plasma CFL. ``"isothermal"`` (default) is the historical gamma=1 Bohm
+        plasma CFL. ``"isothermal"`` is the historical gamma=1 Bohm
         speed ``sqrt(Te/m_i)``; ``"adiabatic"`` (default) is the exact linear
         acoustic speed of the implemented gamma=5/3 two-species ideal-gas
         energy system, ``sqrt((5/3)(Te+Ti)/m_i)``.
