@@ -258,7 +258,7 @@ def capture(baseline_path):
     sidecar = baseline_path.with_suffix(".json")
     payload = {
         "description": (
-            "Golden baseline at the PRODUCTION configuration "
+            "Golden baseline at the PRODUCTION configuration: "
             "current-driven + resolved + adas + "
             "knudsen + square waveform + M6 candidate constants."
         ),
