@@ -140,11 +140,18 @@ def report(path):
     else:
         V = np.zeros_like(I)
         v_label = "V_loop_recon"
-        # Fallbacks track the corrected production stance
-        # (compare_sim1d_es1.PARAM_OVERRIDES, 2026-08-03). These are only
-        # reached for a result whose saved params omit the key; a stale value
-        # here would silently reconstruct the loop voltage against a circuit
-        # the run never used.
+        # Fallbacks for a result whose saved params omit the key. V_bank and
+        # R_comp match the current production stance
+        # (compare_sim1d_es1.PARAM_OVERRIDES); the L fallback DELIBERATELY
+        # DOES NOT -- it is frozen at 6.6e-6, the value that was the config
+        # default while the only artifacts that can reach this branch were
+        # being produced. In practice none can: results/io.py saves fully
+        # RESOLVED params, so every artifact written since the circuit state
+        # existed carries L_parasitic_H and takes the params.get hit. This
+        # branch is reachable only by artifacts predating the parasitic
+        # inductor entirely (before 07119af), which is exactly why tracking
+        # the live stance here would be wrong -- it would reconstruct their
+        # loop voltage against a circuit they never ran.
         V0 = float(params.get("V_bank", 177.843))
         R = float(params.get("R_comp", 7.2244e-3))
         L = float(params.get("L_parasitic_H", 6.6e-6))
