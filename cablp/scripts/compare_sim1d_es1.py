@@ -508,6 +508,26 @@ TE_SYS_FLOOR_EV = 0.20
 TE_SEMIQUANT_EV = 1.0
 N_CAL_FRAC = 0.10
 
+# PRIMARY semi-quantitative criterion for the Te rows: the measured
+# fit-window refit SPREAD, carried per port as `te_window_spread_frac` by
+# schema-v6+ overlays. It is the fractional variation of the fitted Te across
+# the analysis re-fit windows -- a DIRECT measurement of how well the sweep
+# pins Te at that port -- so it supersedes `Te < 1 eV`, which was only a proxy
+# for the same doubt. The old criterion is retained as the SECONDARY label:
+# the two are a union, so no row that was flagged before can lose its mark.
+#
+# A NaN spread is UNDETERMINED, never "not flagged": the row keeps whatever
+# the Te-criterion said and is marked explicitly. This is load-bearing --
+# the ES3 port-50 refit failed and ES4 has no refit product at all, and port
+# 50 is the worst-scoring row in the file.
+#
+# PROVISIONAL VALUE -- pending Tom's registration at review. 0.50 is read off
+# the measured separation rather than fitted: the stable ports sit at
+# 10-25 % and the unstable ones at 70-167 %, with nothing in between, so any
+# threshold in the gap selects the same set.
+TE_SPREAD_SEMIQUANT_FRAC = 0.50  # PROVISIONAL, not yet registered
+TE_SPREAD_FIELD = "te_window_spread_frac"
+
 
 def _sigma_sys(field, exp_values):
     exp_values = np.asarray(exp_values, dtype=float)
@@ -534,6 +554,18 @@ def compare(result, geometry, overlay):
     # I_sat-space synthesis.
     te_t = np.asarray(overlay["te_time_ms"], dtype=float)
     te_mean_2d = np.asarray(overlay["te_mean_ev"], dtype=float)
+
+    # Presence gate: pre-v6 overlays carry no spread field, and on those the
+    # Te < 1 eV criterion stays the sole flag with byte-identical rendering.
+    spread_frac = None
+    if TE_SPREAD_FIELD in overlay:
+        spread_frac = np.asarray(overlay[TE_SPREAD_FIELD], dtype=float)
+        if spread_frac.shape != ports.shape:
+            raise ValueError(
+                f"overlay {TE_SPREAD_FIELD} has shape {spread_frac.shape}, "
+                f"expected one entry per port {ports.shape}; a mismatched "
+                "length would attribute a port's spread to the wrong row"
+            )
 
     rows = []
     # Stage (ii) has no configured window: its comparison domain is the
@@ -598,9 +630,29 @@ def compare(result, geometry, overlay):
             ratio = float(np.mean(model_t[good] / exp_t[good]))
             rel = float(np.sqrt(np.mean(((model_t - exp_t)[good] / exp_t[good]) ** 2)))
             sigma = float(np.mean(np.abs((model_t - exp_t)[good] / err_tot[good])))
-            semiquant = field in ("Te", "n") and float(
+            # Secondary criterion (unchanged): the measured Te regime. It
+            # still covers the n rows, which inherit the doubt through the
+            # sqrt(Te) sweep inversion.
+            te_low = field in ("Te", "n") and float(
                 np.mean(te_exp_t[good])
             ) < TE_SEMIQUANT_EV
+            # Primary criterion: the refit-window spread. Te rows only --
+            # the field measures the stability of the Te fit itself.
+            spread_p = (
+                float(spread_frac[p])
+                if spread_frac is not None and field == "Te"
+                else np.nan
+            )
+            spread_high = bool(
+                np.isfinite(spread_p) and spread_p > TE_SPREAD_SEMIQUANT_FRAC
+            )
+            # UNDETERMINED: spread was expected for this row but is NaN. The
+            # verdict falls back to te_low; it is never silently cleared.
+            spread_undetermined = bool(
+                spread_frac is not None
+                and field == "Te"
+                and not np.isfinite(spread_p)
+            )
             rows.append(
                 {
                     "field": field,
@@ -612,7 +664,12 @@ def compare(result, geometry, overlay):
                     "ratio": ratio,
                     "rms_rel": rel,
                     "sigma": sigma,
-                    "semiquant": bool(semiquant),
+                    # Union of the two criteria, so re-basing cannot un-flag.
+                    "semiquant": bool(te_low or spread_high),
+                    "semiquant_te": bool(te_low),
+                    "semiquant_spread": spread_high,
+                    "spread_undetermined": spread_undetermined,
+                    "spread_gated": spread_frac is not None,
                 }
             )
     return rows
@@ -1602,8 +1659,17 @@ def _report_decay(rows, window):
 
 def _report(label, rows):
     print("\n--- stage (ii): bulk Te / density at the ES1 ports ---")
-    print("  (sigma = |dev|/sigma_tot, SEM (+) sweep systematics; '~' marks")
-    print("   semi-quantitative rows where measured Te < 1 eV)")
+    spread_gated = any(r.get("spread_gated") for r in rows)
+    if spread_gated:
+        pct = 100.0 * TE_SPREAD_SEMIQUANT_FRAC
+        print("  (sigma = |dev|/sigma_tot, SEM (+) sweep systematics;")
+        print(f"   semi-quantitative marks: '~' Te refit-window spread > {pct:.0f}%")
+        print("   [PROVISIONAL threshold, primary], '*' measured Te < 1 eV")
+        print("   [secondary], '?' spread unavailable -> UNDETERMINED, the row")
+        print("   keeps its Te-criterion verdict)")
+    else:
+        print("  (sigma = |dev|/sigma_tot, SEM (+) sweep systematics; '~' marks")
+        print("   semi-quantitative rows where measured Te < 1 eV)")
     header = (
         f"{'field':>5} {'port':>6} {'z [cm]':>8} {'model':>11} {'measured':>11} "
         f"{'ratio':>7} {'rms rel':>8} {'|dev|/sig':>10}"
@@ -1611,11 +1677,22 @@ def _report(label, rows):
     print(header)
     print("-" * len(header))
     for r in rows:
-        flag = "~" if r.get("semiquant") else " "
+        if r.get("spread_gated"):
+            marks = ""
+            if r.get("semiquant_spread"):
+                marks += "~"
+            if r.get("semiquant_te"):
+                marks += "*"
+            if r.get("spread_undetermined"):
+                marks += "?"
+        else:
+            marks = "~" if r.get("semiquant") else ""
+        # Min-width 1 keeps the un-marked and single-marked rows rendering
+        # exactly as they did before the spread criterion existed.
         print(
             f"{r['field']:>5} {r['port']:>6} {r['z']:8.0f} {r['model']:11.4g} "
             f"{r['exp']:11.4g} {r['ratio']:7.2f} {r['rms_rel']:8.2f} "
-            f"{r['sigma']:9.1f}{flag}"
+            f"{r['sigma']:9.1f}{marks:<1}"
         )
     for field in ("Te", "n", "Isat"):
         sub = [r for r in rows if r["field"] == field]
