@@ -882,7 +882,7 @@ def cathode_defaults():
         1. DYNAMICALLY INERT. ``x`` cancels identically from the loop
            equation. The circuit is handed ``R_comp_ohm = x*R_comp``
            (``solver.py``) while ``vdis_of_I(I) = V_b(I) + I*((1-x)*R_comp +
-           R_mesh)`` (``cathode.py``), so the integrand
+           R_mesh)`` (``cathode.py``), so the integrand that
            ``advance_circuit_current_driven`` integrates,
 
                f(I) = (V_src - I*x*R_comp - vdis_of_I(I)) / L
