@@ -128,7 +128,7 @@ def gate_c2():
 
 
 def gate_p1():
-    default_off = not bool(default_config()[1].get("adas_low_te_extension", False))
+    default_off = not bool(default_config()[0].get("adas_low_te_extension", False))
     # icool_recomb OFF: prb1 is never requested, so the extension cannot touch
     # cooling -> extension on == off.
     on = _sim(low_te=True, icool_recomb=False)

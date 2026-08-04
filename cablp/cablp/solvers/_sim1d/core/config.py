@@ -187,7 +187,8 @@ def floor_defaults():
 # Deep-afterglow low-Te recipe -- RETIRED, DO NOT RUN.
 #
 # The recipe was: lower Te_floor to the neutral-gas temperature (0.02585) and
-# set flags adas_low_te_extension=True, icool_recomb=True. The extension makes
+# set the input_dict key adas_low_te_extension=True together with the
+# input_flags key icool_recomb=True. The extension makes
 # acd (recombination) and prb1 (recombination radiation) extend consistently
 # below the 0.2 eV ADF11 edge; scd (ionization) and plt (line power) still
 # clamp there but are exponentially dead at <0.2 eV, so a recombining 300 K

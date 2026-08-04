@@ -9,10 +9,11 @@ The baseline config is the PRODUCTION configuration
 knudsen exchange + the measured square fueling waveform + the M6 candidate
 constants, IMPORTED from the campaign drivers (compare_sim1d_es1 /
 run_mechanism_ladder) so the gate cannot drift from the production stance.
-The pre-D1 legacy fixture is archived under
-``baselines/legacy-final-2026-07-22/`` and remains reproducible at the tag
-of the same name (plus env lockfiles); a re-baseline stays an explicit,
-reviewed step.
+The pre-D1 legacy fixture is retained under
+``baselines/legacy-final-2026-07-22/`` as a pinned historical scaffold. The
+tag of the same name is retired, so the old 0D results are deliberately no
+longer tag-reproducible; the anchor of record is ``minimal-model-2026-08-03``
+(plus env lockfiles). A re-baseline stays an explicit, reviewed step.
 
 Usage::
 
