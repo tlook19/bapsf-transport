@@ -1,9 +1,20 @@
 """
 Equilibrated background neutral density (nn0) lookup table.
 
-Data is loaded from nn_table.csv in the same directory.  Values were generated
-by scripts/generate_nn_table.py, which runs the same 100-cycle plasma-off
-equilibration used by the bapsf-app "Auto-equilibrate nn0" feature:
+Data is loaded from nn_table.csv in the same directory.
+
+*** THIS TABLE IS FROZEN and cannot be regenerated in-tree (2026-08-03). ***
+Its generator (the untracked scripts/generate_nn_table.py) drove the 0D
+_sim3 solver, which has been removed. The DATA below survives and this
+lookup still works; the ability to REGENERATE it does not. Reproduce the
+generator at tag legacy-final-2026-07-22 if the table must ever change.
+
+Note the production stance never reaches this table at all: both the default
+and golden configs pin nn0 = 2.0e13 cm^-3 explicitly, so
+core.config.resolve_nn0 short-circuits before calling lookup_nn0.
+
+Values came from a 100-cycle plasma-off equilibration, the same one used by
+the bapsf-app "Auto-equilibrate nn0" feature:
 
   - 100 cycles × 3 s each, Plasma=False, adaptive RK45, dt_max=1e-2 s
   - Gas puff active for first 20 ms of each cycle
