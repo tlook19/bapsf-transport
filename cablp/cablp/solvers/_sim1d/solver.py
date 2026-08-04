@@ -618,9 +618,7 @@ class LAPDSim1D:
         )
         if exchange_model not in ("constant", "knudsen"):
             raise ValueError(
-                "neutral_exchange_model='molecular_flow' has been removed; "
-                "use 'constant' or 'knudsen', or "
-                "reproduce it at tag legacy-final-2026-07-22 "
+                "neutral_exchange_model must be 'constant' or 'knudsen' "
                 f"(got {exchange_model!r})"
             )
         self._validate_phase_config()
@@ -937,9 +935,7 @@ class LAPDSim1D:
         )
         if warming_model not in ("none", "power_balance"):
             raise ValueError(
-                "cathode_warming_model='ion_bombardment' has been removed; "
-                "use 'none' or 'power_balance', or "
-                "reproduce it at tag legacy-final-2026-07-22 "
+                "cathode_warming_model must be 'none' or 'power_balance' "
                 f"(got {warming_model!r})"
             )
         self._cathode_warming_model = warming_model

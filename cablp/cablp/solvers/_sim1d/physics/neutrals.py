@@ -123,9 +123,7 @@ def neutral_exchange_coefficients(
         )
     else:
         raise ValueError(
-            "neutral_exchange_model must be 'constant' or 'knudsen' "
-            f"(got {model!r}); 'molecular_flow' has been removed and "
-            "remains available at tag legacy-final-2026-07-22"
+            f"neutral_exchange_model must be 'constant' or 'knudsen' (got {model!r})"
         )
     # Escape hatch: a face whose conductance is known directly rather than
     # geometrically overrides the computed value (NaN => keep the computed one).

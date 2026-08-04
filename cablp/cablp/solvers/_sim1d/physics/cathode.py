@@ -385,10 +385,7 @@ def validate_cathode_solver_model(input_dict, input_flags):
     model = str(input_dict.get("cathode_solver_model", "current_driven"))
     if model != "current_driven":
         raise ValueError(
-            "cathode_solver_model='voltage_driven' has been removed; "
-            "use 'current_driven' or reproduce the "
-            "historical path at tag legacy-final-2026-07-22 "
-            f"(got {model!r})"
+            f"cathode_solver_model must be 'current_driven' (got {model!r})"
         )
     coupling = bool(input_flags.get("cathode_coupling", False))
     if coupling and bool(input_flags.get("TwinCathode", False)):

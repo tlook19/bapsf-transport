@@ -1,6 +1,5 @@
 scripts/*
 .DS_Store
-!scripts/example.toml
 
 # Python bytecode
 __pycache__/

@@ -1419,11 +1419,11 @@ def physics_fit_defaults():
     ln_lambda_min:
         Minimum Coulomb logarithm used by transport and exchange estimates.
     Tn_K:
-        Neutral gas temperature used by molecular-flow neutral exchange [K].
+        Neutral gas temperature setting the neutral thermal speed [K].
     neutral_exchange_coeff_cm3_s:
         Constant neutral exchange coefficient for the constant model [cm^3/s].
     neutral_clausing_scale:
-        Scale factor applied to molecular-flow Clausing conductance.
+        Scale factor applied to the Knudsen tube and orifice conductances.
 
     Values and their provenance: ``config_defaults_provenance.md``.
     """
@@ -1439,7 +1439,8 @@ def physics_fit_defaults():
         # Only the "constant" neutral_exchange_model reads this (the default is
         # "knudsen"):
         "neutral_exchange_coeff_cm3_s": 1.0e5,
-        # molecular-flow Clausing conductance -- molecular_flow is deprecated:
+        # LIVE on the default "knudsen" path (it scales every tube and orifice
+        # conductance); inert only because the default multiplier is 1.0:
         "neutral_clausing_scale": 1.0,
     }
 
@@ -1577,7 +1578,8 @@ input_flags_template_1d = {
     # floor projection.
     "active_plasma_topology": True,
     "raw_stage_validation": True,
-    # Retained as a stale-config guard; False raises at construction.
+    # The resolved typed-segment geometry is the only geometry. Retained as a
+    # stale-config guard; False raises at construction.
     "resolved_boundaries": True,
     # End-vessel / magnetic-flare geometry. Presence gated in core.geometry:
     # all three end_expansion_* parameters are required when on and forbidden
@@ -1768,12 +1770,6 @@ def resolve_config(params=None, flags=None):
     """
     supplied_params = {} if params is None else dict(params)
     supplied_flags = {} if flags is None else dict(flags)
-    if "Lz" in supplied_params:
-        raise ValueError(
-            "Lz belongs to the legacy lumped geometry, which has been "
-            "removed; use the resolved geometry, or reproduce the old "
-            "behaviour at tag legacy-final-2026-07-22"
-        )
     unknown_params = sorted(set(supplied_params) - set(input_dict_template_1d))
     unknown_flags = sorted(set(supplied_flags) - set(input_flags_template_1d))
     if unknown_params or unknown_flags:
