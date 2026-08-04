@@ -269,7 +269,7 @@ def main():
     assert resolved_geom.cell_role[-1] == "collector"
     assert not resolved_geom.plasma_open[0] and not resolved_geom.plasma_open[-1]
 
-    # Cathode and anode are *surfaces* (plan §11 decision 5): the cathode surface
+    # Cathode and anode are *surfaces*: the cathode surface
     # is the origin and the anode sits one gap downstream. Lm is measured from the
     # cathode surface, so the plenum lives at negative z and the mesh is longer.
     (cathode_face,) = resolved_geom.cathode_face_indices
@@ -805,7 +805,7 @@ def main():
     assert np.all(np.isfinite(expansion_attempt.y))
     assert expansion_attempt.y.shape == expansion_sim.get_initial_snapshot().y.shape
 
-    # Twin cathode mirrors the source end (plan §11 decision 4): its cathode
+    # Twin cathode mirrors the source end: its cathode
     # surface sits at z = Lm, with that plenum beyond it.
     twin_resolved_flags = dict(resolved_flags)
     twin_resolved_flags["TwinCathode"] = True
@@ -878,7 +878,7 @@ def main():
         obstruction_geom.z_edges_cm[0],
         -(obstruction_params["plenum_length_cm"] + 25.0),
     )
-    # Annular duct: open area and hydraulic radius reduce independently (§3).
+    # Annular duct: open area and hydraulic radius reduce independently.
     assert np.isclose(
         obstruction_geom.neutral_area_cm2[obstruction_cell],
         np.pi * (obstruction_params["Rm"] ** 2 - 25.0**2),
@@ -922,7 +922,7 @@ def main():
     # M3: heat and neutrals are throttled by the transparency (1-eta), but the
     # advective plasma face stays OPEN -- the anode removes plasma through the
     # Bohm sheath flux at its wires, and shrinking the face too would remove the
-    # same particles twice (§5). The cathode surface blocks everything.
+    # same particles twice. The cathode surface blocks everything.
     transparency = 1.0 - resolved_params["eta"]
     assert resolved_geom.plasma_transmission[anode_face] == 1.0
     assert np.isclose(resolved_geom.heat_transmission[anode_face], transparency)
@@ -1078,7 +1078,7 @@ def main():
     assert resolved_beam_weights.sum() <= 1.0 + 1e-12
 
     # M5: the circuit's anode current is the same Bohm collection the fluid
-    # removes (§7), not `2*eta*I_i` scaled off the cathode cell.
+    # removes, not `2*eta*I_i` scaled off the cathode cell.
     resolved_cathode_flags = dict(resolved_flags)
     resolved_cathode_flags["cathode_coupling"] = True
     resolved_cathode_flags["neutral_prebreakdown"] = False
@@ -1120,7 +1120,7 @@ def main():
     assert m5_result.I_i_a > 10.0 * (2.0 * resolved_params["eta"] * m5_result.I_i)
 
     # --- Resolved gap resistance (cathode_Rp_model="resolved_gap",
-    # CATHODE_IDRIVEN_PLAN.md M1): the historical R_p spreads the hot
+    # M1): the historical R_p spreads the hot
     # cathode-adjacent Spitzer sample over the whole 50 cm gap; the resolved
     # model integrates dz/(sigma_par(Te)*A) over the gap profile and feeds
     # it to the unmodified solver through an effective DeviceConfig.R_cath.
@@ -1636,7 +1636,7 @@ def main():
     hot_params = dict(gauss_params, T_s=2110.0)
     hot_cfg = cathode_device_config(hot_params, knee_flags, sim.mu)
 
-    # --- Current-driven sheath solve (CATHODE_IDRIVEN_PLAN.md M2): given the
+    # --- Current-driven sheath solve (M2): given the
     # V-driven solve's I_tot, solve_idriven must reproduce the same operating
     # point -- phi_c/phi_a/I_eth_star/regime -- through the monotone device
     # relation, with no warm windows and no bypass iteration. The M2 gate.
@@ -1844,7 +1844,7 @@ def main():
         assert np.isclose(br_deep_on.phi_c_minus, br_deep_off.phi_c_minus,
                           rtol=1e-11, atol=1e-13), br_I
 
-    # --- Current-driven circuit integration (CATHODE_IDRIVEN_PLAN.md M3):
+    # --- Current-driven circuit integration (M3):
     # TR-BDF2 stages as bracketed scalar root-finds against monotone
     # V_dis(I). Gate 1: 2nd order on the analytic RLC decay with a linear
     # V_dis(I) load (halve dt, error / ~4).
@@ -1886,8 +1886,8 @@ def main():
         assert np.isfinite(m3_Vstep)
     assert m3_I == 0.0
 
-    # Gate 3: the stiff wall (why the scheme is implicit -- plan §2c
-    # revision). A device curve with a 1 MOhm/A branch above I_ceil:
+    # Gate 3: the stiff wall (why the scheme is implicit).
+    # A device curve with a 1 MOhm/A branch above I_ceil:
     # explicit/frozen-V_dis needs dV/dI < 2L/dt ~ 22 mOhm and would
     # sawtooth; the implicit stages must approach the wall monotonically,
     # never overshoot it (L-stability), and pin there.
@@ -2112,7 +2112,7 @@ def main():
     ), (pbh_E_ion, pbh_calls)
 
     # Surface-state coverage model (cathode_surface_model="ads_des",
-    # CATHODE_IDRIVEN_PLAN.md M5a). Validation fails fast; the coverage
+    # M5a). Validation fails fast; the coverage
     # update must reproduce the backward-Euler form exactly from the spy's
     # honest I_i; phi_eff must actually reach the solve (a cleaner surface
     # emits more at fixed T_s and imposed current => shallower sheath).
@@ -2341,7 +2341,7 @@ def main():
         rtol=1e-10,
     )
 
-    # --- A2: the manifold excitation model (BEAM_DEPOSITION_PLAN WP-A).
+    # --- A2: the manifold excitation model (WP-A).
     from cablp.funcs._cathode_solver import beam_excitation_channel
     from cablp.funcs._cross import (
         He_beam_excitation_channel as _He_manifold_channel,
@@ -5014,7 +5014,7 @@ def main():
     )
 
     # --- Power-balance warming (cathode_warming_model="power_balance",
-    # CATHODE_IDRIVEN_PLAN.md M1b): the surface energy budget replaces the
+    # M1b): the surface energy budget replaces the
     # imposed T_s asymptote. Heater pinned by standby equilibrium; emission
     # cooling uses the actually emitted current.
     from cablp.solvers._sim1d.physics.cathode import (
@@ -6924,7 +6924,7 @@ def main():
         else:
             raise AssertionError(f"expected ValueError for {bad_kwargs}")
 
-    # --- Neutral-momentum state foundations (NEUTRAL_MOMENTUM_PLAN.md M1):
+    # --- Neutral-momentum state foundations (M1):
     # the optional M_n field must round-trip both packed layouts, pad-on-
     # demand for term summation, refuse to silently drop, and pass floors
     # through untouched.
@@ -6955,7 +6955,7 @@ def main():
     assert mn_sum.M_n is not None and np.all(mn_sum.M_n == mn_s6.M_n)
     assert add_state_rhs(mn_s5, mn_s5).M_n is None
 
-    # --- Two-zone neutral state foundations (NEUTRAL_TWOZONE_PLAN.md M1):
+    # --- Two-zone neutral state foundations (M1):
     # the optional nn_a field must round-trip its packed layouts, resolve
     # the 6-field width ambiguity by declared hints (bare 6-field keeps its
     # historical M_n meaning), pad-on-demand, refuse to silently drop, and
@@ -7026,7 +7026,7 @@ def main():
     assert np.all(tz_sum.nn_a == tz_s6.nn_a)
     assert add_state_rhs(mn_s5, mn_s5).nn_a is None
 
-    # --- Neutral-momentum sources (NEUTRAL_MOMENTUM_PLAN.md M2): with M_n on
+    # --- Neutral-momentum sources (M2): with M_n on
     # the state, the drag and the reactions become species-conserving momentum
     # exchanges, the wall and pump are the only named sinks, and the local
     # steady state of drag-vs-wall reproduces the slip closure (with its
@@ -7503,7 +7503,7 @@ def main():
     assert np.any(tz_sim_state.M_n != tz_uniform_sim.state.M_n)
 
     # --- Two-zone PARTICLE channel, M2 carriage and transport
-    # (NEUTRAL_TWOZONE_PLAN.md): the solver carries the split (nn, nn_a)
+    # The solver carries the split (nn, nn_a)
     # state, runs per-zone axial Knudsen exchange plus the radial
     # column/annulus conductance, and both close inventory exactly with
     # detailed balance at equal densities. The flag requires the knudsen
@@ -7854,7 +7854,7 @@ def main():
         p2z_loaded = load_result_hdf5(p2z_path)
         assert np.allclose(p2z_loaded.nn_a, p2z_result.nn_a)
 
-    # --- K4a kinetic neutrals (KINETIC_TWOZONE_PLAN.md): the refresh-
+    # --- K4a kinetic neutrals: the refresh-
     # cadence relaxation architecture. The flag requires the two-zone
     # state; targets appear at the first accepted plasma step; every
     # superseded term's neutral rows are zeroed while its plasma rows
@@ -7913,7 +7913,7 @@ def main():
     # flag-off ledgers carry no relaxation key
     assert "neutral_kinetic_relaxation" not in p2z_sim.rhs_terms()
 
-    # --- Neutral-wind advection (NEUTRAL_MOMENTUM_PLAN.md M3): donor-cell
+    # --- Neutral-wind advection (M3): donor-cell
     # upwind of nn and M_n by u_n on the neutral faces, closed ends for
     # particles, end-wall momentum accommodation, and a CFL guard.
     mw_cells = 5
@@ -8361,7 +8361,7 @@ def main():
             rtol=1e-12,
         )
 
-    # --- A1: the He singlet manifold registry (BEAM_DEPOSITION_PLAN WP-A). ---
+    # --- A1: the He singlet manifold registry (WP-A). ---
     from cablp.funcs._cross import (
         He_EIE_cross_manifold,
         He_singlet_tail_cross,
@@ -8421,7 +8421,7 @@ def main():
     assert 1.3 < tail_sigma_100 / sigma_by_level["41P"] < 2.0
 
     # --- B1: the standalone CSDA beam-deposition module
-    # (BEAM_DEPOSITION_PLAN B1; full acceptance in
+    # (B1; full acceptance in
     # scripts/verify_beam_deposition.py — this is the fast subset).
     from cablp.funcs._beam_deposition import (
         _COULOMB_STOPPING_EXPONENT,
@@ -8453,7 +8453,7 @@ def main():
     )
     assert abs(b1_total - b1_budget) / b1_budget < 1e-10
     # Breakdown conditions: several inelastic events per primary (the
-    # single-event Beer-Lambert booking caps at 1 — THESIS_NOTES item 10).
+    # single-event Beer-Lambert booking caps at 1 — recorded as item 10).
     b1_events = (
         b1_res.ionization_events.sum() + b1_res.excitation_events.sum()
     ) / 1.0e22
@@ -9219,7 +9219,7 @@ def main():
         atol=0.0,
     )
 
-    # --- Directed recycle jets (CATHODE_IDRIVEN_PLAN.md §8): cathode-face
+    # --- Directed recycle jets: cathode-face
     # backscatter + effusion and anode-mesh backscatter ride the SAME terms
     # that rebirth the recycle particles, as M_n sources; the mesh
     # accommodates the wind momentum its wires intercept. Validation fails
@@ -9300,9 +9300,12 @@ def main():
     # deriving whether the anode collects ions here needs the ion-sheath
     # physics. The M_n directed-jet module may be rewritten from the ES1
     # baseline findings (Tom), so its anode-channel physics assertions are
-    # deferred rather than re-derived now. Tracked in DEPRECATION_PLAN.md D3 /
-    # R5_STANCE_FLIP_HANDOFF.md. The flag plumbing + construction validation
-    # above, and the mesh-accommodation stencil below, still run.
+    # deferred rather than re-derived now. The deferral retires once one of
+    # two things settles what the anode channel should assert: the anode
+    # ion-sheath current is derived properly, or the directed-jet module is
+    # rewritten. Until then this is a deliberate gap in coverage, not an
+    # oversight. The flag plumbing + construction validation above, and the
+    # mesh-accommodation stencil below, still run.
 
     # Floating (afterglow) solve: the jet rides the floating sheath drop --
     # tiny but finite, never NaN.
@@ -10202,7 +10205,9 @@ def main():
     # quoted over the retired pre-phase-padded window). The ES config is not
     # finalized (geometry + V_bank=180 circuit refit deferred), and startup
     # cleanliness is validated there. Soft-bound here so it does not regress
-    # badly. See R5_STANCE_FLIP_HANDOFF.md.
+    # badly: these two asserts are a REGRESSION GUARD against the numbers
+    # drifting, not a physics gate on the values themselves, because the
+    # configuration they measure is still expected to move.
     assert len(startup_result.timestep_rejection_events["time"]) < 20
     _startup_floor = sum(abs(v) for v in startup_result.floor_ledger.values())
     assert _startup_floor < 1.0e4  # erg, negligible vs the multi-kW plasma
@@ -10287,7 +10292,7 @@ def main():
     ], "start_simulation()'s own run() must not warn"
     assert _eq_sim3._run_via_start_simulation, "run() must not clear the guard"
 
-    # --- S_gp is born at rest (NEUTRAL_MOMENTUM_PLAN.md, 2026-07-28) --------
+    # --- S_gp is born at rest (2026-07-28) ---------------------------------
     # The gas puff is a source of ZERO-parallel-momentum particles: cold gas
     # arrives through the pipe with no directed axial momentum, so S_gp adds
     # nn (and nn_a) and must NEVER add M_n / M_n_a. The only momentum the

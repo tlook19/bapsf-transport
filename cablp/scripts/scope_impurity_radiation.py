@@ -1,6 +1,6 @@
 """Scoping: can ppm-level C/O impurity radiation supply the missing Te sink?
 
-Tests the CATHODE_IDRIVEN_PLAN.md §7c hypothesis (ii) against real ADAS
+Tests hypothesis (ii) of the Te-excess scoping against real ADAS
 data before any model term is written: the stage-(ii) Te excess (~2x at
 ES1, worsening down the fixed-fueling ladder while n transfers at ~1.0)
 has the shape of a missing n^2-scaling radiative sink, and stainless
@@ -28,7 +28,7 @@ data in any series.
 Verdict on record (2026-07-21, es1_nx120_m5ap_es1.h5): required
 f_imp ~ 10 % (O or C, equilibrium L_z at model Te), >= 3-7 % even at the
 non-equilibrium ceiling -- the >= 1 % plausibility gate fires and the
-campaign stops before implementation.  The §7c arithmetic assumed
+campaign stops before implementation.  The original ppm arithmetic assumed
 L_z(O) ~ 5e-25 W cm^3 at 5-15 eV; the ADAS GCR equilibrium value there is
 1e-26 - 5e-26 W cm^3 (the 5e-25 class is only reached near the O radiation
 peak at ~20-40 eV), a factor ~20-50 that the ppm estimate inherited.

@@ -164,7 +164,7 @@ def _apply_plasma_walls(
     A closed face carries no particle or thermal-energy flux, but pressure acts on
     it so a uniform stationary state still has zero divergence. This generalizes
     the historical external-end-only walls (the plasma domain is now bounded
-    *inside* the neutral domain by the cathode surfaces, §5); the pressure comes
+    *inside* the neutral domain by the cathode surfaces); the pressure comes
     from the live plasma cell, which for the external ends is cell 0 and cell -1
     exactly as before.
 
@@ -193,7 +193,7 @@ def _apply_plasma_walls(
             live = right if live_is_right else left
             face_M[face] = pressure[live]
     if characteristic_boundary:
-        # R3.1 (SIM1D_MODEL_AUDIT_PLAN "R3.1 boundary approach"): the plasma-
+        # R3.1 boundary approach: the plasma-
         # terminating (absorbing) faces are handled by the one-sided
         # characteristic ghost-cell Bohm outflow (sources.characteristic_
         # boundary_rhs), which supplies the particle, momentum, and energy flux

@@ -1,7 +1,7 @@
 """Compare the historical He atomic-rate fits against the packaged ADAS data.
 
-This regenerates the evidence behind ``atomic_rate_model = "adas"``
-(THESIS_NOTES.md section 2): the IAEA He I "electron cooling rate" fit
+This regenerates the evidence behind ``atomic_rate_model = "adas"``:
+the IAEA He I "electron cooling rate" fit
 contains the ionization-potential loss (so the model's separate
 ionization-cost term double-counts it), the He II fit is roughly 2x high,
 and the direct ground-state ionization rate misses the stepwise/metastable

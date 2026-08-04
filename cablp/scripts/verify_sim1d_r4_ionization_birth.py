@@ -1,4 +1,4 @@
-"""R4.2 ionization-birth-moment gate suite (SIM1D_MODEL_AUDIT_PLAN R4, A14).
+"""R4.2 ionization-birth-moment gate suite (audit A14).
 
 Pre-registered gates for the unified ionization birth energy moments. The audit
 finding A14: bulk ADAS ionization books electron birth energy

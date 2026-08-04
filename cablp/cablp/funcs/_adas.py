@@ -197,8 +197,9 @@ def he_rates(ne_cm3, Te_eV, quantities, low_te_extension=False):
 
     -- the model's own radiative + classical three-body coefficients, so
     the extension carries the known power laws with no new data and no
-    free parameters (KINETIC_TWOZONE_PLAN/§5b afterglow ledger audit,
-    2026-07-22). Quantities other than acd/prb1 keep the clamp (SCD at
+    free parameters -- the extension introduces no constant that is not
+    already an ADAS coefficient, and it was checked against the afterglow
+    energy ledger (2026-07-22). Quantities other than acd/prb1 keep the clamp (SCD at
     sub-edge Te is exponentially dead regardless).
     """
     (log_ne_grid, log_te_grid), tables = _shared_grid_tables()

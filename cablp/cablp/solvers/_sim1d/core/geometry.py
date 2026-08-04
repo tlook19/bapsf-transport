@@ -3,9 +3,9 @@ from dataclasses import dataclass
 import numpy as np
 
 
-# Roles that carry no plasma: the machine behind the cathode (BOUNDARY_REGIONS_
-# PLAN.md §5). The plasma domain is bounded inside the neutral domain by a
-# reflecting face wherever a plasma-dead cell abuts a live one.
+# Roles that carry no plasma: the machine behind the cathode. The plasma domain
+# is bounded inside the neutral domain by a reflecting face wherever a
+# plasma-dead cell abuts a live one.
 PLASMA_DEAD_ROLES = frozenset({"plenum", "obstruction"})
 
 
@@ -54,7 +54,7 @@ class Sim1DGeometry:
     heat_transmission: np.ndarray
     neutral_face_conductance_cm3_s: np.ndarray
     center_distance_cm: np.ndarray
-    # Positions of the cathode and anode *surfaces* (plan §11 decision 5): face
+    # Positions of the cathode and anode *surfaces*: face
     # indices. The cathode faces are plasma walls at z = 0; the anode faces are
     # interior and plasma-open, throttled for heat and neutrals in M3.
     cathode_face_indices: np.ndarray
@@ -78,8 +78,8 @@ class Sim1DGeometry:
 def build_geometry(input_dict, flags=None):
     """Build the resolved typed-segment machine geometry.
 
-    ``resolved_boundaries=False`` was removed at DEPRECATION_PLAN D2. Keep a
-    construction-time error for stale configurations so they cannot silently
+    ``resolved_boundaries=False`` and the legacy lumped geometry were removed.
+    Keep a construction-time error for stale configurations so they cannot silently
     change geometry; historical results remain reproducible at
     ``legacy-final-2026-07-22``.
     """
@@ -95,14 +95,14 @@ def build_geometry(input_dict, flags=None):
     stale = sorted(removed_keys.intersection(input_dict))
     if stale:
         raise ValueError(
-            "legacy geometry keys were removed at DEPRECATION_PLAN D2: "
+            "these legacy lumped-geometry keys have been removed: "
             + ", ".join(stale)
             + "; reproduce that configuration at tag legacy-final-2026-07-22"
         )
     flags = flags or {}
     if not bool(flags.get("resolved_boundaries", True)):
         raise ValueError(
-            "resolved_boundaries=False was removed at DEPRECATION_PLAN D2; "
+            "resolved_boundaries=False has been removed; "
             "use resolved typed-segment geometry or reproduce the historical "
             "configuration at tag legacy-final-2026-07-22"
         )
@@ -123,7 +123,7 @@ def puff_cell_indices(geometry):
 def pump_cell_indices(geometry):
     """Return ``(left, right)`` cell indices carrying the pump sinks.
 
-    The pump belongs on the plenum behind a cathode (§4); the non-cathode end
+    The pump belongs on the plenum behind a cathode; the non-cathode end
     keeps its own pump on the collector. Resolving by role keeps this correct if
     the layout changes.
     """
@@ -139,7 +139,7 @@ def _derive_cathode_adjacent_cells(cell_role, cathode_face_indices):
     """Resolve the plasma cell against each cathode surface, from scratch.
 
     The cathode surface is a face, so its surface terms (ion neutralization,
-    sheath electron loss, ohmic deposition -- §8) land on the plasma-side cell
+    sheath electron loss, ohmic deposition) land on the plasma-side cell
     next to it. Plasma is on the high-z side at the source cathode and the low-z
     side at a twin cathode, so pick whichever neighbour is not plasma-dead.
 
@@ -185,7 +185,7 @@ def anode_flanking_cells(geometry):
     """Return ``(gap_side, column_side)`` cell pairs flanking each anode face.
 
     The anode neutralizes collected ions on *both* mesh faces, so the resulting
-    neutrals are split across the two cells it separates (§7); the mesh throttles
+    neutrals are split across the two cells it separates; the mesh throttles
     flow between them, which is why the side matters.
     """
     pairs = []
@@ -199,7 +199,7 @@ def gap_cell_indices(geometry, end=0):
 
     Ohmic dissipation is I^2 R_p with R_p the plasma resistance *between* the
     cathode and the anode, so the power is deposited along the gap rather than
-    piled into one boundary cell (§8).
+    piled into one boundary cell.
 
     ``end`` selects the machine end: ``0`` for the source cathode, ``-1`` for the
     twin.
@@ -249,11 +249,11 @@ def _anode_neutral_transparency(input_dict):
 
 
 def _build_resolved_geometry(input_dict, flags):
-    """Build the resolved typed-segment machine (BOUNDARY_REGIONS_PLAN.md §3).
+    """Build the resolved typed-segment machine.
 
     The **cathode surface is the origin**: it sits at ``z = 0`` and the anode at
-    ``z = cathode_anode_gap_cm``. Both are *faces*, not cells (plan §11 decision
-    5) -- surfaces have a position but no length. The plenum and any obstruction
+    ``z = cathode_anode_gap_cm``. Both are *faces*, not cells -- surfaces have
+    a position but no length. The plenum and any obstruction
     extend to negative z behind the cathode, so ``Lm`` spans the cathode surface
     to the far machine end and the total mesh is longer than ``Lm``.
 
@@ -262,15 +262,15 @@ def _build_resolved_geometry(input_dict, flags):
         [plenum, (obstruction)] |cathode  [cathode..gap x nx_gap]  anode|
         [puff, column x (nx-1)] [collector]
 
-    Twin cathode (``TwinCathode``) mirrors the source end instead of the collector
-    (plan §11 decision 4), putting its cathode surface at ``z = Lm``. Column cells
-    adjacent to an anode face carry the ``puff`` role (gas enters in front of the
-    anode, §2); the plasma cell against a cathode surface carries the ``cathode``
-    role so cathode surface terms have somewhere to land (§8).
+    Twin cathode (``TwinCathode``) mirrors the source end instead of the
+    collector, putting its cathode surface at ``z = Lm``. Column cells
+    adjacent to an anode face carry the ``puff`` role (gas enters in front of
+    the anode); the plasma cell against a cathode surface carries the
+    ``cathode`` role so cathode surface terms have somewhere to land.
 
-    The annular cathode-structure obstruction is a *real cell* of length ``Lcs``
-    (plan §11 decision 1), so it holds gas and its inventory reaches the pump. It
-    is omitted entirely when ``Lcs <= 0``, which is the legacy limit.
+    The annular cathode-structure obstruction is a *real cell* of length
+    ``Lcs``, so it holds gas and its inventory reaches the pump. It is omitted
+    entirely when ``Lcs <= 0``, which is the legacy limit.
 
     The default-off ``source_fixed_grid`` flag replaces the uniform column with a
     fixed-cell source region plus an ``nx``-refined far column, so a refinement
@@ -407,8 +407,8 @@ def _build_resolved_geometry(input_dict, flags):
     Rp_cm = np.full(cells, Rp, dtype=float)
     Rm_cm = np.full(cells, Rm, dtype=float)
     # Plenum cells stay at full plasma radius: they are made plasma-dead by the
-    # reflecting cathode face, not by shrinking Rp (§5 warns a near-zero plasma
-    # volume blows up the flux divergence).
+    # reflecting cathode face, not by shrinking Rp: a near-zero plasma
+    # volume blows up the flux divergence.
     plasma_area_cm2 = np.pi * Rp_cm**2
     neutral_area_cm2 = np.pi * Rm_cm**2
     neutral_hydraulic_radius_cm = Rm_cm.copy()
@@ -451,14 +451,14 @@ def _build_resolved_geometry(input_dict, flags):
         ] = end_face_area
 
     # Obstruction cells are an annular duct: reduced open area AND a reduced
-    # hydraulic radius (Rm - Rcs), the two differing independently (§3 keystone).
+    # hydraulic radius (Rm - Rcs), the two differing independently.
     obstruction = cell_role == "obstruction"
     if np.any(obstruction):
         neutral_area_cm2[obstruction] = np.pi * (Rm**2 - Rcs**2)
         neutral_hydraulic_radius_cm[obstruction] = Rm - Rcs
 
     # Support rods block plenum volume only: distributed thin structure, not a
-    # duct, so the hydraulic radius is untouched (§3).
+    # duct, so the hydraulic radius is untouched.
     if Rsup > 0.0:
         plenum = cell_role == "plenum"
         neutral_area_cm2[plenum] = np.pi * (Rm**2 - Rsup**2)
@@ -809,8 +809,8 @@ def _assemble_geometry(
     dead = np.asarray([role in PLASMA_DEAD_ROLES for role in cell_role], dtype=bool)
     plasma_active = ~dead
     # Absorbing faces are the plasma-terminating surfaces: the whole cross-section
-    # ends there, so the plasma goes sonic into the sheath and is neutralized
-    # (plan §11 decision 3). They are a *refinement* of walls -- nothing passes
+    # ends there, so the plasma goes sonic into the sheath and is neutralized.
+    # They are a *refinement* of walls -- nothing passes
     # through to the far side -- and legacy geometry has none, keeping its
     # historical volumetric surface terms.
     plasma_absorbing = np.zeros(cells + 1, dtype=bool)
@@ -842,13 +842,13 @@ def _assemble_geometry(
             plasma_face_live_cell[face] = int(adjacent[0])
 
     # The anode mesh is plasma-open but partially blocking, and the three
-    # transmissions are independent (§3). eta = 0 recovers a fully transparent
+    # transmissions are independent. eta = 0 recovers a fully transparent
     # anode -- the legacy limit.
     #
     # Heat and neutrals are throttled by the transparency (1-eta). The *advective*
     # plasma flux is NOT: the anode removes plasma through the Bohm sheath flux at
     # its wires (physics/sources.anode_collection_rhs), and shrinking the face as
-    # well would remove the same particles twice (§5). Mass that misses a wire
+    # well would remove the same particles twice. Mass that misses a wire
     # simply streams through the holes. `b_anode_advective_block` (default 0)
     # exists only to dial that blocking back in for a sensitivity study; note it
     # *reflects* rather than absorbs, since the absorption is always Bohm.

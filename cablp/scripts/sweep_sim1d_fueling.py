@@ -1,8 +1,8 @@
 #!/usr/bin/env python
-"""C1: quantify the fueling-bifurcation sensitivity (BEAM_DEPOSITION_PLAN WP-C).
+"""C1: quantify the fueling-bifurcation sensitivity (WP-C).
 
-The ES1 operating point sits on the hot-starved / cold-flooded regime boundary
-(THESIS_NOTES §3): tuned ``S_gp`` values carry a large, previously
+The ES1 operating point sits on the hot-starved / cold-flooded regime
+boundary: tuned ``S_gp`` values carry a large, previously
 unquantified sensitivity. This sweeps ``S_gp`` (with ``S_gp_decay_target``
 scaled proportionally, per the documented bracket protocol) around the
 production value on the current-driven benchmark (manifold excitation,

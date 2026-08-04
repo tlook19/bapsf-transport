@@ -1,4 +1,4 @@
-"""R4.1 anode-mesh beam-interception gate suite (SIM1D_MODEL_AUDIT_PLAN R4, A15).
+"""R4.1 anode-mesh beam-interception gate suite (audit A15).
 
 Pre-registered gates for the CSDA anode-mesh interception event. The audit finding
 A15: ``funcs/_beam_deposition.deposit_beam`` launches the full emitted flux

@@ -1,6 +1,6 @@
 """Run the candidate config with a chosen warming mechanism across the ladder.
 
-Mechanism-campaign driver (CATHODE_IDRIVEN_PLAN.md §5b/§7b): candidate
+Mechanism-campaign driver: candidate
 config = current_driven + manifold-era csda_ql deposition + gaussian
 emission profile + Schottky (flag default), with per-campaign inputs
 restricted to the MEASURED pair (open-circuit V0; Fig-10 standby T_s) --
@@ -58,7 +58,7 @@ def main(argv=None):
                         "knob; frozen after ES1)")
     p.add_argument("--c-th", type=float, default=120.0,
                    help="skin-layer heat capacity [J/K] (honest >=120, "
-                        "THESIS_NOTES §2 energy budget)")
+                        "per the surface energy budget)")
     p.add_argument("--emissivity", type=float, default=0.7)
     p.add_argument("--annuli", type=int, default=None,
                    help="cathode_emission_annuli override (10 -> 30 A/B)")
@@ -86,7 +86,7 @@ def main(argv=None):
                         "(ALL arms of the jet A/B carry this, reference "
                         "included, so the A/B isolates the jet)")
     p.add_argument("--jet", choices=("cathode", "both"), default=None,
-                   help="directed recycle jets (CATHODE_IDRIVEN_PLAN.md §8) "
+                   help="directed recycle jets "
                         "at literature-boxed (R_N, R_E); requires --mn")
     p.add_argument("--cjet-RN", type=float, default=None,
                    help="cathode jet particle reflection coefficient "

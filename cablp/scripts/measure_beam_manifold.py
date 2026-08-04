@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Measure the He singlet excitation manifold seen by the cathode beam.
 
-BEAM_DEPOSITION_PLAN.md WP-A / A1: replaces the ``b_beam_excitation = 1.4``
+WP-A / A1: replaces the ``b_beam_excitation = 1.4``
 estimate (2^1P plus "roughly another 40%" for the rest of the singlet
 manifold) with the summed Ralchenko et al. (2008) fits over the full n <= 4
 manifold plus the Eq. (5) n >= 5 Rydberg tail.

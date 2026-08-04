@@ -6,12 +6,12 @@ from cablp.vars._cons import ev_to_erg
 
 
 STATE_NAMES_1D = ("n", "nn", "M", "Ee", "Ei")
-# The optional sixth field (NEUTRAL_MOMENTUM_PLAN.md): axial neutral momentum,
+# The optional sixth field: axial neutral momentum,
 # present only when the `neutral_momentum` flag builds it. STATE_NAMES_1D
 # stays the 5-field tuple because it anchors the historical packed layout,
 # the golden fixture, and the HDF5 format.
 NEUTRAL_MOMENTUM_NAME = "M_n"
-# The optional annulus neutral density (NEUTRAL_TWOZONE_PLAN.md): present only
+# The optional annulus neutral density: present only
 # when the `neutral_two_zone` flag builds it, and `nn` is then the COLUMN
 # density. Packed after M_n in flag-introduction order.
 NEUTRAL_ANNULUS_NAME = "nn_a"

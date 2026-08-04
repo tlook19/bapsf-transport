@@ -1,6 +1,6 @@
 """R5 ES1 ignition-threshold isolation probe (2026-07-25).
 
-Diagnosed blocker (R5_STANCE_FLIP_HANDOFF.md, "ES1 IGNITION-THRESHOLD SHIFT"):
+Diagnosed blocker -- the ES1 ignition-threshold shift:
 the repaired-stance ES config never ignites -- it sits in ``pre_breakdown`` at
 ``source_I_tot`` ~ 2.76 A (needs 150 A to leave prebreakdown) because the
 prebreakdown SEED is ~2.5x below the historical config that ignites. Measured at

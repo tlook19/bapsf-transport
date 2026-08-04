@@ -1,4 +1,4 @@
-"""Current-driven cathode sheath solve (CATHODE_IDRIVEN_PLAN.md M2).
+"""Current-driven cathode sheath solve (M2).
 
 The voltage-driven solver (``_cathode_solver.solve``) finds the intersection
 of the device curve with a Thevenin load line; under an inductive circuit
@@ -24,7 +24,7 @@ Everything physical is **imported** from ``_cathode_solver`` -- Richardson
 emission via ``DeviceConfig``, the space-charge release ``_j_eth_crit``,
 the annular emission state, the sheath power bookkeeping, and the beam
 pieces -- so the two solvers cannot drift apart. ``_cathode_solver`` itself
-is not modified (hard constraint, plan section 3): its solve paths remain
+is not modified (a hard constraint of this design): its solve paths remain
 the historical voltage-driven ones.
 
 ``SolverResult`` is returned field-for-field compatible, with two contract
@@ -47,11 +47,12 @@ floating branch models Boltzmann-suppressed emission over the virtual
 barrier, which is not the same limit as ``I_tot = 0`` through the hard
 space-charge clamp here; routing is the M3 dispatcher's job.
 
-Schottky barrier lowering (opt-in, plan section 2b): the extracting sheath
+Schottky barrier lowering (opt-in): the extracting sheath
 field lowers the effective work function,
 ``dphi = sqrt(e E_s / 4 pi eps0)``, tilting the vertical emission ceiling
-into a sloped line -- physical conditioning of the knee. Closure (stated,
-per plan): the surface field is the Child-Langmuir diode field of the
+into a sloped line -- physical conditioning of the knee. Closure (stated
+explicitly because it is a modelling choice): the surface field is the
+Child-Langmuir diode field of the
 classical sheath, ``E_s = (4/3) phi_c / s_CL`` with
 ``s_CL = (sqrt(2)/3) lambda_D (2 psi)^(3/4)``; it applies on the
 temperature-limited branch only. The per-annulus/per-disc branches are:
@@ -68,7 +69,7 @@ temperature-limited branch only. The per-annulus/per-disc branches are:
 
 which is continuous in psi, reduces bit-for-bit to the historical branches
 with the term off, and preserves monotonicity. Any phi_wf fit must state
-this term's on/off status (plan section 3b): the lowering is ~0.05-0.1 eV,
+this term's on/off status: the lowering is ~0.05-0.1 eV,
 the same order as the fit resolution.
 """
 
@@ -122,7 +123,7 @@ _J_PLATEAU_TOL_REL = 64.0 * sys.float_info.epsilon
 _SCHOTTKY_EV_PER_SQRT_V_M = 3.7946865e-5
 
 # Thermal-bridge half-width, in units of kT_s of would-be barrier depth
-# (CATHODE_IDRIVEN_PLAN.md, chatter diagnosis 2026-07-21). The emitted
+# (chatter diagnosis, 2026-07-21). The emitted
 # Maxwellian has energy spread kT_s, so the SCL<->classical release corner
 # is physically smooth over ~kT_s of barrier -- the transition variable is
 # x = ln(J_eff/J_crit) = (would-be barrier)/kT_s, and the corner max(0, x)
@@ -404,7 +405,7 @@ def solve_idriven(
     sigma_par = 14.6 * T_e**1.5
     R_p = config.L_cath / (math.pi * config.R_cath**2 * sigma_par)
     C_s = math.sqrt(T_e * _e_SI * 1.0e7 / (config.mu * _mp_cgs))
-    # Sheath-edge sampling (R3.2, SIM1D_MODEL_AUDIT_PLAN A16): the ion Bohm
+    # Sheath-edge sampling (R3.2 / A16): the ion Bohm
     # current is drawn at the sheath-edge density n_se = alpha_sheath * n_e. The
     # historical flat exp(-1/2) is the Boltzmann drop across a presheath that
     # fits inside the cell; the fluid boundary instead uses the mesh-independent

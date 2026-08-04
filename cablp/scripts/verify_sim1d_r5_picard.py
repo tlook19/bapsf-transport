@@ -1,4 +1,4 @@
-"""R5.1 gated fluid<->circuit Picard gate suite (SIM1D_MODEL_AUDIT_PLAN R5.1, A11).
+"""R5.1 gated fluid<->circuit Picard gate suite (audit A11).
 
 The `coupled_circuit_picard` flag re-runs the accepted step with the frozen loop
 current updated to the previous iteration's result, when |dI/dt| is large (the
@@ -8,7 +8,7 @@ is `verify_sim1d_r3_a11.py --picard`):
 
   H1  snapshot/restore round-trip: `_picard_snapshot` -> advance a full step ->
       `_picard_restore` returns EVERY step-mutated attribute bit-identical to the
-      pre-step state (the AGENTS.md accepted-step invariant -- rejected Picard
+      pre-step state (the accepted-step invariant -- rejected Picard
       iterations must not leak state).
   N1  no-op: picard ON with a trigger so large it never fires (one pass) is
       bit-identical to picard OFF over a short trajectory.

@@ -24,16 +24,15 @@ Three comparison stages, in tuning order (each scored independently):
       to extend it toward the measured 27.5 ms tail.
 
 Separately, ``--beta-collapse`` runs the simulation-informed sweep-bias
-diagnostic (CATHODE_IDRIVEN_PLAN.md section 5b, HYPOTHESIS ON RECORD
-2026-07-22 plus its two addenda) over a set of saved reference runs: per
+diagnostic (HYPOTHESIS ON RECORD 2026-07-22 plus its two addenda) over
+a set of saved reference runs: per
 (port, ES rung, window) residual vectors (dlnTe, dln n) are decomposed
 against the (1, -1/2) sweep-inversion manifold, per-rung probe-area
 drift (pure n direction), and whatever z/regime structure is left (model
 error). Kinetic (k4*) runs are scored in the plateau window only; the
 afterglow lives on the Isat decay traces. When the overlay carries the
-raw inter-sweep drive Isat (``isat_drive_*``, schema v4; exporter brief
-CATHODE_IDRIVEN_PLAN.md 7h) the area guard runs in its within-shot
-native form and a model-free sweep-chain consistency check is added.
+raw inter-sweep drive Isat (``isat_drive_*``, schema v4) the area guard
+runs in its within-shot native form and a model-free sweep-chain consistency check is added.
 beta and a_{p,r} are hypothesis-test outputs, never data corrections.
 
 Usage::
@@ -271,7 +270,7 @@ FLAG_OVERRIDES = {
 }
 
 
-# WP-D beam product transport (BEAM_DEPOSITION_PLAN). "local" is the
+# WP-D beam product transport. "local" is the
 # production stance and the config.py default, so it is deliberately absent
 # from PARAM_OVERRIDES; "nonlocal" is an A/B arm that must travel with the run
 # it scored. Reported as a delta only -- a production (local) artifact scores
@@ -375,7 +374,7 @@ def run_model(
     params["neutral_exchange_model"] = exchange_model
     if nx is not None:
         params["nx"] = nx
-    # A/B instrument for THESIS_NOTES gate #2 (NEUTRAL_MOMENTUM_PLAN.md M4):
+    # A/B instrument for the drag-closure gate (M4):
     # swap the drag closure without touching the rest of the production
     # config. "constant" is PARAM_OVERRIDES as-is (the calibrated 0.5);
     # "slip" is the entrainment closure; "neutral_momentum" evolves M_n with
@@ -394,7 +393,7 @@ def run_model(
         flags["neutral_momentum"] = True
     elif drag_closure not in (None, "constant"):
         raise ValueError(f"unknown drag_closure {drag_closure!r}")
-    # A/B instrument for CATHODE_IDRIVEN_PLAN.md M1: profile-integrated
+    # A/B instrument for M1: profile-integrated
     # cathode-anode gap resistance vs the historical single-sample R_p.
     # With the production Rp == R_cath the geometric component vanishes, so
     # this isolates the Te-profile effect on V_dis(t).
@@ -550,7 +549,7 @@ def compare_peak_current(result, overlay):
     out["ratio"] = out["model_peak_a"] / out["exp_peak_a"]
 
     # Late-window plateau (15-19.5 ms): the model's early transient carries a
-    # known V_dis(t)-trajectory artifact (THESIS_NOTES section 2), so the
+    # known V_dis(t)-trajectory artifact, so the
     # established current scale is better read from the end of the drive.
     late = (15.0, 19.5)
     m_model = (t_model_ms >= late[0]) & (t_model_ms <= late[1])
@@ -582,8 +581,9 @@ def _efold_time_ms(t_ms, y, floor=0.0):
 # at trigger + tau_discharge = 20 ms, so this is the first 1.5 ms OF THE
 # AFTERGLOW -- the early, transport-dominated decay that both the model and
 # the Isat traces actually resolve. It matches DECAY_WINDOW_MS = (0.0, 1.5) in
-# the deck's afterglow decay figure, so the scored number and the plotted
-# number are the same number. Moved here from the historical (20.5, 25.0)
+# the afterglow decay figure published from these runs. The two windows are
+# kept deliberately identical so the scored number and the plotted number
+# are the same number; changing one without the other silently desyncs them. Moved here from the historical (20.5, 25.0)
 # (Tom, 2026-07-29): that band started 0.5 ms late and ran 5 ms out, so it
 # scored tail structure rather than the decay the figure is about.
 DECAY_WINDOW_MS = (20.0, 21.5)
@@ -701,8 +701,8 @@ def compare_decay(result, overlay, window_ms=DECAY_WINDOW_MS):
     return rows, (t0, t1)
 
 
-# --- beta-collapse diagnostic (CATHODE_IDRIVEN_PLAN.md section 5b,
-# HYPOTHESIS ON RECORD 2026-07-22 + two addenda).  Where the model agrees
+# --- beta-collapse diagnostic (HYPOTHESIS ON RECORD 2026-07-22 + two
+# addenda).  Where the model agrees
 # in Isat space (n*sqrt(Te), sweep-inversion systematics cancel), it is
 # licensed as a reference to test whether the residual Te/n disagreements
 # are a sweep-analysis systematic: a Te bias beta forces measured
@@ -901,8 +901,8 @@ def _beta_trace_points(
 
     ``prefix`` selects the trace family: ``isat_decay`` (afterglow,
     schema v2) or ``isat_drive`` (inter-sweep dead-time cells during the
-    drive, schema v4 -- see the augmenter in bapsf-lapd-data-analysis and
-    CATHODE_IDRIVEN_PLAN.md 7h).  Both are in amps from the swept
+    drive, schema v4 -- added to the overlay by the external data-analysis
+    exporter, not by this repo).  Both are in amps from the swept
     probe's own channel with NO area factor anywhere in the chain, and
     the model proxy n*sqrt(Te) is not in amps, so each value carries an
     unknown per-port unit constant.  Within one rung the constant is
@@ -1069,7 +1069,7 @@ def _beta_fingerprints(points):
 def _report_beta_collapse(runs, svr_by_rung=None):
     print(
         "\n=== beta-collapse diagnostic "
-        "(CATHODE_IDRIVEN_PLAN.md 5b, 2026-07-22 + addenda) ==="
+        "(hypothesis on record 2026-07-22 + addenda) ==="
     )
     print(
         "  beta and a_{p,r} are hypothesis-test outputs, NEVER data\n"
@@ -1579,8 +1579,8 @@ def main(argv=None):
         default=None,
         choices=("sample", "resolved_gap"),
         help=(
-            "cathode gap-resistance model for the M1 A/B "
-            "(CATHODE_IDRIVEN_PLAN.md): sample (historical one-cell "
+            "cathode gap-resistance model for the M1 A/B: "
+            "sample (historical one-cell "
             "Spitzer) or resolved_gap (profile-integrated over the gap)"
         ),
     )
@@ -1590,7 +1590,7 @@ def main(argv=None):
         choices=("scalar14", "manifold"),
         help=(
             "beam excitation channel for the WP-A A/B "
-            "(BEAM_DEPOSITION_PLAN.md A3): scalar14 (production 2p_scalar "
+            "(A3): scalar14 (production 2p_scalar "
             "with the historical b=1.4 estimate) or manifold (measured "
             "Ralchenko singlet sum, b=1.0)"
         ),
@@ -1600,8 +1600,8 @@ def main(argv=None):
         default=None,
         choices=("beer_lambert", "csda", "csda_ql"),
         help=(
-            "beam deposition model for the WP-B B3 A/B "
-            "(BEAM_DEPOSITION_PLAN.md): beer_lambert (historical "
+            "beam deposition model for the WP-B B3 A/B: "
+            "beer_lambert (historical "
             "single-event absorption), csda (slowing-down module, classical "
             "fast-electron Coulomb), or csda_ql (csda + quasilinear "
             "beam-plasma drag)"
@@ -1612,8 +1612,8 @@ def main(argv=None):
         default=None,
         choices=("local", "nonlocal"),
         help=(
-            "beam product transport for the WP-D A/B "
-            "(BEAM_DEPOSITION_PLAN.md): local (production stance and "
+            "beam product transport for the WP-D A/B: "
+            "local (production stance and "
             "config default -- products thermalize where they are born) or "
             "nonlocal (products walk, and the escape ledger is live). "
             "nonlocal requires the CSDA deposition module and raises at "
@@ -1629,7 +1629,7 @@ def main(argv=None):
             "which experiment-set overlay to score against "
             "(data/es{N}_sim1d_overlay.npz; ES1-3 share fueling and differ "
             "only in heater current and bank voltage — the drive-side "
-            "ladder, THESIS_NOTES §2). NB the model config must match the "
+            "ladder). NB the model config must match the "
             "campaign's operating point; this flag only selects the data."
         ),
     )
@@ -1640,7 +1640,7 @@ def main(argv=None):
         metavar="RUN.h5[:es=N][:kind=kinetic|moment]",
         help=(
             "run the sweep-bias beta-collapse diagnostic over saved "
-            "reference runs (CATHODE_IDRIVEN_PLAN.md 5b + addenda) instead "
+            "reference runs (hypothesis on record + addenda) instead "
             "of scoring a single run; rung/kind parse from the file name. "
             "With no arguments, picks up the canonical "
             "es1_nx120_m6_sq3400_{2zbase,2z,k4t}_es{1,2,3}.h5 set as "
@@ -1694,7 +1694,7 @@ def main(argv=None):
         extra = {}
         if args.tau_afterglow is not None:
             extra["tau_afterglow"] = args.tau_afterglow
-        # A/B instrument for BEAM_DEPOSITION_PLAN.md A3: the measured singlet
+        # A/B instrument for A3: the measured singlet
         # manifold vs the retired 1.4 estimate. "scalar14" is PARAM_OVERRIDES
         # as-is; "manifold" swaps the cross-section set and drops b to the
         # pure-multiplier benchmark value.

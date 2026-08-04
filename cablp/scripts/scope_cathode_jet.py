@@ -1,4 +1,4 @@
-"""Step-1 scoping for the cathode neutral-jet hypothesis (CATHODE_IDRIVEN_PLAN §8).
+"""Step-1 scoping for the cathode neutral-jet hypothesis.
 
 Reads the saved M5a' reference matrices (no physics change, no model import)
 and computes, per ladder rung:
@@ -28,8 +28,8 @@ La), which dwarfs the fit-formula uncertainty:
   - He -> B (Z=5/M=10.8): eps ~ 0.07-0.22; light-target reflection is far
     weaker: R_N ~ 0.05-0.15, R_E ~ 0.02-0.06.
 
-The scoping bracket below evaluates the OPTIMISTIC (La-like), MID (plan §8's
-R_N 0.5 / R_E 0.2), and PESSIMISTIC (B-like) corners; the gate verdict is
+The scoping bracket below evaluates the OPTIMISTIC (La-like), MID (the
+nominal R_N 0.5 / R_E 0.2), and PESSIMISTIC (B-like) corners; the gate verdict is
 taken at the pessimistic corner.
 
 Usage:
@@ -55,7 +55,7 @@ REFS = {
 # (label, R_N, R_E) -- the literature box (docstring above).
 RN_RE_BOX = [
     ("pessimistic (B-like)", 0.10, 0.04),
-    ("mid (plan §8)", 0.50, 0.20),
+    ("mid (nominal)", 0.50, 0.20),
     ("optimistic (La-like)", 0.60, 0.35),
 ]
 

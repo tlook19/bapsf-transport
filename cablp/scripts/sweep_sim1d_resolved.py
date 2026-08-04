@@ -1,4 +1,4 @@
-"""Validation sweeps for the resolved source/end boundary (M6, plan §10).
+"""Validation sweeps for the resolved source/end boundary (M6).
 
 Two studies:
 
@@ -12,7 +12,7 @@ Two studies:
     should drift, which is the control.
 
 ``--sensitivity``
-    Vary the knobs plan §10 calls out -- ``Lcs``, ``Rcs``, ``Rsup``, ``eta`` and
+    Vary the resolved-geometry knobs -- ``Lcs``, ``Rcs``, ``Rsup``, ``eta`` and
     pump speed -- around the resolved default, to see which actually move the
     answer. Each is at its legacy limit in the default config, so the deltas here
     are also a check that the knobs are wired to something.
@@ -166,7 +166,7 @@ def convergence(nx_gaps, exchange_model="knudsen"):
 
 
 def sensitivity(exchange_model="knudsen"):
-    """Vary the §10 knobs around the resolved default."""
+    """Vary the resolved-geometry knobs around the resolved default."""
     cases = [
         ("resolved default", {}),
         ("Lcs=25, Rcs=25 (duct)", {"Lcs": 25.0, "Rcs": 25.0}),

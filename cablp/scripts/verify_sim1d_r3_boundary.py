@@ -1,7 +1,7 @@
 """R3.1 characteristic ghost-cell Bohm outflow: pre-registered unit gates.
 
-Static gates for R3.1 (SIM1D_MODEL_AUDIT_PLAN "R3.1 boundary approach: ghost-cell
-Bohm outflow"; audit A1/A16). The characteristic boundary replaces the closed-
+Static gates for R3.1, the ghost-cell Bohm outflow boundary approach
+(audit A1/A16). The characteristic boundary replaces the closed-
 reflecting-face + one-sided volumetric absorber with a one-sided ghost-cell
 KEP/Rusanov flux against the Bohm outflow state (n_se = n*presheath_alpha,
 u = c_s into the wall, Te, Ti). These gates check the boundary in isolation on a

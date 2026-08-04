@@ -1,4 +1,4 @@
-"""R5.2 electron heat-flux limiter gate suite (SIM1D_MODEL_AUDIT_PLAN R5.2, A9).
+"""R5.2 electron heat-flux limiter gate suite (audit A9).
 
 The default-off electron_heat_flux_limit flag scales the electron conductivity per
 cell by the harmonic (Cowie-McKee) flux limiter

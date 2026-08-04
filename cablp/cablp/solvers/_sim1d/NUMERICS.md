@@ -358,8 +358,7 @@ where the trigger does not fire (golden bit-exact). **R5.1 finding:** at product
 `dt` the per-step loop-current change is below the trigger (Picard-1% ≈
 sequential); the coupling sensitivity is confined to the internal sheath potential
 `V_b`/`φ_c` (the SCL-corner regime), while `I_tot` (~3%) and `T_s` are robust.
-Retained as a **default-off diagnostic**; sequential stays production. See
-`SIM1D_MODEL_AUDIT_PLAN.md` R5.1.
+Retained as a **default-off diagnostic**; sequential stays production.
 
 ## R5.2 electron heat-flux limiter (default off, audit A9)
 
@@ -378,5 +377,4 @@ operator stays a conservative flux divergence). Identities
 bit-exact); a declared A9 closure-family bracket — `f=1` targets only the ~gap
 cells (flux → ~42%), `f=0.1` suppresses conduction globally. The static
 engagement bracket is `probe_sim1d_r5_heatflux_bracket.py`; the dynamic
-scored-observable bracket (runs at each `f`) is deferred. See
-`SIM1D_MODEL_AUDIT_PLAN.md` R5.2.
+scored-observable bracket (runs at each `f`) is deferred.

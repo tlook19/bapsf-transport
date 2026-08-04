@@ -266,8 +266,8 @@ def electrode_sheath_alpha(
     """Return the mesh-independent sheath-edge factor ``n_se/n`` at one cell.
 
     The single source of truth for the collisional-presheath sampling
-    (R3.2, SIM1D_MODEL_AUDIT_PLAN A16 "one mesh-independent sheath-edge density
-    n_se ... SHARED by the fluid sink, the circuit current, and the power terms").
+    (R3.2 / A16): one mesh-independent sheath-edge density ``n_se``, SHARED by
+    the fluid sink, the circuit current, and the power terms.
     Both the fluid characteristic boundary (``characteristic_boundary_rhs``) and
     the circuit's cathode current (``funcs._cathode_solver_idriven.solve_idriven``
     via the cathode adapter) call this so they cannot disagree about ``n_se``.
@@ -308,7 +308,7 @@ def boundary_absorption_rhs(
 ):
     """Return the plasma absorbed by the plasma-terminating surfaces.
 
-    ``cathode_jet`` (CATHODE_IDRIVEN_PLAN.md §8): when given (a dict with
+    ``cathode_jet``: when given (a dict with
     ``R_N``, ``R_E``, ``phi_c_V``, ``T_s_K``) and the state carries ``M_n``,
     the recycle flux rebirthed at a *cathode* face is a directed jet instead
     of gas at rest: the reflected fraction ``R_N`` backscatters at
@@ -326,7 +326,7 @@ def boundary_absorption_rhs(
     arm that bounds the omission.
 
     The cathode and collector surfaces end the plasma domain, so the Bohm
-    criterion applies to the face itself (plan §11 decision 3): plasma leaves at
+    criterion applies to the face itself: plasma leaves at
     the sound speed and is neutralized on the surface.
 
     Applied one-sidedly to the live cell rather than as a face flux, because the
@@ -472,8 +472,8 @@ def characteristic_boundary_rhs(
 ):
     """Return the R3.1 characteristic ghost-cell Bohm outflow at absorbing faces.
 
-    R3.1 (SIM1D_MODEL_AUDIT_PLAN "R3.1 boundary approach: ghost-cell Bohm
-    outflow"; audit A1/A16) replaces the closed-reflecting-face + one-sided
+    The R3.1 boundary approach (ghost-cell Bohm outflow; audit A1/A16)
+    replaces the closed-reflecting-face + one-sided
     volumetric sink of ``boundary_absorption_rhs``. At each plasma-terminating
     (absorbing) face a ghost state is set to the Bohm outflow condition
 
@@ -607,7 +607,7 @@ def characteristic_boundary_rhs(
         d_M[live] += scale * f_M
         d_Ei[live] += scale * f_Ei
         # Electron energy row. R3.1: the ghost enthalpy flux (~3/2 Te). R3.2/A16
-        # sheath-transmission routing (SIM1D_MODEL_AUDIT_PLAN "R3 physics map"):
+        # sheath-transmission routing:
         # the electron wall loss is the flux-weighted sheath value 2 Te, and the
         # sheath-fall phi is electrode energy (never the plasma thermal store).
         # At DRIVEN electrodes (cathode) the circuit owns it -- it is booked once
@@ -687,7 +687,7 @@ def anode_collection_rhs(
 ):
     """Return the plasma the anode mesh collects and neutralizes.
 
-    ``anode_jet`` (CATHODE_IDRIVEN_PLAN.md §8, anode addendum): when given
+    ``anode_jet``: when given
     (a dict with ``R_N``, ``R_E``, ``phi_a_V``) and the state carries
     ``M_n``, the backscattered fraction ``R_N`` of each side's collected
     flux re-emits as a directed jet AWAY from the mesh on the side it was
@@ -709,10 +709,11 @@ def anode_collection_rhs(
     The wires present the solid fraction ``eta`` of the plasma cross-section to
     *each* side, and each face is evaluated against the plasma actually on that
     side, so a mesh separating hot gap plasma from cooler column plasma collects
-    asymmetrically -- the sum is the plan's ``2 * eta * I_i_a`` with each half
+    asymmetrically -- the sum is the historical ``2 * eta * I_i_a`` with each
+    half
     sampled locally. Neutrals are released on the side they were collected from,
     since a wire blocks the path to the other side and the mesh throttles neutral
-    flow between them (§7).
+    flow between them.
 
     The full ``alpha_isat`` applies here, and that is the *same* rule
     ``boundary_absorption_rhs`` uses rather than an exception to it. The factor is
@@ -728,7 +729,7 @@ def anode_collection_rhs(
 
     Mass, momentum and thermal energy leave together as at any wall; the collected
     momentum is absorbed by the grounded anode structure rather than heating the
-    ions (§5). ``eta = 0`` gives a transparent anode -- the legacy limit -- and
+    ions. ``eta = 0`` gives a transparent anode -- the legacy limit -- and
     legacy geometry has no anode faces at all.
     """
     zeros = np.zeros(geometry.cells, dtype=float)
@@ -791,8 +792,7 @@ def anode_collection_rhs(
         jet_M_n *= float(b_anode_collection)
 
     plasma_loss_rate = dN_loss / geometry.plasma_volume_cm3
-    # Two-zone state: the mesh feeds the ANNULUS (walls and the mesh feed
-    # the annulus, NEUTRAL_TWOZONE_PLAN.md), falling back to the column in
+    # Two-zone state: the mesh feeds the ANNULUS, falling back to the column in
     # annulus-free cells; the jet momentum stays chamber-mean on M_n.
     if state.nn_a is not None:
         V_col = np.asarray(geometry.plasma_volume_cm3, dtype=float)
@@ -1033,7 +1033,7 @@ def neutral_wind_velocity(state, floors, ion_mass_g, geometry=None):
     When ``M_n_a`` is present, ``M_n`` is the COLUMN momentum density and
     divides by the column density directly. Otherwise ``M_n`` is a
     CHAMBER-MEAN momentum density, so on a two-zone state
-    (``nn_a`` present, NEUTRAL_TWOZONE_PLAN.md) the divisor must be the
+    (``nn_a`` present) the divisor must be the
     chamber-mean density ``(nn V_col + nn_a V_ann) / Vm`` -- dividing by
     the column ``nn`` alone would inflate the wind wherever the annulus
     holds the gas. That path requires ``geometry`` for the zone volumes.
@@ -1529,8 +1529,11 @@ def radial_recycling_rhs(
 ):
     """Return the radial-loss + wall-recycling proxy source terms.
 
-    **This is a documented stand-in for radial physics the 1D model lacks**
-    (THESIS_NOTES section 3): plasma is lost radially at ``-n / tau_s``, the
+    **This is a deliberate stand-in for radial physics the 1D model lacks**,
+    and this docstring is its statement of record: the axial model resolves no
+    radial coordinate, so radial confinement and the wall recycling it drives
+    cannot emerge -- they are imposed here through the single knob ``tau_s``.
+    Plasma is lost radially at ``-n / tau_s``, the
     wall neutralizes it, and the neutral returns *locally* as cold gas. Per
     cell, with ``S = n/tau``: the plasma channel loses particles, momentum,
     and thermal energy (the wall keeps all three -- this is a radial energy
@@ -1538,11 +1541,13 @@ def radial_recycling_rhs(
     particle inventory is conserved exactly; the returned gas is cold, so no
     energy comes back.
 
-    The tuning campaign's motivation (ES1_TUNING.md section 4): the model's
-    mid-column neutral burnout canyon has no refill channel, because the
-    physical refill -- wall recycling of radially-lost plasma, a
-    *distributed* neutral source -- is radial. This term is that channel
-    through one named knob. Its honesty test: LAPD radial confinement is of
+    The motivation: the model's mid-column neutral burnout canyon has no
+    refill channel, because the physical refill -- wall recycling of
+    radially-lost plasma, a *distributed* neutral source -- is radial. This
+    term is that channel through one named knob. ``tau_s`` is therefore a
+    calibrated quantity, not one derived from anything else in the model, and
+    a result that uses it must say so. Its honesty test: LAPD radial
+    confinement is of
     order 5-25 ms, so a fitted ``tau_s`` in the low-ms range is plausible
     compensation, and anything far outside is a documented failure.
 
@@ -1604,8 +1609,8 @@ def neutral_momentum_wall_rhs(
     A free-molecular neutral carries its directed momentum to the chamber
     wall and thermalizes there in ``tau_wall = Rm / vbar_n(Tn)`` -- the same
     accommodation time the ``slip`` closure balances against, because the
-    local steady state of drag reception vs. this sink *is* that closure
-    (NEUTRAL_MOMENTUM_PLAN.md). The rhs is ``-M_n / tau_wall`` on the
+    local steady state of drag reception vs. this sink *is* that closure.
+    The rhs is ``-M_n / tau_wall`` on the
     neutral-momentum field only; a state without ``M_n`` gets zeros.
 
     A non-``None`` ``wall_rate_1_s`` (``neutral_wind_two_zone_factors``)

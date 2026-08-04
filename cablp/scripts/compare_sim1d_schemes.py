@@ -1,6 +1,7 @@
 """Controlled fixed-dt scheme comparison in a production-physics regime.
 
-THESIS_NOTES §4 item 3 asks: does scheme choice change the *physics* at all?
+The question this harness answers: does scheme choice change the
+*physics* at all?
 Every comparison so far has been uncontrolled — adaptive stepping gives each
 scheme a different step sequence, and the one spread observed (~0.3% in final
 thermal energy) was non-monotone in theta, the signature of trajectory

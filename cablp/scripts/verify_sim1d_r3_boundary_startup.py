@@ -1,7 +1,7 @@
 """R3.1 characteristic ghost-cell Bohm outflow: short startup RUN gate.
 
 R3.1 changes the boundary dynamics, so its decisive validation is a run, not a
-static probe (SIM1D_MODEL_AUDIT_PLAN "Approach discipline"; opening prompt §7l).
+static probe.
 This runs the live ES1 stance to a short startup window (through main discharge)
 twice -- with the characteristic ghost-cell Bohm outflow ON and with the
 historical closed-face + volumetric absorber (OFF) -- and checks that the

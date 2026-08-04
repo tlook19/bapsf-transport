@@ -90,7 +90,7 @@ def load_background(path, window_ms):
         if "u_n" in f:
             bg["un_model"] = np.mean(f["u_n"][:][m], axis=0)[sel]
         if "nn_a" in f:
-            # Two-zone run (NEUTRAL_TWOZONE_PLAN.md): the nn dataset is the
+            # Two-zone run: the nn dataset is the
             # COLUMN density and nn_a the annulus -- exactly the TPMC's
             # per-zone tallies. nn_model is rebuilt as the chamber mean for
             # the headline table; the per-zone comparison prints separately.
@@ -317,7 +317,7 @@ def run_mc(bg, n_particles, jet, rng, r_n=(0.5, 0.5), r_e=(0.2, 0.25),
     tal_t = np.zeros((ncell, 2))       # residence [atom-s per s] col/ann
     tal_tv = np.zeros((ncell, 2))      # sum w*dt*vz
     tal_ion = np.zeros(ncell)          # ionization sink [atoms/s]
-    # Time-dependent buildup tallies (KINETIC_TWOZONE_PLAN.md K0): for
+    # Time-dependent buildup tallies (K0): for
     # stationary sources switched on into an EMPTY box at t = 0, the density
     # at time T is exactly the steady residence tally restricted to
     # particle age < T -- so each segment contributes
@@ -508,7 +508,7 @@ def main(argv=None):
                     help="drop the volume-recombination birth source")
     ap.add_argument("--report-ms", default="1,2,3,5,8,12,17,25,40",
                     help="comma-separated buildup report times [ms] "
-                         "(KINETIC_TWOZONE_PLAN.md K0); empty string "
+                         "(K0); empty string "
                          "disables the time-dependent tallies")
     ap.add_argument("--window", nargs=2, type=float, default=(5.0, 19.5))
     ap.add_argument("--seed", type=int, default=1)
@@ -548,7 +548,7 @@ def main(argv=None):
 
     if "nna_model" in bg:
         # Per-zone comparison: the model's split fields against the MC's
-        # per-zone tallies -- the M4 gate of NEUTRAL_TWOZONE_PLAN.md.
+        # per-zone tallies -- the M4 gate.
         print(f"\n{'z[cm]':>7} {'col_model':>10} {'col_MC':>10} {'r_col':>7} "
               f"{'ann_model':>10} {'ann_MC':>10} {'r_ann':>7}")
         for i in range(0, zc.size, max(1, zc.size // 18)):
@@ -559,7 +559,7 @@ def main(argv=None):
                   f"{res['nn_ann'][i] / max(bg['nna_model'][i], 1e-3):7.2f}")
 
     if "report_times_s" in res:
-        # K0 deliverable (KINETIC_TWOZONE_PLAN.md): the annulus reservoir's
+        # K0 deliverable: the annulus reservoir's
         # buildup from an empty start against the ~20 ms drive. The steady
         # tallies are the infinite-time limit and an UPPER BOUND for
         # in-shot conditions; closure gates should compare like-for-like

@@ -240,7 +240,7 @@ class SolverResult:
     beam_bypass_fraction: float = 0.0
     # Beam mean free path [cm]; 0.0 if beam parameters not provided
     l_b: float = 0.0
-    # R3.2 (SIM1D_MODEL_AUDIT_PLAN A16) one-control-surface split. Each electrode
+    # R3.2 (A16) one-control-surface split. Each electrode
     # power splits into a PLASMA-THERMAL part (Te/2 per ion, 2Te per electron --
     # sourced from the plasma thermal store) and a SHEATH-FALL phi part (sourced
     # from the sheath field / circuit, deposited on the electrode, never through
@@ -266,7 +266,11 @@ class SolverResult:
     # I_tot / V_b are the MODEL LOAD quantities and are kept as-is; these alias to
     # the three-plane convention so a future effective-load change diverges
     # predictably without renaming. All divergences are identically zero until
-    # THESIS_NOTES items 24 (parallel branch) / 25 (series impedance) land:
+    # the two declared-but-unpopulated circuit terms defined below land: a
+    # hidden series impedance between the bank terminals and the plasma load
+    # (``V_series``, item 25) and a stray branch carrying current around the
+    # load (``I_parallel``, item 24). Both are pinned at 0.0 today, so this is
+    # scaffolding for those terms, not dead code:
     #   V_dis = V_b + V_series     (measured terminal/discharge voltage)
     #   I_bank = I_plasma + I_parallel   (measured bank/terminal current, I_dis)
     #   I_plasma == I_tot now      (current conducted through the plasma load)
@@ -837,7 +841,7 @@ def solve(
         I_i = float(cathode_current_A)
     # Anode ion current. The historical form scales the cathode current by the
     # mesh opacity on both faces, which assumes the anode sees the same plasma as
-    # the cathode -- exactly the assumption a resolved gap breaks (§7).
+    # the cathode -- exactly the assumption a resolved gap breaks.
     I_i_a = 2 * config.eta * I_i
     if anode_current_A is not None:
         I_i_a = float(anode_current_A)

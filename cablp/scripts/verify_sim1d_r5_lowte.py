@@ -1,4 +1,4 @@
-"""R5.3 low-Te atomic-package consistency gate suite (SIM1D_MODEL_AUDIT_PLAN R5.3, A18).
+"""R5.3 low-Te atomic-package consistency gate suite (audit A18).
 
 A18: `adas_low_te_extension` extends acd (recombination rate) and prb1
 (recombination radiated power) below the 0.2 eV ADF11 edge via the in-repo

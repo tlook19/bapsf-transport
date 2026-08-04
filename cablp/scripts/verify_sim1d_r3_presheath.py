@@ -1,7 +1,6 @@
 """R3 boundary-sampling diagnostic: presheath_alpha vs flat exp(-1/2).
 
-Decision-support for R3 (SIM1D_MODEL_AUDIT_PLAN, "R3 physics map signed off"):
-the fluid boundary sink and the circuit current must sample ONE sheath-edge
+Decision-support for R3 (the R3 physics map): the fluid boundary sink and the circuit current must sample ONE sheath-edge
 density n_se. This runs the live ES1 stance to a short startup window (through
 main discharge) with the mesh-adjusted presheath (`b_presheath_length=1`) and
 the flat `exp(-1/2)` sampling (`b_presheath_length=0`, which also matches the

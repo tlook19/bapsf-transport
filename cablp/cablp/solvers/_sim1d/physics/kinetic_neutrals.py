@@ -1,4 +1,4 @@
-"""Kinetic two-zone neutral engine (KINETIC_TWOZONE_PLAN.md K1/K1b/K4).
+"""Kinetic two-zone neutral engine (K1/K1b/K4).
 
 The deterministic velocity-resolved column/annulus neutral model: shared
 sinh-stretched (v_z, v_perp) grid, moment-exact shifted Maxwellians,
