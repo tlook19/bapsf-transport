@@ -24,7 +24,7 @@ Everything physical is **imported** from ``_cathode_solver`` -- Richardson
 emission via ``DeviceConfig``, the space-charge release ``_j_eth_crit``,
 the annular emission state, the sheath power bookkeeping, and the beam
 pieces -- so the two solvers cannot drift apart. ``_cathode_solver`` itself
-is not modified (hard constraint, plan section 3): its solve paths remain
+is not modified (a hard constraint of this design): its solve paths remain
 the historical voltage-driven ones.
 
 ``SolverResult`` is returned field-for-field compatible, with two contract
@@ -47,11 +47,12 @@ floating branch models Boltzmann-suppressed emission over the virtual
 barrier, which is not the same limit as ``I_tot = 0`` through the hard
 space-charge clamp here; routing is the M3 dispatcher's job.
 
-Schottky barrier lowering (opt-in, plan section 2b): the extracting sheath
+Schottky barrier lowering (opt-in): the extracting sheath
 field lowers the effective work function,
 ``dphi = sqrt(e E_s / 4 pi eps0)``, tilting the vertical emission ceiling
-into a sloped line -- physical conditioning of the knee. Closure (stated,
-per plan): the surface field is the Child-Langmuir diode field of the
+into a sloped line -- physical conditioning of the knee. Closure (stated
+explicitly because it is a modelling choice): the surface field is the
+Child-Langmuir diode field of the
 classical sheath, ``E_s = (4/3) phi_c / s_CL`` with
 ``s_CL = (sqrt(2)/3) lambda_D (2 psi)^(3/4)``; it applies on the
 temperature-limited branch only. The per-annulus/per-disc branches are:
@@ -68,7 +69,7 @@ temperature-limited branch only. The per-annulus/per-disc branches are:
 
 which is continuous in psi, reduces bit-for-bit to the historical branches
 with the term off, and preserves monotonicity. Any phi_wf fit must state
-this term's on/off status (plan section 3b): the lowering is ~0.05-0.1 eV,
+this term's on/off status: the lowering is ~0.05-0.1 eV,
 the same order as the fit resolution.
 """
 

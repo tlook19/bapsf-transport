@@ -841,7 +841,7 @@ def solve(
         I_i = float(cathode_current_A)
     # Anode ion current. The historical form scales the cathode current by the
     # mesh opacity on both faces, which assumes the anode sees the same plasma as
-    # the cathode -- exactly the assumption a resolved gap breaks (§7).
+    # the cathode -- exactly the assumption a resolved gap breaks.
     I_i_a = 2 * config.eta * I_i
     if anode_current_A is not None:
         I_i_a = float(anode_current_A)

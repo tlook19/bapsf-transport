@@ -878,7 +878,7 @@ def main():
         obstruction_geom.z_edges_cm[0],
         -(obstruction_params["plenum_length_cm"] + 25.0),
     )
-    # Annular duct: open area and hydraulic radius reduce independently (§3).
+    # Annular duct: open area and hydraulic radius reduce independently.
     assert np.isclose(
         obstruction_geom.neutral_area_cm2[obstruction_cell],
         np.pi * (obstruction_params["Rm"] ** 2 - 25.0**2),
@@ -922,7 +922,7 @@ def main():
     # M3: heat and neutrals are throttled by the transparency (1-eta), but the
     # advective plasma face stays OPEN -- the anode removes plasma through the
     # Bohm sheath flux at its wires, and shrinking the face too would remove the
-    # same particles twice (§5). The cathode surface blocks everything.
+    # same particles twice. The cathode surface blocks everything.
     transparency = 1.0 - resolved_params["eta"]
     assert resolved_geom.plasma_transmission[anode_face] == 1.0
     assert np.isclose(resolved_geom.heat_transmission[anode_face], transparency)
@@ -1078,7 +1078,7 @@ def main():
     assert resolved_beam_weights.sum() <= 1.0 + 1e-12
 
     # M5: the circuit's anode current is the same Bohm collection the fluid
-    # removes (§7), not `2*eta*I_i` scaled off the cathode cell.
+    # removes, not `2*eta*I_i` scaled off the cathode cell.
     resolved_cathode_flags = dict(resolved_flags)
     resolved_cathode_flags["cathode_coupling"] = True
     resolved_cathode_flags["neutral_prebreakdown"] = False

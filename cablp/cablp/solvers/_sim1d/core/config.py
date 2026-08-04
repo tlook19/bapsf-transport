@@ -262,10 +262,10 @@ def neutral_source_defaults():
     gas_puff_valves:
         Number of equivalent gas-puff valves used by the SCCM conversion.
     gas_puff_profile:
-        Axial shape of the puff. ``"cell"`` (default, the historical
+        Axial shape of the puff. ``"cell"`` (the historical
         behaviour) puts the whole flow in the role-tagged puff cell (in front
-        of the anode in resolved geometry). ``"cosine_pipe"`` is the physical
-        source -- a small pipe at the chamber wall ~10 cm in front of the
+        of the anode in resolved geometry). ``"cosine_pipe"`` (default) is the
+        physical source -- a small pipe at the chamber wall ~10 cm in front of the
         anode, pointing radially inward with a Lambertian (cosine) outlet;
         its first-flight axial deposition is the cosine-lobe pattern
         ``[1 + ((z - z0)/d)^2]^-2`` with throw ``d ~ 2*Rm``, so centre and
@@ -721,9 +721,20 @@ def fudge_factor_defaults():
     sigma_in_model:
         Source of the ion-neutral momentum-transfer rate, which feeds the
         drag, the slip closure's entrainment, thermalization, the drag
-        timestep bound, and the presheath depth. ``"constant"`` (default, the
+        timestep bound, and the presheath depth.
+
+        ``"phelps"`` (default) is the definitive momentum-transfer rate: the
+        same Phelps He+/He isotropic + backscatter cross section the
+        ``ion_neutral_moment_closure`` operator uses, ``nu_in = nn * (k_b +
+        1/2 k_iso)(T_eff)`` with ``T_eff = (Ti + Tn)/2`` at the single
+        cold-gas ``Tn`` (300 K). This ties the presheath sampling to the same
+        collision physics as the drag, which makes ``sigma_in_cm2`` and the
+        two legacy arms below inert on the production path. He-only, gated at
+        construction.
+
+        ``"constant"`` (legacy A/B, the
         historical behaviour) uses ``sigma_in_cm2`` at the ion thermal speed.
-        ``"cx_derived"`` builds it from the same resonant charge-exchange
+        ``"cx_derived"`` (legacy A/B) builds it from the same resonant charge-exchange
         table the CX energy channel uses -- ``nu_in = nn * (2*<sigma v>_cx(Ti)
         + k_Langevin)`` -- since for a symmetric pair each exchange transfers
         essentially the full momentum (``sigma_mt ~ 2*sigma_cx``), plus the
@@ -937,8 +948,9 @@ def cathode_defaults():
     R_cath:
         Cathode radius used to compute cathode area [cm].
     C_bank_F:
-        Effective capacitance of the discharge bank [F]. ``None`` (default)
-        is the historical infinite bank. When set, the bank voltage starts at
+        Effective capacitance of the discharge bank [F]. ``None``
+        is the historical infinite bank; the default is the hardware value
+        ``9.5``. When set, the bank voltage starts at
         ``V_bank`` and drains by the drawn charge during drive phases
         (backward-Euler, folded into the circuit solve as a ``dt/C`` term on
         the effective resistance); the tail and floating phases leave it
@@ -958,10 +970,10 @@ def cathode_defaults():
         provenance: ``config_defaults_provenance.md``.
     cathode_warming_model:
         Slow evolution of the emitter surface temperature within a shot.
-        ``"none"`` (default) holds ``T_s`` constant, so the
+        ``"none"`` holds ``T_s`` constant, so the
         emission ceiling -- and with it the discharge current -- saturates
         on the circuit timescale (~1-2 ms), where the measured current rises
-        for ~15-20 ms. ``"power_balance"`` (M1b) uses
+        for ~15-20 ms. ``"power_balance"`` (default, M1b) uses
         imposed asymptote with the surface energy balance
 
             C_th dT_s/dt = P_heater + P_cathode_i
@@ -1025,11 +1037,11 @@ def cathode_defaults():
         ``config_defaults_provenance.md`` and
         ``scripts/production_stance_provenance.md``.
     cathode_emission_profile:
-        Radial structure of the thermionic emitter. ``"uniform"`` (default,
-        historical) is a single-temperature disc, whose emission ceiling is a
+        Radial structure of the thermionic emitter. ``"uniform"``
+        (historical) is a single-temperature disc, whose emission ceiling is a
         razor wall in the discharge V(I) curve -- the operating point riding
         that wall is what makes the circuit-coupled current/voltage noisy.
-        ``"gaussian"`` gives the cathode a radial falloff: the
+        ``"gaussian"`` (default) gives the cathode a radial falloff: the
         emission-current footprint ``exp(-4 ln2 r^2/FWHM^2)``,
         Richardson-inverted into a local surface temperature profile. The
         implied centre-to-edge temperature drop of order 150-200 K softens the
@@ -1114,9 +1126,9 @@ def cathode_defaults():
         manifold registry and this key is inert.
     beam_deposition_model:
         How the primary beam deposits along the column.
-        ``"beer_lambert"`` (default, historical): single-event absorption
+        ``"beer_lambert"`` (historical): single-event absorption
         over the mixed Coulomb/inelastic profile (``l_b_profile`` +
-        ``beam_absorption_weights``). ``"csda"``: the deterministic
+        ``beam_absorption_weights``). ``"csda"`` (default): the deterministic
         slowing-down module (``funcs/_beam_deposition.deposit_beam``, a pure
         function of the beam and the column — B2):
         primaries survive multiple inelastic events, per-cell ionization/
@@ -1137,8 +1149,8 @@ def cathode_defaults():
         Both parameter-free.
     beam_anomalous_model:
         Anomalous (beam-plasma instability) drag for the CSDA module (inert
-        under ``"beer_lambert"``). ``"none"`` (default) or
-        ``"quasilinear"``: mean-energy relaxation over
+        under ``"beer_lambert"``). ``"none"`` or
+        ``"quasilinear"`` (default): mean-energy relaxation over
         ``l_QL = (n_e/n_b)(v_b/w_pe) ln(n_e/n_b)`` (~5-10 cm at production
         parameters), energy to local electron heating — the
         Langmuir-turbulence picture behind primaries not surviving

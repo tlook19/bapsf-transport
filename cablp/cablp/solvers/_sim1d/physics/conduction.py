@@ -180,7 +180,7 @@ def conductive_face_flux(temperature, conductivity, geometry):
     k_face = 0.5 * (conductivity[:-1] + conductivity[1:])
     q_face[1:-1] = -k_face * np.diff(temperature) / geometry.center_distance_cm
     # Faces may throttle parallel conduction independently of the other transport
-    # channels (§3): 0 at a plasma wall, (1-eta) across the anode mesh, 1 on a
+    # channels: 0 at a plasma wall, (1-eta) across the anode mesh, 1 on a
     # normal interior face -- so legacy geometry is untouched.
     return q_face * geometry.heat_transmission
 

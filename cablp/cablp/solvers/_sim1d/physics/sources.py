@@ -326,7 +326,7 @@ def boundary_absorption_rhs(
     arm that bounds the omission.
 
     The cathode and collector surfaces end the plasma domain, so the Bohm
-    criterion applies to the face itself (plan §11 decision 3): plasma leaves at
+    criterion applies to the face itself: plasma leaves at
     the sound speed and is neutralized on the surface.
 
     Applied one-sidedly to the live cell rather than as a face flux, because the
@@ -709,10 +709,11 @@ def anode_collection_rhs(
     The wires present the solid fraction ``eta`` of the plasma cross-section to
     *each* side, and each face is evaluated against the plasma actually on that
     side, so a mesh separating hot gap plasma from cooler column plasma collects
-    asymmetrically -- the sum is the plan's ``2 * eta * I_i_a`` with each half
+    asymmetrically -- the sum is the historical ``2 * eta * I_i_a`` with each
+    half
     sampled locally. Neutrals are released on the side they were collected from,
     since a wire blocks the path to the other side and the mesh throttles neutral
-    flow between them (§7).
+    flow between them.
 
     The full ``alpha_isat`` applies here, and that is the *same* rule
     ``boundary_absorption_rhs`` uses rather than an exception to it. The factor is
@@ -728,7 +729,7 @@ def anode_collection_rhs(
 
     Mass, momentum and thermal energy leave together as at any wall; the collected
     momentum is absorbed by the grounded anode structure rather than heating the
-    ions (§5). ``eta = 0`` gives a transparent anode -- the legacy limit -- and
+    ions. ``eta = 0`` gives a transparent anode -- the legacy limit -- and
     legacy geometry has no anode faces at all.
     """
     zeros = np.zeros(geometry.cells, dtype=float)

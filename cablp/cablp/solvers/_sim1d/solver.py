@@ -914,7 +914,7 @@ class LAPDSim1D:
             self._input_dict, self._flags
         )
         # Current-driven circuit state: the loop current, integrated once
-        # per accepted step (plan §2c).
+        # per accepted step.
         self._circuit_I_loop = 0.0
         # Step-integrated discharge voltage (the inductor's view) from the
         # last accepted circuit advance; 0.0 under open circuit.
@@ -2493,7 +2493,7 @@ class LAPDSim1D:
                     result = honest_result
                 I_emis = 0.0 if floating else float(result.I_eth_star)
                 # Emission cooling books the EVOLVING work function when
-                # the surface model is on (one shared constant, §3b).
+                # the surface model is on (one shared constant).
                 # The surface keeps (1 - R_E) of the ion power when the jet's
                 # reflected-energy debit sensitivity arm is on (retention is
                 # 1.0 otherwise -- the M5a' calibration convention).
@@ -4791,7 +4791,7 @@ class LAPDSim1D:
         )
 
     def _validate_neutral_jet_config(self):
-        """Validate and cache the directed-recycle-jet configuration (§8).
+        """Validate and cache the directed-recycle-jet configuration.
 
         The jets and the mesh accommodation are M_n physics: they require the
         neutral_momentum flag, and each channel requires the geometry feature

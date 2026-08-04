@@ -164,7 +164,7 @@ def _apply_plasma_walls(
     A closed face carries no particle or thermal-energy flux, but pressure acts on
     it so a uniform stationary state still has zero divergence. This generalizes
     the historical external-end-only walls (the plasma domain is now bounded
-    *inside* the neutral domain by the cathode surfaces, §5); the pressure comes
+    *inside* the neutral domain by the cathode surfaces); the pressure comes
     from the live plasma cell, which for the external ends is cell 0 and cell -1
     exactly as before.
 

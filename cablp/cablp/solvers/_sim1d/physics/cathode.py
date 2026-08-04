@@ -101,7 +101,7 @@ class CathodeSolve1D:
 def anode_circuit_sample(state, derived, geometry, mu, input_dict, end=0):
     """Return ``(I_i_a [A], Te_anode [eV])`` for one anode, or ``(None, None)``.
 
-    §7: the historical circuit takes ``I_i_a = 2*eta*I_i``, scaling the anode
+    The historical circuit takes ``I_i_a = 2*eta*I_i``, scaling the anode
     current straight off the *cathode* cell, which assumes both electrodes see the
     same plasma -- precisely what a resolved cathode-anode gap breaks.
 
@@ -113,7 +113,7 @@ def anode_circuit_sample(state, derived, geometry, mu, input_dict, end=0):
 
     The sheath temperature is collection-weighted across the two faces, matching
     how ``P_anode_e`` is apportioned. Resolving a *separate* sheath per face is
-    §11 #6 and remains open.
+    a known open item.
     """
     anode_faces = np.asarray(getattr(geometry, "anode_face_indices", ()), dtype=int)
     eta = float(input_dict.get("eta", 0.0))
@@ -578,7 +578,7 @@ def advance_circuit_current_driven(
     ``g' = 1 + a*(R + dV_dis/dI)/L >= 1`` because the current-driven device
     voltage is monotone in I, so each stage is a bracketed scalar brentq --
     unconditionally well-posed however steep V_dis(I) gets. This is the
-    load-bearing design decision (plan §2c, revised 2026-07-20): a
+    load-bearing design decision (revised 2026-07-20): a
     frozen-V_dis explicit step needs ``dV/dI < 2L/dt ~ 22 mOhm`` at
     production dt, and the measured device slope near the emission ceiling
     is 0.2 Ohm-0.75 MOhm -- explicit would sawtooth exactly where this
@@ -586,8 +586,8 @@ def advance_circuit_current_driven(
     TR alone would ring against the near-vertical branch (L-stability, the
     same argument as the heat-conduction scheme choice).
 
-    ``I >= 0`` is enforced per stage (the plasma-diode stand-in, plan
-    §2c): a stage whose unconstrained root is negative clamps to 0.
+    ``I >= 0`` is enforced per stage (the plasma-diode stand-in): a stage
+    whose unconstrained root is negative clamps to 0.
     ``V_src_V`` is held constant over the step (drive: bank/capacitor
     voltage; tail: 0); the capacitor, when present, is frozen for the I
     stages (droop ~2e-4 V/step) and then advanced trapezoidally. Returns
@@ -746,7 +746,7 @@ def solve_cathode_boundary(
         # Richardson/DeviceConfig, the Schottky reference barrier, the
         # gaussian profile's Richardson inversion, and (via the same dict
         # in the solver) the power-balance emission-cooling term. One
-        # shared constant, changed in one place (plan §3b).
+        # shared constant, changed in one place.
         input_dict = {**input_dict, "phi_wf": float(phi_wf_override_eV)}
     device_config = cathode_device_config(input_dict, input_flags, mu)
     device_config, Rp_model, R_p_gap_ohm = apply_cathode_Rp_model(
@@ -815,7 +815,7 @@ def solve_cathode_boundary(
             cathode_index=beam_launch(geometry, end=0)[0],
             twin_index=beam_launch(geometry, end=-1)[0],
             # Hand the circuit the same anode Bohm current the fluid
-            # removes, so the two cannot disagree (§7).
+            # removes, so the two cannot disagree.
             anode_current_A=anode_source[0],
             anode_T_e=anode_source[1],
             anode_current_twin_A=anode_twin[0],
@@ -1459,7 +1459,7 @@ def cathode_source_terms(
         else geometry.neutral_volume_cm3
     )
     # Sheath electron power: P_cathode_e is lost at the cathode surface and
-    # P_anode_e at the anode mesh (§8). Legacy has neither resolved, so both stay
+    # P_anode_e at the anode mesh. Legacy has neither resolved, so both stay
     # colocated in its source cell exactly as before; resolved geometry lands each
     # at its own electrode.
     electron_power_loss_W = zeros.copy()
@@ -1553,7 +1553,7 @@ def beam_absorption_weights(length_cm, l_b_profile, cathode_index, direction=Non
     ``direction`` is +1 for a beam heading toward increasing z and -1 for the
     other way; it is inferred for the legacy end cells. Cells *behind* the launch
     point get zero weight -- in resolved geometry those are the plenum and the
-    obstruction, which the beam never enters (§5).
+    obstruction, which the beam never enters.
     """
     length_cm = np.asarray(length_cm, dtype=float)
     l_b_profile = np.asarray(l_b_profile, dtype=float)

@@ -42,7 +42,7 @@ def knudsen_flow_coefficients(
     An anode mesh is a genuinely thin aperture rather than a tube segment, so it
     keeps an orifice conductance ``0.25 * v_th * A_open`` combined in series with
     the tube on either side. The annular obstruction needs no special case: it is
-    a real cell (§11 decision 1), so its own reduced area and hydraulic radius
+    a real cell, so its own reduced area and hydraulic radius
     flow through the tube formula naturally.
     """
     if clausing_scale < 0.0:
@@ -683,7 +683,7 @@ def neutral_source_sink_rhs(
             dnn += puff
     if pump_enabled:
         # The unmodeled pump elbow folds into an effective speed on the plenum
-        # (§4); a collector-side pump has no elbow in front of it.
+        # a collector-side pump has no elbow in front of it.
         S_left = _effective_pump_speed(
             S_pump_L,
             pump_elbow_conductance_lps if is_plenum_cell(geometry, pump_left_index)
@@ -867,7 +867,7 @@ def gas_puff_rate_profile(
 def _effective_pump_speed(lps, elbow_conductance_lps):
     """Return the pump speed seen by the plenum after the unmodeled elbow [L/s].
 
-    Series conductance, ``1/S_eff = 1/S_pump + 1/C_elbow`` (§4). ``None`` or a
+    Series conductance, ``1/S_eff = 1/S_pump + 1/C_elbow``. ``None`` or a
     non-positive conductance means no elbow restriction and returns ``S_pump``
     unchanged -- short-circuited rather than computed as ``1/(1/S + 1/inf)`` so
     the legacy path stays bit-exact.

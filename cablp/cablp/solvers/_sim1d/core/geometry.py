@@ -123,7 +123,7 @@ def puff_cell_indices(geometry):
 def pump_cell_indices(geometry):
     """Return ``(left, right)`` cell indices carrying the pump sinks.
 
-    The pump belongs on the plenum behind a cathode (§4); the non-cathode end
+    The pump belongs on the plenum behind a cathode; the non-cathode end
     keeps its own pump on the collector. Resolving by role keeps this correct if
     the layout changes.
     """
@@ -139,7 +139,7 @@ def _derive_cathode_adjacent_cells(cell_role, cathode_face_indices):
     """Resolve the plasma cell against each cathode surface, from scratch.
 
     The cathode surface is a face, so its surface terms (ion neutralization,
-    sheath electron loss, ohmic deposition -- §8) land on the plasma-side cell
+    sheath electron loss, ohmic deposition) land on the plasma-side cell
     next to it. Plasma is on the high-z side at the source cathode and the low-z
     side at a twin cathode, so pick whichever neighbour is not plasma-dead.
 
@@ -185,7 +185,7 @@ def anode_flanking_cells(geometry):
     """Return ``(gap_side, column_side)`` cell pairs flanking each anode face.
 
     The anode neutralizes collected ions on *both* mesh faces, so the resulting
-    neutrals are split across the two cells it separates (§7); the mesh throttles
+    neutrals are split across the two cells it separates; the mesh throttles
     flow between them, which is why the side matters.
     """
     pairs = []
@@ -199,7 +199,7 @@ def gap_cell_indices(geometry, end=0):
 
     Ohmic dissipation is I^2 R_p with R_p the plasma resistance *between* the
     cathode and the anode, so the power is deposited along the gap rather than
-    piled into one boundary cell (§8).
+    piled into one boundary cell.
 
     ``end`` selects the machine end: ``0`` for the source cathode, ``-1`` for the
     twin.
@@ -407,8 +407,8 @@ def _build_resolved_geometry(input_dict, flags):
     Rp_cm = np.full(cells, Rp, dtype=float)
     Rm_cm = np.full(cells, Rm, dtype=float)
     # Plenum cells stay at full plasma radius: they are made plasma-dead by the
-    # reflecting cathode face, not by shrinking Rp (§5 warns a near-zero plasma
-    # volume blows up the flux divergence).
+    # reflecting cathode face, not by shrinking Rp: a near-zero plasma
+    # volume blows up the flux divergence.
     plasma_area_cm2 = np.pi * Rp_cm**2
     neutral_area_cm2 = np.pi * Rm_cm**2
     neutral_hydraulic_radius_cm = Rm_cm.copy()
@@ -451,14 +451,14 @@ def _build_resolved_geometry(input_dict, flags):
         ] = end_face_area
 
     # Obstruction cells are an annular duct: reduced open area AND a reduced
-    # hydraulic radius (Rm - Rcs), the two differing independently (§3 keystone).
+    # hydraulic radius (Rm - Rcs), the two differing independently.
     obstruction = cell_role == "obstruction"
     if np.any(obstruction):
         neutral_area_cm2[obstruction] = np.pi * (Rm**2 - Rcs**2)
         neutral_hydraulic_radius_cm[obstruction] = Rm - Rcs
 
     # Support rods block plenum volume only: distributed thin structure, not a
-    # duct, so the hydraulic radius is untouched (§3).
+    # duct, so the hydraulic radius is untouched.
     if Rsup > 0.0:
         plenum = cell_role == "plenum"
         neutral_area_cm2[plenum] = np.pi * (Rm**2 - Rsup**2)
@@ -842,13 +842,13 @@ def _assemble_geometry(
             plasma_face_live_cell[face] = int(adjacent[0])
 
     # The anode mesh is plasma-open but partially blocking, and the three
-    # transmissions are independent (§3). eta = 0 recovers a fully transparent
+    # transmissions are independent. eta = 0 recovers a fully transparent
     # anode -- the legacy limit.
     #
     # Heat and neutrals are throttled by the transparency (1-eta). The *advective*
     # plasma flux is NOT: the anode removes plasma through the Bohm sheath flux at
     # its wires (physics/sources.anode_collection_rhs), and shrinking the face as
-    # well would remove the same particles twice (§5). Mass that misses a wire
+    # well would remove the same particles twice. Mass that misses a wire
     # simply streams through the holes. `b_anode_advective_block` (default 0)
     # exists only to dial that blocking back in for a sensitivity study; note it
     # *reflects* rather than absorbs, since the absorption is always Bohm.

@@ -551,7 +551,7 @@ def deposit_beam(
 ) -> BeamDepositionResult:
     """Deposit one monoenergetic beam ray through the column (He only).
 
-    Parameters mirror plan §2: ``E0_eV`` is the accelerating sheath drop,
+    ``E0_eV`` is the accelerating sheath drop,
     ``Gamma0_per_s`` the accepted emitted electron flux, ``nn/ne/Te`` the
     per-cell column state, and the ray is ``(launch, direction, dz_cm)``
     with ``direction`` +1 (toward increasing index) or -1. Cells behind the
