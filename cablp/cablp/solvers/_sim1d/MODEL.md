@@ -19,6 +19,26 @@ implementation in `physics/`.
 
 ## Equations
 
+> **Production stance (2026-07-27).** The equations below are the model's
+> base (legacy-default) forms. The production configuration replaces three
+> of them with later closures documented in their own sections:
+> (i) the ion-neutral quartet in eqs. 3 and 5 — the $\nu_{in}(T_i)$ drag and
+> the $Q_{cx}/Q_{\text{fric}}/Q_{\text{eq,el}}$ energy terms — is replaced by
+> the **R4.3 moment-closed operator** (`ion_neutral_moment_closure=True`):
+> drag at the Phelps momentum-transfer rate $\nu_{mt}$, with
+> $Q_{in} = \tfrac12 m_i \nu_{mt} n u^2 + \tfrac32 \nu_{mt} n (T_n - T_i)$;
+> (ii) the neutral channel (eq. 2) runs with **no dynamically evolved bulk
+> neutral flow** — transport is the Knudsen/Clausing conductance closure, so
+> the production form is $\partial_t n_n + \nabla_\parallel\!\cdot\Gamma_n =
+> -S_{iz} + (S_{rr}+S_{3b}) + S_{gp} - S_{\text{pump}}$ with $\Gamma_n$ the
+> conductance flux (neutrals ionize at rest; the `neutral_momentum` /
+> two-zone selectors are default-off closure instruments);
+> (iii) the electron energy (eq. 4) additionally carries $Q_{\text{beam}}$,
+> the CSDA primary-beam deposition (R4.1/R4.2 sections), so $S_{iz}$ there
+> is thermal + beam ionization. `core/config.py` is the authoritative flag
+> list; this note only marks where the headline forms and the production
+> defaults differ.
+
 **1. Plasma continuity** (`physics/reactions.py`, `physics/flux.py`)
 
 $$\frac{Dn}{Dt} = -\,n\,\nabla\!\cdot\mathbf{u} \;+\; S_{iz} \;-\; \big(S_{rr} + S_{3b}\big)$$
@@ -201,6 +221,25 @@ and $\mathbf{u}\times\mathbf{B}$ forces and diamagnetic/drift heat fluxes, and
 perpendicular conduction — only the parallel (axial) dynamics are retained. Wall
 and end losses (surface neutralization, gas puff, pumping) are folded in as 0D
 boundary-cell source terms rather than bulk 3D terms.
+
+## A9 classical electron heat flux — RETAIN + limiter gate (audit 2026-07-23)
+
+The parallel electron conduction above uses the classical Spitzer–Härm
+$\kappa_{\parallel e} \propto T_e^{5/2}$ closure, and the whole-model audit
+retained it **only under a standing gate**: at resolved gap faces the
+unbounded Spitzer–Härm flux reaches 1.7–3.3× $n\,T_e\,v_{th,e}$ — above the
+free-streaming scale a physically saturated flux must respect (electron mean
+free path medians ~23–24 cm after settling, p95 ~42 cm, against
+comparable-scale gradients). **Time-integration stability does not make a
+constitutive law valid**: the implicit TR-BDF2 substep being well tested is
+not evidence for the closure. The gate: any port-level or
+boundary-power-transfer claim that leans on conduction must carry a
+nonlocal/flux-limited closure **bracket**. The limited arm exists as the
+`electron_heat_flux_limit` flag with `heat_flux_limiter_f` (free-streaming
+fraction, $q_{sat} = f\,n\,T_e\,v_{th,e}$) and `heat_flux_limiter_exponent`
+— see `core/config.py` for the authoritative semantics. Reference: Cowie &
+McKee, ApJ 211 (1977) 135. *(The companion audit gate A11, on the
+fluid↔circuit coupling, is stated in the R3 section below.)*
 
 ## R1 audited topology and configuration contract (2026-07-23)
 
