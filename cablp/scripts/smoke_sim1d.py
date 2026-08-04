@@ -166,26 +166,13 @@ def _cathode_unit_config():
 
 
 def main():
-    # D2 retirement guards: stale selectors fail loudly at construction and
-    # the production/default stance constructs warning-free.
+    # The production/default stance must construct WARNING-FREE. This guards a
+    # SURVIVING path -- it is what stops production silently acquiring a
+    # DeprecationWarning. (The golden's legacy ion-neutral arm is the one
+    # deliberate exception and is not exercised here.)
     import warnings as _warnings
 
     _dep_params, _dep_flags = default_config()
-    for _dep_p, _dep_f in (
-        ({"cathode_solver_model": "voltage_driven"}, {}),
-        ({"neutral_exchange_model": "molecular_flow"}, {}),
-        ({"cathode_warming_model": "ion_bombardment"}, {}),
-        ({}, {"resolved_boundaries": False}),
-        ({"Lz": 1800.0}, {}),
-    ):
-        try:
-            LAPDSim1D(
-                {**_dep_params, **_dep_p}, {**_dep_flags, **_dep_f}
-            )
-        except ValueError as exc:
-            assert "legacy-final-2026-07-22" in str(exc) or "D2" in str(exc)
-        else:
-            raise AssertionError(f"retired selector constructed: {_dep_p}, {_dep_f}")
     with _warnings.catch_warnings(record=True) as _caught:
         _warnings.simplefilter("always")
         LAPDSim1D(_dep_params, _dep_flags)

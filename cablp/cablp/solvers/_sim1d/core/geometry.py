@@ -78,33 +78,14 @@ class Sim1DGeometry:
 def build_geometry(input_dict, flags=None):
     """Build the resolved typed-segment machine geometry.
 
-    ``resolved_boundaries=False`` and the legacy lumped geometry were removed.
-    Keep a construction-time error for stale configurations so they cannot silently
-    change geometry; historical results remain reproducible at
-    ``legacy-final-2026-07-22``.
+    The resolved geometry is the only geometry. ``resolved_boundaries`` is
+    retained purely as a stale-config guard: it must be True.
     """
-    removed_keys = {
-        "Lz",
-        "source_length_cm",
-        "end_length_cm",
-        "source_Rm",
-        "end_Rm",
-        "source_Rp",
-        "end_Rp",
-    }
-    stale = sorted(removed_keys.intersection(input_dict))
-    if stale:
-        raise ValueError(
-            "these legacy lumped-geometry keys have been removed: "
-            + ", ".join(stale)
-            + "; reproduce that configuration at tag legacy-final-2026-07-22"
-        )
     flags = flags or {}
     if not bool(flags.get("resolved_boundaries", True)):
         raise ValueError(
-            "resolved_boundaries=False has been removed; "
-            "use resolved typed-segment geometry or reproduce the historical "
-            "configuration at tag legacy-final-2026-07-22"
+            "resolved_boundaries must be True: the resolved typed-segment "
+            "geometry is the only geometry LAPDSim1D builds"
         )
     return _build_resolved_geometry(input_dict, flags)
 
