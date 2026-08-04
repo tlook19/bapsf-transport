@@ -65,6 +65,59 @@ def non_ignited_message(result, caller):
     )
 
 
+def _wpe_arm_line(params):
+    """Return the one-line WP-E arm header for a run's saved resolved params.
+
+    DUPLICATED, deliberately, from ``compare_sim1d_es1.wpe_arm_line``, on the
+    same grounds as ``non_ignited_message`` above: this tool stays standalone.
+    Keep the two in step.
+
+    {local, tail_walk} is a declared BRACKET, so the arm is printed ALWAYS,
+    not as a delta -- a fingerprint set is incomplete without it, and a
+    delta-only label cannot tell "this run was local" from "this artifact
+    predates the label". Artifacts written before WP-E carry neither key and
+    are labelled "pre-WP-E". The tail energy is read only under
+    ``"tail_walk"`` and is marked inert otherwise.
+    """
+    params = params or {}
+    if "heating_anomalous_transport" not in params:
+        return (
+            "WP-E arm: pre-WP-E (heating_anomalous_transport absent from this "
+            "run's saved params -- the QL heating locality closure did not "
+            "exist when this artifact was written, so its behaviour is the "
+            "'local' arm by construction)"
+        )
+    transport = str(params["heating_anomalous_transport"])
+    tail = params.get("heating_anomalous_tail_energy_eV")
+    tail_text = "<absent>" if tail is None else f"{float(tail):g} eV"
+    if transport == "local":
+        tail_text += " (inert under 'local')"
+    return (
+        f"WP-E arm: heating_anomalous_transport={transport} | "
+        f"heating_anomalous_tail_energy_eV={tail_text}"
+    )
+
+
+def _clamp_notice(requested, limit, kind, site, extent):
+    """Return the window bound actually used, ANNOUNCING a clamp that binds.
+
+    Mirrors ``compare_sim1d_es1._clamp_window_bound``: the arithmetic is the
+    ``max``/``min`` it replaces, and nothing is printed when the clamp is
+    inert. A window silently shortened to fit a short trace reports a number
+    that LOOKS like the configured quantity and is not.
+    """
+    used = max(requested, limit) if kind == "start" else min(requested, limit)
+    if used == requested:
+        return used
+    print(
+        f"  CLAMP NOTICE [{site}]: {kind} bound requested {requested:.4g} ms, "
+        f"USED {used:.4g} ms -- clamped to the {extent} extent. This window "
+        f"is NOT the requested one, so these rows are not comparable to runs "
+        f"reported over the full window."
+    )
+    return used
+
+
 def _origin_s(result):
     phases = np.asarray(getattr(result, "phase", ()), dtype=str)
     times = np.asarray(result.time, dtype=float)
@@ -90,17 +143,25 @@ def report(path):
     I = np.asarray(diag["source_I_tot"], float)
     t_end = _drive_end_ms(t_ms, result.phase)
 
-    drive = (t_ms >= 0.0) & (t_ms <= t_end)
-    late = (t_ms >= 5.0) & (t_ms <= t_end)
-    plateau = (t_ms >= 15.0) & (t_ms <= min(19.5, t_end))
-    early = (t_ms >= 1.0) & (t_ms <= 5.0)
-
     # WP-D arm marker. Printed as a delta only: "local" is the production
     # stance and the config default, so a production artifact's fingerprint
     # output is unchanged and a nonlocal one cannot be mistaken for one.
     bpt = str(params.get("beam_product_transport", "local"))
     bpt_note = "" if bpt == "local" else f" [beam_product_transport={bpt}]"
     print(f"\n=== {path} (drive end +{t_end:.2f} ms){bpt_note} ===")
+    print(_wpe_arm_line(params))
+
+    # The masks are pure computation and were previously built above the
+    # header; they are built here so the plateau clamp notice lands UNDER the
+    # run it belongs to.
+    drive = (t_ms >= 0.0) & (t_ms <= t_end)
+    late = (t_ms >= 5.0) & (t_ms <= t_end)
+    plateau_end = _clamp_notice(
+        19.5, t_end, "end", "plateau (15-19.5 ms)", "drive-phase"
+    )
+    plateau = (t_ms >= 15.0) & (t_ms <= plateau_end)
+    early = (t_ms >= 1.0) & (t_ms <= 5.0)
+
     Ipk = float(np.max(I[drive]))
     tpk = float(t_ms[drive][np.argmax(I[drive])])
     Iplat = float(np.median(I[plateau])) if plateau.any() else np.nan

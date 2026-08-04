@@ -294,6 +294,82 @@ def beam_product_transport_note(params):
     return f" [beam_product_transport={value}]"
 
 
+# --- WP-E QL heating locality (heating_anomalous_transport) ---------------
+# Unlike the WP-D note above, this label is printed ALWAYS rather than as a
+# delta. {local, tail_walk} is a declared BRACKET, not a default plus a
+# variant: the config docstring says outright that "a result must state which
+# one it used", so a scored number is incomplete without its arm. A
+# delta-only label also cannot distinguish "this run was local" from "this
+# artifact predates the label", which is exactly the ambiguity the pre-WP-E
+# case below exists to remove.
+WPE_TRANSPORT_KEY = "heating_anomalous_transport"
+WPE_TAIL_ENERGY_KEY = "heating_anomalous_tail_energy_eV"
+WPE_TRANSPORT_DEFAULT = "local"
+
+
+def wpe_arm_line(params):
+    """Return the one-line WP-E arm header for a run's saved resolved params.
+
+    ``params`` is the artifact's own resolved parameter dict (``results/io``
+    saves them fully resolved), so this reports what the run ACTUALLY carried
+    rather than what the current stance would have given it.
+
+    ``heating_anomalous_tail_energy_eV`` is read only under ``"tail_walk"``
+    and is labelled inert otherwise, matching its config docstring. An
+    artifact written before WP-E existed carries neither key and is labelled
+    "pre-WP-E" -- not silently reported as the default arm, and not a crash.
+
+    DUPLICATED, deliberately, in ``fingerprints_sim1d._wpe_arm_line``: that
+    tool is standalone by design, on the same grounds as
+    ``non_ignited_message`` below. Keep the two in step.
+    """
+    params = params or {}
+    if WPE_TRANSPORT_KEY not in params:
+        return (
+            f"WP-E arm: pre-WP-E ({WPE_TRANSPORT_KEY} absent from this run's "
+            "saved params -- the QL heating locality closure did not exist "
+            "when this artifact was written, so its behaviour is the "
+            f"{WPE_TRANSPORT_DEFAULT!r} arm by construction)"
+        )
+    transport = str(params[WPE_TRANSPORT_KEY])
+    tail = params.get(WPE_TAIL_ENERGY_KEY)
+    tail_text = "<absent>" if tail is None else f"{float(tail):g} eV"
+    if transport == WPE_TRANSPORT_DEFAULT:
+        tail_text += " (inert under 'local')"
+    return (
+        f"WP-E arm: {WPE_TRANSPORT_KEY}={transport} | "
+        f"{WPE_TAIL_ENERGY_KEY}={tail_text}"
+    )
+
+
+def _clamp_window_bound(requested, limit, kind, site, extent):
+    """Return the window bound actually used, ANNOUNCING a clamp that binds.
+
+    ``kind`` is ``"start"`` (the bound is clamped UP to ``limit``) or
+    ``"end"`` (clamped DOWN). The arithmetic is exactly the ``max``/``min``
+    it replaces, so nothing numeric moves; the point is that a clamp which
+    silently shortens a scoring window produces a number that LOOKS like the
+    configured quantity and is not -- the same failure ``short_afterglow_message``
+    hard-fails on further down.
+
+    A NOTICE rather than an exception is right here: unlike stage (iii),
+    these sites are short-trajectory accommodations on diagnostic paths where
+    a partial window is still worth reading, provided the reader knows the
+    window moved. Nothing is printed when the clamp is inert, so a run whose
+    trace covers the requested window scores with no extra output at all.
+    """
+    used = max(requested, limit) if kind == "start" else min(requested, limit)
+    if used == requested:
+        return used
+    print(
+        f"  CLAMP NOTICE [{site}]: {kind} bound requested {requested:.4g} ms, "
+        f"USED {used:.4g} ms -- clamped to the {extent} extent. This window "
+        f"is NOT the requested one, so these rows are not comparable to runs "
+        f"scored over the full window."
+    )
+    return used
+
+
 def non_ignited_message(result, caller):
     """Return the NON-IGNITED diagnosis for a run with no main_discharge.
 
@@ -460,6 +536,12 @@ def compare(result, geometry, overlay):
     te_mean_2d = np.asarray(overlay["te_mean_ev"], dtype=float)
 
     rows = []
+    # Stage (ii) has no configured window: its comparison domain is the
+    # experimental time base intersected with the model's coverage. That
+    # intersection is still a silent window change when the model
+    # under-covers -- two runs whose traces end at different times average
+    # over different windows -- so announce it, once per distinct time base.
+    coverage_announced = set()
     for field, t_key, mean_key, sem_key, unit in (
         ("Te", "te_time_ms", "te_mean_ev", "te_sem_ev", "eV"),
         ("n", "density_time_ms", "density_mean_cm3", "density_total_sem_cm3", "cm^-3"),
@@ -478,6 +560,16 @@ def compare(result, geometry, overlay):
         else:
             model_2d = np.asarray(getattr(result, field), dtype=float)
         # Only compare where the experiment has data and the model has run.
+        if t_key not in coverage_announced:
+            coverage_announced.add(t_key)
+            _clamp_window_bound(
+                float(t_exp.min()), float(t_model_ms.min()), "start",
+                f"stage (ii) / {t_key}", "model trace",
+            )
+            _clamp_window_bound(
+                float(t_exp.max()), float(t_model_ms.max()), "end",
+                f"stage (ii) / {t_key}", "model trace",
+            )
         window = (t_exp >= t_model_ms.min()) & (t_exp <= t_model_ms.max())
         for p, (z, port) in enumerate(zip(z_probe, ports)):
             iz = int(np.argmin(np.abs(z_model - z)))
@@ -805,7 +897,16 @@ def _beta_sweep_points(result, overlay, window_ms):
     z_model = np.asarray(result.z_cm, dtype=float)
     te_2d = np.asarray(result.Te, dtype=float)
     n_2d = np.asarray(result.n, dtype=float)
-    t1 = min(t1, float(t_model_ms.max()))
+    t1 = _clamp_window_bound(
+        t1, float(t_model_ms.max()), "end",
+        "beta-collapse plateau / _beta_sweep_points", "model trace",
+    )
+    # Hoisted out of the port loop, where it was recomputed identically per
+    # port: same value, one notice instead of five.
+    t0_used = _clamp_window_bound(
+        t0, float(t_model_ms.min()), "start",
+        "beta-collapse plateau / _beta_sweep_points", "model trace",
+    )
 
     te_t = np.asarray(overlay["te_time_ms"], dtype=float)
     te_mean = np.asarray(overlay["te_mean_ev"], dtype=float)
@@ -818,14 +919,14 @@ def _beta_sweep_points(result, overlay, window_ms):
     for p, (z, port) in enumerate(zip(overlay["z_cm"], overlay["port"])):
         iz = int(np.argmin(np.abs(z_model - z)))
 
-        w_te = (te_t >= max(t0, t_model_ms.min())) & (te_t <= t1)
+        w_te = (te_t >= t0_used) & (te_t <= t1)
         te_exp = te_mean[p, w_te]
         te_model = np.interp(te_t[w_te], t_model_ms, te_2d[:, iz])
         good_te = (
             np.isfinite(te_exp) & np.isfinite(te_model)
             & (te_exp > 0) & (te_model > 0)
         )
-        w_n = (n_t >= max(t0, t_model_ms.min())) & (n_t <= t1)
+        w_n = (n_t >= t0_used) & (n_t <= t1)
         n_exp = n_mean[p, w_n]
         n_model = np.interp(n_t[w_n], t_model_ms, n_2d[:, iz])
         te_model_n = np.interp(n_t[w_n], t_model_ms, te_2d[:, iz])
@@ -920,7 +1021,10 @@ def _beta_trace_points(
     z_model = np.asarray(result.z_cm, dtype=float)
     n_2d = np.asarray(result.n, dtype=float)
     te_2d = np.asarray(result.Te, dtype=float)
-    t1 = min(t1, float(t_model_ms.max()))
+    t1 = _clamp_window_bound(
+        t1, float(t_model_ms.max()), "end",
+        f"beta-collapse {prefix} / _beta_trace_points", "model trace",
+    )
 
     t_exp = np.asarray(overlay[f"{prefix}_time_ms"], dtype=float)
     isat = np.asarray(overlay[f"{prefix}_mean_a"], dtype=float)
@@ -1001,14 +1105,24 @@ def _beta_sweep_vs_raw(overlay, window_ms):
     n_mean = np.asarray(overlay["density_mean_cm3"], dtype=float)
     n_sem = np.asarray(overlay["density_total_sem_cm3"], dtype=float)
 
+    # This one clamps against the MEASURED raw-Isat trace, not a model
+    # trajectory -- same silent-window failure, different extent. Hoisted out
+    # of the port loop (loop-invariant) so a binding clamp says so once.
+    t0_used = _clamp_window_bound(
+        t0, float(t_raw.min()), "start",
+        "beta-collapse plateau / _beta_sweep_vs_raw", "raw drive Isat trace",
+    )
+    t1_used = _clamp_window_bound(
+        t1, float(t_raw.max()), "end",
+        "beta-collapse plateau / _beta_sweep_vs_raw", "raw drive Isat trace",
+    )
+
     points = []
     for p, port in enumerate(np.asarray(overlay["port"], dtype=int)):
         if port not in raw_ports:
             continue
         pr = raw_ports.index(port)
-        window = (
-            (n_t >= max(t0, t_raw.min())) & (n_t <= min(t1, t_raw.max()))
-        )
+        window = (n_t >= t0_used) & (n_t <= t1_used)
         n_exp = n_mean[p, window]
         te_exp = np.interp(n_t[window], te_t, te_mean[p])
         te_sem_w = np.interp(n_t[window], te_t, te_sem[p])
@@ -1679,6 +1793,7 @@ def main(argv=None):
     if args.from_h5 is not None:
         result = load_result_hdf5(args.from_h5)
         geometry = None
+        scored_params = getattr(result, "params", None)
         label = f"saved run {args.from_h5}"
         # The artifact's own config is the authority on which arm it is; a
         # nonlocal run must not be scored under a production-stance label.
@@ -1728,10 +1843,12 @@ def main(argv=None):
             drag_closure=args.drag_closure,
             Rp_model=args.Rp_model,
         )
+        scored_params = params
         if args.save_h5 is not None:
             save_result_hdf5(args.save_h5, result, params=params, flags=flags)
             print(f"saved result to {args.save_h5}")
     print(f"\n=== {label} ===")
+    print(wpe_arm_line(scored_params))
     _report_peak_current(compare_peak_current(result, overlay))
     _report(label, compare(result, geometry, overlay))
     decay_rows, window = compare_decay(result, overlay, window_ms=args.decay_window)
