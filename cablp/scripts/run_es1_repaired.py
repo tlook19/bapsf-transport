@@ -5,7 +5,7 @@ tuning pass). Uses compare_sim1d_es1.run_model (the exact ES production config)
 with two throughput levers for the refit iteration:
 
   --nx 60                  coarse grid (~2x fewer cells; ES port metrics move
-                           <=14% vs nx=120 per THESIS_NOTES item 7 -- iteration
+                           <=14% vs nx=120 (item 7) -- iteration
                            grade, peak quantities stay unquotable)
   --density-dt-fraction    relaxes the surface_loss (gap-cell Ee) dt bound; the
                            binding bound during the ES crawl. Reports the

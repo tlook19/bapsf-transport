@@ -1,4 +1,4 @@
-"""R2 conservative-hyperbolic-core gate suite (SIM1D_MODEL_AUDIT_PLAN R2).
+"""R2 conservative-hyperbolic-core gate suite.
 
 Pre-registered gates G1-G7 for the kinetic-energy-preserving hyperbolic core
 (default-off flags ``hyperbolic_energy_consistent`` and the ``adiabatic``

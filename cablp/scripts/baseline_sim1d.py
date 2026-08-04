@@ -4,8 +4,8 @@ This is the production reversibility guarantee: a committed reference trajectory
 plus a checker that re-runs the solver and asserts bit-exact reproduction. Every
 change under ``_sim1d`` must keep ``--verify`` green without recapture.
 
-The baseline config is the PRODUCTION configuration (DEPRECATION_PLAN.md
-D1, 2026-07-22): current-driven cathode + resolved boundaries + ADAS rates +
+The baseline config is the PRODUCTION configuration
+(2026-07-22): current-driven cathode + resolved boundaries + ADAS rates +
 knudsen exchange + the measured square fueling waveform + the M6 candidate
 constants, IMPORTED from the campaign drivers (compare_sim1d_es1 /
 run_mechanism_ladder) so the gate cannot drift from the production stance.
@@ -259,7 +259,7 @@ def capture(baseline_path):
     payload = {
         "description": (
             "Golden baseline at the PRODUCTION configuration "
-            "(DEPRECATION_PLAN.md D1): current-driven + resolved + adas + "
+            "current-driven + resolved + adas + "
             "knudsen + square waveform + M6 candidate constants."
         ),
         "result_format": "sim1d packed conservative trajectory y[saves, 5*cells]",

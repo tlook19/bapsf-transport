@@ -1,7 +1,7 @@
 """R3.2 one-control-surface routing (A16): pre-registered unit gates.
 
-Static gates for R3.2 (SIM1D_MODEL_AUDIT_PLAN "R3 physics map signed off" +
-"R3 pre-registration and gates"; audit A16). R3.2 makes ONE sheath control
+Static gates for R3.2, from the R3 physics map and its pre-registered
+gate list (audit A16). R3.2 makes ONE sheath control
 surface feed both the circuit power and the fluid boundary sink, with the
 sheath-fall ``phi`` routed to the electrode and only the plasma-thermal part
 (2Te per electron, Te/2 per ion) taken from the plasma. These gates prove the

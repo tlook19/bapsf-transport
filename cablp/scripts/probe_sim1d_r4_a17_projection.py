@@ -1,6 +1,6 @@
 """R4.3 A17 bracketed projection: velocity-resolved neutral moments vs the moment
-two-neutral-momentum operator, on the matched M6 background (SIM1D_MODEL_AUDIT_PLAN
-R4.3; audit A17).
+two-neutral-momentum operator, on the matched M6 background (R4.3;
+audit A17).
 
 A17 asks whether the reduced two-neutral-momentum operator (pressureless donor-cell
 M_n/M_n_a advection + Fickian Knudsen diffusion, no neutral pressure/stress moment)

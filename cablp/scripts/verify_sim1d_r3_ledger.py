@@ -1,6 +1,6 @@
 """R3 fluid/circuit power-ledger closure probe (audit A16 / section 8).
 
-Static diagnostic for R3 (SIM1D_MODEL_AUDIT_PLAN): reads the settled M6 artifact
+Static diagnostic for R3: reads the settled M6 artifact
 and, on the audit's 18.81-23.80 ms main-discharge window,
 
   1. reproduces the fluid ``boundary_absorption`` power booking -- showing the

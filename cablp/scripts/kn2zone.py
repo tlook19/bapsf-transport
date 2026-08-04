@@ -1,6 +1,6 @@
-"""KN2Zone: deterministic kinetic two-zone neutrals (KINETIC_TWOZONE_PLAN.md K1).
+"""KN2Zone: deterministic kinetic two-zone neutrals (K1).
 
-The synthesis instrument between the moment two-zone (NEUTRAL_TWOZONE_PLAN.md)
+The synthesis instrument between the moment two-zone model
 and the TPMC (`mc_neutrals.py`): two distribution functions on a shared
 velocity grid,
 

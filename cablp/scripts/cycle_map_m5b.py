@@ -1,7 +1,7 @@
 """M5b: the between-shot ads/des cycle map (analytic, no simulation).
 
 The shot-cycle dynamical system for the surface coverage
-(CATHODE_IDRIVEN_PLAN.md M5b): during the ~2.97 s cooldown the coverage
+(M5b): during the ~2.97 s cooldown the coverage
 relaxes toward the adsorption / thermal-desorption equilibrium at the
 standby temperature,
 

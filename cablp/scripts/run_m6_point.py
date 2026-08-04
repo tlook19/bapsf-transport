@@ -37,7 +37,7 @@ def main(argv=None):
     p.add_argument("--mn", action="store_true")
     p.add_argument("--two-zone", action="store_true",
                    help="neutral_two_zone particle channel "
-                        "(NEUTRAL_TWOZONE_PLAN.md): nn becomes the column "
+                        "-- nn becomes the column "
                         "density, nn_a the annulus")
     p.add_argument("--no-smooth", action="store_true")
     p.add_argument("--extra", nargs="*", default=(),

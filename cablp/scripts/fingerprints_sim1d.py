@@ -1,7 +1,7 @@
 """Extract the mechanism-campaign fingerprints from a saved sim1d run.
 
-The regime-universal targets (CATHODE_IDRIVEN_PLAN.md, measured ES1-3
-overlays at fixed fueling):
+The regime-universal targets (measured ES1-3 overlays at fixed
+fueling):
 
   (a) fractional late current ramp, +5 ms -> end of drive  (~+10 %)
   (b) plateau V_dis decline, +5 ms -> end of drive        (~-7..-10 V),

@@ -1,21 +1,21 @@
 #!/usr/bin/env python
 """Acceptance tests for the standalone CSDA beam-deposition module (B1).
 
-No solver in the loop (BEAM_DEPOSITION_PLAN B1). Checks, per closure:
+No solver in the loop. Checks, per closure:
 
 1. Per-ray energy conservation to roundoff:
    Gamma0*E0 = heating + radiated + ionization cost + transmitted.
 2. Breakdown conditions (nn = 3e14, ne = 1e10, 150 eV): inelastic events per
-   primary ~ the hand estimate (plan §1: phi_c / <dE per event> ~ 4), and the
+   primary ~ the hand estimate (phi_c / <dE per event> ~ 4), and the
    ionizations-per-primary multiple over the Beer-Lambert single-event
-   booking (<= 1) — the ~3-5x undercount of THESIS_NOTES item 10.
+   booking (<= 1) — the ~3-5x undercount recorded as item 10.
 3. Analytic Coulomb-only null (nn = 0, "fast_electron"): the numeric range
    matches the closed form R = (E0^2 - E_stop^2) / (4 pi e^4 ne lnL).
 4. Analytic inelastic-only null (ne = 0): ionizations per primary match the
    quadrature of dN/dE = sigma_i / [sigma_i (I + <W>) + sigma_x E_rad].
 5. Closure ordering at production conditions: l_QL << legacy l_bi << the
    classical fast-electron e-fold (~0.1 m / ~1 m / ~35 m) — the three-decade
-   span behind THESIS_NOTES item 12.
+   span recorded as item 12.
 
 The historical Beer-Lambert profile comparison from the original B1
 acceptance is deliberately replaced by nulls 3-4: no continuous slowing-down
@@ -158,8 +158,8 @@ def main() -> None:
 
     # --- 5. closure ordering at production conditions -----------------------
     # Evaluated at the historical flapped energy scale (150 eV) *and* the
-    # honest current-driven plateau phi_c ~ 93 V (CATHODE_IDRIVEN_PLAN M4:
-    # the V-driven 405 V median was a flapping artifact) — the ladder and
+    # honest current-driven plateau phi_c ~ 93 V (M4: the V-driven 405 V
+    # median was a flapping artifact) — the ladder and
     # its ordering survive at both.
     print("\n=== 5. stopping-length ordering (item 12) ===")
     ladder_bounds = {

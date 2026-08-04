@@ -1,7 +1,7 @@
-"""R4 item-21 power-ledger re-check after A15 + A14 (SIM1D_MODEL_AUDIT_PLAN R4).
+"""R4 item-21 power-ledger re-check after A15 + A14.
 
-Static diagnostic on the settled M6 artifact (audit 18.81-23.80 ms window). Item 21
-(THESIS_NOTES): two opposite-sign structural source-side errors partially conceal
+Static diagnostic on the settled M6 artifact (audit 18.81-23.80 ms
+window). Item 21: two opposite-sign structural source-side errors partially conceal
 one another on the settled ES1 fit, so neither is visible in the scalar Te/current
 agreement:
 

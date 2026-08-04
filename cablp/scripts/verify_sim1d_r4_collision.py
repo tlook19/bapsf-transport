@@ -1,4 +1,4 @@
-"""R4.3 ion-neutral moment-closure gate suite (SIM1D_MODEL_AUDIT_PLAN R4, A7/A8).
+"""R4.3 ion-neutral moment-closure gate suite (audit A7/A8).
 
 Pre-registered analytic identities for the moment-closed reduced ion-neutral
 collision operator ``ion_neutral_collision_rhs`` (flag ``ion_neutral_moment_closure``,
