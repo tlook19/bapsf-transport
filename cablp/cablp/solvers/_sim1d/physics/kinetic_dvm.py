@@ -65,6 +65,14 @@ from .neutrals import neutral_zone_volumes
 
 ELASTIC_MODELS = ("phelps_iso", "off")
 
+# Rate factor on the isotropic-elastic BGK channel. A full-replacement event
+# transfers m (v - u_i), which is twice the isotropic angular average
+# ``mu <1 - cos th> g = m g / 2`` at equal mass; halving the collision rate
+# restores the correct mean momentum (and energy) transfer per unit time. It
+# is the equal-mass reduced-mass ratio ``mu/m = 1/2``, not a fitted number.
+# See ``TransientDVM.collision_frequencies``.
+ELASTIC_BGK_MOMENTUM_FACTOR = 0.5
+
 # Every channel the ledger books, as (birth, loss) name pairs plus the
 # one-sided channels. Named here so the verification script and the smoke
 # suite can assert the ledger is complete rather than re-listing them.
@@ -118,12 +126,14 @@ class TransientDVM:
 
     ``elastic_model`` selects the polarization-elastic channel:
     ``"phelps_iso"`` adds a BGK-like relaxation toward the local ion
-    Maxwellian at the Phelps isotropic rate, ``"off"`` drops it (charge
-    exchange then carries all ion-neutral momentum transfer). The elastic
-    channel exists because the arm supersedes the fluid ion-neutral
-    collision family wholesale and the fluid operator's momentum-transfer
-    cross section is ``Qi + 2 Qb``; carrying only ``Qb`` would silently
-    drop the ``Qi`` half.
+    Maxwellian at HALF the Phelps isotropic rate (the isotropic
+    momentum-transfer average -- see :meth:`collision_frequencies` for why
+    the half is there), ``"off"`` drops it (charge exchange then carries
+    all ion-neutral momentum transfer). The elastic channel exists because
+    the arm supersedes the fluid ion-neutral collision family wholesale
+    and the fluid operator's momentum-transfer cross section is
+    ``Qi + 2 Qb``; carrying only ``Qb`` would silently drop the ``Qi``
+    half.
     """
 
     def __init__(
@@ -347,11 +357,23 @@ class TransientDVM:
         thermal-dominated limits for an equal-mass pair), with the Phelps
         He+/He backscatter cross section for charge exchange and the
         Phelps isotropic cross section for polarization-elastic
-        scattering. Both channels re-emit at the local ion Maxwellian, so
-        each is a mass-matched replacement operator whose per-event
-        momentum transfer is ``m (v - u_i)``: exactly the
-        ``int (1 - cos th)`` weight the fluid operator assigns to the
-        isotropic component and to symmetric charge exchange.
+        scattering.
+
+        Both channels are BGK FULL-REPLACEMENT events: the neutral is
+        deleted and re-emitted at the local ion Maxwellian, so one event
+        transfers the whole ``m (v - u_i)``. That is the correct weight
+        for backscatter -- ``mu (1 - cos th) g`` at ``cos th = -1`` and
+        ``mu = m/2`` is exactly ``m g`` -- so ``nu_cx`` is the Phelps
+        backscatter rate unreduced. It is TWICE the correct weight for
+        isotropic scattering, whose angular average ``<1 - cos th> = 1``
+        gives ``mu g = m g / 2``. The returned ``nu_el`` therefore carries
+        an explicit factor ``ELASTIC_BGK_MOMENTUM_FACTOR = 1/2``, which is
+        not a tuning constant but the equal-mass ``mu/m`` ratio; with it
+        the arm's effective momentum transfer is ``k_b + 0.5 k_iso``,
+        exactly the superseded fluid operator
+        ``phelps_momentum_transfer_rate_cm3_s``. The factor scales the
+        whole elastic channel, so its energy transfer and its rebirth
+        throughput are reduced in the same proportion.
         """
         g = self.g
         n_i = np.asarray(n_i, dtype=float)[:, None, None]
@@ -365,7 +387,12 @@ class TransientDVM:
         if self.elastic_model == "off":
             nu_el = np.zeros_like(nu_cx)
         else:
-            nu_el = n_i * phelps_he_isotropic_cm2(E_rel) * g_eff
+            nu_el = (
+                ELASTIC_BGK_MOMENTUM_FACTOR
+                * n_i
+                * phelps_he_isotropic_cm2(E_rel)
+                * g_eff
+            )
         return nu_cx, nu_el
 
     def _march(self, dt, nu_c_loss, nu_a_loss, inflow_c, inflow_a):

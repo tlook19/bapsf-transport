@@ -16,11 +16,26 @@ Gates:
       channel having cancelled
   I3  ledger completeness: every channel the engine declares is present in
       every ledger it emits, and no ledger entry is unaccounted
+  I4  the same inventory closure and an independent transfer reconstruction
+      on the PRODUCTION expanded-end geometry, where the column and annulus
+      areas jump at the plenum constriction and the end expansion -- the
+      case the throat-face flux form exists for and the one the uniform
+      default geometry cannot exercise
+  I5  the same two statements on a zero-annulus geometry, plus the
+      statement that nothing leaks into a cell whose annulus has no volume
   C1  momentum transfer antisymmetry: the fluid coupling term's M row is
       exactly minus the kinetic momentum moment per cell, to roundoff
   C2  energy transfer antisymmetry: the fluid coupling term's Ei row is
       exactly the kinetic energy moment closed with the same bulk-kinetic
       decomposition the conservative birth booking uses, to roundoff
+  C4  the booked transfer rebuilt by an INDEPENDENT route -- substep A's
+      marched state recovered algebraically from the public post-update
+      state, birth moments taken from the analytic Maxwellian targets
+      rather than from the engine's bin sums -- so the decomposition
+      itself is under test and not merely copied
+  C5  elastic-channel calibration: the isotropic BGK rate carries the
+      one-half momentum-transfer factor exactly, and the resulting rate
+      coefficient equals the closed form 0.5 <sigma_iso v_rel> to roundoff
   C3  zone-exchange antisymmetry: V_col * nu_x == V_ann * nu_xp cell by
       cell, so the column/annulus channel moves particles without creating
       or destroying any
@@ -64,8 +79,14 @@ from types import SimpleNamespace
 
 import numpy as np
 
+from cablp.funcs._cross import (
+    phelps_he_isotropic_cm2,
+    phelps_iso_rate_cm3_s,
+    phelps_momentum_transfer_rate_cm3_s,
+)
 from cablp.solvers._sim1d import LAPDSim1D, default_config
 from cablp.solvers._sim1d.physics.kinetic_dvm import (
+    ELASTIC_BGK_MOMENTUM_FACTOR,
     LEDGER_BIRTH_CHANNELS,
     LEDGER_EXTERNAL_BIRTHS,
     LEDGER_LOSS_CHANNELS,
@@ -73,9 +94,16 @@ from cablp.solvers._sim1d.physics.kinetic_dvm import (
     ledger_residual,
 )
 from cablp.solvers._sim1d.physics.kinetic_neutrals import EV, KB, M_HE
+from cablp.solvers._sim1d.physics.neutrals import neutral_zone_volumes
 
 CADENCE_S = 2.5e-5
 ROUNDOFF_REL = 1.0e-12
+
+# Closed form of <sigma_iso v_rel>: the Phelps isotropic cross section is
+# 7.63e-20 E^-0.5 m^2 with E = m g^2 / (4 eV) the equal-mass relative
+# collision energy, so sigma_iso * g is velocity-INDEPENDENT and its
+# Maxwellian average is that same constant, at any temperature.
+CLOSED_ISO_RATE_CM3_S = 2.0 * 7.63e-16 * np.sqrt(EV / M_HE)
 
 
 # --------------------------------------------------------------- harness
@@ -158,6 +186,183 @@ def zero_plasma(dvm):
     }
 
 
+def expanded_end_geometry():
+    """Return the PRODUCTION expanded-end machine geometry.
+
+    The stance's geometry keys, taken from ``compare_sim1d_es1.py``: the end
+    vessel expands to a 1 m neutral radius over 10 cells with the plasma
+    held at ``Rp = 15`` cm, and the plenum choke (``Rcs = 40``, ``Lcs = 25``)
+    constricts the annulus in front of the cathode. Both are ANNULUS area
+    jumps, which is what the throat-face flux form in ``_march`` exists to
+    handle; the column area is uniform throughout.
+    """
+    d, fl = default_config()
+    d = dict(d)
+    fl = dict(fl)
+    d.update(
+        {
+            "Rp": 15.0,
+            "R_cath": 15.0,
+            "Rcs": 40.0,
+            "Lcs": 25.0,
+            "Rsup": 0.0,
+            "end_expansion_cells": 10,
+            "end_expansion_machine_radius_cm": 100.0,
+            "end_expansion_plasma_radius_cm": 15.0,
+            "source_region_length_cm": 100.0,
+            "source_region_dz_cm": 10.0,
+        }
+    )
+    fl.update({"end_expansion_geometry": True, "source_fixed_grid": True})
+    return LAPDSim1D(input_dict=d, input_flags=fl).geometry
+
+
+def zero_annulus_tube(nz=6, blocked=(2, 3)):
+    """Return a tube whose ``blocked`` cells have NO annulus at all.
+
+    ``Rm == Rp`` there, so ``neutral_zone_volumes`` returns ``V_ann = 0``:
+    the zone-exchange and wall rates are forced to zero, the annulus face
+    areas vanish, and the cells must neither receive nor emit annulus
+    particles. Nothing in the device geometries produces this, so it is the
+    degenerate case the engine's ``inv_va`` guards are written for.
+    """
+    dz = np.full(nz, 100.0)
+    Rp_cm = np.full(nz, 15.0)
+    Rm_cm = np.full(nz, 50.0)
+    Rm_cm[list(blocked)] = 15.0
+    return SimpleNamespace(
+        cells=nz,
+        length_cm=dz,
+        Rp_cm=Rp_cm,
+        Rm_cm=Rm_cm,
+        plasma_volume_cm3=np.pi * Rp_cm**2 * dz,
+        neutral_volume_cm3=np.pi * Rm_cm**2 * dz,
+    )
+
+
+def geometry_plasma(nz):
+    """A deliberately non-uniform plasma background for the geometry gates."""
+    return {
+        "n_i": np.full(nz, 5.0e12),
+        "Ti_eV": np.linspace(0.5, 3.0, nz),
+        "u_i": np.linspace(-1.0e5, 3.0e5, nz),
+        "nu_ion": np.full(nz, 2.0e3),
+    }
+
+
+def independent_transfer(dvm, dt, plasma, rec):
+    """Rebuild ``(M, Ei, S)_transfer`` by a route independent of the engine.
+
+    ``_book_transfer`` builds these from substep A's tallies and from bin
+    sums over the birth distributions. This rebuilds them WITHOUT either:
+
+    - substep A's marched state is recovered algebraically from the public
+      post-update ``f_c``. The only column births are the collisional
+      rebirths and recombination, both at the local ion Maxwellian ``M_i``,
+      so ``f_c = f_march + (x + rec dt / V) M_i`` with ``x`` the rebirth
+      density. ``x`` satisfies the linear relation ``x = A - x B`` in the
+      rates, which inverts exactly -- no call into the march.
+    - the birth momentum and energy come from the ANALYTIC Maxwellian
+      moments ``m u`` and ``(1/2) m u^2 + (3/2) k T_i``, so the gate also
+      tests that the projection really is moment-exact rather than assuming
+      it, and would fail on a wrong birth temperature or drift.
+
+    Valid whenever the column receives no mesh, anode or end-face source
+    (the caller supplies only recombination and an annulus puff); zone
+    exchange, the cylindrical wall and the end buffers may all be live,
+    because those act on the annulus or inside the march.
+    """
+    g = dvm.g
+    Ti = np.asarray(plasma["Ti_eV"], dtype=float)
+    u = np.asarray(plasma["u_i"], dtype=float)
+    # The engine floors the birth temperature at 0.02 eV; match it exactly.
+    Ti_used = np.maximum(Ti, 0.02)
+    M_i = np.empty((dvm.nz, g.nvz, g.nvp))
+    for i in range(dvm.nz):
+        M_i[i] = g.maxwellian(float(Ti_used[i]), float(u[i]))
+    inv_vc = np.where(
+        dvm.V_col > 0.0, 1.0 / np.maximum(dvm.V_col, 1e-300), 0.0
+    )
+    rec_dt = np.asarray(rec, dtype=float) * dt
+    rec_births = (rec_dt * inv_vc)[:, None, None] * M_i
+
+    nu_cx, nu_el = dvm.collision_frequencies(
+        plasma["n_i"], Ti, u
+    )
+    nu_coll = nu_cx + nu_el
+    residual = dvm.f_c - rec_births
+    A = (nu_coll * residual * dt).sum(axis=(1, 2))
+    B = (nu_coll * M_i * dt).sum(axis=(1, 2))
+    x = A / (1.0 + B)
+    f_march = residual - x[:, None, None] * M_i
+
+    vol = dvm.V_col[:, None, None]
+    L_ion = np.asarray(plasma["nu_ion"], dtype=float)[:, None, None] * (
+        f_march * dt * vol
+    )
+    L_coll = nu_coll * f_march * dt * vol
+    VZ = g.VZ[None, :, :]
+    V2 = g.V2[None, :, :]
+    N_ion = L_ion.sum(axis=(1, 2))
+    P_ion = M_HE * (L_ion * VZ).sum(axis=(1, 2))
+    E_ion = 0.5 * M_HE * (L_ion * V2).sum(axis=(1, 2))
+    P_coll_lost = M_HE * (L_coll * VZ).sum(axis=(1, 2))
+    E_coll_lost = 0.5 * M_HE * (L_coll * V2).sum(axis=(1, 2))
+
+    N_coll = x * dvm.V_col
+    e_birth = 0.5 * M_HE * u**2 + 1.5 * Ti_used * EV
+    P = P_ion + (P_coll_lost - M_HE * u * N_coll) - M_HE * u * rec_dt
+    E = E_ion + (E_coll_lost - e_birth * N_coll) - e_birth * rec_dt
+    S = N_ion - rec_dt
+
+    scale = 1.0 / (np.maximum(dvm.V_col, 1e-300) * dt)
+    M_t = P * scale
+    S_t = S * scale
+    Ei_t = E * scale - u * M_t + 0.5 * M_HE * u**2 * S_t
+    return M_t, Ei_t, S_t
+
+
+def transfer_reconstruction_error(dvm, dt, plasma, rec):
+    """Return the worst relative error of :func:`independent_transfer`."""
+    want = independent_transfer(dvm, dt, plasma, rec)
+    got = (dvm.M_transfer, dvm.Ei_transfer, dvm.S_transfer)
+    worst = 0.0
+    for engine, rebuilt in zip(got, want):
+        scale = max(np.max(np.abs(rebuilt)), 1e-300)
+        worst = max(worst, float(np.max(np.abs(engine - rebuilt)) / scale))
+    return worst
+
+
+def geometry_closure(geom, label):
+    """Run a DVM on ``geom`` and return (worst residuals, transfer error).
+
+    Everything physical is live -- zone exchange, the cylindrical wall,
+    partial end pumping, a puff into the annulus and volume recombination
+    into the column -- so the closure statement is made against a working
+    engine, not a stripped one.
+    """
+    nz = int(np.asarray(geom.length_cm).size)
+    dvm = TransientDVM(geometry=geom, nvz=16, nvp=6, s_L=0.3, s_R=0.3)
+    seed_ann = np.where(dvm.V_ann > 0.0, 1.0e13, 0.0)
+    dvm.seed_from_density(np.full(nz, 1.0e13), seed_ann)
+    plasma = geometry_plasma(nz)
+    rec = np.full(nz, 1.0e15)
+    puff = np.zeros(nz)
+    puff[int(np.argmax(dvm.V_ann > 0.0))] = 3.0e17
+    dt = CADENCE_S
+    worst_dist = 0.0
+    worst_dom = 0.0
+    for _ in range(6):
+        led = dvm.update(
+            dt, sources={"recombination": rec, "puff": puff}, **plasma
+        )
+        r = ledger_residual(led)
+        worst_dist = max(worst_dist, abs(r["distribution_rel"]))
+        worst_dom = max(worst_dom, abs(r["domain_rel"]))
+    transfer_err = transfer_reconstruction_error(dvm, dt, plasma, rec)
+    return dvm, worst_dist, worst_dom, transfer_err
+
+
 def fmt(x):
     return f"{x:.6e}"
 
@@ -233,6 +438,53 @@ def gate_i3():
     )
 
 
+def gate_i4():
+    geom = expanded_end_geometry()
+    dvm, worst_dist, worst_dom, transfer_err = geometry_closure(
+        geom, "expanded end"
+    )
+    area_ann = dvm.V_ann / dvm.dz
+    jumps = area_ann[1:] / np.maximum(area_ann[:-1], 1e-300)
+    jumps = sorted({round(float(r), 3) for r in jumps if abs(r - 1.0) > 1e-9})
+    ok = (
+        worst_dist < ROUNDOFF_REL
+        and worst_dom < ROUNDOFF_REL
+        and transfer_err < ROUNDOFF_REL
+    )
+    return (
+        "I4 expanded-end production geometry: closure and transfer exact "
+        "across the area jumps",
+        ok,
+        f"{dvm.nz} cells, annulus area-jump ratios {jumps}; worst "
+        f"distribution {fmt(worst_dist)}, domain {fmt(worst_dom)}, "
+        f"independent transfer {fmt(transfer_err)} (tol {fmt(ROUNDOFF_REL)})",
+    )
+
+
+def gate_i5():
+    geom = zero_annulus_tube()
+    dvm, worst_dist, worst_dom, transfer_err = geometry_closure(
+        geom, "zero annulus"
+    )
+    empty = dvm.V_ann <= 0.0
+    leaked = float(np.max(dvm.annulus_density()[empty]))
+    ok = (
+        worst_dist < ROUNDOFF_REL
+        and worst_dom < ROUNDOFF_REL
+        and transfer_err < ROUNDOFF_REL
+        and leaked == 0.0
+    )
+    return (
+        "I5 zero-annulus geometry: closure and transfer exact, no leakage "
+        "into volumeless cells",
+        ok,
+        f"{dvm.nz} cells, {int(empty.sum())} with V_ann = 0; worst "
+        f"distribution {fmt(worst_dist)}, domain {fmt(worst_dom)}, "
+        f"independent transfer {fmt(transfer_err)}; annulus density in the "
+        f"volumeless cells {fmt(leaked)} (exactly zero required)",
+    )
+
+
 def gate_c1():
     sim = make_sim()
     run_until_updates(sim, 3)
@@ -261,19 +513,19 @@ def gate_c2():
     rhs = np.where(active, dvm.Ei_transfer, 0.0)
     err = np.max(np.abs(lhs - rhs))
     scale = max(np.max(np.abs(rhs)), 1e-300)
-    # Independent reconstruction of the internal-energy closure from the
-    # three published moments, so the gate checks the identity and not just
-    # that one array was copied into another.
-    u = np.asarray(sim.derived.u, dtype=float)
-    recon = dvm.Ei_transfer + u * dvm.M_transfer - 0.5 * M_HE * u**2 * dvm.S_transfer
-    total = dvm.Ei_transfer + u * dvm.M_transfer - 0.5 * M_HE * u**2 * dvm.S_transfer
-    closure_err = np.max(np.abs(recon - total))
-    ok = (err == 0.0 or err / scale < ROUNDOFF_REL) and closure_err == 0.0
+    # NB this gate deliberately makes ONE statement -- that the fluid Ei row
+    # is the engine's booked Ei transfer on the active cells. The K2a build
+    # carried a second "independent reconstruction" leg here that computed
+    # its two sides from the same expression and so could only ever print
+    # 0.0; it was removed rather than repaired in place, because the
+    # decomposition it meant to test needs inputs this sim-level gate does
+    # not have. C4 makes that statement properly.
+    ok = err == 0.0 or err / scale < ROUNDOFF_REL
     return (
         "C2 ion energy transfer is the kinetic energy moment, bulk removed",
         ok,
-        f"max |fluid Ei - kinetic closure| = {fmt(err)} on scale {fmt(scale)}; "
-        f"closure self-consistency {fmt(closure_err)}",
+        f"max |fluid Ei - kinetic closure| = {fmt(err)} on scale {fmt(scale)} "
+        f"(the decomposition itself is gated by C4)",
     )
 
 
@@ -288,6 +540,117 @@ def gate_c3():
         "C3 zone-exchange conductance is antisymmetric",
         ok,
         f"max |V_col nu_x - V_ann nu_xp| = {fmt(err)} on scale {fmt(scale)}",
+    )
+
+
+def gate_c4():
+    """The booked transfer, rebuilt from the post-update state alone."""
+    nz = 10
+    dvm = bare_dvm(nz=nz, nvz=16, nvp=6)
+    dvm.s_L = 0.3
+    dvm.s_R = 0.3
+    dvm.seed_from_density(np.full(nz, 1.0e13), np.full(nz, 1.0e13))
+    plasma = geometry_plasma(nz)
+    rec = np.full(nz, 1.0e15)
+    dt = CADENCE_S
+    for _ in range(3):
+        dvm.update(dt, sources={"recombination": rec}, **plasma)
+    want = independent_transfer(dvm, dt, plasma, rec)
+    rows = []
+    ok = True
+    for name, engine, rebuilt in zip(
+        ("M", "Ei", "S"),
+        (dvm.M_transfer, dvm.Ei_transfer, dvm.S_transfer),
+        want,
+    ):
+        scale = max(np.max(np.abs(rebuilt)), 1e-300)
+        err = float(np.max(np.abs(engine - rebuilt)) / scale)
+        rows.append(f"{name} {fmt(err)}")
+        ok = ok and err < ROUNDOFF_REL
+    return (
+        "C4 booked transfer matches an independent reconstruction",
+        ok,
+        "relative error vs the rebuilt moments: "
+        + ", ".join(rows)
+        + f" (tol {fmt(ROUNDOFF_REL)}); marched state recovered from the "
+        "public post-update f_c, birth moments taken analytically",
+    )
+
+
+def gate_c5():
+    """The isotropic-elastic BGK rate carries the one-half factor exactly.
+
+    A BGK full-replacement event transfers the whole ``m (v - u_i)``, which
+    is right for backscatter and twice the isotropic angular average, so
+    the isotropic rate is halved. Two statements are exact and are gated:
+    the factor is applied bit-exactly, and the resulting rate coefficient
+    is the closed form ``0.5 <sigma_iso v_rel>`` -- well defined at ANY
+    temperature because ``sigma_iso ~ 1/v`` makes ``sigma_iso v``
+    velocity-independent. The cx channel has genuine velocity dependence
+    and no single-number correspondence, so its ratio is reported only.
+    """
+    nz = 4
+    dvm = bare_dvm(nz=nz, nvz=48, nvp=12)
+    g = dvm.g
+    n_i = np.full(nz, 5.0e12)
+    Ti = np.array([0.1, 0.5, 2.0, 8.0])
+    u = np.array([0.0, 1.0e5, -2.0e5, 5.0e5])
+    nu_cx, nu_el = dvm.collision_frequencies(n_i, Ti, u)
+
+    # (a) the halving itself, against the unhalved expression.
+    w2 = (g.VZ[None, :, :] - u[:, None, None]) ** 2 + (g.VP**2)[None, :, :]
+    g_eff = np.sqrt(w2 + 16.0 * Ti[:, None, None] * EV / (np.pi * M_HE))
+    E_rel = np.maximum(0.25 * M_HE * g_eff**2 / EV, 1e-9)
+    unhalved = n_i[:, None, None] * phelps_he_isotropic_cm2(E_rel) * g_eff
+    ratio = nu_el / unhalved
+    halved_exactly = bool(
+        np.all(ratio == ELASTIC_BGK_MOMENTUM_FACTOR)
+    ) and ELASTIC_BGK_MOMENTUM_FACTOR == 0.5
+
+    # (b) the rate coefficient against the closed form, and its constancy.
+    k_el = nu_el / n_i[:, None, None]
+    want = 0.5 * CLOSED_ISO_RATE_CM3_S
+    closed_err = float(np.max(np.abs(k_el - want)) / want)
+
+    # (c) the off arm is exactly zero.
+    off = bare_dvm(nz=nz, nvz=16, nvp=6, elastic_model="off")
+    _, nu_el_off = off.collision_frequencies(
+        n_i, Ti, u
+    )
+    off_zero = bool(np.all(nu_el_off == 0.0))
+
+    ok = halved_exactly and closed_err < ROUNDOFF_REL and off_zero
+
+    # Reported context: the fluid TABLE is built by trapezoid quadrature of
+    # an E^-0.5 integrand and sits ~1.2e-3 BELOW its own closed form, so the
+    # table is the looser of the two references; and the total effective
+    # rate against a 300 K neutral Maxwellian, which the halving moves
+    # toward the fluid operator but cannot make exact (the cx channel's
+    # g_eff interpolation is not a Maxwellian rate average).
+    table = float(phelps_iso_rate_cm3_s(0.5))
+    table_rel = table / CLOSED_ISO_RATE_CM3_S - 1.0
+    fM = g.maxwellian(300.0 * KB / EV, 0.0)
+    totals = []
+    for i in range(nz):
+        k_kin = float(((nu_cx[i] + nu_el[i]) * fM).sum()) / n_i[i]
+        k_pre = k_kin + float((nu_el[i] * fM).sum()) / n_i[i]
+        k_fluid = float(
+            phelps_momentum_transfer_rate_cm3_s(0.5 * (Ti[i] + 300.0 * KB / EV))
+        )
+        totals.append(
+            f"Ti={Ti[i]:g}: {k_kin / k_fluid:.3f} (was {k_pre / k_fluid:.3f})"
+        )
+    return (
+        "C5 elastic BGK rate carries the 1/2 momentum-transfer factor",
+        ok,
+        f"nu_el/unhalved exactly {ELASTIC_BGK_MOMENTUM_FACTOR} everywhere: "
+        f"{halved_exactly}; k_el vs closed 0.5<sigma_iso v> = "
+        f"{fmt(want)} cm^3/s, relative error {fmt(closed_err)} "
+        f"(tol {fmt(ROUNDOFF_REL)}); elastic_model='off' exactly zero: "
+        f"{off_zero}. Context (not gated): the tabulated "
+        f"phelps_iso_rate_cm3_s is {table_rel:+.2e} off its own closed form "
+        f"(quadrature); total k/k_fluid vs a 300 K Maxwellian -- "
+        + "; ".join(totals),
     )
 
 
@@ -792,9 +1155,13 @@ def main():
         gate_i1,
         gate_i2,
         gate_i3,
+        gate_i4,
+        gate_i5,
         gate_c1,
         gate_c2,
         gate_c3,
+        gate_c4,
+        gate_c5,
         gate_r1,
         gate_r2,
         gate_p1,
