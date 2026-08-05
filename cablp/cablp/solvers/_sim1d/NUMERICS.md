@@ -203,11 +203,28 @@ physically-motivated candidate bounds, then clamps to `[dt_min, dt_max]`:
   neutral sources, reactions, energy exchange, electron cooling, ion
   charge-exchange, and (explicit path only) heat conduction.
 - **Resolved electrode/source margin** (`surface_loss` diagnostic key): with
-  raw-stage validation active, the combined cathode/sheath, anode collection,
-  and boundary absorption bundle is bounded against `n-n_floor` and the exact
-  conservative temperature margins
+  raw-stage validation active — or unconditionally once a kinetic neutral arm
+  is engaged — the combined cathode/sheath, anode collection, and
+  plasma-terminating boundary bundle is bounded against `n-n_floor` and the
+  exact conservative temperature margins
   `Ee-3/2 n Te_floor` / `Ei-3/2 n Ti_floor`. The corresponding rates include
-  the change in floor energy when density changes.
+  the change in floor energy when density changes. The boundary half is the
+  operator the *stance* runs (the characteristic ghost-cell flux, or the
+  legacy volumetric absorber when `characteristic_boundary` is off), and an
+  engaged `kinetic_dvm` arm adds its plasma-side coupling term, which is
+  otherwise a volumetric ion momentum/energy source no bound could see.
+
+**A bound must describe a row the step applies.** A kinetic neutral arm
+supersedes whole rows of the fluid terms — it zeroes them and carries them in
+its own coupling term — and a bound still computed from the unstripped form is
+a phantom that can set Δt and name itself `active_constraint` while the row it
+describes is identically zero (measured, 2026-08-05: the fatal step's
+constraint named a term whose applied `Ei` row was `0.0`). While the arm is
+engaged, the `ion_charge_exchange`, `ion_neutral_drag`, `neutral_exchange` and
+`neutral_sources` candidates are therefore withdrawn to `inf` and the reaction
+bound keeps only its plasma channel; the replacements are bounded through the
+`surface_loss` bundle above. The withdrawal is presence-gated on engagement,
+so the moment path is untouched.
 
 `TimestepDiagnostics` records every candidate, the `active_constraint` that set
 Δt, and per-step accept/reject bookkeeping.
