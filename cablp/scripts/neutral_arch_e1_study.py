@@ -1008,6 +1008,43 @@ def run_part2(path, log):
 # ------------------------------------------------------------------ reports
 
 
+# Classification thresholds for the Part 2 statement of which moments are
+# grid-limited at the production grid. Stated here so the classification is
+# a rule applied to the numbers rather than a judgement made over them.
+GRID_CONVERGED_REL = 1.0e-3
+GRID_LIMITED_REL = 1.0e-2
+
+
+def observed_order(x_lo, x_mid, x_hi):
+    """Observed convergence order from a geometric cadence triple.
+
+    ``x_lo, x_mid, x_hi`` are one readout at cadences in ratio 1 : 2 : 4.
+    For ``X(dt) = X0 + C dt^p`` the successive differences are in ratio
+    ``2^p``, so ``p = log2((x_hi - x_mid) / (x_mid - x_lo))``. Returns NaN
+    when the differences are not same-signed, which is what a readout
+    dominated by round-off or by non-monotone behaviour looks like.
+    """
+    d1 = x_mid - x_lo
+    d2 = x_hi - x_mid
+    if d1 == 0.0 or d2 / d1 <= 0.0:
+        return float("nan")
+    return float(np.log2(d2 / d1))
+
+
+def anchor_offset(dev_10us, order):
+    """Estimate how far the anchor itself sits from the ``dt -> 0`` limit.
+
+    With ``X(dt) = X0 + C dt^p`` the anchor's own relative offset is
+    ``C dt_a^p / |X| = dev_10us / (2^p - 1)`` -- at first order, exactly the
+    10 us deviation. The deviations tabulated by this study are differences
+    between clocks, not distances from the continuous-time solution, and
+    this is the factor that relates the two.
+    """
+    if not np.isfinite(order) or order <= 0.0:
+        return float("nan")
+    return dev_10us / (2.0**order - 1.0)
+
+
 def _rel(value, ref):
     if not np.isfinite(value) or not np.isfinite(ref):
         return float("nan")
@@ -1047,6 +1084,29 @@ def write_cadence_artifact(path, command, results):
         "those at the END of each neutral tick, applied across the tick."
     )
     lines.append("")
+    lines.append(
+        "The 'order' column is the observed convergence order over the "
+        "25/50/100 us triple (successive-difference ratio, base 2). The "
+        "'anchor off' column is the anchor's OWN estimated relative "
+        "distance from the dt -> 0 limit at that order, dev(10 us) / "
+        "(2^order - 1): the tabulated deviations are differences BETWEEN "
+        "clocks, and this column is what relates them to an absolute error."
+    )
+    lines.append(
+        "Both columns assume the asymptotic regime. Where the coarse-arm "
+        "deviations reach order unity the triple is no longer in it: the "
+        "fitted order is then a SATURATION diagnostic (an order well below "
+        "one, or a negative one) rather than a convergence rate, and the "
+        "'anchor off' estimate inherits that. Read them where the "
+        "deviations are small."
+    )
+    lines.append(
+        "The two hot-tail decay-ratio rows carry, by construction, the same "
+        "relative deviations as the corresponding inventory rows -- every "
+        "arm shares one interval-start value. Their anchor values are the "
+        "informative part (the factor the tail grew or decayed by)."
+    )
+    lines.append("")
     for label, res in results.items():
         t0, t1 = res["window_ms"]
         lines.append("-" * 78)
@@ -1059,8 +1119,10 @@ def write_cadence_artifact(path, command, results):
         lines.append(
             f"  {'readout':<46}{'anchor value':>15}"
             + "".join(f"{c * 1e6:>12.0f} us" for c in cads)
+            + f"{'order':>9}{'anchor off':>12}"
         )
         worst = {c: (0.0, "") for c in cads}
+        orders = []
         for key in ref:
             if key.startswith("_"):
                 continue
@@ -1070,6 +1132,17 @@ def write_cadence_artifact(path, command, results):
                 row += f"{rel:>15.3e}"
                 if np.isfinite(rel) and abs(rel) > abs(worst[c][0]):
                     worst[c] = (rel, key)
+            p = observed_order(
+                arms[2.5e-5]["readouts"][key],
+                arms[5.0e-5]["readouts"][key],
+                arms[1.0e-4]["readouts"][key],
+            )
+            off = anchor_offset(
+                _rel(arms[1.0e-5]["readouts"][key], ref[key]), p
+            )
+            row += f"{p:>9.2f}{off:>12.2e}"
+            if np.isfinite(p):
+                orders.append(p)
             lines.append(row)
         # profile deviation of the column density
         row = f"  {'column density profile, max |rel dev| [-]':<46}{'':>15}"
@@ -1082,6 +1155,12 @@ def write_cadence_artifact(path, command, results):
         lines.append("")
         lines.append(f"  {'ticks in the interval':<46}{arms[ANCHOR_S]['ticks']:>15d}"
                      + "".join(f"{arms[c]['ticks']:>15d}" for c in cads))
+        lines.append(
+            f"  observed order over the 25/50/100 us triple: median "
+            f"{np.median(orders):.2f}, range "
+            f"[{min(orders):.2f}, {max(orders):.2f}] over "
+            f"{len(orders)} readouts"
+        )
         lines.append("  worst relative deviation, by cadence:")
         for c in cads:
             lines.append(
@@ -1122,9 +1201,15 @@ def write_vgrid_artifact(path, command, conditions, moments, costs):
     )
     lines.append(
         f"Relaxation: {VGRID_UPDATES} updates at {VGRID_DT_S * 1e6:.0f} us "
-        f"({VGRID_UPDATES * VGRID_DT_S * 1e3:.1f} ms); the settle figure is "
-        f"the largest relative change over the last {VGRID_SETTLE_TAIL} "
-        "updates."
+        f"({VGRID_UPDATES * VGRID_DT_S * 1e3:.1f} ms). Reported values are "
+        f"means over the last {VGRID_SETTLE_TAIL} updates and the settle "
+        "figure is the largest relative change between that window's mean "
+        "and the mean of the preceding window of equal length."
+    )
+    lines.append(
+        "All velocity grids share the same velocity EXTENT and the same "
+        "sinh stretching scale; only the bin count changes, so the rows are "
+        "a resolution statement and not a domain-truncation one."
     )
     lines.append("")
     lines.append("-" * 78)
@@ -1163,6 +1248,30 @@ def write_vgrid_artifact(path, command, conditions, moments, costs):
             row += f"{moments[name][g]['_settle']:>15.3e}"
         lines.append(row)
         lines.append("")
+    lines.append("-" * 78)
+    lines.append("WHICH MOMENTS ARE GRID-LIMITED AT THE PRODUCTION 48x12 GRID")
+    lines.append(
+        f"  Rule: worst |deviation| over the three cells below "
+        f"{GRID_CONVERGED_REL:.0e} is CONVERGED, above "
+        f"{GRID_LIMITED_REL:.0e} is GRID-LIMITED, between the two is "
+        "PARTLY RESOLVED. Applied to the numbers, not judged over them."
+    )
+    lines.append("")
+    for verdict, lo, hi in (
+        ("GRID-LIMITED ", GRID_LIMITED_REL, np.inf),
+        ("PARTLY RESOLVED", GRID_CONVERGED_REL, GRID_LIMITED_REL),
+        ("CONVERGED    ", 0.0, GRID_CONVERGED_REL),
+    ):
+        for key in moments[next(iter(conditions))][VGRID_ANCHOR]:
+            if key.startswith("_"):
+                continue
+            worst = max(
+                abs(_rel(moments[n][(48, 12)][key], moments[n][VGRID_ANCHOR][key]))
+                for n in conditions
+            )
+            if lo <= worst < hi:
+                lines.append(f"  {verdict}  {key:<44} worst {worst:.3e}")
+    lines.append("")
     lines.append("-" * 78)
     lines.append(
         "PER-UPDATE COST, production nx=240 geometry "
@@ -1267,6 +1376,55 @@ def write_summary(path, command, results, conditions, moments, costs):
     for (label, c), (worst, name) in worst_all.items():
         lines.append(f"- {label}, {c * 1e6:.0f} us: `{name}` at {worst:+.3e}")
     lines.append("")
+    lines.append("### Observed convergence order, and what the anchor is worth")
+    lines.append("")
+    lines.append(
+        "Order is measured over the 25/50/100 us triple as the base-2 "
+        "successive-difference ratio, per readout."
+    )
+    lines.append("")
+    lines.append(
+        "| interval | median order | order range | readouts with a "
+        "same-signed triple |"
+    )
+    lines.append("|---|---|---|---|")
+    for label, res in results.items():
+        ref = res["arms"][ANCHOR_S]["readouts"]
+        orders = []
+        for key in ref:
+            if key.startswith("_"):
+                continue
+            p = observed_order(
+                res["arms"][2.5e-5]["readouts"][key],
+                res["arms"][5.0e-5]["readouts"][key],
+                res["arms"][1.0e-4]["readouts"][key],
+            )
+            if np.isfinite(p):
+                orders.append(p)
+        lines.append(
+            f"| {label} | {np.median(orders):.2f} | "
+            f"{min(orders):.2f} - {max(orders):.2f} | {len(orders)} |"
+        )
+    lines.append("")
+    lines.append(
+        "The deviations tabulated here are differences BETWEEN clocks, not "
+        "distances from the continuous-time solution. At the measured order "
+        "the anchor's own relative distance from the `dt -> 0` limit is "
+        "`dev(10 us) / (2^order - 1)`, which at first order is simply the "
+        "10 us column: the 5 us arm is not itself demonstrated converged, "
+        "and the per-readout estimate is the `anchor off` column of "
+        "`neutral_arch_e1_cadence_nx240.txt`."
+    )
+    lines.append("")
+    lines.append(
+        "Both statements assume the asymptotic regime, which the table "
+        "above is also the test of: an interval whose readouts cluster "
+        "tightly near order 1 is in it, and one whose fitted orders spread "
+        "well below 1 (or negative) has coarse arms that are saturating "
+        "rather than converging, so its order and anchor-offset figures "
+        "are diagnostics of that saturation and not convergence rates."
+    )
+    lines.append("")
     lines.append("### Per-readout deviation, all intervals")
     lines.append("")
     for label, res in results.items():
@@ -1321,6 +1479,32 @@ def write_summary(path, command, results, conditions, moments, costs):
             )
             lines.append(row + " |")
         lines.append("")
+    lines.append("### Which moments are grid-limited at the production 48x12")
+    lines.append("")
+    lines.append(
+        f"Rule applied to the numbers: worst |deviation| over the three "
+        f"cells below {GRID_CONVERGED_REL:.0e} is converged, above "
+        f"{GRID_LIMITED_REL:.0e} is grid-limited, between the two partly "
+        "resolved."
+    )
+    lines.append("")
+    lines.append("| verdict at 48x12 | moment | worst |dev| over the 3 cells |")
+    lines.append("|---|---|---|")
+    for verdict, lo, hi in (
+        ("grid-limited", GRID_LIMITED_REL, np.inf),
+        ("partly resolved", GRID_CONVERGED_REL, GRID_LIMITED_REL),
+        ("converged", 0.0, GRID_CONVERGED_REL),
+    ):
+        for key in moments[next(iter(conditions))][VGRID_ANCHOR]:
+            if key.startswith("_"):
+                continue
+            worst = max(
+                abs(_rel(moments[n][(48, 12)][key], moments[n][VGRID_ANCHOR][key]))
+                for n in conditions
+            )
+            if lo <= worst < hi:
+                lines.append(f"| {verdict} | {key} | {worst:.3e} |")
+    lines.append("")
     lines.append("### Per-update cost vs velocity grid (production nx=240)")
     lines.append("")
     lines.append("| grid | bins | median [ms] | min [ms] | max [ms] | "
