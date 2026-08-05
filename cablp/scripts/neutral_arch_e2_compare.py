@@ -1858,6 +1858,77 @@ def write_cx(path, args, shared, table, extra_lines):
 # --------------------------------------------------------------------- main
 
 
+def sampling_check(dvm, shared, args):
+    """Check that the MC samples exactly the spectra the engine books.
+
+    The whole artifact rests on the two arms being fed the same
+    distributions, so this projects large MC samples onto the engine's own
+    velocity grid and compares the resulting bin masses against the analytic
+    bin masses the engine uses. A residual here is either a sampling bug or
+    the grid's own discretization -- and the mean-energy column separates
+    them, because the engine's ``maxwellian`` projection is moment-compensated
+    while its wall and half-flux spectra are raw bin masses.
+    """
+    g = dvm.g
+    rng = np.random.default_rng(args.seed + 31)
+    N = int(args.sampling_check)
+    T_s = shared["T_s_K"]
+    T_w = shared["T_wall_K"]
+
+    def project(v):
+        iz = np.clip(np.searchsorted(g.vz_edges, v[:, 2]) - 1, 0, g.nvz - 1)
+        vp = np.hypot(v[:, 0], v[:, 1])
+        ip = np.clip(np.searchsorted(g.vp_edges, vp) - 1, 0, g.nvp - 1)
+        h = np.bincount(iz * g.nvp + ip, minlength=g.nvz * g.nvp)
+        return h.reshape(g.nvz, g.nvp) / h.sum()
+
+    cases = (
+        ("cylindrical wall re-emission",
+         lambda: cylinder_spectrum(rng, N, T_w),
+         g.wall_emission_spectrum(T_w)),
+        ("end R half-flux (300 K, -z)",
+         lambda: cosine_z(rng, N, T_w, -1.0),
+         g.half_flux_spectrum(T_w, -1)),
+        ("end L half-flux (T_s, +z)",
+         lambda: cosine_z(rng, N, T_s, +1.0),
+         g.half_flux_spectrum(T_s, +1)),
+        ("300 K volume Maxwellian (puff, seed)",
+         lambda: maxwell3(rng, N, np.full(N, KB * T_w / EV), 0.0),
+         g.maxwellian(KB * T_w / EV, 0.0)),
+    )
+    L = [
+        "REFERENCE SAMPLING CHECK (do both arms see the same distributions?)",
+        "-" * 100,
+        f"{N:,} samples per case, projected onto the engine's own "
+        f"{g.nvz}x{g.nvp} grid and compared with the analytic bin masses the "
+        f"engine uses.",
+        f"{'distribution':<38s} {'L1 bin-mass diff':>17s} "
+        f"{'max |dev|/SEM':>14s} {'<E> MC [eV]':>13s} {'<E> grid [eV]':>14s} "
+        f"{'ratio':>8s}",
+    ]
+    for name, sample, target in cases:
+        v = sample()
+        h = project(v)
+        p = np.maximum(target, 0.0)
+        sem = np.sqrt(p * (1.0 - p) / N)
+        dev = np.where(sem > 0.0, (h - target) / np.maximum(sem, 1e-30), 0.0)
+        eS = float(0.5 * M_HE * (v * v).sum(axis=1).mean() / EV)
+        eT = float(0.5 * M_HE * (target * g.V2).sum() / EV)
+        L.append(
+            f"{name:<38s} {np.abs(h - target).sum():17.5f} "
+            f"{np.abs(dev).max():14.2f} {eS:13.6f} {eT:14.6f} "
+            f"{eS / eT:8.5f}"
+        )
+    L.append(
+        "The volume Maxwellian's mean energy matches to rounding because the "
+        "engine's Maxwellian projection is moment-compensated. The wall and "
+        "half-flux spectra are raw analytic bin masses with no compensation, "
+        "so their ratio is the shipped grid's own mean-energy discretization "
+        "error and it propagates directly into the return-spectrum rows."
+    )
+    return "\n".join(L)
+
+
 def ledger_note(dvm_ledger, mc_meta, args):
     """Compare the two arms' whole-window particle ledgers.
 
@@ -1960,6 +2031,9 @@ def main(argv=None):
                          "return-spectrum rows are populated")
     ap.add_argument("--elastic-model", default="phelps_iso",
                     choices=("phelps_iso", "off"))
+    ap.add_argument("--sampling-check", type=int, default=2_000_000,
+                    help="samples per distribution in the reference-sampling "
+                         "check")
     ap.add_argument("--cx-samples", type=int, default=4_000_000,
                     help="MC samples per state in the CX-channel adjudication")
     ap.add_argument("--dt-refine", action="store_true", default=True,
@@ -2094,6 +2168,7 @@ def main(argv=None):
 
     # ---------------- DVM self-convergence in dt
     dt_note = None
+    dt_band = {}
     if args.dt_refine:
         print("DVM self-convergence: dt/2 ...", flush=True)
         dvm_h, _ = run_dvm(
@@ -2106,10 +2181,13 @@ def main(argv=None):
             f"The same configuration A run at dt = {args.dvm_dt:.4g} s and at "
             f"dt/2. This bounds how much of any DVM-vs-reference deviation "
             f"below is the DVM's own time discretization.",
-            f"{'quantity':<12s} {'region':<22s} {'max |dt vs dt/2| %':>20s}",
+            f"{'quantity':<12s} {'region':<22s} {'max |dt vs dt/2| %':>20s} "
+            f"{'at bin':>7s} {'last bin %':>11s}",
         ]
+        # The end-wall rows are indexed by END, not by axial cell, so they
+        # are compared below rather than through the region masks.
         for key in ("n_col", "n_ann", "p_col", "p_ann", "e_col", "e_ann",
-                    "exch_ca", "exch_ac", "wrad_inc", "wend_inc"):
+                    "exch_ca", "exch_ac", "wrad_inc", "wrad_ret"):
             for lab, m in region_masks(shared["z_cm"]):
                 if not m.any():
                     continue
@@ -2119,17 +2197,33 @@ def main(argv=None):
                     continue
                 a = agg(dvm_A[key], m, w)
                 b = agg(dvm_h[key], m, w)
-                worst = np.nanmax(np.abs(rel_dev(a, b))) * 100.0
-                lines.append(f"{key:<12s} {lab:<22s} {worst:20.3f}")
+                r = np.abs(rel_dev(a, b)) * 100.0
+                dt_band[key] = max(dt_band.get(key, 0.0), float(np.nanmax(r)))
+                lines.append(
+                    f"{key:<12s} {lab:<22s} {np.nanmax(r):20.3f} "
+                    f"{int(np.nanargmax(r)):7d} {r[-1]:11.3f}"
+                )
         for j, end in enumerate(("end L", "end R")):
             for key in ("wend_inc", "wend_ret"):
-                a = dvm_A[key][:, j]
-                b = dvm_h[key][:, j]
-                worst = np.nanmax(np.abs(rel_dev(a, b))) * 100.0
-                lines.append(f"{key:<12s} {end:<22s} {worst:20.3f}")
+                r = np.abs(rel_dev(dvm_A[key][:, j], dvm_h[key][:, j])) * 100.0
+                dt_band[key] = max(dt_band.get(key, 0.0), float(np.nanmax(r)))
+                lines.append(
+                    f"{key:<12s} {end:<22s} {np.nanmax(r):20.3f} "
+                    f"{int(np.nanargmax(r)):7d} {r[-1]:11.3f}"
+                )
+        lines.append(
+            "The COLUMN rows relax on the local ion-neutral loss time "
+            "1/(nu_ion + nu_cx + nu_el), which this background puts at a few "
+            "times 1e-5 s -- the same order as the shipped neutral cadence. "
+            "Their dt band is therefore large and a DVM-vs-reference "
+            "deviation smaller than it is not resolvable at this cadence. "
+            "The annulus has no volume loss channel and is well converged."
+        )
         dt_note = "\n".join(lines)
         notes.append(dt_note)
 
+    sampling_note = sampling_check(dvm_obj, shared, args)
+    notes.append(sampling_note)
     notes.append(ledger_note(dvm_A["_ledger"], summary["kin"][1], args))
 
     notes.append(
@@ -2160,7 +2254,8 @@ def main(argv=None):
     print(f"  wrote {cx_path}", flush=True)
 
     write_summary(sum_path, args, shared, bg, summary, cx_table, dt_note,
-                  dvm_A_wall, time.perf_counter() - t_all)
+                  dt_band, dvm_A_wall, time.perf_counter() - t_all,
+                  sampling_note=sampling_note)
     print(f"  wrote {sum_path}", flush=True)
     print(f"total wall {time.perf_counter() - t_all:.1f} s", flush=True)
     return 0
@@ -2230,8 +2325,8 @@ def cx_adjudication(shared, args, dvm):
     return table, extra
 
 
-def write_summary(path, args, shared, bg, summary, cx_table, dt_note,
-                  dvm_wall, total_wall):
+def write_summary(path, args, shared, bg, summary, cx_table, dt_note, dt_band,
+                  dvm_wall, total_wall, sampling_note=None):
     keys = ("n_col", "n_ann", "p_col", "p_ann", "e_col", "e_ann",
             "exch_ca", "exch_ac", "wrad_inc", "wrad_ret", "wend_inc",
             "wend_ret")
@@ -2287,15 +2382,31 @@ def write_summary(path, args, shared, bg, summary, cx_table, dt_note,
         L.append("")
         L.append(
             "| quantity | worst dev/sigma (region, bin) | worst dev % "
-            "(region, bin) |"
+            "(region, bin) | DVM dt band % | resolvable? |"
         )
-        L.append("|---|---|---|")
+        L.append("|---|---|---|---|---|")
         w = worst_rows(rows, keys)
         for key in keys:
             (s, sw), (p, pw) = w[key]
             sl = f"{s:+.1f} ({sw[0]}, bin {sw[1]})" if sw else "n/a"
             pl_ = f"{100 * p:+.2f}% ({pw[0]}, bin {pw[1]})" if pw else "n/a"
-            L.append(f"| `{key}` | {sl} | {pl_} |")
+            band = dt_band.get(key)
+            bl = f"{band:.1f}%" if band is not None else "n/a"
+            if band is None or pw is None:
+                verdict = "n/a"
+            elif abs(100 * p) > band:
+                verdict = "yes"
+            else:
+                verdict = "NO -- inside the dt band"
+            L.append(f"| `{key}` | {sl} | {pl_} | {bl} | {verdict} |")
+        L.append("")
+        L.append(
+            "`DVM dt band %` is the worst change in that quantity between the "
+            "shipped neutral cadence and half of it (the block below). A "
+            "deviation smaller than the band is not resolvable at this "
+            "cadence and is marked so; it is a statement about the cadence, "
+            "not evidence that the two arms agree."
+        )
         L.append("")
         seg = sum(m["segments"] for m in meta)
         viol = sum(m["violations"] for m in meta)
@@ -2353,6 +2464,13 @@ def write_summary(path, args, shared, bg, summary, cx_table, dt_note,
             f"kinetic-energy moment DVM/MC {min(er):.4f} to {max(er):.4f}."
         )
     L.append("")
+    if sampling_note:
+        L.append("## Reference sampling check")
+        L.append("")
+        L.append("```")
+        L.append(sampling_note)
+        L.append("```")
+        L.append("")
     if dt_note:
         L.append("## DVM self-convergence in the neutral clock")
         L.append("")
