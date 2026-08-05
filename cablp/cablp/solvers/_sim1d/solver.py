@@ -48,6 +48,7 @@ from .core.timestep import suggest_timestep
 from .physics.conduction import heat_conduction_rhs, implicit_heat_conduction_step
 from .physics.kinetic_dvm import (
     ELASTIC_MODELS as KINETIC_DVM_ELASTIC_MODELS,
+    EXCHANGE_MODELS as KINETIC_DVM_EXCHANGE_MODELS,
     TransientDVM,
 )
 from .physics.kinetic_neutrals import (
@@ -1524,6 +1525,14 @@ class LAPDSim1D:
                 "neutral_kinetic_dvm_elastic must be one of "
                 f"{KINETIC_DVM_ELASTIC_MODELS} (got {elastic!r})"
             )
+        exchange = str(
+            self._input_dict.get("neutral_kinetic_dvm_exchange", "cauchy_chord")
+        )
+        if exchange not in KINETIC_DVM_EXCHANGE_MODELS:
+            raise ValueError(
+                "neutral_kinetic_dvm_exchange must be one of "
+                f"{KINETIC_DVM_EXCHANGE_MODELS} (got {exchange!r})"
+            )
         tn_feedback = bool(
             self._input_dict.get("neutral_kinetic_dvm_tn_feedback", False)
         )
@@ -1547,6 +1556,7 @@ class LAPDSim1D:
             nvp=int(self._input_dict.get("neutral_kinetic_dvm_nvp", 12)),
             accommodation=accommodation,
             elastic_model=elastic,
+            exchange_model=exchange,
             transparency=1.0 - float(self._input_dict.get("eta", 0.358)),
             mesh_face=int(anode_faces[0]) if anode_faces.size else -999,
             s_L=self._dvm_end_sticking("S_pump_L"),

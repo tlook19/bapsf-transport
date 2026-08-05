@@ -204,6 +204,52 @@ new is fitted. `"off"` is the declared A/B arm. Corrected 2026-08-05 (the K2a
 build shipped the unhalved rate); the correspondence is measured by
 `scripts/verify_sim1d_k2_dvm.py`, gate C5.
 
+**`neutral_kinetic_dvm_exchange = "cauchy_chord"` — DERIVED (both arms), the
+default is a REPRODUCIBILITY stance.** Which closed form carries the
+column/annulus zone exchange and the radial-wall rate. Both arms are derived,
+neither is fitted, and the choice between them is not a free parameter — they
+are two different pieces of integral geometry applied to the same cell, and one
+of them is the right one:
+
+- `"cauchy_chord"` is the shipped K2a transcription of `KN2Zone`: the
+  three-dimensional Cauchy mean chord `4V/S = 2 (Rm - Rp)` evaluated at the
+  perpendicular speed `vp`, with one surface encounter split between the two
+  cylinders as `Rp/Rm : (1 - Rp/Rm)`.
+- `"geometric"` is derived from the fact that crossings of two COAXIAL
+  cylinders are a two-dimensional problem — the axial coordinate never enters
+  the radial dynamics — so the mean chord is the planar Cauchy chord
+  `pi A / P = pi (Rm - Rp) / 2`, and the encounter splits between the two
+  circles in proportion to their PERIMETERS, `Rp : Rm`. That gives
+  `nu_a->c = 2 vp Rp / (pi (Rm^2 - Rp^2))`,
+  `nu_a->wall = 2 vp Rm / (pi (Rm^2 - Rp^2))` and, on the true cell volumes,
+  `nu_c->a = 2 vp / (pi Rp)`.
+
+Honest bar: `"geometric"` is the one that reproduces the geometry. It is
+measured against the reference geometry by the free-flight billiard probe in
+`scripts/k2_dvm_exchange_measure.py` — the committed E2 ray tracer with
+collisions, sources, pumping and accommodation all switched off, so the
+measurement is a property of `(Rp, Rm)` and the velocity and of nothing else —
+and the record is `scripts/k2_dvm_exchange_measured.txt`. Independently,
+`nu_c->a = 2 vp / (pi Rp)` averages over a Maxwellian to `vbar / (2 Rp)`,
+exactly the free-molecular rate `neutrals.neutral_zone_exchange_conductance`
+already carries in the fluid arm; the `"cauchy_chord"` form does not reduce to
+it. The correction factor is `4 Rm / (pi (Rp + Rm))` on the exchange channels
+and `4 Rm^2 / (pi (Rm^2 - Rp^2))` on the wall channel, so it is
+CELL-dependent, not a constant.
+
+The DEFAULT nonetheless stays `"cauchy_chord"`, because the pre-registered
+acceptance gate that would have promoted `"geometric"` was MISSED
+(`scripts/k2_dvm_exchange_acceptance.txt`, a reduced-statistics E2 rerun with
+both arms scored against one reference). At this device's main-column ratio
+`Rp/Rm = 0.3` the two errors in the shipped exchange rate nearly cancel — the
+mean chord is too long by `4/pi` and the return fraction too large by
+`(Rp+Rm)/Rm` — leaving the exchange channels only -2.1 % apart; the wall
+channel, where they do not cancel, moves +39.9 %. The gate required the worst
+matched-time mid-machine `n_ann` deviation to shrink 3x and it shrank 1.32x
+(+184.97 % to +139.80 %), so the mid-machine annulus divergence is NOT caused
+by the zone-rate coefficients. The two arms are a declared A/B; promotion is
+gated on evidence that has not been produced.
+
 **`neutral_kinetic_dvm_tn_feedback = False` — ASSUMED (a stance, not a value).**
 Off means the fluid keeps its fixed cold-gas neutral temperature where it needs
 one, exactly as today, while the arm reports its measured `Tn(z)` as a
