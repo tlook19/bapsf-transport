@@ -188,10 +188,21 @@ Derived from the requirement that the arm not silently drop physics the fluid
 model has: the arm supersedes the fluid ion-neutral collision family whole, and
 that operator's momentum-transfer cross section is `Qi + 2 Qb`, so carrying
 only the backscatter `Qb` would delete the `Qi` half. `"phelps_iso"` restores
-it as a mass-matched relaxation toward the local ion Maxwellian at the Phelps
-isotropic rate. Both channels use the same archived LXCat cross sections as the
-moment-closure operator, so nothing new is fitted. `"off"` is the declared A/B
-arm.
+it as a mass-matched relaxation toward the local ion Maxwellian at HALF the
+Phelps isotropic rate. The one-half is itself DERIVED, not fitted: a BGK
+full-replacement event transfers the whole `m (v - u_i)`, which is the correct
+weight for backscatter (`mu (1 - cos th) g` at `cos th = -1`, `mu = m/2`, is
+`m g`) but exactly twice the isotropic angular average `<1 - cos th> = 1`,
+i.e. `mu g = m g / 2`. The factor is the equal-mass reduced-mass ratio
+`mu/m = 1/2` and nothing else. With it the arm's effective momentum-transfer
+rate is `k_b + 0.5 k_iso`, identical to the superseded fluid operator
+`phelps_momentum_transfer_rate_cm3_s`, so the kinetic and moment arms are an
+honest A/B on the SAME collision strength rather than a 2x change of the
+elastic channel smuggled in with the discretization. Both channels use the
+same archived LXCat cross sections as the moment-closure operator, so nothing
+new is fitted. `"off"` is the declared A/B arm. Corrected 2026-08-05 (the K2a
+build shipped the unhalved rate); the correspondence is measured by
+`scripts/verify_sim1d_k2_dvm.py`, gate C5.
 
 **`neutral_kinetic_dvm_tn_feedback = False` — ASSUMED (a stance, not a value).**
 Off means the fluid keeps its fixed cold-gas neutral temperature where it needs
