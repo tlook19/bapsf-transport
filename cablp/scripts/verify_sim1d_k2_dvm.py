@@ -23,6 +23,12 @@ Gates:
       default geometry cannot exercise
   I5  the same two statements on a zero-annulus geometry, plus the
       statement that nothing leaks into a cell whose annulus has no volume
+  S1  recycle identity: what the arm sources at a plasma-terminating surface
+      equals what the ACTIVE boundary term removed from the plasma there,
+      per face, on the production-style geometry (Lcs = 25, so the cathode's
+      live cell is not an end cell) and on the Lcs = 0 geometry, in both
+      stances of ``characteristic_boundary``; and the arm deposits it in
+      that same cell
   C1  momentum transfer antisymmetry: the fluid coupling term's M row is
       exactly minus the kinetic momentum moment per cell, to roundoff
   C2  energy transfer antisymmetry: the fluid coupling term's Ei row is
@@ -68,7 +74,7 @@ Gates:
   L5  wall flux balance: incident == accommodated + reflected exactly, at
       the cylindrical wall and at both end walls, for any accommodation
 
-The conservation and antisymmetry gates (I1, I2, I4, I5, C1, C2, C3, C4) are
+The conservation and antisymmetry gates (I1, I2, I4, I5, S1, C1, C2, C3, C4) are
 statements about the OPERATOR, not about the rate values it is handed, so the
 suite runs them once per value of ``neutral_kinetic_dvm_exchange`` -- the same
 gate functions at the same tolerances, with only the closure rebound. The
@@ -92,6 +98,7 @@ from cablp.funcs._cross import (
     phelps_momentum_transfer_rate_cm3_s,
 )
 from cablp.solvers._sim1d import LAPDSim1D, default_config
+from cablp.solvers._sim1d.core.geometry import absorbing_live_cells_by_role
 from cablp.solvers._sim1d.physics.kinetic_dvm import (
     ELASTIC_BGK_MOMENTUM_FACTOR,
     EXCHANGE_MODELS,
@@ -384,6 +391,81 @@ def geometry_closure(geom, label):
     return dvm, worst_dist, worst_dom, transfer_err
 
 
+PRODUCTION_GEOMETRY_KEYS = {
+    "Rp": 15.0,
+    "R_cath": 15.0,
+    "Rcs": 40.0,
+    "Lcs": 25.0,
+    "Rsup": 0.0,
+    "end_expansion_cells": 10,
+    "end_expansion_machine_radius_cm": 100.0,
+    "end_expansion_plasma_radius_cm": 15.0,
+    "source_region_length_cm": 100.0,
+    "source_region_dz_cm": 10.0,
+    "flag:end_expansion_geometry": True,
+    "flag:source_fixed_grid": True,
+}
+
+
+def recycle_identity(production_geometry, characteristic_boundary, steps=40):
+    """Compare the arm's wall-return channels with the plasma actually removed.
+
+    The DESIGN INVARIANT: whatever the active plasma-terminating boundary
+    term takes out of the plasma at an absorbing face, the arm re-injects as
+    neutrals at that same face -- per face, to roundoff, in either stance.
+    The two sides are read independently: the channel rates from
+    ``_kinetic_channel_rates`` (what the arm will source), the removal from
+    the boundary term's PLASMA row ``-n * V_plasma`` (what left the plasma).
+    Nothing here reads the ``nn`` return row the implementation samples, so a
+    channel that samples the wrong operator, or the wrong cell, cannot satisfy
+    both sides at once.
+    """
+    overrides = {
+        "neutral_kinetic_dvm_nvz": 16,
+        "neutral_kinetic_dvm_nvp": 6,
+        "flag:characteristic_boundary": bool(characteristic_boundary),
+    }
+    if production_geometry:
+        overrides.update(PRODUCTION_GEOMETRY_KEYS)
+    sim = make_sim(**overrides)
+    for _ in range(steps):
+        sim.advance_one_step()
+    geom = sim.geometry
+    roles = np.asarray(geom.cell_role)
+    Vp = np.asarray(geom.plasma_volume_cm3, dtype=float)
+    state = sim.state
+    term = (
+        sim.characteristic_boundary_rhs(state=state)
+        if characteristic_boundary
+        else sim.boundary_absorption_rhs(state=state)
+    )
+    removed = -np.asarray(term.n, dtype=float) * Vp
+    rates = sim._kinetic_channel_rates(state, sim.derived, sim.time)
+    by_role = absorbing_live_cells_by_role(geom)
+    faces = []
+    for role, key in (("cathode", "cath_cells"), ("collector", "coll_cells")):
+        channel = np.asarray(rates[key], dtype=float)
+        cells = list(by_role.get(role, ()))
+        elsewhere = np.delete(channel, cells) if cells else channel
+        for cell in cells:
+            faces.append(
+                {
+                    "role": role,
+                    "cell": int(cell),
+                    "recycled": float(channel[cell]),
+                    "removed": float(removed[cell]),
+                    "rel": float(
+                        abs(channel[cell] - removed[cell])
+                        / max(abs(removed[cell]), 1e-300)
+                    ),
+                    # Nothing of this channel may sit anywhere but its own
+                    # faces -- the D3 mis-deposit would show up here.
+                    "off_face": float(np.sum(np.abs(elsewhere))),
+                }
+            )
+    return sim, roles, faces
+
+
 def fmt(x):
     return f"{x:.6e}"
 
@@ -503,6 +585,59 @@ def gate_i5():
         f"distribution {fmt(worst_dist)}, domain {fmt(worst_dom)}, "
         f"independent transfer {fmt(transfer_err)}; annulus density in the "
         f"volumeless cells {fmt(leaked)} (exactly zero required)",
+    )
+
+
+def gate_s1():
+    lines = []
+    ok = True
+    for production_geometry in (False, True):
+        for characteristic_boundary in (False, True):
+            sim, roles, faces = recycle_identity(
+                production_geometry, characteristic_boundary
+            )
+            label = (
+                f"{'Lcs=25' if production_geometry else 'Lcs=0'}/"
+                f"char={int(characteristic_boundary)}"
+            )
+            for face in faces:
+                cell = face["cell"]
+                # The invariant, plus the two structural statements the
+                # positional-constant defect violated: the channel is live and
+                # it sits on the role-resolved cell (cell 2, not 0 or 1, once
+                # the obstruction is present).
+                face_ok = (
+                    face["rel"] < ROUNDOFF_REL
+                    and face["removed"] > 0.0
+                    and face["recycled"] > 0.0
+                    and face["off_face"] == 0.0
+                    and str(roles[cell]) == face["role"]
+                )
+                ok = ok and face_ok
+                lines.append(
+                    f"{label} {face['role']}@cell{cell}: "
+                    f"recycled {fmt(face['recycled'])} vs removed "
+                    f"{fmt(face['removed'])}, rel {fmt(face['rel'])}, "
+                    f"off-face {fmt(face['off_face'])}"
+                )
+            dep = (
+                f"{label} deposit cells: cath={sim._dvm.cath_cell} "
+                f"coll={sim._dvm.coll_cell}"
+            )
+            expected = {
+                f["role"]: f["cell"] for f in faces
+            }
+            dep_ok = (
+                sim._dvm.cath_cell == expected.get("cathode")
+                and sim._dvm.coll_cell == expected.get("collector")
+            )
+            ok = ok and dep_ok
+            lines.append(dep + f" (matches the sampled faces: {dep_ok})")
+    return (
+        "S1 recycle identity: what the arm re-injects equals what the active "
+        "boundary removed, per face, on both geometries and both stances",
+        ok,
+        ("\n        ").join(lines) + f"\n        tol {fmt(ROUNDOFF_REL)}",
     )
 
 
@@ -1187,6 +1322,7 @@ def gate_l5():
 # closure hands the march. These are re-run once per value of
 # ``neutral_kinetic_dvm_exchange``.
 CONSERVATION_GATES = ("gate_i1", "gate_i2", "gate_i4", "gate_i5",
+                      "gate_s1",
                       "gate_c1", "gate_c2", "gate_c3", "gate_c4")
 
 
@@ -1197,6 +1333,7 @@ def main():
         gate_i3,
         gate_i4,
         gate_i5,
+        gate_s1,
         gate_c1,
         gate_c2,
         gate_c3,

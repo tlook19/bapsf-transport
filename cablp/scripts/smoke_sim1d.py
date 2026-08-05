@@ -52,6 +52,7 @@ from cablp.solvers._sim1d.physics.cathode import (
     cathode_sample_indices,
 )
 from cablp.solvers._sim1d.physics.kinetic_dvm import (
+    TransientDVM,
     ledger_residual as kinetic_dvm_ledger_residual,
 )
 from cablp.solvers._sim1d.physics.energy import (
@@ -65,6 +66,7 @@ from cablp.solvers._sim1d.core.integrator import ssprk2_step
 from cablp.solvers._sim1d.core.geometry import (
     _derive_cathode_adjacent_cells,
     _source_fixed_grid_spec,
+    absorbing_live_cells_by_role,
     anode_flanking_cells,
     cathode_adjacent_cells,
     is_plenum_cell,
@@ -8152,6 +8154,89 @@ def main():
     assert np.any(kd_off_abs != kd_on_abs), (
         "the Tn-consumption switch changed nothing"
     )
+
+    # Production-style geometry (Lcs = 25): an obstruction cell sits between
+    # the plenum and the cathode, so the cathode's live cell is index 2 --
+    # neither an end cell nor a fixed offset from one. The wall-return
+    # channels must be READ from that cell and DEPOSITED into it; positional
+    # constants read the plasma-dead cells behind it and source nothing.
+    kd_obs_params = dict(kd_params)
+    kd_obs_params.update(
+        {
+            "Rp": 15.0,
+            "R_cath": 15.0,
+            "Rcs": 40.0,
+            "Lcs": 25.0,
+            "Rsup": 0.0,
+            "end_expansion_cells": 10,
+            "end_expansion_machine_radius_cm": 100.0,
+            "end_expansion_plasma_radius_cm": 15.0,
+            "source_region_length_cm": 100.0,
+            "source_region_dz_cm": 10.0,
+        }
+    )
+    kd_obs_flags = dict(kd_flags)
+    kd_obs_flags["end_expansion_geometry"] = True
+    kd_obs_flags["source_fixed_grid"] = True
+    kd_obs_sim = LAPDSim1D(kd_obs_params, kd_obs_flags)
+    kd_obs_roles = [str(r) for r in np.asarray(kd_obs_sim.geometry.cell_role)]
+    assert kd_obs_roles[:3] == ["plenum", "obstruction", "cathode"]
+    kd_obs_cath = 2
+    kd_obs_coll = len(kd_obs_roles) - 1
+    assert kd_obs_roles[kd_obs_coll] == "collector"
+    assert absorbing_live_cells_by_role(kd_obs_sim.geometry) == {
+        "cathode": (kd_obs_cath,),
+        "collector": (kd_obs_coll,),
+    }
+    # The arm's deposition targets ARE the absorbing faces' live cells.
+    assert kd_obs_sim._dvm.cath_cell == kd_obs_cath
+    assert kd_obs_sim._dvm.coll_cell == kd_obs_coll
+    for _ in range(6):
+        kd_obs_sim.advance_one_step(dt=1.0e-9)
+    assert kd_obs_sim._dvm_engaged and kd_obs_sim._dvm.updates >= 1
+    kd_obs_rates = kd_obs_sim._kinetic_channel_rates(
+        kd_obs_sim.state, kd_obs_sim.derived, kd_obs_sim.time
+    )
+    # Live, and placed ONLY on its own face -- not on cell 0 or 1.
+    assert kd_obs_rates["cath"] > 0.0 and kd_obs_rates["coll"] > 0.0
+    assert kd_obs_rates["cath_cells"][kd_obs_cath] == kd_obs_rates["cath"]
+    assert kd_obs_rates["cath_cells"][0] == 0.0
+    assert kd_obs_rates["cath_cells"][1] == 0.0
+    assert kd_obs_rates["coll_cells"][kd_obs_coll] == kd_obs_rates["coll"]
+    # Recycled == removed, per face, against the boundary term this stance
+    # actually runs (kd_obs_flags keeps characteristic_boundary off).
+    assert kd_obs_sim._characteristic_boundary is False
+    kd_obs_removed = -np.asarray(
+        kd_obs_sim.boundary_absorption_rhs(state=kd_obs_sim.state).n,
+        dtype=float,
+    ) * np.asarray(kd_obs_sim.geometry.plasma_volume_cm3, dtype=float)
+    for kd_obs_cell, kd_obs_key in (
+        (kd_obs_cath, "cath_cells"),
+        (kd_obs_coll, "coll_cells"),
+    ):
+        assert abs(
+            kd_obs_rates[kd_obs_key][kd_obs_cell] - kd_obs_removed[kd_obs_cell]
+        ) <= 1.0e-12 * abs(kd_obs_removed[kd_obs_cell])
+    # f_c deposition lands in that same cell: one update of a bare engine on
+    # this geometry, seeded empty, fed only the cathode channel.
+    kd_dep = TransientDVM(geometry=kd_obs_sim.geometry, nvz=16, nvp=6)
+    assert kd_dep.cath_cell == kd_obs_cath and kd_dep.coll_cell == kd_obs_coll
+    kd_dep.f_c[:] = 0.0
+    kd_dep.f_a[:] = 0.0
+    kd_dep_src = np.zeros(kd_dep.nz)
+    kd_dep_src[kd_obs_cath] = 1.0e18
+    kd_dep.update(
+        1.0e-9,
+        n_i=np.zeros(kd_dep.nz),
+        Ti_eV=np.full(kd_dep.nz, 0.026),
+        u_i=np.zeros(kd_dep.nz),
+        nu_ion=np.zeros(kd_dep.nz),
+        sources={"cathode_face": kd_dep_src},
+        T_s_K=1910.0,
+    )
+    kd_dep_mass = kd_dep.f_c.sum(axis=(1, 2)) * kd_dep.V_col
+    assert kd_dep_mass[kd_obs_cath] > 0.0
+    assert np.all(np.delete(kd_dep_mass, kd_obs_cath) == 0.0)
 
     # --- Neutral-wind advection (M3): donor-cell
     # upwind of nn and M_n by u_n on the neutral faces, closed ends for
