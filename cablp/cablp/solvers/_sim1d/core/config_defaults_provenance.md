@@ -141,6 +141,64 @@ gamma=5/3 energy system, births book no unphysical electron thermal energy, and
 the split step is second order. The regression fixture pins the historical
 first-order values instead; see `scripts/golden_baseline_provenance.md`.
 
+### Transient DVM neutral arm (`neutral_kinetic_dvm_*`)
+
+All six keys are inert under the shipped `neutral_model = "moment"`; they are
+read only by the K2a transient velocity-grid arm.
+
+**`neutral_kinetic_dvm_cadence_s = 2.5e-5` — ASSUMED, and PROVISIONAL.** The
+neutral clock's tick. This value was NOT selected from an accuracy study: the
+multirate convergence measurement that would select it has not been run, and no
+result may present this cadence as accuracy-chosen. It is a conservative
+placeholder inside the `25-50 us` band the neutral-architecture assessment
+named for ordinary discharge evolution, chosen because the split implicit step
+is unconditionally stable, so the cadence buys accuracy rather than stability.
+Honest bar: an ordinary discharge interval only; a rapid source transient or a
+hot charge-exchange transient may need a shorter tick, and the afterglow may
+tolerate a longer one. Replace with the measured value when the convergence
+study lands.
+
+**`neutral_kinetic_dvm_nvz = 48`, `neutral_kinetic_dvm_nvp = 12` — ASSUMED.**
+The velocity-grid resolution, matched to `neutral_kinetic_nvz` /
+`neutral_kinetic_nvp` so the transient arm and the K4a quasi-static engine are
+compared on one grid rather than on two. `nvz` must be even (an odd count
+places a bin at exactly `v_z = 0`). Honest bar: measured consequence, not a
+free choice — on this grid the operator's discrete equilibrium sits about
+2.4e-2 (density split) and 2.4e-2 (temperature) away from the continuum
+Maxwellian at the 300 K wall, because the shared axis is stretched to hold the
+10 eV charge-exchange tail and a 300 K gas then occupies only the few bins
+inside `v_fine`. Refining to 96x32 takes the temperature offset to 8.4e-3 while
+the density split converges to ~2.1e-2. Recorded by
+`scripts/verify_sim1d_k2_dvm.py`, gate L4.
+
+**`neutral_kinetic_dvm_accommodation = 1.0` — ASSUMED, boxed.** Thermal
+accommodation coefficient of the chamber surfaces. Unity reproduces the
+assumption the fluid neutral model already makes everywhere (every wall return
+is a 300 K re-emission), so the arm's default introduces no new surface
+physics and the arm is comparable to the moment model on this axis. It is a
+surface property, never a fit parameter: it is not to be adjusted to move a
+residual. Honest bar: helium on technical (unbaked, oxidized) stainless steel
+is reported well below unity in the literature, so unity is the conservative
+END of a bracket, not a measurement. The incomplete-accommodation arm is the
+A/B; where data cannot pin the coefficient, the bracket over it is the claim.
+
+**`neutral_kinetic_dvm_elastic = "phelps_iso"` — DERIVED.** Whether the
+polarization-elastic ion-neutral channel is carried alongside charge exchange.
+Derived from the requirement that the arm not silently drop physics the fluid
+model has: the arm supersedes the fluid ion-neutral collision family whole, and
+that operator's momentum-transfer cross section is `Qi + 2 Qb`, so carrying
+only the backscatter `Qb` would delete the `Qi` half. `"phelps_iso"` restores
+it as a mass-matched relaxation toward the local ion Maxwellian at the Phelps
+isotropic rate. Both channels use the same archived LXCat cross sections as the
+moment-closure operator, so nothing new is fitted. `"off"` is the declared A/B
+arm.
+
+**`neutral_kinetic_dvm_tn_feedback = False` — ASSUMED (a stance, not a value).**
+Off means the fluid keeps its fixed cold-gas neutral temperature where it needs
+one, exactly as today, while the arm reports its measured `Tn(z)` as a
+diagnostic. Default-off is what makes the assumed-300 K versus measured
+comparison a clean A/B rather than a confounded change of two things at once.
+
 ## `fudge_factor_defaults`
 
 **`atomic_rate_model = "adas"` — MEASURED/published inputs.** The OPEN-ADAS GCR

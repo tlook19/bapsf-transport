@@ -173,7 +173,7 @@ def gate_i1():
     return (
         "I1 particle inventory (distribution form) closes to roundoff",
         ok,
-        f"{len(ledgers)} updates, worst |residual|/throughput = {fmt(worst)} "
+        f"{len(ledgers)} updates, worst |residual|/scale = {fmt(worst)} "
         f"(tol {fmt(ROUNDOFF_REL)})",
     )
 
@@ -189,7 +189,7 @@ def gate_i2():
     for led in ledgers:
         r = ledger_residual(led)
         total += r["domain"]
-        span += r["throughput"]
+        span += r["scale"]
     ok = worst < ROUNDOFF_REL and abs(total) / span < ROUNDOFF_REL
     return (
         "I2 particle inventory (domain form) closes to roundoff",

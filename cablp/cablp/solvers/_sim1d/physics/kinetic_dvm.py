@@ -720,8 +720,15 @@ def ledger_residual(ledger):
     which is the statement that substep B creates exactly what substep A
     destroyed. ``domain``: ``Delta(inventory incl. pending)`` minus
     (external births - ionization - pumping), the physical closure with
-    every internal channel cancelled. Both are absolute particle counts;
-    compare against the update's throughput.
+    every internal channel cancelled.
+
+    Both are absolute particle counts. The relative forms divide by the
+    throughput PLUS the standing inventory, because each identity is a
+    difference of two inventories: on a short neutral tick the throughput
+    can be many orders below the inventory, and the floating-point noise
+    floor of the statement is then set by the inventory, not by the
+    handful of particles that moved. Normalizing by throughput alone would
+    report cancellation noise as a conservation error.
     """
     births = sum(
         v for k, v in ledger.items() if k.startswith("birth_")
@@ -746,12 +753,14 @@ def ledger_residual(ledger):
         - ledger["loss_pump_R"]
     )
     throughput = births + losses + 1e-300
+    scale = throughput + abs(ledger["inventory_before"])
     return {
         "distribution": distribution,
         "domain": domain,
         "throughput": throughput,
-        "distribution_rel": distribution / throughput,
-        "domain_rel": domain / throughput,
+        "scale": scale,
+        "distribution_rel": distribution / scale,
+        "domain_rel": domain / scale,
     }
 
 
