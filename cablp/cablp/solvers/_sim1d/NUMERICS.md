@@ -212,6 +212,21 @@ physically-motivated candidate bounds, then clamps to `[dt_min, dt_max]`:
 `TimestepDiagnostics` records every candidate, the `active_constraint` that set
 Δt, and per-step accept/reject bookkeeping.
 
+**The clamp is recorded separately from the constraint name** (2026-08-05).
+`active_constraint` always names the bound that actually minimized; when that
+bound asked for less than `dt_min`, `clamped_to_dt_min` is set and `dt_raw`
+keeps the unclamped request. It previously overwrote the name with `"dt_min"`,
+which hid the true bound exactly when it mattered most. `dt_raw == 0.0` is the
+drained floor-pinned signature: `_negative_margin_timestep` returns zero for a
+cell sitting ON a floor while a term still drains it, which is a modelling
+breakdown rather than a timestep request, and the clamp then keeps such a run
+alive at `dt_min` indefinitely. `dt_min_lock_max_steps` (default 250000)
+bounds the number of CONSECUTIVE clamped adaptive steps and raises
+`RuntimeError` past it; consecutiveness is the discriminator, because clamp
+episodes that release on their own are a normal, known-good family. Saved
+files from before this date carry the old overwriting semantics and are not
+migrated (see `results/io.py`).
+
 ## Step acceptance and rejection
 
 The solver attempts a candidate step without committing state

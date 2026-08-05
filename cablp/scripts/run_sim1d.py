@@ -70,6 +70,14 @@ def main(argv=None):
         f"{summary.total_particle_inventory_relative_drift:.6e}, "
         f"thermal_drift={summary.thermal_energy_relative_drift:.6e}"
     )
+    # The clamp no longer appears in the constraint histogram above (it is a
+    # fact about the step, not a bound), so report the census explicitly.
+    print(
+        "sim1d dt_min clamp: "
+        f"clamped_steps={summary.dt_min_clamped_step_count}, "
+        f"max_consecutive={summary.max_consecutive_dt_min_clamped_steps}, "
+        f"hard_zero_steps={summary.dt_min_hard_zero_step_count}"
+    )
     if hasattr(result, "neutral_equilibration_summary"):
         neutral_summary = result.neutral_equilibration_summary
         print(

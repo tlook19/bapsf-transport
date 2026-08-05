@@ -85,7 +85,11 @@ from cablp.solvers._sim1d.physics.neutrals import (
     pump_rate,
     two_zone_knudsen_coefficients,
 )
-from cablp.solvers._sim1d.core.timestep import neutral_wind_timestep
+from cablp.solvers._sim1d.core.timestep import (
+    neutral_wind_timestep,
+    plasma_source_timestep,
+    suggest_timestep,
+)
 from cablp.solvers._sim1d.physics.reactions import (
     gas_puff_local_ionization_rhs,
     particle_inventory_rate,
@@ -1357,8 +1361,11 @@ def main():
         "ion_charge_exchange",
         "heat_conduction",
         "dt_max",
-        "dt_min",
     }
+    # The clamp is no longer a constraint NAME (2026-08-05): it is carried by
+    # clamped_to_dt_min, so "dt_min" is not an admissible label any more.
+    assert dt_default.clamped_to_dt_min == 0.0
+    assert dt_default.dt_raw >= params["dt_min"]
     assert np.isfinite(dt_default.dt_neutral_sources)
     assert dt_default.dt_surface_loss > 0.0
     assert dt_default.dt_reactions > 0.0
@@ -10742,6 +10749,152 @@ print(json.dumps({
             f"({_ck_compiled['provenance']}, {_ck_pure['steps']} steps, "
             "final state bit-identical)"
         )
+
+    # ---- dt_min lock: honest labeling, census, loud failure ----------------
+    # Regression pins for the 2026-08-05 change. The clamp to dt_min used to
+    # OVERWRITE active_constraint with "dt_min", so a run pinned at dt_min
+    # reported that it was pinned and never by what -- and because the clamp
+    # keeps such a run alive, a drained floor-pinned cell produced a silent
+    # permanent lock (measured: scripts/dtmin_census_runlengths.txt).
+    dtlock_params = dict(no_source_params)
+    dtlock_flags = dict(flags)
+
+    # (i) THE TRUE CONSTRAINT SURVIVES THE CLAMP. Synthetic drained
+    # floor-pinned scenario: one cell sits exactly ON the density floor while
+    # the resolved-source bundle still drains it, so the surface_loss bound
+    # requests dt = 0 -- not a timestep request but a modelling breakdown.
+    dtlock_sim = LAPDSim1D(dtlock_params, dtlock_flags)
+    pinned_state = dtlock_sim.state
+    pinned_n = np.asarray(pinned_state.n, dtype=float).copy()
+    pinned_cell = pinned_n.size // 2
+    pinned_n[pinned_cell] = float(dtlock_sim._floors["n"])
+    pinned_state = dataclasses.replace(pinned_state, n=pinned_n)
+    draining_source = SimpleNamespace(
+        n=np.where(
+            np.arange(pinned_n.size) == pinned_cell, -1.0, 0.0
+        ),
+        Ee=np.zeros_like(pinned_n),
+        Ei=np.zeros_like(pinned_n),
+    )
+    assert (
+        plasma_source_timestep(
+            state=pinned_state,
+            source_rhs=draining_source,
+            floors=dtlock_sim._floors,
+        )
+        == 0.0
+    )
+    pinned_diag = suggest_timestep(
+        state=pinned_state,
+        floors=dtlock_sim._floors,
+        ion_mass_g=dtlock_sim._ion_mass_g,
+        mu=dtlock_sim._mu,
+        geometry=dtlock_sim._geometry,
+        neutral_exchange_coeff_cm3_s=dtlock_sim.neutral_exchange_coefficients(),
+        plasma_source_rhs=draining_source,
+        dt_min=1.0e-10,
+        dt_max=1.0e-6,
+    )
+    # The label names the bound that actually minimized, NOT "dt_min".
+    assert pinned_diag.active_constraint == "surface_loss"
+    assert pinned_diag.dt_raw == 0.0
+    assert pinned_diag.clamped_to_dt_min == 1.0
+    assert pinned_diag.dt == 1.0e-10
+    # A clamp that is not a hard zero is still labeled by its true bound.
+    soft_clamp_diag = dtlock_sim.suggest_timestep()
+    assert soft_clamp_diag.clamped_to_dt_min == 0.0
+    big_floor_sim = LAPDSim1D(
+        dict(dtlock_params, dt_min=1.0e-6, dt_max=1.0e-3), dtlock_flags
+    )
+    soft_clamped = big_floor_sim.suggest_timestep()
+    assert soft_clamped.clamped_to_dt_min == 1.0
+    assert soft_clamped.active_constraint == soft_clamp_diag.active_constraint
+    assert soft_clamped.active_constraint != "dt_min"
+    assert 0.0 < soft_clamped.dt_raw < 1.0e-6
+    assert soft_clamped.dt == 1.0e-6
+
+    # The guard counts CONSECUTIVE clamped steps, so drive it with a forced
+    # clamp: what is under test is the counting and the raise, not the physics
+    # that produces a clamp (which (i) already pins).
+    class _ForcedClampSim(LAPDSim1D):
+        """Force the clamp flag onto the first ``clamp_steps`` suggestions."""
+
+        def __init__(self, params, flags, clamp_steps):
+            super().__init__(params, flags)
+            self._forced_clamps_left = int(clamp_steps)
+
+        def suggest_timestep(self, *args, **kwargs):
+            diag = super().suggest_timestep(*args, **kwargs)
+            if self._forced_clamps_left > 0:
+                self._forced_clamps_left -= 1
+                return dataclasses.replace(
+                    diag, clamped_to_dt_min=1.0, dt_raw=0.0
+                )
+            return diag
+
+    # (iv) A SUB-THRESHOLD TRANSIENT MUST NOT RAISE. Self-releasing clamp
+    # episodes are a known-good family (6-10% of steps in some completed
+    # afterglow arms); aborting one would be the worse failure.
+    transient_params = dict(dtlock_params)
+    transient_params["dt_save"] = 0.0
+    # Pin every step at dt_max so the run takes a known number of them (the
+    # physical bounds here are far larger than t_end).
+    transient_params["dt_max"] = 1.0e-10
+    transient_params["dt_min_lock_max_steps"] = 5
+    transient_sim = _ForcedClampSim(transient_params, dtlock_flags, clamp_steps=5)
+    transient_result = transient_sim.run(t_end=1.2e-9)
+    assert transient_sim._forced_clamps_left == 0
+    # (ii) THE CENSUS COUNTS.
+    transient_summary = summarize_result(transient_result)
+    assert transient_summary.dt_min_clamped_step_count == 5
+    assert transient_summary.max_consecutive_dt_min_clamped_steps == 5
+    assert transient_summary.dt_min_hard_zero_step_count == 5
+    assert transient_result.steps > 5
+    assert "dt_min" not in transient_summary.constraint_counts
+    assert [
+        diag.clamped_to_dt_min for diag in transient_result.diagnostics[:6]
+    ] == [1.0, 1.0, 1.0, 1.0, 1.0, 0.0]
+    with tempfile.TemporaryDirectory() as dtlock_dir:
+        dtlock_path = Path(dtlock_dir) / "dtlock.h5"
+        transient_sim.save_result(dtlock_path, transient_result)
+        dtlock_loaded = load_result_hdf5(dtlock_path)
+        loaded_summary = summarize_result(dtlock_loaded)
+        assert loaded_summary.dt_min_clamped_step_count == 5
+        assert loaded_summary.max_consecutive_dt_min_clamped_steps == 5
+        assert loaded_summary.dt_min_hard_zero_step_count == 5
+
+    # (iii) PAST THE THRESHOLD IT RAISES, LOUDLY AND WITH THE EVIDENCE.
+    lock_params = dict(transient_params)
+    locked_sim = _ForcedClampSim(lock_params, dtlock_flags, clamp_steps=40)
+    try:
+        locked_sim.run(t_end=1.2e-9)
+    except RuntimeError as error:
+        lock_message = str(error)
+        assert "dt_min lock" in lock_message
+        assert "6 consecutive steps" in lock_message
+        assert "dt_min_lock_max_steps=5" in lock_message
+        # the true bound, the offending cell, its density and its floor
+        assert f"{transient_result.diagnostics[0].active_constraint!r}" in (
+            lock_message
+        )
+        assert "index" in lock_message
+        assert "n_floor=" in lock_message
+        assert "modelling breakdown" in lock_message
+    else:
+        raise AssertionError("dt_min lock guard did not fire past its threshold")
+
+    # Misconfiguration is loud at CONSTRUCTION time, not hours into a run.
+    for bad_lock in (0, -1, 2.5, float("nan"), "many"):
+        try:
+            LAPDSim1D(
+                dict(dtlock_params, dt_min_lock_max_steps=bad_lock), dtlock_flags
+            )
+        except ValueError as error:
+            assert "dt_min_lock_max_steps must be a positive integer" in str(error)
+        else:
+            raise AssertionError(
+                f"dt_min_lock_max_steps accepted {bad_lock!r}"
+            )
 
     print(
         "sim1d smoke ok: "

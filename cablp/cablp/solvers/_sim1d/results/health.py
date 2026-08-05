@@ -80,6 +80,7 @@ def summarize_result(result):
         ],
         dtype=float,
     )
+    dt_min_clamp_summary = _dt_min_clamp_summary(result)
     phase_event_summary = _phase_event_summary(result)
     rejection_event_summary = _timestep_rejection_event_summary(result)
     current_trigger_summary = _current_trigger_sample_summary(result)
@@ -135,6 +136,9 @@ def summarize_result(result):
         phase_switch_fractions=_phase_switch_fractions(result),
         cathode_diagnostic_fractions=_cathode_diagnostic_fractions(result),
         constraint_counts=dict(sorted(constraint_counts.items())),
+        dt_min_clamped_step_count=dt_min_clamp_summary["clamped"],
+        dt_min_hard_zero_step_count=dt_min_clamp_summary["hard_zero"],
+        max_consecutive_dt_min_clamped_steps=dt_min_clamp_summary["max_run"],
     )
 
 
@@ -210,6 +214,48 @@ def _phase_switch_fractions(result):
         summary_name: _mean_fraction(getattr(result, field_name))
         for summary_name, field_name in names.items()
         if hasattr(result, field_name)
+    }
+
+
+def _dt_min_clamp_summary(result):
+    """Census the dt_min clamp over a trajectory's per-step diagnostics.
+
+    Reports how many steps were clamped up to ``dt_min``, how many of those
+    had a bound request of exactly zero (``dt_raw == 0.0``, the drained
+    floor-pinned signature), and the longest CONSECUTIVE clamped run -- the
+    quantity that separates a self-releasing clamp episode from a lock.
+
+    Back-compatibility: results written before 2026-08-05 carry no
+    ``clamped_to_dt_min`` field, but their ``active_constraint`` was
+    OVERWRITTEN with ``"dt_min"`` on exactly the clamped steps, so that label
+    is read as the clamp flag. The fallback is unambiguous because the current
+    solver never emits that label. ``dt_raw`` has no such fallback, so the
+    hard-zero count reads 0 for those older files.
+    """
+    diagnostics = getattr(result, "diagnostics", ())
+    clamped = np.asarray(
+        [
+            bool(getattr(diag, "clamped_to_dt_min", 0.0))
+            or getattr(diag, "active_constraint", "") == "dt_min"
+            for diag in diagnostics
+        ],
+        dtype=bool,
+    )
+    hard_zero = int(
+        sum(
+            1
+            for diag in diagnostics
+            if getattr(diag, "dt_raw", np.nan) == 0.0
+        )
+    )
+    if not clamped.size or not np.any(clamped):
+        return {"clamped": 0, "hard_zero": hard_zero, "max_run": 0}
+    edges = np.diff(np.concatenate(([False], clamped, [False])).astype(np.int8))
+    run_lengths = np.flatnonzero(edges == -1) - np.flatnonzero(edges == 1)
+    return {
+        "clamped": int(np.count_nonzero(clamped)),
+        "hard_zero": hard_zero,
+        "max_run": int(np.max(run_lengths)),
     }
 
 
