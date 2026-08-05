@@ -731,6 +731,8 @@ class LAPDSim1D:
         self._dvm_engaged = False
         self._dvm_next_s = 0.0
         self._dvm_last_s = 0.0
+        self._dvm_transfer_relax_fraction = 1.0
+        self._dvm_step_transfer = None
         if self._neutral_model == "kinetic_dvm":
             self._configure_kinetic_dvm()
         # R5.1 / audit A11: gated fluid<->circuit Picard coupling (default off).
@@ -1551,8 +1553,21 @@ class LAPDSim1D:
                 "the fluid half would break the shared sheath-edge density. "
                 "Accepted: tn_feedback with characteristic_boundary off"
             )
+        relax_fraction = float(
+            self._input_dict.get(
+                "neutral_kinetic_dvm_transfer_relax_fraction", 0.5
+            )
+        )
+        if not 0.0 < relax_fraction <= 1.0:
+            raise ValueError(
+                "neutral_kinetic_dvm_transfer_relax_fraction is the share of "
+                "a cell's ion-energy margin the tick-frozen coupling drain "
+                "may consume in one step and must lie in (0, 1] "
+                f"(got {relax_fraction})"
+            )
         self._dvm_cadence_s = cadence
         self._dvm_tn_feedback = tn_feedback
+        self._dvm_transfer_relax_fraction = relax_fraction
         anode_faces = np.asarray(
             getattr(self._geometry, "anode_face_indices", ()), dtype=int
         )
@@ -2073,6 +2088,14 @@ class LAPDSim1D:
         elif dt is None:
             dt = self.suggest_timestep().dt
         dt = float(dt)
+        if self._dvm_rows_superseded():
+            # Scope the applied DVM transfer to THIS dt, from the accepted
+            # state, once per attempt: both SSPRK stages and the implicit
+            # heat substep then see one frozen, floor-aware rate, and the
+            # amount the step declined to carry is a single well-defined
+            # number the accept path can book. A rejected attempt simply
+            # re-scopes at the smaller dt.
+            self._dvm_scope_step_transfer(dt)
 
         starting_cache = self._step_cache_snapshot()
         attempt_floor_ledger = self._empty_floor_ledger()
@@ -2579,6 +2602,11 @@ class LAPDSim1D:
         return {**self._input_dict, "phi_wf": eff}
 
     def _accept_step_attempt(self, attempt):
+        # Book the DVM deferred-transfer ledger FIRST: it reads the step's
+        # start state and the transfer the step was scoped with, both of
+        # which the lines below overwrite.
+        if self._dvm_rows_superseded():
+            self._dvm_book_step_transfer(attempt.dt)
         self._restore_step_cache(attempt.solver_cache)
         self._set_state_vector(attempt.y)
         self._accumulate_floor_ledger(
@@ -3736,8 +3764,14 @@ class LAPDSim1D:
             )
         dt_min = float(self._input_dict.get("dt_min", 1e-12))
         dt_max = float(self._input_dict.get("dt_max", 1e-6))
+        dvm_superseded = plasma_enabled and self._dvm_rows_superseded()
         plasma_source_rhs = None
-        if plasma_enabled and self._raw_stage_validation:
+        # The bundle's historical trigger is the raw-stage stance. An engaged
+        # DVM arm needs it unconditionally: its coupling term is the largest
+        # unbounded drain in the ledger, and whether it is bounded must not
+        # depend on a validation switch that has nothing to do with it. The
+        # widening reaches DVM-engaged runs only, so no other path moves.
+        if plasma_enabled and (self._raw_stage_validation or dvm_superseded):
             plasma_source_rhs = self._plasma_source_timestep_rhs(
                 state=state,
                 time=time,
@@ -3757,8 +3791,14 @@ class LAPDSim1D:
             electron_cooling_kwargs=(
                 self._electron_cooling_kwargs() if plasma_enabled else None
             ),
+            # The engaged DVM arm zeroes these two terms' applied rows and
+            # carries them in its coupling term, so their unstripped bounds
+            # are phantoms and are withdrawn (K2d). The replacement is
+            # bounded through plasma_source_rhs above.
             ion_charge_exchange_kwargs=(
-                self._ion_charge_exchange_kwargs() if plasma_enabled else None
+                self._ion_charge_exchange_kwargs()
+                if plasma_enabled and not dvm_superseded
+                else None
             ),
             heat_conduction_kwargs=(
                 self._heat_conduction_kwargs()
@@ -3766,10 +3806,13 @@ class LAPDSim1D:
                 else None
             ),
             ion_neutral_drag_kwargs=(
-                self._ion_neutral_drag_kwargs() if plasma_enabled else None
+                self._ion_neutral_drag_kwargs()
+                if plasma_enabled and not dvm_superseded
+                else None
             ),
             plasma_source_rhs=plasma_source_rhs,
             source_floor_exempt_rtol=self._surface_loss_floor_exempt_rtol,
+            neutral_rows_superseded=dvm_superseded,
             cfl=float(self._input_dict.get("cfl", 0.4)),
             density_dt_fraction=float(
                 self._input_dict.get("density_dt_fraction", 0.25)
@@ -3833,7 +3876,27 @@ class LAPDSim1D:
         )
 
     def _plasma_source_timestep_rhs(self, state, time):
-        """Return the resolved electrode/source bundle used by its dt bound."""
+        """Return the resolved electrode/source bundle used by its dt bound.
+
+        The bundle is exactly the set of non-flux terms that can drive a cell
+        into a floor within one step, and it must be the set THIS STANCE
+        RUNS: the R3.1 characteristic ghost-cell flux when
+        ``characteristic_boundary`` is on, the legacy volumetric absorber
+        when it is off. The two disagree face by face -- reading the wrong
+        one bounds a term the step never applies while leaving the applied
+        one unbounded (the same wrong-operator class the recycle channel was
+        fixed for).
+
+        The engaged DVM arm's coupling term joins the bundle for the same
+        reason: it is a volumetric ion momentum/energy source of unbounded
+        magnitude, frozen between neutral ticks, and until K2d it sat outside
+        every timestep bound -- injecting a 1e12 erg/cm^3/s drain changed the
+        suggested dt by exactly zero. The rate bounded here is the tick's
+        BOOKED transfer, not the step's floor-limited application: this bound
+        is the honest question "how big a step can carry what the kinetic
+        side booked", and the limiter is the separate backstop for when the
+        answer is below ``dt_min``.
+        """
         cathode_phase = self._cathode_phase_options(time=time)
         cathode_solve = None
         if cathode_phase["solve_enabled"]:
@@ -3843,7 +3906,12 @@ class LAPDSim1D:
                 time=time,
                 update_cache=False,
             )
-        rhs = self.boundary_absorption_rhs(
+        boundary = (
+            self.characteristic_boundary_rhs
+            if self._characteristic_boundary
+            else self.boundary_absorption_rhs
+        )
+        rhs = boundary(
             state=state,
             cathode_solve=cathode_solve,
             time=time,
@@ -3856,7 +3924,7 @@ class LAPDSim1D:
                 time=time,
             ),
         )
-        return add_state_rhs(
+        rhs = add_state_rhs(
             rhs,
             self.cathode_source_terms(
                 state=state,
@@ -3864,6 +3932,9 @@ class LAPDSim1D:
                 time=time,
             ).rhs,
         )
+        if self._dvm_rows_superseded():
+            rhs = add_state_rhs(rhs, self._dvm_booked_transfer_rhs())
+        return rhs
 
     def phase_at_time(self, time):
         """Return the diagnostic runtime phase label for an absolute time [s]."""
@@ -6951,6 +7022,27 @@ class LAPDSim1D:
             M_n_a=None if term.M_n_a is None else zeros.copy(),
         )
 
+    def _dvm_rows_superseded(self):
+        """Whether the DVM arm has taken the fluid rows over (K2a handover)."""
+        return self._dvm is not None and self._dvm_engaged
+
+    def _dvm_booked_transfer_rhs(self):
+        """Return the tick's BOOKED transfer as an RHS term, unlimited.
+
+        What the kinetic side measured, before the step's floor-aware relax
+        touches it. This is what the timestep bound must see: the limiter is
+        the answer to a bound that could not be met, so bounding the limited
+        rate would be circular.
+        """
+        zeros = np.zeros(self._geometry.cells, dtype=float)
+        return ConservativeState1D(
+            n=zeros,
+            nn=zeros.copy(),
+            M=self._dvm.M_transfer.copy(),
+            Ee=zeros.copy(),
+            Ei=self._dvm.Ei_transfer.copy(),
+        )
+
     def neutral_kinetic_dvm_coupling_rhs(self):
         """Return the K2a plasma-side transfer term.
 
@@ -6959,9 +7051,17 @@ class LAPDSim1D:
         charge-exchange, elastic and recombination operators. Zeros before
         the arm engages, so the term key is present from the first step and
         the saved term structure is stable across the run.
+
+        Once a step has been scoped (:meth:`_dvm_scope_step_transfer`) this
+        returns that step's APPLIED rate: the booked transfer plus any
+        outstanding debt, relaxed at cells the drain would otherwise carry
+        below their ion-energy floor within the step. Outside a scoped step
+        -- before the first attempt, and at a bare diagnostic read -- it
+        returns the booked transfer itself, which is what the arm has to
+        offer when no step is asking.
         """
         zeros = np.zeros(self._geometry.cells, dtype=float)
-        if self._dvm is None or not self._dvm_engaged:
+        if not self._dvm_rows_superseded():
             return ConservativeState1D(
                 n=zeros,
                 nn=zeros.copy(),
@@ -6969,13 +7069,156 @@ class LAPDSim1D:
                 Ee=zeros.copy(),
                 Ei=zeros.copy(),
             )
+        scope = self._dvm_step_transfer
+        if scope is None:
+            return self._dvm_booked_transfer_rhs()
         return ConservativeState1D(
             n=zeros,
             nn=zeros.copy(),
-            M=self._dvm.M_transfer.copy(),
+            M=scope.applied_M.copy(),
             Ee=zeros.copy(),
-            Ei=self._dvm.Ei_transfer.copy(),
+            Ei=scope.applied_Ei.copy(),
         )
+
+    def _dvm_transfer_apply_mask(self):
+        """Cells the coupling term is actually applied on."""
+        if self._active_plasma_topology:
+            return np.asarray(self._geometry.plasma_active, dtype=bool)
+        return np.ones(self._geometry.cells, dtype=bool)
+
+    def _dvm_scope_step_transfer(self, dt):
+        """Scope one step's applied DVM transfer (the K2d floor-aware relax).
+
+        The tick-frozen transfer is held constant for a whole neutral clock
+        interval while the plasma steps a thousand times inside it, and it
+        can flip sign across one tick. At a cell whose ion-energy margin the
+        frozen drain would consume within a single step there is no
+        admissible timestep -- the explicit e-fold falls below ``dt_min`` --
+        and the step dies with a negative ``Ei``. The near-cancelling partner
+        (heat conduction) is on the implicit side of the split, so shrinking
+        dt does not help: the drain is explicit and the refill is not.
+
+        So the APPLIED drain is capped per cell at
+        ``relax_fraction * (Ei - Ei_floor) / dt``, which by construction
+        cannot reach the floor inside the step, and the SAME per-cell factor
+        is applied to the momentum row -- one physical exchange, one relax
+        factor, rather than a rescaled energy against a full momentum.
+
+        Nothing is discarded. The withheld amount is added to a per-cell
+        DEBT and re-offered as ``debt / dt`` on every later step, so a cell
+        that regains margin pays back what it owes and the ledger identity
+
+            applied_cum + debt == booked_cum
+
+        holds per cell to roundoff (:meth:`_dvm_book_step_transfer` closes
+        it). A cell that never regains margin carries the debt to the end of
+        the run, which is the honest statement that the plasma could not
+        absorb what the kinetic side booked -- reported, never silently
+        dropped.
+
+        Heating (a non-negative ``Ei`` rate) is never limited: it cannot
+        threaten a floor.
+        """
+        dvm = self._dvm
+        state = self.state
+        apply_mask = self._dvm_transfer_apply_mask()
+        booked_M = np.asarray(dvm.M_transfer, dtype=float)
+        booked_Ei = np.asarray(dvm.Ei_transfer, dtype=float)
+        desired_M = booked_M + dvm.M_debt / dt
+        desired_Ei = booked_Ei + dvm.Ei_debt / dt
+        floor_energy = (
+            1.5
+            * float(self._floors["Ti"])
+            * ev_to_erg
+            * np.asarray(state.n, dtype=float)
+        )
+        margin = np.maximum(
+            np.asarray(state.Ei, dtype=float) - floor_energy, 0.0
+        )
+        budget = self._dvm_transfer_relax_fraction * margin / dt
+        drain = -desired_Ei
+        limited = apply_mask & (drain > budget) & (drain > 0.0)
+        scale = np.where(limited, budget / np.where(limited, drain, 1.0), 1.0)
+        applied_M = np.where(apply_mask, scale * desired_M, 0.0)
+        applied_Ei = np.where(apply_mask, scale * desired_Ei, 0.0)
+        self._dvm_step_transfer = SimpleNamespace(
+            dt=float(dt),
+            apply_mask=apply_mask,
+            booked_M=booked_M,
+            booked_Ei=booked_Ei,
+            desired_M=desired_M,
+            desired_Ei=desired_Ei,
+            applied_M=applied_M,
+            applied_Ei=applied_Ei,
+            limited=limited,
+        )
+        return self._dvm_step_transfer
+
+    def _dvm_book_step_transfer(self, dt):
+        """Commit the scoped step's transfer to the deferred-transfer ledger.
+
+        Called at ACCEPT, before the state advances, so the debt a step
+        leaves behind is exactly the transfer that step declined to carry.
+        Rejected attempts never reach here.
+        """
+        scope = self._dvm_step_transfer
+        if scope is None or scope.dt != float(dt):
+            scope = self._dvm_scope_step_transfer(dt)
+        dvm = self._dvm
+        mask = scope.apply_mask
+        dvm.M_debt = np.where(
+            mask, (scope.desired_M - scope.applied_M) * dt, 0.0
+        )
+        dvm.Ei_debt = np.where(
+            mask, (scope.desired_Ei - scope.applied_Ei) * dt, 0.0
+        )
+        dvm.M_booked_cum = dvm.M_booked_cum + np.where(
+            mask, scope.booked_M * dt, 0.0
+        )
+        dvm.Ei_booked_cum = dvm.Ei_booked_cum + np.where(
+            mask, scope.booked_Ei * dt, 0.0
+        )
+        dvm.M_applied_cum = dvm.M_applied_cum + scope.applied_M * dt
+        dvm.Ei_applied_cum = dvm.Ei_applied_cum + scope.applied_Ei * dt
+        dvm.relax_steps += 1
+        if np.any(scope.limited):
+            dvm.relax_limited_steps += 1
+            dvm.relax_cell_steps = dvm.relax_cell_steps + scope.limited
+        # The scope belonged to the step just booked. Dropping it here keeps
+        # "outside a step" a single well-defined reading of the coupling term
+        # -- the tick's booked transfer -- rather than the last step's
+        # application surviving across a neutral tick that already replaced it.
+        self._dvm_step_transfer = None
+
+    def dvm_transfer_ledger(self):
+        """Return the deferred-transfer ledger's closure, or None when off.
+
+        ``residual`` is ``applied_cum + debt - booked_cum`` per cell, the
+        statement that the relax deferred energy and momentum rather than
+        destroying them; ``*_rel`` normalizes it by the accumulated
+        throughput plus the outstanding debt.
+        """
+        if self._dvm is None:
+            return None
+        dvm = self._dvm
+        out = {}
+        for name in ("M", "Ei"):
+            applied = getattr(dvm, f"{name}_applied_cum")
+            booked = getattr(dvm, f"{name}_booked_cum")
+            debt = getattr(dvm, f"{name}_debt")
+            residual = applied + debt - booked
+            scale = np.max(np.abs(booked)) + np.max(np.abs(debt))
+            out[name] = {
+                "residual": residual,
+                "scale": float(scale),
+                "rel": float(
+                    np.max(np.abs(residual)) / max(float(scale), 1e-300)
+                ),
+            }
+        out["relax_steps"] = int(dvm.relax_steps)
+        out["relax_limited_steps"] = int(dvm.relax_limited_steps)
+        out["relax_cell_steps"] = dvm.relax_cell_steps.copy()
+        return out
 
     def _dvm_presheath_Tn_eV(self):
         """Return the per-cell Tn [eV] the presheath should consume, or None."""

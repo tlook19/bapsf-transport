@@ -78,6 +78,7 @@ def suggest_timestep(
     ion_neutral_drag_kwargs=None,
     plasma_source_rhs=None,
     source_floor_exempt_rtol=None,
+    neutral_rows_superseded=False,
     cfl=0.4,
     density_dt_fraction=0.25,
     neutral_dt_fraction=0.25,
@@ -91,7 +92,20 @@ def suggest_timestep(
     active_plasma_topology=False,
     wave_speed="isothermal",
 ):
-    """Return a bounded explicit timestep and diagnostics."""
+    """Return a bounded explicit timestep and diagnostics.
+
+    Every candidate here must be a bound on a rate the accepted step
+    ACTUALLY APPLIES. A kinetic neutral arm supersedes whole rows of the
+    fluid terms -- it zeroes them and carries them itself -- and a bound
+    computed from a superseded row is a PHANTOM: it can name itself
+    ``active_constraint`` and set the step while the row it describes is
+    identically zero. ``neutral_rows_superseded`` withdraws the candidates
+    that read a neutral row an arm has taken over (the pair-exchange and
+    puff/pump bounds whole, and the reaction bound's neutral channel), and
+    the caller withdraws the ion-transfer bounds by passing no kwargs for
+    them. The replacement rows are bounded through ``plasma_source_rhs``,
+    which is where the arm's own coupling term belongs.
+    """
     if dt_min <= 0.0:
         raise ValueError(f"dt_min must be positive (got {dt_min})")
     if dt_max <= 0.0:
@@ -133,17 +147,25 @@ def suggest_timestep(
             plasma_active=plasma_active,
             floor_exempt_rtol=source_floor_exempt_rtol,
         ),
-        "neutral_exchange": neutral_exchange_timestep(
-            state=state,
-            geometry=geometry,
-            neutral_exchange_coeff_cm3_s=neutral_exchange_coeff_cm3_s,
-            neutral_dt_fraction=neutral_dt_fraction,
+        "neutral_exchange": (
+            np.inf
+            if neutral_rows_superseded
+            else neutral_exchange_timestep(
+                state=state,
+                geometry=geometry,
+                neutral_exchange_coeff_cm3_s=neutral_exchange_coeff_cm3_s,
+                neutral_dt_fraction=neutral_dt_fraction,
+            )
         ),
-        "neutral_sources": neutral_source_timestep(
-            state=state,
-            geometry=geometry,
-            neutral_source_kwargs=neutral_source_kwargs,
-            neutral_dt_fraction=neutral_dt_fraction,
+        "neutral_sources": (
+            np.inf
+            if neutral_rows_superseded
+            else neutral_source_timestep(
+                state=state,
+                geometry=geometry,
+                neutral_source_kwargs=neutral_source_kwargs,
+                neutral_dt_fraction=neutral_dt_fraction,
+            )
         ),
         "reactions": reaction_timestep(
             state=state,
@@ -153,6 +175,7 @@ def suggest_timestep(
             reaction_kwargs=reaction_kwargs,
             density_dt_fraction=density_dt_fraction,
             plasma_active=plasma_active,
+            include_neutral_channel=not neutral_rows_superseded,
         ),
         "energy_exchange": energy_exchange_timestep(
             state=state,
@@ -508,8 +531,14 @@ def reaction_timestep(
     reaction_kwargs=None,
     density_dt_fraction=0.25,
     plasma_active=None,
+    include_neutral_channel=True,
 ):
-    """Return a fractional density timestep for local plasma reactions."""
+    """Return a fractional density timestep for local plasma reactions.
+
+    ``include_neutral_channel`` drops the ``nn`` half of the bound. The
+    plasma half stays either way: a kinetic arm supersedes the reactions'
+    neutral row but not the ions they birth.
+    """
     if reaction_kwargs is None:
         return np.inf
     if density_dt_fraction <= 0.0:
@@ -523,14 +552,17 @@ def reaction_timestep(
         geometry=geometry,
         **reaction_kwargs,
     )
+    plasma_channel = _fractional_timestep(
+        state.n,
+        rhs.n,
+        density_dt_fraction,
+        floors["n"],
+        active_mask=plasma_active,
+    )
+    if not include_neutral_channel:
+        return plasma_channel
     return min(
-        _fractional_timestep(
-            state.n,
-            rhs.n,
-            density_dt_fraction,
-            floors["n"],
-            active_mask=plasma_active,
-        ),
+        plasma_channel,
         _fractional_timestep(
             state.nn,
             rhs.nn,

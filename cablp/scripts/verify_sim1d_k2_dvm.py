@@ -59,6 +59,23 @@ Gates:
       carries them
   P3  moment consistency: the saved ``nn`` field IS the zeroth moment of the
       column distribution (floored), and ``nn_a`` the annulus moment
+  D1  the coupling term BOUNDS the timestep: a drain injected into the
+      tick-frozen transfer shortens dt_surface_loss in exact inverse
+      proportion and takes the active constraint -- the inverse of the
+      K2d diagnosis, where a 1e12 erg/cm^3/s injected drain moved the
+      suggested dt by exactly zero
+  D2  honest constraints: every bound the engaged arm makes phantom (it
+      zeroes the row the bound describes) reads inf and cannot be named
+      active_constraint, while the unstripped form of that same bound is
+      demonstrably finite -- the value that used to set the step
+  D3  the floor-aware relax defers, never destroys: inert on a healthy
+      step (applied == booked bit-exactly), engaged under a drain no
+      admissible step could carry, and closing
+      ``applied_cum + debt == booked_cum`` per cell to roundoff
+  D4  the wall recycle enters as a directed inflow at its own face: the
+      injected flux integral equals what was fed, nothing appears
+      upstream of the face, and the emitting cell does not retain the
+      whole return the way the superseded stationary birth did
   G1..G7  construction refusals: each unsupported configuration raises a
       ValueError at construction naming the offender
   L1  free-streaming, exact uniform stationarity: a spatially uniform
@@ -953,6 +970,244 @@ def gate_p3():
     )
 
 
+# --------------------------------------------------------- K2d D gates
+
+
+def engaged_production_sim(**overrides):
+    """Return an ENGAGED arm on the production-style geometry."""
+    kwargs = {
+        "neutral_kinetic_dvm_nvz": 16,
+        "neutral_kinetic_dvm_nvp": 6,
+        **PRODUCTION_GEOMETRY_KEYS,
+    }
+    kwargs.update(overrides)
+    sim = make_sim(**kwargs)
+    run_until_updates(sim, 1)
+    return sim
+
+
+# The bounds the engaged arm's supersession makes PHANTOM: it zeroes the row
+# each one describes, so a value here can only misreport. They must read inf
+# while the arm is engaged, and the term rows they describe must be zero.
+PHANTOM_BOUNDS = {
+    "dt_ion_charge_exchange": ("ion_charge_exchange", "Ei"),
+    "dt_ion_neutral_drag": ("ion_neutral_drag", "M"),
+    "dt_neutral_exchange": ("neutral_exchange", "nn"),
+    "dt_neutral_sources": ("neutral_sources", "nn"),
+}
+
+
+def gate_d1():
+    """The coupling term bounds dt (the inverse of the crash's guard proof)."""
+    sim = engaged_production_sim()
+    base = sim.suggest_timestep()
+    responses = []
+    ok = True
+    for drain in (1.0e10, 1.0e11, 1.0e12):
+        sim._dvm.Ei_transfer = np.full(sim._geometry.cells, -float(drain))
+        diag = sim.suggest_timestep()
+        responses.append((drain, diag.dt_surface_loss, diag.active_constraint))
+    # It must MOVE (the defect was a bound that could not see the term at
+    # all), it must move the right way, and it must scale like 1/drain --
+    # a floor-margin bound on a linear drain is exactly inversely
+    # proportional, which no accidental coupling would reproduce.
+    ok = ok and all(r[1] < base.dt_surface_loss for r in responses)
+    ok = ok and responses[0][1] > responses[1][1] > responses[2][1]
+    ratio = responses[0][1] / responses[2][1]
+    ok = ok and abs(ratio - 100.0) < 1.0e-6 * 100.0
+    ok = ok and all(r[2] == "surface_loss" for r in responses)
+    detail = f"unbounded-drain baseline dt_surface_loss = {fmt(base.dt_surface_loss)}"
+    for drain, dt_sl, constraint in responses:
+        detail += (
+            f"\n        Ei_transfer = -{fmt(drain)} erg/cm3/s -> "
+            f"dt_surface_loss {fmt(dt_sl)} ({constraint})"
+        )
+    detail += f"\n        x100 drain -> x{ratio:.6f} shorter bound (exactly 100 required)"
+    return (
+        "D1 the DVM coupling drain BOUNDS the timestep, inversely and "
+        "through surface_loss",
+        ok,
+        detail,
+    )
+
+
+def gate_d2():
+    """No superseded term's bound survives to be reported or to set dt."""
+    from cablp.solvers._sim1d.core.timestep import ion_charge_exchange_timestep
+
+    sim = engaged_production_sim()
+    # The phantom is REAL as a number -- this is what used to set dt while
+    # naming a term whose applied row is identically zero.
+    phantom = ion_charge_exchange_timestep(
+        state=sim.state,
+        floors=sim.floors,
+        ion_mass_g=sim._ion_mass_g,
+        ion_charge_exchange_kwargs=sim._ion_charge_exchange_kwargs(),
+        density_dt_fraction=0.25,
+        plasma_active=(
+            sim._geometry.plasma_active if sim._active_plasma_topology else None
+        ),
+    )
+    terms = sim.rhs_terms()
+    lines = [
+        f"unstripped ion_charge_exchange bound (the phantom) = {fmt(phantom)} s"
+    ]
+    ok = np.isfinite(phantom)
+    constraints = set()
+    for _ in range(25):
+        diag = sim.suggest_timestep()
+        constraints.add(diag.active_constraint)
+        for field, (term, row) in PHANTOM_BOUNDS.items():
+            ok = ok and getattr(diag, field) == np.inf
+            ok = ok and np.all(
+                np.asarray(getattr(terms[term], row), dtype=float) == 0.0
+            )
+        sim.advance_one_step()
+        terms = sim.rhs_terms()
+    withdrawn = {name.removeprefix("dt_") for name in PHANTOM_BOUNDS}
+    ok = ok and not (constraints & withdrawn)
+    for field, (term, row) in PHANTOM_BOUNDS.items():
+        lines.append(
+            f"{field} = inf while the applied {term}.{row} row is exactly zero"
+        )
+    lines.append(
+        f"active_constraint over 25 engaged steps: {sorted(constraints)}"
+    )
+    return (
+        "D2 every phantom bound is withdrawn: active_constraint names only "
+        "terms the step applies",
+        ok,
+        ("\n        ").join(lines),
+    )
+
+
+def gate_d3():
+    """The floor-aware relax defers transfer; it never destroys any."""
+    sim = engaged_production_sim()
+    # Inert first: with no limiting the applied rate is the booked rate
+    # BIT-exactly, so the relax cannot perturb a healthy run.
+    sim.advance_one_step()
+    quiet = sim.dvm_transfer_ledger()
+    quiet_limited = quiet["relax_limited_steps"]
+    # Now a drain no admissible step could carry: 1e12 erg/cm3/s against
+    # margins of order 1e3 erg/cm3 is the crash's regime, amplified.
+    cells = sim._geometry.cells
+    sim._dvm.Ei_transfer = np.full(cells, -1.0e12)
+    sim._dvm.M_transfer = np.full(cells, -1.0e3)
+    survived = True
+    try:
+        for _ in range(30):
+            sim.advance_one_step()
+    except Exception as error:  # noqa: BLE001 - the gate's whole point
+        survived = False
+        crash = f"{type(error).__name__}: {error}"
+    ledger = sim.dvm_transfer_ledger()
+    engaged_cells = int(np.count_nonzero(ledger["relax_cell_steps"]))
+    ok = (
+        survived
+        and quiet_limited == 0
+        and ledger["relax_limited_steps"] > 0
+        and ledger["Ei"]["rel"] < ROUNDOFF_REL
+        and ledger["M"]["rel"] < ROUNDOFF_REL
+        and np.any(np.abs(sim._dvm.Ei_debt) > 0.0)
+    )
+    detail = (
+        f"quiet run: {quiet['relax_steps']} steps, "
+        f"{quiet_limited} limited (0 required -- the relax is inert on a "
+        f"healthy step and applied == booked bit-exactly)\n        "
+        f"forced -1e12 erg/cm3/s: survived={survived}, "
+        f"{ledger['relax_limited_steps']} of {ledger['relax_steps']} steps "
+        f"limited over {engaged_cells} cells\n        "
+        f"ledger |applied_cum + debt - booked_cum| / scale: "
+        f"Ei {fmt(ledger['Ei']['rel'])}, M {fmt(ledger['M']['rel'])} "
+        f"(tol {fmt(ROUNDOFF_REL)})\n        "
+        f"outstanding Ei debt max {fmt(float(np.max(np.abs(sim._dvm.Ei_debt))))} "
+        f"erg/cm3 -- withheld, not discarded"
+    )
+    if not survived:
+        detail += f"\n        CRASH {crash}"
+    return (
+        "D3 floor-aware relax: the withheld transfer is re-ledgered, not lost",
+        ok,
+        detail,
+    )
+
+
+def gate_d4():
+    """The recycle channel enters as a directed inflow at its own face."""
+    sim = make_sim(
+        neutral_kinetic_dvm_nvz=16,
+        neutral_kinetic_dvm_nvp=6,
+        **PRODUCTION_GEOMETRY_KEYS,
+    )
+    geom = sim.geometry
+    dvm = TransientDVM(geometry=geom, nvz=16, nvp=6,
+                       exchange_model=EXCHANGE_MODEL)
+    cath = dvm.cath_cell
+    fed = 1.0e18
+    # The DECIDED production neutral-clock tick. The transport statement is
+    # about what one tick does, so it must be measured at one.
+    dt = 1.0e-5
+    dvm.f_c[:] = 0.0
+    dvm.f_a[:] = 0.0
+    src = np.zeros(dvm.nz)
+    src[cath] = fed
+    led = dvm.update(
+        dt,
+        n_i=np.zeros(dvm.nz),
+        Ti_eV=np.full(dvm.nz, 0.026),
+        u_i=np.zeros(dvm.nz),
+        nu_ion=np.zeros(dvm.nz),
+        sources={"cathode_face": src},
+        T_s_K=1910.0,
+    )
+    mass = dvm.f_c.sum(axis=(1, 2)) * dvm.V_col
+    mass_a = dvm.f_a.sum(axis=(1, 2)) * dvm.V_ann
+    injected = dvm.total_inventory()
+    expected = fed * dt
+    # 1. Every fed particle arrived. The ghost density is the counted
+    #    particles divided by exactly the ``|v_z| A dt`` the march multiplies
+    #    them by, so the inflow FLUX INTEGRAL across the face equals the
+    #    removed flux the plasma reported -- S1's identity, carried through
+    #    the face into the distribution. Nothing is pumped here (s_L = s_R =
+    #    0) and the end returns are buffered, so the domain inventory IS the
+    #    injected count.
+    flux_rel = abs(injected - expected) / expected
+    # 2. It came off the SURFACE, travelling: nothing upstream of the
+    #    emitting face, and within this one tick part of the return has
+    #    already moved downstream. The superseded form wrote
+    #    ``f_c[cell] += counts * spectrum / V`` AFTER the march, which by
+    #    construction leaves the whole return standing in the emitting cell
+    #    for the entire tick -- the re-ignition mechanism.
+    upstream = float(mass[:cath].sum()) + float(mass_a[:cath].sum())
+    retained = float(mass[cath]) / injected
+    downstream = float(mass[cath + 1:].sum())
+    drift = float(dvm.column_drift()[cath])
+    ok = (
+        flux_rel < ROUNDOFF_REL
+        and upstream == 0.0
+        and 0.0 < retained < 1.0
+        and downstream > 0.0
+        and drift > 0.0
+        and abs(ledger_residual(led)["distribution_rel"]) < ROUNDOFF_REL
+    )
+    return (
+        "D4 wall recycle enters as a directed face inflow: flux integral "
+        "== fed, and it travels",
+        ok,
+        f"fed {fmt(expected)} particles at cell {cath} over one {dt:g} s "
+        f"tick; domain inventory {fmt(injected)}, relative error "
+        f"{fmt(flux_rel)} (tol {fmt(ROUNDOFF_REL)})\n        "
+        f"upstream of the emitting face: {fmt(upstream)} (exactly zero "
+        f"required); retained in the emitting cell {retained:.4f}, moved "
+        f"downstream {fmt(downstream)} particles\n        "
+        f"(the superseded in-cell birth retains 1.0000 by construction)"
+        f"\n        column drift at the emitting cell {fmt(drift)} cm/s "
+        f"(> 0 required); ledger residual "
+        f"{fmt(abs(ledger_residual(led)['distribution_rel']))}",
+    )
+
+
 # ------------------------------------------------- construction refusals
 
 
@@ -1323,7 +1578,8 @@ def gate_l5():
 # ``neutral_kinetic_dvm_exchange``.
 CONSERVATION_GATES = ("gate_i1", "gate_i2", "gate_i4", "gate_i5",
                       "gate_s1",
-                      "gate_c1", "gate_c2", "gate_c3", "gate_c4")
+                      "gate_c1", "gate_c2", "gate_c3", "gate_c4",
+                      "gate_d3", "gate_d4")
 
 
 def main():
@@ -1344,6 +1600,10 @@ def main():
         gate_p1,
         gate_p2,
         gate_p3,
+        gate_d1,
+        gate_d2,
+        gate_d3,
+        gate_d4,
     ]
     gates += [
         make_refusal_gate(label, offender, mutate)

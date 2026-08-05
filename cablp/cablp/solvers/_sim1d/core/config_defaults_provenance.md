@@ -256,6 +256,23 @@ one, exactly as today, while the arm reports its measured `Tn(z)` as a
 diagnostic. Default-off is what makes the assumed-300 K versus measured
 comparison a clean A/B rather than a confounded change of two things at once.
 
+**`neutral_kinetic_dvm_transfer_relax_fraction = 0.5` — ASSUMED (a numerical
+safety margin, not a physical quantity).** The share of a cell's ion-energy
+margin above its `Ti` floor that the tick-frozen coupling drain may consume in
+one plasma step. It exists because the transfer is frozen for a whole neutral
+tick while the plasma steps ~1e3 times inside it and can flip sign across one
+tick: at the 2026-08-05 K3a crash the frozen drain was -1.57e10 erg/cm^3/s
+against a margin of 0.746 erg/cm^3, an explicit e-fold of 9.5e-11 s, below the
+run's `dt_min` of 1e-10 s — no admissible step existed. `0.5` leaves half the
+margin for every other term in the same step; it was NOT selected by a
+convergence study, and nothing in the model depends on the value being 0.5
+rather than, say, 0.25 — a smaller value defers more transfer and a larger one
+less, with the deferred amount conserved either way (`applied + debt ==
+booked`). The physically meaningful statement is the one the cap makes
+regardless of its value: the applied drain cannot carry a cell through its
+floor inside a step. Raise the value only with the ledger's outstanding debt
+reported alongside.
+
 ## `fudge_factor_defaults`
 
 **`atomic_rate_model = "adas"` — MEASURED/published inputs.** The OPEN-ADAS GCR
