@@ -198,6 +198,7 @@ def presheath_length_cm(
     sigma_in_cm2=5.0e-15,
     sigma_in_model="constant",
     gas_type=None,
+    Tn_eV=None,
 ):
     """Return the collisional presheath depth in front of a surface [cm].
 
@@ -206,6 +207,13 @@ def presheath_length_cm(
     so ``L_ps ~ c_s / nu_in``. In this device that runs from ~66 cm when the gas
     is cold and rarefied to ~5 cm once the discharge is hot and dense, which is
     what makes the sampling depth self-selecting rather than a tuned constant.
+
+    ``Tn_eV`` is the neutral temperature entering the collisionality's
+    ``T_eff = (Ti + Tn)/2``. ``None`` (every historical caller) leaves
+    ``ion_neutral_collision_frequency`` on its own fixed cold-gas value, so
+    the default path is unchanged bit for bit; a value is supplied only by
+    the kinetic DVM arm's Tn-feedback switch, which measures ``Tn`` from the
+    live distribution instead of assuming it.
     """
     nu_in = ion_neutral_collision_frequency(
         nn=nn,
@@ -214,6 +222,7 @@ def presheath_length_cm(
         sigma_in_cm2=sigma_in_cm2,
         sigma_in_model=sigma_in_model,
         gas_type=gas_type,
+        **({} if Tn_eV is None else {"Tn_eV": float(Tn_eV)}),
     )
     if nu_in <= 0.0 or not np.isfinite(nu_in):
         return np.inf
@@ -305,8 +314,15 @@ def boundary_absorption_rhs(
     sigma_in_model="constant",
     gas_type=None,
     cathode_jet=None,
+    Tn_presheath_eV=None,
 ):
     """Return the plasma absorbed by the plasma-terminating surfaces.
+
+    ``Tn_presheath_eV``: optional PER-CELL neutral temperature [eV] for the
+    presheath collisionality's ``T_eff``. ``None`` (the default, and every
+    historical caller) keeps the fixed cold-gas value, so this path is
+    unchanged bit for bit; the kinetic DVM arm supplies the measured
+    ``Tn(z)`` here when its Tn-feedback switch is on.
 
     ``cathode_jet``: when given (a dict with
     ``R_N``, ``R_E``, ``phi_c_V``, ``T_s_K``) and the state carries ``M_n``,
@@ -391,6 +407,11 @@ def boundary_absorption_rhs(
             sigma_in_cm2=sigma_in_cm2,
             sigma_in_model=sigma_in_model,
             gas_type=gas_type,
+            Tn_eV=(
+                None
+                if Tn_presheath_eV is None
+                else float(np.asarray(Tn_presheath_eV, dtype=float)[live])
+            ),
         )
         alpha_eff = presheath_alpha(
             alpha_isat=alpha_isat,

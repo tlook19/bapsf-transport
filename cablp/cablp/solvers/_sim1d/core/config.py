@@ -579,9 +579,74 @@ def model_mode_defaults():
         deterministic -- and only once the plasma phase is live; the
         neutral-prebreakdown fill is carried by the moment terms in both
         settings, as is the whole run until the first refresh completes.
-        ``"kinetic"`` rides on the two-zone neutral state and so requires the
-        ``neutral_two_zone`` flag. Any other value, or ``"kinetic"`` without
-        that flag, raises at construction.
+        ``"kinetic_dvm"`` carries LIVE transient column and annulus
+        distributions ``f(z, v_z, v_perp)`` and advances them with one split
+        implicit transport/collision step per neutral-clock tick, at step
+        ACCEPTANCE only. The fluid neutral rows (``nn``, ``nn_a``, and any
+        neutral-momentum rows) are then carried by the kinetic state instead
+        of by the RHS, and ``nn`` IS the zeroth moment of the column
+        distribution; the ion-side momentum and energy transfer of the
+        ionization, charge-exchange, elastic and recombination channels is
+        minus the corresponding moment of the kinetic operator, so the two
+        sides are antisymmetric by construction. Electron-side costs
+        (ionization potential, radiation, excitation) stay on the plasma
+        book unchanged. Like ``"kinetic"`` it rides on the two-zone state and
+        engages only once the plasma phase is live, so the pre-breakdown fill
+        and the neutral equilibration stay on the moment terms.
+
+        ``"kinetic_dvm"`` requires the ``neutral_two_zone`` flag and refuses
+        the ``neutral_momentum`` flag, ``coupled_circuit_picard``, a nonzero
+        ``gas_puff_local_ionization_fraction``, and ``gas_type`` other than
+        ``"He"``. Any other value, or ``"kinetic"``/``"kinetic_dvm"`` without
+        the two-zone flag, raises at construction.
+    neutral_kinetic_dvm_cadence_s:
+        Neutral-clock interval [s] between transient DVM updates under
+        ``neutral_model = "kinetic_dvm"``. The kinetic state advances on this
+        clock, not on the plasma step, and the plasma-side transfer terms are
+        held constant between ticks. Must be positive; raises at construction
+        otherwise. Inert under the other neutral models. The shipped value is
+        PROVISIONAL and was NOT chosen from an accuracy study -- the
+        multirate convergence measurement that selects it has not been run.
+    neutral_kinetic_dvm_nvz:
+        Number of axial-velocity bins in the transient DVM's velocity grid.
+        Must be EVEN: an odd count places a bin at exactly ``v_z = 0``, which
+        neither transports nor mirrors under end-wall reflection. Raises at
+        construction otherwise.
+    neutral_kinetic_dvm_nvp:
+        Number of perpendicular-speed bins in that same grid (positive-only,
+        carrying the 2D perpendicular speed measure).
+    neutral_kinetic_dvm_accommodation:
+        Thermal accommodation coefficient of the chamber surfaces, in
+        ``[0, 1]``. The accommodated fraction is re-emitted cosine-distributed
+        at the wall temperature (300 K, or the live cathode surface
+        temperature on the cathode-adjacent end); the remaining fraction is
+        reflected at the incident energy, which on this axisymmetric grid is
+        bin-preserving at the cylindrical wall and an exact bin mirror at an
+        end wall. A boxed surface property, never a fit parameter. Raises at
+        construction outside ``[0, 1]``.
+    neutral_kinetic_dvm_elastic:
+        Polarization-elastic ion-neutral channel of the transient DVM.
+        ``"phelps_iso"`` adds a BGK-like relaxation toward the local ion
+        Maxwellian at the Phelps isotropic rate, alongside the charge-exchange
+        channel at the Phelps backscatter rate; ``"off"`` drops it, leaving
+        charge exchange to carry all ion-neutral momentum transfer. The arm
+        supersedes the fluid ion-neutral collision family wholesale and that
+        operator's momentum-transfer cross section is ``Qi + 2 Qb``, so
+        ``"off"`` deliberately omits the ``Qi`` half. Any other value raises
+        at construction.
+    neutral_kinetic_dvm_tn_feedback:
+        Whether the DVM's measured neutral temperature ``Tn(z)`` FEEDS the
+        fluid evaluations that otherwise assume a fixed cold gas. The
+        temperature moment is computed as a diagnostic whenever the arm is
+        on; this switch controls consumption only, so that the
+        assumed-300 K versus measured comparison is a clean A/B. Under this
+        arm the single surviving consumer is the collisional presheath depth
+        behind the sheath-edge sampling, whose ``T_eff = (Ti + Tn)/2`` sets
+        ``nu_in``. Requires ``characteristic_boundary`` to be OFF: in the
+        characteristic stance the circuit's cathode sheath factor samples the
+        same presheath through a path that does not carry ``Tn``, and letting
+        only one of the two move would break the shared sheath-edge density
+        those two deliberately agree on. Raises at construction otherwise.
     neutral_kinetic_refresh_s:
         Maximum interval [s] between full kinetic solves under
         ``neutral_model = "kinetic"``. Between full refreshes the targets are
@@ -666,6 +731,15 @@ def model_mode_defaults():
         "neutral_kinetic_refresh_tol": 0.2,
         "neutral_kinetic_nvz": 48,
         "neutral_kinetic_nvp": 12,
+        # Dead under neutral_model="moment" (the K2a transient DVM arm, also
+        # gated on neutral_two_zone, is the only consumer). The cadence is
+        # PROVISIONAL -- a conservative placeholder, not an accuracy result:
+        "neutral_kinetic_dvm_cadence_s": 2.5e-5,
+        "neutral_kinetic_dvm_nvz": 48,
+        "neutral_kinetic_dvm_nvp": 12,
+        "neutral_kinetic_dvm_accommodation": 1.0,
+        "neutral_kinetic_dvm_elastic": "phelps_iso",
+        "neutral_kinetic_dvm_tn_feedback": False,
         # Bucket-2 default-off closure instrument (low-Te ADAS extension; only
         # active with icool_recomb, sub-0.2 eV):
         "adas_low_te_extension": False,

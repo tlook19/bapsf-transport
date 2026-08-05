@@ -33,6 +33,7 @@ from .core.integrator import (
     ssprk2_step,
 )
 from .core.state import (
+    NEUTRAL_ANNULUS_NAME,
     STATE_NAMES_1D,
     ConservativeState1D,
     apply_state_floors,
@@ -45,6 +46,10 @@ from .core.state import (
 )
 from .core.timestep import suggest_timestep
 from .physics.conduction import heat_conduction_rhs, implicit_heat_conduction_step
+from .physics.kinetic_dvm import (
+    ELASTIC_MODELS as KINETIC_DVM_ELASTIC_MODELS,
+    TransientDVM,
+)
 from .physics.kinetic_neutrals import (
     EV as _KIN_EV,
     KB as _KIN_KB,
@@ -669,9 +674,9 @@ class LAPDSim1D:
         self._neutral_model = str(
             self._input_dict.get("neutral_model", "moment")
         )
-        if self._neutral_model not in ("moment", "kinetic"):
+        if self._neutral_model not in ("moment", "kinetic", "kinetic_dvm"):
             raise ValueError(
-                "neutral_model must be 'moment' or 'kinetic' "
+                "neutral_model must be 'moment', 'kinetic' or 'kinetic_dvm' "
                 f"(got {self._neutral_model!r})"
             )
         if self._neutral_model == "kinetic":
@@ -713,6 +718,14 @@ class LAPDSim1D:
                 )
         else:
             self._kinetic = None
+        self._dvm = None
+        self._dvm_cadence_s = 0.0
+        self._dvm_tn_feedback = False
+        self._dvm_engaged = False
+        self._dvm_next_s = 0.0
+        self._dvm_last_s = 0.0
+        if self._neutral_model == "kinetic_dvm":
+            self._configure_kinetic_dvm()
         # R5.1 / audit A11: gated fluid<->circuit Picard coupling (default off).
         self._coupled_circuit_picard = bool(
             self._flags.get("coupled_circuit_picard", False)
@@ -723,6 +736,14 @@ class LAPDSim1D:
                     "coupled_circuit_picard is incompatible with the K4a kinetic "
                     "engine: the Picard re-run would double-trigger a kinetic "
                     "refresh, whose state the step snapshot does not restore"
+                )
+            if self._dvm is not None:
+                raise ValueError(
+                    "coupled_circuit_picard is incompatible with "
+                    "neutral_model='kinetic_dvm': the Picard re-run would "
+                    "advance the transient distribution a second time on the "
+                    "same step, and the step snapshot does not restore it. "
+                    "Accepted: kinetic_dvm with coupled_circuit_picard off"
                 )
             self._circuit_picard_tol_rel = float(
                 self._input_dict.get("circuit_picard_tol_rel", 1.0e-2)
@@ -1440,6 +1461,113 @@ class LAPDSim1D:
     def I_ion(self):
         return self._I_ion
 
+    def _configure_kinetic_dvm(self):
+        """Validate and build the K2a transient DVM arm (default-off).
+
+        Every refusal below names what the arm DOES accept. The arm owns
+        the whole neutral field once it engages, so a configuration that
+        also asks a fluid term to own part of it is a contradiction, not a
+        preference: those combinations raise here rather than silently
+        letting one of the two win.
+        """
+        if not self._neutral_two_zone:
+            raise ValueError(
+                "neutral_model='kinetic_dvm' carries column AND annulus "
+                "distributions and stores their moments in nn / nn_a: set "
+                "the neutral_two_zone flag"
+            )
+        if self._neutral_momentum:
+            raise ValueError(
+                "neutral_model='kinetic_dvm' is incompatible with the "
+                "neutral_momentum flag: the kinetic state already carries "
+                "the neutral momentum as the first moment of f, so an "
+                "evolved M_n field would be a second, unowned copy. "
+                "Accepted: neutral_two_zone alone"
+            )
+        if self._gas_type != "He":
+            raise ValueError(
+                "neutral_model='kinetic_dvm' is wired for gas_type='He' "
+                "only (the Phelps He+/He cross sections and the helium "
+                f"velocity grid); got {self._gas_type!r}"
+            )
+        if float(
+            self._input_dict.get("gas_puff_local_ionization_fraction", 0.0)
+        ) > 0.0:
+            raise ValueError(
+                "neutral_model='kinetic_dvm' is incompatible with "
+                "gas_puff_local_ionization_fraction > 0: that channel "
+                "removes puff neutrals on the fluid book, which the "
+                "kinetic particle ledger would not see. Accepted: "
+                "gas_puff_local_ionization_fraction = 0"
+            )
+        cadence = float(
+            self._input_dict.get("neutral_kinetic_dvm_cadence_s", 2.5e-5)
+        )
+        if not (cadence > 0.0):
+            raise ValueError(
+                "neutral_kinetic_dvm_cadence_s must be positive "
+                f"(got {cadence})"
+            )
+        accommodation = float(
+            self._input_dict.get("neutral_kinetic_dvm_accommodation", 1.0)
+        )
+        if not 0.0 <= accommodation <= 1.0:
+            raise ValueError(
+                "neutral_kinetic_dvm_accommodation is a surface property in "
+                f"[0, 1] (got {accommodation})"
+            )
+        elastic = str(
+            self._input_dict.get("neutral_kinetic_dvm_elastic", "phelps_iso")
+        )
+        if elastic not in KINETIC_DVM_ELASTIC_MODELS:
+            raise ValueError(
+                "neutral_kinetic_dvm_elastic must be one of "
+                f"{KINETIC_DVM_ELASTIC_MODELS} (got {elastic!r})"
+            )
+        tn_feedback = bool(
+            self._input_dict.get("neutral_kinetic_dvm_tn_feedback", False)
+        )
+        if tn_feedback and self._characteristic_boundary:
+            raise ValueError(
+                "neutral_kinetic_dvm_tn_feedback is incompatible with the "
+                "characteristic_boundary stance: there the circuit's "
+                "cathode sheath factor samples the same presheath through a "
+                "path that carries no Tn, so feeding the measured Tn to only "
+                "the fluid half would break the shared sheath-edge density. "
+                "Accepted: tn_feedback with characteristic_boundary off"
+            )
+        self._dvm_cadence_s = cadence
+        self._dvm_tn_feedback = tn_feedback
+        anode_faces = np.asarray(
+            getattr(self._geometry, "anode_face_indices", ()), dtype=int
+        )
+        self._dvm = TransientDVM(
+            geometry=self._geometry,
+            nvz=int(self._input_dict.get("neutral_kinetic_dvm_nvz", 48)),
+            nvp=int(self._input_dict.get("neutral_kinetic_dvm_nvp", 12)),
+            accommodation=accommodation,
+            elastic_model=elastic,
+            transparency=1.0 - float(self._input_dict.get("eta", 0.358)),
+            mesh_face=int(anode_faces[0]) if anode_faces.size else -999,
+            s_L=self._dvm_end_sticking("S_pump_L"),
+            s_R=self._dvm_end_sticking("S_pump_R"),
+        )
+
+    def _dvm_end_sticking(self, key):
+        """Return the end-plane sticking probability of a pump speed [L/s].
+
+        The TPMC/KN2Zone convention: the pumping speed over the one-way
+        300 K thermal flux through the end plane, clipped to a probability.
+        """
+        speed = float(self._input_dict.get(key, 0.0))
+        if speed <= 0.0:
+            return 0.0
+        vbar = math.sqrt(
+            8.0 * kb_cgs * 300.0 / (math.pi * self._mu_neutral * m_p_cgs)
+        )
+        area = math.pi * float(np.asarray(self._geometry.Rm_cm)[-1]) ** 2
+        return min(speed * 1.0e3 / (area * vbar / 4.0), 1.0)
+
     @property
     def floors(self):
         return dict(self._floors)
@@ -1512,6 +1640,10 @@ class LAPDSim1D:
             if self._kinetic is not None:
                 kinetic_terms["neutral_kinetic_relaxation"] = (
                     self.neutral_kinetic_relaxation_rhs(state)
+                )
+            if self._dvm is not None:
+                kinetic_terms["neutral_kinetic_dvm_coupling"] = (
+                    self.neutral_kinetic_dvm_coupling_rhs()
                 )
             terms = {
                 **zone_terms,
@@ -1672,6 +1804,20 @@ class LAPDSim1D:
                 }
             terms["neutral_kinetic_relaxation"] = (
                 self.neutral_kinetic_relaxation_rhs(state)
+            )
+        if self._dvm is not None:
+            # K2a supersession: once the arm engages it owns every neutral
+            # row, and the ion-side momentum/energy of the channels it
+            # models, which the coupling term carries instead. The key is
+            # present from the first step so the saved term structure is
+            # stable across engagement.
+            if self._dvm_engaged:
+                terms = {
+                    name: self._strip_dvm_rows(name, term)
+                    for name, term in terms.items()
+                }
+            terms["neutral_kinetic_dvm_coupling"] = (
+                self.neutral_kinetic_dvm_coupling_rhs()
             )
         return self._apply_active_plasma_topology(terms)
 
@@ -2459,6 +2605,18 @@ class LAPDSim1D:
                         derived=derived,
                         nu_pair=(nu_ion, nu_cx),
                     )
+        # K2a: the transient DVM advances on its own neutral clock, at
+        # ACCEPTED states only -- never inside a trial RHS or a step retry,
+        # so a rejected attempt cannot touch the distribution.
+        if (
+            self._dvm is not None
+            and self._flags.get("Plasma", True)
+            and not self._neutral_prebreakdown_active()
+        ):
+            if not self._dvm_engaged:
+                self._dvm_engage()
+            elif self._time >= self._dvm_next_s:
+                self._dvm_advance(self._time - self._dvm_last_s)
         # Retain the accepted solve current for the measured-tail phase gate.
         solve = self._cathode_solve
         if solve is not None and solve.beam_result is not None:
@@ -4049,6 +4207,7 @@ class LAPDSim1D:
             ),
             gas_type=self._gas_type,
             cathode_jet=self._cathode_jet_spec(cathode_solve),
+            Tn_presheath_eV=self._dvm_presheath_Tn_eV(),
         )
 
     def characteristic_boundary_rhs(
@@ -6703,6 +6862,189 @@ class LAPDSim1D:
             inv_ann / np.maximum(arr, 1e-30), 1e-4, 0.05
         )
         kin.next_update_s = float(time) + kin.update_s
+
+    # ------------------------------------------------------------ K2a DVM
+    #
+    # Terms whose ion-side momentum and energy rows the transient DVM
+    # supersedes. The first group is pure ion-neutral transfer and is
+    # replaced whole; the second group keeps its particle and
+    # electron-energy rows (the plasma still books its own ionization,
+    # recombination and the electron-side costs) and hands only the ion
+    # momentum/energy booking to the measured kinetic moments.
+    _DVM_TRANSFER_TERMS = frozenset(
+        {
+            "ion_charge_exchange",
+            "ion_neutral_drag",
+            "ion_neutral_frictional_heating",
+            "ion_neutral_thermalization",
+            "ion_neutral_collision",
+        }
+    )
+    _DVM_BIRTH_TERMS = frozenset(
+        {
+            "ionization_birth",
+            "beam_ionization_birth",
+            "recombination_rad_loss",
+            "recombination_3b_loss",
+        }
+    )
+
+    def _strip_dvm_rows(self, name, term):
+        """Return ``term`` with the rows the engaged DVM arm owns zeroed."""
+        zeros = np.zeros_like(np.asarray(term.nn, dtype=float))
+        superseded = (
+            name in self._DVM_TRANSFER_TERMS or name in self._DVM_BIRTH_TERMS
+        )
+        return ConservativeState1D(
+            n=term.n,
+            nn=zeros,
+            M=zeros.copy() if superseded else term.M,
+            Ee=term.Ee,
+            Ei=zeros.copy() if superseded else term.Ei,
+            M_n=None if term.M_n is None else zeros.copy(),
+            nn_a=None if term.nn_a is None else zeros.copy(),
+            M_n_a=None if term.M_n_a is None else zeros.copy(),
+        )
+
+    def neutral_kinetic_dvm_coupling_rhs(self):
+        """Return the K2a plasma-side transfer term.
+
+        Momentum and ion energy only, frozen between neutral-clock ticks
+        and equal to MINUS the measured moments of the kinetic ionization,
+        charge-exchange, elastic and recombination operators. Zeros before
+        the arm engages, so the term key is present from the first step and
+        the saved term structure is stable across the run.
+        """
+        zeros = np.zeros(self._geometry.cells, dtype=float)
+        if self._dvm is None or not self._dvm_engaged:
+            return ConservativeState1D(
+                n=zeros,
+                nn=zeros.copy(),
+                M=zeros.copy(),
+                Ee=zeros.copy(),
+                Ei=zeros.copy(),
+            )
+        return ConservativeState1D(
+            n=zeros,
+            nn=zeros.copy(),
+            M=self._dvm.M_transfer.copy(),
+            Ee=zeros.copy(),
+            Ei=self._dvm.Ei_transfer.copy(),
+        )
+
+    def _dvm_presheath_Tn_eV(self):
+        """Return the per-cell Tn [eV] the presheath should consume, or None."""
+        if self._dvm is None or not self._dvm_engaged:
+            return None
+        if not self._dvm_tn_feedback:
+            return None
+        return self._dvm.Tn_col_eV
+
+    def _dvm_engage(self):
+        """Seed the transient distributions from the live fluid neutrals.
+
+        Until this fires the moment terms carry the neutrals exactly as
+        they always have -- the pre-breakdown fill and the neutral
+        equilibration are untouched by the arm. The seed is a Maxwellian
+        at the wall temperature carrying the fluid's own column and
+        annulus densities, so the handover conserves particles exactly.
+        """
+        state = self.state
+        self._dvm.seed_from_density(
+            np.maximum(np.asarray(state.nn, dtype=float), 0.0),
+            np.maximum(np.asarray(state.nn_a, dtype=float), 0.0),
+        )
+        self._dvm_engaged = True
+        self._dvm_last_s = self._time
+        self._dvm_next_s = self._time + self._dvm_cadence_s
+
+    def _dvm_advance(self, dt_neutral):
+        """Run one transient DVM update and republish the neutral moments."""
+        state = self.state
+        derived = self.derived
+        geometry = self._geometry
+        nu_ion = self._dvm_ionization_frequency(state, derived)
+        rates = self._kinetic_channel_rates(state, derived, self._time)
+        sources = {
+            "puff": np.asarray(rates["puff"], dtype=float),
+            "recombination": np.asarray(rates["rec"], dtype=float),
+            "anode": np.asarray(rates["anode"], dtype=float),
+            "cathode_face": float(rates["cath"]),
+            "collector_face": float(rates["coll"]),
+        }
+        self._dvm.update(
+            float(dt_neutral),
+            n_i=np.asarray(state.n, dtype=float),
+            Ti_eV=np.asarray(derived.Ti, dtype=float),
+            u_i=np.asarray(derived.u, dtype=float),
+            nu_ion=nu_ion,
+            sources=sources,
+            T_s_K=(
+                float(self._cathode_Ts_K)
+                if self._cathode_Ts_K is not None
+                else float(self._input_dict.get("T_s", 1910.0))
+            ),
+        )
+        self._dvm_last_s = self._time
+        self._dvm_next_s = self._time + self._dvm_cadence_s
+        # Republish: the fluid neutral density consumed by the plasma
+        # physics IS the zeroth moment of f. Written straight into the
+        # packed rows rather than through the flooring path, so the plasma
+        # rows the step just accepted are not re-rounded.
+        cells = geometry.cells
+        names = state_field_names(state)
+        y = self._y.copy()
+        floor = self._floors["nn"]
+        y[cells : 2 * cells] = np.maximum(self._dvm.column_density(), floor)
+        row = names.index(NEUTRAL_ANNULUS_NAME)
+        y[row * cells : (row + 1) * cells] = np.maximum(
+            self._dvm.annulus_density(), floor
+        )
+        self._y = y
+        self._state = self._unpack(y)
+        self._derived = derive_state(
+            self._state, self._floors, self._ion_mass_g
+        )
+
+    def _dvm_ionization_frequency(self, state, derived):
+        """Return the velocity-blind ionization frequency [1/s] per cell.
+
+        Derived from the ionization the PLASMA actually books -- bulk plus
+        beam -- divided by the column density those bookings consumed, so
+        the kinetic side removes the same neutrals the plasma turns into
+        ions rather than re-deriving a rate that could drift from it.
+        """
+        S = np.asarray(
+            self.reaction_rhs_terms(state=state)["ionization_birth"].n,
+            dtype=float,
+        )
+        cathode_phase = self._cathode_phase_options(time=self._time)
+        cathode_solve = None
+        if cathode_phase["solve_enabled"]:
+            # Accepted-state solve that does NOT write the warm-start cache:
+            # this is a neutral-clock read, not part of the step's own solve
+            # sequence.
+            cathode_solve = self.solve_cathode_boundary(
+                state=state,
+                floating=cathode_phase["floating"],
+                time=self._time,
+                update_cache=False,
+            )
+        if cathode_solve is not None:
+            S = S + np.asarray(
+                self.beam_ionization_rhs_terms(
+                    state=state,
+                    cathode_solve=cathode_solve,
+                    time=self._time,
+                )["beam_ionization_birth"].n,
+                dtype=float,
+            )
+        nu = S / np.maximum(np.asarray(state.nn, dtype=float), self._floors["nn"])
+        if self._active_plasma_topology:
+            nu = np.where(
+                np.asarray(self._geometry.plasma_active, dtype=bool), nu, 0.0
+            )
+        return np.maximum(nu, 0.0)
 
     @staticmethod
     def _strip_neutral_rows(term):

@@ -51,6 +51,9 @@ from cablp.solvers._sim1d.physics.cathode import (
     beam_launch,
     cathode_sample_indices,
 )
+from cablp.solvers._sim1d.physics.kinetic_dvm import (
+    ledger_residual as kinetic_dvm_ledger_residual,
+)
 from cablp.solvers._sim1d.physics.energy import (
     electron_cooling_rhs,
     electron_cooling_rhs_terms,
@@ -7965,6 +7968,190 @@ def main():
     assert np.all(np.isfinite(k4_state.nn_a))
     # flag-off ledgers carry no relaxation key
     assert "neutral_kinetic_relaxation" not in p2z_sim.rhs_terms()
+
+    # --- K2a transient DVM neutrals: the LIVE distribution arm on its own
+    # neutral clock. Default off and presence-gated; once engaged it owns
+    # every neutral row and the ion-side momentum/energy of the channels it
+    # models, the saved nn IS the column zeroth moment, the particle ledger
+    # closes to roundoff, and each unsupported combination is refused at
+    # construction naming the offender.
+    assert "neutral_kinetic_dvm_coupling" not in p2z_sim.rhs_terms()
+    assert p2z_sim._dvm is None
+    kd_params = dict(p2z_params)
+    kd_params["neutral_model"] = "kinetic_dvm"
+    # Smoke-scale clock: a few 1 ns steps must cross it.
+    kd_params["neutral_kinetic_dvm_cadence_s"] = 2.0e-9
+    kd_params["neutral_kinetic_dvm_nvz"] = 16
+    kd_params["neutral_kinetic_dvm_nvp"] = 6
+    kd_flags = dict(p2z_flags)
+    kd_flags["neutral_prebreakdown"] = False
+    kd_flags["neutral_equilibration"] = False
+    kd_flags["characteristic_boundary"] = False
+
+    # Every refusal, and the offender it must name.
+    for kd_bad_params, kd_bad_flags, kd_offender in (
+        (kd_params, dict(kd_flags, neutral_two_zone=False), "neutral_two_zone"),
+        (kd_params, dict(kd_flags, neutral_momentum=True), "neutral_momentum"),
+        (
+            dict(kd_params, neutral_kinetic_dvm_cadence_s=0.0),
+            kd_flags,
+            "neutral_kinetic_dvm_cadence_s",
+        ),
+        (
+            dict(kd_params, neutral_kinetic_dvm_accommodation=-0.1),
+            kd_flags,
+            "neutral_kinetic_dvm_accommodation",
+        ),
+        (
+            dict(kd_params, neutral_kinetic_dvm_elastic="bilinear"),
+            kd_flags,
+            "neutral_kinetic_dvm_elastic",
+        ),
+        (
+            dict(kd_params, neutral_kinetic_dvm_nvz=17),
+            kd_flags,
+            "nvz",
+        ),
+        (
+            dict(kd_params, gas_puff_local_ionization_fraction=0.3),
+            kd_flags,
+            "gas_puff_local_ionization_fraction",
+        ),
+        (
+            kd_params,
+            dict(kd_flags, coupled_circuit_picard=True),
+            "coupled_circuit_picard",
+        ),
+        (
+            dict(kd_params, neutral_kinetic_dvm_tn_feedback=True),
+            dict(kd_flags, characteristic_boundary=True),
+            "characteristic_boundary",
+        ),
+    ):
+        try:
+            LAPDSim1D(dict(kd_bad_params), dict(kd_bad_flags))
+        except ValueError as kd_error:
+            assert kd_offender in str(kd_error), (kd_offender, str(kd_error))
+        else:
+            raise AssertionError(
+                f"kinetic_dvm accepted an unsupported configuration "
+                f"({kd_offender})"
+            )
+
+    kd_sim = LAPDSim1D(dict(kd_params), dict(kd_flags))
+    assert kd_sim._dvm is not None
+    # Tn consumption is its OWN switch and defaults off.
+    assert kd_sim._dvm_tn_feedback is False
+    assert kd_sim._dvm_presheath_Tn_eV() is None
+    # Pre-engagement: the coupling key exists and is all-zero, and the fluid
+    # neutral rows are still live (the moment terms carry the fill).
+    kd_pre = kd_sim.rhs_terms()
+    assert "neutral_kinetic_dvm_coupling" in kd_pre
+    assert np.all(kd_pre["neutral_kinetic_dvm_coupling"].M == 0.0)
+    assert np.all(kd_pre["neutral_kinetic_dvm_coupling"].Ei == 0.0)
+    assert np.any(kd_pre["neutral_sources"].nn != 0.0)
+
+    for _ in range(6):
+        kd_sim.advance_one_step(dt=1.0e-9)
+    kd_dvm = kd_sim._dvm
+    assert kd_sim._dvm_engaged and kd_dvm.updates >= 1
+    assert np.all(np.isfinite(kd_dvm.f_c)) and np.all(np.isfinite(kd_dvm.f_a))
+    assert np.all(kd_dvm.f_c >= 0.0) and np.all(kd_dvm.f_a >= 0.0)
+    kd_state = kd_sim.state
+    assert np.all(np.isfinite(kd_state.nn)) and np.all(np.isfinite(kd_state.nn_a))
+    assert np.all(np.isfinite(kd_sim.rhs()))
+
+    # Moment-consistency contract: the saved nn IS the column zeroth moment
+    # (floored), nn_a the annulus moment. Exact equality, not a tolerance.
+    kd_floor = kd_sim.floors["nn"]
+    assert np.array_equal(
+        kd_state.nn, np.maximum(kd_dvm.column_density(), kd_floor)
+    )
+    assert np.array_equal(
+        kd_state.nn_a, np.maximum(kd_dvm.annulus_density(), kd_floor)
+    )
+
+    # Particle ledger: births minus losses closes to roundoff in both the
+    # distribution and domain forms.
+    kd_res = kinetic_dvm_ledger_residual(kd_dvm.last_ledger)
+    assert abs(kd_res["distribution_rel"]) < 1.0e-12, kd_res
+    assert abs(kd_res["domain_rel"]) < 1.0e-12, kd_res
+
+    # Transfer antisymmetry: the fluid coupling rows ARE minus the measured
+    # kinetic moments -- the M*Vp + M_n*Vm == 0 discipline, extended to a
+    # velocity-resolved neutral state.
+    kd_terms = kd_sim.rhs_terms()
+    kd_active = np.asarray(kd_sim.geometry.plasma_active, dtype=bool)
+    kd_coupling = kd_terms["neutral_kinetic_dvm_coupling"]
+
+    def kd_expected(values):
+        # The coupling term is plasma-coupled, so it takes the same
+        # dead-cell mask as every other plasma term when that stance is on.
+        if kd_sim._active_plasma_topology:
+            return np.where(kd_active, values, 0.0)
+        return values
+
+    assert np.array_equal(
+        np.asarray(kd_coupling.M, dtype=float), kd_expected(kd_dvm.M_transfer)
+    )
+    assert np.array_equal(
+        np.asarray(kd_coupling.Ei, dtype=float), kd_expected(kd_dvm.Ei_transfer)
+    )
+
+    # Supersession: every neutral row is zeroed, the superseded ion-transfer
+    # rows are zeroed, and the particle / electron rows keep their forms.
+    for kd_name, kd_term in kd_terms.items():
+        if kd_name == "neutral_kinetic_dvm_coupling":
+            continue
+        assert np.all(np.asarray(kd_term.nn, dtype=float) == 0.0), kd_name
+        if kd_term.nn_a is not None:
+            assert np.all(np.asarray(kd_term.nn_a, dtype=float) == 0.0), kd_name
+    for kd_name in ("ionization_birth", "recombination_rad_loss"):
+        assert np.all(kd_terms[kd_name].M == 0.0), kd_name
+        assert np.all(kd_terms[kd_name].Ei == 0.0), kd_name
+    assert np.any(kd_terms["ionization_birth"].n != 0.0)
+
+    # Rejected attempts mutate nothing: the distribution, the lagged end
+    # buffers and the coupling accumulators are bit-identical afterwards.
+    kd_before = (
+        kd_dvm.f_c.tobytes(),
+        kd_dvm.f_a.tobytes(),
+        kd_dvm.pend_L_c.tobytes(),
+        kd_dvm.pend_R_c.tobytes(),
+        kd_dvm.M_transfer.tobytes(),
+        kd_dvm.Ei_transfer.tobytes(),
+        kd_dvm.updates,
+    )
+    kd_sim._attempt_step(dt=1.0e-9)
+    kd_sim._attempt_step(dt=1.0e-13)
+    kd_sim.rhs(y=kd_sim._y * 1.01)
+    assert kd_before == (
+        kd_dvm.f_c.tobytes(),
+        kd_dvm.f_a.tobytes(),
+        kd_dvm.pend_L_c.tobytes(),
+        kd_dvm.pend_R_c.tobytes(),
+        kd_dvm.M_transfer.tobytes(),
+        kd_dvm.Ei_transfer.tobytes(),
+        kd_dvm.updates,
+    )
+
+    # Tn consumption A/B: with the switch on, the measured Tn reaches the
+    # presheath collisionality and the boundary absorption moves.
+    kd_tn_sim = LAPDSim1D(
+        dict(kd_params, neutral_kinetic_dvm_tn_feedback=True), dict(kd_flags)
+    )
+    for _ in range(6):
+        kd_tn_sim.advance_one_step(dt=1.0e-9)
+    assert kd_tn_sim._dvm_tn_feedback is True
+    kd_tn = kd_tn_sim._dvm_presheath_Tn_eV()
+    assert kd_tn is not None and np.all(np.isfinite(kd_tn))
+    # The two builds are identical except for the switch, so any difference
+    # in the absorption term is the Tn feedback and nothing else.
+    kd_off_abs = kd_sim.boundary_absorption_rhs(state=kd_tn_sim.state).n
+    kd_on_abs = kd_tn_sim.boundary_absorption_rhs(state=kd_tn_sim.state).n
+    assert np.any(kd_off_abs != kd_on_abs), (
+        "the Tn-consumption switch changed nothing"
+    )
 
     # --- Neutral-wind advection (M3): donor-cell
     # upwind of nn and M_n by u_n on the neutral faces, closed ends for
