@@ -8217,16 +8217,22 @@ def main():
         assert abs(
             kd_obs_rates[kd_obs_key][kd_obs_cell] - kd_obs_removed[kd_obs_cell]
         ) <= 1.0e-12 * abs(kd_obs_removed[kd_obs_cell])
-    # f_c deposition lands in that same cell: one update of a bare engine on
-    # this geometry, seeded empty, fed only the cathode channel.
+    # K2d: the return enters as a DIRECTED INFLOW at the emitting face, not
+    # as a stationary birth inside the cell. One update of a bare engine on
+    # this geometry, seeded empty, fed only the cathode channel: every fed
+    # particle arrives (the ghost density is the counted particles over
+    # exactly the |v_z| A dt the march multiplies back), nothing appears
+    # upstream of the face, and part of the return has already travelled
+    # downstream within the tick.
     kd_dep = TransientDVM(geometry=kd_obs_sim.geometry, nvz=16, nvp=6)
     assert kd_dep.cath_cell == kd_obs_cath and kd_dep.coll_cell == kd_obs_coll
     kd_dep.f_c[:] = 0.0
     kd_dep.f_a[:] = 0.0
     kd_dep_src = np.zeros(kd_dep.nz)
     kd_dep_src[kd_obs_cath] = 1.0e18
+    kd_dep_dt = 1.0e-5
     kd_dep.update(
-        1.0e-9,
+        kd_dep_dt,
         n_i=np.zeros(kd_dep.nz),
         Ti_eV=np.full(kd_dep.nz, 0.026),
         u_i=np.zeros(kd_dep.nz),
@@ -8235,8 +8241,70 @@ def main():
         T_s_K=1910.0,
     )
     kd_dep_mass = kd_dep.f_c.sum(axis=(1, 2)) * kd_dep.V_col
+    kd_dep_fed = 1.0e18 * kd_dep_dt
+    assert abs(kd_dep.total_inventory() - kd_dep_fed) <= 1.0e-12 * kd_dep_fed
     assert kd_dep_mass[kd_obs_cath] > 0.0
-    assert np.all(np.delete(kd_dep_mass, kd_obs_cath) == 0.0)
+    assert np.all(kd_dep_mass[:kd_obs_cath] == 0.0)
+    assert kd_dep_mass[kd_obs_cath + 1:].sum() > 0.0
+    assert kd_dep_mass[kd_obs_cath] < kd_dep.total_inventory()
+    assert kd_dep.column_drift()[kd_obs_cath] > 0.0
+
+    # K2d afterglow-entry stretch: the tick-frozen coupling drain is held
+    # constant while the plasma steps inside one tick, and at the afterglow
+    # entry it flipped sign and demanded more ion energy than the cathode
+    # cell held -- an explicit e-fold below dt_min, so no admissible step
+    # existed and the run died on a negative Ei (2026-08-05, t = 21.312 ms).
+    # Three statements: the drain now BOUNDS dt, the applied drain cannot
+    # carry a cell through its floor, and what it declines to carry is
+    # re-ledgered rather than lost.
+    kd_lim_sim = LAPDSim1D(dict(kd_obs_params), dict(kd_obs_flags))
+    for _ in range(8):
+        kd_lim_sim.advance_one_step(dt=1.0e-9)
+    assert kd_lim_sim._dvm_engaged
+    kd_lim_quiet = kd_lim_sim.dvm_transfer_ledger()
+    # Inert on a healthy step: applied == booked, bit-exactly.
+    assert kd_lim_quiet["relax_limited_steps"] == 0
+    kd_lim_base = kd_lim_sim.suggest_timestep().dt_surface_loss
+    kd_lim_cells = kd_lim_sim.geometry.cells
+    kd_lim_sim._dvm.Ei_transfer = np.full(kd_lim_cells, -1.0e12)
+    kd_lim_sim._dvm.M_transfer = np.full(kd_lim_cells, -1.0e3)
+    # The bound SEES it (the defect: a 1e12 drain moved dt by exactly zero).
+    assert kd_lim_sim.suggest_timestep().dt_surface_loss < kd_lim_base
+    kd_lim_floor = 1.5 * ev_to_erg * kd_lim_sim.floors["Ti"]
+    for _ in range(40):
+        kd_lim_sim.advance_one_step()
+        kd_lim_state = kd_lim_sim.state
+        assert np.all(np.isfinite(kd_lim_state.Ei))
+        assert np.all(
+            kd_lim_state.Ei >= kd_lim_floor * kd_lim_state.n * (1.0 - 1.0e-12)
+        )
+    kd_lim = kd_lim_sim.dvm_transfer_ledger()
+    assert kd_lim["relax_limited_steps"] > 0
+    assert kd_lim["Ei"]["rel"] < 1.0e-12, kd_lim["Ei"]
+    assert kd_lim["M"]["rel"] < 1.0e-12, kd_lim["M"]
+    assert np.any(np.abs(kd_lim_sim._dvm.Ei_debt) > 0.0)
+    # Every bound the arm makes phantom is withdrawn, so the constraint it
+    # reports names a term the step actually applies.
+    kd_lim_diag = kd_lim_sim.suggest_timestep()
+    for kd_lim_field in (
+        "dt_ion_charge_exchange",
+        "dt_ion_neutral_drag",
+        "dt_neutral_exchange",
+        "dt_neutral_sources",
+    ):
+        assert getattr(kd_lim_diag, kd_lim_field) == np.inf, kd_lim_field
+    assert kd_lim_diag.active_constraint not in (
+        "ion_charge_exchange",
+        "ion_neutral_drag",
+        "neutral_exchange",
+        "neutral_sources",
+    )
+    # And the timestep bundle reads the boundary operator THIS stance runs.
+    assert kd_lim_sim._characteristic_boundary is False
+    kd_lim_bundle = kd_lim_sim._plasma_source_timestep_rhs(
+        state=kd_lim_sim.state, time=kd_lim_sim.time
+    )
+    assert np.all(np.isfinite(np.asarray(kd_lim_bundle.Ei, dtype=float)))
 
     # --- Neutral-wind advection (M3): donor-cell
     # upwind of nn and M_n by u_n on the neutral faces, closed ends for

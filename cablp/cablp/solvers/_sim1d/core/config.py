@@ -667,6 +667,19 @@ def model_mode_defaults():
         same presheath through a path that does not carry ``Tn``, and letting
         only one of the two move would break the shared sheath-edge density
         those two deliberately agree on. Raises at construction otherwise.
+    neutral_kinetic_dvm_transfer_relax_fraction:
+        Share of a cell's ion-energy margin above its ``Ti`` floor that the
+        transient DVM's tick-frozen coupling drain may consume in ONE plasma
+        step, in ``(0, 1]``. The transfer is held constant between neutral
+        clock ticks while the plasma steps many times inside one, so at a
+        collapsing cell the frozen drain can demand more energy than the cell
+        holds; this caps what is APPLIED. The withheld energy and momentum
+        are not dropped -- they are held as a per-cell debt and re-offered on
+        later steps, so ``applied + debt == booked`` per cell at every
+        accepted step. A value of ``1.0`` permits a drain that lands exactly
+        on the floor within the step and leaves nothing for the other terms.
+        Inert unless ``neutral_model = "kinetic_dvm"``; raises at
+        construction outside the interval.
     neutral_kinetic_refresh_s:
         Maximum interval [s] between full kinetic solves under
         ``neutral_model = "kinetic"``. Between full refreshes the targets are
@@ -761,6 +774,7 @@ def model_mode_defaults():
         "neutral_kinetic_dvm_elastic": "phelps_iso",
         "neutral_kinetic_dvm_exchange": "cauchy_chord",
         "neutral_kinetic_dvm_tn_feedback": False,
+        "neutral_kinetic_dvm_transfer_relax_fraction": 0.5,
         # Bucket-2 default-off closure instrument (low-Te ADAS extension; only
         # active with icool_recomb, sub-0.2 eV):
         "adas_low_te_extension": False,

@@ -39,14 +39,23 @@ EXACT rather than converged: substep A never creates a particle and
 substep B creates exactly the number substep A destroyed, per channel, so
 the domain total closes to roundoff at every update regardless of dt.
 
-End walls are the one lagged channel. Their returns re-enter as boundary
-INFLOW ghost densities rather than as a volume source in the end cell,
+EVERY surface return enters as a directed boundary INFLOW ghost density at
+the face it came off, never as a volume source in the adjacent cell,
 because only the inflow form preserves an equilibrium Maxwellian exactly
 (the returned flux spectrum divided by ``|v_z| A`` reproduces the volume
-Maxwellian bin for bin). The outflow is known only after the march, so
-the returning particles are held in a per-end pending buffer and injected
-on the next update. The buffer is part of the inventory: closure is
-stated over ``sum(f V) + pending``.
+Maxwellian bin for bin) and only it makes the returning population
+TRAVEL: a volume birth deposits its whole mass inside one cell for a
+whole tick, which at a plasma-terminating surface re-ionizes on the spot
+and re-ignites the cell it was supposed to be draining. That applies to
+the end walls and, since K2d, to the cathode/collector recycle channels,
+whose faces are interior whenever something sits behind the surface.
+
+End walls remain the one LAGGED channel: their outflow is known only
+after the march, so the returning particles are held in a per-end pending
+buffer and injected on the next update. The buffer is part of the
+inventory: closure is stated over ``sum(f V) + pending``. The recycle
+faces are not lagged -- the plasma tells the arm what it removed before
+the march runs, so those particles are injected in the same update.
 
 Sign and unit conventions: CGS throughout, distributions in cm^-3 per
 bin (the bin sum IS the density), ledger entries in PARTICLES (not
@@ -327,6 +336,36 @@ class TransientDVM:
         self.updates = 0
         self.last_ledger = None
 
+        # ---- deferred transfer ledger (the K2d floor-aware relax)
+        #
+        # The solver may WITHHOLD part of a tick's booked transfer at a cell
+        # whose ion energy the frozen drain would otherwise carry below its
+        # floor inside one step. Withheld energy and momentum are not
+        # discarded: they are held here as a per-cell DEBT and re-offered on
+        # every later step, so the exchange stays a transfer rather than a
+        # sink. Units are the transfer's own, integrated over the step:
+        # erg/cm^3 and g/(cm^2 s), on the column (= plasma) volume.
+        #
+        # The identity these carry, per cell and at every accepted step:
+        #
+        #     applied_cum + debt == booked_cum
+        #
+        # i.e. everything the kinetic side booked has either been handed to
+        # the plasma or is still owed to it. ``booked_cum`` accumulates the
+        # tick-frozen rate over the step; ``applied_cum`` what the step's
+        # RHS actually carried.
+        self.M_debt = cells.copy()
+        self.Ei_debt = cells.copy()
+        self.M_booked_cum = cells.copy()
+        self.Ei_booked_cum = cells.copy()
+        self.M_applied_cum = cells.copy()
+        self.Ei_applied_cum = cells.copy()
+        # Census: steps scoped, steps where any cell was limited, and the
+        # per-cell count of limited steps.
+        self.relax_steps = 0
+        self.relax_limited_steps = 0
+        self.relax_cell_steps = cells.copy()
+
     # ------------------------------------------------------------ state
 
     def seed_from_density(self, nn_col, nn_ann, T_K=None):
@@ -356,6 +395,15 @@ class TransientDVM:
             "S_transfer": self.S_transfer.copy(),
             "Tn_col_eV": self.Tn_col_eV.copy(),
             "updates": int(self.updates),
+            "M_debt": self.M_debt.copy(),
+            "Ei_debt": self.Ei_debt.copy(),
+            "M_booked_cum": self.M_booked_cum.copy(),
+            "Ei_booked_cum": self.Ei_booked_cum.copy(),
+            "M_applied_cum": self.M_applied_cum.copy(),
+            "Ei_applied_cum": self.Ei_applied_cum.copy(),
+            "relax_steps": int(self.relax_steps),
+            "relax_limited_steps": int(self.relax_limited_steps),
+            "relax_cell_steps": self.relax_cell_steps.copy(),
         }
 
     def restore(self, snap):
@@ -371,6 +419,15 @@ class TransientDVM:
         self.S_transfer = snap["S_transfer"].copy()
         self.Tn_col_eV = snap["Tn_col_eV"].copy()
         self.updates = int(snap["updates"])
+        self.M_debt = snap["M_debt"].copy()
+        self.Ei_debt = snap["Ei_debt"].copy()
+        self.M_booked_cum = snap["M_booked_cum"].copy()
+        self.Ei_booked_cum = snap["Ei_booked_cum"].copy()
+        self.M_applied_cum = snap["M_applied_cum"].copy()
+        self.Ei_applied_cum = snap["Ei_applied_cum"].copy()
+        self.relax_steps = int(snap["relax_steps"])
+        self.relax_limited_steps = int(snap["relax_limited_steps"])
+        self.relax_cell_steps = snap["relax_cell_steps"].copy()
 
     # ---------------------------------------------------------- moments
 
@@ -469,13 +526,23 @@ class TransientDVM:
             )
         return nu_cx, nu_el
 
-    def _march(self, dt, nu_c_loss, nu_a_loss, inflow_c, inflow_a):
+    def _march(self, dt, nu_c_loss, nu_a_loss, inflow_c, inflow_a,
+               inject_c=None):
         """Backward-Euler implicit upwind march (substep A).
 
         ``nu_c_loss`` / ``nu_a_loss`` are the per-(cell, bin) NON-zone loss
         frequencies of each zone; the zone-exchange rates are added here so
         the 2x2 coupling stays exactly antisymmetric. ``inflow_*`` are
         boundary ghost DENSITIES keyed ``(-1, +1)`` by domain end.
+
+        ``inject_c`` carries the INTERIOR-face column inflows (the recycle
+        channels) as ghost densities keyed ``(face_index, direction)``. They
+        are added to the upstream flux the moment the sweep crosses their
+        face, which injects exactly ``|v_z| F A dt`` particles per bin -- the
+        same identity the end-wall ghosts satisfy -- while the cells behind
+        the face keep passing their own flux through unchanged. Injection is
+        applied AFTER any mesh interception at that face: a surface emits
+        into the plasma, on the plasma side of an anode mesh.
 
         Returns ``(f_c, f_a, mesh_c, mesh_a, out)`` where the mesh arrays
         are intercepted PARTICLES per emitting cell and ``out`` maps
@@ -527,6 +594,10 @@ class TransientDVM:
                     )
                     F_c_prev = self.transparency * F_c_prev
                     F_a_prev = self.transparency * F_a_prev
+                if inject_c:
+                    ghost = inject_c.get((fi, direction))
+                    if ghost is not None:
+                        F_c_prev = F_c_prev + ghost[sel]
                 nux = self.nux[i][None, :]
                 nuxp = self.nuxp[i][None, :]
                 a11 = inv_dt + out_c + nu_c_loss[i][sel] + nux
@@ -555,6 +626,39 @@ class TransientDVM:
             )
         return f_c, f_a, mesh_c, mesh_a, out
 
+    def _add_face_inflow(self, inject, counts, default_cell, direction,
+                         spectrum, dt):
+        """Accumulate a wall return as a directed ghost inflow at its face.
+
+        ``counts`` are PARTICLES this update, either per cell or a scalar
+        deposited at ``default_cell``. The emitting surface stands on the
+        UPSTREAM face of its own cell for the direction it emits into: face
+        ``i`` for a ``+z`` emitter, face ``i + 1`` for a ``-z`` one. Dividing
+        the counted particles by ``|v_z| A dt`` at exactly the face area the
+        march uses makes the injected count equal the counted one bin by bin,
+        independent of ``dt`` -- the same construction :func:`_ghost_density`
+        performs for the lagged end-wall buffers.
+        """
+        counts = np.asarray(counts, dtype=float)
+        if counts.ndim:
+            items = [
+                (int(i), float(counts[i])) for i in np.flatnonzero(counts)
+            ]
+        elif counts:
+            items = [(int(default_cell), float(counts))]
+        else:
+            items = []
+        for cell, particles in items:
+            face = cell if direction > 0 else cell + 1
+            ghost = _ghost_density(
+                particles * spectrum, self.face_c[face], dt, self.g
+            )
+            key = (face, direction)
+            if key in inject:
+                inject[key] = inject[key] + ghost
+            else:
+                inject[key] = ghost
+
     def update(
         self,
         dt,
@@ -574,11 +678,17 @@ class TransientDVM:
         remove and create the same particles. ``sources`` holds the
         external ledger in atoms/s: ``puff`` (annulus cells),
         ``recombination`` (column cells), ``cathode_face`` /
-        ``collector_face`` (column cells, or a scalar deposited at the
+        ``collector_face`` (column cells, or a scalar attributed to the
         role-resolved ``cath_cell`` / ``coll_cell``), ``anode`` (column
         cells). ``T_s_K`` is the live cathode-surface temperature used for
         the cathode-adjacent surfaces (the stated special case); the wall
         temperature is used everywhere else.
+
+        The two recycle channels enter as directed INFLOWS at their own
+        faces -- a ``+z`` half-flux spectrum at the cathode's upstream face,
+        a ``-z`` one at the collector's downstream face -- so they are
+        transported and attacked by the loss channels within this same
+        update. Every other external channel is a volume birth in substep B.
 
         Returns the ledger of this update: every birth and loss channel in
         PARTICLES, plus the inventory before/after, so that
@@ -614,8 +724,31 @@ class TransientDVM:
         birth_return_L = float(self.pend_L_c.sum() + self.pend_L_a.sum())
         birth_return_R = float(self.pend_R_c.sum() + self.pend_R_a.sum())
 
+        # --- the wall-return (recycle) channels, as directed inflows at the
+        # faces they came off. Known before the march (the plasma reports
+        # what its boundary term removed), so unlike the end walls they are
+        # not lagged. Built here so the counted particles enter substep A and
+        # are transported and attacked by the loss channels in the same
+        # update -- the physical statement that a recycled atom leaves the
+        # surface moving, rather than materializing at rest in the cell the
+        # boundary was draining.
+        puff = np.asarray(sources.get("puff", 0.0), dtype=float) * dt
+        rec = np.asarray(sources.get("recombination", 0.0), dtype=float) * dt
+        anode = np.asarray(sources.get("anode", 0.0), dtype=float) * dt
+        cath = np.asarray(sources.get("cathode_face", 0.0), dtype=float) * dt
+        coll = np.asarray(sources.get("collector_face", 0.0), dtype=float) * dt
+        inject_c = {}
+        self._add_face_inflow(
+            inject_c, cath, self.cath_cell, +1,
+            g.half_flux_spectrum(T_s_K, +1), dt,
+        )
+        self._add_face_inflow(
+            inject_c, coll, self.coll_cell, -1,
+            g.half_flux_spectrum(self.T_wall_K, -1), dt,
+        )
+
         f_c, f_a, mesh_c, mesh_a, out = self._march(
-            dt, nu_c_loss, nu_a_loss, inflow_c, inflow_a
+            dt, nu_c_loss, nu_a_loss, inflow_c, inflow_a, inject_c
         )
 
         # --- substep A tallies, in PARTICLES, from the marched state
@@ -660,12 +793,9 @@ class TransientDVM:
         f_c += (mesh_c * inv_vc)[:, None, None] * self.M_wall[None, :, :]
         f_a += (mesh_a * inv_va)[:, None, None] * self.M_wall[None, :, :]
 
-        # --- external source ledger (counted particles this update)
-        puff = np.asarray(sources.get("puff", 0.0), dtype=float) * dt
-        rec = np.asarray(sources.get("recombination", 0.0), dtype=float) * dt
-        anode = np.asarray(sources.get("anode", 0.0), dtype=float) * dt
-        cath = np.asarray(sources.get("cathode_face", 0.0), dtype=float) * dt
-        coll = np.asarray(sources.get("collector_face", 0.0), dtype=float) * dt
+        # --- external source ledger (counted particles this update). The two
+        # recycle channels are absent here: they entered through the march as
+        # face inflows above, which is the whole point of the K2d rework.
         if puff.ndim:
             # Registered channel 5: the puff is born as a 300 K Maxwellian
             # at rest -- the zero-momentum convention, as a distribution.
@@ -674,23 +804,6 @@ class TransientDVM:
             f_c += (rec * inv_vc)[:, None, None] * M_i
         if anode.ndim:
             f_c += (anode * inv_vc)[:, None, None] * self.M_wall[None, :, :]
-        # The wall return is born at the surface it came off, into the plasma:
-        # a half-flux spectrum off the hot cathode disc pointing +z, and off
-        # the room-temperature collector pointing -z.
-        cath_spec = g.half_flux_spectrum(T_s_K, +1)
-        coll_spec = g.half_flux_spectrum(self.T_wall_K, -1)
-        if cath.ndim:
-            f_c += (cath * inv_vc)[:, None, None] * cath_spec
-        elif cath:
-            f_c[self.cath_cell] += (
-                float(cath) * inv_vc[self.cath_cell] * cath_spec
-            )
-        if coll.ndim:
-            f_c += (coll * inv_vc)[:, None, None] * coll_spec
-        elif coll:
-            f_c[self.coll_cell] += (
-                float(coll) * inv_vc[self.coll_cell] * coll_spec
-            )
 
         # --- end walls: pump what sticks, buffer what returns
         out_L = float(out[("c", -1)].sum() + out[("a", -1)].sum())
