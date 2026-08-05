@@ -162,6 +162,37 @@ def cathode_adjacent_cells(geometry):
     return geometry.cathode_cell_indices
 
 
+def absorbing_live_cells_by_role(geometry):
+    """Return ``{role: (cell, ...)}`` for the plasma-absorbing faces.
+
+    The key of each entry is the ``cell_role`` of the LIVE cell against an
+    absorbing face -- ``"cathode"`` and ``"collector"`` on a single-cathode
+    machine, ``"cathode"`` twice on a twin. The value is the tuple of those
+    live cell indices, in face order.
+
+    This is the topology any consumer of a per-surface boundary quantity needs:
+    the live cell is where the boundary term books its removal and its neutral
+    return, and it is NOT at a fixed offset from the array ends. An
+    obstruction cell (``Lcs > 0``) pushes the cathode's live cell one further
+    in, so a positional constant reads a plasma-dead cell and silently returns
+    zero. Resolve the role instead.
+    """
+    roles = np.asarray(geometry.cell_role)
+    absorbing = np.asarray(
+        getattr(geometry, "plasma_absorbing", np.zeros(0)), dtype=bool
+    )
+    live_cells = np.asarray(
+        getattr(geometry, "plasma_face_live_cell", np.zeros(0)), dtype=int
+    )
+    by_role = {}
+    for face in np.flatnonzero(absorbing):
+        live = int(live_cells[int(face)])
+        if live < 0:
+            continue
+        by_role.setdefault(str(roles[live]), []).append(live)
+    return {role: tuple(cells) for role, cells in by_role.items()}
+
+
 def anode_flanking_cells(geometry):
     """Return ``(gap_side, column_side)`` cell pairs flanking each anode face.
 

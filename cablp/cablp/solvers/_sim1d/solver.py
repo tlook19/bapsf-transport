@@ -16,6 +16,7 @@ from .core.config import (
 )
 from .core.geometry import (
     _anode_neutral_transparency,
+    absorbing_live_cells_by_role,
     build_geometry,
     is_plenum_cell,
     puff_cell_indices,
@@ -680,6 +681,11 @@ class LAPDSim1D:
                 "neutral_model must be 'moment', 'kinetic' or 'kinetic_dvm' "
                 f"(got {self._neutral_model!r})"
             )
+        # Live cells against the plasma-terminating surfaces, by role: where the
+        # active boundary term books its removal, and so where the kinetic arms'
+        # wall-return channels must be read and deposited. Run-constant
+        # topology, resolved once (see absorbing_live_cells_by_role).
+        self._recycle_cells = absorbing_live_cells_by_role(self._geometry)
         if self._neutral_model == "kinetic":
             if not self._neutral_two_zone:
                 raise ValueError(
@@ -6662,11 +6668,38 @@ class LAPDSim1D:
         so the kinetic targets track source transients continuously --
         the recycle channels collapse WITH the plasma, which is what
         removes the afterglow flood.
+
+        The wall-return channels are read from the boundary term that is
+        ACTUALLY removing the plasma in this stance -- the R3.1 characteristic
+        ghost-cell flux when ``characteristic_boundary`` is on, the legacy
+        volumetric absorber when it is off -- and from its own live cells,
+        resolved by role. Both halves matter: the two operators disagree face
+        by face (they are different discretizations of the same surface), and
+        the recycled quantity IS the ``nn`` row the fluid path would have
+        applied itself had the arm not superseded it, so what the arm re-injects
+        equals what the boundary removed, per face, to roundoff.
+
+        ``cath``/``coll`` are the per-surface totals (the kinetic steady arm
+        needs a magnitude per channel); ``cath_cells``/``coll_cells`` place
+        the same particles on the grid, which is what the transient arm
+        deposits into.
         """
         geometry = self._geometry
         V_col, V_ann = self._zone_volumes
-        ba = self.boundary_absorption_rhs(state=state)
-        recycle = np.clip(ba.nn, 0.0, None) * V_col
+        boundary = (
+            self.characteristic_boundary_rhs(state=state)
+            if self._characteristic_boundary
+            else self.boundary_absorption_rhs(state=state)
+        )
+        recycle = np.clip(boundary.nn, 0.0, None) * V_col
+        cath_cells = np.zeros(geometry.cells)
+        coll_cells = np.zeros(geometry.cells)
+        for role, target in (
+            ("cathode", cath_cells),
+            ("collector", coll_cells),
+        ):
+            for cell in self._recycle_cells.get(role, ()):
+                target[cell] = recycle[cell]
         reaction_terms = self.reaction_rhs_terms(state=state)
         rec_cells = np.clip(
             reaction_terms["recombination_rad_loss"].nn
@@ -6691,8 +6724,10 @@ class LAPDSim1D:
                 throw_cm=src_kwargs["gas_puff_throw_cm"],
             ) * np.asarray(geometry.neutral_volume_cm3, dtype=float)
         return {
-            "cath": float(recycle[0] + recycle[1]),
-            "coll": float(recycle[-1]),
+            "cath": float(np.sum(cath_cells)),
+            "coll": float(np.sum(coll_cells)),
+            "cath_cells": cath_cells,
+            "coll_cells": coll_cells,
             "puff": puff_cells,
             "rec": rec_cells,
             "anode": an_gain,
@@ -6979,8 +7014,11 @@ class LAPDSim1D:
             "puff": np.asarray(rates["puff"], dtype=float),
             "recombination": np.asarray(rates["rec"], dtype=float),
             "anode": np.asarray(rates["anode"], dtype=float),
-            "cathode_face": float(rates["cath"]),
-            "collector_face": float(rates["coll"]),
+            # Per-cell, not a scalar: the wall return belongs in the cell the
+            # boundary term drained, which is not an end cell once an
+            # obstruction sits behind the cathode.
+            "cathode_face": np.asarray(rates["cath_cells"], dtype=float),
+            "collector_face": np.asarray(rates["coll_cells"], dtype=float),
         }
         self._dvm.update(
             float(dt_neutral),

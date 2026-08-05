@@ -62,6 +62,7 @@ from cablp.funcs._cross import (
     phelps_he_isotropic_cm2,
 )
 
+from ..core.geometry import absorbing_live_cells_by_role
 from .kinetic_neutrals import EV, KB, M_HE, T_WALL_K, VGrid
 from .neutrals import neutral_zone_volumes
 
@@ -234,6 +235,20 @@ class TransientDVM:
         # free-molecular choice. Both ends are open (the pumped faces).
         self.face_c = _throat_areas(self.A_col)
         self.face_a = _throat_areas(self.A_ann)
+        # Where a SCALAR cathode/collector wall return is deposited. A typed
+        # geometry resolves it by role, because the live cell against the
+        # cathode surface is not the first cell whenever something sits behind
+        # the cathode (a plenum always does; an obstruction adds another). The
+        # synthetic tubes the gate suite builds carry no roles at all: there
+        # the ends ARE the surfaces, which is the fallback.
+        self.cath_cell = 0
+        self.coll_cell = self.nz - 1
+        if getattr(geometry, "cell_role", None) is not None:
+            by_role = absorbing_live_cells_by_role(geometry)
+            if by_role.get("cathode"):
+                self.cath_cell = int(by_role["cathode"][0])
+            if by_role.get("collector"):
+                self.coll_cell = int(by_role["collector"][0])
         Rp = np.asarray(geometry.Rp_cm, dtype=float)
         Rm = np.asarray(geometry.Rm_cm, dtype=float)
 
@@ -559,7 +574,8 @@ class TransientDVM:
         remove and create the same particles. ``sources`` holds the
         external ledger in atoms/s: ``puff`` (annulus cells),
         ``recombination`` (column cells), ``cathode_face`` /
-        ``collector_face`` (scalars, column ends), ``anode`` (column
+        ``collector_face`` (column cells, or a scalar deposited at the
+        role-resolved ``cath_cell`` / ``coll_cell``), ``anode`` (column
         cells). ``T_s_K`` is the live cathode-surface temperature used for
         the cathode-adjacent surfaces (the stated special case); the wall
         temperature is used everywhere else.
@@ -648,8 +664,8 @@ class TransientDVM:
         puff = np.asarray(sources.get("puff", 0.0), dtype=float) * dt
         rec = np.asarray(sources.get("recombination", 0.0), dtype=float) * dt
         anode = np.asarray(sources.get("anode", 0.0), dtype=float) * dt
-        cath = float(sources.get("cathode_face", 0.0)) * dt
-        coll = float(sources.get("collector_face", 0.0)) * dt
+        cath = np.asarray(sources.get("cathode_face", 0.0), dtype=float) * dt
+        coll = np.asarray(sources.get("collector_face", 0.0), dtype=float) * dt
         if puff.ndim:
             # Registered channel 5: the puff is born as a 300 K Maxwellian
             # at rest -- the zero-momentum convention, as a distribution.
@@ -658,11 +674,22 @@ class TransientDVM:
             f_c += (rec * inv_vc)[:, None, None] * M_i
         if anode.ndim:
             f_c += (anode * inv_vc)[:, None, None] * self.M_wall[None, :, :]
-        if cath:
-            f_c[0] += cath * inv_vc[0] * g.half_flux_spectrum(T_s_K, +1)
-        if coll:
-            f_c[-1] += coll * inv_vc[-1] * g.half_flux_spectrum(
-                self.T_wall_K, -1
+        # The wall return is born at the surface it came off, into the plasma:
+        # a half-flux spectrum off the hot cathode disc pointing +z, and off
+        # the room-temperature collector pointing -z.
+        cath_spec = g.half_flux_spectrum(T_s_K, +1)
+        coll_spec = g.half_flux_spectrum(self.T_wall_K, -1)
+        if cath.ndim:
+            f_c += (cath * inv_vc)[:, None, None] * cath_spec
+        elif cath:
+            f_c[self.cath_cell] += (
+                float(cath) * inv_vc[self.cath_cell] * cath_spec
+            )
+        if coll.ndim:
+            f_c += (coll * inv_vc)[:, None, None] * coll_spec
+        elif coll:
+            f_c[self.coll_cell] += (
+                float(coll) * inv_vc[self.coll_cell] * coll_spec
             )
 
         # --- end walls: pump what sticks, buffer what returns
@@ -719,8 +746,8 @@ class TransientDVM:
             "birth_end_return_R": birth_return_R,
             "birth_puff": float(puff.sum()),
             "birth_recombination": float(rec.sum()),
-            "birth_cathode_face": cath,
-            "birth_collector_face": coll,
+            "birth_cathode_face": float(cath.sum()),
+            "birth_collector_face": float(coll.sum()),
             "birth_anode": float(anode.sum()),
         }
         self.last_ledger = ledger
