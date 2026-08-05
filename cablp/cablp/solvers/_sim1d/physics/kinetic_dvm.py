@@ -9,8 +9,11 @@ steady state, this module carries accepted-state distributions
 
 and advances them ONE step per neutral-clock tick with the same implicit
 upwind march, the same sinh-stretched shared ``VGrid``, the same
-moment-exact Maxwellian projection, the same cosine-wall re-emission
-spectrum and the same Cauchy-chord zone rates. Nothing here is a second
+moment-exact Maxwellian projection and the same cosine-wall re-emission
+spectrum. The zone rates are the one place this module offers a choice:
+``exchange_model`` selects between that same Cauchy-chord form and a
+geometrically derived one (see :class:`TransientDVM`), and it defaults to
+the Cauchy-chord form. Nothing here is a second
 implementation of the velocity grid or of the transport sweep -- the
 operators are imported or transcribed from that module so the offline
 instruments and the in-solver arm keep agreeing on inputs.
