@@ -1,7 +1,8 @@
 """Step-1 scoping for the cathode neutral-jet hypothesis.
 
-Reads the saved M5a' reference matrices (no physics change, no model import)
-and computes, per ladder rung:
+Reads the saved M5a' reference matrices (no physics change; the only model
+import is the run-constant topology helper that resolves which cell a boundary
+face books into) and computes, per ladder rung:
 
   (b) recycle flux vs puff; the jet velocity per channel -- fast backscatter
       v_back = sqrt(2 R_E (phi_c + Ti) / m) with (R_N, R_E) literature-BOXED
@@ -37,9 +38,25 @@ Usage:
 """
 
 import json
+import sys
+from pathlib import Path
 
 import h5py
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from mc_neutrals import (  # noqa: E402
+    BOUNDARY_ROWS,
+    assert_recycle_channel_live,
+    boundary_recycle_row,
+)
+
+from cablp.solvers._sim1d.core.geometry import (  # noqa: E402
+    absorbing_live_cells_by_role,
+    build_geometry,
+)
 
 E_CHARGE = 1.602176634e-19        # C
 EV_TO_ERG = 1.602176634e-12
@@ -99,11 +116,36 @@ def scope_one(path):
 
         Ti_cath = float(np.mean(f["Ti"][:, cathode_cell][mask]))  # eV
 
-        # Recycle flux cross-check: boundary_absorption's neutral gain at the
-        # cathode cell [1/cm^3/s] * neutral volume -> atoms/s.
-        ba_nn = f["rhs_terms/boundary_absorption/nn"]
-        ba_gain = np.asarray(ba_nn[:, cathode_cell])[mask] * Vm[cathode_cell]
+        # Recycle flux cross-check: the boundary term's neutral gain at the
+        # cathode face's LIVE cell [1/cm^3/s] * neutral volume -> atoms/s.
+        # Which row carries it is stance-dependent (boundary_recycle_row); the
+        # live cell is resolved by role, not by position, because an
+        # obstruction cell displaces it inward.
+        row, stance = boundary_recycle_row(f)
+        params = json.loads(f.attrs["params_json"])
+        raw_flags = f.attrs.get("flags_json")
+        flags = json.loads(raw_flags) if raw_flags is not None else {}
+        by_role = absorbing_live_cells_by_role(build_geometry(params, flags))
+        recycle_cell = (
+            int(by_role["cathode"][0]) if "cathode" in by_role else cathode_cell
+        )
+        ba_nn = f[f"rhs_terms/{row}/nn"]
+        ba_gain = np.asarray(ba_nn[:, recycle_cell])[mask] * Vm[recycle_cell]
         recycle_ba = float(np.mean(ba_gain))
+        removal_any = sum(
+            -np.mean(np.asarray(f[f"rhs_terms/{name}/n"][:, recycle_cell])[mask])
+            * Vp[recycle_cell]
+            for name in BOUNDARY_ROWS
+            if f"rhs_terms/{name}/n" in f
+        )
+        assert_recycle_channel_live(
+            recycle_ba,
+            removal_any,
+            row=row,
+            stance=stance,
+            path=str(path),
+            window_ms=PLATEAU_MS,
+        )
 
         # Puff rate: positive part of neutral_sources' nn term (puff source;
         # the pump sink is the negative part), volume-integrated.
