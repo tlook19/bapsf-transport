@@ -68,6 +68,13 @@ Gates:
   L5  wall flux balance: incident == accommodated + reflected exactly, at
       the cylindrical wall and at both end walls, for any accommodation
 
+The conservation and antisymmetry gates (I1, I2, I4, I5, C1, C2, C3, C4) are
+statements about the OPERATOR, not about the rate values it is handed, so the
+suite runs them once per value of ``neutral_kinetic_dvm_exchange`` -- the same
+gate functions at the same tolerances, with only the closure rebound. The
+default-off, refusal and limit-case gates are about the shipped default and
+run once.
+
 Artifacts: this script writes nothing. The transcript is the artifact; the
 caller redirects it (``k2_dvm_verify.txt`` by campaign convention).
 
@@ -87,6 +94,7 @@ from cablp.funcs._cross import (
 from cablp.solvers._sim1d import LAPDSim1D, default_config
 from cablp.solvers._sim1d.physics.kinetic_dvm import (
     ELASTIC_BGK_MOMENTUM_FACTOR,
+    EXCHANGE_MODELS,
     LEDGER_BIRTH_CHANNELS,
     LEDGER_EXTERNAL_BIRTHS,
     LEDGER_LOSS_CHANNELS,
@@ -98,6 +106,14 @@ from cablp.solvers._sim1d.physics.neutrals import neutral_zone_volumes
 
 CADENCE_S = 2.5e-5
 ROUNDOFF_REL = 1.0e-12
+
+# Which zone-exchange closure the gates below build. The conservation and
+# antisymmetry statements are properties of the OPERATOR, not of the rate
+# values it is handed, so every gate that makes one is run once per selector
+# value; ``main`` rebinds this between the two passes. Everything else (the
+# default-off, refusal and limit-case gates) runs on the shipped default only,
+# which is what those gates are about.
+EXCHANGE_MODEL = "cauchy_chord"
 
 # Closed form of <sigma_iso v_rel>: the Phelps isotropic cross section is
 # 7.63e-20 E^-0.5 m^2 with E = m g^2 / (4 eV) the equal-mass relative
@@ -117,6 +133,7 @@ def arm_config(**overrides):
     fl["neutral_two_zone"] = True
     d["neutral_model"] = "kinetic_dvm"
     d["neutral_kinetic_dvm_cadence_s"] = CADENCE_S
+    d["neutral_kinetic_dvm_exchange"] = EXCHANGE_MODEL
     for key, value in overrides.items():
         if key in fl or key.startswith("flag:"):
             fl[key.removeprefix("flag:")] = value
@@ -173,6 +190,7 @@ def uniform_tube(nz, length_cm=1600.0, Rp=15.0, Rm=50.0):
 
 def bare_dvm(nz=12, nvz=16, nvp=6, **kwargs):
     """Build a standalone DVM on the uniform straight tube."""
+    kwargs.setdefault("exchange_model", EXCHANGE_MODEL)
     return TransientDVM(geometry=uniform_tube(nz), nvz=nvz, nvp=nvp, **kwargs)
 
 
@@ -342,7 +360,10 @@ def geometry_closure(geom, label):
     engine, not a stripped one.
     """
     nz = int(np.asarray(geom.length_cm).size)
-    dvm = TransientDVM(geometry=geom, nvz=16, nvp=6, s_L=0.3, s_R=0.3)
+    dvm = TransientDVM(
+        geometry=geom, nvz=16, nvp=6, s_L=0.3, s_R=0.3,
+        exchange_model=EXCHANGE_MODEL,
+    )
     seed_ann = np.where(dvm.V_ann > 0.0, 1.0e13, 0.0)
     dvm.seed_from_density(np.full(nz, 1.0e13), seed_ann)
     plasma = geometry_plasma(nz)
@@ -877,6 +898,15 @@ REFUSALS = (
         "nvz",
         lambda d, fl: (d.__setitem__("neutral_kinetic_dvm_nvz", 47), None)[1],
     ),
+    (
+        "G11 unknown zone-exchange closure refused",
+        dict(),
+        "neutral_kinetic_dvm_exchange",
+        lambda d, fl: (
+            d.__setitem__("neutral_kinetic_dvm_exchange", "cauchy"),
+            None,
+        )[1],
+    ),
 )
 
 
@@ -1150,6 +1180,16 @@ def gate_l5():
 # ------------------------------------------------------------------ main
 
 
+# The conservation and antisymmetry gates. Each is a statement about the
+# OPERATOR -- that substep B creates exactly what substep A destroyed, that the
+# fluid gain is minus the kinetic moment, that the zone channel moves particles
+# without making any -- so it must hold whatever rate values the exchange
+# closure hands the march. These are re-run once per value of
+# ``neutral_kinetic_dvm_exchange``.
+CONSERVATION_GATES = ("gate_i1", "gate_i2", "gate_i4", "gate_i5",
+                      "gate_c1", "gate_c2", "gate_c3", "gate_c4")
+
+
 def main():
     gates = [
         gate_i1,
@@ -1177,6 +1217,7 @@ def main():
     print("=" * 78)
     print(f"accepted command line: {' '.join(sys.argv)}")
     print(f"neutral clock cadence under test: {CADENCE_S} s (PROVISIONAL)")
+    print(f"zone-exchange closure of the main pass: {EXCHANGE_MODEL!r}")
     print("=" * 78)
     all_ok = True
     for g in gates:
@@ -1184,9 +1225,40 @@ def main():
         all_ok = all_ok and ok
         print(f"[{'PASS' if ok else 'FAIL'}] {name}")
         print(f"        {detail}")
+    all_ok = run_exchange_pass(EXCHANGE_MODELS, gates) and all_ok
     print("=" * 78)
     print("K2a DVM gates:", "ALL PASS" if all_ok else "FAILURES PRESENT")
     return 0 if all_ok else 1
+
+
+def run_exchange_pass(models, gates):
+    """Re-run the conservation/antisymmetry gates under the other closures.
+
+    Same gate functions, same tolerances -- only the module-level
+    ``EXCHANGE_MODEL`` the three construction sites read is rebound, so the
+    second pass cannot drift from the first.
+    """
+    global EXCHANGE_MODEL
+    by_name = {g.__name__: g for g in gates if hasattr(g, "__name__")}
+    subset = [by_name[n] for n in CONSERVATION_GATES if n in by_name]
+    ok_all = True
+    original = EXCHANGE_MODEL
+    for model in models:
+        if model == original:
+            continue
+        print("-" * 78)
+        print(f"conservation/antisymmetry gates re-run under "
+              f"neutral_kinetic_dvm_exchange = {model!r}")
+        EXCHANGE_MODEL = model
+        try:
+            for g in subset:
+                name, ok, detail = g()
+                ok_all = ok_all and ok
+                print(f"[{'PASS' if ok else 'FAIL'}] [{model}] {name}")
+                print(f"        {detail}")
+        finally:
+            EXCHANGE_MODEL = original
+    return ok_all
 
 
 if __name__ == "__main__":

@@ -9,8 +9,11 @@ steady state, this module carries accepted-state distributions
 
 and advances them ONE step per neutral-clock tick with the same implicit
 upwind march, the same sinh-stretched shared ``VGrid``, the same
-moment-exact Maxwellian projection, the same cosine-wall re-emission
-spectrum and the same Cauchy-chord zone rates. Nothing here is a second
+moment-exact Maxwellian projection and the same cosine-wall re-emission
+spectrum. The zone rates are the one place this module offers a choice:
+``exchange_model`` selects between that same Cauchy-chord form and a
+geometrically derived one (see :class:`TransientDVM`), and it defaults to
+the Cauchy-chord form. Nothing here is a second
 implementation of the velocity grid or of the transport sweep -- the
 operators are imported or transcribed from that module so the offline
 instruments and the in-solver arm keep agreeing on inputs.
@@ -64,6 +67,14 @@ from .neutrals import neutral_zone_volumes
 
 
 ELASTIC_MODELS = ("phelps_iso", "off")
+
+# Column<->annulus zone-exchange closures. Both are algebraic rates on the
+# same (cell, v_perp) index and both impose the antisymmetry through the
+# actual geometry volumes; they differ in the mean chord and in how one
+# surface encounter is split between the two cylinders. See
+# ``TransientDVM`` for the expressions and
+# ``scripts/k2_dvm_exchange_measured.txt`` for the measurement.
+EXCHANGE_MODELS = ("cauchy_chord", "geometric")
 
 # Rate factor on the isotropic-elastic BGK channel. A full-replacement event
 # transfers m (v - u_i), which is twice the isotropic angular average
@@ -134,6 +145,38 @@ class TransientDVM:
     and the fluid operator's momentum-transfer cross section is
     ``Qi + 2 Qb``; carrying only ``Qb`` would silently drop the ``Qi``
     half.
+
+    ``exchange_model`` selects the column<->annulus zone-exchange closure,
+    i.e. the per-``(cell, v_perp)`` frequencies at which a neutral crosses
+    ``r = Rp`` in either direction and strikes ``r = Rm``:
+
+    ``"cauchy_chord"``
+        the three-dimensional Cauchy mean chord ``4V/S = 2 (Rm - Rp)``
+        evaluated at the perpendicular speed, with the encounter split
+        between the two cylinders as ``Rp/Rm : (1 - Rp/Rm)``::
+
+            nu_total = vp / (2 (Rm - Rp))
+            nu_a->c  = (Rp/Rm) nu_total        nu_a->wall = (1 - Rp/Rm) nu_total
+
+    ``"geometric"``
+        the mean chord of the cell CROSS-SECTION, ``pi A / P``, since the
+        crossings of two coaxial cylinders are decided entirely by the
+        motion in the ``(x, y)`` plane, with the encounter split between
+        the two circles in proportion to their PERIMETERS::
+
+            nu_total = 2 vp / (pi (Rm - Rp))
+            nu_a->c  = 2 vp Rp / (pi (Rm^2 - Rp^2))
+            nu_a->wall = 2 vp Rm / (pi (Rm^2 - Rp^2))
+            nu_c->a  = 2 vp / (pi Rp)
+
+        Averaged over a Maxwellian this ``nu_c->a`` is ``vbar / (2 Rp)``,
+        the free-molecular column loss rate the fluid arm's
+        :func:`~cablp.solvers._sim1d.physics.neutrals.neutral_zone_exchange_conductance`
+        carries.
+
+    Both branches impose ``V_col nu_c->a == V_ann nu_a->c`` through the
+    actual cell volumes, so the ledger's zone channel cancels exactly
+    either way. Any other value raises.
     """
 
     def __init__(
@@ -144,6 +187,7 @@ class TransientDVM:
         nvp=12,
         accommodation=1.0,
         elastic_model="phelps_iso",
+        exchange_model="cauchy_chord",
         transparency=1.0,
         mesh_face=-999,
         s_L=0.0,
@@ -159,8 +203,14 @@ class TransientDVM:
                 f"elastic_model must be one of {ELASTIC_MODELS} "
                 f"(got {elastic_model!r})"
             )
+        if exchange_model not in EXCHANGE_MODELS:
+            raise ValueError(
+                f"exchange_model must be one of {EXCHANGE_MODELS} "
+                f"(got {exchange_model!r})"
+            )
         self.accommodation = float(accommodation)
         self.elastic_model = str(elastic_model)
+        self.exchange_model = str(exchange_model)
         self.T_wall_K = float(T_wall_K)
         self.transparency = float(transparency)
         self.mesh_face = int(mesh_face)
@@ -207,19 +257,28 @@ class TransientDVM:
         # zero at half-offsets, so the mirror is a pure index reversal).
         self.mirror = np.arange(g.nvz)[::-1]
 
-        # Cauchy-chord zone rates, transcribed from KN2Zone's default
-        # branch, with the column<->annulus antisymmetry imposed through
-        # the ACTUAL geometry volumes so that
+        # Zone rates, with the column<->annulus antisymmetry imposed
+        # through the ACTUAL geometry volumes so that
         #     V_col * nu_x  ==  V_ann * nu_xp
         # holds to roundoff cell by cell (the particle ledger's zone
-        # channel cancels exactly, which the ledger gate checks).
+        # channel cancels exactly, which the ledger gate checks). Only the
+        # mean chord and the surface split differ between the branches.
         vp = g.vp[None, :]
         Rp2 = Rp[:, None]
         Rm2 = Rm[:, None]
         gap = np.maximum(Rm2 - Rp2, 1e-9)
-        nu_total = vp / (2.0 * gap)
-        self.nuxp = (Rp2 / Rm2) * nu_total
-        self.nuw = (1.0 - Rp2 / Rm2) * nu_total
+        if self.exchange_model == "geometric":
+            # 2D Cauchy chord pi A / P on the cell cross-section; the
+            # encounter splits between the two circles by perimeter.
+            nu_total = 2.0 * vp / (np.pi * gap)
+            self.nuxp = (Rp2 / (Rp2 + Rm2)) * nu_total
+            self.nuw = (Rm2 / (Rp2 + Rm2)) * nu_total
+        else:
+            # Cauchy-chord branch, transcribed from KN2Zone's default:
+            # the 3D chord 4V/S = 2 gap, split as Rp/Rm : 1 - Rp/Rm.
+            nu_total = vp / (2.0 * gap)
+            self.nuxp = (Rp2 / Rm2) * nu_total
+            self.nuw = (1.0 - Rp2 / Rm2) * nu_total
         ratio = np.where(
             self.V_col > 0.0, self.V_ann / np.maximum(self.V_col, 1e-300), 0.0
         )

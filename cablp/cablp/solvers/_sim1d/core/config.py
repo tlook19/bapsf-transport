@@ -634,6 +634,26 @@ def model_mode_defaults():
         operator's momentum-transfer cross section is ``Qi + 2 Qb``, so
         ``"off"`` deliberately omits the ``Qi`` half. Any other value raises
         at construction.
+    neutral_kinetic_dvm_exchange:
+        Column/annulus zone-exchange closure of the transient DVM: the
+        per-``(cell, v_perp)`` frequencies at which a neutral crosses
+        ``r = Rp`` in either direction and strikes the vessel wall at
+        ``r = Rm``. ``"cauchy_chord"`` uses the three-dimensional Cauchy
+        mean chord ``4V/S = 2 (Rm - Rp)`` at the perpendicular speed and
+        splits one surface encounter between the two cylinders as
+        ``Rp/Rm : (1 - Rp/Rm)``. ``"geometric"`` uses the mean chord of the
+        cell CROSS-SECTION, ``pi A / P = pi (Rm - Rp) / 2`` -- the crossings
+        of two coaxial cylinders are decided entirely by the motion in the
+        ``(x, y)`` plane, so the chord is a planar one -- and splits the
+        encounter between the two circles in proportion to their
+        PERIMETERS, giving ``nu_a->c = 2 vp Rp / (pi (Rm^2 - Rp^2))``,
+        ``nu_a->wall = 2 vp Rm / (pi (Rm^2 - Rp^2))`` and
+        ``nu_c->a = 2 vp / (pi Rp)``, the last of which averages over a
+        Maxwellian to the free-molecular ``vbar / (2 Rp)`` the fluid arm's
+        zone-exchange conductance already carries. Both branches impose
+        ``V_col nu_c->a == V_ann nu_a->c`` on the actual cell volumes, so
+        the particle ledger's zone channel cancels exactly either way. Any
+        other value raises at construction.
     neutral_kinetic_dvm_tn_feedback:
         Whether the DVM's measured neutral temperature ``Tn(z)`` FEEDS the
         fluid evaluations that otherwise assume a fixed cold gas. The
@@ -739,6 +759,7 @@ def model_mode_defaults():
         "neutral_kinetic_dvm_nvp": 12,
         "neutral_kinetic_dvm_accommodation": 1.0,
         "neutral_kinetic_dvm_elastic": "phelps_iso",
+        "neutral_kinetic_dvm_exchange": "cauchy_chord",
         "neutral_kinetic_dvm_tn_feedback": False,
         # Bucket-2 default-off closure instrument (low-Te ADAS extension; only
         # active with icool_recomb, sub-0.2 eV):
