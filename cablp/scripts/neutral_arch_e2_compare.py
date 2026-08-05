@@ -2337,8 +2337,19 @@ def write_summary(path, args, shared, bg, summary, cx_table, dt_note, dt_band,
         f"Background `{Path(args.run).name}`, plateau window "
         f"{args.window[0]}-{args.window[1]} ms, nz={shared['nz']}, velocity "
         f"grid {args.nvz}x{args.nvp}, DVM neutral clock "
-        f"dt={args.dvm_dt:.4g} s. Schedule: sources ON from an empty vessel "
-        f"over 0-{1e3 * shared['t_switch']:.2f} ms (transient), OFF over "
+        f"dt={args.dvm_dt:.4g} s. Both arms start from the same initial "
+        f"state: "
+        + (
+            "the background's own saved two-zone neutral profile "
+            f"({float((shared['seed_col'] * shared['V_col']).sum()):.4g} "
+            f"column + "
+            f"{float((shared['seed_ann'] * shared['V_ann']).sum()):.4g} "
+            "annulus atoms), laid down as a 300 K Maxwellian at rest"
+            if float(np.sum(shared["seed_col"])) > 0.0
+            else "an empty vessel"
+        )
+        + f". Schedule: sources ON over 0-{1e3 * shared['t_switch']:.2f} ms "
+        f"(transient), OFF over "
         f"{1e3 * shared['t_switch']:.2f}-{1e3 * shared['t_end']:.2f} ms "
         f"(relaxation); {shared['nbin']} report bins of "
         f"{1e3 * shared['bin_s']:.2f} ms. Reference: transient full-particle "
@@ -2454,14 +2465,26 @@ def write_summary(path, args, shared, bg, summary, cx_table, dt_note, dt_band,
     fr = [r["P_fluid"] / r["P_mc"] for r in cx_table if r["P_mc"]]
     kr = [r["kcx_dvm"] / r["kcx_mc"] for r in cx_table if r["kcx_mc"]]
     dfr = [r["P_dvm"] / r["P_fluid"] for r in cx_table if r["P_fluid"]]
-    er = [r["Etot_dvm"] / r["Etot_mc"] for r in cx_table if r["Etot_mc"]]
+    cold = [r for r in cx_table if "Tn=300K" in r["label"]]
+    er = [r["Etot_dvm"] / r["Etot_mc"] for r in cold if r["Etot_mc"]]
+    eir = [r["E_dvm"] / r["E_mc"] for r in cold if r["E_mc"]]
     if pr:
         L.append(
             f"Range over the states measured: `C_P` DVM/MC "
             f"{min(pr):.4f} to {max(pr):.4f}; fluid/MC {min(fr):.4f} to "
             f"{max(fr):.4f}; DVM/fluid {min(dfr):.4f} to {max(dfr):.4f}; "
-            f"`k_cx` DVM/MC {min(kr):.4f} to {max(kr):.4f}; total "
-            f"kinetic-energy moment DVM/MC {min(er):.4f} to {max(er):.4f}."
+            f"`k_cx` DVM/MC {min(kr):.4f} to {max(kr):.4f}."
+        )
+        L.append("")
+        L.append(
+            f"Energy ranges are quoted over the `Tn=300K` states only: "
+            f"`C_Ei` DVM/MC {min(eir):.4f} to {max(eir):.4f}, total "
+            f"kinetic-energy moment DVM/MC {min(er):.4f} to {max(er):.4f}. "
+            f"At `Tn=Ti` the neutral and ion populations are at the same "
+            f"temperature and the drift is small, so both energy moments are "
+            f"a near cancellation of much larger terms; their ratios in the "
+            f"table above are ratios of residuals, not fractional errors, and "
+            f"the momentum channel is the readable statement there."
         )
     L.append("")
     if sampling_note:
