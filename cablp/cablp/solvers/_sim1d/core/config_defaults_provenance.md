@@ -390,6 +390,28 @@ round-off), while every healthy drained cell sampled across drive and afterglow
 sits at >= ~2e1 relative. 1e-3 splits those scales by more than two decades on
 each side; physically it means Te within 0.1% of `Te_floor`.
 
+**`dt_min_lock_max_steps = 250000` — DERIVED from a census of saved runs.**
+Memo: `scripts/dtmin_census_runlengths.txt` (2026-08-05). All 209 result h5
+files then present in `cablp/scripts/` were scanned for the per-step
+`active_constraint` label, which under the pre-2026-08-05 semantics read
+`"dt_min"` on exactly the steps that were clamped. 80 files clamp at least
+once, and the two populations separate cleanly on CONSECUTIVENESS:
+
+- self-releasing episodes (79 files), median run length 1–2 steps, with the
+  longest at **23296 consecutive steps** in `es1_r5_hflim01_exp2.h5` (t =
+  2.002–2.005 ms, `dt_surface_loss` small but strictly positive throughout).
+  That run released, completed, and was scored;
+- one permanent lock, `es1_r5_f01_ag26ms.h5`: a run of 36690 steps still open
+  at the last recorded step, with `dt_surface_loss` exactly `0.0` on 1446 of
+  them, truncated at 22.3 ms against a 26.0 ms target.
+
+The pre-registered rule was **≥ 10× the longest run in any completed
+(non-pathological) run**, i.e. ≥ 232960; 250000 is the round number above it.
+The margin buys immunity for the known-good family: since the guard is
+default-ON, aborting a healthy arm would be the worse failure, and a genuine
+lock is unbounded by construction so a large threshold costs only detection
+latency, never detection itself.
+
 The remaining timestep parameters (`cfl`, the `*_dt_fraction` limits, growth
 and retry factors) are ASSUMED numerical-control values with no measurement
 behind them.

@@ -320,7 +320,9 @@ def trace(variant, nx, out_h5, cached_path=None):
     """Run the ES config to completion with progress, save H5.
 
     Decisive end-to-end test: does it ignite (phase -> main_discharge), how long,
-    and does dt crawl (watch active_constraint)? With ``cached_path`` the neutral
+    and does dt crawl (watch dt sitting at dt_min; since 2026-08-05
+    ``active_constraint`` names the bound responsible rather than reading
+    "dt_min")? With ``cached_path`` the neutral
     seed is loaded from cache (skips the ~20 s equilibration) -- also a
     correctness check that the cached-seed run matches the live-equilibration one.
     """

@@ -1734,6 +1734,21 @@ def timestep_defaults():
         Fractional thermal-energy change limit for heat/source estimates.
     dt_min:
         Minimum allowed timestep [s].
+    dt_min_lock_max_steps:
+        Maximum number of CONSECUTIVE adaptive steps whose timestep may be
+        clamped up to ``dt_min`` before ``run()`` raises RuntimeError. Guards
+        the dt_min lock: when a bound requests ``dt <= 0`` -- the signature of
+        a cell sitting ON a floor while a term still drains it -- the clamp
+        keeps the run alive at ``dt_min`` forever, so the run never finishes
+        and never reports why. Consecutiveness is the discriminator: clamp
+        episodes that release on their own are a normal, known-good family
+        and are not bounded by this key; only an unbroken run of clamped
+        steps is. The counter resets on the first unclamped step, and a
+        caller-supplied fixed ``dt`` is never counted (the clamp does not set
+        the step there, so such a run cannot lock). The raised error names the
+        true active constraint, what it asked for, and the cell closest to the
+        density floor. Must be a positive integer; anything else (zero,
+        negative, non-integer, NaN) raises ValueError at construction.
     dt_max:
         Maximum allowed timestep [s].
     max_steps:
@@ -1795,6 +1810,7 @@ def timestep_defaults():
         "neutral_dt_fraction": 0.25,
         "heat_dt_fraction": 0.25,
         "dt_min": 1e-10,
+        "dt_min_lock_max_steps": 250000,
         "dt_max": 1e-4,
         "max_steps": 0,
         "max_steps_action": "raise",

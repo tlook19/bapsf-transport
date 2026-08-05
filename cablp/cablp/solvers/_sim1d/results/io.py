@@ -14,6 +14,16 @@ from .compat import add_sim3_compat_aliases
 
 RESULT_VERSION = "sim1d-hdf5-v1"
 
+# LABEL-SEMANTICS BOUNDARY, 2026-08-05. ``diagnostics/active_constraint`` now
+# always names the bound that actually minimized. Files written BEFORE this
+# date instead carry the literal "dt_min" on every step whose timestep was
+# clamped up to ``dt_min``, overwriting the true bound's name. Those files are
+# historical records and are NOT migrated: a "dt_min" entry in one of them
+# means "this step was clamped, by an unrecorded bound". From this date the
+# clamp is carried by the separate ``clamped_to_dt_min`` flag (0.0/1.0)
+# alongside ``dt_raw``, the unclamped request. Both are defaulted fields, so
+# older files still load, reading 0.0 and NaN respectively.
+
 
 def _resolve_config_namespace(kind, supplied):
     """Resolve one namespace the way ``LAPDSim1D.__init__`` resolves it.

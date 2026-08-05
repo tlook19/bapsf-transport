@@ -39,6 +39,18 @@ class TimestepDiagnostics:
     # Defaulted so results written before the neutral wind existed still
     # load; inf whenever the state carries no M_n (the historical case).
     dt_neutral_wind: float = np.inf
+    # The dt_min clamp, recorded as a FACT ABOUT THE STEP rather than as a
+    # constraint name. ``active_constraint`` always names the bound that
+    # actually minimized; ``clamped_to_dt_min`` (0.0/1.0, the float-flag idiom
+    # used by the phase_* switches below) says whether that bound asked for
+    # less than dt_min and was clamped up to it, and ``dt_raw`` records what it
+    # asked for. ``dt_raw == 0.0`` is the drained floor-pinned signature from
+    # ``_negative_margin_timestep``: a cell sitting ON a floor while still
+    # draining, which is a modelling breakdown and not a timestep request.
+    # Defaulted so pre-2026-08-05 results still load (see results/io.py for the
+    # label-semantics boundary).
+    clamped_to_dt_min: float = 0.0
+    dt_raw: float = np.nan
     accepted_dt: float = np.nan
     step_cap: str = ""
     retry_count: int = 0
@@ -196,8 +208,11 @@ def suggest_timestep(
     }
     active_constraint, raw_dt = min(dt_candidates.items(), key=lambda item: item[1])
     dt = min(max(raw_dt, dt_min), dt_max)
-    if dt == dt_min and raw_dt < dt_min:
-        active_constraint = "dt_min"
+    # active_constraint keeps naming the bound that actually minimized. The
+    # clamp is recorded as a separate fact, because relabelling it "dt_min"
+    # hid the true bound exactly when a caller most needs it: a run pinned at
+    # dt_min reported only that it was pinned, never by what.
+    clamped_to_dt_min = dt == dt_min and raw_dt < dt_min
     return TimestepDiagnostics(
         dt=float(dt),
         dt_plasma_cfl=float(dt_candidates["plasma_cfl"]),
@@ -214,6 +229,8 @@ def suggest_timestep(
         dt_max=float(dt_max),
         active_constraint=active_constraint,
         dt_neutral_wind=float(dt_candidates["neutral_wind"]),
+        clamped_to_dt_min=float(clamped_to_dt_min),
+        dt_raw=float(raw_dt),
     )
 
 

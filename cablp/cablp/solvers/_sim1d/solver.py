@@ -796,6 +796,26 @@ class LAPDSim1D:
                 f"(got {_max_steps_action!r})"
             )
         self._max_steps_action = _max_steps_action
+        # Consecutive-clamp bound on the dt_min lock. Validated here, at
+        # construction, so a misconfigured guard cannot be discovered hours
+        # into a run.
+        _dt_min_lock_max_steps = self._input_dict.get(
+            "dt_min_lock_max_steps", 250000
+        )
+        try:
+            _dt_min_lock_value = float(_dt_min_lock_max_steps)
+        except (TypeError, ValueError):
+            _dt_min_lock_value = np.nan
+        if (
+            not np.isfinite(_dt_min_lock_value)
+            or _dt_min_lock_value != int(_dt_min_lock_value)
+            or _dt_min_lock_value <= 0.0
+        ):
+            raise ValueError(
+                "dt_min_lock_max_steps must be a positive integer number of "
+                f"consecutive clamped steps (got {_dt_min_lock_max_steps!r})"
+            )
+        self._dt_min_lock_max_steps = int(_dt_min_lock_value)
         self._neutral_momentum_radial = str(
             self._input_dict.get("neutral_momentum_radial", "uniform")
         )
@@ -3017,6 +3037,7 @@ class LAPDSim1D:
         force_progress = False
         steps = 0
         max_steps_stopped = False
+        consecutive_dt_min_clamps = 0
         while self._time < t_end - time_tol:
             if not unlimited_steps and steps >= max_steps:
                 if self._max_steps_action == "stop":
@@ -3034,6 +3055,21 @@ class LAPDSim1D:
                     else self._flags.get("implicit_heat_conduction", False)
                 )
             )
+            # dt_min lock guard. Only an ADAPTIVE step can be locked: with a
+            # caller-supplied dt the clamp does not set the step, so a fixed-dt
+            # run cannot crawl and is not counted. Consecutiveness is the
+            # discriminator -- self-releasing clamp episodes are a known-good
+            # family (see scripts/dtmin_census_runlengths.txt) and must not
+            # abort, while a genuine lock never releases.
+            if dt is None and diag.clamped_to_dt_min:
+                consecutive_dt_min_clamps += 1
+                if consecutive_dt_min_clamps > self._dt_min_lock_max_steps:
+                    raise self._dt_min_lock_error(
+                        diag=diag,
+                        consecutive=consecutive_dt_min_clamps,
+                    )
+            else:
+                consecutive_dt_min_clamps = 0
             step_dt = diag.dt if dt is None else float(dt)
             step_cap = diag.active_constraint if dt is None else "fixed_dt"
             if dt is None and dt_growth_enabled and previous_accepted_dt is not None:
@@ -3143,6 +3179,31 @@ class LAPDSim1D:
             )
         self._last_result = result
         return result
+
+    def _dt_min_lock_error(self, diag, consecutive):
+        """Return the RuntimeError for a run stuck at dt_min.
+
+        Names the true minimizing bound (not "dt_min"), what it asked for, and
+        the cell closest to the density floor -- the drained floor-pinned cell
+        that makes ``_negative_margin_timestep`` return exactly zero.
+        """
+        n = np.asarray(self.state.n, dtype=float)
+        n_floor = float(self._floors["n"])
+        cell = int(np.argmin(n - n_floor))
+        return RuntimeError(
+            f"dt_min lock: the timestep was clamped up to dt_min on "
+            f"{consecutive} consecutive steps, exceeding "
+            f"dt_min_lock_max_steps={self._dt_min_lock_max_steps}, at "
+            f"t={self._time:.9e} s (phase={diag.phase!r}). The true active "
+            f"constraint is {diag.active_constraint!r}, asking for "
+            f"dt_raw={diag.dt_raw:.9e} s against dt_min={diag.dt:.9e} s. "
+            f"Cell closest to the density floor: index {cell}, "
+            f"n={n[cell]:.9e} cm^-3 against n_floor={n_floor:.9e} cm^-3. "
+            "A cell sitting ON a floor while a term still drains it requests "
+            "dt=0, which is a modelling breakdown and not a timestep request: "
+            "fix the drain or the floor rather than shrinking dt, and raise "
+            "dt_min_lock_max_steps only deliberately."
+        )
 
     @staticmethod
     def _reset_progress_tracker(tracker):
@@ -3567,8 +3628,9 @@ class LAPDSim1D:
                 key=lambda item: item[1],
             )
             neutral_dt = min(max(raw_dt, dt_min), dt_max)
-            if neutral_dt == dt_min and raw_dt < dt_min:
-                active_constraint = "dt_min"
+            # Same honest-labeling rule as suggest_timestep(): the constraint
+            # name stays the bound that minimized; the clamp is its own fact.
+            neutral_clamped = neutral_dt == dt_min and raw_dt < dt_min
             diag = replace(
                 diag,
                 dt=float(neutral_dt),
@@ -3582,6 +3644,8 @@ class LAPDSim1D:
                 dt_heat_conduction=np.inf,
                 dt_ion_neutral_drag=np.inf,
                 active_constraint=active_constraint,
+                clamped_to_dt_min=float(neutral_clamped),
+                dt_raw=float(raw_dt),
             )
         phase, _ = self._phase_info(time)
         switches = self._phase_switches(phase)
