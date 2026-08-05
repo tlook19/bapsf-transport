@@ -132,14 +132,14 @@ class Timed:
         )
 
 
-def repeat(name, fn, n, unit="s", note="", scale=1.0):
+def repeat(name, fn, n, unit="s", note=""):
     """Call ``fn`` ``n`` times, timing each call. One untimed warm-up first."""
     fn()
     samples = []
     for _ in range(n):
         t0 = time.perf_counter()
         fn()
-        samples.append((time.perf_counter() - t0) * scale)
+        samples.append(time.perf_counter() - t0)
     return Timed(name, samples, unit=unit, note=note)
 
 
