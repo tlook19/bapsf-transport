@@ -34,6 +34,7 @@ Usage:
 """
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -44,6 +45,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from cablp.funcs._adas import he_rates
 from cablp.funcs._cross import charge_ex_react
+from cablp.solvers._sim1d.core.geometry import (
+    absorbing_live_cells_by_role,
+    build_geometry,
+)
 
 EV = 1.602176634e-12
 KB = 1.380649e-16
@@ -51,9 +56,58 @@ M_HE = 4.002602 * 1.66053907e-24
 E_CHARGE = 1.602176634e-19
 T_WALL_K = 300.0
 
+# The two mutually exclusive rows the solver books the plasma-terminating
+# boundary under. Exactly one of them is live on any given run.
+BOUNDARY_ROWS = ("boundary_absorption", "characteristic_boundary")
+
 
 def vt_cm_s(T_eV):
     return np.sqrt(T_eV * EV / M_HE)
+
+
+def boundary_recycle_row(f):
+    """Name the ``rhs_terms`` row carrying this run's boundary recycle.
+
+    Returns ``(row_name, stance)``, ``stance`` being the saved
+    ``characteristic_boundary`` flag.
+
+    Under ``characteristic_boundary`` -- the shipped production stance since
+    R5 -- the solver zeroes the WHOLE ``boundary_absorption`` state, plasma
+    removal and neutral return ``nn`` alike, and books both under
+    ``characteristic_boundary``. An offline reader that hardcodes the legacy
+    row therefore gets an identically-zero channel on every production run and
+    silently drops the end-wall return from its source menu. Pre-R5 artifacts
+    carry no ``characteristic_boundary`` key in ``flags_json`` (and usually no
+    such row at all) and keep the legacy row.
+    """
+    raw = f.attrs.get("flags_json")
+    flags = json.loads(raw) if raw is not None else {}
+    stance = bool(flags.get("characteristic_boundary", False))
+    return ("characteristic_boundary" if stance else "boundary_absorption"), stance
+
+
+def assert_recycle_channel_live(recycle, removal, *, row, stance, path, window_ms):
+    """Raise unless the selected recycle channel carries the boundary return.
+
+    ``removal`` is the plasma removal booked by EITHER boundary row, so a
+    channel read from the wrong row is caught rather than quietly contributing
+    nothing to the source menu.
+    """
+    if np.any(recycle) or not np.any(removal):
+        return
+    raise ValueError(
+        f"boundary recycle channel is identically zero over "
+        f"{window_ms[0]}-{window_ms[1]} ms while the plasma-removal row is "
+        f"nonzero, for {path}.\n"
+        f"  stance: characteristic_boundary={stance}\n"
+        f"  row read: rhs_terms/{row}\n"
+        "  likely cause: the run books its boundary physics under the OTHER "
+        f"row of {BOUNDARY_ROWS} -- under characteristic_boundary the solver "
+        "zeroes the entire boundary_absorption state (including the neutral "
+        "return nn) and books it under characteristic_boundary. Refusing to "
+        "run source-starved: the end-wall return would silently vanish from "
+        "the source menu."
+    )
 
 
 def load_background(path, window_ms):
@@ -104,7 +158,16 @@ def load_background(path, window_ms):
             ) / Vm_sel
         Vm_full = g["neutral_volume_cm3"][:]
         Vp_full = g["plasma_volume_cm3"][:]
-        ba = np.mean(f["rhs_terms/boundary_absorption/nn"][:][m], axis=0) * Vm_full
+        # The boundary row is stance-dependent (see boundary_recycle_row).
+        row, stance = boundary_recycle_row(f)
+        # Plasma removal as booked by EITHER row: the guard's reference, so a
+        # channel read from the wrong row cannot pass as a genuinely empty one.
+        removal_any = sum(
+            -np.mean(f[f"rhs_terms/{name}/n"][:][m], axis=0) * Vp_full
+            for name in BOUNDARY_ROWS
+            if f"rhs_terms/{name}/n" in f
+        )
+        ba = np.mean(f[f"rhs_terms/{row}/nn"][:][m], axis=0) * Vm_full
         an = np.mean(f["rhs_terms/anode_collection/nn"][:][m], axis=0) * Vm_full
         ns = np.mean(
             np.clip(f["rhs_terms/neutral_sources/nn"][:][m], 0.0, None), axis=0
@@ -114,9 +177,11 @@ def load_background(path, window_ms):
             # (zeroed) -- rebuild the source menu from the PLASMA-side
             # rows, which keep their exact forms: the recycle source is
             # the boundary plasma loss, the anode source its collection,
-            # and the puff comes from the configured waveform.
+            # and the puff comes from the configured waveform. The recycle
+            # row is the stance's row here too -- reading the legacy one is
+            # the same defect one level down.
             ba = -np.mean(
-                f["rhs_terms/boundary_absorption/n"][:][m], axis=0
+                f[f"rhs_terms/{row}/n"][:][m], axis=0
             ) * Vp_full
             an = -np.mean(
                 f["rhs_terms/anode_collection/n"][:][m], axis=0
@@ -134,6 +199,14 @@ def load_background(path, window_ms):
                 roles_full.index("puff") if "puff" in roles_full else 0
             )
             ns[puff_idx] = 4.477962e17 * sccm * valves
+        assert_recycle_channel_live(
+            ba,
+            removal_any,
+            row=row,
+            stance=stance,
+            path=str(path),
+            window_ms=window_ms,
+        )
         # Volume-recombination birth (n^2 * ACD via the run's own ledger --
         # identical to recomputing from the frozen fields, and closed by
         # construction): an nn gain everywhere the plasma recombines. The
@@ -155,8 +228,28 @@ def load_background(path, window_ms):
         phi_c = float(np.nanmean(cd["source_phi_c"][:][m]))
         T_s = float(np.mean(cd["T_s_surface"][:][m]))
         params = __import__("json").loads(f.attrs["params_json"])
-    cath_cell = roles.index("cathode")
-    coll_cell = len(roles) - 1
+        raw_flags = f.attrs.get("flags_json")
+        flags = json.loads(raw_flags) if raw_flags is not None else {}
+    # Per-face cells by ROLE: the live cell against an absorbing face is where
+    # the boundary term books its removal and its neutral return, and it is not
+    # at a fixed offset from the array ends (an obstruction cell pushes the
+    # cathode's live cell one further in). Legacy geometry declares no
+    # absorbing faces at all -- there the boundary term is volumetric and the
+    # end cells are the only meaningful attribution.
+    by_role = absorbing_live_cells_by_role(build_geometry(params, flags))
+    if by_role:
+        missing = [r for r in ("cathode", "collector") if r not in by_role]
+        if missing:
+            raise ValueError(
+                f"no plasma-absorbing live cell with role(s) {missing}; "
+                f"absorbing faces resolve to {by_role}. The recycle ledger "
+                "cannot be attributed per face."
+            )
+        cath_cell = int(by_role["cathode"][0])
+        coll_cell = int(by_role["collector"][-1])
+    else:
+        cath_cell = roles.index("cathode")
+        coll_cell = len(roles) - 1
     anode_cells = [i for i, r in enumerate(roles) if r == "gap"][-1:]  # gap side
     bg["sources"] = {
         "cathode_face": float(ba[cath_cell]),
