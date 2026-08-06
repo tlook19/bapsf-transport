@@ -110,6 +110,24 @@ def assert_recycle_channel_live(recycle, removal, *, row, stance, path, window_m
     )
 
 
+def _puff_peak_cell(ns, roles):
+    """Index of the puff row's peak cell, ties broken toward the puff cell.
+
+    A distributed puff profile is symmetric about the valve, so the two cells
+    straddling it carry EQUAL weight and ``np.argmax`` alone picks whichever
+    comes first in the array -- a plain column cell one cell upstream of the
+    role-tagged puff cell. Ties are resolved toward the ``puff`` role.
+    """
+    peak = ns.max()
+    if peak <= 0.0:
+        return int(np.argmax(ns))
+    tied = np.flatnonzero(ns >= peak)
+    for i in tied:
+        if roles[i] == "puff":
+            return int(i)
+    return int(tied[0])
+
+
 def load_background(path, window_ms):
     with h5py.File(path, "r") as f:
         t0 = float(f.attrs["t_breakdown_trigger"])
@@ -256,10 +274,26 @@ def load_background(path, window_ms):
         "collector_face": float(ba[coll_cell]),
         "anode_left": float(an[an.nonzero()[0][0]]) if an.any() else 0.0,
         "anode_right": float(an[an.nonzero()[0][-1]]) if an.any() else 0.0,
-        "puff": float(ns.sum()),
-        "puff_z": float(zc[np.argmax(ns)] - edges[first]),
+        # The puff is a DISTRIBUTION over cells, not a point: the solver's
+        # 'gaussian' and 'cosine_pipe' profiles spread the inflow over every
+        # eligible main-chamber cell (normalized to conserve it exactly), and
+        # only the legacy 'cell' profile is a single cell. Carry the whole row
+        # and let the launcher sample it, exactly as vol_rec does. The rate and
+        # the weights are read from the SAME in-domain slice so they cannot
+        # disagree (any share upstream of the cathode face is outside the TPMC
+        # domain, as for vol_rec).
+        "puff": float(ns[first:].sum()),
+        # Representative SINGLE-cell z, kept for the point-injection consumers
+        # of this loader (kn2zone, the E0 bench, the E2 DVM comparison), whose
+        # own discretizations inject the puff into one z-bin. run_mc no longer
+        # uses it. np.argmax alone resolved a tie by array order, which on a
+        # cosine_pipe run put the source in a plain column cell one cell
+        # UPSTREAM of the role-tagged puff cell; prefer the puff cell whenever
+        # it is among the maxima.
+        "puff_z": float(zc[_puff_peak_cell(ns, roles)] - edges[first]),
         "vol_rec": float(rec[first:].sum()),
     }
+    bg["puff_cell"] = ns[first:]
     bg["rec_cell"] = rec[first:]
     bg["phi_c"] = phi_c
     bg["T_s"] = T_s
@@ -331,12 +365,16 @@ def run_mc(bg, n_particles, jet, rng, r_n=(0.5, 0.5), r_e=(0.2, 0.25),
     def launch(name, N):
         pos = np.zeros((N, 3))
         if name == "puff":
-            zc = src["puff_z"]
-            icell = np.searchsorted(ze, zc) - 1
+            # Sample the launch cell from the run's own per-cell puff row, then
+            # uniformly within that cell. Entry is still at the chamber wall
+            # pointing inward -- the physical pipe outlet the 'cosine_pipe'
+            # profile models -- so only the AXIAL spread changes.
+            w_cell = bg["puff_cell"] / bg["puff_cell"].sum()
+            icell = rng.choice(w_cell.size, size=N, p=w_cell)
             th = rng.random(N) * 2 * np.pi
             pos[:, 0] = Rm[icell] * 0.999 * np.cos(th)
             pos[:, 1] = Rm[icell] * 0.999 * np.sin(th)
-            pos[:, 2] = zc
+            pos[:, 2] = ze[icell] + rng.random(N) * (ze[icell + 1] - ze[icell])
             vel = wall_emit_inward(rng, pos[:, 0], pos[:, 1], T_WALL_K)
         elif name in ("cathode_face", "collector_face"):
             at_start = name == "cathode_face"
