@@ -16,6 +16,7 @@ import json
 from compare_sim1d_es1 import PRODUCTION_NX, run_model
 from run_mechanism_ladder import ES_OPERATING
 from cablp.solvers._sim1d.results.io import save_result_hdf5
+from cablp.solvers._sim1d.results.health import summarize_result
 
 
 ELECTRON_BIRTH_POLICY = "floor"
@@ -113,6 +114,30 @@ def main(argv=None):
         flags_extra=flags_extra or None,
     )
     save_result_hdf5(args.save_h5, result, params=params, flags=flags)
+    # Standing condition for a DVM-arm run: every report quotes the limited
+    # step count and the outstanding debt, and any limited > 0 gets a
+    # dedicated look. A moment run has no ledger and prints nothing.
+    census = summarize_result(result).dvm_transfer_ledger_census
+    if census is not None:
+        print(
+            "dvm transfer ledger: "
+            f"engaged={census['engaged']}, "
+            f"relax_steps={census['relax_steps']}, "
+            f"relax_limited_steps={census['relax_limited_steps']}, "
+            f"limited_cells={census['limited_cells']}, "
+            f"Ei_debt_total={census['Ei_debt_total']:.6e} erg "
+            f"(max/cell {census['Ei_debt_max_abs']:.6e} erg/cm^3), "
+            f"M_debt_total={census['M_debt_total']:.6e} g cm/s "
+            f"(max/cell {census['M_debt_max_abs']:.6e} g/(cm^2 s)), "
+            f"closure |applied+debt-booked|/scale: "
+            f"Ei {census['Ei_residual_rel']:.3e}, "
+            f"M {census['M_residual_rel']:.3e}"
+        )
+        if census["relax_limited_steps"] > 0:
+            print(
+                "dvm transfer ledger: LIMITED STEPS PRESENT -- the standing "
+                "condition calls for a dedicated look at this run"
+            )
     print(f"saved {args.save_h5}")
 
 

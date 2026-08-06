@@ -5819,7 +5819,7 @@ class LAPDSim1D:
             rhs_terms=rhs_terms,
             cathode_diagnostics=cathode_diagnostics,
         )
-        return {
+        snapshot = {
             **wind,
             "time": float(time),
             "phase": phase,
@@ -5856,6 +5856,11 @@ class LAPDSim1D:
             "ignition_diagnostics": ignition_diagnostics,
             "gas_puff_diagnostics": self._gas_puff_diagnostic_snapshot(time=time),
         }
+        # Only the DVM arm carries a transfer ledger, so only its runs carry
+        # the per-save census record; a moment-model snapshot is unchanged.
+        if self._dvm is not None:
+            snapshot["dvm_ledger"] = self._dvm_ledger_sample(time=time)
+        return snapshot
 
     def _gas_puff_diagnostic_snapshot(self, time):
         """Return the per-save EFFECTIVE gas-puff waveform record.
@@ -6188,6 +6193,11 @@ class LAPDSim1D:
         if saved and "M_n_a" in saved[0]:
             result.M_n_a = stack("M_n_a")
             result.u_n_a = stack("u_n_a")
+        # Present ONLY on a run that built the DVM arm. A moment-model result
+        # carries no such attribute and its saved file no such group, so the
+        # census is ABSENT rather than zero wherever it was never kept.
+        if self._dvm is not None:
+            result.dvm_transfer_ledger = self._dvm_ledger_census(saved)
         result.atomic_rate_domain = _atomic_rate_domain(result)
         return add_sim3_compat_aliases(result)
 
@@ -7219,6 +7229,74 @@ class LAPDSim1D:
         out["relax_limited_steps"] = int(dvm.relax_limited_steps)
         out["relax_cell_steps"] = dvm.relax_cell_steps.copy()
         return out
+
+    def _dvm_ledger_sample(self, time):
+        """Return the per-save-frame census record of the transfer ledger.
+
+        Three cumulative counters and the frame time -- enough to place WHEN
+        the limiter engaged (difference consecutive frames) without carrying
+        the per-cell arrays at every save. ``limited_cells`` counts cells
+        limited at least once so far, not cells limited at this frame.
+        """
+        dvm = self._dvm
+        return {
+            "time": float(time),
+            "relax_steps": float(dvm.relax_steps),
+            "relax_limited_steps": float(dvm.relax_limited_steps),
+            "limited_cells": float(np.count_nonzero(dvm.relax_cell_steps)),
+        }
+
+    def _dvm_ledger_census(self, saved):
+        """Return the end-of-run transfer-ledger census for the result.
+
+        The quotable form of the standing DVM report condition: how many
+        steps the floor-aware relax limited, what each channel still owes the
+        plasma, and the cumulative booked-vs-applied totals that carry the
+        identity ``applied_cum + debt == booked_cum``. Per-cell arrays are
+        kept (they are one row of ``cells`` each) so the identity is
+        checkable from the artifact and the debt can be localized; the
+        scalars are the numbers a report quotes.
+
+        Units are the ledger's own, integrated over the step: ``Ei_*`` in
+        erg/cm^3 and ``M_*`` in g/(cm^2 s) per cell, and the ``*_total``
+        scalars are those densities integrated over the plasma (= column)
+        volume, i.e. erg and g cm/s.
+        """
+        dvm = self._dvm
+        volume = np.asarray(self._geometry.plasma_volume_cm3, dtype=float)
+        census = {
+            "engaged": int(bool(self._dvm_engaged)),
+            "relax_steps": int(dvm.relax_steps),
+            "relax_limited_steps": int(dvm.relax_limited_steps),
+            "limited_cells": int(np.count_nonzero(dvm.relax_cell_steps)),
+            "relax_cell_steps": dvm.relax_cell_steps.copy(),
+        }
+        for name in ("Ei", "M"):
+            debt = np.asarray(getattr(dvm, f"{name}_debt"), dtype=float)
+            booked = np.asarray(getattr(dvm, f"{name}_booked_cum"), dtype=float)
+            applied = np.asarray(getattr(dvm, f"{name}_applied_cum"), dtype=float)
+            residual = applied + debt - booked
+            scale = float(np.max(np.abs(booked)) + np.max(np.abs(debt)))
+            census.update(
+                {
+                    f"{name}_debt": debt.copy(),
+                    f"{name}_booked_cum": booked.copy(),
+                    f"{name}_applied_cum": applied.copy(),
+                    f"{name}_debt_total": float(np.sum(debt * volume)),
+                    f"{name}_debt_max_abs": float(np.max(np.abs(debt))),
+                    f"{name}_booked_total": float(np.sum(booked * volume)),
+                    f"{name}_applied_total": float(np.sum(applied * volume)),
+                    f"{name}_residual_rel": float(
+                        np.max(np.abs(residual)) / max(scale, 1e-300)
+                    ),
+                }
+            )
+        for field in ("time", "relax_steps", "relax_limited_steps", "limited_cells"):
+            census[f"sample_{field}"] = np.asarray(
+                [snapshot["dvm_ledger"][field] for snapshot in saved],
+                dtype=float,
+            )
+        return census
 
     def _dvm_presheath_Tn_eV(self):
         """Return the per-cell Tn [eV] the presheath should consume, or None."""

@@ -139,6 +139,8 @@ def summarize_result(result):
         dt_min_clamped_step_count=dt_min_clamp_summary["clamped"],
         dt_min_hard_zero_step_count=dt_min_clamp_summary["hard_zero"],
         max_consecutive_dt_min_clamped_steps=dt_min_clamp_summary["max_run"],
+        dvm_arm_configured=_dvm_arm_configured(result),
+        dvm_transfer_ledger_census=_dvm_ledger_census_summary(result),
     )
 
 
@@ -257,6 +259,53 @@ def _dt_min_clamp_summary(result):
         "hard_zero": hard_zero,
         "max_run": int(np.max(run_lengths)),
     }
+
+
+def _dvm_arm_configured(result):
+    """Return whether the run built the K2d DVM arm, or None when unknowable.
+
+    Read from the run's own ``neutral_model`` parameter. None is returned for
+    a result carrying no params at all -- that is "cannot tell", never "no".
+    """
+    params = getattr(result, "params", None)
+    if not isinstance(params, dict) or "neutral_model" not in params:
+        return None
+    return str(params["neutral_model"]) == "kinetic_dvm"
+
+
+def _dvm_ledger_census_summary(result):
+    """Return the quotable K2d transfer-ledger census, or None if not recorded.
+
+    None is the UNQUOTABLE reading and must never be presented as zero: every
+    DVM artifact written before the census was persisted (2026-08-05) carries
+    no ledger group at all, and a moment-model run has no ledger to carry.
+    Pair this with ``dvm_arm_configured`` to tell those two apart -- an arm
+    that ran with no census recorded is the case a report has to flag.
+
+    Scalars only: the per-cell arrays stay on ``result.dvm_transfer_ledger``
+    for anyone localizing the debt. ``*_total`` are volume-integrated (erg for
+    the Ei channel, g cm/s for M); ``*_max_abs`` are per-cell densities.
+    """
+    census = getattr(result, "dvm_transfer_ledger", None)
+    if not census:
+        return None
+    names = (
+        "engaged",
+        "relax_steps",
+        "relax_limited_steps",
+        "limited_cells",
+        "Ei_debt_total",
+        "Ei_debt_max_abs",
+        "Ei_booked_total",
+        "Ei_applied_total",
+        "Ei_residual_rel",
+        "M_debt_total",
+        "M_debt_max_abs",
+        "M_booked_total",
+        "M_applied_total",
+        "M_residual_rel",
+    )
+    return {name: census[name] for name in names if name in census}
 
 
 def _phase_event_summary(result):

@@ -156,6 +156,12 @@ def save_result_hdf5(path, result, params=None, flags=None):
             _write_field_arrays(
                 h5.create_group("floor_ledger"), result.floor_ledger
             )
+        # K2d transfer-ledger census. Written only by a run that built the
+        # DVM arm, so a moment-model file's dataset layout is unchanged and
+        # the absence of the group means "never recorded", never "zero".
+        dvm_ledger = getattr(result, "dvm_transfer_ledger", None)
+        if dvm_ledger:
+            _write_census(h5.create_group("dvm_transfer_ledger"), dvm_ledger)
         if hasattr(result, "atomic_rate_domain"):
             _write_field_arrays(
                 h5.create_group("atomic_rate_domain"),
@@ -346,6 +352,10 @@ def load_result_hdf5(path):
             if "compiled_kernels" in h5.attrs
             else PURE_KERNEL_PROVENANCE
         )
+        # Set only when the file carries it: a reader must be able to tell a
+        # run whose census was never persisted from one whose census is zero.
+        if "dvm_transfer_ledger" in h5:
+            result.dvm_transfer_ledger = _read_census(h5["dvm_transfer_ledger"])
         if "ignition_abort" in h5:
             result.ignition_abort = {
                 key: (
@@ -405,6 +415,30 @@ def _write_array_dataset(group, name, values):
         )
     else:
         group.create_dataset(name, data=values)
+
+
+def _write_census(group, census):
+    """Write a scalar/array census mapping: arrays as datasets, scalars as attrs.
+
+    Integer counts are written as integers so the round trip returns the count,
+    not a float that a report would have to re-cast.
+    """
+    for name, value in census.items():
+        if isinstance(value, np.ndarray):
+            group.create_dataset(name, data=np.asarray(value, dtype=float))
+        elif isinstance(value, (bool, int, np.integer)):
+            group.attrs[name] = int(value)
+        else:
+            group.attrs[name] = float(value)
+
+
+def _read_census(group):
+    """Read a :func:`_write_census` group back into its scalar/array mapping."""
+    census = {name: _read_dataset(dataset) for name, dataset in group.items()}
+    for name, value in group.attrs.items():
+        value = np.asarray(value)
+        census[name] = int(value) if value.dtype.kind in "iub" else float(value)
+    return census
 
 
 def _write_term_arrays(group, terms):
