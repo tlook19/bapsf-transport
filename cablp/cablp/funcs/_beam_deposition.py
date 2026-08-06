@@ -222,11 +222,25 @@ convention the primary's births use:
 - each excitation event's threshold energy goes to ``radiated_erg_s``;
 - the walker's Coulomb drag and its sub-threshold terminal residual bank as
   plasma heating where they occur;
-- a walker still above ``E_stop`` at a domain end goes to the SAME tail end
-  ledger the energy-only walk uses (``end_loss_tail_low/high``) and leaves the
-  system. This keeps ``"tail_walk"`` a free-escape bound with or without the
-  ionization channel, so ``tail_ionization`` moves ONE thing and the end
-  convention is not silently swapped underneath it.
+- a walker still above ``E_stop`` at either face of its WALK WINDOW goes to the
+  SAME tail end ledger the energy-only walk uses (``end_loss_tail_low/high``)
+  and leaves the system. This keeps ``"tail_walk"`` a free-escape bound with or
+  without the ionization channel, so ``tail_ionization`` moves ONE thing and
+  the end convention is not silently swapped underneath it.
+
+``tail_walk_window`` is REQUIRED under ``"on"`` and is the inclusive cell range
+the walkers may traverse -- for the solver, the plasma-active window, so that
+the cathode disc and anything behind it are a wall. It exists because the
+default "the whole grid" is WRONG for a particle channel and wrong quietly: a
+``-z`` walker launched near the source runs on into the cells behind the
+cathode, and at K5a breakdown conditions 5-66% of the tail's ionization lands
+there (measured; ``k6build_tailion_crosscheck.txt``) -- in rows the solver's
+active-plasma mask zeroes, so those pairs are created and then deleted. The
+energy-only walk shares the geometry but leaks only ~0.04% of ``P_QL`` into it,
+which is why the defect had no visible consequence until the walk started
+carrying particles. Bounding the window also makes the walk agree with the
+registered offline estimate, which truncates ``-z`` walks at the cathode disc
+for the same reason.
 
 All of the walkers' heat lands in ``heating_anomalous_erg_s``, which keeps its
 documented meaning ("the anomalous channel's delivery to the electrons"); the
@@ -636,6 +650,7 @@ def deposit_beam(
     anomalous_transport: str = "local",
     tail_energy_eV: float | None = None,
     tail_ionization: str = "off",
+    tail_walk_window: tuple[int, int] | None = None,
     stopping_coefficient: np.ndarray | None = None,
 ) -> BeamDepositionResult:
     """Deposit one monoenergetic beam ray through the column (He only).
@@ -702,8 +717,10 @@ def deposit_beam(
     channel to) and a ``tail_energy_eV`` the truncation argument holds at:
     above ``E_stop_eV``, so the channel can act, and low enough that
     ``<W_sec>(E_tail) < E_stop_eV``, so banking secondaries locally is the
-    correct depth-1 truncation rather than a dropped cascade. Both are
-    ValueErrors, not silent adjustments.
+    correct depth-1 truncation rather than a dropped cascade. It also requires
+    ``tail_walk_window=(lo, hi)``, the inclusive cell range the walkers may
+    traverse; see the module docstring for why this has no safe default. All
+    three are ValueErrors, not silent adjustments.
 
     ``stopping_coefficient`` (cost read 2026-08-02, restructure C) is the
     per-cell ``A`` of ``dE/dx = A W**p`` that the walks below need, HOISTED to
@@ -796,7 +813,36 @@ def deposit_beam(
                 f"{tail_energy_eV})"
             )
     ionize_tail = tail_ionization == "on"
+    tail_lo, tail_hi = 0, cells - 1
     if ionize_tail:
+        # THE WALK DOMAIN IS REQUIRED, not defaulted to the whole grid. This
+        # module is solver-agnostic and cannot know which cells are plasma, but
+        # an ionizing walk that leaves the plasma is not a small error: a ``-z``
+        # walker launched near the source runs into whatever cells sit behind
+        # the cathode, and at K5a conditions that is where 5-66% of its
+        # ionization lands (measured, k6build_tailion_crosscheck.txt) -- births
+        # into rows the solver's active-plasma mask ZEROES, i.e. pairs created
+        # and silently deleted. The energy-only walk survives the same geometry
+        # only because it leaks ~0.04% of P_QL there rather than most of its
+        # product; a PARTICLE channel cannot be built on that domain. So the
+        # caller states the window and a caller that has not thought about it
+        # gets an error, not a quiet sink.
+        if tail_walk_window is None:
+            raise ValueError(
+                "tail_ionization='on' needs tail_walk_window=(lo, hi), the "
+                "inclusive cell range the tail walkers may traverse (the "
+                "plasma-active window: a walker leaving it hits a wall and is "
+                "booked to the tail end ledger). Without it the walk would "
+                "run off into cells whose plasma rows the solver zeroes and "
+                "birth pairs that are then deleted"
+            )
+        tail_lo, tail_hi = (int(tail_walk_window[0]), int(tail_walk_window[1]))
+        if not 0 <= tail_lo <= tail_hi < cells:
+            raise ValueError(
+                "tail_walk_window must be an inclusive (lo, hi) cell range "
+                f"with 0 <= lo <= hi < cells={cells} (got "
+                f"{tail_walk_window})"
+            )
         # The two bars the K6 truncation argument stands on, both computed
         # from the thresholds themselves rather than asserted for the shipped
         # rungs (module docstring). Refusing is deliberate: the alternative to
@@ -1268,17 +1314,36 @@ def deposit_beam(
                 # No anode interception: these are born in the column, not
                 # streaming out of the cathode through the mesh. No recursion
                 # risk: the nested call takes anomalous_transport="local".
+                #
+                # The march runs on the WINDOWED domain, so the window's two
+                # faces are walls: a walker that reaches one is transmitted out
+                # of the sliced grid and booked to the tail end ledger, exactly
+                # as it would be at a true domain end. That is what keeps every
+                # birth inside cells the solver actually integrates.
+                win = slice(tail_lo, tail_hi + 1)
+                nn_w = nn[win]
+                ne_w = ne[win]
+                Te_w = Te[win]
+                dz_w = dz_cm[win]
                 for birth in np.flatnonzero(half_flux > 0.0):
+                    if not tail_lo <= birth <= tail_hi:
+                        raise ValueError(
+                            f"anomalous power in cell {int(birth)} lies "
+                            f"outside tail_walk_window {(tail_lo, tail_hi)}; "
+                            "the window must contain every cell the QL "
+                            "channel drives, or that cell's tail power would "
+                            "be silently dropped"
+                        )
                     for walk_direction in (1, -1):
                         tail = deposit_beam(
                             E_tail,
                             float(half_flux[birth]),
-                            nn,
-                            ne,
-                            Te,
-                            int(birth),
+                            nn_w,
+                            ne_w,
+                            Te_w,
+                            int(birth) - tail_lo,
                             walk_direction,
-                            dz_cm,
+                            dz_w,
                             I_ion_eV=I_ion_eV,
                             E_stop_eV=E_stop_eV,
                             coulomb_model=coulomb_model,
@@ -1289,26 +1354,29 @@ def deposit_beam(
                         # primary's, which is what puts the born pair on the
                         # existing beam-ionization birth convention and its
                         # I_ion investment on the existing cost sink.
-                        ionization_events += tail.ionization_events
-                        excitation_events += tail.excitation_events
-                        ionization_cost += tail.ionization_cost_erg_s
-                        radiated += tail.radiated_erg_s
+                        ionization_events[win] += tail.ionization_events
+                        excitation_events[win] += tail.excitation_events
+                        ionization_cost[win] += tail.ionization_cost_erg_s
+                        radiated[win] += tail.radiated_erg_s
                         # All of the walker's HEAT (Coulomb drag, the local
                         # <W_sec> secondaries, the terminal residual) is the
                         # anomalous channel's delivery to the electrons, so it
                         # lands in the lumped bank and in the anomalous split
                         # -- never in the primary's coulomb/secondary/terminal
                         # splits, which keep describing the primary alone.
-                        heating += tail.plasma_heating_erg_s
-                        heat_anomalous += tail.plasma_heating_erg_s
+                        heating[win] += tail.plasma_heating_erg_s
+                        heat_anomalous[win] += tail.plasma_heating_erg_s
                         # Diagnostic splits of the four shared banks.
-                        ion_events_tail += tail.ionization_events
-                        exc_events_tail += tail.excitation_events
-                        ion_cost_tail += tail.ionization_cost_erg_s
-                        radiated_tail += tail.radiated_erg_s
-                        # A walker still above E_stop at the end it was
+                        ion_events_tail[win] += tail.ionization_events
+                        exc_events_tail[win] += tail.excitation_events
+                        ion_cost_tail[win] += tail.ionization_cost_erg_s
+                        radiated_tail[win] += tail.radiated_erg_s
+                        # A walker still above E_stop at the window face it was
                         # heading for escapes, on the SAME free-escape
-                        # convention the energy-only walk uses.
+                        # convention the energy-only walk uses. No sheath or
+                        # ambipolar throttle is applied at the cathode face
+                        # either, so "tail_walk" stays the free-escape bound it
+                        # is documented as with the channel on.
                         exit_erg = (
                             float(tail.transmitted_flux)
                             * float(tail.transmitted_energy_eV)

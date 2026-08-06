@@ -926,6 +926,33 @@ def _sum_beam_deposition(a, b):
     )
 
 
+def _plasma_active_window(geometry):
+    """Return the inclusive ``(lo, hi)`` cell range the plasma occupies.
+
+    The K6 tail walkers may traverse exactly these cells: outside them the
+    solver's active-plasma mask zeroes every row, so a walk there deposits and
+    births into nothing. Resolved geometry has one contiguous live run (the
+    plenum and obstruction sit behind the cathode at the low end); a
+    geometry with the live region split into several runs has no single window
+    and is refused rather than silently walked across the gap.
+    """
+    active = np.asarray(geometry.plasma_active, dtype=bool)
+    live = np.flatnonzero(active)
+    if live.size == 0:
+        raise ValueError(
+            "no plasma-active cells: the QL tail walk has nowhere to go"
+        )
+    lo, hi = int(live[0]), int(live[-1])
+    if not active[lo : hi + 1].all():
+        raise ValueError(
+            "plasma-active cells are not contiguous "
+            f"({np.flatnonzero(~active[lo : hi + 1]) + lo}); the tail walk "
+            "window is a single inclusive range and cannot describe this "
+            "topology"
+        )
+    return lo, hi
+
+
 def _csda_beam_deposition(
     beam_result,
     state,
@@ -1019,6 +1046,18 @@ def _csda_beam_deposition(
         )
         if tail_ionization != "off":
             transport_kwargs["tail_ionization"] = tail_ionization
+            # The walk window the module refuses to default (see its
+            # docstring): the maximal contiguous PLASMA-ACTIVE run, which in
+            # resolved geometry starts at the cathode cell -- so the cathode
+            # disc and the obstruction/plenum behind it are a wall to a tail
+            # electron, and no pair is born into a row the RHS mask zeroes.
+            # Derived from ``geometry.plasma_active`` rather than from the
+            # cathode roles, because "the cells whose plasma rows the solver
+            # integrates" is exactly the property that matters here, and it is
+            # the same array the mask itself is built from.
+            transport_kwargs["tail_walk_window"] = _plasma_active_window(
+                geometry
+            )
     if transport_kwargs:
         # Hoisted stopping coefficient (cost read 2026-08-02, restructure C).
         # The walks' per-cell A in dE/dx = A W**p is a 262-iteration Python

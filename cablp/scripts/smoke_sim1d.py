@@ -3148,6 +3148,254 @@ def main():
     )
     assert abs(wpe_both_total - csda_budget) / csda_budget < 1e-9
 
+    # --- K6 through the solver: heating_anomalous_tail_ionization lets the QL
+    # tail walkers IONIZE the column gas they cross, turning the energy-only
+    # WP-E walk into a particle channel. Unit level only -- what it does to
+    # the discharge spin-up is a campaign run, not a smoke scenario.
+    # Misconfiguration is loud at CONSTRUCTION, and every refusal here is a
+    # configuration in which the channel could only be a no-op or could only
+    # mis-bank what it carries.
+    for k6_bad in (
+        dict(csda_params, heating_anomalous_tail_ionization="bogus"),
+        # No walkers to give the channel to.
+        dict(csda_params, heating_anomalous_tail_ionization="on"),
+        dict(csda_params, heating_anomalous_transport="local",
+             heating_anomalous_tail_ionization="on"),
+        # Below the lowest inelastic threshold the channel cannot fire.
+        dict(csda_params, heating_anomalous_transport="tail_walk",
+             heating_anomalous_tail_energy_eV=20.0,
+             heating_anomalous_tail_ionization="on"),
+        # Above ~221 eV the mean secondary clears that threshold too, so
+        # banking it locally would drop a cascade the walk does not follow.
+        # The bar is COMPUTED from <W_sec> and E_stop, not tabulated: this
+        # case is what proves the depth-1 truncation is measured.
+        dict(csda_params, heating_anomalous_transport="tail_walk",
+             heating_anomalous_tail_energy_eV=300.0,
+             heating_anomalous_tail_ionization="on"),
+    ):
+        try:
+            LAPDSim1D(k6_bad, dict(cathode_flags))
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "expected ValueError for heating_anomalous_tail_ionization "
+                f"({k6_bad.get('heating_anomalous_tail_ionization')!r}, "
+                f"{k6_bad.get('heating_anomalous_transport')!r}, "
+                f"{k6_bad.get('heating_anomalous_tail_energy_eV')!r})"
+            )
+    # Every registered E_tail arm clears BOTH bars -- the bracket the campaign
+    # reports is usable with the channel on, which is the point of computing
+    # the bars rather than asserting them.
+    for k6_rung in (30.0, 75.0, 150.0):
+        LAPDSim1D(
+            dict(csda_params, heating_anomalous_transport="tail_walk",
+                 heating_anomalous_tail_energy_eV=k6_rung,
+                 heating_anomalous_tail_ionization="on"),
+            dict(cathode_flags),
+        )
+    # A tail energy the IONIZING walk would refuse is NOT an error while the
+    # channel is off: the key is documented as read only under "on", so the
+    # energy-only walk must still accept 300 eV (this pins the contract, not
+    # just the guard).
+    LAPDSim1D(
+        dict(csda_params, heating_anomalous_transport="tail_walk",
+             heating_anomalous_tail_energy_eV=300.0),
+        dict(cathode_flags),
+    )
+    # Default-path bit-exactness sentinel: naming "off" explicitly reproduces
+    # the tail_walk deposition above, byte for byte, on every array and every
+    # scalar -- and the four K6 splits are identically zero, so the off path
+    # cannot have entered the branch.
+    k6_off_sim = LAPDSim1D(
+        dict(csda_params, heating_anomalous_transport="tail_walk",
+             heating_anomalous_tail_ionization="off"),
+        dict(cathode_flags),
+    )
+    k6_off_sim._circuit_I_loop = 3000.0
+    k6_off_solve = k6_off_sim.solve_cathode_boundary()
+    k6_off_dep = k6_off_solve.beam_deposition[0]
+    for _k6_arr in (
+        "plasma_heating_erg_s", "heating_anomalous_erg_s",
+        "heating_coulomb_erg_s", "heating_secondary_erg_s",
+        "heating_terminal_erg_s", "radiated_erg_s",
+        "ionization_cost_erg_s", "ionization_events", "excitation_events",
+        "E_entry_eV",
+    ):
+        assert np.array_equal(
+            getattr(k6_off_dep, _k6_arr), getattr(wpe_on_dep, _k6_arr)
+        ), _k6_arr
+    for _k6_sc in ("end_loss_tail_low_erg_s", "end_loss_tail_high_erg_s",
+                   "transmitted_flux", "transmitted_energy_eV"):
+        assert getattr(k6_off_dep, _k6_sc) == getattr(wpe_on_dep, _k6_sc)
+    for _k6_split in ("ionization_events_tail", "excitation_events_tail",
+                      "ionization_cost_tail_erg_s", "radiated_tail_erg_s"):
+        assert not np.any(getattr(k6_off_dep, _k6_split)), _k6_split
+        assert not np.any(getattr(csda_dep, _k6_split)), _k6_split
+    # On: the walkers now ionize on their way, so the SAME QL power comes back
+    # split across more channels.
+    k6_on_sim = LAPDSim1D(
+        dict(csda_params, heating_anomalous_transport="tail_walk",
+             heating_anomalous_tail_ionization="on"),
+        dict(cathode_flags),
+    )
+    k6_on_sim._circuit_I_loop = 3000.0
+    k6_on_solve = k6_on_sim.solve_cathode_boundary()
+    k6_on_dep = k6_on_solve.beam_deposition[0]
+    k6_ledger = (
+        float(k6_on_dep.end_loss_tail_low_erg_s)
+        + float(k6_on_dep.end_loss_tail_high_erg_s)
+    )
+    # The scenario must actually FIRE the channel or every assertion is
+    # vacuous: pairs born, potential invested, light radiated.
+    assert float(k6_on_dep.ionization_events_tail.sum()) > 0.0
+    assert float(k6_on_dep.ionization_cost_tail_erg_s.sum()) > 0.0
+    assert float(k6_on_dep.radiated_tail_erg_s.sum()) > 0.0
+    # THE K6 CLOSURE IDENTITY (E3): every eV launched as tail electrons ends in
+    # exactly one of {bulk heat via thermalization, ionization investment,
+    # secondary-birth heat, radiation, end ledger}. The launched power is what
+    # the "local" arm banked locally -- exact, because the ray integration is
+    # bit-identical in both modes -- and the secondary-birth heat is inside
+    # heating_anomalous with the rest of the walkers' heat.
+    k6_launched = float(csda_dep.heating_anomalous_erg_s.sum())
+    k6_delivered = (
+        float(k6_on_dep.heating_anomalous_erg_s.sum())
+        + float(k6_on_dep.ionization_cost_tail_erg_s.sum())
+        + float(k6_on_dep.radiated_tail_erg_s.sum())
+        + k6_ledger
+    )
+    assert abs(k6_delivered - k6_launched) / k6_launched < 1e-12, (
+        k6_launched, k6_delivered
+    )
+    # ... and the whole ray still closes, with the tail's cost and radiation
+    # now inside the terms that already carried the primary's.
+    k6_on_total = (
+        k6_on_dep.plasma_heating_erg_s.sum()
+        + k6_on_dep.radiated_erg_s.sum()
+        + k6_on_dep.ionization_cost_erg_s.sum()
+        + float(k6_on_dep.anode_intercepted_erg_s)
+        + k6_on_dep.transmitted_flux * k6_on_dep.transmitted_energy_eV
+        * ev_to_erg
+        + k6_ledger
+    )
+    assert abs(k6_on_total - csda_budget) / csda_budget < 1e-9
+    # THE PARTICLE STATEMENT: every tail ionization event is one pair added to
+    # the shared row, so the difference from the energy-only arm IS the tail
+    # split -- nothing is booked twice and nothing is dropped.
+    k6_extra = k6_on_dep.ionization_events - wpe_on_dep.ionization_events
+    assert np.allclose(
+        k6_extra, k6_on_dep.ionization_events_tail, rtol=1e-12, atol=0.0
+    )
+    for _k6_pair in (
+        ("excitation_events", "excitation_events_tail"),
+        ("ionization_cost_erg_s", "ionization_cost_tail_erg_s"),
+        ("radiated_erg_s", "radiated_tail_erg_s"),
+    ):
+        assert np.allclose(
+            getattr(k6_on_dep, _k6_pair[0])
+            - getattr(wpe_on_dep, _k6_pair[0]),
+            getattr(k6_on_dep, _k6_pair[1]),
+            rtol=1e-12, atol=0.0,
+        ), _k6_pair
+    # THE WALK WINDOW: not one pair is born, and not one erg deposited, in a
+    # cell the RHS mask zeroes. This is the property the window exists for --
+    # without it the -z walkers run on behind the cathode and most of the
+    # channel's product is created and then deleted.
+    k6_dead = ~np.asarray(k6_on_sim._geometry.plasma_active, dtype=bool)
+    assert k6_dead.any(), "scenario has no plasma-dead cells to protect"
+    assert not np.any(k6_on_dep.ionization_events_tail[k6_dead])
+    assert not np.any(k6_on_dep.radiated_tail_erg_s[k6_dead])
+    assert not np.any(
+        k6_on_dep.heating_anomalous_erg_s[k6_dead]
+    ), "tail heat deposited into a plasma-dead cell"
+    # The primary's own three heating splits, the WP-D ledger and the
+    # primary-flux instruments are all untouched: K6 adds to the tail channel
+    # and to nothing else.
+    for _k6_arr in ("heating_coulomb_erg_s", "heating_secondary_erg_s",
+                    "heating_terminal_erg_s"):
+        assert np.array_equal(
+            getattr(k6_on_dep, _k6_arr), getattr(csda_dep, _k6_arr)
+        ), _k6_arr
+    assert k6_on_dep.end_loss_low_erg_s == 0.0
+    assert k6_on_dep.end_loss_high_erg_s == 0.0
+    assert k6_on_solve.beam_gap_ledger[0] == csda_ledger[0]
+    assert (
+        k6_on_solve.beam_result.beam_atten_cross[csda_launch] == csda_sigma_eff
+    )
+    # The tail births reach the FLUID through the beam-ionization birth row --
+    # the same convention, the same momentum and birth-temperature booking, the
+    # same I_ion sink -- so the row grows by exactly the tail's event density.
+    k6_terms = k6_on_sim.beam_ionization_rhs_terms(cathode_solve=k6_on_solve)
+    k6_terms_off = k6_off_sim.beam_ionization_rhs_terms(
+        cathode_solve=k6_off_solve
+    )
+    k6_Vp = k6_on_sim._geometry.plasma_volume_cm3
+    assert np.allclose(
+        k6_terms["beam_ionization_birth"].n
+        - k6_terms_off["beam_ionization_birth"].n,
+        k6_on_dep.ionization_events_tail / k6_Vp,
+        rtol=1e-10, atol=0.0,
+    )
+    assert np.allclose(
+        k6_terms["beam_ionization_cost"].Ee
+        - k6_terms_off["beam_ionization_cost"].Ee,
+        -k6_on_sim._I_ion * ev_to_erg
+        * k6_on_dep.ionization_events_tail / k6_Vp,
+        rtol=1e-10, atol=0.0,
+    )
+    # The tail splits are recorded as cathode diagnostics, zero-defaulted so
+    # beer_lambert runs and pre-K6 files stay readable.
+    k6_diag = k6_on_sim._cathode_diagnostic_snapshot()
+    assert np.array_equal(
+        k6_diag["beam_tail_ionization_events_per_s"],
+        k6_on_dep.ionization_events_tail,
+    )
+    assert np.array_equal(
+        k6_diag["beam_tail_ionization_cost_W"],
+        k6_on_dep.ionization_cost_tail_erg_s * 1.0e-7,
+    )
+    assert np.array_equal(
+        k6_diag["beam_tail_radiated_W"], k6_on_dep.radiated_tail_erg_s * 1.0e-7
+    )
+    for _k6_dg in ("beam_tail_ionization_events_per_s",
+                   "beam_tail_ionization_cost_W", "beam_tail_radiated_W"):
+        assert not np.any(bl_diag[_k6_dg]), _k6_dg
+        assert not np.any(wpe_on_diag[_k6_dg]), _k6_dg
+    # At the MODULE, the walk window has no safe default and says so: an
+    # ionizing walk with no window, an out-of-range window, and a window that
+    # does not contain the cells the QL channel drives are all refusals.
+    _k6_win = tuple(
+        int(i) for i in (np.flatnonzero(~k6_dead)[0], np.flatnonzero(~k6_dead)[-1])
+    )
+    _k6_ray = dict(
+        E0_eV=csda_res.phi_c, Gamma0_per_s=_pskip_Gamma0,
+        dz_cm=_pskip_geom.length_cm, nn=csda_state.nn, ne=csda_state.n,
+        Te=csda_derived.Te, anomalous_transport="tail_walk",
+        tail_energy_eV=75.0, tail_ionization="on", **_pskip_ray_kwargs,
+    )
+    for _k6_win_bad in (None, (-1, 10), (5, 3), (0, _pskip_geom.cells)):
+        try:
+            _deposit_beam_ray(**_k6_ray, tail_walk_window=_k6_win_bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                f"expected ValueError for tail_walk_window={_k6_win_bad!r}"
+            )
+    # A window that excludes a driven cell is refused rather than silently
+    # dropping that cell's tail power.
+    try:
+        _deposit_beam_ray(
+            **_k6_ray,
+            tail_walk_window=(_pskip_geom.cells - 1, _pskip_geom.cells - 1),
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(
+            "expected ValueError for a window excluding a QL-driven cell"
+        )
+
     # --- Beam-deposition smoothing CONSERVES the deposit over the live plasma.
     # The Gaussian redistribution kernel must place ZERO weight on the typed
     # plasma-dead cells (plenum/obstruction) behind the cathode face, because
