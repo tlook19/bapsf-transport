@@ -472,6 +472,26 @@ def run_mc(bg, n_particles, jet, rng, r_n=(0.5, 0.5), r_e=(0.2, 0.25),
             d_coll = -np.log(rng.random(n_act)) * speed / nu_max
             d = np.minimum(np.minimum(d_z, d_wall), np.minimum(d_coll, d_rp))
             d = np.minimum(d, 1e6)
+            if np.any(d < 0.0):
+                # A negative flight length is never physical: it means a ray is
+                # standing at r > Rm(icell), where (Rw^2 - r2) < 0 drives both
+                # wall-intersection roots negative and the backward root wins
+                # the minimum. Tallying it accumulates NEGATIVE residence and
+                # marches the particle backwards without bound, so the
+                # estimator diverges rather than degrading. Fail loudly here
+                # instead: the tally below is unrecoverable once fed.
+                bad = np.flatnonzero(d < 0.0)
+                j = bad[0]
+                raise ValueError(
+                    f"negative flight length in the neutral ray tracer: "
+                    f"{bad.size} of {n_act} histories, min d={d[bad].min():.6g} "
+                    f"cm (source '{name}').\n"
+                    f"  first offender: cell {icell[j]}, "
+                    f"r={np.sqrt(r2[j]):.6g} cm vs Rm={Rm[icell[j]]:.6g} cm\n"
+                    "  cause: the ray sits outside the vessel wall of its own "
+                    "cell, which happens when a z-crossing into a NARROWER "
+                    "section is not intercepted by the annular step face."
+                )
             dt = d / speed
             # tally the segment (entirely inside icell)
             in_col = r2 < Rp[icell] ** 2  # start-of-segment zone (approx)
@@ -521,8 +541,9 @@ def run_mc(bg, n_particles, jet, rng, r_n=(0.5, 0.5), r_e=(0.2, 0.25),
                 pos[idx, 0] *= shrink
                 pos[idx, 1] *= shrink
                 vel[idx] = wall_emit_inward(rng, pos[idx, 0], pos[idx, 1], None)
-            # --- z-edge crossings (Rp-surface crossings need no handler:
-            # the segment split plus the ray overshoot is the whole event)
+            # --- z-edge crossings: ends, mesh, and the annular step face
+            # (Rp-surface crossings need no handler: the segment split plus
+            # the ray overshoot is the whole event)
             hit_z = (~hit_c) & (~hit_w) & (d_z <= d_rp)
             if hit_z.any():
                 idx = np.flatnonzero(hit_z)
@@ -558,7 +579,27 @@ def run_mc(bg, n_particles, jet, rng, r_n=(0.5, 0.5), r_e=(0.2, 0.25),
                         sign = -np.sign(vel[bidx, 2])
                         vel[bidx] = cosine_emit(rng, bidx.size, T_WALL_K, sign)
                         pos[bidx, 2] = ze[mesh_edge] + sign * 1e-6
-                # interior crossings just continue
+                # annular step face: where Rm narrows across an interior
+                # z-edge, the part of the crossing plane with
+                # Rm(dest) < r <= Rm(src) is a real z-normal annulus of
+                # vessel wall, not an opening. Without this the ray passes
+                # THROUGH the wall and is left outside its cell's radius --
+                # the divergent-estimator failure the tripwire above names.
+                # Diffuse re-emission back into the cell it came from, at the
+                # radial wall's convention (full accommodation, 300 K).
+                interior = (edge > 0) & (edge < ncell)
+                e = idx[interior]
+                if e.size:
+                    zdir_i = zdir[interior]
+                    dest = np.where(zdir_i > 0, edge[interior],
+                                    edge[interior] - 1)
+                    r_e = np.sqrt(pos[e, 0] ** 2 + pos[e, 1] ** 2)
+                    step = r_e > Rm[dest]
+                    h = e[step]
+                    if h.size:
+                        sgn = -zdir_i[step]
+                        vel[h] = cosine_emit(rng, h.size, T_WALL_K, sgn)
+                        pos[h, 2] += sgn * 1e-6
             alive = ~kill
             pos, vel, wgt = pos[alive], vel[alive], wgt[alive]
             age = age[alive]

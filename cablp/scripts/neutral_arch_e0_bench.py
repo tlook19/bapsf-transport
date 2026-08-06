@@ -659,6 +659,24 @@ class PersistentMC:
                     sign = -np.sign(vel[bidx, 2])
                     vel[bidx] = cosine_emit(rng, bidx.size, T_WALL_K, sign)
                     pos[bidx, 2] = ze[self.mesh_edge] + sign * 1e-6
+            # annular step face: where Rm narrows across an interior z-edge,
+            # the part of the crossing plane with Rm(dest) < r <= Rm(src) is
+            # vessel wall, not an opening. Unhandled, the ray passes THROUGH
+            # the wall and thereafter sits at r > Rm of its own cell, where
+            # both wall-intersection roots go negative and the flight length
+            # turns negative -- the transport diverges instead of degrading.
+            interior = (edge > 0) & (edge < ncell)
+            e = idx[interior]
+            if e.size:
+                zdir_i = zdir[interior]
+                dest = np.where(zdir_i > 0, edge[interior], edge[interior] - 1)
+                r_e = np.sqrt(pos[e, 0] ** 2 + pos[e, 1] ** 2)
+                step = r_e > Rm[dest]
+                h = e[step]
+                if h.size:
+                    sgn = -zdir_i[step]
+                    vel[h] = cosine_emit(rng, h.size, T_WALL_K, sgn)
+                    pos[h, 2] += sgn * 1e-6
         self.spawn(np.flatnonzero(dead))
         self.n_events += N
         self.dt_sum += float(dt.sum())
