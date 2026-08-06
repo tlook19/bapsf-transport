@@ -160,6 +160,14 @@ EXCHANGE_MODEL = "cauchy_chord"
 # Maxwellian average is that same constant, at any temperature.
 CLOSED_ISO_RATE_CM3_S = 2.0 * 7.63e-16 * np.sqrt(EV / M_HE)
 
+# Registered coarse drift-tripwire bracket (2026-08-05) on the kinetic/fluid
+# TOTAL-drag ratio, gated by C6. The two operators are not the same object and
+# no exact ratio is predicted; this bounds how far apart they may drift. Sized
+# to catch structural regressions -- a dropped channel, a lost 1/2, a wrong
+# reduced mass -- which move the ratio by a factor. DO NOT tighten it onto the
+# values the current build produces.
+DRAG_RATIO_BRACKET = (1.0, 1.7)
+
 
 # --------------------------------------------------------------- harness
 
@@ -953,6 +961,62 @@ def gate_c5():
         f"phelps_iso_rate_cm3_s is {table_rel:+.2e} off its own closed form "
         f"(quadrature); total k/k_fluid vs a 300 K Maxwellian -- "
         + "; ".join(totals),
+    )
+
+
+def gate_c6():
+    """The kinetic/fluid total-drag ratio stays inside its registered bracket.
+
+    A COARSE DRIFT TRIPWIRE, not a correspondence check. The kinetic and
+    fluid operators are not the same object -- the cx channel's ``g_eff``
+    interpolation is not a Maxwellian rate average -- so no exact ratio is
+    predicted and none is asserted. What IS asserted is that the two stay
+    within a factor of each other: the kinetic arm should drag somewhat
+    HARDER than the fluid reduced operator (ratio >= 1) and not by more than
+    a modest factor.
+
+    The bracket is the registered one and is deliberately loose. It exists to
+    catch gross structural drift -- a dropped channel, a wrong reduced mass, a
+    units slip -- which moves this ratio by a factor, not by percent. It must
+    NOT be tightened onto whatever the current build happens to produce; a
+    tripwire that tracks the code it watches is not a tripwire.
+
+    What this bracket does NOT catch, stated so nobody mistakes its scope:
+    the isotropic channel's one-half momentum-transfer factor. Dropping it
+    takes the ratios to 1.42-1.60, still inside [1.0, 1.7]. That factor is
+    gated exactly, bit-for-bit, by C5; this row is not its guard and the two
+    are complementary rather than redundant.
+    """
+    nz = 4
+    dvm = bare_dvm(nz=nz, nvz=48, nvp=12)
+    g = dvm.g
+    n_i = np.full(nz, 5.0e12)
+    Ti = np.array([0.1, 0.5, 2.0, 8.0])
+    u = np.array([0.0, 1.0e5, -2.0e5, 5.0e5])
+    nu_cx, nu_el = dvm.collision_frequencies(n_i, Ti, u)
+    Tn_eV = 300.0 * KB / EV
+    fM = g.maxwellian(Tn_eV, 0.0)
+
+    ratios = []
+    for i in range(nz):
+        k_kin = float(((nu_cx[i] + nu_el[i]) * fM).sum()) / n_i[i]
+        k_fluid = float(
+            phelps_momentum_transfer_rate_cm3_s(0.5 * (Ti[i] + Tn_eV))
+        )
+        ratios.append(k_kin / k_fluid if k_fluid else float("inf"))
+
+    lo, hi = DRAG_RATIO_BRACKET
+    ok = all(lo <= r <= hi for r in ratios)
+    worst = min(ratios, key=lambda r: min(r - lo, hi - r))
+    return (
+        "C6 kinetic/fluid total-drag ratio inside its registered bracket",
+        ok,
+        f"bracket [{lo}, {hi}] (registered 2026-08-05, coarse drift "
+        f"tripwire -- not to be tightened onto the current build); "
+        + "; ".join(
+            f"Ti={Ti[i]:g}: {ratios[i]:.3f}" for i in range(nz)
+        )
+        + f"; closest to an edge: {worst:.3f}",
     )
 
 
@@ -1761,6 +1825,7 @@ def main():
         gate_c3,
         gate_c4,
         gate_c5,
+        gate_c6,
         gate_r1,
         gate_r2,
         gate_p1,
