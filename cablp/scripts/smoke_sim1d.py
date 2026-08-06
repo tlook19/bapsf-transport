@@ -11679,6 +11679,51 @@ print(json.dumps({
         assert loaded_summary.max_consecutive_dt_min_clamped_steps == 5
         assert loaded_summary.dt_min_hard_zero_step_count == 5
 
+    # (ii-b) ACCEPTED STEPS BELOW dt_min ARE SEEN, AND SEPARATELY.
+    # The dt_min clamp lifts a bound's request UP to dt_min inside
+    # suggest_timestep, but the step caps are applied AFTERWARDS in the run
+    # loop and can only shrink the step -- so an accepted step can land
+    # strictly BELOW dt_min and the clamp census above cannot see it. A
+    # production run (K6d) accepted 9.239e-11 against a configured dt_min of
+    # 1e-10 with nothing recording it.
+    below_params = dict(dtlock_params)
+    below_params["dt_save"] = 0.0
+    below_params["dt_min"] = 1.0e-10
+    below_sim = LAPDSim1D(below_params, dtlock_flags)
+    # t_end lands 5e-11 past the last whole step: below dt_min by construction.
+    below_result = below_sim.run(t_end=2.5e-10, dt=1.0e-10)
+    below_summary = summarize_result(below_result)
+    assert [diag.accepted_dt for diag in below_result.diagnostics] == [
+        1.0e-10,
+        1.0e-10,
+        below_result.diagnostics[-1].accepted_dt,
+    ]
+    assert below_summary.below_dt_min_step_count == 1
+    assert below_summary.below_dt_min_known is True
+    assert np.isclose(below_summary.below_dt_min_min_accepted_dt, 5.0e-11)
+    # It NAMES the cap responsible -- the diagnostic point of the category.
+    assert below_summary.below_dt_min_step_cap_counts == {"t_end": 1}
+    # DISTINCT, not folded into the clamp count: no step was clamped here.
+    assert below_summary.dt_min_clamped_step_count == 0
+    assert below_summary.max_consecutive_dt_min_clamped_steps == 0
+    # The clamp census and this one are independent: the forced-clamp run
+    # above clamped 5 steps and had no below-floor accepted step.
+    assert transient_summary.below_dt_min_step_count == 0
+    # A result carrying no params cannot know dt_min, and says so rather than
+    # reporting a reassuring zero.
+    unknowable = summarize_result(
+        SimpleNamespace(
+            **{
+                field: getattr(below_result, field)
+                for field in dir(below_result)
+                if not field.startswith("_") and field != "params"
+            }
+        )
+    )
+    assert unknowable.below_dt_min_known is False
+    assert unknowable.below_dt_min_step_count == 0
+    assert np.isnan(unknowable.below_dt_min_min_accepted_dt)
+
     # (iii) PAST THE THRESHOLD IT RAISES, LOUDLY AND WITH THE EVIDENCE.
     lock_params = dict(transient_params)
     locked_sim = _ForcedClampSim(lock_params, dtlock_flags, clamp_steps=40)
