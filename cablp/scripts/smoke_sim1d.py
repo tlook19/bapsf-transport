@@ -8306,6 +8306,133 @@ def main():
     )
     assert np.all(np.isfinite(np.asarray(kd_lim_bundle.Ei, dtype=float)))
 
+    # K2d transfer-ledger census, PERSISTED: the standing DVM report condition
+    # ("quote relax_limited_steps and the outstanding debt; any limited > 0
+    # gets a dedicated look") has to be answerable from the saved artifact,
+    # not only from a live solver object. Four statements: the moment path
+    # writes no such group at all, a DVM run round-trips its census through
+    # save/load, the forced-limiter scenario persists NONZERO counts, and the
+    # ledger identity applied_cum + debt == booked_cum survives the file.
+    from cablp.solvers._sim1d.results.io import (
+        save_result_hdf5 as _save_result_hdf5_dvm,
+    )
+
+    kd_cen_flags = dict(kd_obs_flags)
+    # Same geometry and flags as the DVM build below; ONLY neutral_model
+    # differs, so a layout difference between the two files can be nothing
+    # else.
+    kd_cen_mom_params = dict(kd_obs_params)
+    kd_cen_mom_params["neutral_model"] = "moment"
+    kd_cen_mom_params["dt_save"] = 5.0e-9
+    kd_cen_mom_sim = LAPDSim1D(kd_cen_mom_params, dict(kd_cen_flags))
+    assert kd_cen_mom_sim._dvm is None
+    kd_cen_mom_result = kd_cen_mom_sim.run(t_end=2.0e-8, dt=1.0e-9)
+    assert not hasattr(kd_cen_mom_result, "dvm_transfer_ledger")
+
+    kd_cen_params = dict(kd_obs_params)
+    kd_cen_params["dt_save"] = 5.0e-9
+    kd_cen_sim = LAPDSim1D(kd_cen_params, dict(kd_cen_flags))
+    for _ in range(8):
+        kd_cen_sim.advance_one_step(dt=1.0e-9)
+    assert kd_cen_sim._dvm_engaged
+    kd_cen_cells = kd_cen_sim.geometry.cells
+    kd_cen_sim._dvm.Ei_transfer = np.full(kd_cen_cells, -1.0e12)
+    kd_cen_sim._dvm.M_transfer = np.full(kd_cen_cells, -1.0e3)
+    kd_cen_result = kd_cen_sim.run(
+        t_end=kd_cen_sim.time + 4.0e-8, dt=1.0e-9
+    )
+    kd_cen = kd_cen_result.dvm_transfer_ledger
+    assert kd_cen["engaged"] == 1
+    assert kd_cen["relax_limited_steps"] > 0
+    assert kd_cen["limited_cells"] > 0
+
+    with tempfile.TemporaryDirectory() as kd_cen_dir:
+        kd_cen_mom_path = Path(kd_cen_dir) / "dvm_census_moment.h5"
+        _save_result_hdf5_dvm(kd_cen_mom_path, kd_cen_mom_result)
+        with h5py.File(kd_cen_mom_path, "r") as kd_cen_mom_h5:
+            assert "dvm_transfer_ledger" not in kd_cen_mom_h5
+        kd_cen_mom_loaded = load_result_hdf5(kd_cen_mom_path)
+        assert not hasattr(kd_cen_mom_loaded, "dvm_transfer_ledger")
+        assert summarize_result(
+            kd_cen_mom_loaded
+        ).dvm_transfer_ledger_census is None
+
+        kd_cen_path = Path(kd_cen_dir) / "dvm_census.h5"
+        _save_result_hdf5_dvm(
+            kd_cen_path, kd_cen_result, params=kd_cen_params, flags=kd_cen_flags
+        )
+        kd_cen_loaded = load_result_hdf5(kd_cen_path)
+        kd_cen_back = kd_cen_loaded.dvm_transfer_ledger
+        assert set(kd_cen_back) == set(kd_cen)
+        for kd_cen_name, kd_cen_value in kd_cen.items():
+            if isinstance(kd_cen_value, np.ndarray):
+                assert np.array_equal(kd_cen_back[kd_cen_name], kd_cen_value), (
+                    kd_cen_name
+                )
+            else:
+                assert kd_cen_back[kd_cen_name] == kd_cen_value, kd_cen_name
+                assert isinstance(
+                    kd_cen_back[kd_cen_name], type(kd_cen_value)
+                ), kd_cen_name
+        # The identity, re-checked from the FILE's own arrays.
+        for kd_cen_ch in ("Ei", "M"):
+            kd_cen_debt = kd_cen_back[f"{kd_cen_ch}_debt"]
+            kd_cen_booked = kd_cen_back[f"{kd_cen_ch}_booked_cum"]
+            kd_cen_applied = kd_cen_back[f"{kd_cen_ch}_applied_cum"]
+            kd_cen_scale = float(
+                np.max(np.abs(kd_cen_booked)) + np.max(np.abs(kd_cen_debt))
+            )
+            assert kd_cen_scale > 0.0, kd_cen_ch
+            assert np.max(
+                np.abs(kd_cen_applied + kd_cen_debt - kd_cen_booked)
+            ) / kd_cen_scale < 1.0e-12, kd_cen_ch
+        assert np.any(np.abs(kd_cen_back["Ei_debt"]) > 0.0)
+        # The per-save series: one record per saved frame, counters that only
+        # ever climb, and never past the end-of-run totals.
+        kd_cen_frames = len(kd_cen_result.time)
+        for kd_cen_field in (
+            "time",
+            "relax_steps",
+            "relax_limited_steps",
+            "limited_cells",
+        ):
+            kd_cen_series = kd_cen_back[f"sample_{kd_cen_field}"]
+            assert len(kd_cen_series) == kd_cen_frames, kd_cen_field
+            assert np.all(np.diff(kd_cen_series) >= 0.0), kd_cen_field
+        assert (
+            kd_cen_back["sample_relax_limited_steps"][-1]
+            <= kd_cen["relax_limited_steps"]
+        )
+        assert kd_cen_back["sample_relax_limited_steps"][-1] > 0.0
+        # Surfaced, and the arm's presence is readable from the file.
+        kd_cen_summary = summarize_result(kd_cen_loaded)
+        assert kd_cen_summary.dvm_arm_configured is True
+        assert (
+            kd_cen_summary.dvm_transfer_ledger_census["relax_limited_steps"]
+            == kd_cen["relax_limited_steps"]
+        )
+        assert (
+            "Ei_debt_total" in kd_cen_summary.dvm_transfer_ledger_census
+        )
+        # A PRE-FIX DVM artifact -- the arm ran, the census was never kept --
+        # reads "not recorded", never zero.
+        kd_cen_prefix = SimpleNamespace(**vars(kd_cen_result))
+        del kd_cen_prefix.dvm_transfer_ledger
+        kd_cen_prefix_path = Path(kd_cen_dir) / "dvm_census_prefix.h5"
+        _save_result_hdf5_dvm(
+            kd_cen_prefix_path,
+            kd_cen_prefix,
+            params=kd_cen_params,
+            flags=kd_cen_flags,
+        )
+        with h5py.File(kd_cen_prefix_path, "r") as kd_cen_prefix_h5:
+            assert "dvm_transfer_ledger" not in kd_cen_prefix_h5
+        kd_cen_prefix_summary = summarize_result(
+            load_result_hdf5(kd_cen_prefix_path)
+        )
+        assert kd_cen_prefix_summary.dvm_arm_configured is True
+        assert kd_cen_prefix_summary.dvm_transfer_ledger_census is None
+
     # --- Neutral-wind advection (M3): donor-cell
     # upwind of nn and M_n by u_n on the neutral faces, closed ends for
     # particles, end-wall momentum accommodation, and a CFL guard.
