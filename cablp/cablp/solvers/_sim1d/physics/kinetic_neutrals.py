@@ -720,6 +720,69 @@ def _drift_engine(F, g):
         )
 
 
+CHORD_CLASS_SAMPLES = 20001
+
+
+def annulus_chord_classes(Rp_cm, Rm_cm, samples=CHORD_CLASS_SAMPLES):
+    """Return the bounded-chord flight classes of a coaxial annulus.
+
+    Three cosine-weighted chord classes, derived numerically from the local
+    ``(Rp, Rm)`` alone -- no free parameters. ``s`` is the sine of the
+    emission angle to the surface normal, uniformly sampled because the
+    cosine law makes it uniform on ``[0, 1]``:
+
+    ``c_ww``
+        outer wall to outer wall, the emission directions that miss the
+        inner cylinder (``s >= Rp/Rm``);
+    ``c_wi``
+        outer wall to the inner cylinder, the directions that hit it
+        (``s < Rp/Rm``); the fraction taking this branch is the view factor
+        ``F_inner = Rp/Rm``;
+    ``c_io``
+        inner cylinder outward to the outer wall, over all directions.
+
+    Returns ``(F_inner, c_ww, c_wi, c_io, var_ww, var_wi, var_io)``, all
+    per-cell arrays [cm] except the dimensionless view factor and the three
+    chord VARIANCES [cm^2] of the sampled distributions, which state how
+    much of the class each mean stands for.
+    """
+    Rp = np.asarray(Rp_cm, dtype=float)
+    Rm = np.asarray(Rm_cm, dtype=float)
+    nz = Rp.size
+    F_inner = Rp / Rm
+    s = np.linspace(0.0, 1.0, int(samples))
+    c_ww = np.empty(nz)
+    c_wi = np.empty(nz)
+    c_io = np.empty(nz)
+    v_ww = np.zeros(nz)
+    v_wi = np.zeros(nz)
+    v_io = np.zeros(nz)
+    for i in range(nz):
+        mu = F_inner[i]
+        Rmi = Rm[i]
+        Rpi = Rp[i]
+        outer = s >= mu
+        cw = 2.0 * Rmi * np.sqrt(1.0 - s[outer] ** 2)
+        if cw.size:
+            c_ww[i] = cw.mean()
+            v_ww[i] = cw.var()
+        else:
+            c_ww[i] = 2.0 * (Rmi - Rpi)
+        si = s[~outer]
+        if si.size:
+            ci = Rmi * np.sqrt(1.0 - si**2) - np.sqrt(
+                np.maximum(Rpi**2 - (Rmi * si) ** 2, 0.0)
+            )
+            c_wi[i] = ci.mean()
+            v_wi[i] = ci.var()
+        else:
+            c_wi[i] = Rmi - Rpi
+        cio = np.sqrt(Rmi**2 - (Rpi * s) ** 2) - Rpi * np.sqrt(1.0 - s**2)
+        c_io[i] = cio.mean()
+        v_io[i] = cio.var()
+    return F_inner, c_ww, c_wi, c_io, v_ww, v_wi, v_io
+
+
 class KN2ZoneJump(KN2Zone):
     """K1b: bounded-chord (jump) annulus kernel.
 
@@ -743,31 +806,15 @@ class KN2ZoneJump(KN2Zone):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # per-cell chord classes from the local geometry, cosine-weighted
-        nz = self.nz
-        self.F_inner = self.Rp / self.Rm
-        s = np.linspace(0.0, 1.0, 20001)
-        self.c_ww = np.empty(nz)
-        self.c_wi = np.empty(nz)
-        self.c_io = np.empty(nz)
-        for i in range(nz):
-            mu = self.F_inner[i]
-            Rm = self.Rm[i]
-            Rp = self.Rp[i]
-            outer = s >= mu
-            cw = 2.0 * Rm * np.sqrt(1.0 - s[outer] ** 2)
-            self.c_ww[i] = cw.mean() if cw.size else 2.0 * (Rm - Rp)
-            si = s[~outer]
-            if si.size:
-                ci = Rm * np.sqrt(1.0 - si**2) - np.sqrt(
-                    np.maximum(Rp**2 - (Rm * si) ** 2, 0.0)
-                )
-                self.c_wi[i] = ci.mean()
-            else:
-                self.c_wi[i] = Rm - Rp
-            # inner surface, outward cosine: c = sqrt(Rm^2 - Rp^2 s^2) - Rp sqrt(1-s^2)...
-            # parameterize by emission angle: chord to the outer circle
-            cio = np.sqrt(Rm**2 - (Rp * s) ** 2) - Rp * np.sqrt(1.0 - s**2)
-            self.c_io[i] = cio.mean()
+        (
+            self.F_inner,
+            self.c_ww,
+            self.c_wi,
+            self.c_io,
+            _,
+            _,
+            _,
+        ) = annulus_chord_classes(self.Rp, self.Rm)
         self.z_edges = self.bg["z_edges"]
         self.zc = 0.5 * (self.z_edges[:-1] + self.z_edges[1:])
 

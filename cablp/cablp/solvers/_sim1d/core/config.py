@@ -654,6 +654,30 @@ def model_mode_defaults():
         ``V_col nu_c->a == V_ann nu_a->c`` on the actual cell volumes, so
         the particle ledger's zone channel cancels exactly either way. Any
         other value raises at construction.
+    neutral_kinetic_dvm_annulus_flights:
+        How the transient DVM takes the ANNULUS zone's wall-interaction and
+        radial-exchange flights. ``"rates"`` uses the algebraic
+        ``neutral_kinetic_dvm_exchange`` rates in the implicit march, with
+        the annulus advected axially by the same upwind sweep as the
+        column; the flight-time distribution each rate implies is
+        exponential. ``"bounded_chord"`` replaces the annulus-side wall and
+        annulus-to-column rates with three deterministic flight classes
+        whose mean chords are derived numerically from the local
+        ``(Rp, Rm)``: a wall launch reaches the inner surface with the view
+        factor ``Rp/Rm`` at chord ``c_wi`` and the wall otherwise at
+        ``c_ww``, and a column escape reaches the wall at ``c_io``. Each
+        flight displaces the atom axially by exactly ``v_z c / v_perp`` and
+        lasts ``c / v_perp``, so the axial step per surface encounter is
+        bounded rather than exponentially tailed. Under that branch the
+        annulus is not advected by the march -- the jump is its whole axial
+        motion -- and the annulus distribution is the sum of the three
+        in-flight populations; the column keeps the rate treatment, so
+        ``neutral_kinetic_dvm_exchange`` still sets its escape rate
+        ``nu_c->a`` and is not ignored. Neither branch has a free
+        parameter. Inert unless ``neutral_model = "kinetic_dvm"``;
+        selecting ``"bounded_chord"`` without that model and the
+        ``neutral_two_zone`` flag, or any other value, raises at
+        construction.
     neutral_kinetic_dvm_tn_feedback:
         Whether the DVM's measured neutral temperature ``Tn(z)`` FEEDS the
         fluid evaluations that otherwise assume a fixed cold gas. The
@@ -773,6 +797,7 @@ def model_mode_defaults():
         "neutral_kinetic_dvm_accommodation": 1.0,
         "neutral_kinetic_dvm_elastic": "phelps_iso",
         "neutral_kinetic_dvm_exchange": "cauchy_chord",
+        "neutral_kinetic_dvm_annulus_flights": "rates",
         "neutral_kinetic_dvm_tn_feedback": False,
         "neutral_kinetic_dvm_transfer_relax_fraction": 0.5,
         # Bucket-2 default-off closure instrument (low-Te ADAS extension; only
