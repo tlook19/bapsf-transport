@@ -250,6 +250,45 @@ matched-time mid-machine `n_ann` deviation to shrink 3x and it shrank 1.32x
 by the zone-rate coefficients. The two arms are a declared A/B; promotion is
 gated on evidence that has not been produced.
 
+**`neutral_kinetic_dvm_annulus_flights = "rates"` — DERIVED (both arms), the
+default is a REPRODUCIBILITY stance.** How the annulus zone's wall interaction
+and radial exchange are taken. Neither arm has a fitted number in it.
+
+- `"rates"` is the shipped algebraic treatment: the
+  `neutral_kinetic_dvm_exchange` frequencies `nuw` and `nuxp` in the implicit
+  march, with the annulus advected by the same upwind sweep as the column. A
+  per-cell rate is a memoryless process, so the flight time it implies is
+  EXPONENTIAL — `mean^2/var = 1`.
+- `"bounded_chord"` replaces the annulus-side wall and annulus-to-column rates
+  with the K1b jump kernel's three flight classes. The mean chords are the
+  cosine-weighted class means computed numerically from the local `(Rp, Rm)` by
+  `kinetic_neutrals.annulus_chord_classes`, the same function `KN2ZoneJump`
+  uses: outer wall to inner surface with the view factor `Rp/Rm` at `c_wi`,
+  outer wall to outer wall at `c_ww`, inner surface outward at `c_io`. On the
+  production geometry's duct (`Rp = 15`, `Rm = 50`) they are 37.46, 69.99 and
+  37.46 cm. Their sampled distributions carry `mean^2/var` 196.0, 10.5 and
+  195.7 — the measured chord statistics of the duct, ten to two hundred times
+  narrower than the exponential the rate arm implies, which is the whole
+  reason the arm exists. The classes are checked against the two-dimensional
+  mean-chord theorem `pi (Rm - Rp) / 2`, which nothing in their derivation was
+  fitted to, by gate J1 of `scripts/verify_sim1d_k2_dvm.py`.
+
+Honest bar: the transient-ification is NOT the steady K1b kernel. It keeps the
+axial displacement per flight deterministic and equal to `v_z c / v_perp`, and
+the mean flight time equal to `c / v_perp`, but the flight is TERMINATED at
+that mean rate rather than at a fixed elapsed time, and the in-flight atom is
+held at the flight's midpoint rather than spread along its path. An exact
+fixed-duration delay is not representable in an Eulerian `f_a` without an age
+coordinate, whose cost on the production grid is prohibitive; what is
+recovered exactly is the per-flight axial step and hence the annulus's axial
+dispersion, which is the quantity the exponential tail was over-carrying. The
+E2 read of both arms against the step-face ray-traced Monte Carlo on
+`scripts/es1_k3a_cal2_nx240.h5` is `scripts/k5build_report.txt`; the numbers
+there are RATIFICATION-PENDING and nothing in the kernel was tuned to them.
+
+The DEFAULT stays `"rates"` because the frozen production arm ran on it and
+must stay bit-reproducible; `scripts/k5_frozen_bitexact.py` is the check.
+
 **`neutral_kinetic_dvm_tn_feedback = False` — ASSUMED (a stance, not a value).**
 Off means the fluid keeps its fixed cold-gas neutral temperature where it needs
 one, exactly as today, while the arm reports its measured `Tn(z)` as a

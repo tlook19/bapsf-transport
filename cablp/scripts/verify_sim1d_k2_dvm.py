@@ -21,6 +21,16 @@ Gates:
       areas jump at the plenum constriction and the end expansion -- the
       case the throat-face flux form exists for and the one the uniform
       default geometry cannot exercise
+  J1  the bounded-chord annulus flight classes satisfy the two-dimensional
+      mean-chord theorem, ``pi (Rm - Rp) / 2``, which nothing in their
+      derivation was fitted to; and every class flight time is sharper than
+      the exponential the rate arm implies
+  J2  the bounded-chord jump operator routes every launched particle to
+      exactly one outcome, and the running engine closes both ledger forms
+      and reproduces the booked transfer on the PRODUCTION expanded-end
+      geometry -- the I4 statement, made against the jump kernel
+  J3  naming the shipped ``annulus_flights = "rates"`` is bit-identical to
+      not naming it at all
   I5  the same two statements on a zero-annulus geometry, plus the
       statement that nothing leaks into a cell whose annulus has no volume
   S1  recycle identity: what the arm sources at a plasma-terminating surface
@@ -125,7 +135,12 @@ from cablp.solvers._sim1d.physics.kinetic_dvm import (
     TransientDVM,
     ledger_residual,
 )
-from cablp.solvers._sim1d.physics.kinetic_neutrals import EV, KB, M_HE
+from cablp.solvers._sim1d.physics.kinetic_neutrals import (
+    EV,
+    KB,
+    M_HE,
+    annulus_chord_classes,
+)
 from cablp.solvers._sim1d.physics.neutrals import neutral_zone_volumes
 
 CADENCE_S = 2.5e-5
@@ -375,7 +390,7 @@ def transfer_reconstruction_error(dvm, dt, plasma, rec):
     return worst
 
 
-def geometry_closure(geom, label):
+def geometry_closure(geom, label, annulus_flights="rates"):
     """Run a DVM on ``geom`` and return (worst residuals, transfer error).
 
     Everything physical is live -- zone exchange, the cylindrical wall,
@@ -386,7 +401,7 @@ def geometry_closure(geom, label):
     nz = int(np.asarray(geom.length_cm).size)
     dvm = TransientDVM(
         geometry=geom, nvz=16, nvp=6, s_L=0.3, s_R=0.3,
-        exchange_model=EXCHANGE_MODEL,
+        exchange_model=EXCHANGE_MODEL, annulus_flights=annulus_flights,
     )
     seed_ann = np.where(dvm.V_ann > 0.0, 1.0e13, 0.0)
     dvm.seed_from_density(np.full(nz, 1.0e13), seed_ann)
@@ -578,6 +593,117 @@ def gate_i4():
         f"{dvm.nz} cells, annulus area-jump ratios {jumps}; worst "
         f"distribution {fmt(worst_dist)}, domain {fmt(worst_dom)}, "
         f"independent transfer {fmt(transfer_err)} (tol {fmt(ROUNDOFF_REL)})",
+    )
+
+
+def gate_j1():
+    """The bounded-chord classes are the cosine-weighted chords, analytically.
+
+    The three class means are checked against an identity nothing in their
+    derivation was fitted to: the two-dimensional mean-chord theorem. The
+    annulus cross-section has mean chord ``pi A / P = pi (Rm - Rp) / 2``
+    over all its surfaces, and the same average taken over the CLASSES is
+    the perimeter-weighted mix of the outer-wall branch (the view factor
+    splitting ``c_wi`` from ``c_ww``) and the inner-surface branch
+    ``c_io``. The two must agree, and the only error is the sampling of the
+    emission angle.
+    """
+    geom = expanded_end_geometry()
+    Rp = np.asarray(geom.Rp_cm, dtype=float)
+    Rm = np.asarray(geom.Rm_cm, dtype=float)
+    F, c_ww, c_wi, c_io, v_ww, v_wi, v_io = annulus_chord_classes(Rp, Rm)
+    wall_mean = (1.0 - F) * c_ww + F * c_wi
+    mixed = (Rm * wall_mean + Rp * c_io) / (Rm + Rp)
+    analytic = np.pi * (Rm - Rp) / 2.0
+    err = float(np.max(np.abs(mixed - analytic) / analytic))
+    sharp = {
+        "ww": c_ww**2 / np.maximum(v_ww, 1e-300),
+        "wi": c_wi**2 / np.maximum(v_wi, 1e-300),
+        "io": c_io**2 / np.maximum(v_io, 1e-300),
+    }
+    # An exponential flight time -- what the rate arm's nuw and nuxp imply --
+    # has mean^2/var exactly 1. Every class must be narrower than that; the
+    # measured duct values are the ~10 and ~200 the kernel was built for.
+    ok = err < 1.0e-4 and all(float(np.min(s)) > 1.0 for s in sharp.values())
+    duct = int(np.argmax(np.isclose(Rm, np.min(Rm))))
+    return (
+        "J1 bounded-chord classes satisfy the 2D mean-chord theorem",
+        ok,
+        f"max relative departure from pi (Rm - Rp) / 2 = {fmt(err)} "
+        f"(tol 1e-4, the angle sampling); duct cell {duct} "
+        f"(Rp={Rp[duct]:g}, Rm={Rm[duct]:g}) chords "
+        f"ww {c_ww[duct]:.3f} wi {c_wi[duct]:.3f} io {c_io[duct]:.3f} cm, "
+        f"mean^2/var ww {sharp['ww'][duct]:.2f} wi {sharp['wi'][duct]:.2f} "
+        f"io {sharp['io'][duct]:.2f} (an exponential flight time is 1.00)",
+    )
+
+
+def gate_j2():
+    """The jump operator conserves on the production expanded-end geometry.
+
+    The I4 statement, made against the bounded-chord annulus: the routing
+    map itself must send every launched particle to exactly one outcome,
+    and the running engine must close both ledger forms and reproduce the
+    booked transfer independently, across the same annulus area jumps the
+    throat-face flux form exists for.
+    """
+    geom = expanded_end_geometry()
+    dvm, worst_dist, worst_dom, transfer_err = geometry_closure(
+        geom, "expanded end", annulus_flights="bounded_chord"
+    )
+    area_ann = dvm.V_ann / dvm.dz
+    jumps = area_ann[1:] / np.maximum(area_ann[:-1], 1e-300)
+    jumps = sorted({round(float(r), 3) for r in jumps if abs(r - 1.0) > 1e-9})
+    routing = dvm.flights.residual
+    parts = sum(dvm.f_flight.values())
+    split = float(np.max(np.abs(dvm.f_a - parts)))
+    ok = (
+        worst_dist < ROUNDOFF_REL
+        and worst_dom < ROUNDOFF_REL
+        and transfer_err < ROUNDOFF_REL
+        and routing == 0.0
+        and split == 0.0
+    )
+    return (
+        "J2 bounded-chord annulus: routing and closure exact across the "
+        "area jumps",
+        ok,
+        f"{dvm.nz} cells, annulus area-jump ratios {jumps}; flight-map "
+        f"routing residual {fmt(routing)} (exact 0 required); "
+        f"f_a - sum(in-flight classes) {fmt(split)} (exact 0 required); "
+        f"worst distribution {fmt(worst_dist)}, domain {fmt(worst_dom)}, "
+        f"independent transfer {fmt(transfer_err)} (tol {fmt(ROUNDOFF_REL)})",
+    )
+
+
+def gate_j3():
+    """Naming the shipped selector changes nothing, bit for bit."""
+    geom = expanded_end_geometry()
+    nz = int(np.asarray(geom.length_cm).size)
+    states = []
+    for kwargs in ({}, {"annulus_flights": "rates"}):
+        dvm = TransientDVM(
+            geometry=geom, nvz=16, nvp=6, s_L=0.3, s_R=0.3,
+            exchange_model=EXCHANGE_MODEL, **kwargs
+        )
+        dvm.seed_from_density(
+            np.full(nz, 1.0e13), np.where(dvm.V_ann > 0.0, 1.0e13, 0.0)
+        )
+        plasma = geometry_plasma(nz)
+        rec = np.full(nz, 1.0e15)
+        for _ in range(6):
+            dvm.update(CADENCE_S, sources={"recombination": rec}, **plasma)
+        states.append((dvm.f_c.copy(), dvm.f_a.copy(),
+                       dvm.M_transfer.copy(), dvm.Ei_transfer.copy()))
+    same = all(
+        a.tobytes() == b.tobytes() for a, b in zip(states[0], states[1])
+    )
+    return (
+        "J3 annulus_flights='rates' is bit-identical to not naming it",
+        same,
+        "f_c, f_a and both transfer rows compared as raw bytes after 6 "
+        f"updates on the expanded-end geometry: "
+        f"{'identical' if same else 'DIFFER'}",
     )
 
 
@@ -1297,6 +1423,39 @@ REFUSALS = (
             None,
         )[1],
     ),
+    (
+        "G12 unknown annulus-flight treatment refused",
+        dict(),
+        "neutral_kinetic_dvm_annulus_flights",
+        lambda d, fl: (
+            d.__setitem__("neutral_kinetic_dvm_annulus_flights", "chord"),
+            None,
+        )[1],
+    ),
+    (
+        "G13 bounded-chord annulus without the DVM arm refused",
+        dict(),
+        "neutral_kinetic_dvm_annulus_flights",
+        lambda d, fl: (
+            d.__setitem__(
+                "neutral_kinetic_dvm_annulus_flights", "bounded_chord"
+            ),
+            d.__setitem__("neutral_model", "moment"),
+            None,
+        )[2],
+    ),
+    (
+        "G14 bounded-chord annulus without the two-zone flag refused",
+        dict(),
+        "neutral_two_zone",
+        lambda d, fl: (
+            d.__setitem__(
+                "neutral_kinetic_dvm_annulus_flights", "bounded_chord"
+            ),
+            fl.__setitem__("neutral_two_zone", False),
+            None,
+        )[2],
+    ),
 )
 
 
@@ -1577,6 +1736,7 @@ def gate_l5():
 # closure hands the march. These are re-run once per value of
 # ``neutral_kinetic_dvm_exchange``.
 CONSERVATION_GATES = ("gate_i1", "gate_i2", "gate_i4", "gate_i5",
+                      "gate_j2",
                       "gate_s1",
                       "gate_c1", "gate_c2", "gate_c3", "gate_c4",
                       "gate_d3", "gate_d4")
@@ -1589,6 +1749,9 @@ def main():
         gate_i3,
         gate_i4,
         gate_i5,
+        gate_j1,
+        gate_j2,
+        gate_j3,
         gate_s1,
         gate_c1,
         gate_c2,

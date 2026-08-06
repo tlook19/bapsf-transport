@@ -8029,6 +8029,28 @@ def main():
             dict(kd_flags, characteristic_boundary=True),
             "characteristic_boundary",
         ),
+        (
+            dict(kd_params, neutral_kinetic_dvm_annulus_flights="chord"),
+            kd_flags,
+            "neutral_kinetic_dvm_annulus_flights",
+        ),
+        (
+            dict(
+                kd_params,
+                neutral_kinetic_dvm_annulus_flights="bounded_chord",
+                neutral_model="moment",
+            ),
+            kd_flags,
+            "neutral_kinetic_dvm_annulus_flights",
+        ),
+        (
+            dict(
+                kd_params,
+                neutral_kinetic_dvm_annulus_flights="bounded_chord",
+            ),
+            dict(kd_flags, neutral_two_zone=False),
+            "neutral_two_zone",
+        ),
     ):
         try:
             LAPDSim1D(dict(kd_bad_params), dict(kd_bad_flags))

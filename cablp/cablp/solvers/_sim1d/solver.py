@@ -48,6 +48,7 @@ from .core.state import (
 from .core.timestep import suggest_timestep
 from .physics.conduction import heat_conduction_rhs, implicit_heat_conduction_step
 from .physics.kinetic_dvm import (
+    ANNULUS_FLIGHT_MODELS as KINETIC_DVM_ANNULUS_FLIGHT_MODELS,
     ELASTIC_MODELS as KINETIC_DVM_ELASTIC_MODELS,
     EXCHANGE_MODELS as KINETIC_DVM_EXCHANGE_MODELS,
     TransientDVM,
@@ -735,6 +736,24 @@ class LAPDSim1D:
         self._dvm_step_transfer = None
         if self._neutral_model == "kinetic_dvm":
             self._configure_kinetic_dvm()
+        else:
+            # The bounded-chord annulus is an operator inside the transient
+            # DVM; asking for it anywhere else has nothing to act on, and a
+            # selector that silently does nothing is the trap this refuses.
+            flights = str(
+                self._input_dict.get(
+                    "neutral_kinetic_dvm_annulus_flights", "rates"
+                )
+            )
+            if flights != "rates":
+                raise ValueError(
+                    "neutral_kinetic_dvm_annulus_flights selects an operator "
+                    "of the transient DVM's annulus zone and has no meaning "
+                    f"under neutral_model={self._neutral_model!r}. Accepted: "
+                    "'rates' anywhere, or 'bounded_chord' with "
+                    "neutral_model='kinetic_dvm' and the neutral_two_zone "
+                    f"flag (got {flights!r})"
+                )
         # R5.1 / audit A11: gated fluid<->circuit Picard coupling (default off).
         self._coupled_circuit_picard = bool(
             self._flags.get("coupled_circuit_picard", False)
@@ -1541,6 +1560,16 @@ class LAPDSim1D:
                 "neutral_kinetic_dvm_exchange must be one of "
                 f"{KINETIC_DVM_EXCHANGE_MODELS} (got {exchange!r})"
             )
+        flights = str(
+            self._input_dict.get(
+                "neutral_kinetic_dvm_annulus_flights", "rates"
+            )
+        )
+        if flights not in KINETIC_DVM_ANNULUS_FLIGHT_MODELS:
+            raise ValueError(
+                "neutral_kinetic_dvm_annulus_flights must be one of "
+                f"{KINETIC_DVM_ANNULUS_FLIGHT_MODELS} (got {flights!r})"
+            )
         tn_feedback = bool(
             self._input_dict.get("neutral_kinetic_dvm_tn_feedback", False)
         )
@@ -1578,6 +1607,7 @@ class LAPDSim1D:
             accommodation=accommodation,
             elastic_model=elastic,
             exchange_model=exchange,
+            annulus_flights=flights,
             transparency=1.0 - float(self._input_dict.get("eta", 0.358)),
             mesh_face=int(anode_faces[0]) if anode_faces.size else -999,
             s_L=self._dvm_end_sticking("S_pump_L"),

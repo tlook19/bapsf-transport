@@ -10,13 +10,15 @@ steady state, this module carries accepted-state distributions
 and advances them ONE step per neutral-clock tick with the same implicit
 upwind march, the same sinh-stretched shared ``VGrid``, the same
 moment-exact Maxwellian projection and the same cosine-wall re-emission
-spectrum. The zone rates are the one place this module offers a choice:
-``exchange_model`` selects between that same Cauchy-chord form and a
-geometrically derived one (see :class:`TransientDVM`), and it defaults to
-the Cauchy-chord form. Nothing here is a second
-implementation of the velocity grid or of the transport sweep -- the
-operators are imported or transcribed from that module so the offline
-instruments and the in-solver arm keep agreeing on inputs.
+spectrum. The ANNULUS zone is where this module offers its choices:
+``exchange_model`` selects between that same Cauchy-chord rate form and a
+geometrically derived one, and ``annulus_flights`` selects whether the
+annulus is carried by those rates at all or by the bounded-chord flight
+classes of ``KN2ZoneJump`` (see :class:`TransientDVM` and
+:class:`BoundedChordFlights`); both default to the shipped forms. Nothing
+here is a second implementation of the velocity grid or of the transport
+sweep -- the operators are imported or transcribed from that module so the
+offline instruments and the in-solver arm keep agreeing on inputs.
 
 Time discretization (split implicit; first order, unconditionally stable,
 positivity preserving):
@@ -26,7 +28,11 @@ positivity preserving):
      coupling solved exactly per (cell, bin) as in ``KN2Zone.sweep``. The
      march diagonal carries ``1/dt`` and the right-hand side ``f^n/dt``;
      every loss channel is then tallied from ``f^{n+1}``, so the tallies
-     are the losses the update actually took.
+     are the losses the update actually took. Under
+     ``annulus_flights = "bounded_chord"`` the march is the COLUMN's alone
+     -- the annulus has no advected row there -- and the annulus's own
+     substep A is the flights that complete this tick, taken implicitly at
+     the same backward-Euler weight.
   B. BIRTHS, at masses exactly equal to the substep-A tallies. Charge
      exchange and elastic scattering re-emit their own losses at the local
      ion Maxwellian, the cylindrical wall re-emits its own losses (split
@@ -72,11 +78,29 @@ from cablp.funcs._cross import (
 )
 
 from ..core.geometry import absorbing_live_cells_by_role
-from .kinetic_neutrals import EV, KB, M_HE, T_WALL_K, VGrid
+from .kinetic_neutrals import (
+    EV,
+    KB,
+    M_HE,
+    T_WALL_K,
+    VGrid,
+    annulus_chord_classes,
+)
 from .neutrals import neutral_zone_volumes
 
 
 ELASTIC_MODELS = ("phelps_iso", "off")
+
+# How the ANNULUS zone's wall-interaction and radial-exchange flights are
+# taken. ``"rates"`` is the shipped algebraic-rate treatment (``nuw`` /
+# ``nuxp`` in the implicit march); ``"bounded_chord"`` replaces it with the
+# deterministic bounded-chord jump kernel. See ``TransientDVM``.
+ANNULUS_FLIGHT_MODELS = ("rates", "bounded_chord")
+
+# The three bounded-chord flight classes, in the order the kernel stores
+# them: outer wall -> outer wall, outer wall -> inner surface (the a->c
+# crossing), inner surface -> outer wall (the c->a escapes' flight).
+FLIGHT_CLASSES = ("ww", "wi", "io")
 
 # Column<->annulus zone-exchange closures. Both are algebraic rates on the
 # same (cell, v_perp) index and both impose the antisymmetry through the
@@ -187,6 +211,35 @@ class TransientDVM:
     Both branches impose ``V_col nu_c->a == V_ann nu_a->c`` through the
     actual cell volumes, so the ledger's zone channel cancels exactly
     either way. Any other value raises.
+
+    ``annulus_flights`` selects how the ANNULUS zone's wall interaction and
+    radial exchange are taken:
+
+    ``"rates"``
+        the algebraic rates above, in the implicit march: ``nuw`` removes
+        annulus particles to the wall and ``nuxp`` to the column, and the
+        annulus is advected axially by the same upwind sweep as the column.
+        The flight-time distribution each rate implies is exponential.
+
+    ``"bounded_chord"``
+        the annulus is carried as three DETERMINISTIC flight classes
+        instead (:class:`BoundedChordFlights`): a wall launch reaches the
+        inner surface with the view factor ``Rp/Rm`` at the class-mean
+        chord ``c_wi`` and the wall otherwise at ``c_ww``, and a column
+        escape reaches the wall at ``c_io``. Each flight displaces the atom
+        axially by exactly ``v_z c / v_perp`` and lasts ``c / v_perp``; the
+        chords are derived numerically from the local ``(Rp, Rm)`` and
+        carry no free parameter. The annulus is then NOT advected by the
+        march -- the flight jump is its whole axial motion -- so ``f_a``
+        becomes the sum of the three in-flight populations and the march
+        runs on the column alone, with the arriving inner-surface landings
+        entering as a volume source and the column's escapes leaving on the
+        same diagonal rate the rate arm uses. ``exchange_model`` therefore
+        still sets the column's ``nu_c->a`` escape rate under this branch;
+        it is the annulus-side ``nuw`` and ``nuxp`` that the chord classes
+        replace.
+
+    Any other value raises.
     """
 
     def __init__(
@@ -198,6 +251,7 @@ class TransientDVM:
         accommodation=1.0,
         elastic_model="phelps_iso",
         exchange_model="cauchy_chord",
+        annulus_flights="rates",
         transparency=1.0,
         mesh_face=-999,
         s_L=0.0,
@@ -218,9 +272,15 @@ class TransientDVM:
                 f"exchange_model must be one of {EXCHANGE_MODELS} "
                 f"(got {exchange_model!r})"
             )
+        if annulus_flights not in ANNULUS_FLIGHT_MODELS:
+            raise ValueError(
+                f"annulus_flights must be one of {ANNULUS_FLIGHT_MODELS} "
+                f"(got {annulus_flights!r})"
+            )
         self.accommodation = float(accommodation)
         self.elastic_model = str(elastic_model)
         self.exchange_model = str(exchange_model)
+        self.annulus_flights = str(annulus_flights)
         self.T_wall_K = float(T_wall_K)
         self.transparency = float(transparency)
         self.mesh_face = int(mesh_face)
@@ -319,6 +379,40 @@ class TransientDVM:
         shape = (self.nz, g.nvz, g.nvp)
         self.f_c = np.zeros(shape)
         self.f_a = np.zeros(shape)
+        # Bounded-chord arm: the annulus state is the three in-flight class
+        # populations, held at their flight midpoints; ``f_a`` is their sum
+        # and stays the annulus distribution every other consumer reads.
+        self.flights = None
+        self.f_flight = None
+        self.last_flight = None
+        if self.annulus_flights == "bounded_chord":
+            self.flights = BoundedChordFlights(
+                dz=self.dz,
+                V_ann=self.V_ann,
+                A_ann=self.A_ann,
+                Rp_cm=Rp,
+                Rm_cm=Rm,
+                grid=g,
+                mesh_face=self.mesh_face,
+                transparency=self.transparency,
+            )
+            self.f_flight = {
+                name: np.zeros(shape) for name in FLIGHT_CLASSES
+            }
+            # Free-molecular equilibrium split of a wall-launched annulus:
+            # the branch weights are the view factor, the residence weights
+            # the class flight times, and both are ratios of the chord
+            # classes, so the split is one per-cell number independent of
+            # the velocity bin.
+            F = self.flights.F_inner
+            w_ww = (1.0 - F) * self.flights.chords["ww"]
+            w_wi = F * self.flights.chords["wi"]
+            denom = np.maximum(w_ww + w_wi, 1e-300)
+            self._seed_split = {
+                "ww": w_ww / denom,
+                "wi": w_wi / denom,
+                "io": np.zeros(self.nz),
+            }
         # Pending end-wall returns, in PARTICLES per bin (inward half only).
         self.pend_L_c = np.zeros((g.nvz, g.nvp))
         self.pend_R_c = np.zeros((g.nvz, g.nvp))
@@ -376,6 +470,15 @@ class TransientDVM:
             spec = self.g.maxwellian(float(T_K) * KB / EV, 0.0)
         self.f_c = np.asarray(nn_col, dtype=float)[:, None, None] * spec
         self.f_a = np.asarray(nn_ann, dtype=float)[:, None, None] * spec
+        if self.f_flight is not None:
+            # The seed is read as a population that has just launched off
+            # the cylindrical wall: split between the two wall classes by
+            # the free-molecular equilibrium weights, so the sum is the
+            # requested annulus density exactly.
+            for name in FLIGHT_CLASSES:
+                self.f_flight[name] = (
+                    self._seed_split[name][:, None, None] * self.f_a
+                )
         self.pend_L_c[...] = 0.0
         self.pend_R_c[...] = 0.0
         self.pend_L_a[...] = 0.0
@@ -383,7 +486,7 @@ class TransientDVM:
 
     def snapshot(self):
         """Return a deep copy of every mutable piece of the DVM state."""
-        return {
+        snap = {
             "f_c": self.f_c.copy(),
             "f_a": self.f_a.copy(),
             "pend_L_c": self.pend_L_c.copy(),
@@ -405,11 +508,20 @@ class TransientDVM:
             "relax_limited_steps": int(self.relax_limited_steps),
             "relax_cell_steps": self.relax_cell_steps.copy(),
         }
+        if self.f_flight is not None:
+            snap["f_flight"] = {
+                name: arr.copy() for name, arr in self.f_flight.items()
+            }
+        return snap
 
     def restore(self, snap):
         """Restore a :meth:`snapshot`."""
         self.f_c = snap["f_c"].copy()
         self.f_a = snap["f_a"].copy()
+        if self.f_flight is not None:
+            self.f_flight = {
+                name: arr.copy() for name, arr in snap["f_flight"].items()
+            }
         self.pend_L_c = snap["pend_L_c"].copy()
         self.pend_R_c = snap["pend_R_c"].copy()
         self.pend_L_a = snap["pend_L_a"].copy()
@@ -527,13 +639,21 @@ class TransientDVM:
         return nu_cx, nu_el
 
     def _march(self, dt, nu_c_loss, nu_a_loss, inflow_c, inflow_a,
-               inject_c=None):
+               inject_c=None, source_c=None, column_only=False):
         """Backward-Euler implicit upwind march (substep A).
 
         ``nu_c_loss`` / ``nu_a_loss`` are the per-(cell, bin) NON-zone loss
         frequencies of each zone; the zone-exchange rates are added here so
         the 2x2 coupling stays exactly antisymmetric. ``inflow_*`` are
         boundary ghost DENSITIES keyed ``(-1, +1)`` by domain end.
+
+        ``column_only`` marches the COLUMN alone, with the zone-escape rate
+        still on its diagonal but no annulus row to couple to: the
+        bounded-chord arm carries the annulus as flights rather than as an
+        advected field, so its returning particles arrive as ``source_c``, a
+        volume source in density per second, and the annulus outputs come
+        back zero. Under the shipped rate arm neither argument is supplied
+        and the 2x2 coupling below is the whole update.
 
         ``inject_c`` carries the INTERIOR-face column inflows (the recycle
         channels) as ghost densities keyed ``(face_index, direction)``. They
@@ -567,7 +687,7 @@ class TransientDVM:
                 end_in, end_out = +1, -1
             vz = np.abs(g.vz[sel])[:, None]
             F_c_prev = inflow_c[end_in][sel]
-            F_a_prev = inflow_a[end_in][sel]
+            F_a_prev = None if column_only else inflow_a[end_in][sel]
             for i in order:
                 # Upstream face carries the inflow, downstream face the
                 # outflow; both are throat areas, so what leaves one cell
@@ -576,6 +696,29 @@ class TransientDVM:
                 fo = i + 1 if direction > 0 else i
                 in_c = vz * self.face_c[fi] / self.V_col[i]
                 out_c = vz * self.face_c[fo] / self.V_col[i]
+                if column_only:
+                    if fi == self.mesh_face:
+                        blocked_c = (1.0 - self.transparency) * F_c_prev
+                        j = min(max(i - direction, 0), nz - 1)
+                        mesh_c[j] += float(
+                            (blocked_c * vz).sum() * self.face_c[fi] * dt
+                        )
+                        F_c_prev = self.transparency * F_c_prev
+                    if inject_c:
+                        ghost = inject_c.get((fi, direction))
+                        if ghost is not None:
+                            F_c_prev = F_c_prev + ghost[sel]
+                    a11 = (
+                        inv_dt + out_c + nu_c_loss[i][sel]
+                        + self.nux[i][None, :]
+                    )
+                    r1 = self.f_c[i][sel] * inv_dt + in_c * F_c_prev
+                    if source_c is not None:
+                        r1 = r1 + source_c[i][sel]
+                    fc = r1 / a11
+                    f_c[i][sel] = fc
+                    F_c_prev = fc
+                    continue
                 if self.V_ann[i] > 0.0:
                     in_a = vz * self.face_a[fi] / self.V_ann[i]
                     out_a = vz * self.face_a[fo] / self.V_ann[i]
@@ -709,15 +852,20 @@ class TransientDVM:
         nu_ion = np.asarray(nu_ion, dtype=float)
         nu_cx, nu_el = self.collision_frequencies(n_i, Ti_eV, u_i)
         nu_c_loss = nu_ion[:, None, None] + nu_cx + nu_el
-        nu_a_loss = self.nuw[:, None, :] * np.ones((self.nz, g.nvz, g.nvp))
+        jump = self.flights is not None
+        nu_a_loss = None if jump else (
+            self.nuw[:, None, :] * np.ones((self.nz, g.nvz, g.nvp))
+        )
 
         # --- boundary inflow: last update's pending returns, as ghost
-        # densities that inject exactly the buffered particle count.
+        # densities that inject exactly the buffered particle count. The
+        # bounded-chord annulus is not marched, so its own buffered returns
+        # are re-LAUNCHED off the end plane in substep B instead.
         inflow_c = {
             -1: _ghost_density(self.pend_L_c, self.face_c[0], dt, g),
             +1: _ghost_density(self.pend_R_c, self.face_c[-1], dt, g),
         }
-        inflow_a = {
+        inflow_a = None if jump else {
             -1: _ghost_density(self.pend_L_a, self.face_a[0], dt, g),
             +1: _ghost_density(self.pend_R_a, self.face_a[-1], dt, g),
         }
@@ -747,17 +895,57 @@ class TransientDVM:
             g.half_flux_spectrum(self.T_wall_K, -1), dt,
         )
 
-        f_c, f_a, mesh_c, mesh_a, out = self._march(
-            dt, nu_c_loss, nu_a_loss, inflow_c, inflow_a, inject_c
-        )
-
-        # --- substep A tallies, in PARTICLES, from the marched state
         vol_c = self.V_col[:, None, None]
         vol_a = self.V_ann[:, None, None]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            inv_vc = np.where(self.V_col > 0.0, 1.0 / self.V_col, 0.0)
+            inv_va = np.where(self.V_ann > 0.0, 1.0 / self.V_ann, 0.0)
+
+        if jump:
+            # --- substep A for the annulus: the flights that COMPLETE this
+            # tick, taken implicitly at the class rate 1 / (chord / v_perp)
+            # so the mean flight time is the class time exactly, and routed
+            # through the frozen half-displacement map.
+            wall_land = np.zeros((self.nz, g.nvz, g.nvp))
+            inner_land = np.zeros((self.nz, g.nvz, g.nvp))
+            mesh_a_bins = np.zeros((self.nz, g.nvz, g.nvp))
+            end_a = {-1: np.zeros((g.nvz, g.nvp)), +1: np.zeros((g.nvz, g.nvp))}
+            for name in FLIGHT_CLASSES:
+                nu_f = self.flights.nu[name]
+                surviving = 1.0 / (1.0 + nu_f * dt)
+                done = self.f_flight[name] * (nu_f * dt) * surviving * vol_a
+                self.f_flight[name] = self.f_flight[name] * surviving
+                arrive, stopped, meshed, eL, eR = self.flights.route(name, done)
+                if name == "wi":
+                    inner_land += arrive
+                else:
+                    wall_land += arrive
+                wall_land += stopped
+                mesh_a_bins += meshed
+                end_a[-1] += eL
+                end_a[+1] += eR
+            source_c = inner_land * inv_vc[:, None, None] / dt
+            f_c, f_a, mesh_c, _, out = self._march(
+                dt, nu_c_loss, None, inflow_c, None, inject_c,
+                source_c=source_c, column_only=True,
+            )
+            out[("a", -1)] = end_a[-1]
+            out[("a", +1)] = end_a[+1]
+            mesh_a = mesh_a_bins.sum(axis=(1, 2))
+            # the column's zone escapes, at the same implicit discretization
+            # the march's diagonal used, become inner-surface launches
+            escapes = self.nux[:, None, :] * f_c * dt * vol_c
+            L_wall = wall_land
+        else:
+            f_c, f_a, mesh_c, mesh_a, out = self._march(
+                dt, nu_c_loss, nu_a_loss, inflow_c, inflow_a, inject_c
+            )
+            L_wall = self.nuw[:, None, :] * f_a * dt * vol_a
+
+        # --- substep A tallies, in PARTICLES, from the marched state
         L_ion = nu_ion[:, None, None] * f_c * dt * vol_c
         L_cx = nu_cx * f_c * dt * vol_c
         L_el = nu_el * f_c * dt * vol_c
-        L_wall = self.nuw[:, None, :] * f_a * dt * vol_a
 
         # --- substep B: births at exactly the tallied masses
         M_i = np.empty((self.nz, g.nvz, g.nvp))
@@ -769,34 +957,71 @@ class TransientDVM:
         N_cx = L_cx.sum(axis=(1, 2))
         N_el = L_el.sum(axis=(1, 2))
         N_wall = L_wall.sum(axis=(1, 2))
-        with np.errstate(divide="ignore", invalid="ignore"):
-            inv_vc = np.where(self.V_col > 0.0, 1.0 / self.V_col, 0.0)
-            inv_va = np.where(self.V_ann > 0.0, 1.0 / self.V_ann, 0.0)
 
         birth_cx = (N_cx * inv_vc)[:, None, None] * M_i
         birth_el = (N_el * inv_vc)[:, None, None] * M_i
         f_c += birth_cx + birth_el
 
         alpha = self.accommodation
-        birth_wall_acc = (
-            alpha * (N_wall * inv_va)[:, None, None] * self.M_wall[None, :, :]
-        )
-        # Specular reflection off the cylindrical wall reverses only the
-        # radial direction, which this axisymmetric grid does not resolve:
-        # the bin is unchanged, so the reflected fraction returns exactly
-        # where it left.
-        birth_wall_ref = (1.0 - alpha) * L_wall * inv_va[:, None, None]
-        f_a += birth_wall_acc + birth_wall_ref
+        if jump:
+            # Every annulus return is a LAUNCH, in particles: accommodated
+            # at the cosine-wall spectrum, reflected bin-preserving (the
+            # cylinder reverses only the unresolved radial component), the
+            # mesh re-emitting what it intercepted at the wall temperature
+            # in the cell it was intercepted from, and the puff still born
+            # as a 300 K distribution at rest -- the zero-momentum
+            # convention, now leaving the wall port rather than standing in
+            # the cell. Last update's buffered end-plane returns re-enter
+            # here too, already carrying their return spectra.
+            launch_wall = (
+                alpha * N_wall[:, None, None] * self.M_wall[None, :, :]
+                + (1.0 - alpha) * L_wall
+                + mesh_a[:, None, None] * self.M_wall[None, :, :]
+            )
+            if puff.ndim:
+                launch_wall = launch_wall + puff[:, None, None] * self.M_cold
+            launch_wall[0] += self.pend_L_a
+            launch_wall[-1] += self.pend_R_a
+            F_in = self.flights.F_inner[:, None, None]
+            launches = {
+                "ww": (1.0 - F_in) * launch_wall,
+                "wi": F_in * launch_wall,
+                "io": escapes,
+            }
+            f_a = np.zeros_like(f_c)
+            for name in FLIGHT_CLASSES:
+                self.f_flight[name] = self.f_flight[name] + (
+                    self.flights.place(name, launches[name])
+                    * inv_va[:, None, None]
+                )
+                f_a = f_a + self.f_flight[name]
+            self.last_flight = {
+                "annulus_to_column": inner_land.sum(axis=(1, 2)),
+                "column_to_annulus": escapes.sum(axis=(1, 2)),
+                "wall_landings": N_wall,
+            }
+        else:
+            birth_wall_acc = (
+                alpha * (N_wall * inv_va)[:, None, None]
+                * self.M_wall[None, :, :]
+            )
+            # Specular reflection off the cylindrical wall reverses only the
+            # radial direction, which this axisymmetric grid does not
+            # resolve: the bin is unchanged, so the reflected fraction
+            # returns exactly where it left.
+            birth_wall_ref = (1.0 - alpha) * L_wall * inv_va[:, None, None]
+            f_a += birth_wall_acc + birth_wall_ref
 
         # Anode-mesh interception re-emits at the wall temperature in the
         # cell it was intercepted from, on both sides of the mesh.
         f_c += (mesh_c * inv_vc)[:, None, None] * self.M_wall[None, :, :]
-        f_a += (mesh_a * inv_va)[:, None, None] * self.M_wall[None, :, :]
+        if not jump:
+            f_a += (mesh_a * inv_va)[:, None, None] * self.M_wall[None, :, :]
 
         # --- external source ledger (counted particles this update). The two
         # recycle channels are absent here: they entered through the march as
         # face inflows above, which is the whole point of the K2d rework.
-        if puff.ndim:
+        if puff.ndim and not jump:
             # Registered channel 5: the puff is born as a 300 K Maxwellian
             # at rest -- the zero-momentum convention, as a distribution.
             f_a += (puff * inv_va)[:, None, None] * self.M_cold
@@ -921,6 +1146,231 @@ class TransientDVM:
         self.Ei_transfer = (
             E * scale - u * self.M_transfer + 0.5 * M_HE * u**2 * self.S_transfer
         )
+
+
+class BoundedChordFlights:
+    """Frozen deterministic annulus flight maps (the K1b jump kernel).
+
+    Built once from the geometry and the velocity grid; nothing here
+    depends on the plasma, so the maps are run-constant.
+
+    A flight of class ``X`` launched in cell ``i`` in bin ``(v_z, v_perp)``
+    lasts the class time ``c_X(i) / v_perp`` and displaces the atom axially
+    by ``dz = v_z c_X(i) / v_perp`` -- deterministic, at the cosine-weighted
+    class-mean chord, with no free parameter. The atom is HELD at the
+    midpoint of that flight and lands after a second half displacement, so
+    the map this class stores is the single HALF displacement, applied once
+    when the flight is launched (placement) and once when it completes
+    (landing). Total displacement per flight is the full chord displacement
+    and the residence centroid is the flight's own mean position.
+
+    Along a half displacement the atom crosses faces, and three of those
+    matter:
+
+    - a **domain end plane**: the flight leaves the modelled system there.
+      On the LANDING half it is booked as end outflow, which the engine's
+      end-wall machinery then sticks or returns; on the PLACEMENT half it
+      is only clipped, because placement moves no particle across any
+      surface -- it decides which cell holds an atom that is already inside.
+    - an **annulus area jump** (the throat faces the expanded ends and the
+      plenum choke produce): the free-molecular throat convention the march
+      already uses, ``min(A_left, A_right) / A_upstream``, is the fraction
+      that passes; the rest strikes the annular step and is booked as a
+      wall landing in the cell it was stopped in.
+    - the **anode mesh face**: the transparency passes, the rest is booked
+      on the mesh channel exactly as the march books it.
+
+    Every routed weight sums to one per ``(cell, bin)``: ``residual`` is the
+    worst departure from that identity over the whole map, and is the
+    statement that the operator moves particles without creating or
+    destroying any.
+    """
+
+    def __init__(self, *, dz, V_ann, A_ann, Rp_cm, Rm_cm, grid, mesh_face,
+                 transparency):
+        g = grid
+        nz = int(np.asarray(dz).size)
+        nvz, nvp = g.nvz, g.nvp
+        shape = (nz, nvz, nvp)
+        self.nz, self.shape = nz, shape
+        self.n_flat = nz * nvz * nvp
+        dz = np.asarray(dz, dtype=float)
+        V_ann = np.asarray(V_ann, dtype=float)
+        A_ann = np.asarray(A_ann, dtype=float)
+        ze = np.concatenate(([0.0], np.cumsum(dz)))
+        zc = 0.5 * (ze[:-1] + ze[1:])
+
+        (
+            self.F_inner,
+            c_ww,
+            c_wi,
+            c_io,
+            self.var_ww,
+            self.var_wi,
+            self.var_io,
+        ) = annulus_chord_classes(Rp_cm, Rm_cm)
+        self.chords = {"ww": c_ww, "wi": c_wi, "io": c_io}
+
+        # Interior-face transmissions, per direction. The throat form is the
+        # march's own: what leaves a cell through a face is limited by the
+        # narrower of the two cells it joins.
+        tau_f = np.ones(nz + 1)
+        tau_b = np.ones(nz + 1)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            throat = np.minimum(A_ann[:-1], A_ann[1:])
+            tau_f[1:-1] = np.where(A_ann[:-1] > 0.0, throat / A_ann[:-1], 0.0)
+            tau_b[1:-1] = np.where(A_ann[1:] > 0.0, throat / A_ann[1:], 0.0)
+        mesh_face = int(mesh_face)
+        is_mesh = np.zeros(nz + 1, dtype=bool)
+        if 0 < mesh_face < nz:
+            tau_f[mesh_face] *= float(transparency)
+            tau_b[mesh_face] *= float(transparency)
+            is_mesh[mesh_face] = True
+        special = [
+            f for f in range(1, nz)
+            if tau_f[f] < 1.0 - 1e-15 or tau_b[f] < 1.0 - 1e-15
+        ]
+
+        no_ann = V_ann <= 0.0
+        cell = np.arange(nz)[:, None, None]
+        vz_pos = (g.vz > 0.0)[:, None]
+        self.vz_pos = vz_pos
+
+        self.nu = {}
+        self.hold_flat = {}
+        self.dest_flat = {}
+        self.w_pass = {}
+        self.w_end = {}
+        self.stop_src = {}
+        self.stop_dst = {}
+        self.stop_w = {}
+        self.mesh_src = {}
+        self.mesh_dst = {}
+        self.mesh_w = {}
+        self.residual = 0.0
+
+        bin_flat = (np.arange(nvz)[:, None] * nvp + np.arange(nvp)[None, :])
+        for name in FLIGHT_CLASSES:
+            c = self.chords[name]
+            nu = np.where(
+                no_ann[:, None], 0.0, g.vp[None, :] / np.maximum(c, 1e-30)[:, None]
+            )
+            self.nu[name] = nu[:, None, :]
+            half = 0.5 * (g.VZ * c[:, None, None]) / np.maximum(g.VP, 1e-30)
+            z1 = zc[:, None, None] + half
+            exits_L = z1 < ze[0]
+            exits_R = z1 > ze[-1]
+            j = np.clip(
+                np.searchsorted(ze, np.clip(z1, ze[0], ze[-1])) - 1, 0, nz - 1
+            )
+            fwd = half > 0.0
+            bwd = half < 0.0
+            surv = np.ones(shape)
+            hold = j.copy()
+            stops = {"step": [], "mesh": []}
+            for faces, forward in ((special, True), (special[::-1], False)):
+                for f in faces:
+                    tau = tau_f[f] if forward else tau_b[f]
+                    if tau >= 1.0 - 1e-15:
+                        continue
+                    if forward:
+                        crossed = fwd & (cell < f) & (j >= f)
+                        landing = f - 1
+                    else:
+                        crossed = bwd & (cell >= f) & (j < f)
+                        landing = f
+                    if not crossed.any():
+                        continue
+                    blocked = np.where(crossed, surv * (1.0 - tau), 0.0)
+                    idx = np.flatnonzero(blocked.ravel() > 0.0)
+                    if idx.size:
+                        stops["mesh" if is_mesh[f] else "step"].append(
+                            (idx, landing, blocked.ravel()[idx])
+                        )
+                    surv = np.where(crossed, surv * tau, surv)
+                    if tau <= 0.0:
+                        hold = np.where(
+                            crossed & ((hold >= f) if forward else (hold < f)),
+                            landing,
+                            hold,
+                        )
+            hold = np.where(no_ann[:, None, None], cell, hold)
+            hold = np.where(no_ann[hold], cell, hold)
+            exits = exits_L | exits_R
+            self.w_end[name] = np.where(exits, surv, 0.0)
+            self.w_pass[name] = np.where(exits, 0.0, surv)
+            self.dest_flat[name] = (j * nvz * nvp + bin_flat[None, :, :]).ravel()
+            self.hold_flat[name] = (
+                hold * nvz * nvp + bin_flat[None, :, :]
+            ).ravel()
+            for kind, src, dst, wts in (
+                ("step", self.stop_src, self.stop_dst, self.stop_w),
+                ("mesh", self.mesh_src, self.mesh_dst, self.mesh_w),
+            ):
+                if stops[kind]:
+                    src[name] = np.concatenate([s[0] for s in stops[kind]])
+                    dst[name] = np.concatenate([
+                        s[0] % (nvz * nvp) + s[1] * nvz * nvp
+                        for s in stops[kind]
+                    ])
+                    wts[name] = np.concatenate([s[2] for s in stops[kind]])
+                else:
+                    src[name] = np.zeros(0, dtype=np.int64)
+                    dst[name] = np.zeros(0, dtype=np.int64)
+                    wts[name] = np.zeros(0)
+            total = self.w_pass[name] + self.w_end[name]
+            for src, wts in ((self.stop_src, self.stop_w),
+                             (self.mesh_src, self.mesh_w)):
+                np.add.at(total.reshape(-1), src[name], wts[name])
+            live = ~np.broadcast_to(no_ann[:, None, None], shape)
+            self.residual = max(
+                self.residual, float(np.max(np.abs(total[live] - 1.0)))
+            )
+        if not self.residual <= 1.0e-12:
+            raise ValueError(
+                "the bounded-chord annulus flight map must route every "
+                "launched particle exactly once (pass + stopped + through an "
+                f"end plane == 1); worst departure {self.residual:.3e}"
+            )
+
+    def route(self, name, counts):
+        """Route completed flights of one class.
+
+        ``counts`` are PARTICLES per ``(cell, bin)`` completing this tick.
+        Returns ``(arrive, stopped, meshed, end_L, end_R)``: the particles
+        reaching the class's landing surface per destination cell and bin,
+        those stopped at an annular step, those the anode mesh intercepted,
+        and the two end-plane outflows per bin.
+        """
+        flat = counts.reshape(-1)
+        n = self.n_flat
+        arrive = np.bincount(
+            self.dest_flat[name],
+            weights=(counts * self.w_pass[name]).reshape(-1),
+            minlength=n,
+        ).reshape(self.shape)
+        stopped = np.bincount(
+            self.stop_dst[name],
+            weights=flat[self.stop_src[name]] * self.stop_w[name],
+            minlength=n,
+        ).reshape(self.shape)
+        meshed = np.bincount(
+            self.mesh_dst[name],
+            weights=flat[self.mesh_src[name]] * self.mesh_w[name],
+            minlength=n,
+        ).reshape(self.shape)
+        gone = (counts * self.w_end[name]).sum(axis=0)
+        end_R = np.where(self.vz_pos, gone, 0.0)
+        end_L = np.where(self.vz_pos, 0.0, gone)
+        return arrive, stopped, meshed, end_L, end_R
+
+    def place(self, name, launched):
+        """Return launched PARTICLES per holding cell and bin for a class."""
+        return np.bincount(
+            self.hold_flat[name],
+            weights=launched.reshape(-1),
+            minlength=self.n_flat,
+        ).reshape(self.shape)
 
 
 def _throat_areas(cell_areas):
