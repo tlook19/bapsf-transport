@@ -128,6 +128,10 @@ from .physics.sources import (
 )
 from .results.compat import add_sim3_compat_aliases
 from cablp.funcs._adas import he_rate_temperature_range_eV, he_rates
+from cablp.funcs._beam_deposition import (
+    HE_E_STOP_EV,
+    he_mean_secondary_energy_eV,
+)
 from cablp.funcs._cross import charge_ex_react
 from cablp.funcs._kernels import PROVENANCE as KERNEL_PROVENANCE
 from cablp.vars._cons import I_Ry, I_ion, ev_to_erg, kb_cgs, m_He_cgs, m_p_cgs
@@ -1169,6 +1173,53 @@ class LAPDSim1D:
                 raise ValueError(
                     "heating_anomalous_tail_energy_eV must be finite and > 0 "
                     f"(got {self._input_dict.get('heating_anomalous_tail_energy_eV')})"
+                )
+        # K6 tail ionization. Same discipline again, and the same reason to
+        # duplicate the module's own guards here: a misconfiguration must fail
+        # before the first cathode solve, not hours into a run. The two
+        # tail-energy bars are the module's, evaluated on the module's own
+        # threshold constants and <W_sec> convention rather than restated, so
+        # they cannot drift apart from the arithmetic they protect.
+        _tion = str(
+            self._input_dict.get("heating_anomalous_tail_ionization", "off")
+        )
+        if _tion not in ("off", "on"):
+            raise ValueError(
+                "heating_anomalous_tail_ionization must be 'off' or 'on' "
+                f"(got {_tion!r})"
+            )
+        if _tion == "on":
+            if _hat != "tail_walk":
+                raise ValueError(
+                    "heating_anomalous_tail_ionization='on' requires "
+                    "heating_anomalous_transport='tail_walk' (the ionizing "
+                    "channel belongs to the QL tail walkers; without them "
+                    "the setting would be a silent no-op). "
+                    "heating_anomalous_transport accepts 'local' or "
+                    "'tail_walk'; heating_anomalous_tail_ionization accepts "
+                    f"'off' or 'on' (got {_hat!r} and {_tion!r})"
+                )
+            if _tail_eV <= HE_E_STOP_EV:
+                raise ValueError(
+                    "heating_anomalous_tail_ionization='on' needs "
+                    "heating_anomalous_tail_energy_eV above the lowest He "
+                    f"inelastic threshold ({HE_E_STOP_EV} eV); at {_tail_eV} "
+                    "eV a tail walker cannot ionize or excite at all and the "
+                    "setting would be a silent no-op"
+                )
+            _W_sec_launch = he_mean_secondary_energy_eV(
+                _tail_eV, I_ion_eV=float(self._I_ion)
+            )
+            if _W_sec_launch >= HE_E_STOP_EV:
+                raise ValueError(
+                    "heating_anomalous_tail_ionization='on' banks each "
+                    "secondary as local heat, which is the correct depth-1 "
+                    "truncation only while the mean secondary energy stays "
+                    "below the lowest inelastic threshold; at "
+                    f"heating_anomalous_tail_energy_eV={_tail_eV} eV it is "
+                    f"{_W_sec_launch:.4f} eV against {HE_E_STOP_EV} eV, so "
+                    "the cascade the walk does not follow would be mis-banked "
+                    "as thermalized"
                 )
         _fc = float(self._input_dict.get("beam_clump_fraction", 0.0))
         if not 0.0 <= _fc < 1.0:
@@ -6608,6 +6659,22 @@ class LAPDSim1D:
             "beam_heat_anomalous_W": np.zeros(cells, dtype=float),
             "beam_heat_secondary_W": np.zeros(cells, dtype=float),
             "beam_heat_terminal_W": np.zeros(cells, dtype=float),
+            # K6: the QL tail walkers' own share of the three shared banks
+            # they write into under
+            # ``heating_anomalous_tail_ionization="on"`` -- the pairs they
+            # birth [1/s], the potential they invest and the line power they
+            # radiate [W]. Diagnostic splits, not extra sources: the events
+            # are already inside ``beam_ionization_birth`` and the energies
+            # inside the cost and radiation sinks. Identically zero under the
+            # default ``"off"``, so every run to date reads zero; runs saved
+            # before 2026-08-06 lack the datasets and readers must default
+            # them. With ``beam_heat_anomalous_W`` (which under ``"on"``
+            # carries the walkers' whole heat delivery) and the tail end
+            # ledger, these close the tail channel's branching from a saved
+            # file alone.
+            "beam_tail_ionization_events_per_s": np.zeros(cells, dtype=float),
+            "beam_tail_ionization_cost_W": np.zeros(cells, dtype=float),
+            "beam_tail_radiated_W": np.zeros(cells, dtype=float),
         }
         for prefix in ("source", "end"):
             # Per-ray exit ledger [W]: power the anode mesh intercepts at the
@@ -6727,6 +6794,13 @@ class LAPDSim1D:
                 dep.heating_secondary_erg_s * 1.0e-7
             )
             diag["beam_heat_terminal_W"] += dep.heating_terminal_erg_s * 1.0e-7
+            diag["beam_tail_ionization_events_per_s"] += (
+                dep.ionization_events_tail
+            )
+            diag["beam_tail_ionization_cost_W"] += (
+                dep.ionization_cost_tail_erg_s * 1.0e-7
+            )
+            diag["beam_tail_radiated_W"] += dep.radiated_tail_erg_s * 1.0e-7
             prefix = prefixes[int(end)]
             diag[f"{prefix}_beam_anode_intercepted_W"] = (
                 float(dep.anode_intercepted_erg_s) * 1.0e-7
