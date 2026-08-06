@@ -2270,6 +2270,21 @@ input_flags_template_1d = {
     # a floor-pinned afterglow otherwise cannot finish in finite time. Set it
     # False to recover the historical bound.
     "surface_loss_floor_exempt": True,
+    # Include the beam_ionization_birth row in the resolved electrode/source
+    # ("surface_loss") timestep bound. Default OFF and bit-exact off.
+    #
+    # The row is in NO timestep bound today: the bundle carries only the
+    # boundary, anode-collection and cathode-surface rows, so beam-driven
+    # birth -- a volumetric plasma source of unbounded magnitude that CAN
+    # drive a cell into a floor within one step -- has never constrained dt.
+    # That is pre-existing and solver-wide, not specific to any arm, and the
+    # row is measured healthy on the current arms; this is insurance, not a
+    # hot fix.
+    #
+    # Turning it ON changes the suggested timestep wherever the row is live,
+    # so it MOVES THE GOLDEN and the default-flip decision is deliberately
+    # left open rather than taken here.
+    "beam_ionization_birth_timestep_bound": False,
     "ionization_energy_cost": True,
     "icool": True,
     "ncool": True,

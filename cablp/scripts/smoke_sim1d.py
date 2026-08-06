@@ -1617,6 +1617,75 @@ def main():
         beam_birth_terms.nn,
     )
     assert np.allclose(split_beam_terms["beam_ionization_birth"].Ee, 0.0)
+
+    # --- beam_ionization_birth in the resolved-source dt bound (default off) --
+    # The row is a volumetric plasma source that can drive a cell into a floor
+    # within one step, and it has never been in ANY timestep bound: the bundle
+    # carries only the boundary, anode-collection and cathode-surface rows.
+    # Here the row is demonstrably live (asserted nonzero above).
+    assert flags.get("beam_ionization_birth_timestep_bound", False) is False
+    assert default_config()[1]["beam_ionization_birth_timestep_bound"] is False
+    # Both sims built FRESH and identically here: the bundle re-solves the
+    # cathode internally, so a sim whose solve cache has been walked by other
+    # checks is not a like-for-like control.
+    def _beam_bound_sim(bound_on):
+        built = LAPDSim1D(
+            cathode_bl_params,
+            {
+                **cathode_flags,
+                "beam_ionization_birth_timestep_bound": bound_on,
+            },
+        )
+        built._circuit_I_loop = 3000.0
+        return built
+
+    beam_bound_sim = _beam_bound_sim(True)
+    beam_unbound_sim = _beam_bound_sim(False)
+    beam_bound_row = beam_bound_sim.beam_ionization_rhs_terms(
+        state=beam_bound_sim.state,
+        cathode_solve=beam_bound_sim.solve_cathode_boundary(
+            state=beam_bound_sim.state,
+            time=beam_bound_sim._time,
+            update_cache=False,
+        ),
+        time=beam_bound_sim._time,
+    )["beam_ionization_birth"]
+    assert np.any(beam_bound_row.n > 0.0)
+    beam_bundle_off = beam_unbound_sim._plasma_source_timestep_rhs(
+        state=beam_unbound_sim.state, time=beam_unbound_sim._time
+    )
+    beam_bundle_on = beam_bound_sim._plasma_source_timestep_rhs(
+        state=beam_bound_sim.state, time=beam_bound_sim._time
+    )
+    # The WHOLE applied row joins the bundle -- not a sub-fraction of it. A
+    # bound computed from part of a row describes a term the step does not
+    # apply and leaves the remainder unbounded.
+    for beam_field in ("n", "nn", "M", "Ee", "Ei"):
+        assert np.allclose(
+            getattr(beam_bundle_on, beam_field),
+            getattr(beam_bundle_off, beam_field)
+            + getattr(beam_bound_row, beam_field),
+        ), beam_field
+    # OFF the bundle is untouched: bit-identical to a sim that never heard of
+    # the flag.
+    beam_absent_sim = LAPDSim1D(cathode_bl_params, cathode_flags)
+    beam_absent_sim._circuit_I_loop = 3000.0
+    for beam_field in ("n", "nn", "M", "Ee", "Ei"):
+        assert np.array_equal(
+            getattr(
+                beam_absent_sim._plasma_source_timestep_rhs(
+                    state=beam_absent_sim.state,
+                    time=beam_absent_sim._time,
+                ),
+                beam_field,
+            ),
+            getattr(beam_bundle_off, beam_field),
+        ), beam_field
+    # And it can only TIGHTEN the suggested step, never loosen it.
+    assert (
+        beam_bound_sim.suggest_timestep().dt_surface_loss
+        <= beam_unbound_sim.suggest_timestep().dt_surface_loss * (1.0 + 1.0e-12)
+    )
     assert np.all(split_beam_terms["beam_power_deposition"].Ee >= 0.0)
     assert np.any(split_beam_terms["beam_power_deposition"].Ee > 0.0)
     assert np.all(split_beam_terms["beam_ionization_cost"].Ee <= 0.0)

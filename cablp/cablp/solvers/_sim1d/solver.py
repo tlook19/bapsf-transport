@@ -941,6 +941,11 @@ class LAPDSim1D:
                     "the base factor could never accelerate anything"
                 )
         self._dt_growth_recovery_factor = _growth_recovery_value
+        # Presence gate for the beam_ionization_birth timestep bound. Reading
+        # it once here keeps the off path out of the branch entirely.
+        self._beam_ionization_birth_timestep_bound = bool(
+            self._flags.get("beam_ionization_birth_timestep_bound", False)
+        )
         self._neutral_momentum_radial = str(
             self._input_dict.get("neutral_momentum_radial", "uniform")
         )
@@ -4125,6 +4130,22 @@ class LAPDSim1D:
                 time=time,
             ).rhs,
         )
+        if self._beam_ionization_birth_timestep_bound:
+            # The WHOLE applied row, per the applied-row convention: a bound
+            # computed from a fraction of a row describes a term the step does
+            # not apply, and leaves the remainder unbounded -- the same
+            # wrong-operator class as reading the wrong boundary operator
+            # above. beam_ionization_birth is a volumetric plasma source that
+            # can drive a cell into a floor within one step and has never been
+            # in any bound.
+            rhs = add_state_rhs(
+                rhs,
+                self.beam_ionization_rhs_terms(
+                    state=state,
+                    cathode_solve=cathode_solve,
+                    time=time,
+                )["beam_ionization_birth"],
+            )
         if self._dvm_rows_superseded():
             rhs = add_state_rhs(rhs, self._dvm_booked_transfer_rhs())
         return rhs
