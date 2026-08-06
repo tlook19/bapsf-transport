@@ -2945,23 +2945,40 @@ def main():
     # The scenario must actually drive the anomalous channel, or the routing
     # has nothing to carry and every assertion below is vacuous.
     assert float(csda_dep.heating_anomalous_erg_s.sum()) > 0.0
+    # K7 REPIN. This block and the K6 block below were written against the tail
+    # closure as WP-E and K6 shipped it: birth at a FIXED rung, free escape at
+    # the cathode face. K7 made both of those selectable and defaulted the
+    # engaged walk to the corrected pair instead, so every arm here names the
+    # legacy values explicitly. That is what keeps these assertions testing the
+    # arithmetic they were written for, bit for bit, rather than silently
+    # re-pointing at the new closure.
+    wpe_legacy = dict(
+        heating_anomalous_tail_energy_keying="fixed",
+        heating_anomalous_tail_cathode_boundary="escape",
+    )
     # Misconfiguration is loud at CONSTRUCTION, including every incomplete
     # configuration in which the selection could only be a silent no-op: no
     # CSDA module to deposit, no anomalous channel to carry, or a tail energy
     # the walk cannot launch at.
     for wpe_bad in (
         dict(csda_params, heating_anomalous_transport="bogus"),
-        dict(csda_params, heating_anomalous_transport="tail_walk",
+        dict(csda_params, **wpe_legacy,
+             heating_anomalous_transport="tail_walk",
              beam_deposition_model="beer_lambert"),
-        dict(csda_params, heating_anomalous_transport="tail_walk",
+        dict(csda_params, **wpe_legacy,
+             heating_anomalous_transport="tail_walk",
              beam_anomalous_model="none"),
-        dict(csda_params, heating_anomalous_transport="tail_walk",
+        dict(csda_params, **wpe_legacy,
+             heating_anomalous_transport="tail_walk",
              heating_anomalous_tail_energy_eV=0.0),
-        dict(csda_params, heating_anomalous_transport="tail_walk",
+        dict(csda_params, **wpe_legacy,
+             heating_anomalous_transport="tail_walk",
              heating_anomalous_tail_energy_eV=-75.0),
-        dict(csda_params, heating_anomalous_transport="tail_walk",
+        dict(csda_params, **wpe_legacy,
+             heating_anomalous_transport="tail_walk",
              heating_anomalous_tail_energy_eV=float("nan")),
-        dict(csda_params, heating_anomalous_transport="tail_walk",
+        dict(csda_params, **wpe_legacy,
+             heating_anomalous_transport="tail_walk",
              heating_anomalous_tail_energy_eV=float("inf")),
     ):
         try:
@@ -3002,7 +3019,8 @@ def main():
     # keeps less of it, and the per-ray budget still closes with the tail
     # ledger in it.
     wpe_on_sim = LAPDSim1D(
-        dict(csda_params, heating_anomalous_transport="tail_walk"),
+        dict(csda_params, **wpe_legacy,
+             heating_anomalous_transport="tail_walk"),
         dict(cathode_flags),
     )
     wpe_on_sim._circuit_I_loop = 3000.0
@@ -3116,7 +3134,8 @@ def main():
     # The two closures COMPOSE: with both on, each ledger books its own
     # population and neither is empty.
     wpe_both_sim = LAPDSim1D(
-        dict(csda_params, heating_anomalous_transport="tail_walk",
+        dict(csda_params, **wpe_legacy,
+             heating_anomalous_transport="tail_walk",
              beam_product_transport="nonlocal"),
         dict(cathode_flags),
     )
@@ -3162,14 +3181,16 @@ def main():
         dict(csda_params, heating_anomalous_transport="local",
              heating_anomalous_tail_ionization="on"),
         # Below the lowest inelastic threshold the channel cannot fire.
-        dict(csda_params, heating_anomalous_transport="tail_walk",
+        dict(csda_params, **wpe_legacy,
+             heating_anomalous_transport="tail_walk",
              heating_anomalous_tail_energy_eV=20.0,
              heating_anomalous_tail_ionization="on"),
         # Above ~221 eV the mean secondary clears that threshold too, so
         # banking it locally would drop a cascade the walk does not follow.
         # The bar is COMPUTED from <W_sec> and E_stop, not tabulated: this
         # case is what proves the depth-1 truncation is measured.
-        dict(csda_params, heating_anomalous_transport="tail_walk",
+        dict(csda_params, **wpe_legacy,
+             heating_anomalous_transport="tail_walk",
              heating_anomalous_tail_energy_eV=300.0,
              heating_anomalous_tail_ionization="on"),
     ):
@@ -3189,7 +3210,8 @@ def main():
     # the bars rather than asserting them.
     for k6_rung in (30.0, 75.0, 150.0):
         LAPDSim1D(
-            dict(csda_params, heating_anomalous_transport="tail_walk",
+            dict(csda_params, **wpe_legacy,
+                 heating_anomalous_transport="tail_walk",
                  heating_anomalous_tail_energy_eV=k6_rung,
                  heating_anomalous_tail_ionization="on"),
             dict(cathode_flags),
@@ -3199,7 +3221,8 @@ def main():
     # energy-only walk must still accept 300 eV (this pins the contract, not
     # just the guard).
     LAPDSim1D(
-        dict(csda_params, heating_anomalous_transport="tail_walk",
+        dict(csda_params, **wpe_legacy,
+             heating_anomalous_transport="tail_walk",
              heating_anomalous_tail_energy_eV=300.0),
         dict(cathode_flags),
     )
@@ -3208,7 +3231,8 @@ def main():
     # scalar -- and the four K6 splits are identically zero, so the off path
     # cannot have entered the branch.
     k6_off_sim = LAPDSim1D(
-        dict(csda_params, heating_anomalous_transport="tail_walk",
+        dict(csda_params, **wpe_legacy,
+             heating_anomalous_transport="tail_walk",
              heating_anomalous_tail_ionization="off"),
         dict(cathode_flags),
     )
@@ -3235,7 +3259,8 @@ def main():
     # On: the walkers now ionize on their way, so the SAME QL power comes back
     # split across more channels.
     k6_on_sim = LAPDSim1D(
-        dict(csda_params, heating_anomalous_transport="tail_walk",
+        dict(csda_params, **wpe_legacy,
+             heating_anomalous_transport="tail_walk",
              heating_anomalous_tail_ionization="on"),
         dict(cathode_flags),
     )
@@ -3395,6 +3420,274 @@ def main():
         raise AssertionError(
             "expected ValueError for a window excluding a QL-driven cell"
         )
+
+    # --- K7 through the solver: the sheath-aware tail closure. The cathode
+    # face REFLECTS walkers below e*phi_c(t) instead of deleting them, and the
+    # birth energy is keyed to the live phi_c instead of a fixed rung. Unit
+    # level only -- what the recovered power does to the discharge is a
+    # campaign run.
+    #
+    # The scenario needs a PRODUCTION-LIKE phi_c: the block above runs against
+    # the 1000 V cap, where 0.25*phi_c = 250 eV sits above the K6 depth-1 bar
+    # and the ionizing arm (correctly) refuses. Capping the drop at 300 V puts
+    # the keyed energy where the drive actually puts it.
+    k7_params = dict(csda_params, cathode_phi_c_cap_V=300.0)
+    k7_local_sim = LAPDSim1D(
+        dict(k7_params, heating_anomalous_transport="local"),
+        dict(cathode_flags),
+    )
+    k7_local_sim._circuit_I_loop = 3000.0
+    k7_local_solve = k7_local_sim.solve_cathode_boundary()
+    k7_local_dep = k7_local_solve.beam_deposition[0]
+    k7_phi_c = float(k7_local_solve.beam_result.result.phi_c)
+    k7_launched = float(k7_local_dep.heating_anomalous_erg_s.sum())
+    assert k7_launched > 0.0, "K7 scenario drives no QL power"
+    # The keyed energy must clear both K6 bars or the ionizing arm below would
+    # be testing a refusal instead of a walk.
+    assert (
+        _beam_deposition_mod.HE_E_STOP_EV < 0.25 * k7_phi_c < 221.0
+    ), k7_phi_c
+
+    # (a) PRESENCE GATE. Under "local" the three K7 keys are inert at ANY
+    # value: the corrected closure lives inside the walk and cannot be reached
+    # from a stance that never walks.
+    for k7_inert in (
+        dict(k7_params, heating_anomalous_tail_cathode_boundary="escape"),
+        dict(k7_params, heating_anomalous_tail_energy_keying="fixed"),
+        dict(k7_params, heating_anomalous_tail_phi_c_fraction=1.0),
+    ):
+        k7_inert_sim = LAPDSim1D(k7_inert, dict(cathode_flags))
+        k7_inert_sim._circuit_I_loop = 3000.0
+        k7_inert_dep = k7_inert_sim.solve_cathode_boundary().beam_deposition[0]
+        for _k7_arr in (
+            "plasma_heating_erg_s", "heating_anomalous_erg_s",
+            "radiated_erg_s", "ionization_cost_erg_s", "ionization_events",
+        ):
+            assert np.array_equal(
+                getattr(k7_inert_dep, _k7_arr), getattr(k7_local_dep, _k7_arr)
+            ), _k7_arr
+        assert k7_inert_dep.end_loss_tail_low_erg_s == 0.0
+        assert k7_inert_dep.end_loss_tail_high_erg_s == 0.0
+
+    # (b) MISCONFIGURATION is loud at CONSTRUCTION. The f arm is a DECLARED
+    # BRACKET, so a value off it is refused wherever it appears; the rest are
+    # the silent-no-op configurations: a fraction that nothing reads, a rung
+    # that nothing reads, and a twin machine whose two reflecting faces would
+    # trap the walkers with no way out.
+    for k7_bad_p, k7_bad_f in (
+        (dict(k7_params, heating_anomalous_tail_energy_keying="bogus"),
+         cathode_flags),
+        (dict(k7_params, heating_anomalous_tail_cathode_boundary="bogus"),
+         cathode_flags),
+        (dict(k7_params, heating_anomalous_tail_phi_c_fraction=0.3),
+         cathode_flags),
+        (dict(k7_params, heating_anomalous_tail_phi_c_fraction=0.0),
+         cathode_flags),
+        (dict(k7_params, heating_anomalous_transport="tail_walk",
+              heating_anomalous_tail_energy_keying="fixed",
+              heating_anomalous_tail_phi_c_fraction=0.25), cathode_flags),
+        (dict(k7_params, heating_anomalous_transport="tail_walk",
+              heating_anomalous_tail_energy_eV=150.0), cathode_flags),
+        (dict(k7_params, heating_anomalous_transport="tail_walk"),
+         dict(cathode_flags, TwinCathode=True)),
+    ):
+        try:
+            LAPDSim1D(k7_bad_p, dict(k7_bad_f))
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "expected ValueError for the K7 selectors "
+                f"({k7_bad_p.get('heating_anomalous_tail_energy_keying')!r}, "
+                f"{k7_bad_p.get('heating_anomalous_tail_cathode_boundary')!r}, "
+                f"{k7_bad_p.get('heating_anomalous_tail_phi_c_fraction')!r}, "
+                f"twin={k7_bad_f.get('TwinCathode')})"
+            )
+    # Every declared bracket arm constructs, and the legacy pair does too --
+    # the bracket the campaign reports is usable, which is the point of
+    # refusing everything outside it.
+    for k7_f in (0.25, 0.5, 1.0):
+        LAPDSim1D(
+            dict(k7_params, heating_anomalous_transport="tail_walk",
+                 heating_anomalous_tail_phi_c_fraction=k7_f),
+            dict(cathode_flags),
+        )
+
+    # (c) THE LEGACY ARM IS BIT-EXACT. Naming both legacy values reproduces the
+    # module call that has never heard of reflection or keying, byte for byte
+    # -- which is what makes every WP-E and K6 assertion above still an
+    # assertion about the closure it was written for.
+    k7_legacy_sim = LAPDSim1D(
+        dict(k7_params, **wpe_legacy,
+             heating_anomalous_transport="tail_walk"),
+        dict(cathode_flags),
+    )
+    k7_legacy_sim._circuit_I_loop = 3000.0
+    k7_legacy_dep = k7_legacy_sim.solve_cathode_boundary().beam_deposition[0]
+    k7_legacy_ray = _deposit_beam_ray(
+        k7_phi_c, k7_local_solve.beam_result.result.I_eth_star / qe_SI,
+        dz_cm=_pskip_geom.length_cm,
+        nn=csda_state.nn, ne=csda_state.n, Te=csda_derived.Te,
+        anode_cross_index=int(_pskip_geom.anode_face_indices[0]),
+        anode_eta=csda_eta,
+        anomalous_transport="tail_walk", tail_energy_eV=75.0,
+        **_pskip_ray_kwargs,
+    )
+    for _k7_arr in (
+        "plasma_heating_erg_s", "heating_anomalous_erg_s", "radiated_erg_s",
+        "ionization_cost_erg_s", "ionization_events", "excitation_events",
+    ):
+        assert np.array_equal(
+            getattr(k7_legacy_dep, _k7_arr), getattr(k7_legacy_ray, _k7_arr)
+        ), _k7_arr
+    for _k7_sc in ("end_loss_tail_low_erg_s", "end_loss_tail_high_erg_s"):
+        assert getattr(k7_legacy_dep, _k7_sc) == getattr(k7_legacy_ray, _k7_sc)
+    assert k7_legacy_dep.end_loss_tail_low_erg_s > 0.0  # the deleted half
+
+    # (d) REFLECTION. The corrected default returns the cathode-end flux to the
+    # column: that ledger is EXACTLY zero (phi_c is above every energy any
+    # walker can arrive with), the conservation identity still closes to
+    # roundoff, and the column keeps materially more of the QL power.
+    k7_on_sim = LAPDSim1D(
+        dict(k7_params, heating_anomalous_transport="tail_walk"),
+        dict(cathode_flags),
+    )
+    k7_on_sim._circuit_I_loop = 3000.0
+    k7_on_dep = k7_on_sim.solve_cathode_boundary().beam_deposition[0]
+    assert k7_on_dep.end_loss_tail_low_erg_s == 0.0
+    k7_on_ledger = (
+        float(k7_on_dep.end_loss_tail_low_erg_s)
+        + float(k7_on_dep.end_loss_tail_high_erg_s)
+    )
+    k7_on_delivered = (
+        float(k7_on_dep.heating_anomalous_erg_s.sum()) + k7_on_ledger
+    )
+    assert abs(k7_on_delivered - k7_launched) / k7_launched < 1e-12, (
+        k7_launched, k7_on_delivered
+    )
+    assert (
+        float(k7_on_dep.heating_anomalous_erg_s.sum())
+        > float(k7_legacy_dep.heating_anomalous_erg_s.sum())
+    )
+    # Energy-only, exactly like WP-E: reflection moves where the QL energy
+    # lands and nothing else. The particle rows and the WP-D ledger are
+    # untouched, and so are the primary's own heating splits.
+    assert np.array_equal(
+        k7_on_dep.ionization_events, k7_local_dep.ionization_events
+    )
+    for _k7_arr in ("heating_coulomb_erg_s", "heating_secondary_erg_s",
+                    "heating_terminal_erg_s"):
+        assert np.array_equal(
+            getattr(k7_on_dep, _k7_arr), getattr(k7_local_dep, _k7_arr)
+        ), _k7_arr
+    assert k7_on_dep.end_loss_low_erg_s == 0.0
+    assert k7_on_dep.end_loss_high_erg_s == 0.0
+
+    # (e) phi_c KEYING IS EXACTLY f*phi_c. The keyed arm and a fixed arm named
+    # at that same energy are the same run, byte for byte -- the keying moves
+    # one number and nothing else.
+    for k7_f in (0.25, 0.5):
+        k7_keyed_sim = LAPDSim1D(
+            dict(k7_params, heating_anomalous_transport="tail_walk",
+                 heating_anomalous_tail_cathode_boundary="escape",
+                 heating_anomalous_tail_phi_c_fraction=k7_f),
+            dict(cathode_flags),
+        )
+        k7_keyed_sim._circuit_I_loop = 3000.0
+        k7_keyed_dep = (
+            k7_keyed_sim.solve_cathode_boundary().beam_deposition[0]
+        )
+        k7_fixed_sim = LAPDSim1D(
+            dict(k7_params, **wpe_legacy,
+                 heating_anomalous_transport="tail_walk",
+                 heating_anomalous_tail_energy_eV=k7_f * k7_phi_c),
+            dict(cathode_flags),
+        )
+        k7_fixed_sim._circuit_I_loop = 3000.0
+        k7_fixed_dep = (
+            k7_fixed_sim.solve_cathode_boundary().beam_deposition[0]
+        )
+        assert np.array_equal(
+            k7_keyed_dep.heating_anomalous_erg_s,
+            k7_fixed_dep.heating_anomalous_erg_s,
+        ), k7_f
+        assert (
+            k7_keyed_dep.end_loss_tail_low_erg_s
+            == k7_fixed_dep.end_loss_tail_low_erg_s
+        )
+    # The default fraction IS the 0.25 arm (continuity with the shipped rung).
+    k7_default_sim = LAPDSim1D(
+        dict(k7_params, heating_anomalous_transport="tail_walk",
+             heating_anomalous_tail_phi_c_fraction=0.25),
+        dict(cathode_flags),
+    )
+    k7_default_sim._circuit_I_loop = 3000.0
+    assert np.array_equal(
+        k7_default_sim.solve_cathode_boundary()
+        .beam_deposition[0].heating_anomalous_erg_s,
+        k7_on_dep.heating_anomalous_erg_s,
+    )
+
+    # (f) THE IONIZING CHANNEL SURVIVES REFLECTION. The reflected walker keeps
+    # marching and stays eligible to ionize, the K6 closure identity still
+    # closes, the single-booking property still holds (the shared row grows by
+    # exactly the tail split, so nothing is booked twice across the bounce),
+    # and not one pair is born in a cell the RHS mask zeroes.
+    k7_ion_sim = LAPDSim1D(
+        dict(k7_params, heating_anomalous_transport="tail_walk",
+             heating_anomalous_tail_ionization="on"),
+        dict(cathode_flags),
+    )
+    k7_ion_sim._circuit_I_loop = 3000.0
+    k7_ion_dep = k7_ion_sim.solve_cathode_boundary().beam_deposition[0]
+    k7_ion_ledger = (
+        float(k7_ion_dep.end_loss_tail_low_erg_s)
+        + float(k7_ion_dep.end_loss_tail_high_erg_s)
+    )
+    assert k7_ion_dep.end_loss_tail_low_erg_s == 0.0
+    assert float(k7_ion_dep.ionization_events_tail.sum()) > 0.0
+    k7_ion_delivered = (
+        float(k7_ion_dep.heating_anomalous_erg_s.sum())
+        + float(k7_ion_dep.ionization_cost_tail_erg_s.sum())
+        + float(k7_ion_dep.radiated_tail_erg_s.sum())
+        + k7_ion_ledger
+    )
+    assert abs(k7_ion_delivered - k7_launched) / k7_launched < 1e-12, (
+        k7_launched, k7_ion_delivered
+    )
+    assert np.allclose(
+        k7_ion_dep.ionization_events - k7_on_dep.ionization_events,
+        k7_ion_dep.ionization_events_tail, rtol=1e-12, atol=0.0,
+    )
+    for _k7_pair in (
+        ("excitation_events", "excitation_events_tail"),
+        ("ionization_cost_erg_s", "ionization_cost_tail_erg_s"),
+        ("radiated_erg_s", "radiated_tail_erg_s"),
+    ):
+        assert np.allclose(
+            getattr(k7_ion_dep, _k7_pair[0]) - getattr(k7_on_dep, _k7_pair[0]),
+            getattr(k7_ion_dep, _k7_pair[1]), rtol=1e-12, atol=0.0,
+        ), _k7_pair
+    k7_dead = ~np.asarray(k7_ion_sim._geometry.plasma_active, dtype=bool)
+    assert k7_dead.any(), "scenario has no plasma-dead cells to protect"
+    assert not np.any(k7_ion_dep.ionization_events_tail[k7_dead])
+    assert not np.any(k7_ion_dep.heating_anomalous_erg_s[k7_dead])
+    # The reflected leg is what makes the channel bigger: more of the launched
+    # power is spent in the column, so more pairs are born there.
+    k7_ion_legacy_sim = LAPDSim1D(
+        dict(k7_params, **wpe_legacy,
+             heating_anomalous_transport="tail_walk",
+             heating_anomalous_tail_ionization="on"),
+        dict(cathode_flags),
+    )
+    k7_ion_legacy_sim._circuit_I_loop = 3000.0
+    k7_ion_legacy_dep = (
+        k7_ion_legacy_sim.solve_cathode_boundary().beam_deposition[0]
+    )
+    assert (
+        float(k7_ion_dep.ionization_events_tail.sum())
+        > float(k7_ion_legacy_dep.ionization_events_tail.sum())
+    )
 
     # --- Beam-deposition smoothing CONSERVES the deposit over the live plasma.
     # The Gaussian redistribution kernel must place ZERO weight on the typed
@@ -9953,6 +10246,117 @@ def main():
             pass
         else:
             raise AssertionError("expected ValueError for anomalous_transport")
+
+    # --- K7 at the module: one walk-window face REFLECTS instead of letting
+    # walkers leave. The comparison against the threshold is general, so the
+    # arm is not a disguised "reflect everything" switch.
+    k7m_win = (0, wpe_cells - 1)
+    k7m_common = dict(
+        wpe_thin, anomalous_transport="tail_walk", tail_energy_eV=75.0,
+        tail_walk_window=k7m_win, tail_reflect_face=-1,
+    )
+    # (a) THRESHOLD BELOW EVERY ARRIVAL ENERGY: nothing reflects, and with the
+    # window spanning the whole grid the result is the unreflected walk BYTE
+    # FOR BYTE. This is the general-comparison statement and the
+    # bit-exactness statement in one.
+    k7m_inert = deposit_beam(
+        wpe_E0, wpe_G0, **k7m_common, tail_reflect_threshold_eV=1.0e-30,
+    )
+    assert np.array_equal(
+        k7m_inert.heating_anomalous_erg_s, wpe_walk.heating_anomalous_erg_s
+    )
+    assert (
+        k7m_inert.end_loss_tail_low_erg_s == wpe_walk.end_loss_tail_low_erg_s
+    )
+    assert (
+        k7m_inert.end_loss_tail_high_erg_s == wpe_walk.end_loss_tail_high_erg_s
+    )
+    # (b) THRESHOLD ABOVE THEM: everything reflects. The named face's ledger is
+    # EXACTLY zero, the conservation identity still closes to roundoff, and the
+    # column keeps what the face used to delete.
+    for k7m_face in (-1, 1):
+        k7m_refl = deposit_beam(
+            wpe_E0, wpe_G0, **dict(k7m_common, tail_reflect_face=k7m_face),
+            tail_reflect_threshold_eV=1.0e4,
+        )
+        k7m_ledger = (
+            float(k7m_refl.end_loss_tail_low_erg_s)
+            + float(k7m_refl.end_loss_tail_high_erg_s)
+        )
+        k7m_face_ledger = (
+            k7m_refl.end_loss_tail_low_erg_s if k7m_face < 0
+            else k7m_refl.end_loss_tail_high_erg_s
+        )
+        assert k7m_face_ledger == 0.0, k7m_face
+        k7m_delivered = (
+            float(k7m_refl.heating_anomalous_erg_s.sum()) + k7m_ledger
+        )
+        assert abs(k7m_delivered - wpe_removed) / wpe_removed < 1e-12, (
+            k7m_face, wpe_removed, k7m_delivered
+        )
+        assert (
+            float(k7m_refl.heating_anomalous_erg_s.sum())
+            > float(wpe_walk.heating_anomalous_erg_s.sum())
+        )
+        # Energy-only still: reflection moves energy, never particles.
+        assert np.array_equal(
+            k7m_refl.ionization_events, wpe_walk.ionization_events
+        )
+    # (c) A SUB-WINDOW IS A WALL. With the window closed short of the grid, no
+    # tail energy lands beyond it in either direction, and the budget still
+    # closes -- what leaves through the far face is booked, not lost.
+    k7m_sub = deposit_beam(
+        wpe_E0, wpe_G0, **dict(k7m_common, tail_walk_window=(0, 40)),
+        tail_reflect_threshold_eV=1.0e4,
+    )
+    assert not np.any(k7m_sub.heating_anomalous_erg_s[41:])
+    k7m_sub_delivered = (
+        float(k7m_sub.heating_anomalous_erg_s.sum())
+        + float(k7m_sub.end_loss_tail_low_erg_s)
+        + float(k7m_sub.end_loss_tail_high_erg_s)
+    )
+    assert abs(k7m_sub_delivered - wpe_removed) / wpe_removed < 1e-12
+    # (d) MISCONFIGURATION at the module boundary: a face with no threshold, a
+    # threshold with no face, a face that is not a face, a threshold that is
+    # not an energy, a face with no window to put it on, and reflection asked
+    # for where there is no walk at all.
+    for k7m_bad in (
+        dict(tail_reflect_face=-1, tail_walk_window=k7m_win),
+        dict(tail_reflect_threshold_eV=100.0, tail_walk_window=k7m_win),
+        dict(tail_reflect_face=0, tail_reflect_threshold_eV=100.0,
+             tail_walk_window=k7m_win),
+        dict(tail_reflect_face=-1, tail_reflect_threshold_eV=0.0,
+             tail_walk_window=k7m_win),
+        dict(tail_reflect_face=-1, tail_reflect_threshold_eV=float("nan"),
+             tail_walk_window=k7m_win),
+        dict(tail_reflect_face=-1, tail_reflect_threshold_eV=float("inf"),
+             tail_walk_window=k7m_win),
+        dict(tail_reflect_face=-1, tail_reflect_threshold_eV=100.0),
+        dict(tail_reflect_face=-1, tail_reflect_threshold_eV=100.0,
+             tail_walk_window=(0, wpe_cells)),
+    ):
+        try:
+            deposit_beam(
+                wpe_E0, wpe_G0, **wpe_thin,
+                anomalous_transport="tail_walk", tail_energy_eV=75.0,
+                **k7m_bad,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected ValueError for {k7m_bad!r}")
+    try:
+        deposit_beam(
+            wpe_E0, wpe_G0, **wpe_thin,
+            tail_reflect_face=-1, tail_reflect_threshold_eV=100.0,
+            tail_walk_window=k7m_win,
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(
+            "expected ValueError for reflection without a tail walk"
+        )
 
     adas_reaction_kwargs = dict(
         state=knob_state,

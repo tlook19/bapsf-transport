@@ -1,0 +1,50 @@
+# k7build_config_delta -- resolved-config key delta vs the base checkout
+# reference: /Users/tlook/bapsf/bapsf-transport/cablp
+# expected added params: ['heating_anomalous_tail_cathode_boundary', 'heating_anomalous_tail_energy_keying', 'heating_anomalous_tail_phi_c_fraction']
+# expected added flags : []
+
+== compare_sim1d_es1 [params]  base=214 branch=217
+   added   : ['heating_anomalous_tail_cathode_boundary', 'heating_anomalous_tail_energy_keying', 'heating_anomalous_tail_phi_c_fraction']
+   removed : []
+   changed : {}
+   new-key values: {"heating_anomalous_tail_cathode_boundary": "reflect", "heating_anomalous_tail_energy_keying": "phi_c", "heating_anomalous_tail_phi_c_fraction": null}
+== compare_sim1d_es1 [flags]  base=38 branch=38
+   added   : []
+   removed : []
+   changed : {}
+   new-key values: {}
+
+== production_golden [params]  base=214 branch=217
+   added   : ['heating_anomalous_tail_cathode_boundary', 'heating_anomalous_tail_energy_keying', 'heating_anomalous_tail_phi_c_fraction']
+   removed : []
+   changed : {}
+   new-key values: {"heating_anomalous_tail_cathode_boundary": "reflect", "heating_anomalous_tail_energy_keying": "phi_c", "heating_anomalous_tail_phi_c_fraction": null}
+== production_golden [flags]  base=38 branch=38
+   added   : []
+   removed : []
+   changed : {}
+   new-key values: {}
+
+== run_m6_point_es1_sgp3400_defaults [params]  base=214 branch=217
+   added   : ['heating_anomalous_tail_cathode_boundary', 'heating_anomalous_tail_energy_keying', 'heating_anomalous_tail_phi_c_fraction']
+   removed : []
+   changed : {}
+   new-key values: {"heating_anomalous_tail_cathode_boundary": "reflect", "heating_anomalous_tail_energy_keying": "phi_c", "heating_anomalous_tail_phi_c_fraction": null}
+== run_m6_point_es1_sgp3400_defaults [flags]  base=38 branch=38
+   added   : []
+   removed : []
+   changed : {}
+   new-key values: {}
+
+== run_mechanism_ladder_es1_defaults [params]  base=214 branch=217
+   added   : ['heating_anomalous_tail_cathode_boundary', 'heating_anomalous_tail_energy_keying', 'heating_anomalous_tail_phi_c_fraction']
+   removed : []
+   changed : {}
+   new-key values: {"heating_anomalous_tail_cathode_boundary": "reflect", "heating_anomalous_tail_energy_keying": "phi_c", "heating_anomalous_tail_phi_c_fraction": null}
+== run_mechanism_ladder_es1_defaults [flags]  base=38 branch=38
+   added   : []
+   removed : []
+   changed : {}
+   new-key values: {}
+
+CONFIG DELTA PASSED: every case adds exactly the pre-registered keys, removes nothing, and moves no existing default.
