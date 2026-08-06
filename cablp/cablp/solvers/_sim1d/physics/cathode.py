@@ -915,6 +915,14 @@ def _sum_beam_deposition(a, b):
                                  + b.heating_secondary_erg_s),
         heating_terminal_erg_s=(a.heating_terminal_erg_s
                                 + b.heating_terminal_erg_s),
+        # K6 tail splits add like the banks they partition.
+        ionization_events_tail=(a.ionization_events_tail
+                                + b.ionization_events_tail),
+        excitation_events_tail=(a.excitation_events_tail
+                                + b.excitation_events_tail),
+        ionization_cost_tail_erg_s=(a.ionization_cost_tail_erg_s
+                                    + b.ionization_cost_tail_erg_s),
+        radiated_tail_erg_s=(a.radiated_tail_erg_s + b.radiated_tail_erg_s),
     )
 
 
@@ -965,12 +973,15 @@ def _csda_beam_deposition(
     books as never entering the plasma. The gap-transmission probe is
     unaffected (it measures gap survival, which feeds the circuit bypass).
 
-    ``beam_product_transport`` (WP-D) and ``heating_anomalous_transport``
-    (WP-E) are threaded to the DEPOSITION rays only, and only when they are
-    not their default ``"local"``. The probe rays keep the historical argument
+    ``beam_product_transport`` (WP-D), ``heating_anomalous_transport`` (WP-E)
+    and ``heating_anomalous_tail_ionization`` (K6) are threaded to the
+    DEPOSITION rays only, and only when they are
+    not their default ``"local"`` / ``"off"``. The probe rays keep the
+    historical argument
     list: they are transmission instruments whose single output is the ratio
-    of transmitted to launched PRIMARY flux, which neither closure can change
-    (both are energy-only -- they move deposited energy, never primary flux),
+    of transmitted to launched PRIMARY flux, which no closure here can change
+    (the walks move deposited energy and, under K6, add SECONDARY events --
+    never the primary's own flux),
     so walking their products or tails would be pure cost. For the same reason
     ``_ray_gap_breakout`` and the item-35 tripwire are unaffected -- both read
     ``transmitted_flux`` and ``E_entry_eV``, which are primary-flux
@@ -999,6 +1010,15 @@ def _csda_beam_deposition(
         transport_kwargs["tail_energy_eV"] = float(
             input_dict.get("heating_anomalous_tail_energy_eV", 75.0)
         )
+        # K6: presence-gated inside the tail_walk branch, because the module
+        # refuses the combination the solver has already refused at
+        # construction. Passed only when ON, so a tail_walk run without it
+        # enters deposit_beam with the argument list it had before K6.
+        tail_ionization = str(
+            input_dict.get("heating_anomalous_tail_ionization", "off")
+        )
+        if tail_ionization != "off":
+            transport_kwargs["tail_ionization"] = tail_ionization
     if transport_kwargs:
         # Hoisted stopping coefficient (cost read 2026-08-02, restructure C).
         # The walks' per-cell A in dE/dx = A W**p is a 262-iteration Python

@@ -192,6 +192,73 @@ identical in both modes. Stated limitations, inherited from the walk: straight
 lines along B, no pitch-angle diffusion, one mean energy rather than a plateau
 distribution, and no sheath/ambipolar throttle at the ends — so ``"tail_walk"``
 is a FREE-ESCAPE bound and the pair {local, tail_walk} brackets the truth.
+
+Tail ionization (``tail_ionization``, K6)
+-----------------------------------------
+
+``tail_ionization="on"`` removes the ENERGY-ONLY restriction from the WP-E
+tail walk: a tail electron at ``E_tail`` is above every He inelastic threshold
+at all shipped rungs, so declaring that it may only Coulomb-slow is a modeling
+choice, not a physical one. Under ``"on"`` each tail population is marched
+with THIS MODULE'S OWN CSDA integration -- a recursive ``deposit_beam`` call
+per birth cell and direction, at ``anomalous_model="none"`` (the plateau
+electrons are the instability's product; they do not re-drive it) and
+``product_transport="local"`` -- so it attenuates on the local COLUMN neutral
+density with the same He ionization and excitation cross sections the primary
+uses, at the walker's CURRENT energy, simultaneously with its Coulomb slowing.
+Under ``neutral_two_zone`` the ``nn`` the caller passes IS the column channel,
+and that is the density the walker attenuates on; the attic/annulus channel is
+not on the walker's field line.
+
+The walker's channels are booked into the SAME per-cell banks the primary
+fills, so every downstream consumer -- the fluid particle rows, the ionization
+cost sink, the radiation sink, the circuit -- sees tail-borne events through
+the machinery it already has, with the ion/electron pair booked by exactly the
+convention the primary's births use:
+
+- each ionization event adds one pair to ``ionization_events`` (and its
+  ``I_ion`` investment to ``ionization_cost_erg_s``);
+- the mean secondary ``<W_sec>`` banks as local electron heat with the birth;
+- each excitation event's threshold energy goes to ``radiated_erg_s``;
+- the walker's Coulomb drag and its sub-threshold terminal residual bank as
+  plasma heating where they occur;
+- a walker still above ``E_stop`` at a domain end goes to the SAME tail end
+  ledger the energy-only walk uses (``end_loss_tail_low/high``) and leaves the
+  system. This keeps ``"tail_walk"`` a free-escape bound with or without the
+  ionization channel, so ``tail_ionization`` moves ONE thing and the end
+  convention is not silently swapped underneath it.
+
+All of the walkers' heat lands in ``heating_anomalous_erg_s``, which keeps its
+documented meaning ("the anomalous channel's delivery to the electrons"); the
+primary's own ``heating_coulomb`` / ``heating_secondary`` / ``heating_terminal``
+splits are untouched. The tail's contributions to the shared banks are ALSO
+reported separately as ``ionization_events_tail``, ``excitation_events_tail``,
+``ionization_cost_tail_erg_s`` and ``radiated_tail_erg_s`` -- pure bookkeeping,
+identically zero under ``"off"``, and what makes the per-ray branching
+statement checkable::
+
+    P_QL = heating_anomalous + ionization_cost_tail + radiated_tail
+           + end_loss_tail_low + end_loss_tail_high
+
+i.e. every launched eV ends in exactly one of {bulk heat via thermalization,
+ionization investment, secondary-birth heat, radiation, end ledger}. The
+overall per-ray identity is UNCHANGED in form -- the tail's cost and radiation
+join the terms that already carry the primary's.
+
+**The depth-1 cascade truncation is MEASURED, not assumed.** Secondaries bank
+locally rather than walking, which is only correct while ``<W_sec>(E_tail)``
+sits below ``E_stop`` -- the point at which a secondary could itself do
+something inelastic. That is true at every shipped rung (1.35 / 9.89 / 16.82 eV
+at 30 / 75 / 150 eV against the 20.6158 eV floor) and stops being true above
+``E_tail`` ~ 221 eV, so the module REFUSES a rung it cannot truncate rather
+than silently mis-banking a cascade it does not follow. ``E_tail`` at or below
+``E_stop`` is refused too: there the ionizing channel cannot act at all and the
+selection would be a silent no-op.
+
+Stated limitations, additional to the walk's own: the walker carries one mean
+energy rather than a plateau distribution, so its cross sections are evaluated
+at that mean; and it is launched at the near edge of its birth cell, the same
+cell-resolution granularity as everywhere else in the module.
 """
 
 from __future__ import annotations
@@ -504,6 +571,23 @@ class BeamDepositionResult:
                           enter any RHS row.
     end_loss_tail_high_erg_s: WP-E TAIL END LEDGER, high-index end [erg/s];
                           same content.
+    ionization_events_tail  : K6 DIAGNOSTIC SPLIT -- how much of
+                          ``ionization_events`` the QL tail walkers contributed
+                          [1/s]. Identically zero under ``tail_ionization="off"``
+                          (the default), where the walkers cannot ionize at all.
+    excitation_events_tail  : K6 DIAGNOSTIC SPLIT of ``excitation_events``
+                          [1/s]; same status.
+    ionization_cost_tail_erg_s: K6 DIAGNOSTIC SPLIT of ``ionization_cost_erg_s``
+                          [erg/s]; same status.
+    radiated_tail_erg_s     : K6 DIAGNOSTIC SPLIT of ``radiated_erg_s``
+                          [erg/s]; same status.
+
+    The four ``*_tail`` arrays are bookkeeping, exactly like the four
+    ``heating_*`` splits: they re-report a SUBSET of banks the shared arrays
+    already carry, and nothing downstream consumes them in place of those
+    arrays. Their purpose is that the tail channel's own energy branching
+    (module docstring, K6) stays readable when the primary is filling the same
+    banks.
     """
 
     ionization_events: np.ndarray
@@ -519,6 +603,10 @@ class BeamDepositionResult:
     heating_anomalous_erg_s: np.ndarray
     heating_secondary_erg_s: np.ndarray
     heating_terminal_erg_s: np.ndarray
+    ionization_events_tail: np.ndarray
+    excitation_events_tail: np.ndarray
+    ionization_cost_tail_erg_s: np.ndarray
+    radiated_tail_erg_s: np.ndarray
     end_loss_low_erg_s: float = 0.0
     end_loss_high_erg_s: float = 0.0
     end_loss_transmitted_erg_s: float = 0.0
@@ -547,6 +635,7 @@ def deposit_beam(
     product_transport: str = "local",
     anomalous_transport: str = "local",
     tail_energy_eV: float | None = None,
+    tail_ionization: str = "off",
     stopping_coefficient: np.ndarray | None = None,
 ) -> BeamDepositionResult:
     """Deposit one monoenergetic beam ray through the column (He only).
@@ -605,6 +694,17 @@ def deposit_beam(
     independent and compose: with both on, the event products walk on the WP-D
     ledger and the QL tails on the WP-E one.
 
+    **Tail ionization (K6).** ``tail_ionization`` is ``"off"`` (default,
+    bit-exact -- the walk stays energy-only) or ``"on"``, which marches each
+    tail population on this module's own CSDA integration so it ionizes and
+    excites the column gas on its way; see the module docstring. Requires
+    ``anomalous_transport="tail_walk"`` (there is no other walk to give the
+    channel to) and a ``tail_energy_eV`` the truncation argument holds at:
+    above ``E_stop_eV``, so the channel can act, and low enough that
+    ``<W_sec>(E_tail) < E_stop_eV``, so banking secondaries locally is the
+    correct depth-1 truncation rather than a dropped cascade. Both are
+    ValueErrors, not silent adjustments.
+
     ``stopping_coefficient`` (cost read 2026-08-02, restructure C) is the
     per-cell ``A`` of ``dE/dx = A W**p`` that the walks below need, HOISTED to
     the caller. Left ``None`` -- the default, and every historical call -- it
@@ -626,6 +726,19 @@ def deposit_beam(
         raise ValueError(
             f"unknown anomalous_transport {anomalous_transport!r}; "
             "expected 'local' or 'tail_walk'"
+        )
+    if tail_ionization not in ("off", "on"):
+        raise ValueError(
+            f"unknown tail_ionization {tail_ionization!r}; "
+            "expected 'off' or 'on'"
+        )
+    if tail_ionization == "on" and anomalous_transport != "tail_walk":
+        raise ValueError(
+            "tail_ionization='on' requires anomalous_transport='tail_walk' "
+            "(the ionizing channel belongs to the QL tail walkers; with "
+            "anomalous_transport='local' there are no walkers and the "
+            "setting would do nothing). anomalous_transport accepts 'local' "
+            "or 'tail_walk'; tail_ionization accepts 'off' or 'on'"
         )
     if anode_eta != 0.0 and not (0.0 <= anode_eta < 1.0):
         raise ValueError(
@@ -682,6 +795,31 @@ def deposit_beam(
                 "tail_energy_eV must be finite and > 0 (got "
                 f"{tail_energy_eV})"
             )
+    ionize_tail = tail_ionization == "on"
+    if ionize_tail:
+        # The two bars the K6 truncation argument stands on, both computed
+        # from the thresholds themselves rather than asserted for the shipped
+        # rungs (module docstring). Refusing is deliberate: the alternative to
+        # the first is a channel that cannot fire, and to the second a cascade
+        # this module would drop while banking it as if it had thermalized.
+        if E_tail <= E_stop_eV:
+            raise ValueError(
+                f"tail_ionization='on' needs tail_energy_eV > E_stop_eV "
+                f"({E_stop_eV} eV, the lowest He inelastic threshold); at "
+                f"{E_tail} eV a tail walker cannot ionize or excite at all "
+                "and the setting would be a silent no-op"
+            )
+        W_sec_launch = he_mean_secondary_energy_eV(E_tail, I_ion_eV=I_ion_eV)
+        if W_sec_launch >= E_stop_eV:
+            raise ValueError(
+                "tail_ionization='on' banks each secondary as local heat, "
+                "which is the correct depth-1 truncation only while the mean "
+                "secondary energy stays below the lowest inelastic threshold; "
+                f"at tail_energy_eV={E_tail} eV it is {W_sec_launch:.4f} eV "
+                f"against E_stop_eV={E_stop_eV} eV, so the cascade this "
+                "module does not follow would be mis-banked as thermalized. "
+                "Lower tail_energy_eV or extend the walk to recurse"
+            )
     if stopping_coefficient is not None:
         stopping_coefficient = np.asarray(stopping_coefficient, dtype=float)
         if stopping_coefficient.shape != (cells,):
@@ -708,6 +846,14 @@ def deposit_beam(
     heat_anomalous = np.zeros(cells)
     heat_secondary = np.zeros(cells)
     heat_terminal = np.zeros(cells)
+    # K6 diagnostic splits: the QL tail walkers' share of the four shared
+    # banks they now write into. Allocated unconditionally (four cell-sized
+    # arrays) so every result carries the same fields; they stay all-zero
+    # unless the ionizing walk actually runs.
+    ion_events_tail = np.zeros(cells)
+    exc_events_tail = np.zeros(cells)
+    ion_cost_tail = np.zeros(cells)
+    radiated_tail = np.zeros(cells)
     # --- Non-local product transport (WP-D) -----------------------------
     # Under "nonlocal" the secondary and terminal-residual banks are WITHHELD
     # from their birth cells and accumulated here, then walked after the ray
@@ -768,6 +914,10 @@ def deposit_beam(
             heating_anomalous_erg_s=heat_anomalous,
             heating_secondary_erg_s=heat_secondary,
             heating_terminal_erg_s=heat_terminal,
+            ionization_events_tail=ion_events_tail,
+            excitation_events_tail=exc_events_tail,
+            ionization_cost_tail_erg_s=ion_cost_tail,
+            radiated_tail_erg_s=radiated_tail,
             end_loss_low_erg_s=end_loss_low,
             end_loss_high_erg_s=end_loss_high,
             end_loss_transmitted_erg_s=end_loss_transmitted,
@@ -1098,16 +1248,86 @@ def deposit_beam(
             # the slowing length falls below a cell, the walker thermalizes in
             # its birth cell, and the closure collapses onto the local banking
             # it replaced.
-            tail_W = np.full(cells, E_tail)
             half_flux = 0.5 * (anom_power_eV / E_tail)
-            for walk_direction in (1, -1):
-                exit_erg = _walk_and_deposit(
-                    tail_W, half_flux, walk_direction, heat_anomalous
-                )
-                if walk_direction > 0:
-                    end_loss_tail_high += exit_erg
-                else:
-                    end_loss_tail_low += exit_erg
+            if ionize_tail:
+                # K6: the walkers attenuate INELASTICALLY on the column gas as
+                # well as Coulomb-slowing, so the closed-form integral above
+                # (which knows only the Coulomb power law) cannot carry them.
+                # March them on this module's own CSDA integration instead --
+                # one call per birth cell and direction, the same instrument
+                # the primary uses, so the cross sections, thresholds, <W_sec>
+                # convention and substep control are the primary's by
+                # construction rather than by transcription.
+                #
+                # anomalous_model="none": the plateau electrons ARE the
+                # instability's product and do not re-drive it (and a walker
+                # that drove its own QL drag would double-count the very power
+                # being carried). product_transport="local": the depth-1
+                # truncation validated at construction -- secondaries and the
+                # sub-threshold terminal residual bank where they are made.
+                # No anode interception: these are born in the column, not
+                # streaming out of the cathode through the mesh. No recursion
+                # risk: the nested call takes anomalous_transport="local".
+                for birth in np.flatnonzero(half_flux > 0.0):
+                    for walk_direction in (1, -1):
+                        tail = deposit_beam(
+                            E_tail,
+                            float(half_flux[birth]),
+                            nn,
+                            ne,
+                            Te,
+                            int(birth),
+                            walk_direction,
+                            dz_cm,
+                            I_ion_eV=I_ion_eV,
+                            E_stop_eV=E_stop_eV,
+                            coulomb_model=coulomb_model,
+                            anomalous_model="none",
+                            max_energy_fraction_per_substep=frac,
+                        )
+                        # Shared banks: the tail's events and energy join the
+                        # primary's, which is what puts the born pair on the
+                        # existing beam-ionization birth convention and its
+                        # I_ion investment on the existing cost sink.
+                        ionization_events += tail.ionization_events
+                        excitation_events += tail.excitation_events
+                        ionization_cost += tail.ionization_cost_erg_s
+                        radiated += tail.radiated_erg_s
+                        # All of the walker's HEAT (Coulomb drag, the local
+                        # <W_sec> secondaries, the terminal residual) is the
+                        # anomalous channel's delivery to the electrons, so it
+                        # lands in the lumped bank and in the anomalous split
+                        # -- never in the primary's coulomb/secondary/terminal
+                        # splits, which keep describing the primary alone.
+                        heating += tail.plasma_heating_erg_s
+                        heat_anomalous += tail.plasma_heating_erg_s
+                        # Diagnostic splits of the four shared banks.
+                        ion_events_tail += tail.ionization_events
+                        exc_events_tail += tail.excitation_events
+                        ion_cost_tail += tail.ionization_cost_erg_s
+                        radiated_tail += tail.radiated_erg_s
+                        # A walker still above E_stop at the end it was
+                        # heading for escapes, on the SAME free-escape
+                        # convention the energy-only walk uses.
+                        exit_erg = (
+                            float(tail.transmitted_flux)
+                            * float(tail.transmitted_energy_eV)
+                            * _ERG_PER_EV
+                        )
+                        if walk_direction > 0:
+                            end_loss_tail_high += exit_erg
+                        else:
+                            end_loss_tail_low += exit_erg
+            else:
+                tail_W = np.full(cells, E_tail)
+                for walk_direction in (1, -1):
+                    exit_erg = _walk_and_deposit(
+                        tail_W, half_flux, walk_direction, heat_anomalous
+                    )
+                    if walk_direction > 0:
+                        end_loss_tail_high += exit_erg
+                    else:
+                        end_loss_tail_low += exit_erg
         if walk_products and not absorbed and gamma > 0.0 and E > 0.0:
             # The transmitted primary: computed since B1, never banked. It
             # leaves through the end the ray was heading for.
@@ -1131,6 +1351,10 @@ def deposit_beam(
         heating_anomalous_erg_s=heat_anomalous,
         heating_secondary_erg_s=heat_secondary,
         heating_terminal_erg_s=heat_terminal,
+        ionization_events_tail=ion_events_tail,
+        excitation_events_tail=exc_events_tail,
+        ionization_cost_tail_erg_s=ion_cost_tail,
+        radiated_tail_erg_s=radiated_tail,
         end_loss_low_erg_s=end_loss_low,
         end_loss_high_erg_s=end_loss_high,
         end_loss_transmitted_erg_s=end_loss_transmitted,

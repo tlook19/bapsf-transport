@@ -1549,6 +1549,37 @@ def cathode_defaults():
         model cannot pin, so this is an ASSUMED value and a run that uses it
         must report a bracket rather than a single number. Arms and values:
         ``config_defaults_provenance.md``.
+    heating_anomalous_tail_ionization:
+        Whether the QL tail walkers may IONIZE and EXCITE the column gas they
+        pass through. **Read ONLY under
+        ``heating_anomalous_transport="tail_walk"``** -- inert otherwise, and
+        selecting ``"on"`` without it raises. ``"off"`` (default, bit-exact):
+        the walk is energy-only, the walkers Coulomb-slow and nothing else, and
+        every particle row is what it would be under ``"local"``. ``"on"``: each
+        tail population is marched on the CSDA module's own integration, so it
+        attenuates on the local COLUMN neutral density (under
+        ``neutral_two_zone`` that is the column channel ``nn``, the only gas on
+        the walker's field line) with the He ionization and excitation cross
+        sections evaluated at the walker's CURRENT energy, simultaneously with
+        its Coulomb slowing. Each ionization event births one ion/electron pair
+        at the event cell on the same convention the beam's own births use,
+        invests ``I_ion``, banks the mean secondary ``<W_sec>`` as local
+        electron heat and each excitation threshold as radiation; the walker
+        continues on the reduced energy, and what still reaches a domain end
+        goes to the same tail end ledger the energy-only walk uses. So
+        ``"on"`` adds a PARTICLE channel where the rest of WP-E is
+        energy-only, and both settings share one end convention -- the flag
+        moves one thing.
+        Motivation: the omitted channel is negligible in the main discharge
+        (Coulomb blocking, thin target) but brushes materiality in the
+        breakdown foot, where it feeds back on the very density that
+        suppresses it. ``tail_energy_eV`` must sit above the lowest inelastic
+        threshold (below it the channel cannot act) and low enough that
+        ``<W_sec>(E_tail)`` stays below that threshold, which is what makes
+        banking secondaries locally the correct depth-1 truncation rather than
+        a dropped cascade; both bars are checked at construction from the
+        thresholds themselves and refused loudly, and all three registered
+        ``E_tail`` arms clear them.
     beam_clump_fraction:
         Fractional-coverage beam-neutral closure (default 0.0 = OFF, bit-exact).
         The fresh gas puff is a dense, SPOTTY cloud sitting on the uniform
@@ -1715,6 +1746,7 @@ def cathode_defaults():
         # inert under "local".
         "heating_anomalous_transport": "local",
         "heating_anomalous_tail_energy_eV": 75.0,
+        "heating_anomalous_tail_ionization": "off",
         "beam_clump_fraction": 0.0,
         "beam_clump_enhancement": 1.0,
         "beam_deposition_smoothing_cm": 0.0,
