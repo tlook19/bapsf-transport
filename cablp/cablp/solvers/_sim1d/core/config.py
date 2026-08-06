@@ -1541,14 +1541,62 @@ def cathode_defaults():
         rows and the circuit currents are identical in both modes.
     heating_anomalous_tail_energy_eV:
         QL plateau energy ``E_tail`` [eV] the tail electrons are launched at.
-        **Read ONLY under ``heating_anomalous_transport="tail_walk"``** --
-        inert otherwise. Must be finite and > 0. It sets the walkers' Coulomb
+        **Read ONLY under ``heating_anomalous_transport="tail_walk"`` WITH
+        ``heating_anomalous_tail_energy_keying="fixed"``** -- inert otherwise,
+        and supplying a value other than the shipped one under
+        ``"phi_c"`` keying raises rather than being silently ignored. Must be
+        finite and > 0. It sets the walkers' Coulomb
         range and therefore how far the QL power travels before thermalizing;
         the equivalent tail flux is ``P_QL / E_tail``, so the power carried is
         independent of it. The plateau energy is a kinetic quantity a fluid
         model cannot pin, so this is an ASSUMED value and a run that uses it
         must report a bracket rather than a single number. Arms and values:
         ``config_defaults_provenance.md``.
+    heating_anomalous_tail_energy_keying:
+        How the tail birth energy ``E_tail`` is set. **Read ONLY under
+        ``heating_anomalous_transport="tail_walk"``** -- inert otherwise.
+        ``"phi_c"`` (default): ``E_tail = f * e*phi_c(t)``, keyed to the LIVE
+        cathode accelerating drop of the ray that drove the QL power, with
+        ``f`` from ``heating_anomalous_tail_phi_c_fraction``. ``"fixed"``: the
+        constant ``heating_anomalous_tail_energy_eV``, the WP-E/K6 behaviour,
+        bit-exact when selected. The plateau is filled by a beam whose energy
+        IS ``phi_c``, so a fixed rung makes the walkers' reflection margin at
+        the sheath an accident of how far the drive happens to sit from that
+        rung; keying removes that dependence. Under ``"phi_c"`` with
+        ``heating_anomalous_tail_ionization="on"`` the two depth-1 truncation
+        bars are evaluated on the LIVE ``E_tail`` at every solve, so a drive
+        that carries ``f*phi_c`` outside the admissible band raises there
+        rather than at construction -- ``f = 1.0`` is expected to cross the
+        upper bar at production drive.
+    heating_anomalous_tail_phi_c_fraction:
+        The fraction ``f`` in ``E_tail = f * e*phi_c(t)``. **Read ONLY under
+        ``heating_anomalous_tail_energy_keying="phi_c"``**; must be ``None``
+        under ``"fixed"``, where supplying one would silently do nothing.
+        ``None`` (default) selects the shipped arm ``f = 0.25``. The only
+        accepted values are the DECLARED BRACKET ``{0.25, 0.5, 1.0}`` -- any
+        other value raises, because ``f`` is a bracket the campaign reports
+        across and never a fitted number. Values and class:
+        ``config_defaults_provenance.md``.
+    heating_anomalous_tail_cathode_boundary:
+        What the CATHODE end does to a tail walker that reaches it. **Read
+        ONLY under ``heating_anomalous_transport="tail_walk"``** -- inert
+        otherwise. ``"reflect"`` (default): a walker arriving at the cathode
+        face of the plasma-active window with energy below ``e*phi_c(t)`` is
+        turned around at the same energy and keeps walking; only a walker at or
+        above that drop escapes. ``"escape"``: the WP-E/K6 free-escape
+        convention, in which every walker reaching the face leaves and its
+        energy is booked to the tail end ledger -- selectable, and bit-exact
+        when selected. The cathode sits at an accelerating drop of a few
+        hundred volts through drive, above every plateau energy the bracket
+        carries, so free escape there deletes tail power the sheath in fact
+        returns to the column. Selecting ``"reflect"`` also makes the
+        plasma-active window bound the ENERGY-ONLY walk (which otherwise runs
+        the whole grid): the reflecting face has to be a face the walk stops
+        at. Reflection is total by construction, with no partial-reflection
+        coefficient -- the radial fraction of the returning tail that misses
+        the emitting disc is UNSIZED in 1D and is a documented limitation, not
+        a knob. Requires a single cathode: with ``TwinCathode`` both window
+        faces reflect, trapping the walkers, and that raises.
     heating_anomalous_tail_ionization:
         Whether the QL tail walkers may IONIZE and EXCITE the column gas they
         pass through. **Read ONLY under
@@ -1747,6 +1795,13 @@ def cathode_defaults():
         "heating_anomalous_transport": "local",
         "heating_anomalous_tail_energy_eV": 75.0,
         "heating_anomalous_tail_ionization": "off",
+        # K7 sheath-aware tail closure. Both keys are inert unless the walk is
+        # engaged, and when it is they DEFAULT TO THE CORRECTED closure; the
+        # WP-E/K6 arms stay reachable, and bit-exact, by naming "fixed" and
+        # "escape" explicitly.
+        "heating_anomalous_tail_energy_keying": "phi_c",
+        "heating_anomalous_tail_phi_c_fraction": None,
+        "heating_anomalous_tail_cathode_boundary": "reflect",
         "beam_clump_fraction": 0.0,
         "beam_clump_enhancement": 1.0,
         "beam_deposition_smoothing_cm": 0.0,
