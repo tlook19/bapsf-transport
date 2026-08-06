@@ -133,6 +133,17 @@ def main(argv=None):
             f"Ei {census['Ei_residual_rel']:.3e}, "
             f"M {census['M_residual_rel']:.3e}"
         )
+        if "ion_residual_rel" in census:
+            print(
+                "dvm particle handshake: "
+                f"booked={census['ion_booked_total']:.6e}, "
+                f"removed={census['ion_removed_total']:.6e}, "
+                f"debt={census['ion_debt_total']:.6e} particles "
+                f"(max/cell {census['ion_debt_max_abs']:.6e}), "
+                f"shortfall_updates={census['ion_shortfall_updates']}, "
+                f"closure |removed+debt-booked|/scale: "
+                f"{census['ion_residual_rel']:.3e}"
+            )
         if census["relax_limited_steps"] > 0:
             print(
                 "dvm transfer ledger: LIMITED STEPS PRESENT -- the standing "

@@ -284,7 +284,12 @@ def _dvm_ledger_census_summary(result):
 
     Scalars only: the per-cell arrays stay on ``result.dvm_transfer_ledger``
     for anyone localizing the debt. ``*_total`` are volume-integrated (erg for
-    the Ei channel, g cm/s for M); ``*_max_abs`` are per-cell densities.
+    the Ei channel, g cm/s for M); ``*_max_abs`` are per-cell densities. The
+    ``ion_*`` entries are the particle handshake and are already totals in
+    PARTICLES; ``ion_residual_rel`` is the coupled system's
+    particle-conservation residual. Artifacts written before 2026-08-06 have
+    the transfer channels but not the particle one, so read every name as
+    optional -- as this function already does.
     """
     census = getattr(result, "dvm_transfer_ledger", None)
     if not census:
@@ -304,6 +309,12 @@ def _dvm_ledger_census_summary(result):
         "M_booked_total",
         "M_applied_total",
         "M_residual_rel",
+        "ion_booked_total",
+        "ion_removed_total",
+        "ion_debt_total",
+        "ion_debt_max_abs",
+        "ion_residual_rel",
+        "ion_shortfall_updates",
     )
     return {name: census[name] for name in names if name in census}
 

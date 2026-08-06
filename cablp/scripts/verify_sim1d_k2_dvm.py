@@ -130,6 +130,7 @@ from cablp.solvers._sim1d.physics.kinetic_dvm import (
     ELASTIC_BGK_MOMENTUM_FACTOR,
     EXCHANGE_MODELS,
     LEDGER_BIRTH_CHANNELS,
+    LEDGER_BOOKKEEPING,
     LEDGER_EXTERNAL_BIRTHS,
     LEDGER_LOSS_CHANNELS,
     TransientDVM,
@@ -550,13 +551,8 @@ def gate_i3():
         f"birth_{name}" for name in LEDGER_BIRTH_CHANNELS
         if f"birth_{name}" not in led
     ] + [k for k in ("loss_pump_L", "loss_pump_R") if k not in led]
-    bookkeeping = {
-        "dt",
-        "inventory_before",
-        "inventory_after",
-        "f_inventory_before",
-        "f_inventory_after",
-    }
+    bookkeeping = set(LEDGER_BOOKKEEPING)
+    missing += [k for k in LEDGER_BOOKKEEPING if k not in led]
     unaccounted = [
         k
         for k in led
