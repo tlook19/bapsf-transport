@@ -920,12 +920,15 @@ def gate_c5():
 
     ok = halved_exactly and closed_err < ROUNDOFF_REL and off_zero
 
-    # Reported context: the fluid TABLE is built by trapezoid quadrature of
-    # an E^-0.5 integrand and sits ~1.2e-3 BELOW its own closed form, so the
-    # table is the looser of the two references; and the total effective
-    # rate against a 300 K neutral Maxwellian, which the halving moves
-    # toward the fluid operator but cannot make exact (the cx channel's
-    # g_eff interpolation is not a Maxwellian rate average).
+    # Reported context: how far the fluid TABLE sits from its own closed
+    # form, and the total effective rate against a 300 K neutral Maxwellian,
+    # which the halving moves toward the fluid operator but cannot make exact
+    # (the cx channel's g_eff interpolation is not a Maxwellian rate
+    # average). The table's quadrature used to run on a linear E grid, where
+    # the E^-0.5 factor left the integrand non-smooth at the origin and the
+    # table landed ~1.2e-3 BELOW the closed form; it now integrates in
+    # sqrt(E) and agrees to ~3e-7, so the table is no longer the looser of
+    # the two references.
     table = float(phelps_iso_rate_cm3_s(0.5))
     table_rel = table / CLOSED_ISO_RATE_CM3_S - 1.0
     fM = g.maxwellian(300.0 * KB / EV, 0.0)
