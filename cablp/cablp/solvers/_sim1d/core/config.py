@@ -1993,6 +1993,40 @@ def timestep_defaults():
         Enables limiting timestep growth between accepted steps.
     dt_growth_factor:
         Maximum timestep growth factor between accepted steps.
+    dt_growth_recovery_patience:
+        Number of CONSECUTIVE accepted steps that must be capped by
+        ``dt_growth`` before the accelerated re-approach engages. Zero (the
+        default) disables the mechanism entirely and the ramp is uniformly
+        ``dt_growth_factor``.
+
+        What it is for: after a collapse the ramp re-approaches the physics
+        bound geometrically, so recovering from a factor F below it costs
+        ``log F / log(dt_growth_factor)`` steps -- at the shipped 1.25 that is
+        ~26 steps from 364x below, and in knife-edge ``surface_loss`` regimes
+        such episodes recur often enough to dominate the step count (measured
+        in one probe: 80.6% of steps capped by ``dt_growth``, at a median 364x
+        below the binding physics bound).
+
+        Being capped by ``dt_growth`` for many steps in a row is evidence that
+        the controller is merely ramping rather than tracking anything: no
+        physical bound has bound in all that time. This key is how long to
+        require that evidence. It is a PATIENCE, not a threshold on dt --
+        nothing here inspects how far below the bound the step is, so the
+        mechanism cannot mistake a genuinely small physics bound for a ramp.
+    dt_growth_recovery_factor:
+        Growth factor used once the accelerated re-approach has engaged.
+        Consulted ONLY when ``dt_growth_recovery_patience`` > 0. Must be
+        greater than ``dt_growth_factor``; anything else raises at
+        construction.
+
+        The asymmetry between engaging and releasing is the hysteresis:
+        engaging takes ``dt_growth_recovery_patience`` consecutive
+        growth-capped steps, releasing takes ONE step capped by anything else
+        (a physics bound, an output cadence, or a retry after a rejection).
+        Re-approach is therefore fast while nothing is binding and instantly
+        conservative again the moment something is. It does not weaken any
+        bound: every step is still the minimum over all candidates, and this
+        only widens the ceiling the ramp itself imposes.
     max_density_step_fraction:
         Optional accepted-step density fractional-change guard. Zero disables it.
     max_neutral_step_fraction:
@@ -2023,6 +2057,11 @@ def timestep_defaults():
         "dt_reject_factor": 0.5,
         "dt_growth_enabled": True,
         "dt_growth_factor": 1.25,
+        # Default-off: patience 0 skips the branch entirely, so the ramp is
+        # uniformly dt_growth_factor and a run is bit-exact with one predating
+        # these keys. NO default flip -- that decision is not the code's.
+        "dt_growth_recovery_patience": 0,
+        "dt_growth_recovery_factor": 4.0,
         "max_density_step_fraction": 0.0,
         "max_neutral_step_fraction": 0.0,
         "max_energy_step_fraction": 0.0,

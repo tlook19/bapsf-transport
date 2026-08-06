@@ -5662,6 +5662,92 @@ def main():
         "t_end": 1,
     }
 
+    # --- accelerated dt_growth re-approach (default off) ---------------------
+    # A long ramp: an early phase boundary sets a small first step, then
+    # nothing physical binds and dt_growth caps every step while it climbs.
+    # This is the regime the probe measured (80.6% of steps growth-capped at a
+    # median 364x below the binding physics bound).
+    ramp_params = dict(growth_params)
+    ramp_params["tau_prebreakdown"] = 2.0e-9
+    ramp_params["tau_discharge"] = 40.0e-6
+    ramp_base = LAPDSim1D(ramp_params, growth_flags).run(t_end=3.0e-7)
+    assert ramp_base.steps == 17
+    assert [diag.step_cap for diag in ramp_base.diagnostics][:5] == [
+        "phase_boundary",
+        "dt_growth",
+        "dt_growth",
+        "dt_growth",
+        "dt_growth",
+    ]
+    ramp_fast = LAPDSim1D(
+        {
+            **ramp_params,
+            "dt_growth_recovery_patience": 3,
+            "dt_growth_recovery_factor": 4.0,
+        },
+        growth_flags,
+    ).run(t_end=3.0e-7)
+    # Same ramp, far fewer steps: the whole point of the mechanism.
+    assert ramp_fast.steps == 7, ramp_fast.steps
+    ramp_fast_dt = [diag.accepted_dt for diag in ramp_fast.diagnostics]
+    ramp_base_dt = [diag.accepted_dt for diag in ramp_base.diagnostics]
+    # HYSTERESIS, both halves. Engaging takes evidence: the first step is
+    # capped by the phase boundary, so steps 2-4 must still ramp at the BASE
+    # 1.25 while the streak of three growth-capped steps is being earned...
+    assert np.allclose(ramp_fast_dt[:4], ramp_base_dt[:4])
+    assert np.allclose(
+        ramp_fast_dt[1:4],
+        [ramp_fast_dt[0] * 1.25**k for k in (1, 2, 3)],
+    )
+    # ...and only the step AFTER patience is met jumps by the recovery factor.
+    assert np.isclose(ramp_fast_dt[4], ramp_fast_dt[3] * 4.0)
+    assert np.isclose(ramp_fast_dt[5], ramp_fast_dt[4] * 4.0)
+    # It never weakens a bound -- every accepted step is still <= dt_max.
+    assert max(ramp_fast_dt) <= ramp_params["dt_max"] * (1.0 + 1.0e-12)
+    # DEFAULT OFF and presence-gated: shipped defaults disable it, and setting
+    # the keys to their defaults is step-for-step identical to not having them.
+    assert default_config()[0]["dt_growth_recovery_patience"] == 0
+    ramp_off = LAPDSim1D(
+        {
+            **ramp_params,
+            "dt_growth_recovery_patience": 0,
+            "dt_growth_recovery_factor": 4.0,
+        },
+        growth_flags,
+    ).run(t_end=3.0e-7)
+    assert [diag.accepted_dt for diag in ramp_off.diagnostics] == ramp_base_dt
+    assert np.array_equal(ramp_off.n, ramp_base.n)
+    assert np.array_equal(ramp_off.Ee, ramp_base.Ee)
+    # Misconfiguration is loud, and at CONSTRUCTION.
+    for bad_ramp in (
+        {"dt_growth_recovery_patience": -1},
+        {"dt_growth_recovery_patience": 1.5},
+        {"dt_growth_recovery_patience": "soon"},
+        # A recovery factor at or below the base could never accelerate.
+        {"dt_growth_recovery_patience": 2, "dt_growth_recovery_factor": 1.25},
+        {"dt_growth_recovery_patience": 2, "dt_growth_recovery_factor": 0.5},
+        {
+            "dt_growth_recovery_patience": 2,
+            "dt_growth_recovery_factor": float("nan"),
+        },
+    ):
+        try:
+            LAPDSim1D({**ramp_params, **bad_ramp}, growth_flags)
+        except ValueError as error:
+            assert "dt_growth_recovery" in str(error), str(error)
+        else:
+            raise AssertionError(f"{bad_ramp} must raise")
+    # A bad recovery factor is INERT while patience is 0: the key is not
+    # consulted at all on the off path, so it cannot refuse a default run.
+    LAPDSim1D(
+        {
+            **ramp_params,
+            "dt_growth_recovery_patience": 0,
+            "dt_growth_recovery_factor": 0.5,
+        },
+        growth_flags,
+    )
+
     retry_params = dict(params)
     retry_flags = dict(flags)
     retry_flags["Plasma"] = False

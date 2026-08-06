@@ -899,6 +899,48 @@ class LAPDSim1D:
                 f"number of accepted steps, 0 to disable (got {_step_cap!r})"
             )
         self._ignition_accepted_step_cap = int(_step_cap_value)
+        # Accelerated dt_growth re-approach. Validated at construction so a
+        # factor that could never engage is refused before any compute.
+        _growth_patience = self._input_dict.get("dt_growth_recovery_patience", 0)
+        try:
+            _growth_patience_value = float(_growth_patience)
+        except (TypeError, ValueError):
+            _growth_patience_value = np.nan
+        if (
+            not np.isfinite(_growth_patience_value)
+            or _growth_patience_value != int(_growth_patience_value)
+            or _growth_patience_value < 0.0
+        ):
+            raise ValueError(
+                "dt_growth_recovery_patience must be a non-negative integer "
+                "number of consecutive dt_growth-capped steps, 0 to disable "
+                f"(got {_growth_patience!r})"
+            )
+        self._dt_growth_recovery_patience = int(_growth_patience_value)
+        _growth_recovery = self._input_dict.get("dt_growth_recovery_factor", 4.0)
+        try:
+            _growth_recovery_value = float(_growth_recovery)
+        except (TypeError, ValueError):
+            _growth_recovery_value = np.nan
+        if self._dt_growth_recovery_patience > 0:
+            _growth_base = self._input_dict.get("dt_growth_factor", 1.25)
+            try:
+                _growth_base_value = float(_growth_base)
+            except (TypeError, ValueError):
+                _growth_base_value = np.nan
+            if (
+                not np.isfinite(_growth_recovery_value)
+                or not np.isfinite(_growth_base_value)
+                or _growth_recovery_value <= _growth_base_value
+            ):
+                raise ValueError(
+                    "dt_growth_recovery_factor must be finite and greater "
+                    "than dt_growth_factor when dt_growth_recovery_patience "
+                    f"is set (got recovery={_growth_recovery!r}, "
+                    f"base={_growth_base!r}); a recovery factor at or below "
+                    "the base factor could never accelerate anything"
+                )
+        self._dt_growth_recovery_factor = _growth_recovery_value
         self._neutral_momentum_radial = str(
             self._input_dict.get("neutral_momentum_radial", "uniform")
         )
@@ -3360,6 +3402,12 @@ class LAPDSim1D:
         ignition_wall_clock_start = (
             perf_counter() if ignition_budget_guards else None
         )
+        # Presence gate for the accelerated dt_growth re-approach: patience 0
+        # never evaluates the branch, so the ramp stays uniformly
+        # dt_growth_factor and the step sequence is unchanged.
+        dt_growth_recovery_patience = self._dt_growth_recovery_patience
+        dt_growth_recovery_factor = self._dt_growth_recovery_factor
+        dt_growth_capped_streak = 0
         while self._time < t_end - time_tol:
             if not unlimited_steps and steps >= max_steps:
                 if self._max_steps_action == "stop":
@@ -3395,10 +3443,20 @@ class LAPDSim1D:
             step_dt = diag.dt if dt is None else float(dt)
             step_cap = diag.active_constraint if dt is None else "fixed_dt"
             if dt is None and dt_growth_enabled and previous_accepted_dt is not None:
+                step_growth_factor = dt_growth_factor
+                if (
+                    dt_growth_recovery_patience > 0
+                    and dt_growth_capped_streak >= dt_growth_recovery_patience
+                ):
+                    # Nothing physical has bound for this many steps running:
+                    # the ramp is re-approaching, not tracking. Widen the
+                    # ceiling the ramp imposes -- every other candidate is
+                    # still in the minimum below.
+                    step_growth_factor = dt_growth_recovery_factor
                 step_dt, step_cap = cap_step(
                     step_dt,
                     step_cap,
-                    previous_accepted_dt * dt_growth_factor,
+                    previous_accepted_dt * step_growth_factor,
                     "dt_growth",
                 )
             step_dt, step_cap = cap_step(
@@ -3458,6 +3516,16 @@ class LAPDSim1D:
                     force_progress = True
             if retry_count:
                 step_cap = "retry"
+            if dt_growth_recovery_patience > 0:
+                # Asymmetric by design -- this IS the hysteresis. The streak
+                # must be rebuilt from scratch after a single step capped by
+                # anything else (a physics bound, an output cadence, or a
+                # retry after a rejection), so acceleration ends the instant
+                # something real binds and has to re-earn its evidence.
+                if step_cap == "dt_growth":
+                    dt_growth_capped_streak += 1
+                else:
+                    dt_growth_capped_streak = 0
             previous_accepted_dt = float(attempt.dt)
             step_diag = replace(
                 diag,
