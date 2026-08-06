@@ -953,6 +953,31 @@ def _plasma_active_window(geometry):
     return lo, hi
 
 
+def tail_reflect_face(geometry, end=0):
+    """Return which walk-window face the cathode at ``end`` occupies (K7).
+
+    ``-1`` for the window's low-index face, ``+1`` for its high-index face:
+    the face BEHIND the ray, since the beam is launched from the cathode into
+    the machine. That face is the one
+    ``heating_anomalous_tail_cathode_boundary="reflect"`` turns walkers around
+    at, so it must be the face the cathode actually sits at. A geometry whose
+    ray is launched from somewhere other than the window's face cell is refused
+    rather than having its reflection applied at a face that is not a cathode.
+    """
+    lo, hi = _plasma_active_window(geometry)
+    launch, direction = beam_launch(geometry, end=end)
+    face = -1 if direction > 0 else 1
+    face_cell = lo if face < 0 else hi
+    if int(launch) != int(face_cell):
+        raise ValueError(
+            f"the cathode ray for end {end} is launched from cell {launch}, "
+            f"which is not the face cell {face_cell} of the plasma-active "
+            f"window {(lo, hi)}; sheath reflection turns tail walkers around "
+            "at that face, so it has to be the face the cathode occupies"
+        )
+    return face
+
+
 def _csda_beam_deposition(
     beam_result,
     state,
@@ -1030,13 +1055,31 @@ def _csda_beam_deposition(
     anomalous_transport = str(
         input_dict.get("heating_anomalous_transport", "local")
     )
+    # K7: whether the tail birth energy is keyed to the live phi_c, and
+    # whether the cathode face reflects. Both are per-RAY quantities (phi_c is
+    # the ray's own accelerating drop and the reflecting face is its own
+    # cathode's), so they are resolved in the loop below; here we only decide
+    # whether the loop has to do anything at all, which keeps the legacy arms
+    # on the identical dict object and therefore bit-exact.
+    tail_keying = "fixed"
+    tail_phi_fraction = 0.0
+    tail_reflect = False
     if anomalous_transport != "local":
         transport_kwargs["anomalous_transport"] = anomalous_transport
-        # Read ONLY under tail_walk (the key is inert otherwise, by design);
-        # the solver validated it at construction time.
-        transport_kwargs["tail_energy_eV"] = float(
-            input_dict.get("heating_anomalous_tail_energy_eV", 75.0)
+        # Read ONLY under tail_walk (the keys are inert otherwise, by design);
+        # the solver validated them at construction time.
+        tail_keying = str(
+            input_dict.get("heating_anomalous_tail_energy_keying", "phi_c")
         )
+        if tail_keying == "fixed":
+            transport_kwargs["tail_energy_eV"] = float(
+                input_dict.get("heating_anomalous_tail_energy_eV", 75.0)
+            )
+        else:
+            _phi_frac = input_dict.get(
+                "heating_anomalous_tail_phi_c_fraction", None
+            )
+            tail_phi_fraction = 0.25 if _phi_frac is None else float(_phi_frac)
         # K6: presence-gated inside the tail_walk branch, because the module
         # refuses the combination the solver has already refused at
         # construction. Passed only when ON, so a tail_walk run without it
@@ -1055,6 +1098,19 @@ def _csda_beam_deposition(
             # cathode roles, because "the cells whose plasma rows the solver
             # integrates" is exactly the property that matters here, and it is
             # the same array the mask itself is built from.
+            transport_kwargs["tail_walk_window"] = _plasma_active_window(
+                geometry
+            )
+        if str(
+            input_dict.get(
+                "heating_anomalous_tail_cathode_boundary", "reflect"
+            )
+        ) != "escape":
+            # The cathode reflects, so the walk needs the window whether or not
+            # the ionizing channel is on: the reflecting face is one of the
+            # window's faces, and under "escape" the energy-only walk has no
+            # face there at all (it runs the whole grid).
+            tail_reflect = True
             transport_kwargs["tail_walk_window"] = _plasma_active_window(
                 geometry
             )
@@ -1095,6 +1151,26 @@ def _csda_beam_deposition(
             continue
         launch, direction = beam_launch(geometry, end=end)
         Gamma0 = result.I_eth_star / qe_SI
+        # K7, per ray: phi_c is THIS cathode's accelerating drop -- the same
+        # quantity the ray is launched at and the same one the sheath repels
+        # returning electrons with -- so both the keyed birth energy and the
+        # reflection threshold come from it. Left as the shared dict when
+        # neither correction is engaged, so the legacy arms pass the identical
+        # object they always did.
+        ray_transport = transport_kwargs
+        if tail_keying != "fixed" or tail_reflect:
+            ray_transport = dict(transport_kwargs)
+            if tail_keying != "fixed":
+                ray_transport["tail_energy_eV"] = (
+                    tail_phi_fraction * float(result.phi_c)
+                )
+            if tail_reflect:
+                ray_transport["tail_reflect_face"] = tail_reflect_face(
+                    geometry, end=end
+                )
+                ray_transport["tail_reflect_threshold_eV"] = float(
+                    result.phi_c
+                )
         ray_kwargs = dict(
             nn=state.nn,
             ne=state.n,
@@ -1132,13 +1208,13 @@ def _csda_beam_deposition(
             gap_ray = deposit_beam(
                 result.phi_c, (1.0 - f_clump) * Gamma0,
                 dz_cm=geometry.length_cm,
-                **ray_kwargs, **interception_kwargs, **transport_kwargs,
+                **ray_kwargs, **interception_kwargs, **ray_transport,
             )
             # Clump ray: enhanced nn -> short l_b -> local deposit (front seed).
             clump_ray = deposit_beam(
                 result.phi_c, f_clump * Gamma0,
                 dz_cm=geometry.length_cm,
-                **clump_kwargs, **interception_kwargs, **transport_kwargs,
+                **clump_kwargs, **interception_kwargs, **ray_transport,
             )
             dep = _sum_beam_deposition(gap_ray, clump_ray)
             # Breakout is per-ray: the clump ray can die in the gap while the
@@ -1154,7 +1230,7 @@ def _csda_beam_deposition(
         else:
             dep = deposit_beam(
                 result.phi_c, Gamma0, dz_cm=geometry.length_cm,
-                **ray_kwargs, **interception_kwargs, **transport_kwargs,
+                **ray_kwargs, **interception_kwargs, **ray_transport,
             )
             ray_survival = _ray_gap_breakout(dep, gap_dz, launch, direction)
         deposition[end] = dep

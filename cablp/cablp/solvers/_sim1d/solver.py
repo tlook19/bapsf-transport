@@ -72,6 +72,7 @@ from .physics.cathode import (
     cathode_sample_indices,
     cathode_source_terms,
     solve_cathode_boundary,
+    tail_reflect_face,
     validate_cathode_Rp_model,
     validate_cathode_solver_model,
 )
@@ -1174,12 +1175,94 @@ class LAPDSim1D:
                     "heating_anomalous_tail_energy_eV must be finite and > 0 "
                     f"(got {self._input_dict.get('heating_anomalous_tail_energy_eV')})"
                 )
+        # K7 sheath-aware tail closure: birth-energy keying and the cathode
+        # boundary. The two string domains are checked unconditionally (a typo
+        # is a typo whether or not the walk is engaged); everything that
+        # depends on the walk being engaged is checked inside the tail_walk
+        # branch below, so both keys keep the "inert under 'local'" contract
+        # their siblings have.
+        _keying = str(
+            self._input_dict.get(
+                "heating_anomalous_tail_energy_keying", "phi_c"
+            )
+        )
+        if _keying not in ("phi_c", "fixed"):
+            raise ValueError(
+                "heating_anomalous_tail_energy_keying must be 'phi_c' or "
+                f"'fixed' (got {_keying!r})"
+            )
+        _cath_bnd = str(
+            self._input_dict.get(
+                "heating_anomalous_tail_cathode_boundary", "reflect"
+            )
+        )
+        if _cath_bnd not in ("reflect", "escape"):
+            raise ValueError(
+                "heating_anomalous_tail_cathode_boundary must be 'reflect' or "
+                f"'escape' (got {_cath_bnd!r})"
+            )
+        # f is a DECLARED BRACKET, never a fitted number, so a value off the
+        # bracket is refused everywhere rather than only where it is read.
+        _phi_frac = self._input_dict.get(
+            "heating_anomalous_tail_phi_c_fraction", None
+        )
+        if _phi_frac is not None and float(_phi_frac) not in (0.25, 0.5, 1.0):
+            raise ValueError(
+                "heating_anomalous_tail_phi_c_fraction must be one of the "
+                "declared bracket arms 0.25, 0.5 or 1.0 (got "
+                f"{_phi_frac!r}); it is a bracket the campaign reports across, "
+                "not a value to fit"
+            )
+        if _hat == "tail_walk":
+            if _keying == "fixed":
+                if _phi_frac is not None:
+                    raise ValueError(
+                        "heating_anomalous_tail_phi_c_fraction was supplied "
+                        "with heating_anomalous_tail_energy_keying='fixed', "
+                        "where the tail energy is the constant "
+                        "heating_anomalous_tail_energy_eV and the fraction "
+                        "would do nothing; select keying='phi_c' or drop the "
+                        "fraction"
+                    )
+            elif _tail_eV != 75.0:
+                # The rung key is inert under phi_c keying, and the ONE way to
+                # get that wrong is to select a bracket rung and have it
+                # quietly ignored.
+                raise ValueError(
+                    "heating_anomalous_tail_energy_eV="
+                    f"{_tail_eV} was supplied with "
+                    "heating_anomalous_tail_energy_keying='phi_c', where the "
+                    "tail energy is f*e*phi_c(t) and the fixed rung is inert; "
+                    "select keying='fixed' to use the rung, or set the arm "
+                    "through heating_anomalous_tail_phi_c_fraction"
+                )
+            if _cath_bnd == "reflect" and bool(
+                self._flags.get("TwinCathode", False)
+            ):
+                raise ValueError(
+                    "heating_anomalous_tail_cathode_boundary='reflect' does "
+                    "not support TwinCathode: both faces of the walk window "
+                    "would be reflecting cathodes, trapping the tail walkers "
+                    "between them, and the walk has no termination convention "
+                    "for that. Select 'escape' for twin configurations"
+                )
+            if _cath_bnd == "reflect":
+                # The reflecting face has to be the face the cathode actually
+                # occupies; a geometry where it is not is refused here rather
+                # than reflecting walkers off an arbitrary window edge on the
+                # first cathode solve.
+                tail_reflect_face(self._geometry, end=0)
         # K6 tail ionization. Same discipline again, and the same reason to
         # duplicate the module's own guards here: a misconfiguration must fail
         # before the first cathode solve, not hours into a run. The two
         # tail-energy bars are the module's, evaluated on the module's own
         # threshold constants and <W_sec> convention rather than restated, so
         # they cannot drift apart from the arithmetic they protect.
+        # Under K7 phi_c keying the LIVE E_tail is f*phi_c(t), which no
+        # construction-time check can see; the bars below then bind only the
+        # (inert) fixed rung and the module's own copies of them, evaluated on
+        # the live value at every solve, are what actually protect the depth-1
+        # truncation. That is stated in the config docstring for the keying.
         _tion = str(
             self._input_dict.get("heating_anomalous_tail_ionization", "off")
         )

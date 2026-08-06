@@ -273,6 +273,51 @@ Stated limitations, additional to the walk's own: the walker carries one mean
 energy rather than a plateau distribution, so its cross sections are evaluated
 at that mean; and it is launched at the near edge of its birth cell, the same
 cell-resolution granularity as everywhere else in the module.
+
+Sheath reflection at a walk-window face (``tail_reflect_face``, K7)
+-------------------------------------------------------------------
+
+Everything above lets a walker that reaches a window face LEAVE, whatever its
+energy. That is the free-escape bound, and at a face that is a biased emitting
+surface it is the wrong limit rather than a conservative one: a cathode sitting
+at an accelerating drop of a few hundred volts repels every electron in the
+plateau, so the flux the free-escape convention deletes is in fact returned to
+the column.
+
+``tail_reflect_face`` names the ONE window face that reflects and
+``tail_reflect_threshold_eV`` the energy it reflects below. A walker arriving
+at that face with energy strictly below the threshold is turned around at the
+SAME energy and keeps marching from the face cell; at or above the threshold it
+escapes to the tail end ledger exactly as before. The comparison is general
+even though the physical threshold (``e*phi_c``) exceeds every shipped plateau
+energy, so the reflecting arm is not silently a "reflect everything" arm.
+
+Consequences, all of them deliberate:
+
+- naming a face makes ``tail_walk_window`` REQUIRED in both tail modes, and
+  the energy-only walk becomes WINDOWED. Without a window the energy-only walk
+  runs the whole grid and there is no face at the cathode to reflect at; with
+  one, the same two faces bound both tail modes;
+- the reflected walker re-crosses the face cell, the cell-resolution
+  granularity every launch in this module has;
+- only ONE face may reflect. Two reflecting faces trap the walker between them
+  with no escape channel, which neither the closed-form walk nor the march has
+  a termination convention for, and it is refused rather than approximated.
+
+STANDING RIDER, unsized: the reflected fraction assumed here is 1. A real
+cathode end is a grounded wall with an emitting disc in it, so some of the
+returning tail misses the disc RADIALLY and is lost to the wall at its own
+much smaller potential. This 1D walk has no radial coordinate and cannot size
+that fraction; it is the one assumption that could pull the measured ~2x
+reflection gain below exact. It is a documented limitation, NOT a knob -- there
+is no partial-reflection coefficient to turn, precisely so that nothing can be
+fitted through it.
+
+STANDING RIDER, unchanged by this: the 30 eV bracket arm sits below the
+``min(4*Te, 30 eV)`` free-escape convention the offline estimate uses at the
+ends, and that convention is the estimate's, not this module's; the walk here
+reflects on ``tail_reflect_threshold_eV`` alone and free-escapes on everything
+else.
 """
 
 from __future__ import annotations
@@ -388,8 +433,14 @@ def _walk_products_forward(W0_eV, flux_per_s, coeff, dz_cm, floor_eV, q):
 
     ``W0_eV[s]`` / ``flux_per_s[s]`` are the birth energy and flux of the
     population born in cell ``s``; the walk proceeds s, s+1, ... Returns
-    ``(deposited_eV_per_s, exit_eV_per_s)``: per-cell deposited power in
-    ``flux*eV`` units and the scalar power carried out of the last cell.
+    ``(deposited_eV_per_s, exit_eV_per_s, exit_state)``: per-cell deposited
+    power in ``flux*eV`` units, the scalar power carried out of the last cell,
+    and ``exit_state = (birth_cells, W_exit_eV, thermalized)`` -- the PER-BIRTH
+    breakdown of that scalar, which a reflecting boundary needs because the
+    populations arrive at the face with different energies and only some of
+    them may be below its threshold. ``exit_state`` is pure bookkeeping: it
+    re-reads quantities the walk already formed and no caller that ignores it
+    sees any difference.
 
     The integration is EXACT, not substepped. With ``dE/dx = A_j W**p`` held
     constant across a cell, ``u = W**q`` with ``q = 1 - p`` obeys
@@ -406,7 +457,7 @@ def _walk_products_forward(W0_eV, flux_per_s, coeff, dz_cm, floor_eV, q):
     flux_per_s = np.asarray(flux_per_s, dtype=float)
     active = np.flatnonzero((flux_per_s > 0.0) & (W0_eV > 0.0))
     if active.size == 0:
-        return dep, 0.0
+        return dep, 0.0, (active, np.zeros(0), np.zeros(0, dtype=bool))
     W0v = W0_eV[active]
     fluxv = flux_per_s[active]
     index = np.arange(cells)
@@ -435,20 +486,23 @@ def _walk_products_forward(W0_eV, flux_per_s, coeff, dz_cm, floor_eV, q):
     exit_eV = float(
         np.sum(fluxv * np.where(has_stop, 0.0, W_out[:, -1]))
     )
-    return dep, exit_eV
+    return dep, exit_eV, (active, W_out[:, -1], has_stop)
 
 
 def _walk_products(W0_eV, flux_per_s, direction, coeff, dz_cm, floor_eV, q):
     """Direction-aware wrapper around ``_walk_products_forward``.
 
     Returns ``(deposited_eV_per_s, exit_eV_per_s)``; the exit power leaves the
-    HIGH-index end for ``direction > 0`` and the LOW-index end otherwise.
+    HIGH-index end for ``direction > 0`` and the LOW-index end otherwise. The
+    per-birth exit state is dropped -- the reflecting walk below indexes cells
+    in its own traversal order and calls the forward walk directly.
     """
     if direction > 0:
-        return _walk_products_forward(
+        dep, exit_eV, _ = _walk_products_forward(
             W0_eV, flux_per_s, coeff, dz_cm, floor_eV, q
         )
-    dep, exit_eV = _walk_products_forward(
+        return dep, exit_eV
+    dep, exit_eV, _ = _walk_products_forward(
         W0_eV[::-1], flux_per_s[::-1], coeff[::-1], dz_cm[::-1],
         floor_eV[::-1], q,
     )
@@ -651,6 +705,8 @@ def deposit_beam(
     tail_energy_eV: float | None = None,
     tail_ionization: str = "off",
     tail_walk_window: tuple[int, int] | None = None,
+    tail_reflect_face: int | None = None,
+    tail_reflect_threshold_eV: float | None = None,
     stopping_coefficient: np.ndarray | None = None,
 ) -> BeamDepositionResult:
     """Deposit one monoenergetic beam ray through the column (He only).
@@ -721,6 +777,22 @@ def deposit_beam(
     ``tail_walk_window=(lo, hi)``, the inclusive cell range the walkers may
     traverse; see the module docstring for why this has no safe default. All
     three are ValueErrors, not silent adjustments.
+
+    **Sheath reflection at a walk-window face (K7).** ``tail_reflect_face`` is
+    ``None`` (default, bit-exact: both faces free-escape, as WP-E and K6 ship)
+    or ``-1`` / ``+1``, naming the ONE face of ``tail_walk_window`` that
+    reflects tail walkers. A walker arriving there is reflected -- same energy,
+    reversed direction -- when its arrival energy is strictly below
+    ``tail_reflect_threshold_eV`` (required, finite, > 0 with a face named),
+    and free-escapes to the tail end ledger otherwise; see the module
+    docstring. Naming a face also requires ``tail_walk_window``, whose faces
+    become the walk's boundary in BOTH tail modes: the energy-only walk is
+    windowed under reflection where it runs the whole grid without it, because
+    a reflecting face has to be a face the walk actually stops at. Only one
+    face may reflect: two reflecting faces trap the walker between them, which
+    this closed-form walk has no termination convention for, and the caller is
+    expected to refuse that configuration rather than have it silently
+    approximated here.
 
     ``stopping_coefficient`` (cost read 2026-08-02, restructure C) is the
     per-cell ``A`` of ``dE/dx = A W**p`` that the walks below need, HOISTED to
@@ -813,7 +885,60 @@ def deposit_beam(
                 f"{tail_energy_eV})"
             )
     ionize_tail = tail_ionization == "on"
+    # K7 sheath reflection. The face and its threshold are one setting: a face
+    # with no threshold cannot be tested and a threshold with no face has
+    # nothing to test, so each without the other is a refusal rather than a
+    # default.
+    reflect_face = None
+    E_reflect = 0.0
+    if tail_reflect_face is not None:
+        if not walk_tail:
+            raise ValueError(
+                "tail_reflect_face requires anomalous_transport='tail_walk' "
+                "(it reflects the QL tail walkers; with no walk there is "
+                "nothing to reflect and the setting would do nothing)"
+            )
+        reflect_face = int(tail_reflect_face)
+        if reflect_face not in (-1, 1):
+            raise ValueError(
+                "tail_reflect_face must be -1 (the walk window's low-index "
+                f"face) or +1 (its high-index face), got {tail_reflect_face!r}"
+            )
+        if tail_reflect_threshold_eV is None:
+            raise ValueError(
+                "tail_reflect_face needs tail_reflect_threshold_eV (the "
+                "energy below which a walker arriving at that face is turned "
+                "around instead of escaping)"
+            )
+        E_reflect = float(tail_reflect_threshold_eV)
+        if not math.isfinite(E_reflect) or E_reflect <= 0.0:
+            raise ValueError(
+                "tail_reflect_threshold_eV must be finite and > 0 (got "
+                f"{tail_reflect_threshold_eV})"
+            )
+    elif tail_reflect_threshold_eV is not None:
+        raise ValueError(
+            "tail_reflect_threshold_eV was given without tail_reflect_face; "
+            "the threshold belongs to a named reflecting face and on its own "
+            "would silently do nothing"
+        )
     tail_lo, tail_hi = 0, cells - 1
+    if reflect_face is not None and not ionize_tail:
+        # The reflecting face IS a window face, so the window is required in
+        # both tail modes once reflection is on -- see the docstring.
+        if tail_walk_window is None:
+            raise ValueError(
+                "tail_reflect_face needs tail_walk_window=(lo, hi): the "
+                "reflecting face is one of that window's two faces, and "
+                "without it the walk has no face to reflect at"
+            )
+        tail_lo, tail_hi = (int(tail_walk_window[0]), int(tail_walk_window[1]))
+        if not 0 <= tail_lo <= tail_hi < cells:
+            raise ValueError(
+                "tail_walk_window must be an inclusive (lo, hi) cell range "
+                f"with 0 <= lo <= hi < cells={cells} (got "
+                f"{tail_walk_window})"
+            )
     if ionize_tail:
         # THE WALK DOMAIN IS REQUIRED, not defaulted to the whole grid. This
         # module is solver-agnostic and cannot know which cells are plasma, but
@@ -1295,6 +1420,19 @@ def deposit_beam(
             # its birth cell, and the closure collapses onto the local banking
             # it replaced.
             half_flux = 0.5 * (anom_power_eV / E_tail)
+            if ionize_tail or reflect_face is not None:
+                # Both WINDOWED closures stand on the same statement: the
+                # window must contain every cell the QL channel drives, or
+                # that cell's tail power would be dropped on the floor.
+                for birth in np.flatnonzero(half_flux > 0.0):
+                    if not tail_lo <= birth <= tail_hi:
+                        raise ValueError(
+                            f"anomalous power in cell {int(birth)} lies "
+                            f"outside tail_walk_window {(tail_lo, tail_hi)}; "
+                            "the window must contain every cell the QL "
+                            "channel drives, or that cell's tail power would "
+                            "be silently dropped"
+                        )
             if ionize_tail:
                 # K6: the walkers attenuate INELASTICALLY on the column gas as
                 # well as Coulomb-slowing, so the closed-form integral above
@@ -1325,67 +1463,193 @@ def deposit_beam(
                 ne_w = ne[win]
                 Te_w = Te[win]
                 dz_w = dz_cm[win]
+
+                def _bank_tail_march(res):
+                    """Book one marched tail population into the shared banks.
+
+                    Shared banks: the tail's events and energy join the
+                    primary's, which is what puts the born pair on the existing
+                    beam-ionization birth convention and its ``I_ion``
+                    investment on the existing cost sink.
+                    """
+                    ionization_events[win] += res.ionization_events
+                    excitation_events[win] += res.excitation_events
+                    ionization_cost[win] += res.ionization_cost_erg_s
+                    radiated[win] += res.radiated_erg_s
+                    # All of the walker's HEAT (Coulomb drag, the local
+                    # <W_sec> secondaries, the terminal residual) is the
+                    # anomalous channel's delivery to the electrons, so it
+                    # lands in the lumped bank and in the anomalous split
+                    # -- never in the primary's coulomb/secondary/terminal
+                    # splits, which keep describing the primary alone.
+                    heating[win] += res.plasma_heating_erg_s
+                    heat_anomalous[win] += res.plasma_heating_erg_s
+                    # Diagnostic splits of the four shared banks.
+                    ion_events_tail[win] += res.ionization_events
+                    exc_events_tail[win] += res.excitation_events
+                    ion_cost_tail[win] += res.ionization_cost_erg_s
+                    radiated_tail[win] += res.radiated_erg_s
+
+                march_kwargs = dict(
+                    I_ion_eV=I_ion_eV,
+                    E_stop_eV=E_stop_eV,
+                    coulomb_model=coulomb_model,
+                    anomalous_model="none",
+                    max_energy_fraction_per_substep=frac,
+                )
                 for birth in np.flatnonzero(half_flux > 0.0):
-                    if not tail_lo <= birth <= tail_hi:
-                        raise ValueError(
-                            f"anomalous power in cell {int(birth)} lies "
-                            f"outside tail_walk_window {(tail_lo, tail_hi)}; "
-                            "the window must contain every cell the QL "
-                            "channel drives, or that cell's tail power would "
-                            "be silently dropped"
-                        )
                     for walk_direction in (1, -1):
-                        tail = deposit_beam(
+                        leg_dir = walk_direction
+                        leg = deposit_beam(
                             E_tail,
                             float(half_flux[birth]),
                             nn_w,
                             ne_w,
                             Te_w,
                             int(birth) - tail_lo,
-                            walk_direction,
+                            leg_dir,
                             dz_w,
-                            I_ion_eV=I_ion_eV,
-                            E_stop_eV=E_stop_eV,
-                            coulomb_model=coulomb_model,
-                            anomalous_model="none",
-                            max_energy_fraction_per_substep=frac,
+                            **march_kwargs,
                         )
-                        # Shared banks: the tail's events and energy join the
-                        # primary's, which is what puts the born pair on the
-                        # existing beam-ionization birth convention and its
-                        # I_ion investment on the existing cost sink.
-                        ionization_events[win] += tail.ionization_events
-                        excitation_events[win] += tail.excitation_events
-                        ionization_cost[win] += tail.ionization_cost_erg_s
-                        radiated[win] += tail.radiated_erg_s
-                        # All of the walker's HEAT (Coulomb drag, the local
-                        # <W_sec> secondaries, the terminal residual) is the
-                        # anomalous channel's delivery to the electrons, so it
-                        # lands in the lumped bank and in the anomalous split
-                        # -- never in the primary's coulomb/secondary/terminal
-                        # splits, which keep describing the primary alone.
-                        heating[win] += tail.plasma_heating_erg_s
-                        heat_anomalous[win] += tail.plasma_heating_erg_s
-                        # Diagnostic splits of the four shared banks.
-                        ion_events_tail[win] += tail.ionization_events
-                        exc_events_tail[win] += tail.excitation_events
-                        ion_cost_tail[win] += tail.ionization_cost_erg_s
-                        radiated_tail[win] += tail.radiated_erg_s
-                        # A walker still above E_stop at the window face it was
-                        # heading for escapes, on the SAME free-escape
-                        # convention the energy-only walk uses. No sheath or
-                        # ambipolar throttle is applied at the cathode face
-                        # either, so "tail_walk" stays the free-escape bound it
-                        # is documented as with the channel on.
-                        exit_erg = (
-                            float(tail.transmitted_flux)
-                            * float(tail.transmitted_energy_eV)
-                            * _ERG_PER_EV
+                        while True:
+                            _bank_tail_march(leg)
+                            leg_flux = float(leg.transmitted_flux)
+                            leg_E = float(leg.transmitted_energy_eV)
+                            # K7: at the ONE reflecting face, a walker whose
+                            # arrival energy is below the sheath threshold is
+                            # turned around at the same energy and marched back
+                            # from the face cell. Only that face reflects, so
+                            # the reversed leg cannot come back to it and this
+                            # loop runs at most twice.
+                            if (
+                                reflect_face is not None
+                                and leg_dir == reflect_face
+                                and leg_flux > 0.0
+                                and leg_E < E_reflect
+                            ):
+                                leg_dir = -leg_dir
+                                leg = deposit_beam(
+                                    leg_E,
+                                    leg_flux,
+                                    nn_w,
+                                    ne_w,
+                                    Te_w,
+                                    0 if reflect_face < 0 else tail_hi - tail_lo,
+                                    leg_dir,
+                                    dz_w,
+                                    **march_kwargs,
+                                )
+                                continue
+                            # A walker still above E_stop at the window face it
+                            # was heading for escapes, on the SAME free-escape
+                            # convention the energy-only walk uses. Without a
+                            # reflecting face no sheath or ambipolar throttle
+                            # is applied at either end, which is what makes
+                            # "tail_walk" the free-escape bound it is
+                            # documented as with the channel on.
+                            exit_erg = leg_flux * leg_E * _ERG_PER_EV
+                            if leg_dir > 0:
+                                end_loss_tail_high += exit_erg
+                            else:
+                                end_loss_tail_low += exit_erg
+                            break
+            elif reflect_face is not None:
+                # K7 energy-only walk with one reflecting window face. The
+                # closed-form integral above carries a population over a
+                # SEQUENCE of cells, so a reflection is expressed by UNFOLDING
+                # the path: the reflected leg is the window traversed back the
+                # other way, concatenated onto the incoming leg. The entry
+                # energy of the first cell of the second leg is the identical
+                # float that left the last cell of the first, so the walk still
+                # telescopes exactly across the bounce and the energy ledger
+                # closes at roundoff, as it does without reflection.
+                win = slice(tail_lo, tail_hi + 1)
+                n_w = tail_hi - tail_lo + 1
+                coeff_w = coeff[win]
+                dz_w = dz_cm[win]
+                floor_w = floor_eV[win]
+                flux_w = half_flux[win]
+                W0_w = np.full(n_w, E_tail)
+                # Window-local cell indices in traversal order for the arm that
+                # heads INTO the reflecting face, and for the arm that heads
+                # away from it (which is also the reflected leg's order).
+                order_hit = (
+                    np.arange(n_w)[::-1] if reflect_face < 0 else np.arange(n_w)
+                )
+                order_away = order_hit[::-1]
+                escape_at_face = 0.0     # leaves through the reflecting face
+                escape_opposite = 0.0    # leaves through the other one
+
+                def _leg(order, W0, flux):
+                    return _walk_products_forward(
+                        W0[order], flux[order], coeff_w[order], dz_w[order],
+                        floor_w[order], q,
+                    )
+
+                def _bank_tail_walk(dep_eV, *orders):
+                    """Deposit one walked population, in ITS traversal order.
+
+                    ``orders`` maps each block of ``dep_eV`` back onto window
+                    cells: one block for a plain arm, two for the unfolded
+                    reflected path. Banked per population, matching the arm-by-
+                    arm conversion the unreflected walk does, so a walk in
+                    which nothing reflects lands on the identical floats.
+                    """
+                    dep_win = np.zeros(n_w)
+                    for k, order in enumerate(orders):
+                        dep_win[order] += dep_eV[k * n_w:(k + 1) * n_w]
+                    dep_erg = dep_win * _ERG_PER_EV
+                    heating[win] += dep_erg
+                    heat_anomalous[win] += dep_erg
+
+                # The arm walking AWAY from the reflecting face never meets it.
+                dep_a, exit_a, _ = _leg(order_away, W0_w, flux_w)
+                _bank_tail_walk(dep_a, order_away)
+                escape_opposite += exit_a
+                # The arm walking INTO it: test each population's ARRIVAL
+                # energy against the threshold. Populations born in different
+                # cells arrive with different energies, so this is a per-birth
+                # split, not a whole-arm switch.
+                dep_h, exit_h, (act_h, W_face, stop_h) = _leg(
+                    order_hit, W0_w, flux_w
+                )
+                bounced = (~stop_h) & (W_face < E_reflect)
+                if not bounced.any():
+                    _bank_tail_walk(dep_h, order_hit)
+                    escape_at_face += exit_h
+                else:
+                    flux_hit = flux_w[order_hit]
+                    flux_bounce = np.zeros(n_w)
+                    flux_escape = np.zeros(n_w)
+                    flux_bounce[act_h[bounced]] = flux_hit[act_h[bounced]]
+                    flux_escape[act_h[~bounced]] = flux_hit[act_h[~bounced]]
+                    if np.any(flux_escape > 0.0):
+                        dep_e, exit_e, _ = _walk_products_forward(
+                            W0_w[order_hit], flux_escape, coeff_w[order_hit],
+                            dz_w[order_hit], floor_w[order_hit], q,
                         )
-                        if walk_direction > 0:
-                            end_loss_tail_high += exit_erg
-                        else:
-                            end_loss_tail_low += exit_erg
+                        _bank_tail_walk(dep_e, order_hit)
+                        escape_at_face += exit_e
+                    # The unfolded two-leg path. The face cell appears at the
+                    # end of the first leg and again at the start of the second
+                    # -- the reflected walker re-crosses it, the same
+                    # cell-resolution granularity the marched walk has.
+                    dep_u, exit_u, _ = _walk_products_forward(
+                        np.concatenate([W0_w[order_hit], np.zeros(n_w)]),
+                        np.concatenate([flux_bounce, np.zeros(n_w)]),
+                        np.concatenate([coeff_w[order_hit], coeff_w[order_away]]),
+                        np.concatenate([dz_w[order_hit], dz_w[order_away]]),
+                        np.concatenate([floor_w[order_hit], floor_w[order_away]]),
+                        q,
+                    )
+                    _bank_tail_walk(dep_u, order_hit, order_away)
+                    escape_opposite += exit_u
+                if reflect_face > 0:
+                    end_loss_tail_high += escape_at_face * _ERG_PER_EV
+                    end_loss_tail_low += escape_opposite * _ERG_PER_EV
+                else:
+                    end_loss_tail_low += escape_at_face * _ERG_PER_EV
+                    end_loss_tail_high += escape_opposite * _ERG_PER_EV
             else:
                 tail_W = np.full(cells, E_tail)
                 for walk_direction in (1, -1):

@@ -536,7 +536,47 @@ always uses the measured manifold.
 quasilinear plateau energy is a kinetic quantity a fluid model cannot pin, so
 the BRACKET is the claim: the central arm is 75 eV with 30 and 150 eV as the
 bracket arms, and all three are reported together. Inert unless
-`heating_anomalous_transport = "tail_walk"`.
+`heating_anomalous_transport = "tail_walk"` AND
+`heating_anomalous_tail_energy_keying = "fixed"`.
+
+**`heating_anomalous_tail_energy_keying = "phi_c"` — DERIVED.** The plateau is
+filled by a beam whose energy IS the cathode accelerating drop, so keying the
+tail birth energy to that drop rather than to a constant follows from the
+channel's own driver rather than from a fit. It is not a free choice between
+equals: with a FIXED rung the walkers' margin against the sheath that reflects
+them is set by how far the drive happens to sit from the rung, and the
+sheathwalk read (2026-08-05) measured up to 60% spurious ES1<->ES2 dependence
+from that alone, against <3% under keying. `"fixed"` remains selectable and is
+bit-exact, and is what every pre-K7 arm must name to reproduce.
+Memo: `scripts/sheathwalk_report.txt`.
+
+**`heating_anomalous_tail_phi_c_fraction = None` (the `f = 0.25` arm) —
+ASSUMED, NEVER fitted.** `f` in `E_tail = f * e*phi_c(t)` is a DECLARED
+BRACKET `{0.25, 0.5, 1.0}` and any other value is refused at construction,
+precisely so it cannot become a knob. The shipped arm is 0.25 on CONTINUITY
+grounds and nothing stronger: at ES1 drive it reproduces the shipped 75 eV rung
+to within a factor 0.75-1.04, so adopting the keying does not silently move the
+plateau energy at the same time. Honest bar: none — the plateau energy is
+kinetic and a fluid model cannot pin it, which is why the bracket is the claim
+and all three arms are reported together, exactly as for the fixed rungs.
+Memo: `scripts/sheathwalk_report.txt`.
+
+**`heating_anomalous_tail_cathode_boundary = "reflect"` — DERIVED from a
+MEASURED potential.** The cathode sheath drop measured through drive is
+190-310 V, above every plateau energy either bracket carries, so the cathode
+reflects essentially the whole `-z` tail flux; the shipped free-escape
+convention deleted it instead (the sheathwalk read measures the deleted share
+at ~0.50 of `P_QL`, and reflection recovering it at x1.80-2.06 on the total
+in-domain deposition). This is a boundary condition read off a solved quantity,
+not a tuned one, and there is deliberately NO partial-reflection coefficient.
+Standing rider, UNSIZED: a real cathode end is a grounded wall with an emitting
+disc in it, so some of the returning tail misses the disc radially and is lost
+at the wall's much smaller potential. The 1D walk has no radial coordinate and
+cannot size that fraction; it is the one assumption that could pull the ~2x
+below exact, and it is a documented limitation rather than a knob.
+`"escape"` remains selectable, is bit-exact, and is what every pre-K7 arm must
+name to reproduce. Memo: `scripts/sheathwalk_report.txt`,
+`scripts/k7build_sheath_crosscheck.txt`.
 
 **`beam_deposition_smoothing_cm = 0.0`** ships off (bit-exact). The campaign
 stance uses a physical straggling width; see
