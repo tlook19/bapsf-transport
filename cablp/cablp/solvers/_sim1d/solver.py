@@ -869,6 +869,36 @@ class LAPDSim1D:
                 f"consecutive clamped steps (got {_dt_min_lock_max_steps!r})"
             )
         self._dt_min_lock_max_steps = int(_dt_min_lock_value)
+        # Non-ignition guards measured in WALL CLOCK and in WORK, the two
+        # budgets the simulated-time guards cannot see. Validated here so a
+        # misconfigured guard cannot be discovered hours into the very crawl
+        # it exists to catch.
+        _wall_cap = self._input_dict.get("ignition_wall_clock_cap_s", 0.0)
+        try:
+            _wall_cap_value = float(_wall_cap)
+        except (TypeError, ValueError):
+            _wall_cap_value = np.nan
+        if not np.isfinite(_wall_cap_value) or _wall_cap_value < 0.0:
+            raise ValueError(
+                "ignition_wall_clock_cap_s must be a finite non-negative "
+                f"number of seconds, 0 to disable (got {_wall_cap!r})"
+            )
+        self._ignition_wall_clock_cap_s = _wall_cap_value
+        _step_cap = self._input_dict.get("ignition_accepted_step_cap", 0)
+        try:
+            _step_cap_value = float(_step_cap)
+        except (TypeError, ValueError):
+            _step_cap_value = np.nan
+        if (
+            not np.isfinite(_step_cap_value)
+            or _step_cap_value != int(_step_cap_value)
+            or _step_cap_value < 0.0
+        ):
+            raise ValueError(
+                "ignition_accepted_step_cap must be a non-negative integer "
+                f"number of accepted steps, 0 to disable (got {_step_cap!r})"
+            )
+        self._ignition_accepted_step_cap = int(_step_cap_value)
         self._neutral_momentum_radial = str(
             self._input_dict.get("neutral_momentum_radial", "uniform")
         )
@@ -3321,6 +3351,15 @@ class LAPDSim1D:
         steps = 0
         max_steps_stopped = False
         consecutive_dt_min_clamps = 0
+        # Presence gate for the wall-clock/step-count non-ignition guards: with
+        # both caps off nothing below is evaluated and no clock is read.
+        ignition_budget_guards = (
+            self._ignition_wall_clock_cap_s > 0.0
+            or self._ignition_accepted_step_cap > 0
+        )
+        ignition_wall_clock_start = (
+            perf_counter() if ignition_budget_guards else None
+        )
         while self._time < t_end - time_tol:
             if not unlimited_steps and steps >= max_steps:
                 if self._max_steps_action == "stop":
@@ -3404,6 +3443,11 @@ class LAPDSim1D:
             retry_count, rejection_reason, step_rejection_events = _extra
             timestep_rejection_events.extend(step_rejection_events)
             self._update_current_phase_triggers()
+            if ignition_budget_guards:
+                self._check_ignition_budget_guards(
+                    accepted_steps=steps + 1,
+                    wall_clock_start=ignition_wall_clock_start,
+                )
             if dynamic_t_end:
                 current_t_end = self._dynamic_t_end(dynamic_current_t_end)
                 if current_t_end is not None and current_t_end < t_end:
@@ -5609,6 +5653,55 @@ class LAPDSim1D:
         )
         self._ignition_abort_threshold_name = str(threshold_name)
         self._record_current_trigger_sample(I_now)
+
+    def _check_ignition_budget_guards(self, accepted_steps, wall_clock_start):
+        """Trip the switch-open abort on a wall-clock or accepted-step budget.
+
+        The non-simulated-time arm of the non-ignition guards. The stall
+        detector and the ``tau_prebreakdown`` timeout both measure SIMULATED
+        time, so both are blind to the failure mode where a non-igniting run
+        stops producing simulated time at all: the timestep collapses and the
+        arm burns hours of wall clock without ever reaching the simulated
+        instant either guard watches. These two budgets bound that directly --
+        one in wall clock, one in work done -- and route into the same
+        ``_open_ignition_switch`` wind-down, so a tripped run leaves the same
+        kind of artifact and is refused scoring for the same reason.
+
+        Inert once the run has broken down: a discharge that ignited is not a
+        non-ignition failure however long it subsequently takes.
+        """
+        if (
+            self._t_breakdown_trigger is not None
+            or self._t_ignition_abort is not None
+        ):
+            return False
+        step_cap = self._ignition_accepted_step_cap
+        wall_cap = self._ignition_wall_clock_cap_s
+        elapsed = (
+            perf_counter() - wall_clock_start
+            if wall_clock_start is not None
+            else 0.0
+        )
+        if step_cap > 0 and accepted_steps >= step_cap:
+            reason = "accepted_step_cap"
+        elif wall_cap > 0.0 and elapsed >= wall_cap:
+            reason = "wall_clock_cap"
+        else:
+            return False
+        context = dict(self._last_ignition_record or {})
+        context.update(
+            {
+                "accepted_steps": float(accepted_steps),
+                "wall_clock_s": float(elapsed),
+                "ignition_accepted_step_cap": float(step_cap),
+                "ignition_wall_clock_cap_s": float(wall_cap),
+            }
+        )
+        return self._open_ignition_switch(
+            time=float(self._time),
+            reason=reason,
+            context=context,
+        )
 
     def _ignition_abort_t_end(self):
         """Return the wind-down end time [s] after a switch-open abort."""

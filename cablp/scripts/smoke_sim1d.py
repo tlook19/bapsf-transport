@@ -6659,6 +6659,85 @@ def main():
     assert np.all(direct_current_phase_result.ignition_diagnostics["stalled"] == 0.0)
     assert IGNITION_STALL_MIN_SAMPLES >= 2
 
+    # --- non-ignition guards, wall-clock / accepted-step arm -----------------
+    # The stall detector and the tau_prebreakdown timeout both measure
+    # SIMULATED time, so neither can see a non-igniting arm that stops
+    # producing simulated time and burns wall clock instead. These two budgets
+    # close over that, through the SAME switch-open path.
+    for budget_key, budget_value, budget_reason in (
+        ("ignition_accepted_step_cap", 3, "accepted_step_cap"),
+        ("ignition_wall_clock_cap_s", 1.0e-9, "wall_clock_cap"),
+    ):
+        budget_params = dict(current_phase_params)
+        budget_params["I_prebreakdown"] = 1.0e30
+        budget_params["I_breakdown"] = 1.0e30
+        # Far beyond reach, so the simulated-time guard cannot be what fires.
+        budget_params["tau_prebreakdown"] = 1.0
+        budget_params[budget_key] = budget_value
+        budget_sim = LAPDSim1D(budget_params, current_phase_flags)
+        with warnings.catch_warnings(record=True) as budget_warnings:
+            warnings.simplefilter("always")
+            budget_result = budget_sim.run(dt=1.0e-10, max_steps=50)
+        assert any(
+            "ignition aborted" in str(entry.message)
+            and budget_reason in str(entry.message)
+            for entry in budget_warnings
+        ), [str(entry.message) for entry in budget_warnings]
+        # Same wind-down as every other switch-open abort: a real phase
+        # transition, no main_discharge, and refused scoring.
+        assert budget_result.ignition_abort["reason"] == budget_reason
+        assert "main_discharge" not in set(budget_result.phase)
+        assert budget_result.phase_events["reason"][-1] == "tau_afterglow"
+        assert budget_result.phase_events["phase"][1] == "afterglow"
+        assert budget_result.ignition_abort["wall_clock_s"] >= 0.0
+        assert budget_result.ignition_abort["accepted_steps"] >= 1.0
+        # The accepted-step cap is deterministic: it trips ON the capped step.
+        if budget_key == "ignition_accepted_step_cap":
+            assert np.isclose(
+                budget_result.ignition_abort["time_s"], 3.0e-10
+            ), budget_result.ignition_abort["time_s"]
+            assert budget_result.ignition_abort["accepted_steps"] == 3.0
+    # Misconfiguration is loud, and at CONSTRUCTION -- not hours into the very
+    # crawl the guard exists to catch.
+    for bad_key, bad_value in (
+        ("ignition_wall_clock_cap_s", -1.0),
+        ("ignition_wall_clock_cap_s", float("nan")),
+        ("ignition_wall_clock_cap_s", "soon"),
+        ("ignition_accepted_step_cap", -5),
+        ("ignition_accepted_step_cap", 2.5),
+        ("ignition_accepted_step_cap", "many"),
+    ):
+        try:
+            LAPDSim1D({**current_phase_params, bad_key: bad_value},
+                      current_phase_flags)
+        except ValueError as error:
+            assert bad_key in str(error), str(error)
+        else:
+            raise AssertionError(f"{bad_key}={bad_value!r} must raise")
+    # Default-off, and presence-gated: shipped defaults disable both, and a
+    # run that sets them to their defaults is step-for-step identical to one
+    # that has never heard of them.
+    assert default_config()[0]["ignition_wall_clock_cap_s"] == 0.0
+    assert default_config()[0]["ignition_accepted_step_cap"] == 0
+    budget_absent_params = dict(current_phase_params)
+    budget_absent_params.pop("ignition_wall_clock_cap_s", None)
+    budget_absent_params.pop("ignition_accepted_step_cap", None)
+    budget_absent = LAPDSim1D(budget_absent_params, current_phase_flags).run(
+        dt=1.0e-10, max_steps=6
+    )
+    budget_off = LAPDSim1D(
+        {
+            **current_phase_params,
+            "ignition_wall_clock_cap_s": 0.0,
+            "ignition_accepted_step_cap": 0,
+        },
+        current_phase_flags,
+    ).run(dt=1.0e-10, max_steps=6)
+    assert np.array_equal(budget_absent.n, budget_off.n)
+    assert np.array_equal(budget_absent.Ee, budget_off.Ee)
+    assert not hasattr(budget_absent, "ignition_abort")
+    assert not hasattr(budget_off, "ignition_abort")
+
     # Scorer hard-fail (scripts): a non-ignited run must raise, an ignited one
     # must score its origin from the first main_discharge sample.
     import compare_sim1d_es1 as _cmp_es1

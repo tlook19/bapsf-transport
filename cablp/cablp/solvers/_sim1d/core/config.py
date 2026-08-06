@@ -460,11 +460,48 @@ def timing_defaults():
         exception. Only consulted under
         ``phase_transition_mode="current"`` (the scheduled scheduler has no
         breakdown trigger to miss).
+    ignition_wall_clock_cap_s:
+        Wall-clock budget [s] for reaching breakdown, measured from the start
+        of the ``run()`` call. Zero (the default) disables the guard.
+
+        Every OTHER non-ignition guard is expressed in SIMULATED time -- the
+        stall window and ``tau_prebreakdown`` both are -- so all of them
+        assume simulated time keeps advancing. A run that fails to ignite
+        can instead destroy simulated time per wall-second: the timestep
+        collapses and the arm crawls for hours without ever reaching the
+        simulated instant at which a guard would fire. This cap is the arm
+        that closes over that mode. It trips the SAME switch-open path as
+        the stall trip and the ``tau_prebreakdown`` timeout, with reason
+        ``"wall_clock_cap"``.
+
+        Checked only while the run has not yet broken down, so it can never
+        interrupt an igniting or ignited run however long it takes. Must be
+        finite and non-negative; anything else raises at construction.
+    ignition_accepted_step_cap:
+        Accepted-step budget for reaching breakdown, counted from the start
+        of the ``run()`` call. Zero (the default) disables the guard.
+
+        The hardware-independent companion to
+        ``ignition_wall_clock_cap_s``: it bounds the same crawl by work done
+        rather than by time taken, so it is reproducible across machines
+        and is the form to prefer for a gate. Trips the same switch-open
+        path with reason ``"accepted_step_cap"``. Distinct from
+        ``max_steps``, which bounds the WHOLE run and whose action is a
+        RuntimeError or a truncated trajectory rather than a physical
+        wind-down.
+
+        Checked only while the run has not yet broken down. Must be a
+        non-negative integer; anything else raises at construction.
 
     Values and their provenance: ``config_defaults_provenance.md``.
     """
     return {
         "tau_prebreakdown": 0.05,
+        # Both default-off: 0 disables the guard entirely and no wall clock
+        # is ever read, so an unset run is bit-exact with a run predating
+        # these keys.
+        "ignition_wall_clock_cap_s": 0.0,
+        "ignition_accepted_step_cap": 0,
         # 0.0 disables the neutral-only pre-drive window entirely.
         "tau_neutral_prebreakdown": 0.0,
         "tau_breakdown": 0.0,
