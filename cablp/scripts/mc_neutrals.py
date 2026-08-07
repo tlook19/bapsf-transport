@@ -631,8 +631,12 @@ def run_mc(bg, n_particles, jet, rng, r_n=(0.5, 0.5), r_e=(0.2, 0.25),
                     zdir_i = zdir[interior]
                     dest = np.where(zdir_i > 0, edge[interior],
                                     edge[interior] - 1)
-                    r_e = np.sqrt(pos[e, 0] ** 2 + pos[e, 1] ** 2)
-                    step = r_e > Rm[dest]
+                    # NOT r_e: that is a run_mc PARAMETER (the jet
+                    # fast-fraction energy pair) which the launch() closure
+                    # reads from this scope, so binding it here would feed
+                    # launch() an array of radii on every later source.
+                    r_step = np.sqrt(pos[e, 0] ** 2 + pos[e, 1] ** 2)
+                    step = r_step > Rm[dest]
                     h = e[step]
                     if h.size:
                         sgn = -zdir_i[step]

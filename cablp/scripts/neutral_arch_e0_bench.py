@@ -670,8 +670,11 @@ class PersistentMC:
             if e.size:
                 zdir_i = zdir[interior]
                 dest = np.where(zdir_i > 0, edge[interior], edge[interior] - 1)
-                r_e = np.sqrt(pos[e, 0] ** 2 + pos[e, 1] ** 2)
-                step = r_e > Rm[dest]
+                # r_step, not r_e: harmless in this method (no closures), but
+                # mc_neutrals' mirror of this block has an r_e PARAMETER its
+                # launch() closure reads, so the two stay identical.
+                r_step = np.sqrt(pos[e, 0] ** 2 + pos[e, 1] ** 2)
+                step = r_step > Rm[dest]
                 h = e[step]
                 if h.size:
                     sgn = -zdir_i[step]
