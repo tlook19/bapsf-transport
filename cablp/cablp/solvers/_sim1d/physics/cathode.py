@@ -923,6 +923,19 @@ def _sum_beam_deposition(a, b):
         ionization_cost_tail_erg_s=(a.ionization_cost_tail_erg_s
                                     + b.ionization_cost_tail_erg_s),
         radiated_tail_erg_s=(a.radiated_tail_erg_s + b.radiated_tail_erg_s),
+        # K7b exposure ledger: both rays launch their own tail power at the
+        # SAME E_tail (the split varies nn alone), so they land in the same
+        # band and the powers add like every other per-ray bank.
+        tail_power_erg_s=(float(a.tail_power_erg_s)
+                          + float(b.tail_power_erg_s)),
+        tail_sub_threshold_power_erg_s=(
+            float(a.tail_sub_threshold_power_erg_s)
+            + float(b.tail_sub_threshold_power_erg_s)
+        ),
+        tail_above_bar_power_erg_s=(
+            float(a.tail_above_bar_power_erg_s)
+            + float(b.tail_above_bar_power_erg_s)
+        ),
     )
 
 

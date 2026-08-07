@@ -578,6 +578,22 @@ below exact, and it is a documented limitation rather than a knob.
 name to reproduce. Memo: `scripts/sheathwalk_report.txt`,
 `scripts/k7build_sheath_crosscheck.txt`.
 
+**`heating_anomalous_tail_ionization = "off"`** ships off (bit-exact); the
+default needs no physical justification, but the band treatment its `"on"` arm
+uses does. The two depth-1 bars are DERIVED (the lowest He inelastic threshold
+20.6158 eV, and the `<W_sec>` crossing at 221.406 eV, both computed from the
+thresholds rather than tabulated). Since K7b neither refuses: below the lower
+bar the march reverts to the energy-only walk, which is exact rather than
+approximate because no inelastic channel is open there; above the upper bar it
+marches with the depth-1 truncation, whose cascade understatement is MEASURED
+at 0.08-2.03% (variant-B-over-variant-A ratios 1.0008-1.0203 over the six
+above-bar frames at `f = 1.0`), i.e. the disclosed bar is <= 2.0%. Honest bar:
+that spread is over the sampled frames, not a proof of a bound. The one
+surviving refusal, a tail energy past the tabulated He EII cross section
+(eps = 40.671258, ~999.98 eV at the module's `I_ion`), is a DOMAIN limit read
+off the table itself and is unreachable at the 190-310 V drop this device
+produces. Memo: `scripts/sheathwalk_report.txt`.
+
 **`beam_deposition_smoothing_cm = 0.0`** ships off (bit-exact). The campaign
 stance sets a nonzero width, and that width is **load-bearing rather than
 cosmetic**: at the production operating point the raw CSDA stopping profile is

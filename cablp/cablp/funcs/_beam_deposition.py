@@ -262,12 +262,49 @@ join the terms that already carry the primary's.
 **The depth-1 cascade truncation is MEASURED, not assumed.** Secondaries bank
 locally rather than walking, which is only correct while ``<W_sec>(E_tail)``
 sits below ``E_stop`` -- the point at which a secondary could itself do
-something inelastic. That is true at every shipped rung (1.35 / 9.89 / 16.82 eV
-at 30 / 75 / 150 eV against the 20.6158 eV floor) and stops being true above
-``E_tail`` ~ 221 eV, so the module REFUSES a rung it cannot truncate rather
-than silently mis-banking a cascade it does not follow. ``E_tail`` at or below
-``E_stop`` is refused too: there the ionizing channel cannot act at all and the
-selection would be a silent no-op.
+something inelastic. That is true at every shipped fixed rung (1.35 / 9.89 /
+16.82 eV at 30 / 75 / 150 eV against the 20.6158 eV floor) and stops being true
+above ``E_tail`` = 221.406 eV, the ``<W_sec>`` crossing. Both that bar and the
+``E_stop`` bar below it are COMPUTED from the thresholds themselves, never
+tabulated for the shipped rungs.
+
+Marching outside the band (``tail_ionization``, K7b)
+-----------------------------------------------------
+
+Under K7 the tail birth energy is keyed to the LIVE cathode drop,
+``E_tail = f * e*phi_c(t)``, so a single run sweeps a wide range of ``E_tail``
+as ``phi_c`` climbs from its cold value to its drive plateau. Refusing at the
+two bars, which is what K6 did, made that unrunnable: the cold foot sits below
+the lower bar and the top ``f`` arm sits above the upper one, so no keyed
+ionizing arm could start. The bars now select a TREATMENT per ray instead:
+
+- **Below** ``E_stop``: the march is REVERTED to the energy-only walk for that
+  ray. This is exact physics rather than a fallback -- no He inelastic channel
+  is open below the lowest threshold, so zero ionization is the answer and not
+  an approximation of one. The reversion is EXACT in the implementation sense
+  too: the ray takes the identical branch, over the identical floats, that
+  ``tail_ionization="off"`` would take for the same call, including that
+  closure's own domain convention (windowed under ``tail_reflect_face``, the
+  whole grid without it). It is deliberately NOT silent: the reverted power is
+  reported in ``tail_sub_threshold_power_erg_s``, so the foot-phase reversion
+  is quotable from a saved trajectory.
+- **Above** the ``<W_sec>`` crossing: the march is ALLOWED, with the depth-1
+  truncation kept and its cost DISCLOSED rather than assumed away. Banking the
+  mean secondary locally there UNDERSTATES the tail's ionization, because a
+  secondary that clears ``E_stop`` could itself ionize; the understatement was
+  MEASURED at <= 2.0% at ``f = 1.0`` (the 2026-08-05 sheathwalk read) and no
+  cross-section extrapolation is involved in it -- the EII table covers the
+  whole range. The exposure is reported in ``tail_above_bar_power_erg_s``.
+- **Above the EII table edge** (``HE_EII_EPS_TOP * I_ion``, ~999.98 eV at the
+  module's own ``I_ion``): still a REFUSAL, and the only one left. There
+  ``He_EII_cross_lkup`` clamps to its last node, so the walk would attenuate
+  on an extrapolated cross section. Unreachable at ``phi_c <= 310 V``, and the
+  guard stays regardless.
+
+``tail_power_erg_s`` carries the launched ``P_QL`` so the two exposures can be
+read as fractions. In band both are identically zero, which is the statement
+that K7b changed nothing that already ran: the split activates ONLY where the
+previous code refused outright.
 
 Stated limitations, additional to the walk's own: the walker carries one mean
 energy rather than a plateau distribution, so its cross sections are evaluated
@@ -345,6 +382,13 @@ _OMEGA_PE_COEFF = 5.64e4  # omega_pe = 5.64e4 sqrt(n_e) [rad/s] (NRL)
 HE_I_ION_EV = 24.587
 HE_E_STOP_EV = 20.6158  # lowest inelastic threshold (2^1S)
 HE_OPB_EBAR_EV = 15.8  # Opal-Peterson-Beaty shape parameter for He
+# Top of the tabulated He EII cross section, in the table's own reduced units
+# eps = E / I_ion (``He_EII_cross_lkup``). Taken FROM the table rather than
+# written down, so it cannot drift from the data it describes. Above it the
+# lookup clamps to the last node -- i.e. it extrapolates a constant sigma --
+# which is the one thing the marched tail walk must never be allowed to do
+# (K7b). At the module's own I_ion this is ~999.98 eV.
+HE_EII_EPS_TOP = float(np.exp(_HE_LOG_EPS[-1]))
 
 # --- Non-local product transport (product_transport="nonlocal") -------------
 # Thermalization floor of a walking product, as a multiple of the local Te.
@@ -649,6 +693,24 @@ class BeamDepositionResult:
                           [erg/s]; same status.
     radiated_tail_erg_s     : K6 DIAGNOSTIC SPLIT of ``radiated_erg_s``
                           [erg/s]; same status.
+    tail_power_erg_s        : K7b EXPOSURE LEDGER -- the total QL tail power
+                          this ray launched into the walk [erg/s], i.e. the
+                          withheld ``P_QL`` before any of it is deposited.
+                          The DENOMINATOR of the two band fractions below.
+                          Identically 0.0 under
+                          ``anomalous_transport="local"``.
+    tail_sub_threshold_power_erg_s: K7b -- how much of ``tail_power_erg_s`` was
+                          marched with the ionizing channel REVERTED because
+                          ``E_tail`` sits at or below ``E_stop_eV`` [erg/s].
+                          Nonzero only under ``tail_ionization="on"``; it is
+                          the whole tail power when it is nonzero, because
+                          ``E_tail`` is one number per ray. What makes the
+                          foot-phase reversion readable from a saved file
+                          rather than being a silent no-op.
+    tail_above_bar_power_erg_s: K7b -- how much of ``tail_power_erg_s`` was
+                          marched ABOVE the depth-1 ``<W_sec>`` bar [erg/s],
+                          i.e. under the <= 2.0% cascade understatement. Same
+                          status and same all-or-nothing structure.
 
     The four ``*_tail`` arrays are bookkeeping, exactly like the four
     ``heating_*`` splits: they re-report a SUBSET of banks the shared arrays
@@ -680,6 +742,9 @@ class BeamDepositionResult:
     end_loss_transmitted_erg_s: float = 0.0
     end_loss_tail_low_erg_s: float = 0.0
     end_loss_tail_high_erg_s: float = 0.0
+    tail_power_erg_s: float = 0.0
+    tail_sub_threshold_power_erg_s: float = 0.0
+    tail_above_bar_power_erg_s: float = 0.0
 
 
 def deposit_beam(
@@ -770,13 +835,23 @@ def deposit_beam(
     tail population on this module's own CSDA integration so it ionizes and
     excites the column gas on its way; see the module docstring. Requires
     ``anomalous_transport="tail_walk"`` (there is no other walk to give the
-    channel to) and a ``tail_energy_eV`` the truncation argument holds at:
-    above ``E_stop_eV``, so the channel can act, and low enough that
-    ``<W_sec>(E_tail) < E_stop_eV``, so banking secondaries locally is the
-    correct depth-1 truncation rather than a dropped cascade. It also requires
-    ``tail_walk_window=(lo, hi)``, the inclusive cell range the walkers may
-    traverse; see the module docstring for why this has no safe default. All
-    three are ValueErrors, not silent adjustments.
+    channel to) and ``tail_walk_window=(lo, hi)``, the inclusive cell range the
+    walkers may traverse; see the module docstring for why the window has no
+    safe default. Both are ValueErrors, not silent adjustments.
+
+    **The band split (K7b).** ``tail_energy_eV`` no longer has to sit inside
+    the depth-1 band; the two bars select a treatment for the ray instead of
+    refusing it. At or below ``E_stop_eV`` the march REVERTS to the energy-only
+    walk -- exactly the branch and exactly the floats ``"off"`` would produce
+    for this call, because no inelastic channel is open there -- and the
+    reverted power is reported in ``tail_sub_threshold_power_erg_s``. Above the
+    ``<W_sec>(E_tail) >= E_stop_eV`` crossing the march RUNS with the depth-1
+    truncation, whose cascade understatement is measured at <= 2.0%, and the
+    exposed power is reported in ``tail_above_bar_power_erg_s``. Only the EII
+    table edge (``HE_EII_EPS_TOP * I_ion_eV``) is still a ValueError: past it
+    the ionization lookup clamps to its last node and the walk would be running
+    on an extrapolated cross section. In band both exposure fields are zero and
+    nothing about the march changed.
 
     **Sheath reflection at a walk-window face (K7).** ``tail_reflect_face`` is
     ``None`` (default, bit-exact: both faces free-escape, as WP-E and K6 ship)
@@ -885,6 +960,14 @@ def deposit_beam(
                 f"{tail_energy_eV})"
             )
     ionize_tail = tail_ionization == "on"
+    # K7b band diagnostics for THIS ray. ``tail_sub_threshold`` means the
+    # requested channel was reverted to the energy-only walk because E_tail
+    # sits at or below the lowest inelastic threshold; ``tail_above_bar``
+    # means it marched with the depth-1 truncation past the <W_sec> crossing.
+    # At most one can be true (E_tail is one number per ray) and both are
+    # false in band, which is what makes the in-band path provably untouched.
+    tail_sub_threshold = False
+    tail_above_bar = False
     # K7 sheath reflection. The face and its threshold are one setting: a face
     # with no threshold cannot be tested and a threshold with no face has
     # nothing to test, so each without the other is a refusal rather than a
@@ -968,29 +1051,42 @@ def deposit_beam(
                 f"with 0 <= lo <= hi < cells={cells} (got "
                 f"{tail_walk_window})"
             )
-        # The two bars the K6 truncation argument stands on, both computed
-        # from the thresholds themselves rather than asserted for the shipped
-        # rungs (module docstring). Refusing is deliberate: the alternative to
-        # the first is a channel that cannot fire, and to the second a cascade
-        # this module would drop while banking it as if it had thermalized.
+        # --- The K7b band split (module docstring) -----------------------
+        # The two depth-1 bars are still COMPUTED from the thresholds
+        # themselves, but each now selects a treatment instead of refusing.
+        # BELOW E_stop the march reverts to the energy-only walk -- exact
+        # physics, no inelastic channel is open -- and ABOVE the <W_sec>
+        # crossing the march runs with the depth-1 truncation and its measured
+        # understatement. The ONE surviving refusal is the EII table edge:
+        # there the lookup would clamp to its last node and the walk would be
+        # marching on an extrapolated cross section.
+        if E_tail >= HE_EII_EPS_TOP * I_ion_eV:
+            raise ValueError(
+                "tail_ionization='on' marches the walkers on the tabulated "
+                "He EII cross section, which ends at eps = E/I_ion = "
+                f"{HE_EII_EPS_TOP:.6f} (i.e. "
+                f"{HE_EII_EPS_TOP * I_ion_eV:.2f} eV at I_ion_eV={I_ion_eV}); "
+                f"at tail_energy_eV={E_tail} eV the lookup would clamp to its "
+                "last node and the walk would attenuate on an extrapolated "
+                "cross section. This is refused, not approximated"
+            )
         if E_tail <= E_stop_eV:
-            raise ValueError(
-                f"tail_ionization='on' needs tail_energy_eV > E_stop_eV "
-                f"({E_stop_eV} eV, the lowest He inelastic threshold); at "
-                f"{E_tail} eV a tail walker cannot ionize or excite at all "
-                "and the setting would be a silent no-op"
-            )
-        W_sec_launch = he_mean_secondary_energy_eV(E_tail, I_ion_eV=I_ion_eV)
-        if W_sec_launch >= E_stop_eV:
-            raise ValueError(
-                "tail_ionization='on' banks each secondary as local heat, "
-                "which is the correct depth-1 truncation only while the mean "
-                "secondary energy stays below the lowest inelastic threshold; "
-                f"at tail_energy_eV={E_tail} eV it is {W_sec_launch:.4f} eV "
-                f"against E_stop_eV={E_stop_eV} eV, so the cascade this "
-                "module does not follow would be mis-banked as thermalized. "
-                "Lower tail_energy_eV or extend the walk to recurse"
-            )
+            # SUB-THRESHOLD: no He inelastic channel is open, so zero
+            # ionization is not a modeling choice but the answer. Revert this
+            # ray to the energy-only walk by clearing the flag -- the branches
+            # below then take the identical path, on the identical floats,
+            # that ``tail_ionization="off"`` would take for this same call.
+            tail_sub_threshold = True
+            ionize_tail = False
+        elif (
+            he_mean_secondary_energy_eV(E_tail, I_ion_eV=I_ion_eV)
+            >= E_stop_eV
+        ):
+            # ABOVE THE DEPTH-1 BAR: the mean secondary can itself do
+            # something inelastic, so banking it locally UNDERSTATES the
+            # cascade. Allowed, with the understatement measured (<= 2.0% at
+            # f = 1.0, module docstring) and the exposure reported.
+            tail_above_bar = True
     if stopping_coefficient is not None:
         stopping_coefficient = np.asarray(stopping_coefficient, dtype=float)
         if stopping_coefficient.shape != (cells,):
@@ -1045,6 +1141,12 @@ def deposit_beam(
     # the ray is done. Under "local" none of this is touched or allocated.
     end_loss_tail_low = 0.0
     end_loss_tail_high = 0.0
+    # K7b exposure ledger [erg/s]: the QL tail power this ray launched, and
+    # how much of it was marched outside the depth-1 band. Filled once the
+    # withheld power is known, below.
+    tail_power = 0.0
+    tail_sub_threshold_power = 0.0
+    tail_above_bar_power = 0.0
     if walk_tail:
         anom_power_eV = np.zeros(cells)
 
@@ -1092,10 +1194,14 @@ def deposit_beam(
             end_loss_low_erg_s=end_loss_low,
             end_loss_high_erg_s=end_loss_high,
             end_loss_transmitted_erg_s=end_loss_transmitted,
-            # A sub-threshold source drives no anomalous drag, so the tail
-            # ledger has nothing to book on this path either.
+            # A sub-threshold source drives no anomalous drag, so neither the
+            # tail ledger nor the K7b exposure ledger has anything to book on
+            # this path.
             end_loss_tail_low_erg_s=end_loss_tail_low,
             end_loss_tail_high_erg_s=end_loss_tail_high,
+            tail_power_erg_s=tail_power,
+            tail_sub_threshold_power_erg_s=tail_sub_threshold_power,
+            tail_above_bar_power_erg_s=tail_above_bar_power,
         )
 
     # --- Compiled CSDA march (opt-in) ------------------------------------
@@ -1420,6 +1526,14 @@ def deposit_beam(
             # its birth cell, and the closure collapses onto the local banking
             # it replaced.
             half_flux = 0.5 * (anom_power_eV / E_tail)
+            # K7b: the tail power this ray actually launched, and which band
+            # it was marched in. Read-only bookkeeping over a bank that is
+            # already final -- nothing below consumes it.
+            tail_power = float(anom_power_eV.sum()) * _ERG_PER_EV
+            if tail_sub_threshold:
+                tail_sub_threshold_power = tail_power
+            elif tail_above_bar:
+                tail_above_bar_power = tail_power
             if ionize_tail or reflect_face is not None:
                 # Both WINDOWED closures stand on the same statement: the
                 # window must contain every cell the QL channel drives, or
@@ -1692,4 +1806,7 @@ def deposit_beam(
         end_loss_transmitted_erg_s=end_loss_transmitted,
         end_loss_tail_low_erg_s=end_loss_tail_low,
         end_loss_tail_high_erg_s=end_loss_tail_high,
+        tail_power_erg_s=tail_power,
+        tail_sub_threshold_power_erg_s=tail_sub_threshold_power,
+        tail_above_bar_power_erg_s=tail_above_bar_power,
     )
