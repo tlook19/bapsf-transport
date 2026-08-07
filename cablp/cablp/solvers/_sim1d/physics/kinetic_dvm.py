@@ -45,6 +45,23 @@ EXACT rather than converged: substep A never creates a particle and
 substep B creates exactly the number substep A destroyed, per channel, so
 the domain total closes to roundoff at every update regardless of dt.
 
+The IONIZATION channel is the one the coupled solver shares with a fluid
+partner, and it is settled in COUNTED PARTICLES, not in a rate (K2e). The
+partner hands ``update`` the count it booked as ionization over the tick;
+that count is what this engine debits, taken from the post-march column
+population in proportion to it, with any part a cell cannot surrender
+carried as ``ion_debt`` and re-offered next tick. So particle
+conservation across the fluid/kinetic handshake is EXACT BY CONSTRUCTION
+and independent of the neutral-clock cadence: the coupled system creates
+no particle, whatever the tick length.
+
+That is a conservation statement and nothing more. The ACCURACY of the
+ionization rate is a separate question and is unchanged: the fluid rate
+is evaluated against a column density that only moves when this engine
+republishes it, so the rate itself remains first-order accurate in the
+cadence. Shortening the cadence still buys rate accuracy; it no longer
+buys conservation, because conservation is no longer approximate.
+
 EVERY surface return enters as a directed boundary INFLOW ghost density at
 the face it came off, never as a volume source in the adjacent cell,
 because only the inflow form preserves an equilibrium Maxwellian exactly
@@ -153,6 +170,21 @@ LEDGER_EXTERNAL_BIRTHS = (
     "cathode_face",
     "collector_face",
     "anode",
+)
+# Ledger entries that are NOT channels: the tick's own bookkeeping and the
+# counted-ionization handshake's reconciliation record. Named here for the
+# same reason as the channel tuples -- the completeness gate asserts that
+# every key is either a declared channel or a declared non-channel, so a
+# new entry cannot slip in unnoticed on either side.
+LEDGER_BOOKKEEPING = (
+    "dt",
+    "inventory_before",
+    "inventory_after",
+    "f_inventory_before",
+    "f_inventory_after",
+    "ion_booked",
+    "ion_debt_carried",
+    "ion_limited_cells",
 )
 
 
@@ -460,6 +492,23 @@ class TransientDVM:
         self.relax_limited_steps = 0
         self.relax_cell_steps = cells.copy()
 
+        # ---- counted-particle ionization ledger (the K2e handshake)
+        #
+        # The partner's booked count is what the ionization channel debits,
+        # and a cell that cannot give up the whole count owes the rest.
+        # In PARTICLES, per column cell, cumulative over the run, carrying
+        #
+        #     ion_removed_cum + ion_debt == ion_booked_cum
+        #
+        # at every update: no ionization booked by the plasma is ever
+        # silently un-removed, which is the leak this ledger exists to
+        # make visible from a saved file.
+        self.ion_debt = cells.copy()
+        self.ion_booked_cum = cells.copy()
+        self.ion_removed_cum = cells.copy()
+        self.ion_shortfall_updates = 0
+        self.ion_shortfall_cell_updates = cells.copy()
+
     # ------------------------------------------------------------ state
 
     def seed_from_density(self, nn_col, nn_ann, T_K=None):
@@ -507,6 +556,11 @@ class TransientDVM:
             "relax_steps": int(self.relax_steps),
             "relax_limited_steps": int(self.relax_limited_steps),
             "relax_cell_steps": self.relax_cell_steps.copy(),
+            "ion_debt": self.ion_debt.copy(),
+            "ion_booked_cum": self.ion_booked_cum.copy(),
+            "ion_removed_cum": self.ion_removed_cum.copy(),
+            "ion_shortfall_updates": int(self.ion_shortfall_updates),
+            "ion_shortfall_cell_updates": self.ion_shortfall_cell_updates.copy(),
         }
         if self.f_flight is not None:
             snap["f_flight"] = {
@@ -540,6 +594,11 @@ class TransientDVM:
         self.relax_steps = int(snap["relax_steps"])
         self.relax_limited_steps = int(snap["relax_limited_steps"])
         self.relax_cell_steps = snap["relax_cell_steps"].copy()
+        self.ion_debt = snap["ion_debt"].copy()
+        self.ion_booked_cum = snap["ion_booked_cum"].copy()
+        self.ion_removed_cum = snap["ion_removed_cum"].copy()
+        self.ion_shortfall_updates = int(snap["ion_shortfall_updates"])
+        self.ion_shortfall_cell_updates = snap["ion_shortfall_cell_updates"].copy()
 
     # ---------------------------------------------------------- moments
 
@@ -810,6 +869,7 @@ class TransientDVM:
         Ti_eV,
         u_i,
         nu_ion,
+        ion_counts=None,
         sources=None,
         T_s_K=None,
     ):
@@ -817,8 +877,20 @@ class TransientDVM:
 
         ``nu_ion`` is the velocity-BLIND ionization frequency per cell
         [1/s] -- the registered channel-1 convention; the solver derives
-        it from the ionization the plasma actually books, so the two sides
-        remove and create the same particles. ``sources`` holds the
+        it from the ionization the plasma actually books. It sets how the
+        ionization sink enters the implicit march, i.e. how the surviving
+        population is attenuated and transported WITHIN the tick.
+
+        ``ion_counts`` is the separate, and stronger, statement: the
+        particle count per column cell that the coupled partner booked as
+        ionization over this tick. Supplied, it is what the channel
+        debits, exactly, with the march's tally reconciled to it (see
+        :meth:`_debit_booked_ionization`); the frequency alone cannot make
+        that statement, because the count it removes is measured against
+        the POST-march population while the partner booked against the
+        pre-tick one. ``None`` leaves the march's own tally standing,
+        which is the reading an offline caller with no partner has.
+        ``sources`` holds the
         external ledger in atoms/s: ``puff`` (annulus cells),
         ``recombination`` (column cells), ``cathode_face`` /
         ``collector_face`` (column cells, or a scalar attributed to the
@@ -947,6 +1019,15 @@ class TransientDVM:
         L_cx = nu_cx * f_c * dt * vol_c
         L_el = nu_el * f_c * dt * vol_c
 
+        # --- the counted-particle ionization handshake (K2e). When a
+        # coupled partner supplies the count it BOOKED, that count -- not
+        # the march's own frequency tally -- is what leaves the column, so
+        # the two sides destroy and create the same particles by
+        # construction rather than by agreement of two rate formulas.
+        ion = self._debit_booked_ionization(ion_counts, L_ion, f_c, vol_c)
+        f_c = f_c - ion["drop"]
+        L_ion = L_ion + ion["correction"]
+
         # --- substep B: births at exactly the tallied masses
         M_i = np.empty((self.nz, g.nvz, g.nvp))
         Ti_arr = np.asarray(Ti_eV, dtype=float)
@@ -1055,6 +1136,7 @@ class TransientDVM:
         inv_after = self.total_inventory()
 
         # --- plasma coupling: minus the moments of the kinetic operators
+        self._book_ionization_ledger(ion)
         self._book_transfer(dt, L_ion, L_cx, L_el, birth_cx, birth_el, rec,
                             M_i, u_arr)
         self.Tn_col_eV = self.column_temperature_eV()
@@ -1087,9 +1169,102 @@ class TransientDVM:
             "birth_cathode_face": float(cath.sum()),
             "birth_collector_face": float(coll.sum()),
             "birth_anode": float(anode.sum()),
+            # The counted handshake, per update: what the partner booked,
+            # what this update actually debited, and what it still owes.
+            # All three are zero on a standalone update (no partner count).
+            "ion_booked": float(ion["booked"].sum()),
+            "ion_debt_carried": float(self.ion_debt.sum()),
+            "ion_limited_cells": float(np.count_nonzero(ion["limited"])),
         }
         self.last_ledger = ledger
         return ledger
+
+    def _debit_booked_ionization(self, ion_counts, L_ion, f_c, vol_c):
+        """Reconcile the march's ionization tally with a partner's booking.
+
+        ``ion_counts`` is the particle count per cell that the coupled
+        partner (the fluid plasma) booked as ionization over this tick --
+        counted particles, not a rate. ``None`` means no partner supplied
+        one: the march's own tally then stands unchanged and every entry
+        below is zero, which is the standalone-engine reading and the only
+        one available to an offline caller.
+
+        With a count in hand the debit is renormalized to it. The march
+        already removed ``sum(L_ion)`` from each cell; the remainder is
+        taken from the POST-march ``f_c`` in proportion to ``f_c`` itself,
+        which is the same velocity shape the march's velocity-blind
+        frequency removed, so the reconciliation changes how MANY atoms
+        the channel takes and not WHICH ones. A negative remainder is a
+        credit and puts atoms back, which is what a partner that booked
+        less than the march removed is owed.
+
+        Positivity is a hard constraint: a cell can give up at most the
+        atoms it holds. The shortfall is never clipped away -- it is
+        carried in ``ion_debt`` and re-offered on the next tick, exactly
+        as the deferred momentum/energy transfer carries its own. The
+        identity the ledger states, per cell and at every update, is
+
+            ion_removed_cum + ion_debt == ion_booked_cum
+
+        Returns the per-bin ``correction`` to apply to ``f_c`` (in
+        particles) and the per-cell scalars the ledger books.
+        """
+        zeros = np.zeros(self.nz)
+        if ion_counts is None:
+            return {
+                "drop": np.zeros_like(L_ion),
+                "correction": np.zeros_like(L_ion),
+                "booked": zeros,
+                "removed": L_ion.sum(axis=(1, 2)),
+                "shortfall": zeros.copy(),
+                "limited": np.zeros(self.nz, dtype=bool),
+                "counted": False,
+            }
+        booked = np.asarray(ion_counts, dtype=float)
+        if booked.shape != (self.nz,):
+            raise ValueError(
+                "ion_counts must carry one particle count per column cell "
+                f"(got shape {booked.shape}, expected {(self.nz,)})"
+            )
+        if not np.all(np.isfinite(booked)):
+            raise ValueError("ion_counts must be finite")
+        target = booked + self.ion_debt
+        marched = L_ion.sum(axis=(1, 2))
+        held = (f_c * vol_c).sum(axis=(1, 2))
+        enough = held > 0.0
+        frac = np.where(enough, (target - marched) / np.where(enough, held, 1.0), 0.0)
+        # A cell cannot surrender more than it holds; what it cannot give
+        # becomes debt rather than a negative distribution.
+        applied = np.minimum(frac, 1.0)
+        # As a DENSITY first: ``f_c - 1.0 * f_c`` is exactly zero, while the
+        # same debit routed through a multiply-then-divide by the cell
+        # volume leaves a roundoff-negative distribution behind.
+        drop = applied[:, None, None] * f_c
+        correction = drop * vol_c
+        removed = marched + correction.sum(axis=(1, 2))
+        return {
+            "drop": drop,
+            "correction": correction,
+            "booked": booked,
+            "removed": removed,
+            "shortfall": target - removed,
+            "limited": np.where(enough, frac > 1.0, target > marched),
+            "counted": True,
+        }
+
+    def _book_ionization_ledger(self, ion):
+        """Fold one update's counted-ionization reconciliation into the ledger."""
+        if not ion["counted"]:
+            return
+        self.ion_booked_cum = self.ion_booked_cum + ion["booked"]
+        self.ion_removed_cum = self.ion_removed_cum + ion["removed"]
+        self.ion_debt = ion["shortfall"]
+        limited = ion["limited"]
+        if np.any(limited):
+            self.ion_shortfall_updates += 1
+            self.ion_shortfall_cell_updates = (
+                self.ion_shortfall_cell_updates + limited
+            )
 
     def _book_transfer(self, dt, L_ion, L_cx, L_el, birth_cx, birth_el, rec,
                        M_i, u_i):

@@ -8700,6 +8700,47 @@ def main():
         kd_dvm.updates,
     )
 
+    # K2e counted-particle ionization handshake. The arm debits the count
+    # the PLASMA booked over the tick, so no neutral becomes an ion without
+    # leaving the kinetic state -- the identity below is the whole point,
+    # and it is a conservation law, not a tolerance.
+    kd_resid = (
+        kd_dvm.ion_removed_cum + kd_dvm.ion_debt - kd_dvm.ion_booked_cum
+    )
+    kd_ion_scale = max(float(np.max(np.abs(kd_dvm.ion_booked_cum))), 1e-300)
+    assert float(np.max(np.abs(kd_resid))) / kd_ion_scale < 1.0e-12, kd_resid
+    assert np.any(kd_dvm.ion_booked_cum > 0.0)
+    # Nothing was withheld on a healthy tick, so the debit IS the booking.
+    assert kd_dvm.ion_shortfall_updates == 0
+    assert np.allclose(
+        kd_dvm.ion_removed_cum, kd_dvm.ion_booked_cum, rtol=1.0e-12, atol=0.0
+    )
+    # The pending booking is attempt-local: the rejected attempts above did
+    # not add to it, and it is cleared at every tick.
+    assert np.all(np.isfinite(kd_sim._dvm_ion_booked))
+    assert kd_sim._dvm_ion_stage_accum is None
+    assert kd_sim._dvm_ion_stage_weight == 0.0
+    # A standalone update -- no partner, no booked count -- leaves the
+    # march's own tally standing and books nothing into the handshake. Run
+    # against a snapshot so the arm this sim carries is put back bit for
+    # bit, which also exercises the snapshot's new ledger fields.
+    kd_snap = kd_dvm.snapshot()
+    kd_bare_led = kd_dvm.update(
+        1.0e-9,
+        n_i=np.asarray(kd_sim.state.n, dtype=float),
+        Ti_eV=np.asarray(kd_sim.derived.Ti, dtype=float),
+        u_i=np.asarray(kd_sim.derived.u, dtype=float),
+        nu_ion=np.full(kd_dvm.nz, 1.0e4),
+    )
+    assert kd_bare_led["ion_booked"] == 0.0
+    assert kd_bare_led["ion_limited_cells"] == 0.0
+    assert kd_bare_led["loss_ionization"] > 0.0
+    assert np.array_equal(kd_dvm.ion_booked_cum, kd_snap["ion_booked_cum"])
+    assert np.array_equal(kd_dvm.ion_removed_cum, kd_snap["ion_removed_cum"])
+    kd_dvm.restore(kd_snap)
+    assert np.array_equal(kd_dvm.f_c, kd_snap["f_c"])
+    assert np.array_equal(kd_dvm.ion_debt, kd_snap["ion_debt"])
+
     # Tn consumption A/B: with the switch on, the measured Tn reaches the
     # presheath collisionality and the boundary absorption moves.
     kd_tn_sim = LAPDSim1D(
@@ -8950,6 +8991,23 @@ def main():
                 np.abs(kd_cen_applied + kd_cen_debt - kd_cen_booked)
             ) / kd_cen_scale < 1.0e-12, kd_cen_ch
         assert np.any(np.abs(kd_cen_back["Ei_debt"]) > 0.0)
+        # The particle handshake's own identity, likewise from the FILE: a
+        # nonzero residual here is particle creation in the coupled system,
+        # which is what the counted debit exists to make impossible.
+        kd_cen_ion_booked = kd_cen_back["ion_booked_cum"]
+        kd_cen_ion_scale = float(
+            np.max(np.abs(kd_cen_ion_booked))
+            + np.max(np.abs(kd_cen_back["ion_debt"]))
+        )
+        assert kd_cen_ion_scale > 0.0
+        assert np.max(
+            np.abs(
+                kd_cen_back["ion_removed_cum"]
+                + kd_cen_back["ion_debt"]
+                - kd_cen_ion_booked
+            )
+        ) / kd_cen_ion_scale < 1.0e-12
+        assert kd_cen_back["ion_residual_rel"] < 1.0e-12
         # The per-save series: one record per saved frame, counters that only
         # ever climb, and never past the end-of-run totals.
         kd_cen_frames = len(kd_cen_result.time)
@@ -8958,6 +9016,9 @@ def main():
             "relax_steps",
             "relax_limited_steps",
             "limited_cells",
+            "ion_booked_total",
+            "ion_removed_total",
+            "ion_shortfall_updates",
         ):
             kd_cen_series = kd_cen_back[f"sample_{kd_cen_field}"]
             assert len(kd_cen_series) == kd_cen_frames, kd_cen_field
@@ -8976,6 +9037,13 @@ def main():
         )
         assert (
             "Ei_debt_total" in kd_cen_summary.dvm_transfer_ledger_census
+        )
+        assert (
+            kd_cen_summary.dvm_transfer_ledger_census["ion_residual_rel"]
+            == kd_cen["ion_residual_rel"]
+        )
+        assert (
+            kd_cen_summary.dvm_transfer_ledger_census["ion_booked_total"] > 0.0
         )
         # A PRE-FIX DVM artifact -- the arm ran, the census was never kept --
         # reads "not recorded", never zero.

@@ -179,6 +179,7 @@ class StepAttempt1D:
     floor_ledger: dict
     raw_rejection_reason: str = ""
     raw_rejection_detail: dict | None = None
+    ion_booking: np.ndarray | None = None
 
 
 class _RawStageError(ValueError):
@@ -739,6 +740,14 @@ class LAPDSim1D:
         self._dvm_last_s = 0.0
         self._dvm_transfer_relax_fraction = 1.0
         self._dvm_step_transfer = None
+        # Ionization the plasma has BOOKED since the last neutral tick, as a
+        # per-cell density increment [cm^-3] on the plasma (= column) volume.
+        # This is the counted quantity the kinetic arm debits; see
+        # _accumulate_dvm_ion_booking.
+        self._dvm_ion_booked = np.zeros(self._geometry.cells, dtype=float)
+        self._dvm_ion_stage_weight = 0.0
+        self._dvm_ion_stage_accum = None
+        self._dvm_ion_shortfall_warned = False
         if self._neutral_model == "kinetic_dvm":
             self._configure_kinetic_dvm()
         else:
@@ -1791,12 +1800,14 @@ class LAPDSim1D:
     def rhs(self, y=None, include_heat_conduction=True, time=None):
         """Return the packed explicit RHS for the current scaffold physics."""
         state_rhs = self._zero_rhs_state()
-        for term in self.rhs_terms(
+        terms = self.rhs_terms(
             y=y,
             include_heat_conduction=include_heat_conduction,
             time=time,
-        ).values():
+        )
+        for term in terms.values():
             state_rhs = add_state_rhs(state_rhs, term)
+        self._accumulate_dvm_ion_booking(terms)
         # With optional fields on, the packed RHS must always match the
         # state vector's width, even when no term touched them (pads zeros).
         return pack_state(
@@ -2260,6 +2271,13 @@ class LAPDSim1D:
             # number the accept path can book. A rejected attempt simply
             # re-scopes at the smaller dt.
             self._dvm_scope_step_transfer(dt)
+            # Arm the booked-ionization tally for this attempt only. Every
+            # RHS call the integration below makes carries the same SSPRK2
+            # stage weight; see _accumulate_dvm_ion_booking.
+            self._dvm_ion_stage_accum = np.zeros(
+                self._geometry.cells, dtype=float
+            )
+            self._dvm_ion_stage_weight = 0.5 * dt
 
         starting_cache = self._step_cache_snapshot()
         attempt_floor_ledger = self._empty_floor_ledger()
@@ -2318,6 +2336,9 @@ class LAPDSim1D:
             candidate_cache = self._step_cache_snapshot()
         finally:
             self._restore_step_cache(starting_cache)
+            attempt_ion_booking = self._dvm_ion_stage_accum
+            self._dvm_ion_stage_accum = None
+            self._dvm_ion_stage_weight = 0.0
         return StepAttempt1D(
             y=np.asarray(y_next, dtype=float),
             dt=dt,
@@ -2326,6 +2347,7 @@ class LAPDSim1D:
             floor_ledger=attempt_floor_ledger,
             raw_rejection_reason=raw_rejection_reason,
             raw_rejection_detail=raw_rejection_detail,
+            ion_booking=attempt_ion_booking,
         )
 
     def _implicit_neutral_step(
@@ -2771,6 +2793,11 @@ class LAPDSim1D:
         # which the lines below overwrite.
         if self._dvm_rows_superseded():
             self._dvm_book_step_transfer(attempt.dt)
+            # Only an ACCEPTED attempt's ionization counts: this is the
+            # booking the state vector below actually carries.
+            booking = getattr(attempt, "ion_booking", None)
+            if booking is not None:
+                self._dvm_ion_booked = self._dvm_ion_booked + booking
         self._restore_step_cache(attempt.solver_cache)
         self._set_state_vector(attempt.y)
         self._accumulate_floor_ledger(
@@ -7223,6 +7250,33 @@ class LAPDSim1D:
         """Whether the DVM arm has taken the fluid rows over (K2a handover)."""
         return self._dvm is not None and self._dvm_engaged
 
+    def _accumulate_dvm_ion_booking(self, terms):
+        """Tally this RHS stage's share of the step's booked ionization.
+
+        The engaged arm owns the fluid ``nn`` rows, so the neutrals the
+        plasma consumes leave the fluid state through the ``n`` rows of
+        ``ionization_birth`` and ``beam_ionization_birth`` alone (their
+        ``nn`` counterparts are stripped, and are exactly minus the same
+        numbers). Tallying those rows here, at the terms the step actually
+        applies -- after the DVM stripping and the plasma-topology mask --
+        is what makes the count handed to the arm the count the plasma
+        booked, rather than a rate re-derived from a frozen state.
+
+        The weight is set by :meth:`_attempt_step` for the whole attempt.
+        Both explicit paths book the plasma rows through exactly one
+        ``ssprk2_step`` at the full step dt (the implicit heat substep
+        touches no particle row), and SSPRK2 weights its two stages
+        EQUALLY at ``dt/2``, so one weight covers every call. Nothing
+        accumulates outside an attempt (bare diagnostic reads) and a
+        rejected attempt's tally is discarded with the attempt.
+        """
+        if self._dvm_ion_stage_accum is None:
+            return
+        self._dvm_ion_stage_accum += self._dvm_ion_stage_weight * (
+            np.asarray(terms["ionization_birth"].n, dtype=float)
+            + np.asarray(terms["beam_ionization_birth"].n, dtype=float)
+        )
+
     def _dvm_booked_transfer_rhs(self):
         """Return the tick's BOOKED transfer as an RHS term, unlimited.
 
@@ -7394,15 +7448,25 @@ class LAPDSim1D:
         statement that the relax deferred energy and momentum rather than
         destroying them; ``*_rel`` normalizes it by the accumulated
         throughput plus the outstanding debt.
+
+        The ``N`` channel is the same statement for PARTICLES across the
+        fluid/kinetic ionization handshake: ``removed_cum + debt -
+        booked_cum``, i.e. every neutral the plasma turned into an ion has
+        either left the kinetic state or is still owed by it. Unlike the
+        two transfer channels this one is a conservation law, not a
+        scheduling record -- a nonzero relative residual here is particle
+        creation in the coupled system, which is exactly the leak the
+        counted handshake removed.
         """
         if self._dvm is None:
             return None
         dvm = self._dvm
         out = {}
-        for name in ("M", "Ei"):
-            applied = getattr(dvm, f"{name}_applied_cum")
-            booked = getattr(dvm, f"{name}_booked_cum")
-            debt = getattr(dvm, f"{name}_debt")
+        for name, applied, booked, debt in (
+            ("M", dvm.M_applied_cum, dvm.M_booked_cum, dvm.M_debt),
+            ("Ei", dvm.Ei_applied_cum, dvm.Ei_booked_cum, dvm.Ei_debt),
+            ("N", dvm.ion_removed_cum, dvm.ion_booked_cum, dvm.ion_debt),
+        ):
             residual = applied + debt - booked
             scale = np.max(np.abs(booked)) + np.max(np.abs(debt))
             out[name] = {
@@ -7415,6 +7479,8 @@ class LAPDSim1D:
         out["relax_steps"] = int(dvm.relax_steps)
         out["relax_limited_steps"] = int(dvm.relax_limited_steps)
         out["relax_cell_steps"] = dvm.relax_cell_steps.copy()
+        out["ion_shortfall_updates"] = int(dvm.ion_shortfall_updates)
+        out["ion_shortfall_cell_updates"] = dvm.ion_shortfall_cell_updates.copy()
         return out
 
     def _dvm_ledger_sample(self, time):
@@ -7424,6 +7490,14 @@ class LAPDSim1D:
         the limiter engaged (difference consecutive frames) without carrying
         the per-cell arrays at every save. ``limited_cells`` counts cells
         limited at least once so far, not cells limited at this frame.
+
+        The three ``ion_*`` totals are the particle handshake's running
+        domain sums [particles]. They are the per-frame record of the
+        neutral sink the engaged arm owns, which the saved ``rhs_terms``
+        cannot show -- the fluid ``nn`` rows are stripped to zero once the
+        arm supersedes them, so the ionization drain is invisible in the
+        term ledger from the first tick onward. Differencing consecutive
+        frames gives the ionization booked and debited over that interval.
         """
         dvm = self._dvm
         return {
@@ -7431,6 +7505,10 @@ class LAPDSim1D:
             "relax_steps": float(dvm.relax_steps),
             "relax_limited_steps": float(dvm.relax_limited_steps),
             "limited_cells": float(np.count_nonzero(dvm.relax_cell_steps)),
+            "ion_booked_total": float(np.sum(dvm.ion_booked_cum)),
+            "ion_removed_total": float(np.sum(dvm.ion_removed_cum)),
+            "ion_debt_total": float(np.sum(dvm.ion_debt)),
+            "ion_shortfall_updates": float(dvm.ion_shortfall_updates),
         }
 
     def _dvm_ledger_census(self, saved):
@@ -7447,7 +7525,11 @@ class LAPDSim1D:
         Units are the ledger's own, integrated over the step: ``Ei_*`` in
         erg/cm^3 and ``M_*`` in g/(cm^2 s) per cell, and the ``*_total``
         scalars are those densities integrated over the plasma (= column)
-        volume, i.e. erg and g cm/s.
+        volume, i.e. erg and g cm/s. The ``ion_*`` block is the particle
+        handshake's own ledger and is already in PARTICLES per cell, so it
+        takes no volume conversion; ``ion_residual_rel`` is the coupled
+        system's particle-conservation residual and is the number a report
+        quotes to say the handshake creates nothing.
         """
         dvm = self._dvm
         volume = np.asarray(self._geometry.plasma_volume_cm3, dtype=float)
@@ -7478,7 +7560,39 @@ class LAPDSim1D:
                     ),
                 }
             )
-        for field in ("time", "relax_steps", "relax_limited_steps", "limited_cells"):
+        ion_debt = np.asarray(dvm.ion_debt, dtype=float)
+        ion_booked = np.asarray(dvm.ion_booked_cum, dtype=float)
+        ion_removed = np.asarray(dvm.ion_removed_cum, dtype=float)
+        ion_residual = ion_removed + ion_debt - ion_booked
+        ion_scale = float(np.max(np.abs(ion_booked)) + np.max(np.abs(ion_debt)))
+        census.update(
+            {
+                "ion_debt": ion_debt.copy(),
+                "ion_booked_cum": ion_booked.copy(),
+                "ion_removed_cum": ion_removed.copy(),
+                "ion_debt_total": float(np.sum(ion_debt)),
+                "ion_debt_max_abs": float(np.max(np.abs(ion_debt))),
+                "ion_booked_total": float(np.sum(ion_booked)),
+                "ion_removed_total": float(np.sum(ion_removed)),
+                "ion_residual_rel": float(
+                    np.max(np.abs(ion_residual)) / max(ion_scale, 1e-300)
+                ),
+                "ion_shortfall_updates": int(dvm.ion_shortfall_updates),
+                "ion_shortfall_cell_updates": (
+                    dvm.ion_shortfall_cell_updates.copy()
+                ),
+            }
+        )
+        for field in (
+            "time",
+            "relax_steps",
+            "relax_limited_steps",
+            "limited_cells",
+            "ion_booked_total",
+            "ion_removed_total",
+            "ion_debt_total",
+            "ion_shortfall_updates",
+        ):
             census[f"sample_{field}"] = np.asarray(
                 [snapshot["dvm_ledger"][field] for snapshot in saved],
                 dtype=float,
@@ -7510,6 +7624,10 @@ class LAPDSim1D:
         self._dvm_engaged = True
         self._dvm_last_s = self._time
         self._dvm_next_s = self._time + self._dvm_cadence_s
+        # The step that engaged the arm booked its ionization against the
+        # LIVE fluid nn rows, which were not yet stripped, so it is already
+        # settled and must not be handed to the arm as well.
+        self._dvm_ion_booked = np.zeros(self._geometry.cells, dtype=float)
 
     def _dvm_advance(self, dt_neutral):
         """Run one transient DVM update and republish the neutral moments."""
@@ -7528,12 +7646,21 @@ class LAPDSim1D:
             "cathode_face": np.asarray(rates["cath_cells"], dtype=float),
             "collector_face": np.asarray(rates["coll_cells"], dtype=float),
         }
+        # The counted handshake: what the plasma booked as ionization over
+        # this tick, in particles, so the arm debits that and not a rate.
+        # Reset before the update, not after, so a raise cannot leave the
+        # tally to be counted twice.
+        ion_counts = self._dvm_ion_booked * np.asarray(
+            self._geometry.plasma_volume_cm3, dtype=float
+        )
+        self._dvm_ion_booked = np.zeros(self._geometry.cells, dtype=float)
         self._dvm.update(
             float(dt_neutral),
             n_i=np.asarray(state.n, dtype=float),
             Ti_eV=np.asarray(derived.Ti, dtype=float),
             u_i=np.asarray(derived.u, dtype=float),
             nu_ion=nu_ion,
+            ion_counts=ion_counts,
             sources=sources,
             T_s_K=(
                 float(self._cathode_Ts_K)
@@ -7541,6 +7668,24 @@ class LAPDSim1D:
                 else float(self._input_dict.get("T_s", 1910.0))
             ),
         )
+        if (
+            not self._dvm_ion_shortfall_warned
+            and self._dvm.ion_shortfall_updates
+        ):
+            self._dvm_ion_shortfall_warned = True
+            warnings.warn(
+                "the kinetic_dvm arm could not debit the whole ionization "
+                "count the plasma booked at "
+                f"{int(np.count_nonzero(self._dvm.ion_shortfall_cell_updates))} "
+                f"cell(s) by t={self._time:.6g} s: those cells ran out of "
+                "column neutrals inside one neutral tick. The shortfall is "
+                "held as ion_debt and re-offered on later ticks, so nothing "
+                "is lost, but a run that carries debt persistently is "
+                "asking for a shorter neutral cadence "
+                "(neutral_kinetic_dvm_cadence_s). The per-cell debt and the "
+                "shortfall counts are in the saved dvm_transfer_ledger.",
+                stacklevel=2,
+            )
         self._dvm_last_s = self._time
         self._dvm_next_s = self._time + self._dvm_cadence_s
         # Republish: the fluid neutral density consumed by the plasma
@@ -7566,9 +7711,14 @@ class LAPDSim1D:
         """Return the velocity-blind ionization frequency [1/s] per cell.
 
         Derived from the ionization the PLASMA actually books -- bulk plus
-        beam -- divided by the column density those bookings consumed, so
-        the kinetic side removes the same neutrals the plasma turns into
-        ions rather than re-deriving a rate that could drift from it.
+        beam -- divided by the column density those bookings consumed,
+        rather than re-deriving a rate that could drift from it.
+
+        This is the rate the implicit march carries: it sets how the
+        surviving neutrals are attenuated and transported WITHIN the tick.
+        It does not decide how many neutrals the tick destroys. That is the
+        counted ``ion_counts`` channel, which is the accumulated booking
+        itself and needs no rate; see :meth:`_dvm_advance`.
         """
         S = np.asarray(
             self.reaction_rhs_terms(state=state)["ionization_birth"].n,
