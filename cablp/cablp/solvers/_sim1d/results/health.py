@@ -139,6 +139,16 @@ def summarize_result(result):
         dt_min_clamped_step_count=dt_min_clamp_summary["clamped"],
         dt_min_hard_zero_step_count=dt_min_clamp_summary["hard_zero"],
         max_consecutive_dt_min_clamped_steps=dt_min_clamp_summary["max_run"],
+        # Accepted steps BELOW dt_min: the post-clamp step caps can shrink a
+        # step under the floor, which the clamp census above cannot see.
+        below_dt_min_step_count=dt_min_clamp_summary["below_dt_min"],
+        below_dt_min_known=dt_min_clamp_summary["below_dt_min_known"],
+        below_dt_min_min_accepted_dt=dt_min_clamp_summary[
+            "below_dt_min_min_accepted"
+        ],
+        below_dt_min_step_cap_counts=dt_min_clamp_summary[
+            "below_dt_min_step_caps"
+        ],
         dvm_arm_configured=_dvm_arm_configured(result),
         dvm_transfer_ledger_census=_dvm_ledger_census_summary(result),
     )
@@ -250,14 +260,75 @@ def _dt_min_clamp_summary(result):
             if getattr(diag, "dt_raw", np.nan) == 0.0
         )
     )
+    below = _below_dt_min_summary(result, diagnostics)
     if not clamped.size or not np.any(clamped):
-        return {"clamped": 0, "hard_zero": hard_zero, "max_run": 0}
+        return {"clamped": 0, "hard_zero": hard_zero, "max_run": 0, **below}
     edges = np.diff(np.concatenate(([False], clamped, [False])).astype(np.int8))
     run_lengths = np.flatnonzero(edges == -1) - np.flatnonzero(edges == 1)
     return {
         "clamped": int(np.count_nonzero(clamped)),
         "hard_zero": hard_zero,
         "max_run": int(np.max(run_lengths)),
+        **below,
+    }
+
+
+def _below_dt_min_summary(result, diagnostics):
+    """Census accepted steps that landed BELOW ``dt_min``.
+
+    A separate category from the clamp count, and deliberately not folded into
+    it: these are the opposite fact. The clamp lifts a bound's request UP to
+    ``dt_min`` inside ``suggest_timestep``; the step caps (``dt_growth``,
+    ``save_time``, ``phase_boundary``, ``t_end``) are applied AFTERWARDS in the
+    run loop and can only shrink the step, so an accepted step can end up
+    strictly below ``dt_min`` while ``clamped_to_dt_min`` reads either way.
+    Such a step was invisible to this census, which is why a production run
+    (K6d) accepted dt = 9.239e-11 against a configured ``dt_min`` of 1e-10 and
+    nothing recorded it.
+
+    ``step_caps`` names which cap was responsible, which is the whole
+    diagnostic value: it distinguishes a benign landing on ``t_end`` or a save
+    time from a ``dt_growth`` ramp genuinely driving the step under the floor.
+
+    Returns zero counts and NaN when the run records no ``dt_min`` (results
+    carrying no params). That is "cannot tell", and is reported as such rather
+    than as an absence of below-floor steps.
+    """
+    params = getattr(result, "params", None)
+    dt_min = None
+    if isinstance(params, dict) and "dt_min" in params:
+        try:
+            candidate = float(params["dt_min"])
+        except (TypeError, ValueError):
+            candidate = np.nan
+        if np.isfinite(candidate) and candidate > 0.0:
+            dt_min = candidate
+    if dt_min is None:
+        return {
+            "below_dt_min": 0,
+            "below_dt_min_known": False,
+            "below_dt_min_min_accepted": np.nan,
+            "below_dt_min_step_caps": {},
+        }
+    accepted = np.asarray(
+        [getattr(diag, "accepted_dt", np.nan) for diag in diagnostics],
+        dtype=float,
+    )
+    below = np.isfinite(accepted) & (accepted < dt_min)
+    caps = _value_counts(
+        [
+            getattr(diag, "step_cap", "")
+            for diag, is_below in zip(diagnostics, below)
+            if is_below
+        ]
+    )
+    return {
+        "below_dt_min": int(np.count_nonzero(below)),
+        "below_dt_min_known": True,
+        "below_dt_min_min_accepted": (
+            float(np.min(accepted[below])) if np.any(below) else np.nan
+        ),
+        "below_dt_min_step_caps": caps,
     }
 
 

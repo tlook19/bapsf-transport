@@ -579,8 +579,11 @@ name to reproduce. Memo: `scripts/sheathwalk_report.txt`,
 `scripts/k7build_sheath_crosscheck.txt`.
 
 **`beam_deposition_smoothing_cm = 0.0`** ships off (bit-exact). The campaign
-stance uses a physical straggling width; see
-`scripts/production_stance_provenance.md`.
+stance sets a nonzero width, and that width is **load-bearing rather than
+cosmetic**: at the production operating point the raw CSDA stopping profile is
+only ~2 cells wide, so the kernel sets the applied axial deposition geometry
+outright. The value, its ASSUMED class and its honest bar live with the stance,
+in `scripts/production_stance_provenance.md`.
 
 ## `physics_fit_defaults`
 

@@ -229,6 +229,53 @@ so the moment path is untouched.
 `TimestepDiagnostics` records every candidate, the `active_constraint` that set
 Δt, and per-step accept/reject bookkeeping.
 
+### Growth ramp and its accelerated re-approach (default off)
+
+Between accepted steps Δt may grow by at most `dt_growth_factor` (1.25). The
+ramp is applied *after* `suggest_timestep`, as one more `cap_step`, so it can
+only shrink the step and never widens any physical bound.
+
+Geometric re-approach is the cost. Recovering from a factor *F* below the
+binding bound takes `log F / log 1.25` steps — ~26 steps from 364× below. In
+knife-edge `surface_loss` regimes the collapse-and-recover episodes recur
+often enough to dominate the step count: one probe measured **80.6% of steps
+capped by `dt_growth`, at a median 364× below the binding physics bound**, with
+~40-step recovery episodes recurring every ~15 steps. Those steps are not
+resolving anything — no physical bound bound during any of them.
+
+`dt_growth_recovery_patience` (**default 0 = off**) and
+`dt_growth_recovery_factor` (4.0, consulted only when patience > 0) are an
+opt-in accelerated re-approach. After `patience` CONSECUTIVE accepted steps
+capped by `dt_growth`, the ramp's factor becomes the recovery factor; one step
+capped by anything else — a physics bound, an output cadence, or a retry after
+a rejection — resets the streak and the base factor returns immediately.
+
+That asymmetry is the hysteresis, and it is the whole safety argument:
+
+- **Engaging needs evidence.** Being growth-capped for many steps running means
+  no physical candidate has bound in all that time, so the ramp is
+  re-approaching rather than tracking. The key is a PATIENCE, not a threshold
+  on Δt: nothing inspects how far below the bound the step is, so a genuinely
+  small physics bound can never be mistaken for a ramp.
+- **Releasing needs nothing.** A single non-growth-capped step ends
+  acceleration, and the streak must be re-earned from zero.
+- **No bound is weakened.** Every step remains the minimum over all candidates;
+  this only widens the ceiling the ramp itself imposes. The reject/retry path
+  is unchanged and remains the backstop.
+
+Honest limits of the design, as built and unmeasured here:
+
+- It is a **heuristic on the controller, not a physical improvement**. A larger
+  jump toward the bound raises the chance of overshooting a bound that is
+  moving, which costs a rejection and a retry — trading many cheap ramp steps
+  for occasional expensive rejections. Whether that trade pays is regime
+  dependent and is **not** established by anything in this repository.
+- Accepted steps therefore change wherever it engages, so it is **trajectory
+  changing** and stays default off. No default flip is proposed here.
+- With patience 0 the branch is never evaluated, the ramp is uniformly
+  `dt_growth_factor`, and the step sequence is bit-identical to a run predating
+  the keys. The production golden is unaffected and was not recaptured.
+
 **The clamp is recorded separately from the constraint name** (2026-08-05).
 `active_constraint` always names the bound that actually minimized; when that
 bound asked for less than `dt_min`, `clamped_to_dt_min` is set and `dt_raw`

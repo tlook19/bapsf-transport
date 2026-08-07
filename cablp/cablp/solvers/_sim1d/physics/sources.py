@@ -2,8 +2,6 @@ import numpy as np
 
 from cablp.funcs._cross import (
     charge_ex_react,
-    phelps_cx_rate_cm3_s,
-    phelps_iso_rate_cm3_s,
     phelps_momentum_transfer_rate_cm3_s,
 )
 from cablp.vars._cons import ev_to_erg, kb_cgs

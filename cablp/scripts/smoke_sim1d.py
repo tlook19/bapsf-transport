@@ -1617,6 +1617,75 @@ def main():
         beam_birth_terms.nn,
     )
     assert np.allclose(split_beam_terms["beam_ionization_birth"].Ee, 0.0)
+
+    # --- beam_ionization_birth in the resolved-source dt bound (default off) --
+    # The row is a volumetric plasma source that can drive a cell into a floor
+    # within one step, and it has never been in ANY timestep bound: the bundle
+    # carries only the boundary, anode-collection and cathode-surface rows.
+    # Here the row is demonstrably live (asserted nonzero above).
+    assert flags.get("beam_ionization_birth_timestep_bound", False) is False
+    assert default_config()[1]["beam_ionization_birth_timestep_bound"] is False
+    # Both sims built FRESH and identically here: the bundle re-solves the
+    # cathode internally, so a sim whose solve cache has been walked by other
+    # checks is not a like-for-like control.
+    def _beam_bound_sim(bound_on):
+        built = LAPDSim1D(
+            cathode_bl_params,
+            {
+                **cathode_flags,
+                "beam_ionization_birth_timestep_bound": bound_on,
+            },
+        )
+        built._circuit_I_loop = 3000.0
+        return built
+
+    beam_bound_sim = _beam_bound_sim(True)
+    beam_unbound_sim = _beam_bound_sim(False)
+    beam_bound_row = beam_bound_sim.beam_ionization_rhs_terms(
+        state=beam_bound_sim.state,
+        cathode_solve=beam_bound_sim.solve_cathode_boundary(
+            state=beam_bound_sim.state,
+            time=beam_bound_sim._time,
+            update_cache=False,
+        ),
+        time=beam_bound_sim._time,
+    )["beam_ionization_birth"]
+    assert np.any(beam_bound_row.n > 0.0)
+    beam_bundle_off = beam_unbound_sim._plasma_source_timestep_rhs(
+        state=beam_unbound_sim.state, time=beam_unbound_sim._time
+    )
+    beam_bundle_on = beam_bound_sim._plasma_source_timestep_rhs(
+        state=beam_bound_sim.state, time=beam_bound_sim._time
+    )
+    # The WHOLE applied row joins the bundle -- not a sub-fraction of it. A
+    # bound computed from part of a row describes a term the step does not
+    # apply and leaves the remainder unbounded.
+    for beam_field in ("n", "nn", "M", "Ee", "Ei"):
+        assert np.allclose(
+            getattr(beam_bundle_on, beam_field),
+            getattr(beam_bundle_off, beam_field)
+            + getattr(beam_bound_row, beam_field),
+        ), beam_field
+    # OFF the bundle is untouched: bit-identical to a sim that never heard of
+    # the flag.
+    beam_absent_sim = LAPDSim1D(cathode_bl_params, cathode_flags)
+    beam_absent_sim._circuit_I_loop = 3000.0
+    for beam_field in ("n", "nn", "M", "Ee", "Ei"):
+        assert np.array_equal(
+            getattr(
+                beam_absent_sim._plasma_source_timestep_rhs(
+                    state=beam_absent_sim.state,
+                    time=beam_absent_sim._time,
+                ),
+                beam_field,
+            ),
+            getattr(beam_bundle_off, beam_field),
+        ), beam_field
+    # And it can only TIGHTEN the suggested step, never loosen it.
+    assert (
+        beam_bound_sim.suggest_timestep().dt_surface_loss
+        <= beam_unbound_sim.suggest_timestep().dt_surface_loss * (1.0 + 1.0e-12)
+    )
     assert np.all(split_beam_terms["beam_power_deposition"].Ee >= 0.0)
     assert np.any(split_beam_terms["beam_power_deposition"].Ee > 0.0)
     assert np.all(split_beam_terms["beam_ionization_cost"].Ee <= 0.0)
@@ -5955,6 +6024,92 @@ def main():
         "t_end": 1,
     }
 
+    # --- accelerated dt_growth re-approach (default off) ---------------------
+    # A long ramp: an early phase boundary sets a small first step, then
+    # nothing physical binds and dt_growth caps every step while it climbs.
+    # This is the regime the probe measured (80.6% of steps growth-capped at a
+    # median 364x below the binding physics bound).
+    ramp_params = dict(growth_params)
+    ramp_params["tau_prebreakdown"] = 2.0e-9
+    ramp_params["tau_discharge"] = 40.0e-6
+    ramp_base = LAPDSim1D(ramp_params, growth_flags).run(t_end=3.0e-7)
+    assert ramp_base.steps == 17
+    assert [diag.step_cap for diag in ramp_base.diagnostics][:5] == [
+        "phase_boundary",
+        "dt_growth",
+        "dt_growth",
+        "dt_growth",
+        "dt_growth",
+    ]
+    ramp_fast = LAPDSim1D(
+        {
+            **ramp_params,
+            "dt_growth_recovery_patience": 3,
+            "dt_growth_recovery_factor": 4.0,
+        },
+        growth_flags,
+    ).run(t_end=3.0e-7)
+    # Same ramp, far fewer steps: the whole point of the mechanism.
+    assert ramp_fast.steps == 7, ramp_fast.steps
+    ramp_fast_dt = [diag.accepted_dt for diag in ramp_fast.diagnostics]
+    ramp_base_dt = [diag.accepted_dt for diag in ramp_base.diagnostics]
+    # HYSTERESIS, both halves. Engaging takes evidence: the first step is
+    # capped by the phase boundary, so steps 2-4 must still ramp at the BASE
+    # 1.25 while the streak of three growth-capped steps is being earned...
+    assert np.allclose(ramp_fast_dt[:4], ramp_base_dt[:4])
+    assert np.allclose(
+        ramp_fast_dt[1:4],
+        [ramp_fast_dt[0] * 1.25**k for k in (1, 2, 3)],
+    )
+    # ...and only the step AFTER patience is met jumps by the recovery factor.
+    assert np.isclose(ramp_fast_dt[4], ramp_fast_dt[3] * 4.0)
+    assert np.isclose(ramp_fast_dt[5], ramp_fast_dt[4] * 4.0)
+    # It never weakens a bound -- every accepted step is still <= dt_max.
+    assert max(ramp_fast_dt) <= ramp_params["dt_max"] * (1.0 + 1.0e-12)
+    # DEFAULT OFF and presence-gated: shipped defaults disable it, and setting
+    # the keys to their defaults is step-for-step identical to not having them.
+    assert default_config()[0]["dt_growth_recovery_patience"] == 0
+    ramp_off = LAPDSim1D(
+        {
+            **ramp_params,
+            "dt_growth_recovery_patience": 0,
+            "dt_growth_recovery_factor": 4.0,
+        },
+        growth_flags,
+    ).run(t_end=3.0e-7)
+    assert [diag.accepted_dt for diag in ramp_off.diagnostics] == ramp_base_dt
+    assert np.array_equal(ramp_off.n, ramp_base.n)
+    assert np.array_equal(ramp_off.Ee, ramp_base.Ee)
+    # Misconfiguration is loud, and at CONSTRUCTION.
+    for bad_ramp in (
+        {"dt_growth_recovery_patience": -1},
+        {"dt_growth_recovery_patience": 1.5},
+        {"dt_growth_recovery_patience": "soon"},
+        # A recovery factor at or below the base could never accelerate.
+        {"dt_growth_recovery_patience": 2, "dt_growth_recovery_factor": 1.25},
+        {"dt_growth_recovery_patience": 2, "dt_growth_recovery_factor": 0.5},
+        {
+            "dt_growth_recovery_patience": 2,
+            "dt_growth_recovery_factor": float("nan"),
+        },
+    ):
+        try:
+            LAPDSim1D({**ramp_params, **bad_ramp}, growth_flags)
+        except ValueError as error:
+            assert "dt_growth_recovery" in str(error), str(error)
+        else:
+            raise AssertionError(f"{bad_ramp} must raise")
+    # A bad recovery factor is INERT while patience is 0: the key is not
+    # consulted at all on the off path, so it cannot refuse a default run.
+    LAPDSim1D(
+        {
+            **ramp_params,
+            "dt_growth_recovery_patience": 0,
+            "dt_growth_recovery_factor": 0.5,
+        },
+        growth_flags,
+    )
+
     retry_params = dict(params)
     retry_flags = dict(flags)
     retry_flags["Plasma"] = False
@@ -6951,6 +7106,85 @@ def main():
     }
     assert np.all(direct_current_phase_result.ignition_diagnostics["stalled"] == 0.0)
     assert IGNITION_STALL_MIN_SAMPLES >= 2
+
+    # --- non-ignition guards, wall-clock / accepted-step arm -----------------
+    # The stall detector and the tau_prebreakdown timeout both measure
+    # SIMULATED time, so neither can see a non-igniting arm that stops
+    # producing simulated time and burns wall clock instead. These two budgets
+    # close over that, through the SAME switch-open path.
+    for budget_key, budget_value, budget_reason in (
+        ("ignition_accepted_step_cap", 3, "accepted_step_cap"),
+        ("ignition_wall_clock_cap_s", 1.0e-9, "wall_clock_cap"),
+    ):
+        budget_params = dict(current_phase_params)
+        budget_params["I_prebreakdown"] = 1.0e30
+        budget_params["I_breakdown"] = 1.0e30
+        # Far beyond reach, so the simulated-time guard cannot be what fires.
+        budget_params["tau_prebreakdown"] = 1.0
+        budget_params[budget_key] = budget_value
+        budget_sim = LAPDSim1D(budget_params, current_phase_flags)
+        with warnings.catch_warnings(record=True) as budget_warnings:
+            warnings.simplefilter("always")
+            budget_result = budget_sim.run(dt=1.0e-10, max_steps=50)
+        assert any(
+            "ignition aborted" in str(entry.message)
+            and budget_reason in str(entry.message)
+            for entry in budget_warnings
+        ), [str(entry.message) for entry in budget_warnings]
+        # Same wind-down as every other switch-open abort: a real phase
+        # transition, no main_discharge, and refused scoring.
+        assert budget_result.ignition_abort["reason"] == budget_reason
+        assert "main_discharge" not in set(budget_result.phase)
+        assert budget_result.phase_events["reason"][-1] == "tau_afterglow"
+        assert budget_result.phase_events["phase"][1] == "afterglow"
+        assert budget_result.ignition_abort["wall_clock_s"] >= 0.0
+        assert budget_result.ignition_abort["accepted_steps"] >= 1.0
+        # The accepted-step cap is deterministic: it trips ON the capped step.
+        if budget_key == "ignition_accepted_step_cap":
+            assert np.isclose(
+                budget_result.ignition_abort["time_s"], 3.0e-10
+            ), budget_result.ignition_abort["time_s"]
+            assert budget_result.ignition_abort["accepted_steps"] == 3.0
+    # Misconfiguration is loud, and at CONSTRUCTION -- not hours into the very
+    # crawl the guard exists to catch.
+    for bad_key, bad_value in (
+        ("ignition_wall_clock_cap_s", -1.0),
+        ("ignition_wall_clock_cap_s", float("nan")),
+        ("ignition_wall_clock_cap_s", "soon"),
+        ("ignition_accepted_step_cap", -5),
+        ("ignition_accepted_step_cap", 2.5),
+        ("ignition_accepted_step_cap", "many"),
+    ):
+        try:
+            LAPDSim1D({**current_phase_params, bad_key: bad_value},
+                      current_phase_flags)
+        except ValueError as error:
+            assert bad_key in str(error), str(error)
+        else:
+            raise AssertionError(f"{bad_key}={bad_value!r} must raise")
+    # Default-off, and presence-gated: shipped defaults disable both, and a
+    # run that sets them to their defaults is step-for-step identical to one
+    # that has never heard of them.
+    assert default_config()[0]["ignition_wall_clock_cap_s"] == 0.0
+    assert default_config()[0]["ignition_accepted_step_cap"] == 0
+    budget_absent_params = dict(current_phase_params)
+    budget_absent_params.pop("ignition_wall_clock_cap_s", None)
+    budget_absent_params.pop("ignition_accepted_step_cap", None)
+    budget_absent = LAPDSim1D(budget_absent_params, current_phase_flags).run(
+        dt=1.0e-10, max_steps=6
+    )
+    budget_off = LAPDSim1D(
+        {
+            **current_phase_params,
+            "ignition_wall_clock_cap_s": 0.0,
+            "ignition_accepted_step_cap": 0,
+        },
+        current_phase_flags,
+    ).run(dt=1.0e-10, max_steps=6)
+    assert np.array_equal(budget_absent.n, budget_off.n)
+    assert np.array_equal(budget_absent.Ee, budget_off.Ee)
+    assert not hasattr(budget_absent, "ignition_abort")
+    assert not hasattr(budget_off, "ignition_abort")
 
     # Scorer hard-fail (scripts): a non-ignited run must raise, an ignited one
     # must score its origin from the first main_discharge sample.
@@ -12071,6 +12305,51 @@ print(json.dumps({
         assert loaded_summary.dt_min_clamped_step_count == 5
         assert loaded_summary.max_consecutive_dt_min_clamped_steps == 5
         assert loaded_summary.dt_min_hard_zero_step_count == 5
+
+    # (ii-b) ACCEPTED STEPS BELOW dt_min ARE SEEN, AND SEPARATELY.
+    # The dt_min clamp lifts a bound's request UP to dt_min inside
+    # suggest_timestep, but the step caps are applied AFTERWARDS in the run
+    # loop and can only shrink the step -- so an accepted step can land
+    # strictly BELOW dt_min and the clamp census above cannot see it. A
+    # production run (K6d) accepted 9.239e-11 against a configured dt_min of
+    # 1e-10 with nothing recording it.
+    below_params = dict(dtlock_params)
+    below_params["dt_save"] = 0.0
+    below_params["dt_min"] = 1.0e-10
+    below_sim = LAPDSim1D(below_params, dtlock_flags)
+    # t_end lands 5e-11 past the last whole step: below dt_min by construction.
+    below_result = below_sim.run(t_end=2.5e-10, dt=1.0e-10)
+    below_summary = summarize_result(below_result)
+    assert [diag.accepted_dt for diag in below_result.diagnostics] == [
+        1.0e-10,
+        1.0e-10,
+        below_result.diagnostics[-1].accepted_dt,
+    ]
+    assert below_summary.below_dt_min_step_count == 1
+    assert below_summary.below_dt_min_known is True
+    assert np.isclose(below_summary.below_dt_min_min_accepted_dt, 5.0e-11)
+    # It NAMES the cap responsible -- the diagnostic point of the category.
+    assert below_summary.below_dt_min_step_cap_counts == {"t_end": 1}
+    # DISTINCT, not folded into the clamp count: no step was clamped here.
+    assert below_summary.dt_min_clamped_step_count == 0
+    assert below_summary.max_consecutive_dt_min_clamped_steps == 0
+    # The clamp census and this one are independent: the forced-clamp run
+    # above clamped 5 steps and had no below-floor accepted step.
+    assert transient_summary.below_dt_min_step_count == 0
+    # A result carrying no params cannot know dt_min, and says so rather than
+    # reporting a reassuring zero.
+    unknowable = summarize_result(
+        SimpleNamespace(
+            **{
+                field: getattr(below_result, field)
+                for field in dir(below_result)
+                if not field.startswith("_") and field != "params"
+            }
+        )
+    )
+    assert unknowable.below_dt_min_known is False
+    assert unknowable.below_dt_min_step_count == 0
+    assert np.isnan(unknowable.below_dt_min_min_accepted_dt)
 
     # (iii) PAST THE THRESHOLD IT RAISES, LOUDLY AND WITH THE EVIDENCE.
     lock_params = dict(transient_params)

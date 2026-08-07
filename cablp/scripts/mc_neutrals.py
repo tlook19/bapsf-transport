@@ -110,6 +110,24 @@ def assert_recycle_channel_live(recycle, removal, *, row, stance, path, window_m
     )
 
 
+def _puff_peak_cell(ns, roles):
+    """Index of the puff row's peak cell, ties broken toward the puff cell.
+
+    A distributed puff profile is symmetric about the valve, so the two cells
+    straddling it carry EQUAL weight and ``np.argmax`` alone picks whichever
+    comes first in the array -- a plain column cell one cell upstream of the
+    role-tagged puff cell. Ties are resolved toward the ``puff`` role.
+    """
+    peak = ns.max()
+    if peak <= 0.0:
+        return int(np.argmax(ns))
+    tied = np.flatnonzero(ns >= peak)
+    for i in tied:
+        if roles[i] == "puff":
+            return int(i)
+    return int(tied[0])
+
+
 def load_background(path, window_ms):
     with h5py.File(path, "r") as f:
         t0 = float(f.attrs["t_breakdown_trigger"])
@@ -256,10 +274,26 @@ def load_background(path, window_ms):
         "collector_face": float(ba[coll_cell]),
         "anode_left": float(an[an.nonzero()[0][0]]) if an.any() else 0.0,
         "anode_right": float(an[an.nonzero()[0][-1]]) if an.any() else 0.0,
-        "puff": float(ns.sum()),
-        "puff_z": float(zc[np.argmax(ns)] - edges[first]),
+        # The puff is a DISTRIBUTION over cells, not a point: the solver's
+        # 'gaussian' and 'cosine_pipe' profiles spread the inflow over every
+        # eligible main-chamber cell (normalized to conserve it exactly), and
+        # only the legacy 'cell' profile is a single cell. Carry the whole row
+        # and let the launcher sample it, exactly as vol_rec does. The rate and
+        # the weights are read from the SAME in-domain slice so they cannot
+        # disagree (any share upstream of the cathode face is outside the TPMC
+        # domain, as for vol_rec).
+        "puff": float(ns[first:].sum()),
+        # Representative SINGLE-cell z, kept for the point-injection consumers
+        # of this loader (kn2zone, the E0 bench, the E2 DVM comparison), whose
+        # own discretizations inject the puff into one z-bin. run_mc no longer
+        # uses it. np.argmax alone resolved a tie by array order, which on a
+        # cosine_pipe run put the source in a plain column cell one cell
+        # UPSTREAM of the role-tagged puff cell; prefer the puff cell whenever
+        # it is among the maxima.
+        "puff_z": float(zc[_puff_peak_cell(ns, roles)] - edges[first]),
         "vol_rec": float(rec[first:].sum()),
     }
+    bg["puff_cell"] = ns[first:]
     bg["rec_cell"] = rec[first:]
     bg["phi_c"] = phi_c
     bg["T_s"] = T_s
@@ -331,12 +365,16 @@ def run_mc(bg, n_particles, jet, rng, r_n=(0.5, 0.5), r_e=(0.2, 0.25),
     def launch(name, N):
         pos = np.zeros((N, 3))
         if name == "puff":
-            zc = src["puff_z"]
-            icell = np.searchsorted(ze, zc) - 1
+            # Sample the launch cell from the run's own per-cell puff row, then
+            # uniformly within that cell. Entry is still at the chamber wall
+            # pointing inward -- the physical pipe outlet the 'cosine_pipe'
+            # profile models -- so only the AXIAL spread changes.
+            w_cell = bg["puff_cell"] / bg["puff_cell"].sum()
+            icell = rng.choice(w_cell.size, size=N, p=w_cell)
             th = rng.random(N) * 2 * np.pi
             pos[:, 0] = Rm[icell] * 0.999 * np.cos(th)
             pos[:, 1] = Rm[icell] * 0.999 * np.sin(th)
-            pos[:, 2] = zc
+            pos[:, 2] = ze[icell] + rng.random(N) * (ze[icell + 1] - ze[icell])
             vel = wall_emit_inward(rng, pos[:, 0], pos[:, 1], T_WALL_K)
         elif name in ("cathode_face", "collector_face"):
             at_start = name == "cathode_face"
@@ -472,6 +510,26 @@ def run_mc(bg, n_particles, jet, rng, r_n=(0.5, 0.5), r_e=(0.2, 0.25),
             d_coll = -np.log(rng.random(n_act)) * speed / nu_max
             d = np.minimum(np.minimum(d_z, d_wall), np.minimum(d_coll, d_rp))
             d = np.minimum(d, 1e6)
+            if np.any(d < 0.0):
+                # A negative flight length is never physical: it means a ray is
+                # standing at r > Rm(icell), where (Rw^2 - r2) < 0 drives both
+                # wall-intersection roots negative and the backward root wins
+                # the minimum. Tallying it accumulates NEGATIVE residence and
+                # marches the particle backwards without bound, so the
+                # estimator diverges rather than degrading. Fail loudly here
+                # instead: the tally below is unrecoverable once fed.
+                bad = np.flatnonzero(d < 0.0)
+                j = bad[0]
+                raise ValueError(
+                    f"negative flight length in the neutral ray tracer: "
+                    f"{bad.size} of {n_act} histories, min d={d[bad].min():.6g} "
+                    f"cm (source '{name}').\n"
+                    f"  first offender: cell {icell[j]}, "
+                    f"r={np.sqrt(r2[j]):.6g} cm vs Rm={Rm[icell[j]]:.6g} cm\n"
+                    "  cause: the ray sits outside the vessel wall of its own "
+                    "cell, which happens when a z-crossing into a NARROWER "
+                    "section is not intercepted by the annular step face."
+                )
             dt = d / speed
             # tally the segment (entirely inside icell)
             in_col = r2 < Rp[icell] ** 2  # start-of-segment zone (approx)
@@ -521,8 +579,9 @@ def run_mc(bg, n_particles, jet, rng, r_n=(0.5, 0.5), r_e=(0.2, 0.25),
                 pos[idx, 0] *= shrink
                 pos[idx, 1] *= shrink
                 vel[idx] = wall_emit_inward(rng, pos[idx, 0], pos[idx, 1], None)
-            # --- z-edge crossings (Rp-surface crossings need no handler:
-            # the segment split plus the ray overshoot is the whole event)
+            # --- z-edge crossings: ends, mesh, and the annular step face
+            # (Rp-surface crossings need no handler: the segment split plus
+            # the ray overshoot is the whole event)
             hit_z = (~hit_c) & (~hit_w) & (d_z <= d_rp)
             if hit_z.any():
                 idx = np.flatnonzero(hit_z)
@@ -558,7 +617,31 @@ def run_mc(bg, n_particles, jet, rng, r_n=(0.5, 0.5), r_e=(0.2, 0.25),
                         sign = -np.sign(vel[bidx, 2])
                         vel[bidx] = cosine_emit(rng, bidx.size, T_WALL_K, sign)
                         pos[bidx, 2] = ze[mesh_edge] + sign * 1e-6
-                # interior crossings just continue
+                # annular step face: where Rm narrows across an interior
+                # z-edge, the part of the crossing plane with
+                # Rm(dest) < r <= Rm(src) is a real z-normal annulus of
+                # vessel wall, not an opening. Without this the ray passes
+                # THROUGH the wall and is left outside its cell's radius --
+                # the divergent-estimator failure the tripwire above names.
+                # Diffuse re-emission back into the cell it came from, at the
+                # radial wall's convention (full accommodation, 300 K).
+                interior = (edge > 0) & (edge < ncell)
+                e = idx[interior]
+                if e.size:
+                    zdir_i = zdir[interior]
+                    dest = np.where(zdir_i > 0, edge[interior],
+                                    edge[interior] - 1)
+                    # NOT r_e: that is a run_mc PARAMETER (the jet
+                    # fast-fraction energy pair) which the launch() closure
+                    # reads from this scope, so binding it here would feed
+                    # launch() an array of radii on every later source.
+                    r_step = np.sqrt(pos[e, 0] ** 2 + pos[e, 1] ** 2)
+                    step = r_step > Rm[dest]
+                    h = e[step]
+                    if h.size:
+                        sgn = -zdir_i[step]
+                        vel[h] = cosine_emit(rng, h.size, T_WALL_K, sgn)
+                        pos[h, 2] += sgn * 1e-6
             alive = ~kill
             pos, vel, wgt = pos[alive], vel[alive], wgt[alive]
             age = age[alive]

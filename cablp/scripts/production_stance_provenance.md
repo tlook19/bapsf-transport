@@ -150,10 +150,36 @@ harmonically (Cowie-McKee) with the Braginskii flux at
 `heat_flux_limiter_exponent = 1`, which is already the config default. This
 coefficient is a bracket, not a measurement.
 
-**`beam_deposition_smoothing_cm = 50.0`** — ASSUMED, physical straggling width.
-The CSDA range profile is sharp on the mesh scale; smoothing over a fixed
-physical length keeps the deposited power from following cell edges and makes
-the deposition profile mesh-convergent.
+**`beam_deposition_smoothing_cm = 50.0`** — **ASSUMED**, nominally a physical
+straggling width. The CSDA range profile is sharp on the mesh scale; smoothing
+over a fixed physical length keeps the deposited power from following cell
+edges and makes the deposition profile mesh-convergent.
+
+**Honest bar: this kernel IS the applied axial deposition geometry, not a
+numerical tidy-up of it, and its width is not measured.** Measured on the
+`es1_k6d_sgp5200_nx240` plateau (5.0-19.5 ms, `I_tot` 1904 A, CSDA), the RAW
+stopping profile is **2 cells wide at half maximum** — FWHM 15.0 cm on 7.5 cm
+cells — and puts 7.6% of the beam power in a SINGLE cell. The 50 cm kernel
+widens that to FWHM 377.5 cm, a factor of ~25, and drops the peak cell to
+1.6%. Total deposited power is unchanged (4.01313e+08 erg/s either way), so
+the kernel moves only WHERE the power lands, which is the whole axial
+structure of the beam heating. A result that depends on the axial shape of
+beam deposition is therefore reporting this assumed 50 cm, not the stopping
+physics.
+
+Two consequences follow and are NOT yet discharged:
+
+- The 50 cm is not derived from a straggling calculation anywhere in this
+  repository or its history; it is a round number chosen for the stated
+  mesh-convergence purpose. It should be treated as a **bracket arm**, not a
+  value, until a straggling width is computed or measured.
+- Because the raw support is sub-cell to 2 cells, "mesh-convergent" here means
+  convergent to the KERNEL, not to the deposition. Refining `nx` cannot expose
+  the assumption; only varying `beam_deposition_smoothing_cm` can.
+
+Evidence: `scripts/smallbatch_beam_smoothing_support.txt` (the raw-vs-applied
+support measurement above); the sub-cell finding it confirms is the deposition
+discriminator of 2026-08-05.
 
 **`implicit_heat_scheme = "tr_bdf2"`, `operator_splitting = "strang"`,
 `heat_picard_iterations = 2`, `heat_picard_tol = 1e-10`** — DERIVED accuracy
