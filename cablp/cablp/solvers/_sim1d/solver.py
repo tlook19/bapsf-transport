@@ -129,10 +129,7 @@ from .physics.sources import (
 )
 from .results.compat import add_sim3_compat_aliases
 from cablp.funcs._adas import he_rate_temperature_range_eV, he_rates
-from cablp.funcs._beam_deposition import (
-    HE_E_STOP_EV,
-    he_mean_secondary_energy_eV,
-)
+from cablp.funcs._beam_deposition import HE_EII_EPS_TOP
 from cablp.funcs._cross import charge_ex_react
 from cablp.funcs._kernels import PROVENANCE as KERNEL_PROVENANCE
 from cablp.vars._cons import I_Ry, I_ion, ev_to_erg, kb_cgs, m_He_cgs, m_p_cgs
@@ -1262,16 +1259,20 @@ class LAPDSim1D:
                 # first cathode solve.
                 tail_reflect_face(self._geometry, end=0)
         # K6 tail ionization. Same discipline again, and the same reason to
-        # duplicate the module's own guards here: a misconfiguration must fail
-        # before the first cathode solve, not hours into a run. The two
-        # tail-energy bars are the module's, evaluated on the module's own
-        # threshold constants and <W_sec> convention rather than restated, so
-        # they cannot drift apart from the arithmetic they protect.
-        # Under K7 phi_c keying the LIVE E_tail is f*phi_c(t), which no
-        # construction-time check can see; the bars below then bind only the
-        # (inert) fixed rung and the module's own copies of them, evaluated on
-        # the live value at every solve, are what actually protect the depth-1
-        # truncation. That is stated in the config docstring for the keying.
+        # duplicate the module's own guard here: a misconfiguration must fail
+        # before the first cathode solve, not hours into a run.
+        # Since K7b the two depth-1 bars no longer refuse -- they select a
+        # treatment per ray (revert below E_stop, march with the measured
+        # <= 2.0% understatement above the <W_sec> crossing), so there is
+        # nothing for construction to reject there and the exposure is
+        # reported in the tail diagnostics instead. The ONE surviving refusal
+        # is the EII table edge, and it is the module's own constant evaluated
+        # on this solver's I_ion rather than restated, so the two cannot
+        # drift apart. Under K7 phi_c keying the LIVE E_tail is f*phi_c(t),
+        # which no construction-time check can see; the check below then binds
+        # only the (inert) fixed rung and the module's own copy of it,
+        # evaluated on the live value at every solve, is what actually holds
+        # the walk inside the tabulated cross section.
         _tion = str(
             self._input_dict.get("heating_anomalous_tail_ionization", "off")
         )
@@ -1291,27 +1292,16 @@ class LAPDSim1D:
                     "'tail_walk'; heating_anomalous_tail_ionization accepts "
                     f"'off' or 'on' (got {_hat!r} and {_tion!r})"
                 )
-            if _tail_eV <= HE_E_STOP_EV:
+            _E_table_top = HE_EII_EPS_TOP * float(self._I_ion)
+            if _tail_eV >= _E_table_top:
                 raise ValueError(
-                    "heating_anomalous_tail_ionization='on' needs "
-                    "heating_anomalous_tail_energy_eV above the lowest He "
-                    f"inelastic threshold ({HE_E_STOP_EV} eV); at {_tail_eV} "
-                    "eV a tail walker cannot ionize or excite at all and the "
-                    "setting would be a silent no-op"
-                )
-            _W_sec_launch = he_mean_secondary_energy_eV(
-                _tail_eV, I_ion_eV=float(self._I_ion)
-            )
-            if _W_sec_launch >= HE_E_STOP_EV:
-                raise ValueError(
-                    "heating_anomalous_tail_ionization='on' banks each "
-                    "secondary as local heat, which is the correct depth-1 "
-                    "truncation only while the mean secondary energy stays "
-                    "below the lowest inelastic threshold; at "
-                    f"heating_anomalous_tail_energy_eV={_tail_eV} eV it is "
-                    f"{_W_sec_launch:.4f} eV against {HE_E_STOP_EV} eV, so "
-                    "the cascade the walk does not follow would be mis-banked "
-                    "as thermalized"
+                    "heating_anomalous_tail_ionization='on' marches the "
+                    "walkers on the tabulated He EII cross section, which "
+                    f"ends at {_E_table_top:.2f} eV; at "
+                    f"heating_anomalous_tail_energy_eV={_tail_eV} eV the "
+                    "lookup would clamp to its last node and the walk would "
+                    "attenuate on an extrapolated cross section. This is "
+                    "refused, not approximated"
                 )
         _fc = float(self._input_dict.get("beam_clump_fraction", 0.0))
         if not 0.0 <= _fc < 1.0:
@@ -6785,6 +6775,25 @@ class LAPDSim1D:
             "beam_tail_ionization_events_per_s": np.zeros(cells, dtype=float),
             "beam_tail_ionization_cost_W": np.zeros(cells, dtype=float),
             "beam_tail_radiated_W": np.zeros(cells, dtype=float),
+            # K7b band exposure [W], summed over the active rays. Under phi_c
+            # keying E_tail follows the live cathode drop, so one run visits
+            # all three bands: below the lowest inelastic threshold the
+            # ionizing march REVERTS to the energy-only walk (exact -- no
+            # channel is open there), above the <W_sec> crossing it runs under
+            # the measured <= 2.0% depth-1 understatement, and in between
+            # nothing is out of band. These say which, per frame, so the foot
+            # reversion and the above-bar exposure are readable from a saved
+            # trajectory instead of having to be inferred from phi_c.
+            # ``_power_W`` are the tail power in each regime and
+            # ``_fraction`` the sub-threshold share of the total (NaN when no
+            # tail power was launched). Identically zero under
+            # ``heating_anomalous_transport="local"`` (the default); runs
+            # saved before 2026-08-06 lack the datasets and readers must
+            # default them.
+            "beam_tail_power_W": 0.0,
+            "beam_tail_sub_threshold_power_W": 0.0,
+            "beam_tail_above_bar_power_W": 0.0,
+            "beam_tail_sub_threshold_fraction": np.nan,
         }
         for prefix in ("source", "end"):
             # Per-ray exit ledger [W]: power the anode mesh intercepts at the
@@ -6911,6 +6920,15 @@ class LAPDSim1D:
                 dep.ionization_cost_tail_erg_s * 1.0e-7
             )
             diag["beam_tail_radiated_W"] += dep.radiated_tail_erg_s * 1.0e-7
+            diag["beam_tail_power_W"] += (
+                float(dep.tail_power_erg_s) * 1.0e-7
+            )
+            diag["beam_tail_sub_threshold_power_W"] += (
+                float(dep.tail_sub_threshold_power_erg_s) * 1.0e-7
+            )
+            diag["beam_tail_above_bar_power_W"] += (
+                float(dep.tail_above_bar_power_erg_s) * 1.0e-7
+            )
             prefix = prefixes[int(end)]
             diag[f"{prefix}_beam_anode_intercepted_W"] = (
                 float(dep.anode_intercepted_erg_s) * 1.0e-7
@@ -6935,6 +6953,15 @@ class LAPDSim1D:
             )
             diag[f"{prefix}_beam_end_loss_tail_high_W"] = (
                 float(dep.end_loss_tail_high_erg_s) * 1.0e-7
+            )
+        # K7b: the sub-threshold SHARE, formed once the per-end powers are
+        # summed. NaN rather than 0 where no tail power was launched at all --
+        # a frame with no QL drive has no fraction, and 0.0 there would read
+        # as "fully in band".
+        if diag["beam_tail_power_W"] > 0.0:
+            diag["beam_tail_sub_threshold_fraction"] = (
+                diag["beam_tail_sub_threshold_power_W"]
+                / diag["beam_tail_power_W"]
             )
 
     def _copy_cathode_result_diagnostics(self, diag, prefix, result):

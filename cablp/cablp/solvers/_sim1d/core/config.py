@@ -1564,10 +1564,15 @@ def cathode_defaults():
         the sheath an accident of how far the drive happens to sit from that
         rung; keying removes that dependence. Under ``"phi_c"`` with
         ``heating_anomalous_tail_ionization="on"`` the two depth-1 truncation
-        bars are evaluated on the LIVE ``E_tail`` at every solve, so a drive
-        that carries ``f*phi_c`` outside the admissible band raises there
-        rather than at construction -- ``f = 1.0`` is expected to cross the
-        upper bar at production drive.
+        bars are evaluated on the LIVE ``E_tail`` at every solve, so which
+        band the walkers march in is a per-frame property of the DRIVE rather
+        than of the configuration: a cold foot sits below the lower bar and
+        the march reverts to the energy-only walk there, and ``f = 1.0``
+        crosses the upper bar at production drive and marches under the
+        disclosed depth-1 understatement. Both are recorded per frame in the
+        tail diagnostics (``beam_tail_sub_threshold_power_W`` /
+        ``beam_tail_sub_threshold_fraction`` /
+        ``beam_tail_above_bar_power_W``), so neither regime is silent.
     heating_anomalous_tail_phi_c_fraction:
         The fraction ``f`` in ``E_tail = f * e*phi_c(t)``. **Read ONLY under
         ``heating_anomalous_tail_energy_keying="phi_c"``**; must be ``None``
@@ -1621,13 +1626,21 @@ def cathode_defaults():
         Motivation: the omitted channel is negligible in the main discharge
         (Coulomb blocking, thin target) but brushes materiality in the
         breakdown foot, where it feeds back on the very density that
-        suppresses it. ``tail_energy_eV`` must sit above the lowest inelastic
-        threshold (below it the channel cannot act) and low enough that
-        ``<W_sec>(E_tail)`` stays below that threshold, which is what makes
-        banking secondaries locally the correct depth-1 truncation rather than
-        a dropped cascade; both bars are checked at construction from the
-        thresholds themselves and refused loudly, and all three registered
-        ``E_tail`` arms clear them.
+        suppresses it.
+        BAND TREATMENT (K7b): the two depth-1 bars are still computed from the
+        thresholds themselves, but each selects a treatment for the ray rather
+        than refusing it, so a ``phi_c``-keyed arm can run from cold. At or
+        below the lowest inelastic threshold the ionizing march REVERTS to the
+        energy-only walk -- exact, since no inelastic channel is open there,
+        and bit-identical to what ``"off"`` would do for that frame. Above the
+        ``<W_sec>(E_tail)`` crossing the march RUNS with the depth-1
+        truncation, which there understates the tail's ionization by a
+        MEASURED <= 2.0%. Neither regime is silent: the tail diagnostics carry
+        the power marched in each. The one refusal left is a tail energy past
+        the tabulated He EII cross section, where the lookup would clamp to its
+        last node and the walk would attenuate on an extrapolated cross
+        section; that is checked at construction against the table itself and
+        is unreachable at any ``phi_c`` this device produces.
     beam_clump_fraction:
         Fractional-coverage beam-neutral closure (default 0.0 = OFF, bit-exact).
         The fresh gas puff is a dense, SPOTTY cloud sitting on the uniform

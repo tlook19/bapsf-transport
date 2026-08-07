@@ -3180,18 +3180,16 @@ def main():
         dict(csda_params, heating_anomalous_tail_ionization="on"),
         dict(csda_params, heating_anomalous_transport="local",
              heating_anomalous_tail_ionization="on"),
-        # Below the lowest inelastic threshold the channel cannot fire.
+        # K7b: the ONLY tail energy still refused is one past the tabulated
+        # He EII cross section, where the lookup clamps to its last node and
+        # the walk would attenuate on an extrapolated sigma. The bar is read
+        # off the table (HE_EII_EPS_TOP * I_ion, ~1000 eV), not written down.
+        # REPINNED 2026-08-06: the 20 eV (sub-threshold) and 300 eV
+        # (above-<W_sec>) cases used to live in this list and are now the two
+        # SPLIT TREATMENTS pinned below -- they construct and run.
         dict(csda_params, **wpe_legacy,
              heating_anomalous_transport="tail_walk",
-             heating_anomalous_tail_energy_eV=20.0,
-             heating_anomalous_tail_ionization="on"),
-        # Above ~221 eV the mean secondary clears that threshold too, so
-        # banking it locally would drop a cascade the walk does not follow.
-        # The bar is COMPUTED from <W_sec> and E_stop, not tabulated: this
-        # case is what proves the depth-1 truncation is measured.
-        dict(csda_params, **wpe_legacy,
-             heating_anomalous_transport="tail_walk",
-             heating_anomalous_tail_energy_eV=300.0,
+             heating_anomalous_tail_energy_eV=1500.0,
              heating_anomalous_tail_ionization="on"),
     ):
         try:
@@ -3216,8 +3214,8 @@ def main():
                  heating_anomalous_tail_ionization="on"),
             dict(cathode_flags),
         )
-    # A tail energy the IONIZING walk would refuse is NOT an error while the
-    # channel is off: the key is documented as read only under "on", so the
+    # A tail energy outside the depth-1 band is not an error with the channel
+    # off either: the key is documented as read only under "on", so the
     # energy-only walk must still accept 300 eV (this pins the contract, not
     # just the guard).
     LAPDSim1D(
@@ -3428,9 +3426,10 @@ def main():
     # campaign run.
     #
     # The scenario needs a PRODUCTION-LIKE phi_c: the block above runs against
-    # the 1000 V cap, where 0.25*phi_c = 250 eV sits above the K6 depth-1 bar
-    # and the ionizing arm (correctly) refuses. Capping the drop at 300 V puts
-    # the keyed energy where the drive actually puts it.
+    # the 1000 V cap, where 0.25*phi_c = 250 eV sits ABOVE the K6 depth-1 bar
+    # (since K7b that marches under the disclosed truncation rather than
+    # refusing, but it is still not the band the drive actually visits).
+    # Capping the drop at 300 V puts the keyed energy where the drive puts it.
     k7_params = dict(csda_params, cathode_phi_c_cap_V=300.0)
     k7_local_sim = LAPDSim1D(
         dict(k7_params, heating_anomalous_transport="local"),
@@ -3688,6 +3687,153 @@ def main():
         float(k7_ion_dep.ionization_events_tail.sum())
         > float(k7_ion_legacy_dep.ionization_events_tail.sum())
     )
+
+    # --- K7b: the BAND SPLIT. Under phi_c keying E_tail follows the live
+    # cathode drop, so one run visits all three bands; refusing at the two
+    # depth-1 bars (K6's behaviour) made no keyed ionizing arm startable from
+    # cold. Each bar now selects a TREATMENT, and the property that matters is
+    # that the split activates ONLY where the old code refused outright.
+    #
+    # (i) THE CLEAN PROPERTY. In band -- every fixed rung the bracket carries,
+    # and the keyed arm above -- both exposure fields are identically zero, so
+    # nothing that already ran can have taken a new branch.
+    for _k7b_inband in (k7_ion_dep, k7_ion_legacy_dep, k6_on_dep):
+        assert _k7b_inband.tail_power_erg_s > 0.0
+        assert _k7b_inband.tail_sub_threshold_power_erg_s == 0.0
+        assert _k7b_inband.tail_above_bar_power_erg_s == 0.0
+    # ... and the exposure ledger is present but empty on the energy-only walk
+    # and absent entirely without one, which is the presence gate for the two
+    # new diagnostics.
+    assert k7_on_dep.tail_power_erg_s > 0.0
+    assert k7_on_dep.tail_sub_threshold_power_erg_s == 0.0
+    assert k7_on_dep.tail_above_bar_power_erg_s == 0.0
+    assert k7_local_dep.tail_power_erg_s == 0.0
+    assert csda_dep.tail_power_erg_s == 0.0
+
+    # (ii) BELOW THE LOWER BAR the march REVERTS to the energy-only walk. This
+    # is exact physics -- no He inelastic channel is open below the lowest
+    # threshold -- and it is exact arithmetic too: the reverted arm is the
+    # SAME FLOATS the ionization-off arm produces for the same configuration,
+    # on every array and every scalar. Pinned under BOTH tail-end conventions,
+    # because the energy-only walk they revert onto has two different domains
+    # (windowed under reflection, the whole grid under "escape") and the
+    # reversion has to inherit whichever one it would have had.
+    k7b_sub_eV = 0.5 * _beam_deposition_mod.HE_E_STOP_EV
+    for _k7b_end in ({}, dict(wpe_legacy)):
+        k7b_sub_base = dict(
+            k7_params,
+            heating_anomalous_transport="tail_walk",
+            heating_anomalous_tail_energy_keying="fixed",
+            heating_anomalous_tail_energy_eV=k7b_sub_eV,
+        )
+        k7b_sub_base.update(_k7b_end)
+        k7b_sub_off_sim = LAPDSim1D(dict(k7b_sub_base), dict(cathode_flags))
+        k7b_sub_off_sim._circuit_I_loop = 3000.0
+        k7b_sub_off = (
+            k7b_sub_off_sim.solve_cathode_boundary().beam_deposition[0]
+        )
+        k7b_sub_sim = LAPDSim1D(
+            dict(k7b_sub_base, heating_anomalous_tail_ionization="on"),
+            dict(cathode_flags),
+        )
+        k7b_sub_sim._circuit_I_loop = 3000.0
+        k7b_sub_solve = k7b_sub_sim.solve_cathode_boundary()
+        k7b_sub = k7b_sub_solve.beam_deposition[0]
+        for _k7b_arr in (
+            "plasma_heating_erg_s", "heating_anomalous_erg_s",
+            "heating_coulomb_erg_s", "heating_secondary_erg_s",
+            "heating_terminal_erg_s", "radiated_erg_s",
+            "ionization_cost_erg_s", "ionization_events",
+            "excitation_events", "E_entry_eV",
+        ):
+            assert np.array_equal(
+                getattr(k7b_sub, _k7b_arr), getattr(k7b_sub_off, _k7b_arr)
+            ), (_k7b_arr, _k7b_end)
+        for _k7b_sc in ("end_loss_tail_low_erg_s", "end_loss_tail_high_erg_s",
+                        "end_loss_low_erg_s", "end_loss_high_erg_s",
+                        "transmitted_flux", "transmitted_energy_eV",
+                        "tail_power_erg_s"):
+            assert getattr(k7b_sub, _k7b_sc) == getattr(
+                k7b_sub_off, _k7b_sc
+            ), (_k7b_sc, _k7b_end)
+        # NOT a silent no-op: zero ionization, and the reverted power booked.
+        for _k7b_split in ("ionization_events_tail", "excitation_events_tail",
+                           "ionization_cost_tail_erg_s",
+                           "radiated_tail_erg_s"):
+            assert not np.any(getattr(k7b_sub, _k7b_split)), _k7b_split
+        assert k7b_sub.tail_power_erg_s > 0.0
+        assert (
+            k7b_sub.tail_sub_threshold_power_erg_s == k7b_sub.tail_power_erg_s
+        )
+        assert k7b_sub.tail_above_bar_power_erg_s == 0.0
+        assert k7b_sub_off.tail_sub_threshold_power_erg_s == 0.0
+    # The reverted frame reads as fully sub-band in the saved diagnostics.
+    k7b_sub_diag = k7b_sub_sim._cathode_diagnostic_snapshot()
+    assert k7b_sub_diag["beam_tail_sub_threshold_fraction"] == 1.0
+    assert k7b_sub_diag["beam_tail_sub_threshold_power_W"] == (
+        k7b_sub.tail_sub_threshold_power_erg_s * 1.0e-7
+    )
+    assert k7b_sub_diag["beam_tail_above_bar_power_W"] == 0.0
+
+    # (iii) ABOVE THE UPPER BAR the march RUNS, with the depth-1 truncation
+    # kept and its <= 2.0% cascade understatement disclosed rather than
+    # refused. 300 eV was a construction-time refusal before K7b; it is
+    # REPINNED here as an allowed above-bar case.
+    k7b_hi_sim = LAPDSim1D(
+        dict(k7_params, **wpe_legacy,
+             heating_anomalous_transport="tail_walk",
+             heating_anomalous_tail_energy_eV=300.0,
+             heating_anomalous_tail_ionization="on"),
+        dict(cathode_flags),
+    )
+    k7b_hi_sim._circuit_I_loop = 3000.0
+    k7b_hi = k7b_hi_sim.solve_cathode_boundary().beam_deposition[0]
+    assert float(k7b_hi.ionization_events_tail.sum()) > 0.0
+    assert float(k7b_hi.radiated_tail_erg_s.sum()) > 0.0
+    assert k7b_hi.tail_above_bar_power_erg_s == k7b_hi.tail_power_erg_s
+    assert k7b_hi.tail_sub_threshold_power_erg_s == 0.0
+    # The channel still closes its own energy branching above the bar -- the
+    # truncation understates the CASCADE, it does not leak energy.
+    k7b_hi_launched = float(k7_local_dep.heating_anomalous_erg_s.sum())
+    k7b_hi_delivered = (
+        float(k7b_hi.heating_anomalous_erg_s.sum())
+        + float(k7b_hi.ionization_cost_tail_erg_s.sum())
+        + float(k7b_hi.radiated_tail_erg_s.sum())
+        + float(k7b_hi.end_loss_tail_low_erg_s)
+        + float(k7b_hi.end_loss_tail_high_erg_s)
+    )
+    assert abs(k7b_hi_delivered - k7b_hi_launched) / k7b_hi_launched < 1e-12
+    k7b_hi_diag = k7b_hi_sim._cathode_diagnostic_snapshot()
+    assert k7b_hi_diag["beam_tail_above_bar_power_W"] == (
+        k7b_hi.tail_above_bar_power_erg_s * 1.0e-7
+    )
+    assert k7b_hi_diag["beam_tail_sub_threshold_fraction"] == 0.0
+    # Presence gate on the diagnostics: a beer_lambert run and a "local" run
+    # launch no tail power at all, so the fraction is undefined rather than 0.
+    for _k7b_dg in ("beam_tail_power_W", "beam_tail_sub_threshold_power_W",
+                    "beam_tail_above_bar_power_W"):
+        assert bl_diag[_k7b_dg] == 0.0, _k7b_dg
+    assert math.isnan(bl_diag["beam_tail_sub_threshold_fraction"])
+    assert wpe_on_diag["beam_tail_power_W"] > 0.0
+    assert wpe_on_diag["beam_tail_sub_threshold_power_W"] == 0.0
+    assert wpe_on_diag["beam_tail_above_bar_power_W"] == 0.0
+
+    # (iv) THE TABLE EDGE IS STILL A REFUSAL, at the module as well as at
+    # construction: past the tabulated He EII cross section the lookup clamps
+    # to its last node and the walk would attenuate on an extrapolated sigma.
+    try:
+        _deposit_beam_ray(
+            **{**_k6_ray,
+               "tail_energy_eV": 1.5 * _beam_deposition_mod.HE_EII_EPS_TOP
+               * _beam_deposition_mod.HE_I_ION_EV},
+            tail_walk_window=_k6_win,
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(
+            "expected ValueError for a tail energy past the EII table edge"
+        )
 
     # --- Beam-deposition smoothing CONSERVES the deposit over the live plasma.
     # The Gaussian redistribution kernel must place ZERO weight on the typed
