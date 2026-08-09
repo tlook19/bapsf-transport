@@ -129,7 +129,7 @@ from .physics.sources import (
 )
 from .results.compat import add_sim3_compat_aliases
 from cablp.funcs._adas import he_rate_temperature_range_eV, he_rates
-from cablp.funcs._beam_deposition import HE_EII_EPS_TOP
+from cablp.funcs._beam_deposition import HE_EII_EDGE_REL_TOL, HE_EII_EPS_TOP
 from cablp.funcs._cross import charge_ex_react
 from cablp.funcs._kernels import PROVENANCE as KERNEL_PROVENANCE
 from cablp.vars._cons import I_Ry, I_ion, ev_to_erg, kb_cgs, m_He_cgs, m_p_cgs
@@ -1349,7 +1349,11 @@ class LAPDSim1D:
         # which no construction-time check can see; the check below then binds
         # only the (inert) fixed rung and the module's own copy of it,
         # evaluated on the live value at every solve, is what actually holds
-        # the walk inside the tabulated cross section.
+        # the walk inside the tabulated cross section. That runtime copy is
+        # REACHED: f = 1.0 with phi_c at cathode_phi_c_cap_V puts E_tail on
+        # the edge to the last bit. Hence K7c -- the edge is inclusive within
+        # HE_EII_EDGE_REL_TOL (the module owns both the constant and the
+        # comparison; here it is imported, not restated).
         _tion = str(
             self._input_dict.get("heating_anomalous_tail_ionization", "off")
         )
@@ -1370,7 +1374,8 @@ class LAPDSim1D:
                     f"'off' or 'on' (got {_hat!r} and {_tion!r})"
                 )
             _E_table_top = HE_EII_EPS_TOP * float(self._I_ion)
-            if _tail_eV >= _E_table_top:
+            _edge_excess = (_tail_eV - _E_table_top) / _E_table_top
+            if _edge_excess > HE_EII_EDGE_REL_TOL:
                 raise ValueError(
                     "heating_anomalous_tail_ionization='on' marches the "
                     "walkers on the tabulated He EII cross section, which "
@@ -1378,7 +1383,9 @@ class LAPDSim1D:
                     f"heating_anomalous_tail_energy_eV={_tail_eV} eV the "
                     "lookup would clamp to its last node and the walk would "
                     "attenuate on an extrapolated cross section. This is "
-                    "refused, not approximated"
+                    "refused, not approximated (relative excess "
+                    f"{_edge_excess:.3e}, tolerated "
+                    f"{HE_EII_EDGE_REL_TOL:.1e})"
                 )
         _fc = float(self._input_dict.get("beam_clump_fraction", 0.0))
         if not 0.0 <= _fc < 1.0:
