@@ -1438,7 +1438,11 @@ def cathode_defaults():
         below it returns the ceiling solution tagged
         ``regime = "capability_limited"`` with the correspondingly large
         V_dis, and the circuit ramps the current down at ~V/L — the
-        well-posed version of the inductive kick.
+        well-posed version of the inductive kick. It bounds a REGIME of the
+        solve rather than describing a drop the device sustains, so the
+        ceiling value is reported as ``phi_c`` for as long as that regime
+        holds, and every consumer keyed to ``phi_c`` (notably the tail birth
+        energy under ``heating_anomalous_tail_energy_keying="phi_c"``) sees it.
     cathode_Rp_model:
         How the cathode solver's parallel plasma (gap) resistance ``R_p`` is
         built. ``"sample"`` (default, historical) is the solver's internal
@@ -1676,8 +1680,20 @@ def cathode_defaults():
         the power marched in each. The one refusal left is a tail energy past
         the tabulated He EII cross section, where the lookup would clamp to its
         last node and the walk would attenuate on an extrapolated cross
-        section; that is checked at construction against the table itself and
-        is unreachable at any ``phi_c`` this device produces.
+        section. That edge is checked against the table itself, and it is
+        checked in TWO places because they see different values: construction
+        tests ``heating_anomalous_tail_energy_eV``, which under ``"phi_c"``
+        keying is the inert fixed rung, and the deposition module tests the
+        LIVE ``E_tail = f*phi_c(t)`` at every cathode solve. The runtime one is
+        the binding check under keying, and it is REACHABLE: with ``f = 1.0``
+        and ``phi_c`` at ``cathode_phi_c_cap_V`` (the capability-limited
+        ceiling, a numerical bound on the sheath solve rather than a drop the
+        device sustains) ``E_tail`` lands on the edge to the last bit. The edge
+        is therefore INCLUSIVE within a relative tolerance of 1e-12
+        (``_beam_deposition.HE_EII_EDGE_REL_TOL``): within it the lookup is
+        clamped to the table's last node, which AT the edge is that node's own
+        value and not an extrapolation, and beyond it the march raises and the
+        message reports the measured relative excess.
     beam_clump_fraction:
         Fractional-coverage beam-neutral closure (default 0.0 = OFF, bit-exact).
         The fresh gas puff is a dense, SPOTTY cloud sitting on the uniform

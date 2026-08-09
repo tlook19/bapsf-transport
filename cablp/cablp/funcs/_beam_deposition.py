@@ -298,8 +298,13 @@ ionizing arm could start. The bars now select a TREATMENT per ray instead:
 - **Above the EII table edge** (``HE_EII_EPS_TOP * I_ion``, ~999.98 eV at the
   module's own ``I_ion``): still a REFUSAL, and the only one left. There
   ``He_EII_cross_lkup`` clamps to its last node, so the walk would attenuate
-  on an extrapolated cross section. Unreachable at ``phi_c <= 310 V``, and the
-  guard stays regardless.
+  on an extrapolated cross section. It IS reachable: a caller keying
+  ``E_tail`` to the cathode drop at ``f = 1.0`` puts it on the edge whenever
+  the sheath solve sits at its capability-limited ceiling. The edge itself is
+  therefore INCLUSIVE within ``HE_EII_EDGE_REL_TOL`` (K7c) -- at the edge the
+  clamped value IS the table's last node, so nothing is extrapolated and there
+  is nothing to refuse -- and a genuine excess beyond that tolerance raises,
+  reporting the measured relative excess.
 
 ``tail_power_erg_s`` carries the launched ``P_QL`` so the two exposures can be
 read as fractions. In band both are identically zero, which is the statement
@@ -389,6 +394,24 @@ HE_OPB_EBAR_EV = 15.8  # Opal-Peterson-Beaty shape parameter for He
 # which is the one thing the marched tail walk must never be allowed to do
 # (K7b). At the module's own I_ion this is ~999.98 eV.
 HE_EII_EPS_TOP = float(np.exp(_HE_LOG_EPS[-1]))
+# Fractional slack on that edge (K7c). The edge is INCLUSIVE and carries this
+# tolerance: a tail energy whose relative excess over ``HE_EII_EPS_TOP *
+# I_ion_eV`` is <= this clamps to the table's last node, which AT the edge is
+# the node's own value and therefore not an extrapolation at all; a larger
+# excess still raises. The number brackets two measurable scales:
+#   floor -- the arithmetic that produces the comparison. ``E_tail`` and the
+#     edge are each a product of floats (1 ULP = 1.14e-16 relative here), and
+#     under phi_c keying at the ceiling ``E_tail`` also carries the
+#     capability-limited sheath root-find, run at rtol = 1e-14
+#     (``_cathode_solver_idriven``). That is the largest term, so the slack
+#     must exceed ~1e-14 to admit an ``E_tail`` the caller meant to place AT
+#     the edge;
+#   ceiling -- the table's own resolution. The last two nodes are 3.7e-3 apart
+#     in eps, so 1e-12 is 2.7e-10 of one node gap, and a log-linear
+#     extrapolation over it (end slope dln(sigma)/dln(eps) = -0.764) would
+#     move sigma by 7.6e-13 relative. Nothing physical lives in that window.
+# 1e-12 sits two decades above the floor and ten below the ceiling.
+HE_EII_EDGE_REL_TOL = 1.0e-12
 
 # --- Non-local product transport (product_transport="nonlocal") -------------
 # Thermalization floor of a walking product, as a multiple of the local Te.
@@ -850,8 +873,12 @@ def deposit_beam(
     exposed power is reported in ``tail_above_bar_power_erg_s``. Only the EII
     table edge (``HE_EII_EPS_TOP * I_ion_eV``) is still a ValueError: past it
     the ionization lookup clamps to its last node and the walk would be running
-    on an extrapolated cross section. In band both exposure fields are zero and
-    nothing about the march changed.
+    on an extrapolated cross section. That edge is INCLUSIVE within
+    ``HE_EII_EDGE_REL_TOL`` (K7c) -- ``E_tail`` there evaluates the cross
+    section AT the table's last node, which is the node's own value rather than
+    an extrapolation of it -- and a relative excess larger than the tolerance
+    raises, reporting what it measured. In band both exposure fields are zero
+    and nothing about the march changed.
 
     **Sheath reflection at a walk-window face (K7).** ``tail_reflect_face`` is
     ``None`` (default, bit-exact: both faces free-escape, as WP-E and K6 ship)
@@ -1060,15 +1087,25 @@ def deposit_beam(
         # understatement. The ONE surviving refusal is the EII table edge:
         # there the lookup would clamp to its last node and the walk would be
         # marching on an extrapolated cross section.
-        if E_tail >= HE_EII_EPS_TOP * I_ion_eV:
+        # The edge itself is INCLUSIVE, within HE_EII_EDGE_REL_TOL (K7c): AT
+        # the edge the clamped cross section IS the table's endpoint value, so
+        # no extrapolation happens and there is nothing to refuse. Only a
+        # genuine excess -- more than the tolerance above the edge -- is
+        # refused, and the message reports the measured excess so a refusal
+        # can be told apart from float noise at a glance.
+        _E_table_top = HE_EII_EPS_TOP * I_ion_eV
+        _edge_excess = (E_tail - _E_table_top) / _E_table_top
+        if _edge_excess > HE_EII_EDGE_REL_TOL:
             raise ValueError(
                 "tail_ionization='on' marches the walkers on the tabulated "
                 "He EII cross section, which ends at eps = E/I_ion = "
                 f"{HE_EII_EPS_TOP:.6f} (i.e. "
-                f"{HE_EII_EPS_TOP * I_ion_eV:.2f} eV at I_ion_eV={I_ion_eV}); "
+                f"{_E_table_top:.2f} eV at I_ion_eV={I_ion_eV}); "
                 f"at tail_energy_eV={E_tail} eV the lookup would clamp to its "
                 "last node and the walk would attenuate on an extrapolated "
-                "cross section. This is refused, not approximated"
+                "cross section. This is refused, not approximated (relative "
+                f"excess {_edge_excess:.3e}, tolerated "
+                f"{HE_EII_EDGE_REL_TOL:.1e})"
             )
         if E_tail <= E_stop_eV:
             # SUB-THRESHOLD: no He inelastic channel is open, so zero

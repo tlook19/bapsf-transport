@@ -3243,6 +3243,17 @@ def main():
     # Misconfiguration is loud at CONSTRUCTION, and every refusal here is a
     # configuration in which the channel could only be a no-op or could only
     # mis-bank what it carries.
+    #
+    # The EII table edge in this solver's own units, built the way both guards
+    # build it (the module's constant times the solver's I_ion) rather than
+    # written down. This is the exact value the K7c ladder refusal reported
+    # (es1_lad_tw100ion_nx240.log): under phi_c keying at f = 1.0 with phi_c
+    # at the cathode_phi_c_cap_V ceiling, the live E_tail lands here to the
+    # last bit -- so the edge has to be inclusive or the declared f bracket
+    # loses its top rung to float noise.
+    _k7c_edge_eV = _beam_deposition_mod.HE_EII_EPS_TOP * float(csda_sim._I_ion)
+    assert float(csda_sim._I_ion) == 24.58738793623
+    assert _k7c_edge_eV == 1000.0000000000002
     for k6_bad in (
         dict(csda_params, heating_anomalous_tail_ionization="bogus"),
         # No walkers to give the channel to.
@@ -3259,6 +3270,13 @@ def main():
         dict(csda_params, **wpe_legacy,
              heating_anomalous_transport="tail_walk",
              heating_anomalous_tail_energy_eV=1500.0,
+             heating_anomalous_tail_ionization="on"),
+        # K7c: the edge is inclusive within HE_EII_EDGE_REL_TOL, and a
+        # GENUINE excess -- here 1e-9 relative, three decades past the
+        # tolerance -- is still refused at construction.
+        dict(csda_params, **wpe_legacy,
+             heating_anomalous_transport="tail_walk",
+             heating_anomalous_tail_energy_eV=_k7c_edge_eV * (1.0 + 1.0e-9),
              heating_anomalous_tail_ionization="on"),
     ):
         try:
@@ -3280,6 +3298,26 @@ def main():
             dict(csda_params, **wpe_legacy,
                  heating_anomalous_transport="tail_walk",
                  heating_anomalous_tail_energy_eV=k6_rung,
+                 heating_anomalous_tail_ionization="on"),
+            dict(cathode_flags),
+        )
+    # K7c: and the edge itself CONSTRUCTS, at the edge and a few ULPs above
+    # it. At the edge the lookup evaluates the table's last node, which is
+    # that node's own value and not an extrapolation of it, so there is
+    # nothing for the guard to refuse.
+    # (The boundary itself is not pinned either way: reconstructing an excess
+    # of exactly HE_EII_EDGE_REL_TOL is a rounding away from either side of
+    # the comparison, so the cases below sit strictly inside it.)
+    for k7c_ok in (
+        _k7c_edge_eV,
+        _k7c_edge_eV * (1.0 + 1.0e-13),
+        _k7c_edge_eV
+        * (1.0 + 0.5 * _beam_deposition_mod.HE_EII_EDGE_REL_TOL),
+    ):
+        LAPDSim1D(
+            dict(csda_params, **wpe_legacy,
+                 heating_anomalous_transport="tail_walk",
+                 heating_anomalous_tail_energy_eV=k7c_ok,
                  heating_anomalous_tail_ionization="on"),
             dict(cathode_flags),
         )
@@ -3902,6 +3940,54 @@ def main():
     else:
         raise AssertionError(
             "expected ValueError for a tail energy past the EII table edge"
+        )
+
+    # (v) BUT THE EDGE ITSELF IS NOT PAST THE EDGE (K7c). The refusal exists
+    # so that nothing marches on an EXTRAPOLATED cross section; AT the edge
+    # the lookup returns the table's last node, which is that node's own
+    # value, so there is nothing to refuse and the guard is inclusive within
+    # HE_EII_EDGE_REL_TOL. The energy below is the ladder's exact failing
+    # value (es1_lad_tw100ion_nx240.log): f = 1.0 keyed to a phi_c sitting at
+    # the capability-limited ceiling puts E_tail on the edge to the last bit,
+    # so a strict ">=" deleted the top rung of the declared f bracket.
+    _k7c_edge_ray_eV = (
+        _beam_deposition_mod.HE_EII_EPS_TOP * _pskip_ray_kwargs["I_ion_eV"]
+    )
+    assert _k7c_edge_ray_eV == 1000.0000000000002, _k7c_edge_ray_eV
+    _k7c_sigma_top = float(np.exp(_beam_deposition_mod._HE_LOG_SIGMA[-1]))
+    for _k7c_E in (
+        _k7c_edge_ray_eV,
+        _k7c_edge_ray_eV * (1.0 + 1.0e-13),
+        _k7c_edge_ray_eV
+        * (1.0 + 0.5 * _beam_deposition_mod.HE_EII_EDGE_REL_TOL),
+    ):
+        # The physics the tolerance rests on: the lookup at this energy IS the
+        # tabulated endpoint, bit for bit. Nothing is extrapolated.
+        assert _beam_deposition_mod.He_EII_cross_lkup(
+            _k7c_E / _pskip_ray_kwargs["I_ion_eV"]
+        ) == _k7c_sigma_top
+        _k7c_dep = _deposit_beam_ray(
+            **{**_k6_ray, "tail_energy_eV": _k7c_E},
+            tail_walk_window=_k6_win,
+        )
+        # It MARCHES, and it marches in the disclosed above-<W_sec> regime
+        # rather than silently.
+        assert float(_k7c_dep.ionization_events_tail.sum()) > 0.0
+        assert float(_k7c_dep.tail_above_bar_power_erg_s) > 0.0
+        assert float(_k7c_dep.tail_sub_threshold_power_erg_s) == 0.0
+    # A GENUINE excess -- 1e-9 relative, three decades past the tolerance --
+    # is still refused, and the message says what it measured.
+    try:
+        _deposit_beam_ray(
+            **{**_k6_ray,
+               "tail_energy_eV": _k7c_edge_ray_eV * (1.0 + 1.0e-9)},
+            tail_walk_window=_k6_win,
+        )
+    except ValueError as _k7c_exc:
+        assert "relative excess" in str(_k7c_exc), str(_k7c_exc)
+    else:
+        raise AssertionError(
+            "expected ValueError for a tail energy 1e-9 past the EII edge"
         )
 
     # --- Beam-deposition smoothing CONSERVES the deposit over the live plasma.
