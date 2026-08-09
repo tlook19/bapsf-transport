@@ -56,6 +56,14 @@ M_HE = 4.002602 * 1.66053907e-24
 E_CHARGE = 1.602176634e-19
 T_WALL_K = 300.0
 
+# Ray overshoot [cm]. After every segment the ray is advanced this far along
+# its own direction so that no boundary (a z-edge, the Rp surface, the vessel
+# wall) can alias into a zero-length loop. It is also the width of the on-wall
+# band in run_mc, and for the same reason: the overshoot is the ONLY way a ray
+# ends up outside its own cell's radial wall by a hair, so an excess larger
+# than this is a real escape and not a boundary artifact.
+RAY_EPS_CM = 1e-7
+
 # The two mutually exclusive rows the solver books the plasma-terminating
 # boundary under. Exactly one of them is live on any given run.
 BOUNDARY_ROWS = ("boundary_absorption", "characteristic_boundary")
@@ -457,6 +465,10 @@ def run_mc(bg, n_particles, jet, rng, r_n=(0.5, 0.5), r_e=(0.2, 0.25),
     report_times = np.asarray(report_times_s, dtype=float)
     tal_t_time = np.zeros((report_times.size, ncell, 2))
     lost = {"ion": 0.0, "pump": 0.0, "stuck": 0.0}
+    # On-wall wall-root clamps (see the guard in the step below). Reported so
+    # the clamp cannot silently become a bias: it is a roundoff-scale event
+    # and its count belongs in the run's own output.
+    n_wall_clamp = 0
 
     for name, N, w in zip(names, counts, w_each):
         pos, vel = launch(name, int(N))
@@ -491,6 +503,26 @@ def run_mc(bg, n_particles, jet, rng, r_n=(0.5, 0.5), r_e=(0.2, 0.25),
                     vxy2 > 0, vxy2, np.inf
                 )
             d_wall = np.where(vxy2 > 0, t_wall * speed, np.inf)
+            # On-wall degenerate. Only the wall handler below pulls a ray back
+            # inside the vessel, and it is skipped whenever another event won
+            # the step -- so an event that ends a segment within the ray
+            # overshoot of the wall (in the case this guard was written for, a
+            # null collision 2.30737 cm along the ray, ~9e-8 cm short of the
+            # wall) is advanced THROUGH it, leaving the ray at most RAY_EPS_CM
+            # outside its own cell's Rm. There (Rw^2 - r2) < 0 turns both roots
+            # negative and the backward root wins the minimum below. Such a
+            # ray is ON the wall: its flight length is zero and its next event
+            # is the wall itself, so clamp the root to zero and let the wall
+            # handler take it. The gate is the RADIAL excess, which the
+            # overshoot bounds -- not the size of d, which a grazing ray
+            # inflates by 1/cos -- so a ray that genuinely punched through a
+            # step face (whole cm to 1e18 cm outside) keeps its negative d and
+            # is still refused by the tripwire.
+            on_wall = (r2 > Rw**2) & ((np.sqrt(r2) - Rw) <= RAY_EPS_CM)
+            clamp = on_wall & (d_wall < 0.0)
+            if clamp.any():
+                n_wall_clamp += int(clamp.sum())
+                d_wall = np.where(clamp, 0.0, d_wall)
             # distance to the column surface r = Rp (both directions), so no
             # segment ever spans the column boundary -- otherwise a chord
             # through the column would skip collision testing (a transparent
@@ -525,10 +557,15 @@ def run_mc(bg, n_particles, jet, rng, r_n=(0.5, 0.5), r_e=(0.2, 0.25),
                     f"{bad.size} of {n_act} histories, min d={d[bad].min():.6g} "
                     f"cm (source '{name}').\n"
                     f"  first offender: cell {icell[j]}, "
-                    f"r={np.sqrt(r2[j]):.6g} cm vs Rm={Rm[icell[j]]:.6g} cm\n"
+                    f"r={np.sqrt(r2[j]):.6g} cm vs Rm={Rm[icell[j]]:.6g} cm "
+                    f"(excess {np.sqrt(r2[j]) - Rm[icell[j]]:.6g} cm, "
+                    f"overshoot {RAY_EPS_CM:g} cm)\n"
                     "  cause: the ray sits outside the vessel wall of its own "
-                    "cell, which happens when a z-crossing into a NARROWER "
-                    "section is not intercepted by the annular step face."
+                    "cell by MORE than the ray overshoot, which happens when a "
+                    "z-crossing into a NARROWER section is not intercepted by "
+                    "the annular step face. (Excesses within the overshoot are "
+                    "the on-wall degenerate and are clamped above, not "
+                    "refused.)"
                 )
             dt = d / speed
             # tally the segment (entirely inside icell)
@@ -547,7 +584,7 @@ def run_mc(bg, n_particles, jet, rng, r_n=(0.5, 0.5), r_e=(0.2, 0.25),
             # advance; overshoot 0.1 um along the ray so no boundary (z-edge
             # or the Rp surface) can alias into zero-length loops
             pos = pos + vel * (dt[:, None] * 1.0)
-            pos = pos + (vel / speed[:, None]) * 1e-7
+            pos = pos + (vel / speed[:, None]) * RAY_EPS_CM
             kill = np.zeros(n_act, dtype=bool)
             # --- collision events
             hit_c = d_coll <= np.minimum(np.minimum(d_z, d_wall), d_rp)
@@ -665,6 +702,7 @@ def run_mc(bg, n_particles, jet, rng, r_n=(0.5, 0.5), r_e=(0.2, 0.25),
         "nn_col": nn_col, "nn_ann": nn_ann, "nn_mean": nn_mean,
         "un_col": un_col, "un_ann": un_ann, "un_mean": un_mean,
         "S_ion": tal_ion, "lost": lost, "rates": dict(zip(names, rates)),
+        "n_wall_clamp": n_wall_clamp,
     }
     if report_times.size:
         out["report_times_s"] = report_times
@@ -708,6 +746,7 @@ def main(argv=None):
           f"pump {res['lost']['pump']:.3g}, "
           f"stuck {res['lost']['stuck']:.3g}, total {tot:.3g} "
           f"(closure {sum(res['lost'].values()) / tot:.3f})")
+    print(f"on-wall wall-root clamps: {res['n_wall_clamp']}")
 
     ze = bg["z_edges"]
     zc = 0.5 * (ze[:-1] + ze[1:])

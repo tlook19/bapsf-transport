@@ -68,6 +68,7 @@ from mc_neutrals import (  # noqa: E402
     EV,
     KB,
     M_HE,
+    RAY_EPS_CM,
     T_WALL_K,
     cosine_emit,
     load_background,
@@ -485,6 +486,9 @@ class PersistentMC:
         self.spawn(np.arange(self.N))
         self.n_events = 0
         self.dt_sum = 0.0
+        # On-wall wall-root clamps (see step()); counted so the clamp cannot
+        # silently become a bias.
+        self.n_wall_clamp = 0
 
     # -- persistent state footprint, bytes per particle
     @property
@@ -582,6 +586,19 @@ class PersistentMC:
                 vxy2 > 0, vxy2, np.inf
             )
         d_wall = np.where(vxy2 > 0, t_wall * speed, np.inf)
+        # On-wall degenerate, mirroring mc_neutrals.run_mc (which carries the
+        # full derivation and the tripwire this bench does not): an event that
+        # ends a segment within the ray overshoot of the wall is advanced
+        # THROUGH it whenever the wall handler below is skipped, and the ray
+        # is then at most RAY_EPS_CM outside its own cell's Rm, where both
+        # wall roots go negative. Such a ray is ON the wall -- clamp the root
+        # to zero so the wall handler takes it. Gating on the RADIAL excess
+        # keeps a genuine escape (cm and beyond) negative.
+        on_wall = (r2 > Rw**2) & ((np.sqrt(r2) - Rw) <= RAY_EPS_CM)
+        clamp = on_wall & (d_wall < 0.0)
+        if clamp.any():
+            self.n_wall_clamp += int(clamp.sum())
+            d_wall = np.where(clamp, 0.0, d_wall)
         Rp_here = Rp[icell]
         disc_p = b**2 + vxy2 * (Rp_here**2 - r2)
         sq_p = np.sqrt(np.maximum(disc_p, 0.0))
@@ -600,7 +617,7 @@ class PersistentMC:
         self.dt_last = dt
         self.r2 = r2
         pos += vel * dt[:, None]
-        pos += (vel / speed[:, None]) * 1e-7
+        pos += (vel / speed[:, None]) * RAY_EPS_CM
         dead = np.zeros(N, dtype=bool)
 
         hit_c = d_coll <= np.minimum(np.minimum(d_z, d_wall), d_rp)
