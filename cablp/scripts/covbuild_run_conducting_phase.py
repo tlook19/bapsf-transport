@@ -65,6 +65,50 @@ def build_config(nx, coverage=None, extra=None):
     return params, flags
 
 
+def _deposition_profile_split(sim, result):
+    """Print the axial split of the beam's deposited power."""
+    diag = getattr(result, "cathode_diagnostics", None) or {}
+    banks = [
+        "beam_heat_coulomb_W",
+        "beam_heat_anomalous_W",
+        "beam_heat_secondary_W",
+        "beam_heat_terminal_W",
+    ]
+    present = [b for b in banks if b in diag]
+    if not present:
+        print("deposition split: no CSDA beam-heat banks saved")
+        return
+    heat = sum(np.asarray(diag[b], dtype=float) for b in present)
+    if heat.ndim != 2:
+        print("deposition split: unexpected bank shape")
+        return
+    geom = sim.geometry
+    z = np.cumsum(np.asarray(geom.length_cm, dtype=float)) - 0.5 * np.asarray(
+        geom.length_cm, dtype=float
+    )
+    z_mid = 0.5 * (z[0] + z[-1])
+    beyond = z > z_mid
+    times = np.asarray(result.time, dtype=float)
+    total = heat.sum(axis=1)
+    live = total > 0.0
+    print(f"deposition split: mid-machine at z = {z_mid:.1f} cm")
+    if not np.any(live):
+        print("  beam deposited no power over the window")
+        return
+    frac = np.zeros_like(total)
+    frac[live] = heat[live][:, beyond].sum(axis=1) / total[live]
+    print(
+        f"  window-mean fraction beyond mid-machine: "
+        f"{float(np.mean(frac[live])):.6f}"
+    )
+    for want in (0.0, 0.25, 0.5, 0.75, 1.0):
+        i = min(int(want * (times.size - 1)), times.size - 1)
+        print(
+            f"  t={times[i] * 1e3:9.4f} ms  beyond_mid={frac[i]:.6f}  "
+            f"total_beam_heat={total[i]:.6e} W"
+        )
+
+
 def main(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("--nx", type=int, default=120)
@@ -99,6 +143,12 @@ def main(argv=None):
     )
     result = sim.get_results()
     save_result_hdf5(args.save_h5, result, params=params, flags=flags)
+
+    # Where the beam actually put its energy. Under the coverage closure's
+    # two-medium split the reservoir arm is supposed to reach past the source
+    # region, so the share deposited beyond mid-machine is the direct readout
+    # of whether it does.
+    _deposition_profile_split(sim, result)
 
     times = np.asarray(result.time, dtype=float)
     breakdown = None
