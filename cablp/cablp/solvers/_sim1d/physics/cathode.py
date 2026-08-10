@@ -1136,14 +1136,14 @@ def _csda_beam_deposition(
     ``coverage`` (clumpy-plasma closure v1) is the optional
     :class:`CoverageView1D`. Left ``None`` -- the default and every historical
     call -- not one line below changes. Supplied, the rays march through the
-    CHANNEL medium (``ne = n / f_cov``, ``nn`` the covered column's own), the
-    quasilinear beam density is formed on the channel cross-section
-    ``f_cov * A``, and the frozen-solve ``sigma_eff`` inversion and the
-    gap-ledger reconstruction read the same channel quantities as the ray --
-    so the circuit's view of the beam-plasma coupling and the ray's own
-    cannot part company under coverage. The per-cell deposition TOTALS the
-    module returns are unchanged in meaning, so their callers keep the
-    historical conversion to mean volumetric sources.
+    CHANNEL medium (``ne = n / f_cov``, ``nn`` the covered column's own) and
+    the quasilinear beam density is formed on the channel cross-section
+    ``f_cov * A``. The ``sigma_eff`` inversion and the gap ledger stay on the
+    MEAN densities -- they calibrate and audit the frozen sheath solve, which
+    runs on the mean fields -- so what the circuit inherits is the CHANNEL
+    ray's transmission expressed in the frozen solve's own arithmetic. The
+    per-cell deposition TOTALS the module returns are unchanged in meaning, so
+    their callers keep the historical conversion to mean volumetric sources.
 
     ``anode_interception`` (R4.1, audit A15): when set, the mesh solid fraction
     ``device_config.eta`` of the beam surviving the gap is intercepted at the
@@ -2448,12 +2448,12 @@ def _beam_event_profile(
     independently.
 
     Under a ``coverage`` view the collision partner is the covered column's
-    own neutral density, and ``l_b_profile`` already carries the channel
-    densities (the beam system was solved on them). The returned rate stays a
-    MEAN volumetric density: the channel-local rate is ``1 / f_cov`` larger --
-    ``n_beam`` is formed on the unchanged geometric area, so the concentration
-    would enter there -- and it acts over the fraction ``f_cov`` of the cell,
-    and the two factors cancel exactly.
+    own neutral density, and ``l_b_profile`` carries the channel densities
+    (``solve_cathode_boundary`` rebuilds it on them after the sheath solve).
+    The returned rate stays a MEAN volumetric density: the channel-local rate
+    is ``1 / f_cov`` larger -- ``n_beam`` is formed on the unchanged geometric
+    area, so the concentration would enter there -- and it acts over the
+    fraction ``f_cov`` of the cell, and the two factors cancel exactly.
     """
     launch, direction = beam_launch(geometry, end=end)
     cross = event_cross[launch]
