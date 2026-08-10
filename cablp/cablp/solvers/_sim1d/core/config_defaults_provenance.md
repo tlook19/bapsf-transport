@@ -451,6 +451,35 @@ pitch, rising with anode temperature). A temperature-dependent `R_mesh(T_anode)`
 from an anode power balance was designed and declined; only a constant value is
 implemented.
 
+**`cathode_phi_c_cap_V = 1000.0` V — ASSUMED, a numerical REGIME guard.** It is
+not a device-physics voltage and no measurement bounds it. What it bounds is the
+current-driven sheath solve: the bracket ladder doubles `psi_top` looking for a
+`psi` that carries the imposed current, and this is the ceiling at which that
+search stops and the solve returns the solution AT the cap tagged
+`regime = "capability_limited"` — the well-posed form of the inductive kick,
+which the circuit then rides down at ~V/L. Since the returned-root fix
+(2026-08-09) it also bounds the located J-root, not only the ladder's doubling
+grid points, so a root at or above the ceiling now falls through to the same
+branch; the two routes are indistinguishable in the exported result and both are
+flagged by `{source,end}_phi_c_at_cap`.
+
+*Honest bar: none, and none is available from the data.* The value is round, was
+never fitted, and the solve is deliberately insensitive to it wherever the
+ceiling is not reached — a free root below the cap is returned bit for bit
+independently of where the cap sits. It is load-bearing only in the at-cap
+regime, and there it sets the reported `phi_c` outright, so every `phi_c`-keyed
+consumer inherits it (notably `E_tail` under
+`heating_anomalous_tail_energy_keying = "phi_c"`, where `f = 1.0` puts `E_tail`
+on the He EII table's top edge to the last bit — which is why that edge is
+checked inclusively rather than clamped). A result that spends material time at
+the cap is therefore quoting a guard, not a device voltage.
+
+*Memo line:* adjudicated 2026-08-09 — accepted as-is, with the at-cap regime
+flag (`{source,end}_phi_c_at_cap`, added the same day) as the standing
+instrument for reading how much of a run rides it. REGISTERED REVISIT: if any
+arm is found riding the cap materially, the value stops being latent and must
+acquire a bracket before any claim leans on that arm.
+
 ### Emission
 
 **`C_R = 29.0` A cm^-2 K^-2 — literature nominal for LaB6**, in the effective
