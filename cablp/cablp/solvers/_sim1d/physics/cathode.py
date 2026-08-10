@@ -9,6 +9,7 @@ from scipy.optimize import brentq
 
 from cablp.funcs._beam_deposition import (
     deposit_beam,
+    deposit_beam_two_stream,
     BeamDepositionResult,
     _coulomb_stopping_coefficient,
 )
@@ -40,21 +41,27 @@ from .sources import electrode_sheath_alpha
 class CoverageView1D:
     """Channel-local view of the medium the beam propagates through.
 
-    ``f_cov`` in ``(0, 1]`` is the covered fraction of the column
-    cross-section and ``nn_channel`` the per-cell neutral density INSIDE the
-    covered channels. ``None`` in place of this record is the shipped
-    mean-field model, and every consumer below is presence-gated on it.
+    ``f_cov`` is the covered fraction of the column cross-section, PER CELL
+    (coverage v2): an array of shape ``(cells,)`` with every entry in
+    ``(0, 1]``. It was a single scalar through v1.1; the z-resolved field is
+    what lets the covered fraction differ between the source region and the
+    far end. ``nn_channel`` is the per-cell neutral density INSIDE the covered
+    patches. ``None`` in place of this whole record is the shipped mean-field
+    model, and every consumer below is presence-gated on it.
 
     ``nn_reservoir`` / ``ne_reservoir`` describe the OTHER medium, the
     ``1 - f_cov`` of the cross-section the discharge has not broken down: the
     reservoir's own neutral density, and the plasma density there, which the
     closure's premise puts at the model's "no plasma" representation (the
     density floor) because plasma lives in the covered fraction by
-    definition. Both are ``None`` at ``f_cov == 1``, where there is no
-    uncovered medium and the beam has nowhere else to go.
+    definition. Both are ``None`` only when ``f_cov == 1`` in EVERY cell,
+    where there is no uncovered medium anywhere and the beam has nowhere else
+    to go; where a profile is 1 in some cells and not others they are present
+    and carry the mean field in the fully-covered cells, which those cells'
+    zero-width reservoir arm never reads.
     """
 
-    f_cov: float
+    f_cov: np.ndarray
     nn_channel: np.ndarray
     nn_reservoir: np.ndarray | None = None
     ne_reservoir: np.ndarray | None = None
@@ -67,7 +74,8 @@ def coverage_channel_densities(state, coverage):
     With one, the plasma density is the channel-local ``n / f_cov`` -- the
     plasma occupies only the covered fraction, so its local density is the
     mean divided by that fraction -- and the neutral density is the covered
-    column's own ``nn_channel``.
+    column's own ``nn_channel``. Under v2 ``f_cov`` is per-cell, so the
+    division is elementwise and the concentration varies along the column.
 
     Both are LOCAL densities and no volume fraction is applied here. The
     deposition's outputs are per-cell TOTALS (events/s, erg/s), and the total
@@ -1123,17 +1131,26 @@ def _csda_beam_deposition(
     :class:`CoverageView1D`. Left ``None`` -- the default and every historical
     call -- not one line below changes.
 
-    Supplied, the beam is split by AREA into two media (v1.1). The cathode
-    emits over its whole face, so the fraction ``f_cov`` of the emitted flux
-    enters the covered channels and the remaining ``1 - f_cov`` enters the
-    reservoir -- the part of the cross-section the discharge has not broken
-    down. Two rays are marched per end and their per-cell totals are summed:
+    Supplied with a profile that is 1 in every cell, the ray is the shipped
+    single-medium one and ``deposit_beam`` is called exactly as it always has
+    been -- that is the exact reduction, not an approximation of it.
 
-    * CHANNEL arm: flux ``f_cov * Gamma0`` through ``ne = n / f_cov`` and the
-      covered column's ``nn``, on the channel cross-section ``f_cov * A``.
-    * RESERVOIR arm: flux ``(1 - f_cov) * Gamma0`` through the reservoir's own
-      ``nn`` and a plasma density at the model's floor, on the complementary
-      cross-section ``(1 - f_cov) * A``.
+    Supplied with any cell below 1, the beam is split by AREA into two media
+    and marched by ``deposit_beam_two_stream`` (coverage v2), which re-makes
+    the partition at EVERY cell:
+
+    * CHANNEL arm: the local share ``f_cov(z)`` of the surviving flux through
+      ``ne = n / f_cov(z)`` and the covered column's ``nn``, on the channel
+      cross-section ``f_cov(z) * A``.
+    * RESERVOIR arm: the complementary share through the reservoir's own
+      ``nn`` and a plasma density at the model's floor, on ``(1-f_cov(z)) * A``.
+
+    The two arms re-mix at each cell exit into one flux at one mean energy, so
+    per-cell deposition is the sum of both arms' deposits in that cell. This
+    REPLACES v1.1's partition-once-at-emission, and it does not reduce to it at
+    uniform ``f_cov``: see ``deposit_beam_two_stream`` for the axial-
+    decorrelation approximation the re-mix states, and MODEL.md for why that
+    difference is expected rather than a defect.
 
     Note what the split does to the quasilinear beam density: each arm carries
     its own share of the flux over its own share of the area, so ``n_b`` comes
@@ -1143,8 +1160,8 @@ def _csda_beam_deposition(
 
     The ``sigma_eff`` inversion and the gap ledger stay on the MEAN densities
     -- they calibrate and audit the frozen sheath solve, which runs on the
-    mean fields -- and the transmission they reproduce is now the
-    flux-weighted survival of BOTH arms, i.e. of the whole emitted beam.
+    mean fields -- and the transmission they reproduce is the survival of the
+    whole emitted beam, both media together.
 
     The per-cell deposition TOTALS the module returns are unchanged in
     meaning, so their callers keep the historical conversion to mean
@@ -1181,25 +1198,25 @@ def _csda_beam_deposition(
     # so the whole function is byte-for-byte the historical one.
     ray_ne, ray_nn = coverage_channel_densities(state, coverage)
     beam_area_cm2 = geometry.plasma_area_cm2
-    # The second medium. Present only when there IS an uncovered fraction:
-    # at f_cov == 1 the beam has nowhere else to go, the split degenerates to
-    # the single historical ray, and every factor below is exactly 1.0.
-    two_medium = coverage is not None and coverage.f_cov < 1.0
-    f_cov = 1.0 if coverage is None else float(coverage.f_cov)
+    # The second medium. Present only when there IS an uncovered fraction
+    # somewhere: with f_cov == 1 in every cell the beam has nowhere else to go,
+    # the split degenerates to the single historical ray, and the call below is
+    # byte-for-byte the mean-field one.
+    f_cov = None if coverage is None else np.asarray(
+        coverage.f_cov, dtype=float
+    )
+    two_medium = f_cov is not None and bool(np.any(f_cov < 1.0))
     res_ne = res_nn = None
-    res_area_cm2 = None
-    if coverage is not None:
-        beam_area_cm2 = beam_area_cm2 * f_cov
     if two_medium:
         res_ne = coverage.ne_reservoir
         res_nn = coverage.nn_reservoir
         if res_ne is None or res_nn is None:
             raise ValueError(
-                "the coverage view has f_cov < 1 but carries no reservoir "
-                "medium (ne_reservoir/nn_reservoir); the beam's uncovered "
-                f"share {1.0 - f_cov:.6g} would have nowhere to go"
+                "the coverage view has f_cov < 1 in "
+                f"{int(np.count_nonzero(f_cov < 1.0))} cell(s) but carries no "
+                "reservoir medium (ne_reservoir/nn_reservoir); the beam's "
+                "uncovered share would have nowhere to go"
             )
-        res_area_cm2 = geometry.plasma_area_cm2 * (1.0 - f_cov)
     # WP-D product transport and WP-E QL heating locality. Presence-gated:
     # only the DEPOSITION rays get the keywords, and only when they are not
     # their defaults, so the off path enters deposit_beam with the identical
@@ -1289,17 +1306,18 @@ def _csda_beam_deposition(
                 ray_ne, derived.Te, coulomb_model
             )
         )
-    # The two media have different ne, so the hoist above is the CHANNEL arm's
-    # and the reservoir arm needs its own. Built here for the same reason: it
-    # depends only on (ne, Te, model), which are shared by every reservoir ray
-    # in this call.
-    reservoir_transport_kwargs = transport_kwargs
+    # The walk closures do not reach the two-stream march: the solver refuses
+    # coverage_closure together with a non-local product or tail transport at
+    # construction time (a fused march has one post-march walk stage for two
+    # media, and walking reservoir-born products on the channel's stopping
+    # power would be a silent misattribution). Asserted here rather than
+    # assumed, because this function is reachable from the module's own tests.
     if two_medium and transport_kwargs:
-        reservoir_transport_kwargs = dict(transport_kwargs)
-        reservoir_transport_kwargs["stopping_coefficient"] = (
-            _coulomb_stopping_coefficient(
-                res_ne, derived.Te, coulomb_model
-            )
+        raise ValueError(
+            "the coverage closure's two-stream march does not carry the WP-D "
+            "product walk or the WP-E tail walk; the solver refuses that "
+            "combination at construction time and this call bypassed it "
+            f"(active closures: {sorted(transport_kwargs)})"
         )
     # Fractional-coverage beam-neutral closure (default off/uniform, bit-exact):
     # split the ray into a clump fraction (short l_b against nn*chi -> local seed)
@@ -1372,14 +1390,27 @@ def _csda_beam_deposition(
             if clumping
             else None
         )
-        # The reservoir arm marches the same ray geometry through the other
-        # medium: the reservoir's neutrals, no concentrated plasma, and its own
-        # share of the cross-section for the quasilinear beam density.
-        reservoir_kwargs = None
+        # The two-stream march's own argument list. It takes BOTH media and the
+        # coverage profile and forms the arm cross-sections itself, so
+        # ``beam_area_cm2`` here is the full column area exactly as a
+        # mean-field ray's is.
+        two_stream_kwargs = None
         if two_medium:
-            reservoir_kwargs = {**ray_kwargs, "nn": res_nn, "ne": res_ne}
+            two_stream_kwargs = dict(
+                f_cov=f_cov,
+                nn_channel=ray_nn,
+                ne_channel=ray_ne,
+                nn_reservoir=res_nn,
+                ne_reservoir=res_ne,
+                Te=derived.Te,
+                launch=launch,
+                direction=direction,
+                I_ion_eV=float(I_ion),
+                coulomb_model=coulomb_model,
+                anomalous_model=anomalous_model,
+            )
             if anomalous_model != "none":
-                reservoir_kwargs["beam_area_cm2"] = res_area_cm2
+                two_stream_kwargs["beam_area_cm2"] = beam_area_cm2
         # The gap's per-cell path length, shared by the probe below and by the
         # deposition ray's own breakout test.
         gap_dz = _clip_ray_length(
@@ -1410,28 +1441,24 @@ def _csda_beam_deposition(
                 * _ray_gap_breakout(clump_ray, gap_dz, launch, direction)
             )
         elif two_medium:
-            # Two-medium split: the emitted flux divides by AREA between the
-            # covered channels and the reservoir, each arm marches its own
-            # medium, and the per-cell totals add. Breakout is per-arm for the
-            # same reason it is under clumping -- one arm can die in the gap
-            # while the other penetrates -- so the split's gap survival is the
-            # flux-weighted mean.
-            channel_ray = deposit_beam(
-                result.phi_c, f_cov * Gamma0, dz_cm=geometry.length_cm,
-                **ray_kwargs, **interception_kwargs, **ray_transport,
-            )
-            reservoir_ray = deposit_beam(
-                result.phi_c, (1.0 - f_cov) * Gamma0,
-                dz_cm=geometry.length_cm,
-                **reservoir_kwargs, **interception_kwargs,
-                **reservoir_transport_kwargs,
+            # Two-stream march (coverage v2): ONE ray whose flux is re-split by
+            # the LOCAL coverage at every cell, marched through both media
+            # there, and re-mixed at the cell exit. The per-cell totals add, so
+            # the deposition the RHS consumes is their sum; the reservoir arm is
+            # kept apart because the neutrals it burns are the reservoir's.
+            channel_ray, reservoir_ray, flux_entry = deposit_beam_two_stream(
+                result.phi_c, Gamma0, dz_cm=geometry.length_cm,
+                **two_stream_kwargs, **interception_kwargs,
             )
             dep = _sum_beam_deposition(channel_ray, reservoir_ray)
-            ray_survival = (
-                f_cov
-                * _ray_gap_breakout(channel_ray, gap_dz, launch, direction)
-                + (1.0 - f_cov)
-                * _ray_gap_breakout(reservoir_ray, gap_dz, launch, direction)
+            # Gap survival is now genuinely FRACTIONAL: one arm can stop inside
+            # the gap while the other carries its share past it, and the re-mix
+            # means the survivor is not identifiable with either medium. The
+            # march's own record of the flux ENTERING each cell answers it
+            # exactly -- the same probe-independent bookkeeping
+            # ``_ray_gap_breakout`` reads off E_entry, one level finer.
+            ray_survival = _ray_gap_flux_survival(
+                flux_entry, Gamma0, gap_dz, launch, direction
             )
             reservoir_deposition[end] = reservoir_ray
         else:
@@ -1508,22 +1535,21 @@ def _csda_beam_deposition(
         )
         if Gamma0 > 0.0:
             if two_medium:
-                # Mirror the deposition above: same two launched fluxes, same
-                # two media, truncated at L_cath. The circuit's bypass is then
-                # the survival of the WHOLE emitted beam, not of one arm.
-                channel_launch = f_cov * Gamma0
-                reservoir_launch = (1.0 - f_cov) * Gamma0
-                transmitted = (
-                    float(deposit_beam(
-                        result.phi_c, channel_launch,
-                        dz_cm=gap_dz, **ray_kwargs,
-                    ).transmitted_flux)
-                    + float(deposit_beam(
-                        result.phi_c, reservoir_launch,
-                        dz_cm=gap_dz, **reservoir_kwargs,
-                    ).transmitted_flux)
+                # Mirror the deposition above: the SAME two-stream march, the
+                # same launched flux, same media and same re-mixing, truncated
+                # at L_cath. The circuit's bypass is then the survival of the
+                # whole emitted beam. Both arms' transmitted fluxes are summed
+                # because the march books the mixed exit stream on the channel
+                # slot by convention (see its docstring), and summing is
+                # convention-independent.
+                _probe_ch, _probe_res, _ = deposit_beam_two_stream(
+                    result.phi_c, Gamma0, dz_cm=gap_dz, **two_stream_kwargs,
                 )
-                launched = channel_launch + reservoir_launch
+                transmitted = (
+                    float(_probe_ch.transmitted_flux)
+                    + float(_probe_res.transmitted_flux)
+                )
+                launched = Gamma0
             elif clumping:
                 gap_launch = (1.0 - f_clump) * Gamma0
                 clump_launch = f_clump * Gamma0
@@ -1555,6 +1581,17 @@ def _csda_beam_deposition(
                 )
                 launched = Gamma0
             survival = transmitted / launched
+        elif two_medium:
+            # No emission this frame, under coverage: the same unit-flux
+            # measurement, run through the two-stream march so the media and
+            # the re-mixing are the deposition ray's.
+            _probe_ch, _probe_res, _ = deposit_beam_two_stream(
+                result.phi_c, 1.0, dz_cm=gap_dz, **two_stream_kwargs,
+            )
+            survival = (
+                float(_probe_ch.transmitted_flux)
+                + float(_probe_res.transmitted_flux)
+            )
         else:
             # No emission this frame: the flux-weighted ratio is 0/0. The
             # Gamma0 -> 0 limit of any flux-dependent stopping is the
@@ -1657,6 +1694,35 @@ def _ray_gap_breakout(dep, gap_dz, launch, direction):
             return 1.0 if E_entry[cell] > 0.0 else 0.0
     # The gap runs to the domain edge, so there is no cell beyond it to test;
     # the ray did not leave the far end either, so it died inside the gap.
+    return 0.0
+
+
+def _ray_gap_flux_survival(flux_entry, Gamma0, gap_dz, launch, direction):
+    """Fraction of a two-stream ray's flux that crosses the gap, in ``[0, 1]``.
+
+    The coverage v2 analogue of :func:`_ray_gap_breakout`, and probe-independent
+    in exactly the same way: it reads only the deposition march's own record of
+    the flux ENTERING each cell. A single-medium CSDA ray either crosses whole
+    or dies inside, but a two-stream ray re-splits at every cell and can lose
+    one arm inside the gap while the other carries its share past it, so the
+    answer here is genuinely fractional.
+
+    Reading the ENTERING flux (rather than what a cell deposited) is what makes
+    this exact when the gap ends mid-cell: the entering flux is sampled before
+    any of that cell's path is consumed, so truncating the last gap cell cannot
+    perturb it.
+    """
+    Gamma0 = float(Gamma0)
+    if Gamma0 <= 0.0:
+        return 0.0
+    flux_entry = np.asarray(flux_entry, dtype=float)
+    cells = gap_dz.size
+    order = range(launch, cells) if direction > 0 else range(launch, -1, -1)
+    for cell in order:
+        if gap_dz[cell] <= 0.0:
+            return min(max(float(flux_entry[cell]) / Gamma0, 0.0), 1.0)
+    # The gap runs to the domain edge, so there is no cell beyond it to test;
+    # whatever left the far end is what cleared it.
     return 0.0
 
 

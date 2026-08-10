@@ -177,8 +177,8 @@ def main(argv=None):
             result.cathode_diagnostics["coverage_fraction"], dtype=float
         )
         print(
-            f"f_cov trace: start {f_cov[0]:.6f}, end {f_cov[-1]:.6f}, "
-            f"reaches 0.5 at "
+            f"f_cov trace (column mean): start {f_cov[0]:.6f}, "
+            f"end {f_cov[-1]:.6f}, reaches 0.5 at "
             + (
                 f"{times[np.flatnonzero(f_cov >= 0.5)[0]] * 1e3:.4f} ms"
                 if np.any(f_cov >= 0.5)
@@ -192,7 +192,87 @@ def main(argv=None):
                 f"nn_deficit_max="
                 f"{result.cathode_diagnostics['coverage_nn_deficit_max'][i]:.6e}"
             )
+        _coverage_profile_read(sim, result)
     print(f"saved {args.save_h5}")
+
+
+def _coverage_profile_read(sim, result):
+    """Print f_cov(z, t) snapshots and the front-lengthening direction read.
+
+    Under v2 the coverage field is z-resolved and driven by the LOCAL beam
+    ionization, so the question the snapshots answer is whether downstream
+    cells' coverage grows LATER than near-source ones -- a front lengthening in
+    kind. Direction only; nothing here is a score.
+    """
+    diag = getattr(result, "cathode_diagnostics", None) or {}
+    profile = diag.get("coverage_fraction_profile")
+    if profile is None:
+        print("f_cov(z) profile: not saved in this result")
+        return
+    profile = np.asarray(profile, dtype=float)
+    if profile.ndim != 2:
+        print("f_cov(z) profile: unexpected shape", profile.shape)
+        return
+    times = np.asarray(result.time, dtype=float)
+    geom = sim.geometry
+    length = np.asarray(geom.length_cm, dtype=float)
+    z = np.cumsum(length) - 0.5 * length
+    live = np.flatnonzero(np.asarray(geom.plasma_active, dtype=bool))
+    print("f_cov(z, t) snapshots  [plasma-active cells only]")
+    picks = [min(int(f * (times.size - 1)), times.size - 1)
+             for f in (0.0, 0.25, 0.5, 0.75, 1.0)]
+    for i in picks:
+        row = profile[i][live]
+        # Six evenly spaced positions along the live column, so the axial
+        # shape is readable at a glance without dumping nx numbers per frame.
+        idx = np.linspace(0, row.size - 1, 6).round().astype(int)
+        cells = "  ".join(
+            f"z={z[live][j]:6.0f}:{row[j]:.6f}" for j in idx
+        )
+        print(f"  t={times[i] * 1e3:9.4f} ms  {cells}")
+    # The front read. The threshold is a quarter of the run's OWN largest
+    # relative growth, so it is meaningful whatever the window's absolute
+    # growth turns out to be (a short window grows f_cov by a fraction of a
+    # percent, and a fixed 10% bar would simply never be crossed). A monotone
+    # increase of the crossing time with z is coverage growth arriving later
+    # downstream -- a front lengthening in kind.
+    f0 = profile[0][live]
+    rel = profile[:, live] / f0 - 1.0
+    peak = float(np.max(rel))
+    if peak <= 0.0:
+        print("f_cov(z) did not grow over this window; no front read")
+        return
+    threshold = 0.25 * peak
+    print(
+        f"relative growth f_cov(z, t_end)/f_cov(z, 0) - 1: "
+        f"max {peak:.6e}, min {float(np.min(rel[-1])):.6e}"
+    )
+    idx = np.linspace(0, f0.size - 1, 6).round().astype(int)
+    print("  final relative growth by position:")
+    for j in idx:
+        print(f"    z={z[live][j]:6.0f} cm  {rel[-1][j]:.6e}")
+    print(f"first time f_cov(z) grows by {threshold:.6e} (0.25 x the peak):")
+    onset = []
+    for j in range(f0.size):
+        hit = np.flatnonzero(rel[:, j] >= threshold)
+        onset.append(times[hit[0]] if hit.size else np.nan)
+    onset = np.asarray(onset, dtype=float)
+    for j in idx:
+        when = "never" if not np.isfinite(onset[j]) else f"{onset[j] * 1e3:.4f} ms"
+        print(f"    z={z[live][j]:6.0f} cm  onset={when}")
+    finite = np.isfinite(onset)
+    if finite.sum() >= 2:
+        slope = np.polyfit(z[live][finite], onset[finite] * 1e3, 1)[0]
+        print(
+            f"  onset-vs-z slope: {slope:+.6e} ms/cm "
+            f"({'LATER downstream' if slope > 0 else 'EARLIER downstream'}; "
+            f"{int(finite.sum())}/{f0.size} cells crossed)"
+        )
+    else:
+        print(
+            f"  onset-vs-z slope: only {int(finite.sum())}/{f0.size} cells "
+            "crossed; no slope"
+        )
 
 
 # Step-gated only: interval_fraction above 1 can never come due, so the

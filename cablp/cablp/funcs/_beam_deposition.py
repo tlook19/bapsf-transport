@@ -1847,3 +1847,367 @@ def deposit_beam(
         tail_sub_threshold_power_erg_s=tail_sub_threshold_power,
         tail_above_bar_power_erg_s=tail_above_bar_power,
     )
+
+
+def _empty_deposition(cells, transmitted_flux=0.0, transmitted_energy_eV=0.0):
+    """Return an all-zero :class:`BeamDepositionResult` of width ``cells``."""
+    return BeamDepositionResult(
+        ionization_events=np.zeros(cells),
+        excitation_events=np.zeros(cells),
+        plasma_heating_erg_s=np.zeros(cells),
+        radiated_erg_s=np.zeros(cells),
+        ionization_cost_erg_s=np.zeros(cells),
+        transmitted_flux=float(transmitted_flux),
+        transmitted_energy_eV=float(transmitted_energy_eV),
+        anode_intercepted_erg_s=0.0,
+        E_entry_eV=np.zeros(cells),
+        heating_coulomb_erg_s=np.zeros(cells),
+        heating_anomalous_erg_s=np.zeros(cells),
+        heating_secondary_erg_s=np.zeros(cells),
+        heating_terminal_erg_s=np.zeros(cells),
+        ionization_events_tail=np.zeros(cells),
+        excitation_events_tail=np.zeros(cells),
+        ionization_cost_tail_erg_s=np.zeros(cells),
+        radiated_tail_erg_s=np.zeros(cells),
+    )
+
+
+def deposit_beam_two_stream(
+    E0_eV: float,
+    Gamma0_per_s: float,
+    *,
+    f_cov: np.ndarray,
+    nn_channel: np.ndarray,
+    ne_channel: np.ndarray,
+    nn_reservoir: np.ndarray,
+    ne_reservoir: np.ndarray,
+    Te: np.ndarray,
+    launch: int,
+    direction: int,
+    dz_cm: np.ndarray,
+    I_ion_eV: float = HE_I_ION_EV,
+    E_stop_eV: float = HE_E_STOP_EV,
+    coulomb_model: str = "fast_electron",
+    anomalous_model: str = "none",
+    beam_area_cm2: np.ndarray | float | None = None,
+    max_energy_fraction_per_substep: float = 0.02,
+    anode_cross_index: int | None = None,
+    anode_eta: float = 0.0,
+):
+    """March one beam ray through a Z-RESOLVED two-medium column (coverage v2).
+
+    Returns ``(channel, reservoir, flux_entry_per_s)``: one
+    :class:`BeamDepositionResult` per medium -- their per-cell banks ADD to the
+    ray's total, which is what the caller consumes -- and the per-cell total
+    primary flux ENTERING each cell [1/s] (zero for cells the ray never
+    reaches), which is the ray's own probe-independent record of where its flux
+    was lost.
+
+    **What this is.** ``deposit_beam`` marches ONE stream through ONE medium.
+    The coverage closure's v1.1 split ran it twice, partitioning the emitted
+    flux once at the cathode face and letting each arm march its own medium to
+    the end of the column. That is exact only while the covered fraction is
+    uniform in z. With ``f_cov = f_cov(z)`` the two media exchange
+    cross-sectional territory as the ray advances, so the partition has to be
+    re-made at every cell:
+
+    * enter cell ``k`` with a total surviving primary flux ``Gamma`` at mean
+      energy ``E``;
+    * re-split by the LOCAL coverage -- ``f_cov[k]*Gamma`` into the channel
+      medium (``ne_channel``, ``nn_channel``) and ``(1-f_cov[k])*Gamma`` into
+      the reservoir medium (``ne_reservoir``, ``nn_reservoir``);
+    * march each arm across that cell's path length with its own substepping,
+      banking into that arm's own per-cell arrays;
+    * re-mix at cell exit: ``Gamma' = gamma_c' + gamma_r'`` and
+      ``E' = (gamma_c'*E_c' + gamma_r'*E_r')/Gamma'``.
+
+    **The stated approximation.** Re-mixing at every cell is the statement that
+    the breakdown patches DECORRELATE AXIALLY ON THE CELL SCALE: an electron
+    that crossed cell ``k`` inside a patch has no memory of that when it enters
+    cell ``k+1``, so the population is re-randomised over the local
+    cross-section there. The re-mix is a ONE-GROUP closure on that population --
+    it carries the flux-weighted mean energy forward rather than two separate
+    energies -- and it conserves both flux and power identically at every
+    re-partition boundary (``Gamma'*E'`` is by construction
+    ``gamma_c'*E_c' + gamma_r'*E_r'``), so nothing is created or lost by the
+    re-partition itself. What it discards is the SPREAD of the primary energy
+    distribution, which the CSDA model does not carry in the first place.
+
+    **Uniform ``f_cov`` does NOT reproduce v1.1.** Re-mixing at every cell is a
+    different model from partitioning once at emission, even when the profile
+    is flat: v1.1's channel arm keeps whatever energy the channel medium left
+    it, while here both arms are pulled back to the common mean at every cell
+    face. Only ``f_cov == 1`` everywhere reduces exactly -- and then to the
+    SHIPPED single-medium model, which the caller obtains by calling
+    ``deposit_beam`` directly rather than by entering this function.
+
+    **The quasilinear beam density is unchanged by the split.** Each arm
+    carries ``f`` (or ``1-f``) of the flux over ``f`` (or ``1-f``) of the area,
+    so ``n_b = Gamma/(A*v)`` in both and equal to the mean-field value.
+    ``beam_area_cm2`` is therefore the FULL column area, exactly as it is for a
+    mean-field ray; the arm areas are formed here.
+
+    **Scope.** The WP-D product walk and the WP-E QL tail walk are NOT
+    accepted. Those closures withhold banks during the march and walk them
+    afterwards on a single medium's stopping coefficient, and a fused march has
+    one post-march walk stage for two media; giving reservoir-born products the
+    channel's stopping power (its ``n_e`` is larger by ``1/f``) would be a
+    silent misattribution. The solver refuses the combination at construction
+    time instead. ``product_transport``/``anomalous_transport`` are absent from
+    this signature rather than defaulted, so the refusal cannot be bypassed by
+    passing them.
+    """
+    if anomalous_model not in ("none", "quasilinear"):
+        raise ValueError(
+            f"unknown anomalous_model {anomalous_model!r}; "
+            "expected 'none' or 'quasilinear'"
+        )
+    if anode_eta != 0.0 and not (0.0 <= anode_eta < 1.0):
+        raise ValueError(f"anode_eta must be in [0, 1) (got {anode_eta})")
+    if direction not in (-1, 1):
+        raise ValueError(f"direction must be +1 or -1 (got {direction})")
+    dz_cm = np.asarray(dz_cm, dtype=float)
+    cells = dz_cm.size
+    f_cov = np.asarray(f_cov, dtype=float)
+    media = tuple(
+        np.asarray(a, dtype=float)
+        for a in (nn_channel, ne_channel, nn_reservoir, ne_reservoir, Te)
+    )
+    if f_cov.shape != (cells,) or any(a.shape != (cells,) for a in media):
+        raise ValueError(
+            "f_cov, nn_channel, ne_channel, nn_reservoir, ne_reservoir, Te "
+            f"and dz_cm must share one shape (cells,) = {(cells,)}"
+        )
+    if not np.all(np.isfinite(f_cov)) or np.any(f_cov <= 0.0) or np.any(
+        f_cov > 1.0
+    ):
+        raise ValueError(
+            "f_cov must be finite and in (0, 1] per cell (got min "
+            f"{float(np.min(f_cov)):.6g}, max {float(np.max(f_cov)):.6g})"
+        )
+    nn_ch, ne_ch, nn_res, ne_res, Te = media
+    if anode_cross_index is not None:
+        anode_cross_index = int(anode_cross_index)
+        if not 0 <= anode_cross_index < cells:
+            raise ValueError(
+                "anode_cross_index must index a cell in [0, cells) "
+                f"(got {anode_cross_index}, cells={cells})"
+            )
+    area = None
+    if anomalous_model == "quasilinear":
+        if beam_area_cm2 is None:
+            raise ValueError("anomalous_model='quasilinear' needs beam_area_cm2")
+        area = np.broadcast_to(
+            np.asarray(beam_area_cm2, dtype=float), (cells,)
+        )
+    frac = float(max_energy_fraction_per_substep)
+    if not 0.0 < frac < 1.0:
+        raise ValueError(
+            "max_energy_fraction_per_substep must be in (0, 1), got "
+            f"{max_energy_fraction_per_substep}"
+        )
+
+    # Per-arm banks. Index 0 is the CHANNEL arm, 1 the RESERVOIR arm; they are
+    # never summed here, so the caller keeps the reservoir arm's ionization
+    # separable for the closure's deficit equation.
+    banks = tuple(
+        {
+            name: np.zeros(cells)
+            for name in (
+                "ionization_events",
+                "excitation_events",
+                "heating",
+                "radiated",
+                "ionization_cost",
+                "heat_coulomb",
+                "heat_anomalous",
+                "heat_secondary",
+                "heat_terminal",
+                "E_entry",
+            )
+        }
+        for _ in range(2)
+    )
+    flux_entry = np.zeros(cells)
+    anode_intercepted = [0.0, 0.0]
+
+    E = float(E0_eV)
+    gamma_total = float(Gamma0_per_s)
+    if E <= E_stop_eV:
+        # Sub-threshold source: nothing inelastic can happen, so the ray passes
+        # through untouched and the whole flux is transmitted. Mirrors
+        # deposit_beam's own early return; the coverage wiring never launches
+        # such a ray (phi_c > I_ion > E_stop).
+        chan = _empty_deposition(cells, gamma_total, E)
+        return chan, _empty_deposition(cells), flux_entry
+
+    order = range(launch, cells) if direction > 0 else range(launch, -1, -1)
+    intercept_active = anode_cross_index is not None and anode_eta > 0.0
+    absorbed = False
+    for cell in order:
+        # Anode-mesh interception (A15). The mesh is a GEOMETRIC obstruction
+        # across the whole cross-section, so it removes the same solid fraction
+        # from both media; applying it to the mixed flux before the re-split is
+        # therefore equivalent to applying it per arm, and books the
+        # intercepted energy on the arm shares the cell is about to use.
+        f = float(f_cov[cell])
+        # Recorded BEFORE the mesh takes its share: ``flux_entry`` is what
+        # ARRIVED at this cell, the flux counterpart of ``E_entry`` (which the
+        # interception cannot move, since it removes primaries rather than
+        # slowing them). A caller measuring where the ray lost flux to the
+        # PLASMA -- the gap-survival ledger -- must not see a solid obstruction
+        # counted as stopping.
+        flux_entry[cell] = gamma_total
+        if intercept_active and cell == anode_cross_index:
+            lost = anode_eta * gamma_total * E * _ERG_PER_EV
+            anode_intercepted[0] += f * lost
+            anode_intercepted[1] += (1.0 - f) * lost
+            gamma_total *= 1.0 - anode_eta
+            intercept_active = False
+        # The local re-split, by AREA. At f == 1 the reservoir arm has no
+        # cross-section at all and is skipped entirely, so a fully-covered cell
+        # costs exactly what a single-medium cell costs.
+        arms = [(0, f, float(nn_ch[cell]), float(ne_ch[cell]))]
+        if f < 1.0:
+            arms.append(
+                (1, 1.0 - f, float(nn_res[cell]), float(ne_res[cell]))
+            )
+        Te_c = float(Te[cell])
+        dz_cell = float(dz_cm[cell])
+        # n_b is formed on the TOTAL flux over the FULL area: each arm carries
+        # its share of the flux over the matching share of the area, so the two
+        # factors cancel and both arms see the mean-field beam density.
+        area_c = 0.0 if area is None else float(area[cell])
+        surviving_weight = 0.0
+        surviving_energy_weight = 0.0
+        for arm, weight, nn_c, ne_c in arms:
+            bank = banks[arm]
+            gamma = weight * gamma_total
+            bank["E_entry"][cell] = E
+            E_arm = E
+            remaining = dz_cell
+            arm_absorbed = False
+            acc_ionization_events = 0.0
+            acc_excitation_events = 0.0
+            acc_heating = 0.0
+            acc_radiated = 0.0
+            acc_ionization_cost = 0.0
+            acc_heat_coulomb = 0.0
+            acc_heat_anomalous = 0.0
+            acc_heat_secondary = 0.0
+            acc_heat_terminal = 0.0
+            while remaining > 0.0:
+                sigma_i = (
+                    He_EII_cross_lkup(E_arm / I_ion_eV)
+                    if E_arm > I_ion_eV
+                    else 0.0
+                )
+                sigma_x, E_rad = He_beam_excitation_channel_lkup(E_arm)
+                W_sec = he_mean_secondary_energy_eV(E_arm, I_ion_eV=I_ion_eV)
+                L_pot = nn_c * sigma_i * I_ion_eV
+                L_sec = nn_c * sigma_i * W_sec
+                L_exc = nn_c * sigma_x * E_rad
+                L_coul = coulomb_stopping_eV_per_cm(
+                    E_arm, ne_c, Te_c, model=coulomb_model
+                )
+                L_anom = 0.0
+                if anomalous_model == "quasilinear":
+                    n_b = gamma_total / (area_c * beam_speed_cm_s(E_arm))
+                    l_ql = quasilinear_relaxation_length_cm(E_arm, ne_c, n_b)
+                    if math.isfinite(l_ql) and l_ql > 0.0:
+                        L_anom = E_arm / l_ql
+                L_tot = L_pot + L_sec + L_exc + L_coul + L_anom
+                if L_tot <= 0.0:
+                    break  # vacuum cell: free streaming
+                dz_sub = min(remaining, frac * E_arm / L_tot)
+                if E_arm - L_tot * dz_sub <= E_stop_eV:
+                    dz_sub = (E_arm - E_stop_eV) / L_tot
+                if dz_sub <= 0.0:
+                    acc_heating += gamma * E_arm * _ERG_PER_EV
+                    acc_heat_terminal += gamma * E_arm * _ERG_PER_EV
+                    E_arm = 0.0
+                    arm_absorbed = True
+                    break
+                d_pot = L_pot * dz_sub
+                d_sec = L_sec * dz_sub
+                d_exc = L_exc * dz_sub
+                d_coul = L_coul * dz_sub
+                d_anom = L_anom * dz_sub
+                acc_ionization_cost += gamma * d_pot * _ERG_PER_EV
+                acc_heating += gamma * (d_sec + d_coul + d_anom) * _ERG_PER_EV
+                acc_heat_secondary += gamma * d_sec * _ERG_PER_EV
+                acc_heat_coulomb += gamma * d_coul * _ERG_PER_EV
+                acc_heat_anomalous += gamma * d_anom * _ERG_PER_EV
+                acc_radiated += gamma * d_exc * _ERG_PER_EV
+                acc_ionization_events += gamma * nn_c * sigma_i * dz_sub
+                acc_excitation_events += gamma * nn_c * sigma_x * dz_sub
+                E_arm -= d_pot + d_sec + d_exc + d_coul + d_anom
+                remaining -= dz_sub
+                if E_arm <= E_stop_eV:
+                    acc_heating += gamma * E_arm * _ERG_PER_EV
+                    acc_heat_terminal += gamma * E_arm * _ERG_PER_EV
+                    E_arm = 0.0
+                    arm_absorbed = True
+                    break
+            bank["ionization_events"][cell] += acc_ionization_events
+            bank["excitation_events"][cell] += acc_excitation_events
+            bank["heating"][cell] += acc_heating
+            bank["radiated"][cell] += acc_radiated
+            bank["ionization_cost"][cell] += acc_ionization_cost
+            bank["heat_coulomb"][cell] += acc_heat_coulomb
+            bank["heat_anomalous"][cell] += acc_heat_anomalous
+            bank["heat_secondary"][cell] += acc_heat_secondary
+            bank["heat_terminal"][cell] += acc_heat_terminal
+            if not arm_absorbed:
+                surviving_weight += weight
+                surviving_energy_weight += weight * E_arm
+        # --- Re-mix -----------------------------------------------------
+        # Flux and power both carry across: the surviving total is the entering
+        # total times the surviving AREA share, and the common energy is the
+        # area-weighted mean over the surviving arms. Weighting by area rather
+        # than by flux is the same weighting -- each arm's flux is its area
+        # share times the entering total -- and it stays well defined on a
+        # zero-flux ray, which is a legitimate energy-only trajectory (the
+        # flux-independent probe). An arm that stopped inside this cell
+        # contributes to neither sum and has already banked its residual as
+        # terminal heating there.
+        if surviving_weight > 0.0:
+            gamma_total = gamma_total * surviving_weight
+            E = surviving_energy_weight / surviving_weight
+        else:
+            gamma_total = 0.0
+            E = 0.0
+            absorbed = True
+            break
+
+    results = []
+    for arm, bank in enumerate(banks):
+        # The transmitted primary is the mixed stream leaving the far end; it
+        # is booked to the CHANNEL slot rather than split, because after the
+        # last re-mix there is one population and no medium owns it. The
+        # reservoir slot's transmitted flux is 0 by that convention, which is
+        # why the caller must read the SUM (or ``flux_entry``) when it wants
+        # the ray's survival.
+        transmitted = 0.0 if (absorbed or arm == 1) else gamma_total
+        results.append(
+            BeamDepositionResult(
+                ionization_events=bank["ionization_events"],
+                excitation_events=bank["excitation_events"],
+                plasma_heating_erg_s=bank["heating"],
+                radiated_erg_s=bank["radiated"],
+                ionization_cost_erg_s=bank["ionization_cost"],
+                transmitted_flux=transmitted,
+                transmitted_energy_eV=0.0 if transmitted <= 0.0 else E,
+                anode_intercepted_erg_s=anode_intercepted[arm],
+                E_entry_eV=bank["E_entry"],
+                heating_coulomb_erg_s=bank["heat_coulomb"],
+                heating_anomalous_erg_s=bank["heat_anomalous"],
+                heating_secondary_erg_s=bank["heat_secondary"],
+                heating_terminal_erg_s=bank["heat_terminal"],
+                ionization_events_tail=np.zeros(cells),
+                excitation_events_tail=np.zeros(cells),
+                ionization_cost_tail_erg_s=np.zeros(cells),
+                radiated_tail_erg_s=np.zeros(cells),
+            )
+        )
+    return results[0], results[1], flux_entry
