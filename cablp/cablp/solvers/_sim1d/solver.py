@@ -185,6 +185,7 @@ class StepAttempt1D:
     ion_booking: np.ndarray | None = None
     coverage_burn: np.ndarray | None = None
     coverage_reservoir_burn: np.ndarray | None = None
+    coverage_w: np.ndarray | None = None
 
 
 class _RawStageError(ValueError):
@@ -1430,11 +1431,11 @@ class LAPDSim1D:
             assert_finite_state(self._state, self._derived)
 
     def _validate_coverage_config(self):
-        """Validate and arm the clumpy-plasma coverage closure (v1).
+        """Validate and arm the clumpy-plasma coverage closure (v2).
 
         Every failure here is a construction-time ``ValueError``: an
         incomplete or unrepresentable coverage configuration must never reach
-        the first cathode solve. With the flag off the three coverage keys
+        the first cathode solve. With the flag off the four coverage keys
         must all sit at their defaults, so a run that configures the closure
         and forgets the flag is loud rather than silently mean-field.
         """
@@ -1442,16 +1443,27 @@ class LAPDSim1D:
         r = self._input_dict.get("coverage_growth_rate_per_s", 0.0)
         tau = self._input_dict.get("coverage_backfill_time_s", 0.0)
         f0 = self._input_dict.get("coverage_initial_fraction", None)
+        profile = self._input_dict.get("coverage_initial_profile", None)
         if not enabled:
             defaults = coverage_closure_defaults()
+
+            def _is_default(value, default):
+                # coverage_initial_profile is sequence-valued, and ``!=`` on a
+                # sequence is elementwise, so the comparison is reduced to one
+                # bool here before it is used as a truth value.
+                if value is None or default is None:
+                    return value is None and default is None
+                return bool(np.array_equal(value, default))
+
             configured = [
                 name
                 for name, value in (
                     ("coverage_growth_rate_per_s", r),
                     ("coverage_backfill_time_s", tau),
                     ("coverage_initial_fraction", f0),
+                    ("coverage_initial_profile", profile),
                 )
-                if value != defaults[name]
+                if not _is_default(value, defaults[name])
             ]
             if configured:
                 raise ValueError(
@@ -1463,33 +1475,59 @@ class LAPDSim1D:
             self._coverage = None
             self._coverage_r = 0.0
             self._coverage_tau_s = 0.0
-            self._coverage_f0 = None
+            self._coverage_f = None
             self._coverage_deficit = None
             self._coverage_burn_accum = None
             self._coverage_burn_weight = 0.0
+            self._coverage_w_accum = None
             self._coverage_reservoir_debit = None
             self._coverage_reservoir_burn_accum = None
             return
-        if f0 is None:
+        cells = self._geometry.cells
+        if (f0 is None) == (profile is None):
             raise ValueError(
-                "the coverage_closure flag requires "
-                "coverage_initial_fraction (the covered fraction of the "
-                "column cross-section at the plasma-phase time origin, in "
-                "(0, 1]); it has no default because there is no neutral "
-                "value for it -- 1.0 is the fully-covered mean-field limit "
-                "and would make the closure a silent no-op"
+                "the coverage_closure flag requires EXACTLY ONE initial "
+                "condition: coverage_initial_fraction (one uniform covered "
+                "fraction in (0, 1]) or coverage_initial_profile (a per-cell "
+                f"f_cov0 of length nx={cells}). "
+                + (
+                    "Both were given; they are two spellings of the same "
+                    "initial condition and neither modifies the other, so "
+                    "there is no composition rule to apply -- drop one."
+                    if f0 is not None
+                    else "Neither was given; there is no neutral default -- "
+                    "1.0 is the fully-covered mean-field limit and would "
+                    "make the closure a silent no-op."
+                )
             )
-        f0 = float(f0)
-        if not (math.isfinite(f0) and 0.0 < f0 <= 1.0):
-            raise ValueError(
-                "coverage_initial_fraction must be finite and in (0, 1] "
-                f"(got {f0!r})"
-            )
+        if profile is not None:
+            f_init = np.asarray(profile, dtype=float).reshape(-1)
+            if f_init.size != cells:
+                raise ValueError(
+                    "coverage_initial_profile must have one entry per grid "
+                    f"cell (nx={cells}); got {f_init.size}"
+                )
+            if not np.all(np.isfinite(f_init)) or np.any(
+                f_init <= 0.0
+            ) or np.any(f_init > 1.0):
+                raise ValueError(
+                    "every coverage_initial_profile entry must be finite and "
+                    f"in (0, 1] (got min {float(np.min(f_init)):.6g}, max "
+                    f"{float(np.max(f_init)):.6g})"
+                )
+        else:
+            f0 = float(f0)
+            if not (math.isfinite(f0) and 0.0 < f0 <= 1.0):
+                raise ValueError(
+                    "coverage_initial_fraction must be finite and in (0, 1] "
+                    f"(got {f0!r})"
+                )
+            f_init = np.full(cells, f0, dtype=float)
         r = float(r)
         if not (math.isfinite(r) and r >= 0.0):
             raise ValueError(
-                "coverage_growth_rate_per_s (the logistic rate of "
-                "df_cov/dt = r*f_cov*(1-f_cov)) must be finite and >= 0 "
+                "coverage_growth_rate_per_s (the column-mean logistic rate of "
+                "df_cov/dt = r0*w*f_cov*(1-f_cov)) must be finite and >= 0 "
                 f"(got {r!r})"
             )
         tau = float(tau)
@@ -1527,20 +1565,57 @@ class LAPDSim1D:
                 "neutral model the column would never deplete and the "
                 "backfill would be a silent no-op"
             )
+        walks = [
+            f"{key}={value!r}"
+            for key, value, off in (
+                (
+                    "beam_product_transport",
+                    str(self._input_dict.get("beam_product_transport", "local")),
+                    "local",
+                ),
+                (
+                    "heating_anomalous_transport",
+                    str(
+                        self._input_dict.get(
+                            "heating_anomalous_transport", "local"
+                        )
+                    ),
+                    "local",
+                ),
+            )
+            if value != off
+        ]
+        if walks:
+            raise ValueError(
+                f"coverage_closure is incompatible with {sorted(walks)}: the "
+                "closure marches ONE fused two-stream ray whose flux re-splits "
+                "between the covered and reservoir media at every cell, and "
+                "those closures withhold their banks during the march and walk "
+                "them afterwards on a single medium's stopping coefficient. "
+                "There is one post-march walk stage and two media, and the "
+                "reservoir's n_e is smaller than the channel's by f_cov, so "
+                "walking reservoir-born products on the channel's stopping "
+                "power would silently misattribute where they thermalize. "
+                "Disable one"
+            )
         if compiled_kernels_requested():
             raise ValueError(
                 "coverage_closure refuses the compiled kernels "
                 f"({_KERNEL_ENV_VAR}=1): the beam deposition it concentrates "
-                "has a compiled transcription that v1 deliberately does not "
-                "touch, and running one arm of the closure on transcribed "
-                "arithmetic that has never been bit-compared under coverage "
-                "would risk a silent pure/compiled divergence. Unset "
+                "has a compiled transcription that the closure deliberately "
+                "does not touch, and running one arm of the closure on "
+                "transcribed arithmetic that has never been bit-compared under "
+                "coverage would risk a silent pure/compiled divergence. Unset "
                 f"{_KERNEL_ENV_VAR} for coverage runs; the refusal binds only "
                 "while the flag is ON"
             )
         self._coverage_r = r
         self._coverage_tau_s = tau
-        self._coverage_f0 = f0
+        # The coverage FIELD itself [1], per cell, in (0, 1]. v2 co-integrates
+        # it (see _advance_coverage_fraction): its growth law is driven by the
+        # beam ionization the coverage itself shapes, so there is no closed
+        # form to evaluate and the field is carried as accepted-step state.
+        self._coverage_f = f_init
         # The covered column's neutral DEFICIT relative to the cell mean
         # [cm^-3], per cell. The mean field nn is untouched by the closure and
         # keeps every particle, so this auxiliary is a pure re-partition and
@@ -1549,6 +1624,10 @@ class LAPDSim1D:
         self._coverage_deficit = np.zeros(self._geometry.cells, dtype=float)
         self._coverage_burn_accum = None
         self._coverage_burn_weight = 0.0
+        # The stage-accumulated growth driver for the CURRENT attempt; armed by
+        # _attempt_step and dropped with the attempt, exactly like the burn
+        # tally above, so a rejected step cannot advance the field.
+        self._coverage_w_accum = None
         # The reservoir arm's neutral debit published by the beam terms of the
         # CURRENT RHS evaluation; reset by rhs_terms on every call so it can
         # never be read from a stale solve.
@@ -1563,6 +1642,20 @@ class LAPDSim1D:
     #: cross-section (the gas puff, the pump, neutral transport and the
     #: zone/kinetic exchanges) and terms that transfer no particles (the
     #: ion-neutral collision operators) are deliberately absent.
+    #:
+    #: Two of the ABSENT terms do carry a neutral row that a plasma density
+    #: sets, and are named here so their absence reads as a decision rather
+    #: than an oversight:
+    #:
+    #: * ``characteristic_boundary`` -- the plasma leaving through the end
+    #:   sheath returns as neutrals from the WALL, re-emitted diffusely over
+    #:   the whole end face. Those neutrals are not channel-born and do not
+    #:   land preferentially inside the patches the plasma left through, so
+    #:   crediting them to the covered column would enrich it on a surface
+    #:   process that has no azimuthal structure.
+    #: * ``anode_collection`` -- the same statement at the anode mesh: ions
+    #:   collected on a solid surface come back as diffuse surface re-emission
+    #:   across the cross-section, not into the channel they arrived in.
     COVERAGE_BURN_TERMS = (
         "ionization_birth",
         "beam_ionization_birth",
@@ -1571,48 +1664,57 @@ class LAPDSim1D:
         "gas_puff_local_ionization",
     )
 
-    def coverage_fraction(self, time=None):
-        """Return the scalar covered fraction ``f_cov`` at ``time`` [s].
+    def coverage_fraction_profile(self):
+        """Return the per-cell covered fraction ``f_cov(z)``, in ``(0, 1]``.
 
-        ``1.0`` whenever the closure is off, so a caller needs no branch.
+        All ones whenever the closure is off, so a caller needs no branch.
 
-        The law is ``df_cov/dt = r*f_cov*(1-f_cov)`` from ``f_cov0`` at the
-        plasma-phase time origin. It is autonomous and takes no feedback in
-        v1, so the solver evaluates its CLOSED FORM here rather than
-        co-integrating it: that is exact (no scheme error to compose with the
-        state's), it makes ``f_cov`` a pure function of time and therefore
-        stage-time consistent through the SSPRK2 stage clock exactly as the
-        gas-puff waveform is, and it is reproducible across step retries and
-        Picard re-runs without any snapshot. A v2 that gives the coverage a
-        decay or drop-out channel, or any feedback from the state, loses that
-        property and must move to genuine co-integration.
+        This is accepted-step STATE, not a function of time: v2's growth law
+        ``df_cov(z)/dt = r0*w(z,t)*f_cov*(1-f_cov)`` is driven by the beam
+        ionization that the coverage itself shapes, so the closed form v1 could
+        evaluate at any stage time no longer exists (v1's own documentation
+        said a feedback v2 would have to co-integrate). The field is advanced
+        once per ACCEPTED step from a driver accumulated across the SSPRK2
+        stages -- the discipline the neutral deficit already uses -- and is
+        therefore frozen within a step's stages and unmoved by a rejected
+        attempt. See :meth:`_advance_coverage_fraction`.
+
+        The array is a copy, so a caller cannot reach into the solver's state.
+        """
+        if self._coverage is None:
+            return np.ones(self._geometry.cells, dtype=float)
+        return self._coverage_f.copy()
+
+    def coverage_fraction(self):
+        """Return the volume-weighted COLUMN MEAN of ``f_cov(z)``.
+
+        ``1.0`` whenever the closure is off. This is the scalar summary of the
+        z-resolved field -- the single number v1 carried -- and is what the
+        saved ``coverage_fraction`` diagnostic reports. Nothing in the physics
+        reads it: every consumer takes the per-cell profile.
         """
         if self._coverage is None:
             return 1.0
-        if time is None:
-            time = self._time
-        dt = float(time) - self._plasma_phase_time_origin()
-        if dt <= 0.0 or self._coverage_r == 0.0:
-            return self._coverage_f0
-        f0 = self._coverage_f0
-        # 1 / (1 + (1/f0 - 1) exp(-r t)), written so f0 = 1 returns exactly
-        # 1.0 and a large r*t saturates at 1.0 rather than overflowing.
-        return 1.0 / (1.0 + (1.0 / f0 - 1.0) * math.exp(-self._coverage_r * dt))
+        volume = np.asarray(self._geometry.plasma_volume_cm3, dtype=float)
+        return float(np.sum(self._coverage_f * volume) / np.sum(volume))
 
     def _coverage_view(self, state, time=None):
         """Return the ``CoverageView1D`` the beam subsystem propagates in.
 
         ``None`` when the closure is off, which is what keeps every consumer
-        on its historical argument list and the off path bit-exact.
+        on its historical argument list and the off path bit-exact. ``time`` is
+        accepted and ignored: the coverage field is accepted-step state under
+        v2, not a function of the stage clock (see
+        :meth:`coverage_fraction_profile`).
         """
         if self._coverage is None:
             return None
         nn = np.asarray(state.nn, dtype=float)
         nn_channel = np.maximum(nn - self._coverage_deficit, self._floors["nn"])
-        f_cov = self.coverage_fraction(time)
+        f_cov = self._coverage_f
         nn_reservoir = None
         ne_reservoir = None
-        if f_cov < 1.0:
+        if np.any(f_cov < 1.0):
             # The other medium the beam is split across. Its neutral density
             # is the implicit reservoir's; its PLASMA density is the model's
             # own "no plasma" representation, the density floor, because the
@@ -1621,13 +1723,35 @@ class LAPDSim1D:
             # other plasma-free cell in this solver carries, so the stopping
             # coefficients are evaluated on a state the model already
             # produces rather than on an untested singular one.
-            nn_reservoir = nn + f_cov * (nn - nn_channel) / (1.0 - f_cov)
+            #
+            # Cells at f_cov == 1 have no uncovered region and the expression
+            # is 0/0 there, so they carry the mean itself -- the value the
+            # partition identity gives in the limit. Their reservoir arm is
+            # launched with zero area and zero flux and never reads it.
+            nn_reservoir = self._coverage_reservoir_from(nn, nn_channel, f_cov)
             ne_reservoir = np.full_like(nn, self._floors["n"])
         return CoverageView1D(
-            f_cov=f_cov,
+            f_cov=f_cov.copy(),
             nn_channel=nn_channel,
             nn_reservoir=nn_reservoir,
             ne_reservoir=ne_reservoir,
+        )
+
+    @staticmethod
+    def _coverage_reservoir_from(nn, nn_channel, f_cov):
+        """Return ``nn_r`` from the mean, the covered column and ``f_cov(z)``.
+
+        From ``nn = f*nn_c + (1-f)*nn_r`` this is ``nn + f*D/(1-f)`` with
+        ``D = nn - nn_c``. Cells at ``f == 1`` have no uncovered region at all
+        and take the mean, which is the limit of the partition identity there.
+        """
+        uncovered = 1.0 - f_cov
+        return np.where(
+            uncovered > 0.0,
+            nn + f_cov * (nn - nn_channel) / np.where(
+                uncovered > 0.0, uncovered, 1.0
+            ),
+            nn,
         )
 
     def coverage_reservoir_density(self, state=None):
@@ -1636,19 +1760,101 @@ class LAPDSim1D:
         Diagnostic only: the reservoir is represented IMPLICITLY, as the
         complement of the covered column inside the conserved mean field, so
         nothing integrates this. From ``nn = f*nn_c + (1-f)*nn_r`` it is
-        ``nn + f*D/(1-f)`` with ``D = nn - nn_c`` the carried deficit. At
+        ``nn + f*D/(1-f)`` with ``D = nn - nn_c`` the carried deficit. Where
         ``f_cov = 1`` there is no uncovered region and the mean itself is
-        returned.
+        returned for that cell.
         """
         state = self.state if state is None else state
         nn = np.asarray(state.nn, dtype=float)
         if self._coverage is None:
             return nn.copy()
-        f = self.coverage_fraction()
-        if f >= 1.0:
-            return nn.copy()
         nn_channel = np.maximum(nn - self._coverage_deficit, self._floors["nn"])
-        return nn + f * (nn - nn_channel) / (1.0 - f)
+        return self._coverage_reservoir_from(nn, nn_channel, self._coverage_f)
+
+    def coverage_growth_driver(self, terms):
+        """Return ``w(z)``, the normalized beam-ionization growth driver.
+
+        ``w`` is the LOCAL beam ionization rate divided by its own
+        VOLUME-WEIGHTED COLUMN MEAN,
+
+            w_i = S_i / (sum_j S_j V_j / sum_j V_j),
+
+        with ``S`` the per-cell beam ion birth density [cm^-3 s^-1] -- the
+        ``n`` row of ``beam_ionization_birth``, already carrying the
+        active-plasma mask -- and ``V`` the plasma cell volumes. Both sums run
+        over the PLASMA-ACTIVE cells: those are the cells whose plasma rows the
+        solver integrates, the only ones where ``S`` can be nonzero and the
+        only ones where a covered fraction means anything. Including the
+        plasma-dead plenum volume in the denominator would dilute ``w``
+        everywhere by a geometry ratio that has nothing to do with the beam.
+
+        So normalized, ``<w>_V = 1`` identically over that window, which is the
+        whole point: the rescaling is parameter-free and leaves
+        ``coverage_growth_rate_per_s`` meaning exactly what it meant in v1, the
+        column-mean growth rate. It redistributes growth in z without changing
+        how much growth there is on average.
+
+        DEGENERATE CASE, handled explicitly rather than by a guard on the
+        divisor: when the beam deposits no ionization anywhere -- no cathode
+        solve this evaluation, no emission, or a ray that stops in the gap --
+        the mean is zero, ``w`` is 0/0, and the answer is ``w == 0`` in every
+        cell, i.e. no growth. That is the physical statement (nothing is
+        breaking the column down, so no patch spreads), not a numerical
+        fallback. A non-finite mean is treated the same way.
+        """
+        term = terms.get("beam_ionization_birth")
+        cells = self._geometry.cells
+        if term is None:
+            return np.zeros(cells, dtype=float)
+        rate = np.asarray(term.n, dtype=float)
+        volume = np.asarray(self._geometry.plasma_volume_cm3, dtype=float)
+        window = (
+            np.asarray(self._geometry.plasma_active, dtype=bool)
+            if self._active_plasma_topology
+            else np.ones(cells, dtype=bool)
+        )
+        weight = np.where(window, volume, 0.0)
+        total_volume = float(np.sum(weight))
+        mean = (
+            float(np.sum(rate * weight)) / total_volume
+            if total_volume > 0.0
+            else 0.0
+        )
+        if not math.isfinite(mean) or mean <= 0.0:
+            return np.zeros(cells, dtype=float)
+        return np.where(window, rate / mean, 0.0)
+
+    def _advance_coverage_fraction(self, dt, w_accum):
+        """Advance ``f_cov(z)`` over one accepted step (coverage v2).
+
+        The law is the logistic ``df/dt = r0*w*f*(1-f)`` with ``w`` the
+        stage-accumulated growth driver: ``w_accum`` carries
+        ``sum_stages (dt/2) * w_stage``, so ``w_bar = w_accum/dt`` is the
+        step's stage-averaged driver on exactly the equal SSPRK2 stage weights
+        the neutral-deficit burn uses. Holding it fixed over the step makes the
+        logistic exactly integrable,
+
+            f' = 1 / (1 + (1/f - 1) * exp(-r0 * w_bar * dt)),
+
+        which is unconditionally positive, cannot leave ``(0, 1]`` at any dt,
+        and reduces to ``f`` identically wherever ``w_bar`` or ``r0`` is zero
+        and to exactly ``1.0`` wherever ``f`` is already 1 (the ``1/f - 1``
+        factor is then exactly 0.0).
+
+        Called only from the accept path, so a rejected attempt leaves the
+        field untouched and a re-tried step re-derives its own driver.
+        """
+        if self._coverage_r == 0.0 or w_accum is None:
+            return
+        dt = float(dt)
+        if dt <= 0.0:
+            return
+        w_bar = np.asarray(w_accum, dtype=float) / dt
+        f = self._coverage_f
+        growth = np.exp(-self._coverage_r * w_bar * dt)
+        self._coverage_f = np.clip(
+            1.0 / (1.0 + (1.0 / f - 1.0) * growth), None, 1.0
+        )
 
     def _accumulate_coverage_burn(self, terms):
         """Tally this RHS stage's share of the step's covered-only neutral debit.
@@ -1658,9 +1864,16 @@ class LAPDSim1D:
         through exactly one ``ssprk2_step`` at the full step dt, and SSPRK2
         weights its two stages equally at ``dt/2``. Nothing accumulates
         outside an attempt, and a rejected attempt's tally dies with it.
+
+        The coverage field's own growth driver rides the SAME accumulator
+        discipline and the same stage weight, which is what makes ``f_cov``
+        co-integrated with the state rather than bolted on after it.
         """
         if self._coverage_burn_accum is None:
             return
+        self._coverage_w_accum += (
+            self._coverage_burn_weight * self.coverage_growth_driver(terms)
+        )
         total = None
         for name in self.COVERAGE_BURN_TERMS:
             term = terms.get(name)
@@ -1710,7 +1923,10 @@ class LAPDSim1D:
         at any dt/tau.
         """
         dt = float(dt)
-        f = self.coverage_fraction()
+        # Per-cell under v2: the covered fraction varies along the column, so
+        # every factor below that carried the scalar f now carries the local
+        # one. The algebra is unchanged and elementwise.
+        f = self._coverage_f
         # Debit is negative on a burn; the deficit grows when neutrals leave.
         # ``None`` is a step that evaluated no plasma RHS at all (the
         # neutral-only pre-drive path), i.e. zero debit -- the reservoir then
@@ -1741,11 +1957,7 @@ class LAPDSim1D:
         # destroys nothing; the lower bound closes onto 0 as f -> 1, where
         # there is no reservoir left to donate from.
         nn = np.maximum(np.asarray(self.state.nn, dtype=float), 0.0)
-        floor = (
-            np.zeros_like(nn)
-            if f >= 1.0
-            else -(1.0 - f) / f * nn
-        )
+        floor = -(1.0 - f) / f * nn
         self._coverage_deficit = np.clip(deficit, floor, nn)
 
     def _validate_r1_configuration_presence(self):
@@ -2707,12 +2919,18 @@ class LAPDSim1D:
             self._dvm_ion_stage_weight = 0.5 * dt
 
         if self._coverage is not None:
-            # Arm the covered-only neutral-debit tally for THIS attempt only,
-            # on the same SSPRK2 stage weighting the DVM booking above uses.
+            # Arm the covered-only neutral-debit tally AND the coverage field's
+            # growth driver for THIS attempt only, on the same SSPRK2 stage
+            # weighting the DVM booking above uses. Both are dropped in the
+            # ``finally`` below and carried on the attempt, so a rejected step
+            # advances neither.
             self._coverage_burn_accum = np.zeros(
                 self._geometry.cells, dtype=float
             )
             self._coverage_reservoir_burn_accum = np.zeros(
+                self._geometry.cells, dtype=float
+            )
+            self._coverage_w_accum = np.zeros(
                 self._geometry.cells, dtype=float
             )
             self._coverage_burn_weight = 0.5 * dt
@@ -2781,8 +2999,10 @@ class LAPDSim1D:
             attempt_coverage_reservoir_burn = (
                 self._coverage_reservoir_burn_accum
             )
+            attempt_coverage_w = self._coverage_w_accum
             self._coverage_burn_accum = None
             self._coverage_reservoir_burn_accum = None
+            self._coverage_w_accum = None
             self._coverage_burn_weight = 0.0
         return StepAttempt1D(
             y=np.asarray(y_next, dtype=float),
@@ -2795,6 +3015,7 @@ class LAPDSim1D:
             ion_booking=attempt_ion_booking,
             coverage_burn=attempt_coverage_burn,
             coverage_reservoir_burn=attempt_coverage_reservoir_burn,
+            coverage_w=attempt_coverage_w,
         )
 
     def _implicit_neutral_step(
@@ -3256,6 +3477,13 @@ class LAPDSim1D:
         # only ever the auxiliary deficit -- the conserved mean field above is
         # never touched by this.
         if self._coverage is not None:
+            # The coverage FIELD first: the deficit equation's (1-f)/f weights
+            # and its positivity floor are the end-of-step partition's, exactly
+            # as v1's were (v1 read the closed form after the clock had already
+            # been advanced).
+            self._advance_coverage_fraction(
+                attempt.dt, getattr(attempt, "coverage_w", None)
+            )
             self._advance_coverage_deficit(
                 attempt.dt,
                 getattr(attempt, "coverage_burn", None),
@@ -7400,7 +7628,15 @@ class LAPDSim1D:
             # Clumpy-plasma coverage closure: PRESENCE-GATED so the saved
             # diagnostic structure of every mean-field run -- the golden
             # included -- is byte-identical to before the closure existed.
-            diag["coverage_fraction"] = float(self.coverage_fraction(time))
+            # The scalar summary keeps its name and its meaning as "the
+            # coverage of the column", now as the volume-weighted mean of the
+            # z-resolved field; the profile itself is saved beside it so the
+            # axial structure the closure exists to carry is readable from a
+            # saved trajectory rather than only from a live solver.
+            diag["coverage_fraction"] = float(self.coverage_fraction())
+            diag["coverage_fraction_profile"] = self._coverage_f.copy()
+            diag["coverage_fraction_min"] = float(np.min(self._coverage_f))
+            diag["coverage_fraction_max"] = float(np.max(self._coverage_f))
             diag["coverage_nn_deficit_max"] = float(
                 np.max(self._coverage_deficit)
             )

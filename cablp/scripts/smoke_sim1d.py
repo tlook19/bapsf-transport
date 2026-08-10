@@ -12884,16 +12884,47 @@ print(json.dumps({
     # an incomplete coverage configuration must never reach a cathode solve.
     _cov_base_p, _cov_base_f = _coverage_config("csda")
     _cov_on_f = dict(_cov_base_f, coverage_closure=True)
+    _cov_nx = LAPDSim1D(*_coverage_config("csda")).geometry.cells
     for bad, needle in (
-        ({}, "requires coverage_initial_fraction"),
+        ({}, "requires EXACTLY ONE initial condition"),
+        # Both spellings of the initial condition at once: they are the same
+        # quantity and neither modifies the other, so there is no composition
+        # rule and the config is refused rather than silently resolved.
+        ({"coverage_initial_fraction": 0.3,
+          "coverage_initial_profile": [0.3] * _cov_nx},
+         "requires EXACTLY ONE initial condition"),
         ({"coverage_initial_fraction": 0.0}, "must be finite and in (0, 1]"),
         ({"coverage_initial_fraction": 1.5}, "must be finite and in (0, 1]"),
         ({"coverage_initial_fraction": float("nan")},
+         "must be finite and in (0, 1]"),
+        # The per-cell seed (D4, the L3 ensemble hook): wrong length, and every
+        # way an entry can leave (0, 1].
+        ({"coverage_initial_profile": [0.3] * (_cov_nx - 1)},
+         "must have one entry per grid cell"),
+        ({"coverage_initial_profile": [0.3] * (_cov_nx + 3)},
+         "must have one entry per grid cell"),
+        ({"coverage_initial_profile": [0.3] * (_cov_nx - 1) + [0.0]},
+         "must be finite and in (0, 1]"),
+        ({"coverage_initial_profile": [0.3] * (_cov_nx - 1) + [1.5]},
+         "must be finite and in (0, 1]"),
+        ({"coverage_initial_profile":
+          [0.3] * (_cov_nx - 1) + [float("nan")]},
          "must be finite and in (0, 1]"),
         ({"coverage_initial_fraction": 0.3,
           "coverage_growth_rate_per_s": -1.0}, "must be finite and >= 0"),
         ({"coverage_initial_fraction": 0.3,
           "coverage_backfill_time_s": 0.0}, "must be finite and > 0"),
+        # v2's fused two-stream march has ONE post-march walk stage and two
+        # media, so the walk closures are refused rather than given the
+        # channel's stopping power for reservoir-born products.
+        ({"coverage_initial_fraction": 0.3,
+          "beam_product_transport": "nonlocal"},
+         "beam_product_transport"),
+        ({"coverage_initial_fraction": 0.3,
+          "heating_anomalous_transport": "tail_walk",
+          "heating_anomalous_tail_energy_keying": "fixed",
+          "heating_anomalous_tail_energy_eV": 75.0},
+         "heating_anomalous_transport"),
     ):
         try:
             LAPDSim1D(dict(_cov_base_p, **bad), _cov_on_f)
@@ -12903,14 +12934,21 @@ print(json.dumps({
             raise AssertionError(f"coverage_closure accepted {bad!r}")
     # ... and the reverse direction: coverage parameters set with the flag OFF
     # would be inert, which is exactly the silent no-op the house rules forbid.
-    try:
-        LAPDSim1D(
-            dict(_cov_base_p, coverage_initial_fraction=0.3), _cov_base_f
-        )
-    except ValueError as error:
-        assert "without the coverage_closure flag" in str(error)
-    else:
-        raise AssertionError("coverage parameters accepted without the flag")
+    for _cov_off_key, _cov_off_value in (
+        ("coverage_initial_fraction", 0.3),
+        ("coverage_initial_profile", [0.3] * _cov_nx),
+    ):
+        try:
+            LAPDSim1D(
+                dict(_cov_base_p, **{_cov_off_key: _cov_off_value}),
+                _cov_base_f,
+            )
+        except ValueError as error:
+            assert "without the coverage_closure flag" in str(error)
+        else:
+            raise AssertionError(
+                f"{_cov_off_key} accepted without the coverage_closure flag"
+            )
     # The two-medium split is built on the CSDA rays; under Beer-Lambert the
     # whole beam would go through the channels while the closure's own premise
     # says only f_cov of it does -- inconsistent, not merely inert.
@@ -12983,7 +13021,10 @@ print(json.dumps({
         for _ in range(6):
             _cov_off_sim.advance_one_step(dt=2.0e-9)
             _cov_one_sim.advance_one_step(dt=2.0e-9)
-        assert _cov_one_sim.coverage_fraction() == 1.0
+        assert np.array_equal(
+            _cov_one_sim.coverage_fraction_profile(),
+            np.ones(_cov_one_sim.geometry.cells),
+        )
         assert (
             np.asarray(_cov_off_sim._y).tobytes()
             == np.asarray(_cov_one_sim._y).tobytes()
@@ -13001,10 +13042,12 @@ print(json.dumps({
         assert _cov_one_sim._y.size == _cov_off_sim._y.size
         assert set(_cov_one_sim.rhs_terms()) == set(_cov_off_sim.rhs_terms())
 
-    # (iii) CONTINUITY AND THE CLOSED FORM. The coverage field is integrated in
-    # closed form rather than co-integrated, so check it against an explicit
-    # march of its own ODE, and check that the concentration factors approach
-    # the mean-field ones continuously as f_cov -> 1.
+    # (iii) THE CO-INTEGRATED GROWTH LAW. v2's coverage field is driven by the
+    # beam ionization it itself shapes, so the v1 closed form is gone and the
+    # field is accepted-step state. Check the discrete advance against the
+    # closed form of the frozen-driver logistic it claims to integrate exactly,
+    # and check that the concentration factors approach the mean-field ones
+    # continuously as f_cov -> 1.
     _cov_r = 1390.0
     _cov_f0 = 0.05
     _cov_sim = LAPDSim1D(*_coverage_config(
@@ -13012,34 +13055,62 @@ print(json.dumps({
         coverage_initial_fraction=_cov_f0,
         coverage_growth_rate_per_s=_cov_r,
     ))
-
-    def _cov_rate(x):
-        return _cov_r * x * (1.0 - x)
-
-    _cov_f_march = _cov_f0
-    _cov_sub = 2000
-    _cov_horizon = 4.0e-3
-    _cov_h = _cov_horizon / _cov_sub
-    for _ in range(_cov_sub):
-        # RK4 on df/dt = r f (1-f), tight enough to bound the closed form.
-        k1 = _cov_rate(_cov_f_march)
-        k2 = _cov_rate(_cov_f_march + 0.5 * _cov_h * k1)
-        k3 = _cov_rate(_cov_f_march + 0.5 * _cov_h * k2)
-        k4 = _cov_rate(_cov_f_march + _cov_h * k3)
-        _cov_f_march += (_cov_h / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
-    _cov_f_closed = _cov_sim.coverage_fraction(_cov_horizon)
-    assert abs(_cov_f_closed - _cov_f_march) < 1e-10, (
-        _cov_f_closed, _cov_f_march
+    _cov_cells = _cov_sim.geometry.cells
+    # Held-constant driver over one step -> the logistic is exactly integrable,
+    # which is what _advance_coverage_fraction claims. Drive it directly with a
+    # SPATIALLY VARYING w so the per-cell independence is exercised too.
+    _cov_dt_f = 1.0e-4
+    _cov_w = np.linspace(0.25, 2.5, _cov_cells)
+    _cov_f_before = _cov_sim.coverage_fraction_profile()
+    _cov_sim._advance_coverage_fraction(_cov_dt_f, _cov_w * _cov_dt_f)
+    _cov_expect_f = 1.0 / (
+        1.0
+        + (1.0 / _cov_f_before - 1.0)
+        * np.exp(-_cov_r * _cov_w * _cov_dt_f)
     )
-    # Monotone, bounded, and saturating at 1 -- the logistic has no overshoot.
-    _cov_prev = 0.0
-    for _cov_t in (0.0, 1e-4, 5e-4, 1e-3, 5e-3, 1.0):
-        _cov_f = _cov_sim.coverage_fraction(_cov_t)
-        assert _cov_f0 <= _cov_f <= 1.0
-        assert _cov_f >= _cov_prev
-        _cov_prev = _cov_f
-    assert _cov_sim.coverage_fraction(1.0) == 1.0
-    assert _cov_sim.coverage_fraction(-1.0) == _cov_f0
+    assert np.allclose(
+        _cov_sim.coverage_fraction_profile(), _cov_expect_f,
+        rtol=1e-14, atol=0.0,
+    ), (_cov_sim.coverage_fraction_profile()[:3], _cov_expect_f[:3])
+    # Cells with a larger local driver grew more: that is the whole point of
+    # the z-resolved law, and it is not implied by the closed form above.
+    _cov_grew = _cov_sim.coverage_fraction_profile() - _cov_f_before
+    assert np.all(_cov_grew > 0.0)
+    assert np.all(np.diff(_cov_grew) > 0.0), _cov_grew
+    # DEGENERATE CASES, each an explicit answer rather than a guarded divide.
+    #   * a zero driver anywhere freezes THAT cell and only that cell;
+    #   * f == 1 stays exactly 1 whatever the driver does;
+    #   * r0 == 0 freezes the whole field.
+    _cov_f_frozen = _cov_sim.coverage_fraction_profile()
+    _cov_zero_w = np.zeros(_cov_cells)
+    _cov_zero_w[2] = 3.0
+    _cov_sim._advance_coverage_fraction(_cov_dt_f, _cov_zero_w * _cov_dt_f)
+    _cov_moved = np.flatnonzero(
+        _cov_sim.coverage_fraction_profile() != _cov_f_frozen
+    )
+    assert list(_cov_moved) == [2], _cov_moved
+    _cov_one_field = LAPDSim1D(*_coverage_config(
+        "csda",
+        coverage_initial_fraction=1.0,
+        coverage_growth_rate_per_s=_cov_r,
+    ))
+    _cov_one_field._advance_coverage_fraction(
+        _cov_dt_f, np.full(_cov_cells, 5.0) * _cov_dt_f
+    )
+    assert np.array_equal(
+        _cov_one_field.coverage_fraction_profile(), np.ones(_cov_cells)
+    )
+    _cov_norate = LAPDSim1D(*_coverage_config(
+        "csda",
+        coverage_initial_fraction=0.2,
+        coverage_growth_rate_per_s=0.0,
+    ))
+    _cov_norate._advance_coverage_fraction(
+        _cov_dt_f, np.full(_cov_cells, 5.0) * _cov_dt_f
+    )
+    assert np.array_equal(
+        _cov_norate.coverage_fraction_profile(), np.full(_cov_cells, 0.2)
+    )
     # The concentrated view converges to the mean field as f_cov -> 1, with the
     # departure of the concentrated density proportional to (1 - f_cov).
     _cov_state = _cov_sim.state
@@ -13047,7 +13118,10 @@ print(json.dumps({
     for _cov_eps in (1e-2, 1e-3, 1e-4):
         _cov_ne, _cov_nn = coverage_channel_densities(
             _cov_state,
-            CoverageView1D(f_cov=1.0 - _cov_eps, nn_channel=_cov_state.nn),
+            CoverageView1D(
+                f_cov=np.full(_cov_cells, 1.0 - _cov_eps),
+                nn_channel=_cov_state.nn,
+            ),
         )
         _cov_departures.append(
             float(np.max(np.abs(_cov_ne / _cov_state.n - 1.0)))
@@ -13056,7 +13130,10 @@ print(json.dumps({
     for _cov_a, _cov_b in zip(_cov_departures, _cov_departures[1:]):
         assert 5.0 < _cov_a / _cov_b < 20.0, _cov_departures
     _cov_ne_one, _cov_nn_one = coverage_channel_densities(
-        _cov_state, CoverageView1D(f_cov=1.0, nn_channel=_cov_state.nn)
+        _cov_state,
+        CoverageView1D(
+            f_cov=np.ones(_cov_cells), nn_channel=_cov_state.nn
+        ),
     )
     assert np.array_equal(_cov_ne_one, _cov_state.n)
     assert np.array_equal(
@@ -13095,14 +13172,19 @@ print(json.dumps({
                 + float(dep.transmitted_flux) * float(dep.transmitted_energy_eV)
                 * ev_to_erg
             )
-        # The reservoir ray carries (1 - f_cov) of the emitted beam...
-        _cov_res_E = _cov_ray_energy(_cov_res_dep[0])
-        _cov_expect_res = (1.0 - _cov_f0_split) * _cov_Gamma0 * _cov_E0 * ev_to_erg
-        assert abs(_cov_res_E / _cov_expect_res - 1.0) < 1e-9, (
-            _cov_res_E, _cov_expect_res
-        )
-        # ...and the two arms together carry the WHOLE of it, so the split
-        # neither creates nor destroys beam energy.
+        # v2 REPLACED the per-arm exact share that used to be asserted here
+        # ("the reservoir ray carries (1 - f_cov) of the emitted beam"). That
+        # was true only while the flux was partitioned ONCE at the cathode
+        # face; the two-stream march re-splits the surviving flux by the LOCAL
+        # f_cov at every cell, so flux migrates between the arms all the way
+        # down the column and the reservoir arm's energy is
+        # sum_k (1-f_k) Gamma_k dE_res,k, not (1-f) Gamma0 E0. The invariant
+        # that survives -- and the one the closure actually needs -- is the
+        # TOTAL, asserted at the unchanged 1e-9 below. The per-cell re-mix
+        # bookkeeping, which IS still exact under v2, is gated in block (vi).
+        #
+        # The two arms together carry the WHOLE emitted beam, so neither the
+        # split nor the re-mixing creates or destroys beam energy.
         _cov_tot_E = _cov_ray_energy(_cov_total_dep[0])
         assert abs(
             _cov_tot_E / (_cov_Gamma0 * _cov_E0 * ev_to_erg) - 1.0
@@ -13202,6 +13284,313 @@ print(json.dumps({
     _cov_ref_sim = LAPDSim1D(*_coverage_config("csda"))
     assert set(_cov_terms) == set(_cov_ref_sim.rhs_terms())
     assert _cov_burn_sim._y.size == _cov_ref_sim._y.size
+
+    # --- Coverage closure v2: the z-resolved field ------------------------
+    # Five statements the scalar-f_cov closure could not make: the seed input
+    # reaches the field intact, the growth driver is normalized so its own
+    # column mean is exactly 1, the two-stream march conserves flux and beam
+    # energy CELL BY CELL across every re-partition boundary, the z-resolved
+    # partition identity closes per cell, and a rejected step leaves the field
+    # exactly where it was.
+    from cablp.funcs._beam_deposition import deposit_beam_two_stream
+
+    def _cov2_ray_energy(dep):
+        """Every erg one arm accounts for: deposited, radiated, spent or gone."""
+        return (
+            float(np.sum(dep.plasma_heating_erg_s))
+            + float(np.sum(dep.radiated_erg_s))
+            + float(np.sum(dep.ionization_cost_erg_s))
+            + float(dep.anode_intercepted_erg_s)
+            + float(dep.transmitted_flux) * float(dep.transmitted_energy_eV)
+            * ev_to_erg
+        )
+
+    # (vi-a) THE SEED INPUT (D4). A per-cell profile is carried verbatim into
+    # the field, and the scalar spelling is the same thing broadcast -- so an
+    # externally generated ensemble member arrives as written, which is the
+    # only property the L3 hook needs.
+    _cov_seed = np.linspace(0.02, 0.4, _cov_ref_sim.geometry.cells)
+    _cov_seed_sim = LAPDSim1D(*_coverage_config(
+        "csda",
+        coverage_initial_profile=_cov_seed.tolist(),
+        coverage_growth_rate_per_s=0.0,
+    ))
+    assert np.array_equal(
+        _cov_seed_sim.coverage_fraction_profile(), _cov_seed
+    )
+    # The returned profile is a copy: mutating it cannot reach solver state.
+    _cov_escaped = _cov_seed_sim.coverage_fraction_profile()
+    _cov_escaped[:] = 1.0
+    assert np.array_equal(
+        _cov_seed_sim.coverage_fraction_profile(), _cov_seed
+    )
+    _cov_scalar_sim = LAPDSim1D(*_coverage_config(
+        "csda", coverage_initial_fraction=0.05,
+        coverage_growth_rate_per_s=0.0,
+    ))
+    assert np.array_equal(
+        _cov_scalar_sim.coverage_fraction_profile(),
+        np.full(_cov_scalar_sim.geometry.cells, 0.05),
+    )
+    # The scalar summary is the volume-weighted mean of the field.
+    _cov_Vp_seed = _cov_seed_sim.geometry.plasma_volume_cm3
+    assert abs(
+        _cov_seed_sim.coverage_fraction()
+        - float(np.sum(_cov_seed * _cov_Vp_seed) / np.sum(_cov_Vp_seed))
+    ) < 1e-15
+
+    # (vi-b) THE w NORMALIZATION. w is the local beam-ionization rate over its
+    # own volume-weighted column mean, so <w>_V == 1 identically over the
+    # window it is defined on -- that is what makes the rescaling
+    # parameter-free and leaves coverage_growth_rate_per_s meaning the
+    # column-mean rate. Driven here with a synthetic term so the check is on
+    # the normalization itself and not on whatever the beam happened to do.
+    _cov_w_sim = _cov_seed_sim
+    _cov_w_cells = _cov_w_sim.geometry.cells
+    _cov_w_window = (
+        np.asarray(_cov_w_sim.geometry.plasma_active, dtype=bool)
+        if _cov_w_sim._active_plasma_topology
+        else np.ones(_cov_w_cells, dtype=bool)
+    )
+    _cov_w_V = np.where(
+        _cov_w_window,
+        np.asarray(_cov_w_sim.geometry.plasma_volume_cm3, dtype=float),
+        0.0,
+    )
+    for _cov_shape in (
+        np.linspace(1.0, 9.0, _cov_w_cells),
+        np.exp(-np.arange(_cov_w_cells) / 3.0) * 1e14,
+        np.full(_cov_w_cells, 7.5e12),
+    ):
+        _cov_rate_term = _cov_w_sim._zero_rhs_state()
+        _cov_rate_term.n[:] = np.where(_cov_w_window, _cov_shape, 0.0)
+        _cov_w_out = _cov_w_sim.coverage_growth_driver(
+            {"beam_ionization_birth": _cov_rate_term}
+        )
+        assert abs(
+            float(np.sum(_cov_w_out * _cov_w_V) / np.sum(_cov_w_V)) - 1.0
+        ) < 1e-12, _cov_w_out
+        # w is a pure rescaling: it carries the rate's SHAPE, so any two cells
+        # in the window keep their ratio exactly.
+        _cov_live = np.flatnonzero(_cov_w_window)
+        assert np.allclose(
+            _cov_w_out[_cov_live] * _cov_shape[_cov_live[0]],
+            _cov_w_out[_cov_live[0]] * _cov_shape[_cov_live],
+            rtol=1e-12, atol=0.0,
+        )
+        # ...and it is blind to the rate's overall SCALE, which is the whole
+        # content of "normalized to its own column mean".
+        _cov_scaled_term = _cov_w_sim._zero_rhs_state()
+        _cov_scaled_term.n[:] = _cov_rate_term.n * 3.7e6
+        assert np.allclose(
+            _cov_w_sim.coverage_growth_driver(
+                {"beam_ionization_birth": _cov_scaled_term}
+            ),
+            _cov_w_out, rtol=1e-12, atol=0.0,
+        )
+    # DEGENERATE: no beam ionization anywhere is 0/0, and the answer is w == 0
+    # (nothing is breaking the column down), not a divide. Same for a missing
+    # term, which is what the neutral-only pre-drive branch hands over.
+    _cov_dead_term = _cov_w_sim._zero_rhs_state()
+    assert np.array_equal(
+        _cov_w_sim.coverage_growth_driver(
+            {"beam_ionization_birth": _cov_dead_term}
+        ),
+        np.zeros(_cov_w_cells),
+    )
+    assert np.array_equal(
+        _cov_w_sim.coverage_growth_driver({}), np.zeros(_cov_w_cells)
+    )
+
+    # (vi-c) THE TWO-STREAM MARCH'S PER-CELL BUDGET. The re-partition happens
+    # at every cell face, so conservation has to be checked THERE and not only
+    # in the total: no flux is created or lost at a re-mix, and the beam power
+    # entering a cell equals what it deposits there plus what leaves.
+    _cov_ts_cells = 24
+    _cov_ts_f = np.clip(
+        0.04 + 0.5 * np.sin(np.arange(_cov_ts_cells) / 3.0) ** 2, 0.02, 1.0
+    )
+    _cov_ts_f[-3:] = 1.0  # a fully-covered run: the single-medium degeneracy
+    _cov_ts_nn = np.full(_cov_ts_cells, 6.0e13)
+    _cov_ts_n = np.full(_cov_ts_cells, 2.0e11)
+    _cov_ts_kwargs = dict(
+        f_cov=_cov_ts_f,
+        nn_channel=_cov_ts_nn,
+        ne_channel=_cov_ts_n / _cov_ts_f,
+        nn_reservoir=_cov_ts_nn * 1.4,
+        ne_reservoir=np.full(_cov_ts_cells, 1.0e5),
+        Te=np.full(_cov_ts_cells, 3.0),
+        launch=0,
+        direction=1,
+        dz_cm=np.full(_cov_ts_cells, 10.0),
+        anomalous_model="quasilinear",
+        beam_area_cm2=np.full(_cov_ts_cells, 300.0),
+    )
+    _cov_ts_E0, _cov_ts_G0 = 900.0, 4.0e18
+    _cov_ts_ch, _cov_ts_res, _cov_ts_flux = deposit_beam_two_stream(
+        _cov_ts_E0, _cov_ts_G0, **_cov_ts_kwargs
+    )
+    # Flux never rises along the march and never exceeds what was launched:
+    # the re-mix redistributes the surviving beam, it does not manufacture it.
+    assert _cov_ts_flux[0] == _cov_ts_G0
+    assert np.all(np.diff(_cov_ts_flux) <= 0.0), _cov_ts_flux
+    assert np.all(_cov_ts_flux >= 0.0)
+    # Per-cell beam-energy closure. The power entering cell k is
+    # flux_entry[k] * E_entry[k]; what leaves is flux_entry[k+1] * E_entry[k+1]
+    # (the re-mixed stream, by construction of the re-mix); the difference is
+    # what both arms deposited in that cell. E_entry is per arm but identical
+    # between them, because the arms enter every cell at the common mixed
+    # energy -- asserted, since the whole ledger below rests on it.
+    _cov_ts_Ein = np.maximum(_cov_ts_ch.E_entry_eV, _cov_ts_res.E_entry_eV)
+    _cov_ts_reached = _cov_ts_flux > 0.0
+    assert np.array_equal(
+        _cov_ts_ch.E_entry_eV[_cov_ts_reached & (_cov_ts_f < 1.0)],
+        _cov_ts_res.E_entry_eV[_cov_ts_reached & (_cov_ts_f < 1.0)],
+    )
+    _cov_ts_dep = (
+        _cov_ts_ch.plasma_heating_erg_s + _cov_ts_res.plasma_heating_erg_s
+        + _cov_ts_ch.radiated_erg_s + _cov_ts_res.radiated_erg_s
+        + _cov_ts_ch.ionization_cost_erg_s + _cov_ts_res.ionization_cost_erg_s
+    )
+    _cov_ts_power = _cov_ts_flux * _cov_ts_Ein * ev_to_erg
+    _cov_ts_out = np.append(_cov_ts_power[1:], 0.0)
+    _cov_ts_out[-1] = (
+        (float(_cov_ts_ch.transmitted_flux) + float(_cov_ts_res.transmitted_flux))
+        * float(_cov_ts_ch.transmitted_energy_eV) * ev_to_erg
+    )
+    _cov_ts_resid = _cov_ts_power - _cov_ts_out - _cov_ts_dep
+    assert np.max(
+        np.abs(_cov_ts_resid) / np.maximum(_cov_ts_power, 1.0)
+    ) < 1e-12, _cov_ts_resid
+    # The fully-covered run at the far end has NO reservoir deposit at all:
+    # f_cov == 1 leaves the second medium with zero cross-section, which is the
+    # exact single-medium degeneracy inside a z-resolved march.
+    assert not np.any(_cov_ts_res.ionization_events[_cov_ts_f >= 1.0])
+    assert np.any(_cov_ts_res.ionization_events[_cov_ts_f < 1.0] > 0.0)
+    # A uniform profile does NOT reproduce the v1.1 partition-once split. This
+    # is EXPECTED (MODEL.md states it): re-mixing at every cell is a different
+    # model from partitioning at emission. Asserted so the difference cannot be
+    # mistaken for a regression later.
+    _cov_flat = np.full(_cov_ts_cells, 0.05)
+    _cov_flat_kwargs = dict(
+        _cov_ts_kwargs, f_cov=_cov_flat, ne_channel=_cov_ts_n / _cov_flat
+    )
+    _cov_v2_ch, _cov_v2_res, _ = deposit_beam_two_stream(
+        _cov_ts_E0, _cov_ts_G0, **_cov_flat_kwargs
+    )
+    _cov_v11_ch = deposit_beam(
+        _cov_ts_E0, 0.05 * _cov_ts_G0,
+        nn=_cov_flat_kwargs["nn_channel"], ne=_cov_flat_kwargs["ne_channel"],
+        Te=_cov_ts_kwargs["Te"], launch=0, direction=1,
+        dz_cm=_cov_ts_kwargs["dz_cm"], anomalous_model="quasilinear",
+        beam_area_cm2=_cov_ts_kwargs["beam_area_cm2"] * 0.05,
+    )
+    _cov_v11_res = deposit_beam(
+        _cov_ts_E0, 0.95 * _cov_ts_G0,
+        nn=_cov_ts_kwargs["nn_reservoir"], ne=_cov_ts_kwargs["ne_reservoir"],
+        Te=_cov_ts_kwargs["Te"], launch=0, direction=1,
+        dz_cm=_cov_ts_kwargs["dz_cm"], anomalous_model="quasilinear",
+        beam_area_cm2=_cov_ts_kwargs["beam_area_cm2"] * 0.95,
+    )
+    _cov_v2_ion = _cov_v2_ch.ionization_events + _cov_v2_res.ionization_events
+    _cov_v11_ion = (
+        _cov_v11_ch.ionization_events + _cov_v11_res.ionization_events
+    )
+    assert not np.allclose(_cov_v2_ion, _cov_v11_ion, rtol=1e-6), (
+        "uniform-f_cov v2 reproduced the v1.1 emission-partition split; the "
+        "per-cell re-mix is not engaged"
+    )
+    # Both models still carry the whole emitted beam, so the difference is a
+    # re-distribution and not a leak.
+    for _cov_pair_arms in ((_cov_v2_ch, _cov_v2_res), (_cov_v11_ch, _cov_v11_res)):
+        _cov_pair_E = sum(_cov2_ray_energy(_cov_arm) for _cov_arm in _cov_pair_arms)
+        assert abs(
+            _cov_pair_E / (_cov_ts_G0 * _cov_ts_E0 * ev_to_erg) - 1.0
+        ) < 1e-9, _cov_pair_E
+
+    # (vi-d) THE Z-RESOLVED PARTITION AND ITS BUDGET, stepped forward with the
+    # field genuinely varying in z. The partition identity is now a per-cell
+    # statement with a per-cell f, and the mean field it partitions is still
+    # bitwise untouched by anything the closure does.
+    _cov_z_sim = LAPDSim1D(*_coverage_config(
+        "csda",
+        coverage_initial_profile=np.linspace(
+            0.03, 0.30, _cov_ref_sim.geometry.cells
+        ).tolist(),
+        coverage_growth_rate_per_s=1390.0,
+        coverage_backfill_time_s=3.0e-5,
+    ))
+    _cov_z_seen = _cov_z_sim.coverage_fraction_profile()
+    for _ in range(60):
+        _cov_z_sim.advance_one_step(dt=2.0e-9)
+        _cov_z_f = _cov_z_sim.coverage_fraction_profile()
+        assert np.all(_cov_z_f > 0.0) and np.all(_cov_z_f <= 1.0), _cov_z_f
+        # Growth only: the law has no decay channel and w >= 0 everywhere.
+        assert np.all(_cov_z_f >= _cov_z_seen - 1e-15), _cov_z_f - _cov_z_seen
+        _cov_z_seen = _cov_z_f
+        _cov_z_nn = np.asarray(_cov_z_sim.state.nn, dtype=float)
+        _cov_z_col = _cov_z_sim._coverage_view(_cov_z_sim.state).nn_channel
+        _cov_z_res = _cov_z_sim.coverage_reservoir_density()
+        _cov_z_mean = _cov_z_f * _cov_z_col + (1.0 - _cov_z_f) * _cov_z_res
+        assert np.max(np.abs(_cov_z_mean / _cov_z_nn - 1.0)) < 1e-12
+        assert np.all(_cov_z_col > 0.0) and np.all(_cov_z_res >= 0.0)
+    # The field really did become z-structured rather than staying uniform.
+    assert float(np.ptp(_cov_z_sim.coverage_fraction_profile())) > 0.0
+    # Total neutral inventory is untouched by the whole z-resolved closure:
+    # the deficit and the coverage field are auxiliaries over a conserved mean.
+    _cov_z_terms = _cov_z_sim.rhs_terms()
+    for _cov_name in _cov_z_sim.COVERAGE_BURN_TERMS:
+        _cov_term = _cov_z_terms[_cov_name]
+        _cov_pair = (
+            np.asarray(_cov_term.n, dtype=float)
+            * _cov_z_sim.geometry.plasma_volume_cm3
+            + np.asarray(_cov_term.nn, dtype=float)
+            * _cov_z_sim.geometry.neutral_volume_cm3
+        )
+        _cov_scale = np.maximum(
+            np.abs(np.asarray(_cov_term.n, dtype=float))
+            * _cov_z_sim.geometry.plasma_volume_cm3,
+            1.0,
+        )
+        assert np.max(np.abs(_cov_pair) / _cov_scale) < 1e-12, _cov_name
+
+    # (vi-e) RETRY SAFETY. The field is accepted-step state advanced from a
+    # stage-accumulated driver, so a REJECTED attempt must leave it exactly
+    # where it was -- the same discipline the neutral deficit already has, and
+    # the reason the driver is carried on the attempt rather than on the
+    # solver. Checked by running attempts and throwing them away.
+    _cov_retry_f = _cov_z_sim.coverage_fraction_profile()
+    _cov_retry_D = _cov_z_sim._coverage_deficit.copy()
+    _cov_retry_y = np.asarray(_cov_z_sim._y).tobytes()
+    for _cov_retry_dt in (2.0e-9, 1.0e-9, 5.0e-10):
+        _cov_attempt = _cov_z_sim._attempt_step(dt=_cov_retry_dt)
+        # The attempt DID accumulate a driver -- otherwise this proves nothing.
+        assert _cov_attempt.coverage_w is not None
+        assert np.array_equal(
+            _cov_z_sim.coverage_fraction_profile(), _cov_retry_f
+        ), "a rejected attempt advanced the coverage field"
+        assert np.array_equal(_cov_z_sim._coverage_deficit, _cov_retry_D)
+        assert np.asarray(_cov_z_sim._y).tobytes() == _cov_retry_y
+        # ...and nothing is left armed on the solver between attempts.
+        assert _cov_z_sim._coverage_w_accum is None
+        assert _cov_z_sim._coverage_burn_accum is None
+    # An ACCEPTED attempt does advance it, from the driver it carried: the same
+    # attempt object, applied, must move the field exactly where the frozen
+    # logistic says. This is the positive control for the three negatives.
+    _cov_acc = _cov_z_sim._attempt_step(dt=2.0e-9)
+    _cov_acc_expect = 1.0 / (
+        1.0
+        + (1.0 / _cov_retry_f - 1.0)
+        * np.exp(-_cov_z_sim._coverage_r * np.asarray(_cov_acc.coverage_w))
+    )
+    _cov_z_sim._accept_step_attempt(_cov_acc)
+    assert np.allclose(
+        _cov_z_sim.coverage_fraction_profile(), _cov_acc_expect,
+        rtol=1e-14, atol=0.0,
+    )
+    assert not np.array_equal(
+        _cov_z_sim.coverage_fraction_profile(), _cov_retry_f
+    ), "the accepted attempt did not advance the field; (vi-e) is vacuous"
 
     print(
         "sim1d smoke ok: "

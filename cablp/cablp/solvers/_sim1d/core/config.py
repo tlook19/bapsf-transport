@@ -2154,23 +2154,28 @@ def timestep_defaults():
 
 
 def coverage_closure_defaults():
-    """Return clumpy-plasma coverage-closure defaults.
+    """Return clumpy-plasma coverage-closure defaults (v2, z-resolved).
 
     Every key here is read ONLY under the ``coverage_closure`` flag and is
-    inert otherwise. The closure carries a single scalar coverage fraction
-    ``f_cov(t) in (0, 1]``: the plasma occupies that fraction of the column
-    cross-section, so channel-local densities are the mean divided by
-    ``f_cov`` and the remaining ``1 - f_cov`` is a neutral reservoir. See
-    ``MODEL.md`` for the term placement.
+    inert otherwise. The closure carries a PER-CELL coverage fraction
+    ``f_cov(z, t) in (0, 1]``: the plasma occupies that fraction of the column
+    cross-section at each axial position, so channel-local densities are the
+    mean divided by ``f_cov(z)`` and the remaining ``1 - f_cov(z)`` is a
+    neutral reservoir. See ``MODEL.md`` for the term placement.
 
     coverage_growth_rate_per_s:
-        Logistic growth rate ``r`` [s^-1] of the coverage fraction, which
-        evolves as ``df_cov/dt = r * f_cov * (1 - f_cov)`` from
-        ``coverage_initial_fraction`` at the plasma-phase time origin. Must be
-        finite and ``>= 0``; ``0`` freezes the coverage at its initial value.
-        Since the law is autonomous and takes no feedback, the solver
-        evaluates its closed-form solution at each stage time rather than
-        co-integrating it.
+        Column-mean logistic growth rate ``r0`` [s^-1] of the coverage field,
+        which evolves as
+        ``df_cov(z)/dt = r0 * w(z, t) * f_cov(z) * (1 - f_cov(z))`` from its
+        initial condition at the plasma-phase time origin. ``w(z, t)`` is the
+        local beam-ionization rate normalized to its own volume-weighted
+        column mean, so ``<w> = 1`` by construction and ``r0`` keeps its
+        meaning as the mean rate -- it introduces no constant of its own and
+        is the calibration target. Must be finite and ``>= 0``; ``0`` freezes
+        the field at its initial condition. The law takes feedback from the
+        state (deposition depends on the coverage it drives), so the solver
+        CO-INTEGRATES it on the step's stage structure rather than evaluating
+        a closed form.
     coverage_backfill_time_s:
         Relaxation time ``tau_backfill`` [s] over which the uncovered
         reservoir refills the covered column's neutral density toward the
@@ -2178,13 +2183,22 @@ def coverage_closure_defaults():
         between cells and none into or out of the conserved mean neutral
         field, so total particle inventory is unaffected by construction.
     coverage_initial_fraction:
-        Initial coverage fraction ``f_cov0`` at the plasma-phase time origin.
-        ``None`` (the default) is the only value permitted with the flag off;
-        with the flag on it is REQUIRED and must lie in ``(0, 1]``. This is an
-        initial condition, not a physical constant: it is the per-realization
-        ensemble hook, and ``coverage_growth_rate_per_s`` is the second one
-        (both are ordinary config keys, so a realization is one run with one
-        pair of values and no solver-side randomness exists).
+        UNIFORM initial coverage fraction ``f_cov0`` at the plasma-phase time
+        origin, applied to every cell. ``None`` (the default) is the only
+        value permitted with the flag off; with the flag on it must lie in
+        ``(0, 1]``. This is an initial condition, not a physical constant.
+    coverage_initial_profile:
+        PER-CELL initial coverage ``f_cov0(z)``: a sequence of length ``nx``
+        (the grid's cell count) with every entry finite and in ``(0, 1]``.
+        ``None`` (the default) is the only value permitted with the flag off.
+        With the flag on, EXACTLY ONE of this and
+        ``coverage_initial_fraction`` must be given -- they are two spellings
+        of the same initial condition and neither modifies the other, so
+        supplying both is a construction-time ``ValueError`` rather than a
+        rule the reader has to remember. This is the per-realization ensemble
+        hook: the solver contains no randomness, and an ensemble is generated
+        by building profiles externally and passing them here, one run per
+        realization.
 
     Values and their provenance: ``config_defaults_provenance.md``.
     """
@@ -2192,6 +2206,7 @@ def coverage_closure_defaults():
         "coverage_growth_rate_per_s": 1390.0,
         "coverage_backfill_time_s": 3.0e-5,
         "coverage_initial_fraction": None,
+        "coverage_initial_profile": None,
     }
 
 
