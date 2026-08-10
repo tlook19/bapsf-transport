@@ -524,56 +524,163 @@ and reduced from the present $-46.0$ kW, with no rate tuning (Phelps supersedes 
 IAEA rate set; the bracket is a cross-check).
 
 
-## Clumpy-plasma coverage closure v1 (`coverage_closure`, default off)
+## Clumpy-plasma coverage closure v2 (`coverage_closure`, default off)
 
 Breakdown in the machine is azimuthally patchy: discrete channels carry the
 discharge, and a 1D mean-field solver azimuthally averages that structure away.
-v1 restores the leading consequence of it with a single **scalar** coverage
-fraction $f_\text{cov}(t)\in(0,1]$ -- the fraction of the column cross-section
-the plasma occupies. Channel-local densities are then the mean divided by
-$f_\text{cov}$, and the remaining $1-f_\text{cov}$ is a neutral reservoir.
+The closure restores the leading consequence of it with a coverage fraction
+$f_\text{cov}(z,t)\in(0,1]$ -- the fraction of the column cross-section the
+plasma occupies, **per axial cell**. Channel-local densities are then the mean
+divided by $f_\text{cov}(z)$, and the remaining $1-f_\text{cov}(z)$ is a
+neutral reservoir.
 
-**The coverage field.** $f_\text{cov}$ obeys the logistic law
+The geometry is **patches, not a connected channel**: $f_\text{cov}(z)$ is the
+local broken-down area fraction at each $z$, with no axial-connectivity
+requirement and no threshold. Coverage feeds the physics continuously, exactly
+as the scalar did.
 
-$$\frac{df_\text{cov}}{dt} = r\,f_\text{cov}\,(1-f_\text{cov}),\qquad
-f_\text{cov}(t_0)=f_{\text{cov}0}$$
+**The coverage field.** $f_\text{cov}$ obeys the logistic law with a
+deposition-keyed local rate,
 
-from the plasma-phase time origin, with $r$ =
-`coverage_growth_rate_per_s` and $f_{\text{cov}0}$ =
-`coverage_initial_fraction`. There is deliberately **no decay or drop-out
-term** in v1; that richness is a pre-registered open question for the ensemble
-leg, not something to patch in here. Because the law is autonomous and takes no
-feedback from the state, the solver evaluates its closed form
-$f_\text{cov}(t)=\left[1+(1/f_{\text{cov}0}-1)e^{-r(t-t_0)}\right]^{-1}$ at each
-stage time rather than co-integrating it: exact, stage-time consistent through
-the same SSPRK2 stage clock the gas-puff waveform rides, and reproducible
-across step retries and Picard re-runs with no snapshot state. **A v2 that adds
-feedback or a decay channel loses that property and must move to genuine
-co-integration.**
+$$\frac{\partial f_\text{cov}(z)}{\partial t}
+= r_0\,w(z,t)\,f_\text{cov}(z)\,\bigl(1-f_\text{cov}(z)\bigr),$$
 
-**The two-medium beam split (v1.1).** The beam is emitted over the WHOLE
-cathode face, so it does not all enter the channels: it divides by area. The
-fraction $f_\text{cov}$ of the emitted flux enters the covered medium and the
-remaining $1-f_\text{cov}$ enters the reservoir -- the part of the
-cross-section the discharge has not broken down. Two rays are marched per
-cathode end and their per-cell totals are summed,
+with $r_0$ = `coverage_growth_rate_per_s`. There is deliberately **no decay or
+drop-out term**; that richness is a pre-registered open question for the
+ensemble leg, not something to patch in here.
 
-$$\text{deposition} = \underbrace{\text{ray}\!\left(f_\text{cov}\Gamma_0;\;
-n/f_\text{cov},\;n_{n,c},\;f_\text{cov}A\right)}_{\text{channel arm}}
-\;+\;
-\underbrace{\text{ray}\!\left((1-f_\text{cov})\Gamma_0;\;
-n_\text{floor},\;n_{n,r},\;(1-f_\text{cov})A\right)}_{\text{reservoir arm}},$$
+$w(z,t)$ is the local beam-ionization rate normalized to its own
+**volume-weighted column mean**,
 
-with the reservoir arm's plasma density at the model's own "no plasma"
-representation, the density floor, because the closure's premise is that
-plasma lives in the covered fraction. Note what the split does to the
-quasilinear beam density: each arm carries its own share of the flux over its
-own share of the area, so $n_b$ comes out the same in both and equal to the
-mean-field value. That is the physical statement -- the emitted beam is
-uniform over the cathode face, and it is the MEDIUM that differs between the
-arms, not the beam. The v1 build routed the *whole* beam through the channels,
-which is what made it a pure ignition accelerant; the reservoir arm is what
-restores the machine-wide deposition the measured conducting phase shows.
+$$w_i = \frac{S_i}{\bigl(\sum_j S_j V_j\bigr)\big/\bigl(\sum_j V_j\bigr)},$$
+
+with $S$ the per-cell beam ion birth density (the `n` row of
+`beam_ionization_birth`, already carrying the active-plasma mask) and $V$ the
+plasma cell volumes, both sums running over the **plasma-active** cells. So
+normalized, $\langle w\rangle_V = 1$ identically: the rescaling is
+parameter-free, it introduces **no new constant**, and $r_0$ keeps exactly the
+meaning it had in v1 -- the column-mean growth rate, and still the F2
+calibration target. What $w$ does is redistribute growth in $z$, not change how
+much growth there is on average. **Degenerate case, stated:** when the beam
+deposits no ionization anywhere -- no cathode solve this evaluation, no
+emission, or a ray that dies in the gap -- the mean is zero, $w$ is $0/0$, and
+the answer is $w\equiv0$, i.e. no growth. That is the physical statement
+(nothing is breaking the column down), not a numerical guard.
+
+**Co-integration.** This law takes feedback from the state -- the deposition
+that drives it is shaped by the coverage it drives -- so v1's closed form is
+gone, exactly as v1's own documentation said a feedback v2 would require. The
+field is carried as **accepted-step state** and advanced on the SSPRK2 stage
+structure, using the discipline the neutral deficit $D$ already uses: every RHS
+stage adds $\tfrac{dt}{2}\,w_\text{stage}$ to a per-attempt accumulator, the
+accumulator is carried on the step attempt (not on the solver), and the field is
+advanced once per ACCEPTED step from $\bar w = w_\text{accum}/dt$ by the exact
+solution of the frozen-driver logistic,
+
+$$f' = \Bigl[1 + \bigl(1/f - 1\bigr)\,e^{-r_0\bar w\,dt}\Bigr]^{-1}.$$
+
+That advance is unconditionally positive, cannot leave $(0,1]$ at any $dt$,
+reduces to $f$ identically wherever $\bar w$ or $r_0$ is zero, and returns
+exactly $1.0$ wherever $f$ is already 1. A **rejected** attempt drops its
+accumulator with the attempt and leaves the field untouched; a re-tried step
+re-derives its own driver. The packed state vector is **not** widened -- the
+field is an auxiliary per-cell array beside $D$, so nothing downstream of
+`pack_state` changes.
+
+Within a step's stages the field itself is held frozen (its DRIVER is what is
+stage-accumulated), which is the same first-order treatment the DVM's scoped
+transfer and the frozen-$\kappa$ Picard-0 path already carry.
+
+**The two-stream march (v2).** The beam is emitted over the WHOLE cathode face,
+so it does not all enter the patches: it divides by area. With $f_\text{cov}$
+varying in $z$ the two media exchange cross-sectional territory as the ray
+advances, so the partition cannot be made once at emission -- it is re-made at
+every cell. One ray is marched per cathode end
+(`deposit_beam_two_stream`), and in each cell $k$:
+
+1. it enters with a total surviving primary flux $\Gamma_k$ at mean energy
+   $E_k$;
+2. the flux re-splits by the LOCAL coverage -- $f_\text{cov}(z_k)\Gamma_k$ into
+   the channel medium $(n/f_\text{cov}(z_k),\,n_{n,c})$ and
+   $(1-f_\text{cov}(z_k))\Gamma_k$ into the reservoir medium
+   $(n_\text{floor},\,n_{n,r})$, on cross-sections $f_\text{cov}A$ and
+   $(1-f_\text{cov})A$;
+3. each arm marches that cell's path length in its own medium and banks into
+   its own per-cell arrays -- **per-cell deposition is the sum of the two
+   arms' deposits there**;
+4. the arms re-mix at the cell exit into one stream:
+   $\Gamma_{k+1}=\gamma_c'+\gamma_r'$ and
+   $E_{k+1}=(\gamma_c'E_c'+\gamma_r'E_r')/\Gamma_{k+1}$.
+
+The reservoir arm's plasma density is the model's own "no plasma"
+representation, the density floor, because the closure's premise is that plasma
+lives in the covered fraction.
+
+**The stated approximation.** Re-mixing at every cell is the statement that the
+breakdown patches **decorrelate axially on the cell scale**: an electron that
+crossed cell $k$ inside a patch has no memory of that on entering cell $k+1$, so
+the population is re-randomised over the local cross-section there. The re-mix
+is a ONE-GROUP closure on that population -- it carries the flux-weighted mean
+energy forward rather than two separate energies -- and it conserves flux and
+power identically at every re-partition boundary, since $\Gamma_{k+1}E_{k+1}$ is
+by construction $\gamma_c'E_c'+\gamma_r'E_r'$. **No flux or beam energy is
+created or lost at a re-partition boundary**; what the closure discards is the
+SPREAD of the primary energy distribution, which the CSDA model does not carry
+in the first place.
+
+Note what the split does to the quasilinear beam density: each arm carries its
+share of the flux over the matching share of the area, so $n_b=\Gamma/(Av)$ in
+both and equal to the mean-field value. That is the physical statement -- the
+emitted beam is uniform over the cathode face, and it is the MEDIUM that
+differs between the arms, not the beam.
+
+**Uniform $f_\text{cov}$ does NOT reduce to v1.1, and that is expected.**
+v1.1 partitioned the emitted flux once at the cathode face and let each arm
+keep its own energy to the end of the column; v2 pulls both arms back to the
+common mixed energy at every cell face. Those are different models even when
+the profile is flat, so a flat-profile v2 run will not reproduce a v1.1 run and
+must not be expected to. Two consequences are worth stating explicitly:
+
+* The per-arm energy share is **no longer** $(1-f_\text{cov})\Gamma_0E_0$:
+  flux migrates between the arms all the way down the column, so the reservoir
+  arm carries $\sum_k (1-f_k)\Gamma_k\,\Delta E_{\text{res},k}$. The smoke
+  suite's beam-split gate asserted the v1.1 per-arm identity; under v2 that one
+  assertion is replaced by the TOTAL closure at the same tolerance (both arms
+  plus the re-mixing carry exactly the emitted beam), with the per-cell re-mix
+  budget -- which IS still exact under v2 -- gated separately.
+* Gap survival is now genuinely **fractional**. A single-medium CSDA ray either
+  crosses the cathode-anode gap whole or dies inside it; a two-stream ray can
+  lose one arm in the gap while the other carries its share past. The ledger
+  tripwire's "ray" view therefore reads the march's own record of the flux
+  ENTERING each cell (recorded before any anode-mesh interception, which removes
+  primaries rather than stopping them) instead of the binary breakout test.
+
+**The exact reduction** is $f_\text{cov}\equiv1$ in every cell: there is then no
+uncovered medium anywhere, the caller marches the shipped single-medium
+`deposit_beam` rather than entering the two-stream march at all, every
+concentration factor is multiplication by exactly 1.0, and the flag-off
+trajectory is reproduced bit-for-bit. A profile that is 1 in SOME cells is
+handled cell-wise: those cells give the reservoir arm zero cross-section and
+zero flux, and cost exactly what a single-medium cell costs.
+
+**Initial condition and the ensemble hook.** Exactly one of
+`coverage_initial_fraction` (one uniform $f_{\text{cov}0}$) and
+`coverage_initial_profile` (a per-cell $f_{\text{cov}0}(z)$ of length `nx`) must
+be given with the flag on. They are two spellings of the same initial condition
+and neither modifies the other, so supplying both is a construction-time
+`ValueError` rather than a precedence rule the reader has to remember. There is
+**no RNG inside the solver**: an ensemble is generated by building profiles
+externally and passing them here, one run per realization.
+
+**Scope: the walk closures are refused.** `beam_product_transport="nonlocal"`
+(WP-D) and `heating_anomalous_transport="tail_walk"` (WP-E) withhold banks
+during the march and walk them afterwards on a single medium's stopping
+coefficient. The fused two-stream march has one post-march walk stage and two
+media, and the reservoir's $n_e$ is smaller than the channel's by
+$f_\text{cov}$, so walking reservoir-born products on the channel's stopping
+power would silently misattribute where they thermalize. Both combinations are
+construction-time `ValueError`s. (v1.1 could support them because it ran two
+independent rays, each with its own hoisted stopping coefficient.)
 
 **Where the concentration factors go.** The rule is that a factor appears only
 where it does not cancel. A volumetric rate that is bilinear in a plasma and a
@@ -613,17 +720,13 @@ linear in the local density:
    reproduce is the channel's. The same cancellation is why the anode sample
    and the sheath $\alpha$ take no factor.
 
-   The transmission $\sigma_\text{eff}$ reproduces is the flux-weighted
-   survival of BOTH arms, i.e. of the whole emitted beam, so the circuit's
-   bypass is the real one and not one medium's.
-3. **The anomalous tail channel.** The QL tail walkers are marched on the same
-   CSDA machinery, so they inherit the channel $n_e$ (through the hoisted
-   stopping coefficient) and the channel $n_n$ they ionize. No separate factor
-   exists for them.
+   The transmission $\sigma_\text{eff}$ reproduces is the survival of the whole
+   emitted beam -- both media together, measured by a gap-clipped run of the
+   SAME two-stream march -- so the circuit's bypass is the real one and not one
+   medium's.
 
-At $f_\text{cov}=1$ every factor above is multiplication by exactly 1.0 and the
-model reduces to the shipped one; $f_{\text{cov}0}=1$ with $r=0$ reproduces the
-flag-off trajectory bit-for-bit.
+At $f_\text{cov}=1$ in every cell each factor above is multiplication by exactly
+1.0 and the model reduces to the shipped one bit-for-bit.
 
 **The reservoir, and why the budget cannot open.** The mean neutral field $n_n$
 keeps its exact meaning and its exact equations: **every existing term is
@@ -658,11 +761,14 @@ rather than a $0/0$. The reservoir arm of the beam split debits the OTHER medium
 mean while leaving the covered column alone and so closes the gap between
 them; the deficit equation therefore carries both debits, at different weights:
 
-$$\frac{dD}{dt} = -B_\text{cov}\frac{1-f_\text{cov}}{f_\text{cov}}
-+ B_\text{res} - \frac{D}{\tau_\text{backfill}}$$
+$$\frac{dD(z)}{dt} = -B_\text{cov}(z)\frac{1-f_\text{cov}(z)}{f_\text{cov}(z)}
++ B_\text{res}(z) - \frac{D(z)}{\tau_\text{backfill}}$$
 
 (both debits negative on a burn, so the first term grows the deficit and the
-second shrinks it). $B_\text{cov}$ is the step-integrated sum of the neutral
+second shrinks it). Under v2 every $f_\text{cov}$ above is the LOCAL one: the
+algebra is unchanged and elementwise, including the positivity floor
+$-(1-f_\text{cov}(z))n_n/f_\text{cov}(z)$, which closes onto 0 in cells that are
+fully covered. $B_\text{cov}$ is the step-integrated sum of the neutral
 rows of the COVERED-ONLY channels -- the terms whose rate is proportional to a
 plasma or beam density, so the reaction can only happen where the plasma is:
 ionization birth, the CHANNEL arm's share of beam ionization birth, both
@@ -676,29 +782,36 @@ weights the DVM ionization booking uses, carried on the step attempt, and
 applied once per ACCEPTED step, so a rejected attempt or a Picard re-run cannot
 double-count it.
 
-**The reservoir-born plasma caveat (v1.1), stated rather than hidden.** The
-reservoir arm's ionization births are booked into the MEAN plasma fields,
-conservatively and with their full energy cost, exactly as the channel arm's
-are. But the closure then READS those mean fields as covered plasma: the very
-next concentration divides them by $f_\text{cov}$ along with everything else.
-So plasma born in the uncovered fraction is, one step later, treated as though
-it lived in the channels. This is the honest cost of carrying one plasma field
-for two media, and it is the leading candidate for what v2 has to fix -- either
-by giving the reservoir its own plasma field, or by letting $f_\text{cov}$ be
-driven by that birth rather than by an imposed logistic law. It is bounded in
-the regime v1.1 targets, where the reservoir is tenuous and its births are a
-small share of the total, and it is NOT bounded once the reservoir carries an
-appreciable plasma density -- which is precisely when $f_\text{cov}$ should
-have grown anyway.
+**The reservoir-born plasma caveat, stated rather than hidden.** The reservoir
+arm's ionization births are booked into the MEAN plasma fields, conservatively
+and with their full energy cost, exactly as the channel arm's are. But the
+closure then READS those mean fields as covered plasma: the very next
+concentration divides them by $f_\text{cov}(z)$ along with everything else. So
+plasma born in the uncovered fraction is, one step later, treated as though it
+lived in the patches. This is the honest cost of carrying one plasma field for
+two media. v2 addresses **half** of the pair v1.1 named: $f_\text{cov}$ is now
+driven by that birth rather than by an imposed autonomous law, so the coverage
+grows where the reservoir is actually being ionized. Giving the reservoir its
+own plasma field remains **open** and is the leading candidate for v3. The
+caveat is bounded in the regime this closure targets, where the reservoir is
+tenuous and its births are a small share of the total, and it is NOT bounded
+once the reservoir carries an appreciable plasma density -- which is precisely
+when $f_\text{cov}$ should have grown anyway.
 
-**v1 limitations, stated rather than absorbed.** The bulk fluid reactions run
+**Limitations, stated rather than absorbed.** The bulk fluid reactions run
 on the mean $n_n$, which is exact when the column is backfilled
 ($n_{n,c}=n_n$) and understates their depletion sensitivity otherwise. The
 deficit is carried on the chamber-mean $n_n$ rather than on a column-resolved
 partition, so $\tau_\text{backfill}$ absorbs the column-to-chamber exchange as
-well as the azimuthal one. The closure requires `neutral_model="moment"` (the
-kinetic arms take over the fluid $n_n$ rows once engaged, so the column would
-never deplete and the backfill would be a silent no-op) and refuses the
+well as the azimuthal one. The coverage field is held frozen within a step's
+stages (only its DRIVER is stage-accumulated), so the feedback between coverage
+and deposition is resolved at first order in $dt$ within the step, the same
+treatment the DVM's scoped transfer carries. There is no azimuthal transport of
+coverage: $f_\text{cov}(z)$ cells are independent, and patch spreading in $z$
+enters only through the deposition profile that drives them. The closure
+requires `neutral_model="moment"` (the kinetic arms take over the fluid $n_n$
+rows once engaged, so the column would never deplete and the backfill would be
+a silent no-op), refuses the WP-D/WP-E walk closures (above), and refuses the
 compiled kernels while it is on (the beam deposition it concentrates has a
-compiled transcription that v1 does not touch and that has never been
-bit-compared under coverage). Both are construction-time `ValueError`s.
+compiled transcription that the closure does not touch and that has never been
+bit-compared under coverage). All are construction-time `ValueError`s.

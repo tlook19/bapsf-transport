@@ -677,19 +677,24 @@ behind them.
 
 ## `coverage_closure_defaults`
 
-All three keys are read only under the default-off `coverage_closure` flag, so
+All four keys are read only under the default-off `coverage_closure` flag, so
 nothing here is on any shipped trajectory. The closure declares exactly TWO
 physical constants — `coverage_growth_rate_per_s` and
-`coverage_backfill_time_s`. `coverage_initial_fraction` is an initial
-condition, not a constant, and appears here only because it also has no
-default. **The v1.1 two-medium beam split introduced no constant of its own:
-the split ratio IS `f_cov`, and the reservoir's plasma density is the existing
-`ne_floor` rather than a new parameter.**
+`coverage_backfill_time_s`. `coverage_initial_fraction` and
+`coverage_initial_profile` are initial conditions, not constants, and appear
+here only because they also have no default. **Neither the two-medium beam
+split nor the v2 z-resolved rebuild introduced a constant of its own: the split
+ratio IS `f_cov`, the reservoir's plasma density is the existing `ne_floor`,
+and v2's growth driver `w(z,t)` is the beam-ionization rate divided by its own
+volume-weighted column mean — a normalization with `<w> = 1` by construction,
+so it carries no free scale and leaves `coverage_growth_rate_per_s` meaning
+exactly what it meant before.**
 
 **`coverage_growth_rate_per_s = 1390.0` s^-1 — FITTED-on-F2, CALIBRATION
 PENDING. The shipped number is a PLACEHOLDER and must not be quoted as a
-result.** Under the logistic law `df_cov/dt = r f_cov (1 - f_cov)` the
-small-`f_cov` limit is exponential with e-fold time `1/r`, so the placeholder
+result.** Under the logistic law `df_cov/dt = r0 w f_cov (1 - f_cov)` — with
+`w` the parameter-free normalized driver, so `r0` is the COLUMN-MEAN rate — the
+small-`f_cov` limit is exponential with e-fold time `1/r0`, so the placeholder
 is the reciprocal of the midpoint of the MEASURED pedestal e-fold window
 713–725 µs (`1/719 µs = 1391 s^-1`, rounded to 1390). That is a scale-setting
 identification, NOT the calibration: the measured e-fold constrains the growth
@@ -715,10 +720,22 @@ chamber-mean `nn` field the burn debits, so `tau_backfill` absorbs the
 column-to-chamber exchange as well as the channel-to-inter-channel one; and
 the exchange is a single-rate relaxation rather than a transport operator.
 
-**`coverage_initial_fraction = None` — no default, REQUIRED when the flag is
-on, and an INITIAL CONDITION rather than a physical constant.** It is one of
-the two L3 ensemble hooks (the other is `coverage_growth_rate_per_s`): a
-realization is one run at one pair of values, and no randomness exists inside
-the solver. `None` is not a neutral default — 1.0 is the fully-covered
-mean-field limit and would make the flag a silent no-op — so the flag requires
-the key explicitly.
+**`coverage_initial_fraction = None` — no default, and an INITIAL CONDITION
+rather than a physical constant.** The uniform spelling: one covered fraction
+applied to every cell. `None` is not a neutral default — 1.0 is the
+fully-covered mean-field limit and would make the flag a silent no-op — so the
+flag requires an initial condition explicitly.
+
+**`coverage_initial_profile = None` — no default, and an INITIAL CONDITION
+rather than a physical constant.** The per-cell spelling: `f_cov0(z)` as a
+sequence of length `nx`, every entry in `(0, 1]`. This is the L3 ENSEMBLE HOOK.
+The solver contains no randomness; a realization is one run with one externally
+generated profile, so the ensemble's statistics live entirely in whatever
+generates the profiles and are reproducible from the saved config alone.
+
+With the flag on, EXACTLY ONE of the two must be given — they are two spellings
+of the same initial condition and neither modifies the other, so there is no
+composition rule and supplying both is a construction-time `ValueError`. This
+is a deliberate choice of the least-surprising rule over a precedence rule
+(e.g. "profile wins", or "profile scaled by the fraction"), which would have to
+be remembered and could be got wrong silently.
