@@ -5346,9 +5346,28 @@ class LAPDSim1D:
         """Parse and seed the electrode sample-smoothing EMA (config.py).
 
         Tracked cells: the cathode sample cell and the first anode face's
-        two flanking cells -- every (n, Te) the sheath solve reads. The EMA
+        two flanking cells -- every (n, Te) a sheath solve samples. The EMA
         is seeded from the initial state (deterministic) and updated on
         accepted steps only, so dt-retries never move it.
+
+        KNOWN DEVIATION, deliberate and documented rather than unified: the
+        smoothed sample does NOT reach every consumer of those cells. The
+        substitution happens in ``_smoothed_sample_state``, and only its
+        callers see it --
+
+        - the RHS/beam-side sheath solve (``solve_cathode_boundary``, which
+          smooths the state it was handed before dispatching), and
+        - the accepted-state re-solve that feeds the surface updates
+          (cathode warming and the coverage model),
+
+        both consume the EMA sample. The current-driven CIRCUIT advance does
+        not: it builds its ``V_dis(I)`` evaluator on ``self.state``
+        directly, so the loop-current root-find reads the RAW accepted
+        (n, Te) in the same cells. With smoothing on, the two sides can
+        therefore evaluate the sheath from different (n, Te) within one
+        accepted step. Smoothing is off by default (``None``), where
+        ``_smoothed_sample_state`` returns its argument unchanged and the
+        two sides read the identical state bit for bit.
         """
         raw = self._input_dict.get("cathode_sample_smoothing", None)
         self._sample_smoothing = None
@@ -5409,7 +5428,14 @@ class LAPDSim1D:
         """Return ``state`` with the sampled electrode cells' (n, Te)
         replaced by their supply-averaged EMA values (config.py:
         cathode_sample_smoothing). Off (the default) returns ``state``
-        unchanged -- the golden path is bit-exact."""
+        unchanged -- the golden path is bit-exact.
+
+        This is the ONLY substitution site, so the smoothed sample reaches
+        exactly its callers: the RHS/beam-side sheath solve and the
+        accepted-state surface-update re-solve. The current-driven circuit
+        advance bypasses it and reads the raw accepted state -- a known
+        deviation from "every sheath consumer sees the EMA", described in
+        full on ``_init_sample_smoothing``."""
         if self._sample_ema is None:
             return state
         n = np.asarray(state.n, dtype=float).copy()
