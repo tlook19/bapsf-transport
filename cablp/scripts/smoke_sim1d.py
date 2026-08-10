@@ -13068,50 +13068,68 @@ print(json.dumps({
     # rest enters the reservoir. Each arm must carry exactly its AREA share and
     # nothing may be created or lost by splitting -- deposit_beam closes energy
     # per ray, so that closure is the direct test of the ratio.
-    _cov_split_sim = LAPDSim1D(*_coverage_config(
-        "csda",
-        coverage_initial_fraction=0.05,
-        coverage_growth_rate_per_s=0.0,
-    ))
-    _cov_split_sim.advance_one_step(dt=2.0e-9)
+    #
+    # This runs on a BEAM-LIVE state, and that is the whole point of the
+    # configuration below. The beam only exists where phi_c > I_ion; on the
+    # cheap nx=12 coverage config used by (i)-(iii) and (v), phi_c is about
+    # -1.29 eV after one step, both deposition dicts come back None, and a
+    # gate that skipped on that condition could never fail. So the split is
+    # exercised on the conducting-phase stance (nx=24, 40 steps of 2e-9 s --
+    # seconds of wall time), and liveness is ASSERTED rather than tested for:
+    # a state that stops driving the beam must break this gate loudly, not
+    # silently retire it.
+    from covbuild_run_conducting_phase import build_config as _cov_live_config
+
+    _cov_split_sim = LAPDSim1D(*_cov_live_config(24, coverage=(0.05, 0.0)))
+    for _ in range(40):
+        _cov_split_sim.advance_one_step(dt=2.0e-9)
     _cov_solve = _cov_split_sim.solve_cathode_boundary(state=_cov_split_sim.state)
     _cov_f0_split = _cov_split_sim.coverage_fraction()
     _cov_res_dep = _cov_solve.beam_reservoir_deposition
-    assert _cov_res_dep is not None, "the split produced no reservoir arm"
     _cov_total_dep = _cov_solve.beam_deposition
     _cov_E0 = float(_cov_solve.beam_result.result.phi_c)
     _cov_Gamma0 = float(_cov_solve.beam_result.result.I_eth_star) / 1.602176634e-19
-    if _cov_Gamma0 > 0.0 and _cov_res_dep.get(0) is not None:
-        def _cov_ray_energy(dep):
-            return (
-                float(np.sum(dep.plasma_heating_erg_s))
-                + float(np.sum(dep.radiated_erg_s))
-                + float(np.sum(dep.ionization_cost_erg_s))
-                + float(np.sum(dep.end_loss_low_erg_s))
-                + float(np.sum(dep.end_loss_high_erg_s))
-                + float(np.sum(dep.end_loss_tail_low_erg_s))
-                + float(np.sum(dep.end_loss_tail_high_erg_s))
-                + float(dep.anode_intercepted_erg_s)
-                + float(dep.transmitted_flux) * float(dep.transmitted_energy_eV)
-                * ev_to_erg
-            )
-        # The reservoir ray carries (1 - f_cov) of the emitted beam...
-        _cov_res_E = _cov_ray_energy(_cov_res_dep[0])
-        _cov_expect_res = (1.0 - _cov_f0_split) * _cov_Gamma0 * _cov_E0 * ev_to_erg
-        assert abs(_cov_res_E / _cov_expect_res - 1.0) < 1e-9, (
-            _cov_res_E, _cov_expect_res
+    # LIVENESS, hard: an emitting beam above the ionization threshold, and both
+    # arms present on the cathode end this gate goes on to measure.
+    assert _cov_E0 > I_ion, ("beam is not live: phi_c must exceed I_ion", _cov_E0)
+    assert _cov_Gamma0 > 0.0, ("beam is not live: no emitted flux", _cov_Gamma0)
+    assert _cov_total_dep is not None and _cov_total_dep.get(0) is not None, (
+        "the beam deposited nothing on the cathode end"
+    )
+    assert _cov_res_dep is not None and _cov_res_dep.get(0) is not None, (
+        "the split produced no reservoir arm"
+    )
+
+    def _cov_ray_energy(dep):
+        return (
+            float(np.sum(dep.plasma_heating_erg_s))
+            + float(np.sum(dep.radiated_erg_s))
+            + float(np.sum(dep.ionization_cost_erg_s))
+            + float(np.sum(dep.end_loss_low_erg_s))
+            + float(np.sum(dep.end_loss_high_erg_s))
+            + float(np.sum(dep.end_loss_tail_low_erg_s))
+            + float(np.sum(dep.end_loss_tail_high_erg_s))
+            + float(dep.anode_intercepted_erg_s)
+            + float(dep.transmitted_flux) * float(dep.transmitted_energy_eV)
+            * ev_to_erg
         )
-        # ...and the two arms together carry the WHOLE of it, so the split
-        # neither creates nor destroys beam energy.
-        _cov_tot_E = _cov_ray_energy(_cov_total_dep[0])
-        assert abs(
-            _cov_tot_E / (_cov_Gamma0 * _cov_E0 * ev_to_erg) - 1.0
-        ) < 1e-9, _cov_tot_E
-        # The reservoir arm really deposits: it is the machine-wide channel the
-        # closure exists to restore, and it is a strict part of the total.
-        _cov_res_events = float(np.sum(_cov_res_dep[0].ionization_events))
-        _cov_tot_events = float(np.sum(_cov_total_dep[0].ionization_events))
-        assert 0.0 < _cov_res_events < _cov_tot_events
+    # The reservoir ray carries (1 - f_cov) of the emitted beam...
+    _cov_res_E = _cov_ray_energy(_cov_res_dep[0])
+    _cov_expect_res = (1.0 - _cov_f0_split) * _cov_Gamma0 * _cov_E0 * ev_to_erg
+    assert abs(_cov_res_E / _cov_expect_res - 1.0) < 1e-9, (
+        _cov_res_E, _cov_expect_res
+    )
+    # ...and the two arms together carry the WHOLE of it, so the split
+    # neither creates nor destroys beam energy.
+    _cov_tot_E = _cov_ray_energy(_cov_total_dep[0])
+    assert abs(
+        _cov_tot_E / (_cov_Gamma0 * _cov_E0 * ev_to_erg) - 1.0
+    ) < 1e-9, _cov_tot_E
+    # The reservoir arm really deposits: it is the machine-wide channel the
+    # closure exists to restore, and it is a strict part of the total.
+    _cov_res_events = float(np.sum(_cov_res_dep[0].ionization_events))
+    _cov_tot_events = float(np.sum(_cov_total_dep[0].ionization_events))
+    assert 0.0 < _cov_res_events < _cov_tot_events
 
     # (v) WHOLE-SYSTEM PARTICLE BUDGET. The closure re-partitions neutrals
     # between a covered column and a reservoir; it must not create or destroy
