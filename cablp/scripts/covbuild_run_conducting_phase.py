@@ -100,7 +100,7 @@ def main(argv=None):
     result = sim.get_results()
     save_result_hdf5(args.save_h5, result, params=params, flags=flags)
 
-    times = np.asarray(result.t, dtype=float)
+    times = np.asarray(result.time, dtype=float)
     breakdown = None
     events = getattr(result, "phase_events", None) or {}
     for when, phase, reason in zip(
