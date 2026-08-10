@@ -2320,9 +2320,21 @@ class LAPDSim1D:
         # Side channel, not a term: the reservoir arm's neutral debit. It is
         # read out here and deliberately NOT placed in the ledger below, so
         # the RHS sum and the saved term structure are untouched by it.
-        self._coverage_reservoir_debit = beam_terms.get(
-            "coverage_reservoir_nn_debit"
-        )
+        #
+        # It must carry the SAME plasma-topology mask the beam term it was
+        # split out of will get, or the two stop being a split: the accumulator
+        # subtracts this from the (masked) beam row, so an unmasked debit would
+        # leave a spurious positive residue on every plasma-dead cell -- the
+        # plenum and the obstruction behind the cathode, where no birth is
+        # applied at all.
+        _reservoir_debit = beam_terms.get("coverage_reservoir_nn_debit")
+        if _reservoir_debit is not None and self._active_plasma_topology:
+            _reservoir_debit = np.where(
+                np.asarray(self._geometry.plasma_active, dtype=bool),
+                np.asarray(_reservoir_debit, dtype=float),
+                0.0,
+            )
+        self._coverage_reservoir_debit = _reservoir_debit
         terms = {
             **zone_terms,
             **geometry_terms,
