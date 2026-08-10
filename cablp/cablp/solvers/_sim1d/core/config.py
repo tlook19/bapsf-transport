@@ -2415,15 +2415,17 @@ input_flags_template_1d = {
     # Clumpy-plasma coverage closure v1. Breakdown in the machine is
     # azimuthally patchy -- discrete channels carry the discharge -- which the
     # 1D mean-field solver azimuthally averages away. When ON, a scalar
-    # coverage fraction f_cov(t) in (0, 1] concentrates the beam/discharge
-    # channel's view of the plasma (n -> n/f_cov) and splits the neutrals into
-    # a burnt covered column and an uncovered reservoir that refills it. The
-    # MEAN equations are untouched, so total particle inventory is conserved
-    # identically; at f_cov = 1 every factor reduces to the shipped model.
-    # Default OFF and bit-exact off (presence-gated: the off path never builds
-    # the coverage view and every consumer keeps its historical argument
-    # list). Requires coverage_initial_fraction, neutral_model="moment", and
-    # the pure-Python kernels; each is a construction-time ValueError.
+    # coverage fraction f_cov(t) in (0, 1] splits the beam by AREA between the
+    # covered channels (concentrated plasma, n -> n/f_cov) and the uncovered
+    # reservoir (tenuous, its own neutrals), and splits the neutrals into a
+    # burnt covered column and a reservoir that refills it. The MEAN equations
+    # are untouched, so total particle inventory is conserved identically; at
+    # f_cov = 1 every factor reduces to the shipped model. Default OFF and
+    # bit-exact off (presence-gated: the off path never builds the coverage
+    # view and every consumer keeps its historical argument list). Requires
+    # coverage_initial_fraction, beam_deposition_model="csda",
+    # neutral_model="moment", no beam clumping, and the pure-Python kernels;
+    # each is a construction-time ValueError.
     "coverage_closure": False,
     "ionization_energy_cost": True,
     "icool": True,

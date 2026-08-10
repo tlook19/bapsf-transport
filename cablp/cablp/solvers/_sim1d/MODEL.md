@@ -551,6 +551,30 @@ across step retries and Picard re-runs with no snapshot state. **A v2 that adds
 feedback or a decay channel loses that property and must move to genuine
 co-integration.**
 
+**The two-medium beam split (v1.1).** The beam is emitted over the WHOLE
+cathode face, so it does not all enter the channels: it divides by area. The
+fraction $f_\text{cov}$ of the emitted flux enters the covered medium and the
+remaining $1-f_\text{cov}$ enters the reservoir -- the part of the
+cross-section the discharge has not broken down. Two rays are marched per
+cathode end and their per-cell totals are summed,
+
+$$\text{deposition} = \underbrace{\text{ray}\!\left(f_\text{cov}\Gamma_0;\;
+n/f_\text{cov},\;n_{n,c},\;f_\text{cov}A\right)}_{\text{channel arm}}
+\;+\;
+\underbrace{\text{ray}\!\left((1-f_\text{cov})\Gamma_0;\;
+n_\text{floor},\;n_{n,r},\;(1-f_\text{cov})A\right)}_{\text{reservoir arm}},$$
+
+with the reservoir arm's plasma density at the model's own "no plasma"
+representation, the density floor, because the closure's premise is that
+plasma lives in the covered fraction. Note what the split does to the
+quasilinear beam density: each arm carries its own share of the flux over its
+own share of the area, so $n_b$ comes out the same in both and equal to the
+mean-field value. That is the physical statement -- the emitted beam is
+uniform over the cathode face, and it is the MEDIUM that differs between the
+arms, not the beam. The v1 build routed the *whole* beam through the channels,
+which is what made it a pure ignition accelerant; the reservoir arm is what
+restores the machine-wide deposition the measured conducting phase shows.
+
 **Where the concentration factors go.** The rule is that a factor appears only
 where it does not cancel. A volumetric rate that is bilinear in a plasma and a
 neutral density gains $1/f_\text{cov}$ locally but acts over the fraction
@@ -558,16 +582,18 @@ $f_\text{cov}$ of the cell, so its MEAN is unchanged -- which is why the bulk
 reaction terms take no factor. What survives is everything that is *not*
 linear in the local density:
 
-1. **Beam stopping / deposition.** The CSDA rays march through the channel
-   medium, $n_e = n/f_\text{cov}$ and $n_n$ the covered column's own density,
-   and the quasilinear closure forms its beam density $n_b$ on the channel
-   cross-section $f_\text{cov}A$. Attenuation is exponential in these, so the
-   coverage changes the deposition PROFILE. Its amplitude is untouched: the
-   module returns per-cell TOTALS, and the $1/f_\text{cov}$ in the channel flux
-   density cancels the $f_\text{cov}$ in the channel volume, so the callers keep
-   the historical conversion to a mean volumetric source. Under the
-   Beer-Lambert arm the same statement holds with $\ell_b$ and the collision
-   partner $n_n$ taken on the channel medium.
+1. **Beam stopping / deposition.** Each arm's attenuation is exponential in
+   its own medium's densities, so the coverage changes the deposition PROFILE.
+   The amplitude is untouched: the module returns per-cell TOTALS, and within
+   each arm the $1/f_\text{cov}$ (or $1/(1-f_\text{cov})$) in the local flux
+   density cancels the matching factor in that medium's volume, so the callers
+   keep the historical conversion to a mean volumetric source. The closure
+   REFUSES `beam_deposition_model="beer_lambert"`: that path has no second ray
+   to give the reservoir, so the whole beam would go through the channels while
+   the closure's own premise says only $f_\text{cov}$ of it does -- silently
+   inconsistent rather than inert. It refuses `beam_clump_fraction > 0` for the
+   same class of reason (two beam splits over different neutral media, whose
+   four-ray product this build does not define).
 2. **The discharge-current channel, where it is density-bilinear.** That is the
    sheath solve's coupling length, $1/\ell_b = 1/\ell_{bi}(n_e)+\sigma_b n_n$,
    which sets the gap bypass fraction the circuit books. It is reached
@@ -587,13 +613,9 @@ linear in the local density:
    reproduce is the channel's. The same cancellation is why the anode sample
    and the sheath $\alpha$ take no factor.
 
-   **v1 limitation:** this circuit path exists only under
-   `beam_deposition_model="csda"` (the production stance), which is what
-   rewrites $\sigma_\text{eff}$. Under the Beer-Lambert arm the coverage
-   reaches the deposition profile but not the circuit's bypass fraction, whose
-   $\sigma_b$ is the bare EII cross section. Closing that would mean splitting
-   `PlasmaState.n_e` into its bilinear and linear consumers inside
-   `cablp/funcs/`, which v1 does not do.
+   The transmission $\sigma_\text{eff}$ reproduces is the flux-weighted
+   survival of BOTH arms, i.e. of the whole emitted beam, so the circuit's
+   bypass is the real one and not one medium's.
 3. **The anomalous tail channel.** The QL tail walkers are marched on the same
    CSDA machinery, so they inherit the channel $n_e$ (through the hoisted
    stopping coefficient) and the channel $n_n$ they ionize. No separate factor
@@ -632,17 +654,42 @@ The relaxation term is the exchange
 $f_\text{cov}(1-f_\text{cov})(n_{n,r}-n_{n,c})/\tau_\text{backfill}$ written
 out: it reduces ALGEBRAICALLY to $(n_n-n_{n,c})/\tau_\text{backfill}$, so no
 reservoir density is ever formed and the $f_\text{cov}\to1$ limit is regular
-rather than a $0/0$. $B$ is the step-integrated sum of the neutral rows of the
-COVERED-ONLY channels -- the terms whose rate is proportional to a plasma or
-beam density, so the reaction can only happen where the plasma is: ionization
-birth, beam ionization birth, both recombination returns, and the gas-puff
-local ionization. Terms that act uniformly across the cross-section (the puff,
+rather than a $0/0$. The reservoir arm of the beam split debits the OTHER medium, which lowers the
+mean while leaving the covered column alone and so closes the gap between
+them; the deficit equation therefore carries both debits, at different weights:
+
+$$\frac{dD}{dt} = -B_\text{cov}\frac{1-f_\text{cov}}{f_\text{cov}}
++ B_\text{res} - \frac{D}{\tau_\text{backfill}}$$
+
+(both debits negative on a burn, so the first term grows the deficit and the
+second shrinks it). $B_\text{cov}$ is the step-integrated sum of the neutral
+rows of the COVERED-ONLY channels -- the terms whose rate is proportional to a
+plasma or beam density, so the reaction can only happen where the plasma is:
+ionization birth, the CHANNEL arm's share of beam ionization birth, both
+recombination returns, and the gas-puff local ionization. $B_\text{res}$ is the
+reservoir arm's share, which the beam terms publish as a side channel the RHS
+ledger never sees. Terms that act uniformly across the cross-section (the puff,
 the pump, neutral transport, the zone and kinetic exchanges) and terms that
 transfer no particles (the ion-neutral collision operators) are deliberately
 absent. It is accumulated across the SSPRK2 stages at the same equal stage
 weights the DVM ionization booking uses, carried on the step attempt, and
 applied once per ACCEPTED step, so a rejected attempt or a Picard re-run cannot
 double-count it.
+
+**The reservoir-born plasma caveat (v1.1), stated rather than hidden.** The
+reservoir arm's ionization births are booked into the MEAN plasma fields,
+conservatively and with their full energy cost, exactly as the channel arm's
+are. But the closure then READS those mean fields as covered plasma: the very
+next concentration divides them by $f_\text{cov}$ along with everything else.
+So plasma born in the uncovered fraction is, one step later, treated as though
+it lived in the channels. This is the honest cost of carrying one plasma field
+for two media, and it is the leading candidate for what v2 has to fix -- either
+by giving the reservoir its own plasma field, or by letting $f_\text{cov}$ be
+driven by that birth rather than by an imposed logistic law. It is bounded in
+the regime v1.1 targets, where the reservoir is tenuous and its births are a
+small share of the total, and it is NOT bounded once the reservoir carries an
+appreciable plasma density -- which is precisely when $f_\text{cov}$ should
+have grown anyway.
 
 **v1 limitations, stated rather than absorbed.** The bulk fluid reactions run
 on the mean $n_n$, which is exact when the column is backfilled

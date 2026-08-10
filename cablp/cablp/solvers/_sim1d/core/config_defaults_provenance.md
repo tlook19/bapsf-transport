@@ -682,7 +682,9 @@ nothing here is on any shipped trajectory. The closure declares exactly TWO
 physical constants — `coverage_growth_rate_per_s` and
 `coverage_backfill_time_s`. `coverage_initial_fraction` is an initial
 condition, not a constant, and appears here only because it also has no
-default.
+default. **The v1.1 two-medium beam split introduced no constant of its own:
+the split ratio IS `f_cov`, and the reservoir's plasma density is the existing
+`ne_floor` rather than a new parameter.**
 
 **`coverage_growth_rate_per_s = 1390.0` s^-1 — FITTED-on-F2, CALIBRATION
 PENDING. The shipped number is a PLACEHOLDER and must not be quoted as a

@@ -184,6 +184,7 @@ class StepAttempt1D:
     raw_rejection_detail: dict | None = None
     ion_booking: np.ndarray | None = None
     coverage_burn: np.ndarray | None = None
+    coverage_reservoir_burn: np.ndarray | None = None
 
 
 class _RawStageError(ValueError):
@@ -1466,6 +1467,8 @@ class LAPDSim1D:
             self._coverage_deficit = None
             self._coverage_burn_accum = None
             self._coverage_burn_weight = 0.0
+            self._coverage_reservoir_debit = None
+            self._coverage_reservoir_burn_accum = None
             return
         if f0 is None:
             raise ValueError(
@@ -1494,6 +1497,26 @@ class LAPDSim1D:
             raise ValueError(
                 "coverage_backfill_time_s (the reservoir->column neutral "
                 f"refill time) must be finite and > 0 (got {tau!r})"
+            )
+        if str(
+            self._input_dict.get("beam_deposition_model", "beer_lambert")
+        ) != "csda":
+            raise ValueError(
+                "coverage_closure requires beam_deposition_model='csda': the "
+                "closure splits the beam by area across the covered and "
+                "reservoir media, and that split is built on the CSDA rays. "
+                "Under 'beer_lambert' there is no second ray to give the "
+                "reservoir, so the whole beam would be routed through the "
+                "channels while the closure's own premise says only f_cov of "
+                "it goes there -- a silently inconsistent model rather than a "
+                "no-op, which is why this refuses instead of degrading"
+            )
+        if float(self._input_dict.get("beam_clump_fraction", 0.0)) > 0.0:
+            raise ValueError(
+                "coverage_closure is incompatible with beam_clump_fraction > "
+                "0: both split the beam into rays over different neutral "
+                "media, and their product is a four-ray composition this "
+                "build does not define. Disable one"
             )
         if self._neutral_model != "moment":
             raise ValueError(
@@ -1526,6 +1549,11 @@ class LAPDSim1D:
         self._coverage_deficit = np.zeros(self._geometry.cells, dtype=float)
         self._coverage_burn_accum = None
         self._coverage_burn_weight = 0.0
+        # The reservoir arm's neutral debit published by the beam terms of the
+        # CURRENT RHS evaluation; reset by rhs_terms on every call so it can
+        # never be read from a stale solve.
+        self._coverage_reservoir_debit = None
+        self._coverage_reservoir_burn_accum = None
         self._coverage = True
 
     #: RHS terms whose neutral row is a COVERED-ONLY debit or return: their
@@ -1581,8 +1609,25 @@ class LAPDSim1D:
             return None
         nn = np.asarray(state.nn, dtype=float)
         nn_channel = np.maximum(nn - self._coverage_deficit, self._floors["nn"])
+        f_cov = self.coverage_fraction(time)
+        nn_reservoir = None
+        ne_reservoir = None
+        if f_cov < 1.0:
+            # The other medium the beam is split across. Its neutral density
+            # is the implicit reservoir's; its PLASMA density is the model's
+            # own "no plasma" representation, the density floor, because the
+            # closure's premise is that plasma lives in the covered fraction.
+            # The floor rather than a literal zero because that is what every
+            # other plasma-free cell in this solver carries, so the stopping
+            # coefficients are evaluated on a state the model already
+            # produces rather than on an untested singular one.
+            nn_reservoir = nn + f_cov * (nn - nn_channel) / (1.0 - f_cov)
+            ne_reservoir = np.full_like(nn, self._floors["n"])
         return CoverageView1D(
-            f_cov=self.coverage_fraction(time), nn_channel=nn_channel
+            f_cov=f_cov,
+            nn_channel=nn_channel,
+            nn_reservoir=nn_reservoir,
+            ne_reservoir=ne_reservoir,
         )
 
     def coverage_reservoir_density(self, state=None):
@@ -1623,21 +1668,36 @@ class LAPDSim1D:
                 continue
             row = np.asarray(term.nn, dtype=float)
             total = row if total is None else total + row
+        reservoir = self._coverage_reservoir_debit
+        if reservoir is not None:
+            # The beam's neutral row above is the SUM over both media. Only
+            # the channel arm's share burnt covered gas, so the reservoir
+            # arm's debit is subtracted out here and tallied separately: it
+            # lowers the mean without lowering the covered column, which moves
+            # the deficit the other way (see _advance_coverage_deficit).
+            reservoir = np.asarray(reservoir, dtype=float)
+            if total is not None:
+                total = total - reservoir
+            self._coverage_reservoir_burn_accum += (
+                self._coverage_burn_weight * reservoir
+            )
         if total is not None:
             self._coverage_burn_accum += self._coverage_burn_weight * total
 
-    def _advance_coverage_deficit(self, dt, burn):
+    def _advance_coverage_deficit(self, dt, burn, reservoir_burn=None):
         """Advance the covered column's neutral deficit over one accepted step.
 
-        The covered column loses the whole cell's plasma-driven neutral debit
-        but holds only the fraction ``f_cov`` of its volume, so its LOCAL
-        density falls ``1/f_cov`` times as fast as the mean's; the deficit
-        ``D = nn - nn_c`` therefore grows at ``|debit| * (1 - f)/f`` while the
-        reservoir relaxes it back at ``D/tau_backfill``::
+        The covered column absorbs the COVERED-ONLY neutral debit ``B_cov``
+        but holds only the fraction ``f_cov`` of the cell's volume, so its
+        local density falls ``1/f_cov`` times as fast as the mean's. The beam's
+        reservoir arm (v1.1) debits ``B_res`` from the OTHER medium, lowering
+        the mean while leaving the covered column alone, which moves the
+        deficit the opposite way. With ``D = nn - nn_c``::
 
-            dD/dt = B*(1 - f)/f - D/tau_backfill
+            dD/dt = -B_cov*(1 - f)/f + B_res - D/tau_backfill
 
-        with ``B`` the step-integrated debit divided by dt. This is the whole
+        (both debits are negative on a burn, so the first term is positive --
+        channels deplete -- and the second is negative). This is the whole
         azimuthal exchange: the reservoir/column relaxation ``f(1-f)(nn_r -
         nn_c)/tau`` reduces ALGEBRAICALLY to ``(nn - nn_c)/tau``, so no
         reservoir density is ever formed and the ``f -> 1`` limit is regular
@@ -1659,6 +1719,11 @@ class LAPDSim1D:
             source = np.zeros(self._geometry.cells, dtype=float)
         else:
             source = -np.asarray(burn, dtype=float) / dt * (1.0 - f) / f
+        if reservoir_burn is not None:
+            # The reservoir arm's debit enters at weight ONE, not (1-f)/f: it
+            # is removed from the mean and from the reservoir, never from the
+            # covered column, so it closes the gap between them.
+            source = source + np.asarray(reservoir_burn, dtype=float) / dt
         decay = math.exp(-dt / self._coverage_tau_s)
         deficit = self._coverage_deficit * decay + source * self._coverage_tau_s * (
             1.0 - decay
@@ -2160,6 +2225,11 @@ class LAPDSim1D:
 
     def rhs_terms(self, y=None, include_heat_conduction=True, time=None):
         """Return named conservative RHS contributions for diagnostics."""
+        # The coverage closure's reservoir-arm debit belongs to THIS
+        # evaluation's beam solve and nothing else. Cleared first so a branch
+        # that never reaches the beam terms (the neutral-only pre-drive, or
+        # Plasma off) cannot leave the accumulator reading a stale solve.
+        self._coverage_reservoir_debit = None
         state = self.state if y is None else self._unpack(y)
         # The zone-exchange term exists only in two-zone runs, so the term
         # ledger (and the saved rhs_terms structure) is unchanged when the
@@ -2246,6 +2316,12 @@ class LAPDSim1D:
             state=state,
             cathode_solve=cathode_solve,
             time=time,
+        )
+        # Side channel, not a term: the reservoir arm's neutral debit. It is
+        # read out here and deliberately NOT placed in the ledger below, so
+        # the RHS sum and the saved term structure are untouched by it.
+        self._coverage_reservoir_debit = beam_terms.get(
+            "coverage_reservoir_nn_debit"
         )
         terms = {
             **zone_terms,
@@ -2624,6 +2700,9 @@ class LAPDSim1D:
             self._coverage_burn_accum = np.zeros(
                 self._geometry.cells, dtype=float
             )
+            self._coverage_reservoir_burn_accum = np.zeros(
+                self._geometry.cells, dtype=float
+            )
             self._coverage_burn_weight = 0.5 * dt
 
         starting_cache = self._step_cache_snapshot()
@@ -2687,7 +2766,11 @@ class LAPDSim1D:
             self._dvm_ion_stage_accum = None
             self._dvm_ion_stage_weight = 0.0
             attempt_coverage_burn = self._coverage_burn_accum
+            attempt_coverage_reservoir_burn = (
+                self._coverage_reservoir_burn_accum
+            )
             self._coverage_burn_accum = None
+            self._coverage_reservoir_burn_accum = None
             self._coverage_burn_weight = 0.0
         return StepAttempt1D(
             y=np.asarray(y_next, dtype=float),
@@ -2699,6 +2782,7 @@ class LAPDSim1D:
             raw_rejection_detail=raw_rejection_detail,
             ion_booking=attempt_ion_booking,
             coverage_burn=attempt_coverage_burn,
+            coverage_reservoir_burn=attempt_coverage_reservoir_burn,
         )
 
     def _implicit_neutral_step(
@@ -3163,6 +3247,7 @@ class LAPDSim1D:
             self._advance_coverage_deficit(
                 attempt.dt,
                 getattr(attempt, "coverage_burn", None),
+                getattr(attempt, "coverage_reservoir_burn", None),
             )
         # Electrode sample smoothing: fold the newly accepted state into the
         # supply-average EMA before any accepted-state consumer reads it.

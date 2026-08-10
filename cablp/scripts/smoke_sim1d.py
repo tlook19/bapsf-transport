@@ -2992,7 +2992,7 @@ def main():
             result_twin=None,
             beam_atten_cross=np.zeros(_pskip_geom.cells),
         )
-        _, _ledger = _csda_beam_deposition(
+        _, _ledger, _ = _csda_beam_deposition(
             _beam,
             SimpleNamespace(nn=nn, n=csda_state.n),
             SimpleNamespace(Te=csda_derived.Te),
@@ -12847,12 +12847,13 @@ print(json.dumps({
                 f"dt_min_lock_max_steps accepted {bad_lock!r}"
             )
 
-    # --- Clumpy-plasma coverage closure v1 (`coverage_closure`) -----------
-    # Four things are checked, in this order: the configuration refusals; the
+    # --- Clumpy-plasma coverage closure v1.1 (`coverage_closure`) ---------
+    # Five things are checked, in this order: the configuration refusals; the
     # bit-exact reduction at f_cov = 1; the continuity of the closed-form
-    # coverage field and of the concentration factors as f_cov -> 1; and the
-    # whole-system particle budget, which is the check this repo's phantom-fuel
-    # history demands of any closure that touches the neutral inventory.
+    # coverage field and of the concentration factors as f_cov -> 1; the
+    # two-medium beam split's own energy closure; and the whole-system particle
+    # budget, which is the check this repo's phantom-fuel history demands of
+    # any closure that touches the neutral inventory.
     from cablp.solvers._sim1d.physics.cathode import (
         CoverageView1D,
         coverage_channel_densities,
@@ -12910,6 +12911,30 @@ print(json.dumps({
         assert "without the coverage_closure flag" in str(error)
     else:
         raise AssertionError("coverage parameters accepted without the flag")
+    # The two-medium split is built on the CSDA rays; under Beer-Lambert the
+    # whole beam would go through the channels while the closure's own premise
+    # says only f_cov of it does -- inconsistent, not merely inert.
+    try:
+        LAPDSim1D(
+            *_coverage_config("beer_lambert", coverage_initial_fraction=0.3)
+        )
+    except ValueError as error:
+        assert "requires beam_deposition_model='csda'" in str(error)
+    else:
+        raise AssertionError("coverage_closure accepted beer_lambert")
+    # Clumping is the other beam split over neutral media; their product is a
+    # four-ray composition this build does not define.
+    try:
+        LAPDSim1D(*_coverage_config(
+            "csda",
+            coverage_initial_fraction=0.3,
+            beam_clump_fraction=0.5,
+            beam_clump_enhancement=10.0,
+        ))
+    except ValueError as error:
+        assert "incompatible with beam_clump_fraction" in str(error)
+    else:
+        raise AssertionError("coverage_closure accepted beam clumping")
     # The kinetic neutral arms own the fluid nn rows once engaged, so the
     # covered column could never deplete and the backfill would do nothing.
     _cov_kin_p, _cov_kin_f = _coverage_config(
@@ -12946,7 +12971,7 @@ print(json.dumps({
     # exactly 1.0 and the covered column is the mean, so the trajectory must
     # reproduce the flag-off one to the LAST BIT -- compared as raw bytes, on
     # both deposition arms, with the circuit state included.
-    for _cov_model in ("beer_lambert", "csda"):
+    for _cov_model in ("csda",):
         _cov_off_sim = LAPDSim1D(*_coverage_config(_cov_model))
         _cov_one_sim = LAPDSim1D(*_coverage_config(
             _cov_model,
@@ -13038,7 +13063,57 @@ print(json.dumps({
         coverage_channel_densities(_cov_state, None)[0], _cov_state.n
     )
 
-    # (iv) WHOLE-SYSTEM PARTICLE BUDGET. The closure re-partitions neutrals
+    # (iv) THE TWO-MEDIUM BEAM SPLIT. The cathode emits over its whole face,
+    # so the fraction f_cov of the flux enters the covered channels and the
+    # rest enters the reservoir. Each arm must carry exactly its AREA share and
+    # nothing may be created or lost by splitting -- deposit_beam closes energy
+    # per ray, so that closure is the direct test of the ratio.
+    _cov_split_sim = LAPDSim1D(*_coverage_config(
+        "csda",
+        coverage_initial_fraction=0.05,
+        coverage_growth_rate_per_s=0.0,
+    ))
+    _cov_split_sim.advance_one_step(dt=2.0e-9)
+    _cov_solve = _cov_split_sim.solve_cathode_boundary(state=_cov_split_sim.state)
+    _cov_f0_split = _cov_split_sim.coverage_fraction()
+    _cov_res_dep = _cov_solve.beam_reservoir_deposition
+    assert _cov_res_dep is not None, "the split produced no reservoir arm"
+    _cov_total_dep = _cov_solve.beam_deposition
+    _cov_E0 = float(_cov_solve.beam_result.result.phi_c)
+    _cov_Gamma0 = float(_cov_solve.beam_result.result.I_eth_star) / 1.602176634e-19
+    if _cov_Gamma0 > 0.0 and _cov_res_dep.get(0) is not None:
+        def _cov_ray_energy(dep):
+            return (
+                float(np.sum(dep.plasma_heating_erg_s))
+                + float(np.sum(dep.radiated_erg_s))
+                + float(np.sum(dep.ionization_cost_erg_s))
+                + float(np.sum(dep.end_loss_low_erg_s))
+                + float(np.sum(dep.end_loss_high_erg_s))
+                + float(np.sum(dep.end_loss_tail_low_erg_s))
+                + float(np.sum(dep.end_loss_tail_high_erg_s))
+                + float(dep.anode_intercepted_erg_s)
+                + float(dep.transmitted_flux) * float(dep.transmitted_energy_eV)
+                * ev_to_erg
+            )
+        # The reservoir ray carries (1 - f_cov) of the emitted beam...
+        _cov_res_E = _cov_ray_energy(_cov_res_dep[0])
+        _cov_expect_res = (1.0 - _cov_f0_split) * _cov_Gamma0 * _cov_E0 * ev_to_erg
+        assert abs(_cov_res_E / _cov_expect_res - 1.0) < 1e-9, (
+            _cov_res_E, _cov_expect_res
+        )
+        # ...and the two arms together carry the WHOLE of it, so the split
+        # neither creates nor destroys beam energy.
+        _cov_tot_E = _cov_ray_energy(_cov_total_dep[0])
+        assert abs(
+            _cov_tot_E / (_cov_Gamma0 * _cov_E0 * ev_to_erg) - 1.0
+        ) < 1e-9, _cov_tot_E
+        # The reservoir arm really deposits: it is the machine-wide channel the
+        # closure exists to restore, and it is a strict part of the total.
+        _cov_res_events = float(np.sum(_cov_res_dep[0].ionization_events))
+        _cov_tot_events = float(np.sum(_cov_total_dep[0].ionization_events))
+        assert 0.0 < _cov_res_events < _cov_tot_events
+
+    # (v) WHOLE-SYSTEM PARTICLE BUDGET. The closure re-partitions neutrals
     # between a covered column and a reservoir; it must not create or destroy
     # one. Three independent statements, on a run whose column genuinely
     # depletes (asserted below, so none of this is vacuous).
@@ -13050,7 +13125,7 @@ print(json.dumps({
     ))
     _cov_Vp = _cov_burn_sim.geometry.plasma_volume_cm3
     _cov_Vm = _cov_burn_sim.geometry.neutral_volume_cm3
-    # (a) The deficit dynamics, checked against their own closed form on a
+    # (v-a) The deficit dynamics, checked against their own closed form on a
     # KNOWN burn, so the control is deterministic rather than hostage to
     # whichever way the cold seed's net neutral budget happens to point.
     _cov_dt = 1.0e-6
@@ -13095,7 +13170,7 @@ print(json.dumps({
     assert float(np.min(_cov_burn_sim._coverage_deficit)) < 0.0
     assert np.array_equal(_cov_burn_sim.state.nn, _cov_nn0)
 
-    # (b) Stepped forward with the closure live, the partition identity closes
+    # (v-b) Stepped forward with the closure live, the partition identity closes
     # to roundoff at every accepted step and both densities stay positive.
     for _ in range(30):
         _cov_burn_sim.advance_one_step(dt=2.0e-9)
@@ -13108,7 +13183,7 @@ print(json.dumps({
         assert np.all(_cov_col > 0.0)
         assert np.all(_cov_res >= 0.0)
         assert np.all(_cov_burn_sim._coverage_deficit <= _cov_nn)
-    # (c) every internal particle channel still pairs ion birth against neutral
+    # (v-c) every internal particle channel still pairs ion birth against neutral
     # debit exactly, IN ABSOLUTE COUNTS across the two volumes, under coverage
     # -- i.e. the concentration factors did not open a hole in the pairing.
     _cov_terms = _cov_burn_sim.rhs_terms()
