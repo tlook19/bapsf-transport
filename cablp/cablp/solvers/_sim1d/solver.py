@@ -1663,11 +1663,25 @@ class LAPDSim1D:
         deficit = self._coverage_deficit * decay + source * self._coverage_tau_s * (
             1.0 - decay
         )
-        # A deficit outside [0, nn] would put the covered column above the
-        # mean or the reservoir below zero. Clipping it re-partitions only:
-        # the conserved mean is untouched, so no particle is created or lost.
-        nn = np.asarray(self.state.nn, dtype=float)
-        self._coverage_deficit = np.clip(deficit, 0.0, np.maximum(nn, 0.0))
+        # The deficit is SIGNED. It is positive where the plasma burns column
+        # gas faster than the reservoir refills it, and negative where the
+        # covered region is a net neutral SOURCE -- a recombining cold column
+        # returns neutrals into the covered fraction alone, enriching it above
+        # the mean, which is the same physics with the sign reversed and is
+        # not clipped away.
+        #
+        # The bounds are the two positivity conditions on the partition:
+        # nn_c = nn - D >= 0 and nn_r = nn + f*D/(1-f) >= 0. Both are
+        # re-partitions of the conserved mean, so hitting either creates and
+        # destroys nothing; the lower bound closes onto 0 as f -> 1, where
+        # there is no reservoir left to donate from.
+        nn = np.maximum(np.asarray(self.state.nn, dtype=float), 0.0)
+        floor = (
+            np.zeros_like(nn)
+            if f >= 1.0
+            else -(1.0 - f) / f * nn
+        )
+        self._coverage_deficit = np.clip(deficit, floor, nn)
 
     def _validate_r1_configuration_presence(self):
         """Reject R1-audited controls that would otherwise be silent no-ops."""

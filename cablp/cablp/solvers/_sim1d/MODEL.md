@@ -522,3 +522,119 @@ artifact (`probe_sim1d_r4_collision_bracket.py`) the operator's thermal cooling 
 $-28.2$ kW -- inside the IAEA-based pre-registration bracket $[-30.40,-22.67]$ kW
 and reduced from the present $-46.0$ kW, with no rate tuning (Phelps supersedes the
 IAEA rate set; the bracket is a cross-check).
+
+
+## Clumpy-plasma coverage closure v1 (`coverage_closure`, default off)
+
+Breakdown in the machine is azimuthally patchy: discrete channels carry the
+discharge, and a 1D mean-field solver azimuthally averages that structure away.
+v1 restores the leading consequence of it with a single **scalar** coverage
+fraction $f_\text{cov}(t)\in(0,1]$ -- the fraction of the column cross-section
+the plasma occupies. Channel-local densities are then the mean divided by
+$f_\text{cov}$, and the remaining $1-f_\text{cov}$ is a neutral reservoir.
+
+**The coverage field.** $f_\text{cov}$ obeys the logistic law
+
+$$\frac{df_\text{cov}}{dt} = r\,f_\text{cov}\,(1-f_\text{cov}),\qquad
+f_\text{cov}(t_0)=f_{\text{cov}0}$$
+
+from the plasma-phase time origin, with $r$ =
+`coverage_growth_rate_per_s` and $f_{\text{cov}0}$ =
+`coverage_initial_fraction`. There is deliberately **no decay or drop-out
+term** in v1; that richness is a pre-registered open question for the ensemble
+leg, not something to patch in here. Because the law is autonomous and takes no
+feedback from the state, the solver evaluates its closed form
+$f_\text{cov}(t)=\left[1+(1/f_{\text{cov}0}-1)e^{-r(t-t_0)}\right]^{-1}$ at each
+stage time rather than co-integrating it: exact, stage-time consistent through
+the same SSPRK2 stage clock the gas-puff waveform rides, and reproducible
+across step retries and Picard re-runs with no snapshot state. **A v2 that adds
+feedback or a decay channel loses that property and must move to genuine
+co-integration.**
+
+**Where the concentration factors go.** The rule is that a factor appears only
+where it does not cancel. A volumetric rate that is bilinear in a plasma and a
+neutral density gains $1/f_\text{cov}$ locally but acts over the fraction
+$f_\text{cov}$ of the cell, so its MEAN is unchanged -- which is why the bulk
+reaction terms take no factor. What survives is everything that is *not*
+linear in the local density:
+
+1. **Beam stopping / deposition.** The CSDA rays march through the channel
+   medium, $n_e = n/f_\text{cov}$ and $n_n$ the covered column's own density,
+   and the quasilinear closure forms its beam density $n_b$ on the channel
+   cross-section $f_\text{cov}A$. Attenuation is exponential in these, so the
+   coverage changes the deposition PROFILE. Its amplitude is untouched: the
+   module returns per-cell TOTALS, and the $1/f_\text{cov}$ in the channel flux
+   density cancels the $f_\text{cov}$ in the channel volume, so the callers keep
+   the historical conversion to a mean volumetric source. Under the
+   Beer-Lambert arm the same statement holds with $\ell_b$ and the collision
+   partner $n_n$ taken on the channel medium.
+2. **The discharge-current channel, where it is density-bilinear.** That is the
+   sheath solve's coupling length, $1/\ell_b = 1/\ell_{bi}(n_e)+\sigma_b n_n$,
+   which sets the gap bypass fraction the circuit books. It reads the same
+   channel densities the deposition ray does, and so do the frozen-solve
+   $\sigma_\text{eff}$ inversion and the item-35 gap ledger, so the circuit's
+   view of the beam and the ray's cannot part company. The *linear* cathode
+   quantities -- the Bohm ion current, the anode sample, the sheath $\alpha$ --
+   take no factor: their density rises by $1/f_\text{cov}$ over an area that
+   shrinks by $f_\text{cov}$, and the coverage cancels identically.
+3. **The anomalous tail channel.** The QL tail walkers are marched on the same
+   CSDA machinery, so they inherit the channel $n_e$ (through the hoisted
+   stopping coefficient) and the channel $n_n$ they ionize. No separate factor
+   exists for them.
+
+At $f_\text{cov}=1$ every factor above is multiplication by exactly 1.0 and the
+model reduces to the shipped one; $f_{\text{cov}0}=1$ with $r=0$ reproduces the
+flag-off trajectory bit-for-bit.
+
+**The reservoir, and why the budget cannot open.** The mean neutral field $n_n$
+keeps its exact meaning and its exact equations: **every existing term is
+untouched, so $n_n$ still carries every particle and total inventory is
+conserved identically.** What the closure adds is one auxiliary per-cell scalar,
+the covered column's neutral DEFICIT $D = n_n - n_{n,c}$, from which the
+channel density $n_{n,c}$ is read and the reservoir density follows
+algebraically as $n_{n,r} = n_n + f_\text{cov}D/(1-f_\text{cov})$. The reservoir
+is therefore represented IMPLICITLY, as the complement of the covered column
+inside the conserved mean, and is never integrated. Its budget is a
+re-partition of what the mean already holds, so no operation on $D$ -- including
+the clip to the two positivity conditions $n_{n,c}\ge0$ and $n_{n,r}\ge0$,
+i.e. $D\in[-(1-f_\text{cov})n_n/f_\text{cov},\,n_n]$ -- can create or destroy a
+particle. $D$ is SIGNED: it is positive where the plasma burns column gas
+faster than the reservoir refills it, and negative where the covered region is
+a net neutral source (a recombining cold column returns neutrals into the
+covered fraction alone and enriches it above the mean). Its lower bound closes
+onto zero as $f_\text{cov}\to1$, where there is no reservoir left to donate.
+
+$D$ evolves under two effects. The covered column absorbs the whole cell's
+plasma-driven neutral debit $B$ but holds only the fraction $f_\text{cov}$ of
+its volume, so its local density falls $1/f_\text{cov}$ times as fast as the
+mean's; and the reservoir relaxes the difference back on `coverage_backfill_time_s`:
+
+$$\frac{dD}{dt} = B\,\frac{1-f_\text{cov}}{f_\text{cov}} - \frac{D}{\tau_\text{backfill}}.$$
+
+The relaxation term is the exchange
+$f_\text{cov}(1-f_\text{cov})(n_{n,r}-n_{n,c})/\tau_\text{backfill}$ written
+out: it reduces ALGEBRAICALLY to $(n_n-n_{n,c})/\tau_\text{backfill}$, so no
+reservoir density is ever formed and the $f_\text{cov}\to1$ limit is regular
+rather than a $0/0$. $B$ is the step-integrated sum of the neutral rows of the
+COVERED-ONLY channels -- the terms whose rate is proportional to a plasma or
+beam density, so the reaction can only happen where the plasma is: ionization
+birth, beam ionization birth, both recombination returns, and the gas-puff
+local ionization. Terms that act uniformly across the cross-section (the puff,
+the pump, neutral transport, the zone and kinetic exchanges) and terms that
+transfer no particles (the ion-neutral collision operators) are deliberately
+absent. It is accumulated across the SSPRK2 stages at the same equal stage
+weights the DVM ionization booking uses, carried on the step attempt, and
+applied once per ACCEPTED step, so a rejected attempt or a Picard re-run cannot
+double-count it.
+
+**v1 limitations, stated rather than absorbed.** The bulk fluid reactions run
+on the mean $n_n$, which is exact when the column is backfilled
+($n_{n,c}=n_n$) and understates their depletion sensitivity otherwise. The
+deficit is carried on the chamber-mean $n_n$ rather than on a column-resolved
+partition, so $\tau_\text{backfill}$ absorbs the column-to-chamber exchange as
+well as the azimuthal one. The closure requires `neutral_model="moment"` (the
+kinetic arms take over the fluid $n_n$ rows once engaged, so the column would
+never deplete and the backfill would be a silent no-op) and refuses the
+compiled kernels while it is on (the beam deposition it concentrates has a
+compiled transcription that v1 does not touch and that has never been
+bit-compared under coverage). Both are construction-time `ValueError`s.
