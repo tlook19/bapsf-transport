@@ -37,6 +37,47 @@ from .sources import electrode_sheath_alpha
 
 
 @dataclass(frozen=True)
+class CoverageView1D:
+    """Channel-local view of the medium the beam propagates through.
+
+    ``f_cov`` in ``(0, 1]`` is the covered fraction of the column
+    cross-section and ``nn_channel`` the per-cell neutral density INSIDE the
+    covered channels. ``None`` in place of this record is the shipped
+    mean-field model, and every consumer below is presence-gated on it.
+    """
+
+    f_cov: float
+    nn_channel: np.ndarray
+
+
+def coverage_channel_densities(state, coverage):
+    """Return the ``(ne, nn)`` profiles the beam propagates through.
+
+    Without a coverage view these are the mean fields themselves, unchanged.
+    With one, the plasma density is the channel-local ``n / f_cov`` -- the
+    plasma occupies only the covered fraction, so its local density is the
+    mean divided by that fraction -- and the neutral density is the covered
+    column's own ``nn_channel``.
+
+    Both are LOCAL densities and no volume fraction is applied here. The
+    deposition's outputs are per-cell TOTALS (events/s, erg/s), and the total
+    delivered into a cell is the channel-local rate density times the channel
+    volume ``f_cov * V_cell``; the ``1 / f_cov`` in the launched flux density
+    and the ``f_cov`` in the volume cancel, which is why the callers convert
+    those totals to mean volumetric sources with the unchanged ``/ V_cell``.
+    What coverage changes is therefore the SHAPE of the stopping, not the
+    amplitude of the deposit -- exactly the sense in which the mean equations
+    stay conservative.
+    """
+    if coverage is None:
+        return state.n, state.nn
+    return (
+        np.asarray(state.n, dtype=float) / coverage.f_cov,
+        coverage.nn_channel,
+    )
+
+
+@dataclass(frozen=True)
 class CathodeCellState1D:
     """Primitive/source-cell state passed toward a cathode adapter."""
 
@@ -438,6 +479,7 @@ def idriven_result_evaluator(
     beam_cross_prev,
     T_s_override_K=None,
     phi_wf_override_eV=None,
+    coverage=None,
 ):
     """Return an ``I [A] -> SolverResult`` evaluator at this frozen state.
 
@@ -465,10 +507,17 @@ def idriven_result_evaluator(
     )
     idx = beam_launch(geometry, end=0)[0]
     beam_cross_prev = np.asarray(beam_cross_prev, dtype=float)
+    # The sheath solve's beam-plasma coupling length l_b -- and therefore the
+    # gap bypass fraction the circuit books -- is the one density-BILINEAR
+    # quantity on the discharge-current path (1/l_b = 1/l_bi(n_e) +
+    # sigma_b*n_n). It must see the same channel medium the deposition ray
+    # does, so the evaluator and the dispatched solve cannot disagree about
+    # what the beam crosses.
+    _cov_ne, _cov_nn = coverage_channel_densities(state, coverage)
     plasma = PlasmaState(
         T_e=float(derived.Te[idx]),
-        n_e=float(state.n[idx]),
-        n_n=float(state.nn[idx]),
+        n_e=float(_cov_ne[idx]),
+        n_n=float(_cov_nn[idx]),
         sigma_b=float(beam_cross_prev[idx]),
     )
     schottky = bool(input_flags.get("cathode_schottky", False))
@@ -505,6 +554,7 @@ def idriven_vdis_evaluator(
     beam_cross_prev,
     T_s_override_K=None,
     phi_wf_override_eV=None,
+    coverage=None,
 ):
     """Return a ``V_dis(I) [V]`` evaluator at this frozen plasma state.
 
@@ -524,6 +574,7 @@ def idriven_vdis_evaluator(
         beam_cross_prev=beam_cross_prev,
         T_s_override_K=T_s_override_K,
         phi_wf_override_eV=phi_wf_override_eV,
+        coverage=coverage,
     )
 
     # Internal series drop on the plasma side of the V_dis probe (R5 ES1 tuning
@@ -696,8 +747,17 @@ def solve_cathode_boundary(
     T_s_override_K=None,
     phi_wf_override_eV=None,
     circuit_I_loop_A=0.0,
+    coverage=None,
 ):
-    """Call the cathode/beam solver and return raw diagnostics only."""
+    """Call the cathode/beam solver and return raw diagnostics only.
+
+    ``coverage`` is the optional :class:`CoverageView1D`. It is applied at
+    exactly the points where the beam's own view of the medium enters -- the
+    densities the beam system attenuates on, and the CSDA rays -- and NOT to
+    the boundary sample, the anode circuit sample or the sheath alpha, whose
+    plasma terms are linear in density over an area that shrinks by the same
+    factor, so the coverage cancels identically there.
+    """
     boundary = cathode_boundary_state(
         state=state,
         floors=floors,
@@ -756,6 +816,9 @@ def solve_cathode_boundary(
             "beam_cross_prev must have shape "
             f"({geometry.cells},), got {beam_cross_prev.shape}"
         )
+    # The channel-local medium the beam attenuates on. Identical to the mean
+    # fields (the same array objects) without a coverage view.
+    beam_ne, beam_nn = coverage_channel_densities(state, coverage)
     if not floating:
         # The circuit is explicit solver state: no inductive fold, no
         # warm start -- the solve is a well-posed evaluation at the frozen
@@ -765,8 +828,8 @@ def solve_cathode_boundary(
         beam_result = solve_beam_system_idriven(
             config=device_config,
             Te=derived.Te,
-            ne=state.n,
-            nn=state.nn,
+            ne=beam_ne,
+            nn=beam_nn,
             beam_cross_prev=beam_cross_prev,
             plasma_cross=geometry.plasma_area_cm2,
             I_ion=I_ion,
@@ -796,8 +859,8 @@ def solve_cathode_boundary(
         beam_result = solve_beam_system(
             config=device_config,
             Te=derived.Te,
-            ne=state.n,
-            nn=state.nn,
+            ne=beam_ne,
+            nn=beam_nn,
             beam_cross_prev=beam_cross_prev,
             plasma_cross=geometry.plasma_area_cm2,
             I_ion=I_ion,
@@ -840,6 +903,7 @@ def solve_cathode_boundary(
             anode_interception=bool(
                 input_flags.get("beam_anode_interception", False)
             ),
+            coverage=coverage,
         )
     return CathodeSolve1D(
         boundary=boundary,
@@ -1001,6 +1065,7 @@ def _csda_beam_deposition(
     I_ion,
     twin=False,
     anode_interception=False,
+    coverage=None,
 ):
     """Run the CSDA module for each active cathode ray (B2 wiring).
 
@@ -1031,6 +1096,18 @@ def _csda_beam_deposition(
     ``eta * f_bypass`` of the emitted beam power as never-coupling while the
     real ray stopped inside the gap (item 35).
 
+    ``coverage`` (clumpy-plasma closure v1) is the optional
+    :class:`CoverageView1D`. Left ``None`` -- the default and every historical
+    call -- not one line below changes. Supplied, the rays march through the
+    CHANNEL medium (``ne = n / f_cov``, ``nn`` the covered column's own), the
+    quasilinear beam density is formed on the channel cross-section
+    ``f_cov * A``, and the frozen-solve ``sigma_eff`` inversion and the
+    gap-ledger reconstruction read the same channel quantities as the ray --
+    so the circuit's view of the beam-plasma coupling and the ray's own
+    cannot part company under coverage. The per-cell deposition TOTALS the
+    module returns are unchanged in meaning, so their callers keep the
+    historical conversion to mean volumetric sources.
+
     ``anode_interception`` (R4.1, audit A15): when set, the mesh solid fraction
     ``device_config.eta`` of the beam surviving the gap is intercepted at the
     anode-face crossing (``deposit_beam(anode_cross_index=..., anode_eta=...)``),
@@ -1054,6 +1131,14 @@ def _csda_beam_deposition(
     """
     coulomb_model = str(input_dict.get("beam_coulomb_model", "fast_electron"))
     anomalous_model = str(input_dict.get("beam_anomalous_model", "none"))
+    # The channel medium every ray below marches through, and the
+    # cross-section the quasilinear closure forms its beam density on. Without
+    # a coverage view these are the mean fields and the geometry area itself,
+    # so the whole function is byte-for-byte the historical one.
+    ray_ne, ray_nn = coverage_channel_densities(state, coverage)
+    beam_area_cm2 = geometry.plasma_area_cm2
+    if coverage is not None:
+        beam_area_cm2 = beam_area_cm2 * coverage.f_cov
     # WP-D product transport and WP-E QL heating locality. Presence-gated:
     # only the DEPOSITION rays get the keywords, and only when they are not
     # their defaults, so the off path enters deposit_beam with the identical
@@ -1140,7 +1225,7 @@ def _csda_beam_deposition(
         # default-stance run never reaches this line.
         transport_kwargs["stopping_coefficient"] = (
             _coulomb_stopping_coefficient(
-                state.n, derived.Te, coulomb_model
+                ray_ne, derived.Te, coulomb_model
             )
         )
     # Fractional-coverage beam-neutral closure (default off/uniform, bit-exact):
@@ -1185,8 +1270,8 @@ def _csda_beam_deposition(
                     result.phi_c
                 )
         ray_kwargs = dict(
-            nn=state.nn,
-            ne=state.n,
+            nn=ray_nn,
+            ne=ray_ne,
             Te=derived.Te,
             launch=launch,
             direction=direction,
@@ -1195,7 +1280,7 @@ def _csda_beam_deposition(
             anomalous_model=anomalous_model,
         )
         if anomalous_model != "none":
-            ray_kwargs["beam_area_cm2"] = geometry.plasma_area_cm2
+            ray_kwargs["beam_area_cm2"] = beam_area_cm2
         interception_kwargs = {}
         if anode_interception and eta > 0.0 and anode_faces.size > 0:
             # The ray crosses the anode face between cell ``f-1`` and cell ``f``;
@@ -1207,7 +1292,7 @@ def _csda_beam_deposition(
                 anode_cross_index=cross_cell, anode_eta=eta
             )
         clump_kwargs = (
-            {**ray_kwargs, "nn": np.asarray(state.nn) * chi_clump}
+            {**ray_kwargs, "nn": np.asarray(ray_nn) * chi_clump}
             if clumping
             else None
         )
@@ -1354,11 +1439,11 @@ def _csda_beam_deposition(
                 ).transmitted_flux
             )
         transmission = min(max(survival, 1.0e-6), 1.0)
-        nn_launch = float(state.nn[launch])
+        nn_launch = float(ray_nn[launch])
         l_bi = _compute_l_b(
             result.phi_c,
             float(derived.Te[launch]),
-            float(state.n[launch]),
+            float(ray_ne[launch]),
             0.0,
             0.0,
         )
@@ -1395,7 +1480,7 @@ def _csda_beam_deposition(
                 _compute_l_b(
                     result.phi_c,
                     float(derived.Te[launch]),
-                    float(state.n[launch]),
+                    float(ray_ne[launch]),
                     nn_launch,
                     sigma_eff,
                 ),
@@ -1745,6 +1830,7 @@ def beam_ionization_rhs(
     input_flags,
     I_ion,
     cathode_solve=None,
+    coverage=None,
 ):
     """Return conservative beam ionization and beam electron energy terms."""
     terms = beam_ionization_rhs_terms(
@@ -1756,6 +1842,7 @@ def beam_ionization_rhs(
         input_flags=input_flags,
         I_ion=I_ion,
         cathode_solve=cathode_solve,
+        coverage=coverage,
     )
     rhs = terms["beam_ionization_birth"]
     for term in (
@@ -1781,8 +1868,16 @@ def beam_ionization_rhs_terms(
     input_flags,
     I_ion,
     cathode_solve=None,
+    coverage=None,
 ):
-    """Return split beam ionization particle, power, and cost terms."""
+    """Return split beam ionization particle, power, and cost terms.
+
+    ``coverage`` (clumpy-plasma closure v1) is the optional
+    :class:`CoverageView1D`; it reaches only the Beer-Lambert event profiles,
+    whose collision partner is the covered column's neutral density. The CSDA
+    branch needs nothing here -- its rays already marched through the channel
+    medium inside the cathode solve, and it consumes their per-cell totals.
+    """
     boundary = cathode_boundary_state(
         state=state,
         floors=floors,
@@ -1809,6 +1904,7 @@ def beam_ionization_rhs_terms(
         Te=beam_derived.Te,
         exc_energy_fallback_eV=E_exc,
         smoothing_cm=float(input_dict.get("beam_deposition_smoothing_cm", 0.0)),
+        coverage=coverage,
     )
     volume_ratio = geometry.plasma_volume_cm3 / geometry.neutral_volume_cm3
     # Two-zone state: nn is the column density on
@@ -2031,6 +2127,7 @@ def _beam_ionization_sources(
     Te=None,
     exc_energy_fallback_eV=21.218,
     smoothing_cm=0.0,
+    coverage=None,
 ):
     zeros = np.zeros(geometry.cells, dtype=float)
     beam_result = cathode_solve.beam_result
@@ -2124,6 +2221,7 @@ def _beam_ionization_sources(
         geometry=geometry,
         beam_result=beam_result,
         end=0,
+        coverage=coverage,
     )
     S_beam += source_profile
     exc_profile = _beam_event_profile(
@@ -2132,6 +2230,7 @@ def _beam_ionization_sources(
         beam_result=beam_result,
         event_cross=beam_result.beam_exc_cross,
         end=0,
+        coverage=coverage,
     )
     S_exc += exc_profile
     S_exc_E += exc_profile * _exc_energy_at(beam_launch(geometry, end=0)[0])
@@ -2148,6 +2247,7 @@ def _beam_ionization_sources(
             geometry=geometry,
             beam_result=beam_result,
             end=-1,
+            coverage=coverage,
         )
         S_beam += twin_profile
         exc_profile_twin = _beam_event_profile(
@@ -2156,6 +2256,7 @@ def _beam_ionization_sources(
             beam_result=beam_result,
             event_cross=beam_result.beam_exc_cross,
             end=-1,
+            coverage=coverage,
         )
         S_exc += exc_profile_twin
         S_exc_E += exc_profile_twin * _exc_energy_at(
@@ -2288,7 +2389,9 @@ def _electron_power_loss_W(result):
     return result.P_cathode_e + result.P_anode_e
 
 
-def _beam_event_profile(state, geometry, beam_result, event_cross, end=0):
+def _beam_event_profile(
+    state, geometry, beam_result, event_cross, end=0, coverage=None
+):
     """Per-cell rate density of one beam collision channel [cm^-3 s^-1].
 
     The beam attenuates along the Beer-Lambert profile set by the *total*
@@ -2296,6 +2399,14 @@ def _beam_event_profile(state, geometry, beam_result, event_cross, end=0):
     the fraction of absorbed primaries whose event is this channel, so the
     channels split the same absorbed flux rather than each attenuating
     independently.
+
+    Under a ``coverage`` view the collision partner is the covered column's
+    own neutral density, and ``l_b_profile`` already carries the channel
+    densities (the beam system was solved on them). The returned rate stays a
+    MEAN volumetric density: the channel-local rate is ``1 / f_cov`` larger --
+    ``n_beam`` is formed on the unchanged geometric area, so the concentration
+    would enter there -- and it acts over the fraction ``f_cov`` of the cell,
+    and the two factors cancel exactly.
     """
     launch, direction = beam_launch(geometry, end=end)
     cross = event_cross[launch]
@@ -2304,7 +2415,9 @@ def _beam_event_profile(state, geometry, beam_result, event_cross, end=0):
     l_b_profile = (
         beam_result.l_b_profile if end == 0 else beam_result.l_b_profile_twin
     )
-    p_event = l_b_profile * cross * state.nn
+    p_event = l_b_profile * cross * coverage_channel_densities(
+        state, coverage
+    )[1]
     weights = beam_absorption_weights(
         length_cm=geometry.length_cm,
         l_b_profile=l_b_profile,
@@ -2320,13 +2433,14 @@ def _beam_event_profile(state, geometry, beam_result, event_cross, end=0):
     )
 
 
-def _beam_ionization_profile(state, geometry, beam_result, end=0):
+def _beam_ionization_profile(state, geometry, beam_result, end=0, coverage=None):
     return _beam_event_profile(
         state=state,
         geometry=geometry,
         beam_result=beam_result,
         event_cross=beam_result.beam_cross,
         end=end,
+        coverage=coverage,
     )
 
 
