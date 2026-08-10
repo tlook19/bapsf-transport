@@ -103,3 +103,26 @@ production stance's fitted one.
 
 `BASELINE_RUN_KWARGS` are all `None`, i.e. the solver's own run defaults:
 adaptive dt, dynamic current-trigger end time, unlimited steps.
+
+## Recapture record
+
+**2026-08-09 — returned-root sheath-ceiling fix (AUTHORIZED recapture, Tom,
+2026-08-09).** The current-driven sheath solve enforced `cathode_phi_c_cap_V`
+only at the bracket ladder's doubling grid points, never on the root it
+returned; the fixture's own ignition foot contained 34 such escaped solves
+(net phi_c up to 1.9669× the 1000 V cap — 1966.89 V returned at the cap),
+i.e. the committed trajectory certified the defect. The fix (commit
+`8a09363`, this branch) tests the located J-root against the cap and routes
+an at-or-above-cap root through the pre-existing ceiling branch, so the foot
+solves move BY DESIGN and both goldens fail against the old fixture with
+`max_rel=2.000e+00`, `time_max_abs=1.113e-06 s`, character-identical on the
+pure and compiled paths. Recaptured with the script's own
+`--capture` at the fixed code. **The pin set is unchanged:** zero
+added, removed, or changed keys in `BASELINE_PARAM_OVERRIDES` /
+`BASELINE_FLAG_OVERRIDES` (the fix touches neither `baseline_sim1d.py` nor
+`core/config.py`), and the sidecar params/flags diff against the previous
+capture shows zero changed values — the 18 param keys and 1 flag key newly
+recorded are config defaults added since the 2026-08-03 capture, already in
+effect for every verify since (verify rebuilds the config from live code),
+recorded at their unchanged live defaults. saves stays 2545, cells stays 72;
+steps 41054 → 40975 on the corrected foot.

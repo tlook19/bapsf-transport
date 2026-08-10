@@ -448,6 +448,23 @@ cdef inline double _net_phi_c_c(double psi, _root_args* p) noexcept nogil:
     return (psi - psi_minus) * p.T_e
 
 
+cdef inline double _reported_phi_c_c(double psi, _root_args* p) noexcept nogil:
+    """``psi*T_e - psi_minus*T_e``: the caller's own phi_c arithmetic.
+
+    Transcribes ``_cathode_solver_idriven._reported_phi_c``, which differs from
+    ``_net_phi_c`` in its last bit and is the form the returned-root ceiling
+    test must use (see the comment there).
+    """
+    cdef double J_star = 0.0
+    cdef double psi_minus = 0.0
+    cdef bint clamped = 0
+    _annular_schottky_c(
+        psi, p.J_i, p.mu, p.J_eth_k, p.delta_k, p.ion_frac_k, p.n,
+        p.T_e, p.n_e, &J_star, &psi_minus, &clamped,
+    )
+    return psi * p.T_e - psi_minus * p.T_e
+
+
 cdef double _f_current(double psi, void* args) noexcept:
     """``_J_tot(psi) - J_target``, the current-matching residual."""
     cdef _root_args* p = <_root_args*> args
@@ -534,6 +551,20 @@ def solve_psi_annular_schottky(
             capability_limited = 0
             J_target = J_imposed - plateau_tol_rel * fabs(J_imposed)
 
+        if not capability_limited:
+            args.target = J_target
+            psi_c_plus = brentq(
+                _f_current, psi_lo, psi_top, &args,
+                _BRENTQ_XTOL, _BRENTQ_RTOL, _BRENTQ_MAXITER, &out,
+            )
+            _check_brentq(&out)
+            iterations = out.iterations
+            # The ceiling is enforced on the located root, not only on the
+            # ladder's doubling grid (fix 2026-08-09) -- see the comment on the
+            # same test in ``_cathode_solver_idriven.solve_idriven``.
+            if _reported_phi_c_c(psi_c_plus, &args) >= phi_c_cap_V:
+                capability_limited = 1
+
         if capability_limited:
             if _net_phi_c_c(psi_top, &args) > phi_c_cap_V:
                 args.target = phi_c_cap_V
@@ -545,14 +576,7 @@ def solve_psi_annular_schottky(
                 iterations = out.iterations
             else:
                 psi_c_plus = psi_top
-        else:
-            args.target = J_target
-            psi_c_plus = brentq(
-                _f_current, psi_lo, psi_top, &args,
-                _BRENTQ_XTOL, _BRENTQ_RTOL, _BRENTQ_MAXITER, &out,
-            )
-            _check_brentq(&out)
-            iterations = out.iterations
+                iterations = -1
     finally:
         free(buf_eth)
         free(buf_delta)

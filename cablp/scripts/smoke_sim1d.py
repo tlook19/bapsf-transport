@@ -174,6 +174,74 @@ def _cathode_unit_config():
     return p, f
 
 
+# The sheath state that escaped the phi_c ceiling before the returned-root fix
+# (2026-08-09), frozen from the solve it was captured at: step 39 of the f = 1.0
+# tail-walk arm, the solve whose beam energy the EII table-edge guard then
+# refused (scripts/capfix_escape_case.txt). At this state, and at THIS imposed
+# current, the bracket ladder's first grid point sat below the cap in NET phi_c
+# (psi_minus > 0), the ladder doubled once, and the J-root came back at 1854.195
+# V -- 1.85x the 1000 V cap, tagged virtual_cathode. It is kept as literals
+# rather than re-derived: reproducing it needs a 39-step production march, and
+# post-fix that march no longer visits this state at all.
+_CAPFIX_ESCAPE_CONFIG = dict(
+    A_c=706.8583470577034,
+    mu=4,
+    V_bank=177.843,
+    T_s=1910.0000073162657,
+    phi_wf=2.8689998037499964,
+    C_R=12.96,
+    R_comp=0.0072244,
+    R_comp_partition=1.0,
+    R_mesh_ohm=0.0,
+    eta=0.358,
+    Twin=False,
+    L_cath=50.0,
+    R_cath=15.0,
+    phi_sheath_max=None,
+    emission_Ts_K=tuple(
+        np.float64(v)
+        for v in (
+            1909.7820600303419, 1908.0402707241847, 1904.566206201057,
+            1899.3787650723516, 1892.5059746195277, 1883.9846150874373,
+            1873.859733444452, 1862.1840584532556, 1849.0173309615827,
+            1834.425564867055,
+        )
+    ),
+    emission_area_cm2=tuple(
+        np.float64(v)
+        for v in (
+            7.0685834705770345, 21.205750411731103, 35.34291735288517,
+            49.480084294039244, 63.61725123519331, 77.75441817634739,
+            91.89158511750145, 106.02875205865551, 120.16591899980959,
+            134.30308594096365,
+        )
+    ),
+    emission_plasma_frac=(1.0,) * 10,
+)
+_CAPFIX_ESCAPE_PLASMA = dict(
+    T_e=2.895378507817385,
+    n_e=824479922.2030256,
+    n_n=19744589075162.41,
+    sigma_b=0.0,
+)
+_CAPFIX_ESCAPE_KWARGS = dict(
+    anode_current_A=0.0424709088850732,
+    anode_T_e=2.9855005007754283,
+    schottky=True,
+    bridge=False,
+    phi_c_cap_V=1000.0,
+    alpha_sheath=0.8738291673131621,
+    alpha_sheath_anode=None,
+)
+# The imposed current at capture, and the currents that bracket the escape
+# window measured there: below ~5.4518 A the sheath carries the current under
+# the ceiling; above it, every current must come back capability_limited AT the
+# ceiling. Pre-fix, 5.46 A through 5.57 A returned 1038.9 V .. 1884.2 V.
+_CAPFIX_ESCAPE_I_A = 5.5674329614887945
+_CAPFIX_BELOW_I_A = (5.0, 5.44, 5.45)
+_CAPFIX_WINDOW_I_A = (5.46, 5.5, _CAPFIX_ESCAPE_I_A, 5.57, 5.58, 6.0, 8.0)
+
+
 def main():
     # The production/default stance must construct WARNING-FREE. This guards a
     # SURVIVING path -- it is what stops production silently acquiring a
@@ -1867,6 +1935,101 @@ def main():
         pass
     else:
         raise AssertionError("expected ValueError for negative imposed current")
+
+    # The ceiling binds the RETURNED ROOT, not just the ladder's grid points
+    # (2026-08-09). At the frozen escaping state the pre-fix ladder doubled
+    # once, found the J-root inside the doubled bracket and returned a net
+    # phi_c of 1854.195 V at a 1000 V cap -- unclamped, tagged
+    # virtual_cathode, and independent of the cap. Post-fix: phi_c(I) rises to
+    # the cap and stays there, so the whole window is capability_limited AT
+    # the ceiling and the escape signature (phi_c above the cap in any other
+    # regime) cannot be produced.
+    _cap_cfg = _cathode_solver_mod.DeviceConfig(**_CAPFIX_ESCAPE_CONFIG)
+    _cap_pl = PlasmaState(**_CAPFIX_ESCAPE_PLASMA)
+    _cap_prev = 0.0
+    for _cap_I in _CAPFIX_BELOW_I_A:
+        _cap_r = solve_idriven(
+            _cap_cfg, _cap_pl, I_tot_A=_cap_I, **_CAPFIX_ESCAPE_KWARGS
+        )
+        assert _cap_r.regime == "virtual_cathode", (_cap_I, _cap_r.regime)
+        assert _cap_r.phi_c < 1000.0, (_cap_I, _cap_r.phi_c)
+        assert _cap_r.phi_c > _cap_prev, (_cap_I, _cap_r.phi_c, _cap_prev)
+        _cap_prev = _cap_r.phi_c
+    for _cap_I in _CAPFIX_WINDOW_I_A:
+        _cap_r = solve_idriven(
+            _cap_cfg, _cap_pl, I_tot_A=_cap_I, **_CAPFIX_ESCAPE_KWARGS
+        )
+        assert _cap_r.regime == "capability_limited", (_cap_I, _cap_r.regime)
+        # AT the cap, to the ceiling brentq's own rtol (1e-14) -- not the
+        # 4 %-to-85 % excursions the escape produced.
+        assert np.isclose(_cap_r.phi_c, 1000.0, rtol=1e-12, atol=0.0), (
+            _cap_I, _cap_r.phi_c
+        )
+        assert _cap_r.V_b >= 1000.0, (_cap_I, _cap_r.V_b)
+        assert _cap_r.I_tot >= 0.0, (_cap_I, _cap_r.I_tot)
+    # Cap-dependence restored: pre-fix the escaped root was the SAME 1854.195 V
+    # at every cap from 950 V to 1500 V. Post-fix the answer is the cap, until
+    # the cap rises above what the sheath would have reached on its own.
+    for _cap_V in (500.0, 900.0, 1000.0, 1500.0):
+        _cap_r = solve_idriven(
+            _cap_cfg, _cap_pl,
+            I_tot_A=_CAPFIX_ESCAPE_I_A,
+            **{**_CAPFIX_ESCAPE_KWARGS, "phi_c_cap_V": _cap_V},
+        )
+        assert _cap_r.regime == "capability_limited", (_cap_V, _cap_r.regime)
+        assert np.isclose(_cap_r.phi_c, _cap_V, rtol=1e-12, atol=0.0), (
+            _cap_V, _cap_r.phi_c
+        )
+    _cap_free = solve_idriven(
+        _cap_cfg, _cap_pl,
+        I_tot_A=_CAPFIX_ESCAPE_I_A,
+        **{**_CAPFIX_ESCAPE_KWARGS, "phi_c_cap_V": 2000.0},
+    )
+    assert _cap_free.regime == "virtual_cathode", _cap_free.regime
+    assert 1854.0 < _cap_free.phi_c < 1855.0, _cap_free.phi_c
+    # The beam-side lookup keeps its no-extrapolation contract at that raised
+    # cap: the He EII table ends at 1000 eV, so a 1854 V sheath is refused
+    # rather than silently clamped to the last node.
+    try:
+        _cathode_solver_idriven_mod.solve_beam_system_idriven(
+            _cap_cfg,
+            np.array([_cap_pl.T_e, _cap_pl.T_e]),
+            np.array([_cap_pl.n_e, _cap_pl.n_e]),
+            np.array([_cap_pl.n_n, _cap_pl.n_n]),
+            np.zeros(2),
+            np.array([_cap_cfg.A_c, _cap_cfg.A_c]),
+            I_ion,
+            "He",
+            _CAPFIX_ESCAPE_I_A,
+            cathode_index=0,
+            **{**_CAPFIX_ESCAPE_KWARGS, "phi_c_cap_V": 2000.0},
+        )
+    except ValueError as _cap_err:
+        assert "refused, not approximated" in str(_cap_err), _cap_err
+    else:
+        raise AssertionError(
+            "a beam energy past the He EII table edge must be refused"
+        )
+    # ... and at the shipped cap it is INSIDE the table (the ceiling sits on
+    # the last node to within a ULP), so the guard is inert and the lookup
+    # returns what it always returned.
+    _cap_beam = _cathode_solver_idriven_mod.solve_beam_system_idriven(
+        _cap_cfg,
+        np.array([_cap_pl.T_e, _cap_pl.T_e]),
+        np.array([_cap_pl.n_e, _cap_pl.n_e]),
+        np.array([_cap_pl.n_n, _cap_pl.n_n]),
+        np.zeros(2),
+        np.array([_cap_cfg.A_c, _cap_cfg.A_c]),
+        I_ion,
+        "He",
+        _CAPFIX_ESCAPE_I_A,
+        cathode_index=0,
+        **_CAPFIX_ESCAPE_KWARGS,
+    )
+    assert _cap_beam.result.regime == "capability_limited"
+    assert _cap_beam.beam_cross[0] == _beam_deposition_mod.He_EII_cross_lkup(
+        _cap_beam.result.phi_c / I_ion
+    ), _cap_beam.beam_cross[0]
 
     # Schottky lowering (opt-in): the field-tilted emission ceiling gives the
     # knee a finite dV/dI. Near the raw ceiling the enhanced curve must sit
@@ -5672,6 +5835,9 @@ def main():
                 def _net_phi_c(psi):
                     return (psi - _state(psi)[1]) * T_e
 
+                def _reported_phi_c(psi):
+                    return psi * T_e - _state(psi)[1] * T_e
+
                 capability_limited = False
                 J_target = J_imposed
                 for _ in range(200):
@@ -5688,6 +5854,16 @@ def main():
                 ):
                     capability_limited = False
                     J_target = J_imposed - plateau_tol_rel * abs(J_imposed)
+                psi_c_plus = None
+                if not capability_limited:
+                    psi_c_plus = _ta_brentq(
+                        lambda x: _J_tot(x) - J_target,
+                        psi_lo, psi_top, xtol=1.0e-12, rtol=1.0e-14,
+                        full_output=False,
+                    )
+                    # The ceiling is enforced on the located root (2026-08-09).
+                    if _reported_phi_c(psi_c_plus) >= phi_c_cap_V:
+                        capability_limited = True
                 if capability_limited:
                     if _net_phi_c(psi_top) > phi_c_cap_V:
                         return _ta_brentq(
@@ -5696,11 +5872,7 @@ def main():
                             full_output=False,
                         ), True
                     return psi_top, True
-                return _ta_brentq(
-                    lambda x: _J_tot(x) - J_target,
-                    psi_lo, psi_top, xtol=1.0e-12, rtol=1.0e-14,
-                    full_output=False,
-                ), False
+                return psi_c_plus, False
 
             _ta_tol = _cathode_solver_idriven_mod._J_PLATEAU_TOL_REL
             _ta_lam = math.log(math.sqrt(4.0 * _cathode_solver_mod._pemr
@@ -5743,6 +5915,65 @@ def main():
                             _ta_cases += 1
             assert _ta_cases >= 180, _ta_cases
             assert _ta_cap_seen[False] > 20, _ta_cap_seen
+
+            # The returned-root ceiling (2026-08-09) on the case that motivated
+            # it, end to end and on BOTH paths: the frozen escaping state, run
+            # through solve_idriven with the compiled root find bound and then
+            # with the pure ladder. The two must agree BIT for bit -- the
+            # transcription is faithful or it is not -- and both must report
+            # the ceiling rather than the 1854.195 V the pre-fix ladder
+            # returned. Also run at a current BELOW the window, so the
+            # comparison covers the ordinary J-root path through the same
+            # frozen state.
+            _cap_cy_cfg = _cathode_solver_mod.DeviceConfig(
+                **_CAPFIX_ESCAPE_CONFIG
+            )
+            _cap_cy_pl = _cathode_solver_mod.PlasmaState(
+                **_CAPFIX_ESCAPE_PLASMA
+            )
+            _cap_saved_root = _cathode_solver_idriven_mod._COMPILED_ROOT
+            try:
+                for _cap_cy_I in (5.0, 5.45, _CAPFIX_ESCAPE_I_A, 6.0):
+                    _cathode_solver_idriven_mod._COMPILED_ROOT = None
+                    _cap_pure = _cathode_solver_idriven_mod.solve_idriven(
+                        _cap_cy_cfg, _cap_cy_pl, I_tot_A=_cap_cy_I,
+                        **_CAPFIX_ESCAPE_KWARGS
+                    )
+                    _cathode_solver_idriven_mod._COMPILED_ROOT = (
+                        _cy.solve_psi_annular_schottky
+                    )
+                    _cap_comp = _cathode_solver_idriven_mod.solve_idriven(
+                        _cap_cy_cfg, _cap_cy_pl, I_tot_A=_cap_cy_I,
+                        **_CAPFIX_ESCAPE_KWARGS
+                    )
+                    assert _cap_comp.regime == _cap_pure.regime, (
+                        _cap_cy_I, _cap_comp.regime, _cap_pure.regime
+                    )
+                    for _cap_att in (
+                        "phi_c", "phi_c_plus", "phi_c_minus", "phi_a",
+                        "I_eth_star", "I_tot", "V_p", "V_b", "l_b",
+                        "beam_bypass_fraction",
+                    ):
+                        _cap_a = float(getattr(_cap_comp, _cap_att))
+                        _cap_b = float(getattr(_cap_pure, _cap_att))
+                        assert _cap_a == _cap_b, (
+                            _cap_cy_I, _cap_att,
+                            _cap_a.hex(), _cap_b.hex(),
+                        )
+                    if _cap_cy_I >= 5.46:
+                        assert _cap_comp.regime == "capability_limited", (
+                            _cap_cy_I, _cap_comp.regime
+                        )
+                        assert np.isclose(
+                            _cap_comp.phi_c, 1000.0, rtol=1e-12, atol=0.0
+                        ), _cap_comp.phi_c
+                    else:
+                        assert _cap_comp.regime == "virtual_cathode", (
+                            _cap_cy_I, _cap_comp.regime
+                        )
+                        assert _cap_comp.phi_c < 1000.0, _cap_comp.phi_c
+            finally:
+                _cathode_solver_idriven_mod._COMPILED_ROOT = _cap_saved_root
 
         loaded_result = load_result_hdf5(output_path)
         loaded_via_solver = LAPDSim1D.load_result(output_path)
