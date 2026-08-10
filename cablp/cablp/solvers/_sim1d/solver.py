@@ -7055,6 +7055,25 @@ class LAPDSim1D:
             for key in _CATHODE_RESULT_KEYS:
                 diag[f"{prefix}_{key}"] = np.nan
             diag[f"{prefix}_long_mfp"] = np.nan
+            # At-cap regime flag: 1.0 where the exported ``phi_c`` is the
+            # ``cathode_phi_c_cap_V`` ceiling BOUND rather than a free root
+            # of the current-matching solve, 0.0 where it is a free root,
+            # NaN where no solve ran. Both routes into the ceiling land
+            # here -- the bracket ladder reaching the cap before it can
+            # carry the imposed current, and the returned-root clip
+            # (2026-08-09) that re-tests the located J-root against the cap
+            # -- because both leave the solve in
+            # ``regime = "capability_limited"``, which is exactly the tag
+            # the module's own escape invariant keys on. Read it with any
+            # ``phi_c``-derived quantity (notably ``E_tail`` under
+            # ``heating_anomalous_tail_energy_keying = "phi_c"``): on a
+            # flagged frame that quantity is riding a numerical regime
+            # guard, not a device-sustained drop. Diagnostic only -- it is
+            # derived from the regime string the solve already returns, so
+            # nothing here is recomputed and no exported value moves. Runs
+            # saved before 2026-08-09 lack the datasets and readers must
+            # default them.
+            diag[f"{prefix}_phi_c_at_cap"] = np.nan
 
         cathode_solve = self._cathode_solve
         if (
@@ -7186,6 +7205,10 @@ class LAPDSim1D:
         for key in _CATHODE_RESULT_KEYS:
             diag[f"{prefix}_{key}"] = float(getattr(result, key))
         diag[f"{prefix}_long_mfp"] = float(bool(result.long_mfp))
+        # See the default-seeding block in _cathode_diagnostic_snapshot.
+        diag[f"{prefix}_phi_c_at_cap"] = float(
+            str(result.regime) == "capability_limited"
+        )
 
     def _stack_trajectory_cathode_diagnostics(self, saved):
         if not saved:
