@@ -4,7 +4,10 @@ Plotting-only campaign instrument for the R5 ES1 refit visual inspection. Does
 not run LAPDSim1D or touch the shared scorer. Produces the required validation
 panels with the adopted sigma_tot error bars:
 
-  (1) discharge current I(t) and voltage V_dis(t) vs the ES overlay (SEM bands);
+  (1) discharge current I(t) and voltage V_dis(t) vs the ES overlay. Where the
+      overlay carries the measured ensemble spread (schema v8+), the wide band
+      is the shot-to-shot +/-sd ENVELOPE and the narrow one the +/-SEM of the
+      mean; on older overlays only the SEM band is drawn, unchanged;
   (2) Te(z) and ne(z) at t=15 and 19 ms, model line vs measured port points
       (sigma_tot bars), with vertical dashed lines at the probe/port locations;
   (3) Isat(z) = n*sqrt(Te) (systematics-robust) model vs measured ports, plus
@@ -48,6 +51,26 @@ def _overlay_path(es):
     return SCRIPT_DIR / "data" / name
 
 
+def _spread_band(ov, key, mean):
+    """Return the measured ensemble sd for `key`, or None on older overlays.
+
+    Presence-gated: overlays written before the discharge-spread export carry
+    no sd field, and on those the discharge panels keep their SEM-only
+    rendering exactly as before. A length that does not match the mean trace
+    raises rather than shading the band against the wrong samples.
+    """
+    if key not in ov:
+        return None
+    sd = np.asarray(ov[key], float)
+    if sd.shape != mean.shape:
+        raise ValueError(
+            f"overlay {key} has shape {sd.shape}, expected the mean trace's "
+            f"{mean.shape}; a mismatched length would shade the band against "
+            "the wrong samples"
+        )
+    return sd
+
+
 def _interp_port_slice(t_axis, values_2d, t_ms):
     """Interpolate each port's measured time series onto t_ms. values_2d[port,t]."""
     return np.array([np.interp(t_ms, t_axis, values_2d[p]) for p in range(values_2d.shape[0])])
@@ -66,10 +89,16 @@ def main():
     ap.add_argument("--from-h5", required=True)
     ap.add_argument("--es", type=int, default=1)
     ap.add_argument("--out", default=None)
+    ap.add_argument(
+        "--overlay",
+        default=None,
+        help="overlay NPZ to render against; default is the promoted "
+             "data/es{N}_sim1d_overlay.npz",
+    )
     args = ap.parse_args()
 
     r = load_result_hdf5(args.from_h5)
-    ov = np.load(_overlay_path(args.es))
+    ov = np.load(args.overlay or _overlay_path(args.es))
     diag = r.cathode_diagnostics
 
     origin = _main_discharge_origin(r)
@@ -98,6 +127,10 @@ def main():
     dt_ms = np.asarray(ov["discharge_time_ms"], float)
     dI = np.asarray(ov["discharge_current_mean_a"], float)
     dIs = np.asarray(ov["discharge_current_sem_a"], float)
+    dIsd = _spread_band(ov, "discharge_current_sd_a", dI)
+    if dIsd is not None:
+        ax.fill_between(dt_ms, dI - dIsd, dI + dIsd, color="tab:orange", alpha=0.22,
+                        lw=0, label="meas shot sd")
     ax.fill_between(dt_ms, dI - dIs, dI + dIs, color="gray", alpha=0.3, label="meas SEM")
     ax.plot(dt_ms, dI, "k-", lw=1, label="measured")
     ax.plot(t_ms, I, "b-", lw=1.3, label="model")
@@ -108,6 +141,10 @@ def main():
     ax = axes[0, 1]
     dV = np.asarray(ov["discharge_voltage_positive_mean_v"], float)
     dVs = np.asarray(ov["discharge_voltage_sem_v"], float)
+    dVsd = _spread_band(ov, "discharge_voltage_sd_v", dV)
+    if dVsd is not None:
+        ax.fill_between(dt_ms, dV - dVsd, dV + dVsd, color="tab:orange", alpha=0.22,
+                        lw=0, label="meas shot sd")
     ax.fill_between(dt_ms, dV - dVs, dV + dVs, color="gray", alpha=0.3)
     ax.plot(dt_ms, dV, "k-", lw=1, label="measured")
     ax.plot(t_ms, Vdis, "b-", lw=1.0, label="model V_dis")
