@@ -3259,7 +3259,6 @@ class LAPDSim1D:
                 beam_cross_prev=self._cathode_beam_cross,
                 T_s_override_K=self._cathode_Ts_K,
                 phi_wf_override_eV=self._cathode_phi_wf_eff(),
-                coverage=self._coverage_view(self.state),
             )(self._circuit_I_loop)
         # Cathode warming, accepted steps only (rejected attempts never move
         # the surface temperature).
@@ -3438,7 +3437,6 @@ class LAPDSim1D:
                 beam_cross_prev=self._cathode_beam_cross,
                 T_s_override_K=self._cathode_Ts_K,
                 phi_wf_override_eV=self._cathode_phi_wf_eff(),
-                coverage=self._coverage_view(self.state),
             )
             I_new, V_cap_new, V_dis_step = advance_circuit_current_driven(
                 I_prev_A=self._circuit_I_loop,

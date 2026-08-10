@@ -570,13 +570,30 @@ linear in the local density:
    partner $n_n$ taken on the channel medium.
 2. **The discharge-current channel, where it is density-bilinear.** That is the
    sheath solve's coupling length, $1/\ell_b = 1/\ell_{bi}(n_e)+\sigma_b n_n$,
-   which sets the gap bypass fraction the circuit books. It reads the same
-   channel densities the deposition ray does, and so do the frozen-solve
-   $\sigma_\text{eff}$ inversion and the item-35 gap ledger, so the circuit's
-   view of the beam and the ray's cannot part company. The *linear* cathode
-   quantities -- the Bohm ion current, the anode sample, the sheath $\alpha$ --
-   take no factor: their density rises by $1/f_\text{cov}$ over an area that
-   shrinks by $f_\text{cov}$, and the coverage cancels identically.
+   which sets the gap bypass fraction the circuit books. It is reached
+   INDIRECTLY, and deliberately so. The sheath solve reads one $n_e$ and spends
+   it on two different things: that bilinear coupling length, and the LINEAR
+   Bohm ion current $I_i = A_c e\,n\,c_s$ over the full cathode area. Only the
+   first may be concentrated -- the channel density rises by $1/f_\text{cov}$
+   over an area that shrinks by $f_\text{cov}$, so the coverage cancels
+   identically in the second, and handing the solve a concentrated argument
+   would silently inflate $I_i$ by $1/f_\text{cov}$. The solve therefore keeps
+   the mean fields, and the coverage reaches the circuit through
+   $\sigma_\text{eff}$: the CSDA adapter calibrates that effective attenuation
+   cross section so the frozen mean-density Beer-Lambert bypass reproduces the
+   transmission the CHANNEL ray measured. The inversion and the item-35 gap
+   ledger are on the mean densities for the same reason -- they must be
+   self-consistent with the solve they calibrate -- while the transmission they
+   reproduce is the channel's. The same cancellation is why the anode sample
+   and the sheath $\alpha$ take no factor.
+
+   **v1 limitation:** this circuit path exists only under
+   `beam_deposition_model="csda"` (the production stance), which is what
+   rewrites $\sigma_\text{eff}$. Under the Beer-Lambert arm the coverage
+   reaches the deposition profile but not the circuit's bypass fraction, whose
+   $\sigma_b$ is the bare EII cross section. Closing that would mean splitting
+   `PlasmaState.n_e` into its bilinear and linear consumers inside
+   `cablp/funcs/`, which v1 does not do.
 3. **The anomalous tail channel.** The QL tail walkers are marched on the same
    CSDA machinery, so they inherit the channel $n_e$ (through the hoisted
    stopping coefficient) and the channel $n_n$ they ionize. No separate factor

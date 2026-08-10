@@ -479,7 +479,6 @@ def idriven_result_evaluator(
     beam_cross_prev,
     T_s_override_K=None,
     phi_wf_override_eV=None,
-    coverage=None,
 ):
     """Return an ``I [A] -> SolverResult`` evaluator at this frozen state.
 
@@ -507,17 +506,17 @@ def idriven_result_evaluator(
     )
     idx = beam_launch(geometry, end=0)[0]
     beam_cross_prev = np.asarray(beam_cross_prev, dtype=float)
-    # The sheath solve's beam-plasma coupling length l_b -- and therefore the
-    # gap bypass fraction the circuit books -- is the one density-BILINEAR
-    # quantity on the discharge-current path (1/l_b = 1/l_bi(n_e) +
-    # sigma_b*n_n). It must see the same channel medium the deposition ray
-    # does, so the evaluator and the dispatched solve cannot disagree about
-    # what the beam crosses.
-    _cov_ne, _cov_nn = coverage_channel_densities(state, coverage)
+    # MEAN densities, matching the dispatched solve in
+    # solve_cathode_boundary: this ONE n_e is spent on both the bilinear beam
+    # coupling length and the linear Bohm ion current, and only the former may
+    # be concentrated. Under coverage the beam-plasma coupling reaches this
+    # solve through `sigma_b` -- the effective attenuation cross section the
+    # CSDA adapter calibrated against the CHANNEL ray's gap transmission --
+    # which is the density-bilinear discharge-current placement.
     plasma = PlasmaState(
         T_e=float(derived.Te[idx]),
-        n_e=float(_cov_ne[idx]),
-        n_n=float(_cov_nn[idx]),
+        n_e=float(state.n[idx]),
+        n_n=float(state.nn[idx]),
         sigma_b=float(beam_cross_prev[idx]),
     )
     schottky = bool(input_flags.get("cathode_schottky", False))
@@ -554,7 +553,6 @@ def idriven_vdis_evaluator(
     beam_cross_prev,
     T_s_override_K=None,
     phi_wf_override_eV=None,
-    coverage=None,
 ):
     """Return a ``V_dis(I) [V]`` evaluator at this frozen plasma state.
 
@@ -574,7 +572,6 @@ def idriven_vdis_evaluator(
         beam_cross_prev=beam_cross_prev,
         T_s_override_K=T_s_override_K,
         phi_wf_override_eV=phi_wf_override_eV,
-        coverage=coverage,
     )
 
     # Internal series drop on the plasma side of the V_dis probe (R5 ES1 tuning
@@ -753,10 +750,15 @@ def solve_cathode_boundary(
 
     ``coverage`` is the optional :class:`CoverageView1D`. It is applied at
     exactly the points where the beam's own view of the medium enters -- the
-    densities the beam system attenuates on, and the CSDA rays -- and NOT to
-    the boundary sample, the anode circuit sample or the sheath alpha, whose
-    plasma terms are linear in density over an area that shrinks by the same
-    factor, so the coverage cancels identically there.
+    CSDA rays, and the Beer-Lambert stopping profile rebuilt below -- and NOT
+    to the sheath solve's own densities. The sheath solve reads ONE ``n_e``
+    and spends it on both the bilinear beam coupling length and the LINEAR
+    Bohm ion current over the full cathode area, and only the former may be
+    concentrated; the same cancellation protects the boundary sample, the
+    anode circuit sample and the sheath alpha. Under coverage the circuit
+    still feels the channel beam, through the effective attenuation cross
+    section the CSDA adapter calibrates against the CHANNEL ray's gap
+    transmission.
     """
     boundary = cathode_boundary_state(
         state=state,
@@ -816,9 +818,6 @@ def solve_cathode_boundary(
             "beam_cross_prev must have shape "
             f"({geometry.cells},), got {beam_cross_prev.shape}"
         )
-    # The channel-local medium the beam attenuates on. Identical to the mean
-    # fields (the same array objects) without a coverage view.
-    beam_ne, beam_nn = coverage_channel_densities(state, coverage)
     if not floating:
         # The circuit is explicit solver state: no inductive fold, no
         # warm start -- the solve is a well-posed evaluation at the frozen
@@ -828,8 +827,8 @@ def solve_cathode_boundary(
         beam_result = solve_beam_system_idriven(
             config=device_config,
             Te=derived.Te,
-            ne=beam_ne,
-            nn=beam_nn,
+            ne=state.n,
+            nn=state.nn,
             beam_cross_prev=beam_cross_prev,
             plasma_cross=geometry.plasma_area_cm2,
             I_ion=I_ion,
@@ -859,8 +858,8 @@ def solve_cathode_boundary(
         beam_result = solve_beam_system(
             config=device_config,
             Te=derived.Te,
-            ne=beam_ne,
-            nn=beam_nn,
+            ne=state.n,
+            nn=state.nn,
             beam_cross_prev=beam_cross_prev,
             plasma_cross=geometry.plasma_area_cm2,
             I_ion=I_ion,
@@ -888,6 +887,44 @@ def solve_cathode_boundary(
                 input_dict.get("beam_excitation_model", "2p_scalar")
             ),
         )
+    if coverage is not None:
+        # The Beer-Lambert deposition profile is beam STOPPING and belongs on
+        # the channel medium; it is rebuilt here, after the solve, rather than
+        # by feeding channel densities into the solve itself. The sheath solve
+        # reads ONE `n_e`, and it spends it on two different things: the
+        # bilinear beam coupling length (which the coverage must reach) and the
+        # LINEAR Bohm ion current I_i = A_c e n c_s over the full cathode area
+        # (which it must not -- the channel density rises by 1/f_cov over an
+        # area that shrinks by f_cov, so the coverage cancels identically
+        # there). Concentrating the argument would silently inflate I_i by
+        # 1/f_cov, so the solve keeps the mean fields and only the profile
+        # moves.
+        _cov_ne, _cov_nn = coverage_channel_densities(state, coverage)
+        _cov_launch = beam_launch(geometry, end=0)[0]
+        if beam_result.beam_cross[_cov_launch] != 0.0:
+            beam_result.l_b_profile = np.array([
+                _compute_l_b(
+                    beam_result.result.phi_c,
+                    float(derived.Te[j]),
+                    float(_cov_ne[j]),
+                    float(_cov_nn[j]),
+                    float(beam_result.beam_atten_cross[_cov_launch]),
+                )
+                for j in range(geometry.cells)
+            ])
+        if boundary.twin_cathode and beam_result.result_twin is not None:
+            _cov_twin = beam_launch(geometry, end=-1)[0]
+            if beam_result.beam_cross[_cov_twin] != 0.0:
+                beam_result.l_b_profile_twin = np.array([
+                    _compute_l_b(
+                        beam_result.result_twin.phi_c,
+                        float(derived.Te[j]),
+                        float(_cov_ne[j]),
+                        float(_cov_nn[j]),
+                        float(beam_result.beam_atten_cross[_cov_twin]),
+                    )
+                    for j in range(geometry.cells)
+                ])
     beam_deposition = None
     beam_gap_ledger = None
     if str(input_dict.get("beam_deposition_model", "beer_lambert")) == "csda":
@@ -1439,11 +1476,21 @@ def _csda_beam_deposition(
                 ).transmitted_flux
             )
         transmission = min(max(survival, 1.0e-6), 1.0)
-        nn_launch = float(ray_nn[launch])
+        # The inversion below is deliberately on the MEAN densities even under
+        # coverage. sigma_eff is an EFFECTIVE cross section whose entire job is
+        # to make the frozen sheath solve's Beer-Lambert bypass reproduce the
+        # transmission the module measured, and that frozen solve runs on the
+        # mean fields (see solve_cathode_boundary). The coverage enters through
+        # the TRANSMISSION -- the ray above marched on the channel medium -- so
+        # the circuit sees the channel's beam-plasma coupling while the algebra
+        # stays self-consistent with the solve it is calibrating. Inverting on
+        # channel densities instead would leave the frozen solve reproducing
+        # nothing, and the gap ledger tripwire below would say so.
+        nn_launch = float(state.nn[launch])
         l_bi = _compute_l_b(
             result.phi_c,
             float(derived.Te[launch]),
-            float(ray_ne[launch]),
+            float(state.n[launch]),
             0.0,
             0.0,
         )
@@ -1480,7 +1527,7 @@ def _csda_beam_deposition(
                 _compute_l_b(
                     result.phi_c,
                     float(derived.Te[launch]),
-                    float(ray_ne[launch]),
+                    float(state.n[launch]),
                     nn_launch,
                     sigma_eff,
                 ),
