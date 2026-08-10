@@ -95,7 +95,7 @@ def main(argv=None):
         t_end=args.t_end,
         max_steps=args.max_steps,
         progress_tracker=_progress,
-        progress_interval_s=2.0e-4,
+        progress_interval_s=0.0,
     )
     result = sim.get_results()
     save_result_hdf5(args.save_h5, result, params=params, flags=flags)
@@ -145,7 +145,11 @@ def main(argv=None):
     print(f"saved {args.save_h5}")
 
 
-_progress = ProgressPrinter1D(interval_fraction=0.02, interval_steps=50000)
+# Step-gated only: interval_fraction above 1 can never come due, so the
+# cadence is purely `interval_steps`. The solver's own progress_interval_s is
+# 0 above, so every accepted step reaches the tracker and the step gate is the
+# only one that decides.
+_progress = ProgressPrinter1D(interval_fraction=2.0, interval_steps=20000)
 
 
 if __name__ == "__main__":
