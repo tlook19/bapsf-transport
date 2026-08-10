@@ -1893,6 +1893,13 @@ def deposit_beam_two_stream(
     max_energy_fraction_per_substep: float = 0.02,
     anode_cross_index: int | None = None,
     anode_eta: float = 0.0,
+    product_transport: str = "local",
+    anomalous_transport: str = "local",
+    tail_energy_eV: float | None = None,
+    tail_walk_window: tuple[int, int] | None = None,
+    tail_reflect_face: int | None = None,
+    tail_reflect_threshold_eV: float | None = None,
+    stopping_coefficient: np.ndarray | None = None,
 ):
     """March one beam ray through a Z-RESOLVED two-medium column (coverage v2).
 
@@ -1947,15 +1954,56 @@ def deposit_beam_two_stream(
     ``beam_area_cm2`` is therefore the FULL column area, exactly as it is for a
     mean-field ray; the arm areas are formed here.
 
-    **Scope.** The WP-D product walk and the WP-E QL tail walk are NOT
-    accepted. Those closures withhold banks during the march and walk them
-    afterwards on a single medium's stopping coefficient, and a fused march has
-    one post-march walk stage for two media; giving reservoir-born products the
-    channel's stopping power (its ``n_e`` is larger by ``1/f``) would be a
-    silent misattribution. The solver refuses the combination at construction
-    time instead. ``product_transport``/``anomalous_transport`` are absent from
-    this signature rather than defaulted, so the refusal cannot be bypassed by
-    passing them.
+    **The walk closures run ON THE MEAN STATE.** ``product_transport="nonlocal"``
+    (WP-D) and ``anomalous_transport="tail_walk"`` (WP-E) withhold banks during
+    the march and walk them afterwards. Both arms' per-cell withheld banks --
+    which are per-arm per-cell by construction, so birth LOCATIONS are the
+    march's own -- feed the ONE post-march walk stage, and that stage runs on
+    the mean plasma state: neither the channel view ``n/f_cov`` nor the
+    reservoir floor.
+
+    That is the same patch-decorrelation closure the re-mix above stands on,
+    applied to a product instead of a primary. A field-aligned product's path
+    samples the channel medium with probability ``f_cov(z)`` per cell and the
+    reservoir with ``1 - f_cov(z)``, so the stopping it sees on average is
+    ``f_cov*(n/f_cov) + (1-f_cov)*n_floor``, i.e. the MEAN density: the
+    concentration cancels exactly the way it cancels in a volumetric bilinear
+    rate. The free-stream-to-walk transition is therefore EMERGENT rather than
+    imposed -- the walk's reach is set by the same density-dependent Coulomb
+    blocking the primary's drag law uses, so at pedestal densities a walker
+    crosses the machine (it IS a free-streamer there) and localizes as the mean
+    builds. No constant and no keyword is introduced for it.
+
+    Two second-order misattributions are accepted, in opposite directions and
+    both bounded by the patch-scale argument above:
+
+    * a product born INSIDE a channel is briefly correlated with that channel,
+      whose density is higher than the mean, so it thermalizes somewhat more
+      locally than this mean-field walk predicts;
+    * a product born in the RESERVOIR truly sees the floor density, so its reach
+      is longer than the mean walk gives it. This one vanishes at both ends of
+      the closure's own life: early, when the mean IS near the floor and the two
+      media barely differ, and late, when ``1 - f_cov -> 0`` and there is no
+      reservoir birth left to misplace.
+
+    ``stopping_coefficient`` is REQUIRED once either walk is active and is the
+    mean-state coefficient (see ``deposit_beam``'s hoisting note). It is not
+    defaulted here: this function holds two media and no single ``(ne, Te)``
+    pair it could honestly build one from, so a caller that has not decided
+    which state the walk runs on gets an error rather than a quiet choice.
+
+    ``tail_ionization`` is absent from this signature rather than defaulted, so
+    the ionizing tail channel cannot reach this march: its walkers BURN
+    neutrals, and which medium's neutrals a mean-state walker burnt -- the
+    quantity the closure's deficit equation is written on -- is not settled by
+    the mean-state ruling. The solver refuses that combination at construction
+    time.
+
+    The walked deposits are booked to the CHANNEL arm's banks, on the same
+    convention the transmitted primary already uses above: after the walk the
+    energy belongs to the mean field and no medium owns it, and the caller
+    consumes the two arms' sum. Only the reservoir arm's IONIZATION rows are
+    read separately, and the walks under this signature deposit heat alone.
     """
     if anomalous_model not in ("none", "quasilinear"):
         raise ValueError(
@@ -2006,6 +2054,106 @@ def deposit_beam_two_stream(
             "max_energy_fraction_per_substep must be in (0, 1), got "
             f"{max_energy_fraction_per_substep}"
         )
+    if product_transport not in ("local", "nonlocal"):
+        raise ValueError(
+            f"unknown product_transport {product_transport!r}; "
+            "expected 'local' or 'nonlocal'"
+        )
+    if anomalous_transport not in ("local", "tail_walk"):
+        raise ValueError(
+            f"unknown anomalous_transport {anomalous_transport!r}; "
+            "expected 'local' or 'tail_walk'"
+        )
+    walk_products = product_transport == "nonlocal"
+    walk_tail = anomalous_transport == "tail_walk"
+    E_tail = 0.0
+    if walk_tail:
+        # Same presence gating deposit_beam applies: with no anomalous channel
+        # there is no power for the walk to carry and the setting is a no-op.
+        if anomalous_model == "none":
+            raise ValueError(
+                "anomalous_transport='tail_walk' requires an active anomalous "
+                "channel (anomalous_model='quasilinear'); with no anomalous "
+                "drag there is no power to carry and the setting would do "
+                "nothing"
+            )
+        if tail_energy_eV is None:
+            raise ValueError(
+                "anomalous_transport='tail_walk' needs tail_energy_eV (the "
+                "QL plateau energy the tail electrons are launched at)"
+            )
+        E_tail = float(tail_energy_eV)
+        if not math.isfinite(E_tail) or E_tail <= 0.0:
+            raise ValueError(
+                f"tail_energy_eV must be finite and > 0 (got {tail_energy_eV})"
+            )
+    reflect_face = None
+    E_reflect = 0.0
+    if tail_reflect_face is not None:
+        if not walk_tail:
+            raise ValueError(
+                "tail_reflect_face requires anomalous_transport='tail_walk' "
+                "(it reflects the QL tail walkers; with no walk there is "
+                "nothing to reflect and the setting would do nothing)"
+            )
+        reflect_face = int(tail_reflect_face)
+        if reflect_face not in (-1, 1):
+            raise ValueError(
+                "tail_reflect_face must be -1 (the walk window's low-index "
+                f"face) or +1 (its high-index face), got {tail_reflect_face!r}"
+            )
+        if tail_reflect_threshold_eV is None:
+            raise ValueError(
+                "tail_reflect_face needs tail_reflect_threshold_eV (the "
+                "energy below which a walker arriving at that face is turned "
+                "around instead of escaping)"
+            )
+        E_reflect = float(tail_reflect_threshold_eV)
+        if not math.isfinite(E_reflect) or E_reflect <= 0.0:
+            raise ValueError(
+                "tail_reflect_threshold_eV must be finite and > 0 (got "
+                f"{tail_reflect_threshold_eV})"
+            )
+    elif tail_reflect_threshold_eV is not None:
+        raise ValueError(
+            "tail_reflect_threshold_eV was given without tail_reflect_face; "
+            "the threshold belongs to a named reflecting face and on its own "
+            "would silently do nothing"
+        )
+    tail_lo, tail_hi = 0, cells - 1
+    if reflect_face is not None:
+        if tail_walk_window is None:
+            raise ValueError(
+                "tail_reflect_face needs tail_walk_window=(lo, hi): the "
+                "reflecting face is one of that window's two faces, and "
+                "without it the walk has no face to reflect at"
+            )
+        tail_lo, tail_hi = (int(tail_walk_window[0]), int(tail_walk_window[1]))
+        if not 0 <= tail_lo <= tail_hi < cells:
+            raise ValueError(
+                "tail_walk_window must be an inclusive (lo, hi) cell range "
+                f"with 0 <= lo <= hi < cells={cells} (got {tail_walk_window})"
+            )
+    if walk_products or walk_tail:
+        # THE MEAN-STATE HAND-OFF, made structural. There is no medium here the
+        # walk could fall back on: this function holds a channel view and a
+        # reservoir view and the closure says the walk runs on NEITHER, so the
+        # coefficient is required rather than built.
+        if stopping_coefficient is None:
+            raise ValueError(
+                "the walk closures under a two-stream march need an explicit "
+                "stopping_coefficient: the walk runs on the MEAN plasma state, "
+                "and this march carries two media (channel n/f_cov and "
+                "reservoir floor) but not the mean, so it cannot build one "
+                "without silently choosing a medium. Pass the caller's "
+                "mean-state _coulomb_stopping_coefficient(ne_mean, Te, model)"
+            )
+        stopping_coefficient = np.asarray(stopping_coefficient, dtype=float)
+        if stopping_coefficient.shape != (cells,):
+            raise ValueError(
+                "stopping_coefficient must have one entry per grid cell "
+                f"(cells={cells}); got shape {stopping_coefficient.shape}"
+            )
 
     # Per-arm banks. Index 0 is the CHANNEL arm, 1 the RESERVOIR arm; they are
     # never summed here, so the caller keeps the reservoir arm's ionization
@@ -2030,6 +2178,24 @@ def deposit_beam_two_stream(
     )
     flux_entry = np.zeros(cells)
     anode_intercepted = [0.0, 0.0]
+    # WP-D / WP-E withholding banks, SHARED across the arms and indexed by
+    # BIRTH CELL. Both arms withhold into the same per-cell slot because the
+    # one walk stage below runs on the mean state for both, so a per-arm split
+    # would only be summed again before it was used; the birth LOCATION, which
+    # is the thing the walk consumes, is the march's own either way. The energy
+    # each slot carries is a flux-weighted mean, exactly the convention
+    # deposit_beam uses across the substeps within one cell.
+    sec_flux = np.zeros(cells) if walk_products else None
+    sec_power_eV = np.zeros(cells) if walk_products else None
+    term_flux = np.zeros(cells) if walk_products else None
+    term_power_eV = np.zeros(cells) if walk_products else None
+    anom_power_eV = np.zeros(cells) if walk_tail else None
+    end_loss_low = 0.0
+    end_loss_high = 0.0
+    end_loss_transmitted = 0.0
+    end_loss_tail_low = 0.0
+    end_loss_tail_high = 0.0
+    tail_power = 0.0
 
     E = float(E0_eV)
     gamma_total = float(Gamma0_per_s)
@@ -2096,6 +2262,11 @@ def deposit_beam_two_stream(
             acc_heat_anomalous = 0.0
             acc_heat_secondary = 0.0
             acc_heat_terminal = 0.0
+            # This arm's withheld populations in this cell; inert unless their
+            # closure is on.
+            acc_sec_flux = 0.0
+            acc_sec_power_eV = 0.0
+            acc_anom_power_eV = 0.0
             while remaining > 0.0:
                 sigma_i = (
                     He_EII_cross_lkup(E_arm / I_ion_eV)
@@ -2123,8 +2294,12 @@ def deposit_beam_two_stream(
                 if E_arm - L_tot * dz_sub <= E_stop_eV:
                     dz_sub = (E_arm - E_stop_eV) / L_tot
                 if dz_sub <= 0.0:
-                    acc_heating += gamma * E_arm * _ERG_PER_EV
-                    acc_heat_terminal += gamma * E_arm * _ERG_PER_EV
+                    if walk_products:
+                        term_flux[cell] += gamma
+                        term_power_eV[cell] += gamma * E_arm
+                    else:
+                        acc_heating += gamma * E_arm * _ERG_PER_EV
+                        acc_heat_terminal += gamma * E_arm * _ERG_PER_EV
                     E_arm = 0.0
                     arm_absorbed = True
                     break
@@ -2134,18 +2309,44 @@ def deposit_beam_two_stream(
                 d_coul = L_coul * dz_sub
                 d_anom = L_anom * dz_sub
                 acc_ionization_cost += gamma * d_pot * _ERG_PER_EV
-                acc_heating += gamma * (d_sec + d_coul + d_anom) * _ERG_PER_EV
-                acc_heat_secondary += gamma * d_sec * _ERG_PER_EV
+                # WP-E: under the tail walk the anomalous decrement is withheld
+                # from every local bank in this cell and carried to the walk
+                # stage. ``d_anom_local`` is ``d_anom`` with the walk off, so
+                # the expressions below are then literally the ones this march
+                # shipped with. The ARM's own energy decrement further down is
+                # unchanged in both modes, so the trajectory, the re-mix and
+                # every other channel are untouched: only this bank's
+                # destination moves.
+                if walk_tail:
+                    acc_anom_power_eV += gamma * d_anom
+                    d_anom_local = 0.0
+                else:
+                    d_anom_local = d_anom
+                if walk_products:
+                    acc_heating += (
+                        gamma * (d_coul + d_anom_local) * _ERG_PER_EV
+                    )
+                    acc_sec_flux += gamma * nn_c * sigma_i * dz_sub
+                    acc_sec_power_eV += gamma * d_sec
+                else:
+                    acc_heating += (
+                        gamma * (d_sec + d_coul + d_anom_local) * _ERG_PER_EV
+                    )
+                    acc_heat_secondary += gamma * d_sec * _ERG_PER_EV
                 acc_heat_coulomb += gamma * d_coul * _ERG_PER_EV
-                acc_heat_anomalous += gamma * d_anom * _ERG_PER_EV
+                acc_heat_anomalous += gamma * d_anom_local * _ERG_PER_EV
                 acc_radiated += gamma * d_exc * _ERG_PER_EV
                 acc_ionization_events += gamma * nn_c * sigma_i * dz_sub
                 acc_excitation_events += gamma * nn_c * sigma_x * dz_sub
                 E_arm -= d_pot + d_sec + d_exc + d_coul + d_anom
                 remaining -= dz_sub
                 if E_arm <= E_stop_eV:
-                    acc_heating += gamma * E_arm * _ERG_PER_EV
-                    acc_heat_terminal += gamma * E_arm * _ERG_PER_EV
+                    if walk_products:
+                        term_flux[cell] += gamma
+                        term_power_eV[cell] += gamma * E_arm
+                    else:
+                        acc_heating += gamma * E_arm * _ERG_PER_EV
+                        acc_heat_terminal += gamma * E_arm * _ERG_PER_EV
                     E_arm = 0.0
                     arm_absorbed = True
                     break
@@ -2158,6 +2359,11 @@ def deposit_beam_two_stream(
             bank["heat_anomalous"][cell] += acc_heat_anomalous
             bank["heat_secondary"][cell] += acc_heat_secondary
             bank["heat_terminal"][cell] += acc_heat_terminal
+            if walk_products:
+                sec_flux[cell] += acc_sec_flux
+                sec_power_eV[cell] += acc_sec_power_eV
+            if walk_tail:
+                anom_power_eV[cell] += acc_anom_power_eV
             if not arm_absorbed:
                 surviving_weight += weight
                 surviving_energy_weight += weight * E_arm
@@ -2179,6 +2385,188 @@ def deposit_beam_two_stream(
             E = 0.0
             absorbed = True
             break
+
+    if walk_products or walk_tail:
+        # --- THE ONE POST-MARCH WALK STAGE, ON THE MEAN STATE -------------
+        # The same closed-form machinery deposit_beam's walks use, on the same
+        # closure exponent and the same thermalization floor, fed by the shared
+        # per-cell birth banks above. What is coverage-specific is the MEDIUM:
+        # ``coeff`` is the caller's mean-state coefficient (required, validated
+        # above), never the channel view -- see this function's docstring for
+        # why the concentration cancels in a decorrelated walker's path.
+        # ``floor_eV`` needs Te alone, which the two media share.
+        q = 1.0 - _COULOMB_STOPPING_EXPONENT[coulomb_model]
+        coeff = stopping_coefficient
+        floor_eV = np.maximum(
+            _PRODUCT_FLOOR_TE_MULTIPLE * Te, _PRODUCT_FLOOR_MIN_EV
+        )
+        chan = banks[0]
+
+        def _walk_and_deposit(W0, flux, walk_direction, split):
+            """Walk one population; deposit it and RETURN the escaping power.
+
+            The deposit lands in the CHANNEL arm's banks: the walked energy is
+            the mean field's, not either medium's, and the caller consumes the
+            two arms' sum (see the docstring's booking note).
+            """
+            dep_eV, exit_eV = _walk_products(
+                W0, flux, walk_direction, coeff, dz_cm, floor_eV, q
+            )
+            dep_erg = dep_eV * _ERG_PER_EV
+            chan["heating"] += dep_erg
+            chan[split] += dep_erg
+            return exit_eV * _ERG_PER_EV
+
+        def _bank_walk(W0, flux, walk_direction, split):
+            """Walk one product population and book its deposit and escape."""
+            nonlocal end_loss_low, end_loss_high
+            exit_erg = _walk_and_deposit(W0, flux, walk_direction, split)
+            if walk_direction > 0:
+                end_loss_high += exit_erg
+            else:
+                end_loss_low += exit_erg
+
+        if walk_products and np.any(sec_flux > 0.0):
+            # Flux-weighted mean secondary energy per BIRTH cell, over both
+            # arms' contributions to that cell, emitted 50/50 along +-z.
+            W_sec_cell = np.zeros(cells)
+            born = sec_flux > 0.0
+            W_sec_cell[born] = sec_power_eV[born] / sec_flux[born]
+            half = 0.5 * sec_flux
+            for walk_direction in (1, -1):
+                _bank_walk(W_sec_cell, half, walk_direction, "heat_secondary")
+        if walk_products and np.any(term_flux > 0.0):
+            # The terminal residual keeps the PRIMARY's direction. Unlike the
+            # single-medium march there can be several terminal cells: each arm
+            # runs out of energy where its own medium stops it, and an arm that
+            # stops leaves the survivor marching on. Carried per cell at the
+            # flux-weighted mean residual, the same convention as above.
+            term_W = np.zeros(cells)
+            stopped = term_flux > 0.0
+            term_W[stopped] = term_power_eV[stopped] / term_flux[stopped]
+            _bank_walk(term_W, term_flux, direction, "heat_terminal")
+        if walk_tail and np.any(anom_power_eV > 0.0):
+            # WP-E: re-express each cell's withheld anomalous POWER as a flux of
+            # tail electrons at the single plateau energy E_tail
+            # (flux*E_tail returns the power to roundoff), split 50/50 along
+            # +-B, and walk them. The deposition profile becomes the anomalous
+            # diagnostic split: heating_anomalous reports where the QL energy
+            # LANDS. This self-limits on the mean density -- machine-length at
+            # pedestal densities, collapsing onto local banking once the mean
+            # has built -- which is the emergent transition the closure claims.
+            half_flux = 0.5 * (anom_power_eV / E_tail)
+            tail_power = float(anom_power_eV.sum()) * _ERG_PER_EV
+            if reflect_face is not None:
+                # The windowed closure's standing requirement: the window must
+                # contain every cell the QL channel drives, or that cell's tail
+                # power would be dropped on the floor.
+                for birth in np.flatnonzero(half_flux > 0.0):
+                    if not tail_lo <= birth <= tail_hi:
+                        raise ValueError(
+                            f"anomalous power in cell {int(birth)} lies "
+                            f"outside tail_walk_window {(tail_lo, tail_hi)}; "
+                            "the window must contain every cell the QL "
+                            "channel drives, or that cell's tail power would "
+                            "be silently dropped"
+                        )
+                # K7 with one reflecting window face. A reflection is expressed
+                # by UNFOLDING the path: the reflected leg is the window
+                # traversed back the other way, concatenated onto the incoming
+                # leg, so the walk still telescopes exactly across the bounce.
+                win = slice(tail_lo, tail_hi + 1)
+                n_w = tail_hi - tail_lo + 1
+                coeff_w = coeff[win]
+                dz_w = dz_cm[win]
+                floor_w = floor_eV[win]
+                flux_w = half_flux[win]
+                W0_w = np.full(n_w, E_tail)
+                order_hit = (
+                    np.arange(n_w)[::-1] if reflect_face < 0 else np.arange(n_w)
+                )
+                order_away = order_hit[::-1]
+                escape_at_face = 0.0     # leaves through the reflecting face
+                escape_opposite = 0.0    # leaves through the other one
+
+                def _leg(order, W0, flux):
+                    return _walk_products_forward(
+                        W0[order], flux[order], coeff_w[order], dz_w[order],
+                        floor_w[order], q,
+                    )
+
+                def _bank_tail_walk(dep_eV, *orders):
+                    """Deposit one walked population, in ITS traversal order."""
+                    dep_win = np.zeros(n_w)
+                    for k, order in enumerate(orders):
+                        dep_win[order] += dep_eV[k * n_w:(k + 1) * n_w]
+                    dep_erg = dep_win * _ERG_PER_EV
+                    chan["heating"][win] += dep_erg
+                    chan["heat_anomalous"][win] += dep_erg
+
+                # The arm walking AWAY from the reflecting face never meets it.
+                dep_a, exit_a, _ = _leg(order_away, W0_w, flux_w)
+                _bank_tail_walk(dep_a, order_away)
+                escape_opposite += exit_a
+                # The arm walking INTO it: populations born in different cells
+                # arrive with different energies, so the threshold test is a
+                # per-birth split, not a whole-arm switch.
+                dep_h, exit_h, (act_h, W_face, stop_h) = _leg(
+                    order_hit, W0_w, flux_w
+                )
+                bounced = (~stop_h) & (W_face < E_reflect)
+                if not bounced.any():
+                    _bank_tail_walk(dep_h, order_hit)
+                    escape_at_face += exit_h
+                else:
+                    flux_hit = flux_w[order_hit]
+                    flux_bounce = np.zeros(n_w)
+                    flux_escape = np.zeros(n_w)
+                    flux_bounce[act_h[bounced]] = flux_hit[act_h[bounced]]
+                    flux_escape[act_h[~bounced]] = flux_hit[act_h[~bounced]]
+                    if np.any(flux_escape > 0.0):
+                        dep_e, exit_e, _ = _walk_products_forward(
+                            W0_w[order_hit], flux_escape, coeff_w[order_hit],
+                            dz_w[order_hit], floor_w[order_hit], q,
+                        )
+                        _bank_tail_walk(dep_e, order_hit)
+                        escape_at_face += exit_e
+                    dep_u, exit_u, _ = _walk_products_forward(
+                        np.concatenate([W0_w[order_hit], np.zeros(n_w)]),
+                        np.concatenate([flux_bounce, np.zeros(n_w)]),
+                        np.concatenate(
+                            [coeff_w[order_hit], coeff_w[order_away]]
+                        ),
+                        np.concatenate([dz_w[order_hit], dz_w[order_away]]),
+                        np.concatenate(
+                            [floor_w[order_hit], floor_w[order_away]]
+                        ),
+                        q,
+                    )
+                    _bank_tail_walk(dep_u, order_hit, order_away)
+                    escape_opposite += exit_u
+                if reflect_face > 0:
+                    end_loss_tail_high += escape_at_face * _ERG_PER_EV
+                    end_loss_tail_low += escape_opposite * _ERG_PER_EV
+                else:
+                    end_loss_tail_low += escape_at_face * _ERG_PER_EV
+                    end_loss_tail_high += escape_opposite * _ERG_PER_EV
+            else:
+                tail_W = np.full(cells, E_tail)
+                for walk_direction in (1, -1):
+                    exit_erg = _walk_and_deposit(
+                        tail_W, half_flux, walk_direction, "heat_anomalous"
+                    )
+                    if walk_direction > 0:
+                        end_loss_tail_high += exit_erg
+                    else:
+                        end_loss_tail_low += exit_erg
+        if walk_products and not absorbed and gamma_total > 0.0 and E > 0.0:
+            # The transmitted primary: computed by the march, never banked. It
+            # leaves through the end the ray was heading for.
+            end_loss_transmitted = gamma_total * E * _ERG_PER_EV
+            if direction > 0:
+                end_loss_high += end_loss_transmitted
+            else:
+                end_loss_low += end_loss_transmitted
 
     results = []
     for arm, bank in enumerate(banks):
@@ -2208,6 +2596,21 @@ def deposit_beam_two_stream(
                 excitation_events_tail=np.zeros(cells),
                 ionization_cost_tail_erg_s=np.zeros(cells),
                 radiated_tail_erg_s=np.zeros(cells),
+                # The end ledgers belong to the WALK, which ran once on the
+                # mean state for both arms' births, so they are booked whole to
+                # the channel slot on the same convention the transmitted
+                # primary uses above. The reservoir slot carries 0.0, which is
+                # why a caller reading escape must read the SUM.
+                end_loss_low_erg_s=0.0 if arm == 1 else end_loss_low,
+                end_loss_high_erg_s=0.0 if arm == 1 else end_loss_high,
+                end_loss_transmitted_erg_s=(
+                    0.0 if arm == 1 else end_loss_transmitted
+                ),
+                end_loss_tail_low_erg_s=0.0 if arm == 1 else end_loss_tail_low,
+                end_loss_tail_high_erg_s=(
+                    0.0 if arm == 1 else end_loss_tail_high
+                ),
+                tail_power_erg_s=0.0 if arm == 1 else tail_power,
             )
         )
     return results[0], results[1], flux_entry

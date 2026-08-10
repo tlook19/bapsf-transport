@@ -12914,17 +12914,14 @@ print(json.dumps({
           "coverage_growth_rate_per_s": -1.0}, "must be finite and >= 0"),
         ({"coverage_initial_fraction": 0.3,
           "coverage_backfill_time_s": 0.0}, "must be finite and > 0"),
-        # v2's fused two-stream march has ONE post-march walk stage and two
-        # media, so the walk closures are refused rather than given the
-        # channel's stopping power for reservoir-born products.
-        ({"coverage_initial_fraction": 0.3,
-          "beam_product_transport": "nonlocal"},
-         "beam_product_transport"),
+        # The ionizing tail channel is the ONE walk sub-mode still refused
+        # under coverage: its walkers burn neutrals, and which medium's
+        # neutrals a mean-state walker burnt is what the deficit equation
+        # would have to be told. The energy-only walks deposit heat alone.
         ({"coverage_initial_fraction": 0.3,
           "heating_anomalous_transport": "tail_walk",
-          "heating_anomalous_tail_energy_keying": "fixed",
-          "heating_anomalous_tail_energy_eV": 75.0},
-         "heating_anomalous_transport"),
+          "heating_anomalous_tail_ionization": "on"},
+         "heating_anomalous_tail_ionization"),
     ):
         try:
             LAPDSim1D(dict(_cov_base_p, **bad), _cov_on_f)
@@ -12932,6 +12929,20 @@ print(json.dumps({
             assert needle in str(error), (bad, str(error))
         else:
             raise AssertionError(f"coverage_closure accepted {bad!r}")
+    # POSITIVE CONSTRUCTION, the other side of the refusal above: the two walk
+    # closures are ACCEPTED under coverage as of the walk-on-mean ruling. They
+    # used to be construction-time refusals; a build that silently reinstated
+    # either would fail here rather than quietly dropping the walk.
+    for _cov_walk in (
+        {"coverage_initial_fraction": 0.3,
+         "beam_product_transport": "nonlocal"},
+        {"coverage_initial_fraction": 0.3,
+         "heating_anomalous_transport": "tail_walk",
+         "heating_anomalous_tail_energy_keying": "fixed",
+         "heating_anomalous_tail_energy_eV": 75.0},
+    ):
+        _cov_walk_ok_sim = LAPDSim1D(dict(_cov_base_p, **_cov_walk), _cov_on_f)
+        assert _cov_walk_ok_sim._coverage is not None, _cov_walk
     # ... and the reverse direction: coverage parameters set with the flag OFF
     # would be inert, which is exactly the silent no-op the house rules forbid.
     for _cov_off_key, _cov_off_value in (
@@ -13212,6 +13223,108 @@ print(json.dumps({
     _cov_res_events = float(np.sum(_cov_res_dep[0].ionization_events))
     _cov_tot_events = float(np.sum(_cov_total_dep[0].ionization_events))
     assert 0.0 < _cov_res_events < _cov_tot_events
+
+    # (iv-b) THE WALK STAGE CONSUMES THE MEAN STATE. Both walk closures are
+    # reachable under coverage, and the whole content of the ruling that made
+    # them reachable is WHICH medium their one post-march walk stage runs on:
+    # the mean plasma state, not the channel view n/f_cov the rays march
+    # through. That is a plumbing property, so it is asserted on the quantity
+    # actually plumbed -- the stopping_coefficient the solver's own cathode
+    # path hands the two-stream march -- captured by wrapping the two module
+    # globals for the duration of ONE cathode solve and restored in a finally.
+    # Nothing is re-derived from the solver's public state: `sim.state` is not
+    # the array the cathode path samples (presheath sampling moves it), so
+    # comparing against it would test the sampler, not the hand-off.
+    from cablp.solvers._sim1d.physics import cathode as _cov_cath_mod
+    from cablp.funcs._beam_deposition import (
+        _coulomb_stopping_coefficient as _cov_stop_coeff,
+    )
+
+    _cov_walk_cells = _cov_split_sim.geometry.cells
+    _cov_walk_sim = LAPDSim1D(*_cov_live_config(24, coverage=(0.05, 0.0), extra={
+        # A z-VARYING profile, so "mean" and "channel view" are different in
+        # every cell and by a different factor -- the positive control below
+        # measures how different, and a flat f_cov could make the inequality
+        # pass for the wrong reason.
+        "coverage_initial_fraction": None,
+        "coverage_initial_profile": np.linspace(
+            0.03, 0.30, _cov_walk_cells
+        ).tolist(),
+        "heating_anomalous_transport": "tail_walk",
+        "beam_product_transport": "nonlocal",
+    }))
+    for _ in range(40):
+        _cov_walk_sim.advance_one_step(dt=2.0e-9)
+    _cov_walk_kw = {}
+    _cov_walk_n = {}
+    _cov_walk_orig_march = _cov_cath_mod.deposit_beam_two_stream
+    _cov_walk_orig_chan = _cov_cath_mod.coverage_channel_densities
+
+    def _cov_walk_spy_march(*args, **kwargs):
+        _cov_walk_kw.update(kwargs)
+        return _cov_walk_orig_march(*args, **kwargs)
+
+    def _cov_walk_spy_chan(state, coverage):
+        # The mean plasma density as the cathode path itself saw it, i.e. the
+        # array the hoisted coefficient is required to be built on.
+        _cov_walk_n["n"] = state.n
+        return _cov_walk_orig_chan(state, coverage)
+
+    _cov_cath_mod.deposit_beam_two_stream = _cov_walk_spy_march
+    _cov_cath_mod.coverage_channel_densities = _cov_walk_spy_chan
+    try:
+        _cov_walk_solve = _cov_walk_sim.solve_cathode_boundary(
+            state=_cov_walk_sim.state
+        )
+    finally:
+        _cov_cath_mod.deposit_beam_two_stream = _cov_walk_orig_march
+        _cov_cath_mod.coverage_channel_densities = _cov_walk_orig_chan
+    # The march really received both closures and a coefficient.
+    assert _cov_walk_kw.get("anomalous_transport") == "tail_walk", _cov_walk_kw
+    assert _cov_walk_kw.get("product_transport") == "nonlocal", _cov_walk_kw
+    _cov_walk_coeff = _cov_walk_kw.get("stopping_coefficient")
+    assert _cov_walk_coeff is not None, "the walk got no stopping coefficient"
+    _cov_walk_model = _cov_walk_kw["coulomb_model"]
+    _cov_walk_Te = _cov_walk_kw["Te"]
+    _cov_walk_mean = _cov_stop_coeff(
+        _cov_walk_n["n"], _cov_walk_Te, _cov_walk_model
+    )
+    _cov_walk_chan = _cov_stop_coeff(
+        _cov_walk_kw["ne_channel"], _cov_walk_Te, _cov_walk_model
+    )
+    # EXACTLY the mean-state coefficient, and NOT the channel view.
+    assert np.array_equal(_cov_walk_coeff, _cov_walk_mean), (
+        "the walk's stopping coefficient is not the mean-state one",
+        float(np.max(np.abs(_cov_walk_coeff / _cov_walk_mean - 1.0))),
+    )
+    assert not np.array_equal(_cov_walk_coeff, _cov_walk_chan)
+    # ...and the two are genuinely far apart here, so the inequality above is
+    # a statement about the closure and not about float noise.
+    assert float(np.max(np.abs(_cov_walk_chan / _cov_walk_mean - 1.0))) > 1.0, (
+        "channel and mean coefficients are too close for this to discriminate"
+    )
+    # LIVENESS, hard: the walk stage actually ran and carried the QL tail.
+    # Withheld power that is never walked would leave every one of these zero.
+    _cov_walk_dep = _cov_walk_solve.beam_deposition[0]
+    assert float(_cov_walk_dep.tail_power_erg_s) > 0.0, (
+        "no anomalous power was withheld: the tail walk is not engaged"
+    )
+    _cov_walk_landed = float(np.sum(_cov_walk_dep.heating_anomalous_erg_s))
+    _cov_walk_escaped = (
+        float(_cov_walk_dep.end_loss_tail_low_erg_s)
+        + float(_cov_walk_dep.end_loss_tail_high_erg_s)
+    )
+    assert _cov_walk_landed > 0.0, "the tail walk deposited nothing"
+    # The walk conserves the withheld power: what it lands plus what escapes
+    # the two ends IS the tail power it launched.
+    assert abs(
+        (_cov_walk_landed + _cov_walk_escaped)
+        / float(_cov_walk_dep.tail_power_erg_s) - 1.0
+    ) < 1e-12, (_cov_walk_landed, _cov_walk_escaped)
+    assert np.all(np.isfinite(_cov_walk_dep.plasma_heating_erg_s))
+    assert np.all(np.isfinite(
+        _cov_walk_solve.beam_reservoir_deposition[0].plasma_heating_erg_s
+    ))
 
     # (v) WHOLE-SYSTEM PARTICLE BUDGET. The closure re-partitions neutrals
     # between a covered column and a reservoir; it must not create or destroy
