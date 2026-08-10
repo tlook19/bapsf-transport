@@ -2992,7 +2992,7 @@ def main():
             result_twin=None,
             beam_atten_cross=np.zeros(_pskip_geom.cells),
         )
-        _, _ledger = _csda_beam_deposition(
+        _, _ledger, _ = _csda_beam_deposition(
             _beam,
             SimpleNamespace(nn=nn, n=csda_state.n),
             SimpleNamespace(Te=csda_derived.Te),
@@ -12846,6 +12846,362 @@ print(json.dumps({
             raise AssertionError(
                 f"dt_min_lock_max_steps accepted {bad_lock!r}"
             )
+
+    # --- Clumpy-plasma coverage closure v1.1 (`coverage_closure`) ---------
+    # Five things are checked, in this order: the configuration refusals; the
+    # bit-exact reduction at f_cov = 1; the continuity of the closed-form
+    # coverage field and of the concentration factors as f_cov -> 1; the
+    # two-medium beam split's own energy closure; and the whole-system particle
+    # budget, which is the check this repo's phantom-fuel history demands of
+    # any closure that touches the neutral inventory.
+    from cablp.solvers._sim1d.physics.cathode import (
+        CoverageView1D,
+        coverage_channel_densities,
+    )
+
+    def _coverage_config(deposition_model, **cov):
+        p, f = default_config()
+        p.update({
+            "nx": 12,
+            "beam_deposition_model": deposition_model,
+            "cathode_warming_model": "none",
+            "cathode_Ts_base_K": None,
+            "cathode_surface_model": "none",
+            "cathode_phiwf_clean_eV": None,
+            "cathode_cleaning_E_th_eV": None,
+            "cathode_sample_smoothing": None,
+        })
+        if deposition_model == "csda":
+            p["beam_anomalous_model"] = "quasilinear"
+        p.update(cov)
+        f = dict(f)
+        f["neutral_equilibration"] = False
+        if cov:
+            f["coverage_closure"] = True
+        return p, f
+
+    # (i) CONFIGURATION REFUSALS. Every one is a construction-time ValueError:
+    # an incomplete coverage configuration must never reach a cathode solve.
+    _cov_base_p, _cov_base_f = _coverage_config("csda")
+    _cov_on_f = dict(_cov_base_f, coverage_closure=True)
+    for bad, needle in (
+        ({}, "requires coverage_initial_fraction"),
+        ({"coverage_initial_fraction": 0.0}, "must be finite and in (0, 1]"),
+        ({"coverage_initial_fraction": 1.5}, "must be finite and in (0, 1]"),
+        ({"coverage_initial_fraction": float("nan")},
+         "must be finite and in (0, 1]"),
+        ({"coverage_initial_fraction": 0.3,
+          "coverage_growth_rate_per_s": -1.0}, "must be finite and >= 0"),
+        ({"coverage_initial_fraction": 0.3,
+          "coverage_backfill_time_s": 0.0}, "must be finite and > 0"),
+    ):
+        try:
+            LAPDSim1D(dict(_cov_base_p, **bad), _cov_on_f)
+        except ValueError as error:
+            assert needle in str(error), (bad, str(error))
+        else:
+            raise AssertionError(f"coverage_closure accepted {bad!r}")
+    # ... and the reverse direction: coverage parameters set with the flag OFF
+    # would be inert, which is exactly the silent no-op the house rules forbid.
+    try:
+        LAPDSim1D(
+            dict(_cov_base_p, coverage_initial_fraction=0.3), _cov_base_f
+        )
+    except ValueError as error:
+        assert "without the coverage_closure flag" in str(error)
+    else:
+        raise AssertionError("coverage parameters accepted without the flag")
+    # The two-medium split is built on the CSDA rays; under Beer-Lambert the
+    # whole beam would go through the channels while the closure's own premise
+    # says only f_cov of it does -- inconsistent, not merely inert.
+    try:
+        LAPDSim1D(
+            *_coverage_config("beer_lambert", coverage_initial_fraction=0.3)
+        )
+    except ValueError as error:
+        assert "requires beam_deposition_model='csda'" in str(error)
+    else:
+        raise AssertionError("coverage_closure accepted beer_lambert")
+    # Clumping is the other beam split over neutral media; their product is a
+    # four-ray composition this build does not define.
+    try:
+        LAPDSim1D(*_coverage_config(
+            "csda",
+            coverage_initial_fraction=0.3,
+            beam_clump_fraction=0.5,
+            beam_clump_enhancement=10.0,
+        ))
+    except ValueError as error:
+        assert "incompatible with beam_clump_fraction" in str(error)
+    else:
+        raise AssertionError("coverage_closure accepted beam clumping")
+    # The kinetic neutral arms own the fluid nn rows once engaged, so the
+    # covered column could never deplete and the backfill would do nothing.
+    _cov_kin_p, _cov_kin_f = _coverage_config(
+        "csda", coverage_initial_fraction=0.3
+    )
+    _cov_kin_p["neutral_model"] = "kinetic"
+    _cov_kin_f["neutral_two_zone"] = True
+    try:
+        LAPDSim1D(_cov_kin_p, _cov_kin_f)
+    except ValueError as error:
+        assert "requires neutral_model='moment'" in str(error)
+    else:
+        raise AssertionError("coverage_closure accepted a kinetic neutral model")
+    # The compiled kernels carry a transcription of the very deposition the
+    # closure concentrates, and it has never been bit-compared under coverage.
+    _cov_env_prev = os.environ.get("CABLP_COMPILED_KERNELS")
+    os.environ["CABLP_COMPILED_KERNELS"] = "1"
+    try:
+        LAPDSim1D(
+            *_coverage_config("csda", coverage_initial_fraction=0.3)
+        )
+    except ValueError as error:
+        assert "refuses the compiled kernels" in str(error)
+    else:
+        raise AssertionError("coverage_closure accepted the compiled kernels")
+    finally:
+        if _cov_env_prev is None:
+            del os.environ["CABLP_COMPILED_KERNELS"]
+        else:
+            os.environ["CABLP_COMPILED_KERNELS"] = _cov_env_prev
+
+    # (ii) BIT-EXACT REDUCTION. f_cov0 = 1 with r = 0 pins the coverage at 1
+    # for all time; every concentration factor is then multiplication by
+    # exactly 1.0 and the covered column is the mean, so the trajectory must
+    # reproduce the flag-off one to the LAST BIT -- compared as raw bytes, on
+    # both deposition arms, with the circuit state included.
+    for _cov_model in ("csda",):
+        _cov_off_sim = LAPDSim1D(*_coverage_config(_cov_model))
+        _cov_one_sim = LAPDSim1D(*_coverage_config(
+            _cov_model,
+            coverage_initial_fraction=1.0,
+            coverage_growth_rate_per_s=0.0,
+        ))
+        assert _cov_off_sim._coverage is None
+        assert _cov_one_sim._coverage is not None
+        for _ in range(6):
+            _cov_off_sim.advance_one_step(dt=2.0e-9)
+            _cov_one_sim.advance_one_step(dt=2.0e-9)
+        assert _cov_one_sim.coverage_fraction() == 1.0
+        assert (
+            np.asarray(_cov_off_sim._y).tobytes()
+            == np.asarray(_cov_one_sim._y).tobytes()
+        ), f"coverage f_cov=1 is not bit-exact under {_cov_model}"
+        assert float(_cov_off_sim._circuit_I_loop) == float(
+            _cov_one_sim._circuit_I_loop
+        )
+        # With no burn deficit the covered column IS the mean, exactly.
+        assert np.array_equal(
+            _cov_one_sim._coverage_deficit,
+            np.zeros_like(_cov_one_sim._coverage_deficit),
+        )
+        # The closure adds no conservative field and no RHS term: the packed
+        # width and the term ledger are the historical ones.
+        assert _cov_one_sim._y.size == _cov_off_sim._y.size
+        assert set(_cov_one_sim.rhs_terms()) == set(_cov_off_sim.rhs_terms())
+
+    # (iii) CONTINUITY AND THE CLOSED FORM. The coverage field is integrated in
+    # closed form rather than co-integrated, so check it against an explicit
+    # march of its own ODE, and check that the concentration factors approach
+    # the mean-field ones continuously as f_cov -> 1.
+    _cov_r = 1390.0
+    _cov_f0 = 0.05
+    _cov_sim = LAPDSim1D(*_coverage_config(
+        "csda",
+        coverage_initial_fraction=_cov_f0,
+        coverage_growth_rate_per_s=_cov_r,
+    ))
+
+    def _cov_rate(x):
+        return _cov_r * x * (1.0 - x)
+
+    _cov_f_march = _cov_f0
+    _cov_sub = 2000
+    _cov_horizon = 4.0e-3
+    _cov_h = _cov_horizon / _cov_sub
+    for _ in range(_cov_sub):
+        # RK4 on df/dt = r f (1-f), tight enough to bound the closed form.
+        k1 = _cov_rate(_cov_f_march)
+        k2 = _cov_rate(_cov_f_march + 0.5 * _cov_h * k1)
+        k3 = _cov_rate(_cov_f_march + 0.5 * _cov_h * k2)
+        k4 = _cov_rate(_cov_f_march + _cov_h * k3)
+        _cov_f_march += (_cov_h / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+    _cov_f_closed = _cov_sim.coverage_fraction(_cov_horizon)
+    assert abs(_cov_f_closed - _cov_f_march) < 1e-10, (
+        _cov_f_closed, _cov_f_march
+    )
+    # Monotone, bounded, and saturating at 1 -- the logistic has no overshoot.
+    _cov_prev = 0.0
+    for _cov_t in (0.0, 1e-4, 5e-4, 1e-3, 5e-3, 1.0):
+        _cov_f = _cov_sim.coverage_fraction(_cov_t)
+        assert _cov_f0 <= _cov_f <= 1.0
+        assert _cov_f >= _cov_prev
+        _cov_prev = _cov_f
+    assert _cov_sim.coverage_fraction(1.0) == 1.0
+    assert _cov_sim.coverage_fraction(-1.0) == _cov_f0
+    # The concentrated view converges to the mean field as f_cov -> 1, with the
+    # departure of the concentrated density proportional to (1 - f_cov).
+    _cov_state = _cov_sim.state
+    _cov_departures = []
+    for _cov_eps in (1e-2, 1e-3, 1e-4):
+        _cov_ne, _cov_nn = coverage_channel_densities(
+            _cov_state,
+            CoverageView1D(f_cov=1.0 - _cov_eps, nn_channel=_cov_state.nn),
+        )
+        _cov_departures.append(
+            float(np.max(np.abs(_cov_ne / _cov_state.n - 1.0)))
+        )
+        assert np.array_equal(_cov_nn, _cov_state.nn)
+    for _cov_a, _cov_b in zip(_cov_departures, _cov_departures[1:]):
+        assert 5.0 < _cov_a / _cov_b < 20.0, _cov_departures
+    _cov_ne_one, _cov_nn_one = coverage_channel_densities(
+        _cov_state, CoverageView1D(f_cov=1.0, nn_channel=_cov_state.nn)
+    )
+    assert np.array_equal(_cov_ne_one, _cov_state.n)
+    assert np.array_equal(
+        coverage_channel_densities(_cov_state, None)[0], _cov_state.n
+    )
+
+    # (iv) THE TWO-MEDIUM BEAM SPLIT. The cathode emits over its whole face,
+    # so the fraction f_cov of the flux enters the covered channels and the
+    # rest enters the reservoir. Each arm must carry exactly its AREA share and
+    # nothing may be created or lost by splitting -- deposit_beam closes energy
+    # per ray, so that closure is the direct test of the ratio.
+    _cov_split_sim = LAPDSim1D(*_coverage_config(
+        "csda",
+        coverage_initial_fraction=0.05,
+        coverage_growth_rate_per_s=0.0,
+    ))
+    _cov_split_sim.advance_one_step(dt=2.0e-9)
+    _cov_solve = _cov_split_sim.solve_cathode_boundary(state=_cov_split_sim.state)
+    _cov_f0_split = _cov_split_sim.coverage_fraction()
+    _cov_res_dep = _cov_solve.beam_reservoir_deposition
+    assert _cov_res_dep is not None, "the split produced no reservoir arm"
+    _cov_total_dep = _cov_solve.beam_deposition
+    _cov_E0 = float(_cov_solve.beam_result.result.phi_c)
+    _cov_Gamma0 = float(_cov_solve.beam_result.result.I_eth_star) / 1.602176634e-19
+    if _cov_Gamma0 > 0.0 and _cov_res_dep.get(0) is not None:
+        def _cov_ray_energy(dep):
+            return (
+                float(np.sum(dep.plasma_heating_erg_s))
+                + float(np.sum(dep.radiated_erg_s))
+                + float(np.sum(dep.ionization_cost_erg_s))
+                + float(np.sum(dep.end_loss_low_erg_s))
+                + float(np.sum(dep.end_loss_high_erg_s))
+                + float(np.sum(dep.end_loss_tail_low_erg_s))
+                + float(np.sum(dep.end_loss_tail_high_erg_s))
+                + float(dep.anode_intercepted_erg_s)
+                + float(dep.transmitted_flux) * float(dep.transmitted_energy_eV)
+                * ev_to_erg
+            )
+        # The reservoir ray carries (1 - f_cov) of the emitted beam...
+        _cov_res_E = _cov_ray_energy(_cov_res_dep[0])
+        _cov_expect_res = (1.0 - _cov_f0_split) * _cov_Gamma0 * _cov_E0 * ev_to_erg
+        assert abs(_cov_res_E / _cov_expect_res - 1.0) < 1e-9, (
+            _cov_res_E, _cov_expect_res
+        )
+        # ...and the two arms together carry the WHOLE of it, so the split
+        # neither creates nor destroys beam energy.
+        _cov_tot_E = _cov_ray_energy(_cov_total_dep[0])
+        assert abs(
+            _cov_tot_E / (_cov_Gamma0 * _cov_E0 * ev_to_erg) - 1.0
+        ) < 1e-9, _cov_tot_E
+        # The reservoir arm really deposits: it is the machine-wide channel the
+        # closure exists to restore, and it is a strict part of the total.
+        _cov_res_events = float(np.sum(_cov_res_dep[0].ionization_events))
+        _cov_tot_events = float(np.sum(_cov_total_dep[0].ionization_events))
+        assert 0.0 < _cov_res_events < _cov_tot_events
+
+    # (v) WHOLE-SYSTEM PARTICLE BUDGET. The closure re-partitions neutrals
+    # between a covered column and a reservoir; it must not create or destroy
+    # one. Three independent statements, on a run whose column genuinely
+    # depletes (asserted below, so none of this is vacuous).
+    _cov_burn_sim = LAPDSim1D(*_coverage_config(
+        "csda",
+        coverage_initial_fraction=0.05,
+        coverage_growth_rate_per_s=0.0,
+        coverage_backfill_time_s=3.0e-5,
+    ))
+    _cov_Vp = _cov_burn_sim.geometry.plasma_volume_cm3
+    _cov_Vm = _cov_burn_sim.geometry.neutral_volume_cm3
+    # (v-a) The deficit dynamics, checked against their own closed form on a
+    # KNOWN burn, so the control is deterministic rather than hostage to
+    # whichever way the cold seed's net neutral budget happens to point.
+    _cov_dt = 1.0e-6
+    _cov_f = _cov_burn_sim.coverage_fraction()
+    _cov_tau = _cov_burn_sim._coverage_tau_s
+    _cov_nn0 = _cov_burn_sim.state.nn.copy()
+    _cov_debit = np.full(_cov_burn_sim.geometry.cells, -2.0e10) * _cov_dt
+    _cov_burn_sim._advance_coverage_deficit(_cov_dt, _cov_debit)
+    _cov_decay = math.exp(-_cov_dt / _cov_tau)
+    _cov_expect = (
+        (2.0e10 * (1.0 - _cov_f) / _cov_f) * _cov_tau * (1.0 - _cov_decay)
+    )
+    assert np.allclose(
+        _cov_burn_sim._coverage_deficit, _cov_expect, rtol=1e-12, atol=0.0
+    ), (_cov_burn_sim._coverage_deficit[:3], _cov_expect)
+    # A burn genuinely depletes the covered column: the density the beam
+    # subsystem propagates through is now BELOW the mean, and the reservoir
+    # above it. This is the positive control for everything below.
+    assert float(np.max(_cov_burn_sim._coverage_deficit)) > 0.0
+    _cov_view = _cov_burn_sim._coverage_view(_cov_burn_sim.state)
+    assert np.all(_cov_view.nn_channel < _cov_nn0)
+    assert np.all(_cov_burn_sim.coverage_reservoir_density() > _cov_nn0)
+    # The mean field is bitwise unmoved by the coverage advance -- that is what
+    # makes the total inventory immune to anything the partition does.
+    assert np.array_equal(_cov_burn_sim.state.nn, _cov_nn0)
+    # Switch the burn off and the reservoir relaxes the column back on
+    # tau_backfill, again to its own closed form.
+    _cov_before_relax = _cov_burn_sim._coverage_deficit.copy()
+    _cov_burn_sim._advance_coverage_deficit(_cov_dt, None)
+    assert np.allclose(
+        _cov_burn_sim._coverage_deficit,
+        _cov_before_relax * _cov_decay,
+        rtol=1e-12,
+        atol=0.0,
+    )
+    # The reverse sign is physics too, not an error to clip away: a covered
+    # region that RETURNS neutrals (a recombining cold column) enriches itself
+    # above the mean, and the closure carries that as a negative deficit.
+    _cov_burn_sim._advance_coverage_deficit(
+        _cov_dt, np.full(_cov_burn_sim.geometry.cells, +2.0e10) * _cov_dt
+    )
+    assert float(np.min(_cov_burn_sim._coverage_deficit)) < 0.0
+    assert np.array_equal(_cov_burn_sim.state.nn, _cov_nn0)
+
+    # (v-b) Stepped forward with the closure live, the partition identity closes
+    # to roundoff at every accepted step and both densities stay positive.
+    for _ in range(30):
+        _cov_burn_sim.advance_one_step(dt=2.0e-9)
+        _cov_f = _cov_burn_sim.coverage_fraction()
+        _cov_nn = np.asarray(_cov_burn_sim.state.nn, dtype=float)
+        _cov_col = _cov_burn_sim._coverage_view(_cov_burn_sim.state).nn_channel
+        _cov_res = _cov_burn_sim.coverage_reservoir_density()
+        _cov_mean = _cov_f * _cov_col + (1.0 - _cov_f) * _cov_res
+        assert np.max(np.abs(_cov_mean / _cov_nn - 1.0)) < 1e-12
+        assert np.all(_cov_col > 0.0)
+        assert np.all(_cov_res >= 0.0)
+        assert np.all(_cov_burn_sim._coverage_deficit <= _cov_nn)
+    # (v-c) every internal particle channel still pairs ion birth against neutral
+    # debit exactly, IN ABSOLUTE COUNTS across the two volumes, under coverage
+    # -- i.e. the concentration factors did not open a hole in the pairing.
+    _cov_terms = _cov_burn_sim.rhs_terms()
+    for _cov_name in _cov_burn_sim.COVERAGE_BURN_TERMS:
+        _cov_term = _cov_terms[_cov_name]
+        _cov_pair = (
+            np.asarray(_cov_term.n, dtype=float) * _cov_Vp
+            + np.asarray(_cov_term.nn, dtype=float) * _cov_Vm
+        )
+        _cov_scale = np.maximum(
+            np.abs(np.asarray(_cov_term.n, dtype=float)) * _cov_Vp, 1.0
+        )
+        assert np.max(np.abs(_cov_pair) / _cov_scale) < 1e-12, _cov_name
+    # And the coverage-on term ledger and packed width are still the shipped
+    # ones: the closure adds no particle-carrying row anywhere.
+    _cov_ref_sim = LAPDSim1D(*_coverage_config("csda"))
+    assert set(_cov_terms) == set(_cov_ref_sim.rhs_terms())
+    assert _cov_burn_sim._y.size == _cov_ref_sim._y.size
 
     print(
         "sim1d smoke ok: "

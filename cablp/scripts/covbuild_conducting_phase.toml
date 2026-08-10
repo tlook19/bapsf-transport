@@ -1,0 +1,56 @@
+# Conducting-phase simulation window -- DELTA over the production stance.
+#
+# The measured machine conducts for >= 4.5 ms at low current (2 -> 132 A) while
+# the beam ionizes machine-wide, and only then breaks down. The shipped
+# production configuration opens its window ~0.49 ms before breakdown, so that
+# whole phase sits outside the simulated window. Everything below moves the
+# window open earlier; nothing below is a physics change.
+#
+# This file is a DELTA, not a complete configuration: it is applied ON TOP of
+# compare_sim1d_es1.PARAM_OVERRIDES / FLAG_OVERRIDES (the campaign stance) by
+# scripts/covbuild_run_conducting_phase.py. Loading it through
+# `LAPDSim1D.load_config` instead would resolve it against the bare config
+# defaults and would NOT be the production machine.
+
+[params]
+# The seed proper, moved to the phase start. The shipped ne0 = 1e9 is a seed
+# for a window that opens just before breakdown; the conducting phase starts
+# from essentially nothing and builds its own plasma, so the seed goes down to
+# a small floor-level value and the avalanche is left to do the work.
+#
+# It sits just ABOVE ne_floor rather than ON it, and that is not a tuning
+# choice -- it is the edge of a documented singularity, located by
+# scripts/covbuild_window_probe.py (transcript covbuild_window_probe.txt):
+#
+#   ne0=1.000e+08  dt=1.000e-10 s  constraint=surface_loss  dt_raw=0.000e+00
+#   ne0=2.000e+08  dt=5.572e-07 s  constraint=surface_loss  dt_raw=5.572e-07
+#   ne0=1.000e+09  dt=5.572e-07 s  constraint=surface_loss  dt_raw=5.572e-07
+#
+# ne0 == ne_floor puts every plasma cell ON the density floor while the
+# boundary is still draining it, which is the `dt_raw == 0.0` drain-margin
+# signature core/timestep.py calls a modelling breakdown rather than a
+# timestep request; the run is then pinned at dt_min (measured ETA ~12 h for
+# 0.3 ms at nx=60). One factor of two of margin removes it entirely, and every
+# seed from 2e8 upward returns the identical bound -- so 2e8 is the smallest
+# seed this configuration can express, not a value chosen for its answer.
+ne0 = 2e8
+
+# tau_prebreakdown is the hardware guard, not a scheduled duration: under
+# phase_transition_mode="current" it is the deadline by which breakdown must
+# have happened, after which the cathode switch opens. It must comfortably
+# exceed the conducting phase it is now expected to contain.
+tau_prebreakdown = 12e-3
+
+[flags]
+# The equilibrated-seed convention is OFF for this configuration. With it on,
+# start_simulation() pre-runs the neutral puff/off accumulation and injects the
+# EQUILIBRATED nn profile as the initial condition -- i.e. the machine is
+# already filled at t = 0 and breaks down almost immediately, which is exactly
+# what compresses the window to ~0.49 ms. Off, the run starts from the direct
+# pre-shot nn0 fill and the puff fills the machine inside the simulated window,
+# which is what the conducting phase physically is.
+#
+# use_cached_neutral_seed stays at its default False: the seed DATABASE is only
+# consulted when neutral_equilibration is on (and the solver refuses the
+# combination outright), so there is no cache interaction left to disarm.
+neutral_equilibration = false

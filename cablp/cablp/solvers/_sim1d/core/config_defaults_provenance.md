@@ -674,3 +674,51 @@ latency, never detection itself.
 The remaining timestep parameters (`cfl`, the `*_dt_fraction` limits, growth
 and retry factors) are ASSUMED numerical-control values with no measurement
 behind them.
+
+## `coverage_closure_defaults`
+
+All three keys are read only under the default-off `coverage_closure` flag, so
+nothing here is on any shipped trajectory. The closure declares exactly TWO
+physical constants — `coverage_growth_rate_per_s` and
+`coverage_backfill_time_s`. `coverage_initial_fraction` is an initial
+condition, not a constant, and appears here only because it also has no
+default. **The v1.1 two-medium beam split introduced no constant of its own:
+the split ratio IS `f_cov`, and the reservoir's plasma density is the existing
+`ne_floor` rather than a new parameter.**
+
+**`coverage_growth_rate_per_s = 1390.0` s^-1 — FITTED-on-F2, CALIBRATION
+PENDING. The shipped number is a PLACEHOLDER and must not be quoted as a
+result.** Under the logistic law `df_cov/dt = r f_cov (1 - f_cov)` the
+small-`f_cov` limit is exponential with e-fold time `1/r`, so the placeholder
+is the reciprocal of the midpoint of the MEASURED pedestal e-fold window
+713–725 µs (`1/719 µs = 1391 s^-1`, rounded to 1390). That is a scale-setting
+identification, NOT the calibration: the measured e-fold constrains the growth
+of the observable the pedestal is read from, and the mapping from that
+observable to `f_cov` has to come from the F2 fit against the pedestal itself,
+which happens post-merge. Honest bar until then: the placeholder is right to
+within whatever that mapping costs, which is unmeasured, so treat the value as
+order-of-magnitude only. The reciprocals of the window edges, 1379–1403 s^-1,
+are the spread of the ANCHOR, not an uncertainty on `r`.
+
+**`coverage_backfill_time_s = 3.0e-5` s — ASSUMED. Bracket
+1.0e-5 – 1.2e-4 s, and the bracket is the claim.** The time over which the
+uncovered reservoir refills a burnt channel is a free-molecular transit across
+the inter-channel spacing. Helium at the model's `Tn_K = 300` K has mean speed
+`sqrt(8 k T / (pi m)) = 1.26e5` cm/s, so a refill path of 1 cm gives 8e-6 s and
+one of the full plasma radius `Rp = 15` cm gives 1.2e-4 s; the bracket rounds
+those to one significant figure and the shipped value is the ~4 cm spacing in
+the middle of it. Nothing in the campaign measures the azimuthal channel
+spacing, which is why this is a bracket rather than a point. Two further
+approximations sit inside the same constant and are NOT separately
+parameterized in v1: the closure carries its neutral deficit on the same
+chamber-mean `nn` field the burn debits, so `tau_backfill` absorbs the
+column-to-chamber exchange as well as the channel-to-inter-channel one; and
+the exchange is a single-rate relaxation rather than a transport operator.
+
+**`coverage_initial_fraction = None` — no default, REQUIRED when the flag is
+on, and an INITIAL CONDITION rather than a physical constant.** It is one of
+the two L3 ensemble hooks (the other is `coverage_growth_rate_per_s`): a
+realization is one run at one pair of values, and no randomness exists inside
+the solver. `None` is not a neutral default — 1.0 is the fully-covered
+mean-field limit and would make the flag a silent no-op — so the flag requires
+the key explicitly.

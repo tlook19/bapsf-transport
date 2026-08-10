@@ -9,10 +9,15 @@ from types import SimpleNamespace
 import numpy as np
 
 from .core.config import (
+    coverage_closure_defaults,
     default_config,
     load_config,
     resolve_config,
     resolve_nn0,
+)
+from cablp.funcs._kernels import (
+    ENV_VAR as _KERNEL_ENV_VAR,
+    compiled_kernels_requested,
 )
 from .core.geometry import (
     _anode_neutral_transparency,
@@ -64,6 +69,7 @@ from .physics.kinetic_neutrals import (
 )
 from .physics.cathode import (
     BEAM_GAP_LEDGER_POWER_ATOL,
+    CoverageView1D,
     beam_gap_ledger_mismatch,
     beam_ionization_rhs,
     beam_ionization_rhs_terms,
@@ -177,6 +183,8 @@ class StepAttempt1D:
     raw_rejection_reason: str = ""
     raw_rejection_detail: dict | None = None
     ion_booking: np.ndarray | None = None
+    coverage_burn: np.ndarray | None = None
+    coverage_reservoir_burn: np.ndarray | None = None
 
 
 class _RawStageError(ValueError):
@@ -1407,6 +1415,8 @@ class LAPDSim1D:
                 "gas_puff_local_ionization_fraction is not supported with "
                 "neutral_two_zone (annulus puff routing); disable one"
             )
+        # Clumpy-plasma coverage closure v1 (default off, bit-exact off).
+        self._validate_coverage_config()
         self._cathode_solve = None
         # Item-35 ledger tripwire: latched so the warning fires once per run.
         self._beam_gap_ledger_warned = False
@@ -1418,6 +1428,325 @@ class LAPDSim1D:
         self._run_via_start_simulation = False
         if self._flags.get("debug_checks", False):
             assert_finite_state(self._state, self._derived)
+
+    def _validate_coverage_config(self):
+        """Validate and arm the clumpy-plasma coverage closure (v1).
+
+        Every failure here is a construction-time ``ValueError``: an
+        incomplete or unrepresentable coverage configuration must never reach
+        the first cathode solve. With the flag off the three coverage keys
+        must all sit at their defaults, so a run that configures the closure
+        and forgets the flag is loud rather than silently mean-field.
+        """
+        enabled = bool(self._flags.get("coverage_closure", False))
+        r = self._input_dict.get("coverage_growth_rate_per_s", 0.0)
+        tau = self._input_dict.get("coverage_backfill_time_s", 0.0)
+        f0 = self._input_dict.get("coverage_initial_fraction", None)
+        if not enabled:
+            defaults = coverage_closure_defaults()
+            configured = [
+                name
+                for name, value in (
+                    ("coverage_growth_rate_per_s", r),
+                    ("coverage_backfill_time_s", tau),
+                    ("coverage_initial_fraction", f0),
+                )
+                if value != defaults[name]
+            ]
+            if configured:
+                raise ValueError(
+                    "the coverage-closure parameters "
+                    f"{sorted(configured)} were configured without the "
+                    "coverage_closure flag, where they are inert; set the "
+                    "flag or drop the parameters"
+                )
+            self._coverage = None
+            self._coverage_r = 0.0
+            self._coverage_tau_s = 0.0
+            self._coverage_f0 = None
+            self._coverage_deficit = None
+            self._coverage_burn_accum = None
+            self._coverage_burn_weight = 0.0
+            self._coverage_reservoir_debit = None
+            self._coverage_reservoir_burn_accum = None
+            return
+        if f0 is None:
+            raise ValueError(
+                "the coverage_closure flag requires "
+                "coverage_initial_fraction (the covered fraction of the "
+                "column cross-section at the plasma-phase time origin, in "
+                "(0, 1]); it has no default because there is no neutral "
+                "value for it -- 1.0 is the fully-covered mean-field limit "
+                "and would make the closure a silent no-op"
+            )
+        f0 = float(f0)
+        if not (math.isfinite(f0) and 0.0 < f0 <= 1.0):
+            raise ValueError(
+                "coverage_initial_fraction must be finite and in (0, 1] "
+                f"(got {f0!r})"
+            )
+        r = float(r)
+        if not (math.isfinite(r) and r >= 0.0):
+            raise ValueError(
+                "coverage_growth_rate_per_s (the logistic rate of "
+                "df_cov/dt = r*f_cov*(1-f_cov)) must be finite and >= 0 "
+                f"(got {r!r})"
+            )
+        tau = float(tau)
+        if not (math.isfinite(tau) and tau > 0.0):
+            raise ValueError(
+                "coverage_backfill_time_s (the reservoir->column neutral "
+                f"refill time) must be finite and > 0 (got {tau!r})"
+            )
+        if str(
+            self._input_dict.get("beam_deposition_model", "beer_lambert")
+        ) != "csda":
+            raise ValueError(
+                "coverage_closure requires beam_deposition_model='csda': the "
+                "closure splits the beam by area across the covered and "
+                "reservoir media, and that split is built on the CSDA rays. "
+                "Under 'beer_lambert' there is no second ray to give the "
+                "reservoir, so the whole beam would be routed through the "
+                "channels while the closure's own premise says only f_cov of "
+                "it goes there -- a silently inconsistent model rather than a "
+                "no-op, which is why this refuses instead of degrading"
+            )
+        if float(self._input_dict.get("beam_clump_fraction", 0.0)) > 0.0:
+            raise ValueError(
+                "coverage_closure is incompatible with beam_clump_fraction > "
+                "0: both split the beam into rays over different neutral "
+                "media, and their product is a four-ray composition this "
+                "build does not define. Disable one"
+            )
+        if self._neutral_model != "moment":
+            raise ValueError(
+                "coverage_closure requires neutral_model='moment' (got "
+                f"{self._neutral_model!r}): the kinetic arms take over the "
+                "fluid nn rows once engaged, and the closure's covered-column "
+                "burn is read from exactly those rows, so under a kinetic "
+                "neutral model the column would never deplete and the "
+                "backfill would be a silent no-op"
+            )
+        if compiled_kernels_requested():
+            raise ValueError(
+                "coverage_closure refuses the compiled kernels "
+                f"({_KERNEL_ENV_VAR}=1): the beam deposition it concentrates "
+                "has a compiled transcription that v1 deliberately does not "
+                "touch, and running one arm of the closure on transcribed "
+                "arithmetic that has never been bit-compared under coverage "
+                "would risk a silent pure/compiled divergence. Unset "
+                f"{_KERNEL_ENV_VAR} for coverage runs; the refusal binds only "
+                "while the flag is ON"
+            )
+        self._coverage_r = r
+        self._coverage_tau_s = tau
+        self._coverage_f0 = f0
+        # The covered column's neutral DEFICIT relative to the cell mean
+        # [cm^-3], per cell. The mean field nn is untouched by the closure and
+        # keeps every particle, so this auxiliary is a pure re-partition and
+        # total inventory is conserved identically whatever happens to it.
+        # It starts at zero: at the phase origin nothing has burnt yet.
+        self._coverage_deficit = np.zeros(self._geometry.cells, dtype=float)
+        self._coverage_burn_accum = None
+        self._coverage_burn_weight = 0.0
+        # The reservoir arm's neutral debit published by the beam terms of the
+        # CURRENT RHS evaluation; reset by rhs_terms on every call so it can
+        # never be read from a stale solve.
+        self._coverage_reservoir_debit = None
+        self._coverage_reservoir_burn_accum = None
+        self._coverage = True
+
+    #: RHS terms whose neutral row is a COVERED-ONLY debit or return: their
+    #: rate is proportional to a plasma or beam density, so the reaction can
+    #: only happen where the plasma is. Their summed ``nn`` rows drive the
+    #: covered column's depletion. Terms that act uniformly across the
+    #: cross-section (the gas puff, the pump, neutral transport and the
+    #: zone/kinetic exchanges) and terms that transfer no particles (the
+    #: ion-neutral collision operators) are deliberately absent.
+    COVERAGE_BURN_TERMS = (
+        "ionization_birth",
+        "beam_ionization_birth",
+        "recombination_rad_loss",
+        "recombination_3b_loss",
+        "gas_puff_local_ionization",
+    )
+
+    def coverage_fraction(self, time=None):
+        """Return the scalar covered fraction ``f_cov`` at ``time`` [s].
+
+        ``1.0`` whenever the closure is off, so a caller needs no branch.
+
+        The law is ``df_cov/dt = r*f_cov*(1-f_cov)`` from ``f_cov0`` at the
+        plasma-phase time origin. It is autonomous and takes no feedback in
+        v1, so the solver evaluates its CLOSED FORM here rather than
+        co-integrating it: that is exact (no scheme error to compose with the
+        state's), it makes ``f_cov`` a pure function of time and therefore
+        stage-time consistent through the SSPRK2 stage clock exactly as the
+        gas-puff waveform is, and it is reproducible across step retries and
+        Picard re-runs without any snapshot. A v2 that gives the coverage a
+        decay or drop-out channel, or any feedback from the state, loses that
+        property and must move to genuine co-integration.
+        """
+        if self._coverage is None:
+            return 1.0
+        if time is None:
+            time = self._time
+        dt = float(time) - self._plasma_phase_time_origin()
+        if dt <= 0.0 or self._coverage_r == 0.0:
+            return self._coverage_f0
+        f0 = self._coverage_f0
+        # 1 / (1 + (1/f0 - 1) exp(-r t)), written so f0 = 1 returns exactly
+        # 1.0 and a large r*t saturates at 1.0 rather than overflowing.
+        return 1.0 / (1.0 + (1.0 / f0 - 1.0) * math.exp(-self._coverage_r * dt))
+
+    def _coverage_view(self, state, time=None):
+        """Return the ``CoverageView1D`` the beam subsystem propagates in.
+
+        ``None`` when the closure is off, which is what keeps every consumer
+        on its historical argument list and the off path bit-exact.
+        """
+        if self._coverage is None:
+            return None
+        nn = np.asarray(state.nn, dtype=float)
+        nn_channel = np.maximum(nn - self._coverage_deficit, self._floors["nn"])
+        f_cov = self.coverage_fraction(time)
+        nn_reservoir = None
+        ne_reservoir = None
+        if f_cov < 1.0:
+            # The other medium the beam is split across. Its neutral density
+            # is the implicit reservoir's; its PLASMA density is the model's
+            # own "no plasma" representation, the density floor, because the
+            # closure's premise is that plasma lives in the covered fraction.
+            # The floor rather than a literal zero because that is what every
+            # other plasma-free cell in this solver carries, so the stopping
+            # coefficients are evaluated on a state the model already
+            # produces rather than on an untested singular one.
+            nn_reservoir = nn + f_cov * (nn - nn_channel) / (1.0 - f_cov)
+            ne_reservoir = np.full_like(nn, self._floors["n"])
+        return CoverageView1D(
+            f_cov=f_cov,
+            nn_channel=nn_channel,
+            nn_reservoir=nn_reservoir,
+            ne_reservoir=ne_reservoir,
+        )
+
+    def coverage_reservoir_density(self, state=None):
+        """Return the uncovered reservoir's neutral density [cm^-3], per cell.
+
+        Diagnostic only: the reservoir is represented IMPLICITLY, as the
+        complement of the covered column inside the conserved mean field, so
+        nothing integrates this. From ``nn = f*nn_c + (1-f)*nn_r`` it is
+        ``nn + f*D/(1-f)`` with ``D = nn - nn_c`` the carried deficit. At
+        ``f_cov = 1`` there is no uncovered region and the mean itself is
+        returned.
+        """
+        state = self.state if state is None else state
+        nn = np.asarray(state.nn, dtype=float)
+        if self._coverage is None:
+            return nn.copy()
+        f = self.coverage_fraction()
+        if f >= 1.0:
+            return nn.copy()
+        nn_channel = np.maximum(nn - self._coverage_deficit, self._floors["nn"])
+        return nn + f * (nn - nn_channel) / (1.0 - f)
+
+    def _accumulate_coverage_burn(self, terms):
+        """Tally this RHS stage's share of the step's covered-only neutral debit.
+
+        Mirrors the DVM ionization booking: the weight is set once per attempt
+        by :meth:`_attempt_step`, both explicit paths book the plasma rows
+        through exactly one ``ssprk2_step`` at the full step dt, and SSPRK2
+        weights its two stages equally at ``dt/2``. Nothing accumulates
+        outside an attempt, and a rejected attempt's tally dies with it.
+        """
+        if self._coverage_burn_accum is None:
+            return
+        total = None
+        for name in self.COVERAGE_BURN_TERMS:
+            term = terms.get(name)
+            if term is None:
+                continue
+            row = np.asarray(term.nn, dtype=float)
+            total = row if total is None else total + row
+        reservoir = self._coverage_reservoir_debit
+        if reservoir is not None:
+            # The beam's neutral row above is the SUM over both media. Only
+            # the channel arm's share burnt covered gas, so the reservoir
+            # arm's debit is subtracted out here and tallied separately: it
+            # lowers the mean without lowering the covered column, which moves
+            # the deficit the other way (see _advance_coverage_deficit).
+            reservoir = np.asarray(reservoir, dtype=float)
+            if total is not None:
+                total = total - reservoir
+            self._coverage_reservoir_burn_accum += (
+                self._coverage_burn_weight * reservoir
+            )
+        if total is not None:
+            self._coverage_burn_accum += self._coverage_burn_weight * total
+
+    def _advance_coverage_deficit(self, dt, burn, reservoir_burn=None):
+        """Advance the covered column's neutral deficit over one accepted step.
+
+        The covered column absorbs the COVERED-ONLY neutral debit ``B_cov``
+        but holds only the fraction ``f_cov`` of the cell's volume, so its
+        local density falls ``1/f_cov`` times as fast as the mean's. The beam's
+        reservoir arm (v1.1) debits ``B_res`` from the OTHER medium, lowering
+        the mean while leaving the covered column alone, which moves the
+        deficit the opposite way. With ``D = nn - nn_c``::
+
+            dD/dt = -B_cov*(1 - f)/f + B_res - D/tau_backfill
+
+        (both debits are negative on a burn, so the first term is positive --
+        channels deplete -- and the second is negative). This is the whole
+        azimuthal exchange: the reservoir/column relaxation ``f(1-f)(nn_r -
+        nn_c)/tau`` reduces ALGEBRAICALLY to ``(nn - nn_c)/tau``, so no
+        reservoir density is ever formed and the ``f -> 1`` limit is regular
+        rather than a 0/0. The mean field is not touched at any point, so the
+        total particle inventory is conserved IDENTICALLY -- this is a
+        re-partition of what the mean already holds.
+
+        Integrated with the exact integrating factor for a source held
+        constant over the step, which is unconditionally positive and stable
+        at any dt/tau.
+        """
+        dt = float(dt)
+        f = self.coverage_fraction()
+        # Debit is negative on a burn; the deficit grows when neutrals leave.
+        # ``None`` is a step that evaluated no plasma RHS at all (the
+        # neutral-only pre-drive path), i.e. zero debit -- the reservoir then
+        # simply relaxes whatever deficit is outstanding.
+        if burn is None:
+            source = np.zeros(self._geometry.cells, dtype=float)
+        else:
+            source = -np.asarray(burn, dtype=float) / dt * (1.0 - f) / f
+        if reservoir_burn is not None:
+            # The reservoir arm's debit enters at weight ONE, not (1-f)/f: it
+            # is removed from the mean and from the reservoir, never from the
+            # covered column, so it closes the gap between them.
+            source = source + np.asarray(reservoir_burn, dtype=float) / dt
+        decay = math.exp(-dt / self._coverage_tau_s)
+        deficit = self._coverage_deficit * decay + source * self._coverage_tau_s * (
+            1.0 - decay
+        )
+        # The deficit is SIGNED. It is positive where the plasma burns column
+        # gas faster than the reservoir refills it, and negative where the
+        # covered region is a net neutral SOURCE -- a recombining cold column
+        # returns neutrals into the covered fraction alone, enriching it above
+        # the mean, which is the same physics with the sign reversed and is
+        # not clipped away.
+        #
+        # The bounds are the two positivity conditions on the partition:
+        # nn_c = nn - D >= 0 and nn_r = nn + f*D/(1-f) >= 0. Both are
+        # re-partitions of the conserved mean, so hitting either creates and
+        # destroys nothing; the lower bound closes onto 0 as f -> 1, where
+        # there is no reservoir left to donate from.
+        nn = np.maximum(np.asarray(self.state.nn, dtype=float), 0.0)
+        floor = (
+            np.zeros_like(nn)
+            if f >= 1.0
+            else -(1.0 - f) / f * nn
+        )
+        self._coverage_deficit = np.clip(deficit, floor, nn)
 
     def _validate_r1_configuration_presence(self):
         """Reject R1-audited controls that would otherwise be silent no-ops."""
@@ -1882,6 +2211,7 @@ class LAPDSim1D:
         for term in terms.values():
             state_rhs = add_state_rhs(state_rhs, term)
         self._accumulate_dvm_ion_booking(terms)
+        self._accumulate_coverage_burn(terms)
         # With optional fields on, the packed RHS must always match the
         # state vector's width, even when no term touched them (pads zeros).
         return pack_state(
@@ -1895,6 +2225,11 @@ class LAPDSim1D:
 
     def rhs_terms(self, y=None, include_heat_conduction=True, time=None):
         """Return named conservative RHS contributions for diagnostics."""
+        # The coverage closure's reservoir-arm debit belongs to THIS
+        # evaluation's beam solve and nothing else. Cleared first so a branch
+        # that never reaches the beam terms (the neutral-only pre-drive, or
+        # Plasma off) cannot leave the accumulator reading a stale solve.
+        self._coverage_reservoir_debit = None
         state = self.state if y is None else self._unpack(y)
         # The zone-exchange term exists only in two-zone runs, so the term
         # ledger (and the saved rhs_terms structure) is unchanged when the
@@ -1982,6 +2317,24 @@ class LAPDSim1D:
             cathode_solve=cathode_solve,
             time=time,
         )
+        # Side channel, not a term: the reservoir arm's neutral debit. It is
+        # read out here and deliberately NOT placed in the ledger below, so
+        # the RHS sum and the saved term structure are untouched by it.
+        #
+        # It must carry the SAME plasma-topology mask the beam term it was
+        # split out of will get, or the two stop being a split: the accumulator
+        # subtracts this from the (masked) beam row, so an unmasked debit would
+        # leave a spurious positive residue on every plasma-dead cell -- the
+        # plenum and the obstruction behind the cathode, where no birth is
+        # applied at all.
+        _reservoir_debit = beam_terms.get("coverage_reservoir_nn_debit")
+        if _reservoir_debit is not None and self._active_plasma_topology:
+            _reservoir_debit = np.where(
+                np.asarray(self._geometry.plasma_active, dtype=bool),
+                np.asarray(_reservoir_debit, dtype=float),
+                0.0,
+            )
+        self._coverage_reservoir_debit = _reservoir_debit
         terms = {
             **zone_terms,
             **geometry_terms,
@@ -2353,6 +2706,17 @@ class LAPDSim1D:
             )
             self._dvm_ion_stage_weight = 0.5 * dt
 
+        if self._coverage is not None:
+            # Arm the covered-only neutral-debit tally for THIS attempt only,
+            # on the same SSPRK2 stage weighting the DVM booking above uses.
+            self._coverage_burn_accum = np.zeros(
+                self._geometry.cells, dtype=float
+            )
+            self._coverage_reservoir_burn_accum = np.zeros(
+                self._geometry.cells, dtype=float
+            )
+            self._coverage_burn_weight = 0.5 * dt
+
         starting_cache = self._step_cache_snapshot()
         attempt_floor_ledger = self._empty_floor_ledger()
 
@@ -2413,6 +2777,13 @@ class LAPDSim1D:
             attempt_ion_booking = self._dvm_ion_stage_accum
             self._dvm_ion_stage_accum = None
             self._dvm_ion_stage_weight = 0.0
+            attempt_coverage_burn = self._coverage_burn_accum
+            attempt_coverage_reservoir_burn = (
+                self._coverage_reservoir_burn_accum
+            )
+            self._coverage_burn_accum = None
+            self._coverage_reservoir_burn_accum = None
+            self._coverage_burn_weight = 0.0
         return StepAttempt1D(
             y=np.asarray(y_next, dtype=float),
             dt=dt,
@@ -2422,6 +2793,8 @@ class LAPDSim1D:
             raw_rejection_reason=raw_rejection_reason,
             raw_rejection_detail=raw_rejection_detail,
             ion_booking=attempt_ion_booking,
+            coverage_burn=attempt_coverage_burn,
+            coverage_reservoir_burn=attempt_coverage_reservoir_burn,
         )
 
     def _implicit_neutral_step(
@@ -2878,6 +3251,16 @@ class LAPDSim1D:
             getattr(attempt, "floor_ledger", self._empty_floor_ledger())
         )
         self._time += float(attempt.dt)
+        # Coverage closure: re-partition the accepted state's neutrals between
+        # the burnt covered column and the reservoir. Accepted steps only, and
+        # only ever the auxiliary deficit -- the conserved mean field above is
+        # never touched by this.
+        if self._coverage is not None:
+            self._advance_coverage_deficit(
+                attempt.dt,
+                getattr(attempt, "coverage_burn", None),
+                getattr(attempt, "coverage_reservoir_burn", None),
+            )
         # Electrode sample smoothing: fold the newly accepted state into the
         # supply-average EMA before any accepted-state consumer reads it.
         self._update_sample_smoothing(attempt.dt)
@@ -4923,6 +5306,7 @@ class LAPDSim1D:
             input_flags=cathode_flags,
             I_ion=self._I_ion,
             cathode_solve=cathode_solve,
+            coverage=self._coverage_view(state, time),
         )
 
     def beam_ionization_rhs_terms(
@@ -4951,6 +5335,7 @@ class LAPDSim1D:
             input_flags=cathode_flags,
             I_ion=self._I_ion,
             cathode_solve=cathode_solve,
+            coverage=self._coverage_view(state, time),
         )
 
     def solve_cathode_boundary(
@@ -4990,6 +5375,7 @@ class LAPDSim1D:
             T_s_override_K=self._cathode_Ts_K,
             phi_wf_override_eV=self._cathode_phi_wf_eff(),
             circuit_I_loop_A=self._circuit_I_loop,
+            coverage=self._coverage_view(state, time),
         )
         if update_cache:
             self._warn_beam_gap_ledger(result)
@@ -7010,6 +7396,23 @@ class LAPDSim1D:
             "beam_tail_above_bar_power_W": 0.0,
             "beam_tail_sub_threshold_fraction": np.nan,
         }
+        if self._coverage is not None:
+            # Clumpy-plasma coverage closure: PRESENCE-GATED so the saved
+            # diagnostic structure of every mean-field run -- the golden
+            # included -- is byte-identical to before the closure existed.
+            diag["coverage_fraction"] = float(self.coverage_fraction(time))
+            diag["coverage_nn_deficit_max"] = float(
+                np.max(self._coverage_deficit)
+            )
+            diag["coverage_nn_column_min"] = float(
+                np.min(
+                    np.maximum(
+                        np.asarray(self.state.nn, dtype=float)
+                        - self._coverage_deficit,
+                        self._floors["nn"],
+                    )
+                )
+            )
         for prefix in ("source", "end"):
             # Per-ray exit ledger [W]: power the anode mesh intercepts at the
             # anode-face crossing, and power streaming out of the far end.

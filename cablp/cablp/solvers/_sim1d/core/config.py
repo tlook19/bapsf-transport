@@ -2153,6 +2153,48 @@ def timestep_defaults():
     }
 
 
+def coverage_closure_defaults():
+    """Return clumpy-plasma coverage-closure defaults.
+
+    Every key here is read ONLY under the ``coverage_closure`` flag and is
+    inert otherwise. The closure carries a single scalar coverage fraction
+    ``f_cov(t) in (0, 1]``: the plasma occupies that fraction of the column
+    cross-section, so channel-local densities are the mean divided by
+    ``f_cov`` and the remaining ``1 - f_cov`` is a neutral reservoir. See
+    ``MODEL.md`` for the term placement.
+
+    coverage_growth_rate_per_s:
+        Logistic growth rate ``r`` [s^-1] of the coverage fraction, which
+        evolves as ``df_cov/dt = r * f_cov * (1 - f_cov)`` from
+        ``coverage_initial_fraction`` at the plasma-phase time origin. Must be
+        finite and ``>= 0``; ``0`` freezes the coverage at its initial value.
+        Since the law is autonomous and takes no feedback, the solver
+        evaluates its closed-form solution at each stage time rather than
+        co-integrating it.
+    coverage_backfill_time_s:
+        Relaxation time ``tau_backfill`` [s] over which the uncovered
+        reservoir refills the covered column's neutral density toward the
+        cell mean. Must be finite and ``> 0``. The exchange moves no particles
+        between cells and none into or out of the conserved mean neutral
+        field, so total particle inventory is unaffected by construction.
+    coverage_initial_fraction:
+        Initial coverage fraction ``f_cov0`` at the plasma-phase time origin.
+        ``None`` (the default) is the only value permitted with the flag off;
+        with the flag on it is REQUIRED and must lie in ``(0, 1]``. This is an
+        initial condition, not a physical constant: it is the per-realization
+        ensemble hook, and ``coverage_growth_rate_per_s`` is the second one
+        (both are ordinary config keys, so a realization is one run with one
+        pair of values and no solver-side randomness exists).
+
+    Values and their provenance: ``config_defaults_provenance.md``.
+    """
+    return {
+        "coverage_growth_rate_per_s": 1390.0,
+        "coverage_backfill_time_s": 3.0e-5,
+        "coverage_initial_fraction": None,
+    }
+
+
 _PARAMETER_DEFAULT_GROUPS = (
     initial_condition_defaults,
     geometry_defaults,
@@ -2165,6 +2207,7 @@ _PARAMETER_DEFAULT_GROUPS = (
     cathode_defaults,
     physics_fit_defaults,
     timestep_defaults,
+    coverage_closure_defaults,
 )
 
 
@@ -2369,6 +2412,21 @@ input_flags_template_1d = {
     # so it MOVES THE GOLDEN and the default-flip decision is deliberately
     # left open rather than taken here.
     "beam_ionization_birth_timestep_bound": False,
+    # Clumpy-plasma coverage closure v1. Breakdown in the machine is
+    # azimuthally patchy -- discrete channels carry the discharge -- which the
+    # 1D mean-field solver azimuthally averages away. When ON, a scalar
+    # coverage fraction f_cov(t) in (0, 1] splits the beam by AREA between the
+    # covered channels (concentrated plasma, n -> n/f_cov) and the uncovered
+    # reservoir (tenuous, its own neutrals), and splits the neutrals into a
+    # burnt covered column and a reservoir that refills it. The MEAN equations
+    # are untouched, so total particle inventory is conserved identically; at
+    # f_cov = 1 every factor reduces to the shipped model. Default OFF and
+    # bit-exact off (presence-gated: the off path never builds the coverage
+    # view and every consumer keeps its historical argument list). Requires
+    # coverage_initial_fraction, beam_deposition_model="csda",
+    # neutral_model="moment", no beam clumping, and the pure-Python kernels;
+    # each is a construction-time ValueError.
+    "coverage_closure": False,
     "ionization_energy_cost": True,
     "icool": True,
     "ncool": True,
