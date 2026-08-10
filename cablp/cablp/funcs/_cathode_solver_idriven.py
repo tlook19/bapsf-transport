@@ -79,6 +79,10 @@ import sys
 import numpy as np
 from scipy.optimize import brentq
 
+from cablp.funcs._beam_deposition import (
+    HE_EII_EDGE_REL_TOL,
+    HE_EII_EPS_TOP,
+)
 from cablp.funcs._cathode_solver import (
     BeamResult,
     DeviceConfig,
@@ -526,6 +530,15 @@ def solve_idriven(
     def _net_phi_c(psi: float) -> float:
         return (psi - _emission_state(psi)[1]) * T_e
 
+    def _reported_phi_c(psi: float) -> float:
+        # The ceiling test on the located root uses the arithmetic the result
+        # is ASSEMBLED with below (phi_c_plus - phi_c_minus), not the ladder's
+        # algebraically-equal (psi - psi_minus)*T_e: the two differ in the last
+        # bit, and only this form makes "a returned phi_c above the cap is
+        # always tagged capability_limited" exactly true rather than true to
+        # within a ULP.
+        return psi * T_e - _emission_state(psi)[1] * T_e
+
     # The physical ceiling applies to the *net* sheath drop phi_c: in a deep
     # virtual cathode psi_c_plus legitimately exceeds any voltage-scale cap
     # while phi_c = (psi_plus - psi_minus)*T_e stays at bank scale (the
@@ -535,6 +548,19 @@ def solve_idriven(
     # sheath exceeds the cap. This is deterministic range extension on a
     # monotone function -- there is exactly one root and no branch to
     # mis-select -- not the voltage-driven path's root-hunting ladder.
+    #
+    # The ceiling is enforced on the RETURNED ROOT, not merely on the ladder's
+    # grid points (fix 2026-08-09). The doubling grid only SAMPLES the cap
+    # test, and in the virtual-cathode regime psi_minus > 0 puts the first grid
+    # point psi = cap/T_e strictly below the cap in NET phi_c, so the ladder
+    # always doubles at least once; the J-test is checked first at the doubled
+    # point, so an imposed current reachable within that one doubling returned
+    # a J-root whose net phi_c could be anything up to ~2x the cap -- above the
+    # ceiling, tagged virtual_cathode, and (worst) INDEPENDENT of the cap, with
+    # phi_c(I) non-monotone across the escape window. That non-monotonicity
+    # violates the premise of the circuit's own brentq on V_dis(I). So the
+    # J-root is tested against the cap after it is located, and a root at or
+    # above the ceiling falls through to the ceiling branch below.
     psi_lo = 1.0e-8
     psi_top = max(phi_c_cap_V / T_e, Lambda + 2.0)
     # Compiled root find (Tier A, 2026-08-02). The ladder and brentq below
@@ -577,6 +603,27 @@ def solve_idriven(
             capability_limited = False
             J_target = J_imposed - _J_PLATEAU_TOL_REL * abs(J_imposed)
 
+        if not capability_limited:
+            # f(psi_lo) ~ -J_i*exp(Lambda) < 0 <= J_target, so the bracket is
+            # valid by construction; brentq is run tight because it is the only
+            # root-find in the module and costs microseconds.
+            psi_c_plus = brentq(
+                lambda x: _J_tot(x) - J_target,
+                psi_lo,
+                psi_top,
+                xtol=1.0e-12,
+                rtol=1.0e-14,
+                full_output=False,
+            )
+            # The located root is where the ceiling is actually enforced. The
+            # test is made AFTER the J-solve, on the SAME bracket the J-solve
+            # used, precisely so that a root below the ceiling is returned bit
+            # for bit as before: narrowing psi_top to the cap crossing up front
+            # would have moved brentq's last bits on every virtual-cathode
+            # solve, ceiling-bound or not.
+            if _reported_phi_c(psi_c_plus) >= phi_c_cap_V:
+                capability_limited = True
+
         if capability_limited:
             # A genuine inductive kick: the sheath cannot carry the imposed
             # current at physical net voltages. Return the solution *at* the
@@ -595,18 +642,6 @@ def solve_idriven(
                 )
             else:
                 psi_c_plus = psi_top
-        else:
-            # f(psi_lo) ~ -J_i*exp(Lambda) < 0 <= J_target, so the bracket is
-            # valid by construction; brentq is run tight because it is the only
-            # root-find in the module and costs microseconds.
-            psi_c_plus = brentq(
-                lambda x: _J_tot(x) - J_target,
-                psi_lo,
-                psi_top,
-                xtol=1.0e-12,
-                rtol=1.0e-14,
-                full_output=False,
-            )
 
     # ------------------------------------------------------------------
     # Everything else follows explicitly from the solved psi
@@ -622,6 +657,16 @@ def solve_idriven(
     phi_c_plus = psi_c_plus * T_e
     phi_c_minus = psi_c_minus * T_e
     phi_c = phi_c_plus - phi_c_minus
+    # The one signature the ceiling forbids, on BOTH the pure and the compiled
+    # root: a net sheath above the cap that is not tagged as sitting on it. One
+    # comparison, and it covers the compiled path too because phi_c is
+    # re-derived here from whichever root came back.
+    if phi_c > phi_c_cap_V and regime != "capability_limited":
+        raise RuntimeError(
+            f"net phi_c={phi_c!r} V escaped the ceiling phi_c_cap_V="
+            f"{phi_c_cap_V!r} V in regime {regime!r} (psi_c_plus="
+            f"{psi_c_plus!r}, T_e={T_e!r}, I_tot_A={I_tot_A!r})"
+        )
 
     # Beam MFP and bypass: explicit evaluation at the solved sheath (the
     # voltage-driven path needs a fixed-point loop here only because its
@@ -883,7 +928,35 @@ def solve_beam_system_idriven(
             _e_SI * plasma_cross[cathode_index] * v_beam[cathode_index]
         )
         if gas_type == "He":
-            beam_cross[cathode_index] = He_EII_cross_lkup(phi_c_0 / I_ion)
+            # The tabulated He EII cross section ends at eps = E/I_ion =
+            # HE_EII_EPS_TOP, and the lookup CLAMPS to its last node above
+            # that. On a capability-limited step the beam energy is the sheath
+            # ceiling, which at the shipped cap (1000 V) sits on the table's
+            # last node to within a ULP -- so the edge is INCLUSIVE within
+            # HE_EII_EDGE_REL_TOL, exactly as the tail walk's guard has it
+            # (K7c): at the edge the clamped value IS the endpoint node and
+            # nothing is extrapolated. A larger excess is refused rather than
+            # silently clamped, which is what this call did before. Since the
+            # sheath root is now capped, reaching the refusal requires a cap
+            # configured above the table top.
+            _beam_eps = phi_c_0 / I_ion
+            _beam_edge_excess = (
+                _beam_eps - HE_EII_EPS_TOP
+            ) / HE_EII_EPS_TOP
+            if _beam_edge_excess > HE_EII_EDGE_REL_TOL:
+                raise ValueError(
+                    "the beam ionization cross section is read from the "
+                    "tabulated He EII data, which ends at eps = E/I_ion = "
+                    f"{HE_EII_EPS_TOP:.6f} (i.e. "
+                    f"{HE_EII_EPS_TOP * I_ion:.2f} eV at I_ion={I_ion}); at "
+                    f"phi_c={phi_c_0} V the lookup would clamp to its last "
+                    "node and the beam would deposit on an extrapolated cross "
+                    "section. This is refused, not approximated (relative "
+                    f"excess {_beam_edge_excess:.3e}, tolerated "
+                    f"{HE_EII_EDGE_REL_TOL:.1e}); lower "
+                    "cathode_phi_c_cap_V to the table top or below"
+                )
+            beam_cross[cathode_index] = He_EII_cross_lkup(_beam_eps)
         elif gas_type == "H":
             beam_cross[cathode_index] = H_EII_cross_lkup(phi_c_0)
         (
