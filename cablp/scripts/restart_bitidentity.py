@@ -195,6 +195,41 @@ NEGATIVE_CONTROLS = {
 }
 
 
+#: Controls that are EXPECTED to show no effect, with the evidence for why.
+#: A member showing no effect is otherwise a gate defect; listing one here is a
+#: claim that it is genuinely inert in that scenario, and each entry has to be
+#: backed by a measurement rather than a guess. ``None`` as the scenario means
+#: every scenario.
+INERT_EXPECTATIONS = {
+    (None, "cathode._cathode_x0"):
+        "measured inert: the d1a probe (2026-08-11) found ONE distinct beam "
+        "result over five seeds spanning a 3300x range, on both the "
+        "current-driven and the floating branch. Carried anyway -- the fixed "
+        "point is a property of this stance, not a guarantee",
+    ("meanfield_beam", "run_loop.dt_growth_capped_streak"):
+        "dt_growth_recovery_patience is 0 here, which presence-gates the "
+        "recovery branch off entirely (solver.py:4209) -- the streak cannot "
+        "matter when nothing reads it; meanfield runs at patience 3 and its "
+        "control does break identity",
+    ("coverage", "run_loop.dt_growth_capped_streak"):
+        "dt_growth_recovery_patience is 0 here, which presence-gates the "
+        "recovery branch off entirely (solver.py:4209) -- the streak cannot "
+        "matter when nothing reads it; meanfield runs at patience 3 and its "
+        "control does break identity",
+    ("meanfield", "cathode._cathode_beam_cross"):
+        "beam_atten_cross is identically zero until the sheath potential "
+        "crosses the ionization threshold (~2e-4 s), so there is nothing to "
+        "perturb in this short window; covered by meanfield_beam and coverage",
+}
+
+
+def inert_reason(scenario, control):
+    """Return the recorded justification for a no-effect control, or None."""
+    return INERT_EXPECTATIONS.get(
+        (scenario, control), INERT_EXPECTATIONS.get((None, control))
+    )
+
+
 def engagement_census(result, log):
     """Report what the window actually exercised, so a pass cannot be vacuous."""
     caps = [d.step_cap for d in result.diagnostics]
@@ -339,6 +374,11 @@ def run_scenario(name, workdir, log, split_at=None, control=None):
             log(f"  RESULT: PASS (control) -- corrupting {control} broke "
                 f"identity in {len(problems)} place(s), e.g. {problems[0]}")
             return []
+        reason = inert_reason(name, control)
+        if reason is not None:
+            log(f"  RESULT: INERT (expected) -- {control} changed nothing. "
+                f"{reason}")
+            return []
         log(f"  RESULT: FAIL (control) -- corrupting {control} changed "
             "NOTHING; the gate does not test this member")
         return [f"{name}: negative control {control} did not break identity"]
@@ -364,6 +404,10 @@ def main(argv=None):
     parser.add_argument("--negative-control", action="store_true",
                         help="corrupt each carried member in turn; every one "
                              "must break identity or the gate is vacuous")
+    parser.add_argument("--controls", default=None,
+                        help="comma-separated subset of NEGATIVE_CONTROLS to "
+                             "run, for targeting one member in an expensive "
+                             "scenario")
     args = parser.parse_args(argv)
     names = (
         (args.scenario,)
@@ -388,7 +432,13 @@ def main(argv=None):
         problems = []
         for name in names:
             if args.negative_control:
-                for control in sorted(NEGATIVE_CONTROLS):
+                selected = sorted(NEGATIVE_CONTROLS)
+                if args.controls:
+                    selected = [c.strip() for c in args.controls.split(",")]
+                    unknown = [c for c in selected if c not in NEGATIVE_CONTROLS]
+                    if unknown:
+                        raise SystemExit(f"unknown control(s): {unknown}")
+                for control in selected:
                     problems.extend(
                         run_scenario(name, workdir, log, control=control)
                     )

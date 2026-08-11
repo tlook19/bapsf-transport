@@ -294,6 +294,26 @@ They are refusals, not partial loads: the alternative — carrying the fluid
 state and silently reseeding a kinetic distribution — would produce a run that
 looks like a continuation and is not one.
 
+## How the inventory is checked
+
+`scripts/restart_bitidentity.py` runs a window unsplit and split and compares
+every saved frame after the handoff at **raw uint64** — the float bytes, with no
+tolerance anywhere — across the conserved rows, the derived primitives, and
+every per-frame cathode diagnostic the run publishes.
+
+Passing that is necessary but not sufficient: a comparison can be green because
+nothing it claims to test was exercised. So the script also runs a **negative
+control** per carried member (`--negative-control`): it corrupts one member in
+a written payload and requires the comparison to FAIL. A member whose
+corruption changes nothing is either untested or genuinely inert, and the
+script refuses to guess between those — the inert ones are listed with their
+evidence in `INERT_EXPECTATIONS`, and anything else is reported as a defect.
+
+This is what caught the two mistakes that would otherwise have shipped a
+green-but-hollow gate: a diagnostic key list naming keys that do not exist
+(compared nothing, silently), and a split point taken at a nominal time rather
+than the exact float of a save instant.
+
 ## What "bit-identical" does and does not promise
 
 A restart reproduces, exactly, the continuation of **the step sequence stage 1

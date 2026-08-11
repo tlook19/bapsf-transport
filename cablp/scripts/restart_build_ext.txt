@@ -1,8 +1,0 @@
-running build_ext
-building 'cablp.funcs._cathode_kernels_cy' extension
-creating build/temp.macosx-11.0-arm64-cpython-314/cablp/funcs
-clang -fno-strict-overflow -Wsign-compare -Wunreachable-code -DNDEBUG -O2 -Wall -fPIC -O2 -isystem /Users/tlook/miniforge3/envs/fenicsx-env/include -arch arm64 -fPIC -O2 -isystem /Users/tlook/miniforge3/envs/fenicsx-env/include -arch arm64 -I/Users/tlook/miniforge3/envs/fenicsx-env/include/python3.14 -c cablp/funcs/_cathode_kernels_cy.c -o build/temp.macosx-11.0-arm64-cpython-314/cablp/funcs/_cathode_kernels_cy.o -ffp-contract=off
-creating build/lib.macosx-11.0-arm64-cpython-314/cablp/funcs
-clang -bundle -undefined dynamic_lookup -Wl,-rpath,/Users/tlook/miniforge3/envs/fenicsx-env/lib -L/Users/tlook/miniforge3/envs/fenicsx-env/lib -Wl,-rpath,/Users/tlook/miniforge3/envs/fenicsx-env/lib -L/Users/tlook/miniforge3/envs/fenicsx-env/lib build/temp.macosx-11.0-arm64-cpython-314/cablp/funcs/_cathode_kernels_cy.o -o build/lib.macosx-11.0-arm64-cpython-314/cablp/funcs/_cathode_kernels_cy.cpython-314-darwin.so
-ld: warning: duplicate -rpath '/Users/tlook/miniforge3/envs/fenicsx-env/lib' ignored
-copying build/lib.macosx-11.0-arm64-cpython-314/cablp/funcs/_cathode_kernels_cy.cpython-314-darwin.so -> cablp/funcs
