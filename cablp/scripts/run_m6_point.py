@@ -45,6 +45,12 @@ def main(argv=None):
                    help="additional k=v param overrides (JSON-parsed values)")
     p.add_argument("--extra-flag", nargs="*", default=(),
                    help="additional k=v input_flags overrides (JSON-parsed)")
+    p.add_argument("--max-steps", type=int, default=None,
+                   help="accepted-step cap; absent (default) is the "
+                        "historical uncapped run. Pair it with "
+                        "--extra max_steps_action=stop to end cleanly and "
+                        "SAVE the partial trajectory at the cap -- on its own "
+                        "the cap raises RuntimeError and the h5 is lost")
     p.add_argument("--save-h5", required=True)
     args = p.parse_args(argv)
 
@@ -112,6 +118,7 @@ def main(argv=None):
     result, geometry, params, flags = run_model(
         nx=args.nx, extra=extra,
         flags_extra=flags_extra or None,
+        max_steps=args.max_steps,
     )
     save_result_hdf5(args.save_h5, result, params=params, flags=flags)
     # Standing condition for a DVM-arm run: every report quotes the limited
