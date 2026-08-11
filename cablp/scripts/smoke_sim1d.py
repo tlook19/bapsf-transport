@@ -13904,6 +13904,514 @@ print(json.dumps({
         _cov_z_sim.coverage_fraction_profile(), _cov_retry_f
     ), "the accepted attempt did not advance the field; (vi-e) is vacuous"
 
+    # --- Ad-hoc probe neutral source (`neutral_probe_source`) -------------
+    # An INFERENCE INSTRUMENT: an arm with this on measures the plasma's
+    # response to a hypothesized neutral source. Six things are checked, in
+    # this order: the configuration refusals; the profile normalization and the
+    # waveform values (including their edges); the whole-system particle
+    # budget, on and off; the bit-exact reductions, as raw bytes; the two-zone
+    # routing; and composition with the coverage closure.
+    from cablp.solvers._sim1d.physics.neutrals import (
+        NEUTRAL_PROBE_SHAPES,
+        NEUTRAL_PROBE_WAVEFORMS,
+        neutral_zone_volumes as _probe_zone_volumes,
+    )
+
+    def _probe_config(**over):
+        p, f = default_config()
+        p.update({
+            "nx": 12,
+            "cathode_warming_model": "none",
+            "cathode_Ts_base_K": None,
+            "cathode_surface_model": "none",
+            "cathode_phiwf_clean_eV": None,
+            "cathode_cleaning_E_th_eV": None,
+            "cathode_sample_smoothing": None,
+        })
+        f = dict(f)
+        f["neutral_equilibration"] = False
+        p.update(over)
+        if over:
+            f["neutral_probe_source"] = True
+        return p, f
+
+    #: A complete, minimal probe: a gaussian in the middle of the machine,
+    #: always on. Every refusal case below is this with one thing wrong.
+    _probe_ok = {
+        "neutral_probe_amplitude_cm3_s": 1.0e17,
+        "neutral_probe_shape": "gaussian",
+        "neutral_probe_center_cm": 500.0,
+        "neutral_probe_width_cm": 100.0,
+        "neutral_probe_waveform": "const",
+    }
+    _probe_off_sim = LAPDSim1D(*_probe_config())
+    _probe_cells = _probe_off_sim.geometry.cells
+    _probe_Vm = np.asarray(
+        _probe_off_sim.geometry.neutral_volume_cm3, dtype=float
+    )
+    assert _probe_off_sim._probe is None
+    _probe_base_p, _probe_base_f = _probe_config()
+    _probe_on_f = dict(_probe_base_f, neutral_probe_source=True)
+
+    # (i) CONFIGURATION REFUSALS. Every one is a construction-time ValueError:
+    # an incomplete probe configuration must never reach the first step.
+    for _probe_bad, _probe_needle in (
+        ({}, "requires neutral_probe_amplitude_cm3_s"),
+        (dict(_probe_ok, neutral_probe_amplitude_cm3_s=-1.0),
+         "must be finite and >= 0"),
+        (dict(_probe_ok, neutral_probe_amplitude_cm3_s=float("nan")),
+         "must be finite and >= 0"),
+        # The shape: neither spelling, both spellings, and every way each one
+        # can be malformed.
+        ({"neutral_probe_amplitude_cm3_s": 1.0e17,
+          "neutral_probe_waveform": "const"},
+         "EXACTLY ONE axial shape"),
+        (dict(_probe_ok, neutral_probe_profile=[1.0] * _probe_cells),
+         "EXACTLY ONE axial shape"),
+        (dict(_probe_ok, neutral_probe_shape="lorentzian"),
+         "neutral_probe_shape must be one of"),
+        (dict(_probe_ok, neutral_probe_width_cm=0.0),
+         "neutral_probe_width_cm must be finite and > 0"),
+        (dict(_probe_ok, neutral_probe_width_cm=-3.0),
+         "neutral_probe_width_cm must be finite and > 0"),
+        (dict(_probe_ok, neutral_probe_center_cm=float("inf")),
+         "neutral_probe_center_cm must be finite"),
+        # A family parameter with no family, and a family with no parameter.
+        (dict(_probe_ok, neutral_probe_shape=None,
+              neutral_probe_width_cm=None,
+              neutral_probe_profile=[1.0] * _probe_cells),
+         "has no meaning without neutral_probe_shape"),
+        (dict(_probe_ok, neutral_probe_width_cm=None),
+         "requires neutral_probe_width_cm"),
+        # The per-cell profile: wrong length, and every way an entry can be
+        # unusable. An identically-zero profile is a misconfiguration, not the
+        # null control -- the null control is amplitude 0, a different key.
+        (dict(_probe_ok, neutral_probe_shape=None,
+              neutral_probe_center_cm=None, neutral_probe_width_cm=None,
+              neutral_probe_profile=[1.0] * (_probe_cells - 1)),
+         "must have one entry per grid cell"),
+        (dict(_probe_ok, neutral_probe_shape=None,
+              neutral_probe_center_cm=None, neutral_probe_width_cm=None,
+              neutral_probe_profile=[1.0] * (_probe_cells + 3)),
+         "must have one entry per grid cell"),
+        (dict(_probe_ok, neutral_probe_shape=None,
+              neutral_probe_center_cm=None, neutral_probe_width_cm=None,
+              neutral_probe_profile=[1.0] * (_probe_cells - 1) + [-1.0]),
+         "must be finite and >= 0"),
+        (dict(_probe_ok, neutral_probe_shape=None,
+              neutral_probe_center_cm=None, neutral_probe_width_cm=None,
+              neutral_probe_profile=[1.0] * (_probe_cells - 1)
+              + [float("nan")]),
+         "must be finite and >= 0"),
+        (dict(_probe_ok, neutral_probe_shape=None,
+              neutral_probe_center_cm=None, neutral_probe_width_cm=None,
+              neutral_probe_profile=[0.0] * _probe_cells),
+         "carries no weight on this grid"),
+        # The waveform and its per-waveform keys, in both directions.
+        (dict(_probe_ok, neutral_probe_waveform=None),
+         "requires neutral_probe_waveform"),
+        (dict(_probe_ok, neutral_probe_waveform="ramp"),
+         "neutral_probe_waveform must be one of"),
+        (dict(_probe_ok, neutral_probe_waveform="square"),
+         "requires neutral_probe_t_on_s"),
+        (dict(_probe_ok, neutral_probe_waveform="square",
+              neutral_probe_t_on_s=1.0e-3),
+         "requires neutral_probe_t_off_s"),
+        (dict(_probe_ok, neutral_probe_waveform="square",
+              neutral_probe_t_on_s=2.0e-3, neutral_probe_t_off_s=1.0e-3),
+         "must be strictly less than"),
+        (dict(_probe_ok, neutral_probe_waveform="square",
+              neutral_probe_t_on_s=1.0e-3, neutral_probe_t_off_s=1.0e-3),
+         "must be strictly less than"),
+        (dict(_probe_ok, neutral_probe_t_on_s=1.0e-3),
+         "is inert under 'const'"),
+        (dict(_probe_ok, neutral_probe_waveform_table=[[0.0, 1.0], [1.0, 1.0]]),
+         "is inert under 'const'"),
+        (dict(_probe_ok, neutral_probe_waveform="table"),
+         "requires neutral_probe_waveform_table"),
+        (dict(_probe_ok, neutral_probe_waveform="table",
+              neutral_probe_waveform_table=[[0.0, 1.0]]),
+         "at least two [t_s, w] pairs"),
+        (dict(_probe_ok, neutral_probe_waveform="table",
+              neutral_probe_waveform_table=[[0.0, 1.0], [0.0, 2.0]]),
+         "must be strictly increasing"),
+        (dict(_probe_ok, neutral_probe_waveform="table",
+              neutral_probe_waveform_table=[[1.0, 1.0], [0.0, 2.0]]),
+         "must be strictly increasing"),
+        (dict(_probe_ok, neutral_probe_waveform="table",
+              neutral_probe_waveform_table=[[0.0, 1.0], [1.0, -2.0]]),
+         "w must be >= 0"),
+        (dict(_probe_ok, neutral_probe_waveform="table",
+              neutral_probe_waveform_table=[[0.0, 1.0],
+                                            [1.0, float("inf")]]),
+         "entry must be finite"),
+        # The zone selector, in both directions (the ON direction is checked
+        # under neutral_two_zone in block (v)).
+        (dict(_probe_ok, neutral_probe_zone="column"),
+         "no meaning without the neutral_two_zone flag"),
+    ):
+        try:
+            LAPDSim1D(dict(_probe_base_p, **_probe_bad), _probe_on_f)
+        except ValueError as error:
+            assert _probe_needle in str(error), (_probe_bad, str(error))
+        else:
+            raise AssertionError(
+                f"neutral_probe_source accepted {_probe_bad!r}"
+            )
+    # ... and the reverse direction: ANY probe parameter set with the flag OFF
+    # would be inert, which is exactly the silent no-op the house rules forbid.
+    for _probe_off_key, _probe_off_value in (
+        ("neutral_probe_amplitude_cm3_s", 1.0e17),
+        ("neutral_probe_profile", [1.0] * _probe_cells),
+        ("neutral_probe_shape", "gaussian"),
+        ("neutral_probe_center_cm", 500.0),
+        ("neutral_probe_width_cm", 100.0),
+        ("neutral_probe_waveform", "const"),
+        ("neutral_probe_t_on_s", 1.0e-3),
+        ("neutral_probe_t_off_s", 2.0e-3),
+        ("neutral_probe_waveform_table", [[0.0, 1.0], [1.0, 1.0]]),
+        ("neutral_probe_zone", "column"),
+    ):
+        try:
+            LAPDSim1D(
+                dict(_probe_base_p, **{_probe_off_key: _probe_off_value}),
+                _probe_base_f,
+            )
+        except ValueError as error:
+            assert "without the neutral_probe_source flag" in str(error)
+        else:
+            raise AssertionError(
+                f"{_probe_off_key} accepted without the neutral_probe_source "
+                "flag"
+            )
+    # v1 IS the moment neutral model. Both kinetic arms take over the fluid nn
+    # rows once engaged, so a source written into those rows would be stripped
+    # or double-counted rather than felt -- the probe would silently inject
+    # nothing, which is the reason this refuses instead of degrading.
+    for _probe_kin_model, _probe_kin_flags in (
+        ("kinetic", {"neutral_two_zone": True}),
+        ("kinetic_dvm", {"neutral_two_zone": True}),
+    ):
+        _probe_kin_p = dict(_probe_base_p, **_probe_ok)
+        _probe_kin_p["neutral_model"] = _probe_kin_model
+        _probe_kin_p["neutral_probe_zone"] = "column"
+        try:
+            LAPDSim1D(
+                _probe_kin_p, dict(_probe_on_f, **_probe_kin_flags)
+            )
+        except ValueError as error:
+            assert "requires neutral_model='moment'" in str(error), (
+                _probe_kin_model, str(error)
+            )
+        else:
+            raise AssertionError(
+                f"neutral_probe_source accepted neutral_model="
+                f"{_probe_kin_model!r}"
+            )
+    # The registered sets are what the error messages promise, so a family or
+    # waveform added without a smoke case fails here rather than shipping
+    # untested.
+    assert set(NEUTRAL_PROBE_SHAPES) == {"gaussian"}, NEUTRAL_PROBE_SHAPES
+    assert set(NEUTRAL_PROBE_WAVEFORMS) == {"const", "square", "table"}, (
+        NEUTRAL_PROBE_WAVEFORMS
+    )
+
+    # (ii) THE PROFILE NORMALIZATION AND THE WAVEFORM VALUES. p(z) is a SHAPE:
+    # its own scale divides out, so the amplitude carries the whole magnitude
+    # and the volume-integrated influx is A*w*sum(V) whatever profile is used.
+    _probe_gauss_sim = LAPDSim1D(dict(_probe_base_p, **_probe_ok), _probe_on_f)
+    _probe_p = _probe_gauss_sim.neutral_probe_profile()
+    assert abs(
+        float(np.sum(_probe_p * _probe_Vm) / np.sum(_probe_Vm)) - 1.0
+    ) < 1e-12, _probe_p
+    # The returned profile is a copy: mutating it cannot reach solver state.
+    _probe_escaped = _probe_gauss_sim.neutral_probe_profile()
+    _probe_escaped[:] = 0.0
+    assert np.array_equal(_probe_gauss_sim.neutral_probe_profile(), _probe_p)
+    # The gaussian really is a gaussian about its centre, on the grid's own z.
+    _probe_z = np.asarray(_probe_gauss_sim.geometry.z_cm, dtype=float)
+    _probe_raw = np.exp(-0.5 * ((_probe_z - 500.0) / 100.0) ** 2)
+    assert np.allclose(
+        _probe_p * float(np.sum(_probe_raw * _probe_Vm)),
+        _probe_raw * float(np.sum(_probe_Vm)),
+        rtol=1e-13, atol=0.0,
+    )
+    # A per-cell profile arrives as written up to that one normalization, and
+    # rescaling the input by any positive factor changes nothing at all.
+    _probe_seed = np.linspace(0.2, 3.0, _probe_cells)
+    _probe_prof_sim = LAPDSim1D(dict(_probe_base_p, **dict(
+        _probe_ok, neutral_probe_shape=None, neutral_probe_center_cm=None,
+        neutral_probe_width_cm=None,
+        neutral_probe_profile=_probe_seed.tolist(),
+    )), _probe_on_f)
+    _probe_scaled_sim = LAPDSim1D(dict(_probe_base_p, **dict(
+        _probe_ok, neutral_probe_shape=None, neutral_probe_center_cm=None,
+        neutral_probe_width_cm=None,
+        neutral_probe_profile=(_probe_seed * 7.3e5).tolist(),
+    )), _probe_on_f)
+    assert np.allclose(
+        _probe_prof_sim.neutral_probe_profile(),
+        _probe_scaled_sim.neutral_probe_profile(),
+        rtol=1e-13, atol=0.0,
+    )
+    assert abs(float(np.sum(
+        _probe_prof_sim.neutral_probe_profile() * _probe_Vm
+    ) / np.sum(_probe_Vm)) - 1.0) < 1e-12
+    # The waveforms, at their edges. "square" is the half-open [t_on, t_off),
+    # so the two edges are unambiguous and the delivered inventory is exactly
+    # the amplitude times the window.
+    assert _probe_gauss_sim.neutral_probe_waveform_value(time=-1.0) == 1.0
+    assert _probe_gauss_sim.neutral_probe_waveform_value(time=1.0e3) == 1.0
+    assert _probe_off_sim.neutral_probe_waveform_value(time=0.0) == 0.0
+    assert _probe_off_sim.neutral_probe_profile() is None
+    _probe_sq_sim = LAPDSim1D(dict(_probe_base_p, **dict(
+        _probe_ok, neutral_probe_waveform="square",
+        neutral_probe_t_on_s=1.0e-8, neutral_probe_t_off_s=3.0e-8,
+    )), _probe_on_f)
+    for _probe_t, _probe_w in (
+        (0.0, 0.0), (9.9e-9, 0.0), (1.0e-8, 1.0), (2.0e-8, 1.0),
+        (3.0e-8, 0.0), (1.0, 0.0),
+    ):
+        assert _probe_sq_sim.neutral_probe_waveform_value(
+            time=_probe_t
+        ) == _probe_w, (_probe_t, _probe_w)
+    # Both hard edges are registered step boundaries, so no accepted step
+    # straddles one and the delivered inventory cannot depend on where the
+    # stepper happened to sample.
+    assert _probe_sq_sim._neutral_probe_event_times() == [1.0e-8, 3.0e-8]
+    assert _probe_gauss_sim._neutral_probe_event_times() == []
+    assert _probe_off_sim._neutral_probe_event_times() == []
+    # "table" interpolates linearly between its nodes and is exactly zero
+    # strictly outside their span; the span ends are step boundaries for the
+    # same reason the square's edges are.
+    _probe_tab_sim = LAPDSim1D(dict(_probe_base_p, **dict(
+        _probe_ok, neutral_probe_waveform="table",
+        neutral_probe_waveform_table=[[1.0e-8, 0.0], [2.0e-8, 1.0],
+                                      [3.0e-8, 0.5]],
+    )), _probe_on_f)
+    for _probe_t, _probe_w in (
+        (0.0, 0.0), (9.9e-9, 0.0), (1.0e-8, 0.0), (1.5e-8, 0.5),
+        (2.0e-8, 1.0), (2.5e-8, 0.75), (3.0e-8, 0.5), (3.1e-8, 0.0),
+    ):
+        assert abs(
+            _probe_tab_sim.neutral_probe_waveform_value(time=_probe_t)
+            - _probe_w
+        ) < 1e-14, (_probe_t, _probe_w)
+    assert _probe_tab_sim._neutral_probe_event_times() == [1.0e-8, 3.0e-8]
+
+    # (iii) THE WHOLE-SYSTEM PARTICLE BUDGET. The instrument injects neutrals
+    # and nothing else, and every particle it injects is in the ledger.
+    _probe_terms = _probe_gauss_sim.rhs_terms()
+    _probe_term = _probe_terms["neutral_probe_source"]
+    _probe_expect = 1.0e17 * float(np.sum(_probe_Vm))
+    assert abs(
+        float(np.sum(np.asarray(_probe_term.nn, dtype=float) * _probe_Vm))
+        / _probe_expect - 1.0
+    ) < 1e-12
+    assert abs(
+        particle_inventory_rate(_probe_term, _probe_gauss_sim.geometry)
+        / _probe_expect - 1.0
+    ) < 1e-12
+    # ZERO NET MOMENTUM and no energy or plasma channel: every other row is
+    # exactly zero, so "injected at rest, into the single cold-gas Tn_K
+    # population" is a property of the arrays and not only of the prose.
+    for _probe_row in ("n", "M", "Ee", "Ei"):
+        assert np.array_equal(
+            np.asarray(getattr(_probe_term, _probe_row), dtype=float),
+            np.zeros(_probe_cells),
+        ), _probe_row
+    assert _probe_term.M_n is None and _probe_term.nn_a is None
+    # The probe is the WHOLE difference between the on and off arms at the
+    # same state: the system's total particle inventory rate moves by exactly
+    # the injected influx, so nothing else was perturbed by adding the term.
+    _probe_y0 = _probe_off_sim._y.copy()
+    _probe_on_rate = math.fsum(
+        particle_inventory_rate(term, _probe_gauss_sim.geometry)
+        for term in _probe_gauss_sim.rhs_terms(y=_probe_y0).values()
+    )
+    _probe_off_rate = math.fsum(
+        particle_inventory_rate(term, _probe_off_sim.geometry)
+        for term in _probe_off_sim.rhs_terms(y=_probe_y0).values()
+    )
+    assert abs(
+        (_probe_on_rate - _probe_off_rate) / _probe_expect - 1.0
+    ) < 1e-9, (_probe_on_rate, _probe_off_rate, _probe_expect)
+    # ...and term by term, everything except the probe row is untouched.
+    _probe_on_terms = _probe_gauss_sim.rhs_terms(y=_probe_y0)
+    _probe_off_terms = _probe_off_sim.rhs_terms(y=_probe_y0)
+    assert set(_probe_on_terms) - set(_probe_off_terms) == {
+        "neutral_probe_source"
+    }
+    for _probe_name, _probe_other in _probe_off_terms.items():
+        assert np.array_equal(
+            np.asarray(_probe_on_terms[_probe_name].nn, dtype=float),
+            np.asarray(_probe_other.nn, dtype=float),
+        ), _probe_name
+    # A stepped arm really gains the fuel: the neutral inventory rises, and by
+    # the nominal delivery to within the plasma's own response to it.
+    _probe_run_off = LAPDSim1D(*_probe_config())
+    _probe_run_on = LAPDSim1D(dict(_probe_base_p, **_probe_ok), _probe_on_f)
+    for _ in range(8):
+        _probe_run_off.advance_one_step(dt=2.0e-9)
+        _probe_run_on.advance_one_step(dt=2.0e-9)
+    _probe_gained = float(np.sum(
+        (np.asarray(_probe_run_on.state.nn, dtype=float)
+         - np.asarray(_probe_run_off.state.nn, dtype=float)) * _probe_Vm
+    ))
+    assert _probe_gained > 0.0
+    assert abs(
+        _probe_gained / (8 * 2.0e-9 * _probe_expect) - 1.0
+    ) < 1.0e-3, _probe_gained
+    # The probe is NOT a coverage burn term: its rate is set by the caller, not
+    # by a plasma or beam density, so it acts uniformly across the
+    # cross-section exactly as the gas puff and the pump do. Named here so the
+    # absence reads as the decision block (vi) relies on rather than an
+    # oversight.
+    assert "neutral_probe_source" not in _probe_run_on.COVERAGE_BURN_TERMS
+
+    # (iv) BIT-EXACT REDUCTIONS, as raw bytes with the circuit state included.
+    # Two independent ways of asking for nothing must reproduce the flag-off
+    # trajectory to the LAST BIT: a zero amplitude (the explicit null control)
+    # and a square window that never opens inside the run. Both keep the whole
+    # instrument armed -- profile built, term in the ledger, waveform
+    # evaluated every stage -- so this is a statement about the term being
+    # exactly zero, not about the code being skipped.
+    for _probe_null in (
+        dict(_probe_ok, neutral_probe_amplitude_cm3_s=0.0),
+        dict(_probe_ok, neutral_probe_waveform="square",
+             neutral_probe_t_on_s=1.0, neutral_probe_t_off_s=2.0),
+    ):
+        _probe_null_sim = LAPDSim1D(
+            dict(_probe_base_p, **_probe_null), _probe_on_f
+        )
+        _probe_ref_sim = LAPDSim1D(*_probe_config())
+        assert _probe_null_sim._probe is not None
+        assert _probe_ref_sim._probe is None
+        for _ in range(8):
+            _probe_null_sim.advance_one_step(dt=2.0e-9)
+            _probe_ref_sim.advance_one_step(dt=2.0e-9)
+        assert (
+            np.asarray(_probe_null_sim._y).tobytes()
+            == np.asarray(_probe_ref_sim._y).tobytes()
+        ), f"an inert probe is not bit-exact: {_probe_null!r}"
+        assert float(_probe_null_sim._circuit_I_loop) == float(
+            _probe_ref_sim._circuit_I_loop
+        )
+        # The instrument adds no conservative field: the packed width is the
+        # shipped one, and the ledger differs by exactly the one new row.
+        assert _probe_null_sim._y.size == _probe_ref_sim._y.size
+        assert set(_probe_null_sim.rhs_terms()) - set(
+            _probe_ref_sim.rhs_terms()
+        ) == {"neutral_probe_source"}
+    # A LIVE probe is not bit-exact -- otherwise the four assertions above
+    # would pass on a term that never reached the state.
+    _probe_live_sim = LAPDSim1D(dict(_probe_base_p, **_probe_ok), _probe_on_f)
+    for _ in range(8):
+        _probe_live_sim.advance_one_step(dt=2.0e-9)
+    assert (
+        np.asarray(_probe_live_sim._y).tobytes()
+        != np.asarray(_probe_ref_sim._y).tobytes()
+    )
+
+    # (v) TWO-ZONE ROUTING. Under `neutral_two_zone` the caller must say which
+    # neutral field the source feeds, because the two put the gas in different
+    # places. Whichever is chosen, the amplitude keeps ONE meaning: the total
+    # influx is the same number, formed on the chamber volume and then
+    # re-normalized to the target zone.
+    _probe_2z_p, _probe_2z_f = _probe_config(**_probe_ok)
+    _probe_2z_f["neutral_two_zone"] = True
+    _probe_2z_totals = {}
+    for _probe_zone in ("column", "annulus"):
+        _probe_2z_sim = LAPDSim1D(
+            dict(_probe_2z_p, neutral_probe_zone=_probe_zone), _probe_2z_f
+        )
+        _probe_2z_term = _probe_2z_sim.rhs_terms()["neutral_probe_source"]
+        _probe_Vc, _probe_Va = _probe_zone_volumes(_probe_2z_sim.geometry)
+        _probe_2z_totals[_probe_zone] = (
+            float(np.sum(np.asarray(_probe_2z_term.nn, dtype=float)
+                         * _probe_Vc))
+            + float(np.sum(np.asarray(_probe_2z_term.nn_a, dtype=float)
+                           * _probe_Va))
+        )
+        _probe_2z_into_a = float(np.sum(
+            np.asarray(_probe_2z_term.nn_a, dtype=float) * _probe_Va
+        ))
+        if _probe_zone == "annulus":
+            # Almost all of it lands in the annulus; the remainder is the
+            # documented fallback on cells that have none.
+            assert _probe_2z_into_a > 0.5 * _probe_2z_totals[_probe_zone]
+        else:
+            assert _probe_2z_into_a == 0.0
+        # This arm evolves no neutral momentum, so there is no momentum row to
+        # carry -- the zero-momentum convention is checked on an arm that has
+        # one, just below.
+        assert _probe_2z_term.M_n is None
+    assert abs(
+        _probe_2z_totals["column"] / _probe_2z_totals["annulus"] - 1.0
+    ) < 1e-12, _probe_2z_totals
+    assert abs(
+        _probe_2z_totals["column"] / _probe_expect - 1.0
+    ) < 1e-12, _probe_2z_totals
+    # ZERO NET MOMENTUM, on an arm that actually evolves a neutral wind. The
+    # momentum row is present and exactly zero: the gas arrives at rest, so a
+    # standing wind is DILUTED by the injection (u_n = M_n / (m_n n_n) falls as
+    # n_n rises at fixed M_n) rather than dragged by a companion term.
+    _probe_mom_p, _probe_mom_f = _probe_config(**_probe_ok)
+    _probe_mom_f["neutral_momentum"] = True
+    _probe_mom_sim = LAPDSim1D(_probe_mom_p, _probe_mom_f)
+    _probe_mom_term = _probe_mom_sim.rhs_terms()["neutral_probe_source"]
+    assert _probe_mom_term.M_n is not None
+    assert np.array_equal(
+        np.asarray(_probe_mom_term.M_n, dtype=float),
+        np.zeros(_probe_cells),
+    )
+    assert abs(float(np.sum(
+        np.asarray(_probe_mom_term.nn, dtype=float) * _probe_Vm
+    )) / _probe_expect - 1.0) < 1e-12
+
+    # (vi) COMPOSITION WITH THE COVERAGE CLOSURE, which is ALLOWED rather than
+    # refused. The closure partitions the mean nn through a deficit that only
+    # its own burn terms move; the probe is uniform across the cross-section,
+    # so it raises the covered column and the reservoir by the same amount,
+    # leaves the deficit alone, and the partition identity keeps closing. A
+    # build that quietly routed probe fuel into one arm would break the
+    # identity here.
+    _probe_cov_p, _probe_cov_f = _probe_config(**_probe_ok)
+    _probe_cov_p.update({
+        "beam_deposition_model": "csda",
+        "beam_anomalous_model": "quasilinear",
+        "coverage_initial_fraction": 0.05,
+        "coverage_growth_rate_per_s": 0.0,
+        "coverage_backfill_time_s": 3.0e-5,
+    })
+    _probe_cov_f["coverage_closure"] = True
+    _probe_cov_sim = LAPDSim1D(_probe_cov_p, _probe_cov_f)
+    # A synthetic burn first, so the covered column is genuinely BELOW the mean
+    # and the identity below is not the trivial zero-deficit one.
+    _probe_cov_sim._advance_coverage_deficit(
+        1.0e-6, np.full(_probe_cells, -2.0e10) * 1.0e-6
+    )
+    assert float(np.max(_probe_cov_sim._coverage_deficit)) > 0.0
+    for _ in range(20):
+        _probe_cov_sim.advance_one_step(dt=2.0e-9)
+        _probe_cov_f_cov = _probe_cov_sim.coverage_fraction()
+        _probe_cov_nn = np.asarray(_probe_cov_sim.state.nn, dtype=float)
+        _probe_cov_col = _probe_cov_sim._coverage_view(
+            _probe_cov_sim.state
+        ).nn_channel
+        _probe_cov_res = _probe_cov_sim.coverage_reservoir_density()
+        _probe_cov_mean = (
+            _probe_cov_f_cov * _probe_cov_col
+            + (1.0 - _probe_cov_f_cov) * _probe_cov_res
+        )
+        assert np.max(np.abs(_probe_cov_mean / _probe_cov_nn - 1.0)) < 1e-12
+        assert np.all(_probe_cov_col > 0.0)
+        assert np.all(_probe_cov_res >= 0.0)
+    # The burn deficit survived the probe: fuel went to BOTH arms in area
+    # proportion, so the partition the closure carries is undisturbed.
+    assert float(np.max(_probe_cov_sim._coverage_deficit)) > 0.0
+    assert "neutral_probe_source" in _probe_cov_sim.rhs_terms()
+
     print(
         "sim1d smoke ok: "
         f"cells={geom.cells}, dz={geom.dz_cm:g} cm, "
