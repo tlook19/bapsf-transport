@@ -1404,6 +1404,7 @@ def _csda_beam_deposition(
         # ``beam_area_cm2`` here is the full column area exactly as a
         # mean-field ray's is.
         two_stream_kwargs = None
+        two_stream_probe_kwargs = None
         if two_medium:
             two_stream_kwargs = dict(
                 f_cov=f_cov,
@@ -1420,10 +1421,24 @@ def _csda_beam_deposition(
             )
             if anomalous_model != "none":
                 two_stream_kwargs["beam_area_cm2"] = beam_area_cm2
-            # The walk closures reach the two-stream march too, on the same
-            # presence gating as the single-medium ray: the withheld banks are
-            # per-arm per-cell and feed one walk stage that runs on the
-            # mean-state ``stopping_coefficient`` hoisted above.
+            # The GAP PROBE's argument list, taken here -- before the walk
+            # block is added -- so the two-medium probe mirrors the
+            # single-medium one, which is handed ``ray_kwargs`` and has never
+            # run a walk. The probe's only consumed outputs are the two arms'
+            # ``transmitted_flux`` (see the gap-transmission block below); the
+            # walk banks products and burns into per-arm per-cell arrays that
+            # the probe's caller drops on the floor, and it cannot reach the
+            # primary flux, which is marched before any walk stage. Measured
+            # rather than assumed: over 2314 probe calls across four coverage
+            # configurations (tail-walk only; ionizing tail; f_cov0 = 0.2; a
+            # z-varying seed) both arms' transmitted fluxes were raw-uint64
+            # IDENTICAL with and without the block, at both the emitting and
+            # the unit-flux launch, and the whole trajectory reproduced to the
+            # bit. The DEPOSITION ray keeps the walk, on the same presence
+            # gating as the single-medium ray: its withheld banks are per-arm
+            # per-cell and feed one walk stage that runs on the mean-state
+            # ``stopping_coefficient`` hoisted above.
+            two_stream_probe_kwargs = dict(two_stream_kwargs)
             two_stream_kwargs.update(ray_transport)
             if "tail_ionization" in ray_transport:
                 # The ionizing walkers are MARCHED rather than integrated in
@@ -1558,13 +1573,18 @@ def _csda_beam_deposition(
             if two_medium:
                 # Mirror the deposition above: the SAME two-stream march, the
                 # same launched flux, same media and same re-mixing, truncated
-                # at L_cath. The circuit's bypass is then the survival of the
-                # whole emitted beam. Both arms' transmitted fluxes are summed
+                # at L_cath -- and WITHOUT the walk block, exactly as the
+                # single-medium probe below is (see two_stream_probe_kwargs;
+                # the walk cannot move the transmitted flux read here, and the
+                # banks it would fill are discarded). The circuit's bypass
+                # is then the survival of the whole emitted beam. Both arms'
+                # transmitted fluxes are summed
                 # because the march books the mixed exit stream on the channel
                 # slot by convention (see its docstring), and summing is
                 # convention-independent.
                 _probe_ch, _probe_res, _ = deposit_beam_two_stream(
-                    result.phi_c, Gamma0, dz_cm=gap_dz, **two_stream_kwargs,
+                    result.phi_c, Gamma0, dz_cm=gap_dz,
+                    **two_stream_probe_kwargs,
                 )
                 transmitted = (
                     float(_probe_ch.transmitted_flux)
@@ -1607,7 +1627,7 @@ def _csda_beam_deposition(
             # measurement, run through the two-stream march so the media and
             # the re-mixing are the deposition ray's.
             _probe_ch, _probe_res, _ = deposit_beam_two_stream(
-                result.phi_c, 1.0, dz_cm=gap_dz, **two_stream_kwargs,
+                result.phi_c, 1.0, dz_cm=gap_dz, **two_stream_probe_kwargs,
             )
             survival = (
                 float(_probe_ch.transmitted_flux)

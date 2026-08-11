@@ -12550,20 +12550,41 @@ def main():
         assert _ck_module.KERNEL_ID == _ck_expected_kernel_id, (
             _ck_module.KERNEL_ID
         )
-        # A short current-driven discharge on the production stance: the
-        # cathode sheath solve (Tier A) runs on every sample and the CSDA ray
-        # fires, so both halves of "tierA+csda" are on the hot path.
+        # TWO scenarios, run through the same child harness:
+        #
+        # * ``meanfield`` -- a short current-driven discharge on the production
+        #   stance. The cathode sheath solve (Tier A) runs on every sample and
+        #   the CSDA ray fires, so both halves of "tierA+csda" are on the hot
+        #   path.
+        # * ``coverage`` -- the same question under the clumpy-plasma closure,
+        #   which used to REFUSE the opt-in outright. It no longer does, and
+        #   this is what replaced the refusal. The compiled march is bound only
+        #   inside ``deposit_beam``, the single-medium ray;
+        #   ``deposit_beam_two_stream`` has no compiled branch, so under
+        #   coverage the opt-in reaches exactly the NESTED single-medium walker
+        #   marches plus the tier-A kernels. The scenario therefore turns the
+        #   ionizing tail walk on: that is what issues those nested legs, and
+        #   without it the comparison would be blind to the march entirely.
+        #
+        # The child counts the nested marches by wrapping ``deposit_beam`` in
+        # its DEFINING module -- the two-stream wrapper resolves it as a module
+        # global, so the count is exactly the nested legs and excludes the
+        # top-level rays ``cathode`` calls through its own imported name. Both
+        # children carry the identical wrapper, so the census cannot perturb
+        # the comparison it makes non-vacuous.
         _ck_child_source = '''
 import json
+import sys
 
 import numpy as np
 
+from cablp.funcs import _beam_deposition as _beam_dep
 from cablp.funcs import _kernels as K
 from cablp.solvers._sim1d import LAPDSim1D, default_config
 
+scenario = sys.argv[1]
 params, flags = default_config()
 params.update({
-    "nx": 24,
     "dt_save": 0.0,
     "phase_transition_mode": "scheduled",
     "tau_neutral_prebreakdown": 0.0,
@@ -12572,7 +12593,40 @@ params.update({
     "tau_discharge": 1.0,
     "tau_afterglow": 0.0,
 })
-result = LAPDSim1D(params, flags).run(t_end=2.0e-6, dt=1.0e-7)
+if scenario == "meanfield":
+    params["nx"] = 24
+    t_end = 2.0e-6
+else:
+    params.update({
+        "nx": 12,
+        "beam_deposition_model": "csda",
+        "beam_anomalous_model": "quasilinear",
+        "cathode_warming_model": "none",
+        "cathode_Ts_base_K": None,
+        "cathode_surface_model": "none",
+        "cathode_phiwf_clean_eV": None,
+        "cathode_cleaning_E_th_eV": None,
+        "cathode_sample_smoothing": None,
+        "coverage_initial_fraction": 0.3,
+        "heating_anomalous_transport": "tail_walk",
+        "heating_anomalous_tail_ionization": "on",
+    })
+    flags["coverage_closure"] = True
+    flags["neutral_equilibration"] = False
+    t_end = 1.0e-6
+
+_marches = [0]
+_deposit_beam = _beam_dep.deposit_beam
+
+
+def _counted_deposit_beam(*args, **kwargs):
+    _marches[0] += 1
+    return _deposit_beam(*args, **kwargs)
+
+
+_beam_dep.deposit_beam = _counted_deposit_beam
+
+result = LAPDSim1D(params, flags).run(t_end=t_end, dt=1.0e-7)
 diag = result.cathode_diagnostics
 print(json.dumps({
     "provenance": K.PROVENANCE,
@@ -12582,79 +12636,112 @@ print(json.dumps({
     ),
     "requested": bool(K.compiled_kernels_requested()),
     "steps": int(result.steps),
+    "nested_marches": int(_marches[0]),
     "solve_enabled": float(np.min(diag["solve_enabled"])),
     "has_solution": float(np.min(diag["has_solution"])),
     "beam_csda_active": float(np.max(diag["beam_csda_active"])),
+    "coverage_fraction": (
+        None if "coverage_fraction" not in diag
+        else float(diag["coverage_fraction"][-1])
+    ),
     "I_tot": float(diag["source_I_tot"][-1]),
     "phi_c": float(diag["source_phi_c"][-1]),
     "y": np.ascontiguousarray(result.y[-1], dtype=float).tobytes().hex(),
 }))
 '''
+        _ck_expected_steps = {"meanfield": 20, "coverage": 10}
         _ck_results = {}
         with tempfile.TemporaryDirectory() as _ck_tmpdir:
             _ck_script = Path(_ck_tmpdir) / "compiled_equivalence_child.py"
             _ck_script.write_text(_ck_child_source)
-            for _ck_tag, _ck_optin in (("pure", None), ("compiled", "1")):
-                # Inherit the environment (PYTHONPATH decides WHICH checkout
-                # the child imports) and override only the opt-in.
-                _ck_env = dict(os.environ)
-                if _ck_optin is None:
-                    _ck_env.pop(_kernel_selector.ENV_VAR, None)
-                else:
-                    _ck_env[_kernel_selector.ENV_VAR] = _ck_optin
-                _ck_proc = subprocess.run(
-                    [sys.executable, str(_ck_script)],
-                    env=_ck_env,
-                    capture_output=True,
-                    text=True,
+            for _ck_scenario in ("meanfield", "coverage"):
+                for _ck_tag, _ck_optin in (("pure", None), ("compiled", "1")):
+                    # Inherit the environment (PYTHONPATH decides WHICH
+                    # checkout the child imports) and override only the opt-in.
+                    _ck_env = dict(os.environ)
+                    if _ck_optin is None:
+                        _ck_env.pop(_kernel_selector.ENV_VAR, None)
+                    else:
+                        _ck_env[_kernel_selector.ENV_VAR] = _ck_optin
+                    _ck_proc = subprocess.run(
+                        [sys.executable, str(_ck_script), _ck_scenario],
+                        env=_ck_env,
+                        capture_output=True,
+                        text=True,
+                    )
+                    assert _ck_proc.returncode == 0, (
+                        _ck_scenario,
+                        _ck_tag,
+                        _ck_proc.returncode,
+                        _ck_proc.stderr[-2000:],
+                    )
+                    # Warnings go to stderr; the JSON is the last stdout line.
+                    _ck_results[_ck_scenario, _ck_tag] = json.loads(
+                        _ck_proc.stdout.strip().splitlines()[-1]
+                    )
+        for _ck_scenario in ("meanfield", "coverage"):
+            _ck_pure = _ck_results[_ck_scenario, "pure"]
+            _ck_compiled = _ck_results[_ck_scenario, "compiled"]
+            # Each child really took the path it was asked for -- an opt-in
+            # that silently ran pure would make the comparison meaningless.
+            assert _ck_pure["requested"] is False, _ck_pure
+            assert _ck_pure["kernel_id"] is None, _ck_pure
+            assert _ck_pure["provenance"] == _kernel_selector.PURE_PROVENANCE, (
+                _ck_pure
+            )
+            assert _ck_compiled["requested"] is True, _ck_compiled
+            assert _ck_compiled["kernel_id"] == _ck_expected_kernel_id, (
+                _ck_compiled
+            )
+            assert _ck_compiled["provenance"] == _ck_expected_kernel_id, (
+                _ck_compiled
+            )
+            # ...and the kernels were actually exercised. Without this the
+            # state comparison could pass vacuously on a run that never solved.
+            for _ck_tag, _ck_res in (
+                ("pure", _ck_pure), ("compiled", _ck_compiled)
+            ):
+                assert _ck_res["steps"] == _ck_expected_steps[_ck_scenario], (
+                    _ck_scenario, _ck_tag, _ck_res["steps"]
                 )
-                assert _ck_proc.returncode == 0, (
-                    _ck_tag,
-                    _ck_proc.returncode,
-                    _ck_proc.stderr[-2000:],
+                assert _ck_res["solve_enabled"] == 1.0, (_ck_scenario, _ck_tag)
+                assert _ck_res["has_solution"] == 1.0, (_ck_scenario, _ck_tag)
+                assert _ck_res["beam_csda_active"] == 1.0, (
+                    _ck_scenario, _ck_tag
                 )
-                # Warnings go to stderr; the JSON is the last stdout line.
-                _ck_results[_ck_tag] = json.loads(
-                    _ck_proc.stdout.strip().splitlines()[-1]
-                )
-        _ck_pure = _ck_results["pure"]
-        _ck_compiled = _ck_results["compiled"]
-        # Each child really took the path it was asked for -- an opt-in that
-        # silently ran pure would make the comparison meaningless.
-        assert _ck_pure["requested"] is False, _ck_pure
-        assert _ck_pure["kernel_id"] is None, _ck_pure
-        assert _ck_pure["provenance"] == _kernel_selector.PURE_PROVENANCE, (
-            _ck_pure
-        )
-        assert _ck_compiled["requested"] is True, _ck_compiled
-        assert _ck_compiled["kernel_id"] == _ck_expected_kernel_id, _ck_compiled
-        assert _ck_compiled["provenance"] == _ck_expected_kernel_id, (
-            _ck_compiled
-        )
-        # ...and the kernels were actually exercised. Without this the state
-        # comparison could pass vacuously on a run that never solved.
-        for _ck_tag, _ck_res in _ck_results.items():
-            assert _ck_res["steps"] == 20, (_ck_tag, _ck_res["steps"])
-            assert _ck_res["solve_enabled"] == 1.0, _ck_tag
-            assert _ck_res["has_solution"] == 1.0, _ck_tag
-            assert _ck_res["beam_csda_active"] == 1.0, _ck_tag
-        # Bit-identical, not merely close: the compiled path is a faithful
-        # transcription, so the raw state bytes must match exactly -- the
-        # same standard the golden holds on the compiled path.
-        assert _ck_compiled["y"] == _ck_pure["y"], (
-            "compiled and pure solver states differ at the bit level"
-        )
-        assert _ck_compiled["I_tot"] == _ck_pure["I_tot"], (
-            _ck_compiled["I_tot"], _ck_pure["I_tot"]
-        )
-        assert _ck_compiled["phi_c"] == _ck_pure["phi_c"], (
-            _ck_compiled["phi_c"], _ck_pure["phi_c"]
-        )
-        print(
-            "compiled-kernel equivalence: ok "
-            f"({_ck_compiled['provenance']}, {_ck_pure['steps']} steps, "
-            "final state bit-identical)"
-        )
+                if _ck_scenario == "coverage":
+                    # The closure was really on, and the nested single-medium
+                    # marches -- the ONLY place the compiled march can be
+                    # reached under coverage -- really ran.
+                    assert _ck_res["coverage_fraction"] is not None, (
+                        _ck_scenario, _ck_tag
+                    )
+                    assert _ck_res["nested_marches"] > 0, (
+                        _ck_scenario, _ck_tag, _ck_res["nested_marches"]
+                    )
+            # Bit-identical, not merely close: the compiled path is a faithful
+            # transcription, so the raw state bytes must match exactly -- the
+            # same standard the golden holds on the compiled path.
+            assert _ck_compiled["y"] == _ck_pure["y"], (
+                f"compiled and pure solver states differ at the bit level "
+                f"({_ck_scenario})"
+            )
+            assert _ck_compiled["I_tot"] == _ck_pure["I_tot"], (
+                _ck_scenario, _ck_compiled["I_tot"], _ck_pure["I_tot"]
+            )
+            assert _ck_compiled["phi_c"] == _ck_pure["phi_c"], (
+                _ck_scenario, _ck_compiled["phi_c"], _ck_pure["phi_c"]
+            )
+            assert (
+                _ck_compiled["coverage_fraction"]
+                == _ck_pure["coverage_fraction"]
+            ), (_ck_scenario, _ck_compiled["coverage_fraction"])
+            print(
+                f"compiled-kernel equivalence [{_ck_scenario}]: ok "
+                f"({_ck_compiled['provenance']}, {_ck_pure['steps']} steps, "
+                f"{_ck_pure['nested_marches']} nested marches, "
+                "final state bit-identical)"
+            )
 
     # ---- dt_min lock: honest labeling, census, loud failure ----------------
     # Regression pins for the 2026-08-05 change. The clamp to dt_min used to
@@ -12995,18 +13082,24 @@ print(json.dumps({
         assert "requires neutral_model='moment'" in str(error)
     else:
         raise AssertionError("coverage_closure accepted a kinetic neutral model")
-    # The compiled kernels carry a transcription of the very deposition the
-    # closure concentrates, and it has never been bit-compared under coverage.
+    # POSITIVE CONSTRUCTION under the compiled opt-in. v1 REFUSED
+    # CABLP_COMPILED_KERNELS=1 here, on the belief that the closure's beam
+    # split ran on transcribed arithmetic nobody had bit-compared under
+    # coverage. The belief was wrong about what the opt-in reaches -- the
+    # compiled march is bound inside ``deposit_beam`` alone, and
+    # ``deposit_beam_two_stream`` has no compiled branch -- so the refusal was
+    # lifted and bit-identity took its place: the compiled-kernel equivalence
+    # block above runs a beam-live coverage arm on BOTH paths and asserts the
+    # raw state bytes match. This case is the construction-side half of that
+    # pair, and it fails loudly if a refusal is ever reinstated without the
+    # equivalence evidence being revisited.
     _cov_env_prev = os.environ.get("CABLP_COMPILED_KERNELS")
     os.environ["CABLP_COMPILED_KERNELS"] = "1"
     try:
-        LAPDSim1D(
+        _cov_optin_sim = LAPDSim1D(
             *_coverage_config("csda", coverage_initial_fraction=0.3)
         )
-    except ValueError as error:
-        assert "refuses the compiled kernels" in str(error)
-    else:
-        raise AssertionError("coverage_closure accepted the compiled kernels")
+        assert _cov_optin_sim._coverage is not None
     finally:
         if _cov_env_prev is None:
             del os.environ["CABLP_COMPILED_KERNELS"]

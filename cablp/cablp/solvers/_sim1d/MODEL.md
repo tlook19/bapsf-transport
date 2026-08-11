@@ -864,7 +864,21 @@ coverage: $f_\text{cov}(z)$ cells are independent, and patch spreading in $z$
 enters only through the deposition profile that drives them. The closure
 requires `neutral_model="moment"` (the kinetic arms take over the fluid $n_n$
 rows once engaged, so the column would never deplete and the backfill would be
-a silent no-op) and refuses the
-compiled kernels while it is on (the beam deposition it concentrates has a
-compiled transcription that the closure does not touch and that has never been
-bit-compared under coverage). All are construction-time `ValueError`s.
+a silent no-op). All are construction-time `ValueError`s.
+
+**The compiled kernels are permitted under coverage.** v1 refused
+`CABLP_COMPILED_KERNELS=1` while the closure was on. That refusal was written
+against a belief about what the opt-in reaches, and the belief was wrong: the
+compiled CSDA march is bound only inside `deposit_beam`, the SINGLE-MEDIUM
+ray. `deposit_beam_two_stream` -- the closure's own two-medium wrapper, its
+per-cell re-split, its flux/energy re-mix and every one of its banking
+arrays -- has no compiled branch and runs in pure Python whether the opt-in is
+set or not. What the flag actually accelerates under coverage is (i) the
+nested single-medium walker marches the two-stream wrapper issues, which are
+exactly the ray shape the `tierA+csda` transcription was bit-verified over,
+and (ii) the tier-A cathode kernels, which the closure does not touch at all.
+Both were measured raw-uint64 IDENTICAL over coverage trajectories (tail-walk
+and ionizing-tail arms, flat and $z$-varying $f_\text{cov}$ seeds) before the
+refusal was lifted, and bit-identity is now the standing guard in its place:
+the smoke suite runs a beam-live coverage arm on both paths and asserts the
+raw state bytes match.
