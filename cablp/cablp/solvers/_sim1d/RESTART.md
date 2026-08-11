@@ -158,7 +158,7 @@ an approximation — there is nothing there.
 | `_current_trigger_samples` | `solver.py:6364` | CARRIED |
 | `_t_ignition_abort` | `solver.py:6384` | CARRIED |
 | `_ignition_abort_reason` | `solver.py:6385` | CARRIED |
-| `_ignition_abort_context` | `solver.py:6386` | CARRIED |
+| `_ignition_abort_context` | `solver.py:6386` | DROPPED — rebuilt diagnostic |
 | `_ignition_abort_threshold_name` | `solver.py:6457` | CARRIED |
 | `_run_start_for_phase_events` | `solver.py:4006` | CARRIED (diagnostic) |
 
@@ -172,19 +172,37 @@ place breakdown at a different instant.
 It is carried so a resumed run reports events from the original origin rather
 than from the restart instant; it does not affect stepping.
 
+`_ignition_abort_context` is the one member of this table that is DROPPED, and
+deliberately so. It is absent from `_RESTART_TRIGGER_ATTRS` (`solver.py:3855`)
+and `_apply_restart_payload` then sets it to `None` outright
+(`solver.py:4039`), with the reason stated in the comment above that line: the
+context is a diagnostic record of a switch-open that has *already* happened,
+while the abort reason, time and threshold name — all three carried — are what
+the wind-down reads, and the context is rebuilt by the next guard evaluation.
+Carrying it would restore a snapshot of guard internals that the next
+evaluation overwrites anyway.
+
 ### Ignition stall monitor
 
 | state | site | class |
 |---|---|---|
 | `IgnitionMonitor._samples` ring buffer | `ignition.py:244` via `solver.py:6951` | CARRIED |
 | `IgnitionMonitor._stalled` latch | `ignition.py:255` | CARRIED |
-| `_last_ignition_record` | `solver.py:6988` | CARRIED |
+| `_last_ignition_record` | `solver.py:6988` | DROPPED — rebuilt diagnostic |
 | `window_s`, `rate_window_s`, `min_samples` | construction | DERIVABLE |
 
 Not diagnostic: a trip calls `_open_ignition_switch` (`solver.py:6989`), which
 sets `_t_ignition_abort` and shortens `t_end`. The buffer is fed once per
 trajectory save, so it is coupled to the save lattice the run-loop block below
 preserves.
+
+`_last_ignition_record` is the exception and is DROPPED, alongside
+`_ignition_abort_context` and for the same reason: `_apply_restart_payload`
+resets it to `None` (`solver.py:4040`). It holds the most recent monitor
+*report*, rebuilt in full at the next monitor evaluation (`solver.py:7310`)
+from the ring buffer and the RHS terms; its only readers assemble abort
+artifacts (`solver.py:6760`, `6816`). The latch and the samples, which do decide
+whether a trip fires, are carried above.
 
 ### Electrode sample EMA
 
@@ -240,8 +258,9 @@ attribute to grep for.
 `previous_accepted_dt` is the dt-growth ramp's anchor: without it the first
 step after a restart is not growth-capped and takes whatever the physics bound
 allows, which changes that step's dt and every subsequent one.
-`dt_growth_capped_streak` is the recovery hysteresis (`solver.py:4209-4218`),
-asymmetric by design and therefore not reconstructible from the state.
+`dt_growth_capped_streak` is the recovery hysteresis (the streak-update block in
+`run()`, `solver.py:4519-4528`), asymmetric by design and therefore not
+reconstructible from the state.
 
 `ignition_wall_clock_start` is DROPPED because wall clock is a property of the
 process, not of the trajectory. A two-stage run genuinely gets two wall-clock
@@ -336,7 +355,9 @@ Members whose carry is **inert at the shipped defaults** — real, carried, but
 which a default-configured acceptance run cannot distinguish from dropping:
 
 * `dt_growth_capped_streak`, unless `dt_growth_recovery_patience > 0`
-  (default `0` presence-gates the whole branch at `solver.py:4209`). The
+  (default `0` presence-gates the whole branch in `run()`: neither the
+  widened-ceiling read at `solver.py:4448` nor the streak update at
+  `solver.py:4519` runs). The
   acceptance harness raises it so the carry is exercised.
 * `_cathode_x0`, whose consequence the d1a probe measured at exactly zero over
   a 3300x seed span. Carried regardless: the fixed point is a property of the

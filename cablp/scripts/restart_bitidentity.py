@@ -208,14 +208,14 @@ INERT_EXPECTATIONS = {
         "point is a property of this stance, not a guarantee",
     ("meanfield_beam", "run_loop.dt_growth_capped_streak"):
         "dt_growth_recovery_patience is 0 here, which presence-gates the "
-        "recovery branch off entirely (solver.py:4209) -- the streak cannot "
-        "matter when nothing reads it; meanfield runs at patience 3 and its "
-        "control does break identity",
+        "recovery branch off entirely (run(), solver.py:4448) -- the streak "
+        "cannot matter when nothing reads it; meanfield runs at patience 3 "
+        "and its control does break identity",
     ("coverage", "run_loop.dt_growth_capped_streak"):
         "dt_growth_recovery_patience is 0 here, which presence-gates the "
-        "recovery branch off entirely (solver.py:4209) -- the streak cannot "
-        "matter when nothing reads it; meanfield runs at patience 3 and its "
-        "control does break identity",
+        "recovery branch off entirely (run(), solver.py:4448) -- the streak "
+        "cannot matter when nothing reads it; meanfield runs at patience 3 "
+        "and its control does break identity",
     ("meanfield", "cathode._cathode_beam_cross"):
         "beam_atten_cross is identically zero until the sheath potential "
         "crosses the ionization threshold (~2e-4 s), so there is nothing to "

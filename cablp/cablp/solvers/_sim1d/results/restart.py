@@ -13,7 +13,6 @@ and a run result answer different questions and version separately.
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import h5py
 import numpy as np
