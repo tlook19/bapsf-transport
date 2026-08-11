@@ -1565,39 +1565,6 @@ class LAPDSim1D:
                 "neutral model the column would never deplete and the "
                 "backfill would be a silent no-op"
             )
-        walks = [
-            f"{key}={value!r}"
-            for key, value, off in (
-                (
-                    "beam_product_transport",
-                    str(self._input_dict.get("beam_product_transport", "local")),
-                    "local",
-                ),
-                (
-                    "heating_anomalous_transport",
-                    str(
-                        self._input_dict.get(
-                            "heating_anomalous_transport", "local"
-                        )
-                    ),
-                    "local",
-                ),
-            )
-            if value != off
-        ]
-        if walks:
-            raise ValueError(
-                f"coverage_closure is incompatible with {sorted(walks)}: the "
-                "closure marches ONE fused two-stream ray whose flux re-splits "
-                "between the covered and reservoir media at every cell, and "
-                "those closures withhold their banks during the march and walk "
-                "them afterwards on a single medium's stopping coefficient. "
-                "There is one post-march walk stage and two media, and the "
-                "reservoir's n_e is smaller than the channel's by f_cov, so "
-                "walking reservoir-born products on the channel's stopping "
-                "power would silently misattribute where they thermalize. "
-                "Disable one"
-            )
         if compiled_kernels_requested():
             raise ValueError(
                 "coverage_closure refuses the compiled kernels "

@@ -1189,6 +1189,19 @@ def _csda_beam_deposition(
     ``_ray_gap_breakout`` and the item-35 tripwire are unaffected -- both read
     ``transmitted_flux`` and ``E_entry_eV``, which are primary-flux
     quantities the walks never touch.
+
+    Under the coverage closure the same keywords reach the TWO-STREAM march,
+    whose one post-march walk stage runs on the MEAN plasma state: the hoisted
+    ``stopping_coefficient`` is built on the mean ``n`` rather than on the
+    channel view the rays march through, and without a coverage view those are
+    the same array. Under ``heating_anomalous_tail_ionization="on"`` the
+    walkers are marched rather than integrated in closed form, so the mean
+    medium itself (``nn_mean``, ``ne_mean``) goes with them, and their per-cell
+    ionization is attributed between the covered column and the reservoir by
+    the same decorrelation partition -- which the two-stream march expresses by
+    banking those events into the two ARMS with weights ``f_cov`` and
+    ``1 - f_cov``, so the reservoir debit this module already publishes carries
+    the split with no extra plumbing.
     """
     coulomb_model = str(input_dict.get("beam_coulomb_model", "fast_electron"))
     anomalous_model = str(input_dict.get("beam_anomalous_model", "none"))
@@ -1298,26 +1311,22 @@ def _csda_beam_deposition(
         # deposition ray in this call: both cathode ends under TwinCathode,
         # both halves of the clumping split (which varies nn alone), and every
         # energy group a future WP-F build adds. Build it once here rather than
-        # once per ray. Bit-exact: it is the module's own function on the same
-        # inputs, and it is presence-gated behind an active walk closure, so a
-        # default-stance run never reaches this line.
+        # once per ray.
+        #
+        # THE WALK RUNS ON THE MEAN STATE, so this is built on the mean ``n``
+        # and NOT on the channel view the rays march through. A walking
+        # product is field-aligned and decorrelates from its birth patch on the
+        # cell scale exactly as the primary does, so its path samples the
+        # channel with probability f_cov and the reservoir with (1 - f_cov):
+        # f_cov*(n/f_cov) + (1-f_cov)*floor is the mean density, and the
+        # concentration cancels. Without a coverage view ``state.n`` IS the
+        # array ``coverage_channel_densities`` returned, so this line is the
+        # identical call on the identical object it always was, which is what
+        # keeps every walk arm without coverage bit-exact.
         transport_kwargs["stopping_coefficient"] = (
             _coulomb_stopping_coefficient(
-                ray_ne, derived.Te, coulomb_model
+                state.n, derived.Te, coulomb_model
             )
-        )
-    # The walk closures do not reach the two-stream march: the solver refuses
-    # coverage_closure together with a non-local product or tail transport at
-    # construction time (a fused march has one post-march walk stage for two
-    # media, and walking reservoir-born products on the channel's stopping
-    # power would be a silent misattribution). Asserted here rather than
-    # assumed, because this function is reachable from the module's own tests.
-    if two_medium and transport_kwargs:
-        raise ValueError(
-            "the coverage closure's two-stream march does not carry the WP-D "
-            "product walk or the WP-E tail walk; the solver refuses that "
-            "combination at construction time and this call bypassed it "
-            f"(active closures: {sorted(transport_kwargs)})"
         )
     # Fractional-coverage beam-neutral closure (default off/uniform, bit-exact):
     # split the ray into a clump fraction (short l_b against nn*chi -> local seed)
@@ -1411,6 +1420,18 @@ def _csda_beam_deposition(
             )
             if anomalous_model != "none":
                 two_stream_kwargs["beam_area_cm2"] = beam_area_cm2
+            # The walk closures reach the two-stream march too, on the same
+            # presence gating as the single-medium ray: the withheld banks are
+            # per-arm per-cell and feed one walk stage that runs on the
+            # mean-state ``stopping_coefficient`` hoisted above.
+            two_stream_kwargs.update(ray_transport)
+            if "tail_ionization" in ray_transport:
+                # The ionizing walkers are MARCHED rather than integrated in
+                # closed form, so they need the mean medium itself and not only
+                # its stopping coefficient. Presence-gated with the channel, so
+                # a run without it passes the argument list it had before.
+                two_stream_kwargs["nn_mean"] = state.nn
+                two_stream_kwargs["ne_mean"] = state.n
         # The gap's per-cell path length, shared by the probe below and by the
         # deposition ray's own breakout test.
         gap_dz = _clip_ray_length(
