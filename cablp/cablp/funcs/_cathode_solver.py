@@ -72,7 +72,7 @@ class DeviceConfig:
     phi_wf  : Work function [eV]; default 3.0 (LaB6)
     C_R     : Richardson constant [A cm⁻² K⁻²]; default 29 (LaB6)
     R_comp  : Compliance resistor [Ω]; default 0.004
-    eta     : Anode area / cathode area; default 0.5
+    eta     : Anode-mesh solid fraction (opacity) [dimensionless]; the share of the anode face its wires occupy, so 1 - eta transmits. It sets the anode's ion collection area (``I_i_a = 2*eta*I_i``, both mesh faces) and the share of the gap-surviving thermionic beam the mesh intercepts (``eta*beam_bypass_fraction``). Valid range [0, 1]; eta = 0 is admissible for the anode's neutral and heat throttles but makes the discharge circuit singular and raises. Default 0.358
     Twin    : Second-cathode flag; when True, solve_beam_system also solves the twin cathode at the far end of the plasma arrays
     L_cath  : Cathode-to-anode distance [cm]; default 50
     R_cath  : Cathode radius [cm]; default 19

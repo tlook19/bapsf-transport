@@ -451,6 +451,40 @@ pitch, rising with anode temperature). A temperature-dependent `R_mesh(T_anode)`
 from an anode power balance was designed and declined; only a constant value is
 implemented.
 
+**`eta = 0.358` — MEASURED (hardware: anode mesh geometry).** Calipers on the
+anode mesh (Tom, 2026-08-11): molybdenum wire diameter `d = 0.64` mm, square
+weave, clear opening `a = 2.58` mm. The solid fraction follows from the
+geometry alone,
+
+    T = (a/(a + d))^2 = (2.58/3.22)^2 = 0.641989,  eta = 1 - T = 0.358011,
+
+i.e. the shipped `0.358` to every digit it quotes.
+
+**The exact match also settles which spacing convention the caliper number
+used, and that check IS the verification.** Read instead as a
+centre-to-centre pitch of 2.58 mm, the same wire gives
+`eta = 1 - ((2.58 - 0.64)/2.58)^2 = 0.434589` — nowhere near the shipped
+value. Only the clear-opening reading reproduces it, so `2.58` mm is the
+OPENING and the pitch is `a + d = 3.22` mm. (Note the `R_mesh_ohm` entry above
+calls 2.58 mm a "pitch"; on this check that wording is the loose one.)
+
+Honest bar **+/- 0.01**, carried almost entirely by wire-DIAMETER variation:
+at a caliper resolution of +/- 0.02 mm, `d` moves eta by `+/- 0.008` and `a`
+by `-/+ 0.002` (opposite in sign, and the smaller term).
+
+**Spacing NONUNIFORMITY contributes ~zero to the mean, exactly rather than
+approximately.** For straight wires the open-area fraction factorizes,
+`T = (sum of x-openings / L) * (sum of y-openings / L)`, and displacing a wire
+within the plane conserves each sum — every wire blocks exactly its own
+diameter wherever it sits — so the area-averaged transparency is INVARIANT to
+where the wires are. The invariance fails only for wires that touch or overlap
+(visually excluded on this mesh) and for out-of-plane weave at oblique
+incidence, which does not arise here.
+
+The value is geometric and assumes NORMAL INCIDENCE: the magnetized electrons
+follow field lines perpendicular to the mesh plane, so the projected solid
+fraction is the collection fraction, independent of energy and of current.
+
 **`cathode_phi_c_cap_V = 1000.0` V — DERIVED from the atomic data's domain, and
 a numerical REGIME guard.** Both are true of it, and the second is what it is
 usually read as. It is not a device-physics voltage and no measurement of a

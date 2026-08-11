@@ -1221,7 +1221,13 @@ def cathode_defaults():
         reach the loop current. Default ``0.0`` is bit-exact. Must be ``>= 0``.
         Measured bounds: ``config_defaults_provenance.md``.
     eta:
-        Anode-to-cathode area ratio.
+        Anode-mesh solid fraction (opacity) [dimensionless]: the share of the
+        anode face its wires occupy, so ``1 - eta`` transmits. ``eta`` sets the
+        anode's Bohm ion collection area (``2*eta*I_i``, both mesh faces) and
+        the share of the gap-surviving thermionic beam the mesh intercepts;
+        ``1 - eta`` is the face's neutral transparency and the beam's geometric
+        survival. Must lie in ``[0, 1]``. Value and class:
+        ``config_defaults_provenance.md``.
     anode_radius_cm:
         Radius of the anode mesh disc [cm]. ``None`` (default) spans the
         chamber, giving the historical neutral transparency ``1 - eta``. A
