@@ -472,8 +472,8 @@ to is the same He atomic data the standing no-tuning policy protects — raising
 the cap is not a re-choice of a number, it requires cross-section data above
 1000 eV.
 
-What it ALSO bounds is the
-current-driven sheath solve: the bracket ladder doubles `psi_top` looking for a
+What it ALSO bounds — the regime reading — is the current-driven sheath solve:
+the bracket ladder doubles `psi_top` looking for a
 `psi` that carries the imposed current, and this is the ceiling at which that
 search stops and the solve returns the solution AT the cap tagged
 `regime = "capability_limited"` — the well-posed form of the inductive kick,

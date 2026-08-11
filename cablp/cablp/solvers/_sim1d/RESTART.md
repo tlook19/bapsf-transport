@@ -173,12 +173,14 @@ It is carried so a resumed run reports events from the original origin rather
 than from the restart instant; it does not affect stepping.
 
 `_ignition_abort_context` is the one member of this table that is DROPPED, and
-deliberately so: `_apply_restart_payload` sets it to `None` after restoring the
-row above it, with the reason stated in place — the context is a diagnostic
-record of a switch-open that has *already* happened, while the abort reason,
-time and threshold name are what the wind-down actually reads, and the context
-is rebuilt by the next guard evaluation. Carrying it would restore a snapshot of
-guard internals that the next evaluation overwrites anyway.
+deliberately so. It is absent from `_RESTART_TRIGGER_ATTRS` (`solver.py:3855`)
+and `_apply_restart_payload` then sets it to `None` outright
+(`solver.py:4039`), with the reason stated in the comment above that line: the
+context is a diagnostic record of a switch-open that has *already* happened,
+while the abort reason, time and threshold name — all three carried — are what
+the wind-down reads, and the context is rebuilt by the next guard evaluation.
+Carrying it would restore a snapshot of guard internals that the next
+evaluation overwrites anyway.
 
 ### Ignition stall monitor
 
@@ -196,10 +198,11 @@ preserves.
 
 `_last_ignition_record` is the exception and is DROPPED, alongside
 `_ignition_abort_context` and for the same reason: `_apply_restart_payload`
-resets it to `None`. It holds the most recent monitor *report* — a rebuilt
-diagnostic, re-populated at the next save from the ring buffer that IS carried
-— and nothing in the stepping path reads it. The latch and the samples, which
-do decide whether a trip fires, are carried above.
+resets it to `None` (`solver.py:4040`). It holds the most recent monitor
+*report*, rebuilt in full at the next monitor evaluation (`solver.py:7310`)
+from the ring buffer and the RHS terms; its only readers assemble abort
+artifacts (`solver.py:6760`, `6816`). The latch and the samples, which do decide
+whether a trip fires, are carried above.
 
 ### Electrode sample EMA
 
