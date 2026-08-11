@@ -732,8 +732,10 @@ $B_\text{res}$. The walk itself still runs on the mean medium, the births are
 still booked to the mean fields under the interpretation caveat recorded above,
 and the two misattribution bounds carry over unchanged -- they are statements
 about this same sampling argument, not separate approximations. The walker's
-energy rows are split by the same weights, which leaves their sum, the only
-thing any consumer reads, exactly where it shipped.
+energy rows are NOT split by those weights: the walk ran ONCE on the mean state
+for both arms' births, so its end ledgers and tail-power scalars are booked
+WHOLE to the channel arm with the reservoir arm carrying $0$ -- which likewise
+leaves their sum, the only thing any consumer reads, exactly where it shipped.
 
 **Where the concentration factors go.** The rule is that a factor appears only
 where it does not cancel. A volumetric rate that is bilinear in a plasma and a
