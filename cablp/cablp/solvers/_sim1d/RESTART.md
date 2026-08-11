@@ -211,11 +211,13 @@ Accumulator; appears in the result. No feedback into the state.
 
 | state | site | class |
 |---|---|---|
-| `_picard_extra_solves` | `solver.py:3846` | CARRIED |
-| `_picard_triggered_steps` | `solver.py:3859` | CARRIED |
+| `_picard_extra_solves` | `solver.py:3846` | DROPPED |
+| `_picard_triggered_steps` | `solver.py:3859` | DROPPED |
 
-Counters only; carried because they are cheap and a consumer reading them
-across a two-stage run should see the total.
+Counters only, read nowhere in the solver, and — decisively — they exist only
+when `coupled_circuit_picard` is on (`solver.py:811-812` sits inside that
+branch), so carrying them unconditionally would make the payload's own shape
+depend on a non-structural flag. Each stage counts its own.
 
 ### Run-loop controller state (LOCAL to `run()`, not instance attributes)
 
@@ -291,6 +293,38 @@ Each raises `ValueError` at construction when combined with `restart_from`.
 They are refusals, not partial loads: the alternative — carrying the fluid
 state and silently reseeding a kinetic distribution — would produce a run that
 looks like a continuation and is not one.
+
+## What "bit-identical" does and does not promise
+
+A restart reproduces, exactly, the continuation of **the step sequence stage 1
+actually took**. It reproduces an unsplit run's frames when — and only when —
+the handoff instant is one the unsplit run also steps to exactly.
+
+That is not a limitation in practice: every save instant IS a step boundary,
+because `next_save_time_after` caps the adaptive step to land on it
+(`solver.py:4170-4177`), and an export is naturally taken at the end of a
+stage. It does matter to anyone comparing a split run against an unsplit one,
+because the save lattice is **accumulated** (`next = t_last_save + dt_save`)
+and therefore carries float drift: at `dt_save = 1e-4` the third save lands on
+`3.0000000000000003e-04`, not `3e-04`. Stopping stage 1 at the nominal `3e-04`
+stops it one ulp before any instant the unsplit run visits, which re-phases
+every later save and compares different instants. `scripts/restart_bitidentity.py`
+snaps its split point onto the exact float of an unsplit save for this reason,
+and says so when it does.
+
+Members whose carry is **inert at the shipped defaults** — real, carried, but
+which a default-configured acceptance run cannot distinguish from dropping:
+
+* `dt_growth_capped_streak`, unless `dt_growth_recovery_patience > 0`
+  (default `0` presence-gates the whole branch at `solver.py:4209`). The
+  acceptance harness raises it so the carry is exercised.
+* `_cathode_x0`, whose consequence the d1a probe measured at exactly zero over
+  a 3300x seed span. Carried regardless: the fixed point is a property of the
+  current stance, not a guarantee.
+* `_cathode_beam_cross`, which is identically zero until the sheath potential
+  crosses the ionization threshold — roughly `2e-4 s` into the production
+  stance. An acceptance window shorter than that cannot test it, which is why
+  both harness scenarios hand off in the beam-live regime instead.
 
 ## Compatibility refusal
 

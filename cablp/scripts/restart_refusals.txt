@@ -1,0 +1,28 @@
+reference payload written at t=4.000000000e-06 s
+
+[RAISED ValueError] missing payload file
+    restart_from points at a missing file: /var/folders/f_/5mm8drhn4xx8gvrr3dvx5x1m0000gn/T/tmpdcxuwygj/absent.h5
+
+[RAISED ValueError] foreign file format
+    unsupported sim1d restart payload format 'sim1d-hdf5-v1'; expected 'sim1d-restart-v1' (file: /var/folders/f_/5mm8drhn4xx8gvrr3dvx5x1m0000gn/T/tmpdcxuwygj/foreign.h5)
+
+[RAISED ValueError] grid change (nx 24 -> 30)
+    restart payload is incompatible with this LAPDSim1D configuration (/var/folders/f_/5mm8drhn4xx8gvrr3dvx5x1m0000gn/T/tmpdcxuwygj/good.restart.h5); a restart may change any config key EXCEPT the grid, the packed state layout, and the structural keys listed in results/restart.py. Mi
+
+[RAISED ValueError] structural param (phase_transition_mode)
+    restart payload is incompatible with this LAPDSim1D configuration (/var/folders/f_/5mm8drhn4xx8gvrr3dvx5x1m0000gn/T/tmpdcxuwygj/good.restart.h5); a restart may change any config key EXCEPT the grid, the packed state layout, and the structural keys listed in results/restart.py. Mi
+
+[RAISED ValueError] structural flag (coverage_closure)
+    restart payload is incompatible with this LAPDSim1D configuration (/var/folders/f_/5mm8drhn4xx8gvrr3dvx5x1m0000gn/T/tmpdcxuwygj/good.restart.h5); a restart may change any config key EXCEPT the grid, the packed state layout, and the structural keys listed in results/restart.py. Mi
+
+[RAISED ValueError] neutral_equilibration would overwrite the restored IC
+    restart_from cannot be combined with neutral_equilibration: start_simulation() would run the puff/off accumulation and OVERWRITE the restored state. A restart payload IS the neutral seed. Clear the flag on the resuming run.
+
+[RAISED ValueError] kinetic neutral_model (distribution not carried)
+    restart_from cannot be combined with neutral_model='kinetic_dvm': that arm evolves a velocity distribution which the sim1d-restart-v1 payload does not carry, so resuming would silently reseed the kinetic half from a Maxwellian and the run would not be a continuation. Accepted neu
+
+[LOADED] non-structural change (tau_discharge) accepted, and the clock round-trips exactly (t=4.000000000e-06 s)
+
+[OFF PATH] restart_from unset: no resume state, clock at 0.0
+
+OVERALL: PASS -- every misconfiguration raises at construction, the accepted case loads, and the off path is untouched

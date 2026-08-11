@@ -1,0 +1,184 @@
+
+===== scenario meanfield: t_mid=4e-06 s, t_end=8e-06 s, NEGATIVE CONTROL cathode._cathode_beam_cross =====
+unsplit: 18 accepted steps, 5 saved frames
+  step caps: {'dt_growth': 12, 'save_time': 3, 'surface_loss': 2, 't_end': 1}
+  steps per save: 18/5
+  engaged: dt_growth bound 12 step(s)
+  engaged: beam TURN-ON inside the window
+stage 1: 10 accepted steps, 3 saved frames -> restart_bitidentity_meanfield.restart.h5
+  perturbed dataset cathode/_cathode_beam_cross
+stage 2: 8 accepted steps, 2 saved frames
+frames at/<= t_mid: 3; frames after t_mid (THE GATE): 2
+frames compared (whole window, raw uint64): 5
+  RESULT: FAIL (control) -- corrupting cathode._cathode_beam_cross changed NOTHING; the gate does not test this member
+
+===== scenario meanfield: t_mid=4e-06 s, t_end=8e-06 s, NEGATIVE CONTROL cathode._cathode_x0 =====
+unsplit: 18 accepted steps, 5 saved frames
+  step caps: {'dt_growth': 12, 'save_time': 3, 'surface_loss': 2, 't_end': 1}
+  steps per save: 18/5
+  engaged: dt_growth bound 12 step(s)
+  engaged: beam TURN-ON inside the window
+stage 1: 10 accepted steps, 3 saved frames -> restart_bitidentity_meanfield.restart.h5
+  perturbed attr cathode/_cathode_x0: 1000.9661890135986 -> 1000.9662891102176
+stage 2: 8 accepted steps, 2 saved frames
+frames at/<= t_mid: 3; frames after t_mid (THE GATE): 2
+frames compared (whole window, raw uint64): 5
+  RESULT: FAIL (control) -- corrupting cathode._cathode_x0 changed NOTHING; the gate does not test this member
+
+===== scenario meanfield: t_mid=4e-06 s, t_end=8e-06 s, NEGATIVE CONTROL circuit.V_dis_prev_save_integral =====
+unsplit: 18 accepted steps, 5 saved frames
+  step caps: {'dt_growth': 12, 'save_time': 3, 'surface_loss': 2, 't_end': 1}
+  steps per save: 18/5
+  engaged: dt_growth bound 12 step(s)
+  engaged: beam TURN-ON inside the window
+stage 1: 10 accepted steps, 3 saved frames -> restart_bitidentity_meanfield.restart.h5
+  perturbed attr circuit/V_dis_prev_save_integral: 0.0006436964002165377 -> 0.0006436964645861777
+stage 2: 8 accepted steps, 2 saved frames
+frames at/<= t_mid: 3; frames after t_mid (THE GATE): 2
+frames compared (whole window, raw uint64): 5
+  RESULT: PASS (control) -- corrupting circuit.V_dis_prev_save_integral broke identity in 1 place(s), e.g. meanfield t=6.000000000000e-06: diag:circuit_V_dis_step differs in 1/1 uint64 words
+
+===== scenario meanfield: t_mid=4e-06 s, t_end=8e-06 s, NEGATIVE CONTROL circuit._circuit_I_loop =====
+unsplit: 18 accepted steps, 5 saved frames
+  step caps: {'dt_growth': 12, 'save_time': 3, 'surface_loss': 2, 't_end': 1}
+  steps per save: 18/5
+  engaged: dt_growth bound 12 step(s)
+  engaged: beam TURN-ON inside the window
+stage 1: 10 accepted steps, 3 saved frames -> restart_bitidentity_meanfield.restart.h5
+  perturbed attr circuit/_circuit_I_loop: 9.397780797702453 -> 9.397781737480534
+stage 2: 8 accepted steps, 2 saved frames
+frames at/<= t_mid: 3; frames after t_mid (THE GATE): 2
+frames compared (whole window, raw uint64): 5
+  RESULT: PASS (control) -- corrupting circuit._circuit_I_loop broke identity in 6 place(s), e.g. meanfield t=6.000000000000e-06: diag:circuit_I_loop differs in 1/1 uint64 words
+
+===== scenario meanfield: t_mid=4e-06 s, t_end=8e-06 s, NEGATIVE CONTROL coverage.deficit =====
+unsplit: 18 accepted steps, 5 saved frames
+  step caps: {'dt_growth': 12, 'save_time': 3, 'surface_loss': 2, 't_end': 1}
+  steps per save: 18/5
+  engaged: dt_growth bound 12 step(s)
+  engaged: beam TURN-ON inside the window
+stage 1: 10 accepted steps, 3 saved frames -> restart_bitidentity_meanfield.restart.h5
+  coverage/deficit absent in this scenario; control skipped
+
+===== scenario meanfield: t_mid=4e-06 s, t_end=8e-06 s, NEGATIVE CONTROL coverage.f =====
+unsplit: 18 accepted steps, 5 saved frames
+  step caps: {'dt_growth': 12, 'save_time': 3, 'surface_loss': 2, 't_end': 1}
+  steps per save: 18/5
+  engaged: dt_growth bound 12 step(s)
+  engaged: beam TURN-ON inside the window
+stage 1: 10 accepted steps, 3 saved frames -> restart_bitidentity_meanfield.restart.h5
+  coverage/f absent in this scenario; control skipped
+
+===== scenario meanfield: t_mid=4e-06 s, t_end=8e-06 s, NEGATIVE CONTROL run_loop.dt_growth_capped_streak =====
+unsplit: 18 accepted steps, 5 saved frames
+  step caps: {'dt_growth': 12, 'save_time': 3, 'surface_loss': 2, 't_end': 1}
+  steps per save: 18/5
+  engaged: dt_growth bound 12 step(s)
+  engaged: beam TURN-ON inside the window
+stage 1: 10 accepted steps, 3 saved frames -> restart_bitidentity_meanfield.restart.h5
+  perturbed attr run_loop/dt_growth_capped_streak__int: 0 -> 64
+stage 2: 5 accepted steps, 2 saved frames
+  STEP COUNT MISMATCH: 10+5 != 18
+frames at/<= t_mid: 3; frames after t_mid (THE GATE): 2
+frames compared (whole window, raw uint64): 5
+  RESULT: PASS (control) -- corrupting run_loop.dt_growth_capped_streak broke identity in 130 place(s), e.g. meanfield t=6.000000000000e-06: Ee differs in 30/31 uint64 words
+
+===== scenario meanfield: t_mid=4e-06 s, t_end=8e-06 s, NEGATIVE CONTROL run_loop.previous_accepted_dt =====
+unsplit: 18 accepted steps, 5 saved frames
+  step caps: {'dt_growth': 12, 'save_time': 3, 'surface_loss': 2, 't_end': 1}
+  steps per save: 18/5
+  engaged: dt_growth bound 12 step(s)
+  engaged: beam TURN-ON inside the window
+stage 1: 10 accepted steps, 3 saved frames -> restart_bitidentity_meanfield.restart.h5
+  perturbed attr run_loop/previous_accepted_dt: 3.497615967555496e-07 -> 3.497616317317093e-07
+stage 2: 8 accepted steps, 2 saved frames
+frames at/<= t_mid: 3; frames after t_mid (THE GATE): 2
+frames compared (whole window, raw uint64): 5
+  RESULT: PASS (control) -- corrupting run_loop.previous_accepted_dt broke identity in 123 place(s), e.g. meanfield t=6.000000000000e-06: Ee differs in 30/31 uint64 words
+
+===== scenario meanfield: t_mid=4e-06 s, t_end=8e-06 s, NEGATIVE CONTROL run_loop.t_last_save =====
+unsplit: 18 accepted steps, 5 saved frames
+  step caps: {'dt_growth': 12, 'save_time': 3, 'surface_loss': 2, 't_end': 1}
+  steps per save: 18/5
+  engaged: dt_growth bound 12 step(s)
+  engaged: beam TURN-ON inside the window
+stage 1: 10 accepted steps, 3 saved frames -> restart_bitidentity_meanfield.restart.h5
+  perturbed attr run_loop/t_last_save: 4e-06 -> 4.0000004e-06
+stage 2: 8 accepted steps, 2 saved frames
+frames at/<= t_mid: 3; frames after t_mid (THE GATE): 2
+frames compared (whole window, raw uint64): 4
+  RESULT: PASS (control) -- corrupting run_loop.t_last_save broke identity in 65 place(s), e.g. meanfield: split run has no frame at t=6e-06
+
+===== scenario meanfield_beam: t_mid=0.0003 s, t_end=0.0005 s, NEGATIVE CONTROL cathode._cathode_beam_cross =====
+unsplit: 1109 accepted steps, 6 saved frames
+  step caps: {'dt_growth': 17, 'plasma_cfl': 7, 'save_time': 4, 'surface_loss': 1080, 't_end': 1}
+  steps per save: 1109/6
+  engaged: dt_growth bound 17 step(s)
+  engaged: beam TURN-ON inside the window
+  split point snapped 0.0003 -> 0.00030000000000000003 (exact float of an unsplit save instant)
+stage 1: 937 accepted steps, 4 saved frames -> restart_bitidentity_meanfield_beam.restart.h5
+  perturbed dataset cathode/_cathode_beam_cross
+stage 2: 172 accepted steps, 2 saved frames
+frames at/<= t_mid: 4; frames after t_mid (THE GATE): 2
+frames compared (whole window, raw uint64): 6
+  RESULT: PASS (control) -- corrupting cathode._cathode_beam_cross broke identity in 119 place(s), e.g. meanfield_beam t=4.000000000000e-04: Ee differs in 26/31 uint64 words
+
+===== scenario meanfield_beam: t_mid=0.0003 s, t_end=0.0005 s, NEGATIVE CONTROL cathode._cathode_x0 =====
+unsplit: 1109 accepted steps, 6 saved frames
+  step caps: {'dt_growth': 17, 'plasma_cfl': 7, 'save_time': 4, 'surface_loss': 1080, 't_end': 1}
+  steps per save: 1109/6
+  engaged: dt_growth bound 17 step(s)
+  engaged: beam TURN-ON inside the window
+  split point snapped 0.0003 -> 0.00030000000000000003 (exact float of an unsplit save instant)
+stage 1: 937 accepted steps, 4 saved frames -> restart_bitidentity_meanfield_beam.restart.h5
+  perturbed attr cathode/_cathode_x0: 144.08775446628326 -> 144.0877688750587
+stage 2: 172 accepted steps, 2 saved frames
+frames at/<= t_mid: 4; frames after t_mid (THE GATE): 2
+frames compared (whole window, raw uint64): 6
+  RESULT: FAIL (control) -- corrupting cathode._cathode_x0 changed NOTHING; the gate does not test this member
+
+===== scenario meanfield_beam: t_mid=0.0003 s, t_end=0.0005 s, NEGATIVE CONTROL circuit.V_dis_prev_save_integral =====
+unsplit: 1109 accepted steps, 6 saved frames
+  step caps: {'dt_growth': 17, 'plasma_cfl': 7, 'save_time': 4, 'surface_loss': 1080, 't_end': 1}
+  steps per save: 1109/6
+  engaged: dt_growth bound 17 step(s)
+  engaged: beam TURN-ON inside the window
+  split point snapped 0.0003 -> 0.00030000000000000003 (exact float of an unsplit save instant)
+stage 1: 937 accepted steps, 4 saved frames -> restart_bitidentity_meanfield_beam.restart.h5
+  perturbed attr circuit/V_dis_prev_save_integral: 0.01782222486444389 -> 0.017822226646666377
+stage 2: 172 accepted steps, 2 saved frames
+frames at/<= t_mid: 4; frames after t_mid (THE GATE): 2
+frames compared (whole window, raw uint64): 6
+  RESULT: PASS (control) -- corrupting circuit.V_dis_prev_save_integral broke identity in 1 place(s), e.g. meanfield_beam t=4.000000000000e-04: diag:circuit_V_dis_step differs in 1/1 uint64 words
+
+===== scenario meanfield_beam: t_mid=0.0003 s, t_end=0.0005 s, NEGATIVE CONTROL circuit._circuit_I_loop =====
+unsplit: 1109 accepted steps, 6 saved frames
+  step caps: {'dt_growth': 17, 'plasma_cfl': 7, 'save_time': 4, 'surface_loss': 1080, 't_end': 1}
+  steps per save: 1109/6
+  engaged: dt_growth bound 17 step(s)
+  engaged: beam TURN-ON inside the window
+  split point snapped 0.0003 -> 0.00030000000000000003 (exact float of an unsplit save instant)
+stage 1: 937 accepted steps, 4 saved frames -> restart_bitidentity_meanfield_beam.restart.h5
+  perturbed attr circuit/_circuit_I_loop: 3920.1540693475336 -> 3920.1544613629408
+stage 2: 172 accepted steps, 2 saved frames
+frames at/<= t_mid: 4; frames after t_mid (THE GATE): 2
+frames compared (whole window, raw uint64): 6
+  RESULT: PASS (control) -- corrupting circuit._circuit_I_loop broke identity in 128 place(s), e.g. meanfield_beam t=4.000000000000e-04: Ee differs in 30/31 uint64 words
+
+===== scenario meanfield_beam: t_mid=0.0003 s, t_end=0.0005 s, NEGATIVE CONTROL coverage.deficit =====
+unsplit: 1109 accepted steps, 6 saved frames
+  step caps: {'dt_growth': 17, 'plasma_cfl': 7, 'save_time': 4, 'surface_loss': 1080, 't_end': 1}
+  steps per save: 1109/6
+  engaged: dt_growth bound 17 step(s)
+  engaged: beam TURN-ON inside the window
+  split point snapped 0.0003 -> 0.00030000000000000003 (exact float of an unsplit save instant)
+stage 1: 937 accepted steps, 4 saved frames -> restart_bitidentity_meanfield_beam.restart.h5
+  coverage/deficit absent in this scenario; control skipped
+
+===== scenario meanfield_beam: t_mid=0.0003 s, t_end=0.0005 s, NEGATIVE CONTROL coverage.f =====
+unsplit: 1109 accepted steps, 6 saved frames
+  step caps: {'dt_growth': 17, 'plasma_cfl': 7, 'save_time': 4, 'surface_loss': 1080, 't_end': 1}
+  steps per save: 1109/6
+  engaged: dt_growth bound 17 step(s)
+  engaged: beam TURN-ON inside the window
+  split point snapped 0.0003 -> 0.00030000000000000003 (exact float of an unsplit save instant)

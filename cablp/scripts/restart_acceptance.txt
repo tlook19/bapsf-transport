@@ -1,0 +1,41 @@
+
+===== scenario meanfield: t_mid=4e-06 s, t_end=8e-06 s =====
+unsplit: 18 accepted steps, 5 saved frames
+  step caps: {'dt_growth': 12, 'save_time': 3, 'surface_loss': 2, 't_end': 1}
+  steps per save: 18/5
+  engaged: dt_growth bound 12 step(s)
+  engaged: beam TURN-ON inside the window
+stage 1: 10 accepted steps, 3 saved frames -> restart_bitidentity_meanfield.restart.h5
+stage 2: 8 accepted steps, 2 saved frames
+frames at/<= t_mid: 3; frames after t_mid (THE GATE): 2
+frames compared (whole window, raw uint64): 5
+  RESULT: PASS -- every frame raw-byte identical (2 after t_mid, 5 total)
+
+===== scenario meanfield_beam: t_mid=0.0003 s, t_end=0.0005 s =====
+unsplit: 1109 accepted steps, 6 saved frames
+  step caps: {'dt_growth': 17, 'plasma_cfl': 7, 'save_time': 4, 'surface_loss': 1080, 't_end': 1}
+  steps per save: 1109/6
+  engaged: dt_growth bound 17 step(s)
+  engaged: beam TURN-ON inside the window
+  split point snapped 0.0003 -> 0.00030000000000000003 (exact float of an unsplit save instant)
+stage 1: 937 accepted steps, 4 saved frames -> restart_bitidentity_meanfield_beam.restart.h5
+stage 2: 172 accepted steps, 2 saved frames
+frames at/<= t_mid: 4; frames after t_mid (THE GATE): 2
+frames compared (whole window, raw uint64): 6
+  RESULT: PASS -- every frame raw-byte identical (2 after t_mid, 6 total)
+
+===== scenario coverage: t_mid=0.00015 s, t_end=0.00025 s =====
+unsplit: 2001 accepted steps, 6 saved frames
+  step caps: {'dt_growth': 32, 'save_time': 4, 'surface_loss': 1964, 't_end': 1}
+  steps per save: 2001/6
+  engaged: dt_growth bound 32 step(s)
+  engaged: beam TURN-ON inside the window
+  engaged: coverage f moved 0.300000 -> 0.339966
+  split point snapped 0.00015 -> 0.00015000000000000001 (exact float of an unsplit save instant)
+stage 1: 1392 accepted steps, 4 saved frames -> restart_bitidentity_coverage.restart.h5
+stage 2: 609 accepted steps, 2 saved frames
+frames at/<= t_mid: 4; frames after t_mid (THE GATE): 2
+frames compared (whole window, raw uint64): 6
+  RESULT: PASS -- every frame raw-byte identical (2 after t_mid, 6 total)
+
+OVERALL: PASS -- split-vs-unsplit bit-identity holds for meanfield, meanfield_beam, coverage

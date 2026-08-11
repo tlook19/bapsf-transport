@@ -3861,8 +3861,6 @@ class LAPDSim1D:
         "_ignition_abort_reason",
         "_ignition_abort_threshold_name",
         "_run_start_for_phase_events",
-        "_picard_extra_solves",
-        "_picard_triggered_steps",
     )
 
     def restart_payload(self):
