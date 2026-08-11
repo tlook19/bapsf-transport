@@ -71,30 +71,30 @@ free, and the fixed point is not guaranteed to survive a stance change.
 
 | state | site | class |
 |---|---|---|
-| `_y` (packed `n, nn, M, Ee, Ei` + optional `M_n, nn_a, M_n_a`) | `solver.py:3437` (`_set_state_vector` via accept) | CARRIED |
-| `_state`, `_derived` | `solver.py:8575-8577` | DERIVABLE (unpacked from `_y`) |
-| `_time` | `solver.py:3441` | CARRIED |
+| `_y` (packed `n, nn, M, Ee, Ei` + optional `M_n, nn_a, M_n_a`) | `_accept_step_attempt` -> `_set_state_vector` (`solver.py:3448`) | CARRIED |
+| `_state`, `_derived` | `_set_state_vector` (`solver.py:9019-9022`) | DERIVABLE (unpacked from `_y`) |
+| `_time` | `_accept_step_attempt` (`solver.py:3452`) | CARRIED |
 | `_floors`, `_ion_mass_g`, `_mu`, `_geometry` | construction | DERIVABLE |
 
 The packed vector is restored **exactly**, not through the flooring path — the
-same reasoning `_picard_restore` records at `solver.py:3811`: re-flooring an
+same reasoning `_picard_restore` records at `solver.py:3822`: re-flooring an
 already-floored accepted state is not guaranteed idempotent.
 
 ### Cathode continuation caches
 
 | state | site | class |
 |---|---|---|
-| `_cathode_x0` | `solver.py:5578` | CARRIED |
-| `_cathode_x0_twin` | `solver.py:5579` | CARRIED |
-| `_cathode_beam_cross` | `solver.py:5581` | CARRIED |
-| `_cathode_solve` | `solver.py:5577` | DROPPED — see below |
+| `_cathode_x0` | `solve_cathode_boundary` (`solver.py:5900`) | CARRIED |
+| `_cathode_x0_twin` | `solve_cathode_boundary` (`solver.py:5901`) | CARRIED |
+| `_cathode_beam_cross` | `solve_cathode_boundary` (`solver.py:5903`) | CARRIED |
+| `_cathode_solve` | `solve_cathode_boundary` (`solver.py:5899`) | DROPPED — see below |
 
 These are written by `solve_cathode_boundary(update_cache=True)`, which is
 reached from three consumers: the SSPRK2 stages, `_update_current_phase_triggers`
-(`solver.py:6534`) and `_trajectory_snapshot` -> `rhs_terms` (`solver.py:2488`).
+(`solver.py:6856`) and `_trajectory_snapshot` -> `rhs_terms` (`solver.py:2499`).
 
 `_cathode_solve` is the full solve *result object* from the last update. It is
-read on the accept path (`solver.py:3508`) for the warming and coverage surface
+read on the accept path (`_accept_step_attempt`, `solver.py:3519`) for the warming and coverage surface
 updates and by the diagnostic snapshot. It is **not** carried: it is a derived
 product of the state and the three caches above, it holds nested namespaces
 with no serialisation contract, and — decisively — the accept path that reads
@@ -107,12 +107,12 @@ before the first step, which the load path forbids (see *The leading save*).
 
 | state | site | class |
 |---|---|---|
-| `_circuit_I_loop` | `solver.py:3704`, `3752`, `3845` | CARRIED |
-| `_circuit_I_prev` | `solver.py:3519`, `3524` | CARRIED |
-| `_circuit_V_cap` | `solver.py:3713`, `3758` | CARRIED |
-| `_circuit_V_dis_step` | `solver.py:3705`, `3753` | CARRIED |
-| `_circuit_V_dis_time_integral` | `solver.py:3754` | CARRIED |
-| `_circuit_V_dis_prev_save` | `solver.py:7474` | CARRIED |
+| `_circuit_I_loop` | `_accept_step_attempt` (`solver.py:3715`, `3763`), `_accept_step_with_picard` (`4114`) | CARRIED |
+| `_circuit_I_prev` | `_accept_step_attempt` (`solver.py:3530`, `3535`) | CARRIED |
+| `_circuit_V_cap` | `_accept_step_attempt` (`solver.py:3724`, `3769`) | CARRIED |
+| `_circuit_V_dis_step` | `_accept_step_attempt` (`solver.py:3716`, `3764`) | CARRIED |
+| `_circuit_V_dis_time_integral` | `_accept_step_attempt` (`solver.py:3765`) | CARRIED |
+| `_circuit_V_dis_prev_save` | `_cathode_diagnostic_snapshot` (`solver.py:7796`) | CARRIED |
 
 `_circuit_V_dis_prev_save` is the `(t, integral)` anchor from which each save
 reconstructs the dt-averaged discharge voltage. It is mutated **once per
@@ -123,27 +123,27 @@ it is load-bearing for frame identity even though it never touches the state.
 
 | state | site | class |
 |---|---|---|
-| `_cathode_Ts_K` | `solver.py:3614` | CARRIED |
-| `_cathode_theta` | `solver.py:3691` | CARRIED |
-| `_cathode_energy_ledger_J` | `solver.py:3618-3623` | CARRIED |
+| `_cathode_Ts_K` | `_accept_step_attempt` (`solver.py:3625`) | CARRIED |
+| `_cathode_theta` | `_accept_step_attempt` (`solver.py:3702`) | CARRIED |
+| `_cathode_energy_ledger_J` | `_accept_step_attempt` (`solver.py:3629-3634`) | CARRIED |
 | `_cathode_warming_model`, `_cathode_surface_ion_retention` | construction | DERIVABLE |
 
 ### Coverage closure (v2)
 
 | state | site | class |
 |---|---|---|
-| `_coverage_f` (z-resolved) | `solver.py:1822` | CARRIED |
-| `_coverage_deficit` (z-resolved `D`) | `solver.py:1928` | CARRIED |
-| `_coverage_burn_accum` | `solver.py:1865`, armed `2894` | DROPPED — per-attempt |
-| `_coverage_reservoir_burn_accum` | `solver.py:1861`, armed `2897` | DROPPED — per-attempt |
-| `_coverage_w_accum` | `solver.py:1841`, armed `2900` | DROPPED — per-attempt |
-| `_coverage_burn_weight` | `solver.py:2903` | DROPPED — per-attempt |
-| `_coverage_reservoir_debit` | `solver.py:2411`, `2516` | DROPPED — per-RHS-evaluation |
+| `_coverage_f` (z-resolved) | `_advance_coverage_fraction` (`solver.py:1833`) | CARRIED |
+| `_coverage_deficit` (z-resolved `D`) | `_advance_coverage_deficit` (`solver.py:1939`) | CARRIED |
+| `_coverage_burn_accum` | `_accumulate_coverage_burn` (`solver.py:1876`), armed `_attempt_step` (`2905`) | DROPPED — per-attempt |
+| `_coverage_reservoir_burn_accum` | `_accumulate_coverage_burn` (`solver.py:1872`), armed `_attempt_step` (`2908`) | DROPPED — per-attempt |
+| `_coverage_w_accum` | `_accumulate_coverage_burn` (`solver.py:1852`), armed `_attempt_step` (`2911`) | DROPPED — per-attempt |
+| `_coverage_burn_weight` | `_attempt_step` (`solver.py:2914`) | DROPPED — per-attempt |
+| `_coverage_reservoir_debit` | `rhs_terms` (`solver.py:2422`, `2527`) | DROPPED — per-RHS-evaluation |
 | `_coverage_r`, `_coverage_tau_s`, `_coverage` | construction | DERIVABLE |
 
 The five dropped members are armed by `_attempt_step` and cleared at
-`solver.py:2963-2973`; the code states the invariant directly at
-`solver.py:1594-1601` ("armed by `_attempt_step` and dropped with the attempt").
+`floor_with_ledger` (`solver.py:2974-2984`); the code states the invariant directly at
+`solver.py:1605-1612` ("armed by `_attempt_step` and dropped with the attempt").
 They are `None` at every point a restart can be taken, so dropping them is not
 an approximation — there is nothing there.
 
@@ -151,21 +151,21 @@ an approximation — there is nothing there.
 
 | state | site | class |
 |---|---|---|
-| `_t_prebreakdown_trigger` | `solver.py:6554` | CARRIED |
-| `_t_breakdown_trigger` | `solver.py:6556`, `6598` | CARRIED |
-| `_last_current_trigger_time` | `solver.py:6362` | CARRIED |
-| `_last_current_trigger_I_tot` | `solver.py:6363` | CARRIED |
-| `_current_trigger_samples` | `solver.py:6364` | CARRIED |
-| `_t_ignition_abort` | `solver.py:6384` | CARRIED |
-| `_ignition_abort_reason` | `solver.py:6385` | CARRIED |
-| `_ignition_abort_context` | `solver.py:6386` | DROPPED — rebuilt diagnostic |
-| `_ignition_abort_threshold_name` | `solver.py:6457` | CARRIED |
-| `_run_start_for_phase_events` | `solver.py:4006` | CARRIED (diagnostic) |
+| `_t_prebreakdown_trigger` | `_update_current_phase_triggers` (`solver.py:6876`) | CARRIED |
+| `_t_breakdown_trigger` | `_update_current_phase_triggers` (`solver.py:6878`, `6920`) | CARRIED |
+| `_last_current_trigger_time` | `_record_current_trigger_sample` (`solver.py:6684`) | CARRIED |
+| `_last_current_trigger_I_tot` | `_record_current_trigger_sample` (`solver.py:6685`) | CARRIED |
+| `_current_trigger_samples` | `_record_current_trigger_sample` (`solver.py:6686`) | CARRIED |
+| `_t_ignition_abort` | `_open_ignition_switch` (`solver.py:6706`) | CARRIED |
+| `_ignition_abort_reason` | `_open_ignition_switch` (`solver.py:6707`) | CARRIED |
+| `_ignition_abort_context` | `_open_ignition_switch` (`solver.py:6708`) | DROPPED — rebuilt diagnostic |
+| `_ignition_abort_threshold_name` | `_prebreakdown_timeout_switch_open` (`solver.py:6779`) | CARRIED |
+| `_run_start_for_phase_events` | `run()` (`solver.py:4287`) | CARRIED (diagnostic) |
 
 The last-sample pair is not diagnostic: `_current_threshold_time`
-(`solver.py:6340`) interpolates the threshold crossing between it and the
+(`solver.py:6662`) interpolates the threshold crossing between it and the
 current sample, and the resulting trigger time becomes a phase boundary that
-**caps the timestep** (`solver.py:4158-4169`). A restart that reset it would
+**caps the timestep** (`cap_step` in `run()`, `solver.py:4468-4479`). A restart that reset it would
 place breakdown at a different instant.
 
 `_run_start_for_phase_events` feeds only the `phase_events` diagnostic list.
@@ -186,12 +186,12 @@ evaluation overwrites anyway.
 
 | state | site | class |
 |---|---|---|
-| `IgnitionMonitor._samples` ring buffer | `ignition.py:244` via `solver.py:6951` | CARRIED |
-| `IgnitionMonitor._stalled` latch | `ignition.py:255` | CARRIED |
-| `_last_ignition_record` | `solver.py:6988` | DROPPED — rebuilt diagnostic |
+| `IgnitionMonitor._samples` ring buffer | `IgnitionMonitor.record` (`ignition.py:244`) via `_ignition_diagnostic_snapshot` (`solver.py:7273`) | CARRIED |
+| `IgnitionMonitor._stalled` latch | `IgnitionMonitor.record` (`ignition.py:255`) | CARRIED |
+| `_last_ignition_record` | `_ignition_diagnostic_snapshot` (`solver.py:7310`) | DROPPED — rebuilt diagnostic |
 | `window_s`, `rate_window_s`, `min_samples` | construction | DERIVABLE |
 
-Not diagnostic: a trip calls `_open_ignition_switch` (`solver.py:6989`), which
+Not diagnostic: a trip calls `_open_ignition_switch` (called at `solver.py:7312`), which
 sets `_t_ignition_abort` and shortens `t_end`. The buffer is fed once per
 trajectory save, so it is coupled to the save lattice the run-loop block below
 preserves.
@@ -208,12 +208,12 @@ whether a trip fires, are carried above.
 
 | state | site | class |
 |---|---|---|
-| `_sample_ema` (`{cell: [n, Te]}`) | `solver.py:6003` | CARRIED |
+| `_sample_ema` (`{cell: [n, Te]}`) | `_update_sample_smoothing` (`solver.py:6325`) | CARRIED |
 | `_sample_smoothing`, `_sample_smooth_cells` | construction | DERIVABLE |
 
-Three consumers read the smoothed sample (`solver.py:6008` is the only
+Three consumers read the smoothed sample (`_smoothed_sample_state`, `solver.py:6330`, is the only
 substitution site): the RHS/beam sheath solve, the accepted-state surface
-re-solve at `solver.py:3542`, and the surface coverage update. The EMA is
+re-solve at `_accept_step_attempt` (`solver.py:3553`), and the surface coverage update. The EMA is
 seeded from the initial state at construction, so an uncarried restart would
 restart the average — a first-order error in every sheath solve that follows.
 
@@ -221,7 +221,7 @@ restart the average — a first-order error in every sheath solve that follows.
 
 | state | site | class |
 |---|---|---|
-| `_floor_ledger` | `solver.py:2771` | CARRIED |
+| `_floor_ledger` | `_accumulate_floor_ledger` (`solver.py:2782`) | CARRIED |
 
 Accumulator; appears in the result. No feedback into the state.
 
@@ -229,11 +229,11 @@ Accumulator; appears in the result. No feedback into the state.
 
 | state | site | class |
 |---|---|---|
-| `_picard_extra_solves` | `solver.py:3846` | DROPPED |
-| `_picard_triggered_steps` | `solver.py:3859` | DROPPED |
+| `_picard_extra_solves` | `_accept_step_with_picard` (`solver.py:4115`) | DROPPED |
+| `_picard_triggered_steps` | `_accept_step_with_picard` (`solver.py:4128`) | DROPPED |
 
 Counters only, read nowhere in the solver, and — decisively — they exist only
-when `coupled_circuit_picard` is on (`solver.py:811-812` sits inside that
+when `coupled_circuit_picard` is on (`solver.py:812-813` sits inside that
 branch), so carrying them unconditionally would make the payload's own shape
 depend on a non-structural flag. Each stage counts its own.
 
@@ -244,16 +244,16 @@ attribute to grep for.
 
 | local | site | class |
 |---|---|---|
-| `previous_accepted_dt` | `solver.py:4002`, set `4219`, read `4149` | CARRIED |
-| `t_last_save` | `solver.py:4001`, set `4065`/`4231`, read `4031`/`4041` | CARRIED |
-| `dt_growth_capped_streak` | `solver.py:4100`, set `4216-4218` | CARRIED |
-| `consecutive_dt_min_clamps` | `solver.py:4085`, set `4125`/`4132` | CARRIED |
-| `len(saved)` | `solver.py:3998` | CARRIED (as a frame-count offset) |
-| `steps` | `solver.py:4083` | CARRIED (as an offset for the accepted-step guard) |
-| `run_start` | `solver.py:4004` | CARRIED (via `_run_start_for_phase_events`) |
-| `ignition_wall_clock_start` | `solver.py:4092` | DROPPED — see below |
-| `progress_wall_start`, `last_progress_time`, `force_progress` | `solver.py:4005`, `4081-4082` | DROPPED — progress reporting only |
-| `saved`, `diagnostics`, `timestep_rejection_events` | `solver.py:3998-4000` | DROPPED — each stage owns its own trajectory |
+| `previous_accepted_dt` | `run()` (`solver.py:4277`), set `4529`, read `4459` | CARRIED |
+| `t_last_save` | `run()` (`solver.py:4276`), set `4358`/`4541`, read `4317`/`4327` | CARRIED |
+| `dt_growth_capped_streak` | `run()` (`solver.py:4393`), set `4526-4528` | CARRIED |
+| `consecutive_dt_min_clamps` | `run()` (`solver.py:4378`), set `4435`/`4442` | CARRIED |
+| `len(saved)` | `run()` (`solver.py:4273`) | CARRIED (as a frame-count offset) |
+| `steps` | `run()` (`solver.py:4376`) | CARRIED (as an offset for the accepted-step guard) |
+| `run_start` | `run()` (`solver.py:4284`) | CARRIED (via `_run_start_for_phase_events`) |
+| `ignition_wall_clock_start` | `run()` (`solver.py:4385`) | DROPPED — see below |
+| `progress_wall_start`, `last_progress_time`, `force_progress` | `run()` (`solver.py:4285`, `4374-4375`) | DROPPED — progress reporting only |
+| `saved`, `diagnostics`, `timestep_rejection_events` | `run()` (`solver.py:4273-4275`) | DROPPED — each stage owns its own trajectory |
 
 `previous_accepted_dt` is the dt-growth ramp's anchor: without it the first
 step after a restart is not growth-capped and takes whatever the physics bound
@@ -272,7 +272,7 @@ here, and it is inert at the shipped defaults (`ignition_wall_clock_cap_s` is
 
 ### The leading save
 
-`run()` opens with a leading `if should_save(self._time)` (`solver.py:4063`).
+`run()` opens with a leading `if should_save(self._time)` (`solver.py:4356`, guarded by `resume is None`).
 On a restarted run that instant was already saved by the producing stage, and
 the save is not passive — it would issue a second cache-mutating
 `solve_cathode_boundary` at the same instant. The restart therefore
@@ -285,8 +285,8 @@ frame; stage 1's last frame is that frame.
 
 | state | site | class |
 |---|---|---|
-| `_beam_gap_ledger_warned` | `solver.py:5627`, reset `solver.py:3968` | DROPPED |
-| `_dvm_ion_shortfall_warned` | `solver.py:8546` | DROPPED (arm is REFUSED) |
+| `_beam_gap_ledger_warned` | `_warn_beam_gap_ledger` (`solver.py:5949`), reset in `run()` (`solver.py:4237`) | DROPPED |
+| `_dvm_ion_shortfall_warned` | `_dvm_advance` (`solver.py:8888`) | DROPPED (arm is REFUSED) |
 
 `_beam_gap_ledger_warned` is reset by `run()` itself at entry, so carrying it
 would be overwritten anyway. The effect of dropping it is that a warning
@@ -297,16 +297,16 @@ trajectory consequence.
 
 `_last_result`, `_last_neutral_equilibration_result`,
 `_last_neutral_equilibration_summary`, `_run_via_start_simulation`
-(`solver.py:4265`, `4404-4405`, `4573`): DROPPED. They hold the previous call's
+(`solver.py:4587`, `4726-4727`, `4895`): DROPPED. They hold the previous call's
 return value and feed nothing in the stepping path.
 
 ### Refused subsystems
 
 | subsystem | gate | why refused |
 |---|---|---|
-| K4a kinetic response functions (`_kinetic`) | `neutral_model == "kinetic"` | `solver.py:709-728`: frozen velocity grid, per-channel response functions, refresh clocks. Not serialised. |
-| K2a transient DVM (`_dvm`, `_dvm_*`) | `neutral_model == "kinetic_dvm"` | `solver.py:2328`: a full distribution function plus ion-debt ledger and a neutral clock (`solver.py:8496-8560`). Not serialised. |
-| neutral equilibration | `neutral_equilibration` flag | `start_simulation()` would run the puff/off accumulation and **overwrite** the restored IC (`solver.py:4550-4571`). A restart *is* the seed. |
+| K4a kinetic response functions (`_kinetic`) | `neutral_model == "kinetic"` | `solver.py:710-729`: frozen velocity grid, per-channel response functions, refresh clocks. Not serialised. |
+| K2a transient DVM (`_dvm`, `_dvm_*`) | `neutral_model == "kinetic_dvm"` | `solver.py:2339`: a full distribution function plus ion-debt ledger and a neutral clock (`solver.py:8838-8902`). Not serialised. |
+| neutral equilibration | `neutral_equilibration` flag | `start_simulation()` would run the puff/off accumulation and **overwrite** the restored IC (`start_simulation`, `solver.py:4872-4893`). A restart *is* the seed. |
 
 Each raises `ValueError` at construction when combined with `restart_from`.
 They are refusals, not partial loads: the alternative — carrying the fluid
@@ -341,7 +341,7 @@ the handoff instant is one the unsplit run also steps to exactly.
 
 That is not a limitation in practice: every save instant IS a step boundary,
 because `next_save_time_after` caps the adaptive step to land on it
-(`solver.py:4170-4177`), and an export is naturally taken at the end of a
+(`cap_step` in `run()`, `solver.py:4480-4487`), and an export is naturally taken at the end of a
 stage. It does matter to anyone comparing a split run against an unsplit one,
 because the save lattice is **accumulated** (`next = t_last_save + dt_save`)
 and therefore carries float drift: at `dt_save = 1e-4` the third save lands on
