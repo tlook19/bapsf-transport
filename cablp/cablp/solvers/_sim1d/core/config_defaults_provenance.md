@@ -451,8 +451,28 @@ pitch, rising with anode temperature). A temperature-dependent `R_mesh(T_anode)`
 from an anode power balance was designed and declined; only a constant value is
 implemented.
 
-**`cathode_phi_c_cap_V = 1000.0` V — ASSUMED, a numerical REGIME guard.** It is
-not a device-physics voltage and no measurement bounds it. What it bounds is the
+**`cathode_phi_c_cap_V = 1000.0` V — DERIVED from the atomic data's domain, and
+a numerical REGIME guard.** Both are true of it, and the second is what it is
+usually read as. It is not a device-physics voltage and no measurement of a
+device bounds it — but it is also not a free numerical choice: **1000.0 V IS the
+top of the tabulated He EII cross section** the beam deposition reads. From the
+modules' own constants, `HE_EII_EPS_TOP = 40.671258069120896` times
+`I_ion = 24.58738793623` eV is `1000.0000000000002` eV, and the shipped value
+sits **sub-ULP below that edge** — relative offset `-1.75e-16` in the `eps`
+space the guard actually tests (`-2.27e-16`, i.e. two ULP, in energy space).
+With `HE_EII_EDGE_REL_TOL = 1e-12` the largest admissible cap is
+`1000.0000000010` V: one part in `1e9` of headroom. **The cap is movable
+DOWNWARD only.** The edge is INCLUSIVE by deliberate design
+(`_cathode_solver_idriven.py:930-941`, `_beam_deposition.py:298-307`): at the
+edge the clamped lookup IS the table's endpoint node and nothing is
+extrapolated, while a larger excess is REFUSED with a `ValueError` naming the
+table top rather than silently clamped onto an extrapolated cross section. The
+relation is therefore `cap = HE_EII_EPS_TOP * I_ion`, and the data it is pinned
+to is the same He atomic data the standing no-tuning policy protects — raising
+the cap is not a re-choice of a number, it requires cross-section data above
+1000 eV.
+
+What it ALSO bounds is the
 current-driven sheath solve: the bracket ladder doubles `psi_top` looking for a
 `psi` that carries the imposed current, and this is the ceiling at which that
 search stops and the solve returns the solution AT the cap tagged
@@ -463,22 +483,42 @@ grid points, so a root at or above the ceiling now falls through to the same
 branch; the two routes are indistinguishable in the exported result and both are
 flagged by `{source,end}_phi_c_at_cap`.
 
-*Honest bar: none, and none is available from the data.* The value is round, was
-never fitted, and the solve is deliberately insensitive to it wherever the
-ceiling is not reached — a free root below the cap is returned bit for bit
-independently of where the cap sits. It is load-bearing only in the at-cap
-regime, and there it sets the reported `phi_c` outright, so every `phi_c`-keyed
-consumer inherits it (notably `E_tail` under
-`heating_anomalous_tail_energy_keying = "phi_c"`, where `f = 1.0` puts `E_tail`
-on the He EII table's top edge to the last bit — which is why that edge is
-checked inclusively rather than clamped). A result that spends material time at
-the cap is therefore quoting a guard, not a device voltage.
+*Honest bar: one-sided and exact.* Upward there is no bar to state and no
+bracket to explore — the admissible headroom is `1e-9` relative, so the value is
+its own upper bound. Downward the value is unconstrained by the data and the
+solve is deliberately insensitive to it wherever the ceiling is not reached: a
+free root below the cap is returned bit for bit independently of where the cap
+sits. It is load-bearing only in the at-cap regime, and there it sets the
+reported `phi_c` outright, so every `phi_c`-keyed consumer inherits it (notably
+`E_tail` under `heating_anomalous_tail_energy_keying = "phi_c"`, where
+`f = 1.0` puts `E_tail` on the He EII table's top edge to the last bit — which
+is the same edge, reached from the consumer side, and why it is checked
+inclusively rather than clamped). A result that spends material time at the cap
+is quoting a guard AND the table's last node, not a device voltage.
+
+Two facts recorded 2026-08-11, both MEASURED, both bearing on how much weight
+the value carries:
+
+- **At-cap exposure on the build leg is 40-65 % of saves** in the
+  conducting-phase coverage arms (40.0 / 46.3 / 64.7 % of pre-breakdown saves
+  across the three F2-family shots), and those saves carry 54-78 % of the beam
+  channel's pedestal log-gain. The cap is not a latent bound in that regime; it
+  is on the calibration path.
+- **The ignition-frame sheath demand is at least 10 kV.** A trial run with the
+  cap raised to 10 kV reported `phi_c` pinned at the *new* ceiling
+  (`10000.000000000002` V) at the FIRST cathode solve — before the table-top
+  guard refused the step. Raising the cap by 10x does not un-pin `phi_c`, so the
+  at-cap regime cannot be exited by raising the ceiling even where the atomic
+  data would allow it.
 
 *Memo line:* adjudicated 2026-08-09 — accepted as-is, with the at-cap regime
 flag (`{source,end}_phi_c_at_cap`, added the same day) as the standing
-instrument for reading how much of a run rides it. REGISTERED REVISIT: if any
-arm is found riding the cap materially, the value stops being latent and must
-acquire a bracket before any claim leans on that arm.
+instrument for reading how much of a run rides it. The REGISTERED REVISIT
+("if any arm is found riding the cap materially, the value must acquire a
+bracket") TRIGGERED on 2026-08-11 and is resolved by the class correction above:
+the arms do ride it materially, and the bracket that answer demands does not
+exist upward, because the value is the data's edge rather than a choice.
+Memos: `covcap_memo.md`, `covcal_efold_read.md`.
 
 ### Emission
 
