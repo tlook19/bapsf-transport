@@ -1635,7 +1635,15 @@ def cathode_defaults():
         when selected. The cathode sits at an accelerating drop of a few
         hundred volts through drive, above every plateau energy the bracket
         carries, so free escape there deletes tail power the sheath in fact
-        returns to the column. Selecting ``"reflect"`` also makes the
+        returns to the column. Under ``"reflect"`` the cathode-face row of the
+        tail end ledger (``source_beam_end_loss_tail_low_W``) is therefore
+        EXACTLY ZERO for the whole of a ``"phi_c"``-keyed run -- birth energy
+        ``f*e*phi_c`` with ``f <= 1`` against a threshold of ``e*phi_c``, and
+        walkers only lose energy -- but NOT for a ``"fixed"``-keyed one, where
+        the rung is decoupled from the drive and any frame with
+        ``e*phi_c`` below the rung lets walkers out through that face. A reader
+        deriving the escaping fraction must sum the whole end ledger rather
+        than name the far-end row alone. Selecting ``"reflect"`` also makes the
         plasma-active window bound the ENERGY-ONLY walk (which otherwise runs
         the whole grid): the reflecting face has to be a face the walk stops
         at. Reflection is total by construction, with no partial-reflection
