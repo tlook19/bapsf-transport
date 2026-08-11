@@ -485,6 +485,33 @@ The value is geometric and assumes NORMAL INCIDENCE: the magnetized electrons
 follow field lines perpendicular to the mesh plane, so the projected solid
 fraction is the collection fraction, independent of energy and of current.
 
+**`eta` is NOT overloaded: every consumer implements the one meaning.** The
+symbol does double duty across modules, so the consumers were enumerated
+before the docstrings were unified. Four classes, all of them the mesh solid
+fraction:
+
+1. **Geometric transmission, `1 - eta`** — the anode face's open fraction
+   (`geometry.anode_open_fraction`, `1 - eta*(Ra/Rm)^2`), the neutral
+   transparency (`physics/neutrals.py`, `physics/kinetic_neutrals.py`) and the
+   parallel heat transmission across the mesh (`physics/conduction.py`).
+2. **Bohm ion collection at the wires** — `sources.anode_collection_rhs` takes
+   the collecting area as `eta * plasma_area_cm2` in each flanking cell, and
+   `cathode.anode_circuit_sample` sums the two faces, which is the historical
+   `I_i_a = 2*eta*I_i`. The `2` is the mesh's two faces, not a second quantity.
+3. **Beam interception** — `eta*beam_bypass_fraction` in both cathode solvers
+   (`J_anode`, `P_prim`, the bypass power) and the CSDA ray's anode-face event
+   (`anode_eta`), where the wires remove `eta` of the gap-surviving flux and
+   `1 - eta` transmits.
+4. **Particle-loss bookkeeping** — `(1 + 2*eta) * I_i / qe`: the cathode face
+   plus the mesh's two.
+
+**The competing "anode area / cathode area" reading is excluded twice over,
+quantitatively and structurally.** At the shipped stance `R_cath = 15` cm,
+`Rp = 15` cm and `anode_radius_cm = None` — the mesh spans the chamber, with
+`Ra >= Rp` enforced — so an anode-to-cathode AREA RATIO is `>= 1` and cannot
+be `0.358`. Independently, class 1 uses the quantity as `1 - eta`, which is a
+transparency only for a fraction: for a ratio `>= 1` it would be `<= 0`.
+
 **`cathode_phi_c_cap_V = 1000.0` V — DERIVED from the atomic data's domain, and
 a numerical REGIME guard.** Both are true of it, and the second is what it is
 usually read as. It is not a device-physics voltage and no measurement of a
