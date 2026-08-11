@@ -8,6 +8,10 @@ from .core.config import (
     load_config,
     resolve_config,
 )
+from .results.restart import (
+    load_restart_state,
+    save_restart_state,
+)
 from .solver import (
     BreakdownError,
     LAPDSim1D,
@@ -29,7 +33,9 @@ __all__ = [
     "input_dict_template_1d",
     "input_flags_template_1d",
     "load_config",
+    "load_restart_state",
     "load_result_hdf5",
     "resolve_config",
+    "save_restart_state",
     "summarize_result",
 ]

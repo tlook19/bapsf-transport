@@ -28,6 +28,7 @@ from .core.ignition import (
     IGNITION_DIAGNOSTIC_FIELDS,
     IGNITION_POWER_GROUPS,
     IgnitionMonitor,
+    _Sample as _IgnitionSample,
     empty_ignition_diagnostics,
 )
 from .core.integrator import (
@@ -1423,6 +1424,16 @@ class LAPDSim1D:
         # Set only while start_simulation drives run(); lets run() tell a direct
         # call from the equilibration-aware entry point (see run()).
         self._run_via_start_simulation = False
+        # Run-loop controller state handed to the NEXT run() call by a restart,
+        # and consumed there. None on every non-restart run, which is the
+        # presence gate for the whole resume branch in run().
+        self._restart_run_loop = None
+        # Deposited by run() when it returns; read by restart_payload().
+        self._last_run_loop_state = None
+        # Continuation of a previous run. Last in construction: the payload
+        # overwrites the initial condition that everything above just built,
+        # so it must run after all of it and after every validator.
+        self._load_restart_if_configured()
         if self._flags.get("debug_checks", False):
             assert_finite_state(self._state, self._derived)
 
@@ -3818,6 +3829,266 @@ class LAPDSim1D:
             self._state, self._floors, self._ion_mass_g
         )
 
+    # ---- restart: export and resume -------------------------------------
+    #
+    # The inventory below is the executable form of _sim1d/RESTART.md, which
+    # gives the mutation site of every member and the justification for each
+    # deliberate omission. Members NOT here are either derivable from config
+    # and geometry at construction, per-attempt scratch that is None at any
+    # instant a restart can be taken, or dropped with a reason recorded there.
+
+    #: Instance scalars/arrays carried verbatim, grouped by payload section.
+    _RESTART_CATHODE_ATTRS = (
+        "_cathode_x0",
+        "_cathode_x0_twin",
+        "_cathode_beam_cross",
+        "_cathode_Ts_K",
+        "_cathode_theta",
+    )
+    _RESTART_CIRCUIT_ATTRS = (
+        "_circuit_I_loop",
+        "_circuit_I_prev",
+        "_circuit_V_cap",
+        "_circuit_V_dis_step",
+        "_circuit_V_dis_time_integral",
+    )
+    _RESTART_TRIGGER_ATTRS = (
+        "_t_prebreakdown_trigger",
+        "_t_breakdown_trigger",
+        "_last_current_trigger_time",
+        "_last_current_trigger_I_tot",
+        "_t_ignition_abort",
+        "_ignition_abort_reason",
+        "_ignition_abort_threshold_name",
+        "_run_start_for_phase_events",
+        "_picard_extra_solves",
+        "_picard_triggered_steps",
+    )
+
+    def restart_payload(self):
+        """Return this solver's complete evolving state as a flat mapping.
+
+        The instant described is :attr:`time`. ``results.restart`` serialises
+        the mapping; keeping the two separate means the inventory lives with
+        the solver that owns the attributes, not with the file format.
+        """
+        cathode = {
+            name: _copy_cache_value(getattr(self, name))
+            for name in self._RESTART_CATHODE_ATTRS
+        }
+        cathode["energy_ledger_J"] = None
+        circuit = {
+            name: getattr(self, name) for name in self._RESTART_CIRCUIT_ATTRS
+        }
+        prev_save = self._circuit_V_dis_prev_save
+        circuit["V_dis_prev_save_t"] = (
+            None if prev_save is None else float(prev_save[0])
+        )
+        circuit["V_dis_prev_save_integral"] = (
+            None if prev_save is None else float(prev_save[1])
+        )
+        triggers = {
+            name: getattr(self, name) for name in self._RESTART_TRIGGER_ATTRS
+        }
+        samples = self._current_trigger_samples
+        triggers["sample_time"] = np.asarray(
+            [t for t, _ in samples], dtype=float
+        )
+        triggers["sample_I_tot"] = np.asarray(
+            [I for _, I in samples], dtype=float
+        )
+        monitor = self._ignition_monitor
+        ignition = {
+            "stalled": bool(monitor.stalled),
+            "sample_time": np.asarray(
+                [s.time for s in monitor._samples], dtype=float
+            ),
+            "sample_N": np.asarray(
+                [s.N for s in monitor._samples], dtype=float
+            ),
+            "sample_N_n": np.asarray(
+                [s.N_n for s in monitor._samples], dtype=float
+            ),
+            "sample_Ee": np.asarray(
+                [s.Ee for s in monitor._samples], dtype=float
+            ),
+            "sample_joint": np.asarray(
+                [float(s.joint) for s in monitor._samples], dtype=float
+            ),
+        }
+        coverage = {}
+        if self._coverage is not None:
+            coverage["f"] = np.asarray(self._coverage_f, dtype=float).copy()
+            coverage["deficit"] = np.asarray(
+                self._coverage_deficit, dtype=float
+            ).copy()
+        ledgers = dict(self._floor_ledger)
+        ledgers.update(
+            {
+                f"cathode_energy_{key}_J": value
+                for key, value in self._cathode_energy_ledger_J.items()
+            }
+        )
+        sample_ema = {}
+        if self._sample_ema is not None:
+            for cell, (n_ema, Te_ema) in self._sample_ema.items():
+                sample_ema[f"cell_{int(cell)}_n"] = float(n_ema)
+                sample_ema[f"cell_{int(cell)}_Te"] = float(Te_ema)
+        return {
+            "time": float(self._time),
+            "cells": int(self._geometry.cells),
+            "state_fields": state_field_names(self.state),
+            "y": np.asarray(self._y, dtype=float).copy(),
+            "params": dict(self._input_dict),
+            "flags": dict(self._flags),
+            "compiled_kernels": str(KERNEL_PROVENANCE),
+            "cathode": cathode,
+            "circuit": circuit,
+            "coverage": coverage,
+            "triggers": triggers,
+            "ignition": ignition,
+            "ledgers": ledgers,
+            "sample_ema": sample_ema,
+            "run_loop": dict(self._restart_run_loop_state()),
+        }
+
+    def _restart_run_loop_state(self):
+        """Return the run loop's controller state from the last ``run`` call.
+
+        These values live in locals of :meth:`run`, not on the instance, so
+        :meth:`run` deposits them here when it returns. ``previous_accepted_dt``
+        anchors the dt-growth ramp and ``t_last_save`` sets the save lattice --
+        and a save is not passive, because ``_trajectory_snapshot`` rewrites the
+        cathode continuation cache through ``rhs_terms``. Both are therefore
+        part of the trajectory, not bookkeeping.
+        """
+        return getattr(self, "_last_run_loop_state", None) or {
+            "previous_accepted_dt": None,
+            "t_last_save": None,
+            "dt_growth_capped_streak": 0,
+            "consecutive_dt_min_clamps": 0,
+            "saved_frames": 0,
+            "accepted_steps": 0,
+        }
+
+    def _load_restart_if_configured(self):
+        """Replace the initial condition with a restart payload, if configured.
+
+        Presence-gated on ``restart_from``: unset (the default) returns before
+        any import, so a non-restart run neither opens a file nor touches a
+        single attribute this method would otherwise overwrite.
+        """
+        source = self._input_dict.get("restart_from", None)
+        if source is None:
+            return
+        from .results.restart import (
+            check_restart_compatibility,
+            load_restart_state,
+            REFUSED_NEUTRAL_MODELS,
+        )
+
+        if self._flags.get("neutral_equilibration", False):
+            raise ValueError(
+                "restart_from cannot be combined with neutral_equilibration: "
+                "start_simulation() would run the puff/off accumulation and "
+                "OVERWRITE the restored state. A restart payload IS the "
+                "neutral seed. Clear the flag on the resuming run."
+            )
+        if self._neutral_model in REFUSED_NEUTRAL_MODELS:
+            raise ValueError(
+                f"restart_from cannot be combined with neutral_model="
+                f"{self._neutral_model!r}: that arm evolves a velocity "
+                "distribution which the sim1d-restart-v1 payload does not "
+                "carry, so resuming would silently reseed the kinetic half "
+                "from a Maxwellian and the run would not be a continuation. "
+                f"Accepted neutral_model values for a restart: everything "
+                f"except {list(REFUSED_NEUTRAL_MODELS)}"
+            )
+        payload = load_restart_state(source)
+        check_restart_compatibility(
+            payload,
+            cells=self._geometry.cells,
+            state_fields=state_field_names(self.state),
+            params=self._input_dict,
+            flags=self._flags,
+        )
+        self._apply_restart_payload(payload)
+
+    def _apply_restart_payload(self, payload):
+        """Overwrite this solver's whole evolving state with ``payload``."""
+        cathode = payload["cathode"]
+        for name in self._RESTART_CATHODE_ATTRS:
+            setattr(self, name, _copy_cache_value(cathode[name]))
+        circuit = payload["circuit"]
+        for name in self._RESTART_CIRCUIT_ATTRS:
+            setattr(self, name, circuit[name])
+        prev_save_t = circuit["V_dis_prev_save_t"]
+        self._circuit_V_dis_prev_save = (
+            None
+            if prev_save_t is None
+            else (float(prev_save_t), float(circuit["V_dis_prev_save_integral"]))
+        )
+        triggers = payload["triggers"]
+        for name in self._RESTART_TRIGGER_ATTRS:
+            setattr(self, name, triggers[name])
+        self._current_trigger_samples = [
+            (float(t), float(I))
+            for t, I in zip(triggers["sample_time"], triggers["sample_I_tot"])
+        ]
+        # The abort CONTEXT is a diagnostic record of a switch-open that has
+        # already happened; the reason, time and threshold name above are what
+        # the wind-down reads. It is rebuilt by the next guard evaluation.
+        self._ignition_abort_context = None
+        self._last_ignition_record = None
+        ignition = payload["ignition"]
+        monitor = self._ignition_monitor
+        monitor._samples = [
+            _IgnitionSample(
+                float(t), float(N), float(N_n), float(Ee), bool(joint)
+            )
+            for t, N, N_n, Ee, joint in zip(
+                ignition["sample_time"],
+                ignition["sample_N"],
+                ignition["sample_N_n"],
+                ignition["sample_Ee"],
+                ignition["sample_joint"],
+            )
+        ]
+        monitor._stalled = bool(ignition["stalled"])
+        if self._coverage is not None:
+            self._coverage_f = np.asarray(
+                payload["coverage"]["f"], dtype=float
+            ).copy()
+            self._coverage_deficit = np.asarray(
+                payload["coverage"]["deficit"], dtype=float
+            ).copy()
+        ledgers = payload["ledgers"]
+        for name in self._floor_ledger:
+            self._floor_ledger[name] = float(ledgers[name])
+        for key in self._cathode_energy_ledger_J:
+            self._cathode_energy_ledger_J[key] = float(
+                ledgers[f"cathode_energy_{key}_J"]
+            )
+        if self._sample_ema is not None:
+            stored = payload["sample_ema"]
+            for cell in self._sample_smooth_cells:
+                self._sample_ema[int(cell)] = [
+                    float(stored[f"cell_{int(cell)}_n"]),
+                    float(stored[f"cell_{int(cell)}_Te"]),
+                ]
+        # State last, and EXACTLY: the payload holds an already-floored
+        # accepted state, and re-flooring it is not guaranteed idempotent
+        # (the same reasoning _picard_restore records).
+        self._y = np.asarray(payload["y"], dtype=float).copy()
+        self._state = self._unpack(self._y)
+        self._derived = derive_state(
+            self._state, self._floors, self._ion_mass_g
+        )
+        self._time = float(payload["time"])
+        run_loop = dict(payload["run_loop"])
+        run_loop["resumed"] = True
+        self._restart_run_loop = run_loop
+
     def _accept_step_with_picard(self, generate_attempt):
         """Accept one step, Picard-iterating the loop current at the knee (A11).
 
@@ -3966,6 +4237,12 @@ class LAPDSim1D:
     ):
         """Advance to ``t_end`` and return sparse saved trajectory arrays."""
         self._beam_gap_ledger_warned = False
+        # Restart resume. Claimed (and cleared) once, here, so a second run()
+        # on the same solver is an ordinary continuation of this one rather
+        # than a second replay of the payload. ``None`` on every non-restart
+        # run: that is the presence gate for each resume branch below.
+        resume = self._restart_run_loop
+        self._restart_run_loop = None
         if (
             self._flags.get("neutral_equilibration", False)
             and not self._run_via_start_simulation
@@ -4000,10 +4277,21 @@ class LAPDSim1D:
         timestep_rejection_events = []
         t_last_save = -np.inf
         previous_accepted_dt = None
+        # Frames and accepted steps this run INHERITS. Zero except on a resume,
+        # where the max_output_steps and accepted-step budgets must be measured
+        # against the two-stage totals rather than this stage's own.
+        saved_frames_before = 0
+        steps_before = 0
         time_tol = max(1e-15, 1e-12 * max(abs(t_end), 1.0))
         run_start = float(self._time)
         progress_wall_start = perf_counter()
-        self._run_start_for_phase_events = run_start
+        if resume is None:
+            self._run_start_for_phase_events = run_start
+        else:
+            # A resumed run reports phase events from the ORIGINAL origin, not
+            # from the handoff instant: the carried value is the whole two-stage
+            # run's start.
+            run_start = float(self._run_start_for_phase_events)
         dt_growth_enabled = bool(self._input_dict.get("dt_growth_enabled", True))
         dt_growth_factor = float(self._input_dict.get("dt_growth_factor", 1.25))
         if dt_growth_enabled and dt_growth_factor <= 1.0:
@@ -4022,7 +4310,7 @@ class LAPDSim1D:
         dynamic_t_end = not explicit_t_end and self._flags.get("Plasma", True)
 
         def should_save(t):
-            if max_output_steps > 0 and len(saved) >= max_output_steps:
+            if max_output_steps > 0 and saved_frames_before + len(saved) >= max_output_steps:
                 return False
             if t + 1e-15 < t_save_start:
                 return False
@@ -4031,7 +4319,7 @@ class LAPDSim1D:
             return t - t_last_save >= dt_save - time_tol or abs(t - t_end) <= time_tol
 
         def next_save_time_after(t):
-            if max_output_steps > 0 and len(saved) >= max_output_steps:
+            if max_output_steps > 0 and saved_frames_before + len(saved) >= max_output_steps:
                 return None
             if dt_save <= 0.0:
                 return None
@@ -4060,7 +4348,14 @@ class LAPDSim1D:
                     step_cap = candidate_cap
             return step_dt, step_cap
 
-        if should_save(self._time):
+        # The leading save is SUPPRESSED on a resume: the producing stage
+        # already saved this instant, and the save is not passive -- it issues
+        # a cache-mutating solve through _trajectory_snapshot -> rhs_terms. So
+        # one save and one cache write happen at the handoff instant across the
+        # pair, exactly as an unsplit run does at that instant. The resumed
+        # stage's trajectory therefore begins AFTER the handoff frame, which
+        # stage 1's last frame already is.
+        if resume is None and should_save(self._time):
             saved.append(self._trajectory_snapshot(self._time))
             t_last_save = self._time
 
@@ -4098,6 +4393,23 @@ class LAPDSim1D:
         dt_growth_recovery_patience = self._dt_growth_recovery_patience
         dt_growth_recovery_factor = self._dt_growth_recovery_factor
         dt_growth_capped_streak = 0
+        # Resume: adopt the producing run's controller state, AFTER every local
+        # above has taken its fresh-run value. previous_accepted_dt anchors the
+        # dt-growth ramp, t_last_save sets the save lattice (and so the cathode
+        # cache writes that ride on it), and the streak is the recovery
+        # hysteresis -- none is reconstructible from the state, so all three
+        # must come across for the resumed steps to be the same steps.
+        # ``saved_frames_before``/``steps_before`` carry the counts the
+        # max_output_steps and accepted-step budgets are measured against; the
+        # WALL-CLOCK budget deliberately restarts (RESTART.md records why).
+        if resume is not None:
+            previous_accepted_dt = resume["previous_accepted_dt"]
+            if resume["t_last_save"] is not None:
+                t_last_save = float(resume["t_last_save"])
+            dt_growth_capped_streak = int(resume["dt_growth_capped_streak"])
+            consecutive_dt_min_clamps = int(resume["consecutive_dt_min_clamps"])
+            saved_frames_before = int(resume["saved_frames"])
+            steps_before = int(resume["accepted_steps"])
         while self._time < t_end - time_tol:
             if not unlimited_steps and steps >= max_steps:
                 if self._max_steps_action == "stop":
@@ -4193,7 +4505,7 @@ class LAPDSim1D:
             self._update_current_phase_triggers()
             if ignition_budget_guards:
                 self._check_ignition_budget_guards(
-                    accepted_steps=steps + 1,
+                    accepted_steps=steps_before + steps + 1,
                     wall_clock_start=ignition_wall_clock_start,
                 )
             if dynamic_t_end:
@@ -4249,6 +4561,18 @@ class LAPDSim1D:
                 last_progress_time = float(self._time)
                 force_progress = False
 
+        # Deposit the run loop's controller state where restart_payload() can
+        # reach it. These are locals, so without this an exported end state
+        # would be missing the dt-growth anchor and the save lattice entirely
+        # -- the two members a naive restart cannot even find to drop.
+        self._last_run_loop_state = {
+            "previous_accepted_dt": previous_accepted_dt,
+            "t_last_save": None if not np.isfinite(t_last_save) else float(t_last_save),
+            "dt_growth_capped_streak": int(dt_growth_capped_streak),
+            "consecutive_dt_min_clamps": int(consecutive_dt_min_clamps),
+            "saved_frames": int(saved_frames_before + len(saved)),
+            "accepted_steps": int(steps_before + steps),
+        }
         result = self._trajectory_result(
             saved=saved,
             diagnostics=diagnostics,
