@@ -779,3 +779,38 @@ composition rule and supplying both is a construction-time `ValueError`. This
 is a deliberate choice of the least-surprising rule over a precedence rule
 (e.g. "profile wins", or "profile scaled by the fraction"), which would have to
 be remembered and could be got wrong silently.
+
+## `neutral_probe_source_defaults`
+
+**All ten keys are `None`, and that is the whole entry: this group ships no
+number, so there is nothing here to classify.** The ad-hoc probe source is an
+INFERENCE INSTRUMENT — an arm with it on measures the plasma's response to a
+*hypothesized* neutral source — so every one of its values is the hypothesis
+the arm is stating and none of them is a property of the machine. A default
+would be a hypothesis nobody made, silently inherited into a run and then read
+back out of the saved config as if someone had chosen it. There is accordingly
+no default amplitude, no default placement, no default waveform, and (under two
+zones) no default zone; each is a construction-time `ValueError` when the flag
+is on, and each is refused when the flag is off. Nothing in this group is on
+any shipped trajectory.
+
+Two consequences worth stating, because both look like missing entries:
+
+- **There is no injection-temperature key.** The moment neutral model carries
+  one neutral temperature, `Tn_K = 300 K` (its own entry above), and no neutral
+  energy equation, so probe-injected particles join that single cold-gas
+  population exactly as gas-puff particles do. A distinct probe temperature
+  would be a new field, not a new parameter, and would need its own provenance
+  and its own physics.
+- **There is no smoothing constant.** The `square` waveform's edges are hard
+  and its window is the half-open `[t_on, t_off)`; the `table` waveform is
+  linear between the caller's own nodes and exactly zero outside their span.
+  Any rise or fall time here would be an invented number in a group whose whole
+  point is that it invents none — a caller who wants a shaped turn-on tabulates
+  one, where it is visible in the config.
+
+`neutral_probe_amplitude_cm3_s = 0` is the explicit NULL CONTROL and must be
+asked for: it is bit-exact against the flag-off trajectory, which is what makes
+it a usable control rather than a silent no-op. An identically-zero
+`neutral_probe_profile` is refused instead, because a shape that injects
+nowhere is a misconfiguration and the null control already has a key.
