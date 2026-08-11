@@ -1,0 +1,32 @@
+parameter_count: 225 -> 226 (delta 1)
+flag_count: 40 -> 40 (unchanged)
+restart_from registered with default None: yes
+restart_from owned by defaults group: restart_defaults
+
+per-case digests with restart_from stripped back out:
+  MATCH   compare_sim1d_es1
+  MATCH   production_golden
+  MATCH   run_m6_point_es1_sgp3400_defaults
+  MATCH   run_mechanism_ladder_es1_defaults
+
+OVERALL: PASS -- every case digest reproduces its pre-restart value once restart_from is removed, so registering that one default-None key is the ENTIRE config delta. Updating config_snapshots.json is therefore recording a proven change, not silencing a tripwire.
+
+new manifest_sha256: 60425291d7bb077ed54d0130640ba34caaa798546cabab4ee93fd31997cd91d0
+{
+  "compare_sim1d_es1": {
+    "Te_birth_ionization": "local",
+    "sha256": "480a39e4e0fa9129ad00851c20cccb67e38777675f692992d877a422c3bb706b"
+  },
+  "production_golden": {
+    "Te_birth_ionization": "local",
+    "sha256": "83d8f36168387fda3f3927ec699539cd7a6dec0f85878bedb2e00e5c06318585"
+  },
+  "run_m6_point_es1_sgp3400_defaults": {
+    "Te_birth_ionization": "floor",
+    "sha256": "d23d5c7eea215fc7dc3afa2021d53a07ea22e04f77dee6a9ed6b6993a8a2465e"
+  },
+  "run_mechanism_ladder_es1_defaults": {
+    "Te_birth_ionization": "floor",
+    "sha256": "d4d2d1704b1581c592eb3c900f38077ac0c930fb91fd84c39f69742f97cae2b3"
+  }
+}

@@ -182,3 +182,64 @@ unsplit: 1109 accepted steps, 6 saved frames
   engaged: dt_growth bound 17 step(s)
   engaged: beam TURN-ON inside the window
   split point snapped 0.0003 -> 0.00030000000000000003 (exact float of an unsplit save instant)
+stage 1: 937 accepted steps, 4 saved frames -> restart_bitidentity_meanfield_beam.restart.h5
+  coverage/f absent in this scenario; control skipped
+
+===== scenario meanfield_beam: t_mid=0.0003 s, t_end=0.0005 s, NEGATIVE CONTROL run_loop.dt_growth_capped_streak =====
+unsplit: 1109 accepted steps, 6 saved frames
+  step caps: {'dt_growth': 17, 'plasma_cfl': 7, 'save_time': 4, 'surface_loss': 1080, 't_end': 1}
+  steps per save: 1109/6
+  engaged: dt_growth bound 17 step(s)
+  engaged: beam TURN-ON inside the window
+  split point snapped 0.0003 -> 0.00030000000000000003 (exact float of an unsplit save instant)
+stage 1: 937 accepted steps, 4 saved frames -> restart_bitidentity_meanfield_beam.restart.h5
+  perturbed attr run_loop/dt_growth_capped_streak__int: 0 -> 64
+stage 2: 172 accepted steps, 2 saved frames
+frames at/<= t_mid: 4; frames after t_mid (THE GATE): 2
+frames compared (whole window, raw uint64): 6
+  RESULT: FAIL (control) -- corrupting run_loop.dt_growth_capped_streak changed NOTHING; the gate does not test this member
+
+===== scenario meanfield_beam: t_mid=0.0003 s, t_end=0.0005 s, NEGATIVE CONTROL run_loop.previous_accepted_dt =====
+unsplit: 1109 accepted steps, 6 saved frames
+  step caps: {'dt_growth': 17, 'plasma_cfl': 7, 'save_time': 4, 'surface_loss': 1080, 't_end': 1}
+  steps per save: 1109/6
+  engaged: dt_growth bound 17 step(s)
+  engaged: beam TURN-ON inside the window
+  split point snapped 0.0003 -> 0.00030000000000000003 (exact float of an unsplit save instant)
+stage 1: 937 accepted steps, 4 saved frames -> restart_bitidentity_meanfield_beam.restart.h5
+  perturbed attr run_loop/previous_accepted_dt: 5.982515123727607e-07 -> 5.982515721979119e-07
+stage 2: 172 accepted steps, 2 saved frames
+frames at/<= t_mid: 4; frames after t_mid (THE GATE): 2
+frames compared (whole window, raw uint64): 6
+  RESULT: PASS (control) -- corrupting run_loop.previous_accepted_dt broke identity in 128 place(s), e.g. meanfield_beam t=4.000000000000e-04: Ee differs in 30/31 uint64 words
+
+===== scenario meanfield_beam: t_mid=0.0003 s, t_end=0.0005 s, NEGATIVE CONTROL run_loop.t_last_save =====
+unsplit: 1109 accepted steps, 6 saved frames
+  step caps: {'dt_growth': 17, 'plasma_cfl': 7, 'save_time': 4, 'surface_loss': 1080, 't_end': 1}
+  steps per save: 1109/6
+  engaged: dt_growth bound 17 step(s)
+  engaged: beam TURN-ON inside the window
+  split point snapped 0.0003 -> 0.00030000000000000003 (exact float of an unsplit save instant)
+stage 1: 937 accepted steps, 4 saved frames -> restart_bitidentity_meanfield_beam.restart.h5
+  perturbed attr run_loop/t_last_save: 0.00030000000000000003 -> 0.00030000003000000007
+stage 2: 172 accepted steps, 2 saved frames
+frames at/<= t_mid: 4; frames after t_mid (THE GATE): 2
+frames compared (whole window, raw uint64): 5
+  RESULT: PASS (control) -- corrupting run_loop.t_last_save broke identity in 65 place(s), e.g. meanfield_beam: split run has no frame at t=0.0004
+
+===== scenario coverage: t_mid=0.00015 s, t_end=0.00025 s, NEGATIVE CONTROL cathode._cathode_beam_cross =====
+unsplit: 2001 accepted steps, 6 saved frames
+  step caps: {'dt_growth': 32, 'save_time': 4, 'surface_loss': 1964, 't_end': 1}
+  steps per save: 2001/6
+  engaged: dt_growth bound 32 step(s)
+  engaged: beam TURN-ON inside the window
+  engaged: coverage f moved 0.300000 -> 0.339966
+  split point snapped 0.00015 -> 0.00015000000000000001 (exact float of an unsplit save instant)
+stage 1: 1392 accepted steps, 4 saved frames -> restart_bitidentity_coverage.restart.h5
+  perturbed dataset cathode/_cathode_beam_cross
+stage 2: 609 accepted steps, 2 saved frames
+frames at/<= t_mid: 4; frames after t_mid (THE GATE): 2
+frames compared (whole window, raw uint64): 6
+  RESULT: PASS (control) -- corrupting cathode._cathode_beam_cross broke identity in 132 place(s), e.g. coverage t=2.000000000000e-04: Ee differs in 18/19 uint64 words
+
+===== scenario coverage: t_mid=0.00015 s, t_end=0.00025 s, NEGATIVE CONTROL cathode._cathode_x0 =====
