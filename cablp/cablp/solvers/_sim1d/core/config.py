@@ -2210,6 +2210,31 @@ def coverage_closure_defaults():
     }
 
 
+def restart_defaults():
+    """Continuation of a previous run from an exported end state.
+
+    restart_from:
+        Path to a ``sim1d-restart-v1`` payload written by
+        ``results.restart.save_restart_state``, or ``None`` (the default) for a
+        run that builds its own initial condition. When set, the payload's
+        instant replaces the whole initial condition: the conserved state, the
+        simulation clock, every continuation cache and latch, and the run
+        loop's own controller state, so the resumed run's saved frames are
+        raw-byte identical to those of an unsplit run over the same window.
+
+        The load raises ``ValueError`` at construction if the file is missing,
+        carries another format, or was produced under a different grid, packed
+        state layout, or structural closure key; and if the run also requests
+        ``neutral_equilibration`` (which would overwrite the restored state) or
+        a ``neutral_model`` whose distribution function the payload does not
+        carry. The full inventory, and the justification for each deliberately
+        dropped member, is ``_sim1d/RESTART.md``.
+    """
+    return {
+        "restart_from": None,
+    }
+
+
 _PARAMETER_DEFAULT_GROUPS = (
     initial_condition_defaults,
     geometry_defaults,
@@ -2223,6 +2248,7 @@ _PARAMETER_DEFAULT_GROUPS = (
     physics_fit_defaults,
     timestep_defaults,
     coverage_closure_defaults,
+    restart_defaults,
 )
 
 
