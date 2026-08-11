@@ -1194,10 +1194,14 @@ def _csda_beam_deposition(
     whose one post-march walk stage runs on the MEAN plasma state: the hoisted
     ``stopping_coefficient`` is built on the mean ``n`` rather than on the
     channel view the rays march through, and without a coverage view those are
-    the same array. ``heating_anomalous_tail_ionization="on"`` is the exception
-    -- the solver refuses it with coverage at construction time, because a
-    mean-state walker that burns neutrals leaves the deficit equation with no
-    medium to debit.
+    the same array. Under ``heating_anomalous_tail_ionization="on"`` the
+    walkers are marched rather than integrated in closed form, so the mean
+    medium itself (``nn_mean``, ``ne_mean``) goes with them, and their per-cell
+    ionization is attributed between the covered column and the reservoir by
+    the same decorrelation partition -- which the two-stream march expresses by
+    banking those events into the two ARMS with weights ``f_cov`` and
+    ``1 - f_cov``, so the reservoir debit this module already publishes carries
+    the split with no extra plumbing.
     """
     coulomb_model = str(input_dict.get("beam_coulomb_model", "fast_electron"))
     anomalous_model = str(input_dict.get("beam_anomalous_model", "none"))
@@ -1421,6 +1425,13 @@ def _csda_beam_deposition(
             # per-arm per-cell and feed one walk stage that runs on the
             # mean-state ``stopping_coefficient`` hoisted above.
             two_stream_kwargs.update(ray_transport)
+            if "tail_ionization" in ray_transport:
+                # The ionizing walkers are MARCHED rather than integrated in
+                # closed form, so they need the mean medium itself and not only
+                # its stopping coefficient. Presence-gated with the channel, so
+                # a run without it passes the argument list it had before.
+                two_stream_kwargs["nn_mean"] = state.nn
+                two_stream_kwargs["ne_mean"] = state.n
         # The gap's per-cell path length, shared by the probe below and by the
         # deposition ray's own breakout test.
         gap_dz = _clip_ray_length(

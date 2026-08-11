@@ -717,15 +717,23 @@ two media and no mean and therefore refuses to choose one silently. Without a
 coverage view the mean array IS the array the rays march through, so every walk
 arm without coverage is bit-exact.
 
-**One walk sub-mode is still refused:**
-`heating_anomalous_tail_ionization="on"`. Those walkers BURN neutrals, and which
-medium's neutrals a mean-state walker burnt is precisely what the deficit
-equation below would have to be told -- the covered column and the reservoir
-hold different neutral densities, and the mean-state ruling does not settle the
-attribution. The energy-only walks have no such ambiguity: they deposit heat
-alone, which the mean fields consume as the sum of the two arms. The refusal is
-a construction-time `ValueError`, and `tail_ionization` is absent from
-`deposit_beam_two_stream`'s signature so it cannot be reached by passing it.
+**Burn attribution follows the same partition.** Under
+`heating_anomalous_tail_ionization="on"` a walker also removes neutrals, and the
+medium it removed them from is fixed by the identical sampling statement: at
+cell $z$ its path lies inside a channel for a fraction $f_\text{cov}(z)$ of the
+cross-section and inside the reservoir for $1-f_\text{cov}(z)$, so a fraction
+$f_\text{cov}(z)$ of its per-cell ionization events debits the covered column
+and $1-f_\text{cov}(z)$ debits the reservoir. This is the third application of
+the one registered closure rule -- after the primary's re-mix and the walk
+medium -- and it introduces no constant and no key: the split is expressed by
+banking the walker's events into the two ARMS with those weights, and the
+reservoir arm's ionization rows are already what the deficit equation reads as
+$B_\text{res}$. The walk itself still runs on the mean medium, the births are
+still booked to the mean fields under the interpretation caveat recorded above,
+and the two misattribution bounds carry over unchanged -- they are statements
+about this same sampling argument, not separate approximations. The walker's
+energy rows are split by the same weights, which leaves their sum, the only
+thing any consumer reads, exactly where it shipped.
 
 **Where the concentration factors go.** The rule is that a factor appears only
 where it does not cancel. A volumetric rate that is bilinear in a plasma and a
@@ -856,7 +864,7 @@ coverage: $f_\text{cov}(z)$ cells are independent, and patch spreading in $z$
 enters only through the deposition profile that drives them. The closure
 requires `neutral_model="moment"` (the kinetic arms take over the fluid $n_n$
 rows once engaged, so the column would never deplete and the backfill would be
-a silent no-op), refuses the ionizing tail channel (above), and refuses the
+a silent no-op) and refuses the
 compiled kernels while it is on (the beam deposition it concentrates has a
 compiled transcription that the closure does not touch and that has never been
 bit-compared under coverage). All are construction-time `ValueError`s.

@@ -1565,27 +1565,6 @@ class LAPDSim1D:
                 "neutral model the column would never deplete and the "
                 "backfill would be a silent no-op"
             )
-        if (
-            str(
-                self._input_dict.get("heating_anomalous_transport", "local")
-            ) == "tail_walk"
-            and str(
-                self._input_dict.get(
-                    "heating_anomalous_tail_ionization", "off"
-                )
-            ) != "off"
-        ):
-            raise ValueError(
-                "coverage_closure is incompatible with "
-                "heating_anomalous_tail_ionization='on': under coverage the "
-                "tail walk runs on the MEAN plasma state, and a walker that "
-                "also IONIZES burns neutrals -- but which medium's neutrals a "
-                "mean-state walker burnt is exactly what the closure's deficit "
-                "equation has to be told, and the covered column and the "
-                "reservoir hold different neutral densities. The energy-only "
-                "tail walk has no such ambiguity because it deposits heat "
-                "alone, which the mean fields consume as a sum. Disable one"
-            )
         if compiled_kernels_requested():
             raise ValueError(
                 "coverage_closure refuses the compiled kernels "

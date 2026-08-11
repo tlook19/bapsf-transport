@@ -1897,9 +1897,12 @@ def deposit_beam_two_stream(
     anomalous_transport: str = "local",
     tail_energy_eV: float | None = None,
     tail_walk_window: tuple[int, int] | None = None,
+    tail_ionization: str = "off",
     tail_reflect_face: int | None = None,
     tail_reflect_threshold_eV: float | None = None,
     stopping_coefficient: np.ndarray | None = None,
+    nn_mean: np.ndarray | None = None,
+    ne_mean: np.ndarray | None = None,
 ):
     """March one beam ray through a Z-RESOLVED two-medium column (coverage v2).
 
@@ -1992,18 +1995,27 @@ def deposit_beam_two_stream(
     pair it could honestly build one from, so a caller that has not decided
     which state the walk runs on gets an error rather than a quiet choice.
 
-    ``tail_ionization`` is absent from this signature rather than defaulted, so
-    the ionizing tail channel cannot reach this march: its walkers BURN
-    neutrals, and which medium's neutrals a mean-state walker burnt -- the
-    quantity the closure's deficit equation is written on -- is not settled by
-    the mean-state ruling. The solver refuses that combination at construction
-    time.
+    **Burn attribution under ``tail_ionization="on"`` is THE SAME PARTITION.**
+    An ionizing walker also removes neutrals, and the medium it removed them
+    from follows from the identical statement: at cell ``z`` the walker's path
+    lies inside a channel for a fraction ``f_cov(z)`` of its cross-section and
+    inside the reservoir for ``1 - f_cov(z)``, so its per-cell ionization
+    EVENTS are split that way -- ``f_cov`` of them debit the covered column and
+    ``1 - f_cov`` the reservoir. That split is expressed by banking the walker's
+    events into the two ARMS with those weights, which is why it needs no
+    machinery of its own: the caller already reads the reservoir arm's
+    ionization rows as the reservoir debit, and the sum of the arms as the
+    total. The walk itself still runs on the mean medium (``nn_mean``,
+    ``ne_mean``, required with the channel on), the births are still booked to
+    the mean fields, and the two misattribution bounds above carry over
+    unchanged -- they are statements about the same sampling argument.
 
-    The walked deposits are booked to the CHANNEL arm's banks, on the same
+    The walked HEAT is booked to the CHANNEL arm's banks, on the same
     convention the transmitted primary already uses above: after the walk the
     energy belongs to the mean field and no medium owns it, and the caller
-    consumes the two arms' sum. Only the reservoir arm's IONIZATION rows are
-    read separately, and the walks under this signature deposit heat alone.
+    consumes the two arms' sum. Splitting the ionization cost and the radiated
+    energy by the same weights therefore leaves the energy side exactly where
+    it shipped -- only the sum is read.
     """
     if anomalous_model not in ("none", "quasilinear"):
         raise ValueError(
@@ -2064,8 +2076,24 @@ def deposit_beam_two_stream(
             f"unknown anomalous_transport {anomalous_transport!r}; "
             "expected 'local' or 'tail_walk'"
         )
+    if tail_ionization not in ("off", "on"):
+        raise ValueError(
+            f"unknown tail_ionization {tail_ionization!r}; "
+            "expected 'off' or 'on'"
+        )
+    if tail_ionization == "on" and anomalous_transport != "tail_walk":
+        raise ValueError(
+            "tail_ionization='on' requires anomalous_transport='tail_walk' "
+            "(the ionizing channel belongs to the QL tail walkers; with "
+            "anomalous_transport='local' there are no walkers and the "
+            "setting would do nothing). anomalous_transport accepts 'local' "
+            "or 'tail_walk'; tail_ionization accepts 'off' or 'on'"
+        )
     walk_products = product_transport == "nonlocal"
     walk_tail = anomalous_transport == "tail_walk"
+    ionize_tail = tail_ionization == "on"
+    tail_sub_threshold = False
+    tail_above_bar = False
     E_tail = 0.0
     if walk_tail:
         # Same presence gating deposit_beam applies: with no anomalous channel
@@ -2121,7 +2149,7 @@ def deposit_beam_two_stream(
             "would silently do nothing"
         )
     tail_lo, tail_hi = 0, cells - 1
-    if reflect_face is not None:
+    if reflect_face is not None and not ionize_tail:
         if tail_walk_window is None:
             raise ValueError(
                 "tail_reflect_face needs tail_walk_window=(lo, hi): the "
@@ -2134,6 +2162,76 @@ def deposit_beam_two_stream(
                 "tail_walk_window must be an inclusive (lo, hi) cell range "
                 f"with 0 <= lo <= hi < cells={cells} (got {tail_walk_window})"
             )
+    if ionize_tail:
+        # The walk DOMAIN is required, not defaulted to the whole grid: an
+        # ionizing walker that leaves the plasma births pairs into rows the
+        # solver's active mask zeroes, i.e. pairs created and silently deleted.
+        if tail_walk_window is None:
+            raise ValueError(
+                "tail_ionization='on' needs tail_walk_window=(lo, hi), the "
+                "inclusive cell range the tail walkers may traverse (the "
+                "plasma-active window: a walker leaving it hits a wall and is "
+                "booked to the tail end ledger). Without it the walk would "
+                "run off into cells whose plasma rows the solver zeroes and "
+                "birth pairs that are then deleted"
+            )
+        tail_lo, tail_hi = (int(tail_walk_window[0]), int(tail_walk_window[1]))
+        if not 0 <= tail_lo <= tail_hi < cells:
+            raise ValueError(
+                "tail_walk_window must be an inclusive (lo, hi) cell range "
+                f"with 0 <= lo <= hi < cells={cells} (got {tail_walk_window})"
+            )
+        # THE MEAN MEDIUM the walkers march through. Required for the same
+        # reason the stopping coefficient is: this march holds a channel view
+        # and a reservoir view, and the ruling says the walk runs on neither.
+        if nn_mean is None or ne_mean is None:
+            raise ValueError(
+                "tail_ionization='on' under a two-stream march needs nn_mean "
+                "and ne_mean: the ionizing walkers march the MEAN state, and "
+                "this march carries only the channel and reservoir views, so "
+                "it cannot form the mean without silently choosing a medium"
+            )
+        nn_mean = np.asarray(nn_mean, dtype=float)
+        ne_mean = np.asarray(ne_mean, dtype=float)
+        if nn_mean.shape != (cells,) or ne_mean.shape != (cells,):
+            raise ValueError(
+                "nn_mean and ne_mean must have one entry per grid cell "
+                f"(cells={cells}); got {nn_mean.shape} and {ne_mean.shape}"
+            )
+        # --- The K7b band split, transcribed from deposit_beam --------------
+        # The two depth-1 bars select a TREATMENT rather than refusing; only
+        # the EII table edge is still a refusal, and it is edge-INCLUSIVE
+        # within HE_EII_EDGE_REL_TOL (at the edge the clamped cross section IS
+        # the table's endpoint value, so nothing is extrapolated).
+        _E_table_top = HE_EII_EPS_TOP * I_ion_eV
+        _edge_excess = (E_tail - _E_table_top) / _E_table_top
+        if _edge_excess > HE_EII_EDGE_REL_TOL:
+            raise ValueError(
+                "tail_ionization='on' marches the walkers on the tabulated "
+                "He EII cross section, which ends at eps = E/I_ion = "
+                f"{HE_EII_EPS_TOP:.6f} (i.e. "
+                f"{_E_table_top:.2f} eV at I_ion_eV={I_ion_eV}); "
+                f"at tail_energy_eV={E_tail} eV the lookup would clamp to its "
+                "last node and the walk would attenuate on an extrapolated "
+                "cross section. This is refused, not approximated (relative "
+                f"excess {_edge_excess:.3e}, tolerated "
+                f"{HE_EII_EDGE_REL_TOL:.1e})"
+            )
+        if E_tail <= E_stop_eV:
+            # SUB-THRESHOLD: no He inelastic channel is open, so zero
+            # ionization is the answer, not a modelling choice. Revert this ray
+            # to the energy-only walk by clearing the flag.
+            tail_sub_threshold = True
+            ionize_tail = False
+        elif (
+            he_mean_secondary_energy_eV(E_tail, I_ion_eV=I_ion_eV)
+            >= E_stop_eV
+        ):
+            # ABOVE THE DEPTH-1 BAR: the mean secondary can itself do something
+            # inelastic, so banking it locally understates the cascade.
+            # Allowed, with the understatement measured and the exposure
+            # reported.
+            tail_above_bar = True
     if walk_products or walk_tail:
         # THE MEAN-STATE HAND-OFF, made structural. There is no medium here the
         # walk could fall back on: this function holds a channel view and a
@@ -2172,6 +2270,13 @@ def deposit_beam_two_stream(
                 "heat_secondary",
                 "heat_terminal",
                 "E_entry",
+                # K6 diagnostic splits. Present (and zero) on both arms
+                # whatever the closure, so the result shape never depends on
+                # which branch ran.
+                "ion_events_tail",
+                "exc_events_tail",
+                "ion_cost_tail",
+                "radiated_tail",
             )
         }
         for _ in range(2)
@@ -2196,6 +2301,8 @@ def deposit_beam_two_stream(
     end_loss_tail_low = 0.0
     end_loss_tail_high = 0.0
     tail_power = 0.0
+    tail_sub_threshold_power = 0.0
+    tail_above_bar_power = 0.0
 
     E = float(E0_eV)
     gamma_total = float(Gamma0_per_s)
@@ -2456,7 +2563,11 @@ def deposit_beam_two_stream(
             # has built -- which is the emergent transition the closure claims.
             half_flux = 0.5 * (anom_power_eV / E_tail)
             tail_power = float(anom_power_eV.sum()) * _ERG_PER_EV
-            if reflect_face is not None:
+            if tail_sub_threshold:
+                tail_sub_threshold_power = tail_power
+            elif tail_above_bar:
+                tail_above_bar_power = tail_power
+            if ionize_tail or reflect_face is not None:
                 # The windowed closure's standing requirement: the window must
                 # contain every cell the QL channel drives, or that cell's tail
                 # power would be dropped on the floor.
@@ -2469,6 +2580,122 @@ def deposit_beam_two_stream(
                             "channel drives, or that cell's tail power would "
                             "be silently dropped"
                         )
+            if ionize_tail:
+                # K6 under coverage: the walkers attenuate INELASTICALLY on the
+                # mean neutral column as well as Coulomb-slowing, so the
+                # closed-form integral cannot carry them. March them on this
+                # module's own CSDA integration over the WINDOWED MEAN medium
+                # -- the same instrument the primary uses, so cross sections,
+                # thresholds, <W_sec> and substep control are the primary's by
+                # construction rather than by transcription.
+                #
+                # BURN ATTRIBUTION: every per-cell bank the marched walker
+                # produces is split between the arms by the local coverage --
+                # f_cov to the channel, (1 - f_cov) to the reservoir. That is
+                # the decorrelation partition applied to the walker's path, and
+                # it is the whole implementation: the caller already reads the
+                # reservoir arm's ionization rows as the reservoir debit and
+                # the arms' sum as the total, so the deficit equation picks the
+                # split up with no machinery of its own. The energy rows are
+                # split by the same weights, which leaves their SUM -- the only
+                # thing read -- exactly where it shipped.
+                win = slice(tail_lo, tail_hi + 1)
+                nn_w = nn_mean[win]
+                ne_w = ne_mean[win]
+                Te_w = Te[win]
+                dz_w = dz_cm[win]
+                f_w = f_cov[win]
+
+                def _bank_tail_march(res):
+                    """Book one marched tail population, PARTITIONED by f_cov."""
+                    for arm, weight in ((0, f_w), (1, 1.0 - f_w)):
+                        bank = banks[arm]
+                        bank["ionization_events"][win] += (
+                            weight * res.ionization_events
+                        )
+                        bank["excitation_events"][win] += (
+                            weight * res.excitation_events
+                        )
+                        bank["ionization_cost"][win] += (
+                            weight * res.ionization_cost_erg_s
+                        )
+                        bank["radiated"][win] += weight * res.radiated_erg_s
+                    # All of the walker's HEAT is the anomalous channel's
+                    # delivery to the electrons, so it lands in the lumped bank
+                    # and in the anomalous split -- never in the primary's
+                    # coulomb/secondary/terminal splits, which keep describing
+                    # the primary alone. Booked whole to the channel slot, like
+                    # every other walked deposit above.
+                    chan["heating"][win] += res.plasma_heating_erg_s
+                    chan["heat_anomalous"][win] += res.plasma_heating_erg_s
+                    # Diagnostic tail splits of the four shared banks, on the
+                    # same partition as the banks they split.
+                    for arm, weight in ((0, f_w), (1, 1.0 - f_w)):
+                        bank = banks[arm]
+                        bank["ion_events_tail"][win] += (
+                            weight * res.ionization_events
+                        )
+                        bank["exc_events_tail"][win] += (
+                            weight * res.excitation_events
+                        )
+                        bank["ion_cost_tail"][win] += (
+                            weight * res.ionization_cost_erg_s
+                        )
+                        bank["radiated_tail"][win] += (
+                            weight * res.radiated_erg_s
+                        )
+
+                march_kwargs = dict(
+                    I_ion_eV=I_ion_eV,
+                    E_stop_eV=E_stop_eV,
+                    coulomb_model=coulomb_model,
+                    anomalous_model="none",
+                    max_energy_fraction_per_substep=frac,
+                )
+                for birth in np.flatnonzero(half_flux > 0.0):
+                    for walk_direction in (1, -1):
+                        leg_dir = walk_direction
+                        leg = deposit_beam(
+                            E_tail,
+                            float(half_flux[birth]),
+                            nn_w,
+                            ne_w,
+                            Te_w,
+                            int(birth) - tail_lo,
+                            leg_dir,
+                            dz_w,
+                            **march_kwargs,
+                        )
+                        while True:
+                            _bank_tail_march(leg)
+                            leg_flux = float(leg.transmitted_flux)
+                            leg_E = float(leg.transmitted_energy_eV)
+                            if (
+                                reflect_face is not None
+                                and leg_dir == reflect_face
+                                and leg_flux > 0.0
+                                and leg_E < E_reflect
+                            ):
+                                leg_dir = -leg_dir
+                                leg = deposit_beam(
+                                    leg_E,
+                                    leg_flux,
+                                    nn_w,
+                                    ne_w,
+                                    Te_w,
+                                    0 if reflect_face < 0 else tail_hi - tail_lo,
+                                    leg_dir,
+                                    dz_w,
+                                    **march_kwargs,
+                                )
+                                continue
+                            exit_erg = leg_flux * leg_E * _ERG_PER_EV
+                            if leg_dir > 0:
+                                end_loss_tail_high += exit_erg
+                            else:
+                                end_loss_tail_low += exit_erg
+                            break
+            elif reflect_face is not None:
                 # K7 with one reflecting window face. A reflection is expressed
                 # by UNFOLDING the path: the reflected leg is the window
                 # traversed back the other way, concatenated onto the incoming
@@ -2592,10 +2819,13 @@ def deposit_beam_two_stream(
                 heating_anomalous_erg_s=bank["heat_anomalous"],
                 heating_secondary_erg_s=bank["heat_secondary"],
                 heating_terminal_erg_s=bank["heat_terminal"],
-                ionization_events_tail=np.zeros(cells),
-                excitation_events_tail=np.zeros(cells),
-                ionization_cost_tail_erg_s=np.zeros(cells),
-                radiated_tail_erg_s=np.zeros(cells),
+                # K6 diagnostic splits, PARTITIONED by f_cov like the shared
+                # banks they split, so the two arms' tail rows sum to the
+                # walkers' own totals exactly as their parents do.
+                ionization_events_tail=bank["ion_events_tail"],
+                excitation_events_tail=bank["exc_events_tail"],
+                ionization_cost_tail_erg_s=bank["ion_cost_tail"],
+                radiated_tail_erg_s=bank["radiated_tail"],
                 # The end ledgers belong to the WALK, which ran once on the
                 # mean state for both arms' births, so they are booked whole to
                 # the channel slot on the same convention the transmitted
@@ -2611,6 +2841,12 @@ def deposit_beam_two_stream(
                     0.0 if arm == 1 else end_loss_tail_high
                 ),
                 tail_power_erg_s=0.0 if arm == 1 else tail_power,
+                tail_sub_threshold_power_erg_s=(
+                    0.0 if arm == 1 else tail_sub_threshold_power
+                ),
+                tail_above_bar_power_erg_s=(
+                    0.0 if arm == 1 else tail_above_bar_power
+                ),
             )
         )
     return results[0], results[1], flux_entry
