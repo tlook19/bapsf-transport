@@ -15,10 +15,6 @@ from .core.config import (
     resolve_config,
     resolve_nn0,
 )
-from cablp.funcs._kernels import (
-    ENV_VAR as _KERNEL_ENV_VAR,
-    compiled_kernels_requested,
-)
 from .core.geometry import (
     _anode_neutral_transparency,
     absorbing_live_cells_by_role,
@@ -1565,17 +1561,21 @@ class LAPDSim1D:
                 "neutral model the column would never deplete and the "
                 "backfill would be a silent no-op"
             )
-        if compiled_kernels_requested():
-            raise ValueError(
-                "coverage_closure refuses the compiled kernels "
-                f"({_KERNEL_ENV_VAR}=1): the beam deposition it concentrates "
-                "has a compiled transcription that the closure deliberately "
-                "does not touch, and running one arm of the closure on "
-                "transcribed arithmetic that has never been bit-compared under "
-                "coverage would risk a silent pure/compiled divergence. Unset "
-                f"{_KERNEL_ENV_VAR} for coverage runs; the refusal binds only "
-                "while the flag is ON"
-            )
+        # NB there is deliberately NO refusal of the compiled kernels here.
+        # v1 carried one, on the belief that the closure's beam split ran on
+        # transcribed arithmetic that had never been bit-compared under
+        # coverage. That is not what the opt-in reaches: the compiled march
+        # (``_CSDA_MARCH``) is bound only inside ``deposit_beam``, the
+        # SINGLE-MEDIUM ray, and ``deposit_beam_two_stream`` -- the closure's
+        # own two-medium wrapper, its per-cell re-split, its re-mix and all of
+        # its banking -- has no compiled branch at all. So under coverage the
+        # opt-in accelerates exactly the nested single-medium walker marches
+        # (the ray shape the tierA+csda transcription was bit-verified over)
+        # plus the tier-A cathode kernels, and both paths were measured
+        # raw-uint64 identical over coverage trajectories before the refusal
+        # was lifted. Bit-identity, not the refusal, is the standing guard:
+        # smoke's compiled-kernel equivalence block runs a beam-live coverage
+        # arm both ways and asserts the raw state bytes match.
         self._coverage_r = r
         self._coverage_tau_s = tau
         # The coverage FIELD itself [1], per cell, in (0, 1]. v2 co-integrates
