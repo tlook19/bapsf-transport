@@ -30,8 +30,23 @@ see NUMERICS.md, "MEASURED: the local balance has no root at the production
 stance"). That is reported as BLOCKED with the refusal verbatim, because a gate
 that cannot run has not passed.
 
+MATCHED-CLOSURE READING (registered before the ql_relaxation run)
+-----------------------------------------------------------------
+``--anomalous-model`` moves BOTH arms together, and moving it changes what the
+gate measures. On the shipped ``quasilinear`` the tracer refuses the anomalous
+booking on its own cells and the fluid does not, so a disagreement is dominated
+by that refusal -- the gate is measuring the closure gap. Under
+``ql_relaxation`` a passive cell books the channel exactly as an active one
+does, so the closure is MATCHED across the interface and what remains is
+tracer-vs-fluid NUMERICS: the tracer's quasi-static ``Te`` and its neglect of
+parallel transport against the fluid's resolved equations. Both verdicts are
+evidence and neither is tuned for; a FAIL under matched closures is a statement
+about the two descriptions, not a defect to be fitted away.
+
 Usage (from <checkout>/cablp, with PYTHONPATH set to that same cablp):
     python scripts/regime_r2_overlap_gate.py --nx 20 --t-end 3e-5
+    python scripts/regime_r2_overlap_gate.py --nx 20 --t-end 3e-5 \\
+        --anomalous-model ql_relaxation --ql-relaxation-coeff 30
 """
 
 import argparse
@@ -120,10 +135,26 @@ def main(argv=None):
     parser.add_argument("--t-end", type=float, default=3.0e-5)
     parser.add_argument("--dt-save", type=float, default=1.0e-6)
     parser.add_argument("--max-steps", type=int, default=20000)
+    # The anomalous closure BOTH arms run. Changing it changes what the gate
+    # tests, and that is the point of exposing it: with the two arms on the
+    # fiat closure the gate measures the tracer's refusal of it, and with both
+    # on `ql_relaxation` -- which a passive cell books like an active one --
+    # the closure is matched and what is left is tracer-vs-fluid NUMERICS.
+    # Either reading is evidence; neither is tuned for here.
+    parser.add_argument(
+        "--anomalous-model",
+        default="quasilinear",
+        choices=("none", "quasilinear", "ql_relaxation"),
+    )
+    parser.add_argument("--ql-relaxation-coeff", type=float, default=None)
     args = parser.parse_args(argv)
 
+    extra = {"beam_anomalous_model": args.anomalous_model}
+    if args.ql_relaxation_coeff is not None:
+        extra["ql_relaxation_coeff"] = args.ql_relaxation_coeff
+
     warnings.simplefilter("ignore")
-    params, _flags = build_config(args.nx, False)
+    params, _flags = build_config(args.nx, False, extra)
     band = [float(v) for v in params["tracer_overlap_band_ne"]]
     rtol = float(params["tracer_overlap_rtol"])
     print(
@@ -134,16 +165,24 @@ def main(argv=None):
         f"  registered band = [{band[0]:g}, {band[1]:g}] cm^-3, "
         f"registered rtol = {rtol:g} (both from input_dict)"
     )
+    print(
+        f"  beam_anomalous_model = {args.anomalous_model!r} on BOTH arms"
+        + (
+            f", ql_relaxation_coeff = {params['ql_relaxation_coeff']:g}"
+            if args.anomalous_model == "ql_relaxation"
+            else ""
+        )
+    )
 
     t_f, n_f, _sim_f = run_arm(
-        args.nx, False, args.t_end, args.dt_save, args.max_steps
+        args.nx, False, args.t_end, args.dt_save, args.max_steps, extra
     )
     print(f"  fluid arm: {t_f.size} frames, t_end={t_f[-1]:.6g} s, "
           f"n max {float(np.max(n_f)):.4g} cm^-3")
 
     try:
         t_t, n_t, sim_t = run_arm(
-            args.nx, True, args.t_end, args.dt_save, args.max_steps
+            args.nx, True, args.t_end, args.dt_save, args.max_steps, extra
         )
     except TracerBalanceError as error:
         print("  tracer arm: REFUSED to produce a number")

@@ -16,6 +16,7 @@ from ..vars._cons import (
     c_cgs,
     ev_to_erg,
     m_He_cgs,
+    m_e_cgs,
 )
 
 a215 = [
@@ -876,3 +877,69 @@ def phelps_momentum_transfer_rate_cm3_s(T_eff, gas_type="He"):
         phelps_cx_rate_cm3_s(T_eff, gas_type)
         + 0.5 * phelps_iso_rate_cm3_s(T_eff, gas_type)
     )
+
+
+# ── He ELECTRON-neutral momentum transfer (the QL-relaxation damping side) ───
+# A two-node boxed table of the He e-n momentum-transfer cross section, and the
+# Maxwellian-scale rate coefficient K_m(Te) built from it. Distinct from the
+# `phelps_*` block above in both species and role: those are He+/He ION-neutral
+# channels feeding the R4.3 drag operator, this is the ELECTRON-neutral channel
+# that collisionally damps a Langmuir wave, and it is read only by the
+# `ql_relaxation` beam-anomalous closure's onset gate.
+#
+# The table is two nodes and nothing is smuggled in between them: the shipped
+# values, their classes and their honest bars live in
+# `solvers/_sim1d/core/config_defaults_provenance.md` under "QL relaxation
+# closure". The 25 eV node is a BRACKET carried as a bracket -- its endpoints
+# are published here as data so a reported result can quote them rather than
+# re-derive them.
+HE_EN_MT_NODE_EV = (5.0, 25.0)
+HE_EN_MT_SIGMA_CM2 = (6.0e-16, 2.1e-16)
+HE_EN_MT_SIGMA_BRACKET_CM2 = ((5.7e-16, 6.3e-16), (1.6e-16, 2.6e-16))
+
+_HE_EN_MT_LOG_E = np.log(np.asarray(HE_EN_MT_NODE_EV, dtype=float))
+_HE_EN_MT_LOG_SIGMA = np.log(np.asarray(HE_EN_MT_SIGMA_CM2, dtype=float))
+
+
+def he_electron_momentum_transfer_cm2(E_eV):
+    """He electron-neutral momentum-transfer cross section [cm^2] at E_eV.
+
+    Log-log interpolation between the two tabulated nodes, CLAMPED flat outside
+    them: with two nodes the slope is a chord and not a measurement, so
+    extrapolating it past either end would manufacture structure the table does
+    not contain. Inside the span the chord is a power law
+    ``sigma ~ E^-0.652``.
+
+    Accepts a scalar or an array and returns the same shape.
+    """
+    E = np.asarray(E_eV, dtype=float)
+    logE = np.log(np.maximum(E, 1.0e-300))
+    out = np.exp(
+        np.interp(logE, _HE_EN_MT_LOG_E, _HE_EN_MT_LOG_SIGMA)
+    )
+    return float(out) if np.isscalar(E_eV) or out.ndim == 0 else out
+
+
+def he_electron_momentum_transfer_rate_cm3_s(Te_eV):
+    """He e-n momentum-transfer rate coefficient ``K_m(Te)`` [cm^3/s].
+
+    ``nu_en = nn * K_m(Te)`` is the electron-neutral momentum-transfer
+    collision frequency [1/s]; half of it is the AMPLITUDE damping rate of a
+    Langmuir wave, which is the quantity the QL-relaxation onset gate weighs the
+    beam-plasma growth rate against.
+
+    Formed as ``sigma_m(<E>) * <v>`` with both factors the Maxwellian means at
+    ``Te`` -- mean energy ``<E> = 1.5 Te``, mean speed
+    ``<v> = sqrt(8 kTe / (pi m_e))``. This is the ``<sigma v> ~ sigma(<E>)<v>``
+    estimate, not a quadrature: the underlying table is two nodes wide, so a
+    Maxwellian average over it would report a precision the data does not have.
+    The order-of-magnitude standing is stated with the values in the provenance
+    note and travels with every number this gate produces.
+
+    Accepts a scalar or an array and returns the same shape.
+    """
+    Te = np.asarray(Te_eV, dtype=float)
+    Te_pos = np.maximum(Te, 1.0e-300)
+    v_mean = np.sqrt(8.0 * Te_pos * ev_to_erg / (np.pi * m_e_cgs))
+    out = he_electron_momentum_transfer_cm2(1.5 * Te_pos) * v_mean
+    return float(out) if np.isscalar(Te_eV) or np.ndim(out) == 0 else out

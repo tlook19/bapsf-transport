@@ -18,6 +18,8 @@ from cablp.funcs import _kernels as _kernel_selector
 from cablp.funcs import _cathode_solver as _cathode_solver_mod
 from cablp.funcs import _cathode_solver_idriven as _cathode_solver_idriven_mod
 from cablp.funcs import _beam_deposition as _beam_deposition_mod
+from cablp.funcs import _cross as _cross_mod
+from cablp.solvers._sim1d.physics import cathode as _cathode_mod
 from cablp.funcs._adas import he_rate_temperature_range_eV
 # main() re-imports deposit_beam locally further down (B1 block), which makes
 # the bare name local to the whole function -- alias it for the item-35 block.
@@ -15358,6 +15360,383 @@ print(json.dumps({
     _r2ql_bl_params["beam_deposition_model"] = "beer_lambert"
     _r2ql_bl_params["beam_anomalous_model"] = "none"
     LAPDSim1D(_r2ql_bl_params, _r2ql_bl_flags)
+
+    # ================= ql_relaxation: the anomalous middle leg =============
+    # Pre-registered with the closure. Four things have to hold and each has an
+    # anti-vacuity twin: the boxed onset gate actually gates (and is open where
+    # the memo says it is), the bracket constant is load-bearing when selected
+    # and INERT when it is not, the compiled kernel never runs this closure,
+    # and a passive cell BOOKS its power (the option-3 refusal is keyed to the
+    # fiat arm alone).
+    _qlr_cells = 20
+    _qlr_dz = np.full(_qlr_cells, 10.0)
+    _qlr_ray = dict(
+        nn=np.full(_qlr_cells, 2.0e13),
+        ne=np.full(_qlr_cells, 1.0e10),
+        Te=np.full(_qlr_cells, 2.0),
+        launch=0,
+        direction=1,
+        dz_cm=_qlr_dz,
+        beam_area_cm2=100.0,
+    )
+
+    # ---- (a) the boxed onset inequality, and that it is a GATE ----
+    # Memo statement, recomputed rather than quoted: over the working range the
+    # linear onset is always open, by a wide margin. This is what makes onset
+    # NOT the gating physics and relaxation the currency.
+    _qlr_nb = 1.0e19 / (
+        100.0 * _beam_deposition_mod.beam_speed_cm_s(150.0)
+    )
+    for _qlr_ne in (1.0e8, 1.0e9, 1.0e10, 1.0e11):
+        assert _beam_deposition_mod.ql_onset_open(
+            _qlr_ne, 2.0e13, 2.0, _qlr_nb
+        ), (
+            "the boxed QL onset must be open across the working range "
+            f"(closed at n_e = {_qlr_ne:g})"
+        )
+    # ANTI-VACUITY: the gate CAN close, and closes for the right reason. Two
+    # ways, one per conjunct -- an absurd neutral density kills growth against
+    # damping, and a vacuum-class plasma leaves no wave to damp.
+    assert not _beam_deposition_mod.ql_onset_open(1.0e10, 1.0e22, 2.0, _qlr_nb)
+    assert not _beam_deposition_mod.ql_onset_open(1.0e2, 2.0e13, 2.0, _qlr_nb)
+    # ... and a closed gate books EXACTLY zero, not merely little.
+    _qlr_shut = _beam_deposition_mod.deposit_beam(
+        150.0,
+        1.0e19,
+        **dict(_qlr_ray, nn=np.full(_qlr_cells, 1.0e22)),
+        anomalous_model="ql_relaxation",
+        ql_relaxation_coeff=30.0,
+    )
+    assert not np.any(_qlr_shut.heating_anomalous_erg_s), (
+        "with the onset gate closed the ql_relaxation channel must book "
+        "identically zero"
+    )
+    assert (
+        _beam_deposition_mod.ql_relaxation_stopping_eV_per_cm(
+            150.0, 1.0e10, 1.0e22, 2.0, _qlr_nb, 30.0
+        )
+        == 0.0
+    )
+
+    # ---- (b) the closure books, conserves, and the bracket moves it ----
+    _qlr_by_coeff = {}
+    for _qlr_c in (10.0, 30.0, 100.0):
+        _qlr_by_coeff[_qlr_c] = _beam_deposition_mod.deposit_beam(
+            150.0,
+            1.0e19,
+            **_qlr_ray,
+            anomalous_model="ql_relaxation",
+            ql_relaxation_coeff=_qlr_c,
+        )
+    _qlr_anom = {
+        c: float(r.heating_anomalous_erg_s.sum())
+        for c, r in _qlr_by_coeff.items()
+    }
+    assert _qlr_anom[10.0] > _qlr_anom[30.0] > _qlr_anom[100.0] > 0.0, (
+        "the plateau-formation bracket must be load-bearing and monotone "
+        f"(a longer relaxation length is weaker drag): {_qlr_anom}"
+    )
+    # Energy: extracted + retained-and-carried-out = launched, to roundoff. The
+    # ledger is the module's own per-ray identity, which the new channel joins
+    # rather than sits beside.
+    _qlr_ref = _qlr_by_coeff[30.0]
+    _qlr_launched = 1.0e19 * 150.0 * ev_to_erg
+    _qlr_booked = (
+        float(_qlr_ref.plasma_heating_erg_s.sum())
+        + float(_qlr_ref.radiated_erg_s.sum())
+        + float(_qlr_ref.ionization_cost_erg_s.sum())
+        + _qlr_ref.transmitted_flux * _qlr_ref.transmitted_energy_eV * ev_to_erg
+    )
+    assert abs(_qlr_booked / _qlr_launched - 1.0) < 1e-12, (
+        f"ql_relaxation broke per-ray energy conservation: {_qlr_booked} vs "
+        f"{_qlr_launched}"
+    )
+    # The extracted power lands in the anomalous bank and therefore in the
+    # LUMPED plasma-heating bank the RHS consumes -- bulk electrons, where the
+    # waves damp -- not in a separate ledger.
+    assert float(_qlr_ref.heating_anomalous_erg_s.sum()) > 0.0
+    assert float(_qlr_ref.plasma_heating_erg_s.sum()) > float(
+        _qlr_ref.heating_anomalous_erg_s.sum()
+    )
+    # The middle leg is a MIDDLE leg at this state: strictly between refusing
+    # the channel and the fiat closure's near-total absorption.
+    _qlr_none = _beam_deposition_mod.deposit_beam(
+        150.0, 1.0e19, **_qlr_ray, anomalous_model="none"
+    )
+    _qlr_fiat = _beam_deposition_mod.deposit_beam(
+        150.0, 1.0e19, **_qlr_ray, anomalous_model="quasilinear"
+    )
+    assert (
+        float(_qlr_none.heating_anomalous_erg_s.sum())
+        < _qlr_anom[30.0]
+        < float(_qlr_fiat.heating_anomalous_erg_s.sum())
+    )
+
+    # ---- (c) the module's own refusals ----
+    for _qlr_bad in (None,):
+        try:
+            _beam_deposition_mod.deposit_beam(
+                150.0, 1.0e19, **_qlr_ray, anomalous_model="ql_relaxation",
+                ql_relaxation_coeff=_qlr_bad,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "ql_relaxation must refuse an unregistered bracket arm"
+            )
+    for _qlr_bad in (0.0, -1.0, float("nan"), float("inf")):
+        try:
+            _beam_deposition_mod.deposit_beam(
+                150.0, 1.0e19, **_qlr_ray, anomalous_model="ql_relaxation",
+                ql_relaxation_coeff=_qlr_bad,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                f"ql_relaxation_coeff={_qlr_bad} must raise"
+            )
+
+    # ---- (d) the compiled kernel must NEVER run this closure ----
+    # It takes the anomalous channel as a BOOLEAN and applies the fiat drag, so
+    # offering it ql_relaxation would silently run the wrong physics. Tested by
+    # binding a march that explodes if reached, which works on a pure checkout
+    # too -- the point is the precondition, not the extension.
+    class _QlrKernelReached(RuntimeError):
+        pass
+
+    class _QlrFakeTables:
+        # Only ``exc_top`` is read before the march is called.
+        exc_top = 1.0e9
+
+    def _qlr_boom(*_args, **_kwargs):
+        raise _QlrKernelReached("the compiled march was offered this ray")
+
+    _qlr_saved = (
+        _beam_deposition_mod._CSDA_MARCH, _beam_deposition_mod._csda_tables
+    )
+    try:
+        _beam_deposition_mod._CSDA_MARCH = _qlr_boom
+        _beam_deposition_mod._csda_tables = lambda: _QlrFakeTables()
+        _beam_deposition_mod.deposit_beam(
+            150.0, 1.0e19, **_qlr_ray, anomalous_model="ql_relaxation",
+            ql_relaxation_coeff=30.0,
+        )
+        # ANTI-VACUITY: the same harness DOES reach the kernel for the two
+        # closures the transcription reproduces, so the pass above is the
+        # precondition doing work and not the fake march being unreachable.
+        for _qlr_ok in ("none", "quasilinear"):
+            try:
+                _beam_deposition_mod.deposit_beam(
+                    150.0, 1.0e19, **_qlr_ray, anomalous_model=_qlr_ok,
+                )
+            except _QlrKernelReached:
+                pass
+            else:
+                raise AssertionError(
+                    f"the compiled-march precondition test is vacuous for "
+                    f"{_qlr_ok!r}: the kernel was never offered the ray"
+                )
+    finally:
+        (
+            _beam_deposition_mod._CSDA_MARCH,
+            _beam_deposition_mod._csda_tables,
+        ) = _qlr_saved
+
+    # ---- (e) PRESENCE GATING: byte-identity with ql_relaxation unselected ---
+    # The key must not reach deposit_beam, and sweeping it must not move a
+    # single bit of a run on either of the other two arms.
+    def _qlr_unselected_bytes(model, coeff):
+        params, flags = _r2ql_config()
+        params["beam_anomalous_model"] = model
+        params["ql_relaxation_coeff"] = coeff
+        seen = []
+        # Wrapped in the CATHODE module's namespace, not the defining one:
+        # cathode.py binds ``deposit_beam`` by name at import, so the
+        # top-level deposition rays -- the ones that carry the closure's
+        # keywords -- resolve there and nowhere else.
+        _real = _cathode_mod.deposit_beam
+
+        def _watch(*args, **kwargs):
+            seen.append("ql_relaxation_coeff" in kwargs)
+            return _real(*args, **kwargs)
+
+        _cathode_mod.deposit_beam = _watch
+        try:
+            out = LAPDSim1D(params, flags).run(t_end=1.0e-6, dt=1.0e-7)
+        finally:
+            _cathode_mod.deposit_beam = _real
+        return np.asarray(out.n, dtype=float).tobytes(), seen
+
+    for _qlr_model in ("none", "quasilinear"):
+        _qlr_ref_bytes, _qlr_seen = _qlr_unselected_bytes(_qlr_model, 30.0)
+        assert _qlr_seen and not any(_qlr_seen), (
+            f"beam_anomalous_model={_qlr_model!r} must not carry "
+            "ql_relaxation_coeff into deposit_beam"
+        )
+        for _qlr_sweep in (10.0, 100.0, 1.0e4):
+            _qlr_moved, _ = _qlr_unselected_bytes(_qlr_model, _qlr_sweep)
+            assert _qlr_moved == _qlr_ref_bytes, (
+                f"ql_relaxation_coeff moved a {_qlr_model!r} run "
+                f"(swept to {_qlr_sweep})"
+            )
+    # ANTI-VACUITY: with the closure SELECTED the identical sweep must move the
+    # run, and the key must reach the module.
+    _qlr_sel_ref, _qlr_sel_seen = _qlr_unselected_bytes("ql_relaxation", 30.0)
+    assert _qlr_sel_seen and all(_qlr_sel_seen), (
+        "ql_relaxation must carry its bracket constant into deposit_beam"
+    )
+    _qlr_sel_swept, _ = _qlr_unselected_bytes("ql_relaxation", 100.0)
+    assert _qlr_sel_swept != _qlr_sel_ref, (
+        "the presence-gating test is vacuous: the bracket constant does not "
+        "move a run even when its closure is selected"
+    )
+
+    # ---- (f) construction-time refusals, at the SOLVER ----
+    def _qlr_refuses(**overrides):
+        params, flags = _r2ql_config()
+        params["beam_anomalous_model"] = "ql_relaxation"
+        params.update(overrides)
+        try:
+            LAPDSim1D(params, flags)
+        except ValueError:
+            return
+        raise AssertionError(f"LAPDSim1D must refuse {overrides}")
+
+    _qlr_refuses(beam_deposition_model="beer_lambert")
+    _qlr_refuses(ql_relaxation_coeff=None)
+    _qlr_refuses(ql_relaxation_coeff=0.0)
+    _qlr_refuses(ql_relaxation_coeff=-30.0)
+    _qlr_refuses(ql_relaxation_coeff=float("nan"))
+    _qlr_ok_params, _qlr_ok_flags = _r2ql_config()
+    _qlr_ok_params["beam_anomalous_model"] = "ql_relaxation"
+    LAPDSim1D(_qlr_ok_params, _qlr_ok_flags)
+    # The selector domain is closed.
+    _qlr_zzz_params, _qlr_zzz_flags = _r2ql_config()
+    _qlr_zzz_params["beam_anomalous_model"] = "zzz"
+    try:
+        LAPDSim1D(_qlr_zzz_params, _qlr_zzz_flags)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("beam_anomalous_model must reject 'zzz'")
+
+    # ---- (g) a PASSIVE cell BOOKS ql_relaxation's power ----
+    # The option-3 refusal is keyed to the FIAT arm. This closure carries its
+    # own onset gate and its own density-dependent extracted fraction, so it
+    # already books what a low-density cell can absorb; refusing it wholesale
+    # would delete the physics the middle leg exists to supply.
+    _qlr_t_params, _qlr_t_flags = _r2ql_config()
+    _qlr_t_params["beam_anomalous_model"] = "ql_relaxation"
+    _qlr_t_sim = LAPDSim1D(_qlr_t_params, _qlr_t_flags)
+    _qlr_t_sim.run(t_end=1.0e-6, dt=1.0e-7)
+    _qlr_t_passive = _qlr_t_sim._tracer_passive
+    _qlr_t_solve = _qlr_t_sim.solve_cathode_boundary(
+        state=_qlr_t_sim.state, time=_qlr_t_sim._time, update_cache=False
+    )
+    _qlr_t_kwargs = _qlr_t_sim._tracer_beam_kwargs(
+        _qlr_t_sim.state, _qlr_t_solve, _qlr_t_sim._time
+    )
+    _qlr_t_power = _r2.beam_anomalous_power_density(**_qlr_t_kwargs)
+    # PRECONDITION: there IS ql_relaxation power on passive cells here, so
+    # "the passive cell booked it" is a statement about something.
+    assert float(np.max(np.abs(_qlr_t_power[_qlr_t_passive]))) > 0.0, (
+        "the ql_relaxation booking assertions are vacuous: no anomalous power "
+        "on any passive cell at this state"
+    )
+    _qlr_t_S, _qlr_t_net, _qlr_t_full = _qlr_t_sim._tracer_beam_rows(
+        _qlr_t_sim.state, _qlr_t_solve, _qlr_t_sim._time
+    )
+    assert np.array_equal(_qlr_t_net, _qlr_t_full), (
+        "under ql_relaxation a passive cell must book the anomalous power in "
+        "full -- nothing may be subtracted"
+    )
+    assert float(
+        np.max(np.abs(_qlr_t_sim.tracer_passive_anomalous_leak()))
+    ) == 0.0
+
+    # ANTI-VACUITY for the BOOKING: hand the audit a build that wrongly refuses
+    # (the fiat arm's subtraction applied under this closure) and it must
+    # report the whole anomalous power. Without this the "leak == 0" above
+    # would be satisfied by an audit that checks nothing under this model.
+    _qlr_t_broken = _r2.passive_anomalous_leak(
+        P_beam_net_consumed=_qlr_t_full - np.where(
+            _qlr_t_passive, _qlr_t_power, 0.0
+        ),
+        P_beam_net_full=_qlr_t_full,
+        passive=_qlr_t_passive,
+        beam_kwargs=_qlr_t_kwargs,
+    )
+    assert np.array_equal(
+        _qlr_t_broken, -np.where(_qlr_t_passive, _qlr_t_power, 0.0)
+    ), (
+        "the ql_relaxation booking audit is vacuous: a build that refused the "
+        "channel on passive cells was not caught"
+    )
+    assert float(np.max(np.abs(_qlr_t_broken))) > 0.0
+    # ... and the MODEL KEY is what decides, read by the audit itself: relabel
+    # the same booking as the fiat arm and the expectation flips.
+    _qlr_t_relabel = _r2.passive_anomalous_leak(
+        P_beam_net_consumed=_qlr_t_full,
+        P_beam_net_full=_qlr_t_full,
+        passive=_qlr_t_passive,
+        beam_kwargs=dict(
+            _qlr_t_kwargs,
+            input_dict=dict(
+                _qlr_t_kwargs["input_dict"],
+                beam_anomalous_model="quasilinear",
+            ),
+        ),
+    )
+    assert np.array_equal(
+        _qlr_t_relabel, np.where(_qlr_t_passive, _qlr_t_power, 0.0)
+    ), "the passive-cell policy must be keyed on beam_anomalous_model"
+
+    # ---- (h) the K_m table is the boxed table ----
+    # Two nodes, and the numbers are the memo's. Interpolation is log-log
+    # inside the span and CLAMPED outside it, so no structure is manufactured
+    # where the table has none.
+    # The nodes round-trip through the log-log interpolation, so they are
+    # compared to the published constants relatively (1 ULP of an exp/log pair,
+    # not a tolerance on the physics); the CLAMPS are exact, being the function
+    # compared against itself.
+    for _qlr_node, _qlr_sigma in zip(
+        _cross_mod.HE_EN_MT_NODE_EV, _cross_mod.HE_EN_MT_SIGMA_CM2
+    ):
+        assert abs(
+            _cross_mod.he_electron_momentum_transfer_cm2(_qlr_node)
+            / _qlr_sigma
+            - 1.0
+        ) < 1e-12, _qlr_node
+    assert _cross_mod.HE_EN_MT_SIGMA_CM2 == (6.0e-16, 2.1e-16)
+    assert _cross_mod.HE_EN_MT_NODE_EV == (5.0, 25.0)
+    assert _cross_mod.he_electron_momentum_transfer_cm2(
+        1.0
+    ) == _cross_mod.he_electron_momentum_transfer_cm2(5.0)
+    assert _cross_mod.he_electron_momentum_transfer_cm2(
+        500.0
+    ) == _cross_mod.he_electron_momentum_transfer_cm2(25.0)
+    assert (
+        2.1e-16
+        < _cross_mod.he_electron_momentum_transfer_cm2(11.18)
+        < 6.0e-16
+    )
+    # The 25 eV row is carried AS a bracket, and the shipped value sits in it.
+    _qlr_lo, _qlr_hi = _cross_mod.HE_EN_MT_SIGMA_BRACKET_CM2[1]
+    assert _qlr_lo == 1.6e-16 and _qlr_hi == 2.6e-16
+    assert _qlr_lo < _cross_mod.HE_EN_MT_SIGMA_CM2[1] < _qlr_hi
+    _qlr_lo5, _qlr_hi5 = _cross_mod.HE_EN_MT_SIGMA_BRACKET_CM2[0]
+    assert _qlr_lo5 < _cross_mod.HE_EN_MT_SIGMA_CM2[0] < _qlr_hi5
+    # nu_en = nn * K_m is a rate: positive, finite, and rising with the fill.
+    assert (
+        0.0
+        < _cross_mod.he_electron_momentum_transfer_rate_cm3_s(2.0)
+        < 1.0e-6
+    )
+    assert _cross_mod.he_electron_momentum_transfer_rate_cm3_s(
+        8.0
+    ) > _cross_mod.he_electron_momentum_transfer_rate_cm3_s(0.5)
 
     # ---- the registered constants are exactly the registered constants ----
     # A key added to the wrong namespace silently does nothing (input_dict and

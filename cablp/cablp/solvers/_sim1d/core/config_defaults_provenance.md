@@ -724,6 +724,76 @@ surviving refusal, a tail energy past the tabulated He EII cross section
 off the table itself and is unreachable at the 190-310 V drop this device
 produces. Memo: `scripts/sheathwalk_report.txt`.
 
+#### QL relaxation closure (`beam_anomalous_model = "ql_relaxation"`)
+
+The middle leg of the anomalous closure bracket. One config key, three boxed
+module constants and a two-node table; all of it read only when this arm is
+selected, and all of it from `QL_ONSET_MEMO_2026-08-12.md`. Not the shipped
+default — the family is described in NUMERICS.md, "The anomalous closure
+bracket".
+
+**`ql_relaxation_coeff = 30.0` — ASSUMED, NEVER fitted.** The O(10-100)
+coefficient `c` in the quasilinear plateau-formation time
+`tau_QL = c (n_e/n_b)/w_pe` (Vedenov-era scaling as restated in Krall &
+Trivelpiece §10, which gives it as an order-of-magnitude class and not a
+number), and hence the length `L_rel = tau_QL v_b` the extracted beam power is
+spread over. **Bracket `[10, 100]`, and the bracket is the claim**: the shipped
+value is the bracket's geometric centre and carries no more standing than the
+endpoints, so every headline under this closure is quoted at 10, 30 and 100.
+Honest bar: none is possible from within a fluid model — the plateau-formation
+time is kinetic, and the source states a decade-wide class rather than a
+coefficient. This is the closure's ONLY description-selecting constant and it
+is deliberately NOT defaulted at the point of use: `deposit_beam` raises rather
+than substituting a value, so a run cannot land behind a published number
+without having named its bracket arm. Inert under every other
+`beam_anomalous_model`, and byte-inert (smoke-pinned). MEASURED consequence:
+the third balance column bins SPLIT across this bracket — no root at `c = 10`,
+root at 30 and 100 (NUMERICS.md).
+
+**`_beam_deposition.QL_TRAP_COEFF = 1.0` (module constant, not config) —
+DERIVED (cited scaling).** `C_trap` in the reactive-trapping extracted fraction
+`f_ext = C_trap (n_b/2n_e)^(1/3)` [O'Neil, Winfrey & Malmberg, Phys. Fluids 14,
+1204 (1971)]. The cited result is the SCALING, stated as `~(n_b/2n_e)^(1/3)`;
+unity is the adoption of that form with its order-unity prefactor unresolved.
+Honest bar: exactly that — the prefactor is not separately measured here, and a
+factor-of-a-few in `C_trap` is degenerate with `ql_relaxation_coeff`, which is
+the bracket that is reported. Not exposed as config, precisely so it cannot
+become a second knob on the same product.
+
+**`_beam_deposition.QL_GROWTH_COEFF = 0.687` (module constant) — DERIVED.** The
+cold-beam beam-plasma growth rate `gamma_r = 0.687 w_pe (n_b/n_e)^(1/3)`
+[O'Neil & Malmberg 1968; Krall & Trivelpiece §9]. Enters the onset gate only —
+it never scales a deposited power. Honest bar: the `min(n_b/n_e, 1)` cap that
+keeps it finite in the `n_b >~ n_e` corner is a **FLAGGED INFERENCE**, not part
+of the cited result; it holds the rate at `0.687 w_pe` rather than continuing a
+curve past its own domain, and the same flag rides `f_ext`'s cap.
+
+**He e-n momentum-transfer table `_cross.HE_EN_MT_SIGMA_CM2` (module data, not
+config).** `nu_en = nn K_m(Te)` is the damping side of the onset gate, with
+`K_m(Te) = sigma_m(1.5 Te) * <v>(Te)`. Two nodes, log-log inside the span and
+CLAMPED outside it.
+
+| node | shipped `sigma_m` | class | bracket carried | honest bar |
+|---|---|---|---|---|
+| 5 eV | `6.0e-16 cm^2` | **MEASURED (cited)** | `5.7e-16 - 6.3e-16` | the ±3-5% of the source, propagated |
+| 25 eV | `2.1e-16 cm^2` | **ASSUMED — bracket** | `1.6e-16 - 2.6e-16` | **not verified against a primary table** |
+
+The 5 eV node is Milloy & Crompton, PRA 15, 1847 (1977), ±3-5%, consistent with
+Crompton, Elford & Robertson, Aust. J. Phys. 23, 667 (1970); the shipped value
+is the cited central and the bracket is that stated uncertainty. The 25 eV row
+is a BRACKET of the Register/Trajmar/Srivastava-class values as carried in the
+LXCat sets (per Alves et al., J. Phys. D 46, 334002 (2013)); the shipped value
+is its arithmetic midpoint, and **the memo did not verify it against a primary
+table — pull the LXCat set before boxing it**, and until then the row must be
+quoted as a bracket and never cited as a primary measurement. Both brackets are
+published as `HE_EN_MT_SIGMA_BRACKET_CM2` so a result can quote them.
+Order-of-magnitude standing overall: `K_m` is formed as `sigma(<E>)·<v>` rather
+than by Maxwellian quadrature, because a two-node table cannot support the
+precision a quadrature would imply. This is tolerable HERE and only here: the
+gate it feeds is open by ×400-2500 across the working range, so no headline
+moves anywhere inside either bracket. It must not be reused as a transport
+rate on that basis.
+
 **`beam_deposition_smoothing_cm = 0.0`** ships off (bit-exact). The campaign
 stance sets a nonzero width, and that width is **load-bearing rather than
 cosmetic**: at the production operating point the raw CSDA stopping profile is
@@ -957,19 +1027,29 @@ model's validity, not an arithmetic relation. Honest bar: the 100x margin is a
 sufficiency argument, not a measurement of where the clip stops mattering.
 Bracket `3e9 - 3e10`.
 
-*Role (ii), the de-facto quasilinear-onset gate — ASSUMED.* Because the
-passive/active mask is also what gates the anomalous beam power booking, this
-same number decides where quasilinear absorption starts being booked. It was
-never derived for that job. Bracket `[2.9e9 cm^-3, substantially higher]`. The
-lower edge is the deposition module's own weak-beam validity floor — `10 n_b`
-evaluated at stance, the density below which `quasilinear_relaxation_length_cm`
-returns `inf` — and that is **a numerical validity bound on the closure, not
-the physical instability onset**; it says where the weak-beam expression stops
-being applicable, not where the beam-plasma instability starts. The physical
-onset (beam-plasma growth against electron-neutral damping) is under separate
-derivation. When it lands, activation is expected to split into
-`max(n_QL, n_fluid)` and role (ii) leaves this entry. Honest bar: the upper end
-of the bracket is genuinely open — no measurement here constrains it.
+*Role (ii), the de-facto quasilinear-onset gate — ASSUMED, and **RESOLVED
+BELOW RANGE** (amended 2026-08-12).* Because the passive/active mask is also
+what gates the anomalous beam power booking, this same number decided where
+quasilinear absorption started being booked. It was never derived for that job.
+The bracket as first registered was `[2.9e9 cm^-3, substantially higher]`, its
+lower edge being the deposition module's own weak-beam validity floor —
+`10 n_b` at stance, the density below which `quasilinear_relaxation_length_cm`
+returns `inf` — which is **a numerical validity bound on the closure, not the
+physical instability onset**.
+
+*Memo adoption (`QL_ONSET_MEMO_2026-08-12.md`).* The physical onset that was
+"under separate derivation" has landed, and it does not bound this number from
+either side. The LINEAR beam-plasma onset is **always on** over the working
+range `n_e = 1e8 - 1e11 cm^-3`, by ×400-2500 against He collisional damping, so
+the onset criterion is satisfied everywhere `n_act` could plausibly sit and
+`max(n_QL, n_fluid)` degenerates to `n_fluid`. The ASSUMED bracket is therefore
+**retired as resolved below range** rather than narrowed: no split occurs, and
+role (ii) leaves this entry. What replaces it is not another threshold but a
+CLOSURE FAMILY — the onset question now lives in `beam_anomalous_model`, whose
+`"ql_relaxation"` arm evaluates the boxed inequality per cell and whose gating
+physics is relaxation, not onset (NUMERICS.md, "The anomalous closure
+bracket"). **Role (i), the fluid-validity/handoff gate, is DERIVED and is now
+the sole binding role; the VALUE is unchanged by this amendment.**
 
 *Measured consequence of role (ii)'s ignorance interval.* The two-sided overlap
 gate FAILS at the shipped value (worst relative disagreement 0.978 against

@@ -282,13 +282,23 @@ def passive_anomalous_leak(
     passive,
     beam_kwargs,
 ):
-    """Return the QL/anomalous power still inside a PASSIVE cell's booking.
+    """Return the deviation of a PASSIVE cell's booking from the model's policy.
 
-    Zero, cell by cell, is the invariant: on a cell the tracer owns, the
-    quasi-static balance must be fed the beam power MINUS the quasilinear
-    share, because quasilinear absorption is a beam-PLASMA instability and a
-    passive cell has no plasma to carry the wave. NUMERICS.md, "Corrected beam
-    power booking on passive cells", is the statement of record.
+    Zero, cell by cell, is the invariant. What the policy IS depends on the
+    anomalous closure, and this function re-derives that too:
+
+    * ``beam_anomalous_model="quasilinear"`` -- the FIAT leg. The balance must
+      be fed the beam power MINUS the anomalous share, because that closure
+      books near-total absorption by assertion and quasilinear absorption is a
+      beam-PLASMA instability: a passive cell has no plasma to carry the wave.
+    * ``"ql_relaxation"`` -- the MIDDLE leg. Its own onset gate and its own
+      ``(n_b/2n_e)^(1/3)`` extracted fraction already decide how much a cell of
+      that density absorbs, so the balance must be fed the power in FULL and
+      subtracting it would delete the closure's content.
+    * ``"none"`` -- there is no anomalous share, and full and net coincide.
+
+    NUMERICS.md, "Corrected beam power booking on passive cells" and "The
+    anomalous closure bracket", are the statements of record.
 
     The check is deliberately built the long way round rather than by asking
     the subtraction whether it subtracted:
@@ -299,6 +309,11 @@ def passive_anomalous_leak(
       through this module's own reference to
       :func:`~.cathode.beam_anomalous_power_density`, on the ``beam_kwargs``
       the beam rows themselves were built from;
+    * the model key is likewise re-read HERE, straight off
+      ``beam_kwargs["input_dict"]``, rather than through any predicate the
+      solver shares with the subtraction -- so a build that has rebound or
+      widened the keying is caught by the same mechanism that catches a build
+      that removed the subtraction;
     * ``P_beam_net_consumed`` is what the balance was actually handed.
 
     So a build in which the refusal has been removed, disabled, or rebound to
@@ -307,14 +322,19 @@ def passive_anomalous_leak(
     anti-vacuity case removes the refusal exactly that way and asserts this
     returns the full anomalous power.
 
-    ACTIVE cells are excluded, not audited-and-passed: on them the quasilinear
-    channel is real and its booking stands unchanged. The passive/active
-    boundary is the gate, which is the same statement as "the tracer handoff
-    and QL onset are one event".
+    ACTIVE cells are excluded, not audited-and-passed: on them every closure's
+    booking stands unchanged. The passive/active boundary is the gate for the
+    fiat leg, which is the same statement as "the tracer handoff and QL onset
+    are one event".
     """
     passive = np.asarray(passive, dtype=bool)
-    P_ql = beam_anomalous_power_density(**beam_kwargs)
-    expected = np.asarray(P_beam_net_full, dtype=float) - P_ql
+    refusing = str(
+        beam_kwargs["input_dict"].get("beam_anomalous_model", "none")
+    ) == "quasilinear"
+    P_full = np.asarray(P_beam_net_full, dtype=float)
+    expected = P_full
+    if refusing:
+        expected = P_full - beam_anomalous_power_density(**beam_kwargs)
     residual = np.asarray(P_beam_net_consumed, dtype=float) - expected
     return np.where(passive, residual, 0.0)
 

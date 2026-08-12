@@ -809,6 +809,105 @@ What this does **not** settle: the tracer's density growth over that window
 stays near its seed (`n` max 2.9e9 at `t = 3e-5 s`, no cell activating), so the
 overlap gate's registered band is not reached from the tracer side. See Gates.
 
+#### The anomalous closure bracket: the two legs and the middle one
+
+The amendment above is one arm of a declared closure family, not a verdict on
+the beam-plasma channel. `beam_anomalous_model` now carries three arms and a
+result must state which one produced it:
+
+| arm | what it books | passive-cell policy |
+|---|---|---|
+| `"none"` | nothing | nothing to book |
+| `"quasilinear"` (shipped default) | near-total absorption by FIAT: `dE/dx = E/l_QL` with `l_QL = (n_e/n_b)(v_b/ω_pe)ln(n_e/n_b)`, weak-beam domain only | REFUSED (the amendment above) |
+| `"ql_relaxation"` | the RELAXATION physics, coefficients boxed | **BOOKED in full** |
+
+**Why the refusal is model-keyed.** The passive-cell refusal is an answer to a
+closure that asserts a total, not to the beam-plasma channel as such. The fiat
+arm books ~92% of the deposited power through a wave the cell has no medium to
+carry, so on a passive cell the correct answer is zero. `ql_relaxation` reaches
+the same question from the other end: it books what a cell of that density can
+actually take, through an extracted fraction that goes as `(n_b/2n_e)^(1/3)` and
+a gate it must first pass. Refusing that wholesale would delete the physics the
+arm exists to supply. So the two legs bracket the truth and the middle leg sits
+between them by construction, and `physics.tracer.passive_anomalous_leak`
+re-reads the model key itself so the keying is audited, not assumed.
+
+**What the memo settled about onset** (`QL_ONSET_MEMO_2026-08-12.md`). The
+LINEAR beam-plasma onset is **always on** in the working range
+`n_e = 1e8 – 1e11 cm⁻³`, by a margin of ×400–2500 against He collisional
+damping. Onset is therefore **not the gating physics**, and the ASSUMED
+QL-onset role that `tracer_activation_ne` was carrying is RESOLVED BELOW RANGE
+rather than pinned — see the provenance note. What does gate is
+RELAXATION/SATURATION, which is what the middle leg is built on:
+
+* reactive trapping extracts `f_ext = C_trap·min(n_b/2n_e, 1)^(1/3)` of the
+  beam energy, `C_trap = 1` [O'Neil, Winfrey & Malmberg, Phys. Fluids 14, 1204
+  (1971)];
+* the plateau forms over `τ_QL = c·(n_e/n_b)/ω_pe` (Vedenov-era scaling as
+  restated in Krall & Trivelpiece §10, order-of-magnitude class), so the
+  extracted power is spread over `L_rel = τ_QL·v_b`. `c` is the closure's ONE
+  registered bracket constant, `ql_relaxation_coeff`, and every headline is
+  quoted at 10, 30 and 100;
+* the wave hands its energy to BULK electrons by collisional damping at
+  `ν_en/2` [Ginzburg 1970; Alexandrov–Bogdankevich–Rukhadze 1984], which is why
+  the deposition is bulk heating in the cell where the waves damp.
+
+The onset inequality is still evaluated, per cell, and still gates the booking —
+`0.687·ω_pe·min(n_b/n_e,1)^(1/3) > ν_en/2` **and** `ω_pe > ν_en`, with
+`ν_en = nn·K_m(Te)` on the boxed He e-n momentum-transfer table. That keeps
+"the gate is open here" a computed property of the run rather than a claim made
+once about a range; `smoke_sim1d.py` checks it is open across the working range
+AND that it closes (one case per conjunct) with exactly zero booked when it
+does. The `min(·,1)` caps that carry the `n_b ≳ n_e` corner are a FLAGGED
+INFERENCE, not part of the cited results.
+
+`ql_relaxation` is never offered to the compiled CSDA march: that kernel takes
+the anomalous channel as a boolean and applies the fiat drag, so the closure
+takes the Python march. The smoke pins that precondition and shows the same
+harness DOES reach the kernel for the other two arms.
+
+##### MEASURED: the third balance column
+
+`scripts/regime_pb_balance_table.py --nx 20`, section H — the same stance and
+the same instant as the table above, one fluid arm per bracket arm, fed
+`P_full` (the middle leg is booked, not refused). Registered before running:
+root at the ×1 row → the middle leg is viable; no root → report and stop, no
+fallback built.
+
+| `ql_relaxation_coeff` | anomalous share of the row (cells 2/7) | ×1 (actual, `n ≈ 1e9`) | bin |
+|---|---|---|---|
+| 10 | 95.1% / 94.7% | **no root** | **NO ROOT** |
+| 30 (default) | 74.7% / 72.7% | root, `Te` = 18.9 / 14.8 eV, 1 sign change | **ROOT AT STANCE** |
+| 100 | 34.8% / 32.8% | root, `Te` = 7.95 / 6.99 eV, 1 sign change | **ROOT AT STANCE** |
+
+**The bin is SPLIT across the registered bracket, and the split IS the result.**
+At the short-relaxation endpoint the middle leg concentrates enough power to
+reproduce the fiat arm's failure (95% of the row, no root); over the rest of the
+bracket it does not. Nothing was moved to remove the split: `c = 10` is a
+registered endpoint and the balance's refusal there is a finding about the
+closure's short-length limit, not about the balance. The honest claim is
+therefore "viable over `c` ≳ 30", with the lower endpoint disclosed.
+
+##### MEASURED: the overlap gate under MATCHED closures
+
+`scripts/regime_r2_overlap_gate.py --nx 20 --t-end 3e-5 --anomalous-model
+ql_relaxation --ql-relaxation-coeff 30` — **BLOCKED**, which the gate defines as
+not a pass. The tracer arm refuses at cell 2 (deposited beam power
+`115237 erg cm⁻³ s⁻¹` against a bracket top of 118.456 eV). Registered reading:
+with the closure matched across the passive/active interface the gate stops
+measuring the closure gap and starts measuring tracer-vs-fluid NUMERICS — and
+under matched closures the tracer cannot produce a number at all at this stance,
+so the numerics question is not reached. Reported as-is; nothing tuned.
+
+Two facts travel with it. The fluid arm under `ql_relaxation` reaches
+`n` max `4.472e9 cm⁻³` over the window, against `1.325e11` under the fiat arm,
+so it never enters the registered band `[1e10, 1e11]` either — a matched-closure
+comparison at this window would have had an empty overlap sample regardless of
+the refusal. And the refusal is the same *shape* as the one the amendment above
+removed, arriving from the other side: the middle leg still concentrates enough
+power on the cathode cell for the local balance to want an electron hotter than
+the beam heating it.
+
 ### Seed transport: the quantified neglect
 
 A passive cell's plasma does not advect (see the interface). The neglected term
@@ -1016,7 +1115,11 @@ result carries no such attribute at all (asserted in `smoke_sim1d.py`).
   phase-gated read-back), and an anti-vacuity variant per guard that must fail
   if the guard is removed.
 - `regime_pb_balance_table.py` — reproduces the measured balance table above
-  under both bookings, plus the QL-onset gap below.
+  under both bookings, plus the QL-onset gap below, plus the third
+  (`ql_relaxation`) column at all three registered bracket arms.
+- `regime_r2_overlap_gate.py --anomalous-model ql_relaxation` — the same gate
+  with BOTH arms on the middle leg, i.e. matched closures. Its registered
+  reading and its measured verdict are in "The anomalous closure bracket".
 
 **Measured under the corrected booking** (`nx = 20`, production stance). Both
 run-level gates now RUN rather than being blocked by a refusal, and both report
