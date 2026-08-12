@@ -40,6 +40,30 @@ A fourth outcome, BLOCKED, is not a pass: the tracer can refuse to produce a
 number (``TracerBalanceError``) at the operating point. That is reported with
 the refusal verbatim.
 
+READ THIS BEFORE QUOTING A PASS FROM THIS SCRIPT
+------------------------------------------------
+**A PASS here is CONDITIONAL on the Picard refresh cadence, and is not a claim
+that the tracer is usable at this stance.** The per-cell quasi-static electron
+energy balance has NO ROOT at the production pre-breakdown stance -- parallel
+heat conduction and the boundary losses are each an order of magnitude larger
+than every local radiative channel, and a per-cell object cannot see conduction
+at all. The measurement is in ``_sim1d/NUMERICS.md``, section "MEASURED: the
+local balance has no root at the production stance".
+
+This script nevertheless reaches a PASS because ``gamma`` and ``Te`` are
+refreshed on a tolerance, not every step: on this run's save lattice the
+refreshes happen to land at states where a root still exists, so the refusal is
+never evaluated. ``regime_r2_overlap_gate.py``, at a finer ``dt_save`` over the
+SAME window and the SAME configuration, refreshes at the failing state and is
+BLOCKED. Whether the tracer runs at all therefore depends on the refresh
+cadence -- which is itself evidence that the balance is marginal here, not that
+this configuration is sound.
+
+So a PASS means: the handoff MACHINERY (config identity, finiteness, ledger
+closure, the closed interface) is correct. It does not mean the tracer's ``Te``
+closure describes this leg. The printed output repeats this next to the
+refresh count so the caveat cannot be separated from the result.
+
 Usage (from <checkout>/cablp, with PYTHONPATH set to that same cablp):
     python scripts/regime_r2_handoff_check.py --nx 20 --t-handoff 2e-5
 """
@@ -90,6 +114,32 @@ def _faces(sim, geometry):
         wave_speed=sim._hyperbolic_wave_speed,
         energy_consistent=sim._hyperbolic_energy_consistent,
         characteristic_boundary=sim._characteristic_boundary,
+    )
+
+
+def print_cadence_caveat(sim):
+    """Print, next to the refresh count, what a PASS from this script does not mean.
+
+    The caveat has to travel WITH the result. NUMERICS.md records that the
+    per-cell quasi-static balance has no root at this stance, and a printed
+    PASS sitting beside that statement with no explanation is worse than no
+    output at all -- a reader has to be able to reconcile the two from the
+    output itself, not from a gate log that is not in the repository.
+    """
+    refreshes = 0
+    census = getattr(sim, "_tracer_census", None)
+    if census:
+        refreshes = int(census.get("refreshes", 0))
+    print(
+        f"  CADENCE CAVEAT (refreshes={refreshes}): a PASS below is "
+        "CONDITIONAL. The per-cell quasi-static Te balance has NO ROOT at this "
+        "stance (NUMERICS.md, 'MEASURED: the local balance has no root at the "
+        "production stance'); this run reaches an answer only because the "
+        f"{refreshes} Picard refresh(es) landed at states where a root still "
+        "exists. regime_r2_overlap_gate.py, at a finer dt_save over the same "
+        "window and the same configuration, refreshes at the failing state and "
+        "is BLOCKED. A PASS therefore certifies the handoff MACHINERY, not "
+        "that the tracer's Te closure describes this leg."
     )
 
 
@@ -173,6 +223,7 @@ def main(argv=None):
     census = stage1._tracer_census_line()
     if census:
         print(f"  {census}")
+    print_cadence_caveat(stage1)
     check_interface_row(stage1, failures)
     inventory_before = plasma_inventory(stage1)
     print(
@@ -233,10 +284,18 @@ def main(argv=None):
             f"{float(np.max(stage2.state.n)):.4g}] cm^-3"
         )
 
-    print("regime_r2 handoff check: " + ("PASS" if not failures else "FAIL"))
-    for item in failures:
-        print(f"    {item}")
-    return 0 if not failures else 1
+    if failures:
+        print("regime_r2 handoff check: FAIL")
+        for item in failures:
+            print(f"    {item}")
+        return 1
+    # The verdict string itself carries the qualifier, so a grep for the
+    # result line cannot pick up the PASS and leave the caveat behind.
+    print(
+        "regime_r2 handoff check: PASS (CONDITIONAL -- handoff machinery only; "
+        "see the CADENCE CAVEAT above, the Te closure is not certified here)"
+    )
+    return 0
 
 
 if __name__ == "__main__":

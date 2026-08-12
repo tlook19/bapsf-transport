@@ -2412,6 +2412,15 @@ def regime_tracer_defaults():
         voltage; it is the current the plasma actually passes under the applied
         drop, NOT the cathode's emission capability. Raises at construction
         outside ``(0, 1]``.
+
+        ``I_cond`` is an UPPER BOUND, so this criterion is one-sided:
+        satisfying it establishes passivity, failing it does not establish the
+        converse. The bound puts the WHOLE device drop across the column, while
+        most of that drop is the cathode sheath fall, so the axial field and
+        therefore ``I_cond`` are overstated. Two consequences for a caller:
+        cells are handed to the fluid earlier than the physics alone requires
+        (the safe direction), and at low density it is the
+        ``tracer_activation_ne`` gate rather than this criterion that binds.
     tracer_passivity_thinness:
         Criterion (b). Largest cumulative single-pass fraction of the beam's
         energy the plasma may absorb and still count as passive, dimensionless

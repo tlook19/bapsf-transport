@@ -783,11 +783,25 @@ and the fluid region exchange no particles, so the run's inventory is the sum
 of two separately closed ledgers. That is a *choice with a cost*, and the cost
 is exactly the neglected `∇·(n u)` of the previous section: the plasma that
 would have crossed the interface is the same plasma the seed-transport neglect
-drops. The ledger books it as an explicit zero row
-(`tracer_interface_particle_flux`) rather than dropping it silently, so a
-reader can see that the term exists and is zero by construction rather than
-absent by oversight. `regime_r2_handoff_check.py` closes the two-part ledger to
-a stated tolerance.
+drops.
+
+There is **no named RHS row** for that dropped transport, and deliberately so:
+a row that is identically zero at every face it is defined on would still be
+summed, saved and plotted on every run, for no information. What exists instead
+is an **assertion** — invariant I4 of `regime_r2_handoff_check.py`. It evaluates
+the Rusanov face fluxes on the tracer's geometry view and requires the `n`,
+`Ee` and `Ei` flux at every passive/active face to be exactly zero, then
+evaluates the *same state* on the base geometry, where those faces are open,
+and requires a **nonzero** particle flux there. The pair is what makes the zero
+demonstrably deliberate rather than an artefact of nothing flowing: the term
+exists, it is zero because the face is closed, and removing the closure would
+change the answer.
+
+The assertion is at the face, not on a cell row, because `_mask_inactive_rhs`
+writes literal zeros onto every cell the tracer owns — a cell-row check would
+be true whatever the flux did, and would say nothing about whether the ACTIVE
+neighbour lost plasma. Invariant I3 of the same script closes the two-part
+inventory across the handoff to a stated tolerance.
 
 **Activation handoff.** When a cell leaves passivity AND its tracer density has
 reached `tracer_activation_ne`, its packed rows are written from the tracer
@@ -831,14 +845,30 @@ code edit, and carries a classed provenance entry in
 
 ### The census
 
-Every tracer run reports, from day one, **which criterion binds where and
-when** — the `active_constraint` idiom the timestep limiter already uses. Per
-save frame the result carries `tracer_criterion` (the binding criterion name
-per cell), the four ratios, the passive mask, `Te_qs`, `γ`, and the refresh
-count; at the end of a tracer run `run()` prints a one-line summary naming the
-criterion that bound most often, the cell and time of first activation, and
-whether the transport ratio stayed small. It is presence-gated on the flag, so
-a non-tracer run prints and records nothing.
+Every tracer run reports **which criterion binds and where** — the
+`active_constraint` idiom the timestep limiter already uses. What ships is
+exactly two things, and no more:
+
+1. **A printed one-line summary at the end of `run()`**, naming the criterion
+   that bound on the most cells, how many cells are still passive, the time and
+   cell of the first activation and which criterion caused it, the refresh
+   count, and the worst value of the dropped-transport ratio.
+2. **One in-memory attribute on the result**, `result.tracer_criterion_census`:
+   a mapping carrying the per-cell binding criterion index, the worst ratio,
+   the three criterion ratios, the transport ratio, the passive mask, `Te_qs`,
+   `γ`, `S`, and the refresh count.
+
+**That attribute is a SINGLE INSTANT, not a time series.** `_tracer_census` is
+overwritten on every accepted step and only the last accepted step's value is
+attached, so it describes the end of the run and nothing before it. It is also
+**not serialized**: `results/io.py` does not write it, so it does not survive a
+save/load round-trip and is absent from every HDF5 result. A per-save-frame,
+serialized census is a reasonable thing to want and is deliberately not in this
+pass — anything needing the history has to read the printed line or keep the
+live solver.
+
+Both are presence-gated on the flag: a non-tracer run prints nothing and its
+result carries no such attribute at all (asserted in `smoke_sim1d.py`).
 
 ### Gates
 

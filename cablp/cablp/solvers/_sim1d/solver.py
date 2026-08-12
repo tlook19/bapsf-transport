@@ -2692,6 +2692,15 @@ class LAPDSim1D:
                     self._input_dict.get("beam_coulomb_model", "fast_electron")
                 ),
             ) / criteria["thinness"],
+            # An empty cell (nn == 0) has no neutrals left to burn, so its
+            # depletion is total and the ratio is inf -- the cell activates.
+            # NOTE the divisor is max(nn, 1): between 0 and 1 cm^-3 the ratio
+            # is UNDERSTATED (divided by 1 instead of by nn), so criterion (c)
+            # under-reports in a band it cannot physically reach -- 1 cm^-3 is
+            # five decades below nn_floor and twelve below any real fill, and
+            # the nn == 0 branch above already covers true vacuum. The clamp is
+            # there so the divide cannot produce a subnormal or overflow on a
+            # nonsense input, not to model anything.
             "depletion": np.where(
                 nn > 0.0,
                 self._tracer_depletion / np.maximum(nn, 1.0),
