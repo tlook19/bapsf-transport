@@ -1113,6 +1113,16 @@ vessel — some 20 m of it — is ONE wall conductor; and the anode is reference
 to that conductor only through FOUR feedthrough capacitors bridging the ceramic
 gap insulators.
 
+**The capacitor TYPE is visually UNRESOLVED** (2026-08-12). A first look read
+them as axial-wound aluminium electrolytics; a second look read them as axial
+**polypropylene film**, with a black mark on one side of the cylinder. The
+mark does not settle it and mildly favours film: on a film capacitor a plain
+band conventionally marks the OUTER-FOIL terminal — a shielding convention,
+not a polarity one — while electrolytics mark polarity with explicit `-`/`+`
+symbols. The type sets the leak class below and the tolerance term in
+`C_total`'s bar, so both are carried type-conditionally until the **bench
+measurement**, which resolves the type and the value together.
+
 **`vessel_capacitance_F = 1.3e-6` F — ESTIMATED. THE BRACKET IS THE CLAIM.**
 The four feedthrough capacitors are in parallel, so `C_total = 4 * C_each`.
 `C_each` is an ENGINEER'S ESTIMATE — "probably 0.1-1 uF" — with no part number
@@ -1127,9 +1137,15 @@ a measurement and no result may quote it as one.** Any result that depends on
 `C_total` must report the bracket, and
 `scripts/regime_vcm_r0b_check.py` is the instrument that sweeps it.
 
-*Honest bar: a factor of 10, one-sided in neither direction.* What the bracket
-does and does not decide, measured across `0.4 / 1.3 / 4.0` uF at
-`V_scale = V_bank = 180` V:
+*Honest bar: a factor of 10, one-sided in neither direction, and the part
+tolerance sits INSIDE it under either type reading.* Polypropylene film runs
+`±5-10 %`; aluminium electrolytics of this vintage run `-20/+80 %` (a factor
+of ~2.25). Both are dominated by, and already contained in, the factor-of-ten
+engineer bracket, so the unresolved type does NOT widen this bar — which is
+why the type question is a leak question rather than a capacitance question. A
+bench measurement removes every term at once; a part number alone would not.
+What the bracket does and does not decide, measured across
+`0.4 / 1.3 / 4.0` uF at `V_scale = V_bank = 180` V:
 
 - The PHASE SEQUENCE is bracket-stable in kind. Early build is
   wall-referenced at every capacitance (at 1 mA seed current the node reaches
@@ -1148,18 +1164,71 @@ lands, the class becomes MEASURED with the instrument's own bar, the bracket
 above is retired, and any result quoted against the bracket is re-read at the
 measured value.
 
-**`vessel_leak_resistance_ohm = None` (hard float) — DERIVED from the capacitor
-TYPE.** `None` means no DC path at all. The derivation is a type read rather
-than a measurement: the feedthrough capacitors are ceramic/film, whose
-insulation resistance is GOhm-class, so `R_leak * C_total` is at least
-`1e9 * 4e-7 = 400` s against a machine cycle of milliseconds — four to five
-decades of separation. Over any window this solver integrates, a GOhm tie and
-an open circuit are indistinguishable, and the hard float is the honest
-simplification rather than an approximation with a residual worth carrying.
+**`vessel_leak_resistance_ohm = 1.0e10` Ohm — ESTIMATED, TYPE-UNCERTAIN. THE
+BRACKET IS THE CLAIM.** The bracket spans BOTH readings of the unresolved
+capacitor type:
 
-*Honest bar: the type read, not a measured insulation resistance.* A finite
-positive value is accepted for the soft-tie case — a deliberately installed
-bleeder, a degraded insulator, or a sensitivity arm — and the closed-form step
-integrates it exactly, so a soft tie is a legitimate A/B arm rather than a
-perturbation. The class of that arm's value would be whatever pins it. Zero and
-negative values raise at construction: they are not ties.
+| reading | basis | `R_leak` |
+|---|---|---|
+| electrolytic | leakage spec `I_leak ≈ (0.01…0.03)·C[µF]·V[V]` µA, over `C_total ∈ [0.4, 4.0]` µF at the ~178 V bank scale, inverted | `2.5e7 … 1e9` Ω |
+| polypropylene film | insulation-resistance class of the dielectric | up to `~1e11` Ω |
+
+so the carried bracket is
+
+    R_leak in [2.5e7, 1e11] Ohm,
+
+about four decades. The shipped default `1e10` takes the **film reading**,
+which is the second-look call, at its high-edge decade. `None` remains
+accepted and means the idealized hard float — an explicit A/B arm.
+
+*Honest bar: four decades, dominated by an unresolved TYPE rather than by an
+unresolved value, and the LOW EDGE IS SOFT.* If the parts are electrolytic,
+the spec describes a capacitor that is formed and in service; these sit
+unbiased between shots and are old, and an unbiased or aged electrolytic loses
+oxide, leaks WORSE than spec — sometimes by a large factor — and re-forms only
+under bias. So the true `R_leak` could fall below `2.5e7` Ω, and the bracket
+is not symmetric in credibility. **The bench measurement resolves the type and
+the value in one step**, and this entry is provisional until it lands.
+
+**WHY THE UNRESOLVED TYPE DOES NOT BLOCK THE MODEL.** The structural fact the
+node rests on is the leak TIMESCALE against the discharge, and it survives
+BOTH readings:
+
+    tau_leak = R_leak · C_total ≈ 10 s  …  4e5 s
+
+over the joint bracket, against a ~25 ms discharge — a separation of at least
+~400x at the most pessimistic corner (`R_leak = 2.5e7` Ω, `C_total = 0.4` µF,
+i.e. the aged-electrolytic edge), and vastly more at the film edge.
+**Within a shot the node is therefore hard-float IN KIND whichever type these
+turn out to be**, and the phase sequence (early wall-referenced / engagement /
+bootstrap) is unchanged by the leak. `scripts/regime_vcm_r0b_check.py` sweeps
+the `R_leak` endpoints alongside the `C_total` endpoints and reports the
+in-window sensitivity as a NUMBER: the worst shift anywhere in the joint
+bracket is `1.25e-3` relative, which is exactly the closed form's
+`dt/(2*tau_leak)` at that corner and two decades below the factor-of-ten
+`C_total` bracket the same result already carries. A shift that DID reach the
+percent level would be a finding, not a rounding error. Note the converse: the
+separation is a statement about the DISCHARGE window only, and it fails on any
+question posed over seconds.
+
+**Two documented model deviations, both deliberate and neither built.**
+
+- *Polarity — conditional on the unresolved type.* IF the capacitors are
+  electrolytic, they are polarized and conduct asymmetrically under reverse
+  bias (roughly diode-like above ~1-2 V), and the machine's plateau
+  common-mode bias is observed at EITHER sign, so the reverse branch is
+  physically reachable; the shipped leak is a SYMMETRIC linear resistor in
+  both directions, which is the deviation. IF they are film there is no
+  polarity nuance to model at all, and the black band on one side of the
+  cylinder is the conventional outer-foil marking rather than a polarity mark.
+  Either way this matters only if `V_cm` scoring eventually cares about the
+  negative-plateau branch; on the discharge timescale the leak moves nothing
+  in either direction, which is why an asymmetric leak model is not worth its
+  constants today.
+- *Inter-shot memory.* `tau_leak` far exceeds the ~3 s shot period under both
+  readings (and by a wide margin for film), so the capacitors cannot discharge
+  the node between shots. The physical reset path is the afterglow plasma
+  conductance, not the leak. Runs here are single-shot and start from
+  `V_cm = 0`; a shot-to-shot study would have to model that reset explicitly.
+
+Zero and negative values raise at construction: they are not ties.

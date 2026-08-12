@@ -1100,10 +1100,19 @@ The cathode/anode system **floats** with respect to the machine wall. The
 whole electrically connected stainless vessel is ONE wall conductor, and the
 anode is referenced to it only through four feedthrough capacitors bridging
 the ceramic gap insulators, whose parallel sum is `vessel_capacitance_F`
-($C_\text{total}$). The capacitors are ceramic/film, so their leakage is
-GΩ-class and the shipped closure is a **hard float**
-(`vessel_leak_resistance_ohm = None`), with a finite resistance exposed for
-the soft-tie case.
+($C_\text{total}$). The capacitor **type is visually unresolved** — axial
+polypropylene film on the second look, aluminium electrolytic on the first —
+so `vessel_leak_resistance_ohm` is finite, ESTIMATED over a bracket spanning
+both readings (2.5e7–1e11 Ω, defaulting to the film reading) with the bracket
+as the claim, and a bench measurement resolves it.
+
+**The structural fact does not depend on the type.** At BOTH bracket edges
+$\tau_\text{leak} = R_\text{leak}C_\text{total} \gtrsim 10\ \text{s}$ against a
+~25 ms discharge, so **within a shot the node is hard-float in kind either
+way** and nothing a run measures moves with the leak. The shipped leak is a
+*symmetric* linear resistor; if the parts are electrolytic their reverse-bias
+asymmetry is a documented deviation rather than a modelled one, and if they
+are film there is no polarity nuance at all (see `NUMERICS.md`).
 
 The flag adds ONE state variable, the anode-to-wall potential $V_\text{cm}$:
 

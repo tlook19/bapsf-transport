@@ -1236,10 +1236,49 @@ the anode-to-cathode differential the column conducts under.
 The LAPD cathode/anode system **floats** with respect to the machine wall. The
 whole electrically connected stainless vessel — some 20 m of it — is ONE wall
 conductor, and the anode is referenced to it only through four feedthrough
-capacitors bridging the ceramic gap insulators. Those capacitors are
-ceramic/film, so their leakage is GΩ-class and over a machine cycle the tie is
-indistinguishable from open: the shipped closure is a **hard float**, with
-`vessel_leak_resistance_ohm` exposed for the soft-tie case.
+capacitors bridging the ceramic gap insulators. Their **type is visually
+unresolved**: axial polypropylene film on the second look, aluminium
+electrolytic on the first, with a black band on one side of the cylinder that
+does not settle it and mildly favours film (on a film part a plain band marks
+the OUTER FOIL — a shielding convention; electrolytics mark polarity with
+explicit −/+). So `vessel_leak_resistance_ohm` is finite and ESTIMATED over a
+bracket spanning both readings, 2.5e7–1e11 Ω, defaulting to the film reading.
+`None` is accepted and means the idealized hard float, an A/B arm rather than
+the hardware. A bench measurement resolves the type and the value together.
+
+**THE STRUCTURAL FACT THE MODEL RESTS ON IS TYPE-INSENSITIVE, and that is the
+statement to quote.** Over the joint `R_leak × C_total` bracket
+
+```
+tau_leak = R_leak · C_total ≈ 10 s … 4e5 s
+```
+
+against a ~25 ms discharge — at least ~400× at the most pessimistic corner
+(the aged-electrolytic edge) and vastly more at the film edge. So **within a
+shot the node is hard-float in kind at both bracket edges, whichever type
+these turn out to be**: the leak drains a negligible fraction of the node's
+charge and the phase sequence is unchanged by it.
+`scripts/regime_vcm_r0b_check.py` sweeps the `R_leak` endpoints alongside the
+`C_total` endpoints and reports the in-window sensitivity as a NUMBER — the
+worst shift anywhere in the joint bracket is `1.25e-3` relative, exactly the
+closed form's `dt/(2·tau_leak)` at that corner, two decades below the
+factor-of-ten `C_total` bracket the same result already carries. A shift
+reaching the percent level would be a finding. The separation is a claim about
+the discharge window only and fails on any question posed over seconds.
+
+**Two documented deviations, neither modelled.** *Polarity, conditional on the
+unresolved type*: if the parts are electrolytic they are polarized and conduct
+asymmetrically under reverse bias (diode-like above ~1–2 V), and the machine's
+plateau common-mode bias is observed at either sign, so the reverse branch is
+reachable — the shipped leak is a **symmetric** linear resistor, which is the
+deviation; if they are film there is no polarity nuance and the black band is
+the outer-foil marking. Either way a nonlinear asymmetric model would buy
+nothing on the discharge timescale, where the leak moves nothing in either
+direction, and would matter only if `V_cm` scoring came to care about the
+negative-plateau branch. *Inter-shot memory*: `tau_leak` far exceeds the ~3 s
+shot period under both readings, so the capacitors cannot reset the node
+between shots — the physical reset path is the afterglow plasma conductance.
+Runs here are single-shot and start from `V_cm = 0`.
 
 ### The node
 
@@ -1361,7 +1400,10 @@ wall-referenced (at mA-scale seed current the charging time is tens to
 hundreds of ms, far longer than the cycle, so the float cannot engage);
 engagement mid-build in the sub-amp decade; and the bootstrap's sign. The
 sequence is stable in kind across the bracket — only the currents at which the
-phases occur move, by the 10× span of `C_total` itself.
+phases occur move, by the 10× span of `C_total` itself. The same script sweeps
+the `R_leak` bracket endpoints and the hard float and reports that the
+in-window numbers do not move with them, which is the executable form of the
+timescale argument above.
 
 ### Restart
 

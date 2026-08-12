@@ -545,10 +545,15 @@ class VesselNode1D:
     """Resolved constants of the vessel / common-mode node (regime V_cm).
 
     ``C_total_F`` is the capacitance bridging the floating cathode/anode
-    system to the wall conductor; ``R_leak_ohm`` is ``None`` for a hard float
-    and a positive resistance for the soft-tie case. ``collector_cells`` are
-    the cells whose plasma-terminating face IS the vessel, i.e. where the
-    column's ion wall flux is read.
+    system to the wall conductor; ``R_leak_ohm`` is the positive resistance of
+    the feedthrough capacitors' leakage path, or ``None`` for the idealized
+    hard float. ``collector_cells`` are the cells whose plasma-terminating
+    face IS the vessel, i.e. where the column's ion wall flux is read.
+
+    The leak is SYMMETRIC: a linear resistor in both directions. If the
+    capacitors turn out to be electrolytic rather than film they are polarized
+    and conduct asymmetrically under reverse bias; that is a documented
+    deviation and not modelled here.
     """
 
     C_total_F: float
@@ -583,10 +588,12 @@ def resolve_vessel_node(input_dict, geometry):
             R_leak = float("nan")
         if not (R_leak > 0.0) or not math.isfinite(R_leak):
             raise ValueError(
-                "vessel_leak_resistance_ohm must be None (a HARD float, the "
-                "ceramic/film capacitor read) or a finite positive resistance "
-                "[Ohm] for the soft-tie case; a zero or negative value is not "
-                "a tie, it is a short with the wrong sign (got "
+                "vessel_leak_resistance_ohm must be a finite positive "
+                "resistance [Ohm] -- the feedthrough capacitors' leakage path, "
+                "ESTIMATED at 2.5e7-1e11 Ohm over both readings of an "
+                "unresolved capacitor type -- or None for the idealized HARD "
+                "float; a zero or negative value is not a tie, it is a short "
+                "with the wrong sign (got "
                 f"{input_dict.get('vessel_leak_resistance_ohm')!r})"
             )
     collector = np.flatnonzero(

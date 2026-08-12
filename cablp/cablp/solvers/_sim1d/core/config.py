@@ -2559,16 +2559,41 @@ def regime_vessel_node_defaults():
         ESTIMATED and the BRACKET is the claim, not the shipped number — see
         the provenance note, and sweep it rather than quoting it.
     vessel_leak_resistance_ohm:
-        ``R_leak`` [Ohm]: a resistive tie from the same node to the wall,
-        draining ``V_cm/R_leak``. ``None`` (default) is a HARD FLOAT — no
-        DC path at all, which is what the ceramic/film capacitor read implies
-        (GOhm-class leakage over the cycle length is indistinguishable from
-        open). A finite value must be positive and models the soft-tie case;
-        construction raises on zero, negative or non-finite.
+        ``R_leak`` [Ohm]: the resistive tie from the same node to the wall,
+        draining ``V_cm/R_leak``. Must be positive and finite; construction
+        raises on zero, negative or non-finite. ``None`` is accepted and means
+        the idealized HARD FLOAT (no DC path at all) — an explicit A/B arm.
+
+        The capacitor TYPE is visually UNRESOLVED, so the value is ESTIMATED
+        over a bracket spanning both readings (2.5e7 Ohm, the aged-electrolytic
+        low edge, to 1e11 Ohm, the polypropylene-film insulation class); the
+        shipped default takes the second-look FILM reading. The bench
+        measurement resolves it. See the provenance note, and sweep it rather
+        than quoting it.
+
+        **The structural fact the model rests on does not depend on the type.**
+        ``R_leak*C_total`` is at least ~10 s at BOTH bracket edges, against a
+        ~25 ms discharge, so within a shot the node is hard-float **in kind**
+        either way and the leak moves nothing that a run measures.
+
+        Two documented model deviations, neither of them built. (i) POLARITY,
+        conditional on the unresolved type: IF the capacitors are electrolytic
+        they are polarized and conduct asymmetrically under reverse bias
+        (diode-like above ~1-2 V), which this node can reach because the
+        machine's plateau bias is observed at EITHER sign — the shipped leak is
+        SYMMETRIC, a linear resistor in both directions. IF they are film there
+        is no polarity nuance at all, and the black band on one side of the
+        cylinder is the conventional OUTER-FOIL marking (a shielding
+        convention; electrolytics mark polarity with explicit -/+ symbols).
+        (ii) INTER-SHOT MEMORY: with a leak timescale far longer than the ~3 s
+        shot period under either reading, the capacitors cannot discharge the
+        node between shots, so the physical reset path is the afterglow plasma
+        conductance, not the leak. Runs here are single-shot and start from
+        ``V_cm = 0``.
     """
     return {
         "vessel_capacitance_F": 1.3e-6,
-        "vessel_leak_resistance_ohm": None,
+        "vessel_leak_resistance_ohm": 1.0e10,
     }
 
 
@@ -2876,7 +2901,7 @@ input_flags_template_1d = {
     # Vessel / common-mode node. The cathode/anode system FLOATS with respect
     # to the machine wall (the whole electrically connected stainless vessel is
     # one conductor; the anode is tied to it only through four feedthrough
-    # capacitors across the ceramic gap insulators). This flag adds ONE state
+    # electrolytic capacitors across the ceramic gap insulators). This adds ONE state
     # variable V_cm, the anode-to-wall potential, obeying
     # C_total dV_cm/dt = I_wall_net -- electron current landing on
     # wall-connected surfaces (the transmitted beam terminates on the far end,

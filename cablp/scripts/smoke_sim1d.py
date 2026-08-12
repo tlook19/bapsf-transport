@@ -2539,6 +2539,8 @@ def main():
         ({"vessel_leak_resistance_ohm": -5.0}, "vessel_leak_resistance_ohm"),
         ({"vessel_leak_resistance_ohm": float("inf")},
          "vessel_leak_resistance_ohm"),
+        ({"vessel_leak_resistance_ohm": float("nan")},
+         "vessel_leak_resistance_ohm"),
     ):
         _vcm_p, _vcm_f = _r1_sim_config(
             cathode_circuit_voltage_bound=True, regime_vessel_node=True
@@ -2600,14 +2602,38 @@ def main():
     ):
         assert _vcm_key in _vcm_diag, _vcm_key
         assert math.isfinite(float(_vcm_diag[_vcm_key])), _vcm_key
-    # The two wall channels are magnitudes, the climb is the node's positive
-    # part, and the hard-float default leaks nothing.
+    # The two wall channels are magnitudes and the climb is the node's
+    # positive part. The SHIPPED leak is finite (the capacitors are
+    # electrolytics), so the leak channel is live and carries V_cm/R_leak with
+    # the node's own sign -- but it is negligible against the wall currents on
+    # any discharge-length window, which is the whole timescale argument, and
+    # here that is an assertion rather than a claim.
     assert float(_vcm_diag["vessel_I_e_wall_A"]) >= 0.0
     assert float(_vcm_diag["vessel_I_i_wall_A"]) >= 0.0
-    assert float(_vcm_diag["vessel_I_leak_A"]) == 0.0
+    assert np.isclose(
+        float(_vcm_diag["vessel_I_leak_A"]),
+        float(_vcm_diag["vessel_V_cm_V"])
+        / float(_vcm_on._input_dict["vessel_leak_resistance_ohm"]),
+        rtol=1e-12, atol=0.0,
+    ), _vcm_diag
+    assert abs(float(_vcm_diag["vessel_I_leak_A"])) < 1.0e-6 * abs(
+        float(_vcm_diag["vessel_I_i_wall_A"])
+    ), _vcm_diag
     assert float(_vcm_diag["vessel_beam_climb_V"]) == max(
         float(_vcm_diag["vessel_V_cm_V"]), 0.0
     )
+    # The idealized HARD FLOAT remains reachable as an explicit arm, and there
+    # the leak channel really is exactly zero.
+    _vcm_hf = LAPDSim1D(*_r1_sim_config(
+        cathode_circuit_voltage_bound=True, regime_vessel_node=True,
+        vessel_leak_resistance_ohm=None,
+    ))
+    assert _vcm_hf._vessel.R_leak_ohm is None
+    for _ in range(4):
+        _vcm_hf.advance_one_step(dt=2.0e-9)
+    assert float(
+        _vcm_hf._cathode_diagnostic_snapshot()["vessel_I_leak_A"]
+    ) == 0.0
     _vcm_abs, _vcm_rel = _vcm_on.vessel_charge_residual()
     assert _vcm_rel <= 1.0e-12, (_vcm_abs, _vcm_rel)
     # ANTI-VACUITY. An inert node -- one whose ODE is never stepped -- would

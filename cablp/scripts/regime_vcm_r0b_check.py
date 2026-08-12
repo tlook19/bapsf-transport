@@ -44,6 +44,14 @@ from cablp.solvers._sim1d.physics.cathode import (
 #: bracket; the shipped default is the midpoint and is not a claim.
 C_TOTAL_BRACKET_F = (0.4e-6, 1.3e-6, 4.0e-6)
 
+#: The leak bracket spanning BOTH readings of an unresolved capacitor type --
+#: 2.5e7 Ohm at the aged-electrolytic edge, 1e11 Ohm at the polypropylene-film
+#: edge -- with the shipped film default and the idealized hard float. Swept
+#: for INSENSITIVITY: the claim is that nothing in-window moves across it,
+#: because tau_leak = R_leak*C_total is >= ~10 s at BOTH edges against a
+#: ~25 ms discharge, so hard-float-in-kind holds regardless of type.
+R_LEAK_BRACKET_OHM = (2.5e7, 1.0e9, 1.0e10, 1.0e11, None)
+
 #: Currents spanning the seed decade through the sub-amp decade to the
 #: plateau, for the tau table.
 CURRENT_DECADES_A = (1.0e-3, 1.0e-2, 7.0e-2, 1.0e-1, 3.25e-1, 7.0e-1, 1.0, 5.0)
@@ -59,15 +67,15 @@ def crossing_current_A(C_F, V_scale_V, tau_ref_s):
     return C_F * V_scale_V / tau_ref_s
 
 
-def integrate_ramp(C_F, I_e_A, dt_s, steps):
+def integrate_ramp(C_F, I_e_A, dt_s, steps, R_leak_ohm=None):
     """Integrate the SHIPPED node ODE at a constant electron wall current.
 
-    Hard float, no ion return: the pure charging leg, which is what phases 1
-    and 2 are about. Returns ``V_cm`` after ``steps*dt_s``.
+    No ion return: the pure charging leg, which is what phases 1 and 2 are
+    about. Returns ``V_cm`` after ``steps*dt_s``.
     """
     node = VesselNode1D(
         C_total_F=C_F,
-        R_leak_ohm=None,
+        R_leak_ohm=R_leak_ohm,
         collector_cells=np.asarray([0], dtype=int),
     )
     V = 0.0
@@ -101,6 +109,9 @@ def main(argv=None):
                    help="reference charging time [s] for the crossing report")
     p.add_argument("--cycle", type=float, default=1.0e-2,
                    help="machine cycle scale [s] phase 1 is judged against")
+    p.add_argument("--discharge", type=float, default=2.5e-2,
+                   help="discharge window [s] the leak timescale is judged "
+                        "against")
     args = p.parse_args(argv)
 
     params, _flags = default_config()
@@ -206,6 +217,97 @@ def main(argv=None):
               f"{V_excess_i:+.4g} V (falls, releases it)")
     print()
 
+    print("--- leak insensitivity across the R_leak bracket ---")
+    print("The capacitor TYPE is visually UNRESOLVED (axial polypropylene film")
+    print("on the second look, aluminium electrolytic on the first), so R_leak")
+    print("is ESTIMATED over a bracket spanning both readings, 2.5e7-1e11 Ohm.")
+    print("The claim is not the value but the TIMESCALE, which is")
+    print("TYPE-INSENSITIVE: tau_leak = R_leak*C_total vs the ~25 ms discharge.")
+    print()
+    print("  tau_leak [s] over the joint bracket:")
+    header = "     R_leak [Ohm] " + "".join(
+        f"{C * 1e6:>13.2f} uF" for C in C_TOTAL_BRACKET_F
+    )
+    print(header)
+    tau_min = None
+    for R in R_LEAK_BRACKET_OHM:
+        if R is None:
+            print(f"{'hard float':>17}  " + "".join(
+                f"{'inf':>16}" for _ in C_TOTAL_BRACKET_F
+            ))
+            continue
+        row = f"{R:17.3g}  "
+        for C in C_TOTAL_BRACKET_F:
+            tau = R * C
+            tau_min = tau if tau_min is None else min(tau_min, tau)
+            row += f"{tau:>16.4g}"
+        print(row)
+    print(f"  worst-corner tau_leak = {tau_min:.4g} s against a "
+          f"{args.discharge * 1e3:.1f} ms discharge -> "
+          f"{tau_min / args.discharge:.4g}x separation")
+    print()
+    print("  IN-WINDOW insensitivity, measured on the shipped ODE. Phase-1")
+    print("  ramp (1 mA, no ion return) integrated over the FULL discharge")
+    print("  window at every leak setting, against the hard float:")
+    worst_overall = 0.0
+    for C in C_TOTAL_BRACKET_F:
+        steps = 1000
+        ref = integrate_ramp(C, seed_I, args.discharge / steps, steps, None)
+        line = f"    C={C * 1e6:5.2f} uF  hard float V_cm={ref:11.6f} V"
+        worst = 0.0
+        for R in R_LEAK_BRACKET_OHM:
+            if R is None:
+                continue
+            V = integrate_ramp(C, seed_I, args.discharge / steps, steps, R)
+            rel = abs(V - ref) / abs(ref) if ref != 0.0 else 0.0
+            worst = max(worst, rel)
+        worst_overall = max(worst_overall, worst)
+        line += f"   worst relative shift over the R_leak bracket: {worst:.3e}"
+        print(line)
+    print()
+    print(f"  WORST SHIFT ANYWHERE IN THE JOINT BRACKET: {worst_overall:.3e} "
+          f"({worst_overall * 100:.4f} %)")
+    print("  It is not noise and it is not zero, so it is reported as a")
+    print("  number rather than as a boolean. It is also exactly what the")
+    print("  closed form predicts: for a linear ramp the leak removes")
+    print(f"  dt/(2*tau_leak) of the accumulated charge, = "
+          f"{args.discharge / (2.0 * tau_min):.3e} at the worst corner")
+    print(f"  (C = 0.40 uF, R_leak = 2.5e7 Ohm, tau_leak = {tau_min:.4g} s).")
+    print()
+    # MATERIALITY, against a NAMED yardstick rather than a bare constant: the
+    # node's own inputs are known to a factor of ten (C_total) and a factor of
+    # forty (R_leak), so a shift has to reach the percent level before it can
+    # compete with what the brackets already admit. 1 % is still two decades
+    # tighter than the C bracket.
+    material = worst_overall >= 1.0e-2
+    print(f"  MATERIAL (>= 1 % -- still two decades tighter than the factor-of")
+    print(f"  -ten C_total bracket the same result must already carry): "
+          f"{material}")
+    if material:
+        print("  *** FINDING: an in-window number MOVES materially with R_leak")
+        print("      inside the bracket. The timescale argument does not hold")
+        print("      here and R_leak would have to be pinned before any V_cm")
+        print("      result could be quoted. ***")
+    else:
+        print("  -> in-window behaviour is leak-insensitive: across the whole")
+        print("     joint bracket the leak changes V_cm by at most a tenth of")
+        print("     a percent, while C_total alone moves it by a factor of")
+        print("     ten. The node is hard-float IN KIND within a shot, and the")
+        print("     phase sequence is untouched by the leak.")
+        print("     CAVEAT: this is a DISCHARGE-WINDOW statement. The same")
+        print("     ratio over seconds is order unity, so nothing here")
+        print("     licenses a claim about inter-shot behaviour.")
+    print()
+    print("  Documented, NOT modelled. Polarity, CONDITIONAL on the type: if")
+    print("  the caps are electrolytic they conduct asymmetrically under")
+    print("  reverse bias and the shipped SYMMETRIC linear resistor is the")
+    print("  deviation; if film there is no polarity nuance and the black band")
+    print("  is the outer-foil marking. Inter-shot: tau_leak far exceeds the")
+    print("  ~3 s shot period under BOTH readings, so the caps cannot reset")
+    print("  the node between shots -- the afterglow plasma conductance is the")
+    print("  physical reset path.")
+    print()
+
     print("--- sequence verdict ---")
     print("  1 early wall-referenced :", "yes" if ok_phase1 else "NO")
     print("  2 sub-amp engagement    :",
@@ -213,7 +315,11 @@ def main(argv=None):
           if not decade_ok else "yes at both references")
     print("  3 bootstrap sign correct: yes (equal currents hold V_cm; an")
     print("    electron excess raises it, an ion excess lowers it)")
-    print("  bracket-stable IN KIND  :", "yes" if ok_phase1 else "NO")
+    print("  4 leak-insensitive      :",
+          f"yes (worst {worst_overall:.3e} over the joint bracket)"
+          if not material else "NO -- see the FINDING above")
+    print("  bracket-stable IN KIND  :",
+          "yes" if (ok_phase1 and not material) else "NO")
     print("    -- the three phases occur in this order for every capacitance")
     print("    in the bracket, and only the currents at which they occur")
     print("    move, by the 10x span of C itself. That is the claim; the")
