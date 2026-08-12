@@ -88,9 +88,17 @@ def bound_values(d):
     return fails
 
 
+#: A save counts as FALLING only below this relative step. The loop current
+#: wanders at the 1e-11 level from the circuit brentq's own tolerance, and an
+#: exact `dI < 0` test reads that noise as decay -- which it did, on the first
+#: pass, and reported the excluded condition as occurring in a build-leg
+#: window that contains no decay at all. 1e-9 sits two decades above the
+#: measured noise floor and many decades below any physical ramp-down.
+FALL_REL = 1.0e-9
+
+
 def contract_evidence(d):
     """B3: is a full-window flag-ON in contract now?"""
-    stem = d["stem"]
     bound_on = bool(d["flags"].get("cathode_circuit_voltage_bound", False))
     if not bound_on or "source_bound_active" not in d:
         return
@@ -103,24 +111,45 @@ def contract_evidence(d):
     live = np.asarray(d.get("has_solution", np.ones_like(t)), float) > 0.0
     dI = np.zeros_like(I)
     dI[1:] = np.diff(I)
-    falling = live & (dI < 0.0)
+    scale = np.maximum(np.abs(I), 1e-30)
+    falling = live & (dI < -FALL_REL * scale)
+    noise = live & (dI < 0.0) & ~falling
     bound_now = live & (code == 2.0)
     both = falling & bound_now
     print(f"  B3 back-EMF exclusion over {int(live.sum())} saved solves:")
-    print(f"       saves with a FALLING loop current: {int(falling.sum())}")
     print(f"       saves with the circuit bound ACTIVE: "
           f"{int(bound_now.sum())}")
-    print(f"       saves with BOTH (the excluded condition): "
-          f"{int(both.sum())}")
-    print(f"       I_loop: {I[0]:.6g} -> {I[-1]:.6g} A, "
-          f"max {np.nanmax(I):.6g} A, monotone non-decreasing: "
-          f"{bool(np.all(np.diff(I) >= 0.0))}")
+    print(f"       saves FALLING by more than {FALL_REL:.0e} relative: "
+          f"{int(falling.sum())}")
+    print(f"       saves falling only within that noise band: "
+          f"{int(noise.sum())}"
+          + (f" (worst {np.nanmin((dI / scale)[noise]):.2e} relative)"
+             if np.any(noise) else ""))
+    print(f"       saves with BOTH bound and a real fall (the EXCLUDED "
+          f"condition): {int(both.sum())}")
+    print(f"       I_loop: {I[0]:.6g} -> {I[-1]:.6g} A, max "
+          f"{np.nanmax(I):.6g} A")
+    # The positive evidence this window CAN give: while the bound is active,
+    # dI/dt is held at zero. That is the documented property, and it is what
+    # becomes a defect on a decaying leg.
+    held = bound_now.copy()
+    held[0] = False
+    if np.any(held):
+        spread = float(np.nanmax(I[held]) - np.nanmin(I[held]))
+        print(f"       while BOUND, I_loop spans {spread:.3e} A over "
+              f"{int(held.sum())} saves "
+              f"({spread / max(float(np.nanmax(I[held])), 1e-30):.2e} "
+              f"relative) -- frozen, which IS the dI/dt = 0 property")
     if int(both.sum()) == 0:
-        print("       -> this WINDOW is inside the contract (no falling-")
-        print("          current save has the bound active). That is a")
-        print("          statement about the window, not about a full run:")
-        print("          the main-discharge DECAY is by definition a falling")
-        print("          leg, and this probe stops before it.")
+        print("       -> this WINDOW is inside the contract: the bound is")
+        print("          active almost throughout and the current is pinned,")
+        print("          but nothing here WANTS to fall, so the freeze costs")
+        print("          nothing. That is a statement about the window and")
+        print("          not about a full run -- the main-discharge DECAY is")
+        print("          a falling leg by definition, and this probe stops")
+        print("          long before it. The full-window verdict below is")
+        print("          therefore STRUCTURAL, argued from the loop equation,")
+        print("          and is NOT measured by this probe.")
     else:
         print("       -> the excluded condition OCCURS in this window: the")
         print("          bound is holding dI/dt at zero on a leg where the")
@@ -164,12 +193,19 @@ def main(argv=None):
     print("longer a mis-clamp but the correct answer. A FULL-WINDOW FLAG-ON IS")
     print("STILL OUT OF CONTRACT, for the independent back-EMF exclusion: the")
     print("inductor's stored energy is not counted as supply, so while the")
-    print("bound binds the loop residual is identically zero and dI/dt = 0.")
-    print("The main-discharge decay is a falling-current leg by definition, so")
-    print("a full window with the flag on would have the bound freeze the")
-    print("decay. The contract is therefore WIDER than R1's (any window over")
-    print("which the loop current is not falling, which now includes the rise")
-    print("into the plateau) but still not the whole window.")
+    print("bound binds the loop residual is identically zero and dI/dt = 0 --")
+    print("which this probe MEASURES as the frozen I_loop above. The")
+    print("main-discharge decay is a falling-current leg by definition, so a")
+    print("full window with the flag on would have the bound freeze the decay.")
+    print("The contract is therefore WIDER than R1's (any window over which")
+    print("the loop current is not falling, which now includes the rise into")
+    print("the plateau) but still not the whole window.")
+    print()
+    print("SCOPE OF THIS EVIDENCE. The probe covers 0 -> 0.033 ms of the build")
+    print("leg and reaches no decay, so the freeze is measured but its COST is")
+    print("not: the full-window verdict is argued from the loop equation, not")
+    print("observed here. Confirming it needs a window that reaches the decay,")
+    print("which this brief did not buy.")
     return 1 if failures else 0
 
 
