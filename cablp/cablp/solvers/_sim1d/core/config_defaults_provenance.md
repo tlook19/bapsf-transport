@@ -858,9 +858,20 @@ default-ON, aborting a healthy arm would be the worse failure, and a genuine
 lock is unbounded by construction so a large threshold costs only detection
 latency, never detection itself.
 
-The remaining timestep parameters (`cfl`, the `*_dt_fraction` limits, growth
-and retry factors) are ASSUMED numerical-control values with no measurement
-behind them.
+**`circuit_dt_fraction = 0.25` — ASSUMED numerical-control value**, carrying
+the same quarter-of-a-relaxation-time convention as `density_dt_fraction`,
+`neutral_dt_fraction` and `heat_dt_fraction`. What is MEASURED is the feature
+it exists to resolve, not the fraction: the sheath capability wall's device
+slope reaches ~2 kOhm, giving `tau_circuit = L/(R + dV_dis/dI)` ~ 4 ns against
+an `L/R_comp` of 1.12 ms and a `dt_max` of 1e-4 s, and the sub-wall slew
+crosses the wall in ~45 ns (`scripts/regime_dtq_wallmap.txt`,
+`scripts/regime_dtq_frozen_circuit.txt`, 2026-08-12). The bound is an ACCURACY
+control — the TR-BDF2 loop advance is L-stable and needs no stability
+restriction — and is read only while `cathode_circuit_voltage_bound` is armed.
+
+The remaining timestep parameters (`cfl`, the other `*_dt_fraction` limits,
+growth and retry factors) are ASSUMED numerical-control values with no
+measurement behind them.
 
 ## `coverage_closure_defaults`
 

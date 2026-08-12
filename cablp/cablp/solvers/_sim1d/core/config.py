@@ -2216,6 +2216,17 @@ def timestep_defaults():
         Maximum ion-neutral drag relaxation fraction per explicit step.
         This was formerly available only through an unregistered
         ``dict.get`` fallback.
+    circuit_dt_fraction:
+        Fraction of the current-driven loop's LOCAL relaxation time
+        ``tau_circuit = L_parasitic_H / (R_comp + R_mesh_ohm + dV_dis/dI)``
+        allowed per accepted step. Read only while
+        ``cathode_circuit_voltage_bound`` is armed and a live loop exists;
+        the candidate is withdrawn to ``inf`` otherwise, so this key cannot
+        move an unarmed run. Bounds the sheath's capability wall, whose
+        device slope reaches ~2 kOhm (``tau_circuit`` ~ 4 ns) while ``L/R``
+        is 1.12 ms -- the wall, not the loop's bulk time constant, is the
+        stiff feature. Accuracy, not stability: the TR-BDF2 advance is
+        L-stable. See ``cathode.circuit_relaxation_timestep``.
 
     Values and their provenance: ``config_defaults_provenance.md``.
     """
@@ -2244,6 +2255,7 @@ def timestep_defaults():
         "max_neutral_step_fraction": 0.0,
         "max_energy_step_fraction": 0.0,
         "drag_dt_fraction": 0.5,
+        "circuit_dt_fraction": 0.25,
     }
 
 
