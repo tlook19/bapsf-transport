@@ -2380,6 +2380,109 @@ def neutral_probe_source_defaults():
     }
 
 
+def regime_tracer_defaults():
+    """Pre-breakdown passive-tracer bridge (regime R2); ``regime_tracer`` flag.
+
+    Every key here is read ONLY under the ``regime_tracer`` flag and is inert
+    otherwise. With the flag off the tracer object is never constructed and no
+    branch below it is reachable, so the trajectory is bit-identical to a
+    checkout that has never heard of the feature.
+
+    On a cell the tracer owns, the plasma density is the exact integral of the
+    affine ODE ``dn/dt = gamma(z)*n + S(z, t)``: ``gamma`` a Picard-frozen
+    functional of the slow background (bulk ionization minus recombination
+    minus surface absorption) and ``S`` the n-independent beam-impact
+    ionization birth. ``Te`` on those cells is the root of a quasi-static local
+    electron energy balance rather than an integrated field. The method, the
+    passive/active interface, and the neglect bounds are ``_sim1d/NUMERICS.md``
+    (section "Regime-R2 pre-breakdown passive-tracer bridge"). Values and their
+    provenance classes are ``config_defaults_provenance.md``.
+
+    A cell is PASSIVE while all three criteria below hold; it activates (and
+    the fluid takes it over) when any of them fails AND its density has reached
+    ``tracer_activation_ne``. Each criterion is expressed as a ratio that must
+    stay ``<= 1`` after division by its constant, so the three are directly
+    comparable and the census can name the one that binds.
+
+    tracer_passivity_current_ratio:
+        Criterion (a). Largest share of the loop current the cell may CONDUCT
+        and still count as passive, dimensionless in ``(0, 1]``. The conducted
+        current is ``I_cond = sigma_par(n, Te) * A_plasma * V_dev / L_plasma``
+        with the Spitzer parallel conductivity and the R1-bounded device
+        voltage; it is the current the plasma actually passes under the applied
+        drop, NOT the cathode's emission capability. Raises at construction
+        outside ``(0, 1]``.
+
+        ``I_cond`` is an UPPER BOUND, so this criterion is one-sided:
+        satisfying it establishes passivity, failing it does not establish the
+        converse. The bound puts the WHOLE device drop across the column, while
+        most of that drop is the cathode sheath fall, so the axial field and
+        therefore ``I_cond`` are overstated. Two consequences for a caller:
+        cells are handed to the fluid earlier than the physics alone requires
+        (the safe direction), and at low density it is the
+        ``tracer_activation_ne`` gate rather than this criterion that binds.
+    tracer_passivity_thinness:
+        Criterion (b). Largest cumulative single-pass fraction of the beam's
+        energy the plasma may absorb and still count as passive, dimensionless
+        in ``(0, 1]``. Accumulated along each cathode's ray from the launch end
+        as ``sum (dE/dx)_plasma * dz / E_beam`` with the Coulomb slowing rate
+        on plasma electrons; the max over ends is the cell's value. Raises at
+        construction outside ``(0, 1]``.
+    tracer_passivity_depletion:
+        Criterion (c). Largest fraction of the local neutral density the
+        plasma's own bulk ionization may burn and still count as passive,
+        dimensionless in ``(0, 1]``. The beam's neutral debit is NOT counted --
+        the beam is background, and criterion (c) measures the plasma's
+        back-reaction on the neutrals, not the discharge's. Raises at
+        construction outside ``(0, 1]``.
+    tracer_passivity_hysteresis:
+        Enter/exit ratio on all three criteria, ``> 1``. A cell activates when
+        its worst ratio exceeds ``1`` and can only return to passive when that
+        ratio falls below ``1 / tracer_passivity_hysteresis``. All three ratios
+        are monotone increasing while the discharge builds, so re-entry is not
+        an expected event; the width exists so that a cell sitting exactly on a
+        criterion cannot chatter between descriptions on round-off and make the
+        step sequence irreproducible. Raises at construction at ``<= 1``.
+    tracer_refresh_tol:
+        Picard cadence for ``gamma`` and the quasi-static ``Te``: both are
+        frozen until the largest relative change in the background they are
+        built from (``n``, ``nn``, ``S``) exceeds this, then both are rebuilt.
+        ``0`` refreshes every step. A numerics tolerance in the same family as
+        ``circuit_picard_tol_rel``, not a description-selecting constant.
+        Raises at construction if negative.
+    tracer_activation_ne:
+        Handoff density [cm^-3]: the density at or above which the FLUID
+        description is usable, so a cell that has failed passivity may be given
+        to it. Must sit far above ``ne_floor`` -- handing the fluid a cell
+        whose density the floor clip is holding up would reproduce exactly the
+        floor-poisoned regime the tracer exists to skip -- and construction
+        raises unless it is at least ten times ``ne_floor``.
+    tracer_overlap_band_ne:
+        Two-element ``[low, high]`` density band [cm^-3] over which BOTH
+        descriptions are valid and must therefore agree: at or above
+        ``tracer_activation_ne`` (fluid valid) and below the density at which
+        passivity fails (tracer valid). Read by
+        ``scripts/regime_r2_overlap_gate.py``, which is the two-sided gate.
+        Construction raises unless ``0 < low < high``.
+    tracer_overlap_rtol:
+        Relative agreement the two descriptions must reach inside that band for
+        the overlap gate to PASS. Raises at construction if not positive.
+    """
+    return {
+        "tracer_passivity_current_ratio": 0.01,
+        "tracer_passivity_thinness": 0.01,
+        "tracer_passivity_depletion": 0.01,
+        "tracer_passivity_hysteresis": 3.0,
+        "tracer_refresh_tol": 0.01,
+        "tracer_activation_ne": 1.0e10,
+        # A LIST, not a tuple: the resolved config round-trips through JSON in
+        # the HDF5 result header, and a tuple comes back as a list, so a tuple
+        # default would fail the saved-vs-rebuilt config identity check.
+        "tracer_overlap_band_ne": [1.0e10, 1.0e11],
+        "tracer_overlap_rtol": 0.05,
+    }
+
+
 _PARAMETER_DEFAULT_GROUPS = (
     initial_condition_defaults,
     geometry_defaults,
@@ -2395,6 +2498,7 @@ _PARAMETER_DEFAULT_GROUPS = (
     coverage_closure_defaults,
     restart_defaults,
     neutral_probe_source_defaults,
+    regime_tracer_defaults,
 )
 
 
@@ -2662,6 +2766,22 @@ input_flags_template_1d = {
     # the ten keys set with this flag off. Default OFF and bit-exact off
     # (presence-gated: the off path builds no profile and adds no RHS row).
     "neutral_probe_source": False,
+    # Pre-breakdown PASSIVE-TRACER bridge (regime R2). On a cell that is still
+    # passive -- conducting a negligible share of the loop current, absorbing a
+    # negligible share of the beam's single pass, and burning a negligible
+    # share of the local neutrals -- the plasma feeds back on nothing, so its
+    # density is integrated as the EXACT solution of the affine scalar ODE
+    # dn/dt = gamma*n + S while the background (circuit ramp, cathode thermal,
+    # coverage, neutrals) owns the timestep. That removes the floor-poisoned
+    # dt collapse the fluid solver suffers when n sits near ne_floor, and makes
+    # n = 0 a regular state, so ne0 = 0 is a legitimate initial condition.
+    # Cells hand back to the full solver individually, at a closed interface
+    # face; the whole-column handoff is a restart state transfer. Requires
+    # cathode_coupling (the beam birth S is the cathode solve's) and refuses
+    # the kinetic/kinetic_dvm neutral models (R2 is fluid-arms only) -- both
+    # construction-time ValueErrors, as is any out-of-range criterion constant.
+    # Default OFF, presence-gated and bit-exact off.
+    "regime_tracer": False,
     "ionization_energy_cost": True,
     "icool": True,
     "ncool": True,
