@@ -581,6 +581,22 @@ the arms do ride it materially, and the bracket that answer demands does not
 exist upward, because the value is the data's edge rather than a choice.
 Memos: `covcap_memo.md`, `covcal_efold_read.md`.
 
+**`cathode_circuit_bound_object = "device_voltage"` — DERIVED; a selector, not
+a magnitude.** It carries no number and no bar: it names which quantity
+`cathode_circuit_voltage_bound` holds at the circuit-available voltage. The
+derivation is the loop equation itself. What the source and the series
+resistance can sustain is the DEVICE voltage `V_b = phi_c - phi_a + V_p`, and
+that is the quantity the circuit integrates, so `"device_voltage"` is the
+object the relation actually contains; `"phi_c"` is the proxy R1 shipped,
+correct only where `phi_a` and `V_p` are negligible. The shipped value is
+therefore the derived one and not a preference. `"phi_c"` is retained as a
+declared A/B arm (it reproduces R1 bit for bit) so that results taken under
+the R1 composition remain reproducible, exactly like the other closure
+families. Honest bar: none applies to a selector; what a RESULT must state is
+which arm produced it, because the two differ by `phi_a - V_p` in the returned
+sheath drop and therefore in the beam birth energy keyed to it (measured on a
+plateau-class point: 190.36 V vs 177.84 V at `phi_a = 12.90` V).
+
 ### Emission
 
 **`C_R = 29.0` A cm^-2 K^-2 — literature nominal for LaB6**, in the effective
@@ -1082,3 +1098,68 @@ be — that bound reaches ~50% at the low-`Te` end. What the gate therefore
 proves is agreement *at the operating point it runs*, not agreement in general;
 a PASS is evidence about the code, and the neglect table is the statement about
 the physics. Bracket `0.02 - 0.10`.
+
+---
+
+## `regime_vessel_node_defaults`
+
+Both values are HARDWARE quantities of the machine's electrical topology, not
+model closures. Nothing in this group is tuned, and nothing in it is fitted to
+any run.
+
+The topology behind them is hardware-verified: the cathode/anode system floats
+with respect to the machine wall; the entire electrically connected stainless
+vessel — some 20 m of it — is ONE wall conductor; and the anode is referenced
+to that conductor only through FOUR feedthrough capacitors bridging the ceramic
+gap insulators.
+
+**`vessel_capacitance_F = 1.3e-6` F — ESTIMATED. THE BRACKET IS THE CLAIM.**
+The four feedthrough capacitors are in parallel, so `C_total = 4 * C_each`.
+`C_each` is an ENGINEER'S ESTIMATE — "probably 0.1-1 uF" — with no part number
+read and no bench measurement behind it, which puts
+
+    C_total in [0.4, 4.0] uF,
+
+a factor of ten wide. The shipped value is the bracket's geometric midpoint
+(`sqrt(0.4*4.0) = 1.265` uF, rounded to 1.3), chosen so that a run left at the
+default sits in the middle of the bracket rather than at an edge. **It is not
+a measurement and no result may quote it as one.** Any result that depends on
+`C_total` must report the bracket, and
+`scripts/regime_vcm_r0b_check.py` is the instrument that sweeps it.
+
+*Honest bar: a factor of 10, one-sided in neither direction.* What the bracket
+does and does not decide, measured across `0.4 / 1.3 / 4.0` uF at
+`V_scale = V_bank = 180` V:
+
+- The PHASE SEQUENCE is bracket-stable in kind. Early build is
+  wall-referenced at every capacitance (at 1 mA seed current the node reaches
+  only 1.4-13.9 % of the bank scale over a 10 ms cycle); engagement follows;
+  the bootstrap's sign is a property of the ODE and not of `C_total` at all.
+- The CURRENT AT WHICH each phase occurs scales linearly with `C_total` and so
+  moves by the full factor of ten: the charging time crosses 713 us at
+  `0.101 / 0.328 / 1.010` A respectively. Only the middle of the bracket lands
+  near the measured band (the pre-avalanche discharge current back-extrapolates
+  to 0.34-0.47 A at the window start; 1.3 uF gives 0.328 A, 3.5 % below its
+  lower edge). That near-coincidence is an observation, NOT a calibration —
+  `C_total` must not be fitted to it.
+
+**A BENCH MEASUREMENT IS INCOMING** and will replace this entry. When it
+lands, the class becomes MEASURED with the instrument's own bar, the bracket
+above is retired, and any result quoted against the bracket is re-read at the
+measured value.
+
+**`vessel_leak_resistance_ohm = None` (hard float) — DERIVED from the capacitor
+TYPE.** `None` means no DC path at all. The derivation is a type read rather
+than a measurement: the feedthrough capacitors are ceramic/film, whose
+insulation resistance is GOhm-class, so `R_leak * C_total` is at least
+`1e9 * 4e-7 = 400` s against a machine cycle of milliseconds — four to five
+decades of separation. Over any window this solver integrates, a GOhm tie and
+an open circuit are indistinguishable, and the hard float is the honest
+simplification rather than an approximation with a residual worth carrying.
+
+*Honest bar: the type read, not a measured insulation resistance.* A finite
+positive value is accepted for the soft-tie case — a deliberately installed
+bleeder, a degraded insulator, or a sensitivity arm — and the closed-form step
+integrates it exactly, so a soft tie is a legitimate A/B arm rather than a
+perturbation. The class of that arm's value would be whatever pins it. Zero and
+negative values raise at construction: they are not ties.
