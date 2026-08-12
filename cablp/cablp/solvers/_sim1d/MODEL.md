@@ -1008,3 +1008,59 @@ waveform key belonging to another waveform; an empty or inverted square window;
 a table with fewer than two rows, non-increasing times or a negative $w$; and
 the zone selector present without two zones or absent with them. All are
 construction-time `ValueError`s.
+
+## Circuit voltage bound on the sheath ceiling (`cathode_circuit_voltage_bound`, default off)
+
+The current-driven sheath solve carries a ceiling `cathode_phi_c_cap_V` on the
+net cathode drop $\phi_c$. That number is the top of the tabulated He EII cross
+section — an **atomic-data domain guard**, not a voltage the device sustains —
+and in the `capability_limited` branch it was also used as a FLOOR on the
+device voltage, `V_b = max(V_b, phi_c_cap_V)`. On the pre-breakdown build leg
+that makes the solve report $V_b \approx 1000$ V and launch a $\sim$keV beam
+while the bank supplies $\approx 178$ V (measured $V_b/V_\text{dis} \approx
+5.1$ on 27–53 % of build-leg saves; 0 % at the plateau, which is 100 %
+`classical`).
+
+The flag composes a second upper bound with the cap. The circuit-available
+device voltage is the loop equation the circuit already integrates,
+
+$$L\,\frac{dI}{dt} = V_\text{src} - I\,(R_\text{comp} + R_\text{mesh}) - V_b,$$
+
+read at $dI/dt = 0$: $V_\text{avail}(I) = V_\text{src} - I\,(R_\text{comp} +
+R_\text{mesh})$. The ceiling the sheath root is solved against becomes
+$\min(\phi_{c,\text{cap}}, V_\text{avail})$, so $\phi_c$ — and the beam birth
+energy keyed to it through `_compute_l_b` — is held at the supply, and the
+capability-limited $V_b$ is clamped there instead of floored at the cap. The
+cap's own refusal machinery is untouched and still composes as the other upper
+bound. The escape invariant (a returned $\phi_c$ above the ceiling in any other
+regime is a `RuntimeError`) now asserts against the composed ceiling.
+
+**The inductor's back-EMF is deliberately not counted as available voltage.**
+It is stored energy, not supply, and including it would make the bound
+vacuous. The consequence is that while the bound binds, $dI/dt = 0$ exactly:
+the loop current can neither grow nor fall through it. This strengthens the
+runaway backstop the floor was originally added for — the loop residual is
+identically zero in the clamped branch — and the circuit's stage root-find
+stays well-posed, with $g'(I) = 1$ exactly there rather than merely $\ge 1$.
+
+**SCOPE — the bound's contract is the capability-limited / near-vacuum regime,
+i.e. the pre-breakdown build leg. A full-window run with the flag on is out of
+contract.** The bound's object is $\phi_c$, but what the circuit supplies is
+the *device* voltage $V_b = \phi_c - \phi_a + V_p$, in which the anode fall
+**subtracts**. On the build leg $\phi_a$ is negligible and the two coincide,
+which is why bounding $\phi_c$ is the right move there. At the main-discharge
+plateau $\phi_a$ is not negligible: $\phi_c$ legitimately exceeds
+$V_\text{avail}(\approx 5\ \text{kA})$ while $V_b$ does not, so the composed
+ceiling would clamp a physically correct solve — forcing every plateau solve to
+`capability_limited` at $\phi_c = V_\text{avail}$. **Nothing raises when that
+happens.** Only the `bound_active` census records it, so the census must be
+read on any run that reaches the plateau with the flag on. Because the plateau
+never touches the ceiling with the flag off, this is a defect the flag would
+*introduce*, not one it inherits. A $\phi_a$-aware bound whose object is $V_b$
+is the R2 follow-on; until then, confine the flag to build-leg windows.
+
+**Diagnostics.** Three per-solve values ride the cathode diagnostics:
+`phi_c_ceiling_V` (the ceiling actually solved against), `circuit_V_avail_V`
+(NaN where the bound is not in force) and `bound_active` — 0 the solve is a
+free root, 1 it sat on the data cap, 2 it sat on the circuit bound. All three
+are NaN on the voltage-driven (floating) solve, which has no ceiling.

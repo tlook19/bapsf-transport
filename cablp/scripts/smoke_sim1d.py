@@ -2031,6 +2031,226 @@ def main():
         _cap_beam.result.phi_c / I_ion
     ), _cap_beam.beam_cross[0]
 
+    # ------------------------------------------------------------------
+    # R1: the CIRCUIT VOLTAGE BOUND. The device voltage cannot exceed what the
+    # circuit supplies. The cap above is an atomic-data domain guard (the He
+    # EII table top), and used alone it FLOORS V_b at ~1000 V on the
+    # pre-breakdown build leg while the bank sources ~178 V. The bound
+    # composes with it -- the ceiling the sheath root is solved against is the
+    # MINIMUM of the two -- and it is presence-gated on
+    # ``circuit_V_avail_V=None``.
+    # ------------------------------------------------------------------
+    _R1_CENSUS_FIELDS = (
+        "phi_c_ceiling_V", "circuit_V_avail_V", "bound_active",
+    )
+
+    def _r1_state(result, skip=()):
+        """Raw-byte view of every float field, plus the non-float ones."""
+        floats, others = [], []
+        for _f in dataclasses.fields(result):
+            if _f.name in skip:
+                continue
+            _v = getattr(result, _f.name)
+            if isinstance(_v, float):
+                floats.append(_v)
+            else:
+                others.append((_f.name, _v))
+        return np.asarray(floats, dtype=float).tobytes(), tuple(others)
+
+    # (i) PRESENCE GATE. Omitting the argument and passing None must be
+    # indistinguishable to the LAST BIT, on a free-root point and on a
+    # capability-limited one -- this is the whole of "bit-exact off" at the
+    # solve, and the flag can reach the solve no other way.
+    for _r1_I in (5.0, _CAPFIX_ESCAPE_I_A):
+        _r1_omit = solve_idriven(
+            _cap_cfg, _cap_pl, I_tot_A=_r1_I, **_CAPFIX_ESCAPE_KWARGS
+        )
+        _r1_none = solve_idriven(
+            _cap_cfg, _cap_pl, I_tot_A=_r1_I, circuit_V_avail_V=None,
+            **_CAPFIX_ESCAPE_KWARGS,
+        )
+        assert _r1_state(_r1_omit) == _r1_state(_r1_none), _r1_I
+        # Off, the census reports the data cap as the whole ceiling and no
+        # circuit voltage at all.
+        assert _r1_none.phi_c_ceiling_V == 1000.0, _r1_none.phi_c_ceiling_V
+        assert math.isnan(_r1_none.circuit_V_avail_V)
+
+    # (ii) EXACT REDUCTION where the bound cannot bind. An available voltage
+    # above the cap leaves the cap as the composed ceiling, and the V_b clamp
+    # is then a no-op -- so everything except the census fields is byte-equal
+    # to the off solve.
+    for _r1_I in (5.0, _CAPFIX_ESCAPE_I_A):
+        _r1_off = solve_idriven(
+            _cap_cfg, _cap_pl, I_tot_A=_r1_I, **_CAPFIX_ESCAPE_KWARGS
+        )
+        _r1_wide = solve_idriven(
+            _cap_cfg, _cap_pl, I_tot_A=_r1_I, circuit_V_avail_V=1.0e4,
+            **_CAPFIX_ESCAPE_KWARGS,
+        )
+        assert _r1_wide.phi_c_ceiling_V == 1000.0, _r1_wide.phi_c_ceiling_V
+        assert _r1_wide.V_b <= 1.0e4, _r1_wide.V_b
+        assert _r1_state(_r1_off, skip=_R1_CENSUS_FIELDS) == _r1_state(
+            _r1_wide, skip=_R1_CENSUS_FIELDS
+        ), _r1_I
+        # The census still distinguishes the two members of the composition:
+        # at the ceiling under a non-binding circuit voltage the DATA CAP is
+        # what the solve sat on.
+        assert _r1_wide.bound_active == (
+            1.0 if _r1_wide.regime == "capability_limited" else 0.0
+        ), _r1_wide.bound_active
+
+    # (iii) THE BOUND BITES, and it is the circuit that binds. At the frozen
+    # escaping state a 178 V loop must hold phi_c -- and therefore the beam
+    # birth energy keyed to it -- at 178 V, not at the 1000 V table top, and
+    # must hold V_b there too instead of flooring it at the cap.
+    _R1_V_AVAIL = 177.843
+    for _r1_I in _CAPFIX_BELOW_I_A + _CAPFIX_WINDOW_I_A:
+        _r1_b = solve_idriven(
+            _cap_cfg, _cap_pl, I_tot_A=float(_r1_I),
+            circuit_V_avail_V=_R1_V_AVAIL, **_CAPFIX_ESCAPE_KWARGS,
+        )
+        assert _r1_b.phi_c_ceiling_V == _R1_V_AVAIL, _r1_b.phi_c_ceiling_V
+        # NO ESCAPED SOLVES against the COMPOSED ceiling: the returned root is
+        # at or below it, and anything at it is tagged. (A violation raises
+        # RuntimeError inside the solve before reaching here; this is the
+        # positive statement of the same invariant.)
+        assert _r1_b.phi_c <= _R1_V_AVAIL * (1.0 + 1e-12), (_r1_I, _r1_b.phi_c)
+        if _r1_b.regime == "capability_limited":
+            assert np.isclose(
+                _r1_b.phi_c, _R1_V_AVAIL, rtol=1e-12, atol=0.0
+            ), (_r1_I, _r1_b.phi_c)
+            assert _r1_b.V_b <= _R1_V_AVAIL, (_r1_I, _r1_b.V_b)
+            assert _r1_b.bound_active == 2.0, (_r1_I, _r1_b.bound_active)
+        else:
+            assert _r1_b.bound_active == 0.0, (_r1_I, _r1_b.bound_active)
+        assert _r1_b.I_tot >= 0.0, (_r1_I, _r1_b.I_tot)
+    # The escape current itself: off it rides the 1000 V table top, on it
+    # rides the loop.
+    _r1_esc_off = solve_idriven(
+        _cap_cfg, _cap_pl, I_tot_A=_CAPFIX_ESCAPE_I_A, **_CAPFIX_ESCAPE_KWARGS
+    )
+    _r1_esc_on = solve_idriven(
+        _cap_cfg, _cap_pl, I_tot_A=_CAPFIX_ESCAPE_I_A,
+        circuit_V_avail_V=_R1_V_AVAIL, **_CAPFIX_ESCAPE_KWARGS,
+    )
+    assert _r1_esc_off.V_b >= 1000.0 and _r1_esc_on.V_b <= _R1_V_AVAIL, (
+        _r1_esc_off.V_b, _r1_esc_on.V_b
+    )
+    assert _r1_esc_off.phi_c > 5.0 * _r1_esc_on.phi_c, (
+        _r1_esc_off.phi_c, _r1_esc_on.phi_c
+    )
+
+    # (iv) THE BEAM SIDE. The birth energy keys to the returned phi_c, so the
+    # bound carries straight through to the beam -- and the He EII lookup is
+    # then far inside its table rather than sitting on its last node.
+    _r1_beam = _cathode_solver_idriven_mod.solve_beam_system_idriven(
+        _cap_cfg,
+        np.array([_cap_pl.T_e, _cap_pl.T_e]),
+        np.array([_cap_pl.n_e, _cap_pl.n_e]),
+        np.array([_cap_pl.n_n, _cap_pl.n_n]),
+        np.zeros(2),
+        np.array([_cap_cfg.A_c, _cap_cfg.A_c]),
+        I_ion,
+        "He",
+        _CAPFIX_ESCAPE_I_A,
+        cathode_index=0,
+        circuit_V_avail_V=_R1_V_AVAIL,
+        **_CAPFIX_ESCAPE_KWARGS,
+    )
+    assert _r1_beam.result.phi_c <= _R1_V_AVAIL, _r1_beam.result.phi_c
+    assert _r1_beam.beam_cross[0] == _beam_deposition_mod.He_EII_cross_lkup(
+        _r1_beam.result.phi_c / I_ion
+    )
+    assert _r1_beam.v_beam[0] < _cap_beam.v_beam[0], _r1_beam.v_beam[0]
+
+    # (v) A LOOP WITH NO VOLTAGE TO OFFER IS A CALLER BUG, not a zero ceiling.
+    for _r1_bad in (0.0, -1.0, float("nan"), float("inf")):
+        try:
+            solve_idriven(
+                _cap_cfg, _cap_pl, I_tot_A=5.0,
+                circuit_V_avail_V=_r1_bad, **_CAPFIX_ESCAPE_KWARGS,
+            )
+        except ValueError as _r1_err:
+            assert "must be finite and positive" in str(_r1_err), _r1_err
+        else:
+            raise AssertionError(
+                f"circuit_V_avail_V={_r1_bad!r} must be refused"
+            )
+
+    # (vi) CONSTRUCTION-TIME REFUSALS. The flag reaches the solve only through
+    # a cathode solve fed by a bank, so every configuration in which it would
+    # be inert is refused rather than silently ignored. (There is no
+    # solver-model case to check: ``cathode_solver_model`` accepts only
+    # ``"current_driven"``, and ``validate_cathode_solver_model`` refuses
+    # anything else before this flag is ever read.)
+    def _r1_sim_config(**overrides):
+        _p, _f = default_config()
+        _p.update({
+            "nx": 12,
+            "cathode_warming_model": "none",
+            "cathode_Ts_base_K": None,
+            "cathode_surface_model": "none",
+            "cathode_phiwf_clean_eV": None,
+            "cathode_cleaning_E_th_eV": None,
+            "cathode_sample_smoothing": None,
+        })
+        _f = dict(_f, neutral_equilibration=False)
+        for _k, _v in overrides.items():
+            if _k in _f:
+                _f[_k] = _v
+            else:
+                _p[_k] = _v
+        return _p, _f
+
+    for _r1_over, _r1_needle in (
+        ({"cathode_coupling": False}, "cathode_coupling"),
+        ({"V_bank": 0.0}, "positive"),
+    ):
+        try:
+            LAPDSim1D(*_r1_sim_config(
+                cathode_circuit_voltage_bound=True, **_r1_over
+            ))
+        except ValueError as _r1_err:
+            assert "cathode_circuit_voltage_bound" in str(_r1_err), _r1_err
+            assert _r1_needle in str(_r1_err), (_r1_over, str(_r1_err))
+        else:
+            raise AssertionError(
+                f"cathode_circuit_voltage_bound accepted {_r1_over!r}"
+            )
+    # POSITIVE CONSTRUCTION, the other side of those three: the shipped
+    # current-driven stance takes the flag.
+    _r1_on_sim = LAPDSim1D(*_r1_sim_config(cathode_circuit_voltage_bound=True))
+    assert _r1_on_sim._flags["cathode_circuit_voltage_bound"] is True
+
+    # (vii) END TO END. A short run with the flag on carries the census
+    # datasets, populates them, and never reports a device voltage above the
+    # loop's on a bounded solve.
+    _r1_off_sim = LAPDSim1D(*_r1_sim_config())
+    _r1_codes = []
+    for _ in range(12):
+        _r1_on_sim.advance_one_step(dt=2.0e-9)
+        _r1_off_sim.advance_one_step(dt=2.0e-9)
+        _r1_diag = _r1_on_sim._cathode_diagnostic_snapshot()
+        for _r1_name in _R1_CENSUS_FIELDS:
+            assert f"source_{_r1_name}" in _r1_diag, _r1_name
+        _r1_code = float(_r1_diag["source_bound_active"])
+        _r1_avail = float(_r1_diag["source_circuit_V_avail_V"])
+        _r1_codes.append(_r1_code)
+        assert _r1_code in (0.0, 1.0, 2.0), _r1_code
+        # The bound IS in force on a bank-driven phase, and the composed
+        # ceiling is the loop's voltage (the 1000 V data cap is far above a
+        # 180 V bank, so the circuit is the binding member).
+        assert math.isfinite(_r1_avail), _r1_avail
+        assert float(_r1_diag["source_phi_c_ceiling_V"]) == _r1_avail
+        assert float(_r1_diag["source_phi_c"]) <= _r1_avail, _r1_diag
+        if _r1_code == 2.0:
+            assert float(_r1_diag["source_V_b"]) <= _r1_avail, _r1_diag
+        # ...and with the flag OFF the same datasets exist and say "no bound".
+        _r1_off_diag = _r1_off_sim._cathode_diagnostic_snapshot()
+        assert math.isnan(float(_r1_off_diag["source_circuit_V_avail_V"]))
+        assert float(_r1_off_diag["source_phi_c_ceiling_V"]) == 1000.0
+    assert any(code == 0.0 for code in _r1_codes), _r1_codes
+
     # Schottky lowering (opt-in): the field-tilted emission ceiling gives the
     # knee a finite dV/dI. Near the raw ceiling the enhanced curve must sit
     # at lower voltage and with a much smaller maximum slope.

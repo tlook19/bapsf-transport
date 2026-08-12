@@ -37,10 +37,14 @@ notes:
   voltages on both sides.
 - ``regime`` may additionally be ``"capability_limited"``: the imposed
   current exceeds what the sheath can carry at the bracket ceiling
-  (``phi_c_cap_V``), i.e. a genuine inductive kick. The bracket-top
+  (``phi_c_cap_V``, optionally composed with ``circuit_V_avail_V``), i.e.
+  a genuine inductive kick. The bracket-top
   solution is returned with its correspondingly large ``V_b`` and the
   circuit is expected to ramp the current down at ~V/L per step. No
-  exception, no fallback ladder.
+  exception, no fallback ladder. With the circuit bound in force the kick
+  is limited to the loop's available voltage instead, and the current
+  freezes rather than ramping; see ``circuit_V_avail_V`` in
+  ``solve_idriven``.
 
 Floating (open-circuit) solves keep using ``_cathode_solver.solve`` -- its
 floating branch models Boltzmann-suppressed emission over the virtual
@@ -372,6 +376,7 @@ def solve_idriven(
     phi_c_cap_V: float = 1000.0,
     alpha_sheath: float | None = None,
     alpha_sheath_anode: float | None = None,
+    circuit_V_avail_V: float | None = None,
 ) -> SolverResult:
     """Solve the cathode sheath for an *imposed* loop current.
 
@@ -383,6 +388,30 @@ def solve_idriven(
     ``phi_c_cap_V`` is the fixed physical bracket ceiling on the classical
     sheath drop; a current the sheath cannot carry below it returns the
     bracket-top solution tagged ``regime="capability_limited"``.
+    ``circuit_V_avail_V`` is the optional CIRCUIT-AVAILABLE device voltage
+    [V] -- the largest device voltage the external loop can sustain at this
+    current, ``V_src - I*(R_comp + R_mesh)``, which is the loop equation
+    ``L dI/dt = V_src - I*(R_comp + R_mesh) - V_b`` read at ``dI/dt = 0``.
+    ``None`` (the default) leaves the solve bit-for-bit as it was. Given, it
+    composes with ``phi_c_cap_V`` as an upper bound: the ceiling the sheath
+    root is solved against becomes ``min(phi_c_cap_V, circuit_V_avail_V)``,
+    so the returned ``phi_c`` -- and every consumer keyed to it, notably the
+    beam birth energy through ``_compute_l_b`` -- cannot exceed what the
+    circuit supplies, and the capability-limited device voltage ``V_b`` is
+    clamped to that same available voltage. Must be positive: a loop with no
+    available voltage has no ceiling to offer and the caller passes ``None``
+    there instead. NB the inductor's back-EMF is deliberately NOT counted as
+    available voltage, so while the bound binds the loop current cannot fall.
+    SCOPE: this bounds ``phi_c``, but what the circuit supplies is the DEVICE
+    voltage ``V_b = phi_c - phi_a + V_p``, in which the anode fall SUBTRACTS.
+    The two coincide only where ``phi_a`` is negligible -- the
+    capability-limited / near-vacuum regime the pre-breakdown build leg sits
+    in, which is this argument's contract. Where ``phi_a`` is not negligible
+    (the main-discharge plateau) ``phi_c`` legitimately exceeds the available
+    voltage while ``V_b`` does not, and passing a value here would clamp a
+    correct solve to ``phi_c = circuit_V_avail_V`` and tag it
+    ``capability_limited`` with no error raised; only ``bound_active``
+    records it. Pass ``None`` outside the build leg.
     ``bridge`` enables the kT_s-width thermal bridge across the
     SCL<->classical release corner (``_bridge_release``); off reproduces
     the hard branches bit-for-bit (the M2 equivalence gate's condition).
@@ -398,6 +427,25 @@ def solve_idriven(
         )
     if phi_c_cap_V <= 0.0:
         raise ValueError(f"phi_c_cap_V must be positive (got {phi_c_cap_V})")
+    # Composed ceiling. Off (``None``) this IS ``phi_c_cap_V``, the same float
+    # object, so every comparison and every bracket below is bit-for-bit the
+    # historical one.
+    if circuit_V_avail_V is None:
+        phi_c_ceiling_V = phi_c_cap_V
+        _ceiling_is_circuit = False
+    else:
+        circuit_V_avail_V = float(circuit_V_avail_V)
+        if not (circuit_V_avail_V > 0.0) or not math.isfinite(
+            circuit_V_avail_V
+        ):
+            raise ValueError(
+                "circuit_V_avail_V must be finite and positive when the "
+                f"circuit voltage bound is in force (got {circuit_V_avail_V})"
+            )
+        _ceiling_is_circuit = circuit_V_avail_V < phi_c_cap_V
+        phi_c_ceiling_V = (
+            circuit_V_avail_V if _ceiling_is_circuit else phi_c_cap_V
+        )
 
     T_e = plasma.T_e
     n_e = plasma.n_e
@@ -562,7 +610,7 @@ def solve_idriven(
     # J-root is tested against the cap after it is located, and a root at or
     # above the ceiling falls through to the ceiling branch below.
     psi_lo = 1.0e-8
-    psi_top = max(phi_c_cap_V / T_e, Lambda + 2.0)
+    psi_top = max(phi_c_ceiling_V / T_e, Lambda + 2.0)
     # Compiled root find (Tier A, 2026-08-02). The ladder and brentq below
     # evaluate `_J_tot` / `_net_phi_c` ~50-100 times per solve, and each one is
     # a Python round-trip through `_emission_state` and its per-annulus loop.
@@ -576,7 +624,7 @@ def solve_idriven(
         psi_c_plus, capability_limited, _ = _COMPILED_ROOT(
             J_i, mu, Lambda, T_e, n_e,
             J_eth_k, delta_k, ion_frac_k,
-            J_imposed, phi_c_cap_V, psi_lo, psi_top, _J_PLATEAU_TOL_REL,
+            J_imposed, phi_c_ceiling_V, psi_lo, psi_top, _J_PLATEAU_TOL_REL,
         )
     else:
         capability_limited = False
@@ -586,7 +634,7 @@ def solve_idriven(
         for _ in range(200):
             if _J_tot(psi_top) >= J_target:
                 break
-            if _net_phi_c(psi_top) >= phi_c_cap_V:
+            if _net_phi_c(psi_top) >= phi_c_ceiling_V:
                 capability_limited = True
                 break
             psi_top *= 2.0
@@ -621,19 +669,19 @@ def solve_idriven(
             # for bit as before: narrowing psi_top to the cap crossing up front
             # would have moved brentq's last bits on every virtual-cathode
             # solve, ceiling-bound or not.
-            if _reported_phi_c(psi_c_plus) >= phi_c_cap_V:
+            if _reported_phi_c(psi_c_plus) >= phi_c_ceiling_V:
                 capability_limited = True
 
         if capability_limited:
             # A genuine inductive kick: the sheath cannot carry the imposed
             # current at physical net voltages. Return the solution *at* the
-            # ceiling -- net phi_c = phi_c_cap_V, located by a bracketed solve
-            # on the monotone net-sheath map so the reported kick voltage does
-            # not depend on where the doubling happened to land -- and let the
-            # circuit ramp I down at ~V/L per step.
-            if _net_phi_c(psi_top) > phi_c_cap_V:
+            # ceiling -- net phi_c = phi_c_ceiling_V, located by a bracketed
+            # solve on the monotone net-sheath map so the reported kick
+            # voltage does not depend on where the doubling happened to
+            # land -- and let the circuit ramp I down at ~V/L per step.
+            if _net_phi_c(psi_top) > phi_c_ceiling_V:
                 psi_c_plus = brentq(
-                    lambda x: _net_phi_c(x) - phi_c_cap_V,
+                    lambda x: _net_phi_c(x) - phi_c_ceiling_V,
                     psi_lo,
                     psi_top,
                     xtol=1.0e-12,
@@ -658,14 +706,17 @@ def solve_idriven(
     phi_c_minus = psi_c_minus * T_e
     phi_c = phi_c_plus - phi_c_minus
     # The one signature the ceiling forbids, on BOTH the pure and the compiled
-    # root: a net sheath above the cap that is not tagged as sitting on it. One
-    # comparison, and it covers the compiled path too because phi_c is
-    # re-derived here from whichever root came back.
-    if phi_c > phi_c_cap_V and regime != "capability_limited":
+    # root: a net sheath above the ceiling that is not tagged as sitting on it.
+    # One comparison, and it covers the compiled path too because phi_c is
+    # re-derived here from whichever root came back. The ceiling tested is the
+    # COMPOSED one, so the invariant covers the circuit bound as well as the
+    # data cap the moment that bound is in force.
+    if phi_c > phi_c_ceiling_V and regime != "capability_limited":
         raise RuntimeError(
-            f"net phi_c={phi_c!r} V escaped the ceiling phi_c_cap_V="
-            f"{phi_c_cap_V!r} V in regime {regime!r} (psi_c_plus="
-            f"{psi_c_plus!r}, T_e={T_e!r}, I_tot_A={I_tot_A!r})"
+            f"net phi_c={phi_c!r} V escaped the ceiling phi_c_ceiling_V="
+            f"{phi_c_ceiling_V!r} V (phi_c_cap_V={phi_c_cap_V!r}, "
+            f"circuit_V_avail_V={circuit_V_avail_V!r}) in regime {regime!r} "
+            f"(psi_c_plus={psi_c_plus!r}, T_e={T_e!r}, I_tot_A={I_tot_A!r})"
         )
 
     # Beam MFP and bypass: explicit evaluation at the solved sheath (the
@@ -700,7 +751,26 @@ def solve_idriven(
         # sheath delivers what it can, never a backwards current.
         I_tot = max(I_tot, 0.0)
         V_p = I_tot * R_p
-        V_b = max(V_b, float(phi_c_cap_V))
+        V_b = max(V_b, float(phi_c_ceiling_V))
+        if circuit_V_avail_V is not None:
+            # ...and no larger than what the loop can supply. Without this the
+            # kick above is a device voltage the circuit never sourced: with
+            # the historical cap as the floor the build leg reports ~1000 V
+            # against a bank supplying ~178 V (measured V_b/V_dis ~ 5.1). The
+            # floor and this clamp compose without fighting, because the floor
+            # value phi_c_ceiling_V is itself <= circuit_V_avail_V whenever the
+            # circuit bound is the binding member of the composition.
+            #
+            # The circuit stays well-posed. In the clamped branch
+            # vdis_of_I(I) = (V_src - I*(R_comp + R_mesh)) + I*R_internal, so
+            # the loop residual f(I) = (V_src - I*(R_comp+R_mesh) - V_b)/L is
+            # identically zero and the circuit stage's g'(I) = 1 exactly --
+            # still monotone, still a bracketed root. The runaway the floor was
+            # added to stop (I_loop -> 8e8 A, 2026-07-20) is closed off more
+            # tightly than before: the loop current cannot GROW through the
+            # bound either. It also cannot fall through it, because the
+            # inductor's back-EMF is not counted as circuit-available voltage.
+            V_b = min(V_b, circuit_V_avail_V)
 
     P_wall = I_tot * (V_b + I_tot * config.R_comp)
     P_load = I_tot * V_b
@@ -805,6 +875,17 @@ def solve_idriven(
     P_load_residual = P_load - P_load_ledger
     I_cathode_kirchhoff_residual = (I_eth_star + I_i - I_e_ret) - I_tot
 
+    # Active-bound census (see SolverResult): which member of the composed
+    # ceiling this solve ended up sitting on. Derived from the regime tag and
+    # the composition already decided above -- no recomputation, no extra
+    # evaluation of anything.
+    if not capability_limited:
+        bound_active = 0.0
+    elif _ceiling_is_circuit:
+        bound_active = 2.0
+    else:
+        bound_active = 1.0
+
     return SolverResult(
         phi_c_plus=phi_c_plus,
         phi_c_minus=phi_c_minus,
@@ -854,6 +935,11 @@ def solve_idriven(
         P_load_ledger=P_load_ledger,
         P_load_residual=P_load_residual,
         I_cathode_kirchhoff_residual=I_cathode_kirchhoff_residual,
+        phi_c_ceiling_V=phi_c_ceiling_V,
+        circuit_V_avail_V=(
+            float("nan") if circuit_V_avail_V is None else circuit_V_avail_V
+        ),
+        bound_active=bound_active,
         regime=regime,
         long_mfp=long_mfp,
         beam_bypass_fraction=beam_bypass_fraction,
@@ -882,6 +968,7 @@ def solve_beam_system_idriven(
     phi_c_cap_V: float = 1000.0,
     alpha_sheath: float | None = None,
     alpha_sheath_anode: float | None = None,
+    circuit_V_avail_V: float | None = None,
 ) -> BeamResult:
     """Current-driven, single-cathode counterpart of ``solve_beam_system``.
 
@@ -917,6 +1004,7 @@ def solve_beam_system_idriven(
         phi_c_cap_V=phi_c_cap_V,
         alpha_sheath=alpha_sheath,
         alpha_sheath_anode=alpha_sheath_anode,
+        circuit_V_avail_V=circuit_V_avail_V,
     )
     phi_c_0 = result.phi_c
     if phi_c_0 > I_ion:
