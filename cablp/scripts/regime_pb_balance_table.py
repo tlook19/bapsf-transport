@@ -18,6 +18,22 @@ The stance is `regime_r2_overlap_gate.build_config` -- the same production-stanc
 ES1 arm the R2 gates use (current-driven cathode, CSDA + quasilinear deposition,
 circuit voltage bound on), so nothing about the operating point is chosen here.
 
+THE THIRD COLUMN (`ql_relaxation`), registered before it was run
+-----------------------------------------------------------------
+Section H re-measures the same balance at the same stance under the MIDDLE leg
+of the anomalous closure bracket. That closure carries its own boxed onset gate
+and its own `(n_b/2n_e)^(1/3)` extracted fraction, so a passive cell BOOKS its
+power in full -- there is no refusal to apply and the balance is fed `P_full`.
+It has one registered bracket constant, `ql_relaxation_coeff`, and the column
+is quoted at all three of its arms (10, 30, 100), never at the default alone.
+
+Pre-registered outcome bins, one per coefficient arm, read at the x1 (actual
+density) row:
+
+* ROOT AT STANCE -- the middle leg is viable as a booking for the tracer leg;
+* NO ROOT -- reported and stopped at. No fallback is built here and no
+  constant is moved to produce a root.
+
 Usage (from <checkout>/cablp, with PYTHONPATH set to that same cablp):
     python scripts/regime_pb_balance_table.py --nx 20
 """
@@ -180,6 +196,13 @@ def main(argv=None):
     parser.add_argument("--dt-save", type=float, default=1.0e-6)
     parser.add_argument("--max-steps", type=int, default=200000)
     parser.add_argument("--t-end-long", type=float, default=1.0e-4)
+    parser.add_argument(
+        "--ql-relaxation-coeff",
+        type=float,
+        nargs="+",
+        default=(10.0, 30.0, 100.0),
+        help="the registered bracket arms the third column is quoted at",
+    )
     args = parser.parse_args(argv)
     warnings.simplefilter("ignore")
 
@@ -442,9 +465,83 @@ def main(argv=None):
               "small-volume cells. Not the QL channel and not the ohmic "
               "booking.")
 
+    # -- H. THE THIRD COLUMN: the same balance under the ql_relaxation closure.
+    # A separate fluid arm per bracket arm, because the closure changes the
+    # deposition and therefore the trajectory -- the background this is read at
+    # is the one that closure produces, not the quasilinear one re-labelled.
+    # No refusal is applied: under the middle leg a passive cell books the
+    # channel in full, so the balance is fed P_full.
+    print()
+    print("-- H. THIRD COLUMN: quasi-static balance under beam_anomalous_model"
+          " = 'ql_relaxation'")
+    print("   registered bins, read at the x1 row: ROOT AT STANCE = the middle "
+          "leg is viable;")
+    print("   NO ROOT = reported and stopped at, no fallback built here.")
+    qlr_bins = {}
+    for coeff in args.ql_relaxation_coeff:
+        qlr_params, qlr_flags = build_config(
+            args.nx,
+            False,
+            {
+                "beam_anomalous_model": "ql_relaxation",
+                "ql_relaxation_coeff": coeff,
+            },
+        )
+        qlr_fluid = LAPDSim1D(qlr_params, qlr_flags)
+        qlr_reached = advance_to(qlr_fluid, args.t_target)
+        qlr_state = qlr_fluid.state
+        qlr_solve = qlr_fluid.solve_cathode_boundary(
+            state=qlr_state, time=qlr_reached, update_cache=False
+        )
+        qlr_S, qlr_net, qlr_full = qlr_fluid._tracer_beam_rows(
+            qlr_state, qlr_solve, qlr_reached
+        )
+        qlr_ql = beam_anomalous_power_density(
+            **qlr_fluid._tracer_beam_kwargs(qlr_state, qlr_solve, qlr_reached)
+        )
+        qlr_passive = np.asarray(
+            qlr_fluid._geometry.plasma_active, dtype=bool
+        )
+        qlr_rows = channel_rows(qlr_fluid, cells)
+        print(f"   ql_relaxation_coeff = {coeff:g}")
+        print(f"     background t = {qlr_reached:.6g} s, "
+              f"n[{ci}] = {float(np.asarray(qlr_state.n)[ci]):.4g}, "
+              f"n[{coli}] = {float(np.asarray(qlr_state.n)[coli]):.4g} cm^-3")
+        qlr_dep = qlr_rows["beam_power_deposition"]
+        print(f"     beam_power_deposition {qlr_dep[ci]:>14.4g} "
+              f"{qlr_dep[coli]:>14.4g}   (cells {ci}/{coli})")
+        print(f"     of which anomalous    {qlr_ql[ci]:>14.4g} "
+              f"{qlr_ql[coli]:>14.4g}")
+        for cell in (ci, coli):
+            share = (
+                0.0 if qlr_dep[cell] == 0.0 else qlr_ql[cell] / qlr_dep[cell]
+            )
+            print(f"     cell {cell}: the anomalous channel is "
+                  f"{100.0 * share:.3g}% of the row (booked, not refused)")
+        # The middle leg books on passive cells, so P_net IS P_full. Asserted
+        # rather than assumed: if a build ever refuses it here the table would
+        # silently report the wrong column.
+        assert np.array_equal(qlr_net, qlr_full), (
+            "under ql_relaxation the balance must be fed the FULL beam power"
+        )
+        qlr_scan = balance_scan(
+            qlr_fluid, qlr_state, qlr_reached, qlr_solve, qlr_S, qlr_full,
+            (ci, coli), qlr_passive,
+        )
+        for scale in SCAN:
+            print(f"       {'x' + format(scale, 'g'):<8} {qlr_scan[scale]}")
+        qlr_bins[coeff] = (
+            "NO ROOT" if qlr_scan[1.0].startswith("REFUSED")
+            else "ROOT AT STANCE"
+        )
+        print(f"     BIN at coeff {coeff:g}: {qlr_bins[coeff]}")
+
     print()
     print(f"== outcome: the balance {'HAS' if status == 'RAN' else 'has NO'} a "
           f"root at stance under the corrected booking; tracer arm {status}")
+    print("== third column bins: " + ", ".join(
+        f"coeff {c:g} -> {b}" for c, b in qlr_bins.items()
+    ))
     return 0 if worst == 0.0 else 1
 
 
