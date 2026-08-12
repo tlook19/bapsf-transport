@@ -2673,6 +2673,57 @@ def main():
         assert _vcm_on._vessel_ion_wall_current_A() == 0.0
     finally:
         _vcm_on._cathode_solve = _vcm_saved_solve
+    # THE SECOND WALL-LANDING POPULATION. Under
+    # beam_product_transport="terminal_nonlocal" the walked terminal residual
+    # that reaches an end lands on the same surface as the transmitted
+    # primary, so its CURRENT joins this channel while its energy stays in the
+    # deposition module's end ledger. Presence-gated on the selector AND the
+    # node, and read on the same constructed deposition so the two arms differ
+    # in nothing else.
+    _vcm_tnl = LAPDSim1D(*_r1_sim_config(
+        cathode_circuit_voltage_bound=True, regime_vessel_node=True,
+        beam_product_transport="terminal_nonlocal",
+    ))
+    assert _vcm_tnl._beam_terminal_wall_charge is True
+    assert _vcm_on._beam_terminal_wall_charge is False
+    # The selector WITHOUT a node arms nothing: there is no node to charge.
+    assert LAPDSim1D(*_r1_sim_config(
+        beam_product_transport="terminal_nonlocal",
+    ))._beam_terminal_wall_charge is False
+    # ...and neither does the node under the full "nonlocal" closure, which
+    # stays ENERGY-ONLY as documented (its secondaries escape too, and v1
+    # books neither their charge nor the terminal one).
+    assert LAPDSim1D(*_r1_sim_config(
+        cathode_circuit_voltage_bound=True, regime_vessel_node=True,
+        beam_product_transport="nonlocal",
+    ))._beam_terminal_wall_charge is False
+    _vcm_tnl_dep = {
+        0: SimpleNamespace(
+            transmitted_flux=2.5e18, terminal_escape_flux_per_s=1.0e18
+        ),
+        -1: SimpleNamespace(
+            transmitted_flux=0.0, terminal_escape_flux_per_s=5.0e17
+        ),
+    }
+    _vcm_tnl_saved = (_vcm_tnl._cathode_solve, _vcm_on._cathode_solve)
+    try:
+        _vcm_tnl._cathode_solve = SimpleNamespace(
+            beam_deposition=_vcm_tnl_dep
+        )
+        assert np.isclose(
+            _vcm_tnl._vessel_electron_wall_current_A(),
+            4.0e18 * 1.602176634e-19, rtol=1e-9, atol=0.0,
+        ), _vcm_tnl._vessel_electron_wall_current_A()
+        # The SAME deposition at the default selector books the transmitted
+        # primary alone -- the escaping terminal flux is not read at all, so
+        # the gating is on the selector and not on the field being zero.
+        _vcm_on._cathode_solve = SimpleNamespace(beam_deposition=_vcm_tnl_dep)
+        assert np.isclose(
+            _vcm_on._vessel_electron_wall_current_A(),
+            2.5e18 * 1.602176634e-19, rtol=1e-9, atol=0.0,
+        ), _vcm_on._vessel_electron_wall_current_A()
+    finally:
+        _vcm_tnl._cathode_solve, _vcm_on._cathode_solve = _vcm_tnl_saved
     # EARLY BUILD IS WALL-REFERENCED. At the mA-scale currents this window
     # opens at, charging C_total to the bank scale takes far longer than the
     # cycle, so the node has not engaged: |V_cm| must still be far below the
@@ -3821,6 +3872,197 @@ def main():
     assert wpd_on_diag["end_beam_end_loss_low_W"] == 0.0
     for _bl_key in ("low", "high"):
         assert bl_diag[f"source_beam_end_loss_{_bl_key}_W"] == 0.0
+
+    # --- WP-D MIDDLE POINT: beam_product_transport="terminal_nonlocal" walks
+    # the TERMINAL residual and nothing else. Every ALONG-RAY product stays
+    # where "local" banks it, so this arm must BE the local arm everywhere
+    # except in the one population that walks.
+    # The incomplete configuration is refused at construction, like the others.
+    try:
+        LAPDSim1D(
+            dict(csda_params, beam_product_transport="terminal_nonlocal",
+                 beam_deposition_model="beer_lambert"),
+            dict(cathode_flags),
+        )
+    except ValueError as _tnl_err:
+        assert "terminal_nonlocal" in str(_tnl_err), _tnl_err
+    else:
+        raise AssertionError(
+            "expected ValueError for beam_product_transport="
+            "'terminal_nonlocal' under beer_lambert"
+        )
+    wpd_tnl_sim = LAPDSim1D(
+        dict(csda_params, beam_product_transport="terminal_nonlocal"),
+        dict(cathode_flags),
+    )
+    wpd_tnl_sim._circuit_I_loop = 3000.0
+    wpd_tnl_dep = wpd_tnl_sim.solve_cathode_boundary().beam_deposition[0]
+    for _tnl_arr in (
+        "heating_secondary_erg_s", "heating_coulomb_erg_s",
+        "heating_anomalous_erg_s", "radiated_erg_s",
+        "ionization_cost_erg_s", "ionization_events", "excitation_events",
+        "E_entry_eV",
+    ):
+        assert np.array_equal(
+            getattr(wpd_tnl_dep, _tnl_arr), getattr(csda_dep, _tnl_arr)
+        ), _tnl_arr
+    # Energy-only here too, and the transmitted primary keeps its own term
+    # instead of joining the ledger -- the second thing that separates this
+    # value from "nonlocal".
+    assert wpd_tnl_dep.transmitted_flux == csda_dep.transmitted_flux
+    assert wpd_tnl_dep.transmitted_energy_eV == csda_dep.transmitted_energy_eV
+    assert wpd_tnl_dep.end_loss_transmitted_erg_s == 0.0
+    wpd_tnl_total = (
+        wpd_tnl_dep.plasma_heating_erg_s.sum()
+        + wpd_tnl_dep.radiated_erg_s.sum()
+        + wpd_tnl_dep.ionization_cost_erg_s.sum()
+        + float(wpd_tnl_dep.anode_intercepted_erg_s)
+        + wpd_tnl_dep.end_loss_low_erg_s
+        + wpd_tnl_dep.end_loss_high_erg_s
+        + wpd_tnl_dep.transmitted_flux
+        * wpd_tnl_dep.transmitted_energy_eV
+        * ev_to_erg
+    )
+    assert abs(wpd_tnl_total - csda_budget) / csda_budget < 1e-9
+
+    # A CONTROLLED ray at the pre-breakdown class this value exists for: gas
+    # dense enough to stop the primary inside the grid, plasma thin enough
+    # that the terminal population walks out of the end instead of
+    # thermalizing. Both are ASSERTED, because without either the comparison
+    # below would be vacuous -- a ray that never stops has no terminal
+    # population to move, and one that thermalizes in its birth cell reproduces
+    # the local banking whatever the selector says.
+    _tnl_cells = 40
+    _tnl_ray = dict(
+        nn=np.full(_tnl_cells, 2.0e14),
+        ne=np.full(_tnl_cells, 4.5e9),
+        Te=np.full(_tnl_cells, 3.0),
+        launch=0,
+        direction=1,
+        dz_cm=np.full(_tnl_cells, 50.0),
+    )
+    _tnl_gamma0 = 1.0e19
+    _tnl_local = _beam_deposition_mod.deposit_beam(
+        150.0, _tnl_gamma0, **_tnl_ray
+    )
+    _tnl_full = _beam_deposition_mod.deposit_beam(
+        150.0, _tnl_gamma0, product_transport="nonlocal", **_tnl_ray
+    )
+    _tnl_mid = _beam_deposition_mod.deposit_beam(
+        150.0, _tnl_gamma0, product_transport="terminal_nonlocal", **_tnl_ray
+    )
+    assert _tnl_local.heating_terminal_erg_s.sum() > 0.0
+    assert _tnl_local.heating_secondary_erg_s.sum() > 0.0
+    assert _tnl_local.transmitted_flux == 0.0
+    # The one population that moves, and the two that do not.
+    assert not np.array_equal(
+        _tnl_mid.heating_terminal_erg_s, _tnl_local.heating_terminal_erg_s
+    )
+    assert np.array_equal(
+        _tnl_mid.heating_secondary_erg_s, _tnl_local.heating_secondary_erg_s
+    )
+    assert np.array_equal(
+        _tnl_mid.heating_coulomb_erg_s, _tnl_local.heating_coulomb_erg_s
+    )
+    assert np.array_equal(
+        _tnl_mid.ionization_events, _tnl_local.ionization_events
+    )
+    # The full closure moves the secondaries as well, which is the difference
+    # the middle point exists to NOT make.
+    assert not np.array_equal(
+        _tnl_full.heating_secondary_erg_s, _tnl_local.heating_secondary_erg_s
+    )
+    # The energy leaves through the ledger, in the primary's own direction...
+    assert _tnl_mid.end_loss_high_erg_s > 0.0
+    assert _tnl_mid.end_loss_low_erg_s == 0.0
+    # ...and the CHARGE behind it is reported separately: this ray's whole
+    # terminal population reached the end, so the escaping flux is the primary
+    # flux itself. Never an energy, and never booked into one.
+    assert _tnl_mid.terminal_escape_flux_per_s == _tnl_gamma0
+    assert _tnl_local.terminal_escape_flux_per_s == 0.0
+    # THE LEDGER CLOSES: launched = along-ray booked + walked-to-ledger +
+    # transmitted, with the transmitted term zero on this absorbed ray.
+    def _tnl_ledger_residual(dep, launched, escape_erg=None):
+        booked = (
+            dep.plasma_heating_erg_s.sum()
+            + dep.radiated_erg_s.sum()
+            + dep.ionization_cost_erg_s.sum()
+            + float(dep.anode_intercepted_erg_s)
+        )
+        escaped = (
+            dep.end_loss_low_erg_s + dep.end_loss_high_erg_s
+            if escape_erg is None else escape_erg
+        )
+        transmitted = (
+            dep.transmitted_flux * dep.transmitted_energy_eV * ev_to_erg
+        )
+        return abs(booked + escaped + transmitted - launched) / launched
+
+    _tnl_launched = 150.0 * _tnl_gamma0 * ev_to_erg
+    assert _tnl_ledger_residual(_tnl_mid, _tnl_launched) < 1e-12
+    # ANTI-VACUITY for that closure: a booking that loses the walked escape --
+    # the exact failure "silently banked local" would produce -- must be caught
+    # by the same expression, not absorbed by its tolerance.
+    assert _tnl_ledger_residual(_tnl_mid, _tnl_launched, escape_erg=0.0) > 1e-3
+    # The walk SELF-LIMITS onto the local rule at plasma density: the same ray
+    # against a dense background thermalizes in place, escapes nothing, and
+    # books the terminal residual back where "local" put it.
+    _tnl_dense = _beam_deposition_mod.deposit_beam(
+        150.0, _tnl_gamma0,
+        product_transport="terminal_nonlocal",
+        **dict(_tnl_ray, ne=np.full(_tnl_cells, 1.0e12)),
+    )
+    assert _tnl_dense.terminal_escape_flux_per_s == 0.0
+    assert _tnl_dense.end_loss_low_erg_s == 0.0
+    assert _tnl_dense.end_loss_high_erg_s == 0.0
+
+    # The COMPILED march must never run this value. Same boolean trap as
+    # ql_relaxation and tested the same way: the kernel takes product transport
+    # as ONE boolean covering both populations, so it can only run "local"
+    # terminal banking or withhold secondaries nothing then walks. Binding a
+    # march that explodes if reached tests the precondition on a pure checkout
+    # too.
+    class _TnlKernelReached(RuntimeError):
+        pass
+
+    class _TnlFakeTables:
+        # Only ``exc_top`` is read before the march is called.
+        exc_top = 1.0e9
+
+    def _tnl_boom(*_args, **_kwargs):
+        raise _TnlKernelReached("the compiled march was offered this ray")
+
+    _tnl_saved = (
+        _beam_deposition_mod._CSDA_MARCH, _beam_deposition_mod._csda_tables
+    )
+    try:
+        _beam_deposition_mod._CSDA_MARCH = _tnl_boom
+        _beam_deposition_mod._csda_tables = lambda: _TnlFakeTables()
+        _beam_deposition_mod.deposit_beam(
+            150.0, _tnl_gamma0, product_transport="terminal_nonlocal",
+            **_tnl_ray
+        )
+        # ANTI-VACUITY: the two values the transcription DOES reproduce reach
+        # the fake march, so the pass above is the precondition working rather
+        # than the kernel being unreachable from here.
+        for _tnl_ok in ("local", "nonlocal"):
+            try:
+                _beam_deposition_mod.deposit_beam(
+                    150.0, _tnl_gamma0, product_transport=_tnl_ok, **_tnl_ray
+                )
+            except _TnlKernelReached:
+                pass
+            else:
+                raise AssertionError(
+                    "the compiled-march precondition test is vacuous for "
+                    f"product_transport={_tnl_ok!r}: the kernel was never "
+                    "offered the ray"
+                )
+    finally:
+        (
+            _beam_deposition_mod._CSDA_MARCH,
+            _beam_deposition_mod._csda_tables,
+        ) = _tnl_saved
 
     # --- WP-E through the solver: heating_anomalous_transport routes the CSDA
     # ray's ANOMALOUS (quasilinear) heating onto tail electrons at E_tail (see

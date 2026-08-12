@@ -1318,20 +1318,31 @@ class LAPDSim1D:
         # launches the CSDA module, so the requested physics could not act --
         # and raises rather than silently doing nothing.
         _bpt = str(self._input_dict.get("beam_product_transport", "local"))
-        if _bpt not in ("local", "nonlocal"):
+        if _bpt not in ("local", "nonlocal", "terminal_nonlocal"):
             raise ValueError(
-                "beam_product_transport must be 'local' or 'nonlocal' "
-                f"(got {_bpt!r})"
+                "beam_product_transport must be 'local', 'nonlocal' or "
+                f"'terminal_nonlocal' (got {_bpt!r})"
             )
-        if _bpt == "nonlocal" and str(
+        if _bpt != "local" and str(
             self._input_dict.get("beam_deposition_model", "beer_lambert")
         ) != "csda":
             raise ValueError(
-                "beam_product_transport='nonlocal' requires "
+                f"beam_product_transport={_bpt!r} requires "
                 "beam_deposition_model='csda' (the products it transports "
                 "are the CSDA ray's; under beer_lambert it would be a "
                 "silent no-op)"
             )
+        # The wall-charge leg of "terminal_nonlocal": the walked terminal
+        # electrons that reach an end land on a terminating surface, so their
+        # CURRENT joins the vessel node's electron channel while their energy
+        # leaves through the deposition module's end ledger. Presence-gated on
+        # BOTH the selector and an armed node (``_configure_regime_vessel_node``
+        # ran above), and resolved once here so no consumer re-reads a
+        # selector: with either absent this is False and the node's electron
+        # current is the transmitted-primary sum it always was.
+        self._beam_terminal_wall_charge = (
+            _bpt == "terminal_nonlocal" and self._vessel is not None
+        )
         # The anomalous closure family. Same discipline: the module validates
         # too, but a bad selector must fail at CONSTRUCTION rather than on the
         # first cathode solve, and selecting a closure the deposition path
@@ -2479,6 +2490,16 @@ class LAPDSim1D:
         exactly the electron current the wall conductor collects; the flux the
         anode mesh intercepts and the flux that stops in the column are
         system-side and plasma-side respectively and are not booked here.
+
+        Under ``beam_product_transport="terminal_nonlocal"`` the walked
+        terminal residual that reaches an end is a SECOND population landing on
+        that same surface, and its flux is added on the identical convention
+        (summed over rays, whichever end each ray was heading for). Its energy
+        is not double-counted: the walk already booked that to the deposition
+        module's end ledger, which is an energy ledger and never a charge one.
+        With the selector at any other value the term is absent, not zero-by-
+        arithmetic -- ``_beam_terminal_wall_charge`` is resolved at
+        construction.
         """
         solve = self._cathode_solve
         deposition = None if solve is None else getattr(
@@ -2490,6 +2511,8 @@ class LAPDSim1D:
         for dep in deposition.values():
             if dep is not None:
                 flux += float(dep.transmitted_flux)
+                if self._beam_terminal_wall_charge:
+                    flux += float(dep.terminal_escape_flux_per_s)
         return qe_SI * max(flux, 0.0)
 
     def _vessel_advance(self, dt):

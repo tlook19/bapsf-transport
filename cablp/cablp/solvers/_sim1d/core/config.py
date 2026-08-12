@@ -1604,16 +1604,33 @@ def cathode_defaults():
         ``1.5*Te`` or leaves an end, where its remaining energy is booked to
         the new END LEDGER and leaves the system. Secondaries split 50/50
         into +z/-z half-weight walks (broadly isotropic OPB emission);
-        the terminal residual keeps the primary's direction. Motivation: at
+        the terminal residual keeps the primary's direction.
+        ``"terminal_nonlocal"``: the MIDDLE point -- the terminal residual
+        walks exactly as under ``"nonlocal"`` (same machinery, same
+        thermalization rule, same end ledger) while every ALONG-RAY product,
+        the secondaries included, is banked in its birth cell exactly as under
+        ``"local"``. It differs from ``"nonlocal"`` in two further bookings:
+        the transmitted primary keeps its own term instead of joining the end
+        ledger (so under this value the ledger holds the walked terminal
+        escape alone), and the escaping terminal electrons' CURRENT is added
+        to the vessel node's wall electron channel when ``regime_vessel_node``
+        is also armed -- charge to the node, energy to the ledger, neither
+        counted twice. Not available on the compiled kernel, which takes
+        product transport as a single boolean covering both populations and
+        so cannot express one walking without the other; selecting it takes
+        the Python march. Motivation: at
         breakdown both products sit BELOW every He inelastic threshold and
         Coulomb-couple at ~1 eV per machine pass (n_e ~ 1e10), i.e. they are
         near-collisionless along B exactly where ``"local"`` assumes perfect
-        confinement. The end ledger also books the transmitted PRIMARY's
-        ``Gamma_t*E_t``, closing a standing hole (computed since B1, never
+        confinement. Under ``"nonlocal"`` the end ledger also books the
+        transmitted PRIMARY's ``Gamma_t*E_t``, closing a standing hole
+        (computed since B1, never
         banked). Parameter-free; no pitch-angle diffusion and no elastic
-        e-He channel (~5 meV/collision) — stated limitations. ENERGY-ONLY in
-        v1: ionization events, the particle rows and the circuit currents are
-        identical in both modes. The two settings are a bracket, not a
+        e-He channel (~5 meV/collision) — stated limitations. ENERGY-ONLY:
+        ionization events and the particle rows are
+        identical under all three values, and so are the circuit currents
+        except for the one charge channel ``"terminal_nonlocal"`` adds at an
+        armed vessel node. The three settings are a bracket, not a
         prediction, so a result must state which one it used.
     heating_anomalous_transport:
         Where the CSDA ray's ANOMALOUS (quasilinear) heating lands (inert

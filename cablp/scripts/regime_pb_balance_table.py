@@ -34,8 +34,19 @@ density) row:
 * NO ROOT -- reported and stopped at. No fallback is built here and no
   constant is moved to produce a root.
 
+THE PRODUCT-TRANSPORT SELECTOR (`--beam-product-transport`)
+-----------------------------------------------------------
+Every arm this file builds carries the same `beam_product_transport`, so the
+whole table can be re-measured under a different one and read against the
+default column line by line. At the shipped `"local"` the selector is not
+passed to `build_config` at all, so the default invocation is byte-for-byte
+the one that produced the original table; the value is echoed in the header of
+every run so a table can never be read without knowing which arm it is.
+
 Usage (from <checkout>/cablp, with PYTHONPATH set to that same cablp):
     python scripts/regime_pb_balance_table.py --nx 20
+    python scripts/regime_pb_balance_table.py --nx 20 \\
+        --beam-product-transport terminal_nonlocal
 """
 
 import argparse
@@ -203,19 +214,43 @@ def main(argv=None):
         default=(10.0, 30.0, 100.0),
         help="the registered bracket arms the third column is quoted at",
     )
+    parser.add_argument(
+        "--beam-product-transport",
+        default="local",
+        choices=("local", "nonlocal", "terminal_nonlocal"),
+        help=(
+            "the product-transport arm EVERY section is measured under; the "
+            "default is the shipped value and is not passed to build_config "
+            "at all, so the default run reproduces the original table exactly"
+        ),
+    )
     args = parser.parse_args(argv)
     warnings.simplefilter("ignore")
+
+    # One place decides what every arm below carries, so no section can drift
+    # onto a different closure than the one the header names.
+    transport = args.beam_product_transport
+    transport_extra = (
+        {} if transport == "local" else {"beam_product_transport": transport}
+    )
+
+    def stance(nx, tracer_on, extra=None):
+        merged = dict(transport_extra)
+        if extra:
+            merged.update(extra)
+        return build_config(nx, tracer_on, merged or None)
 
     print("== regime_pb: quasi-static balance under the CORRECTED beam booking")
     print(
         f"   stance regime_r2_overlap_gate.build_config, nx={args.nx}, "
         f"target t={args.t_target:g} s"
     )
+    print(f"   beam_product_transport = {transport!r} on EVERY arm below")
 
     # -- the background. The FLUID arm, exactly as the original table used it:
     # its step sequence is untouched by this pass, so it reaches the same state
     # at the same instant.
-    params, flags = build_config(args.nx, False)
+    params, flags = stance(args.nx, False)
     fluid = LAPDSim1D(params, flags)
     reached = advance_to(fluid, args.t_target)
     cells = int(fluid._geometry.cells)
@@ -314,7 +349,7 @@ def main(argv=None):
     # passive mask, the refusal on the live code path.
     print()
     print("-- E. end-to-end tracer arm under the corrected booking")
-    tracer_params, tracer_flags = build_config(args.nx, True)
+    tracer_params, tracer_flags = stance(args.nx, True)
     tracer_params["dt_save"] = args.dt_save
     tracer = LAPDSim1D(tracer_params, tracer_flags)
     status = "RAN"
@@ -370,7 +405,7 @@ def main(argv=None):
     # reports is therefore on a cell the TRACER still owns.
     print()
     print(f"-- G. long window (t_end = {args.t_end_long:g} s)")
-    long_params, long_flags = build_config(args.nx, True)
+    long_params, long_flags = stance(args.nx, True)
     long_params["dt_save"] = 1.0e-5
     long_sim = LAPDSim1D(long_params, long_flags)
     try:
@@ -479,7 +514,7 @@ def main(argv=None):
     print("   NO ROOT = reported and stopped at, no fallback built here.")
     qlr_bins = {}
     for coeff in args.ql_relaxation_coeff:
-        qlr_params, qlr_flags = build_config(
+        qlr_params, qlr_flags = stance(
             args.nx,
             False,
             {
