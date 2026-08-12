@@ -220,13 +220,24 @@ def main(argv=None):
                       f"<n>(end) = {d['meann'][b]:.6e} cm^-3   "
                       f"t_end = {d['t'][b] * 1e3:.6f} ms")
         # Matched-time comparison: same save index, so the two are read at the
-        # same elapsed time rather than at whatever each window reached.
+        # same elapsed time rather than at whatever each window reached. The
+        # two arms do NOT cover the same window (the step cap and t_end bite
+        # differently), so the raw taus above are over different intervals and
+        # the matched pair below is the like-for-like one.
         k = min(off[0]["t"].size, on[0]["t"].size) - 1
         if k > 0 and abs(off[0]["t"][k] - on[0]["t"][k]) < 1e-12:
             r = on[0]["meann"][k] / off[0]["meann"][k]
             print(f"  matched-time <n> ratio ON/OFF at t="
                   f"{on[0]['t'][k] * 1e3:.6f} ms: {r:.6f} "
                   f"({'SLOWER' if r < 1.0 else 'FASTER -- STOP AND REPORT'})")
+            a0 = int(np.flatnonzero(off[0]["t"] > 0)[0])
+            if a0 < k:
+                for d in (off[0], on[0]):
+                    tag = "ON " if d["flags"].get(
+                        "cathode_circuit_voltage_bound", False) else "OFF"
+                    print(f"  {tag}  matched-window tau [{d['t'][a0] * 1e3:.6f}"
+                          f" -> {d['t'][k] * 1e3:.6f} ms] = "
+                          f"{tau_us(d, a0, k):10.4f} us")
         else:
             print("  matched-time comparison unavailable (save grids differ)")
         print()
