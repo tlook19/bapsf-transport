@@ -167,6 +167,16 @@ _CATHODE_RESULT_KEYS = (
     "P_loss",
     "beam_bypass_fraction",
     "l_b",
+    # Ceiling census (R1). ``phi_c_ceiling_V`` is the ceiling the sheath root
+    # was solved against, ``circuit_V_avail_V`` the circuit-available device
+    # voltage the optional bound was formed from (NaN when the bound is not in
+    # force), ``bound_active`` which member of the composition the solve sat on
+    # (0 none / 1 data cap / 2 circuit). All three are NaN on the voltage-driven
+    # (floating) solve, which has no ceiling. Runs saved before this build lack
+    # the datasets and readers must default them.
+    "phi_c_ceiling_V",
+    "circuit_V_avail_V",
+    "bound_active",
 )
 
 
@@ -1089,6 +1099,26 @@ class LAPDSim1D:
         self._cathode_solver_model = validate_cathode_solver_model(
             self._input_dict, self._flags
         )
+        # Circuit voltage bound (R1): a ceiling on the device voltage set by
+        # what the loop can supply. It lives inside the current-driven sheath
+        # solve and is formed from the bank/capacitor source, so a
+        # configuration that has neither would turn it on and get nothing --
+        # exactly the silent no-op the house rules forbid.
+        if bool(self._flags.get("cathode_circuit_voltage_bound", False)):
+            if not bool(self._flags.get("cathode_coupling", False)):
+                raise ValueError(
+                    "cathode_circuit_voltage_bound requires the "
+                    "cathode_coupling flag: with no cathode solve there is "
+                    "no device voltage to bound"
+                )
+            if not float(self._input_dict.get("V_bank", 0.0)) > 0.0:
+                raise ValueError(
+                    "cathode_circuit_voltage_bound requires a positive "
+                    f"V_bank (got {self._input_dict.get('V_bank', 0.0)!r}); "
+                    "the bound is the source voltage minus the series "
+                    "resistive drop, so a zero source would leave it "
+                    "permanently inactive"
+                )
         # Current-driven circuit state: the loop current, integrated once
         # per accepted step.
         self._circuit_I_loop = 0.0
@@ -3717,16 +3747,19 @@ class LAPDSim1D:
         else:
             C_bank_id = self._input_dict.get("C_bank_F")
             bank_off = bool(step_phase.get("inductive_tail", False))
-            if bank_off:
-                V_src = 0.0
-            elif C_bank_id is not None and float(C_bank_id) > 0.0:
-                if self._circuit_V_cap is None:
-                    self._circuit_V_cap = float(
-                        self._input_dict.get("V_bank", 0.0)
-                    )
-                V_src = float(self._circuit_V_cap)
-            else:
-                V_src = float(self._input_dict.get("V_bank", 0.0))
+            # Lazy first-step charge of the bank, kept exactly where it was;
+            # the VALUE is then read through the one shared expression so the
+            # RHS-side solve and this advance cannot disagree about V_src.
+            if (
+                not bank_off
+                and C_bank_id is not None
+                and float(C_bank_id) > 0.0
+                and self._circuit_V_cap is None
+            ):
+                self._circuit_V_cap = float(
+                    self._input_dict.get("V_bank", 0.0)
+                )
+            V_src = self._circuit_source_voltage_V(step_phase)
             vdis = idriven_vdis_evaluator(
                 state=self.state,
                 floors=self._floors,
@@ -3740,6 +3773,7 @@ class LAPDSim1D:
                 beam_cross_prev=self._cathode_beam_cross,
                 T_s_override_K=self._cathode_Ts_K,
                 phi_wf_override_eV=self._cathode_phi_wf_eff(),
+                circuit_V_src_V=V_src,
             )
             I_new, V_cap_new, V_dis_step = advance_circuit_current_driven(
                 I_prev_A=self._circuit_I_loop,
@@ -5892,6 +5926,7 @@ class LAPDSim1D:
             T_s_override_K=self._cathode_Ts_K,
             phi_wf_override_eV=self._cathode_phi_wf_eff(),
             circuit_I_loop_A=self._circuit_I_loop,
+            circuit_V_src_V=self._circuit_source_voltage_V(cathode_phase),
             coverage=self._coverage_view(state, time),
         )
         if update_cache:
@@ -6151,6 +6186,27 @@ class LAPDSim1D:
             "inductive_tail": inductive_tail,
             "solve_enabled": cathode_enabled or floating or inductive_tail,
         }
+
+    def _circuit_source_voltage_V(self, step_phase):
+        """Return the loop's source voltage [V] for this phase.
+
+        Zero once the bank transistors have opened (the inductive tail drives
+        the loop at zero bank volts), the live capacitor voltage where a bank
+        capacitance is configured, and the fixed ``V_bank`` otherwise. Pure
+        read: the lazy first-step charge of ``_circuit_V_cap`` stays in the
+        circuit advance, so calling this from the RHS-side solve cannot move
+        any solver state.
+        """
+        if bool(step_phase.get("inductive_tail", False)):
+            return 0.0
+        C_bank = self._input_dict.get("C_bank_F")
+        if (
+            C_bank is not None
+            and float(C_bank) > 0.0
+            and self._circuit_V_cap is not None
+        ):
+            return float(self._circuit_V_cap)
+        return float(self._input_dict.get("V_bank", 0.0))
 
     def _effective_cathode_flags(self, time=None, active_only=True, floating=None):
         options = self._cathode_phase_options(time=time)

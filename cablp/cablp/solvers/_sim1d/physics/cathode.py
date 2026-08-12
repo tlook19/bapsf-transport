@@ -493,6 +493,39 @@ def apply_cathode_Rp_model(device_config, derived, geometry, input_dict, input_f
     return device_config, Rp_model, R_p_gap_ohm
 
 
+def circuit_available_voltage_V(input_dict, input_flags, V_src_V, I_A):
+    """Return the circuit-available device voltage [V], or ``None``.
+
+    ``None`` means "no bound": either the ``cathode_circuit_voltage_bound``
+    flag is off, or no source voltage is known at this call site, or the loop
+    has no positive voltage left to offer at this current. The current-driven
+    sheath solve takes exactly that convention (``circuit_V_avail_V=None``
+    reproduces the historical solve bit for bit).
+
+    The expression is the loop equation the circuit itself integrates,
+    ``L dI/dt = V_src - I*(R_comp + R_mesh_ohm) - V_b`` (see
+    ``advance_circuit_current_driven`` and ``idriven_vdis_evaluator``, whose
+    ``R_comp_partition`` split cancels identically), read at ``dI/dt = 0``:
+
+        V_avail(I) = V_src - I*(R_comp + R_mesh_ohm)
+
+    i.e. the largest device voltage the SOURCE and the series resistance can
+    sustain. The inductor's back-EMF is not part of it: that is stored energy,
+    not supply, and counting it would make the bound unbounded.
+    """
+    if not bool(input_flags.get("cathode_circuit_voltage_bound", False)):
+        return None
+    if V_src_V is None:
+        return None
+    R_loop_ohm = float(input_dict.get("R_comp", 0.0)) + float(
+        input_dict.get("R_mesh_ohm", 0.0)
+    )
+    V_avail = float(V_src_V) - max(float(I_A), 0.0) * R_loop_ohm
+    if not V_avail > 0.0:
+        return None
+    return V_avail
+
+
 def idriven_result_evaluator(
     state,
     floors,
@@ -504,6 +537,7 @@ def idriven_result_evaluator(
     beam_cross_prev,
     T_s_override_K=None,
     phi_wf_override_eV=None,
+    circuit_V_src_V=None,
 ):
     """Return an ``I [A] -> SolverResult`` evaluator at this frozen state.
 
@@ -552,6 +586,10 @@ def idriven_result_evaluator(
     )
 
     def solve_at(I_A):
+        # The available voltage is a function of I, so the circuit's own root
+        # find sees the bound move with the current it is testing -- which is
+        # what keeps the stage residual monotone (see the clamp comment in
+        # _cathode_solver_idriven.solve_idriven).
         return solve_idriven(
             device_config,
             plasma,
@@ -562,6 +600,9 @@ def idriven_result_evaluator(
             bridge=bridge,
             phi_c_cap_V=cap,
             alpha_sheath=alpha_sheath,
+            circuit_V_avail_V=circuit_available_voltage_V(
+                input_dict, input_flags, circuit_V_src_V, I_A
+            ),
         )
 
     return solve_at
@@ -578,6 +619,7 @@ def idriven_vdis_evaluator(
     beam_cross_prev,
     T_s_override_K=None,
     phi_wf_override_eV=None,
+    circuit_V_src_V=None,
 ):
     """Return a ``V_dis(I) [V]`` evaluator at this frozen plasma state.
 
@@ -597,6 +639,7 @@ def idriven_vdis_evaluator(
         beam_cross_prev=beam_cross_prev,
         T_s_override_K=T_s_override_K,
         phi_wf_override_eV=phi_wf_override_eV,
+        circuit_V_src_V=circuit_V_src_V,
     )
 
     # Internal series drop on the plasma side of the V_dis probe (R5 ES1 tuning
@@ -769,6 +812,7 @@ def solve_cathode_boundary(
     T_s_override_K=None,
     phi_wf_override_eV=None,
     circuit_I_loop_A=0.0,
+    circuit_V_src_V=None,
     coverage=None,
 ):
     """Call the cathode/beam solver and return raw diagnostics only.
@@ -878,6 +922,12 @@ def solve_cathode_boundary(
             schottky=bool(input_flags.get("cathode_schottky", False)),
             bridge=bool(input_flags.get("cathode_emission_bridge", False)),
             phi_c_cap_V=float(input_dict.get("cathode_phi_c_cap_V", 1000.0)),
+            circuit_V_avail_V=circuit_available_voltage_V(
+                input_dict,
+                input_flags,
+                circuit_V_src_V,
+                max(float(circuit_I_loop_A), 0.0),
+            ),
         )
     else:
         beam_result = solve_beam_system(

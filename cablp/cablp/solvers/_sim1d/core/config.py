@@ -1449,6 +1449,10 @@ def cathode_defaults():
         ceiling value is reported as ``phi_c`` for as long as that regime
         holds, and every consumer keyed to ``phi_c`` (notably the tail birth
         energy under ``heating_anomalous_tail_energy_keying="phi_c"``) sees it.
+        Under the ``cathode_circuit_voltage_bound`` flag this cap is not the
+        whole ceiling: the solve is run against ``min`` of it and the
+        circuit-available voltage, and the ``bound_active`` diagnostic says
+        which of the two the solve sat on.
     cathode_Rp_model:
         How the cathode solver's parallel plasma (gap) resistance ``R_p`` is
         built. ``"sample"`` (default, historical) is the solver's internal
@@ -2421,6 +2425,24 @@ input_flags_template_1d = {
     # of branch slopes -- see funcs._cathode_solver_idriven._bridge_release).
     # Off => bit-exact hard branches.
     "cathode_emission_bridge": False,
+    # Bound the device voltage by what the CIRCUIT can supply, *current-driven*
+    # sheath solve only. The
+    # ceiling the sheath root is solved against becomes
+    # min(cathode_phi_c_cap_V, V_src - I*(R_comp + R_mesh_ohm)) -- the atomic-
+    # data cap composed with the loop equation read at dI/dt = 0 -- so the
+    # returned phi_c, the beam birth energy keyed to it, and the
+    # capability-limited device voltage V_b are all held at or below the
+    # supply. Without it the capability-limited branch floors V_b at the data
+    # cap, which on the pre-breakdown build leg reports ~1000 V and a ~keV beam
+    # against a bank supplying ~178 V. The cap itself is untouched and still
+    # composes as the other upper bound (it is the He EII table top, an
+    # atomic-data domain guard). The inductor's back-EMF is deliberately NOT
+    # counted as available voltage, so while the bound binds the loop current
+    # neither grows nor falls. Requires cathode_solver_model='current_driven',
+    # cathode_coupling and V_bank > 0; inactive (ceiling falls back to the data
+    # cap) wherever the available voltage is not positive, notably the zero-
+    # bank inductive tail. Default OFF and bit-exact off.
+    "cathode_circuit_voltage_bound": False,
     # Gates the neutral-only pre-drive phase. DELIBERATELY LEFT ON while
     # tau_neutral_prebreakdown defaults to 0.0: the duration alone decides
     # whether the phase runs, so ON + zero duration is already inert

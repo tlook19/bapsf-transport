@@ -298,6 +298,20 @@ class SolverResult:
     P_load_ledger: float = 0.0     # per-region net-current field work [W]
     P_load_residual: float = 0.0   # P_load - P_load_ledger [W] (~0 by closure)
     I_cathode_kirchhoff_residual: float = 0.0  # (I_eth_star+I_i-I_e_ret) - I_tot [A]
+    # Ceiling census (current-driven solve only; NaN on the voltage-driven
+    # paths, which have no ceiling). ``phi_c_ceiling_V`` is the ceiling the
+    # sheath root was actually solved against -- the composition of the
+    # atomic-data cap ``phi_c_cap_V`` with the optional circuit bound, i.e.
+    # their minimum. ``circuit_V_avail_V`` is the circuit-available device
+    # voltage the bound was formed from, NaN where the bound is not in force.
+    # ``bound_active`` says which member of that composition the SOLVE ended
+    # up sitting on: 0 = neither (the returned phi_c is a free root of the
+    # current match), 1 = the data cap, 2 = the circuit bound. It is derived
+    # from the regime tag and the ceiling composition, so nothing is
+    # recomputed to produce it.
+    phi_c_ceiling_V: float = float("nan")
+    circuit_V_avail_V: float = float("nan")
+    bound_active: float = float("nan")
 
 
 @dataclass(slots=True)
