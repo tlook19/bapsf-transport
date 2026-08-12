@@ -457,3 +457,327 @@ bit-exact); a declared A9 closure-family bracket — `f=1` targets only the ~gap
 cells (flux → ~42%), `f=0.1` suppresses conduction globally. The static
 engagement bracket is `probe_sim1d_r5_heatflux_bracket.py`; the dynamic
 scored-observable bracket (runs at each `f`) is deferred.
+
+## Regime-R2 pre-breakdown passive-tracer bridge (default off)
+
+*Not to be confused with the "R2 conservative hyperbolic core" section above —
+that R2 is an audit number from the 2026-07-24 hyperbolic repair. This one is
+the REGIME programme's step R2 and touches no hyperbolic operator.*
+
+During the conducting/pre-breakdown leg the plasma is **passive**: it conducts
+a negligible share of the loop current, it takes a negligible share of the
+beam's single-pass energy, and it burns a negligible share of the local
+neutrals. Nothing it does feeds back on the circuit, the beam or the neutral
+background, so the background (circuit ramp, cathode thermal state, coverage,
+neutrals) owns the clock and the plasma is a *tracer* riding on it. Integrating
+that leg with the full fluid solver is wasteful and, worse, inaccurate: the
+density sits within a small factor of `ne_floor`, so the floor clip binds, the
+`_negative_margin_timestep` bound collapses, and the run crawls at `dt_min`
+through a regime whose physics is a single scalar ODE per cell.
+
+`regime_tracer` (flag, default OFF, golden bit-exact off) replaces the fluid
+update on **passive** cells with the exact integral of that ODE, and leaves the
+fluid in charge of everything else. The two descriptions coexist on one grid,
+so the object that has to be defined carefully is not the ODE — it is the
+**interface between the passive and active regions**, which moves.
+
+### The tracer equation
+
+On a passive cell the plasma density obeys an **affine** scalar ODE
+
+```
+dn/dt = γ(z; background) · n + S(z, t)
+```
+
+- `γ` is a functional of the SLOW variables only — bulk ionization by thermal
+  electrons, minus recombination, minus the surface/end absorption frequency.
+  It is a Picard iterate: refreshed when the background it is built from has
+  moved by more than `tracer_refresh_tol`, frozen in between.
+- `S` is the **beam-impact ionization** birth rate: the mesh-transmitted,
+  circuit-voltage-bounded beam current times the local neutral density times
+  the He EII cross-section. It is independent of `n` by construction (the beam
+  is launched and marched by the cathode solve, which the tracer consumes
+  rather than reimplements). The beam current and birth energy come from the
+  R1 objects — `cathode.circuit_available_voltage_V` composed into the sheath
+  ceiling — never from the raw `cathode_phi_c_cap_V` atomic-data cap.
+
+Neither `γ` nor `S` is re-derived here. `physics.tracer` builds both by
+evaluating the solver's OWN term functions (`reactions.reaction_rates`,
+`sources.boundary_absorption_rhs`, `cathode.beam_ionization_rhs_terms`) on a
+probe state and dividing out the known homogeneity degree of each channel in
+`n` — degree 1 for bulk ionization and surface loss, 2 for radiative
+recombination, 3 for three-body, 0 for the beam birth. That is exact, and it
+means the tracer automatically consumes whatever closure the run configured
+(ADAS vs Janev, coverage split, CSDA vs Beer–Lambert deposition) with no
+duplicated physics. `smoke_sim1d.py` asserts the identity `γ·n + S ==` the
+fluid's own summed `n` row at a non-vacuum state.
+
+The probe state carries `n = n_ref = max(n, ne_floor)` so that the ADAS
+coefficients are looked up at exactly the density the fluid itself uses
+(`reaction_rates` clamps its `n_safe` the same way), and each channel is then
+rescaled to the true `n` by its own degree. That is why the identity above
+holds bit-for-bit above the floor and remains *correct* (rather than merely
+close) below it.
+
+### Exact affine update
+
+The step is the closed-form integral, written in the `γ → 0`-regular form so
+that a vanishing growth rate is not a special case:
+
+```
+x     = γ Δt
+φ₁(x) = expm1(x)/x,   φ₁(0) = 1
+n⁺    = n + n·expm1(x) + S·Δt·φ₁(x)
+```
+
+`n + n·expm1(x)` rather than `n·exp(x)` because it avoids the cancellation at
+small `|x|`. This update has
+
+- **no stability limit** — `Δt` is chosen by the background, not by the plasma;
+- **no floor race** — `n = 0` is a regular state (`n⁺ = S·Δt`), and a decaying
+  cell relaxes onto the exact equilibrium `−S/γ` instead of oscillating about
+  the density floor. The density floor is therefore NOT applied on passive
+  cells; `floor_state_vector` skips them while the tracer is engaged. This is
+  what lets `ne0 = 0` be a legitimate initial condition rather than a crash.
+- **exact growth** — over a window in which `γ` and `S` are constant the tracer
+  is not an approximation of the ODE, it is its solution.
+
+The initial condition is a config choice, not a baked-in convention: `ne0 = 0`
+runs a true-vacuum start and any `ne0 > 0` runs the existing seed convention.
+
+The **time integral** of `n` over the step (needed by the depletion accumulator
+and the conservation ledger) is likewise closed-form,
+`∫n dt = Δt·(n·φ₁(x) + S·Δt·φ₂(x))` with `φ₂(x) = (φ₁(x) − 1)/x`, `φ₂(0) = ½`.
+`φ₂` cancels catastrophically as `x → 0`, so it switches to its Taylor series
+below `|x| = eps^(1/3)` — the standard optimum for a second-difference
+cancellation, taken from `numpy.finfo(float).eps` rather than written as a
+literal. `φ₂` never touches the state update; only the accumulators read it,
+where a relative error of `10⁻¹⁰` in a ratio compared against a `10⁻²` criterion
+is immaterial.
+
+### Electron temperature: quasi-static local balance
+
+`γ` needs `Te`, and the tracer does not integrate the electron energy equation.
+Instead `Te` is the root of the **per-cell quasi-static electron energy
+balance**, refreshed on the same cadence as `γ`:
+
+```
+1.5 · Te · S  =  P_dep(z)  −  n·nn·L₁(Te)  −  n²·L₂(Te)
+```
+
+- The left side is the **dilution cost**: the model's beam ionization births its
+  electron at `Ee = 0` (the standing convention in
+  `cathode.beam_ionization_rhs_terms`), so every beam-born electron has to be
+  raised to the bulk temperature out of the deposited power. Bulk-ionization
+  births carry the local `Te` (`Te_birth_ionization = "local"`) and therefore do
+  not appear.
+- `P_dep` is the beam's deposited power density plus the ohmic gap booking,
+  minus the ionization cost and the excitation radiation — the same rows the
+  fluid books. It is independent of `n`.
+- `L₁` is the per-`n·nn` electron loss (ionization cost + electron–neutral line
+  power), `L₂` the per-`n²` loss (electron–ion line power + electron–ion
+  thermal exchange). Both come from `energy.electron_cooling_rhs_terms` and
+  `energy.electron_ion_exchange_rhs` on the same probe state, divided by their
+  own degree.
+
+**Why this is well-posed at `n = 0`.** As `n → 0` the balance does not
+degenerate: it becomes `1.5·Te·S = P_dep`, i.e. `Te → (2/3)·(deposited energy
+per beam-born electron)` — a finite, positive, `n`-independent number, the
+W-value of the beam in the gas. This is the reason the dilution term is the
+term that must not be dropped: without it the vacuum limit has no root and `Te`
+runs away. With it, `F(Te) = 1.5·Te·S + n·nn·L₁ + n²·L₂ − P_dep` satisfies
+`F(0) = −P_dep < 0` and `F → +∞` (the dilution term is strictly linear in `Te`
+and the loss coefficients are non-negative), so a root always **exists** in
+`[Te_floor, Te_max]`.
+
+**Uniqueness is not guaranteed a priori** and is not claimed. `L₁` rises
+steeply with `Te` over the 2–15 eV window (the SCD ionization coefficient
+climbs four decades), but the `Q_ei` part of `L₂` falls like `Te^(-1/2)` at
+`Te ≫ Ti`, so monotonicity of `F` is a property of the operating point rather
+than a theorem. The solve is therefore a **bracketed bisection** — which cannot
+diverge and cannot leave the bracket — and the tracer additionally **counts
+sign changes of `F` on the bracket** on every refresh. More than one sign
+change means the balance is multi-valued at that cell and the description is
+not usable there; that raises rather than silently picking a branch. Any
+occurrence is a reportable finding, not something to be smoothed over.
+
+Ions are not given a balance: on a passive cell `Ti = Ti_floor` (the beam-born
+ion is born cold and the passive leg has no ion heating channel worth
+resolving) and `M = 0` (see the interface, below — a passive cell exchanges no
+momentum). Both are stated conventions, not derivations.
+
+Parallel electron heat conduction is **not** in the balance: it is local by
+construction. That is a real omission — `κ_e ∝ Te^2.5` is fast — and its effect
+is to let neighbouring passive cells hold `Te` values that conduction would
+flatten. The balance is a leading-order local closure and the passive leg's
+`Te(z)` profile should be read as such.
+
+### Seed transport: the quantified neglect
+
+A passive cell's plasma does not advect (see the interface). The neglected term
+is the parallel divergence `∇·(n u)`, whose size relative to the retained
+growth term is
+
+```
+|∇·(n u)| / (γ n)  ≈  c_s / (L_n · γ)
+```
+
+with `L_n` the axial density scale length, at most the plasma half-length
+(1000 cm on the shipped 67-cell grid, which carries 2000 cm of plasma-active
+column). At the shipped `nn = 2×10¹³ cm⁻³` fill, with `c_s = sqrt(Te/m_i)` and
+`γ = nn·SCD(Te)`:
+
+| `Te` [eV] | `c_s` [cm/s] | `γ` [1/s] | `1/γ` [ms] | half-transit [ms] | `c_s/(L_n γ)` |
+|---|---|---|---|---|---|
+| 3  | 8.5e5  | 96     | 10.4  | 1.18 | 8.8   |
+| 4  | 9.8e5  | 548    | 1.83  | 1.02 | 1.8   |
+| 5  | 1.10e6 | 2.1e3  | 0.47  | 0.91 | 0.52  |
+| 7  | 1.30e6 | 8.2e3  | 0.12  | 0.77 | 0.16  |
+| 10 | 1.55e6 | 2.4e4  | 0.042 | 0.64 | 0.06  |
+
+So the neglect is **not uniformly small**: growth dominates transport by ≥6×
+only above ~7 eV, is a ~50% correction at 5 eV, and *loses* below ~4 eV. The
+tracer is a valid description of the leg only where the quasi-static `Te` sits
+in the upper part of that range, and the honest statement of its accuracy is
+the last column evaluated at the run's own `Te`, not a single number. The
+`active_criterion` census reports `transport_ratio = c_s/(L_n γ)` per cell
+alongside the three passivity criteria for exactly this reason: it is the term
+the description drops, and a run in which it is not small is a run whose tracer
+leg should not be trusted.
+
+(For context, the R2 design sketch quoted "transit ~3.6 ms vs e-folds 0.1–0.7
+ms, growth dominates 5–10×". That ratio uses the *cold-seed* sound speed
+(`Te = Te0 = 0.21 eV`, half-transit 4.4 ms) against the *hot* quasi-static `γ`.
+Evaluating both at the same `Te` — which is what the tracer actually does —
+gives the table above, and the margin is smaller. The correction is recorded
+here because the code is what the reader can check.)
+
+### The passive/active interface
+
+Cells cross out of passivity at different times, so the active region is a
+**set** with a moving boundary, not a front index.
+
+**Passivity criteria.** A cell is passive when ALL THREE hold:
+
+| # | criterion | measured quantity | constant |
+|---|---|---|---|
+| a | the plasma conducts a negligible share of the loop current | `I_cond(z) / I_loop`, with `I_cond = σ_∥(n,Te)·A_plasma(z)·(V_dev/L_plasma)` — the current the cell **actually conducts** under the applied device drop, Spitzer `σ_∥ = n e² τ_e/m_e` | `tracer_passivity_current_ratio` |
+| b | the beam is optically thin to the plasma | cumulative single-pass fractional beam-energy loss to plasma electrons from the launch end to this cell, `Σ (dE/dx)_plasma Δz / E_beam` with `(dE/dx)_plasma = 2π e⁴ n_e lnΛ / E_beam`; max over cathode ends | `tracer_passivity_thinness` |
+| c | the plasma has not eaten the neutrals | `D(z)/nn(z)`, `D` the running accumulator of plasma-driven (bulk, NOT beam) neutral burn since the tracer engaged, advanced with the exact `∫n dt` above | `tracer_passivity_depletion` |
+
+Criterion (a) is the **conducted** current, not an emission capability. The
+earlier sketch conflated the two; the cathode's Richardson emission capability
+says nothing about whether the plasma column is shunting the loop, and the
+conflation is on record as wrong. `V_dev` is the R1-bounded device voltage
+(`min(cathode_phi_c_cap_V, V_avail(I))`), consumed from the cathode
+diagnostics; the atomic-data cap alone would inflate `I_cond` by the same ~5×
+the R1 pass removed from `V_b`.
+
+**Hysteresis.** A passive cell becomes active when its worst criterion ratio
+exceeds 1. It becomes passive again only when that ratio falls below
+`1/tracer_passivity_hysteresis`. Physically all three ratios are monotone
+increasing while the discharge builds, so re-entry is not an expected event —
+the hysteresis exists so that a cell sitting on a criterion cannot chatter
+between descriptions on background noise, which would make the run's step
+sequence depend on round-off.
+
+**Flux at the interface.** A face between an active and a passive cell is
+**closed**: zero particle, momentum-advective and thermal-energy flux, with the
+active cell's pressure acting on it. This is exactly the existing
+`flux._apply_plasma_walls` closed-face condition, reached by composing the
+tracer's passive mask into the geometry's `plasma_open`/`plasma_face_live_cell`
+view, so the interface reuses the operator that is already known to keep a
+uniform stationary state at zero divergence.
+
+The alternative — a one-sided Rusanov flux against a ghost built from the
+tracer's `(n, Te_qs, u = 0)` — was rejected: it would advect fluid mass into a
+region whose density is owned by an ODE that does not know about it, so the
+same particles would be booked twice, once by the flux divergence and once by
+the tracer's next exact update. The closed face is the only treatment under
+which each cell has exactly one owner.
+
+**Conservation across the interface.** The closed face means the tracer region
+and the fluid region exchange no particles, so the run's inventory is the sum
+of two separately closed ledgers. That is a *choice with a cost*, and the cost
+is exactly the neglected `∇·(n u)` of the previous section: the plasma that
+would have crossed the interface is the same plasma the seed-transport neglect
+drops. The ledger books it as an explicit zero row
+(`tracer_interface_particle_flux`) rather than dropping it silently, so a
+reader can see that the term exists and is zero by construction rather than
+absent by oversight. `regime_r2_handoff_check.py` closes the two-part ledger to
+a stated tolerance.
+
+**Activation handoff.** When a cell leaves passivity AND its tracer density has
+reached `tracer_activation_ne`, its packed rows are written from the tracer
+(`n` from the exact update, `Ee = 1.5·n·Te_qs·ev_to_erg`,
+`Ei = 1.5·n·Ti_floor·ev_to_erg`, `M = 0`) and the fluid owns it from the next
+step. Both conditions are required: passivity failing at a density the fluid
+cannot represent (near `ne_floor`, where the clip binds) would hand the fluid
+exactly the floor-poisoned state the tracer exists to avoid.
+
+When the LAST passive cell activates the tracer disengages for the rest of the
+run. Handing the whole column to a *separately configured* main arm is a
+**state transfer**, and the instrument for it is the restart machinery
+(`results/restart.py`, `RESTART.md`): stage 1 runs the conducting leg with
+`regime_tracer` on and exports at the handoff instant; stage 2 resumes with the
+flag off. The restart's structural-key check is what guarantees the two stages
+agree about what the stored fields mean.
+
+**DVM is refused.** `results/restart.py` refuses `kinetic`/`kinetic_dvm`
+neutral models because it does not serialise a distribution function, and the
+tracer refuses them at construction for the same reason plus a second one: the
+tracer's `γ` is built from moment-model neutral densities. R2 is fluid-arms
+only and does not extend DVM support.
+
+### Registered criterion constants
+
+No anonymous threshold appears in the tracer. Every description-selecting
+number is a config key, sweepable by config alone (`ε/3`, `ε`, `3ε`) with no
+code edit, and carries a classed provenance entry in
+`core/config_defaults_provenance.md`.
+
+| key | symbol | shipped | class |
+|---|---|---|---|
+| `tracer_passivity_current_ratio` | ε_I | 0.01 | DERIVED |
+| `tracer_passivity_thinness` | ε_thin | 0.01 | ASSUMED |
+| `tracer_passivity_depletion` | ε_dep | 0.01 | ASSUMED |
+| `tracer_passivity_hysteresis` | h | 3.0 | ASSUMED |
+| `tracer_refresh_tol` | — | 0.01 | NUMERICS |
+| `tracer_activation_ne` | n_act | 1.0e10 | DERIVED |
+| `tracer_overlap_band_ne` | — | (1.0e10, 1.0e11) | DERIVED |
+| `tracer_overlap_rtol` | — | 0.05 | ASSUMED |
+
+### The census
+
+Every tracer run reports, from day one, **which criterion binds where and
+when** — the `active_constraint` idiom the timestep limiter already uses. Per
+save frame the result carries `tracer_criterion` (the binding criterion name
+per cell), the four ratios, the passive mask, `Te_qs`, `γ`, and the refresh
+count; at the end of a tracer run `run()` prints a one-line summary naming the
+criterion that bound most often, the cell and time of first activation, and
+whether the transport ratio stayed small. It is presence-gated on the flag, so
+a non-tracer run prints and records nothing.
+
+### Gates
+
+- `regime_r2_overlap_gate.py` — the **two-sided** gate. Over the registered
+  overlap band, where both descriptions are valid, run both and compare; PASS
+  iff the densities agree within `tracer_overlap_rtol`. The band and the
+  tolerance are registered in the script header (and in config) before the
+  comparison is implemented.
+- `regime_r2_handoff_check.py` — conducting leg via tracer → restart export →
+  full solver resume; asserts the restart config-identity checks, state
+  finiteness, and closure of the two-part conservation ledger.
+- `smoke_sim1d.py` — affine-update exactness against a closed-form two-cell
+  case (including `γ → 0` and `n = 0`), presence-gating (byte-identical
+  trajectory with the flag off), each construction-time `ValueError` class,
+  and an anti-vacuity variant per guard that must fail if the guard is removed.
+
+### Explicitly out of scope at stage 1
+
+The `V_cm` vessel/common-mode node (a one-ODE floating closure) is **not**
+built: stage 1 is wall-referenced, `V_cm ≡ 0`. The documented seam is the
+`V_dev` read in criterion (a), which is where a common-mode offset would enter.
+The φ_a-aware `V_b`-object bound is an R1 follow-up in the cathode solver; the
+tracer consumes the R1 bound's objects as they are and does not touch its
+contract.
