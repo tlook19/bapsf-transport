@@ -428,14 +428,17 @@ def main(argv=None):
                   f"Vp {long_Vp[cell]:.5g} cm^3")
         print("   NOTE the active-cell refusal is GONE: the run passes both "
               "the instant and the cell that used to stop it. This refusal is "
-              "on a cell the tracer OWNS, past the beam's range, and it is the "
-              "OPPOSITE limit from the original finding -- not too much power "
-              "but too few beam-born electrons to dilute into, S having "
-              "collapsed to a denormal while P_net has not. RULED OUT as its "
-              "cause: the QL channel (P_ql is ~1e-283 there) and the ohmic gap "
-              "booking (the gap is the cathode-end cells and P_ohmic is under "
-              "1 W). What the residual P_net IS on cells the rays never reach "
-              "is a separate question the rows above open and do not close.")
+              "on a cell the tracer OWNS, past the beam's IONIZING range (the "
+              "rays still reach it and still deposit; what has stopped is "
+              "ionization), and it is the OPPOSITE limit from the original "
+              "finding -- not too much power but too few beam-born electrons "
+              "to dilute into, S having collapsed to a denormal while P_net "
+              "has not. The residual P_net is IDENTIFIED, by "
+              "regime_pb_pnet_decomposition.py: it is the primary's "
+              "end-of-range terminal dump, banked whole in one 10 cm cell and "
+              "redistributed by the 50 cm smoothing kernel into short "
+              "small-volume cells. Not the QL channel and not the ohmic "
+              "booking.")
 
     print()
     print(f"== outcome: the balance {'HAS' if status == 'RAN' else 'has NO'} a "

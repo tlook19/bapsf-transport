@@ -939,21 +939,47 @@ it trades cost against the size of the frozen-coefficient error. Freezing
 the exact affine update at the same order. `0` refreshes every step and is the
 reference against which the shipped cadence is checked. Bracket `0.001 - 0.1`.
 
-**`tracer_activation_ne = 1.0e10` cm^-3 — DERIVED.** Two conditions have to
+**`tracer_activation_ne = 1.0e10` cm^-3 — DUAL ROLE; classed separately per
+role.** One number is doing two jobs, and they do not have the same standing.
+The value is unchanged by this entry.
+
+*Role (i), the fluid-validity / handoff gate — DERIVED.* Two conditions have to
 hold before the fluid can be handed a cell, and this is the larger of them.
-(i) The density floor must be inert: `ne_floor = 1e8`, and the fluid's
+(a) The density floor must be inert: `ne_floor = 1e8`, and the fluid's
 `_negative_margin_timestep` bound degrades as `n` approaches it, so a 100x
 margin is the condition that the clip is not what is holding the cell up.
-(ii) The value must sit at the bottom of the density range the fluid model is
+(b) The value must sit at the bottom of the density range the fluid model is
 validated over — the LAPD afterglow/early-discharge scale is `1e10 - 1e11`
 cm^-3, so `1e10` is the low edge of the validated window rather than an
-extrapolation. Construction enforces only condition (i) (`>= 10 * ne_floor`),
-because `ne_floor` is itself configurable and (ii) is a judgement about the
+extrapolation. Construction enforces only condition (a) (`>= 10 * ne_floor`),
+because `ne_floor` is itself configurable and (b) is a judgement about the
 model's validity, not an arithmetic relation. Honest bar: the 100x margin is a
 sufficiency argument, not a measurement of where the clip stops mattering.
-Bracket `3e9 - 3e10`. The overlap gate is what makes the choice checkable — if
-the two descriptions agree across the band, the boundary inside it did not
-matter.
+Bracket `3e9 - 3e10`.
+
+*Role (ii), the de-facto quasilinear-onset gate — ASSUMED.* Because the
+passive/active mask is also what gates the anomalous beam power booking, this
+same number decides where quasilinear absorption starts being booked. It was
+never derived for that job. Bracket `[2.9e9 cm^-3, substantially higher]`. The
+lower edge is the deposition module's own weak-beam validity floor — `10 n_b`
+evaluated at stance, the density below which `quasilinear_relaxation_length_cm`
+returns `inf` — and that is **a numerical validity bound on the closure, not
+the physical instability onset**; it says where the weak-beam expression stops
+being applicable, not where the beam-plasma instability starts. The physical
+onset (beam-plasma growth against electron-neutral damping) is under separate
+derivation. When it lands, activation is expected to split into
+`max(n_QL, n_fluid)` and role (ii) leaves this entry. Honest bar: the upper end
+of the bracket is genuinely open — no measurement here constrains it.
+
+*Measured consequence of role (ii)'s ignorance interval.* The two-sided overlap
+gate FAILS at the shipped value (worst relative disagreement 0.978 against
+`tracer_overlap_rtol = 0.05`): the fluid arm is heated across the band by
+quasilinear power the tracer arm refuses below `n_act`, so the two descriptions
+do not meet. That failure is the measurement of the gap, and neither the gate
+nor this value was adjusted to remove it. See NUMERICS.md, "Corrected beam
+power booking on passive cells". For role (i) the overlap gate remains the
+check that makes the choice falsifiable — if the two descriptions agree across
+the band, the boundary inside it did not matter.
 
 **`tracer_overlap_band_ne = (1.0e10, 1.0e11)` cm^-3 — DERIVED.** The band where
 BOTH descriptions are valid, and therefore the only place a two-sided check is

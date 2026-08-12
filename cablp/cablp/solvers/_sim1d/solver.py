@@ -2729,6 +2729,28 @@ class LAPDSim1D:
             np.asarray(Te_fluid, dtype=float),
         )
 
+    def _tracer_criteria_n_cm3(self, n_next):
+        """Return the density the criteria read, per cell.
+
+        The density analogue of :meth:`_tracer_criteria_Te_eV`, and the same
+        principle: the criteria describe the STATE of a cell, and on a cell the
+        fluid owns the state is the fluid's. ``n_next`` there is that cell's
+        step-START density advanced by one step of the tracer's affine ODE --
+        an extrapolation by a description that does not own the cell, and one
+        that ignores everything the fluid actually did to it this step
+        (advection across its open faces, the flux divergence, the floor).
+
+        On a passive cell this is ``n_next`` by construction, which is also
+        exactly what the installed state carries there: ``_tracer_apply`` wrote
+        it and ``floor_state_vector`` exempts those cells, so no clip stands
+        between the two.
+        """
+        return np.where(
+            self._tracer_passive,
+            np.asarray(n_next, dtype=float),
+            np.asarray(self.state.n, dtype=float),
+        )
+
     def _tracer_apply(self, prepared):
         """Commit an accepted step's tracer update, mask move and census."""
         if prepared is None:
@@ -2776,15 +2798,21 @@ class LAPDSim1D:
             self._tracer_background = prepared["background"]
             self._tracer_refreshes += 1
         self._tracer_update_mask(
-            prepared, n_next, self._tracer_criteria_Te_eV(Te), gamma
+            prepared,
+            self._tracer_criteria_n_cm3(n_next),
+            self._tracer_criteria_Te_eV(Te),
+            gamma,
         )
 
     def _tracer_update_mask(self, prepared, n_next, Te, gamma):
         """Move the passive/active boundary, with hysteresis, and census it.
 
-        ``Te`` here is the COMPOSED temperature from
-        :meth:`_tracer_criteria_Te_eV` -- quasi-static on the tracer's cells,
-        the fluid's own everywhere else -- not the raw balance output.
+        ``n_next`` and ``Te`` here are the COMPOSED state from
+        :meth:`_tracer_criteria_n_cm3` and :meth:`_tracer_criteria_Te_eV` --
+        the tracer's on the cells it owns, the FLUID's own everywhere else --
+        not the raw affine update and not the raw balance output. The criteria
+        judge a cell by the state of that cell, and which description that
+        comes from is settled by who owns the cell.
         """
         state = self.state
         criteria = self._tracer["criteria"]

@@ -15218,6 +15218,86 @@ print(json.dumps({
         - 1.0
     ) < 1e-12, "the smoothing kernel must conserve the anomalous power total"
 
+    # ---- (vi) the criteria read the OWNER's state, per cell ----
+    # The quasi-static balance is solved on the passive set only, so off that
+    # set its Te is a floor-by-convention filler; and the affine update's
+    # density on a cell the fluid owns is that cell's step-START density
+    # advanced by a description that does not own it. Both are composed against
+    # the fluid's own state before any criterion reads them.
+    _r2own_params, _r2own_flags = _r2ql_config()
+    _r2own_sim = LAPDSim1D(_r2own_params, _r2own_flags)
+    _r2own_sim.run(t_end=1.0e-6, dt=1.0e-7)
+    _r2own_cells = int(_r2own_sim.geometry.cells)
+    # Hand two cells to the fluid by hand. Every tracer config starts with the
+    # whole plasma passive, and the criteria's active-cell branch is exactly
+    # what is under test, so it has to be reached deliberately here.
+    _r2own_mask = _r2own_sim._tracer_passive.copy()
+    _r2own_live = np.flatnonzero(_r2own_mask)
+    assert _r2own_live.size >= 4, "need passive cells to hand over"
+    _r2own_handed = _r2own_live[:2]
+    _r2own_mask[_r2own_handed] = False
+    _r2own_sim._tracer_passive = _r2own_mask
+    _r2own_fluid_n = np.asarray(_r2own_sim.state.n, dtype=float)
+    _r2own_fluid_Te = np.asarray(_r2own_sim.derived.Te, dtype=float)
+    # Distinct stand-ins for what the tracer would have said, so "took the
+    # fluid's value" and "took the tracer's" cannot be confused.
+    _r2own_tracer_n = _r2own_fluid_n * 3.0 + 1.0
+    _r2own_tracer_Te = _r2own_fluid_Te * 5.0 + 2.0
+    _r2own_got_n = _r2own_sim._tracer_criteria_n_cm3(_r2own_tracer_n)
+    _r2own_got_Te = _r2own_sim._tracer_criteria_Te_eV(_r2own_tracer_Te)
+    assert np.array_equal(
+        _r2own_got_n[_r2own_mask], _r2own_tracer_n[_r2own_mask]
+    ), "a PASSIVE cell's criteria must read the tracer's own density"
+    assert np.array_equal(
+        _r2own_got_Te[_r2own_mask], _r2own_tracer_Te[_r2own_mask]
+    ), "a PASSIVE cell's criteria must read the quasi-static Te"
+    assert np.array_equal(
+        _r2own_got_n[~_r2own_mask], _r2own_fluid_n[~_r2own_mask]
+    ), "an ACTIVE cell's criteria must read the FLUID's own density"
+    assert np.array_equal(
+        _r2own_got_Te[~_r2own_mask], _r2own_fluid_Te[~_r2own_mask]
+    ), "an ACTIVE cell's criteria must read the FLUID's own Te"
+    # ANTI-VACUITY: the composition has to CHANGE something on the handed
+    # cells, or the two assertions above would hold for a build that composed
+    # nothing at all.
+    assert not np.array_equal(
+        _r2own_got_n[_r2own_handed], _r2own_tracer_n[_r2own_handed]
+    ), "the density composition is vacuous: it returned the tracer's values"
+    assert not np.array_equal(
+        _r2own_got_Te[_r2own_handed], _r2own_tracer_Te[_r2own_handed]
+    ), "the Te composition is vacuous: it returned the balance's values"
+    # ... and the balance's SOLVE DOMAIN is the passive set, so a handed-over
+    # cell is never asked for a quasi-static Te in the first place.
+    _r2own_solve = _r2own_sim.solve_cathode_boundary(
+        state=_r2own_sim.state, time=_r2own_sim._time, update_cache=False
+    )
+    _r2own_S, _r2own_P, _r2own_Pf = _r2own_sim._tracer_beam_rows(
+        _r2own_sim.state, _r2own_solve, _r2own_sim._time
+    )
+    _r2own_Te_qs, _r2own_sc = _r2.quasistatic_Te_eV(
+        state=_r2own_sim.state,
+        n_true=_r2own_fluid_n,
+        n_probe=np.maximum(_r2own_fluid_n, _r2own_sim.floors["n"]),
+        Ti_eV=np.full(_r2own_cells, float(_r2own_sim.floors["Ti"])),
+        S_beam=_r2own_S,
+        P_beam_net=_r2own_P,
+        floors=_r2own_sim.floors,
+        ion_mass_g=_r2own_sim.ion_mass_g,
+        mu=_r2own_sim._mu,
+        cooling_kwargs=_r2own_sim._electron_cooling_kwargs(),
+        exchange_kwargs=_r2own_sim._tracer_exchange_kwargs(),
+        boundary_rhs=_r2own_sim._tracer_boundary_rhs(
+            _r2own_solve, _r2own_sim._time
+        ),
+        active=_r2own_mask & (
+            (_r2own_fluid_n > 0.0) | (_r2own_S > 0.0)
+        ),
+        Te_ceiling_eV=_r2own_sim._tracer_beam_energy_eV(_r2own_solve),
+    )
+    assert np.all(
+        _r2own_Te_qs[_r2own_handed] == _r2own_sim.floors["Te"]
+    ), "a cell outside the solve domain must not come back solved"
+
     # PRESENCE GATE for the new code: with the flag OFF there are no passive
     # cells, the beam booking the tracer helpers report is the fluid's own
     # untouched row, and the audit is identically zero.

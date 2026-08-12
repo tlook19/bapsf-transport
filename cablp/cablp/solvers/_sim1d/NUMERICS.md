@@ -722,6 +722,19 @@ deposition model at construction: the anomalous channel exists only on the CSDA
 rays, so such a run reads as though the correction is doing work when neither
 the channel nor its refusal is live.
 
+**Where the refused power goes (convention).** The quasilinear power refused on
+a passive cell is neither deposited nor destroyed: **the beam keeps it.** With
+no wave medium the primary is not slowed by that channel, so the energy stays
+in the beam and is carried along the ray, out of the tracer's domain, to
+whatever terminating surface the ray reaches — the far end or the wall. The
+tracer phase carries **no wall-load ledger**, so that arriving power is not
+booked anywhere today and no row reports it; this paragraph is what records
+that it exists and where it goes, so its absence from the ledger is a known gap
+rather than a silent one. The convention is stated in terms of the terminating
+surface, not of the tracer, precisely so that a build which adds a vessel /
+common-mode node can attach the far-end power to that node as-is: the
+destination does not change, only whether something is listening at it.
+
 **The balance is solved on the PASSIVE SET and nowhere else.** A cell the fluid
 owns has its own electron energy equation, integrated with conduction and the
 boundary terms in it, so the local quasi-static closure — which cannot see
@@ -1051,14 +1064,55 @@ refuses.
   used to stop it.
 
   The refusal that remains is the OPPOSITE limit from the one at the top of
-  this block. Past the beam's range `S` collapses to a denormal while `P_net`
-  does not, so the **dilution denominator goes to zero** and the balance
-  demands an unbounded `Te` — too few beam-born electrons to dilute into,
-  rather than too much power. It is not the anomalous channel (`P_ql ~ 1e-283`
-  there) and not the ohmic gap booking (the gap is the cathode-end cells and
-  `P_ohmic < 1 W`). What the residual `P_net` is on cells the rays never reach
-  is a separate question, opened by `regime_pb_balance_table.py` section G and
-  deliberately not closed here.
+  this block. Past the beam's IONIZING range `S` collapses to a denormal while
+  `P_net` does not, so the **dilution denominator goes to zero** and the
+  balance demands an unbounded `Te` — too few beam-born electrons to dilute
+  into, rather than too much power.
+
+#### MEASURED: what the residual power on the far cells is
+
+`scripts/regime_pb_pnet_decomposition.py`, at the refusal state
+(`t = 7.476e-5 s`, `nx = 20`). Stated as measurement; no remedy is proposed
+here.
+
+Off the cathode–anode gap, `P_full` is the smoothed plasma-heating bank and
+nothing else — worst relative mismatch **1.12e-15** against
+`smoothed(plasma_heating)/Vp` across the grid, because the smoothed radiated
+and ionization-cost banks cancel the excitation and cost rows exactly. So the
+residual is not a second channel: the anomalous channel is `1e-289` there and
+the ohmic booking is 0.49 W confined to cells 2–6.
+
+What it is, is **one cell's terminal dump spread by the kernel**. The CSDA
+primary's end-of-range residual is banked whole in the single cell where `E`
+crosses `E_stop` — cell 39, `2.2603e10 erg/s`, **9.35% of all banked plasma
+heating in one 10 cm cell**. The 50 cm conservative kernel then redistributes
+it:
+
+| cell | z [cm] | dz | `Vp` [cm³] | raw bank [erg/s] | raw density | smoothed density | from OTHER cells |
+|---|---|---|---|---|---|---|---|
+| 13 | 235 | 90 | 63617 | 5.124e7 | 805 | 1383 | 58.5% |
+| 22 | 1045 | 90 | 63617 | 3.760e7 | 591 | 591 | 28.5% |
+| 31 | 1855 | 90 | 63617 | 2.592e7 | 407 | 21932 | **98.7%** |
+| 32 | 1905 | 10 | 7069 | 2.824e6 | 400 | 1.442e5 | **99.98%** |
+| 40 | 1985 | 10 | 7069 | **0** | 0 | 3.759e5 | **100%** |
+
+Cells 31, 32 and 40 draw 98.1%, 99.7% and 100% of their smoothed power from
+cell 39 alone. Cell 40 banks *nothing* of its own and still carries the largest
+power density in the column.
+
+Two mechanisms compound, and both are confirmed by the numbers rather than
+inferred. The kernel conserves the **extensive** power (to `1.1e-16`) while the
+balance consumes a **density**, and the far cells are short: `dz = 10 cm` and
+`Vp = 7069 cm³` against `90 cm` and `63617 cm³` mid-column, a factor 9. So the
+same erg/s deposited there is a 9× larger source term. And the kernel's reach
+in *cells* is set by the local mesh spacing, not by a fixed stencil, so a 50 cm
+width spans many cells wherever the mesh is fine.
+
+The consequence for the tracer is the refusal above: the column's largest
+`P_net` density lands exactly where `S` has gone to zero. The consequence for
+the deposition model generally is that at this mesh the smoothing kernel, not
+the stopping calculation, sets the applied deposition geometry in the
+end-of-range region — the raw stopping there is sub-cell.
 
 ### Explicitly out of scope at stage 1
 
