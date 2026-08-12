@@ -441,6 +441,7 @@ def run_model(
     Rp_model=None,
     flags_extra=None,
     t_end=None,
+    max_steps=None,
 ):
     params, flags = default_config()
     params.update(PARAM_OVERRIDES)
@@ -482,7 +483,17 @@ def run_model(
     # the tau_* budget; an explicit t_end caps run cost WITHOUT deforming the
     # hardware drive length (the loop terminates at t_end regardless of
     # tau_discharge), as run_floorfix_g3g4.py already relies on.
-    sim.start_simulation(t_end=t_end, dt=None, operator_split=None, max_steps=None)
+    # max_steps=None (default) is the historical unbounded loop. An explicit
+    # cap is a WALL, not a schedule: on its own the solver raises RuntimeError
+    # at the cap and the in-progress trajectory is lost, which is the whole
+    # point of pairing it with the input_dict key max_steps_action="stop"
+    # (extra={"max_steps_action": "stop"}), where the run ends cleanly and
+    # get_results() returns the partial trajectory with
+    # run_status="max_steps_reached". Both halves are the caller's to choose;
+    # nothing here supplies a default cap or a default action.
+    sim.start_simulation(
+        t_end=t_end, dt=None, operator_split=None, max_steps=max_steps
+    )
     return sim.get_results(), sim.geometry, params, flags
 
 

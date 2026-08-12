@@ -384,6 +384,12 @@ _ME_CGS = 9.1093837015e-28  # electron mass [g]
 _E4_CGS = (4.80320425e-10) ** 4  # e^4 [esu^4]
 _OMEGA_PE_COEFF = 5.64e4  # omega_pe = 5.64e4 sqrt(n_e) [rad/s] (NRL)
 
+# He first ionization potential [eV], the module's STANDALONE default for the
+# ``I_ion_eV`` argument. Every solver path passes ``I_ion_eV`` explicitly from
+# ``vars._cons.I_ion = 24.58738793623``, so this default is dormant there and
+# the two differ only in the 4th decimal -- but a caller invoking this module
+# directly gets 24.587 and will not reproduce a solver run's numbers bit for
+# bit. Pass the constant explicitly to match the solver.
 HE_I_ION_EV = 24.587
 HE_E_STOP_EV = 20.6158  # lowest inelastic threshold (2^1S)
 HE_OPB_EBAR_EV = 15.8  # Opal-Peterson-Beaty shape parameter for He

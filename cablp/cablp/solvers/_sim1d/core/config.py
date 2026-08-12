@@ -1221,7 +1221,13 @@ def cathode_defaults():
         reach the loop current. Default ``0.0`` is bit-exact. Must be ``>= 0``.
         Measured bounds: ``config_defaults_provenance.md``.
     eta:
-        Anode-to-cathode area ratio.
+        Anode-mesh solid fraction (opacity) [dimensionless]: the share of the
+        anode face its wires occupy, so ``1 - eta`` transmits. ``eta`` sets the
+        anode's Bohm ion collection area (``2*eta*I_i``, both mesh faces) and
+        the share of the gap-surviving thermionic beam the mesh intercepts;
+        ``1 - eta`` is the face's neutral transparency and the beam's geometric
+        survival. Must lie in ``[0, 1]``. Value and class:
+        ``config_defaults_provenance.md``.
     anode_radius_cm:
         Radius of the anode mesh disc [cm]. ``None`` (default) spans the
         chamber, giving the historical neutral transparency ``1 - eta``. A
@@ -1635,7 +1641,15 @@ def cathode_defaults():
         when selected. The cathode sits at an accelerating drop of a few
         hundred volts through drive, above every plateau energy the bracket
         carries, so free escape there deletes tail power the sheath in fact
-        returns to the column. Selecting ``"reflect"`` also makes the
+        returns to the column. Under ``"reflect"`` the cathode-face row of the
+        tail end ledger (``source_beam_end_loss_tail_low_W``) is therefore
+        EXACTLY ZERO for the whole of a ``"phi_c"``-keyed run -- birth energy
+        ``f*e*phi_c`` with ``f <= 1`` against a threshold of ``e*phi_c``, and
+        walkers only lose energy -- but NOT for a ``"fixed"``-keyed one, where
+        the rung is decoupled from the drive and any frame with
+        ``e*phi_c`` below the rung lets walkers out through that face. A reader
+        deriving the escaping fraction must sum the whole end ledger rather
+        than name the far-end row alone. Selecting ``"reflect"`` also makes the
         plasma-active window bound the ENERGY-ONLY walk (which otherwise runs
         the whole grid): the reflecting face has to be a face the walk stops
         at. Reflection is total by construction, with no partial-reflection

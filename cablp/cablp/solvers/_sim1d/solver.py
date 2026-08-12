@@ -7965,6 +7965,26 @@ class LAPDSim1D:
             # Identically zero under heating_anomalous_transport="local" (the
             # default), so on every run to date these read 0.0; runs saved
             # before 2026-08-02 lack the datasets and readers must default.
+            #
+            # THE TOTAL TAIL ESCAPE IS THE SUM OF ALL FOUR ROWS (both prefixes,
+            # both faces) -- that is the quantity the per-ray identity
+            #   P_QL = heating_anomalous + ionization_cost_tail + radiated_tail
+            #          + end_loss_tail_low + end_loss_tail_high
+            # complements, and the ONLY form that is correct for every keying.
+            # The high row alone is the total only while the low row is zero,
+            # which is a property of the KEYING and not an invariant of the
+            # closure: under heating_anomalous_tail_energy_keying="phi_c" a
+            # walker is born at E_tail = f*e*phi_c with f <= 1 against a
+            # cathode-face reflection threshold of e*phi_c and only ever loses
+            # energy, so it can never reach that face at or above the threshold
+            # and the low row is exactly 0.0; under "fixed" the rung is
+            # decoupled from phi_c, and on any frame whose drive sits below the
+            # rung the sheath no longer repels the walkers and the low row
+            # fills. Measured: covdisc_fixed (75 eV rung) books up to 0.486 of
+            # the launched tail power through the low row on the 43 frames
+            # where phi_c fell to 44.6-71.7 V, while the identity itself still
+            # closes to 8.1e-16 on every frame. A reader that names only the
+            # high row understates the escape there by that much.
             diag[f"{prefix}_beam_end_loss_tail_low_W"] = 0.0
             diag[f"{prefix}_beam_end_loss_tail_high_W"] = 0.0
             # Item-35 gap-survival ledger: three views of the fraction of the
