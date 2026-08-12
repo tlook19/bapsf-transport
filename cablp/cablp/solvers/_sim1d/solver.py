@@ -158,7 +158,11 @@ from .results.restart import (
     REFUSED_NEUTRAL_MODELS as RESTART_REFUSED_NEUTRAL_MODELS,
 )
 from cablp.funcs._adas import he_rate_temperature_range_eV, he_rates
-from cablp.funcs._beam_deposition import HE_EII_EDGE_REL_TOL, HE_EII_EPS_TOP
+from cablp.funcs._beam_deposition import (
+    ANOMALOUS_MODELS,
+    HE_EII_EDGE_REL_TOL,
+    HE_EII_EPS_TOP,
+)
 from cablp.funcs._cross import charge_ex_react
 from cablp.funcs._kernels import PROVENANCE as KERNEL_PROVENANCE
 from cablp.vars._cons import I_Ry, I_ion, ev_to_erg, kb_cgs, m_He_cgs, m_p_cgs
@@ -1297,6 +1301,43 @@ class LAPDSim1D:
                 "are the CSDA ray's; under beer_lambert it would be a "
                 "silent no-op)"
             )
+        # The anomalous closure family. Same discipline: the module validates
+        # too, but a bad selector must fail at CONSTRUCTION rather than on the
+        # first cathode solve, and selecting a closure the deposition path
+        # never launches is an INCOMPLETE configuration, not a no-op.
+        _bam = str(self._input_dict.get("beam_anomalous_model", "none"))
+        if _bam not in ANOMALOUS_MODELS:
+            raise ValueError(
+                "beam_anomalous_model must be one of "
+                f"{sorted(ANOMALOUS_MODELS)} (got {_bam!r})"
+            )
+        if _bam == "ql_relaxation":
+            if str(
+                self._input_dict.get("beam_deposition_model", "beer_lambert")
+            ) != "csda":
+                raise ValueError(
+                    "beam_anomalous_model='ql_relaxation' requires "
+                    "beam_deposition_model='csda': the anomalous channel "
+                    "exists only on the CSDA rays, so under beer_lambert the "
+                    "closure could not act and the run would read as though "
+                    "the middle leg were live when nothing is booked"
+                )
+            _qlrc = self._input_dict.get("ql_relaxation_coeff", None)
+            if _qlrc is None:
+                raise ValueError(
+                    "beam_anomalous_model='ql_relaxation' requires "
+                    "ql_relaxation_coeff (the registered O(10-100) "
+                    "plateau-formation bracket constant); it is deliberately "
+                    "not defaulted at the point of use, because a headline "
+                    "under this closure is quoted at the bracket endpoints "
+                    "and an unstated arm cannot be reported"
+                )
+            _qlrc = float(_qlrc)
+            if not math.isfinite(_qlrc) or _qlrc <= 0.0:
+                raise ValueError(
+                    "ql_relaxation_coeff must be finite and > 0 (got "
+                    f"{self._input_dict.get('ql_relaxation_coeff')})"
+                )
         # WP-E QL heating locality. Same discipline as WP-D above: the module
         # validates too, but a misconfiguration must fail at CONSTRUCTION, and
         # every combination in which the walk machinery could not act is an
@@ -2551,24 +2592,36 @@ class LAPDSim1D:
         (deposition, ionization cost, excitation radiation), i.e. the net beam
         heating of the electron fluid.
 
-        ``P_net`` is ``P_full`` with the QUASILINEAR/ANOMALOUS share removed on
-        every cell the tracer owns, and it is ``P_net`` -- not ``P_full`` --
-        that the quasi-static balance absorbs. Quasilinear absorption is a
-        beam-PLASMA instability: it needs a wave medium, and a passive cell by
-        its own definition has no plasma to be that medium, so on such a cell
-        the channel does not exist and booking its power there was describing
-        an interaction with a plasma that is not there. The channels that
-        survive on a passive cell are the ones that do not need one: collisional
-        beam drag on plasma electrons (proportional to ``n``, and at
-        vacuum-class density accordingly tiny) and the ionization-birth
+        Under ``beam_anomalous_model="quasilinear"`` ONLY, ``P_net`` is
+        ``P_full`` with the anomalous share removed on every cell the tracer
+        owns, and it is ``P_net`` -- not ``P_full`` -- that the quasi-static
+        balance absorbs. That closure books near-total absorption by fiat, and
+        it is a beam-PLASMA instability: it needs a wave medium, and a passive
+        cell by its own definition has no plasma to be that medium, so on such
+        a cell the channel does not exist and booking its power there was
+        describing an interaction with a plasma that is not there. The channels
+        that survive on a passive cell are the ones that do not need one:
+        collisional beam drag on plasma electrons (proportional to ``n``, and
+        at vacuum-class density accordingly tiny) and the ionization-birth
         bookkeeping, both of which stay exactly as they were.
 
-        The subtraction is gated on the PASSIVE MASK and on nothing else. No
-        density threshold is introduced: the tracer-to-fluid handoff and the
-        onset of quasilinear absorption are made the same event by
-        construction, so a cell that has become active books the anomalous
-        channel in full, unchanged. NUMERICS.md, "Corrected beam power booking
-        on passive cells", is the statement of record, and
+        The refusal is MODEL-KEYED, and that is the whole of the difference
+        between the closure legs. ``"ql_relaxation"`` carries its own onset
+        gate and its own density-dependent extracted fraction, so it already
+        books what a low-density cell can actually absorb rather than a fiat
+        total; refusing it wholesale on the passive set would delete the
+        physics the closure exists to supply. A passive cell therefore BOOKS
+        ``ql_relaxation``'s power in full, exactly as an active one does, and
+        ``P_net == P_full`` everywhere. Under ``"none"`` there is no anomalous
+        power to move either way.
+
+        Where the subtraction does apply it is gated on the PASSIVE MASK and on
+        nothing else. No density threshold is introduced: the tracer-to-fluid
+        handoff and the onset of fiat quasilinear absorption are made the same
+        event by construction, so a cell that has become active books the
+        anomalous channel in full, unchanged. NUMERICS.md, "Corrected beam
+        power booking on passive cells" and "The anomalous closure bracket",
+        are the statements of record, and
         :meth:`tracer_passive_anomalous_leak` is the auditable invariant.
         """
         zeros = np.zeros(self._geometry.cells, dtype=float)
@@ -2586,19 +2639,24 @@ class LAPDSim1D:
             + np.asarray(terms["beam_ionization_cost"].Ee, dtype=float)
             + np.asarray(terms["beam_excitation_radiation"].Ee, dtype=float)
         )
+        if str(
+            self._input_dict.get("beam_anomalous_model", "none")
+        ) != "quasilinear":
+            return S, P_full.copy(), P_full
         P_ql = beam_anomalous_power_density(**beam_kwargs)
         P_net = P_full - np.where(self._tracer_passive, P_ql, 0.0)
         return S, P_net, P_full
 
     def tracer_passive_anomalous_leak(self, state=None, time=None):
-        """Return the QL power still in each PASSIVE cell's booking; must be 0.
+        """Return each PASSIVE cell's departure from its closure's policy; 0.
 
-        The audit form of the refusal in :meth:`_tracer_beam_rows`. It re-reads
-        the anomalous share from the deposition objects through
-        ``physics.tracer``'s own reference, so it does not travel through the
-        code path it is checking and a removed or neutered refusal is still
-        caught. Returns zeros when the tracer is not engaged: there are no
-        passive cells to audit.
+        The audit form of the model-keyed booking in :meth:`_tracer_beam_rows`.
+        It re-reads both the anomalous share and the model key from the
+        deposition objects and the config through ``physics.tracer``'s own
+        references, so it does not travel through the code path it is checking
+        and a removed, neutered or mis-keyed refusal is still caught. Returns
+        zeros when the tracer is not engaged: there are no passive cells to
+        audit.
         """
         cells = int(self._geometry.cells)
         if not self._tracer_engaged:

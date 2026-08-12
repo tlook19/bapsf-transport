@@ -1536,13 +1536,36 @@ def cathode_defaults():
         Both parameter-free.
     beam_anomalous_model:
         Anomalous (beam-plasma instability) drag for the CSDA module (inert
-        under ``"beer_lambert"``). ``"none"`` or
+        under ``"beer_lambert"``). A declared closure BRACKET of three arms; a
+        result states which one produced it.
+        ``"none"``.
         ``"quasilinear"`` (default): mean-energy relaxation over
         ``l_QL = (n_e/n_b)(v_b/w_pe) ln(n_e/n_b)`` (~5-10 cm at production
         parameters), energy to local electron heating — the
         Langmuir-turbulence picture behind primaries not surviving
         downstream. Weak-beam domain only (returns no drag when
         ``n_b >= n_e/10``); parameter-free.
+        ``"ql_relaxation"``: the same instability booked on its relaxation
+        physics rather than by fiat. Reactive trapping extracts
+        ``f_ext = min(n_b/2n_e, 1)^(1/3)`` of the beam energy, spread over the
+        plateau-formation length ``L_rel = ql_relaxation_coeff (n_e/n_b) v_b /
+        w_pe``, delivered to BULK electrons where the waves collisionally damp;
+        and the booking is gated per cell on the boxed onset inequality
+        ``0.687 w_pe min(n_b/n_e,1)^(1/3) > nu_en/2`` with ``w_pe > nu_en``,
+        ``nu_en = nn K_m(Te)`` on the He e-n momentum-transfer table. No
+        weak-beam cutoff (the caps carry the ``n_b >~ n_e`` corner). Requires
+        ``ql_relaxation_coeff``. Not available on the compiled kernel, which
+        takes the anomalous channel as a boolean and would run the fiat arm;
+        selecting it takes the Python march.
+    ql_relaxation_coeff:
+        The O(10-100) coefficient in the quasilinear plateau-formation time
+        ``tau_QL = c (n_e/n_b)/w_pe``, and so the length the extracted beam
+        power is spread over. Read ONLY under
+        ``beam_anomalous_model="ql_relaxation"`` and inert under every other
+        value. Must be finite and > 0 or construction raises. It is a
+        REGISTERED BRACKET rather than a tuned number — see the provenance
+        note — and results under this closure are quoted at the bracket
+        endpoints, not at the default alone.
     beam_product_transport:
         Where the CSDA ray's event PRODUCTS deposit (inert under
         ``"beer_lambert"``, which never launches the module; selecting the
@@ -1878,6 +1901,11 @@ def cathode_defaults():
         "beam_deposition_model": "csda",
         "beam_coulomb_model": "fast_electron",
         "beam_anomalous_model": "quasilinear",
+        # ql_relaxation's plateau-formation bracket constant. INERT unless that
+        # closure is selected; the shipped value is the bracket's geometric
+        # centre and every headline under the closure is quoted at 10 and 100
+        # as well.
+        "ql_relaxation_coeff": 30.0,
         # Non-local product transport: DEFAULT OFF (bit-exact).
         "beam_product_transport": "local",
         # QL heating locality: DEFAULT OFF (bit-exact). The tail energy is

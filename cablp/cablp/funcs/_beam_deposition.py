@@ -54,6 +54,39 @@ Anomalous closure:
   detuning and saturation physics can lengthen it substantially; results
   using it must be presented per closure, like the drag story.
 
+- ``"ql_relaxation"``: the same instability, booked on its RELAXATION physics
+  instead of by fiat. Three ingredients, each literature-boxed:
+
+  * reactive trapping extracts a fraction
+    ``f_ext = C_trap min(n_b/2n_e, 1)^(1/3)`` of the beam energy per
+    relaxation, ``C_trap = 1`` (O'Neil, Winfrey & Malmberg 1971);
+  * the plateau forms over ``tau_QL = c (n_e/n_b)/omega_pe``, so the extracted
+    power is spread over ``L_rel = tau_QL v_b`` -- and ``c``, the Vedenov-era
+    O(10-100) coefficient, is the closure's ONE registered bracket constant
+    (``ql_relaxation_coeff``, default 30, every headline quoted at 10 and 100
+    as well);
+  * the wave hands its energy to BULK electrons by collisional damping at
+    ``nu_en/2``, so the deposition is bulk heating in the cell where the waves
+    damp -- the same bank the fiat closure fills, reached for a stated reason
+    rather than by assumption.
+
+  Modeled as mean-energy drag ``dE/dx = f_ext E / L_rel``, flux preserved, and
+  GATED on the boxed onset inequality: nothing is booked in a cell unless
+  ``0.687 omega_pe min(n_b/n_e,1)^(1/3) > nu_en/2`` AND ``omega_pe > nu_en``,
+  with ``nu_en = nn K_m(Te)`` on the boxed He e-n momentum-transfer table
+  (``_cross.he_electron_momentum_transfer_rate_cm3_s``). Over the working range
+  ``n_e = 1e8-1e11`` the gate is expected permanently open by a factor
+  400-2500: linear onset is NOT the gating physics, which is precisely why the
+  closure is built on relaxation. The gate is evaluated per cell anyway so the
+  statement stays a computed property rather than a claim about a range.
+
+  Unlike ``"quasilinear"`` this closure has NO weak-beam cutoff: the
+  ``min(., 1)`` caps carry the ``n_b >~ n_e`` corner (a flagged inference), so
+  it is defined across breakdown as well as in the main-discharge column.
+  Requires ``beam_area_cm2`` and ``ql_relaxation_coeff``. The three closures
+  ``{none, quasilinear, ql_relaxation}`` are a declared BRACKET and a result
+  must state which one it used.
+
 The primary is followed until it exits the domain (transmitted) or its
 energy crosses ``E_stop`` (default: the lowest inelastic threshold, He 2^1S
 at 20.6158 eV), where the sub-threshold residual is banked as plasma heating
@@ -375,6 +408,7 @@ from ._cross import (
     _HE_LOG_SIGMA,
     He_EII_cross_lkup,
     He_beam_excitation_channel_lkup,
+    he_electron_momentum_transfer_rate_cm3_s,
     _he_beam_excitation_table,
 )
 from ._kernels import COMPILED_KERNELS as _COMPILED_KERNELS
@@ -383,6 +417,22 @@ _ERG_PER_EV = 1.602176634e-12
 _ME_CGS = 9.1093837015e-28  # electron mass [g]
 _E4_CGS = (4.80320425e-10) ** 4  # e^4 [esu^4]
 _OMEGA_PE_COEFF = 5.64e4  # omega_pe = 5.64e4 sqrt(n_e) [rad/s] (NRL)
+
+# --- ql_relaxation closure: the two literature-boxed coefficients -----------
+# Neither is a knob and neither is exposed as config. The closure's ONE
+# description-class constant is `ql_relaxation_coeff`, which is; both of these
+# are cited values, and their classes and honest bars live in
+# `solvers/_sim1d/core/config_defaults_provenance.md` under "QL relaxation
+# closure".
+#
+# Cold-beam growth rate coefficient, gamma_r = 0.687 w_pe (n_b/n_e)^(1/3).
+QL_GROWTH_COEFF = 0.687
+# Reactive-trapping extraction coefficient, f_ext = C_trap (n_b/2n_e)^(1/3).
+QL_TRAP_COEFF = 1.0
+
+# The declared anomalous-closure family. A bracket, not a default plus
+# alternatives: a result states which arm produced it.
+ANOMALOUS_MODELS = ("none", "quasilinear", "ql_relaxation")
 
 # He first ionization potential [eV], the module's STANDALONE default for the
 # ``I_ion_eV`` argument. Every solver path passes ``I_ion_eV`` explicitly from
@@ -638,6 +688,118 @@ def quasilinear_relaxation_length_cm(
     return ratio * (beam_speed_cm_s(E_eV) / omega_pe) * math.log(ratio)
 
 
+def beam_plasma_growth_rate_s(ne: float, n_b: float) -> float:
+    """Cold-beam beam-plasma (bump-on-tail) growth rate [1/s].
+
+    ``gamma_r = 0.687 * omega_pe * min(n_b/n_e, 1)**(1/3)`` with
+    ``omega_pe = 5.64e4 sqrt(n_e)``. Zero for an absent beam or plasma.
+
+    The ``min(., 1)`` cap keeps the expression finite where ``n_b`` approaches
+    or exceeds ``n_e``; there the cold-beam derivation no longer applies at all
+    and the cap holds the rate at ``0.687 omega_pe`` rather than continuing a
+    curve past its own domain. The cap is a FLAGGED INFERENCE and travels as one
+    -- it is not part of the cited result, which is the ``(n_b/n_e)**(1/3)``
+    scaling in the weak-beam limit.
+    """
+    if ne <= 0.0 or n_b <= 0.0:
+        return 0.0
+    omega_pe = _OMEGA_PE_COEFF * math.sqrt(ne)
+    return QL_GROWTH_COEFF * omega_pe * min(n_b / ne, 1.0) ** (1.0 / 3.0)
+
+
+def ql_onset_open(ne: float, nn: float, Te_eV: float, n_b: float) -> bool:
+    """Whether the boxed beam-plasma onset inequality is satisfied locally.
+
+    Two conditions, both evaluated on the LOCAL cell state:
+
+    * growth beats damping -- ``gamma_r > 0.5 * nu_en``, the half being the
+      conversion from the momentum-transfer collision frequency to the
+      AMPLITUDE damping rate of the Langmuir wave the instability drives;
+    * the wave exists as a wave -- ``omega_pe > nu_en``, i.e. the oscillation
+      completes before it is collisionally interrupted.
+
+    ``nu_en = nn * K_m(Te)`` uses the boxed He e-n momentum-transfer rate
+    coefficient (``_cross.he_electron_momentum_transfer_rate_cm3_s``).
+
+    Expected permanently OPEN over the working range: onset is not the gating
+    physics, relaxation is. It is evaluated anyway, and gates the booking, so
+    that the statement is a computed property of each cell rather than an
+    assertion made once about a range.
+    """
+    if ne <= 0.0 or n_b <= 0.0:
+        return False
+    omega_pe = _OMEGA_PE_COEFF * math.sqrt(ne)
+    nu_en = max(nn, 0.0) * float(
+        he_electron_momentum_transfer_rate_cm3_s(max(Te_eV, 0.0))
+    )
+    if not omega_pe > nu_en:
+        return False
+    return beam_plasma_growth_rate_s(ne, n_b) > 0.5 * nu_en
+
+
+def ql_trapped_fraction(ne: float, n_b: float) -> float:
+    """Beam-energy fraction reactive trapping extracts per relaxation.
+
+    ``f_ext = C_trap * min(n_b/(2 n_e), 1)**(1/3)`` -- the O'Neil, Winfrey &
+    Malmberg (1971) trapping scaling, with the same flagged-inference cap the
+    growth rate carries. Zero for an absent beam or plasma, and never above
+    ``C_trap``.
+    """
+    if ne <= 0.0 or n_b <= 0.0:
+        return 0.0
+    return QL_TRAP_COEFF * min(n_b / (2.0 * ne), 1.0) ** (1.0 / 3.0)
+
+
+def ql_relaxation_length_cm(
+    E_eV: float, ne: float, n_b: float, coeff: float
+) -> float:
+    """Plateau-formation length [cm], ``L_rel = tau_QL * v_b``.
+
+    ``tau_QL = coeff * (n_e/n_b) / omega_pe`` is the Vedenov-era quasilinear
+    plateau-formation time with ``coeff`` the registered O(10-100) bracket
+    constant (``ql_relaxation_coeff``); the beam covers ``v_b`` per unit time
+    while it forms, so the extracted power is spread over that length rather
+    than dumped at a point. Returns inf for an absent beam or plasma.
+
+    Note what this does NOT contain: the ``ln(n_e/n_b)`` of
+    :func:`quasilinear_relaxation_length_cm`. That factor is the fiat closure's
+    own estimate of the same length; here the order-unity content of the
+    estimate is carried explicitly by ``coeff``, whose bracket is reported with
+    every result, instead of being fixed by a logarithm.
+    """
+    if ne <= 0.0 or n_b <= 0.0 or coeff <= 0.0:
+        return math.inf
+    omega_pe = _OMEGA_PE_COEFF * math.sqrt(ne)
+    return coeff * (ne / n_b) * beam_speed_cm_s(E_eV) / omega_pe
+
+
+def ql_relaxation_stopping_eV_per_cm(
+    E_eV: float, ne: float, nn: float, Te_eV: float, n_b: float, coeff: float
+) -> float:
+    """Anomalous stopping [eV/cm] of the ``ql_relaxation`` closure.
+
+    ``dE/dx = f_ext * E / L_rel`` -- the trapped fraction of the beam energy,
+    delivered over the plateau-formation length. Identically 0.0 wherever the
+    boxed onset inequality is not satisfied (:func:`ql_onset_open`), which is
+    what makes the gate a property of the booking rather than a claim about it.
+
+    The extracted energy leaves the beam here and is banked as BULK electron
+    heating in the same cell: the beam's energy goes into Langmuir waves, and
+    the waves hand it to the bulk by collisional damping at ``nu_en/2``, which
+    is a bulk channel and not a tail one. Energy conservation is by
+    construction -- the banked decrement and the beam's own energy decrement are
+    the same product -- so extracted + retained-and-carried-out = launched.
+    """
+    if E_eV <= 0.0:
+        return 0.0
+    if not ql_onset_open(ne, nn, Te_eV, n_b):
+        return 0.0
+    L_rel = ql_relaxation_length_cm(E_eV, ne, n_b, coeff)
+    if not (math.isfinite(L_rel) and L_rel > 0.0):
+        return 0.0
+    return ql_trapped_fraction(ne, n_b) * E_eV / L_rel
+
+
 @dataclass(frozen=True)
 class BeamDepositionResult:
     """Per-cell deposition of one beam ray; arrays have shape (cells,).
@@ -791,6 +953,7 @@ def deposit_beam(
     coulomb_model: str = "fast_electron",
     anomalous_model: str = "none",
     beam_area_cm2: np.ndarray | float | None = None,
+    ql_relaxation_coeff: float | None = None,
     max_energy_fraction_per_substep: float = 0.02,
     anode_cross_index: int | None = None,
     anode_eta: float = 0.0,
@@ -811,8 +974,12 @@ def deposit_beam(
     with ``direction`` +1 (toward increasing index) or -1. Cells behind the
     launch point receive nothing.
 
-    ``anomalous_model``: ``"none"`` (default) or ``"quasilinear"``
-    (requires ``beam_area_cm2``, scalar or per-cell, to form n_b).
+    ``anomalous_model``: ``"none"`` (default), ``"quasilinear"`` or
+    ``"ql_relaxation"``. Both non-default values require ``beam_area_cm2``
+    (scalar or per-cell) to form n_b; ``"ql_relaxation"`` additionally requires
+    ``ql_relaxation_coeff``, the registered O(10-100) plateau-formation bracket
+    constant, and raises rather than substituting a default for it.
+    ``ql_relaxation_coeff`` is INERT under the other two models.
 
     **Anode-mesh interception (audit A15).** ``anode_cross_index`` is the first
     cell on the far (column) side of the anode face along the ray; when it is
@@ -957,17 +1124,38 @@ def deposit_beam(
         raise ValueError("nn, ne, Te, dz_cm must share one shape (cells,)")
     if direction not in (-1, 1):
         raise ValueError(f"direction must be +1 or -1 (got {direction})")
-    if anomalous_model not in ("none", "quasilinear"):
+    if anomalous_model not in ANOMALOUS_MODELS:
         raise ValueError(
             f"unknown anomalous_model {anomalous_model!r}; "
-            "expected 'none' or 'quasilinear'"
+            f"expected one of {sorted(ANOMALOUS_MODELS)}"
         )
-    if anomalous_model == "quasilinear":
+    if anomalous_model in ("quasilinear", "ql_relaxation"):
         if beam_area_cm2 is None:
-            raise ValueError("anomalous_model='quasilinear' needs beam_area_cm2")
+            raise ValueError(
+                f"anomalous_model={anomalous_model!r} needs beam_area_cm2"
+            )
         area = np.broadcast_to(
             np.asarray(beam_area_cm2, dtype=float), (cells,)
         )
+    ql_coeff = 0.0
+    if anomalous_model == "ql_relaxation":
+        # No default is substituted here. The plateau-formation coefficient is
+        # a REGISTERED BRACKET whose endpoints every headline is quoted at, so
+        # a caller that has not stated which arm it is on has not configured
+        # the closure -- picking one silently would put an unreported bracket
+        # arm behind a published number.
+        if ql_relaxation_coeff is None:
+            raise ValueError(
+                "anomalous_model='ql_relaxation' needs ql_relaxation_coeff "
+                "(the registered O(10-100) plateau-formation bracket "
+                "constant); there is deliberately no default here"
+            )
+        ql_coeff = float(ql_relaxation_coeff)
+        if not math.isfinite(ql_coeff) or ql_coeff <= 0.0:
+            raise ValueError(
+                "ql_relaxation_coeff must be finite and > 0 (got "
+                f"{ql_relaxation_coeff})"
+            )
     walk_tail = anomalous_transport == "tail_walk"
     E_tail = 0.0
     if walk_tail:
@@ -977,7 +1165,8 @@ def deposit_beam(
         if anomalous_model == "none":
             raise ValueError(
                 "anomalous_transport='tail_walk' requires an active anomalous "
-                "channel (anomalous_model='quasilinear'); with no anomalous "
+                "channel (anomalous_model='quasilinear' or "
+                "'ql_relaxation'); with no anomalous "
                 "drag there is no power to carry and the setting would do "
                 "nothing"
             )
@@ -1254,20 +1443,28 @@ def deposit_beam(
     # equivalence target and has to stay byte-for-byte reviewable, and an
     # added indent level would touch every one of its ~170 lines.
     #
-    # The four preconditions are the cases the transcription does not
+    # The five preconditions are the cases the transcription does not
     # reproduce, each routed back to Python so it behaves exactly as it always
     # has: an out-of-range ``launch`` (Python's ``range`` walks negative
     # indices or raises), ``I_ion_eV == 0`` (ZeroDivisionError), an unknown
-    # coulomb model (ValueError from ``coulomb_stopping_eV_per_cm``), and a
+    # coulomb model (ValueError from ``coulomb_stopping_eV_per_cm``), a
     # beam above the excitation table's ceiling (where the lookup falls back
-    # to the exact manifold sum). ``E`` only ever decreases along the march,
-    # so testing the launch energy settles the ceiling for the whole ray.
+    # to the exact manifold sum), and ``anomalous_model="ql_relaxation"``.
+    # ``E`` only ever decreases along the march, so testing the launch energy
+    # settles the ceiling for the whole ray.
+    #
+    # The anomalous precondition is a HARD one, not a performance choice: the
+    # kernel takes the anomalous channel as a BOOLEAN and applies the fiat
+    # quasilinear drag when it is set, so offering it ``ql_relaxation`` would
+    # silently run the wrong closure. It takes the Python march instead, which
+    # is where the new closure lives.
     _csda_ctx = None
     if (
         _CSDA_MARCH is not None
         and 0 <= launch < cells
         and I_ion_eV != 0.0
         and coulomb_model in _COULOMB_MODEL_CODE
+        and anomalous_model in ("none", "quasilinear")
     ):
         _csda_ctx = _csda_tables()
         if not E < _csda_ctx.exc_top:
@@ -1396,6 +1593,13 @@ def deposit_beam(
                 l_ql = quasilinear_relaxation_length_cm(E, ne_c, n_b)
                 if math.isfinite(l_ql) and l_ql > 0.0:
                     L_anom = E / l_ql
+            elif anomalous_model == "ql_relaxation":
+                n_b = gamma / (
+                    float(area[cell]) * beam_speed_cm_s(E)
+                )
+                L_anom = ql_relaxation_stopping_eV_per_cm(
+                    E, ne_c, nn_c, Te_c, n_b, ql_coeff
+                )
             L_tot = L_pot + L_sec + L_exc + L_coul + L_anom
             if L_tot <= 0.0:
                 break  # vacuum cell: free streaming
@@ -1896,6 +2100,7 @@ def deposit_beam_two_stream(
     coulomb_model: str = "fast_electron",
     anomalous_model: str = "none",
     beam_area_cm2: np.ndarray | float | None = None,
+    ql_relaxation_coeff: float | None = None,
     max_energy_fraction_per_substep: float = 0.02,
     anode_cross_index: int | None = None,
     anode_eta: float = 0.0,
@@ -2023,10 +2228,10 @@ def deposit_beam_two_stream(
     energy by the same weights therefore leaves the energy side exactly where
     it shipped -- only the sum is read.
     """
-    if anomalous_model not in ("none", "quasilinear"):
+    if anomalous_model not in ANOMALOUS_MODELS:
         raise ValueError(
             f"unknown anomalous_model {anomalous_model!r}; "
-            "expected 'none' or 'quasilinear'"
+            f"expected one of {sorted(ANOMALOUS_MODELS)}"
         )
     if anode_eta != 0.0 and not (0.0 <= anode_eta < 1.0):
         raise ValueError(f"anode_eta must be in [0, 1) (got {anode_eta})")
@@ -2060,12 +2265,33 @@ def deposit_beam_two_stream(
                 f"(got {anode_cross_index}, cells={cells})"
             )
     area = None
-    if anomalous_model == "quasilinear":
+    if anomalous_model in ("quasilinear", "ql_relaxation"):
         if beam_area_cm2 is None:
-            raise ValueError("anomalous_model='quasilinear' needs beam_area_cm2")
+            raise ValueError(
+                f"anomalous_model={anomalous_model!r} needs beam_area_cm2"
+            )
         area = np.broadcast_to(
             np.asarray(beam_area_cm2, dtype=float), (cells,)
         )
+    ql_coeff = 0.0
+    if anomalous_model == "ql_relaxation":
+        # No default is substituted here. The plateau-formation coefficient is
+        # a REGISTERED BRACKET whose endpoints every headline is quoted at, so
+        # a caller that has not stated which arm it is on has not configured
+        # the closure -- picking one silently would put an unreported bracket
+        # arm behind a published number.
+        if ql_relaxation_coeff is None:
+            raise ValueError(
+                "anomalous_model='ql_relaxation' needs ql_relaxation_coeff "
+                "(the registered O(10-100) plateau-formation bracket "
+                "constant); there is deliberately no default here"
+            )
+        ql_coeff = float(ql_relaxation_coeff)
+        if not math.isfinite(ql_coeff) or ql_coeff <= 0.0:
+            raise ValueError(
+                "ql_relaxation_coeff must be finite and > 0 (got "
+                f"{ql_relaxation_coeff})"
+            )
     frac = float(max_energy_fraction_per_substep)
     if not 0.0 < frac < 1.0:
         raise ValueError(
@@ -2107,7 +2333,8 @@ def deposit_beam_two_stream(
         if anomalous_model == "none":
             raise ValueError(
                 "anomalous_transport='tail_walk' requires an active anomalous "
-                "channel (anomalous_model='quasilinear'); with no anomalous "
+                "channel (anomalous_model='quasilinear' or "
+                "'ql_relaxation'); with no anomalous "
                 "drag there is no power to carry and the setting would do "
                 "nothing"
             )
@@ -2400,6 +2627,11 @@ def deposit_beam_two_stream(
                     l_ql = quasilinear_relaxation_length_cm(E_arm, ne_c, n_b)
                     if math.isfinite(l_ql) and l_ql > 0.0:
                         L_anom = E_arm / l_ql
+                elif anomalous_model == "ql_relaxation":
+                    n_b = gamma_total / (area_c * beam_speed_cm_s(E_arm))
+                    L_anom = ql_relaxation_stopping_eV_per_cm(
+                        E_arm, ne_c, nn_c, Te_c, n_b, ql_coeff
+                    )
                 L_tot = L_pot + L_sec + L_exc + L_coul + L_anom
                 if L_tot <= 0.0:
                     break  # vacuum cell: free streaming

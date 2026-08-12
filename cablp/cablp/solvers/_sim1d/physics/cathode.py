@@ -1255,6 +1255,12 @@ def _csda_beam_deposition(
     """
     coulomb_model = str(input_dict.get("beam_coulomb_model", "fast_electron"))
     anomalous_model = str(input_dict.get("beam_anomalous_model", "none"))
+    # Read unconditionally, threaded conditionally (below). ``None`` is what
+    # the module refuses on rather than substituting a default for, so a config
+    # that selects the closure without registering a bracket arm still raises
+    # -- the solver's construction-time check is the loud copy of the same
+    # requirement.
+    ql_relaxation_coeff = input_dict.get("ql_relaxation_coeff", None)
     # The channel medium every ray below marches through, and the
     # cross-section the quasilinear closure forms its beam density on. Without
     # a coverage view these are the mean fields and the geometry area itself,
@@ -1434,6 +1440,12 @@ def _csda_beam_deposition(
         )
         if anomalous_model != "none":
             ray_kwargs["beam_area_cm2"] = beam_area_cm2
+        # Presence-gated exactly like the area above: the bracket constant only
+        # reaches the module when the closure that reads it is selected, so the
+        # other two arms enter deposit_beam with the argument list they shipped
+        # with.
+        if anomalous_model == "ql_relaxation":
+            ray_kwargs["ql_relaxation_coeff"] = ql_relaxation_coeff
         interception_kwargs = {}
         if anode_interception and eta > 0.0 and anode_faces.size > 0:
             # The ray crosses the anode face between cell ``f-1`` and cell ``f``;
@@ -1471,6 +1483,8 @@ def _csda_beam_deposition(
             )
             if anomalous_model != "none":
                 two_stream_kwargs["beam_area_cm2"] = beam_area_cm2
+            if anomalous_model == "ql_relaxation":
+                two_stream_kwargs["ql_relaxation_coeff"] = ql_relaxation_coeff
             # The GAP PROBE's argument list, taken here -- before the walk
             # block is added -- so the two-medium probe mirrors the
             # single-medium one, which is handed ``ray_kwargs`` and has never
@@ -2444,14 +2458,23 @@ def beam_anomalous_power_density(
     input_flags,
     cathode_solve=None,
 ):
-    """Return the QL/anomalous share of ``beam_power_deposition`` [erg cm^-3 s^-1].
+    """Return the anomalous share of ``beam_power_deposition`` [erg cm^-3 s^-1].
 
-    The quasilinear beam-plasma channel's contribution to the ``Ee`` row that
+    The beam-plasma channel's contribution to the ``Ee`` row that
     :func:`beam_ionization_rhs_terms` books, read off the SAME
     ``BeamDepositionResult`` objects and put through the SAME conservative
     smoothing kernel that :func:`_beam_ionization_sources` applies to the
     lumped power. Subtracting this from that row therefore removes exactly the
     anomalous share and nothing else.
+
+    This is a READER and is closure-agnostic: it reports whatever
+    ``heating_anomalous_erg_s`` the selected ``beam_anomalous_model`` produced,
+    whether that is the fiat ``"quasilinear"`` drag or ``"ql_relaxation"``'s
+    gated, trapping-limited extraction. The POLICY of what a passive cell may
+    book is model-keyed and lives with the tracer
+    (``solver._tracer_beam_rows``), deliberately not here -- a reader that
+    silently returned zero for one closure could not be used to audit that
+    policy.
 
     The argument list is the one :func:`beam_ionization_rhs_terms` takes, minus
     what only the other rows need, and DELIBERATELY so: the two functions must
@@ -2466,8 +2489,9 @@ def beam_anomalous_power_density(
 
     Zero whenever there is no anomalous power to speak of: the booking is off,
     no cathode solve, no CSDA deposition (the Beer-Lambert profile has no
-    anomalous channel at all), or ``beam_anomalous_model="none"`` (where
-    ``heating_anomalous_erg_s`` is identically zero by construction).
+    anomalous channel at all), ``beam_anomalous_model="none"`` (where
+    ``heating_anomalous_erg_s`` is identically zero by construction), or
+    ``"ql_relaxation"`` with its onset gate closed in every cell.
 
     Under ``heating_anomalous_transport="tail_walk"`` this is the WALKED
     profile -- where the tail electrons actually deposited -- which is the
