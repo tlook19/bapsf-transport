@@ -2522,9 +2522,25 @@ class LAPDSim1D:
             "ln_lambda_min": float(self._input_dict.get("ln_lambda_min", 1.0)),
         }
 
-    def _tracer_beam_smoothing_cm(self):
-        """Return the deposition smoothing width the beam booking used [cm]."""
-        return float(self._input_dict.get("beam_deposition_smoothing_cm", 0.0))
+    def _tracer_beam_kwargs(self, state, cathode_solve, time):
+        """Return the argument set BOTH beam readers must be built from.
+
+        One object, passed to ``beam_ionization_rhs_terms`` and to
+        ``beam_anomalous_power_density`` alike, so the row and the anomalous
+        share it is asked to give back cannot be built from different flags,
+        a different coverage view or a different smoothing width.
+        """
+        return {
+            "state": state,
+            "floors": self._floors,
+            "ion_mass_g": self._ion_mass_g,
+            "geometry": self._geometry,
+            "input_dict": self._input_dict,
+            "input_flags": self._effective_cathode_flags(
+                time=time, active_only=True
+            ),
+            "cathode_solve": cathode_solve,
+        }
 
     def _tracer_beam_rows(self, state, cathode_solve, time):
         """Return ``(S, P_net, P_full)``: the beam rows the balance consumes.
@@ -2558,16 +2574,11 @@ class LAPDSim1D:
         zeros = np.zeros(self._geometry.cells, dtype=float)
         if cathode_solve is None:
             return zeros, zeros.copy(), zeros.copy()
+        beam_kwargs = self._tracer_beam_kwargs(state, cathode_solve, time)
         terms = beam_ionization_rhs_terms(
-            state=state,
-            floors=self._floors,
-            ion_mass_g=self._ion_mass_g,
-            geometry=self._geometry,
-            input_dict=self._input_dict,
-            input_flags=self._effective_cathode_flags(time=time, active_only=True),
             I_ion=self._I_ion,
-            cathode_solve=cathode_solve,
             coverage=self._coverage_view(state, time),
+            **beam_kwargs,
         )
         S = np.asarray(terms["beam_ionization_birth"].n, dtype=float)
         P_full = (
@@ -2575,11 +2586,7 @@ class LAPDSim1D:
             + np.asarray(terms["beam_ionization_cost"].Ee, dtype=float)
             + np.asarray(terms["beam_excitation_radiation"].Ee, dtype=float)
         )
-        P_ql = beam_anomalous_power_density(
-            cathode_solve=cathode_solve,
-            geometry=self._geometry,
-            smoothing_cm=self._tracer_beam_smoothing_cm(),
-        )
+        P_ql = beam_anomalous_power_density(**beam_kwargs)
         P_net = P_full - np.where(self._tracer_passive, P_ql, 0.0)
         return S, P_net, P_full
 
@@ -2609,10 +2616,8 @@ class LAPDSim1D:
         return tracer_passive_anomalous_leak(
             P_beam_net_consumed=P_net,
             P_beam_net_full=P_full,
-            cathode_solve=cathode_solve,
-            geometry=self._geometry,
             passive=self._tracer_passive,
-            smoothing_cm=self._tracer_beam_smoothing_cm(),
+            beam_kwargs=self._tracer_beam_kwargs(state, cathode_solve, time),
         )
 
     def _tracer_prepare(self, dt):

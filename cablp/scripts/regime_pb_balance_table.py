@@ -30,12 +30,14 @@ import numpy as np
 
 from regime_r2_overlap_gate import build_config
 
+from cablp.funcs._beam_deposition import beam_speed_cm_s
 from cablp.solvers._sim1d import LAPDSim1D
 from cablp.solvers._sim1d.physics.cathode import beam_anomalous_power_density
 from cablp.solvers._sim1d.physics.tracer import (
     TracerBalanceError,
     quasistatic_Te_eV,
 )
+from cablp.vars._cons import qe_SI as QE_SI
 
 #: The rows the R2 table reports, in its order.
 ROW_NAMES = (
@@ -89,11 +91,7 @@ def beam_ledger(sim, state, time):
     geometry = sim._geometry
     Vp = np.asarray(geometry.plasma_volume_cm3, dtype=float)
     P_ql = beam_anomalous_power_density(
-        cathode_solve=cathode_solve,
-        geometry=geometry,
-        smoothing_cm=float(
-            sim._input_dict.get("beam_deposition_smoothing_cm", 0.0)
-        ),
+        **sim._tracer_beam_kwargs(state, cathode_solve, time)
     )
     totals = {}
     events = 0.0
@@ -301,6 +299,36 @@ def main(argv=None):
     worst = float(np.max(np.abs(leak)))
     print(f"   passive-cell QL leak invariant: max |leak| = {worst:.6g} "
           "erg cm^-3 s^-1 (must be exactly 0)")
+    # -- F. the n_act / QL-onset gap the overlap gate measures when it fails.
+    # The onset is not a number chosen here: `quasilinear_relaxation_length_cm`
+    # returns inf -- no anomalous drag at all -- unless n_b < 0.1 n_e, so the
+    # module's own weak-beam gate puts QL onset at n_e = 10 n_b. The tracer
+    # hands a cell to the fluid at `tracer_activation_ne`. Between the two,
+    # quasilinear absorption is live by the code's own criterion while the cell
+    # is still passive and the refusal is suppressing it.
+    print()
+    print("-- F. QL onset (the module's own weak-beam gate) vs tracer_activation_ne")
+    beam_result = cathode_solve.beam_result
+    n_act = float(fluid._input_dict["tracer_activation_ne"])
+    for end, result in (("low", beam_result.result),
+                        ("high", beam_result.result_twin)):
+        if result is None:
+            continue
+        Gamma0 = float(result.I_eth_star) / QE_SI
+        E0 = float(result.phi_c)
+        area = float(np.asarray(fluid._geometry.plasma_area_cm2)[ci])
+        n_b = Gamma0 / (area * beam_speed_cm_s(E0))
+        onset = 10.0 * n_b
+        print(f"   {end} end: E0 = {E0:.5g} eV, Gamma0 = {Gamma0:.5g} 1/s, "
+              f"beam density n_b = {n_b:.5g} cm^-3")
+        print(f"     QL onset n_e = 10 n_b = {onset:.5g} cm^-3; "
+              f"tracer_activation_ne = {n_act:.5g} cm^-3")
+        print(f"     GAP: n_act / n_QL_onset = {n_act / onset:.5g} "
+              f"({np.log10(n_act / onset):.3g} decades of density in which QL "
+              "is live and the cell is still passive)")
+    print(f"   observed: the module books QL power at this background, where "
+          f"n = {float(np.asarray(state.n)[ci]):.4g} cm^-3 < n_act")
+
     print()
     print(f"== outcome: the balance {'HAS' if status == 'RAN' else 'has NO'} a "
           f"root at stance under the corrected booking; tracer arm {status}")

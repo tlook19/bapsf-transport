@@ -48,6 +48,7 @@ from cablp.solvers._sim1d.physics.cathode import (
     _ray_gap_breakout,
     beam_absorption_weights,
     beam_gap_ledger_mismatch,
+    beam_ionization_rhs_terms,
     beam_launch,
     cathode_sample_indices,
 )
@@ -15115,11 +15116,10 @@ print(json.dumps({
     _r2ql_S, _r2ql_net, _r2ql_full = _r2ql_sim._tracer_beam_rows(
         _r2ql_sim.state, _r2ql_solve, _r2ql_sim._time
     )
-    _r2ql_power = _r2.beam_anomalous_power_density(
-        cathode_solve=_r2ql_solve,
-        geometry=_r2ql_sim._geometry,
-        smoothing_cm=0.0,
+    _r2ql_beam_kwargs = _r2ql_sim._tracer_beam_kwargs(
+        _r2ql_sim.state, _r2ql_solve, _r2ql_sim._time
     )
+    _r2ql_power = _r2.beam_anomalous_power_density(**_r2ql_beam_kwargs)
     # PRECONDITION, and the reason the assertions below are not vacuous: there
     # IS anomalous power on passive cells at this state. Without it a refusal
     # that does nothing would pass everything that follows.
@@ -15147,8 +15147,8 @@ print(json.dumps({
     _r2ql_real = solver_module.beam_anomalous_power_density
     try:
         solver_module.beam_anomalous_power_density = (
-            lambda *, cathode_solve, geometry, smoothing_cm=0.0: np.zeros(
-                int(geometry.cells), dtype=float
+            lambda *_args, **kwargs: np.zeros(
+                int(kwargs["geometry"].cells), dtype=float
             )
         )
         _r2ql_leak = _r2ql_sim.tracer_passive_anomalous_leak()
@@ -15165,6 +15165,58 @@ print(json.dumps({
     assert float(
         np.max(np.abs(_r2ql_sim.tracer_passive_anomalous_leak()))
     ) == 0.0
+
+    # The production stance smooths the deposition over a fixed physical width
+    # (50 cm), and the smoothing is applied to the LUMPED power -- so the
+    # anomalous share has to go through the same kernel or the subtraction
+    # removes a differently-shaped profile from the one that was booked. This
+    # case is here because getting it wrong is quiet: the arrays still have the
+    # right units and the right total, only the profile is wrong.
+    _r2ql_sm_params, _r2ql_sm_flags = _r2ql_config(
+        beam_deposition_smoothing_cm=50.0
+    )
+    _r2ql_sm_sim = LAPDSim1D(_r2ql_sm_params, _r2ql_sm_flags)
+    _r2ql_sm_sim.run(t_end=1.0e-6, dt=1.0e-7)
+    _r2ql_sm_solve = _r2ql_sm_sim.solve_cathode_boundary(
+        state=_r2ql_sm_sim.state, time=_r2ql_sm_sim._time, update_cache=False
+    )
+    _r2ql_sm_rows = _r2ql_sm_sim._tracer_beam_rows(
+        _r2ql_sm_sim.state, _r2ql_sm_solve, _r2ql_sm_sim._time
+    )
+    _r2ql_sm_kwargs = _r2ql_sm_sim._tracer_beam_kwargs(
+        _r2ql_sm_sim.state, _r2ql_sm_solve, _r2ql_sm_sim._time
+    )
+    _r2ql_sm_power = _r2.beam_anomalous_power_density(**_r2ql_sm_kwargs)
+    # The unsmoothed share is a DIFFERENT array, so the assertion below is
+    # about the kernel and not merely about subtracting something.
+    _r2ql_sm_kwargs_raw = dict(
+        _r2ql_sm_kwargs,
+        input_dict=dict(
+            _r2ql_sm_kwargs["input_dict"], beam_deposition_smoothing_cm=0.0
+        ),
+    )
+    _r2ql_sm_raw = _r2.beam_anomalous_power_density(**_r2ql_sm_kwargs_raw)
+    assert not np.array_equal(_r2ql_sm_power, _r2ql_sm_raw), (
+        "the smoothing case is vacuous: the kernel changed nothing"
+    )
+    assert np.array_equal(
+        _r2ql_sm_rows[1],
+        _r2ql_sm_rows[2]
+        - np.where(_r2ql_sm_sim._tracer_passive, _r2ql_sm_power, 0.0),
+    ), "the refused QL share must go through the booking's own smoothing kernel"
+    assert float(
+        np.max(np.abs(_r2ql_sm_sim.tracer_passive_anomalous_leak()))
+    ) == 0.0
+    # Conservative kernel: smoothing moves the anomalous power around, it does
+    # not create or destroy it.
+    _r2ql_sm_Vp = np.asarray(
+        _r2ql_sm_sim._geometry.plasma_volume_cm3, dtype=float
+    )
+    assert abs(
+        float(np.sum(_r2ql_sm_power * _r2ql_sm_Vp))
+        / float(np.sum(_r2ql_sm_raw * _r2ql_sm_Vp))
+        - 1.0
+    ) < 1e-12, "the smoothing kernel must conserve the anomalous power total"
 
     # PRESENCE GATE for the new code: with the flag OFF there are no passive
     # cells, the beam booking the tracer helpers report is the fluid's own
@@ -15188,16 +15240,37 @@ print(json.dumps({
         np.max(np.abs(_r2ql_off_sim.tracer_passive_anomalous_leak()))
     ) == 0.0
 
-    # The Beer-Lambert profile has no anomalous channel to read, so the
-    # accessor is zero there rather than guessing -- and the tracer refuses the
-    # combination outright, because a run configured that way reads as though
-    # the correction is doing work when neither the channel nor its refusal is
-    # live.
+    # With no cathode solve there is nothing to read and the accessor is zero
+    # rather than guessing.
     assert not np.any(
         _r2.beam_anomalous_power_density(
-            cathode_solve=None, geometry=_r2ql_sim._geometry, smoothing_cm=0.0
+            **dict(_r2ql_beam_kwargs, cathode_solve=None)
         )
     )
+    # And the accessor shares the BOOKING's gate, not the deposition object's
+    # presence: read back through flags that switch the beam rows off, the same
+    # live solve yields zero. Without this the subtraction could remove power
+    # from a row that booked none.
+    _r2ql_gate_kwargs = dict(
+        _r2ql_beam_kwargs,
+        input_flags=dict(_r2ql_beam_kwargs["input_flags"],
+                         cathode_coupling=False),
+    )
+    assert _r2ql_solve.beam_deposition is not None
+    assert not np.any(_r2.beam_anomalous_power_density(**_r2ql_gate_kwargs))
+    assert not np.any(
+        np.asarray(
+            beam_ionization_rhs_terms(
+                I_ion=_r2ql_sim._I_ion, coverage=None, **_r2ql_gate_kwargs
+            )["beam_power_deposition"].Ee,
+            dtype=float,
+        )
+    )
+
+    # The Beer-Lambert profile has no anomalous channel at all, and the tracer
+    # refuses the combination outright, because a run configured that way reads
+    # as though the correction is doing work when neither the channel nor its
+    # refusal is live.
     _r2_refuses(
         "beam_anomalous_model", beam_deposition_model="beer_lambert"
     )

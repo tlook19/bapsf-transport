@@ -680,6 +680,103 @@ and none of those is a fix to be improvised inside the tracer. Until it is
 resolved the tracer cannot run at the production stance, and the two run-level
 gates below report that rather than a number.
 
+#### Corrected beam power booking on passive cells (AMENDMENT)
+
+The section above is the record of a measurement and stands as written. This
+block is what came of it: the balance's failure was traced to the **booking**
+the balance was fed, not to the balance, and the correction restores a root at
+the stance. Both are kept, because the second only makes sense against the
+first.
+
+**The diagnosis.** Of the beam power the deposition module books into plasma
+electrons at the pre-breakdown stance, **91.8%** is the quasilinear/anomalous
+channel — 3978 W of the 4334 W it banks, against 0.36 W of collisional Coulomb
+drag. Per cell it is 95.3% of the `beam_power_deposition` row at the cathode
+cell and 91.6% at the column cell. But quasilinear absorption is a
+beam-**plasma** instability: the beam's energy goes into a Langmuir wave that
+the plasma then damps. At vacuum-class density there is no wave medium, so the
+channel does not exist and booking its power was describing an interaction with
+a plasma that is not there. That single channel is the whole of the 8.3 keV per
+beam-born electron the section above reports: with it refused the figure is
+**607 eV**, and the local channels can absorb what remains.
+
+**The correction.** On a cell the tracer owns, the anomalous share of the
+deposited power is subtracted from the beam power the quasi-static balance
+absorbs. What survives on a passive cell is what does not need a wave medium:
+collisional beam drag on plasma electrons (degree 1 in `n`, and accordingly
+tiny at vacuum), the end-of-range terminal dump, the secondary-electron
+residue, and the ionization-birth bookkeeping — all unchanged.
+
+**The gate is the passive mask and nothing else.** No density threshold is
+introduced and no constant is registered: the tracer→fluid handoff and the
+onset of quasilinear absorption are made the *same event* by construction. An
+ACTIVE cell books the anomalous channel in full, exactly as before, and the
+fluid path — every cell active, tracer off or absent — is untouched and
+bit-exact. `physics.tracer.passive_anomalous_leak` is the auditable invariant
+(zero on every passive cell); it recomputes the anomalous share through its own
+reference rather than through the subtraction it audits, so a removed refusal
+is still caught, and `smoke_sim1d.py` removes the refusal and checks that it is.
+
+`regime_tracer` refuses `beam_anomalous_model != "none"` with a non-CSDA
+deposition model at construction: the anomalous channel exists only on the CSDA
+rays, so such a run reads as though the correction is doing work when neither
+the channel nor its refusal is live.
+
+**RE-MEASURED**, same stance, same instant (`nx = 20`, `t = 1.0423e-05 s`,
+fluid-arm background), by `scripts/regime_pb_balance_table.py`:
+
+| `Ee` row at cell 2 (cathode) | erg cm⁻³ s⁻¹ | at cell 7 (column) |
+|---|---|---|
+| `beam_power_deposition` as booked | +8.852e5 | +5.533e5 |
+| — of which QL/anomalous | +8.439e5 | +5.071e5 |
+| — **remainder, what a passive cell keeps** | **+4.132e4** | **+4.626e4** |
+| `heat_conduction` | −4.336e5 | −8.259e5 |
+| `plasma_advective_flux` | +1.278e5 | +4.123e4 |
+| `cathode_surface_loss` | −6.912e4 | −9.973e5 |
+| `ionization_energy_cost` | −5.512e4 | −6.080e4 |
+| `electron_neutral_cooling` | −2.153e4 | −2.438e4 |
+| `anode_collection` | 0 | −5.450e4 |
+
+The kept remainder is now *smaller* than the local sinks rather than an order
+of magnitude above them, which is the whole of the repair. Conduction and the
+boundary losses are still the dominant sinks and are still not local — that
+statement from the section above is unchanged and is not what was wrong.
+
+Density scan at that same background, `Te` reported at cells 2/7:
+
+| density | as booked (the original scan) | with QL refused |
+|---|---|---|
+| ×1 (actual, `n ≈ 4.5e9`) | **no root** | **root, `Te` = 23.9 / 24.5 eV, 1 sign change** |
+| ×10 | root, 75.5 / 31.6 eV, 1 sign change | root, 7.63 / 7.61 eV, 1 sign change |
+| ×100 | root, 10.8 / 8.31 eV, 1 sign change | root, 4.23 / 4.20 eV, 1 sign change |
+| ×1000 | root, 4.86 / 0.1 eV, **2 sign changes** | root at the floor, 0 sign changes |
+| ×10⁴ | root at the floor | root at the floor |
+
+**OUTCOME: the quasi-static closure SURVIVES.** The balance has a root at the
+stance the tracer is meant to run at, and the multi-valuedness three decades
+above it is gone as well. End to end, the tracer arm at the production stance
+runs the full window (`t_end = 3e-5 s`) instead of raising, so the tracer arms.
+
+Two honest caveats on the comparison, neither of which changes the outcome:
+
+- The original scan's `Te` values at ×10 and ×100 (22.9 eV at cell 2, 49.4 eV
+  max) do **not** reproduce against the shipped code at the shipped stance; the
+  as-booked column above (75.5 eV at cell 2) is what the current code gives,
+  and 49.4 eV is its cell-3 value. The original text attributes the difference
+  to the surface-loss row, and at the shipped `characteristic_boundary` stance
+  that row's `Ee` is routed to the cathode term and is zero at the cathode
+  cell. The ×1 refusal, the ×1000 multi-valuedness and the ×10⁴ floor all
+  reproduce exactly, as does every non-conduction row of the channel table to
+  four figures.
+- The `heat_conduction` row re-measures at −4.336e5 / −8.259e5 against the
+  original's −3.633e5 / −8.635e5. It is a second difference of `Te` and so the
+  most reproduction-path-sensitive row in the table; every other row agrees to
+  four figures.
+
+What this does **not** settle: the tracer's density growth over that window
+stays near its seed (`n` max 2.9e9 at `t = 3e-5 s`, no cell activating), so the
+overlap gate's registered band is not reached from the tracer side. See Gates.
+
 ### Seed transport: the quantified neglect
 
 A passive cell's plasma does not advect (see the interface). The neglected term

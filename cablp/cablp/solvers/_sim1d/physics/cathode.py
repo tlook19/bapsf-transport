@@ -2435,7 +2435,15 @@ def _smooth_beam_density(W, density, Vp):
     return out
 
 
-def beam_anomalous_power_density(*, cathode_solve, geometry, smoothing_cm=0.0):
+def beam_anomalous_power_density(
+    state,
+    floors,
+    ion_mass_g,
+    geometry,
+    input_dict,
+    input_flags,
+    cathode_solve=None,
+):
     """Return the QL/anomalous share of ``beam_power_deposition`` [erg cm^-3 s^-1].
 
     The quasilinear beam-plasma channel's contribution to the ``Ee`` row that
@@ -2445,10 +2453,21 @@ def beam_anomalous_power_density(*, cathode_solve, geometry, smoothing_cm=0.0):
     lumped power. Subtracting this from that row therefore removes exactly the
     anomalous share and nothing else.
 
-    Zero whenever there is no anomalous power to speak of: no cathode solve, no
-    CSDA deposition (the Beer-Lambert profile has no anomalous channel at all),
-    or ``beam_anomalous_model="none"`` (where ``heating_anomalous_erg_s`` is
-    identically zero by construction).
+    The argument list is the one :func:`beam_ionization_rhs_terms` takes, minus
+    what only the other rows need, and DELIBERATELY so: the two functions must
+    agree about whether there is a booking at all. The beam rows are gated on
+    ``cathode_boundary_state(...).enabled``, which depends on the phase-resolved
+    ``input_flags`` the CALLER passes and not on whether the cathode solve
+    happens to be carrying deposition objects -- a solve made with the cathode
+    enabled can be read back in a phase where the rows are zero. Re-deriving
+    that gate here from the same inputs is what makes it impossible for the
+    subtraction to remove power from a row that booked none. The smoothing
+    width is read from ``input_dict`` for the same reason.
+
+    Zero whenever there is no anomalous power to speak of: the booking is off,
+    no cathode solve, no CSDA deposition (the Beer-Lambert profile has no
+    anomalous channel at all), or ``beam_anomalous_model="none"`` (where
+    ``heating_anomalous_erg_s`` is identically zero by construction).
 
     Under ``heating_anomalous_transport="tail_walk"`` this is the WALKED
     profile -- where the tail electrons actually deposited -- which is the
@@ -2459,17 +2478,31 @@ def beam_anomalous_power_density(*, cathode_solve, geometry, smoothing_cm=0.0):
     channel, and it is added to the density after the smoothing in both
     branches.
     """
-    cells = int(geometry.cells)
-    out = np.zeros(cells, dtype=float)
+    zeros = np.zeros(int(geometry.cells), dtype=float)
+    boundary = cathode_boundary_state(
+        state=state,
+        floors=floors,
+        ion_mass_g=ion_mass_g,
+        geometry=geometry,
+        input_dict=input_dict,
+        input_flags=input_flags,
+    )
+    if (
+        not boundary.enabled
+        or cathode_solve is None
+        or cathode_solve.beam_result is None
+    ):
+        return zeros
     deposition = getattr(cathode_solve, "beam_deposition", None)
     if deposition is None:
-        return out
+        return zeros
     Vp = np.asarray(geometry.plasma_volume_cm3, dtype=float)
+    out = zeros
     for dep in deposition.values():
         if dep is None:
             continue
-        out += np.asarray(dep.heating_anomalous_erg_s, dtype=float) / Vp
-    smoothing_cm = float(smoothing_cm)
+        out = out + np.asarray(dep.heating_anomalous_erg_s, dtype=float) / Vp
+    smoothing_cm = float(input_dict.get("beam_deposition_smoothing_cm", 0.0))
     if smoothing_cm > 0.0:
         out = _smooth_beam_density(
             _beam_smoothing_matrix(geometry, smoothing_cm), out, Vp

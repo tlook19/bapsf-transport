@@ -279,10 +279,8 @@ def passive_anomalous_leak(
     *,
     P_beam_net_consumed,
     P_beam_net_full,
-    cathode_solve,
-    geometry,
     passive,
-    smoothing_cm=0.0,
+    beam_kwargs,
 ):
     """Return the QL/anomalous power still inside a PASSIVE cell's booking.
 
@@ -299,7 +297,8 @@ def passive_anomalous_leak(
       ``Ee`` rows summed, with no knowledge of the tracer;
     * the anomalous share is recomputed HERE, from the deposition objects,
       through this module's own reference to
-      :func:`~.cathode.beam_anomalous_power_density`;
+      :func:`~.cathode.beam_anomalous_power_density`, on the ``beam_kwargs``
+      the beam rows themselves were built from;
     * ``P_beam_net_consumed`` is what the balance was actually handed.
 
     So a build in which the refusal has been removed, disabled, or rebound to
@@ -314,11 +313,7 @@ def passive_anomalous_leak(
     and QL onset are one event".
     """
     passive = np.asarray(passive, dtype=bool)
-    P_ql = beam_anomalous_power_density(
-        cathode_solve=cathode_solve,
-        geometry=geometry,
-        smoothing_cm=smoothing_cm,
-    )
+    P_ql = beam_anomalous_power_density(**beam_kwargs)
     expected = np.asarray(P_beam_net_full, dtype=float) - P_ql
     residual = np.asarray(P_beam_net_consumed, dtype=float) - expected
     return np.where(passive, residual, 0.0)
