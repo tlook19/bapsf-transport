@@ -2435,6 +2435,48 @@ def _smooth_beam_density(W, density, Vp):
     return out
 
 
+def beam_anomalous_power_density(*, cathode_solve, geometry, smoothing_cm=0.0):
+    """Return the QL/anomalous share of ``beam_power_deposition`` [erg cm^-3 s^-1].
+
+    The quasilinear beam-plasma channel's contribution to the ``Ee`` row that
+    :func:`beam_ionization_rhs_terms` books, read off the SAME
+    ``BeamDepositionResult`` objects and put through the SAME conservative
+    smoothing kernel that :func:`_beam_ionization_sources` applies to the
+    lumped power. Subtracting this from that row therefore removes exactly the
+    anomalous share and nothing else.
+
+    Zero whenever there is no anomalous power to speak of: no cathode solve, no
+    CSDA deposition (the Beer-Lambert profile has no anomalous channel at all),
+    or ``beam_anomalous_model="none"`` (where ``heating_anomalous_erg_s`` is
+    identically zero by construction).
+
+    Under ``heating_anomalous_transport="tail_walk"`` this is the WALKED
+    profile -- where the tail electrons actually deposited -- which is the
+    profile the booking used, so the two stay in step.
+
+    The ohmic gap booking is deliberately NOT included: it is the circuit's
+    ``I^2 R_p`` dissipated between cathode and anode, not a beam-plasma wave
+    channel, and it is added to the density after the smoothing in both
+    branches.
+    """
+    cells = int(geometry.cells)
+    out = np.zeros(cells, dtype=float)
+    deposition = getattr(cathode_solve, "beam_deposition", None)
+    if deposition is None:
+        return out
+    Vp = np.asarray(geometry.plasma_volume_cm3, dtype=float)
+    for dep in deposition.values():
+        if dep is None:
+            continue
+        out += np.asarray(dep.heating_anomalous_erg_s, dtype=float) / Vp
+    smoothing_cm = float(smoothing_cm)
+    if smoothing_cm > 0.0:
+        out = _smooth_beam_density(
+            _beam_smoothing_matrix(geometry, smoothing_cm), out, Vp
+        )
+    return out
+
+
 def _beam_ionization_sources(
     state,
     geometry,

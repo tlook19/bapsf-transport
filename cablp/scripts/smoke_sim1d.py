@@ -14762,6 +14762,7 @@ print(json.dumps({
     # FAIL on a deliberately broken variant, because a guard that cannot fire
     # is not a guard.
     # ==================================================================
+    from cablp.solvers._sim1d import solver as solver_module
     from cablp.solvers._sim1d.physics import tracer as _r2
 
     # ---- (i) the affine update IS the closed-form solution ----
@@ -15079,6 +15080,131 @@ print(json.dumps({
         _r2_nocen_sim.run(t_end=2.0e-10, dt=1.0e-10), "tracer_criterion_census"
     )
     assert _r2_nocen_sim._tracer_census_line() is None
+
+    # ---- (v) the QL/anomalous booking is REFUSED on passive cells ----
+    # Quasilinear absorption is a beam-PLASMA instability, so on a cell the
+    # tracer owns -- a cell that by definition carries no plasma worth speaking
+    # of -- there is no wave medium and the channel does not exist. The gate is
+    # the passive mask and nothing else: no density threshold is introduced, so
+    # the tracer-to-fluid handoff and the onset of QL absorption are one event.
+    # The tracer configs above start from a cold cathode, which does not launch
+    # a beam inside a smoke-sized window -- and with no beam there is no
+    # anomalous power, so every assertion here would pass on an empty set. The
+    # already-emitting cathode the CSDA blocks use is what makes the checks
+    # bite; the precondition below is what enforces that it did.
+    def _r2ql_config(**overrides):
+        params, flags = _r2_on_config()
+        params.update({
+            "cathode_warming_model": "none",
+            "cathode_Ts_base_K": None,
+            "cathode_surface_model": "none",
+            "cathode_phiwf_clean_eV": None,
+            "cathode_cleaning_E_th_eV": None,
+            "cathode_sample_smoothing": None,
+        })
+        params.update(overrides)
+        return params, flags
+
+    _r2ql_params, _r2ql_flags = _r2ql_config()
+    _r2ql_sim = LAPDSim1D(_r2ql_params, _r2ql_flags)
+    _r2ql_sim.run(t_end=1.0e-6, dt=1.0e-7)
+    _r2ql_passive = _r2ql_sim._tracer_passive
+    _r2ql_solve = _r2ql_sim.solve_cathode_boundary(
+        state=_r2ql_sim.state, time=_r2ql_sim._time, update_cache=False
+    )
+    _r2ql_S, _r2ql_net, _r2ql_full = _r2ql_sim._tracer_beam_rows(
+        _r2ql_sim.state, _r2ql_solve, _r2ql_sim._time
+    )
+    _r2ql_power = _r2.beam_anomalous_power_density(
+        cathode_solve=_r2ql_solve,
+        geometry=_r2ql_sim._geometry,
+        smoothing_cm=0.0,
+    )
+    # PRECONDITION, and the reason the assertions below are not vacuous: there
+    # IS anomalous power on passive cells at this state. Without it a refusal
+    # that does nothing would pass everything that follows.
+    assert float(np.max(np.abs(_r2ql_power[_r2ql_passive]))) > 0.0, (
+        "the QL-refusal assertions are vacuous: no anomalous power is booked "
+        "on any passive cell at this state, so nothing is being refused"
+    )
+    # The refusal removes exactly the anomalous share, and only there.
+    assert np.array_equal(
+        _r2ql_net, _r2ql_full - np.where(_r2ql_passive, _r2ql_power, 0.0)
+    ), "the passive-cell booking must be the full beam power minus QL exactly"
+    assert np.array_equal(
+        _r2ql_net[~_r2ql_passive], _r2ql_full[~_r2ql_passive]
+    ), "an ACTIVE cell's beam power booking must be untouched"
+    # The auditable invariant: zero, exactly, on every passive cell.
+    assert float(
+        np.max(np.abs(_r2ql_sim.tracer_passive_anomalous_leak()))
+    ) == 0.0, "QL power leaked into a passive cell's booking"
+
+    # ANTI-VACUITY: break the refusal and the invariant must catch it. Rebinding
+    # the solver module's own reference is the smallest faithful stand-in for
+    # deleting the subtraction -- the audit recomputes the anomalous share
+    # through physics.tracer's reference, so it does not travel through the path
+    # it is checking and still sees the truth.
+    _r2ql_real = solver_module.beam_anomalous_power_density
+    try:
+        solver_module.beam_anomalous_power_density = (
+            lambda *, cathode_solve, geometry, smoothing_cm=0.0: np.zeros(
+                int(geometry.cells), dtype=float
+            )
+        )
+        _r2ql_leak = _r2ql_sim.tracer_passive_anomalous_leak()
+    finally:
+        solver_module.beam_anomalous_power_density = _r2ql_real
+    assert np.array_equal(
+        _r2ql_leak, np.where(_r2ql_passive, _r2ql_power, 0.0)
+    ), (
+        "the passive-cell QL leak check is vacuous: with the refusal removed "
+        "it must report the whole anomalous power on the passive cells"
+    )
+    assert float(np.max(np.abs(_r2ql_leak))) > 0.0
+    # ... and the real refusal is back, so the invariant holds again.
+    assert float(
+        np.max(np.abs(_r2ql_sim.tracer_passive_anomalous_leak()))
+    ) == 0.0
+
+    # PRESENCE GATE for the new code: with the flag OFF there are no passive
+    # cells, the beam booking the tracer helpers report is the fluid's own
+    # untouched row, and the audit is identically zero.
+    _r2ql_off_params, _r2ql_off_flags = _r2ql_config()
+    _r2ql_off_flags["regime_tracer"] = False
+    _r2ql_off_sim = LAPDSim1D(_r2ql_off_params, _r2ql_off_flags)
+    _r2ql_off_sim.run(t_end=1.0e-6, dt=1.0e-7)
+    _r2ql_off_solve = _r2ql_off_sim.solve_cathode_boundary(
+        state=_r2ql_off_sim.state,
+        time=_r2ql_off_sim._time,
+        update_cache=False,
+    )
+    _r2ql_off_rows = _r2ql_off_sim._tracer_beam_rows(
+        _r2ql_off_sim.state, _r2ql_off_solve, _r2ql_off_sim._time
+    )
+    assert np.array_equal(_r2ql_off_rows[1], _r2ql_off_rows[2]), (
+        "with regime_tracer off nothing may be subtracted from the beam power"
+    )
+    assert float(
+        np.max(np.abs(_r2ql_off_sim.tracer_passive_anomalous_leak()))
+    ) == 0.0
+
+    # The Beer-Lambert profile has no anomalous channel to read, so the
+    # accessor is zero there rather than guessing -- and the tracer refuses the
+    # combination outright, because a run configured that way reads as though
+    # the correction is doing work when neither the channel nor its refusal is
+    # live.
+    assert not np.any(
+        _r2.beam_anomalous_power_density(
+            cathode_solve=None, geometry=_r2ql_sim._geometry, smoothing_cm=0.0
+        )
+    )
+    _r2_refuses(
+        "beam_anomalous_model", beam_deposition_model="beer_lambert"
+    )
+    _r2ql_bl_params, _r2ql_bl_flags = _r2_on_config()
+    _r2ql_bl_params["beam_deposition_model"] = "beer_lambert"
+    _r2ql_bl_params["beam_anomalous_model"] = "none"
+    LAPDSim1D(_r2ql_bl_params, _r2ql_bl_flags)
 
     # ---- the registered constants are exactly the registered constants ----
     # A key added to the wrong namespace silently does nothing (input_dict and

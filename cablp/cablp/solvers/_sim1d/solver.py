@@ -68,6 +68,7 @@ from .physics.kinetic_neutrals import (
 from .physics.cathode import (
     BEAM_GAP_LEDGER_POWER_ATOL,
     CoverageView1D,
+    beam_anomalous_power_density,
     beam_gap_ledger_mismatch,
     beam_ionization_rhs,
     beam_ionization_rhs_terms,
@@ -146,6 +147,7 @@ from .physics.tracer import (
     bind_census as tracer_bind_census,
     conducted_current_A as tracer_conducted_current_A,
     growth_rate as tracer_growth_rate,
+    passive_anomalous_leak as tracer_passive_anomalous_leak,
     quasistatic_Te_eV,
     relative_drift as tracer_relative_drift,
     resolve_criteria as resolve_tracer_criteria,
@@ -2251,6 +2253,26 @@ class LAPDSim1D:
                 "only and does not extend DVM support; accepted: "
                 f"{sorted(set(('moment',)) )} and any other moment closure"
             )
+        anomalous_model = str(
+            self._input_dict.get("beam_anomalous_model", "none")
+        )
+        deposition_model = str(
+            self._input_dict.get("beam_deposition_model", "beer_lambert")
+        )
+        if anomalous_model != "none" and deposition_model != "csda":
+            raise ValueError(
+                f"regime_tracer refuses beam_anomalous_model="
+                f"{anomalous_model!r} together with beam_deposition_model="
+                f"{deposition_model!r}: the anomalous channel exists only on "
+                "the CSDA deposition rays, so under any other deposition model "
+                "no quasilinear power is booked at all and the tracer's "
+                "passive-cell refusal of it has nothing to refuse. A run "
+                "configured this way reads as though the corrected booking is "
+                "doing work when neither the channel nor its refusal is live. "
+                "Accepted: beam_deposition_model='csda' with any "
+                "beam_anomalous_model, or beam_anomalous_model='none' with any "
+                "deposition model"
+            )
         if self._input_dict.get("restart_from", None) is not None:
             raise ValueError(
                 "regime_tracer cannot be combined with restart_from: the "
@@ -2500,19 +2522,42 @@ class LAPDSim1D:
             "ln_lambda_min": float(self._input_dict.get("ln_lambda_min", 1.0)),
         }
 
+    def _tracer_beam_smoothing_cm(self):
+        """Return the deposition smoothing width the beam booking used [cm]."""
+        return float(self._input_dict.get("beam_deposition_smoothing_cm", 0.0))
+
     def _tracer_beam_rows(self, state, cathode_solve, time):
-        """Return ``(S, P_net)``: the beam's particle birth and net electron power.
+        """Return ``(S, P_net, P_full)``: the beam rows the balance consumes.
 
         ``S`` is the ``n`` row of ``beam_ionization_birth`` -- the affine
         source, independent of ``n`` to the accuracy criterion (b) enforces.
-        ``P_net`` is the sum of the three beam rows the fluid books on ``Ee``
+        ``P_full`` is the sum of the three beam rows the fluid books on ``Ee``
         (deposition, ionization cost, excitation radiation), i.e. the net beam
-        heating of the electron fluid, which is what the quasi-static balance
-        has to absorb.
+        heating of the electron fluid.
+
+        ``P_net`` is ``P_full`` with the QUASILINEAR/ANOMALOUS share removed on
+        every cell the tracer owns, and it is ``P_net`` -- not ``P_full`` --
+        that the quasi-static balance absorbs. Quasilinear absorption is a
+        beam-PLASMA instability: it needs a wave medium, and a passive cell by
+        its own definition has no plasma to be that medium, so on such a cell
+        the channel does not exist and booking its power there was describing
+        an interaction with a plasma that is not there. The channels that
+        survive on a passive cell are the ones that do not need one: collisional
+        beam drag on plasma electrons (proportional to ``n``, and at
+        vacuum-class density accordingly tiny) and the ionization-birth
+        bookkeeping, both of which stay exactly as they were.
+
+        The subtraction is gated on the PASSIVE MASK and on nothing else. No
+        density threshold is introduced: the tracer-to-fluid handoff and the
+        onset of quasilinear absorption are made the same event by
+        construction, so a cell that has become active books the anomalous
+        channel in full, unchanged. NUMERICS.md, "Corrected beam power booking
+        on passive cells", is the statement of record, and
+        :meth:`tracer_passive_anomalous_leak` is the auditable invariant.
         """
         zeros = np.zeros(self._geometry.cells, dtype=float)
         if cathode_solve is None:
-            return zeros, zeros.copy()
+            return zeros, zeros.copy(), zeros.copy()
         terms = beam_ionization_rhs_terms(
             state=state,
             floors=self._floors,
@@ -2525,12 +2570,50 @@ class LAPDSim1D:
             coverage=self._coverage_view(state, time),
         )
         S = np.asarray(terms["beam_ionization_birth"].n, dtype=float)
-        P_net = (
+        P_full = (
             np.asarray(terms["beam_power_deposition"].Ee, dtype=float)
             + np.asarray(terms["beam_ionization_cost"].Ee, dtype=float)
             + np.asarray(terms["beam_excitation_radiation"].Ee, dtype=float)
         )
-        return S, P_net
+        P_ql = beam_anomalous_power_density(
+            cathode_solve=cathode_solve,
+            geometry=self._geometry,
+            smoothing_cm=self._tracer_beam_smoothing_cm(),
+        )
+        P_net = P_full - np.where(self._tracer_passive, P_ql, 0.0)
+        return S, P_net, P_full
+
+    def tracer_passive_anomalous_leak(self, state=None, time=None):
+        """Return the QL power still in each PASSIVE cell's booking; must be 0.
+
+        The audit form of the refusal in :meth:`_tracer_beam_rows`. It re-reads
+        the anomalous share from the deposition objects through
+        ``physics.tracer``'s own reference, so it does not travel through the
+        code path it is checking and a removed or neutered refusal is still
+        caught. Returns zeros when the tracer is not engaged: there are no
+        passive cells to audit.
+        """
+        cells = int(self._geometry.cells)
+        if not self._tracer_engaged:
+            return np.zeros(cells, dtype=float)
+        if state is None:
+            state = self.state
+        if time is None:
+            time = self._time
+        cathode_solve = self._cathode_solve
+        if cathode_solve is None:
+            cathode_solve = self.solve_cathode_boundary(
+                state=state, time=time, update_cache=False
+            )
+        _S, P_net, P_full = self._tracer_beam_rows(state, cathode_solve, time)
+        return tracer_passive_anomalous_leak(
+            P_beam_net_consumed=P_net,
+            P_beam_net_full=P_full,
+            cathode_solve=cathode_solve,
+            geometry=self._geometry,
+            passive=self._tracer_passive,
+            smoothing_cm=self._tracer_beam_smoothing_cm(),
+        )
 
     def _tracer_prepare(self, dt):
         """Return this attempt's frozen tracer coefficients, mutating nothing.
@@ -2549,7 +2632,7 @@ class LAPDSim1D:
             cathode_solve = self.solve_cathode_boundary(
                 state=state, time=time, update_cache=False
             )
-        S, P_net = self._tracer_beam_rows(state, cathode_solve, time)
+        S, P_net, _P_full = self._tracer_beam_rows(state, cathode_solve, time)
         n_true = np.maximum(np.asarray(state.n, dtype=float), 0.0)
         n_probe = np.maximum(n_true, float(self._floors["n"]))
         nn = np.asarray(state.nn, dtype=float)

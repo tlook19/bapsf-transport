@@ -26,6 +26,7 @@ from cablp.funcs._plasmaparams import c_log, time_elec_coll
 from cablp.vars._cons import ev_to_erg, m_e_SI, qe_SI
 
 from ..core.state import ConservativeState1D
+from .cathode import beam_anomalous_power_density
 from .energy import electron_cooling_rhs_terms, electron_ion_exchange_rhs
 from .flux import ion_sound_speed
 from .reactions import reaction_rates
@@ -272,6 +273,55 @@ def electron_loss_coefficients(
         + np.asarray(exchange.Ee, dtype=float)
     )
     return L1, L2
+
+
+def passive_anomalous_leak(
+    *,
+    P_beam_net_consumed,
+    P_beam_net_full,
+    cathode_solve,
+    geometry,
+    passive,
+    smoothing_cm=0.0,
+):
+    """Return the QL/anomalous power still inside a PASSIVE cell's booking.
+
+    Zero, cell by cell, is the invariant: on a cell the tracer owns, the
+    quasi-static balance must be fed the beam power MINUS the quasilinear
+    share, because quasilinear absorption is a beam-PLASMA instability and a
+    passive cell has no plasma to carry the wave. NUMERICS.md, "Corrected beam
+    power booking on passive cells", is the statement of record.
+
+    The check is deliberately built the long way round rather than by asking
+    the subtraction whether it subtracted:
+
+    * ``P_beam_net_full`` is the beam power the FLUID rows carry -- the three
+      ``Ee`` rows summed, with no knowledge of the tracer;
+    * the anomalous share is recomputed HERE, from the deposition objects,
+      through this module's own reference to
+      :func:`~.cathode.beam_anomalous_power_density`;
+    * ``P_beam_net_consumed`` is what the balance was actually handed.
+
+    So a build in which the refusal has been removed, disabled, or rebound to
+    something that returns zeros still gets caught: the checker's own anomalous
+    share does not travel through the code path it is auditing. The smoke's
+    anti-vacuity case removes the refusal exactly that way and asserts this
+    returns the full anomalous power.
+
+    ACTIVE cells are excluded, not audited-and-passed: on them the quasilinear
+    channel is real and its booking stands unchanged. The passive/active
+    boundary is the gate, which is the same statement as "the tracer handoff
+    and QL onset are one event".
+    """
+    passive = np.asarray(passive, dtype=bool)
+    P_ql = beam_anomalous_power_density(
+        cathode_solve=cathode_solve,
+        geometry=geometry,
+        smoothing_cm=smoothing_cm,
+    )
+    expected = np.asarray(P_beam_net_full, dtype=float) - P_ql
+    residual = np.asarray(P_beam_net_consumed, dtype=float) - expected
+    return np.where(passive, residual, 0.0)
 
 
 def _atomic_scan_temperatures_eV():
