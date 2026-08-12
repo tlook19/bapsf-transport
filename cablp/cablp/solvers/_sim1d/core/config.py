@@ -1452,7 +1452,13 @@ def cathode_defaults():
         Under the ``cathode_circuit_voltage_bound`` flag this cap is not the
         whole ceiling: the solve is run against ``min`` of it and the
         circuit-available voltage, and the ``bound_active`` diagnostic says
-        which of the two the solve sat on.
+        which of the two the solve sat on. That composition is in contract on
+        the capability-limited (pre-breakdown build) leg only: at the plateau
+        the anode fall subtracts in ``V_b = phi_c - phi_a + V_p``, so ``phi_c``
+        legitimately exceeds the circuit-available voltage and the composed
+        ceiling would clamp a correct solve without raising. This cap alone
+        has no such restriction — it is a domain guard on the atomic data and
+        holds in every regime.
     cathode_Rp_model:
         How the cathode solver's parallel plasma (gap) resistance ``R_p`` is
         built. ``"sample"`` (default, historical) is the solver's internal
@@ -2442,6 +2448,24 @@ input_flags_template_1d = {
     # cathode_coupling and V_bank > 0; inactive (ceiling falls back to the data
     # cap) wherever the available voltage is not positive, notably the zero-
     # bank inductive tail. Default OFF and bit-exact off.
+    #
+    # SCOPE -- THE BOUND'S CONTRACT IS THE CAPABILITY-LIMITED / NEAR-VACUUM
+    # REGIME, i.e. THE PRE-BREAKDOWN BUILD LEG. A FULL-WINDOW RUN WITH THIS
+    # FLAG ON IS OUT OF CONTRACT. The bound is a ceiling on phi_c, but the
+    # quantity the circuit actually supplies is the DEVICE voltage
+    # V_b = phi_c - phi_a + V_p, in which the anode fall SUBTRACTS. On the
+    # build leg phi_a is negligible and the two coincide, which is why the
+    # ceiling is the right object there. At the main-discharge plateau phi_a
+    # is not negligible: phi_c legitimately EXCEEDS the circuit-available
+    # voltage while V_b does not, so the composed ceiling would mis-clamp a
+    # physically correct solve -- forcing every plateau solve to
+    # capability_limited at phi_c = V_avail. Nothing raises when that happens;
+    # only the bound_active census shows it, so READ THE CENSUS on any run
+    # that reaches the plateau with this flag on. The plateau is 100 %
+    # classical with the flag off and the data cap never fires there, so this
+    # is a defect the flag would INTRODUCE, not one it inherits. A bound whose
+    # object is V_b and which is aware of phi_a is R2 work; until it exists,
+    # confine this flag to build-leg windows.
     "cathode_circuit_voltage_bound": False,
     # Gates the neutral-only pre-drive phase. DELIBERATELY LEFT ON while
     # tau_neutral_prebreakdown defaults to 0.0: the duration alone decides

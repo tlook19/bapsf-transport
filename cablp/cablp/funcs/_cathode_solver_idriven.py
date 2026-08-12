@@ -402,6 +402,16 @@ def solve_idriven(
     available voltage has no ceiling to offer and the caller passes ``None``
     there instead. NB the inductor's back-EMF is deliberately NOT counted as
     available voltage, so while the bound binds the loop current cannot fall.
+    SCOPE: this bounds ``phi_c``, but what the circuit supplies is the DEVICE
+    voltage ``V_b = phi_c - phi_a + V_p``, in which the anode fall SUBTRACTS.
+    The two coincide only where ``phi_a`` is negligible -- the
+    capability-limited / near-vacuum regime the pre-breakdown build leg sits
+    in, which is this argument's contract. Where ``phi_a`` is not negligible
+    (the main-discharge plateau) ``phi_c`` legitimately exceeds the available
+    voltage while ``V_b`` does not, and passing a value here would clamp a
+    correct solve to ``phi_c = circuit_V_avail_V`` and tag it
+    ``capability_limited`` with no error raised; only ``bound_active``
+    records it. Pass ``None`` outside the build leg.
     ``bridge`` enables the kT_s-width thermal bridge across the
     SCL<->classical release corner (``_bridge_release``); off reproduces
     the hard branches bit-for-bit (the M2 equivalence gate's condition).
