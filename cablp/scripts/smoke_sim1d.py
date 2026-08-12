@@ -14753,6 +14753,351 @@ print(json.dumps({
     assert float(np.max(_probe_cov_sim._coverage_deficit)) > 0.0
     assert "neutral_probe_source" in _probe_cov_sim.rhs_terms()
 
+    # ==================================================================
+    # REGIME-R2 PRE-BREAKDOWN PASSIVE TRACER (default off, bit-exact off)
+    #
+    # Four blocks, matching the pre-registered gate: (i) affine-update
+    # exactness against the closed form, (ii) presence gating, (iii) every
+    # construction-time refusal, (iv) ANTI-VACUITY -- each guard is shown to
+    # FAIL on a deliberately broken variant, because a guard that cannot fire
+    # is not a guard.
+    # ==================================================================
+    from cablp.solvers._sim1d.physics import tracer as _r2
+
+    # ---- (i) the affine update IS the closed-form solution ----
+    # Two cells, one growing and one decaying, plus the two removable
+    # singularities the expm1 form exists to handle.
+    _r2_n0 = np.array([3.0e9, 7.0e11])
+    _r2_gamma = np.array([2.5e4, -1.1e5])
+    _r2_S = np.array([4.0e13, 9.0e12])
+    _r2_dt = 3.7e-6
+    _r2_closed = (
+        (_r2_n0 + _r2_S / _r2_gamma) * np.exp(_r2_gamma * _r2_dt)
+        - _r2_S / _r2_gamma
+    )
+    _r2_got = _r2.affine_update(_r2_n0, _r2_gamma, _r2_S, _r2_dt)
+    assert np.max(np.abs(_r2_got / _r2_closed - 1.0)) < 1e-14, (
+        "R2 affine update must reproduce the closed-form solution",
+        _r2_got,
+        _r2_closed,
+    )
+    # gamma -> 0 is exact, not merely close: the update degenerates to n + S dt.
+    assert _r2.affine_update(_r2_n0, np.zeros(2), _r2_S, _r2_dt).tolist() == (
+        _r2_n0 + _r2_S * _r2_dt
+    ).tolist(), "R2 affine update at gamma = 0 must be exactly n + S*dt"
+    # ... and stays exact for a gamma so small that exp(x) - 1 would cancel to
+    # nothing. This is the whole reason the expm1 form is used.
+    _r2_tiny = np.full(2, 1.0e-13)
+    assert np.max(
+        np.abs(
+            _r2.affine_update(_r2_n0, _r2_tiny, _r2_S, _r2_dt)
+            / (_r2_n0 + _r2_S * _r2_dt)
+            - 1.0
+        )
+    ) < 1e-12, "R2 affine update must stay regular as gamma -> 0"
+    # n = 0 is a REGULAR state: a true-vacuum cell fills from the source alone.
+    _r2_vac = _r2.affine_update(np.zeros(2), _r2_gamma, _r2_S, _r2_dt)
+    assert np.allclose(
+        _r2_vac,
+        _r2_S * np.expm1(_r2_gamma * _r2_dt) / _r2_gamma,
+        rtol=1e-14,
+        atol=0.0,
+    ), "R2 affine update must run from a true-vacuum initial condition"
+    assert np.all(np.isfinite(_r2_vac)) and np.all(_r2_vac > 0.0)
+    # A decaying cell relaxes onto the exact equilibrium -S/gamma, with no
+    # floor race and no overshoot.
+    _r2_eq = _r2.affine_update(1.0e14, -1.0e7, 1.0e9, 1.0)
+    assert abs(float(_r2_eq) / (1.0e9 / 1.0e7) - 1.0) < 1e-14
+    # The time integral is the closed form too (it feeds criterion (c)).
+    _r2_int_closed = (
+        (_r2_n0 + _r2_S / _r2_gamma)
+        * np.expm1(_r2_gamma * _r2_dt)
+        / _r2_gamma
+        - _r2_S / _r2_gamma * _r2_dt
+    )
+    assert np.max(
+        np.abs(
+            _r2.affine_time_integral(_r2_n0, _r2_gamma, _r2_S, _r2_dt)
+            / _r2_int_closed
+            - 1.0
+        )
+    ) < 1e-12
+    assert np.allclose(
+        _r2.affine_time_integral(_r2_n0, np.zeros(2), _r2_S, _r2_dt),
+        _r2_n0 * _r2_dt + 0.5 * _r2_S * _r2_dt * _r2_dt,
+        rtol=1e-14,
+        atol=0.0,
+    )
+    # ANTI-VACUITY for (i): the tolerance above must REJECT the naive
+    # implementation (n*exp(x) + S*dt), which is the mistake the expm1 form is
+    # there to avoid. If this passed, the exactness assertions would be empty.
+    _r2_naive = _r2_n0 * np.exp(_r2_gamma * _r2_dt) + _r2_S * _r2_dt
+    assert np.max(np.abs(_r2_naive / _r2_closed - 1.0)) > 1e-14, (
+        "R2 exactness assertions are vacuous: the naive update passes them too"
+    )
+
+    # ---- (i, continued) gamma*n + S IS the fluid's own n row ----
+    # The tracer claims to duplicate no physics: it recovers each channel's
+    # coefficient from the solver's own term function by homogeneity degree.
+    # That claim is checkable, and this is the check.
+    _r2_id_p, _r2_id_f = default_config()
+    _r2_id_p["nx"] = 12
+    _r2_id_p["ne0"] = 5.0e10  # above ne_floor, so the probe ratio is exactly 1
+    _r2_id_f["neutral_equilibration"] = False
+    _r2_id_f["cathode_coupling"] = False
+    _r2_id_sim = LAPDSim1D(_r2_id_p, _r2_id_f)
+    _r2_id_state = _r2_id_sim.state
+    _r2_id_n = np.asarray(_r2_id_state.n, dtype=float)
+    _r2_id_Te = np.asarray(_r2_id_sim.derived.Te, dtype=float)
+    _r2_id_Ti = np.asarray(_r2_id_sim.derived.Ti, dtype=float)
+    _r2_id_gamma = _r2.growth_rate(
+        state=_r2_id_state,
+        n_true=_r2_id_n,
+        n_probe=np.maximum(_r2_id_n, _r2_id_sim.floors["n"]),
+        Te_eV=_r2_id_Te,
+        Ti_eV=_r2_id_Ti,
+        floors=_r2_id_sim.floors,
+        ion_mass_g=_r2_id_sim.ion_mass_g,
+        reaction_kwargs=_r2_id_sim._tracer_reaction_kwargs(),
+        boundary_rhs=_r2_id_sim._tracer_boundary_rhs(None, 0.0),
+    )
+    _r2_id_terms = _r2_id_sim.rhs_terms(include_heat_conduction=False)
+    # The four n-row channels gamma is built from. Both boundary spellings are
+    # summed because exactly one of them is live (the other is identically
+    # zero), which is precisely the selector gamma has to follow.
+    _r2_id_fluid = sum(
+        np.asarray(_r2_id_terms[name].n, dtype=float)
+        for name in (
+            "ionization_birth",
+            "recombination_rad_loss",
+            "recombination_3b_loss",
+            "boundary_absorption",
+            "characteristic_boundary",
+        )
+    )
+    # Plasma-dead cells are masked out of the fluid rows by the typed topology
+    # and have no tracer either, so the identity is asserted where plasma lives.
+    _r2_id_live = np.asarray(_r2_id_sim.geometry.plasma_active, dtype=bool)
+    _r2_id_scale = np.maximum(np.abs(_r2_id_fluid), 1.0)
+    _r2_id_err = np.max(
+        (np.abs(_r2_id_gamma * _r2_id_n - _r2_id_fluid) / _r2_id_scale)[
+            _r2_id_live
+        ]
+    )
+    assert _r2_id_err < 1e-10, (
+        "R2 gamma must reproduce the fluid's own n row (no duplicated physics)",
+        _r2_id_err,
+    )
+    # ANTI-VACUITY: a 1e-7 relative error in gamma -- far smaller than picking
+    # the wrong boundary discretization or mis-scaling a homogeneity degree --
+    # must break it. Without this the tolerance could be vacuously loose.
+    assert np.max(
+        (
+            np.abs(_r2_id_gamma * 1.0000001 * _r2_id_n - _r2_id_fluid)
+            / _r2_id_scale
+        )[_r2_id_live]
+    ) > 1e-10, "R2 gamma identity is vacuous: a 1e-7 error passes it"
+
+    # ---- (ii) PRESENCE GATING: the off path cannot read the tracer keys ----
+    # Sweeping every registered criterion constant by 3x and 1/3 must leave the
+    # flag-off trajectory raw-byte identical. If the off path touched any of
+    # them, this moves.
+    def _r2_off_bytes(scale):
+        params, flags = default_config()
+        params["nx"] = 12
+        flags["neutral_equilibration"] = False
+        flags["cathode_coupling"] = False
+        for key in (
+            "tracer_passivity_current_ratio",
+            "tracer_passivity_thinness",
+            "tracer_passivity_depletion",
+            "tracer_refresh_tol",
+        ):
+            params[key] = params[key] * scale
+        params["tracer_passivity_hysteresis"] = 1.0 + (
+            params["tracer_passivity_hysteresis"] - 1.0
+        ) * scale
+        params["tracer_activation_ne"] = params["tracer_activation_ne"] * scale
+        params["tracer_overlap_rtol"] = params["tracer_overlap_rtol"] * scale
+        sim_off = LAPDSim1D(params, flags)
+        assert sim_off._tracer is None, (
+            "regime_tracer off must build no tracer object"
+        )
+        # The off path must also hand back the BASE geometry object itself, not
+        # a copy: a view would be a branch the golden could see.
+        assert sim_off._plasma_geometry() is sim_off._geometry
+        result = sim_off.run(t_end=4.0e-10, dt=1.0e-10)
+        return np.asarray(result.n, dtype=float).tobytes()
+
+    _r2_off_ref = _r2_off_bytes(1.0)
+    assert _r2_off_bytes(3.0) == _r2_off_ref, (
+        "regime_tracer OFF must not read tracer_* constants (3x sweep moved it)"
+    )
+    assert _r2_off_bytes(1.0 / 3.0) == _r2_off_ref, (
+        "regime_tracer OFF must not read tracer_* constants (1/3 sweep moved it)"
+    )
+
+    def _r2_on_config(**overrides):
+        params, flags = default_config()
+        params["nx"] = 12
+        params["cathode_solver_model"] = "current_driven"
+        flags["neutral_equilibration"] = False
+        flags["cathode_coupling"] = True
+        flags["regime_tracer"] = True
+        params.update(overrides)
+        return params, flags
+
+    # ANTI-VACUITY for (ii): with the flag ON the same sweep MUST move the run.
+    # Otherwise the byte-identity above would be satisfied by a feature that
+    # reads nothing at all, and would prove nothing about gating.
+    def _r2_on_bytes(activation_ne):
+        params, flags = _r2_on_config(tracer_activation_ne=activation_ne)
+        sim_on = LAPDSim1D(params, flags)
+        assert sim_on._tracer is not None
+        return np.asarray(
+            sim_on.run(t_end=6.0e-8, dt=2.0e-8).n, dtype=float
+        ).tobytes()
+
+    assert _r2_on_bytes(1.0e10) != _r2_off_ref, (
+        "regime_tracer ON must change the trajectory"
+    )
+
+    # The ON path owns the cells it claims: the fluid's active mask excludes
+    # them, the geometry view closes the interface, and the density floor is
+    # skipped there so n = 0 stays exactly 0.
+    _r2_on_params, _r2_on_flags = _r2_on_config()
+    _r2_on_sim = LAPDSim1D(_r2_on_params, _r2_on_flags)
+    assert bool(np.any(_r2_on_sim._tracer_passive))
+    assert not np.any(
+        _r2_on_sim._plasma_active_mask() & _r2_on_sim._tracer_passive
+    ), "the fluid must not own a cell the tracer owns"
+    _r2_on_view = _r2_on_sim._plasma_geometry()
+    assert _r2_on_view is not _r2_on_sim._geometry
+    _r2_on_dead = ~_r2_on_sim._plasma_active_mask()
+    for _face in range(1, _r2_on_sim.geometry.cells):
+        if _r2_on_dead[_face - 1] != _r2_on_dead[_face]:
+            assert not _r2_on_view.plasma_open[_face], (
+                "a passive/active interface face must be closed"
+            )
+            assert _r2_on_view.plasma_transmission[_face] == 0.0
+            assert _r2_on_view.heat_transmission[_face] == 0.0
+    # A closed face has at most one live cell, so each cell has exactly one
+    # owner -- the property the closed-face treatment was chosen for.
+    for _face in np.flatnonzero(~np.asarray(_r2_on_view.plasma_open, dtype=bool)):
+        _live = int(_r2_on_view.plasma_face_live_cell[int(_face)])
+        assert _live < 0 or not _r2_on_sim._tracer_passive[_live]
+
+    # ne0 = 0 is a legal initial condition, and the floor leaves it alone.
+    _r2_vac_params, _r2_vac_flags = _r2_on_config(ne0=0.0)
+    _r2_vac_sim = LAPDSim1D(_r2_vac_params, _r2_vac_flags)
+    # Exactly the tracer's own cells hold a true vacuum. The plasma-DEAD cells
+    # are not the tracer's and keep their ordinary floor, which is why this is
+    # asserted on the passive mask rather than on the whole grid.
+    assert float(
+        np.max(np.asarray(_r2_vac_sim.state.n)[_r2_vac_sim._tracer_passive])
+    ) == 0.0, "ne0 = 0 must survive construction under the tracer"
+    _r2_vac_floored = _r2_vac_sim.floor_state_vector(_r2_vac_sim._y)
+    _r2_vac_n = _r2_vac_floored[: _r2_vac_sim.geometry.cells]
+    assert float(np.max(_r2_vac_n[_r2_vac_sim._tracer_passive])) == 0.0, (
+        "the density floor must skip tracer cells; n = 0 is a regular state"
+    )
+    # ANTI-VACUITY: the very same vector floored with the tracer disengaged IS
+    # clipped, so the exemption above is doing something.
+    _r2_vac_sim._tracer_passive = np.zeros_like(_r2_vac_sim._tracer_passive)
+    assert float(
+        np.min(_r2_vac_sim.floor_state_vector(_r2_vac_sim._y)[
+            : _r2_vac_sim.geometry.cells
+        ])
+    ) == _r2_vac_sim.floors["n"], (
+        "the floor-exemption assertion is vacuous: nothing was being clipped"
+    )
+
+    # ---- (iii) every construction-time refusal, and (iv) its anti-vacuity ----
+    # Each case: the broken config RAISES naming the offending key, and the
+    # SAME config with only that key repaired constructs. The second half is
+    # the anti-vacuity check -- without it a raise could be coming from
+    # anywhere in the configuration.
+    def _r2_refuses(fragment, **overrides):
+        params, flags = _r2_on_config()
+        flag_keys = {key for key in overrides if key in flags}
+        for key, value in overrides.items():
+            (flags if key in flag_keys else params)[key] = value
+        try:
+            LAPDSim1D(params, flags)
+        except ValueError as error:
+            assert fragment in str(error), (fragment, str(error))
+        else:
+            raise AssertionError(
+                f"regime_tracer must refuse this configuration ({fragment})"
+            )
+        # anti-vacuity: repair only the offending key and it must construct
+        params, flags = _r2_on_config()
+        LAPDSim1D(params, flags)
+
+    _r2_refuses("cathode_coupling on", cathode_coupling=False)
+    _r2_refuses("active_plasma_topology on", active_plasma_topology=False)
+    _r2_refuses("Plasma on", Plasma=False)
+    # The kinetic arm needs the two-zone state, and that prerequisite is
+    # checked earlier; supplying it is what makes this case test the TRACER's
+    # refusal rather than someone else's.
+    _r2_refuses(
+        "R2 is fluid-arms", neutral_model="kinetic", neutral_two_zone=True
+    )
+    _r2_refuses("restart_from", restart_from="/nonexistent/payload.h5")
+    for _key in (
+        "tracer_passivity_current_ratio",
+        "tracer_passivity_thinness",
+        "tracer_passivity_depletion",
+    ):
+        _r2_refuses(_key, **{_key: 0.0})
+        _r2_refuses(_key, **{_key: 1.5})
+    _r2_refuses("tracer_passivity_hysteresis", tracer_passivity_hysteresis=1.0)
+    _r2_refuses("tracer_refresh_tol", tracer_refresh_tol=-1.0)
+    _r2_refuses("tracer_activation_ne", tracer_activation_ne=1.0e8)
+    _r2_refuses("tracer_overlap_band_ne", tracer_overlap_band_ne=(1e11, 1e10))
+    _r2_refuses("tracer_overlap_band_ne", tracer_overlap_band_ne=None)
+    _r2_refuses("tracer_overlap_rtol", tracer_overlap_rtol=0.0)
+
+    # ---- the census exists from day one, and names a binding criterion ----
+    _r2_cen_params, _r2_cen_flags = _r2_on_config()
+    _r2_cen_sim = LAPDSim1D(_r2_cen_params, _r2_cen_flags)
+    _r2_cen_result = _r2_cen_sim.run(t_end=6.0e-8, dt=2.0e-8)
+    _r2_cen = getattr(_r2_cen_result, "tracer_criterion_census", None)
+    assert _r2_cen is not None, "a tracer run must carry its criterion census"
+    assert set(_r2_cen["ratios"]) == set(_r2.CRITERION_NAMES)
+    assert _r2_cen["criterion"].shape == (_r2_cen_sim.geometry.cells,)
+    assert _r2_cen["passive"].shape == (_r2_cen_sim.geometry.cells,)
+    assert _r2_cen["refreshes"] >= 1
+    assert "transport_ratio" in _r2_cen
+    assert _r2_cen_sim._tracer_census_line().startswith("regime_r2 tracer census")
+    # ANTI-VACUITY: a run WITHOUT the flag carries no census at all.
+    _r2_nocen_p, _r2_nocen_f = default_config()
+    _r2_nocen_p["nx"] = 12
+    _r2_nocen_f["neutral_equilibration"] = False
+    _r2_nocen_sim = LAPDSim1D(_r2_nocen_p, _r2_nocen_f)
+    assert not hasattr(
+        _r2_nocen_sim.run(t_end=2.0e-10, dt=1.0e-10), "tracer_criterion_census"
+    )
+    assert _r2_nocen_sim._tracer_census_line() is None
+
+    # ---- the registered constants are exactly the registered constants ----
+    # A key added to the wrong namespace silently does nothing (input_dict and
+    # input_flags validate neither), so the split is asserted here.
+    _r2_reg_p, _r2_reg_f = default_config()
+    for _key in (
+        "tracer_passivity_current_ratio",
+        "tracer_passivity_thinness",
+        "tracer_passivity_depletion",
+        "tracer_passivity_hysteresis",
+        "tracer_refresh_tol",
+        "tracer_activation_ne",
+        "tracer_overlap_band_ne",
+        "tracer_overlap_rtol",
+    ):
+        assert _key in _r2_reg_p and _key not in _r2_reg_f, _key
+    assert "regime_tracer" in _r2_reg_f and "regime_tracer" not in _r2_reg_p
+    assert _r2_reg_f["regime_tracer"] is False, "regime_tracer must ship OFF"
+
     print(
         "sim1d smoke ok: "
         f"cells={geom.cells}, dz={geom.dz_cm:g} cm, "

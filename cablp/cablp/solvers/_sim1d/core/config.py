@@ -2449,7 +2449,7 @@ def regime_tracer_defaults():
         floor-poisoned regime the tracer exists to skip -- and construction
         raises unless it is at least ten times ``ne_floor``.
     tracer_overlap_band_ne:
-        Two-element ``(low, high)`` density band [cm^-3] over which BOTH
+        Two-element ``[low, high]`` density band [cm^-3] over which BOTH
         descriptions are valid and must therefore agree: at or above
         ``tracer_activation_ne`` (fluid valid) and below the density at which
         passivity fails (tracer valid). Read by
@@ -2466,7 +2466,10 @@ def regime_tracer_defaults():
         "tracer_passivity_hysteresis": 3.0,
         "tracer_refresh_tol": 0.01,
         "tracer_activation_ne": 1.0e10,
-        "tracer_overlap_band_ne": (1.0e10, 1.0e11),
+        # A LIST, not a tuple: the resolved config round-trips through JSON in
+        # the HDF5 result header, and a tuple comes back as a list, so a tuple
+        # default would fail the saved-vs-rebuilt config identity check.
+        "tracer_overlap_band_ne": [1.0e10, 1.0e11],
         "tracer_overlap_rtol": 0.05,
     }
 

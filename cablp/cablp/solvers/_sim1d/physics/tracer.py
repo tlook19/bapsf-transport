@@ -29,7 +29,6 @@ from ..core.state import ConservativeState1D
 from .energy import electron_cooling_rhs_terms, electron_ion_exchange_rhs
 from .flux import ion_sound_speed
 from .reactions import reaction_rates
-from .sources import boundary_absorption_rhs
 
 
 #: Names of the three passivity criteria plus the transport ratio the
@@ -152,14 +151,12 @@ def growth_rate(
     Ti_eV,
     floors,
     ion_mass_g,
-    mu,
-    geometry,
     reaction_kwargs,
-    surface_kwargs,
+    boundary_rhs,
 ):
     """Return the per-cell affine growth rate ``gamma`` [1/s].
 
-    ``gamma = gamma_ion - gamma_rec_rad - gamma_rec_3b - gamma_surface``, each
+    ``gamma = gamma_ion - gamma_rec_rad - gamma_rec_3b - gamma_boundary``, each
     channel recovered from the solver's own term function by dividing out its
     homogeneity degree in ``n``:
 
@@ -169,7 +166,7 @@ def growth_rate(
     bulk ionization    1    ``reactions.reaction_rates`` ``S_ion``
     radiative recomb   2    ``reactions.reaction_rates`` ``S_rec_rad``
     three-body recomb  3    ``reactions.reaction_rates`` ``S_rec_3b``
-    surface absorption 1    ``sources.boundary_absorption_rhs`` ``n`` row
+    plasma-end loss    1    ``boundary_rhs`` ``n`` row
     ==============  ======  ==============================================
 
     A degree-``d`` channel evaluated at ``n_probe`` equals its coefficient times
@@ -177,6 +174,17 @@ def growth_rate(
     probe value divided by ``n_probe`` and multiplied by ``(n_true/n_probe)**(d-1)``.
     The ratio is unity above the density floor, which is why the identity
     ``gamma*n + S ==`` the fluid's summed ``n`` row holds bit-for-bit there.
+
+    ``boundary_rhs`` is a callable ``probe_state -> ConservativeState1D``
+    supplied by the caller, NOT a fixed choice of operator. The plasma-
+    terminating faces are discretized two different ways in this package -- the
+    volumetric Bohm absorption ``sources.boundary_absorption_rhs`` and the R3
+    one-sided characteristic ghost-cell outflow -- and which one is live is a
+    config selector. Taking either one unconditionally would make the tracer
+    disagree with the fluid on whichever stance did not match; the shipped
+    default is the characteristic one, so a fixed choice here would have been
+    wrong in production. Both are linear in ``n`` at fixed ``Te``, so the same
+    degree-1 division recovers the frequency from either.
 
     Parallel advection is NOT in ``gamma``: a passive cell exchanges nothing
     across its interface (NUMERICS.md, "Flux at the interface"), and that
@@ -196,20 +204,10 @@ def growth_rate(
     gamma_rec_rad = (S_rec_rad / n_probe) * ratio
     gamma_rec_3b = (S_rec_3b / n_probe) * ratio * ratio
 
-    # The jet is deliberately not passed: it moves only the M_n row, and the
-    # tracer reads the n row. Tn_presheath_eV is likewise absent because the
-    # kinetic arms that supply it are refused at construction.
-    surface = boundary_absorption_rhs(
-        state=probe,
-        floors=floors,
-        ion_mass_g=ion_mass_g,
-        mu=mu,
-        geometry=geometry,
-        **surface_kwargs,
-    )
-    gamma_surface = -np.asarray(surface.n, dtype=float) / n_probe
+    boundary = boundary_rhs(probe)
+    gamma_boundary = -np.asarray(boundary.n, dtype=float) / n_probe
 
-    return gamma_ion - gamma_rec_rad - gamma_rec_3b - gamma_surface
+    return gamma_ion - gamma_rec_rad - gamma_rec_3b - gamma_boundary
 
 
 def electron_loss_coefficients(
@@ -221,28 +219,29 @@ def electron_loss_coefficients(
     floors,
     ion_mass_g,
     mu,
-    geometry,
     cooling_kwargs,
     exchange_kwargs,
-    surface_kwargs,
+    boundary_rhs,
 ):
     """Return ``(L1, L2)``: electron energy sinks by homogeneity degree in ``n``.
 
     Both are POSITIVE loss rates [erg cm^-3 s^-1] evaluated at ``n_probe``:
 
     * ``L1`` -- degree 1 in ``n``: the ionization energy cost, the
-      electron-neutral line power, and the ``1.5*Te`` the surface absorption
+      electron-neutral line power, and the ``1.5*Te`` the plasma-end loss
       carries out with each lost particle.
     * ``L2`` -- degree 2: the electron-ion line power and the electron-ion
       thermal exchange.
 
-    The surface term is here for the same reason it is in :func:`growth_rate`:
-    it is a genuinely PER-CELL sink (applied one-sidedly to the live cell at a
-    plasma-terminating face), the tracer already consumes the very same term
-    function for the particle channel, and taking its particle row without its
-    energy row would be an inconsistency in the tracer rather than a modelling
-    choice. It is not, and must not be read as, a repair for the non-local sink
-    the local balance is missing -- see NUMERICS.md.
+    The boundary term is here for the same reason it is in :func:`growth_rate`,
+    and comes through the same caller-supplied ``boundary_rhs`` so the two
+    cannot disagree about which discretization is live: it is a genuinely
+    PER-CELL sink (applied one-sidedly to the live cell at a plasma-terminating
+    face), the tracer already consumes that term for the particle channel, and
+    taking its particle row without its energy row would be an inconsistency in
+    the tracer rather than a modelling choice. It is not, and must not be read
+    as, a repair for the non-local sink the local balance is missing -- see
+    NUMERICS.md.
 
     The Coulomb logarithm inside the exchange term carries a weak logarithmic
     density dependence that the degree split treats as part of the coefficient
@@ -263,18 +262,11 @@ def electron_loss_coefficients(
         mu=mu,
         **exchange_kwargs,
     )
-    surface = boundary_absorption_rhs(
-        state=probe,
-        floors=floors,
-        ion_mass_g=ion_mass_g,
-        mu=mu,
-        geometry=geometry,
-        **surface_kwargs,
-    )
+    boundary = boundary_rhs(probe)
     L1 = -(
         np.asarray(cooling["ionization_energy_cost"].Ee, dtype=float)
         + np.asarray(cooling["electron_neutral_cooling"].Ee, dtype=float)
-        + np.asarray(surface.Ee, dtype=float)
+        + np.asarray(boundary.Ee, dtype=float)
     )
     L2 = -(
         np.asarray(cooling["electron_ion_cooling"].Ee, dtype=float)
@@ -318,10 +310,9 @@ def quasistatic_Te_eV(
     floors,
     ion_mass_g,
     mu,
-    geometry,
     cooling_kwargs,
     exchange_kwargs,
-    surface_kwargs,
+    boundary_rhs,
     active,
     Te_ceiling_eV=0.0,
 ):
@@ -387,10 +378,9 @@ def quasistatic_Te_eV(
             floors=floors,
             ion_mass_g=ion_mass_g,
             mu=mu,
-            geometry=geometry,
             cooling_kwargs=cooling_kwargs,
             exchange_kwargs=exchange_kwargs,
-            surface_kwargs=surface_kwargs,
+            boundary_rhs=boundary_rhs,
         )
         return (
             1.5 * Te_vec * ev_to_erg * S_beam

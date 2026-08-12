@@ -1086,10 +1086,22 @@ class LAPDSim1D:
             "Ti": float(self._input_dict["Ti_floor"]),
         }
         self._floor_ledger = self._empty_floor_ledger()
+        # Regime-R2 pre-breakdown passive tracer (default off, bit-exact off).
+        # Armed HERE, before the initial condition is floored, because the
+        # floor is the thing it has to be exempt from: ``ne0 = 0`` is a
+        # legitimate true-vacuum start under the tracer, and the construction
+        # floor would otherwise clip it to ``ne_floor`` before any feature
+        # existed to object. Everything it validates is already built (the
+        # floors, the geometry, both config namespaces, the topology flag).
+        self._configure_regime_tracer()
         initial_raw = self._initial_state()
         self._state = apply_state_floors(
             initial_raw, self._floors, self._ion_mass_g
         )
+        if self._tracer is not None:
+            self._state = self._tracer_exempt_initial_floor(
+                initial_raw, self._state
+            )
         self._accumulate_floor_ledger(
             self._floor_additions(initial_raw, self._state)
         )
@@ -1476,8 +1488,6 @@ class LAPDSim1D:
         self._validate_coverage_config()
         # Ad-hoc probe neutral source (default off, bit-exact off).
         self._validate_neutral_probe_config()
-        # Regime-R2 pre-breakdown passive tracer (default off, bit-exact off).
-        self._configure_regime_tracer()
         self._cathode_solve = None
         # Item-35 ledger tripwire: latched so the warning fires once per run.
         self._beam_gap_ledger_warned = False
@@ -2260,6 +2270,26 @@ class LAPDSim1D:
         self._tracer_depletion = np.zeros(self._geometry.cells, dtype=float)
         self._tracer_census = self._empty_tracer_census()
 
+    def _tracer_exempt_initial_floor(self, raw, floored):
+        """Restore the RAW plasma rows on tracer cells in the initial condition.
+
+        Same exemption :meth:`floor_state_vector` applies every step, applied
+        once to the initial condition so ``ne0 = 0`` is a true-vacuum start
+        rather than a silent ``ne_floor`` fill. The NEUTRAL rows keep their
+        floor: the tracer owns the plasma, not the background.
+        """
+        passive = self._tracer_passive
+        return ConservativeState1D(
+            n=np.where(passive, raw.n, floored.n),
+            nn=floored.nn,
+            M=np.where(passive, raw.M, floored.M),
+            Ee=np.where(passive, raw.Ee, floored.Ee),
+            Ei=np.where(passive, raw.Ei, floored.Ei),
+            M_n=floored.M_n,
+            nn_a=floored.nn_a,
+            M_n_a=floored.M_n_a,
+        )
+
     @property
     def _tracer_engaged(self):
         """True while any cell is still owned by the tracer."""
@@ -2425,6 +2455,45 @@ class LAPDSim1D:
             "gas_type": self._gas_type,
         }
 
+    def _tracer_boundary_rhs(self, cathode_solve, time):
+        """Return ``probe_state -> plasma-end loss term`` for the LIVE stance.
+
+        The plasma-terminating faces are discretized two ways in this package
+        and which one is live is a config selector: under
+        ``characteristic_boundary`` (the shipped default) the R3 one-sided
+        ghost-cell Bohm outflow owns them and ``boundary_absorption`` is
+        identically zero, otherwise the volumetric absorption does. The tracer
+        must consume WHICHEVER the run configured -- taking one unconditionally
+        made ``gamma`` disagree with the fluid's own ``n`` row at the shipped
+        stance, which is exactly what the smoke's identity assertion caught.
+        """
+        surface_kwargs = self._tracer_surface_kwargs()
+        if self._characteristic_boundary:
+            def boundary(probe):
+                return characteristic_boundary_rhs(
+                    state=probe,
+                    floors=self._floors,
+                    ion_mass_g=self._ion_mass_g,
+                    mu=self._mu,
+                    geometry=self._plasma_geometry(),
+                    cathode_jet=None,
+                    wave_speed=self._hyperbolic_wave_speed,
+                    energy_consistent=self._hyperbolic_energy_consistent,
+                    sheath_energy_routing=True,
+                    **surface_kwargs,
+                )
+        else:
+            def boundary(probe):
+                return boundary_absorption_rhs(
+                    state=probe,
+                    floors=self._floors,
+                    ion_mass_g=self._ion_mass_g,
+                    mu=self._mu,
+                    geometry=self._plasma_geometry(),
+                    **surface_kwargs,
+                )
+        return boundary
+
     def _tracer_exchange_kwargs(self):
         return {
             "b_Qie": float(self._input_dict.get("b_Qie", 1.0)),
@@ -2489,6 +2558,7 @@ class LAPDSim1D:
         cached = self._tracer_coefficients
         refreshed = cached is None or drift > self._tracer["refresh_tol"]
         if refreshed:
+            boundary_rhs = self._tracer_boundary_rhs(cathode_solve, time)
             Ti = np.full(self._geometry.cells, float(self._floors["Ti"]))
             Te, sign_changes = quasistatic_Te_eV(
                 state=state,
@@ -2500,10 +2570,9 @@ class LAPDSim1D:
                 floors=self._floors,
                 ion_mass_g=self._ion_mass_g,
                 mu=self._mu,
-                geometry=self._geometry,
                 cooling_kwargs=self._electron_cooling_kwargs(),
                 exchange_kwargs=self._tracer_exchange_kwargs(),
-                surface_kwargs=self._tracer_surface_kwargs(),
+                boundary_rhs=boundary_rhs,
                 active=(n_true > 0.0) | (S > 0.0),
                 Te_ceiling_eV=self._tracer_beam_energy_eV(cathode_solve),
             )
@@ -2515,10 +2584,8 @@ class LAPDSim1D:
                 Ti_eV=Ti,
                 floors=self._floors,
                 ion_mass_g=self._ion_mass_g,
-                mu=self._mu,
-                geometry=self._geometry,
                 reaction_kwargs=self._tracer_reaction_kwargs(),
-                surface_kwargs=self._tracer_surface_kwargs(),
+                boundary_rhs=boundary_rhs,
             )
             coefficients = {
                 "gamma": gamma,
