@@ -980,7 +980,56 @@ result carries no such attribute at all (asserted in `smoke_sim1d.py`).
 - `smoke_sim1d.py` — affine-update exactness against a closed-form two-cell
   case (including `γ → 0` and `n = 0`), presence-gating (byte-identical
   trajectory with the flag off), each construction-time `ValueError` class,
-  and an anti-vacuity variant per guard that must fail if the guard is removed.
+  the passive-cell QL leak invariant (including the smoothed booking and the
+  phase-gated read-back), and an anti-vacuity variant per guard that must fail
+  if the guard is removed.
+- `regime_pb_balance_table.py` — reproduces the measured balance table above
+  under both bookings, plus the QL-onset gap below.
+
+**Measured under the corrected booking** (`nx = 20`, production stance). Both
+run-level gates now RUN rather than being blocked by a refusal, and both report
+the same thing from different directions: the tracer's plasma grows far more
+slowly than the fluid's, because the fluid is being heated by power the tracer
+refuses.
+
+- `regime_r2_overlap_gate.py --t-end 3e-5` — **FAIL**, worst relative
+  disagreement `0.978` against `rtol = 0.05`, over 198 in-band samples. The
+  fluid arm reaches `n` max `1.325e11`; the tracer arm reaches `2.91e9`. The
+  gate is not tuned to pass and `tracer_activation_ne` is not moved: the
+  failure is the measurement.
+- **The gap it measures.** `quasilinear_relaxation_length_cm` returns `inf` —
+  no anomalous drag at all — unless `n_b < 0.1 n_e`, so the module's OWN
+  weak-beam gate puts QL onset at `n_e = 10 n_b`. At the stance
+  (`E_0 = 177.6 eV`, `Γ_0 = 1.647e20 s⁻¹`, `n_b = 2.95e8 cm⁻³`) that is
+  `n_QL,onset = 2.95e9 cm⁻³`, against `tracer_activation_ne = 1e10 cm⁻³`:
+
+  | quantity | value |
+  |---|---|
+  | QL onset, `10 n_b` | 2.95e9 cm⁻³ |
+  | `tracer_activation_ne` | 1.0e10 cm⁻³ |
+  | **gap** | **×3.39, i.e. 0.53 decades** |
+
+  Over that window quasilinear absorption is live by the code's own criterion
+  while the cell is still passive and the refusal is suppressing it. The
+  pre-breakdown background sits inside it (`n = 4.5e9`). The two criteria are
+  therefore NOT the same event yet — making them one is what the correction
+  intends, and `n_act` is the criterion that does not match. Reconciling them
+  is a follow-up against a settled criterion, not a number to move here.
+- `regime_r2_handoff_check.py --t-handoff 2e-5` — **FAIL at I4 only**, and
+  structurally: I1 (config identity), I2 (finiteness) and I3 (the two-part
+  ledger, relative change exactly 0) all pass, but no cell reaches
+  `tracer_activation_ne` inside that window, so no passive/active interface
+  exists for I4 to check. The R2 PASS at the same window was disclosed as
+  cadence-conditional; under the corrected booking the leg is simply colder
+  and slower, and does not hand off that early.
+- Run out to `t = 1e-4` and the tracer leg does hand cells over — cells 2–7
+  cross `n_act` at `n ≈ 1.05–1.22e10` — and then **raises at `t = 7e-5` on
+  cell 2, a cell it no longer owns.** The balance is solved wherever there is
+  plasma or a beam birth, including cells the fluid has taken, and on those
+  the anomalous booking is restored in full (correctly — QL is real there), so
+  the balance refuses exactly as the original section describes. Restricting
+  the `Te` solve to the passive set would change what the criteria read on
+  active cells and is deliberately NOT done here.
 
 ### Explicitly out of scope at stage 1
 
