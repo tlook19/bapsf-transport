@@ -1642,20 +1642,12 @@ class LAPDSim1D:
             for name, default in defaults.items()
         }
         if not enabled:
-
-            def _is_default(value, default):
-                # neutral_probe_profile and neutral_probe_waveform_table are
-                # sequence-valued, and ``!=`` on a sequence is elementwise, so
-                # the comparison is reduced to one bool here before it is used
-                # as a truth value.
-                if value is None or default is None:
-                    return value is None and default is None
-                return bool(np.array_equal(value, default))
-
+            # Every default in this group is None -- the instrument ships no
+            # number, deliberately -- so "at its default" is exactly "is
+            # None", and the two sequence-valued keys need no elementwise
+            # comparison here.
             configured = [
-                name
-                for name, value in values.items()
-                if not _is_default(value, defaults[name])
+                name for name, value in values.items() if value is not None
             ]
             if configured:
                 raise ValueError(
