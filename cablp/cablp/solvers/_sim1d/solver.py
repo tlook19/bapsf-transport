@@ -2442,10 +2442,19 @@ class LAPDSim1D:
         over the collector cells' plasma volume. The loss channel is not
         re-derived here: this is the same term the fluid itself subtracts, so
         the node cannot book an ion flux the column did not lose.
+
+        Zero when the step carries no cached cathode solve. That is a guard
+        with teeth rather than a convenience: the boundary term's cathode-jet
+        path re-solves the cathode with ``update_cache=True`` when it is handed
+        no solve, so reading the term here without one would let a DIAGNOSTIC
+        read mutate the continuation cache and move the trajectory. There is no
+        driven plasma to lose ions in that window anyway.
         """
         node = self._vessel
         state = self.state
         cathode_solve = self._cathode_solve
+        if cathode_solve is None:
+            return 0.0
         if self._characteristic_boundary:
             term = self.characteristic_boundary_rhs(
                 state=state, cathode_solve=cathode_solve, time=self._time

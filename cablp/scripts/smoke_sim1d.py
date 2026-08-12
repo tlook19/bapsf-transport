@@ -2610,6 +2610,43 @@ def main():
     )
     _vcm_abs, _vcm_rel = _vcm_on.vessel_charge_residual()
     assert _vcm_rel <= 1.0e-12, (_vcm_abs, _vcm_rel)
+    # ANTI-VACUITY. An inert node -- one whose ODE is never stepped -- would
+    # satisfy every bound below, so require that it MOVED, in the direction
+    # its one live channel implies. On this short arm the beam has not yet
+    # broken out to the far end, so the ion wall flux is the only current and
+    # V_cm must be strictly negative.
+    assert float(_vcm_diag["vessel_I_i_wall_A"]) > 0.0, _vcm_diag
+    assert float(_vcm_diag["vessel_V_cm_V"]) < 0.0, _vcm_diag
+    assert float(_vcm_diag["vessel_Q_node_C"]) < 0.0, _vcm_diag
+    # The ELECTRON channel is genuinely zero on this arm (nothing is
+    # transmitted yet), so its READ is checked against a constructed
+    # deposition rather than left vacuous: it must sum the transmitted PRIMARY
+    # flux over ends, skip an absent ray, and convert with the electron charge.
+    _vcm_saved_solve = _vcm_on._cathode_solve
+    try:
+        _vcm_on._cathode_solve = SimpleNamespace(beam_deposition={
+            0: SimpleNamespace(transmitted_flux=2.5e18),
+            -1: None,
+        })
+        assert np.isclose(
+            _vcm_on._vessel_electron_wall_current_A(),
+            2.5e18 * 1.602176634e-19, rtol=1e-9, atol=0.0,
+        ), _vcm_on._vessel_electron_wall_current_A()
+        _vcm_on._cathode_solve = SimpleNamespace(beam_deposition={
+            0: SimpleNamespace(transmitted_flux=2.5e18),
+            -1: SimpleNamespace(transmitted_flux=1.5e18),
+        })
+        assert np.isclose(
+            _vcm_on._vessel_electron_wall_current_A(),
+            4.0e18 * 1.602176634e-19, rtol=1e-9, atol=0.0,
+        )
+        # No solve at all is zero, not a crash -- and, critically, must not
+        # trigger a cache-mutating cathode re-solve on the ion side either.
+        _vcm_on._cathode_solve = None
+        assert _vcm_on._vessel_electron_wall_current_A() == 0.0
+        assert _vcm_on._vessel_ion_wall_current_A() == 0.0
+    finally:
+        _vcm_on._cathode_solve = _vcm_saved_solve
     # EARLY BUILD IS WALL-REFERENCED. At the mA-scale currents this window
     # opens at, charging C_total to the bank scale takes far longer than the
     # cycle, so the node has not engaged: |V_cm| must still be far below the
