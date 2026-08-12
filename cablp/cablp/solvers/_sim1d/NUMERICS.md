@@ -965,7 +965,9 @@ Criterion (a) is the **conducted** current, not an emission capability. The
 earlier sketch conflated the two; the cathode's Richardson emission capability
 says nothing about whether the plasma column is shunting the loop, and the
 conflation is on record as wrong. `V_dev` is the R1-bounded device voltage
-(`min(cathode_phi_c_cap_V, V_avail(I))`), consumed from the cathode
+(the composed ceiling `min(cathode_phi_c_cap_V, <circuit member>)`, whose
+circuit member is chosen by `cathode_circuit_bound_object`), consumed from the
+cathode
 diagnostics; the atomic-data cap alone would inflate `I_cond` by the same ~5×
 the R1 pass removed from `V_b`.
 
@@ -1217,11 +1219,195 @@ the deposition model generally is that at this mesh the smoothing kernel, not
 the stopping calculation, sets the applied deposition geometry in the
 end-of-range region — the raw stopping there is sub-cell.
 
-### Explicitly out of scope at stage 1
+### Both stage-1 exclusions are now built
 
-The `V_cm` vessel/common-mode node (a one-ODE floating closure) is **not**
-built: stage 1 is wall-referenced, `V_cm ≡ 0`. The documented seam is the
-`V_dev` read in criterion (a), which is where a common-mode offset would enter.
-The φ_a-aware `V_b`-object bound is an R1 follow-up in the cathode solver; the
-tracer consumes the R1 bound's objects as they are and does not touch its
-contract.
+The `V_cm` vessel/common-mode node is the next section; the φ_a-aware
+`V_b`-object bound is `cathode_circuit_bound_object` (MODEL.md, "The bound's
+object"). The tracer still consumes the R1 bound's objects as they are and
+still does not touch its contract — what changed is which quantity that bound
+holds. One tracer read moved with the node: criterion (b)'s beam energy is the
+CHOKED launch energy, because that is the beam the plasma is thin or thick to.
+Criterion (a)'s `V_dev` deliberately did **not** move — a common-mode offset
+translates the whole cathode/anode system against the wall and cannot change
+the anode-to-cathode differential the column conducts under.
+
+## Vessel common-mode node (`regime_vessel_node`, default off)
+
+The LAPD cathode/anode system **floats** with respect to the machine wall. The
+whole electrically connected stainless vessel — some 20 m of it — is ONE wall
+conductor, and the anode is referenced to it only through four feedthrough
+capacitors bridging the ceramic gap insulators. Their **type is visually
+unresolved**: axial polypropylene film on the second look, aluminium
+electrolytic on the first, with a black band on one side of the cylinder that
+does not settle it and mildly favours film (on a film part a plain band marks
+the OUTER FOIL — a shielding convention; electrolytics mark polarity with
+explicit −/+). So `vessel_leak_resistance_ohm` is finite and ESTIMATED over a
+bracket spanning both readings, 2.5e7–1e11 Ω, defaulting to the film reading.
+`None` is accepted and means the idealized hard float, an A/B arm rather than
+the hardware. A bench measurement resolves the type and the value together.
+
+**THE STRUCTURAL FACT THE MODEL RESTS ON IS TYPE-INSENSITIVE, and that is the
+statement to quote.** Over the joint `R_leak × C_total` bracket
+
+```
+tau_leak = R_leak · C_total ≈ 10 s … 4e5 s
+```
+
+against a ~25 ms discharge — at least ~400× at the most pessimistic corner
+(the aged-electrolytic edge) and vastly more at the film edge. So **within a
+shot the node is hard-float in kind at both bracket edges, whichever type
+these turn out to be**: the leak drains a negligible fraction of the node's
+charge and the phase sequence is unchanged by it.
+`scripts/regime_vcm_r0b_check.py` sweeps the `R_leak` endpoints alongside the
+`C_total` endpoints and reports the in-window sensitivity as a NUMBER — the
+worst shift anywhere in the joint bracket is `1.25e-3` relative, exactly the
+closed form's `dt/(2·tau_leak)` at that corner, two decades below the
+factor-of-ten `C_total` bracket the same result already carries. A shift
+reaching the percent level would be a finding. The separation is a claim about
+the discharge window only and fails on any question posed over seconds.
+
+**Two documented deviations, neither modelled.** *Polarity, conditional on the
+unresolved type*: if the parts are electrolytic they are polarized and conduct
+asymmetrically under reverse bias (diode-like above ~1–2 V), and the machine's
+plateau common-mode bias is observed at either sign, so the reverse branch is
+reachable — the shipped leak is a **symmetric** linear resistor, which is the
+deviation; if they are film there is no polarity nuance and the black band is
+the outer-foil marking. Either way a nonlinear asymmetric model would buy
+nothing on the discharge timescale, where the leak moves nothing in either
+direction, and would matter only if `V_cm` scoring came to care about the
+negative-plateau branch. *Inter-shot memory*: `tau_leak` far exceeds the ~3 s
+shot period under both readings, so the capacitors cannot reset the node
+between shots — the physical reset path is the afterglow plasma conductance.
+Runs here are single-shot and start from `V_cm = 0`.
+
+### The node
+
+ONE new state variable: `V_cm`, the anode-to-wall (common-mode) potential,
+obeying
+
+```
+C_total dV_cm/dt = I_e_wall − I_i_wall − V_cm/R_leak
+```
+
+with `C_total` the four capacitors' parallel sum. The sign convention is the
+physical one and is the load-bearing part: electrons landing on the wall
+charge it negative and so **raise** `V_cm`; ions landing on it **lower**
+`V_cm`; the steady state of the pair is the floating condition, zero net
+system-to-wall current.
+
+Neither current is re-derived here.
+
+- `I_e_wall` is the CSDA rays' **transmitted primary flux** times `e`. The far
+  end IS the vessel, so the flux that leaves the domain there is exactly the
+  electron current the wall conductor collects. Flux the anode mesh intercepts
+  is system-side, and flux that stops in the column is plasma-side; neither is
+  booked. This is why the node **refuses** any deposition model but `csda`:
+  no other model carries a flux at a terminating surface, so the wall electron
+  channel would be identically zero and the node would charge on the ion flux
+  alone — a run that reads as though the bootstrap is live when half of it is
+  missing.
+- `I_i_wall` is the LIVE plasma-terminating boundary term — whichever of the
+  characteristic ghost-cell outflow and the volumetric absorption the run
+  configured — evaluated on the accepted state and integrated over the
+  collector cells' plasma volume. It is the same term the fluid itself
+  subtracts, so the node cannot book an ion flux the column did not lose.
+
+### The choke, and the bootstrap it closes
+
+`V_cm` is the potential a transmitted beam electron must **climb** going from
+the mesh (at system potential) into the column (referenced to the wall), so
+the energy that reaches column physics is
+
+```
+E_launch = max(φ_c − max(V_cm, 0), 0)
+```
+
+with `φ_c` the R1 **circuit-bounded** sheath drop, never the raw
+`cathode_phi_c_cap_V` atomic-data cap — which is why the node requires
+`cathode_circuit_voltage_bound`. Only a positive `V_cm` decelerates: a
+common-mode offset cannot *accelerate* the beam into the column, and the
+floor at zero is the fully choked limit (no beam at all), not an error. The
+**flux is untouched** — the same electrons arrive, decelerated — so the
+climb moves `E_launch` and nothing else.
+
+One launch energy per ray serves the Beer-Lambert beam arrays, the CSDA
+deposition ray, the gap-transmission probe, the tail birth keying, the
+reflection threshold and the `sigma_eff` inversion, so the item-35 tripwire
+keeps comparing three views of one number. Modelling choice to be aware of:
+the step is applied at LAUNCH rather than at the mesh face, which is exact for
+the column leg and slightly over-applies the climb over the ~`L_cath` gap.
+
+That closes the loop the node exists to describe. A rising `V_cm` chokes the
+beam; a choked beam deposits less and transmits less, so `I_e_wall` falls; the
+column's ionization feeds `I_i_wall`, which pulls `V_cm` back down. The
+floating constraint therefore **permits beam leakage into the column in
+proportion to the ion wall flux**, and column seeding becomes ion-loss
+throttled rather than emission throttled.
+
+### The step
+
+Advanced once per **accepted** step, after the circuit, with both wall
+currents frozen at their accepted-state values — the same explicit coupling
+the loop current and the cathode thermal state already use, so the choke a
+step produces reaches the beam at the next solve. A rejected attempt moves
+nothing.
+
+The step is the **closed-form** solution rather than an Euler step, because
+the leak is linear in `V_cm` and `R_leak·C_total` can be arbitrarily short
+against `Δt`:
+
+```
+A      = I_e_wall − I_i_wall
+hard:    ΔV = A Δt / C_total,                    Q_leak = 0
+soft:    ΔV = (A R_leak − V_cm)·(−expm1(−Δt/(R_leak C_total)))
+         Q_leak = A Δt − C_total ΔV
+```
+
+`Q_leak` is the exact `∫ V_cm/R_leak dt` the same closed form implies (it
+follows from integrating the ODE itself), which makes the node's conservation
+statement
+
+```
+C_total·Σ ΔV  ==  Q_electron − Q_ion − Q_leak
+```
+
+close to round-off by construction rather than to a tolerance.
+`LAPDSim1D.vessel_charge_residual()` is the auditable form, returning the
+absolute residual and its ratio to the total charge MOVED (not to a cancelling
+net, which can pass through zero). The smoke suite drives a scripted
+seed→engagement→bootstrap→tail scenario at three leak settings and requires
+the relative residual below `1e-12`, and asserts the same on a real
+trajectory.
+
+### The prediction channel
+
+`V_cm(t)` and its three current channels ride the cathode diagnostics
+(`vessel_V_cm_V`, `vessel_beam_climb_V`, `vessel_I_e_wall_A`,
+`vessel_I_i_wall_A`, `vessel_I_leak_A`, `vessel_I_wall_net_A`,
+`vessel_Q_node_C`, `vessel_charge_residual_C`), present only when the node is
+armed. **Nothing here is scored.** The channel exists so that the qualitative
+shape observed on the machine — high early positive bias, decaying as the
+bootstrap relaxes it, plateauing at either sign at the main discharge — has
+something to be compared against later. There are **zero tuned constants**:
+the two config values are hardware quantities, and `C_total` is ESTIMATED with
+the bracket as the claim.
+
+### Phase sequence (reported, not gated)
+
+`scripts/regime_vcm_r0b_check.py` reports the sequence across the whole
+`C_total` bracket, because no single capacitance is a claim: early build
+wall-referenced (at mA-scale seed current the charging time is tens to
+hundreds of ms, far longer than the cycle, so the float cannot engage);
+engagement mid-build in the sub-amp decade; and the bootstrap's sign. The
+sequence is stable in kind across the bracket — only the currents at which the
+phases occur move, by the 10× span of `C_total` itself. The same script sweeps
+the `R_leak` bracket endpoints and the hard float and reports that the
+in-window numbers do not move with them, which is the executable form of the
+timescale argument above.
+
+### Restart
+
+`V_cm` and its charge ledger ride the payload's `circuit` group, and only when
+the node is armed, so a payload from a run without it is structurally what it
+always was. `regime_vessel_node` is a **structural flag key**, so a resume
+that changes the arming refuses rather than reading half a node.

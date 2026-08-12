@@ -35,6 +35,11 @@ STRUCTURAL_FLAG_KEYS = (
     "coverage_closure",
     "neutral_momentum",
     "neutral_two_zone",
+    # The vessel node's V_cm and its charge ledger ride the ``circuit`` group,
+    # and only when the node is armed. Resuming across a change of this flag
+    # would either drop an evolved potential or leave one unread, so the
+    # structural check refuses instead.
+    "regime_vessel_node",
 )
 STRUCTURAL_PARAM_KEYS = (
     "cathode_sample_smoothing",

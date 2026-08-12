@@ -119,6 +119,26 @@ reconstructs the dt-averaged discharge voltage. It is mutated **once per
 trajectory save**, and its value appears in the saved cathode diagnostics, so
 it is load-bearing for frame identity even though it never touches the state.
 
+### Vessel common-mode node (`regime_vessel_node`)
+
+| state | site | class |
+|---|---|---|
+| `_vessel_V_cm` | `_vessel_advance`, from `_accept_step_attempt` | CARRIED (armed only) |
+| `_vessel_charge_ledger_C` | `_vessel_advance` | CARRIED (armed only) |
+| `_vessel_wall_currents_A` | `_vessel_advance` | DROPPED — re-read next step |
+| `_vessel` (resolved constants) | construction | DERIVABLE |
+
+These ride the **`circuit` group**, written and read only when the node is
+armed, so a payload from a run without the node is structurally what it always
+was and no format version moved. `_vessel_wall_currents_A` is the last step's
+`(I_e, I_i, I_leak)` triple and exists for the diagnostics alone; the next
+accepted step re-reads all three from the state before using them, so carrying
+it would change nothing.
+
+`regime_vessel_node` is a **structural flag key**: resuming across a change of
+arming would either drop an evolved potential or leave one unread, so the
+compatibility check refuses instead.
+
 ### Cathode surface
 
 | state | site | class |
@@ -390,7 +410,8 @@ the constructed solver exactly, or the load raises:
 * the **structural** config keys — the ones that decide what the payload's
   members mean rather than merely how big a number is:
   flags `coverage_closure`, `neutral_momentum`, `neutral_two_zone`,
-  `TwinCathode`, `Plasma`, `cathode_coupling`; params `neutral_model`,
+  `TwinCathode`, `Plasma`, `cathode_coupling`, `regime_vessel_node`;
+  params `neutral_model`,
   `cathode_warming_model`, `cathode_surface_model`,
   `cathode_sample_smoothing`, `phase_transition_mode`.
 

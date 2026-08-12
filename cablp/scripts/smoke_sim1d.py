@@ -20,6 +20,7 @@ from cablp.funcs import _cathode_solver_idriven as _cathode_solver_idriven_mod
 from cablp.funcs import _beam_deposition as _beam_deposition_mod
 from cablp.funcs import _cross as _cross_mod
 from cablp.solvers._sim1d.physics import cathode as _cathode_mod
+from cablp.solvers._sim1d.results import restart as _restart_mod
 from cablp.funcs._adas import he_rate_temperature_range_eV
 # main() re-imports deposit_beam locally further down (B1 block), which makes
 # the bare name local to the whole function -- alias it for the item-35 block.
@@ -2220,9 +2221,30 @@ def main():
             raise AssertionError(
                 f"cathode_circuit_voltage_bound accepted {_r1_over!r}"
             )
+    # An unknown bound OBJECT is refused at construction rather than silently
+    # bounding nothing (the selector is read only while the flag is on).
+    try:
+        LAPDSim1D(*_r1_sim_config(
+            cathode_circuit_voltage_bound=True,
+            cathode_circuit_bound_object="V_b",
+        ))
+    except ValueError as _r1_err:
+        assert "cathode_circuit_bound_object" in str(_r1_err), _r1_err
+    else:
+        raise AssertionError("cathode_circuit_bound_object='V_b' accepted")
+    # ...and it is INERT with the flag off: the selector names a member of a
+    # composition that is not formed, so a nonsense value cannot change a run
+    # that never bounds anything.
+    LAPDSim1D(*_r1_sim_config(cathode_circuit_bound_object="V_b"))
+
     # POSITIVE CONSTRUCTION, the other side of those three: the shipped
-    # current-driven stance takes the flag.
-    _r1_on_sim = LAPDSim1D(*_r1_sim_config(cathode_circuit_voltage_bound=True))
+    # current-driven stance takes the flag. Pinned to the R1 object here so
+    # the statements below stay the ones R1 registered; the shipped
+    # ``device_voltage`` object gets its own arm at (viii).
+    _r1_on_sim = LAPDSim1D(*_r1_sim_config(
+        cathode_circuit_voltage_bound=True,
+        cathode_circuit_bound_object="phi_c",
+    ))
     assert _r1_on_sim._flags["cathode_circuit_voltage_bound"] is True
 
     # (vii) END TO END. A short run with the flag on carries the census
@@ -2253,6 +2275,414 @@ def main():
         assert math.isnan(float(_r1_off_diag["source_circuit_V_avail_V"]))
         assert float(_r1_off_diag["source_phi_c_ceiling_V"]) == 1000.0
     assert any(code == 0.0 for code in _r1_codes), _r1_codes
+
+    # (viii) THE phi_a-AWARE OBJECT. R1 bounded phi_c; what the circuit
+    # supplies is the DEVICE voltage V_b = phi_c - phi_a + V_p, in which the
+    # anode fall SUBTRACTS. cathode_circuit_bound_object='device_voltage' (the
+    # shipped value) makes the circuit member of the composed ceiling the net
+    # drop at which V_b reaches the available voltage, so the returned V_b --
+    # not the returned phi_c -- is what the loop can source.
+    for _r1_I in _CAPFIX_BELOW_I_A + _CAPFIX_WINDOW_I_A:
+        _r1_dv = solve_idriven(
+            _cap_cfg, _cap_pl, I_tot_A=float(_r1_I),
+            circuit_V_avail_V=_R1_V_AVAIL,
+            circuit_bound_object="device_voltage",
+            **_CAPFIX_ESCAPE_KWARGS,
+        )
+        # The object's OWN statement, on every solve: the device voltage is
+        # at or below the supply.
+        assert _r1_dv.V_b <= _R1_V_AVAIL * (1.0 + 1e-12), (_r1_I, _r1_dv.V_b)
+        if _r1_dv.regime == "capability_limited":
+            assert _r1_dv.bound_active == 2.0, (_r1_I, _r1_dv.bound_active)
+            # ...and it is reached by SOLVING for it, not by clamping: at the
+            # ceiling the assembled V_b equals the supply to round-off, with
+            # no help from the min() backstop.
+            assert np.isclose(
+                _r1_dv.phi_c + _r1_dv.V_p - _r1_dv.phi_a,
+                _R1_V_AVAIL, rtol=1e-9, atol=0.0,
+            ), (_r1_I, _r1_dv.phi_c, _r1_dv.V_p, _r1_dv.phi_a)
+        # The escape invariant still holds against the COMPOSED ceiling (a
+        # violation raises inside the solve; this is its positive form).
+        assert _r1_dv.phi_c <= _r1_dv.phi_c_ceiling_V * (1.0 + 1e-12), (
+            _r1_I, _r1_dv.phi_c, _r1_dv.phi_c_ceiling_V
+        )
+    # The two objects are NOT the same bound, and the anode fall is the whole
+    # of the difference. On this build-leg fixture phi_a is small and NEGATIVE
+    # (it adds to V_b), so the device-voltage ceiling sits slightly BELOW the
+    # available voltage.
+    _r1_phic_arm = solve_idriven(
+        _cap_cfg, _cap_pl, I_tot_A=_CAPFIX_ESCAPE_I_A,
+        circuit_V_avail_V=_R1_V_AVAIL, circuit_bound_object="phi_c",
+        **_CAPFIX_ESCAPE_KWARGS,
+    )
+    _r1_dv_arm = solve_idriven(
+        _cap_cfg, _cap_pl, I_tot_A=_CAPFIX_ESCAPE_I_A,
+        circuit_V_avail_V=_R1_V_AVAIL, circuit_bound_object="device_voltage",
+        **_CAPFIX_ESCAPE_KWARGS,
+    )
+    assert _r1_phic_arm.phi_c_ceiling_V == _R1_V_AVAIL
+    assert _r1_dv_arm.phi_c_ceiling_V != _R1_V_AVAIL
+    assert _r1_dv_arm.phi_c_ceiling_V < _R1_V_AVAIL, (
+        _r1_dv_arm.phi_c_ceiling_V
+    )
+
+    # A PLATEAU-CLASS point, which is the case R1 documented as out of
+    # contract: hot column, large anode ion collection, so phi_a is a real
+    # positive fall. There phi_c LEGITIMATELY exceeds the available voltage
+    # while V_b does not, and the two objects part company by exactly phi_a.
+    _r1_plat_kwargs = dict(_CAPFIX_ESCAPE_KWARGS)
+    _r1_plat_kwargs.update(anode_current_A=200.0, anode_T_e=5.0)
+    _r1_plat_pl = PlasmaState(T_e=5.0, n_e=1.0e12, n_n=1.0e13, sigma_b=0.0)
+    _r1_plat_phic = solve_idriven(
+        _cap_cfg, _r1_plat_pl, I_tot_A=1000.0,
+        circuit_V_avail_V=_R1_V_AVAIL, circuit_bound_object="phi_c",
+        **_r1_plat_kwargs,
+    )
+    _r1_plat_dv = solve_idriven(
+        _cap_cfg, _r1_plat_pl, I_tot_A=1000.0,
+        circuit_V_avail_V=_R1_V_AVAIL, circuit_bound_object="device_voltage",
+        **_r1_plat_kwargs,
+    )
+    assert _r1_plat_dv.phi_a > 5.0, _r1_plat_dv.phi_a
+    # The mis-clamp, stated as the inequality it is: the phi_c object holds
+    # the sheath drop at the supply and therefore UNDER-reports it (and the
+    # beam birth energy keyed to it) by about the anode fall.
+    assert _r1_plat_phic.phi_c == _R1_V_AVAIL, _r1_plat_phic.phi_c
+    assert _r1_plat_dv.phi_c > _R1_V_AVAIL, _r1_plat_dv.phi_c
+    # The gap between the two objects IS the anode fall (less the gap drop):
+    # the device-voltage ceiling is V_avail + phi_a - V_p, so the phi_c object
+    # loses exactly that much sheath, and therefore that much beam energy.
+    assert np.isclose(
+        _r1_plat_dv.phi_c - _r1_plat_phic.phi_c,
+        _r1_plat_dv.phi_a - _r1_plat_dv.V_p,
+        rtol=1e-9, atol=0.0,
+    ), (_r1_plat_dv.phi_c, _r1_plat_phic.phi_c, _r1_plat_dv.phi_a)
+    # Both objects still honour the supply on the DEVICE voltage; only the
+    # phi_c object needs the clamp to get there.
+    assert _r1_plat_dv.V_b <= _R1_V_AVAIL * (1.0 + 1e-12), _r1_plat_dv.V_b
+    assert np.isclose(
+        _r1_plat_dv.phi_c + _r1_plat_dv.V_p - _r1_plat_dv.phi_a,
+        _R1_V_AVAIL, rtol=1e-9, atol=0.0,
+    )
+
+    # ------------------------------------------------------------------
+    # THE VESSEL / COMMON-MODE NODE (regime_vessel_node, default off).
+    # One state variable V_cm, the anode-to-wall potential, obeying
+    # C_total dV_cm/dt = I_e_wall - I_i_wall - V_cm/R_leak; V_cm is the
+    # potential the transmitted beam must CLIMB from the mesh into the
+    # column, so the energy reaching column physics is phi_c - max(V_cm, 0).
+    # ------------------------------------------------------------------
+    _vcm_climb = _cathode_solver_idriven_mod.beam_launch_energy_eV
+
+    # (i) OFF IS THE IDENTITY, and it is the SAME OBJECT, not an equal one --
+    # which is what makes every downstream float bit-for-bit historical.
+    for _vcm_phi in (0.0, 3.7, 177.843, 1000.0):
+        assert _vcm_climb(_vcm_phi, None) is _vcm_phi, _vcm_phi
+    # DIRECTION, and a flipped sign cannot pass: a POSITIVE common-mode
+    # decelerates by exactly itself, a negative one does nothing at all (a
+    # beam cannot be accelerated into the column by the node -- the same
+    # electrons arrive, and an accelerating step would be a free energy
+    # source), and the fully choked limit is zero rather than negative.
+    assert _vcm_climb(100.0, 30.0) == 70.0
+    assert _vcm_climb(100.0, -30.0) == 100.0
+    assert _vcm_climb(100.0, 250.0) == 0.0
+    for _vcm_v in (1.0, 30.0, 99.0):
+        assert _vcm_climb(100.0, _vcm_v) < 100.0
+        assert _vcm_climb(100.0, _vcm_v) == 100.0 - _vcm_v
+
+    # (ii) THE CHOKE BITES AT THE BEAM. At the frozen escaping state a climb
+    # must lower the launch energy, the beam speed and the He EII cross
+    # section the birth rate is formed on -- and the FLUX must not move,
+    # because the same electrons arrive, decelerated.
+    def _vcm_beam(climb):
+        return _cathode_solver_idriven_mod.solve_beam_system_idriven(
+            _cap_cfg,
+            np.array([_cap_pl.T_e, _cap_pl.T_e]),
+            np.array([_cap_pl.n_e, _cap_pl.n_e]),
+            np.array([_cap_pl.n_n, _cap_pl.n_n]),
+            np.zeros(2),
+            np.array([_cap_cfg.A_c, _cap_cfg.A_c]),
+            I_ion,
+            "He",
+            _CAPFIX_ESCAPE_I_A,
+            cathode_index=0,
+            circuit_V_avail_V=_R1_V_AVAIL,
+            circuit_bound_object="device_voltage",
+            beam_climb_V=climb,
+            **_CAPFIX_ESCAPE_KWARGS,
+        )
+
+    _vcm_b0 = _vcm_beam(None)
+    # Passing None is indistinguishable from omitting the argument, to the bit.
+    assert _r1_state(_vcm_b0.result) == _r1_state(
+        _cathode_solver_idriven_mod.solve_beam_system_idriven(
+            _cap_cfg,
+            np.array([_cap_pl.T_e, _cap_pl.T_e]),
+            np.array([_cap_pl.n_e, _cap_pl.n_e]),
+            np.array([_cap_pl.n_n, _cap_pl.n_n]),
+            np.zeros(2),
+            np.array([_cap_cfg.A_c, _cap_cfg.A_c]),
+            I_ion,
+            "He",
+            _CAPFIX_ESCAPE_I_A,
+            cathode_index=0,
+            circuit_V_avail_V=_R1_V_AVAIL,
+            circuit_bound_object="device_voltage",
+            **_CAPFIX_ESCAPE_KWARGS,
+        ).result
+    )
+    _vcm_prev_v = _vcm_b0.v_beam[0]
+    for _vcm_V in (10.0, 50.0, 120.0):
+        _vcm_b = _vcm_beam(_vcm_V)
+        # The SHEATH is untouched: V_cm is common-mode and cannot change the
+        # anode-to-cathode differential the circuit integrates.
+        assert _vcm_b.result.phi_c == _vcm_b0.result.phi_c, _vcm_V
+        assert _vcm_b.result.V_b == _vcm_b0.result.V_b, _vcm_V
+        # The BEAM is choked, monotonically, by exactly the climb.
+        assert _vcm_b.v_beam[0] < _vcm_prev_v, (_vcm_V, _vcm_b.v_beam[0])
+        _vcm_prev_v = _vcm_b.v_beam[0]
+        assert _vcm_b.beam_cross[0] == _beam_deposition_mod.He_EII_cross_lkup(
+            (_vcm_b0.result.phi_c - _vcm_V) / I_ion
+        ), _vcm_V
+        # Flux invariance: n_beam * v_beam is the current, and it is the one
+        # thing the climb may not move.
+        assert np.isclose(
+            _vcm_b.n_beam[0] * _vcm_b.v_beam[0],
+            _vcm_b0.n_beam[0] * _vcm_b0.v_beam[0],
+            rtol=1e-12, atol=0.0,
+        ), _vcm_V
+    # Fully choked: past the ionization potential there is no beam at all,
+    # which is the bootstrap's own limit and not an error.
+    _vcm_dead = _vcm_beam(_vcm_b0.result.phi_c)
+    assert _vcm_dead.v_beam[0] == 0.0 and _vcm_dead.beam_cross[0] == 0.0
+
+    # (iii) THE ODE, on a SCRIPTED scenario, closes its charge ledger. This is
+    # the node's conservation statement: C*sum(dV) == Q_e - Q_i - Q_leak, with
+    # Q_leak the exact int V_cm/R_leak dt the same closed form implies.
+    _vcm_node_mod = _cathode_mod
+    for _vcm_R in (None, 1.0e6, 1.0e3):
+        _vcm_node = _vcm_node_mod.VesselNode1D(
+            C_total_F=1.3e-6,
+            R_leak_ohm=_vcm_R,
+            collector_cells=np.asarray([3], dtype=int),
+        )
+        _vcm_V_cm = 0.0
+        _vcm_Q = {"e": 0.0, "i": 0.0, "leak": 0.0, "node": 0.0, "abs": 0.0}
+        # A scripted build: seed current, engagement, bootstrap relaxation
+        # (the ion flux overtakes), and a quiet tail.
+        for _vcm_Ie, _vcm_Ii, _vcm_dt in (
+            (1.0e-3, 0.0, 1.0e-5), (1.0e-3, 0.0, 1.0e-5),
+            (0.35, 0.0, 2.0e-5), (0.35, 0.10, 2.0e-5),
+            (0.35, 0.35, 5.0e-5), (0.10, 0.40, 5.0e-5),
+            (0.0, 0.20, 1.0e-4), (0.0, 0.0, 1.0e-3),
+        ):
+            _vcm_V_cm, _vcm_dV, _vcm_dQe, _vcm_dQi, _vcm_dQl = (
+                _vcm_node_mod.vessel_node_advance(
+                    _vcm_node, _vcm_V_cm, _vcm_Ie, _vcm_Ii, _vcm_dt
+                )
+            )
+            _vcm_Q["e"] += _vcm_dQe
+            _vcm_Q["i"] += _vcm_dQi
+            _vcm_Q["leak"] += _vcm_dQl
+            _vcm_Q["node"] += _vcm_node.C_total_F * _vcm_dV
+            _vcm_Q["abs"] += abs(_vcm_dQe) + abs(_vcm_dQi) + abs(_vcm_dQl)
+        _vcm_res = _vcm_Q["node"] - (
+            _vcm_Q["e"] - _vcm_Q["i"] - _vcm_Q["leak"]
+        )
+        assert abs(_vcm_res) <= 1.0e-12 * _vcm_Q["abs"], (_vcm_R, _vcm_res)
+        # ...and the state itself agrees with the ledger, which is the
+        # stronger statement (it would catch a dV that was booked but not
+        # applied).
+        assert np.isclose(
+            _vcm_node.C_total_F * _vcm_V_cm, _vcm_Q["node"],
+            rtol=1e-10, atol=1e-18,
+        ), (_vcm_R, _vcm_V_cm)
+    # SIGN, on the physics rather than on the arithmetic: electrons landing on
+    # the wall raise V_cm, ions lower it, and a hard float never leaks.
+    _vcm_hard = _vcm_node_mod.VesselNode1D(
+        C_total_F=1.3e-6, R_leak_ohm=None,
+        collector_cells=np.asarray([3], dtype=int),
+    )
+    assert _vcm_node_mod.vessel_node_advance(
+        _vcm_hard, 0.0, 1.0, 0.0, 1.0e-6
+    )[0] > 0.0
+    assert _vcm_node_mod.vessel_node_advance(
+        _vcm_hard, 0.0, 0.0, 1.0, 1.0e-6
+    )[0] < 0.0
+    assert _vcm_node_mod.vessel_node_advance(
+        _vcm_hard, 100.0, 0.0, 0.0, 1.0e-3
+    )[0] == 100.0
+    # A soft tie DRAINS a charged node toward zero and cannot overshoot it,
+    # however many time constants the step spans (the closed form is what
+    # buys that; an Euler step of this length would change sign).
+    _vcm_soft = _vcm_node_mod.VesselNode1D(
+        C_total_F=1.3e-6, R_leak_ohm=1.0e3,
+        collector_cells=np.asarray([3], dtype=int),
+    )
+    _vcm_drained = _vcm_node_mod.vessel_node_advance(
+        _vcm_soft, 100.0, 0.0, 0.0, 1.0
+    )[0]
+    assert 0.0 <= _vcm_drained < 1.0e-6, _vcm_drained
+
+    # (iv) CONSTRUCTION-TIME REFUSALS. Every configuration in which the node
+    # would be inert or half-present is refused, loudly, before any compute.
+    for _vcm_over, _vcm_needle in (
+        ({"cathode_coupling": False}, "cathode_coupling"),
+        ({"Plasma": False}, "Plasma on"),
+        ({"cathode_circuit_voltage_bound": False},
+         "cathode_circuit_voltage_bound"),
+        ({"beam_deposition_model": "beer_lambert"}, "transmitted_flux"),
+        ({"vessel_capacitance_F": 0.0}, "vessel_capacitance_F"),
+        ({"vessel_capacitance_F": -1.0e-6}, "vessel_capacitance_F"),
+        ({"vessel_capacitance_F": float("nan")}, "vessel_capacitance_F"),
+        ({"vessel_leak_resistance_ohm": 0.0}, "vessel_leak_resistance_ohm"),
+        ({"vessel_leak_resistance_ohm": -5.0}, "vessel_leak_resistance_ohm"),
+        ({"vessel_leak_resistance_ohm": float("inf")},
+         "vessel_leak_resistance_ohm"),
+        ({"vessel_leak_resistance_ohm": float("nan")},
+         "vessel_leak_resistance_ohm"),
+    ):
+        _vcm_p, _vcm_f = _r1_sim_config(
+            cathode_circuit_voltage_bound=True, regime_vessel_node=True
+        )
+        for _vcm_k, _vcm_v in _vcm_over.items():
+            if _vcm_k in _vcm_f:
+                _vcm_f[_vcm_k] = _vcm_v
+            else:
+                _vcm_p[_vcm_k] = _vcm_v
+        try:
+            LAPDSim1D(_vcm_p, _vcm_f)
+        except ValueError as _vcm_err:
+            assert _vcm_needle in str(_vcm_err), (_vcm_over, str(_vcm_err))
+        else:
+            raise AssertionError(f"regime_vessel_node accepted {_vcm_over!r}")
+    # A geometry with no plasma-terminating COLLECTOR has no ion wall channel
+    # and no terminal surface for the beam, so the node refuses it. Checked at
+    # the resolver, because LAPDSim1D builds only the resolved geometry and
+    # cannot present this case at all.
+    try:
+        _cathode_mod.resolve_vessel_node(
+            {"vessel_capacitance_F": 1.3e-6},
+            SimpleNamespace(cell_role=np.asarray(
+                ["cathode", "column", "column"], dtype=object
+            )),
+        )
+    except ValueError as _vcm_err:
+        assert "COLLECTOR" in str(_vcm_err), _vcm_err
+    else:
+        raise AssertionError("regime_vessel_node accepted a collector-free grid")
+
+    # (v) END TO END. Off, the node is ABSENT (not zero) and its diagnostics
+    # do not exist at all; the vessel constants are unreadable from the off
+    # path, so setting them cannot move a single bit of the trajectory.
+    _vcm_off_a = LAPDSim1D(*_r1_sim_config())
+    _vcm_off_b = LAPDSim1D(*_r1_sim_config(
+        vessel_capacitance_F=4.0e-6, vessel_leak_resistance_ohm=1.0e5
+    ))
+    assert _vcm_off_a._vessel is None and _vcm_off_a._vessel_V_cm is None
+    for _ in range(8):
+        _vcm_off_a.advance_one_step(dt=2.0e-9)
+        _vcm_off_b.advance_one_step(dt=2.0e-9)
+    assert _vcm_off_a._y.tobytes() == _vcm_off_b._y.tobytes()
+    assert "vessel_V_cm_V" not in _vcm_off_a._cathode_diagnostic_snapshot()
+
+    # ...and ON, the node runs, publishes its channels, and closes its ledger
+    # over a real trajectory.
+    _vcm_on = LAPDSim1D(*_r1_sim_config(
+        cathode_circuit_voltage_bound=True, regime_vessel_node=True
+    ))
+    assert _vcm_on._vessel is not None and _vcm_on._vessel_V_cm == 0.0
+    for _ in range(8):
+        _vcm_on.advance_one_step(dt=2.0e-9)
+    _vcm_diag = _vcm_on._cathode_diagnostic_snapshot()
+    for _vcm_key in (
+        "vessel_V_cm_V", "vessel_beam_climb_V", "vessel_I_e_wall_A",
+        "vessel_I_i_wall_A", "vessel_I_leak_A", "vessel_I_wall_net_A",
+        "vessel_Q_node_C", "vessel_charge_residual_C",
+    ):
+        assert _vcm_key in _vcm_diag, _vcm_key
+        assert math.isfinite(float(_vcm_diag[_vcm_key])), _vcm_key
+    # The two wall channels are magnitudes and the climb is the node's
+    # positive part. The SHIPPED leak is finite (the capacitors are
+    # electrolytics), so the leak channel is live and carries V_cm/R_leak with
+    # the node's own sign -- but it is negligible against the wall currents on
+    # any discharge-length window, which is the whole timescale argument, and
+    # here that is an assertion rather than a claim.
+    assert float(_vcm_diag["vessel_I_e_wall_A"]) >= 0.0
+    assert float(_vcm_diag["vessel_I_i_wall_A"]) >= 0.0
+    assert np.isclose(
+        float(_vcm_diag["vessel_I_leak_A"]),
+        float(_vcm_diag["vessel_V_cm_V"])
+        / float(_vcm_on._input_dict["vessel_leak_resistance_ohm"]),
+        rtol=1e-12, atol=0.0,
+    ), _vcm_diag
+    assert abs(float(_vcm_diag["vessel_I_leak_A"])) < 1.0e-6 * abs(
+        float(_vcm_diag["vessel_I_i_wall_A"])
+    ), _vcm_diag
+    assert float(_vcm_diag["vessel_beam_climb_V"]) == max(
+        float(_vcm_diag["vessel_V_cm_V"]), 0.0
+    )
+    # The idealized HARD FLOAT remains reachable as an explicit arm, and there
+    # the leak channel really is exactly zero.
+    _vcm_hf = LAPDSim1D(*_r1_sim_config(
+        cathode_circuit_voltage_bound=True, regime_vessel_node=True,
+        vessel_leak_resistance_ohm=None,
+    ))
+    assert _vcm_hf._vessel.R_leak_ohm is None
+    for _ in range(4):
+        _vcm_hf.advance_one_step(dt=2.0e-9)
+    assert float(
+        _vcm_hf._cathode_diagnostic_snapshot()["vessel_I_leak_A"]
+    ) == 0.0
+    _vcm_abs, _vcm_rel = _vcm_on.vessel_charge_residual()
+    assert _vcm_rel <= 1.0e-12, (_vcm_abs, _vcm_rel)
+    # ANTI-VACUITY. An inert node -- one whose ODE is never stepped -- would
+    # satisfy every bound below, so require that it MOVED, in the direction
+    # its one live channel implies. On this short arm the beam has not yet
+    # broken out to the far end, so the ion wall flux is the only current and
+    # V_cm must be strictly negative.
+    assert float(_vcm_diag["vessel_I_i_wall_A"]) > 0.0, _vcm_diag
+    assert float(_vcm_diag["vessel_V_cm_V"]) < 0.0, _vcm_diag
+    assert float(_vcm_diag["vessel_Q_node_C"]) < 0.0, _vcm_diag
+    # The ELECTRON channel is genuinely zero on this arm (nothing is
+    # transmitted yet), so its READ is checked against a constructed
+    # deposition rather than left vacuous: it must sum the transmitted PRIMARY
+    # flux over ends, skip an absent ray, and convert with the electron charge.
+    _vcm_saved_solve = _vcm_on._cathode_solve
+    try:
+        _vcm_on._cathode_solve = SimpleNamespace(beam_deposition={
+            0: SimpleNamespace(transmitted_flux=2.5e18),
+            -1: None,
+        })
+        assert np.isclose(
+            _vcm_on._vessel_electron_wall_current_A(),
+            2.5e18 * 1.602176634e-19, rtol=1e-9, atol=0.0,
+        ), _vcm_on._vessel_electron_wall_current_A()
+        _vcm_on._cathode_solve = SimpleNamespace(beam_deposition={
+            0: SimpleNamespace(transmitted_flux=2.5e18),
+            -1: SimpleNamespace(transmitted_flux=1.5e18),
+        })
+        assert np.isclose(
+            _vcm_on._vessel_electron_wall_current_A(),
+            4.0e18 * 1.602176634e-19, rtol=1e-9, atol=0.0,
+        )
+        # No solve at all is zero, not a crash -- and, critically, must not
+        # trigger a cache-mutating cathode re-solve on the ion side either.
+        _vcm_on._cathode_solve = None
+        assert _vcm_on._vessel_electron_wall_current_A() == 0.0
+        assert _vcm_on._vessel_ion_wall_current_A() == 0.0
+    finally:
+        _vcm_on._cathode_solve = _vcm_saved_solve
+    # EARLY BUILD IS WALL-REFERENCED. At the mA-scale currents this window
+    # opens at, charging C_total to the bank scale takes far longer than the
+    # cycle, so the node has not engaged: |V_cm| must still be far below the
+    # supply. This is the R0b phase-1 statement, asserted rather than assumed.
+    assert abs(float(_vcm_diag["vessel_V_cm_V"])) < 1.0, _vcm_diag[
+        "vessel_V_cm_V"
+    ]
+    # A restart across a change of arming is refused by the structural key
+    # rather than reading half a node.
+    assert "regime_vessel_node" in _restart_mod.STRUCTURAL_FLAG_KEYS
 
     # Schottky lowering (opt-in): the field-tilted emission ceiling gives the
     # knee a finite dV/dI. Near the raw ceiling the enhanced curve must sit

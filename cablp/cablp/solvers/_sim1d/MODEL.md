@@ -1043,24 +1043,110 @@ runaway backstop the floor was originally added for — the loop residual is
 identically zero in the clamped branch — and the circuit's stage root-find
 stays well-posed, with $g'(I) = 1$ exactly there rather than merely $\ge 1$.
 
-**SCOPE — the bound's contract is the capability-limited / near-vacuum regime,
-i.e. the pre-breakdown build leg. A full-window run with the flag on is out of
-contract.** The bound's object is $\phi_c$, but what the circuit supplies is
-the *device* voltage $V_b = \phi_c - \phi_a + V_p$, in which the anode fall
-**subtracts**. On the build leg $\phi_a$ is negligible and the two coincide,
-which is why bounding $\phi_c$ is the right move there. At the main-discharge
-plateau $\phi_a$ is not negligible: $\phi_c$ legitimately exceeds
-$V_\text{avail}(\approx 5\ \text{kA})$ while $V_b$ does not, so the composed
-ceiling would clamp a physically correct solve — forcing every plateau solve to
-`capability_limited` at $\phi_c = V_\text{avail}$. **Nothing raises when that
-happens.** Only the `bound_active` census records it, so the census must be
-read on any run that reaches the plateau with the flag on. Because the plateau
-never touches the ceiling with the flag off, this is a defect the flag would
-*introduce*, not one it inherits. A $\phi_a$-aware bound whose object is $V_b$
-is the R2 follow-on; until then, confine the flag to build-leg windows.
+### The bound's object
+
+What the circuit supplies is the *device* voltage $V_b = \phi_c - \phi_a +
+V_p$, in which the anode fall **subtracts**; $\phi_c$ is only its proxy.
+`cathode_circuit_bound_object` chooses between them.
+
+`"device_voltage"` (shipped) makes the circuit member of the composed ceiling
+the net cathode drop $\phi_c^\star$ at which
+
+$$V_b(\psi) = \phi_c(\psi) + V_p(\psi) - \phi_a(\psi) = V_\text{avail},$$
+
+located by a bracketed solve on the same monotone device relation the current
+root uses, with $\phi_a$ and $V_p$ evaluated by the identical expressions that
+assemble the returned result — so the bound's object and the reported object
+cannot drift apart. Everything downstream is unchanged: the composition is
+still a `min` with the data cap, the ladder is the same ladder, the escape
+invariant still asserts against the composed ceiling, the `bound_active`
+census still says which member bound, and because the circuit's contribution
+is still a $\phi_c$ number the compiled root path is entered exactly as
+before. On the build leg $\phi_a$ is small and *negative* (it adds to $V_b$),
+so $\phi_c^\star$ sits slightly **below** $V_\text{avail}$; at a plateau-class
+point $\phi_a$ is a real positive fall and $\phi_c^\star = V_\text{avail} +
+\phi_a - V_p$ sits **above** it. That is the whole of the difference.
+
+`"phi_c"` makes the circuit member $V_\text{avail}$ itself. This is the R1
+composition, bit for bit, retained as an A/B arm. Where $\phi_a$ is not
+negligible it clamps a physically correct solve to $\phi_c = V_\text{avail}$
+and tags it `capability_limited`, **raising nothing** — only `bound_active`
+records it — and the sheath drop, and the beam birth energy keyed to it, come
+back low by about $\phi_a$.
+
+**SCOPE — a full-window run with the flag on remains out of contract, for a
+reason the object does not touch.** The $\phi_c$/$V_b$ mismatch above is
+fixed. What is not is the back-EMF exclusion: while the bound binds, $V_b$ is
+held at $V_\text{avail}$, the loop residual is identically zero and $dI/dt =
+0$. On any leg where the loop current is **falling** — the main-discharge
+decay — the physical $V_b$ exceeds $V_\text{avail}$ *precisely because the
+inductor is supplying*, and the bound engages and freezes the current instead
+of letting it decay. So the contract is: **any window over which the loop
+current is not falling** — the pre-breakdown build leg and the rise into the
+plateau — and the `bound_active` census must be read on any run that reaches
+the decay with the flag on. Lifting this needs a bound that counts the
+inductor's stored energy as supply on the falling leg, which is a different
+change from this one.
 
 **Diagnostics.** Three per-solve values ride the cathode diagnostics:
 `phi_c_ceiling_V` (the ceiling actually solved against), `circuit_V_avail_V`
 (NaN where the bound is not in force) and `bound_active` — 0 the solve is a
 free root, 1 it sat on the data cap, 2 it sat on the circuit bound. All three
 are NaN on the voltage-driven (floating) solve, which has no ceiling.
+
+## Vessel / common-mode node (`regime_vessel_node`, default off)
+
+The cathode/anode system **floats** with respect to the machine wall. The
+whole electrically connected stainless vessel is ONE wall conductor, and the
+anode is referenced to it only through four feedthrough capacitors bridging
+the ceramic gap insulators, whose parallel sum is `vessel_capacitance_F`
+($C_\text{total}$). The capacitor **type is visually unresolved** — axial
+polypropylene film on the second look, aluminium electrolytic on the first —
+so `vessel_leak_resistance_ohm` is finite, ESTIMATED over a bracket spanning
+both readings (2.5e7–1e11 Ω, defaulting to the film reading) with the bracket
+as the claim, and a bench measurement resolves it.
+
+**The structural fact does not depend on the type.** At BOTH bracket edges
+$\tau_\text{leak} = R_\text{leak}C_\text{total} \gtrsim 10\ \text{s}$ against a
+~25 ms discharge, so **within a shot the node is hard-float in kind either
+way** and nothing a run measures moves with the leak. The shipped leak is a
+*symmetric* linear resistor; if the parts are electrolytic their reverse-bias
+asymmetry is a documented deviation rather than a modelled one, and if they
+are film there is no polarity nuance at all (see `NUMERICS.md`).
+
+The flag adds ONE state variable, the anode-to-wall potential $V_\text{cm}$:
+
+$$C_\text{total}\,\frac{dV_\text{cm}}{dt}
+  = I_{e,\text{wall}} - I_{i,\text{wall}} - \frac{V_\text{cm}}{R_\text{leak}},$$
+
+with $I_{e,\text{wall}}$ the CSDA rays' transmitted primary flux (the far end
+IS the vessel) and $I_{i,\text{wall}}$ the column's ion loss read off the live
+plasma-terminating boundary term at the collector cells. Electrons landing on
+the wall raise $V_\text{cm}$; ions lower it; the steady state is the floating
+condition, zero net system-to-wall current.
+
+$V_\text{cm}$ is the potential the transmitted beam must **climb** from the
+mesh into the column, so the energy reaching column physics is
+$\max(\phi_c - \max(V_\text{cm},0),\,0)$ with $\phi_c$ the circuit-bounded
+sheath drop — never the atomic-data cap, which is why the node requires
+`cathode_circuit_voltage_bound`. The launched **flux** is untouched: the same
+electrons arrive, decelerated.
+
+That is the **ion-loss bootstrap**. The system self-biases until transmitted
+electrons are decelerated climbing from mesh to column; with gas present,
+ionization produces an ion wall flux, and the floating constraint then permits
+an equal electron leakage into the column. Column seeding becomes ion-loss
+throttled rather than emission throttled.
+
+$V_\text{cm}(t)$ is saved as a **prediction channel** and is deliberately not
+scored here: the qualitative shape observed on the machine — high early
+positive bias, decaying as the bootstrap relaxes it, plateauing at either sign
+at the main discharge — is the eventual comparison, and this build supplies
+the trace, not the verdict. There are no tuned constants: both config values
+are hardware quantities, and $C_\text{total}$ is ESTIMATED with the bracket as
+the claim.
+
+The numerical method — the closed-form step, the charge ledger and its
+conservation statement, the single shared launch energy, the restart handling
+and the reported phase sequence — is `NUMERICS.md`, section "Vessel
+common-mode node".

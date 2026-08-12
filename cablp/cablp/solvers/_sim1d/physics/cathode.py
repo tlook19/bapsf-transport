@@ -21,6 +21,7 @@ from cablp.funcs._cathode_solver import (
     solve_beam_system,
 )
 from cablp.funcs._cathode_solver_idriven import (
+    beam_launch_energy_eV,
     solve_beam_system_idriven,
     solve_idriven,
 )
@@ -526,6 +527,148 @@ def circuit_available_voltage_V(input_dict, input_flags, V_src_V, I_A):
     return V_avail
 
 
+def circuit_bound_object(input_dict):
+    """Return ``cathode_circuit_bound_object``, the quantity the bound bounds.
+
+    ``"device_voltage"`` (the shipped value) makes the circuit member of the
+    composed sheath ceiling the net drop at which ``V_b = V_avail``, so the
+    bound's object is the quantity the loop equation contains; ``"phi_c"``
+    bounds the net cathode drop directly and reproduces the R1 composition
+    bit for bit. Read by the sheath solve, which validates it only when the
+    bound is actually in force; the solver validates it at construction.
+    """
+    return str(input_dict.get("cathode_circuit_bound_object", "device_voltage"))
+
+
+@dataclass(frozen=True)
+class VesselNode1D:
+    """Resolved constants of the vessel / common-mode node (regime V_cm).
+
+    ``C_total_F`` is the capacitance bridging the floating cathode/anode
+    system to the wall conductor; ``R_leak_ohm`` is the positive resistance of
+    the feedthrough capacitors' leakage path, or ``None`` for the idealized
+    hard float. ``collector_cells`` are the cells whose plasma-terminating
+    face IS the vessel, i.e. where the column's ion wall flux is read.
+
+    The leak is SYMMETRIC: a linear resistor in both directions. If the
+    capacitors turn out to be electrolytic rather than film they are polarized
+    and conduct asymmetrically under reverse bias; that is a documented
+    deviation and not modelled here.
+    """
+
+    C_total_F: float
+    R_leak_ohm: float | None
+    collector_cells: np.ndarray
+
+
+def resolve_vessel_node(input_dict, geometry):
+    """Return the validated :class:`VesselNode1D`, raising on nonsense.
+
+    Called only when ``regime_vessel_node`` is on. Every refusal names what
+    the node accepts and fires at construction: a run that cannot legally arm
+    the node must not spend compute discovering it.
+    """
+    C_total = input_dict.get("vessel_capacitance_F", None)
+    try:
+        C_total = float(C_total)
+    except (TypeError, ValueError):
+        C_total = float("nan")
+    if not (C_total > 0.0) or not math.isfinite(C_total):
+        raise ValueError(
+            "regime_vessel_node requires a finite positive "
+            "vessel_capacitance_F [F] -- the four feedthrough capacitors' "
+            "parallel sum, engineer-ESTIMATED at 0.4-4 uF; accepted: any "
+            f"finite value > 0 (got {input_dict.get('vessel_capacitance_F')!r})"
+        )
+    R_leak = input_dict.get("vessel_leak_resistance_ohm", None)
+    if R_leak is not None:
+        try:
+            R_leak = float(R_leak)
+        except (TypeError, ValueError):
+            R_leak = float("nan")
+        if not (R_leak > 0.0) or not math.isfinite(R_leak):
+            raise ValueError(
+                "vessel_leak_resistance_ohm must be a finite positive "
+                "resistance [Ohm] -- the feedthrough capacitors' leakage path, "
+                "ESTIMATED at 2.5e7-1e11 Ohm over both readings of an "
+                "unresolved capacitor type -- or None for the idealized HARD "
+                "float; a zero or negative value is not a tie, it is a short "
+                "with the wrong sign (got "
+                f"{input_dict.get('vessel_leak_resistance_ohm')!r})"
+            )
+    collector = np.flatnonzero(
+        np.asarray(geometry.cell_role) == "collector"
+    ).astype(int)
+    if collector.size == 0:
+        raise ValueError(
+            "regime_vessel_node needs a plasma-terminating COLLECTOR cell: "
+            "the far end is the vessel, and it carries both the transmitted "
+            "beam's terminal surface and the column's ion wall flux, which "
+            "are the two currents the node integrates. Accepted: the resolved "
+            "geometry (resolved_boundaries=True)"
+        )
+    return VesselNode1D(
+        C_total_F=C_total,
+        R_leak_ohm=R_leak,
+        collector_cells=collector,
+    )
+
+
+def vessel_node_advance(node, V_cm_V, I_e_wall_A, I_i_wall_A, dt_s):
+    """Advance ``V_cm`` one step in closed form; return the step's ledger.
+
+    Integrates ``C dV_cm/dt = I_e_wall - I_i_wall - V_cm/R_leak`` over ``dt``
+    with the two wall currents FROZEN at their step values (the same explicit
+    coupling the loop current and the cathode thermal state already use). The
+    leak is linear in ``V_cm``, so the step is exact rather than Euler and
+    cannot ring however small ``R_leak*C`` is against ``dt``.
+
+    Sign convention: electrons landing on the wall charge it negative and so
+    RAISE the anode-to-wall potential ``V_cm``; ions landing on it lower
+    ``V_cm``. The steady state of the pair is the floating condition, zero net
+    system-to-wall current.
+
+    Returns ``(V_cm_new, dV, dQ_e, dQ_i, dQ_leak)`` in volts and coulombs,
+    with ``dQ_leak`` the exact ``int V_cm/R_leak dt`` implied by the same
+    closed form, so ``C*dV == dQ_e - dQ_i - dQ_leak`` closes to round-off.
+    """
+    C = float(node.C_total_F)
+    dt = float(dt_s)
+    I_e = float(I_e_wall_A)
+    I_i = float(I_i_wall_A)
+    A = I_e - I_i
+    V0 = float(V_cm_V)
+    if node.R_leak_ohm is None:
+        dV = A * dt / C
+        dQ_leak = 0.0
+    else:
+        R = float(node.R_leak_ohm)
+        V_inf = A * R
+        dV = (V_inf - V0) * (-math.expm1(-dt / (R * C)))
+        dQ_leak = A * dt - C * dV
+    return V0 + dV, dV, I_e * dt, I_i * dt, dQ_leak
+
+
+def vessel_beam_climb_V(input_flags, V_cm_V):
+    """Return the mesh-to-column climb [V] for the beam, or ``None``.
+
+    ``None`` -- the vessel common-mode node is not armed, or no node potential
+    was supplied at this call site -- means "no potential step exists", and
+    the beam launch energy is the sheath drop itself, bit for bit. Otherwise
+    the climb IS the anode-to-wall common-mode potential ``V_cm``: the column
+    is referenced to the vessel and the mesh to the floating cathode/anode
+    system, so an electron crossing from one to the other climbs exactly their
+    difference. Only a POSITIVE ``V_cm`` decelerates; the sign is applied by
+    :func:`cablp.funcs._cathode_solver_idriven.beam_launch_energy_eV`, which
+    owns it for both beam readers.
+    """
+    if not bool(input_flags.get("regime_vessel_node", False)):
+        return None
+    if V_cm_V is None:
+        return None
+    return float(V_cm_V)
+
+
 def idriven_result_evaluator(
     state,
     floors,
@@ -603,6 +746,7 @@ def idriven_result_evaluator(
             circuit_V_avail_V=circuit_available_voltage_V(
                 input_dict, input_flags, circuit_V_src_V, I_A
             ),
+            circuit_bound_object=circuit_bound_object(input_dict),
         )
 
     return solve_at
@@ -814,8 +958,16 @@ def solve_cathode_boundary(
     circuit_I_loop_A=0.0,
     circuit_V_src_V=None,
     coverage=None,
+    vessel_V_cm_V=None,
 ):
     """Call the cathode/beam solver and return raw diagnostics only.
+
+    ``vessel_V_cm_V`` is the anode-to-wall common-mode potential [V] when the
+    vessel node is armed, and ``None`` otherwise. It reaches exactly two
+    places -- the Beer-Lambert beam-array assembly and the CSDA deposition
+    rays -- as the mesh-to-column climb the transmitted beam must pay, and
+    never the sheath solve itself (see
+    :func:`cablp.funcs._cathode_solver_idriven.solve_beam_system_idriven`).
 
     ``coverage`` is the optional :class:`CoverageView1D`. It is applied at
     exactly the point where the beam's own view of the medium enters -- the
@@ -881,6 +1033,7 @@ def solve_cathode_boundary(
         device_config, derived, geometry, input_dict, input_flags
     )
     solver_model = validate_cathode_solver_model(input_dict, input_flags)
+    beam_climb_V = vessel_beam_climb_V(input_flags, vessel_V_cm_V)
     beam_cross_prev = np.asarray(beam_cross_prev, dtype=float)
     if beam_cross_prev.shape != (geometry.cells,):
         raise ValueError(
@@ -928,6 +1081,8 @@ def solve_cathode_boundary(
                 circuit_V_src_V,
                 max(float(circuit_I_loop_A), 0.0),
             ),
+            circuit_bound_object=circuit_bound_object(input_dict),
+            beam_climb_V=beam_climb_V,
         )
     else:
         beam_result = solve_beam_system(
@@ -983,6 +1138,7 @@ def solve_cathode_boundary(
                 input_flags.get("beam_anode_interception", False)
             ),
             coverage=coverage,
+            beam_climb_V=beam_climb_V,
         )
     return CathodeSolve1D(
         boundary=boundary,
@@ -1146,6 +1302,7 @@ def _csda_beam_deposition(
     twin=False,
     anode_interception=False,
     coverage=None,
+    beam_climb_V=None,
 ):
     """Run the CSDA module for each active cathode ray (B2 wiring).
 
@@ -1252,6 +1409,19 @@ def _csda_beam_deposition(
     banking those events into the two ARMS with weights ``f_cov`` and
     ``1 - f_cov``, so the reservoir debit this module already publishes carries
     the split with no extra plumbing.
+
+    ``beam_climb_V`` is the mesh-to-column potential step the transmitted beam
+    must climb (the vessel node's ``V_cm``), or ``None`` for no such step. It
+    enters at ONE point -- the per-ray launch energy ``phi_c_ray`` -- and the
+    launched FLUX is untouched. The whole ray family of a given end therefore
+    moves together: deposition ray, gap probe, tail birth keying, reflection
+    threshold and the ``sigma_eff`` inversion are all built from that one
+    energy, so the item-35 tripwire keeps comparing three views of one number.
+    The consequence to be aware of is that the choke also shortens the ray
+    inside the CATHODE-ANODE GAP, which physically sits upstream of the climb:
+    at this granularity the model applies the step at launch rather than at
+    the mesh face, which is exact for the column leg and slightly
+    over-applies it over the ~``L_cath`` gap.
     """
     coulomb_model = str(input_dict.get("beam_coulomb_model", "fast_electron"))
     anomalous_model = str(input_dict.get("beam_anomalous_model", "none"))
@@ -1401,7 +1571,18 @@ def _csda_beam_deposition(
     ends = (0, -1) if twin else (0,)
     for end in ends:
         result = beam_result.result if end == 0 else beam_result.result_twin
-        if result is None or result.phi_c <= I_ion:
+        # The energy THIS ray carries into the column. Without the vessel node
+        # it is ``result.phi_c``, the same object, so every ray below is the
+        # historical one; with the node armed it is that drop less the
+        # mesh-to-column climb, and one local carries it to the deposition
+        # ray, the gap probe, the tail keying and the sigma_eff inversion
+        # alike, so the ray and the instruments that measure it cannot be
+        # launched at two different energies.
+        phi_c_ray = (
+            None if result is None
+            else beam_launch_energy_eV(result.phi_c, beam_climb_V)
+        )
+        if result is None or phi_c_ray <= I_ion:
             deposition[end] = None
             if two_medium:
                 reservoir_deposition[end] = None
@@ -1419,14 +1600,14 @@ def _csda_beam_deposition(
             ray_transport = dict(transport_kwargs)
             if tail_keying != "fixed":
                 ray_transport["tail_energy_eV"] = (
-                    tail_phi_fraction * float(result.phi_c)
+                    tail_phi_fraction * float(phi_c_ray)
                 )
             if tail_reflect:
                 ray_transport["tail_reflect_face"] = tail_reflect_face(
                     geometry, end=end
                 )
                 ray_transport["tail_reflect_threshold_eV"] = float(
-                    result.phi_c
+                    phi_c_ray
                 )
         ray_kwargs = dict(
             nn=ray_nn,
@@ -1519,13 +1700,13 @@ def _csda_beam_deposition(
         if clumping:
             # Gap ray: background nn, penetrates (the fast far-end pedestal).
             gap_ray = deposit_beam(
-                result.phi_c, (1.0 - f_clump) * Gamma0,
+                phi_c_ray, (1.0 - f_clump) * Gamma0,
                 dz_cm=geometry.length_cm,
                 **ray_kwargs, **interception_kwargs, **ray_transport,
             )
             # Clump ray: enhanced nn -> short l_b -> local deposit (front seed).
             clump_ray = deposit_beam(
-                result.phi_c, f_clump * Gamma0,
+                phi_c_ray, f_clump * Gamma0,
                 dz_cm=geometry.length_cm,
                 **clump_kwargs, **interception_kwargs, **ray_transport,
             )
@@ -1547,7 +1728,7 @@ def _csda_beam_deposition(
             # the deposition the RHS consumes is their sum; the reservoir arm is
             # kept apart because the neutrals it burns are the reservoir's.
             channel_ray, reservoir_ray, flux_entry = deposit_beam_two_stream(
-                result.phi_c, Gamma0, dz_cm=geometry.length_cm,
+                phi_c_ray, Gamma0, dz_cm=geometry.length_cm,
                 **two_stream_kwargs, **interception_kwargs,
             )
             dep = _sum_beam_deposition(channel_ray, reservoir_ray)
@@ -1563,7 +1744,7 @@ def _csda_beam_deposition(
             reservoir_deposition[end] = reservoir_ray
         else:
             dep = deposit_beam(
-                result.phi_c, Gamma0, dz_cm=geometry.length_cm,
+                phi_c_ray, Gamma0, dz_cm=geometry.length_cm,
                 **ray_kwargs, **interception_kwargs, **ray_transport,
             )
             ray_survival = _ray_gap_breakout(dep, gap_dz, launch, direction)
@@ -1647,7 +1828,7 @@ def _csda_beam_deposition(
                 # slot by convention (see its docstring), and summing is
                 # convention-independent.
                 _probe_ch, _probe_res, _ = deposit_beam_two_stream(
-                    result.phi_c, Gamma0, dz_cm=gap_dz,
+                    phi_c_ray, Gamma0, dz_cm=gap_dz,
                     **two_stream_probe_kwargs,
                 )
                 transmitted = (
@@ -1660,11 +1841,11 @@ def _csda_beam_deposition(
                 clump_launch = f_clump * Gamma0
                 transmitted = (
                     float(deposit_beam(
-                        result.phi_c, gap_launch,
+                        phi_c_ray, gap_launch,
                         dz_cm=gap_dz, **ray_kwargs,
                     ).transmitted_flux)
                     + float(deposit_beam(
-                        result.phi_c, clump_launch,
+                        phi_c_ray, clump_launch,
                         dz_cm=gap_dz, **clump_kwargs,
                     ).transmitted_flux)
                 )
@@ -1681,7 +1862,7 @@ def _csda_beam_deposition(
             else:
                 transmitted = float(
                     deposit_beam(
-                        result.phi_c, Gamma0, dz_cm=gap_dz, **ray_kwargs
+                        phi_c_ray, Gamma0, dz_cm=gap_dz, **ray_kwargs
                     ).transmitted_flux
                 )
                 launched = Gamma0
@@ -1691,7 +1872,7 @@ def _csda_beam_deposition(
             # measurement, run through the two-stream march so the media and
             # the re-mixing are the deposition ray's.
             _probe_ch, _probe_res, _ = deposit_beam_two_stream(
-                result.phi_c, 1.0, dz_cm=gap_dz, **two_stream_probe_kwargs,
+                phi_c_ray, 1.0, dz_cm=gap_dz, **two_stream_probe_kwargs,
             )
             survival = (
                 float(_probe_ch.transmitted_flux)
@@ -1704,7 +1885,7 @@ def _csda_beam_deposition(
             # historical unit-flux probe measures, so keep it verbatim here.
             survival = float(
                 deposit_beam(
-                    result.phi_c, 1.0, dz_cm=gap_dz, **ray_kwargs
+                    phi_c_ray, 1.0, dz_cm=gap_dz, **ray_kwargs
                 ).transmitted_flux
             )
         transmission = min(max(survival, 1.0e-6), 1.0)
@@ -1720,7 +1901,7 @@ def _csda_beam_deposition(
         # nothing, and the gap ledger tripwire below would say so.
         nn_launch = float(state.nn[launch])
         l_bi = _compute_l_b(
-            result.phi_c,
+            phi_c_ray,
             float(derived.Te[launch]),
             float(state.n[launch]),
             0.0,
@@ -1757,7 +1938,7 @@ def _csda_beam_deposition(
             ray_survival,
             _compute_beam_bypass_fraction(
                 _compute_l_b(
-                    result.phi_c,
+                    phi_c_ray,
                     float(derived.Te[launch]),
                     float(state.n[launch]),
                     nn_launch,

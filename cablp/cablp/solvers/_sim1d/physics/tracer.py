@@ -546,8 +546,12 @@ def conducted_current_A(*, n_cm3, Te_eV, geometry, V_dev_V, L_plasma_cm):
     whether the column is shunting the loop.
 
     ``V_dev_V`` is the R1-bounded device voltage (the sheath solve's ``V_b``,
-    held at or below ``min(cathode_phi_c_cap_V, V_avail(I))``). The raw
-    atomic-data cap would inflate this by the same factor R1 removed.
+    held at or below the composed ceiling, whose circuit member
+    ``cathode_circuit_bound_object`` selects). The raw atomic-data cap would
+    inflate this by the same factor R1 removed. The vessel node's ``V_cm`` does
+    NOT enter here: a common-mode offset moves the whole cathode/anode system
+    against the wall and so cannot change the anode-to-cathode differential the
+    column conducts under. It enters criterion (b)'s BEAM energy instead.
 
     This is deliberately an UPPER BOUND, and must be read as one. Putting the
     WHOLE device drop across the column overstates the axial field, because
