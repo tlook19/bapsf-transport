@@ -574,11 +574,15 @@ balance**, refreshed on the same cadence as `γ`:
 - `P_dep` is the beam's deposited power density plus the ohmic gap booking,
   minus the ionization cost and the excitation radiation — the same rows the
   fluid books. It is independent of `n`.
-- `L₁` is the per-`n·nn` electron loss (ionization cost + electron–neutral line
-  power), `L₂` the per-`n²` loss (electron–ion line power + electron–ion
-  thermal exchange). Both come from `energy.electron_cooling_rhs_terms` and
-  `energy.electron_ion_exchange_rhs` on the same probe state, divided by their
-  own degree.
+- `L₁` is the degree-1 electron loss (ionization cost, electron–neutral line
+  power, and the `1.5·Te` the surface absorption carries out with each lost
+  particle), `L₂` the degree-2 loss (electron–ion line power + electron–ion
+  thermal exchange). All come from `energy.electron_cooling_rhs_terms`,
+  `energy.electron_ion_exchange_rhs` and `sources.boundary_absorption_rhs` on
+  the same probe state, divided by their own degree. The surface term is in the
+  balance because it is genuinely per-cell and because `γ` already consumes the
+  same term function for the particle channel; taking one row without the other
+  would be an inconsistency in the tracer.
 
 **Why this is well-posed at `n = 0`.** As `n → 0` the balance does not
 degenerate: it becomes `1.5·Te·S = P_dep`, i.e. `Te → (2/3)·(deposited energy
@@ -606,11 +610,75 @@ ion is born cold and the passive leg has no ion heating channel worth
 resolving) and `M = 0` (see the interface, below — a passive cell exchanges no
 momentum). Both are stated conventions, not derivations.
 
-Parallel electron heat conduction is **not** in the balance: it is local by
-construction. That is a real omission — `κ_e ∝ Te^2.5` is fast — and its effect
-is to let neighbouring passive cells hold `Te` values that conduction would
-flatten. The balance is a leading-order local closure and the passive leg's
-`Te(z)` profile should be read as such.
+Parallel electron heat conduction is **not** in the balance: the balance is
+local by construction and conduction is not a local term.
+
+#### MEASURED: the local balance has no root at the production stance
+
+This is the flagged design risk, and it fired. It is recorded here rather than
+worked around, and **the tracer raises `TracerBalanceError` rather than
+producing a number** wherever it happens.
+
+Measured on the production-stance ES1 arm (`nx = 20`, current-driven cathode,
+CSDA + quasilinear deposition, circuit voltage bound on) at
+`t = 1.0423e-05 s`, the first instant the beam is live:
+
+| `Ee` row at cell 2 (cathode) | erg cm⁻³ s⁻¹ | at cell 7 (column) |
+|---|---|---|
+| `beam_power_deposition` | **+8.851e5** | +5.533e5 |
+| `heat_conduction` | **−3.633e5** | **−8.635e5** |
+| `plasma_advective_flux` | +1.279e5 | +4.095e4 |
+| `cathode_surface_loss` | −6.910e4 | **−9.974e5** |
+| `ionization_energy_cost` | −5.511e4 | −6.082e4 |
+| `electron_neutral_cooling` | −2.152e4 | −2.438e4 |
+| `anode_collection` | 0 | −5.454e4 |
+
+The two dominant sinks are **parallel heat conduction** and the **boundary
+losses** — each an order of magnitude larger than every local radiative
+channel. A purely per-cell balance cannot see conduction at all, so at the
+actual pre-breakdown density it has **no root**: the bisection bracket's top
+end still has `G < 0`. The fluid itself sits at `Te ≈ 49–61 eV` in those cells
+at that instant, so the model is not producing runaway electrons; the local
+closure simply omits what is holding them down.
+
+The arithmetic behind it is worth stating, because it also shows why the
+vacuum-limit argument above, while correct as an argument, does not rescue the
+production point. Over that solve the beam launches 4182 W and the deposition
+module books **4161 W (99.5%) as plasma heating** — Coulomb drag plus the
+terminal residual — while creating `3.14e18` ionization events/s. That is
+**8.3 keV of deposited energy per beam-born electron** (only 1.7% of the beam
+electrons ionize, so `177 eV / 0.017`), against an atomic W-value of tens of
+eV. The dilution term would therefore have to carry `Te ≈ 5.4 keV`, far above
+both the ADF11 grid and the `(2/3)·E_beam = 118 eV` hard ceiling. The beam's
+"W-value in the gas" **in this model** is a transport quantity, not an atomic
+one.
+
+Scanning the density at that same background, holding everything else fixed:
+
+| density | outcome |
+|---|---|
+| ×1 (actual, `n ≈ 5e9`) | **no root** |
+| ×10 | root, `Te` = 22.9 eV (cell 2), 49.4 eV max, 1 sign change |
+| ×100 | root, `Te` = 5.9 eV (cell 2), 9.6 eV max, 1 sign change |
+| ×1000 | root, `Te` = 1.2 eV (cell 2), **2 sign changes** — MULTI-VALUED |
+| ×10⁴ and above | root at the floor |
+
+So both flagged failure modes are real: non-existence at the density the tracer
+is meant to run at, and multi-valuedness three decades above it. Adding the
+surface-loss row to `L₁` (which the balance now carries, on consistency
+grounds) moves `Te` at ×10 from 75.5 eV to 22.9 eV but does **not** create a
+root at ×1 — it is a completion of the local object, not a repair of the
+non-local omission, and must not be read as one.
+
+**Consequence.** The affine density core, the passive/active interface, the
+criteria and the census are all independent of this and stand. The
+`Te`-closure, as a per-cell object, does not describe the production
+pre-breakdown leg. Resolving it is a design decision — a `Te(z)` two-point
+boundary-value closure that carries conduction, or an evolved (rather than
+quasi-static) electron energy on the passive set, or a beam-booking change —
+and none of those is a fix to be improvised inside the tracer. Until it is
+resolved the tracer cannot run at the production stance, and the two run-level
+gates below report that rather than a number.
 
 ### Seed transport: the quantified neglect
 
@@ -672,6 +740,20 @@ conflation is on record as wrong. `V_dev` is the R1-bounded device voltage
 (`min(cathode_phi_c_cap_V, V_avail(I))`), consumed from the cathode
 diagnostics; the atomic-data cap alone would inflate `I_cond` by the same ~5×
 the R1 pass removed from `V_b`.
+
+Criterion (a) is nevertheless an **upper bound**, and the census must be read
+that way: putting the whole device drop across the column overstates the axial
+field, because most of that drop is the cathode sheath fall. Passing (a) proves
+passivity; failing it may only mean the bound is loose. The error is in the
+safe direction — the criterion gives cells to the fluid early rather than
+holding them in the cheap description too long — and the refinement (the column
+drop `V_b − φ_c − φ_a`, or the solver's own `R_p` network) is deliberately not
+taken at stage 1: under the capability-limited branch `φ_c → V_b`, so that
+difference collapses toward zero and the criterion would fail the other way,
+and the sheath partition it rests on is what the R1 follow-up is still moving.
+In practice this means the **density gate `tracer_activation_ne` is the binding
+condition at low density** and the criteria only start to discriminate above
+it, which is what the census shows.
 
 **Hysteresis.** A passive cell becomes active when its worst criterion ratio
 exceeds 1. It becomes passive again only when that ratio falls below
