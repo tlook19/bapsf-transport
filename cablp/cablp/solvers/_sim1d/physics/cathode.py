@@ -1198,6 +1198,11 @@ def _sum_beam_deposition(a, b):
                              + float(b.end_loss_high_erg_s)),
         end_loss_transmitted_erg_s=(float(a.end_loss_transmitted_erg_s)
                                     + float(b.end_loss_transmitted_erg_s)),
+        # The walked terminal population that reached an end: both rays'
+        # escapes land on the same surfaces, so the fluxes add like the
+        # powers above.
+        terminal_escape_flux_per_s=(float(a.terminal_escape_flux_per_s)
+                                    + float(b.terminal_escape_flux_per_s)),
         # Tail end ledger (WP-E): same argument as the WP-D pair above -- both
         # rays' QL tails leave through the same two ends, so the escaping
         # powers add.

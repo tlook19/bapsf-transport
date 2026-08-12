@@ -159,6 +159,46 @@ new is booked, and the identity stays exactly the historical
 and the circuit currents are identical in both modes. Only where the product
 ENERGY lands moves.
 
+``product_transport="terminal_nonlocal"`` is the MIDDLE point between those
+two, and it moves exactly ONE population. The terminal residual walks -- same
+machinery, same thermalization floor, same end ledger as under ``"nonlocal"``
+-- while every ALONG-RAY product stays where ``"local"`` puts it: the
+secondaries are banked at their birth cell, and so are the Coulomb drag, the
+ionization cost and the excitation radiation. The two selectors that walk
+something therefore differ only in WHICH population walks, never in how.
+
+What separates the terminal residual from the along-ray products is where it
+is born and what it is. It is the WHOLE surviving primary flux arriving at one
+cell carrying exactly ``E_stop`` each, so it is a point source rather than a
+distributed one; and at pre-breakdown density its Coulomb slowing path is
+hundreds of machine lengths while its stop cell can sit a small fraction of an
+elastic mean free path from the end wall, so "thermalizes where it stopped" is
+then a statement about a population that physically leaves. The secondaries
+are a distributed source born along the whole ray and are a separate question,
+which ``"nonlocal"`` answers and this value deliberately does not.
+
+Two bookings follow from walking that population alone:
+
+- the ESCAPING ENERGY goes to ``end_loss_low_erg_s`` / ``end_loss_high_erg_s``
+  exactly as under ``"nonlocal"``. The transmitted primary is NOT added to
+  those fields here (that is ``"nonlocal"``'s separate closure of a standing
+  hole), so under ``"terminal_nonlocal"`` the end ledger contains the walked
+  terminal escape and nothing else, ``end_loss_transmitted_erg_s`` stays 0.0,
+  and the per-ray identity keeps ``transmitted`` as its own term::
+
+      Gamma0*E0 = heating + radiated + ionization_cost + anode_intercepted
+                  + end_loss_low + end_loss_high + transmitted
+
+- the ESCAPING FLUX is reported in ``terminal_escape_flux_per_s``. Those
+  electrons land on a terminating surface, so a caller running a wall-charge
+  model can book their CURRENT there while their energy leaves through the
+  ledger above. The field is filled whenever the terminal walk runs (under
+  either walking value); the solver consumes it only under
+  ``"terminal_nonlocal"``, where the terminal population is the only one that
+  walks and the charge statement is therefore complete -- ``"nonlocal"``
+  remains ENERGY-ONLY as documented above, its secondaries' escape being an
+  equally real charge channel that v1 does not book.
+
 QL heating locality (``anomalous_transport``, WP-E)
 ---------------------------------------------------
 
@@ -469,7 +509,7 @@ HE_EII_EPS_TOP = float(np.exp(_HE_LOG_EPS[-1]))
 # 1e-12 sits two decades above the floor and ten below the ceiling.
 HE_EII_EDGE_REL_TOL = 1.0e-12
 
-# --- Non-local product transport (product_transport="nonlocal") -------------
+# --- Non-local product transport (the walking product_transport values) -----
 # Thermalization floor of a walking product, as a multiple of the local Te.
 # 3/2 is the mean energy of the local Maxwellian: at that energy the product
 # is statistically indistinguishable from the bulk it is dragging against, and
@@ -615,21 +655,29 @@ def _walk_products_forward(W0_eV, flux_per_s, coeff, dz_cm, floor_eV, q):
 def _walk_products(W0_eV, flux_per_s, direction, coeff, dz_cm, floor_eV, q):
     """Direction-aware wrapper around ``_walk_products_forward``.
 
-    Returns ``(deposited_eV_per_s, exit_eV_per_s)``; the exit power leaves the
-    HIGH-index end for ``direction > 0`` and the LOW-index end otherwise. The
-    per-birth exit state is dropped -- the reflecting walk below indexes cells
-    in its own traversal order and calls the forward walk directly.
+    Returns ``(deposited_eV_per_s, exit_eV_per_s, exit_flux_per_s)``; the exit
+    power and flux leave the HIGH-index end for ``direction > 0`` and the
+    LOW-index end otherwise. The exit FLUX is the population behind that power
+    -- the walkers that reached the end without thermalizing -- read off the
+    forward walk's own per-birth exit state, so it cannot disagree with the
+    energy about who left. The rest of the per-birth state is dropped; the
+    reflecting walk below indexes cells in its own traversal order and calls
+    the forward walk directly.
     """
     if direction > 0:
-        dep, exit_eV, _ = _walk_products_forward(
+        flux_ordered = np.asarray(flux_per_s, dtype=float)
+        dep, exit_eV, (active, _W_exit, thermalized) = _walk_products_forward(
             W0_eV, flux_per_s, coeff, dz_cm, floor_eV, q
         )
-        return dep, exit_eV
-    dep, exit_eV, _ = _walk_products_forward(
+        return dep, exit_eV, float(
+            np.sum(flux_ordered[active][~thermalized])
+        )
+    flux_ordered = np.asarray(flux_per_s, dtype=float)[::-1]
+    dep, exit_eV, (active, _W_exit, thermalized) = _walk_products_forward(
         W0_eV[::-1], flux_per_s[::-1], coeff[::-1], dz_cm[::-1],
         floor_eV[::-1], q,
     )
-    return dep[::-1], exit_eV
+    return dep[::-1], exit_eV, float(np.sum(flux_ordered[active][~thermalized]))
 
 
 def beam_speed_cm_s(E_eV: float) -> float:
@@ -860,7 +908,21 @@ class BeamDepositionResult:
     end_loss_transmitted_erg_s: DIAGNOSTIC split -- how much of
                           ``end_loss_low + end_loss_high`` is the transmitted
                           primary rather than walked products. 0.0 under
-                          ``"local"``.
+                          ``"local"``, and 0.0 under ``"terminal_nonlocal"``
+                          as well: that value books only the walked terminal
+                          population, leaving the transmitted primary its own
+                          term in the identity.
+    terminal_escape_flux_per_s: the WALKED TERMINAL population that reached a
+                          domain end without thermalizing [1/s]. Identically
+                          0.0 unless the terminal walk ran, i.e. under
+                          ``product_transport="local"`` and whenever the ray
+                          stopped nowhere. These electrons land on a
+                          terminating surface, so this is the CHARGE channel
+                          matching the energy that went to the end ledger; it
+                          is a flux, never an energy, and it is not part of
+                          any RHS row. Under ``"nonlocal"`` it reports the
+                          terminal walkers only -- the secondaries' escaping
+                          flux is real and is deliberately not booked in v1.
     end_loss_tail_low_erg_s : WP-E TAIL END LEDGER, low-index end [erg/s].
                           Identically 0.0 under
                           ``anomalous_transport="local"`` (the default). Under
@@ -931,6 +993,7 @@ class BeamDepositionResult:
     end_loss_low_erg_s: float = 0.0
     end_loss_high_erg_s: float = 0.0
     end_loss_transmitted_erg_s: float = 0.0
+    terminal_escape_flux_per_s: float = 0.0
     end_loss_tail_low_erg_s: float = 0.0
     end_loss_tail_high_erg_s: float = 0.0
     tail_power_erg_s: float = 0.0
@@ -1002,15 +1065,23 @@ def deposit_beam(
     the historical result.
 
     **Product transport (WP-D).** ``product_transport`` is ``"local"``
-    (default) or ``"nonlocal"``; see the module docstring for the physics. Off
+    (default), ``"nonlocal"`` or ``"terminal_nonlocal"``; see the module
+    docstring for the physics. Off
     (the default, and the value the gap-transmission probe call sites leave
     untouched) not one branch below changes, so the result is byte-for-byte
-    the historical one and ``end_loss_*`` are identically zero. On, the
+    the historical one and ``end_loss_*`` are identically zero. Under
+    ``"nonlocal"`` the
     secondary and terminal-residual banks are withheld from their birth cells
     and re-deposited along mini-CSDA walks, with what escapes an end booked to
-    the end ledger. Energy-only: ``ionization_events`` and
+    the end ledger. ``"terminal_nonlocal"`` withholds the TERMINAL residual
+    alone and walks it identically; the secondary bank is banked locally,
+    exactly as under ``"local"``, and the transmitted primary keeps its own
+    identity term instead of joining the end ledger. Energy-only:
+    ``ionization_events`` and
     ``excitation_events`` -- and therefore every particle and circuit row
-    downstream -- are identical in both modes.
+    downstream -- are identical in all three modes. The escaping terminal
+    FLUX is reported (``terminal_escape_flux_per_s``) for a caller that books
+    wall charge; this function books no charge anywhere.
 
     **QL heating locality (WP-E).** ``anomalous_transport`` is ``"local"``
     (default) or ``"tail_walk"``; see the module docstring for the physics.
@@ -1081,10 +1152,10 @@ def deposit_beam(
     ``_coulomb_stopping_coefficient``, and it is only read when a walk closure
     is active, so the default path never touches it.
     """
-    if product_transport not in ("local", "nonlocal"):
+    if product_transport not in ("local", "nonlocal", "terminal_nonlocal"):
         raise ValueError(
             f"unknown product_transport {product_transport!r}; "
-            "expected 'local' or 'nonlocal'"
+            "expected 'local', 'nonlocal' or 'terminal_nonlocal'"
         )
     if anomalous_transport not in ("local", "tail_walk"):
         raise ValueError(
@@ -1357,11 +1428,26 @@ def deposit_beam(
     # Under "nonlocal" the secondary and terminal-residual banks are WITHHELD
     # from their birth cells and accumulated here, then walked after the ray
     # is done. Under "local" none of this is touched or allocated.
-    walk_products = product_transport == "nonlocal"
+    #
+    # The selector names WHICH population walks, and each branch below tests
+    # the population it belongs to rather than the selector: "nonlocal" walks
+    # both, "terminal_nonlocal" walks the terminal residual alone, and the
+    # secondary branches then take the identical path they take under "local"
+    # -- which is what makes the along-ray banks byte-for-byte the local ones.
+    # `book_transmitted` is "nonlocal"'s separate closure of the standing
+    # transmitted-primary hole and travels with that value only.
+    walk_secondaries = product_transport == "nonlocal"
+    walk_terminal = product_transport in ("nonlocal", "terminal_nonlocal")
+    book_transmitted = product_transport == "nonlocal"
+    walk_products = walk_secondaries or walk_terminal
     end_loss_low = 0.0
     end_loss_high = 0.0
     end_loss_transmitted = 0.0
+    terminal_escape_flux = 0.0
     if walk_products:
+        # Both secondary banks are allocated whenever anything walks, so the
+        # compiled march's argument list and the walk stage below keep one
+        # shape; under "terminal_nonlocal" they simply stay all-zero.
         sec_flux = np.zeros(cells)  # secondary electrons born per cell [1/s]
         sec_power_eV = np.zeros(cells)  # their energy [eV/s]
         terminal_cell = -1
@@ -1399,7 +1485,7 @@ def deposit_beam(
         # ledger books it and the identity closes here too. (Defensive path:
         # the cathode wiring only launches rays with phi_c > I_ion > E_stop.)
         sub_power = float(Gamma0_per_s) * E * _ERG_PER_EV
-        if walk_products and sub_power > 0.0:
+        if book_transmitted and sub_power > 0.0:
             end_loss_transmitted = sub_power
             if direction > 0:
                 end_loss_high = sub_power
@@ -1458,6 +1544,15 @@ def deposit_beam(
     # quasilinear drag when it is set, so offering it ``ql_relaxation`` would
     # silently run the wrong closure. It takes the Python march instead, which
     # is where the new closure lives.
+    #
+    # ``product_transport="terminal_nonlocal"`` is refused for exactly the same
+    # reason, and it is the same trap: the kernel takes product transport as
+    # ONE boolean covering both withholding banks, so neither value it can be
+    # given is this closure. False banks the terminal residual locally --
+    # silently the "local" rule under a selector that asked for the walk --
+    # and True additionally withholds the SECONDARIES, whose bank nothing then
+    # walks, silently deleting that energy. The Python march below is the only
+    # place the two populations are separable.
     _csda_ctx = None
     if (
         _CSDA_MARCH is not None
@@ -1465,6 +1560,7 @@ def deposit_beam(
         and I_ion_eV != 0.0
         and coulomb_model in _COULOMB_MODEL_CODE
         and anomalous_model in ("none", "quasilinear")
+        and walk_secondaries == walk_terminal
     ):
         _csda_ctx = _csda_tables()
         if not E < _csda_ctx.exc_top:
@@ -1609,7 +1705,7 @@ def deposit_beam(
                 dz_sub = (E - E_stop_eV) / L_tot
             if dz_sub <= 0.0:
                 # E sits at E_stop to roundoff: absorb the residual here.
-                if walk_products:
+                if walk_terminal:
                     terminal_cell = cell
                     terminal_flux = gamma
                     terminal_E = E
@@ -1641,7 +1737,7 @@ def deposit_beam(
                 d_anom_local = 0.0
             else:
                 d_anom_local = d_anom
-            if walk_products:
+            if walk_secondaries:
                 # Withhold the secondary bank from this cell; accumulate the
                 # population (flux and energy) for the walks below. The flux
                 # is the SAME product `ionization_events` uses, so the
@@ -1665,8 +1761,9 @@ def deposit_beam(
                 # Sub-threshold residual: the primary can only Coulomb-drag
                 # from here; bank the remainder as local plasma heating
                 # (plan B1's stated closure) and end the ray. Under "nonlocal"
-                # that same residual is instead walked from this cell.
-                if walk_products:
+                # and "terminal_nonlocal" alike that same residual is instead
+                # walked from this cell.
+                if walk_terminal:
                     terminal_cell = cell
                     terminal_flux = gamma
                     terminal_E = E
@@ -1689,7 +1786,7 @@ def deposit_beam(
         heat_anomalous[cell] += acc_heat_anomalous
         heat_secondary[cell] += acc_heat_secondary
         heat_terminal[cell] += acc_heat_terminal
-        if walk_products:
+        if walk_secondaries:
             sec_flux[cell] += acc_sec_flux
             sec_power_eV[cell] += acc_sec_power_eV
         if walk_tail:
@@ -1718,30 +1815,38 @@ def deposit_beam(
         )
 
         def _walk_and_deposit(W0, flux, walk_direction, split):
-            """Walk one population; deposit it and RETURN the escaping power.
+            """Walk one population; deposit it and RETURN what escaped.
 
-            The caller books the escape to its own end ledger -- WP-D products
-            to ``end_loss_*``, WP-E tails to ``end_loss_tail_*`` -- which is
-            what keeps the two ledgers independently readable.
+            ``(escaping power [erg/s], escaping flux [1/s])``. The caller books
+            the escape to its own end ledger -- WP-D products to
+            ``end_loss_*``, WP-E tails to ``end_loss_tail_*`` -- which is what
+            keeps the two ledgers independently readable.
             """
-            dep_eV, exit_eV = _walk_products(
+            dep_eV, exit_eV, exit_flux = _walk_products(
                 W0, flux, walk_direction, coeff, dz_cm, floor_eV, q
             )
             dep_erg = dep_eV * _ERG_PER_EV
             heating[:] += dep_erg
             split[:] += dep_erg
-            return exit_eV * _ERG_PER_EV
+            return exit_eV * _ERG_PER_EV, exit_flux
 
         def _bank_walk(W0, flux, walk_direction, split):
-            """Walk one product population and book its deposit and escape."""
+            """Walk one product population and book its deposit and escape.
+
+            Returns the escaping FLUX, which only the terminal population's
+            caller reads (it is the charge that lands on the end surface).
+            """
             nonlocal end_loss_low, end_loss_high
-            exit_erg = _walk_and_deposit(W0, flux, walk_direction, split)
+            exit_erg, exit_flux = _walk_and_deposit(
+                W0, flux, walk_direction, split
+            )
             if walk_direction > 0:
                 end_loss_high += exit_erg
             else:
                 end_loss_low += exit_erg
+            return exit_flux
 
-        if walk_products and np.any(sec_flux > 0.0):
+        if walk_secondaries and np.any(sec_flux > 0.0):
             # Flux-weighted mean secondary energy per birth cell (the module
             # carries mean energies, not distributions -- stated limitation),
             # emitted 50/50 along +z and -z (OPB emission is broadly
@@ -1752,13 +1857,18 @@ def deposit_beam(
             half = 0.5 * sec_flux
             for walk_direction in (1, -1):
                 _bank_walk(W_sec_cell, half, walk_direction, heat_secondary)
-        if walk_products and terminal_flux > 0.0 and terminal_E > 0.0:
-            # The terminal residual keeps the primary's direction.
+        if walk_terminal and terminal_flux > 0.0 and terminal_E > 0.0:
+            # The terminal residual keeps the primary's direction. Its
+            # escaping FLUX is kept: those electrons reached a terminating
+            # surface, and a wall-charge model books their current there while
+            # their energy left through the ledger above.
             term_flux = np.zeros(cells)
             term_W = np.zeros(cells)
             term_flux[terminal_cell] = terminal_flux
             term_W[terminal_cell] = terminal_E
-            _bank_walk(term_W, term_flux, direction, heat_terminal)
+            terminal_escape_flux = _bank_walk(
+                term_W, term_flux, direction, heat_terminal
+            )
         if walk_tail and np.any(anom_power_eV > 0.0):
             # WP-E: re-express each cell's withheld anomalous POWER as a flux
             # of tail electrons at the single plateau energy E_tail
@@ -2014,14 +2124,14 @@ def deposit_beam(
             else:
                 tail_W = np.full(cells, E_tail)
                 for walk_direction in (1, -1):
-                    exit_erg = _walk_and_deposit(
+                    exit_erg, _exit_flux = _walk_and_deposit(
                         tail_W, half_flux, walk_direction, heat_anomalous
                     )
                     if walk_direction > 0:
                         end_loss_tail_high += exit_erg
                     else:
                         end_loss_tail_low += exit_erg
-        if walk_products and not absorbed and gamma > 0.0 and E > 0.0:
+        if book_transmitted and not absorbed and gamma > 0.0 and E > 0.0:
             # The transmitted primary: computed since B1, never banked. It
             # leaves through the end the ray was heading for.
             end_loss_transmitted = gamma * E * _ERG_PER_EV
@@ -2051,6 +2161,7 @@ def deposit_beam(
         end_loss_low_erg_s=end_loss_low,
         end_loss_high_erg_s=end_loss_high,
         end_loss_transmitted_erg_s=end_loss_transmitted,
+        terminal_escape_flux_per_s=terminal_escape_flux,
         end_loss_tail_low_erg_s=end_loss_tail_low,
         end_loss_tail_high_erg_s=end_loss_tail_high,
         tail_power_erg_s=tail_power,
@@ -2168,7 +2279,8 @@ def deposit_beam_two_stream(
     ``beam_area_cm2`` is therefore the FULL column area, exactly as it is for a
     mean-field ray; the arm areas are formed here.
 
-    **The walk closures run ON THE MEAN STATE.** ``product_transport="nonlocal"``
+    **The walk closures run ON THE MEAN STATE.** The walking
+    ``product_transport`` values (``"nonlocal"``, ``"terminal_nonlocal"``)
     (WP-D) and ``anomalous_transport="tail_walk"`` (WP-E) withhold banks during
     the march and walk them afterwards. Both arms' per-cell withheld banks --
     which are per-arm per-cell by construction, so birth LOCATIONS are the
@@ -2298,10 +2410,10 @@ def deposit_beam_two_stream(
             "max_energy_fraction_per_substep must be in (0, 1), got "
             f"{max_energy_fraction_per_substep}"
         )
-    if product_transport not in ("local", "nonlocal"):
+    if product_transport not in ("local", "nonlocal", "terminal_nonlocal"):
         raise ValueError(
             f"unknown product_transport {product_transport!r}; "
-            "expected 'local' or 'nonlocal'"
+            "expected 'local', 'nonlocal' or 'terminal_nonlocal'"
         )
     if anomalous_transport not in ("local", "tail_walk"):
         raise ValueError(
@@ -2321,7 +2433,13 @@ def deposit_beam_two_stream(
             "setting would do nothing). anomalous_transport accepts 'local' "
             "or 'tail_walk'; tail_ionization accepts 'off' or 'on'"
         )
-    walk_products = product_transport == "nonlocal"
+    # Same population-by-population gating deposit_beam uses; see the comment
+    # on its own booleans for why each branch tests the population and not the
+    # selector.
+    walk_secondaries = product_transport == "nonlocal"
+    walk_terminal = product_transport in ("nonlocal", "terminal_nonlocal")
+    book_transmitted = product_transport == "nonlocal"
+    walk_products = walk_secondaries or walk_terminal
     walk_tail = anomalous_transport == "tail_walk"
     ionize_tail = tail_ionization == "on"
     tail_sub_threshold = False
@@ -2523,14 +2641,15 @@ def deposit_beam_two_stream(
     # is the thing the walk consumes, is the march's own either way. The energy
     # each slot carries is a flux-weighted mean, exactly the convention
     # deposit_beam uses across the substeps within one cell.
-    sec_flux = np.zeros(cells) if walk_products else None
-    sec_power_eV = np.zeros(cells) if walk_products else None
-    term_flux = np.zeros(cells) if walk_products else None
-    term_power_eV = np.zeros(cells) if walk_products else None
+    sec_flux = np.zeros(cells) if walk_secondaries else None
+    sec_power_eV = np.zeros(cells) if walk_secondaries else None
+    term_flux = np.zeros(cells) if walk_terminal else None
+    term_power_eV = np.zeros(cells) if walk_terminal else None
     anom_power_eV = np.zeros(cells) if walk_tail else None
     end_loss_low = 0.0
     end_loss_high = 0.0
     end_loss_transmitted = 0.0
+    terminal_escape_flux = 0.0
     end_loss_tail_low = 0.0
     end_loss_tail_high = 0.0
     tail_power = 0.0
@@ -2639,7 +2758,7 @@ def deposit_beam_two_stream(
                 if E_arm - L_tot * dz_sub <= E_stop_eV:
                     dz_sub = (E_arm - E_stop_eV) / L_tot
                 if dz_sub <= 0.0:
-                    if walk_products:
+                    if walk_terminal:
                         term_flux[cell] += gamma
                         term_power_eV[cell] += gamma * E_arm
                     else:
@@ -2667,7 +2786,7 @@ def deposit_beam_two_stream(
                     d_anom_local = 0.0
                 else:
                     d_anom_local = d_anom
-                if walk_products:
+                if walk_secondaries:
                     acc_heating += (
                         gamma * (d_coul + d_anom_local) * _ERG_PER_EV
                     )
@@ -2686,7 +2805,7 @@ def deposit_beam_two_stream(
                 E_arm -= d_pot + d_sec + d_exc + d_coul + d_anom
                 remaining -= dz_sub
                 if E_arm <= E_stop_eV:
-                    if walk_products:
+                    if walk_terminal:
                         term_flux[cell] += gamma
                         term_power_eV[cell] += gamma * E_arm
                     else:
@@ -2704,7 +2823,7 @@ def deposit_beam_two_stream(
             bank["heat_anomalous"][cell] += acc_heat_anomalous
             bank["heat_secondary"][cell] += acc_heat_secondary
             bank["heat_terminal"][cell] += acc_heat_terminal
-            if walk_products:
+            if walk_secondaries:
                 sec_flux[cell] += acc_sec_flux
                 sec_power_eV[cell] += acc_sec_power_eV
             if walk_tail:
@@ -2748,30 +2867,38 @@ def deposit_beam_two_stream(
         chan = banks[0]
 
         def _walk_and_deposit(W0, flux, walk_direction, split):
-            """Walk one population; deposit it and RETURN the escaping power.
+            """Walk one population; deposit it and RETURN what escaped.
 
-            The deposit lands in the CHANNEL arm's banks: the walked energy is
+            ``(escaping power [erg/s], escaping flux [1/s])``. The deposit
+            lands in the CHANNEL arm's banks: the walked energy is
             the mean field's, not either medium's, and the caller consumes the
             two arms' sum (see the docstring's booking note).
             """
-            dep_eV, exit_eV = _walk_products(
+            dep_eV, exit_eV, exit_flux = _walk_products(
                 W0, flux, walk_direction, coeff, dz_cm, floor_eV, q
             )
             dep_erg = dep_eV * _ERG_PER_EV
             chan["heating"] += dep_erg
             chan[split] += dep_erg
-            return exit_eV * _ERG_PER_EV
+            return exit_eV * _ERG_PER_EV, exit_flux
 
         def _bank_walk(W0, flux, walk_direction, split):
-            """Walk one product population and book its deposit and escape."""
+            """Walk one product population and book its deposit and escape.
+
+            Returns the escaping FLUX, read only by the terminal population's
+            caller (the charge that lands on the end surface).
+            """
             nonlocal end_loss_low, end_loss_high
-            exit_erg = _walk_and_deposit(W0, flux, walk_direction, split)
+            exit_erg, exit_flux = _walk_and_deposit(
+                W0, flux, walk_direction, split
+            )
             if walk_direction > 0:
                 end_loss_high += exit_erg
             else:
                 end_loss_low += exit_erg
+            return exit_flux
 
-        if walk_products and np.any(sec_flux > 0.0):
+        if walk_secondaries and np.any(sec_flux > 0.0):
             # Flux-weighted mean secondary energy per BIRTH cell, over both
             # arms' contributions to that cell, emitted 50/50 along +-z.
             W_sec_cell = np.zeros(cells)
@@ -2780,16 +2907,20 @@ def deposit_beam_two_stream(
             half = 0.5 * sec_flux
             for walk_direction in (1, -1):
                 _bank_walk(W_sec_cell, half, walk_direction, "heat_secondary")
-        if walk_products and np.any(term_flux > 0.0):
+        if walk_terminal and np.any(term_flux > 0.0):
             # The terminal residual keeps the PRIMARY's direction. Unlike the
             # single-medium march there can be several terminal cells: each arm
             # runs out of energy where its own medium stops it, and an arm that
             # stops leaves the survivor marching on. Carried per cell at the
-            # flux-weighted mean residual, the same convention as above.
+            # flux-weighted mean residual, the same convention as above. The
+            # escaping flux sums those populations, which is the charge the
+            # end surface collects.
             term_W = np.zeros(cells)
             stopped = term_flux > 0.0
             term_W[stopped] = term_power_eV[stopped] / term_flux[stopped]
-            _bank_walk(term_W, term_flux, direction, "heat_terminal")
+            terminal_escape_flux = _bank_walk(
+                term_W, term_flux, direction, "heat_terminal"
+            )
         if walk_tail and np.any(anom_power_eV > 0.0):
             # WP-E: re-express each cell's withheld anomalous POWER as a flux of
             # tail electrons at the single plateau energy E_tail
@@ -3017,14 +3148,14 @@ def deposit_beam_two_stream(
             else:
                 tail_W = np.full(cells, E_tail)
                 for walk_direction in (1, -1):
-                    exit_erg = _walk_and_deposit(
+                    exit_erg, _exit_flux = _walk_and_deposit(
                         tail_W, half_flux, walk_direction, "heat_anomalous"
                     )
                     if walk_direction > 0:
                         end_loss_tail_high += exit_erg
                     else:
                         end_loss_tail_low += exit_erg
-        if walk_products and not absorbed and gamma_total > 0.0 and E > 0.0:
+        if book_transmitted and not absorbed and gamma_total > 0.0 and E > 0.0:
             # The transmitted primary: computed by the march, never banked. It
             # leaves through the end the ray was heading for.
             end_loss_transmitted = gamma_total * E * _ERG_PER_EV
@@ -3073,6 +3204,9 @@ def deposit_beam_two_stream(
                 end_loss_high_erg_s=0.0 if arm == 1 else end_loss_high,
                 end_loss_transmitted_erg_s=(
                     0.0 if arm == 1 else end_loss_transmitted
+                ),
+                terminal_escape_flux_per_s=(
+                    0.0 if arm == 1 else terminal_escape_flux
                 ),
                 end_loss_tail_low_erg_s=0.0 if arm == 1 else end_loss_tail_low,
                 end_loss_tail_high_erg_s=(

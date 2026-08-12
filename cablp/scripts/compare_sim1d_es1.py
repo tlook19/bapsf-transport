@@ -1822,13 +1822,15 @@ def main(argv=None):
     parser.add_argument(
         "--beam-product-transport",
         default=None,
-        choices=("local", "nonlocal"),
+        choices=("local", "nonlocal", "terminal_nonlocal"),
         help=(
             "beam product transport for the WP-D A/B: "
             "local (production stance and "
-            "config default -- products thermalize where they are born) or "
-            "nonlocal (products walk, and the escape ledger is live). "
-            "nonlocal requires the CSDA deposition module and raises at "
+            "config default -- products thermalize where they are born), "
+            "nonlocal (products walk, and the escape ledger is live), or "
+            "terminal_nonlocal (the terminal residual alone walks; the "
+            "along-ray products stay local). Both walking values require the "
+            "CSDA deposition module and raise at "
             "construction under --beam-deposition beer_lambert"
         ),
     )
