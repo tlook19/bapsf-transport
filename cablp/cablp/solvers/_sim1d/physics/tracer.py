@@ -31,13 +31,12 @@ from .flux import ion_sound_speed
 from .reactions import reaction_rates
 
 
-#: Names of the three passivity criteria plus the transport ratio the
-#: description DROPS, in census order. ``transport`` is reported but never
-#: decides passivity: it is the neglected parallel-advection term, and a run in
-#: which it is not small is a run whose tracer leg should not be trusted (the
-#: quantified bound is the table in NUMERICS.md).
+#: The three passivity criteria, in census order. The census carries a fourth
+#: number, ``transport_ratio``, which is NOT here because it never decides
+#: passivity: it is the parallel-advection term the description DROPS, and a
+#: run in which it is not small is a run whose tracer leg should not be trusted
+#: (the quantified bound is the table in NUMERICS.md).
 CRITERION_NAMES = ("current", "thinness", "depletion")
-CENSUS_NAMES = CRITERION_NAMES + ("transport",)
 
 #: Series-switch point for :func:`phi2`. ``eps**(1/3)`` is the standard optimum
 #: for a second-difference cancellation and is taken from the machine epsilon
