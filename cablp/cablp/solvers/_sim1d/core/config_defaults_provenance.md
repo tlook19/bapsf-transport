@@ -875,3 +875,104 @@ asked for: it is bit-exact against the flag-off trajectory, which is what makes
 it a usable control rather than a silent no-op. An identically-zero
 `neutral_probe_profile` is refused instead, because a shape that injects
 nowhere is a misconfiguration and the null control already has a key.
+
+## `regime_tracer_defaults`
+
+These eight numbers **select a description**: each one decides where the
+pre-breakdown leg stops being an ODE and starts being a fluid. None of them is
+a property of the machine, so none is measured, and the registration below IS
+the acceptance criterion — a threshold that appeared in the code without an
+entry here would be an anonymous knob deciding a physical boundary. Every one
+is sweepable by config alone (`eps/3`, `eps`, `3 eps`) with no code edit, and
+the `active_criterion` census on every tracer run reports which of them binds,
+where, and when.
+
+The three passivity criteria all ship at the same `0.01`. That is not
+laziness: they are three spellings of one statement — *the plasma's
+back-reaction on the circuit, the beam and the neutral background is a 1%
+correction* — and giving them different values would assert a precision about
+their relative importance that nothing supports. They are separate keys so that
+a sweep can move one at a time and the census can say which one bound.
+
+**`tracer_passivity_current_ratio = 0.01` — DERIVED.** The statement is
+"neglected plasma back-reaction on the loop current is below 1% of the
+loop-current budget", tied to an existing error bar. The R5.1 fluid/circuit
+coupling audit (`NUMERICS.md`, "R5.1 gated fluid<->circuit Picard") measured
+the whole sequential-vs-Picard coupling neglect at ~3% on `I_tot` and the
+sequential stance was nonetheless **retained as production**. A conducted-plasma
+shunt below 1% of the loop current is therefore a third of a neglect the
+campaign has already accepted and re-derived on its own terms, which is what
+makes this DERIVED rather than ASSUMED. Honest bar: the 3% figure is an audit
+measurement at one operating point, so the derivation transfers a *scale*, not
+a bound. Bracket `0.003 - 0.03`; at the upper end the tracer leg's neglect
+becomes comparable to the accepted coupling neglect rather than small against
+it.
+
+**`tracer_passivity_thinness = 0.01` — ASSUMED.** Below a 1% single-pass energy
+loss to plasma electrons, the deposition profile the tracer consumes is the
+vacuum-column profile. Nothing pins the number: the honest observation is that
+the *closure* bracket on beam deposition (Beer-Lambert vs CSDA x
+{classical, quasilinear}) moves the deposited profile by far more than 1%, so
+any value in the bracket below is invisible against a systematic the campaign
+already reports as a bracket. Bracket `0.003 - 0.03`.
+
+**`tracer_passivity_depletion = 0.01` — ASSUMED.** `gamma` is proportional to
+`nn`, so a plasma-driven burn of a fraction `f` of the local neutrals is a
+fractional error `f` in the growth rate. 1% is chosen to match the other two
+criteria. Bracket `0.003 - 0.03`. Note the beam's own neutral debit is
+deliberately excluded: it is background, and including it would trip this
+criterion on a quantity the plasma did not cause.
+
+**`tracer_passivity_hysteresis = 3.0` — ASSUMED.** A pure numerical guard with
+no physical referent. All three ratios rise monotonically while the discharge
+builds, so a cell that activates is not expected to return; the width only has
+to be wide enough that round-off cannot flip a cell sitting on a criterion.
+A factor 3 is comfortably wider than any plausible round-off excursion and
+narrow enough that a genuinely non-monotone background would still be tracked.
+Bracket `1.5 - 10`; the result must not depend on it, and a run in which it
+does is a run whose criteria are chattering and should be reported.
+
+**`tracer_refresh_tol = 0.01` — NUMERICS.** A Picard freeze tolerance in the
+same family as `circuit_picard_tol_rel`, not a description-selecting constant:
+it trades cost against the size of the frozen-coefficient error. Freezing
+`gamma` while the background moves by at most 1% caps the resulting error in
+the exact affine update at the same order. `0` refreshes every step and is the
+reference against which the shipped cadence is checked. Bracket `0.001 - 0.1`.
+
+**`tracer_activation_ne = 1.0e10` cm^-3 — DERIVED.** Two conditions have to
+hold before the fluid can be handed a cell, and this is the larger of them.
+(i) The density floor must be inert: `ne_floor = 1e8`, and the fluid's
+`_negative_margin_timestep` bound degrades as `n` approaches it, so a 100x
+margin is the condition that the clip is not what is holding the cell up.
+(ii) The value must sit at the bottom of the density range the fluid model is
+validated over — the LAPD afterglow/early-discharge scale is `1e10 - 1e11`
+cm^-3, so `1e10` is the low edge of the validated window rather than an
+extrapolation. Construction enforces only condition (i) (`>= 10 * ne_floor`),
+because `ne_floor` is itself configurable and (ii) is a judgement about the
+model's validity, not an arithmetic relation. Honest bar: the 100x margin is a
+sufficiency argument, not a measurement of where the clip stops mattering.
+Bracket `3e9 - 3e10`. The overlap gate is what makes the choice checkable — if
+the two descriptions agree across the band, the boundary inside it did not
+matter.
+
+**`tracer_overlap_band_ne = (1.0e10, 1.0e11)` cm^-3 — DERIVED.** The band where
+BOTH descriptions are valid, and therefore the only place a two-sided check is
+meaningful. Its low edge IS `tracer_activation_ne` (below it the fluid is
+floor-poisoned); its high edge is one decade up, where at the shipped fill the
+conducted-current criterion (a) is approaching its threshold and the tracer
+stops being valid. A decade is what the two validity windows actually share;
+widening it would put one side outside its own domain and turn a disagreement
+into an artefact of the band rather than a finding. Honest bar: the high edge
+is read off criterion (a) at the shipped stance and moves with `nn` and the
+circuit ramp.
+
+**`tracer_overlap_rtol = 0.05` — ASSUMED.** The two descriptions are not
+supposed to be bit-identical: the tracer neglects parallel transport (the
+`c_s/(L_n gamma)` term tabulated in `NUMERICS.md`) and holds `Te` quasi-static,
+while the fluid resolves both. 5% is chosen as a tolerance that a genuine
+implementation defect would exceed while the *stated* physical differences
+would not. Honest bar: it is not derived from the neglect bound, and it cannot
+be — that bound reaches ~50% at the low-`Te` end. What the gate therefore
+proves is agreement *at the operating point it runs*, not agreement in general;
+a PASS is evidence about the code, and the neglect table is the statement about
+the physics. Bracket `0.02 - 0.10`.
