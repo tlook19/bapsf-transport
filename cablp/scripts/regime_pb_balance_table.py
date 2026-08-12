@@ -171,7 +171,8 @@ def main(argv=None):
     parser.add_argument("--column-cell", type=int, default=7)
     parser.add_argument("--t-end", type=float, default=3.0e-5)
     parser.add_argument("--dt-save", type=float, default=1.0e-6)
-    parser.add_argument("--max-steps", type=int, default=20000)
+    parser.add_argument("--max-steps", type=int, default=200000)
+    parser.add_argument("--t-end-long", type=float, default=1.0e-4)
     args = parser.parse_args(argv)
     warnings.simplefilter("ignore")
 
@@ -328,6 +329,38 @@ def main(argv=None):
               "is live and the cell is still passive)")
     print(f"   observed: the module books QL power at this background, where "
           f"n = {float(np.asarray(state.n)[ci]):.4g} cm^-3 < n_act")
+
+    # -- G. the long window: does the tracer ever hand a cell over, and what
+    # happens when it does. On an ACTIVE cell the anomalous booking is restored
+    # in full and correctly so, but the balance is still SOLVED there (it is
+    # solved wherever there is plasma or a beam birth, because the criteria
+    # read Te on every cell), so a handed-over cell can refuse.
+    print()
+    print(f"-- G. long window (t_end = {args.t_end_long:g} s)")
+    long_params, long_flags = build_config(args.nx, True)
+    long_params["dt_save"] = 1.0e-5
+    long_sim = LAPDSim1D(long_params, long_flags)
+    try:
+        long_sim.run(t_end=args.t_end_long, max_steps=args.max_steps)
+        print(f"   ran to t = {float(long_sim._time):.6g} s with no refusal")
+    except TracerBalanceError as error:
+        long_passive = long_sim._tracer_passive
+        handed = (
+            np.asarray(long_sim._geometry.plasma_active, dtype=bool)
+            & ~long_passive
+        )
+        long_n = np.asarray(long_sim.state.n, dtype=float)
+        print(f"   REFUSED at t = {float(long_sim._time):.6g} s")
+        print(f"   {error}")
+        print(f"   cells handed to the fluid: "
+              f"{np.flatnonzero(handed).tolist()}")
+        if np.any(handed):
+            print(f"   their densities: {long_n[handed].min():.4g} .. "
+                  f"{long_n[handed].max():.4g} cm^-3 (n_act = "
+                  f"{float(long_sim._input_dict['tracer_activation_ne']):.4g})")
+        print(f"   cell 2 passive? {bool(long_passive[2])} -- a refusal on a "
+              "cell the tracer no longer owns is the balance's solve domain, "
+              "not the booking")
 
     print()
     print(f"== outcome: the balance {'HAS' if status == 'RAN' else 'has NO'} a "
