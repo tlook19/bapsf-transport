@@ -14157,9 +14157,10 @@ print(json.dumps({
     assert abs(float(np.sum(
         _probe_prof_sim.neutral_probe_profile() * _probe_Vm
     ) / np.sum(_probe_Vm)) - 1.0) < 1e-12
-    # The waveforms, at their edges. "square" is the half-open [t_on, t_off),
-    # so the two edges are unambiguous and the delivered inventory is exactly
-    # the amplitude times the window.
+    # The waveforms, at their edges, INSTANTANEOUSLY -- the diagnostic read.
+    # "square" is the half-open [t_on, t_off), so the two edges are
+    # unambiguous and so is the integral over any window. What an integration
+    # step consumes is the step AVERAGE, gated separately in (ii-b).
     assert _probe_gauss_sim.neutral_probe_waveform_value(time=-1.0) == 1.0
     assert _probe_gauss_sim.neutral_probe_waveform_value(time=1.0e3) == 1.0
     assert _probe_off_sim.neutral_probe_waveform_value(time=0.0) == 0.0
@@ -14176,8 +14177,9 @@ print(json.dumps({
             time=_probe_t
         ) == _probe_w, (_probe_t, _probe_w)
     # Both hard edges are registered step boundaries, so no accepted step
-    # straddles one and the delivered inventory cannot depend on where the
-    # stepper happened to sample.
+    # straddles one and the APPLIED rate stays the square that was asked for.
+    # This is deliberately NOT what makes the delivered inventory exact -- that
+    # is the step average, and (ii-b) proves it with the capture bypassed.
     assert _probe_sq_sim._neutral_probe_event_times() == [1.0e-8, 3.0e-8]
     assert _probe_gauss_sim._neutral_probe_event_times() == []
     assert _probe_off_sim._neutral_probe_event_times() == []
@@ -14198,6 +14200,125 @@ print(json.dumps({
             - _probe_w
         ) < 1e-14, (_probe_t, _probe_w)
     assert _probe_tab_sim._neutral_probe_event_times() == [1.0e-8, 3.0e-8]
+
+    # (ii-b) THE STEP AVERAGE, AND THE DELIVERED INVENTORY ON A HOSTILE
+    # LATTICE. The explicit step is Heun: it samples the RHS at t0 and t0+dt
+    # and averages with equal weights, so a POINTWISE waveform is integrated by
+    # the trapezoid rule -- which across a hard edge is wrong by a finite
+    # amount, not merely second-order. A step ending at a rising edge books
+    # half a step of source from outside the window and one ending at a falling
+    # edge loses the same, so the error CANCELS FOR EQUAL ADJACENT dt. That
+    # cancellation is why an equal-dt test is vacuous here, and it is how the
+    # defect shipped past the first version of this suite.
+    #
+    # So this case is deliberately hostile: edges off the step lattice, and
+    # UNEQUAL adjacent dt so nothing cancels. advance_one_step with an explicit
+    # dt bypasses the phase-boundary capture entirely, so every edge really
+    # does land mid-step.
+    _probe_A = 1.0e17
+    _probe_t_on, _probe_t_off = 1.3e-8, 4.7e-8
+    _probe_dts = [3.0e-9, 7.0e-9] * 12
+    _probe_edge_ok = dict(
+        _probe_ok, neutral_probe_amplitude_cm3_s=_probe_A,
+        neutral_probe_waveform="square",
+        neutral_probe_t_on_s=_probe_t_on, neutral_probe_t_off_s=_probe_t_off,
+    )
+    _probe_edge_sim = LAPDSim1D(
+        dict(_probe_base_p, **_probe_edge_ok), _probe_on_f
+    )
+    # (a) The step averages themselves sum to the waveform's exact integral,
+    # whatever the lattice. This is the mathematical core, independent of any
+    # plasma response: sum_k dt_k * w_bar_k == t_off - t_on.
+    _probe_t = 0.0
+    _probe_int = 0.0
+    _probe_trap = 0.0
+    for _probe_h in _probe_dts:
+        _probe_int += _probe_h * _probe_edge_sim.neutral_probe_waveform_mean(
+            _probe_t, _probe_h
+        )
+        # ...and what the OLD pointwise code would have integrated, kept as the
+        # live measure of the defect this case exists for.
+        _probe_trap += _probe_h * 0.5 * (
+            _probe_edge_sim.neutral_probe_waveform_value(time=_probe_t)
+            + _probe_edge_sim.neutral_probe_waveform_value(
+                time=_probe_t + _probe_h
+            )
+        )
+        _probe_t += _probe_h
+    assert abs(
+        _probe_int / (_probe_t_off - _probe_t_on) - 1.0
+    ) < 1e-14, _probe_int
+    # The trapezoid reading really is off, and by a lot: without this the
+    # assertion above could pass on a lattice that never met an edge.
+    assert abs(
+        _probe_trap / (_probe_t_off - _probe_t_on) - 1.0
+    ) > 1e-3, ("this lattice does not exercise the edge bias", _probe_trap)
+    # (b) ...and the SYSTEM delivers it. Stepped against a probe-free twin on
+    # the identical dt sequence, the neutral inventory gained is the stated
+    # hypothesis A * (t_off - t_on) * sum(V). The tolerance is set by the
+    # plasma's own burn of the injected gas (measured ~3e-13 relative at this
+    # stance), not by the integrator, and is three orders tighter than the
+    # +2.9e-2 the pointwise waveform produced on exactly this lattice.
+    _probe_edge_off = LAPDSim1D(*_probe_config())
+    for _probe_h in _probe_dts:
+        _probe_edge_sim.advance_one_step(dt=_probe_h)
+        _probe_edge_off.advance_one_step(dt=_probe_h)
+    _probe_edge_gained = float(np.sum(
+        (np.asarray(_probe_edge_sim.state.nn, dtype=float)
+         - np.asarray(_probe_edge_off.state.nn, dtype=float)) * _probe_Vm
+    ))
+    _probe_edge_nominal = (
+        _probe_A * float(np.sum(_probe_Vm)) * (_probe_t_off - _probe_t_on)
+    )
+    assert abs(
+        _probe_edge_gained / _probe_edge_nominal - 1.0
+    ) < 1e-9, (_probe_edge_gained, _probe_edge_nominal)
+    # The run really did cross both edges and end past the window, so the
+    # nominal above is the whole window and not a truncated part of it.
+    assert _probe_edge_sim.time > _probe_t_off
+    # (c) The same statement for the tabulated waveform, whose step average is
+    # a piecewise-linear integral rather than an overlap fraction. Its exact
+    # integral is known in closed form from the trapezoids of its own nodes.
+    _probe_tab_nodes = [[1.1e-8, 0.0], [2.3e-8, 1.0], [3.9e-8, 0.4]]
+    _probe_tab_exact = sum(
+        0.5 * (_probe_a[1] + _probe_b[1]) * (_probe_b[0] - _probe_a[0])
+        for _probe_a, _probe_b in zip(_probe_tab_nodes, _probe_tab_nodes[1:])
+    )
+    _probe_tab2_sim = LAPDSim1D(dict(_probe_base_p, **dict(
+        _probe_ok, neutral_probe_waveform="table",
+        neutral_probe_waveform_table=_probe_tab_nodes,
+    )), _probe_on_f)
+    _probe_t = 0.0
+    _probe_tab_int = 0.0
+    for _probe_h in _probe_dts:
+        _probe_tab_int += _probe_h * (
+            _probe_tab2_sim.neutral_probe_waveform_mean(_probe_t, _probe_h)
+        )
+        _probe_t += _probe_h
+    assert abs(
+        _probe_tab_int / _probe_tab_exact - 1.0
+    ) < 1e-13, (_probe_tab_int, _probe_tab_exact)
+    # A window strictly inside one table segment is the plain trapezoid there,
+    # and a window covering the whole span is the whole integral: the two ends
+    # of the closed form, checked directly.
+    assert abs(
+        _probe_tab2_sim.neutral_probe_waveform_mean(1.1e-8, 1.2e-8) - 0.5
+    ) < 1e-14
+    assert abs(
+        _probe_tab2_sim.neutral_probe_waveform_mean(0.0, 5.0e-8) * 5.0e-8
+        - _probe_tab_exact
+    ) < 1e-22
+    # DEGENERATE: a zero-width window is the instantaneous value, which is what
+    # makes the diagnostic read the dt -> 0 limit of the same quantity rather
+    # than a second definition.
+    for _probe_t in (0.0, 1.3e-8, 2.0e-8, 4.7e-8, 1.0):
+        assert _probe_edge_sim.neutral_probe_waveform_mean(_probe_t, 0.0) == (
+            _probe_edge_sim.neutral_probe_waveform_value(time=_probe_t)
+        ), _probe_t
+    assert _probe_off_sim.neutral_probe_waveform_mean(0.0, 1.0e-9) == 0.0
+    # A const waveform averages to 1 over every window, so the fix cannot have
+    # perturbed the arms that have no edges.
+    assert _probe_gauss_sim.neutral_probe_waveform_mean(-5.0, 11.0) == 1.0
 
     # (iii) THE WHOLE-SYSTEM PARTICLE BUDGET. The instrument injects neutrals
     # and nothing else, and every particle it injects is in the ledger.

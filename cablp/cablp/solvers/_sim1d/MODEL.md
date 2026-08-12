@@ -921,9 +921,37 @@ two: they are two spellings of the same object.
 $w(t)$ is dimensionless, on the **absolute solver clock**. Three registered
 forms: `const`; `square`, one on the half-open $[t_\text{on}, t_\text{off})$
 with hard edges and no smoothing constant anywhere; and `table`, linear between
-tabulated $(t, w)$ nodes and exactly zero outside their span. Every hard edge
-is registered as a step boundary, so no accepted step straddles one and the
-delivered inventory cannot depend on where the stepper happened to sample.
+tabulated $(t, w)$ nodes and exactly zero outside their span.
+
+**The stages consume the waveform's exact step average, and that is what makes
+the delivered inventory the stated hypothesis.** The explicit step is Heun: it
+samples the RHS pointwise at $t_0$ and $t_0+\Delta t$ and averages the two with
+equal weights, so a pointwise waveform would be integrated by the **trapezoid
+rule**. Across a hard edge that is not merely second-order but wrong by a
+finite amount -- a step ending at a rising edge books $\tfrac12\Delta t$ of
+source from *outside* the window, one ending at a falling edge loses the same,
+and the two cancel only when those steps carry equal $\Delta t$, which adaptive
+stepping does not arrange. Measured on this build before the fix: $-1.9\times
+10^{-2}$ of the stated inventory on an off-lattice window, $+2.9\times 10^{-2}$
+on an unequal-$\Delta t$ lattice. Because the probe term is state-independent
+and separable, feeding both stages
+
+$$\bar w = \frac{1}{\Delta t}\int_{t_0}^{t_0+\Delta t} w\,\mathrm{d}t$$
+
+-- closed form for all three waveforms -- repairs this *identically*: the two
+stages carry the same value, the $\tfrac12/\tfrac12$ combination returns it
+unchanged, and each accepted step delivers $A\,p\int w\,\mathrm{d}t$ exactly,
+for any $\Delta t$, any edge placement and any asymmetry between adjacent
+steps. The window is threaded to the term as an explicit argument, so a
+rejected trial $\Delta t$ cannot be read by the attempt that follows it.
+
+Every hard edge is still registered as a step boundary, but for a different
+and smaller reason: it keeps the **applied rate** the square that was asked
+for. A step straddling an edge applies a partial-window average across its
+whole width, which smears the edge in the plasma's *response* -- never in the
+delivered total. A diagnostic read of the term (a save, or `rhs_terms` called
+directly) reports the *instantaneous* rate at that instant, which is $\bar w$
+for a window of zero width.
 
 **Injection conventions, both inherited from the gas puff rather than invented
 here.** *Zero net momentum*: the momentum rows are identically zero, so the gas

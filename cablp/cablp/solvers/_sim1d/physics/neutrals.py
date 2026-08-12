@@ -972,14 +972,19 @@ def neutral_probe_waveform_value(
 ):
     """Return the ad-hoc probe source's dimensionless ``w(t)`` at ``time`` [s].
 
+    The INSTANTANEOUS value, i.e. the ``dt -> 0`` limit of
+    :func:`neutral_probe_waveform_mean`. This is what a diagnostic read of the
+    term reports at a save instant; it is NOT what an integration step
+    consumes, which is the step average -- see that function for why the
+    difference matters.
+
     ``time`` is the ABSOLUTE solver clock. ``waveform`` is a member of
     :data:`NEUTRAL_PROBE_WAVEFORMS`:
 
     * ``"const"`` -- 1.0 everywhere.
     * ``"square"`` -- 1.0 on the half-open interval ``[t_on_s, t_off_s)`` and
       0.0 outside, with hard edges. Half-open so the two edges are
-      unambiguous and the delivered inventory is exactly the amplitude times
-      ``t_off_s - t_on_s``.
+      unambiguous and ``int w dt`` over any window is unambiguous with them.
     * ``"table"`` -- linear interpolation between the rows of ``table``
       (``[t_s, w]`` pairs, ``t`` strictly increasing) and exactly 0.0 strictly
       outside their span.
@@ -1003,8 +1008,97 @@ def neutral_probe_waveform_value(
     )
 
 
+def neutral_probe_waveform_mean(
+    t0, dt, waveform, t_on_s=None, t_off_s=None, table=None,
+    table_cumulative=None,
+):
+    """Return the probe waveform's EXACT step average over ``[t0, t0 + dt]``.
+
+    ``w_bar = (1/dt) * int_{t0}^{t0+dt} w(t) dt``, in closed form for every
+    registered waveform. ``dt <= 0`` returns the instantaneous value, which is
+    the same quantity's ``dt -> 0`` limit.
+
+    THIS, not the instantaneous value, is what an integration step consumes,
+    and the reason is a property of the integrator rather than of the source.
+    The explicit step is Heun: it samples the RHS pointwise at ``t0`` and
+    ``t0 + dt`` and averages the two with equal weights, so a pointwise
+    waveform would be integrated by the TRAPEZOID RULE. On a smooth waveform
+    that is merely second-order; across a hard edge it is WRONG BY A FINITE
+    AMOUNT, because the trapezoid reads a step that merely touches an edge as
+    half a step of delivery. A step ending exactly at a rising edge books
+    ``0.5*dt`` of source from outside the window, and one ending at a falling
+    edge loses the same, so the error cancels only when the two edge-adjacent
+    steps happen to carry equal ``dt`` -- which adaptive stepping does not
+    arrange (measured: -1.9e-2 of the stated inventory on an off-lattice
+    window, +2.9e-2 on an unequal-dt lattice).
+
+    The probe term is state-independent and separable, so consuming ``w_bar``
+    in BOTH Heun stages fixes this identically rather than approximately: the
+    stages then carry the same value, the ``0.5/0.5`` combination returns it
+    unchanged, and the step delivers ``A * p * int w dt`` exactly. That holds
+    for any ``dt``, any edge placement, and any asymmetry between adjacent
+    steps, so the delivered inventory is the stated hypothesis and not an
+    artifact of where the stepper put its samples.
+
+    ``table_cumulative`` is the companion returned by
+    :func:`neutral_probe_waveform_table`: ``cum[i]`` is the integral from the
+    first node to node ``i``, so a window costs two interpolations and one
+    subtraction instead of a walk over the table.
+    """
+    t0 = float(t0)
+    dt = float(dt)
+    if dt <= 0.0:
+        return neutral_probe_waveform_value(
+            t0, waveform, t_on_s=t_on_s, t_off_s=t_off_s, table=table
+        )
+    if waveform == "const":
+        return 1.0
+    if waveform == "square":
+        overlap = min(t0 + dt, float(t_off_s)) - max(t0, float(t_on_s))
+        return max(overlap, 0.0) / dt
+    if waveform == "table":
+        nodes = np.asarray(table, dtype=float)
+        cum = np.asarray(table_cumulative, dtype=float)
+        lo = max(t0, float(nodes[0, 0]))
+        hi = min(t0 + dt, float(nodes[-1, 0]))
+        if hi <= lo:
+            return 0.0
+        return (
+            _table_integral(nodes, cum, hi) - _table_integral(nodes, cum, lo)
+        ) / dt
+    raise ValueError(
+        "neutral_probe_waveform must be one of "
+        f"{list(NEUTRAL_PROBE_WAVEFORMS)} (got {waveform!r})"
+    )
+
+
+def _table_integral(nodes, cum, x):
+    """Return ``int`` of the tabulated waveform from its first node to ``x``.
+
+    ``x`` must already lie within the tabulated span. Exact for the piecewise
+    linear interpolant: whole segments come from the precomputed cumulative
+    sum and the partial one is a single trapezoid.
+    """
+    t = nodes[:, 0]
+    w = nodes[:, 1]
+    i = int(np.searchsorted(t, x, side="right")) - 1
+    if i >= t.size - 1:
+        return float(cum[-1])
+    span = t[i + 1] - t[i]
+    frac = (x - t[i]) / span
+    w_x = w[i] + frac * (w[i + 1] - w[i])
+    return float(cum[i] + 0.5 * (w[i] + w_x) * (x - t[i]))
+
+
 def neutral_probe_waveform_table(table):
-    """Return the probe waveform table as a validated ``(N, 2)`` float array.
+    """Return the validated probe waveform table and its cumulative integral.
+
+    Returns ``(nodes, cumulative)``: ``nodes`` is the ``(N, 2)`` float array of
+    ``[t_s, w]`` rows, and ``cumulative[i]`` is the exact integral of the
+    piecewise-linear interpolant from the first node to node ``i`` (so
+    ``cumulative[0] == 0``). The cumulative half is precomputed here, once at
+    construction, because :func:`neutral_probe_waveform_mean` reads it on every
+    integration stage.
 
     Requires at least two rows, strictly increasing times, all entries finite,
     and every ``w >= 0``. Raises ``ValueError`` otherwise.
@@ -1030,7 +1124,9 @@ def neutral_probe_waveform_table(table):
             "every neutral_probe_waveform_table w must be >= 0 (got min "
             f"{float(np.min(nodes[:, 1])):.6g})"
         )
-    return nodes
+    segments = 0.5 * (nodes[:-1, 1] + nodes[1:, 1]) * np.diff(nodes[:, 0])
+    cumulative = np.concatenate(([0.0], np.cumsum(segments)))
+    return nodes, cumulative
 
 
 def neutral_probe_source_rhs(
@@ -1043,6 +1139,15 @@ def neutral_probe_source_rhs(
     :func:`neutral_probe_profile_weights` (chamber-volume-weighted mean 1), so
     the volume-integrated influx is ``A * w * sum(neutral_volume_cm3)``
     [particles/s] exactly.
+
+    ``waveform_value`` is the waveform factor the CALLER resolved, and which
+    one it resolves decides what the term means. An integration stage passes
+    the step average over the step it is taking
+    (:func:`neutral_probe_waveform_mean`), which is what makes the delivered
+    inventory exactly the stated hypothesis; a diagnostic read passes the
+    instantaneous value at its instant
+    (:func:`neutral_probe_waveform_value`). The two differ only on a step that
+    straddles a hard edge.
 
     INJECTION CONVENTIONS, both inherited unchanged from the gas puff rather
     than invented here:

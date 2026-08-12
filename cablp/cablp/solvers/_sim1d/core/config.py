@@ -2301,14 +2301,22 @@ def neutral_probe_source_defaults():
         * ``"square"`` -- ``w = 1`` on ``[t_on, t_off)`` and ``0`` outside;
           ``neutral_probe_t_on_s`` and ``neutral_probe_t_off_s`` required.
           The edges are hard: nothing is smoothed and no smoothing constant
-          exists. Both edges are registered as step boundaries, so an accepted
-          step never straddles one.
+          exists. Both edges are registered as step boundaries, which keeps
+          the APPLIED rate a square; the delivered inventory does not depend
+          on that and is exact on any lattice.
         * ``"table"`` -- ``neutral_probe_waveform_table`` required; linear
           interpolation between its nodes and exactly ``0`` outside their
           span.
 
         There is no default: the waveform decides what a probe arm measured,
         so it is stated rather than inherited.
+
+        Whatever the form, the integration stages consume the waveform's EXACT
+        AVERAGE over the step being taken, not its value at the stage times,
+        so the inventory a run delivers is ``A * int w dt * sum(V)`` exactly
+        -- the hypothesis as stated, independent of the step lattice. See
+        ``physics.neutrals.neutral_probe_waveform_mean`` for why a pointwise
+        waveform would not be.
     neutral_probe_t_on_s:
         Square-waveform rising edge [s], absolute solver clock. Required with
         ``neutral_probe_waveform="square"`` and forbidden otherwise. Must be

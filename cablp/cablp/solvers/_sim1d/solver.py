@@ -102,6 +102,7 @@ from .physics.neutrals import (
     neutral_exchange_two_zone_rhs,
     neutral_probe_profile_weights,
     neutral_probe_source_rhs,
+    neutral_probe_waveform_mean,
     neutral_probe_waveform_table,
     neutral_probe_waveform_value,
     neutral_source_sink_rhs,
@@ -1757,8 +1758,9 @@ class LAPDSim1D:
                     "or inverted window injects nothing and is a "
                     "misconfiguration rather than a null control"
                 )
+        table_cumulative = None
         if waveform == "table":
-            table = neutral_probe_waveform_table(table)
+            table, table_cumulative = neutral_probe_waveform_table(table)
         zone = values["neutral_probe_zone"]
         if self._neutral_two_zone:
             if zone not in ("column", "annulus"):
@@ -1798,6 +1800,7 @@ class LAPDSim1D:
             t_on_s=None if waveform != "square" else t_on,
             t_off_s=None if waveform != "square" else t_off,
             table=None if waveform != "table" else table,
+            table_cumulative=table_cumulative,
             zone=zone,
         )
 
@@ -2578,13 +2581,25 @@ class LAPDSim1D:
             time=self._time,
         )
 
-    def rhs(self, y=None, include_heat_conduction=True, time=None):
-        """Return the packed explicit RHS for the current scaffold physics."""
+    def rhs(
+        self, y=None, include_heat_conduction=True, time=None,
+        step_window=None,
+    ):
+        """Return the packed explicit RHS for the current scaffold physics.
+
+        ``step_window`` is the ``(t0, dt)`` interval an integrator is stepping
+        over, passed through to the terms that integrate their own explicit
+        time dependence exactly over it. Only the probe source reads it; every
+        other term is evaluated pointwise at ``time`` as before, so omitting it
+        (the default, and what every diagnostic caller does) is the historical
+        behaviour exactly.
+        """
         state_rhs = self._zero_rhs_state()
         terms = self.rhs_terms(
             y=y,
             include_heat_conduction=include_heat_conduction,
             time=time,
+            step_window=step_window,
         )
         for term in terms.values():
             state_rhs = add_state_rhs(state_rhs, term)
@@ -2601,8 +2616,37 @@ class LAPDSim1D:
             ),
         )
 
-    def rhs_terms(self, y=None, include_heat_conduction=True, time=None):
-        """Return named conservative RHS contributions for diagnostics."""
+    def _explicit_stage_rhs(self, dt, include_heat_conduction=True):
+        """Return the SSPRK2 stage RHS callable for a step of width ``dt``.
+
+        With no probe source this is exactly the historical
+        ``self.rhs(y, stage_time)`` -- the presence gate extends to the CALL
+        SIGNATURE, so nothing that wraps, replaces or subclasses ``rhs`` sees
+        an argument that did not exist before, and the off path's stage calls
+        are unchanged down to their keywords.
+
+        With a probe armed, the step window rides along so the term can
+        integrate its own explicit time dependence exactly over it. It is
+        passed as an ARGUMENT rather than armed on the solver: it is an input
+        to the RHS, and threading it makes it structurally impossible for a
+        rejected attempt's ``dt`` to be read by the attempt that replaces it.
+        """
+        extra = (
+            {} if include_heat_conduction
+            else {"include_heat_conduction": False}
+        )
+        if self._probe is not None:
+            extra["step_window"] = (self._time, dt)
+        return lambda yy, tt: self.rhs(yy, time=tt, **extra)
+
+    def rhs_terms(
+        self, y=None, include_heat_conduction=True, time=None,
+        step_window=None,
+    ):
+        """Return named conservative RHS contributions for diagnostics.
+
+        ``step_window`` (see :meth:`rhs`) is read only by the probe source.
+        """
         # The coverage closure's reservoir-arm debit belongs to THIS
         # evaluation's beam solve and nothing else. Cleared first so a branch
         # that never reaches the beam terms (the neutral-only pre-drive, or
@@ -2731,6 +2775,7 @@ class LAPDSim1D:
             probe_terms["neutral_probe_source"] = self.neutral_probe_source_rhs(
                 state=state,
                 time=time,
+                step_window=step_window,
             )
         terms = {
             **zone_terms,
@@ -3165,7 +3210,7 @@ class LAPDSim1D:
                     y_next = ssprk2_step(
                         y0=self._y,
                         dt=dt,
-                        rhs_func=lambda yy, tt: self.rhs(yy, time=tt),
+                        rhs_func=self._explicit_stage_rhs(dt),
                         floor_func=floor_with_ledger,
                         time=self._time,
                         raw_stage_func=(
@@ -4407,13 +4452,15 @@ class LAPDSim1D:
             return floor_func(raw)
 
         def explicit(y_in, sub_dt):
+            # The explicit operator spans the WHOLE step under both splittings
+            # (only the cheap heat operator is halved by Strang), so ``sub_dt``
+            # is the one window an explicitly time-dependent term is
+            # integrated over.
             return ssprk2_step(
                 y0=y_in,
                 dt=sub_dt,
-                rhs_func=lambda yy, tt: self.rhs(
-                    yy,
-                    include_heat_conduction=False,
-                    time=tt,
+                rhs_func=self._explicit_stage_rhs(
+                    sub_dt, include_heat_conduction=False
                 ),
                 floor_func=floor_func,
                 time=self._time,
@@ -5558,9 +5605,16 @@ class LAPDSim1D:
             boundaries.append(gas_event)
         # A square probe waveform has two hard edges and nothing smooths them,
         # so they are captured the same way the puff's are: land a step
-        # boundary on each, and no accepted step straddles one. Without this
-        # the delivered probe inventory would depend on where the stepper
-        # happened to put its samples, which an instrument cannot afford.
+        # boundary on each, and no accepted step straddles one.
+        #
+        # This is NOT what makes the delivered inventory exact -- the stages
+        # consume the waveform's exact step average, so the inventory is right
+        # whether or not a step straddles an edge, on any lattice. What the
+        # capture buys is the applied RATE: a step that straddles an edge
+        # applies a partial-window average across its whole width, which
+        # smears the edge in the plasma's RESPONSE (never in the delivered
+        # total). Landing on the edges keeps the applied waveform the square
+        # that was asked for, and it costs nothing.
         boundaries.extend(self._neutral_probe_event_times())
         for boundary in sorted(boundaries):
             if in_run_window(boundary):
@@ -6255,10 +6309,12 @@ class LAPDSim1D:
         )
 
     def neutral_probe_waveform_value(self, time=None):
-        """Return the probe source's dimensionless ``w(t)``, or 0.0 when off.
+        """Return the probe source's INSTANTANEOUS ``w(t)``, or 0.0 when off.
 
         ``time`` defaults to the solver clock. Zero with the flag off, so a
-        caller needs no branch.
+        caller needs no branch. This is the diagnostic read; what an
+        integration step consumes is
+        :meth:`neutral_probe_waveform_mean` over the step it is taking.
         """
         if self._probe is None:
             return 0.0
@@ -6270,18 +6326,52 @@ class LAPDSim1D:
             table=self._probe.table,
         )
 
-    def neutral_probe_source_rhs(self, y=None, state=None, time=None):
-        """Return the ad-hoc probe neutral source term (zeros when off)."""
+    def neutral_probe_waveform_mean(self, t0, dt):
+        """Return the probe waveform's exact average over ``[t0, t0 + dt]``.
+
+        Zero with the flag off. This is the quantity the integration stages
+        consume; ``sum_k dt_k * mean(t_k, dt_k)`` over a run's accepted steps
+        is the waveform's exact integral, whatever the step lattice.
+        """
+        if self._probe is None:
+            return 0.0
+        return neutral_probe_waveform_mean(
+            t0,
+            dt,
+            self._probe.waveform,
+            t_on_s=self._probe.t_on_s,
+            t_off_s=self._probe.t_off_s,
+            table=self._probe.table,
+            table_cumulative=self._probe.table_cumulative,
+        )
+
+    def neutral_probe_source_rhs(
+        self, y=None, state=None, time=None, step_window=None
+    ):
+        """Return the ad-hoc probe neutral source term (zeros when off).
+
+        ``step_window`` is the ``(t0, dt)`` interval the caller is integrating
+        over. Given, the term carries the waveform's EXACT AVERAGE across it,
+        which is what makes the delivered inventory the stated hypothesis
+        rather than the trapezoid rule's reading of it (see
+        ``physics.neutrals.neutral_probe_waveform_mean``). Omitted -- every
+        diagnostic read -- the term carries the instantaneous rate at ``time``,
+        which is the same quantity for a window of zero width.
+        """
         if self._probe is None:
             return self._zero_rhs_state()
         if state is None:
             state = self.state if y is None else self._unpack(y)
+        if step_window is None:
+            waveform_value = self.neutral_probe_waveform_value(time=time)
+        else:
+            waveform_value = self.neutral_probe_waveform_mean(*step_window)
         return neutral_probe_source_rhs(
             state=state,
             geometry=self._geometry,
             amplitude_cm3_s=self._probe.amplitude_cm3_s,
             weights=self._probe.weights,
-            waveform_value=self.neutral_probe_waveform_value(time=time),
+            waveform_value=waveform_value,
             zone=self._probe.zone,
         )
 
@@ -6889,6 +6979,9 @@ class LAPDSim1D:
 
     def _neutral_probe_event_times(self):
         """Return the probe waveform's hard edges [s], on the absolute clock.
+
+        These sharpen the applied rate, not the delivered inventory, which is
+        exact on any lattice -- see the note at the caller.
 
         Empty with the instrument off, and for ``"const"``, which never
         changes. A ``"square"`` contributes both its edges. A ``"table"``
