@@ -1,12 +1,16 @@
-"""What the residual beam power on beyond-range passive cells actually IS.
+"""What the residual beam power past the beam's IONIZING range actually IS.
 
 MEASUREMENT ONLY. This script proposes no remedy and changes no behaviour: it
 decomposes the ``Ee`` beam power the tracer's quasi-static balance is handed on
-cells the beam's rays never reach, and reports where every erg of it comes
-from. The question it answers was opened by
-``regime_pb_balance_table.py`` section G, where the balance refuses past the
-beam's range because the ionization source has collapsed to a denormal while
-the deposited power has not.
+passive cells that the rays still reach and still deposit in, but no longer
+IONIZE in, and reports where every erg of it comes from. The question it
+answers was opened by ``regime_pb_balance_table.py`` section G, where the
+balance refuses past that range because the ionization source has collapsed to
+a denormal while the deposited power has not.
+
+"Beyond the ionizing range", not "beyond the range": the output below shows
+raw plasma-heating banks on cells 2-39, so the rays reach them. What stops is
+ionization, once the primary drops below threshold.
 
 Three decompositions, per cell:
 
@@ -61,7 +65,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     warnings.simplefilter("ignore")
 
-    print("== regime_pb: what the residual P_net on beyond-range cells IS")
+    print("== regime_pb: what the residual P_net past the IONIZING range IS")
     print("   MEASUREMENT ONLY -- no remedy is proposed or applied here.")
     print(f"   stance regime_r2_overlap_gate.build_config, nx={args.nx}")
 

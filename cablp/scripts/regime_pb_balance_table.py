@@ -339,10 +339,12 @@ def main(argv=None):
           f"n = {float(np.asarray(state.n)[ci]):.4g} cm^-3 < n_act")
 
     # -- G. the long window: does the tracer ever hand a cell over, and what
-    # happens when it does. On an ACTIVE cell the anomalous booking is restored
-    # in full and correctly so, but the balance is still SOLVED there (it is
-    # solved wherever there is plasma or a beam birth, because the criteria
-    # read Te on every cell), so a handed-over cell can refuse.
+    # happens after it does. On an ACTIVE cell the anomalous booking is
+    # restored in full and correctly so, but the balance is NOT solved there:
+    # the solve domain is the passive set alone, and anything reading a
+    # temperature on an active cell reads the fluid's own Te. So a handed-over
+    # cell cannot raise TracerBalanceError at all. Any refusal this section
+    # reports is therefore on a cell the TRACER still owns.
     print()
     print(f"-- G. long window (t_end = {args.t_end_long:g} s)")
     long_params, long_flags = build_config(args.nx, True)
@@ -374,8 +376,8 @@ def main(argv=None):
         # sinks, which at this density absorb enough to give most of the
         # screened cells a root anyway. The cell the solver actually refused on
         # is the one named in the message above; the screen is here to show the
-        # SHAPE of the problem, which is that S collapses past the beam's range
-        # while a residual deposited power does not.
+        # SHAPE of the problem, which is that S collapses past the beam's
+        # IONIZING range while a residual deposited power does not.
         long_solve = long_sim._cathode_solve or long_sim.solve_cathode_boundary(
             state=long_sim.state, time=long_t, update_cache=False
         )
