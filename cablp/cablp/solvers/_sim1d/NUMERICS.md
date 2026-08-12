@@ -722,6 +722,25 @@ deposition model at construction: the anomalous channel exists only on the CSDA
 rays, so such a run reads as though the correction is doing work when neither
 the channel nor its refusal is live.
 
+**The balance is solved on the PASSIVE SET and nowhere else.** A cell the fluid
+owns has its own electron energy equation, integrated with conduction and the
+boundary terms in it, so the local quasi-static closure — which cannot see
+either — was never a description of it. Two things follow, and both are the
+rule rather than a consequence of it:
+
+- the balance is never consulted for an active cell, so it can never refuse on
+  one (an earlier build did, at `t = 7e-5`; see Gates);
+- everything that reads a temperature on an active cell — criterion (a)'s
+  Spitzer conductivity, criterion (b)'s stopping power, the re-entry side of
+  the hysteresis, and the census `Te_qs` field — reads **the fluid's own `Te`**
+  for that cell. Off the passive set the balance's output is a
+  floor-by-convention filler and means nothing, so publishing or acting on it
+  would have described a cold cell wherever the fluid was in fact running hot.
+
+The per-cell values below are unaffected by this: the bisection is independent
+per cell, so restricting which cells are solved changes which cells can raise,
+not what any solved cell returns.
+
 **RE-MEASURED**, same stance, same instant (`nx = 20`, `t = 1.0423e-05 s`,
 fluid-arm background), by `scripts/regime_pb_balance_table.py`:
 
@@ -1022,14 +1041,24 @@ refuses.
   exists for I4 to check. The R2 PASS at the same window was disclosed as
   cadence-conditional; under the corrected booking the leg is simply colder
   and slower, and does not hand off that early.
-- Run out to `t = 1e-4` and the tracer leg does hand cells over — cells 2–7
-  cross `n_act` at `n ≈ 1.05–1.22e10` — and then **raises at `t = 7e-5` on
-  cell 2, a cell it no longer owns.** The balance is solved wherever there is
-  plasma or a beam birth, including cells the fluid has taken, and on those
-  the anomalous booking is restored in full (correctly — QL is real there), so
-  the balance refuses exactly as the original section describes. Restricting
-  the `Te` solve to the passive set would change what the criteria read on
-  active cells and is deliberately NOT done here.
+- Run out to `t = 1e-4` and the tracer leg hands **nine** cells over (2–10,
+  at `n = 2.19–4.32e10`) and then raises at `t = 7.476e-5` on **cell 32,
+  which it still owns**. An earlier build solved the balance on every cell
+  carrying plasma, including the ones the fluid had just taken, and raised at
+  `t = 7.0e-5` on cell 2 — an active cell — for exactly the reason this
+  amendment removes on passive cells. That was a solve-domain defect and is
+  fixed, not documented: the run now passes both the instant and the cell that
+  used to stop it.
+
+  The refusal that remains is the OPPOSITE limit from the one at the top of
+  this block. Past the beam's range `S` collapses to a denormal while `P_net`
+  does not, so the **dilution denominator goes to zero** and the balance
+  demands an unbounded `Te` — too few beam-born electrons to dilute into,
+  rather than too much power. It is not the anomalous channel (`P_ql ~ 1e-283`
+  there) and not the ohmic gap booking (the gap is the cathode-end cells and
+  `P_ohmic < 1 W`). What the residual `P_net` is on cells the rays never reach
+  is a separate question, opened by `regime_pb_balance_table.py` section G and
+  deliberately not closed here.
 
 ### Explicitly out of scope at stage 1
 

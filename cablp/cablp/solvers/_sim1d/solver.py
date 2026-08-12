@@ -2661,7 +2661,18 @@ class LAPDSim1D:
                 cooling_kwargs=self._electron_cooling_kwargs(),
                 exchange_kwargs=self._tracer_exchange_kwargs(),
                 boundary_rhs=boundary_rhs,
-                active=(n_true > 0.0) | (S > 0.0),
+                # THE PASSIVE SET, and only it. A cell the fluid owns has its
+                # own electron energy equation, integrated with conduction and
+                # the boundary terms in it; asking the local quasi-static
+                # balance about that cell is asking a description that was
+                # never valid there, and the answer -- or the refusal -- would
+                # be about the wrong object. It is also where the anomalous
+                # booking is legitimately restored, so the balance would see
+                # the whole beam power and refuse for exactly the reason the
+                # amendment above removes on passive cells. Whatever reads a
+                # temperature on an active cell reads the FLUID's own Te (see
+                # :meth:`_tracer_criteria_Te_eV`).
+                active=self._tracer_passive & ((n_true > 0.0) | (S > 0.0)),
                 Te_ceiling_eV=self._tracer_beam_energy_eV(cathode_solve),
             )
             gamma = tracer_growth_rate(
@@ -2693,6 +2704,30 @@ class LAPDSim1D:
             "V_dev_V": self._tracer_device_voltage_V(cathode_solve),
             "E_beam_eV": self._tracer_beam_energy_eV(cathode_solve),
         }
+
+    def _tracer_criteria_Te_eV(self, Te_qs):
+        """Return the temperature the criteria and census read, per cell.
+
+        ``Te_qs`` on a cell the tracer owns; the FLUID's own ``Te`` on every
+        other cell. The quasi-static balance is solved on the passive set only,
+        so ``Te_qs`` off that set is the floor-by-convention filler and means
+        nothing -- reading it would have made criterion (a)'s Spitzer
+        conductivity, criterion (b)'s stopping power and the census all describe
+        a cold cell wherever the fluid was in fact running hot, and it is the
+        re-entry branch of the hysteresis that reads them there.
+
+        Called after the state vector for the step is installed, so the fluid
+        rows are this step's, not the previous one's.
+        """
+        passive = self._tracer_passive
+        Te_fluid = derive_state(
+            self.state, self._floors, self._ion_mass_g
+        ).Te
+        return np.where(
+            passive,
+            np.asarray(Te_qs, dtype=float),
+            np.asarray(Te_fluid, dtype=float),
+        )
 
     def _tracer_apply(self, prepared):
         """Commit an accepted step's tracer update, mask move and census."""
@@ -2740,10 +2775,17 @@ class LAPDSim1D:
             self._tracer_coefficients = prepared["coefficients"]
             self._tracer_background = prepared["background"]
             self._tracer_refreshes += 1
-        self._tracer_update_mask(prepared, n_next, Te, gamma)
+        self._tracer_update_mask(
+            prepared, n_next, self._tracer_criteria_Te_eV(Te), gamma
+        )
 
     def _tracer_update_mask(self, prepared, n_next, Te, gamma):
-        """Move the passive/active boundary, with hysteresis, and census it."""
+        """Move the passive/active boundary, with hysteresis, and census it.
+
+        ``Te`` here is the COMPOSED temperature from
+        :meth:`_tracer_criteria_Te_eV` -- quasi-static on the tracer's cells,
+        the fluid's own everywhere else -- not the raw balance output.
+        """
         state = self.state
         criteria = self._tracer["criteria"]
         hysteresis = self._tracer["hysteresis"]
@@ -2830,6 +2872,10 @@ class LAPDSim1D:
                 L_n_cm=0.5 * L_plasma_cm,
             ),
             "passive": new_passive.copy(),
+            # The temperature the criteria above actually read: quasi-static on
+            # the tracer's cells, the fluid's own on every other. Keeping the
+            # raw balance output here instead would publish the floor filler on
+            # active cells and disagree with the ratios beside it.
             "Te_qs_eV": np.asarray(Te, dtype=float),
             "gamma_per_s": np.asarray(gamma, dtype=float),
             "S_cm3_s": np.asarray(prepared["S"], dtype=float),

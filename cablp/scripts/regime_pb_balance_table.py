@@ -37,7 +37,7 @@ from cablp.solvers._sim1d.physics.tracer import (
     TracerBalanceError,
     quasistatic_Te_eV,
 )
-from cablp.vars._cons import qe_SI as QE_SI
+from cablp.vars._cons import ev_to_erg as EV_TO_ERG, qe_SI as QE_SI
 
 #: The rows the R2 table reports, in its order.
 ROW_NAMES = (
@@ -114,10 +114,17 @@ def beam_ledger(sim, state, time):
     return cathode_solve, P_ql, Vp, totals, events
 
 
-def balance_scan(sim, state, time, cathode_solve, S, P, cells_reported):
-    """Return ``{scale: outcome string}`` for one booking of the beam power."""
+def balance_scan(sim, state, time, cathode_solve, S, P, cells_reported,
+                 passive):
+    """Return ``{scale: outcome string}`` for one booking of the beam power.
+
+    ``passive`` mirrors the solver's own solve domain: the balance is solved on
+    the tracer's cells and nowhere else, because the fluid owns ``Te`` on the
+    rest and the local closure was never valid there.
+    """
     cells = int(sim._geometry.cells)
     ci, coli = cells_reported
+    passive = np.asarray(passive, dtype=bool)
     boundary_rhs = sim._tracer_boundary_rhs(cathode_solve, time)
     Ti = np.full(cells, float(sim._floors["Ti"]))
     n_base = np.maximum(np.asarray(state.n, dtype=float), 0.0)
@@ -139,7 +146,7 @@ def balance_scan(sim, state, time, cathode_solve, S, P, cells_reported):
                 cooling_kwargs=sim._electron_cooling_kwargs(),
                 exchange_kwargs=sim._tracer_exchange_kwargs(),
                 boundary_rhs=boundary_rhs,
-                active=(n_true > 0.0) | (S > 0.0),
+                active=passive & ((n_true > 0.0) | (S > 0.0)),
                 Te_ceiling_eV=sim._tracer_beam_energy_eV(cathode_solve),
             )
         except TracerBalanceError as error:
@@ -268,10 +275,11 @@ def main(argv=None):
           f"({int(np.count_nonzero(passive))} of {cells} cells in the "
           f"pre-breakdown passive set)")
     old = balance_scan(
-        fluid, state, reached, cathode_solve, S, P_full, (ci, coli)
+        fluid, state, reached, cathode_solve, S, P_full, (ci, coli), passive
     )
     new = balance_scan(
-        fluid, state, reached, cathode_solve, S, P_corrected, (ci, coli)
+        fluid, state, reached, cathode_solve, S, P_corrected, (ci, coli),
+        passive
     )
     for label, table in (("AS BOOKED (the R2 column)", old),
                          ("CORRECTED (QL refused on passive cells)", new)):
@@ -350,7 +358,8 @@ def main(argv=None):
             & ~long_passive
         )
         long_n = np.asarray(long_sim.state.n, dtype=float)
-        print(f"   REFUSED at t = {float(long_sim._time):.6g} s")
+        long_t = float(long_sim._time)
+        print(f"   REFUSED at t = {long_t:.6g} s")
         print(f"   {error}")
         print(f"   cells handed to the fluid: "
               f"{np.flatnonzero(handed).tolist()}")
@@ -358,9 +367,75 @@ def main(argv=None):
             print(f"   their densities: {long_n[handed].min():.4g} .. "
                   f"{long_n[handed].max():.4g} cm^-3 (n_act = "
                   f"{float(long_sim._input_dict['tracer_activation_ne']):.4g})")
-        print(f"   cell 2 passive? {bool(long_passive[2])} -- a refusal on a "
-              "cell the tracer no longer owns is the balance's solve domain, "
-              "not the booking")
+        # WHY, without improvising a fix. In the VACUUM limit the balance
+        # reduces to the dilution cost alone, Te -> (2/3) P_net /
+        # (ev_to_erg S) -- the beam's W-value in the gas. That is an
+        # UPPER-BOUND SCREEN and nothing more: it ignores the L1/L2 radiative
+        # sinks, which at this density absorb enough to give most of the
+        # screened cells a root anyway. The cell the solver actually refused on
+        # is the one named in the message above; the screen is here to show the
+        # SHAPE of the problem, which is that S collapses past the beam's range
+        # while a residual deposited power does not.
+        long_solve = long_sim._cathode_solve or long_sim.solve_cathode_boundary(
+            state=long_sim.state, time=long_t, update_cache=False
+        )
+        long_S, long_net, long_full = long_sim._tracer_beam_rows(
+            long_sim.state, long_solve, long_t
+        )
+        long_ql = beam_anomalous_power_density(
+            **long_sim._tracer_beam_kwargs(long_sim.state, long_solve, long_t)
+        )
+        ceiling = (2.0 / 3.0) * long_sim._tracer_beam_energy_eV(long_solve)
+        live = long_S > 0.0
+        demand = np.zeros_like(long_S)
+        demand[live] = (2.0 / 3.0) * long_net[live] / (
+            EV_TO_ERG * long_S[live]
+        )
+        over = live & long_passive & (demand > ceiling)
+        print(f"   bracket top {ceiling:.6g} eV ((2/3) E_beam, E_beam = "
+              f"{long_sim._tracer_beam_energy_eV(long_solve):.6g} eV)")
+        screened = np.flatnonzero(over)
+        print(f"   PASSIVE cells failing the vacuum-limit SCREEN (upper bound, "
+              f"not the refusing set): {screened.tolist()}")
+        sample = (
+            screened[[0, len(screened) // 3, 2 * len(screened) // 3, -1]]
+            if screened.size >= 4
+            else screened
+        )
+        # Where the residual power on those cells comes from, so the reader
+        # does not have to guess: the deposition module's own per-cell banks
+        # BEFORE smoothing, and the plasma volume the conservative kernel
+        # divides by.
+        long_Vp = np.asarray(
+            long_sim._geometry.plasma_volume_cm3, dtype=float
+        )
+        raw_banks = np.zeros_like(long_Vp)
+        for dep in (getattr(long_solve, "beam_deposition", None) or {}).values():
+            if dep is None:
+                continue
+            raw_banks += (
+                np.asarray(dep.plasma_heating_erg_s, dtype=float)
+                + np.asarray(dep.radiated_erg_s, dtype=float)
+                + np.asarray(dep.ionization_cost_erg_s, dtype=float)
+            ) / long_Vp
+        for cell in sample:
+            cell = int(cell)
+            print(f"     cell {cell}: passive={bool(long_passive[cell])} "
+                  f"n={long_n[cell]:.4g} P_full={long_full[cell]:.5g} "
+                  f"P_ql={long_ql[cell]:.5g} P_net={long_net[cell]:.5g} "
+                  f"S={long_S[cell]:.5g} -> Te demand {demand[cell]:.5g} eV")
+            print(f"       unsmoothed bank density {raw_banks[cell]:.5g}, "
+                  f"Vp {long_Vp[cell]:.5g} cm^3")
+        print("   NOTE the active-cell refusal is GONE: the run passes both "
+              "the instant and the cell that used to stop it. This refusal is "
+              "on a cell the tracer OWNS, past the beam's range, and it is the "
+              "OPPOSITE limit from the original finding -- not too much power "
+              "but too few beam-born electrons to dilute into, S having "
+              "collapsed to a denormal while P_net has not. RULED OUT as its "
+              "cause: the QL channel (P_ql is ~1e-283 there) and the ohmic gap "
+              "booking (the gap is the cathode-end cells and P_ohmic is under "
+              "1 W). What the residual P_net IS on cells the rays never reach "
+              "is a separate question the rows above open and do not close.")
 
     print()
     print(f"== outcome: the balance {'HAS' if status == 'RAN' else 'has NO'} a "

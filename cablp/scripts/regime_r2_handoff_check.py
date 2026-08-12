@@ -120,11 +120,17 @@ def _faces(sim, geometry):
 def print_cadence_caveat(sim):
     """Print, next to the refresh count, what a PASS from this script does not mean.
 
-    The caveat has to travel WITH the result. NUMERICS.md records that the
-    per-cell quasi-static balance has no root at this stance, and a printed
-    PASS sitting beside that statement with no explanation is worse than no
-    output at all -- a reader has to be able to reconcile the two from the
-    output itself, not from a gate log that is not in the repository.
+    The caveat has to travel WITH the result: a printed PASS that a reader
+    cannot reconcile against what NUMERICS.md says about the Te closure is
+    worse than no output at all, and a gate log outside the repository is not
+    a substitute.
+
+    What it says was rewritten when the passive-cell beam power booking was
+    corrected (NUMERICS.md, "Corrected beam power booking on passive cells").
+    The balance now HAS a root at this stance, so the old wording -- no root
+    here, overlap gate BLOCKED -- became false the moment that landed. The
+    reasons a PASS is still conditional are different ones, and they are the
+    ones printed below.
     """
     refreshes = 0
     census = getattr(sim, "_tracer_census", None)
@@ -132,14 +138,19 @@ def print_cadence_caveat(sim):
         refreshes = int(census.get("refreshes", 0))
     print(
         f"  CADENCE CAVEAT (refreshes={refreshes}): a PASS below is "
-        "CONDITIONAL. The per-cell quasi-static Te balance has NO ROOT at this "
-        "stance (NUMERICS.md, 'MEASURED: the local balance has no root at the "
-        "production stance'); this run reaches an answer only because the "
-        f"{refreshes} Picard refresh(es) landed at states where a root still "
-        "exists. regime_r2_overlap_gate.py, at a finer dt_save over the same "
-        "window and the same configuration, refreshes at the failing state and "
-        "is BLOCKED. A PASS therefore certifies the handoff MACHINERY, not "
-        "that the tracer's Te closure describes this leg."
+        "CONDITIONAL. Under the corrected passive-cell beam power booking the "
+        "quasi-static Te balance DOES have a root at this stance, so this run "
+        "is no longer living off a lucky refresh cadence -- but the closure is "
+        "still not certified by a PASS here, for two measured reasons. (1) It "
+        "refuses further into the ramp: past the beam's range the ionization "
+        "source collapses while the deposited power does not, so the dilution "
+        "denominator goes to zero (measured at t=7.476e-05 s, cell 32; "
+        "regime_pb_balance_table.py section G). (2) The two-sided overlap "
+        "gate FAILS at the measured gap between tracer_activation_ne and the "
+        "quasilinear onset density, so the two descriptions are not shown to "
+        f"agree anywhere. The {refreshes} Picard refresh(es) still set which "
+        "states the balance is evaluated at. A PASS therefore certifies the "
+        "handoff MACHINERY, not that the tracer's Te closure describes this leg."
     )
 
 
