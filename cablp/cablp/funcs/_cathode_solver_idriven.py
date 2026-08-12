@@ -665,10 +665,10 @@ def solve_idriven(
         if capability_limited:
             # A genuine inductive kick: the sheath cannot carry the imposed
             # current at physical net voltages. Return the solution *at* the
-            # ceiling -- net phi_c = phi_c_ceiling_V, located by a bracketed solve
-            # on the monotone net-sheath map so the reported kick voltage does
-            # not depend on where the doubling happened to land -- and let the
-            # circuit ramp I down at ~V/L per step.
+            # ceiling -- net phi_c = phi_c_ceiling_V, located by a bracketed
+            # solve on the monotone net-sheath map so the reported kick
+            # voltage does not depend on where the doubling happened to
+            # land -- and let the circuit ramp I down at ~V/L per step.
             if _net_phi_c(psi_top) > phi_c_ceiling_V:
                 psi_c_plus = brentq(
                     lambda x: _net_phi_c(x) - phi_c_ceiling_V,
