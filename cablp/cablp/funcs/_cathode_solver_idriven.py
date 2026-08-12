@@ -109,7 +109,17 @@ from cablp.funcs._cathode_solver import (
 from cablp.funcs._cross import H_EII_cross_lkup, He_EII_cross_lkup
 from cablp.funcs._kernels import COMPILED_KERNELS as _COMPILED_KERNELS
 
-__all__ = ["solve_idriven", "solve_beam_system_idriven"]
+__all__ = [
+    "beam_launch_energy_eV",
+    "solve_idriven",
+    "solve_beam_system_idriven",
+]
+
+#: Quantities ``circuit_bound_object`` may name as the circuit bound's object.
+#: ``"phi_c"`` bounds the net cathode drop (the historical composition);
+#: ``"device_voltage"`` bounds ``V_b = phi_c - phi_a + V_p``, the quantity the
+#: loop equation contains.
+_CIRCUIT_BOUND_OBJECTS = ("phi_c", "device_voltage")
 
 # Float-degeneracy margin for the emission-exhausted plateau. Where every
 # emission channel is released and the electron-repelling tail has
@@ -364,6 +374,26 @@ if _COMPILED_KERNELS is not None:
     _COMPILED_ROOT = _COMPILED_KERNELS.solve_psi_annular_schottky
 
 
+def beam_launch_energy_eV(phi_c, climb_V):
+    """Return the energy [eV] the beam carries INTO the column.
+
+    ``phi_c`` is the solved net cathode drop -- under the circuit voltage
+    bound, the bounded one. ``climb_V`` is the potential [V] the transmitted
+    beam must climb between the anode mesh and the column; ``None`` means no
+    such step exists and the launch energy IS ``phi_c``, returned as the same
+    object so every downstream consumer is bit-for-bit unchanged. A climb is
+    only ever a decelerating step here, so a negative value contributes
+    nothing, and the result is floored at zero (a fully choked beam).
+
+    The single definition both beam readers use -- the Beer-Lambert beam-array
+    assembly in :func:`solve_beam_system_idriven` and the CSDA deposition
+    rays -- so a build cannot end up with two launch energies.
+    """
+    if climb_V is None:
+        return phi_c
+    return max(float(phi_c) - max(float(climb_V), 0.0), 0.0)
+
+
 def solve_idriven(
     config: DeviceConfig,
     plasma: PlasmaState,
@@ -377,6 +407,7 @@ def solve_idriven(
     alpha_sheath: float | None = None,
     alpha_sheath_anode: float | None = None,
     circuit_V_avail_V: float | None = None,
+    circuit_bound_object: str = "phi_c",
 ) -> SolverResult:
     """Solve the cathode sheath for an *imposed* loop current.
 
@@ -402,16 +433,34 @@ def solve_idriven(
     available voltage has no ceiling to offer and the caller passes ``None``
     there instead. NB the inductor's back-EMF is deliberately NOT counted as
     available voltage, so while the bound binds the loop current cannot fall.
-    SCOPE: this bounds ``phi_c``, but what the circuit supplies is the DEVICE
-    voltage ``V_b = phi_c - phi_a + V_p``, in which the anode fall SUBTRACTS.
-    The two coincide only where ``phi_a`` is negligible -- the
-    capability-limited / near-vacuum regime the pre-breakdown build leg sits
-    in, which is this argument's contract. Where ``phi_a`` is not negligible
-    (the main-discharge plateau) ``phi_c`` legitimately exceeds the available
-    voltage while ``V_b`` does not, and passing a value here would clamp a
-    correct solve to ``phi_c = circuit_V_avail_V`` and tag it
-    ``capability_limited`` with no error raised; only ``bound_active``
-    records it. Pass ``None`` outside the build leg.
+
+    ``circuit_bound_object`` selects WHICH quantity the available voltage
+    bounds, and is read only when ``circuit_V_avail_V`` is given:
+
+    - ``"device_voltage"`` -- the bound's object is the DEVICE voltage
+      ``V_b = phi_c - phi_a + V_p``, the quantity the loop equation actually
+      contains. The circuit member of the composed ceiling is the *net sheath
+      drop at which* ``V_b(psi) = circuit_V_avail_V``, located by a bracketed
+      solve on the same monotone device relation the current root uses, with
+      ``phi_a`` and ``V_p`` evaluated by the identical expressions that
+      assemble the returned result. The composition, the ladder, the escape
+      invariant and the ``bound_active`` census are unchanged -- only the
+      number the circuit contributes to ``min`` changes -- so the compiled
+      root path is used exactly as before.
+    - ``"phi_c"`` -- the circuit member IS ``circuit_V_avail_V``, i.e. the
+      bound's object is the net cathode drop. Bit-for-bit the historical
+      composition.
+
+    The two coincide only where ``phi_a`` and ``V_p`` are negligible -- the
+    capability-limited / near-vacuum regime of the pre-breakdown build leg. At
+    the main-discharge plateau ``phi_a`` is not negligible, ``phi_c``
+    legitimately exceeds the available voltage while ``V_b`` does not, and
+    ``"phi_c"`` there clamps a correct solve and tags it
+    ``capability_limited`` with no error raised (only ``bound_active`` records
+    it). ``"device_voltage"`` cannot make that error. NB neither object
+    removes the OTHER exclusion above: the back-EMF is not supply, so on any
+    leg where the loop current is FALLING the physical ``V_b`` exceeds
+    ``circuit_V_avail_V`` and the bound engages and freezes ``dI/dt`` at zero.
     ``bridge`` enables the kT_s-width thermal bridge across the
     SCL<->classical release corner (``_bridge_release``); off reproduces
     the hard branches bit-for-bit (the M2 equivalence gate's condition).
@@ -427,13 +476,13 @@ def solve_idriven(
         )
     if phi_c_cap_V <= 0.0:
         raise ValueError(f"phi_c_cap_V must be positive (got {phi_c_cap_V})")
-    # Composed ceiling. Off (``None``) this IS ``phi_c_cap_V``, the same float
-    # object, so every comparison and every bracket below is bit-for-bit the
+    # Validate the bound's inputs here, at the top, so a misconfigured call
+    # fails before it spends a solve. The COMPOSITION itself happens further
+    # down, once the device relation the "device_voltage" object is located on
+    # exists; off (``None``) the composed ceiling is ``phi_c_cap_V``, the same
+    # float object, and every comparison and bracket below is bit-for-bit the
     # historical one.
-    if circuit_V_avail_V is None:
-        phi_c_ceiling_V = phi_c_cap_V
-        _ceiling_is_circuit = False
-    else:
+    if circuit_V_avail_V is not None:
         circuit_V_avail_V = float(circuit_V_avail_V)
         if not (circuit_V_avail_V > 0.0) or not math.isfinite(
             circuit_V_avail_V
@@ -442,10 +491,12 @@ def solve_idriven(
                 "circuit_V_avail_V must be finite and positive when the "
                 f"circuit voltage bound is in force (got {circuit_V_avail_V})"
             )
-        _ceiling_is_circuit = circuit_V_avail_V < phi_c_cap_V
-        phi_c_ceiling_V = (
-            circuit_V_avail_V if _ceiling_is_circuit else phi_c_cap_V
-        )
+        if circuit_bound_object not in _CIRCUIT_BOUND_OBJECTS:
+            raise ValueError(
+                "circuit_bound_object must be one of "
+                f"{sorted(_CIRCUIT_BOUND_OBJECTS)} when the circuit voltage "
+                f"bound is in force (got {circuit_bound_object!r})"
+            )
 
     T_e = plasma.T_e
     n_e = plasma.n_e
@@ -587,6 +638,76 @@ def solve_idriven(
         # within a ULP.
         return psi * T_e - _emission_state(psi)[1] * T_e
 
+    def _device_voltage(psi: float) -> float:
+        # V_b(psi) = phi_c + V_p - phi_a, assembled by the SAME expressions the
+        # returned result is built from below (see the "Everything else follows
+        # explicitly from the solved psi" block) so the bound's object and the
+        # reported object cannot drift apart. Monotone increasing in psi on the
+        # same premises the current root already rests on: phi_c and J_tot both
+        # rise with psi, and phi_a falls as the anode collects more.
+        J_star_p, psi_minus_p, _ = _emission_state(psi)
+        J_tot_p = J_i * (1.0 - _exp_clamped(Lambda - psi)) + J_star_p
+        phi_c_p = psi * T_e - psi_minus_p * T_e
+        l_b_p = _compute_l_b(phi_c_p, T_e, n_e, plasma.n_n, plasma.sigma_b)
+        bypass_p = _compute_beam_bypass_fraction(l_b_p, config.L_cath)
+        J_anode_p = J_tot_p - eta * bypass_p * J_star_p
+        psi_a_p = Lambda_anode - math.log(
+            max(1.0 + J_anode_p / J_i_a, 1e-300)
+        )
+        I_tot_p = J_tot_p * T_e / R_p
+        return phi_c_p + I_tot_p * R_p - psi_a_p * T_e_anode
+
+    # ------------------------------------------------------------------
+    # Composed ceiling (see the circuit_V_avail_V / circuit_bound_object
+    # contract in the docstring). With no circuit bound this IS
+    # ``phi_c_cap_V``, the same float object.
+    # ------------------------------------------------------------------
+    _PSI_LO = 1.0e-8
+    if circuit_V_avail_V is None:
+        phi_c_ceiling_V = phi_c_cap_V
+        _ceiling_is_circuit = False
+    else:
+        if circuit_bound_object == "phi_c":
+            _circuit_phi_c_ceiling_V = circuit_V_avail_V
+        else:
+            # The net sheath drop at which the DEVICE voltage reaches the
+            # available voltage. Same deterministic range extension on a
+            # monotone function the current root uses: grow the bracket top
+            # until either V_b has reached the target or the net sheath has
+            # already passed the data cap -- past which the cap is the binding
+            # member and what the circuit would have contributed is moot.
+            _psi_hi = max(phi_c_cap_V / T_e, Lambda + 2.0)
+            _reached = _device_voltage(_psi_hi) >= circuit_V_avail_V
+            for _ in range(200):
+                if _reached or _net_phi_c(_psi_hi) >= phi_c_cap_V:
+                    break
+                _psi_hi *= 2.0
+                _reached = _device_voltage(_psi_hi) >= circuit_V_avail_V
+            if not _reached:
+                # The device cannot produce the available voltage below the
+                # data cap, so the circuit offers no ceiling at all.
+                _circuit_phi_c_ceiling_V = math.inf
+            elif _device_voltage(_PSI_LO) >= circuit_V_avail_V:
+                # Degenerate: the loop cannot sustain even the smallest sheath.
+                # The bracket bottom IS the ceiling; keep it strictly positive
+                # so the escape invariant's comparison stays well-defined.
+                _circuit_phi_c_ceiling_V = _reported_phi_c(_PSI_LO)
+            else:
+                _circuit_phi_c_ceiling_V = _reported_phi_c(
+                    brentq(
+                        lambda x: _device_voltage(x) - circuit_V_avail_V,
+                        _PSI_LO,
+                        _psi_hi,
+                        xtol=1.0e-12,
+                        rtol=1.0e-14,
+                        full_output=False,
+                    )
+                )
+        _ceiling_is_circuit = _circuit_phi_c_ceiling_V < phi_c_cap_V
+        phi_c_ceiling_V = (
+            _circuit_phi_c_ceiling_V if _ceiling_is_circuit else phi_c_cap_V
+        )
+
     # The physical ceiling applies to the *net* sheath drop phi_c: in a deep
     # virtual cathode psi_c_plus legitimately exceeds any voltage-scale cap
     # while phi_c = (psi_plus - psi_minus)*T_e stays at bank scale (the
@@ -609,7 +730,7 @@ def solve_idriven(
     # violates the premise of the circuit's own brentq on V_dis(I). So the
     # J-root is tested against the cap after it is located, and a root at or
     # above the ceiling falls through to the ceiling branch below.
-    psi_lo = 1.0e-8
+    psi_lo = _PSI_LO
     psi_top = max(phi_c_ceiling_V / T_e, Lambda + 2.0)
     # Compiled root find (Tier A, 2026-08-02). The ladder and brentq below
     # evaluate `_J_tot` / `_net_phi_c` ~50-100 times per solve, and each one is
@@ -969,6 +1090,8 @@ def solve_beam_system_idriven(
     alpha_sheath: float | None = None,
     alpha_sheath_anode: float | None = None,
     circuit_V_avail_V: float | None = None,
+    circuit_bound_object: str = "phi_c",
+    beam_climb_V: float | None = None,
 ) -> BeamResult:
     """Current-driven, single-cathode counterpart of ``solve_beam_system``.
 
@@ -980,6 +1103,20 @@ def solve_beam_system_idriven(
     this is reached), so ``result_twin`` is always ``None`` and the twin
     arrays stay zero. ``x0_next`` is kept for contract compatibility --
     the current-driven solve needs no warm start.
+
+    ``beam_climb_V`` is the potential [V] a transmitted beam electron must
+    CLIMB between the anode mesh and the column, i.e. the anode-to-wall
+    common-mode offset when the vessel node is armed. ``None`` (the default)
+    means no node: the launch energy is ``result.phi_c`` itself, the same
+    float object, and every beam array below is bit-for-bit the historical
+    one. Given, the energy the beam carries into the column is
+    ``max(phi_c - max(beam_climb_V, 0), 0)`` -- the FLUX is untouched, because
+    the same electrons arrive, decelerated. A climb that takes the launch
+    energy to or below ``I_ion`` launches no beam at all, which is the fully
+    choked limit and not an error. The sheath solve's own ``phi_c``, ``V_b``
+    and gap bypass are NOT shifted: the climb sits downstream of the mesh, and
+    the common-mode node moves the whole cathode/anode system together and so
+    cannot change the anode-to-cathode differential the circuit integrates.
     """
     cells = len(Te)
     v_beam = np.zeros(cells)
@@ -1005,8 +1142,9 @@ def solve_beam_system_idriven(
         alpha_sheath=alpha_sheath,
         alpha_sheath_anode=alpha_sheath_anode,
         circuit_V_avail_V=circuit_V_avail_V,
+        circuit_bound_object=circuit_bound_object,
     )
-    phi_c_0 = result.phi_c
+    phi_c_0 = beam_launch_energy_eV(result.phi_c, beam_climb_V)
     if phi_c_0 > I_ion:
         v_beam[cathode_index] = math.sqrt(2.0 * phi_c_0 * _erg_per_eV / _me_cgs)
         _I_beam_0 = result.I_eth_star * (

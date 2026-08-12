@@ -1450,15 +1450,39 @@ def cathode_defaults():
         holds, and every consumer keyed to ``phi_c`` (notably the tail birth
         energy under ``heating_anomalous_tail_energy_keying="phi_c"``) sees it.
         Under the ``cathode_circuit_voltage_bound`` flag this cap is not the
-        whole ceiling: the solve is run against ``min`` of it and the
-        circuit-available voltage, and the ``bound_active`` diagnostic says
-        which of the two the solve sat on. That composition is in contract on
-        the capability-limited (pre-breakdown build) leg only: at the plateau
-        the anode fall subtracts in ``V_b = phi_c - phi_a + V_p``, so ``phi_c``
-        legitimately exceeds the circuit-available voltage and the composed
-        ceiling would clamp a correct solve without raising. This cap alone
-        has no such restriction — it is a domain guard on the atomic data and
-        holds in every regime.
+        whole ceiling: the solve is run against ``min`` of it and the circuit
+        member selected by ``cathode_circuit_bound_object``, and the
+        ``bound_active`` diagnostic says which of the two the solve sat on.
+        This cap alone is a domain guard on the atomic data and holds in every
+        regime; the restrictions on the composition belong to the circuit
+        member and are stated at that key and at the flag.
+    cathode_circuit_bound_object:
+        Which quantity the circuit-available voltage bounds under the
+        ``cathode_circuit_voltage_bound`` flag. Read only while that flag is
+        on; inert otherwise, and construction raises on an unknown value when
+        it is on.
+
+        ``"device_voltage"`` (default) makes the object the DEVICE voltage
+        ``V_b = phi_c - phi_a + V_p``, which is the quantity the loop equation
+        contains. The circuit member of the composed ceiling is then the net
+        cathode drop at which ``V_b`` reaches the available voltage, located
+        by a bracketed solve on the same monotone device relation the current
+        root uses, with ``phi_a`` and ``V_p`` evaluated by the identical
+        expressions that assemble the returned result. Because the anode fall
+        SUBTRACTS, ``phi_c`` may legitimately exceed the available voltage
+        while ``V_b`` does not, and this object permits exactly that.
+
+        ``"phi_c"`` makes the object the net cathode drop itself: the circuit
+        member IS the available voltage. This is the R1 composition, bit for
+        bit, retained as an A/B arm. It coincides with ``"device_voltage"``
+        only where ``phi_a`` and ``V_p`` are negligible — the near-vacuum
+        build leg — and mis-clamps a correct plateau solve elsewhere,
+        silently except for the ``bound_active`` census.
+
+        NEITHER object lifts the flag's other exclusion: the inductor's
+        back-EMF is not counted as supply, so on any leg where the loop
+        current is FALLING the physical ``V_b`` exceeds the available voltage
+        and the bound engages and holds ``dI/dt`` at zero.
     cathode_Rp_model:
         How the cathode solver's parallel plasma (gap) resistance ``R_p`` is
         built. ``"sample"`` (default, historical) is the solver's internal
@@ -1941,6 +1965,7 @@ def cathode_defaults():
         "cathode_Rp_model": "sample",
         "cathode_solver_model": "current_driven",
         "cathode_phi_c_cap_V": 1000.0,
+        "cathode_circuit_bound_object": "device_voltage",
         # Surface-state coverage model:
         # "ads_des" evolves contaminant coverage theta with
         # dtheta/dt = k_ads(1-theta) - [nu0 e^(-E_des/kTs) + sigma Gamma_i] theta
@@ -2511,6 +2536,42 @@ def regime_tracer_defaults():
     }
 
 
+def regime_vessel_node_defaults():
+    """Vessel / common-mode node constants (flag ``regime_vessel_node``).
+
+    Inert unless the flag is on, in which case each value below is validated
+    at construction. The node itself is ONE state variable ``V_cm``, the
+    anode-to-wall (common-mode) potential, obeying
+    ``C_total dV_cm/dt = I_wall_net`` with ``I_wall_net`` the electron current
+    landing on wall-connected surfaces minus the ion wall flux from the column
+    minus the leak. Method of record: ``_sim1d/NUMERICS.md``, section "Vessel
+    common-mode node"; hardware provenance and its class are
+    ``config_defaults_provenance.md``.
+
+    vessel_capacitance_F:
+        ``C_total`` [F]: the total capacitance bridging the floating
+        cathode/anode system to the vessel wall. The LAPD cathode/anode system
+        floats with respect to the machine wall, the whole electrically
+        connected stainless vessel is ONE wall conductor, and the anode is
+        referenced to it only through four feedthrough capacitors across the
+        ceramic gap insulators, so ``C_total`` is their parallel sum. Must be
+        finite and positive; construction raises otherwise. This value is
+        ESTIMATED and the BRACKET is the claim, not the shipped number — see
+        the provenance note, and sweep it rather than quoting it.
+    vessel_leak_resistance_ohm:
+        ``R_leak`` [Ohm]: a resistive tie from the same node to the wall,
+        draining ``V_cm/R_leak``. ``None`` (default) is a HARD FLOAT — no
+        DC path at all, which is what the ceramic/film capacitor read implies
+        (GOhm-class leakage over the cycle length is indistinguishable from
+        open). A finite value must be positive and models the soft-tie case;
+        construction raises on zero, negative or non-finite.
+    """
+    return {
+        "vessel_capacitance_F": 1.3e-6,
+        "vessel_leak_resistance_ohm": None,
+    }
+
+
 _PARAMETER_DEFAULT_GROUPS = (
     initial_condition_defaults,
     geometry_defaults,
@@ -2527,6 +2588,7 @@ _PARAMETER_DEFAULT_GROUPS = (
     restart_defaults,
     neutral_probe_source_defaults,
     regime_tracer_defaults,
+    regime_vessel_node_defaults,
 )
 
 
@@ -2688,38 +2750,39 @@ input_flags_template_1d = {
     # Bound the device voltage by what the CIRCUIT can supply, *current-driven*
     # sheath solve only. The
     # ceiling the sheath root is solved against becomes
-    # min(cathode_phi_c_cap_V, V_src - I*(R_comp + R_mesh_ohm)) -- the atomic-
-    # data cap composed with the loop equation read at dI/dt = 0 -- so the
-    # returned phi_c, the beam birth energy keyed to it, and the
-    # capability-limited device voltage V_b are all held at or below the
-    # supply. Without it the capability-limited branch floors V_b at the data
-    # cap, which on the pre-breakdown build leg reports ~1000 V and a ~keV beam
-    # against a bank supplying ~178 V. The cap itself is untouched and still
-    # composes as the other upper bound (it is the He EII table top, an
-    # atomic-data domain guard). The inductor's back-EMF is deliberately NOT
-    # counted as available voltage, so while the bound binds the loop current
-    # neither grows nor falls. Requires cathode_solver_model='current_driven',
-    # cathode_coupling and V_bank > 0; inactive (ceiling falls back to the data
-    # cap) wherever the available voltage is not positive, notably the zero-
-    # bank inductive tail. Default OFF and bit-exact off.
+    # min(cathode_phi_c_cap_V, <the circuit member>) -- the atomic-data cap
+    # composed with the loop equation V_src - I*(R_comp + R_mesh_ohm) read at
+    # dI/dt = 0 -- so the returned phi_c, the beam birth energy keyed to it,
+    # and the capability-limited device voltage V_b are all held at or below
+    # the supply. Which quantity the available voltage bounds is
+    # cathode_circuit_bound_object's choice. Without the flag the
+    # capability-limited branch floors V_b at the data cap, which on the
+    # pre-breakdown build leg reports ~1000 V and a ~keV beam against a bank
+    # supplying ~178 V. The cap itself is untouched and still composes as the
+    # other upper bound (it is the He EII table top, an atomic-data domain
+    # guard). The inductor's back-EMF is deliberately NOT counted as available
+    # voltage, so while the bound binds the loop current neither grows nor
+    # falls. Requires cathode_solver_model='current_driven', cathode_coupling
+    # and V_bank > 0; inactive (ceiling falls back to the data cap) wherever
+    # the available voltage is not positive, notably the zero-bank inductive
+    # tail. Default OFF and bit-exact off.
     #
-    # SCOPE -- THE BOUND'S CONTRACT IS THE CAPABILITY-LIMITED / NEAR-VACUUM
-    # REGIME, i.e. THE PRE-BREAKDOWN BUILD LEG. A FULL-WINDOW RUN WITH THIS
-    # FLAG ON IS OUT OF CONTRACT. The bound is a ceiling on phi_c, but the
-    # quantity the circuit actually supplies is the DEVICE voltage
-    # V_b = phi_c - phi_a + V_p, in which the anode fall SUBTRACTS. On the
-    # build leg phi_a is negligible and the two coincide, which is why the
-    # ceiling is the right object there. At the main-discharge plateau phi_a
-    # is not negligible: phi_c legitimately EXCEEDS the circuit-available
-    # voltage while V_b does not, so the composed ceiling would mis-clamp a
-    # physically correct solve -- forcing every plateau solve to
-    # capability_limited at phi_c = V_avail. Nothing raises when that happens;
+    # SCOPE. The phi_c/V_b OBJECT mismatch is gone: the shipped
+    # cathode_circuit_bound_object='device_voltage' bounds V_b itself, so
+    # phi_c may legitimately exceed the available voltage where the anode fall
+    # subtracts, and the plateau mis-clamp that object='phi_c' would produce
+    # cannot happen. What REMAINS out of contract is the back-EMF exclusion,
+    # and it is independent of the object: while the bound binds, V_b is held
+    # at the available voltage and the loop residual is identically zero, so
+    # dI/dt = 0. On any leg where the current is FALLING -- the main-discharge
+    # decay -- the physical V_b exceeds the available voltage precisely
+    # because the inductor is supplying, and the bound would engage and FREEZE
+    # the current instead of letting it decay. So: the flag's contract is any
+    # window over which the loop current is not falling (the pre-breakdown
+    # build leg, and the rise into the plateau); A FULL-WINDOW RUN WITH THIS
+    # FLAG ON REMAINS OUT OF CONTRACT. Nothing raises when the bound engages;
     # only the bound_active census shows it, so READ THE CENSUS on any run
-    # that reaches the plateau with this flag on. The plateau is 100 %
-    # classical with the flag off and the data cap never fires there, so this
-    # is a defect the flag would INTRODUCE, not one it inherits. A bound whose
-    # object is V_b and which is aware of phi_a is R2 work; until it exists,
-    # confine this flag to build-leg windows.
+    # that reaches the decay with this flag on.
     "cathode_circuit_voltage_bound": False,
     # Gates the neutral-only pre-drive phase. DELIBERATELY LEFT ON while
     # tau_neutral_prebreakdown defaults to 0.0: the duration alone decides
@@ -2810,6 +2873,30 @@ input_flags_template_1d = {
     # construction-time ValueErrors, as is any out-of-range criterion constant.
     # Default OFF, presence-gated and bit-exact off.
     "regime_tracer": False,
+    # Vessel / common-mode node. The cathode/anode system FLOATS with respect
+    # to the machine wall (the whole electrically connected stainless vessel is
+    # one conductor; the anode is tied to it only through four feedthrough
+    # capacitors across the ceramic gap insulators). This flag adds ONE state
+    # variable V_cm, the anode-to-wall potential, obeying
+    # C_total dV_cm/dt = I_wall_net -- electron current landing on
+    # wall-connected surfaces (the transmitted beam terminates on the far end,
+    # which IS the vessel) minus the column's ion wall flux minus V_cm/R_leak.
+    # V_cm is the potential a transmitted beam electron must CLIMB from the
+    # mesh into the column, so the energy reaching column physics is
+    # phi_c - max(V_cm, 0): the node throttles the beam, ionization feeds the
+    # ion wall flux back, and the floating constraint (zero net system-to-wall
+    # current) is what lets beam leakage into the column grow. Advanced once
+    # per ACCEPTED step, in closed form over the step's frozen currents.
+    # Requires cathode_coupling, Plasma, cathode_circuit_voltage_bound (the
+    # beam energy the climb is subtracted from must be the circuit-bounded
+    # one, never the atomic-data cap), beam_deposition_model='csda' (only the
+    # CSDA rays book a transmitted flux at a terminating surface) and a
+    # plasma-terminating collector face (the ion wall channel) -- each a
+    # construction-time ValueError, as are a non-positive vessel_capacitance_F
+    # and a non-positive vessel_leak_resistance_ohm. V_cm(t) and the three
+    # current channels ride the cathode diagnostics; nothing here is scored.
+    # Default OFF, presence-gated and bit-exact off.
+    "regime_vessel_node": False,
     "ionization_energy_cost": True,
     "icool": True,
     "ncool": True,

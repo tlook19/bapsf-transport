@@ -82,11 +82,17 @@ from .physics.cathode import (
     validate_cathode_Rp_model,
     validate_cathode_solver_model,
 )
+from cablp.funcs._cathode_solver_idriven import beam_launch_energy_eV
 from .physics.cathode import (
     advance_circuit_current_driven,
+    circuit_bound_object,
     idriven_result_evaluator,
     idriven_vdis_evaluator,
+    resolve_vessel_node,
+    vessel_beam_climb_V,
+    vessel_node_advance,
 )
+from cablp.funcs._cathode_solver_idriven import _CIRCUIT_BOUND_OBJECTS
 from .physics.energy import (
     electron_cooling_rhs,
     electron_cooling_rhs_terms,
@@ -165,7 +171,15 @@ from cablp.funcs._beam_deposition import (
 )
 from cablp.funcs._cross import charge_ex_react
 from cablp.funcs._kernels import PROVENANCE as KERNEL_PROVENANCE
-from cablp.vars._cons import I_Ry, I_ion, ev_to_erg, kb_cgs, m_He_cgs, m_p_cgs
+from cablp.vars._cons import (
+    I_Ry,
+    I_ion,
+    ev_to_erg,
+    kb_cgs,
+    m_He_cgs,
+    m_p_cgs,
+    qe_SI,
+)
 
 
 _CATHODE_RESULT_KEYS = (
@@ -1166,6 +1180,18 @@ class LAPDSim1D:
                     "resistive drop, so a zero source would leave it "
                     "permanently inactive"
                 )
+            # Which quantity the available voltage bounds. Validated here so a
+            # typo is a construction error rather than a run that silently
+            # bounds nothing; the sheath solve validates it again where it is
+            # consumed, because it is reachable from callers that never build
+            # a solver.
+            _bound_object = circuit_bound_object(self._input_dict)
+            if _bound_object not in _CIRCUIT_BOUND_OBJECTS:
+                raise ValueError(
+                    "cathode_circuit_bound_object must be one of "
+                    f"{sorted(_CIRCUIT_BOUND_OBJECTS)} (got "
+                    f"{_bound_object!r})"
+                )
         # Current-driven circuit state: the loop current, integrated once
         # per accepted step.
         self._circuit_I_loop = 0.0
@@ -1183,6 +1209,11 @@ class LAPDSim1D:
         # (time, integral) pair at the previous trajectory save anchors it.
         self._circuit_V_dis_time_integral = 0.0
         self._circuit_V_dis_prev_save = None
+        # Vessel / common-mode node (default absent). ``_vessel`` is the
+        # resolved constant record or None; ``_vessel_V_cm`` is the node's
+        # single state variable and stays None while the node is absent, so
+        # every consumer is presence-gated on one object.
+        self._configure_regime_vessel_node()
         # Cathode warming state: the evolving emitter surface temperature [K]
         # (config cathode_warming_model). None = static T_s.
         warming_model = str(
@@ -2333,6 +2364,172 @@ class LAPDSim1D:
         self._tracer_depletion = np.zeros(self._geometry.cells, dtype=float)
         self._tracer_census = self._empty_tracer_census()
 
+    def _configure_regime_vessel_node(self):
+        """Validate and arm the vessel common-mode node, or leave it absent.
+
+        Every refusal names what the node ACCEPTS and fires at construction.
+        With the flag off ``self._vessel`` and ``self._vessel_V_cm`` are both
+        ``None``, which is what every consumer is presence-gated on, so the
+        off path enters no branch this feature added.
+        """
+        self._vessel = None
+        self._vessel_V_cm = None
+        self._vessel_wall_currents_A = (0.0, 0.0, 0.0)
+        self._vessel_charge_ledger_C = {
+            "electron": 0.0,
+            "ion": 0.0,
+            "leak": 0.0,
+            "node": 0.0,
+            "abs": 0.0,
+        }
+        if not self._flags.get("regime_vessel_node", False):
+            return
+        if not self._flags.get("cathode_coupling", False):
+            raise ValueError(
+                "regime_vessel_node needs the cathode solve: the electron "
+                "current landing on the wall IS the transmitted beam, and "
+                "without a beam the node has nothing to charge it. Accepted: "
+                "cathode_coupling on"
+            )
+        if not self._flags.get("Plasma", True):
+            raise ValueError(
+                "regime_vessel_node needs the plasma: the ion wall flux that "
+                "balances the beam leakage -- the bootstrap the node exists "
+                "to describe -- is a column loss channel, and with the Plasma "
+                "flag off the node would charge in one direction forever. "
+                "Accepted: Plasma on"
+            )
+        if not self._flags.get("cathode_circuit_voltage_bound", False):
+            raise ValueError(
+                "regime_vessel_node requires cathode_circuit_voltage_bound: "
+                "the climb V_cm is subtracted from the beam's birth energy, "
+                "and that energy must be the CIRCUIT-BOUNDED sheath drop. "
+                "Without the bound it is the raw cathode_phi_c_cap_V atomic-"
+                "data cap (~1000 V against a bank supplying ~178 V), so the "
+                "choke would be a small correction on a wrong number. "
+                "Accepted: cathode_circuit_voltage_bound on"
+            )
+        deposition_model = str(
+            self._input_dict.get("beam_deposition_model", "beer_lambert")
+        )
+        if deposition_model != "csda":
+            raise ValueError(
+                f"regime_vessel_node refuses beam_deposition_model="
+                f"{deposition_model!r}: the electron current the node books "
+                "is the beam flux that reaches the TERMINATING SURFACE, and "
+                "only the CSDA rays carry that flux "
+                "(BeamDepositionResult.transmitted_flux). Under any other "
+                "deposition model the wall electron channel would be "
+                "identically zero and the node would charge on the ion flux "
+                "alone -- a run that reads as though the bootstrap is live "
+                "when half of it is missing. Accepted: "
+                "beam_deposition_model='csda'"
+            )
+        self._vessel = resolve_vessel_node(self._input_dict, self._geometry)
+        # Stage 1 is WALL-REFERENCED: at the seed currents the build opens
+        # with, charging C_total to the bank scale takes far longer than the
+        # cycle, so the float cannot engage and the node starts at zero. That
+        # is an initial condition, not an assumption -- the ODE is free to
+        # leave it whenever the currents make it.
+        self._vessel_V_cm = 0.0
+
+    def _vessel_ion_wall_current_A(self):
+        """Return the column's ion current [A] onto the vessel, >= 0.
+
+        Reads the LIVE plasma-terminating boundary term -- whichever of the
+        characteristic ghost-cell outflow and the volumetric absorption the
+        run configured -- on the accepted state, and integrates its ``n`` row
+        over the collector cells' plasma volume. The loss channel is not
+        re-derived here: this is the same term the fluid itself subtracts, so
+        the node cannot book an ion flux the column did not lose.
+        """
+        node = self._vessel
+        state = self.state
+        cathode_solve = self._cathode_solve
+        if self._characteristic_boundary:
+            term = self.characteristic_boundary_rhs(
+                state=state, cathode_solve=cathode_solve, time=self._time
+            )
+        else:
+            term = self.boundary_absorption_rhs(
+                state=state, cathode_solve=cathode_solve, time=self._time
+            )
+        row = np.asarray(term.n, dtype=float)
+        Vp = np.asarray(self._geometry.plasma_volume_cm3, dtype=float)
+        cells = node.collector_cells
+        # The row is a SINK there (negative); a positive current onto the wall
+        # is its negation. Clamped at zero so a cell that is momentarily a net
+        # source cannot book a backwards wall current.
+        return qe_SI * max(-float(np.sum(row[cells] * Vp[cells])), 0.0)
+
+    def _vessel_electron_wall_current_A(self):
+        """Return the beam electron current [A] landing on the vessel, >= 0.
+
+        The CSDA rays' transmitted PRIMARY flux, summed over cathode ends. The
+        far end is the vessel, so the flux that leaves the domain there is
+        exactly the electron current the wall conductor collects; the flux the
+        anode mesh intercepts and the flux that stops in the column are
+        system-side and plasma-side respectively and are not booked here.
+        """
+        solve = self._cathode_solve
+        deposition = None if solve is None else getattr(
+            solve, "beam_deposition", None
+        )
+        if not deposition:
+            return 0.0
+        flux = 0.0
+        for dep in deposition.values():
+            if dep is not None:
+                flux += float(dep.transmitted_flux)
+        return qe_SI * max(flux, 0.0)
+
+    def _vessel_advance(self, dt):
+        """Advance ``V_cm`` and its charge ledger over one ACCEPTED step.
+
+        Accepted steps only, exactly like the loop current: a rejected attempt
+        must not move the node. The two wall currents are read at the accepted
+        state and frozen across the step, so the choke they produce reaches
+        the beam at the next solve -- the same explicit coupling the circuit
+        and the cathode thermal state already use.
+        """
+        node = self._vessel
+        if node is None:
+            return
+        I_e = self._vessel_electron_wall_current_A()
+        I_i = self._vessel_ion_wall_current_A()
+        V_new, dV, dQ_e, dQ_i, dQ_leak = vessel_node_advance(
+            node, self._vessel_V_cm, I_e, I_i, dt
+        )
+        self._vessel_V_cm = V_new
+        ledger = self._vessel_charge_ledger_C
+        ledger["electron"] += dQ_e
+        ledger["ion"] += dQ_i
+        ledger["leak"] += dQ_leak
+        ledger["node"] += node.C_total_F * dV
+        # Scale for the ledger's closure test: the total charge MOVED, so a
+        # residual is judged against the traffic and not against a cancelling
+        # net that can pass through zero.
+        ledger["abs"] += abs(dQ_e) + abs(dQ_i) + abs(dQ_leak)
+        self._vessel_wall_currents_A = (
+            I_e,
+            I_i,
+            0.0 if node.R_leak_ohm is None else V_new / node.R_leak_ohm,
+        )
+
+    def vessel_charge_residual(self):
+        """Return the node's charge-ledger residual ``(absolute, relative)``.
+
+        ``C_total * sum(dV)`` against ``Q_electron - Q_ion - Q_leak``: the
+        auditable form of the node's conservation. Zero traffic returns a zero
+        pair rather than dividing by it.
+        """
+        ledger = self._vessel_charge_ledger_C
+        residual = ledger["node"] - (
+            ledger["electron"] - ledger["ion"] - ledger["leak"]
+        )
+        scale = ledger["abs"]
+        return residual, (0.0 if scale <= 0.0 else abs(residual) / scale)
+
     def _tracer_exempt_initial_floor(self, raw, floored):
         """Restore the RAW plasma rows on tracer cells in the initial condition.
 
@@ -2451,9 +2648,11 @@ class LAPDSim1D:
         the R1 pass removed from the pre-breakdown build leg. Zero when there
         is no solve, which makes criterion (a) inactive rather than undefined.
 
-        This read is also the documented seam for the V_cm vessel node: stage 1
-        is wall-referenced (``V_cm = 0``), and a common-mode offset would enter
-        here and nowhere else.
+        The vessel node does NOT shift this value, and that is deliberate:
+        ``V_cm`` moves the whole cathode/anode system against the wall, so it
+        cannot change the anode-to-cathode differential the column conducts
+        under. The node's offset enters the BEAM energy instead --
+        :meth:`_tracer_beam_energy_eV` is that seam.
         """
         beam_result = getattr(cathode_solve, "beam_result", None)
         if beam_result is None:
@@ -2466,13 +2665,19 @@ class LAPDSim1D:
         return max(voltages) if voltages else 0.0
 
     def _tracer_beam_energy_eV(self, cathode_solve):
-        """Return the R1-bounded beam birth energy [eV], or 0 with no beam.
+        """Return the beam energy [eV] reaching the column, or 0 with no beam.
 
         Keyed to the BOUNDED sheath drop, never to ``cathode_phi_c_cap_V``:
         the cap is the He EII table top, an atomic-data domain guard, and using
-        it as a beam energy is the defect R1 removed.
+        it as a beam energy is the defect R1 removed. With the vessel node
+        armed the mesh-to-column climb is subtracted from that bounded drop by
+        the same function the beam readers use, so criterion (b) measures the
+        thinness of the plasma to the beam that actually arrives.
         """
-        return self._tracer_device_voltage_V(cathode_solve)
+        return beam_launch_energy_eV(
+            self._tracer_device_voltage_V(cathode_solve),
+            vessel_beam_climb_V(self._flags, self._vessel_V_cm),
+        )
 
     def _tracer_launch_cells(self):
         """Return ``{end: launch cell index}`` for the beams criterion (b) sums."""
@@ -4956,6 +5161,10 @@ class LAPDSim1D:
             )
             if V_cap_new is not None:
                 self._circuit_V_cap = V_cap_new
+        # Vessel common-mode node: one closed-form step of
+        # C dV_cm/dt = I_wall_net, after the circuit so the wall currents are
+        # read at the fully accepted state. Absent unless armed.
+        self._vessel_advance(float(attempt.dt))
         return self.get_initial_snapshot()
 
     # Every attribute one accepted step mutates (fluid attempt cathode cache +
@@ -4972,11 +5181,16 @@ class LAPDSim1D:
         "_cathode_Ts_K",
         "_cathode_theta",
         "_cathode_solve",
+        # Vessel node: the potential is a float, and the ledger/current
+        # records are copied below because they are mutable containers.
+        "_vessel_V_cm",
+        "_vessel_wall_currents_A",
     )
 
     def _picard_snapshot(self):
         """Capture the pre-step coupled state for a Picard re-run (R5.1/A11)."""
         snap = {a: getattr(self, a) for a in self._PICARD_DIRECT_ATTRS}
+        snap["_vessel_charge_ledger_C"] = dict(self._vessel_charge_ledger_C)
         snap["_y"] = self._y.copy()
         snap["_cathode_x0"] = _copy_cache_value(self._cathode_x0)
         snap["_cathode_x0_twin"] = _copy_cache_value(self._cathode_x0_twin)
@@ -4996,6 +5210,7 @@ class LAPDSim1D:
         """Restore exactly the state ``_picard_snapshot`` captured."""
         for a in self._PICARD_DIRECT_ATTRS:
             setattr(self, a, snap[a])
+        self._vessel_charge_ledger_C = dict(snap["_vessel_charge_ledger_C"])
         self._cathode_x0 = _copy_cache_value(snap["_cathode_x0"])
         self._cathode_x0_twin = _copy_cache_value(snap["_cathode_x0_twin"])
         bc = snap["_cathode_beam_cross"]
@@ -5074,6 +5289,16 @@ class LAPDSim1D:
         circuit["V_dis_prev_save_integral"] = (
             None if prev_save is None else float(prev_save[1])
         )
+        # Vessel node, presence-gated exactly like the coverage section below:
+        # the potential and its charge ledger are written only when the node is
+        # armed, so a payload from a run without it is structurally what it
+        # always was. ``regime_vessel_node`` is a structural flag key, so a
+        # resume that changes the arming refuses rather than reading half a
+        # node.
+        if self._vessel is not None:
+            circuit["vessel_V_cm"] = float(self._vessel_V_cm)
+            for key, value in self._vessel_charge_ledger_C.items():
+                circuit[f"vessel_Q_{key}_C"] = float(value)
         triggers = {
             name: getattr(self, name) for name in self._RESTART_TRIGGER_ATTRS
         }
@@ -5215,6 +5440,12 @@ class LAPDSim1D:
             if prev_save_t is None
             else (float(prev_save_t), float(circuit["V_dis_prev_save_integral"]))
         )
+        if self._vessel is not None:
+            self._vessel_V_cm = float(circuit["vessel_V_cm"])
+            for key in self._vessel_charge_ledger_C:
+                self._vessel_charge_ledger_C[key] = float(
+                    circuit[f"vessel_Q_{key}_C"]
+                )
         triggers = payload["triggers"]
         for name in self._RESTART_TRIGGER_ATTRS:
             setattr(self, name, triggers[name])
@@ -7111,6 +7342,7 @@ class LAPDSim1D:
             circuit_I_loop_A=self._circuit_I_loop,
             circuit_V_src_V=self._circuit_source_voltage_V(cathode_phase),
             coverage=self._coverage_view(state, time),
+            vessel_V_cm_V=self._vessel_V_cm,
         )
         if update_cache:
             self._warn_beam_gap_ledger(result)
@@ -9161,6 +9393,39 @@ class LAPDSim1D:
             # snapshot cadence (and on pre-fix files).
             "circuit_V_dis_dt_integral": float(
                 self._circuit_V_dis_time_integral
+            ),
+            # Vessel common-mode node. Present only when armed, so a run
+            # without it saves exactly the diagnostic set it always did. This
+            # is the PREDICTION CHANNEL: V_cm(t) is written, never scored.
+            **(
+                {}
+                if self._vessel is None
+                else {
+                    "vessel_V_cm_V": float(self._vessel_V_cm),
+                    "vessel_beam_climb_V": max(
+                        float(self._vessel_V_cm), 0.0
+                    ),
+                    "vessel_I_e_wall_A": float(
+                        self._vessel_wall_currents_A[0]
+                    ),
+                    "vessel_I_i_wall_A": float(
+                        self._vessel_wall_currents_A[1]
+                    ),
+                    "vessel_I_leak_A": float(
+                        self._vessel_wall_currents_A[2]
+                    ),
+                    "vessel_I_wall_net_A": float(
+                        self._vessel_wall_currents_A[0]
+                        - self._vessel_wall_currents_A[1]
+                        - self._vessel_wall_currents_A[2]
+                    ),
+                    "vessel_Q_node_C": float(
+                        self._vessel_charge_ledger_C["node"]
+                    ),
+                    "vessel_charge_residual_C": float(
+                        self.vessel_charge_residual()[0]
+                    ),
+                }
             ),
             # Cumulative surface energy ledger [J] (power_balance warming
             # only; zeros otherwise). See _cathode_energy_ledger_J.
