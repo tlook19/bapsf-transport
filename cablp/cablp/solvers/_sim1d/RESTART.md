@@ -147,6 +147,18 @@ The five dropped members are armed by `_attempt_step` and cleared at
 They are `None` at every point a restart can be taken, so dropping them is not
 an approximation — there is nothing there.
 
+### Ad-hoc probe neutral source
+
+| state | site | class |
+|---|---|---|
+| `_probe` (amplitude, weights, waveform, zone) | construction | DERIVABLE |
+
+**No payload member.** The instrument carries no evolving state at all: its
+whole content is resolved from config at construction, and its per-step
+waveform average is computed from the absolute clock and the step window,
+both of which the restart already reproduces. It is listed here so its absence
+reads as a decision rather than an omission.
+
 ### Phase triggers and the current-threshold interpolant
 
 | state | site | class |

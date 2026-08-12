@@ -862,6 +862,357 @@ def gas_puff_rate_profile(
     return dnn
 
 
+#: Registered axial shape families for the ad-hoc probe source. The membership
+#: is deliberately tiny: a family exists so a cheap arm needs no profile file,
+#: and anything richer is expressible as an explicit per-cell profile, which
+#: carries its own provenance instead of hiding a shape behind a name.
+NEUTRAL_PROBE_SHAPES = ("gaussian",)
+
+#: Registered time dependences for the ad-hoc probe source.
+NEUTRAL_PROBE_WAVEFORMS = ("const", "square", "table")
+
+
+def neutral_probe_profile_weights(
+    geometry, profile=None, shape=None, center_cm=None, width_cm=None
+):
+    """Return the ad-hoc probe source's normalized axial shape ``p(z)`` [1].
+
+    Exactly one of ``profile`` (a per-cell sequence of length
+    ``geometry.cells``) and ``shape`` (a member of
+    :data:`NEUTRAL_PROBE_SHAPES`, with its own parameters) selects the raw
+    shape; supplying both or neither raises. ``"gaussian"`` is
+    ``exp(-(z - center_cm)^2 / (2 width_cm^2))`` sampled at the cell centres
+    ``geometry.z_cm``.
+
+    The raw shape is then rescaled so its CHAMBER-VOLUME-WEIGHTED MEAN over the
+    whole grid is exactly 1,
+
+        sum_i p_i V_i / sum_i V_i == 1,   V = geometry.neutral_volume_cm3,
+
+    to roundoff. The input is therefore a shape and not a magnitude: its
+    overall scale divides out, the amplitude carries the whole scale, and the
+    volume-integrated influx ``A * w * sum(V)`` depends on neither the grid nor
+    the profile's normalization.
+
+    No cell role is excluded and no cell length weighting is applied: ``p`` is
+    a field sampled at cell centres, so a refinement of the grid converges to
+    the continuum shape rather than redistributing it. Placing the source is
+    the caller's job, which is what makes this an instrument.
+
+    Raises ``ValueError`` on a wrong-length, non-finite, negative or
+    identically-zero profile, on an unknown shape name, and on a
+    non-positive or non-finite width.
+    """
+    cells = int(geometry.cells)
+    if (profile is None) == (shape is None):
+        raise ValueError(
+            "the probe source needs EXACTLY ONE axial shape: "
+            "neutral_probe_profile (a per-cell sequence of length "
+            f"nx={cells}) or neutral_probe_shape (a parametric family, one of "
+            f"{list(NEUTRAL_PROBE_SHAPES)}). "
+            + (
+                "Both were given; they are two spellings of the same p(z) and "
+                "neither modifies the other, so there is no composition rule "
+                "to apply -- drop one."
+                if profile is not None
+                else "Neither was given; there is no default profile -- a "
+                "probe source with no stated placement measures nothing."
+            )
+        )
+    if profile is not None:
+        raw = np.asarray(profile, dtype=float).reshape(-1)
+        if raw.size != cells:
+            raise ValueError(
+                "neutral_probe_profile must have one entry per grid cell "
+                f"(nx={cells}); got {raw.size}"
+            )
+        if not np.all(np.isfinite(raw)) or np.any(raw < 0.0):
+            raise ValueError(
+                "every neutral_probe_profile entry must be finite and >= 0 "
+                f"(got min {float(np.min(raw)):.6g}, max "
+                f"{float(np.max(raw)):.6g})"
+            )
+    else:
+        if shape not in NEUTRAL_PROBE_SHAPES:
+            raise ValueError(
+                "neutral_probe_shape must be one of "
+                f"{list(NEUTRAL_PROBE_SHAPES)} (got {shape!r})"
+            )
+        z0 = float(center_cm)
+        sigma = float(width_cm)
+        if not math.isfinite(z0):
+            raise ValueError(
+                f"neutral_probe_center_cm must be finite (got {center_cm!r})"
+            )
+        if not (math.isfinite(sigma) and sigma > 0.0):
+            raise ValueError(
+                "neutral_probe_width_cm must be finite and > 0 (got "
+                f"{width_cm!r})"
+            )
+        z = np.asarray(geometry.z_cm, dtype=float)
+        raw = np.exp(-0.5 * ((z - z0) / sigma) ** 2)
+    volume = np.asarray(geometry.neutral_volume_cm3, dtype=float)
+    weighted = float(np.sum(raw * volume))
+    if not (math.isfinite(weighted) and weighted > 0.0):
+        # An all-zero profile, or a gaussian so far outside the grid that every
+        # sample underflows, is a source that injects nothing anywhere. That is
+        # a misconfiguration, not a null control: the amplitude is the null
+        # control and it is a separate key.
+        raise ValueError(
+            "the probe source's axial profile carries no weight on this grid "
+            f"(volume-weighted sum {weighted!r}): every cell sample is zero, "
+            "so the normalization is undefined. Use "
+            "neutral_probe_amplitude_cm3_s = 0 for a null-control arm"
+        )
+    return raw * (float(np.sum(volume)) / weighted)
+
+
+def neutral_probe_waveform_value(
+    time, waveform, t_on_s=None, t_off_s=None, table=None
+):
+    """Return the ad-hoc probe source's dimensionless ``w(t)`` at ``time`` [s].
+
+    The INSTANTANEOUS value, i.e. the ``dt -> 0`` limit of
+    :func:`neutral_probe_waveform_mean`. This is what a diagnostic read of the
+    term reports at a save instant; it is NOT what an integration step
+    consumes, which is the step average -- see that function for why the
+    difference matters.
+
+    ``time`` is the ABSOLUTE solver clock. ``waveform`` is a member of
+    :data:`NEUTRAL_PROBE_WAVEFORMS`:
+
+    * ``"const"`` -- 1.0 everywhere.
+    * ``"square"`` -- 1.0 on the half-open interval ``[t_on_s, t_off_s)`` and
+      0.0 outside, with hard edges. Half-open so the two edges are
+      unambiguous and ``int w dt`` over any window is unambiguous with them.
+    * ``"table"`` -- linear interpolation between the rows of ``table``
+      (``[t_s, w]`` pairs, ``t`` strictly increasing) and exactly 0.0 strictly
+      outside their span.
+
+    The table's validity is checked by :func:`neutral_probe_waveform_table`
+    at construction; this reads an already-validated array.
+    """
+    t = float(time)
+    if waveform == "const":
+        return 1.0
+    if waveform == "square":
+        return 1.0 if float(t_on_s) <= t < float(t_off_s) else 0.0
+    if waveform == "table":
+        nodes = np.asarray(table, dtype=float)
+        if t < nodes[0, 0] or t > nodes[-1, 0]:
+            return 0.0
+        return float(np.interp(t, nodes[:, 0], nodes[:, 1]))
+    raise ValueError(
+        "neutral_probe_waveform must be one of "
+        f"{list(NEUTRAL_PROBE_WAVEFORMS)} (got {waveform!r})"
+    )
+
+
+def neutral_probe_waveform_mean(
+    t0, dt, waveform, t_on_s=None, t_off_s=None, table=None,
+    table_cumulative=None,
+):
+    """Return the probe waveform's EXACT step average over ``[t0, t0 + dt]``.
+
+    ``w_bar = (1/dt) * int_{t0}^{t0+dt} w(t) dt``, in closed form for every
+    registered waveform. ``dt <= 0`` returns the instantaneous value, which is
+    the same quantity's ``dt -> 0`` limit.
+
+    THIS, not the instantaneous value, is what an integration step consumes,
+    and the reason is a property of the integrator rather than of the source.
+    The explicit step is Heun: it samples the RHS pointwise at ``t0`` and
+    ``t0 + dt`` and averages the two with equal weights, so a pointwise
+    waveform would be integrated by the TRAPEZOID RULE. On a smooth waveform
+    that is merely second-order; across a hard edge it is WRONG BY A FINITE
+    AMOUNT, because the trapezoid reads a step that merely touches an edge as
+    half a step of delivery. A step ending exactly at a rising edge books
+    ``0.5*dt`` of source from outside the window, and one ending at a falling
+    edge loses the same, so the error cancels only when the two edge-adjacent
+    steps happen to carry equal ``dt`` -- which adaptive stepping does not
+    arrange (measured: -1.9e-2 of the stated inventory on an off-lattice
+    window, +2.9e-2 on an unequal-dt lattice).
+
+    The probe term is state-independent and separable, so consuming ``w_bar``
+    in BOTH Heun stages fixes this identically rather than approximately: the
+    stages then carry the same value, the ``0.5/0.5`` combination returns it
+    unchanged, and the step delivers ``A * p * int w dt`` exactly. That holds
+    for any ``dt``, any edge placement, and any asymmetry between adjacent
+    steps, so the delivered inventory is the stated hypothesis and not an
+    artifact of where the stepper put its samples.
+
+    ``table_cumulative`` is the companion returned by
+    :func:`neutral_probe_waveform_table`: ``cum[i]`` is the integral from the
+    first node to node ``i``, so a window costs two interpolations and one
+    subtraction instead of a walk over the table.
+    """
+    t0 = float(t0)
+    dt = float(dt)
+    if dt <= 0.0:
+        return neutral_probe_waveform_value(
+            t0, waveform, t_on_s=t_on_s, t_off_s=t_off_s, table=table
+        )
+    if waveform == "const":
+        return 1.0
+    if waveform == "square":
+        overlap = min(t0 + dt, float(t_off_s)) - max(t0, float(t_on_s))
+        return max(overlap, 0.0) / dt
+    if waveform == "table":
+        nodes = np.asarray(table, dtype=float)
+        cum = np.asarray(table_cumulative, dtype=float)
+        lo = max(t0, float(nodes[0, 0]))
+        hi = min(t0 + dt, float(nodes[-1, 0]))
+        if hi <= lo:
+            return 0.0
+        return (
+            _table_integral(nodes, cum, hi) - _table_integral(nodes, cum, lo)
+        ) / dt
+    raise ValueError(
+        "neutral_probe_waveform must be one of "
+        f"{list(NEUTRAL_PROBE_WAVEFORMS)} (got {waveform!r})"
+    )
+
+
+def _table_integral(nodes, cum, x):
+    """Return ``int`` of the tabulated waveform from its first node to ``x``.
+
+    ``x`` must already lie within the tabulated span. Exact for the piecewise
+    linear interpolant: whole segments come from the precomputed cumulative
+    sum and the partial one is a single trapezoid.
+    """
+    t = nodes[:, 0]
+    w = nodes[:, 1]
+    i = int(np.searchsorted(t, x, side="right")) - 1
+    if i >= t.size - 1:
+        return float(cum[-1])
+    span = t[i + 1] - t[i]
+    frac = (x - t[i]) / span
+    w_x = w[i] + frac * (w[i + 1] - w[i])
+    return float(cum[i] + 0.5 * (w[i] + w_x) * (x - t[i]))
+
+
+def neutral_probe_waveform_table(table):
+    """Return the validated probe waveform table and its cumulative integral.
+
+    Returns ``(nodes, cumulative)``: ``nodes`` is the ``(N, 2)`` float array of
+    ``[t_s, w]`` rows, and ``cumulative[i]`` is the exact integral of the
+    piecewise-linear interpolant from the first node to node ``i`` (so
+    ``cumulative[0] == 0``). The cumulative half is precomputed here, once at
+    construction, because :func:`neutral_probe_waveform_mean` reads it on every
+    integration stage.
+
+    Requires at least two rows, strictly increasing times, all entries finite,
+    and every ``w >= 0``. Raises ``ValueError`` otherwise.
+    """
+    nodes = np.asarray(table, dtype=float)
+    if nodes.ndim != 2 or nodes.shape[1] != 2 or nodes.shape[0] < 2:
+        raise ValueError(
+            "neutral_probe_waveform_table must be a sequence of at least two "
+            "[t_s, w] pairs, i.e. shape (N >= 2, 2); got shape "
+            f"{tuple(nodes.shape)}"
+        )
+    if not np.all(np.isfinite(nodes)):
+        raise ValueError(
+            "every neutral_probe_waveform_table entry must be finite"
+        )
+    if not np.all(np.diff(nodes[:, 0]) > 0.0):
+        raise ValueError(
+            "neutral_probe_waveform_table times must be strictly increasing "
+            f"(got {nodes[:, 0].tolist()})"
+        )
+    if np.any(nodes[:, 1] < 0.0):
+        raise ValueError(
+            "every neutral_probe_waveform_table w must be >= 0 (got min "
+            f"{float(np.min(nodes[:, 1])):.6g})"
+        )
+    segments = 0.5 * (nodes[:-1, 1] + nodes[1:, 1]) * np.diff(nodes[:, 0])
+    cumulative = np.concatenate(([0.0], np.cumsum(segments)))
+    return nodes, cumulative
+
+
+def neutral_probe_source_rhs(
+    state, geometry, amplitude_cm3_s, weights, waveform_value, zone=None
+):
+    """Return the conservative RHS of the ad-hoc probe neutral source.
+
+    The term is ``S_probe(z, t) = A * p(z) * w(t)`` [cm^-3 s^-1] on the neutral
+    density row and nothing else. ``weights`` is ``p`` as returned by
+    :func:`neutral_probe_profile_weights` (chamber-volume-weighted mean 1), so
+    the volume-integrated influx is ``A * w * sum(neutral_volume_cm3)``
+    [particles/s] exactly.
+
+    ``waveform_value`` is the waveform factor the CALLER resolved, and which
+    one it resolves decides what the term means. An integration stage passes
+    the step average over the step it is taking
+    (:func:`neutral_probe_waveform_mean`), which is what makes the delivered
+    inventory exactly the stated hypothesis; a diagnostic read passes the
+    instantaneous value at its instant
+    (:func:`neutral_probe_waveform_value`). The two differ only on a step that
+    straddles a hard edge.
+
+    INJECTION CONVENTIONS, both inherited unchanged from the gas puff rather
+    than invented here:
+
+    * ZERO NET MOMENTUM. The momentum rows are identically zero: the injected
+      gas arrives at rest in the lab frame, so it carries no directed momentum
+      of its own. Where a neutral wind is evolved (``M_n`` present) this
+      DILUTES it -- ``u_n = M_n / (m_n n_n)`` falls as ``n_n`` rises at fixed
+      ``M_n`` -- which is the physical content of injecting at rest and is not
+      a separate drag term.
+    * TEMPERATURE. The moment neutral model carries ONE neutral temperature,
+      the config's ``Tn_K``, and no neutral energy equation, so injected
+      particles join that single cold-gas population exactly as gas-puff
+      particles do. There is deliberately no probe temperature key: a distinct
+      injection temperature would be a new field, not a new parameter.
+
+    Under the two-zone closure ``zone`` selects which neutral field is fed,
+    ``"column"`` (``nn``) or ``"annulus"`` (``nn_a``). The per-cell particle
+    rate is formed on the CHAMBER volume first and then re-normalized to the
+    target zone's volume, so the total influx is the same number whichever
+    zone is chosen and the amplitude keeps one meaning. Cells with no annulus
+    (``V_ann = 0``) route to the column, as the gas puff does.
+    """
+    cells = int(geometry.cells)
+    zeros = np.zeros(cells, dtype=float)
+    rate = (
+        float(amplitude_cm3_s)
+        * float(waveform_value)
+        * np.asarray(weights, dtype=float)
+    )
+    dnn = np.zeros(cells, dtype=float)
+    two_zone = state.nn_a is not None
+    dnn_a = np.zeros(cells, dtype=float) if two_zone else None
+    if two_zone:
+        V_col, V_ann = neutral_zone_volumes(geometry)
+        particles = rate * np.asarray(geometry.neutral_volume_cm3, dtype=float)
+        if zone == "annulus":
+            into_annulus = V_ann > 0.0
+            dnn_a += np.where(
+                into_annulus, particles / np.maximum(V_ann, 1e-300), 0.0
+            )
+            dnn += np.where(
+                into_annulus, 0.0, particles / np.maximum(V_col, 1e-300)
+            )
+        elif zone == "column":
+            dnn += particles / np.maximum(V_col, 1e-300)
+        else:
+            raise ValueError(
+                "neutral_probe_zone must be 'column' or 'annulus' under the "
+                f"two-zone closure (got {zone!r})"
+            )
+    else:
+        dnn += rate
+    return ConservativeState1D(
+        n=zeros.copy(),
+        nn=dnn,
+        M=zeros.copy(),
+        Ee=zeros.copy(),
+        Ei=zeros.copy(),
+        M_n=None if state.M_n is None else zeros.copy(),
+        nn_a=dnn_a,
+        M_n_a=None if state.M_n_a is None else zeros.copy(),
+    )
+
+
 def _effective_pump_speed(lps, elbow_conductance_lps):
     """Return the pump speed seen by the plenum after the unmodeled elbow [L/s].
 

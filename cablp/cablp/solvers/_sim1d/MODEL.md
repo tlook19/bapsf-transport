@@ -884,3 +884,127 @@ and ionizing-tail arms, flat and $z$-varying $f_\text{cov}$ seeds) before the
 refusal was lifted, and bit-identity is now the standing guard in its place:
 the smoke suite runs a beam-live coverage arm on both paths and asserts the
 raw state bytes match.
+
+## Ad-hoc probe neutral source (`neutral_probe_source`, default off)
+
+An **inference instrument, not a physical closure and never a validation
+channel.** An arm with this on answers one question -- *if there were this many
+neutrals here, at this time, what would the plasma do?* -- so a result produced
+under it reports the hypothesis alongside the response, and agreement with data
+is not evidence for the source. Everything below is capability; how it is used
+is registered separately.
+
+The term is a volumetric particle source on the neutral density equation
+(eq. 2), separable by construction,
+
+$$S_\text{probe}(z, t) = A\,p(z)\,w(t)
+\qquad [\text{cm}^{-3}\,\text{s}^{-1}],$$
+
+carried as its own named RHS row, `neutral_probe_source`. Nothing else in the
+model changes: the plasma, momentum and energy rows of the term are identically
+zero, and no conservative field is added.
+
+**Normalization, so the amplitude means one thing.** $p(z)$ is a dimensionless
+shape sampled at the cell centres and rescaled so its chamber-volume-weighted
+mean over the whole grid is exactly 1,
+
+$$\frac{\sum_i p_i V_i}{\sum_i V_i} = 1,
+\qquad V = \texttt{neutral\_volume\_cm3}.$$
+
+The caller therefore supplies a shape, not a magnitude: its own scale divides
+out, $A$ is the volume-mean source rate at $w = 1$, and the volume-integrated
+influx is $A\,w(t)\sum_i V_i$ [particles/s] independently of the grid, of the
+profile's normalization, and (under two zones) of which zone is fed. $p$ is
+built either from an explicit per-cell profile -- the hook for an externally
+computed hypothesis, since the solver contains no randomness and does no file
+I/O -- or from the one built-in family, a gaussian in $z$. Exactly one of the
+two: they are two spellings of the same object.
+
+$w(t)$ is dimensionless, on the **absolute solver clock**. Three registered
+forms: `const`; `square`, one on the half-open $[t_\text{on}, t_\text{off})$
+with hard edges and no smoothing constant anywhere; and `table`, linear between
+tabulated $(t, w)$ nodes and exactly zero outside their span.
+
+**The stages consume the waveform's exact step average, and that is what makes
+the delivered inventory the stated hypothesis.** The explicit step is Heun: it
+samples the RHS pointwise at $t_0$ and $t_0+\Delta t$ and averages the two with
+equal weights, so a pointwise waveform would be integrated by the **trapezoid
+rule**. Across a hard edge that is not merely second-order but wrong by a
+finite amount -- a step ending at a rising edge books $\tfrac12\Delta t$ of
+source from *outside* the window, one ending at a falling edge loses the same,
+and the two cancel only when those steps carry equal $\Delta t$, which adaptive
+stepping does not arrange. Measured on this build before the fix: $-1.9\times
+10^{-2}$ of the stated inventory on an off-lattice window, $+2.9\times 10^{-2}$
+on an unequal-$\Delta t$ lattice. Because the probe term is state-independent
+and separable, feeding both stages
+
+$$\bar w = \frac{1}{\Delta t}\int_{t_0}^{t_0+\Delta t} w\,\mathrm{d}t$$
+
+-- closed form for all three waveforms -- repairs this *identically*: the two
+stages carry the same value, the $\tfrac12/\tfrac12$ combination returns it
+unchanged, and each accepted step delivers $A\,p\int w\,\mathrm{d}t$ exactly,
+for any $\Delta t$, any edge placement and any asymmetry between adjacent
+steps. The window is threaded to the term as an explicit argument, so a
+rejected trial $\Delta t$ cannot be read by the attempt that follows it.
+
+Every hard edge is still registered as a step boundary, but for a different
+and smaller reason: it keeps the **applied rate** the square that was asked
+for. A step straddling an edge applies a partial-window average across its
+whole width, which smears the edge in the plasma's *response* -- never in the
+delivered total. A diagnostic read of the term (a save, or `rhs_terms` called
+directly) reports the *instantaneous* rate at that instant, which is $\bar w$
+for a window of zero width.
+
+**Injection conventions, both inherited from the gas puff rather than invented
+here.** *Zero net momentum*: the momentum rows are identically zero, so the gas
+arrives at rest in the lab frame. Where a neutral wind is evolved this DILUTES
+it -- $u_n = M_n/(m_n n_n)$ falls as $n_n$ rises at fixed $M_n$ -- which is the
+physical content of injecting at rest, not a separate drag. *Temperature*: the
+moment model carries one neutral temperature, `Tn_K`, and no neutral energy
+equation, so injected particles join that single cold-gas population exactly as
+puffed particles do. There is deliberately no probe temperature key; a distinct
+injection temperature would be a new field, not a new parameter.
+
+**Where it is live.** Wherever the explicit RHS is evaluated in a plasma run.
+It is identically zero -- and recorded as zero, so the saved term structure is
+stable -- whenever the solver is on the implicit neutral-only stepper (the
+`Plasma` flag off, or the `neutral_prebreakdown` phase), whose backward-Euler
+neutral matrix the term deliberately does not enter. A probe can therefore
+neither fuel a pre-shot fill nor reach a cached neutral-equilibration seed.
+
+**Two zones: an explicit choice, not a default.** Under `neutral_two_zone` the
+run must name `neutral_probe_zone`, `"column"` ($n_n$) or `"annulus"`
+($n_{n,a}$). The two put the gas in different places and the plasma responds to
+them differently, which is precisely the thing a probe arm is measuring, so
+there is no defensible default. The per-cell rate is formed on the chamber
+volume and then re-normalized to the target zone, so the total influx is the
+same number either way; cells with no annulus route to the column, as the puff
+does.
+
+**Coverage composes; it is not refused.** The clumpy-plasma closure partitions
+the mean $n_n$ into a covered column and a reservoir through a deficit that
+only the `COVERAGE_BURN_TERMS` move -- terms whose rate is set by a plasma or
+beam density. The probe is not one of those: its rate is set by the caller and
+it acts **uniformly across the cross-section**, exactly like the gas puff and
+the pump, which that ledger already names as deliberately absent. So a probe
+raises the covered column and the reservoir by the same amount, leaves the
+deficit untouched, and the partition identity
+$f_\text{cov}n_\text{col} + (1-f_\text{cov})n_\text{res} = n_n$ keeps closing.
+The answer to *"does probe-injected inventory belong to the reservoir or the
+column?"* is therefore neither-and-both, in area proportion, and it is forced
+by the injection convention rather than chosen -- which is why this is an
+allowance with a statement rather than a guess.
+
+**Refusals.** v1 is the **moment neutral model only**: both kinetic arms take
+over the fluid $n_n$ rows once engaged, so a source written into those rows
+would be stripped or double-counted rather than felt, and the probe would
+silently inject nothing. Injecting into a distribution function is a different
+instrument, not a flag. Beyond that: every one of the ten parameters set with
+the flag off; a missing amplitude, shape or waveform; both shape spellings at
+once or neither; a negative or non-finite amplitude; a profile of the wrong
+length, with a negative or non-finite entry, or identically zero (the null
+control is amplitude 0, a different key); a non-positive gaussian width; a
+waveform key belonging to another waveform; an empty or inverted square window;
+a table with fewer than two rows, non-increasing times or a negative $w$; and
+the zone selector present without two zones or absent with them. All are
+construction-time `ValueError`s.

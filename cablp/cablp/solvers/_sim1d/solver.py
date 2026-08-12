@@ -10,6 +10,7 @@ import numpy as np
 
 from .core.config import (
     coverage_closure_defaults,
+    neutral_probe_source_defaults,
     default_config,
     load_config,
     resolve_config,
@@ -93,11 +94,17 @@ from .physics.energy import (
 from .physics.flux import ion_sound_speed, plasma_flux_rhs, plasma_flux_rhs_terms
 from .physics.neutrals import (
     GAS_PUFF_DIAGNOSTIC_FIELDS,
+    NEUTRAL_PROBE_WAVEFORMS,
     gas_puff_rate_profile,
     _effective_pump_speed,
     neutral_exchange_coefficients,
     neutral_exchange_rhs,
     neutral_exchange_two_zone_rhs,
+    neutral_probe_profile_weights,
+    neutral_probe_source_rhs,
+    neutral_probe_waveform_mean,
+    neutral_probe_waveform_table,
+    neutral_probe_waveform_value,
     neutral_source_sink_rhs,
     neutral_wind_advection_rhs,
     neutral_zone_exchange_conductance,
@@ -1415,6 +1422,8 @@ class LAPDSim1D:
             )
         # Clumpy-plasma coverage closure v1 (default off, bit-exact off).
         self._validate_coverage_config()
+        # Ad-hoc probe neutral source (default off, bit-exact off).
+        self._validate_neutral_probe_config()
         self._cathode_solve = None
         # Item-35 ledger tripwire: latched so the warning fires once per run.
         self._beam_gap_ledger_warned = False
@@ -1612,6 +1621,188 @@ class LAPDSim1D:
         self._coverage_reservoir_debit = None
         self._coverage_reservoir_burn_accum = None
         self._coverage = True
+
+    def _validate_neutral_probe_config(self):
+        """Validate and arm the ad-hoc probe neutral source (v1).
+
+        Every failure here is a construction-time ``ValueError``: an incomplete
+        or unrepresentable probe configuration must never reach the first step.
+        With the flag off all ten probe keys must sit at their ``None``
+        defaults, so a run that configures a probe and forgets the flag is loud
+        rather than silently unprobed.
+
+        On success ``self._probe`` is the resolved instrument -- amplitude,
+        normalized axial weights, waveform selector and its own parameters, and
+        the two-zone target -- or ``None`` when the flag is off, which is the
+        presence gate every consumer reads.
+        """
+        enabled = bool(self._flags.get("neutral_probe_source", False))
+        defaults = neutral_probe_source_defaults()
+        values = {
+            name: self._input_dict.get(name, default)
+            for name, default in defaults.items()
+        }
+        if not enabled:
+            # Every default in this group is None -- the instrument ships no
+            # number, deliberately -- so "at its default" is exactly "is
+            # None", and the two sequence-valued keys need no elementwise
+            # comparison here.
+            configured = [
+                name for name, value in values.items() if value is not None
+            ]
+            if configured:
+                raise ValueError(
+                    "the probe-source parameters "
+                    f"{sorted(configured)} were configured without the "
+                    "neutral_probe_source flag, where they are inert; set the "
+                    "flag or drop the parameters"
+                )
+            self._probe = None
+            return
+        if self._neutral_model != "moment":
+            raise ValueError(
+                "neutral_probe_source requires neutral_model='moment' (got "
+                f"{self._neutral_model!r}): the kinetic arms take over the "
+                "fluid nn rows once engaged, so a source written into those "
+                "rows would be stripped or double-counted rather than felt -- "
+                "the probe would silently inject nothing. Supporting the "
+                "kinetic arms means injecting into their distribution "
+                "function, which is a different instrument, not a flag"
+            )
+        amplitude = values["neutral_probe_amplitude_cm3_s"]
+        if amplitude is None:
+            raise ValueError(
+                "the neutral_probe_source flag requires "
+                "neutral_probe_amplitude_cm3_s (the volume-mean source rate "
+                "[cm^-3 s^-1] at w = 1). There is no default: the amplitude is "
+                "the hypothesis the arm states, and 0 -- an explicit null "
+                "control -- is a value that has to be asked for"
+            )
+        amplitude = float(amplitude)
+        if not (math.isfinite(amplitude) and amplitude >= 0.0):
+            raise ValueError(
+                "neutral_probe_amplitude_cm3_s must be finite and >= 0 (got "
+                f"{values['neutral_probe_amplitude_cm3_s']!r})"
+            )
+        # The shape's own presence gating (exactly one of profile/family, and
+        # the family's parameters required with it and forbidden without it)
+        # lives with the shape builder, so the rule and its implementation
+        # cannot drift apart.
+        shape = values["neutral_probe_shape"]
+        for name, value in (
+            ("neutral_probe_center_cm", values["neutral_probe_center_cm"]),
+            ("neutral_probe_width_cm", values["neutral_probe_width_cm"]),
+        ):
+            if shape is None and value is not None:
+                raise ValueError(
+                    f"{name} is a parameter of the built-in profile family and "
+                    "has no meaning without neutral_probe_shape; drop it, or "
+                    "select a family (this run supplies its own "
+                    "neutral_probe_profile)"
+                )
+            if shape == "gaussian" and value is None:
+                raise ValueError(
+                    f"neutral_probe_shape='gaussian' requires {name}"
+                )
+        weights = neutral_probe_profile_weights(
+            self._geometry,
+            profile=values["neutral_probe_profile"],
+            shape=shape,
+            center_cm=values["neutral_probe_center_cm"],
+            width_cm=values["neutral_probe_width_cm"],
+        )
+        waveform = values["neutral_probe_waveform"]
+        if waveform is None:
+            raise ValueError(
+                "the neutral_probe_source flag requires "
+                "neutral_probe_waveform, one of "
+                f"{list(NEUTRAL_PROBE_WAVEFORMS)}. There is no default: the "
+                "waveform decides what the arm measured"
+            )
+        if waveform not in NEUTRAL_PROBE_WAVEFORMS:
+            raise ValueError(
+                "neutral_probe_waveform must be one of "
+                f"{list(NEUTRAL_PROBE_WAVEFORMS)} (got {waveform!r})"
+            )
+        t_on = values["neutral_probe_t_on_s"]
+        t_off = values["neutral_probe_t_off_s"]
+        table = values["neutral_probe_waveform_table"]
+        for name, value, owner in (
+            ("neutral_probe_t_on_s", t_on, "square"),
+            ("neutral_probe_t_off_s", t_off, "square"),
+            ("neutral_probe_waveform_table", table, "table"),
+        ):
+            if value is not None and waveform != owner:
+                raise ValueError(
+                    f"{name} belongs to neutral_probe_waveform={owner!r} and "
+                    f"is inert under {waveform!r}; drop it or change the "
+                    "waveform"
+                )
+            if value is None and waveform == owner:
+                raise ValueError(
+                    f"neutral_probe_waveform={owner!r} requires {name}"
+                )
+        if waveform == "square":
+            t_on = float(t_on)
+            t_off = float(t_off)
+            if not (math.isfinite(t_on) and math.isfinite(t_off)):
+                raise ValueError(
+                    "neutral_probe_t_on_s and neutral_probe_t_off_s must be "
+                    f"finite (got {t_on!r}, {t_off!r})"
+                )
+            if not t_on < t_off:
+                raise ValueError(
+                    "neutral_probe_t_on_s must be strictly less than "
+                    f"neutral_probe_t_off_s (got {t_on!r} >= {t_off!r}); the "
+                    "square window is the half-open [t_on, t_off), so an empty "
+                    "or inverted window injects nothing and is a "
+                    "misconfiguration rather than a null control"
+                )
+        table_cumulative = None
+        if waveform == "table":
+            table, table_cumulative = neutral_probe_waveform_table(table)
+        zone = values["neutral_probe_zone"]
+        if self._neutral_two_zone:
+            if zone not in ("column", "annulus"):
+                raise ValueError(
+                    "under the neutral_two_zone closure the probe source "
+                    "requires neutral_probe_zone = 'column' (the plasma "
+                    "column, nn) or 'annulus' (the surrounding chamber, "
+                    f"nn_a); got {zone!r}. There is no default: the two put "
+                    "the gas in different places and the plasma responds to "
+                    "them differently, which is precisely what a probe arm is "
+                    "measuring"
+                )
+        elif zone is not None:
+            raise ValueError(
+                "neutral_probe_zone selects between the two-zone closure's "
+                "column and annulus neutral fields and has no meaning without "
+                f"the neutral_two_zone flag (got {zone!r}); this run has one "
+                "neutral field"
+            )
+        # COVERAGE COMPOSES, deliberately and without a refusal. The closure
+        # partitions the MEAN nn into a covered column and a reservoir through
+        # a deficit that only the COVERAGE_BURN_TERMS move -- terms whose rate
+        # is set by a plasma or beam density. The probe is not one of those: it
+        # is uniform across the cross-section by construction, exactly like the
+        # gas puff and the pump, which that ledger already names as
+        # deliberately absent. So a probe raises the covered column and the
+        # reservoir by the same amount, leaves the deficit untouched, and the
+        # partition identity f*col + (1-f)*res = nn keeps closing. The answer
+        # to "does probe-injected inventory belong to the reservoir or the
+        # column?" is therefore neither-and-both, in area proportion, and it is
+        # forced rather than chosen -- which is why this is an allowance with a
+        # statement and not a guess.
+        self._probe = SimpleNamespace(
+            amplitude_cm3_s=amplitude,
+            weights=weights,
+            waveform=waveform,
+            t_on_s=None if waveform != "square" else t_on,
+            t_off_s=None if waveform != "square" else t_off,
+            table=None if waveform != "table" else table,
+            table_cumulative=table_cumulative,
+            zone=zone,
+        )
 
     #: RHS terms whose neutral row is a COVERED-ONLY debit or return: their
     #: rate is proportional to a plasma or beam density, so the reaction can
@@ -2390,13 +2581,25 @@ class LAPDSim1D:
             time=self._time,
         )
 
-    def rhs(self, y=None, include_heat_conduction=True, time=None):
-        """Return the packed explicit RHS for the current scaffold physics."""
+    def rhs(
+        self, y=None, include_heat_conduction=True, time=None,
+        step_window=None,
+    ):
+        """Return the packed explicit RHS for the current scaffold physics.
+
+        ``step_window`` is the ``(t0, dt)`` interval an integrator is stepping
+        over, passed through to the terms that integrate their own explicit
+        time dependence exactly over it. Only the probe source reads it; every
+        other term is evaluated pointwise at ``time`` as before, so omitting it
+        (the default, and what every diagnostic caller does) is the historical
+        behaviour exactly.
+        """
         state_rhs = self._zero_rhs_state()
         terms = self.rhs_terms(
             y=y,
             include_heat_conduction=include_heat_conduction,
             time=time,
+            step_window=step_window,
         )
         for term in terms.values():
             state_rhs = add_state_rhs(state_rhs, term)
@@ -2413,8 +2616,37 @@ class LAPDSim1D:
             ),
         )
 
-    def rhs_terms(self, y=None, include_heat_conduction=True, time=None):
-        """Return named conservative RHS contributions for diagnostics."""
+    def _explicit_stage_rhs(self, dt, include_heat_conduction=True):
+        """Return the SSPRK2 stage RHS callable for a step of width ``dt``.
+
+        With no probe source this is exactly the historical
+        ``self.rhs(y, stage_time)`` -- the presence gate extends to the CALL
+        SIGNATURE, so nothing that wraps, replaces or subclasses ``rhs`` sees
+        an argument that did not exist before, and the off path's stage calls
+        are unchanged down to their keywords.
+
+        With a probe armed, the step window rides along so the term can
+        integrate its own explicit time dependence exactly over it. It is
+        passed as an ARGUMENT rather than armed on the solver: it is an input
+        to the RHS, and threading it makes it structurally impossible for a
+        rejected attempt's ``dt`` to be read by the attempt that replaces it.
+        """
+        extra = (
+            {} if include_heat_conduction
+            else {"include_heat_conduction": False}
+        )
+        if self._probe is not None:
+            extra["step_window"] = (self._time, dt)
+        return lambda yy, tt: self.rhs(yy, time=tt, **extra)
+
+    def rhs_terms(
+        self, y=None, include_heat_conduction=True, time=None,
+        step_window=None,
+    ):
+        """Return named conservative RHS contributions for diagnostics.
+
+        ``step_window`` (see :meth:`rhs`) is read only by the probe source.
+        """
         # The coverage closure's reservoir-arm debit belongs to THIS
         # evaluation's beam solve and nothing else. Cleared first so a branch
         # that never reaches the beam terms (the neutral-only pre-drive, or
@@ -2430,6 +2662,17 @@ class LAPDSim1D:
             zone_terms["neutral_zone_exchange"] = self.neutral_zone_exchange_rhs(
                 state=state
             )
+        # The ad-hoc probe source exists only under its own flag, so the term
+        # ledger (and the saved rhs_terms structure) is unchanged when the flag
+        # is off. Present in BOTH branches below and identically zero in the
+        # neutral-only one: while the solver is on the implicit neutral-only
+        # stepper (Plasma off, or the neutral_prebreakdown phase) the step is a
+        # backward-Euler neutral matrix that this term deliberately does not
+        # enter, so the probe cannot fuel a pre-shot fill or a cached
+        # equilibration seed. Recording the zero rather than dropping the key
+        # keeps the saved structure stable across the phase change and makes
+        # the gate readable instead of inferable.
+        probe_terms = {}
         geometry_terms = {}
         if self._flags.get("end_expansion_geometry", False):
             geometry_terms["flux_tube_geometry"] = (
@@ -2450,8 +2693,11 @@ class LAPDSim1D:
                 kinetic_terms["neutral_kinetic_dvm_coupling"] = (
                     self.neutral_kinetic_dvm_coupling_rhs()
                 )
+            if self._probe is not None:
+                probe_terms["neutral_probe_source"] = self._zero_rhs_state()
             terms = {
                 **zone_terms,
+                **probe_terms,
                 **geometry_terms,
                 **kinetic_terms,
                 "plasma_advective_flux": self._zero_rhs_state(),
@@ -2525,8 +2771,15 @@ class LAPDSim1D:
                 0.0,
             )
         self._coverage_reservoir_debit = _reservoir_debit
+        if self._probe is not None:
+            probe_terms["neutral_probe_source"] = self.neutral_probe_source_rhs(
+                state=state,
+                time=time,
+                step_window=step_window,
+            )
         terms = {
             **zone_terms,
+            **probe_terms,
             **geometry_terms,
             "plasma_advective_flux": plasma_terms["plasma_advective_flux"],
             "plasma_front_flux": plasma_terms["plasma_front_flux"],
@@ -2655,6 +2908,9 @@ class LAPDSim1D:
             "neutral_exchange",
             "neutral_sources",
             "neutral_kinetic_relaxation",
+            # The probe is a neutral source like the puff: gas arrives where
+            # the caller put it, whether or not the plasma reaches that cell.
+            "neutral_probe_source",
         }
         return {
             name: (
@@ -2954,7 +3210,7 @@ class LAPDSim1D:
                     y_next = ssprk2_step(
                         y0=self._y,
                         dt=dt,
-                        rhs_func=lambda yy, tt: self.rhs(yy, time=tt),
+                        rhs_func=self._explicit_stage_rhs(dt),
                         floor_func=floor_with_ledger,
                         time=self._time,
                         raw_stage_func=(
@@ -4196,13 +4452,15 @@ class LAPDSim1D:
             return floor_func(raw)
 
         def explicit(y_in, sub_dt):
+            # The explicit operator spans the WHOLE step under both splittings
+            # (only the cheap heat operator is halved by Strang), so ``sub_dt``
+            # is the one window an explicitly time-dependent term is
+            # integrated over.
             return ssprk2_step(
                 y0=y_in,
                 dt=sub_dt,
-                rhs_func=lambda yy, tt: self.rhs(
-                    yy,
-                    include_heat_conduction=False,
-                    time=tt,
+                rhs_func=self._explicit_stage_rhs(
+                    sub_dt, include_heat_conduction=False
                 ),
                 floor_func=floor_func,
                 time=self._time,
@@ -5345,6 +5603,19 @@ class LAPDSim1D:
         gas_event = self._gas_puff_event_time()
         if gas_event is not None:
             boundaries.append(gas_event)
+        # A square probe waveform has two hard edges and nothing smooths them,
+        # so they are captured the same way the puff's are: land a step
+        # boundary on each, and no accepted step straddles one.
+        #
+        # This is NOT what makes the delivered inventory exact -- the stages
+        # consume the waveform's exact step average, so the inventory is right
+        # whether or not a step straddles an edge, on any lattice. What the
+        # capture buys is the applied RATE: a step that straddles an edge
+        # applies a partial-window average across its whole width, which
+        # smears the edge in the plasma's RESPONSE (never in the delivered
+        # total). Landing on the edges keeps the applied waveform the square
+        # that was asked for, and it costs nothing.
+        boundaries.extend(self._neutral_probe_event_times())
         for boundary in sorted(boundaries):
             if in_run_window(boundary):
                 return float(boundary)
@@ -6037,6 +6308,83 @@ class LAPDSim1D:
             **self._neutral_source_kwargs(time=time),
         )
 
+    def neutral_probe_waveform_value(self, time=None):
+        """Return the probe source's INSTANTANEOUS ``w(t)``, or 0.0 when off.
+
+        ``time`` defaults to the solver clock. Zero with the flag off, so a
+        caller needs no branch. This is the diagnostic read; what an
+        integration step consumes is
+        :meth:`neutral_probe_waveform_mean` over the step it is taking.
+        """
+        if self._probe is None:
+            return 0.0
+        return neutral_probe_waveform_value(
+            self._time if time is None else time,
+            self._probe.waveform,
+            t_on_s=self._probe.t_on_s,
+            t_off_s=self._probe.t_off_s,
+            table=self._probe.table,
+        )
+
+    def neutral_probe_waveform_mean(self, t0, dt):
+        """Return the probe waveform's exact average over ``[t0, t0 + dt]``.
+
+        Zero with the flag off. This is the quantity the integration stages
+        consume; ``sum_k dt_k * mean(t_k, dt_k)`` over a run's accepted steps
+        is the waveform's exact integral, whatever the step lattice.
+        """
+        if self._probe is None:
+            return 0.0
+        return neutral_probe_waveform_mean(
+            t0,
+            dt,
+            self._probe.waveform,
+            t_on_s=self._probe.t_on_s,
+            t_off_s=self._probe.t_off_s,
+            table=self._probe.table,
+            table_cumulative=self._probe.table_cumulative,
+        )
+
+    def neutral_probe_source_rhs(
+        self, y=None, state=None, time=None, step_window=None
+    ):
+        """Return the ad-hoc probe neutral source term (zeros when off).
+
+        ``step_window`` is the ``(t0, dt)`` interval the caller is integrating
+        over. Given, the term carries the waveform's EXACT AVERAGE across it,
+        which is what makes the delivered inventory the stated hypothesis
+        rather than the trapezoid rule's reading of it (see
+        ``physics.neutrals.neutral_probe_waveform_mean``). Omitted -- every
+        diagnostic read -- the term carries the instantaneous rate at ``time``,
+        which is the same quantity for a window of zero width.
+        """
+        if self._probe is None:
+            return self._zero_rhs_state()
+        if state is None:
+            state = self.state if y is None else self._unpack(y)
+        if step_window is None:
+            waveform_value = self.neutral_probe_waveform_value(time=time)
+        else:
+            waveform_value = self.neutral_probe_waveform_mean(*step_window)
+        return neutral_probe_source_rhs(
+            state=state,
+            geometry=self._geometry,
+            amplitude_cm3_s=self._probe.amplitude_cm3_s,
+            weights=self._probe.weights,
+            waveform_value=waveform_value,
+            zone=self._probe.zone,
+        )
+
+    def neutral_probe_profile(self):
+        """Return the probe source's normalized axial weights ``p(z)`` [1].
+
+        ``None`` whenever the instrument is off. The array is a copy, so a
+        caller cannot reach into solver state.
+        """
+        if self._probe is None:
+            return None
+        return np.asarray(self._probe.weights, dtype=float).copy()
+
     def gas_puff_local_ionization_rhs(self, y=None, state=None, time=None):
         """Return the fresh-puff clump local-ionization source (default off)."""
         if state is None:
@@ -6628,6 +6976,28 @@ class LAPDSim1D:
             return S_gp, Twin_S_gp
         decay = float(np.exp(-(phase_elapsed - tau_after_breakdown) / tau_decay))
         return decay * S_gp, decay * Twin_S_gp
+
+    def _neutral_probe_event_times(self):
+        """Return the probe waveform's hard edges [s], on the absolute clock.
+
+        These sharpen the applied rate, not the delivered inventory, which is
+        exact on any lattice -- see the note at the caller.
+
+        Empty with the instrument off, and for ``"const"``, which never
+        changes. A ``"square"`` contributes both its edges. A ``"table"``
+        contributes the two ends of its tabulated span, where ``w`` drops to
+        zero outside: it is piecewise linear and continuous WITHIN the span,
+        so its interior nodes need no capture, but each end is a jump whenever
+        the caller tabulated a non-zero ``w`` there.
+        """
+        if self._probe is None:
+            return []
+        if self._probe.waveform == "square":
+            return [float(self._probe.t_on_s), float(self._probe.t_off_s)]
+        if self._probe.waveform == "table":
+            nodes = np.asarray(self._probe.table, dtype=float)
+            return [float(nodes[0, 0]), float(nodes[-1, 0])]
+        return []
 
     def _gas_puff_event_time(self):
         if not (

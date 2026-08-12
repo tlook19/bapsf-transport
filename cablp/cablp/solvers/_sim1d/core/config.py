@@ -2249,6 +2249,127 @@ def restart_defaults():
     }
 
 
+def neutral_probe_source_defaults():
+    """Ad-hoc probe neutral source ``S_probe(z, t)`` (v1, moment model only).
+
+    Every key here is read ONLY under the ``neutral_probe_source`` flag and is
+    inert otherwise; with the flag off each must sit at its ``None`` default or
+    construction raises. Nothing in this group has a shipped value: the source
+    is an INSTRUMENT whose whole content is what the caller asks for, so there
+    is no default amplitude, shape, waveform or placement to inherit.
+
+    The term is a volumetric particle source on the neutral density equation,
+
+        S_probe(z, t) = A * p(z) * w(t)   [cm^-3 s^-1],
+
+    added to ``dn_n/dt`` as its own named RHS row (``neutral_probe_source``).
+    Its injection conventions -- zero net momentum, and the single cold-gas
+    ``Tn_K`` population -- are documented on
+    ``physics.neutrals.neutral_probe_source_rhs``, which is the term.
+
+    The source is a PLASMA-RUN source. Whenever the solver is on the
+    neutral-only implicit stepper (the ``Plasma`` flag off, or the
+    ``neutral_prebreakdown`` phase) the term is identically zero, so a probe
+    can neither fuel a pre-shot fill nor reach a cached neutral-equilibration
+    seed.
+
+    neutral_probe_amplitude_cm3_s:
+        Amplitude ``A`` [cm^-3 s^-1]: the source rate at ``w = 1``, averaged
+        over the whole grid weighted by chamber (neutral) cell volume. The
+        axial profile is normalized so that mean is exactly ``A``, which makes
+        the volume-integrated influx ``A * w(t) * sum(V_chamber)``
+        [particles/s] independent of the grid and of the profile's own scale.
+        Must be finite and ``>= 0``; ``0`` is an explicit null-control arm, not
+        a default.
+    neutral_probe_profile:
+        PER-CELL axial shape ``p(z)``: a sequence of length ``nx`` (the grid's
+        cell count), every entry finite and ``>= 0``, not all zero. Supplied
+        as a SHAPE -- its overall scale is divided out by the normalization
+        above, so only its relative form matters. This is the
+        externally-computed-profile hook: the solver contains no randomness and
+        does no file I/O, so an arbitrary hypothesized axial source is built
+        outside and passed here. EXACTLY ONE of this and
+        ``neutral_probe_shape`` must be given with the flag on.
+    neutral_probe_shape:
+        Built-in parametric profile family, for arms that need no profile
+        file. ``"gaussian"`` is the only member:
+        ``p(z) = exp(-(z - z0)^2 / (2 sigma^2))`` sampled at cell centres, with
+        ``z0 = neutral_probe_center_cm`` and ``sigma = neutral_probe_width_cm``,
+        both then required. EXACTLY ONE of this and ``neutral_probe_profile``
+        must be given with the flag on.
+    neutral_probe_center_cm:
+        Gaussian centre ``z0`` [cm] on the same axial coordinate as
+        ``geometry.z_cm``. Required with ``neutral_probe_shape="gaussian"`` and
+        forbidden otherwise. Must be finite; a centre outside the grid is
+        permitted (it is a one-sided tail, not an error).
+    neutral_probe_width_cm:
+        Gaussian standard deviation ``sigma`` [cm]. Required with
+        ``neutral_probe_shape="gaussian"`` and forbidden otherwise. Must be
+        finite and ``> 0``.
+    neutral_probe_waveform:
+        Time dependence ``w(t)``, dimensionless, on the ABSOLUTE solver clock
+        (seconds since the start of the run, the same ``time`` the RHS is
+        evaluated at). One of:
+
+        * ``"const"`` -- ``w = 1`` for all time; no further keys.
+        * ``"square"`` -- ``w = 1`` on ``[t_on, t_off)`` and ``0`` outside;
+          ``neutral_probe_t_on_s`` and ``neutral_probe_t_off_s`` required.
+          The edges are hard: nothing is smoothed and no smoothing constant
+          exists. Both edges are registered as step boundaries, which keeps
+          the APPLIED rate a square; the delivered inventory does not depend
+          on that and is exact on any lattice.
+        * ``"table"`` -- ``neutral_probe_waveform_table`` required; linear
+          interpolation between its nodes and exactly ``0`` outside their
+          span.
+
+        There is no default: the waveform decides what a probe arm measured,
+        so it is stated rather than inherited.
+
+        Whatever the form, the integration stages consume the waveform's EXACT
+        AVERAGE over the step being taken, not its value at the stage times,
+        so the inventory a run delivers is ``A * int w dt * sum(V)`` exactly
+        -- the hypothesis as stated, independent of the step lattice. See
+        ``physics.neutrals.neutral_probe_waveform_mean`` for why a pointwise
+        waveform would not be.
+    neutral_probe_t_on_s:
+        Square-waveform rising edge [s], absolute solver clock. Required with
+        ``neutral_probe_waveform="square"`` and forbidden otherwise. Must be
+        finite and strictly less than ``neutral_probe_t_off_s``.
+    neutral_probe_t_off_s:
+        Square-waveform falling edge [s], absolute solver clock. Required with
+        ``neutral_probe_waveform="square"`` and forbidden otherwise.
+    neutral_probe_waveform_table:
+        Tabulated ``w(t)`` as a sequence of ``[t_s, w]`` pairs: at least two
+        rows, ``t`` strictly increasing, every entry finite and every ``w``
+        ``>= 0``. Required with ``neutral_probe_waveform="table"`` and
+        forbidden otherwise. ``w`` is ``0`` strictly outside the tabulated
+        span -- a table states what the source does at the times it lists, and
+        holding an end value indefinitely would deliver inventory nobody asked
+        for.
+    neutral_probe_zone:
+        Which neutral zone the source feeds under the ``neutral_two_zone``
+        closure: ``"column"`` (the plasma column, ``nn``) or ``"annulus"``
+        (the surrounding chamber, ``nn_a``). Required when that flag is on --
+        the two land the gas in different places and the plasma's response to
+        them differs, so there is no defensible default -- and forbidden when
+        it is off, where there is only one neutral field. Where a cell has no
+        annulus (``V_ann = 0``) an annulus-routed source falls back to the
+        column for that cell, exactly as the gas puff does.
+    """
+    return {
+        "neutral_probe_amplitude_cm3_s": None,
+        "neutral_probe_profile": None,
+        "neutral_probe_shape": None,
+        "neutral_probe_center_cm": None,
+        "neutral_probe_width_cm": None,
+        "neutral_probe_waveform": None,
+        "neutral_probe_t_on_s": None,
+        "neutral_probe_t_off_s": None,
+        "neutral_probe_waveform_table": None,
+        "neutral_probe_zone": None,
+    }
+
+
 _PARAMETER_DEFAULT_GROUPS = (
     initial_condition_defaults,
     geometry_defaults,
@@ -2263,6 +2384,7 @@ _PARAMETER_DEFAULT_GROUPS = (
     timestep_defaults,
     coverage_closure_defaults,
     restart_defaults,
+    neutral_probe_source_defaults,
 )
 
 
@@ -2482,6 +2604,18 @@ input_flags_template_1d = {
     # neutral_model="moment", no beam clumping, and the pure-Python kernels;
     # each is a construction-time ValueError.
     "coverage_closure": False,
+    # Ad-hoc probe neutral source S_probe(z,t) = A p(z) w(t), a volumetric
+    # particle source on the neutral density equation. An INFERENCE
+    # INSTRUMENT: an arm with this on measures the plasma's response to a
+    # hypothesized neutral source, so it is never a validation channel and a
+    # run carrying it must say so. Supports the moment neutral model only
+    # (the kinetic arms take over the fluid nn rows). Requires an amplitude,
+    # exactly one of neutral_probe_profile / neutral_probe_shape, a waveform
+    # with its own keys, and -- under neutral_two_zone -- an explicit
+    # neutral_probe_zone; each is a construction-time ValueError, as is any of
+    # the ten keys set with this flag off. Default OFF and bit-exact off
+    # (presence-gated: the off path builds no profile and adds no RHS row).
+    "neutral_probe_source": False,
     "ionization_energy_cost": True,
     "icool": True,
     "ncool": True,
