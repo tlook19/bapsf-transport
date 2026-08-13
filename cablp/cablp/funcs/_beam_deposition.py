@@ -389,6 +389,62 @@ energy rather than a plateau distribution, so its cross sections are evaluated
 at that mean; and it is launched at the near edge of its birth cell, the same
 cell-resolution granularity as everywhere else in the module.
 
+Branched disposal of the extracted power (``anomalous_disposal``, pd1)
+----------------------------------------------------------------------
+
+``anomalous_transport`` is all-or-nothing: ``"local"`` books every extracted
+eV as bulk heat in the cell that extracted it, ``"tail_walk"`` withholds every
+extracted eV and walks it. Neither is what a Langmuir wave does. The wave the
+beam drives loses its energy through TWO channels at once -- Landau damping on
+the resonant electrons (which makes tail electrons, and is nonlocal) and
+collisional damping of the wave itself (which makes bulk heat, and is local) --
+and their ratio is a computed property of the local cell, not a choice.
+
+``anomalous_disposal="landau_branched"`` books that ratio. Per cell::
+
+    f_Landau = gamma_L / (gamma_L + nu_en/2)
+
+with ``nu_en/2`` the collisional Langmuir amplitude damping already used by the
+onset gate (:func:`ql_onset_open`) and ``gamma_L`` the Maxwellian Landau
+damping rate at the beam-resonant phase velocity
+(:func:`landau_branching_fraction`, which carries the formula and its
+validity caveat). A fraction ``f_Landau`` of each cell's extracted power is
+withheld and walked exactly as ``"tail_walk"`` walks all of it -- same birth
+energy, same 50/50 launch, same Coulomb machinery, same cathode and collector
+conventions, same tail end ledger -- and the remaining ``1 - f_Landau`` is
+banked as local bulk heat, exactly as ``"local"`` banks all of it. The two
+existing values are therefore the ``f_Landau ≡ 1`` and ``f_Landau ≡ 0``
+corners of this one, which is why selecting the branch TOGETHER with
+``anomalous_transport="tail_walk"`` is refused rather than composed: both
+settings claim the same bank.
+
+Mechanically the split is applied AFTER the march and BEFORE the walk stage,
+over the withholding bank the tail walk already fills. The march therefore runs
+in exactly the configuration ``"tail_walk"`` runs it in -- including the
+compiled CSDA kernel, which supports the withholding bank -- and the branch
+never enters a kernel. That is what makes the branched arm compiled-vs-pure
+bit-identical for the same reason the tail-walk arm is.
+
+The conservation identity is unchanged in FORM, because the locally-banked
+share is booked into ``heating_anomalous_erg_s`` alongside the walked share
+(both are the anomalous channel's delivery to the electrons)::
+
+    P_QL = heating_anomalous + ionization_cost_tail + radiated_tail
+           + end_loss_tail_low + end_loss_tail_high
+
+``tail_power_erg_s`` keeps its documented meaning -- the power this ray
+actually LAUNCHED as walkers -- so under the branch it reports the Landau
+share rather than ``P_QL``.
+
+Where the split is evaluated matters and is stated: ``f_Landau`` uses the
+column state each ray marched (so under beam clumping the enhanced-``nn`` ray
+branches on its own enhanced collisionality) and the ray's LAUNCH energy for
+the resonant phase velocity, the same convention the pd0 read used. CSDA
+slowing along the column is neglected in ``v_phi``.
+
+**Not available under the two-stream (coverage) march**, which refuses it: see
+:func:`deposit_beam_two_stream`.
+
 Sheath reflection at a walk-window face (``tail_reflect_face``, K7)
 -------------------------------------------------------------------
 
@@ -469,6 +525,12 @@ _OMEGA_PE_COEFF = 5.64e4  # omega_pe = 5.64e4 sqrt(n_e) [rad/s] (NRL)
 QL_GROWTH_COEFF = 0.687
 # Reactive-trapping extraction coefficient, f_ext = C_trap (n_b/2n_e)^(1/3).
 QL_TRAP_COEFF = 1.0
+
+# Maxwellian Landau damping prefactor, sqrt(pi/8), of the Krall & Trivelpiece
+# Sec. 8.6 expression used by `landau_branching_fraction`. A number the cited
+# formula contains, not a description-class constant: nothing selects it and
+# nothing may tune it.
+_LANDAU_DAMPING_COEFF = math.sqrt(math.pi / 8.0)
 
 # The declared anomalous-closure family. A bracket, not a default plus
 # alternatives: a result states which arm produced it.
@@ -785,6 +847,80 @@ def ql_onset_open(ne: float, nn: float, Te_eV: float, n_b: float) -> bool:
     return beam_plasma_growth_rate_s(ne, n_b) > 0.5 * nu_en
 
 
+def landau_branching_fraction(ne, Te_eV, nn, E_beam_eV):
+    """Landau share of the driven Langmuir-wave energy, per cell (in [0, 1]).
+
+    ``f_Landau = gamma_L / (gamma_L + nu_en/2)`` -- the fraction of the wave
+    energy the beam-plasma instability drives that is damped on the RESONANT
+    electrons (Landau, which makes a fast tail) rather than on the wave itself
+    (electron-neutral collisions, which make bulk heat). ``1 - f_Landau`` is
+    the collisional share. Dimensionless; the two rates are both amplitude
+    damping rates [1/s], so their units cancel.
+
+    ``nu_en/2 = 0.5 * nn * K_m(Te)`` is the collisional Langmuir amplitude
+    damping the onset gate already weighs against
+    (:func:`ql_onset_open`), on the boxed He e-n momentum-transfer rate
+    coefficient ``_cross.he_electron_momentum_transfer_rate_cm3_s``.
+
+    ``gamma_L`` is the Maxwellian Landau damping rate evaluated at the
+    beam-resonant phase velocity ``v_phi = v_b`` (the wave the beam drives has
+    ``k = omega/v_b``), Krall & Trivelpiece Sec. 8.6 with the Bohm-Gross
+    ``-3/2`` term::
+
+        gamma_L = sqrt(pi/8) * omega_pe * (v_phi/v_te)**3
+                  * exp(-v_phi**2 / (2 v_te**2) - 3/2)
+
+    with ``omega_pe = 5.64e4 sqrt(ne)`` and ``v_te**2 = Te/m_e``, so
+    ``(v_phi/v_te)**2 = 2 E_beam / Te`` in eV. NO new physical constant enters:
+    ``omega_pe``'s coefficient and ``K_m`` are the module's existing boxed
+    inputs and the rest is the cited formula's own arithmetic.
+
+    ``E_beam_eV`` is the resonant beam energy [eV] -- the caller's launch
+    energy; slowing along the column is not tracked in ``v_phi``.
+
+    **Validity caveat, stated because the formula is used as-is:** the
+    asymptotic Landau expression is a large-argument expansion and is
+    quantitative for ``v_phi/v_te`` greater than roughly 2.4; below that the
+    expansion is marginal and the value should be read as indicative. It is
+    never extrapolated into a regime it changes sign in -- it is positive
+    everywhere and monotone in ``Te`` at fixed ``E_beam``.
+
+    Corner behaviour, all of it the collisional limit and none of it a
+    fallback: where the exponential underflows (a cold or slow-tail cell) the
+    Landau channel is genuinely dead and ``f_Landau`` is 0.0; where BOTH rates
+    vanish (no plasma and no neutrals, i.e. no wave and no damping at all) the
+    ratio is undefined and 0.0 is returned, which routes such a cell's power
+    exactly where the shipped ``"local"`` closure routes it.
+
+    Accepts per-cell arrays of ``ne``, ``Te_eV`` and ``nn`` sharing one shape
+    and a scalar ``E_beam_eV``; returns an array of that shape.
+    """
+    ne = np.asarray(ne, dtype=float)
+    Te = np.asarray(Te_eV, dtype=float)
+    nn = np.asarray(nn, dtype=float)
+    # (v_phi/v_te)**2. The positive floor on Te is an ARITHMETIC guard on the
+    # division, not a temperature: the exponential below is already exactly
+    # 0.0 many decades above it, so every value it can produce is the
+    # collisional limit whatever the floor is set to.
+    r2 = 2.0 * float(E_beam_eV) / np.maximum(Te, 1.0e-12)
+    gamma_L = (
+        _LANDAU_DAMPING_COEFF
+        * _OMEGA_PE_COEFF
+        * np.sqrt(np.maximum(ne, 0.0))
+        * r2 ** 1.5
+        * np.exp(-0.5 * r2 - 1.5)
+    )
+    nu_half = 0.5 * np.maximum(nn, 0.0) * (
+        he_electron_momentum_transfer_rate_cm3_s(np.maximum(Te, 0.0))
+    )
+    total = gamma_L + nu_half
+    # The 0/0 cell (no plasma AND no neutrals) is masked out of the division
+    # itself rather than divided and repaired, so no invalid-value warning is
+    # raised and no NaN is ever formed.
+    live = total > 0.0
+    return np.where(live, gamma_L / np.where(live, total, 1.0), 0.0)
+
+
 def ql_trapped_fraction(ne: float, n_b: float) -> float:
     """Beam-energy fraction reactive trapping extracts per relaxation.
 
@@ -1022,6 +1158,7 @@ def deposit_beam(
     anode_eta: float = 0.0,
     product_transport: str = "local",
     anomalous_transport: str = "local",
+    anomalous_disposal: str = "local",
     tail_energy_eV: float | None = None,
     tail_ionization: str = "off",
     tail_walk_window: tuple[int, int] | None = None,
@@ -1097,6 +1234,18 @@ def deposit_beam(
     independent and compose: with both on, the event products walk on the WP-D
     ledger and the QL tails on the WP-E one.
 
+    **Branched disposal (pd1).** ``anomalous_disposal`` is ``"local"``
+    (default, bit-exact -- not one branch below changes) or
+    ``"landau_branched"``, which splits each cell's extracted anomalous power
+    by the COMPUTED ``landau_branching_fraction(ne, Te, nn, E0_eV)``: that
+    share is walked exactly as ``anomalous_transport="tail_walk"`` walks all of
+    it, the rest is banked locally exactly as ``"local"`` banks all of it. See
+    the module docstring. It needs everything the walk needs
+    (``anomalous_model`` active, ``tail_energy_eV``) and is REFUSED together
+    with ``anomalous_transport="tail_walk"``, which is its ``f_Landau ≡ 1``
+    corner -- both settings claim the same bank, so naming both states two
+    dispositions for one quantity.
+
     **Tail ionization (K6).** ``tail_ionization`` is ``"off"`` (default,
     bit-exact -- the walk stays energy-only) or ``"on"``, which marches each
     tail population on this module's own CSDA integration so it ionizes and
@@ -1162,18 +1311,39 @@ def deposit_beam(
             f"unknown anomalous_transport {anomalous_transport!r}; "
             "expected 'local' or 'tail_walk'"
         )
+    if anomalous_disposal not in ("local", "landau_branched"):
+        raise ValueError(
+            f"unknown anomalous_disposal {anomalous_disposal!r}; "
+            "expected 'local' or 'landau_branched'"
+        )
+    if anomalous_disposal == "landau_branched" and (
+        anomalous_transport != "local"
+    ):
+        raise ValueError(
+            "anomalous_disposal='landau_branched' cannot be combined with "
+            f"anomalous_transport={anomalous_transport!r}: the branch already "
+            "decides what share of the extracted power is walked, and "
+            "'tail_walk' is its f_Landau == 1 corner, so naming both states "
+            "two dispositions for one bank. Select the branch with "
+            "anomalous_transport='local'"
+        )
+    branch_tail = anomalous_disposal == "landau_branched"
     if tail_ionization not in ("off", "on"):
         raise ValueError(
             f"unknown tail_ionization {tail_ionization!r}; "
             "expected 'off' or 'on'"
         )
-    if tail_ionization == "on" and anomalous_transport != "tail_walk":
+    if tail_ionization == "on" and not (
+        anomalous_transport == "tail_walk" or branch_tail
+    ):
         raise ValueError(
-            "tail_ionization='on' requires anomalous_transport='tail_walk' "
-            "(the ionizing channel belongs to the QL tail walkers; with "
-            "anomalous_transport='local' there are no walkers and the "
-            "setting would do nothing). anomalous_transport accepts 'local' "
-            "or 'tail_walk'; tail_ionization accepts 'off' or 'on'"
+            "tail_ionization='on' requires walkers to give the channel to: "
+            "anomalous_transport='tail_walk' or "
+            "anomalous_disposal='landau_branched' (with both 'local' there "
+            "are no walkers and the setting would do nothing). "
+            "anomalous_transport accepts 'local' or 'tail_walk'; "
+            "anomalous_disposal accepts 'local' or 'landau_branched'; "
+            "tail_ionization accepts 'off' or 'on'"
         )
     if anode_eta != 0.0 and not (0.0 <= anode_eta < 1.0):
         raise ValueError(
@@ -1227,7 +1397,15 @@ def deposit_beam(
                 "ql_relaxation_coeff must be finite and > 0 (got "
                 f"{ql_relaxation_coeff})"
             )
-    walk_tail = anomalous_transport == "tail_walk"
+    # The branched disposal fills and consumes the SAME withholding bank the
+    # tail walk does -- it only scales it per cell between the march and the
+    # walk -- so it enters the march in the tail walk's own configuration and
+    # every requirement the walk states applies to it verbatim.
+    walk_tail = anomalous_transport == "tail_walk" or branch_tail
+    _tail_sel = (
+        "anomalous_disposal='landau_branched'" if branch_tail
+        else "anomalous_transport='tail_walk'"
+    )
     E_tail = 0.0
     if walk_tail:
         # There must BE an anomalous channel for the walk to carry; without one
@@ -1235,7 +1413,7 @@ def deposit_beam(
         # gating exists to prevent.
         if anomalous_model == "none":
             raise ValueError(
-                "anomalous_transport='tail_walk' requires an active anomalous "
+                f"{_tail_sel} requires an active anomalous "
                 "channel (anomalous_model='quasilinear' or "
                 "'ql_relaxation'); with no anomalous "
                 "drag there is no power to carry and the setting would do "
@@ -1243,7 +1421,7 @@ def deposit_beam(
             )
         if tail_energy_eV is None:
             raise ValueError(
-                "anomalous_transport='tail_walk' needs tail_energy_eV (the "
+                f"{_tail_sel} needs tail_energy_eV (the "
                 "QL plateau energy the tail electrons are launched at)"
             )
         E_tail = float(tail_energy_eV)
@@ -1270,9 +1448,11 @@ def deposit_beam(
     if tail_reflect_face is not None:
         if not walk_tail:
             raise ValueError(
-                "tail_reflect_face requires anomalous_transport='tail_walk' "
-                "(it reflects the QL tail walkers; with no walk there is "
-                "nothing to reflect and the setting would do nothing)"
+                "tail_reflect_face requires a selection that walks the QL "
+                "tail (anomalous_transport='tail_walk' or "
+                "anomalous_disposal='landau_branched'); with no walk "
+                "there is nothing to reflect and the setting would do "
+                "nothing"
             )
         reflect_face = int(tail_reflect_face)
         if reflect_face not in (-1, 1):
@@ -1794,6 +1974,29 @@ def deposit_beam(
         if absorbed:
             break
 
+    if branch_tail:
+        # --- pd1: the Landau/collisional branch ---------------------------
+        # The march above withheld ALL of the anomalous power, exactly as the
+        # tail walk does, so this is the ONE place the two dispositions differ
+        # and it sits strictly between the march and the walk stage. Nothing
+        # here reaches a kernel: the withholding bank is already final, and the
+        # compiled and pure marches produce it bit-identically.
+        #
+        # The collisional share is returned to the local banks it was withheld
+        # from -- the lumped one and the anomalous diagnostic split alike, the
+        # same two the march's own `d_anom_local` feeds -- so the conservation
+        # identity keeps its shipped FORM with the local share inside
+        # `heating_anomalous`. The tail share is left in the bank for the walk
+        # below, which then carries it with no knowledge that it was split.
+        #
+        # Cells the ray never reached carry 0.0 in the bank, so their local
+        # credit is 0.0 whatever the branching says there.
+        f_landau = landau_branching_fraction(ne, Te, nn, E0_eV)
+        local_anom_erg = (1.0 - f_landau) * anom_power_eV * _ERG_PER_EV
+        heating += local_anom_erg
+        heat_anomalous += local_anom_erg
+        anom_power_eV *= f_landau
+
     if walk_products or walk_tail:
         # --- Product walks (WP-D) and QL tail walks (WP-E) ---------------
         # ONE set of walk machinery serves both closures: the same per-cell
@@ -2217,6 +2420,7 @@ def deposit_beam_two_stream(
     anode_eta: float = 0.0,
     product_transport: str = "local",
     anomalous_transport: str = "local",
+    anomalous_disposal: str = "local",
     tail_energy_eV: float | None = None,
     tail_walk_window: tuple[int, int] | None = None,
     tail_ionization: str = "off",
@@ -2339,11 +2543,56 @@ def deposit_beam_two_stream(
     consumes the two arms' sum. Splitting the ionization cost and the radiated
     energy by the same weights therefore leaves the energy side exactly where
     it shipped -- only the sum is read.
+
+    **``anomalous_disposal="landau_branched"`` is REFUSED here** (pd1), and the
+    refusal is the design rather than a gap in it. Three code facts decide it:
+
+    * the withholding bank is SHARED across the two arms and indexed by birth
+      cell (see its comment below), because the one walk stage runs on the mean
+      state for both. The power the RESERVOIR arm extracted is therefore not
+      separable from the channel arm's at the point the branch would be
+      applied, so a per-medium branching cannot be expressed without giving the
+      bank a per-arm axis it deliberately does not have;
+    * a single MEAN-FIELD ``f_Landau`` applied to that shared bank would branch
+      the reservoir's extraction on a density that is not the reservoir's --
+      and under ``anomalous_model="ql_relaxation"`` the reservoir arm is the
+      DOMINANT extractor, so that is not a small misattribution;
+    * a per-arm branch would evaluate the reservoir's ``f_Landau`` at
+      ``ne = ne_floor``, a numerical floor constant standing for "no plasma",
+      against the MEAN-FIELD ``Te`` this march shares between the media. That
+      combination is not a physical state: at the floor with a hot ``Te`` it
+      returns ``f_Landau`` ~ 0.83 (Te 25 eV) to ~0.98 (Te 55 eV), i.e. the
+      branching in the reservoir would be an artifact of the floor convention
+      rather than a measurement of it.
+
+    The honest disposition is therefore to refuse the combination at
+    construction and leave the coverage arms to a stance designed for them,
+    rather than to ship a number the floor convention owns.
     """
     if anomalous_model not in ANOMALOUS_MODELS:
         raise ValueError(
             f"unknown anomalous_model {anomalous_model!r}; "
             f"expected one of {sorted(ANOMALOUS_MODELS)}"
+        )
+    if anomalous_disposal != "local":
+        # See the docstring for the three code facts behind this refusal. The
+        # value domain is checked first so a typo reads as a typo rather than
+        # as the coverage refusal.
+        if anomalous_disposal != "landau_branched":
+            raise ValueError(
+                f"unknown anomalous_disposal {anomalous_disposal!r}; "
+                "expected 'local' or 'landau_branched'"
+            )
+        raise ValueError(
+            "anomalous_disposal='landau_branched' is not available under the "
+            "two-stream (coverage) march: the withholding bank is shared "
+            "across the channel and reservoir arms by construction, so the "
+            "reservoir's extracted power cannot be branched on the reservoir's "
+            "own state -- and the reservoir carries ne = ne_floor, a numerical "
+            "floor constant, against the mean-field Te, so any branching there "
+            "would be an artifact of the floor convention rather than a "
+            "measurement. The coverage arms are deferred until that stance is "
+            "designed; run the branch without coverage_closure"
         )
     if anode_eta != 0.0 and not (0.0 <= anode_eta < 1.0):
         raise ValueError(f"anode_eta must be in [0, 1) (got {anode_eta})")

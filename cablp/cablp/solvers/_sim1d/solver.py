@@ -1393,12 +1393,52 @@ class LAPDSim1D:
                 "heating_anomalous_transport must be 'local' or 'tail_walk' "
                 f"(got {_hat!r})"
             )
-        if _hat == "tail_walk":
+        # pd1 branched disposal. It fills and consumes the SAME withholding
+        # bank the tail walk does -- it only scales it per cell between the
+        # march and the walk -- so every requirement the walk states applies to
+        # it verbatim, and the two selectors are checked together below rather
+        # than in parallel blocks that could drift apart.
+        _disposal = str(
+            self._input_dict.get("heating_anomalous_disposal", "local")
+        )
+        if _disposal not in ("local", "landau_branched"):
+            raise ValueError(
+                "heating_anomalous_disposal must be 'local' or "
+                f"'landau_branched' (got {_disposal!r})"
+            )
+        _branch = _disposal == "landau_branched"
+        if _branch and _hat != "local":
+            raise ValueError(
+                "heating_anomalous_disposal='landau_branched' cannot be "
+                f"combined with heating_anomalous_transport={_hat!r}: the "
+                "branch already decides what share of each cell's extracted "
+                "power is walked, and 'tail_walk' is its f_Landau == 1 "
+                "corner, so naming both states two dispositions for one bank. "
+                "Select the branch with heating_anomalous_transport='local'"
+            )
+        if _branch and bool(self._flags.get("coverage_closure", False)):
+            raise ValueError(
+                "heating_anomalous_disposal='landau_branched' does not "
+                "support coverage_closure: the two-stream march shares ONE "
+                "withholding bank between the channel and reservoir arms, so "
+                "the reservoir's extracted power cannot be branched on the "
+                "reservoir's own state -- and the reservoir carries "
+                "ne = the density FLOOR against the mean-field Te, so any "
+                "branching there would be an artifact of the floor convention "
+                "rather than a measurement of the plasma. The coverage arms "
+                "are deferred until that stance is designed"
+            )
+        _tail_walking = _hat == "tail_walk" or _branch
+        if _tail_walking:
+            _sel = (
+                "heating_anomalous_disposal='landau_branched'" if _branch
+                else "heating_anomalous_transport='tail_walk'"
+            )
             if str(
                 self._input_dict.get("beam_deposition_model", "beer_lambert")
             ) != "csda":
                 raise ValueError(
-                    "heating_anomalous_transport='tail_walk' requires "
+                    f"{_sel} requires "
                     "beam_deposition_model='csda' (the anomalous heating it "
                     "transports is the CSDA ray's; under beer_lambert it "
                     "would be a silent no-op)"
@@ -1407,7 +1447,7 @@ class LAPDSim1D:
                 self._input_dict.get("beam_anomalous_model", "none")
             ) == "none":
                 raise ValueError(
-                    "heating_anomalous_transport='tail_walk' requires an "
+                    f"{_sel} requires an "
                     "active anomalous channel "
                     "(beam_anomalous_model='quasilinear'); with no anomalous "
                     "drag there is no power to carry and the setting would "
@@ -1459,7 +1499,32 @@ class LAPDSim1D:
                 f"{_phi_frac!r}); it is a bracket the campaign reports across, "
                 "not a value to fit"
             )
-        if _hat == "tail_walk":
+        if _branch:
+            # The registered branched closure keys the birth energy to the LIVE
+            # cathode drop. The fixed rung is an ASSUMED constant (75 eV) that
+            # this closure's zero-new-constants statement does not cover, so it
+            # is refused here rather than silently admitted.
+            if _keying != "phi_c":
+                raise ValueError(
+                    "heating_anomalous_disposal='landau_branched' requires "
+                    "heating_anomalous_tail_energy_keying='phi_c' (got "
+                    f"{_keying!r}): the branched closure's birth energy is the "
+                    "live cathode drop e*phi_c(t), and the fixed rung is an "
+                    "assumed constant it does not carry"
+                )
+            # f is a DECLARED BRACKET. Under the branch there is no shipped
+            # arm to fall back on -- the registered central arm is f = 1.0 and
+            # the default None would silently select 0.25 -- so the arm must be
+            # stated rather than defaulted.
+            if _phi_frac is None:
+                raise ValueError(
+                    "heating_anomalous_disposal='landau_branched' requires "
+                    "heating_anomalous_tail_phi_c_fraction to be stated "
+                    "explicitly (one of the declared bracket arms 0.25, 0.5 "
+                    "or 1.0); leaving it None would silently select 0.25 "
+                    "while the registered central arm is 1.0"
+                )
+        if _tail_walking:
             if _keying == "fixed":
                 if _phi_frac is not None:
                     raise ValueError(
@@ -1526,15 +1591,18 @@ class LAPDSim1D:
                 f"(got {_tion!r})"
             )
         if _tion == "on":
-            if _hat != "tail_walk":
+            if not _tail_walking:
                 raise ValueError(
-                    "heating_anomalous_tail_ionization='on' requires "
-                    "heating_anomalous_transport='tail_walk' (the ionizing "
-                    "channel belongs to the QL tail walkers; without them "
-                    "the setting would be a silent no-op). "
+                    "heating_anomalous_tail_ionization='on' requires walkers "
+                    "to give the channel to: "
+                    "heating_anomalous_transport='tail_walk' or "
+                    "heating_anomalous_disposal='landau_branched' (without "
+                    "them the setting would be a silent no-op). "
                     "heating_anomalous_transport accepts 'local' or "
-                    "'tail_walk'; heating_anomalous_tail_ionization accepts "
-                    f"'off' or 'on' (got {_hat!r} and {_tion!r})"
+                    "'tail_walk'; heating_anomalous_disposal accepts 'local' "
+                    "or 'landau_branched'; heating_anomalous_tail_ionization "
+                    f"accepts 'off' or 'on' (got {_hat!r}, {_disposal!r} and "
+                    f"{_tion!r})"
                 )
             _E_table_top = HE_EII_EPS_TOP * float(self._I_ion)
             _edge_excess = (_tail_eV - _E_table_top) / _E_table_top

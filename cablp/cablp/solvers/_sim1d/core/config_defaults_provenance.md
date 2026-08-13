@@ -740,6 +740,64 @@ surviving refusal, a tail energy past the tabulated He EII cross section
 off the table itself and is unreachable at the 190-310 V drop this device
 produces. Memo: `scripts/sheathwalk_report.txt`.
 
+**`heating_anomalous_disposal = "local"`** ships off (bit-exact, verified
+raw-uint64 on both kernel paths); the default needs no physical justification,
+but the branching its `"landau_branched"` arm computes does.
+
+**The branching is DERIVED — computed from boxed inputs, with NO new constant
+and nothing tunable in it.** Per cell
+`f_Landau = gamma_L / (gamma_L + nu_en/2)` splits each cell's extracted
+anomalous power between the nonlocal tail and local bulk heat. Both rates are
+already in the model:
+
+- `nu_en/2 = 0.5 nn K_m(Te)` is the collisional Langmuir AMPLITUDE damping the
+  `ql_relaxation` onset gate already weighs growth against (Ginzburg 1970), on
+  the boxed two-node He e-n momentum-transfer table
+  (`_cross.he_electron_momentum_transfer_rate_cm3_s`; its own provenance and
+  bracket are the entry for that table);
+- `gamma_L = sqrt(pi/8) w_pe (v_phi/v_te)^3 exp(-v_phi^2/2v_te^2 - 3/2)` is the
+  Maxwellian Landau damping rate at the beam-resonant phase velocity, Krall &
+  Trivelpiece §8 with the Bohm-Gross term, evaluated with the module's existing
+  `w_pe = 5.64e4 sqrt(n_e)` and `v_phi` the ray's own launch energy. The
+  `sqrt(pi/8)` prefactor is arithmetic inside the cited expression, not a
+  description-class constant.
+
+CROSS-CHECKED before use, and the anchors are smoke-pinned: the same expression
+reproduces the QL-onset memo's independent §4 anchors — the `e^-37.0` Landau
+exponent at Te 5 eV, the ~4e14 Landau-limited threshold at Te 25 eV, and
+`nu_en(25 eV) = 1.405e6` s^-1 at the stance neutral density — and the stance
+branching table `f_Landau = 0.8316 / 0.9398 / 0.9802 / 0.9936` at
+`n_e = 1e8 / 1e9 / 1e10 / 1e11`. Sensitivity to the `K_m` 25 eV bracket is
+<= 0.04 in `f_Landau`, i.e. immaterial. Memos:
+`QL_ONSET_MEMO_2026-08-12.md` (including its 2026-08-13 addendum, which records
+that the memo's §4 prose puts the 50% crossing higher than its own formula
+gives — the error is in the conservative direction) and the pd0 read
+`scripts/pd0_branching.txt`, which is the artifact these anchors are taken from.
+
+Honest bars, both DOCUMENTED rather than sized: (i) the asymptotic Landau
+expression is a large-argument expansion, quantitative for `v_phi/v_te`
+above roughly 2.4 and marginal below it; the formula is used AS-IS across the
+whole range rather than switched, and a cell in the marginal band is reported
+as indicative. (ii) `v_phi` uses the ray's LAUNCH energy — CSDA slowing along
+the column is not tracked into the resonance, the same convention the pd0 read
+disclosed.
+
+The birth energy of the Landau share introduces nothing either: it is the
+EXISTING `heating_anomalous_tail_energy_keying = "phi_c"` path, whose `f`
+bracket entry is above, and the branched arm requires that arm to be STATED
+(the registered central arm is `f = 1.0`, while the shipped default `None`
+would silently select 0.25). The cathode `reflect` convention, the free-escape
+collector and the tail end ledger are likewise the existing ones.
+
+REFUSED under `coverage_closure`, by design and not by omission: the two-stream
+march shares ONE withholding bank between the channel and reservoir arms, so
+the reservoir's extraction cannot be branched on the reservoir's own state; and
+the reservoir carries `n_e = ` the density floor (a numerical constant standing
+for "no plasma") against the mean-field `Te`, which returns `f_Landau` ~ 0.83
+at Te 25 eV and ~0.98 at Te 55 eV — a branching owned by the floor convention
+rather than by the plasma. The coverage arms are deferred until that stance is
+designed.
+
 #### QL relaxation closure (`beam_anomalous_model = "ql_relaxation"`)
 
 The middle leg of the anomalous closure bracket. One config key, three boxed
