@@ -1506,8 +1506,9 @@ def _csda_beam_deposition(
     books as never entering the plasma. The gap-transmission probe is
     unaffected (it measures gap survival, which feeds the circuit bypass).
 
-    ``beam_product_transport`` (WP-D), ``heating_anomalous_transport`` (WP-E)
-    and ``heating_anomalous_tail_ionization`` (K6) are threaded to the
+    ``beam_product_transport`` (WP-D), ``heating_anomalous_transport`` (WP-E),
+    ``heating_anomalous_tail_ionization`` (K6) and
+    ``heating_anomalous_disposal`` (pd1) are threaded to the
     DEPOSITION rays only, and only when they are
     not their default ``"local"`` / ``"off"``. The probe rays keep the
     historical argument
@@ -1593,6 +1594,17 @@ def _csda_beam_deposition(
     anomalous_transport = str(
         input_dict.get("heating_anomalous_transport", "local")
     )
+    # pd1 branched disposal. It walks the Landau share of the same bank the
+    # tail walk walks whole, so it engages the SAME tail machinery below and
+    # the block's condition is "is the tail walked at all", not "is transport
+    # tail_walk". With both selectors at their defaults nothing is added to
+    # ``transport_kwargs`` and the rays pass the identical dict object they
+    # always did, which is what keeps the off path bit-exact.
+    anomalous_disposal = str(
+        input_dict.get("heating_anomalous_disposal", "local")
+    )
+    if anomalous_disposal != "local":
+        transport_kwargs["anomalous_disposal"] = anomalous_disposal
     # K7: whether the tail birth energy is keyed to the live phi_c, and
     # whether the cathode face reflects. Both are per-RAY quantities (phi_c is
     # the ray's own accelerating drop and the reflecting face is its own
@@ -1602,10 +1614,11 @@ def _csda_beam_deposition(
     tail_keying = "fixed"
     tail_phi_fraction = 0.0
     tail_reflect = False
-    if anomalous_transport != "local":
-        transport_kwargs["anomalous_transport"] = anomalous_transport
-        # Read ONLY under tail_walk (the keys are inert otherwise, by design);
-        # the solver validated them at construction time.
+    if anomalous_transport != "local" or anomalous_disposal != "local":
+        if anomalous_transport != "local":
+            transport_kwargs["anomalous_transport"] = anomalous_transport
+        # Read ONLY when the tail is walked (the keys are inert otherwise, by
+        # design); the solver validated them at construction time.
         tail_keying = str(
             input_dict.get("heating_anomalous_tail_energy_keying", "phi_c")
         )

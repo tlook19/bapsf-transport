@@ -1662,9 +1662,47 @@ def cathode_defaults():
         {local, tail_walk} is a bracket, not a prediction, and a result must
         state which one it used. ENERGY-ONLY: ionization events, the particle
         rows and the circuit currents are identical in both modes.
+    heating_anomalous_disposal:
+        How each cell's extracted anomalous power is SPLIT between the local
+        bulk and the walked tail (inert under ``"beer_lambert"``, and requires
+        an active anomalous channel; selecting the non-default value without
+        either raises). ``"local"`` (default, bit-exact): no split — the
+        disposition is whatever ``heating_anomalous_transport`` says, which is
+        all-or-nothing. ``"landau_branched"``: the wave the beam drives loses
+        its energy through two channels at once, Landau damping on the resonant
+        electrons (which makes a nonlocal tail) and collisional damping of the
+        wave (which makes local bulk heat), and their ratio is a COMPUTED
+        property of each cell rather than a choice —
+        ``f_Landau = gamma_L / (gamma_L + nu_en/2)`` with ``nu_en = nn*K_m(Te)``
+        on the boxed He e-n momentum-transfer coefficient and ``gamma_L`` the
+        Maxwellian Landau rate at the beam-resonant phase velocity
+        (``funcs._beam_deposition.landau_branching_fraction``, which carries the
+        formula and its ``v_phi/v_te`` validity caveat). That share of each
+        cell's power is walked exactly as ``"tail_walk"`` walks all of it —
+        same birth energy, launch, Coulomb machinery, cathode and collector
+        conventions and tail end ledger — and ``1 - f_Landau`` is banked
+        locally exactly as ``"local"`` banks all of it. NO new physical
+        constant: the branching is computed from boxed inputs and the birth
+        energy is the existing ``phi_c`` keying.
+        The two ``heating_anomalous_transport`` values are the ``f_Landau ≡ 1``
+        and ``f_Landau ≡ 0`` corners of this one, so selecting
+        ``"landau_branched"`` together with ``"tail_walk"`` RAISES — both name a
+        disposition for the same bank. ``"landau_branched"`` requires
+        ``heating_anomalous_tail_energy_keying="phi_c"`` (the registered birth
+        energy is the live cathode drop, and the fixed rung is an assumed
+        constant this closure does not carry) with
+        ``heating_anomalous_tail_phi_c_fraction`` stated explicitly, and it
+        RAISES under ``coverage_closure``: the two-stream march shares one
+        withholding bank between the channel and reservoir arms and the
+        reservoir carries the density FLOOR, so a branching there would be an
+        artifact of the floor convention (see
+        ``funcs._beam_deposition.deposit_beam_two_stream``). ENERGY-ONLY,
+        exactly like ``heating_anomalous_transport``.
     heating_anomalous_tail_energy_eV:
         QL plateau energy ``E_tail`` [eV] the tail electrons are launched at.
-        **Read ONLY under ``heating_anomalous_transport="tail_walk"`` WITH
+        **Read ONLY when the QL tail is WALKED (``heating_anomalous_transport
+        ="tail_walk"``; ``heating_anomalous_disposal="landau_branched"`` walks
+        only the Landau share) WITH
         ``heating_anomalous_tail_energy_keying="fixed"``** -- inert otherwise,
         and supplying a value other than the shipped one under
         ``"phi_c"`` keying raises rather than being silently ignored. Must be
@@ -1676,8 +1714,10 @@ def cathode_defaults():
         must report a bracket rather than a single number. Arms and values:
         ``config_defaults_provenance.md``.
     heating_anomalous_tail_energy_keying:
-        How the tail birth energy ``E_tail`` is set. **Read ONLY under
-        ``heating_anomalous_transport="tail_walk"``** -- inert otherwise.
+        How the tail birth energy ``E_tail`` is set. **Read ONLY when the QL
+        tail is WALKED** (``heating_anomalous_transport="tail_walk"`` or
+        ``heating_anomalous_disposal="landau_branched"``) -- inert otherwise,
+        and the branched disposal accepts ``"phi_c"`` alone.
         ``"phi_c"`` (default): ``E_tail = f * e*phi_c(t)``, keyed to the LIVE
         cathode accelerating drop of the ray that drove the QL power, with
         ``f`` from ``heating_anomalous_tail_phi_c_fraction``. ``"fixed"``: the
@@ -1700,15 +1740,18 @@ def cathode_defaults():
         The fraction ``f`` in ``E_tail = f * e*phi_c(t)``. **Read ONLY under
         ``heating_anomalous_tail_energy_keying="phi_c"``**; must be ``None``
         under ``"fixed"``, where supplying one would silently do nothing.
-        ``None`` (default) selects the shipped arm ``f = 0.25``. The only
+        ``None`` (default) selects the shipped arm ``f = 0.25``, except under
+        ``heating_anomalous_disposal="landau_branched"``, which requires the
+        arm to be stated and raises on ``None``. The only
         accepted values are the DECLARED BRACKET ``{0.25, 0.5, 1.0}`` -- any
         other value raises, because ``f`` is a bracket the campaign reports
         across and never a fitted number. Values and class:
         ``config_defaults_provenance.md``.
     heating_anomalous_tail_cathode_boundary:
         What the CATHODE end does to a tail walker that reaches it. **Read
-        ONLY under ``heating_anomalous_transport="tail_walk"``** -- inert
-        otherwise. ``"reflect"`` (default): a walker arriving at the cathode
+        ONLY when the QL tail is WALKED** (``heating_anomalous_transport=
+        "tail_walk"`` or ``heating_anomalous_disposal="landau_branched"``)
+        -- inert otherwise. ``"reflect"`` (default): a walker arriving at the cathode
         face of the plasma-active window with energy below ``e*phi_c(t)`` is
         turned around at the same energy and keeps walking; only a walker at or
         above that drop escapes. ``"escape"``: the WP-E/K6 free-escape
@@ -1735,9 +1778,10 @@ def cathode_defaults():
         faces reflect, trapping the walkers, and that raises.
     heating_anomalous_tail_ionization:
         Whether the QL tail walkers may IONIZE and EXCITE the column gas they
-        pass through. **Read ONLY under
-        ``heating_anomalous_transport="tail_walk"``** -- inert otherwise, and
-        selecting ``"on"`` without it raises. ``"off"`` (default, bit-exact):
+        pass through. **Read ONLY when the QL tail is WALKED**
+        (``heating_anomalous_transport="tail_walk"`` or
+        ``heating_anomalous_disposal="landau_branched"``) -- inert otherwise,
+        and selecting ``"on"`` without either raises. ``"off"`` (default, bit-exact):
         the walk is energy-only, the walkers Coulomb-slow and nothing else, and
         every particle row is what it would be under ``"local"``. ``"on"``: each
         tail population is marched on the CSDA module's own integration, so it
@@ -1954,6 +1998,9 @@ def cathode_defaults():
         # QL heating locality: DEFAULT OFF (bit-exact). The tail energy is
         # inert under "local".
         "heating_anomalous_transport": "local",
+        # Branched disposal of the extracted QL power: DEFAULT OFF
+        # (bit-exact). Inert under "local"; see the docstring above.
+        "heating_anomalous_disposal": "local",
         "heating_anomalous_tail_energy_eV": 75.0,
         "heating_anomalous_tail_ionization": "off",
         # K7 sheath-aware tail closure. Both keys are inert unless the walk is

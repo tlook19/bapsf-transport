@@ -5192,6 +5192,404 @@ def main():
             "expected ValueError for a tail energy 1e-9 past the EII edge"
         )
 
+    # --- pd1: BRANCHED DISPOSAL of the extracted QL power. The all-or-nothing
+    # routing above is replaced by a COMPUTED per-cell split between the
+    # nonlocal tail (Landau damping on the resonant electrons) and local bulk
+    # heat (collisional damping of the wave). Unit level only -- what the
+    # branch does to the ignition timeline is a campaign run.
+    #
+    # (b) THE BRANCHING ANCHORS. The formula is the one the pd0 read
+    # cross-checked against the QL-onset memo, and these are that read's own
+    # printed numbers (scripts/pd0_branching.txt). They are asserted BEFORE the
+    # closure is exercised, so a drift in K_m, in the omega_pe coefficient or
+    # in the Bohm-Gross term fails here rather than downstream.
+    _pd1_branch = _beam_deposition_mod.landau_branching_fraction
+    _pd1_stance_nn = np.full(1, 2.0e13)
+    _pd1_stance_E = 177.6
+    # nu_en(25 eV) at the stance neutral density.
+    _pd1_nu_en = 2.0e13 * float(
+        _cross_mod.he_electron_momentum_transfer_rate_cm3_s(25.0)
+    )
+    assert abs(_pd1_nu_en - 1.405e6) / 1.405e6 < 1.0e-3, _pd1_nu_en
+    # The Landau exponent at Te 5 is e^-37.0 (the memo's own anchor): recover
+    # it from the shipped function by dividing out the prefactor, which pins
+    # the -3/2 Bohm-Gross term and the (v_phi/v_te)^2 = 2E/Te conversion
+    # together.
+    _pd1_f5 = float(
+        _pd1_branch(np.full(1, 1.0e8), np.full(1, 5.0), _pd1_stance_nn,
+                    _pd1_stance_E)[0]
+    )
+    _pd1_nu_half_5 = 0.5 * 2.0e13 * float(
+        _cross_mod.he_electron_momentum_transfer_rate_cm3_s(5.0)
+    )
+    _pd1_gL5 = _pd1_f5 * _pd1_nu_half_5 / (1.0 - _pd1_f5)
+    _pd1_r2_5 = 2.0 * _pd1_stance_E / 5.0
+    _pd1_expo = -math.log(
+        _pd1_gL5
+        / (
+            math.sqrt(math.pi / 8.0)
+            * _beam_deposition_mod._OMEGA_PE_COEFF
+            * math.sqrt(1.0e8)
+            * _pd1_r2_5 ** 1.5
+        )
+    )
+    assert abs(_pd1_expo - 37.02) < 1.0e-9, _pd1_expo
+    # The stance branching table, to the four decimals pd0 printed.
+    for _pd1_ne, _pd1_want in (
+        (1.0e8, 0.8316), (1.0e9, 0.9398), (1.0e10, 0.9802), (1.0e11, 0.9936),
+    ):
+        _pd1_got = float(
+            _pd1_branch(np.full(1, _pd1_ne), np.full(1, 25.0), _pd1_stance_nn,
+                        _pd1_stance_E)[0]
+        )
+        assert abs(_pd1_got - _pd1_want) < 5.0e-5, (_pd1_ne, _pd1_got)
+    # THE CORNERS ARE CLEAN. Floor-cold, floor-thin, a plasma-free AND
+    # neutral-free cell (the 0/0 the ratio would otherwise form) and an
+    # absurdly cold cell all return finite values in [0, 1], and none of them
+    # raises a numpy RuntimeWarning -- checked with warnings promoted to
+    # errors, because a silently-NaN branching would route power nowhere.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _pd1_corner = _pd1_branch(
+            np.array([1.0e8, 0.0, 1.0e12, 0.0, 1.0e10]),
+            np.array([0.1, 25.0, 1.0e-12, 0.0, 25.0]),
+            np.array([2.0e13, 2.0e13, 2.0e13, 0.0, 2.0e13]),
+            200.0,
+        )
+    assert np.all(np.isfinite(_pd1_corner)), _pd1_corner
+    assert np.all(_pd1_corner >= 0.0) and np.all(_pd1_corner <= 1.0), (
+        _pd1_corner
+    )
+    # The cold/thin/empty corners are the COLLISIONAL limit exactly, which is
+    # where the shipped "local" closure puts that power too.
+    assert np.array_equal(_pd1_corner[:4], np.zeros(4)), _pd1_corner
+    assert _pd1_corner[4] > 0.9, _pd1_corner
+
+    # (f) MISCONFIGURATION IS LOUD AT CONSTRUCTION -- every combination in
+    # which the branch could not act, could only be a silent no-op, or would
+    # silently pick an undeclared bracket arm.
+    _pd1_armed = dict(
+        heating_anomalous_disposal="landau_branched",
+        heating_anomalous_tail_phi_c_fraction=1.0,
+    )
+    for _pd1_bad in (
+        # unknown value
+        dict(k7_params, heating_anomalous_disposal="bogus"),
+        # nothing to deposit / nothing to carry
+        dict(k7_params, **_pd1_armed, beam_deposition_model="beer_lambert"),
+        dict(k7_params, **_pd1_armed, beam_anomalous_model="none"),
+        # DOUBLE SPECIFICATION: tail_walk is the f_Landau == 1 corner of the
+        # branch, so naming both states two dispositions for one bank.
+        dict(k7_params, **_pd1_armed,
+             heating_anomalous_transport="tail_walk"),
+        # the fixed rung is an assumed constant the branched closure does not
+        # carry; its birth energy is the live cathode drop
+        dict(k7_params, **_pd1_armed,
+             heating_anomalous_tail_energy_keying="fixed"),
+        # the f arm must be STATED: None would silently select 0.25 while the
+        # registered central arm is 1.0
+        dict(k7_params, heating_anomalous_disposal="landau_branched"),
+        # ...and it is still confined to the declared bracket
+        dict(k7_params, heating_anomalous_disposal="landau_branched",
+             heating_anomalous_tail_phi_c_fraction=0.75),
+    ):
+        try:
+            LAPDSim1D(_pd1_bad, dict(cathode_flags))
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "expected ValueError for heating_anomalous_disposal="
+                f"{_pd1_bad.get('heating_anomalous_disposal')!r} with "
+                f"transport={_pd1_bad.get('heating_anomalous_transport')!r}, "
+                f"keying={_pd1_bad.get('heating_anomalous_tail_energy_keying')!r}"
+                f", f={_pd1_bad.get('heating_anomalous_tail_phi_c_fraction')!r}"
+            )
+    # The coverage refusal, at BOTH levels: the two-stream march shares one
+    # withholding bank between the media and the reservoir carries the density
+    # FLOOR, so a branching there would be an artifact of the floor convention.
+    _pd1_cov_flags = dict(cathode_flags)
+    _pd1_cov_flags["coverage_closure"] = True
+    try:
+        LAPDSim1D(dict(k7_params, **_pd1_armed), _pd1_cov_flags)
+    except ValueError as _pd1_exc:
+        assert "coverage_closure" in str(_pd1_exc), str(_pd1_exc)
+    else:
+        raise AssertionError(
+            "expected ValueError for landau_branched under coverage_closure"
+        )
+    try:
+        _beam_deposition_mod.deposit_beam_two_stream(
+            csda_res.phi_c, _pskip_Gamma0,
+            f_cov=np.full(_pskip_geom.cells, 0.5),
+            nn_channel=csda_state.nn, ne_channel=csda_state.n,
+            nn_reservoir=csda_state.nn, ne_reservoir=csda_state.n,
+            Te=csda_derived.Te, dz_cm=_pskip_geom.length_cm,
+            anomalous_disposal="landau_branched", tail_energy_eV=75.0,
+            **_pskip_ray_kwargs,
+        )
+    except ValueError as _pd1_exc:
+        assert "two-stream" in str(_pd1_exc), str(_pd1_exc)
+    else:
+        raise AssertionError(
+            "expected ValueError for landau_branched at the two-stream march"
+        )
+    # A bad disposal value under "local" IS NOT the coverage refusal: the
+    # domain check comes first, so a typo reads as a typo.
+    try:
+        _beam_deposition_mod.deposit_beam_two_stream(
+            csda_res.phi_c, _pskip_Gamma0,
+            f_cov=np.full(_pskip_geom.cells, 0.5),
+            nn_channel=csda_state.nn, ne_channel=csda_state.n,
+            nn_reservoir=csda_state.nn, ne_reservoir=csda_state.n,
+            Te=csda_derived.Te, dz_cm=_pskip_geom.length_cm,
+            anomalous_disposal="bogus", **_pskip_ray_kwargs,
+        )
+    except ValueError as _pd1_exc:
+        assert "unknown anomalous_disposal" in str(_pd1_exc), str(_pd1_exc)
+    else:
+        raise AssertionError("expected ValueError for a bad disposal value")
+
+    # (a) FLAG-OFF BIT-EXACTNESS. Naming "local" explicitly reproduces the
+    # deposition the default stance already produced, byte for byte, on every
+    # array and every scalar -- the presence gating means the off path never
+    # even forms the keyword.
+    _pd1_off_sim = LAPDSim1D(
+        dict(csda_params, heating_anomalous_disposal="local"),
+        dict(cathode_flags),
+    )
+    _pd1_off_sim._circuit_I_loop = 3000.0
+    _pd1_off_dep = _pd1_off_sim.solve_cathode_boundary().beam_deposition[0]
+    for _pd1_arr in (
+        "plasma_heating_erg_s", "heating_anomalous_erg_s",
+        "heating_coulomb_erg_s", "heating_secondary_erg_s",
+        "heating_terminal_erg_s", "radiated_erg_s",
+        "ionization_cost_erg_s", "ionization_events", "excitation_events",
+        "E_entry_eV",
+    ):
+        assert np.array_equal(
+            getattr(_pd1_off_dep, _pd1_arr), getattr(csda_dep, _pd1_arr)
+        ), _pd1_arr
+    assert _pd1_off_dep.end_loss_tail_low_erg_s == 0.0
+    assert _pd1_off_dep.end_loss_tail_high_erg_s == 0.0
+    assert _pd1_off_dep.tail_power_erg_s == 0.0
+    # ...and at the MODULE, where the keyword IS formed and named explicitly.
+    _pd1_ray = dict(
+        E0_eV=csda_res.phi_c, Gamma0_per_s=_pskip_Gamma0,
+        dz_cm=_pskip_geom.length_cm, nn=csda_state.nn, ne=csda_state.n,
+        Te=csda_derived.Te, **_pskip_ray_kwargs,
+    )
+    _pd1_mod_local = _deposit_beam_ray(**_pd1_ray)
+    _pd1_mod_named = _deposit_beam_ray(**_pd1_ray, anomalous_disposal="local")
+    for _pd1_arr in (
+        "plasma_heating_erg_s", "heating_anomalous_erg_s",
+        "heating_coulomb_erg_s", "heating_secondary_erg_s",
+        "heating_terminal_erg_s", "radiated_erg_s",
+        "ionization_cost_erg_s", "ionization_events", "excitation_events",
+        "E_entry_eV",
+    ):
+        assert np.array_equal(
+            getattr(_pd1_mod_named, _pd1_arr),
+            getattr(_pd1_mod_local, _pd1_arr),
+        ), _pd1_arr
+
+    # (c) THE FORCED-LIMIT IDENTITIES, at the module over a synthetic column
+    # cold enough / hot enough to drive f_Landau to each corner. The scenario
+    # must actually extract QL power or both limits are vacuous.
+    _pd1_cells = 40
+    _pd1_col = dict(
+        dz_cm=np.full(_pd1_cells, 25.0),
+        nn=np.full(_pd1_cells, 2.0e13),
+        ne=np.full(_pd1_cells, 1.0e10),
+        launch=0, direction=1,
+        anomalous_model="quasilinear", beam_area_cm2=300.0,
+        I_ion_eV=float(I_ion),
+    )
+    _pd1_E0 = 177.6
+    _pd1_G0 = 1.0e19
+    # COLD (Te 0.5 eV): the Landau channel is dead by 140 decades, so the
+    # branch must behave as "local" does -- same anomalous delivery, nothing
+    # launched, nothing at the ends.
+    _pd1_cold_Te = np.full(_pd1_cells, 0.5)
+    assert float(_pd1_branch(
+        _pd1_col["ne"], _pd1_cold_Te, _pd1_col["nn"], _pd1_E0)[0]
+    ) < 1.0e-100
+    _pd1_cold_loc = _deposit_beam_ray(
+        _pd1_E0, _pd1_G0, Te=_pd1_cold_Te, **_pd1_col
+    )
+    _pd1_P_QL_cold = float(_pd1_cold_loc.heating_anomalous_erg_s.sum())
+    assert _pd1_P_QL_cold > 0.0, "cold-limit scenario extracts no QL power"
+    _pd1_cold_br = _deposit_beam_ray(
+        _pd1_E0, _pd1_G0, Te=_pd1_cold_Te, **_pd1_col,
+        anomalous_disposal="landau_branched", tail_energy_eV=_pd1_E0,
+    )
+    _pd1_cold_led = (
+        float(_pd1_cold_br.end_loss_tail_low_erg_s)
+        + float(_pd1_cold_br.end_loss_tail_high_erg_s)
+    )
+    assert _pd1_cold_led / _pd1_P_QL_cold < 1.0e-100, _pd1_cold_led
+    assert (
+        abs(float(_pd1_cold_br.heating_anomalous_erg_s.sum())
+            - _pd1_P_QL_cold) / _pd1_P_QL_cold < 1.0e-14
+    )
+    # Per-cell, not merely in total: the branch is a per-cell statement, so it
+    # must reproduce the birth PROFILE and not just its integral.
+    _pd1_live = _pd1_cold_loc.heating_anomalous_erg_s > 0.0
+    assert float(np.max(np.abs(
+        _pd1_cold_br.heating_anomalous_erg_s[_pd1_live]
+        / _pd1_cold_loc.heating_anomalous_erg_s[_pd1_live] - 1.0
+    ))) < 1.0e-12
+    # HOT (Te 60 eV): f_Landau > 0.99, so essentially all of the extracted
+    # power is launched as walkers rather than banked in its birth cell.
+    _pd1_hot_Te = np.full(_pd1_cells, 60.0)
+    _pd1_f_hot = float(_pd1_branch(
+        _pd1_col["ne"], _pd1_hot_Te, _pd1_col["nn"], _pd1_E0)[0]
+    )
+    assert _pd1_f_hot > 0.99, _pd1_f_hot
+    _pd1_hot_loc = _deposit_beam_ray(
+        _pd1_E0, _pd1_G0, Te=_pd1_hot_Te, **_pd1_col
+    )
+    _pd1_P_QL_hot = float(_pd1_hot_loc.heating_anomalous_erg_s.sum())
+    _pd1_hot_br = _deposit_beam_ray(
+        _pd1_E0, _pd1_G0, Te=_pd1_hot_Te, **_pd1_col,
+        anomalous_disposal="landau_branched", tail_energy_eV=_pd1_E0,
+    )
+    # The LAUNCHED tail power is the branching fraction of P_QL, to roundoff:
+    # the split is applied to a bank the two arms form bit-identically.
+    assert abs(
+        float(_pd1_hot_br.tail_power_erg_s) / _pd1_P_QL_hot - _pd1_f_hot
+    ) < 1.0e-12, (_pd1_hot_br.tail_power_erg_s, _pd1_P_QL_hot, _pd1_f_hot)
+    # ...and "tail_walk" is that same statement at f == 1, which is why the
+    # two selections are refused together.
+    _pd1_hot_tw = _deposit_beam_ray(
+        _pd1_E0, _pd1_G0, Te=_pd1_hot_Te, **_pd1_col,
+        anomalous_transport="tail_walk", tail_energy_eV=_pd1_E0,
+    )
+    assert abs(
+        float(_pd1_hot_tw.tail_power_erg_s) / _pd1_P_QL_hot - 1.0
+    ) < 1.0e-12
+    # The OTHER channels are untouched in both limits: only the anomalous
+    # bank's destination moved, and the closure stays ENERGY-ONLY.
+    for _pd1_arr in (
+        "heating_coulomb_erg_s", "heating_secondary_erg_s",
+        "heating_terminal_erg_s", "radiated_erg_s", "ionization_cost_erg_s",
+        "ionization_events", "excitation_events", "E_entry_eV",
+    ):
+        assert np.array_equal(
+            getattr(_pd1_hot_br, _pd1_arr), getattr(_pd1_hot_loc, _pd1_arr)
+        ), _pd1_arr
+        assert np.array_equal(
+            getattr(_pd1_cold_br, _pd1_arr), getattr(_pd1_cold_loc, _pd1_arr)
+        ), _pd1_arr
+
+    # (d) THE CONSERVATION IDENTITY, extended to the split and asserted at
+    # SOLVER conditions. Every extracted eV ends in exactly one of {local bulk
+    # heat, walked bulk heat, tail ionization investment, tail radiation, the
+    # tail end ledger} -- and because the locally-banked share is booked into
+    # heating_anomalous alongside the walked share, the shipped identity holds
+    # in its shipped FORM. Exact to roundoff rather than a budget statement:
+    # the ray integration is bit-identical in both arms, so the "local" arm's
+    # anomalous bank IS this arm's P_QL.
+    #
+    # THE SCENARIO IS CHOSEN TO LAND IN THE BRANCH'S INTERIOR, and that is a
+    # test-scenario choice rather than a physics one: the k7 stance above
+    # starts at Te0 = 0.21 eV, where the Landau channel is dead by ~90 decades
+    # and the branch is INDISTINGUISHABLE from "local" (correct physics, and
+    # asserted as such in the cold limit above, but vacuous as a test of a
+    # split). Raising the scenario's initial Te to 30 eV -- the regime the
+    # driven cells actually reach, per the pd0 branching read -- puts
+    # f_Landau strictly inside (0, 1) so both shares are live.
+    _pd1_params = dict(k7_params, Te0=30.0)
+    _pd1_base_sim = LAPDSim1D(_pd1_params, dict(cathode_flags))
+    _pd1_base_sim._circuit_I_loop = 3000.0
+    _pd1_base_solve = _pd1_base_sim.solve_cathode_boundary()
+    _pd1_base_dep = _pd1_base_solve.beam_deposition[0]
+    _pd1_P_QL = float(_pd1_base_dep.heating_anomalous_erg_s.sum())
+    assert _pd1_P_QL > 0.0, "pd1 solver scenario drives no QL power"
+    _pd1_on_sim = LAPDSim1D(
+        dict(_pd1_params, **_pd1_armed), dict(cathode_flags)
+    )
+    _pd1_on_sim._circuit_I_loop = 3000.0
+    _pd1_on_solve = _pd1_on_sim.solve_cathode_boundary()
+    _pd1_on_dep = _pd1_on_solve.beam_deposition[0]
+    _pd1_ledger = (
+        float(_pd1_on_dep.end_loss_tail_low_erg_s)
+        + float(_pd1_on_dep.end_loss_tail_high_erg_s)
+    )
+    _pd1_delivered = (
+        float(_pd1_on_dep.heating_anomalous_erg_s.sum())
+        + float(_pd1_on_dep.ionization_cost_tail_erg_s.sum())
+        + float(_pd1_on_dep.radiated_tail_erg_s.sum())
+        + _pd1_ledger
+    )
+    assert abs(_pd1_delivered - _pd1_P_QL) / _pd1_P_QL < 1.0e-12, (
+        _pd1_P_QL, _pd1_delivered
+    )
+    # ANTI-VACUITY: the branch really SPLIT something. Both shares are a
+    # substantial fraction of P_QL at these conditions, so neither corner is
+    # being tested by accident -- which is the whole content of "branched" as
+    # against the two all-or-nothing values.
+    _pd1_launched = float(_pd1_on_dep.tail_power_erg_s)
+    assert 0.05 < _pd1_launched / _pd1_P_QL < 0.95, (
+        _pd1_launched, _pd1_P_QL
+    )
+    assert _pd1_ledger > 0.0
+    # ...and it is neither of the two corners it interpolates: the branched
+    # arm's anomalous delivery differs from BOTH the local arm's and the
+    # tail-walk arm's by more than roundoff.
+    _pd1_tw_sim = LAPDSim1D(
+        dict(_pd1_params, heating_anomalous_transport="tail_walk",
+             heating_anomalous_tail_phi_c_fraction=1.0),
+        dict(cathode_flags),
+    )
+    _pd1_tw_sim._circuit_I_loop = 3000.0
+    _pd1_tw_dep = _pd1_tw_sim.solve_cathode_boundary().beam_deposition[0]
+    _pd1_tw_ledger = (
+        float(_pd1_tw_dep.end_loss_tail_low_erg_s)
+        + float(_pd1_tw_dep.end_loss_tail_high_erg_s)
+    )
+    assert _pd1_ledger < _pd1_tw_ledger, (_pd1_ledger, _pd1_tw_ledger)
+    assert (
+        _pd1_on_dep.plasma_heating_erg_s.sum()
+        < _pd1_base_dep.plasma_heating_erg_s.sum()
+    )
+    assert (
+        _pd1_on_dep.plasma_heating_erg_s.sum()
+        > _pd1_tw_dep.plasma_heating_erg_s.sum()
+    )
+    # The whole per-ray budget still closes with the tail ledger in it.
+    _pd1_total = (
+        _pd1_on_dep.plasma_heating_erg_s.sum()
+        + _pd1_on_dep.radiated_erg_s.sum()
+        + _pd1_on_dep.ionization_cost_erg_s.sum()
+        + float(_pd1_on_dep.anode_intercepted_erg_s)
+        + _pd1_on_dep.transmitted_flux
+        * _pd1_on_dep.transmitted_energy_eV
+        * ev_to_erg
+        + _pd1_ledger
+    )
+    _pd1_budget = (
+        float(_pd1_on_solve.beam_result.result.I_eth_star)
+        * float(_pd1_on_solve.beam_result.result.phi_c)
+        * 1.0e7
+    )
+    assert abs(_pd1_total - _pd1_budget) / _pd1_budget < 1.0e-9, (
+        _pd1_total, _pd1_budget
+    )
+    # ENERGY-ONLY, exactly like the walk it rides on: the particle rows the
+    # fluid and the circuit read are untouched, and the WP-D ledger stays
+    # identically zero.
+    assert np.array_equal(
+        _pd1_on_dep.ionization_events, _pd1_base_dep.ionization_events
+    )
+    assert _pd1_on_dep.end_loss_low_erg_s == 0.0
+    assert _pd1_on_dep.end_loss_high_erg_s == 0.0
+    print(
+        "pd1 branched disposal: ok (launched tail share "
+        f"{_pd1_launched / _pd1_P_QL:.4f} of P_QL, identity closes to "
+        f"{abs(_pd1_delivered - _pd1_P_QL) / _pd1_P_QL:.1e})"
+    )
+
     # --- Beam-deposition smoothing CONSERVES the deposit over the live plasma.
     # The Gaussian redistribution kernel must place ZERO weight on the typed
     # plasma-dead cells (plenum/obstruction) behind the cathode face, because
@@ -13635,6 +14033,30 @@ params.update({
 if scenario == "meanfield":
     params["nx"] = 24
     t_end = 2.0e-6
+elif scenario == "landau":
+    # pd1: the branched disposal ARMED. The split is applied post-march to the
+    # withholding bank the compiled CSDA march itself fills, so this is the
+    # scenario that answers "does the branch survive the kernel boundary".
+    # Te0 is raised into the regime where f_Landau is strictly interior --
+    # at the shipped 0.21 eV the branch is numerically the local closure and
+    # the comparison would be blind to it.
+    params.update({
+        "nx": 12,
+        "beam_deposition_model": "csda",
+        "beam_anomalous_model": "quasilinear",
+        "cathode_warming_model": "none",
+        "cathode_Ts_base_K": None,
+        "cathode_surface_model": "none",
+        "cathode_phiwf_clean_eV": None,
+        "cathode_cleaning_E_th_eV": None,
+        "cathode_sample_smoothing": None,
+        "cathode_phi_c_cap_V": 300.0,
+        "Te0": 30.0,
+        "heating_anomalous_disposal": "landau_branched",
+        "heating_anomalous_tail_phi_c_fraction": 1.0,
+    })
+    flags["neutral_equilibration"] = False
+    t_end = 1.0e-6
 else:
     params.update({
         "nx": 12,
@@ -13683,17 +14105,24 @@ print(json.dumps({
         None if "coverage_fraction" not in diag
         else float(diag["coverage_fraction"][-1])
     ),
+    # pd1 anti-vacuity: the tail end ledger is identically zero unless a
+    # disposal actually withheld and walked power, so a nonzero maximum is
+    # proof the branched closure was live on the path being compared.
+    "tail_ledger_W": float(
+        np.max(diag["source_beam_end_loss_tail_low_W"])
+        + np.max(diag["source_beam_end_loss_tail_high_W"])
+    ),
     "I_tot": float(diag["source_I_tot"][-1]),
     "phi_c": float(diag["source_phi_c"][-1]),
     "y": np.ascontiguousarray(result.y[-1], dtype=float).tobytes().hex(),
 }))
 '''
-        _ck_expected_steps = {"meanfield": 20, "coverage": 10}
+        _ck_expected_steps = {"meanfield": 20, "coverage": 10, "landau": 10}
         _ck_results = {}
         with tempfile.TemporaryDirectory() as _ck_tmpdir:
             _ck_script = Path(_ck_tmpdir) / "compiled_equivalence_child.py"
             _ck_script.write_text(_ck_child_source)
-            for _ck_scenario in ("meanfield", "coverage"):
+            for _ck_scenario in ("meanfield", "coverage", "landau"):
                 for _ck_tag, _ck_optin in (("pure", None), ("compiled", "1")):
                     # Inherit the environment (PYTHONPATH decides WHICH
                     # checkout the child imports) and override only the opt-in.
@@ -13718,7 +14147,7 @@ print(json.dumps({
                     _ck_results[_ck_scenario, _ck_tag] = json.loads(
                         _ck_proc.stdout.strip().splitlines()[-1]
                     )
-        for _ck_scenario in ("meanfield", "coverage"):
+        for _ck_scenario in ("meanfield", "coverage", "landau"):
             _ck_pure = _ck_results[_ck_scenario, "pure"]
             _ck_compiled = _ck_results[_ck_scenario, "compiled"]
             # Each child really took the path it was asked for -- an opt-in
@@ -13758,6 +14187,13 @@ print(json.dumps({
                     assert _ck_res["nested_marches"] > 0, (
                         _ck_scenario, _ck_tag, _ck_res["nested_marches"]
                     )
+                if _ck_scenario == "landau":
+                    # The branched disposal really withheld and walked power
+                    # on BOTH paths; without this the bit-identity below
+                    # could pass on a run where the branch never fired.
+                    assert _ck_res["tail_ledger_W"] > 0.0, (
+                        _ck_scenario, _ck_tag, _ck_res["tail_ledger_W"]
+                    )
             # Bit-identical, not merely close: the compiled path is a faithful
             # transcription, so the raw state bytes must match exactly -- the
             # same standard the golden holds on the compiled path.
@@ -13775,6 +14211,10 @@ print(json.dumps({
                 _ck_compiled["coverage_fraction"]
                 == _ck_pure["coverage_fraction"]
             ), (_ck_scenario, _ck_compiled["coverage_fraction"])
+            assert (
+                _ck_compiled["tail_ledger_W"] == _ck_pure["tail_ledger_W"]
+            ), (_ck_scenario, _ck_compiled["tail_ledger_W"],
+                _ck_pure["tail_ledger_W"])
             print(
                 f"compiled-kernel equivalence [{_ck_scenario}]: ok "
                 f"({_ck_compiled['provenance']}, {_ck_pure['steps']} steps, "
