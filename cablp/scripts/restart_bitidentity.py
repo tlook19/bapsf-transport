@@ -118,6 +118,26 @@ def scenario_config(name):
         # Beam-live, and f_cov still climbing at the handoff (it saturates at
         # 1.0 by ~3e-4 s), so both coverage members are moving when exported.
         return params, flags, 1.5e-4, 2.5e-4
+    if name == "emitting_area":
+        # ea1: the cathode lit-area fraction is a carried member of the
+        # cathode group. It is one scalar, but it multiplies every annulus's
+        # emission, so dropping it would relocate the discharge current
+        # rather than perturb it.
+        params.update({
+            "nx": 12,
+            "dt_save": 2.0e-7,
+            "cathode_solver_model": "current_driven",
+            "cathode_emission_profile": "gaussian",
+            "beam_deposition_model": "csda",
+            "beam_anomalous_model": "quasilinear",
+        })
+        flags["cathode_coupling"] = True
+        flags["cathode_circuit_voltage_bound"] = True
+        flags["cathode_emitting_area"] = True
+        # The clock is still climbing at the handoff -- f_em saturates on the
+        # 1/r ~ 0.7 ms scale, far outside this window -- so the exported
+        # fraction is a moving member, not a frozen seed.
+        return params, flags, 1.0e-6, 2.0e-6
     raise SystemExit(f"unknown scenario {name!r}")
 
 
@@ -187,6 +207,7 @@ NEGATIVE_CONTROLS = {
     "cathode._cathode_x0": ("cathode", "_cathode_x0"),
     "circuit._circuit_I_loop": ("circuit", "_circuit_I_loop"),
     "circuit.V_dis_prev_save_integral": ("circuit", "V_dis_prev_save_integral"),
+    "cathode._cathode_f_em": ("cathode", "_cathode_f_em"),
     "coverage.f": ("coverage", "f"),
     "coverage.deficit": ("coverage", "deficit"),
     "run_loop.previous_accepted_dt": ("run_loop", "previous_accepted_dt"),
@@ -249,6 +270,11 @@ def engagement_census(result, log):
     if "coverage_fraction" in diagnostics:
         f_cov = np.asarray(diagnostics["coverage_fraction"], dtype=float)
         notes.append(f"coverage f moved {f_cov.min():.6f} -> {f_cov.max():.6f}")
+    if "cathode_emitting_area_fraction" in diagnostics:
+        f_em = np.asarray(
+            diagnostics["cathode_emitting_area_fraction"], dtype=float
+        )
+        notes.append(f"f_em moved {f_em.min():.8f} -> {f_em.max():.8f}")
     for note in notes:
         log(f"  engaged: {note}")
     return census

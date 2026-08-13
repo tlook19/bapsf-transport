@@ -2331,6 +2331,14 @@ def coverage_closure_defaults():
         state (deposition depends on the coverage it drives), so the solver
         CO-INTEGRATES it on the step's stage structure rather than evaluating
         a closed form.
+
+        SHARED CLOCK: this key is ALSO the growth rate of the cathode
+        emitting-area fraction under the ``cathode_emitting_area`` flag (see
+        ``emitting_area_defaults``), which reads it rather than carrying a
+        rate of its own. The two closures describe one percolation clock seen
+        from two surfaces, so the constant is fitted once and has one owner;
+        the key is therefore live -- and non-default values are accepted --
+        whenever EITHER flag is armed.
     coverage_backfill_time_s:
         Relaxation time ``tau_backfill`` [s] over which the uncovered
         reservoir refills the covered column's neutral density toward the
@@ -2362,6 +2370,43 @@ def coverage_closure_defaults():
         "coverage_backfill_time_s": 3.0e-5,
         "coverage_initial_fraction": None,
         "coverage_initial_profile": None,
+    }
+
+
+def emitting_area_defaults():
+    """Return cathode emitting-area percolation defaults (ea1).
+
+    Every key here is read ONLY under the ``cathode_emitting_area`` flag and is
+    inert otherwise. The closure carries ONE scalar ``f_em(t) in (0, 1]``: the
+    fraction of the cathode's emitting face that is actually lit. The annular
+    emission tuples are scaled by it at the single device-config seam --
+    ``area_k -> f_em*area_k`` (which throttles each annulus's Richardson
+    emission) and ``frac_k -> f_em*frac_k`` (which throttles the share of the
+    Bohm ion current attributed to the lit patches, and hence each patch's
+    space-charge release limit). Electron repulsion, the full-disc ion sink,
+    the anode sample and the warming ion power stay FULL-DISC.
+
+    cathode_emitting_area_initial_fraction:
+        Initial lit fraction ``f_em0`` at the run's time origin. Must be finite
+        and in ``(0, 1]``; with the flag off it must sit at its shipped value,
+        so a run that sets a seed and forgets the flag raises rather than
+        running mean-field. This is an initial condition AND a physical
+        estimate of the machine's window-start emitting fraction: its shipped
+        value carries a bracket, recorded with its class in
+        ``config_defaults_provenance.md``.
+
+    The growth law is the logistic ``df_em/dt = r*f_em*(1 - f_em)``, advanced
+    on ACCEPTED steps only in the exactly-integrated form, so ``f_em`` is
+    monotone non-decreasing for ``r >= 0``, never leaves ``(0, 1]``, and never
+    falls below its seed. The rate ``r`` is NOT a key of this group: it is
+    ``coverage_growth_rate_per_s``, the SAME disclosed percolation constant the
+    column coverage closure uses, read here so the two surfaces share one clock
+    with one owner and one fit.
+
+    Values and their provenance: ``config_defaults_provenance.md``.
+    """
+    return {
+        "cathode_emitting_area_initial_fraction": 0.0075,
     }
 
 
@@ -2688,6 +2733,7 @@ _PARAMETER_DEFAULT_GROUPS = (
     physics_fit_defaults,
     timestep_defaults,
     coverage_closure_defaults,
+    emitting_area_defaults,
     restart_defaults,
     neutral_probe_source_defaults,
     regime_tracer_defaults,
@@ -2952,6 +2998,25 @@ input_flags_template_1d = {
     # neutral_model="moment", no beam clumping, and the pure-Python kernels;
     # each is a construction-time ValueError.
     "coverage_closure": False,
+    # Cathode emitting-area percolation (ea1). Thermionic release in the
+    # machine's current foot is patchy: only lit patches of the emitting face
+    # carry it, and the lit area percolates outward. When ON, one scalar
+    # f_em(t) in (0, 1] throttles the emission at the annuli seam -- area_k ->
+    # f_em*area_k and the ion attribution frac_k -> f_em*frac_k, unrenormalized
+    # -- so each patch keeps its clamp ratio and its barrier and the whole
+    # space-charge release curve rescales as f_em * (the full-disc curve),
+    # leaving phi_c and the beam launch energy invariant at a fixed sheath
+    # state. Full-disc quantities (electron repulsion, the ion sink, the anode
+    # sample, the warming ion power) are NOT scaled. f_em grows logistically on
+    # accepted steps at coverage_growth_rate_per_s -- the SHARED percolation
+    # clock, not a second constant. Requires cathode_coupling,
+    # cathode_emission_profile="gaussian" (under "uniform" A_c is dual-use for
+    # emission AND ion collection, so the throttle is not expressible) and a
+    # seed in (0, 1]; each is a construction-time ValueError, as is setting the
+    # seed key with this flag off. Default OFF and bit-exact off
+    # (presence-gated: the off path passes no override, scales no tuple and
+    # leaves every device config identical).
+    "cathode_emitting_area": False,
     # Ad-hoc probe neutral source S_probe(z,t) = A p(z) w(t), a volumetric
     # particle source on the neutral density equation. An INFERENCE
     # INSTRUMENT: an arm with this on measures the plasma's response to a

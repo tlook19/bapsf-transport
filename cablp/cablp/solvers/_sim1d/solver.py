@@ -10,6 +10,7 @@ import numpy as np
 
 from .core.config import (
     coverage_closure_defaults,
+    emitting_area_defaults,
     neutral_probe_source_defaults,
     default_config,
     load_config,
@@ -1640,6 +1641,8 @@ class LAPDSim1D:
             )
         # Clumpy-plasma coverage closure v1 (default off, bit-exact off).
         self._validate_coverage_config()
+        # Cathode emitting-area percolation (default off, bit-exact off).
+        self._validate_emitting_area_config()
         # Ad-hoc probe neutral source (default off, bit-exact off).
         self._validate_neutral_probe_config()
         self._cathode_solve = None
@@ -1689,14 +1692,21 @@ class LAPDSim1D:
                     return value is None and default is None
                 return bool(np.array_equal(value, default))
 
+            # coverage_growth_rate_per_s is the SHARED percolation clock: the
+            # cathode emitting-area closure reads the same key rather than
+            # minting a second rate, so it is live -- and a non-default value
+            # legitimate -- whenever that flag is armed. The other three keys
+            # are the column closure's alone and stay inert.
+            inert = (
+                ("coverage_backfill_time_s", tau),
+                ("coverage_initial_fraction", f0),
+                ("coverage_initial_profile", profile),
+            )
+            if not bool(self._flags.get("cathode_emitting_area", False)):
+                inert = (("coverage_growth_rate_per_s", r),) + inert
             configured = [
                 name
-                for name, value in (
-                    ("coverage_growth_rate_per_s", r),
-                    ("coverage_backfill_time_s", tau),
-                    ("coverage_initial_fraction", f0),
-                    ("coverage_initial_profile", profile),
-                )
+                for name, value in inert
                 if not _is_default(value, defaults[name])
             ]
             if configured:
@@ -1839,6 +1849,103 @@ class LAPDSim1D:
         self._coverage_reservoir_debit = None
         self._coverage_reservoir_burn_accum = None
         self._coverage = True
+
+    def _validate_emitting_area_config(self):
+        """Validate and arm the cathode emitting-area closure (ea1).
+
+        Every failure here is a construction-time ``ValueError``: a throttle
+        that cannot be applied, or one that would be silently inert, must never
+        reach the first cathode solve. With the flag off the seed key must sit
+        at its shipped value, so a run that sets a seed and forgets the flag is
+        loud rather than silently fully lit.
+
+        On success ``self._cathode_f_em`` is the lit-area fraction -- the
+        closure's whole state -- or ``None`` when the flag is off, which is the
+        presence gate every consumer reads.
+        """
+        enabled = bool(self._flags.get("cathode_emitting_area", False))
+        default_f0 = emitting_area_defaults()[
+            "cathode_emitting_area_initial_fraction"
+        ]
+        f0 = self._input_dict.get(
+            "cathode_emitting_area_initial_fraction", default_f0
+        )
+        if not enabled:
+            if f0 != default_f0:
+                raise ValueError(
+                    "cathode_emitting_area_initial_fraction was configured "
+                    f"({f0!r}) without the cathode_emitting_area flag, where "
+                    "it is inert; set the flag or drop the parameter"
+                )
+            self._cathode_f_em = None
+            return
+        if f0 is None or not (
+            math.isfinite(float(f0)) and 0.0 < float(f0) <= 1.0
+        ):
+            raise ValueError(
+                "cathode_emitting_area_initial_fraction (the lit fraction of "
+                "the emitting face at the time origin) must be finite and in "
+                f"(0, 1] (got {f0!r})"
+            )
+        if not bool(self._flags.get("cathode_coupling", False)):
+            raise ValueError(
+                "cathode_emitting_area requires cathode_coupling: the closure "
+                "throttles the thermionic emission of the cathode solve, and "
+                "with the coupling off there is no such solve, so the flag "
+                "would be a silent no-op"
+            )
+        profile = str(
+            self._input_dict.get("cathode_emission_profile", "uniform")
+        )
+        if profile != "gaussian":
+            raise ValueError(
+                "cathode_emitting_area requires "
+                "cathode_emission_profile='gaussian' (got "
+                f"{profile!r}): under 'uniform' the disc area A_c sets the "
+                "Richardson emission AND collects the ion current, so a lit "
+                "fraction applied to it would throttle the ion sink along "
+                "with the emission -- the throttle is not expressible there"
+            )
+        # The growth rate is the SHARED percolation clock, read from the
+        # coverage closure's key. It is validated here too because this flag
+        # can be armed with that closure off, in which case nothing else
+        # checks it.
+        r = self._input_dict.get("coverage_growth_rate_per_s", 0.0)
+        if not (math.isfinite(float(r)) and float(r) >= 0.0):
+            raise ValueError(
+                "coverage_growth_rate_per_s (the shared percolation clock of "
+                "df_em/dt = r*f_em*(1-f_em)) must be finite and >= 0 "
+                f"(got {r!r})"
+            )
+        self._cathode_f_em = float(f0)
+
+    def _advance_emitting_area_fraction(self, dt):
+        """Advance the lit-area fraction ``f_em`` over one accepted step (ea1).
+
+        The law is the logistic ``df_em/dt = r*f_em*(1 - f_em)`` with ``r`` the
+        shared percolation clock. Held constant over the step it is exactly
+        integrable,
+
+            f' = 1 / (1 + (1/f - 1) * exp(-r * dt)),
+
+        which is unconditionally positive at any dt, cannot leave ``(0, 1]``,
+        is monotone non-decreasing for ``r >= 0`` -- so ``f_em`` never falls
+        below its seed -- and reduces to ``f`` identically wherever ``r`` is
+        zero and to exactly ``1.0`` wherever ``f`` is already 1 (the
+        ``1/f - 1`` factor is then exactly 0.0).
+
+        Called only from the accept path, so a rejected attempt leaves the
+        fraction untouched and a re-tried step re-runs against the same value.
+        """
+        r = float(self._input_dict.get("coverage_growth_rate_per_s", 0.0))
+        dt = float(dt)
+        if r == 0.0 or dt <= 0.0:
+            return
+        f = self._cathode_f_em
+        growth = math.exp(-r * dt)
+        self._cathode_f_em = min(
+            1.0 / (1.0 + (1.0 / f - 1.0) * growth), 1.0
+        )
 
     def _validate_neutral_probe_config(self):
         """Validate and arm the ad-hoc probe neutral source (v1).
@@ -5053,6 +5160,7 @@ class LAPDSim1D:
                 beam_cross_prev=self._cathode_beam_cross,
                 T_s_override_K=self._cathode_Ts_K,
                 phi_wf_override_eV=self._cathode_phi_wf_eff(),
+                f_em_override=self._cathode_f_em,
             )(self._circuit_I_loop)
         # Cathode warming, accepted steps only (rejected attempts never move
         # the surface temperature).
@@ -5193,6 +5301,14 @@ class LAPDSim1D:
             self._cathode_theta = (
                 self._cathode_theta + float(attempt.dt) * k_ads
             ) / (1.0 + float(attempt.dt) * (k_ads + loss))
+        # Emitting-area percolation, accepted steps only, and at the SAME seam
+        # as the other two surface states above: the honest accepted-state
+        # re-solve read the pre-update surface (pre-update T_s, phi_wf_eff and
+        # f_em together), and the circuit advance below reads the post-update
+        # one. The clock is autonomous -- it takes no feedback from the state --
+        # so unlike the coverage field it needs no stage accumulator.
+        if self._cathode_f_em is not None:
+            self._advance_emitting_area_fraction(attempt.dt)
         # Current-driven circuit: advance the loop current by one TR-BDF2
         # step against V_dis(I) evaluated at the accepted end-of-step state
         # (and post-warming T_s). Accepted steps only, exactly like the
@@ -5234,6 +5350,7 @@ class LAPDSim1D:
                 beam_cross_prev=self._cathode_beam_cross,
                 T_s_override_K=self._cathode_Ts_K,
                 phi_wf_override_eV=self._cathode_phi_wf_eff(),
+                f_em_override=self._cathode_f_em,
                 circuit_V_src_V=V_src,
             )
             I_new, V_cap_new, V_dis_step = advance_circuit_current_driven(
@@ -5281,6 +5398,7 @@ class LAPDSim1D:
         "_circuit_V_cap",
         "_cathode_Ts_K",
         "_cathode_theta",
+        "_cathode_f_em",
         "_cathode_solve",
         # Vessel node: the potential is a float, and the ledger/current
         # records are copied below because they are mutable containers.
@@ -5380,6 +5498,15 @@ class LAPDSim1D:
             for name in self._RESTART_CATHODE_ATTRS
         }
         cathode["energy_ledger_J"] = None
+        # Emitting-area percolation, presence-gated exactly like the vessel
+        # node and the coverage section: the lit fraction is written only when
+        # the closure is armed, so a payload from a run without it is
+        # structurally what it always was and older payloads stay readable.
+        # ``cathode_emitting_area`` is a structural flag key, so a resume that
+        # changes the arming refuses rather than restoring a fraction nothing
+        # reads or leaving an armed closure at its seed.
+        if self._cathode_f_em is not None:
+            cathode["_cathode_f_em"] = float(self._cathode_f_em)
         circuit = {
             name: getattr(self, name) for name in self._RESTART_CIRCUIT_ATTRS
         }
@@ -5532,6 +5659,8 @@ class LAPDSim1D:
         cathode = payload["cathode"]
         for name in self._RESTART_CATHODE_ATTRS:
             setattr(self, name, _copy_cache_value(cathode[name]))
+        if self._cathode_f_em is not None:
+            self._cathode_f_em = float(cathode["_cathode_f_em"])
         circuit = payload["circuit"]
         for name in self._RESTART_CIRCUIT_ATTRS:
             setattr(self, name, circuit[name])
@@ -7450,6 +7579,7 @@ class LAPDSim1D:
             floating=floating,
             T_s_override_K=self._cathode_Ts_K,
             phi_wf_override_eV=self._cathode_phi_wf_eff(),
+            f_em_override=self._cathode_f_em,
             circuit_I_loop_A=self._circuit_I_loop,
             circuit_V_src_V=self._circuit_source_voltage_V(cathode_phase),
             coverage=self._coverage_view(state, time),
@@ -7848,6 +7978,7 @@ class LAPDSim1D:
             beam_cross_prev=self._cathode_beam_cross,
             T_s_override_K=self._cathode_Ts_K,
             phi_wf_override_eV=self._cathode_phi_wf_eff(),
+            f_em_override=self._cathode_f_em,
             circuit_V_src_V=self._circuit_source_voltage_V(step_phase),
         )
         return {
@@ -9678,6 +9809,15 @@ class LAPDSim1D:
             "beam_tail_above_bar_power_W": 0.0,
             "beam_tail_sub_threshold_fraction": np.nan,
         }
+        if self._cathode_f_em is not None:
+            # Emitting-area percolation: PRESENCE-GATED, so an unarmed run's
+            # saved diagnostic structure is byte-identical to before the
+            # closure existed. Saved because the closure's own state is what
+            # says whether an arm's f_em actually advanced -- a frozen
+            # fraction makes every number the arm produces a mean-field
+            # number under another name, and that has to be checkable from a
+            # saved trajectory rather than only from a live solver.
+            diag["cathode_emitting_area_fraction"] = float(self._cathode_f_em)
         if self._coverage is not None:
             # Clumpy-plasma coverage closure: PRESENCE-GATED so the saved
             # diagnostic structure of every mean-field run -- the golden

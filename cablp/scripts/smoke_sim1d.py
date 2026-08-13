@@ -14033,6 +14033,23 @@ params.update({
 if scenario == "meanfield":
     params["nx"] = 24
     t_end = 2.0e-6
+elif scenario == "emitting_area":
+    # ea1: the lit-area throttle ARMED. The annular Schottky branch IS a
+    # compiled kernel and it receives the scaled emission tuples and the
+    # scaled ion attribution as plain arguments, so this is what says the
+    # tuple scaling is path-invariant rather than merely correct in Python.
+    params.update({
+        "nx": 12,
+        "cathode_solver_model": "current_driven",
+        "cathode_emission_profile": "gaussian",
+        "beam_deposition_model": "csda",
+        "beam_anomalous_model": "quasilinear",
+    })
+    flags["neutral_equilibration"] = False
+    flags["cathode_coupling"] = True
+    flags["cathode_circuit_voltage_bound"] = True
+    flags["cathode_emitting_area"] = True
+    t_end = 1.0e-6
 elif scenario == "landau":
     # pd1: the branched disposal ARMED. The split is applied post-march to the
     # withholding bank the compiled CSDA march itself fills, so this is the
@@ -14105,6 +14122,14 @@ print(json.dumps({
         None if "coverage_fraction" not in diag
         else float(diag["coverage_fraction"][-1])
     ),
+    "f_em": (
+        None if "cathode_emitting_area_fraction" not in diag
+        else float(diag["cathode_emitting_area_fraction"][-1])
+    ),
+    "f_em0": (
+        None if "cathode_emitting_area_fraction" not in diag
+        else float(diag["cathode_emitting_area_fraction"][0])
+    ),
     # pd1 anti-vacuity: the tail end ledger is identically zero unless a
     # disposal actually withheld and walked power, so a nonzero maximum is
     # proof the branched closure was live on the path being compared.
@@ -14117,12 +14142,14 @@ print(json.dumps({
     "y": np.ascontiguousarray(result.y[-1], dtype=float).tobytes().hex(),
 }))
 '''
-        _ck_expected_steps = {"meanfield": 20, "coverage": 10, "landau": 10}
+        _ck_expected_steps = {
+            "meanfield": 20, "coverage": 10, "landau": 10, "emitting_area": 10,
+        }
         _ck_results = {}
         with tempfile.TemporaryDirectory() as _ck_tmpdir:
             _ck_script = Path(_ck_tmpdir) / "compiled_equivalence_child.py"
             _ck_script.write_text(_ck_child_source)
-            for _ck_scenario in ("meanfield", "coverage", "landau"):
+            for _ck_scenario in ("meanfield", "coverage", "landau", "emitting_area"):
                 for _ck_tag, _ck_optin in (("pure", None), ("compiled", "1")):
                     # Inherit the environment (PYTHONPATH decides WHICH
                     # checkout the child imports) and override only the opt-in.
@@ -14147,7 +14174,7 @@ print(json.dumps({
                     _ck_results[_ck_scenario, _ck_tag] = json.loads(
                         _ck_proc.stdout.strip().splitlines()[-1]
                     )
-        for _ck_scenario in ("meanfield", "coverage", "landau"):
+        for _ck_scenario in ("meanfield", "coverage", "landau", "emitting_area"):
             _ck_pure = _ck_results[_ck_scenario, "pure"]
             _ck_compiled = _ck_results[_ck_scenario, "compiled"]
             # Each child really took the path it was asked for -- an opt-in
@@ -14194,6 +14221,16 @@ print(json.dumps({
                     assert _ck_res["tail_ledger_W"] > 0.0, (
                         _ck_scenario, _ck_tag, _ck_res["tail_ledger_W"]
                     )
+                if _ck_scenario == "emitting_area":
+                    # The throttle was armed AND the clock ran: a frozen f_em
+                    # would make this a mean-field comparison under another
+                    # name and say nothing about the scaled tuples crossing
+                    # the kernel boundary.
+                    assert _ck_res["f_em"] is not None, (_ck_scenario, _ck_tag)
+                    assert _ck_res["f_em"] > _ck_res["f_em0"] > 0.0, (
+                        _ck_scenario, _ck_tag, _ck_res["f_em0"],
+                        _ck_res["f_em"],
+                    )
             # Bit-identical, not merely close: the compiled path is a faithful
             # transcription, so the raw state bytes must match exactly -- the
             # same standard the golden holds on the compiled path.
@@ -14215,6 +14252,9 @@ print(json.dumps({
                 _ck_compiled["tail_ledger_W"] == _ck_pure["tail_ledger_W"]
             ), (_ck_scenario, _ck_compiled["tail_ledger_W"],
                 _ck_pure["tail_ledger_W"])
+            assert _ck_compiled["f_em"] == _ck_pure["f_em"], (
+                _ck_scenario, _ck_compiled["f_em"], _ck_pure["f_em"]
+            )
             print(
                 f"compiled-kernel equivalence [{_ck_scenario}]: ok "
                 f"({_ck_compiled['provenance']}, {_ck_pure['steps']} steps, "
@@ -16994,10 +17034,298 @@ print(json.dumps({
         8.0
     ) > _cross_mod.he_electron_momentum_transfer_rate_cm3_s(0.5)
 
+    # ---- ea1: cathode emitting-area percolation -------------------------
+    # The closure throttles thermionic release to the LIT fraction of the
+    # emitting face. Its load-bearing claim is a patch-invariance identity --
+    # scaling the annuli's areas and their ion attribution together rescales
+    # the whole space-charge release curve by f_em and leaves the sheath's own
+    # solution (phi_c, the barrier, the beam launch energy) alone -- so that
+    # identity is asserted first and directly. If it fails the design is
+    # wrong, not the tolerance.
+    _ea1_default_f0 = 0.0075
+    _ea1_p, _ea1_f = default_config()
+    assert _ea1_f["cathode_emitting_area"] is False, (
+        "cathode_emitting_area must ship OFF"
+    )
+    assert (
+        _ea1_p["cathode_emitting_area_initial_fraction"] == _ea1_default_f0
+    ), _ea1_p["cathode_emitting_area_initial_fraction"]
+    # The clock is SHARED, not duplicated: no second rate constant exists.
+    assert "coverage_growth_rate_per_s" in _ea1_p
+    assert not any(
+        _k.startswith("cathode_emitting_area") and _k.endswith("_per_s")
+        for _k in _ea1_p
+    ), "the emitting-area closure must not mint a growth rate of its own"
+
+    def _ea1_stance(**overrides):
+        """A gaussian-profile, cathode-coupled, current-driven stance."""
+        params, flags = default_config()
+        params.update({
+            "nx": 12,
+            "cathode_solver_model": "current_driven",
+            "cathode_emission_profile": "gaussian",
+            "beam_deposition_model": "csda",
+            "beam_anomalous_model": "quasilinear",
+            "phase_transition_mode": "scheduled",
+            "tau_neutral_prebreakdown": 0.0,
+            "tau_prebreakdown": 0.0,
+            "tau_breakdown": 0.0,
+            "tau_discharge": 1.0,
+            "tau_afterglow": 0.0,
+            "dt_save": 0.0,
+        })
+        flags["neutral_equilibration"] = False
+        flags["cathode_coupling"] = True
+        flags["cathode_circuit_voltage_bound"] = True
+        params.update(overrides)
+        return params, flags
+
+    # (b) PATCH INVARIANCE. The full-disc and throttled device configs at one
+    # frozen plasma state, driven far above capability so the solve sits ON
+    # the wall -- the object the closure claims to rescale.
+    _ea1_dp, _ea1_df = _ea1_stance()
+    _ea1_dev_full = _cathode_mod.cathode_device_config(_ea1_dp, _ea1_df, 4.002602)
+    _ea1_dev_thr = _cathode_mod.cathode_device_config(
+        _ea1_dp, _ea1_df, 4.002602, f_em=_ea1_default_f0
+    )
+    assert _ea1_dev_full.emission_area_fraction == 1.0
+    assert _ea1_dev_thr.emission_area_fraction == _ea1_default_f0
+    # Richardson capability scales with the lit area, exactly.
+    assert abs(
+        (_ea1_dev_thr.I_eth / _ea1_dev_full.I_eth) / _ea1_default_f0 - 1.0
+    ) < 1e-13, (_ea1_dev_thr.I_eth, _ea1_dev_full.I_eth)
+    # The unscaled disc area and the annuli temperatures are untouched: the
+    # ion sink and the emission barrier are full-disc quantities.
+    assert _ea1_dev_thr.A_c == _ea1_dev_full.A_c
+    assert _ea1_dev_thr.emission_Ts_K == _ea1_dev_full.emission_Ts_K
+    _ea1_schottky = bool(_ea1_df.get("cathode_schottky", False))
+    _ea1_cap = float(_ea1_dp["cathode_phi_c_cap_V"])
+    for _ea1_Te, _ea1_ne, _ea1_nn in (
+        (0.5, 1.0e9, 2.0e13),
+        (2.0, 1.0e10, 2.0e13),
+        (12.0, 1.0e11, 2.0e13),
+        (13.0, 1.55e11, 2.0e13),
+    ):
+        _ea1_plasma = _cathode_solver_mod.PlasmaState(
+            T_e=_ea1_Te, n_e=_ea1_ne, n_n=_ea1_nn, sigma_b=0.0
+        )
+        # Both ceilings production runs meet: the phi_c cap alone, and the
+        # circuit voltage bound, which is the one bound-ON arms ride.
+        for _ea1_avail in (None, 180.0):
+            _ea1_a = _cathode_solver_idriven_mod.solve_idriven(
+                _ea1_dev_full, _ea1_plasma, I_tot_A=1.0e4,
+                schottky=_ea1_schottky, phi_c_cap_V=_ea1_cap,
+                circuit_V_avail_V=_ea1_avail,
+            )
+            _ea1_b = _cathode_solver_idriven_mod.solve_idriven(
+                _ea1_dev_thr, _ea1_plasma, I_tot_A=1.0e4,
+                schottky=_ea1_schottky, phi_c_cap_V=_ea1_cap,
+                circuit_V_avail_V=_ea1_avail,
+            )
+            _ea1_where = (_ea1_Te, _ea1_ne, _ea1_avail)
+            assert _ea1_a.regime == "capability_limited", _ea1_where
+            assert _ea1_b.regime == "capability_limited", _ea1_where
+            # THE IDENTITY: the released current is f_em times the full one.
+            _ea1_ratio = (_ea1_b.I_eth_star / _ea1_a.I_eth_star) / _ea1_default_f0
+            assert abs(_ea1_ratio - 1.0) < 1e-12, (_ea1_where, _ea1_ratio)
+            # ...and the sheath's own solution does not move with it. phi_c
+            # and the launch energy are bit-identical; the emission-weighted
+            # barrier is invariant to within float reassociation.
+            assert _ea1_b.phi_c == _ea1_a.phi_c, _ea1_where
+            assert (
+                _cathode_solver_idriven_mod.beam_launch_energy_eV(
+                    _ea1_b.phi_c, None
+                )
+                == _cathode_solver_idriven_mod.beam_launch_energy_eV(
+                    _ea1_a.phi_c, None
+                )
+            ), _ea1_where
+            assert abs(
+                _ea1_b.phi_c_minus - _ea1_a.phi_c_minus
+            ) <= 1e-12 * abs(_ea1_a.phi_c_minus), _ea1_where
+            # The full-disc ion collection is NOT throttled: the dark face
+            # still collects Bohm ions, which is why A_c stays unscaled.
+            assert (
+                _ea1_b.I_tot - _ea1_b.I_eth_star
+            ) == (_ea1_a.I_tot - _ea1_a.I_eth_star), _ea1_where
+
+    # (c) THE LOGISTIC ADVANCE. Unit form first: the exactly-integrated step
+    # against the closed form, monotone, capped at 1, never below the seed.
+    _ea1_lp, _ea1_lf = _ea1_stance()
+    _ea1_lf["cathode_emitting_area"] = True
+    _ea1_lsim = LAPDSim1D(_ea1_lp, _ea1_lf)
+    assert _ea1_lsim._cathode_f_em == _ea1_default_f0
+    _ea1_r = float(_ea1_lp["coverage_growth_rate_per_s"])
+    assert _ea1_r == 1390.0, _ea1_r
+    _ea1_seed = _ea1_lsim._cathode_f_em
+    _ea1_elapsed = 0.0
+    _ea1_prev = _ea1_seed
+    for _ea1_dt in (1.0e-6, 5.0e-6, 1.0e-5, 1.0e-4, 1.0e-3, 1.0e-2):
+        _ea1_lsim._advance_emitting_area_fraction(_ea1_dt)
+        _ea1_elapsed += _ea1_dt
+        _ea1_closed = 1.0 / (
+            1.0 + (1.0 / _ea1_seed - 1.0) * math.exp(-_ea1_r * _ea1_elapsed)
+        )
+        assert _ea1_lsim._cathode_f_em >= _ea1_prev, _ea1_dt
+        assert _ea1_seed <= _ea1_lsim._cathode_f_em <= 1.0, _ea1_dt
+        assert abs(
+            _ea1_lsim._cathode_f_em / _ea1_closed - 1.0
+        ) < 1e-12, (_ea1_dt, _ea1_lsim._cathode_f_em, _ea1_closed)
+        _ea1_prev = _ea1_lsim._cathode_f_em
+    # Saturation is a hard cap, not an overshoot: a huge step lands on 1.0.
+    _ea1_lsim._advance_emitting_area_fraction(1.0)
+    assert _ea1_lsim._cathode_f_em == 1.0
+    _ea1_lsim._advance_emitting_area_fraction(1.0)
+    assert _ea1_lsim._cathode_f_em == 1.0
+    # r = 0 freezes the fraction identically (the frozen-arm control).
+    _ea1_zp, _ea1_zf = _ea1_stance(coverage_growth_rate_per_s=0.0)
+    _ea1_zf["cathode_emitting_area"] = True
+    _ea1_zsim = LAPDSim1D(_ea1_zp, _ea1_zf)
+    _ea1_zsim._advance_emitting_area_fraction(1.0e-3)
+    assert _ea1_zsim._cathode_f_em == _ea1_default_f0
+
+    # ...and on a live run the same closed form holds at the elapsed time,
+    # with the saved diagnostic monotone and actually off its seed (the
+    # anti-vacuity check the verdict runs rely on).
+    _ea1_rp, _ea1_rf = _ea1_stance(dt_save=2.0e-7)
+    _ea1_rf["cathode_emitting_area"] = True
+    _ea1_rsim = LAPDSim1D(_ea1_rp, _ea1_rf)
+    _ea1_rres = _ea1_rsim.run(t_end=2.0e-6, dt=2.0e-7)
+    _ea1_trace = np.asarray(
+        _ea1_rres.cathode_diagnostics["cathode_emitting_area_fraction"],
+        dtype=float,
+    )
+    assert _ea1_trace.size > 1
+    assert np.all(np.diff(_ea1_trace) >= 0.0), _ea1_trace
+    assert _ea1_trace[-1] > _ea1_trace[0], _ea1_trace
+    assert _ea1_trace[0] >= _ea1_default_f0
+    _ea1_run_closed = 1.0 / (
+        1.0
+        + (1.0 / _ea1_default_f0 - 1.0)
+        * math.exp(-_ea1_r * float(_ea1_rsim.time))
+    )
+    assert abs(
+        _ea1_rsim._cathode_f_em / _ea1_run_closed - 1.0
+    ) < 1e-9, (_ea1_rsim._cathode_f_em, _ea1_run_closed, _ea1_rsim.time)
+    # An unarmed run publishes no such diagnostic at all (presence gating).
+    _ea1_op, _ea1_of = _ea1_stance(dt_save=2.0e-7)
+    _ea1_ores = LAPDSim1D(_ea1_op, _ea1_of).run(t_end=2.0e-6, dt=2.0e-7)
+    assert (
+        "cathode_emitting_area_fraction" not in _ea1_ores.cathode_diagnostics
+    )
+
+    # (d) SUBCRITICALITY AT THE SEED. The armed run's discharge current is
+    # suppressed into the f_em class of the unarmed control's, and does not
+    # run away inside the window. Runaway is the efold1 onset criterion --
+    # 10x the WALL-RIDING current, which that instrument reads at
+    # t = 1e-6 s, not at t = 0 where the loop current is identically zero and
+    # the ratio would be meaningless.
+    _ea1_sub_t = np.asarray(_ea1_rres.time, dtype=float)
+    _ea1_sub_I_armed = np.asarray(
+        _ea1_rres.cathode_diagnostics["source_I_tot"], dtype=float
+    )
+    _ea1_sub_I_off = np.asarray(
+        _ea1_ores.cathode_diagnostics["source_I_tot"], dtype=float
+    )
+    _ea1_sub_ratio = float(_ea1_sub_I_armed[-1]) / float(_ea1_sub_I_off[-1])
+    assert 0.1 * _ea1_default_f0 <= _ea1_sub_ratio <= 10.0 * _ea1_default_f0, (
+        "armed discharge current must sit in the f_em class of the unarmed "
+        f"control (ratio {_ea1_sub_ratio:.6g}, f_em {_ea1_default_f0})"
+    )
+    _ea1_sub_wall_i = int(np.argmin(np.abs(_ea1_sub_t - 1.0e-6)))
+    _ea1_sub_wall = float(_ea1_sub_I_armed[_ea1_sub_wall_i])
+    assert _ea1_sub_wall > 0.0, _ea1_sub_wall
+    assert float(
+        np.max(_ea1_sub_I_armed[_ea1_sub_wall_i:])
+    ) <= 10.0 * _ea1_sub_wall, (
+        "the armed seed must not ignite inside the smoke window "
+        f"(max {float(np.max(_ea1_sub_I_armed[_ea1_sub_wall_i:])):.6g} A vs "
+        f"wall-riding {_ea1_sub_wall:.6g} A)"
+    )
+
+    # (f) THE REFUSALS. Every one is a construction-time ValueError.
+    def _ea1_refuses(reason, params_over=None, flags_over=None):
+        params, flags = _ea1_stance(**(params_over or {}))
+        flags.update(flags_over or {})
+        try:
+            LAPDSim1D(params, flags)
+        except ValueError:
+            return
+        raise AssertionError(f"expected a ValueError: {reason}")
+
+    _ea1_refuses(
+        "the seed configured with the flag off",
+        params_over={"cathode_emitting_area_initial_fraction": 0.5},
+    )
+    for _ea1_bad in (0.0, -0.1, 1.5, None, float("nan")):
+        _ea1_refuses(
+            f"f_em0 = {_ea1_bad!r} is outside (0, 1]",
+            params_over={"cathode_emitting_area_initial_fraction": _ea1_bad},
+            flags_over={"cathode_emitting_area": True},
+        )
+    _ea1_refuses(
+        "cathode_emission_profile='uniform' cannot express the throttle",
+        params_over={"cathode_emission_profile": "uniform"},
+        flags_over={"cathode_emitting_area": True},
+    )
+    _ea1_refuses(
+        "the flag without cathode_coupling is a silent no-op",
+        flags_over={"cathode_emitting_area": True, "cathode_coupling": False},
+    )
+    _ea1_refuses(
+        "a negative shared clock",
+        params_over={"coverage_growth_rate_per_s": -1.0},
+        flags_over={"cathode_emitting_area": True},
+    )
+    # The same refusal at the seam itself, for a direct caller that never
+    # goes through LAPDSim1D.
+    _ea1_up, _ea1_uf = _ea1_stance(cathode_emission_profile="uniform")
+    try:
+        _cathode_mod.cathode_device_config(_ea1_up, _ea1_uf, 4.002602, f_em=0.5)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(
+            "cathode_device_config must refuse a lit fraction under the "
+            "uniform profile"
+        )
+    # THE SHARED CLOCK, both ways: the coverage closure's inert-key refusal
+    # still fires with both flags off, and lifts for this key alone once the
+    # emitting-area flag is armed (it is one constant with one owner, not two).
+    _ea1_cp, _ea1_cf = _ea1_stance(coverage_growth_rate_per_s=900.0)
+    try:
+        LAPDSim1D(_ea1_cp, _ea1_cf)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(
+            "coverage_growth_rate_per_s must stay inert with both closures off"
+        )
+    _ea1_cf["cathode_emitting_area"] = True
+    _ea1_csim = LAPDSim1D(_ea1_cp, _ea1_cf)
+    assert _ea1_csim._cathode_f_em == _ea1_default_f0
+    _ea1_csim._advance_emitting_area_fraction(1.0e-3)
+    assert _ea1_csim._cathode_f_em > _ea1_default_f0
+    _ea1_refuses(
+        "the other three coverage keys stay inert under this flag alone",
+        params_over={"coverage_backfill_time_s": 1.0e-4},
+        flags_over={"cathode_emitting_area": True},
+    )
+    # A resume across a change of arming is refused by the structural key.
+    assert "cathode_emitting_area" in _restart_mod.STRUCTURAL_FLAG_KEYS
+
     # ---- the registered constants are exactly the registered constants ----
     # A key added to the wrong namespace silently does nothing (input_dict and
     # input_flags validate neither), so the split is asserted here.
     _r2_reg_p, _r2_reg_f = default_config()
+    assert (
+        "cathode_emitting_area_initial_fraction" in _r2_reg_p
+        and "cathode_emitting_area_initial_fraction" not in _r2_reg_f
+    )
+    assert (
+        "cathode_emitting_area" in _r2_reg_f
+        and "cathode_emitting_area" not in _r2_reg_p
+    )
     for _key in (
         "tracer_passivity_current_ratio",
         "tracer_passivity_thinness",
