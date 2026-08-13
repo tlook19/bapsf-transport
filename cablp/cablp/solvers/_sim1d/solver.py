@@ -551,6 +551,7 @@ def _timestep_limiters(diag, count=3):
         ("ion_charge_exchange", diag.dt_ion_charge_exchange),
         ("heat_conduction", diag.dt_heat_conduction),
         ("ion_neutral_drag", diag.dt_ion_neutral_drag),
+        ("circuit", diag.dt_circuit),
         ("dt_max", diag.dt_max),
     )
     finite = [
@@ -6443,6 +6444,7 @@ class LAPDSim1D:
                 state=state,
                 time=time,
             )
+        circuit_kwargs = self._circuit_timestep_kwargs(state=state, time=time)
         diag = suggest_timestep(
             state=state,
             floors=self._floors,
@@ -6477,6 +6479,7 @@ class LAPDSim1D:
                 if plasma_enabled and not dvm_superseded
                 else None
             ),
+            circuit_kwargs=circuit_kwargs,
             plasma_source_rhs=plasma_source_rhs,
             source_floor_exempt_rtol=self._surface_loss_floor_exempt_rtol,
             neutral_rows_superseded=dvm_superseded,
@@ -6489,6 +6492,9 @@ class LAPDSim1D:
             ),
             heat_dt_fraction=float(self._input_dict.get("heat_dt_fraction", 0.25)),
             drag_dt_fraction=float(self._input_dict.get("drag_dt_fraction", 0.5)),
+            circuit_dt_fraction=float(
+                self._input_dict.get("circuit_dt_fraction", 0.25)
+            ),
             dt_min=dt_min,
             dt_max=dt_max,
             include_front=plasma_enabled and self._flags.get("front_flux", True),
@@ -6510,6 +6516,11 @@ class LAPDSim1D:
             neutral_candidates = {
                 "neutral_exchange": diag.dt_neutral_exchange,
                 "neutral_sources": diag.dt_neutral_sources,
+                # The loop is not a fluid row: a neutral-only phase can still
+                # carry a live current-driven circuit, so its bound survives
+                # the rebuild rather than being silently dropped. It is inf
+                # unless the bundle was built, so no unarmed run moves.
+                "circuit": diag.dt_circuit,
                 "dt_max": diag.dt_max,
             }
             active_constraint, raw_dt = min(
@@ -7731,6 +7742,57 @@ class LAPDSim1D:
         ):
             return float(self._circuit_V_cap)
         return float(self._input_dict.get("V_bank", 0.0))
+
+    def _circuit_timestep_kwargs(self, state=None, time=None):
+        """Bundle for the loop-relaxation timestep bound, or ``None``.
+
+        ``None`` withdraws the candidate. PRESENCE-GATED on
+        ``cathode_circuit_voltage_bound``: without the flag the sheath's
+        capability wall never clamps the device voltage, the loop equation
+        already carried its restoring force, and the historical adaptive
+        controller stands -- so an unarmed run never builds this bundle,
+        never spends its two probe solves, and keeps its dt sequence to the
+        bit. Also withdrawn where there is no loop to bound: an open circuit
+        (no solve, or the floating afterglow), which is the same phase gate
+        the circuit advance itself uses.
+
+        The bundle carries the SAME ``vdis_of_I`` the advance integrates,
+        built at the state the step starts from, so the bound and the step
+        cannot disagree about the device relation.
+        """
+        if not bool(self._flags.get("cathode_circuit_voltage_bound", False)):
+            return None
+        if time is None:
+            time = self._time
+        step_phase = self._cathode_phase_options(time=time)
+        if not step_phase["solve_enabled"] or step_phase["floating"]:
+            return None
+        vdis = idriven_vdis_evaluator(
+            state=self.state if state is None else state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            mu=self._mu,
+            geometry=self._geometry,
+            input_dict=self._input_dict,
+            input_flags=self._effective_cathode_flags(
+                active_only=False, floating=False
+            ),
+            beam_cross_prev=self._cathode_beam_cross,
+            T_s_override_K=self._cathode_Ts_K,
+            phi_wf_override_eV=self._cathode_phi_wf_eff(),
+            circuit_V_src_V=self._circuit_source_voltage_V(step_phase),
+        )
+        return {
+            "vdis_of_I": vdis,
+            "I_A": float(self._circuit_I_loop),
+            "L_H": float(self._input_dict.get("L_parasitic_H", 0.0)),
+            "V_src_V": self._circuit_source_voltage_V(step_phase),
+            # The external partition, exactly as the advance passes it: the
+            # internal partition and R_mesh are already inside vdis_of_I, and
+            # the two sum back to the total loop resistance.
+            "R_series_ohm": float(self._input_dict.get("R_comp", 0.0))
+            * float(self._input_dict.get("R_comp_partition", 1.0)),
+        }
 
     def _effective_cathode_flags(self, time=None, active_only=True, floating=None):
         options = self._cathode_phase_options(time=time)

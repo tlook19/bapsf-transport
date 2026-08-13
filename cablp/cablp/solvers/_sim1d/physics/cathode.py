@@ -681,6 +681,7 @@ def idriven_result_evaluator(
     T_s_override_K=None,
     phi_wf_override_eV=None,
     circuit_V_src_V=None,
+    apply_circuit_bound=True,
 ):
     """Return an ``I [A] -> SolverResult`` evaluator at this frozen state.
 
@@ -693,6 +694,17 @@ def idriven_result_evaluator(
     last internal-stage solve of the step, whose P_cathode_i was measured
     at 4.6-7.5x the accepted-state value at the same frozen current
     (2026-07-21; the stage state sits on the other side of the knee).
+
+    ``apply_circuit_bound`` selects whether the evaluated solves carry the
+    ``cathode_circuit_voltage_bound`` ceiling. ``True`` (the default) is the
+    bounded semantics every beam-facing consumer reads. ``False`` withholds
+    the circuit member of the composed ceiling -- the solve is run against
+    ``cathode_phi_c_cap_V`` alone -- and is the SHEATH'S UNBOUNDED DEMAND:
+    the device voltage the sheath would require to carry the imposed
+    current, whether or not the loop can supply it. Only the loop equation's
+    own integrand wants that (see ``idriven_vdis_evaluator``). With the flag
+    off the two are the same object bit for bit, because the bound
+    contributes ``None`` either way.
     """
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     anode_A, anode_Te = anode_circuit_sample(
@@ -729,10 +741,13 @@ def idriven_result_evaluator(
     )
 
     def solve_at(I_A):
-        # The available voltage is a function of I, so the circuit's own root
-        # find sees the bound move with the current it is testing -- which is
-        # what keeps the stage residual monotone (see the clamp comment in
-        # _cathode_solver_idriven.solve_idriven).
+        # The available voltage is a function of I, so a bounded consumer's
+        # solve sees the bound move with the current it is testing. The
+        # circuit's own root find asks for the UNBOUNDED demand instead
+        # (apply_circuit_bound=False): a ceiling built from V_avail(I) makes
+        # the loop residual identically zero above the emission wall, which
+        # is a ratchet rather than a restoring force. See
+        # idriven_vdis_evaluator.
         return solve_idriven(
             device_config,
             plasma,
@@ -743,8 +758,12 @@ def idriven_result_evaluator(
             bridge=bridge,
             phi_c_cap_V=cap,
             alpha_sheath=alpha_sheath,
-            circuit_V_avail_V=circuit_available_voltage_V(
-                input_dict, input_flags, circuit_V_src_V, I_A
+            circuit_V_avail_V=(
+                circuit_available_voltage_V(
+                    input_dict, input_flags, circuit_V_src_V, I_A
+                )
+                if apply_circuit_bound
+                else None
             ),
             circuit_bound_object=circuit_bound_object(input_dict),
         )
@@ -771,6 +790,29 @@ def idriven_vdis_evaluator(
     root-finds the loop current against the monotone device voltage, so it
     needs many cheap sheath evaluations at the *accepted* end-of-step state
     with only I varying. Thin wrapper over ``idriven_result_evaluator``.
+
+    **The circuit integrand reads the UNBOUNDED device voltage**
+    (``apply_circuit_bound=False``), and that asymmetry against the
+    beam-facing consumers is deliberate. The bound is a statement about what
+    the loop can SUPPLY; the loop equation's V_dis(I) is a statement about
+    what the sheath DEMANDS, and the difference between them is precisely
+    the restoring force ``L dI/dt = V_src - I*R - V_dis(I)`` integrates.
+    Feeding the bounded voltage back in makes V_dis(I) == V_src - I*R
+    identically wherever the sheath is capability-limited and R_mesh is
+    zero, so ``f(I) == 0`` above the emission wall and ``f(I) > 0`` below
+    it: dI/dt >= 0 everywhere, a RATCHET whose fixed point is whatever the
+    TR stage's explicit kick ``I_n + 0.293*dt*f_n`` last overshot to. That
+    was measured (2026-08-12): 156.7 A after one 2e-5 s step against a
+    dt-converged 0.9 A, with I_loop a monotone function of dt and of the
+    save cadence. Unbounded, the sheath's demand keeps climbing past
+    V_avail on the steep branch above the wall, f goes negative, and the
+    wall is an attractor instead of a floor.
+
+    Every BOUNDED object is untouched: the dispatched per-step solve, the
+    exported phi_c / V_b / bound_active diagnostics, the composed ceiling
+    and the beam birth energy keyed to phi_c all still see the bound. Only
+    the number the inductor integrates changes. With the flag off both
+    paths are the historical solve bit for bit.
     """
     solve_at = idriven_result_evaluator(
         state=state,
@@ -784,6 +826,7 @@ def idriven_vdis_evaluator(
         T_s_override_K=T_s_override_K,
         phi_wf_override_eV=phi_wf_override_eV,
         circuit_V_src_V=circuit_V_src_V,
+        apply_circuit_bound=False,
     )
 
     # Internal series drop on the plasma side of the V_dis probe (R5 ES1 tuning
@@ -816,6 +859,81 @@ def idriven_vdis_evaluator(
         return solve_at(I_A).V_b + I_A * R_internal_total
 
     return vdis
+
+
+#: Relative current increment of the one-sided slope probe in
+#: :func:`circuit_relaxation_timestep`. NUMERICS, not physics: it is the
+#: finite-difference width used to read ``dV_dis/dI``, chosen small enough that
+#: the emission wall's local slope is resolved and large enough to stay well
+#: clear of the sheath root-find's own tolerance (brentq at xtol 1e-10 A).
+CIRCUIT_SLOPE_PROBE_REL_DI = 1.0e-3
+#: Absolute floor [A] on that increment, so the probe is still a finite
+#: difference at I = 0 (the cold start, where the relative width vanishes).
+CIRCUIT_SLOPE_PROBE_MIN_DI_A = 1.0e-6
+
+
+def circuit_relaxation_timestep(
+    vdis_of_I, I_A, L_H, R_series_ohm, V_src_V, fraction
+):
+    """Return a timestep bound [s] on the loop current's local relaxation.
+
+    The loop equation ``L dI/dt = f(I)*L = V_src - I*R_series - V_dis(I)``
+    has local relaxation rate ``|df/dI| = (R_series + dV_dis/dI)/L``, so its
+    local time constant is
+
+        tau_circuit = L / (R_series + dV_dis/dI),
+
+    and the bound is ``fraction * tau_circuit``. ``dV_dis/dI`` is read by a
+    one-sided finite difference of the SAME ``vdis_of_I`` the advance
+    integrates, over ``CIRCUIT_SLOPE_PROBE_REL_DI * I`` (floored at
+    ``CIRCUIT_SLOPE_PROBE_MIN_DI_A``) -- two extra sheath solves per call,
+    which also give ``f(I)`` for free.
+
+    Why this bound exists (2026-08-12). ``L/R_comp`` is 1.12 ms and the bank
+    RC is 68.6 ms; neither is the stiff mode, and the controller carried no
+    circuit term at all, so the adaptive path took ``dt_max``-sized steps
+    across the sheath's capability wall -- a feature whose measured device
+    slope reaches ~2 kOhm, i.e. ``tau_circuit ~ 4 ns``, with the sub-wall
+    slew crossing it in ~45 ns. TR-BDF2 is L-stable, so this is an ACCURACY
+    bound and not a stability one: the wall is resolved rather than jumped.
+
+    **The bound is withdrawn once the loop sits AT its local equilibrium**,
+    and that withdrawal is not an optimization -- it is the house rule that a
+    bound must describe a rate the step actually applies. The relaxation rate
+    is a property of the device slope alone and stays large on the steep
+    branch whether or not anything is relaxing, so a bound that only read the
+    slope would pin the step at a stiff FIXED POINT forever: measured on the
+    conducting-phase stance, 1.64e-10 s held indefinitely while ``I_loop``
+    stood at 0.894481 A to six figures -- ~122000 steps to cross a 20 us
+    window that contains no circuit transient at all. The distance to the
+    local equilibrium, ``|dI_eq| = |f(I)| * tau_circuit``, is what says
+    whether there is a transient; when it is smaller than the probe
+    increment the current is at its equilibrium to within the resolution of
+    the very measurement this bound is built from, and there is nothing left
+    to resolve.
+
+    Returns ``inf`` -- no constraint -- in each of those cases: a
+    non-positive ``L`` (no inductor, hence no ODE to bound), a non-positive
+    total slope ``R_series + dV_dis/dI`` (a locally flat device relation
+    offers no time constant), or a converged loop current.
+    """
+    L = float(L_H)
+    if not L > 0.0:
+        return math.inf
+    I = max(float(I_A), 0.0)
+    dI = max(CIRCUIT_SLOPE_PROBE_REL_DI * I, CIRCUIT_SLOPE_PROBE_MIN_DI_A)
+    V_here = float(vdis_of_I(I))
+    dV_dI = (float(vdis_of_I(I + dI)) - V_here) / dI
+    slope_ohm = float(R_series_ohm) + dV_dI
+    if not slope_ohm > 0.0:
+        return math.inf
+    tau = L / slope_ohm
+    # f(I) from the same two evaluations; dI_eq = |f| * tau is the current's
+    # distance to the local equilibrium, in amperes.
+    f_here = (float(V_src_V) - I * float(R_series_ohm) - V_here) / L
+    if abs(f_here) * tau < dI:
+        return math.inf
+    return float(fraction) * tau
 
 
 def advance_circuit_current_driven(

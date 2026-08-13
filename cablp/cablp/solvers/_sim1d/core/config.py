@@ -1479,10 +1479,12 @@ def cathode_defaults():
         build leg — and mis-clamps a correct plateau solve elsewhere,
         silently except for the ``bound_active`` census.
 
-        NEITHER object lifts the flag's other exclusion: the inductor's
-        back-EMF is not counted as supply, so on any leg where the loop
-        current is FALLING the physical ``V_b`` exceeds the available voltage
-        and the bound engages and holds ``dI/dt`` at zero.
+        NEITHER object changes what the bound leaves alone: the inductor's
+        back-EMF is not counted as supply, so on a FALLING leg the physical
+        ``V_b`` exceeds the available voltage and the bound engages -- but
+        the loop current is not held there, because the circuit integrates
+        the sheath's unbounded demand rather than the clamped ``V_b``. Only
+        the reported/beam-facing objects are clamped.
     cathode_Rp_model:
         How the cathode solver's parallel plasma (gap) resistance ``R_p`` is
         built. ``"sample"`` (default, historical) is the solver's internal
@@ -2216,6 +2218,17 @@ def timestep_defaults():
         Maximum ion-neutral drag relaxation fraction per explicit step.
         This was formerly available only through an unregistered
         ``dict.get`` fallback.
+    circuit_dt_fraction:
+        Fraction of the current-driven loop's LOCAL relaxation time
+        ``tau_circuit = L_parasitic_H / (R_comp + R_mesh_ohm + dV_dis/dI)``
+        allowed per accepted step. Read only while
+        ``cathode_circuit_voltage_bound`` is armed and a live loop exists;
+        the candidate is withdrawn to ``inf`` otherwise, so this key cannot
+        move an unarmed run. Bounds the sheath's capability wall, whose
+        device slope reaches ~2 kOhm (``tau_circuit`` ~ 4 ns) while ``L/R``
+        is 1.12 ms -- the wall, not the loop's bulk time constant, is the
+        stiff feature. Accuracy, not stability: the TR-BDF2 advance is
+        L-stable. See ``cathode.circuit_relaxation_timestep``.
 
     Values and their provenance: ``config_defaults_provenance.md``.
     """
@@ -2244,6 +2257,7 @@ def timestep_defaults():
         "max_neutral_step_fraction": 0.0,
         "max_energy_step_fraction": 0.0,
         "drag_dt_fraction": 0.5,
+        "circuit_dt_fraction": 0.25,
     }
 
 
@@ -2803,28 +2817,32 @@ input_flags_template_1d = {
     # supplying ~178 V. The cap itself is untouched and still composes as the
     # other upper bound (it is the He EII table top, an atomic-data domain
     # guard). The inductor's back-EMF is deliberately NOT counted as available
-    # voltage, so while the bound binds the loop current neither grows nor
-    # falls. Requires cathode_solver_model='current_driven', cathode_coupling
-    # and V_bank > 0; inactive (ceiling falls back to the data cap) wherever
-    # the available voltage is not positive, notably the zero-bank inductive
-    # tail. Default OFF and bit-exact off.
+    # voltage. Requires cathode_solver_model='current_driven',
+    # cathode_coupling and V_bank > 0; inactive (ceiling falls back to the
+    # data cap) wherever the available voltage is not positive, notably the
+    # zero-bank inductive tail. Default OFF and bit-exact off.
     #
-    # SCOPE. The phi_c/V_b OBJECT mismatch is gone: the shipped
-    # cathode_circuit_bound_object='device_voltage' bounds V_b itself, so
-    # phi_c may legitimately exceed the available voltage where the anode fall
-    # subtracts, and the plateau mis-clamp that object='phi_c' would produce
-    # cannot happen. What REMAINS out of contract is the back-EMF exclusion,
-    # and it is independent of the object: while the bound binds, V_b is held
-    # at the available voltage and the loop residual is identically zero, so
-    # dI/dt = 0. On any leg where the current is FALLING -- the main-discharge
-    # decay -- the physical V_b exceeds the available voltage precisely
-    # because the inductor is supplying, and the bound would engage and FREEZE
-    # the current instead of letting it decay. So: the flag's contract is any
-    # window over which the loop current is not falling (the pre-breakdown
-    # build leg, and the rise into the plateau); A FULL-WINDOW RUN WITH THIS
-    # FLAG ON REMAINS OUT OF CONTRACT. Nothing raises when the bound engages;
-    # only the bound_active census shows it, so READ THE CENSUS on any run
-    # that reaches the decay with this flag on.
+    # WHAT THE BOUND DOES NOT BOUND is the loop current. The circuit
+    # integrates the sheath's UNBOUNDED demand, not this clamped V_b, so the
+    # restoring force survives the clamp. Feeding the clamped value back in
+    # was the ratchet defect (2026-08-12): the loop residual went identically
+    # zero above the capability wall, dI/dt >= 0 everywhere, and I_loop
+    # became the running maximum of the TR stage's explicit overshoot --
+    # 156.7 A in one 2e-5 s step against a converged 0.9 A. See
+    # cathode.idriven_vdis_evaluator.
+    #
+    # SCOPE. A FULL-WINDOW RUN WITH THIS FLAG ON IS IN CONTRACT (2026-08-12);
+    # both of the exclusions that once narrowed it are gone. The phi_c/V_b
+    # OBJECT mismatch went with cathode_circuit_bound_object='device_voltage',
+    # which bounds V_b itself, so phi_c may legitimately exceed the available
+    # voltage where the anode fall subtracts. The BACK-EMF exclusion went with
+    # the integrand: it held that while the bound binds the loop residual is
+    # identically zero, hence dI/dt = 0, hence a frozen main-discharge decay.
+    # That was true of the old integrand and is not true of this one --
+    # measured on the ON-probe build leg, where the current FALLS on 12 of 33
+    # bound saves. Nothing raises when the bound engages; only the
+    # bound_active census shows it, and the probe window reaches no plateau
+    # decay, so reading the census on a run that does remains worthwhile.
     "cathode_circuit_voltage_bound": False,
     # Gates the neutral-only pre-drive phase. DELIBERATELY LEFT ON while
     # tau_neutral_prebreakdown defaults to 0.0: the duration alone decides

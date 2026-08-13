@@ -4,6 +4,7 @@ import numpy as np
 
 from cablp.vars._cons import ev_to_erg
 
+from ..physics.cathode import circuit_relaxation_timestep
 from ..physics.conduction import heat_conduction_timestep_bound
 from ..physics.energy import (
     electron_cooling_rhs,
@@ -39,6 +40,11 @@ class TimestepDiagnostics:
     # Defaulted so results written before the neutral wind existed still
     # load; inf whenever the state carries no M_n (the historical case).
     dt_neutral_wind: float = np.inf
+    # The current-driven loop's local relaxation bound. Defaulted (and inf)
+    # so results written before it existed still load, and inf on every run
+    # that does not arm cathode_circuit_voltage_bound -- the candidate is
+    # presence-gated on the flag, so an unarmed run's dt sequence cannot move.
+    dt_circuit: float = np.inf
     # The dt_min clamp, recorded as a FACT ABOUT THE STEP rather than as a
     # constraint name. ``active_constraint`` always names the bound that
     # actually minimized; ``clamped_to_dt_min`` (0.0/1.0, the float-flag idiom
@@ -76,6 +82,7 @@ def suggest_timestep(
     ion_charge_exchange_kwargs=None,
     heat_conduction_kwargs=None,
     ion_neutral_drag_kwargs=None,
+    circuit_kwargs=None,
     plasma_source_rhs=None,
     source_floor_exempt_rtol=None,
     neutral_rows_superseded=False,
@@ -84,6 +91,7 @@ def suggest_timestep(
     neutral_dt_fraction=0.25,
     heat_dt_fraction=0.25,
     drag_dt_fraction=0.5,
+    circuit_dt_fraction=0.25,
     dt_min=1e-12,
     dt_max=1e-6,
     include_front=True,
@@ -105,6 +113,13 @@ def suggest_timestep(
     the caller withdraws the ion-transfer bounds by passing no kwargs for
     them. The replacement rows are bounded through ``plasma_source_rhs``,
     which is where the arm's own coupling term belongs.
+
+    ``circuit_kwargs`` is the same kind of bundle for the current-driven
+    loop's own ODE (see ``cathode.circuit_relaxation_timestep``). It is the
+    one candidate that does not describe a fluid row, and it is
+    presence-gated by the caller: ``None`` -- every run that does not arm
+    ``cathode_circuit_voltage_bound``, and every phase with no live loop --
+    withdraws it to ``inf``, so it cannot move an unarmed run's step.
     """
     if dt_min <= 0.0:
         raise ValueError(f"dt_min must be positive (got {dt_min})")
@@ -227,6 +242,10 @@ def suggest_timestep(
             geometry=geometry,
             cfl=cfl,
         ),
+        "circuit": circuit_timestep(
+            circuit_kwargs=circuit_kwargs,
+            circuit_dt_fraction=circuit_dt_fraction,
+        ),
         "dt_max": float(dt_max),
     }
     active_constraint, raw_dt = min(dt_candidates.items(), key=lambda item: item[1])
@@ -252,8 +271,24 @@ def suggest_timestep(
         dt_max=float(dt_max),
         active_constraint=active_constraint,
         dt_neutral_wind=float(dt_candidates["neutral_wind"]),
+        dt_circuit=float(dt_candidates["circuit"]),
         clamped_to_dt_min=float(clamped_to_dt_min),
         dt_raw=float(raw_dt),
+    )
+
+
+def circuit_timestep(circuit_kwargs=None, circuit_dt_fraction=0.25):
+    """Bound the step by the current-driven loop's local relaxation time.
+
+    ``None`` withdraws the candidate (``inf``): the bound is presence-gated
+    on ``cathode_circuit_voltage_bound`` and on a live loop, so an unarmed
+    run never evaluates it. Otherwise the bundle is forwarded to
+    ``cathode.circuit_relaxation_timestep``, which owns the physics.
+    """
+    if circuit_kwargs is None:
+        return np.inf
+    return circuit_relaxation_timestep(
+        fraction=circuit_dt_fraction, **circuit_kwargs
     )
 
 

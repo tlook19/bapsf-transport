@@ -214,6 +214,32 @@ physically-motivated candidate bounds, then clamps to `[dt_min, dt_max]`:
   engaged `kinetic_dvm` arm adds its plasma-side coupling term, which is
   otherwise a volumetric ion momentum/energy source no bound could see.
 
+- **Current-driven loop relaxation** (`circuit`, `circuit_dt_fraction`,
+  default 0.25), **presence-gated on `cathode_circuit_voltage_bound`** and on
+  a live loop, so an unarmed run neither evaluates it nor moves. The loop
+  equation's local time constant is `tau_circuit = L / (R_comp + R_mesh +
+  dV_dis/dI)`, with the device slope read by a one-sided finite difference of
+  the same `vdis_of_I` the TR-BDF2 advance integrates (two extra sheath
+  solves, which also yield `f(I)` free). It exists because neither `L/R_comp`
+  (1.12 ms) nor the bank `RC` (68.6 ms) is the stiff mode: the **sheath
+  capability wall** is, at a measured device slope up to ~2 kOhm — `tau` ~ 4
+  ns, crossed by the sub-wall slew in ~45 ns — and the controller previously
+  carried no circuit term at all, so the adaptive path stepped `dt_max` (1e-4
+  s) straight across it. TR-BDF2 is L-stable, so this is an **accuracy**
+  bound, not a stability one.
+
+  It is **withdrawn once the loop reaches its local equilibrium**, tested as
+  `|f(I)| * tau_circuit < dI_probe`: the distance to that equilibrium, in
+  amperes, below the resolution of the finite difference the bound is built
+  from. This is the phantom rule below applied to the circuit rather than an
+  optimization. The relaxation rate depends only on the device slope, which
+  stays steep at a stiff FIXED POINT, so a slope-only bound pins the step
+  there forever — measured on the conducting-phase stance: `dt` held at
+  1.64e-10 s while `I_loop` stood at 0.894481 A to six figures, ~122000 steps
+  to cross a 20 us window containing no circuit transient. With the
+  withdrawal the same window costs 53 steps, 7 of them `circuit`-bound
+  through the actual transient.
+
 **A bound must describe a row the step applies.** A kinetic neutral arm
 supersedes whole rows of the fluid terms — it zeroes them and carries them in
 its own coupling term — and a bound still computed from the unstripped form is
@@ -499,7 +525,9 @@ dn/dt = γ(z; background) · n + S(z, t)
   is launched and marched by the cathode solve, which the tracer consumes
   rather than reimplements). The beam current and birth energy come from the
   R1 objects — `cathode.circuit_available_voltage_V` composed into the sheath
-  ceiling — never from the raw `cathode_phi_c_cap_V` atomic-data cap.
+  ceiling — never from the raw `cathode_phi_c_cap_V` atomic-data cap. (The
+  loop equation's own integrand is the one thing that does NOT read the
+  bounded objects; see MODEL.md, "What the bound does not constrain".)
 
 Neither `γ` nor `S` is re-derived here. `physics.tracer` builds both by
 evaluating the solver's OWN term functions (`reactions.reaction_rates`,
