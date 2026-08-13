@@ -1038,11 +1038,28 @@ regime is a `RuntimeError`) now asserts against the composed ceiling.
 
 **The inductor's back-EMF is deliberately not counted as available voltage.**
 It is stored energy, not supply, and including it would make the bound
-vacuous. The consequence is that while the bound binds, $dI/dt = 0$ exactly:
-the loop current can neither grow nor fall through it. This strengthens the
-runaway backstop the floor was originally added for — the loop residual is
-identically zero in the clamped branch — and the circuit's stage root-find
-stays well-posed, with $g'(I) = 1$ exactly there rather than merely $\ge 1$.
+vacuous.
+
+**What the bound does NOT constrain is the loop current** (corrected
+2026-08-12). The bound is a ceiling on the sheath and beam objects; the
+circuit integrates the sheath's *unbounded demand* $V_b^{\text{unb}}(I)$ —
+the device voltage the sheath would require to carry $I$, whether or not the
+loop can source it. That asymmetry is what keeps a restoring force above the
+capability wall. Feeding the bounded voltage into the loop equation instead
+makes $V_\text{dis}(I) \equiv V_\text{src} - I R$ wherever the bound binds
+(at $R_\text{mesh} = 0$), so the residual is identically zero there, $dI/dt
+\ge 0$ everywhere, and the loop current becomes a **ratchet** whose value is
+the running maximum of the TR stage's explicit overshoot — measured 156.7 A
+after a single $2\times10^{-5}$ s step against a dt-converged 0.9 A, growing
+with $\Delta t$ and with the save cadence. Unbounded, the demand climbs to
+the data cap past the wall, $f$ goes sharply negative, and the wall is an
+attractor: the same scenario is now dt-invariant to six figures from
+$\Delta t = 10^{-8}$ s up to a single-step traverse.
+
+The runaway backstop the floor was originally added for is therefore still in
+place — more robustly, since it now rests on a real restoring force rather
+than on a null residual — and the circuit's stage root-find keeps $g'(I) > 1$
+strictly rather than collapsing to exactly 1.
 
 ### The bound's object
 
@@ -1075,19 +1092,30 @@ and tags it `capability_limited`, **raising nothing** — only `bound_active`
 records it — and the sheath drop, and the beam birth energy keyed to it, come
 back low by about $\phi_a$.
 
-**SCOPE — a full-window run with the flag on remains out of contract, for a
-reason the object does not touch.** The $\phi_c$/$V_b$ mismatch above is
-fixed. What is not is the back-EMF exclusion: while the bound binds, $V_b$ is
-held at $V_\text{avail}$, the loop residual is identically zero and $dI/dt =
-0$. On any leg where the loop current is **falling** — the main-discharge
-decay — the physical $V_b$ exceeds $V_\text{avail}$ *precisely because the
-inductor is supplying*, and the bound engages and freezes the current instead
-of letting it decay. So the contract is: **any window over which the loop
-current is not falling** — the pre-breakdown build leg and the rise into the
-plateau — and the `bound_active` census must be read on any run that reaches
-the decay with the flag on. Lifting this needs a bound that counts the
-inductor's stored energy as supply on the falling leg, which is a different
-change from this one.
+**SCOPE — a full-window run with the flag on is IN contract** (2026-08-12).
+Both exclusions that once narrowed it are gone. The $\phi_c$/$V_b$ mismatch
+went with the object above. The back-EMF exclusion went with the integrand:
+it said that while the bound binds, $V_b$ is held at $V_\text{avail}$, the
+loop residual is identically zero and $dI/dt = 0$, so on a **falling** leg —
+the main-discharge decay, where the physical $V_b$ exceeds $V_\text{avail}$
+*precisely because the inductor is supplying* — the bound would freeze the
+current instead of letting it decay. That reasoning was sound about the code
+as it then stood, and it is what the ratchet above was the acute form of.
+With the circuit integrating the unbounded demand the residual is no longer
+null under the clamp, so $dI/dt$ is free while the bound is active.
+
+Measured, not merely argued: on the ON-probe build leg (`r1vb_run_probe.py
+--bound on`, both objects, read by `regime_vcm_onprobe_read.py`) the loop
+current **falls on 12 of 33 bound saves** and spans 1.10 A while bound — a
+state the old contract excluded as impossible — with every R1 registered
+assertion still holding ($V_b \le V_\text{avail}$ 33/33, zero ceiling
+escapes, $V_b/V_\text{dis}$ median 1.0002). The inductor's stored energy is
+still not counted as supply; that exclusion now costs the falling leg
+nothing, because it constrains only the reported and beam-facing objects.
+The one caveat on the evidence: the probe window stops at 0.033 ms and never
+reaches the plateau decay, so the decay leg specifically is covered by the
+loop equation rather than by observation, and the `bound_active` census is
+still worth reading on a run that gets there.
 
 **Diagnostics.** Three per-solve values ride the cathode diagnostics:
 `phi_c_ceiling_V` (the ceiling actually solved against), `circuit_V_avail_V`

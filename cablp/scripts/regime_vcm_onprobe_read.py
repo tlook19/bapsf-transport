@@ -12,10 +12,12 @@ was ``phi_c``:
       what the new object actually promises (A1 restated as the primary claim
       rather than as a corollary);
   B3  the CONTRACT verdict evidence. The phi_c/V_b mismatch is gone by
-      construction. The remaining exclusion is the back-EMF one, and it is
-      measurable: while the bound binds, dI/dt is held at zero, so the test is
-      whether the window contains a FALLING loop current on which the bound is
-      active. Reported per arm.
+      construction, and since 2026-08-12 so is the back-EMF exclusion: the
+      circuit integrates the sheath's UNBOUNDED demand, so dI/dt is no longer
+      held at zero while the bound binds. The test is unchanged and its
+      READING is inverted -- a FALLING loop current on a bound solve was the
+      excluded-impossible state under the old contract and is the positive
+      evidence under the new one. Reported per arm.
 
 Usage (from <checkout>/cablp, with PYTHONPATH set to that same cablp):
     python scripts/regime_vcm_onprobe_read.py regime_vcm_onprobe_dv \
@@ -125,13 +127,18 @@ def contract_evidence(d):
           f"{int(noise.sum())}"
           + (f" (worst {np.nanmin((dI / scale)[noise]):.2e} relative)"
              if np.any(noise) else ""))
-    print(f"       saves with BOTH bound and a real fall (the EXCLUDED "
-          f"condition): {int(both.sum())}")
+    print(f"       saves with BOTH bound and a real fall (the condition the "
+          f"OLD contract excluded): {int(both.sum())}")
     print(f"       I_loop: {I[0]:.6g} -> {I[-1]:.6g} A, max "
           f"{np.nanmax(I):.6g} A")
-    # The positive evidence this window CAN give: while the bound is active,
-    # dI/dt is held at zero. That is the documented property, and it is what
-    # becomes a defect on a decaying leg.
+    # The reading of these counts INVERTED on 2026-08-12. While the circuit
+    # integrated the BOUNDED device voltage the loop residual was identically
+    # zero wherever the bound bound, so `both` could only ever be zero and a
+    # frozen I_loop was the expected -- documented -- signature. The circuit
+    # now integrates the sheath's unbounded demand, so dI/dt is free while
+    # the bound is active, and `both` counts the saves that PROVE it: a bound
+    # solve on a falling current is exactly the state the old contract
+    # excluded as impossible.
     held = bound_now.copy()
     held[0] = False
     if np.any(held):
@@ -139,21 +146,18 @@ def contract_evidence(d):
         print(f"       while BOUND, I_loop spans {spread:.3e} A over "
               f"{int(held.sum())} saves "
               f"({spread / max(float(np.nanmax(I[held])), 1e-30):.2e} "
-              f"relative) -- frozen, which IS the dI/dt = 0 property")
+              f"relative) -- a frozen loop would span zero")
     if int(both.sum()) == 0:
-        print("       -> this WINDOW is inside the contract: the bound is")
-        print("          active almost throughout and the current is pinned,")
-        print("          but nothing here WANTS to fall, so the freeze costs")
-        print("          nothing. That is a statement about the window and")
-        print("          not about a full run -- the main-discharge DECAY is")
-        print("          a falling leg by definition, and this probe stops")
-        print("          long before it. The full-window verdict below is")
-        print("          therefore STRUCTURAL, argued from the loop equation,")
-        print("          and is NOT measured by this probe.")
+        print("       -> NO bound save falls in this window. That is not by")
+        print("          itself the old freeze: nothing here need be falling.")
+        print("          This arm gives no evidence either way, and the")
+        print("          verdict below rests on the loop equation alone.")
     else:
-        print("       -> the excluded condition OCCURS in this window: the")
-        print("          bound is holding dI/dt at zero on a leg where the")
-        print("          current wants to fall.")
+        print("       -> the loop current FALLS on bound saves, which the")
+        print("          pre-2026-08-12 contract excluded as impossible.")
+        print("          The back-EMF exclusion no longer freezes dI/dt:")
+        print("          the bound clamps the reported/beam-facing voltage")
+        print("          while the circuit integrates the unbounded demand.")
 
 
 def main(argv=None):
@@ -190,22 +194,25 @@ def main(argv=None):
     print("CONTRACT: the phi_c/V_b OBJECT mismatch R1 documented is removed by")
     print("cathode_circuit_bound_object='device_voltage' -- the bound's object")
     print("IS V_b, so phi_c exceeding V_avail where phi_a subtracts is no")
-    print("longer a mis-clamp but the correct answer. A FULL-WINDOW FLAG-ON IS")
-    print("STILL OUT OF CONTRACT, for the independent back-EMF exclusion: the")
-    print("inductor's stored energy is not counted as supply, so while the")
-    print("bound binds the loop residual is identically zero and dI/dt = 0 --")
-    print("which this probe MEASURES as the frozen I_loop above. The")
-    print("main-discharge decay is a falling-current leg by definition, so a")
-    print("full window with the flag on would have the bound freeze the decay.")
-    print("The contract is therefore WIDER than R1's (any window over which")
-    print("the loop current is not falling, which now includes the rise into")
-    print("the plateau) but still not the whole window.")
+    print("longer a mis-clamp but the correct answer. THE BACK-EMF EXCLUSION")
+    print("IS ALSO GONE (2026-08-12): it rested on the circuit integrating the")
+    print("BOUNDED device voltage, which made the loop residual identically")
+    print("zero wherever the bound bound, hence dI/dt = 0 and a frozen decay.")
+    print("The circuit now integrates the sheath's UNBOUNDED demand, so the")
+    print("restoring force survives the clamp and the current is free to fall")
+    print("while the bound is active -- which B3 above MEASURES rather than")
+    print("assumes. The inductor's stored energy is still not counted as")
+    print("supply; that exclusion now costs the falling leg nothing, because")
+    print("it constrains only the reported and beam-facing objects.")
+    print("A FULL-WINDOW RUN WITH THE FLAG ON IS THEREFORE IN CONTRACT.")
     print()
     print("SCOPE OF THIS EVIDENCE. The probe covers 0 -> 0.033 ms of the build")
-    print("leg and reaches no decay, so the freeze is measured but its COST is")
-    print("not: the full-window verdict is argued from the loop equation, not")
-    print("observed here. Confirming it needs a window that reaches the decay,")
-    print("which this brief did not buy.")
+    print("leg and reaches no main-discharge decay, so what is MEASURED is")
+    print("that dI/dt is free while the bound binds -- the mechanism the old")
+    print("exclusion rested on -- and not the decay itself. A window reaching")
+    print("the plateau decay would confirm the cost is zero end to end; this")
+    print("brief did not buy one, so the full-window statement remains")
+    print("structural for the decay leg specifically.")
     return 1 if failures else 0
 
 

@@ -2365,6 +2365,150 @@ def main():
         _R1_V_AVAIL, rtol=1e-9, atol=0.0,
     )
 
+    # (ix) THE CIRCUIT INTEGRAND IS THE UNBOUNDED DEMAND (2026-08-12). The
+    # bound belongs to the sheath and beam consumers; feeding it back into the
+    # loop equation removed the restoring force above the capability wall and
+    # turned I_loop into a ratchet driven by the TR stage's explicit kick.
+    # Each statement below is paired with a scratch RECONSTRUCTION of the
+    # defect, so none of them can pass vacuously.
+    from cablp.solvers._sim1d.physics.cathode import (
+        advance_circuit_current_driven,
+        idriven_result_evaluator,
+        idriven_vdis_evaluator,
+    )
+
+    _crf_sim = LAPDSim1D(*_r1_sim_config(cathode_circuit_voltage_bound=True))
+    _crf_V_src = float(_crf_sim._input_dict["V_bank"])
+    _crf_R = float(_crf_sim._input_dict["R_comp"])
+    _crf_L = float(_crf_sim._input_dict["L_parasitic_H"])
+    _crf_common = dict(
+        state=_crf_sim.state,
+        floors=_crf_sim._floors,
+        ion_mass_g=_crf_sim._ion_mass_g,
+        mu=_crf_sim._mu,
+        geometry=_crf_sim._geometry,
+        input_dict=_crf_sim._input_dict,
+        input_flags=_crf_sim._effective_cathode_flags(
+            active_only=False, floating=False
+        ),
+        beam_cross_prev=_crf_sim._cathode_beam_cross,
+        T_s_override_K=_crf_sim._cathode_Ts_K,
+        phi_wf_override_eV=_crf_sim._cathode_phi_wf_eff(),
+        circuit_V_src_V=_crf_V_src,
+    )
+    # The shipped integrand, and the pre-fix one it replaced. R_comp_partition
+    # is 1 and R_mesh 0 on this fixture, so the bounded evaluator's V_dis is
+    # exactly the bounded V_b -- the defect's integrand, reconstructed.
+    _crf_vdis = idriven_vdis_evaluator(**_crf_common)
+    _crf_bounded_solve = idriven_result_evaluator(**_crf_common)
+
+    def _crf_vdis_ratchet(_I):
+        return _crf_bounded_solve(_I).V_b
+
+    def _crf_f(_vdis, _I):
+        return (_crf_V_src - _I * _crf_R - _vdis(_I)) / _crf_L
+
+    # (a) A RESTORING FORCE EXISTS ABOVE THE WALL. Below it the loop drives
+    # the current up; above it -- where the sheath is capability-limited --
+    # the unbounded demand runs away to the data cap and f turns sharply
+    # NEGATIVE. That sign change is the whole fix.
+    assert _crf_bounded_solve(0.1).regime != "capability_limited"
+    assert _crf_f(_crf_vdis, 0.1) > 0.0, _crf_f(_crf_vdis, 0.1)
+    _crf_saw_wall = False
+    for _crf_I in (5.0, 20.0, 100.0, 1000.0):
+        assert _crf_bounded_solve(_crf_I).regime == "capability_limited"
+        _crf_saw_wall = True
+        assert _crf_f(_crf_vdis, _crf_I) < 0.0, (
+            _crf_I, _crf_f(_crf_vdis, _crf_I)
+        )
+        # THE RECONSTRUCTION, which must be CAUGHT: with the bounded voltage
+        # as the integrand the residual is identically zero here -- no
+        # restoring force, hence the ratchet.
+        assert abs(_crf_f(_crf_vdis_ratchet, _crf_I)) < 1.0, (
+            _crf_I, _crf_f(_crf_vdis_ratchet, _crf_I)
+        )
+    assert _crf_saw_wall, "fixture never reached the capability wall"
+
+    # (b) dt-HALVING INVARIANCE, on the circuit alone at this frozen state --
+    # which is where the defect lived (no fluid co-evolution is needed to
+    # reproduce it). Integrating from I = 0 through the wall must land on the
+    # same current however the interval is cut.
+    def _crf_integrate(_vdis, _dt, _t_end=2.0e-6):
+        _I = 0.0
+        for _ in range(max(1, int(round(_t_end / _dt)))):
+            _I, _, _ = advance_circuit_current_driven(
+                I_prev_A=_I, dt_s=_dt, V_src_V=_crf_V_src,
+                R_comp_ohm=_crf_R, L_H=_crf_L, vdis_of_I=_vdis,
+            )
+        return _I
+
+    _crf_dts = (5.0e-7, 2.5e-7, 1.25e-7)
+    _crf_fixed = [_crf_integrate(_crf_vdis, _dt) for _dt in _crf_dts]
+    for _crf_a, _crf_b in zip(_crf_fixed, _crf_fixed[1:]):
+        assert abs(_crf_a - _crf_b) <= 1.0e-6 * abs(_crf_b), (
+            _crf_dts, _crf_fixed
+        )
+    # THE RECONSTRUCTION, CAUGHT: the same halvings on the bounded integrand
+    # spread by more than a factor of two across the same three dt, because
+    # each arm simply parks on its own overshoot and no later step lowers it.
+    # (The spread is the honest discriminator, not a per-halving ratio: the
+    # overshoot is dt-proportional only while it dominates, and the arms
+    # converge toward the wall from above as dt shrinks.)
+    _crf_ratchet = [_crf_integrate(_crf_vdis_ratchet, _dt) for _dt in _crf_dts]
+    assert max(_crf_ratchet) > 2.0 * min(_crf_ratchet), _crf_ratchet
+    # ...every arm of it monotone in dt, and every arm ABOVE the converged
+    # current the restored restoring force finds.
+    assert _crf_ratchet == sorted(_crf_ratchet, reverse=True), _crf_ratchet
+    for _crf_r in _crf_ratchet:
+        assert _crf_r > _crf_fixed[-1] * (1.0 + 1e-3), (_crf_r, _crf_fixed)
+    assert _crf_ratchet[0] > 2.0 * _crf_fixed[0], (_crf_ratchet, _crf_fixed)
+
+    # (c) PRESENCE GATING of the controller's circuit term. With the flag off
+    # the bundle is never built, the candidate is inf, and the safety factor
+    # is INERT -- a value that would crush the step to nothing if it were
+    # read leaves the dt sequence untouched.
+    _crf_off = LAPDSim1D(*_r1_sim_config())
+    assert _crf_off._circuit_timestep_kwargs() is None
+    _crf_off_diag = _crf_off.suggest_timestep()
+    assert math.isinf(_crf_off_diag.dt_circuit), _crf_off_diag.dt_circuit
+    assert _crf_off_diag.active_constraint != "circuit"
+
+    def _crf_dt_sequence(**_overrides):
+        _s = LAPDSim1D(*_r1_sim_config(**_overrides))
+        _out = []
+        for _ in range(5):
+            _out.append(_s.suggest_timestep().dt)
+            _s.advance_one_step(dt=2.0e-9)
+        return _out
+
+    assert _crf_dt_sequence() == _crf_dt_sequence(circuit_dt_fraction=1.0e-30)
+    # ...and the gate is not vacuous the other way: ARMED, the bundle exists
+    # and the term is a real, finite bound that the safety factor scales.
+    _crf_on = LAPDSim1D(*_r1_sim_config(cathode_circuit_voltage_bound=True))
+    assert _crf_on._circuit_timestep_kwargs() is not None
+    _crf_on_diag = _crf_on.suggest_timestep()
+    assert math.isfinite(_crf_on_diag.dt_circuit), _crf_on_diag.dt_circuit
+    assert _crf_on_diag.active_constraint == "circuit", (
+        _crf_on_diag.active_constraint, _crf_on_diag.dt_circuit
+    )
+    _crf_tight = LAPDSim1D(
+        *_r1_sim_config(
+            cathode_circuit_voltage_bound=True, circuit_dt_fraction=1.0e-3
+        )
+    ).suggest_timestep()
+    assert np.isclose(
+        _crf_tight.dt_circuit,
+        _crf_on_diag.dt_circuit * (1.0e-3 / 0.25),
+        rtol=1e-9, atol=0.0,
+    ), (_crf_tight.dt_circuit, _crf_on_diag.dt_circuit)
+    # The WITHDRAWAL, which is what keeps the bound from pinning the step at a
+    # stiff fixed point: parked at the local equilibrium there is no transient
+    # to resolve and the candidate goes back to inf, even though the device
+    # slope there is enormous.
+    _crf_eq = LAPDSim1D(*_r1_sim_config(cathode_circuit_voltage_bound=True))
+    _crf_eq._circuit_I_loop = _crf_integrate(_crf_vdis, 1.25e-7)
+    assert math.isinf(_crf_eq.suggest_timestep().dt_circuit)
+
     # ------------------------------------------------------------------
     # THE VESSEL / COMMON-MODE NODE (regime_vessel_node, default off).
     # One state variable V_cm, the anode-to-wall potential, obeying

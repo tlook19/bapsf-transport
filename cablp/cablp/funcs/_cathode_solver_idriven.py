@@ -41,10 +41,11 @@ notes:
   a genuine inductive kick. The bracket-top
   solution is returned with its correspondingly large ``V_b`` and the
   circuit is expected to ramp the current down at ~V/L per step. No
-  exception, no fallback ladder. With the circuit bound in force the kick
-  is limited to the loop's available voltage instead, and the current
-  freezes rather than ramping; see ``circuit_V_avail_V`` in
-  ``solve_idriven``.
+  exception, no fallback ladder. With the circuit bound in force the
+  REPORTED kick is limited to the loop's available voltage, but the ramp is
+  unaffected: the circuit integrates the unbounded demand, so the current
+  still ramps down rather than freezing. See ``circuit_V_avail_V`` in
+  ``solve_idriven`` and ``cathode.idriven_vdis_evaluator``.
 
 Floating (open-circuit) solves keep using ``_cathode_solver.solve`` -- its
 floating branch models Boltzmann-suppressed emission over the virtual
@@ -432,7 +433,17 @@ def solve_idriven(
     clamped to that same available voltage. Must be positive: a loop with no
     available voltage has no ceiling to offer and the caller passes ``None``
     there instead. NB the inductor's back-EMF is deliberately NOT counted as
-    available voltage, so while the bound binds the loop current cannot fall.
+    available voltage: it is stored energy, not supply.
+
+    That exclusion no longer freezes the loop current (corrected 2026-08-12).
+    It once did, because the circuit integrated this same BOUNDED ``V_b``:
+    the loop residual was then identically zero wherever the bound bound, so
+    ``dI/dt >= 0`` everywhere and the current could only ratchet upward on
+    numerical overshoot. The circuit now integrates the sheath's UNBOUNDED
+    demand (``cathode.idriven_vdis_evaluator``), so the restoring force is
+    present on both sides of the capability wall and the current is free to
+    fall while the bound binds. The bound constrains the sheath and beam
+    objects only.
 
     ``circuit_bound_object`` selects WHICH quantity the available voltage
     bounds, and is read only when ``circuit_V_avail_V`` is given:
@@ -457,10 +468,12 @@ def solve_idriven(
     legitimately exceeds the available voltage while ``V_b`` does not, and
     ``"phi_c"`` there clamps a correct solve and tags it
     ``capability_limited`` with no error raised (only ``bound_active`` records
-    it). ``"device_voltage"`` cannot make that error. NB neither object
-    removes the OTHER exclusion above: the back-EMF is not supply, so on any
-    leg where the loop current is FALLING the physical ``V_b`` exceeds
-    ``circuit_V_avail_V`` and the bound engages and freezes ``dI/dt`` at zero.
+    it). ``"device_voltage"`` cannot make that error. NB the object is
+    independent of the back-EMF exclusion above, which no longer costs the
+    falling leg anything: the bound holds the exported ``V_b`` at the
+    available voltage, but the circuit integrates the unbounded demand, so a
+    bound solve on a decaying current reports a clamped ``V_b`` while
+    ``dI/dt`` stays free.
     ``bridge`` enables the kT_s-width thermal bridge across the
     SCL<->classical release corner (``_bridge_release``); off reproduces
     the hard branches bit-for-bit (the M2 equivalence gate's condition).
@@ -882,15 +895,21 @@ def solve_idriven(
             # value phi_c_ceiling_V is itself <= circuit_V_avail_V whenever the
             # circuit bound is the binding member of the composition.
             #
-            # The circuit stays well-posed. In the clamped branch
-            # vdis_of_I(I) = (V_src - I*(R_comp + R_mesh)) + I*R_internal, so
-            # the loop residual f(I) = (V_src - I*(R_comp+R_mesh) - V_b)/L is
-            # identically zero and the circuit stage's g'(I) = 1 exactly --
-            # still monotone, still a bracketed root. The runaway the floor was
-            # added to stop (I_loop -> 8e8 A, 2026-07-20) is closed off more
-            # tightly than before: the loop current cannot GROW through the
-            # bound either. It also cannot fall through it, because the
-            # inductor's back-EMF is not counted as circuit-available voltage.
+            # THIS CLAMPED V_b IS NOT WHAT THE CIRCUIT INTEGRATES, and that
+            # separation is load-bearing (2026-08-12). Were it, the clamped
+            # branch would give vdis_of_I(I) = (V_src - I*(R_comp + R_mesh))
+            # + I*R_internal, hence a loop residual f(I) identically zero and
+            # a stage derivative g'(I) = 1 exactly: monotone and bracketed,
+            # but with NO restoring force, so dI/dt >= 0 everywhere and the
+            # loop current could only ratchet upward on whatever the TR
+            # stage's explicit kick overshot to (measured 156.7 A vs a
+            # converged 0.9 A). The circuit is handed the UNBOUNDED demand
+            # instead -- see cathode.idriven_vdis_evaluator -- which keeps
+            # g'(I) > 1 strictly and leaves the current free to fall. The
+            # runaway this floor was added to stop (I_loop -> 8e8 A,
+            # 2026-07-20) is still closed: past the ceiling the unbounded
+            # demand rises to the data cap, far above anything the loop can
+            # source, so f goes sharply negative there.
             V_b = min(V_b, circuit_V_avail_V)
 
     P_wall = I_tot * (V_b + I_tot * config.R_comp)
