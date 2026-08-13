@@ -115,6 +115,16 @@ class DeviceConfig:
     emission_Ts_K: tuple = ()
     emission_area_cm2: tuple = ()
     emission_plasma_frac: tuple = ()
+    # Lit fraction of the emitting face [1]; 1.0 (the default) is the fully lit
+    # disc and every expression below reduces to its historical form. Below 1
+    # the two annular tuples above have ALREADY been scaled by it -- areas so
+    # each annulus's Richardson emission is throttled, plasma fractions so its
+    # share of the ion current is -- and this scalar is what stops the ion
+    # attribution's own normalization from dividing the second scaling straight
+    # back out (`ion_frac_k` is a normalized weight vector and is invariant
+    # under any uniform scaling of its inputs). It is therefore read at exactly
+    # one place per solver: the wetted-area normalizer.
+    emission_area_fraction: float = 1.0
 
     # Derived constants computed once at construction
     # (stored as slots; frozen prevents reassignment)
@@ -917,6 +927,14 @@ def solve(
             a * f
             for a, f in zip(config.emission_area_cm2, config.emission_plasma_frac)
         )
+        if config.emission_area_fraction != 1.0:
+            # Normalize against the FULL wetted area, not the lit one: the lit
+            # patches collect the uniform Bohm flux over their own share of the
+            # face, so the attribution must sum to f_em rather than to 1. Both
+            # tuples arrive scaled, so the raw sum above is f_em^2 times the
+            # full-disc wetted area and one division restores the intended
+            # single power.
+            wetted /= config.emission_area_fraction
         ion_frac_k = tuple(
             (a * f / wetted) if wetted > 0.0 else 0.0
             for a, f in zip(config.emission_area_cm2, config.emission_plasma_frac)

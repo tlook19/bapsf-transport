@@ -594,6 +594,12 @@ def solve_idriven(
             a * f
             for a, f in zip(config.emission_area_cm2, config.emission_plasma_frac)
         )
+        if config.emission_area_fraction != 1.0:
+            # See the same site in ``_cathode_solver.solve``: the lit patches
+            # collect the Bohm flux over their own share of the face, so the
+            # attribution sums to f_em, and this division is what keeps the
+            # scaled plasma fractions from being normalized straight back out.
+            wetted /= config.emission_area_fraction
         ion_frac_k = tuple(
             (a * f / wetted) if wetted > 0.0 else 0.0
             for a, f in zip(config.emission_area_cm2, config.emission_plasma_frac)

@@ -32,6 +32,11 @@ STRUCTURAL_FLAG_KEYS = (
     "Plasma",
     "TwinCathode",
     "cathode_coupling",
+    # The lit-area fraction rides the ``cathode`` group, and only when the
+    # emitting-area closure is armed. Resuming across a change of this flag
+    # would either drop an evolved fraction or leave an armed closure sitting
+    # at its seed, so the structural check refuses instead.
+    "cathode_emitting_area",
     "coverage_closure",
     "neutral_momentum",
     "neutral_two_zone",

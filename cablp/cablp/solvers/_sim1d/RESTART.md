@@ -145,8 +145,21 @@ compatibility check refuses instead.
 |---|---|---|
 | `_cathode_Ts_K` | `_accept_step_attempt` (`solver.py:3625`) | CARRIED |
 | `_cathode_theta` | `_accept_step_attempt` (`solver.py:3702`) | CARRIED |
+| `_cathode_f_em` | `_advance_emitting_area_fraction`, from `_accept_step_attempt` | CARRIED (armed only) |
 | `_cathode_energy_ledger_J` | `_accept_step_attempt` (`solver.py:3629-3634`) | CARRIED |
 | `_cathode_warming_model`, `_cathode_surface_ion_retention` | construction | DERIVABLE |
+
+`_cathode_f_em` is the emitting-area closure's whole state — the lit fraction
+of the cathode face. It rides the **`cathode` group** and is written and read
+only when `cathode_emitting_area` is armed, so a payload from a run without the
+closure is structurally what it always was and payloads written before the
+closure existed stay readable. It is one scalar, but it multiplies every
+annulus's emission, so dropping it would relocate the discharge current rather
+than perturb it; the `emitting_area` scenario of
+`scripts/restart_bitidentity.py` exports it mid-climb and its negative control
+breaks identity. `cathode_emitting_area` is a **structural flag key**: resuming
+across a change of arming would either drop an evolved fraction or leave an
+armed closure sitting at its seed, so the compatibility check refuses instead.
 
 ### Coverage closure (v2)
 
@@ -410,7 +423,8 @@ the constructed solver exactly, or the load raises:
 * the **structural** config keys — the ones that decide what the payload's
   members mean rather than merely how big a number is:
   flags `coverage_closure`, `neutral_momentum`, `neutral_two_zone`,
-  `TwinCathode`, `Plasma`, `cathode_coupling`, `regime_vessel_node`;
+  `TwinCathode`, `Plasma`, `cathode_coupling`, `cathode_emitting_area`,
+  `regime_vessel_node`;
   params `neutral_model`,
   `cathode_warming_model`, `cathode_surface_model`,
   `cathode_sample_smoothing`, `phase_transition_mode`.

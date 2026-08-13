@@ -317,8 +317,20 @@ def cathode_emission_annuli(input_dict, n_annuli=10):
     return tuple(Ts_k), tuple(area_k), tuple(frac_k)
 
 
-def cathode_device_config(input_dict, input_flags, mu):
-    """Build the existing cathode solver's static device configuration."""
+def cathode_device_config(input_dict, input_flags, mu, f_em=None):
+    """Build the existing cathode solver's static device configuration.
+
+    ``f_em`` is the cathode's lit-area fraction under the emitting-area
+    closure, or ``None`` (the default) for the fully lit face. This is the
+    SINGLE seam the throttle enters through: both solvers recompute their
+    annular emission from the tuples below, so scaling them here is what makes
+    every consumer -- the dispatched solve, the circuit integrand and the
+    accepted-state warming re-solve -- see one lit area. ``area_k`` is scaled
+    so each annulus's Richardson emission is throttled and ``frac_k`` so its
+    share of the ion current (and hence its space-charge release limit) is;
+    the fraction itself rides the config so the ion attribution's own
+    normalization cannot divide the second scaling back out.
+    """
     R_cath = float(input_dict["R_cath"])
     profile = str(input_dict.get("cathode_emission_profile", "uniform"))
     if profile == "uniform":
@@ -332,6 +344,22 @@ def cathode_device_config(input_dict, input_flags, mu):
         raise ValueError(
             "cathode_emission_profile must be 'uniform' or 'gaussian' "
             f"(got {profile!r})"
+        )
+    area_fraction = 1.0
+    if f_em is not None:
+        if profile != "gaussian":
+            raise ValueError(
+                "an emitting-area fraction requires "
+                "cathode_emission_profile='gaussian': under 'uniform' the disc "
+                "area A_c is dual-use -- it sets the Richardson emission AND "
+                "collects the ion current -- so scaling it would throttle the "
+                f"ion sink along with the emission (got {profile!r})"
+            )
+        area_fraction = float(f_em)
+        annuli = (
+            annuli[0],
+            tuple(area_fraction * a for a in annuli[1]),
+            tuple(area_fraction * f for f in annuli[2]),
         )
     return DeviceConfig(
         A_c=math.pi * R_cath**2,
@@ -350,6 +378,7 @@ def cathode_device_config(input_dict, input_flags, mu):
         emission_Ts_K=annuli[0],
         emission_area_cm2=annuli[1],
         emission_plasma_frac=annuli[2],
+        emission_area_fraction=area_fraction,
     )
 
 
@@ -680,6 +709,7 @@ def idriven_result_evaluator(
     beam_cross_prev,
     T_s_override_K=None,
     phi_wf_override_eV=None,
+    f_em_override=None,
     circuit_V_src_V=None,
     apply_circuit_bound=True,
 ):
@@ -714,7 +744,9 @@ def idriven_result_evaluator(
         input_dict = {**input_dict, "T_s": float(T_s_override_K)}
     if phi_wf_override_eV is not None:
         input_dict = {**input_dict, "phi_wf": float(phi_wf_override_eV)}
-    device_config = cathode_device_config(input_dict, input_flags, mu)
+    device_config = cathode_device_config(
+        input_dict, input_flags, mu, f_em=f_em_override
+    )
     device_config, _, _ = apply_cathode_Rp_model(
         device_config, derived, geometry, input_dict, input_flags
     )
@@ -782,6 +814,7 @@ def idriven_vdis_evaluator(
     beam_cross_prev,
     T_s_override_K=None,
     phi_wf_override_eV=None,
+    f_em_override=None,
     circuit_V_src_V=None,
 ):
     """Return a ``V_dis(I) [V]`` evaluator at this frozen plasma state.
@@ -825,6 +858,7 @@ def idriven_vdis_evaluator(
         beam_cross_prev=beam_cross_prev,
         T_s_override_K=T_s_override_K,
         phi_wf_override_eV=phi_wf_override_eV,
+        f_em_override=f_em_override,
         circuit_V_src_V=circuit_V_src_V,
         apply_circuit_bound=False,
     )
@@ -1073,6 +1107,7 @@ def solve_cathode_boundary(
     floating=False,
     T_s_override_K=None,
     phi_wf_override_eV=None,
+    f_em_override=None,
     circuit_I_loop_A=0.0,
     circuit_V_src_V=None,
     coverage=None,
@@ -1146,7 +1181,14 @@ def solve_cathode_boundary(
         # in the solver) the power-balance emission-cooling term. One
         # shared constant, changed in one place.
         input_dict = {**input_dict, "phi_wf": float(phi_wf_override_eV)}
-    device_config = cathode_device_config(input_dict, input_flags, mu)
+    # cathode_emitting_area: the lit-area fraction is not a dict key the
+    # emission paths read but a scaling of the annuli themselves, so it is
+    # handed to the builder rather than substituted into input_dict. Same
+    # discipline as the two above -- one value, applied at the one seam every
+    # emission consumer is built from.
+    device_config = cathode_device_config(
+        input_dict, input_flags, mu, f_em=f_em_override
+    )
     device_config, Rp_model, R_p_gap_ohm = apply_cathode_Rp_model(
         device_config, derived, geometry, input_dict, input_flags
     )

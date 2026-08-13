@@ -961,6 +961,18 @@ within whatever that mapping costs, which is unmeasured, so treat the value as
 order-of-magnitude only. The reciprocals of the window edges, 1379–1403 s^-1,
 are the spread of the ANCHOR, not an uncertainty on `r`.
 
+**This key is the SHARED PERCOLATION CLOCK (ruling of 2026-08-13).** The
+cathode emitting-area closure (`cathode_emitting_area`, below) grows its lit
+fraction on the same law and reads THIS key rather than carrying a rate of its
+own: the column coverage and the lit cathode disc are declared the same
+physical percolation seen from two surfaces, so the constant is fitted once,
+against the F2 current-foot waveform, and has exactly one owner. Registering a
+second rate would have been a second fit to the same waveform. Two consequences
+are structural, not stylistic: a re-calibration of this number moves BOTH
+closures, and the key is live — non-default values accepted — whenever EITHER
+flag is armed, which is why the coverage validator's inert-key refusal exempts
+this key alone under the emitting-area flag.
+
 **`coverage_backfill_time_s = 3.0e-5` s — ASSUMED. Bracket
 1.0e-5 – 1.2e-4 s, and the bracket is the claim.** The time over which the
 uncovered reservoir refills a burnt channel is a free-molecular transit across
@@ -995,6 +1007,74 @@ composition rule and supplying both is a construction-time `ValueError`. This
 is a deliberate choice of the least-surprising rule over a precedence rule
 (e.g. "profile wins", or "profile scaled by the fraction"), which would have to
 be remembered and could be got wrong silently.
+
+## `emitting_area_defaults`
+
+The one key here is read only under the default-off `cathode_emitting_area`
+flag, so nothing in this section is on any shipped trajectory. **The closure
+declares NO constant of its own beyond this seed.** Its growth rate is
+`coverage_growth_rate_per_s`, the shared percolation clock documented above;
+the logistic saturation at `f_em = 1` is structural (the face cannot be more
+than fully lit), not a fitted ceiling; and the patch-scale assumption that lit
+patches are large compared with the Debye length — which is what lets each
+patch carry the same one-dimensional sheath the full disc does — is ASSUMED and
+stated, with no number attached.
+
+**`cathode_emitting_area_initial_fraction = 0.0075` — DERIVED-with-bracket.
+Bracket 0.0063 – 0.0087, and the bracket is the claim; the shipped value is its
+midpoint.** The lit fraction at the start of the machine's current window is
+the back-extrapolated window-start discharge current over the current the model
+carries when the whole face is lit. The numerator is the machine's
+back-extrapolated foot, 0.34 – 0.47 A. The denominator is 54 A — the
+CIRCUIT-SET equilibrium current of the model's build end, not a wall
+coincidence: it is what the loop equation settles at, which is why a
+normalizer that moves with the emission ceiling was rejected. Both endpoints of
+the bracket come from dividing the two ends of the measured foot by that one
+number (`0.34/54 = 0.0063`, `0.47/54 = 0.0087`), so the bracket carries the
+measurement spread of the foot and nothing else.
+
+Two alternative normalizers were considered and are EXCLUDED, not assumed away
+(`scripts/ea0_emission_probe.{py,txt}`, 2026-08-13):
+
+* the static Richardson ceiling, 3151 A at the stance, gives `f_em0 ~ 1.3e-4`.
+  It is the wrong object: the model never rides the Richardson ceiling — the
+  measured release is space-charge/voltage-clamped a factor ~1670 below it
+  (annular Richardson 3151 A against 1.9 A actually carried at the 178 V
+  circuit ceiling at seed conditions).
+* the ~1.5 A the model carries at `t = 0` — the other end of the same
+  "1.5 → 54 A" transient — gives `f_em0 ~ 0.23 – 0.31`. That is excluded by the
+  closure's own feasibility condition rather than by preference: at those
+  values the primary-alone gain is 4.2e3 – 5.9e3 s^-1 against an all-surface
+  loss of 4.45e3 s^-1, i.e. already critical or supercritical at the seed, so
+  there is no subcritical foot for the closure to describe.
+
+At the shipped value the primary-alone gain is 118 – 163 s^-1 against the same
+4.45e3 s^-1 loss — subcritical by a factor 0.026 – 0.037, which is the property
+the closure exists to express and is measured, not imposed.
+
+**Composition with `coverage_closure` is PERMITTED, not refused.** The two
+closures act on different surfaces — the cathode's emitting face and the
+column's cross-section — and the audit found no shared state: `_cathode_f_em`
+is one scalar consumed only at the device-config seam, `_coverage_f` is a
+per-cell field consumed only by the beam split and the neutral partition, and
+they occupy separate restart payload sections (`cathode` vs `coverage`). The
+emitting-area clock is autonomous, and a composed run's `f_em(t)` was measured
+bit-identical to the same window run with the column closure off (2026-08-13).
+Their one common object is the growth constant above, which is shared BY
+DESIGN. A composed arm is therefore a legitimate configuration and simply has
+to disclose that it is one; nothing about the composition is implicit.
+
+**Honest bar.** The number is DERIVED, not measured: it inherits the
+back-extrapolation of the current foot (an extrapolation, not a reading) and
+the identification of the model's circuit-set 54 A with "the fully lit face".
+Neither the lit area nor the patch count is observed in this machine. Two
+physical keyings that WOULD have pinned the growth from measured surface
+physics were evaluated and both fail the clock by orders of magnitude at the
+shipped constants — ion-bombardment cleaning gives `tau ~ 13 s` at foot flux
+(~4 decades slow) and thermal spreading `tau_th ~ 94 ms` (~2 decades) — so they
+are registered as arithmetic-excluded alternatives rather than options, and the
+logistic with the one shared fitted rate is the minimal honest law that
+remains.
 
 ## `neutral_probe_source_defaults`
 
