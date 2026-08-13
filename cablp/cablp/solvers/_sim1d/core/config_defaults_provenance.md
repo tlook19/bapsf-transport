@@ -1052,6 +1052,18 @@ At the shipped value the primary-alone gain is 118 – 163 s^-1 against the same
 4.45e3 s^-1 loss — subcritical by a factor 0.026 – 0.037, which is the property
 the closure exists to express and is measured, not imposed.
 
+**Composition with `coverage_closure` is PERMITTED, not refused.** The two
+closures act on different surfaces — the cathode's emitting face and the
+column's cross-section — and the audit found no shared state: `_cathode_f_em`
+is one scalar consumed only at the device-config seam, `_coverage_f` is a
+per-cell field consumed only by the beam split and the neutral partition, and
+they occupy separate restart payload sections (`cathode` vs `coverage`). The
+emitting-area clock is autonomous, and a composed run's `f_em(t)` was measured
+bit-identical to the same window run with the column closure off (2026-08-13).
+Their one common object is the growth constant above, which is shared BY
+DESIGN. A composed arm is therefore a legitimate configuration and simply has
+to disclose that it is one; nothing about the composition is implicit.
+
 **Honest bar.** The number is DERIVED, not measured: it inherits the
 back-extrapolation of the current foot (an extrapolation, not a reading) and
 the identification of the model's circuit-set 54 A with "the fully lit face".

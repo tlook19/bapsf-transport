@@ -3015,7 +3015,11 @@ input_flags_template_1d = {
     # seed in (0, 1]; each is a construction-time ValueError, as is setting the
     # seed key with this flag off. Default OFF and bit-exact off
     # (presence-gated: the off path passes no override, scales no tuple and
-    # leaves every device config identical).
+    # leaves every device config identical). COMPOSES with coverage_closure:
+    # the two describe different surfaces (the cathode face and the column
+    # cross-section), share no state, and their only common object is the
+    # growth constant -- so the composition is permitted rather than refused,
+    # and a composed arm must disclose that it is one.
     "cathode_emitting_area": False,
     # Ad-hoc probe neutral source S_probe(z,t) = A p(z) w(t), a volumetric
     # particle source on the neutral density equation. An INFERENCE

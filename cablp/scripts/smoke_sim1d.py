@@ -17144,10 +17144,18 @@ print(json.dumps({
                 _ea1_b.phi_c_minus - _ea1_a.phi_c_minus
             ) <= 1e-12 * abs(_ea1_a.phi_c_minus), _ea1_where
             # The full-disc ion collection is NOT throttled: the dark face
-            # still collects Bohm ions, which is why A_c stays unscaled.
-            assert (
-                _ea1_b.I_tot - _ea1_b.I_eth_star
-            ) == (_ea1_a.I_tot - _ea1_a.I_eth_star), _ea1_where
+            # still collects Bohm ions, which is why A_c stays unscaled. The
+            # Bohm current itself is bit-identical (it is built from A_c and
+            # the state, neither of which the throttle touches); the collected
+            # term recovered from the solve is a difference of two numbers ~70x
+            # larger than itself, so it is compared relatively -- 1e-12 against
+            # the 1e-2 change scaling it would imply.
+            assert _ea1_b.I_i == _ea1_a.I_i, _ea1_where
+            _ea1_ion_a = _ea1_a.I_tot - _ea1_a.I_eth_star
+            _ea1_ion_b = _ea1_b.I_tot - _ea1_b.I_eth_star
+            assert abs(
+                _ea1_ion_b - _ea1_ion_a
+            ) <= 1e-12 * abs(_ea1_ion_a), (_ea1_where, _ea1_ion_a, _ea1_ion_b)
 
     # (c) THE LOGISTIC ADVANCE. Unit form first: the exactly-integrated step
     # against the closed form, monotone, capped at 1, never below the seed.

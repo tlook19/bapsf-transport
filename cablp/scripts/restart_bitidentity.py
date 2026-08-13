@@ -130,6 +130,10 @@ def scenario_config(name):
             "cathode_emission_profile": "gaussian",
             "beam_deposition_model": "csda",
             "beam_anomalous_model": "quasilinear",
+            # Raised so the dt-growth recovery branch is reachable and its
+            # carried streak is a LIVE control here rather than an inert one
+            # (at the default patience 0 the whole branch is gated off).
+            "dt_growth_recovery_patience": 3,
         })
         flags["cathode_coupling"] = True
         flags["cathode_circuit_voltage_bound"] = True
@@ -241,6 +245,13 @@ INERT_EXPECTATIONS = {
         "beam_atten_cross is identically zero until the sheath potential "
         "crosses the ionization threshold (~2e-4 s), so there is nothing to "
         "perturb in this short window; covered by meanfield_beam and coverage",
+    ("emitting_area", "cathode._cathode_beam_cross"):
+        "same cause as the meanfield entry, and measured on this scenario "
+        "(2026-08-13): beam_atten_cross is all-zero at the t_mid=1e-6 s "
+        "handoff AND at t_end, so the multiplicative perturbation has "
+        "nothing to act on. The window is short deliberately -- the member "
+        "under test here is the lit fraction, and the beam cache is covered "
+        "by meanfield_beam and coverage",
 }
 
 
@@ -421,7 +432,8 @@ def run_scenario(name, workdir, log, split_at=None, control=None):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--scenario", default=None,
-                        choices=("meanfield", "meanfield_beam", "coverage"))
+                        choices=("meanfield", "meanfield_beam", "coverage",
+                                 "emitting_area"))
     parser.add_argument("--keep-dir", default=None,
                         help="write payloads here instead of a temp dir")
     parser.add_argument("--split-at", type=float, default=None,
@@ -438,7 +450,7 @@ def main(argv=None):
     names = (
         (args.scenario,)
         if args.scenario
-        else ("meanfield", "meanfield_beam", "coverage")
+        else ("meanfield", "meanfield_beam", "coverage", "emitting_area")
     )
 
     lines = []
