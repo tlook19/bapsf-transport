@@ -7490,6 +7490,18 @@ class LAPDSim1D:
         The atoms are NOT routed through the hot channel's ballistic kernel.
         That kernel integrates an isotropic volume birth; the backscattered
         flux is a directed surface jet, and its premise does not hold.
+
+        DISCLOSED CONSEQUENCE, and it is not small. Those atoms are hot-class
+        -- ``R_E (phi_c + Ti)`` is tens of eV per particle -- but with no
+        kernel to carry them they are booked into the COLD channel at the one
+        cathode-adjacent cell. On a short flag-on run with the jet armed
+        (R_N = R_E = 0.5) that cell's ``Tn`` reaches ~11 eV, against ~0.5 eV
+        everywhere else. The energy is conserved and the cell is the right
+        one, but a cold-channel temperature that large is a bookkeeping
+        location, not a physical bulk temperature, and any pressure or rate the
+        cold fluid derives from it there should be read with that in mind.
+        Giving the surface jet its own directed hot population is the way out
+        and is not built.
         """
         zeros = self._zero_rhs_state()
         if state.En is None or cathode_solve is None:
