@@ -976,6 +976,32 @@ therefore over-accommodates the CX tail. If that channel is ever split out, the
 two endpoints **0.1 / 0.4** are to be run as a declared family and the bracket
 reported as the claim — they are never to be fitted, on either arm.
 
+**UPDATE (NBL pass 2).** That channel IS now split out: the CX-born population
+is a separate, collisionally decoupled hot channel
+(`physics/hot_neutrals.py`), and `alpha_E` no longer touches it. The
+coefficient above now applies to what it was measured on — the thermal bulk at
+the wall sink — and nothing else. The hot channel's own surface treatment is
+NOT `alpha_E`: under the ratified annulus-cold v1 cut an intercepted hot atom
+leaves its whole excess energy on the wall, of which only the `alpha_E` share
+is accommodation in the measured sense and the remainder is the cut. The run's
+hot-channel diagnostics report both, so the declared **0.1 / 0.4** family
+remains the right instrument for the CX tail whenever that cut is relaxed —
+still never fitted.
+
+**`neutral_knudsen_temperature = "frozen"` — ASSUMED (stance choice, ratified
+v1-primary).** Which temperature the Knudsen conductances take their thermal
+speed from; read only under the default-off `neutral_energy` flag, because it
+is only there that a second answer exists. `"frozen"` evaluates every
+conductance once at `Tn_K`, making neutral transport a fixed property of the
+geometry — the behaviour every scored run to date was produced with, which is
+why it is the primary. `"local"` scales each conductance by
+`sqrt(Tn_local/Tn_K)` and is a DISCLOSED sensitivity arm. **Honest bar: the arm
+is unscored.** It also does less than its name suggests: it scales the transport
+RATE, not the equilibrium, because the driving potential is still the density
+difference — the textbook transpiration relation `n ~ 1/sqrt(T)` would require
+changing that potential and is not built. No measurement or fit is implied by
+either setting.
+
 ## `timestep_defaults`
 
 **`surface_loss_floor_exempt_rtol = 1e-3` — DERIVED from measured scales.**
