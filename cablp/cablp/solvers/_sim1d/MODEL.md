@@ -261,7 +261,8 @@ temperature claim; the model still separately uses `Tn_K=300 K` and the
 audited `Tn_fit=0.1 eV` collision temperature pending the A8/R4 repair.
 
 Optional neutral states use their actual packed layout throughout evidence:
-five rows for `(n, nn, M, Ee, Ei)`, then optional `M_n`, `nn_a`, and `M_n_a`.
+five rows for `(n, nn, M, Ee, Ei)`, then optional `M_n`, `nn_a`, `M_n_a`, and
+`En`.
 For two-zone runs the column and annulus inventories are
 `nn*V_col + nn_a*V_ann`, with `V_col=V_p` and `V_ann=V_m-V_p`; `nn*V_m` is
 never reported as a two-zone inventory. The same volume split applies to the

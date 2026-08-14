@@ -12,8 +12,10 @@ equations these schemes discretize, see [`MODEL.md`](MODEL.md).
   and ion energy densities `Ee`, `Ei`. Primitive quantities (`Te`, `Ti`, `v`)
   are recovered by `derive_state`. Default-off neutral reductions append
   optional rows in introduction order: column/chamber neutral momentum `M_n`,
-  annulus density `nn_a`, and (only for `kinetic_two_moment`) annulus momentum
-  `M_n_a`. Existing 5-, 6-, and 7-row layouts are unchanged.
+  annulus density `nn_a`, (only for `kinetic_two_moment`) annulus momentum
+  `M_n_a`, and (only for `neutral_energy`) neutral thermal energy `En`, which
+  carries the neutral temperature as `Tn = (2/3) En / (nn k)` on the volume
+  `nn` itself lives on. Existing 5-, 6-, 7- and 8-row layouts are unchanged.
 - **Grid** (`core/geometry.py`): finite-volume cells along the axial (`z`)
   coordinate with cell-centered states and face-based fluxes. Plasma and neutral
   fields carry separate face areas and cell volumes so inventory
