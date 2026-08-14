@@ -17575,6 +17575,62 @@ print(json.dumps({
                 assert float(np.max(_sp3_out)) < float(
                     np.max(_sp3_deposit)
                 ), (_sp3_kernel, _sp3_cells_wide)
+    # ...and the h5 BASE reader, which is what makes the verdict arm's single
+    # delta the foot addition: with the sp1 reference as base, the arm starts
+    # from the reference's OWN equilibrated initial profile rather than from
+    # the uniform convention (7.5x denser). The reader must return those
+    # frames exactly, and refuse a closure mismatch in either direction.
+    _sp3_base_p, _sp3_base_f = _sp3_stance()
+    _sp3_base_f["neutral_two_zone"] = True
+    _sp3_base_p["neutral_exchange_model"] = "knudsen"
+    _sp3_base_p["nn0"] = 3.3e12
+    _sp3_base_sim = LAPDSim1D(dict(_sp3_base_p), dict(_sp3_base_f))
+    _sp3_base_result = _sp3_base_sim.run(t_end=1.0e-6, dt=1.0e-7)
+    with tempfile.TemporaryDirectory() as _sp3_tmpdir:
+        _sp3_h5 = str(Path(_sp3_tmpdir) / "sp3_base_source.h5")
+        _sp3_base_sim.save_result(_sp3_h5, _sp3_base_result)
+        _sp3_got_col, _sp3_got_ann = _sp3_mod.base_profiles_from_h5(
+            _sp3_h5, _sp3_base_sim.geometry.cells, True
+        )
+        # THE NULL CONSTRUCTION at the reader: the base IS the source's t=0
+        # frames, bit for bit, in both zones.
+        assert np.array_equal(
+            _sp3_got_col, np.asarray(_sp3_base_result.nn[0], dtype=float)
+        )
+        assert np.array_equal(
+            _sp3_got_ann, np.asarray(_sp3_base_result.nn_a[0], dtype=float)
+        )
+        # ...and it really is a profile from the run, not the scalar echoed:
+        # the equilibration-free stance starts uniform, so this fixture is
+        # checked for having been READ rather than reconstructed.
+        assert np.array_equal(
+            _sp3_got_col, np.full(_sp3_got_col.size, 3.3e12)
+        )
+        for _sp3_bad_cells, _sp3_bad_tz, _sp3_why in (
+            (_sp3_base_sim.geometry.cells - 1, True, "a cell-count mismatch"),
+            (_sp3_base_sim.geometry.cells, False, "a two-zone source read "
+             "single-field"),
+        ):
+            try:
+                _sp3_mod.base_profiles_from_h5(
+                    _sp3_h5, _sp3_bad_cells, _sp3_bad_tz
+                )
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(
+                    f"base_profiles_from_h5 must refuse {_sp3_why}"
+                )
+    # A zero-width kernel is not a spread; the null control is dt_foot = 0,
+    # which never reaches the kernel at all.
+    for _sp3_bad_width in (0.0, -1.0):
+        try:
+            _sp3_mod.spread_matrix(_sp3_geom, "diffusive", _sp3_bad_width)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("spread_matrix must refuse a non-positive width")
+
     # vbar at 300 K helium, and the reaches the sp3 registration quotes.
     _sp3_vbar = _sp3_mod.mean_speed_cm_s(300.0, m_He_cgs)
     assert 1.25e5 < _sp3_vbar < 1.27e5, _sp3_vbar

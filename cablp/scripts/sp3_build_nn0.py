@@ -9,8 +9,23 @@ THE CONSTRUCTION (leg 3a of the sp campaign):
 
     nn0(z) = base + spread( first-flight lobe x throughput x dt_foot )
 
-* ``base`` -- the shipped-convention uniform fill the stance would otherwise
-  start from, i.e. exactly what ``resolve_nn0`` returns for the stance config.
+* ``base`` -- ONE OF TWO, and a result states which:
+
+  - ``--base-from-h5 RUN.h5`` (the verdict-arm base): the ``t = 0`` column
+    ``nn`` frame of an existing result, and its ``nn_a`` frame for the
+    annulus. For the sp3 verdict arm that h5 is the sp1 fluid REFERENCE, so
+    the base IS the reference run's own equilibrated initial profile and the
+    arm's SINGLE DELTA is the foot addition on top of it. This matters
+    numerically: the REF's equilibrated fill is ~2.6e12 cm^-3, about 7.5x
+    BELOW the uniform ``nn0`` convention, so the two bases are not
+    interchangeable.
+  - the uniform ``resolve_nn0`` value for the stance config (the default).
+    Retained for stances that do not start from an equilibrated seed
+    (the SS/G-class conducting stances), where there is no reference frame to
+    read and the shipped convention is the honest base.
+
+  The two are mutually exclusive: passing ``--base-from-h5`` replaces the
+  uniform base entirely, and the ledger records which was used.
 * the lobe -- the gas puff's first-flight axial deposition, taken from the
   repo's own ``gas_puff_rate_profile`` at the stance's own puff keys
   (``cosine_pipe``, its centre and throw). It is imported, never re-derived,
@@ -68,7 +83,7 @@ import numpy as np
 from compare_sim1d_es1 import PRODUCTION_NX, PARAM_OVERRIDES, FLAG_OVERRIDES
 from run_mechanism_ladder import ES_OPERATING
 
-from cablp.solvers._sim1d import LAPDSim1D, default_config
+from cablp.solvers._sim1d import LAPDSim1D, default_config, load_result_hdf5
 from cablp.solvers._sim1d.core.config import resolve_nn0
 from cablp.solvers._sim1d.physics.neutrals import (
     # The eligibility mask the puff itself uses. Imported rather than
@@ -129,6 +144,68 @@ def stance_config(es, nx, sgp, two_zone):
     return params, flags
 
 
+def base_profiles_from_h5(path, cells, two_zone):
+    """Return ``(base_column, base_annulus)`` from a result's ``t = 0`` frames.
+
+    The base is the run's INITIAL neutral state, so the first saved frame must
+    actually be the initial one: a result whose first sample sits at ``t > 0``
+    (a ``t_save_start`` beyond zero) is refused rather than silently treated as
+    an initial condition it is not.
+
+    ``base_annulus`` is the ``nn_a`` frame under the two-zone closure and
+    ``None`` without it. The closure must MATCH: a two-zone build needs an
+    ``nn_a`` to read, and a single-field build refuses a two-zone source,
+    because collapsing two zones into one field is a modelling choice this
+    script does not get to make silently.
+    """
+    result = load_result_hdf5(path)
+    time = np.asarray(result.time, dtype=float)
+    if time.size == 0 or time[0] != 0.0:
+        raise ValueError(
+            f"{path} does not save a t = 0 frame (first saved time "
+            f"{time[0] if time.size else 'none'!r}), so its first frame is "
+            "not an initial condition; rerun the source with t_save_start = 0"
+        )
+    base_col = np.array(result.nn[0], dtype=float).reshape(-1)
+    if base_col.size != int(cells):
+        raise ValueError(
+            f"{path} has {base_col.size} cells, this stance has {cells}; the "
+            "base profile and the run it seeds must be on the same grid "
+            "(check --nx and the geometry keys)"
+        )
+    source_nn_a = getattr(result, "nn_a", None)
+    if two_zone:
+        if source_nn_a is None:
+            raise ValueError(
+                f"--two-zone needs an annulus base, but {path} carries no "
+                "nn_a (it is a single-field run). Use a two-zone source, or "
+                "drop --two-zone"
+            )
+        base_ann = np.array(source_nn_a[0], dtype=float).reshape(-1)
+        if base_ann.size != int(cells):
+            raise ValueError(
+                f"{path} nn_a has {base_ann.size} cells, expected {cells}"
+            )
+    else:
+        if source_nn_a is not None:
+            raise ValueError(
+                f"{path} is a TWO-ZONE run but this build is single-field; "
+                "folding its two zones into one neutral field is a modelling "
+                "choice, not a conversion. Pass --two-zone"
+            )
+        base_ann = None
+    for label, arr in (("nn", base_col), ("nn_a", base_ann)):
+        if arr is None:
+            continue
+        if not np.all(np.isfinite(arr)) or np.any(arr <= 0.0):
+            raise ValueError(
+                f"{path} frame 0 {label} must be finite and > 0 (got min "
+                f"{float(np.min(arr)):.6g}); the solver refuses such a profile "
+                "as an initial condition and so does this"
+            )
+    return base_col, base_ann
+
+
 def mean_speed_cm_s(T_K, mass_g):
     """Return the Maxwellian mean speed sqrt(8 k T / (pi m)) [cm/s]."""
     return math.sqrt(8.0 * kb_cgs * float(T_K) / (math.pi * float(mass_g)))
@@ -154,6 +231,13 @@ def spread_matrix(geometry, kernel, width_cm):
     the deposit. Silence here would delete particles; the conservation check in
     :func:`build` is what turns that into a loud failure.
     """
+    if not (math.isfinite(width_cm) and width_cm > 0.0):
+        raise ValueError(
+            "the spreading kernel needs a finite width > 0 (got "
+            f"{width_cm!r}); a zero-width spread is the NULL CONTROL and is "
+            "handled by dt_foot = 0, which deposits nothing and never reaches "
+            "this function"
+        )
     z = np.asarray(geometry.z_cm, dtype=float)
     length = np.asarray(geometry.length_cm, dtype=float)
     eligible = np.array(
@@ -184,7 +268,34 @@ def build(args):
     geometry = LAPDSim1D(dict(params), dict(flags)).geometry
     cells = int(geometry.cells)
 
-    base = float(resolve_nn0(params, flags))
+    V_chamber_all = np.asarray(geometry.neutral_volume_cm3, dtype=float)
+    V_col_all, V_ann_all = neutral_zone_volumes(geometry)
+    if args.base_from_h5 is None:
+        base_col_profile, base_ann_profile = None, None
+        base_scalar = float(resolve_nn0(params, flags))
+        base_col = np.full(cells, base_scalar)
+        base_ann = np.full(cells, base_scalar) if args.two_zone else None
+        base_source = "resolve_nn0 at the stance config (shipped convention)"
+    else:
+        base_col_profile, base_ann_profile = base_profiles_from_h5(
+            args.base_from_h5, cells, args.two_zone
+        )
+        base_col = base_col_profile
+        base_ann = base_ann_profile
+        base_source = f"t=0 frames of {args.base_from_h5}"
+    # The scalar density the mean free path is evaluated at. For a profile
+    # base that is the CHAMBER-VOLUME-WEIGHTED MEAN over the whole grid (total
+    # neutral particles / total neutral volume, both zones counted) -- the
+    # honest single number for a spread that is computed once for the grid.
+    # lambda goes as 1/n and the diffusive reach as sqrt(lambda), so the choice
+    # is a weak one, and --mfp-cm overrides it outright.
+    if base_ann is None:
+        base_particles = float(np.sum(base_col * V_chamber_all))
+    else:
+        base_particles = float(
+            np.sum(base_col * V_col_all + base_ann * V_ann_all)
+        )
+    base_density = base_particles / float(np.sum(V_chamber_all))
     Tn_K = float(args.tn_k if args.tn_k is not None else params["Tn_K"])
     vbar = mean_speed_cm_s(Tn_K, m_He_cgs)
 
@@ -201,7 +312,7 @@ def build(args):
         throw_cm=params["gas_puff_throw_cm"],
         end=0,
     )
-    V_chamber = np.asarray(geometry.neutral_volume_cm3, dtype=float)
+    V_chamber = V_chamber_all
     deposited = rate * V_chamber * float(args.dt_foot_s)  # particles per cell
 
     throughput_applied = puff_rate(params["S_gp"], params["gas_puff_valves"], 1.0)
@@ -216,9 +327,10 @@ def build(args):
     else:
         # Like-particle mean free path: the sqrt(2) is the relative-speed
         # correction for a test particle moving through its own species.
-        mfp = 1.0 / (math.sqrt(2.0) * base * float(args.sigma_hehe_cm2))
+        mfp = 1.0 / (math.sqrt(2.0) * base_density * float(args.sigma_hehe_cm2))
         mfp_source = (
-            f"1 / (sqrt(2) n sigma) at n = base = {base:.6g} cm^-3, "
+            f"1 / (sqrt(2) n sigma) at n = the base's chamber-volume-weighted "
+            f"mean = {base_density:.6g} cm^-3, "
             f"sigma = {args.sigma_hehe_cm2:.6g} cm^2 [{SIGMA_HE_HE_SOURCE}]"
         )
     D_cm2_s = mfp * vbar / 3.0
@@ -229,19 +341,26 @@ def build(args):
         width = vbar * float(args.dt_foot_s)
         width_label = "top-hat half-width = vbar dt"
 
-    spread = spread_matrix(geometry, args.kernel, width)
-    # A source cell the kernel cannot carry out of is only safe if it holds
-    # nothing; otherwise the spread would delete its particles silently.
-    unreachable = spread.sum(axis=0) <= 0.0
-    if np.any(deposited[unreachable] != 0.0):
-        raise ValueError(
-            "the spreading kernel reaches no eligible cell from a source cell "
-            "that carries deposited gas, so the spread would delete it: "
-            f"{int(np.count_nonzero(deposited[unreachable] != 0.0))} such "
-            f"cells at kernel width {width:.6g} cm. Widen the kernel or "
-            "refine the grid"
-        )
-    accumulated = spread @ deposited  # particles per cell after spreading
+    if width == 0.0:
+        # THE NULL CONTROL (dt_foot = 0): nothing was deposited, so there is
+        # nothing to spread and no kernel is built. Short-circuited rather
+        # than passed through a zero-width kernel, which is undefined.
+        accumulated = np.zeros(cells, dtype=float)
+    else:
+        spread = spread_matrix(geometry, args.kernel, width)
+        # A source cell the kernel cannot carry out of is only safe if it
+        # holds nothing; otherwise the spread would delete its particles
+        # silently.
+        unreachable = spread.sum(axis=0) <= 0.0
+        if np.any(deposited[unreachable] != 0.0):
+            raise ValueError(
+                "the spreading kernel reaches no eligible cell from a source "
+                "cell that carries deposited gas, so the spread would delete "
+                f"it: {int(np.count_nonzero(deposited[unreachable] != 0.0))} "
+                f"such cells at kernel width {width:.6g} cm. Widen the kernel "
+                "or refine the grid"
+            )
+        accumulated = spread @ deposited  # particles per cell after spreading
 
     grid_in = float(deposited.sum())
     grid_out = float(accumulated.sum())
@@ -252,7 +371,7 @@ def build(args):
     )
 
     # --- routing into the neutral field(s) ---------------------------------
-    V_col, V_ann = neutral_zone_volumes(geometry)
+    V_col, V_ann = V_col_all, V_ann_all
     add_col = np.zeros(cells, dtype=float)
     add_ann = np.zeros(cells, dtype=float) if args.two_zone else None
     if not args.two_zone:
@@ -275,8 +394,8 @@ def build(args):
     else:
         raise ValueError(f"unknown --zone {args.zone!r}")
 
-    nn0_profile = base + add_col
-    nn0_annulus_profile = None if add_ann is None else base + add_ann
+    nn0_profile = base_col + add_col
+    nn0_annulus_profile = None if add_ann is None else base_ann + add_ann
 
     # Round-trip particle check: the densities written out must hold the
     # inventory the spread produced, in whichever zone(s) it was routed to.
@@ -301,8 +420,18 @@ def build(args):
         "gas_puff_throw_cm": float(params["gas_puff_throw_cm"]),
         "two_zone": bool(args.two_zone),
         "zone": args.zone if args.two_zone else "single-field",
-        "base_nn0_cm3": base,
-        "base_source": "resolve_nn0 at the stance config (shipped convention)",
+        "base_kind": "uniform" if args.base_from_h5 is None else "profile_h5",
+        "base_source": base_source,
+        "base_from_h5": args.base_from_h5,
+        "base_mean_density_cm3": base_density,
+        "base_column_min_cm3": float(np.min(base_col)),
+        "base_column_max_cm3": float(np.max(base_col)),
+        "base_annulus_min_cm3": (
+            None if base_ann is None else float(np.min(base_ann))
+        ),
+        "base_annulus_max_cm3": (
+            None if base_ann is None else float(np.max(base_ann))
+        ),
         "Tn_K": Tn_K,
         "vbar_cm_s": vbar,
         "dt_foot_s": float(args.dt_foot_s),
@@ -324,10 +453,13 @@ def build(args):
         "spread_conservation_rel": conservation_rel,
         "zone_routing_conservation_rel": routing_rel,
     }
-    return (nn0_profile, nn0_annulus_profile, geometry, ledger)
+    return (nn0_profile, nn0_annulus_profile, base_col, base_ann,
+            geometry, ledger)
 
 
-def print_ledger(nn0_profile, nn0_annulus_profile, geometry, ledger):
+def print_ledger(
+    nn0_profile, nn0_annulus_profile, base_col, base_ann, geometry, ledger
+):
     """Print the inventory ledger and the profile's headline numbers."""
     z = np.asarray(geometry.z_cm, dtype=float)
     print("=== sp3 shaped-nn0 construction ===")
@@ -338,7 +470,16 @@ def print_ledger(nn0_profile, nn0_annulus_profile, geometry, ledger):
         f"throw {ledger['gas_puff_throw_cm']:g} cm"
     )
     print(
-        f"base fill: {ledger['base_nn0_cm3']:.6g} cm^-3 ({ledger['base_source']})"
+        f"base [{ledger['base_kind']}]: {ledger['base_source']}; "
+        f"column {ledger['base_column_min_cm3']:.6g}..."
+        f"{ledger['base_column_max_cm3']:.6g}"
+        + (
+            ""
+            if ledger["base_annulus_min_cm3"] is None
+            else f", annulus {ledger['base_annulus_min_cm3']:.6g}..."
+            f"{ledger['base_annulus_max_cm3']:.6g}"
+        )
+        + f"; chamber-mean {ledger['base_mean_density_cm3']:.6g} cm^-3"
     )
     print(
         f"bracket corner: dt_foot={ledger['dt_foot_s']:.6g} s of "
@@ -379,24 +520,25 @@ def print_ledger(nn0_profile, nn0_annulus_profile, geometry, ledger):
         f"{ledger['grid_inventory_after_spread']:.6g} atoms  "
         f"(rel err {ledger['zone_routing_conservation_rel']:.3e})"
     )
-    print("--- profile ---")
-    for label, prof in (
-        ("column" if ledger["two_zone"] else "nn", nn0_profile),
-        ("annulus", nn0_annulus_profile),
+    print("--- profile (enhancement is CELL-LOCAL: profile / base at that cell) ---")
+    for label, prof, base in (
+        ("column" if ledger["two_zone"] else "nn", nn0_profile, base_col),
+        ("annulus", nn0_annulus_profile, base_ann),
     ):
         if prof is None:
             continue
+        ratio = np.asarray(prof, dtype=float) / np.asarray(base, dtype=float)
         print(
             f"{label:>8}: min {float(np.min(prof)):.6g}  max "
             f"{float(np.max(prof)):.6g}  mean {float(np.mean(prof)):.6g} cm^-3 "
-            f"(base x {float(np.max(prof)) / ledger['base_nn0_cm3']:.4g} at peak)"
+            f"(peak enhancement x{float(np.max(ratio)):.4g})"
         )
         for z_band in SP1_BAND_Z_CM:
             i = int(np.argmin(np.abs(z - z_band)))
             print(
                 f"          z={z[i]:8.2f} cm (sp1 band {z_band:g}): "
-                f"{float(prof[i]):.6g} cm^-3 = base x "
-                f"{float(prof[i]) / ledger['base_nn0_cm3']:.6g}"
+                f"{float(prof[i]):.6g} cm^-3 = base x {float(ratio[i]):.6g} "
+                f"(base {float(base[i]):.6g})"
             )
 
 
@@ -422,9 +564,21 @@ def main(argv=None):
                         "shipped first-flight routing exactly; 'column' is the "
                         "fully-mixed-inward extreme. The routing is a "
                         "DISCLOSED DEGENERACY (sp2), so a result states it")
+    p.add_argument("--base-from-h5", default=None,
+                   help="read the base profile from an existing result's t=0 "
+                        "frames (column nn, and nn_a for the annulus) instead "
+                        "of the uniform resolve_nn0 convention. THE VERDICT-ARM "
+                        "BASE: with the sp1 fluid reference here, the base is "
+                        "that run's own equilibrated initial profile and the "
+                        "arm's single delta is the foot addition on top of it. "
+                        "Mutually exclusive with the uniform base by "
+                        "construction -- passing this replaces it, and the "
+                        "ledger records which was used")
     p.add_argument("--dt-foot-s", type=float, default=4.5e-3,
                    help=f"foot duration [s]; registered bracket "
-                        f"{DT_FOOT_BRACKET_S} (default: the pedestal-floor end)")
+                        f"{DT_FOOT_BRACKET_S} (default: the pedestal-floor "
+                        f"end). 0 is the explicit NULL CONTROL: no foot "
+                        f"addition at all, so the output is the base itself")
     p.add_argument("--kernel", choices=KERNELS, default="diffusive",
                    help="spreading kernel; registered bracket is both members "
                         "(default: the short-reach end)")
@@ -438,16 +592,36 @@ def main(argv=None):
                         "against an independently quoted lambda")
     p.add_argument("--tn-k", type=float, default=None,
                    help="neutral temperature [K]; default is the stance Tn_K")
+    p.add_argument("--selfcheck", action="store_true",
+                   help="NULL-CONSTRUCTION SELF-CHECK: requires --base-from-h5 "
+                        "and --dt-foot-s 0. After writing, re-reads the npz "
+                        "and the source h5 and asserts the written profiles "
+                        "equal the h5's t=0 frames EXACTLY, in every zone. It "
+                        "checks the plumbing end to end -- that the base "
+                        "really came from the h5, survived the routing, and "
+                        "round-tripped through the file -- rather than the "
+                        "arithmetic of adding zero")
     p.add_argument("--out", required=True, help="output .npz path")
     args = p.parse_args(argv)
 
-    if args.dt_foot_s <= 0.0 or not math.isfinite(args.dt_foot_s):
-        p.error("--dt-foot-s must be finite and > 0")
+    if args.dt_foot_s < 0.0 or not math.isfinite(args.dt_foot_s):
+        p.error("--dt-foot-s must be finite and >= 0 (0 is the null control)")
     if args.zone != "chamber" and not args.two_zone:
         p.error("--zone is a two-zone routing choice; pass --two-zone or drop it")
+    if args.selfcheck and (
+        args.base_from_h5 is None or args.dt_foot_s != 0.0
+    ):
+        p.error(
+            "--selfcheck is the null construction: it requires "
+            "--base-from-h5 and --dt-foot-s 0"
+        )
 
-    nn0_profile, nn0_annulus_profile, geometry, ledger = build(args)
-    print_ledger(nn0_profile, nn0_annulus_profile, geometry, ledger)
+    nn0_profile, nn0_annulus_profile, base_col, base_ann, geometry, ledger = (
+        build(args)
+    )
+    print_ledger(
+        nn0_profile, nn0_annulus_profile, base_col, base_ann, geometry, ledger
+    )
 
     payload = {
         "nn0_profile": nn0_profile,
@@ -458,6 +632,34 @@ def main(argv=None):
         payload["nn0_annulus_profile"] = nn0_annulus_profile
     np.savez(args.out, **payload)
     print(f"saved {args.out}")
+
+    if args.selfcheck:
+        source = load_result_hdf5(args.base_from_h5)
+        with np.load(args.out, allow_pickle=False) as written:
+            checks = [(
+                "column",
+                np.asarray(written["nn0_profile"], dtype=float),
+                np.asarray(source.nn[0], dtype=float),
+            )]
+            if "nn0_annulus_profile" in written:
+                checks.append((
+                    "annulus",
+                    np.asarray(written["nn0_annulus_profile"], dtype=float),
+                    np.asarray(source.nn_a[0], dtype=float),
+                ))
+            ok = True
+            for label, got, want in checks:
+                same = np.array_equal(got, want)
+                ok = ok and same
+                print(
+                    f"null-construction self-check [{label}]: "
+                    f"{'EXACT' if same else 'DIFFERS'} vs "
+                    f"{args.base_from_h5} t=0 ({got.size} cells, "
+                    f"max |delta| {float(np.max(np.abs(got - want))):.3e})"
+                )
+        print("SELFCHECK:", "PASS" if ok else "FAIL")
+        if not ok:
+            raise SystemExit(1)
 
 
 if __name__ == "__main__":
