@@ -1644,6 +1644,16 @@ class LAPDSim1D:
                 "gas_puff_local_ionization_fraction is not supported with "
                 "neutral_two_zone (annulus puff routing); disable one"
             )
+        _fgp = float(self._input_dict.get("gas_puff_delivery_fraction", 1.0))
+        if not np.isfinite(_fgp) or not 0.0 < _fgp <= 1.0:
+            raise ValueError(
+                "gas_puff_delivery_fraction must be finite and in (0, 1] "
+                f"(got {_fgp}). It is the dimensionless share of the "
+                "at-the-valve flow S_gp that is delivered into the modelled "
+                "volume: 1.0 delivers all of it, 0 would delete the fueling "
+                "entirely, and >1 would inject more gas than the valve "
+                "supplies"
+            )
         # Clumpy-plasma coverage closure v1 (default off, bit-exact off).
         self._validate_coverage_config()
         # Cathode emitting-area percolation (default off, bit-exact off).
@@ -4659,6 +4669,7 @@ class LAPDSim1D:
                 sigma_cm=source_kwargs["gas_puff_sigma_cm"],
                 throw_cm=source_kwargs["gas_puff_throw_cm"],
                 end=0,
+                delivery_fraction=source_kwargs["gas_puff_delivery_fraction"],
             )
             if source_kwargs["twin_cathode"]:
                 rhs += dt * gas_puff_rate_profile(
@@ -4670,6 +4681,7 @@ class LAPDSim1D:
                     sigma_cm=source_kwargs["gas_puff_sigma_cm"],
                     throw_cm=source_kwargs["gas_puff_throw_cm"],
                     end=-1,
+                    delivery_fraction=source_kwargs["gas_puff_delivery_fraction"],
                 )
 
         nn_next = np.linalg.solve(matrix, rhs)
@@ -4787,6 +4799,7 @@ class LAPDSim1D:
                     sigma_cm=source_kwargs["gas_puff_sigma_cm"],
                     throw_cm=source_kwargs["gas_puff_throw_cm"],
                     end=end,
+                    delivery_fraction=source_kwargs["gas_puff_delivery_fraction"],
                 )
             particles = puff * np.asarray(
                 geometry.neutral_volume_cm3, dtype=float
@@ -7824,14 +7837,14 @@ class LAPDSim1D:
             self._geometry, nk["S_gp"], nk["gas_puff_valves"],
             profile=nk["gas_puff_profile"], z_cm=nk["gas_puff_z_cm"],
             sigma_cm=nk["gas_puff_sigma_cm"], throw_cm=nk["gas_puff_throw_cm"],
-            end=0,
+            end=0, delivery_fraction=nk["gas_puff_delivery_fraction"],
         )
         if nk["twin_cathode"]:
             puff = puff + gas_puff_rate_profile(
                 self._geometry, nk["Twin_S_gp"], nk["gas_puff_valves"],
                 profile=nk["gas_puff_profile"], z_cm=nk["gas_puff_z_cm"],
                 sigma_cm=nk["gas_puff_sigma_cm"], throw_cm=nk["gas_puff_throw_cm"],
-                end=-1,
+                end=-1, delivery_fraction=nk["gas_puff_delivery_fraction"],
             )
         return _gas_puff_local_ionization_rhs(
             state=state,
@@ -8039,6 +8052,9 @@ class LAPDSim1D:
             ),
             "gas_puff_throw_cm": float(
                 self._input_dict.get("gas_puff_throw_cm", 100.0)
+            ),
+            "gas_puff_delivery_fraction": float(
+                self._input_dict.get("gas_puff_delivery_fraction", 1.0)
             ),
         }
 
@@ -9049,7 +9065,7 @@ class LAPDSim1D:
             self._geometry, nk["S_gp"], nk["gas_puff_valves"],
             profile=nk["gas_puff_profile"], z_cm=nk["gas_puff_z_cm"],
             sigma_cm=nk["gas_puff_sigma_cm"], throw_cm=nk["gas_puff_throw_cm"],
-            end=0,
+            end=0, delivery_fraction=nk["gas_puff_delivery_fraction"],
         )
         if twin:
             puff = puff + gas_puff_rate_profile(
@@ -9057,7 +9073,7 @@ class LAPDSim1D:
                 profile=nk["gas_puff_profile"], z_cm=nk["gas_puff_z_cm"],
                 sigma_cm=nk["gas_puff_sigma_cm"],
                 throw_cm=nk["gas_puff_throw_cm"],
-                end=-1,
+                end=-1, delivery_fraction=nk["gas_puff_delivery_fraction"],
             )
         return {
             "S_gp_sccm": float(nk["S_gp"]),
@@ -10140,6 +10156,7 @@ class LAPDSim1D:
                 z_cm=src_kwargs["gas_puff_z_cm"],
                 sigma_cm=src_kwargs["gas_puff_sigma_cm"],
                 throw_cm=src_kwargs["gas_puff_throw_cm"],
+                delivery_fraction=src_kwargs["gas_puff_delivery_fraction"],
             ) * np.asarray(geometry.neutral_volume_cm3, dtype=float)
         return {
             "cath": float(np.sum(cath_cells)),
