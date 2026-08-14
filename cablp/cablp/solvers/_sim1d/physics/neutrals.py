@@ -862,6 +862,44 @@ def gas_puff_rate_profile(
     return dnn
 
 
+def neutral_initial_profile_values(geometry, profile, key):
+    """Return the validated per-cell initial neutral density [cm^-3].
+
+    ``profile`` is a sequence of length ``geometry.cells``; ``key`` names the
+    config key it came from and appears in every message. The array is
+    returned as VALUES -- absolute densities, copied and cast to float, with
+    no normalization, rescaling or role masking of any kind. That is what
+    separates an initial condition from :func:`neutral_probe_profile_weights`,
+    whose input is a shape whose scale divides out.
+
+    Every entry must be finite and strictly ``> 0``: a neutral density is
+    positive, and zero would be a hole in the fill that the state floor would
+    silently paper over at the first read. Raises ``ValueError`` on a
+    wrong-length, non-finite, or non-positive profile.
+    """
+    cells = int(geometry.cells)
+    raw = np.array(profile, dtype=float).reshape(-1)
+    if raw.size != cells:
+        raise ValueError(
+            f"{key} must have one entry per grid cell (nx={cells}); got "
+            f"{raw.size}. It is a per-cell initial condition, not a shape to "
+            "be resampled"
+        )
+    if not np.all(np.isfinite(raw)):
+        raise ValueError(
+            f"every {key} entry must be finite; got "
+            f"{int(np.count_nonzero(~np.isfinite(raw)))} non-finite of {cells}"
+        )
+    if np.any(raw <= 0.0):
+        raise ValueError(
+            f"every {key} entry must be > 0 (a neutral density is positive, "
+            "and a zero cell would be clipped to nn_floor on the first read "
+            f"rather than starting where it was asked to); got min "
+            f"{float(np.min(raw)):.6g}"
+        )
+    return raw
+
+
 #: Registered axial shape families for the ad-hoc probe source. The membership
 #: is deliberately tiny: a family exists so a cheap arm needs no profile file,
 #: and anything richer is expressible as an explicit per-cell profile, which

@@ -42,6 +42,31 @@ replaced a `1e9` near-vacuum value that only ever made sense as a seed for the
 neutral equilibration. The equilibrated path does not read it, so this default
 can move without disturbing any equilibrated run.
 
+**`nn0_profile = None`, `nn0_annulus_profile = None` — INSTRUMENT, NO VALUE.**
+The shaped initial neutral fill (`neutral_initial_profile` flag) carries no
+number and can acquire none: its content is a per-cell array of absolute
+densities [cm^-3] computed OUTSIDE the solver, and `None` is the only defensible
+default because a shaped initial condition has no shape to inherit. Nothing here
+is measured, derived, fitted or assumed — the capability is plumbing, and every
+physical quantity that decides the array lives in the producing script, which is
+where the provenance for a given run's fill belongs.
+
+The value producer of record is **`scripts/sp3_build_nn0.py`** (the sp3 foot-shape
+IC arm): it composes the shipped-convention base fill with the accumulated
+first-flight gas-puff lobe over a foot duration, spread by one of two declared
+kernels, and writes the array plus a provenance header into an `.npz`. The
+`.npz` header — not this file — records that run's base, throughput convention,
+foot duration, kernel, mean free path and cross-section source. A different
+construction is a different instrument and carries its own header; that is the
+point of the key having no value here.
+
+Two rules keep the instrument honest and are enforced at construction rather
+than documented here as a convention: the scalar `nn0` must be `None` when the
+flag is armed (no silent precedence between a scalar and an array claiming the
+same field), and `neutral_equilibration` / `restart_from` are refused (both
+replace `nn` after construction, so a shaped fill under either would be built
+and discarded without a trace).
+
 **`Te0 = 0.21` eV — DERIVED.** Just above the exact bundled He ADF11 low-Te
 edge (~0.200092 eV), below which the rate lookups clamp.
 

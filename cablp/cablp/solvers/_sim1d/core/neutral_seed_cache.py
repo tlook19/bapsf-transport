@@ -98,6 +98,16 @@ INERT_PARAM_KEYS = frozenset({
     # inner sim's start at 1e8 regardless of it, so nn0 cannot reach a seed and
     # cannot change one. This is the one neutral-side key that is provably
     # inert; every other neutral knob stays in the hash.
+    #
+    # Its shaped counterparts nn0_profile / nn0_annulus_profile are
+    # deliberately NOT listed here, and neither is the neutral_initial_profile
+    # flag in INERT_FLAG_KEYS. They are inert for a stronger reason than nn0
+    # is -- the flag REFUSES neutral_equilibration at construction, so an
+    # armed profile can never reach this cache at all -- but the fail-closed
+    # rule above says a key leaves the hash only when it must, and these three
+    # sit at their None/False defaults on every config that can be cached.
+    # They contribute a constant to the signature, which rotates the hash once
+    # (a cold recompute, bit-exact results) and is stable thereafter.
     "nn0",
     # --- plasma-run numerics (equil uses fixed neutral_equilibration_dt) ---
     "cfl", "density_dt_fraction", "drag_dt_fraction", "heat_dt_fraction",
