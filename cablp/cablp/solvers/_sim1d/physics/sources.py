@@ -1778,7 +1778,7 @@ def neutral_energy_wall_rhs(
         vbar_n = np.sqrt(8.0 * float(Tn_fit) * ev_to_erg / (np.pi * ion_mass_g))
         nu_wall = vbar_n / np.asarray(Rm_cm, dtype=float)
     else:
-        nu_wall = np.asarray(wall_rate_1_s, dtype=float).copy()
+        nu_wall = np.asarray(wall_rate_1_s, dtype=float)
     if state.nn_a is not None:
         area = np.asarray(geometry.plasma_face_area_cm2, dtype=float)
         volume = np.asarray(geometry.plasma_volume_cm3, dtype=float)
