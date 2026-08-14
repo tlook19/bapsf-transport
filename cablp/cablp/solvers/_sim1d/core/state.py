@@ -18,7 +18,7 @@ NEUTRAL_MOMENTUM_NAME = "M_n"
 # density. Packed after M_n in flag-introduction order.
 NEUTRAL_ANNULUS_NAME = "nn_a"
 # Optional annulus axial momentum for the kinetic-derived two-momentum
-# reduction. It is packed last so every existing 5/6/7-field layout remains
+# reduction. Packed after nn_a, so every existing 5/6/7-field layout remains
 # byte-for-byte unchanged.
 NEUTRAL_ANNULUS_MOMENTUM_NAME = "M_n_a"
 # Optional neutral thermal energy density, present only when the
@@ -258,7 +258,7 @@ def conservative_from_primitives(
         En=(
             None
             if Tn_K is None
-            else 1.5 * nn.copy() * kb_cgs * float(Tn_K)
+            else 1.5 * nn * kb_cgs * float(Tn_K)
         ),
     )
 
