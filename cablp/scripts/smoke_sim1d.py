@@ -131,7 +131,9 @@ from cablp.solvers._sim1d.core.state import (
     state_field_names,
     unpack_state,
 )
-from cablp.vars._cons import I_ion, en_factor, ev_to_erg, m_p_cgs, qe_SI
+from cablp.vars._cons import (
+    I_ion, en_factor, ev_to_erg, m_He_cgs, m_p_cgs, qe_SI
+)
 
 
 # R5 stance flip (2026-07-25): the production defaults promote the full M6
@@ -14074,6 +14076,32 @@ elif scenario == "landau":
     })
     flags["neutral_equilibration"] = False
     t_end = 1.0e-6
+elif scenario == "initial_profile":
+    # sp3: the shaped initial neutral fill ARMED. The array enters the state
+    # before any kernel runs, so what this asks is whether an initial
+    # condition the compiled path has never seen still leads both paths
+    # through the same arithmetic -- the profile is strongly non-uniform, so
+    # the two runs disagree everywhere if it does not.
+    params.update({
+        "nx": 12,
+        "beam_deposition_model": "csda",
+        "beam_anomalous_model": "quasilinear",
+        "cathode_warming_model": "none",
+        "cathode_Ts_base_K": None,
+        "cathode_surface_model": "none",
+        "cathode_phiwf_clean_eV": None,
+        "cathode_cleaning_E_th_eV": None,
+        "cathode_sample_smoothing": None,
+    })
+    flags["neutral_equilibration"] = False
+    _cells = int(LAPDSim1D(dict(params), dict(flags)).geometry.cells)
+    params["nn0_profile"] = (
+        float(params["nn0"])
+        * (1.5 + np.sin(np.arange(_cells, dtype=float)))
+    ).tolist()
+    params["nn0"] = None
+    flags["neutral_initial_profile"] = True
+    t_end = 1.0e-6
 else:
     params.update({
         "nx": 12,
@@ -14137,6 +14165,10 @@ print(json.dumps({
         np.max(diag["source_beam_end_loss_tail_low_W"])
         + np.max(diag["source_beam_end_loss_tail_high_W"])
     ),
+    # sp3 anti-vacuity: the initial neutral fill's spread across the grid. A
+    # uniform fill gives exactly 0, so a nonzero value is proof the shaped IC
+    # was live on the path being compared.
+    "nn0_spread": float(np.max(result.nn[0]) - np.min(result.nn[0])),
     "I_tot": float(diag["source_I_tot"][-1]),
     "phi_c": float(diag["source_phi_c"][-1]),
     "y": np.ascontiguousarray(result.y[-1], dtype=float).tobytes().hex(),
@@ -14144,12 +14176,17 @@ print(json.dumps({
 '''
         _ck_expected_steps = {
             "meanfield": 20, "coverage": 10, "landau": 10, "emitting_area": 10,
+            "initial_profile": 10,
         }
+        _CK_SCENARIOS = (
+            "meanfield", "coverage", "landau", "emitting_area",
+            "initial_profile",
+        )
         _ck_results = {}
         with tempfile.TemporaryDirectory() as _ck_tmpdir:
             _ck_script = Path(_ck_tmpdir) / "compiled_equivalence_child.py"
             _ck_script.write_text(_ck_child_source)
-            for _ck_scenario in ("meanfield", "coverage", "landau", "emitting_area"):
+            for _ck_scenario in _CK_SCENARIOS:
                 for _ck_tag, _ck_optin in (("pure", None), ("compiled", "1")):
                     # Inherit the environment (PYTHONPATH decides WHICH
                     # checkout the child imports) and override only the opt-in.
@@ -14174,7 +14211,7 @@ print(json.dumps({
                     _ck_results[_ck_scenario, _ck_tag] = json.loads(
                         _ck_proc.stdout.strip().splitlines()[-1]
                     )
-        for _ck_scenario in ("meanfield", "coverage", "landau", "emitting_area"):
+        for _ck_scenario in _CK_SCENARIOS:
             _ck_pure = _ck_results[_ck_scenario, "pure"]
             _ck_compiled = _ck_results[_ck_scenario, "compiled"]
             # Each child really took the path it was asked for -- an opt-in
@@ -14221,6 +14258,14 @@ print(json.dumps({
                     assert _ck_res["tail_ledger_W"] > 0.0, (
                         _ck_scenario, _ck_tag, _ck_res["tail_ledger_W"]
                     )
+                if _ck_scenario == "initial_profile":
+                    # The shaped fill was really the initial condition: a
+                    # uniform nn0 gives a spread of exactly zero, which would
+                    # make the bit-identity below a mean-field comparison
+                    # under another name.
+                    assert _ck_res["nn0_spread"] > 0.0, (
+                        _ck_scenario, _ck_tag, _ck_res["nn0_spread"]
+                    )
                 if _ck_scenario == "emitting_area":
                     # The throttle was armed AND the clock ran: a frozen f_em
                     # would make this a mean-field comparison under another
@@ -14254,6 +14299,10 @@ print(json.dumps({
                 _ck_pure["tail_ledger_W"])
             assert _ck_compiled["f_em"] == _ck_pure["f_em"], (
                 _ck_scenario, _ck_compiled["f_em"], _ck_pure["f_em"]
+            )
+            assert _ck_compiled["nn0_spread"] == _ck_pure["nn0_spread"], (
+                _ck_scenario, _ck_compiled["nn0_spread"],
+                _ck_pure["nn0_spread"],
             )
             print(
                 f"compiled-kernel equivalence [{_ck_scenario}]: ok "
@@ -17322,6 +17371,228 @@ print(json.dumps({
     # A resume across a change of arming is refused by the structural key.
     assert "cathode_emitting_area" in _restart_mod.STRUCTURAL_FLAG_KEYS
 
+    # ---- sp3: shaped initial neutral fill (neutral_initial_profile) --------
+    # The capability replaces the uniform scalar nn0 with a per-cell array of
+    # ABSOLUTE densities. Four questions decide it: does the off path still
+    # build exactly the old initial condition, is a UNIFORM profile at the
+    # scalar's own value bit-identical to the scalar run (the
+    # null-construction identity -- the load-bearing check, because it is the
+    # only one that says the array reaches the state through the same
+    # arithmetic rather than merely near it), does a shaped profile arrive
+    # unaltered in both zones, and does every misconfiguration raise.
+    def _sp3_stance(**over):
+        params, flags = default_config()
+        params.update({
+            "nx": 12,
+            "dt_save": 0.0,
+            "phase_transition_mode": "scheduled",
+            "tau_neutral_prebreakdown": 0.0,
+            "tau_prebreakdown": 0.0,
+            "tau_breakdown": 0.0,
+            "tau_discharge": 1.0,
+            "tau_afterglow": 0.0,
+            "beam_deposition_model": "csda",
+            "beam_anomalous_model": "quasilinear",
+            "cathode_warming_model": "none",
+            "cathode_Ts_base_K": None,
+            "cathode_surface_model": "none",
+            "cathode_phiwf_clean_eV": None,
+            "cathode_cleaning_E_th_eV": None,
+            "cathode_sample_smoothing": None,
+        })
+        # The shaped IC and the equilibrated seed are alternative statements of
+        # the same initial condition and the solver refuses the pair, so the
+        # comparison stance clears the flag on BOTH arms.
+        flags["neutral_equilibration"] = False
+        params.update(over)
+        return params, flags
+
+    _sp3_scalar_p, _sp3_scalar_f = _sp3_stance()
+    _sp3_scalar_sim = LAPDSim1D(dict(_sp3_scalar_p), dict(_sp3_scalar_f))
+    _sp3_cells = int(_sp3_scalar_sim.geometry.cells)
+    _sp3_nn0 = float(_sp3_scalar_p["nn0"])
+
+    # (a) OFF PATH. No profile object is built and the initial fill is the
+    # historical uniform array, cell for cell.
+    assert _sp3_scalar_sim._nn0_profile is None
+    assert _sp3_scalar_sim._nn0_annulus_profile is None
+    assert np.array_equal(
+        _sp3_scalar_sim.state.nn, np.full(_sp3_cells, _sp3_nn0)
+    )
+    assert _sp3_scalar_sim.state.nn_a is None
+
+    # (b) THE NULL-CONSTRUCTION IDENTITY. A uniform profile at the scalar's own
+    # value must reproduce the scalar run at the RAW BIT level, not merely
+    # close: the array path and the scalar path have to reach the state
+    # through the same arithmetic.
+    def _sp3_raw(result):
+        return [
+            np.ascontiguousarray(y, dtype=float).view(np.uint64).tobytes()
+            for y in result.y
+        ]
+
+    _sp3_scalar_result = LAPDSim1D(
+        dict(_sp3_scalar_p), dict(_sp3_scalar_f)
+    ).run(t_end=1.0e-6, dt=1.0e-7)
+    _sp3_uniform_p, _sp3_uniform_f = _sp3_stance(
+        nn0=None, nn0_profile=[_sp3_nn0] * _sp3_cells
+    )
+    _sp3_uniform_f["neutral_initial_profile"] = True
+    _sp3_uniform_result = LAPDSim1D(
+        _sp3_uniform_p, _sp3_uniform_f
+    ).run(t_end=1.0e-6, dt=1.0e-7)
+    assert _sp3_scalar_result.steps == _sp3_uniform_result.steps > 0, (
+        _sp3_scalar_result.steps, _sp3_uniform_result.steps
+    )
+    assert _sp3_raw(_sp3_scalar_result) == _sp3_raw(_sp3_uniform_result), (
+        "a uniform nn0_profile at the scalar's own value must be bit-identical "
+        "to the scalar run"
+    )
+
+    # (c) A SHAPED PROFILE ROUND-TRIPS. state.nn at t = 0 IS the supplied
+    # array -- no normalization, no rescaling, no role masking -- and the same
+    # for the annulus under the two-zone closure.
+    _sp3_shape = (
+        _sp3_nn0 * (1.5 + np.sin(np.arange(_sp3_cells, dtype=float)))
+    ).tolist()
+    _sp3_ann_shape = (
+        _sp3_nn0 * (2.5 + np.cos(np.arange(_sp3_cells, dtype=float)))
+    ).tolist()
+    _sp3_shaped_p, _sp3_shaped_f = _sp3_stance(
+        nn0=None, nn0_profile=_sp3_shape
+    )
+    _sp3_shaped_f["neutral_initial_profile"] = True
+    _sp3_shaped_sim = LAPDSim1D(dict(_sp3_shaped_p), dict(_sp3_shaped_f))
+    assert np.array_equal(_sp3_shaped_sim.state.nn, np.array(_sp3_shape))
+    assert _sp3_shaped_sim.state.nn_a is None
+
+    _sp3_tz_f = dict(_sp3_shaped_f)
+    _sp3_tz_f["neutral_two_zone"] = True
+    _sp3_tz_p = dict(_sp3_shaped_p)
+    _sp3_tz_p["neutral_exchange_model"] = "knudsen"
+    _sp3_tz_sim = LAPDSim1D(dict(_sp3_tz_p), dict(_sp3_tz_f))
+    # Omitted annulus profile => the shipped convention that both zones start
+    # at the same fill, in its shaped form.
+    assert np.array_equal(_sp3_tz_sim.state.nn, np.array(_sp3_shape))
+    assert np.array_equal(_sp3_tz_sim.state.nn_a, np.array(_sp3_shape))
+    _sp3_tz_p["nn0_annulus_profile"] = _sp3_ann_shape
+    _sp3_tz2_sim = LAPDSim1D(dict(_sp3_tz_p), dict(_sp3_tz_f))
+    assert np.array_equal(_sp3_tz2_sim.state.nn, np.array(_sp3_shape))
+    assert np.array_equal(_sp3_tz2_sim.state.nn_a, np.array(_sp3_ann_shape))
+
+    # (d) EVERY MISCONFIGURATION RAISES, at construction.
+    def _sp3_refuses(label, params_over=None, flags_over=None):
+        params, flags = _sp3_stance(nn0=None, nn0_profile=_sp3_shape)
+        flags["neutral_initial_profile"] = True
+        params.update(params_over or {})
+        flags.update(flags_over or {})
+        try:
+            LAPDSim1D(params, flags)
+        except ValueError:
+            return
+        raise AssertionError(f"neutral_initial_profile must refuse: {label}")
+
+    _sp3_refuses(
+        "a wrong-length profile",
+        params_over={"nn0_profile": _sp3_shape[:-1]},
+    )
+    _sp3_refuses(
+        "a non-finite entry",
+        params_over={"nn0_profile": _sp3_shape[:-1] + [float("nan")]},
+    )
+    _sp3_refuses(
+        "a zero entry (a density is positive; nn_floor would paper it over)",
+        params_over={"nn0_profile": _sp3_shape[:-1] + [0.0]},
+    )
+    _sp3_refuses(
+        "a negative entry",
+        params_over={"nn0_profile": _sp3_shape[:-1] + [-1.0]},
+    )
+    _sp3_refuses(
+        "an annulus profile without the two-zone closure",
+        params_over={"nn0_annulus_profile": _sp3_ann_shape},
+    )
+    _sp3_refuses(
+        "the flag armed alongside an explicit scalar nn0",
+        params_over={"nn0": _sp3_nn0},
+    )
+    _sp3_refuses(
+        "neutral_equilibration, which would overwrite the shaped fill",
+        flags_over={"neutral_equilibration": True},
+    )
+    _sp3_refuses(
+        "restart_from, which replaces the whole initial condition",
+        params_over={"restart_from": "nonexistent.h5"},
+    )
+    _sp3_refuses(
+        "the flag armed with no profile at all",
+        params_over={"nn0_profile": None},
+    )
+    # ...and the presence gate the other way: either key set with the flag off
+    # is inert, so it raises rather than running the uniform fill silently.
+    for _sp3_key, _sp3_value in (
+        ("nn0_profile", _sp3_shape),
+        ("nn0_annulus_profile", _sp3_ann_shape),
+    ):
+        _sp3_off_p, _sp3_off_f = _sp3_stance(**{_sp3_key: _sp3_value})
+        try:
+            LAPDSim1D(_sp3_off_p, _sp3_off_f)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                f"{_sp3_key} must be refused with neutral_initial_profile off"
+            )
+
+    # (e) THE CONSTRUCTION SCRIPT. It is an instrument in scripts/, not repo
+    # physics, so it is imported HERE rather than at module scope -- the smoke
+    # suite's import block stays package-only. Two properties are asserted:
+    # every spreading kernel conserves the injected inventory on the grid
+    # exactly, and the ledger's throughput arithmetic reproduces the sp2
+    # bridge numbers under BOTH stated conventions.
+    import sp3_build_nn0 as _sp3_mod
+
+    _sp3_geom = _sp3_scalar_sim.geometry
+    _sp3_deposit = gas_puff_rate_profile(
+        _sp3_geom, 5200.0, 2, profile="cosine_pipe", z_cm=60.0, throw_cm=100.0
+    ) * np.asarray(_sp3_geom.neutral_volume_cm3, dtype=float)
+    # Widths are stated in CELLS, not centimetres: this smoke geometry is far
+    # coarser than a production grid, and a kernel narrower than one cell is
+    # the identity on any grid -- it would conserve trivially and say nothing.
+    _sp3_dz = float(np.mean(np.asarray(_sp3_geom.length_cm, dtype=float)))
+    for _sp3_kernel in _sp3_mod.KERNELS:
+        for _sp3_cells_wide in (0.4, 2.0, 6.0):
+            _sp3_width = _sp3_cells_wide * _sp3_dz
+            _sp3_W = _sp3_mod.spread_matrix(_sp3_geom, _sp3_kernel, _sp3_width)
+            _sp3_out = _sp3_W @ _sp3_deposit
+            _sp3_rel = abs(
+                float(_sp3_out.sum()) - float(_sp3_deposit.sum())
+            ) / float(_sp3_deposit.sum())
+            assert _sp3_rel < 1e-12, (_sp3_kernel, _sp3_width, _sp3_rel)
+            if _sp3_cells_wide >= 2.0:
+                # ...and it really moved gas: a spread that never moved
+                # anything conserves trivially.
+                assert float(np.max(_sp3_out)) < float(
+                    np.max(_sp3_deposit)
+                ), (_sp3_kernel, _sp3_cells_wide)
+    # vbar at 300 K helium, and the reaches the sp3 registration quotes.
+    _sp3_vbar = _sp3_mod.mean_speed_cm_s(300.0, m_He_cgs)
+    assert 1.25e5 < _sp3_vbar < 1.27e5, _sp3_vbar
+    assert 5.6e2 < _sp3_vbar * 4.5e-3 < 5.8e2, _sp3_vbar * 4.5e-3
+    # The sp2 bridge numbers, 4.7e18--2.1e19 atoms, are the two ENDS of the
+    # registered bracket in the two throughput conventions: the low end is
+    # per-valve-nominal at the 2 ms foot, the high end as-applied at 4.5 ms.
+    # puff_rate(..., 1.0) is the repo's own throughput constant per unit
+    # volume, so this is the solver's arithmetic and not a restatement of it.
+    _sp3_nominal = puff_rate(5200.0, 1, 1.0) * min(_sp3_mod.DT_FOOT_BRACKET_S)
+    _sp3_applied = puff_rate(5200.0, 2, 1.0) * max(_sp3_mod.DT_FOOT_BRACKET_S)
+    assert abs(_sp3_nominal / 4.7e18 - 1.0) < 0.02, _sp3_nominal
+    assert abs(_sp3_applied / 2.1e19 - 1.0) < 0.02, _sp3_applied
+    # The two ends differ by exactly the valve factor times the foot ratio, so
+    # the pair is one bracket read under two conventions and not two
+    # independent numbers.
+    assert abs(_sp3_applied / _sp3_nominal - (2.0 * 4.5) / 2.0) < 1e-12
+
     # ---- the registered constants are exactly the registered constants ----
     # A key added to the wrong namespace silently does nothing (input_dict and
     # input_flags validate neither), so the split is asserted here.
@@ -17347,6 +17618,16 @@ print(json.dumps({
         assert _key in _r2_reg_p and _key not in _r2_reg_f, _key
     assert "regime_tracer" in _r2_reg_f and "regime_tracer" not in _r2_reg_p
     assert _r2_reg_f["regime_tracer"] is False, "regime_tracer must ship OFF"
+    for _key in ("nn0_profile", "nn0_annulus_profile"):
+        assert _key in _r2_reg_p and _key not in _r2_reg_f, _key
+        assert _r2_reg_p[_key] is None, "a shaped IC ships no shape"
+    assert (
+        "neutral_initial_profile" in _r2_reg_f
+        and "neutral_initial_profile" not in _r2_reg_p
+    )
+    assert _r2_reg_f["neutral_initial_profile"] is False, (
+        "neutral_initial_profile must ship OFF"
+    )
 
     print(
         "sim1d smoke ok: "

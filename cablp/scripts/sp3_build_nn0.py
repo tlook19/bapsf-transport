@@ -146,6 +146,13 @@ def spread_matrix(geometry, kernel, width_cm):
 
     Targets are restricted to the puff's own eligible roles, weighted by cell
     length so a refinement of the grid converges rather than redistributing.
+
+    A source cell from which the kernel reaches NO eligible target gets an
+    identically-zero column. That is a real possibility on a coarse grid with
+    a narrow kernel, and it is harmless exactly when such a cell carries no
+    inventory -- which is the caller's to check, because only the caller knows
+    the deposit. Silence here would delete particles; the conservation check in
+    :func:`build` is what turns that into a loud failure.
     """
     z = np.asarray(geometry.z_cm, dtype=float)
     length = np.asarray(geometry.length_cm, dtype=float)
@@ -161,12 +168,9 @@ def spread_matrix(geometry, kernel, width_cm):
         raise ValueError(f"kernel must be one of {list(KERNELS)} (got {kernel!r})")
     raw = raw * (length * eligible)[:, None]
     column_sum = raw.sum(axis=0)
-    if not np.all(column_sum > 0.0):
-        raise ValueError(
-            "the spreading kernel reaches no eligible cell from at least one "
-            "source cell; widen the kernel or check the geometry"
-        )
-    return raw / column_sum
+    return np.divide(
+        raw, column_sum, out=np.zeros_like(raw), where=column_sum > 0.0
+    )
 
 
 def build(args):
@@ -226,6 +230,17 @@ def build(args):
         width_label = "top-hat half-width = vbar dt"
 
     spread = spread_matrix(geometry, args.kernel, width)
+    # A source cell the kernel cannot carry out of is only safe if it holds
+    # nothing; otherwise the spread would delete its particles silently.
+    unreachable = spread.sum(axis=0) <= 0.0
+    if np.any(deposited[unreachable] != 0.0):
+        raise ValueError(
+            "the spreading kernel reaches no eligible cell from a source cell "
+            "that carries deposited gas, so the spread would delete it: "
+            f"{int(np.count_nonzero(deposited[unreachable] != 0.0))} such "
+            f"cells at kernel width {width:.6g} cm. Widen the kernel or "
+            "refine the grid"
+        )
     accumulated = spread @ deposited  # particles per cell after spreading
 
     grid_in = float(deposited.sum())
