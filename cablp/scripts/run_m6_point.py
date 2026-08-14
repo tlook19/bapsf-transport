@@ -13,6 +13,8 @@ Usage:
 import argparse
 import json
 
+import numpy as np
+
 from compare_sim1d_es1 import PRODUCTION_NX, run_model
 from run_mechanism_ladder import ES_OPERATING
 from cablp.solvers._sim1d.results.io import save_result_hdf5
@@ -41,6 +43,22 @@ def main(argv=None):
                         "-- nn becomes the column "
                         "density, nn_a the annulus")
     p.add_argument("--no-smooth", action="store_true")
+    p.add_argument("--nn0-profile-npz", default=None,
+                   help="path to a shaped initial neutral profile written by "
+                        "scripts/sp3_build_nn0.py. The DRIVER does the file "
+                        "I/O -- the solver never opens a file -- and passes "
+                        "the arrays in as input_dict values. It arms the "
+                        "neutral_initial_profile flag, sets nn0=None (the "
+                        "scalar is superseded, and the solver refuses an "
+                        "armed flag alongside an explicit scalar), and passes "
+                        "nn0_annulus_profile too when the npz carries one. "
+                        "NOT set here: the stance ships neutral_equilibration "
+                        "ON and the solver REFUSES it with a shaped IC (the "
+                        "seed would overwrite the profile), so a shaped run "
+                        "also passes --extra-flag neutral_equilibration=false "
+                        "-- a stance delta the arm states rather than "
+                        "inherits. Applied BEFORE --extra/--extra-flag, so "
+                        "either can still override any of it")
     p.add_argument("--extra", nargs="*", default=(),
                    help="additional k=v param overrides (JSON-parsed values)")
     p.add_argument("--extra-flag", nargs="*", default=(),
@@ -102,6 +120,26 @@ def main(argv=None):
             "neutral_mesh_accommodation": True,
         })
         flags_extra["neutral_momentum"] = True
+    if args.nn0_profile_npz is not None:
+        with np.load(args.nn0_profile_npz, allow_pickle=False) as data:
+            if "nn0_profile" not in data:
+                raise ValueError(
+                    f"{args.nn0_profile_npz} carries no 'nn0_profile' array; "
+                    "it is not a shaped-initial-fill npz"
+                )
+            extra["nn0_profile"] = np.asarray(
+                data["nn0_profile"], dtype=float
+            ).tolist()
+            if "nn0_annulus_profile" in data:
+                extra["nn0_annulus_profile"] = np.asarray(
+                    data["nn0_annulus_profile"], dtype=float
+                ).tolist()
+            provenance = (
+                str(data["provenance"]) if "provenance" in data else "(absent)"
+            )
+        extra["nn0"] = None
+        flags_extra["neutral_initial_profile"] = True
+        print(f"shaped nn0 from {args.nn0_profile_npz}: {provenance}")
     for kv in args.extra:
         k, v = kv.split("=", 1)
         try:
