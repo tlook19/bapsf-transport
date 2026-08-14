@@ -134,6 +134,7 @@ from .physics.reactions import (
     recombination_energy_return_rhs,
 )
 from .physics.hot_neutrals import (
+    HOT_CHANNEL_DIAGNOSTIC_FIELDS,
     ballistic_flight_kernels,
     neutral_hot_channel_rhs,
 )
@@ -9611,7 +9612,7 @@ class LAPDSim1D:
             # The hot channel is algebraic, so its standing population is a
             # DIAGNOSTIC row rather than packed state: saved from the last RHS
             # evaluation's own rates, not recomputed from the saved sample.
-            for name in ("nn_hot", "f_hot", "tau_hot"):
+            for name in HOT_CHANNEL_DIAGNOSTIC_FIELDS:
                 value = self._hot_channel_diagnostics.get(name)
                 wind[name] = (
                     np.zeros_like(state.nn)
@@ -10012,9 +10013,8 @@ class LAPDSim1D:
         if saved and "En" in saved[0]:
             result.En = stack("En")
             result.Tn = stack("Tn")
-            result.nn_hot = stack("nn_hot")
-            result.f_hot = stack("f_hot")
-            result.tau_hot = stack("tau_hot")
+            for name in HOT_CHANNEL_DIAGNOSTIC_FIELDS:
+                setattr(result, name, stack(name))
         if saved and "nn_a" in saved[0]:
             result.nn_a = stack("nn_a")
         if saved and "M_n_a" in saved[0]:

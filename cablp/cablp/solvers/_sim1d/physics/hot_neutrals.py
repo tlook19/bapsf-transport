@@ -93,6 +93,26 @@ from .sources import (
 #: symmetrically and never evaluate the ``mu -> +-1`` grazing limit exactly.
 BALLISTIC_DIRECTION_SAMPLES = 4001
 
+#: The PER-CELL hot-channel diagnostics a trajectory saves, in save order.
+#: Each is a reading of :func:`neutral_hot_channel_rhs`'s own rates rather than
+#: a row of its RHS, and each is present only on a run carrying ``En``; a saved
+#: file written before they were persisted has none of them, which readers must
+#: treat as "never recorded" rather than zero. The names are the result
+#: attribute names and the HDF5 dataset names alike.
+HOT_CHANNEL_DIAGNOSTIC_FIELDS = (
+    "nn_hot",
+    "f_hot",
+    "tau_hot",
+    "hot_S_cx",
+    "hot_births",
+    "hot_wall",
+    "hot_recx",
+    "hot_ionized",
+    "hot_end_fraction",
+    "hot_Ei_recx",
+    "hot_Ei_ionization",
+)
+
 
 def ballistic_flight_kernels(geometry, samples=BALLISTIC_DIRECTION_SAMPLES):
     """Return ``(landing, residence, end_fraction)`` for isotropic column births.
@@ -324,6 +344,17 @@ def neutral_hot_channel_rhs(
     the same cut wall-thermalizes them. The momentum they carried out of the
     column is absorbed by the surface, exactly as the momentum wall sink
     absorbs the cold wind's.
+
+    ``diagnostics`` is a READING of the term, never a row of it: nothing in it
+    enters the RHS sum, and every array in it is the pre-mask quantity the rows
+    were built from. Per cell it carries the standing population
+    (``nn_hot``, ``f_hot``, ``tau_hot``), the four birth-cell fates
+    (``hot_S_cx``, ``hot_births``, ``hot_wall``, ``hot_recx``,
+    ``hot_ionized``), the kernel's end-plane fold fraction
+    (``hot_end_fraction``), and the two separated halves of the ion-energy
+    return (``hot_Ei_recx``, ``hot_Ei_ionization``, which sum bitwise to the
+    ``Ei`` row). The remaining ``hot_*_per_s`` / ``hot_*_erg_s`` entries are
+    run-wide scalars.
     """
     zeros = np.zeros_like(np.asarray(state.nn, dtype=float))
     if state.En is None:
@@ -405,7 +436,41 @@ def neutral_hot_channel_rhs(
         "nn_hot": rates["nn_hot"],
         "f_hot": rates["f_hot"],
         "tau_hot": rates["tau_hot"],
-        "S_cx": rates["S_cx"],
+        # --- per-cell readings of the channel, not rows of it ----------------
+        # These are the SAME arrays the rows above were built from, handed back
+        # so a saved trajectory can be read without reconstructing them. They
+        # are pre-mask, like every other entry here: the plasma-topology mask is
+        # applied to the RETURNED ROWS by the caller, so a reader comparing a
+        # diagnostic against a saved row must expect them to agree only where
+        # the mask left the row alone.
+        #
+        # The four fates are booked at the BIRTH cell (``births`` is the
+        # fixed-point rate ``Shat``, so ``wall + recx + ionized == births``
+        # per cell). The ledger's own ``nn_a`` and ``n`` rows carry the same
+        # wall and ionization flows at the cell the flight REACHED, so the two
+        # views together give the axial displacement the channel performs.
+        "hot_S_cx": rates["S_cx"],
+        "hot_births": rates["births"],
+        "hot_wall": rates["wall"],
+        "hot_recx": rates["recx"],
+        "hot_ionized": rates["ionized"],
+        # The kernel's end-plane fold: the fraction of cell ``i``'s isotropic
+        # launches whose free flight would have left through an end plane and
+        # was folded back onto the end cell instead. Geometry only, constant in
+        # time, and NOT a loss -- it is what keeps the landing rows closing to
+        # 1 -- so it is saved to make the approximation measurable per cell
+        # rather than only as the run-wide scalar below.
+        "hot_end_fraction": np.asarray(end_fraction, dtype=float),
+        # The two halves of the ion-energy return, separated. Their sum is
+        # bit-identical to the ``Ei`` row above by construction -- the row is
+        # literally ``dEi_recx + dEi_ion`` and these are its two addends -- so
+        # separating them here costs no arithmetic and changes no row.
+        # ``hot_Ei_recx`` is the nonlocal CX-recycling power: energy the ions
+        # hand back at the cell a hot atom's flight reached, net of the
+        # replacement drawn there. ``hot_Ei_ionization`` is the thermal energy
+        # an in-flight ionization deposits with the new ion.
+        "hot_Ei_recx": dEi_recx,
+        "hot_Ei_ionization": dEi_ion,
         "hot_births_per_s": float(np.sum(rates["births"] * Vp)),
         "hot_wall_energy_erg_s": float(np.sum(wall_energy_carried * Vp)),
         "hot_wall_energy_returned_erg_s": returned,

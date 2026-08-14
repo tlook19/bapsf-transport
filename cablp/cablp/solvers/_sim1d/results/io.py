@@ -9,10 +9,58 @@ from cablp.funcs._kernels import PURE_PROVENANCE as PURE_KERNEL_PROVENANCE
 
 from ..core.config import resolve_config
 from ..core.timestep import TimestepDiagnostics
+from ..physics.hot_neutrals import HOT_CHANNEL_DIAGNOSTIC_FIELDS
 from .compat import add_sim3_compat_aliases
 
 
 RESULT_VERSION = "sim1d-hdf5-v1"
+
+# The optional per-sample arrays a run may or may not carry. ``_write_arrays``
+# skips the ones the result lacks and ``_read_arrays`` skips the ones the file
+# lacks, so this list is additive: adding a name here cannot change any file a
+# previous run wrote, and a file written before a name existed still loads with
+# that attribute simply absent.
+#
+# HOT-CHANNEL DIAGNOSTICS, 2026-08-14. The hot channel's per-cell readings were
+# computed and attached to the live result but were NOT in this list, so
+# ``save_result_hdf5`` silently dropped them and every artifact written before
+# this date is missing them. Those files are not migrated: absence means "never
+# persisted", never zero.
+_OPTIONAL_ARRAY_FIELDS = (
+    # Present only when the run evolved them (the neutral_momentum /
+    # neutral_two_zone / neutral_energy flags); readers tolerate their
+    # absence, so the 5-field format is unchanged. With nn_a present, nn is
+    # the COLUMN density. En / Tn ride the same volume as nn.
+    "M_n",
+    "u_n",
+    "nn_a",
+    "M_n_a",
+    "u_n_a",
+    "En",
+    "Tn",
+) + HOT_CHANNEL_DIAGNOSTIC_FIELDS
+
+_ARRAY_FIELDS = (
+    "time",
+    "phase",
+    "phase_elapsed",
+    "phase_cathode_enabled",
+    "phase_gas_puff_enabled",
+    "phase_floating",
+    "y",
+    "n",
+    "nn",
+    "M",
+    "momentum",
+    "Ee",
+    "Ei",
+    "u",
+    "Te",
+    "Ti",
+    "pe",
+    "pi",
+    "p",
+) + _OPTIONAL_ARRAY_FIELDS
 
 # LABEL-SEMANTICS BOUNDARY, 2026-08-05. ``diagnostics/active_constraint`` now
 # always names the bound that actually minimized. Files written BEFORE this
@@ -107,43 +155,7 @@ def save_result_hdf5(path, result, params=None, flags=None):
         if flags is not None:
             h5.attrs["flags_json"] = _json_dumps(flags)
 
-        _write_arrays(
-            h5,
-            result,
-            (
-                "time",
-                "phase",
-                "phase_elapsed",
-                "phase_cathode_enabled",
-                "phase_gas_puff_enabled",
-                "phase_floating",
-                "y",
-                "n",
-                "nn",
-                "M",
-                "momentum",
-                "Ee",
-                "Ei",
-                "u",
-                "Te",
-                "Ti",
-                "pe",
-                "pi",
-                "p",
-                # Optional fields, present only when the run evolved them
-                # (the neutral_momentum / neutral_two_zone / neutral_energy
-                # flags); readers tolerate their absence, so the 5-field
-                # format is unchanged. With nn_a present, nn is the COLUMN
-                # density. En / Tn ride the same volume as nn.
-                "M_n",
-                "u_n",
-                "nn_a",
-                "M_n_a",
-                "u_n_a",
-                "En",
-                "Tn",
-            ),
-        )
+        _write_arrays(h5, result, _ARRAY_FIELDS)
         _write_geometry(h5.create_group("geometry"), result)
         _write_nested_fields(h5.create_group("rhs_terms"), result.rhs_terms)
         _write_term_arrays(
@@ -222,37 +234,7 @@ def load_result_hdf5(path):
                 f"expected {RESULT_VERSION!r}"
             )
 
-        arrays = _read_arrays(
-            h5,
-            (
-                "time",
-                "phase",
-                "phase_elapsed",
-                "phase_cathode_enabled",
-                "phase_gas_puff_enabled",
-                "phase_floating",
-                "y",
-                "n",
-                "nn",
-                "M",
-                "momentum",
-                "Ee",
-                "Ei",
-                "u",
-                "Te",
-                "Ti",
-                "pe",
-                "pi",
-                "p",
-                "M_n",
-                "u_n",
-                "nn_a",
-                "M_n_a",
-                "u_n_a",
-                "En",
-                "Tn",
-            ),
-        )
+        arrays = _read_arrays(h5, _ARRAY_FIELDS)
         geometry = _read_arrays(
             h5["geometry"],
             (
