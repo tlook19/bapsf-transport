@@ -124,15 +124,19 @@ plenum, transit line, entry aperture, gas that never reaches the column) it is
 outside the modelled volume by construction, which is exactly why it belongs
 in a delivery fraction rather than in a pumping speed. Its eventual class will
 be FITTED-with-a-measured-envelope: the measured half is the per-valve plateau
-flow from the censored valve fit (`scripts/flowcal_censored_fit.txt`), and the
+flow from the censored valve fit (`scripts/flowcal_censored_fit.txt`, which
+gives `A(76.4 V) = 9.01` slm at the ES1 operating point, systematic envelope
+`[8.80, 9.50]` slm, plus 4.8% pass-to-pass valve reproducibility), and the
 fitted half is whatever `S_gp` the discharge calibration lands on, so the
 implied `f_gp` is a ratio of one to the other and inherits the envelope of
-both. Against the frozen calibration that ratio sits at
-**`f_gp = [0.578, 0.650]`, full envelope `[0.556, 0.667]`**, for a measured
-per-valve delivery of `[8.0, 9.0]` slm. That bracket is context for the
-campaign leg that will set the value; nothing in this repository is calibrated
-to it yet, and **the bracket, not a point, is the claim** if the leg cannot
-pin it.
+both. The bracket registered for the calibration leg is
+**`f_gp = [0.578, 0.650]`, full envelope `[0.556, 0.667]`**. Note that only
+its lower end follows from the artifact above — `5200/9010 = 0.577` — while
+`0.650` implies a per-valve delivery near 8.0 slm, which that fit's own
+envelope does not reach; **reconciling the upper end is owed by the
+calibration leg and is not established here.** Nothing in this repository is
+calibrated to any of it yet, and **the bracket, not a point, is the claim** if
+the leg cannot pin it.
 
 **`gas_puff_mode = "square"` — MEASURED shape.** The valve is driven by a
 square voltage pulse from the same trigger that closes the cathode circuit and
