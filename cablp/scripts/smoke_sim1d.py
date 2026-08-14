@@ -17649,6 +17649,144 @@ print(json.dumps({
     # independent numbers.
     assert abs(_sp3_applied / _sp3_nominal - (2.0 * 4.5) / 2.0) < 1e-12
 
+    # ---- eqmap: the equilibration map's slicer ----------------------------
+    # eqmap_make.py runs a 101st cycle whose puff is open for the foot fill
+    # time and keeps nn(z,t) as a map of starting distributions; eqmap_slice.py
+    # cuts a pre-fill time out of it into an sp3 shaped-fill npz. The PRODUCER
+    # carries its own two checks (its t=0 row is the equilibrated seed; the
+    # inventory books as puff minus pump) and needs a full equilibration to run,
+    # which is far too slow for a smoke suite -- so what is asserted here is the
+    # SLICER, whose properties are decidable on a synthetic map in milliseconds.
+    # Both are instruments in scripts/, so they are imported HERE rather than at
+    # module scope, following the sp3 precedent above.
+    import eqmap_make as _eq_make_mod
+    import eqmap_slice as _eq_mod
+
+    # A synthetic map at a real stance, so the construction check below has a
+    # geometry to land in. The rows are arbitrary but positive and far above
+    # nn_floor; nothing here asserts physics, only the slicer's arithmetic.
+    _eq_p, _eq_f = default_config()
+    _eq_p["nx"] = 12
+    _eq_cells = int(LAPDSim1D(dict(_eq_p), dict(_eq_f)).geometry.cells)
+    _eq_z = np.asarray(
+        LAPDSim1D(dict(_eq_p), dict(_eq_f)).geometry.z_cm, dtype=float
+    )
+    _eq_t = np.array([0.0, 1e-3, 2e-3, 3e-3], dtype=float)
+    _eq_nn = 1e12 * (
+        1.0 + np.outer(np.arange(1.0, 5.0), np.linspace(1.0, 2.0, _eq_cells)) ** 2
+    )
+    _eq_header = {
+        "es": None, "nx": 12, "cells": _eq_cells, "two_zone": False,
+        "S_gp_sccm": float(_eq_p["S_gp"]), "foot_s": 3e-3, "cadence_s": 1e-3,
+        "stance_extra": {}, "stance_extra_flag": {},
+    }
+    with tempfile.TemporaryDirectory() as _eq_dir:
+        _eq_map = str(Path(_eq_dir) / "map.npz")
+        np.savez(
+            _eq_map,
+            format=_eq_make_mod.MAP_FORMAT,
+            t_s=_eq_t,
+            nn=_eq_nn,
+            z_cm=_eq_z,
+            provenance=json.dumps(_eq_header, sort_keys=True),
+        )
+        _eq_loaded = _eq_mod.load_map(_eq_map)
+        assert np.array_equal(_eq_loaded["nn"], _eq_nn)
+
+        # (i) AN EXACT SAMPLE IS COPIED, NOT INTERPOLATED. This is what makes
+        # the producer's null survive the slicer: a map's t=0 row IS the
+        # standard equilibrated seed, so slicing at t=0 must reproduce it at
+        # the raw bit level rather than merely to rounding.
+        for _eq_k, _eq_time in enumerate(_eq_t):
+            _eq_cut, _eq_mode, _, _, _ = _eq_mod.interpolate(
+                _eq_t, _eq_nn, float(_eq_time), 1e-12
+            )
+            assert _eq_mode == "exact_sample", (_eq_k, _eq_mode)
+            assert _eq_cut.tobytes() == _eq_nn[_eq_k].tobytes(), (
+                "an exact pre-fill time must return the recorded sample "
+                "verbatim, bit for bit"
+            )
+
+        # (ii) A MIDPOINT IS THE LINEAR BLEND, and the bracket it reports is
+        # the bracket it used.
+        _eq_cut, _eq_mode, _eq_lo, _eq_hi, _eq_w = _eq_mod.interpolate(
+            _eq_t, _eq_nn, 1.5e-3, 1e-12
+        )
+        assert (_eq_mode, _eq_lo, _eq_hi) == ("linear", 1, 2)
+        assert abs(_eq_w - 0.5) < 1e-15, _eq_w
+        assert np.allclose(
+            _eq_cut, 0.5 * (_eq_nn[1] + _eq_nn[2]), rtol=0.0, atol=0.0
+        )
+        # ...and a linear blend of positive rows is positive, so the slicer
+        # cannot manufacture a value the sp3 positivity validator would refuse.
+        assert np.all(_eq_cut > 0.0)
+
+        # (iii) THE ERROR BOUND IS h^2 max|f''| / 8 and it is REAL: these rows
+        # are quadratic in the sample index, so the second difference is exact
+        # and the bound must be met with equality by the true error.
+        _eq_abs, _eq_rel = _eq_mod.interpolation_error(_eq_t, _eq_nn, 1, 2)
+        _eq_true = np.max(np.abs(_eq_cut - _eq_nn[1] - 0.5 * (_eq_nn[2] - _eq_nn[1])))
+        assert _eq_abs > 0.0 and _eq_rel > 0.0
+        assert _eq_true <= _eq_abs + 1e-6 * _eq_abs
+
+        # (iv) EVERY MISUSE RAISES rather than writing a quietly wrong fill.
+        _eq_bad = str(Path(_eq_dir) / "notamap.npz")
+        np.savez(_eq_bad, nn=_eq_nn)
+        try:
+            _eq_mod.load_map(_eq_bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("load_map must refuse a non-eqmap npz")
+        for _eq_label, _eq_values in (
+            ("a non-positive entry", np.append(_eq_nn[0][:-1], 0.0)),
+            ("a non-finite entry", np.append(_eq_nn[0][:-1], np.nan)),
+            ("an entry below nn_floor", np.append(_eq_nn[0][:-1], 1.0)),
+        ):
+            try:
+                _eq_mod.validate_profile(_eq_values, "nn0_profile", 1e8)
+            except ValueError:
+                continue
+            raise AssertionError(f"the slicer must refuse {_eq_label}")
+
+        # (v) THE ROUND TRIP. A written slice loads through run_m6_point's own
+        # reading of the file, passes every sp3 construction-time validator,
+        # and arrives in the state unaltered -- which is the whole delivery
+        # contract, asserted end to end.
+        _eq_out = str(Path(_eq_dir) / "slice.npz")
+        assert _eq_mod.main([
+            "--map", _eq_map, "--prefill-s", "1.5e-3", "--out", _eq_out,
+        ]) == 0
+        with np.load(_eq_out, allow_pickle=False) as _eq_data:
+            assert "nn0_profile" in _eq_data.files, (
+                "the slice must carry the key run_m6_point.py looks for"
+            )
+            assert np.array_equal(
+                np.asarray(_eq_data["nn0_profile"], dtype=float), _eq_cut
+            )
+            assert "nn0_annulus_profile" not in _eq_data.files, (
+                "a single-zone map must not emit an annulus array"
+            )
+            assert json.loads(str(_eq_data["provenance"]))["prefill_s"] == 1.5e-3
+        _eq_check = _eq_mod.selfcheck(_eq_out, _eq_header)
+        assert _eq_check["pass"], _eq_check
+        assert _eq_check["cells"] == _eq_cells
+
+        # (vi) EXTRAPOLATION IS REFUSED. The map's axis is the foot window that
+        # was actually run; a pre-fill time past it has no recorded fill and
+        # inventing one would be a silent fabrication.
+        for _eq_bad_t in ("-1e-3", "4e-3"):
+            try:
+                _eq_mod.main([
+                    "--map", _eq_map, "--prefill-s", _eq_bad_t,
+                    "--out", str(Path(_eq_dir) / "never.npz"),
+                ])
+            except ValueError:
+                continue
+            raise AssertionError(
+                f"a pre-fill time of {_eq_bad_t} s is off the map and must raise"
+            )
+
     # ---- the registered constants are exactly the registered constants ----
     # A key added to the wrong namespace silently does nothing (input_dict and
     # input_flags validate neither), so the split is asserted here.

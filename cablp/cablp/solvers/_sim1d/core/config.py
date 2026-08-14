@@ -20,7 +20,10 @@ def initial_condition_defaults():
         value: ``run_neutral_equilibration`` pins its inner sim's start at the
         nn_table generator's 1e8 and overwrites nn with the equilibrated
         profile, so the two paths are decoupled and this default can move
-        without disturbing any equilibrated run.
+        without disturbing any equilibrated run. Since ``neutral_equilibration``
+        ships ON, the uniform value is a PLACEHOLDER that no shipped
+        configuration reads -- equilibration is the convention for the fill a
+        run starts from.
 
         Provenance of the shipped value: ``config_defaults_provenance.md``.
     nn0_profile:
