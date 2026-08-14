@@ -320,6 +320,21 @@ def neutral_source_defaults():
         Enables neutral pump sink terms.
     gas_puff_valves:
         Number of equivalent gas-puff valves used by the SCCM conversion.
+    gas_puff_delivery_fraction:
+        Dimensionless delivery/entry efficiency [1] multiplying the gas puff
+        at the single shared sccm-to-particles conversion, so ``S_gp`` means
+        the flow delivered AT THE VALVE and the flow injected into the model
+        volume is ``S_gp * gas_puff_delivery_fraction``. It enters exactly
+        where ``gas_puff_valves`` does, at both conversion sites (the
+        ``"cell"`` profile and the distributed profiles), so it scales the
+        puff magnitude without touching its axial shape or its waveform, and
+        it applies to the source-end and twin-end puffs alike. Consumed by the
+        neutral gas-puff source term in ``physics.neutrals`` -- the explicit
+        RHS, the implicit backward-Euler neutral matrices, the local-ionization
+        channel, and the saved ``puff_particles_per_s`` diagnostic all read the
+        same value, so none can desync. Must be in ``(0, 1]`` and finite; a
+        value outside that range raises at construction. ``1.0`` (the default)
+        is the identity and is bit-exact.
     gas_puff_profile:
         Axial shape of the puff. ``"cell"`` (the historical
         behaviour) puts the whole flow in the role-tagged puff cell (in front
@@ -396,6 +411,12 @@ def neutral_source_defaults():
         "gas_puff_enabled": True,
         "pump_enabled": True,
         "gas_puff_valves": 2,
+        # Delivery/entry efficiency of the puff: S_gp is the flow AT THE VALVE
+        # and this fraction is the share that reaches the modelled volume. 1.0
+        # is the identity, so the shipped configuration is unchanged; the
+        # decomposition exists so the valve level and the delivered level are
+        # separate quantities rather than one lumped constant.
+        "gas_puff_delivery_fraction": 1.0,
         "pump_elbow_conductance_lps": None,
         # Physical Lambertian pipe source ~10 cm in front of the anode; its
         # centre and width are geometry-derived, not tunable.

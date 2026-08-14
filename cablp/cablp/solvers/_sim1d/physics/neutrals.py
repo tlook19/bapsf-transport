@@ -623,13 +623,16 @@ def neutral_source_sink_rhs(
     gas_puff_z_cm=None,
     gas_puff_sigma_cm=50.0,
     gas_puff_throw_cm=100.0,
+    gas_puff_delivery_fraction=1.0,
 ):
     """Return conservative RHS for neutral gas puff and pump terms.
 
     Both terms are anchored by ``cell_role``, not by ``[0]``/``[-1]``: the
     puff lands on its puff cell and each pump on the plenum/collector at its end.
     Legacy roles resolve to the source and end cells, reproducing today exactly.
-    The puff's axial shape comes from ``gas_puff_rate_profile``.
+    The puff's axial shape comes from ``gas_puff_rate_profile``, and
+    ``gas_puff_delivery_fraction`` [1] scales the flow both ends of the puff
+    deliver (``1.0`` = identity).
 
     On a two-zone state (``nn_a`` present) the puff
     feeds the ANNULUS first -- the pipe enters at the wall -- re-normalized
@@ -653,6 +656,7 @@ def neutral_source_sink_rhs(
             sigma_cm=gas_puff_sigma_cm,
             throw_cm=gas_puff_throw_cm,
             end=0,
+            delivery_fraction=gas_puff_delivery_fraction,
         )
         if twin_cathode:
             puff = puff + gas_puff_rate_profile(
@@ -664,6 +668,7 @@ def neutral_source_sink_rhs(
                 sigma_cm=gas_puff_sigma_cm,
                 throw_cm=gas_puff_throw_cm,
                 end=-1,
+                delivery_fraction=gas_puff_delivery_fraction,
             )
         if two_zone:
             V_col, V_ann = neutral_zone_volumes(geometry)
@@ -753,11 +758,22 @@ GAS_PUFF_DIAGNOSTIC_FIELDS = (
 )
 
 
-def puff_rate(sccm, valves, chamber_vol):
-    """Return gas puff source rate [cm^-3 s^-1] using _sim3 conversion."""
+def puff_rate(sccm, valves, chamber_vol, delivery_fraction=1.0):
+    """Return gas puff source rate [cm^-3 s^-1] using _sim3 conversion.
+
+    ``delivery_fraction`` is the dimensionless share of the valve flow that
+    reaches the modelled chamber volume; it multiplies the flow exactly as
+    ``valves`` does, so ``1.0`` (the default) is the identity.
+    """
     if chamber_vol <= 0.0:
         raise ValueError(f"chamber_vol must be positive (got {chamber_vol})")
-    return 4.477962e17 * float(sccm) * float(valves) / float(chamber_vol)
+    return (
+        4.477962e17
+        * float(sccm)
+        * float(valves)
+        * float(delivery_fraction)
+        / float(chamber_vol)
+    )
 
 
 # Roles a distributed gas puff may land on: the main plasma chamber, not the
@@ -775,6 +791,7 @@ def gas_puff_rate_profile(
     sigma_cm=50.0,
     throw_cm=100.0,
     end=0,
+    delivery_fraction=1.0,
 ):
     """Return the per-cell puff source rate array [cm^-3 s^-1].
 
@@ -802,13 +819,18 @@ def gas_puff_rate_profile(
     exactly. ``z_cm = None`` centres on the puff cell; ``end = -1`` selects
     the twin puff cell and mirrors an explicit centre through the machine
     midpoint.
+
+    ``delivery_fraction`` [1] scales the sccm-to-particles conversion at both
+    of its sites -- the ``"cell"`` profile's ``puff_rate`` and the distributed
+    profiles' ``total_particles_per_s`` -- so the shape is untouched and only
+    the delivered flow moves. ``1.0`` (the default) is the identity.
     """
     dnn = np.zeros(geometry.cells, dtype=float)
     puff_index, puff_twin_index = puff_cell_indices(geometry)
     index = puff_twin_index if end == -1 else puff_index
     if profile == "cell":
         dnn[index] = puff_rate(
-            sccm, valves, geometry.neutral_volume_cm3[index]
+            sccm, valves, geometry.neutral_volume_cm3[index], delivery_fraction
         )
         return dnn
     if profile not in ("gaussian", "cosine_pipe"):
@@ -850,10 +872,12 @@ def gas_puff_rate_profile(
         # Profile centred far outside the chamber: fall back to the puff cell
         # rather than silently deleting the fueling.
         dnn[index] = puff_rate(
-            sccm, valves, geometry.neutral_volume_cm3[index]
+            sccm, valves, geometry.neutral_volume_cm3[index], delivery_fraction
         )
         return dnn
-    total_particles_per_s = 4.477962e17 * float(sccm) * float(valves)
+    total_particles_per_s = (
+        4.477962e17 * float(sccm) * float(valves) * float(delivery_fraction)
+    )
     dnn = (
         total_particles_per_s
         * (weights / total_weight)
