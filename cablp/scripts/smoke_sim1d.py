@@ -17721,13 +17721,29 @@ print(json.dumps({
         # cannot manufacture a value the sp3 positivity validator would refuse.
         assert np.all(_eq_cut > 0.0)
 
-        # (iii) THE ERROR BOUND IS h^2 max|f''| / 8 and it is REAL: these rows
-        # are quadratic in the sample index, so the second difference is exact
-        # and the bound must be met with equality by the true error.
-        _eq_abs, _eq_rel = _eq_mod.interpolation_error(_eq_t, _eq_nn, 1, 2)
-        _eq_true = np.max(np.abs(_eq_cut - _eq_nn[1] - 0.5 * (_eq_nn[2] - _eq_nn[1])))
+        # (iii) THE ERROR FIGURE IS A BOUND WHERE IT CLAIMS TO BE ONE, and
+        # DISCLAIMS ITSELF ACROSS THE VALVE-OPENING CORNER. The map's t=0 is a
+        # corner in nn(t) -- flat before the valve opens, rising after -- and no
+        # stencil inside the map spans it, so a bracket touching sample 0 is
+        # reported as an estimate rather than a bound. That distinction is the
+        # instrument's honesty and is asserted, not assumed.
+        _eq_abs, _eq_rel, _eq_valid, _eq_why = _eq_mod.interpolation_error(
+            _eq_t, _eq_nn, 1, 2
+        )
         assert _eq_abs > 0.0 and _eq_rel > 0.0
-        assert _eq_true <= _eq_abs + 1e-6 * _eq_abs
+        assert _eq_valid, "an interior bracket's figure must be a bound"
+        assert "NOT A BOUND" not in _eq_why
+        # These rows are quadratic in the sample index, so the second difference
+        # is exact and the true error must actually sit under the bound.
+        _eq_true = float(np.max(np.abs(_eq_cut - 0.5 * (_eq_nn[1] + _eq_nn[2]))))
+        assert _eq_true <= _eq_abs * (1.0 + 1e-9), (_eq_true, _eq_abs)
+        _, _, _eq_valid0, _eq_why0 = _eq_mod.interpolation_error(
+            _eq_t, _eq_nn, 0, 1
+        )
+        assert not _eq_valid0, (
+            "a bracket spanning the map's t=0 corner must NOT claim a bound"
+        )
+        assert "NOT A BOUND" in _eq_why0
 
         # (iv) EVERY MISUSE RAISES rather than writing a quietly wrong fill.
         _eq_bad = str(Path(_eq_dir) / "notamap.npz")

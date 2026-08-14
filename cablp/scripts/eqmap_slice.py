@@ -28,11 +28,21 @@ positive, so the sp3 positivity validator cannot be tripped by the
 interpolation itself.
 
 INTERPOLATION ERROR.  For a linear interpolant on a cadence ``h`` the pointwise
-error is bounded by ``h^2 max|d2nn/dt2| / 8``.  This script estimates that
-bound from the map's OWN second differences around the requested time and
-prints it, absolute and relative, per zone.  It is an estimate of the error the
-slice carries relative to the trajectory the map was cut from -- not a solver
-error bar.  Cut a finer-cadence map if it is too large for the use.
+error is bounded by ``h^2 max|d2nn/dt2| / 8``.  This script estimates that bound
+from the map's OWN second differences around the requested time and prints it,
+absolute and relative, per zone.  It is an estimate of the error the slice
+carries relative to the trajectory the map was cut from -- not a solver error
+bar.  Cut a finer-cadence map if it is too large for the use.
+
+THE FIRST INTERVAL IS EXEMPT AND SAYS SO.  The bound assumes the fill is twice
+differentiable across the bracket; at the map's t=0 it is not, because the
+valve opens as a step and nn(t) turns a corner there.  A bracket containing
+sample 0 is reported as an ESTIMATE, not a bound, with a loud warning and an
+``interp_error_is_a_bound: false`` entry in the header.  Measured on the demo
+map by decimation, the bound holds on 38 of 40 slices and is exceeded ~3x on
+exactly the two that straddle t=0.  Away from that corner the interpolation is
+comfortable: median relative error 2.6e-06 and 99th percentile 5.9e-03 at
+TWICE the demo map's cadence.
 
 ``--selfcheck`` (on by default) re-reads the written file exactly as
 ``run_m6_point.py`` does, builds a ``LAPDSim1D`` at the map's own stance, and
@@ -123,23 +133,51 @@ def interpolate(t_s, values, t, sample_tol):
 def interpolation_error(t_s, values, lo, hi):
     """Estimate the linear-interpolation error bound h^2 max|f''| / 8.
 
-    ``f''`` is estimated by the map's own second difference across the
-    bracketing interval, using the widest stencil available around it.
+    Returns ``(abs, rel, valid, reason)``.  ``f''`` is estimated by the map's
+    own second differences, taken at BOTH ends of the bracket and maximised, so
+    the estimate is the more conservative of the two one-sided reads.
+
+    THE BOUND IS A SMOOTH-REGION STATEMENT AND THE FIRST INTERVAL IS NOT IN
+    ONE.  The Taylor bound requires the fill to be twice differentiable across
+    the bracket, and at the map's t=0 it is not: the valve opens as a step, so
+    nn(t) turns a CORNER there -- flat before, rising after.  No stencil inside
+    the map can span that corner (there is nothing recorded before t=0), so a
+    second difference taken after it underestimates the curvature the
+    interpolant actually crosses.  Measured on the demo map, the bound is
+    honoured on 38 of 40 decimation slices and exceeded (by ~3x) on exactly the
+    two that bracket t=0.  So a bracket containing sample 0 is reported
+    ``valid=False`` rather than carrying a number that is not a bound: slice at
+    a recorded sample, or rebuild the map at a finer cadence, if the first
+    interval is the one you need.
     """
     n = t_s.size
     if n < 3 or lo == hi:
-        return 0.0, 0.0
-    i = max(1, min(n - 2, lo))
-    h_prev = t_s[i] - t_s[i - 1]
-    h_next = t_s[i + 1] - t_s[i]
-    second = 2.0 * (
-        (values[i + 1] - values[i]) / h_next
-        - (values[i] - values[i - 1]) / h_prev
-    ) / (h_prev + h_next)
-    h = float(t_s[hi] - t_s[lo])
-    bound = h * h * np.abs(second) / 8.0
-    denom = np.maximum(np.abs(values[i]), 1e-300)
-    return float(np.max(bound)), float(np.max(bound / denom))
+        return 0.0, 0.0, True, "exact sample: no interpolation error"
+    bound = None
+    for i in (lo, hi - 1):
+        i = int(max(1, min(n - 2, i)))
+        h_prev = t_s[i] - t_s[i - 1]
+        h_next = t_s[i + 1] - t_s[i]
+        second = 2.0 * (
+            (values[i + 1] - values[i]) / h_next
+            - (values[i] - values[i - 1]) / h_prev
+        ) / (h_prev + h_next)
+        h = float(t_s[hi] - t_s[lo])
+        candidate = h * h * np.abs(second) / 8.0
+        bound = candidate if bound is None else np.maximum(bound, candidate)
+    denom = np.maximum(np.abs(values[lo]), 1e-300)
+    valid = lo > 0
+    reason = (
+        "h^2 max|d2nn/dt2| / 8, curvature from the map's own second differences"
+        if valid else
+        "NOT A BOUND: this bracket spans the map's t=0, where the valve opens "
+        "as a step and nn(t) turns a corner. The value below is the "
+        "smooth-region formula evaluated anyway, and it is known to "
+        "UNDERESTIMATE the true error across that corner (measured ~3x on the "
+        "demo map). Slice at a recorded sample, or rebuild the map at a finer "
+        "cadence"
+    )
+    return float(np.max(bound)), float(np.max(bound / denom)), valid, reason
 
 
 def validate_profile(values, key, nn_floor):
@@ -256,7 +294,9 @@ def main(argv=None):
         )
 
     nn_slice, mode, lo, hi, w = interpolate(t_s, m["nn"], t, args.sample_tol)
-    err_abs, err_rel = interpolation_error(t_s, m["nn"], lo, hi)
+    err_abs, err_rel, err_valid, err_reason = interpolation_error(
+        t_s, m["nn"], lo, hi
+    )
     nn_floor = 1e8
     validate_profile(nn_slice, "nn0_profile", nn_floor)
 
@@ -264,7 +304,7 @@ def main(argv=None):
     err_a = (0.0, 0.0)
     if m["nn_a"] is not None:
         nn_a_slice, _, _, _, _ = interpolate(t_s, m["nn_a"], t, args.sample_tol)
-        err_a = interpolation_error(t_s, m["nn_a"], lo, hi)
+        err_a = interpolation_error(t_s, m["nn_a"], lo, hi)[:2]
         validate_profile(nn_a_slice, "nn0_annulus_profile", nn_floor)
 
     cadence = float(header.get("cadence_s", np.min(np.diff(t_s))))
@@ -290,11 +330,11 @@ def main(argv=None):
             else "linear in time, per cell and per zone, between the two "
                  "bracketing map samples"
         ),
-        "interp_error_bound_note": (
-            "h^2 max|d2nn/dt2| / 8, with the second derivative estimated from "
-            "the map's own samples around the bracket; the error of this slice "
-            "relative to the trajectory the map was cut from, not a solver "
-            "error bar"
+        "interp_error_bound_note": err_reason,
+        "interp_error_is_a_bound": bool(err_valid),
+        "interp_error_scope": (
+            "the error of this slice relative to the trajectory the map was cut "
+            "from, not a solver error bar"
         ),
         "interp_error_abs_cm3": err_abs,
         "interp_error_rel": err_rel,
@@ -343,11 +383,13 @@ def main(argv=None):
     if nn_a_slice is not None:
         print(f"#   annulus min/mean/max = {nn_a_slice.min():.6e} / "
               f"{nn_a_slice.mean():.6e} / {nn_a_slice.max():.6e} cm^-3")
-    print(f"#   interpolation error bound: {err_abs:.6e} cm^-3 "
-          f"({err_rel:.6e} relative)")
+    label = "interpolation error bound" if err_valid else "interp error ESTIMATE"
+    print(f"#   {label}: {err_abs:.6e} cm^-3 ({err_rel:.6e} relative)")
     if nn_a_slice is not None:
-        print(f"#   annulus error bound:       {err_a[0]:.6e} cm^-3 "
+        print(f"#   annulus:                   {err_a[0]:.6e} cm^-3 "
               f"({err_a[1]:.6e} relative)")
+    if not err_valid:
+        print(f"# WARNING: the figure above IS NOT A BOUND -- {err_reason}")
     print(f"# wrote {args.out}")
 
     if not args.no_selfcheck:

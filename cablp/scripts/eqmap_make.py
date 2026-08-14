@@ -423,7 +423,10 @@ def main(argv=None):
         "equilibration_tau_cycle_s": float(p_eff.get("tau_cycle", 0.0)),
         "equilibration_puff_on_s": p_eff.get("equilibration_gas_puff_on_s"),
         "equilibration_dt_s": p_eff.get("neutral_equilibration_dt"),
-        "equilibration_wall_s": round(wall, 2),
+        # NB no wall-clock figures land in this header. They drift with
+        # hardware, and recording them would make two byte-identical physics
+        # runs produce two different files -- the map is meant to be
+        # checksum-comparable. Wall times are printed to the console instead.
         "base_mean_density_cm3": float(nn.mean()),
         "base_column_min_cm3": float(nn.min()),
         "base_column_max_cm3": float(nn.max()),
@@ -445,7 +448,6 @@ def main(argv=None):
         ),
         "samples": int(t_s.size),
         "foot_cycle_steps": int(result.steps),
-        "foot_cycle_wall_s": round(foot_wall, 2),
         "t_min_s": float(t_s[0]),
         "t_max_s": float(t_s[-1]),
         # --- the checks ---
