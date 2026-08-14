@@ -111,6 +111,7 @@ from .physics.neutrals import (
     neutral_exchange_coefficients,
     neutral_exchange_rhs,
     neutral_exchange_two_zone_rhs,
+    neutral_fluid_flux_rhs,
     neutral_initial_profile_values,
     neutral_probe_profile_weights,
     neutral_probe_source_rhs,
@@ -132,12 +133,18 @@ from .physics.reactions import (
     reaction_rhs_terms,
     recombination_energy_return_rhs,
 )
+from .physics.hot_neutrals import (
+    ballistic_flight_kernels,
+    neutral_hot_channel_rhs,
+)
 from .physics.sources import (
     add_state_rhs,
     anode_collection_rhs,
     boundary_absorption_rhs,
     characteristic_boundary_rhs,
     ion_neutral_collision_rhs,
+    neutral_cx_channel_rhs,
+    neutral_energy_transfer_row,
     ion_neutral_drag_rhs,
     ion_neutral_frictional_heating_rhs,
     ion_neutral_thermalization_rhs,
@@ -186,6 +193,80 @@ from cablp.vars._cons import (
     m_p_cgs,
     qe_SI,
 )
+
+
+#: What energy each named RHS term's neutral-density row carries, under the
+#: ``neutral_energy`` flag. This table is the disclosure: every term in the
+#: ledger appears in it, and a term that is NOT in it raises rather than moving
+#: neutrals with no stated energy. Modes:
+#:
+#: ``"owns"``   the term computes its own ``En`` row (it needs face-level or
+#:              per-channel information a net density row cannot carry back)
+#: ``"local"``  a pure SINK; the atoms leave at the local ``En/nn``, so the
+#:              temperature of what remains does not move
+#: ``"wall"``   a SOURCE of gas at the vessel wall temperature: fresh feed, or
+#:              plasma neutralized on a surface and re-emitted from it
+#: ``"ion"``    a SOURCE of gas at the local ION temperature: a recombined ion
+#:              is born as a neutral at the temperature it had (see the routing
+#:              note on ``recombination_rad_loss`` below)
+#: ``"none"``   the term never moves neutrals
+_NEUTRAL_ENERGY_TERM_BOOKING = {
+    # --- terms that own their En row -------------------------------------
+    "ion_neutral_collision": "owns",
+    "neutral_energy_wall": "owns",
+    "neutral_cx_channel": "owns",
+    "neutral_hot_channel": "owns",
+    "cathode_jet_neutral_energy": "owns",
+    "neutral_exchange": "owns",
+    "neutral_zone_exchange": "owns",
+    "neutral_sources": "owns",
+    "neutral_wind_advection": "owns",
+    # --- sinks: ionization consumes cold gas at its own energy -----------
+    "ionization_birth": "local",
+    "beam_ionization_birth": "local",
+    "gas_puff_local_ionization": "local",
+    # --- surface sources: recycled plasma leaves the surface at T_wall ---
+    "boundary_absorption": "wall",
+    "characteristic_boundary": "wall",
+    "anode_collection": "wall",
+    "cathode_surface_loss": "wall",
+    "surface_loss": "wall",
+    "neutral_probe_source": "wall",
+    # --- recombination: born at the ion temperature ----------------------
+    # ROUTING NOTE. These neutrals are Ti-class and so are physically hot, but
+    # they stay in the COLD channel deliberately. The operator hands the
+    # recombined ion's DIRECTED momentum to M_n as an exact mirror of the ion
+    # loss, so its particle, momentum and energy bookings are one closed unit
+    # on the cold fluid; moving the particle to the hot channel while its
+    # momentum stayed behind would break that mirror, and moving the momentum
+    # too would ask the isotropic ballistic kernel to carry a population born
+    # with a bulk drift, which is not what it integrates. What IS fixed here is
+    # the leak: the ion loses (3/2) k Ti per recombination and, before this
+    # pass, nothing received it.
+    "recombination_rad_loss": "ion",
+    "recombination_3b_loss": "ion",
+    # --- everything else never touches nn --------------------------------
+    "plasma_advective_flux": "none",
+    "plasma_front_flux": "none",
+    "pressure_work": "none",
+    "hyperbolic_energy_correction": "none",
+    "flux_tube_geometry": "none",
+    "ei_exchange": "none",
+    "ionization_energy_cost": "none",
+    "electron_ion_cooling": "none",
+    "electron_neutral_cooling": "none",
+    "ion_charge_exchange": "none",
+    "ion_neutral_drag": "none",
+    "ion_neutral_frictional_heating": "none",
+    "ion_neutral_thermalization": "none",
+    "neutral_momentum_wall": "none",
+    "neutral_momentum_radial": "none",
+    "beam_power_deposition": "none",
+    "beam_ionization_cost": "none",
+    "beam_excitation_radiation": "none",
+    "recombination_energy_return": "none",
+    "heat_conduction": "none",
+}
 
 
 _CATHODE_RESULT_KEYS = (
@@ -1101,6 +1182,16 @@ class LAPDSim1D:
                     "moment of f, so an evolved En field would be a second, "
                     "unowned copy. Accepted: neutral_model='moment'"
                 )
+            if self._neutral_two_momentum:
+                raise ValueError(
+                    "the neutral_energy flag is incompatible with "
+                    "neutral_momentum_radial='kinetic_two_moment': that "
+                    "reduction gives the annulus its own momentum row while "
+                    "nothing gives it an energy row, so the single cold fluid "
+                    "the mini-flux transports would be split across two "
+                    "momenta and one energy. Accepted: neutral_energy with "
+                    "neutral_momentum_radial in ('uniform', 'two_zone')"
+                )
         self._neutral_energy_alpha = float(
             self._input_dict.get("neutral_energy_wall_accommodation", 0.40)
         )
@@ -1109,6 +1200,31 @@ class LAPDSim1D:
                 "neutral_energy_wall_accommodation (the thermal "
                 "accommodation coefficient alpha_E) must be in [0, 1] (got "
                 f"{self._neutral_energy_alpha})"
+            )
+        # Thermal transpiration: which temperature the Knudsen conductances
+        # read. The v1-primary freezes them at Tn_K; the disclosed arm scales
+        # them by sqrt(Tn_local/Tn_K), which only exists where a per-cell Tn
+        # does.
+        self._neutral_knudsen_temperature = str(
+            self._input_dict.get("neutral_knudsen_temperature", "frozen")
+        )
+        if self._neutral_knudsen_temperature not in ("frozen", "local"):
+            raise ValueError(
+                "neutral_knudsen_temperature must be 'frozen' or 'local' "
+                f"(got {self._neutral_knudsen_temperature!r})"
+            )
+        if (
+            self._neutral_knudsen_temperature == "local"
+            and not self._neutral_energy
+        ):
+            raise ValueError(
+                "neutral_knudsen_temperature='local' (the thermal-"
+                "transpiration arm) requires the neutral_energy flag: the "
+                "scaling reads the evolved per-cell Tn, and without the En "
+                "field there is only the config scalar Tn_K, against which "
+                "the scale factor is identically 1. Accepted: "
+                "neutral_knudsen_temperature='frozen', or 'local' with "
+                "neutral_energy"
             )
         # Geometry and Tn_fit are fixed for the run, so the two-zone factors
         # are computed once here; None selects the uniform (legacy) closure
@@ -1125,6 +1241,31 @@ class LAPDSim1D:
         else:
             self._wind_column_factor = None
             self._wind_wall_rate = None
+        # The ENERGY channel's wall-visit rate is the same free-molecular
+        # geometry evaluated at the wall's own temperature rather than the
+        # momentum closure's 0.1 eV Tn_fit: the gas that trades energy with a
+        # surface is the near-wall gas, which the v1 cut holds at T_wall. The
+        # two-zone factors are linear in vbar, so this is the same closure with
+        # the right speed in it, not a different one.
+        self._neutral_energy_wall_Tn_eV = (
+            NEUTRAL_ENERGY_FLOOR_T_K * kb_cgs / ev_to_erg
+        )
+        if self._neutral_energy and self._neutral_momentum_radial == "two_zone":
+            _, self._neutral_energy_wall_rate = neutral_wind_two_zone_factors(
+                geometry=self._geometry,
+                Tn_eV=self._neutral_energy_wall_Tn_eV,
+                ion_mass_g=self._ion_mass_g,
+            )
+        else:
+            self._neutral_energy_wall_rate = None
+        # The ballistic redistribution kernels are geometry alone (the flight
+        # speed cancels out of the axial hop), so they are built once here and
+        # never re-entered.
+        if self._neutral_energy:
+            self._hot_neutral_kernels = ballistic_flight_kernels(self._geometry)
+        else:
+            self._hot_neutral_kernels = None
+        self._hot_channel_diagnostics = {}
         self._validate_neutral_jet_config()
         self._recombination_energy_return = bool(
             self._input_dict.get("recombination_energy_return", False)
@@ -4041,6 +4182,12 @@ class LAPDSim1D:
         energy_wall_terms = {}
         if self._neutral_energy:
             energy_wall_terms["neutral_energy_wall"] = self._zero_rhs_state()
+            energy_wall_terms["neutral_cx_channel"] = self._zero_rhs_state()
+            energy_wall_terms["neutral_hot_channel"] = self._zero_rhs_state()
+            if self._cathode_jet_enabled:
+                energy_wall_terms["cathode_jet_neutral_energy"] = (
+                    self._zero_rhs_state()
+                )
         # The ad-hoc probe source exists only under its own flag, so the term
         # ledger (and the saved rhs_terms structure) is unchanged when the flag
         # is off. Present in BOTH branches below and identically zero in the
@@ -4115,7 +4262,9 @@ class LAPDSim1D:
                 "recombination_3b_loss": self._zero_rhs_state(),
                 "heat_conduction": self._zero_rhs_state(),
             }
-            return self._apply_active_plasma_topology(terms)
+            return self._attach_neutral_energy_rows(
+                self._apply_active_plasma_topology(terms), state
+            )
         plasma_terms = self.plasma_flux_rhs_terms(state=state)
         reaction_terms = self.reaction_rhs_terms(state=state)
         electron_cooling_terms = self.electron_cooling_rhs_terms(state=state)
@@ -4160,6 +4309,24 @@ class LAPDSim1D:
         if self._neutral_energy:
             energy_wall_terms["neutral_energy_wall"] = (
                 self.neutral_energy_wall_rhs(state=state)
+            )
+            energy_wall_terms["neutral_cx_channel"] = (
+                self.neutral_cx_channel_rhs(state=state)
+            )
+            # The hot channel's in-flight ionization must use the SAME
+            # per-neutral ionization frequency the bulk channel is using on
+            # this evaluation, so it is read back off the reaction term rather
+            # than recomputed from the rate tables.
+            energy_wall_terms["neutral_hot_channel"] = (
+                self.neutral_hot_channel_rhs(
+                    state=state,
+                    ionization_rate=np.asarray(
+                        reaction_terms["ionization_birth"].n, dtype=float
+                    )
+                    / np.maximum(
+                        np.asarray(state.nn, dtype=float), self._floors["nn"]
+                    ),
+                )
             )
         terms = {
             **zone_terms,
@@ -4252,6 +4419,22 @@ class LAPDSim1D:
         }
         if include_heat_conduction:
             terms["heat_conduction"] = self.heat_conduction_rhs(state=state)
+        if self._neutral_energy and self._cathode_jet_enabled:
+            # Reads the recycle flux the boundary term just computed, so the
+            # jet's energy cannot describe a different flux from the one that
+            # actually rebirthed the atoms.
+            recycle = (
+                terms["characteristic_boundary"].nn
+                if self._characteristic_boundary
+                else terms["boundary_absorption"].nn
+            )
+            terms["cathode_jet_neutral_energy"] = (
+                self.cathode_jet_neutral_energy_rhs(
+                    state=state,
+                    cathode_solve=cathode_solve,
+                    recycle_nn_row=recycle,
+                )
+            )
         if self._kinetic is not None:
             # K4a supersession: once targets exist, every term's neutral
             # rows are carried by the kinetic relaxation instead (plasma
@@ -4280,7 +4463,72 @@ class LAPDSim1D:
             terms["neutral_kinetic_dvm_coupling"] = (
                 self.neutral_kinetic_dvm_coupling_rhs()
             )
-        return self._apply_active_plasma_topology(terms)
+        return self._attach_neutral_energy_rows(
+            self._apply_active_plasma_topology(terms), state
+        )
+
+    def _attach_neutral_energy_rows(self, terms, state):
+        """Give every neutral-moving term the ``En`` row its ``nn`` row implies.
+
+        Terms that own their ``En`` row are left alone; the rest get one built
+        from the density row they already computed and the birth energy
+        ``_NEUTRAL_ENERGY_TERM_BOOKING`` states for them. Doing it here, once,
+        rather than inside each of a dozen physics functions is what makes the
+        coverage auditable: a term absent from the table raises, so a new
+        neutral source cannot be added without saying what temperature its gas
+        arrives at.
+
+        It runs AFTER the plasma-topology mask, so an ``En`` row can never
+        appear on a cell whose ``nn`` row was masked away.
+        """
+        if state.En is None:
+            return terms
+        Tn = neutral_temperature_eV(
+            state,
+            floors=self._floors,
+            Tn_eV=float(self._input_dict.get("Tn_K", 300.0))
+            * kb_cgs
+            / ev_to_erg,
+        )
+        wall_energy = NEUTRAL_ENERGY_FLOOR_T_K * kb_cgs
+        ion_energy = 1.5 * derive_state(
+            state, floors=self._floors, ion_mass_g=self._ion_mass_g
+        ).Ti * ev_to_erg
+        attached = {}
+        for name, term in terms.items():
+            try:
+                mode = _NEUTRAL_ENERGY_TERM_BOOKING[name]
+            except KeyError:
+                raise ValueError(
+                    f"RHS term {name!r} has no neutral-energy booking. Every "
+                    "term that can move neutrals must state the energy its "
+                    "particles carry (add it to "
+                    "_NEUTRAL_ENERGY_TERM_BOOKING); a term that never touches "
+                    "them is declared 'none'."
+                ) from None
+            if mode == "owns":
+                attached[name] = term
+                continue
+            birth = {
+                "none": None,
+                "local": None,
+                "wall": 1.5 * wall_energy,
+                "ion": ion_energy,
+            }[mode]
+            attached[name] = ConservativeState1D(
+                n=term.n,
+                nn=term.nn,
+                M=term.M,
+                Ee=term.Ee,
+                Ei=term.Ei,
+                M_n=term.M_n,
+                nn_a=term.nn_a,
+                M_n_a=term.M_n_a,
+                En=neutral_energy_transfer_row(
+                    term.nn, Tn, birth_energy_erg=birth
+                ),
+            )
+        return attached
 
     def _apply_active_plasma_topology(self, terms):
         """Mask plasma-coupled terms on typed plasma-dead cells.
@@ -7212,6 +7460,75 @@ class LAPDSim1D:
             characteristic_boundary=self._characteristic_boundary,
         )
 
+    def cathode_jet_neutral_energy_rhs(
+        self, state, cathode_solve, recycle_nn_row
+    ):
+        """Return the ``En`` the cathode jet's recycled atoms actually carry.
+
+        THE COMPOSITION, stated. The jet's MOMENTUM booking is untouched: the
+        directed ``v_mix = R_N v_back + (1 - R_N) v_eff`` per particle stays
+        inside ``boundary_absorption_rhs``, where it rides the same term that
+        rebirths the particles. Nothing about it is repeated here, so no
+        momentum is booked twice. What this term adds is the ENERGY that
+        booking has always dropped -- ``boundary_absorption_rhs`` says so in as
+        many words ("the reflected atoms' kinetic energy beyond the mean-flow
+        momentum is NOT booked -- neutrals carry no energy field") -- and that
+        the ``En`` field now has somewhere to put:
+
+            e_jet = R_N (1/2) m v_back^2 + (1 - R_N) (3/2) k T_s
+
+        The generic surface booking has already credited every recycled atom
+        the wall energy ``(3/2) k T_wall``, so this term supplies only the
+        EXCESS ``e_jet - (3/2) k T_wall``, on the cathode cells alone.
+
+        Because that energy comes off the surface, the surface must stop
+        keeping it: the ``cathode_jet_surface_debit`` arm is what removes
+        ``R_E`` of the ion bombardment power from the cathode's balance, and
+        construction REFUSES this combination without it rather than booking
+        the same ``R_E`` on both sides.
+
+        The atoms are NOT routed through the hot channel's ballistic kernel.
+        That kernel integrates an isotropic volume birth; the backscattered
+        flux is a directed surface jet, and its premise does not hold.
+        """
+        zeros = self._zero_rhs_state()
+        if state.En is None or cathode_solve is None:
+            return zeros
+        spec = self._cathode_jet_spec(cathode_solve)
+        if spec is None:
+            return zeros
+        derived = derive_state(
+            state, floors=self._floors, ion_mass_g=self._ion_mass_g
+        )
+        roles = np.asarray(self._geometry.cell_role)
+        cathode = roles == "cathode"
+        if not np.any(cathode):
+            return zeros
+        R_N = float(spec["R_N"])
+        v_back = np.sqrt(
+            2.0
+            * float(spec["R_E"])
+            * np.maximum(float(spec["phi_c_V"]) + derived.Ti, 0.0)
+            * ev_to_erg
+            / self._ion_mass_g
+        )
+        e_jet = R_N * 0.5 * self._ion_mass_g * v_back**2 + (1.0 - R_N) * (
+            1.5 * kb_cgs * max(float(spec["T_s_K"]), 0.0)
+        )
+        excess = e_jet - 1.5 * kb_cgs * NEUTRAL_ENERGY_FLOOR_T_K
+        recycle = np.asarray(recycle_nn_row, dtype=float)
+        return ConservativeState1D(
+            n=zeros.n,
+            nn=zeros.nn,
+            M=zeros.M,
+            Ee=zeros.Ee,
+            Ei=zeros.Ei,
+            M_n=zeros.M_n,
+            nn_a=zeros.nn_a,
+            M_n_a=zeros.M_n_a,
+            En=np.where(cathode, np.maximum(recycle, 0.0) * excess, 0.0),
+        )
+
     def pressure_work_rhs(self, y=None, state=None):
         """Return conservative pressure-work energy sources."""
         if state is None:
@@ -7439,8 +7756,12 @@ class LAPDSim1D:
 
         Active only where the state carries ``En`` (the ``neutral_energy``
         flag); a strict zero otherwise. It shares the momentum wall sink's
-        free-molecular geometry, so ``Tn_fit`` and the two-zone effective
-        wall rate are the same values that term reads.
+        free-molecular GEOMETRY but not its temperature: the visit rate here is
+        built from the wall's own 300 K thermal speed rather than the momentum
+        closure's 0.1 eV ``Tn_fit``, because the gas that trades energy with a
+        surface is the near-wall gas the v1 cut holds at ``T_wall``. The
+        two-zone effective rate is the same closure re-evaluated at that speed,
+        which it is linear in.
         """
         if state is None:
             state = self.state if y is None else self._unpack(y)
@@ -7451,8 +7772,8 @@ class LAPDSim1D:
             geometry=self._geometry,
             Rm_cm=self._geometry.Rm_cm,
             alpha_E=self._neutral_energy_alpha,
-            Tn_fit=float(self._input_dict.get("Tn_fit", 0.1)),
-            wall_rate_1_s=self._wind_wall_rate,
+            Tn_fit=self._neutral_energy_wall_Tn_eV,
+            wall_rate_1_s=self._neutral_energy_wall_rate,
         )
 
     def neutral_momentum_two_zone_rhs(self, y=None, state=None):
@@ -7468,9 +7789,27 @@ class LAPDSim1D:
         )
 
     def neutral_wind_advection_rhs(self, y=None, state=None):
-        """Return upwind advection of nn and M_n by the neutral wind."""
+        """Return the neutral gas's axial transport under the wind.
+
+        EXACTLY ONE advection operator runs, and this method is the only place
+        that chooses which. Without ``En`` it is the historical first-order
+        donor-cell upwind of ``nn`` and ``M_n``. With ``En`` the Rusanov
+        mini-flux SUPERSEDES it and carries all three rows plus the cold gas's
+        pressure -- the donor-cell term is not called at all, so nothing is
+        advected twice. The ledger name is unchanged either way, so the saved
+        ``rhs_terms`` structure does not move with the flag.
+        """
         if state is None:
             state = self.state if y is None else self._unpack(y)
+        if state.En is not None:
+            return neutral_fluid_flux_rhs(
+                state=state,
+                floors=self._floors,
+                ion_mass_g=self._ion_mass_g,
+                geometry=self._geometry,
+                mesh_faces=self._mesh_faces,
+                mesh_blocked_area_cm2=self._mesh_blocked_area_cm2,
+            )
         return neutral_wind_advection_rhs(
             state=state,
             floors=self._floors,
@@ -7479,6 +7818,52 @@ class LAPDSim1D:
             mesh_faces=self._mesh_faces,
             mesh_blocked_area_cm2=self._mesh_blocked_area_cm2,
         )
+
+    def neutral_cx_channel_rhs(self, y=None, state=None):
+        """Return the charge-exchange decoupling correction on the cold gas."""
+        if state is None:
+            state = self.state if y is None else self._unpack(y)
+        return neutral_cx_channel_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            geometry=self._geometry,
+            wind_column_factor=self._wind_column_factor,
+            **self._collision_operator_kwargs(),
+        )
+
+    def neutral_hot_channel_rhs(self, y=None, state=None, ionization_rate=None):
+        """Return the hot channel's ballistic flows, caching its diagnostics.
+
+        ``ionization_rate`` is the per-neutral ionization frequency the bulk
+        reaction term is using on this same evaluation, threaded in so the
+        in-flight and bulk channels cannot disagree about the rate. The
+        per-cell diagnostics (``nn_hot``, ``f_hot``, ``tau_hot``) land on
+        ``self._hot_channel_diagnostics`` as a side channel, exactly as the
+        coverage reservoir debit does -- they are a reading of the term, not a
+        row of it.
+        """
+        if state is None:
+            state = self.state if y is None else self._unpack(y)
+        if state.En is None:
+            return self._zero_rhs_state()
+        rhs, diagnostics = neutral_hot_channel_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            geometry=self._geometry,
+            kernels=self._hot_neutral_kernels,
+            I_ion=self._I_ion,
+            ionization_rate_per_neutral=(
+                np.zeros_like(state.nn)
+                if ionization_rate is None
+                else ionization_rate
+            ),
+            wind_column_factor=self._wind_column_factor,
+            **self._collision_operator_kwargs(),
+        )
+        self._hot_channel_diagnostics = diagnostics
+        return rhs
 
     def ion_neutral_frictional_heating_rhs(self, y=None, state=None):
         """Return the elastic ion-neutral frictional-heating energy source."""
@@ -7531,23 +7916,34 @@ class LAPDSim1D:
             state = self.state if y is None else self._unpack(y)
         if not self._ion_neutral_moment_closure:
             return self._zero_rhs_state()
-        drag_enabled = bool(self._flags.get("ion_neutral_drag", True))
-        Tn_K = float(self._input_dict.get("Tn_K", 300.0))
-        Tn_eV = Tn_K * kb_cgs / ev_to_erg
         return ion_neutral_collision_rhs(
             state=state,
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
-            gas_type=self._gas_type,
-            Tn_eV=Tn_eV,
-            b_ion_neutral_drag=(
+            geometry=self._geometry,
+            wind_column_factor=self._wind_column_factor,
+            **self._collision_operator_kwargs(),
+        )
+
+    def _collision_operator_kwargs(self):
+        """Return the rate bundle every ion-neutral collision channel shares.
+
+        The moment-closed operator, the CX decoupling correction, and the hot
+        channel must all read ONE gas, ONE reference neutral temperature, and
+        ONE drag scale, or their split stops being a split.
+        """
+        drag_enabled = bool(self._flags.get("ion_neutral_drag", True))
+        return {
+            "gas_type": self._gas_type,
+            "Tn_eV": float(self._input_dict.get("Tn_K", 300.0))
+            * kb_cgs
+            / ev_to_erg,
+            "b_ion_neutral_drag": (
                 float(self._input_dict.get("b_ion_neutral_drag", 1.0))
                 if drag_enabled
                 else 0.0
             ),
-            geometry=self._geometry,
-            wind_column_factor=self._wind_column_factor,
-        )
+        }
 
     def energy_exchange_rhs(self, y=None, state=None):
         """Return conservative electron-ion thermal exchange sources."""
@@ -7842,12 +8238,49 @@ class LAPDSim1D:
                 geometry=self._geometry,
                 column_coeff_cm3_s=column_coeff,
                 annulus_coeff_cm3_s=annulus_coeff,
+                floors=self._floors,
+                temperature_scale=self._transpiration_face_scale(state),
             )
         return neutral_exchange_rhs(
             state=state,
             geometry=self._geometry,
             exchange_coeff_cm3_s=self.neutral_exchange_coefficients(),
+            floors=self._floors,
+            temperature_scale=self._transpiration_face_scale(state),
         )
+
+    def _transpiration_temperature_ratio(self, state):
+        """Return the per-cell ``Tn_local / Tn_K`` the transpiration arm reads.
+
+        ``None`` on the frozen (v1-primary) closure, which is what leaves every
+        conductance at its construction-time value.
+        """
+        if self._neutral_knudsen_temperature != "local" or state.En is None:
+            return None
+        Tn_ref = float(self._input_dict.get("Tn_K", 300.0)) * kb_cgs / ev_to_erg
+        Tn = neutral_temperature_eV(
+            state, floors=self._floors, Tn_eV=Tn_ref
+        )
+        return np.maximum(Tn, 0.0) / Tn_ref
+
+    def _transpiration_face_scale(self, state):
+        """Return the internal-face conductance scale, or ``None`` when frozen.
+
+        A conductance is proportional to the thermal speed, so the scale is the
+        square root of the temperature ratio, taken on the face average of the
+        two adjacent cells.
+        """
+        ratio = self._transpiration_temperature_ratio(state)
+        if ratio is None:
+            return None
+        return np.sqrt(0.5 * (ratio[:-1] + ratio[1:]))
+
+    def _transpiration_cell_scale(self, state):
+        """Return the radial (per-cell) conductance scale, or ``None``."""
+        ratio = self._transpiration_temperature_ratio(state)
+        if ratio is None:
+            return None
+        return np.sqrt(ratio)
 
     def neutral_zone_exchange_rhs(self, y=None, state=None):
         """Return the conservative column/annulus free-molecular exchange."""
@@ -7857,6 +8290,8 @@ class LAPDSim1D:
             state=state,
             geometry=self._geometry,
             conductance_cm3_s=self._zone_exchange_cm3_s,
+            floors=self._floors,
+            temperature_scale=self._transpiration_cell_scale(state),
         )
 
     def neutral_exchange_coefficients(self):
@@ -8425,6 +8860,19 @@ class LAPDSim1D:
             raise ValueError(
                 "cathode_jet_surface_debit reads the cathode jet's R_E and "
                 "requires cathode_neutral_jet"
+            )
+        if self._neutral_energy and self._cathode_jet_enabled and not surface_debit:
+            raise ValueError(
+                "cathode_neutral_jet with neutral_energy requires "
+                "cathode_jet_surface_debit=True: the R_E share of the ion "
+                "bombardment power is the energy the backscattered atoms "
+                "carry away, and with an En field that energy is now BOOKED "
+                "into the neutral gas. Without the debit the surface keeps it "
+                "too, so the same R_E is spent twice. This is not flipped for "
+                "you -- the debit changes the cathode's power balance, which "
+                "is a stance decision, not a plumbing one. Accepted: "
+                "cathode_jet_surface_debit=True, or neutral_energy without "
+                "cathode_neutral_jet"
             )
         # Reflected-energy retention for the surface power balance:
         # (1 - R_E) of the ion bombardment power stays in the surface when
@@ -9095,8 +9543,8 @@ class LAPDSim1D:
                 else 0.0
             ),
             "alpha_E": self._neutral_energy_alpha,
-            "Tn_fit": float(self._input_dict.get("Tn_fit", 0.1)),
-            "wall_rate_1_s": self._wind_wall_rate,
+            "Tn_fit": self._neutral_energy_wall_Tn_eV,
+            "wall_rate_1_s": self._neutral_energy_wall_rate,
         }
 
     def _reaction_kwargs(self):
@@ -9148,6 +9596,16 @@ class LAPDSim1D:
             wind["Tn"] = neutral_temperature_eV(
                 state, floors=self._floors, Tn_eV=np.nan
             )
+            # The hot channel is algebraic, so its standing population is a
+            # DIAGNOSTIC row rather than packed state: saved from the last RHS
+            # evaluation's own rates, not recomputed from the saved sample.
+            for name in ("nn_hot", "f_hot", "tau_hot"):
+                value = self._hot_channel_diagnostics.get(name)
+                wind[name] = (
+                    np.zeros_like(state.nn)
+                    if value is None
+                    else np.asarray(value, dtype=float).copy()
+                )
         if state.nn_a is not None:
             wind["nn_a"] = state.nn_a.copy()
         if state.M_n_a is not None:
@@ -9542,6 +10000,9 @@ class LAPDSim1D:
         if saved and "En" in saved[0]:
             result.En = stack("En")
             result.Tn = stack("Tn")
+            result.nn_hot = stack("nn_hot")
+            result.f_hot = stack("f_hot")
+            result.tau_hot = stack("tau_hot")
         if saved and "nn_a" in saved[0]:
             result.nn_a = stack("nn_a")
         if saved and "M_n_a" in saved[0]:

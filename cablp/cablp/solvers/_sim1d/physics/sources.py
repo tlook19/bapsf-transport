@@ -2,6 +2,7 @@ import numpy as np
 
 from cablp.funcs._cross import (
     charge_ex_react,
+    phelps_cx_rate_cm3_s,
     phelps_momentum_transfer_rate_cm3_s,
 )
 from cablp.vars._cons import ev_to_erg, kb_cgs
@@ -1469,6 +1470,187 @@ def neutral_energy_volume_ratio(state, geometry):
     return np.asarray(geometry.volume_ratio, dtype=float)
 
 
+def ion_neutral_cx_split_rates(nn, Ti, Tn, gas_type):
+    """Return ``(nu_cx, nu_el)`` [s^-1]: the CX and elastic shares of ``nu_mt``.
+
+    The collision operator's momentum-transfer frequency is
+    ``nu_mt = nn (k_b + 0.5 k_iso)(T_eff)``, and the two summands ARE the two
+    physical channels: ``k_b`` is the resonant charge-exchange (backscatter)
+    rate coefficient and ``0.5 k_iso`` the polarization-elastic one, both
+    already carrying the equal-mass lab-frame factor. The split is therefore
+    exact and introduces no constant that was not already in ``nu_mt``:
+
+        nu_cx = nn k_b(T_eff)          nu_el = nu_mt - nu_cx = nn 0.5 k_iso(T_eff)
+
+    ``nu_cx`` doubles as the CX EVENT rate per ion, which is what makes it the
+    cold->hot population-swap rate: the equal-mass ``mu/m_i = 1/2`` factor that
+    turns ``2 Qb`` into ``k_b`` is exactly the factor that turns the
+    momentum-transfer moment back into an event count.
+
+    ``nu_el`` is floored at zero and the floor RAISES if it ever binds. It
+    cannot: ``k_iso`` is a positive cross-section moment, so the difference is
+    positive by construction. A bind would mean the two rate tables had stopped
+    being the two halves of the same sum, which is a broken model rather than a
+    small negative number to clip away.
+    """
+    T_eff = 0.5 * (np.asarray(Ti, dtype=float) + np.asarray(Tn, dtype=float))
+    nn = np.asarray(nn, dtype=float)
+    k_cx = phelps_cx_rate_cm3_s(T_eff, gas_type=gas_type)
+    k_mt = phelps_momentum_transfer_rate_cm3_s(T_eff, gas_type=gas_type)
+    elastic = k_mt - k_cx
+    if np.any(elastic < 0.0):
+        raise ValueError(
+            "the elastic share of the ion-neutral momentum-transfer rate went "
+            f"negative (worst k_mt - k_cx = {float(np.min(elastic)):.6e} "
+            "cm^3/s): k_cx and k_mt are no longer the backscatter rate and its "
+            "sum with the isotropic-elastic half, so the CX/elastic split has "
+            "lost its meaning"
+        )
+    return nn * k_cx, nn * elastic
+
+
+def neutral_energy_transfer_row(nn_row, Tn_eV_local, birth_energy_erg=None):
+    """Return the ``En`` row [erg cm^-3 s^-1] accompanying a neutral-density row.
+
+    ``En`` and ``nn`` share a volume, so an ``nn`` row of ``[cm^-3 s^-1]``
+    becomes an ``En`` row by multiplying it, per cell, by the energy the
+    particles it moves carry:
+
+    - a REMOVAL carries the local per-particle energy ``(3/2) k Tn``, so a sink
+      cannot change the temperature of what it leaves behind. This is what
+      makes ionization, pumping, and the cold->hot swap temperature-preserving
+      rather than temperature-shifting;
+    - an ADDITION carries ``birth_energy_erg`` per particle, the stated
+      temperature of whatever the source is (the wall for a puff or a recycled
+      surface flux, the local ion temperature for a recombined ion).
+
+    A row that adds particles without a stated birth energy raises: silently
+    reusing the local energy would assert that fresh gas arrives at whatever
+    temperature the cell already had.
+    """
+    nn_row = np.asarray(nn_row, dtype=float)
+    local = 1.5 * np.asarray(Tn_eV_local, dtype=float) * ev_to_erg
+    if birth_energy_erg is None:
+        if np.any(nn_row > 0.0):
+            raise ValueError(
+                "neutral_energy_transfer_row was given a row that ADDS "
+                "neutrals but no birth energy; a source must state the "
+                "temperature its particles arrive at"
+            )
+        return nn_row * local
+    birth = np.asarray(birth_energy_erg, dtype=float)
+    return np.where(nn_row > 0.0, nn_row * birth, nn_row * local)
+
+
+def neutral_cx_channel_rhs(
+    state,
+    floors,
+    ion_mass_g,
+    gas_type,
+    Tn_eV,
+    b_ion_neutral_drag=1.0,
+    geometry=None,
+    wind_column_factor=None,
+):
+    """Return the charge-exchange DECOUPLING correction on the cold channel.
+
+    :func:`ion_neutral_collision_rhs` is left exactly as it was: its ion rows
+    are correct for the full ``nu_mt`` (the ion really does feel both channels),
+    and its pairwise identity is a property of that operator which this term
+    does not disturb. What the pass-1 operator got wrong once the two neutral
+    populations are recognised as decoupled is the NEUTRAL side of the CX share:
+    it heated the cold gas with energy that in fact leaves it entirely.
+
+    A resonant charge exchange is a population swap, not a collision that warms
+    anything::
+
+        ion(u_i, Ti) + cold(u_n, Tn)  ->  HOT(u_i, Ti) + ion(u_n, Tn)
+
+    The cold gas loses one atom carrying its OWN per-particle energy and
+    momentum -- so ``Tn`` is untouched by CX, which is the whole content of the
+    decoupling ruling -- and the hot channel gains one atom carrying the ion's.
+    This term therefore does two things, both restricted to the neutral rows:
+
+    1. WITHDRAWS the CX share of the collision operator's cold-side booking,
+       ``-(q_fric_cx - q_therm_cx)`` on ``En`` and the CX share of the momentum
+       mirror on ``M_n``;
+    2. BOOKS the swap itself: ``-S_cx`` on ``nn`` at the local per-particle
+       energy on ``En``, and ``-m u_i S_cx`` on ``M_n`` -- the momentum the hot
+       atom carries away, which is exactly what the two corrections sum to.
+
+    The elastic share keeps the full pass-1 treatment: it is a real collision
+    and it really does heat the cold gas.
+
+    What the hot channel receives is the exact complement,
+    ``S_cx (3/2 k Ti + 1/2 m u_rel^2)`` of energy and ``S_cx m u_i`` of
+    momentum, so ion + cold + hot conserve both to roundoff. The frictional
+    half is not thermal energy in the cold gas's sense: it is the slip kinetic
+    energy the hot atom is born with, and
+    :func:`~.hot_neutrals.hot_channel_rates` carries it in ``e_hot``.
+
+    A state without ``En`` gets zeros -- the decoupling has no meaning without
+    a neutral temperature to decouple.
+    """
+    zeros = np.zeros_like(np.asarray(state.n, dtype=float))
+    if state.En is None or b_ion_neutral_drag == 0.0:
+        return ConservativeState1D(
+            n=zeros,
+            nn=zeros.copy(),
+            M=zeros.copy(),
+            Ee=zeros.copy(),
+            Ei=zeros.copy(),
+        )
+    if geometry is None:
+        raise ValueError(
+            "neutral_cx_channel_rhs requires geometry for the plasma/neutral "
+            "volume conversion"
+        )
+    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
+    Tn = neutral_temperature_eV(state, floors=floors, Tn_eV=Tn_eV)
+    nu_cx, _nu_el = ion_neutral_cx_split_rates(
+        nn=state.nn, Ti=derived.Ti, Tn=Tn, gas_type=gas_type
+    )
+    if state.M_n is not None:
+        u_n = neutral_wind_velocity(
+            state, floors=floors, ion_mass_g=ion_mass_g, geometry=geometry
+        )
+        if wind_column_factor is not None:
+            u_n = wind_column_factor * u_n
+    else:
+        u_n = np.zeros_like(derived.u)
+    u_rel = derived.u - u_n
+    scale = float(b_ion_neutral_drag)
+    S_cx = scale * nu_cx * np.asarray(state.n, dtype=float)
+    ratio = neutral_energy_volume_ratio(state, geometry)
+    # (1) the CX share of what pass-1 booked into the cold gas.
+    q_fric_cx = 0.5 * ion_mass_g * S_cx * u_rel**2
+    q_therm_cx = 1.5 * S_cx * (Tn - derived.Ti) * ev_to_erg
+    # (2) the swap itself, at the cold gas's own per-particle energy.
+    swap_energy = 1.5 * Tn * ev_to_erg * S_cx
+    dEn = (-(q_fric_cx - q_therm_cx) - swap_energy) * ratio
+    dM_n = None
+    if state.M_n is not None:
+        momentum_ratio = (
+            np.ones_like(ratio)
+            if state.M_n_a is not None
+            else np.asarray(geometry.volume_ratio, dtype=float)
+        )
+        # The two corrections collapse to the hot atom's own momentum:
+        # -(m u_n S_cx) - (+m S_cx u_rel) == -m u_i S_cx.
+        dM_n = -ion_mass_g * S_cx * derived.u * momentum_ratio
+    return ConservativeState1D(
+        n=zeros,
+        nn=-S_cx * ratio,
+        M=zeros.copy(),
+        Ee=zeros.copy(),
+        Ei=zeros.copy(),
+        M_n=dM_n,
+        nn_a=None if state.nn_a is None else zeros.copy(),
+        M_n_a=None if state.M_n_a is None else zeros.copy(),
+        En=dEn,
+    )
+
+
 def ion_neutral_collision_rhs(
     state,
     floors,
@@ -1756,7 +1938,14 @@ def neutral_energy_wall_rhs(
 
     ``nu_wall`` is the free-molecular wall-visit rate, taken from the SAME
     geometry the momentum wall sinks use so the two channels see one surface
-    model: radially ``vbar_n(Tn_fit)/Rm``, or the two-zone effective rate when
+    model. ``Tn_fit`` is the temperature whose thermal speed sets that visit
+    rate, and for THIS channel it is the wall's own: the gas that reaches a
+    surface and exchanges energy with it is the near-wall gas, which the v1 cut
+    holds at ``T_wall``. (The momentum wall sink keeps the 0.1 eV ``Tn_fit``
+    closure it was calibrated with; the two terms are allowed to differ because
+    they are answering different questions, and the solver passes each its
+    own.) Radially the rate is ``vbar_n(Tn_fit)/Rm``, or the two-zone
+    effective rate when
     ``wall_rate_1_s`` is supplied (``neutral_wind_two_zone_factors``, in which
     only the slow annulus gas touches the wall); plus, on the two end cells,
     the outward-wind end-face flux ``max(-+u_n, 0) * A_end / V``, the same

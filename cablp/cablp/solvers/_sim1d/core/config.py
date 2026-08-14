@@ -667,6 +667,23 @@ def model_mode_defaults():
         orifice conductance in series. Prefer this for resolved runs, where the
         puff-to-pump back-path is the physics of interest and the historical model
         under-predicts it by 2-14x depending on cell size.
+    neutral_knudsen_temperature:
+        Which temperature the Knudsen conductances take their thermal speed
+        from. Read only under the ``neutral_energy`` flag, which is the only
+        setting in which a second answer exists.
+
+        ``"frozen"`` (default, and the ratified v1-primary) evaluates every
+        conductance once at the configured ``Tn_K``, so axial and radial
+        neutral transport is a fixed property of the geometry.
+
+        ``"local"`` scales each conductance by ``sqrt(Tn_local / Tn_K)`` from
+        the evolved per-cell neutral temperature -- the thermal-transpiration
+        arm, in which a hot patch of gas conducts faster than a cold one. It is
+        a DISCLOSED sensitivity arm, not the production closure: its steady
+        state carries a density gradient wherever a temperature gradient
+        exists, and that has not been scored against anything. Selecting it
+        without ``neutral_energy`` raises at construction, because there is no
+        per-cell ``Tn`` for it to read.
     neutral_model:
         Which engine carries the neutral population. ``"moment"`` integrates
         the fluid neutral density (and, with the ``neutral_momentum`` flag,
@@ -872,6 +889,9 @@ def model_mode_defaults():
         # mass-loading mixing energy booked explicitly.
         "ionization_birth_energy_model": "conservative",
         "neutral_exchange_model": "knudsen",
+        # The ratified v1-primary: conductances frozen at Tn_K. Read only under
+        # the neutral_energy flag, which ships off.
+        "neutral_knudsen_temperature": "frozen",
         "neutral_model": "moment",
         # 2nd-order operator-split pair; both are needed together with
         # heat_picard_iterations > 0 for the step to reach second order.
@@ -2933,23 +2953,37 @@ input_flags_template_1d = {
     # chamber-mean nn.
     "neutral_two_zone": False,
     # Evolve the neutral thermal energy density En as an optional conservative
-    # field, packed last. The neutral temperature becomes the per-cell field
-    # value Tn = (2/3) En / (nn k) instead of the config scalar Tn_K: the
-    # moment-closed ion-neutral collision operator reads it in both (Tn - Ti)
-    # and T_eff = (Ti + Tn)/2, books the neutral side of that exchange into En
-    # (making the operator pairwise energy-conserving), and the surfaces
-    # accommodate En back toward (3/2) nn k T_wall at
-    # neutral_energy_wall_accommodation times the free-molecular wall-visit
-    # rate. Requires ion_neutral_moment_closure and neutral_momentum; refuses
-    # coverage_closure (its deficit partitions nn only, so a mean En under
-    # concentration would be an unstated closure) and every kinetic neutral
-    # model (which carries the neutral energy as a moment of f). Each is a
-    # construction-time ValueError. Off => the historical layout, bit-exact.
+    # field, packed last, AND with it the decoupled two-channel neutral gas the
+    # field only makes sense inside.
     #
-    # THIS FIELD'S BUDGET IS INCOMPLETE: only the collision coupling and the
-    # wall sink are booked. Neutral pressure force, En advection, Knudsen
-    # enthalpy carriage, and the jet/puff/pump/reaction En bookkeeping are NOT
-    # built, so a flag-on run is a plumbing exercise, not a physics arm.
+    # COLD CHANNEL. The neutral temperature becomes the per-cell field value
+    # Tn = (2/3) En / (nn k) instead of the config scalar Tn_K. (nn, M_n, En)
+    # are transported as one fluid by a Rusanov mini-flux carrying the COLD
+    # gas's own pressure p_n = (2/3) En, which SUPERSEDES the donor-cell M_n
+    # self-advection -- exactly one advection operator runs. The Knudsen
+    # exchanges carry the donor cell's energy per atom; the puff arrives at the
+    # wall temperature, the pump leaves at the local one, ionization debits the
+    # local one, and the surfaces accommodate En toward (3/2) nn k T_wall at
+    # neutral_energy_wall_accommodation times the free-molecular wall-visit
+    # rate.
+    #
+    # HOT CHANNEL. The CX-born minority sits at the local ion temperature and
+    # is collisionally decoupled from the cold bulk (the gas-gas mean free path
+    # is far longer than the column radius), so its pressure never enters a
+    # force on the fluid. It is algebraic -- no packed row -- with a ballistic
+    # redistribution kernel: atoms are eroded out of nn at their own energy,
+    # fly, and end on the column boundary (mass moved axially, energy left on
+    # the wall), in re-CX (momentum and energy handed to the ions where they
+    # got to), or ionized in flight.
+    #
+    # Requires ion_neutral_moment_closure and neutral_momentum; refuses
+    # coverage_closure (its deficit partitions nn only, so a mean En under
+    # concentration would be an unstated closure), the two-momentum reduction
+    # (an annulus momentum row with no annulus energy row), and every kinetic
+    # neutral model (which carries the neutral energy as a moment of f). With
+    # cathode_neutral_jet it additionally requires cathode_jet_surface_debit,
+    # so the backscatter energy is booked once rather than twice. Each is a
+    # construction-time ValueError. Off => the historical layout, bit-exact.
     "neutral_energy": False,
     # Shaped initial neutral fill. The run's neutral IC comes from a PER-CELL
     # profile of absolute densities (nn0_profile, and optionally

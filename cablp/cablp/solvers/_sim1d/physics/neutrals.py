@@ -3,7 +3,7 @@ import math
 import numpy as np
 
 from ..core.geometry import is_plenum_cell, puff_cell_indices, pump_cell_indices
-from ..core.state import ConservativeState1D
+from ..core.state import ConservativeState1D, neutral_energy_floor
 from .sources import neutral_wind_velocity
 from cablp.vars._cons import kb_cgs, m_p_cgs
 
@@ -170,11 +170,24 @@ def neutral_zone_exchange_conductance(geometry, Tn_K, mu_neutral):
     return np.where(V_ann > 0.0, conductance, 0.0)
 
 
-def neutral_zone_exchange_rhs(state, geometry, conductance_cm3_s):
+def neutral_zone_exchange_rhs(
+    state, geometry, conductance_cm3_s, floors=None, temperature_scale=None
+):
     """Return the conservative column/annulus free-molecular exchange.
 
     A state without ``nn_a`` gets zeros (the term is presence-gated, like
     every optional-field term).
+
+    ENTHALPY CONVENTION (the ratified annulus-cold v1 cut). Gas leaving the
+    column takes the COLUMN's energy per atom with it and that energy leaves the
+    model with it; gas entering the column from the annulus arrives at the WALL
+    temperature, which is where the v1 cut holds the annulus. So the column's
+    ``En`` sees ``-flow_out (En/nn)`` and ``+flow_in (3/2) k T_wall``, and the
+    asymmetry is the cut, stated here rather than hidden in a mean.
+
+    ``temperature_scale`` (the thermal-transpiration arm) multiplies the radial
+    conductance per cell; the conductance is ``vbar/4`` times an area, so it
+    scales with the same square root the axial one does.
     """
     zeros = np.zeros(geometry.cells, dtype=float)
     if state.nn_a is None:
@@ -186,11 +199,27 @@ def neutral_zone_exchange_rhs(state, geometry, conductance_cm3_s):
             Ei=zeros.copy(),
         )
     V_col, V_ann = neutral_zone_volumes(geometry)
-    flow = np.asarray(conductance_cm3_s, dtype=float) * (
+    conductance = np.asarray(conductance_cm3_s, dtype=float)
+    if temperature_scale is not None:
+        conductance = conductance * np.asarray(temperature_scale, dtype=float)
+    flow = conductance * (
         np.asarray(state.nn_a, dtype=float) - np.asarray(state.nn, dtype=float)
     )
     dnn = np.where(V_col > 0.0, flow / np.maximum(V_col, 1e-300), 0.0)
     dnn_a = np.where(V_ann > 0.0, -flow / np.maximum(V_ann, 1e-300), 0.0)
+    dEn = None
+    if state.En is not None:
+        if floors is None:
+            raise ValueError(
+                "neutral_zone_exchange_rhs on an En-carrying state requires "
+                "floors for the column energy per particle"
+            )
+        energy = np.where(
+            dnn > 0.0,
+            neutral_energy_floor(np.ones_like(dnn)),
+            neutral_energy_per_particle(state, floors),
+        )
+        dEn = dnn * energy
     return ConservativeState1D(
         n=zeros,
         nn=dnn,
@@ -198,6 +227,7 @@ def neutral_zone_exchange_rhs(state, geometry, conductance_cm3_s):
         Ee=zeros.copy(),
         Ei=zeros.copy(),
         nn_a=dnn_a,
+        En=dEn,
     )
 
 
@@ -315,12 +345,27 @@ def two_zone_knudsen_coefficients(geometry, Tn_K, mu_neutral, clausing_scale=1.0
     return coeff_col, coeff_ann
 
 
-def neutral_exchange_two_zone_rhs(state, geometry, column_coeff_cm3_s, annulus_coeff_cm3_s):
+def neutral_exchange_two_zone_rhs(
+    state,
+    geometry,
+    column_coeff_cm3_s,
+    annulus_coeff_cm3_s,
+    floors=None,
+    temperature_scale=None,
+):
     """Return conservative per-zone axial Knudsen exchange.
 
     The same pairwise-face form as ``neutral_exchange_rhs``, run
     independently per zone on the zone's own volumes. Faces where a zone's
     conductance is zero pass nothing (a pinched-off channel).
+
+    The COLUMN channel carries the donor cell's energy per atom on ``En``, for
+    the reason ``neutral_exchange_rhs`` states. The ANNULUS channel carries no
+    energy at all: under the ratified v1 cut the annulus gas is held at the wall
+    temperature and has no energy field to move.
+
+    ``temperature_scale`` (the thermal-transpiration arm) multiplies BOTH zones'
+    internal-face conductances per face.
     """
     if state.nn_a is None:
         raise ValueError(
@@ -330,17 +375,38 @@ def neutral_exchange_two_zone_rhs(state, geometry, column_coeff_cm3_s, annulus_c
     zeros = np.zeros(geometry.cells, dtype=float)
     dnn = zeros.copy()
     dnn_a = zeros.copy()
+    column_faces = None
     for coeff, values, volumes, out in (
         (column_coeff_cm3_s, state.nn, V_col, dnn),
         (annulus_coeff_cm3_s, state.nn_a, V_ann, dnn_a),
     ):
-        face_rates = np.asarray(coeff, dtype=float) * (
+        coeff = np.asarray(coeff, dtype=float)
+        if temperature_scale is not None:
+            coeff = coeff * np.asarray(temperature_scale, dtype=float)
+        face_rates = coeff * (
             np.asarray(values[:-1], dtype=float)
             - np.asarray(values[1:], dtype=float)
         )
+        if column_faces is None:
+            column_faces = face_rates
         safe = np.maximum(volumes, 1e-300)
         out[:-1] -= np.where(volumes[:-1] > 0.0, face_rates / safe[:-1], 0.0)
         out[1:] += np.where(volumes[1:] > 0.0, face_rates / safe[1:], 0.0)
+    dEn = None
+    if state.En is not None:
+        if floors is None:
+            raise ValueError(
+                "neutral_exchange_two_zone_rhs on an En-carrying state "
+                "requires floors for the donor energy per particle"
+            )
+        energy = _donor_upwind(
+            column_faces, neutral_energy_per_particle(state, floors)
+        )
+        face_energy = column_faces * energy
+        safe = np.maximum(V_col, 1e-300)
+        dEn = zeros.copy()
+        dEn[:-1] -= np.where(V_col[:-1] > 0.0, face_energy / safe[:-1], 0.0)
+        dEn[1:] += np.where(V_col[1:] > 0.0, face_energy / safe[1:], 0.0)
     return ConservativeState1D(
         n=zeros,
         nn=dnn,
@@ -348,6 +414,7 @@ def neutral_exchange_two_zone_rhs(state, geometry, column_coeff_cm3_s, annulus_c
         Ee=zeros.copy(),
         Ei=zeros.copy(),
         nn_a=dnn_a,
+        En=dEn,
     )
 
 
@@ -359,23 +426,245 @@ def neutral_exchange_face_rates(nn, geometry, exchange_coeff_cm3_s):
     )
 
 
-def neutral_exchange_rhs(state, geometry, exchange_coeff_cm3_s):
-    """Return conservative RHS for pairwise neutral exchange."""
+def neutral_energy_per_particle(state, floors):
+    """Return the cold gas's energy per atom [erg], or ``None`` without ``En``.
+
+    ``En / nn`` on the floored ``nn``, i.e. ``(3/2) k Tn``. Every place a
+    particle current has to decide what energy it carries uses THIS, so a
+    current between two cells at the same temperature moves energy in exactly
+    the proportion that leaves both temperatures where they were.
+    """
+    if state.En is None:
+        return None
+    nn = np.maximum(np.asarray(state.nn, dtype=float), floors["nn"])
+    return np.asarray(state.En, dtype=float) / nn
+
+
+def _donor_upwind(face_rates, values):
+    """Return the donor-cell value on each internal face for a signed rate.
+
+    A positive face rate flows from the low-z cell, so the donor is the left
+    one. This is the only place the exchange terms make that choice.
+    """
+    return np.where(
+        np.asarray(face_rates, dtype=float) > 0.0, values[:-1], values[1:]
+    )
+
+
+def neutral_exchange_rhs(
+    state, geometry, exchange_coeff_cm3_s, floors=None, temperature_scale=None
+):
+    """Return conservative RHS for pairwise neutral exchange.
+
+    ``temperature_scale`` (the thermal-transpiration arm) multiplies the
+    internal-face conductances per face; ``None`` leaves them at the frozen
+    value the construction-time coefficients carry.
+
+    ENTHALPY CARRIAGE. With the state carrying ``En`` the particle current
+    across each face takes the DONOR cell's energy per atom with it,
+    ``En_donor / nn_donor``. That is the choice which leaves an isothermal gas
+    isothermal: transferring atoms between two cells at the same ``Tn`` moves
+    exactly ``(3/2) k Tn`` per atom, so neither side's temperature moves. The
+    free-molecular effusive value ``2 k T`` would instead manufacture a
+    temperature difference out of a pure density gradient, which the cells --
+    well-mixed Maxwellian reservoirs by construction -- cannot support. The
+    conductance is a density-driven current, so this channel carries no
+    conduction: at uniform density and unequal ``Tn`` the face rate is zero and
+    no energy moves. That is a stated limitation of the closure, not an
+    oversight.
+    """
+    coeff = _as_face_coefficients(exchange_coeff_cm3_s, geometry)
+    if temperature_scale is not None:
+        coeff = coeff * np.asarray(temperature_scale, dtype=float)
     face_rates = neutral_exchange_face_rates(
         nn=state.nn,
         geometry=geometry,
-        exchange_coeff_cm3_s=exchange_coeff_cm3_s,
+        exchange_coeff_cm3_s=coeff,
     )
     dnn = np.zeros(geometry.cells, dtype=float)
     dnn[:-1] -= face_rates / geometry.neutral_volume_cm3[:-1]
     dnn[1:] += face_rates / geometry.neutral_volume_cm3[1:]
     zeros = np.zeros(geometry.cells, dtype=float)
+    dEn = None
+    if state.En is not None:
+        if floors is None:
+            raise ValueError(
+                "neutral_exchange_rhs on an En-carrying state requires floors "
+                "for the donor energy per particle"
+            )
+        energy = _donor_upwind(
+            face_rates, neutral_energy_per_particle(state, floors)
+        )
+        face_energy = face_rates * energy
+        dEn = np.zeros(geometry.cells, dtype=float)
+        dEn[:-1] -= face_energy / geometry.neutral_volume_cm3[:-1]
+        dEn[1:] += face_energy / geometry.neutral_volume_cm3[1:]
     return ConservativeState1D(
         n=zeros.copy(),
         nn=dnn,
         M=zeros.copy(),
         Ee=zeros.copy(),
         Ei=zeros.copy(),
+        En=dEn,
+    )
+
+
+#: Ratio of specific heats of the monatomic cold neutral gas. Used only for the
+#: mini-flux's acoustic signal speed, which is the Rusanov dissipation scale and
+#: the CFL bound -- not a tunable.
+NEUTRAL_GAMMA = 5.0 / 3.0
+
+
+def neutral_fluid_flux_rhs(
+    state,
+    floors,
+    ion_mass_g,
+    geometry,
+    mesh_faces=None,
+    mesh_blocked_area_cm2=None,
+):
+    """Return the COLD neutral fluid's conservative transport (nn, M_n, En).
+
+    This is the ``neutral_energy`` replacement for
+    :func:`neutral_wind_advection_rhs`, and it REPLACES it -- the solver runs
+    exactly one of the two, so nothing is advected twice. It transcribes the
+    plasma pattern in :mod:`..physics.flux`: a Rusanov face flux built from the
+    cell-centred physical fluxes and a ``a_max = |u_n| + c_n`` dissipation, with
+    the cold gas's own pressure ``p_n = nn k Tn = (2/3) En`` in the momentum
+    flux and its pressure work ``-p_n div u_n`` on the energy row. Both the
+    scheme and the split between them are the plasma's: the energy row carries
+    pure advection ``En u_n`` in the flux and the ``p dV`` work separately,
+    exactly as ``Ee``/``Ei`` do.
+
+    THE PRESSURE IS THE COLD CHANNEL'S ALONE. The hot, CX-born population is
+    collisionally decoupled from this fluid -- the gas-gas mean free path is far
+    longer than the column radius -- so its (much larger) partial pressure is
+    deliberately absent from ``p_n``. Putting it in would assert a collisional
+    coupling the gas does not have.
+
+    VOLUME CONVENTION, stated once and used throughout. Each row is divided by
+    the volume of the field it transports, and each flux crosses the area that
+    field occupies:
+
+    - ``nn`` and ``En`` share a volume by construction (the ``En`` field is
+      defined on it), so both use ``V_nn`` and ``A_nn``: the plasma column
+      under ``neutral_two_zone``, the chamber otherwise;
+    - ``M_n`` is a CHAMBER-MEAN momentum density, so it uses ``V_m`` and
+      ``A_m`` -- the same convention the donor-cell term it replaces already
+      used, so the momentum inventory ``sum M_n V_m`` is conserved by the
+      interior fluxes exactly as before;
+    - the PRESSURE FORCE crosses the area the pressure actually acts on
+      (``A_nn``) and lands on the momentum's volume (``V_m``). Under
+      ``neutral_two_zone`` that is the column pressure pushing on the chamber
+      mean, which is the correct total force per chamber volume from the
+      modelled gas. The annulus gas's own pressure gradient is NOT modelled --
+      the annulus carries no energy field under the v1 cold cut -- and that
+      omission is disclosed rather than absorbed into ``p_n``.
+
+    A uniform gas at rest is exactly stationary: the closed end faces carry the
+    live cell's own pressure (the ``flux._apply_plasma_walls`` convention) and
+    no particle, momentum, or energy flux.
+
+    The end-wall and anode-mesh momentum accommodation sinks are carried over
+    from the donor-cell term unchanged; the end-face ENERGY accommodation is
+    the wall sink's ``_end_face_wall_rate`` and is not repeated here.
+    """
+    zeros = np.zeros(geometry.cells, dtype=float)
+    if state.En is None or state.M_n is None:
+        raise ValueError(
+            "neutral_fluid_flux_rhs requires a state carrying both En and M_n; "
+            "without an evolved wind there is nothing for the mini-flux to "
+            "transport and without En it is the donor-cell term's job"
+        )
+    if state.M_n_a is not None:
+        raise ValueError(
+            "neutral_fluid_flux_rhs does not support the two-momentum "
+            "reduction: M_n_a gives the annulus its own momentum row but "
+            "nothing gives it an energy row, so the cold fluid the mini-flux "
+            "transports would be split across two momenta and one energy"
+        )
+    nn = np.asarray(state.nn, dtype=float)
+    En = np.asarray(state.En, dtype=float)
+    M_n = np.asarray(state.M_n, dtype=float)
+    u_n = neutral_wind_velocity(
+        state, floors=floors, ion_mass_g=ion_mass_g, geometry=geometry
+    )
+    # p_n = nn k Tn = (2/3) En, written through En so the pressure and the
+    # transported energy can never drift apart by a floor or a rounding.
+    p_n = (2.0 / 3.0) * En
+    Tn_erg = p_n / np.maximum(nn, floors["nn"])
+    c_n = np.sqrt(NEUTRAL_GAMMA * np.maximum(Tn_erg, 0.0) / ion_mass_g)
+    amax = np.maximum(
+        np.abs(u_n[:-1]) + c_n[:-1], np.abs(u_n[1:]) + c_n[1:]
+    )
+
+    if state.nn_a is not None:
+        area_nn = np.asarray(geometry.plasma_face_area_cm2, dtype=float)
+        volume_nn = np.asarray(geometry.plasma_volume_cm3, dtype=float)
+    else:
+        area_nn = np.asarray(geometry.neutral_face_area_cm2, dtype=float)
+        volume_nn = np.asarray(geometry.neutral_volume_cm3, dtype=float)
+    area_m = np.asarray(geometry.neutral_face_area_cm2, dtype=float)
+    volume_m = np.asarray(geometry.neutral_volume_cm3, dtype=float)
+
+    def rusanov(values):
+        face = np.zeros(geometry.cells + 1, dtype=float)
+        face[1:-1] = 0.5 * (
+            values[:-1] * u_n[:-1] + values[1:] * u_n[1:]
+        ) - 0.5 * amax * (values[1:] - values[:-1])
+        return face
+
+    def divergence(face, area, volume):
+        inventory = area * face
+        return -(inventory[1:] - inventory[:-1]) / volume
+
+    face_nn = rusanov(nn)
+    face_En = rusanov(En)
+    face_M = rusanov(M_n)
+    # Closed ends carry the live cell's pressure so a uniform stationary gas
+    # has exactly zero momentum divergence.
+    face_p = np.zeros(geometry.cells + 1, dtype=float)
+    face_p[1:-1] = 0.5 * (p_n[:-1] + p_n[1:])
+    face_p[0] = p_n[0]
+    face_p[-1] = p_n[-1]
+
+    dnn = divergence(face_nn, area_nn, volume_nn)
+    dEn = divergence(face_En, area_nn, volume_nn)
+    dM_n = divergence(face_M, area_m, volume_m) + divergence(
+        face_p, area_nn, volume_m
+    )
+    # Pressure work on the energy row, on the same closed-end face velocity the
+    # mass flux uses, so a uniform gas at rest stays at rest.
+    face_u = np.zeros(geometry.cells + 1, dtype=float)
+    face_u[1:-1] = 0.5 * (u_n[:-1] + u_n[1:])
+    div_u = (
+        area_nn[1:] * face_u[1:] - area_nn[:-1] * face_u[:-1]
+    ) / volume_nn
+    dEn = dEn - p_n * div_u
+    # End-wall momentum accommodation: u_n and M_n share a sign, so these sinks
+    # only ever relax M_n toward zero.
+    dM_n[0] -= max(-u_n[0], 0.0) * area_m[0] * M_n[0] / volume_m[0]
+    dM_n[-1] -= max(u_n[-1], 0.0) * area_m[-1] * M_n[-1] / volume_m[-1]
+    if mesh_faces is not None:
+        for face, blocked in zip(
+            np.asarray(mesh_faces, dtype=int),
+            np.asarray(mesh_blocked_area_cm2, dtype=float),
+        ):
+            left, right = int(face) - 1, int(face)
+            dM_n[left] -= (
+                max(u_n[left], 0.0) * blocked * M_n[left] / volume_m[left]
+            )
+            dM_n[right] -= (
+                max(-u_n[right], 0.0) * blocked * M_n[right] / volume_m[right]
+            )
+    return ConservativeState1D(
+        n=zeros,
+        nn=dnn,
+        M=zeros.copy(),
+        Ee=zeros.copy(),
+        Ei=zeros.copy(),
+        M_n=dM_n,
+        En=dEn,
     )
 
 
@@ -641,8 +930,19 @@ def neutral_source_sink_rhs(
     column). The pumps keep their chamber-volume rate coefficient applied
     to BOTH zone densities, which reproduces the single-zone ``S * n_port``
     exactly at the well-mixed equilibrium.
+
+    With the state carrying ``En``, both channels book their energy. The PUFF
+    arrives at the vessel wall temperature -- room-temperature bottle gas
+    through a room-temperature valve -- so its birth energy is exactly the
+    ``En`` floor and a puff into cold gas cannot move ``Tn`` at all. This is
+    what the pass-1 flag-on watch item was missing: the puff added particles
+    with no energy of their own and the floor had to invent it, one clip at a
+    time. The PUMP removes gas at the local energy per atom, so pumping is
+    temperature-preserving. Under ``neutral_two_zone`` the puff feeds the
+    annulus, which carries no energy field, so nothing is booked there.
     """
     dnn = np.zeros(geometry.cells, dtype=float)
+    dEn = None if state.En is None else np.zeros(geometry.cells, dtype=float)
     two_zone = state.nn_a is not None
     dnn_a = np.zeros(geometry.cells, dtype=float) if two_zone else None
     pump_left_index, pump_right_index = pump_cell_indices(geometry)
@@ -684,6 +984,8 @@ def neutral_source_sink_rhs(
             )
         else:
             dnn += puff
+            if dEn is not None:
+                dEn += neutral_energy_floor(puff)
     if pump_enabled:
         # The unmodeled pump elbow folds into an effective speed on the plenum
         # a collector-side pump has no elbow in front of it.
@@ -703,6 +1005,9 @@ def neutral_source_sink_rhs(
         )
         dnn[pump_left_index] -= rate_left * state.nn[pump_left_index]
         dnn[pump_right_index] -= rate_right * state.nn[pump_right_index]
+        if dEn is not None:
+            dEn[pump_left_index] -= rate_left * state.En[pump_left_index]
+            dEn[pump_right_index] -= rate_right * state.En[pump_right_index]
         if two_zone:
             dnn_a[pump_left_index] -= rate_left * state.nn_a[pump_left_index]
             dnn_a[pump_right_index] -= (
@@ -738,6 +1043,7 @@ def neutral_source_sink_rhs(
         M_n=dM_n,
         nn_a=dnn_a,
         M_n_a=dM_n_a,
+        En=dEn,
     )
 
 
