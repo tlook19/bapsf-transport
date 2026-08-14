@@ -22,18 +22,27 @@ Exit 0 iff every check passes.
 
 import argparse
 import sys
+import tempfile
 import warnings
+from pathlib import Path
 
 import numpy as np
 
-from cablp.solvers._sim1d import LAPDSim1D, default_config
+from cablp.solvers._sim1d import (
+    LAPDSim1D,
+    default_config,
+    load_result_hdf5,
+)
 from cablp.solvers._sim1d.core.geometry import build_geometry
 from cablp.solvers._sim1d.physics.hot_neutrals import (
     BALLISTIC_DIRECTION_SAMPLES,
+    HOT_CHANNEL_DIAGNOSTIC_FIELDS,
     ballistic_flight_kernels,
     directed_flight_kernels,
     hot_birth_drift_ratio,
+    hot_thermal_speed,
 )
+from cablp.solvers._sim1d.results.io import save_result_hdf5
 
 FAILURES = []
 
@@ -403,9 +412,37 @@ def section_streaming(nx, t_end):
         if isinstance(getattr(result_on, name, None), np.ndarray)
     ]
     check(
-        "hot_n_flight and hot_flux_z survive the trajectory round trip",
+        "hot_n_flight and hot_flux_z are carried on the run result",
         len(saved) == 2,
-        f"saved rows: {saved}",
+        f"rows present: {saved}",
+    )
+
+    # The HDF5 round trip, on the real writer/reader rather than in memory:
+    # both rows ride HOT_CHANNEL_DIAGNOSTIC_FIELDS into _OPTIONAL_ARRAY_FIELDS,
+    # so a save/load must return them bit for bit, alongside every field that
+    # was already there.
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "hbd_roundtrip.h5"
+        save_result_hdf5(path, result_on)
+        reloaded = load_result_hdf5(path)
+    trip = []
+    for name in HOT_CHANNEL_DIAGNOSTIC_FIELDS:
+        before = np.asarray(getattr(result_on, name))
+        after = np.asarray(getattr(reloaded, name, None))
+        if before.shape != after.shape or not np.array_equal(
+            before.view(np.uint64), after.view(np.uint64)
+        ):
+            trip.append(name)
+    check(
+        "every hot-channel diagnostic survives the HDF5 round trip at uint64",
+        not trip,
+        f"{len(HOT_CHANNEL_DIAGNOSTIC_FIELDS)} rows written and re-read"
+        + ("" if not trip else f"; differing: {trip}"),
+    )
+    check(
+        "the two new rows are last in HOT_CHANNEL_DIAGNOSTIC_FIELDS (order kept)",
+        HOT_CHANNEL_DIAGNOSTIC_FIELDS[-2:] == ("hot_n_flight", "hot_flux_z"),
+        f"tail = {HOT_CHANNEL_DIAGNOSTIC_FIELDS[-2:]}",
     )
     check(
         "both rows read exactly zero with the flag off",
@@ -418,8 +455,6 @@ def section_streaming(nx, t_end):
     flux = np.asarray(sim_on._hot_channel_diagnostics["hot_flux_z"])
     live = n_flight > 0.0
     speed = np.abs(flux[live]) / n_flight[live]
-    from cablp.solvers._sim1d.physics.hot_neutrals import hot_thermal_speed
-
     v_hot = hot_thermal_speed(sim_on.derived.Ti, sim_on._ion_mass_g)
     ceiling = float(np.max(v_hot) + np.max(np.abs(sim_on.derived.u)))
     check(
