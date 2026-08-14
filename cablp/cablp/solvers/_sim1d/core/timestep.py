@@ -182,6 +182,7 @@ def suggest_timestep(
                 geometry=geometry,
                 neutral_exchange_coeff_cm3_s=neutral_exchange_coeff_cm3_s,
                 neutral_dt_fraction=neutral_dt_fraction,
+                floors=floors,
             )
         ),
         "neutral_sources": (
@@ -621,8 +622,14 @@ def neutral_exchange_timestep(
     geometry,
     neutral_exchange_coeff_cm3_s,
     neutral_dt_fraction=0.25,
+    floors=None,
 ):
-    """Return a fractional neutral-density timestep for pair exchange."""
+    """Return a fractional neutral-density timestep for pair exchange.
+
+    ``floors`` is threaded through only so the exchange term can build its
+    donor-energy row on an ``En``-carrying state; this bound reads the density
+    row alone, exactly as before.
+    """
     if neutral_dt_fraction <= 0.0:
         raise ValueError(
             f"neutral_dt_fraction must be positive (got {neutral_dt_fraction})"
@@ -631,6 +638,7 @@ def neutral_exchange_timestep(
         state=state,
         geometry=geometry,
         exchange_coeff_cm3_s=neutral_exchange_coeff_cm3_s,
+        floors=floors,
     )
     return _fractional_timestep(state.nn, rhs.nn, neutral_dt_fraction, 0.0)
 
