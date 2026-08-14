@@ -36,6 +36,12 @@ def add_scaled_state(state, rhs, scale):
                 else rhs.M_n_a
             )
         ),
+        En=(
+            None
+            if state.En is None
+            else state.En
+            + scale * (np.zeros_like(state.En) if rhs.En is None else rhs.En)
+        ),
     )
 
 
@@ -94,6 +100,7 @@ def floor_state_vector(
     neutral_momentum=None,
     neutral_two_zone=None,
     neutral_annulus_momentum=None,
+    neutral_energy=None,
 ):
     """Apply density and temperature floors to a packed conservative vector.
 
@@ -109,6 +116,7 @@ def floor_state_vector(
         neutral_momentum=neutral_momentum,
         neutral_two_zone=neutral_two_zone,
         neutral_annulus_momentum=neutral_annulus_momentum,
+        neutral_energy=neutral_energy,
     )
     floored = apply_state_floors(state, floors=floors, ion_mass_g=ion_mass_g)
     return pack_state(floored)

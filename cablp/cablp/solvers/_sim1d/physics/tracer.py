@@ -139,6 +139,7 @@ def probe_state(state, n_probe, Te_eV, Ti_eV, ion_mass_g):
         M_n_a=(
             None if state.M_n_a is None else np.asarray(state.M_n_a, dtype=float)
         ),
+        En=None if state.En is None else np.asarray(state.En, dtype=float),
     )
 
 
