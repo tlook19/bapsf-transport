@@ -71,7 +71,7 @@ free, and the fixed point is not guaranteed to survive a stance change.
 
 | state | site | class |
 |---|---|---|
-| `_y` (packed `n, nn, M, Ee, Ei` + optional `M_n, nn_a, M_n_a`) | `_accept_step_attempt` -> `_set_state_vector` (`solver.py:3448`) | CARRIED |
+| `_y` (packed `n, nn, M, Ee, Ei` + optional `M_n, nn_a, M_n_a, En`) | `_accept_step_attempt` -> `_set_state_vector` (`solver.py:3448`) | CARRIED |
 | `_state`, `_derived` | `_set_state_vector` (`solver.py:9019-9022`) | DERIVABLE (unpacked from `_y`) |
 | `_time` | `_accept_step_attempt` (`solver.py:3452`) | CARRIED |
 | `_floors`, `_ion_mass_g`, `_mu`, `_geometry` | construction | DERIVABLE |
@@ -423,8 +423,8 @@ the constructed solver exactly, or the load raises:
 * the **structural** config keys — the ones that decide what the payload's
   members mean rather than merely how big a number is:
   flags `coverage_closure`, `neutral_momentum`, `neutral_two_zone`,
-  `TwinCathode`, `Plasma`, `cathode_coupling`, `cathode_emitting_area`,
-  `regime_vessel_node`;
+  `neutral_energy`, `TwinCathode`, `Plasma`, `cathode_coupling`,
+  `cathode_emitting_area`, `regime_vessel_node`;
   params `neutral_model`,
   `cathode_warming_model`, `cathode_surface_model`,
   `cathode_sample_smoothing`, `phase_transition_mode`.
