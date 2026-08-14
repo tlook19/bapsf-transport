@@ -55,6 +55,24 @@ equations these schemes discretize, see [`MODEL.md`](MODEL.md).
   two-zone mode only the annulus coefficient changes; plasma and column-neutral
   transport remain identical to the unbaffled geometry. The selector is
   default off and incomplete or flag-off parameter sets fail at construction.
+- **Cold neutral fluid mini-flux** (`neutral_energy` only,
+  `physics/neutrals.py:neutral_fluid_flux_rhs`): with an evolved `En` the
+  neutral gas is transported as a fluid rather than a drifting density. A
+  Rusanov flux on `(nn, M_n, En)` with `a_max = |u_n| + c_n(Tn)` carries the
+  COLD channel's own pressure `p_n = (2/3) En` in the momentum flux, and the
+  energy row splits exactly as the plasma's does: pure `En u_n` advection in
+  the flux plus a separate `−p_n ∇·u_n` pressure work. The quasi-1D wall
+  reaction `p_n·ΔA/V` accompanies the area-weighted pressure flux (the same
+  pair `flux_tube_geometry` supplies for the plasma), so a uniform gas at rest
+  is bit-exactly stationary. It **supersedes** the donor-cell wind advection
+  below rather than composing with it — the solver runs exactly one neutral
+  advection operator and the ledger name `neutral_wind_advection` is unchanged.
+  Rows are divided by the volume of the field each transports: `nn` and `En` on
+  the column under `neutral_two_zone` and the chamber otherwise, `M_n` always
+  on the chamber (it is a chamber-mean momentum), and the pressure force
+  crosses the area the pressure acts on and lands on the momentum's volume.
+  The hot, CX-born neutral population is collisionally decoupled and its
+  pressure is deliberately absent from `p_n`.
 - **Kinetic-derived two-momentum neutral advection**: column density/momentum
   use plasma face areas and volumes; annulus density/momentum use
   `neutral_face_area - plasma_face_area` and annulus volumes. Each zone uses

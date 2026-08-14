@@ -13,7 +13,11 @@ from ..physics.energy import (
     ion_charge_exchange_rhs,
 )
 from ..physics.flux import ion_sound_speed, plasma_flux_rhs, plasma_wave_speed
-from ..physics.neutrals import neutral_exchange_rhs, neutral_source_sink_rhs
+from ..physics.neutrals import (
+    NEUTRAL_GAMMA,
+    neutral_exchange_rhs,
+    neutral_source_sink_rhs,
+)
 from ..physics.reactions import reaction_rhs
 from ..physics.sources import (
     ion_neutral_collision_frequency,
@@ -178,6 +182,7 @@ def suggest_timestep(
                 geometry=geometry,
                 neutral_exchange_coeff_cm3_s=neutral_exchange_coeff_cm3_s,
                 neutral_dt_fraction=neutral_dt_fraction,
+                floors=floors,
             )
         ),
         "neutral_sources": (
@@ -543,7 +548,7 @@ def neutral_energy_timestep(
     neutral_energy_kwargs=None,
     neutral_dt_fraction=0.25,
 ):
-    """Bound the step by the evolved neutral energy's relaxation rate.
+    """Bound the step by the evolved neutral energy's relaxation and transport.
 
     ``En`` is driven by two explicit relaxations: the ion-neutral collision
     operator pulls ``Tn`` toward ``Ti`` at ``(n/nn) nu_mt (Vp/V_En)`` (the
@@ -552,6 +557,13 @@ def neutral_energy_timestep(
     over its own volume), and the wall pulls it toward ``T_wall`` at
     ``alpha_E nu_wall``. The accepted step keeps ``dt`` times their sum below
     ``neutral_dt_fraction``.
+
+    The cold fluid's mini-flux adds a hyperbolic bound on the same candidate:
+    once the gas carries its own pressure the neutral signal speed is
+    ``|u_n| + c_n`` rather than ``|u_n|`` alone, and the wind bound (which
+    predates the pressure) does not see the acoustic part. Folding it in here
+    keeps the neutral-energy arm on ONE named candidate instead of adding a
+    diagnostic field that older results would not carry.
 
     ``None`` withdraws the candidate (``inf``): a state with no ``En`` has no
     such rate, so an unarmed run's step cannot move.
@@ -589,6 +601,16 @@ def neutral_energy_timestep(
     rate = rate + abs(
         float(neutral_energy_kwargs["alpha_E"])
     ) * np.asarray(wall_rate, dtype=float)
+    # Hyperbolic part: the cold fluid's own acoustic signal on its own cells.
+    u_n = neutral_wind_velocity(
+        state, floors=floors, ion_mass_g=ion_mass_g, geometry=geometry
+    )
+    c_n = np.sqrt(
+        NEUTRAL_GAMMA * np.maximum(Tn, 0.0) * ev_to_erg / ion_mass_g
+    )
+    rate = rate + (np.abs(u_n) + c_n) / np.asarray(
+        geometry.length_cm, dtype=float
+    )
     rate_max = float(np.max(rate)) if rate.size else 0.0
     if rate_max <= 0.0:
         return np.inf
@@ -600,8 +622,14 @@ def neutral_exchange_timestep(
     geometry,
     neutral_exchange_coeff_cm3_s,
     neutral_dt_fraction=0.25,
+    floors=None,
 ):
-    """Return a fractional neutral-density timestep for pair exchange."""
+    """Return a fractional neutral-density timestep for pair exchange.
+
+    ``floors`` is threaded through only so the exchange term can build its
+    donor-energy row on an ``En``-carrying state; this bound reads the density
+    row alone, exactly as before.
+    """
     if neutral_dt_fraction <= 0.0:
         raise ValueError(
             f"neutral_dt_fraction must be positive (got {neutral_dt_fraction})"
@@ -610,6 +638,7 @@ def neutral_exchange_timestep(
         state=state,
         geometry=geometry,
         exchange_coeff_cm3_s=neutral_exchange_coeff_cm3_s,
+        floors=floors,
     )
     return _fractional_timestep(state.nn, rhs.nn, neutral_dt_fraction, 0.0)
 

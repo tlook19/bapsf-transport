@@ -505,8 +505,9 @@ antisymmetric. The frictional term at the full $\nu_{mt}$ carries the CX-sized
 residual the swap moment requires (it is not restricted to the elastic fraction).
 At zero drift the operator is pure equilibration $\tfrac32 n\,\nu_{mt}(T_n-T_i)$ --
 the CX thermal coefficient is $\tfrac32 K_{cx}$, ending the legacy $2.5\,K_{cx}$
-double-count. The neutral carries no energy field, so the neutral-side collisional
-energy is dropped (as before).
+double-count. Without an evolved neutral energy the neutral-side collisional
+energy is dropped (as before); with the `neutral_energy` flag it is booked, and
+the CX share of it is re-routed -- see the two-channel section below.
 
 **A8 (neutral temperature).** The single cold-gas $T_n$ is the 300 K feed/wall
 temperature (`Tn_K`), used consistently in both $(T_n-T_i)$ and $T_\text{eff}$; the
@@ -523,6 +524,59 @@ artifact (`probe_sim1d_r4_collision_bracket.py`) the operator's thermal cooling 
 $-28.2$ kW -- inside the IAEA-based pre-registration bracket $[-30.40,-22.67]$ kW
 and reduced from the present $-46.0$ kW, with no rate tuning (Phelps supersedes the
 IAEA rate set; the bracket is a cross-check).
+
+
+## Decoupled two-channel neutral gas (`neutral_energy`, default off)
+
+The neutral population in the column is bimodal. A cold bulk sits near the
+vessel temperature; a minority born by resonant charge exchange sits at the
+local ion temperature. At column densities the neutral-neutral mean free path
+is orders of magnitude longer than the column radius, so the two populations
+are **collisionally decoupled**: the hot population's (much larger) partial
+pressure must never appear as a force on the cold fluid.
+
+**Cold channel.** A fluid with its own modest pressure $p_n = n_n k T_n =
+\tfrac23 E_n$, transported by the Rusanov mini-flux described in
+[`NUMERICS.md`](NUMERICS.md). Every particle current states the energy it
+carries: the Knudsen exchanges carry the DONOR cell's energy per atom
+$E_n/n_n$, which is the choice that leaves an isothermal gas isothermal under a
+pure density gradient; the puff arrives at the wall temperature; the pump,
+ionization, and the CX swap remove gas at the local per-atom energy; and the
+column/annulus exchange leaves at $T_n$ and returns at $T_\text{wall}$ (the
+ratified annulus-cold v1 cut). Only the ELASTIC share of $\nu_{mt}$ heats it.
+
+**Hot channel.** Algebraic -- no packed row. The CX share
+$\nu_{cx} = n_n k_b(T_\text{eff})$ of $\nu_{mt}$ is a population swap, not a
+collision that warms anything: the cold gas loses an atom carrying its own
+energy and momentum, the hot channel gains one carrying the ion's
+$\tfrac32 kT_i + \tfrac12 m u_\text{rel}^2$ and $m u_i$. The standing
+population follows the saturating balance $f_\text{hot} = x/(1+x)$,
+$x = \nu_{cx}\tau_\text{hot}$, with $\tau_\text{hot}$ a ballistic
+column-radius crossing; the competing rates (re-CX, in-flight ionization) set
+the branching. Nothing in it is fitted: $k_b$ is the Phelps LXCat backscatter
+rate whose sum with the half isotropic-elastic rate IS $\nu_{mt}$, and
+$\tau_\text{hot}$ is geometry.
+
+**Transport is a ballistic redistribution kernel** (`physics/hot_neutrals.py`),
+the same kinematics `KN2ZoneJump._fly` integrates over a discrete velocity grid
+-- a radially determined chord, axial hop $dz = R_p\,\mu/\sqrt{1-\mu^2}$ --
+evaluated analytically over an isotropic volume birth. Flights end on the
+column boundary (mass moved axially, the CX-ballistic **erosion** that relieves
+an axial pile; energy left on the wall), in re-CX (momentum and energy handed
+to the ions where the flight got to -- the nonlocal CX-recycling channel), or
+ionized in flight (a plasma source there).
+
+**What closes and what does not.** Particles, momentum, and energy close across
+ion + cold + hot to machine precision, with the wall as the ONLY named leak:
+the landed atoms rejoin the cold gas at $T_\text{wall}$ and their excess energy
+and their whole directed momentum are absorbed by the surface. Under the v1
+cut the annulus carries no energy field, so only the $\alpha_E$ share of that
+excess is accommodation in the physical sense and the remainder is the cut
+itself; both are reported by the run's hot-channel diagnostics. Recombination-
+born neutrals are Ti-class and so physically hot, but they stay COLD by
+decision: the operator hands the recombined ion's directed momentum to $M_n$ as
+an exact mirror, and splitting the particle from its momentum would break that.
+Gates: `verify_sim1d_nbl2_neutral_transport.py`.
 
 
 ## Clumpy-plasma coverage closure v2 (`coverage_closure`, default off)
