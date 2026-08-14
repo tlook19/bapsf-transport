@@ -2990,6 +2990,32 @@ input_flags_template_1d = {
     # so the backscatter energy is booked once rather than twice. Each is a
     # construction-time ValueError. Off => the historical layout, bit-exact.
     "neutral_energy": False,
+    # Launch the hot channel's CX-born atoms at the local (Ti, u_i) instead of
+    # at Ti alone: the ion drift enters the ballistic flight kinematics as
+    # v_z = v_hot*mu + u_i, so the axial hop becomes
+    # dz = chord*(mu + m)/sqrt(1 - mu^2) with m = u_i/v_hot, and the landing,
+    # residence and end-plane matrices become row-wise drift-asymmetric.
+    # Consumed by the neutral_hot_channel term alone (physics.hot_neutrals):
+    # it selects directed_flight_kernels over ballistic_flight_kernels and
+    # additionally computes the hot_n_flight / hot_flux_z streaming
+    # diagnostics, which read zero when this flag is off.
+    #
+    # mu stays uniform on [-1, 1] and v_perp is untouched (the drift is axial),
+    # so nu_ball = v_hot/Rp, every branching ratio and the standing population
+    # are unchanged; only WHERE the flights get to moves. The momentum a hot
+    # atom carries, p_hot = m*u_i, is the launch MEAN and already directed, so
+    # no new momentum source is booked and the ion/cold/hot closure is the same
+    # one. No new constant: m is local state.
+    #
+    # COST: the kernel stops being a pure function of the geometry (the speed
+    # no longer cancels from dz), so it is rebuilt on every RHS evaluation
+    # rather than once per run.
+    #
+    # Requires neutral_energy -- there is no hot channel to launch without it
+    # -- as a construction-time ValueError. Default OFF and bit-exact off
+    # (presence-gated: the off path builds no drift kernel and the isotropic
+    # one is untouched).
+    "neutral_hot_birth_drift": False,
     # Shaped initial neutral fill. The run's neutral IC comes from a PER-CELL
     # profile of absolute densities (nn0_profile, and optionally
     # nn0_annulus_profile under neutral_two_zone) instead of the uniform

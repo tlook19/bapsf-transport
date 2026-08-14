@@ -68,6 +68,28 @@ function of the geometry and cacheable once per run. And flights that would
 leave through an end plane are folded back onto the end cells, exactly as
 ``kn2zone.build_hop_kernels`` folds its own -- there is a wall there, so the
 atom lands on it rather than leaving the inventory.
+
+DIRECTED BIRTHS (``neutral_hot_birth_drift``, default off). A resonant charge
+exchange hands the atom the ion's WHOLE velocity, drift included, so the birth
+is at the local ``(Ti, u_i)`` rather than at ``Ti`` alone. The flag restores the
+drift to the flight kinematics::
+
+    v_z = v_hot * mu + u_i        v_perp = v_hot * sqrt(1 - mu^2)
+    dz  = chord * (mu + m) / sqrt(1 - mu^2),       m = u_i / v_hot
+
+``mu`` stays uniform on ``[-1, 1]`` -- the birth is still a volume birth, and
+the drift shifts the velocity, not the direction measure. ``v_perp`` is
+untouched because the drift is purely axial, so the radial crossing rate
+``nu_ball = v_hot / Rp``, and with it every branching ratio and the standing
+population, are the SAME numbers the isotropic launch computes; what moves is
+only WHERE the flights get to. Two consequences are stated rather than hidden.
+The kernel is no longer a pure function of the geometry -- the speed no longer
+cancels from ``dz`` -- so it is a function of the STATE, rebuilt on every
+evaluation instead of once per run, and ``BALLISTIC_DIRECTION_SAMPLES`` is a
+per-evaluation cost under this flag rather than a free convergence knob. And
+the drift enters per BIRTH CELL, so the landing, residence and end-plane
+matrices become row-wise asymmetric: an atom born in a cell flowing towards the
+far end is carried that way, which is the whole point of the flag.
 """
 
 import numpy as np
@@ -111,6 +133,22 @@ HOT_CHANNEL_DIAGNOSTIC_FIELDS = (
     "hot_end_fraction",
     "hot_Ei_recx",
     "hot_Ei_ionization",
+    # The two STREAMING readings, appended 2026-08-14 with the directed-birth
+    # flag. Unlike every entry above them these are gated a second time, on
+    # ``neutral_hot_birth_drift``: they are built from the drift kernel's
+    # mu-weighted residence, which the isotropic path does not construct, and
+    # they read ZERO on a run with the flag off. Zero here therefore means "not
+    # computed", exactly as absence means "never recorded" for the rest.
+    #
+    # ``hot_n_flight`` is the residence-resolved in-flight hot density over the
+    # cell [cm^-3] -- the nonlocal counterpart of ``nn_hot``, which counts a
+    # cell's own births only. ``hot_flux_z`` is that population's directed
+    # axial number flux [cm^-2 s^-1], signed with +z. Their RATIO is the hot
+    # population's mean axial velocity over the cell, which is the quantity a
+    # measured directed flow is compared against; it is left to the reader
+    # rather than saved, so the density it was divided by is always in hand.
+    "hot_n_flight",
+    "hot_flux_z",
 )
 
 
@@ -193,6 +231,206 @@ def ballistic_flight_kernels(geometry, samples=BALLISTIC_DIRECTION_SAMPLES):
     return landing, residence, end_fraction
 
 
+def hot_thermal_speed(Ti_eV, ion_mass_g):
+    """Return the hot atom's launch speed ``sqrt(2 k Ti / m)`` [cm/s].
+
+    The single speed the whole channel runs on: it sets the ballistic crossing
+    rate ``nu_ball = v_hot / Rp`` and, under ``neutral_hot_birth_drift``, the
+    denominator of the birth drift ratio. One definition, so the branching
+    ratios and the flight kinematics cannot disagree about how fast the atom is.
+    """
+    return np.sqrt(2.0 * np.asarray(Ti_eV, dtype=float) * ev_to_erg / ion_mass_g)
+
+
+def hot_birth_drift_ratio(state, floors, ion_mass_g):
+    """Return the per-cell birth drift ratio ``m = u_i / v_hot`` [dimensionless].
+
+    The ion drift in units of the hot atom's own launch speed -- the ONLY new
+    number the directed-birth flag introduces, and it is local state rather than
+    a constant: ``u_i`` is the ion fluid velocity the collision operator already
+    runs on and ``v_hot`` is :func:`hot_thermal_speed`. ``|m| < 1`` is a
+    drift-subsonic birth whose flights still reach both ways; ``|m| >= 1`` means
+    every atom is carried downstream, which the kernel handles without a branch.
+    """
+    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
+    v_hot = hot_thermal_speed(derived.Ti, ion_mass_g)
+    return derived.u / np.maximum(v_hot, 1e-300)
+
+
+def directed_flight_kernels(
+    geometry,
+    drift_ratio,
+    samples=BALLISTIC_DIRECTION_SAMPLES,
+    isotropic=None,
+):
+    """Return ``(landing, residence, end_fraction, residence_mu)`` with drift.
+
+    The drift-asymmetric generalization of :func:`ballistic_flight_kernels`:
+    identical launch measure (``mu`` uniform on ``[-1, 1]``, same sample grid),
+    identical end-plane fold, identical row normalization
+
+        landing[i].sum() == 1     residence[i].sum() == 1
+
+    but the axial hop carries the birth cell's own ion drift,
+
+        dz = chord * (mu + m_i) / sqrt(1 - mu**2)
+
+    so each ROW is built at its own ``drift_ratio[i]``. Setting every
+    ``m_i = 0`` recovers the isotropic kernel.
+
+    ``residence_mu[i, j]`` is the same residence average weighted by the
+    flight's own ``mu``. It carries no rows of the RHS; it exists so the
+    standing population's mean axial velocity, ``v_hot * residence_mu + u_i *
+    residence``, is readable per cell. Its rows sum to ``E[mu] == 0`` for ANY
+    drift, which is the statement that the mu-correlated part of the flight
+    velocity transports momentum without creating any.
+
+    ``isotropic``, when given, is the ``(landing, residence, end_fraction)``
+    triple :func:`ballistic_flight_kernels` already built for this geometry.
+    Rows whose ``m_i`` is exactly zero are copied from it VERBATIM rather than
+    recomputed, so a cell with no ion drift gets the isotropic kernel bit for
+    bit -- which is both the physical statement and what makes the drift arm's
+    pre-plasma phase (``u_i == 0`` everywhere) bit-identical to the isotropic
+    arm's. The recomputed rows agree with the isotropic ones to roundoff rather
+    than exactly, because this builder accumulates each row by binning the
+    flights it launched instead of by summing a per-flight overlap matrix; the
+    reorganization is what makes a per-evaluation rebuild affordable at all,
+    and the two orderings are compared directly by
+    ``scripts/verify_hbd_momentum.py``.
+
+    Raises ``ValueError`` for fewer than three direction samples, or for a
+    ``drift_ratio`` that is not one finite value per cell.
+    """
+    z_edges = np.asarray(geometry.z_edges_cm, dtype=float)
+    z_center = np.asarray(geometry.z_cm, dtype=float)
+    chord = np.asarray(geometry.Rp_cm, dtype=float)
+    cells = z_center.size
+    count = int(samples)
+    if count < 3:
+        raise ValueError(
+            "directed_flight_kernels needs at least 3 direction samples "
+            f"(got {samples})"
+        )
+    m = np.asarray(drift_ratio, dtype=float)
+    if m.shape != (cells,):
+        raise ValueError(
+            "directed_flight_kernels needs one drift ratio per cell "
+            f"(got shape {m.shape} for {cells} cells)"
+        )
+    if not np.all(np.isfinite(m)):
+        raise ValueError(
+            "directed_flight_kernels got a non-finite drift ratio; u_i / v_hot "
+            "is finite wherever Ti is floored above zero, so this is a "
+            "corrupted state rather than a configuration error"
+        )
+    # The SAME mu grid the isotropic kernel integrates on: equal solid angle
+    # per sample, none of them on the grazing limit.
+    mu = -1.0 + (np.arange(count, dtype=float) + 0.5) * (2.0 / count)
+    weight = 1.0 / count
+    inv_perp = 1.0 / np.sqrt(1.0 - mu**2)
+
+    live = chord > 0.0
+    # A cell with no column has no CX birth and no flight; its row is the
+    # in-place identity, exactly as in the isotropic kernel.
+    chord_eff = np.where(live, chord, 0.0)[:, None]
+    z0 = z_center[:, None]
+    z_raw = z0 + chord_eff * (
+        mu[None, :] * inv_perp[None, :] + m[:, None] * inv_perp[None, :]
+    )
+    end_fraction = (
+        np.count_nonzero(z_raw < z_edges[0], axis=1)
+        + np.count_nonzero(z_raw > z_edges[-1], axis=1)
+    ) * weight
+    z1 = np.clip(z_raw, z_edges[0], z_edges[-1])
+    cell_of = np.clip(
+        np.searchsorted(z_edges, z1.ravel()) - 1, 0, cells - 1
+    ).reshape(cells, count)
+    flat = (np.arange(cells)[:, None] * cells + cell_of).ravel()
+
+    def binned(values):
+        """Accumulate a per-flight quantity into its landing cell, per row."""
+        return np.bincount(
+            flat, weights=values.ravel(), minlength=cells * cells
+        ).reshape(cells, cells)
+
+    landing = (
+        np.bincount(flat, minlength=cells * cells).reshape(cells, cells) * weight
+    )
+
+    # Residence by accumulation rather than by a per-flight overlap matrix.
+    # Every flight starts at the SAME point z0 and deposits a uniform density
+    # 1/|z1 - z0| along the segment it covers, so a cell's residence splits into
+    # (a) the flights that cross it entirely, which contribute their full width
+    # times the density of everything landing beyond it, and (b) the flights
+    # that END inside it, which contribute the part of the cell they reached.
+    displacement = z1 - z0
+    stalled = displacement == 0.0
+    density = weight / np.where(stalled, 1.0, np.abs(displacement))
+    # The near side of the landing cell as seen from the birth point -- the
+    # lower edge for a flight that went up, the upper edge for one that went
+    # down, and z0 itself for a flight that never left its birth cell. Taking
+    # the difference against it PER FLIGHT keeps the near-perpendicular flights,
+    # whose density diverges as their span shrinks, out of any cancellation.
+    anchor = np.where(
+        cell_of == np.arange(cells)[:, None],
+        z0,
+        z_edges[cell_of + (cell_of < np.arange(cells)[:, None])],
+    )
+    # A flight with no axial span spends its whole life over its birth cell.
+    partial = np.where(stalled, weight, density * np.abs(z1 - anchor))
+    crossing = np.where(stalled, 0.0, density)
+
+    # Widths of the part of each cell that lies above / below the birth point.
+    above_lo = np.maximum(z0, z_edges[None, :-1])
+    above_hi = np.maximum(above_lo, z_edges[None, 1:])
+    below_hi = np.minimum(z0, z_edges[None, 1:])
+    below_lo = np.minimum(below_hi, z_edges[None, :-1])
+
+    def beyond(values):
+        """Suffix sums (up-going flights) and prefix sums (down-going)."""
+        up = np.zeros_like(values)
+        up[:, :-1] = np.cumsum(values[:, ::-1], axis=1)[:, ::-1][:, 1:]
+        down = np.zeros_like(values)
+        down[:, 1:] = np.cumsum(values, axis=1)[:, :-1]
+        return up, down
+
+    # An up-going flight can only land at or above its birth cell and a
+    # down-going one at or below it, so ONE binned array carries both: the
+    # suffix sums above the birth cell see only up-going flights, the prefix
+    # sums below it only down-going ones, and the widths vanish on the wrong
+    # side of the birth point.
+    up, down = beyond(binned(crossing))
+    residence = (above_hi - above_lo) * up + (below_hi - below_lo) * down
+    residence = residence + binned(partial)
+    up_mu, down_mu = beyond(binned(crossing * mu[None, :]))
+    residence_mu = (above_hi - above_lo) * up_mu + (below_hi - below_lo) * down_mu
+    residence_mu = residence_mu + binned(partial * mu[None, :])
+
+    rows = np.arange(cells)
+    dead = ~live
+    if np.any(dead):
+        landing[dead, :] = 0.0
+        residence[dead, :] = 0.0
+        residence_mu[dead, :] = 0.0
+        end_fraction[dead] = 0.0
+        landing[rows[dead], rows[dead]] = 1.0
+        residence[rows[dead], rows[dead]] = 1.0
+    if isotropic is not None:
+        # Exactly-zero drift IS the isotropic launch; take those rows verbatim
+        # so the reduction is bit-for-bit rather than merely to roundoff.
+        undrifted = (m == 0.0) & live
+        if np.any(undrifted):
+            iso_landing, iso_residence, iso_end = isotropic
+            landing[undrifted, :] = np.asarray(iso_landing, dtype=float)[
+                undrifted, :
+            ]
+            residence[undrifted, :] = np.asarray(iso_residence, dtype=float)[
+                undrifted, :
+            ]
+            end_fraction[undrifted] = np.asarray(iso_end, dtype=float)[undrifted]
+    return landing, residence, end_fraction, residence_mu
+
+
 def hot_channel_rates(
     state,
     floors,
@@ -258,7 +496,7 @@ def hot_channel_rates(
         if wind_column_factor is not None:
             u_n = wind_column_factor * u_n
     u_rel = derived.u - u_n
-    v_hot = np.sqrt(2.0 * derived.Ti * ev_to_erg / ion_mass_g)
+    v_hot = hot_thermal_speed(derived.Ti, ion_mass_g)
     Rp = np.asarray(geometry.Rp_cm, dtype=float)
     nu_ball = np.where(Rp > 0.0, v_hot / np.maximum(Rp, 1e-300), 0.0)
     # The hot atom meets ions at the ion temperature on both sides of the
@@ -313,6 +551,7 @@ def neutral_hot_channel_rhs(
     I_ion,
     b_ion_neutral_drag=1.0,
     wind_column_factor=None,
+    birth_drift=False,
 ):
     """Return ``(rhs, diagnostics)`` for the hot channel's ballistic flows.
 
@@ -343,7 +582,49 @@ def neutral_hot_channel_rhs(
     MOMENTUM LEFT ON THE WALL. Landed atoms arrive with no directed momentum:
     the same cut wall-thermalizes them. The momentum they carried out of the
     column is absorbed by the surface, exactly as the momentum wall sink
-    absorbs the cold wind's.
+    absorbs the cold wind's. This is unchanged by ``birth_drift``, and the
+    reason is worth stating, because a directed birth looks like it should need
+    a second momentum source and does NOT.
+
+    THE PAIRING, AND WHY THE DIRECTED CASE ADDS NO BOOKING. Three terms touch
+    the CX momentum and each owns exactly one leg:
+
+    1. :func:`~.sources.ion_neutral_collision_rhs` books the ION side of the
+       full ``nu_mt`` -- CX and elastic together -- as ``-m n nu_mt u_rel`` with
+       the exact mirror on ``M_n``. The CX share of that ion debit is already
+       the right answer for a swap (the ion fluid loses ``m u_i`` and gains
+       ``m u_n``), so nothing here or downstream touches the ion side of a fresh
+       CX event again.
+    2. :func:`~.sources.neutral_cx_channel_rhs` repairs only the COLD side,
+       replacing the mirror's ``+m S_cx u_rel`` with the atom's own
+       ``-m S_cx u_n``; the two collapse to ``-m S_cx u_i``. Ion and cold fluid
+       together are therefore short by exactly ``m u_i S_cx`` per cell, and that
+       deficit IS the hot channel's income.
+    3. This term spends it. ``p_hot = m u_i`` is the momentum ONE hot atom
+       carries out of its birth cell, and the birth rate it multiplies is the
+       fixed point ``births == wall + recx + ionized``, so income
+       ``births * p_hot`` leaves as wall absorption plus the two residence-
+       weighted returns to the ions, with the ``recx`` return net of the
+       replacement drawn at the cell it reached.
+
+    Under ``birth_drift`` the hot atom's axial velocity is
+    ``v_hot * mu + u_i`` and ``mu`` stays uniform on ``[-1, 1]``, so its MEAN
+    over the launch is ``u_i`` -- unchanged. ``p_hot`` is that mean, so every
+    debit above is already the directed one and adding a drift momentum on top
+    would book the same ``m u_i`` twice. What the flag changes is only the
+    kernel the returns are spread over: the same momentum, delivered where the
+    drift actually carried it.
+
+    WHAT IS STILL CUT. Booking ``p_hot`` at the landing cell delivers the
+    launch MEAN there, not each flight's own ``v_hot * mu`` excess. The
+    mu-correlated half of the per-flight momentum is therefore transported
+    without being resolved per landing cell. That cut is pre-existing, it is
+    exactly as large under drift as without it (``mu`` is uniform either way,
+    so the unresolved part integrates to zero over each birth cell's flights,
+    which is why total momentum still closes), and ``residence_mu`` -- built by
+    :func:`directed_flight_kernels` for the streaming diagnostic -- is the
+    object that would resolve it. Resolving it is a separate closure decision
+    and is NOT taken here.
 
     ``diagnostics`` is a READING of the term, never a row of it: nothing in it
     enters the RHS sum, and every array in it is the pre-mask quantity the rows
@@ -368,7 +649,19 @@ def neutral_hot_channel_rhs(
             ),
             {},
         )
-    landing, residence, end_fraction = kernels
+    if birth_drift:
+        # State-dependent: the drift ratio is read from the same state the
+        # rates below are built from, and the kernel is rebuilt for it.
+        landing, residence, end_fraction, residence_mu = directed_flight_kernels(
+            geometry,
+            drift_ratio=hot_birth_drift_ratio(
+                state, floors=floors, ion_mass_g=ion_mass_g
+            ),
+            isotropic=kernels,
+        )
+    else:
+        landing, residence, end_fraction = kernels
+        residence_mu = None
     rates = hot_channel_rates(
         state=state,
         floors=floors,
@@ -432,6 +725,22 @@ def neutral_hot_channel_rhs(
     # The returned energy is extensive on the plasma volume: the row is
     # landed_energy * (Vp/V_En) on V_En, so its inventory is landed_energy*Vp.
     returned = 0.0 if two_zone else float(np.sum(landed_energy * Vp))
+    # --- the streaming reading, gated on the directed kernel ---------------
+    # Atoms born at cell i live tau_hot[i] and spend residence[i, j] of it over
+    # cell j, so births*Vp*tau_hot is the in-flight count and the residence
+    # kernels carry it onto the axis. The velocity each flight holds is
+    # v_hot*mu + u_i, constant along a ballistic flight, so the flux uses the
+    # mu-weighted kernel for the thermal half and the plain one for the drift.
+    if residence_mu is None:
+        n_flight = zeros.copy()
+        flux_z = zeros.copy()
+    else:
+        in_flight = rates["births"] * Vp * rates["tau_hot"]
+        v_hot = hot_thermal_speed(rates["Ti"], ion_mass_g)
+        n_flight = (in_flight @ residence) / Vp
+        flux_z = (
+            (in_flight * v_hot) @ residence_mu + (in_flight * rates["u_i"]) @ residence
+        ) / Vp
     diagnostics = {
         "nn_hot": rates["nn_hot"],
         "f_hot": rates["f_hot"],
@@ -471,6 +780,10 @@ def neutral_hot_channel_rhs(
         # an in-flight ionization deposits with the new ion.
         "hot_Ei_recx": dEi_recx,
         "hot_Ei_ionization": dEi_ion,
+        # The streaming pair. Zero unless ``birth_drift`` armed the mu-weighted
+        # kernel; their ratio is the hot population's mean axial velocity.
+        "hot_n_flight": n_flight,
+        "hot_flux_z": flux_z,
         "hot_births_per_s": float(np.sum(rates["births"] * Vp)),
         "hot_wall_energy_erg_s": float(np.sum(wall_energy_carried * Vp)),
         "hot_wall_energy_returned_erg_s": returned,

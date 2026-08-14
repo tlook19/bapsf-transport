@@ -1193,6 +1193,21 @@ class LAPDSim1D:
                     "momenta and one energy. Accepted: neutral_energy with "
                     "neutral_momentum_radial in ('uniform', 'two_zone')"
                 )
+        # Directed hot births (default off, bit-exact off). The drift it puts
+        # into the flight kinematics is the hot channel's own launch velocity,
+        # so the flag is meaningless without the channel that launches.
+        self._neutral_hot_birth_drift = bool(
+            self._flags.get("neutral_hot_birth_drift", False)
+        )
+        if self._neutral_hot_birth_drift and not self._neutral_energy:
+            raise ValueError(
+                "the neutral_hot_birth_drift flag requires neutral_energy: it "
+                "directs the CX-born HOT channel's birth kinematics, and "
+                "without neutral_energy there is no hot channel -- no "
+                "ballistic kernel is built and the flag would be silently "
+                "inert. Accepted: neutral_hot_birth_drift with "
+                "neutral_energy=True, or neutral_hot_birth_drift=False"
+            )
         self._neutral_energy_alpha = float(
             self._input_dict.get("neutral_energy_wall_accommodation", 0.40)
         )
@@ -7873,6 +7888,7 @@ class LAPDSim1D:
                 else ionization_rate
             ),
             wind_column_factor=self._wind_column_factor,
+            birth_drift=self._neutral_hot_birth_drift,
             **self._collision_operator_kwargs(),
         )
         self._hot_channel_diagnostics = diagnostics
