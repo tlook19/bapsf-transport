@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from cablp.funcs._cross import phelps_momentum_transfer_rate_cm3_s
 from cablp.vars._cons import ev_to_erg
 
 from ..physics.cathode import circuit_relaxation_timestep
@@ -16,6 +17,8 @@ from ..physics.neutrals import neutral_exchange_rhs, neutral_source_sink_rhs
 from ..physics.reactions import reaction_rhs
 from ..physics.sources import (
     ion_neutral_collision_frequency,
+    neutral_energy_volume_ratio,
+    neutral_temperature_eV,
     neutral_wind_velocity,
 )
 from .state import derive_state
@@ -57,6 +60,10 @@ class TimestepDiagnostics:
     # label-semantics boundary).
     clamped_to_dt_min: float = 0.0
     dt_raw: float = np.nan
+    # The evolved neutral energy's relaxation bound. Defaulted (and inf) so
+    # results written before the En field existed still load, and inf on every
+    # run whose state carries no En.
+    dt_neutral_energy: float = np.inf
     accepted_dt: float = np.nan
     step_cap: str = ""
     retry_count: int = 0
@@ -82,6 +89,7 @@ def suggest_timestep(
     ion_charge_exchange_kwargs=None,
     heat_conduction_kwargs=None,
     ion_neutral_drag_kwargs=None,
+    neutral_energy_kwargs=None,
     circuit_kwargs=None,
     plasma_source_rhs=None,
     source_floor_exempt_rtol=None,
@@ -242,6 +250,14 @@ def suggest_timestep(
             geometry=geometry,
             cfl=cfl,
         ),
+        "neutral_energy": neutral_energy_timestep(
+            state=state,
+            floors=floors,
+            ion_mass_g=ion_mass_g,
+            geometry=geometry,
+            neutral_energy_kwargs=neutral_energy_kwargs,
+            neutral_dt_fraction=neutral_dt_fraction,
+        ),
         "circuit": circuit_timestep(
             circuit_kwargs=circuit_kwargs,
             circuit_dt_fraction=circuit_dt_fraction,
@@ -274,6 +290,7 @@ def suggest_timestep(
         dt_circuit=float(dt_candidates["circuit"]),
         clamped_to_dt_min=float(clamped_to_dt_min),
         dt_raw=float(raw_dt),
+        dt_neutral_energy=float(dt_candidates["neutral_energy"]),
     )
 
 
@@ -516,6 +533,66 @@ def neutral_wind_timestep(state, floors, ion_mass_g, geometry, cfl=0.4):
     return float(cfl) * float(
         np.min(geometry.length_cm[moving] / speed[moving])
     )
+
+
+def neutral_energy_timestep(
+    state,
+    floors,
+    ion_mass_g,
+    geometry,
+    neutral_energy_kwargs=None,
+    neutral_dt_fraction=0.25,
+):
+    """Bound the step by the evolved neutral energy's relaxation rate.
+
+    ``En`` is driven by two explicit relaxations: the ion-neutral collision
+    operator pulls ``Tn`` toward ``Ti`` at ``(n/nn) nu_mt (Vp/V_En)`` (the
+    per-NEUTRAL exchange rate -- the collision term's ``nu_mt`` is the rate a
+    given ION collides, and the mirror lands in a reservoir of ``nn`` neutrals
+    over its own volume), and the wall pulls it toward ``T_wall`` at
+    ``alpha_E nu_wall``. The accepted step keeps ``dt`` times their sum below
+    ``neutral_dt_fraction``.
+
+    ``None`` withdraws the candidate (``inf``): a state with no ``En`` has no
+    such rate, so an unarmed run's step cannot move.
+    """
+    if neutral_energy_kwargs is None or state.En is None:
+        return np.inf
+    if neutral_dt_fraction <= 0.0:
+        raise ValueError(
+            f"neutral_dt_fraction must be positive (got {neutral_dt_fraction})"
+        )
+    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
+    Tn = neutral_temperature_eV(
+        state, floors=floors, Tn_eV=neutral_energy_kwargs["Tn_eV"]
+    )
+    nn = np.maximum(np.asarray(state.nn, dtype=float), floors["nn"])
+    nu_mt = nn * phelps_momentum_transfer_rate_cm3_s(
+        0.5 * (derived.Ti + Tn), gas_type=neutral_energy_kwargs["gas_type"]
+    )
+    rate = (
+        abs(float(neutral_energy_kwargs["b_ion_neutral_drag"]))
+        * np.asarray(state.n, dtype=float)
+        * nu_mt
+        / nn
+        * neutral_energy_volume_ratio(state, geometry)
+    )
+    wall_rate = neutral_energy_kwargs["wall_rate_1_s"]
+    if wall_rate is None:
+        vbar_n = np.sqrt(
+            8.0
+            * float(neutral_energy_kwargs["Tn_fit"])
+            * ev_to_erg
+            / (np.pi * ion_mass_g)
+        )
+        wall_rate = vbar_n / np.asarray(geometry.Rm_cm, dtype=float)
+    rate = rate + abs(
+        float(neutral_energy_kwargs["alpha_E"])
+    ) * np.asarray(wall_rate, dtype=float)
+    rate_max = float(np.max(rate)) if rate.size else 0.0
+    if rate_max <= 0.0:
+        return np.inf
+    return float(neutral_dt_fraction) / rate_max
 
 
 def neutral_exchange_timestep(

@@ -12,7 +12,11 @@ from .flux import (
     _flux_divergence,
     kep_rusanov_face_scalar,
 )
-from ..core.state import ConservativeState1D, derive_state
+from ..core.state import (
+    ConservativeState1D,
+    derive_state,
+    neutral_energy_floor,
+)
 
 
 def velocity_divergence(
@@ -1438,6 +1442,33 @@ def ion_neutral_thermalization_rhs(
     )
 
 
+def neutral_temperature_eV(state, floors, Tn_eV):
+    """Return the neutral temperature [eV] the collision terms should use.
+
+    With the optional ``En`` field present this is the PER-CELL field value
+    ``Tn = (2/3) En / (nn k)`` (``nn`` floored before dividing, as
+    ``derive_state`` floors ``n``); without it, the caller's single cold-gas
+    scalar ``Tn_eV`` is returned unchanged.
+    """
+    if state.En is None:
+        return float(Tn_eV)
+    nn = np.maximum(np.asarray(state.nn, dtype=float), floors["nn"])
+    return (2.0 / 3.0) * np.asarray(state.En, dtype=float) / (nn * ev_to_erg)
+
+
+def neutral_energy_volume_ratio(state, geometry):
+    """Return the ``Vp / V_En`` factor converting a plasma-volume energy source
+    into the volume ``En`` lives on.
+
+    ``En`` sits on the same volume as ``nn``: the plasma column ``Vp`` when
+    ``nn_a`` splits the zones (so the factor is exactly 1), and the chamber
+    volume ``Vm`` otherwise (so the factor is ``geometry.volume_ratio``).
+    """
+    if state.nn_a is not None:
+        return np.ones_like(np.asarray(state.nn, dtype=float))
+    return np.asarray(geometry.volume_ratio, dtype=float)
+
+
 def ion_neutral_collision_rhs(
     state,
     floors,
@@ -1467,14 +1498,26 @@ def ion_neutral_collision_rhs(
 
     The neutral receives the exact mirror momentum source (``M_n`` when the state
     carries it, through the plasma/neutral volume ratio, exactly as the legacy
-    drag), so ion-neutral momentum exchange is antisymmetric. The neutral has no
-    energy field, so the neutral-side collisional energy is dropped as ever; the
+    drag), so ion-neutral momentum exchange is antisymmetric. The
     CX-sized frictional-heating residual the exact swap moment requires is present
     inside the single ``0.5 m n nu_mt (u-u_n)^2`` term (it is not restricted to the
     elastic fraction, unlike the legacy ``Q_fric``).
 
     ``Tn_eV`` is the single cold-gas neutral temperature (audit A8; 300 K feed/wall
     for production), used consistently in both ``(Tn - Ti)`` and ``T_eff``.
+
+    When the state carries the optional ``En`` field (the ``neutral_energy``
+    flag) the neutral temperature is instead the PER-CELL field value
+    ``Tn = (2/3) En / (nn k)`` -- in ``(Tn - Ti)`` and in ``T_eff`` alike --
+    and the neutral side of the collisional energy is booked rather than
+    dropped, through the ``Vp/V_En`` volume conversion::
+
+        dEn/dt = [1.5 n nu_mt (Ti - Tn) + 0.5 m n nu_mt (u - u_n)^2] Vp/V_En
+
+    the exact mirror of the ion thermal channel plus the neutral half of the
+    equal-mass frictional split. The operator is then PAIRWISE conservative in
+    energy: ``dEi Vp + dEn V_En == -dM u_rel Vp`` per cell, the full dissipated
+    drift power, to roundoff.
     """
     zeros = np.zeros_like(state.n, dtype=float)
     if b_ion_neutral_drag == 0.0:
@@ -1486,7 +1529,7 @@ def ion_neutral_collision_rhs(
             Ei=zeros.copy(),
         )
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
-    Tn = float(Tn_eV)
+    Tn = neutral_temperature_eV(state, floors=floors, Tn_eV=Tn_eV)
     T_eff = 0.5 * (derived.Ti + Tn)
     nu_mt = np.asarray(state.nn, dtype=float) * phelps_momentum_transfer_rate_cm3_s(
         T_eff, gas_type=gas_type
@@ -1509,6 +1552,15 @@ def ion_neutral_collision_rhs(
     drag = -scale * ion_mass_g * nu_mt * state.n * u_rel
     q_fric = 0.5 * scale * ion_mass_g * nu_mt * state.n * u_rel**2
     q_therm = 1.5 * scale * nu_mt * state.n * (Tn - derived.Ti) * ev_to_erg
+    if state.En is None:
+        dEn = None
+    else:
+        if geometry is None:
+            raise ValueError(
+                "ion_neutral_collision_rhs with an evolved En requires "
+                "geometry for the plasma/neutral volume conversion"
+            )
+        dEn = (q_fric - q_therm) * neutral_energy_volume_ratio(state, geometry)
     if state.M_n is not None:
         # Mirror momentum source into the neutral wind (exactly conservative).
         # In the kinetic-derived two-momentum mode M_n lives on the plasma/column
@@ -1529,6 +1581,7 @@ def ion_neutral_collision_rhs(
                 if state.M_n_a is not None
                 else None
             ),
+            En=dEn,
         )
     return ConservativeState1D(
         n=zeros,
@@ -1536,6 +1589,7 @@ def ion_neutral_collision_rhs(
         M=drag,
         Ee=zeros.copy(),
         Ei=q_fric + q_therm,
+        En=dEn,
     )
 
 
@@ -1676,6 +1730,96 @@ def neutral_momentum_wall_rhs(
     )
 
 
+def neutral_energy_wall_rhs(
+    state,
+    floors,
+    ion_mass_g,
+    geometry,
+    Rm_cm,
+    alpha_E,
+    Tn_fit=0.1,
+    wall_rate_1_s=None,
+):
+    """Return the neutral-energy wall-accommodation sink.
+
+    A neutral that reaches a vessel surface leaves part of its excess thermal
+    energy there and returns partly re-thermalized. The rhs is
+
+        dEn/dt = -alpha_E * nu_wall * (En - (3/2) nn k T_wall)
+
+    on the ``En`` field only [erg cm^-3 s^-1]; a state without ``En`` gets
+    zeros. ``alpha_E`` is the thermal accommodation coefficient, in [0, 1]
+    (0 = perfectly specular, no energy exchange; 1 = full accommodation in one
+    wall visit). The equilibrium it relaxes toward is
+    :func:`~..core.state.neutral_energy_floor`, so the sink and the state
+    floor agree by construction and the term can never push ``En`` below it.
+
+    ``nu_wall`` is the free-molecular wall-visit rate, taken from the SAME
+    geometry the momentum wall sinks use so the two channels see one surface
+    model: radially ``vbar_n(Tn_fit)/Rm``, or the two-zone effective rate when
+    ``wall_rate_1_s`` is supplied (``neutral_wind_two_zone_factors``, in which
+    only the slow annulus gas touches the wall); plus, on the two end cells,
+    the outward-wind end-face flux ``max(-+u_n, 0) * A_end / V``, the same
+    form ``neutral_wind_advection_rhs`` applies to the momentum an outward
+    wind carries into an end wall. Areas and volumes are the ones ``nn``
+    (and so ``En``) lives on: the column under ``nn_a``, the chamber
+    otherwise.
+    """
+    zeros = np.zeros_like(np.asarray(state.nn, dtype=float))
+    if state.En is None:
+        return ConservativeState1D(
+            n=zeros,
+            nn=zeros.copy(),
+            M=zeros.copy(),
+            Ee=zeros.copy(),
+            Ei=zeros.copy(),
+        )
+    if wall_rate_1_s is None:
+        vbar_n = np.sqrt(8.0 * float(Tn_fit) * ev_to_erg / (np.pi * ion_mass_g))
+        nu_wall = vbar_n / np.asarray(Rm_cm, dtype=float)
+    else:
+        nu_wall = np.asarray(wall_rate_1_s, dtype=float).copy()
+    if state.nn_a is not None:
+        area = np.asarray(geometry.plasma_face_area_cm2, dtype=float)
+        volume = np.asarray(geometry.plasma_volume_cm3, dtype=float)
+    else:
+        area = np.asarray(geometry.neutral_face_area_cm2, dtype=float)
+        volume = np.asarray(geometry.neutral_volume_cm3, dtype=float)
+    u_n = neutral_wind_velocity(
+        state, floors=floors, ion_mass_g=ion_mass_g, geometry=geometry
+    )
+    nu_wall = nu_wall + _end_face_wall_rate(u_n, area, volume)
+    excess = np.asarray(state.En, dtype=float) - neutral_energy_floor(state.nn)
+    return ConservativeState1D(
+        n=zeros,
+        nn=zeros.copy(),
+        M=zeros.copy(),
+        Ee=zeros.copy(),
+        Ei=zeros.copy(),
+        En=-float(alpha_E) * nu_wall * excess,
+    )
+
+
+def _end_face_wall_rate(u_n, face_area_cm2, volume_cm3):
+    """Return the end-cell outward-wind wall-visit rate [1/s], zero elsewhere.
+
+    ``max(-+u_n, 0) * A_end / V`` on the first and last cells: the rate at
+    which a wind directed INTO an end wall delivers the cell's contents to it.
+    """
+    rate = np.zeros_like(np.asarray(u_n, dtype=float))
+    rate[0] = (
+        max(-float(u_n[0]), 0.0)
+        * float(face_area_cm2[0])
+        / max(float(volume_cm3[0]), 1e-300)
+    )
+    rate[-1] = (
+        max(float(u_n[-1]), 0.0)
+        * float(face_area_cm2[-1])
+        / max(float(volume_cm3[-1]), 1e-300)
+    )
+    return rate
+
+
 def neutral_momentum_two_zone_rhs(
     state,
     floors,
@@ -1754,9 +1898,9 @@ def _add_optional_rows(a, b):
 def add_state_rhs(left, right):
     """Return the sum of two conservative RHS bundles.
 
-    A missing optional field (``M_n``, ``nn_a``, ``M_n_a``) on either side counts as
-    zeros when the other side carries one (most RHS terms do not touch
-    them); both missing keeps the historical 5-field result.
+    A missing optional field (``M_n``, ``nn_a``, ``M_n_a``, ``En``) on either
+    side counts as zeros when the other side carries one (most RHS terms do
+    not touch them); both missing keeps the historical 5-field result.
     """
     return ConservativeState1D(
         n=left.n + right.n,
@@ -1767,4 +1911,5 @@ def add_state_rhs(left, right):
         M_n=_add_optional_rows(left.M_n, right.M_n),
         nn_a=_add_optional_rows(left.nn_a, right.nn_a),
         M_n_a=_add_optional_rows(left.M_n_a, right.M_n_a),
+        En=_add_optional_rows(left.En, right.En),
     )
