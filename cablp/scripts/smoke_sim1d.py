@@ -13182,6 +13182,7 @@ def main():
                 "nn_a_particles_added",
                 "Ee_energy_added_erg",
                 "Ei_energy_added_erg",
+                "En_energy_added_erg",
             }
             assert all(
                 float(value) == 0.0
