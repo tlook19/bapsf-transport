@@ -23,6 +23,38 @@ def initial_condition_defaults():
         without disturbing any equilibrated run.
 
         Provenance of the shipped value: ``config_defaults_provenance.md``.
+    nn0_profile:
+        PER-CELL initial neutral density [cm^-3]: a sequence of length ``nx``
+        (the grid's cell count), every entry finite and ``> 0``. Read ONLY
+        under the ``neutral_initial_profile`` flag, and REQUIRED by it; with
+        the flag off it must be ``None`` or construction raises.
+
+        Supplied as VALUES, not as a shape: these are the absolute densities
+        the run starts from, cell by cell, and nothing rescales or normalizes
+        them. This is the externally-computed-profile hook for the INITIAL
+        CONDITION -- the solver does no file I/O, so a hypothesized axial fill
+        is built outside and passed here. (Its source-side counterpart,
+        ``neutral_probe_profile``, is a normalized SHAPE; the two are not
+        interchangeable.)
+
+        It supersedes the scalar ``nn0`` for BOTH zones, so ``nn0`` must be
+        ``None`` when the flag is armed -- an armed flag with a non-``None``
+        scalar raises rather than establishing a silent precedence. Neither
+        ``resolve_nn0`` nor the ``nn_table`` lookup is consulted on the armed
+        path.
+    nn0_annulus_profile:
+        PER-CELL initial ANNULUS neutral density [cm^-3] under the
+        ``neutral_two_zone`` closure: same length, finiteness and positivity
+        rules as ``nn0_profile``. Read ONLY under the
+        ``neutral_initial_profile`` flag, and valid only with
+        ``neutral_two_zone`` on -- setting it without that closure raises,
+        because there is no second neutral field for it to land in.
+
+        OPTIONAL when armed: omitted, the annulus starts at ``nn0_profile``,
+        which is the shaped form of the shipped convention that both zones
+        start at the same fill density. Supplying it addresses the two zones
+        separately, which is what a construction that routes its inventory
+        radially needs.
     Te0:
         Uniform initial electron temperature [eV].
     Ti0:
@@ -44,6 +76,12 @@ def initial_condition_defaults():
         # Pre-shot neutral background for DIRECT runs. The equilibrated path
         # never reads this (see the docstring above).
         "nn0": 2.0e13,
+        # Shaped initial neutral fill (neutral_initial_profile flag). Both are
+        # None on every shipped configuration: a per-cell IC has no default
+        # shape to inherit, and the flag's whole content is what the caller
+        # computed outside.
+        "nn0_profile": None,
+        "nn0_annulus_profile": None,
         # Te0 sits just above the bundled He ADF11 low-Te edge (~0.200092 eV),
         # below which the rate lookups clamp. Ti0 sits a hair above Ti_floor so
         # the raw-stage validator's strict Ti0 > Ti_floor holds (that floor is a
@@ -2856,6 +2894,20 @@ input_flags_template_1d = {
     # constant counterpart). Off => single-field
     # chamber-mean nn.
     "neutral_two_zone": False,
+    # Shaped initial neutral fill. The run's neutral IC comes from a PER-CELL
+    # profile of absolute densities (nn0_profile, and optionally
+    # nn0_annulus_profile under neutral_two_zone) instead of the uniform
+    # scalar nn0. Values, not a shape: nothing is rescaled or normalized, so
+    # the array IS the initial condition. Requires nn0_profile, requires
+    # nn0 = None (the scalar and the table lookup are superseded, and an
+    # armed flag with an explicit scalar raises rather than establishing a
+    # silent precedence), and REFUSES neutral_equilibration and restart_from
+    # -- both of those overwrite nn after construction, so a shaped IC under
+    # either would be silently discarded. Each is a construction-time
+    # ValueError, as is either profile key set with this flag off. Default
+    # OFF and bit-exact off (presence-gated: the off path builds no profile
+    # and the initial condition is the historical uniform fill).
+    "neutral_initial_profile": False,
     "ion_neutral_thermalization": False,
     # Replace the drag + frictional-heating + elastic thermalization +
     # CX-cooling quartet with ONE moment-closed reduced ion-neutral collision

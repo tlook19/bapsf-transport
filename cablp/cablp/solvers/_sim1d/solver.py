@@ -109,6 +109,7 @@ from .physics.neutrals import (
     neutral_exchange_coefficients,
     neutral_exchange_rhs,
     neutral_exchange_two_zone_rhs,
+    neutral_initial_profile_values,
     neutral_probe_profile_weights,
     neutral_probe_source_rhs,
     neutral_probe_waveform_mean,
@@ -1116,6 +1117,10 @@ class LAPDSim1D:
         # existed to object. Everything it validates is already built (the
         # floors, the geometry, both config namespaces, the topology flag).
         self._configure_regime_tracer()
+        # Shaped initial neutral fill (default off, bit-exact off). Armed
+        # HERE, before the initial condition is built, because the initial
+        # condition is the only thing it touches.
+        self._configure_neutral_initial_profile()
         initial_raw = self._initial_state()
         self._state = apply_state_floors(
             initial_raw, self._floors, self._ion_mass_g
@@ -10928,10 +10933,98 @@ class LAPDSim1D:
         if self._flags.get("debug_checks", False):
             assert_finite_state(self._state, self._derived)
 
+    def _configure_neutral_initial_profile(self):
+        """Build the shaped initial neutral fill, or ``None`` when off.
+
+        Sets ``_nn0_profile`` (the column, or the single neutral field without
+        the two-zone closure) and ``_nn0_annulus_profile``. Both are ``None``
+        with the ``neutral_initial_profile`` flag off, which is the presence
+        gate :meth:`_initial_state` reads: the off path resolves the scalar
+        fill exactly as it always has and never touches an array from here.
+        """
+        enabled = bool(self._flags.get("neutral_initial_profile", False))
+        column = self._input_dict.get("nn0_profile", None)
+        annulus = self._input_dict.get("nn0_annulus_profile", None)
+        if not enabled:
+            configured = [
+                name
+                for name, value in (
+                    ("nn0_profile", column),
+                    ("nn0_annulus_profile", annulus),
+                )
+                if value is not None
+            ]
+            if configured:
+                raise ValueError(
+                    f"the shaped-initial-fill parameters {configured} were "
+                    "configured without the neutral_initial_profile flag, "
+                    "where they are inert (the run would start from the "
+                    "uniform scalar nn0 and the profile would never be read); "
+                    "set the flag or drop the parameters"
+                )
+            self._nn0_profile = None
+            self._nn0_annulus_profile = None
+            return
+        if annulus is not None and not self._neutral_two_zone:
+            raise ValueError(
+                "nn0_annulus_profile requires the neutral_two_zone flag: "
+                "without that closure there is one chamber-mean neutral "
+                "field and no annulus density for the profile to initialize. "
+                "Set neutral_two_zone, or fold the annulus inventory into "
+                "nn0_profile"
+            )
+        if column is None:
+            raise ValueError(
+                "the neutral_initial_profile flag requires nn0_profile (a "
+                f"per-cell sequence of length nx={int(self._geometry.cells)} "
+                "of absolute neutral densities [cm^-3]). There is no default: "
+                "the flag's whole content is the profile the caller computed"
+            )
+        if self._input_dict.get("nn0", None) is not None:
+            raise ValueError(
+                "neutral_initial_profile supersedes the scalar nn0 for BOTH "
+                f"zones, but nn0={self._input_dict['nn0']!r} was supplied as "
+                "well. There is no precedence rule to apply and a silent one "
+                "would hide which fill the run actually started from: set "
+                "nn0=None on a shaped run, and put the uniform level into "
+                "nn0_profile if that is what is wanted"
+            )
+        if self._flags.get("neutral_equilibration", False):
+            raise ValueError(
+                "neutral_initial_profile cannot be combined with "
+                "neutral_equilibration: start_simulation() seeds nn (and nn_a) "
+                "from the equilibration result AFTER construction, so the "
+                "shaped fill would be built and then OVERWRITTEN without a "
+                "trace. The two are alternative ways to state the same "
+                "initial condition -- clear the flag on a shaped run"
+            )
+        if self._input_dict.get("restart_from", None) is not None:
+            raise ValueError(
+                "neutral_initial_profile cannot be combined with restart_from "
+                "for the same reason neutral_equilibration cannot: the restart "
+                "payload replaces the whole initial condition after "
+                "construction, so the shaped fill would be silently discarded. "
+                "A restart payload IS the initial neutral profile"
+            )
+        self._nn0_profile = neutral_initial_profile_values(
+            self._geometry, column, "nn0_profile"
+        )
+        self._nn0_annulus_profile = (
+            None
+            if annulus is None
+            else neutral_initial_profile_values(
+                self._geometry, annulus, "nn0_annulus_profile"
+            )
+        )
+
     def _initial_state(self):
         cells = self._geometry.cells
         n0 = np.full(cells, float(self._input_dict["ne0"]))
-        nn0 = np.full(cells, float(resolve_nn0(self._input_dict, self._flags)))
+        nn0 = (
+            np.full(cells, float(resolve_nn0(self._input_dict, self._flags)))
+            if self._nn0_profile is None
+            else self._nn0_profile.copy()
+        )
         u0 = np.full(cells, float(self._input_dict.get("u0", 0.0)))
         Te0 = np.full(cells, float(self._input_dict["Te0"]))
         Ti0 = np.full(cells, float(self._input_dict["Ti0"]))
@@ -10945,8 +11038,17 @@ class LAPDSim1D:
             un=np.zeros(cells) if self._neutral_momentum else None,
             # Both zones start at the same fill density -- the free-molecular
             # equilibrium of the zone exchange; annulus-free cells carry the
-            # value inertly.
-            nn_a=nn0.copy() if self._neutral_two_zone else None,
+            # value inertly. A shaped run may address the annulus separately,
+            # in which case its own profile stands in for that convention.
+            nn_a=(
+                None
+                if not self._neutral_two_zone
+                else (
+                    nn0.copy()
+                    if self._nn0_annulus_profile is None
+                    else self._nn0_annulus_profile.copy()
+                )
+            ),
             un_a=np.zeros(cells) if self._neutral_two_momentum else None,
         )
 
