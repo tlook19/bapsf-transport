@@ -174,6 +174,8 @@ def _finite_fields(result):
         "nn_a",
         "M_n_a",
         "u_n_a",
+        "En",
+        "Tn",
     )
     return {
         name: bool(np.all(np.isfinite(np.asarray(getattr(result, name)))))

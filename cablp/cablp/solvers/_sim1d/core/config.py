@@ -2188,6 +2188,17 @@ def physics_fit_defaults():
         Minimum Coulomb logarithm used by transport and exchange estimates.
     Tn_K:
         Neutral gas temperature setting the neutral thermal speed [K].
+        Superseded as the collision operator's neutral temperature wherever
+        the ``neutral_energy`` flag evolves ``En``, which carries a per-cell
+        ``Tn`` instead.
+    neutral_energy_wall_accommodation:
+        Thermal accommodation coefficient ``alpha_E`` for neutral energy at
+        the vessel surfaces, read only under the ``neutral_energy`` flag. It
+        scales the free-molecular wall-visit rate in the ``En`` sink
+        ``-alpha_E nu_wall (En - (3/2) nn k T_wall)``: ``0`` is perfectly
+        specular (no energy exchange at the wall) and ``1`` is full
+        accommodation in a single visit. Must lie in ``[0, 1]``; anything
+        outside raises at construction.
     neutral_exchange_coeff_cm3_s:
         Constant neutral exchange coefficient for the constant model [cm^3/s].
     neutral_clausing_scale:
@@ -2204,6 +2215,9 @@ def physics_fit_defaults():
         "ln_lambda_min": 1.0,
         "Tn_K": 300.0,  # single cold-gas neutral temperature (Phelps T_eff)
         # --- INERT under these defaults ---
+        # Neutral-energy wall accommodation (read only when the
+        # neutral_energy flag is on, which ships off):
+        "neutral_energy_wall_accommodation": 0.40,
         # Only the "constant" neutral_exchange_model reads this (the default is
         # "knudsen"):
         "neutral_exchange_coeff_cm3_s": 1.0e5,
@@ -2918,6 +2932,25 @@ input_flags_template_1d = {
     # constant counterpart). Off => single-field
     # chamber-mean nn.
     "neutral_two_zone": False,
+    # Evolve the neutral thermal energy density En as an optional conservative
+    # field, packed last. The neutral temperature becomes the per-cell field
+    # value Tn = (2/3) En / (nn k) instead of the config scalar Tn_K: the
+    # moment-closed ion-neutral collision operator reads it in both (Tn - Ti)
+    # and T_eff = (Ti + Tn)/2, books the neutral side of that exchange into En
+    # (making the operator pairwise energy-conserving), and the surfaces
+    # accommodate En back toward (3/2) nn k T_wall at
+    # neutral_energy_wall_accommodation times the free-molecular wall-visit
+    # rate. Requires ion_neutral_moment_closure and neutral_momentum; refuses
+    # coverage_closure (its deficit partitions nn only, so a mean En under
+    # concentration would be an unstated closure) and every kinetic neutral
+    # model (which carries the neutral energy as a moment of f). Each is a
+    # construction-time ValueError. Off => the historical layout, bit-exact.
+    #
+    # THIS FIELD'S BUDGET IS INCOMPLETE: only the collision coupling and the
+    # wall sink are booked. Neutral pressure force, En advection, Knudsen
+    # enthalpy carriage, and the jet/puff/pump/reaction En bookkeeping are NOT
+    # built, so a flag-on run is a plumbing exercise, not a physics arm.
+    "neutral_energy": False,
     # Shaped initial neutral fill. The run's neutral IC comes from a PER-CELL
     # profile of absolute densities (nn0_profile, and optionally
     # nn0_annulus_profile under neutral_two_zone) instead of the uniform

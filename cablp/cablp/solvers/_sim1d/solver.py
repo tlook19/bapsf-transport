@@ -39,12 +39,14 @@ from .core.integrator import (
 )
 from .core.state import (
     NEUTRAL_ANNULUS_NAME,
+    NEUTRAL_ENERGY_FLOOR_T_K,
     STATE_NAMES_1D,
     ConservativeState1D,
     apply_state_floors,
     assert_finite_state,
     conservative_from_primitives,
     derive_state,
+    neutral_energy_floor,
     pack_state,
     state_field_names,
     unpack_state,
@@ -139,8 +141,10 @@ from .physics.sources import (
     ion_neutral_drag_rhs,
     ion_neutral_frictional_heating_rhs,
     ion_neutral_thermalization_rhs,
+    neutral_energy_wall_rhs,
     neutral_momentum_wall_rhs,
     neutral_momentum_two_zone_rhs,
+    neutral_temperature_eV,
     neutral_wind_two_zone_factors,
     neutral_wind_velocity,
     flux_tube_geometry_rhs,
@@ -1051,6 +1055,60 @@ class LAPDSim1D:
             raise ValueError(
                 "neutral_momentum_radial='kinetic_two_moment' requires "
                 "neutral_two_zone"
+            )
+        # Evolved neutral thermal energy (default off, bit-exact off). The
+        # field only means anything alongside the moment-closed collision
+        # operator (which is what reads and feeds it) and an evolved wind
+        # (which is what the frictional half is booked against), and there is
+        # no consistent reading of it under a coverage deficit or a kinetic
+        # neutral model -- so each of those is refused here rather than
+        # silently resolved.
+        self._neutral_energy = bool(self._flags.get("neutral_energy", False))
+        if self._neutral_energy:
+            if not self._ion_neutral_moment_closure:
+                raise ValueError(
+                    "the neutral_energy flag requires "
+                    "ion_neutral_moment_closure: the moment-closed collision "
+                    "operator is the only term that reads the per-cell Tn and "
+                    "books the neutral side of the exchange into En, so "
+                    "without it the field would be evolved by nothing but the "
+                    "wall sink. Accepted: ion_neutral_moment_closure with "
+                    "neutral_momentum"
+                )
+            if not self._neutral_momentum:
+                raise ValueError(
+                    "the neutral_energy flag requires neutral_momentum: the "
+                    "frictional half of the collisional energy is booked "
+                    "against the relative velocity u - u_n, which has no "
+                    "meaning without an evolved neutral wind. Accepted: "
+                    "ion_neutral_moment_closure with neutral_momentum"
+                )
+            if bool(self._flags.get("coverage_closure", False)):
+                raise ValueError(
+                    "the neutral_energy flag is incompatible with "
+                    "coverage_closure: the coverage deficit partitions nn "
+                    "alone, so a single mean En spread over a concentrated "
+                    "gas would assert a temperature relation between the "
+                    "covered and uncovered fractions that nothing in the "
+                    "model states. Accepted: neutral_energy without "
+                    "coverage_closure"
+                )
+            if self._neutral_model != "moment":
+                raise ValueError(
+                    "the neutral_energy flag is incompatible with "
+                    f"neutral_model={self._neutral_model!r}: a kinetic "
+                    "neutral model already carries the neutral energy as a "
+                    "moment of f, so an evolved En field would be a second, "
+                    "unowned copy. Accepted: neutral_model='moment'"
+                )
+        self._neutral_energy_alpha = float(
+            self._input_dict.get("neutral_energy_wall_accommodation", 0.40)
+        )
+        if not (0.0 <= self._neutral_energy_alpha <= 1.0):
+            raise ValueError(
+                "neutral_energy_wall_accommodation (the thermal "
+                "accommodation coefficient alpha_E) must be in [0, 1] (got "
+                f"{self._neutral_energy_alpha})"
             )
         # Geometry and Tn_fit are fixed for the run, so the two-zone factors
         # are computed once here; None selects the uniform (legacy) closure
@@ -2771,6 +2829,7 @@ class LAPDSim1D:
             M_n=floored.M_n,
             nn_a=floored.nn_a,
             M_n_a=floored.M_n_a,
+            En=floored.En,
         )
 
     @property
@@ -3267,6 +3326,7 @@ class LAPDSim1D:
                 ConservativeState1D(
                     n=n, nn=state.nn, M=M, Ee=Ee, Ei=Ei,
                     M_n=state.M_n, nn_a=state.nn_a, M_n_a=state.M_n_a,
+                    En=state.En,
                 )
             )
         )
@@ -3702,6 +3762,7 @@ class LAPDSim1D:
             neutral_momentum=self._neutral_momentum,
             neutral_two_zone=self._neutral_two_zone,
             neutral_annulus_momentum=self._neutral_two_momentum,
+            neutral_energy=self._neutral_energy,
         )
 
     @property
@@ -3922,6 +3983,7 @@ class LAPDSim1D:
             neutral_annulus_momentum=(
                 True if self._neutral_two_momentum else None
             ),
+            neutral_energy=True if self._neutral_energy else None,
         )
 
     def _explicit_stage_rhs(self, dt, include_heat_conduction=True):
@@ -3970,6 +4032,15 @@ class LAPDSim1D:
             zone_terms["neutral_zone_exchange"] = self.neutral_zone_exchange_rhs(
                 state=state
             )
+        # The neutral-energy wall sink exists only under its own flag, so the
+        # term ledger (and the saved rhs_terms structure) is unchanged when
+        # the flag is off. Present in BOTH branches below and identically zero
+        # in the neutral-only one -- that phase runs the backward-Euler
+        # neutral matrix, which En passes through untouched -- so the saved
+        # structure is stable across the phase change.
+        energy_wall_terms = {}
+        if self._neutral_energy:
+            energy_wall_terms["neutral_energy_wall"] = self._zero_rhs_state()
         # The ad-hoc probe source exists only under its own flag, so the term
         # ledger (and the saved rhs_terms structure) is unchanged when the flag
         # is off. Present in BOTH branches below and identically zero in the
@@ -4006,6 +4077,7 @@ class LAPDSim1D:
             terms = {
                 **zone_terms,
                 **probe_terms,
+                **energy_wall_terms,
                 **geometry_terms,
                 **kinetic_terms,
                 "plasma_advective_flux": self._zero_rhs_state(),
@@ -4085,6 +4157,10 @@ class LAPDSim1D:
                 time=time,
                 step_window=step_window,
             )
+        if self._neutral_energy:
+            energy_wall_terms["neutral_energy_wall"] = (
+                self.neutral_energy_wall_rhs(state=state)
+            )
         terms = {
             **zone_terms,
             **probe_terms,
@@ -4133,6 +4209,7 @@ class LAPDSim1D:
                 self.ion_neutral_collision_rhs(state=state)
             ),
             "neutral_momentum_wall": self.neutral_momentum_wall_rhs(state=state),
+            **energy_wall_terms,
             **(
                 {
                     "neutral_momentum_radial": (
@@ -4261,6 +4338,7 @@ class LAPDSim1D:
             M_n_a=(
                 masked(term.M_n_a) if include_neutral else copied(term.M_n_a)
             ),
+            En=masked(term.En) if include_neutral else copied(term.En),
         )
 
     def floor_state_vector(self, y):
@@ -4284,6 +4362,7 @@ class LAPDSim1D:
             neutral_momentum=self._neutral_momentum,
             neutral_two_zone=self._neutral_two_zone,
             neutral_annulus_momentum=self._neutral_two_momentum,
+            neutral_energy=self._neutral_energy,
         )
         if not self._tracer_engaged:
             return floored
@@ -4308,6 +4387,7 @@ class LAPDSim1D:
             "nn_a_particles_added": 0.0,
             "Ee_energy_added_erg": 0.0,
             "Ei_energy_added_erg": 0.0,
+            "En_energy_added_erg": 0.0,
         }
 
     def _floor_additions(self, raw, floored):
@@ -4352,6 +4432,25 @@ class LAPDSim1D:
                     * Vann
                 )
             )
+        if raw.En is None:
+            En_added = 0.0
+        else:
+            # The En floor is measured against the FLOORED nn -- the same
+            # quantity apply_state_floors clips against -- so a cell whose nn
+            # was itself floored up books only the energy the En clip added.
+            En_floor = neutral_energy_floor(
+                np.maximum(np.asarray(raw.nn, dtype=float), self._floors["nn"])
+            )
+            En_added = float(
+                np.sum(
+                    np.where(
+                        np.asarray(raw.En) < En_floor,
+                        np.asarray(floored.En) - np.asarray(raw.En),
+                        0.0,
+                    )
+                    * Vnn
+                )
+            )
         return {
             "n_particles_added": float(
                 np.sum(n_delta * Vp)
@@ -4366,6 +4465,7 @@ class LAPDSim1D:
             "Ei_energy_added_erg": float(
                 np.sum(Ei_delta * Vp)
             ),
+            "En_energy_added_erg": En_added,
         }
 
     def _floor_vector_with_ledger(self, y):
@@ -4402,6 +4502,8 @@ class LAPDSim1D:
             fields["nn_a"] = state.nn_a
         if state.M_n_a is not None:
             fields["M_n_a"] = state.M_n_a
+        if state.En is not None:
+            fields["En"] = state.En
         nonfinite = {
             name: summary
             for name, values in fields.items()
@@ -4685,8 +4787,8 @@ class LAPDSim1D:
                 )
 
         nn_next = np.linalg.solve(matrix, rhs)
-        # M_n passes through untouched: this step runs pre-plasma, where
-        # there is no drag to drive a wind.
+        # M_n and En pass through untouched: this step runs pre-plasma, where
+        # there is no drag to drive a wind and no plasma to heat the gas.
         return ConservativeState1D(
             n=state.n.copy(),
             nn=(
@@ -4700,6 +4802,7 @@ class LAPDSim1D:
             M_n=None if state.M_n is None else state.M_n.copy(),
             nn_a=None if state.nn_a is None else state.nn_a.copy(),
             M_n_a=None if state.M_n_a is None else state.M_n_a.copy(),
+            En=None if state.En is None else state.En.copy(),
         )
 
     def _implicit_neutral_step_two_zone(
@@ -4823,6 +4926,7 @@ class LAPDSim1D:
             M=state.M.copy(),
             Ee=state.Ee.copy(),
             Ei=state.Ei.copy(),
+            En=None if state.En is None else state.En.copy(),
             M_n=None if state.M_n is None else state.M_n.copy(),
             nn_a=(
                 np.maximum(solution[cells:], self._floors["nn"])
@@ -6459,6 +6563,10 @@ class LAPDSim1D:
             M_n=None if state.M_n is None else state.M_n.copy(),
             nn_a=final_nn_a,
             M_n_a=None if state.M_n_a is None else state.M_n_a.copy(),
+            # En is REDERIVED from the seeded nn rather than carried: the
+            # equilibrated gas is pre-plasma gas at the wall temperature, and
+            # the incoming En belongs to the fresh IC's different nn.
+            En=None if state.En is None else neutral_energy_floor(final_nn),
         )
         self._set_state_vector(pack_state(seeded))
         self._time = 0.0
@@ -6694,6 +6802,12 @@ class LAPDSim1D:
                 if plasma_enabled and not dvm_superseded
                 else None
             ),
+            # Withdrawn on a neutral-only phase for the reason every plasma
+            # bound is: the collision operator that drives En is not applied
+            # there, and the wall sink is zeroed with it.
+            neutral_energy_kwargs=(
+                self._neutral_energy_timestep_kwargs() if plasma_enabled else None
+            ),
             circuit_kwargs=circuit_kwargs,
             plasma_source_rhs=plasma_source_rhs,
             source_floor_exempt_rtol=self._surface_loss_floor_exempt_rtol,
@@ -6758,6 +6872,7 @@ class LAPDSim1D:
                 dt_ion_charge_exchange=np.inf,
                 dt_heat_conduction=np.inf,
                 dt_ion_neutral_drag=np.inf,
+                dt_neutral_energy=np.inf,
                 active_constraint=active_constraint,
                 clamped_to_dt_min=float(neutral_clamped),
                 dt_raw=float(raw_dt),
@@ -7315,6 +7430,27 @@ class LAPDSim1D:
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
             Rm_cm=self._geometry.Rm_cm,
+            Tn_fit=float(self._input_dict.get("Tn_fit", 0.1)),
+            wall_rate_1_s=self._wind_wall_rate,
+        )
+
+    def neutral_energy_wall_rhs(self, y=None, state=None):
+        """Return the neutral-energy wall-accommodation sink.
+
+        Active only where the state carries ``En`` (the ``neutral_energy``
+        flag); a strict zero otherwise. It shares the momentum wall sink's
+        free-molecular geometry, so ``Tn_fit`` and the two-zone effective
+        wall rate are the same values that term reads.
+        """
+        if state is None:
+            state = self.state if y is None else self._unpack(y)
+        return neutral_energy_wall_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            geometry=self._geometry,
+            Rm_cm=self._geometry.Rm_cm,
+            alpha_E=self._neutral_energy_alpha,
             Tn_fit=float(self._input_dict.get("Tn_fit", 0.1)),
             wall_rate_1_s=self._wind_wall_rate,
         )
@@ -8218,6 +8354,7 @@ class LAPDSim1D:
             M_n=state.M_n,
             nn_a=state.nn_a,
             M_n_a=state.M_n_a,
+            En=state.En,
         )
 
     def _validate_neutral_jet_config(self):
@@ -8936,6 +9073,32 @@ class LAPDSim1D:
             "heat_flux_limiter_exponent": self._heat_flux_limiter_exponent,
         }
 
+    def _neutral_energy_timestep_kwargs(self):
+        """Return the bundle the En relaxation bound reads, or None.
+
+        ``None`` where no ``En`` field exists, which withdraws the candidate.
+        The values are the ones the collision operator and the wall sink
+        actually apply, so the bound describes the applied rate rather than a
+        nominal one.
+        """
+        if not self._neutral_energy:
+            return None
+        drag_enabled = bool(self._flags.get("ion_neutral_drag", True))
+        return {
+            "gas_type": self._gas_type,
+            "Tn_eV": float(self._input_dict.get("Tn_K", 300.0))
+            * kb_cgs
+            / ev_to_erg,
+            "b_ion_neutral_drag": (
+                float(self._input_dict.get("b_ion_neutral_drag", 1.0))
+                if drag_enabled
+                else 0.0
+            ),
+            "alpha_E": self._neutral_energy_alpha,
+            "Tn_fit": float(self._input_dict.get("Tn_fit", 0.1)),
+            "wall_rate_1_s": self._wind_wall_rate,
+        }
+
     def _reaction_kwargs(self):
         return {
             "gas_type": self._gas_type,
@@ -8980,6 +9143,11 @@ class LAPDSim1D:
                     geometry=self._geometry,
                 ),
             }
+        if state.En is not None:
+            wind["En"] = state.En.copy()
+            wind["Tn"] = neutral_temperature_eV(
+                state, floors=self._floors, Tn_eV=np.nan
+            )
         if state.nn_a is not None:
             wind["nn_a"] = state.nn_a.copy()
         if state.M_n_a is not None:
@@ -9371,6 +9539,9 @@ class LAPDSim1D:
         if saved and "M_n" in saved[0]:
             result.M_n = stack("M_n")
             result.u_n = stack("u_n")
+        if saved and "En" in saved[0]:
+            result.En = stack("En")
+            result.Tn = stack("Tn")
         if saved and "nn_a" in saved[0]:
             result.nn_a = stack("nn_a")
         if saved and "M_n_a" in saved[0]:
@@ -11067,6 +11238,11 @@ class LAPDSim1D:
                 )
             ),
             un_a=np.zeros(cells) if self._neutral_two_momentum else None,
+            # Pre-plasma the gas IS at the wall temperature, so this initial
+            # condition is exact rather than a convention.
+            Tn_K=(
+                NEUTRAL_ENERGY_FLOOR_T_K if self._neutral_energy else None
+            ),
         )
 
     @staticmethod

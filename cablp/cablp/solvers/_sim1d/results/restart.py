@@ -40,6 +40,10 @@ STRUCTURAL_FLAG_KEYS = (
     "coverage_closure",
     "neutral_momentum",
     "neutral_two_zone",
+    # En is a packed row, so the layout check already refuses a mismatch; the
+    # flag is listed for the same reason the two above are, so the refusal
+    # names the closure that changed rather than only its width.
+    "neutral_energy",
     # The vessel node's V_cm and its charge ledger ride the ``circuit`` group,
     # and only when the node is armed. Resuming across a change of this flag
     # would either drop an evolved potential or leave one unread, so the

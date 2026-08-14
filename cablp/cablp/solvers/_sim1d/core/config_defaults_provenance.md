@@ -944,6 +944,38 @@ the fitted `Tn_fit`.
 `tr_bdf2` + `strang` to express second order; 0 freezes the conductivity and
 caps the whole step at first order.
 
+**`neutral_energy_wall_accommodation = 0.40`, bracket `[0.35, 0.46]` —
+MEASURED (literature-boxed).** The thermal accommodation coefficient of helium
+on an engineering (unpolished, air-exposed, vacuum-baked) stainless surface,
+read only under the default-off `neutral_energy` flag. Three independent
+sources box it:
+
+- the Sandia parallel-plate accommodation programme (SAND2005-6084; the same
+  apparatus and analysis published as *Rev. Sci. Instrum.* **82**, 035120
+  (2011)) measures He on engineering-finish stainless at **0.36–0.46**, and
+  reports a downward shift to **0.31–0.38** on plasma-conditioned (sputter-
+  cleaned) surfaces — the cleaner the metal, the weaker the coupling;
+- Zampella *et al.*, PATRAM 2019, independently obtain **0.35–0.37** for He on
+  stainless cask surfaces;
+- the Song & Yovanovich (1987) engineering correlation, evaluated for He on
+  steel at 300 K, returns **≈0.40**.
+
+The three overlap on 0.36–0.37 and span 0.35–0.46; 0.40 is the round value
+inside that overlap and at the correlation's own prediction. **Honest bar:
+±0.06**, dominated by surface condition (finish, adsorbate coverage, degree of
+plasma conditioning) rather than by any instrument's precision — the
+plasma-conditioned shift alone is that large.
+
+**Stated caveat — this number applies to the THERMAL population only.** The
+measurements above are equilibrium-gas experiments at or near 300 K. For the
+1–5 eV charge-exchange tail the same surface behaves very differently: clean
+metal molecular-dynamics (Borovikov/Voter/Tang, *J. Nucl. Mater.* **447**
+(2014)) gives **≈0.07–0.09** for energetic He, and no engineering-steel
+measurement exists at those energies at all. The shipped single coefficient
+therefore over-accommodates the CX tail. If that channel is ever split out, the
+two endpoints **0.1 / 0.4** are to be run as a declared family and the bracket
+reported as the claim — they are never to be fitted, on either arm.
+
 ## `timestep_defaults`
 
 **`surface_loss_floor_exempt_rtol = 1e-3` — DERIVED from measured scales.**
