@@ -366,9 +366,13 @@ def neutral_hot_channel_rhs(
     # from that cell's own ion population. ``births`` already contains the
     # replacement, so the two halves close exactly.
     recx_here = spread(rates["recx"], residence)
+    # The replacement is drawn at the cell the flight REACHED and is born with
+    # that cell's whole e_hot -- thermal AND slip. Debiting only the thermal
+    # half would leave the three-way energy identity short by exactly the
+    # replacement's slip term, which is how this was caught.
     dEi_recx = (
         spread(rates["recx"] * rates["e_hot"], residence)
-        - recx_here * 1.5 * rates["Ti"] * ev_to_erg
+        - recx_here * rates["e_hot"]
     )
     dM_recx = (
         spread(rates["recx"] * rates["p_hot"], residence)
@@ -394,7 +398,9 @@ def neutral_hot_channel_rhs(
         M_n_a=None if state.M_n_a is None else zeros.copy(),
         En=zeros.copy() if two_zone else landed_energy * ratio,
     )
-    returned = 0.0 if two_zone else float(np.sum(landed_energy * Vp / ratio))
+    # The returned energy is extensive on the plasma volume: the row is
+    # landed_energy * (Vp/V_En) on V_En, so its inventory is landed_energy*Vp.
+    returned = 0.0 if two_zone else float(np.sum(landed_energy * Vp))
     diagnostics = {
         "nn_hot": rates["nn_hot"],
         "f_hot": rates["f_hot"],

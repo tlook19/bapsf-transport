@@ -678,12 +678,17 @@ def model_mode_defaults():
 
         ``"local"`` scales each conductance by ``sqrt(Tn_local / Tn_K)`` from
         the evolved per-cell neutral temperature -- the thermal-transpiration
-        arm, in which a hot patch of gas conducts faster than a cold one. It is
-        a DISCLOSED sensitivity arm, not the production closure: its steady
-        state carries a density gradient wherever a temperature gradient
-        exists, and that has not been scored against anything. Selecting it
-        without ``neutral_energy`` raises at construction, because there is no
-        per-cell ``Tn`` for it to read.
+        arm, in which a hot patch of gas conducts faster than a cold one.
+
+        WHAT THIS ARM DOES AND DOES NOT DO. It scales the RATE, not the
+        equilibrium. The driving potential stays the density difference, so a
+        temperature gradient at uniform density still drives no flow and the
+        steady state is still uniform ``nn``: this is not the textbook
+        transpiration relation ``n ~ 1/sqrt(T)``, which would require the
+        driving potential itself to change and is NOT built. It is a DISCLOSED
+        sensitivity arm on the transport timescale, not the production closure.
+        Selecting it without ``neutral_energy`` raises at construction, because
+        there is no per-cell ``Tn`` for it to read.
     neutral_model:
         Which engine carries the neutral population. ``"moment"`` integrates
         the fluid neutral density (and, with the ``neutral_momentum`` flag,

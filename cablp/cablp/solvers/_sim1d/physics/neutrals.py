@@ -562,8 +562,9 @@ def neutral_fluid_flux_rhs(
       omission is disclosed rather than absorbed into ``p_n``.
 
     A uniform gas at rest is exactly stationary: the closed end faces carry the
-    live cell's own pressure (the ``flux._apply_plasma_walls`` convention) and
-    no particle, momentum, or energy flux.
+    live cell's own pressure (the ``flux._apply_plasma_walls`` convention), no
+    particle, momentum, or energy flux crosses them, and the quasi-1D wall
+    reaction ``p_n dA/dz`` cancels the area-weighted pressure flux to the bit.
 
     The end-wall and anode-mesh momentum accommodation sinks are carried over
     from the donor-cell term unchanged; the end-face ENERGY accommodation is
@@ -630,8 +631,19 @@ def neutral_fluid_flux_rhs(
 
     dnn = divergence(face_nn, area_nn, volume_nn)
     dEn = divergence(face_En, area_nn, volume_nn)
-    dM_n = divergence(face_M, area_m, volume_m) + divergence(
-        face_p, area_nn, volume_m
+    # The neutral duct's cross-section varies along the machine, so the
+    # quasi-1D momentum equation needs the wall reaction p dA/dz alongside the
+    # area-weighted pressure flux -- the same pair ``flux_tube_geometry_rhs``
+    # supplies for the plasma. Written with the same multiply-then-subtract
+    # ordering as the divergence above, so a uniform stationary gas cancels
+    # bit-exactly rather than merely algebraically.
+    wall_reaction = (
+        p_n * area_nn[1:] - p_n * area_nn[:-1]
+    ) / volume_m
+    dM_n = (
+        divergence(face_M, area_m, volume_m)
+        + divergence(face_p, area_nn, volume_m)
+        + wall_reaction
     )
     # Pressure work on the energy row, on the same closed-end face velocity the
     # mass flux uses, so a uniform gas at rest stays at rest.
