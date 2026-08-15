@@ -49,6 +49,7 @@ from cablp.solvers._sim1d.core.geometry import (
     absorbing_live_cells_by_role,
     build_geometry,
 )
+from cablp.solvers._sim1d.physics.neutrals import puff_particles_per_s
 
 EV = 1.602176634e-12
 KB = 1.380649e-16
@@ -115,6 +116,35 @@ def assert_recycle_channel_live(recycle, removal, *, row, stance, path, window_m
         "return nn) and books it under characteristic_boundary. Refusing to "
         "run source-starved: the end-wall return would silently vanish from "
         "the source menu."
+    )
+
+
+def assert_two_zone_puff_live(ns, ns_ann, path, window_ms):
+    """Raise when a two-zone ledger's annulus puff is missing from the menu.
+
+    ``ns`` is the assembled per-cell source row [s^-1] and ``ns_ann`` the
+    annulus rate row it was built from (``None`` on a single-zone run, which
+    returns immediately).
+
+    Under ``neutral_two_zone`` the gas puff is booked into the ANNULUS row
+    (``nn_a``), so a menu assembled from the column row alone reads zero puff
+    on every such background and the TPMC runs unfuelled. A nonzero annulus
+    source with an empty assembled row is that defect and nothing else: a
+    genuinely unfuelled window leaves both zero and does not raise.
+    """
+    if ns_ann is None:
+        return
+    if not np.any(ns_ann > 0.0) or np.any(ns > 0.0):
+        return
+    raise ValueError(
+        f"two-zone background carries a nonzero annulus neutral source over "
+        f"{window_ms[0]}-{window_ms[1]} ms but the assembled source menu has "
+        f"no puff, for {path}.\n"
+        "  likely cause: the menu was read from rhs_terms/neutral_sources/nn "
+        "alone. Under the neutral_two_zone closure the puff enters at the "
+        "wall and is booked into the nn_a row; the nn row is pump-only, so a "
+        "column-only read degrades the puff to nothing. Refusing to run "
+        "source-starved."
     )
 
 
@@ -195,9 +225,29 @@ def load_background(path, window_ms):
         )
         ba = np.mean(f[f"rhs_terms/{row}/nn"][:][m], axis=0) * Vm_full
         an = np.mean(f["rhs_terms/anode_collection/nn"][:][m], axis=0) * Vm_full
-        ns = np.mean(
+        # Volume-integrated POSITIVE part of the neutral_sources row -- the
+        # puff (the pump is its negative part). Under the two-zone closure the
+        # puff is booked into the ANNULUS row (nn_a): the pipe enters at the
+        # vessel wall, so the column row nn is pump-only and a menu assembled
+        # from it alone loses the puff entirely. Integrate each zone on its
+        # own volume, exactly as bg["nn_model"] is rebuilt above -- nn lives
+        # on the column volume (Vp) and nn_a on the annulus (Vm - Vp) -- which
+        # reduces to the single-zone nn * Vm when there is no annulus row.
+        ns_col = np.mean(
             np.clip(f["rhs_terms/neutral_sources/nn"][:][m], 0.0, None), axis=0
-        ) * Vm_full
+        )
+        ns_ann = None
+        if "rhs_terms/neutral_sources/nn_a" in f:
+            ns_ann = np.mean(
+                np.clip(
+                    f["rhs_terms/neutral_sources/nn_a"][:][m], 0.0, None
+                ),
+                axis=0,
+            )
+        if ns_ann is None:
+            ns = ns_col * Vm_full
+        else:
+            ns = ns_col * Vp_full + ns_ann * np.maximum(Vm_full - Vp_full, 0.0)
         if not np.any(ba) and "nn_a" in f:
             # K4a kinetic run: the neutral ledger rows are superseded
             # (zeroed) -- rebuild the source menu from the PLASMA-side
@@ -224,7 +274,10 @@ def load_background(path, window_ms):
             puff_idx = (
                 roles_full.index("puff") if "puff" in roles_full else 0
             )
-            ns[puff_idx] = 4.477962e17 * sccm * valves
+            ns[puff_idx] = puff_particles_per_s(sccm, valves)
+        assert_two_zone_puff_live(
+            ns, ns_ann, path=str(path), window_ms=window_ms
+        )
         assert_recycle_channel_live(
             ba,
             removal_any,

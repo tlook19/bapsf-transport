@@ -1076,9 +1076,38 @@ GAS_PUFF_DIAGNOSTIC_FIELDS = (
 )
 
 
-def puff_rate(sccm, valves, chamber_vol, delivery_fraction=1.0):
-    """Return gas puff source rate [cm^-3 s^-1] using _sim3 conversion.
+# Standard-conditions gas-flow conversion [particles s^-1 per sccm]: one
+# standard cm^3 per minute of gas delivers this many particles per second.
+# THE single source of truth for the sccm -> particles/s conversion; every
+# site that turns a valve flow into a particle rate reads it through
+# ``puff_particles_per_s`` rather than restating the number.
+SCCM_TO_PARTICLES_PER_S = 4.477962e17
 
+
+def puff_particles_per_s(sccm, valves, delivery_fraction=1.0):
+    """Return the gas puff's total particle influx [s^-1].
+
+    ``sccm`` is the per-valve flow [sccm], ``valves`` [1] the number of
+    equivalent valves delivering it, and ``delivery_fraction`` [1] the share
+    of that flow which reaches the modelled volume; the last two multiply the
+    flow identically, so ``1.0`` (the default) is the identity.
+
+    This is the volume-independent half of the conversion, shared by the
+    per-cell rate (``puff_rate``) and the distributed profiles, so the sites
+    cannot desync.
+    """
+    return (
+        SCCM_TO_PARTICLES_PER_S
+        * float(sccm)
+        * float(valves)
+        * float(delivery_fraction)
+    )
+
+
+def puff_rate(sccm, valves, chamber_vol, delivery_fraction=1.0):
+    """Return gas puff source rate [cm^-3 s^-1] over ``chamber_vol`` [cm^3].
+
+    The flow-to-particles conversion is ``puff_particles_per_s``;
     ``delivery_fraction`` is the dimensionless share of the valve flow that
     reaches the modelled chamber volume; it multiplies the flow exactly as
     ``valves`` does, so ``1.0`` (the default) is the identity.
@@ -1086,10 +1115,7 @@ def puff_rate(sccm, valves, chamber_vol, delivery_fraction=1.0):
     if chamber_vol <= 0.0:
         raise ValueError(f"chamber_vol must be positive (got {chamber_vol})")
     return (
-        4.477962e17
-        * float(sccm)
-        * float(valves)
-        * float(delivery_fraction)
+        puff_particles_per_s(sccm, valves, delivery_fraction)
         / float(chamber_vol)
     )
 
@@ -1193,8 +1219,8 @@ def gas_puff_rate_profile(
             sccm, valves, geometry.neutral_volume_cm3[index], delivery_fraction
         )
         return dnn
-    total_particles_per_s = (
-        4.477962e17 * float(sccm) * float(valves) * float(delivery_fraction)
+    total_particles_per_s = puff_particles_per_s(
+        sccm, valves, delivery_fraction
     )
     dnn = (
         total_particles_per_s

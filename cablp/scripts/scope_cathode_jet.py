@@ -148,9 +148,20 @@ def scope_one(path):
         )
 
         # Puff rate: positive part of neutral_sources' nn term (puff source;
-        # the pump sink is the negative part), volume-integrated.
+        # the pump sink is the negative part), volume-integrated. Under the
+        # two-zone closure the puff is booked into the ANNULUS row (nn_a) --
+        # the pipe enters at the wall -- so the nn row alone is pump-only and
+        # reads zero puff; each zone is integrated on its own volume, which
+        # reduces to nn * Vm when there is no annulus row.
         ns_nn = np.asarray(f["rhs_terms/neutral_sources/nn"])[mask]
-        puff = float(np.mean(np.sum(np.clip(ns_nn, 0.0, None) * Vm, axis=1)))
+        if "rhs_terms/neutral_sources/nn_a" in f:
+            ns_nn_a = np.asarray(f["rhs_terms/neutral_sources/nn_a"])[mask]
+            puff_cell = np.clip(ns_nn, 0.0, None) * Vp + np.clip(
+                ns_nn_a, 0.0, None
+            ) * np.maximum(Vm - Vp, 0.0)
+        else:
+            puff_cell = np.clip(ns_nn, 0.0, None) * Vm
+        puff = float(np.mean(np.sum(puff_cell, axis=1)))
 
         # Drag momentum exchange: ion-side sink of ion_neutral_drag [g/cm^2/s^2]
         # * plasma volume -> dyn, per cell, plateau-averaged.
