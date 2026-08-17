@@ -19,14 +19,16 @@ nx = PRODUCTION_NX = 240 (driver default, untouched).
 
 import sys
 import time as _time
+from pathlib import Path
 
-sys.path.insert(0, "/Users/tlook/bapsf/bapsf-transport/cablp/scripts")
+_HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(_HERE))
 
 from cablp.solvers._sim1d import LAPDSim1D
 from cablp.solvers._sim1d.results.io import save_result_hdf5
 import compare_sim1d_es1 as C
 
-OUT = "/Users/tlook/bapsf/bapsf-transport/cablp/scripts/es1_kn2z_promoted_nx240.h5"
+OUT = str(_HERE / "es1_kn2z_promoted_nx240.h5")
 
 KINETIC_EXTRA = {
     "neutral_model": "kinetic",
@@ -68,8 +70,7 @@ import numpy as _np
 PORT_Z = (470.05, 789.55, 1045.15, 1428.55, 1716.10)
 PORTS = (11, 21, 29, 41, 50)
 REC = {"t": [], "n": [], "cells": None, "z": None}
-PORT_NPZ = ("/Users/tlook/bapsf/bapsf-transport/cablp/scripts/"
-            "es1_kn2z_promoted_nx240_ports.npz")
+PORT_NPZ = str(_HERE / "es1_kn2z_promoted_nx240_ports.npz")
 
 
 def _dump_ports(*_a):

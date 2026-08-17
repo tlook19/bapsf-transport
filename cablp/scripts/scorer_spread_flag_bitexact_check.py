@@ -12,8 +12,7 @@ from pathlib import Path
 
 import numpy as np
 
-WT = Path("/Users/tlook/bapsf/bapsf-transport/.claude/worktrees/"
-          "agent-ab06290979dde7b57/cablp")
+WT = Path(__file__).resolve().parent.parent
 SCRATCH = Path("/private/tmp/claude-501/-Users-tlook-bapsf-bapsf-transport/"
                "0db6b570-25fe-4ec9-8f34-fd79511820b8/scratchpad")
 sys.path.insert(0, str(WT / "scripts"))
@@ -32,8 +31,7 @@ print(f"NEW module: {NEW.__file__}")
 assert not hasattr(OLD, "TE_SPREAD_SEMIQUANT_FRAC"), "base already has the flag"
 assert hasattr(NEW, "TE_SPREAD_SEMIQUANT_FRAC")
 
-H5 = ("/Users/tlook/bapsf/bapsf-transport/cablp/scripts/"
-      "es1_prod_circuit_nx240.h5")
+H5 = str(Path(__file__).resolve().parent / "es1_prod_circuit_nx240.h5")
 print("loading result h5 ...", flush=True)
 result = load_result_hdf5(H5)
 print("loaded.", flush=True)

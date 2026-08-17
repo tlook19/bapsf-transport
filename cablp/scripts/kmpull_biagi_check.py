@@ -15,6 +15,7 @@ kmpull_biagi_check.txt).
 
 import sys
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 import numpy as np
 
@@ -27,7 +28,7 @@ from cablp.funcs._cross import (  # noqa: E402
     he_electron_momentum_transfer_rate_cm3_s,
 )
 
-XML = "/Users/tlook/Downloads/biagi.xml"
+XML = str(Path.home() / "Downloads" / "biagi.xml")
 
 root = ET.parse(XML).getroot()
 proc = root.find(".//Process")

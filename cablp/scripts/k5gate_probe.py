@@ -16,7 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import numpy as np
 
-CABLP = Path("/Users/tlook/bapsf/bapsf-transport/cablp")
+CABLP = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(CABLP / "scripts"))
 sys.path.insert(0, str(CABLP))
 

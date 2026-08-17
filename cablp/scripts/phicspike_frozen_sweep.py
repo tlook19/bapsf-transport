@@ -6,10 +6,11 @@ Read-only.
 import argparse
 import os
 import sys
+from pathlib import Path
 
 import numpy as np
 
-MAIN_SCRIPTS = "/Users/tlook/bapsf/bapsf-transport/cablp/scripts"
+MAIN_SCRIPTS = str(Path(__file__).resolve().parent)
 if MAIN_SCRIPTS not in sys.path:
     sys.path.insert(0, MAIN_SCRIPTS)
 

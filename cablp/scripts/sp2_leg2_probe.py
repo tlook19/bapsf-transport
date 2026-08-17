@@ -12,10 +12,12 @@
 # Registration: sp1 leg 1 executed to products, + Tom's leg-2 dispatch.
 # Artifact: sp2_leg2_probe.txt (this script's stdout).
 import json, math
+from pathlib import Path
+
 import numpy as np
 import h5py
 
-H5 = "/Users/tlook/bapsf/bapsf-transport/cablp/scripts/sp1_ref.h5"
+H5 = str(Path(__file__).resolve().parent / "sp1_ref.h5")
 SCCM = 4.477962e17          # particles/s per sccm (neutrals.py:760)
 A_1045 = 7.1828e13          # cm^-3 s^-1, sp1_p1045r.cmd (frozen linear rule)
 A_630  = 9.4510e13          # cm^-3 s^-1, sp1_p630r.cmd

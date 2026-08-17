@@ -272,8 +272,8 @@ def main(argv=None):
     )
     ap.add_argument(
         "--run",
-        default="/Users/tlook/bapsf/bapsf-transport/cablp/scripts/"
-                "es1_kn2z_promoted_nx240.h5",
+        default=str(Path(__file__).resolve().parent
+                    / "es1_kn2z_promoted_nx240.h5"),
         help="saved nx=240 production background (read in place, geometry only)",
     )
     ap.add_argument("--window", nargs=2, type=float, default=(5.0, 19.5))

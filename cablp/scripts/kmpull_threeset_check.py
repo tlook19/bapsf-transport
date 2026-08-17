@@ -12,6 +12,7 @@ Read-only on the repo; stdout only (tee to kmpull_threeset_check.txt).
 
 import re
 import sys
+from pathlib import Path
 
 import numpy as np
 
@@ -22,7 +23,7 @@ from cablp.funcs._cross import (  # noqa: E402
     HE_EN_MT_SIGMA_BRACKET_CM2,
 )
 
-TXT = "/Users/tlook/Downloads/crosssec.txt"
+TXT = str(Path.home() / "Downloads" / "crosssec.txt")
 text = open(TXT).read()
 
 # Each DB section: "DATABASE:  <name>" ... ELASTIC block with a

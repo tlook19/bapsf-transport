@@ -24,11 +24,6 @@ Usage (from <checkout>/cablp, PYTHONPATH set to that same cablp):
 
 import argparse
 import os
-import sys
-
-MAIN_SCRIPTS = "/Users/tlook/bapsf/bapsf-transport/cablp/scripts"
-if MAIN_SCRIPTS not in sys.path:
-    sys.path.insert(0, MAIN_SCRIPTS)
 
 from k7cbuild_frozen_bitexact import ARMS, build, digest  # noqa: E402
 

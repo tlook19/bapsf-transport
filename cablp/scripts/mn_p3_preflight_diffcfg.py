@@ -12,11 +12,13 @@ Usage:
 """
 import json
 import sys
+from pathlib import Path
 
 import h5py
 
-sys.path.insert(0, "/Users/tlook/bapsf/bapsf-transport/cablp")
-sys.path.insert(0, "/Users/tlook/bapsf/bapsf-transport/cablp/scripts")
+_HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(_HERE.parent))
+sys.path.insert(0, str(_HERE))
 
 from cablp.solvers._sim1d import default_config  # noqa: E402
 import compare_sim1d_es1 as cmp_es1  # noqa: E402

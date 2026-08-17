@@ -9,17 +9,19 @@ Usage:
 """
 import json
 import sys
+from pathlib import Path
 
 import h5py
 
-sys.path.insert(0, "/Users/tlook/bapsf/bapsf-transport/cablp")
+_HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(_HERE.parent))
 
 from cablp.solvers._sim1d import default_config  # noqa: E402
 
 import importlib.util  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location(
-    "cmp_es1", "/Users/tlook/bapsf/bapsf-transport/cablp/scripts/compare_sim1d_es1.py"
+    "cmp_es1", str(_HERE / "compare_sim1d_es1.py")
 )
 cmp_es1 = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cmp_es1)

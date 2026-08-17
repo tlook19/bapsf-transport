@@ -20,11 +20,13 @@ Usage:
 """
 import argparse
 import sys
+from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, "/Users/tlook/bapsf/bapsf-transport/cablp")
-sys.path.insert(0, "/Users/tlook/bapsf/bapsf-transport/cablp/scripts")
+_HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(_HERE.parent))
+sys.path.insert(0, str(_HERE))
 
 from compare_sim1d_es1 import PARAM_OVERRIDES, FLAG_OVERRIDES  # noqa: E402
 from run_mechanism_ladder import ES_OPERATING  # noqa: E402

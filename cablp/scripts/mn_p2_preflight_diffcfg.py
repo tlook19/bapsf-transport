@@ -23,10 +23,11 @@ Usage:
 """
 import json
 import sys
+from pathlib import Path
 
 import h5py
 
-REPO = "/Users/tlook/bapsf/bapsf-transport/cablp"
+REPO = str(Path(__file__).resolve().parent.parent)
 sys.path.insert(0, REPO)
 sys.path.insert(0, REPO + "/scripts")
 

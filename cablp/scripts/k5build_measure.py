@@ -43,7 +43,7 @@ from cablp.solvers._sim1d.physics.kinetic_dvm import (  # noqa: E402
     TransientDVM,
 )
 
-MAIN = Path("/Users/tlook/bapsf/bapsf-transport/cablp")
+MAIN = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import neutral_arch_e2_compare as e2  # noqa: E402
