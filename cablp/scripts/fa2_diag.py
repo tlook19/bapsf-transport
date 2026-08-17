@@ -624,7 +624,7 @@ def main():
     print("=" * 108)
     print("fa2 -- NBL MOMENTUM PREVIEW A/B: 1-zone fluid neutral momentum ON")
     print("  DISCLOSED INSTRUMENT. The closure was REJECTED as a production")
-    print("  candidate 2026-08-04 (M_n campaign, THESIS_NOTES item 39); it is")
+    print("  candidate 2026-08-04 (M_n campaign); it is")
     print("  used here as leg C's reserved vehicle, NOT as a candidate.")
     print("  CARRIED CAVEAT: Tn is FIXED at 300 K in this closure -- the energy")
     print("  back-reaction is absent, so this preview tests the MOMENTUM HALF")

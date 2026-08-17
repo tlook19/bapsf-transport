@@ -9,8 +9,8 @@
 #       fraction landing in the required band;
 #   (c) the flow demand: flux through the band's bounding faces and the
 #       implied directed velocity at the REF's own nn(z), vs He thermal.
-# Registration: CAMPAIGN_LOG "sp1 LEG 1 EXECUTED TO PRODUCTS" + Tom's leg-2
-# dispatch. Artifact: sp2_leg2_probe.txt (this script's stdout).
+# Registration: sp1 leg 1 executed to products, + Tom's leg-2 dispatch.
+# Artifact: sp2_leg2_probe.txt (this script's stdout).
 import json, math
 import numpy as np
 import h5py
