@@ -26,13 +26,24 @@ Usage::
     # on a CONTRACTED platform (macOS/arm64), once:
     python scripts/interp_fused_reference.py --capture
 
-    # anywhere, any time:
+    # anywhere, any time -- the package's own fused helper:
     python scripts/interp_fused_reference.py --verify
 
+    # the platform probe: is THIS numpy's arr_interp contracted?
+    python scripts/interp_fused_reference.py --verify --impl numpy
+
 ``--verify`` compares at raw uint64, never with a tolerance: a tolerance would
-defeat the entire point. On a contracted platform it passes. On linux-64 it is
-EXPECTED to fail against stock ``np.interp`` -- that failure IS the finding,
-and is what an implementation must fix rather than tolerate.
+defeat the entire point.
+
+``--impl helper`` (the default) checks
+``cablp.funcs._interp.interp_scalar_fused``, which writes the fusion out with
+``math.fma`` and must therefore reproduce the fixture on EVERY platform. A
+failure there is a bug in the helper.
+
+``--impl numpy`` checks ambient ``np.interp`` and so measures the platform, not
+the package: it passes on a contracted build and is EXPECTED to fail on
+linux-64. That failure IS the finding, and is what the helper exists to make
+irrelevant rather than something to tolerate.
 
 Coverage follows the method recorded in ``_interp_scalar``'s own docstring
 (1,235,520 queries): every exact node, both ``nextafter`` neighbours of every
@@ -160,6 +171,29 @@ def _contracted_here():
                      == unfused.view(np.uint64)).all())
 
 
+def _evaluator(impl):
+    """Return ``f(x, xp, fp, **kw) -> array`` for the named implementation.
+
+    ``numpy`` is ambient ``np.interp`` and therefore probes the platform's
+    contraction. ``helper`` is the package's explicit-``fma`` scalar helper,
+    mapped over the query vector one element at a time -- it is a SCALAR
+    function, and evaluating it elementwise is the only faithful way to ask it
+    the fixture's questions.
+    """
+    if impl == "numpy":
+        return lambda x, xp, fp, **kw: np.interp(x, xp, fp, **kw)
+
+    from cablp.funcs._interp import interp_scalar_fused
+
+    def _helper(x, xp, fp, **kw):
+        return np.array(
+            [interp_scalar_fused(v, xp, fp, **kw) for v in np.asarray(x).ravel()],
+            dtype=np.float64,
+        )
+
+    return _helper
+
+
 def _bitdiff(a, b):
     """Count differing float64 values, treating NaN payloads as equal-if-both-NaN."""
     a = np.ascontiguousarray(a, dtype=np.float64)
@@ -186,7 +220,7 @@ def capture(path):
     return 0
 
 
-def verify(path, quiet=False):
+def verify(path, impl="helper", quiet=False):
     if not path.exists():
         print(f"FAIL: fixture not found: {path}")
         return 1
@@ -195,13 +229,18 @@ def verify(path, quiet=False):
     if not manifest:
         print("FAIL: fixture manifest is EMPTY — refusing to report a pass")
         return 1
+    evaluate = _evaluator(impl)
     lval, rval = float(z["__lval__"][0]), float(z["__rval__"][0])
     total = bad = checked = 0
     for label in manifest:
         xp, fp, x = z[f"{label}__xp"], z[f"{label}__fp"], z[f"{label}__x"]
         for kind, kw in (("default", {}), ("sentinel", dict(left=lval, right=rval))):
             want = z[f"{label}__r_{kind}"]
-            got = np.interp(x, xp, fp, **kw)
+            got = evaluate(x, xp, fp, **kw)
+            if np.asarray(got).size != want.size:
+                print(f"FAIL: {impl} returned {np.asarray(got).size} values for "
+                      f"{label} [{kind}], expected {want.size}")
+                return 1
             d = _bitdiff(got, want)
             total += want.size
             checked += 1
@@ -211,17 +250,22 @@ def verify(path, quiet=False):
     if checked == 0 or total == 0:
         print("FAIL: nothing was compared — refusing to report a pass")
         return 1
-    print(f"numpy {np.__version__} on {sys.platform}; "
+    print(f"impl={impl}; numpy {np.__version__} on {sys.platform}; "
           f"arr_interp contracted: {_contracted_here()}")
     print(f"compared {total} values across {len(manifest)} tables: "
           f"{bad} differing")
     if bad:
-        print("VERIFY FAILED — this numpy does not reproduce the fused reference.")
-        print("  Expected on linux-64 (x86_64_v2 baseline has no FMA). An "
-              "implementation claiming to reproduce contracted numpy must make "
-              "this pass; a tolerance would defeat the purpose.")
+        print(f"VERIFY FAILED — {impl} does not reproduce the fused reference.")
+        if impl == "numpy":
+            print("  Expected on linux-64 (x86_64_v2 baseline has no FMA). An "
+                  "implementation claiming to reproduce contracted numpy must "
+                  "make this pass; a tolerance would defeat the purpose.")
+        else:
+            print("  The helper writes the fusion out with math.fma and must "
+                  "pass on EVERY platform, so this is a bug in the helper, not "
+                  "a property of this machine.")
         return 1
-    print("VERIFY OK — bit-identical to the fused reference.")
+    print(f"VERIFY OK — {impl} is bit-identical to the fused reference.")
     return 0
 
 
@@ -231,11 +275,15 @@ def main(argv=None):
     g.add_argument("--capture", action="store_true",
                    help="write the fixture (contracted platforms only)")
     g.add_argument("--verify", action="store_true",
-                   help="check this numpy against the fixture, at raw uint64")
+                   help="check an implementation against the fixture, at raw "
+                        "uint64")
+    p.add_argument("--impl", choices=("numpy", "helper"), default="helper",
+                   help="what to check: the package's fused helper (default), "
+                        "or ambient np.interp as a platform probe")
     p.add_argument("--fixture", type=Path, default=DEFAULT_FIXTURE)
     p.add_argument("--quiet", action="store_true")
     a = p.parse_args(argv)
-    return capture(a.fixture) if a.capture else verify(a.fixture, a.quiet)
+    return capture(a.fixture) if a.capture else verify(a.fixture, a.impl, a.quiet)
 
 
 if __name__ == "__main__":
