@@ -3,6 +3,7 @@ import math
 import mpmath as mp
 import numpy as np
 from pathlib import Path
+from ._interp import interp_scalar_fused as _interp_scalar_fused
 from ..vars._cons import (
     M_e_eV,
     qe_cgs,
@@ -99,8 +100,9 @@ def H_EII_cross_lkup(E):
     E : float
         Beam energy [eV].
     """
-    return float(np.exp(np.interp(np.log(E), _H_LOG_E, _H_LOG_SIGMA,
-                                  left=_H_LOG_SIGMA[0], right=_H_LOG_SIGMA[-1])))
+    return float(np.exp(_interp_scalar_fused(np.log(E), _H_LOG_E, _H_LOG_SIGMA,
+                                             left=_H_LOG_SIGMA[0],
+                                             right=_H_LOG_SIGMA[-1])))
 
 
 def He_EII_cross_lkup(eps):
@@ -115,8 +117,10 @@ def He_EII_cross_lkup(eps):
     eps : float
         Beam energy scaled by He ionization threshold (E / IE_He).
     """
-    return float(np.exp(np.interp(np.log(eps), _HE_LOG_EPS, _HE_LOG_SIGMA,
-                                   left=_HE_LOG_SIGMA[0], right=_HE_LOG_SIGMA[-1])))
+    return float(np.exp(_interp_scalar_fused(np.log(eps), _HE_LOG_EPS,
+                                             _HE_LOG_SIGMA,
+                                             left=_HE_LOG_SIGMA[0],
+                                             right=_HE_LOG_SIGMA[-1])))
 
 
 def He_ion_rate_lkup(T):
@@ -345,10 +349,10 @@ def He_beam_excitation_channel_lkup(E_eV, n_max=20):
         return 0.0, 0.0
     if E >= E_grid[-1]:
         return He_beam_excitation_channel(E, n_max=n_max)
-    s = float(np.interp(E, E_grid, sigma))
+    s = _interp_scalar_fused(E, E_grid, sigma)
     if s <= 0.0:
         return 0.0, 0.0
-    return s, float(np.interp(E, E_grid, sigma_E)) / s
+    return s, _interp_scalar_fused(E, E_grid, sigma_E) / s
 
 
 def int_factor(I):

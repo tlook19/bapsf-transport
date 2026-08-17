@@ -5,6 +5,7 @@ import numpy as np
 from ..core.geometry import is_plenum_cell, puff_cell_indices, pump_cell_indices
 from ..core.state import ConservativeState1D, neutral_energy_floor
 from .sources import neutral_wind_velocity
+from cablp.funcs._interp import interp_scalar_fused
 from cablp.vars._cons import kb_cgs, m_p_cgs
 
 
@@ -1407,7 +1408,7 @@ def neutral_probe_waveform_value(
         nodes = np.asarray(table, dtype=float)
         if t < nodes[0, 0] or t > nodes[-1, 0]:
             return 0.0
-        return float(np.interp(t, nodes[:, 0], nodes[:, 1]))
+        return interp_scalar_fused(t, nodes[:, 0], nodes[:, 1])
     raise ValueError(
         "neutral_probe_waveform must be one of "
         f"{list(NEUTRAL_PROBE_WAVEFORMS)} (got {waveform!r})"
