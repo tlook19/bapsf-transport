@@ -667,9 +667,14 @@ cdef double _interp_scalar(
     OTHER expression in this file unfused -- so the fusion here has to be
     written out, and only here.
 
-    Note the ``n == 1`` case needs no special branch: numpy handles it with a
-    separate loop, but the general path above reduces to exactly the same
-    three-way answer (``lval`` / ``rval`` / ``fp[0]``).
+    ``n == 1`` is NOT transcribed, and the general path below is not its
+    limit. numpy runs a separate single-node loop with NO NaN short-circuit:
+    both of its comparisons are false for a NaN query, so it falls through and
+    returns ``fp[0]``, where the path below propagates the NaN. For a FINITE
+    ``x`` the two do agree on the three-way ``lval`` / ``rval`` / ``fp[0]``
+    answer. The tables this module interpolates all have many nodes, so the
+    shape does not arise here; ``_interp.py``'s ``interp_scalar_fused``, which
+    is the general-purpose entry point, writes the single-node rule out.
     """
     cdef Py_ssize_t imin, imax, imid, j
     cdef double slope, res
