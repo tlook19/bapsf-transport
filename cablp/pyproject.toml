@@ -18,7 +18,22 @@ dependencies = [
 # cablp.funcs._cathode_kernels_cy extension (D4 spike). The runtime never
 # needs them -- the compiled kernels are opt-in via CABLP_COMPILED_KERNELS and
 # the default path is pure Python whether or not the extension was built.
-requires = ["poetry-core>=2.0.0,<3.0.0", "Cython>=3.0", "setuptools>=68"]
+#
+# scipy is BOTH a runtime dependency and a build requirement, and it must be
+# listed here as well: the .pyx does
+# `from scipy.optimize.cython_optimize cimport brentq, zeros_full_output`,
+# and Cython resolves that against scipy/optimize/cython_optimize.pxd on
+# sys.path. A PEP 517 isolated build env contains ONLY the packages named
+# here, so without scipy the cimport cannot resolve; >=1.3 is the release that
+# introduced the cimport-able cython_optimize module. numpy is deliberately
+# NOT a build requirement -- the .pyx imports it at Python level only and
+# cimports nothing from it, so no numpy headers are needed to compile.
+requires = [
+    "poetry-core>=2.0.0,<3.0.0",
+    "Cython>=3.0",
+    "setuptools>=68",
+    "scipy>=1.3",
+]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
