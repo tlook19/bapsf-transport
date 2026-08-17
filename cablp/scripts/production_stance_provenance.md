@@ -44,11 +44,26 @@ systematic is unresolved between supply regulation and probe gain.
 `L_parasitic_H` was 6.6e-6 until the reconciliation. 6.6e-6 was the orphaned
 fourth member of the same retracted free fit as the old `R_comp`/`C_bank_F`,
 not a considered choice; it is still inside the plateau refit's jackknife bar
-(6.7 +/- 2.5 uH) and is therefore not excluded, only unsupported. L is inert for
-every scored row; its measurable consequences are confined to the unscored
-reported fingerprints (t90 +0.05..0.11 ms, ignition +0.02..0.07 ms, both toward
-the measurement). The regression fixture has pinned 8.1e-6 all along, so it is
-bit-exact across the change.
+(6.7 +/- 2.5 uH) and is therefore not excluded, only unsupported.
+
+L is inert for every scored row -- and, MEASURED on the production reference
+run 2026-08-03, inert on the UNSCORED timing observables too: across the
+6.6 -> 8.1 uH change t90 moved 0.00000 ms and ignition -0.0035 ms.
+
+*(Corrected 2026-08-17, THESIS_NOTES chain pass. This paragraph previously
+read "its measurable consequences are confined to the unscored reported
+fingerprints (t90 +0.05..0.11 ms, ignition +0.02..0.07 ms, both toward the
+measurement)." That projection is WITHDRAWN: it extrapolated
+d(t90)/d(ln L) ~ 0.24 ms from a 12-vs-20 uH artifact pair, and the
+sensitivity does not hold down at 6.6-8.1 uH. The direct measurement above
+postdates and supersedes it. This matters more here than in a narrative
+document: THESIS_NOTES defers to this note by policy when the two
+disagree, so a retracted number left standing here would have WON that
+disagreement. The adoption of 8.1 uH is a pure consistency and provenance
+correction with no measurable physical consequence whatsoever.)*
+
+The regression fixture has pinned 8.1e-6 all along, so it is bit-exact
+across the change.
 
 ## Cathode emission
 
