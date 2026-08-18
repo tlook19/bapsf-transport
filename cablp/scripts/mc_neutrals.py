@@ -148,6 +148,36 @@ def assert_two_zone_puff_live(ns, ns_ann, path, window_ms):
     )
 
 
+def assert_end_recycle_routed_live(ba, ba_ann, path, window_ms):
+    """Raise when a routed end recycle is missing from the assembled menu.
+
+    ``ba`` is the assembled per-cell boundary-recycle row [s^-1] and
+    ``ba_ann`` the annulus rate row it was built from (``None`` on a run whose
+    boundary term carries no ``nn_a`` row, which returns immediately).
+
+    Under ``end_recycle_to_annulus`` the collector faces' recycle is booked
+    into the ANNULUS row, so a menu assembled from the column row alone loses
+    the end recycle entirely -- and, unlike the all-zero case, it does so
+    while the CATHODE row stays nonzero, which is precisely why
+    ``assert_recycle_channel_live`` cannot see it.
+    """
+    if ba_ann is None:
+        return
+    routed = np.asarray(ba_ann) > 0.0
+    if not np.any(routed) or np.any(np.asarray(ba)[routed] > 0.0):
+        return
+    raise ValueError(
+        f"boundary recycle was routed into the annulus over "
+        f"{window_ms[0]}-{window_ms[1]} ms but the assembled recycle row is "
+        f"zero on every routed cell, for {path}.\n"
+        "  likely cause: the menu was read from rhs_terms/<boundary>/nn "
+        "alone. Under the end_recycle_to_annulus closure the collector faces "
+        "rebirth their stream into the nn_a row on the annulus volume; a "
+        "column-only read degrades the end recycle to nothing while leaving "
+        "the cathode face intact. Refusing to run source-starved."
+    )
+
+
 def _puff_peak_cell(ns, roles):
     """Index of the puff row's peak cell, ties broken toward the puff cell.
 
@@ -223,7 +253,23 @@ def load_background(path, window_ms):
             for name in BOUNDARY_ROWS
             if f"rhs_terms/{name}/n" in f
         )
-        ba = np.mean(f[f"rhs_terms/{row}/nn"][:][m], axis=0) * Vm_full
+        # Volume-integrated boundary recycle. Both zones, each on its OWN
+        # volume: under neutral_two_zone the boundary term's nn row lives on
+        # the column volume Vp, and under the end_recycle_to_annulus closure
+        # the COLLECTOR faces' share is booked into nn_a on the annulus
+        # (Vm - Vp) instead. A column-only read then drops the entire end
+        # recycle -- the same defect the two-zone puff had, one term over --
+        # and would leave the cathode row nonzero, so the existing
+        # recycle-channel guard would not catch it. Reduces to the single-zone
+        # nn * Vm when there is no annulus row.
+        ba_col = np.mean(f[f"rhs_terms/{row}/nn"][:][m], axis=0)
+        ba_ann = None
+        if f"rhs_terms/{row}/nn_a" in f:
+            ba_ann = np.mean(f[f"rhs_terms/{row}/nn_a"][:][m], axis=0)
+        if ba_ann is None:
+            ba = ba_col * Vm_full
+        else:
+            ba = ba_col * Vp_full + ba_ann * np.maximum(Vm_full - Vp_full, 0.0)
         an = np.mean(f["rhs_terms/anode_collection/nn"][:][m], axis=0) * Vm_full
         # Volume-integrated POSITIVE part of the neutral_sources row -- the
         # puff (the pump is its negative part). Under the two-zone closure the
@@ -277,6 +323,9 @@ def load_background(path, window_ms):
             ns[puff_idx] = puff_particles_per_s(sccm, valves)
         assert_two_zone_puff_live(
             ns, ns_ann, path=str(path), window_ms=window_ms
+        )
+        assert_end_recycle_routed_live(
+            ba, ba_ann, path=str(path), window_ms=window_ms
         )
         assert_recycle_channel_live(
             ba,
