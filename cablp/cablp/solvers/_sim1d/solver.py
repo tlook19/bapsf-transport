@@ -844,6 +844,32 @@ class LAPDSim1D:
         # wall-return channels must be read and deposited. Run-constant
         # topology, resolved once (see absorbing_live_cells_by_role).
         self._recycle_cells = absorbing_live_cells_by_role(self._geometry)
+        self._end_recycle_to_annulus = bool(
+            self._flags.get("end_recycle_to_annulus", False)
+        )
+        if self._end_recycle_to_annulus:
+            if not self._neutral_two_zone:
+                raise ValueError(
+                    "end_recycle_to_annulus requires the neutral_two_zone "
+                    "flag: the routed stream is deposited into the annulus "
+                    "row nn_a, which only the two-zone closure builds"
+                )
+            routed_cells = self._recycle_cells.get("collector", ())
+            V_ann = self._zone_volumes[1]
+            dead = [
+                int(cell)
+                for cell in routed_cells
+                if float(V_ann[int(cell)]) <= 0.0
+            ]
+            if dead:
+                raise ValueError(
+                    "end_recycle_to_annulus would route the collector recycle "
+                    f"into cells with no annulus volume (V_ann = 0): {dead}. "
+                    "The destination zone must exist wherever the routing "
+                    "deposits, so a geometry whose plasma fills the vessel at "
+                    "the collector face is refused rather than silently "
+                    "destroying the routed stream"
+                )
         if self._neutral_model == "kinetic":
             if not self._neutral_two_zone:
                 raise ValueError(
@@ -7654,6 +7680,16 @@ class LAPDSim1D:
             "phi_a_V": phi_a,
         }
 
+    def _end_recycle_annulus_volume(self):
+        """Return the annulus volume the end recycle routes into, or ``None``.
+
+        ``None`` whenever ``end_recycle_to_annulus`` is off, which is what
+        keeps the boundary terms on their historical column-return path.
+        """
+        if not self._end_recycle_to_annulus:
+            return None
+        return self._zone_volumes[1]
+
     def boundary_absorption_rhs(
         self, y=None, state=None, cathode_solve=None, time=None
     ):
@@ -7682,6 +7718,9 @@ class LAPDSim1D:
             gas_type=self._gas_type,
             cathode_jet=self._cathode_jet_spec(cathode_solve),
             Tn_presheath_eV=self._dvm_presheath_Tn_eV(),
+            end_recycle_annulus_volume_cm3=(
+                self._end_recycle_annulus_volume()
+            ),
         )
 
     def characteristic_boundary_rhs(
@@ -7725,6 +7764,9 @@ class LAPDSim1D:
             # sheath transmission; driven electrodes owned by the circuit,
             # collector floating).
             sheath_energy_routing=True,
+            end_recycle_annulus_volume_cm3=(
+                self._end_recycle_annulus_volume()
+            ),
         )
 
     def anode_collection_rhs(
