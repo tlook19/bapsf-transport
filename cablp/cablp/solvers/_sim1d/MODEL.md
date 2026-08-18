@@ -1297,3 +1297,144 @@ closure.)
 The flag applies to whichever plasma-terminating discretization the run
 configured — the R3.1 characteristic ghost-cell outflow or the volumetric
 absorber — and is bit-exact when off, on both.
+
+## Prescribed flux-tube and vessel geometry (`prescribed_area_geometry`, default off)
+
+**What it changes: the cross-sections the whole 1D column is written on.** By
+default the plasma occupies a straight tube of radius $R_p$ inside a straight
+bore of radius $R_m$, so every cell has the same area $A = \pi R_p^2$ and every
+area factor in the discretization cancels. Under this flag the caller supplies
+a per-cell effective radius vector `plasma_radius_profile_cm`, one entry per
+**mesh** cell, and the geometry is rebuilt on it:
+
+$$A_i = \pi r_i^2,\qquad V_{\mathrm{p},i} = A_i\,\Delta z_i,\qquad
+A_{i+1/2} = \tfrac12\left(A_i + A_{i+1}\right),$$
+
+with the external faces taking their end cell's area. The quantity being
+prescribed is the **area** — $A(z)$ is the flux-tube variable, $AB =
+\mathrm{const}$ along a field line, so a solved $B_z(z)$ maps to
+$A \propto 1/B_z$. It is *supplied* as the radius $\sqrt{A/\pi}$ because that
+parameterization makes a constant profile at $R_p$ reproduce the uniform
+column bit for bit rather than to within a round-trip rounding: the area is
+rebuilt with the same `pi * Rp_cm**2` expression the uniform path uses. Any
+conversion from a measured or solved field happens outside — the solver does
+no file I/O.
+
+**The vessel too, optionally.** `machine_radius_profile_cm` is the same kind
+of vector for $R_m$, and is optional: omitted, every cell keeps the scalar bore
+exactly as before. Supplied, it sets the neutral open area $\pi R_m(z)^2$, the
+neutral cell volume, and the hydraulic radius that fixes the free-molecular
+face conductance — so a bore that **steps** partway along a block of cells is
+expressible, which neither a single $R_m$ nor `end_expansion_machine_radius_cm`
+(one value over the whole terminal block) can express. It composes with the
+annular-duct and support-rod reductions rather than overriding them: an
+obstruction cell keeps $\pi(R_m(z)^2 - R_{cs}^2)$ and hydraulic radius
+$R_m(z) - R_{cs}$, a plenum keeps $\pi(R_m(z)^2 - R_\text{sup}^2)$. Neutral
+face areas stay *restricting* apertures, so a step is seen from upstream as the
+narrow side, as it is at any other change of bore.
+
+This pair is the replacement for the built-in half-cosine flare
+(`end_expansion_geometry`), whose zero slope at *both* ends is wrong for a
+convex solved profile and whose one vessel radius spans the whole terminal
+block. The two are refused together: they prescribe the same quantities over
+the same cells and there is no composition rule.
+
+**Mirror force.** A varying $A$ makes the momentum equation quasi-1D,
+
+$$\partial_t (A\rho u) + \partial_z\!\left[A(\rho u^2 + p)\right]
+= p\,\frac{\partial A}{\partial z} + A\,S_M,$$
+
+and the $p\,\partial_z A$ term is the mirror force. It is not an *additional*
+closure on top of a $-\mu\nabla B$ force: the Maxwellian average of
+$-\mu\nabla_\parallel B$ **is** this term at $A \propto 1/B$, so building both
+would count the expansion twice. Discretely
+(`sources.flux_tube_geometry_rhs`) it is
+
+$$\left.\frac{\partial M_i}{\partial t}\right|_\text{geom}
+= \frac{p_i A_{i+1/2} - p_i A_{i-1/2}}{V_{\mathrm{p},i}},$$
+
+written with the same multiply-then-subtract ordering as the area-weighted
+pressure flux it pairs with. That ordering is the whole point: for a
+stationary uniform-pressure plasma the momentum face flux is exactly $p$, its
+divergence is exactly $-(p A_{i+1/2} - p A_{i-1/2})/V_{\mathrm{p},i}$, and the
+two cancel **bit for bit** rather than to round-off. A flare cannot
+manufacture momentum out of a constant-pressure state — the well-balanced
+property, and the one the smoke suite asserts as an exact array equality. The
+exceptions are the plasma-*terminating* cells, where the characteristic
+ghost-cell outflow supplies the face momentum instead of a reflecting wall
+pressure, and a uniform stationary state is deliberately not the equilibrium.
+
+**Pressure work, in both energy equations.** The compression partner
+$-p_s\,\nabla\!\cdot\mathbf{u}$ is already written on the face areas,
+
+$$\nabla\!\cdot\mathbf{u}\big|_i = \frac{A_{i+1/2}u_{i+1/2} -
+A_{i-1/2}u_{i-1/2}}{V_{\mathrm{p},i}},$$
+
+so it becomes $\partial_z(Au)/A$ the moment $A$ varies
+(`sources.velocity_divergence`, consumed by `pressure_work_rhs` for $E_e$ and
+$E_i$ alike, and by the R2 KEP correction). Expansion cooling through the
+flare is therefore carried by the same term that carries compression heating
+in a straight tube; there is no separate mirror-cooling source, and none
+should be added.
+
+**Neutrals and volumes.** The column zone *is* the plasma volume, so a varying
+$A$ moves it, and the two-zone annulus volume $V_\text{ann} = V_\mathrm{m} -
+V_\mathrm{p}$ moves with **both** profiles cell by cell — as does the zone
+exchange conductance $\tfrac14\bar v\,2\pi r_i \Delta z_i$, which is the
+column's lateral surface. All of these are read off the geometry rather than
+recomputed, so the bookkeeping stays consistent by construction; what a
+profile *can* break is $V_\text{ann}$ itself, in two distinct ways.
+
+The first is the **sign**: a plasma radius past the local vessel open area
+would make $V_\text{ann}$ negative, and it is clipped at zero, so the mistake
+would be silent. That is refused at construction.
+
+The second is **collapse**, which is subtler because the volume stays
+positive. A flux tube that nearly fills the bore leaves an annulus of a few
+hundred cm³ inside a cell of a few hundred thousand, and $V_\text{ann}$ is a
+**divisor**: the zone exchange and the hot-channel deposit $\dot N_\text{land}
+V_\mathrm{p}/V_\text{ann}$ both scale as $1/V_\text{ann}$, so a vanishing
+annulus does not switch off — it stiffens the step without ever tripping the
+`V_ann > 0` gates every consumer already carries. Two controls address it, and
+they are complements rather than alternatives:
+
+- `neutral_annulus_volume_fraction_min` refuses, at construction, any
+  two-zone cell whose $V_\text{ann}/V_\mathrm{m}$ falls below it *while
+  remaining nonzero*. Cells with no annulus at all are exempt — an absent zone
+  is inert by the same gates. The shipped value sits an order of magnitude
+  below a straight column (which leaves $\approx 0.86$) and an order of
+  magnitude above the collapse it exists to catch.
+- `plasma_area_max_vessel_fraction` caps the plasma area at a stated fraction
+  of the local vessel open area. This is a **declared regularization**, not a
+  geometry: a configuration that sets it is stating the cap as part of its
+  closure, and it binds before the sign refusal, so a capped run cannot also
+  trip that error. It is the intended way to run a solved flux tube that would
+  otherwise fill the bore.
+
+The end-recycle routing's own refusal (a routed collector cell with
+$V_\text{ann} = 0$) remains the check for a flare that fills the vessel exactly
+where the routing deposits; the fraction guard is the wider one, covering every
+two-zone cell rather than only the routed ones.
+
+**What it refuses**, all at construction: any of the three profile parameters
+without the flag, or the flag without `plasma_radius_profile_cm` (either way
+they would be inert); a profile whose length is not the mesh cell count — note
+that is the *mesh*, which carries the plenum, gap and end cells as well as the
+$n_x$ column cells; a non-finite, zero or negative entry in either profile (a
+zero-area cell divides the flux divergence by a zero volume); a vessel radius
+narrower than the plasma radius in the same cell; a plasma area past the local
+vessel open area; a ceiling outside $(0, 1]$; a collapsed two-zone annulus;
+and `end_expansion_geometry`.
+
+The flag is default off and bit-exact off — with it clear no profile object is
+built and the geometric momentum source is not even in the term ledger — and a
+constant plasma profile at $R_p$ with a constant vessel profile at $R_m$ is
+bit-identical to it being off. Because it changes the geometry it re-keys the
+cached neutral-equilibration seed: $V_\mathrm{p}$, $V_\text{ann}$, the
+conductances and the exchange are all read by the neutral-only equilibration,
+so a seed equilibrated on one machine is simply wrong for another.
+
+(`neutral_annulus_volume_fraction_min` is the one key here that is *not*
+gated on the flag: it constrains any two-zone geometry, including one built
+from the scalar radii, because the collapse it refuses is a property of the
+volumes and not of how they were specified.)

@@ -289,6 +289,18 @@ def _build_resolved_geometry(input_dict, flags):
     study no longer moves the near-source cell edges (see
     ``_source_fixed_grid_spec``). With it on, ``nx`` counts the far-column cells
     only and the ``puff`` role follows ``gas_puff_z_cm``.
+
+    The plasma cross-section is the uniform ``pi Rp^2`` inside the uniform
+    ``Rm`` bore unless a variable-area machine is configured, and there are two
+    mutually exclusive ways to do that. ``end_expansion_geometry`` resolves a
+    built-in half-cosine flare over a terminal block at one enlarged vessel
+    radius; the default-off ``prescribed_area_geometry`` flag instead takes the
+    whole geometry from the caller as ``plasma_radius_profile_cm`` (required)
+    and ``machine_radius_profile_cm`` (optional), one entry per mesh cell each,
+    with an optional ``plasma_area_max_vessel_fraction`` ceiling (see
+    ``_prescribed_area_geometry_spec``). Either way the per-cell areas, the cell
+    volumes, and the face areas follow, and the quasi-1D ``p dA/dz`` momentum
+    source that pairs with the area-weighted pressure flux comes on with them.
     """
     nx = int(input_dict.get("nx", 60))
     nx_gap = int(input_dict.get("nx_gap", 5))
@@ -299,6 +311,10 @@ def _build_resolved_geometry(input_dict, flags):
 
     total_length = float(input_dict.get("Lm", 2000.0))
     twin = bool(flags.get("TwinCathode", False))
+    # Resolved BEFORE the end expansion so that configuring both area
+    # machineries reports the composition refusal rather than whichever
+    # parameter the other one happens to be missing.
+    prescribed = _prescribed_area_geometry_spec(input_dict, flags)
     end_expansion = _end_expansion_spec(input_dict, flags, twin=twin)
 
     plenum_length = float(input_dict.get("plenum_length_cm", 100.0))
@@ -462,18 +478,92 @@ def _build_resolved_geometry(input_dict, flags):
             start_face : start_face + n_end + 1
         ] = end_face_area
 
+    if prescribed is not None and prescribed["machine_radius_cm"] is not None:
+        # The prescribed bore replaces the uniform scalar Rm cell by cell,
+        # BEFORE the duct and support-rod reductions below so those still
+        # compose against the local bore instead of a machine-wide constant.
+        machine_radius = _prescribed_profile_values(
+            prescribed["machine_radius_cm"], cells, "machine_radius_profile_cm"
+        )
+        Rm_cm = machine_radius.copy()
+        neutral_area_cm2 = np.pi * Rm_cm**2
+        neutral_hydraulic_radius_cm = Rm_cm.copy()
+
     # Obstruction cells are an annular duct: reduced open area AND a reduced
-    # hydraulic radius (Rm - Rcs), the two differing independently.
+    # hydraulic radius (Rm - Rcs), the two differing independently. Written
+    # against the per-cell bore, which is the machine-wide Rm in every cell
+    # unless a vessel profile replaced it (identical arithmetic on identical
+    # values, so the uniform case is unchanged bit for bit).
     obstruction = cell_role == "obstruction"
     if np.any(obstruction):
-        neutral_area_cm2[obstruction] = np.pi * (Rm**2 - Rcs**2)
-        neutral_hydraulic_radius_cm[obstruction] = Rm - Rcs
+        neutral_area_cm2[obstruction] = np.pi * (
+            Rm_cm[obstruction] ** 2 - Rcs**2
+        )
+        neutral_hydraulic_radius_cm[obstruction] = Rm_cm[obstruction] - Rcs
 
     # Support rods block plenum volume only: distributed thin structure, not a
     # duct, so the hydraulic radius is untouched.
     if Rsup > 0.0:
         plenum = cell_role == "plenum"
-        neutral_area_cm2[plenum] = np.pi * (Rm**2 - Rsup**2)
+        neutral_area_cm2[plenum] = np.pi * (Rm_cm[plenum] ** 2 - Rsup**2)
+
+    if prescribed is not None:
+        # The prescribed flux tube replaces the uniform scalar Rp cell by cell.
+        # Applied HERE -- after every neutral-side area adjustment and before
+        # the baffle mapping -- so the vessel comparison below sees the final
+        # open area and the baffles see the final plasma channel.
+        #
+        # The area is rebuilt with the SAME expression the uniform column uses
+        # (pi * Rp_cm**2), not carried alongside the radius, so a profile
+        # holding Rp in every cell reproduces the no-profile geometry bit for
+        # bit rather than to within a rounding of the area round-trip.
+        prescribed_radius = _prescribed_profile_values(
+            prescribed["plasma_radius_cm"], cells, "plasma_radius_profile_cm"
+        )
+        narrow = np.flatnonzero(Rm_cm < prescribed_radius)
+        if narrow.size:
+            source = (
+                "machine_radius_profile_cm"
+                if prescribed["machine_radius_cm"] is not None
+                else "the scalar Rm"
+            )
+            raise ValueError(
+                f"the vessel radius ({source}) is narrower than "
+                f"plasma_radius_profile_cm in {narrow.size} cell(s), first at "
+                f"index {int(narrow[0])} (vessel "
+                f"{float(Rm_cm[narrow[0]]):.6g} cm vs plasma "
+                f"{float(prescribed_radius[narrow[0]]):.6g} cm). The vessel "
+                "cannot be narrower than the plasma it contains"
+            )
+        prescribed_area = np.pi * prescribed_radius**2
+        cap = prescribed["max_vessel_fraction"]
+        if cap is not None:
+            # Declared regularization, not geometry: the ceiling keeps the
+            # two-zone annulus a real volume where a solved flux tube would
+            # otherwise fill the bore. It binds BEFORE the hard refusal, so a
+            # capped configuration cannot also trip that error.
+            capped = np.minimum(prescribed_area, cap * neutral_area_cm2)
+            # The radius is re-derived only where the ceiling actually binds,
+            # so a cap that never binds leaves the profile exactly as given.
+            prescribed_radius = np.where(
+                capped < prescribed_area,
+                np.sqrt(capped / np.pi),
+                prescribed_radius,
+            )
+            prescribed_area = capped
+        over = np.flatnonzero(prescribed_area > neutral_area_cm2)
+        if over.size:
+            raise ValueError(
+                "plasma_radius_profile_cm exceeds the local vessel open area "
+                f"in {over.size} cell(s), first at index {int(over[0])} "
+                f"(plasma {float(prescribed_area[over[0]]):.6g} cm^2 vs vessel "
+                f"{float(neutral_area_cm2[over[0]]):.6g} cm^2). The column "
+                "zone cannot be larger than the chamber holding it: the "
+                "two-zone annulus volume V_ann = Vm - Vp would go negative and "
+                "is clipped at zero, so the mistake would be silent"
+            )
+        Rp_cm = prescribed_radius.copy()
+        plasma_area_cm2 = prescribed_area
 
     baffle_faces, baffle_radii = _neutral_baffle_spec(
         input_dict=input_dict,
@@ -680,6 +770,137 @@ def _end_expansion_spec(input_dict, flags, *, twin):
         "cells": cells,
         "machine_radius_cm": Rm_end,
         "plasma_radius_cm": Rp_end,
+    }
+
+
+#: ``input_dict`` keys the ``prescribed_area_geometry`` flag owns. Every one is
+#: forbidden with the flag off, where it would be inert.
+PRESCRIBED_AREA_KEYS = (
+    "plasma_radius_profile_cm",
+    "machine_radius_profile_cm",
+    "plasma_area_max_vessel_fraction",
+)
+
+
+def _prescribed_radius_vector(raw, key):
+    """Return a finite, strictly positive per-cell radius vector [cm].
+
+    ``key`` names the config key the values came from and appears in every
+    message. Length is NOT checked here -- the mesh cell count exists only in
+    ``_build_resolved_geometry``, which calls
+    :func:`_prescribed_profile_values`. Raises ``ValueError`` on an empty,
+    non-finite or non-positive profile.
+    """
+    radius = np.array(raw, dtype=float).reshape(-1)
+    if radius.size == 0:
+        raise ValueError(f"{key} must be a non-empty sequence")
+    if not np.all(np.isfinite(radius)):
+        raise ValueError(
+            f"every {key} entry must be finite; got "
+            f"{int(np.count_nonzero(~np.isfinite(radius)))} non-finite of "
+            f"{radius.size}"
+        )
+    if np.any(radius <= 0.0):
+        raise ValueError(
+            f"every {key} entry must be > 0 (a zero-area cell divides the "
+            "flux divergence by a zero volume, and a negative radius is not a "
+            f"geometry); got min {float(np.min(radius)):.6g}"
+        )
+    return radius
+
+
+def _prescribed_profile_values(radius, cells, key):
+    """Return the per-cell radius vector after the mesh-length check.
+
+    Split from :func:`_prescribed_radius_vector` because the mesh cell count is
+    resolved inside ``_build_resolved_geometry``, after the roles and lengths
+    are assembled. Raises ``ValueError`` when the profile is not exactly one
+    entry per mesh cell.
+    """
+    if radius.size != cells:
+        raise ValueError(
+            f"{key} must have one entry per MESH cell (cells={cells}); got "
+            f"{radius.size}. It is a per-cell geometry, not a shape to be "
+            "resampled, and the mesh carries the plenum / gap / end cells as "
+            "well as the nx column cells"
+        )
+    return radius
+
+
+def _prescribed_area_geometry_spec(input_dict, flags):
+    """Validate and return the prescribed per-cell geometry, or ``None``.
+
+    Returns ``None`` when the default-off ``prescribed_area_geometry`` flag is
+    off -- which is the presence gate ``_build_resolved_geometry`` reads: on the
+    off path no array is built, the column keeps the uniform ``pi Rp^2``
+    cross-section and the vessel keeps the scalar ``Rm``, exactly as they always
+    have. When on, returns a dict with
+
+    - ``plasma_radius_cm``: the required per-cell flux-tube radius vector,
+    - ``machine_radius_cm``: the optional per-cell vessel radius vector, or
+      ``None`` to keep the scalar ``Rm`` in every cell,
+    - ``max_vessel_fraction``: the optional plasma-area ceiling as a fraction
+      of the local vessel open area, or ``None`` for no ceiling.
+
+    Checked here: the flag/parameter pairing in BOTH directions (the
+    ``input_dict`` / ``input_flags`` silent-namespace trap), each profile's
+    finiteness and strict positivity, the ceiling's range, and the refusal to
+    compose with ``end_expansion_geometry``. The per-cell LENGTH and the
+    vessel-vs-plasma consistency are checked by the caller, which is where the
+    mesh and the duct reductions exist. Raises ``ValueError`` on every one of
+    them, at construction.
+    """
+    raw = {key: input_dict.get(key) for key in PRESCRIBED_AREA_KEYS}
+    if not bool(flags.get("prescribed_area_geometry", False)):
+        stale = [key for key, value in raw.items() if value is not None]
+        if stale:
+            raise ValueError(
+                "prescribed per-cell geometry parameters require the "
+                "default-off prescribed_area_geometry flag, where they are "
+                "inert: the run would silently take the uniform pi*Rp^2 column "
+                "inside the scalar Rm and none of them would be read. Set the "
+                "flag or drop the parameters: " + ", ".join(stale)
+            )
+        return None
+    if raw["plasma_radius_profile_cm"] is None:
+        raise ValueError(
+            "prescribed_area_geometry requires plasma_radius_profile_cm (a "
+            "per-cell sequence of plasma flux-tube radii [cm], one entry per "
+            "mesh cell). There is no default: the flag's whole content is the "
+            "profile the caller computed from the solved field"
+        )
+    if bool(flags.get("end_expansion_geometry", False)):
+        raise ValueError(
+            "prescribed_area_geometry cannot be combined with "
+            "end_expansion_geometry: both prescribe the plasma flux-tube area "
+            "across the end block and there is no composition rule, so the "
+            "run would silently take whichever was applied last. The "
+            "prescribed profile IS the replacement for the built-in "
+            "half-cosine flare -- fold the end expansion into the profile and "
+            "clear that flag"
+        )
+    fraction = raw["plasma_area_max_vessel_fraction"]
+    if fraction is not None:
+        fraction = float(fraction)
+        if not np.isfinite(fraction) or not 0.0 < fraction <= 1.0:
+            raise ValueError(
+                "plasma_area_max_vessel_fraction must be finite and in "
+                f"(0, 1] (got {fraction}); it is the plasma area's ceiling as "
+                "a fraction of the local vessel open area, and a plasma wider "
+                "than its chamber is not a regularization"
+            )
+    return {
+        "plasma_radius_cm": _prescribed_radius_vector(
+            raw["plasma_radius_profile_cm"], "plasma_radius_profile_cm"
+        ),
+        "machine_radius_cm": (
+            None
+            if raw["machine_radius_profile_cm"] is None
+            else _prescribed_radius_vector(
+                raw["machine_radius_profile_cm"], "machine_radius_profile_cm"
+            )
+        ),
+        "max_vessel_fraction": fraction,
     }
 
 

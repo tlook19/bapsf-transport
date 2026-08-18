@@ -109,6 +109,20 @@ INERT_PARAM_KEYS = frozenset({
     # They contribute a constant to the signature, which rotates the hash once
     # (a cold recompute, bit-exact results) and is stable thereafter.
     "nn0",
+    # The prescribed per-cell geometry keys (plasma_radius_profile_cm,
+    # machine_radius_profile_cm, plasma_area_max_vessel_fraction,
+    # neutral_annulus_volume_fraction_min) are deliberately NOT listed here,
+    # and neither is prescribed_area_geometry in INERT_FLAG_KEYS -- unlike
+    # end_recycle_to_annulus below, which IS exempt. That flag changes only two
+    # plasma boundary terms an equilibration never evaluates; these change the
+    # GEOMETRY. The column volume Vp, the vessel volume Vm, the annulus volume
+    # V_ann = Vm - Vp, the zone exchange conductance (~ Rp dz) and the
+    # free-molecular face conductances (~ the hydraulic radius) are all read by
+    # the neutral-only equilibration, whose whole content is where the gas
+    # settles, so a seed equilibrated on one machine is simply wrong for
+    # another. They must re-key, and being absent from this allowlist is what
+    # makes them re-key -- the fail-closed rule at the top, working as
+    # intended.
     # --- plasma-run numerics (equil uses fixed neutral_equilibration_dt) ---
     "cfl", "density_dt_fraction", "drag_dt_fraction", "heat_dt_fraction",
     "implicit_heat_scheme", "operator_splitting", "heat_picard_iterations",
