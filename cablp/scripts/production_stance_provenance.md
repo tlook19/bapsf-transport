@@ -92,9 +92,23 @@ rather than tuned away. Standby emission is not matched exactly either: 1910 K
 on `C_R_eff` versus 1840 K on 29.0 emits 1.4% more at phi = 2.809 and 2.8% at
 2.869 — the same flat-direction residual seen off the operating point.
 
-**`cathode_conduction_W_per_K = 8000.0`** — FITTED. The skin-to-substrate
-conduction is the one fitted knob of the cathode power balance, co-tuned with
-`S_gp` at the reference setting and frozen thereafter.
+**`cathode_conduction_W_per_K = 12058.0`, `cathode_heat_capacity_J_per_K =
+181.0`** — DERIVED by areal transcription (L2 geometry rebaseline, 2026-08-17).
+Both are extensive in the cathode face area, so moving the face from the
+fitted 15.0 cm to the measured 18.415 cm aperture scales them by
+`(18.415/15)^2 = 1.5072`: 8000 -> 12058 W/K and 120 -> 181 J/K. The underlying
+calibration is UNCHANGED — the conduction remains the one fitted knob of the
+cathode power balance, co-tuned with `S_gp` at the reference setting and
+frozen thereafter; only the area it is quoted per has been corrected. The heat
+capacity was previously inherited from the config default and now differs from
+it, so it is pinned in the stance dict.
+
+Disclosure: the physically conducting and radiating body is the whole 19.05 cm
+disc, not the exposed aperture, which would give `(19.05/15)^2 = 1.613` —
+about 7% above the transcription adopted here. That 7% sits well inside the
+hand-tuned class both knobs already carry, and the aperture factor is used for
+consistency with the emitting/collecting area the rest of the stance keys off.
+Neither number is re-fitted to absorb the difference.
 
 ## Neutral source
 
@@ -114,16 +128,32 @@ regression fixture, which pins the key back to `None`.
 
 ## Geometry
 
-**`Rp = 15.0`, `R_cath = 15.0`** — MEASURED plasma-column radius. Note the
-physical cathode disc radius is 19 cm; the gaussian emission profile is
-documented to prefer the physical radius.
+**`Rp = 18.415`, `R_cath = 18.415`** — MEASURED (caliper, 2026-08-17; L2
+geometry rebaseline). The cathode is a 15.0 in x 0.25 in LaB6 disc
+(R = 19.050 cm) held by a backside carbon ring against a graphite front panel
+whose opening is 14.5 in — r = 18.415 cm. The ring's lip fit on the disc is
+self-confirming: the overlap the ring needs is exactly the annulus the panel
+covers. The exposed aperture, not the disc, is the emitting, collecting and
+conducting face, so both radii identify with it and are equal by measurement
+rather than by the previous coincidence of one fitted 15.0. Mapping the
+aperture along the field to the plasma-column radius is ASSUMED 1:1 (recorded
+ruling: no flux-tube expansion or compression is modelled between the cathode
+face and the column).
+
+Both values were 15.0 before this pass — a fit, not a measurement, and one
+that conflated the emitting radius with the plasma-column radius. The golden
+fixture pins 15.0/15.0 explicitly (`baseline_sim1d.BASELINE_PARAM_OVERRIDES`)
+so the regression anchor does not track this stance.
 
 **`end_expansion_cells = 10`, `end_expansion_machine_radius_cm = 100.0`,
-`end_expansion_plasma_radius_cm = 15.0`, `Rcs = 40.0`, `Lcs = 25.0`,
+`end_expansion_plasma_radius_cm = 18.415`, `Rcs = 40.0`, `Lcs = 25.0`,
 `Rsup = 0.0`** — ASSUMED, an interim geometry pending a 2D model. The end vessel
 expands to a 1 m neutral radius over 10 cells with no plasma flare (the plasma
 stays at `Rp`); the plenum choke is an obstruction with no support rods; no
-baffles; collector length unchanged.
+baffles; collector length unchanged. `end_expansion_plasma_radius_cm` carries
+no independent content: it RIDES `Rp` by construction of the no-flare arm, and
+moved to 18.415 with it. The regression fixture needs no pin for it — the
+baseline pops the `end_expansion_*` params when the flag is off.
 
 **`source_region_length_cm = 100.0`, `source_region_dz_cm = 10.0`** (with
 `source_fixed_grid = True`) — ASSUMED, interim geometry. The 100 cm column in
