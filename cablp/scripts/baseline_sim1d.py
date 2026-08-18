@@ -91,6 +91,11 @@ BASELINE_PARAM_OVERRIDES = {
     "cathode_heat_capacity_J_per_K": 120.0,
     "cathode_conduction_W_per_K": 1200.0,
     "cathode_emissivity": 0.7,
+    # The fixture inherits 14.25 through the production splat above -- NOT the
+    # 29.0 config default. Pinned now because the L2 arm-4 recalibration will
+    # move the production value; the pin equals what is inherited today, so the
+    # anchor stays bit-exact across that move.
+    "C_R": 14.25,
     "phi_wf": 2.869,
     "cathode_surface_model": "ads_des",
     "cathode_phiwf_clean_eV": 2.809,

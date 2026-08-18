@@ -2379,7 +2379,21 @@ def main():
         idriven_vdis_evaluator,
     )
 
-    _crf_sim = LAPDSim1D(*_r1_sim_config(cathode_circuit_voltage_bound=True))
+    # This block is a defect RECONSTRUCTION control, and its two magnitude
+    # thresholds below were calibrated at the fixture geometry of the day. A
+    # control has no business tracking the hardware stance -- the L2 rebaseline
+    # moved the cathode onto the measured aperture and compressed the ratchet
+    # spread below its threshold without touching the defect it reconstructs.
+    # So the fixture is pinned here, on the golden's philosophy.
+    _crf_geom = {
+        "R_cath": 15.0,
+        "Rp": 15.0,
+        "cathode_emission_profile": "gaussian",
+    }
+
+    _crf_sim = LAPDSim1D(*_r1_sim_config(
+        cathode_circuit_voltage_bound=True, **_crf_geom
+    ))
     _crf_V_src = float(_crf_sim._input_dict["V_bank"])
     _crf_R = float(_crf_sim._input_dict["R_comp"])
     _crf_L = float(_crf_sim._input_dict["L_parasitic_H"])
@@ -2469,14 +2483,14 @@ def main():
     # the bundle is never built, the candidate is inf, and the safety factor
     # is INERT -- a value that would crush the step to nothing if it were
     # read leaves the dt sequence untouched.
-    _crf_off = LAPDSim1D(*_r1_sim_config())
+    _crf_off = LAPDSim1D(*_r1_sim_config(**_crf_geom))
     assert _crf_off._circuit_timestep_kwargs() is None
     _crf_off_diag = _crf_off.suggest_timestep()
     assert math.isinf(_crf_off_diag.dt_circuit), _crf_off_diag.dt_circuit
     assert _crf_off_diag.active_constraint != "circuit"
 
     def _crf_dt_sequence(**_overrides):
-        _s = LAPDSim1D(*_r1_sim_config(**_overrides))
+        _s = LAPDSim1D(*_r1_sim_config(**_crf_geom, **_overrides))
         _out = []
         for _ in range(5):
             _out.append(_s.suggest_timestep().dt)
@@ -2486,7 +2500,9 @@ def main():
     assert _crf_dt_sequence() == _crf_dt_sequence(circuit_dt_fraction=1.0e-30)
     # ...and the gate is not vacuous the other way: ARMED, the bundle exists
     # and the term is a real, finite bound that the safety factor scales.
-    _crf_on = LAPDSim1D(*_r1_sim_config(cathode_circuit_voltage_bound=True))
+    _crf_on = LAPDSim1D(*_r1_sim_config(
+        cathode_circuit_voltage_bound=True, **_crf_geom
+    ))
     assert _crf_on._circuit_timestep_kwargs() is not None
     _crf_on_diag = _crf_on.suggest_timestep()
     assert math.isfinite(_crf_on_diag.dt_circuit), _crf_on_diag.dt_circuit
@@ -2495,7 +2511,8 @@ def main():
     )
     _crf_tight = LAPDSim1D(
         *_r1_sim_config(
-            cathode_circuit_voltage_bound=True, circuit_dt_fraction=1.0e-3
+            cathode_circuit_voltage_bound=True, circuit_dt_fraction=1.0e-3,
+            **_crf_geom
         )
     ).suggest_timestep()
     assert np.isclose(
@@ -2507,7 +2524,9 @@ def main():
     # stiff fixed point: parked at the local equilibrium there is no transient
     # to resolve and the candidate goes back to inf, even though the device
     # slope there is enormous.
-    _crf_eq = LAPDSim1D(*_r1_sim_config(cathode_circuit_voltage_bound=True))
+    _crf_eq = LAPDSim1D(*_r1_sim_config(
+        cathode_circuit_voltage_bound=True, **_crf_geom
+    ))
     _crf_eq._circuit_I_loop = _crf_integrate(_crf_vdis, 1.25e-7)
     assert math.isinf(_crf_eq.suggest_timestep().dt_circuit)
 
