@@ -10354,9 +10354,12 @@ def main():
         nn_a=p2z_state.nn_a.copy(),
     )
     p2z_zx = p2z_sim.neutral_zone_exchange_rhs(state=p2z_pert)
-    assert (
-        abs(float((p2z_zx.nn * p2z_Vc + p2z_zx.nn_a * p2z_Va).sum())) == 0.0
-    )
+    # Closure is antisymmetric by construction in the scalar flow; the volume
+    # re-multiplication here is not a guaranteed identity, so the honest claim
+    # is closure to round-off (1 ULP at Rp = 18.415), not an exact zero.
+    assert abs(
+        float((p2z_zx.nn * p2z_Vc + p2z_zx.nn_a * p2z_Va).sum())
+    ) <= 1e-12 * float(np.abs(p2z_zx.nn * p2z_Vc).max())
     assert p2z_zx.nn[p2z_mid] > 0.0 and p2z_zx.nn_a[p2z_mid] < 0.0
     p2z_ax = p2z_sim.neutral_exchange_rhs(state=p2z_pert)
     assert abs(float((p2z_ax.nn * p2z_Vc).sum())) <= 1e-12 * float(
