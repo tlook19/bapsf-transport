@@ -10611,6 +10611,189 @@ def main():
         p2z_loaded = load_result_hdf5(p2z_path)
         assert np.allclose(p2z_loaded.nn_a, p2z_result.nn_a)
 
+    # --- L6 END-RECYCLE ROUTING (end_recycle_to_annulus). The recycle stream
+    # rebirthed at COLLECTOR faces is deposited into that cell's annulus row
+    # instead of its column row, as thermal diffuse gas. The cathode face, the
+    # plasma rows, and the flag-off trajectory are untouched. Both
+    # plasma-terminating discretizations carry it, so both are exercised.
+    er_base_p = dict(p2z_params)
+    er_base_f = dict(p2z_flags)
+    er_base_f["neutral_prebreakdown"] = False
+    er_base_f["neutral_equilibration"] = False
+
+    # Presence gate: the destination row must exist.
+    try:
+        LAPDSim1D(
+            dict(er_base_p),
+            dict(
+                er_base_f,
+                neutral_two_zone=False,
+                end_recycle_to_annulus=True,
+            ),
+        )
+    except ValueError as er_exc:
+        assert "neutral_two_zone" in str(er_exc), str(er_exc)
+    else:
+        raise AssertionError(
+            "expected end_recycle_to_annulus without neutral_two_zone to fail"
+        )
+    # ...and the destination must have VOLUME. A machine whose plasma fills
+    # the bore leaves every cell -- the routed collector included -- with
+    # V_ann = 0, and the routing would then destroy the stream it moves.
+    try:
+        LAPDSim1D(
+            dict(er_base_p, Rp=float(er_base_p["Rm"])),
+            dict(er_base_f, end_recycle_to_annulus=True),
+        )
+    except ValueError as er_exc:
+        assert "V_ann" in str(er_exc), str(er_exc)
+    else:
+        raise AssertionError(
+            "expected end_recycle_to_annulus with V_ann = 0 to fail"
+        )
+
+    for er_char in (False, True):
+        er_row = (
+            "characteristic_boundary" if er_char else "boundary_absorption"
+        )
+        er_off = LAPDSim1D(
+            dict(er_base_p), dict(er_base_f, characteristic_boundary=er_char)
+        )
+        er_on = LAPDSim1D(
+            dict(er_base_p),
+            dict(
+                er_base_f,
+                characteristic_boundary=er_char,
+                end_recycle_to_annulus=True,
+            ),
+        )
+        er_geo = er_on.geometry
+        er_Vp = np.asarray(er_geo.plasma_volume_cm3, dtype=float)
+        er_Va = np.maximum(
+            np.asarray(er_geo.neutral_volume_cm3, dtype=float) - er_Vp, 0.0
+        )
+        er_coll = list(absorbing_live_cells_by_role(er_geo)["collector"])
+        assert er_coll, er_row
+        er_mask = np.zeros(er_geo.cells, dtype=bool)
+        er_mask[er_coll] = True
+        er_t_off = er_off.rhs_terms()[er_row]
+        er_t_on = er_on.rhs_terms()[er_row]
+        # The plasma side is untouched, bit for bit: this moves where the
+        # returning atoms land, not how much plasma the surface takes.
+        for er_field in ("n", "M", "Ee", "Ei"):
+            assert np.array_equal(
+                getattr(er_t_off, er_field), getattr(er_t_on, er_field)
+            ), (er_row, er_field)
+        assert er_t_off.nn_a is None and er_t_on.nn_a is not None, er_row
+        # (a) PARTICLE CLOSURE: what the collector faces take out of the
+        # plasma is exactly what lands in those cells' annulus, and nothing
+        # lands anywhere else.
+        er_loss = float((-er_t_on.n * er_Vp)[er_mask].sum())
+        er_dep = float((er_t_on.nn_a * er_Va)[er_mask].sum())
+        assert er_loss > 0.0, er_row
+        assert abs(er_dep - er_loss) <= 1e-12 * er_loss, (er_row, er_dep, er_loss)
+        assert np.all(er_t_on.nn_a[~er_mask] == 0.0), er_row
+        # The column row loses exactly the routed share and nothing else --
+        # exactly zero on a cell whose only absorbing face is a collector one,
+        # and bit-identical (the cathode face) everywhere else.
+        assert np.all(er_t_on.nn[er_mask] == 0.0), er_row
+        assert np.array_equal(
+            er_t_on.nn[~er_mask], er_t_off.nn[~er_mask]
+        ), er_row
+        # LEDGER ATTRIBUTION consistency: the routing moves gas between two
+        # rows of the same term; it creates and destroys none. (Both rows are
+        # rates on their own zone volume -- nn on the column, nn_a on the
+        # annulus -- which is exactly how the artifact must be read.)
+        er_tot_off = float((er_t_off.nn * er_Vp).sum())
+        er_tot_on = float(
+            (er_t_on.nn * er_Vp + er_t_on.nn_a * er_Va).sum()
+        )
+        assert abs(er_tot_on - er_tot_off) <= 1e-12 * abs(er_tot_off), er_row
+        # (c) FLAG OFF is bit-identical through a stepped trajectory, on this
+        # very fixture, for this discretization.
+        er_id_a = LAPDSim1D(
+            dict(er_base_p), dict(er_base_f, characteristic_boundary=er_char)
+        )
+        er_id_b = LAPDSim1D(
+            dict(er_base_p),
+            dict(
+                er_base_f,
+                characteristic_boundary=er_char,
+                end_recycle_to_annulus=False,
+            ),
+        )
+        for _ in range(3):
+            er_id_a.advance_one_step(dt=1.0e-9)
+            er_id_b.advance_one_step(dt=1.0e-9)
+        assert np.array_equal(er_id_a._y, er_id_b._y), er_row
+
+    # (b) ENERGY SINGLE-BOOKING. Under neutral_energy the "wall" entry of
+    # _NEUTRAL_ENERGY_TERM_BOOKING turns a boundary term's COLUMN nn row into
+    # a (3/2) k T_wall column-En credit. The routed particles leave that row,
+    # so their credit leaves with them -- which is the whole point: the
+    # annulus carries no energy field, and the zone-exchange convention
+    # re-supplies wall-temperature enthalpy when the gas re-enters the column.
+    # Booking both would plant the same energy twice.
+    er_en_p, er_en_f = default_config()
+    er_en_p["nx"] = 24
+    er_en_f["neutral_prebreakdown"] = False
+    er_en_f["neutral_equilibration"] = False
+    er_en_f["cathode_coupling"] = False
+    er_en_f["neutral_momentum"] = True
+    er_en_f["neutral_two_zone"] = True
+    er_en_f["neutral_energy"] = True
+    er_en_row = (
+        "characteristic_boundary"
+        if er_en_f["characteristic_boundary"]
+        else "boundary_absorption"
+    )
+    er_en_off = LAPDSim1D(dict(er_en_p), dict(er_en_f))
+    er_en_on = LAPDSim1D(
+        dict(er_en_p), dict(er_en_f, end_recycle_to_annulus=True)
+    )
+    er_en_geo = er_en_on.geometry
+    er_en_mask = np.zeros(er_en_geo.cells, dtype=bool)
+    er_en_mask[
+        list(absorbing_live_cells_by_role(er_en_geo)["collector"])
+    ] = True
+    er_en_t_off = er_en_off.rhs_terms()[er_en_row]
+    er_en_t_on = er_en_on.rhs_terms()[er_en_row]
+    assert er_en_t_off.En is not None and er_en_t_on.En is not None
+    # OFF: the collector face books a positive wall-temperature credit.
+    assert np.all(er_en_t_off.En[er_en_mask] > 0.0)
+    # ON: the routed face books NO column energy at all, while the untouched
+    # cathode face's credit is unchanged bit for bit.
+    assert np.all(er_en_t_on.En[er_en_mask] == 0.0)
+    assert np.array_equal(
+        er_en_t_on.En[~er_en_mask], er_en_t_off.En[~er_en_mask]
+    )
+
+    # The flag must be INERT to the neutral-seed signature: it changes only
+    # the two plasma-terminating boundary terms, which a neutral-only
+    # equilibration (Plasma=False) never evaluates. Otherwise adding it to
+    # default_config() would re-key every cached seed in the database.
+    from cablp.solvers._sim1d.core.config import resolve_config
+    from cablp.solvers._sim1d.core.neutral_seed_cache import (
+        neutral_seed_signature as er_seed_signature,
+    )
+
+    er_absent_p, er_absent_f = default_config()
+    assert er_absent_f["end_recycle_to_annulus"] is False
+    del er_absent_f["end_recycle_to_annulus"]
+    er_false_p, er_false_f = default_config()
+    er_true_p, er_true_f = default_config()
+    er_true_f["end_recycle_to_annulus"] = True
+    # Absent and explicitly-False resolve to the SAME config...
+    assert resolve_config(er_absent_p, er_absent_f) == resolve_config(
+        er_false_p, er_false_f
+    )
+    # ...and all three -- absent, False, True -- hash to one signature.
+    er_sig = er_seed_signature(*resolve_config(er_absent_p, er_absent_f))
+    assert er_sig == er_seed_signature(
+        *resolve_config(er_false_p, er_false_f)
+    )
+    assert er_sig == er_seed_signature(*resolve_config(er_true_p, er_true_f))
+
     # --- K4a kinetic neutrals: the refresh-
     # cadence relaxation architecture. The flag requires the two-zone
     # state; targets appear at the first accepted plasma step; every
