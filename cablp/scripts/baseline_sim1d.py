@@ -134,6 +134,14 @@ BASELINE_PARAM_OVERRIDES = {
     "Rcs": 0.0,
     "Lcs": 0.0,
     "Rsup": 0.0,
+    # L2 geometry rebaseline (2026-08-17): the production stance moved the
+    # plasma-column and cathode radii off the fitted 15.0 onto the measured
+    # hardware aperture. This fixture was captured at 15.0/15.0; pin both so
+    # the anchor does NOT track the live stance -- same rule as the Rcs/Lcs/
+    # Rsup pins above. (end_expansion_plasma_radius_cm needs no pin: it is
+    # popped in build_baseline_config with the flag off.)
+    "Rp": 15.0,
+    "R_cath": 15.0,
     # Measured 25 ms equilibration puff width (2026-07-29): the ES production
     # config (PRODUCTION_PARAM_OVERRIDES, inherited above) adopted it, but this
     # fixture was captured with the equilibration inheriting tau_discharge as
