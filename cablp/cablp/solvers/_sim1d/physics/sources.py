@@ -304,6 +304,28 @@ def electrode_sheath_alpha(
     )
 
 
+def _annulus_deposit_row(dN_routed, annulus_volume_cm3):
+    """Return the ``nn_a`` row [cm^-3 s^-1] for a routed particle stream.
+
+    ``dN_routed`` is the per-cell routed rate [s^-1] and
+    ``annulus_volume_cm3`` the per-cell annulus volume. Cells with no routed
+    stream are left at exactly zero WITHOUT dividing, so a cell that has no
+    annulus at all (``V_ann = 0``, the plenum and any cell the plasma fills to
+    the wall) cannot produce a ``0/0``. Every cell the routing actually
+    deposits into is guaranteed a positive annulus volume at construction, so
+    the division that does run is always well posed.
+    """
+    dN_routed = np.asarray(dN_routed, dtype=float)
+    row = np.zeros_like(dN_routed)
+    np.divide(
+        dN_routed,
+        np.asarray(annulus_volume_cm3, dtype=float),
+        out=row,
+        where=dN_routed != 0.0,
+    )
+    return row
+
+
 def boundary_absorption_rhs(
     state,
     floors,
@@ -318,8 +340,29 @@ def boundary_absorption_rhs(
     gas_type=None,
     cathode_jet=None,
     Tn_presheath_eV=None,
+    end_recycle_annulus_volume_cm3=None,
 ):
     """Return the plasma absorbed by the plasma-terminating surfaces.
+
+    ``end_recycle_annulus_volume_cm3``: when given (the per-cell annulus
+    volume [cm^3], supplied only under the ``end_recycle_to_annulus``
+    closure), the recycle stream rebirthed at faces whose live cell has the
+    ``collector`` role is deposited into the ANNULUS row ``nn_a`` at
+    ``dN_loss / V_ann`` instead of into the column row ``nn``. CATHODE faces
+    are untouched, so the jet/debit closure that owns them is unchanged. The
+    routed atoms are thermal and diffuse: no directed momentum is booked
+    anywhere for them, on either ``M_n`` or ``M_n_a``. ``None`` (the default,
+    and every historical caller) keeps the whole stream on the column row, so
+    that path is unchanged bit for bit.
+
+    ENERGY PAIRING for the routed stream. The recycled atoms are booked at
+    the wall temperature exactly ONCE. This term's column ``nn`` row is what
+    the ``"wall"`` entry of the solver's neutral-energy routing table turns
+    into a ``(3/2) k T_wall`` column-``En`` credit, so moving the routed
+    particles off that row removes their credit with them -- which is
+    correct, because the annulus carries no energy field and the zone-exchange
+    convention re-supplies wall-temperature enthalpy when annulus gas re-enters
+    the column. Booking both would plant the same energy twice.
 
     ``Tn_presheath_eV``: optional PER-CELL neutral temperature [eV] for the
     presheath collisionality's ``T_eff``. ``None`` (the default, and every
@@ -378,6 +421,8 @@ def boundary_absorption_rhs(
     cells = roles.size
     dN_loss = np.zeros(cells, dtype=float)
     sonic_momentum = np.zeros(cells, dtype=float)
+    route_active = end_recycle_annulus_volume_cm3 is not None
+    dN_routed = np.zeros(cells, dtype=float) if route_active else None
     jet_active = cathode_jet is not None and state.M_n is not None
     jet_M_n = np.zeros(cells, dtype=float) if jet_active else None
     if jet_active:
@@ -430,6 +475,8 @@ def boundary_absorption_rhs(
         )
         dN_loss[live] += loss
         sonic_momentum[live] += ion_mass_g * outward * cs * loss
+        if route_active and roles[live] == "collector":
+            dN_routed[live] += loss
         if jet_active and roles[live] == "cathode":
             v_back = np.sqrt(
                 2.0
@@ -456,15 +503,26 @@ def boundary_absorption_rhs(
             )
     dN_loss *= float(b_surface_loss)
     sonic_momentum *= float(b_surface_loss)
+    if route_active:
+        dN_routed *= float(b_surface_loss)
     if jet_active:
         jet_M_n *= float(b_surface_loss)
 
     plasma_loss_rate = dN_loss / geometry.plasma_volume_cm3
     # Two-zone state: the cathode disc and collector are recycle faces and
-    # feed the COLUMN (the jet momentum stays chamber-mean on M_n).
+    # feed the COLUMN (the jet momentum stays chamber-mean on M_n). Under the
+    # end-recycle routing the collector's share is split off to the annulus
+    # instead; the column row is then the remainder, exactly zero on a cell
+    # whose only absorbing face is a collector one.
+    dN_column = dN_loss if not route_active else dN_loss - dN_routed
+    nn_a_row = (
+        None
+        if not route_active
+        else _annulus_deposit_row(dN_routed, end_recycle_annulus_volume_cm3)
+    )
     return ConservativeState1D(
         n=-plasma_loss_rate,
-        nn=dN_loss
+        nn=dN_column
         / (
             geometry.plasma_volume_cm3
             if state.nn_a is not None
@@ -474,6 +532,7 @@ def boundary_absorption_rhs(
         Ee=-1.5 * ev_to_erg * derived.Te * plasma_loss_rate,
         Ei=-1.5 * ev_to_erg * derived.Ti * plasma_loss_rate,
         M_n=jet_M_n,
+        nn_a=nn_a_row,
     )
 
 
@@ -493,6 +552,7 @@ def characteristic_boundary_rhs(
     wave_speed="isothermal",
     energy_consistent=False,
     sheath_energy_routing=False,
+    end_recycle_annulus_volume_cm3=None,
 ):
     """Return the R3.1 characteristic ghost-cell Bohm outflow at absorbing faces.
 
@@ -519,9 +579,15 @@ def characteristic_boundary_rhs(
     condition, not an addition to the reflecting wall pressure.
 
     The neutral return and the cathode jet are booked exactly as in
-    ``boundary_absorption_rhs``. The sheath-``phi`` -> electrode-surface power
-    routing and the circuit's read of the same ``n_se`` are the R3.2 control-
-    surface ledger, layered on top of this term. Default off; golden bit-exact.
+    ``boundary_absorption_rhs``, and so is the optional
+    ``end_recycle_annulus_volume_cm3`` routing of the COLLECTOR faces' recycle
+    stream into ``nn_a`` (including its energy pairing -- see that function's
+    docstring; cathode faces are untouched there too). ``None`` is every
+    historical caller and leaves this path unchanged bit for bit.
+
+    The sheath-``phi`` -> electrode-surface power routing and the circuit's
+    read of the same ``n_se`` are the R3.2 control-surface ledger, layered on
+    top of this term. Default off; golden bit-exact.
     """
     cells = geometry.cells
     zeros = np.zeros(cells, dtype=float)
@@ -547,6 +613,8 @@ def characteristic_boundary_rhs(
     d_Ee = np.zeros(cells, dtype=float)
     d_Ei = np.zeros(cells, dtype=float)
     loss_abs = np.zeros(cells, dtype=float)  # particles/s removed per cell
+    route_active = end_recycle_annulus_volume_cm3 is not None
+    routed_abs = np.zeros(cells, dtype=float) if route_active else None
 
     jet_active = cathode_jet is not None and state.M_n is not None
     jet_M_n = np.zeros(cells, dtype=float) if jet_active else None
@@ -650,6 +718,8 @@ def characteristic_boundary_rhs(
         # Particles/s leaving through this face (density sink-rate x cell volume).
         cell_loss = -scale * f_n * Vp[live]
         loss_abs[live] += cell_loss
+        if route_active and roles[live] == "collector":
+            routed_abs[live] += cell_loss
         if jet_active and roles[live] == "cathode":
             v_back = np.sqrt(
                 2.0
@@ -678,12 +748,17 @@ def characteristic_boundary_rhs(
     d_Ee *= scale_b
     d_Ei *= scale_b
     loss_abs *= scale_b
+    if route_active:
+        routed_abs *= scale_b
     if jet_active:
         jet_M_n *= scale_b
 
     # Neutral return: the absorbed plasma flux is rebirthed as neutrals on the
-    # column (two-zone) or chamber-mean volume, exactly as boundary_absorption.
-    nn_return = loss_abs / (
+    # column (two-zone) or chamber-mean volume, exactly as boundary_absorption
+    # -- and, under the end-recycle routing, the collector faces' share goes to
+    # the annulus instead, leaving the column row exactly zero there.
+    column_abs = loss_abs if not route_active else loss_abs - routed_abs
+    nn_return = column_abs / (
         geometry.plasma_volume_cm3
         if state.nn_a is not None
         else geometry.neutral_volume_cm3
@@ -695,6 +770,13 @@ def characteristic_boundary_rhs(
         Ee=d_Ee,
         Ei=d_Ei,
         M_n=jet_M_n,
+        nn_a=(
+            None
+            if not route_active
+            else _annulus_deposit_row(
+                routed_abs, end_recycle_annulus_volume_cm3
+            )
+        ),
     )
 
 

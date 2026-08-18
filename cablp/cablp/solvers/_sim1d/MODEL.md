@@ -1234,3 +1234,66 @@ The numerical method — the closed-form step, the charge ledger and its
 conservation statement, the single shared launch energy, the restart handling
 and the reported phase sequence — is `NUMERICS.md`, section "Vessel
 common-mode node".
+
+## End-region recycle routing (`end_recycle_to_annulus`, default off)
+
+**What it changes: where the end-recycled atoms are put, not how much plasma
+the end takes.** The plasma-terminating faces neutralize the flux that reaches
+them and rebirth it as gas. By default that gas is booked into the same cell's
+**column** — the plasma channel itself — at column density, which places the
+whole recycle stream directly in the path of the plasma it just left. Under
+this flag the faces whose live cell has the **collector** role instead deposit
+into that cell's **annulus**,
+
+$$\left.\frac{\partial n_{n,a}}{\partial t}\right|_\text{recycle}
+= \frac{\dot N_\text{loss}}{V_\text{ann}},
+\qquad V_\text{ann} = V_\text{m} - V_\text{p},$$
+
+as thermal diffuse gas, and their column row is correspondingly zero. The
+**cathode** faces are untouched — the ratified jet/debit closure owns them, and
+routing is a statement about the far end.
+
+The physical picture is the end region as a plenum the plasma terminates
+*into*, rather than a mirror that returns gas along the flux tube: an atom
+neutralized on a collector surface leaves it with a cosine-law thermal
+distribution into the whole end volume, not preferentially back down the
+column. What the column then receives is set by free-molecular re-entry —
+which the two-zone exchange conductance already computes — instead of being
+imposed as a delta function on the last cells.
+
+**Momentum.** The routed atoms carry none, on either $M_n$ or $M_{n,a}$. A
+diffuse thermal re-emission has no directed flux by construction, and the
+chamber-mean wind is left exactly as it was. The plasma-side rows — the density
+sink, the sonic momentum debit, and the $E_e$/$E_i$ sinks — are bit-identical
+to the unrouted term, on both discretizations.
+
+**Energy, booked exactly once.** The recycled atoms are wall-temperature gas,
+and the model has two places that could say so. The neutral-energy routing
+table classes both boundary terms as `"wall"` sources, which turns their
+**column** $n_n$ row into a $\tfrac32 k T_\text{wall}$ credit on the column
+$E_n$; and the zone-exchange convention re-supplies wall-temperature enthalpy
+whenever annulus gas re-enters the column. Under this flag the routed
+particles leave the column row, so the first credit leaves with them, and the
+second is the one that fires when the gas actually arrives. Booking both would
+plant the same energy twice. The annulus itself carries no energy field, so
+there is nothing to book there.
+
+**Conservation.** The routing is a transfer between two rows of one term: the
+volume-integrated rebirth rate $\sum_i (\dot n_{n,i} V_{\text{p},i} +
+\dot n_{n,a,i} V_{\text{ann},i})$ is unchanged by it, and the recycle
+throughput is conserved as before — nothing is created or destroyed, only
+placed.
+
+**What it refuses.** `neutral_two_zone`, since the destination row is that
+closure's; and any geometry whose routed collector cell has no annulus
+($V_\text{ann} = 0$), since the routing would then deposit into nothing. Both
+are construction-time errors rather than silent fallbacks — the alternative is
+a future end-region flare quietly destroying the stream at exactly the cells
+the closure exists to describe. (This is the one place the routing differs
+deliberately from the anode mesh, which falls back to the column in
+annulus-free cells: the anode's annulus is incidental, the collector's is the
+closure.)
+
+The flag applies to whichever plasma-terminating discretization the run
+configured — the R3.1 characteristic ghost-cell outflow or the volumetric
+absorber — and is bit-exact when off, on both.

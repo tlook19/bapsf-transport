@@ -2957,6 +2957,33 @@ input_flags_template_1d = {
     # constant counterpart). Off => single-field
     # chamber-mean nn.
     "neutral_two_zone": False,
+    # Route the END-REGION recycle stream into the annulus. The plasma-
+    # terminating faces whose live cell has the COLLECTOR role rebirth their
+    # absorbed flux as thermal diffuse gas in that cell's annulus row nn_a
+    # (dN_loss / V_ann) instead of in its column row nn; the CATHODE faces are
+    # untouched, so the ratified jet/debit closure over them is unchanged. The
+    # plasma-side rows (n, M, Ee, Ei and the sonic momentum debit) are
+    # unchanged either way -- this moves where the returning atoms land, not
+    # how much plasma the surface takes. The routed atoms carry NO directed
+    # momentum, on M_n or M_n_a: a diffuse thermal re-emission has none, and
+    # the chamber-mean wind is left alone.
+    #
+    # ENERGY. The recycled atoms are booked at the wall temperature exactly
+    # once. The routed stream leaves the column nn row, and with it the
+    # (3/2) k T_wall column-En credit the neutral-energy routing table grants
+    # every "wall" source; the annulus carries no energy field, and the
+    # zone-exchange convention already re-supplies wall-temperature enthalpy
+    # when annulus gas re-enters the column. Booking both would plant the same
+    # energy twice.
+    #
+    # Requires neutral_two_zone (the destination row must exist), and refuses
+    # any geometry whose routed collector cell has no annulus (V_ann = 0);
+    # both are construction-time ValueErrors. Default OFF and bit-exact off
+    # (presence-gated: the off path passes no annulus volume to either
+    # boundary term and adds no nn_a row). Applies to whichever of the two
+    # plasma-terminating discretizations the run configured --
+    # characteristic_boundary or the volumetric absorber.
+    "end_recycle_to_annulus": False,
     # Evolve the neutral thermal energy density En as an optional conservative
     # field, packed last, AND with it the decoupled two-channel neutral gas the
     # field only makes sense inside.

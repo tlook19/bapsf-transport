@@ -135,6 +135,18 @@ INERT_FLAG_KEYS = frozenset({
     "ion_neutral_thermalization", "ionization_energy_cost", "ncool",
     "source_surface_loss", "end_surface_loss", "raw_stage_validation",
     "debug_checks",
+    # end_recycle_to_annulus changes ONLY the two plasma-terminating boundary
+    # terms (boundary_absorption / characteristic_boundary), and an
+    # equilibration cannot reach either. run_neutral_equilibration pins
+    # Plasma=False on its inner sim, and with Plasma off rhs_terms takes the
+    # neutral-only branch, which returns _zero_rhs_state() for BOTH of those
+    # terms; the implicit neutral-only stepper that actually advances that
+    # phase assembles exchange, pump and puff alone and never calls them. No
+    # plasma => no boundary recycle => nothing for the routing to route. This
+    # is the same argument that already exempts characteristic_boundary above,
+    # and it is what keeps a default-config flag addition from rotating every
+    # cached seed in the database.
+    "end_recycle_to_annulus",
     # cache-control + equilibration-trigger flags (not seed content)
     "neutral_equilibration", "launch_plasma_after_equilibration",
     "use_cached_neutral_seed",
