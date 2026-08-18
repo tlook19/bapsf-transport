@@ -725,6 +725,15 @@ class LAPDSim1D:
             self._I_ion,
         ) = self._gas_constants(self._gas_type)
         self._geometry = build_geometry(self._input_dict, self._flags)
+        # Whether the plasma flux tube has a varying cross-section, and so
+        # whether the quasi-1D p*dA/dz momentum source that pairs with the
+        # area-weighted pressure flux must be built. The two ways to configure
+        # one refuse each other at geometry construction (core.geometry), so
+        # this is an either/or, and it is False on every uniform-column
+        # configuration -- including the golden, which pins both flags off.
+        self._variable_area_geometry = bool(
+            self._flags.get("end_expansion_geometry", False)
+        ) or bool(self._flags.get("prescribed_area_geometry", False))
         self._active_plasma_topology = bool(
             self._flags.get("active_plasma_topology", False)
         )
@@ -814,6 +823,7 @@ class LAPDSim1D:
             # radial exchange conductance, and the per-zone axial Knudsen
             # conductances are computed once here.
             self._zone_volumes = neutral_zone_volumes(self._geometry)
+            self._check_annulus_not_collapsed()
             self._zone_exchange_cm3_s = neutral_zone_exchange_conductance(
                 geometry=self._geometry,
                 Tn_K=float(self._input_dict.get("Tn_K", 300.0)),
@@ -4242,7 +4252,7 @@ class LAPDSim1D:
         # the gate readable instead of inferable.
         probe_terms = {}
         geometry_terms = {}
-        if self._flags.get("end_expansion_geometry", False):
+        if self._variable_area_geometry:
             geometry_terms["flux_tube_geometry"] = (
                 self._zero_rhs_state()
                 if not self._flags.get("Plasma", True)
@@ -11651,6 +11661,51 @@ class LAPDSim1D:
         self._derived = derive_state(self._state, self._floors, self._ion_mass_g)
         if self._flags.get("debug_checks", False):
             assert_finite_state(self._state, self._derived)
+
+    def _check_annulus_not_collapsed(self):
+        """Refuse a two-zone geometry whose annulus has collapsed to a sliver.
+
+        Reads ``neutral_annulus_volume_fraction_min`` and raises ``ValueError``
+        for any cell whose annulus EXISTS but holds less than that fraction of
+        the cell's neutral volume. ``0.0`` disables the check.
+
+        Cells with no annulus at all (``V_ann = 0`` exactly) are deliberately
+        exempt: every annulus consumer gates on ``V_ann > 0``, so an absent
+        zone is inert. The hazard is the zone that exists and is tiny, because
+        it is a DIVISOR and nothing gates on it -- the zone exchange and the
+        hot-channel deposit ``landed * Vp / V_ann`` both scale as ``1/V_ann``,
+        so a collapsing annulus does not switch off, it stiffens the step.
+        """
+        threshold = float(
+            self._input_dict.get("neutral_annulus_volume_fraction_min", 0.0)
+        )
+        if not np.isfinite(threshold) or not 0.0 <= threshold < 1.0:
+            raise ValueError(
+                "neutral_annulus_volume_fraction_min must be finite and in "
+                f"[0, 1) (got {threshold}); it is the minimum share of a "
+                "cell's neutral volume the annulus may hold, and 0 disables "
+                "the check"
+            )
+        if threshold <= 0.0 or self._zone_volumes is None:
+            return
+        V_ann = np.asarray(self._zone_volumes[1], dtype=float)
+        Vm = np.asarray(self._geometry.neutral_volume_cm3, dtype=float)
+        fraction = V_ann / Vm
+        collapsed = np.flatnonzero((V_ann > 0.0) & (fraction < threshold))
+        if collapsed.size:
+            worst = int(collapsed[np.argmin(fraction[collapsed])])
+            raise ValueError(
+                "the two-zone annulus has collapsed to a sliver in "
+                f"{collapsed.size} cell(s) {collapsed.tolist()}: the worst is "
+                f"cell {worst} at V_ann/V_neutral = {float(fraction[worst]):.3e}"
+                f" against neutral_annulus_volume_fraction_min={threshold:g} "
+                f"(V_ann = {float(V_ann[worst]):.6g} cm^3 inside "
+                f"{float(Vm[worst]):.6g} cm^3). The annulus row's sources "
+                "divide by that volume, so a vanishing zone stiffens the step "
+                "rather than switching off. Widen the vessel there, cap the "
+                "plasma area with plasma_area_max_vessel_fraction, or lower "
+                "the threshold deliberately"
+            )
 
     def _configure_neutral_initial_profile(self):
         """Build the shaped initial neutral fill, or ``None`` when off.

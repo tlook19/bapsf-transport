@@ -150,6 +150,82 @@ def geometry_defaults():
         cross-sectional area expands smoothly across the end region from
         ``Rp`` to this value. Setting it equal to ``Rp`` gives the
         vessel-only arm. Requires ``end_expansion_geometry``.
+    plasma_radius_profile_cm:
+        PER-CELL effective plasma flux-tube radius [cm]: a sequence with one
+        entry per MESH cell (``geometry.cells`` -- the plenum, gap, column and
+        end cells, not just the ``nx`` column cells), every entry finite and
+        ``> 0``. Read ONLY under the ``prescribed_area_geometry`` flag, and
+        REQUIRED by it; with the flag off it must be ``None`` or construction
+        raises.
+
+        It replaces the uniform scalar ``Rp`` cell by cell, so the plasma
+        cross-section is ``pi r(z)^2``, the cell volume ``pi r(z)^2 dz``, and
+        the face area the average of the two adjacent cells -- the same
+        expressions the uniform column uses, evaluated on a vector. A profile
+        holding ``Rp`` in every cell is therefore bit-identical to no profile
+        at all.
+
+        The quantity the flag prescribes is the AREA ``A(z)`` (the flux-tube
+        variable, ``A B = const``); the radius ``sqrt(A/pi)`` is how it is
+        supplied, because that parameterization is what makes the constant
+        profile exact rather than exact-to-a-rounding. Any conversion from a
+        solved ``B(z)`` happens outside the solver, which does no file I/O.
+
+        Supplied as VALUES, not as a shape: nothing rescales or normalizes
+        them, and no cell is masked by role. Every entry must satisfy
+        ``pi r^2 <= `` the local vessel open area, since the column zone
+        cannot be larger than the chamber holding it (the two-zone annulus
+        volume ``V_ann = Vm - Vp`` would go negative and be clipped to zero
+        silently). REFUSES ``end_expansion_geometry``: both prescribe the
+        end-block flux-tube area and there is no composition rule.
+    machine_radius_profile_cm:
+        PER-CELL vessel/neutral radius [cm], the same per-mesh-cell form and
+        the same finiteness/positivity rules as ``plasma_radius_profile_cm``.
+        Read ONLY under the ``prescribed_area_geometry`` flag, where it is
+        OPTIONAL: omitted, every cell keeps the scalar ``Rm`` exactly as
+        before. It replaces that scalar cell by cell, setting the neutral open
+        area ``pi Rm(z)^2``, the neutral cell volume, and the hydraulic radius
+        that sets the free-molecular face conductance -- so a vessel whose
+        bore STEPS partway along a cell block is expressible, which a single
+        ``Rm`` (or ``end_expansion_machine_radius_cm``, one value over the
+        whole terminal block) is not.
+
+        Composes with the annular-duct and support-rod reductions rather than
+        overriding them: an obstruction cell keeps its open area
+        ``pi (Rm(z)^2 - Rcs^2)`` and hydraulic radius ``Rm(z) - Rcs``, and a
+        plenum keeps ``pi (Rm(z)^2 - Rsup^2)``. Every entry must be ``>=`` the
+        local ``plasma_radius_profile_cm`` entry; the vessel cannot be
+        narrower than the plasma it contains.
+    plasma_area_max_vessel_fraction:
+        Optional ceiling on the prescribed plasma area as a fraction of the
+        local vessel open area, in ``(0, 1]``. ``None`` (the default) applies
+        no ceiling. Read ONLY under the ``prescribed_area_geometry`` flag.
+
+        When set, each cell's plasma area is clipped to
+        ``fraction * A_vessel(z)``. This is a DECLARED regularization, not a
+        geometry: its purpose is to keep the two-zone annulus a real volume
+        where a solved flux tube would otherwise fill the bore, since the
+        annulus row's sources divide by ``V_ann`` (the hot-channel deposit is
+        ``landed * Vp / V_ann``) and a sliver annulus makes those divisions
+        stiff. A configuration that sets it is stating that cap as part of its
+        closure. It binds before the vessel-area check, so in cells where it
+        binds the hard refusal cannot fire.
+    neutral_annulus_volume_fraction_min:
+        Minimum ``V_ann / V_neutral`` allowed in any cell that HAS an annulus,
+        under the ``neutral_two_zone`` closure [1]. Cells with no annulus at
+        all (``V_ann = 0`` exactly -- the plenum, and any cell the plasma
+        fills) are untouched: every annulus consumer already gates on
+        ``V_ann > 0``, so an absent zone is inert by construction.
+
+        What this refuses is the zone that EXISTS but has collapsed to a
+        sliver, which nothing gates on and which enters as a divisor: the
+        two-zone exchange and the hot-channel deposit both scale as
+        ``1 / V_ann``, so a vanishing annulus does not switch off, it
+        stiffens. Checked at construction against the built zone volumes and
+        raised as a ``ValueError`` naming the offending cells. ``0.0``
+        disables the check; the shipped value is far below any uniform-column
+        geometry (a straight ``Rp`` inside ``Rm`` leaves ~0.86) and far above
+        the collapse it exists to catch.
     neutral_baffle_positions_cm:
         Axial positions [cm] of optional thin annular baffles, measured from
         the cathode surface. A scalar or sequence is accepted. Requires the
@@ -186,6 +262,19 @@ def geometry_defaults():
         "end_expansion_cells": None,
         "end_expansion_machine_radius_cm": None,
         "end_expansion_plasma_radius_cm": None,
+        # Prescribed per-cell flux-tube and vessel radii, plus the optional
+        # area ceiling (prescribed_area_geometry flag). All None on every
+        # shipped configuration: a per-cell geometry has no default shape to
+        # inherit, and the flag's whole content is what the caller computed
+        # outside.
+        "plasma_radius_profile_cm": None,
+        "machine_radius_profile_cm": None,
+        "plasma_area_max_vessel_fraction": None,
+        # Two-zone sliver-annulus guard. Not presence-gated on the prescribed
+        # geometry: it constrains ANY two-zone geometry, and the shipped value
+        # is inert on every uniform column (which leaves ~0.86) while still an
+        # order of magnitude above a capped 0.95-of-bore flux tube (0.05).
+        "neutral_annulus_volume_fraction_min": 1.0e-2,
         "neutral_baffle_positions_cm": None,
         "neutral_baffle_clear_radii_cm": None,
         "source_region_length_cm": None,
@@ -2877,6 +2966,27 @@ input_flags_template_1d = {
     # all three end_expansion_* parameters are required when on and forbidden
     # when off. Bit-exact off.
     "end_expansion_geometry": False,
+    # Prescribed per-cell geometry: the plasma flux-tube area A(z), supplied
+    # as the radius vector plasma_radius_profile_cm (sqrt(A/pi)), and
+    # optionally the vessel bore as machine_radius_profile_cm. They replace
+    # the uniform scalars Rp and Rm cell by cell, so the cell volumes, the
+    # face areas, the neutral conductances and the two-zone annulus volume
+    # V_ann = Vm - Vp all follow the profiles; the quasi-1D
+    # flux_tube_geometry momentum source (the well-balanced p dA/dz mirror
+    # force paired with the area-weighted pressure flux) and the
+    # area-consistent d(Au)/dz pressure work in both energy equations come on
+    # with it. It exists because the built-in end_expansion_geometry flare is
+    # a half-cosine with zero slope at BOTH ends (which no solved convex B(z)
+    # has) applied against ONE vessel radius over the whole terminal block
+    # (which a stepped bore is not); the profiles are computed offline from
+    # the field and the machine drawing and passed in.
+    # Presence gated in core.geometry in both directions (the plasma profile
+    # is required when on and every profile key is forbidden when off) and
+    # REFUSED together with end_expansion_geometry -- two prescriptions of the
+    # same area with no composition rule. Default OFF and bit-exact off; a
+    # constant plasma profile at Rp with no vessel profile is bit-identical to
+    # it being off.
+    "prescribed_area_geometry": False,
     # Thin annular apertures. Positions and clear radii are required together
     # when on and forbidden when off; the plasma channel stays open.
     "neutral_baffles": False,

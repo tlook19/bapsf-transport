@@ -18009,6 +18009,576 @@ print(json.dumps({
                 f"a pre-fill time of {_eq_bad_t} s is off the map and must raise"
             )
 
+    # ---- pa: prescribed per-cell flux-tube / vessel geometry (default off) --
+    # The capability replaces the uniform scalars Rp and Rm with per-cell
+    # radius vectors computed OUTSIDE the solver, so the plasma areas, the cell
+    # volumes, the face areas, the neutral conductances and the two-zone
+    # annulus volume all follow a prescribed A(z) inside a prescribed bore; the
+    # quasi-1D mirror force and the area-consistent pressure work come on with
+    # it. Seven questions decide it: is the OFF path untouched, is a CONSTANT
+    # profile pair bit-identical to no profile at all, is the mirror force
+    # WELL-BALANCED (a static uniform-pressure plasma on a strongly varying
+    # A(z) generates exactly no momentum), do both energy equations see the
+    # same area, does a STEPPED bore land where it was asked to, do the
+    # sliver-annulus guard and its declared cap behave as stated, and does
+    # every misconfiguration raise.
+    def _pa_stance(**over):
+        params, flags = default_config()
+        params.update({
+            "nx": 12,
+            "dt_save": 0.0,
+            "phase_transition_mode": "scheduled",
+            "tau_neutral_prebreakdown": 0.0,
+            "tau_prebreakdown": 0.0,
+            "tau_breakdown": 0.0,
+            "tau_discharge": 1.0,
+            "tau_afterglow": 0.0,
+        })
+        # The cached equilibrated seed is keyed on the geometry (a prescribed
+        # profile re-keys it by design), so the comparison arms clear it and
+        # the identity below is about the profile alone.
+        flags["neutral_equilibration"] = False
+        params.update(over)
+        return params, flags
+
+    _pa_base_p, _pa_base_f = _pa_stance()
+    _pa_base_sim = LAPDSim1D(dict(_pa_base_p), dict(_pa_base_f))
+    _pa_geom0 = _pa_base_sim.geometry
+    _pa_cells = int(_pa_geom0.cells)
+    _pa_Rp = np.asarray(_pa_geom0.Rp_cm, dtype=float)
+    _pa_Rm = np.asarray(_pa_geom0.Rm_cm, dtype=float)
+
+    def _pa_raw(result):
+        return [
+            np.ascontiguousarray(y, dtype=float).view(np.uint64).tobytes()
+            for y in result.y
+        ]
+
+    # (a) PRESENCE GATE. With the flag off nothing is read, the column is the
+    # uniform pi*Rp^2 inside the uniform Rm, and the quasi-1D geometric
+    # momentum source is not even in the term ledger -- which is what keeps the
+    # golden bit-exact. Naming the new keys at their off values must also
+    # change nothing.
+    assert not _pa_base_sim._variable_area_geometry
+    assert "flux_tube_geometry" not in _pa_base_sim.rhs_terms()
+    assert np.array_equal(_pa_geom0.plasma_area_cm2, np.pi * _pa_Rp**2)
+    assert np.all(_pa_Rp == _pa_Rp[0]) and np.all(_pa_Rm == _pa_Rm[0])
+    _pa_base_result = LAPDSim1D(
+        dict(_pa_base_p), dict(_pa_base_f)
+    ).run(t_end=1.0e-6, dt=1.0e-7)
+    _pa_null_p, _pa_null_f = _pa_stance(
+        plasma_radius_profile_cm=None,
+        machine_radius_profile_cm=None,
+        plasma_area_max_vessel_fraction=None,
+    )
+    _pa_null_f["prescribed_area_geometry"] = False
+    _pa_null_result = LAPDSim1D(
+        _pa_null_p, _pa_null_f
+    ).run(t_end=1.0e-6, dt=1.0e-7)
+    assert _pa_base_result.steps == _pa_null_result.steps > 0, (
+        _pa_base_result.steps, _pa_null_result.steps
+    )
+    assert _pa_raw(_pa_base_result) == _pa_raw(_pa_null_result)
+
+    # (b) THE TRIVIAL-PROFILE IDENTITY. Profiles holding the geometry's own
+    # uniform Rp and Rm in every cell reproduce the no-profile run at the RAW
+    # BIT level: each area is rebuilt with the same pi*R**2 expression the
+    # uniform path uses, so the two reach the state through identical
+    # arithmetic, and the geometric source the flag switches on is identically
+    # +0.0, which cannot perturb the term sum. This is why the parameters are
+    # RADII and not areas -- pi*r^2 does not round-trip through sqrt(A/pi) for
+    # every r (18.415 does, 3.7 does not), so an area vector could only claim
+    # the identity for lucky values. A ceiling that never binds is part of the
+    # identity too: it re-derives nothing where it does not clip.
+    _pa_flat_p, _pa_flat_f = _pa_stance(
+        plasma_radius_profile_cm=_pa_Rp.tolist(),
+        machine_radius_profile_cm=_pa_Rm.tolist(),
+        plasma_area_max_vessel_fraction=1.0,
+    )
+    _pa_flat_f["prescribed_area_geometry"] = True
+    _pa_flat_sim = LAPDSim1D(dict(_pa_flat_p), dict(_pa_flat_f))
+    assert _pa_flat_sim._variable_area_geometry
+    _pa_flat_terms = _pa_flat_sim.rhs_terms()
+    assert "flux_tube_geometry" in _pa_flat_terms
+    assert np.array_equal(
+        _pa_flat_terms["flux_tube_geometry"].M, np.zeros(_pa_cells)
+    )
+    for _pa_field in (
+        "Rp_cm", "Rm_cm", "plasma_area_cm2", "neutral_area_cm2",
+        "plasma_volume_cm3", "neutral_volume_cm3", "volume_ratio",
+        "plasma_face_area_cm2", "neutral_face_area_cm2",
+        "neutral_hydraulic_radius_cm", "neutral_face_hydraulic_radius_cm",
+    ):
+        assert np.array_equal(
+            np.asarray(getattr(_pa_flat_sim.geometry, _pa_field), dtype=float),
+            np.asarray(getattr(_pa_geom0, _pa_field), dtype=float),
+        ), _pa_field
+    _pa_flat_result = LAPDSim1D(
+        dict(_pa_flat_p), dict(_pa_flat_f)
+    ).run(t_end=1.0e-6, dt=1.0e-7)
+    assert _pa_raw(_pa_base_result) == _pa_raw(_pa_flat_result), (
+        "a constant plasma_radius_profile_cm at Rp must be bit-identical to "
+        "the uniform column"
+    )
+    # ...and the identity survives the duct and support-rod reductions, which
+    # were rewritten against the per-cell bore to let a vessel profile compose
+    # with them. Same values, same arithmetic, so same bytes.
+    _pa_duct_p, _pa_duct_f = _pa_stance(Rcs=40.0, Lcs=25.0, Rsup=10.0)
+    _pa_duct_geom = LAPDSim1D(
+        dict(_pa_duct_p), dict(_pa_duct_f)
+    ).geometry
+    assert "obstruction" in set(_pa_duct_geom.cell_role)
+    _pa_duct_flat_p, _pa_duct_flat_f = _pa_stance(
+        Rcs=40.0,
+        Lcs=25.0,
+        Rsup=10.0,
+        plasma_radius_profile_cm=np.asarray(
+            _pa_duct_geom.Rp_cm, dtype=float
+        ).tolist(),
+        machine_radius_profile_cm=np.asarray(
+            _pa_duct_geom.Rm_cm, dtype=float
+        ).tolist(),
+    )
+    _pa_duct_flat_f["prescribed_area_geometry"] = True
+    _pa_duct_flat_geom = LAPDSim1D(
+        _pa_duct_flat_p, _pa_duct_flat_f
+    ).geometry
+    for _pa_field in (
+        "neutral_area_cm2", "neutral_volume_cm3",
+        "neutral_hydraulic_radius_cm", "neutral_face_area_cm2",
+        "neutral_face_hydraulic_radius_cm", "volume_ratio",
+    ):
+        assert np.array_equal(
+            np.asarray(getattr(_pa_duct_flat_geom, _pa_field), dtype=float),
+            np.asarray(getattr(_pa_duct_geom, _pa_field), dtype=float),
+        ), _pa_field
+
+    # (b2) A STEPPED BORE. The point of the vessel vector: the machine radius
+    # can change PART WAY along a block of cells, which neither the scalar Rm
+    # nor end_expansion_machine_radius_cm (one value over the whole terminal
+    # block) can express. The step lands exactly where it was asked to, the
+    # open area and hydraulic radius follow it, and the neutral FACE at the
+    # step stays a restricting aperture -- the narrow side, as at any other
+    # change of bore.
+    _pa_step_Rm = _pa_Rm.copy()
+    _pa_step_Rm[-3:] = 76.2
+    _pa_step_p, _pa_step_f = _pa_stance(
+        plasma_radius_profile_cm=_pa_Rp.tolist(),
+        machine_radius_profile_cm=_pa_step_Rm.tolist(),
+    )
+    _pa_step_f["prescribed_area_geometry"] = True
+    _pa_step_geom = LAPDSim1D(_pa_step_p, _pa_step_f).geometry
+    assert np.array_equal(
+        np.asarray(_pa_step_geom.Rm_cm, dtype=float), _pa_step_Rm
+    )
+    assert np.array_equal(
+        np.asarray(_pa_step_geom.neutral_area_cm2, dtype=float),
+        np.pi * _pa_step_Rm**2,
+    )
+    assert np.array_equal(
+        np.asarray(_pa_step_geom.neutral_hydraulic_radius_cm, dtype=float),
+        _pa_step_Rm,
+    )
+    assert np.isclose(
+        float(_pa_step_geom.neutral_face_area_cm2[_pa_cells - 3]),
+        np.pi * float(_pa_Rm[0]) ** 2,
+    ), "the face at a bore step must restrict to the narrow side"
+    # The plasma is untouched by a vessel-only change.
+    assert np.array_equal(
+        np.asarray(_pa_step_geom.plasma_area_cm2, dtype=float),
+        np.asarray(_pa_geom0.plasma_area_cm2, dtype=float),
+    )
+
+    # (b3) THE SLIVER-ANNULUS GUARD and its declared cap. A flux tube that
+    # nearly fills the bore leaves an annulus that is positive -- so every
+    # `V_ann > 0` gate in the annulus consumers passes -- yet tiny, and V_ann
+    # is a DIVISOR (the zone exchange and the hot-channel deposit both scale
+    # as 1/V_ann). The guard refuses that geometry at construction; the
+    # declared area ceiling is the way to run it anyway, and it binds before
+    # the sign refusal so a capped configuration cannot also trip that error.
+    _pa_tight_rp = _pa_Rp.copy()
+    _pa_tight_rp[-3:] = 76.17
+    _pa_tight_Rm = _pa_Rm.copy()
+    _pa_tight_Rm[-3:] = 76.2
+    _pa_tight_p, _pa_tight_f = _pa_stance(
+        plasma_radius_profile_cm=_pa_tight_rp.tolist(),
+        machine_radius_profile_cm=_pa_tight_Rm.tolist(),
+        neutral_exchange_model="knudsen",
+    )
+    _pa_tight_f["prescribed_area_geometry"] = True
+    _pa_tight_f["neutral_two_zone"] = True
+    try:
+        LAPDSim1D(dict(_pa_tight_p), dict(_pa_tight_f))
+    except ValueError as _pa_exc:
+        assert "collapsed to a sliver" in str(_pa_exc), str(_pa_exc)
+    else:
+        raise AssertionError("a collapsed two-zone annulus must be refused")
+    # Without the two-zone closure there is no annulus row to stiffen, so the
+    # same geometry is legal -- the guard is a property of the closure.
+    _pa_tight_single_f = dict(_pa_tight_f)
+    _pa_tight_single_f["neutral_two_zone"] = False
+    LAPDSim1D(dict(_pa_tight_p), _pa_tight_single_f)
+    # The declared ceiling makes the two-zone case legal, at exactly the
+    # stated fraction of the local vessel area.
+    _pa_cap_p = dict(_pa_tight_p)
+    _pa_cap_p["plasma_area_max_vessel_fraction"] = 0.95
+    _pa_cap_geom = LAPDSim1D(_pa_cap_p, dict(_pa_tight_f)).geometry
+    _pa_cap_ratio = (
+        np.asarray(_pa_cap_geom.plasma_area_cm2, dtype=float)
+        / np.asarray(_pa_cap_geom.neutral_area_cm2, dtype=float)
+    )
+    assert np.allclose(_pa_cap_ratio[-3:], 0.95, rtol=0.0, atol=1e-15)
+    assert np.all(_pa_cap_ratio <= 0.95 + 1e-15)
+    # ...and it leaves the cells it does not bind on exactly as supplied.
+    assert np.array_equal(
+        np.asarray(_pa_cap_geom.Rp_cm, dtype=float)[:-3], _pa_tight_rp[:-3]
+    )
+    _pa_cap_Vc, _pa_cap_Va = neutral_zone_volumes(_pa_cap_geom)
+    assert np.allclose(
+        (_pa_cap_Va / np.asarray(_pa_cap_geom.neutral_volume_cm3,
+                                 dtype=float))[-3:],
+        0.05,
+        rtol=1e-12,
+        atol=0.0,
+    )
+    # Cells with NO annulus at all are exempt: an absent zone is inert,
+    # because every consumer already gates on V_ann > 0.
+    _pa_full_rp = _pa_Rp.copy()
+    _pa_full_rp[-3:] = float(_pa_Rm[0])
+    _pa_full_p, _pa_full_f = _pa_stance(
+        plasma_radius_profile_cm=_pa_full_rp.tolist(),
+        neutral_exchange_model="knudsen",
+    )
+    _pa_full_f["prescribed_area_geometry"] = True
+    _pa_full_f["neutral_two_zone"] = True
+    _pa_full_sim = LAPDSim1D(_pa_full_p, _pa_full_f)
+    assert np.all(neutral_zone_volumes(_pa_full_sim.geometry)[1][-3:] == 0.0)
+
+    # (c) WELL-BALANCEDNESS -- the load-bearing property of the mirror force.
+    # On a strongly varying A(z) a static uniform-pressure plasma must generate
+    # EXACTLY no momentum: the quasi-1D p*dA/dz source is written with the same
+    # multiply-then-subtract ordering as the area-weighted pressure flux it
+    # pairs with, so the cancellation is bit-exact rather than merely
+    # algebraic. The carve-out is the two plasma-TERMINATING live cells, where
+    # the characteristic ghost-cell outflow (a term not summed here) carries
+    # the face momentum instead of a reflecting wall pressure -- the same
+    # carve-out the end_expansion block above makes.
+    _pa_col = np.flatnonzero(
+        np.isin(
+            _pa_geom0.cell_role, np.asarray(["puff", "column"], dtype=object)
+        )
+    )
+    assert _pa_col.size >= 8
+    _pa_flare = _pa_Rp.copy()
+    _pa_flare[_pa_col] = _pa_Rp[_pa_col] * (
+        1.0 + 0.8 * np.sin(np.linspace(0.3, 3.0, _pa_col.size)) ** 2
+    )
+    _pa_var_p, _pa_var_f = _pa_stance(
+        plasma_radius_profile_cm=_pa_flare.tolist()
+    )
+    _pa_var_f["prescribed_area_geometry"] = True
+    _pa_var_sim = LAPDSim1D(dict(_pa_var_p), dict(_pa_var_f))
+    _pa_var_geom = _pa_var_sim.geometry
+    assert np.array_equal(_pa_var_geom.Rp_cm, _pa_flare)
+    assert np.array_equal(_pa_var_geom.plasma_area_cm2, np.pi * _pa_flare**2)
+    assert np.array_equal(
+        _pa_var_geom.plasma_volume_cm3,
+        np.pi * _pa_flare**2 * np.asarray(_pa_geom0.length_cm, dtype=float),
+    )
+    _pa_var_area = np.asarray(_pa_var_geom.plasma_area_cm2, dtype=float)
+    assert float(np.ptp(_pa_var_area[_pa_col])) > 0.5 * float(
+        np.max(_pa_var_area[_pa_col])
+    ), "the synthetic flare must actually vary strongly"
+
+    _pa_static = conservative_from_primitives(
+        n=np.full(_pa_cells, 1.0e12),
+        nn=np.full(_pa_cells, 1.0e12),
+        u=np.zeros(_pa_cells),
+        Te=np.full(_pa_cells, 2.0),
+        Ti=np.full(_pa_cells, 1.0),
+        ion_mass_g=_pa_var_sim.ion_mass_g,
+    )
+    _pa_adv = _pa_var_sim.plasma_flux_rhs_terms(
+        state=_pa_static, include_front=False
+    )["plasma_advective_flux"]
+    _pa_geo = _pa_var_sim.flux_tube_geometry_rhs(state=_pa_static)
+    _pa_terminating = sorted({
+        int(cell)
+        for cells in absorbing_live_cells_by_role(_pa_var_geom).values()
+        for cell in cells
+    })
+    assert _pa_terminating, "the machine must have plasma-terminating faces"
+    _pa_balanced = np.setdiff1d(np.arange(_pa_cells), _pa_terminating)
+    assert set(_pa_col.tolist()) <= set(_pa_balanced.tolist())
+    assert np.array_equal(
+        (_pa_adv.M + _pa_geo.M)[_pa_balanced], np.zeros(_pa_balanced.size)
+    ), "the mirror force is not well-balanced on a varying A(z)"
+    # The source is momentum ONLY, and it is genuinely doing something: a
+    # uniform column makes it vanish, so the flare is what is being measured
+    # rather than an accident of the cancellation.
+    for _pa_row in (_pa_geo.n, _pa_geo.nn, _pa_geo.Ee, _pa_geo.Ei):
+        assert np.array_equal(np.asarray(_pa_row, dtype=float),
+                              np.zeros(_pa_cells))
+    assert np.any(_pa_geo.M[_pa_col] != 0.0)
+
+    # (d) BOTH ENERGY EQUATIONS SEE THE SAME AREA. The pressure work is
+    # -p_s * div u with div u the FACE-AREA-weighted d(Au)/dz / V, so a uniform
+    # drift through the flare does expansion work on electrons and ions alike.
+    # Checked against the closed form and against both rows.
+    _pa_u0 = 3.0e5
+    _pa_drift = conservative_from_primitives(
+        n=np.full(_pa_cells, 1.0e12),
+        nn=np.full(_pa_cells, 1.0e12),
+        u=np.full(_pa_cells, _pa_u0),
+        Te=np.full(_pa_cells, 2.0),
+        Ti=np.full(_pa_cells, 1.0),
+        ion_mass_g=_pa_var_sim.ion_mass_g,
+    )
+    _pa_divu = velocity_divergence(
+        _pa_drift,
+        _pa_var_sim.floors,
+        _pa_var_sim.ion_mass_g,
+        _pa_var_geom,
+        active_plasma_topology=_pa_var_sim._active_plasma_topology,
+    )
+    _pa_face_A = np.asarray(_pa_var_geom.plasma_face_area_cm2, dtype=float)
+    _pa_want_divu = (
+        _pa_u0 * (_pa_face_A[1:] - _pa_face_A[:-1])
+    ) / np.asarray(_pa_var_geom.plasma_volume_cm3, dtype=float)
+    assert np.allclose(
+        _pa_divu[_pa_col], _pa_want_divu[_pa_col], rtol=1e-12, atol=0.0
+    )
+    assert np.any(np.abs(_pa_divu[_pa_col]) > 0.0)
+    _pa_pw = _pa_var_sim.pressure_work_rhs(state=_pa_drift)
+    _pa_derived = derive_state(
+        _pa_drift, _pa_var_sim.floors, _pa_var_sim.ion_mass_g
+    )
+    assert np.array_equal(_pa_pw.Ee, -_pa_derived.pe * _pa_divu)
+    assert np.array_equal(_pa_pw.Ei, -_pa_derived.pi * _pa_divu)
+    assert np.any(_pa_pw.Ee[_pa_col] != 0.0)
+    assert np.any(_pa_pw.Ei[_pa_col] != 0.0)
+
+    # (e) CONSERVATION UNDER A VARYING AREA. The area-weighted face inventory
+    # and the cell volume are the same pairing, so the advective flux still
+    # telescopes exactly across the closed domain; the reaction terms still
+    # close in the volume-integrated inventory (their Vp/Vm conversion follows
+    # the profile); the two-zone volumes still partition the chamber cell by
+    # cell with V_ann > 0 everywhere the plasma does not fill it, and the zone
+    # exchange conserves what it moves; and a stepped run stays finite.
+    _pa_var_Vp = np.asarray(_pa_var_geom.plasma_volume_cm3, dtype=float)
+    assert math.fsum((_pa_adv.n * _pa_var_Vp).tolist()) == 0.0
+    _pa_react_terms = _pa_var_sim.reaction_rhs_terms(state=_pa_static)
+    for _pa_name, _pa_term in _pa_react_terms.items():
+        _pa_scale = float(
+            np.sum(np.abs(_pa_term.n * _pa_var_Vp))
+            + np.sum(np.abs(_pa_term.nn * _pa_var_geom.neutral_volume_cm3))
+        )
+        assert abs(
+            particle_inventory_rate(_pa_term, _pa_var_geom)
+        ) <= 1e-12 * _pa_scale, _pa_name
+
+    _pa_tz_p, _pa_tz_f = _pa_stance(
+        plasma_radius_profile_cm=_pa_flare.tolist(),
+        neutral_exchange_model="knudsen",
+    )
+    _pa_tz_f["prescribed_area_geometry"] = True
+    _pa_tz_f["neutral_two_zone"] = True
+    _pa_tz_sim = LAPDSim1D(_pa_tz_p, _pa_tz_f)
+    _pa_Vc, _pa_Va = neutral_zone_volumes(_pa_tz_sim.geometry)
+    assert np.array_equal(
+        _pa_Vc, np.asarray(_pa_tz_sim.geometry.plasma_volume_cm3, dtype=float)
+    )
+    assert np.all(_pa_Va > 0.0)
+    assert np.allclose(
+        _pa_Vc + _pa_Va,
+        np.asarray(_pa_tz_sim.geometry.neutral_volume_cm3, dtype=float),
+        rtol=1e-14,
+        atol=0.0,
+    )
+    _pa_tz_state = _pa_tz_sim.state
+    _pa_tz_nn = _pa_tz_state.nn.copy()
+    _pa_tz_nn[_pa_col] *= 0.5
+    _pa_tz_pert = ConservativeState1D(
+        _pa_tz_state.n,
+        _pa_tz_nn,
+        _pa_tz_state.M,
+        _pa_tz_state.Ee,
+        _pa_tz_state.Ei,
+        nn_a=_pa_tz_state.nn_a.copy(),
+    )
+    _pa_zx = _pa_tz_sim.neutral_zone_exchange_rhs(state=_pa_tz_pert)
+    assert np.any(_pa_zx.nn[_pa_col] > 0.0)
+    assert abs(
+        float((_pa_zx.nn * _pa_Vc + _pa_zx.nn_a * _pa_Va).sum())
+    ) <= 1e-12 * float(np.abs(_pa_zx.nn * _pa_Vc).max())
+    _pa_var_result = LAPDSim1D(
+        dict(_pa_var_p), dict(_pa_var_f)
+    ).run(t_end=1.0e-6, dt=1.0e-7)
+    assert _pa_var_result.steps > 0
+    assert all(np.all(np.isfinite(_pa_y)) for _pa_y in _pa_var_result.y)
+    assert _pa_raw(_pa_var_result) != _pa_raw(_pa_base_result), (
+        "a strongly varying flux tube that changes nothing would mean the "
+        "profile never reached the solver"
+    )
+
+    # (f) EVERY MISCONFIGURATION RAISES, at construction.
+    def _pa_refuses(label, params_over=None, flags_over=None, expected=None):
+        params, flags = _pa_stance(
+            plasma_radius_profile_cm=_pa_flare.tolist()
+        )
+        flags["prescribed_area_geometry"] = True
+        params.update(params_over or {})
+        flags.update(flags_over or {})
+        try:
+            LAPDSim1D(params, flags)
+        except ValueError as exc:
+            if expected is not None:
+                assert expected in str(exc), (label, str(exc))
+            return
+        raise AssertionError(f"prescribed_area_geometry must refuse: {label}")
+
+    _pa_refuses(
+        "a profile shorter than the mesh",
+        params_over={"plasma_radius_profile_cm": _pa_flare[:-1].tolist()},
+        expected="one entry per MESH cell",
+    )
+    _pa_refuses(
+        "a profile the length of nx rather than of the mesh",
+        params_over={"plasma_radius_profile_cm": [18.415] * 12},
+        expected="one entry per MESH cell",
+    )
+    _pa_refuses(
+        "a non-finite entry",
+        params_over={
+            "plasma_radius_profile_cm": _pa_flare[:-1].tolist() + [float("nan")]
+        },
+        expected="must be finite",
+    )
+    for _pa_bad in (0.0, -1.0):
+        _pa_refuses(
+            f"a non-positive entry ({_pa_bad}): a zero-area cell divides the "
+            "flux divergence by a zero volume",
+            params_over={
+                "plasma_radius_profile_cm": _pa_flare[:-1].tolist() + [_pa_bad]
+            },
+            expected="must be > 0",
+        )
+    _pa_refuses(
+        "an empty profile",
+        params_over={"plasma_radius_profile_cm": []},
+        expected="non-empty",
+    )
+    _pa_refuses(
+        "a radius past the vessel WALL",
+        params_over={
+            "plasma_radius_profile_cm": (
+                _pa_flare[:-1].tolist()
+                + [float(_pa_base_p["Rm"]) + 1.0]
+            )
+        },
+        expected="narrower than",
+    )
+    # The OPEN area is the binding one where a duct blocks part of the bore:
+    # a plasma inside Rm can still be wider than the annular gap around the
+    # cathode structure, and that is what would drive V_ann negative.
+    _pa_duct_refuse_p, _pa_duct_refuse_f = _pa_stance(
+        Rcs=40.0,
+        Lcs=25.0,
+        plasma_radius_profile_cm=np.full(_pa_cells + 1, 45.0).tolist(),
+    )
+    _pa_duct_refuse_f["prescribed_area_geometry"] = True
+    try:
+        LAPDSim1D(_pa_duct_refuse_p, _pa_duct_refuse_f)
+    except ValueError as _pa_exc:
+        assert "exceeds the local vessel open area" in str(_pa_exc), str(_pa_exc)
+    else:
+        raise AssertionError(
+            "a plasma wider than a duct's open area must be refused"
+        )
+    _pa_refuses(
+        "the flag armed with no profile at all",
+        params_over={"plasma_radius_profile_cm": None},
+        expected="requires plasma_radius_profile_cm",
+    )
+    _pa_refuses(
+        "the built-in half-cosine flare configured alongside it -- two "
+        "prescriptions of the same area with no composition rule",
+        params_over={
+            "Lm": 2125.85,
+            "collector_length_cm": 150.0,
+            "end_expansion_cells": 10,
+            "end_expansion_machine_radius_cm": 100.0,
+            "end_expansion_plasma_radius_cm": 50.0,
+        },
+        flags_over={"end_expansion_geometry": True},
+        expected="cannot be combined with end_expansion_geometry",
+    )
+    # The vessel profile's own bad values, and the pair's consistency.
+    _pa_refuses(
+        "a vessel profile shorter than the mesh",
+        params_over={"machine_radius_profile_cm": _pa_Rm[:-1].tolist()},
+        expected="one entry per MESH cell",
+    )
+    _pa_refuses(
+        "a non-positive vessel radius",
+        params_over={
+            "machine_radius_profile_cm": _pa_Rm[:-1].tolist() + [0.0]
+        },
+        expected="must be > 0",
+    )
+    _pa_refuses(
+        "a non-finite vessel radius",
+        params_over={
+            "machine_radius_profile_cm": _pa_Rm[:-1].tolist() + [float("inf")]
+        },
+        expected="must be finite",
+    )
+    _pa_refuses(
+        "a vessel narrower than the plasma it contains",
+        params_over={
+            "machine_radius_profile_cm": (
+                _pa_Rm[:-1].tolist() + [float(_pa_flare[-1]) * 0.5]
+            )
+        },
+        expected="narrower than",
+    )
+    for _pa_bad_cap in (0.0, -0.5, 1.5, float("nan")):
+        _pa_refuses(
+            f"an area ceiling outside (0, 1] ({_pa_bad_cap})",
+            params_over={"plasma_area_max_vessel_fraction": _pa_bad_cap},
+            expected="plasma_area_max_vessel_fraction must be finite and in",
+        )
+    for _pa_bad_thr in (-0.1, 1.0, 2.0, float("nan")):
+        _pa_refuses(
+            f"an annulus-fraction threshold outside [0, 1) ({_pa_bad_thr})",
+            params_over={
+                "neutral_annulus_volume_fraction_min": _pa_bad_thr,
+                "neutral_exchange_model": "knudsen",
+            },
+            flags_over={"neutral_two_zone": True},
+            expected="neutral_annulus_volume_fraction_min must be finite",
+        )
+    # ...and the presence gate the other way: ANY of the three parameters set
+    # with the flag off is inert, so it raises rather than silently running the
+    # uniform column inside the scalar bore.
+    for _pa_off_key, _pa_off_value in (
+        ("plasma_radius_profile_cm", _pa_flare.tolist()),
+        ("machine_radius_profile_cm", _pa_Rm.tolist()),
+        ("plasma_area_max_vessel_fraction", 0.95),
+    ):
+        _pa_off_p, _pa_off_f = _pa_stance(**{_pa_off_key: _pa_off_value})
+        try:
+            LAPDSim1D(_pa_off_p, _pa_off_f)
+        except ValueError as _pa_exc:
+            assert "require the default-off prescribed_area_geometry flag" in (
+                str(_pa_exc)
+            ), str(_pa_exc)
+            assert _pa_off_key in str(_pa_exc), str(_pa_exc)
+        else:
+            raise AssertionError(
+                f"{_pa_off_key} must be refused with the flag off"
+            )
+
     # ---- the registered constants are exactly the registered constants ----
     # A key added to the wrong namespace silently does nothing (input_dict and
     # input_flags validate neither), so the split is asserted here.
@@ -18044,6 +18614,61 @@ print(json.dumps({
     assert _r2_reg_f["neutral_initial_profile"] is False, (
         "neutral_initial_profile must ship OFF"
     )
+    for _key in (
+        "plasma_radius_profile_cm",
+        "machine_radius_profile_cm",
+        "plasma_area_max_vessel_fraction",
+        "neutral_annulus_volume_fraction_min",
+    ):
+        assert _key in _r2_reg_p and _key not in _r2_reg_f, _key
+    for _key in (
+        "plasma_radius_profile_cm",
+        "machine_radius_profile_cm",
+        "plasma_area_max_vessel_fraction",
+    ):
+        assert _r2_reg_p[_key] is None, "a per-cell geometry ships no shape"
+    # The sliver guard is the one key here that is NOT presence-gated on the
+    # flag -- it constrains any two-zone geometry -- so it ships a value, and
+    # that value must be inert on a straight column (which leaves ~0.86) while
+    # still above a capped 0.95-of-bore flux tube (0.05).
+    assert 0.0 < _r2_reg_p["neutral_annulus_volume_fraction_min"] < 0.05
+    assert (
+        "prescribed_area_geometry" in _r2_reg_f
+        and "prescribed_area_geometry" not in _r2_reg_p
+    )
+    assert _r2_reg_f["prescribed_area_geometry"] is False, (
+        "prescribed_area_geometry must ship OFF"
+    )
+    # The prescribed profiles change the GEOMETRY, so they must re-key the
+    # equilibrated neutral seed: no key may sit on the seed cache's inert
+    # allowlists (the fail-closed rule -- a key leaves the hash only when it
+    # provably cannot reach an equilibration, and Vp / V_ann / the zone
+    # exchange conductance all can).
+    from cablp.solvers._sim1d.core import neutral_seed_cache as _seed_cache_mod
+
+    for _key in (
+        "plasma_radius_profile_cm",
+        "machine_radius_profile_cm",
+        "plasma_area_max_vessel_fraction",
+        "neutral_annulus_volume_fraction_min",
+    ):
+        assert _key not in _seed_cache_mod.INERT_PARAM_KEYS, _key
+    assert "prescribed_area_geometry" not in _seed_cache_mod.INERT_FLAG_KEYS
+    _pa_sig_p, _pa_sig_f = default_config()
+    _pa_sig_flare_f = dict(_pa_sig_f)
+    _pa_sig_flare_f["prescribed_area_geometry"] = True
+    for _key, _value in (
+        ("plasma_radius_profile_cm", [18.415] * 3),
+        ("machine_radius_profile_cm", [50.0] * 3),
+        ("plasma_area_max_vessel_fraction", 0.95),
+    ):
+        _pa_sig_flare_p = dict(_pa_sig_p)
+        _pa_sig_flare_p[_key] = _value
+        assert _seed_cache_mod.neutral_seed_signature(
+            _pa_sig_p, _pa_sig_f
+        ) != _seed_cache_mod.neutral_seed_signature(
+            _pa_sig_flare_p, _pa_sig_flare_f
+        ), f"{_key} must invalidate a cached neutral seed"
 
     print(
         "sim1d smoke ok: "
