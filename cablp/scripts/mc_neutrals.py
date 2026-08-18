@@ -244,6 +244,19 @@ def load_background(path, window_ms):
             ) / Vm_sel
         Vm_full = g["neutral_volume_cm3"][:]
         Vp_full = g["plasma_volume_cm3"][:]
+        # VOLUME CONVENTION of the neutral ledger, which the two-zone closure
+        # changes wholesale and per-term-row presence does NOT report. On a
+        # single-zone run every term's nn row is a chamber-mean density rate
+        # and integrates on Vm. On a two-zone run (the state carries nn_a) the
+        # nn row is the COLUMN density rate and integrates on Vp, while
+        # whatever the term books into the annulus lives in its own nn_a row
+        # on Vm - Vp. The stance is a property of the STATE, so it is read
+        # from the state dataset: a two-zone run whose term books nothing into
+        # the annulus -- or which predates the per-term annulus rows -- still
+        # has its nn row on Vp, and keying the convention off the per-term row
+        # would silently restore the Vm over-count there.
+        two_zone = "nn_a" in f
+        Va_full = np.maximum(Vm_full - Vp_full, 0.0)
         # The boundary row is stance-dependent (see boundary_recycle_row).
         row, stance = boundary_recycle_row(f)
         # Plasma removal as booked by EITHER row: the guard's reference, so a
@@ -270,7 +283,49 @@ def load_background(path, window_ms):
             ba = ba_col * Vm_full
         else:
             ba = ba_col * Vp_full + ba_ann * np.maximum(Vm_full - Vp_full, 0.0)
-        an = np.mean(f["rhs_terms/anode_collection/nn"][:][m], axis=0) * Vm_full
+        # Volume-integrated anode-mesh collection, both zones each on its OWN
+        # volume. Under neutral_two_zone the mesh feeds the ANNULUS wherever
+        # there is one (physics/sources.anode_collection_rhs), so the column
+        # row is identically zero on every cell flanking the mesh and the old
+        # nn * Vm read returned EXACTLY ZERO on every two-zone background --
+        # the same defect the two-zone puff had, one term over, and worse,
+        # because a vanished channel simply drops out of the menu without a
+        # ratio to notice.
+        an_col = np.mean(f["rhs_terms/anode_collection/nn"][:][m], axis=0)
+        an_ann = None
+        if "rhs_terms/anode_collection/nn_a" in f:
+            an_ann = np.mean(
+                f["rhs_terms/anode_collection/nn_a"][:][m], axis=0
+            )
+        an_provenance = None
+        if not two_zone:
+            an = an_col * Vm_full
+        elif an_ann is not None:
+            an = an_col * Vp_full + an_ann * Va_full
+        else:
+            # July-era two-zone artifact, saved before the per-term annulus
+            # rows existed: the collected stream is nowhere in the neutral
+            # ledger at all, so a per-zone read of it would return zero and
+            # the menu would silently lose the channel. Derive it from the
+            # PLASMA-side row instead -- which is EXACT here, not an
+            # approximation: anode_collection books n = -dN_loss / Vp and
+            # rebirths exactly dN_loss as neutrals, split between the zones,
+            # so -n * Vp IS the total rebirth rate whatever the split was.
+            # Same construction as the K4a kinetic fallback below, and
+            # labelled in the returned menu so the derivation is never
+            # mistaken for a ledger read.
+            an = -np.mean(
+                f["rhs_terms/anode_collection/n"][:][m], axis=0
+            ) * Vp_full
+            an_provenance = (
+                "anode_collection derived from the plasma-side row (-n * Vp): "
+                "two-zone artifact carrying no rhs_terms/anode_collection/nn_a "
+                "row, so the annulus booking is absent from the neutral ledger"
+            )
+            print(
+                f"[load_background] {an_provenance}, for {path}.",
+                file=sys.stderr,
+            )
         # Volume-integrated POSITIVE part of the neutral_sources row -- the
         # puff (the pump is its negative part). Under the two-zone closure the
         # puff is booked into the ANNULUS row (nn_a): the pipe enters at the
@@ -344,9 +399,25 @@ def load_background(path, window_ms):
         for term in ("recombination_rad_loss", "recombination_3b_loss"):
             key = f"rhs_terms/{term}/nn"
             if key in f and np.any(f[key][:][m]):
-                rec += np.mean(
-                    np.clip(f[key][:][m], 0.0, None), axis=0
-                ) * Vm_full
+                # Volume convention as above. Recombination books its birth
+                # into the COLUMN on a two-zone state -- physics/reactions.py
+                # sets the neutral-row conversion to unity there, because nn
+                # IS the column density and the column volume IS Vp -- so the
+                # row integrates on Vp and the old * Vm read over-counted the
+                # channel by Vm/Vp (~29x at the collector cell on l2a7b). No
+                # annulus row is written for these terms today; one is
+                # consumed where it exists so the read cannot go stale if that
+                # ever changes.
+                col = np.mean(np.clip(f[key][:][m], 0.0, None), axis=0)
+                if two_zone:
+                    rec += col * Vp_full
+                    key_a = f"rhs_terms/{term}/nn_a"
+                    if key_a in f:
+                        rec += np.mean(
+                            np.clip(f[key_a][:][m], 0.0, None), axis=0
+                        ) * Va_full
+                else:
+                    rec += col * Vm_full
             elif f"rhs_terms/{term}/n" in f:
                 rec += np.mean(
                     np.clip(-f[f"rhs_terms/{term}/n"][:][m], 0.0, None),
@@ -403,6 +474,14 @@ def load_background(path, window_ms):
         "puff_z": float(zc[_puff_peak_cell(ns, roles)] - edges[first]),
         "vol_rec": float(rec[first:].sum()),
     }
+    if an_provenance is not None:
+        # Present ONLY when a menu entry was not read straight off the neutral
+        # ledger, so a consumer that reports it cannot mislabel an ordinary
+        # read, and its absence is the ordinary case rather than a default.
+        bg["source_provenance"] = {
+            "anode_left": an_provenance,
+            "anode_right": an_provenance,
+        }
     bg["puff_cell"] = ns[first:]
     bg["rec_cell"] = rec[first:]
     bg["phi_c"] = phi_c
