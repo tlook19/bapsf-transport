@@ -129,8 +129,23 @@ def scope_one(path):
         recycle_cell = (
             int(by_role["cathode"][0]) if "cathode" in by_role else cathode_cell
         )
-        ba_nn = f[f"rhs_terms/{row}/nn"]
-        ba_gain = np.asarray(ba_nn[:, recycle_cell])[mask] * Vm[recycle_cell]
+        # Volume convention, exactly as for the puff below: under the two-zone
+        # closure the boundary term's nn row is the COLUMN density rate and
+        # integrates on Vp, so the flat * Vm read over-counted this face by
+        # Vm/Vp; under end_recycle_to_annulus the collector faces' share moves
+        # to nn_a on the annulus (Vm - Vp), which the cathode face does not
+        # use but which is consumed anyway so the read stays correct per cell.
+        # Reduces to nn * Vm when there is no annulus row.
+        ba_nn = np.asarray(f[f"rhs_terms/{row}/nn"][:, recycle_cell])[mask]
+        if f"rhs_terms/{row}/nn_a" in f:
+            ba_nn_a = np.asarray(
+                f[f"rhs_terms/{row}/nn_a"][:, recycle_cell]
+            )[mask]
+            ba_gain = ba_nn * Vp[recycle_cell] + ba_nn_a * max(
+                Vm[recycle_cell] - Vp[recycle_cell], 0.0
+            )
+        else:
+            ba_gain = ba_nn * Vm[recycle_cell]
         recycle_ba = float(np.mean(ba_gain))
         removal_any = sum(
             -np.mean(np.asarray(f[f"rhs_terms/{name}/n"][:, recycle_cell])[mask])
