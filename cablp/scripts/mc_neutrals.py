@@ -35,6 +35,7 @@ Usage:
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -49,7 +50,10 @@ from cablp.solvers._sim1d.core.geometry import (
     absorbing_live_cells_by_role,
     build_geometry,
 )
-from cablp.solvers._sim1d.physics.neutrals import puff_particles_per_s
+from cablp.solvers._sim1d.physics.neutrals import (
+    gas_puff_rate_profile,
+    puff_particles_per_s,
+)
 
 EV = 1.602176634e-12
 KB = 1.380649e-16
@@ -119,32 +123,44 @@ def assert_recycle_channel_live(recycle, removal, *, row, stance, path, window_m
     )
 
 
-def assert_two_zone_puff_live(ns, ns_ann, path, window_ms):
+def assert_two_zone_puff_live(ns, ns_ann, path, window_ms, expected_per_s=0.0):
     """Raise when a two-zone ledger's annulus puff is missing from the menu.
 
     ``ns`` is the assembled per-cell source row [s^-1] and ``ns_ann`` the
-    annulus rate row it was built from (``None`` on a single-zone run, which
-    returns immediately).
+    annulus rate row it was built from (``None`` on a single-zone run, and on
+    a two-zone artifact predating the per-term annulus rows).
 
     Under ``neutral_two_zone`` the gas puff is booked into the ANNULUS row
     (``nn_a``), so a menu assembled from the column row alone reads zero puff
     on every such background and the TPMC runs unfuelled. A nonzero annulus
     source with an empty assembled row is that defect and nothing else: a
     genuinely unfuelled window leaves both zero and does not raise.
+
+    ``expected_per_s`` [s^-1] is the puff rate the background is known to
+    carry from evidence OTHER than that row -- the config-derived rate of
+    ``two_zone_puff_row_from_config`` on an artifact that saved no annulus
+    row. Without it this guard would be structurally inert on exactly the
+    artifacts whose puff is hardest to recover, which is where it is most
+    needed; with it, a derivation that silently failed to land in the menu
+    raises here rather than running the TPMC unfuelled.
     """
-    if ns_ann is None:
-        return
-    if not np.any(ns_ann > 0.0) or np.any(ns > 0.0):
+    live = expected_per_s > 0.0 or (
+        ns_ann is not None and bool(np.any(ns_ann > 0.0))
+    )
+    if not live or np.any(ns > 0.0):
         return
     raise ValueError(
-        f"two-zone background carries a nonzero annulus neutral source over "
+        f"two-zone background is known to be puffing over "
         f"{window_ms[0]}-{window_ms[1]} ms but the assembled source menu has "
         f"no puff, for {path}.\n"
+        f"  annulus row nonzero: {ns_ann is not None and bool(np.any(ns_ann > 0.0))}"
+        f"   config-derived rate: {expected_per_s:.6e} /s\n"
         "  likely cause: the menu was read from rhs_terms/neutral_sources/nn "
         "alone. Under the neutral_two_zone closure the puff enters at the "
         "wall and is booked into the nn_a row; the nn row is pump-only, so a "
-        "column-only read degrades the puff to nothing. Refusing to run "
-        "source-starved."
+        "column-only read degrades the puff to nothing. On an artifact that "
+        "saved no such row the config derivation is the only route, and it "
+        "did not land. Refusing to run source-starved."
     )
 
 
@@ -178,6 +194,154 @@ def assert_end_recycle_routed_live(ba, ba_ann, path, window_ms):
     )
 
 
+def _square_puff_envelope(times, params, flags, t_breakdown_trigger):
+    """Return the ``gas_puff_mode="square"`` envelope [1] at ``times`` [s].
+
+    A transcription of the solver's own envelope (the ``"square"`` branch of
+    ``LAPDSim1D._effective_gas_puff_sccm``): an erf opening edge anchored on
+    the end of the neutral-prebreakdown phase plus ``gas_puff_rise_center_s``,
+    an erf closing edge anchored on the main-discharge start plus
+    ``tau_discharge`` and ``gas_puff_close_lag_s``, both built with the one
+    shared width, clamped at zero where they are configured to overlap.
+
+    Every input is either saved config or the saved ``t_breakdown_trigger``
+    attribute, so the envelope is a function of the ARTIFACT and never of
+    solver run state. ``math.erf`` is used rather than a vectorized library
+    erf because the solver uses ``math.erf``, and this function is only worth
+    having if it reproduces the applied waveform bit for bit.
+    """
+    origin = 0.0
+    if flags.get("Plasma", True) and flags.get("neutral_prebreakdown", False):
+        origin = max(float(params.get("tau_neutral_prebreakdown", 0.0)), 0.0)
+    width = float(params.get("gas_puff_rise_width_s", 5.0e-4))
+    t_on = origin + float(params.get("gas_puff_rise_center_s", 5.0e-4))
+    t_close = (
+        float(t_breakdown_trigger)
+        + max(float(params.get("tau_discharge", 0.0)), 0.0)
+        + float(params.get("gas_puff_close_lag_s", 5.0e-4))
+    )
+    t = np.asarray(times, dtype=float)
+    rise = 0.5 * (1.0 + np.array([math.erf(x) for x in (t - t_on) / width]))
+    fall = 0.5 * (1.0 + np.array([math.erf(x) for x in (t - t_close) / width]))
+    return np.maximum(rise - fall, 0.0)
+
+
+def two_zone_puff_row_from_config(f, params, flags, times, mask, Vm_full, Va_full):
+    """Return ``(per-cell puff row [s^-1], provenance)`` derived from the config.
+
+    For the two-zone artifacts written BEFORE the per-term annulus rows
+    existed. Under ``neutral_two_zone`` the puff is booked into the ANNULUS --
+    the pipe enters at the vessel wall -- so on such an artifact the neutral
+    ledger carries no trace of it at all: the column row is pump-only and a
+    per-zone read of it returns a GENUINE zero, indistinguishable from an
+    unfuelled window. This is the anode fallback's situation one term over,
+    with one difference that matters: the anode's total is recoverable from
+    the plasma-side row, and the puff's is not recoverable from the ledger at
+    ALL. Config is the only surviving evidence, so it is used, and labelled.
+
+    The derivation is the solver's own construction, not a paraphrase of it:
+    the per-cell shape comes from ``gas_puff_rate_profile`` called with the
+    artifact's resolved config on a geometry rebuilt from that same config
+    (and asserted identical to the saved one), and the applied level is that
+    profile scaled by the ``"square"`` envelope, which is linear in the
+    configured flow. Cells with an annulus take the whole per-cell rate; cells
+    without one are already carried by the column row, exactly as the solver
+    splits them.
+
+    ``mask`` selects the plateau window; the returned row is the window MEAN,
+    the same reduction the ledger rows get, so the menu entries stay
+    commensurable.
+
+    Raises ``ValueError`` -- loudly, rather than returning a number nobody can
+    check -- on any configuration outside the certified one: a non-``square``
+    waveform, a phase-transition mode whose main-discharge start is not the
+    saved trigger, a geometry that does not rebuild, or a missing trigger.
+    """
+    mode = str(params.get("gas_puff_mode", "square"))
+    if mode != "square":
+        raise ValueError(
+            f"UNRECOVERABLE two-zone puff: gas_puff_mode={mode!r}.\n"
+            "  The artifact saved no rhs_terms/neutral_sources/nn_a row, so "
+            "the puff is absent from the neutral ledger and only the config "
+            "can supply it; the config derivation implemented here covers the "
+            "'square' waveform alone. Refusing to guess a rate."
+        )
+    transition = str(params.get("phase_transition_mode", "current"))
+    if transition != "current":
+        raise ValueError(
+            f"UNRECOVERABLE two-zone puff: phase_transition_mode="
+            f"{transition!r}.\n"
+            "  The square waveform's closing edge is anchored on the "
+            "main-discharge start, which is the saved t_breakdown_trigger "
+            "only under the 'current' transition mode. Refusing to guess a "
+            "closing time."
+        )
+    if "t_breakdown_trigger" not in f.attrs:
+        raise ValueError(
+            "UNRECOVERABLE two-zone puff: no t_breakdown_trigger attribute, "
+            "so the square waveform's closing edge has no anchor."
+        )
+    geometry = build_geometry(params, flags)
+    Vm_geo = np.asarray(geometry.neutral_volume_cm3, dtype=float)
+    if Vm_geo.shape != Vm_full.shape or not np.array_equal(Vm_geo, Vm_full):
+        raise ValueError(
+            "UNRECOVERABLE two-zone puff: the geometry rebuilt from the saved "
+            "config does not reproduce the saved neutral volumes, so the "
+            "puff profile cannot be placed on the artifact's own cells."
+        )
+    profile = gas_puff_rate_profile(
+        geometry,
+        params.get("S_gp", 0.0),
+        params.get("gas_puff_valves", 2),
+        profile=str(params.get("gas_puff_profile", "cell")),
+        z_cm=params.get("gas_puff_z_cm"),
+        sigma_cm=float(params.get("gas_puff_sigma_cm", 50.0)),
+        throw_cm=float(params.get("gas_puff_throw_cm", 100.0)),
+        end=0,
+        delivery_fraction=float(params.get("gas_puff_delivery_fraction", 1.0)),
+    )
+    if flags.get("TwinCathode", False):
+        profile = profile + gas_puff_rate_profile(
+            geometry,
+            params.get("Twin_S_gp", 0.0),
+            params.get("gas_puff_valves", 2),
+            profile=str(params.get("gas_puff_profile", "cell")),
+            z_cm=params.get("gas_puff_z_cm"),
+            sigma_cm=float(params.get("gas_puff_sigma_cm", 50.0)),
+            throw_cm=float(params.get("gas_puff_throw_cm", 100.0)),
+            end=-1,
+            delivery_fraction=float(
+                params.get("gas_puff_delivery_fraction", 1.0)
+            ),
+        )
+    envelope = _square_puff_envelope(
+        np.asarray(times, dtype=float)[mask],
+        params,
+        flags,
+        f.attrs["t_breakdown_trigger"],
+    )
+    # The per-sample phase gate the solver applied, as saved. It zeroes the
+    # whole puff term when shut, so it multiplies the envelope exactly.
+    if "phase_gas_puff_enabled" in f:
+        envelope = envelope * np.asarray(f["phase_gas_puff_enabled"][:])[mask]
+    scale = float(np.mean(envelope))
+    row = np.where(Va_full > 0.0, profile * Vm_full * scale, 0.0)
+    total = float(row.sum())
+    if total <= 0.0:
+        # A genuinely shut valve (gas_puff_enabled off, or a window entirely
+        # outside the waveform). Nothing was derived, so nothing is labelled.
+        return row, None
+    provenance = (
+        "puff derived from the resolved config (gas_puff_rate_profile at the "
+        "saved S_gp/profile/geometry, scaled by the square waveform envelope "
+        f"averaged over the window, {scale:.9f}): two-zone artifact carrying "
+        "no rhs_terms/neutral_sources/nn_a row, so the annulus-booked puff is "
+        "absent from the neutral ledger entirely and the column row reads a "
+        "genuine zero"
+    )
+    return row, provenance
+
+
 def _puff_peak_cell(ns, roles):
     """Index of the puff row's peak cell, ties broken toward the puff cell.
 
@@ -199,8 +363,14 @@ def _puff_peak_cell(ns, roles):
 def load_background(path, window_ms):
     with h5py.File(path, "r") as f:
         t0 = float(f.attrs["t_breakdown_trigger"])
-        t = (f["time"][:] - t0) * 1e3
+        t_abs = f["time"][:]
+        t = (t_abs - t0) * 1e3
         m = (t >= window_ms[0]) & (t <= window_ms[1])
+        # Read here rather than at the point of use: the config-derived puff
+        # below needs them, and there is only ever one copy.
+        params = json.loads(f.attrs["params_json"])
+        raw_flags = f.attrs.get("flags_json")
+        flags = json.loads(raw_flags) if raw_flags is not None else {}
         g = f["geometry"]
         roles = [
             r.decode() if isinstance(r, bytes) else str(r)
@@ -274,13 +444,24 @@ def load_background(path, window_ms):
         # recycle -- the same defect the two-zone puff had, one term over --
         # and would leave the cathode row nonzero, so the existing
         # recycle-channel guard would not catch it. Reduces to the single-zone
-        # nn * Vm when there is no annulus row.
+        # nn * Vm on a single-zone state.
+        #
+        # The stance comes from two_zone (the STATE), not from row presence: a
+        # July-era two-zone artifact saved no per-term annulus rows at all, and
+        # keying off the row there restored the Vm over-count -- x Vm/Vp,
+        # measured 11.1 on es1_nx120_m6_sq3400_2z_es1.h5. The column-row-on-Vp
+        # read IS the state-level truth for face recycle on such an artifact:
+        # the boundary term rebirths exactly what it removed, so it reproduces
+        # the plasma-side removal -n * Vp cell for cell (verified equal at the
+        # cathode cell, the collector cell and in total on that artifact).
         ba_col = np.mean(f[f"rhs_terms/{row}/nn"][:][m], axis=0)
         ba_ann = None
         if f"rhs_terms/{row}/nn_a" in f:
             ba_ann = np.mean(f[f"rhs_terms/{row}/nn_a"][:][m], axis=0)
-        if ba_ann is None:
+        if not two_zone:
             ba = ba_col * Vm_full
+        elif ba_ann is None:
+            ba = ba_col * Vp_full
         else:
             ba = ba_col * Vp_full + ba_ann * np.maximum(Vm_full - Vp_full, 0.0)
         # Volume-integrated anode-mesh collection, both zones each on its OWN
@@ -333,7 +514,11 @@ def load_background(path, window_ms):
         # from it alone loses the puff entirely. Integrate each zone on its
         # own volume, exactly as bg["nn_model"] is rebuilt above -- nn lives
         # on the column volume (Vp) and nn_a on the annulus (Vm - Vp) -- which
-        # reduces to the single-zone nn * Vm when there is no annulus row.
+        # reduces to the single-zone nn * Vm on a single-zone state. As for
+        # the recycle row above, the stance is the STATE's: on a two-zone
+        # artifact predating the per-term annulus rows the column row is
+        # pump-only and integrates on Vp, and the puff is recovered separately
+        # below because nothing in the ledger carries it.
         ns_col = np.mean(
             np.clip(f["rhs_terms/neutral_sources/nn"][:][m], 0.0, None), axis=0
         )
@@ -345,11 +530,14 @@ def load_background(path, window_ms):
                 ),
                 axis=0,
             )
-        if ns_ann is None:
+        if not two_zone:
             ns = ns_col * Vm_full
+        elif ns_ann is None:
+            ns = ns_col * Vp_full
         else:
             ns = ns_col * Vp_full + ns_ann * np.maximum(Vm_full - Vp_full, 0.0)
-        if not np.any(ba) and "nn_a" in f:
+        kinetic_fallback = bool(not np.any(ba) and "nn_a" in f)
+        if kinetic_fallback:
             # K4a kinetic run: the neutral ledger rows are superseded
             # (zeroed) -- rebuild the source menu from the PLASMA-side
             # rows, which keep their exact forms: the recycle source is
@@ -376,8 +564,32 @@ def load_background(path, window_ms):
                 roles_full.index("puff") if "puff" in roles_full else 0
             )
             ns[puff_idx] = puff_particles_per_s(sccm, valves)
+        ns_provenance = None
+        ns_expected = 0.0
+        if two_zone and ns_ann is None and not kinetic_fallback:
+            # July-era two-zone artifact: the puff is booked into the annulus
+            # and no annulus row survives, so the assembled row above is a
+            # genuine zero and the ledger has nothing else to offer. Derive it
+            # from the resolved config, label it, and say so on stderr -- the
+            # anode fallback's precedent. The kinetic fallback is excluded
+            # because it has already rebuilt the whole menu, its own puff
+            # entry included.
+            ns_derived, ns_provenance = two_zone_puff_row_from_config(
+                f, params, flags, t_abs, m, Vm_full, Va_full
+            )
+            ns = ns + ns_derived
+            ns_expected = float(ns_derived.sum())
+            if ns_provenance is not None:
+                print(
+                    f"[load_background] {ns_provenance}, for {path}.",
+                    file=sys.stderr,
+                )
         assert_two_zone_puff_live(
-            ns, ns_ann, path=str(path), window_ms=window_ms
+            ns,
+            ns_ann,
+            path=str(path),
+            window_ms=window_ms,
+            expected_per_s=ns_expected,
         )
         assert_end_recycle_routed_live(
             ba, ba_ann, path=str(path), window_ms=window_ms
@@ -426,9 +638,6 @@ def load_background(path, window_ms):
         cd = f["cathode_diagnostics"]
         phi_c = float(np.nanmean(cd["source_phi_c"][:][m]))
         T_s = float(np.mean(cd["T_s_surface"][:][m]))
-        params = __import__("json").loads(f.attrs["params_json"])
-        raw_flags = f.attrs.get("flags_json")
-        flags = json.loads(raw_flags) if raw_flags is not None else {}
     # Per-face cells by ROLE: the live cell against an absorbing face is where
     # the boundary term books its removal and its neutral return, and it is not
     # at a fixed offset from the array ends (an obstruction cell pushes the
@@ -474,14 +683,17 @@ def load_background(path, window_ms):
         "puff_z": float(zc[_puff_peak_cell(ns, roles)] - edges[first]),
         "vol_rec": float(rec[first:].sum()),
     }
+    # Present ONLY when a menu entry was not read straight off the neutral
+    # ledger, so a consumer that reports it cannot mislabel an ordinary
+    # read, and its absence is the ordinary case rather than a default.
+    provenance = {}
     if an_provenance is not None:
-        # Present ONLY when a menu entry was not read straight off the neutral
-        # ledger, so a consumer that reports it cannot mislabel an ordinary
-        # read, and its absence is the ordinary case rather than a default.
-        bg["source_provenance"] = {
-            "anode_left": an_provenance,
-            "anode_right": an_provenance,
-        }
+        provenance["anode_left"] = an_provenance
+        provenance["anode_right"] = an_provenance
+    if ns_provenance is not None:
+        provenance["puff"] = ns_provenance
+    if provenance:
+        bg["source_provenance"] = provenance
     bg["puff_cell"] = ns[first:]
     bg["rec_cell"] = rec[first:]
     bg["phi_c"] = phi_c
