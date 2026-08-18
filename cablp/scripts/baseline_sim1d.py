@@ -91,6 +91,11 @@ BASELINE_PARAM_OVERRIDES = {
     "cathode_heat_capacity_J_per_K": 120.0,
     "cathode_conduction_W_per_K": 1200.0,
     "cathode_emissivity": 0.7,
+    # The fixture inherits 14.25 through the production splat above -- NOT the
+    # 29.0 config default. Pinned now because the L2 arm-4 recalibration will
+    # move the production value; the pin equals what is inherited today, so the
+    # anchor stays bit-exact across that move.
+    "C_R": 14.25,
     "phi_wf": 2.869,
     "cathode_surface_model": "ads_des",
     "cathode_phiwf_clean_eV": 2.809,
@@ -134,6 +139,14 @@ BASELINE_PARAM_OVERRIDES = {
     "Rcs": 0.0,
     "Lcs": 0.0,
     "Rsup": 0.0,
+    # L2 geometry rebaseline (2026-08-17): the production stance moved the
+    # plasma-column and cathode radii off the fitted 15.0 onto the measured
+    # hardware aperture. This fixture was captured at 15.0/15.0; pin both so
+    # the anchor does NOT track the live stance -- same rule as the Rcs/Lcs/
+    # Rsup pins above. (end_expansion_plasma_radius_cm needs no pin: it is
+    # popped in build_baseline_config with the flag off.)
+    "Rp": 15.0,
+    "R_cath": 15.0,
     # Measured 25 ms equilibration puff width (2026-07-29): the ES production
     # config (PRODUCTION_PARAM_OVERRIDES, inherited above) adopted it, but this
     # fixture was captured with the equilibration inheriting tau_discharge as
