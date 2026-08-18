@@ -79,8 +79,13 @@ for the legacy IAEA fits. Superseded by the single cold-gas `Tn_K = 300` K.
 
 ## `geometry_defaults`
 
-**`Rp = 15.0` cm — MEASURED.** The LAPD plasma-column radius. Before it was
-made the default, every campaign run overrode it per-run.
+**`Rp = 18.415` cm — MEASURED.** The LAPD plasma-column radius, identified
+with the exposed cathode aperture: the graphite front panel's 14.5 in opening
+in front of the 15.0 in LaB6 disc (caliper, 2026-08-17). Mapping the aperture
+along the field to the column is ASSUMED 1:1. The previous default 15.0 was a
+fit that also conflated this radius with the emitting radius `R_cath`; both
+moved onto the measured aperture in the L2 geometry rebaseline, and the golden
+fixture pins 15.0 explicitly so the regression anchor does not follow.
 
 **`Rm = 50.0` cm, `Lm = 2000.0` cm, `cathode_anode_gap_cm = 50.0`,
 `plenum_length_cm = 100.0`, `collector_length_cm = 100.0` — MEASURED**
@@ -686,9 +691,26 @@ broadening to the cathode gives ~27.8 cm, and radial transport argues for the
 steeper end. The implied centre-to-edge temperature drop is of order
 150-200 K.
 
-**`R_cath = 15.0` cm — the plasma-channel radius, not the cathode disc.** The
-physical cathode radius is 19 cm. The gaussian emission profile should be used
-with the physical radius; the default matches `Rp` instead.
+**`R_cath = 18.415` cm — MEASURED.** The cathode is a 15.0 in x 0.25 in LaB6
+disc (R = 19.050 cm) held by a backside carbon ring against a graphite front
+panel whose opening is 14.5 in, r = 18.415 cm (caliper, 2026-08-17); the
+ring's lip fit on the disc covers exactly the annulus the panel hides, which
+confirms the two measurements against each other. The EXPOSED APERTURE — not
+the disc — is the emitting, collecting and conducting face, so `R_cath` is
+that aperture. It equals `Rp` by measurement plus the assumed 1:1 field
+mapping, no longer by the old coincidence of one fitted 15.0. The physical
+disc radius 19.050 cm remains the right number for anything that is about the
+whole body rather than the exposed face.
+
+**`cathode_emission_profile = "uniform"` — the zero-shape-parameter choice on
+the measured aperture.** The default was `"gaussian"`, whose radial falloff
+was carried by the fitted `cathode_Ts_fwhm_cm = 28.0` footprint. That
+empirical basis is RETIRED by the caliper: the measured emission footprint
+identifies with the aperture the panel defines, not with an emission droop
+across a larger disc, so the falloff no longer has a measurement behind it.
+`"uniform"` introduces no shape parameter and is fully boxed by hardware.
+`"gaussian"` remains a selectable arm and is what the golden fixture pins, so
+the historical trajectory stays reachable and bit-exact.
 
 **`cathode_heat_capacity_J_per_K = 120.0` — ASSUMED (hand-tuned).** It shapes
 only the ramp timescale; the steady state is independent of it. Physical scale:

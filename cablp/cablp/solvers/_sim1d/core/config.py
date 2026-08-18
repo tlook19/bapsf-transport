@@ -175,7 +175,7 @@ def geometry_defaults():
         "Lm": 2000.0,
         "nx": 60,
         "Rm": 50.0,
-        "Rp": 15.0,
+        "Rp": 18.415,
         "plenum_length_cm": 100.0,
         "cathode_anode_gap_cm": 50.0,
         "nx_gap": 5,
@@ -1435,10 +1435,10 @@ def cathode_defaults():
         ``scripts/production_stance_provenance.md``.
     cathode_emission_profile:
         Radial structure of the thermionic emitter. ``"uniform"``
-        (historical) is a single-temperature disc, whose emission ceiling is a
+        (default) is a single-temperature disc, whose emission ceiling is a
         razor wall in the discharge V(I) curve -- the operating point riding
         that wall is what makes the circuit-coupled current/voltage noisy.
-        ``"gaussian"`` (default) gives the cathode a radial falloff: the
+        ``"gaussian"`` gives the cathode a radial falloff: the
         emission-current footprint ``exp(-4 ln2 r^2/FWHM^2)``,
         Richardson-inverted into a local surface temperature profile. The
         implied centre-to-edge temperature drop of order 150-200 K softens the
@@ -2067,7 +2067,7 @@ def cathode_defaults():
         "eta": 0.358,
         "anode_radius_cm": None,
         "L_cath": 50.0,
-        "R_cath": 15.0,
+        "R_cath": 18.415,
         # --- ACTIVE: beam deposition (CSDA production stack; b_beam_excitation
         # + beam_excitation_model are INERT under csda -- the module uses the
         # measured manifold, knob-free -- and matter only for the beer_lambert
@@ -2111,8 +2111,8 @@ def cathode_defaults():
         "cathode_emissivity": 0.7,
         "cathode_rad_area_cm2": None,
         "cathode_env_T_K": 300.0,
-        # --- ACTIVE: gaussian emission profile (radial falloff) ---
-        "cathode_emission_profile": "gaussian",
+        # --- ACTIVE: uniform emission profile ---
+        "cathode_emission_profile": "uniform",
         "cathode_Ts_fwhm_cm": 28.0,
         "cathode_emission_annuli": 10,
         "cathode_Rp_model": "sample",

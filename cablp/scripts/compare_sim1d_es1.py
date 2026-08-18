@@ -154,8 +154,14 @@ PARAM_OVERRIDES = {
     "b_Qei": 1,
     "b_Qen": 1,
     "b_Qcx": 1,
-    "Rp": 15.0,
-    "R_cath": 15.0,
+    # L2 GEOMETRY REBASELINE (2026-08-17): the measured cathode aperture, not
+    # the fitted 15.0 the two radii previously shared. Caliper: a 15.0 in LaB6
+    # disc behind a graphite front panel whose 14.5 in opening is the exposed
+    # emitting/collecting/conducting face -> r = 18.415 cm. Field mapping from
+    # the aperture to the plasma column is assumed 1:1. Provenance:
+    # scripts/production_stance_provenance.md.
+    "Rp": 18.415,
+    "R_cath": 18.415,
     "implicit_heat_scheme": "tr_bdf2",
     "operator_splitting": "strang",
     "heat_picard_iterations": 2,
@@ -163,11 +169,13 @@ PARAM_OVERRIDES = {
     # ES production machine geometry (R5 ES1 tuning pass, 2026-07-25, Tom's
     # decision; provisional pending the 2D model). End vessel expands to a 1 m
     # machine (neutral) radius over 10 cells with NO plasma flare (plasma stays
-    # at Rp=15); plenum-choke obstruction Rcs=40/Lcs=25 (no support rods); no
-    # baffles; collector length unchanged (100 cm default).
+    # at Rp); plenum-choke obstruction Rcs=40/Lcs=25 (no support rods); no
+    # baffles; collector length unchanged (100 cm default). The terminal
+    # plasma radius rides Rp -- no flare is still no flare at the measured
+    # aperture.
     "end_expansion_cells": 10,
     "end_expansion_machine_radius_cm": 100.0,
-    "end_expansion_plasma_radius_cm": 15.0,
+    "end_expansion_plasma_radius_cm": 18.415,
     "Rcs": 40.0,
     "Lcs": 25.0,
     "Rsup": 0.0,
@@ -181,7 +189,12 @@ PARAM_OVERRIDES = {
     #
     # Cathode power balance, co-tuned with S_gp at the ES1 rung: the
     # skin->substrate conduction is the one fitted knob, frozen after ES1.
-    "cathode_conduction_W_per_K": 8000.0,
+    # Both warming-balance knobs are areal, so the L2 rebaseline transcribes
+    # them from their ES1-fitted 15-cm values by (18.415/15)^2 = 1.5072
+    # (8000 -> 12058, 120 -> 181). The fit itself is untouched; the heat
+    # capacity now differs from the config default and must be stated here.
+    "cathode_conduction_W_per_K": 12058.0,
+    "cathode_heat_capacity_J_per_K": 181.0,
     # --- CATHODE CALIBRATION REPARAMETERIZED (Tom, 2026-07-29) ------------
     # The retired stance carried the calibration on the standby temperature
     # ("cathode_Ts_base_K": 1840.0 here, 70 K below the measurement). That
