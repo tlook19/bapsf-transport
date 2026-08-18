@@ -51,6 +51,7 @@ from mc_neutrals import (  # noqa: E402
     BOUNDARY_ROWS,
     assert_recycle_channel_live,
     boundary_recycle_row,
+    two_zone_puff_row_from_config,
 )
 
 from cablp.solvers._sim1d.core.geometry import (  # noqa: E402
@@ -135,9 +136,15 @@ def scope_one(path):
         # Vm/Vp; under end_recycle_to_annulus the collector faces' share moves
         # to nn_a on the annulus (Vm - Vp), which the cathode face does not
         # use but which is consumed anyway so the read stays correct per cell.
-        # Reduces to nn * Vm when there is no annulus row.
+        # The stance is keyed off the STATE (nn_a), not off per-term row
+        # presence: a two-zone artifact predating the per-term annulus rows
+        # still has its nn row on Vp, and keying off the row restored the Vm
+        # over-count there. Reduces to nn * Vm on a single-zone state.
+        two_zone = "nn_a" in f
         ba_nn = np.asarray(f[f"rhs_terms/{row}/nn"][:, recycle_cell])[mask]
-        if f"rhs_terms/{row}/nn_a" in f:
+        if not two_zone:
+            ba_gain = ba_nn * Vm[recycle_cell]
+        elif f"rhs_terms/{row}/nn_a" in f:
             ba_nn_a = np.asarray(
                 f[f"rhs_terms/{row}/nn_a"][:, recycle_cell]
             )[mask]
@@ -145,7 +152,7 @@ def scope_one(path):
                 Vm[recycle_cell] - Vp[recycle_cell], 0.0
             )
         else:
-            ba_gain = ba_nn * Vm[recycle_cell]
+            ba_gain = ba_nn * Vp[recycle_cell]
         recycle_ba = float(np.mean(ba_gain))
         removal_any = sum(
             -np.mean(np.asarray(f[f"rhs_terms/{name}/n"][:, recycle_cell])[mask])
@@ -167,16 +174,34 @@ def scope_one(path):
         # two-zone closure the puff is booked into the ANNULUS row (nn_a) --
         # the pipe enters at the wall -- so the nn row alone is pump-only and
         # reads zero puff; each zone is integrated on its own volume, which
-        # reduces to nn * Vm when there is no annulus row.
+        # reduces to nn * Vm on a single-zone state. On a two-zone artifact
+        # that saved no annulus row the puff is absent from the ledger
+        # ENTIRELY, and a zero here would be a phantom rather than a physical
+        # zero (it divides the reported recycle/puff ratio), so it comes from
+        # the same config derivation the TPMC loader uses -- which refuses
+        # loudly rather than guessing outside the waveform it certifies.
         ns_nn = np.asarray(f["rhs_terms/neutral_sources/nn"])[mask]
-        if "rhs_terms/neutral_sources/nn_a" in f:
+        if not two_zone:
+            puff_cell = np.clip(ns_nn, 0.0, None) * Vm
+        elif "rhs_terms/neutral_sources/nn_a" in f:
             ns_nn_a = np.asarray(f["rhs_terms/neutral_sources/nn_a"])[mask]
             puff_cell = np.clip(ns_nn, 0.0, None) * Vp + np.clip(
                 ns_nn_a, 0.0, None
             ) * np.maximum(Vm - Vp, 0.0)
         else:
-            puff_cell = np.clip(ns_nn, 0.0, None) * Vm
+            puff_cell = np.clip(ns_nn, 0.0, None) * Vp
         puff = float(np.mean(np.sum(puff_cell, axis=1)))
+        if two_zone and "rhs_terms/neutral_sources/nn_a" not in f:
+            derived_row, derived_provenance = two_zone_puff_row_from_config(
+                f, params, flags, f["time"][:], mask, Vm,
+                np.maximum(Vm - Vp, 0.0),
+            )
+            puff += float(derived_row.sum())
+            if derived_provenance is not None:
+                print(
+                    f"[scope_cathode_jet] {derived_provenance}, for {path}.",
+                    file=sys.stderr,
+                )
 
         # Drag momentum exchange: ion-side sink of ion_neutral_drag [g/cm^2/s^2]
         # * plasma volume -> dyn, per cell, plateau-averaged.
