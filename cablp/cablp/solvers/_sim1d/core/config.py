@@ -2066,6 +2066,33 @@ def cathode_defaults():
         backscatter speed ``v_back`` above. Must lie in ``[0, 1]`` when
         ``cathode_neutral_jet`` is on; raises at construction otherwise. Also
         read by ``cathode_jet_surface_debit``.
+        ``cathode_jet_energy_convention`` fixes whether it is read per
+        backscattered particle or as the total reflected energy fraction.
+    cathode_jet_energy_convention:
+        What ``cathode_jet_R_E`` MEANS when the backscattered atoms' launch
+        speed is built, and therefore how much of the incident ion power the
+        cathode jet hands the neutral gas.
+
+        ``"legacy"`` (the default) reads it per backscattered particle:
+        ``v_back = sqrt(2 R_E (phi_c + Ti)/m)``, carried by the ``R_N``
+        reflected fraction alone, so the gas receives ``R_N R_E`` of the
+        incident ion power while ``cathode_jet_surface_debit`` removes
+        ``R_E`` of it from the surface.
+
+        ``"total_reflected"`` reads it as the TOTAL reflected energy fraction
+        (reflected energy over incident, summed over all particles -- the
+        convention the surface debit is written in), so each of the ``R_N``
+        backscattered particles leaves with ``R_E/R_N`` of the incident
+        energy, ``v_back = sqrt(2 (R_E/R_N) (phi_c + Ti)/m)``, and the gas
+        receives exactly the ``R_E`` the surface gave up.
+
+        Consumed by the jet's ``M_n`` momentum booking and by the
+        ``cathode_jet_neutral_energy`` term through one shared spec, so the
+        two can never disagree. ``"total_reflected"`` requires
+        ``cathode_neutral_jet`` and
+        ``0 < cathode_jet_R_E <= cathode_jet_R_N < 1``; any other string, or
+        those bounds violated, raises at construction. Inert when the cathode
+        jet is off.
     anode_neutral_jet:
         The same directed-recycle treatment at the ANODE faces, applied per
         collected side: the backscattered fraction ``anode_jet_R_N`` is
@@ -2251,6 +2278,13 @@ def cathode_defaults():
         "cathode_neutral_jet": False,
         "cathode_jet_R_N": 0.5,
         "cathode_jet_R_E": 0.2,
+        # Which convention R_E is read in when the cathode backscatter speed
+        # is built. "legacy" reads it per backscattered particle (the gas gets
+        # R_N*R_E of the incident ion power while the surface debit removes
+        # R_E); "total_reflected" reads it as the TRIM total reflected-energy
+        # fraction, so the R_N reflected particles carry R_E/R_N each and the
+        # exported power matches the debit.
+        "cathode_jet_energy_convention": "legacy",
         "anode_neutral_jet": False,
         "anode_jet_R_N": 0.5,
         "anode_jet_R_E": 0.25,
@@ -3153,6 +3187,42 @@ input_flags_template_1d = {
     # (presence-gated: the off path builds no drift kernel and the isotropic
     # one is untouched).
     "neutral_hot_birth_drift": False,
+    # Wall the hot channel's ballistic flight at the INTERNAL plasma
+    # boundaries, not only at the two global end planes. The walls are the
+    # closed plasma faces (geometry.plasma_open false: every face where a
+    # plasma-dead cell -- plenum, obstruction -- abuts a live one, plus the two
+    # end planes) together with the plasma-absorbing faces, which are a
+    # refinement of that set. A flight reaching one is clipped to the wall
+    # plane and the atom is booked in the cell on its OWN side of it, which is
+    # exactly the fold/absorb treatment the end planes already get; the landed
+    # atoms rejoin the COLD neutral books (nn, or nn_a under neutral_two_zone)
+    # at that boundary-adjacent cell, at the unchanged landing energy.
+    #
+    # PER-CELL BEHAVIOUR. Every cell is confined to its own contiguous run of
+    # same-topology cells. A LIVE cell's flights stay in its live segment, so
+    # its landings never fall on a plasma-dead cell -- with the flag off they
+    # do, and the caller's plasma-topology mask (which the hot channel's rows
+    # are subject to) then deletes those deposits, so atoms leave the inventory
+    # with no surface having absorbed them. A PLASMA-DEAD cell's flights stay
+    # in the dead block they were born in, so its (floor-density) births can no
+    # longer deposit out of a masked cell into a live one either. A BOUNDARY
+    # cell -- the live cell against a cathode disc or a collector -- is the
+    # cell that receives everything folded at that wall, on both counts. The
+    # mask itself is untouched; the flag only stops feeding it rows to delete.
+    # Cells with no column (Rp = 0) keep the in-place identity row they already
+    # had.
+    #
+    # Consumed by the neutral_hot_channel term alone (physics.hot_neutrals):
+    # it is passed to ballistic_flight_kernels, and to directed_flight_kernels
+    # under neutral_hot_birth_drift so the two kernels cannot disagree about
+    # where the walls are. hot_end_fraction then reads "folded at a wall"
+    # rather than "folded at an end plane".
+    #
+    # Requires neutral_energy -- there is no hot channel to wall without it --
+    # as a construction-time ValueError. Default OFF and bit-exact off
+    # (presence-gated: the off path's wall bounds ARE the two end planes, so
+    # every clip reduces to the historical one).
+    "neutral_hot_internal_wall": False,
     # Shaped initial neutral fill. The run's neutral IC comes from a PER-CELL
     # profile of absolute densities (nn0_profile, and optionally
     # nn0_annulus_profile under neutral_two_zone) instead of the uniform
