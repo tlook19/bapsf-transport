@@ -69,6 +69,19 @@ leave through an end plane are folded back onto the end cells, exactly as
 ``kn2zone.build_hop_kernels`` folds its own -- there is a wall there, so the
 atom lands on it rather than leaving the inventory.
 
+INTERNAL WALLS (``neutral_hot_internal_wall``, default off). The two global end
+planes are not the only surfaces a flight can hit. The plasma domain is bounded
+INSIDE the neutral domain: wherever a plasma-dead cell abuts a live one there is
+a closed face -- the cathode disc against its plenum is the canonical one -- and
+the plasma-terminating (absorbing) faces are a refinement of the same set. The
+flag makes every such face a wall for the flight, on exactly the treatment the
+end planes already get: the flight is clipped to the wall plane and the atom
+lands in the cell on its OWN side of it. Off, a flight launched in a live cell
+next to the cathode disc sails over the plenum and lands there, and the caller's
+plasma-topology mask -- which the hot channel's rows are subject to -- then
+deletes the deposit, so the atoms leave the inventory without a surface having
+absorbed them.
+
 DIRECTED BIRTHS (``neutral_hot_birth_drift``, default off). A resonant charge
 exchange hands the atom the ion's WHOLE velocity, drift included, so the birth
 is at the local ``(Ti, u_i)`` rather than at ``Ti`` alone. The flag restores the
@@ -152,7 +165,54 @@ HOT_CHANNEL_DIAGNOSTIC_FIELDS = (
 )
 
 
-def ballistic_flight_kernels(geometry, samples=BALLISTIC_DIRECTION_SAMPLES):
+def flight_wall_bounds(geometry, internal_wall=False):
+    """Return ``(z_lo, z_hi, cell_lo, cell_hi)``: where a flight from each cell ends.
+
+    One entry per cell. ``z_lo[i]`` / ``z_hi[i]`` are the axial positions of the
+    two walls a flight born in cell ``i`` can reach, and ``cell_lo[i]`` /
+    ``cell_hi[i]`` are the first and last cells between them -- the range a
+    landing index is clipped into, so an atom stopped ON a wall plane is booked
+    on its own side of it rather than in the cell across.
+
+    With ``internal_wall`` FALSE the only walls are the two global end planes,
+    so every row is ``(z_edges[0], z_edges[-1], 0, cells - 1)`` and the caller's
+    clips reduce to the historical ones exactly.
+
+    With it TRUE the walls are the CLOSED plasma faces
+    (``geometry.plasma_open`` false: the two end planes plus every face where a
+    plasma-dead cell abuts a live one) together with the plasma-absorbing faces,
+    which are a refinement of the same set. Each cell is therefore confined to
+    its own contiguous run of same-topology cells: a live cell to its live
+    segment, and a plasma-dead cell (plenum, obstruction) to the dead block it
+    sits in. Neither can reach the other, which is the point -- a live cell's
+    flights never deposit into a masked cell, and a dead cell's never deposit
+    out of one.
+    """
+    z_edges = np.asarray(geometry.z_edges_cm, dtype=float)
+    cells = int(np.asarray(geometry.z_cm, dtype=float).size)
+    if not internal_wall:
+        return (
+            np.full(cells, z_edges[0]),
+            np.full(cells, z_edges[-1]),
+            np.zeros(cells, dtype=int),
+            np.full(cells, cells - 1, dtype=int),
+        )
+    closed = ~np.asarray(geometry.plasma_open, dtype=bool)
+    closed = closed | np.asarray(geometry.plasma_absorbing, dtype=bool)
+    # The two end planes are closed by construction, so every cell has a wall
+    # on both sides and the searches below cannot run off either end.
+    closed[0] = True
+    closed[-1] = True
+    faces = np.flatnonzero(closed)
+    index = np.arange(cells)
+    lo_face = faces[np.searchsorted(faces, index, side="right") - 1]
+    hi_face = faces[np.searchsorted(faces, index + 1, side="left")]
+    return z_edges[lo_face], z_edges[hi_face], lo_face, hi_face - 1
+
+
+def ballistic_flight_kernels(
+    geometry, samples=BALLISTIC_DIRECTION_SAMPLES, internal_wall=False
+):
     """Return ``(landing, residence, end_fraction)`` for isotropic column births.
 
     ``landing[i, j]`` is the fraction of atoms born isotropically in cell ``i``
@@ -164,6 +224,11 @@ def ballistic_flight_kernels(geometry, samples=BALLISTIC_DIRECTION_SAMPLES):
     to machine precision -- the solid-angle normalization identity. The
     ``end_fraction[i]`` that was folded back is returned alongside so the
     approximation is measurable rather than implicit.
+
+    ``internal_wall`` adds the closed and absorbing plasma faces to the pair of
+    end planes (see :func:`flight_wall_bounds`), so every row is confined to its
+    own contiguous same-topology segment and ``end_fraction`` counts the folds
+    at those walls too. False reproduces the two-end-plane kernel exactly.
 
     ``residence[i, j]`` is the fraction of a flight's in-domain path length
     spent over cell ``j``. Path length is proportional to time along a straight
@@ -189,6 +254,9 @@ def ballistic_flight_kernels(geometry, samples=BALLISTIC_DIRECTION_SAMPLES):
     mu = -1.0 + (np.arange(count, dtype=float) + 0.5) * (2.0 / count)
     ratio = mu / np.sqrt(1.0 - mu**2)
     weight = 1.0 / count
+    wall_lo, wall_hi, cell_lo, cell_hi = flight_wall_bounds(
+        geometry, internal_wall=internal_wall
+    )
 
     landing = np.zeros((cells, cells), dtype=float)
     residence = np.zeros((cells, cells), dtype=float)
@@ -202,9 +270,9 @@ def ballistic_flight_kernels(geometry, samples=BALLISTIC_DIRECTION_SAMPLES):
             continue
         z0 = z_center[i]
         z_raw = z0 + chord[i] * ratio
-        outside = (z_raw < z_edges[0]) | (z_raw > z_edges[-1])
-        z1 = np.clip(z_raw, z_edges[0], z_edges[-1])
-        j = np.clip(np.searchsorted(z_edges, z1) - 1, 0, cells - 1)
+        outside = (z_raw < wall_lo[i]) | (z_raw > wall_hi[i])
+        z1 = np.clip(z_raw, wall_lo[i], wall_hi[i])
+        j = np.clip(np.searchsorted(z_edges, z1) - 1, cell_lo[i], cell_hi[i])
         np.add.at(landing[i], j, weight)
         end_fraction[i] = float(np.count_nonzero(outside)) * weight
         # Residence: uniform along the clipped path, normalized per flight so
@@ -262,6 +330,7 @@ def directed_flight_kernels(
     drift_ratio,
     samples=BALLISTIC_DIRECTION_SAMPLES,
     isotropic=None,
+    internal_wall=False,
 ):
     """Return ``(landing, residence, end_fraction, residence_mu)`` with drift.
 
@@ -284,6 +353,12 @@ def directed_flight_kernels(
     residence``, is readable per cell. Its rows sum to ``E[mu] == 0`` for ANY
     drift, which is the statement that the mu-correlated part of the flight
     velocity transports momentum without creating any.
+
+    ``internal_wall`` confines each row to its own contiguous same-topology
+    segment, exactly as it does for :func:`ballistic_flight_kernels` and from
+    the same :func:`flight_wall_bounds` faces; it must be passed the value the
+    ``isotropic`` triple was built with, or the verbatim-row copy below would
+    mix a walled row into an unwalled kernel.
 
     ``isotropic``, when given, is the ``(landing, residence, end_fraction)``
     triple :func:`ballistic_flight_kernels` already built for this geometry.
@@ -328,6 +403,9 @@ def directed_flight_kernels(
     mu = -1.0 + (np.arange(count, dtype=float) + 0.5) * (2.0 / count)
     weight = 1.0 / count
     inv_perp = 1.0 / np.sqrt(1.0 - mu**2)
+    wall_lo, wall_hi, cell_lo, cell_hi = flight_wall_bounds(
+        geometry, internal_wall=internal_wall
+    )
 
     live = chord > 0.0
     # A cell with no column has no CX birth and no flight; its row is the
@@ -338,13 +416,15 @@ def directed_flight_kernels(
         mu[None, :] * inv_perp[None, :] + m[:, None] * inv_perp[None, :]
     )
     end_fraction = (
-        np.count_nonzero(z_raw < z_edges[0], axis=1)
-        + np.count_nonzero(z_raw > z_edges[-1], axis=1)
+        np.count_nonzero(z_raw < wall_lo[:, None], axis=1)
+        + np.count_nonzero(z_raw > wall_hi[:, None], axis=1)
     ) * weight
-    z1 = np.clip(z_raw, z_edges[0], z_edges[-1])
+    z1 = np.clip(z_raw, wall_lo[:, None], wall_hi[:, None])
     cell_of = np.clip(
-        np.searchsorted(z_edges, z1.ravel()) - 1, 0, cells - 1
-    ).reshape(cells, count)
+        (np.searchsorted(z_edges, z1.ravel()) - 1).reshape(cells, count),
+        cell_lo[:, None],
+        cell_hi[:, None],
+    )
     flat = (np.arange(cells)[:, None] * cells + cell_of).ravel()
 
     def binned(values):
@@ -552,6 +632,7 @@ def neutral_hot_channel_rhs(
     b_ion_neutral_drag=1.0,
     wind_column_factor=None,
     birth_drift=False,
+    internal_wall=False,
 ):
     """Return ``(rhs, diagnostics)`` for the hot channel's ballistic flows.
 
@@ -565,7 +646,12 @@ def neutral_hot_channel_rhs(
 
     ``nn`` / ``nn_a``   atoms whose flight ended on the column boundary,
                         deposited at the LANDING cell -- the CX-ballistic
-                        erosion that relieves an axial pile
+                        erosion that relieves an axial pile. Under
+                        ``internal_wall`` the landing cell is always on the
+                        birth cell's own side of every closed plasma face, so
+                        a live cell's deposit can never reach a plasma-dead
+                        one and the caller's topology mask has nothing to
+                        delete.
     ``En``              the landed atoms rejoin the cold gas fully accommodated
                         at the wall temperature (single-zone); the excess is a
                         disclosed wall loss
@@ -658,6 +744,9 @@ def neutral_hot_channel_rhs(
                 state, floors=floors, ion_mass_g=ion_mass_g
             ),
             isotropic=kernels,
+            # The same wall the cached isotropic triple was built with: the
+            # zero-drift rows are copied from it verbatim.
+            internal_wall=internal_wall,
         )
     else:
         landing, residence, end_fraction = kernels
@@ -768,7 +857,10 @@ def neutral_hot_channel_rhs(
         # was folded back onto the end cell instead. Geometry only, constant in
         # time, and NOT a loss -- it is what keeps the landing rows closing to
         # 1 -- so it is saved to make the approximation measurable per cell
-        # rather than only as the run-wide scalar below.
+        # rather than only as the run-wide scalar below. Under
+        # ``internal_wall`` it counts the folds at the closed and absorbing
+        # plasma faces on the same footing, so on a run with that flag the
+        # reading is "folded at a wall", not "folded at an end plane".
         "hot_end_fraction": np.asarray(end_fraction, dtype=float),
         # The two halves of the ion-energy return, separated. Their sum is
         # bit-identical to the ``Ei`` row above by construction -- the row is

@@ -3153,6 +3153,42 @@ input_flags_template_1d = {
     # (presence-gated: the off path builds no drift kernel and the isotropic
     # one is untouched).
     "neutral_hot_birth_drift": False,
+    # Wall the hot channel's ballistic flight at the INTERNAL plasma
+    # boundaries, not only at the two global end planes. The walls are the
+    # closed plasma faces (geometry.plasma_open false: every face where a
+    # plasma-dead cell -- plenum, obstruction -- abuts a live one, plus the two
+    # end planes) together with the plasma-absorbing faces, which are a
+    # refinement of that set. A flight reaching one is clipped to the wall
+    # plane and the atom is booked in the cell on its OWN side of it, which is
+    # exactly the fold/absorb treatment the end planes already get; the landed
+    # atoms rejoin the COLD neutral books (nn, or nn_a under neutral_two_zone)
+    # at that boundary-adjacent cell, at the unchanged landing energy.
+    #
+    # PER-CELL BEHAVIOUR. Every cell is confined to its own contiguous run of
+    # same-topology cells. A LIVE cell's flights stay in its live segment, so
+    # its landings never fall on a plasma-dead cell -- with the flag off they
+    # do, and the caller's plasma-topology mask (which the hot channel's rows
+    # are subject to) then deletes those deposits, so atoms leave the inventory
+    # with no surface having absorbed them. A PLASMA-DEAD cell's flights stay
+    # in the dead block they were born in, so its (floor-density) births can no
+    # longer deposit out of a masked cell into a live one either. A BOUNDARY
+    # cell -- the live cell against a cathode disc or a collector -- is the
+    # cell that receives everything folded at that wall, on both counts. The
+    # mask itself is untouched; the flag only stops feeding it rows to delete.
+    # Cells with no column (Rp = 0) keep the in-place identity row they already
+    # had.
+    #
+    # Consumed by the neutral_hot_channel term alone (physics.hot_neutrals):
+    # it is passed to ballistic_flight_kernels, and to directed_flight_kernels
+    # under neutral_hot_birth_drift so the two kernels cannot disagree about
+    # where the walls are. hot_end_fraction then reads "folded at a wall"
+    # rather than "folded at an end plane".
+    #
+    # Requires neutral_energy -- there is no hot channel to wall without it --
+    # as a construction-time ValueError. Default OFF and bit-exact off
+    # (presence-gated: the off path's wall bounds ARE the two end planes, so
+    # every clip reduces to the historical one).
+    "neutral_hot_internal_wall": False,
     # Shaped initial neutral fill. The run's neutral IC comes from a PER-CELL
     # profile of absolute densities (nn0_profile, and optionally
     # nn0_annulus_profile under neutral_two_zone) instead of the uniform

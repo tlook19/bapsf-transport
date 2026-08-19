@@ -1244,6 +1244,23 @@ class LAPDSim1D:
                 "inert. Accepted: neutral_hot_birth_drift with "
                 "neutral_energy=True, or neutral_hot_birth_drift=False"
             )
+        # Internal walls for the ballistic flight (default off, bit-exact off).
+        # Same dependency as the drift flag, for the same reason: it changes
+        # where the hot channel's flights stop, and without the channel there
+        # is no flight to stop.
+        self._neutral_hot_internal_wall = bool(
+            self._flags.get("neutral_hot_internal_wall", False)
+        )
+        if self._neutral_hot_internal_wall and not self._neutral_energy:
+            raise ValueError(
+                "the neutral_hot_internal_wall flag requires neutral_energy: "
+                "it walls the CX-born HOT channel's ballistic flight at the "
+                "closed and absorbing plasma faces, and without neutral_energy "
+                "there is no hot channel -- no ballistic kernel is built and "
+                "the flag would be silently inert. Accepted: "
+                "neutral_hot_internal_wall with neutral_energy=True, or "
+                "neutral_hot_internal_wall=False"
+            )
         self._neutral_energy_alpha = float(
             self._input_dict.get("neutral_energy_wall_accommodation", 0.40)
         )
@@ -1314,7 +1331,10 @@ class LAPDSim1D:
         # speed cancels out of the axial hop), so they are built once here and
         # never re-entered.
         if self._neutral_energy:
-            self._hot_neutral_kernels = ballistic_flight_kernels(self._geometry)
+            self._hot_neutral_kernels = ballistic_flight_kernels(
+                self._geometry,
+                internal_wall=self._neutral_hot_internal_wall,
+            )
         else:
             self._hot_neutral_kernels = None
         self._hot_channel_diagnostics = {}
@@ -7941,6 +7961,7 @@ class LAPDSim1D:
             ),
             wind_column_factor=self._wind_column_factor,
             birth_drift=self._neutral_hot_birth_drift,
+            internal_wall=self._neutral_hot_internal_wall,
             **self._collision_operator_kwargs(),
         )
         self._hot_channel_diagnostics = diagnostics
