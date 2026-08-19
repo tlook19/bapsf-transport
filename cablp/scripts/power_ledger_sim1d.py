@@ -231,10 +231,11 @@ CHANNEL_PHASE = {
          "solver zeroes it in both branches"),
 }
 
-#: Founding drive-window numbers of record as quoted (log jjjj/llll,
-#: 2026-08-19), keyed by the quantity the --selftest mode re-measures and
-#: carried as (name, reference, significant figures compared).  Four figures
-#: everywhere the record quotes four; the cathode line is on record to three.
+#: Founding drive-window numbers, measured 2026-08-19 on the artifact named
+#: below at the registered drive window, keyed by the quantity the --selftest
+#: mode re-measures and carried as (name, reference, significant figures
+#: compared).  Four figures where the founding read gave four; the cathode
+#: line is held to three.
 SELFTEST_ARTIFACT = "g1a_foot45_cr6p94.h5"
 SELFTEST_WINDOW_MS = (15.25, 19.75)
 SELFTEST_REFERENCE = (
