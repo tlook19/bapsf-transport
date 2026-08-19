@@ -68,6 +68,17 @@ The kernels are stated, not assumed to be right:
   with tails past the top-hat edge. The top-hat is the flatter, more
   spread-out member and so is the honest opposite end of the bracket.
 
+THE STANCE IS OVERRIDABLE. ``--extra k=v`` / ``--extra-flag k=v`` carry
+arbitrary ``input_dict`` / ``input_flags`` overrides into the stance the
+builder assembles -- the same passthrough ``run_m6_point.py`` gives the RUN,
+spelled the same way, so a geometry the arm runs on is a geometry the foot is
+built on. They are applied LAST, after the whole stance is assembled, so the
+grid, the puff lobe, the spread targets and the zone volumes all see them.
+Keys are never screened here: an unknown or misfiled key reaches
+``LAPDSim1D``'s own construction-time refusal, unchanged. Array-valued keys
+(``plasma_radius_profile_cm`` and friends, one entry per mesh cell) come from
+a file rather than a kilobyte of argv, via ``--extra-npz KEY=path.npz:array``.
+
 Usage:
 
     python scripts/sp3_build_nn0.py --sgp 5200 --two-zone \
@@ -127,8 +138,93 @@ KERNELS = ("diffusive", "ballistic")
 SP1_BAND_Z_CM = (790.0, 1045.0)
 
 
-def stance_config(es, nx, sgp, two_zone):
-    """Return (params, flags) for the production stance, as run_model builds it."""
+def parse_kv_overrides(items):
+    """Return ``{key: value}`` parsed from ``k=v`` strings.
+
+    The value rule is ``run_m6_point.py``'s, replicated so that a key spelled
+    the same way on the builder and on the run means the same thing: the value
+    is read as JSON when it parses (numbers, ``true``/``false``/``null``,
+    lists) and kept as the raw string when it does not, which is what lets a
+    bare selector name like ``tail_walk`` be written without quoting.
+
+    Keys are NOT screened. A key this stance does not own -- misspelled, or
+    filed into the wrong one of the two namespaces -- must reach ``LAPDSim1D``
+    and raise there, because the solver's construction-time refusal is the one
+    authority on which template owns which key.
+    """
+    overrides = {}
+    for item in items:
+        key, sep, value = item.partition("=")
+        if not sep or not key:
+            raise ValueError(
+                f"override {item!r} is not of the form key=value"
+            )
+        try:
+            overrides[key] = json.loads(value)
+        except json.JSONDecodeError:
+            overrides[key] = value
+    return overrides
+
+
+def parse_npz_overrides(items):
+    """Return ``({key: value}, {key: provenance})`` from ``KEY=path.npz:array``.
+
+    The array-valued route into the stance. A per-mesh-cell profile
+    (``plasma_radius_profile_cm``, ``machine_radius_profile_cm``, ...) is
+    hundreds of numbers and belongs in a file, not in argv; this reads the
+    named array out of the named ``.npz`` and hands it over as a plain Python
+    list, exactly the form the config templates take. A 0-d entry (an ``.npz``
+    may hold scalars alongside its profiles) becomes the scalar itself, so one
+    file can carry a whole geometry -- the machine length and the puff centre
+    as readily as the profiles. KEY is the CONFIG key and ``arrayname`` the
+    name inside the file; they need not agree, which is what lets one file
+    hold several candidate profiles under distinguishing names.
+
+    The script -- not the solver -- does the file I/O, as everywhere else in
+    this campaign. The returned provenance records where each value came from
+    and its shape, never the values themselves, which would bloat the ledger
+    the output ``.npz`` carries.
+    """
+    values, provenance = {}, {}
+    for item in items:
+        key, sep, reference = item.partition("=")
+        if not sep or not key or not reference:
+            raise ValueError(
+                f"npz override {item!r} is not of the form "
+                "key=path.npz:arrayname"
+            )
+        path, sep, name = reference.rpartition(":")
+        if not sep or not path or not name:
+            raise ValueError(
+                f"npz override {item!r} names no array: the value must be "
+                "path.npz:arrayname"
+            )
+        with np.load(path, allow_pickle=False) as data:
+            if name not in data:
+                raise ValueError(
+                    f"{path} carries no array {name!r}; it holds "
+                    f"{sorted(data.files)}"
+                )
+            array = np.asarray(data[name])
+        values[key] = array.item() if array.ndim == 0 else array.tolist()
+        provenance[key] = {
+            "source": reference,
+            "shape": list(array.shape),
+            "dtype": str(array.dtype),
+        }
+    return values, provenance
+
+
+def stance_config(es, nx, sgp, two_zone, extra_params=None, extra_flags=None):
+    """Return (params, flags) for the production stance, as run_model builds it.
+
+    ``extra_params`` and ``extra_flags`` are applied LAST, after the stance is
+    fully assembled, so every consumer downstream of this function -- the
+    solver geometry, the puff lobe, the spreading kernel's eligible targets,
+    the zone volumes and the uniform base -- reads the overridden values. That
+    ordering is the point: a geometry override that arrived earlier could be
+    overwritten by the stance itself.
+    """
     params, flags = default_config()
     params.update(PARAM_OVERRIDES)
     flags.update(FLAG_OVERRIDES)
@@ -138,6 +234,10 @@ def stance_config(es, nx, sgp, two_zone):
     params["V_bank"] = op["V_bank"]
     if two_zone:
         flags["neutral_two_zone"] = True
+    if extra_params:
+        params.update(extra_params)
+    if extra_flags:
+        flags.update(extra_flags)
     # The geometry is all this script needs from the solver, and the flags
     # that decide it are already set. Equilibration is a start_simulation()
     # behaviour and never runs at construction, so this costs one build.
@@ -259,7 +359,17 @@ def spread_matrix(geometry, kernel, width_cm):
 
 def build(args):
     """Return (profiles, ledger) for the requested corner of the bracket."""
-    params, flags = stance_config(args.es, args.nx, args.sgp, args.two_zone)
+    # npz-sourced values first, so an inline --extra can still override any of
+    # them -- the same precedence run_m6_point.py gives its file-sourced nn0.
+    npz_params, npz_provenance = parse_npz_overrides(args.extra_npz)
+    inline_params = parse_kv_overrides(args.extra)
+    extra_params = dict(npz_params)
+    extra_params.update(inline_params)
+    extra_flags = parse_kv_overrides(args.extra_flag)
+    params, flags = stance_config(
+        args.es, args.nx, args.sgp, args.two_zone,
+        extra_params=extra_params, extra_flags=extra_flags,
+    )
     if params["gas_type"] != "He":
         raise ValueError(
             "sp3_build_nn0 is helium-only: the collision cross section and the "
@@ -453,6 +563,19 @@ def build(args):
         "spread_conservation_rel": conservation_rel,
         "zone_routing_conservation_rel": routing_rel,
     }
+    # The stance overrides, PRESENCE-GATED: an invocation that overrides
+    # nothing writes exactly the ledger it always wrote, and so exactly the
+    # same output bytes. The inline and file-sourced overrides are recorded
+    # separately because they are separate provenance -- a literal value given
+    # on the command line, versus a named array in a named file (recorded as
+    # source, shape and dtype; the values themselves would bloat the ledger
+    # the output npz carries, and they are already IN the output's own grid).
+    if inline_params:
+        ledger["extra_params"] = inline_params
+    if npz_provenance:
+        ledger["extra_params_from_npz"] = npz_provenance
+    if extra_flags:
+        ledger["extra_flags"] = extra_flags
     return (nn0_profile, nn0_annulus_profile, base_col, base_ann,
             geometry, ledger)
 
@@ -469,6 +592,21 @@ def print_ledger(
         f"puff {ledger['gas_puff_profile']} at z={ledger['gas_puff_z_cm']:g} cm, "
         f"throw {ledger['gas_puff_throw_cm']:g} cm"
     )
+    # Presence-gated exactly as the ledger entries are: an invocation that
+    # overrides nothing prints what it always printed.
+    for label, key in (
+        ("stance overrides [params]", "extra_params"),
+        ("stance overrides [flags]", "extra_flags"),
+    ):
+        if key in ledger:
+            print(f"{label}: " + ", ".join(
+                f"{k}={v!r}" for k, v in sorted(ledger[key].items())
+            ))
+    if "extra_params_from_npz" in ledger:
+        print("stance overrides [params from npz]: " + ", ".join(
+            f"{k}<-{spec['source']} {spec['dtype']}{tuple(spec['shape'])}"
+            for k, spec in sorted(ledger["extra_params_from_npz"].items())
+        ))
     print(
         f"base [{ledger['base_kind']}]: {ledger['base_source']}; "
         f"column {ledger['base_column_min_cm3']:.6g}..."
@@ -601,6 +739,32 @@ def main(argv=None):
                         "really came from the h5, survived the routing, and "
                         "round-tripped through the file -- rather than the "
                         "arithmetic of adding zero")
+    p.add_argument("--extra", nargs="*", default=(),
+                   help="additional k=v input_dict (params) overrides, "
+                        "JSON-parsed values, spelled exactly as "
+                        "run_m6_point.py --extra spells them. Applied AFTER "
+                        "the whole stance is assembled, so the geometry keys "
+                        "(Lm, collector_length_cm, gas_puff_z_cm, ...) take "
+                        "effect everywhere this script reads the config. "
+                        "Unknown or misfiled keys are NOT screened here -- "
+                        "they raise at LAPDSim1D construction, which is the "
+                        "one authority on which template owns a key")
+    p.add_argument("--extra-flag", nargs="*", default=(),
+                   help="additional k=v input_flags overrides (JSON-parsed), "
+                        "as run_m6_point.py --extra-flag; same ordering and "
+                        "same no-screening rule as --extra")
+    p.add_argument("--extra-npz", nargs="*", default=(),
+                   help="array-valued params override, KEY=path.npz:arrayname "
+                        "-- reads the named array out of the named .npz and "
+                        "files it under KEY, e.g. "
+                        "plasma_radius_profile_cm=scripts/g1_profiles.npz:"
+                        "plasma_radius_profile_cm_off. This is the route for "
+                        "the per-mesh-cell geometry profiles, which are "
+                        "hundreds of numbers and do not belong in argv; a 0-d "
+                        "entry in the .npz becomes the scalar itself, so one "
+                        "file can carry a whole geometry. Applied BEFORE "
+                        "--extra, so an inline value still overrides a "
+                        "file-sourced one")
     p.add_argument("--out", required=True, help="output .npz path")
     args = p.parse_args(argv)
 
