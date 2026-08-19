@@ -1174,22 +1174,34 @@ def run_fast_reflected(bg, n_particles, rng, r_e=0.2, r_n=0.5, max_iter=20000):
 
     CX. The fast atom's charge-exchange frequency is ENERGY-RESOLVED, taken
     from the same Phelps He+/He backscatter cross section the solver's R4.3
-    ion-neutral operator uses::
+    ion-neutral operator uses, in the CENTRE-OF-MASS convention::
 
-        nu_cx = n_i * Qb(E_atom) * v_rel
+        g_eff^2 = |v - u_i|^2 + 8 k T_i / (pi mu),   mu = m_He / 2
+        E_rel   = 1/2 mu g_eff^2
+        nu_cx   = n_i * Qb(E_rel) * g_eff
 
-    ``Qb`` is :func:`cablp.funcs._cross.phelps_he_backscatter_cm2`, valid over
+    ``Qb`` is :func:`cablp.funcs._cross.phelps_he_backscatter_cm2`, whose
+    argument is the RELATIVE collision energy; it is valid over
     ``PHELPS_QB_RANGE_EV`` = 1.0e-4 to 1.0e4 eV (the span of the archived LXCat
-    table); a launch energy outside that range raises. Two conventions inside
-    this rate are choices and are stated rather than buried: ``E_atom`` is the
-    atom's own LAB kinetic energy (not the He+/He centre-of-mass relative
-    energy, which is half of it for equal masses and cold ions), and ``v_rel``
-    is its speed relative to the local ion MEAN drift ``u``, with the ion
-    thermal spread neglected -- at these energies ``v_fast`` exceeds the ion
-    thermal speed several-fold. This replaces :func:`run_mc`'s treatment, which
-    keys CX off the background ION TEMPERATURE through
-    :func:`~cablp.funcs._cross.charge_ex_react` and so transports a fast atom
-    at a thermal collision rate.
+    table), and an ``E_rel`` reachable outside that range raises.
+
+    CENTRE-OF-MASS CONVENTION, stated rather than buried. ``Qb`` is tabulated
+    against the relative collision energy of the He+/He pair, so its argument
+    is ``E_rel = 1/2 mu g^2`` with the reduced mass ``mu = m_He / 2`` -- for
+    equal masses and cold, drift-free ions that is HALF the atom's own lab
+    kinetic energy, which is what this mode previously passed. The same
+    ``g_eff`` also sets the rate: a collision frequency is
+    ``n sigma <relative speed>``, not ``n sigma <lab speed>``. ``g_eff`` is the
+    standard interpolation between the drift-dominated and thermal-dominated
+    limits for an equal-mass pair, so the ion thermal spread is carried rather
+    than neglected. The form is transcribed symbol-for-symbol from the repo's
+    existing correct consumer,
+    :meth:`cablp.solvers._sim1d.physics.kinetic_dvm.TransientDVM.collision_frequencies`
+    (``kinetic_dvm.py`` lines 686-689), including its ``T_i`` clamp at 1e-6 eV
+    and its ``E_rel`` floor at 1e-9 eV; ``u_i`` is the local ion MEAN drift.
+    This replaces :func:`run_mc`'s treatment, which keys CX off the background
+    ION TEMPERATURE through :func:`~cablp.funcs._cross.charge_ex_react` and so
+    transports a fast atom at a thermal collision rate.
 
     Electron-impact ionization keeps the background's Te-Maxwellian ADAS SCD
     rate (``bg["nu_ion"]``) unchanged: the electrons ARE the Maxwellian
@@ -1217,13 +1229,31 @@ def run_fast_reflected(bg, n_particles, rng, r_e=0.2, r_n=0.5, max_iter=20000):
     Two z-normal planes end a history as well: crossing the far end is
     ``end_loss``, and re-crossing the cathode face is ``source_return``.
 
-    SIMPLIFICATION, disclosed. The anode mesh plane is TRANSPARENT to the fast
-    lobe: unlike :func:`run_mc`, this mode applies no ``1 - eta`` interception
-    there. The registered outcome split has no mesh channel, and inventing one
-    would put a physics decision inside a bookkeeping read. The bias direction
-    is known and one-sided -- atoms the mesh would have thermalized instead fly
-    on and may deposit -- so ``f_dep`` reported here is an UPPER bound in that
-    respect.
+    ANODE MESH, disclosed. The mesh plane is the gap/puff z-edge the loader
+    resolves from the run's own geometry (``bg["mesh_edge"]``, nominally
+    z = 50 cm), and it is OPAQUE with the run's own probability
+    ``eta = bg["eta"]``, the same number :func:`run_mc` uses. At an atom's
+    first crossing of that plane it is culled with probability ``eta`` into the
+    sixth outcome bin ``mesh_intercepted``; survivors continue unchanged. No
+    velocity in this mode ever changes -- every event kills the history and
+    nothing is re-emitted -- so ``z`` is monotone along a history and the plane
+    can be met at most once; that invariant is ASSERTED per crossing rather
+    than assumed, and a second crossing raises.
+
+    The mesh cull is applied BEFORE the annular-step branch of the escape test
+    at the same z-edge: the mesh is a barrier standing in the crossing plane,
+    so an atom meets it before it can be found outside the destination cell's
+    column. A culled history is therefore booked ``mesh_intercepted``, never
+    ``column_escape``.
+
+    ``f_dep`` is consequently NO LONGER a one-sided upper bound in the mesh
+    respect; the residual bias is two-sided. Downward: :func:`run_mc` re-emits
+    an intercepted atom thermally on the incident side, and that thermal
+    population -- some of which re-enters the column and deposits -- is outside
+    this mode's scope, exactly as the newborn thermal neutral of a CX event is,
+    so the cull discards it. Upward: ``eta`` is a plane-averaged opacity applied
+    without angular resolution, and the fast lobe's cosine-launched incidence
+    distribution at the mesh is not the one that average was taken over.
 
     Returns a dict of per-cell profiles [atoms/s], history counts, the outcome
     split, ``f_dep`` with its binomial error, and the launch-energy record.
@@ -1248,25 +1278,62 @@ def run_fast_reflected(bg, n_particles, rng, r_e=0.2, r_n=0.5, max_iter=20000):
         )
     Ti_cath = float(bg["Ti"][0])
     E_fast = (r_e / r_n) * max(phi_c + Ti_cath, 0.0)
-    lo, hi = PHELPS_QB_RANGE_EV
-    if not (lo <= E_fast <= hi):
-        raise ValueError(
-            f"fast-lobe launch energy E_fast={E_fast:.6g} eV is outside the "
-            f"Phelps He+/He backscatter table's range {lo:g}-{hi:g} eV, so "
-            "the CX cross section would be an extrapolation of the fit rather "
-            "than the archived data. Refusing to run."
-        )
     v_fast = math.sqrt(2.0 * E_fast * EV / M_HE)
-    Qb_fast = float(phelps_he_backscatter_cm2(E_fast))
+    # The CoM launch energy in the strict cold-ion, drift-free limit: for an
+    # equal-mass pair E_rel = 1/2 mu g^2 = 1/4 m_He v^2 is exactly half the
+    # lab energy. It is the number that pairs with E_fast in the header; the
+    # REALIZED E_rel is the bracket computed just below.
+    E_rel_launch = 0.25 * M_HE * v_fast**2 / EV
 
-    # Null-collision majorant. Only v_rel varies over the population (Qb is
-    # evaluated at the atom's own energy, which never changes in this mode:
-    # both event channels kill the history), and it is bounded by the launch
-    # speed plus the largest ion drift, so this bound is exact rather than
-    # heuristic. Asserted per step below all the same -- a broken majorant
-    # biases a null-collision estimator silently.
-    v_rel_max = v_fast + float(np.abs(u_bg).max())
-    nu_max = float((nu_ion + n_bg * Qb_fast * v_rel_max).max())
+    # Ion thermal spread and drift, cell by cell, in the reference consumer's
+    # own form (kinetic_dvm.collision_frequencies, lines 686-689): mu = m/2 for
+    # the symmetric pair, so 8 k T / (pi mu) = 16 k T / (pi m).
+    Ti_safe = np.maximum(np.asarray(bg["Ti"], dtype=float), 1e-6)
+    th2 = 16.0 * Ti_safe * EV / (np.pi * M_HE)
+
+    # Null-collision majorant, and it is EXACT rather than heuristic because
+    # g_eff is bounded on both sides. The atom's speed is |v| = v_fast for its
+    # whole life (both event channels kill the history, and nothing is
+    # re-emitted), so per cell i
+    #
+    #     max(v_fast - |u_i|, 0)^2 + th2_i  <=  g_eff^2  <=  (v_fast + |u_i|)^2 + th2_i
+    #
+    # and E_rel is a monotone function of g_eff. Qb is STRICTLY DECREASING on
+    # E > 0 -- d(ln Qb)/dE = -0.15/(E + 5) - 0.25/(1000 + E) < 0, the two
+    # falling factors of the Phelps form beating its rising (1 + 5/E)^-0.15
+    # exactly -- so Qb(E_rel) <= Qb(E_rel_lo_i). Bounding the two factors
+    # separately therefore bounds their product:
+    #
+    #     nu_cx <= n_i * Qb(E_rel_lo_i) * g_hi_i
+    #
+    # Asserted per step below all the same -- a broken majorant biases a
+    # null-collision estimator silently.
+    u_abs = np.abs(u_bg)
+    g_lo = np.sqrt(np.maximum(v_fast - u_abs, 0.0) ** 2 + th2)
+    g_hi = np.sqrt((v_fast + u_abs) ** 2 + th2)
+    E_rel_lo = np.maximum(0.25 * M_HE * g_lo**2 / EV, 1e-9)
+    E_rel_hi = np.maximum(0.25 * M_HE * g_hi**2 / EV, 1e-9)
+    lo, hi = PHELPS_QB_RANGE_EV
+    if not (lo <= float(E_rel_lo.min()) and float(E_rel_hi.max()) <= hi):
+        raise ValueError(
+            "the fast lobe's reachable CoM collision energy E_rel spans "
+            f"{float(E_rel_lo.min()):.6g}-{float(E_rel_hi.max()):.6g} eV "
+            f"(launch E_fast={E_fast:.6g} eV lab), which leaves the Phelps "
+            f"He+/He backscatter table's range {lo:g}-{hi:g} eV, so the CX "
+            "cross section would be an extrapolation of the fit rather than "
+            "the archived data. Refusing to run."
+        )
+    Qb_fast = float(phelps_he_backscatter_cm2(E_rel_launch))
+    nu_max = float(
+        (nu_ion + n_bg * phelps_he_backscatter_cm2(E_rel_lo) * g_hi).max()
+    )
+
+    # The anode mesh plane, from the run's own geometry and config -- the same
+    # z-edge index and the same eta run_mc uses, never a literal here.
+    mesh_edge = int(bg["mesh_edge"])
+    z_mesh = float(ze[mesh_edge])
+    eta = float(bg["eta"])
+    transparency = 1.0 - eta
 
     N = int(n_particles)
     rate_fast = r_n * float(bg["sources"]["cathode_face"])
@@ -1283,12 +1350,17 @@ def run_fast_reflected(bg, n_particles, rng, r_e=0.2, r_n=0.5, max_iter=20000):
 
     cnt_cx = np.zeros(ncell)          # first-interaction CX census [histories]
     cnt_ion = np.zeros(ncell)         # first-interaction ionization census
+    # Per-history record of whether the mesh plane has already been met, so the
+    # at-most-one-crossing invariant is checked rather than trusted. Compacted
+    # with pos/vel at the end of every segment.
+    crossed_mesh = np.zeros(N, dtype=bool)
     outcome = {
         "cx_deposited": 0,
         "ionization_deposited": 0,
         "column_escape": 0,
         "end_loss": 0,
         "source_return": 0,
+        "mesh_intercepted": 0,
     }
     for _ in range(max_iter):
         n_act = pos.shape[0]
@@ -1327,13 +1399,17 @@ def run_fast_reflected(bg, n_particles, rng, r_e=0.2, r_n=0.5, max_iter=20000):
         if hit_c.any():
             idx = np.flatnonzero(hit_c)
             ii = icell[idx]
-            E_atom = 0.5 * M_HE * speed[idx] ** 2 / EV
-            v_rel = np.sqrt(
+            # CoM convention, kinetic_dvm.collision_frequencies lines 686-689
+            # symbol for symbol: the thermal-spread effective relative speed
+            # sets BOTH the cross section's argument and the rate.
+            w2 = (
                 vel[idx, 0] ** 2
                 + vel[idx, 1] ** 2
                 + (vel[idx, 2] - u_bg[ii]) ** 2
             )
-            nu_cx = n_bg[ii] * phelps_he_backscatter_cm2(E_atom) * v_rel
+            g_eff = np.sqrt(w2 + th2[ii])
+            E_rel = np.maximum(0.25 * M_HE * g_eff**2 / EV, 1e-9)
+            nu_cx = n_bg[ii] * phelps_he_backscatter_cm2(E_rel) * g_eff
             nu_tot = nu_ion[ii] + nu_cx
             if np.any(nu_tot > nu_max):
                 raise ValueError(
@@ -1372,22 +1448,44 @@ def run_fast_reflected(bg, n_particles, rng, r_e=0.2, r_n=0.5, max_iter=20000):
             outcome["end_loss"] += int(at_R.sum())
             outcome["source_return"] += int(at_L.sum())
             kill[idx[at_R | at_L]] = True
+            interior = ~(at_R | at_L)
+            # ANODE MESH: an opaque barrier standing IN the crossing plane, so
+            # it is resolved before the annular-step test at the same edge --
+            # a culled atom is mesh_intercepted, never column_escape.
+            at_mesh = interior & (edge == mesh_edge)
+            if at_mesh.any():
+                m = idx[at_mesh]
+                if crossed_mesh[m].any():
+                    raise ValueError(
+                        f"{int(crossed_mesh[m].sum())} fast histories reached "
+                        f"the anode mesh plane z = {z_mesh:.4f} cm a SECOND "
+                        "time. Nothing in this mode changes a velocity, so z "
+                        "is monotone along a history and the plane is "
+                        "reachable at most once; a second crossing means the "
+                        "mesh cull was applied more than once to the same "
+                        "atom and the eta bookkeeping is wrong. Refusing to "
+                        "continue."
+                    )
+                crossed_mesh[m] = True
+                blocked = rng.random(m.size) > transparency
+                outcome["mesh_intercepted"] += int(blocked.sum())
+                kill[m[blocked]] = True
             # Column surface, ANNULAR-STEP branch: a z-crossing into a section
             # whose column is narrower leaves the atom outside Rp without ever
             # meeting the cylindrical root above.
-            interior = ~(at_R | at_L)
             e = idx[interior]
             if e.size:
                 dest = np.where(
                     zdir[interior] > 0, edge[interior], edge[interior] - 1
                 )
                 r_step = np.sqrt(pos[e, 0] ** 2 + pos[e, 1] ** 2)
-                step = r_step > Rp[dest]
+                step = (r_step > Rp[dest]) & ~kill[e]
                 outcome["column_escape"] += int(step.sum())
                 kill[e[step]] = True
 
         alive = ~kill
         pos, vel = pos[alive], vel[alive]
+        crossed_mesh = crossed_mesh[alive]
     else:
         if pos.shape[0]:
             raise ValueError(
@@ -1395,7 +1493,7 @@ def run_fast_reflected(bg, n_particles, rng, r_e=0.2, r_n=0.5, max_iter=20000):
                 f"after max_iter={max_iter} segments. Every outcome of this "
                 "mode is a registered channel, so an exhausted history has "
                 "nowhere honest to be booked; refusing to report a split with "
-                "a silent sixth bin."
+                "a silent extra bin."
             )
 
     n_dep = outcome["cx_deposited"] + outcome["ionization_deposited"]
@@ -1452,8 +1550,13 @@ def run_fast_reflected(bg, n_particles, rng, r_e=0.2, r_n=0.5, max_iter=20000):
         "cx_share_err": cx_share_err,
         "fit": fit,
         "E_fast_eV": E_fast,
+        "E_rel_eV": E_rel_launch,
+        "E_rel_lo_eV": float(E_rel_lo.min()),
+        "E_rel_hi_eV": float(E_rel_hi.max()),
         "v_fast_cm_s": v_fast,
         "Qb_fast_cm2": Qb_fast,
+        "z_mesh_cm": z_mesh,
+        "eta": eta,
         "phi_c_V": phi_c,
         "Ti_cathode_eV": Ti_cath,
         "T_s_K": T_s,
@@ -1487,7 +1590,9 @@ def report_fast_reflected(res, bg, args):
     print(f"  Ti_cath [eV]   {res['Ti_cathode_eV']:.6f}"
           "   (window mean, first in-domain cell)")
     print(f"  E_fast [eV]    {res['E_fast_eV']:.6f}"
-          "   = (R_E/R_N) * (phi_c + Ti_cath)")
+          "   = (R_E/R_N) * (phi_c + Ti_cath)   [LAB, per atom]")
+    print(f"  E_rel [eV]     {res['E_rel_eV']:.6f}"
+          "   = 1/2 mu v_fast^2, mu = M_He/2   [CoM, cold drift-free ions]")
     print(f"  v_fast [cm/s]  {res['v_fast_cm_s']:.6e}")
     print(f"  angular        cosine into the domain (cosine_emit, sign_z=+1, "
           f"T_s={res['T_s_K']:.1f} K); direction only, speed set to v_fast")
@@ -1499,16 +1604,39 @@ def report_fast_reflected(res, bg, args):
           "below is a FRACTION)")
     print()
     print("COLLISION PHYSICS (fast population)")
-    print("  CX             nu_cx = n_i * Qb(E_atom) * v_rel, Phelps He+/He "
+    print("  CX             nu_cx = n_i * Qb(E_rel) * g_eff, Phelps He+/He "
           "backscatter")
+    print("                 g_eff^2 = |v - u_i|^2 + 8 k T_i / (pi mu),   "
+          "mu = M_He/2")
+    print("                 E_rel   = 1/2 mu g_eff^2")
     print(f"                 Qb validity range {PHELPS_QB_RANGE_EV[0]:g} - "
-          f"{PHELPS_QB_RANGE_EV[1]:g} eV (archived LXCat table); "
-          f"E_fast is inside it")
-    print(f"                 Qb(E_fast) = {res['Qb_fast_cm2']:.6e} cm^2")
-    print("                 E_atom is the atom's own LAB kinetic energy; "
-          "v_rel is taken")
-    print("                 against the local ion MEAN drift (ion thermal "
-          "spread neglected)")
+          f"{PHELPS_QB_RANGE_EV[1]:g} eV (archived LXCat table); the "
+          "reachable E_rel")
+    print(f"                 spans {res['E_rel_lo_eV']:.6g} - "
+          f"{res['E_rel_hi_eV']:.6g} eV over the background and is inside it")
+    print(f"                 Qb(E_rel) = {res['Qb_fast_cm2']:.6e} cm^2 "
+          "at the drift-free cold-ion launch E_rel")
+    print("  CoM convention Qb is tabulated against the RELATIVE collision "
+          "energy of the")
+    print("                 He+/He pair, so its argument is E_rel = 1/2 mu "
+          "g^2 with the")
+    print("                 reduced mass mu = M_He/2 -- half the atom's own "
+          "lab energy for")
+    print("                 equal masses and cold, drift-free ions. The same "
+          "g_eff sets the")
+    print("                 RATE: a collision frequency is n sigma <relative "
+          "speed>, not")
+    print("                 n sigma <lab speed>. g_eff carries the ion "
+          "thermal spread (the")
+    print("                 standard equal-mass interpolation) rather than "
+          "neglecting it, and")
+    print("                 u_i is the local ion MEAN drift. Transcribed "
+          "symbol-for-symbol")
+    print("                 from kinetic_dvm.py:686-689 "
+          "(TransientDVM.collision_frequencies),")
+    print("                 the repo's existing correct consumer, including "
+          "its T_i clamp at")
+    print("                 1e-6 eV and its E_rel floor at 1e-9 eV.")
     print("  ionization     nu_ion = n_i * SCD(n,Te), the background's "
           "Te-Maxwellian ADAS rate")
     print("                 (unchanged: the ELECTRONS are the Maxwellian "
@@ -1522,14 +1650,38 @@ def report_fast_reflected(res, bg, args):
     for line in FAST_ESCAPE_DISCLOSURE.split("\n"):
         print(f"  {line}")
     print()
-    print("SIMPLIFICATION (disclosed)")
-    print("  The anode mesh plane is TRANSPARENT to the fast lobe: no 1-eta "
-          "interception is")
-    print("  applied (run_mc does apply it). The registered outcome split has "
-          "no mesh")
-    print("  channel. Bias is one-sided -- atoms the mesh would have "
-          "thermalized fly on and")
-    print("  may deposit -- so f_dep below is an UPPER bound in that respect.")
+    print("ANODE MESH BIN (disclosed)")
+    print(f"  The mesh plane is the run's own gap/puff z-edge, z = "
+          f"{res['z_mesh_cm']:.4f} cm, and it is")
+    print(f"  OPAQUE with the run's own eta = {res['eta']:.6g} (the same "
+          "number run_mc uses; both")
+    print("  are read from the background, never hardcoded here). At an atom's "
+          "FIRST crossing")
+    print("  of that plane it is culled with probability eta into the sixth "
+          "outcome bin")
+    print("  mesh_intercepted; survivors continue unchanged. No velocity in "
+          "this mode ever")
+    print("  changes, so z is monotone along a history and the plane is "
+          "reachable at most")
+    print("  once -- asserted per crossing, not assumed. The cull is resolved "
+          "BEFORE the")
+    print("  annular-step branch of the escape test at the same edge, so a "
+          "culled atom is")
+    print("  booked mesh_intercepted and never column_escape.")
+    print("  f_dep is therefore NO LONGER a one-sided upper bound in the mesh "
+          "respect; the")
+    print("  residual bias is TWO-SIDED. Downward: run_mc re-emits an "
+          "intercepted atom")
+    print("  thermally on the incident side, and that thermal population -- "
+          "some of which")
+    print("  re-enters the column and deposits -- is outside this mode's "
+          "scope, exactly as a")
+    print("  CX event's newborn neutral is, so the cull discards it. Upward: "
+          "eta is a")
+    print("  plane-averaged opacity applied without angular resolution, and "
+          "the fast lobe's")
+    print("  incidence distribution at the mesh is not the one that average "
+          "was taken over.")
     print()
 
     out = res["outcome"]
@@ -1539,7 +1691,7 @@ def report_fast_reflected(res, bg, args):
     print(bar)
     print(f"  {'channel':<22} {'histories':>10} {'fraction':>10}")
     for key in ("cx_deposited", "ionization_deposited", "column_escape",
-                "end_loss", "source_return"):
+                "end_loss", "source_return", "mesh_intercepted"):
         print(f"  {key:<22} {out[key]:>10d} {out[key] / N:>10.5f}")
     print(f"  {'TOTAL':<22} {sum(out.values()):>10d} "
           f"{sum(out.values()) / N:>10.5f}")
@@ -1618,6 +1770,7 @@ def report_fast_reflected(res, bg, args):
             "E_fast_eV", "v_fast_cm_s", "Qb_fast_cm2", "phi_c_V",
             "Ti_cathode_eV", "R_cath_cm", "r_e", "r_n", "rate_fast_per_s",
             "nu_max_per_s", "e_fold_cm", "fit_z_lo", "fit_z_hi",
+            "E_rel_eV", "E_rel_lo_eV", "E_rel_hi_eV", "z_mesh_cm", "eta",
         ]),
         scalars=np.array([
             res["n_launched"], res["f_dep"], res["f_dep_err"],
@@ -1626,6 +1779,8 @@ def report_fast_reflected(res, bg, args):
             res["Ti_cathode_eV"], res["R_cath_cm"], res["r_e"], res["r_n"],
             res["rate_fast_per_s"], res["nu_max_per_s"],
             res["fit"]["e_fold_cm"], res["fit"]["z_lo"], res["fit"]["z_hi"],
+            res["E_rel_eV"], res["E_rel_lo_eV"], res["E_rel_hi_eV"],
+            res["z_mesh_cm"], res["eta"],
         ], dtype=float),
     )
     print(f"saved {prefix}.npz")
