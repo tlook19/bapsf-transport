@@ -190,7 +190,6 @@ def flight_wall_bounds(geometry, internal_wall=False):
     """
     z_edges = np.asarray(geometry.z_edges_cm, dtype=float)
     cells = int(np.asarray(geometry.z_cm, dtype=float).size)
-    index = np.arange(cells)
     if not internal_wall:
         return (
             np.full(cells, z_edges[0]),
@@ -205,6 +204,7 @@ def flight_wall_bounds(geometry, internal_wall=False):
     closed[0] = True
     closed[-1] = True
     faces = np.flatnonzero(closed)
+    index = np.arange(cells)
     lo_face = faces[np.searchsorted(faces, index, side="right") - 1]
     hi_face = faces[np.searchsorted(faces, index + 1, side="left")]
     return z_edges[lo_face], z_edges[hi_face], lo_face, hi_face - 1
