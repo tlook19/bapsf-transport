@@ -139,9 +139,11 @@ from .physics.hot_neutrals import (
     neutral_hot_channel_rhs,
 )
 from .physics.sources import (
+    CATHODE_JET_ENERGY_CONVENTIONS,
     add_state_rhs,
     anode_collection_rhs,
     boundary_absorption_rhs,
+    cathode_jet_backscatter_speed,
     characteristic_boundary_rhs,
     ion_neutral_collision_rhs,
     neutral_cx_channel_rhs,
@@ -7549,6 +7551,11 @@ class LAPDSim1D:
 
             e_jet = R_N (1/2) m v_back^2 + (1 - R_N) (3/2) k T_s
 
+        with ``v_back`` from
+        :func:`~cablp.solvers._sim1d.physics.sources.cathode_jet_backscatter_speed`
+        -- the same one spec the momentum booking reads, so the energy here and
+        the momentum there describe atoms moving at one speed.
+
         The generic surface booking has already credited every recycled atom
         the wall energy ``(3/2) k T_wall``, so this term supplies only the
         EXCESS ``e_jet - (3/2) k T_wall``, on the cathode cells alone.
@@ -7559,12 +7566,20 @@ class LAPDSim1D:
         construction REFUSES this combination without it rather than booking
         the same ``R_E`` on both sides.
 
+        WHICH ``R_E`` LEAVES depends on ``cathode_jet_energy_convention``, and
+        only one of the two settings matches that debit. Under
+        ``"total_reflected"`` the backscatter carries ``R_E (phi_c + Ti)`` per
+        RECYCLED particle, exactly the per-particle share the debit takes off
+        the surface. Under ``"legacy"`` it carries ``R_N R_E (phi_c + Ti)``,
+        so the ``(1 - R_N) R_E`` remainder is debited from the surface and
+        received by nobody.
+
         The atoms are NOT routed through the hot channel's ballistic kernel.
         That kernel integrates an isotropic volume birth; the backscattered
         flux is a directed surface jet, and its premise does not hold.
 
         DISCLOSED CONSEQUENCE, and it is not small. Those atoms are hot-class
-        -- ``R_E (phi_c + Ti)`` is tens of eV per particle -- but with no
+        -- ``(1/2) m v_back^2`` is tens of eV per particle -- but with no
         kernel to carry them they are booked into the COLD channel at the one
         cathode-adjacent cell. On a short flag-on run with the jet armed
         (R_N = R_E = 0.5) that cell's ``Tn`` reaches ~11 eV, against ~0.5 eV
@@ -7589,12 +7604,8 @@ class LAPDSim1D:
         if not np.any(cathode):
             return zeros
         R_N = float(spec["R_N"])
-        v_back = np.sqrt(
-            2.0
-            * float(spec["R_E"])
-            * np.maximum(float(spec["phi_c_V"]) + derived.Ti, 0.0)
-            * ev_to_erg
-            / self._ion_mass_g
+        v_back = cathode_jet_backscatter_speed(
+            spec, derived.Ti, self._ion_mass_g
         )
         e_jet = R_N * 0.5 * self._ion_mass_g * v_back**2 + (1.0 - R_N) * (
             1.5 * kb_cgs * max(float(spec["T_s_K"]), 0.0)
@@ -7691,6 +7702,7 @@ class LAPDSim1D:
             "R_E": self._cathode_jet_R_E,
             "phi_c_V": max(phi_c, 0.0),
             "T_s_K": max(T_s, 0.0),
+            "energy_convention": self._cathode_jet_energy_convention,
         }
 
     def _anode_jet_spec(self, cathode_solve):
@@ -8963,6 +8975,35 @@ class LAPDSim1D:
                 "cathode_jet_surface_debit reads the cathode jet's R_E and "
                 "requires cathode_neutral_jet"
             )
+        # Which convention R_E is read in when the jet's launch energy is
+        # built. "legacy" is the shipped default and is bit-exact.
+        convention = p.get("cathode_jet_energy_convention", "legacy")
+        if convention not in CATHODE_JET_ENERGY_CONVENTIONS:
+            raise ValueError(
+                "cathode_jet_energy_convention must be one of "
+                f"{CATHODE_JET_ENERGY_CONVENTIONS} (got {convention!r})"
+            )
+        self._cathode_jet_energy_convention = convention
+        if convention == "total_reflected":
+            if not self._cathode_jet_enabled:
+                raise ValueError(
+                    "cathode_jet_energy_convention='total_reflected' rescales "
+                    "the cathode jet's launch energy and requires "
+                    "cathode_neutral_jet"
+                )
+            R_N = self._cathode_jet_R_N
+            R_E = self._cathode_jet_R_E
+            if not (0.0 < R_E <= R_N < 1.0):
+                raise ValueError(
+                    "cathode_jet_energy_convention='total_reflected' reads "
+                    "cathode_jet_R_E as the TOTAL reflected energy fraction "
+                    "and gives each of the cathode_jet_R_N backscattered "
+                    "particles R_E/R_N of the incident energy, so it requires "
+                    "0 < cathode_jet_R_E <= cathode_jet_R_N < 1 (a reflected "
+                    "particle cannot carry more energy than it arrived with, "
+                    "and neither coefficient may be degenerate) -- got "
+                    f"cathode_jet_R_E={R_E}, cathode_jet_R_N={R_N}"
+                )
         if self._neutral_energy and self._cathode_jet_enabled and not surface_debit:
             raise ValueError(
                 "cathode_neutral_jet with neutral_energy requires "
