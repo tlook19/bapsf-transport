@@ -746,6 +746,22 @@ is the mid-box for He -> LaB6, with the B-rich versus La surface-termination
 spread as the honest uncertainty; the anode pair sits at the He -> Mo
 heavy-target corner. Not fit knobs. Both jets default off.
 
+**`cathode_jet_energy_convention = "legacy"` — a REPRODUCIBILITY PIN, not a
+physical claim.** The two settings disagree about what `cathode_jet_R_E`
+means, and only one of them is consistent with `cathode_jet_surface_debit`.
+The debit is written in the total-reflected (Eckstein/TRIM) convention that
+the coefficient itself is quoted in — reflected energy over incident, summed
+over particles — so the surface gives up `R_E` of its ion bombardment power.
+`"legacy"` reads the same `R_E` per backscattered particle and lets only the
+`R_N` reflected fraction carry it, so the gas receives `R_N R_E` and the
+`(1 - R_N) R_E` remainder is debited from the surface and received by nobody.
+`"total_reflected"` gives each reflected particle `R_E/R_N` of the incident
+energy, and the exported per-recycled-particle energy then equals the debited
+one exactly. `"legacy"` remains the shipped default ONLY so that jet-armed
+results predating the convention key stay bit-reproducible; it is not the
+defensible reading of the coefficient, and any new energy-carrying jet arm
+selects `"total_reflected"`. Inert when `cathode_neutral_jet` is off.
+
 ### Beam
 
 **`beam_excitation_energy_eV = 21.218` eV — MEASURED**, the He 2^1P excitation

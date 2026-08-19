@@ -107,6 +107,7 @@ from cablp.solvers._sim1d.physics.reactions import (
 )
 from cablp.solvers._sim1d.physics.sources import (
     add_state_rhs,
+    cathode_jet_backscatter_speed,
     ion_neutral_collision_frequency,
     ion_neutral_cx_frequency,
     ion_neutral_drag_rhs,
@@ -13002,6 +13003,144 @@ def main():
         1.0 - float(jet_params.get("cathode_jet_R_E", 0.2)),
         rtol=1e-13,
     )
+
+    # Reflected-energy CONVENTION. The debit above is written in the TRIM
+    # convention (R_E = total reflected energy / total incident, so the
+    # surface keeps 1 - R_E), while the launch reads R_E per backscattered
+    # particle and only the R_N reflected fraction carries it -- the gas
+    # receives R_N*R_E of what the surface gave up. "total_reflected" reads
+    # R_E the way the debit does: R_E/R_N per reflected particle, so the
+    # exported energy per RECYCLED particle is exactly the R_E the debit
+    # removed. "legacy" (the shipped default) keeps the historical launch.
+    for jet_conv_bad in (
+        # unknown selector
+        dict(jet_params, cathode_jet_energy_convention="bogus"),
+        # the corrected convention rescales the jet and needs one to rescale
+        dict(m3_params, cathode_jet_energy_convention="total_reflected"),
+        # 0 < R_E <= R_N < 1: a reflected particle cannot leave with more
+        # energy than it arrived with, and neither coefficient is degenerate
+        dict(jet_params, cathode_jet_energy_convention="total_reflected",
+             cathode_jet_R_E=0.8, cathode_jet_R_N=0.5),
+        dict(jet_params, cathode_jet_energy_convention="total_reflected",
+             cathode_jet_R_E=0.0, cathode_jet_R_N=0.5),
+        dict(jet_params, cathode_jet_energy_convention="total_reflected",
+             cathode_jet_R_E=0.5, cathode_jet_R_N=1.0),
+    ):
+        try:
+            LAPDSim1D(jet_conv_bad, jet_flags)
+        except ValueError as exc:
+            assert "cathode_jet_energy_convention" in str(exc)
+        else:
+            raise AssertionError(
+                "expected ValueError for cathode_jet_energy_convention="
+                f"{jet_conv_bad.get('cathode_jet_energy_convention')!r}"
+            )
+    # Both happy directions construct: the shipped default, an explicit
+    # "legacy", and "total_reflected" at the interior point and at the
+    # R_E == R_N boundary (fully inelastic capture of the reflected share).
+    for jet_conv_ok in (
+        dict(jet_params, cathode_jet_energy_convention="legacy"),
+        dict(jet_params, cathode_jet_energy_convention="total_reflected"),
+        dict(jet_params, cathode_jet_energy_convention="total_reflected",
+             cathode_jet_R_E=0.5, cathode_jet_R_N=0.5),
+    ):
+        LAPDSim1D(jet_conv_ok, jet_flags)
+    # An explicit "legacy" is the default's own path: the jet's M_n row is
+    # byte-identical to the key being absent entirely.
+    jet_legacy_sim = LAPDSim1D(
+        dict(jet_params, cathode_jet_energy_convention="legacy"), jet_flags
+    )
+    jet_legacy_sim._circuit_I_loop = 800.0
+    jet_legacy_ba = jet_legacy_sim.boundary_absorption_rhs(
+        cathode_solve=jet_legacy_sim.solve_cathode_boundary(update_cache=True)
+    )
+    assert np.array_equal(jet_legacy_ba.M_n, jet_ba.M_n)
+
+    # THE CONSERVATION IDENTITY, on a short jet-armed run with the En field
+    # present. Per RECYCLED particle the surface debit gives up
+    # R_E*(phi_c + Ti) and, under "total_reflected", the backscatter share of
+    # the jet's En term delivers exactly that -- to machine precision, on the
+    # evolved state, from the term's own rebirthed flux. Under "legacy" the
+    # same read returns R_N times it, which is the energy hole this convention
+    # closes. NAMED RESIDUAL, and it is not closed by this identity: the
+    # cathode solve debits R_E * P_cathode_i, whose ion flux is the solve's
+    # own Bohm current and whose per-ion energy is (phi_c + Te/2), while the
+    # jet rides the fluid boundary term's recycle flux at (phi_c + Ti).
+    jet_en_flags = dict(
+        jet_flags, neutral_energy=True, ion_neutral_moment_closure=True
+    )
+    jet_en_ref = None
+    for jet_conv, jet_conv_share in (
+        ("legacy", jet_RN),
+        ("total_reflected", 1.0),
+    ):
+        jet_en_sim = LAPDSim1D(
+            dict(
+                jet_params,
+                cathode_jet_surface_debit=True,
+                cathode_jet_energy_convention=jet_conv,
+            ),
+            jet_en_flags,
+        )
+        jet_en_sim._circuit_I_loop = 800.0
+        jet_en_sim.run(t_end=3.0e-10, dt=1.0e-10)
+        jet_en_state = jet_en_sim.state
+        assert jet_en_state.En is not None
+        jet_en_solve = jet_en_sim.solve_cathode_boundary(
+            state=jet_en_state, update_cache=False
+        )
+        jet_en_spec = jet_en_sim._cathode_jet_spec(jet_en_solve)
+        assert jet_en_spec["energy_convention"] == jet_conv
+        jet_en_ba = jet_en_sim.boundary_absorption_rhs(
+            state=jet_en_state, cathode_solve=jet_en_solve
+        )
+        jet_en_term = jet_en_sim.cathode_jet_neutral_energy_rhs(
+            state=jet_en_state,
+            cathode_solve=jet_en_solve,
+            recycle_nn_row=jet_en_ba.nn,
+        )
+        jet_en_derived = derive_state(
+            jet_en_state, jet_en_sim.floors, jet_en_sim.ion_mass_g
+        )
+        jet_en_cath = np.asarray(jet_en_sim.geometry.cell_role) == "cathode"
+        jet_en_vback = cathode_jet_backscatter_speed(
+            jet_en_spec, jet_en_derived.Ti, jet_en_sim.ion_mass_g
+        )
+        # Per-particle: what the backscattered share actually carries, and
+        # what the surface debit gave up for it.
+        jet_en_carried = (
+            jet_RN * 0.5 * jet_en_sim.ion_mass_g * jet_en_vback**2
+        )[jet_en_cath]
+        jet_en_debited = (
+            jet_RE
+            * (jet_en_spec["phi_c_V"] + jet_en_derived.Ti[jet_en_cath])
+            * ev_to_erg
+        )
+        assert np.all(jet_en_debited > 0.0)
+        assert np.allclose(
+            jet_en_carried,
+            jet_conv_share * jet_en_debited,
+            rtol=1e-13,
+            atol=0.0,
+        )
+        # The debit fraction the surface balance loses IS R_E, both arms.
+        assert np.isclose(
+            1.0 - jet_en_sim._cathode_surface_ion_retention,
+            jet_RE,
+            rtol=1e-13,
+        )
+        # The term itself is the excess over the wall credit the generic
+        # surface booking already granted, on the cathode cells alone.
+        assert np.array_equal(
+            np.flatnonzero(jet_en_term.En != 0.0),
+            np.flatnonzero(
+                jet_en_cath & (np.maximum(jet_en_ba.nn, 0.0) != 0.0)
+            ),
+        )
+        jet_en_ref = jet_en_carried if jet_en_ref is None else jet_en_ref
+    # The two conventions really do separate: total_reflected launches the
+    # backscatter with 1/R_N times the legacy energy.
+    assert np.all(jet_en_carried > jet_en_ref)
 
     # --- Retired deep-afterglow low-Te recipe: adas_low_te_extension with
     # icool_recomb composes destructively (bare PRB charged, sub-edge PRB

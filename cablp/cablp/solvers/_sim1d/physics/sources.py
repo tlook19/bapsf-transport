@@ -326,6 +326,65 @@ def _annulus_deposit_row(dN_routed, annulus_volume_cm3):
     return row
 
 
+#: Accepted values of the cathode jet's ``energy_convention``, which fixes how
+#: ``R_E`` is read when the backscattered atoms' launch speed is built.
+CATHODE_JET_ENERGY_CONVENTIONS = ("legacy", "total_reflected")
+
+
+def cathode_jet_backscatter_speed(cathode_jet, Ti_eV, ion_mass_g):
+    """Return the cathode jet's backscatter launch speed [cm s^-1].
+
+    THE ONE SPEC. Every consumer of the backscattered atoms' kinetic energy
+    reads it here -- the directed momentum booked by
+    :func:`boundary_absorption_rhs` and :func:`characteristic_boundary_rhs`,
+    and the ``En`` the solver's ``cathode_jet_neutral_energy`` term hands the
+    neutral gas -- so the momentum and the energy can never describe atoms
+    moving at two different speeds.
+
+    ``cathode_jet`` is the jet spec dict (``R_N``, ``R_E``, ``phi_c_V``,
+    ``T_s_K``, and optionally ``energy_convention``); ``Ti_eV`` is the local
+    ion temperature [eV], scalar or per-cell; ``ion_mass_g`` the ion mass [g].
+    The incident per-particle energy is ``phi_c + Ti`` [eV], clamped at zero.
+
+    ``energy_convention`` fixes what ``R_E`` means, and therefore how much
+    energy one backscattered atom leaves with:
+
+    ``"legacy"`` (the default when the key is absent)
+        ``R_E`` is read PER BACKSCATTERED PARTICLE:
+        ``v_back = sqrt(2 R_E (phi_c + Ti)/m)``. Only the ``R_N`` reflected
+        fraction carries it, so the gas receives ``R_N R_E`` of the incident
+        ion power.
+    ``"total_reflected"``
+        ``R_E`` is the TOTAL reflected energy fraction -- reflected energy
+        over incident energy, summed over all particles, which is the
+        convention :func:`~cablp.solvers._sim1d.solver.LAPDSim1D` debits the
+        cathode surface by. The ``R_N`` reflected particles carry all of it,
+        so each leaves with ``R_E/R_N`` of the incident energy:
+        ``v_back = sqrt(2 (R_E/R_N) (phi_c + Ti)/m)`` and the gas receives
+        ``R_E`` of the incident ion power.
+
+    Raises ``ValueError`` for any other ``energy_convention`` string.
+    """
+    R_E = float(cathode_jet["R_E"])
+    convention = cathode_jet.get("energy_convention", "legacy")
+    if convention == "legacy":
+        energy_fraction = R_E
+    elif convention == "total_reflected":
+        energy_fraction = R_E / float(cathode_jet["R_N"])
+    else:
+        raise ValueError(
+            "cathode jet energy_convention must be one of "
+            f"{CATHODE_JET_ENERGY_CONVENTIONS} (got {convention!r})"
+        )
+    return np.sqrt(
+        2.0
+        * energy_fraction
+        * np.maximum(float(cathode_jet["phi_c_V"]) + Ti_eV, 0.0)
+        * ev_to_erg
+        / ion_mass_g
+    )
+
+
 def boundary_absorption_rhs(
     state,
     floors,
@@ -371,10 +430,13 @@ def boundary_absorption_rhs(
     ``Tn(z)`` here when its Tn-feedback switch is on.
 
     ``cathode_jet``: when given (a dict with
-    ``R_N``, ``R_E``, ``phi_c_V``, ``T_s_K``) and the state carries ``M_n``,
+    ``R_N``, ``R_E``, ``phi_c_V``, ``T_s_K``, and optionally
+    ``energy_convention``) and the state carries ``M_n``,
     the recycle flux rebirthed at a *cathode* face is a directed jet instead
-    of gas at rest: the reflected fraction ``R_N`` backscatters at
-    ``v_back = sqrt(2 R_E (phi_c + Ti)/m)`` and the implanted remainder
+    of gas at rest: the reflected fraction ``R_N`` backscatters at the
+    ``v_back`` of :func:`cathode_jet_backscatter_speed` (which is also what
+    the solver's ``En`` term books, so momentum and energy describe the same
+    atoms) and the implanted remainder
     ``1 - R_N`` desorbs as a directed effusive flux off the hot disc at
     ``v_eff = sqrt(pi k T_s / (2 m))`` (the per-particle directed momentum
     of a cosine-law effusive flux). The momentum rides in the SAME term
@@ -478,14 +540,8 @@ def boundary_absorption_rhs(
         if route_active and roles[live] == "collector":
             dN_routed[live] += loss
         if jet_active and roles[live] == "cathode":
-            v_back = np.sqrt(
-                2.0
-                * float(cathode_jet["R_E"])
-                * max(
-                    float(cathode_jet["phi_c_V"]) + derived.Ti[live], 0.0
-                )
-                * ev_to_erg
-                / ion_mass_g
+            v_back = cathode_jet_backscatter_speed(
+                cathode_jet, derived.Ti[live], ion_mass_g
             )
             R_N = float(cathode_jet["R_N"])
             v_mix = R_N * v_back + (1.0 - R_N) * v_eff
@@ -721,12 +777,8 @@ def characteristic_boundary_rhs(
         if route_active and roles[live] == "collector":
             routed_abs[live] += cell_loss
         if jet_active and roles[live] == "cathode":
-            v_back = np.sqrt(
-                2.0
-                * float(cathode_jet["R_E"])
-                * max(float(cathode_jet["phi_c_V"]) + Ti_l, 0.0)
-                * ev_to_erg
-                / ion_mass_g
+            v_back = cathode_jet_backscatter_speed(
+                cathode_jet, Ti_l, ion_mass_g
             )
             R_N = float(cathode_jet["R_N"])
             v_mix = R_N * v_back + (1.0 - R_N) * v_eff
