@@ -18670,6 +18670,61 @@ print(json.dumps({
             _pa_sig_flare_p, _pa_sig_flare_f
         ), f"{_key} must invalidate a cached neutral seed"
 
+    # ==================================================================
+    # HOT-CHANNEL INTERNAL WALL (neutral_hot_internal_wall, default off).
+    # The ballistic flight kernel clips at the closed/absorbing plasma faces
+    # as well as the two global end planes, so a live cell's landings can no
+    # longer fall on a plasma-dead cell (where the topology mask would delete
+    # the deposit) and a dead cell's can no longer fall on a live one.
+    # ==================================================================
+    from cablp.solvers._sim1d.physics.hot_neutrals import (
+        ballistic_flight_kernels as _hiw_kernels,
+        flight_wall_bounds as _hiw_bounds,
+    )
+
+    _hiw_p, _hiw_f = default_config()
+    _hiw_geom = LAPDSim1D(dict(_hiw_p), dict(_hiw_f)).geometry
+    _hiw_dead = ~np.asarray(_hiw_geom.plasma_active, dtype=bool)
+    assert _hiw_dead.any(), "the default machine must carry a plasma-dead plenum"
+
+    # Off, the bounds ARE the two end planes -- which is what makes the off
+    # path's clips the historical ones.
+    _hiw_zlo, _hiw_zhi, _hiw_clo, _hiw_chi = _hiw_bounds(_hiw_geom, internal_wall=False)
+    assert np.all(_hiw_zlo == _hiw_geom.z_edges_cm[0])
+    assert np.all(_hiw_zhi == _hiw_geom.z_edges_cm[-1])
+    assert np.all(_hiw_clo == 0) and np.all(_hiw_chi == _hiw_geom.cells - 1)
+
+    _hiw_off = _hiw_kernels(_hiw_geom, samples=401, internal_wall=False)
+    _hiw_on = _hiw_kernels(_hiw_geom, samples=401, internal_wall=True)
+    for _hiw_k in (0, 1):
+        # The solid-angle normalization identity survives the extra walls.
+        assert np.allclose(_hiw_off[_hiw_k].sum(axis=1), 1.0, rtol=0.0, atol=1e-12)
+        assert np.allclose(_hiw_on[_hiw_k].sum(axis=1), 1.0, rtol=0.0, atol=1e-12)
+    # THE GATE: with the wall on, no live birth cell puts any landing (or any
+    # residence) mass over a plasma-dead cell, and no dead one puts any over a
+    # live cell. Exactly zero, not small -- the flights never cross the face.
+    for _hiw_k, _hiw_name in ((0, "landing"), (1, "residence")):
+        _hiw_m = _hiw_on[_hiw_k]
+        assert np.all(_hiw_m[~_hiw_dead][:, _hiw_dead] == 0.0), _hiw_name
+        assert np.all(_hiw_m[_hiw_dead][:, ~_hiw_dead] == 0.0), _hiw_name
+    # ... and it is a real discriminator: off, the live cells against the
+    # cathode disc DO deposit over the plenum, which is the deleted stream.
+    assert _hiw_off[0][~_hiw_dead][:, _hiw_dead].sum() > 0.0
+
+    # The flag is presence-gated on the channel it walls.
+    _hiw_bad_p, _hiw_bad_f = default_config()
+    _hiw_bad_f["neutral_hot_internal_wall"] = True
+    _hiw_bad_f["neutral_energy"] = False
+    try:
+        LAPDSim1D(dict(_hiw_bad_p), dict(_hiw_bad_f))
+    except ValueError as _hiw_exc:
+        assert "neutral_hot_internal_wall" in str(_hiw_exc), str(_hiw_exc)
+        assert "neutral_energy" in str(_hiw_exc), str(_hiw_exc)
+    else:
+        raise AssertionError(
+            "neutral_hot_internal_wall without neutral_energy must be refused"
+        )
+
     print(
         "sim1d smoke ok: "
         f"cells={geom.cells}, dz={geom.dz_cm:g} cm, "
