@@ -67,7 +67,25 @@ across the change.
 
 ## Cathode emission
 
-**`C_R = 14.25`** — DERIVED, not refitted. `C_R` is treated by the cathode
+**`C_R = 7.09` — FITTED (the one drive-side fit knob; 2026-08-19 stance
+event).** Value chain: the 14.25 derivation below was superseded when the
+L2 geometry rebaseline moved the operating point to the measured
+18.415 cm aperture (the l2a4 free fit landed 7.26 there; the G1
+measured-geometry arms ran 6.94); the 2026-08-19 D-phase conservation
+fixes (see "Conservation fixes" below) changed the plasma load, and the
+REGISTERED one-knob re-trim (drive-band target ONLY, once at ES1, frozen
+and transferred; campaign log 2026-08-19 zzzz) landed **7.09** — peak
+2997 A / plateau 2964 A, ratio 1.000 against the measured band, matched
+on the first log-knob interpolation (measured local exponent 0.99966;
+the super-linear 1.392 figure is kinetic-era only). Port scores were
+reported unconditionally and never entered the selection: n 0.91,
+Isat 0.84 (1.9σ), Te 0.88 at the matched drive. `cathode_Ts_base_K`
+remains pinned at the measured standby (the flat-direction rule below
+stands: only one member carries the calibration).
+
+*(Historical derivation of the pre-rebaseline 14.25, retained as record —
+the flat-direction and residual-honesty analysis below still applies to
+the current knob:)* `C_R` is treated by the cathode
 literature as an effective emission constant (surface state, patch fields,
 non-ideal emitting fraction), not the 120 A/cm^2/K^2 Richardson-Dushman
 universal. The value is obtained by matching the emission at the operating
@@ -124,6 +142,27 @@ about 7% above the transcription adopted here. That 7% sits well inside the
 hand-tuned class both knobs already carry, and the aperture factor is used for
 consistency with the emitting/collecting area the rest of the stance keys off.
 Neither number is re-fitted to absorb the difference.
+
+## Conservation fixes (2026-08-19 stance event — ARMED stance members)
+
+**`neutral_hot_internal_wall = true`** (flags) and
+**`cathode_jet_energy_convention = "total_reflected"`** (params) are
+armed in the production stance as of the 2026-08-19 adoption
+(campaign @ c1947d8 carries the code; both keys default OFF in the
+config for bit-exactness of historical artifacts). Class: neither is a
+calibration — both restore conservation. The wall flag ends a measured
+particle deletion (~2e21 atoms/s, ~25 % of puff scale, at the plenum;
+kernel flights now terminate at plasma-dead faces); the convention key
+ends a measured ~24 kW energy destruction (the debit and the launch now
+share one TRIM-convention spec; per-particle identity exact). Joint
+effect at the stance: mid-machine density +6–8 % toward measured on two
+geometries at zero tuning, established with input power FALLING
+(particle/fueling-side, not a power artifact). Record: campaign log
+2026-08-19 rrrr–zzzz; the plan of record is POWER_COUPLING_PLAN.md
+(local docs). The production GEOMETRY is the G1a measured-machine
+package (grid of record nx 268 / Lm 2117.8 / collector 7.8 + the sss
+fidelity rulings; coils-ON droop-min ansatz f_end 2.221 — always quoted
+as the ansatz, never "coils on" generically).
 
 ## Neutral source
 

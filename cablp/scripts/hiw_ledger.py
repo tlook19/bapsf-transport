@@ -31,12 +31,8 @@ import sys
 import h5py
 import numpy as np
 
-sys.path.insert(
-    0, "/home/trloo/bapsf/bapsf-transport/.claude/worktrees/agent-ab01a8a131b1e6369/cablp"
-)
-
-from cablp.solvers._sim1d import LAPDSim1D  # noqa: E402
-from cablp.solvers._sim1d.physics.hot_neutrals import (  # noqa: E402
+from cablp.solvers._sim1d import LAPDSim1D
+from cablp.solvers._sim1d.physics.hot_neutrals import (
     ballistic_flight_kernels,
     flight_wall_bounds,
 )
