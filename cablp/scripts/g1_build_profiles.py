@@ -18,8 +18,18 @@ Inputs
     ``c_crossing_z_m`` / ``c_crossing_radii_m``.
 ``scripts/l2a7b_foot45_cr6p94.h5``
     The l2a7b operating point, read for its resolved config only. Its mesh
-    is the identity target: G1 grows ``Lm`` and ``collector_length_cm`` by
-    the same 117.8 cm, so every cell through z = 1900 cm is unmoved.
+    is the identity target ON THE COLUMN: the grid of record (2026-08-18rrr)
+    is ``Lm = 2117.8, collector_length_cm = 7.8, nx = 268`` -- the outer
+    column extends at exactly 7.5 cm through z = 2110 cm (28 new cells) and
+    the terminal cell is 7.8 cm at the flange, so every cell from the
+    cathode face through z = 1900 cm is unmoved. BEHIND the cathode face the
+    mesh deliberately changes (the 2026-08-18sss fidelity package): the
+    guessed ``Rcs 40 / Lcs 25`` obstruction is RETIRED (the obstruction cell
+    is omitted at ``Lcs = 0``) and the plenum is the measured source chamber,
+    ``plenum_length_cm = 166`` at machine radius 40 cm (reservoir volume
+    8.34e5 cm^3 exactly). The measured cathode box enters solely as the
+    machine-radius stages at the cathode/gap cells (annulus areas
+    1350.1 / 1847.6 cm^2 exact) -- Tom's abstracted faithful conductance.
 
 Plasma profile (per case)
 -------------------------
@@ -38,9 +48,10 @@ Vessel profile
 Measured bore: 40.0 cm source chamber, 50.0 cm main shell to the 19.65 m
 step, 76.2 cm far source chamber beyond it. Over the cathode box the bore is
 replaced by the annulus-area-equivalent radius that reproduces the measured
-clear area around the box (1847.6 cm^2 around the body, 1350.1 cm^2 past the
-front plate) against the 18.415 cm column. The cells BEHIND the cathode
-surface keep the scalar 50.0 cm (see ``BEHIND_CATHODE_BORE_CM``).
+clear area around the box (1350.1 cm^2 at the cathode cell, 1847.6 cm^2 at
+the first gap cell) against the 18.415 cm column. The plenum cell sits at
+negative z inside the first bore stage, so it carries the measured source
+chamber's 40.0 cm directly.
 
 Outputs (all in ``scripts/``)
 -----------------------------
@@ -64,10 +75,19 @@ from cablp.solvers._sim1d.core.geometry import build_geometry  # noqa: E402
 CENSUS_NPZ = os.path.join(HERE, "lapd_end_field_1400G_rp18p415_census2026.npz")
 REFERENCE_H5 = os.path.join(HERE, "l2a7b_foot45_cr6p94.h5")
 
-#: The G1 domain (ratified v2 rule): the end flange is the wall, and the end
-#: block absorbs the whole growth so the column/ports mesh is unmoved.
+#: The G1 grid of record (2026-08-18rrr ruling, supersedes the qqq
+#: collector-217.8 draft): the end flange is the wall, the outer column
+#: extends at exactly 7.5 cm through z = 2110 cm, and the terminal cell is
+#: the 7.8 cm collector at the flange where the 0.95 cap binds flat.
 LM_CM = 2117.8
-COLLECTOR_LENGTH_CM = 217.8
+COLLECTOR_LENGTH_CM = 7.8
+NX = 268
+#: The 2026-08-18sss fidelity package: the guessed Rcs 40 / Lcs 25 cathode
+#: box is RETIRED (Lcs = 0 omits the obstruction cell); the plenum is the
+#: measured CAD source chamber (166 cm at bore 40 -> 8.34e5 cm^3 exactly).
+RCS_CM = 0.0
+LCS_CM = 0.0
+PLENUM_LENGTH_CM = 166.0
 #: Measured mid-plane puff ports at the anode stack (supersedes 60.0).
 GAS_PUFF_Z_CM = 86.3
 #: The port-7 annular ring (`TomLook-Aperature`), z 3.401-3.452 m.
@@ -87,20 +107,17 @@ AREA_CAP_FRACTION = 0.95
 #: Measured vessel bore, as (z_upper_cm, radius_cm) stages, applied by cell
 #: centre. The last stage is the far source chamber (r 762 mm).
 BORE_STAGES_CM = ((100.0, 40.0), (1965.0, 50.0), (np.inf, 76.2))
-#: Cathode-box conductance encoding: measured clear areas around the box,
-#: expressed as the vessel radius whose ANNULUS about the column reproduces
-#: them. Applied by cell centre over (z_low, z_high] downstream of z = 0.
+#: Cathode-box conductance encoding (sss): measured clear areas around the
+#: box, expressed as the vessel radius whose ANNULUS about the column
+#: reproduces them, at the cathode cell (front plate) and the first gap cell
+#: (box body). Applied by cell centre over (z_low, z_high] downstream of
+#: z = 0 -- the ranges land exactly on those two 10 cm cells.
 BOX_STAGES = (
-    ("front plate", 0.0, 10.0, 1350.1),
-    ("box body", 10.0, 20.0, 1847.6),
+    ("front plate / cathode cell", 0.0, 10.0, 1350.1),
+    ("box body / gap cell", 10.0, 20.0, 1847.6),
 )
-#: Behind the cathode surface the bore keeps the scalar Rm. Two reasons, both
-#: disclosed: the 0D plenum's reservoir VOLUME at 50.0 cm is the measured one
-#: to 6 % (8.34e5 cm^3), which a 40 cm bore would break by 40 %; and the
-#: obstruction cell already carries the cathode duct as `Rcs` = 40 cm, whose
-#: open area pi (Rm^2 - Rcs^2) collapses to exactly zero at Rm = 40.
-BEHIND_CATHODE_BORE_CM = 50.0
-BEHIND_CATHODE_ROLES = ("plenum", "obstruction")
+#: The plenum reservoir volume the measured source chamber must reproduce.
+PLENUM_VOLUME_CM3 = np.pi * 40.0**2 * PLENUM_LENGTH_CM
 
 CASES = ("droop_min", "off")
 
@@ -126,7 +143,12 @@ def _g1_config(params, flags):
     f = dict(flags)
     p["Lm"] = LM_CM
     p["collector_length_cm"] = COLLECTOR_LENGTH_CM
+    p["nx"] = NX
     p["gas_puff_z_cm"] = GAS_PUFF_Z_CM
+    # The sss fidelity package: guessed cathode box retired, measured plenum.
+    p["Rcs"] = RCS_CM
+    p["Lcs"] = LCS_CM
+    p["plenum_length_cm"] = PLENUM_LENGTH_CM
     # The prescribed profile REPLACES the built-in half-cosine end flare; the
     # two refuse to compose, and the stale parameters refuse the off flag.
     p["end_expansion_cells"] = None
@@ -137,7 +159,12 @@ def _g1_config(params, flags):
 
 
 def build_vessel_profile(z_cm, cell_role):
-    """Return ``machine_radius_profile_cm``: the measured bore, per cell."""
+    """Return ``machine_radius_profile_cm``: the measured bore, per cell.
+
+    The plenum cell (negative z) falls inside the first bore stage, so the
+    measured source chamber's 40.0 cm applies there with no special case --
+    that is the sss encoding, giving the measured reservoir volume exactly.
+    """
     z_cm = np.asarray(z_cm, dtype=float)
     radius = np.empty(z_cm.size, dtype=float)
     for index, z in enumerate(z_cm):
@@ -148,8 +175,6 @@ def build_vessel_profile(z_cm, cell_role):
     for _, z_low, z_high, clear_area in BOX_STAGES:
         inside = (z_cm > z_low) & (z_cm <= z_high)
         radius[inside] = np.sqrt(RP_CM**2 + clear_area / np.pi)
-    behind = np.isin(np.asarray(cell_role), np.asarray(BEHIND_CATHODE_ROLES, dtype=object))
-    radius[behind] = BEHIND_CATHODE_BORE_CM
     return radius
 
 
@@ -204,32 +229,65 @@ def main():
     say(f"reference: {REFERENCE_H5}")
     say(
         f"grid     : Lm {ref_params['Lm']} -> {LM_CM} cm, collector "
-        f"{ref_params['collector_length_cm']} -> {COLLECTOR_LENGTH_CM} cm "
-        f"(dLm = dcollector = {LM_CM - float(ref_params['Lm']):.1f} cm)"
+        f"{ref_params['collector_length_cm']} -> {COLLECTOR_LENGTH_CM} cm, "
+        f"nx {ref_params['nx']} -> {NX} (the rrr grid of record: the outer "
+        f"column extends at its own dz through 2110 cm; terminal cell "
+        f"{COLLECTOR_LENGTH_CM} cm at the flange)"
+    )
+    say(
+        f"source   : Rcs {ref_params['Rcs']} -> {RCS_CM}, Lcs "
+        f"{ref_params['Lcs']} -> {LCS_CM}, plenum_length_cm "
+        f"{ref_params['plenum_length_cm']} -> {PLENUM_LENGTH_CM} "
+        f"(the sss fidelity package)"
     )
     say()
 
     # --- mesh identity ------------------------------------------------------
-    shared = np.flatnonzero(mesh.z_cm <= 1900.0)
-    ref_shared = np.flatnonzero(ref_geometry.z_cm <= 1900.0)
-    say("--- mesh identity (shared cells, through z = 1900 cm) ---")
+    # The identity claim is scoped to the cells DOWNSTREAM of the cathode
+    # face (0 <= z <= 1900 cm). Behind the face the sss fidelity package
+    # deliberately rebuilds the mesh -- the obstruction cell is omitted at
+    # Lcs = 0 and the plenum grows to the measured 166 cm -- so those cells
+    # are reported as a disclosed change, not asserted identical.
+    shared = np.flatnonzero((mesh.z_cm >= 0.0) & (mesh.z_cm <= 1900.0))
+    ref_shared = np.flatnonzero(
+        (ref_geometry.z_cm >= 0.0) & (ref_geometry.z_cm <= 1900.0)
+    )
+    say("--- mesh identity (shared cells: 0 <= z <= 1900 cm) ---")
     say(f"reference cells {ref_geometry.cells}, G1 cells {mesh.cells}")
+    ref_behind = np.flatnonzero(ref_geometry.z_cm < 0.0)
+    g1_behind = np.flatnonzero(mesh.z_cm < 0.0)
+    say(
+        f"behind-cathode cells (deliberate sss change): reference "
+        f"{[str(r) for r in np.asarray(ref_geometry.cell_role)[ref_behind]]} "
+        f"lengths {ref_geometry.length_cm[ref_behind].tolist()} cm -> G1 "
+        f"{[str(r) for r in np.asarray(mesh.cell_role)[g1_behind]]} "
+        f"lengths {mesh.length_cm[g1_behind].tolist()} cm"
+    )
+    if [str(r) for r in np.asarray(mesh.cell_role)[g1_behind]] != ["plenum"]:
+        raise AssertionError(
+            "G1 behind-cathode cells must be the plenum alone (Lcs = 0 "
+            "omits the obstruction cell)"
+        )
     say(f"shared cell count: reference {ref_shared.size}, G1 {shared.size}")
     if ref_shared.size != shared.size:
         raise AssertionError("shared cell counts differ")
     if not np.array_equal(ref_geometry.z_cm[ref_shared], mesh.z_cm[shared]):
         raise AssertionError("shared cell centres are not bit-identical")
     say("ASSERT z-centres bit-identical over shared cells: PASS")
+    ref_first = int(ref_shared[0])
+    g1_first = int(shared[0])
     if not np.array_equal(
-        ref_geometry.z_edges_cm[: shared.size + 1], mesh.z_edges_cm[: shared.size + 1]
+        ref_geometry.z_edges_cm[ref_first : ref_first + ref_shared.size + 1],
+        mesh.z_edges_cm[g1_first : g1_first + shared.size + 1],
     ):
         raise AssertionError("shared cell edges are not bit-identical")
-    say("ASSERT cell EDGES bit-identical over shared cells: PASS")
+    say("ASSERT cell EDGES bit-identical over shared cells (cathode-face anchored): PASS")
     # Cell lengths are the one place the grown domain shows: the far-column
-    # cell size is (Lm - gap - collector - span)/nx, and 2117.8 - 50 - 217.8
-    # rounds one ulp above 2000 - 50 - 100. The edges (a cumsum) and the
-    # centres are unaffected, so the mesh is identical where the solver reads
-    # positions; the report is here so the residual is on the record.
+    # cell size is (Lm - gap - collector - span)/nx, and the 2117.8/7.8
+    # subtraction chain can round an ulp away from the reference's. The
+    # edges (a cumsum) and the centres are unaffected, so the mesh is
+    # identical where the solver reads positions; the report is here so the
+    # residual is on the record.
     length_delta = mesh.length_cm[shared] - ref_geometry.length_cm[ref_shared]
     say(
         f"cell-length residual over shared cells: max |delta| = "
@@ -288,6 +346,19 @@ def main():
                 f"R_m = {vessel[index]:.6f} cm, annulus area = {annulus:.4f} cm^2 "
                 f"(target {clear_area})"
             )
+    plenum_cells = np.flatnonzero(np.asarray(mesh.cell_role) == "plenum")
+    plenum_volume = float(
+        np.sum(np.pi * vessel[plenum_cells] ** 2 * mesh.length_cm[plenum_cells])
+    )
+    say(
+        f"plenum reservoir volume = {plenum_volume:.6e} cm^3 "
+        f"(measured source chamber {PLENUM_VOLUME_CM3:.6e} cm^3)"
+    )
+    if plenum_volume != PLENUM_VOLUME_CM3:
+        raise AssertionError(
+            "plenum reservoir volume does not reproduce the measured source chamber"
+        )
+    say("ASSERT plenum reservoir volume == measured 8.34e5 cm^3: PASS")
     say()
 
     # --- plasma profiles ----------------------------------------------------
@@ -339,10 +410,10 @@ def main():
             f"{area_terminal - area_previous:.4f} cm^2 "
             f"(rel {(area_terminal - area_previous) / area_terminal:+.6f})"
         )
-        # Sub-cell diagnostic, report-only: the terminal cell is 217.8 cm long
-        # (n_end = 1 is forced -- see the report), so a centre sample and a
-        # volume average of the same profile are very different numbers. Both
-        # are stated; the profile the arms carry is the centre sample.
+        # Sub-cell diagnostic, report-only: the terminal cell is the 7.8 cm
+        # collector at the flange (the rrr grid of record), so a centre
+        # sample and a volume average of the same profile should now nearly
+        # agree. Both are stated; the arms carry the centre sample.
         fine_z_cm = np.linspace(
             mesh.z_edges_cm[terminal], mesh.z_edges_cm[terminal + 1], 4001
         )
@@ -450,7 +521,11 @@ def main():
         payload = [
             f"Lm={LM_CM}",
             f"collector_length_cm={COLLECTOR_LENGTH_CM}",
+            f"nx={NX}",
             f"gas_puff_z_cm={GAS_PUFF_Z_CM}",
+            f"Rcs={RCS_CM}",
+            f"Lcs={LCS_CM}",
+            f"plenum_length_cm={PLENUM_LENGTH_CM}",
             "end_expansion_cells=null",
             "end_expansion_machine_radius_cm=null",
             "end_expansion_plasma_radius_cm=null",
@@ -485,7 +560,11 @@ def main():
         plasma_radius_profile_cm_off=profiles["off"],
         Lm_cm=LM_CM,
         collector_length_cm=COLLECTOR_LENGTH_CM,
+        nx=NX,
         gas_puff_z_cm=GAS_PUFF_Z_CM,
+        Rcs_cm=RCS_CM,
+        Lcs_cm=LCS_CM,
+        plenum_length_cm=PLENUM_LENGTH_CM,
         area_cap_fraction=AREA_CAP_FRACTION,
         flat_through_z_cm=FLAT_THROUGH_Z_CM,
         flux_reference_z_m=FLUX_REFERENCE_Z_M,
