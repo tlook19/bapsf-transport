@@ -28,9 +28,20 @@ resampling is omitted -- CX dominates momentum transfer for He+/He; radial
 plasma profile is the 1D model's own top-hat; no plenum volume behind the
 cathode plane (its pump becomes a z=0 annulus sticking coefficient).
 
+``--fast-reflected`` is a SEPARATE, self-contained mode over the same
+background (:func:`run_fast_reflected`): it launches ONLY the cathode jet's
+fast reflected lobe, transports it with an energy-resolved Phelps-Qb CX rate,
+and reports where that lobe deposits inside the plasma column. It shares no
+tally, source or default with the source-menu run above. The shipped ``-n``
+default of 200,000 histories puts the binomial error on its headline ``f_dep``
+below 0.12 % absolute -- an order of magnitude inside the 1 % the read asks
+for -- at any ``f_dep``.
+
 Usage:
     python scripts/mc_neutrals.py RUN.h5 [-n 200000] [--jet {none,cathode,both}]
         [--window 5 19.5] [--seed 1] [--out PREFIX]
+    python scripts/mc_neutrals.py RUN.h5 --fast-reflected [-n 200000]
+        [--r-e 0.2] [--r-n 0.5] [--window 5 19.5] [--seed 1] [--out PREFIX]
 """
 
 import argparse
@@ -45,7 +56,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from cablp.funcs._adas import he_rates
-from cablp.funcs._cross import charge_ex_react
+from cablp.funcs._cross import charge_ex_react, phelps_he_backscatter_cm2
 from cablp.solvers._sim1d.core.geometry import (
     absorbing_live_cells_by_role,
     build_geometry,
@@ -72,6 +83,30 @@ RAY_EPS_CM = 1e-7
 # The two mutually exclusive rows the solver books the plasma-terminating
 # boundary under. Exactly one of them is live on any given run.
 BOUNDARY_ROWS = ("boundary_absorption", "characteristic_boundary")
+
+# Energy range [eV] over which the Phelps He+/He backscatter cross section
+# phelps_he_backscatter_cm2 is data-backed: the span of the archived LXCat
+# download vars/he_ion_neutral_phelps_lxcat.txt, whose tabulated He+/He
+# "Backscat" block runs 0 -> 1.0e4 eV (the analytic form's 1+5/E factor gives
+# it a finite ~2.21e-15 cm^2 limit as E -> 0, so the low end is a table
+# endpoint and not a singularity). --fast-reflected refuses a launch energy
+# outside it rather than extrapolating the fit.
+PHELPS_QB_RANGE_EV = (1.0e-4, 1.0e4)
+
+# THE ESCAPE DEFINITION of the --fast-reflected mode, quoted verbatim into both
+# its docstring and its output header so the reviewer reads the same sentence
+# the code implements. It is the load-bearing choice of the whole read.
+FAST_ESCAPE_DISCLOSURE = (
+    "A fast atom LEAVES the fast population at its FIRST CROSSING of the local\n"
+    "plasma column radius Rp(z) -- the column surface, NOT the vessel wall Rm.\n"
+    "Crossing counts in both forms: outward through the cylindrical surface\n"
+    "r = Rp(icell), and axially across a z-edge into a cell whose Rp is smaller\n"
+    "than the atom's current radius (the column's own annular step). Nothing is\n"
+    "reflected and nothing re-enters: the atom is gone from the tally the moment\n"
+    "it is outside the column, because the deliverable is the IN-COLUMN\n"
+    "deposition fraction the phase-1 kernel's survival factor consumes, and a\n"
+    "fast atom outside the column deposits nowhere the kernel can see."
+)
 
 
 def vt_cm_s(T_eV):
@@ -1105,6 +1140,497 @@ def run_mc(bg, n_particles, jet, rng, r_n=(0.5, 0.5), r_e=(0.2, 0.25),
     return out
 
 
+def run_fast_reflected(bg, n_particles, rng, r_e=0.2, r_n=0.5, max_iter=20000):
+    """Transport ONLY the cathode jet's fast reflected lobe on ``bg``.
+
+    A self-contained read that shares nothing with :func:`run_mc` but the
+    background, the geometry helpers and the RNG conventions. Its question is
+    narrow: of the backscattered atoms the cathode launches into the machine,
+    what fraction deposits INSIDE the plasma column before it leaves, where
+    does it deposit, and with what decay length -- the survival factor a
+    phase-1 in-column kernel needs.
+
+    SOURCE. One population only: the ``R_N`` reflected fraction of the cathode
+    face's own recycle row, launched from a point sampled uniformly on the
+    cathode face disc ``r <= R_cath`` at ``z = 0``, with a cosine-law direction
+    into the domain (:func:`cosine_emit` with ``sign_z=+1``; the sampled
+    DIRECTION is kept and the magnitude replaced) and a single, monoenergetic
+    speed. The thermal remainder of the cathode face and all five other
+    sources of the full menu are absent by construction.
+
+    LAUNCH ENERGY. The ``"total_reflected"`` convention of
+    :func:`cablp.solvers._sim1d.physics.sources.cathode_jet_backscatter_speed`
+    -- ``R_E`` is the TOTAL reflected energy fraction, so each of the ``R_N``
+    backscattered atoms carries ``R_E/R_N`` of the incident per-particle
+    energy ``phi_c + Ti``::
+
+        E_fast = (R_E / R_N) * (phi_c + Ti_cathode)   [eV]
+
+    ``phi_c`` is the window-mean cathode drop the background saved and
+    ``Ti_cathode`` the window-mean ion temperature of the first in-domain
+    (cathode-face) cell. The legacy per-particle reading of ``R_E`` that
+    :func:`run_mc`'s ``--jet`` launcher uses is NOT available here; this mode
+    exists to measure the ratified convention.
+
+    CX. The fast atom's charge-exchange frequency is ENERGY-RESOLVED, taken
+    from the same Phelps He+/He backscatter cross section the solver's R4.3
+    ion-neutral operator uses::
+
+        nu_cx = n_i * Qb(E_atom) * v_rel
+
+    ``Qb`` is :func:`cablp.funcs._cross.phelps_he_backscatter_cm2`, valid over
+    ``PHELPS_QB_RANGE_EV`` = 1.0e-4 to 1.0e4 eV (the span of the archived LXCat
+    table); a launch energy outside that range raises. Two conventions inside
+    this rate are choices and are stated rather than buried: ``E_atom`` is the
+    atom's own LAB kinetic energy (not the He+/He centre-of-mass relative
+    energy, which is half of it for equal masses and cold ions), and ``v_rel``
+    is its speed relative to the local ion MEAN drift ``u``, with the ion
+    thermal spread neglected -- at these energies ``v_fast`` exceeds the ion
+    thermal speed several-fold. This replaces :func:`run_mc`'s treatment, which
+    keys CX off the background ION TEMPERATURE through
+    :func:`~cablp.funcs._cross.charge_ex_react` and so transports a fast atom
+    at a thermal collision rate.
+
+    Electron-impact ionization keeps the background's Te-Maxwellian ADAS SCD
+    rate (``bg["nu_ion"]``) unchanged: the electrons ARE the Maxwellian
+    species there, so no energy resolution on the neutral is called for.
+
+    Both events END the fast history. Ionization removes the atom outright; a
+    CX event hands the fast atom's charge over, and the newborn THERMAL neutral
+    it leaves behind is deliberately NOT tracked -- this mode measures the fast
+    lobe and nothing else, so the thermal relay is :func:`run_mc`'s business.
+
+    ESCAPE -- the load-bearing definition of the whole read, quoted here and,
+    verbatim from ``FAST_ESCAPE_DISCLOSURE``, into the output header:
+
+        A fast atom LEAVES the fast population at its FIRST CROSSING of the
+        local plasma column radius Rp(z) -- the column surface, NOT the vessel
+        wall Rm. Crossing counts in both forms: outward through the
+        cylindrical surface ``r = Rp(icell)``, and axially across a z-edge
+        into a cell whose Rp is smaller than the atom's current radius (the
+        column's own annular step). Nothing is reflected and nothing
+        re-enters: the atom is gone from the tally the moment it is outside
+        the column, because the deliverable is the IN-COLUMN deposition
+        fraction the phase-1 kernel's survival factor consumes, and a fast
+        atom outside the column deposits nowhere the kernel can see.
+
+    Two z-normal planes end a history as well: crossing the far end is
+    ``end_loss``, and re-crossing the cathode face is ``source_return``.
+
+    SIMPLIFICATION, disclosed. The anode mesh plane is TRANSPARENT to the fast
+    lobe: unlike :func:`run_mc`, this mode applies no ``1 - eta`` interception
+    there. The registered outcome split has no mesh channel, and inventing one
+    would put a physics decision inside a bookkeeping read. The bias direction
+    is known and one-sided -- atoms the mesh would have thermalized instead fly
+    on and may deposit -- so ``f_dep`` reported here is an UPPER bound in that
+    respect.
+
+    Returns a dict of per-cell profiles [atoms/s], history counts, the outcome
+    split, ``f_dep`` with its binomial error, and the launch-energy record.
+    """
+    ze = bg["z_edges"]
+    ncell = ze.size - 1
+    dz = np.diff(ze)
+    Rp = bg["Rp"]
+    n_bg, u_bg = bg["n"], bg["u"]
+    nu_ion = bg["nu_ion"]
+    R_cath = bg["R_cath"]
+    T_s, phi_c = bg["T_s"], bg["phi_c"]
+
+    r_e = float(r_e)
+    r_n = float(r_n)
+    if not (0.0 < r_e <= r_n < 1.0):
+        raise ValueError(
+            "--fast-reflected uses the total_reflected energy convention, "
+            "which requires 0 < R_E <= R_N < 1 (each backscattered atom "
+            f"carries R_E/R_N of the incident energy); got R_E={r_e}, "
+            f"R_N={r_n}."
+        )
+    Ti_cath = float(bg["Ti"][0])
+    E_fast = (r_e / r_n) * max(phi_c + Ti_cath, 0.0)
+    lo, hi = PHELPS_QB_RANGE_EV
+    if not (lo <= E_fast <= hi):
+        raise ValueError(
+            f"fast-lobe launch energy E_fast={E_fast:.6g} eV is outside the "
+            f"Phelps He+/He backscatter table's range {lo:g}-{hi:g} eV, so "
+            "the CX cross section would be an extrapolation of the fit rather "
+            "than the archived data. Refusing to run."
+        )
+    v_fast = math.sqrt(2.0 * E_fast * EV / M_HE)
+    Qb_fast = float(phelps_he_backscatter_cm2(E_fast))
+
+    # Null-collision majorant. Only v_rel varies over the population (Qb is
+    # evaluated at the atom's own energy, which never changes in this mode:
+    # both event channels kill the history), and it is bounded by the launch
+    # speed plus the largest ion drift, so this bound is exact rather than
+    # heuristic. Asserted per step below all the same -- a broken majorant
+    # biases a null-collision estimator silently.
+    v_rel_max = v_fast + float(np.abs(u_bg).max())
+    nu_max = float((nu_ion + n_bg * Qb_fast * v_rel_max).max())
+
+    N = int(n_particles)
+    rate_fast = r_n * float(bg["sources"]["cathode_face"])
+    w = rate_fast / N
+
+    rad = R_cath * np.sqrt(rng.random(N))
+    th = rng.random(N) * 2.0 * np.pi
+    pos = np.zeros((N, 3))
+    pos[:, 0] = rad * np.cos(th)
+    pos[:, 1] = rad * np.sin(th)
+    pos[:, 2] = 1e-6
+    vel = cosine_emit(rng, N, T_s, 1.0)
+    vel = vel * (v_fast / np.maximum(np.linalg.norm(vel, axis=1), 1.0))[:, None]
+
+    cnt_cx = np.zeros(ncell)          # first-interaction CX census [histories]
+    cnt_ion = np.zeros(ncell)         # first-interaction ionization census
+    outcome = {
+        "cx_deposited": 0,
+        "ionization_deposited": 0,
+        "column_escape": 0,
+        "end_loss": 0,
+        "source_return": 0,
+    }
+    for _ in range(max_iter):
+        n_act = pos.shape[0]
+        if n_act == 0:
+            break
+        speed = np.linalg.norm(vel, axis=1)
+        icell = np.clip(np.searchsorted(ze, pos[:, 2]) - 1, 0, ncell - 1)
+        with np.errstate(divide="ignore"):
+            d_z = np.where(
+                vel[:, 2] > 0,
+                (ze[icell + 1] - pos[:, 2]) / vel[:, 2],
+                np.where(
+                    vel[:, 2] < 0, (ze[icell] - pos[:, 2]) / vel[:, 2], np.inf
+                ),
+            ) * speed
+        # Outward root of |xy + t vxy| = Rp(icell): the column surface, which
+        # here is an ABSORBER rather than a segment split.
+        vxy2 = vel[:, 0] ** 2 + vel[:, 1] ** 2
+        b = pos[:, 0] * vel[:, 0] + pos[:, 1] * vel[:, 1]
+        r2 = pos[:, 0] ** 2 + pos[:, 1] ** 2
+        Rp_here = Rp[icell]
+        disc = b**2 + vxy2 * (Rp_here**2 - r2)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            t_rp = (-b + np.sqrt(np.maximum(disc, 0.0))) / np.where(
+                vxy2 > 0, vxy2, np.inf
+            )
+        d_rp = np.where(vxy2 > 0, np.maximum(t_rp, 0.0) * speed, np.inf)
+        d_coll = -np.log(rng.random(n_act)) * speed / nu_max
+        d = np.minimum(np.minimum(d_z, d_rp), d_coll)
+        dt = d / speed
+        pos = pos + vel * dt[:, None]
+        pos = pos + (vel / speed[:, None]) * RAY_EPS_CM
+        kill = np.zeros(n_act, dtype=bool)
+
+        hit_c = d_coll <= np.minimum(d_z, d_rp)
+        if hit_c.any():
+            idx = np.flatnonzero(hit_c)
+            ii = icell[idx]
+            E_atom = 0.5 * M_HE * speed[idx] ** 2 / EV
+            v_rel = np.sqrt(
+                vel[idx, 0] ** 2
+                + vel[idx, 1] ** 2
+                + (vel[idx, 2] - u_bg[ii]) ** 2
+            )
+            nu_cx = n_bg[ii] * phelps_he_backscatter_cm2(E_atom) * v_rel
+            nu_tot = nu_ion[ii] + nu_cx
+            if np.any(nu_tot > nu_max):
+                raise ValueError(
+                    "null-collision majorant violated in the fast-lobe "
+                    f"tracer: max nu_tot={float(nu_tot.max()):.6g} /s exceeds "
+                    f"nu_max={nu_max:.6g} /s. The estimator would under-count "
+                    "collisions; refusing to continue."
+                )
+            real = rng.random(idx.size) < (nu_tot / nu_max) * (
+                r2[idx] < Rp[ii] ** 2
+            )
+            hit = idx[real]
+            if hit.size:
+                jj = icell[hit]
+                ionz = rng.random(hit.size) < (
+                    nu_ion[jj] / nu_tot[real]
+                )
+                np.add.at(cnt_ion, jj[ionz], 1.0)
+                np.add.at(cnt_cx, jj[~ionz], 1.0)
+                outcome["ionization_deposited"] += int(ionz.sum())
+                outcome["cx_deposited"] += int((~ionz).sum())
+                kill[hit] = True
+
+        # Column surface: the escape definition, cylindrical branch.
+        esc = (~hit_c) & (d_rp <= d_z)
+        outcome["column_escape"] += int(esc.sum())
+        kill |= esc
+
+        hit_z = (~hit_c) & (~esc)
+        if hit_z.any():
+            idx = np.flatnonzero(hit_z)
+            zdir = np.sign(vel[idx, 2])
+            edge = np.where(zdir > 0, icell[idx] + 1, icell[idx])
+            at_R = edge == ncell
+            at_L = edge == 0
+            outcome["end_loss"] += int(at_R.sum())
+            outcome["source_return"] += int(at_L.sum())
+            kill[idx[at_R | at_L]] = True
+            # Column surface, ANNULAR-STEP branch: a z-crossing into a section
+            # whose column is narrower leaves the atom outside Rp without ever
+            # meeting the cylindrical root above.
+            interior = ~(at_R | at_L)
+            e = idx[interior]
+            if e.size:
+                dest = np.where(
+                    zdir[interior] > 0, edge[interior], edge[interior] - 1
+                )
+                r_step = np.sqrt(pos[e, 0] ** 2 + pos[e, 1] ** 2)
+                step = r_step > Rp[dest]
+                outcome["column_escape"] += int(step.sum())
+                kill[e[step]] = True
+
+        alive = ~kill
+        pos, vel = pos[alive], vel[alive]
+    else:
+        if pos.shape[0]:
+            raise ValueError(
+                f"{pos.shape[0]} of {N} fast histories were still in flight "
+                f"after max_iter={max_iter} segments. Every outcome of this "
+                "mode is a registered channel, so an exhausted history has "
+                "nowhere honest to be booked; refusing to report a split with "
+                "a silent sixth bin."
+            )
+
+    n_dep = outcome["cx_deposited"] + outcome["ionization_deposited"]
+    f_dep = n_dep / N
+    f_dep_err = math.sqrt(max(f_dep * (1.0 - f_dep), 0.0) / N)
+    n_first = n_dep
+    cx_share = outcome["cx_deposited"] / n_first if n_first else float("nan")
+    cx_share_err = (
+        math.sqrt(max(cx_share * (1.0 - cx_share), 0.0) / n_first)
+        if n_first
+        else float("nan")
+    )
+
+    dep_cnt = cnt_cx + cnt_ion
+    dep_per_cm = dep_cnt / N / dz
+    # e-fold of the deposition profile. A log-linear fit is only defined on the
+    # profile's FALLING side, so the window opens at the peak -- the end of the
+    # rise -- and closes at the last contiguous cell still above peak/e^3 with a
+    # nonzero count. The rule and the resulting window are both printed.
+    fit = {"ok": False, "e_fold_cm": float("nan"), "z_lo": float("nan"),
+           "z_hi": float("nan"), "ncell": 0}
+    zc = 0.5 * (ze[:-1] + ze[1:])
+    if dep_per_cm.max() > 0.0:
+        ipk = int(np.argmax(dep_per_cm))
+        floor = dep_per_cm[ipk] * math.exp(-3.0)
+        j = ipk
+        while j + 1 < ncell and dep_per_cm[j + 1] >= floor and dep_per_cm[j + 1] > 0.0:
+            j += 1
+        if j - ipk >= 2:
+            slope, intercept = np.polyfit(
+                zc[ipk : j + 1], np.log(dep_per_cm[ipk : j + 1]), 1
+            )
+            fit = {
+                "ok": bool(slope < 0.0),
+                "e_fold_cm": float(-1.0 / slope) if slope < 0.0 else float("inf"),
+                "z_lo": float(zc[ipk]),
+                "z_hi": float(zc[j]),
+                "ncell": int(j - ipk + 1),
+            }
+
+    return {
+        "z": zc,
+        "dz": dz,
+        "S_cx_fast": cnt_cx * w,
+        "S_ion_fast": cnt_ion * w,
+        "cnt_cx": cnt_cx,
+        "cnt_ion": cnt_ion,
+        "dep_per_cm": dep_per_cm,
+        "outcome": outcome,
+        "n_launched": N,
+        "f_dep": f_dep,
+        "f_dep_err": f_dep_err,
+        "cx_share": cx_share,
+        "cx_share_err": cx_share_err,
+        "fit": fit,
+        "E_fast_eV": E_fast,
+        "v_fast_cm_s": v_fast,
+        "Qb_fast_cm2": Qb_fast,
+        "phi_c_V": phi_c,
+        "Ti_cathode_eV": Ti_cath,
+        "T_s_K": T_s,
+        "R_cath_cm": R_cath,
+        "r_e": r_e,
+        "r_n": r_n,
+        "rate_fast_per_s": rate_fast,
+        "nu_max_per_s": nu_max,
+    }
+
+
+def report_fast_reflected(res, bg, args):
+    """Print the ``--fast-reflected`` read in the house ``*_read.txt`` style."""
+    bar = "=" * 78
+    print(bar)
+    print("P0.3 FAST REFLECTED LOBE -- in-column deposition read")
+    print(bar)
+    print(f"  background     {args.run}")
+    print(f"  window [ms]    {args.window[0]}-{args.window[1]}")
+    print(f"  seed           {args.seed}")
+    print(f"  launched       {res['n_launched']} histories")
+    print()
+    print("SOURCE")
+    print("  convention     total_reflected  "
+          "(cathode_jet_energy_convention; sources.py "
+          "cathode_jet_backscatter_speed)")
+    print(f"  R_E / R_N      {res['r_e']:.6g} / {res['r_n']:.6g}"
+          f"   ->  R_E/R_N = {res['r_e'] / res['r_n']:.6g}")
+    print(f"  phi_c [V]      {res['phi_c_V']:.6f}"
+          "   (window mean, cathode_diagnostics/source_phi_c)")
+    print(f"  Ti_cath [eV]   {res['Ti_cathode_eV']:.6f}"
+          "   (window mean, first in-domain cell)")
+    print(f"  E_fast [eV]    {res['E_fast_eV']:.6f}"
+          "   = (R_E/R_N) * (phi_c + Ti_cath)")
+    print(f"  v_fast [cm/s]  {res['v_fast_cm_s']:.6e}")
+    print(f"  angular        cosine into the domain (cosine_emit, sign_z=+1, "
+          f"T_s={res['T_s_K']:.1f} K); direction only, speed set to v_fast")
+    print(f"  launch disc    uniform on r <= R_cath = {res['R_cath_cm']:.4f} cm "
+          "at z = 0")
+    print(f"  source rate    R_N * cathode_face = {res['rate_fast_per_s']:.6e} "
+          "atoms/s")
+    print("                 (rate scales the tallies only; every deliverable "
+          "below is a FRACTION)")
+    print()
+    print("COLLISION PHYSICS (fast population)")
+    print("  CX             nu_cx = n_i * Qb(E_atom) * v_rel, Phelps He+/He "
+          "backscatter")
+    print(f"                 Qb validity range {PHELPS_QB_RANGE_EV[0]:g} - "
+          f"{PHELPS_QB_RANGE_EV[1]:g} eV (archived LXCat table); "
+          f"E_fast is inside it")
+    print(f"                 Qb(E_fast) = {res['Qb_fast_cm2']:.6e} cm^2")
+    print("                 E_atom is the atom's own LAB kinetic energy; "
+          "v_rel is taken")
+    print("                 against the local ion MEAN drift (ion thermal "
+          "spread neglected)")
+    print("  ionization     nu_ion = n_i * SCD(n,Te), the background's "
+          "Te-Maxwellian ADAS rate")
+    print("                 (unchanged: the ELECTRONS are the Maxwellian "
+          "species)")
+    print("  A CX event ENDS the fast history. The newborn thermal neutral is "
+          "NOT tracked;")
+    print("  this mode measures the fast lobe only.")
+    print(f"  null-collision majorant nu_max = {res['nu_max_per_s']:.6e} /s")
+    print()
+    print("ESCAPE DEFINITION (disclosed)")
+    for line in FAST_ESCAPE_DISCLOSURE.split("\n"):
+        print(f"  {line}")
+    print()
+    print("SIMPLIFICATION (disclosed)")
+    print("  The anode mesh plane is TRANSPARENT to the fast lobe: no 1-eta "
+          "interception is")
+    print("  applied (run_mc does apply it). The registered outcome split has "
+          "no mesh")
+    print("  channel. Bias is one-sided -- atoms the mesh would have "
+          "thermalized fly on and")
+    print("  may deposit -- so f_dep below is an UPPER bound in that respect.")
+    print()
+
+    out = res["outcome"]
+    N = res["n_launched"]
+    print(bar)
+    print("OUTCOME SPLIT (fast population, per launched history)")
+    print(bar)
+    print(f"  {'channel':<22} {'histories':>10} {'fraction':>10}")
+    for key in ("cx_deposited", "ionization_deposited", "column_escape",
+                "end_loss", "source_return"):
+        print(f"  {key:<22} {out[key]:>10d} {out[key] / N:>10.5f}")
+    print(f"  {'TOTAL':<22} {sum(out.values()):>10d} "
+          f"{sum(out.values()) / N:>10.5f}")
+    print()
+    print(f"  f_dep = (CX + ionization) / launched = {res['f_dep']:.5f} "
+          f"+/- {res['f_dep_err']:.5f}  (binomial)")
+    print(f"  N = {N} gives a binomial error of {res['f_dep_err'] * 100:.3f} % "
+          "absolute on f_dep")
+    print()
+    print("FIRST-INTERACTION CENSUS")
+    print("  Every event channel of this mode kills the history, so an "
+          "interaction is")
+    print("  necessarily a history's FIRST -- the census below is the "
+          "first-interaction one.")
+    print(f"  CX               {out['cx_deposited']:>10d}")
+    print(f"  ionization       {out['ionization_deposited']:>10d}")
+    print(f"  CX share         {res['cx_share']:.5f} "
+          f"+/- {res['cx_share_err']:.5f}  (binomial)")
+    print()
+
+    fit = res["fit"]
+    print("DEPOSITION e-FOLD")
+    print("  Log-linear fit of ln(deposition per cm) vs z. Window rule: opens "
+          "at the")
+    print("  profile PEAK (the end of the rise, where a log-linear decay is "
+          "defined) and")
+    print("  closes at the last contiguous cell still above peak/e^3 with a "
+          "nonzero count.")
+    if fit["ok"]:
+        print(f"  fit window     z = {fit['z_lo']:.1f} - {fit['z_hi']:.1f} cm "
+              f"({fit['ncell']} cells)")
+        print(f"  e-fold         {fit['e_fold_cm']:.2f} cm "
+              f"= {fit['e_fold_cm'] / 100.0:.4f} m")
+    else:
+        print("  fit window     NOT ESTABLISHED (profile does not fall "
+              "log-linearly over a")
+        print("                 window of at least 3 cells)")
+    print()
+
+    print(bar)
+    print("DEPOSITION PROFILE (fast population)")
+    print(bar)
+    print(f"  {'z[cm]':>8} {'CX[/s]':>12} {'ion[/s]':>12} "
+          f"{'dep/launch/cm':>14} {'cum f_dep':>10}")
+    dep_cnt = res["cnt_cx"] + res["cnt_ion"]
+    cum = np.cumsum(dep_cnt) / N
+    zc = res["z"]
+    # The lobe deposits over a small leading fraction of the machine, so a
+    # fixed stride over all 279 cells prints the empty tail and hides the
+    # profile. Walk the cells that carry deposition instead, and account for
+    # the remainder in one line. The npz carries every cell regardless.
+    live = np.flatnonzero(dep_cnt > 0.0)
+    hi = min(int(live[-1]) + 1, zc.size - 1) if live.size else 0
+    step = max(1, (hi + 1) // 30)
+    for i in range(0, hi + 1, step):
+        print(f"  {zc[i]:8.1f} {res['S_cx_fast'][i]:12.4e} "
+              f"{res['S_ion_fast'][i]:12.4e} {res['dep_per_cm'][i]:14.6e} "
+              f"{cum[i]:10.5f}")
+    print(f"  cells beyond z = {zc[hi]:.1f} cm carry "
+          f"{res['f_dep'] - cum[hi]:.6f} of the launched population "
+          f"(profile printed with stride {step})")
+    print()
+
+    prefix = args.out or (Path(args.run).stem + "_fastlobe")
+    np.savez(
+        Path(args.run).parent / f"{prefix}.npz",
+        z=res["z"], dz=res["dz"],
+        S_cx_fast=res["S_cx_fast"], S_ion_fast=res["S_ion_fast"],
+        cnt_cx=res["cnt_cx"], cnt_ion=res["cnt_ion"],
+        dep_per_cm=res["dep_per_cm"],
+        Rp=bg["Rp"], n_bg=bg["n"], Te_bg=bg["Te"], Ti_bg=bg["Ti"],
+        outcome_keys=np.array(list(res["outcome"].keys())),
+        outcome_counts=np.array(list(res["outcome"].values())),
+        scalars_keys=np.array([
+            "n_launched", "f_dep", "f_dep_err", "cx_share", "cx_share_err",
+            "E_fast_eV", "v_fast_cm_s", "Qb_fast_cm2", "phi_c_V",
+            "Ti_cathode_eV", "R_cath_cm", "r_e", "r_n", "rate_fast_per_s",
+            "nu_max_per_s", "e_fold_cm", "fit_z_lo", "fit_z_hi",
+        ]),
+        scalars=np.array([
+            res["n_launched"], res["f_dep"], res["f_dep_err"],
+            res["cx_share"], res["cx_share_err"], res["E_fast_eV"],
+            res["v_fast_cm_s"], res["Qb_fast_cm2"], res["phi_c_V"],
+            res["Ti_cathode_eV"], res["R_cath_cm"], res["r_e"], res["r_n"],
+            res["rate_fast_per_s"], res["nu_max_per_s"],
+            res["fit"]["e_fold_cm"], res["fit"]["z_lo"], res["fit"]["z_hi"],
+        ], dtype=float),
+    )
+    print(f"saved {prefix}.npz")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("run")
@@ -1120,9 +1646,42 @@ def main(argv=None):
     ap.add_argument("--window", nargs=2, type=float, default=(5.0, 19.5))
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--out", default=None)
+    ap.add_argument(
+        "--fast-reflected", action="store_true",
+        help="run the SELF-CONTAINED cathode fast-reflected-lobe deposition "
+             "read instead of the full source menu: launches only the R_N "
+             "backscattered fraction of the cathode face, monoenergetic at "
+             "the total_reflected energy (R_E/R_N)*(phi_c+Ti), with an "
+             "energy-resolved Phelps-Qb CX rate, and reports the in-column "
+             "deposition profile, outcome split, f_dep and e-fold",
+    )
+    ap.add_argument(
+        "--r-e", type=float, default=0.2,
+        help="cathode energy reflection coefficient R_E, read in the "
+             "total_reflected convention (--fast-reflected only; default "
+             "0.2, the stance box)",
+    )
+    ap.add_argument(
+        "--r-n", type=float, default=0.5,
+        help="cathode particle reflection coefficient R_N "
+             "(--fast-reflected only; default 0.5, the stance box)",
+    )
     args = ap.parse_args(argv)
 
     bg = load_background(args.run, tuple(args.window))
+    if args.fast_reflected:
+        # A separate mode end to end: its own launcher, its own collision
+        # physics, its own tallies and its own report. It shares no state with
+        # the source-menu path below, which is left bit-for-bit as it was.
+        res = run_fast_reflected(
+            bg,
+            args.n_particles,
+            np.random.default_rng(args.seed),
+            r_e=args.r_e,
+            r_n=args.r_n,
+        )
+        report_fast_reflected(res, bg, args)
+        return
     if args.no_vol_rec:
         bg["sources"]["vol_rec"] = 0.0
     report_times = tuple(
