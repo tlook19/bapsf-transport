@@ -388,6 +388,20 @@ def report_window(f, label, lo, hi, geom, port_top):
         if untagged:
             print(f"  NOTE untagged channels present in the artifact: "
                   f"{untagged}")
+        if label == "AFTERGLOW":
+            live = sorted(((c, n, v) for (c, n), v in table.items()
+                           if tag_of(c) == "DRIVE-ONLY"
+                           and abs(v) >= 1.0e-6),
+                          key=lambda r: -abs(r[2]))
+            if live:
+                print("  WARNING: DRIVE-ONLY channels are NONZERO in this "
+                      "afterglow window (the inductive tail keeps the "
+                      "cathode solve live):")
+                for c, n, v in live:
+                    print(f"    {c}/{n:<4} {v:>16.5f}  kW")
+                print("    an afterglow dichotomy read is NOT clean on these "
+                      "channels in this window; move the window past the "
+                      "tail or discount them explicitly.")
 
     print("\n--- CIRCUIT AND SOURCE DIAGNOSTICS, window mean ---")
     if dg is None:
@@ -421,6 +435,10 @@ def report_window(f, label, lo, hi, geom, port_top):
     print(f"{'P_coupled = beam + ohmic':<44}{P_coupled:>16.5f}  kW")
     tau_ms = (W_J / P_coupled if P_coupled != 0.0 else float("nan"))
     print(f"{'tau_E = W / P_coupled':<44}{tau_ms:>16.6f}  ms")
+    if np.isfinite(tau_ms) and abs(beam) < 0.01 * abs(P_coupled):
+        print("  NOTE: the beam is off in this window, so P_coupled is the "
+              "residual ohmic line\n  alone; this tau_E is the bookkeeping "
+              "ratio W / P, NOT a confinement time.")
 
     print(f"\n--- PER-PORT Ee CHANNEL DENSITIES [W cm^-3], top {port_top} "
           "by |value|, window mean ---")
@@ -499,7 +517,9 @@ def print_header(f, path, geom, drive, afterglow):
     print("tau_E    : W = 3/2 (pe + pi) . V_p (window mean) divided by "
           "P_coupled := beam_power_deposition")
     print("           (Ee + Ei, volume-integrated) + ohmic "
-          "(source_P_ohmic); both windows use this same definition")
+          "(source_P_ohmic); both windows use this same definition.")
+    print("           tau_E is a bookkeeping ratio against that "
+          "denominator; where the beam is off it is NOT a confinement time")
     print(f"windows  : DRIVE {drive[0]}-{drive[1]} ms, "
           f"AFTERGLOW {afterglow[0]}-{afterglow[1]} ms (run clock)")
     print("tags     : DRIVE-ONLY / BOTH / AFTERGLOW-ACTIVE, static and "
