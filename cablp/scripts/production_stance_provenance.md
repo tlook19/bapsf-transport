@@ -166,7 +166,27 @@ as the ansatz, never "coils on" generically).
 
 ## Neutral source
 
-**`S_gp = 3000`** — FITTED, the one calibration constant of the puff model.
+**`S_gp = 9010` sccm per valve × 2 valves, `gas_puff_delivery_fraction
+(f_gp) ≡ 1.0` — MEASURED (hardware), the L2 operating point (adopted at
+l2a7b, carried unchanged by the 2026-08-19 stance event).** The 9010 is
+the flowcal hardware measurement of the East valve's sustained plateau
+flow at the recorded 76.4 V piezo drive (censored forward-model fit of
+`flow_data_2026-02-19.hdf5`; A_v(76.4 V) = 9.01 slm, stat [9.00, 9.04],
+full syst [8.65, 9.50]; West = East ASSUMED; total delivered
+[7.2, 8.1]e21 atoms/s; the meter sits upstream so the number is the
+sustained valve flow — no droop term against a square-waveform source).
+The derivation chain of record: `scripts/flowcal_{map,sensor,
+censored_fit,conservation,figs}.py` + the 2026-08-13 campaign-log
+entries (local docs). **History:** the earlier FITTED values (3000
+production / 5200 kinetic-operating; the previous text of this entry
+said 3000 and predated the L2 adoption — corrected 2026-08-19) sat
+inside the hardware envelope as an implied delivery fraction
+f_gp ≈ 0.577 — the "1.5–1.7× box." The L2 ruling retired the fitted
+level in favor of hardware-true fueling at f_gp ≡ 1.0. **Post-D2
+reconciliation pending (thread 23 phase 0):** the restored ~2e21
+atoms/s recycle stream changes the model's effective fueling economy;
+the box-vs-stance reconciliation re-derives against the adopted-stance
+ledger and lands here when ruled.
 `S_gp_decay_target`, `tau_gp_pulse_duration`, `tau_gp_decay_duration` are read
 only by the deprecated pulse/decay waveform modes and are inert under the
 square waveform.
