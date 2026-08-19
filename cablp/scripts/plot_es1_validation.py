@@ -19,6 +19,10 @@ Model V_dis is the dt-integrated circuit voltage (the inductor's view, the
 honest smooth trace). Times are on the main-discharge clock (t=0 at discharge
 start), matching the overlay's *_time_ms axes.
 
+The z-profile panels draw the plasma quantities (Te, ne, Isat, Ti) only over
+plasma-live cells, blanking the plasma-dead roles behind the cathode face;
+nn is drawn over the full domain, where the plenum reservoir is physical.
+
 Usage:
   python scripts/plot_es1_validation.py --from-h5 scripts/es1_r5_ts1840.h5 \
       --es 1 --out scripts/es1_r5_validation_ts1840.png
@@ -33,6 +37,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from cablp.solvers._sim1d import load_result_hdf5
+from cablp.solvers._sim1d.core.geometry import PLASMA_DEAD_ROLES
 from compare_sim1d_es1 import (
     _main_discharge_origin,
     _sigma_sys,
@@ -69,6 +74,27 @@ def _spread_band(ov, key, mean):
             "the wrong samples"
         )
     return sd
+
+
+def _plasma_live_mask(result):
+    """Return the per-cell plasma-live boolean, or None on results without roles.
+
+    Membership in ``PLASMA_DEAD_ROLES`` is the authoritative test, so twin and
+    collector geometries -- whose dead cells are not a contiguous z<0 block --
+    stay correct. Results saved before ``cell_role`` was written carry no roles
+    and are left unmasked.
+    """
+    roles = np.asarray(getattr(result, "cell_role", ()), dtype=object)
+    if roles.size == 0:
+        return None
+    return np.array([str(role) not in PLASMA_DEAD_ROLES for role in roles], dtype=bool)
+
+
+def _blank_dead(values, live):
+    """Return `values` with the plasma-dead cells replaced by NaN (gaps, not lines)."""
+    if live is None:
+        return values
+    return np.where(live, np.asarray(values, float), np.nan)
 
 
 def _interp_port_slice(t_axis, values_2d, t_ms):
@@ -118,6 +144,7 @@ def main():
 
     zc = np.asarray(ov["z_cm"], float)
     ports = np.asarray(ov["port"])
+    live = _plasma_live_mask(r)
 
     fig, axes = plt.subplots(4, 2, figsize=(13, 17))
     fig.suptitle(f"ES{args.es} validation: {Path(args.from_h5).name}", fontsize=12)
@@ -164,8 +191,8 @@ def main():
     for tsl in T_SLICES_MS:
         c = SLICE_COLORS[tsl]
         it = int(np.argmin(np.abs(t_ms - tsl)))
-        ax_te.plot(z, Te[it], "-", color=c, lw=1.3, label=f"model {tsl:.0f} ms")
-        ax_ne.plot(z, n[it], "-", color=c, lw=1.3, label=f"model {tsl:.0f} ms")
+        ax_te.plot(z, _blank_dead(Te[it], live), "-", color=c, lw=1.3, label=f"model {tsl:.0f} ms")
+        ax_ne.plot(z, _blank_dead(n[it], live), "-", color=c, lw=1.3, label=f"model {tsl:.0f} ms")
         # measured port points at this slice
         te_p = _interp_port_slice(te_t, te_m, tsl)
         te_ps = _interp_port_slice(te_t, te_s, tsl)
@@ -176,7 +203,7 @@ def main():
         ax_te.errorbar(zc, te_p, yerr=te_tot, fmt="o", color=c, ms=5, capsize=3)
         ax_ne.errorbar(zc, ne_p, yerr=ne_tot, fmt="o", color=c, ms=5, capsize=3)
         # Isat = n sqrt(Te)
-        isat_model = n[it] * np.sqrt(np.maximum(Te[it], 0))
+        isat_model = _blank_dead(n[it] * np.sqrt(np.maximum(Te[it], 0)), live)
         isat_meas = ne_p * np.sqrt(np.maximum(te_p, 0))
         ax_is.plot(z, isat_model, "-", color=c, lw=1.3, label=f"model {tsl:.0f} ms")
         ax_is.plot(zc, isat_meas, "o", color=c, ms=5)
@@ -193,7 +220,8 @@ def main():
         c = SLICE_COLORS[tsl]
         it = int(np.argmin(np.abs(t_ms - tsl)))
         ax.plot(z, nn[it], "-", color=c, lw=1.3, label=f"nn {tsl:.0f} ms")
-        ax.plot(z, Ti[it] * 1e12, ":", color=c, lw=1.0, label=f"Ti*1e12 {tsl:.0f} ms")
+        ax.plot(z, _blank_dead(Ti[it] * 1e12, live), ":", color=c, lw=1.0,
+                label=f"Ti*1e12 {tsl:.0f} ms")
     for zp in zc:
         ax.axvline(zp, color="k", ls="--", lw=0.6, alpha=0.4)
     ax.set_yscale("log"); ax.set_xlabel("z [cm]"); ax.set_ylabel("nn [cm^-3] / Ti[eV]*1e12")
