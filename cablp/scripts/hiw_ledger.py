@@ -129,12 +129,12 @@ print("\nLANDING MASS OVER PLASMA-DEAD CELLS, per birth cell "
       "(kernel row sums; the row itself always sums to 1)")
 print(f"{'cell':>5}{'role':>13}{'z_cm':>10}"
       f"{'dead-landing OFF':>19}{'dead-landing ON':>18}"
-      f"{'fold OFF':>11}{'fold ON':>11}")
+      f"{'fold OFF':>14}{'fold ON':>14}")
 show = [i for i in range(geom.cells) if i <= max(closed[:2].max(), 6) + 6]
 for i in show:
     print(f"{i:>5}{roles[i]:>13}{geom.z_cm[i]:>10.2f}"
           f"{k_off[0][i][dead].sum():>19.6e}{k_on[0][i][dead].sum():>18.6e}"
-          f"{k_off[2][i]:>11.6e}{k_on[2][i]:>11.6e}")
+          f"{k_off[2][i]:>14.6e}{k_on[2][i]:>14.6e}")
 live_off = k_off[0][~dead][:, dead].sum()
 live_on = k_on[0][~dead][:, dead].sum()
 print(f"\nsummed over ALL live birth cells: dead-landing mass "
