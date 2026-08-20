@@ -69,7 +69,7 @@ leave through an end plane are folded back onto the end cells, exactly as
 ``kn2zone.build_hop_kernels`` folds its own -- there is a wall there, so the
 atom lands on it rather than leaving the inventory.
 
-INTERNAL WALLS (``neutral_hot_internal_wall``, default off). The two global end
+INTERNAL WALLS (``neutral_hot_internal_wall``). The two global end
 planes are not the only surfaces a flight can hit. The plasma domain is bounded
 INSIDE the neutral domain: wherever a plasma-dead cell abuts a live one there is
 a closed face -- the cathode disc against its plenum is the canonical one -- and

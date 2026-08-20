@@ -3090,7 +3090,7 @@ input_flags_template_1d = {
     # momentum between species, and the wall/pump remove it. Mutually
     # exclusive with ion_neutral_drag_model="slip", whose closure is this
     # equation's own local steady state. Off => the 5-field state.
-    "neutral_momentum": False,
+    "neutral_momentum": True,
     # Split the neutral density into plasma-column and annulus zones:
     # an optional conservative field nn_a
     # carries the annulus density and nn becomes the COLUMN density. Axial
@@ -3100,7 +3100,7 @@ input_flags_template_1d = {
     # neutral_exchange_model="knudsen" (the per-zone conductances have no
     # constant counterpart). Off => single-field
     # chamber-mean nn.
-    "neutral_two_zone": False,
+    "neutral_two_zone": True,
     # Route the END-REGION recycle stream into the annulus. The plasma-
     # terminating faces whose live cell has the COLLECTOR role rebirth their
     # absorbed flux as thermal diffuse gas in that cell's annulus row nn_a
@@ -3160,7 +3160,7 @@ input_flags_template_1d = {
     # cathode_neutral_jet it additionally requires cathode_jet_surface_debit,
     # so the backscatter energy is booked once rather than twice. Each is a
     # construction-time ValueError. Off => the historical layout, bit-exact.
-    "neutral_energy": False,
+    "neutral_energy": True,
     # Launch the hot channel's CX-born atoms at the local (Ti, u_i) instead of
     # at Ti alone: the ion drift enters the ballistic flight kinematics as
     # v_z = v_hot*mu + u_i, so the axial hop becomes
@@ -3219,10 +3219,10 @@ input_flags_template_1d = {
     # rather than "folded at an end plane".
     #
     # Requires neutral_energy -- there is no hot channel to wall without it --
-    # as a construction-time ValueError. Default OFF and bit-exact off
-    # (presence-gated: the off path's wall bounds ARE the two end planes, so
-    # every clip reduces to the historical one).
-    "neutral_hot_internal_wall": False,
+    # as a construction-time ValueError. Bit-exact when off (presence-gated:
+    # the off path's wall bounds ARE the two end planes, so every clip reduces
+    # to the historical one).
+    "neutral_hot_internal_wall": True,
     # Shaped initial neutral fill. The run's neutral IC comes from a PER-CELL
     # profile of absolute densities (nn0_profile, and optionally
     # nn0_annulus_profile under neutral_two_zone) instead of the uniform

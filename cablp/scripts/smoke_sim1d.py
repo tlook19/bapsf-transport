@@ -177,6 +177,15 @@ def _cathode_unit_config():
         "hyperbolic_energy_consistent": False,
         "characteristic_boundary": False,
         "front_flux": True,
+        # The neutral closure family became a config default at the R2a
+        # fold-in. These unit tests are about the cathode and the fluid, and
+        # several of them arm the jet on the legacy drag arm
+        # (ion_neutral_moment_closure off), which neutral_energy refuses; keep
+        # the simple cold-neutral stance the helper's name promises.
+        "neutral_momentum": False,
+        "neutral_two_zone": False,
+        "neutral_energy": False,
+        "neutral_hot_internal_wall": False,
     })
     return p, f
 
@@ -292,6 +301,15 @@ def main():
     flags["characteristic_boundary"] = False
     flags["front_flux"] = True
     params["hyperbolic_wave_speed"] = "isothermal"
+    # Same rule for the neutral closure family, which the R2a fold-in made a
+    # config default: the operator algebra below hand-packs (n, nn, M, Ee, Ei)
+    # state vectors and reads nn as THE neutral density, so it needs the
+    # 5-field single-zone cold-neutral layout. The closure family's own blocks
+    # build their own configs.
+    flags["neutral_momentum"] = False
+    flags["neutral_two_zone"] = False
+    flags["neutral_energy"] = False
+    flags["neutral_hot_internal_wall"] = False
     sim = LAPDSim1D(params, flags)
     snapshot = sim.get_initial_snapshot()
     geom = snapshot.geometry
@@ -327,6 +345,17 @@ def main():
     # Resolved typed-segment geometry is the only live machine.
     resolved_params, resolved_flags = default_config()
     resolved_flags["resolved_boundaries"] = True
+    # This block and everything derived from it (twin_*, m5_*, rgap_*, ...)
+    # exercises geometry, the cathode solve and the beam on the 5-field
+    # cold-neutral layout, hand-packing (n, nn, M, Ee, Ei) state vectors. The
+    # R2a fold-in made the neutral closure family a config default, which adds
+    # conservative fields; pin the three layout flags off here so these blocks
+    # keep testing what they were written to test. The closure family has its
+    # own blocks, which build their own configs.
+    resolved_flags["neutral_momentum"] = False
+    resolved_flags["neutral_two_zone"] = False
+    resolved_flags["neutral_energy"] = False
+    resolved_flags["neutral_hot_internal_wall"] = False
     resolved_geom = LAPDSim1D(
         resolved_params, resolved_flags
     ).get_initial_snapshot().geometry
@@ -9477,6 +9506,22 @@ def main():
                     "b_Qen = 0.0",
                     "b_Qcx = 0.0",
                     "b_surface_loss = 0.0",
+                    # The inventory assertion below holds the CLI run to
+                    # atol=1e-14 on the 5-field single-zone cold-neutral
+                    # layout it was written against. The R2a fold-in made the
+                    # neutral closure family a config default, and the hot
+                    # channel's ballistic redistribution conserves to ~1e-12
+                    # relative rather than to 1e-14 (measured 2026-08-20: the
+                    # offset is set within the first equilibration cycle and
+                    # DECREASES with cycle count, so it is a closure-dependent
+                    # bookkeeping floor, not an accumulating leak). Pin the
+                    # layout rather than loosening the tolerance; the closure
+                    # family's own conservation blocks test it on its terms.
+                    "[flags]",
+                    "neutral_momentum = false",
+                    "neutral_two_zone = false",
+                    "neutral_energy = false",
+                    "neutral_hot_internal_wall = false",
                     "",
                 ]
             ),
@@ -13374,6 +13419,13 @@ def main():
             "neutral_prebreakdown": False,
             "neutral_equilibration": False,
             "launch_plasma_after_equilibration": False,
+            # R1b below walks the five/six/seven/eight-row layouts by ADDING
+            # closure flags to this base, so the base has to be the five-row
+            # one; the R2a fold-in made the family a config default.
+            "neutral_momentum": False,
+            "neutral_two_zone": False,
+            "neutral_energy": False,
+            "neutral_hot_internal_wall": False,
         }
     )
     r1a_sim = LAPDSim1D(r1a_params, r1a_flags)
@@ -14876,6 +14928,16 @@ print(json.dumps({
         p.update(cov)
         f = dict(f)
         f["neutral_equilibration"] = False
+        # coverage_closure refuses neutral_energy (the deficit partitions nn
+        # alone), and the hot internal wall requires neutral_energy. The block
+        # below also reads nn as THE chamber-mean neutral density (its pairing
+        # identity weighs nn by V_m), which is the single-zone layout. All four
+        # became config defaults at the R2a fold-in, so the coverage stance has
+        # to name the layout it composes with.
+        f["neutral_energy"] = False
+        f["neutral_hot_internal_wall"] = False
+        f["neutral_two_zone"] = False
+        f["neutral_momentum"] = False
         if cov:
             f["coverage_closure"] = True
         return p, f
@@ -15843,6 +15905,14 @@ print(json.dumps({
         })
         f = dict(f)
         f["neutral_equilibration"] = False
+        # The single-zone base: the refusal table below checks that
+        # neutral_probe_zone has no meaning WITHOUT neutral_two_zone, and block
+        # (v) arms two_zone itself for the ON direction. The R2a fold-in made
+        # two_zone (and the rest of the closure family) config defaults.
+        f["neutral_two_zone"] = False
+        f["neutral_momentum"] = False
+        f["neutral_energy"] = False
+        f["neutral_hot_internal_wall"] = False
         p.update(over)
         if over:
             f["neutral_probe_source"] = True
@@ -16638,6 +16708,14 @@ print(json.dumps({
         flags["neutral_equilibration"] = False
         flags["cathode_coupling"] = True
         flags["regime_tracer"] = True
+        # The refusal table below arms one offending key at a time and asserts
+        # WHICH refusal fires, so the base must not carry a second conflict of
+        # its own. The R2a fold-in made the neutral closure family a config
+        # default and neutral_energy refuses the kinetic neutral models.
+        flags["neutral_momentum"] = False
+        flags["neutral_two_zone"] = False
+        flags["neutral_energy"] = False
+        flags["neutral_hot_internal_wall"] = False
         params.update(overrides)
         return params, flags
 
@@ -17749,6 +17827,15 @@ print(json.dumps({
         # the same initial condition and the solver refuses the pair, so the
         # comparison stance clears the flag on BOTH arms.
         flags["neutral_equilibration"] = False
+        # The scalar arm below asserts the single-zone layout outright
+        # (state.nn_a is None) and compares the two arms at the raw bit level,
+        # so the stance names the layout rather than inheriting it; the R2a
+        # fold-in made the closure family a config default. The annulus profile
+        # has its own two-zone case further down, which arms two_zone itself.
+        flags["neutral_momentum"] = False
+        flags["neutral_two_zone"] = False
+        flags["neutral_energy"] = False
+        flags["neutral_hot_internal_wall"] = False
         params.update(over)
         return params, flags
 

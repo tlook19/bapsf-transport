@@ -376,14 +376,12 @@ max_steps_action = "stop"
 
 [input_flags]
 
-# NEUTRAL CLOSURE: two-zone particles, neutral momentum and energy, the hot
-# internal wall, and the shaped initial profile (which is why
+# NEUTRAL CLOSURE. Two-zone particles, neutral momentum and energy and the hot
+# internal wall are config defaults since the R2a fold-in and are no longer
+# named here. What remains is the shaped initial profile (which is why
 # neutral_equilibration is OFF -- the equilibrated seed would overwrite the
-# profile, and the solver refuses the pair).
-neutral_two_zone = true
-neutral_momentum = true
-neutral_energy = true
-neutral_hot_internal_wall = true
+# profile, and the solver refuses the pair); the profile flag stays stance-side
+# because the per-cell nn0_profile it requires is sized to this mesh.
 neutral_initial_profile = true
 neutral_equilibration = false
 

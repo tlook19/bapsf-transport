@@ -199,6 +199,17 @@ BASELINE_FLAG_OVERRIDES = {
     # end-expansion geometry; the historical golden ran without it. Pin off
     # (paired with the Rcs/Lcs/Rsup=0 pins above) so the anchor stays 67 cells.
     "end_expansion_geometry": False,
+    # R2a FOLD-IN (2026-08-20): the neutral closure family is now the shipped
+    # default (config.py input_flags_template_1d) -- evolved M_n, the two-zone
+    # column/annulus split, the decoupled neutral energy channel and the hot
+    # channel's internal walls. This fixture predates all four and ran the
+    # 5-field single-zone cold-neutral layout; pin them off so the anchor does
+    # NOT track the fold-in. Same rule as every pin above: the value equals
+    # what the fixture inherited before the fold, so it is bit-exact across it.
+    "neutral_momentum": False,
+    "neutral_two_zone": False,
+    "neutral_energy": False,
+    "neutral_hot_internal_wall": False,
 }
 # Run controls: None => LAPDSim1D defaults (adaptive dt, dynamic current-trigger
 # t_end, unlimited steps -- the notebook's own settings).
