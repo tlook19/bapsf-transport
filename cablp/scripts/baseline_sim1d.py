@@ -90,14 +90,17 @@ BASELINE_FLAG_OVERRIDES = {}
 # lengthen the gate without bound.
 #
 # 40,000 steps is sized to keep this gate at roughly the wall time of the
-# fixture it replaced. MEASURED on the shipped defaults at nx=60 (2026-08-20):
-# the adaptive dt is held near 3e-8 s by the surface_loss limiter through
-# ignition, so running to the dynamic t_end (2.53e-2 s) would take ~4 HOURS --
-# ~30x the retired fixture, twice per merge. The capped trajectory covers the
-# pre-breakdown foot, breakdown, and the first ~0.7 ms of the discharge; it
-# does NOT reach the plateau or the afterglow, so this gate certifies ignition
-# physics and everything the construction and equilibration touch, and says
-# nothing about late-time behaviour. See golden_baseline_provenance.md.
+# fixture it replaced (~8.5 min). MEASURED on the shipped defaults at nx=60
+# (2026-08-20): the adaptive dt is held near 3e-8 s by the surface_loss limiter
+# through ignition, so running to the dynamic t_end (2.53e-2 s) would take
+# ~4 HOURS -- ~30x the retired fixture, twice per merge.
+#
+# What the capped trajectory covers, from the capture: 40,000 steps reach
+# t = 1.887e-3 s over 189 saves -- 18 pre_breakdown, 13 breakdown, 158
+# main_discharge. So it exercises ignition and the first ~1.6 ms of the
+# discharge, and does NOT reach the plateau (15-19.5 ms) or the afterglow. A
+# change confined to late-time behaviour can pass this gate without being
+# exercised by it. See golden_baseline_provenance.md.
 BASELINE_RUN_KWARGS = {
     "t_end": None,
     "dt": None,
@@ -123,19 +126,32 @@ def build_baseline_config(param_overrides=None, flag_overrides=None):
 
 
 def run_baseline(params, flags):
-    """Run the solver and return ``(result, trajectory_dict, summary)``."""
+    """Run the solver and return ``(result, trajectory_dict, summary, cells)``.
+
+    ``cells`` is the mesh cell count read from the solver's own geometry. It is
+    NOT inferred from the width of ``y``: the number of packed fields per cell
+    depends on the neutral closure (5 for the cold single-zone layout, 8 once
+    evolved neutral momentum, the two-zone split and the neutral energy channel
+    are on), so any fixed divisor is wrong for some configuration.
+    """
     sim = LAPDSim1D(params, flags)
     sim.start_simulation(**BASELINE_RUN_KWARGS)
     result = sim.get_results()
     y = np.asarray(result.y, dtype=float)
     if y.ndim != 2:
         raise RuntimeError(f"expected 2-D packed trajectory y, got shape {y.shape}")
+    cells = int(sim.geometry.cells)
+    if y.shape[1] % cells:
+        raise RuntimeError(
+            f"packed trajectory width {y.shape[1]} is not a whole number of "
+            f"fields over {cells} cells"
+        )
     trajectory = {
         "time": np.asarray(result.time, dtype=float),
         "y": y,
         "phase": np.asarray(result.phase, dtype="U32"),
     }
-    return result, trajectory, summarize_result(result)
+    return result, trajectory, summarize_result(result), cells
 
 
 def _summary_scalars(summary):
@@ -170,7 +186,7 @@ def _summary_scalars(summary):
 def capture(baseline_path):
     """Run the baseline config and write the golden NPZ + JSON sidecar."""
     params, flags = build_baseline_config()
-    result, trajectory, summary = run_baseline(params, flags)
+    result, trajectory, summary, cells = run_baseline(params, flags)
     baseline_path = Path(baseline_path)
     baseline_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(baseline_path, **trajectory)
@@ -181,8 +197,11 @@ def capture(baseline_path):
             "(default_config()) plus the run-shape overrides in "
             "baseline_sim1d.BASELINE_PARAM_OVERRIDES."
         ),
-        "result_format": "sim1d packed conservative trajectory y[saves, 5*cells]",
-        "cells": int(trajectory["y"].shape[1] // 5),
+        "result_format": (
+            "sim1d packed conservative trajectory y[saves, fields*cells]"
+        ),
+        "cells": cells,
+        "fields_per_cell": int(trajectory["y"].shape[1] // cells),
         "saves": int(trajectory["y"].shape[0]),
         "summary": _summary_scalars(summary),
         "params": _json_safe(params),
@@ -194,6 +213,7 @@ def capture(baseline_path):
         "baseline captured: "
         f"{baseline_path} ({size_mb:.2f} MB), "
         f"saves={payload['saves']}, cells={payload['cells']}, "
+        f"fields={payload['fields_per_cell']}, "
         f"steps={summary.steps}, final_time={summary.final_time:.6e} s"
     )
     print(f"baseline sidecar: {sidecar}")
@@ -216,7 +236,7 @@ def verify(baseline_path, rtol, atol, param_overrides=None, flag_overrides=None)
     golden_y = golden["y"]
 
     params, flags = build_baseline_config(param_overrides, flag_overrides)
-    _, trajectory, summary = run_baseline(params, flags)
+    _, trajectory, summary, _cells = run_baseline(params, flags)
     fresh_time = trajectory["time"]
     fresh_y = trajectory["y"]
 

@@ -8,8 +8,8 @@ overrides tabulated below and nothing else.
 
 **The previous fixture is retired.** It held the 2026-07-22 operating point
 behind ~30 explicit pins and is reproducible only at the anchor tag
-`pre-refactor-2026-08-20` with its environment lockfile under `notes/env/`. Its
-pin table is in this file's git history; do not reconstruct it here.
+`pre-refactor-2026-08-20`, with the environment lockfile recorded against that
+tag. Its pin table is in this file's git history; do not reconstruct it here.
 
 `scripts/baseline_sim1d.py` builds the configuration. It imports nothing from
 the campaign drivers, so this note is complete on its own: for parameter
@@ -24,7 +24,7 @@ the solver still computes what it computed, not that what it computes is right.
 What changed at R2b is which configuration it scaffolds: it now tracks the
 shipped defaults instead of a frozen historical point.
 
-That swap is the whole reason the pin table collapsed from ~30 to one. Under the
+That swap is the whole reason the pin table collapsed from ~30 to three. Under the
 old arrangement every default the campaign moved had to be pinned back, so the
 table grew monotonically and the fixture drifted further from anything the
 campaign ran — by the end it was pinning a machine length, a fueling waveform, a
@@ -77,15 +77,15 @@ what a reviewer pays even if a future change shrinks the adaptive dt, whereas a
 duration cap would let that same change lengthen the gate without bound. 40,000
 steps sizes the gate at roughly the wall time of the fixture it replaced.
 
-**The coverage consequence, stated plainly.** At 40,000 steps the trajectory
-reaches `t ~ 1e-3 s`: the pre-breakdown foot, breakdown, and the first ~0.7 ms of
-the discharge. It does **not** reach the discharge plateau or the afterglow. So
-this gate certifies construction, the neutral equilibration, the geometry, the
-cathode solve, beam deposition, the neutral closure, conduction, the circuit and
-ignition — and it certifies nothing about late-time behaviour. A bit-exactness
-gate only certifies what reaches its saved state; a change that touches only the
-plateau or the afterglow can pass this golden without ever being exercised by it,
-and needs its own evidence.
+**The coverage consequence, stated plainly.** As captured, 40,000 steps reach
+`t = 1.887e-3 s` over 189 saves — 18 `pre_breakdown`, 13 `breakdown`, 158
+`main_discharge`. So the fixture exercises construction, the neutral
+equilibration, the geometry, the cathode solve, beam deposition, the neutral
+closure, conduction, the circuit, ignition, and the first ~1.6 ms of the
+discharge. It does **not** reach the plateau (15–19.5 ms) or the afterglow, and
+it certifies nothing about them. A bit-exactness gate only certifies what
+reaches its saved state; a change that touches only late-time behaviour can pass
+this golden without ever being exercised by it, and needs its own evidence.
 
 ## Recapture record
 
@@ -99,6 +99,17 @@ flag and coefficient live in one place; made `baseline_sim1d.py` self-contained
 so no stance edit can reach the anchor; replaced the pin table; capped the run
 at 40,000 steps after measuring the uncapped cost at ~4 hours; recaptured.
 Captured twice from clean separate processes and verified byte-identical.
+
+*A latent sidecar bug this pass surfaced and fixed:* `capture()` derived the
+sidecar's `cells` as `y.shape[1] // 5`, assuming five packed fields per cell.
+That divisor is only right for the cold single-zone neutral layout the retired
+fixture ran. Under the shipped closure the packing is EIGHT fields (evolved
+neutral momentum, the two-zone split, the neutral energy channel), so the first
+recapture wrote `cells = 115` for a 72-cell mesh. `run_baseline` now reports the
+cell count from the solver's own geometry and the sidecar records
+`fields_per_cell` alongside it, so no fixed divisor is assumed. Trajectory
+content is unaffected — this was always sidecar metadata only — but the fixture
+was recaptured after the fix so both captures come from identical code.
 
 *A note on the fold that rode this pass:* `heat_flux_limiter_f` was held back
 from R2a on the expectation that folding it would move the golden. It would not
