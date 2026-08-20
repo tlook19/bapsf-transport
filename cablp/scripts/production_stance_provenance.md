@@ -270,10 +270,13 @@ the extra 0.4 approximates the rest of the singlet manifold. It is inert under
 parallel electron heat flux. It combines harmonically (Cowie-McKee) with the
 Braginskii flux at `heat_flux_limiter_exponent = 1`, which is already the
 config default. This coefficient is a bracket, not a measurement. *(Split at
-R2a, 2026-08-20: the FLAG `electron_heat_flux_limit` folded to a config
-default of `True`, but the VALUE stays stance-side pending R2b — note the
-resulting shipped default is limiter ON at the config's `f = 0.3` while
-production runs 0.1 from the stance; `config.py` states this at the flag.)*
+R2a, 2026-08-20 — the FLAG `electron_heat_flux_limit` folded to a config
+default of `True` while the VALUE stayed stance-side — and rejoined at R2b the
+same day: `heat_flux_limiter_f = 0.1` is now the config default too, so the
+stance file names neither. It was held back from R2a on the expectation that
+folding it would move the golden; it does not — the R1 literal pin had already
+made the fixture immune, verified byte-identical. See
+`config_defaults_provenance.md`.)*
 
 **`beam_deposition_smoothing_cm = 50.0`** — **ASSUMED**, nominally a physical
 straggling width. The CSDA range profile is sharp on the mesh scale; smoothing

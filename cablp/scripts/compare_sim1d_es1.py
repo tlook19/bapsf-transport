@@ -229,10 +229,10 @@ PARAM_OVERRIDES = {
     # scale; this spreads it over the physical straggling width so the
     # deposited power does not follow cell edges.
     "beam_deposition_smoothing_cm": _STANCE["beam_deposition_smoothing_cm"],
-    # Free-streaming cap on the parallel electron heat flux (the flag below).
-    # It combines harmonically (Cowie-McKee) with the Braginskii flux at
-    # heat_flux_limiter_exponent=1, which is already the config default.
-    "heat_flux_limiter_f": _STANCE["heat_flux_limiter_f"],
+    # NB the free-streaming cap on the parallel electron heat flux is NOT set
+    # here any more: heat_flux_limiter_f folded into the config defaults at
+    # R2b, joining the flag that reads it (folded at R2a) and the exponent that
+    # shapes it (a config default throughout).
     # NB the fixed-cell-size source region (7a) is NOT set here any more: the
     # flag and both source_region_* values folded into the config defaults at
     # R2a, and the three are presence-gated against each other, so naming any
@@ -247,8 +247,8 @@ FLAG_OVERRIDES = {
     # geometry replaced the built-in flare with per-cell prescribed radii, and
     # the solver refuses the two together. It comes with the stance.
     # NB electron_heat_flux_limit is NOT set here any more either: the flag
-    # folded into the config defaults at R2a. Its COEFFICIENT still is, above,
-    # because heat_flux_limiter_f rides the R2b re-anchor.
+    # folded into the config defaults at R2a and its coefficient at R2b, so
+    # neither namespace names the limiter.
 }
 
 

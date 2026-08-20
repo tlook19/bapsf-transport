@@ -1285,11 +1285,11 @@ def fudge_factor_defaults():
         # adas_low_te_extension; see the retired recipe in the module note
         # above.
         "recombination_energy_return": False,
-        # --- INERT: default-off instruments / neutral ladder ---
-        # Electron heat-flux limiter (read only when the
-        # electron_heat_flux_limit flag is on): free-streaming fraction f in
-        # q_sat = f*n*Te*v_the, the harmonic (Cowie-McKee) saturation cap.
-        "heat_flux_limiter_f": 0.3,
+        # --- Electron heat-flux limiter (read only when the
+        # electron_heat_flux_limit flag is on, which is a shipped default) ---
+        # Free-streaming fraction f in q_sat = f*n*Te*v_the, the harmonic
+        # (Cowie-McKee) saturation cap.
+        "heat_flux_limiter_f": 0.1,
         # Non-local Knudsen exponent p for that limiter (read only when
         # electron_heat_flux_limit is on). lambda = 1/(1+Kn^p)
         # with Kn = q_SH/q_sat. p=1.0 (default) is the harmonic Cowie-McKee
@@ -3044,9 +3044,8 @@ input_flags_template_1d = {
     # q_sat = heat_flux_limiter_f * n * Te * v_the -- so the flux caps at
     # free-streaming where gradients are steep and recovers Spitzer where they
     # are shallow. Electron only; ion conduction unchanged. Bit-exact when
-    # off; a declared closure-family A/B instrument. NB the cap COEFFICIENT
-    # heat_flux_limiter_f is a separate key with its own default (0.3); the
-    # production campaign runs this flag at 0.1 and sets that value itself.
+    # off; a declared closure-family A/B instrument. The cap COEFFICIENT
+    # heat_flux_limiter_f is a separate input_dict key with its own default.
     "electron_heat_flux_limit": True,
     # Sonic front-filling closure, OFF by default: the mesh A/B found the front
     # to be a numerical artifact (its L1 activity and Rusanov numerical
