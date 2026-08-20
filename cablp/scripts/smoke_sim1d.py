@@ -137,6 +137,30 @@ from cablp.vars._cons import (
 )
 
 
+# R2a fold-in (2026-08-20): the neutral closure family and the cathode neutral
+# jet became config DEFAULTS. Many blocks below were written against the older
+# 5-field single-zone cold-neutral stance -- they hand-pack (n, nn, M, Ee, Ei)
+# state vectors, read nn as THE neutral density, weigh it by the chamber volume,
+# or check a refusal that a second default-on conflict would now pre-empt. This
+# scoped helper puts one (params, flags) pair back on that stance so those
+# blocks run as written; the closure family and the jet keep their own blocks,
+# which build their own configs and exercise the shipped defaults.
+#
+# The three jet keys travel with neutral_momentum: the jet is M_n momentum
+# physics and requires the flag, the surface debit requires the jet, and the
+# total_reflected convention requires the jet too.
+def _pin_pre_r2a_neutral_stance(params, flags):
+    """Pin the pre-R2a 5-field cold-neutral stance in place; return the pair."""
+    flags["neutral_momentum"] = False
+    flags["neutral_two_zone"] = False
+    flags["neutral_energy"] = False
+    flags["neutral_hot_internal_wall"] = False
+    params["cathode_neutral_jet"] = False
+    params["cathode_jet_surface_debit"] = False
+    params["cathode_jet_energy_convention"] = "legacy"
+    return params, flags
+
+
 # R5 stance flip (2026-07-25): the production defaults promote the full M6
 # cathode/beam stack (csda + quasilinear, power_balance, gaussian, ads_des,
 # presheath smoothing) and the R2/R3 fluid repairs. The cathode-MECHANISM unit
@@ -178,7 +202,11 @@ def _cathode_unit_config():
         "characteristic_boundary": False,
         "front_flux": True,
     })
-    return p, f
+    # These unit tests are about the cathode and the fluid, and several of them
+    # arm the jet themselves on the legacy drag arm (ion_neutral_moment_closure
+    # off), which neutral_energy refuses; keep the simple cold-neutral stance
+    # the helper's name promises.
+    return _pin_pre_r2a_neutral_stance(p, f)
 
 
 # The sheath state that escaped the phi_c ceiling before the returned-root fix
@@ -292,6 +320,9 @@ def main():
     flags["characteristic_boundary"] = False
     flags["front_flux"] = True
     params["hyperbolic_wave_speed"] = "isothermal"
+    # Same rule for the R2a fold-in: the operator algebra below hand-packs
+    # (n, nn, M, Ee, Ei) state vectors and reads nn as THE neutral density.
+    _pin_pre_r2a_neutral_stance(params, flags)
     sim = LAPDSim1D(params, flags)
     snapshot = sim.get_initial_snapshot()
     geom = snapshot.geometry
@@ -327,6 +358,12 @@ def main():
     # Resolved typed-segment geometry is the only live machine.
     resolved_params, resolved_flags = default_config()
     resolved_flags["resolved_boundaries"] = True
+    # This block and everything derived from it (twin_*, m5_*, rgap_*, ...)
+    # exercises geometry, the cathode solve and the beam on the 5-field
+    # cold-neutral layout, hand-packing (n, nn, M, Ee, Ei) state vectors, and
+    # several of the derived blocks arm the jet themselves to check its
+    # refusals.
+    _pin_pre_r2a_neutral_stance(resolved_params, resolved_flags)
     resolved_geom = LAPDSim1D(
         resolved_params, resolved_flags
     ).get_initial_snapshot().geometry
@@ -421,8 +458,17 @@ def main():
     assert np.allclose(
         resolved_geom.length_cm[cathode_face:anode_face], gap_dz
     )
-    # The gap cells are the smallest in the mesh, so they set the explicit CFL.
-    assert np.isclose(resolved_geom.length_cm.min(), gap_dz)
+    # The smallest cell in the mesh sets the explicit CFL, and it is either a
+    # gap cell or the collector block -- every other segment (plenum, fixed
+    # source region, far column) is longer than both on any shipped geometry.
+    # Which of the two wins is a property of the machine, not of the mesher:
+    # on the nominal 100 cm collector it is the gap, and on the G1 measured
+    # collector (7.8 cm, a config default since the R2a fold-in) it is the
+    # collector block.
+    assert np.isclose(
+        resolved_geom.length_cm.min(),
+        min(gap_dz, resolved_params["collector_length_cm"]),
+    )
 
     # The cathode surface is a plasma wall; the anode face is interior and open.
     assert not resolved_geom.plasma_open[cathode_face]
@@ -451,7 +497,20 @@ def main():
     )
     assert anode_flanking_cells(resolved_geom) == ((anode_face - 1, anode_face),)
     assert resolved_geom.cell_role[anode_face - 1] == "gap"
-    assert resolved_geom.cell_role[anode_face] == "puff"
+    # The puff role sits on the cell CONTAINING gas_puff_z_cm, wherever the
+    # mesh puts it: on the nominal machine that is the first column cell past
+    # the anode face, and under source_fixed_grid with the G1 puff position
+    # (86.3 cm, both config defaults since the R2a fold-in) it is a fixed
+    # source cell further downstream. Checked as containment, so this states
+    # the rule rather than one machine's answer to it.
+    _puff_first, _puff_last = puff_cell_indices(resolved_geom)
+    assert _puff_first == _puff_last
+    assert (
+        resolved_geom.z_edges_cm[_puff_first]
+        <= resolved_params["gas_puff_z_cm"]
+        <= resolved_geom.z_edges_cm[_puff_first + 1]
+    )
+    assert _puff_first >= anode_face
     assert np.all(np.isnan(resolved_geom.neutral_face_conductance_cm3_s))
 
     # G1: default-off expanded end geometry. The provisional hardware arm
@@ -607,29 +666,39 @@ def main():
         else:
             raise AssertionError("invalid neutral-baffle configuration constructed")
 
-    # Fixed-cell-size source region (default-off ``source_fixed_grid``). Without
-    # it, nx uniform column cells span anode face to collector start, so a
-    # refinement study moves every near-source cell edge -- including the puff
-    # cell, whose centre anchors the default cosine puff profile. With it on the
-    # column from the anode face (50 cm) to source_region_length_cm is meshed at
-    # exactly source_region_dz_cm regardless of nx, and the puff role follows
+    # Fixed-cell-size source region (``source_fixed_grid``). Without it, nx
+    # uniform column cells span anode face to collector start, so a refinement
+    # study moves every near-source cell edge -- including the puff cell, whose
+    # centre anchors the default cosine puff profile. With it on the column from
+    # the anode face (50 cm) to source_region_length_cm is meshed at exactly
+    # source_region_dz_cm regardless of nx, and the puff role follows
     # gas_puff_z_cm.
     #
-    # (d) The production default takes NO new branch: flag off, both keys None,
-    # and the spec helper returns None for the resolved default config.
-    assert not resolved_flags["source_fixed_grid"]
-    assert resolved_params["source_region_length_cm"] is None
-    assert resolved_params["source_region_dz_cm"] is None
+    # (d) The OFF path takes no new branch: with the flag cleared and both keys
+    # None the spec helper returns None. Since the R2a fold-in the flag and both
+    # values are config defaults, so the off arm is constructed here rather than
+    # read off default_config().
+    srcgrid_off_flags = {**resolved_flags, "source_fixed_grid": False}
+    srcgrid_off_params = dict(
+        resolved_params,
+        source_region_length_cm=None,
+        source_region_dz_cm=None,
+    )
     assert (
         _source_fixed_grid_spec(
-            resolved_params,
-            resolved_flags,
-            gap_length=resolved_params["cathode_anode_gap_cm"],
-            total_length=resolved_params["Lm"],
-            collector_length=resolved_params["collector_length_cm"],
+            srcgrid_off_params,
+            srcgrid_off_flags,
+            gap_length=srcgrid_off_params["cathode_anode_gap_cm"],
+            total_length=srcgrid_off_params["Lm"],
+            collector_length=srcgrid_off_params["collector_length_cm"],
             twin=False,
         )
         is None
+    )
+    srcgrid_off_geom = (
+        LAPDSim1D(srcgrid_off_params, srcgrid_off_flags)
+        .get_initial_snapshot()
+        .geometry
     )
 
     srcgrid_flags = {**resolved_flags, "source_fixed_grid": True}
@@ -668,7 +737,7 @@ def main():
         srcgrid_geom.length_cm[srcgrid_anode_face:srcgrid_region_end_face] == 10.0
     )
     # nx meshes only the far column, from the region end to the collector.
-    assert srcgrid_geom.cells == resolved_geom.cells + srcgrid_n_fixed
+    assert srcgrid_geom.cells == srcgrid_off_geom.cells + srcgrid_n_fixed
     srcgrid_puff, srcgrid_puff_twin = puff_cell_indices(srcgrid_geom)
     assert srcgrid_puff == srcgrid_puff_twin
     # The puff role went to the fixed-region cell CONTAINING 60 cm, not the
@@ -715,6 +784,23 @@ def main():
     # (c) Every misconfiguration raises loudly at construction; none falls back.
     srcgrid_twin_params = _srcgrid_params(60)
     srcgrid_twin_params["collector_length_cm"] = 100.0
+    # A source region reaching PAST the collector block start, derived from the
+    # machine rather than hardcoded (the G1 collector is 7.8 cm, so a fixed
+    # 1900 cm would now be comfortably inside the column) and rounded up to a
+    # whole number of source cells so the integer-multiple check cannot fire
+    # first and mask the one this case is about.
+    srcgrid_past_collector = float(
+        _srcgrid_params(60)["cathode_anode_gap_cm"]
+        + 10.0
+        * np.ceil(
+            (
+                resolved_params["Lm"]
+                - resolved_params["collector_length_cm"]
+                - _srcgrid_params(60)["cathode_anode_gap_cm"]
+            )
+            / 10.0
+        )
+    )
     for bad_params, bad_flags, expected in (
         (
             {**_srcgrid_params(60), "source_region_length_cm": None},
@@ -728,13 +814,13 @@ def main():
         ),
         (
             _srcgrid_params(60),
-            resolved_flags,
-            "require the default-off",
+            srcgrid_off_flags,
+            "source region parameters require the source_fixed_grid flag",
         ),
         (
-            {**resolved_params, "source_region_dz_cm": 10.0},
-            resolved_flags,
-            "require the default-off",
+            {**srcgrid_off_params, "source_region_dz_cm": 10.0},
+            srcgrid_off_flags,
+            "source region parameters require the source_fixed_grid flag",
         ),
         (
             {**_srcgrid_params(60), "source_region_length_cm": 50.0},
@@ -742,7 +828,10 @@ def main():
             "strictly beyond the anode face",
         ),
         (
-            {**_srcgrid_params(60), "source_region_length_cm": 1900.0},
+            {
+                **_srcgrid_params(60),
+                "source_region_length_cm": srcgrid_past_collector,
+            },
             srcgrid_flags,
             "strictly before the collector",
         ),
@@ -936,12 +1025,16 @@ def main():
     assert expansion_attempt.y.shape == expansion_sim.get_initial_snapshot().y.shape
 
     # Twin cathode mirrors the source end: its cathode
-    # surface sits at z = Lm, with that plenum beyond it.
-    twin_resolved_flags = dict(resolved_flags)
+    # surface sits at z = Lm, with that plenum beyond it. It builds on the
+    # source_fixed_grid OFF arm because mirroring the fixed source region onto
+    # a second cathode end is not implemented and the geometry refuses the
+    # pair (checked in the refusal table above); since the R2a fold-in that
+    # flag is a config default, so the twin layout has to clear it explicitly.
+    twin_resolved_flags = dict(srcgrid_off_flags)
     twin_resolved_flags["TwinCathode"] = True
     twin_resolved_flags["cathode_coupling"] = False
     twin_resolved_geom = LAPDSim1D(
-        resolved_params, twin_resolved_flags
+        srcgrid_off_params, twin_resolved_flags
     ).get_initial_snapshot().geometry
     assert list(twin_resolved_geom.cell_role[:2]) == ["plenum", "cathode"]
     assert list(twin_resolved_geom.cell_role[-2:]) == ["cathode", "plenum"]
@@ -9477,6 +9570,28 @@ def main():
                     "b_Qen = 0.0",
                     "b_Qcx = 0.0",
                     "b_surface_loss = 0.0",
+                    # The inventory assertion below holds the CLI run to
+                    # atol=1e-14 on the 5-field single-zone cold-neutral
+                    # layout it was written against. The R2a fold-in made the
+                    # neutral closure family a config default, and the hot
+                    # channel conserves to ~4e-12 relative rather than to
+                    # 1e-14 on this source-free config: measured 2026-08-20,
+                    # neutral_energy is the member that moves it, and the
+                    # offset is IDENTICAL at 1 and at 100 equilibration cycles
+                    # to every printed digit -- a fixed closure-dependent
+                    # bookkeeping offset, not an accumulating leak. Pin the
+                    # layout rather than loosening the tolerance; the closure
+                    # family's own conservation blocks test it on its terms.
+                    # This is _pin_pre_r2a_neutral_stance spelled as TOML,
+                    # because the CLI reads a file rather than a dict.
+                    "cathode_neutral_jet = false",
+                    "cathode_jet_surface_debit = false",
+                    'cathode_jet_energy_convention = "legacy"',
+                    "[flags]",
+                    "neutral_momentum = false",
+                    "neutral_two_zone = false",
+                    "neutral_energy = false",
+                    "neutral_hot_internal_wall = false",
                     "",
                 ]
             ),
@@ -11106,9 +11221,20 @@ def main():
     # neither an end cell nor a fixed offset from one. The wall-return
     # channels must be READ from that cell and DEPOSITED into it; positional
     # constants read the plasma-dead cells behind it and source nothing.
+    # This is the PRE-G1 production geometry, reconstructed key by key (the
+    # fitted 15 cm radii, the plenum-choke obstruction and the built-in end
+    # flare, none of which the measured machine uses). The R2a fold-in moved
+    # the four machine scalars into the config defaults, so they are named here
+    # with the rest of the arm rather than inherited -- the tiny G1 collector
+    # block would otherwise put a 7.8 cm cell under this block's fixed
+    # dt = 1 ns steps.
     kd_obs_params = dict(kd_params)
     kd_obs_params.update(
         {
+            "Lm": 2000.0,
+            "plenum_length_cm": 100.0,
+            "collector_length_cm": 100.0,
+            "gas_puff_z_cm": 60.0,
             "Rp": 15.0,
             "R_cath": 15.0,
             "Rcs": 40.0,
@@ -13376,6 +13502,9 @@ def main():
             "launch_plasma_after_equilibration": False,
         }
     )
+    # R1b below walks the five/six/seven/eight-row layouts by ADDING closure
+    # flags to this base, so the base has to be the five-row one.
+    _pin_pre_r2a_neutral_stance(r1a_params, r1a_flags)
     r1a_sim = LAPDSim1D(r1a_params, r1a_flags)
     r1a_geom = r1a_sim.geometry
     r1a_active = np.asarray(r1a_geom.plasma_active, dtype=bool)
@@ -14336,10 +14465,10 @@ def main():
         )
         # TWO scenarios, run through the same child harness:
         #
-        # * ``meanfield`` -- a short current-driven discharge on the production
-        #   stance. The cathode sheath solve (Tier A) runs on every sample and
-        #   the CSDA ray fires, so both halves of "tierA+csda" are on the hot
-        #   path.
+        # * ``meanfield`` -- a short current-driven discharge on the shared
+        #   base stated below. The cathode sheath solve (Tier A) runs on every
+        #   sample and the CSDA ray fires, so both halves of "tierA+csda" are
+        #   on the hot path.
         # * ``coverage`` -- the same question under the clumpy-plasma closure,
         #   which used to REFUSE the opt-in outright. It no longer does, and
         #   this is what replaced the refusal. The compiled march is bound only
@@ -14349,6 +14478,22 @@ def main():
         #   marches plus the tier-A kernels. The scenario therefore turns the
         #   ionizing tail walk on: that is what issues those nested legs, and
         #   without it the comparison would be blind to the march entirely.
+        #
+        # LAYOUT (R2a fold-in, 2026-08-20): all five scenarios share ONE base,
+        # and it is the pre-R2a 5-field cold-neutral stance -- the child spells
+        # _pin_pre_r2a_neutral_stance out itself, since a subprocess cannot
+        # import the parent's helper (the TOML block at ~line 9585 spells the
+        # same pin out for the same reason). This block asks a KERNEL
+        # EQUIVALENCE question, not a closure question: the compiled kernels
+        # are the tier-A sheath solve and the CSDA march, neither of which
+        # contains any neutral-closure code, so composing the folded closure
+        # family would add no compiled coverage while moving every trajectory
+        # the expected step counts and anti-vacuity thresholds below were
+        # calibrated against. Nor could the folded defaults be stated as ONE
+        # layout: ``coverage`` composes coverage_closure, which the
+        # now-default neutral_energy refuses outright at construction. The
+        # closure family keeps its own blocks, which build their own configs
+        # and exercise the shipped defaults.
         #
         # The child counts the nested marches by wrapping ``deposit_beam`` in
         # its DEFINING module -- the two-stream wrapper resolves it as a module
@@ -14368,6 +14513,16 @@ from cablp.solvers._sim1d import LAPDSim1D, default_config
 
 scenario = sys.argv[1]
 params, flags = default_config()
+# The shared base for every scenario below: _pin_pre_r2a_neutral_stance,
+# spelled out because this child is a separate process. See the LAYOUT note
+# in the parent for why kernel equivalence is compared on the pinned stance.
+flags["neutral_momentum"] = False
+flags["neutral_two_zone"] = False
+flags["neutral_energy"] = False
+flags["neutral_hot_internal_wall"] = False
+params["cathode_neutral_jet"] = False
+params["cathode_jet_surface_debit"] = False
+params["cathode_jet_energy_convention"] = "legacy"
 params.update({
     "dt_save": 0.0,
     "phase_transition_mode": "scheduled",
@@ -14876,6 +15031,11 @@ print(json.dumps({
         p.update(cov)
         f = dict(f)
         f["neutral_equilibration"] = False
+        # coverage_closure refuses neutral_energy (the deficit partitions nn
+        # alone), and the block below reads nn as THE chamber-mean neutral
+        # density (its pairing identity weighs nn by V_m), which is the
+        # single-zone layout.
+        _pin_pre_r2a_neutral_stance(p, f)
         if cov:
             f["coverage_closure"] = True
         return p, f
@@ -15843,6 +16003,10 @@ print(json.dumps({
         })
         f = dict(f)
         f["neutral_equilibration"] = False
+        # The single-zone base: the refusal table below checks that
+        # neutral_probe_zone has no meaning WITHOUT neutral_two_zone, and block
+        # (v) arms two_zone itself for the ON direction.
+        _pin_pre_r2a_neutral_stance(p, f)
         p.update(over)
         if over:
             f["neutral_probe_source"] = True
@@ -16638,6 +16802,10 @@ print(json.dumps({
         flags["neutral_equilibration"] = False
         flags["cathode_coupling"] = True
         flags["regime_tracer"] = True
+        # The refusal table below arms one offending key at a time and asserts
+        # WHICH refusal fires, so the base must not carry a second conflict of
+        # its own (neutral_energy refuses the kinetic neutral models).
+        _pin_pre_r2a_neutral_stance(params, flags)
         params.update(overrides)
         return params, flags
 
@@ -17749,6 +17917,20 @@ print(json.dumps({
         # the same initial condition and the solver refuses the pair, so the
         # comparison stance clears the flag on BOTH arms.
         flags["neutral_equilibration"] = False
+        # The scalar arm below asserts the single-zone layout outright
+        # (state.nn_a is None) and compares the two arms at the raw bit level,
+        # so the stance names the layout rather than inheriting it. The annulus
+        # profile has its own case further down, which arms two_zone itself.
+        _pin_pre_r2a_neutral_stance(params, flags)
+        # A UNIFORM nx=12 column. The spreading-kernel checks in (e) state
+        # their widths in CELLS and convert with the mesh's MEAN cell length,
+        # which only means "cells" on a uniform mesh; the fixed source region
+        # (a config default since the R2a fold-in) makes cell sizes differ by
+        # a factor of several, and a 2-cell kernel would then be sub-cell where
+        # it lands. The IC construction under test is mesh-agnostic.
+        flags["source_fixed_grid"] = False
+        params["source_region_length_cm"] = None
+        params["source_region_dz_cm"] = None
         params.update(over)
         return params, flags
 

@@ -33,13 +33,12 @@
 [input_dict]
 
 # MACHINE GEOMETRY -- measured end-to-end (G1, 2026-08-18) and adopted with
-# the g1atrim trim. The two per-cell radius profiles are built offline by
-# scripts/g1_build_profiles.py and are sized to THIS mesh (280 cells: 1
-# plenum + 5 gap + 5 fixed source + 268 far column + 1 collector).
-Lm = 2117.8
-collector_length_cm = 7.8
-plenum_length_cm = 166.0
-gas_puff_z_cm = 86.3
+# the g1atrim trim. The four machine scalars (Lm, the plenum and collector
+# block lengths, the puff-pipe position) are config defaults since the R2a
+# fold-in and are no longer named here. What remains is per-cell and per-mesh:
+# the two radius profiles are built offline by scripts/g1_build_profiles.py and
+# are sized to THIS mesh (280 cells: 1 plenum + 5 gap + 5 fixed source + 268
+# far column + 1 collector), and the baffle arrays go with them.
 neutral_baffle_positions_cm = [342.6]
 neutral_baffle_clear_radii_cm = [39.75]
 plasma_radius_profile_cm = [
@@ -189,10 +188,10 @@ machine_radius_profile_cm = [
 
 # MESH. nx counts the FAR column only under source_fixed_grid; the source
 # region is meshed at a fixed cell size so a refinement does not move the
-# near-source cell edges. The three keys travel together with the flag.
+# near-source cell edges. The flag and the two source_region_* values are
+# config defaults since the R2a fold-in; nx stays here because it is a
+# run-cost choice and the per-cell profiles above are sized to it.
 nx = 268
-source_region_length_cm = 100.0
-source_region_dz_cm = 10.0
 
 # INITIAL NEUTRAL FILL. Shaped foot profile from
 # scripts/g1afix_foot45.npz (equilibrated base scripts/g1afix_eqbase.h5,
@@ -351,11 +350,6 @@ cathode_heat_capacity_J_per_K = 181.0
 cathode_emission_profile = "uniform"
 T_s = 1998.15
 
-# CATHODE NEUTRAL JET (armed, total_reflected convention).
-cathode_neutral_jet = true
-cathode_jet_surface_debit = true
-cathode_jet_energy_convention = "total_reflected"
-
 # FUELING.
 S_gp = 9010.0
 S_gp_decay_target = 2000
@@ -376,25 +370,20 @@ max_steps_action = "stop"
 
 [input_flags]
 
-# NEUTRAL CLOSURE: two-zone particles, neutral momentum and energy, the hot
-# internal wall, and the shaped initial profile (which is why
+# NEUTRAL CLOSURE. Two-zone particles, neutral momentum and energy and the hot
+# internal wall are config defaults since the R2a fold-in and are no longer
+# named here. What remains is the shaped initial profile (which is why
 # neutral_equilibration is OFF -- the equilibrated seed would overwrite the
-# profile, and the solver refuses the pair).
-neutral_two_zone = true
-neutral_momentum = true
-neutral_energy = true
-neutral_hot_internal_wall = true
+# profile, and the solver refuses the pair); the profile flag stays stance-side
+# because the per-cell nn0_profile it requires is sized to this mesh.
 neutral_initial_profile = true
 neutral_equilibration = false
 
 # GEOMETRY: the per-cell prescribed areas and the baffles that go with the
-# measured machine, plus the fixed-cell source region.
+# measured machine. Both stay stance-side because the arrays they require are
+# sized to this mesh; source_fixed_grid folded into the config defaults.
 prescribed_area_geometry = true
 neutral_baffles = true
-source_fixed_grid = true
-
-# TRANSPORT.
-electron_heat_flux_limit = true
 
 # Keys whose stance value is None (TOML has no null literal).
 [none_valued]

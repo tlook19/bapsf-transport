@@ -103,9 +103,9 @@ def geometry_defaults():
     Lm:
         Total machine length represented by the 1D mesh [cm].
     nx:
-        Number of resolved column cells between anode and collector. With the
-        default-off ``source_fixed_grid`` flag on it counts only the *far*
-        column cells, between the source region end and the collector.
+        Number of resolved column cells between anode and collector. Under the
+        ``source_fixed_grid`` flag it counts only the *far* column cells,
+        between the source region end and the collector.
     Rm:
         Default neutral/machine radius [cm].
     Rp:
@@ -239,23 +239,23 @@ def geometry_defaults():
         surface]; the region runs from the anode face at ``cathode_anode_gap_cm``
         to here and must lie strictly between the anode face and the collector
         block (``Lm - collector_length_cm``). ``None`` when off. Requires the
-        default-off ``source_fixed_grid`` flag. For the value the campaign
-        stance sets, see ``scripts/production_stance_provenance.md``.
+        ``source_fixed_grid`` flag, and is required by it. For the value's
+        provenance see ``scripts/production_stance_provenance.md``.
     source_region_dz_cm:
         Cell size [cm] inside that source region, held fixed independently of
         ``nx``; the region length minus the anode gap must be an integer
         multiple of it (1e-9 relative tolerance). ``None`` when off. Requires
-        the default-off ``source_fixed_grid`` flag.
+        the ``source_fixed_grid`` flag, and is required by it.
     """
     return {
-        "Lm": 2000.0,
+        "Lm": 2117.8,
         "nx": 60,
         "Rm": 50.0,
         "Rp": 18.415,
-        "plenum_length_cm": 100.0,
+        "plenum_length_cm": 166.0,
         "cathode_anode_gap_cm": 50.0,
         "nx_gap": 5,
-        "collector_length_cm": 100.0,
+        "collector_length_cm": 7.8,
         "Rcs": 0.0,
         "Lcs": 0.0,
         "Rsup": 0.0,
@@ -277,8 +277,8 @@ def geometry_defaults():
         "neutral_annulus_volume_fraction_min": 1.0e-2,
         "neutral_baffle_positions_cm": None,
         "neutral_baffle_clear_radii_cm": None,
-        "source_region_length_cm": None,
-        "source_region_dz_cm": None,
+        "source_region_length_cm": 100.0,
+        "source_region_dz_cm": 10.0,
     }
 
 
@@ -511,7 +511,7 @@ def neutral_source_defaults():
         # centre and width are geometry-derived, not tunable.
         "gas_puff_profile": "cosine_pipe",
         # The pipe position, in machine coordinates so it does not move with nx.
-        "gas_puff_z_cm": 60.0,
+        "gas_puff_z_cm": 86.3,
         "gas_puff_sigma_cm": 50.0,
         "gas_puff_throw_cm": 100.0,
         # Fresh-puff fractional-coverage local ionization (default 0 = OFF,
@@ -2073,7 +2073,7 @@ def cathode_defaults():
         speed is built, and therefore how much of the incident ion power the
         cathode jet hands the neutral gas.
 
-        ``"legacy"`` (the default) reads it per backscattered particle:
+        ``"legacy"`` reads it per backscattered particle:
         ``v_back = sqrt(2 R_E (phi_c + Ti)/m)``, carried by the ``R_N``
         reflected fraction alone, so the gas receives ``R_N R_E`` of the
         incident ion power while ``cathode_jet_surface_debit`` removes
@@ -2275,7 +2275,7 @@ def cathode_defaults():
         # surface T_s; the anode channel is backscatter-only (wire
         # re-emission has no net axial direction), per collected side, at
         # the solve's phi_a.
-        "cathode_neutral_jet": False,
+        "cathode_neutral_jet": True,
         "cathode_jet_R_N": 0.5,
         "cathode_jet_R_E": 0.2,
         # Which convention R_E is read in when the cathode backscatter speed
@@ -2284,15 +2284,17 @@ def cathode_defaults():
         # R_E); "total_reflected" reads it as the TRIM total reflected-energy
         # fraction, so the R_N reflected particles carry R_E/R_N each and the
         # exported power matches the debit.
-        "cathode_jet_energy_convention": "legacy",
+        "cathode_jet_energy_convention": "total_reflected",
         "anode_neutral_jet": False,
         "anode_jet_R_N": 0.5,
         "anode_jet_R_E": 0.25,
-        # Sensitivity arm: debit the cathode surface's ion heating by the
-        # reflected-energy fraction (power_balance receives
-        # (1 - R_E) * P_cathode_i). Off by default, since the jet's first pass
-        # is momentum-only. Requires cathode_neutral_jet.
-        "cathode_jet_surface_debit": False,
+        # Debit the cathode surface's ion heating by the reflected-energy
+        # fraction (power_balance receives (1 - R_E) * P_cathode_i); off, the
+        # jet is momentum-only and the surface keeps that power. Requires
+        # cathode_neutral_jet, and is REQUIRED by neutral_energy with the jet
+        # armed -- with an En field the reflected power is booked into the gas,
+        # so without the debit the same R_E would be spent twice.
+        "cathode_jet_surface_debit": True,
         # Mesh momentum accommodation for the evolved wind: the momentum
         # the anode wires intercept lands on the anode structure instead
         # of staying in the gas (the open-area throttle alone leaves the
@@ -3030,9 +3032,9 @@ input_flags_template_1d = {
     # regardless of nx, which then refines only the far column, and the puff
     # role follows gas_puff_z_cm instead of the first column cell. Presence
     # gated in core.geometry in both directions (both parameters required when
-    # on, forbidden when off) and incompatible with TwinCathode. Default OFF
-    # and structurally bit-exact off.
-    "source_fixed_grid": False,
+    # on, forbidden when off) and incompatible with TwinCathode. Structurally
+    # bit-exact when off.
+    "source_fixed_grid": True,
     "heat_conduction": True,
     "implicit_heat_conduction": True,
     # Flux-limited electron heat conduction. The classical Spitzer-Harm flux
@@ -3041,9 +3043,11 @@ input_flags_template_1d = {
     # scaled per cell by lambda = q_sat/(q_sat+q_SH) (harmonic Cowie-McKee),
     # q_sat = heat_flux_limiter_f * n * Te * v_the -- so the flux caps at
     # free-streaming where gradients are steep and recovers Spitzer where they
-    # are shallow. Electron only; ion conduction unchanged. Default OFF and
-    # bit-exact off; a declared closure-family A/B instrument.
-    "electron_heat_flux_limit": False,
+    # are shallow. Electron only; ion conduction unchanged. Bit-exact when
+    # off; a declared closure-family A/B instrument. NB the cap COEFFICIENT
+    # heat_flux_limiter_f is a separate key with its own default (0.3); the
+    # production campaign runs this flag at 0.1 and sets that value itself.
+    "electron_heat_flux_limit": True,
     # Sonic front-filling closure, OFF by default: the mesh A/B found the front
     # to be a numerical artifact (its L1 activity and Rusanov numerical
     # diffusion vanish under refinement). OFF renders alpha_front inert.
@@ -3090,7 +3094,7 @@ input_flags_template_1d = {
     # momentum between species, and the wall/pump remove it. Mutually
     # exclusive with ion_neutral_drag_model="slip", whose closure is this
     # equation's own local steady state. Off => the 5-field state.
-    "neutral_momentum": False,
+    "neutral_momentum": True,
     # Split the neutral density into plasma-column and annulus zones:
     # an optional conservative field nn_a
     # carries the annulus density and nn becomes the COLUMN density. Axial
@@ -3100,7 +3104,7 @@ input_flags_template_1d = {
     # neutral_exchange_model="knudsen" (the per-zone conductances have no
     # constant counterpart). Off => single-field
     # chamber-mean nn.
-    "neutral_two_zone": False,
+    "neutral_two_zone": True,
     # Route the END-REGION recycle stream into the annulus. The plasma-
     # terminating faces whose live cell has the COLLECTOR role rebirth their
     # absorbed flux as thermal diffuse gas in that cell's annulus row nn_a
@@ -3160,7 +3164,7 @@ input_flags_template_1d = {
     # cathode_neutral_jet it additionally requires cathode_jet_surface_debit,
     # so the backscatter energy is booked once rather than twice. Each is a
     # construction-time ValueError. Off => the historical layout, bit-exact.
-    "neutral_energy": False,
+    "neutral_energy": True,
     # Launch the hot channel's CX-born atoms at the local (Ti, u_i) instead of
     # at Ti alone: the ion drift enters the ballistic flight kinematics as
     # v_z = v_hot*mu + u_i, so the axial hop becomes
@@ -3219,10 +3223,10 @@ input_flags_template_1d = {
     # rather than "folded at an end plane".
     #
     # Requires neutral_energy -- there is no hot channel to wall without it --
-    # as a construction-time ValueError. Default OFF and bit-exact off
-    # (presence-gated: the off path's wall bounds ARE the two end planes, so
-    # every clip reduces to the historical one).
-    "neutral_hot_internal_wall": False,
+    # as a construction-time ValueError. Bit-exact when off (presence-gated:
+    # the off path's wall bounds ARE the two end planes, so every clip reduces
+    # to the historical one).
+    "neutral_hot_internal_wall": True,
     # Shaped initial neutral fill. The run's neutral IC comes from a PER-CELL
     # profile of absolute densities (nn0_profile, and optionally
     # nn0_annulus_profile under neutral_two_zone) instead of the uniform

@@ -526,7 +526,7 @@ and reduced from the present $-46.0$ kW, with no rate tuning (Phelps supersedes 
 IAEA rate set; the bracket is a cross-check).
 
 
-## Decoupled two-channel neutral gas (`neutral_energy`, default off)
+## Decoupled two-channel neutral gas (`neutral_energy`)
 
 The neutral population in the column is bimodal. A cold bulk sits near the
 vessel temperature; a minority born by resonant charge exchange sits at the

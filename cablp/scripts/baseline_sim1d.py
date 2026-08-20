@@ -170,6 +170,25 @@ BASELINE_PARAM_OVERRIDES = {
     "heat_flux_limiter_f": 0.1,
     "source_region_length_cm": 100.0,
     "source_region_dz_cm": 10.0,
+    # R2a FOLD-IN (2026-08-20): the cathode neutral jet, its surface debit and
+    # the total_reflected energy convention are now config defaults. This
+    # fixture predates all three and ran with no jet at all; pin them back so
+    # the anchor does NOT track the fold-in. Same rule as every pin above.
+    "cathode_neutral_jet": False,
+    "cathode_jet_surface_debit": False,
+    "cathode_jet_energy_convention": "legacy",
+    # R2a FOLD-IN (2026-08-20) part 2: the G1 measured machine scalars are now
+    # config defaults. This fixture was captured on the nominal 2000 cm machine
+    # with the 100 cm plenum and collector blocks and the puff pipe 60 cm from
+    # the cathode; pin all four so the anchor keeps its own geometry -- same
+    # rule as the Rcs/Lcs/Rsup and Rp/R_cath pins above. (source_fixed_grid and
+    # its two source_region_* parameters need no new pin: the fixture already
+    # inherits the flag from PRODUCTION_FLAG_OVERRIDES and pins both values
+    # above, so folding their defaults leaves it where it is.)
+    "Lm": 2000.0,
+    "plenum_length_cm": 100.0,
+    "collector_length_cm": 100.0,
+    "gas_puff_z_cm": 60.0,
 }
 # input_flags overrides.
 BASELINE_FLAG_OVERRIDES = {
@@ -199,6 +218,24 @@ BASELINE_FLAG_OVERRIDES = {
     # end-expansion geometry; the historical golden ran without it. Pin off
     # (paired with the Rcs/Lcs/Rsup=0 pins above) so the anchor stays 67 cells.
     "end_expansion_geometry": False,
+    # R2a FOLD-IN (2026-08-20): the neutral closure family is now the shipped
+    # default (config.py input_flags_template_1d) -- evolved M_n, the two-zone
+    # column/annulus split, the decoupled neutral energy channel and the hot
+    # channel's internal walls. This fixture predates all four and ran the
+    # 5-field single-zone cold-neutral layout; pin them off so the anchor does
+    # NOT track the fold-in. Same rule as every pin above: the value equals
+    # what the fixture inherited before the fold, so it is bit-exact across it.
+    "neutral_momentum": False,
+    "neutral_two_zone": False,
+    "neutral_energy": False,
+    "neutral_hot_internal_wall": False,
+    # R2a FOLD-IN, the flags the fixture already ran ON and inherited through
+    # the production splat above. Folding their config defaults does not move
+    # this anchor, but the splat no longer names them, so pin both as literals
+    # to keep the R1 self-containment rule: every value that reaches the golden
+    # is written here until the R2b re-anchor.
+    "source_fixed_grid": True,
+    "electron_heat_flux_limit": True,
 }
 # Run controls: None => LAPDSim1D defaults (adaptive dt, dynamic current-trigger
 # t_end, unlimited steps -- the notebook's own settings).

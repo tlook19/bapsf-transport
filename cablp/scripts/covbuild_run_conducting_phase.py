@@ -60,6 +60,12 @@ def build_config(nx, coverage=None, extra=None):
         params["coverage_initial_fraction"] = f0
         params["coverage_growth_rate_per_s"] = r
         flags["coverage_closure"] = True
+        # The coverage deficit partitions nn alone, so the solver refuses a
+        # single mean En over a concentrated gas. neutral_energy (and the hot
+        # internal wall that requires it) became config defaults at the R2a
+        # fold-in, so the coverage arm has to name the layout it composes with.
+        flags["neutral_energy"] = False
+        flags["neutral_hot_internal_wall"] = False
     if extra:
         params.update(extra)
     return params, flags
