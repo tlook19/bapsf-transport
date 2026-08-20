@@ -82,6 +82,38 @@ and `heating_anomalous_transport = "local"` are already the config defaults;
 they are pinned anyway so a future promotion to `"nonlocal"` / `"tail_walk"`
 cannot silently move the anchor.
 
+**Stance-decoupling pins (R1, 2026-08-20).** Six values the golden previously
+inherited through `compare_sim1d_es1`'s override dicts became literal pins when
+those dicts were replaced by the stance file, so the stance file cannot move
+any golden value: `S_gp_decay_target = 2000`, `b_beam_excitation = 1.4`,
+`beam_deposition_smoothing_cm = 50.0`, `heat_flux_limiter_f = 0.1`,
+`source_region_length_cm = 100.0`, `source_region_dz_cm = 10.0`. The resolved
+golden config was verified byte-identical across the change.
+
+**Fold-in pins (R2a, 2026-08-20).** The g1atrim production package became the
+shipped defaults; the fixture holds the pre-fold values as literals. Eleven
+historical pins (old default ← what the live default became):
+
+| key | pinned (historical) | live default (post-fold) |
+|---|---|---|
+| `neutral_momentum` | `False` | `True` |
+| `neutral_two_zone` | `False` | `True` |
+| `neutral_energy` | `False` | `True` |
+| `neutral_hot_internal_wall` | `False` | `True` |
+| `cathode_neutral_jet` | `False` | `True` |
+| `cathode_jet_surface_debit` | `False` | `True` |
+| `cathode_jet_energy_convention` | `"legacy"` | `"total_reflected"` |
+| `Lm` | `2000.0` | `2117.8` |
+| `plenum_length_cm` | `100.0` | `166.0` |
+| `collector_length_cm` | `100.0` | `7.8` |
+| `gas_puff_z_cm` | `60.0` | `86.3` |
+
+Plus two **inherited values written as literals** (they equal both the old and
+new resolved value — self-containment only, so removing the driver dicts could
+not silently move them): `source_fixed_grid = True`,
+`electron_heat_flux_limit = True`. The `production_golden` snapshot digest was
+verified unchanged across the whole fold.
+
 ## Values the fixture shares with the machine
 
 A few pins are real quantities rather than historical accidents, taken from the

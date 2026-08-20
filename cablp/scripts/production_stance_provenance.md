@@ -1,15 +1,23 @@
-# Provenance of the production stance (`compare_sim1d_es1.PARAM_OVERRIDES`)
+# Provenance of the production stance (`scripts/stances/g1atrim.toml`)
 
-`PARAM_OVERRIDES` / `FLAG_OVERRIDES` in `scripts/compare_sim1d_es1.py` are the
-configuration the scoring driver runs. This file records where each pinned
-number came from. Parameter *meanings* are in the docstrings of
+The production stance of record is the committed stance file
+`scripts/stances/g1atrim.toml`, loaded by `scripts/stance_config.py`
+(R1, 2026-08-20; it replaced the former `PARAM_OVERRIDES` / `FLAG_OVERRIDES`
+dicts in `scripts/compare_sim1d_es1.py`). This file records where each stance
+value came from. Parameter *meanings* are in the docstrings of
 `cablp/solvers/_sim1d/core/config.py`; defaults provenance is in
 `cablp/solvers/_sim1d/core/config_defaults_provenance.md`, which also defines
 the provenance classes MEASURED / DERIVED / FITTED / ASSUMED used here.
 
-Several of these pins duplicate the config defaults exactly. The duplication is
-deliberate: this dict is the stance record, and dropping the pins would change
-resolution order for the other run drivers.
+**Where the values live changed at R2a (2026-08-20), and this note now spans
+both homes.** The fold-in pass made the g1atrim package the shipped
+`default_config()` defaults; the stance file retains only the keys that could
+not fold (per-mesh arrays, per-rung operating measurements, provenance-excluded
+and consequence keys — the R2a exception list). Entries below whose key folded
+now describe a **config default**; their provenance (value, class, bar, memo)
+is unchanged by the move, and `config_defaults_provenance.md` carries the
+default-side entry. The golden fixture pins every pre-fold value as a literal
+(`golden_baseline_provenance.md`), so no historical artifact tracks the fold.
 
 Analysis memos named below are working files kept alongside these scripts and
 are not tracked in this repository.
@@ -148,8 +156,10 @@ Neither number is re-fitted to absorb the difference.
 **`neutral_hot_internal_wall = true`** (flags) and
 **`cathode_jet_energy_convention = "total_reflected"`** (params) are
 armed in the production stance as of the 2026-08-19 adoption
-(campaign @ c1947d8 carries the code; both keys default OFF in the
-config for bit-exactness of historical artifacts). Class: neither is a
+(campaign @ c1947d8 carries the code; both keys defaulted OFF in the
+config until the R2a fold, 2026-08-20 — they are now the shipped
+defaults, with the golden pinning the historical OFF/"legacy" values
+for bit-exactness of historical artifacts). Class: neither is a
 calibration — both restore conservation. The wall flag ends a measured
 particle deletion (~2e21 atoms/s, ~25 % of puff scale, at the plenum;
 kernel flights now terminate at plasma-dead faces); the convention key
@@ -219,9 +229,16 @@ that conflated the emitting radius with the plasma-column radius. The golden
 fixture pins 15.0/15.0 explicitly (`baseline_sim1d.BASELINE_PARAM_OVERRIDES`)
 so the regression anchor does not track this stance.
 
-**`end_expansion_cells = 10`, `end_expansion_machine_radius_cm = 100.0`,
-`end_expansion_plasma_radius_cm = 18.415`, `Rcs = 40.0`, `Lcs = 25.0`,
-`Rsup = 0.0`** — ASSUMED, an interim geometry pending a 2D model. The end vessel
+**`end_expansion_*`, `Rcs`, `Lcs`, `Rsup` — RETIRED FROM THE STANCE (R1,
+2026-08-20).** The G1 measured-geometry adoption replaced the parametric flare
+with the prescribed-area profiles, and the R1 de-staling deleted these keys
+from the stance (flag `end_expansion_geometry = False`; params at their
+inert defaults). The entry below is retained as the historical record of the
+pre-G1 interim geometry it described:
+
+*(historical)* `end_expansion_cells = 10`, `end_expansion_machine_radius_cm
+= 100.0`, `end_expansion_plasma_radius_cm = 18.415`, `Rcs = 40.0`,
+`Lcs = 25.0`, `Rsup = 0.0` — ASSUMED, an interim geometry pending a 2D model. The end vessel
 expands to a 1 m neutral radius over 10 cells with no plasma flare (the plasma
 stays at `Rp`); the plenum choke is an obstruction with no support rods; no
 baffles; collector length unchanged. `end_expansion_plasma_radius_cm` carries
@@ -230,7 +247,8 @@ moved to 18.415 with it. The regression fixture needs no pin for it — the
 baseline pops the `end_expansion_*` params when the flag is off.
 
 **`source_region_length_cm = 100.0`, `source_region_dz_cm = 10.0`** (with
-`source_fixed_grid = True`) — ASSUMED, interim geometry. The 100 cm column in
+`source_fixed_grid = True`) — ASSUMED, interim geometry. *(All three FOLDED to
+config defaults at R2a, 2026-08-20; no longer stance keys.)* The 100 cm column in
 front of the anode is meshed at exactly 10 cm regardless of `nx`, so refining
 `nx` refines only the far column and no longer moves the source cells or the
 puff cell underneath the source terms. All three must travel together: the
@@ -248,11 +266,14 @@ meaningful under this model rather than a null setting.
 the extra 0.4 approximates the rest of the singlet manifold. It is inert under
 `beam_deposition_model = "csda"`, which uses the measured manifold knob-free.
 
-**`heat_flux_limiter_f = 0.1`** (with `electron_heat_flux_limit = True`) —
-ASSUMED. The free-streaming cap on the parallel electron heat flux. It combines
-harmonically (Cowie-McKee) with the Braginskii flux at
-`heat_flux_limiter_exponent = 1`, which is already the config default. This
-coefficient is a bracket, not a measurement.
+**`heat_flux_limiter_f = 0.1`** — ASSUMED. The free-streaming cap on the
+parallel electron heat flux. It combines harmonically (Cowie-McKee) with the
+Braginskii flux at `heat_flux_limiter_exponent = 1`, which is already the
+config default. This coefficient is a bracket, not a measurement. *(Split at
+R2a, 2026-08-20: the FLAG `electron_heat_flux_limit` folded to a config
+default of `True`, but the VALUE stays stance-side pending R2b — note the
+resulting shipped default is limiter ON at the config's `f = 0.3` while
+production runs 0.1 from the stance; `config.py` states this at the flag.)*
 
 **`beam_deposition_smoothing_cm = 50.0`** — **ASSUMED**, nominally a physical
 straggling width. The CSDA range profile is sharp on the mesh scale; smoothing

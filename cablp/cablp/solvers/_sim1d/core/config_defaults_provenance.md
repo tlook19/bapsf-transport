@@ -28,9 +28,26 @@ matter are reproduced here.
 
 Configuration-specific pins live with their configuration, not here:
 
-- `scripts/production_stance_provenance.md` — `compare_sim1d_es1.PARAM_OVERRIDES`
+- `scripts/production_stance_provenance.md` — the stance file `scripts/stances/g1atrim.toml`
 - `scripts/golden_baseline_provenance.md` — `baseline_sim1d.BASELINE_PARAM_OVERRIDES`
 - `scripts/ladder_operating_provenance.md` — `run_mechanism_ladder.ES_OPERATING`
+
+## The R2a fold (2026-08-20): stance values that became shipped defaults
+
+Fifteen keys moved from the production stance into `default_config()` so the
+shipped defaults ARE the production package (thread-24 R2a; the golden pins
+every pre-fold value as a literal, see `golden_baseline_provenance.md`). Their
+provenance did not change with the move; the entry of record for each stays
+where it was written, per the table:
+
+| default (new value) | class | entry of record |
+|---|---|---|
+| `neutral_momentum = True`, `neutral_two_zone = True`, `neutral_energy = True` | stance closure package | `production_stance_provenance.md` (closures) + `MODEL.md` |
+| `neutral_hot_internal_wall = True`, `cathode_jet_energy_convention = "total_reflected"` | conservation restorations, not calibrations | `production_stance_provenance.md` (2026-08-19 stance event); convention discussion also in this file's Emission section |
+| `cathode_neutral_jet = True`, `cathode_jet_surface_debit = True` | jet mechanism armed | `production_stance_provenance.md` |
+| `Lm = 2117.8`, `plenum_length_cm = 166.0`, `collector_length_cm = 7.8`, `gas_puff_z_cm = 86.3` | MEASURED (machine CAD, G1 geometry of record) | `production_stance_provenance.md` (Geometry) + the G1 record |
+| `source_region_length_cm = 100.0`, `source_region_dz_cm = 10.0`, `source_fixed_grid = True` | ASSUMED, interim geometry | `production_stance_provenance.md` (Geometry) |
+| `electron_heat_flux_limit = True` | flag only — the coefficient `heat_flux_limiter_f` stays stance-side (0.1) pending R2b, so the shipped default pairs the ON flag with the config's `f = 0.3` | `production_stance_provenance.md` (Transport and closures) |
 
 ---
 
@@ -757,17 +774,22 @@ over particles — so the surface gives up `R_E` of its ion bombardment power.
 `(1 - R_N) R_E` remainder is debited from the surface and received by nobody.
 `"total_reflected"` gives each reflected particle `R_E/R_N` of the incident
 energy, and the exported per-recycled-particle energy then equals the debited
-one exactly. `"legacy"` remains the shipped default ONLY so that jet-armed
-results predating the convention key stay bit-reproducible; it is not the
-defensible reading of the coefficient, and any new energy-carrying jet arm
-selects `"total_reflected"`. Inert when `cathode_neutral_jet` is off.
+one exactly. `"total_reflected"` is the shipped default since the R2a fold
+(2026-08-20); `"legacy"` had been the default ONLY so that jet-armed results
+predating the convention key stayed bit-reproducible — that duty now lives in
+the golden's literal pin (`golden_baseline_provenance.md`), and `"legacy"` is
+not the defensible reading of the coefficient. Inert when
+`cathode_neutral_jet` is off.
 
 ### Beam
 
 **`beam_excitation_energy_eV = 21.218` eV — MEASURED**, the He 2^1P excitation
 energy.
 
-**`b_beam_excitation = 0.0`** ships off. Under `"2p_scalar"` a value of 1.0
+**`b_beam_excitation = 0.0`** ships off. *(This is also why the key was
+declined at the R2a fold, 2026-08-20: folding the stance's 1.4 would promote
+a superseded ASSUMED estimate into the shipped default while changing no
+production run.)* Under `"2p_scalar"` a value of 1.0
 books the 2^1P channel alone and ~1.4 was a historical ASSUMED estimate of the
 full singlet manifold; the measured replacement is
 `beam_excitation_model = "manifold"` (Ralchenko et al. 2008 singlet manifold),
@@ -985,8 +1007,8 @@ caps the whole step at first order.
 **`neutral_energy_wall_accommodation = 0.40`, bracket `[0.35, 0.46]` —
 MEASURED (literature-boxed).** The thermal accommodation coefficient of helium
 on an engineering (unpolished, air-exposed, vacuum-baked) stainless surface,
-read only under the default-off `neutral_energy` flag. Three independent
-sources box it:
+read only under the `neutral_energy` flag (default ON since the R2a fold,
+2026-08-20). Three independent sources box it:
 
 - the Sandia parallel-plate accommodation programme (SAND2005-6084; the same
   apparatus and analysis published as *Rev. Sci. Instrum.* **82**, 035120
@@ -1028,8 +1050,8 @@ still never fitted.
 
 **`neutral_knudsen_temperature = "frozen"` — ASSUMED (stance choice, ratified
 v1-primary).** Which temperature the Knudsen conductances take their thermal
-speed from; read only under the default-off `neutral_energy` flag, because it
-is only there that a second answer exists. `"frozen"` evaluates every
+speed from; read only under the `neutral_energy` flag (default ON since the
+R2a fold, 2026-08-20), because it is only there that a second answer exists. `"frozen"` evaluates every
 conductance once at `Tn_K`, making neutral transport a fixed property of the
 geometry — the behaviour every scored run to date was produced with, which is
 why it is the primary. `"local"` scales each conductance by
