@@ -82,12 +82,11 @@ OVERLAY = _SCRIPTS / "data" / "es1_sim1d_overlay.npz"
 # it whole -- `run_m6_point.py --stance g1atrim`.
 #
 # NB the golden fixture splats this dict (baseline_sim1d.BASELINE_PARAM_OVERRIDES)
-# and pins back only what it names. It pins C_R, S_gp, V_bank,
-# equilibration_gas_puff_on_s, cathode_conduction_W_per_K and
-# cathode_heat_capacity_J_per_K, so those are free to track the stance; it does
-# NOT pin S_gp_decay_target, b_beam_excitation, beam_deposition_smoothing_cm,
-# heat_flux_limiter_f or the source-region pair, so a stance edit to any of
-# those moves the golden and must ride a recapture event.
+# and pins EVERY stance-fed key back to a literal (R1 stance decoupling,
+# 2026-08-20), so until the R2b re-anchor the golden is self-contained: a
+# stance edit changes the scorer's runs and never the golden. Re-anchoring the
+# golden onto a moved stance is a deliberate recapture event, never a side
+# effect of editing the stance file.
 PRODUCTION_STANCE = "g1atrim"
 _STANCE = load_stance(PRODUCTION_STANCE).params
 
