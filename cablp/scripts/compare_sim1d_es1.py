@@ -49,6 +49,7 @@ Usage::
 
 import argparse
 import re
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -60,7 +61,35 @@ from cablp.solvers._sim1d import (
 )
 from cablp.solvers._sim1d.results.io import save_result_hdf5
 
-OVERLAY = Path(__file__).resolve().parent / "data" / "es1_sim1d_overlay.npz"
+_SCRIPTS = Path(__file__).resolve().parent
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
+
+from stance_config import load_stance  # noqa: E402
+
+OVERLAY = _SCRIPTS / "data" / "es1_sim1d_overlay.npz"
+
+# The stance of record, as a committed file (scripts/stances/g1atrim.toml).
+# Every value below that the stance also names is READ FROM IT rather than
+# repeated here: the stance is one artifact, not a dict that drifts from the
+# runs that cite it. What this dict adds is the part of the production
+# configuration that is SHARED by every run_model caller regardless of point --
+# the circuit, the rate model, the numerics package. The stance's own
+# grid-coupled keys (nx and the per-cell profiles it is sized for), its shaped
+# initial fill, and its run-cost settings are deliberately NOT imported here:
+# run_model's callers pass their own nx, and a per-cell profile sized for a
+# different mesh raises at construction. Runs that want the whole package take
+# it whole -- `run_m6_point.py --stance g1atrim`.
+#
+# NB the golden fixture splats this dict (baseline_sim1d.BASELINE_PARAM_OVERRIDES)
+# and pins back only what it names. It pins C_R, S_gp, V_bank,
+# equilibration_gas_puff_on_s, cathode_conduction_W_per_K and
+# cathode_heat_capacity_J_per_K, so those are free to track the stance; it does
+# NOT pin S_gp_decay_target, b_beam_excitation, beam_deposition_smoothing_cm,
+# heat_flux_limiter_f or the source-region pair, so a stance edit to any of
+# those moves the golden and must ride a recapture event.
+PRODUCTION_STANCE = "g1atrim"
+_STANCE = load_stance(PRODUCTION_STANCE).params
 
 PARAM_OVERRIDES = {
     # DISCHARGE CIRCUIT -- corrected stance, 2026-08-03 (Tom's call). These
@@ -131,9 +160,9 @@ PARAM_OVERRIDES = {
     # its per-cycle puff window -- a double duty with no physical basis. This
     # changes the SCORER's runs (the equilibrated seed rises ~x1.25 in
     # delivered fuel) and NOT the golden, which pins the key back to None.
-    "equilibration_gas_puff_on_s": 25e-3,
-    "S_gp": 3000,
-    "S_gp_decay_target": 2000,
+    "equilibration_gas_puff_on_s": _STANCE["equilibration_gas_puff_on_s"],
+    "S_gp": _STANCE["S_gp"],
+    "S_gp_decay_target": _STANCE["S_gp_decay_target"],
     "tau_gp_pulse_duration": 1e-3,
     "tau_gp_decay_duration": 5e-3,
     # Ion-neutral closure: R5 STANCE FLIP (2026-07-25) -- the ad-hoc constant
@@ -148,9 +177,9 @@ PARAM_OVERRIDES = {
     # ionization-cost term. b_Q* = 1 is meaningful under this model.
     "atomic_rate_model": "adas",
     # Beam-driven neutral excitation: 1.0 books the 2^1P channel alone, the
-    # extra 0.4 approximates the rest of the singlet manifold. Radiates ~21 eV
+    # rest approximates the remainder of the singlet manifold. Radiates ~21 eV
     # per event as He I light and shortens the beam deposition length.
-    "b_beam_excitation": 1.4,
+    "b_beam_excitation": _STANCE["b_beam_excitation"],
     "b_Qei": 1,
     "b_Qen": 1,
     "b_Qcx": 1,
@@ -166,18 +195,15 @@ PARAM_OVERRIDES = {
     "operator_splitting": "strang",
     "heat_picard_iterations": 2,
     "heat_picard_tol": 1e-10,
-    # ES production machine geometry (R5 ES1 tuning pass, 2026-07-25, Tom's
-    # decision; provisional pending the 2D model). End vessel expands to a 1 m
-    # machine (neutral) radius over 10 cells with NO plasma flare (plasma stays
-    # at Rp); plenum-choke obstruction Rcs=40/Lcs=25 (no support rods); no
-    # baffles; collector length unchanged (100 cm default). The terminal
-    # plasma radius rides Rp -- no flare is still no flare at the measured
-    # aperture.
-    "end_expansion_cells": 10,
-    "end_expansion_machine_radius_cm": 100.0,
-    "end_expansion_plasma_radius_cm": 18.415,
-    "Rcs": 40.0,
-    "Lcs": 25.0,
+    # NO machine geometry here. The provisional R5 end-expansion flare
+    # (end_expansion_geometry over 10 cells to a 1 m vessel radius) and the
+    # plenum-choke obstruction (Rcs=40/Lcs=25) were RETIRED by the G1 measured
+    # geometry, which prescribes the vessel and flux-tube radii per cell
+    # instead (prescribed_area_geometry, and the two are mutually exclusive by
+    # construction). Those profiles are sized to their own mesh, so they are
+    # not shared-driver material: geometry now comes with the stance, whole.
+    # Rsup stays at the no-support-rods limit, which is also the config
+    # default, because the plenum obstruction it belongs to is gone.
     "Rsup": 0.0,
     # --- f=0.1 PRODUCTION STANCE (promoted 2026-07-27) --------------------
     # Enumerated by config-diffing es1_r5_f01_rev20ms.h5 against
@@ -187,72 +213,27 @@ PARAM_OVERRIDES = {
     # promoted -- they buy runtime, not physics, and belong on the command
     # line of the run that wants them.
     #
-    # Cathode power balance, co-tuned with S_gp at the ES1 rung: the
-    # skin->substrate conduction is the one fitted knob, frozen after ES1.
-    # Both warming-balance knobs are areal, so the L2 rebaseline transcribes
-    # them from their ES1-fitted 15-cm values by (18.415/15)^2 = 1.5072
-    # (8000 -> 12058, 120 -> 181). The fit itself is untouched; the heat
-    # capacity now differs from the config default and must be stated here.
-    "cathode_conduction_W_per_K": 12058.0,
-    "cathode_heat_capacity_J_per_K": 181.0,
-    # --- CATHODE CALIBRATION REPARAMETERIZED (Tom, 2026-07-29) ------------
-    # The retired stance carried the calibration on the standby temperature
-    # ("cathode_Ts_base_K": 1840.0 here, 70 K below the measurement). That
-    # mislabelled a MEASURED quantity as a fit: the ES1 standby is the
-    # Fig-10 digitized 1910 K (ES_OPERATING[1]["Ts_standby_K"], also the
-    # config.py default), so the pin is GONE and the stance inherits it.
-    #
-    # The same calibration now sits on C_R, which the cathode literature
-    # already treats as an EFFECTIVE emission constant (surface state,
-    # patch fields, non-ideal emitting fraction), not the 120 A/cm^2/K^2
-    # Richardson-Dushman universal. Its value is DERIVED, not refitted, by
-    # matching the emission at the operating point in the code's own
-    # expression J = C_R T^2 exp(-e phi/(kB T)):
-    #
-    #   J(C_R_eff, T + dT) = J(29.0, T)
-    #   =>  C_R_eff = 29.0 * (T/(T+dT))^2 * exp(-(e phi/kB)(1/T - 1/(T+dT)))
-    #
-    #   T   = 1859.02 K   plateau T_s_surface, mean over 15-19.5 ms on the
-    #                     main-discharge clock of the reference production
-    #                     run es1_prod_25ms_nx240.h5
-    #   dT  = +70 K       the base-temperature move (1910 - 1840), taken to
-    #                     propagate ~1:1 into the plateau at fixed heater
-    #                     power (the warming balance's restoring term is
-    #                     G_cond*(T_s - T_base), so a rigid base shift
-    #                     translates the operating point). ASSUMPTION -- the
-    #                     revalidation run is what tests it.
-    #   phi = 2.809 eV    the work function the emission actually evaluates
-    #                     at the plateau: cathode_phiwf_clean_eV, since the
-    #                     ads_des surface is fully cleaned there
-    #                     (recorded phi_wf_eff = 2.809, theta ~ 1e-19).
-    #                     The uncleaned shot-start phi_wf = 2.869 would give
-    #                     14.06, a 1.4% difference well inside the residual
-    #                     below.
-    #
-    # => C_R_eff = 14.2546 -> 14.25 adopted (14.3 to 3 s.f.; the extra digit
-    #    keeps the point-emission match at 0.03%, inside the 0.1% the
-    #    derivation was pre-registered to hit).
-    #
-    # This is a stance promotion, NOT a flagged feature: nothing here is
-    # bit-exact with the retired stance. The match is exact only at the
-    # plateau point; the flat direction (~103 K per e-fold of emission,
-    # recorded) is not perfectly flat, so residual dynamics shifts of order
-    # the ~10% ramp-gain slope across it are ACCEPTED and revalidated by
-    # run, not tuned away. Standby emission is not matched exactly either
-    # (1910 K on C_R_eff vs 1840 K on 29.0 emits 1.4% more at phi = 2.809,
-    # 2.8% at 2.869) -- the ln J curvature between 1840 K and the 1859 K
-    # matching point, i.e. the same flat-direction residual seen off the
-    # operating point.
-    "C_R": 14.25,
-    # Beam deposition smoothed over 50 cm. The CSDA range profile is sharp on
-    # the mesh scale; this spreads it over the physical straggling width so
-    # the deposited power does not follow cell edges.
-    "beam_deposition_smoothing_cm": 50.0,
+    # Cathode power balance: the skin->substrate conduction and the skin heat
+    # capacity, both areal, both frozen after ES1. Values from the stance.
+    "cathode_conduction_W_per_K": _STANCE["cathode_conduction_W_per_K"],
+    "cathode_heat_capacity_J_per_K": _STANCE["cathode_heat_capacity_J_per_K"],
+    # --- CATHODE EMISSION CALIBRATION -------------------------------------
+    # C_R is the one drive-side fit knob: an EFFECTIVE emission constant in the
+    # code's J = C_R T^2 exp(-e phi / (kB T)), not the Richardson-Dushman
+    # universal. It is calibrated once at ES1 against the measured drive band
+    # and transferred frozen; cathode_Ts_base_K carries none of it (only one
+    # member of that flat direction may). Value from the stance; the value
+    # chain, including the superseded 14.25 derivation, is in
+    # scripts/production_stance_provenance.md.
+    "C_R": _STANCE["C_R"],
+    # Beam deposition smoothing. The CSDA range profile is sharp on the mesh
+    # scale; this spreads it over the physical straggling width so the
+    # deposited power does not follow cell edges.
+    "beam_deposition_smoothing_cm": _STANCE["beam_deposition_smoothing_cm"],
     # Free-streaming cap on the parallel electron heat flux (the flag below).
-    # f=0.1 is the flux-limiter coefficient this stance is NAMED for; it
-    # combines harmonically (Cowie-McKee) with the Braginskii flux at
+    # It combines harmonically (Cowie-McKee) with the Braginskii flux at
     # heat_flux_limiter_exponent=1, which is already the config default.
-    "heat_flux_limiter_f": 0.1,
+    "heat_flux_limiter_f": _STANCE["heat_flux_limiter_f"],
     # Fixed-cell-size source region (7a, approved 2026-07-27), enumerated from
     # es1_r5_srcgrid_shakedown.h5 and cross-checked against
     # es1_r5_srcgrid_nx240.h5 -- the two agree on every key except nx, which is
@@ -261,9 +242,9 @@ PARAM_OVERRIDES = {
     # refines only the FAR column and no longer moves the source cells or the
     # puff cell underneath the source terms. Interim geometry, pending the 2D
     # model. Presence-gated BOTH ways against the flag below, so these three
-    # must always travel together.
-    "source_region_length_cm": 100.0,
-    "source_region_dz_cm": 10.0,
+    # must always travel together. Values from the stance.
+    "source_region_length_cm": _STANCE["source_region_length_cm"],
+    "source_region_dz_cm": _STANCE["source_region_dz_cm"],
     # NB nx_gap is NOT promoted: both artifacts ran it at 5, which is already
     # the config.py default, so it never appears in the delta.
 }
@@ -271,10 +252,11 @@ FLAG_OVERRIDES = {
     # R5 stance flip: the legacy ion-neutral thermalization arm is subsumed by
     # the Phelps moment operator (config.py default); no longer set here.
     "ion_neutral_drag_cx_only": False,
-    # R5 ES1 tuning pass: the end-vessel expansion geometry above.
-    "end_expansion_geometry": True,
-    # f=0.1 PRODUCTION STANCE (2026-07-27): the electron heat-flux limiter is
-    # ON in production, at heat_flux_limiter_f=0.1 above.
+    # NB end_expansion_geometry is NOT set here any more: the G1 measured
+    # geometry replaced the built-in flare with per-cell prescribed radii, and
+    # the solver refuses the two together. It comes with the stance.
+    # PRODUCTION STANCE (2026-07-27): the electron heat-flux limiter is
+    # ON in production, at the heat_flux_limiter_f above.
     "electron_heat_flux_limit": True,
     # Fixed-cell-size source region (7a): pairs with source_region_length_cm /
     # source_region_dz_cm above; the geometry raises loudly if either side is
