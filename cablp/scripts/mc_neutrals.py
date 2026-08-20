@@ -93,6 +93,12 @@ BOUNDARY_ROWS = ("boundary_absorption", "characteristic_boundary")
 # outside it rather than extrapolating the fit.
 PHELPS_QB_RANGE_EV = (1.0e-4, 1.0e4)
 
+# Fast-lobe fidelity threshold for --fast-reflected. When the background-wide
+# maximum of g_eff/v_fast exceeds this, the ion thermal spread is comparable
+# to the launch speed: the arithmetic stays regular but the "fast lobe" label
+# is no longer physically true, so the read carries a loud warning.
+FAST_LOBE_G_RATIO_WARN = 1.5
+
 # THE ESCAPE DEFINITION of the --fast-reflected mode, quoted verbatim into both
 # its docstring and its output header so the reviewer reads the same sentence
 # the code implements. It is the load-bearing choice of the whole read.
@@ -1203,6 +1209,14 @@ def run_fast_reflected(bg, n_particles, rng, r_e=0.2, r_n=0.5, max_iter=20000):
     ION TEMPERATURE through :func:`~cablp.funcs._cross.charge_ex_react` and so
     transports a fast atom at a thermal collision rate.
 
+    The mode REFUSES to run when ``E_fast`` is zero (``phi_c + Ti_cath <= 0``
+    under the ``max(., 0)`` clamp): a zero-speed population would produce a
+    well-formed but meaningless read. The launch-point and background-max
+    ``g_eff/v_fast`` ratios are reported in the header, and a background-max
+    beyond ``FAST_LOBE_G_RATIO_WARN`` prints a loud warning -- past it the
+    arithmetic stays regular but the "fast lobe" label is no longer
+    physically true.
+
     Electron-impact ionization keeps the background's Te-Maxwellian ADAS SCD
     rate (``bg["nu_ion"]``) unchanged: the electrons ARE the Maxwellian
     species there, so no energy resolution on the neutral is called for.
@@ -1278,6 +1292,15 @@ def run_fast_reflected(bg, n_particles, rng, r_e=0.2, r_n=0.5, max_iter=20000):
         )
     Ti_cath = float(bg["Ti"][0])
     E_fast = (r_e / r_n) * max(phi_c + Ti_cath, 0.0)
+    if not E_fast > 0.0:
+        raise ValueError(
+            "the fast lobe is undefined at this background: "
+            f"phi_c = {phi_c:.6g} V and Ti_cath = {Ti_cath:.6g} eV give "
+            "E_fast = (R_E/R_N) * max(phi_c + Ti_cath, 0) = 0 and so "
+            "v_fast = 0. A zero-speed 'fast' population runs to a "
+            "well-formed but meaningless read (every history booked "
+            "source_return at speed zero). Refusing to run."
+        )
     v_fast = math.sqrt(2.0 * E_fast * EV / M_HE)
     # The CoM launch energy in the strict cold-ion, drift-free limit: for an
     # equal-mass pair E_rel = 1/2 mu g^2 = 1/4 m_He v^2 is exactly half the
@@ -1290,6 +1313,26 @@ def run_fast_reflected(bg, n_particles, rng, r_e=0.2, r_n=0.5, max_iter=20000):
     # the symmetric pair, so 8 k T / (pi mu) = 16 k T / (pi m).
     Ti_safe = np.maximum(np.asarray(bg["Ti"], dtype=float), 1e-6)
     th2 = 16.0 * Ti_safe * EV / (np.pi * M_HE)
+
+    # Fast-lobe fidelity ratio, drift-free per cell: g_eff/v_fast = 1 is the
+    # cold-ion fast limit; a material departure means the ion thermal spread
+    # rivals the launch speed and the "fast lobe" label is physically false
+    # there even though every formula below stays regular. The launch-point
+    # value goes in the header; the background-wide max warns LOUDLY past
+    # FAST_LOBE_G_RATIO_WARN rather than letting the read pass silently.
+    g_over_v = np.sqrt(v_fast**2 + th2) / v_fast
+    g_over_v_launch = float(g_over_v[0])
+    g_over_v_max = float(g_over_v.max())
+    if g_over_v_max > FAST_LOBE_G_RATIO_WARN:
+        print(
+            f"WARNING: g_eff/v_fast reaches {g_over_v_max:.3f} over the "
+            f"background (launch-point {g_over_v_launch:.3f}, threshold "
+            f"{FAST_LOBE_G_RATIO_WARN:g}). The ion thermal spread rivals the "
+            "launch speed, so the 'fast lobe' label is physically false "
+            "there; do not quote this read as a fast-population deposition "
+            "fraction.",
+            file=sys.stderr,
+        )
 
     # Null-collision majorant, and it is EXACT rather than heuristic because
     # g_eff is bounded on both sides. The atom's speed is |v| = v_fast for its
@@ -1553,6 +1596,8 @@ def run_fast_reflected(bg, n_particles, rng, r_e=0.2, r_n=0.5, max_iter=20000):
         "E_rel_eV": E_rel_launch,
         "E_rel_lo_eV": float(E_rel_lo.min()),
         "E_rel_hi_eV": float(E_rel_hi.max()),
+        "g_over_vfast_launch": g_over_v_launch,
+        "g_over_vfast_max": g_over_v_max,
         "v_fast_cm_s": v_fast,
         "Qb_fast_cm2": Qb_fast,
         "z_mesh_cm": z_mesh,
@@ -1594,6 +1639,17 @@ def report_fast_reflected(res, bg, args):
     print(f"  E_rel [eV]     {res['E_rel_eV']:.6f}"
           "   = 1/2 mu v_fast^2, mu = M_He/2   [CoM, cold drift-free ions]")
     print(f"  v_fast [cm/s]  {res['v_fast_cm_s']:.6e}")
+    print(f"  g_eff/v_fast   {res['g_over_vfast_launch']:.4f} at launch, "
+          f"{res['g_over_vfast_max']:.4f} max over the background "
+          f"(warn threshold {FAST_LOBE_G_RATIO_WARN:g})")
+    if res["g_over_vfast_max"] > FAST_LOBE_G_RATIO_WARN:
+        print("  WARNING        g_eff/v_fast exceeds the threshold: the ion "
+              "thermal spread")
+        print("                 rivals the launch speed, the 'fast lobe' "
+              "label is physically")
+        print("                 false there, and this read must not be "
+              "quoted as a")
+        print("                 fast-population deposition fraction.")
     print(f"  angular        cosine into the domain (cosine_emit, sign_z=+1, "
           f"T_s={res['T_s_K']:.1f} K); direction only, speed set to v_fast")
     print(f"  launch disc    uniform on r <= R_cath = {res['R_cath_cm']:.4f} cm "
@@ -1729,6 +1785,13 @@ def report_fast_reflected(res, bg, args):
         print("  fit window     NOT ESTABLISHED (profile does not fall "
               "log-linearly over a")
         print("                 window of at least 3 cells)")
+    print("  convention     CoM/g_eff CX rate (nu_cx = n_i Qb(E_rel) g_eff) "
+          "with the anode")
+    print("                 mesh bin ACTIVE. NOT like-for-like against a "
+          "lab-frame,")
+    print("                 mesh-transparent (v1) e-fold; always quote "
+          "value, fit window,")
+    print("                 and this convention together.")
     print()
 
     print(bar)
@@ -1771,6 +1834,7 @@ def report_fast_reflected(res, bg, args):
             "Ti_cathode_eV", "R_cath_cm", "r_e", "r_n", "rate_fast_per_s",
             "nu_max_per_s", "e_fold_cm", "fit_z_lo", "fit_z_hi",
             "E_rel_eV", "E_rel_lo_eV", "E_rel_hi_eV", "z_mesh_cm", "eta",
+            "g_over_vfast_launch", "g_over_vfast_max",
         ]),
         scalars=np.array([
             res["n_launched"], res["f_dep"], res["f_dep_err"],
@@ -1781,6 +1845,7 @@ def report_fast_reflected(res, bg, args):
             res["fit"]["e_fold_cm"], res["fit"]["z_lo"], res["fit"]["z_hi"],
             res["E_rel_eV"], res["E_rel_lo_eV"], res["E_rel_hi_eV"],
             res["z_mesh_cm"], res["eta"],
+            res["g_over_vfast_launch"], res["g_over_vfast_max"],
         ], dtype=float),
     )
     print(f"saved {prefix}.npz")
