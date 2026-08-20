@@ -14465,10 +14465,10 @@ def main():
         )
         # TWO scenarios, run through the same child harness:
         #
-        # * ``meanfield`` -- a short current-driven discharge on the production
-        #   stance. The cathode sheath solve (Tier A) runs on every sample and
-        #   the CSDA ray fires, so both halves of "tierA+csda" are on the hot
-        #   path.
+        # * ``meanfield`` -- a short current-driven discharge on the shared
+        #   base stated below. The cathode sheath solve (Tier A) runs on every
+        #   sample and the CSDA ray fires, so both halves of "tierA+csda" are
+        #   on the hot path.
         # * ``coverage`` -- the same question under the clumpy-plasma closure,
         #   which used to REFUSE the opt-in outright. It no longer does, and
         #   this is what replaced the refusal. The compiled march is bound only
@@ -14478,6 +14478,22 @@ def main():
         #   marches plus the tier-A kernels. The scenario therefore turns the
         #   ionizing tail walk on: that is what issues those nested legs, and
         #   without it the comparison would be blind to the march entirely.
+        #
+        # LAYOUT (R2a fold-in, 2026-08-20): all five scenarios share ONE base,
+        # and it is the pre-R2a 5-field cold-neutral stance -- the child spells
+        # _pin_pre_r2a_neutral_stance out itself, since a subprocess cannot
+        # import the parent's helper (the TOML block at ~line 9585 spells the
+        # same pin out for the same reason). This block asks a KERNEL
+        # EQUIVALENCE question, not a closure question: the compiled kernels
+        # are the tier-A sheath solve and the CSDA march, neither of which
+        # contains any neutral-closure code, so composing the folded closure
+        # family would add no compiled coverage while moving every trajectory
+        # the expected step counts and anti-vacuity thresholds below were
+        # calibrated against. Nor could the folded defaults be stated as ONE
+        # layout: ``coverage`` composes coverage_closure, which the
+        # now-default neutral_energy refuses outright at construction. The
+        # closure family keeps its own blocks, which build their own configs
+        # and exercise the shipped defaults.
         #
         # The child counts the nested marches by wrapping ``deposit_beam`` in
         # its DEFINING module -- the two-stream wrapper resolves it as a module
@@ -14497,6 +14513,16 @@ from cablp.solvers._sim1d import LAPDSim1D, default_config
 
 scenario = sys.argv[1]
 params, flags = default_config()
+# The shared base for every scenario below: _pin_pre_r2a_neutral_stance,
+# spelled out because this child is a separate process. See the LAYOUT note
+# in the parent for why kernel equivalence is compared on the pinned stance.
+flags["neutral_momentum"] = False
+flags["neutral_two_zone"] = False
+flags["neutral_energy"] = False
+flags["neutral_hot_internal_wall"] = False
+params["cathode_neutral_jet"] = False
+params["cathode_jet_surface_debit"] = False
+params["cathode_jet_energy_convention"] = "legacy"
 params.update({
     "dt_save": 0.0,
     "phase_transition_mode": "scheduled",
