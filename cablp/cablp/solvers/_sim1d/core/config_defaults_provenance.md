@@ -1026,21 +1026,35 @@ on an engineering (unpolished, air-exposed, vacuum-baked) stainless surface,
 read only under the `neutral_energy` flag (default ON since the R2a fold,
 2026-08-20). Three independent sources box it:
 
-- the Sandia parallel-plate accommodation programme (SAND2005-6084; the same
-  apparatus and analysis published as *Rev. Sci. Instrum.* **82**, 035120
-  (2011)) measures He on engineering-finish stainless at **0.36–0.46**, and
-  reports a downward shift to **0.31–0.38** on plasma-conditioned (sputter-
-  cleaned) surfaces — the cleaner the metal, the weaker the coupling;
+*(Citation surgery 2026-08-20, sight-verification audit: the per-number
+attributions below were previously conflated under the SAND report alone;
+every number is real, now filed to its actual home.)*
+
+- the Sandia parallel-plate accommodation programme, TWO documents with a
+  REAL mutual inconsistency retained un-adjudicated: **SAND2005-6084**
+  measures He on 304SS at **0.36±0.02 (machined) / 0.40±0.02 (polished)**;
+  **Trott, Castañeda, Torczynski, Gallis & Rader, *Rev. Sci. Instrum.*
+  **82**, 035120 (2011), Table I** (same programme) reports **0.46±0.02
+  (machined, untreated) / 0.42±0.02 (polished, untreated)** and an
+  Ar-glow-plasma-treated band **0.31–0.38** (304SS itself 0.38; the 0.31
+  floor is Au-coated, NOT stainless) — the cleaner the metal, the weaker
+  the coupling. The machined-304SS disagreement (0.36 vs 0.46, outside
+  combined bars, same-group lineage) is surface-state DISPERSION, the
+  quantity that actually sets this entry's bar;
 - Zampella *et al.*, PATRAM 2019, independently obtain **0.35–0.37** for He on
   stainless cask surfaces;
 - the Song & Yovanovich (1987) engineering correlation, evaluated for He on
   steel at 300 K, returns **≈0.40**.
 
-The three overlap on 0.36–0.37 and span 0.35–0.46; 0.40 is the round value
-inside that overlap and at the correlation's own prediction. **Honest bar:
-±0.06**, dominated by surface condition (finish, adsorbate coverage, degree of
-plasma conditioning) rather than by any instrument's precision — the
-plasma-conditioned shift alone is that large.
+The untreated-technical-stainless evidence {0.36, 0.46, 0.35–0.37, 0.42}
+centers on 0.40, at the correlation's own prediction; the bracket
+[0.35, 0.46] is the span-of-reported-values (floor Zampella, ceiling Trott
+machined-untreated). LAPD relevance: the vessel is unbaked and
+water-dominated at ~1 % discharge duty, so the wall is adsorbate-dressed —
+the untreated band is the base state; plasma conditioning pulls toward the
+treated-stainless 0.38, INSIDE the box. **Honest bar: ±0.06**, dominated by
+surface condition (finish, adsorbate coverage, degree of plasma
+conditioning) — the SAND-vs-Trott machined dispersion alone is that large.
 
 **Stated caveat — this number applies to the THERMAL population only.** The
 measurements above are equilibrium-gas experiments at or near 300 K. For the
