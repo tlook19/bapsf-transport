@@ -31,11 +31,23 @@ Entry points:
     expressed through that function's own knobs (``drag_closure``,
     ``flags_extra``, ``extra``, ...).
 
+Reference sides, exactly one required:
+
+``--reference REF.h5``
+    the config a saved run recorded.
+``--stance NAME``
+    the config a committed stance file names (``scripts/stances/NAME.toml``,
+    applied to ``default_config()``), so a candidate can be diffed against the
+    stance of record without a saved run to point at.
+
 Usage:
 
     python scripts/preflight_diffcfg.py --reference REF.h5 \\
         --expect 'flags:neutral_momentum=true' \\
         m6 -- --es 2 --sgp 3000 --nx 240 --save-h5 /dev/null
+
+    python scripts/preflight_diffcfg.py --stance g1atrim \\
+        m6 -- --es 1 --stance g1atrim --sgp 9010 --save-h5 /dev/null
 
     python scripts/preflight_diffcfg.py --reference REF.h5 \\
         --expect 'params:b_ion_neutral_drag=1.0' \\
@@ -62,6 +74,7 @@ for _entry in (str(_SCRIPTS.parent), str(_SCRIPTS)):
 
 import compare_sim1d_es1 as cmp_es1  # noqa: E402
 import run_m6_point  # noqa: E402
+from stance_config import available_stances, stance_config  # noqa: E402
 
 NAMESPACES = ("params", "flags")
 
@@ -198,10 +211,19 @@ def build_parser():
             "reference run, with an explicit expected-delta set."
         )
     )
-    parser.add_argument(
+    reference = parser.add_mutually_exclusive_group(required=True)
+    reference.add_argument(
         "--reference",
-        required=True,
         help="reference result .h5 whose params_json/flags_json is the baseline",
+    )
+    reference.add_argument(
+        "--stance",
+        metavar="NAME",
+        help=(
+            "committed stance file (scripts/stances/NAME.toml) applied to "
+            "default_config() as the baseline, instead of a saved run. "
+            "Available: " + (", ".join(available_stances()) or "(none committed)")
+        ),
     )
     parser.add_argument(
         "--expect",
@@ -251,8 +273,15 @@ def main(argv=None):
         description = f"compare_sim1d_es1.run_model(**{kwargs})"
         build = lambda: cmp_es1.run_model(**kwargs)  # noqa: E731
 
-    reference_params, reference_flags = read_reference(args.reference)
-    print(f"reference : {args.reference}")
+    if args.stance is not None:
+        stance_params, stance_flags = stance_config(args.stance)
+        reference_params = _as_recorded(stance_params)
+        reference_flags = _as_recorded(stance_flags)
+        source = f"stance {args.stance} (scripts/stances/{args.stance}.toml)"
+    else:
+        reference_params, reference_flags = read_reference(args.reference)
+        source = args.reference
+    print(f"reference : {source}")
     print(
         f"            params keys={len(reference_params)} "
         f"flags keys={len(reference_flags)}"
