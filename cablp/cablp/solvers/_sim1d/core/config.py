@@ -103,9 +103,9 @@ def geometry_defaults():
     Lm:
         Total machine length represented by the 1D mesh [cm].
     nx:
-        Number of resolved column cells between anode and collector. With the
-        default-off ``source_fixed_grid`` flag on it counts only the *far*
-        column cells, between the source region end and the collector.
+        Number of resolved column cells between anode and collector. Under the
+        ``source_fixed_grid`` flag it counts only the *far* column cells,
+        between the source region end and the collector.
     Rm:
         Default neutral/machine radius [cm].
     Rp:
@@ -239,23 +239,23 @@ def geometry_defaults():
         surface]; the region runs from the anode face at ``cathode_anode_gap_cm``
         to here and must lie strictly between the anode face and the collector
         block (``Lm - collector_length_cm``). ``None`` when off. Requires the
-        default-off ``source_fixed_grid`` flag. For the value the campaign
-        stance sets, see ``scripts/production_stance_provenance.md``.
+        ``source_fixed_grid`` flag, and is required by it. For the value's
+        provenance see ``scripts/production_stance_provenance.md``.
     source_region_dz_cm:
         Cell size [cm] inside that source region, held fixed independently of
         ``nx``; the region length minus the anode gap must be an integer
         multiple of it (1e-9 relative tolerance). ``None`` when off. Requires
-        the default-off ``source_fixed_grid`` flag.
+        the ``source_fixed_grid`` flag, and is required by it.
     """
     return {
-        "Lm": 2000.0,
+        "Lm": 2117.8,
         "nx": 60,
         "Rm": 50.0,
         "Rp": 18.415,
-        "plenum_length_cm": 100.0,
+        "plenum_length_cm": 166.0,
         "cathode_anode_gap_cm": 50.0,
         "nx_gap": 5,
-        "collector_length_cm": 100.0,
+        "collector_length_cm": 7.8,
         "Rcs": 0.0,
         "Lcs": 0.0,
         "Rsup": 0.0,
@@ -277,8 +277,8 @@ def geometry_defaults():
         "neutral_annulus_volume_fraction_min": 1.0e-2,
         "neutral_baffle_positions_cm": None,
         "neutral_baffle_clear_radii_cm": None,
-        "source_region_length_cm": None,
-        "source_region_dz_cm": None,
+        "source_region_length_cm": 100.0,
+        "source_region_dz_cm": 10.0,
     }
 
 
@@ -511,7 +511,7 @@ def neutral_source_defaults():
         # centre and width are geometry-derived, not tunable.
         "gas_puff_profile": "cosine_pipe",
         # The pipe position, in machine coordinates so it does not move with nx.
-        "gas_puff_z_cm": 60.0,
+        "gas_puff_z_cm": 86.3,
         "gas_puff_sigma_cm": 50.0,
         "gas_puff_throw_cm": 100.0,
         # Fresh-puff fractional-coverage local ionization (default 0 = OFF,
@@ -3032,9 +3032,9 @@ input_flags_template_1d = {
     # regardless of nx, which then refines only the far column, and the puff
     # role follows gas_puff_z_cm instead of the first column cell. Presence
     # gated in core.geometry in both directions (both parameters required when
-    # on, forbidden when off) and incompatible with TwinCathode. Default OFF
-    # and structurally bit-exact off.
-    "source_fixed_grid": False,
+    # on, forbidden when off) and incompatible with TwinCathode. Structurally
+    # bit-exact when off.
+    "source_fixed_grid": True,
     "heat_conduction": True,
     "implicit_heat_conduction": True,
     # Flux-limited electron heat conduction. The classical Spitzer-Harm flux

@@ -284,7 +284,7 @@ def _build_resolved_geometry(input_dict, flags):
     ``Lcs``, so it holds gas and its inventory reaches the pump. It is omitted
     entirely when ``Lcs <= 0``, which is the legacy limit.
 
-    The default-off ``source_fixed_grid`` flag replaces the uniform column with a
+    The ``source_fixed_grid`` flag replaces the uniform column with a
     fixed-cell source region plus an ``nx``-refined far column, so a refinement
     study no longer moves the near-source cell edges (see
     ``_source_fixed_grid_spec``). With it on, ``nx`` counts the far-column cells
@@ -639,7 +639,7 @@ def _source_fixed_grid_spec(
         stale = [key for key, present in provided.items() if present]
         if stale:
             raise ValueError(
-                "source region parameters require the default-off "
+                "source region parameters require the "
                 "source_fixed_grid flag: " + ", ".join(stale)
             )
         return None

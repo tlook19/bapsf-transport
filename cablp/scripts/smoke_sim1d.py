@@ -458,8 +458,17 @@ def main():
     assert np.allclose(
         resolved_geom.length_cm[cathode_face:anode_face], gap_dz
     )
-    # The gap cells are the smallest in the mesh, so they set the explicit CFL.
-    assert np.isclose(resolved_geom.length_cm.min(), gap_dz)
+    # The smallest cell in the mesh sets the explicit CFL, and it is either a
+    # gap cell or the collector block -- every other segment (plenum, fixed
+    # source region, far column) is longer than both on any shipped geometry.
+    # Which of the two wins is a property of the machine, not of the mesher:
+    # on the nominal 100 cm collector it is the gap, and on the G1 measured
+    # collector (7.8 cm, a config default since the R2a fold-in) it is the
+    # collector block.
+    assert np.isclose(
+        resolved_geom.length_cm.min(),
+        min(gap_dz, resolved_params["collector_length_cm"]),
+    )
 
     # The cathode surface is a plasma wall; the anode face is interior and open.
     assert not resolved_geom.plasma_open[cathode_face]
@@ -488,7 +497,20 @@ def main():
     )
     assert anode_flanking_cells(resolved_geom) == ((anode_face - 1, anode_face),)
     assert resolved_geom.cell_role[anode_face - 1] == "gap"
-    assert resolved_geom.cell_role[anode_face] == "puff"
+    # The puff role sits on the cell CONTAINING gas_puff_z_cm, wherever the
+    # mesh puts it: on the nominal machine that is the first column cell past
+    # the anode face, and under source_fixed_grid with the G1 puff position
+    # (86.3 cm, both config defaults since the R2a fold-in) it is a fixed
+    # source cell further downstream. Checked as containment, so this states
+    # the rule rather than one machine's answer to it.
+    _puff_first, _puff_last = puff_cell_indices(resolved_geom)
+    assert _puff_first == _puff_last
+    assert (
+        resolved_geom.z_edges_cm[_puff_first]
+        <= resolved_params["gas_puff_z_cm"]
+        <= resolved_geom.z_edges_cm[_puff_first + 1]
+    )
+    assert _puff_first >= anode_face
     assert np.all(np.isnan(resolved_geom.neutral_face_conductance_cm3_s))
 
     # G1: default-off expanded end geometry. The provisional hardware arm
@@ -644,29 +666,39 @@ def main():
         else:
             raise AssertionError("invalid neutral-baffle configuration constructed")
 
-    # Fixed-cell-size source region (default-off ``source_fixed_grid``). Without
-    # it, nx uniform column cells span anode face to collector start, so a
-    # refinement study moves every near-source cell edge -- including the puff
-    # cell, whose centre anchors the default cosine puff profile. With it on the
-    # column from the anode face (50 cm) to source_region_length_cm is meshed at
-    # exactly source_region_dz_cm regardless of nx, and the puff role follows
+    # Fixed-cell-size source region (``source_fixed_grid``). Without it, nx
+    # uniform column cells span anode face to collector start, so a refinement
+    # study moves every near-source cell edge -- including the puff cell, whose
+    # centre anchors the default cosine puff profile. With it on the column from
+    # the anode face (50 cm) to source_region_length_cm is meshed at exactly
+    # source_region_dz_cm regardless of nx, and the puff role follows
     # gas_puff_z_cm.
     #
-    # (d) The production default takes NO new branch: flag off, both keys None,
-    # and the spec helper returns None for the resolved default config.
-    assert not resolved_flags["source_fixed_grid"]
-    assert resolved_params["source_region_length_cm"] is None
-    assert resolved_params["source_region_dz_cm"] is None
+    # (d) The OFF path takes no new branch: with the flag cleared and both keys
+    # None the spec helper returns None. Since the R2a fold-in the flag and both
+    # values are config defaults, so the off arm is constructed here rather than
+    # read off default_config().
+    srcgrid_off_flags = {**resolved_flags, "source_fixed_grid": False}
+    srcgrid_off_params = dict(
+        resolved_params,
+        source_region_length_cm=None,
+        source_region_dz_cm=None,
+    )
     assert (
         _source_fixed_grid_spec(
-            resolved_params,
-            resolved_flags,
-            gap_length=resolved_params["cathode_anode_gap_cm"],
-            total_length=resolved_params["Lm"],
-            collector_length=resolved_params["collector_length_cm"],
+            srcgrid_off_params,
+            srcgrid_off_flags,
+            gap_length=srcgrid_off_params["cathode_anode_gap_cm"],
+            total_length=srcgrid_off_params["Lm"],
+            collector_length=srcgrid_off_params["collector_length_cm"],
             twin=False,
         )
         is None
+    )
+    srcgrid_off_geom = (
+        LAPDSim1D(srcgrid_off_params, srcgrid_off_flags)
+        .get_initial_snapshot()
+        .geometry
     )
 
     srcgrid_flags = {**resolved_flags, "source_fixed_grid": True}
@@ -705,7 +737,7 @@ def main():
         srcgrid_geom.length_cm[srcgrid_anode_face:srcgrid_region_end_face] == 10.0
     )
     # nx meshes only the far column, from the region end to the collector.
-    assert srcgrid_geom.cells == resolved_geom.cells + srcgrid_n_fixed
+    assert srcgrid_geom.cells == srcgrid_off_geom.cells + srcgrid_n_fixed
     srcgrid_puff, srcgrid_puff_twin = puff_cell_indices(srcgrid_geom)
     assert srcgrid_puff == srcgrid_puff_twin
     # The puff role went to the fixed-region cell CONTAINING 60 cm, not the
@@ -752,6 +784,23 @@ def main():
     # (c) Every misconfiguration raises loudly at construction; none falls back.
     srcgrid_twin_params = _srcgrid_params(60)
     srcgrid_twin_params["collector_length_cm"] = 100.0
+    # A source region reaching PAST the collector block start, derived from the
+    # machine rather than hardcoded (the G1 collector is 7.8 cm, so a fixed
+    # 1900 cm would now be comfortably inside the column) and rounded up to a
+    # whole number of source cells so the integer-multiple check cannot fire
+    # first and mask the one this case is about.
+    srcgrid_past_collector = float(
+        _srcgrid_params(60)["cathode_anode_gap_cm"]
+        + 10.0
+        * np.ceil(
+            (
+                resolved_params["Lm"]
+                - resolved_params["collector_length_cm"]
+                - _srcgrid_params(60)["cathode_anode_gap_cm"]
+            )
+            / 10.0
+        )
+    )
     for bad_params, bad_flags, expected in (
         (
             {**_srcgrid_params(60), "source_region_length_cm": None},
@@ -765,13 +814,13 @@ def main():
         ),
         (
             _srcgrid_params(60),
-            resolved_flags,
-            "require the default-off",
+            srcgrid_off_flags,
+            "source region parameters require the source_fixed_grid flag",
         ),
         (
-            {**resolved_params, "source_region_dz_cm": 10.0},
-            resolved_flags,
-            "require the default-off",
+            {**srcgrid_off_params, "source_region_dz_cm": 10.0},
+            srcgrid_off_flags,
+            "source region parameters require the source_fixed_grid flag",
         ),
         (
             {**_srcgrid_params(60), "source_region_length_cm": 50.0},
@@ -779,7 +828,10 @@ def main():
             "strictly beyond the anode face",
         ),
         (
-            {**_srcgrid_params(60), "source_region_length_cm": 1900.0},
+            {
+                **_srcgrid_params(60),
+                "source_region_length_cm": srcgrid_past_collector,
+            },
             srcgrid_flags,
             "strictly before the collector",
         ),
@@ -973,12 +1025,16 @@ def main():
     assert expansion_attempt.y.shape == expansion_sim.get_initial_snapshot().y.shape
 
     # Twin cathode mirrors the source end: its cathode
-    # surface sits at z = Lm, with that plenum beyond it.
-    twin_resolved_flags = dict(resolved_flags)
+    # surface sits at z = Lm, with that plenum beyond it. It builds on the
+    # source_fixed_grid OFF arm because mirroring the fixed source region onto
+    # a second cathode end is not implemented and the geometry refuses the
+    # pair (checked in the refusal table above); since the R2a fold-in that
+    # flag is a config default, so the twin layout has to clear it explicitly.
+    twin_resolved_flags = dict(srcgrid_off_flags)
     twin_resolved_flags["TwinCathode"] = True
     twin_resolved_flags["cathode_coupling"] = False
     twin_resolved_geom = LAPDSim1D(
-        resolved_params, twin_resolved_flags
+        srcgrid_off_params, twin_resolved_flags
     ).get_initial_snapshot().geometry
     assert list(twin_resolved_geom.cell_role[:2]) == ["plenum", "cathode"]
     assert list(twin_resolved_geom.cell_role[-2:]) == ["cathode", "plenum"]
@@ -11164,9 +11220,20 @@ def main():
     # neither an end cell nor a fixed offset from one. The wall-return
     # channels must be READ from that cell and DEPOSITED into it; positional
     # constants read the plasma-dead cells behind it and source nothing.
+    # This is the PRE-G1 production geometry, reconstructed key by key (the
+    # fitted 15 cm radii, the plenum-choke obstruction and the built-in end
+    # flare, none of which the measured machine uses). The R2a fold-in moved
+    # the four machine scalars into the config defaults, so they are named here
+    # with the rest of the arm rather than inherited -- the tiny G1 collector
+    # block would otherwise put a 7.8 cm cell under this block's fixed
+    # dt = 1 ns steps.
     kd_obs_params = dict(kd_params)
     kd_obs_params.update(
         {
+            "Lm": 2000.0,
+            "plenum_length_cm": 100.0,
+            "collector_length_cm": 100.0,
+            "gas_puff_z_cm": 60.0,
             "Rp": 15.0,
             "R_cath": 15.0,
             "Rcs": 40.0,
@@ -17828,6 +17895,15 @@ print(json.dumps({
         # so the stance names the layout rather than inheriting it. The annulus
         # profile has its own case further down, which arms two_zone itself.
         _pin_pre_r2a_neutral_stance(params, flags)
+        # A UNIFORM nx=12 column. The spreading-kernel checks in (e) state
+        # their widths in CELLS and convert with the mesh's MEAN cell length,
+        # which only means "cells" on a uniform mesh; the fixed source region
+        # (a config default since the R2a fold-in) makes cell sizes differ by
+        # a factor of several, and a 2-cell kernel would then be sub-cell where
+        # it lands. The IC construction under test is mesh-agnostic.
+        flags["source_fixed_grid"] = False
+        params["source_region_length_cm"] = None
+        params["source_region_dz_cm"] = None
         params.update(over)
         return params, flags
 

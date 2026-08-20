@@ -177,6 +177,18 @@ BASELINE_PARAM_OVERRIDES = {
     "cathode_neutral_jet": False,
     "cathode_jet_surface_debit": False,
     "cathode_jet_energy_convention": "legacy",
+    # R2a FOLD-IN (2026-08-20) part 2: the G1 measured machine scalars are now
+    # config defaults. This fixture was captured on the nominal 2000 cm machine
+    # with the 100 cm plenum and collector blocks and the puff pipe 60 cm from
+    # the cathode; pin all four so the anchor keeps its own geometry -- same
+    # rule as the Rcs/Lcs/Rsup and Rp/R_cath pins above. (source_fixed_grid and
+    # its two source_region_* parameters need no new pin: the fixture already
+    # inherits the flag from PRODUCTION_FLAG_OVERRIDES and pins both values
+    # above, so folding their defaults leaves it where it is.)
+    "Lm": 2000.0,
+    "plenum_length_cm": 100.0,
+    "collector_length_cm": 100.0,
+    "gas_puff_z_cm": 60.0,
 }
 # input_flags overrides.
 BASELINE_FLAG_OVERRIDES = {

@@ -233,19 +233,11 @@ PARAM_OVERRIDES = {
     # It combines harmonically (Cowie-McKee) with the Braginskii flux at
     # heat_flux_limiter_exponent=1, which is already the config default.
     "heat_flux_limiter_f": _STANCE["heat_flux_limiter_f"],
-    # Fixed-cell-size source region (7a, approved 2026-07-27), enumerated from
-    # es1_r5_srcgrid_shakedown.h5 and cross-checked against
-    # es1_r5_srcgrid_nx240.h5 -- the two agree on every key except nx, which is
-    # what makes the pair a clean resolution study. The 100 cm column in front
-    # of the anode is meshed at exactly 10 cm regardless of nx, so refining nx
-    # refines only the FAR column and no longer moves the source cells or the
-    # puff cell underneath the source terms. Interim geometry, pending the 2D
-    # model. Presence-gated BOTH ways against the flag below, so these three
-    # must always travel together. Values from the stance.
-    "source_region_length_cm": _STANCE["source_region_length_cm"],
-    "source_region_dz_cm": _STANCE["source_region_dz_cm"],
-    # NB nx_gap is NOT promoted: both artifacts ran it at 5, which is already
-    # the config.py default, so it never appears in the delta.
+    # NB the fixed-cell-size source region (7a) is NOT set here any more: the
+    # flag and both source_region_* values folded into the config defaults at
+    # R2a, and the three are presence-gated against each other, so naming any
+    # of them here would only restate a default. Likewise nx_gap, which both
+    # source artifacts ran at the config default 5.
 }
 FLAG_OVERRIDES = {
     # R5 stance flip: the legacy ion-neutral thermalization arm is subsumed by
@@ -257,10 +249,6 @@ FLAG_OVERRIDES = {
     # PRODUCTION STANCE (2026-07-27): the electron heat-flux limiter is
     # ON in production, at the heat_flux_limiter_f above.
     "electron_heat_flux_limit": True,
-    # Fixed-cell-size source region (7a): pairs with source_region_length_cm /
-    # source_region_dz_cm above; the geometry raises loudly if either side is
-    # set without the other.
-    "source_fixed_grid": True,
 }
 
 
