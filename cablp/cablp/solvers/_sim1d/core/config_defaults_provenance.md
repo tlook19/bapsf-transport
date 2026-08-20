@@ -202,10 +202,17 @@ carried through the same doubling.
 
 Sources: Davis 1960 (*J. Appl. Phys.* **31**, 1169), Table II — Monte-Carlo
 elbow transmission probabilities; Clausing 1932 — the exact straight-tube
-transmission; and the 1.33 D equivalent-length convention for a sharp miter,
-taken from a named vacuum handbook (**NOT** Davis: an audit of the paper
-confirmed he never prints that convention, and attributing it to him was the
-error this entry exists to avoid repeating).
+transmission.
+
+> **OPEN CITATION (one line, deliberately left unfilled).** The 1.33 D
+> equivalent-length convention for a sharp miter needs a named vacuum handbook
+> against it, and this entry does not yet carry one. It is **NOT** Davis: an
+> audit of that paper confirmed he never prints the convention, and attributing
+> it to him was the specific error this entry exists to stop repeating. The
+> convention is standard and the number is not in doubt; what is missing is the
+> attribution, and it is recorded as missing rather than guessed. Fill it with
+> the handbook actually consulted before this bracket is quoted in the
+> write-up.
 
 **He-spec caveat (why the bracket is as wide as it is).** The 2,200 L/s
 nameplate does not state its spec gas. Read as N2 and converted to helium the
