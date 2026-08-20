@@ -2073,7 +2073,7 @@ def cathode_defaults():
         speed is built, and therefore how much of the incident ion power the
         cathode jet hands the neutral gas.
 
-        ``"legacy"`` (the default) reads it per backscattered particle:
+        ``"legacy"`` reads it per backscattered particle:
         ``v_back = sqrt(2 R_E (phi_c + Ti)/m)``, carried by the ``R_N``
         reflected fraction alone, so the gas receives ``R_N R_E`` of the
         incident ion power while ``cathode_jet_surface_debit`` removes
@@ -2275,7 +2275,7 @@ def cathode_defaults():
         # surface T_s; the anode channel is backscatter-only (wire
         # re-emission has no net axial direction), per collected side, at
         # the solve's phi_a.
-        "cathode_neutral_jet": False,
+        "cathode_neutral_jet": True,
         "cathode_jet_R_N": 0.5,
         "cathode_jet_R_E": 0.2,
         # Which convention R_E is read in when the cathode backscatter speed
@@ -2284,15 +2284,17 @@ def cathode_defaults():
         # R_E); "total_reflected" reads it as the TRIM total reflected-energy
         # fraction, so the R_N reflected particles carry R_E/R_N each and the
         # exported power matches the debit.
-        "cathode_jet_energy_convention": "legacy",
+        "cathode_jet_energy_convention": "total_reflected",
         "anode_neutral_jet": False,
         "anode_jet_R_N": 0.5,
         "anode_jet_R_E": 0.25,
-        # Sensitivity arm: debit the cathode surface's ion heating by the
-        # reflected-energy fraction (power_balance receives
-        # (1 - R_E) * P_cathode_i). Off by default, since the jet's first pass
-        # is momentum-only. Requires cathode_neutral_jet.
-        "cathode_jet_surface_debit": False,
+        # Debit the cathode surface's ion heating by the reflected-energy
+        # fraction (power_balance receives (1 - R_E) * P_cathode_i); off, the
+        # jet is momentum-only and the surface keeps that power. Requires
+        # cathode_neutral_jet, and is REQUIRED by neutral_energy with the jet
+        # armed -- with an En field the reflected power is booked into the gas,
+        # so without the debit the same R_E would be spent twice.
+        "cathode_jet_surface_debit": True,
         # Mesh momentum accommodation for the evolved wind: the momentum
         # the anode wires intercept lands on the anode structure instead
         # of staying in the gas (the open-area throttle alone leaves the

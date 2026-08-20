@@ -8976,7 +8976,7 @@ class LAPDSim1D:
                 "requires cathode_neutral_jet"
             )
         # Which convention R_E is read in when the jet's launch energy is
-        # built. "legacy" is the shipped default and is bit-exact.
+        # built. "legacy" is the historical reading and is bit-exact.
         convention = p.get("cathode_jet_energy_convention", "legacy")
         if convention not in CATHODE_JET_ENERGY_CONVENTIONS:
             raise ValueError(

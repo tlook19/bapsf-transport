@@ -456,11 +456,17 @@ def run_model(
         # The slip closure IS the evolved M_n equation's local steady state, so
         # the solver refuses the pair. Since the R2a fold-in made
         # neutral_momentum a config default, this arm has to switch the field
-        # off explicitly to be the closure arm it names -- and with it the two
-        # flags presence-gated on it, which would otherwise raise instead.
+        # off explicitly to be the closure arm it names -- and with it
+        # everything the solver presence-gates on M_n: the neutral energy
+        # channel and its hot internal wall, and the cathode jet (M_n momentum
+        # physics), whose debit and total_reflected convention in turn require
+        # the jet. This arm is the whole pre-M_n closure stack, not one key.
         flags["neutral_momentum"] = False
         flags["neutral_energy"] = False
         flags["neutral_hot_internal_wall"] = False
+        params["cathode_neutral_jet"] = False
+        params["cathode_jet_surface_debit"] = False
+        params["cathode_jet_energy_convention"] = "legacy"
     elif drag_closure == "neutral_momentum":
         params["ion_neutral_drag_model"] = "constant"
         params["b_ion_neutral_drag"] = 1.0

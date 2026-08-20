@@ -351,11 +351,6 @@ cathode_heat_capacity_J_per_K = 181.0
 cathode_emission_profile = "uniform"
 T_s = 1998.15
 
-# CATHODE NEUTRAL JET (armed, total_reflected convention).
-cathode_neutral_jet = true
-cathode_jet_surface_debit = true
-cathode_jet_energy_convention = "total_reflected"
-
 # FUELING.
 S_gp = 9010.0
 S_gp_decay_target = 2000

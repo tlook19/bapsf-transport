@@ -170,6 +170,13 @@ BASELINE_PARAM_OVERRIDES = {
     "heat_flux_limiter_f": 0.1,
     "source_region_length_cm": 100.0,
     "source_region_dz_cm": 10.0,
+    # R2a FOLD-IN (2026-08-20): the cathode neutral jet, its surface debit and
+    # the total_reflected energy convention are now config defaults. This
+    # fixture predates all three and ran with no jet at all; pin them back so
+    # the anchor does NOT track the fold-in. Same rule as every pin above.
+    "cathode_neutral_jet": False,
+    "cathode_jet_surface_debit": False,
+    "cathode_jet_energy_convention": "legacy",
 }
 # input_flags overrides.
 BASELINE_FLAG_OVERRIDES = {
