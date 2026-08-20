@@ -4,18 +4,29 @@ This is the production reversibility guarantee: a committed reference trajectory
 plus a checker that re-runs the solver and asserts bit-exact reproduction. Every
 change under ``_sim1d`` must keep ``--verify`` green without recapture.
 
-**The baseline config is ``default_config()`` plus a RUN-SHAPE table, and
-nothing else** (R2b re-anchor, 2026-08-20). The shipped defaults are the
-production package, so the gate exercises the configuration the campaign
-actually runs instead of a frozen historical operating point. Every override
-below is a mesh or cost choice; a physics or stance value pinned here would be
-a second stance, silently diverging from the shipped one, which is exactly the
-drift the old ~30-pin table had accumulated.
+**The baseline config is ``default_config()`` + the committed stance file
+(``scripts/stances/g1atrim.toml``) + ``nx = 60``** -- GOLDEN-AT-STANCE, ratified
+2026-08-20. The stance is applied minus its mesh-sized package; see the re-cut
+note at ``STANCE_MESH_SIZED_PARAMS`` for exactly what is dropped and why.
 
-**This module is SELF-CONTAINED by rule.** It imports nothing from the campaign
-drivers, so ``--verify`` runs with ``compare_sim1d_es1`` and
-``run_mechanism_ladder`` absent and no stance edit can reach the anchor.
-Re-anchoring is a deliberate, reviewed recapture event, never a side effect.
+**The shipped defaults are NOT the production package**, and an earlier draft of
+this file said they were. The R2a/R2b folds moved the neutral closure family and
+the measured machine into ``default_config()``, but the OPERATING POINT stayed in
+the stance file. Captured at bare defaults the fixture gated an unrepresentative
+corner -- marginal breakdown, an anode-cathode gap that never filled, and an
+anode sheath draining a near-empty flanking cell on a ~100 ns e-fold.
+
+**Consequence of anchoring on the stance, stated plainly: EDITING THE STANCE FILE
+BREAKS THIS GATE until the fixture is recaptured.** That is the intended
+trade -- the fixture tracks the configuration the campaign actually runs, and the
+price is that a stance edit is now a recapture event. It is not a licence to
+recapture casually: a recapture is reviewed, authorized, and recorded in
+``golden_baseline_provenance.md``.
+
+**No campaign DRIVER is imported.** ``compare_sim1d_es1`` and
+``run_mechanism_ladder`` stay unimported, so their override dicts cannot reach
+this anchor; the one ``scripts/`` import is ``stance_config``, the loader for the
+committed stance artifact.
 
 The retired fixture -- the ~30-pin table holding the 2026-07-22 operating
 point -- is reproducible only at the tag ``pre-refactor-2026-08-20`` with its
@@ -40,6 +51,7 @@ loading the NPZ.
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -54,68 +66,134 @@ from cablp.solvers._sim1d import (
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_BASELINE = SCRIPT_DIR / "baselines" / "production_discharge.npz"
 
-# --- Baseline config: the shipped defaults plus run shape ------------------
-# RUN SHAPE ONLY (R2b re-anchor, 2026-08-20). Everything else -- the whole
-# physics and stance package -- comes from default_config() and is deliberately
-# NOT restated here: a value written twice is a value that can disagree with
-# itself, which is how the retired ~30-pin table stopped describing anything
-# the campaign ran.
+# The stance loader, for the committed stance FILE. This is the module's only
+# scripts/ import and it is deliberate: `stance_config` is a small loader for a
+# committed artifact, not a campaign driver whose dicts drift. The drivers
+# (`compare_sim1d_es1`, `run_mechanism_ladder`) stay unimported.
+sys.path.insert(0, str(SCRIPT_DIR))
+from stance_config import load_stance  # noqa: E402
+
+# --- Baseline config: the stance of record, re-cut to the gate mesh --------
+# GOLDEN-AT-STANCE (ratified 2026-08-20). The config is
+# ``default_config()`` + the committed stance file + ``nx = 60``.
 #
-# The bar for an entry below: it must be a MESH or COST choice. If a physics or
-# stance value ever looks necessary here, the honest move is to recapture the
-# fixture at the shipped default, not to pin around it.
+# Why the stance and not the bare defaults: the shipped defaults are NOT the
+# production package. The R2a/R2b folds moved the closure family and the
+# measured machine into the defaults, but the OPERATING POINT stayed in the
+# stance file -- the emission constant, the bank voltage, the cathode thermal
+# pair, the puff level and its equilibration window. Captured at bare defaults
+# this fixture gated an unrepresentative corner: breakdown was marginal, the
+# anode-cathode gap never filled, and the anode sheath drained a near-empty
+# flanking cell on a ~100 ns e-fold. The stance is what makes the discharge
+# behave like the machine.
+PRODUCTION_STANCE = "g1atrim"
+
+# THE RE-CUT. Four stance params are per-cell arrays sized to the stance's own
+# 280-cell mesh (1 plenum + 5 gap + 5 fixed source + 268 far column + 1
+# collector). They cannot travel to nx=60, and they are NOT resampled here:
+#
+#   * the two radius profiles are built offline by scripts/g1_build_profiles.py
+#     from a measured field census, and the vessel profile is a STAIRCASE whose
+#     steps interpolation would smear into a bore the machine does not have;
+#   * the two nn0 profiles are an equilibrated 4.5 ms foot computed for that
+#     mesh -- resampling them changes the neutral inventory and the near-source
+#     structure, so it is a new initial condition, not the stance's.
+#
+# The package is therefore dropped WHOLE, with the two flags that require it,
+# rather than half-applied: a prescribed geometry carrying a default fill would
+# be a hybrid corner of exactly the kind this re-anchor exists to stop being.
+# Everything that is mesh-independent still travels, which is every scalar
+# operating-point key plus the baffles (whose arrays are physical cm, not
+# per-cell). What the gate loses is the measured flare, the vessel staircase
+# and the shaped foot; what it keeps is the operating point.
+STANCE_MESH_SIZED_PARAMS = (
+    "plasma_radius_profile_cm",
+    "machine_radius_profile_cm",
+    "nn0_profile",
+    "nn0_annulus_profile",
+)
+STANCE_MESH_SIZED_FLAGS = (
+    "prescribed_area_geometry",
+    "neutral_initial_profile",
+)
+
 BASELINE_PARAM_OVERRIDES = {
-    # Axial resolution. The campaign runs 268 far-column cells; this gate runs
-    # the coarse mesh because a reviewer pays for it on every branch and again
-    # post-merge. Pinned rather than inherited so a future default-nx change
-    # cannot multiply that cost silently.
+    # Axial resolution -- the one run-shape pin. The campaign runs 268 far-column
+    # cells; this gate runs the coarse mesh because a reviewer pays for it on the
+    # candidate branch and again post-merge. Pinned rather than inherited so a
+    # future default-nx change cannot multiply that cost silently.
+    #
     "nx": 60,
-    # Stop at BASELINE_RUN_KWARGS["max_steps"] instead of raising. The shipped
-    # default is "raise" because for a campaign arm a step cap is a failure;
-    # for this gate the cap IS the run length, so reaching it is success. The
-    # production stance carries the same setting for the same reason.
-    "max_steps_action": "stop",
+    # Deliberately OVERRIDES the stance's "stop". For a campaign arm a step cap
+    # is a budget and a truncated arm is still data, so "stop" is right there.
+    # Here max_steps is not a run length at all -- it is a TRIPWIRE (see
+    # BASELINE_RUN_KWARGS). Reaching it means this configuration no longer
+    # completes a discharge in a sane number of steps, which is a different
+    # failure from "the trajectory moved" and should say so loudly instead of
+    # silently handing --verify a short trajectory to report as a shape
+    # mismatch.
+    "max_steps_action": "raise",
 }
-# input_flags overrides. Empty by construction: every flag the production
-# package needs is a shipped default, and a flag pinned here would be a stance
-# choice, not run shape.
-BASELINE_FLAG_OVERRIDES = {}
+# input_flags overrides beyond the stance. The shaped initial fill is gone with
+# the mesh-sized package, and the solver refuses a profile and an equilibration
+# together, so the equilibrated seed fills the machine again -- at the stance's
+# own 25 ms puff window, which is a scalar and travels. This is the substitute
+# for the foot, and it is why the gap fills.
+BASELINE_FLAG_OVERRIDES = {
+    "neutral_equilibration": True,
+}
 # Run controls. dt/operator_split stay at the solver defaults (adaptive dt, the
-# shipped split). t_end is left dynamic and never reached: max_steps ends the
-# run first, by design.
+# shipped split), and t_end stays dynamic -- the run goes to the current-trigger
+# end time, so THE FIXTURE COVERS THE WHOLE CYCLE: ignition, breakdown, the
+# plateau and the afterglow.
 #
-# max_steps IS THE COST KNOB, and it is a step count rather than a t_end on
-# purpose: a step cap bounds what a reviewer pays even if a future change makes
-# the adaptive dt smaller, whereas a duration cap would let the same change
-# lengthen the gate without bound.
+# There is no cost cap any more. The earlier draft capped at 40,000 steps
+# because at BARE DEFAULTS the adaptive dt was pinned near 3e-8 s by the
+# surface_loss limiter and an uncapped run cost ~4 hours. That was a symptom of
+# the unrepresentative corner, not a property of the model: on the stance the
+# discharge ignites properly and the limiter relaxes as the column fills.
 #
-# 40,000 steps is sized to keep this gate at roughly the wall time of the
-# fixture it replaced (~8.5 min). MEASURED on the shipped defaults at nx=60
-# (2026-08-20): the adaptive dt is held near 3e-8 s by the surface_loss limiter
-# through ignition, so running to the dynamic t_end (2.53e-2 s) would take
-# ~4 HOURS -- ~30x the retired fixture, twice per merge.
+# MEASURED at nx=60 on the stance (2026-08-20), from the capture itself:
+# 75,615 steps to the dynamic t_end of 2.632261e-02 s, 914.6 s wall on one
+# lane, 2634 saves. Mean dt is 3.5e-7; it runs 4.8e-7 at the first step, dips
+# to ~1.9e-7 through breakdown, recovers past 6.4e-7 early in the discharge and
+# does not hold that -- which is why the step count came in well above the
+# 40-45k the pre-capture projection suggested from the early-discharge dt.
 #
-# What the capped trajectory covers, from the capture: 40,000 steps reach
-# t = 1.887e-3 s over 189 saves -- 18 pre_breakdown, 13 breakdown, 158
-# main_discharge. So it exercises ignition and the first ~1.6 ms of the
-# discharge, and does NOT reach the plateau (15-19.5 ms) or the afterglow. A
-# change confined to late-time behaviour can pass this gate without being
-# exercised by it. See golden_baseline_provenance.md.
+# max_steps is a TRIPWIRE, not a run length: ~2x the measured step count, paired
+# with max_steps_action="raise" above. It exists so that a change which quietly
+# destroys the timestep fails loudly and quickly instead of running for hours.
+# If it ever fires, the question is "what happened to dt", not "what happened to
+# the trajectory". Sized at 2x deliberately: a backstop with only a few percent
+# of headroom is not a backstop, it is a second cost cap waiting to truncate the
+# gate the first time a legitimate change nudges the timestep.
 BASELINE_RUN_KWARGS = {
     "t_end": None,
     "dt": None,
     "operator_split": None,
-    "max_steps": 40000,
+    "max_steps": 150000,
 }
 
 
 def build_baseline_config(param_overrides=None, flag_overrides=None):
     """Return ``(params, flags)`` for the baseline, with optional extra overrides.
 
-    ``param_overrides`` / ``flag_overrides`` layer on top of the baseline for an
-    explicitly requested production variant.
+    Layering, in order: ``default_config()``, the committed stance file minus
+    its mesh-sized package, then the run-shape overrides. ``param_overrides`` /
+    ``flag_overrides`` layer on top for an explicitly requested variant.
     """
     params, flags = default_config()
+
+    stance = load_stance(PRODUCTION_STANCE)
+    stance_params = dict(stance.params)
+    stance_flags = dict(stance.flags)
+    for key in STANCE_MESH_SIZED_PARAMS:
+        stance_params.pop(key, None)
+    for key in STANCE_MESH_SIZED_FLAGS:
+        stance_flags[key] = False
+    params.update(stance_params)
+    flags.update(stance_flags)
+
     params.update(BASELINE_PARAM_OVERRIDES)
     flags.update(BASELINE_FLAG_OVERRIDES)
     if param_overrides:

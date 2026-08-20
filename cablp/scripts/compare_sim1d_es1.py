@@ -81,11 +81,13 @@ OVERLAY = _SCRIPTS / "data" / "es1_sim1d_overlay.npz"
 # different mesh raises at construction. Runs that want the whole package take
 # it whole -- `run_m6_point.py --stance g1atrim`.
 #
-# NB the golden fixture no longer reads this dict at all (R2b re-anchor,
-# 2026-08-20): baseline_sim1d.py imports nothing from here and builds its
-# config from default_config() plus a run-shape table. A stance edit therefore
-# changes the scorer's runs and can never reach the anchor. Re-anchoring the
-# golden is a deliberate recapture event, never a side effect.
+# NB the golden fixture no longer reads THIS DICT (R2b re-anchor, 2026-08-20):
+# baseline_sim1d.py imports nothing from here. It does read the STANCE FILE,
+# directly, because the golden is now captured at the stance of record. So the
+# standing warning runs the other way from the R1 era: editing
+# scripts/stances/g1atrim.toml changes the scorer's runs AND breaks the golden
+# until the fixture is recaptured. That is deliberate -- see
+# scripts/golden_baseline_provenance.md -- and a recapture is a reviewed event.
 PRODUCTION_STANCE = "g1atrim"
 _STANCE = load_stance(PRODUCTION_STANCE).params
 

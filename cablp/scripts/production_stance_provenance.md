@@ -16,9 +16,13 @@ not fold (per-mesh arrays, per-rung operating measurements, provenance-excluded
 and consequence keys — the R2a exception list). Entries below whose key folded
 now describe a **config default**; their provenance (value, class, bar, memo)
 is unchanged by the move, and `config_defaults_provenance.md` carries the
-default-side entry. The golden fixture no longer pins any of it: R2b recaptured
-that fixture at the shipped defaults, so it tracks them deliberately rather than
-holding a frozen operating point (`golden_baseline_provenance.md`).
+default-side entry. **The golden fixture applies THIS FILE.** R2b recaptured it
+at the stance of record — `default_config()` + this stance + `nx = 60`, minus the
+per-mesh arrays, which cannot travel to the gate's coarse mesh
+(`golden_baseline_provenance.md` records the re-cut). So the fixture no longer
+pins a frozen operating point, and the corollary is load-bearing: **editing a
+scalar in this file breaks the golden until the fixture is recaptured.** That is
+deliberate, and a recapture stays a reviewed, authorized, recorded event.
 
 Analysis memos named below are working files kept alongside these scripts and
 are not tracked in this repository.

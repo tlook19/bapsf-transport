@@ -281,8 +281,8 @@ operators belong to R2/R3, not R1.
 
 The historical shared electron-birth default remains
 `Te_birth_ionization="local"`, which is what the committed production golden
-runs — as a shipped default since the R2b re-anchor, not as a pin. The
-config-complete M6 and mechanism-ladder
+runs since the R2b re-anchor — inherited from the stance of record (which names
+it) rather than pinned in the fixture. The config-complete M6 and mechanism-ladder
 drivers now explicitly select `"floor"` so they cannot accidentally inherit
 `"local"`. This is provenance repair, not endorsement of either physical
 moment: the unified ionization particle/momentum/energy derivation remains R4.
@@ -383,8 +383,8 @@ event to the CSDA beam ray (audit A15). It is the correct csda physics, so it is
 the **production default (on)**; like `beam_coulomb_model` / `beam_anomalous_model`
 it is a csda control -- inert under `beam_deposition_model="beer_lambert"` (which
 never launches the CSDA module) and where the resolved geometry has no anode faces.
-The golden fixture runs it ON, like every other shipped default, since the R2b
-re-anchor recaptured that fixture at `default_config()`. Set it `False` for the
+The golden fixture runs it ON since the R2b re-anchor recaptured that fixture at
+the stance of record, which inherits this default. Set it `False` for the
 with/without-interception A/B. Without it the CSDA adapter launches the full emitted flux
 `Gamma0 = I_eth_star/e` through the whole column, so the fluid deposits the entire
 emitted beam (~470 kW on the settled artifact) while the current-driven circuit

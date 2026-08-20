@@ -35,11 +35,21 @@ Configuration-specific pins live with their configuration, not here:
 ## The R2a fold (2026-08-20): stance values that became shipped defaults
 
 Fifteen keys moved from the production stance into `default_config()` at R2a,
-plus one R2b rider below, so the shipped defaults ARE the production package
-(thread-24). Their provenance did not change with the move; the entry of
-record for each stays where it was written, per the table. All sixteen folds
-are value-neutral: every resolved driver config is byte-identical across them,
-because a fold changes where a value comes from and never what it is.
+plus one R2b rider below (thread-24). Their provenance did not change with the
+move; the entry of record for each stays where it was written, per the table.
+All sixteen folds are value-neutral: every resolved driver config is
+byte-identical across them, because a fold changes where a value comes from and
+never what it is.
+
+**What the folds did NOT do is make the shipped defaults the production
+package.** They moved the *neutral closure family* and the *measured machine*;
+the **operating point** — the emission constant, the bank voltage, the cathode
+thermal pair, the emission profile, the puff level and its equilibration window,
+the afterglow length — stays in `scripts/stances/g1atrim.toml`, along with the
+per-mesh arrays. `default_config()` alone is not a configuration the campaign
+runs, and a fixture captured there gates an unrepresentative corner: that is
+exactly what happened to the first R2b golden draft, and why the golden now
+applies the committed stance explicitly (`scripts/golden_baseline_provenance.md`).
 
 | default (new value) | class | entry of record |
 |---|---|---|
@@ -732,7 +742,8 @@ across a larger disc, so the falloff no longer has a measurement behind it.
 `"uniform"` introduces no shape parameter and is fully boxed by hardware.
 `"gaussian"` remains a selectable arm, and the trajectory that used it stays
 reachable at the `pre-refactor-2026-08-20` anchor tag — the golden fixture ran
-it until R2b recaptured that fixture at the shipped defaults.
+it until R2b recaptured that fixture at the stance of record, which selects
+`"uniform"`.
 
 **`cathode_heat_capacity_J_per_K = 120.0` — ASSUMED (hand-tuned).** It shapes
 only the ramp timescale; the steady state is independent of it. Physical scale:
