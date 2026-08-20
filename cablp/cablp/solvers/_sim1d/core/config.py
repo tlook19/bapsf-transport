@@ -3043,9 +3043,11 @@ input_flags_template_1d = {
     # scaled per cell by lambda = q_sat/(q_sat+q_SH) (harmonic Cowie-McKee),
     # q_sat = heat_flux_limiter_f * n * Te * v_the -- so the flux caps at
     # free-streaming where gradients are steep and recovers Spitzer where they
-    # are shallow. Electron only; ion conduction unchanged. Default OFF and
-    # bit-exact off; a declared closure-family A/B instrument.
-    "electron_heat_flux_limit": False,
+    # are shallow. Electron only; ion conduction unchanged. Bit-exact when
+    # off; a declared closure-family A/B instrument. NB the cap COEFFICIENT
+    # heat_flux_limiter_f is a separate key with its own default (0.3); the
+    # production campaign runs this flag at 0.1 and sets that value itself.
+    "electron_heat_flux_limit": True,
     # Sonic front-filling closure, OFF by default: the mesh A/B found the front
     # to be a numerical artifact (its L1 activity and Rusanov numerical
     # diffusion vanish under refinement). OFF renders alpha_front inert.

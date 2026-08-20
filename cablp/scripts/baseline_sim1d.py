@@ -229,6 +229,13 @@ BASELINE_FLAG_OVERRIDES = {
     "neutral_two_zone": False,
     "neutral_energy": False,
     "neutral_hot_internal_wall": False,
+    # R2a FOLD-IN, the flags the fixture already ran ON and inherited through
+    # the production splat above. Folding their config defaults does not move
+    # this anchor, but the splat no longer names them, so pin both as literals
+    # to keep the R1 self-containment rule: every value that reaches the golden
+    # is written here until the R2b re-anchor.
+    "source_fixed_grid": True,
+    "electron_heat_flux_limit": True,
 }
 # Run controls: None => LAPDSim1D defaults (adaptive dt, dynamic current-trigger
 # t_end, unlimited steps -- the notebook's own settings).

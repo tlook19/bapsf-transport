@@ -385,9 +385,6 @@ neutral_equilibration = false
 prescribed_area_geometry = true
 neutral_baffles = true
 
-# TRANSPORT.
-electron_heat_flux_limit = true
-
 # Keys whose stance value is None (TOML has no null literal).
 [none_valued]
 input_dict = ["nn0"]

@@ -246,9 +246,9 @@ FLAG_OVERRIDES = {
     # NB end_expansion_geometry is NOT set here any more: the G1 measured
     # geometry replaced the built-in flare with per-cell prescribed radii, and
     # the solver refuses the two together. It comes with the stance.
-    # PRODUCTION STANCE (2026-07-27): the electron heat-flux limiter is
-    # ON in production, at the heat_flux_limiter_f above.
-    "electron_heat_flux_limit": True,
+    # NB electron_heat_flux_limit is NOT set here any more either: the flag
+    # folded into the config defaults at R2a. Its COEFFICIENT still is, above,
+    # because heat_flux_limiter_f rides the R2b re-anchor.
 }
 
 
