@@ -405,9 +405,9 @@ than stopping on an unrelated cold cell.
 
 ## R2 conservative hyperbolic core (2026-07-24)
 
-Two default-off selectors make the plasma hyperbolic update discretely
-total-energy conservative; the checkpoint golden pins the old stance and stays
-bit-exact.
+Two selectors make the plasma hyperbolic update discretely total-energy
+conservative. Both are shipped defaults now, and the golden fixture runs them
+so since the R2b re-anchor captured it at `default_config()`.
 
 - `hyperbolic_wave_speed`: `"isothermal"` (default, `sqrt(Te/m_i)`) or
   `"adiabatic"` (`sqrt((5/3)(Te+Ti)/m_i)`, the exact spectral radius of the

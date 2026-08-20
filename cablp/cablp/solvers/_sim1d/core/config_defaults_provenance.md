@@ -730,8 +730,9 @@ empirical basis is RETIRED by the caliper: the measured emission footprint
 identifies with the aperture the panel defines, not with an emission droop
 across a larger disc, so the falloff no longer has a measurement behind it.
 `"uniform"` introduces no shape parameter and is fully boxed by hardware.
-`"gaussian"` remains a selectable arm and is what the golden fixture pins, so
-the historical trajectory stays reachable and bit-exact.
+`"gaussian"` remains a selectable arm, and the trajectory that used it stays
+reachable at the `pre-refactor-2026-08-20` anchor tag — the golden fixture ran
+it until R2b recaptured that fixture at the shipped defaults.
 
 **`cathode_heat_capacity_J_per_K = 120.0` — ASSUMED (hand-tuned).** It shapes
 only the ramp timescale; the steady state is independent of it. Physical scale:

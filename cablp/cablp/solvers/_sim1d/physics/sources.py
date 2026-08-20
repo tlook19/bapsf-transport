@@ -111,7 +111,7 @@ def hyperbolic_energy_correction_rhs(
     (``flux._rusanov_raw_faces(energy_consistent=True)``) the flux plus
     pressure-work operator then conserves the closed-domain total plasma energy
     ``K + Ee + Ei`` to machine precision. Off-path callers never build it, so
-    the historical golden stays bit-exact.
+    the operator is structurally inert when the selector is off.
     """
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     u = derived.u

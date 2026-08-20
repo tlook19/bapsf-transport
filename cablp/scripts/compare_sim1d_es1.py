@@ -81,12 +81,11 @@ OVERLAY = _SCRIPTS / "data" / "es1_sim1d_overlay.npz"
 # different mesh raises at construction. Runs that want the whole package take
 # it whole -- `run_m6_point.py --stance g1atrim`.
 #
-# NB the golden fixture splats this dict (baseline_sim1d.BASELINE_PARAM_OVERRIDES)
-# and pins EVERY stance-fed key back to a literal (R1 stance decoupling,
-# 2026-08-20), so until the R2b re-anchor the golden is self-contained: a
-# stance edit changes the scorer's runs and never the golden. Re-anchoring the
-# golden onto a moved stance is a deliberate recapture event, never a side
-# effect of editing the stance file.
+# NB the golden fixture no longer reads this dict at all (R2b re-anchor,
+# 2026-08-20): baseline_sim1d.py imports nothing from here and builds its
+# config from default_config() plus a run-shape table. A stance edit therefore
+# changes the scorer's runs and can never reach the anchor. Re-anchoring the
+# golden is a deliberate recapture event, never a side effect.
 PRODUCTION_STANCE = "g1atrim"
 _STANCE = load_stance(PRODUCTION_STANCE).params
 
@@ -139,9 +138,9 @@ PARAM_OVERRIDES = {
     #   jackknife bar (6.7 +- 2.5 uH) -- it has no evidence behind it, but it is
     #   not excluded. L is inert for every sigma-scored row; consequences are
     #   confined to the unscored reported fingerprints (t90 +0.05..0.11 ms,
-    #   ignition +0.02..0.07 ms, both toward the measurement). This restores the
-    #   value the golden fixture has pinned all along (baseline_sim1d.py:104),
-    #   so the golden is bit-exact across the change.
+    #   ignition +0.02..0.07 ms, both toward the measurement). This restored the
+    #   value the golden fixture pinned at the time, so the golden was bit-exact
+    #   across the change; 8.1e-6 is the config default now.
     "V_bank": 177.843,
     "R_comp": 7.2244e-3,
     "L_parasitic_H": 8.1e-6,
@@ -169,8 +168,8 @@ PARAM_OVERRIDES = {
     # RETIRED in favour of the R4.3 Phelps moment operator
     # (ion_neutral_moment_closure, now the config.py production default;
     # first-principles drag+CX+thermal, no knob). The legacy drag keys are
-    # DEPRECATED and no longer set here; the historical golden pins them back
-    # (baseline_sim1d BASELINE_PARAM_OVERRIDES) to stay bit-exact.
+    # DEPRECATED and no longer set here, nor in the golden, which has run the
+    # shipped moment-closure defaults since the R2b re-anchor.
     # ADAS GCR rates (see cablp/vars/adas/README.md): effective ionization/
     # recombination and radiation-only cooling, consistent with the separate
     # ionization-cost term. b_Q* = 1 is meaningful under this model.
