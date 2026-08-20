@@ -400,9 +400,11 @@ def neutral_source_defaults():
     tau_gp_decay_duration:
         E-folding time toward the decay target for pulse decay modes [s].
     S_pump_L:
-        Source-side vacuum pump speed [L/s].
+        Source-side vacuum pump speed [L/s], lumped per END: the whole
+        pumping speed seen by that end cell, ducting included.
     S_pump_R:
-        End-side vacuum pump speed [L/s].
+        End-side vacuum pump speed [L/s], lumped per END, same convention as
+        ``S_pump_L``.
     gas_puff_enabled:
         Enables neutral gas-puff source terms.
     pump_enabled:
@@ -470,6 +472,9 @@ def neutral_source_defaults():
         pump sitting on a plenum cell, so it is inert in legacy geometry.
         ``None`` (default) or a
         non-positive value means no elbow restriction -- the legacy limit.
+        Because ``S_pump_L``/``S_pump_R`` are lumped per-end speeds that
+        already carry their own ducting, setting this alongside them applies
+        the same restriction twice on the source side.
 
     Values and their provenance: ``config_defaults_provenance.md``.
     """
@@ -493,10 +498,13 @@ def neutral_source_defaults():
         "gas_puff_rise_center_s": 5e-4,
         "gas_puff_rise_width_s": 5e-4,
         "gas_puff_close_lag_s": 5e-4,
-        # S_pump_L matches S_pump_R: the plenum aperture, not the pump speed,
-        # throttles the source-side rate.
-        "S_pump_L": 4000,
-        "S_pump_R": 4000,
+        # S_pump_L matches S_pump_R: each end carries the same lumped pumping
+        # speed, the series conductance of that end's turbo through its own
+        # elbow. The elbow is already inside this number, so
+        # pump_elbow_conductance_lps stays None -- setting both would count the
+        # elbow twice on the source side.
+        "S_pump_L": 2900.0,
+        "S_pump_R": 2900.0,
         "gas_puff_enabled": True,
         "pump_enabled": True,
         "gas_puff_valves": 2,
@@ -2276,8 +2284,8 @@ def cathode_defaults():
         # re-emission has no net axial direction), per collected side, at
         # the solve's phi_a.
         "cathode_neutral_jet": True,
-        "cathode_jet_R_N": 0.5,
-        "cathode_jet_R_E": 0.2,
+        "cathode_jet_R_N": 0.34,
+        "cathode_jet_R_E": 0.18,
         # Which convention R_E is read in when the cathode backscatter speed
         # is built. "legacy" reads it per backscattered particle (the gas gets
         # R_N*R_E of the incident ion power while the surface debit removes
