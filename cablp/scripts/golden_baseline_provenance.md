@@ -1,10 +1,12 @@
 # Provenance of the golden baseline pins (`baseline_sim1d.BASELINE_*_OVERRIDES`)
 
-**Recaptured 2026-08-20 (thread-24 R2b, reviewed-recapture protocol).** The
-committed regression fixture `scripts/baselines/production_discharge.npz` is
-captured at **the stance of record, re-cut to the gate mesh** — `default_config()`
-plus the committed stance file `scripts/stances/g1atrim.toml`, minus that
-stance's mesh-sized package, plus `nx = 60`.
+**Recaptured 2026-08-20 (the stance-update wave; re-anchored onto the stance at
+thread-24 R2b immediately before it — both under the reviewed-recapture
+protocol, see the recapture record below).** The committed regression fixture
+`scripts/baselines/production_discharge.npz` is captured at **the stance of
+record, re-cut to the gate mesh** — `default_config()` plus the committed stance
+file `scripts/stances/g1atrim.toml`, minus that stance's mesh-sized package,
+plus `nx = 60`.
 
 **The previous fixture is retired.** It held the 2026-07-22 operating point
 behind ~30 explicit pins and is reproducible only at the anchor tag
@@ -78,7 +80,7 @@ to be.
 |---|---|---|
 | `nx` | `60` | Axial resolution of the far column: a pure cost knob. The campaign runs 268; a reviewer pays for this gate on the candidate branch and again post-merge. Pinned rather than inherited so a future default-`nx` change cannot multiply every gate's runtime silently. |
 | `max_steps_action` | `"raise"` | Deliberately overrides the stance's `"stop"`. For a campaign arm a step cap is a budget and a truncated arm is still data; here the cap is a tripwire, and tripping it should be loud. |
-| `max_steps` (run kwarg) | `150000` | **A tripwire, not a run length** — ~2× the measured 75,615 steps. It exists so a change that quietly destroys the timestep fails fast instead of running for hours. If it fires, the question is what happened to `dt`, not what happened to the trajectory. Sized at 2× deliberately: a backstop with a few percent of headroom is not a backstop, it is a second cost cap waiting to truncate the gate. |
+| `max_steps` (run kwarg) | `150000` | **A tripwire, not a run length** — ~1.8× the measured 84,276 steps. It exists so a change that quietly destroys the timestep fails fast instead of running for hours. If it fires, the question is what happened to `dt`, not what happened to the trajectory. Sized at 2× deliberately: a backstop with a few percent of headroom is not a backstop, it is a second cost cap waiting to truncate the gate. |
 
 `BASELINE_FLAG_OVERRIDES` carries one entry, `neutral_equilibration = True`, for
 the reason given in the re-cut section above.
@@ -92,17 +94,21 @@ whole cycle rather than a truncated foot.
 
 | quantity | value |
 |---|---|
-| steps | 75,615 |
-| wall, single lane | 914.6 s (~15.2 min) |
-| saves | 2,634 |
-| `final_time` | 2.632261e-02 s (the dynamic `t_end`, reached) |
-| trajectory | `y[2634, 576]` = 8 fields × 72 cells |
-| phase census (saves) | 13 `pre_breakdown`, 20 `breakdown`, 2000 `main_discharge`, 600 `afterglow`, 1 `post_afterglow` |
+| steps | 84,276 |
+| wall, single lane | 917 s / 986 s over the two captures (~15.3 / 16.4 min) |
+| saves | 2,626 |
+| `final_time` | 2.624091e-02 s (the dynamic `t_end`, reached) |
+| trajectory | `y[2626, 576]` = 8 fields × 72 cells |
+| phase census (saves) | 9 `pre_breakdown`, 16 `breakdown`, 2000 `main_discharge`, 600 `afterglow`, 1 `post_afterglow` |
+
+*(Figures above are the 2026-08-20 stance-update-wave capture. The two captures
+were bit-identical but not equal in wall time; the spread is scheduling, not
+trajectory, and the smaller figure is the cleaner lane.)*
 
 **The gate is ~2× the wall time of the fixture it replaced** (~8–9 min), not the
 same — the pre-capture projection of 40–45k steps was taken from the
 early-discharge `dt` (6.4e-7 at t = 1.4e-3 s) and the timestep does not hold
-that value through the plateau; the measured mean is 3.5e-7. What the extra cost
+that value through the plateau; the measured mean is 3.1e-7. What the extra cost
 buys is the whole cycle at a representative operating point, including the
 plateau and the afterglow, instead of 8 % of the discharge at a corner the
 campaign never runs. Flagged rather than silently absorbed: a reviewer runs this
@@ -117,6 +123,53 @@ stance the cells carry plasma and the term is well behaved. Recorded as a known
 closure stress, deliberately not addressed by this pass.
 
 ## Recapture record
+
+**2026-08-20 — stance-update wave: the S_pump and cathode-jet re-cuts
+(AUTHORIZED recapture, Tom; CAMPAIGN_LOG 2026-08-20xx/as/ax).** **The first
+recapture forced by the GOLDEN-AT-STANCE consequence** — the standing trade
+declared in the R2b entry below, exercised for the first time. Two shipped
+defaults moved, so the fixture moved with them; no code path, pin, or run
+shape changed.
+
+| key | old | new |
+|---|---|---|
+| `S_pump_L`, `S_pump_R` | `4000` | `2900.0` L/s |
+| `cathode_jet_R_N` | `0.5` | `0.34` |
+| `cathode_jet_R_E` | `0.2` | `0.18` |
+
+Values, classes and brackets: `config_defaults_provenance.md` (both entries were
+rewritten in the same pass; `S_pump` moved ASSUMED -> DERIVED, the cathode jet
+pair moved MEASURED -> ASSUMED mid-box).
+
+**Delta discipline — what was proven before anything was recaptured.** A
+no-solve config diff of the rebuilt baseline against the OUTGOING fixture's own
+sidecar showed **exactly those four keys and nothing else**, and a four-case A/B
+showed the same four across every config-complete driver
+(`production_golden`, `compare_sim1d_es1`, `run_m6_point_es1_sgp3400_defaults`,
+`run_mechanism_ladder_es1_defaults`) with no flag moving in any of them.
+`pump_elbow_conductance_lps` stayed `None` — the double-count trap the S_pump
+entry documents. The `config_snapshots.json` fixture was regenerated in the same
+pass for the same reason and under the same proof: substituting the four old
+defaults back into the current manifest reproduces the previously committed
+`manifest_sha256` bit-for-bit, so those four are provably its only deltas, and
+`parameter_count` (261) / `flag_count` (51) are unchanged.
+
+**Capture evidence.** Recaptured twice from clean separate processes to
+temporary paths and compared BEFORE installing: NPZ and JSON sidecar both
+byte-identical (`sha256` of the NPZ
+`970006067c3cd6fbf406112fe26a4738c5c54f4aa783b07271d121dcc4a24571`), and
+raw-bitwise identical at `uint64` over all three arrays (`y`, `time`, `phase`;
+0 differing elements). `--verify` prints `exact=True` on the pure and the
+compiled path, the latter with `KERNEL_ID` probed in-process.
+
+**What moved in the trajectory, and why it is the physics.** The pumping re-cut
+raises the equilibrated fill (~+36 % centrally), so the machine breaks down
+sooner and runs denser: `pre_breakdown` saves 13 -> 9, `breakdown` 20 -> 16,
+`n_max` 2.14e13 -> 2.92e13 cm^-3, steps 75,615 -> 84,276, `final_time`
+2.632261e-02 -> 2.624091e-02 s. Health stayed sane and finite throughout:
+`Te_max` 28.9 -> 29.5 eV, `Ti_max` 8.36 -> 7.85 eV. **The old and new
+trajectories are not comparable point-by-point** — this is a configuration
+change, not a repair, and no bit-level comparison between them is meaningful.
 
 **2026-08-20 — R2b re-anchor onto the stance of record (AUTHORIZED recapture,
 Tom, 2026-08-20; thread-24 R2b, GOLDEN-AT-STANCE ratified after the dt-collapse
