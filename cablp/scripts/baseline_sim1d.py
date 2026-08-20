@@ -271,9 +271,11 @@ def capture(baseline_path):
     sidecar = baseline_path.with_suffix(".json")
     payload = {
         "description": (
-            "Golden baseline at the shipped LAPDSim1D defaults "
-            "(default_config()) plus the run-shape overrides in "
-            "baseline_sim1d.BASELINE_PARAM_OVERRIDES."
+            "Golden baseline at the stance of record, re-cut to the gate "
+            "mesh: default_config() plus the committed stance file "
+            "scripts/stances/g1atrim.toml, minus that stance's mesh-sized "
+            "package, plus the run-shape overrides in "
+            "baseline_sim1d.BASELINE_PARAM_OVERRIDES (nx=60)."
         ),
         "result_format": (
             "sim1d packed conservative trajectory y[saves, fields*cells]"

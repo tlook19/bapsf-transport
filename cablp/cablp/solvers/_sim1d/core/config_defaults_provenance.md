@@ -188,9 +188,47 @@ is a small pipe at the chamber wall about 10 cm in front of the anode
 the throw is of order the chord across the chamber, ~2*Rm. Neither centre nor
 width is tunable.
 
-**`S_pump_L = S_pump_R = 4000` L/s — ASSUMED.** The source side was previously
-2000. Matching them reflects that the plenum aperture, not the pump speed,
-throttles the source-side rate.
+**`S_pump_L = S_pump_R = 2900.0` L/s — DERIVED, bracket [2600, 3300] L/s.**
+The per-END lumped pumping speed for helium, i.e. the whole speed the end cell
+sees, ducting included. Each of the four main 2,200 L/s turbos is taken in
+series with its own elbow, `1/S_eff = 1/S_p + 1/C_elbow`. The elbow is modelled
+as a single Ø285.75 mm (11.25") full-centerline tube at exact Clausing
+transmission, with the sharp-miter correction taken as a BRACKET between the
+straight tube and a straight tube lengthened by the customary 1.33 D equivalent
+length. That gives **per-pump `S_eff` ≈ 1470 L/s, bracket [1300, 1650]**. Two
+of those pumps sit at each end, so the per-end lumped speed is `2 * S_eff`,
+rounded to 2900 L/s, and the reported band [2600, 3300] is the endpoint pair
+carried through the same doubling.
+
+Sources: Davis 1960 (*J. Appl. Phys.* **31**, 1169), Table II — Monte-Carlo
+elbow transmission probabilities; Clausing 1932 — the exact straight-tube
+transmission; and the 1.33 D equivalent-length convention for a sharp miter,
+taken from a named vacuum handbook (**NOT** Davis: an audit of the paper
+confirmed he never prints that convention, and attributing it to him was the
+error this entry exists to avoid repeating).
+
+**He-spec caveat (why the bracket is as wide as it is).** The 2,200 L/s
+nameplate does not state its spec gas. Read as N2 and converted to helium the
+pump speed is `S_p(He) ∈ [1870, 2310]` L/s; that spread, not the elbow
+geometry, is the dominant term in the bracket above.
+
+**The fifth pump is EXCLUDED.** The small cathode-chamber pump on the east
+side is deliberately not in this number. Whether it was valved in on any given
+run day is not knowable from the record, so its contribution is a REGISTERED
+A/B rather than a silent addition to the stance.
+
+**MECHANICS: set these two keys ONLY.** `pump_elbow_conductance_lps` stays
+`None`. The elbow is already inside `S_eff` above; configuring the solver's own
+series-elbow term as well would apply the same restriction twice on the source
+side.
+
+Superseded: `4000` L/s on both ends, an ASSUMED value (the source side had
+previously been 2000, and matching them expressed the reading that the plenum
+aperture rather than the pump speed throttled the source-side rate). The re-cut
+raises the equilibrated fill by roughly +21 to +54 % depending on position
+(+36 % centrally); that rise is the physics of the correction, not a
+regression. The neutral-seed cache keys on these values and invalidates —
+expected.
 
 **Gas-puff clump density (motivating `gas_puff_local_ionization_fraction` and
 `beam_clump_enhancement`) — DERIVED, boxed** at ~1-2e15 cm^-3 from the 45 psi
@@ -772,12 +810,80 @@ evaluated and this number is inert. It acquires a bar only when the ads/des
 arm (`cathode_surface_model = "ads_des"`) is first exercised with a positive
 prefactor; a bracket must be established before any result leans on it.
 
-**`cathode_jet_R_N = 0.5`, `cathode_jet_R_E = 0.2`, `anode_jet_R_N = 0.5`,
-`anode_jet_R_E = 0.25` — literature-boxed (MEASURED class).** Particle and
-energy reflection coefficients of the Eckstein/Thomas class: the cathode pair
-is the mid-box for He -> LaB6, with the B-rich versus La surface-termination
-spread as the honest uncertainty; the anode pair sits at the He -> Mo
-heavy-target corner. Not fit knobs. Both jets default off.
+**`cathode_jet_R_N = 0.34`, `cathode_jet_R_E = 0.18` — ASSUMED (mid-box
+construction), bracket = the two endpoint PAIRS below.** Particle and energy
+reflection coefficients for He -> LaB6 at the cathode. They are not read off a
+table for LaB6 — no such table exists — they are the midpoint of a two-endpoint
+box built from the Eckstein reflection compilation, and the BOX is the claim.
+
+Source: **Eckstein, IPP 9/132** (*Calculated Sputtering, Reflection and Range
+Values*). Both endpoints are taken at that report's **200 eV** rows, which is
+the relevant incident energy: the stance's ions arrive at `phi_c + Ti ≈ 189 eV`.
+
+| endpoint | surface termination | `R_N` | `R_E` |
+|---|---|---|---|
+| lower | B-terminated, read as He -> B4C | 0.099 | 0.0207 |
+| upper | La-terminated, Mo–W log-mass interpolation at M = 138.9 | 0.572 | 0.348 |
+
+**The bracket is the two PAIRS, never four independent corners.** `R_N` and
+`R_E` are strongly correlated through the target mass; a run at
+(`R_N` = 0.099, `R_E` = 0.348) is not a physical surface and quoting a
+four-corner box would overstate the uncertainty in exactly the direction that
+flatters the model. The declared family is: B-terminated pair, mid-box pair,
+La-terminated pair. The shipped default is the mid-box.
+
+*Known skew, stated qualitatively because it cannot be quantified here:* a real
+operating LaB6 surface is expected to run La-terminated, and the reflection
+coefficient rises with target `Z^2`, so both effects push the true value into
+the UPPER half of the box. This is a stated direction, not a correction
+applied — no factor is taken on its account.
+
+Superseded: `R_N = 0.5`, `R_E = 0.2`, carried as "literature-boxed (MEASURED
+class)" against the Eckstein/Thomas class generally. That class label was too
+strong for a mid-box construction, and the pair did not sit at the midpoint of
+any explicit endpoint set. Two consequences of the re-cut, both under the
+shipped `"total_reflected"` convention and quoted at the stance's
+`phi_c + Ti ≈ 189` eV: the per-backscattered-particle energy
+`E_fast = (R_E/R_N)(phi_c + Ti)` rises from 75.8 to 100 eV, while the
+backscatter channel's momentum `R_N * v_back ∝ R_N * sqrt(R_E/R_N)` falls by
+about 20 % (0.316 -> 0.247 in units of `sqrt(2(phi_c + Ti)/m)`). Fewer, faster
+reflected atoms.
+
+**`anode_jet_R_N = 0.5`, `anode_jet_R_E = 0.25` — UNCHANGED and NOT re-cut,
+because `anode_neutral_jet` ships `False`.** The anode channel is inert at the
+shipped defaults, so these two carry no result.
+
+*Banked for arming (do not paste these in without reading the guard below).*
+The same construction run for He -> Mo gives `R_N = 0.63` and, for the energy
+coefficient, **0.41 as a TOTAL reflected fraction / 0.65 PER BACKSCATTERED
+PARTICLE** — two numbers for two different conventions, and they are not
+interchangeable.
+
+> **REGISTERED GUARD — READ BEFORE ANY ANODE-JET ARM.** The cathode slot has a
+> convention key, `cathode_jet_energy_convention`, which fixes whether its
+> `R_E` is read per backscattered particle or as the total reflected energy
+> fraction. **The anode slot has NO such key: it reads `anode_jet_R_E` per
+> particle, unconditionally.** So arming the anode jet with a total-reflected
+> number silently understates the exported energy by a factor `R_N`, and there
+> is nothing in the code to catch it. **Extending the D1 convention key to the
+> anode is REQUIRED before any anode-jet arm is run** — this is a build
+> prerequisite, not a caveat to disclose afterwards.
+
+Note on both jets' arming state: `cathode_neutral_jet` ships **`True`** (folded
+into the defaults at R2a, 2026-08-20), so the cathode pair above is live in
+every shipped run. `anode_neutral_jet` ships `False`. An earlier version of
+this entry said "Both jets default off"; that has been wrong since the R2a
+fold.
+
+**Incidence angle — why the normal-incidence rows are the right ones.** The
+reflection tables are tabulated against angle of incidence, so the choice of
+column has to be justified rather than defaulted. Ions reaching either
+electrode are accelerated through the sheath, whose normal field dominates
+their thermal transverse motion, so they arrive very close to NORMAL: about
+**11° at the cathode** and about **19° at the anode**. Over the tables' 15–30°
+columns `R` rises by no more than ~5 % relative, which is well inside the
+endpoint brackets declared above and is therefore absorbed by them rather than
+carried as a separate term.
 
 **`cathode_jet_energy_convention = "legacy"` — a REPRODUCIBILITY PIN, not a
 physical claim.** The two settings disagree about what `cathode_jet_R_E`
