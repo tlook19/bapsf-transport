@@ -5,9 +5,17 @@ that need params the ladder driver does not expose (close lag, L, etc.),
 kept as a separate file so concurrent sessions editing the shared driver
 and solver are never touched.
 
+The configuration package is named, not accreted: ``--stance NAME`` applies a
+committed stance file (``scripts/stances/NAME.toml``) as the base config, and
+``--extra`` / ``--extra-flag`` still layer on top of it and say so. Naming the
+package is mandatory -- a run either names its stance or acknowledges that it
+has none with ``--no-stance``.
+
 Usage:
-    python scripts/run_m6_point.py --es 1 --sgp 3400 --close-lag 2e-3 \
-        --save-h5 out.h5 [--mn] [--L 8.1e-6] [--extra k=v ...]
+    python scripts/run_m6_point.py --es 1 --stance g1atrim --sgp 9010 \
+        --save-h5 out.h5
+    python scripts/run_m6_point.py --es 1 --no-stance --sgp 3400 \
+        --close-lag 2e-3 --save-h5 out.h5 [--mn] [--L 8.1e-6] [--extra k=v ...]
 """
 
 import argparse
@@ -17,6 +25,7 @@ import numpy as np
 
 from compare_sim1d_es1 import PRODUCTION_NX, run_model
 from run_mechanism_ladder import ES_OPERATING
+from stance_config import available_stances, load_stance
 from cablp.solvers._sim1d.results.io import save_result_hdf5
 from cablp.solvers._sim1d.results.health import summarize_result
 
@@ -24,9 +33,36 @@ from cablp.solvers._sim1d.results.health import summarize_result
 ELECTRON_BIRTH_POLICY = "floor"
 
 
+def _brief_value(value):
+    """Return a short repr of a config value for a one-line console message.
+
+    Per-cell profiles are hundreds of entries long; they report as their type
+    and length so a stance banner stays readable.
+    """
+    shown = repr(value)
+    if len(shown) <= 48:
+        return shown
+    length = getattr(value, "__len__", None)
+    if length is not None:
+        return f"<{type(value).__name__} len={len(value)}>"
+    return shown[:45] + "..."
+
+
 def main(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("--es", type=int, choices=(1, 2, 3), required=True)
+    stance_group = p.add_mutually_exclusive_group()
+    stance_group.add_argument(
+        "--stance", metavar="NAME", default=None,
+        help="committed stance file (scripts/stances/NAME.toml) applied as the "
+             "base config, on top of this driver's own defaults and below "
+             "--nn0-profile-npz / --extra / --extra-flag. Available: "
+             + (", ".join(available_stances()) or "(none committed)"))
+    stance_group.add_argument(
+        "--no-stance", action="store_true",
+        help="acknowledge that this run names no stance and is configured "
+             "entirely by this driver's defaults plus the explicit overrides "
+             "on this command line")
     p.add_argument("--nx", type=int, default=PRODUCTION_NX)
     p.add_argument("--sgp", type=float, required=True)
     p.add_argument("--close-lag", type=float, default=None)
@@ -57,8 +93,10 @@ def main(argv=None):
                         "seed would overwrite the profile), so a shaped run "
                         "also passes --extra-flag neutral_equilibration=false "
                         "-- a stance delta the arm states rather than "
-                        "inherits. Applied BEFORE --extra/--extra-flag, so "
-                        "either can still override any of it")
+                        "inherits. Applied AFTER --stance and BEFORE "
+                        "--extra/--extra-flag, so it overrides a stance's own "
+                        "shaped fill and either of those can still override "
+                        "any of it")
     p.add_argument("--extra", nargs="*", default=(),
                    help="additional k=v param overrides (JSON-parsed values)")
     p.add_argument("--extra-flag", nargs="*", default=(),
@@ -71,6 +109,19 @@ def main(argv=None):
                         "the cap raises RuntimeError and the h5 is lost")
     p.add_argument("--save-h5", required=True)
     args = p.parse_args(argv)
+    # Agent-safety rider: the configuration package a run carries is stated,
+    # never inherited by silence. The mis-configured launch this closes is the
+    # one that reads as a full stance on the command line while quietly
+    # standing on whatever the shared driver dicts happened to hold.
+    if args.stance is None and not args.no_stance:
+        raise SystemExit(
+            "run_m6_point: name the configuration package. Pass "
+            "--stance <name> to run a committed stance file "
+            f"(available: {', '.join(available_stances()) or '(none committed)'})"
+            ", or --no-stance to acknowledge that this run has none and is "
+            "configured by this driver's defaults plus the overrides on this "
+            "command line."
+        )
 
     op = ES_OPERATING[args.es]
     extra = {
@@ -120,6 +171,32 @@ def main(argv=None):
             "neutral_mesh_accommodation": True,
         })
         flags_extra["neutral_momentum"] = True
+    stance = None
+    if args.stance is not None:
+        stance = load_stance(args.stance)
+        superseded = [
+            f"{key}: {_brief_value(extra[key])} -> "
+            f"{_brief_value(value)}"
+            for key, value in sorted(stance.params.items())
+            if key in extra and extra[key] != value
+        ] + [
+            f"flags:{key}: {_brief_value(flags_extra[key])} -> "
+            f"{_brief_value(value)}"
+            for key, value in sorted(stance.flags.items())
+            if key in flags_extra and flags_extra[key] != value
+        ]
+        extra.update(stance.params)
+        flags_extra.update(stance.flags)
+        print(
+            f"stance {stance.name} from {stance.path}: "
+            f"{len(stance.params)} params, {len(stance.flags)} flags"
+        )
+        for line in superseded:
+            print(f"  stance supersedes this driver's default {line}")
+    # Keys this command line supplies above the stance layer, for the
+    # departure report below.
+    cli_supplied = set()
+    cli_supplied_flags = set()
     if args.nn0_profile_npz is not None:
         with np.load(args.nn0_profile_npz, allow_pickle=False) as data:
             if "nn0_profile" not in data:
@@ -139,6 +216,8 @@ def main(argv=None):
             )
         extra["nn0"] = None
         flags_extra["neutral_initial_profile"] = True
+        cli_supplied.update(("nn0", "nn0_profile", "nn0_annulus_profile"))
+        cli_supplied_flags.add("neutral_initial_profile")
         print(f"shaped nn0 from {args.nn0_profile_npz}: {provenance}")
     for kv in args.extra:
         k, v = kv.split("=", 1)
@@ -146,12 +225,46 @@ def main(argv=None):
             extra[k] = json.loads(v)
         except json.JSONDecodeError:
             extra[k] = v
+        cli_supplied.add(k)
     for kv in args.extra_flag:
         k, v = kv.split("=", 1)
         try:
             flags_extra[k] = json.loads(v)
         except json.JSONDecodeError:
             flags_extra[k] = v
+        cli_supplied_flags.add(k)
+    if stance is not None:
+        # Every layer above the stance is reported as a DEPARTURE: a run that
+        # cites a stance by name must not carry unstated overrides on top of
+        # it. Both a changed stance key and a key the stance does not name at
+        # all count -- the second is how the shaped-fill and run-cost keys get
+        # onto an arm.
+        departures = [
+            f"{key}: {_brief_value(stance.params[key])} -> "
+            f"{_brief_value(extra[key])}"
+            for key in sorted(stance.params)
+            if extra[key] != stance.params[key]
+        ] + [
+            f"flags:{key}: {_brief_value(stance.flags[key])} -> "
+            f"{_brief_value(flags_extra[key])}"
+            for key in sorted(stance.flags)
+            if flags_extra[key] != stance.flags[key]
+        ] + [
+            f"{key}: <not in stance> -> {_brief_value(extra[key])}"
+            for key in sorted(cli_supplied)
+            if key in extra and key not in stance.params
+        ] + [
+            f"flags:{key}: <not in stance> -> {_brief_value(flags_extra[key])}"
+            for key in sorted(cli_supplied_flags)
+            if key in flags_extra and key not in stance.flags
+        ]
+        if departures:
+            print(
+                f"WARNING: this run DEPARTS stance {stance.name} -- "
+                f"{len(departures)} override(s) applied on top of it:"
+            )
+            for line in departures:
+                print(f"  WARNING: departs {stance.name} {line}")
 
     result, geometry, params, flags = run_model(
         nx=args.nx, extra=extra,
