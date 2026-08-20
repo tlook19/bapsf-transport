@@ -154,6 +154,22 @@ BASELINE_PARAM_OVERRIDES = {
     # tau_discharge-derived window) so the anchor does NOT track the live ES
     # puff width -- same rule as every pin above.
     "equilibration_gas_puff_on_s": None,
+    # R1 STANCE DECOUPLING (2026-08-20, review ruling): the production splat
+    # above now READS its shared values from the committed stance file
+    # (scripts/stances/g1atrim.toml, via compare_sim1d_es1.PARAM_OVERRIDES).
+    # Every other stance-fed key is already pinned above (C_R, S_gp, V_bank,
+    # equilibration_gas_puff_on_s, the cathode warming pair); these are the
+    # remainder. Until the R2b re-anchor, this golden is SELF-CONTAINED:
+    # every stance-fed value that reaches its config is a literal here, so a
+    # stance edit can never move this anchor -- re-anchoring is a deliberate
+    # recapture event, never a side effect. Each value equals the stance of
+    # record at pin time, so the fixture is bit-exact across this pinning.
+    "S_gp_decay_target": 2000,
+    "b_beam_excitation": 1.4,
+    "beam_deposition_smoothing_cm": 50.0,
+    "heat_flux_limiter_f": 0.1,
+    "source_region_length_cm": 100.0,
+    "source_region_dz_cm": 10.0,
 }
 # input_flags overrides.
 BASELINE_FLAG_OVERRIDES = {
