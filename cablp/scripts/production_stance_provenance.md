@@ -16,8 +16,13 @@ not fold (per-mesh arrays, per-rung operating measurements, provenance-excluded
 and consequence keys — the R2a exception list). Entries below whose key folded
 now describe a **config default**; their provenance (value, class, bar, memo)
 is unchanged by the move, and `config_defaults_provenance.md` carries the
-default-side entry. The golden fixture pins every pre-fold value as a literal
-(`golden_baseline_provenance.md`), so no historical artifact tracks the fold.
+default-side entry. **The golden fixture applies THIS FILE.** R2b recaptured it
+at the stance of record — `default_config()` + this stance + `nx = 60`, minus the
+per-mesh arrays, which cannot travel to the gate's coarse mesh
+(`golden_baseline_provenance.md` records the re-cut). So the fixture no longer
+pins a frozen operating point, and the corollary is load-bearing: **editing a
+scalar in this file breaks the golden until the fixture is recaptured.** That is
+deliberate, and a recapture stays a reviewed, authorized, recorded event.
 
 Analysis memos named below are working files kept alongside these scripts and
 are not tracked in this repository.
@@ -270,10 +275,13 @@ the extra 0.4 approximates the rest of the singlet manifold. It is inert under
 parallel electron heat flux. It combines harmonically (Cowie-McKee) with the
 Braginskii flux at `heat_flux_limiter_exponent = 1`, which is already the
 config default. This coefficient is a bracket, not a measurement. *(Split at
-R2a, 2026-08-20: the FLAG `electron_heat_flux_limit` folded to a config
-default of `True`, but the VALUE stays stance-side pending R2b — note the
-resulting shipped default is limiter ON at the config's `f = 0.3` while
-production runs 0.1 from the stance; `config.py` states this at the flag.)*
+R2a, 2026-08-20 — the FLAG `electron_heat_flux_limit` folded to a config
+default of `True` while the VALUE stayed stance-side — and rejoined at R2b the
+same day: `heat_flux_limiter_f = 0.1` is now the config default too, so the
+stance file names neither. It was held back from R2a on the expectation that
+folding it would move the golden; it does not — the R1 literal pin had already
+made the fixture immune, verified byte-identical. See
+`config_defaults_provenance.md`.)*
 
 **`beam_deposition_smoothing_cm = 50.0`** — **ASSUMED**, nominally a physical
 straggling width. The CSDA range profile is sharp on the mesh scale; smoothing

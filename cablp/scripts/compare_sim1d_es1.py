@@ -81,12 +81,13 @@ OVERLAY = _SCRIPTS / "data" / "es1_sim1d_overlay.npz"
 # different mesh raises at construction. Runs that want the whole package take
 # it whole -- `run_m6_point.py --stance g1atrim`.
 #
-# NB the golden fixture splats this dict (baseline_sim1d.BASELINE_PARAM_OVERRIDES)
-# and pins EVERY stance-fed key back to a literal (R1 stance decoupling,
-# 2026-08-20), so until the R2b re-anchor the golden is self-contained: a
-# stance edit changes the scorer's runs and never the golden. Re-anchoring the
-# golden onto a moved stance is a deliberate recapture event, never a side
-# effect of editing the stance file.
+# NB the golden fixture no longer reads THIS DICT (R2b re-anchor, 2026-08-20):
+# baseline_sim1d.py imports nothing from here. It does read the STANCE FILE,
+# directly, because the golden is now captured at the stance of record. So the
+# standing warning runs the other way from the R1 era: editing
+# scripts/stances/g1atrim.toml changes the scorer's runs AND breaks the golden
+# until the fixture is recaptured. That is deliberate -- see
+# scripts/golden_baseline_provenance.md -- and a recapture is a reviewed event.
 PRODUCTION_STANCE = "g1atrim"
 _STANCE = load_stance(PRODUCTION_STANCE).params
 
@@ -139,9 +140,9 @@ PARAM_OVERRIDES = {
     #   jackknife bar (6.7 +- 2.5 uH) -- it has no evidence behind it, but it is
     #   not excluded. L is inert for every sigma-scored row; consequences are
     #   confined to the unscored reported fingerprints (t90 +0.05..0.11 ms,
-    #   ignition +0.02..0.07 ms, both toward the measurement). This restores the
-    #   value the golden fixture has pinned all along (baseline_sim1d.py:104),
-    #   so the golden is bit-exact across the change.
+    #   ignition +0.02..0.07 ms, both toward the measurement). This restored the
+    #   value the golden fixture pinned at the time, so the golden was bit-exact
+    #   across the change; 8.1e-6 is the config default now.
     "V_bank": 177.843,
     "R_comp": 7.2244e-3,
     "L_parasitic_H": 8.1e-6,
@@ -169,8 +170,8 @@ PARAM_OVERRIDES = {
     # RETIRED in favour of the R4.3 Phelps moment operator
     # (ion_neutral_moment_closure, now the config.py production default;
     # first-principles drag+CX+thermal, no knob). The legacy drag keys are
-    # DEPRECATED and no longer set here; the historical golden pins them back
-    # (baseline_sim1d BASELINE_PARAM_OVERRIDES) to stay bit-exact.
+    # DEPRECATED and no longer set here, nor in the golden, which has run the
+    # shipped moment-closure defaults since the R2b re-anchor.
     # ADAS GCR rates (see cablp/vars/adas/README.md): effective ionization/
     # recombination and radiation-only cooling, consistent with the separate
     # ionization-cost term. b_Q* = 1 is meaningful under this model.
@@ -229,10 +230,10 @@ PARAM_OVERRIDES = {
     # scale; this spreads it over the physical straggling width so the
     # deposited power does not follow cell edges.
     "beam_deposition_smoothing_cm": _STANCE["beam_deposition_smoothing_cm"],
-    # Free-streaming cap on the parallel electron heat flux (the flag below).
-    # It combines harmonically (Cowie-McKee) with the Braginskii flux at
-    # heat_flux_limiter_exponent=1, which is already the config default.
-    "heat_flux_limiter_f": _STANCE["heat_flux_limiter_f"],
+    # NB the free-streaming cap on the parallel electron heat flux is NOT set
+    # here any more: heat_flux_limiter_f folded into the config defaults at
+    # R2b, joining the flag that reads it (folded at R2a) and the exponent that
+    # shapes it (a config default throughout).
     # NB the fixed-cell-size source region (7a) is NOT set here any more: the
     # flag and both source_region_* values folded into the config defaults at
     # R2a, and the three are presence-gated against each other, so naming any
@@ -247,8 +248,8 @@ FLAG_OVERRIDES = {
     # geometry replaced the built-in flare with per-cell prescribed radii, and
     # the solver refuses the two together. It comes with the stance.
     # NB electron_heat_flux_limit is NOT set here any more either: the flag
-    # folded into the config defaults at R2a. Its COEFFICIENT still is, above,
-    # because heat_flux_limiter_f rides the R2b re-anchor.
+    # folded into the config defaults at R2a and its coefficient at R2b, so
+    # neither namespace names the limiter.
 }
 
 

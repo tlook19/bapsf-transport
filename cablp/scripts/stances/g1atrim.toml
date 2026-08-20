@@ -355,12 +355,14 @@ S_gp = 9010.0
 S_gp_decay_target = 2000
 equilibration_gas_puff_on_s = 0.025
 
-# BEAM DEPOSITION, ANOMALOUS HEATING, AND THE HEAT-FLUX LIMITER.
+# BEAM DEPOSITION AND ANOMALOUS HEATING. The heat-flux limiter is no longer
+# named here: both the electron_heat_flux_limit flag and its coefficient
+# heat_flux_limiter_f are config defaults (the flag folded at R2a, the
+# coefficient at R2b).
 b_beam_excitation = 1.4
 beam_deposition_smoothing_cm = 50.0
 heating_anomalous_transport = "tail_walk"
 heating_anomalous_tail_ionization = "on"
-heat_flux_limiter_f = 0.1
 Te_birth_ionization = "local"
 
 # RUN COST. Not physics: the afterglow tail length and the max-steps

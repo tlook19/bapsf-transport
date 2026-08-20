@@ -1,160 +1,175 @@
 # Provenance of the golden baseline pins (`baseline_sim1d.BASELINE_*_OVERRIDES`)
 
-`scripts/baseline_sim1d.py` builds the configuration behind the committed
-regression fixture `scripts/baselines/production_discharge.npz`. It layers its
-own pins on top of the production stance it imports, so this note only covers
-what it changes. For the imported layer see
-`scripts/production_stance_provenance.md`; for parameter meanings see the
-docstrings in `cablp/solvers/_sim1d/core/config.py`, and for the shipped
-defaults see `cablp/solvers/_sim1d/core/config_defaults_provenance.md`.
+**Recaptured 2026-08-20 (thread-24 R2b, reviewed-recapture protocol).** The
+committed regression fixture `scripts/baselines/production_discharge.npz` is
+captured at **the stance of record, re-cut to the gate mesh** — `default_config()`
+plus the committed stance file `scripts/stances/g1atrim.toml`, minus that
+stance's mesh-sized package, plus `nx = 60`.
 
-## What kind of configuration this is
+**The previous fixture is retired.** It held the 2026-07-22 operating point
+behind ~30 explicit pins and is reproducible only at the anchor tag
+`pre-refactor-2026-08-20`, with the environment lockfile recorded against that
+tag. Its pin table is in this file's git history; do not reconstruct it here.
 
-**The golden is a regression scaffold, not a physical claim.** Almost every pin
-below exists for one reason: the committed fixture was captured at a particular
-historical configuration, and the anchor must not drift when a live default
-moves. These pins are therefore neither MEASURED nor FITTED — they are
-*recorded historical settings*, and their provenance is "this is what the
-fixture ran at".
+`scripts/baseline_sim1d.py` builds the configuration. It imports no campaign
+driver — `compare_sim1d_es1` and `run_mechanism_ladder` stay unimported — and
+reads the stance through `stance_config`, the loader for that committed
+artifact. For parameter meanings see the docstrings in
+`cablp/solvers/_sim1d/core/config.py`; for the stance values and their
+provenance see `production_stance_provenance.md`; for everything inherited from
+the defaults see `cablp/solvers/_sim1d/core/config_defaults_provenance.md`.
 
-Two rules follow, and they are the whole point of the file:
+## Why the stance, and not the shipped defaults
 
-- **The fixture is never recaptured to make a changed default look unchanged.**
-  A repaired physical default gets a pin here, not a new NPZ.
-- **A physical default must never be quietly changed to make an old result
-  reproduce.** If a default moves, the pin records the old value explicitly.
+**The shipped defaults are NOT the production package.** An earlier draft of
+this note said they were, on the strength of the R2a/R2b fold-ins. That was
+wrong, and the correction matters: those folds moved the *neutral closure
+family* and the *measured machine* into `default_config()`, but the **operating
+point stayed in the stance file** — the effective Richardson constant, the bank
+voltage, the cathode thermal pair, the emission profile, the puff level and its
+25 ms equilibration window, the afterglow length.
 
-`scripts/baselines/` is off limits to routine work.
+Captured at bare defaults, the fixture gated an **unrepresentative corner**:
+breakdown was marginal, the anode–cathode gap never filled, and the anode sheath
+power drained a near-empty flanking cell on a ~100 ns e-fold. The adaptive dt was
+consequently pinned near `3e-8 s` by the `surface_loss` limiter and never
+recovered, which is why that draft needed a 40,000-step cost cap and could only
+reach `t = 1.9e-3 s`. **The stiffness was a symptom of the wrong configuration,
+not a property of the model.** On the stance the discharge ignites properly, the
+limiter relaxes as the column fills, and the full cycle is affordable.
 
-## The one pin that is not historical
+**The trade this makes, stated plainly: EDITING THE STANCE FILE BREAKS THIS GATE
+until the fixture is recaptured.** That is intended — the fixture tracks the
+configuration the campaign actually runs. It is not a licence to recapture
+casually; a recapture stays a reviewed, authorized, recorded event.
 
-**`L_parasitic_H = 8.1e-6`.** This fixture has pinned 8.1e-6 since it was
-captured, which is why it is bit-exact across the circuit correction that moved
-the production stance from 6.6e-6 to 8.1e-6. It was the pre-regression config
-default, and the fixture carried it through the interval in which the config
-default had been overwritten to 6.6e-6 by an unrelated hunk. The production
-stance now finally matches it. Value class: DERIVED from measurement, bracket
-7.6-8.4 uH — see the defaults provenance note for the two instruments.
+## The re-cut: what could not travel to `nx = 60`
 
-## Historical pins, by reason
+Four stance params are per-cell arrays sized to the stance's own **280-cell**
+mesh (1 plenum + 5 gap + 5 fixed source + 268 far column + 1 collector). They
+cannot be applied at `nx = 60` (a 72-cell mesh), and they are **not resampled**:
 
-**Resolution.** `nx = 60` — the value the fixture was captured at (the config
-default at capture time). The campaign drivers promoted their own default to
-240; the gate must not inherit it, because quadrupling the cell count would
-multiply every reviewer gate's runtime.
+| dropped | why not interpolated |
+|---|---|
+| `plasma_radius_profile_cm`, `machine_radius_profile_cm` | Built offline by `scripts/g1_build_profiles.py` from a measured field census. The vessel profile is a **staircase** (40 / 50 / 76.2 cm bores plus annulus-equivalent radii over the cathode box); interpolating it would smear the steps into a bore the machine does not have, and the cathode-box annulus areas are exact measured quantities. |
+| `nn0_profile`, `nn0_annulus_profile` | An equilibrated 4.5 ms ballistic foot computed **for that mesh**. Resampling changes the neutral inventory and the near-source structure, so the result is a new initial condition, not the stance's. |
 
-**Historical checkpoint seed.** `Te0 = 0.1`, `Ti0 = 0.1`, `Ti_floor = 0.1`. The
-live defaults are deliberately different.
+The package is dropped **whole**, together with the two flags that require it
+(`prescribed_area_geometry`, `neutral_initial_profile`). Half-applying it — a
+prescribed geometry carrying a default fill — would be a hybrid corner of exactly
+the kind this re-anchor exists to eliminate.
 
-**Pre-repair physics, pinned to their old values** so the trajectory stays
-bit-exact while the live defaults carry the repairs:
+**Everything mesh-independent still travels**, which is every scalar
+operating-point key plus the baffles (`neutral_baffle_positions_cm` /
+`_clear_radii_cm` are physical cm, not per-cell, so `neutral_baffles` stays on).
+Because the shaped foot is gone and the solver refuses a profile and an
+equilibration together, `neutral_equilibration` returns to `True` — the
+equilibrated seed refills the machine at the stance's own 25 ms puff window,
+which is the scalar substitute for the foot and is why the gap fills.
 
-| key | pinned | live default |
+**What the gate therefore does NOT exercise:** the measured flare, the vessel
+staircase, and the shaped initial fill. Those live in the campaign arms, not
+here. The fixture is not bit-comparable to any campaign arm and was never meant
+to be.
+
+## The pin table
+
+| pin | value | why it is run shape, not physics |
 |---|---|---|
-| `ionization_birth_energy_model` | `"legacy"` | `"conservative"` |
-| `hyperbolic_wave_speed` | `"isothermal"` | `"adiabatic"` |
-| `Te_birth_ionization` | `"local"` | (inert under `"conservative"`) |
-| `hyperbolic_energy_consistent` | `False` | `True` |
-| `characteristic_boundary` | `False` | `True` |
-| `ion_neutral_moment_closure` | `False` | `True` |
-| `beam_anode_interception` | `False` | `True` |
-| `front_flux` | `True` | `False` |
-| `active_plasma_topology`, `raw_stage_validation` | `False` | `True` |
+| `nx` | `60` | Axial resolution of the far column: a pure cost knob. The campaign runs 268; a reviewer pays for this gate on the candidate branch and again post-merge. Pinned rather than inherited so a future default-`nx` change cannot multiply every gate's runtime silently. |
+| `max_steps_action` | `"raise"` | Deliberately overrides the stance's `"stop"`. For a campaign arm a step cap is a budget and a truncated arm is still data; here the cap is a tripwire, and tripping it should be loud. |
+| `max_steps` (run kwarg) | `150000` | **A tripwire, not a run length** — ~2× the measured 75,615 steps. It exists so a change that quietly destroys the timestep fails fast instead of running for hours. If it fires, the question is what happened to `dt`, not what happened to the trajectory. Sized at 2× deliberately: a backstop with a few percent of headroom is not a backstop, it is a second cost cap waiting to truncate the gate. |
 
-**Superseded ion-neutral closure**, pinned because the fixture ran the ad-hoc
-drag stance that the Phelps moment operator replaced: `b_ion_neutral_drag = 0.5`
-(a FITTED slip constant), `ion_neutral_drag_model = "constant"`,
-`sigma_in_model = "cx_derived"`, `b_ion_neutral_thermalization = 1.0`,
-`ion_neutral_thermalization = True`.
+`BASELINE_FLAG_OVERRIDES` carries one entry, `neutral_equilibration = True`, for
+the reason given in the re-cut section above.
 
-**Neutral flow and geometry as captured:** `S_pump_L = 2000` (the live default
-now matches `S_pump_R`), `gas_puff_profile = "cell"` (live default
-`"cosine_pipe"`), `equilibration_gas_puff_on_s = None` (so the equilibration
-inherits `tau_discharge`, rather than the measured 25 ms puff width the
-production stance adopted), and `Rcs = Lcs = Rsup = 0.0` with
-`end_expansion_geometry = False` — the fixture was captured at the plain
-geometry defaults, 67 cells. `build_baseline_config` pops the inherited
-`end_expansion_*` parameters when the flag is off, because they are
-presence-gated and would otherwise raise.
+`t_end`, `dt` and `operator_split` are `None`, i.e. the solver's own run
+defaults: adaptive dt, the shipped operator split, and the dynamic
+current-trigger end time — **which the fixture now reaches**, so it covers the
+whole cycle rather than a truncated foot.
 
-**Anti-drift pins on default-off closures.** `beam_product_transport = "local"`
-and `heating_anomalous_transport = "local"` are already the config defaults;
-they are pinned anyway so a future promotion to `"nonlocal"` / `"tail_walk"`
-cannot silently move the anchor.
+### What the fixture costs and covers (measured at capture)
 
-**Stance-decoupling pins (R1, 2026-08-20).** Six values the golden previously
-inherited through `compare_sim1d_es1`'s override dicts became literal pins when
-those dicts were replaced by the stance file, so the stance file cannot move
-any golden value: `S_gp_decay_target = 2000`, `b_beam_excitation = 1.4`,
-`beam_deposition_smoothing_cm = 50.0`, `heat_flux_limiter_f = 0.1`,
-`source_region_length_cm = 100.0`, `source_region_dz_cm = 10.0`. The resolved
-golden config was verified byte-identical across the change.
+| quantity | value |
+|---|---|
+| steps | 75,615 |
+| wall, single lane | 914.6 s (~15.2 min) |
+| saves | 2,634 |
+| `final_time` | 2.632261e-02 s (the dynamic `t_end`, reached) |
+| trajectory | `y[2634, 576]` = 8 fields × 72 cells |
+| phase census (saves) | 13 `pre_breakdown`, 20 `breakdown`, 2000 `main_discharge`, 600 `afterglow`, 1 `post_afterglow` |
 
-**Fold-in pins (R2a, 2026-08-20).** The g1atrim production package became the
-shipped defaults; the fixture holds the pre-fold values as literals. Eleven
-historical pins (old default ← what the live default became):
+**The gate is ~2× the wall time of the fixture it replaced** (~8–9 min), not the
+same — the pre-capture projection of 40–45k steps was taken from the
+early-discharge `dt` (6.4e-7 at t = 1.4e-3 s) and the timestep does not hold
+that value through the plateau; the measured mean is 3.5e-7. What the extra cost
+buys is the whole cycle at a representative operating point, including the
+plateau and the afterglow, instead of 8 % of the discharge at a corner the
+campaign never runs. Flagged rather than silently absorbed: a reviewer runs this
+twice per merge.
 
-| key | pinned (historical) | live default (post-fold) |
-|---|---|---|
-| `neutral_momentum` | `False` | `True` |
-| `neutral_two_zone` | `False` | `True` |
-| `neutral_energy` | `False` | `True` |
-| `neutral_hot_internal_wall` | `False` | `True` |
-| `cathode_neutral_jet` | `False` | `True` |
-| `cathode_jet_surface_debit` | `False` | `True` |
-| `cathode_jet_energy_convention` | `"legacy"` | `"total_reflected"` |
-| `Lm` | `2000.0` | `2117.8` |
-| `plenum_length_cm` | `100.0` | `166.0` |
-| `collector_length_cm` | `100.0` | `7.8` |
-| `gas_puff_z_cm` | `60.0` | `86.3` |
+## Disclosed closure stress (diagnosis side-finding, not fixed here)
 
-Plus two **inherited values written as literals** (they equal both the old and
-new resolved value — self-containment only, so removing the driver dicts could
-not silently move them): `source_fixed_grid = True`,
-`electron_heat_flux_limit = True`. The `production_golden` snapshot digest was
-verified unchanged across the whole fold.
-
-## Values the fixture shares with the machine
-
-A few pins are real quantities rather than historical accidents, taken from the
-per-setting operating points in `run_mechanism_ladder.ES_OPERATING` (see
-`scripts/ladder_operating_provenance.md`):
-
-- `V_bank` — the MEASURED pre-shot open-circuit bank voltage.
-- `T_s` and `cathode_Ts_base_K` — the MEASURED standby surface temperature.
-
-The remaining cathode pins (`phi_wf = 2.869`, `cathode_phiwf_clean_eV = 2.809`,
-`cathode_cleaning_sigma_cm2 = 3.5e-16`, `cathode_cleaning_E_th_eV = 20.0`,
-`cathode_heat_capacity_J_per_K = 120.0`, `cathode_conduction_W_per_K = 1200.0`,
-`cathode_emissivity = 0.7`, `S_gp = 3400`, `gas_puff_mode = "square"`,
-`cathode_sample_smoothing = "presheath"`, `neutral_exchange_model = "knudsen"`)
-are the values the fixture was captured with; their provenance classes are in
-`cablp/solvers/_sim1d/core/config_defaults_provenance.md`. Note
-`cathode_conduction_W_per_K` here is the capture-time value and differs from the
-production stance's fitted one.
-
-`BASELINE_RUN_KWARGS` are all `None`, i.e. the solver's own run defaults:
-adaptive dt, dynamic current-trigger end time, unlimited steps.
+The anode sheath power is booked **volumetrically into two flanking cells**, and
+that booking diverges as those cells empty — the ~100 ns e-fold seen at bare
+defaults. It is visible only OFF the stance, where the gap never fills; on the
+stance the cells carry plasma and the term is well behaved. Recorded as a known
+closure stress, deliberately not addressed by this pass.
 
 ## Recapture record
 
+**2026-08-20 — R2b re-anchor onto the stance of record (AUTHORIZED recapture,
+Tom, 2026-08-20; thread-24 R2b, GOLDEN-AT-STANCE ratified after the dt-collapse
+diagnosis).** The fixture moved from the ~30-pin 2026-07-22 operating point to
+the stance re-cut at `nx = 60`. This is a wholesale change of configuration, not
+a repair: the new and old trajectories are unrelated and no comparison between
+them is meaningful. The pass folded `heat_flux_limiter_f` (`0.3 -> 0.1`) into the
+shipped defaults, removed every campaign-driver import from `baseline_sim1d.py`,
+replaced the pin table, and recaptured twice from clean separate processes with
+byte-identical results.
+
+Health of the recaptured trajectory, as a check that the stance does what the
+diagnosis said it would: `Te_max = 28.9 eV`, `Ti_max = 8.36 eV`,
+`n_max = 2.14e13 cm^-3`, finite throughout. The bare-defaults draft reached
+`Te_max = 474 eV` — the flanking-cell runaway the diagnosis identified.
+
+*An intermediate draft of this pass captured at bare `default_config()` and was
+corrected before merge.* It is recorded here because the failure is instructive:
+"the folds made the defaults the production package" was a plausible reading of
+the R2a work and it was false, and the fixture it produced looked healthy —
+`exact=True` on both paths, byte-identical captures — while gating a corner the
+campaign never runs. Bit-exactness gates certify reproducibility, not
+representativeness; nothing in the gate could have caught this, and the
+dt-collapse diagnosis is what did.
+
+*A latent sidecar bug this pass surfaced and fixed:* `capture()` derived the
+sidecar's `cells` as `y.shape[1] // 5`, assuming five packed fields per cell.
+That divisor is only right for the cold single-zone neutral layout the retired
+fixture ran; under the shipped closure the packing is EIGHT fields. `run_baseline`
+now reports the cell count from the solver's own geometry and the sidecar records
+`fields_per_cell` alongside it, so no fixed divisor is assumed.
+
+*On the `heat_flux_limiter_f` fold:* it was held back from R2a on the expectation
+that folding it would move the golden. It would not have — the R1
+stance-decoupling pass had already pinned `0.1` as a literal in
+`BASELINE_PARAM_OVERRIDES`, which made the old fixture immune to that default.
+Verified: the resolved OLD golden config is byte-identical across the fold.
+
 **2026-08-09 — returned-root sheath-ceiling fix (AUTHORIZED recapture, Tom,
-2026-08-09).** The current-driven sheath solve enforced `cathode_phi_c_cap_V`
-only at the bracket ladder's doubling grid points, never on the root it
-returned; the fixture's own ignition foot contained 34 such escaped solves
-(net phi_c up to 1.9669× the 1000 V cap — 1966.89 V returned at the cap),
-i.e. the committed trajectory certified the defect. The fix (commit
-`8a09363`, this branch) tests the located J-root against the cap and routes
-an at-or-above-cap root through the pre-existing ceiling branch, so the foot
-solves move BY DESIGN and both goldens fail against the old fixture with
-`max_rel=2.000e+00`, `time_max_abs=1.113e-06 s`, character-identical on the
-pure and compiled paths. Recaptured with the script's own
-`--capture` at the fixed code. **The pin set is unchanged:** zero
-added, removed, or changed keys in `BASELINE_PARAM_OVERRIDES` /
-`BASELINE_FLAG_OVERRIDES` (the fix touches neither `baseline_sim1d.py` nor
-`core/config.py`), and the sidecar params/flags diff against the previous
-capture shows zero changed values — the 18 param keys and 1 flag key newly
-recorded are config defaults added since the 2026-08-03 capture, already in
-effect for every verify since (verify rebuilds the config from live code),
-recorded at their unchanged live defaults. saves stays 2545, cells stays 72;
-steps 41054 → 40975 on the corrected foot.
+2026-08-09).** *Applies to the retired fixture, retained as record.* The
+current-driven sheath solve enforced `cathode_phi_c_cap_V` only at the bracket
+ladder's doubling grid points, never on the root it returned; the fixture's own
+ignition foot contained 34 such escaped solves (net phi_c up to 1.9669× the
+1000 V cap — 1966.89 V returned at the cap), i.e. the committed trajectory
+certified the defect. The fix (commit `8a09363`) tests the located J-root
+against the cap and routes an at-or-above-cap root through the pre-existing
+ceiling branch, so the foot solves moved BY DESIGN and both goldens failed
+against the old fixture with `max_rel=2.000e+00`,
+`time_max_abs=1.113e-06 s`, character-identical on the pure and compiled paths.
+Recaptured with the script's own `--capture` at the fixed code. The pin set was
+unchanged: zero added, removed, or changed keys, and the sidecar params/flags
+diff against the previous capture showed zero changed values — the 18 param keys
+and 1 flag key newly recorded were config defaults added since the 2026-08-03
+capture, already in effect for every verify since, recorded at their unchanged
+live defaults. saves stayed 2545, cells stayed 72; steps 41054 → 40975 on the
+corrected foot.

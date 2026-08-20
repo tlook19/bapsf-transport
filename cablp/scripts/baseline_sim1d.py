@@ -1,19 +1,38 @@
-"""Golden baseline capture/verify for the 1D source-boundary redesign.
+"""Golden baseline capture/verify for LAPDSim1D.
 
 This is the production reversibility guarantee: a committed reference trajectory
 plus a checker that re-runs the solver and asserts bit-exact reproduction. Every
 change under ``_sim1d`` must keep ``--verify`` green without recapture.
 
-The baseline config is the PRODUCTION configuration
-(2026-07-22): current-driven cathode + resolved boundaries + ADAS rates +
-knudsen exchange + the measured square fueling waveform + the M6 candidate
-constants, IMPORTED from the campaign drivers (compare_sim1d_es1 /
-run_mechanism_ladder) so the gate cannot drift from the production stance.
-The pre-D1 legacy fixture is retained under
-``baselines/legacy-final-2026-07-22/`` as a pinned historical scaffold. The
-tag of the same name is retired, so the old 0D results are deliberately no
-longer tag-reproducible; the anchor of record is ``minimal-model-2026-08-03``
-(plus env lockfiles). A re-baseline stays an explicit, reviewed step.
+**The baseline config is ``default_config()`` + the committed stance file
+(``scripts/stances/g1atrim.toml``) + ``nx = 60``** -- GOLDEN-AT-STANCE, ratified
+2026-08-20. The stance is applied minus its mesh-sized package; see the re-cut
+note at ``STANCE_MESH_SIZED_PARAMS`` for exactly what is dropped and why.
+
+**The shipped defaults are NOT the production package**, and an earlier draft of
+this file said they were. The R2a/R2b folds moved the neutral closure family and
+the measured machine into ``default_config()``, but the OPERATING POINT stayed in
+the stance file. Captured at bare defaults the fixture gated an unrepresentative
+corner -- marginal breakdown, an anode-cathode gap that never filled, and an
+anode sheath draining a near-empty flanking cell on a ~100 ns e-fold.
+
+**Consequence of anchoring on the stance, stated plainly: EDITING THE STANCE FILE
+BREAKS THIS GATE until the fixture is recaptured.** That is the intended
+trade -- the fixture tracks the configuration the campaign actually runs, and the
+price is that a stance edit is now a recapture event. It is not a licence to
+recapture casually: a recapture is reviewed, authorized, and recorded in
+``golden_baseline_provenance.md``.
+
+**No campaign DRIVER is imported.** ``compare_sim1d_es1`` and
+``run_mechanism_ladder`` stay unimported, so their override dicts cannot reach
+this anchor; the one ``scripts/`` import is ``stance_config``, the loader for the
+committed stance artifact.
+
+The retired fixture -- the ~30-pin table holding the 2026-07-22 operating
+point -- is reproducible only at the tag ``pre-refactor-2026-08-20`` with its
+environment lockfile; its pin table is in this file's git history. The pre-D1
+legacy fixture under ``baselines/legacy-final-2026-07-22/`` is likewise a
+pinned historical scaffold whose tag is retired.
 
 Usage::
 
@@ -47,243 +66,170 @@ from cablp.solvers._sim1d import (
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_BASELINE = SCRIPT_DIR / "baselines" / "production_discharge.npz"
 
-# --- Baseline config: the production stance, imported (no drift) -----------
+# The stance loader, for the committed stance FILE. This is the module's only
+# scripts/ import and it is deliberate: `stance_config` is a small loader for a
+# committed artifact, not a campaign driver whose dicts drift. The drivers
+# (`compare_sim1d_es1`, `run_mechanism_ladder`) stay unimported.
 sys.path.insert(0, str(SCRIPT_DIR))
-from compare_sim1d_es1 import (  # noqa: E402
-    FLAG_OVERRIDES as PRODUCTION_FLAG_OVERRIDES,
-    PARAM_OVERRIDES as PRODUCTION_PARAM_OVERRIDES,
-)
-from run_mechanism_ladder import ES_OPERATING  # noqa: E402
+from stance_config import load_stance  # noqa: E402
 
-# The M6 candidate constants (run_m6_point.py, ES1 rung): square waveform at
-# sq3400, fitted loop inductance, drive tier, frozen M5a' surface tier,
-# presheath sample smoothing.
+# --- Baseline config: the stance of record, re-cut to the gate mesh --------
+# GOLDEN-AT-STANCE (ratified 2026-08-20). The config is
+# ``default_config()`` + the committed stance file + ``nx = 60``.
+#
+# Why the stance and not the bare defaults: the shipped defaults are NOT the
+# production package. The R2a/R2b folds moved the closure family and the
+# measured machine into the defaults, but the OPERATING POINT stayed in the
+# stance file -- the emission constant, the bank voltage, the cathode thermal
+# pair, the puff level and its equilibration window. Captured at bare defaults
+# this fixture gated an unrepresentative corner: breakdown was marginal, the
+# anode-cathode gap never filled, and the anode sheath drained a near-empty
+# flanking cell on a ~100 ns e-fold. The stance is what makes the discharge
+# behave like the machine.
+PRODUCTION_STANCE = "g1atrim"
+
+# THE RE-CUT. Four stance params are per-cell arrays sized to the stance's own
+# 280-cell mesh (1 plenum + 5 gap + 5 fixed source + 268 far column + 1
+# collector). They cannot travel to nx=60, and they are NOT resampled here:
+#
+#   * the two radius profiles are built offline by scripts/g1_build_profiles.py
+#     from a measured field census, and the vessel profile is a STAIRCASE whose
+#     steps interpolation would smear into a bore the machine does not have;
+#   * the two nn0 profiles are an equilibrated 4.5 ms foot computed for that
+#     mesh -- resampling them changes the neutral inventory and the near-source
+#     structure, so it is a new initial condition, not the stance's.
+#
+# The package is therefore dropped WHOLE, with the two flags that require it,
+# rather than half-applied: a prescribed geometry carrying a default fill would
+# be a hybrid corner of exactly the kind this re-anchor exists to stop being.
+# Everything that is mesh-independent still travels, which is every scalar
+# operating-point key plus the baffles (whose arrays are physical cm, not
+# per-cell). What the gate loses is the measured flare, the vessel staircase
+# and the shaped foot; what it keeps is the operating point.
+STANCE_MESH_SIZED_PARAMS = (
+    "plasma_radius_profile_cm",
+    "machine_radius_profile_cm",
+    "nn0_profile",
+    "nn0_annulus_profile",
+)
+STANCE_MESH_SIZED_FLAGS = (
+    "prescribed_area_geometry",
+    "neutral_initial_profile",
+)
+
 BASELINE_PARAM_OVERRIDES = {
-    **PRODUCTION_PARAM_OVERRIDES,
-    # Axial resolution PINNED (stance promotion, 2026-07-27). The campaign
-    # drivers promoted their default nx to 240 (compare_sim1d_es1.PRODUCTION_NX,
-    # run_m6_point --nx); this gate must NOT inherit it. The golden is a
-    # regression scaffold, not a production claim, and quadrupling the cell
-    # count would multiply every reviewer gate's runtime. 60 is the value this
-    # fixture was captured at (config default at capture time) -- pinned here
-    # explicitly so a future config.py nx change cannot move it either.
+    # Axial resolution -- the one run-shape pin. The campaign runs 268 far-column
+    # cells; this gate runs the coarse mesh because a reviewer pays for it on the
+    # candidate branch and again post-merge. Pinned rather than inherited so a
+    # future default-nx change cannot multiply that cost silently.
+    #
     "nx": 60,
-    # Historical checkpoint seed. The repaired live defaults are intentionally
-    # different; this unchanged fixture remains an off-path regression anchor.
-    "Te0": 0.1,
-    "Ti0": 0.1,
-    "V_bank": ES_OPERATING[1]["V_bank"],
-    "cathode_solver_model": "current_driven",
-    "beam_deposition_model": "csda",
-    "beam_anomalous_model": "quasilinear",
-    # WP-D product transport: the fixture was captured with local (birth-cell)
-    # product deposition. Pin it so a future default promotion to "nonlocal"
-    # cannot silently move this anchor (same rule as Te_birth_ionization above).
-    "beam_product_transport": "local",
-    # WP-E QL heating locality: same rule as beam_product_transport above --
-    # the fixture banks the anomalous drag locally; pin it so a future default
-    # promotion to "tail_walk" cannot silently move this anchor.
-    "heating_anomalous_transport": "local",
-    "cathode_emission_profile": "gaussian",
-    "cathode_warming_model": "power_balance",
-    "T_s": ES_OPERATING[1]["Ts_standby_K"],
-    "cathode_Ts_base_K": ES_OPERATING[1]["Ts_standby_K"],
-    "cathode_heat_capacity_J_per_K": 120.0,
-    "cathode_conduction_W_per_K": 1200.0,
-    "cathode_emissivity": 0.7,
-    # The fixture inherits 14.25 through the production splat above -- NOT the
-    # 29.0 config default. Pinned now because the L2 arm-4 recalibration will
-    # move the production value; the pin equals what is inherited today, so the
-    # anchor stays bit-exact across that move.
-    "C_R": 14.25,
-    "phi_wf": 2.869,
-    "cathode_surface_model": "ads_des",
-    "cathode_phiwf_clean_eV": 2.809,
-    "cathode_cleaning_sigma_cm2": 3.5e-16,
-    "cathode_cleaning_E_th_eV": 20.0,
-    # The committed fixture records "local". Pin that historical stance
-    # explicitly; R1e must not silently change a physical default to make an
-    # old result look like a floor-birth run.
-    "Te_birth_ionization": "local",
-    "gas_puff_mode": "square",
-    "S_gp": 3400,
-    "L_parasitic_H": 8.1e-6,
-    "cathode_sample_smoothing": "presheath",
-    "neutral_exchange_model": "knudsen",
-    # R5 STANCE FLIP (2026-07-25): the production defaults moved to conservative
-    # ionization birth + the Phelps ion-neutral operator. Pin the historical
-    # legacy stance (the ad-hoc constant-0.5 / cx_derived drag + thermalization,
-    # now removed from the ES production config) so this checkpoint stays
-    # bit-exact.
-    "ionization_birth_energy_model": "legacy",
-    "b_ion_neutral_drag": 0.5,
-    "ion_neutral_drag_model": "constant",
-    "sigma_in_model": "cx_derived",
-    "b_ion_neutral_thermalization": 1.0,
-    # R5 STANCE FLIP part 2 (2026-07-25): the config walkthrough flipped more
-    # live defaults. Pin every one the historical fixture ran at its OLD default
-    # (and that neither PRODUCTION_PARAM_OVERRIDES nor the pins above cover) so
-    # the anchor stays bit-exact:
-    "Ti_floor": 0.1,                       # default relaxed to 300 K (0.02585)
-    "S_pump_L": 2000,                      # default now matches R (4000)
-    "gas_puff_profile": "cell",            # default now "cosine_pipe"
-    "hyperbolic_wave_speed": "isothermal",  # default now "adiabatic" (A3)
-    # R5 ES1 tuning pass (2026-07-26): the ES production config
-    # (PRODUCTION_PARAM_OVERRIDES, inherited above) gained the end-expansion
-    # machine geometry (Rcs=40/Lcs=25/Rsup=0 + end_expansion_geometry). The
-    # historical golden was captured at the geometry_defaults (Rcs=Lcs=Rsup=0,
-    # no end-expansion, 67 cells); pin those back so this anchor stays
-    # bit-exact and does NOT track the live ES geometry. (The end_expansion_*
-    # params inherited from production are popped in build_baseline_config when
-    # the flag is off, since they are presence-gated on it.)
-    "Rcs": 0.0,
-    "Lcs": 0.0,
-    "Rsup": 0.0,
-    # L2 geometry rebaseline (2026-08-17): the production stance moved the
-    # plasma-column and cathode radii off the fitted 15.0 onto the measured
-    # hardware aperture. This fixture was captured at 15.0/15.0; pin both so
-    # the anchor does NOT track the live stance -- same rule as the Rcs/Lcs/
-    # Rsup pins above. (end_expansion_plasma_radius_cm needs no pin: it is
-    # popped in build_baseline_config with the flag off.)
-    "Rp": 15.0,
-    "R_cath": 15.0,
-    # Measured 25 ms equilibration puff width (2026-07-29): the ES production
-    # config (PRODUCTION_PARAM_OVERRIDES, inherited above) adopted it, but this
-    # fixture was captured with the equilibration inheriting tau_discharge as
-    # its puff window. Pin the historical stance back (None = the
-    # tau_discharge-derived window) so the anchor does NOT track the live ES
-    # puff width -- same rule as every pin above.
-    "equilibration_gas_puff_on_s": None,
-    # R1 STANCE DECOUPLING (2026-08-20, review ruling): the production splat
-    # above now READS its shared values from the committed stance file
-    # (scripts/stances/g1atrim.toml, via compare_sim1d_es1.PARAM_OVERRIDES).
-    # Every other stance-fed key is already pinned above (C_R, S_gp, V_bank,
-    # equilibration_gas_puff_on_s, the cathode warming pair); these are the
-    # remainder. Until the R2b re-anchor, this golden is SELF-CONTAINED:
-    # every stance-fed value that reaches its config is a literal here, so a
-    # stance edit can never move this anchor -- re-anchoring is a deliberate
-    # recapture event, never a side effect. Each value equals the stance of
-    # record at pin time, so the fixture is bit-exact across this pinning.
-    "S_gp_decay_target": 2000,
-    "b_beam_excitation": 1.4,
-    "beam_deposition_smoothing_cm": 50.0,
-    "heat_flux_limiter_f": 0.1,
-    "source_region_length_cm": 100.0,
-    "source_region_dz_cm": 10.0,
-    # R2a FOLD-IN (2026-08-20): the cathode neutral jet, its surface debit and
-    # the total_reflected energy convention are now config defaults. This
-    # fixture predates all three and ran with no jet at all; pin them back so
-    # the anchor does NOT track the fold-in. Same rule as every pin above.
-    "cathode_neutral_jet": False,
-    "cathode_jet_surface_debit": False,
-    "cathode_jet_energy_convention": "legacy",
-    # R2a FOLD-IN (2026-08-20) part 2: the G1 measured machine scalars are now
-    # config defaults. This fixture was captured on the nominal 2000 cm machine
-    # with the 100 cm plenum and collector blocks and the puff pipe 60 cm from
-    # the cathode; pin all four so the anchor keeps its own geometry -- same
-    # rule as the Rcs/Lcs/Rsup and Rp/R_cath pins above. (source_fixed_grid and
-    # its two source_region_* parameters need no new pin: the fixture already
-    # inherits the flag from PRODUCTION_FLAG_OVERRIDES and pins both values
-    # above, so folding their defaults leaves it where it is.)
-    "Lm": 2000.0,
-    "plenum_length_cm": 100.0,
-    "collector_length_cm": 100.0,
-    "gas_puff_z_cm": 60.0,
+    # Deliberately OVERRIDES the stance's "stop". For a campaign arm a step cap
+    # is a budget and a truncated arm is still data, so "stop" is right there.
+    # Here max_steps is not a run length at all -- it is a TRIPWIRE (see
+    # BASELINE_RUN_KWARGS). Reaching it means this configuration no longer
+    # completes a discharge in a sane number of steps, which is a different
+    # failure from "the trajectory moved" and should say so loudly instead of
+    # silently handing --verify a short trajectory to report as a shape
+    # mismatch.
+    "max_steps_action": "raise",
 }
-# input_flags overrides.
+# input_flags overrides beyond the stance. The shaped initial fill is gone with
+# the mesh-sized package, and the solver refuses a profile and an equilibration
+# together, so the equilibrated seed fills the machine again -- at the stance's
+# own 25 ms puff window, which is a scalar and travels. This is the substitute
+# for the foot, and it is why the gap fills.
 BASELINE_FLAG_OVERRIDES = {
-    **PRODUCTION_FLAG_OVERRIDES,
-    # Historical R1-off stance, pinned so the checkpoint remains reproducible
-    # without making it the future production configuration.
-    "active_plasma_topology": False,
-    "raw_stage_validation": False,
-    "resolved_boundaries": True,
-    # R4.1/A15 anode-mesh beam interception is now the production default (on),
-    # but this csda checkpoint fixture predates it -- pin it off so the historical
-    # trajectory stays reproducible (same pattern as the R1 selectors above; the
-    # baseline NPZ is never recaptured to hide a repaired-physics change).
-    "beam_anode_interception": False,
-    # R5 STANCE FLIP (2026-07-25): the R2/R3/R4.3 repairs are now production
-    # defaults. Pin them to their historical-off values here so this checkpoint
-    # (which predates the flip) stays bit-exact -- the anchor never recaptures.
-    "hyperbolic_energy_consistent": False,
-    "characteristic_boundary": False,
-    "ion_neutral_moment_closure": False,
-    # the historical golden ran the legacy ion-neutral thermalization arm
-    "ion_neutral_thermalization": True,
-    # R5 STANCE FLIP part 2 (2026-07-25): front_flux default is now False (R2 G7
-    # retired the sonic front); the fixture ran it on.
-    "front_flux": True,
-    # R5 ES1 tuning pass (2026-07-26): the ES production config gained the
-    # end-expansion geometry; the historical golden ran without it. Pin off
-    # (paired with the Rcs/Lcs/Rsup=0 pins above) so the anchor stays 67 cells.
-    "end_expansion_geometry": False,
-    # R2a FOLD-IN (2026-08-20): the neutral closure family is now the shipped
-    # default (config.py input_flags_template_1d) -- evolved M_n, the two-zone
-    # column/annulus split, the decoupled neutral energy channel and the hot
-    # channel's internal walls. This fixture predates all four and ran the
-    # 5-field single-zone cold-neutral layout; pin them off so the anchor does
-    # NOT track the fold-in. Same rule as every pin above: the value equals
-    # what the fixture inherited before the fold, so it is bit-exact across it.
-    "neutral_momentum": False,
-    "neutral_two_zone": False,
-    "neutral_energy": False,
-    "neutral_hot_internal_wall": False,
-    # R2a FOLD-IN, the flags the fixture already ran ON and inherited through
-    # the production splat above. Folding their config defaults does not move
-    # this anchor, but the splat no longer names them, so pin both as literals
-    # to keep the R1 self-containment rule: every value that reaches the golden
-    # is written here until the R2b re-anchor.
-    "source_fixed_grid": True,
-    "electron_heat_flux_limit": True,
+    "neutral_equilibration": True,
 }
-# Run controls: None => LAPDSim1D defaults (adaptive dt, dynamic current-trigger
-# t_end, unlimited steps -- the notebook's own settings).
+# Run controls. dt/operator_split stay at the solver defaults (adaptive dt, the
+# shipped split), and t_end stays dynamic -- the run goes to the current-trigger
+# end time, so THE FIXTURE COVERS THE WHOLE CYCLE: ignition, breakdown, the
+# plateau and the afterglow.
+#
+# There is no cost cap any more. The earlier draft capped at 40,000 steps
+# because at BARE DEFAULTS the adaptive dt was pinned near 3e-8 s by the
+# surface_loss limiter and an uncapped run cost ~4 hours. That was a symptom of
+# the unrepresentative corner, not a property of the model: on the stance the
+# discharge ignites properly and the limiter relaxes as the column fills.
+#
+# MEASURED at nx=60 on the stance (2026-08-20), from the capture itself:
+# 75,615 steps to the dynamic t_end of 2.632261e-02 s, 914.6 s wall on one
+# lane, 2634 saves. Mean dt is 3.5e-7; it runs 4.8e-7 at the first step, dips
+# to ~1.9e-7 through breakdown, recovers past 6.4e-7 early in the discharge and
+# does not hold that -- which is why the step count came in well above the
+# 40-45k the pre-capture projection suggested from the early-discharge dt.
+#
+# max_steps is a TRIPWIRE, not a run length: ~2x the measured step count, paired
+# with max_steps_action="raise" above. It exists so that a change which quietly
+# destroys the timestep fails loudly and quickly instead of running for hours.
+# If it ever fires, the question is "what happened to dt", not "what happened to
+# the trajectory". Sized at 2x deliberately: a backstop with only a few percent
+# of headroom is not a backstop, it is a second cost cap waiting to truncate the
+# gate the first time a legitimate change nudges the timestep.
 BASELINE_RUN_KWARGS = {
     "t_end": None,
     "dt": None,
     "operator_split": None,
-    "max_steps": None,
+    "max_steps": 150000,
 }
 
 
 def build_baseline_config(param_overrides=None, flag_overrides=None):
     """Return ``(params, flags)`` for the baseline, with optional extra overrides.
 
-    ``param_overrides`` / ``flag_overrides`` layer on top of the baseline for an
-    explicitly requested production variant.
+    Layering, in order: ``default_config()``, the committed stance file minus
+    its mesh-sized package, then the run-shape overrides. ``param_overrides`` /
+    ``flag_overrides`` layer on top for an explicitly requested variant.
     """
     params, flags = default_config()
+
+    stance = load_stance(PRODUCTION_STANCE)
+    stance_params = dict(stance.params)
+    stance_flags = dict(stance.flags)
+    for key in STANCE_MESH_SIZED_PARAMS:
+        stance_params.pop(key, None)
+    for key in STANCE_MESH_SIZED_FLAGS:
+        stance_flags[key] = False
+    params.update(stance_params)
+    flags.update(stance_flags)
+
     params.update(BASELINE_PARAM_OVERRIDES)
     flags.update(BASELINE_FLAG_OVERRIDES)
     if param_overrides:
         params.update(param_overrides)
     if flag_overrides:
         flags.update(flag_overrides)
-    # The end-expansion params are presence-gated on the flag; the historical
-    # anchor pins the flag off, so drop the params inherited from the ES
-    # production overrides (else construction raises a loud ValueError).
-    if not flags.get("end_expansion_geometry", False):
-        for _k in ("end_expansion_cells", "end_expansion_machine_radius_cm",
-                   "end_expansion_plasma_radius_cm"):
-            params.pop(_k, None)
     return params, flags
 
 
 def run_baseline(params, flags):
-    """Run the solver and return ``(result, trajectory_dict, summary)``."""
+    """Run the solver and return ``(result, trajectory_dict, summary, cells)``.
+
+    ``cells`` is the mesh cell count read from the solver's own geometry. It is
+    NOT inferred from the width of ``y``: the number of packed fields per cell
+    depends on the neutral closure (5 for the cold single-zone layout, 8 once
+    evolved neutral momentum, the two-zone split and the neutral energy channel
+    are on), so any fixed divisor is wrong for some configuration.
+    """
     sim = LAPDSim1D(params, flags)
     sim.start_simulation(**BASELINE_RUN_KWARGS)
     result = sim.get_results()
     y = np.asarray(result.y, dtype=float)
     if y.ndim != 2:
         raise RuntimeError(f"expected 2-D packed trajectory y, got shape {y.shape}")
+    cells = int(sim.geometry.cells)
+    if y.shape[1] % cells:
+        raise RuntimeError(
+            f"packed trajectory width {y.shape[1]} is not a whole number of "
+            f"fields over {cells} cells"
+        )
     trajectory = {
         "time": np.asarray(result.time, dtype=float),
         "y": y,
         "phase": np.asarray(result.phase, dtype="U32"),
     }
-    return result, trajectory, summarize_result(result)
+    return result, trajectory, summarize_result(result), cells
 
 
 def _summary_scalars(summary):
@@ -318,19 +264,22 @@ def _summary_scalars(summary):
 def capture(baseline_path):
     """Run the baseline config and write the golden NPZ + JSON sidecar."""
     params, flags = build_baseline_config()
-    result, trajectory, summary = run_baseline(params, flags)
+    result, trajectory, summary, cells = run_baseline(params, flags)
     baseline_path = Path(baseline_path)
     baseline_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(baseline_path, **trajectory)
     sidecar = baseline_path.with_suffix(".json")
     payload = {
         "description": (
-            "Golden baseline at the PRODUCTION configuration: "
-            "current-driven + resolved + adas + "
-            "knudsen + square waveform + M6 candidate constants."
+            "Golden baseline at the shipped LAPDSim1D defaults "
+            "(default_config()) plus the run-shape overrides in "
+            "baseline_sim1d.BASELINE_PARAM_OVERRIDES."
         ),
-        "result_format": "sim1d packed conservative trajectory y[saves, 5*cells]",
-        "cells": int(trajectory["y"].shape[1] // 5),
+        "result_format": (
+            "sim1d packed conservative trajectory y[saves, fields*cells]"
+        ),
+        "cells": cells,
+        "fields_per_cell": int(trajectory["y"].shape[1] // cells),
         "saves": int(trajectory["y"].shape[0]),
         "summary": _summary_scalars(summary),
         "params": _json_safe(params),
@@ -342,6 +291,7 @@ def capture(baseline_path):
         "baseline captured: "
         f"{baseline_path} ({size_mb:.2f} MB), "
         f"saves={payload['saves']}, cells={payload['cells']}, "
+        f"fields={payload['fields_per_cell']}, "
         f"steps={summary.steps}, final_time={summary.final_time:.6e} s"
     )
     print(f"baseline sidecar: {sidecar}")
@@ -364,7 +314,7 @@ def verify(baseline_path, rtol, atol, param_overrides=None, flag_overrides=None)
     golden_y = golden["y"]
 
     params, flags = build_baseline_config(param_overrides, flag_overrides)
-    _, trajectory, summary = run_baseline(params, flags)
+    _, trajectory, summary, _cells = run_baseline(params, flags)
     fresh_time = trajectory["time"]
     fresh_y = trajectory["y"]
 

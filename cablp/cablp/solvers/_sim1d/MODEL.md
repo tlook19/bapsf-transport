@@ -280,8 +280,9 @@ at construction rather than acting as silent no-ops. Their replacement
 operators belong to R2/R3, not R1.
 
 The historical shared electron-birth default remains
-`Te_birth_ionization="local"`, and the committed production golden pins that
-recorded stance explicitly. The config-complete M6 and mechanism-ladder
+`Te_birth_ionization="local"`, which is what the committed production golden
+runs since the R2b re-anchor — inherited from the stance of record (which names
+it) rather than pinned in the fixture. The config-complete M6 and mechanism-ladder
 drivers now explicitly select `"floor"` so they cannot accidentally inherit
 `"local"`. This is provenance repair, not endorsement of either physical
 moment: the unified ionization particle/momentum/energy derivation remains R4.
@@ -382,8 +383,8 @@ event to the CSDA beam ray (audit A15). It is the correct csda physics, so it is
 the **production default (on)**; like `beam_coulomb_model` / `beam_anomalous_model`
 it is a csda control -- inert under `beam_deposition_model="beer_lambert"` (which
 never launches the CSDA module) and where the resolved geometry has no anode faces.
-The historical csda checkpoint golden pins it off explicitly (`baseline_sim1d.py`,
-the R1 pattern) so its pre-A15 trajectory stays bit-exact. Set it `False` for the
+The golden fixture runs it ON since the R2b re-anchor recaptured that fixture at
+the stance of record, which inherits this default. Set it `False` for the
 with/without-interception A/B. Without it the CSDA adapter launches the full emitted flux
 `Gamma0 = I_eth_star/e` through the whole column, so the fluid deposits the entire
 emitted beam (~470 kW on the settled artifact) while the current-driven circuit
@@ -405,8 +406,8 @@ $$\Gamma_0 E_0 = \text{heating} + \text{radiated} + \text{cost} + \text{anode-in
 
 Active under `beam_deposition_model="csda"` with resolved anode faces; inert
 otherwise (no construction error -- a csda control, like the beam Coulomb/anomalous
-selectors). Production default on; the csda checkpoint golden pins it off
-(`baseline_sim1d.py`) so its pre-A15 trajectory stays bit-exact. This removes the
+selectors). Production default on, and on in the golden fixture too since the
+R2b re-anchor (`baseline_sim1d.py`). This removes the
 +164 kW item-21 anode-interception error; the paired +43.1 kW ionization birth
 energy (A14) is R4.2.
 

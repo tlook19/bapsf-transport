@@ -98,8 +98,8 @@ def main(argv=None):
                     help="heat_flux_limiter_exponent p (non-local A9): lambda="
                          "1/(1+Kn^p); p=1 harmonic, p>1 sharper non-local cap")
     ap.add_argument("--heat-flux-f", type=float, default=None,
-                    help="heat_flux_limiter_f (free-streaming fraction; default "
-                         "0.3; kinetic ~0.1; smaller = harder cap on e- conduction)")
+                    help="heat_flux_limiter_f (free-streaming fraction; config "
+                         "default 0.1; smaller = harder cap on e- conduction)")
     ap.add_argument("--no-cache", action="store_true",
                     help="run a live neutral equilibration instead of the seed "
                          "DB (needed for a new neutral-flow config, e.g. "
