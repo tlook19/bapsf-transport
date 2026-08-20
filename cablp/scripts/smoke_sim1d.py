@@ -9574,11 +9574,12 @@ def main():
                     # atol=1e-14 on the 5-field single-zone cold-neutral
                     # layout it was written against. The R2a fold-in made the
                     # neutral closure family a config default, and the hot
-                    # channel's ballistic redistribution conserves to ~1e-12
-                    # relative rather than to 1e-14 (measured 2026-08-20: the
-                    # offset is set within the first equilibration cycle and
-                    # DECREASES with cycle count, so it is a closure-dependent
-                    # bookkeeping floor, not an accumulating leak). Pin the
+                    # channel conserves to ~4e-12 relative rather than to
+                    # 1e-14 on this source-free config: measured 2026-08-20,
+                    # neutral_energy is the member that moves it, and the
+                    # offset is IDENTICAL at 1 and at 100 equilibration cycles
+                    # to every printed digit -- a fixed closure-dependent
+                    # bookkeeping offset, not an accumulating leak. Pin the
                     # layout rather than loosening the tolerance; the closure
                     # family's own conservation blocks test it on its terms.
                     # This is _pin_pre_r2a_neutral_stance spelled as TOML,
