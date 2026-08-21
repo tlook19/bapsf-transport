@@ -2303,9 +2303,9 @@ def cathode_defaults():
         # config_defaults_provenance.md for the values and their brackets).
         # The cathode channel splits R_N fast backscatter at
         # sqrt(2 R_E (phi_c + Ti)/m) + (1-R_N) directed effusion at the
-        # surface T_s; the anode channel is backscatter-only (wire
-        # re-emission has no net axial direction), per collected side, at
-        # the solve's phi_a.
+        # surface T_s; the anode channel is backscatter-only, per collected
+        # side, at the solve's phi_a (wire re-emission has no net axial
+        # direction).
         "cathode_neutral_jet": True,
         "cathode_jet_R_N": 0.34,
         "cathode_jet_R_E": 0.18,

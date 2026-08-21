@@ -27,6 +27,12 @@ positive control that reverts toward the historical stance:
   all3          char_off + birth_legacy + sgp3400        (positive control)
   no_equil      neutral_equilibration = False            (historical control)
 
+SUPERSEDED 2026-08-21: sccm now MEANS meter-sccm (4.171431e17 particles/s per
+sccm, 20 C / 1013 mbar) and the S_gp default moved 3400 -> 3649.84 on the same
+rescale, so 3400 is no longer the config default and now ships ~6.85 % less
+flux. The arm names and levels above are left AS A RECORD of what this dated
+probe ran.
+
 DECISION RULE (RE-REGISTERED 2026-08-04, fixed before the re-measurement runs;
 supersedes the retired rule above). Three registered questions:
 
@@ -100,6 +106,10 @@ VARIANTS = {
     "baseline": (dict(), dict()),
     "char_off": (dict(), {"characteristic_boundary": False}),
     "birth_legacy": ({"ionization_birth_energy_model": "legacy"}, dict()),
+    # SUPERSEDED 2026-08-21 (see the module docstring): the two 3400 literals
+    # below are pre-changeover sccm, so they now ship ~6.85 % less flux than
+    # when the arms ran, and 3400 is no longer the config default. Left AS A
+    # RECORD of what this dated probe ran.
     "sgp3400": ({"S_gp": 3400}, dict()),
     "all3": (
         {"ionization_birth_energy_model": "legacy", "S_gp": 3400},
