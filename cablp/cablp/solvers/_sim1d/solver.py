@@ -687,6 +687,84 @@ class LAPDSim1D:
         progress_tracker=None,
         progress_interval_s=1.0e-4,
     ):
+        """Build a solver: resolve the config, then arm each subsystem.
+
+        Construction runs as an ORDERED sequence of phases, and the order is
+        load-bearing -- later refusals read flags earlier phases cached, and
+        the initial condition is built only after everything that shapes it
+        has been armed. The phases below are the same statements in the same
+        order they have always run in; each ``_init_*`` method is one
+        contiguous stretch of them, named.
+        """
+        self._init_config_and_early_flags(
+            input_dict,
+            input_flags,
+            progress_callback,
+            progress_tracker,
+            progress_interval_s,
+        )
+        validate_r1_configuration_presence(
+            self._input_dict,
+            self._flags,
+            geometry=self._geometry,
+            ion_neutral_moment_closure=self._ion_neutral_moment_closure,
+            hyperbolic_wave_speed=self._hyperbolic_wave_speed,
+            characteristic_boundary=self._characteristic_boundary,
+            raw_stage_validation=self._raw_stage_validation,
+        )
+        # The declarative half of the deprecation surface (core/deprecations.py):
+        # one DeprecationWarning per deprecated control this config actually
+        # uses. It reads the canonical defaults from the config templates, so
+        # default_config() construction is warning-free by construction and no
+        # value is changed -- a deprecated path stays runnable and bit-identical.
+        # The hand-written blocks in validate_r1_configuration_presence above
+        # keep their own conditions and are NOT duplicated in that table.
+        warn_deprecated_config(self._input_dict, self._flags, stacklevel=2)
+        self._init_neutral_closure_selection()
+        self._init_numerical_guards()
+        self._init_neutral_momentum_and_energy()
+        # Every RUN-CONSTANT subsystem bundle, resolved ONCE, here, now that
+        # each of its inputs is itself resolved (the wall rate immediately
+        # above is the last of them).  The `*_kwargs` accessors below read
+        # this record instead of re-interpreting the config per RHS call.
+        self._options = build_solver_options(
+            self._input_dict,
+            self._flags,
+            geometry=self._geometry,
+            gas_type=self._gas_type,
+            I_ion=self._I_ion,
+            electron_heat_flux_limit=self._electron_heat_flux_limit,
+            heat_flux_limiter_f=self._heat_flux_limiter_f,
+            heat_flux_limiter_exponent=self._heat_flux_limiter_exponent,
+            neutral_energy=self._neutral_energy,
+            neutral_energy_alpha=self._neutral_energy_alpha,
+            neutral_energy_wall_Tn_eV=self._neutral_energy_wall_Tn_eV,
+            neutral_energy_wall_rate=self._neutral_energy_wall_rate,
+            wind_column_factor=self._wind_column_factor,
+        )
+        self._init_hot_neutral_channel_and_jets()
+        self._init_atomic_package_refusals()
+        self._init_floors_and_initial_state()
+        self._init_run_and_circuit_state()
+        self._init_cathode_surface_state()
+        self._init_beam_transport_refusals()
+        self._init_area_closures()
+        self._init_run_machinery()
+
+    def _init_config_and_early_flags(
+        self,
+        input_dict,
+        input_flags,
+        progress_callback,
+        progress_tracker,
+        progress_interval_s,
+    ):
+        """Resolve both config namespaces, the gas, the grid, and the early flags.
+
+        The flags cached here are read by every phase below (and by the R1
+        presence check that follows immediately), which is why they are
+        resolved before any of them.
+        """
         self._input_dict, self._flags = resolve_config(input_dict, input_flags)
         self._progress_callback = progress_callback
         self._progress_tracker = progress_tracker
@@ -749,23 +827,14 @@ class LAPDSim1D:
                 f"and requires gas_type='He' (got {self._gas_type!r}); select "
                 "'constant' or 'cx_derived' for other gases"
             )
-        validate_r1_configuration_presence(
-            self._input_dict,
-            self._flags,
-            geometry=self._geometry,
-            ion_neutral_moment_closure=self._ion_neutral_moment_closure,
-            hyperbolic_wave_speed=self._hyperbolic_wave_speed,
-            characteristic_boundary=self._characteristic_boundary,
-            raw_stage_validation=self._raw_stage_validation,
-        )
-        # The declarative half of the deprecation surface (core/deprecations.py):
-        # one DeprecationWarning per deprecated control this config actually
-        # uses. It reads the canonical defaults from the config templates, so
-        # default_config() construction is warning-free by construction and no
-        # value is changed -- a deprecated path stays runnable and bit-identical.
-        # The hand-written blocks in validate_r1_configuration_presence above
-        # keep their own conditions and are NOT duplicated in that table.
-        warn_deprecated_config(self._input_dict, self._flags, stacklevel=2)
+
+    def _init_neutral_closure_selection(self):
+        """Select and arm the neutral closure: zones, model, and recycle routing.
+
+        Everything here is a refusal or a run-constant topology resolved
+        once -- the two-zone conductances, the kinetic bookkeeping record,
+        the DVM accumulators -- in the order the refusals depend on.
+        """
         validate_neutral_seed_cache_config(self._input_dict, self._flags)
         validate_equilibration_gas_puff_on(self._input_dict)
         _x = float(self._input_dict.get("R_comp_partition", 1.0))
@@ -949,6 +1018,16 @@ class LAPDSim1D:
                     "neutral_model='kinetic_dvm' and the neutral_two_zone "
                     f"flag (got {flights!r})"
                 )
+
+    def _init_numerical_guards(self):
+        """Validate the step-controller and non-ignition guards.
+
+        These are budgets rather than physics: the Picard coupling, the
+        heat-flux limiter, the floor-exempt drain, the max-step and dt_min
+        locks, the wall-clock and accepted-step ignition caps, and the
+        dt_growth recovery. Each is checked HERE so a misconfigured guard
+        cannot be discovered hours into the run it exists to catch.
+        """
         # R5.1 / audit A11: gated fluid<->circuit Picard coupling (default off).
         self._coupled_circuit_picard = bool(
             self._flags.get("coupled_circuit_picard", False)
@@ -1137,6 +1216,15 @@ class LAPDSim1D:
         self._beam_ionization_birth_timestep_bound = bool(
             self._flags.get("beam_ionization_birth_timestep_bound", False)
         )
+
+    def _init_neutral_momentum_and_energy(self):
+        """Arm the evolved neutral wind and its optional energy field.
+
+        The radial closure, the neutral_energy field and its two hot-birth
+        modifiers, the wall accommodation, the Knudsen temperature arm, and
+        the two-zone wind factors -- each gated on the flag that gives it
+        something to act on, so no selector here can be silently inert.
+        """
         self._neutral_momentum_radial = str(
             self._input_dict.get("neutral_momentum_radial", "uniform")
         )
@@ -1321,25 +1409,9 @@ class LAPDSim1D:
             )
         else:
             self._neutral_energy_wall_rate = None
-        # Every RUN-CONSTANT subsystem bundle, resolved ONCE, here, now that
-        # each of its inputs is itself resolved (the wall rate immediately
-        # above is the last of them).  The `*_kwargs` accessors below read
-        # this record instead of re-interpreting the config per RHS call.
-        self._options = build_solver_options(
-            self._input_dict,
-            self._flags,
-            geometry=self._geometry,
-            gas_type=self._gas_type,
-            I_ion=self._I_ion,
-            electron_heat_flux_limit=self._electron_heat_flux_limit,
-            heat_flux_limiter_f=self._heat_flux_limiter_f,
-            heat_flux_limiter_exponent=self._heat_flux_limiter_exponent,
-            neutral_energy=self._neutral_energy,
-            neutral_energy_alpha=self._neutral_energy_alpha,
-            neutral_energy_wall_Tn_eV=self._neutral_energy_wall_Tn_eV,
-            neutral_energy_wall_rate=self._neutral_energy_wall_rate,
-            wind_column_factor=self._wind_column_factor,
-        )
+
+    def _init_hot_neutral_channel_and_jets(self):
+        """Build the ballistic flight kernels and resolve the recycle jets."""
         # The ballistic redistribution kernels are geometry alone (the flight
         # speed cancels out of the axial hop), so they are built once here and
         # never re-entered.
@@ -1372,6 +1444,9 @@ class LAPDSim1D:
         )
         self._mesh_faces = _jet.mesh_faces
         self._mesh_blocked_area_cm2 = _jet.mesh_blocked_area_cm2
+
+    def _init_atomic_package_refusals(self):
+        """Refuse atomic-package combinations that would double-book photons."""
         self._recombination_energy_return = bool(
             self._input_dict.get("recombination_energy_return", False)
         )
@@ -1406,6 +1481,15 @@ class LAPDSim1D:
                 "them is RETIRED; without that booking the afterglow "
                 "validity window is Te > 0.2 eV (the ADF11 edge)"
             )
+
+    def _init_floors_and_initial_state(self):
+        """Set the floors, arm the initial-condition features, and build state.
+
+        Order is load-bearing: the tracer and the shaped neutral fill are
+        armed BEFORE the initial condition, because the construction floor
+        is the thing the tracer has to be exempt from and the fill is the
+        only thing the profile touches.
+        """
         self._floors = {
             "n": float(self._input_dict["ne_floor"]),
             "nn": float(self._input_dict["nn_floor"]),
@@ -1439,6 +1523,14 @@ class LAPDSim1D:
         self._init_sample_smoothing()
         self._y = pack_state(self._state)
         self._derived = derive_state(self._state, self._floors, self._ion_mass_g)
+
+    def _init_run_and_circuit_state(self):
+        """Initialize the run-loop, ignition-monitor and circuit state.
+
+        The cathode model validators run here, not at the first solve: an
+        unknown model string or an unsupported combination must fail at
+        construction.
+        """
         self._time = 0.0
         self._t_prebreakdown_trigger = None
         self._t_breakdown_trigger = None
@@ -1520,6 +1612,15 @@ class LAPDSim1D:
         # (time, integral) pair at the previous trajectory save anchors it.
         self._circuit_V_dis_time_integral = 0.0
         self._circuit_V_dis_prev_save = None
+
+    def _init_cathode_surface_state(self):
+        """Arm the vessel node and the evolving cathode surface state.
+
+        The warming model's surface temperature and the ads/des coverage
+        are the two pieces of cathode state that evolve over a shot; both
+        are ``None`` under their default 'none' selectors, which is the
+        presence gate every consumer reads.
+        """
         # Vessel / common-mode node (default absent). ``_vessel`` is the
         # resolved constant record or None; ``_vessel_V_cm`` is the node's
         # single state variable and stays None while the node is absent, so
@@ -1617,6 +1718,16 @@ class LAPDSim1D:
         self._cathode_energy_ledger_J = {
             "heater": 0.0, "ion": 0.0, "rad": 0.0, "emis": 0.0, "cond": 0.0,
         }
+
+    def _init_beam_transport_refusals(self):
+        """Refuse incomplete beam-deposition and anomalous-transport configs.
+
+        Every selector below is validated at CONSTRUCTION even though the
+        deposition module validates it again where it is consumed: a
+        misconfiguration must fail before the first cathode solve, and a
+        combination the walk machinery could not act on is an incomplete
+        configuration rather than a silent no-op.
+        """
         if float(self._input_dict.get("beam_deposition_smoothing_cm", 0.0)) < 0.0:
             raise ValueError(
                 "beam_deposition_smoothing_cm must be >= 0 (got "
@@ -1958,6 +2069,9 @@ class LAPDSim1D:
                 "entirely, and >1 would inject more gas than the valve "
                 "supplies"
             )
+
+    def _init_area_closures(self):
+        """Validate and arm the three area/coverage closures."""
         # Clumpy-plasma coverage closure v1 (default off, bit-exact off).
         _cov = resolve_coverage_config(
             self._input_dict,
@@ -1987,6 +2101,9 @@ class LAPDSim1D:
             neutral_model=self._neutral_model,
             neutral_two_zone=self._neutral_two_zone,
         )
+
+    def _init_run_machinery(self):
+        """Initialize the run-loop bookkeeping and apply any restart payload."""
         self._cathode_solve = None
         # Item-35 ledger tripwire: latched so the warning fires once per run.
         self._beam_gap_ledger_warned = False
