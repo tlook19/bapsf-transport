@@ -32,12 +32,21 @@ Keys are per-cathode S_gp in SCCM (100 – 16000):
   single cathode: one source at cell 0
   twin cathode  : S_gp = Twin_S_gp (app splits total S_gp equally)
 
-*** LEGACY SCCM CONVENTION. *** The keys are pre-2026-08-21 0 C-sccm --
-convert before lookup. The repo's sccm now MEANS meter-sccm (Sensirion
-SFM5500, 20 C / 1013 mbar), which is a ~7% different particle throughput at
-the same numeric key, and the table's own generator retired with _sim3 so it
-cannot be regenerated on the new convention. The keys are therefore ANNOTATED,
-not rescaled: rescaling them would forge data that was never computed.
+*** LEGACY SCCM CONVENTION. *** The keys are pre-2026-08-21 0 C-sccm, while
+the repo's sccm now MEANS meter-sccm (Sensirion SFM5500, 20 C / 1013 mbar) --
+a ~7% different particle throughput at the same numeric key. The table's own
+generator retired with _sim3, so it cannot be regenerated on the new
+convention, and the keys are ANNOTATED rather than rescaled: rescaling frozen
+data would forge an interpolation that was never computed.
+
+**Nothing in the repo converts, and that is deliberate.** The only in-repo
+caller is the fallback branch of ``core.config.resolve_nn0``, which passes the
+configured meter-sccm ``S_gp`` straight through and carries the ~7%
+inconsistency as a documented note. Production never reaches it: both the
+config default and the stance of record pin ``nn0`` explicitly, so
+``resolve_nn0`` short-circuits first. A conversion is therefore owed by any
+NEW caller that actually depends on this table -- it is not applied here, and
+it is not applied for you.
 
 Usage
 -----

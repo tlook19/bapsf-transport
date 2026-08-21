@@ -598,6 +598,19 @@ def _case_production_construction_warning_free():
 )
 def _case_shipped_defaults_and_base_geometry():
     params, flags = default_config()
+    # HELIUM MASS PIN (2026-08-21 unification). A LITERAL, deliberately: the
+    # repo had carried three hand-made helium-mass products differing by up to
+    # 0.9 ppm, none of them citable, and nothing caught it. The compiled
+    # kernels never read a helium mass, so there is no .pyx constant guard to
+    # extend -- this assertion is the guard. The value is Ar(4He)*u =
+    # 4.00260325413 * 1.66053906892e-27 kg (CODATA 2022), cross-checked
+    # against m(alpha) + 2 m_e - 79.005151 eV/c^2 to 5e-12 relative.
+    from cablp.vars._cons import m_He_SI as _m_He_SI
+    from cablp.vars._cons import m_He_cgs as _m_He_cgs
+
+    assert _m_He_cgs == 6.6464790809e-24, _m_He_cgs
+    assert _m_He_SI == 6.6464790809e-27, _m_He_SI
+    assert LAPDSim1D(params, flags).ion_mass_g == 6.6464790809e-24
     assert params["cycles"] == 1
     assert params["phase_transition_mode"] == "current"
     assert params["gas_puff_mode"] == "square"
@@ -1774,6 +1787,16 @@ def _case_cathode_resolved_gap_resistance(cathode_face):
     # 0.2 + 0.8*(12/3)^1.5 * lnL(3)/lnL(12); the lnLambda factor is what the
     # frozen-coefficient form (which gave a flat 6.6x) could not carry, and
     # the two temperatures straddle the NRL formula's 10 eV switch.
+    # lnLambda LITERAL PIN. The ratio below is built from _c_log_ei, the same
+    # helper the solver uses, so a TRANSCRIPTION error shared by both would
+    # cancel out of the comparison and pass silently. Pinning one lnLambda
+    # value against an independent literal closes that class.
+    assert np.isclose(_c_log_ei(3.0, 4.0e12), 10.1392, rtol=1e-5), _c_log_ei(
+        3.0, 4.0e12
+    )
+    assert np.isclose(_c_log_ei(12.0, 4.0e12), 11.9762, rtol=1e-5), _c_log_ei(
+        12.0, 4.0e12
+    )
     _rgap_cold_ratio = 0.2 + 0.8 * (12.0 / 3.0) ** 1.5 * (
         _c_log_ei(3.0, 4.0e12) / _c_log_ei(12.0, 4.0e12)
     )

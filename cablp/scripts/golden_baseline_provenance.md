@@ -175,10 +175,17 @@ lane, run strictly serially. `--verify` prints `exact=True` on the pure path.
 else unchanged. The fueling changeover dominates the fill: `nn` at `t = 0`
 falls 11.4 % (the meter convention delivers 6.85 % fewer particles per
 configured sccm, and the stance's 9010 was deliberately NOT rescaled), and the
-column follows — plateau mean `n` −10.0 %, `n_max` −9.9 %. `Te_max` falls
-12.5 %, the largest single mover and the conductivity member's signature: a
-colder, thinner gap has a SMALLER `lnLambda` than the frozen 13.03, so it is
-more conductive than the old form claimed and dissipates less ohmically there.
+column follows — plateau mean `n` −10.0 %, `n_max` −9.9 %.
+
+**`Te_max` (−12.5 %) is a breakdown-phase transient attained in the far column
+(cell 65→59), not the gap; it moves jointly with the fill and one save later;
+no member is credited. Plateau Te moves the other way (+8.8 %).** An earlier
+draft of this entry credited that −12.5 % to the conductivity member as its
+"signature". That was wrong — the advisor located the maximum in the far
+column during breakdown, co-moving with the fill — and it is corrected here
+rather than quietly deleted, because a wrong attribution that has been read is
+worth more as a correction than as an absence.
+
 The `I_sat`-class metric `n*sqrt(Te)` moves only −3.2 % over the plateau, so
 most of the density fall is offset in the systematics-robust combination.
 Health stayed sane and finite throughout; `Ti_max` +1.0 %.

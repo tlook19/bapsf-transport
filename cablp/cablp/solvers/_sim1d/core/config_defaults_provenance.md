@@ -63,6 +63,56 @@ applies the committed stance explicitly (`scripts/golden_baseline_provenance.md`
 
 ---
 
+## Physical constants that are not config keys
+
+**`m_He = 6.6464790809e-24` g (`6.6464790809e-27` kg) — DERIVED, the neutral
+helium-4 ATOM mass.** It is not an `input_dict` key — `gas_type = "He"` selects
+it and the solver's `ion_mass_g` IS this number — but it is a boxed physical
+constant and belongs in the provenance record.
+
+`Ar(4He) * u = 4.00260325413 u * 1.66053906892e-27 kg/u = 6.646479080869e-27
+kg`, i.e. the CODATA-2022 relative atomic mass of the nuclide times the
+CODATA-2022 atomic mass constant. Independently cross-checked against
+`m(alpha) + 2 m_e - 79.005151 eV/c^2` (the alpha particle plus two electrons,
+less the double-ionization binding energy), which agrees to **5e-12
+relative**.
+
+**Class is DERIVED, not MEASURED, and the reason matters:** NIST/CODATA
+publishes no neutral helium-atom mass in kg in any adjustment (2010, 2014,
+2018 or 2022) — only the alpha particle and the helion. Every helium-atom mass
+in kg is therefore somebody's product of two published constants, and the
+honest bar is the bar on those two (both ~1e-10 relative, far below anything
+this model resolves).
+
+**Unified 2026-08-21 (Tom's ruling); the single definition point is
+`cablp/vars/_cons.py`.** The repo had carried THREE different hand-made
+products, none of them citable and none agreeing:
+
+| superseded spelling | value [g] | error vs adopted | where |
+|---|---|---|---|
+| `6.6464731e-24` | 6.6464731e-24 | **−0.90 ppm** | `vars/_cons.py` — the fluid solver's `ion_mass_g` |
+| `4.002602 * 1.66053907e-24` | 6.6464770e-24 | **−0.31 ppm** | the kinetic/TPMC instruments |
+| `4 * 1.6605e-24` | 6.642e-24 | −707 ppm | one dated figure script |
+
+The first is uniquely reproduced by `4.0026 * u(CODATA 2010)` — a stale
+5-significant-figure product. The second multiplies the standard atomic weight
+of the ELEMENT by a truncated `u`. Neither is wrong by anything this model can
+resolve; what was wrong is that the repo could not say where either came from,
+and that two of them disagreed.
+
+**Guarded by a smoke literal pin, not by a build-time constant check.** The
+compiled kernels never read a helium mass — `check_constants` covers `m_e` and
+`m_p` only — so there was no `.pyx` guard to extend and none was added. The
+pin lives in `smoke_sim1d.py` (`shipped-defaults-and-base-geometry`) and
+asserts the literal exactly, on both spellings and on a constructed solver's
+`ion_mass_g`.
+
+Dated one-off scripts keep their old literals as a RECORD of what they ran,
+each with a one-line supersession comment naming the adopted value and the ppm
+offset. They are not edited: rewriting a record of a past run is not a fix.
+
+---
+
 ## `initial_condition_defaults`
 
 **`nn0 = 2.0e13` cm^-3 — ASSUMED.** A representative pre-shot neutral

@@ -61,6 +61,9 @@ WALKER_BANDS = ((0.0, 100.0), (100.0, 200.0), (200.0, 400.0), (400.0, 600.0),
                 (1400.0, 1900.0))
 
 # Helium mass [g] for the neutral thermal speed / Mach number.
+# SUPERSEDED 2026-08-21: the unified helium mass is cablp.vars._cons
+# .m_He_cgs = 6.6464790809e-24 g (Ar(4He)*u, CODATA 2022). The literal
+# below is 0.90 ppm low and is left AS A RECORD of what this dated script ran.
 M_HE_G = 6.6464731e-24
 K_B_ERG = 1.380649e-16
 # The saved rhs energy terms are CGS: erg cm^-3 s^-1. 1 W = 1e7 erg/s.
