@@ -14,6 +14,16 @@ it; otherwise the loop reconstruction ``V0 - Q/C - I*R - L*dI/dt`` from
 the smooth I(t), the same definition the measurement used. Also reports the T_s trajectory,
 honest P_cathode_i, and the power-balance energy ledger when present.
 
+A trailing block adds the high-precision watch-class rows, tagged ``(i)``,
+``(iii)`` and ``(iv)``: the sub-bin interpolated breakdown-trigger crossing
+times against the save-quantized phase-label edge; the plateau V_dis mean,
+plateau current and gap P_ohmic ledger; and the breakdown-phase Te_max with
+its time and cell. Those rows carry more significant figures than the rows
+above them ON PURPOSE -- they are read against sub-volt, sub-percent and
+sub-kW predictions. Every row above that block is byte-frozen: it is quoted
+in stored comparisons, so this tool only ever gains rows, never re-prints
+an old one differently.
+
 Usage::
 
     python scripts/fingerprints_sim1d.py run.h5 [run2.h5 ...]
@@ -288,6 +298,100 @@ def report(path):
             print(f"V_dis_tavg plateau: p5/p50/p95 = {np.percentile(vs, 5):.0f}/"
                   f"{np.percentile(vs, 50):.0f}/{np.percentile(vs, 95):.0f} V, "
                   f"sigma {np.std(vs):.1f} V")
+
+    # --- The high-precision watch-class rows. -------------------------------
+    #
+    # Everything above is byte-frozen: those lines are quoted in stored
+    # comparisons across the campaign record, so this block only ever APPENDS.
+    # It also carries its own precision, deliberately finer than the rows
+    # above, because the quantities here are tested against sub-volt,
+    # sub-percent and sub-kW predictions that the older rows round away.
+    #
+    # NOT EMITTED HERE: knee time and ramp slope. The "knee" of the current
+    # trace has no computed definition anywhere in this repo -- it appears
+    # only as prose and as a hard-coded ~4.5 ms landmark
+    # (verify_sim1d_r3_a11.py, --phase knee) -- so there is nothing to
+    # transcribe, and inventing one would make the row's value an artifact of
+    # this file rather than a property of the run.
+
+    # (i) Breakdown-trigger crossing times, SUB-BIN. The solver linearly
+    # interpolates each threshold crossing between the two consecutive
+    # trigger-check samples that bracket it (``_current_threshold_time``,
+    # solver.py) and stores the result; that is a solver-step-resolved reading
+    # of the current trace. It is NOT the phase-label edge, which is the first
+    # SAVE carrying the new label and is therefore quantized to the save
+    # cadence -- the two differ by up to one save interval, which is the whole
+    # reason this row exists.
+    origin_ms = _origin_s(result) * 1.0e3
+    for threshold_key, trigger_key in (
+        ("I_prebreakdown", "t_prebreakdown_trigger"),
+        ("I_breakdown", "t_breakdown_trigger"),
+    ):
+        t_trigger = float(getattr(result, trigger_key, np.nan))
+        if not np.isfinite(t_trigger):
+            continue
+        threshold = params.get(threshold_key)
+        threshold_text = (
+            "<absent>" if threshold is None else f"{float(threshold):.6g} A"
+        )
+        print(f"(i) {trigger_key}: {t_trigger * 1.0e3:.4f} ms absolute, "
+              f"{t_trigger * 1.0e3 - origin_ms:+.4f} ms vs the main-discharge "
+              f"origin | threshold {threshold_key}={threshold_text}")
+    print(f"(i) phase-label edge (first 'main_discharge' save): "
+          f"{origin_ms:.4f} ms absolute -- save-cadence quantized, carried as "
+          f"the reference the interpolated crossings above are offset from")
+
+    # (iii) The 21q plateau observables, over the SAME plateau window the rows
+    # above use (15 ms -> the clamp-checked end; no second clamp notice is
+    # printed because no second window is opened).
+    if plateau.any():
+        vs_full = V[plateau][np.isfinite(V[plateau])]
+        v_text = (
+            "<no finite samples>" if not vs_full.size
+            else f"{np.mean(vs_full):.4f} V"
+        )
+        print(f"(iii) {v_label} plateau mean: {v_text}")
+        Ip = I[plateau][np.isfinite(I[plateau])]
+        if Ip.size:
+            print(f"(iii) plateau current: mean {np.mean(Ip):.3f} A | "
+                  f"median {np.median(Ip):.3f} A")
+        # The gap P_ohmic ledger row. ``P_ohmic = I_tot * V_p`` is the
+        # circuit's I^2 R_p dissipated in the plasma between cathode and
+        # anode (funcs/_cathode_solver.py), and physics/cathode.py deposits
+        # ALL of it into that end's gap cells through weights that normalize
+        # to one -- so each end's P_ohmic IS its gap booking, and the two are
+        # reported separately as well as summed. The twin end is absent on a
+        # single-ended run and reads NaN there, which is why it is presence-
+        # gated rather than summed through.
+        ohmic_total = 0.0
+        ohmic_texts = []
+        for end_key in ("source_P_ohmic", "end_P_ohmic"):
+            series = np.asarray(diag.get(end_key, np.full_like(I, np.nan)), float)
+            finite = series[plateau][np.isfinite(series[plateau])]
+            if not finite.size:
+                ohmic_texts.append(f"{end_key} <absent>")
+                continue
+            end_mean = float(np.mean(finite))
+            ohmic_total += end_mean
+            ohmic_texts.append(f"{end_key} {end_mean / 1.0e3:.4f} kW")
+        print("(iii) gap P_ohmic plateau mean: "
+              f"{' | '.join(ohmic_texts)} | total {ohmic_total / 1.0e3:.4f} kW")
+
+    # (iv) Breakdown-phase Te_max, over the saves the solver itself labelled
+    # 'breakdown' (result.phase), reported with the cell it was attained in --
+    # the location is the point of the row, since a gap-local and a
+    # far-column maximum are different mechanisms.
+    phase_labels = np.asarray(getattr(result, "phase", ()), dtype=str)
+    breakdown = phase_labels == "breakdown"
+    if breakdown.any():
+        Te_bd = np.asarray(result.Te, float)[breakdown]
+        if np.any(np.isfinite(Te_bd)):
+            sample, cell = np.unravel_index(
+                int(np.nanargmax(Te_bd)), Te_bd.shape
+            )
+            print(f"(iv) breakdown-phase Te_max: {Te_bd[sample, cell]:.4f} eV "
+                  f"at {t_ms[breakdown][sample]:+.4f} ms "
+                  f"(cell {int(cell)} of {Te_bd.shape[1]})")
 
 
 def main(argv):
