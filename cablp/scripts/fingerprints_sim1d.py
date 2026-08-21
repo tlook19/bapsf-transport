@@ -14,9 +14,25 @@ it; otherwise the loop reconstruction ``V0 - Q/C - I*R - L*dI/dt`` from
 the smooth I(t), the same definition the measurement used. Also reports the T_s trajectory,
 honest P_cathode_i, and the power-balance energy ledger when present.
 
+A trailing block adds the high-precision watch-class rows, tagged ``(i)``,
+``(iii)`` and ``(iv)``: the sub-bin interpolated breakdown-trigger crossing
+times against the save-quantized phase-label edge; the plateau V_dis mean,
+plateau current and gap P_ohmic ledger; and the breakdown-phase Te_max with
+its time and cell. Those rows carry more significant figures than the rows
+above them ON PURPOSE -- they are read against sub-volt, sub-percent and
+sub-kW predictions. Every row above that block is byte-frozen: it is quoted
+in stored comparisons, so this tool only ever gains rows, never re-prints
+an old one differently.
+
+Row ``(ii)`` reports fast-phase ramp geometry. Every one of its members
+carries a value, a declared equivalence band and a status, and NONE of them
+can raise: "the feature is absent on this arm" is a reading, not a failure,
+and must not take the other rows down with it.
+
 Usage::
 
     python scripts/fingerprints_sim1d.py run.h5 [run2.h5 ...]
+    python scripts/fingerprints_sim1d.py --pair post.h5=pre.h5 post.h5 pre.h5
 """
 
 import sys
@@ -118,6 +134,336 @@ def _clamp_notice(requested, limit, kind, site, extent):
     return used
 
 
+# --- Row (ii): fast-phase ramp structure. ----------------------------------
+#
+# This operationalizes the campaign's "knee time + ramp slope" as the pair
+# (t_ovs, S_ramp). The word "knee" is deliberately NOT used in any field name:
+# this codebase already spends it on two unrelated things (the cathode V(I)
+# emission knee, physics/cathode.py; the ~4.5 ms cathode-warming landmark,
+# verify_sim1d_r3_a11.py), and a third meaning would make all three
+# unsearchable.
+#
+# WHAT IS AND IS NOT CLAIMED. These rows are TRACE GEOMETRY. "Overshoot" and
+# "ringback" name the shape of I(t) and nothing else -- whether that shape is
+# a circuit ring, breakdown dynamics, or something else is NOT claimed here
+# and must not be read out of these numbers. The overshoot/ringback structure
+# is VERIFIED ON TWO ARMS ONLY (an ES1-class run and its pre-batch control)
+# and is NOT generic: arms that saturate monotonically into the crawl have no
+# such feature at all, and for those the existence criterion below reports
+# the four members as 'absent'. Recording the absence IS the reading.
+#
+# The window is anchored on row (i)'s interpolated trigger and reaches only
+# FORWARD. That is causal, not cosmetic: the drive turn-on edge (the bank
+# slewing into the cold gap at drive start) always precedes the conductivity
+# threshold crossing and is steeper than the fast-phase ramp, so any
+# backward reach re-admits a feature that is not the one being measured.
+# A fixed save cadence over the window is asserted, not assumed.
+
+# Window forward extent [s]. Sized so an arm whose slope maximum sits late in
+# the fast phase keeps several samples of margin inside the right edge; the
+# slow crawl's few-hundred-A/ms never competes with the ramp maximum.
+RAMP_WINDOW_S = 1.2e-3
+
+# CLASSIFICATION CONSTANTS -- these decide whether a feature is PRESENT and
+# well-separated. They are not estimator parameters: no reported value is a
+# function of them, so a reader may not tune them to move a number. Each is
+# quoted with the margin it was ruled on.
+#
+#   EDGE_SLOPE_FRACTION -- the slope at each window edge must fall below this
+#       fraction of the maximum, so the maximum is a resolved interior
+#       feature rather than the shoulder of something outside the window.
+#       The bare interior test is NOT sufficient: an arm whose steepest slope
+#       sits at the trigger passes "interior" while measuring the wrong
+#       feature entirely.
+#   OVERSHOOT_MIN_FRACTION -- fractional depth (I_pk - I_min)/I_pk below which
+#       the trace is called monotone-saturating and no overshoot is reported.
+#       Measured margin is three orders either side: an ES1-class arm shows
+#       ~11 %, a saturating arm ~0.03 %.
+#   GRID_PHASE_FRACTION -- the measured scale of the grid-phase artifact in
+#       the centered-difference slope, as a fraction of the slope maximum.
+#       It sets the t_dImax conditioning band below.
+RAMP_EDGE_SLOPE_FRACTION = 0.9
+RAMP_OVERSHOOT_MIN_FRACTION = 0.01
+RAMP_GRID_PHASE_FRACTION = 0.002
+
+# Declared equivalence bands. Measured spreads, not asserted tolerances: a
+# member whose pre->post move sits inside its band is reported "unmoved".
+RAMP_BAND_T_FLOOR_S = 2.0e-6      # t_dImax floor, and the flat t_ovs band
+RAMP_BAND_T_DIP_S = 4.0e-6        # dip bottom is quartic-flat, worst-conditioned
+RAMP_BAND_S_RAMP_FRAC = 0.004     # S_ramp, +-0.4 % on every arm
+RAMP_BAND_I_FRAC = 0.002          # I_ovs and I_dip, +-0.2 %
+
+# Paired-reference crossing family. Fractions of a plateau reference current
+# taken from the PRE-BATCH PARTNER OF THE SAME RUNG, with both members of a
+# pair using the same reference -- an unpaired reference lets an amplitude
+# move masquerade as a timing move.
+RAMP_CROSSING_FRACTIONS = (0.50, 0.60, 0.90)
+RAMP_CROSSING_SLOPE_FRACTION = 0.3   # classification: fast-crossing vs coarse
+RAMP_CROSSING_BAND_S = 1.0e-6
+
+
+def _ramp_member(value, band, status, reason=""):
+    """One ramp member: a value, its equivalence band, and its status.
+
+    ``status`` is one of ``ok`` (resolved inside the declared band),
+    ``coarse`` (resolved, but the band had to be widened by local
+    conditioning), ``absent`` (the feature does not exist in this trace, or
+    its reference does not exist), and ``not-contained`` (the window or its
+    preconditions could not isolate the feature).
+
+    A member NEVER raises. Row (ii) reporting "feature absent" is a reading,
+    and it must not be able to take the rest of the fingerprint set down with
+    it -- the other rows are independent measurements of the same artifact.
+    """
+    return {"value": value, "band": band, "status": status, "reason": reason}
+
+
+def _parabola_vertex(x, y):
+    """Return the vertex of the exact quadratic through three points.
+
+    General (non-uniform) 3-point form via divided differences, so the caller
+    never has to assume the samples are evenly spaced. Returns ``(None, None)``
+    on degenerate curvature -- three collinear points have no vertex, and
+    inventing one would report a grid coordinate as a measurement.
+    """
+    x0, x1, x2 = (float(v) for v in x)
+    y0, y1, y2 = (float(v) for v in y)
+    d01 = (y1 - y0) / (x1 - x0)
+    d12 = (y2 - y1) / (x2 - x1)
+    curvature = (d12 - d01) / (x2 - x0)
+    if not np.isfinite(curvature) or curvature == 0.0:
+        return None, None
+    xv = 0.5 * (x0 + x1) - d01 / (2.0 * curvature)
+    yv = y0 + d01 * (xv - x0) + curvature * (xv - x0) * (xv - x1)
+    return xv, yv
+
+
+def _ramp_members(t, I, t_trig):
+    """Return the six fast-phase ramp members keyed by name.
+
+    ``t`` is ABSOLUTE saved time [s] over the whole trajectory and ``I`` the
+    matching ``source_I_tot`` [A]; ``t_trig`` is row (i)'s interpolated
+    breakdown-trigger time [s], which is both the causal left edge of the
+    search window and the origin every reported time is offset from. The
+    save-quantized phase-label edge is deliberately never used here: it hops
+    a whole bin and would inject that hop into otherwise sub-bin readings.
+    """
+    names = ("t_dImax", "S_ramp", "t_ovs", "I_ovs", "t_dip", "I_dip")
+
+    def unresolved(status, reason, keep=None):
+        out = {n: _ramp_member(np.nan, np.nan, status, reason) for n in names}
+        out.update(keep or {})
+        return out
+
+    if not np.isfinite(t_trig):
+        return unresolved("absent", "no interpolated breakdown trigger on this run")
+
+    window = np.flatnonzero((t >= t_trig) & (t <= t_trig + RAMP_WINDOW_S))
+    if window.size < 7:
+        return unresolved(
+            "not-contained", f"only {window.size} saves inside the window"
+        )
+    spacing = np.diff(t[window])
+    if not np.all(np.isfinite(spacing)) or spacing.min() <= 0.0:
+        return unresolved("not-contained", "save times are not increasing")
+    if spacing.max() / spacing.min() - 1.0 > 0.01:
+        return unresolved(
+            "not-contained",
+            f"save cadence is not fixed over the window (min "
+            f"{spacing.min() * 1e6:.4g} us, max {spacing.max() * 1e6:.4g} us)",
+        )
+    h = float(np.mean(spacing))
+
+    # Centered-difference slope, restricted to samples that HAVE both
+    # neighbours; the window's own end samples borrow from outside it, which
+    # is what makes the edge-slope test below meaningful.
+    lo, hi = int(window[0]), int(window[-1])
+    idx = np.arange(max(lo, 1), min(hi, t.size - 2) + 1)
+    if idx.size < 5:
+        return unresolved("not-contained", "too few interior samples for a slope")
+    slope = (I[idx + 1] - I[idx - 1]) / (t[idx + 1] - t[idx - 1])
+    if not np.all(np.isfinite(slope)):
+        return unresolved("not-contained", "non-finite current inside the window")
+
+    k = int(np.argmax(slope))
+    s_max = float(slope[k])
+    if k < 2 or k > slope.size - 3:
+        return unresolved(
+            "not-contained",
+            f"ramp slope maximum is within 2 samples of a window edge "
+            f"(index {k} of {slope.size})",
+        )
+    edge = RAMP_EDGE_SLOPE_FRACTION * s_max
+    if not (slope[0] < edge and slope[-1] < edge):
+        return unresolved(
+            "not-contained",
+            f"window edge slope is not below {RAMP_EDGE_SLOPE_FRACTION:g}*s_max "
+            f"(edges {slope[0] / 1e3:.4g}/{slope[-1] / 1e3:.4g} A/ms vs s_max "
+            f"{s_max / 1e3:.4g} A/ms) -- the maximum is not an isolated feature",
+        )
+
+    # t_dImax conditioning band. A perturbation ds of the three slope samples
+    # moves the 3-point vertex by roughly h*ds/|d|, where d is the discrete
+    # second difference; ds is taken at the measured grid-phase scale
+    # GRID_PHASE_FRACTION*s_max. A sharply peaked slope floors at the declared
+    # band; a flat-topped one widens honestly to the width of its own plateau,
+    # which is the case the interior and edge tests cannot see.
+    d = float(slope[k - 1] - 2.0 * slope[k] + slope[k + 1])
+    if not np.isfinite(d) or d == 0.0:
+        return unresolved(
+            "not-contained", "degenerate slope curvature at the ramp maximum"
+        )
+    band_t_dImax = max(
+        RAMP_BAND_T_FLOOR_S, h * (RAMP_GRID_PHASE_FRACTION * s_max) / abs(d)
+    )
+    t_dImax, S_ramp = _parabola_vertex(
+        t[idx[k - 1:k + 2]], slope[k - 1:k + 2]
+    )
+    if t_dImax is None:
+        return unresolved(
+            "not-contained", "degenerate slope curvature at the ramp maximum"
+        )
+    resolved = {
+        "t_dImax": _ramp_member(
+            t_dImax, band_t_dImax,
+            "ok" if band_t_dImax <= RAMP_BAND_T_FLOOR_S else "coarse",
+            "" if band_t_dImax <= RAMP_BAND_T_FLOOR_S
+            else f"flat slope maximum (|d|={abs(d) / 1e3:.4g} A/ms)",
+        ),
+        # The flatness that ruins the TIME leaves the VALUE well determined,
+        # so S_ramp keeps its declared band on every arm.
+        "S_ramp": _ramp_member(
+            S_ramp, RAMP_BAND_S_RAMP_FRAC * abs(S_ramp), "ok"
+        ),
+    }
+
+    # Overshoot EXISTENCE, on the discrete samples, before any vertex fit:
+    # the peak in a fixed reach after the ramp maximum, then the minimum in a
+    # fixed reach after that peak.
+    peak_win = np.flatnonzero((t >= t_dImax) & (t <= t_dImax + 0.30e-3))
+    if peak_win.size < 3:
+        return unresolved("not-contained", "overshoot search window too short", resolved)
+    jp = int(np.argmax(I[peak_win]))
+    g = int(peak_win[jp])
+    dip_win = np.flatnonzero((t >= t[g]) & (t <= t[g] + 0.40e-3))
+    if dip_win.size < 3:
+        return unresolved("not-contained", "ringback search window too short", resolved)
+    jm = int(np.argmin(I[dip_win]))
+    m = int(dip_win[jm])
+    I_pk, I_min = float(I[g]), float(I[m])
+    depth = (I_pk - I_min) / I_pk if I_pk != 0.0 else 0.0
+    if not np.isfinite(depth) or depth < RAMP_OVERSHOOT_MIN_FRACTION:
+        reason = (
+            f"no overshoot: (I_pk-I_min)/I_pk = {100.0 * depth:.4g} % < "
+            f"{100.0 * RAMP_OVERSHOOT_MIN_FRACTION:g} % -- the trace saturates "
+            f"monotonically here (I_pk {I_pk:.4g} A, I_min {I_min:.4g} A)"
+        )
+        return unresolved("absent", reason, resolved)
+
+    if jp == 0 or jp == peak_win.size - 1 or g < 1 or g > t.size - 2:
+        return unresolved(
+            "not-contained", "overshoot maximum is on its window edge", resolved
+        )
+    if jm == 0 or jm == dip_win.size - 1 or m < 1 or m > t.size - 2:
+        return unresolved(
+            "not-contained", "ringback minimum is on its window edge", resolved
+        )
+    t_ovs, I_ovs = _parabola_vertex(t[g - 1:g + 2], I[g - 1:g + 2])
+    t_dip, I_dip = _parabola_vertex(t[m - 1:m + 2], I[m - 1:m + 2])
+    if t_ovs is None or t_dip is None:
+        return unresolved(
+            "not-contained", "degenerate curvature at an extremum", resolved
+        )
+    resolved.update({
+        "t_ovs": _ramp_member(t_ovs, RAMP_BAND_T_FLOOR_S, "ok"),
+        "I_ovs": _ramp_member(I_ovs, RAMP_BAND_I_FRAC * abs(I_ovs), "ok"),
+        "t_dip": _ramp_member(t_dip, RAMP_BAND_T_DIP_S, "ok"),
+        "I_dip": _ramp_member(I_dip, RAMP_BAND_I_FRAC * abs(I_dip), "ok"),
+    })
+    return resolved
+
+
+def _plateau_reference_A(path, cache, loaded=None):
+    """Return the pre-batch partner's plateau mean current [A], or None.
+
+    Read with h5py rather than through ``load_result_hdf5``: only three
+    datasets are needed, and a production artifact is multi-GB -- holding a
+    second full result alongside the one being reported would put two of them
+    in memory at once for a single scalar.
+    """
+    if path in cache:
+        return cache[path]
+    try:
+        if loaded is not None:
+            time_s = np.asarray(loaded.time, float)
+            phases = np.asarray(loaded.phase, dtype=str)
+            current = np.asarray(
+                loaded.cathode_diagnostics["source_I_tot"], float
+            )
+        else:
+            import h5py
+
+            with h5py.File(path, "r") as handle:
+                time_s = np.asarray(handle["time"][...], float)
+                phases = np.asarray(handle["phase"][...], dtype=str)
+                current = np.asarray(
+                    handle["cathode_diagnostics"]["source_I_tot"][...], float
+                )
+        hits = np.flatnonzero(phases == "main_discharge")
+        if not hits.size:
+            cache[path] = None
+            return None
+        t_ms = (time_s - float(time_s[hits[0]])) * 1.0e3
+        window = (t_ms >= 15.0) & (t_ms <= 19.5)
+        values = current[window][np.isfinite(current[window])]
+        cache[path] = float(np.mean(values)) if values.size else None
+    except (OSError, KeyError, ValueError):
+        cache[path] = None
+    return cache[path]
+
+
+def _ramp_crossings(t, I, t_trig, I_ref, S_ramp):
+    """Return the paired-reference crossing family as (fraction, member) rows.
+
+    Each row is the FIRST upward crossing at or after ``t_trig`` of
+    ``fraction * I_ref``, linearly interpolated on the bracketing interval,
+    carrying the local secant slope the interpolation itself used.
+    """
+    rows = []
+    post = np.flatnonzero(t >= t_trig)
+    tp, Ip = t[post], I[post]
+    fast = (
+        RAMP_CROSSING_SLOPE_FRACTION * S_ramp
+        if S_ramp is not None and np.isfinite(S_ramp) else None
+    )
+    for fraction in RAMP_CROSSING_FRACTIONS:
+        level = fraction * I_ref
+        hits = np.flatnonzero((Ip[:-1] < level) & (Ip[1:] >= level))
+        if not hits.size:
+            rows.append((fraction, level, np.nan, _ramp_member(
+                np.nan, np.nan, "absent",
+                "the current never reaches this level after the trigger")))
+            continue
+        i = int(hits[0])
+        span_t = float(tp[i + 1] - tp[i])
+        span_I = float(Ip[i + 1] - Ip[i])
+        s_loc = span_I / span_t
+        t_cross = float(tp[i]) + (level - float(Ip[i])) * span_t / span_I
+        if fast is not None and s_loc >= fast:
+            rows.append((fraction, level, s_loc, _ramp_member(
+                t_cross, RAMP_CROSSING_BAND_S, "ok")))
+        else:
+            band = (RAMP_GRID_PHASE_FRACTION * I_ref) / s_loc
+            why = (
+                f"local slope {s_loc / 1e3:.4g} A/ms is below "
+                f"{RAMP_CROSSING_SLOPE_FRACTION:g}*S_ramp"
+                if fast is not None else "no S_ramp to classify against"
+            )
+            rows.append((fraction, level, s_loc, _ramp_member(
+                t_cross, band, "coarse", why)))
+    return rows
+
+
 def _origin_s(result):
     phases = np.asarray(getattr(result, "phase", ()), dtype=str)
     times = np.asarray(result.time, dtype=float)
@@ -135,7 +481,16 @@ def _drive_end_ms(t_ms, phases):
     return float(t_ms[hits[-1]]) if hits.size else float(t_ms[-1])
 
 
-def report(path):
+def report(path, partner=None, reference_cache=None):
+    """Print the fingerprint set for one saved run.
+
+    ``partner`` is the pre-batch artifact of the SAME rung at the SAME stance,
+    supplying the crossing family's reference current; ``None`` (the default)
+    reports that family absent rather than falling back to anything else.
+    ``reference_cache`` is shared across a multi-artifact invocation so a
+    partner is read once even when both members of a pair are reported.
+    """
+    reference_cache = {} if reference_cache is None else reference_cache
     result = load_result_hdf5(path)
     diag = result.cathode_diagnostics
     params = dict(getattr(result, "params", None) or {})
@@ -289,10 +644,198 @@ def report(path):
                   f"{np.percentile(vs, 50):.0f}/{np.percentile(vs, 95):.0f} V, "
                   f"sigma {np.std(vs):.1f} V")
 
+    # --- The high-precision watch-class rows. -------------------------------
+    #
+    # Everything above is byte-frozen: those lines are quoted in stored
+    # comparisons across the campaign record, so this block only ever APPENDS.
+    # It also carries its own precision, deliberately finer than the rows
+    # above, because the quantities here are tested against sub-volt,
+    # sub-percent and sub-kW predictions that the older rows round away.
+    #
+    # NOT EMITTED HERE: knee time and ramp slope. The "knee" of the current
+    # trace has no computed definition anywhere in this repo -- it appears
+    # only as prose and as a hard-coded ~4.5 ms landmark
+    # (verify_sim1d_r3_a11.py, --phase knee) -- so there is nothing to
+    # transcribe, and inventing one would make the row's value an artifact of
+    # this file rather than a property of the run.
+
+    # (i) Breakdown-trigger crossing times, SUB-BIN. The solver linearly
+    # interpolates each threshold crossing between the two consecutive
+    # trigger-check samples that bracket it (``_current_threshold_time``,
+    # solver.py) and stores the result; that is a solver-step-resolved reading
+    # of the current trace. It is NOT the phase-label edge, which is the first
+    # SAVE carrying the new label and is therefore quantized to the save
+    # cadence -- the two differ by up to one save interval, which is the whole
+    # reason this row exists.
+    origin_ms = _origin_s(result) * 1.0e3
+    for threshold_key, trigger_key in (
+        ("I_prebreakdown", "t_prebreakdown_trigger"),
+        ("I_breakdown", "t_breakdown_trigger"),
+    ):
+        t_trigger = float(getattr(result, trigger_key, np.nan))
+        if not np.isfinite(t_trigger):
+            continue
+        threshold = params.get(threshold_key)
+        threshold_text = (
+            "<absent>" if threshold is None else f"{float(threshold):.6g} A"
+        )
+        print(f"(i) {trigger_key}: {t_trigger * 1.0e3:.4f} ms absolute, "
+              f"{t_trigger * 1.0e3 - origin_ms:+.4f} ms vs the main-discharge "
+              f"origin | threshold {threshold_key}={threshold_text}")
+    print(f"(i) phase-label edge (first 'main_discharge' save): "
+          f"{origin_ms:.4f} ms absolute -- save-cadence quantized, carried as "
+          f"the reference the interpolated crossings above are offset from")
+
+    # (ii) Fast-phase ramp structure, all times offset from t_trig.
+    t_trig = float(getattr(result, "t_breakdown_trigger", np.nan))
+    members = _ramp_members(tsec_all, I, t_trig)
+
+    def _t_row(name, member):
+        if member["status"] in ("ok", "coarse"):
+            value = member["value"]
+            body = (f"{value * 1e3:.4f} ms absolute "
+                    f"({(value - t_trig) * 1e6:+.2f} us vs t_trig) | band "
+                    f"+-{member['band'] * 1e6:.2f} us")
+        else:
+            body = "<not resolved> | band n/a"
+        note = f" -- {member['reason']}" if member["reason"] else ""
+        print(f"(ii)   {name:<8} {body} [{member['status']}]{note}")
+
+    def _v_row(name, member, unit, scale, fmt):
+        if member["status"] in ("ok", "coarse"):
+            body = (f"{member['value'] / scale:{fmt}} {unit} | band "
+                    f"+-{member['band'] / scale:{fmt}} {unit}")
+        else:
+            body = "<not resolved> | band n/a"
+        note = f" -- {member['reason']}" if member["reason"] else ""
+        print(f"(ii)   {name:<8} {body} [{member['status']}]{note}")
+
+    trig_text = "<absent>" if not np.isfinite(t_trig) else f"{t_trig * 1e3:.4f} ms"
+    print(f"(ii) fast-phase ramp structure [t_trig {trig_text}, window "
+          f"t_trig -> t_trig+{RAMP_WINDOW_S * 1e3:g} ms, geometry only -- no "
+          f"mechanism claimed]")
+    _t_row("t_dImax", members["t_dImax"])
+    _v_row("S_ramp", members["S_ramp"], "A/ms", 1.0e3, ".4f")
+    _t_row("t_ovs", members["t_ovs"])
+    _v_row("I_ovs", members["I_ovs"], "A", 1.0, ".4f")
+    _t_row("t_dip", members["t_dip"])
+    _v_row("I_dip", members["I_dip"], "A", 1.0, ".4f")
+
+    # The paired-reference crossing family. Both members of a pre/post pair
+    # read against the SAME reference -- the pre-batch partner of that rung --
+    # so an amplitude move cannot masquerade as a timing move. A rung with no
+    # same-stance partner reports the family absent and NAMES what is missing:
+    # substituting a cross-stance partner would reintroduce exactly the
+    # confound the paired form exists to remove.
+    I_ref = None if partner is None else _plateau_reference_A(
+        partner, reference_cache, loaded=result if partner == path else None
+    )
+    if I_ref is None:
+        reason = (
+            "no pre-batch partner supplied for this rung" if partner is None
+            else f"partner {partner} carries no usable 15-19.5 ms plateau"
+        )
+        print(f"(ii)   crossings <not resolved> [absent] -- {reason}; "
+              f"S_ramp above is the partner-free timing-adjacent member")
+    else:
+        S_ramp = (
+            members["S_ramp"]["value"]
+            if members["S_ramp"]["status"] in ("ok", "coarse") else None
+        )
+        print(f"(ii)   crossings vs I_ref {I_ref:.4f} A "
+              f"(pre-batch partner {partner}):")
+        for fraction, level, s_loc, member in _ramp_crossings(
+            tsec_all, I, t_trig, I_ref, S_ramp
+        ):
+            if member["status"] == "absent":
+                body = "<not resolved> | band n/a"
+            else:
+                body = (f"{member['value'] * 1e3:.4f} ms absolute "
+                        f"({(member['value'] - t_trig) * 1e6:+.2f} us vs t_trig)"
+                        f" | s_loc {s_loc / 1e3:.4f} A/ms | band "
+                        f"+-{member['band'] * 1e6:.2f} us")
+            note = f" -- {member['reason']}" if member["reason"] else ""
+            print(f"(ii)     {fraction:.2f}*I_ref={level:.4f} A  {body} "
+                  f"[{member['status']}]{note}")
+
+    # (iii) The 21q plateau observables, over the SAME plateau window the rows
+    # above use (15 ms -> the clamp-checked end; no second clamp notice is
+    # printed because no second window is opened).
+    if plateau.any():
+        vs_full = V[plateau][np.isfinite(V[plateau])]
+        v_text = (
+            "<no finite samples>" if not vs_full.size
+            else f"{np.mean(vs_full):.4f} V"
+        )
+        print(f"(iii) {v_label} plateau mean: {v_text}")
+        Ip = I[plateau][np.isfinite(I[plateau])]
+        if Ip.size:
+            print(f"(iii) plateau current: mean {np.mean(Ip):.3f} A | "
+                  f"median {np.median(Ip):.3f} A")
+        # The gap P_ohmic ledger row. ``P_ohmic = I_tot * V_p`` is the
+        # circuit's I^2 R_p dissipated in the plasma between cathode and
+        # anode (funcs/_cathode_solver.py), and physics/cathode.py deposits
+        # ALL of it into that end's gap cells through weights that normalize
+        # to one -- so each end's P_ohmic IS its gap booking, and the two are
+        # reported separately as well as summed. The twin end is absent on a
+        # single-ended run and reads NaN there, which is why it is presence-
+        # gated rather than summed through.
+        ohmic_total = 0.0
+        ohmic_texts = []
+        for end_key in ("source_P_ohmic", "end_P_ohmic"):
+            series = np.asarray(diag.get(end_key, np.full_like(I, np.nan)), float)
+            finite = series[plateau][np.isfinite(series[plateau])]
+            if not finite.size:
+                ohmic_texts.append(f"{end_key} <absent>")
+                continue
+            end_mean = float(np.mean(finite))
+            ohmic_total += end_mean
+            ohmic_texts.append(f"{end_key} {end_mean / 1.0e3:.4f} kW")
+        print("(iii) gap P_ohmic plateau mean: "
+              f"{' | '.join(ohmic_texts)} | total {ohmic_total / 1.0e3:.4f} kW")
+
+    # (iv) Breakdown-phase Te_max, over the saves the solver itself labelled
+    # 'breakdown' (result.phase), reported with the cell it was attained in --
+    # the location is the point of the row, since a gap-local and a
+    # far-column maximum are different mechanisms.
+    phase_labels = np.asarray(getattr(result, "phase", ()), dtype=str)
+    breakdown = phase_labels == "breakdown"
+    if breakdown.any():
+        Te_bd = np.asarray(result.Te, float)[breakdown]
+        if np.any(np.isfinite(Te_bd)):
+            sample, cell = np.unravel_index(
+                int(np.nanargmax(Te_bd)), Te_bd.shape
+            )
+            print(f"(iv) breakdown-phase Te_max: {Te_bd[sample, cell]:.4f} eV "
+                  f"at {t_ms[breakdown][sample]:+.4f} ms "
+                  f"(cell {int(cell)} of {Te_bd.shape[1]})")
+
 
 def main(argv):
-    for path in argv:
-        report(path)
+    # ``--pair RUN=PARTNER`` (repeatable) names the pre-batch artifact of the
+    # same rung and stance for RUN. It is passed explicitly rather than
+    # inferred from filenames: the pairing is a campaign fact about which two
+    # runs share a stance, which a public tool cannot read off a path.
+    pairs = {}
+    paths = []
+    pending = False
+    for arg in argv:
+        if pending:
+            run, _, partner = arg.partition("=")
+            pairs[run] = partner or None
+            pending = False
+        elif arg == "--pair":
+            pending = True
+        elif arg.startswith("--pair="):
+            run, _, partner = arg[len("--pair="):].partition("=")
+            pairs[run] = partner or None
+        else:
+            paths.append(arg)
+    if pending:
+        raise SystemExit("--pair needs an argument of the form RUN=PARTNER")
+    reference_cache = {}
+    for path in paths:
+        report(path, pairs.get(path), reference_cache)
     return 0
 
 
