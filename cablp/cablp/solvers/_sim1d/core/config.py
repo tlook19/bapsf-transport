@@ -1488,8 +1488,8 @@ def cathode_defaults():
         fallback. During floating phases the emitted electrons return to
         the surface, so the emission-cooling term is dropped there. The
         update is semi-implicit in the linearized loss (unconditionally
-        stable for any ``C_th``), floored at ``cathode_env_T_K``, accepted
-        steps only.
+        stable for any ``C_th``), floored at the 300 K chamber-wall
+        temperature the surface radiates against, accepted steps only.
     cathode_Ts_base_K:
         Heater-maintained standby surface temperature [K] for
         ``cathode_warming_model = "power_balance"`` -- the temperature the
@@ -1508,12 +1508,6 @@ def cathode_defaults():
     cathode_emissivity:
         Total hemispherical emissivity of the emitting surface for the
         radiation term (LaB6 ~0.7).
-    cathode_rad_area_cm2:
-        Radiating area [cm^2] for ``"power_balance"``. ``None`` (default)
-        uses the cathode disc area ``pi*R_cath^2``.
-    cathode_env_T_K:
-        Environment temperature [K] the surface radiates against
-        (chamber walls); negligible against T_s^4, kept for completeness.
     cathode_conduction_W_per_K:
         Conductance [W/K] from the emitting skin layer into the
         heater-held substrate at ``cathode_Ts_base_K`` -- the "heater
@@ -1553,10 +1547,10 @@ def cathode_defaults():
         fully covered (``theta = 1``, so the shot starts at ``phi_wf``
         exactly), evolving as
 
-            dtheta/dt = k_ads (1 - theta)
-                        - [nu_th + sigma_cl Gamma_i] theta
+            dtheta/dt = -sigma_cl Gamma_i theta
 
-        (adsorption, thermal desorption, ion-stimulated desorption), and
+        (ion-stimulated desorption, the only coverage channel, so ``theta``
+        is monotonically non-increasing through a shot), and
         substitutes ``phi_eff = phi_clean + (phi_wf - phi_clean)*theta``
         wherever the work function is read -- Richardson emission, Schottky
         lowering, emission cooling and the gaussian profile's Richardson
@@ -1588,27 +1582,6 @@ def cathode_defaults():
         ``E <= E_th``. ``None`` leaves the cross section energy-independent
         (the pure fluence limit). Inert unless
         ``cathode_surface_model = "ads_des"``.
-    cathode_ads_rate_per_s:
-        Adsorption rate constant ``k_ads`` [1/s] re-covering the clean
-        fraction -- the ``k_ads (1 - theta)`` gain term, which is the only
-        channel that can raise the coverage back up. Must be non-negative;
-        raises at construction otherwise. ``0`` removes it, leaving the
-        coverage monotonically non-increasing through the shot. Inert unless
-        ``cathode_surface_model = "ads_des"``.
-    cathode_desorption_prefactor_per_s:
-        Arrhenius prefactor ``nu0`` [1/s] of the THERMAL desorption channel,
-        whose rate is ``nu_th = nu0 exp(-E_des/(k_B T_s))`` at the current
-        surface temperature (the evolving one under ``"power_balance"``, else
-        the static ``T_s``). Must be non-negative; raises at construction
-        otherwise. ``0`` removes the channel -- ``nu_th`` is set to zero
-        without evaluating the exponential, leaving
-        ``cathode_desorption_energy_eV`` unread. Inert unless
-        ``cathode_surface_model = "ads_des"``.
-    cathode_desorption_energy_eV:
-        Activation energy ``E_des`` [eV] in that Arrhenius rate; larger
-        values suppress thermal desorption more strongly at a given surface
-        temperature. Read only when
-        ``cathode_desorption_prefactor_per_s > 0``.
     cathode_solver_model:
         The live ``"current_driven"`` formulation carries the loop current
         ``I_loop`` (and the
@@ -2233,8 +2206,6 @@ def cathode_defaults():
         "cathode_heat_capacity_J_per_K": 120.0,
         "cathode_conduction_W_per_K": 1200.0,
         "cathode_emissivity": 0.7,
-        "cathode_rad_area_cm2": None,
-        "cathode_env_T_K": 300.0,
         # --- ACTIVE: uniform emission profile ---
         "cathode_emission_profile": "uniform",
         "cathode_Ts_fwhm_cm": 28.0,
@@ -2245,19 +2216,17 @@ def cathode_defaults():
         "cathode_circuit_bound_object": "device_voltage",
         # Surface-state coverage model:
         # "ads_des" evolves contaminant coverage theta with
-        # dtheta/dt = k_ads(1-theta) - [nu0 e^(-E_des/kTs) + sigma Gamma_i] theta
+        # dtheta/dt = -sigma Gamma_i theta
         # and substitutes phi_eff = phi_clean + (phi_wf - phi_clean)*theta
         # everywhere phi_wf is read (emission, Schottky, cooling, gaussian
         # inversion -- every consumer reads the one substituted
         # value, never a mix of phi_eff and phi_wf). phi_wf keeps its
         # meaning as the contaminated SHOT-START value; the clean floor is
         # the per-shot-accessible depth of the re-adsorbed layer, not the
-        # literature clean-LaB6 value. In-shot the ion-stimulated term
-        # dominates (fluence-cleaning limit); adsorption and thermal
-        # desorption are carried for the between-shot cycle map and default to
-        # zero (inert).
-        # --- ACTIVE: ads_des surface state (in-shot ion-stimulated cleaning;
-        # the between-shot ads/desorption params default to zero, inert) ---
+        # literature clean-LaB6 value. Ion-stimulated desorption is the only
+        # coverage-loss channel: the coverage is monotonically non-increasing
+        # through a shot.
+        # --- ACTIVE: ads_des surface state (in-shot ion-stimulated cleaning) ---
         "cathode_surface_model": "ads_des",
         "cathode_phiwf_clean_eV": 2.809,
         "cathode_cleaning_sigma_cm2": 3.5e-16,
@@ -2266,9 +2235,6 @@ def cathode_defaults():
         # per-ion energy E = P_cathode_i/I_i. None = the energy-independent
         # fluence limit.
         "cathode_cleaning_E_th_eV": 20.0,
-        "cathode_ads_rate_per_s": 0.0,
-        "cathode_desorption_prefactor_per_s": 0.0,
-        "cathode_desorption_energy_eV": 3.0,
         # Directed neutral recycle jets: with
         # the neutral_momentum flag on, the surface recycle fluxes carry
         # directed momentum into M_n instead of rebirthing at rest.

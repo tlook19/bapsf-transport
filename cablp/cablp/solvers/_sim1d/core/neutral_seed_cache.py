@@ -68,13 +68,12 @@ INERT_PARAM_KEYS = frozenset({
     "tau_neutral_prebreakdown", "phase_transition_mode",
     # --- cathode / emission / warming / surface (no cathode during equil) ---
     "T_s", "L_cath", "R_cath", "phi_wf",
-    "cathode_Ts_base_K", "cathode_Ts_fwhm_cm", "cathode_ads_rate_per_s",
+    "cathode_Ts_base_K", "cathode_Ts_fwhm_cm",
     "cathode_cleaning_E_th_eV", "cathode_cleaning_sigma_cm2",
-    "cathode_conduction_W_per_K", "cathode_desorption_energy_eV",
-    "cathode_desorption_prefactor_per_s", "cathode_emission_annuli",
-    "cathode_emission_profile", "cathode_emissivity", "cathode_env_T_K",
+    "cathode_conduction_W_per_K", "cathode_emission_annuli",
+    "cathode_emission_profile", "cathode_emissivity",
     "cathode_heat_capacity_J_per_K", "cathode_model", "cathode_phi_c_cap_V",
-    "cathode_phiwf_clean_eV", "cathode_rad_area_cm2", "cathode_sample_smoothing",
+    "cathode_phiwf_clean_eV", "cathode_sample_smoothing",
     "cathode_solver_model", "cathode_surface_model", "cathode_warming_model",
     "cathode_Rp_model",
     # --- beam deposition / excitation (no plasma/beam during equil) ---

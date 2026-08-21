@@ -3904,7 +3904,7 @@ def _case_cathode_power_balance_under_current_drive(
         sf_result.cathode_diagnostics["phi_wf_eff"], float
     )
     assert np.all(np.isfinite(sf_theta)) and np.all(sf_theta <= 1.0)
-    assert np.all(np.diff(sf_theta) <= 0.0)  # cleaning only, k_ads = 0
+    assert np.all(np.diff(sf_theta) <= 0.0)  # ion-stimulated cleaning only
     # Reproduce the backward-Euler update exactly from the spy's honest
     # I_i sequence (run() starts I_loop at 0, so the accepted honest
     # solves carry the near-floating I_i -- the form is what's tested).
@@ -3912,8 +3912,8 @@ def _case_cathode_power_balance_under_current_drive(
     sf_th = 1.0
     for sf_Ii in sf_calls:
         sf_G = max(sf_Ii, 0.0) / (1.602176634e-19 * sf_area)
-        sf_loss = 0.0 + 1.0e-16 * sf_G
-        sf_th = (sf_th + 1.0e-10 * 0.0) / (1.0 + 1.0e-10 * (0.0 + sf_loss))
+        sf_loss = 1.0e-16 * sf_G
+        sf_th = sf_th / (1.0 + 1.0e-10 * sf_loss)
     assert np.isclose(sf_theta[-1], sf_th, rtol=0.0, atol=1e-11), (
         sf_theta[-1], sf_th
     )
@@ -8475,6 +8475,7 @@ def _case_cathode_power_balance_warming(
     sim, snapshot = _base_sim()
     geom = snapshot.geometry
     from cablp.solvers._sim1d.physics.cathode import (
+        CATHODE_ENV_T_K,
         cathode_power_balance_terms_W,
     )
 
@@ -8570,7 +8571,7 @@ def _case_cathode_power_balance_warming(
             + 1.0e-10
             * (pb_h + pb_p - pb_r - pb_e - pb_c)
             / (_pb_C + 1.0e-10 * pb_G),
-            float(pb_params["cathode_env_T_K"]),
+            CATHODE_ENV_T_K,
         )
         assert np.isclose(pb_Ts[pb_k], pb_T_prev, rtol=0.0, atol=1e-9), (
             pb_k, pb_Ts[pb_k], pb_T_prev,

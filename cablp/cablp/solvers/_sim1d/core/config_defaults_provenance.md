@@ -809,14 +809,6 @@ different value; see `scripts/production_stance_provenance.md`.
 He -> O kinematics for chemisorbed oxygen.
 **`cathode_cleaning_sigma_cm2 = 3.5e-16` cm^2 — FITTED.**
 
-**`cathode_desorption_energy_eV = 3.0` eV — ASSUMED.** No independent bar is on
-record and no memo was written; the value is latent rather than load-bearing.
-It is read only when `cathode_desorption_prefactor_per_s > 0`, which ships `0`,
-so at the shipped defaults the thermal-desorption exponential is never
-evaluated and this number is inert. It acquires a bar only when the ads/des
-arm (`cathode_surface_model = "ads_des"`) is first exercised with a positive
-prefactor; a bracket must be established before any result leans on it.
-
 **`cathode_jet_R_N = 0.34`, `cathode_jet_R_E = 0.18` — ASSUMED (mid-box
 construction), bracket = the two endpoint PAIRS below.** Particle and energy
 reflection coefficients for He -> LaB6 at the cathode. They are not read off a

@@ -105,6 +105,7 @@ from .physics.cathode import (
 )
 from cablp.funcs._cathode_solver_idriven import beam_launch_energy_eV
 from .physics.cathode import (
+    CATHODE_ENV_T_K,
     advance_circuit_current_driven,
     circuit_bound_object,
     idriven_result_evaluator,
@@ -1663,22 +1664,20 @@ class LAPDSim1D:
                 raise ValueError(
                     "cathode_conduction_W_per_K must be non-negative"
                 )
-            if float(Ts_base) <= float(
-                self._input_dict.get("cathode_env_T_K", 300.0)
-            ):
+            if float(Ts_base) <= CATHODE_ENV_T_K:
                 raise ValueError(
-                    "cathode_Ts_base_K must exceed cathode_env_T_K"
+                    "cathode_Ts_base_K must exceed the "
+                    f"{CATHODE_ENV_T_K:g} K chamber-wall temperature"
                 )
             self._cathode_Ts_K = float(Ts_base)
         # Surface-state coverage (cathode_surface_model="ads_des",
         # M5a): theta in [0, 1] is the contaminant
         # coverage raising the effective work function,
         # phi_eff = phi_clean + (phi_wf - phi_clean) * theta, evolving as
-        #   dtheta/dt = k_ads (1-theta) - [nu0 e^(-E_des/kT_s) + sigma Gamma_i] theta
-        # (adsorption / thermal desorption / ion-stimulated desorption).
-        # In-shot the ion term dominates (M5a: the fluence-cleaning limit);
-        # the other channels are carried for the M5b cycle map and default
-        # to zero. None = static phi_wf (historical).
+        #   dtheta/dt = -sigma Gamma_i theta
+        # (ion-stimulated desorption -- M5a, the fluence-cleaning limit --
+        # which is the only coverage channel, so theta is monotonically
+        # non-increasing). None = static phi_wf (historical).
         surface_model = str(
             self._input_dict.get("cathode_surface_model", "none")
         )
@@ -1700,13 +1699,10 @@ class LAPDSim1D:
                     "cathode_phiwf_clean_eV must be below phi_wf (the "
                     "contaminated shot-start value)"
                 )
-            for _sk in (
-                "cathode_cleaning_sigma_cm2",
-                "cathode_ads_rate_per_s",
-                "cathode_desorption_prefactor_per_s",
-            ):
-                if float(self._input_dict.get(_sk, 0.0)) < 0.0:
-                    raise ValueError(f"{_sk} must be non-negative")
+            if float(self._input_dict.get("cathode_cleaning_sigma_cm2", 0.0)) < 0.0:
+                raise ValueError(
+                    "cathode_cleaning_sigma_cm2 must be non-negative"
+                )
             self._cathode_theta = 1.0
         # Per-shot surface energy ledger [J] (power_balance only): running
         # integrals of the balance terms over accepted steps. The net
@@ -5063,9 +5059,7 @@ class LAPDSim1D:
                 # explicit update to 4 decimal places; for tiny C_th it
                 # cannot overshoot the radiative equilibrium and ring.
                 eps = float(self._input_dict.get("cathode_emissivity", 0.7))
-                area = self._input_dict.get("cathode_rad_area_cm2")
-                if area is None:
-                    area = math.pi * float(self._input_dict["R_cath"]) ** 2
+                area = math.pi * float(self._input_dict["R_cath"]) ** 2
                 G_lin = (
                     4.0
                     * eps
@@ -5086,7 +5080,7 @@ class LAPDSim1D:
                 )
                 self._cathode_Ts_K = max(
                     self._cathode_Ts_K + dT,
-                    float(self._input_dict.get("cathode_env_T_K", 300.0)),
+                    CATHODE_ENV_T_K,
                 )
                 ledger = self._cathode_energy_ledger_J
                 ledger["heater"] += float(attempt.dt) * P_heat
@@ -5137,33 +5131,10 @@ class LAPDSim1D:
                 else:
                     r = E_th / E_ion_eV
                     sigma_cl *= (1.0 - r ** (2.0 / 3.0)) * (1.0 - r) ** 2
-            k_ads = float(
-                self._input_dict.get("cathode_ads_rate_per_s", 0.0)
+            loss = sigma_cl * Gamma_i
+            self._cathode_theta = self._cathode_theta / (
+                1.0 + float(attempt.dt) * loss
             )
-            nu0 = float(
-                self._input_dict.get(
-                    "cathode_desorption_prefactor_per_s", 0.0
-                )
-            )
-            nu_th = 0.0
-            if nu0 > 0.0:
-                T_des = (
-                    float(self._cathode_Ts_K)
-                    if self._cathode_Ts_K is not None
-                    else float(self._input_dict.get("T_s", 300.0))
-                )
-                nu_th = nu0 * math.exp(
-                    -float(
-                        self._input_dict.get(
-                            "cathode_desorption_energy_eV", 3.0
-                        )
-                    )
-                    / (8.617333262e-5 * max(T_des, 1.0))
-                )
-            loss = nu_th + sigma_cl * Gamma_i
-            self._cathode_theta = (
-                self._cathode_theta + float(attempt.dt) * k_ads
-            ) / (1.0 + float(attempt.dt) * (k_ads + loss))
         # Emitting-area percolation, accepted steps only, and at the SAME seam
         # as the other two surface states above: the honest accepted-state
         # re-solve read the pre-update surface (pre-update T_s, phi_wf_eff and

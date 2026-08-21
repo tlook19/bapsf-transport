@@ -188,15 +188,6 @@ DEPRECATED_CONTROLS = {
         values=("kinetic",),
     ),
     # ==== dead levers: cathode ============================================
-    "cathode_rad_area_cm2": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
-    "cathode_ads_rate_per_s": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
-    "cathode_desorption_prefactor_per_s": DeprecatedControl(
-        PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX,
-    ),
-    "cathode_desorption_energy_eV": DeprecatedControl(
-        PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX,
-    ),
-    "cathode_env_T_K": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
     "anode_radius_cm": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
     "coverage_backfill_time_s": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
     # ==== dead levers: timestep control ===================================

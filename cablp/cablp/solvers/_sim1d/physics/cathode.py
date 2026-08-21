@@ -385,6 +385,11 @@ def cathode_device_config(input_dict, input_flags, mu, f_em=None):
 _SIGMA_SB_W_CM2_K4 = 5.670374419e-12
 _KB_EV_PER_K = 8.617333262e-5
 
+#: Chamber-wall temperature [K] the cathode surface radiates against, and the
+#: floor of the evolving surface temperature under
+#: ``cathode_warming_model = "power_balance"``. Negligible against ``T_s^4``.
+CATHODE_ENV_T_K = 300.0
+
 
 def cathode_power_balance_terms_W(T_s_K, P_ion_W, I_eth_star_A, input_dict):
     """Return ``(P_heater, P_ion, P_rad, P_emis, P_cond)`` [W] for warming.
@@ -417,11 +422,9 @@ def cathode_power_balance_terms_W(T_s_K, P_ion_W, I_eth_star_A, input_dict):
     The net rate is ``(P_heater + P_ion - P_rad - P_emis - P_cond) /
     C_th``; the caller owns the time discretization.
     """
-    area = input_dict.get("cathode_rad_area_cm2")
-    if area is None:
-        area = math.pi * float(input_dict["R_cath"]) ** 2
+    area = math.pi * float(input_dict["R_cath"]) ** 2
     eps = float(input_dict.get("cathode_emissivity", 0.7))
-    T_env = float(input_dict.get("cathode_env_T_K", 300.0))
+    T_env = CATHODE_ENV_T_K
     T_base = float(input_dict["cathode_Ts_base_K"])
 
     def _rad(T):
