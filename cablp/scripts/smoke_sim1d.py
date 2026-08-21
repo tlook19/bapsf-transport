@@ -1,4 +1,82 @@
+"""Assertion smoke suite for LAPDSim1D, as a registry of named cases.
+
+Run the whole suite (the gate) with no arguments; it exits 0 on success and
+dies at the first failing assert, exactly as the single linear script it
+replaces did.
+
+    python scripts/smoke_sim1d.py              # full suite, the gate
+    python scripts/smoke_sim1d.py --list       # case names, in order
+    python scripts/smoke_sim1d.py --only cathode-boundary-beer-lambert
+    python scripts/smoke_sim1d.py --trace      # log each case name as it starts
+
+There is no pytest dependency and no discovery: ``_CASES`` is an ordered list
+built by the ``@_case`` decorator at import time, and the full suite runs it
+in registration order, which is the order the blocks had inside the old
+``main()``.
+
+SHARED STATE, AND WHAT ``--only`` CAN AND CANNOT DO
+---------------------------------------------------
+The old ``main()`` was one scope, so every block could see everything the
+blocks above it had built. Two mechanisms replace that, and both are explicit:
+
+* **Fixtures** -- ``_base_config``, ``_base_sim``, ``_resolved_config``,
+  ``_resolved_geometry``, ``_cathode_flags``, ``_resolved_cathode_flags``.
+  These are the objects ``main()`` built ONCE and dozens of blocks reused.
+  Each is a plain function whose value is cached for the process, so in a
+  full-suite run every case gets the same object -- mutations included --
+  that the single shared scope used to hand out. A case that asks for one
+  binds it in the first lines of its body.
+
+* **The case context** -- values that one case computes and a later case
+  consumes travel through a ``ctx`` dict the runner threads. A case declares
+  what it hands on in ``@_case(..., provides=(...))`` and what it consumes as
+  its parameters; the runner injects the parameters and harvests the declared
+  names from the case's ``return locals()``. The registry is therefore the
+  dependency graph, and ``--only`` refuses a case whose inputs are missing
+  with a message naming the case that produces them.
+
+Consequences of running a subset, stated rather than hidden:
+
+* A case that mutates a fixture (most of them mutate ``params``/``flags``)
+  changes what every LATER case sees. Under ``--only`` a case gets the fixture
+  as built, without its predecessors' mutations, so a case can pass in the
+  full suite and fail alone, or the reverse. ``--only`` is a debugging aid;
+  the FULL SUITE is the gate.
+* Nothing is reordered and nothing is duplicated: the cases hold the original
+  statements, in the original order. The one deliberate exception is that
+  ``default_config()`` is now called twice at the top -- once by
+  ``production-construction-warning-free`` and ``shipped-defaults-and-base-
+  geometry`` for their read-only assertions on the shipped defaults, and once
+  inside ``_base_config`` which then pins the historical stance.
+
+DEPRECATION-WARNING SUPPRESSION (and its limits)
+------------------------------------------------
+Two helpers pin a deliberately legacy stance: ``_pin_pre_r2a_neutral_stance``
+(the pre-R2a 5-field cold-neutral layout) and ``_pin_operator_algebra_stance``
+(the historical all-cells operator algebra). Every key they touch is listed in
+``_HISTORICAL_PIN_KEYS``. Cases registered with ``historical_stance=True`` run
+inside ``_historical_pin_warnings()``, which ignores DeprecationWarnings whose
+message names one of those keys -- so the suite's stderr is not buried under
+warnings about pins it makes on purpose.
+
+The suppression is deliberately narrow in both directions:
+
+* only those keys are muted, so a case on the historical stance that
+  deprecates any OTHER key still prints its warning;
+* only cases that BUILD ON a pinned config dict are muted -- either straight
+  from a fixture, or from one a predecessor derived and handed on -- so a case
+  that constructs a deprecated configuration of its own still prints its
+  warning (50 of the 106 cases carry the flag; the other 56 warn as usual);
+* ``production-construction-warning-free`` is not muted, and it asserts
+  against a fresh ``warnings.catch_warnings(record=True)`` with
+  ``simplefilter("always")``, which overrides any outer filter -- a production
+  default that starts warning is still caught there.
+"""
+
+import argparse
+import contextlib
 import dataclasses
+import inspect
 import json
 import math
 import os
@@ -412,7 +490,89 @@ _CAPFIX_BELOW_I_A = (5.0, 5.44, 5.45)
 _CAPFIX_WINDOW_I_A = (5.46, 5.5, _CAPFIX_ESCAPE_I_A, 5.57, 5.58, 6.0, 8.0)
 
 
-def main():
+# ----------------------------------------------------------------------
+# The case registry. ``_CASES`` is ordered by registration, and registration
+# order IS the order the blocks had inside the old linear main().
+# ----------------------------------------------------------------------
+class _Case:
+    """One named, individually-runnable block of the suite."""
+
+    def __init__(self, name, fn, needs, provides, historical_stance):
+        self.name = name
+        self.fn = fn
+        self.needs = needs
+        self.provides = provides
+        self.historical_stance = historical_stance
+
+
+_CASES = []
+_CASE_BY_NAME = {}
+_PRODUCER = {}
+
+
+def _case(name, provides=(), historical_stance=False):
+    """Register a case. Parameters are consumed from the context; ``provides``
+    names what the case hands on to later cases."""
+    def decorate(fn):
+        needs = tuple(inspect.signature(fn).parameters)
+        entry = _Case(name, fn, needs, tuple(provides), historical_stance)
+        if name in _CASE_BY_NAME:
+            raise ValueError(f"duplicate smoke case name: {name}")
+        _CASES.append(entry)
+        _CASE_BY_NAME[name] = entry
+        for key in entry.provides:
+            _PRODUCER.setdefault(key, name)
+        return fn
+    return decorate
+
+
+@contextlib.contextmanager
+def _historical_pin_warnings():
+    """Mute the DeprecationWarnings raised by the two historical-pin helpers.
+
+    Scoped to the keys ``_HISTORICAL_PIN_KEYS`` lists and to cases that
+    declare ``historical_stance=True``; everything else warns as usual.
+    """
+    with warnings.catch_warnings():
+        for key in _HISTORICAL_PIN_KEYS:
+            warnings.filterwarnings(
+                "ignore", message=f"{key}=", category=DeprecationWarning
+            )
+        yield
+
+
+def _run_case(entry, ctx, trace=False):
+    """Run one case against the shared context and harvest what it provides."""
+    if trace:
+        print(f"case: {entry.name}", file=sys.stderr, flush=True)
+    missing = [k for k in entry.needs if k not in ctx]
+    if missing:
+        where = ", ".join(
+            f"{k} (from {_PRODUCER.get(k, 'an earlier case')})" for k in missing
+        )
+        raise SystemExit(
+            f"case {entry.name!r} needs values it did not receive: {where}. "
+            "Run the full suite, or add the producing case to --only."
+        )
+    kwargs = {k: ctx[k] for k in entry.needs}
+    if entry.historical_stance:
+        with _historical_pin_warnings():
+            result = entry.fn(**kwargs)
+    else:
+        result = entry.fn(**kwargs)
+    for key in entry.provides:
+        if result is not None and key in result:
+            ctx[key] = result[key]
+
+
+# --------------------------------------------------------------------
+# production-construction-warning-free
+# --------------------------------------------------------------------
+@_case(
+    "production-construction-warning-free",
+    provides=("_warnings",),
+)
+def _case_production_construction_warning_free():
     # The production/default stance must construct WARNING-FREE. This guards a
     # SURVIVING path -- it is what stops production silently acquiring a
     # DeprecationWarning. (The golden's legacy ion-neutral arm is the one
@@ -424,7 +584,18 @@ def main():
         _warnings.simplefilter("always")
         LAPDSim1D(_dep_params, _dep_flags)
     assert not _caught, "production/default configuration must be warning-free"
+    return locals()
 
+
+# --------------------------------------------------------------------
+# shipped-defaults-and-base-geometry
+# --------------------------------------------------------------------
+@_case(
+    "shipped-defaults-and-base-geometry",
+    historical_stance=True,
+    provides=("anode_face", "cathode_face"),
+)
+def _case_shipped_defaults_and_base_geometry():
     params, flags = default_config()
     assert params["cycles"] == 1
     assert params["phase_transition_mode"] == "current"
@@ -774,7 +945,21 @@ def main():
             assert expected in str(exc)
         else:
             raise AssertionError("invalid neutral-baffle configuration constructed")
+    return locals()
 
+
+# --------------------------------------------------------------------
+# source-fixed-grid
+# --------------------------------------------------------------------
+@_case(
+    "source-fixed-grid",
+    historical_stance=True,
+    provides=(
+        "expansion_geom", "expansion_sim", "srcgrid_off_flags",
+        "srcgrid_off_params",
+    ),
+)
+def _case_source_fixed_grid():
     # Fixed-cell-size source region (``source_fixed_grid``). Without it, nx
     # uniform column cells span anode face to collector start, so a refinement
     # study moves every near-source cell edge -- including the puff cell, whose
@@ -787,6 +972,8 @@ def main():
     # None the spec helper returns None. Since the R2a fold-in the flag and both
     # values are config defaults, so the off arm is constructed here rather than
     # read off default_config().
+    resolved_params, resolved_flags = _resolved_config()
+    resolved_geom = _resolved_geometry()
     srcgrid_off_flags = {**resolved_flags, "source_fixed_grid": False}
     srcgrid_off_params = dict(
         resolved_params,
@@ -1075,7 +1262,20 @@ def main():
             assert expected in str(exc)
         else:
             raise AssertionError("invalid expanded-end configuration constructed")
+    return locals()
 
+
+# --------------------------------------------------------------------
+# variable-area-well-balancedness
+# --------------------------------------------------------------------
+@_case(
+    "variable-area-well-balancedness",
+    historical_stance=True,
+)
+def _case_variable_area_well_balancedness(
+    anode_face, cathode_face, expansion_geom, expansion_sim,
+    srcgrid_off_flags, srcgrid_off_params
+):
     # Well-balancedness of the variable-area flux tube: for a uniform stationary
     # plasma the quasi-1D p*dA/dz geometric source cancels the area-weighted
     # pressure flux bit-for-bit -- but this property applies only across the
@@ -1089,6 +1289,10 @@ def main():
     # effect on this state: at u=0 with no gradients the KEP convective term and
     # the Rusanov dissipation both vanish at every interior face, so only the
     # collector ghost -- gated by characteristic_boundary -- can be nonzero.)
+    resolved_params, resolved_flags = _resolved_config()
+    sim, snapshot = _base_sim()
+    geom = snapshot.geometry
+    resolved_geom = _resolved_geometry()
     uniform_expansion = conservative_from_primitives(
         n=np.full(expansion_geom.cells, 1.0e12),
         nn=np.full(expansion_geom.cells, 1.0e12),
@@ -1449,11 +1653,29 @@ def main():
     # cathode-scaled estimate is far off -- which is the point of the split.
     assert m5_result.I_i_a > 10.0 * (2.0 * resolved_params["eta"] * m5_result.I_i)
 
+
+# --------------------------------------------------------------------
+# cathode-resolved-gap-resistance
+# --------------------------------------------------------------------
+@_case(
+    "cathode-resolved-gap-resistance",
+    historical_stance=True,
+    provides=("_warnings", "dt_default", "neutral_phase_params"),
+)
+def _case_cathode_resolved_gap_resistance(cathode_face):
     # --- Resolved gap resistance (cathode_Rp_model="resolved_gap",
     # M1): the historical R_p spreads the hot
     # cathode-adjacent Spitzer sample over the whole 50 cm gap; the resolved
     # model integrates dz/(sigma_par(Te)*A) over the gap profile and feeds
     # it to the unmodified solver through an effective DeviceConfig.R_cath.
+    params, flags = _base_config()
+    resolved_params, resolved_flags = _resolved_config()
+    sim, snapshot = _base_sim()
+    geom = snapshot.geometry
+    state = snapshot.state
+    derived = snapshot.derived
+    resolved_geom = _resolved_geometry()
+    resolved_cathode_flags = _resolved_cathode_flags()
     import warnings as _warnings
 
     from cablp.solvers._sim1d.core.geometry import gap_cell_indices
@@ -1791,10 +2013,29 @@ def main():
     }
 
     cathode_flags = _cathode_flags()
+    return locals()
+
+
+# --------------------------------------------------------------------
+# cathode-boundary-beer-lambert
+# --------------------------------------------------------------------
+@_case(
+    "cathode-boundary-beer-lambert",
+    historical_stance=True,
+    provides=(
+        "beam_birth_terms", "cathode_bl_params", "cathode_sim",
+        "cathode_solve", "split_beam_terms",
+    ),
+)
+def _case_cathode_boundary_beer_lambert(cathode_face):
     # This block exercises the cathode boundary + beam-ionization bookkeeping in
     # the beer_lambert regime it was written for (excitation off by default);
     # the CSDA production beam + manifold excitation are covered by the R4
     # blocks. beer_lambert is a live A/B arm.
+    params, flags = _base_config()
+    sim, snapshot = _base_sim()
+    geom = snapshot.geometry
+    cathode_flags = _cathode_flags()
     cathode_bl_params = dict(params, beam_deposition_model="beer_lambert")
     cathode_sim = LAPDSim1D(cathode_bl_params, cathode_flags)
     cathode_sim._circuit_I_loop = 3000.0
@@ -1891,12 +2132,28 @@ def main():
         beam_birth_terms.nn,
     )
     assert np.allclose(split_beam_terms["beam_ionization_birth"].Ee, 0.0)
+    return locals()
 
+
+# --------------------------------------------------------------------
+# beam-ionization-birth-dt-bound
+# --------------------------------------------------------------------
+@_case(
+    "beam-ionization-birth-dt-bound",
+    historical_stance=True,
+)
+def _case_beam_ionization_birth_dt_bound(
+    beam_birth_terms, cathode_bl_params, split_beam_terms
+):
     # --- beam_ionization_birth in the resolved-source dt bound (default off) --
     # The row is a volumetric plasma source that can drive a cell into a floor
     # within one step, and it has never been in ANY timestep bound: the bundle
     # carries only the boundary, anode-collection and cathode-surface rows.
     # Here the row is demonstrably live (asserted nonzero above).
+    params, flags = _base_config()
+    sim, snapshot = _base_sim()
+    geom = snapshot.geometry
+    cathode_flags = _cathode_flags()
     assert flags.get("beam_ionization_birth_timestep_bound", False) is False
     assert default_config()[1]["beam_ionization_birth_timestep_bound"] is False
     # Both sims built FRESH and identically here: the bundle re-solves the
@@ -1982,11 +2239,24 @@ def main():
         atol=1e-12 * beam_inventory_scale,
     )
 
+
+# --------------------------------------------------------------------
+# cathode-annular-emission-profile
+# --------------------------------------------------------------------
+@_case(
+    "cathode-annular-emission-profile",
+    provides=(
+        "PlasmaState", "cathode_solve_fn", "gauss_cfg", "hot_cfg",
+        "one_annulus", "plasma_probe", "uni_cfg",
+    ),
+)
+def _case_cathode_annular_emission_profile():
     # --- Annular cathode emission profile (cathode_emission_profile):
     # the uniform disc's ceiling is a razor wall; the measured radial
     # footprint softens it into a ramp. Single warm annulus at the plasma
     # footprint must reproduce the uniform solve; the gaussian profile must
     # produce a monotone, softened V(I) knee.
+    sim, snapshot = _base_sim()
     from cablp.funcs._cathode_solver import PlasmaState, solve as cathode_solve_fn
     from cablp.solvers._sim1d.physics.cathode import (
         cathode_device_config,
@@ -2036,7 +2306,23 @@ def main():
     assert gauss_cfg.I_eth < uni_cfg.I_eth * (np.pi * 19.0**2) / uni_cfg.A_c
     hot_params = dict(gauss_params, T_s=2110.0)
     hot_cfg = cathode_device_config(hot_params, knee_flags, sim.mu)
+    return locals()
 
+
+# --------------------------------------------------------------------
+# cathode-current-driven-sheath-solve
+# --------------------------------------------------------------------
+@_case(
+    "cathode-current-driven-sheath-solve",
+    provides=(
+        "_cap_beam", "_cap_cfg", "_cap_pl", "id_ceiling", "id_grid",
+        "id_plasmas", "solve_idriven",
+    ),
+)
+def _case_cathode_current_driven_sheath_solve(
+    PlasmaState, cathode_solve_fn, gauss_cfg, hot_cfg, one_annulus,
+    plasma_probe, uni_cfg
+):
     # --- Current-driven sheath solve (M2): given the
     # V-driven solve's I_tot, solve_idriven must reproduce the same operating
     # point -- phi_c/phi_a/I_eth_star/regime -- through the monotone device
@@ -2236,7 +2522,19 @@ def main():
     assert _cap_beam.beam_cross[0] == _beam_deposition_mod.He_EII_cross_lkup(
         _cap_beam.result.phi_c / I_ion
     ), _cap_beam.beam_cross[0]
+    return locals()
 
+
+# --------------------------------------------------------------------
+# cathode-circuit-voltage-bound-r1
+# --------------------------------------------------------------------
+@_case(
+    "cathode-circuit-voltage-bound-r1",
+    provides=("_R1_V_AVAIL", "_r1_sim_config", "_r1_state"),
+)
+def _case_cathode_circuit_voltage_bound_r1(
+    _cap_beam, _cap_cfg, _cap_pl, solve_idriven
+):
     # ------------------------------------------------------------------
     # R1: the CIRCUIT VOLTAGE BOUND. The device voltage cannot exceed what the
     # circuit supplies. The cap above is an atomic-data domain guard (the He
@@ -2477,7 +2775,20 @@ def main():
         assert math.isnan(float(_r1_off_diag["source_circuit_V_avail_V"]))
         assert float(_r1_off_diag["source_phi_c_ceiling_V"]) == 1000.0
     assert any(code == 0.0 for code in _r1_codes), _r1_codes
+    return locals()
 
+
+# --------------------------------------------------------------------
+# cathode-phi-a-aware-object
+# --------------------------------------------------------------------
+@_case(
+    "cathode-phi-a-aware-object",
+    provides=("idriven_vdis_evaluator",),
+)
+def _case_cathode_phi_a_aware_object(
+    PlasmaState, _R1_V_AVAIL, _cap_cfg, _cap_pl, _r1_sim_config,
+    solve_idriven
+):
     # (viii) THE phi_a-AWARE OBJECT. R1 bounded phi_c; what the circuit
     # supplies is the DEVICE voltage V_b = phi_c - phi_a + V_p, in which the
     # anode fall SUBTRACTS. cathode_circuit_bound_object='device_voltage' (the
@@ -2729,7 +3040,19 @@ def main():
     ))
     _crf_eq._circuit_I_loop = _crf_integrate(_crf_vdis, 1.25e-7)
     assert math.isinf(_crf_eq.suggest_timestep().dt_circuit)
+    return locals()
 
+
+# --------------------------------------------------------------------
+# vessel-common-mode-node
+# --------------------------------------------------------------------
+@_case(
+    "vessel-common-mode-node",
+    provides=("_vcm_diag", "_vcm_on"),
+)
+def _case_vessel_common_mode_node(
+    _R1_V_AVAIL, _cap_cfg, _cap_pl, _r1_sim_config, _r1_state
+):
     # ------------------------------------------------------------------
     # THE VESSEL / COMMON-MODE NODE (regime_vessel_node, default off).
     # One state variable V_cm, the anode-to-wall potential, obeying
@@ -3038,6 +3361,17 @@ def main():
         assert _vcm_on._vessel_ion_wall_current_A() == 0.0
     finally:
         _vcm_on._cathode_solve = _vcm_saved_solve
+    return locals()
+
+
+# --------------------------------------------------------------------
+# cathode-second-wall-landing-population
+# --------------------------------------------------------------------
+@_case("cathode-second-wall-landing-population")
+def _case_cathode_second_wall_landing_population(
+    _r1_sim_config, _vcm_diag, _vcm_on, gauss_cfg, id_ceiling, id_grid,
+    id_plasmas, plasma_probe, solve_idriven, uni_cfg
+):
     # THE SECOND WALL-LANDING POPULATION. Under
     # beam_product_transport="terminal_nonlocal" the walked terminal residual
     # that reaches an end lands on the same surface as the transmitted
@@ -3203,10 +3537,24 @@ def main():
         assert np.isclose(br_deep_on.phi_c_minus, br_deep_off.phi_c_minus,
                           rtol=1e-11, atol=1e-13), br_I
 
+
+# --------------------------------------------------------------------
+# circuit-current-driven-integration
+# --------------------------------------------------------------------
+@_case(
+    "circuit-current-driven-integration",
+    historical_stance=True,
+    provides=(
+        "idriven_vdis_evaluator", "m3_Iloop", "m3_cathode_flags",
+        "m3_diag", "m3_params", "m3_run_sim",
+    ),
+)
+def _case_circuit_current_driven_integration():
     # --- Current-driven circuit integration (M3):
     # TR-BDF2 stages as bracketed scalar root-finds against monotone
     # V_dis(I). Gate 1: 2nd order on the analytic RLC decay with a linear
     # V_dis(I) load (halve dt, error / ~4).
+    resolved_cathode_flags = _resolved_cathode_flags()
     from cablp.solvers._sim1d.physics.cathode import (
         advance_circuit_current_driven,
         idriven_vdis_evaluator,
@@ -3420,12 +3768,26 @@ def main():
     assert np.allclose(m3_Vstep[1:], m3_recon, atol=0.5), (
         m3_Vstep[1:], m3_recon
     )
+    return locals()
+
+
+# --------------------------------------------------------------------
+# cathode-power-balance-under-current-drive
+# --------------------------------------------------------------------
+@_case(
+    "cathode-power-balance-under-current-drive",
+    historical_stance=True,
+)
+def _case_cathode_power_balance_under_current_drive(
+    idriven_vdis_evaluator, m3_Iloop, m3_diag, m3_params, m3_run_sim
+):
     # Power-balance warming under current_driven must feed on the HONEST
     # accepted-state solve, not the RHS cache: the cache holds the step's
     # last internal-stage solve, measured at 4.6-7.5x the accepted-state
     # P_cathode_i at the same frozen current (2026-07-21). Spy on the
     # evaluator the warming branch uses and require the energy ledger to
     # integrate exactly the honest values it returned.
+    resolved_cathode_flags = _resolved_cathode_flags()
     import cablp.solvers._sim1d.solver as _solver_mod
 
     pbh_calls = []
@@ -3643,7 +4005,21 @@ def main():
         rtol=1e-10,
     )
 
+
+# --------------------------------------------------------------------
+# beam-excitation-channel
+# --------------------------------------------------------------------
+@_case(
+    "beam-excitation-channel",
+    historical_stance=True,
+    provides=(
+        "beam_excitation_cross", "exc_beam", "exc_params", "launch_idx",
+    ),
+)
+def _case_beam_excitation_channel(cathode_solve):
     # --- Beam excitation channel (b_beam_excitation, default 0 = historical).
+    params, flags = _base_config()
+    cathode_flags = _cathode_flags()
     from cablp.funcs._cathode_solver import beam_excitation_cross
 
     sigma_exc_100 = beam_excitation_cross(100.0, 1.0, "He")
@@ -3699,8 +4075,21 @@ def main():
         exc_beam.beam_exc_cross[launch_idx] / exc_beam.beam_cross[launch_idx],
         rtol=1e-10,
     )
+    return locals()
 
+
+# --------------------------------------------------------------------
+# beam-manifold-excitation-model
+# --------------------------------------------------------------------
+@_case(
+    "beam-manifold-excitation-model",
+    historical_stance=True,
+)
+def _case_beam_manifold_excitation_model(
+    beam_excitation_cross, exc_beam, exc_params, launch_idx
+):
     # --- A2: the manifold excitation model (WP-A).
+    cathode_flags = _cathode_flags()
     from cablp.funcs._cathode_solver import beam_excitation_channel
     from cablp.funcs._cross import (
         He_beam_excitation_channel as _He_manifold_channel,
@@ -3792,7 +4181,24 @@ def main():
         rtol=1e-10,
     )
 
+
+# --------------------------------------------------------------------
+# beam-csda-deposition-model
+# --------------------------------------------------------------------
+@_case(
+    "beam-csda-deposition-model",
+    historical_stance=True,
+    provides=(
+        "csda_Vp", "csda_budget", "csda_dep", "csda_launch",
+        "csda_params", "csda_power_sum", "csda_res", "csda_sigma_eff",
+        "csda_sim", "csda_solve", "csda_terms",
+    ),
+)
+def _case_beam_csda_deposition_model(exc_params):
     # --- B2: the CSDA deposition model wired behind beam_deposition_model.
+    sim, snapshot = _base_sim()
+    geom = snapshot.geometry
+    cathode_flags = _cathode_flags()
     csda_params = dict(exc_params)
     csda_params["beam_deposition_model"] = "csda"
     csda_sim = LAPDSim1D(csda_params, cathode_flags)
@@ -3854,7 +4260,20 @@ def main():
         csda_solve.beam_result.beam_atten_cross[csda_launch]
     )
     assert np.isfinite(csda_sigma_eff) and csda_sigma_eff >= 0.0
+    return locals()
 
+
+# --------------------------------------------------------------------
+# beam-gap-transmission-probe
+# --------------------------------------------------------------------
+@_case(
+    "beam-gap-transmission-probe",
+    provides=("csda_L_cath", "csda_derived", "csda_dir", "csda_state"),
+)
+def _case_beam_gap_transmission_probe(
+    csda_launch, csda_params, csda_res, csda_sigma_eff, csda_sim,
+    csda_solve
+):
     # --- Item 35: the gap-transmission probe is launched at the REAL emitted
     # flux, not unit flux, so flux-DEPENDENT stopping reaches the circuit.
     #
@@ -3960,11 +4379,23 @@ def main():
         / csda_nn_launch,
     )
     assert csda_sigma_eff == csda_sigma_unit
+    return locals()
 
+
+# --------------------------------------------------------------------
+# beam-gap-ledger-tripwire
+# --------------------------------------------------------------------
+@_case(
+    "beam-gap-ledger-tripwire",
+    historical_stance=True,
+    provides=("bl_diag", "csda_eta", "csda_ledger"),
+)
+def _case_beam_gap_ledger_tripwire(csda_sim, csda_solve, exc_params):
     # --- Item 35 ledger tripwire: probe, deposition ray and circuit are three
     # views of the SAME gap crossing, and nothing else in the model notices
     # when they disagree (each side is internally consistent). On a healthy
     # config all three agree and no warning fires.
+    cathode_flags = _cathode_flags()
     csda_ledger = csda_solve.beam_gap_ledger
     csda_eta = float(csda_solve.device_config.eta)
     assert set(csda_ledger) == {0}
@@ -4028,7 +4459,20 @@ def main():
     )._cathode_diagnostic_snapshot()
     for _bl_key in ("probe", "ray", "circuit"):
         assert np.isnan(bl_diag[f"source_beam_gap_survival_{_bl_key}"])
+    return locals()
 
+
+# --------------------------------------------------------------------
+# beam-probe-skip
+# --------------------------------------------------------------------
+@_case(
+    "beam-probe-skip",
+    provides=("_pskip_Gamma0", "_pskip_geom", "_pskip_ray_kwargs"),
+)
+def _case_beam_probe_skip(
+    csda_L_cath, csda_derived, csda_dir, csda_eta, csda_launch,
+    csda_params, csda_res, csda_sim, csda_solve, csda_state
+):
     # --- Probe skip (cost read 2026-08-02, restructure A) ------------------
     # When the deposition ray died inside the gap, the gap-transmission probe
     # is not launched at all: its transmitted flux is then the EXACT float
@@ -4129,10 +4573,23 @@ def main():
         _clip_ray_length(_pskip_geom.length_cm, csda_launch, csda_dir, 1.0e6),
         _pskip_geom.length_cm,
     )
+    return locals()
 
+
+# --------------------------------------------------------------------
+# beam-anode-mesh-interception
+# --------------------------------------------------------------------
+@_case(
+    "beam-anode-mesh-interception",
+    historical_stance=True,
+)
+def _case_beam_anode_mesh_interception(
+    csda_Vp, csda_dep, csda_params, csda_power_sum, exc_params
+):
     # --- R4.1 (audit A15): anode-mesh beam interception is the PRODUCTION DEFAULT
     # (correct csda physics), so csda_sim above already has it on -- the anode
     # books energy and it is part of the csda per-ray budget checked earlier.
+    cathode_flags = _cathode_flags()
     assert float(csda_dep.anode_intercepted_erg_s) > 0.0
     # A/B off: setting the flag False restores the old (over-depositing) csda run,
     # which deposits strictly MORE power into the plasma and intercepts nothing.
@@ -4155,12 +4612,26 @@ def main():
     bl_sim._circuit_I_loop = 3000.0
     assert bl_sim.solve_cathode_boundary().beam_deposition is None
 
+
+# --------------------------------------------------------------------
+# beam-product-transport-wpd
+# --------------------------------------------------------------------
+@_case(
+    "beam-product-transport-wpd",
+    historical_stance=True,
+    provides=("wpd_on_dep",),
+)
+def _case_beam_product_transport_wpd(
+    bl_diag, csda_budget, csda_dep, csda_eta, csda_launch, csda_ledger,
+    csda_params, csda_sigma_eff
+):
     # --- WP-D through the solver: beam_product_transport routes the CSDA
     # ray's event products (see the module block for the physics and the
     # per-ray identity). Unit level only -- the flag's effect on the ignition
     # timeline is a campaign run, not a smoke scenario.
     # Misconfiguration is loud at CONSTRUCTION, including the incomplete
     # configuration where the selection could only be a silent no-op.
+    cathode_flags = _cathode_flags()
     for wpd_bad in (
         dict(csda_params, beam_product_transport="bogus"),
         dict(csda_params, beam_product_transport="nonlocal",
@@ -4237,12 +4708,23 @@ def main():
     assert wpd_on_diag["end_beam_end_loss_low_W"] == 0.0
     for _bl_key in ("low", "high"):
         assert bl_diag[f"source_beam_end_loss_{_bl_key}_W"] == 0.0
+    return locals()
 
+
+# --------------------------------------------------------------------
+# beam-product-terminal-nonlocal
+# --------------------------------------------------------------------
+@_case(
+    "beam-product-terminal-nonlocal",
+    historical_stance=True,
+)
+def _case_beam_product_terminal_nonlocal(csda_budget, csda_dep, csda_params):
     # --- WP-D MIDDLE POINT: beam_product_transport="terminal_nonlocal" walks
     # the TERMINAL residual and nothing else. Every ALONG-RAY product stays
     # where "local" banks it, so this arm must BE the local arm everywhere
     # except in the one population that walks.
     # The incomplete configuration is refused at construction, like the others.
+    cathode_flags = _cathode_flags()
     try:
         LAPDSim1D(
             dict(csda_params, beam_product_transport="terminal_nonlocal",
@@ -4429,6 +4911,20 @@ def main():
             _beam_deposition_mod._csda_tables,
         ) = _tnl_saved
 
+
+# --------------------------------------------------------------------
+# beam-anomalous-transport-wpe
+# --------------------------------------------------------------------
+@_case(
+    "beam-anomalous-transport-wpe",
+    historical_stance=True,
+    provides=("wpe_legacy", "wpe_on_dep", "wpe_on_diag", "wpe_removed"),
+)
+def _case_beam_anomalous_transport_wpe(
+    _pskip_Gamma0, _pskip_geom, _pskip_ray_kwargs, bl_diag, csda_budget,
+    csda_dep, csda_derived, csda_eta, csda_launch, csda_ledger,
+    csda_params, csda_res, csda_sigma_eff, csda_state, wpd_on_dep
+):
     # --- WP-E through the solver: heating_anomalous_transport routes the CSDA
     # ray's ANOMALOUS (quasilinear) heating onto tail electrons at E_tail (see
     # the module block for the physics and the conservation identity). Unit
@@ -4436,6 +4932,7 @@ def main():
     # run, not a smoke scenario.
     # The scenario must actually drive the anomalous channel, or the routing
     # has nothing to carry and every assertion below is vacuous.
+    cathode_flags = _cathode_flags()
     assert float(csda_dep.heating_anomalous_erg_s.sum()) > 0.0
     # K7 REPIN. This block and the K6 block below were written against the tail
     # closure as WP-E and K6 shipped it: birth at a FIXED rung, free escape at
@@ -4658,7 +5155,23 @@ def main():
         + wpe_both_dep.end_loss_tail_high_erg_s
     )
     assert abs(wpe_both_total - csda_budget) / csda_budget < 1e-9
+    return locals()
 
+
+# --------------------------------------------------------------------
+# beam-tail-ionization-k6
+# --------------------------------------------------------------------
+@_case(
+    "beam-tail-ionization-k6",
+    historical_stance=True,
+    provides=("_k6_ray", "_k6_win", "k6_on_dep"),
+)
+def _case_beam_tail_ionization_k6(
+    _pskip_Gamma0, _pskip_geom, _pskip_ray_kwargs, bl_diag, csda_budget,
+    csda_dep, csda_derived, csda_launch, csda_ledger, csda_params,
+    csda_res, csda_sigma_eff, csda_sim, csda_state, wpe_legacy, wpe_on_dep,
+    wpe_on_diag
+):
     # --- K6 through the solver: heating_anomalous_tail_ionization lets the QL
     # tail walkers IONIZE the column gas they cross, turning the energy-only
     # WP-E walk into a particle channel. Unit level only -- what it does to
@@ -4674,6 +5187,7 @@ def main():
     # at the cathode_phi_c_cap_V ceiling, the live E_tail lands here to the
     # last bit -- so the edge has to be inclusive or the declared f bracket
     # loses its top rung to float noise.
+    cathode_flags = _cathode_flags()
     _k7c_edge_eV = _beam_deposition_mod.HE_EII_EPS_TOP * float(csda_sim._I_ion)
     assert float(csda_sim._I_ion) == 24.58738793623
     assert _k7c_edge_eV == 1000.0000000000002
@@ -4948,7 +5462,24 @@ def main():
         raise AssertionError(
             "expected ValueError for a window excluding a QL-driven cell"
         )
+    return locals()
 
+
+# --------------------------------------------------------------------
+# beam-sheath-aware-tail-k7
+# --------------------------------------------------------------------
+@_case(
+    "beam-sheath-aware-tail-k7",
+    historical_stance=True,
+    provides=(
+        "k7_ion_dep", "k7_ion_legacy_dep", "k7_local_dep", "k7_on_dep",
+        "k7_params",
+    ),
+)
+def _case_beam_sheath_aware_tail_k7(
+    _pskip_geom, _pskip_ray_kwargs, csda_derived, csda_eta, csda_params,
+    csda_state, wpe_legacy
+):
     # --- K7 through the solver: the sheath-aware tail closure. The cathode
     # face REFLECTS walkers below e*phi_c(t) instead of deleting them, and the
     # birth energy is keyed to the live phi_c instead of a fixed rung. Unit
@@ -4960,6 +5491,7 @@ def main():
     # (since K7b that marches under the disclosed truncation rather than
     # refusing, but it is still not the band the drive actually visits).
     # Capping the drop at 300 V puts the keyed energy where the drive puts it.
+    cathode_flags = _cathode_flags()
     k7_params = dict(csda_params, cathode_phi_c_cap_V=300.0)
     k7_local_sim = LAPDSim1D(
         dict(k7_params, heating_anomalous_transport="local"),
@@ -5217,7 +5749,21 @@ def main():
         float(k7_ion_dep.ionization_events_tail.sum())
         > float(k7_ion_legacy_dep.ionization_events_tail.sum())
     )
+    return locals()
 
+
+# --------------------------------------------------------------------
+# beam-tail-band-split-k7b
+# --------------------------------------------------------------------
+@_case(
+    "beam-tail-band-split-k7b",
+    historical_stance=True,
+)
+def _case_beam_tail_band_split_k7b(
+    _k6_ray, _k6_win, _pskip_ray_kwargs, bl_diag, csda_dep, k6_on_dep,
+    k7_ion_dep, k7_ion_legacy_dep, k7_local_dep, k7_on_dep, k7_params,
+    wpe_legacy, wpe_on_diag
+):
     # --- K7b: the BAND SPLIT. Under phi_c keying E_tail follows the live
     # cathode drop, so one run visits all three bands; refusing at the two
     # depth-1 bars (K6's behaviour) made no keyed ionizing arm startable from
@@ -5227,6 +5773,7 @@ def main():
     # (i) THE CLEAN PROPERTY. In band -- every fixed rung the bracket carries,
     # and the keyed arm above -- both exposure fields are identically zero, so
     # nothing that already ran can have taken a new branch.
+    cathode_flags = _cathode_flags()
     for _k7b_inband in (k7_ion_dep, k7_ion_legacy_dep, k6_on_dep):
         assert _k7b_inband.tail_power_erg_s > 0.0
         assert _k7b_inband.tail_sub_threshold_power_erg_s == 0.0
@@ -5413,6 +5960,18 @@ def main():
             "expected ValueError for a tail energy 1e-9 past the EII edge"
         )
 
+
+# --------------------------------------------------------------------
+# beam-ql-power-disposal-pd1
+# --------------------------------------------------------------------
+@_case(
+    "beam-ql-power-disposal-pd1",
+    historical_stance=True,
+)
+def _case_beam_ql_power_disposal_pd1(
+    _pskip_Gamma0, _pskip_geom, _pskip_ray_kwargs, csda_dep, csda_derived,
+    csda_params, csda_res, csda_state, k7_params
+):
     # --- pd1: BRANCHED DISPOSAL of the extracted QL power. The all-or-nothing
     # routing above is replaced by a COMPUTED per-cell split between the
     # nonlocal tail (Landau damping on the resonant electrons) and local bulk
@@ -5424,6 +5983,7 @@ def main():
     # printed numbers (scripts/pd0_branching.txt). They are asserted BEFORE the
     # closure is exercised, so a drift in K_m, in the omega_pe coefficient or
     # in the Bohm-Gross term fails here rather than downstream.
+    cathode_flags = _cathode_flags()
     _pd1_branch = _beam_deposition_mod.landau_branching_fraction
     _pd1_stance_nn = np.full(1, 2.0e13)
     _pd1_stance_E = 177.6
@@ -5811,6 +6371,16 @@ def main():
         f"{abs(_pd1_delivered - _pd1_P_QL) / _pd1_P_QL:.1e})"
     )
 
+
+# --------------------------------------------------------------------
+# beam-deposition-smoothing-conservation
+# --------------------------------------------------------------------
+@_case(
+    "beam-deposition-smoothing-conservation",
+    historical_stance=True,
+    provides=("smooth_sigma_cm",),
+)
+def _case_beam_deposition_smoothing_conservation(csda_params):
     # --- Beam-deposition smoothing CONSERVES the deposit over the live plasma.
     # The Gaussian redistribution kernel must place ZERO weight on the typed
     # plasma-dead cells (plenum/obstruction) behind the cathode face, because
@@ -5825,6 +6395,7 @@ def main():
     # kernel is weighted by cell length, and without that weighting a refined
     # region is over-weighted per cm, which makes the smoothing operator itself
     # mesh-dependent even where it happens to conserve.
+    cathode_flags = _cathode_flags()
     smooth_sigma_cm = 50.0
     smoothing_meshes = (
         ("uniform", dict(csda_params), dict(cathode_flags)),
@@ -5911,7 +6482,17 @@ def main():
             # ...and the kernel is not quietly the identity: it MOVED the
             # deposit, so the conservation above is a real statement.
             assert not np.allclose(on_row, off_row), (mesh_label, smooth_term)
+    return locals()
 
+
+# --------------------------------------------------------------------
+# beam-smoothing-matrix-cache
+# --------------------------------------------------------------------
+@_case(
+    "beam-smoothing-matrix-cache",
+    historical_stance=True,
+)
+def _case_beam_smoothing_matrix_cache(csda_params, smooth_sigma_cm):
     # --- The smoothing-matrix cache is keyed on geometry CONTENT, not address.
     # ``id(geometry)`` is unique only among LIVE objects: CPython reuses the
     # address of a collected geometry, so a freed mesh followed by a
@@ -5920,6 +6501,7 @@ def main():
     # silent case is two meshes with the SAME cell count and different
     # positions -- exactly what an nx-matched source_region_dz_cm refinement
     # sweep builds.
+    cathode_flags = _cathode_flags()
     smoothkey_flags = {**cathode_flags, "source_fixed_grid": True}
     smoothkey_base = dict(
         csda_params,
@@ -5983,10 +6565,25 @@ def main():
     assert smoothkey_W_roles is not smoothkey_W_a
     assert not np.allclose(smoothkey_W_roles, smoothkey_W_a)
 
+
+# --------------------------------------------------------------------
+# ionization-birth-energy-model
+# --------------------------------------------------------------------
+@_case(
+    "ionization-birth-energy-model",
+    historical_stance=True,
+    provides=("decay_params", "source_rhs"),
+)
+def _case_ionization_birth_energy_model(csda_params, csda_sim, csda_terms):
     # --- R4.2 (audit A14): ionization_birth_energy_model. Default-off ("legacy")
     # is the historical booking; "conservative" zeroes the bulk electron
     # birth energy (no 3Te/2 creation) and adds the ion mixing energy, and the
     # beam ion birth gains the same mixing energy (its electron Ee is already 0).
+    params, flags = _base_config()
+    sim, snapshot = _base_sim()
+    geom = snapshot.geometry
+    state = snapshot.state
+    cathode_flags = _cathode_flags()
     cons_params = dict(csda_params)
     cons_params["ionization_birth_energy_model"] = "conservative"
     cons_sim = LAPDSim1D(cons_params, cathode_flags)
@@ -6166,12 +6763,30 @@ def main():
             pulse_geom.neutral_volume_cm3[pulse_puff],
         ),
     )
+    return locals()
+
+
+# --------------------------------------------------------------------
+# gas-puff-diagnostics-and-fluid-operators
+# --------------------------------------------------------------------
+@_case(
+    "gas-puff-diagnostics-and-fluid-operators",
+    historical_stance=True,
+    provides=("hot_ion_cx_state", "nn_ramp_state", "ramp_state"),
+)
+def _case_gas_puff_diagnostics_and_fluid_operators(
+    _warnings, decay_params, dt_default, source_rhs
+):
     # --- saved effective S_gp(t) waveform (gas_puff_diagnostics) ------------
     # The recorded waveform must be the APPLIED one, not the configured level:
     # decay_after_breakdown shapes it down through the main discharge and the
     # phase gate shuts it off in the afterglow. Every other neutral channel is
     # switched off (pump, reactions, anode recycling) so the puff is the ONLY
     # nn source and the delivered fuel is unambiguous.
+    params, flags = _base_config()
+    sim, snapshot = _base_sim()
+    geom = snapshot.geometry
+    state = snapshot.state
     puffdiag_params = dict(decay_params)
     puffdiag_params["dt_save"] = 0.0
     puffdiag_params["tau_afterglow"] = 3.0e-10
@@ -6583,11 +7198,26 @@ def main():
         cx=True,
     )
     assert np.allclose(disabled_cx.Ei, 0.0)
+    return locals()
 
+
+# --------------------------------------------------------------------
+# helium-only-reaction-rates
+# --------------------------------------------------------------------
+@_case(
+    "helium-only-reaction-rates",
+    historical_stance=True,
+    provides=("expected_rhs_terms", "no_source_params"),
+)
+def _case_helium_only_reaction_rates(dt_default, hot_ion_cx_state):
     # Hydrogen coverage removed 2026-07-20: the thesis scope is He-only (all
     # experimental data is helium) and the adas rate default is wired for He.
     # gas_type = "H" remains selectable with atomic_rate_model = "janev" but
     # is no longer exercised here.
+    params, flags = _base_config()
+    sim, snapshot = _base_sim()
+    geom = snapshot.geometry
+    state = snapshot.state
     try:
         ion_charge_exchange_rhs(
             state=hot_ion_cx_state,
@@ -6795,8 +7425,27 @@ def main():
     no_source_params["b_Qei"] = 0.0
     no_source_params["b_Qen"] = 0.0
     no_source_params["b_Qcx"] = 0.0
+    return locals()
+
+
+# --------------------------------------------------------------------
+# no-source-run-and-results
+# --------------------------------------------------------------------
+@_case(
+    "no-source-run-and-results",
+    historical_stance=True,
+    provides=(
+        "cathode_diag", "cathode_run_flags", "cathode_run_params",
+        "cathode_run_result", "cathode_run_sim", "run_params",
+        "split_flags",
+    ),
+)
+def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
     # b_ionization_energy_cost removed as a config knob; b_ioniz=0 already
     # zeros ionization (and its cost), so no override is needed here.
+    params, flags = _base_config()
+    sim, snapshot = _base_sim()
+    geom = snapshot.geometry
     no_source_params["b_surface_loss"] = 0.0
     no_source_sim = LAPDSim1D(no_source_params, flags)
     y_before = no_source_sim.get_initial_snapshot().y.copy()
@@ -7801,11 +8450,29 @@ def main():
     assert np.allclose(
         cathode_diag["T_s_surface"], float(cathode_run_params["T_s"])
     )
+    return locals()
 
+
+# --------------------------------------------------------------------
+# cathode-power-balance-warming
+# --------------------------------------------------------------------
+@_case(
+    "cathode-power-balance-warming",
+    historical_stance=True,
+    provides=("growth_flags", "growth_params"),
+)
+def _case_cathode_power_balance_warming(
+    cathode_diag, cathode_run_flags, cathode_run_params,
+    cathode_run_result, cathode_run_sim, expected_rhs_terms,
+    no_source_params
+):
     # --- Power-balance warming (cathode_warming_model="power_balance",
     # M1b): the surface energy budget replaces the
     # imposed T_s asymptote. Heater pinned by standby equilibrium; emission
     # cooling uses the actually emitted current.
+    params, flags = _base_config()
+    sim, snapshot = _base_sim()
+    geom = snapshot.geometry
     from cablp.solvers._sim1d.physics.cathode import (
         cathode_power_balance_terms_W,
     )
@@ -8144,12 +8811,24 @@ def main():
         "phase_boundary": 1,
         "t_end": 1,
     }
+    return locals()
 
+
+# --------------------------------------------------------------------
+# timestep-dt-growth-reapproach
+# --------------------------------------------------------------------
+@_case(
+    "timestep-dt-growth-reapproach",
+    historical_stance=True,
+    provides=("retry_flags", "retry_params"),
+)
+def _case_timestep_dt_growth_reapproach(growth_flags, growth_params):
     # --- accelerated dt_growth re-approach (default off) ---------------------
     # A long ramp: an early phase boundary sets a small first step, then
     # nothing physical binds and dt_growth caps every step while it climbs.
     # This is the regime the probe measured (80.6% of steps growth-capped at a
     # median 364x below the binding physics bound).
+    params, flags = _base_config()
     ramp_params = dict(growth_params)
     ramp_params["tau_prebreakdown"] = 2.0e-9
     ramp_params["tau_discharge"] = 40.0e-6
@@ -8240,6 +8919,23 @@ def main():
     retry_params["dt_max"] = 1.0e-6
     retry_params["neutral_dt_fraction"] = 100.0
     retry_params["max_neutral_step_fraction"] = 6.0
+    return locals()
+
+
+# --------------------------------------------------------------------
+# breakdown-retry-near-vacuum
+# --------------------------------------------------------------------
+@_case(
+    "breakdown-retry-near-vacuum",
+    historical_stance=True,
+    provides=(
+        "current_phase_flags", "current_phase_params",
+        "current_phase_result", "direct_current_phase_result",
+    ),
+)
+def _case_breakdown_retry_near_vacuum(
+    no_source_params, retry_flags, retry_params, run_params, split_flags
+):
     # This scenario needs a near-vacuum start: the retry it exercises fires
     # when one puff step moves nn by more than max_neutral_step_fraction, which
     # is only possible against a tiny background. It used to inherit that from
@@ -8247,6 +8943,9 @@ def main():
     # which the same puff is a ~1e-4 fractional step and nothing is ever
     # rejected. Pin the initial condition the scenario is built on, alongside
     # the other limiter constants it already sets.
+    params, flags = _base_config()
+    sim, snapshot = _base_sim()
+    geom = snapshot.geometry
     retry_params["nn0"] = 1.0e9
     retry_sim = LAPDSim1D(retry_params, retry_flags)
     retry_result = retry_sim.run(t_end=1.0e-6)
@@ -8892,7 +9591,19 @@ def main():
         "afterglow",
         "post_afterglow",
     ]
+    return locals()
 
+
+# --------------------------------------------------------------------
+# current-phase-raise-on-timeout
+# --------------------------------------------------------------------
+@_case(
+    "current-phase-raise-on-timeout",
+    historical_stance=True,
+)
+def _case_current_phase_raise_on_timeout(
+    current_phase_flags, current_phase_params
+):
     # The historical raise-on-timeout arm, now selected explicitly. Every
     # assertion below is the pre-existing BreakdownError contract, unchanged;
     # the switch-open default is covered by its own block further down.
@@ -8975,6 +9686,19 @@ def main():
     else:
         raise AssertionError("expected current-triggered breakdown phase to fail")
 
+
+# --------------------------------------------------------------------
+# ignition-failure-diagnostics
+# --------------------------------------------------------------------
+@_case(
+    "ignition-failure-diagnostics",
+    historical_stance=True,
+    provides=("timeout_result",),
+)
+def _case_ignition_failure_diagnostics(
+    current_phase_flags, current_phase_params, current_phase_result,
+    direct_current_phase_result
+):
     # --- Ignition-failure diagnostics and guards -------------------------
     #
     # (i) the joint-condition logic on synthetic histories, (ii) the
@@ -9227,12 +9951,30 @@ def main():
     }
     assert np.all(direct_current_phase_result.ignition_diagnostics["stalled"] == 0.0)
     assert IGNITION_STALL_MIN_SAMPLES >= 2
+    return locals()
 
+
+# --------------------------------------------------------------------
+# non-ignition-guards
+# --------------------------------------------------------------------
+@_case(
+    "non-ignition-guards",
+    historical_stance=True,
+    provides=(
+        "equilibration_flags", "neutral_phase_run_flags",
+        "neutral_phase_run_params",
+    ),
+)
+def _case_non_ignition_guards(
+    current_phase_flags, current_phase_params, direct_current_phase_result,
+    no_source_params, timeout_result
+):
     # --- non-ignition guards, wall-clock / accepted-step arm -----------------
     # The stall detector and the tau_prebreakdown timeout both measure
     # SIMULATED time, so neither can see a non-igniting arm that stops
     # producing simulated time and burns wall clock instead. These two budgets
     # close over that, through the SAME switch-open path.
+    params, flags = _base_config()
     for budget_key, budget_value, budget_reason in (
         ("ignition_accepted_step_cap", 3, "accepted_step_cap"),
         ("ignition_wall_clock_cap_s", 1.0e-9, "wall_clock_cap"),
@@ -9524,6 +10266,19 @@ def main():
         "tau_discharge",
         "tau_cycle",
     ]
+    return locals()
+
+
+# --------------------------------------------------------------------
+# equilibration-puff-duty
+# --------------------------------------------------------------------
+@_case(
+    "equilibration-puff-duty",
+    historical_stance=True,
+)
+def _case_equilibration_puff_duty(
+    neutral_phase_run_flags, neutral_phase_run_params
+):
     # --- item 37: the equilibration delivers its CONFIGURED puff duty --------
     # tau_cycle / tau_discharge / dt chosen so a step lands a hair BELOW the
     # puff-off instant (t=6e-10 is 1 ulp short of cycle_start + tau_discharge).
@@ -9565,11 +10320,27 @@ def main():
         np.sum(np.diff(duty_div_times)[duty_div_phases[:-1] == "equilibrium_puff"])
     )
     assert np.isclose(duty_div_on, 2.0 * 1.0e-10, rtol=1e-12), duty_div_on
+
+
+# --------------------------------------------------------------------
+# equilibration-puff-width
+# --------------------------------------------------------------------
+@_case(
+    "equilibration-puff-width",
+    historical_stance=True,
+)
+def _case_equilibration_puff_width(
+    equilibration_flags, neutral_phase_params, neutral_phase_run_flags,
+    neutral_phase_run_params, nn_ramp_state, ramp_state
+):
     # --- measured equilibration puff width (equilibration_gas_puff_on_s) -----
     # Default None == the historical tau_discharge-derived window, BIT-exact
     # through the real equilibration path (start_simulation -> the inner sim).
     # NB built on neutral_phase_params, NOT the no_source_* family: the puff
     # has to be ENABLED for the window to be observable in the seed at all.
+    params, flags = _base_config()
+    sim, snapshot = _base_sim()
+    geom = snapshot.geometry
     puffw_base_params = dict(neutral_phase_params)
     puffw_base_params["neutral_equilibration_cycles"] = 2
     puffw_base_params["neutral_equilibration_dt"] = 1.0e-10
@@ -9811,6 +10582,18 @@ def main():
     assert np.all(np.isfinite(nn_ramp_state_1.nn))
     assert np.all(nn_ramp_state_1.nn >= params["nn_floor"])
 
+
+# --------------------------------------------------------------------
+# ion-neutral-closure-knobs
+# --------------------------------------------------------------------
+@_case(
+    "ion-neutral-closure-knobs",
+    provides=(
+        "drag_const", "drag_kwargs", "heat_const", "knob_Rm",
+        "knob_floors", "knob_mass", "knob_n", "knob_state",
+    ),
+)
+def _case_ion_neutral_closure_knobs():
     # --- Ion-neutral closure knobs: slip drag model, thermalization scale
     # decoupling, Te-shaped cooling corrections. All are default-off (the
     # golden baseline guards the OFF path bit-exactly); these guard the ON
@@ -9899,7 +10682,17 @@ def main():
             pass
         else:
             raise AssertionError(f"expected ValueError for {bad_kwargs}")
+    return locals()
 
+
+# --------------------------------------------------------------------
+# neutral-momentum-state-foundations
+# --------------------------------------------------------------------
+@_case(
+    "neutral-momentum-state-foundations",
+    provides=("mn_s5", "mn_s6"),
+)
+def _case_neutral_momentum_state_foundations(knob_floors, knob_mass):
     # --- Neutral-momentum state foundations (M1):
     # the optional M_n field must round-trip both packed layouts, pad-on-
     # demand for term summation, refuse to silently drop, and pass floors
@@ -9930,7 +10723,16 @@ def main():
     mn_sum = add_state_rhs(mn_s5, mn_s6)
     assert mn_sum.M_n is not None and np.all(mn_sum.M_n == mn_s6.M_n)
     assert add_state_rhs(mn_s5, mn_s5).M_n is None
+    return locals()
 
+
+# --------------------------------------------------------------------
+# two-zone-neutral-state-foundations
+# --------------------------------------------------------------------
+@_case("two-zone-neutral-state-foundations")
+def _case_two_zone_neutral_state_foundations(
+    knob_floors, knob_mass, mn_s5, mn_s6
+):
     # --- Two-zone neutral state foundations (M1):
     # the optional nn_a field must round-trip its packed layouts, resolve
     # the 6-field width ambiguity by declared hints (bare 6-field keeps its
@@ -10002,11 +10804,29 @@ def main():
     assert np.all(tz_sum.nn_a == tz_s6.nn_a)
     assert add_state_rhs(mn_s5, mn_s5).nn_a is None
 
+
+# --------------------------------------------------------------------
+# neutral-momentum-sources
+# --------------------------------------------------------------------
+@_case(
+    "neutral-momentum-sources",
+    historical_stance=True,
+    provides=(
+        "build_geometry", "mn_drag_kwargs", "mn_flags", "mn_geom",
+        "mn_nu_ni", "mn_plasma_flags", "mn_plasma_params",
+        "mn_plasma_sim", "mn_reactions", "mn_state", "mn_u", "mn_vbar",
+    ),
+)
+def _case_neutral_momentum_sources(
+    drag_const, drag_kwargs, expected_rhs_terms, heat_const, knob_Rm,
+    knob_floors, knob_mass, knob_n, knob_state, run_params
+):
     # --- Neutral-momentum sources (M2): with M_n on
     # the state, the drag and the reactions become species-conserving momentum
     # exchanges, the wall and pump are the only named sinks, and the local
     # steady state of drag-vs-wall reproduces the slip closure (with its
     # entrainment scaled by Vp/Vm, since M_n is the chamber-mean wind).
+    params, flags = _base_config()
     mn_geom = SimpleNamespace(
         plasma_volume_cm3=np.array([450.0, 900.0, 1800.0]) * 1.0e3,
         neutral_volume_cm3=np.full(3, 5.0e6),
@@ -10314,13 +11134,28 @@ def main():
         mn_plasma_state, mn_plasma_sim.floors, mn_plasma_sim.ion_mass_g
     ).u
     assert np.all(mn_drive[mn_plasma_state.M_n != 0.0] > 0.0)
+    return locals()
 
+
+# --------------------------------------------------------------------
+# neutral-momentum-two-zone-radial
+# --------------------------------------------------------------------
+@_case(
+    "neutral-momentum-two-zone-radial",
+    historical_stance=True,
+)
+def _case_neutral_momentum_two_zone_radial(
+    drag_const, drag_kwargs, heat_const, knob_Rm, knob_floors, knob_mass,
+    mn_drag_kwargs, mn_flags, mn_geom, mn_nu_ni, mn_plasma_flags,
+    mn_plasma_params, mn_reactions, mn_state, mn_u, mn_vbar, run_params
+):
     # --- Two-zone radial closure (neutral_momentum_radial = "two_zone"): the
     # drag samples the in-column wind, and only the slow annulus gas -- held
     # back by diffuse wall reflection -- reaches the wall. The factors reduce
     # to closed form: r = Rp/(Rp+Rm), c = 1/(f + (1-f) r) with f = (Rp/Rm)^2,
     # W = vbar/(2 Rm) * r * c; a cell without an annulus (Rp >= Rm) falls
     # back to the uniform closure.
+    params, flags = _base_config()
     tz_geom = SimpleNamespace(
         Rp_cm=np.array([15.0, 18.0, 50.0]),
         Rm_cm=np.full(3, 50.0),
@@ -10478,6 +11313,19 @@ def main():
     assert np.any(tz_nonzero)
     assert np.any(tz_sim_state.M_n != tz_uniform_sim.state.M_n)
 
+
+# --------------------------------------------------------------------
+# neutral-two-zone-particle-channel
+# --------------------------------------------------------------------
+@_case(
+    "neutral-two-zone-particle-channel",
+    historical_stance=True,
+    provides=(
+        "p2z_Va", "p2z_Vc", "p2z_both_flags", "p2z_flags", "p2z_params",
+        "p2z_sim",
+    ),
+)
+def _case_neutral_two_zone_particle_channel(mn_plasma_flags, mn_plasma_params):
     # --- Two-zone PARTICLE channel, M2 carriage and transport
     # The solver carries the split (nn, nn_a)
     # state, runs per-zone axial Knudsen exchange plus the radial
@@ -10644,12 +11492,27 @@ def main():
     assert p2z_both_state.nn_a is not None
     assert np.all(np.isfinite(p2z_both_state.M_n))
     assert np.all(np.isfinite(p2z_both_state.nn_a))
+    return locals()
 
+
+# --------------------------------------------------------------------
+# neutral-kinetic-two-momentum-reduction
+# --------------------------------------------------------------------
+@_case(
+    "neutral-kinetic-two-momentum-reduction",
+    historical_stance=True,
+)
+def _case_neutral_kinetic_two_momentum_reduction(
+    cathode_sim, cathode_solve, expected_rhs_terms, mn_plasma_flags,
+    mn_plasma_params, p2z_Va, p2z_Vc, p2z_both_flags, p2z_flags,
+    p2z_params, p2z_sim, run_params
+):
     # --- Kinetic-derived two-momentum reduction (M6): the selector is
     # default-off and requires both optional parent fields. The eighth packed
     # row is annulus momentum; radial exchange closes Mc*Vc + Ma*Va exactly,
     # drag closes M*Vp + Mc*Vc exactly, and a short full-solver trajectory
     # keeps the optional layout finite.
+    params, flags = _base_config()
     for m6_bad_params, m6_bad_flags in (
         (
             dict(
@@ -10833,6 +11696,15 @@ def main():
         p2z_loaded = load_result_hdf5(p2z_path)
         assert np.allclose(p2z_loaded.nn_a, p2z_result.nn_a)
 
+
+# --------------------------------------------------------------------
+# end-recycle-routing
+# --------------------------------------------------------------------
+@_case(
+    "end-recycle-routing",
+    historical_stance=True,
+)
+def _case_end_recycle_routing(p2z_flags, p2z_params):
     # --- L6 END-RECYCLE ROUTING (end_recycle_to_annulus). The recycle stream
     # rebirthed at COLLECTOR faces is deposited into that cell's annulus row
     # instead of its column row, as thermal diffuse gas. The cathode face, the
@@ -11016,6 +11888,15 @@ def main():
     )
     assert er_sig == er_seed_signature(*resolve_config(er_true_p, er_true_f))
 
+
+# --------------------------------------------------------------------
+# kinetic-neutrals-k4a
+# --------------------------------------------------------------------
+@_case(
+    "kinetic-neutrals-k4a",
+    historical_stance=True,
+)
+def _case_kinetic_neutrals_k4a(p2z_flags, p2z_params, p2z_sim):
     # --- K4a kinetic neutrals: the refresh-
     # cadence relaxation architecture. The flag requires the two-zone
     # state; targets appear at the first accepted plasma step; every
@@ -11075,6 +11956,16 @@ def main():
     # flag-off ledgers carry no relaxation key
     assert "neutral_kinetic_relaxation" not in p2z_sim.rhs_terms()
 
+
+# --------------------------------------------------------------------
+# transient-dvm-neutrals-k2a
+# --------------------------------------------------------------------
+@_case(
+    "transient-dvm-neutrals-k2a",
+    historical_stance=True,
+    provides=("kd_flags", "kd_params"),
+)
+def _case_transient_dvm_neutrals_k2a(p2z_flags, p2z_params, p2z_sim):
     # --- K2a transient DVM neutrals: the LIVE distribution arm on its own
     # neutral clock. Default off and presence-gated; once engaged it owns
     # every neutral row and the ion-side momentum/energy of the channels it
@@ -11321,7 +12212,17 @@ def main():
     assert np.any(kd_off_abs != kd_on_abs), (
         "the Tn-consumption switch changed nothing"
     )
+    return locals()
 
+
+# --------------------------------------------------------------------
+# obstruction-geometry-production-style
+# --------------------------------------------------------------------
+@_case(
+    "obstruction-geometry-production-style",
+    historical_stance=True,
+)
+def _case_obstruction_geometry_production_style(kd_flags, kd_params):
     # Production-style geometry (Lcs = 25): an obstruction cell sits between
     # the plenum and the cathode, so the cathode's live cell is index 2 --
     # neither an end cell nor a fixed offset from one. The wall-return
@@ -11638,6 +12539,14 @@ def main():
         assert kd_cen_prefix_summary.dvm_arm_configured is True
         assert kd_cen_prefix_summary.dvm_transfer_ledger_census is None
 
+
+# --------------------------------------------------------------------
+# neutral-wind-advection
+# --------------------------------------------------------------------
+@_case("neutral-wind-advection")
+def _case_neutral_wind_advection(
+    knob_floors, knob_mass, knob_state, mn_plasma_sim
+):
     # --- Neutral-wind advection (M3): donor-cell
     # upwind of nn and M_n by u_n on the neutral faces, closed ends for
     # particles, end-wall momentum accommodation, and a CFL guard.
@@ -11770,6 +12679,15 @@ def main():
     assert np.isfinite(mw_diag.dt_neutral_wind)
     assert mw_diag.dt_neutral_wind > 0.0
 
+
+# --------------------------------------------------------------------
+# gas-puff-axial-profile
+# --------------------------------------------------------------------
+@_case(
+    "gas-puff-axial-profile",
+    provides=("build_geometry",),
+)
+def _case_gas_puff_axial_profile():
     # --- Gas-puff axial profile (gas_puff_profile): one shared implementation
     # behind both puff sites; "cell" is bit-exact legacy, "gaussian" conserves
     # the same total inflow over the main chamber.
@@ -11840,7 +12758,14 @@ def main():
         pass
     else:
         raise AssertionError("expected ValueError for unknown gas_puff_profile")
+    return locals()
 
+
+# --------------------------------------------------------------------
+# gas-puff-double-erf-waveform
+# --------------------------------------------------------------------
+@_case("gas-puff-double-erf-waveform")
+def _case_gas_puff_double_erf_waveform():
     # --- Double-erf puff waveform (gas_puff_mode="double_erf"): valve-like
     # erf rise 0 -> S_gp, plateau, erf drop S_gp -> S_gp_decay_target, on
     # the scheduled main-discharge clock (rise before breakdown). Both puff
@@ -11909,6 +12834,12 @@ def main():
         else:
             raise AssertionError(f"expected ValueError for {derf_bad}")
 
+
+# --------------------------------------------------------------------
+# anode-disc-radius
+# --------------------------------------------------------------------
+@_case("anode-disc-radius")
+def _case_anode_disc_radius(build_geometry):
     # --- Anode disc radius (anode_radius_cm): opens the annulus around the
     # mesh to neutrals only. None = historical (1 - eta); Ra < Rm gives
     # 1 - eta*(Ra/Rm)^2; heat/Bohm keep the bare mesh values.
@@ -11933,6 +12864,17 @@ def main():
     else:
         raise AssertionError("expected ValueError for anode disc inside Rp")
 
+
+# --------------------------------------------------------------------
+# sigma-in-cx-derived
+# --------------------------------------------------------------------
+@_case(
+    "sigma-in-cx-derived",
+    provides=("cool_flat", "cooling_kwargs", "shape_state"),
+)
+def _case_sigma_in_cx_derived(
+    drag_const, drag_kwargs, knob_floors, knob_mass, knob_state
+):
     # --- CX-derived momentum-transfer rate (sigma_in_model = "cx_derived"):
     # nu_in = nn * (2*<sigma v>_cx + k_Langevin), consistent with the CX
     # energy channel and carrying the velocity dependence the constant lacks.
@@ -12031,7 +12973,17 @@ def main():
     shape_factor = np.array([0.5, 1.0, 2.0])
     assert np.allclose(cool_shaped.Ee, cool_flat.Ee * shape_factor, rtol=1e-12)
     assert cool_shaped.Ee[1] == cool_flat.Ee[1]
+    return locals()
 
+
+# --------------------------------------------------------------------
+# adas-atomic-rate-model
+# --------------------------------------------------------------------
+@_case(
+    "adas-atomic-rate-model",
+    provides=("_b21p", "_he_2p_excitation_cross_cm2"),
+)
+def _case_adas_atomic_rate_model():
     # --- ADAS atomic rate model (atomic_rate_model = "adas"): adf11 tables
     # parse, grid nodes reproduce exactly, edges clamp, and the physics the
     # switch exists for shows up (effective SCD ionization above the direct
@@ -12085,7 +13037,14 @@ def main():
             float(He_EIE_cross_DA(eps_probe, _b21p)),
             rtol=1e-12,
         )
+    return locals()
 
+
+# --------------------------------------------------------------------
+# he-singlet-manifold-registry
+# --------------------------------------------------------------------
+@_case("he-singlet-manifold-registry")
+def _case_he_singlet_manifold_registry(_b21p, _he_2p_excitation_cross_cm2):
     # --- A1: the He singlet manifold registry (WP-A). ---
     from cablp.funcs._cross import (
         He_EIE_cross_manifold,
@@ -12145,6 +13104,20 @@ def main():
     # plus the small nS/nD/nF series and threshold shifts).
     assert 1.3 < tail_sigma_100 / sigma_by_level["41P"] < 2.0
 
+
+# --------------------------------------------------------------------
+# csda-module-standalone
+# --------------------------------------------------------------------
+@_case(
+    "csda-module-standalone",
+    provides=(
+        "_COULOMB_STOPPING_EXPONENT", "_coulomb_stopping_coefficient",
+        "b1_cells", "b1_col", "b1_res", "beam_speed_cm_s",
+        "coulomb_stopping_eV_per_cm", "deposit_beam",
+        "quasilinear_relaxation_length_cm",
+    ),
+)
+def _case_csda_module_standalone():
     # --- B1: the standalone CSDA beam-deposition module
     # (B1; full acceptance in
     # scripts/verify_beam_deposition.py — this is the fast subset).
@@ -12215,7 +13188,20 @@ def main():
             pass
         else:
             raise AssertionError("expected ValueError from deposit_beam")
+    return locals()
 
+
+# --------------------------------------------------------------------
+# csda-per-cell-accumulators
+# --------------------------------------------------------------------
+@_case(
+    "csda-per-cell-accumulators",
+    provides=("_b2_weak",),
+)
+def _case_csda_per_cell_accumulators(
+    b1_cells, b1_col, beam_speed_cm_s, coulomb_stopping_eV_per_cm,
+    deposit_beam, quasilinear_relaxation_length_cm
+):
     # --- Per-cell float accumulators (cost read 2026-08-02, restructure B) ---
     # deposit_beam banks each substep's channels in local Python floats and
     # flushes them to their arrays once, at cell exit, instead of doing eight
@@ -12480,7 +13466,17 @@ def main():
             assert _b2_ref["sec_flux"].sum() > 0.0
         else:
             assert _b2_ref["anom_power_eV"].sum() > 0.0
+    return locals()
 
+
+# --------------------------------------------------------------------
+# csda-hoisted-stopping-coefficient
+# --------------------------------------------------------------------
+@_case("csda-hoisted-stopping-coefficient")
+def _case_csda_hoisted_stopping_coefficient(
+    _COULOMB_STOPPING_EXPONENT, _b2_weak, _coulomb_stopping_coefficient,
+    b1_cells, b1_col, b1_res, coulomb_stopping_eV_per_cm, deposit_beam
+):
     # --- Hoisted stopping coefficient (cost read 2026-08-02, restructure C) --
     # The walks' per-cell A in dE/dx = A W**p is a 262-iteration Python
     # listcomp costing ~100 us -- half the entire WP-E per-call surcharge --
@@ -12689,6 +13685,18 @@ def main():
     else:
         raise AssertionError("expected ValueError for product_transport")
 
+
+# --------------------------------------------------------------------
+# csda-ql-heating-locality
+# --------------------------------------------------------------------
+@_case(
+    "csda-ql-heating-locality",
+    provides=(
+        "wpe_E0", "wpe_G0", "wpe_cells", "wpe_removed", "wpe_thin",
+        "wpe_walk",
+    ),
+)
+def _case_csda_ql_heating_locality(deposit_beam):
     # --- WP-E: QL heating locality (anomalous_transport). The anomalous
     # channel banks its drag as instantaneous LOCAL bulk heating; kinetically
     # QL fills a fast-tail plateau first, and at breakdown densities a tail
@@ -12888,7 +13896,18 @@ def main():
             pass
         else:
             raise AssertionError("expected ValueError for anomalous_transport")
+    return locals()
 
+
+# --------------------------------------------------------------------
+# csda-walk-window-reflection-k7
+# --------------------------------------------------------------------
+@_case("csda-walk-window-reflection-k7")
+def _case_csda_walk_window_reflection_k7(
+    cool_flat, cooling_kwargs, deposit_beam, knob_floors, knob_mass,
+    knob_state, shape_state, wpe_E0, wpe_G0, wpe_cells, wpe_removed,
+    wpe_thin, wpe_walk
+):
     # --- K7 at the module: one walk-window face REFLECTS instead of letting
     # walkers leave. The comparison against the threshold is general, so the
     # arm is not a disguised "reflect everything" switch.
@@ -13055,6 +14074,15 @@ def main():
         atol=0.0,
     )
 
+
+# --------------------------------------------------------------------
+# directed-recycle-jets
+# --------------------------------------------------------------------
+@_case(
+    "directed-recycle-jets",
+    historical_stance=True,
+)
+def _case_directed_recycle_jets(knob_mass, m3_cathode_flags, m3_params):
     # --- Directed recycle jets: cathode-face
     # backscatter + effusion and anode-mesh backscatter ride the SAME terms
     # that rebirth the recycle particles, as M_n sources; the mesh
@@ -13064,6 +14092,7 @@ def main():
     # Directed recycle jets ride on the evolved M_n (legacy-drag path); run on
     # the simple stance with the moment operator off (jet_params derive from the
     # simple m3_params). The legacy-drag DeprecationWarning is expected.
+    resolved_cathode_flags = _resolved_cathode_flags()
     jet_flags = dict(m3_cathode_flags)
     jet_flags["neutral_momentum"] = True
     jet_flags["ion_neutral_moment_closure"] = False
@@ -13374,10 +14403,20 @@ def main():
     # backscatter with 1/R_N times the legacy energy.
     assert np.all(jet_en_carried > jet_en_ref)
 
+
+# --------------------------------------------------------------------
+# adas-low-te-extension-retired
+# --------------------------------------------------------------------
+@_case(
+    "adas-low-te-extension-retired",
+    historical_stance=True,
+)
+def _case_adas_low_te_extension_retired(m3_params):
     # --- Retired deep-afterglow low-Te recipe: adas_low_te_extension with
     # icool_recomb composes destructively (bare PRB charged, sub-edge PRB
     # amplified ~9,300x -> thermal runaway to the Te floor and a permanent
     # electron_cooling dt collapse). Construction must refuse the pair.
+    resolved_cathode_flags = _resolved_cathode_flags()
     try:
         LAPDSim1D(
             dict(m3_params, adas_low_te_extension=True),
@@ -13397,9 +14436,19 @@ def main():
     )
     LAPDSim1D(m3_params, dict(resolved_cathode_flags, icool_recomb=True))
 
+
+# --------------------------------------------------------------------
+# gcr-recombination-energy-pair
+# --------------------------------------------------------------------
+@_case(
+    "gcr-recombination-energy-pair",
+    historical_stance=True,
+)
+def _case_gcr_recombination_energy_pair(m3_params):
     # --- GCR-consistent recombination energy pair
     # (recombination_energy_return): +I_ion*S_rec - P_PRB on the electron
     # fluid, adas-only, mutually exclusive with icool_recomb (double-charge).
+    resolved_cathode_flags = _resolved_cathode_flags()
     from cablp.funcs._adas import he_rates as _rer_he_rates
     from cablp.solvers._sim1d.physics.reactions import (
         recombination_energy_return_rhs,
@@ -13457,9 +14506,19 @@ def main():
     assert rer_I_ion * rer_cold["acd"][0] > rer_cold["prb1"][0]
     assert rer_I_ion * rer_hot["acd"][0] < rer_hot["prb1"][0]
 
+
+# --------------------------------------------------------------------
+# square-gas-puff-waveform
+# --------------------------------------------------------------------
+@_case(
+    "square-gas-puff-waveform",
+    historical_stance=True,
+)
+def _case_square_gas_puff_waveform(m3_params):
     # --- Square gas-puff waveform (the measured piezo/supply behaviour):
     # erf rise anchored on circuit-on, flat at S_gp through the drive,
     # erf close after drive end with a tail into the afterglow.
+    resolved_cathode_flags = _resolved_cathode_flags()
     for sq_bad in (
         {"gas_puff_mode": "square", "gas_puff_rise_width_s": 0.0},
         {"gas_puff_mode": "square", "gas_puff_close_lag_s": -1e-3},
@@ -13506,9 +14565,20 @@ def main():
         resolved_cathode_flags,
     )._phase_switches("afterglow")["gas_puff_enabled"]
 
+
+# --------------------------------------------------------------------
+# electrode-sample-smoothing
+# --------------------------------------------------------------------
+@_case(
+    "electrode-sample-smoothing",
+    historical_stance=True,
+    provides=("r1a_flags", "r1a_params"),
+)
+def _case_electrode_sample_smoothing(m3_params):
     # --- Electrode sample smoothing (cathode_sample_smoothing): EMA of the
     # sampled cathode/anode-flank (n, Te) at the presheath transit time,
     # accepted-steps only; the solve reads the smoothed state.
+    resolved_cathode_flags = _resolved_cathode_flags()
     for ss_bad in ({"cathode_sample_smoothing": "bogus"},
                    {"cathode_sample_smoothing": -1.0}):
         try:
@@ -13676,7 +14746,17 @@ def main():
                 getattr(term, field_name)[r1a_dead],
                 np.zeros(np.count_nonzero(r1a_dead)),
             )
+    return locals()
 
+
+# --------------------------------------------------------------------
+# restart-saved-evidence-r1b
+# --------------------------------------------------------------------
+@_case(
+    "restart-saved-evidence-r1b",
+    historical_stance=True,
+)
+def _case_restart_saved_evidence_r1b(r1a_flags, r1a_params):
     # R1b: the saved evidence follows the actual packed state for the stable
     # five-, six-, seven-, and eight-row layouts. Two-zone density inventory
     # uses V_col=V_p and V_ann=V_m-V_p; the two-momentum radial transfer is
@@ -14024,6 +15104,12 @@ def main():
     assert raw_off_attempt.raw_rejection_reason == ""
     assert raw_off_attempt.floor_ledger["nn_a_particles_added"] > 0.0
 
+
+# --------------------------------------------------------------------
+# resolved-config-manifest-r1e
+# --------------------------------------------------------------------
+@_case("resolved-config-manifest-r1e")
+def _case_resolved_config_manifest_r1e():
     # R1e exact resolved-config evidence: the machine-readable manifest
     # covers the authoritative registry, every config-complete campaign
     # driver matches its reviewed digest, and constructed config metadata
@@ -14249,6 +15335,12 @@ def main():
             del rate_h5["atomic_rate_domain"]
         assert load_result_hdf5(rate_path).atomic_rate_domain == {}
 
+
+# --------------------------------------------------------------------
+# neutral-equilibration-run-warning
+# --------------------------------------------------------------------
+@_case("neutral-equilibration-run-warning")
+def _case_neutral_equilibration_run_warning():
     # --- direct run() with neutral_equilibration ON warns loudly -------------
     # The equilibration fires only from start_simulation(); a direct run()
     # silently started from the nn0 fill instead. That is a warning, never an
@@ -14293,6 +15385,12 @@ def main():
     ], "start_simulation()'s own run() must not warn"
     assert _eq_sim3._run_via_start_simulation, "run() must not clear the guard"
 
+
+# --------------------------------------------------------------------
+# gas-puff-source-born-at-rest
+# --------------------------------------------------------------------
+@_case("gas-puff-source-born-at-rest")
+def _case_gas_puff_source_born_at_rest():
     # --- S_gp is born at rest (2026-07-28) ---------------------------------
     # The gas puff is a source of ZERO-parallel-momentum particles: cold gas
     # arrives through the pipe with no directed axial momentum, so S_gp adds
@@ -14536,6 +15634,12 @@ def main():
     assert np.array_equal(sgp_tzq_next.M_n, sgp_tzq_Mn)
     assert np.array_equal(sgp_tzq_next.M_n_a, sgp_tzq_Mna)
 
+
+# --------------------------------------------------------------------
+# compiled-kernel-equivalence
+# --------------------------------------------------------------------
+@_case("compiled-kernel-equivalence")
+def _case_compiled_kernel_equivalence():
     # --- Compiled-kernel END-TO-END equivalence (D3/D4, opt-in) -----------
     # The suite itself runs on the pure path (asserted above), and the D4
     # block compares each compiled kernel against its pure twin one function
@@ -14545,7 +15649,8 @@ def main():
     # process -- each is a subprocess carrying its own CABLP_COMPILED_KERNELS.
     #
     # Gated on the extension being BUILT, not on this process having opted
-    # in: the parent smoke deliberately runs pure (line ~4573 asserts it), so
+    # in: the parent smoke deliberately runs pure (the
+    # no-source-run-and-results case asserts it), so
     # keying this off the parent's env var would leave the section dead in
     # every gate invocation. On a checkout with no extension it SKIPS and
     # never fails -- the compiled path is opt-in by design and a pure
@@ -14588,7 +15693,8 @@ def main():
         # LAYOUT (R2a fold-in, 2026-08-20): all five scenarios share ONE base,
         # and it is the pre-R2a 5-field cold-neutral stance -- the child spells
         # _pin_pre_r2a_neutral_stance out itself, since a subprocess cannot
-        # import the parent's helper (the TOML block at ~line 9585 spells the
+        # import the parent's helper (the TOML block in the
+        # equilibration-puff-width case spells the
         # same pin out for the same reason). This block asks a KERNEL
         # EQUIVALENCE question, not a closure question: the compiled kernels
         # are the tier-A sheath solve and the CSDA march, neither of which
@@ -14917,12 +16023,22 @@ print(json.dumps({
                 "final state bit-identical)"
             )
 
+
+# --------------------------------------------------------------------
+# dt-min-lock
+# --------------------------------------------------------------------
+@_case(
+    "dt-min-lock",
+    historical_stance=True,
+)
+def _case_dt_min_lock(no_source_params):
     # ---- dt_min lock: honest labeling, census, loud failure ----------------
     # Regression pins for the 2026-08-05 change. The clamp to dt_min used to
     # OVERWRITE active_constraint with "dt_min", so a run pinned at dt_min
     # reported that it was pinned and never by what -- and because the clamp
     # keeps such a run alive, a drained floor-pinned cell produced a silent
     # permanent lock (measured: scripts/dtmin_census_runlengths.txt).
+    params, flags = _base_config()
     dtlock_params = dict(no_source_params)
     dtlock_flags = dict(flags)
 
@@ -15108,6 +16224,15 @@ print(json.dumps({
                 f"dt_min_lock_max_steps accepted {bad_lock!r}"
             )
 
+
+# --------------------------------------------------------------------
+# coverage-closure-v1
+# --------------------------------------------------------------------
+@_case(
+    "coverage-closure-v1",
+    provides=("_coverage_config",),
+)
+def _case_coverage_closure_v1():
     # --- Clumpy-plasma coverage closure v1.1 (`coverage_closure`) ---------
     # Five things are checked, in this order: the configuration refusals; the
     # bit-exact reduction at f_cov = 1; the continuity of the closed-form
@@ -15420,7 +16545,17 @@ print(json.dumps({
     assert np.array_equal(
         coverage_channel_densities(_cov_state, None)[0], _cov_state.n
     )
+    return locals()
 
+
+# --------------------------------------------------------------------
+# coverage-two-medium-beam-split
+# --------------------------------------------------------------------
+@_case(
+    "coverage-two-medium-beam-split",
+    provides=("_cov_ref_sim",),
+)
+def _case_coverage_two_medium_beam_split(_coverage_config):
     # (iv) THE TWO-MEDIUM BEAM SPLIT. The cathode emits over its whole face,
     # so the fraction f_cov of the flux enters the covered channels and the
     # rest enters the reservoir. Each arm must carry exactly its AREA share and
@@ -15775,7 +16910,14 @@ print(json.dumps({
     _cov_ref_sim = LAPDSim1D(*_coverage_config("csda"))
     assert set(_cov_terms) == set(_cov_ref_sim.rhs_terms())
     assert _cov_burn_sim._y.size == _cov_ref_sim._y.size
+    return locals()
 
+
+# --------------------------------------------------------------------
+# coverage-closure-v2
+# --------------------------------------------------------------------
+@_case("coverage-closure-v2")
+def _case_coverage_closure_v2(_cov_ref_sim, _coverage_config, deposit_beam):
     # --- Coverage closure v2: the z-resolved field ------------------------
     # Five statements the scalar-f_cov closure could not make: the seed input
     # reaches the field intact, the growth driver is normalized so its own
@@ -16083,6 +17225,19 @@ print(json.dumps({
         _cov_z_sim.coverage_fraction_profile(), _cov_retry_f
     ), "the accepted attempt did not advance the field; (vi-e) is vacuous"
 
+
+# --------------------------------------------------------------------
+# neutral-probe-source
+# --------------------------------------------------------------------
+@_case(
+    "neutral-probe-source",
+    provides=(
+        "_probe_Vm", "_probe_base_p", "_probe_cells", "_probe_config",
+        "_probe_gauss_sim", "_probe_off_sim", "_probe_ok",
+        "_probe_on_f", "_probe_zone_volumes",
+    ),
+)
+def _case_neutral_probe_source():
     # --- Ad-hoc probe neutral source (`neutral_probe_source`) -------------
     # An INFERENCE INSTRUMENT: an arm with this on measures the plasma's
     # response to a hypothesized neutral source. Six things are checked, in
@@ -16383,7 +17538,18 @@ print(json.dumps({
             - _probe_w
         ) < 1e-14, (_probe_t, _probe_w)
     assert _probe_tab_sim._neutral_probe_event_times() == [1.0e-8, 3.0e-8]
+    return locals()
 
+
+# --------------------------------------------------------------------
+# neutral-probe-step-average
+# --------------------------------------------------------------------
+@_case("neutral-probe-step-average")
+def _case_neutral_probe_step_average(
+    _probe_Vm, _probe_base_p, _probe_cells, _probe_config,
+    _probe_gauss_sim, _probe_off_sim, _probe_ok, _probe_on_f,
+    _probe_zone_volumes
+):
     # (ii-b) THE STEP AVERAGE, AND THE DELIVERED INVENTORY ON A HOSTILE
     # LATTICE. The explicit step is Heun: it samples the RHS at t0 and t0+dt
     # and averages with equal weights, so a POINTWISE waveform is integrated by
@@ -16716,6 +17882,15 @@ print(json.dumps({
     assert float(np.max(_probe_cov_sim._coverage_deficit)) > 0.0
     assert "neutral_probe_source" in _probe_cov_sim.rhs_terms()
 
+
+# --------------------------------------------------------------------
+# tracer-affine-update-identity
+# --------------------------------------------------------------------
+@_case(
+    "tracer-affine-update-identity",
+    provides=("_r2", "solver_module"),
+)
+def _case_tracer_affine_update_identity():
     # ==================================================================
     # REGIME-R2 PRE-BREAKDOWN PASSIVE TRACER (default off, bit-exact off)
     #
@@ -16799,7 +17974,14 @@ print(json.dumps({
     assert np.max(np.abs(_r2_naive / _r2_closed - 1.0)) > 1e-14, (
         "R2 exactness assertions are vacuous: the naive update passes them too"
     )
+    return locals()
 
+
+# --------------------------------------------------------------------
+# tracer-fluid-n-row-identity
+# --------------------------------------------------------------------
+@_case("tracer-fluid-n-row-identity")
+def _case_tracer_fluid_n_row_identity(_r2):
     # ---- (i, continued) gamma*n + S IS the fluid's own n row ----
     # The tracer claims to duplicate no physics: it recovers each channel's
     # coefficient from the solver's own term function by homogeneity degree.
@@ -16862,6 +18044,15 @@ print(json.dumps({
         )[_r2_id_live]
     ) > 1e-10, "R2 gamma identity is vacuous: a 1e-7 error passes it"
 
+
+# --------------------------------------------------------------------
+# tracer-presence-gating
+# --------------------------------------------------------------------
+@_case(
+    "tracer-presence-gating",
+    provides=("_r2_on_config",),
+)
+def _case_tracer_presence_gating():
     # ---- (ii) PRESENCE GATING: the off path cannot read the tracer keys ----
     # Sweeping every registered criterion constant by 3x and 1/3 must leave the
     # flag-off trajectory raw-byte identical. If the off path touched any of
@@ -16979,7 +18170,18 @@ print(json.dumps({
     ) == _r2_vac_sim.floors["n"], (
         "the floor-exemption assertion is vacuous: nothing was being clipped"
     )
+    return locals()
 
+
+# --------------------------------------------------------------------
+# tracer-construction-refusals
+# --------------------------------------------------------------------
+@_case(
+    "tracer-construction-refusals",
+    historical_stance=True,
+    provides=("_r2_refuses",),
+)
+def _case_tracer_construction_refusals(_r2_on_config):
     # ---- (iii) every construction-time refusal, and (iv) its anti-vacuity ----
     # Each case: the broken config RAISES naming the offending key, and the
     # SAME config with only that key repaired constructs. The second half is
@@ -17025,7 +18227,14 @@ print(json.dumps({
     _r2_refuses("tracer_overlap_band_ne", tracer_overlap_band_ne=(1e11, 1e10))
     _r2_refuses("tracer_overlap_band_ne", tracer_overlap_band_ne=None)
     _r2_refuses("tracer_overlap_rtol", tracer_overlap_rtol=0.0)
+    return locals()
 
+
+# --------------------------------------------------------------------
+# tracer-census-and-criterion
+# --------------------------------------------------------------------
+@_case("tracer-census-and-criterion")
+def _case_tracer_census_and_criterion(_r2, _r2_on_config):
     # ---- the census exists from day one, and names a binding criterion ----
     _r2_cen_params, _r2_cen_flags = _r2_on_config()
     _r2_cen_sim = LAPDSim1D(_r2_cen_params, _r2_cen_flags)
@@ -17048,6 +18257,17 @@ print(json.dumps({
     )
     assert _r2_nocen_sim._tracer_census_line() is None
 
+
+# --------------------------------------------------------------------
+# tracer-ql-booking-passive-cells
+# --------------------------------------------------------------------
+@_case(
+    "tracer-ql-booking-passive-cells",
+    provides=(
+        "_r2ql_beam_kwargs", "_r2ql_config", "_r2ql_sim", "_r2ql_solve",
+    ),
+)
+def _case_tracer_ql_booking_passive_cells(_r2, _r2_on_config, solver_module):
     # ---- (v) the QL/anomalous booking is REFUSED on passive cells ----
     # Quasilinear absorption is a beam-PLASMA instability, so on a cell the
     # tracer owns -- a cell that by definition carries no plasma worth speaking
@@ -17183,7 +18403,17 @@ print(json.dumps({
         / float(np.sum(_r2ql_sm_raw * _r2ql_sm_Vp))
         - 1.0
     ) < 1e-12, "the smoothing kernel must conserve the anomalous power total"
+    return locals()
 
+
+# --------------------------------------------------------------------
+# tracer-owner-state-criteria
+# --------------------------------------------------------------------
+@_case("tracer-owner-state-criteria")
+def _case_tracer_owner_state_criteria(
+    _r2, _r2_on_config, _r2_refuses, _r2ql_beam_kwargs, _r2ql_config,
+    _r2ql_sim, _r2ql_solve
+):
     # ---- (vi) the criteria read the OWNER's state, per cell ----
     # The quasi-static balance is solved on the passive set only, so off that
     # set its Te is a floor-by-convention filler; and the affine update's
@@ -17325,6 +18555,15 @@ print(json.dumps({
     _r2ql_bl_params["beam_anomalous_model"] = "none"
     LAPDSim1D(_r2ql_bl_params, _r2ql_bl_flags)
 
+
+# --------------------------------------------------------------------
+# ql-relaxation-onset-gate
+# --------------------------------------------------------------------
+@_case(
+    "ql-relaxation-onset-gate",
+    provides=("_qlr_ray",),
+)
+def _case_ql_relaxation_onset_gate():
     # ================= ql_relaxation: the anomalous middle leg =============
     # Pre-registered with the closure. Four things have to hold and each has an
     # anti-vacuity twin: the boxed onset gate actually gates (and is open where
@@ -17381,7 +18620,14 @@ print(json.dumps({
         )
         == 0.0
     )
+    return locals()
 
+
+# --------------------------------------------------------------------
+# ql-relaxation-books-and-conserves
+# --------------------------------------------------------------------
+@_case("ql-relaxation-books-and-conserves")
+def _case_ql_relaxation_books_and_conserves(_qlr_ray):
     # ---- (b) the closure books, conserves, and the bracket moves it ----
     _qlr_by_coeff = {}
     for _qlr_c in (10.0, 30.0, 100.0):
@@ -17436,6 +18682,12 @@ print(json.dumps({
         < float(_qlr_fiat.heating_anomalous_erg_s.sum())
     )
 
+
+# --------------------------------------------------------------------
+# ql-relaxation-module-refusals
+# --------------------------------------------------------------------
+@_case("ql-relaxation-module-refusals")
+def _case_ql_relaxation_module_refusals(_qlr_ray):
     # ---- (c) the module's own refusals ----
     for _qlr_bad in (None,):
         try:
@@ -17462,6 +18714,12 @@ print(json.dumps({
                 f"ql_relaxation_coeff={_qlr_bad} must raise"
             )
 
+
+# --------------------------------------------------------------------
+# ql-relaxation-compiled-kernel-refusal
+# --------------------------------------------------------------------
+@_case("ql-relaxation-compiled-kernel-refusal")
+def _case_ql_relaxation_compiled_kernel_refusal(_qlr_ray):
     # ---- (d) the compiled kernel must NEVER run this closure ----
     # It takes the anomalous channel as a BOOLEAN and applies the fiat drag, so
     # offering it ql_relaxation would silently run the wrong physics. Tested by
@@ -17508,6 +18766,12 @@ print(json.dumps({
             _beam_deposition_mod._csda_tables,
         ) = _qlr_saved
 
+
+# --------------------------------------------------------------------
+# ql-relaxation-presence-gating
+# --------------------------------------------------------------------
+@_case("ql-relaxation-presence-gating")
+def _case_ql_relaxation_presence_gating(_r2ql_config):
     # ---- (e) PRESENCE GATING: byte-identity with ql_relaxation unselected ---
     # The key must not reach deposit_beam, and sweeping it must not move a
     # single bit of a run on either of the other two arms.
@@ -17557,6 +18821,12 @@ print(json.dumps({
         "move a run even when its closure is selected"
     )
 
+
+# --------------------------------------------------------------------
+# ql-relaxation-solver-refusals
+# --------------------------------------------------------------------
+@_case("ql-relaxation-solver-refusals")
+def _case_ql_relaxation_solver_refusals(_r2ql_config):
     # ---- (f) construction-time refusals, at the SOLVER ----
     def _qlr_refuses(**overrides):
         params, flags = _r2ql_config()
@@ -17586,6 +18856,12 @@ print(json.dumps({
     else:
         raise AssertionError("beam_anomalous_model must reject 'zzz'")
 
+
+# --------------------------------------------------------------------
+# ql-relaxation-passive-cell-booking
+# --------------------------------------------------------------------
+@_case("ql-relaxation-passive-cell-booking")
+def _case_ql_relaxation_passive_cell_booking(_r2, _r2ql_config):
     # ---- (g) a PASSIVE cell BOOKS ql_relaxation's power ----
     # The option-3 refusal is keyed to the FIAT arm. This closure carries its
     # own onset gate and its own density-dependent extracted fraction, so it
@@ -17657,6 +18933,12 @@ print(json.dumps({
         _qlr_t_relabel, np.where(_qlr_t_passive, _qlr_t_power, 0.0)
     ), "the passive-cell policy must be keyed on beam_anomalous_model"
 
+
+# --------------------------------------------------------------------
+# ql-relaxation-km-table
+# --------------------------------------------------------------------
+@_case("ql-relaxation-km-table")
+def _case_ql_relaxation_km_table():
     # ---- (h) the K_m table is the boxed table ----
     # Two nodes, and the numbers are the memo's. Interpolation is log-log
     # inside the span and CLAMPED outside it, so no structure is manufactured
@@ -17702,6 +18984,12 @@ print(json.dumps({
         8.0
     ) > _cross_mod.he_electron_momentum_transfer_rate_cm3_s(0.5)
 
+
+# --------------------------------------------------------------------
+# cathode-emitting-area-percolation-ea1
+# --------------------------------------------------------------------
+@_case("cathode-emitting-area-percolation-ea1")
+def _case_cathode_emitting_area_percolation_ea1():
     # ---- ea1: cathode emitting-area percolation -------------------------
     # The closure throttles thermionic release to the LIT fraction of the
     # emitting face. Its load-bearing claim is a patch-invariance identity --
@@ -17990,6 +19278,12 @@ print(json.dumps({
     # A resume across a change of arming is refused by the structural key.
     assert "cathode_emitting_area" in _restart_mod.STRUCTURAL_FLAG_KEYS
 
+
+# --------------------------------------------------------------------
+# shaped-initial-neutral-fill-sp3
+# --------------------------------------------------------------------
+@_case("shaped-initial-neutral-fill-sp3")
+def _case_shaped_initial_neutral_fill_sp3():
     # ---- sp3: shaped initial neutral fill (neutral_initial_profile) --------
     # The capability replaces the uniform scalar nn0 with a per-cell array of
     # ABSOLUTE densities. Four questions decide it: does the off path still
@@ -18282,6 +19576,12 @@ print(json.dumps({
     # independent numbers.
     assert abs(_sp3_applied / _sp3_nominal - (2.0 * 4.5) / 2.0) < 1e-12
 
+
+# --------------------------------------------------------------------
+# equilibration-map-slicer
+# --------------------------------------------------------------------
+@_case("equilibration-map-slicer")
+def _case_equilibration_map_slicer():
     # ---- eqmap: the equilibration map's slicer ----------------------------
     # eqmap_make.py runs a 101st cycle whose puff is open for the foot fill
     # time and keeps nn(z,t) as a map of starting distributions; eqmap_slice.py
@@ -18436,6 +19736,18 @@ print(json.dumps({
                 f"a pre-fill time of {_eq_bad_t} s is off the map and must raise"
             )
 
+
+# --------------------------------------------------------------------
+# prescribed-area-geometry
+# --------------------------------------------------------------------
+@_case(
+    "prescribed-area-geometry",
+    provides=(
+        "_pa_Rm", "_pa_Rp", "_pa_base_p", "_pa_base_result",
+        "_pa_cells", "_pa_geom0", "_pa_raw", "_pa_stance",
+    ),
+)
+def _case_prescribed_area_geometry():
     # ---- pa: prescribed per-cell flux-tube / vessel geometry (default off) --
     # The capability replaces the uniform scalars Rp and Rm with per-cell
     # radius vectors computed OUTSIDE the solver, so the plasma areas, the cell
@@ -18506,7 +19818,17 @@ print(json.dumps({
         _pa_base_result.steps, _pa_null_result.steps
     )
     assert _pa_raw(_pa_base_result) == _pa_raw(_pa_null_result)
+    return locals()
 
+
+# --------------------------------------------------------------------
+# prescribed-area-trivial-profile-identity
+# --------------------------------------------------------------------
+@_case("prescribed-area-trivial-profile-identity")
+def _case_prescribed_area_trivial_profile_identity(
+    _pa_Rm, _pa_Rp, _pa_base_result, _pa_cells, _pa_geom0, _pa_raw,
+    _pa_stance
+):
     # (b) THE TRIVIAL-PROFILE IDENTITY. Profiles holding the geometry's own
     # uniform Rp and Rm in every cell reproduce the no-profile run at the RAW
     # BIT level: each area is rebuilt with the same pi*R**2 expression the
@@ -18681,6 +20003,15 @@ print(json.dumps({
     _pa_full_sim = LAPDSim1D(_pa_full_p, _pa_full_f)
     assert np.all(neutral_zone_volumes(_pa_full_sim.geometry)[1][-3:] == 0.0)
 
+
+# --------------------------------------------------------------------
+# prescribed-area-well-balancedness
+# --------------------------------------------------------------------
+@_case("prescribed-area-well-balancedness")
+def _case_prescribed_area_well_balancedness(
+    _pa_Rm, _pa_Rp, _pa_base_p, _pa_base_result, _pa_cells, _pa_geom0,
+    _pa_raw, _pa_stance
+):
     # (c) WELL-BALANCEDNESS -- the load-bearing property of the mirror force.
     # On a strongly varying A(z) a static uniform-pressure plasma must generate
     # EXACTLY no momentum: the quasi-1D p*dA/dz source is written with the same
@@ -19006,6 +20337,12 @@ print(json.dumps({
                 f"{_pa_off_key} must be refused with the flag off"
             )
 
+
+# --------------------------------------------------------------------
+# config-key-namespace-and-seed-cache
+# --------------------------------------------------------------------
+@_case("config-key-namespace-and-seed-cache")
+def _case_config_key_namespace_and_seed_cache():
     # ---- the registered constants are exactly the registered constants ----
     # A key added to the wrong namespace silently does nothing (input_dict and
     # input_flags validate neither), so the split is asserted here.
@@ -19097,6 +20434,12 @@ print(json.dumps({
             _pa_sig_flare_p, _pa_sig_flare_f
         ), f"{_key} must invalidate a cached neutral seed"
 
+
+# --------------------------------------------------------------------
+# hot-channel-internal-wall
+# --------------------------------------------------------------------
+@_case("hot-channel-internal-wall")
+def _case_hot_channel_internal_wall():
     # ==================================================================
     # HOT-CHANNEL INTERNAL WALL (neutral_hot_internal_wall, default off).
     # The ballistic flight kernel clips at the closed/absorbing plasma faces
@@ -19152,6 +20495,14 @@ print(json.dumps({
             "neutral_hot_internal_wall without neutral_energy must be refused"
         )
 
+
+# --------------------------------------------------------------------
+# smoke-summary
+# --------------------------------------------------------------------
+@_case("smoke-summary")
+def _case_smoke_summary():
+    sim, snapshot = _base_sim()
+    geom = snapshot.geometry
     print(
         "sim1d smoke ok: "
         f"cells={geom.cells}, dz={geom.dz_cm:g} cm, "
@@ -19160,5 +20511,49 @@ print(json.dumps({
     )
 
 
+def main(argv=None):
+    """Run the suite. No arguments = the full gate, in registration order."""
+    parser = argparse.ArgumentParser(
+        description="LAPDSim1D assertion smoke suite (case registry)."
+    )
+    parser.add_argument(
+        "--list", action="store_true",
+        help="print the case names, in run order, and exit",
+    )
+    parser.add_argument(
+        "--only", action="append", default=[], metavar="NAME[,NAME...]",
+        help="run only these cases (repeatable, comma-separated); they run in "
+             "registration order, never in the order given",
+    )
+    parser.add_argument(
+        "--trace", action="store_true",
+        help="log each case name to stderr as it starts",
+    )
+    args = parser.parse_args(argv)
+
+    if args.list:
+        for entry in _CASES:
+            print(entry.name)
+        return 0
+
+    requested = [n for chunk in args.only for n in chunk.split(",") if n]
+    if requested:
+        unknown = [n for n in requested if n not in _CASE_BY_NAME]
+        if unknown:
+            raise SystemExit(
+                "unknown case name(s): %s (see --list)" % ", ".join(unknown)
+            )
+        wanted = set(requested)
+        selected = [e for e in _CASES if e.name in wanted]
+    else:
+        selected = list(_CASES)
+
+    ctx = {}
+    for entry in selected:
+        _run_case(entry, ctx, trace=args.trace)
+    return 0
+
+
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
+
