@@ -101,6 +101,7 @@ from .physics.cathode import (
     solve_cathode_boundary,
     tail_reflect_face,
     validate_cathode_Rp_model,
+    validate_cathode_lnL_model,
     validate_cathode_solver_model,
 )
 from cablp.funcs._cathode_solver_idriven import beam_launch_energy_eV
@@ -1572,6 +1573,7 @@ class LAPDSim1D:
         # Fail at construction, not at the first cathode solve mid-run:
         # unknown model strings and the unsupported TwinCathode combination.
         validate_cathode_Rp_model(self._input_dict, self._flags)
+        validate_cathode_lnL_model(self._input_dict)
         self._cathode_solver_model = validate_cathode_solver_model(
             self._input_dict, self._flags
         )

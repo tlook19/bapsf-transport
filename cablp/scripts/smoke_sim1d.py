@@ -1680,6 +1680,7 @@ def _case_cathode_resolved_gap_resistance(cathode_face):
     import warnings as _warnings
 
     from cablp.solvers._sim1d.core.geometry import gap_cell_indices
+    from cablp.funcs._cathode_solver import _c_log_ei
     from cablp.solvers._sim1d.physics.cathode import spitzer_sigma_par_ohm_cm
 
     rgap_params = dict(resolved_params)
@@ -1697,7 +1698,28 @@ def _case_cathode_resolved_gap_resistance(cathode_face):
     sim_rgap = LAPDSim1D(rgap_resolved_params, resolved_cathode_flags)
     rgap_geom = sim_rgap.get_initial_snapshot().geometry
     rgap_gap = np.asarray(gap_cell_indices(rgap_geom), dtype=int)
-    assert spitzer_sigma_par_ohm_cm(4.0) == 14.6 * 4.0**1.5
+    # sigma_par carries a state-dependent Coulomb logarithm: the NRL
+    # transverse resistivity (p.30) lifted to parallel by the Braginskii 1.96
+    # (p.38). The "fixed_14p6" arm is the historical frozen coefficient, which
+    # is the same expression evaluated at lnLambda = 13.03.
+    assert np.isclose(
+        spitzer_sigma_par_ohm_cm(4.0, 4.0e12),
+        (1.96 / (1.03e-2 * _c_log_ei(4.0, 4.0e12))) * 4.0**1.5,
+        rtol=0.0,
+        atol=0.0,
+    )
+    assert spitzer_sigma_par_ohm_cm(4.0, 4.0e12, "fixed_14p6") == (
+        14.6 * 4.0**1.5
+    )
+    assert np.isclose(
+        14.6, 1.96 / (1.03e-2 * 13.03), rtol=1e-3
+    ), "the retired 14.6 is sigma_par at lnLambda 13.03"
+    try:
+        spitzer_sigma_par_ohm_cm(4.0, 4.0e12, "bogus")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for unknown lnL_model")
 
     def _rgap_state(Te):
         return conservative_from_primitives(
@@ -1747,8 +1769,15 @@ def _case_cathode_resolved_gap_resistance(cathode_face):
     r_cold_r = sim_rgap.solve_cathode_boundary(
         state=cold_state, update_cache=False
     ).beam_result.result
-    # 1/5 of the gap at 12 eV, 4/5 at 3 eV: 0.2 + 0.8*(12/3)^1.5 = 6.6x.
-    assert np.isclose(r_cold_r.R_p, 6.6 * r_cold_s.R_p, rtol=1e-9)
+    # 1/5 of the gap at 12 eV (the sampled cell), 4/5 at 3 eV. Spitzer
+    # resistivity is eta_sp ~ lnLambda(Te, n) * Te^-3/2, so the ratio is
+    # 0.2 + 0.8*(12/3)^1.5 * lnL(3)/lnL(12); the lnLambda factor is what the
+    # frozen-coefficient form (which gave a flat 6.6x) could not carry, and
+    # the two temperatures straddle the NRL formula's 10 eV switch.
+    _rgap_cold_ratio = 0.2 + 0.8 * (12.0 / 3.0) ** 1.5 * (
+        _c_log_ei(3.0, 4.0e12) / _c_log_ei(12.0, 4.0e12)
+    )
+    assert np.isclose(r_cold_r.R_p, _rgap_cold_ratio * r_cold_s.R_p, rtol=1e-9)
     # The resolved integral's larger R_p yields a larger ohmic gap drop at the
     # same driven current.
     assert r_cold_r.V_p > r_cold_s.V_p

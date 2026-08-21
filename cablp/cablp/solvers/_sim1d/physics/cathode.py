@@ -14,12 +14,14 @@ from cablp.funcs._beam_deposition import (
     _coulomb_stopping_coefficient,
 )
 from cablp.funcs._cathode_solver import (
+    CATHODE_LNL_MODELS,
     DeviceConfig,
     PlasmaState,
     _compute_beam_bypass_fraction,
     _compute_l_b,
     solve_beam_system,
 )
+from cablp.funcs._plasmaparams import LN_LAMBDA_MIN, c_log
 from cablp.funcs._cathode_solver_idriven import (
     beam_launch_energy_eV,
     solve_beam_system_idriven,
@@ -377,7 +379,19 @@ def cathode_device_config(input_dict, input_flags, mu, f_em=None):
         emission_area_cm2=annuli[1],
         emission_plasma_frac=annuli[2],
         emission_area_fraction=area_fraction,
+        lnL_model=validate_cathode_lnL_model(input_dict),
     )
+
+
+def validate_cathode_lnL_model(input_dict):
+    """Validate and return the ``cathode_lnL_model`` selection."""
+    model = str(input_dict.get("cathode_lnL_model", "nrl_ei"))
+    if model not in CATHODE_LNL_MODELS:
+        raise ValueError(
+            "cathode_lnL_model must be one of "
+            f"{CATHODE_LNL_MODELS} (got {model!r})"
+        )
+    return model
 
 
 _SIGMA_SB_W_CM2_K4 = 5.670374419e-12
@@ -443,37 +457,53 @@ def cathode_power_balance_terms_W(T_s_K, P_ion_W, I_eth_star_A, input_dict):
     )
 
 
-def spitzer_sigma_par_ohm_cm(Te_eV):
+def spitzer_sigma_par_ohm_cm(Te_eV, n_cm3, lnL_model="nrl_ei"):
     """Parallel Spitzer conductivity [Ohm^-1 cm^-1], as the cathode solver's.
 
-    Must match the internal ``sigma_par = 14.6 * T_e**1.5`` (fixed Coulomb
-    logarithm) in ``_cathode_solver.solve`` so the ``"resolved_gap"`` R_p
-    model reduces exactly to ``"sample"`` over a uniform gap. Follow-up on
-    record (Tom, 2026-07-20): derive sigma_par from the electron-ion
-    collision frequency nu_ei -- lnLambda(Te, n) via ``funcs._plasmaparams``
-    (``c_log``, ``time_elec_coll``) -- instead of this fixed-lnLambda fit.
-    That has to move in lockstep with the voltage-driven solver's internal
-    formula (or land only on the current-driven path), so it is a deliberate
-    separate change, not a drive-by here.
+    Must match the internal ``sigma_par`` in ``_cathode_solver.solve`` so the
+    ``"resolved_gap"`` R_p model reduces to ``"sample"`` over a uniform gap.
+    Elementwise in ``(Te_eV, n_cm3)``.
+
+    Under ``"nrl_ei"`` the Coulomb logarithm is the state-dependent
+    electron-ion log at the local ``(Te, n)``, floored at ``LN_LAMBDA_MIN`` --
+    the SAME ``c_log(..., kind="ei")`` convention the conduction and exchange
+    terms use, so the solver carries one lnLambda repo-wide. ``"fixed_14p6"``
+    restores the frozen coefficient the solver carried historically and is an
+    attribution-only comparison arm.
     """
-    return 14.6 * np.asarray(Te_eV, dtype=float) ** 1.5
+    Te = np.asarray(Te_eV, dtype=float)
+    if lnL_model == "fixed_14p6":
+        return 14.6 * Te**1.5
+    if lnL_model != "nrl_ei":
+        raise ValueError(
+            "lnL_model must be one of "
+            f"{CATHODE_LNL_MODELS} (got {lnL_model!r})"
+        )
+    ln_lambda = np.maximum(
+        c_log(Te, np.asarray(n_cm3, dtype=float), kind="ei"), LN_LAMBDA_MIN
+    )
+    return (1.96 / (1.03e-2 * ln_lambda)) * Te**1.5
 
 
-def resolved_gap_resistance_ohm(Te, geometry):
+def resolved_gap_resistance_ohm(Te, n, geometry, lnL_model="nrl_ei"):
     """Return the profile-integrated cathode-anode gap resistance [Ohm].
 
-    ``R_p = sum_k dz_k / (sigma_par(Te_k) * A_k)`` over the resolved gap
+    ``R_p = sum_k dz_k / (sigma_par(Te_k, n_k) * A_k)`` over the resolved gap
     cells, with each cell's own plasma-channel area -- the series resistance
     of the actual column the discharge current crosses, and the same
     per-cell Spitzer weighting ``_ohmic_gap_weights`` deposits P_ohmic with.
     The historical single-sample formula spreads the hot cathode-adjacent
     conductivity over the whole gap and so underestimates a colder gap
-    (eta_Spitzer ~ Te^-3/2).
+    (eta_Spitzer ~ lnLambda * Te^-3/2).
     """
     gap = np.asarray(gap_cell_indices(geometry, end=0), dtype=int)
     dz = np.asarray(geometry.length_cm, dtype=float)[gap]
     area = np.asarray(geometry.plasma_area_cm2, dtype=float)[gap]
-    sigma = spitzer_sigma_par_ohm_cm(np.asarray(Te, dtype=float)[gap])
+    sigma = spitzer_sigma_par_ohm_cm(
+        np.asarray(Te, dtype=float)[gap],
+        np.asarray(n, dtype=float)[gap],
+        lnL_model,
+    )
     return float(np.sum(dz / (sigma * area)))
 
 
@@ -498,23 +528,39 @@ def validate_cathode_solver_model(input_dict, input_flags):
     return model
 
 
-def apply_cathode_Rp_model(device_config, derived, geometry, input_dict, input_flags):
+def apply_cathode_Rp_model(
+    device_config, derived, geometry, input_dict, input_flags, n
+):
     """Apply ``cathode_Rp_model`` to the device config (M1 feed-in).
 
     Returns ``(device_config, applied_model, R_p_gap_ohm)``; see
     ``resolved_gap_resistance_ohm`` and the ``cathode_Rp_model`` config
     docs. Shared by the per-step solve dispatch and the current-driven
     circuit's V_dis(I) evaluator so the two cannot disagree about R_p.
+
+    ``n`` is the floored plasma density [cm^-3] the Coulomb logarithm reads,
+    supplied alongside ``derived`` because the derived state does not carry
+    it. The lnLambda model itself rides ``device_config``, so the gap
+    integral and the sheath solve cannot select different ones.
     """
     Rp_model = validate_cathode_Rp_model(input_dict, input_flags)
     R_p_gap_ohm = None
     if Rp_model == "resolved_gap":
-        R_p_gap_ohm = resolved_gap_resistance_ohm(derived.Te, geometry)
+        R_p_gap_ohm = resolved_gap_resistance_ohm(
+            derived.Te, n, geometry, device_config.lnL_model
+        )
         # DeviceConfig.R_cath is an effective value on this path: invert the
         # cathode solver's sampled Spitzer formula so it carries the resolved
-        # profile-integrated resistance exactly.
-        Te_sample = float(derived.Te[beam_launch(geometry, end=0)[0]])
-        sigma_sample = float(spitzer_sigma_par_ohm_cm(Te_sample))
+        # profile-integrated resistance exactly. The sample cell supplies BOTH
+        # (Te, n), so a uniform gap still reduces to the sampled solve exactly.
+        sample_index = beam_launch(geometry, end=0)[0]
+        Te_sample = float(derived.Te[sample_index])
+        n_sample = float(np.asarray(n, dtype=float)[sample_index])
+        sigma_sample = float(
+            spitzer_sigma_par_ohm_cm(
+                Te_sample, n_sample, device_config.lnL_model
+            )
+        )
         device_config = dataclasses.replace(
             device_config,
             R_cath=math.sqrt(
@@ -749,7 +795,8 @@ def idriven_result_evaluator(
         input_dict, input_flags, mu, f_em=f_em_override
     )
     device_config, _, _ = apply_cathode_Rp_model(
-        device_config, derived, geometry, input_dict, input_flags
+        device_config, derived, geometry, input_dict, input_flags,
+        np.maximum(state.n, floors["n"]),
     )
     idx = beam_launch(geometry, end=0)[0]
     beam_cross_prev = np.asarray(beam_cross_prev, dtype=float)
@@ -1191,7 +1238,8 @@ def solve_cathode_boundary(
         input_dict, input_flags, mu, f_em=f_em_override
     )
     device_config, Rp_model, R_p_gap_ohm = apply_cathode_Rp_model(
-        device_config, derived, geometry, input_dict, input_flags
+        device_config, derived, geometry, input_dict, input_flags,
+        np.maximum(state.n, floors["n"]),
     )
     solver_model = validate_cathode_solver_model(input_dict, input_flags)
     beam_climb_V = vessel_beam_climb_V(input_flags, vessel_V_cm_V)
@@ -2582,6 +2630,8 @@ def beam_ionization_rhs_terms(
         cathode_solve=cathode_solve,
         boundary=boundary,
         Te=beam_derived.Te,
+        n=np.maximum(state.n, floors["n"]),
+        lnL_model=validate_cathode_lnL_model(input_dict),
         exc_energy_fallback_eV=E_exc,
         smoothing_cm=float(input_dict.get("beam_deposition_smoothing_cm", 0.0)),
         coverage=coverage,
@@ -2900,6 +2950,8 @@ def _beam_ionization_sources(
     cathode_solve,
     boundary,
     Te=None,
+    n=None,
+    lnL_model="nrl_ei",
     exc_energy_fallback_eV=21.218,
     smoothing_cm=0.0,
     coverage=None,
@@ -2960,7 +3012,9 @@ def _beam_ionization_sources(
                 beam_result.result if end == 0 else beam_result.result_twin
             )
             gap = np.asarray(gap_cell_indices(geometry, end=end), dtype=int)
-            ohmic_weights = _ohmic_gap_weights(geometry, gap, Te)
+            ohmic_weights = _ohmic_gap_weights(
+            geometry, gap, Te, n, lnL_model
+        )
             beam_power_density[gap] += (
                 ohmic_weights * solver_result.P_ohmic * 1.0e7 / Vp[gap]
             )
@@ -2990,7 +3044,9 @@ def _beam_ionization_sources(
                 beam_result.result if end == 0 else beam_result.result_twin
             )
             gap = np.asarray(gap_cell_indices(geometry, end=end), dtype=int)
-            ohmic_weights = _ohmic_gap_weights(geometry, gap, Te)
+            ohmic_weights = _ohmic_gap_weights(
+            geometry, gap, Te, n, lnL_model
+        )
             ohmic_power[gap] += (
                 ohmic_weights * solver_result.P_ohmic * 1.0e7 / Vp[gap]
             )
@@ -3036,6 +3092,8 @@ def _beam_ionization_sources(
         solver_result=beam_result.result,
         end=0,
         Te=Te,
+        n=n,
+        lnL_model=lnL_model,
     )
     if boundary.twin_cathode and beam_result.result_twin is not None:
         twin_profile = _beam_ionization_profile(
@@ -3062,6 +3120,8 @@ def _beam_ionization_sources(
             solver_result=beam_result.result_twin,
             end=-1,
             Te=Te,
+            n=n,
+            lnL_model=lnL_model,
         )
 
     return S_beam, S_exc, S_exc_E, beam_power_density, S_beam_res
@@ -3235,6 +3295,8 @@ def _beam_power_deposition_density(
     solver_result,
     end=0,
     Te=None,
+    n=None,
+    lnL_model="nrl_ei",
 ):
     """Return the beam/ohmic power deposition density [erg cm^-3 s^-1].
 
@@ -3266,7 +3328,7 @@ def _beam_power_deposition_density(
         weights * solver_result.P_prim * 1.0e7 / geometry.plasma_volume_cm3
     )
     gap = np.asarray(gap_cell_indices(geometry, end=end), dtype=int)
-    ohmic_weights = _ohmic_gap_weights(geometry, gap, Te)
+    ohmic_weights = _ohmic_gap_weights(geometry, gap, Te, n, lnL_model)
     density[gap] += (
         ohmic_weights
         * solver_result.P_ohmic
@@ -3276,20 +3338,25 @@ def _beam_power_deposition_density(
     return density
 
 
-def _ohmic_gap_weights(geometry, gap, Te):
+def _ohmic_gap_weights(geometry, gap, Te, n=None, lnL_model="nrl_ei"):
     """Return the normalized share of ``P_ohmic`` deposited in each gap cell.
 
     ``P_cell = j^2 * eta_sp * V_cell``; with the current density uniform along
-    the gap this reduces to ``P_cell ~ eta_sp * length``, and Spitzer resistivity
-    gives ``eta_sp ~ Te^-3/2``. A single-cell gap normalizes to exactly 1.0, so
-    legacy deposition is bit-identical.
+    the gap this reduces to ``P_cell ~ eta_sp * length``, and Spitzer
+    resistivity gives ``eta_sp ~ lnLambda(Te, n) * Te^-3/2``. The weights are
+    built from ``spitzer_sigma_par_ohm_cm`` itself, so the deposition profile
+    and the gap resistance cannot disagree about the conductivity; the
+    normalization divides out its constant prefactor. A single-cell gap
+    normalizes to exactly 1.0, so legacy deposition is bit-identical.
     """
     lengths = np.asarray(geometry.length_cm, dtype=float)[gap]
-    if Te is None or gap.size == 1:
+    if Te is None or n is None or gap.size == 1:
         weights = lengths
     else:
         Te_gap = np.maximum(np.asarray(Te, dtype=float)[gap], 1e-30)
-        weights = lengths * Te_gap**-1.5
+        weights = lengths / spitzer_sigma_par_ohm_cm(
+            Te_gap, np.asarray(n, dtype=float)[gap], lnL_model
+        )
     total = weights.sum()
     if not np.isfinite(total) or total <= 0.0:
         return np.full(gap.size, 1.0 / gap.size)

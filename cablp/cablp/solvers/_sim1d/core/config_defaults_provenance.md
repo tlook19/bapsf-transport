@@ -752,6 +752,48 @@ which arm produced it, because the two differ by `phi_a - V_p` in the returned
 sheath drop and therefore in the beam birth energy keyed to it (measured on a
 plateau-class point: 190.36 V vs 177.84 V at `phi_a = 12.90` V).
 
+**`cathode_lnL_model = "nrl_ei"` — DERIVED (literature-BOXED), no fitted
+number.** The parallel Spitzer conductivity behind the gap resistance
+`R_p = L_cath / (pi R_cath^2 sigma_par)`. Two literature factors, kept
+un-collapsed in the code so the lineage stays readable:
+
+| factor | source | what it is |
+|---|---|---|
+| `eta_perp = 1.03e-2 Z lnLambda Te^-3/2` [Ohm cm] | **NRL Plasma Formulary 2004, p.30** | TRANSVERSE (perpendicular) Spitzer resistivity |
+| `sigma_par = 1.96 sigma_perp` at `Z = 1` | **NRL Plasma Formulary 2004, p.38** (Braginskii) | the parallel/perpendicular ratio |
+
+`lnLambda` is the electron-ion Coulomb logarithm at the LOCAL `(Te, n)` — the
+same `c_log(..., kind="ei")` and the same `LN_LAMBDA_MIN = 1.0` floor the
+conduction and electron-ion exchange terms already use, so the solver carries
+ONE lnLambda convention. The floor is a positivity guard for the cold, tenuous
+corner and does not bind at any physical discharge state.
+
+**Attribution note: the geometry is NOT from the NRL Formulary.** The
+`R_p = L/(pi R^2 sigma)` form — a cathode-area column across the gap — is
+**Poulos 2019, Eq. 30**, and is cited separately. The Formulary supplies the
+conductivity only.
+
+**Archaeology, recorded so the retired numbers are not mistaken for physics.**
+The superseded form was `sigma_par = 14.6 Te^1.5`, a frozen coefficient. It is
+exactly the expression above evaluated at **`lnLambda = 13.03`**
+(`1.96/(1.03e-2 * 13.03) = 14.604`) and held there regardless of state — a
+plausible mid-discharge value that becomes wrong in both directions across a
+shot, and most wrongly on the cold ramp, where the true `lnLambda` is smaller
+and the plasma therefore MORE conductive than the frozen form says. The
+"6.65" that earlier records attached to this expression was **`lnLambda/1.96`**
+— an effective bookkeeping number, **not a physical Coulomb logarithm**, and it
+should not be quoted as one.
+
+`"fixed_14p6"` is retained as an ATTRIBUTION-ONLY comparison arm so a result
+can be split between the lnLambda correction and everything else. It is not a
+physical alternative and is expected to acquire a deprecation-register row once
+that attribution is banked. Honest bar: none applies to a selector; what a
+RESULT must state is which arm produced it.
+
+**No refit rides this.** `C_R` stays at its value of record; the correction
+moves `R_p`, and whether the emission calibration follows is a separate,
+registered decision.
+
 ### Emission
 
 **`C_R = 29.0` A cm^-2 K^-2 — literature nominal for LaB6**, in the effective

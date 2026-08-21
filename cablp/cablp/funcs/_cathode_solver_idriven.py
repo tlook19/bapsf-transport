@@ -89,13 +89,16 @@ from cablp.funcs._beam_deposition import (
     HE_EII_EPS_TOP,
 )
 from cablp.funcs._cathode_solver import (
+    CATHODE_LNL_MODELS,
     BeamResult,
     DeviceConfig,
     PlasmaState,
     SolverResult,
+    _LN_LAMBDA_MIN,
     _P_elec,
     _P_ion,
     _annular_emission_state,
+    _c_log_ei,
     _compute_beam_bypass_fraction,
     _compute_l_b,
     _e_SI,
@@ -518,7 +521,25 @@ def solve_idriven(
     # Plasma-derived quantities: identical formulas to the voltage-driven
     # solve, so the two solvers agree bit-for-bit on the operating map.
     # ------------------------------------------------------------------
-    sigma_par = 14.6 * T_e**1.5
+    # Parallel plasma conductivity [Ω⁻¹ cm⁻¹]. Spitzer, with the Coulomb
+    # logarithm evaluated at the solve's own state rather than frozen: NRL
+    # Formulary 2004 p.30 gives the TRANSVERSE resistivity
+    # eta_perp = 1.03e-2 Z lnLambda T_e^-3/2 [Ohm cm], and p.38 gives
+    # sigma_par = 1.96 sigma_perp at Z = 1 (Braginskii). The two literature
+    # factors are left un-collapsed so the lineage stays readable. lnLambda is
+    # floored at _LN_LAMBDA_MIN, the same floor the transport terms use -- it
+    # is a positivity guard for the cold, tenuous corner and does not bind at
+    # any physical discharge state.
+    ln_lambda = max(_c_log_ei(T_e, n_e), _LN_LAMBDA_MIN)
+    if config.lnL_model == "nrl_ei":
+        sigma_par = (1.96 / (1.03e-2 * ln_lambda)) * T_e**1.5
+    elif config.lnL_model == "fixed_14p6":
+        sigma_par = 14.6 * T_e**1.5
+    else:
+        raise ValueError(
+            "lnL_model must be one of "
+            f"{CATHODE_LNL_MODELS} (got {config.lnL_model!r})"
+        )
     R_p = config.L_cath / (math.pi * config.R_cath**2 * sigma_par)
     C_s = math.sqrt(T_e * _e_SI * 1.0e7 / (config.mu * _mp_cgs))
     # Sheath-edge sampling (R3.2 / A16): the ion Bohm

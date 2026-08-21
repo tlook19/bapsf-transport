@@ -1640,6 +1640,23 @@ def cathode_defaults():
         cannot carry two gaps sampled at different Te). NB with ``Rp !=
         R_cath`` the two models differ even for a uniform gap -- conduction
         through the plasma channel, not the cathode disc.
+    cathode_lnL_model:
+        Which Coulomb logarithm the parallel Spitzer conductivity
+        ``sigma_par`` is built from, in BOTH sheath solvers and in every
+        sim1d-side consumer of ``sigma_par`` (the ``"resolved_gap"`` R_p
+        integral and the ohmic gap deposition weights).
+
+        ``"nrl_ei"`` (default) evaluates the electron-ion Coulomb logarithm at
+        the local ``(Te, n)`` and floors it at ``LN_LAMBDA_MIN``, the same
+        convention the conduction and electron-ion exchange terms use, giving
+        ``sigma_par = (1.96/(1.03e-2 lnLambda)) Te^1.5`` [Ohm^-1 cm^-1].
+
+        ``"fixed_14p6"`` restores the frozen-coefficient form
+        ``sigma_par = 14.6 Te^1.5``, i.e. ``"nrl_ei"`` evaluated at
+        ``lnLambda = 13.03`` and held there regardless of state. It is an
+        ATTRIBUTION-ONLY comparison arm: it exists so a result can be split
+        between the lnLambda correction and everything else, and it is not a
+        physical alternative. Any other value raises at construction.
     b_beam_excitation:
         Scale on the neutral-excitation cross section added to the primary
         beam's inelastic channels. ``0`` (default) is the historical beam:
@@ -2216,6 +2233,10 @@ def cathode_defaults():
         "cathode_Ts_fwhm_cm": 28.0,
         "cathode_emission_annuli": 10,
         "cathode_Rp_model": "sample",
+        # Coulomb logarithm behind sigma_par. "nrl_ei" reads it at the local
+        # (Te, n); "fixed_14p6" freezes it at the historical 13.03 and is an
+        # attribution-only comparison arm.
+        "cathode_lnL_model": "nrl_ei",
         "cathode_solver_model": "current_driven",
         "cathode_phi_c_cap_V": 1000.0,
         "cathode_circuit_bound_object": "device_voltage",

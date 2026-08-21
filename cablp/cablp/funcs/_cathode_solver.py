@@ -39,6 +39,7 @@ from cablp.funcs._cross import (
     He_beam_excitation_channel,
 )
 from cablp.funcs._kernels import COMPILED_KERNELS as _COMPILED_KERNELS
+from cablp.funcs._plasmaparams import LN_LAMBDA_MIN as _LN_LAMBDA_MIN
 from cablp.vars._coeff import b_11s_21p
 from cablp.vars._cons import E_21p as _E_21p_eV, Ry_eV as _Ry_eV, atm_cross_cgs as _atm_cross_cgs
 
@@ -52,6 +53,13 @@ _me_cgs: float = 9.1093837015e-28  # Electron mass [g]
 _mp_cgs: float = 1.67262192369e-24  # Proton mass [g]
 _pemr: float = _mp_cgs / _me_cgs  # Proton-to-electron mass ratio ≈ 1836.15
 _erg_per_eV: float = _e_SI * 1.0e7  # eV → erg conversion
+
+#: Accepted values of ``DeviceConfig.lnL_model``, which fixes how the parallel
+#: Spitzer conductivity's Coulomb logarithm is obtained. ``"nrl_ei"`` uses the
+#: state-dependent electron-ion log ``_c_log_ei(T_e, n_e)``; ``"fixed_14p6"``
+#: is the frozen-coefficient historical form, retained as an attribution-only
+#: comparison arm.
+CATHODE_LNL_MODELS: tuple = ("nrl_ei", "fixed_14p6")
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +84,7 @@ class DeviceConfig:
     Twin    : Second-cathode flag; when True, solve_beam_system also solves the twin cathode at the far end of the plasma arrays
     L_cath  : Cathode-to-anode distance [cm]; default 50
     R_cath  : Cathode radius [cm]; default 19
+    lnL_model : Coulomb-logarithm model for the parallel Spitzer conductivity; one of ``CATHODE_LNL_MODELS``. Default ``"nrl_ei"``
     """
 
     A_c: float
@@ -125,6 +134,11 @@ class DeviceConfig:
     # under any uniform scaling of its inputs). It is therefore read at exactly
     # one place per solver: the wetted-area normalizer.
     emission_area_fraction: float = 1.0
+    # Which Coulomb logarithm the parallel Spitzer conductivity is built from.
+    # "nrl_ei" (the default) reads the state-dependent electron-ion log at the
+    # solve's own (T_e, n_e); "fixed_14p6" restores the frozen coefficient the
+    # solver carried historically and is an attribution-only comparison arm.
+    lnL_model: str = "nrl_ei"
 
     # Derived constants computed once at construction
     # (stored as slots; frozen prevents reassignment)
@@ -846,8 +860,25 @@ def solve(
     # Plasma-dependent derived quantities
     # ------------------------------------------------------------------
 
-    # Parallel plasma conductivity [Ω⁻¹ cm⁻¹]
-    sigma_par = 14.6 * T_e**1.5
+    # Parallel plasma conductivity [Ω⁻¹ cm⁻¹]. Spitzer, with the Coulomb
+    # logarithm evaluated at the solve's own state rather than frozen: NRL
+    # Formulary 2004 p.30 gives the TRANSVERSE resistivity
+    # eta_perp = 1.03e-2 Z lnLambda T_e^-3/2 [Ohm cm], and p.38 gives
+    # sigma_par = 1.96 sigma_perp at Z = 1 (Braginskii). The two literature
+    # factors are left un-collapsed so the lineage stays readable. lnLambda is
+    # floored at _LN_LAMBDA_MIN, the same floor the transport terms use -- it
+    # is a positivity guard for the cold, tenuous corner and does not bind at
+    # any physical discharge state.
+    ln_lambda = max(_c_log_ei(T_e, n_e), _LN_LAMBDA_MIN)
+    if config.lnL_model == "nrl_ei":
+        sigma_par = (1.96 / (1.03e-2 * ln_lambda)) * T_e**1.5
+    elif config.lnL_model == "fixed_14p6":
+        sigma_par = 14.6 * T_e**1.5
+    else:
+        raise ValueError(
+            "lnL_model must be one of "
+            f"{CATHODE_LNL_MODELS} (got {config.lnL_model!r})"
+        )
 
     # Parallel plasma resistance [Ω]
     R_p = config.L_cath / (math.pi * config.R_cath**2 * sigma_par)
