@@ -157,6 +157,7 @@ from .physics.hot_neutrals import (
     ballistic_flight_kernels,
     neutral_hot_channel_rhs,
 )
+from .physics.jet_carrier import cathode_jet_carrier_rhs
 from .physics.sources import (
     CATHODE_JET_ENERGY_CONVENTIONS,
     add_state_rhs,
@@ -253,6 +254,7 @@ _NEUTRAL_ENERGY_TERM_BOOKING = {
     "neutral_cx_channel": "owns",
     "neutral_hot_channel": "owns",
     "cathode_jet_neutral_energy": "owns",
+    "cathode_jet_hot_carrier": "owns",
     "neutral_exchange": "owns",
     "neutral_zone_exchange": "owns",
     "neutral_sources": "owns",
@@ -1451,6 +1453,8 @@ class LAPDSim1D:
         self._cathode_surface_ion_retention = (
             _jet.cathode_surface_ion_retention
         )
+        self._cathode_jet_carrier = _jet.cathode_jet_carrier
+        self._jet_carrier_diagnostics = {}
         self._mesh_faces = _jet.mesh_faces
         self._mesh_blocked_area_cm2 = _jet.mesh_blocked_area_cm2
 
@@ -3750,6 +3754,10 @@ class LAPDSim1D:
                 energy_wall_terms["cathode_jet_neutral_energy"] = (
                     self._zero_rhs_state()
                 )
+            if self._cathode_jet_carrier:
+                energy_wall_terms["cathode_jet_hot_carrier"] = (
+                    self._zero_rhs_state()
+                )
         # The ad-hoc probe source exists only under its own flag, so the term
         # ledger (and the saved rhs_terms structure) is unchanged when the flag
         # is off. Present in BOTH branches below and identically zero in the
@@ -3868,6 +3876,7 @@ class LAPDSim1D:
                 time=time,
                 step_window=step_window,
             )
+        ionization_rate_per_neutral = None
         if self._neutral_energy:
             energy_wall_terms["neutral_energy_wall"] = (
                 self.neutral_energy_wall_rhs(state=state)
@@ -3878,18 +3887,25 @@ class LAPDSim1D:
             # The hot channel's in-flight ionization must use the SAME
             # per-neutral ionization frequency the bulk channel is using on
             # this evaluation, so it is read back off the reaction term rather
-            # than recomputed from the rate tables.
+            # than recomputed from the rate tables. The directed surface
+            # carrier's in-beam ionization reads the very same array.
+            ionization_rate_per_neutral = np.asarray(
+                reaction_terms["ionization_birth"].n, dtype=float
+            ) / np.maximum(
+                np.asarray(state.nn, dtype=float), self._floors["nn"]
+            )
             energy_wall_terms["neutral_hot_channel"] = (
                 self.neutral_hot_channel_rhs(
                     state=state,
-                    ionization_rate=np.asarray(
-                        reaction_terms["ionization_birth"].n, dtype=float
-                    )
-                    / np.maximum(
-                        np.asarray(state.nn, dtype=float), self._floors["nn"]
-                    ),
+                    ionization_rate=ionization_rate_per_neutral,
                 )
             )
+        # The directed surface carrier's launch is the recycle share the
+        # boundary term WITHHOLDS for it on this same evaluation. It travels
+        # through this dict rather than being recomputed, so the withdrawal
+        # and the launch are one number; ``None`` leaves the boundary term on
+        # its historical path, keyword for keyword.
+        carrier_out = {} if self._cathode_jet_carrier else None
         terms = {
             **zone_terms,
             **probe_terms,
@@ -3900,12 +3916,18 @@ class LAPDSim1D:
                 self._zero_rhs_state()
                 if self._characteristic_boundary
                 else self.boundary_absorption_rhs(
-                    state=state, cathode_solve=cathode_solve, time=time
+                    state=state,
+                    cathode_solve=cathode_solve,
+                    time=time,
+                    carrier_out=carrier_out,
                 )
             ),
             "characteristic_boundary": (
                 self.characteristic_boundary_rhs(
-                    state=state, cathode_solve=cathode_solve, time=time
+                    state=state,
+                    cathode_solve=cathode_solve,
+                    time=time,
+                    carrier_out=carrier_out,
                 )
                 if self._characteristic_boundary
                 else self._zero_rhs_state()
@@ -3995,6 +4017,15 @@ class LAPDSim1D:
                     state=state,
                     cathode_solve=cathode_solve,
                     recycle_nn_row=recycle,
+                )
+            )
+        if self._cathode_jet_carrier:
+            terms["cathode_jet_hot_carrier"] = (
+                self.cathode_jet_hot_carrier_rhs(
+                    state=state,
+                    cathode_solve=cathode_solve,
+                    launch_per_s=carrier_out.get("launch_per_s"),
+                    ionization_rate=ionization_rate_per_neutral,
                 )
             )
         if self._kinetic is not None:
@@ -6973,8 +7004,16 @@ class LAPDSim1D:
         one, but a cold-channel temperature that large is a bookkeeping
         location, not a physical bulk temperature, and any pressure or rate the
         cold fluid derives from it there should be read with that in mind.
-        Giving the surface jet its own directed hot population is the way out
-        and is not built.
+
+        THE WAY OUT IS ``cathode_jet_hot_carrier``, and when it is armed this
+        term stops describing the backscatter share at all. The ``R_N`` atoms
+        and their ``(1/2) m v_back^2`` leave with the carrier -- the boundary
+        term has already withheld them from ``recycle_nn_row`` -- so what
+        remains here is the implanted ``1 - R_N`` share alone, desorbing at
+        the surface temperature: ``e_jet = (3/2) k T_s`` per REBIRTHED atom.
+        The row is still the excess over the wall credit the generic surface
+        booking granted, on the same cathode cells; it is only the population
+        it describes that shrinks.
         """
         zeros = self._zero_rhs_state()
         if state.En is None or cathode_solve is None:
@@ -6990,12 +7029,18 @@ class LAPDSim1D:
         if not np.any(cathode):
             return zeros
         R_N = float(spec["R_N"])
-        v_back = cathode_jet_backscatter_speed(
-            spec, derived.Ti, self._ion_mass_g
-        )
-        e_jet = R_N * 0.5 * self._ion_mass_g * v_back**2 + (1.0 - R_N) * (
-            1.5 * kb_cgs * max(float(spec["T_s_K"]), 0.0)
-        )
+        if self._cathode_jet_carrier:
+            # The carrier owns the R_N backscatter share; ``recycle_nn_row``
+            # already counts the implanted remainder alone, so each atom it
+            # carries desorbs at the surface temperature.
+            e_jet = 1.5 * kb_cgs * max(float(spec["T_s_K"]), 0.0)
+        else:
+            v_back = cathode_jet_backscatter_speed(
+                spec, derived.Ti, self._ion_mass_g
+            )
+            e_jet = R_N * 0.5 * self._ion_mass_g * v_back**2 + (1.0 - R_N) * (
+                1.5 * kb_cgs * max(float(spec["T_s_K"]), 0.0)
+            )
         excess = e_jet - 1.5 * kb_cgs * NEUTRAL_ENERGY_FLOOR_T_K
         recycle = np.asarray(recycle_nn_row, dtype=float)
         return ConservativeState1D(
@@ -7118,10 +7163,64 @@ class LAPDSim1D:
             return None
         return self._zone_volumes[1]
 
-    def boundary_absorption_rhs(
-        self, y=None, state=None, cathode_solve=None, time=None
+    def cathode_jet_hot_carrier_rhs(
+        self,
+        state,
+        cathode_solve,
+        launch_per_s,
+        ionization_rate=None,
     ):
-        """Return the Bohm absorption at the plasma-terminating surfaces."""
+        """Return the directed hot surface carrier's flows, caching its ledger.
+
+        The backscatter share of the cathode recycle, carried down the column
+        as an algebraic attenuation profile instead of being dumped cold into
+        the cathode cell -- the defect ``cathode_jet_neutral_energy_rhs``'s
+        docstring names. See
+        :mod:`~cablp.solvers._sim1d.physics.jet_carrier`.
+
+        ``launch_per_s`` is the per-cell rate the boundary term withheld for
+        this carrier on this same evaluation; ``ionization_rate`` is the
+        per-neutral ionization frequency the bulk reaction term is using, so
+        the beam and the bulk cannot disagree about it. The named ledger rows
+        land on ``self._jet_carrier_diagnostics`` as a side channel, exactly
+        as the hot channel's diagnostics do -- they are a reading of the term,
+        not a row of it, and nothing about them is saved.
+        """
+        zeros = self._zero_rhs_state()
+        if state.En is None or launch_per_s is None:
+            return zeros
+        spec = self._cathode_jet_spec(cathode_solve)
+        if spec is None:
+            return zeros
+        rhs, diagnostics = cathode_jet_carrier_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            geometry=self._geometry,
+            cathode_jet=spec,
+            launch_per_s=launch_per_s,
+            ionization_rate_per_neutral=(
+                np.zeros_like(np.asarray(state.nn, dtype=float))
+                if ionization_rate is None
+                else ionization_rate
+            ),
+            I_ion=self._I_ion,
+            eta=float(self._input_dict.get("eta", 0.0)),
+        )
+        self._jet_carrier_diagnostics = diagnostics
+        return rhs
+
+    def boundary_absorption_rhs(
+        self, y=None, state=None, cathode_solve=None, time=None,
+        carrier_out=None,
+    ):
+        """Return the Bohm absorption at the plasma-terminating surfaces.
+
+        ``carrier_out`` is the directed hot surface carrier's launch channel:
+        a dict the physics term fills with the recycle share it withheld (see
+        that function's docstring). ``None`` is the historical call and leaves
+        the term's bookings unchanged bit for bit.
+        """
         if state is None:
             state = self.state if y is None else self._unpack(y)
         surface_kwargs = self._surface_loss_kwargs()
@@ -7145,10 +7244,12 @@ class LAPDSim1D:
             end_recycle_annulus_volume_cm3=(
                 self._end_recycle_annulus_volume()
             ),
+            cathode_carrier_out=carrier_out,
         )
 
     def characteristic_boundary_rhs(
-        self, y=None, state=None, cathode_solve=None, time=None
+        self, y=None, state=None, cathode_solve=None, time=None,
+        carrier_out=None,
     ):
         """Return the R3.1 characteristic ghost-cell Bohm outflow (audit A1/A16).
 
@@ -7157,6 +7258,10 @@ class LAPDSim1D:
         outflow state at each absorbing face. Reads the same surface kwargs and
         cathode jet, and follows the interior's momentum-flux form and wave speed
         so a repaired stance stays consistent.
+
+        ``carrier_out`` is the directed hot surface carrier's launch channel,
+        booked exactly as in :meth:`boundary_absorption_rhs`; ``None`` is the
+        historical call and is unchanged bit for bit.
         """
         if state is None:
             state = self.state if y is None else self._unpack(y)
@@ -7187,6 +7292,7 @@ class LAPDSim1D:
             end_recycle_annulus_volume_cm3=(
                 self._end_recycle_annulus_volume()
             ),
+            cathode_carrier_out=carrier_out,
         )
 
     def anode_collection_rhs(

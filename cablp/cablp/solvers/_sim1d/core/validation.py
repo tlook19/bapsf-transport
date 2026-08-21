@@ -441,6 +441,37 @@ def resolve_neutral_jet_config(
             "cathode_jet_surface_debit reads the cathode jet's R_E and "
             "requires cathode_neutral_jet"
         )
+    # The directed hot surface carrier: it takes over the backscatter share of
+    # the cathode recycle, so it needs the jet that produces that share, the
+    # debit that lets the surface give the energy up, and an En field for the
+    # CX partner atoms to be born into. Each prerequisite raises on its own,
+    # naming what is missing -- never a silent fallback to the v1 booking.
+    carrier = bool(p.get("cathode_jet_hot_carrier", False))
+    if carrier and not cathode_jet_enabled:
+        raise ValueError(
+            "cathode_jet_hot_carrier carries the CATHODE JET's backscatter "
+            "share and requires cathode_neutral_jet: without that jet there "
+            "is no R_N stream for it to own. Accepted: "
+            "cathode_neutral_jet=True, or cathode_jet_hot_carrier=False"
+        )
+    if carrier and not surface_debit:
+        raise ValueError(
+            "cathode_jet_hot_carrier requires cathode_jet_surface_debit=True: "
+            "the beam's launch energy is the R_E share of the ion bombardment "
+            "power, and without the debit the surface keeps that power too, "
+            "so the same R_E would be spent twice. This is not flipped for "
+            "you -- the debit changes the cathode's power balance, which is a "
+            "stance decision. Accepted: cathode_jet_surface_debit=True, or "
+            "cathode_jet_hot_carrier=False"
+        )
+    if carrier and not neutral_energy:
+        raise ValueError(
+            "cathode_jet_hot_carrier requires the neutral_energy flag: every "
+            "charge exchange along the beam returns an atom born at the LOCAL "
+            "ION STATE, and without an En field there is nowhere to book the "
+            "(3/2) k Ti it carries -- the ion debit would be one-sided. "
+            "Accepted: neutral_energy=True, or cathode_jet_hot_carrier=False"
+        )
     # Which convention R_E is read in when the jet's launch energy is
     # built. "legacy" is the historical reading and is bit-exact.
     convention = p.get("cathode_jet_energy_convention", "legacy")
@@ -519,6 +550,7 @@ def resolve_neutral_jet_config(
         anode_jet_R_N=R_coeffs["anode_jet_R_N"],
         anode_jet_R_E=R_coeffs["anode_jet_R_E"],
         cathode_jet_energy_convention=cathode_jet_energy_convention,
+        cathode_jet_carrier=carrier,
         cathode_surface_ion_retention=cathode_surface_ion_retention,
         mesh_faces=mesh_faces,
         mesh_blocked_area_cm2=mesh_blocked_area_cm2,
