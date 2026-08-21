@@ -161,6 +161,141 @@ def _pin_pre_r2a_neutral_stance(params, flags):
     return params, flags
 
 
+# The long-standing operator algebra isolates the historical all-cells path;
+# dedicated R1/R2/R3/R4 cases exercise the repaired live defaults. This helper
+# holds the pins that used to sit inline at the top of main(): the R2/R3
+# boundary+flux repairs off, the historical single-cell puff, the scheduled
+# phase machine, and the pre-R2a cold-neutral layout the hand-packed
+# (n, nn, M, Ee, Ei) state vectors below assume. Moment closure stays on -- the
+# drag is orthogonal, so the production baseline stays warning-free.
+def _pin_operator_algebra_stance(params, flags):
+    """Pin the historical operator-algebra stance in place; return the pair."""
+    params["phase_transition_mode"] = "scheduled"
+    params["gas_puff_mode"] = "decay_after_breakdown"
+    params["gas_puff_profile"] = "cell"  # historical single-cell puff
+    flags["neutral_prebreakdown"] = False
+    flags["cathode_coupling"] = False
+    flags["implicit_heat_conduction"] = False
+    flags["active_plasma_topology"] = False
+    flags["raw_stage_validation"] = False
+    flags["hyperbolic_energy_consistent"] = False
+    flags["characteristic_boundary"] = False
+    flags["front_flux"] = True
+    params["hyperbolic_wave_speed"] = "isothermal"
+    return _pin_pre_r2a_neutral_stance(params, flags)
+
+
+# The two helpers above are the ONLY places the smoke pins a deliberately
+# legacy stance, and every key they touch is listed here. The runner mutes the
+# DeprecationWarnings these keys raise -- and only these keys, and only for the
+# cases that declare the historical stance (see ``_historical_pin_warnings``
+# and the module docstring). A case that deprecates any OTHER key, or that
+# constructs a deprecated config without asking for the historical fixtures,
+# still prints its warning.
+_HISTORICAL_PIN_KEYS = (
+    # _pin_pre_r2a_neutral_stance
+    "neutral_momentum",
+    "neutral_two_zone",
+    "neutral_energy",
+    "neutral_hot_internal_wall",
+    "cathode_neutral_jet",
+    "cathode_jet_surface_debit",
+    "cathode_jet_energy_convention",
+    # _pin_operator_algebra_stance
+    "phase_transition_mode",
+    "gas_puff_mode",
+    "gas_puff_profile",
+    "neutral_prebreakdown",
+    "cathode_coupling",
+    "implicit_heat_conduction",
+    "active_plasma_topology",
+    "raw_stage_validation",
+    "hyperbolic_energy_consistent",
+    "characteristic_boundary",
+    "front_flux",
+    "hyperbolic_wave_speed",
+)
+
+
+# ----------------------------------------------------------------------
+# Fixtures. main() built each of these ONCE and dozens of blocks reused the
+# result, mutations included. A fixture is a plain function whose value is
+# cached, so every case that asks gets the SAME object the single shared
+# scope used to hand out -- and a case run alone under --only builds it on
+# demand instead of inheriting nothing.
+# ----------------------------------------------------------------------
+_FIXTURE_CACHE = {}
+
+
+def _fixture(fn):
+    """Cache a fixture's value for the lifetime of the process."""
+    def wrapper():
+        if fn.__name__ not in _FIXTURE_CACHE:
+            _FIXTURE_CACHE[fn.__name__] = fn()
+        return _FIXTURE_CACHE[fn.__name__]
+    wrapper.__name__ = fn.__name__
+    wrapper.__doc__ = fn.__doc__
+    wrapper.__wrapped__ = fn
+    return wrapper
+
+
+@_fixture
+def _base_config():
+    """(params, flags) on the historical operator-algebra stance."""
+    params, flags = default_config()
+    return _pin_operator_algebra_stance(params, flags)
+
+
+@_fixture
+def _base_sim():
+    """(sim, snapshot) for the base stance; snapshot carries geom/state/derived."""
+    params, flags = _base_config()
+    sim = LAPDSim1D(params, flags)
+    snapshot = sim.get_initial_snapshot()
+    return sim, snapshot
+
+
+@_fixture
+def _resolved_config():
+    """(resolved_params, resolved_flags): resolved typed-segment geometry."""
+    resolved_params, resolved_flags = default_config()
+    resolved_flags["resolved_boundaries"] = True
+    # This fixture and everything derived from it (twin_*, m5_*, rgap_*, ...)
+    # exercises geometry, the cathode solve and the beam on the 5-field
+    # cold-neutral layout, hand-packing (n, nn, M, Ee, Ei) state vectors, and
+    # several of the derived cases arm the jet themselves to check its
+    # refusals.
+    return _pin_pre_r2a_neutral_stance(resolved_params, resolved_flags)
+
+
+@_fixture
+def _resolved_geometry():
+    """The resolved typed-segment geometry."""
+    resolved_params, resolved_flags = _resolved_config()
+    return LAPDSim1D(
+        resolved_params, resolved_flags
+    ).get_initial_snapshot().geometry
+
+
+@_fixture
+def _cathode_flags():
+    """The base flags with cathode_coupling armed."""
+    _, flags = _base_config()
+    cathode_flags = dict(flags)
+    cathode_flags["cathode_coupling"] = True
+    return cathode_flags
+
+
+@_fixture
+def _resolved_cathode_flags():
+    """The resolved flags with cathode_coupling armed, prebreakdown off."""
+    _, resolved_flags = _resolved_config()
+    resolved_cathode_flags = dict(resolved_flags)
+    resolved_cathode_flags["cathode_coupling"] = True
+    resolved_cathode_flags["neutral_prebreakdown"] = False
+    return resolved_cathode_flags
+
+
 # R5 stance flip (2026-07-25): the production defaults promote the full M6
 # cathode/beam stack (csda + quasilinear, power_balance, gaussian, ads_des,
 # presheath smoothing) and the R2/R3 fluid repairs. The cathode-MECHANISM unit
@@ -303,28 +438,11 @@ def main():
     # tau_neutral_prebreakdown, so that feature test does not read this default).
     assert params["tau_neutral_prebreakdown"] == 0.0
     assert flags["neutral_prebreakdown"]
-    params["phase_transition_mode"] = "scheduled"
-    params["gas_puff_mode"] = "decay_after_breakdown"
-    params["gas_puff_profile"] = "cell"  # historical single-cell puff
-    flags["neutral_prebreakdown"] = False
-    flags["cathode_coupling"] = False
-    flags["implicit_heat_conduction"] = False
-    # The long-standing operator algebra below isolates the historical
-    # all-cells path; dedicated R1/R2/R3/R4 blocks exercise the repaired live
-    # defaults. Turn the R2/R3 boundary+flux repairs off here so the quiescent-
-    # zero and operator-algebra invariants hold (moment closure stays on -- the
-    # drag is orthogonal, so the production baseline stays warning-free).
-    flags["active_plasma_topology"] = False
-    flags["raw_stage_validation"] = False
-    flags["hyperbolic_energy_consistent"] = False
-    flags["characteristic_boundary"] = False
-    flags["front_flux"] = True
-    params["hyperbolic_wave_speed"] = "isothermal"
-    # Same rule for the R2a fold-in: the operator algebra below hand-packs
-    # (n, nn, M, Ee, Ei) state vectors and reads nn as THE neutral density.
-    _pin_pre_r2a_neutral_stance(params, flags)
-    sim = LAPDSim1D(params, flags)
-    snapshot = sim.get_initial_snapshot()
+    # Everything below runs on the historical operator-algebra stance, which
+    # the shared fixture pins (the quiescent-zero and operator-algebra
+    # invariants hold only there).
+    params, flags = _base_config()
+    sim, snapshot = _base_sim()
     geom = snapshot.geometry
     state = snapshot.state
     derived = snapshot.derived
@@ -356,17 +474,8 @@ def main():
     assert np.all(np.isnan(geom.neutral_face_conductance_cm3_s))
 
     # Resolved typed-segment geometry is the only live machine.
-    resolved_params, resolved_flags = default_config()
-    resolved_flags["resolved_boundaries"] = True
-    # This block and everything derived from it (twin_*, m5_*, rgap_*, ...)
-    # exercises geometry, the cathode solve and the beam on the 5-field
-    # cold-neutral layout, hand-packing (n, nn, M, Ee, Ei) state vectors, and
-    # several of the derived blocks arm the jet themselves to check its
-    # refusals.
-    _pin_pre_r2a_neutral_stance(resolved_params, resolved_flags)
-    resolved_geom = LAPDSim1D(
-        resolved_params, resolved_flags
-    ).get_initial_snapshot().geometry
+    resolved_params, resolved_flags = _resolved_config()
+    resolved_geom = _resolved_geometry()
     assert resolved_geom.cells > resolved_params["nx"] + 2
     assert np.all(resolved_geom.plasma_volume_cm3 > 0.0)
     assert np.all(resolved_geom.neutral_volume_cm3 > resolved_geom.plasma_volume_cm3)
@@ -1302,9 +1411,7 @@ def main():
 
     # M5: the circuit's anode current is the same Bohm collection the fluid
     # removes, not `2*eta*I_i` scaled off the cathode cell.
-    resolved_cathode_flags = dict(resolved_flags)
-    resolved_cathode_flags["cathode_coupling"] = True
-    resolved_cathode_flags["neutral_prebreakdown"] = False
+    resolved_cathode_flags = _resolved_cathode_flags()
     # The anode current == fluid Bohm collection identity holds only without
     # electrode sample smoothing, which EMA-smooths the anode-flank (n, Te) the
     # solve reads so I_i_a decouples from the raw-state fluid collection. The
@@ -1683,8 +1790,7 @@ def main():
         "floating": False,
     }
 
-    cathode_flags = dict(flags)
-    cathode_flags["cathode_coupling"] = True
+    cathode_flags = _cathode_flags()
     # This block exercises the cathode boundary + beam-ionization bookkeeping in
     # the beer_lambert regime it was written for (excitation off by default);
     # the CSDA production beam + manifold excitation are covered by the R4
