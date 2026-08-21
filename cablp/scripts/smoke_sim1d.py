@@ -67,7 +67,7 @@ The suppression is deliberately narrow in both directions:
 * only cases that BUILD ON a pinned config dict are muted -- either straight
   from a fixture, or from one a predecessor derived and handed on -- so a case
   that constructs a deprecated configuration of its own still prints its
-  warning (51 of the 107 cases carry the flag; the other 56 warn as usual);
+  warning (51 of the 108 cases carry the flag; the other 57 warn as usual);
 * ``production-construction-warning-free`` is not muted, and it asserts
   against a fresh ``warnings.catch_warnings(record=True)`` with
   ``simplefilter("always")``, which overrides any outer filter -- a production
@@ -14656,6 +14656,320 @@ def _case_directed_recycle_jets(knob_mass, m3_cathode_flags, m3_params):
     # The two conventions really do separate: total_reflected launches the
     # backscatter with 1/R_N times the legacy energy.
     assert np.all(jet_en_carried > jet_en_ref)
+
+
+# --------------------------------------------------------------------
+# cathode-jet-hot-carrier
+# --------------------------------------------------------------------
+@_case("cathode-jet-hot-carrier")
+def _case_cathode_jet_hot_carrier():
+    # --- The DIRECTED hot surface carrier (thread-23 phase 1). The R_N
+    # backscatter share leaves the cathode as its own attenuated beam instead
+    # of rebirthing cold at the cathode cell. Three things are gated here:
+    # the construction refusals, the OFF path's bit-exactness, and the term's
+    # own particle/energy/momentum closure with the three v1 withholdings
+    # checked against the launch BY NAME. The stance-point magnitudes are
+    # scripts/t23c_pairwise_audit.py's job; this is the plumbing gate.
+    from cablp.solvers._sim1d.core.state import NEUTRAL_ENERGY_FLOOR_T_K
+    from cablp.solvers._sim1d.physics.sources import (
+        cathode_jet_backscatter_speed as _hc_vback,
+    )
+
+    hc_kb = 1.380649e-16
+    hc_params, hc_flags = default_config()
+    hc_params["nx"] = 10
+    hc_flags["neutral_equilibration"] = False
+
+    # (1) Construction refusals, one per prerequisite, each naming the flag.
+    for hc_bad_params, hc_bad_flags, hc_missing in (
+        (
+            dict(
+                hc_params,
+                cathode_jet_hot_carrier=True,
+                cathode_neutral_jet=False,
+                cathode_jet_surface_debit=False,
+                cathode_jet_energy_convention="legacy",
+            ),
+            hc_flags,
+            "cathode_neutral_jet",
+        ),
+        (
+            dict(
+                hc_params,
+                cathode_jet_hot_carrier=True,
+                cathode_jet_surface_debit=False,
+            ),
+            hc_flags,
+            "cathode_jet_surface_debit",
+        ),
+        (
+            dict(hc_params, cathode_jet_hot_carrier=True),
+            dict(
+                hc_flags,
+                neutral_energy=False,
+                neutral_hot_internal_wall=False,
+            ),
+            "neutral_energy",
+        ),
+    ):
+        try:
+            LAPDSim1D(hc_bad_params, dict(hc_bad_flags))
+        except ValueError as exc:
+            assert "cathode_jet_hot_carrier" in str(exc)
+            assert hc_missing in str(exc)
+        else:
+            raise AssertionError(
+                f"expected ValueError for a carrier missing {hc_missing}"
+            )
+
+    # (2) PRESENCE GATING AND THE OFF PATH. With the flag off the term is
+    # absent from the ledger entirely, and an explicit False is byte-identical
+    # to the key being absent -- state vector included, after a step.
+    hc_off = LAPDSim1D(dict(hc_params), dict(hc_flags))
+    hc_off._circuit_I_loop = 800.0
+    assert hc_off._cathode_jet_carrier is False
+    assert "cathode_jet_hot_carrier" not in hc_off.rhs_terms()
+    hc_absent = dict(hc_params)
+    hc_absent.pop("cathode_jet_hot_carrier")
+    hc_ref = LAPDSim1D(hc_absent, dict(hc_flags))
+    hc_ref._circuit_I_loop = 800.0
+    for hc_sim in (hc_off, hc_ref):
+        hc_sim.run(t_end=3.0e-10, dt=1.0e-10)
+    assert np.array_equal(hc_off._y, hc_ref._y)
+    # The boundary term's new keyword defaults to the historical booking: on a
+    # carrier-ARMED solver, calling it WITHOUT the launch channel reproduces
+    # the off solver's row bit for bit.
+    hc_on = LAPDSim1D(
+        dict(hc_params, cathode_jet_hot_carrier=True), dict(hc_flags)
+    )
+    hc_on._circuit_I_loop = 800.0
+    hc_on.run(t_end=3.0e-10, dt=1.0e-10)
+    hc_state = hc_off.state
+    hc_solve = hc_off.solve_cathode_boundary(
+        state=hc_state, update_cache=False
+    )
+    hc_bnd_off = hc_off.characteristic_boundary_rhs(
+        state=hc_state, cathode_solve=hc_solve
+    )
+    hc_bnd_inert = hc_on.characteristic_boundary_rhs(
+        state=hc_state, cathode_solve=hc_solve
+    )
+    assert np.array_equal(hc_bnd_off.nn, hc_bnd_inert.nn)
+    assert np.array_equal(hc_bnd_off.M_n, hc_bnd_inert.M_n)
+
+    # (3) THE CLOSURE, on the armed solver's own evolved state, with the three
+    # withholdings checked against the launch by name. A sum identity alone
+    # cannot catch a compensated double-book, which is why each pair is
+    # compared directly.
+    hc_g = hc_on.geometry
+    hc_state = hc_on.state
+    hc_Vp = np.asarray(hc_g.plasma_volume_cm3, dtype=float)
+    hc_Vm = np.asarray(hc_g.neutral_volume_cm3, dtype=float)
+    hc_Vnn = hc_Vp if hc_state.nn_a is not None else hc_Vm
+    hc_VMn = hc_Vp if hc_state.M_n_a is not None else hc_Vm
+    hc_Vann = np.maximum(hc_Vm - hc_Vp, 1e-300)
+    hc_solve = hc_on.solve_cathode_boundary(
+        state=hc_state, update_cache=False
+    )
+    hc_out = {}
+    hc_on_bnd = hc_on.characteristic_boundary_rhs(
+        state=hc_state, cathode_solve=hc_solve, carrier_out=hc_out
+    )
+    hc_v1_bnd = hc_on.characteristic_boundary_rhs(
+        state=hc_state, cathode_solve=hc_solve
+    )
+    hc_launch = hc_out["launch_per_s"]
+    hc_reaction = hc_on.reaction_rhs_terms(state=hc_state)
+    hc_term = hc_on.cathode_jet_hot_carrier_rhs(
+        state=hc_state,
+        cathode_solve=hc_solve,
+        launch_per_s=hc_launch,
+        ionization_rate=np.asarray(
+            hc_reaction["ionization_birth"].n, dtype=float
+        )
+        / np.maximum(
+            np.asarray(hc_state.nn, dtype=float), hc_on.floors["nn"]
+        ),
+    )
+    hc_led = hc_on._jet_carrier_diagnostics
+    hc_launched = float(np.sum(hc_launch))
+    assert hc_launched > 0.0
+    assert np.isclose(hc_led["launch_per_s"], hc_launched, rtol=1e-13)
+
+    # (i) the cathode cell's nn rebirth <-> the launch rate
+    assert np.isclose(
+        float(np.sum((hc_v1_bnd.nn - hc_on_bnd.nn) * hc_Vnn)),
+        hc_launched,
+        rtol=1e-10,
+        atol=0.0,
+    )
+    # (ii) the R_N v_back share of jet_M_n <-> the launch momentum
+    assert np.isclose(
+        float(np.sum((hc_v1_bnd.M_n - hc_on_bnd.M_n) * hc_VMn)),
+        hc_led["launch_dyn"],
+        rtol=1e-10,
+        atol=0.0,
+    )
+    # (iii) the v1 En pair (surface wall credit + jet excess) <-> the launch
+    # power, with the v1 side rebuilt from the documented formula.
+    hc_spec = hc_on._cathode_jet_spec(hc_solve)
+    hc_der = derive_state(hc_state, hc_on.floors, hc_on.ion_mass_g)
+    hc_RN = float(hc_spec["R_N"])
+    hc_vback = _hc_vback(hc_spec, hc_der.Ti, hc_on.ion_mass_g)
+    hc_ejet = hc_RN * 0.5 * hc_on.ion_mass_g * hc_vback**2 + (
+        1.0 - hc_RN
+    ) * (1.5 * hc_kb * max(float(hc_spec["T_s_K"]), 0.0))
+    hc_wall = 1.5 * hc_kb * NEUTRAL_ENERGY_FLOOR_T_K
+    hc_cath = np.asarray(hc_g.cell_role) == "cathode"
+    hc_v1_En = float(
+        np.sum(
+            np.where(
+                hc_cath,
+                np.maximum(hc_v1_bnd.nn, 0.0) * (hc_ejet - hc_wall),
+                0.0,
+            )
+            * hc_Vnn
+        )
+    ) + hc_wall * float(np.sum(np.maximum(hc_v1_bnd.nn, 0.0) * hc_Vnn))
+    hc_on_En = float(
+        np.sum(
+            hc_on.cathode_jet_neutral_energy_rhs(
+                state=hc_state,
+                cathode_solve=hc_solve,
+                recycle_nn_row=hc_on_bnd.nn,
+            ).En
+            * hc_Vnn
+        )
+    ) + hc_wall * float(np.sum(np.maximum(hc_on_bnd.nn, 0.0) * hc_Vnn))
+    assert np.isclose(
+        (hc_v1_En - hc_on_En) * 1e-7,
+        hc_led["launch_W"],
+        rtol=1e-10,
+        atol=0.0,
+    )
+
+    # Sum closure, all three conserved quantities, at machine precision.
+    hc_fates = (
+        hc_led["partner_exchange_per_s"]
+        + hc_led["jet_ionization_per_s"]
+        + hc_led["wall_leak_per_s"]
+        + hc_led["end_leak_per_s"]
+        + hc_led["mesh_cull_per_s"]
+    )
+    hc_rows = (
+        float(np.sum(hc_term.n * hc_Vp))
+        + float(np.sum(hc_term.nn * hc_Vnn))
+        + float(np.sum(hc_term.nn_a * hc_Vann))
+    )
+    assert np.isclose(hc_fates, hc_launched, rtol=1e-10, atol=0.0)
+    assert np.isclose(hc_rows, hc_launched, rtol=1e-10, atol=0.0)
+    hc_spent_W = (
+        float(np.sum(hc_term.Ei * hc_Vp)) * 1e-7
+        + float(np.sum(hc_term.En * hc_Vnn)) * 1e-7
+        + hc_led["wall_leak_W"]
+        + hc_led["end_leak_W"]
+        + hc_led["mesh_cull_W"]
+    )
+    assert np.isclose(hc_spent_W, hc_led["launch_W"], rtol=1e-10, atol=0.0)
+    hc_spent_dyn = (
+        float(np.sum(hc_term.M * hc_Vp))
+        + float(np.sum(hc_term.M_n * hc_VMn))
+        + hc_led["leak_dyn"]
+    )
+    assert np.isclose(
+        hc_spent_dyn, hc_led["launch_dyn"], rtol=1e-10, atol=0.0
+    )
+    # Charge exchange is a SWAP: it moves no net plasma density, and every
+    # deposit lands on a plasma-active cell (a masked deposit would be a
+    # silent particle loss rather than the named leak the ledger reports).
+    assert np.isclose(
+        float(np.sum(hc_term.n * hc_Vp)),
+        hc_led["jet_ionization_per_s"],
+        rtol=1e-10,
+        atol=0.0,
+    )
+    hc_live = np.asarray(hc_g.plasma_active, dtype=bool)
+    for hc_row in (hc_term.n, hc_term.nn, hc_term.nn_a, hc_term.Ei):
+        assert np.all(np.asarray(hc_row, dtype=float)[~hc_live] == 0.0)
+    # The beam is directed AWAY from the source cathode, into the column.
+    assert hc_led["launch_dyn"] > 0.0
+    assert hc_led["E_fast_eV"] > 1.0
+    # The anode mesh really culls: eta of the flux crossing the anode face.
+    assert hc_led["mesh_cull_per_s"] > 0.0
+    # The geometric escape length is the mean interior-point ray of the column
+    # disc, 8 Rp/(3 pi), times <cot(theta)> = pi/2 over the Lambert launch:
+    # lambda_esc = 4 Rp / 3. Pinned as a NUMBER, because the first cut of this
+    # kernel compounded a chord-vs-ray error with a <cot> -> 1/<tan> swap and
+    # landed a third short (advisor correction 2026-08-21).
+    from cablp.solvers._sim1d.physics.jet_carrier import (
+        carrier_escape_length_cm as _hc_lesc,
+    )
+
+    hc_Rp = np.asarray(hc_g.Rp_cm, dtype=float)
+    hc_lam = _hc_lesc(hc_g)
+    assert np.allclose(
+        hc_lam[hc_Rp > 0.0],
+        (4.0 / 3.0) * hc_Rp[hc_Rp > 0.0],
+        rtol=1e-14,
+        atol=0.0,
+    )
+    assert np.all(np.isinf(hc_lam[hc_Rp <= 0.0]))
+    # The dt bundle OWNS the carrier: the bounded rows are the applied rows
+    # (the withheld boundary plus the beam), not the v1 rows the step no
+    # longer books. Off, the bundle is untouched.
+    hc_bundle_on = hc_on._plasma_source_timestep_rhs(
+        state=hc_state, time=hc_on.time
+    )
+    hc_bundle_off = hc_off._plasma_source_timestep_rhs(
+        state=hc_off.state, time=hc_off.time
+    )
+    assert np.any(hc_bundle_on.Ei != 0.0)
+    assert np.all(np.isfinite(hc_bundle_on.Ei))
+    assert np.all(np.isfinite(hc_bundle_off.Ei))
+    # A dt PROBE must not rewrite the ledger the last accepted evaluation
+    # left, exactly as it re-solves the cathode with update_cache=False.
+    hc_probe_ref = hc_on._jet_carrier_diagnostics
+    hc_on._plasma_source_timestep_rhs(state=hc_state, time=hc_on.time)
+    assert hc_on._jet_carrier_diagnostics is hc_probe_ref
+    # The birth-convention debts are REPORTED as numbers, not left as prose:
+    # neither is visible to any identity above, because both halves of every
+    # pair are booked in one convention.
+    for hc_debt in (
+        "u_dM_partner_exchange_W",
+        "u_dM_jet_ionization_W",
+        "u_dM_ion_total_W",
+        "u_dM_partner_neutral_W",
+        "q_mix_missing_W",
+        "electron_birth_convention_W",
+    ):
+        assert hc_debt in hc_led
+        assert np.isfinite(hc_led[hc_debt])
+    assert np.isclose(
+        hc_led["u_dM_ion_total_W"],
+        hc_led["u_dM_partner_exchange_W"] + hc_led["u_dM_jet_ionization_W"],
+        rtol=1e-12,
+    )
+    # Q_mix is a squared magnitude summed over births: never negative, and
+    # strictly positive wherever the beam deposited anything at all.
+    assert hc_led["q_mix_missing_W"] > 0.0
+    # THE STANCE RUNS "conservative" -- it is the shipped default, and
+    # "legacy" is the DEPRECATED arm. The carrier must stay constructible on
+    # it (every registered arm is at the stance), and on that model the
+    # electron side AGREES: the bulk books Ee_birth = 0 exactly as the
+    # carrier does. Pinned so a future refusal cannot silently strand the
+    # arms, and so the agreement is a gate rather than a memory.
+    hc_default_params, _hc_default_flags = default_config()
+    assert (
+        hc_default_params["ionization_birth_energy_model"] == "conservative"
+    )
+    LAPDSim1D(
+        dict(
+            hc_params,
+            cathode_jet_hot_carrier=True,
+            ionization_birth_energy_model="conservative",
+        ),
+        dict(hc_flags),
+    )
 
 
 # --------------------------------------------------------------------

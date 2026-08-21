@@ -299,12 +299,14 @@ never reported as a two-zone inventory. The same volume split applies to the
 two neutral-momentum rows, and internal radial/zone transfers close exactly.
 
 Configuration is resolved once at construction from the shared registry.
-Unknown keys raise `ValueError`; `config_manifest()` exposes all 251 parameter
+Unknown keys raise `ValueError`; `config_manifest()` exposes all 252 parameter
 defaults and 48 flags with their defining groups (count current as of the
 2026-08-21 physics batch, which added `anode_jet_energy_convention` and
-`cathode_lnL_model`, and the wall-partition merge on top of it, which added
+`cathode_lnL_model`, the wall-partition merge on top of it, which added
 `neutral_wall_partition_sigma_hehe_cm2` and the flag
-`neutral_wall_momentum_partition`). The live but formerly
+`neutral_wall_momentum_partition`, and the `cathode_jet_hot_carrier` build on
+top of that, which added the one parameter of the same name). The live but
+formerly
 unregistered controls `b_anode_collection` and
 `b_anode_advective_block` are registered at their pre-audit fallback
 values; `drag_dt_fraction` was registered alongside them and then deleted

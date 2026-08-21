@@ -2127,6 +2127,32 @@ def cathode_defaults():
         heating the surface. ``False`` retains all of it. Requires
         ``cathode_neutral_jet`` (it reads that jet's ``R_E``); raises at
         construction otherwise.
+    cathode_jet_hot_carrier:
+        Gives the cathode jet's BACKSCATTER share its own directed hot
+        population instead of dumping it, cold, into the one cathode-adjacent
+        cell. ``False`` (the default) is the v1 booking and is bit-exact.
+
+        On, the ``cathode_jet_R_N`` share of the cathode recycle flux leaves
+        the surface as an algebraic quasi-static beam at the one-spec
+        ``v_back`` and is attenuated along the column by three channels --
+        charge exchange at the relative collision energy, electron-impact
+        ionization at the local ``Te``, and a geometric escape across the
+        column boundary -- with a ``(1 - eta)`` first-crossing cull at each
+        anode face. No new state field and no new saved row: the profile is
+        rebuilt from the state on every evaluation. A CX event makes the fast
+        atom an ion and returns the exchanged ion to the gas at the LOCAL ion
+        state; an in-beam ionization is a plasma source paying the standard
+        binding cost; escaped, culled and end-lost atoms are named leaks.
+
+        The three v1 bookings the beam replaces are WITHHELD when it is armed
+        (the cathode cell's ``R_N`` neutral rebirth, that share of the
+        ``cathode_jet_neutral_energy`` excess, and the ``R_N v_back`` share of
+        the jet momentum), so no channel is booked twice.
+
+        Requires ``cathode_neutral_jet`` (it carries that jet's backscatter
+        share), ``cathode_jet_surface_debit`` (the surface must give the
+        energy up) and the ``neutral_energy`` flag (the partner atoms need an
+        energy field to be born into); raises at construction otherwise.
     neutral_mesh_accommodation:
         Accommodates the evolved neutral wind's momentum on the anode mesh
         WIRES. The mesh's open area already throttles what the wind carries
@@ -2308,6 +2334,12 @@ def cathode_defaults():
         # armed -- with an En field the reflected power is booked into the gas,
         # so without the debit the same R_E would be spent twice.
         "cathode_jet_surface_debit": True,
+        # Directed hot surface carrier for the backscatter share: DEFAULT OFF
+        # (bit-exact). On, the R_N share leaves as its own attenuated beam
+        # instead of rebirthing cold at the cathode cell, and the three v1
+        # bookings it replaces are withheld. Requires cathode_neutral_jet,
+        # cathode_jet_surface_debit and the neutral_energy flag.
+        "cathode_jet_hot_carrier": False,
         # Mesh momentum accommodation for the evolved wind: the momentum
         # the anode wires intercept lands on the anode structure instead
         # of staying in the gas (the open-area throttle alone leaves the

@@ -449,8 +449,25 @@ def boundary_absorption_rhs(
     cathode_jet=None,
     Tn_presheath_eV=None,
     end_recycle_annulus_volume_cm3=None,
+    cathode_carrier_out=None,
 ):
     """Return the plasma absorbed by the plasma-terminating surfaces.
+
+    ``cathode_carrier_out``: when given (a dict), the directed hot surface
+    carrier is ARMED and this term stops booking the backscatter share of the
+    cathode recycle itself -- see
+    :func:`~.jet_carrier.cathode_jet_carrier_rhs`, which spends it instead.
+    Two things change on the cathode faces alone, and both are the same
+    withholding: the ``R_N`` share of the recycle flux is removed from the
+    neutral rebirth row (the implanted ``1 - R_N`` effusive share stays,
+    cold at the surface temperature), and the jet's per-particle momentum
+    drops from ``R_N v_back + (1 - R_N) v_eff`` to ``(1 - R_N) v_eff``. The
+    withheld particle rate [s^-1] per cell is written back into the dict as
+    ``"launch_per_s"``, so the carrier's launch and this withdrawal are ONE
+    number rather than two estimates of it. ``None`` (the default, and every
+    historical caller) leaves both bookings exactly as they were, bit for
+    bit. The PLASMA sink is untouched either way: the surface absorbs the
+    same flux, only its re-emission changes.
 
     ``end_recycle_annulus_volume_cm3``: when given (the per-cell annulus
     volume [cm^3], supplied only under the ``end_recycle_to_annulus``
@@ -536,6 +553,8 @@ def boundary_absorption_rhs(
     dN_routed = np.zeros(cells, dtype=float) if route_active else None
     jet_active = cathode_jet is not None and state.M_n is not None
     jet_M_n = np.zeros(cells, dtype=float) if jet_active else None
+    carrier_active = jet_active and cathode_carrier_out is not None
+    dN_withheld = np.zeros(cells, dtype=float) if carrier_active else None
     if jet_active:
         # Directed effusive desorption off the hot disc: per-particle
         # momentum of a cosine-law effusive flux at the surface temperature.
@@ -591,7 +610,13 @@ def boundary_absorption_rhs(
                 cathode_jet, derived.Ti[live], ion_mass_g
             )
             R_N = float(cathode_jet["R_N"])
-            v_mix = R_N * v_back + (1.0 - R_N) * v_eff
+            if carrier_active:
+                # The carrier owns the backscatter share: it leaves as its own
+                # directed beam instead of as this cell's cold rebirth.
+                dN_withheld[live] += R_N * loss
+                v_mix = (1.0 - R_N) * v_eff
+            else:
+                v_mix = R_N * v_back + (1.0 - R_N) * v_eff
             # Directed into the plasma: opposite the face's outward normal.
             jet_M_n[live] += (
                 -outward
@@ -610,6 +635,9 @@ def boundary_absorption_rhs(
         dN_routed *= float(b_surface_loss)
     if jet_active:
         jet_M_n *= float(b_surface_loss)
+    if carrier_active:
+        dN_withheld *= float(b_surface_loss)
+        cathode_carrier_out["launch_per_s"] = dN_withheld
 
     plasma_loss_rate = dN_loss / geometry.plasma_volume_cm3
     # Two-zone state: the cathode disc and collector are recycle faces and
@@ -618,6 +646,8 @@ def boundary_absorption_rhs(
     # instead; the column row is then the remainder, exactly zero on a cell
     # whose only absorbing face is a collector one.
     dN_column = dN_loss if not route_active else dN_loss - dN_routed
+    if carrier_active:
+        dN_column = dN_column - dN_withheld
     nn_a_row = (
         None
         if not route_active
@@ -654,6 +684,7 @@ def characteristic_boundary_rhs(
     energy_consistent=False,
     sheath_energy_routing=False,
     end_recycle_annulus_volume_cm3=None,
+    cathode_carrier_out=None,
 ):
     """Return the R3.1 characteristic ghost-cell Bohm outflow at absorbing faces.
 
@@ -685,6 +716,12 @@ def characteristic_boundary_rhs(
     stream into ``nn_a`` (including its energy pairing -- see that function's
     docstring; cathode faces are untouched there too). ``None`` is every
     historical caller and leaves this path unchanged bit for bit.
+
+    ``cathode_carrier_out`` arms the directed hot surface carrier and is booked
+    exactly as in ``boundary_absorption_rhs`` -- the ``R_N`` share of the
+    cathode recycle is withheld from the neutral rebirth row and from the jet
+    momentum, and the withheld rate is written back as ``"launch_per_s"``. See
+    that function's docstring; ``None`` leaves this path unchanged bit for bit.
 
     The sheath-``phi`` -> electrode-surface power routing and the circuit's
     read of the same ``n_se`` are the R3.2 control-surface ledger, layered on
@@ -719,6 +756,8 @@ def characteristic_boundary_rhs(
 
     jet_active = cathode_jet is not None and state.M_n is not None
     jet_M_n = np.zeros(cells, dtype=float) if jet_active else None
+    carrier_active = jet_active and cathode_carrier_out is not None
+    withheld_abs = np.zeros(cells, dtype=float) if carrier_active else None
     if jet_active:
         v_eff = np.sqrt(
             np.pi * kb_cgs * max(float(cathode_jet["T_s_K"]), 0.0)
@@ -824,7 +863,13 @@ def characteristic_boundary_rhs(
                 cathode_jet, Ti_l, ion_mass_g
             )
             R_N = float(cathode_jet["R_N"])
-            v_mix = R_N * v_back + (1.0 - R_N) * v_eff
+            if carrier_active:
+                # The carrier owns the backscatter share (see
+                # boundary_absorption_rhs's ``cathode_carrier_out``).
+                withheld_abs[live] += R_N * cell_loss
+                v_mix = (1.0 - R_N) * v_eff
+            else:
+                v_mix = R_N * v_back + (1.0 - R_N) * v_eff
             jet_M_n[live] += (
                 -outward
                 * ion_mass_g
@@ -847,12 +892,17 @@ def characteristic_boundary_rhs(
         routed_abs *= scale_b
     if jet_active:
         jet_M_n *= scale_b
+    if carrier_active:
+        withheld_abs *= scale_b
+        cathode_carrier_out["launch_per_s"] = withheld_abs
 
     # Neutral return: the absorbed plasma flux is rebirthed as neutrals on the
     # column (two-zone) or chamber-mean volume, exactly as boundary_absorption
     # -- and, under the end-recycle routing, the collector faces' share goes to
     # the annulus instead, leaving the column row exactly zero there.
     column_abs = loss_abs if not route_active else loss_abs - routed_abs
+    if carrier_active:
+        column_abs = column_abs - withheld_abs
     nn_return = column_abs / (
         geometry.plasma_volume_cm3
         if state.nn_a is not None
