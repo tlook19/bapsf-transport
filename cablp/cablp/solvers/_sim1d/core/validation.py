@@ -125,8 +125,7 @@ def validate_r1_configuration_presence(
     if not ion_neutral_moment_closure:
         warnings.warn(
             "the legacy ion-neutral drag/CX/thermalization path "
-            "(ion_neutral_moment_closure=False, with sigma_in_model "
-            "'constant'/'cx_derived', b_ion_neutral_drag, "
+            "(ion_neutral_moment_closure=False, with b_ion_neutral_drag, "
             "ion_neutral_drag_model, b_ion_neutral_thermalization, and the "
             "Tn_fit collision temperature) is DEPRECATED: the Phelps "
             "moment-closed operator (ion_neutral_moment_closure) is the "

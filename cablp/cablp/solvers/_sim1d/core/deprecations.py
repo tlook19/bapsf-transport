@@ -143,13 +143,6 @@ DEPRECATED_CONTROLS = {
     "ionization_birth_energy_model": DeprecatedControl(
         PARAMS, _FREED_BRANCH, _FREED_BRANCH_FIX, values=("legacy",),
     ),
-    "sigma_in_model": DeprecatedControl(
-        PARAMS,
-        "the pre-Phelps presheath cross-section arms are superseded by "
-        "sigma_in_model='phelps', and " + _FREED_BRANCH,
-        _FREED_BRANCH_FIX,
-        values=("constant", "cx_derived"),
-    ),
     "b_ion_neutral_drag": DeprecatedControl(
         PARAMS,
         "it scales the legacy ion-neutral drag term, which the moment-closed "

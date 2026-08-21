@@ -1,7 +1,6 @@
 from mpmath import mp
 
 en_factor = 2 / 3
-drag_factor = 7.5225e-15
 ev_to_erg = 1.602176634e-12  # qe_SI * 1e-7
 
 I_ion = 24.58738793623
@@ -21,7 +20,6 @@ m_He_cgs = 6.6464731e-24  # grams
 m_e_cgs = 9.1093837e-28  # grams
 qe_cgs = 4.803e-10  # electron charge in cgs
 
-He_e_mass_ratio = 7.3448e3
 H_e_mass_ratio = 1.8362e3
 
 E_ion = mp.mpf("24.58738793623")  # Example value in eV

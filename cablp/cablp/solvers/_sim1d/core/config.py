@@ -1185,33 +1185,20 @@ def fudge_factor_defaults():
         to an upstream sample. `0` collapses the sample to the adjacent cell,
         recovering the historical behaviour; `1` (default) uses the physical
         depth. Inert in legacy geometry, which has no absorbing faces.
-    sigma_in_cm2:
-        Ion-neutral momentum-transfer cross section [cm^2]. Only used by the
-        ``constant`` sigma_in_model.
     sigma_in_model:
         Source of the ion-neutral momentum-transfer rate, which feeds the
         drag, the slip closure's entrainment, thermalization, the drag
         timestep bound, and the presheath depth.
 
-        ``"phelps"`` (default) is the definitive momentum-transfer rate: the
-        same Phelps He+/He isotropic + backscatter cross section the
-        ``ion_neutral_moment_closure`` operator uses, ``nu_in = nn * (k_b +
-        1/2 k_iso)(T_eff)`` with ``T_eff = (Ti + Tn)/2`` at the single
-        cold-gas ``Tn`` (300 K). This ties the presheath sampling to the same
-        collision physics as the drag, which makes ``sigma_in_cm2`` and the
-        two legacy arms below inert on the production path. He-only, gated at
-        construction.
-
-        ``"constant"`` (legacy A/B, the
-        historical behaviour) uses ``sigma_in_cm2`` at the ion thermal speed.
-        ``"cx_derived"`` (legacy A/B) builds it from the same resonant charge-exchange
-        table the CX energy channel uses -- ``nu_in = nn * (2*<sigma v>_cx(Ti)
-        + k_Langevin)`` -- since for a symmetric pair each exchange transfers
-        essentially the full momentum (``sigma_mt ~ 2*sigma_cx``), plus the
-        velocity-independent Langevin polarization floor. This restores the
-        factor ~2 velocity dependence a constant cannot express: the constant
-        crosses the CX-derived curve near 0.5 eV (too small in the afterglow,
-        ~1.5-1.8x at 0.1 eV; too large in the warm column, ~1.3x at 5-10 eV).
+        ``"phelps"`` is the only accepted value: the definitive
+        momentum-transfer rate, the same Phelps He+/He isotropic +
+        backscatter cross section the ``ion_neutral_moment_closure`` operator
+        uses, ``nu_in = nn * (k_b + 1/2 k_iso)(T_eff)`` with
+        ``T_eff = (Ti + Tn)/2`` at the single cold-gas ``Tn`` (300 K). This
+        ties the presheath sampling to the same collision physics as the
+        drag. He-only, gated at construction; the legacy ``"constant"`` and
+        ``"cx_derived"`` arms, which were the solver's only non-helium path,
+        were removed at D3 (2026-08-21) and raise.
     alpha_isat:
         Ion-saturation/surface-loss coefficient.
     b_anode_collection:
@@ -1248,9 +1235,8 @@ def fudge_factor_defaults():
         "alpha_front": 1.0,
         # Ion-neutral momentum-transfer rate, which also feeds the presheath
         # depth (electrode_sheath_alpha). "phelps" is the same cross section
-        # ion_neutral_moment_closure uses (He-only); "constant"/"cx_derived"
-        # are the A/B arms, and sigma_in_cm2 is read by "constant" only.
-        "sigma_in_cm2": 5.0e-15,
+        # ion_neutral_moment_closure uses, and since D3 the only accepted
+        # value: the solver is helium-only.
         "sigma_in_model": "phelps",
         # --- INERT: superseded rate/cooling/conduction scales, locked at 1
         # (kept readable for the janev A/B and the =0 disable diagnostics) ---
@@ -3207,7 +3193,7 @@ input_flags_template_1d = {
     # zero and this single operator runs; when OFF it is a strict no-op.
     # He-only. Uses the single cold-gas Tn_K for the neutral temperature,
     # ending the Tn_K/Tn_fit term-by-term mix. With this ON the ad-hoc
-    # b_ion_neutral_drag / sigma_in constant/cx_derived / slip closures are
+    # b_ion_neutral_drag / slip closures are
     # superseded and DEPRECATED.
     "ion_neutral_moment_closure": True,
     # Gated fluid<->circuit Picard. The fluid step runs at a loop current

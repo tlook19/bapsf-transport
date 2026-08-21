@@ -249,8 +249,6 @@ def cathode_circuit_alpha_sheath(
         ion_mass_g=ion_mass_g,
         alpha_isat=float(input_dict.get("alpha_isat", math.exp(-0.5))),
         b_presheath_length=float(input_dict.get("b_presheath_length", 1.0)),
-        sigma_in_cm2=float(input_dict.get("sigma_in_cm2", 5.0e-15)),
-        sigma_in_model=str(input_dict.get("sigma_in_model", "constant")),
         gas_type=input_dict.get("gas_type", "He"),
     )
 

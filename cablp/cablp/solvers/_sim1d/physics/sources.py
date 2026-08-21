@@ -198,8 +198,6 @@ def presheath_length_cm(
     Ti,
     mu,
     ion_mass_g,
-    sigma_in_cm2=5.0e-15,
-    sigma_in_model="constant",
     gas_type=None,
     Tn_eV=None,
 ):
@@ -221,9 +219,6 @@ def presheath_length_cm(
     nu_in = ion_neutral_collision_frequency(
         nn=nn,
         Ti=Ti,
-        ion_mass_g=ion_mass_g,
-        sigma_in_cm2=sigma_in_cm2,
-        sigma_in_model=sigma_in_model,
         gas_type=gas_type,
         **({} if Tn_eV is None else {"Tn_eV": float(Tn_eV)}),
     )
@@ -271,8 +266,6 @@ def electrode_sheath_alpha(
     ion_mass_g,
     alpha_isat=np.exp(-0.5),
     b_presheath_length=1.0,
-    sigma_in_cm2=5.0e-15,
-    sigma_in_model="constant",
     gas_type=None,
 ):
     """Return the mesh-independent sheath-edge factor ``n_se/n`` at one cell.
@@ -293,8 +286,6 @@ def electrode_sheath_alpha(
         Ti=Ti,
         mu=mu,
         ion_mass_g=ion_mass_g,
-        sigma_in_cm2=sigma_in_cm2,
-        sigma_in_model=sigma_in_model,
         gas_type=gas_type,
     )
     return presheath_alpha(
@@ -393,9 +384,7 @@ def boundary_absorption_rhs(
     geometry,
     alpha_isat=np.exp(-0.5),
     b_surface_loss=1.0,
-    sigma_in_cm2=5.0e-15,
     b_presheath_length=1.0,
-    sigma_in_model="constant",
     gas_type=None,
     cathode_jet=None,
     Tn_presheath_eV=None,
@@ -514,8 +503,6 @@ def boundary_absorption_rhs(
             Ti=derived.Ti[live],
             mu=mu,
             ion_mass_g=ion_mass_g,
-            sigma_in_cm2=sigma_in_cm2,
-            sigma_in_model=sigma_in_model,
             gas_type=gas_type,
             Tn_eV=(
                 None
@@ -600,9 +587,7 @@ def characteristic_boundary_rhs(
     geometry,
     alpha_isat=np.exp(-0.5),
     b_surface_loss=1.0,
-    sigma_in_cm2=5.0e-15,
     b_presheath_length=1.0,
-    sigma_in_model="constant",
     gas_type=None,
     cathode_jet=None,
     wave_speed="isothermal",
@@ -705,8 +690,6 @@ def characteristic_boundary_rhs(
             ion_mass_g=ion_mass_g,
             alpha_isat=alpha_isat,
             b_presheath_length=b_presheath_length,
-            sigma_in_cm2=sigma_in_cm2,
-            sigma_in_model=sigma_in_model,
             gas_type=gas_type,
         )
 
@@ -983,88 +966,33 @@ def _cell_surface_particle_loss(n, Te, mu, area_cm2, alpha_isat):
     return float(alpha_isat) * n * ion_sound_speed(Te, mu) * area_cm2
 
 
-# Dipole polarizability of the neutral [cm^3], for the Langevin capture rate.
-_NEUTRAL_POLARIZABILITY_CM3 = {"He": 2.05e-25, "H": 6.67e-25}
-_QE_CGS = 4.803e-10  # electron charge [esu], matches cablp.vars._cons.qe_cgs
-
-
-def langevin_rate_cm3_s(gas_type, ion_mass_g):
-    """Return the Langevin (polarization capture) rate coefficient [cm^3/s].
-
-    ``k_L = 2 * pi * e * sqrt(alpha / mu_r)`` with the neutral's dipole
-    polarizability ``alpha`` and the reduced mass ``mu_r = m/2`` of the
-    symmetric ion-atom pair. Velocity-independent, so it is the natural
-    low-energy floor for the elastic momentum-transfer channel.
-    """
-    try:
-        alpha = _NEUTRAL_POLARIZABILITY_CM3[gas_type]
-    except KeyError:
-        raise ValueError(
-            f"no polarizability tabulated for gas_type {gas_type!r}"
-        ) from None
-    return 2.0 * np.pi * _QE_CGS * np.sqrt(alpha / (0.5 * ion_mass_g))
-
-
 def ion_neutral_collision_frequency(
     nn,
     Ti,
-    ion_mass_g,
-    sigma_in_cm2=5.0e-15,
-    sigma_in_model="constant",
     gas_type=None,
     Tn_eV=0.025851,
 ):
     """Return the ion-neutral momentum-transfer collision frequency [s^-1].
 
-    ``sigma_in_model = "phelps"`` (default as of the R5 stance flip): the
-    DEFINITIVE momentum-transfer rate -- the same Phelps He+/He isotropic +
-    backscatter cross section the ``ion_neutral_moment_closure`` operator uses,
-    ``nu_in = nn * (k_b + 1/2 k_iso)(T_eff)`` with ``T_eff = (Ti + Tn)/2`` (A8
-    single cold-gas ``Tn`` = ``Tn_eV``, 300 K by default). Ties the R3.1
-    presheath sampling to the same collision physics as the drag, so
-    ``sigma_in_cm2`` / the legacy ``constant`` / ``cx_derived`` arms are inert
-    on the production path. He-only (gated at construction).
-
-    ``sigma_in_model = "constant"`` (legacy A/B): ``nu_in = (8/3) *
-    nn * sigma_in * sqrt(Ti / (pi * m_i))`` with ``Ti`` in eV (converted to
-    erg here), ``m_i`` in grams, and ``sigma_in`` in cm^2, so the
-    thermal-speed factor is in cm/s and ``nu_in`` in s^-1.
-
-    ``sigma_in_model = "cx_derived"`` (legacy A/B): for a symmetric resonant
-    pair the momentum transfer is dominated by charge exchange, each event
-    handing over essentially the full momentum, so ``sigma_mt ~ 2*sigma_cx``.
-    The rate is built from the same CX table the energy channel uses --
-    ``nu_in = nn * (2*<sigma v>_cx(Ti) + k_Langevin)``. The Langevin term is
-    the velocity-independent polarization-elastic floor. Requires ``gas_type``.
+    The DEFINITIVE momentum-transfer rate -- the same Phelps He+/He isotropic
+    + backscatter cross section the ``ion_neutral_moment_closure`` operator
+    uses, ``nu_in = nn * (k_b + 1/2 k_iso)(T_eff)`` with
+    ``T_eff = (Ti + Tn)/2`` (A8 single cold-gas ``Tn`` = ``Tn_eV``, 300 K by
+    default). This ties the R3.1 presheath sampling to the same collision
+    physics as the drag. He-only; ``gas_type`` is required and the He gate
+    lives in ``phelps_momentum_transfer_rate_cm3_s``.
 
     NB the presheath ``Tn`` is taken as the fixed A8 cold-gas value (Tn_eV);
     callers do not thread the config ``Tn_K`` because it is a fixed constant,
     not a tuned knob (thread it here if that ever changes).
     """
-    if sigma_in_model == "phelps":
-        if gas_type is None:
-            raise ValueError("sigma_in_model='phelps' requires gas_type")
-        T_eff = 0.5 * (np.asarray(Ti, dtype=float) + float(Tn_eV))
-        return np.asarray(nn, dtype=float) * phelps_momentum_transfer_rate_cm3_s(
-            T_eff, gas_type=gas_type
+    if gas_type is None:
+        raise ValueError(
+            "the ion-neutral momentum-transfer rate requires gas_type"
         )
-    if sigma_in_model == "constant":
-        v_thi = np.sqrt(
-            np.asarray(Ti, dtype=float) * ev_to_erg / (np.pi * ion_mass_g)
-        )
-        return (
-            (8.0 / 3.0) * np.asarray(nn, dtype=float) * float(sigma_in_cm2) * v_thi
-        )
-    if sigma_in_model == "cx_derived":
-        if gas_type is None:
-            raise ValueError("sigma_in_model='cx_derived' requires gas_type")
-        return np.asarray(nn, dtype=float) * (
-            2.0 * charge_ex_react(Ti, gas_type)
-            + langevin_rate_cm3_s(gas_type, ion_mass_g)
-        )
-    raise ValueError(
-        "sigma_in_model must be 'phelps', 'constant', or 'cx_derived' "
-        f"(got {sigma_in_model!r})"
+    T_eff = 0.5 * (np.asarray(Ti, dtype=float) + float(Tn_eV))
+    return np.asarray(nn, dtype=float) * phelps_momentum_transfer_rate_cm3_s(
+        T_eff, gas_type=gas_type
     )
 
 
@@ -1082,9 +1010,7 @@ def ion_neutral_momentum_frequency(
     Ti,
     ion_mass_g,
     gas_type,
-    sigma_in_cm2=5.0e-15,
     cx_only=False,
-    sigma_in_model="constant",
 ):
     """Return the ion-neutral momentum-transfer frequency [s^-1].
 
@@ -1098,9 +1024,6 @@ def ion_neutral_momentum_frequency(
     return ion_neutral_collision_frequency(
         nn=nn,
         Ti=Ti,
-        ion_mass_g=ion_mass_g,
-        sigma_in_cm2=sigma_in_cm2,
-        sigma_in_model=sigma_in_model,
         gas_type=gas_type,
     )
 
@@ -1111,9 +1034,7 @@ def ion_neutral_slip_factor(
     ion_mass_g,
     Rm_cm,
     Tn_eV=0.1,
-    sigma_in_cm2=5.0e-15,
     b_slip_entrainment=1.0,
-    sigma_in_model="constant",
     gas_type=None,
 ):
     """Return the local drag slip factor ``s = 1 - u_n/u_i = 1/(1 + E)``.
@@ -1134,9 +1055,6 @@ def ion_neutral_slip_factor(
     nu_ni = ion_neutral_collision_frequency(
         nn=n,
         Ti=Ti,
-        ion_mass_g=ion_mass_g,
-        sigma_in_cm2=sigma_in_cm2,
-        sigma_in_model=sigma_in_model,
         gas_type=gas_type,
     )
     vbar_n = np.sqrt(
@@ -1154,9 +1072,7 @@ def _resolve_slip_factor(
     drag_model,
     Rm_cm,
     Tn_fit,
-    sigma_in_cm2,
     b_slip_entrainment,
-    sigma_in_model="constant",
     gas_type=None,
 ):
     """Return the per-cell slip factor for ``drag_model``, or 1 for constant."""
@@ -1175,9 +1091,7 @@ def _resolve_slip_factor(
         ion_mass_g=ion_mass_g,
         Rm_cm=Rm_cm,
         Tn_eV=Tn_fit,
-        sigma_in_cm2=sigma_in_cm2,
         b_slip_entrainment=b_slip_entrainment,
-        sigma_in_model=sigma_in_model,
         gas_type=gas_type,
     )
 
@@ -1268,14 +1182,12 @@ def ion_neutral_drag_rhs(
     floors,
     ion_mass_g,
     gas_type,
-    sigma_in_cm2=5.0e-15,
     b_ion_neutral_drag=1.0,
     cx_only=False,
     drag_model="constant",
     b_slip_entrainment=1.0,
     Rm_cm=None,
     Tn_fit=0.1,
-    sigma_in_model="constant",
     geometry=None,
     wind_column_factor=None,
 ):
@@ -1318,9 +1230,7 @@ def ion_neutral_drag_rhs(
         Ti=derived.Ti,
         ion_mass_g=ion_mass_g,
         gas_type=gas_type,
-        sigma_in_cm2=sigma_in_cm2,
         cx_only=cx_only,
-        sigma_in_model=sigma_in_model,
     )
     if state.M_n is not None:
         if drag_model == "slip":
@@ -1371,9 +1281,7 @@ def ion_neutral_drag_rhs(
         drag_model=drag_model,
         Rm_cm=Rm_cm,
         Tn_fit=Tn_fit,
-        sigma_in_cm2=sigma_in_cm2,
         b_slip_entrainment=b_slip_entrainment,
-        sigma_in_model=sigma_in_model,
         gas_type=gas_type,
     )
     drag = (
@@ -1393,9 +1301,7 @@ def ion_neutral_elastic_frequency(
     Ti,
     ion_mass_g,
     gas_type,
-    sigma_in_cm2=5.0e-15,
     cx_only=False,
-    sigma_in_model="constant",
 ):
     """Return the elastic (non-CX) ion-neutral momentum-transfer frequency [s^-1].
 
@@ -1409,9 +1315,6 @@ def ion_neutral_elastic_frequency(
     nu_in = ion_neutral_collision_frequency(
         nn=nn,
         Ti=Ti,
-        ion_mass_g=ion_mass_g,
-        sigma_in_cm2=sigma_in_cm2,
-        sigma_in_model=sigma_in_model,
         gas_type=gas_type,
     )
     nu_cx = ion_neutral_cx_frequency(nn=nn, Ti=Ti, gas_type=gas_type)
@@ -1423,14 +1326,12 @@ def ion_neutral_frictional_heating_rhs(
     floors,
     ion_mass_g,
     gas_type,
-    sigma_in_cm2=5.0e-15,
     b_ion_neutral_drag=1.0,
     cx_only=False,
     drag_model="constant",
     b_slip_entrainment=1.0,
     Rm_cm=None,
     Tn_fit=0.1,
-    sigma_in_model="constant",
     wind_column_factor=None,
     geometry=None,
 ):
@@ -1466,9 +1367,7 @@ def ion_neutral_frictional_heating_rhs(
         Ti=derived.Ti,
         ion_mass_g=ion_mass_g,
         gas_type=gas_type,
-        sigma_in_cm2=sigma_in_cm2,
         cx_only=cx_only,
-        sigma_in_model=sigma_in_model,
     )
     if state.M_n is not None:
         u_n = neutral_wind_velocity(
@@ -1485,9 +1384,7 @@ def ion_neutral_frictional_heating_rhs(
             drag_model=drag_model,
             Rm_cm=Rm_cm,
             Tn_fit=Tn_fit,
-            sigma_in_cm2=sigma_in_cm2,
             b_slip_entrainment=b_slip_entrainment,
-            sigma_in_model=sigma_in_model,
             gas_type=gas_type,
         )
         u_rel = derived.u * slip
@@ -1514,11 +1411,9 @@ def ion_neutral_thermalization_rhs(
     ion_mass_g,
     gas_type,
     Tn_fit=0.1,
-    sigma_in_cm2=5.0e-15,
     b_ion_neutral_drag=1.0,
     cx_only=False,
     b_ion_neutral_thermalization=None,
-    sigma_in_model="constant",
 ):
     """Return the conservative elastic ion-neutral thermal-equilibration source.
 
@@ -1556,9 +1451,7 @@ def ion_neutral_thermalization_rhs(
         Ti=derived.Ti,
         ion_mass_g=ion_mass_g,
         gas_type=gas_type,
-        sigma_in_cm2=sigma_in_cm2,
         cx_only=cx_only,
-        sigma_in_model=sigma_in_model,
     )
     q_eq = (
         1.5

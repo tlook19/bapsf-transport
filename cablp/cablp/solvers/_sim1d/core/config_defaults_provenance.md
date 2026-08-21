@@ -463,10 +463,6 @@ diagnostics still work.
 **`alpha_isat = 0.6065306597126334` — DERIVED.** `exp(-1/2)`, the Bohm
 presheath density ratio.
 
-**`sigma_in_cm2 = 5.0e-15` cm^2 — literature (MEASURED).** Read only by
-`sigma_in_model = "constant"`; the shipped `"phelps"` model uses the Phelps
-He+/He cross section directly.
-
 **`heat_flux_limiter_f = 0.1` — ASSUMED.** The free-streaming fraction is not
 pinned by any measurement; the limiter is a closure-family instrument and the
 coefficient is properly reported as a bracket, never as a single number. `0.1`

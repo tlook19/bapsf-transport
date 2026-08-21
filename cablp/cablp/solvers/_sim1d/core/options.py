@@ -73,10 +73,6 @@ def ion_neutral_drag_kwargs(input_dict, flags, *, gas_type):
     drag_enabled = bool(flags.get("ion_neutral_drag", True))
     return {
         "gas_type": gas_type,
-        "sigma_in_cm2": float(input_dict.get("sigma_in_cm2", 5.0e-15)),
-        "sigma_in_model": str(
-            input_dict.get("sigma_in_model", "constant")
-        ),
         "b_ion_neutral_drag": (
             float(input_dict.get("b_ion_neutral_drag", 1.0))
             if drag_enabled

@@ -84,7 +84,7 @@ INERT_PARAM_KEYS = frozenset({
     "atomic_rate_model", "b_ioniz", "b_rec_rad", "b_rec_3b", "b_Qie", "b_Qei",
     "b_Qen", "b_Qcx", "b_Qei_Te_exp", "b_Qen_Te_exp", "b_Q_Te_ref_eV",
     "b_epara", "b_ipara", "recombination_energy_return",
-    "sigma_in_model", "sigma_in_cm2", "ionization_birth_energy_model",
+    "sigma_in_model", "ionization_birth_energy_model",
     "Te_birth_ionization", "Ti_birth_ionization",
     "b_ion_neutral_drag", "b_ion_neutral_thermalization", "b_slip_entrainment",
     "ion_neutral_drag_model", "D_amb", "D_amb_model", "heat_flux_limiter_f",

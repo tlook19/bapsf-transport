@@ -489,9 +489,6 @@ def ion_neutral_drag_timestep(
     nu_in = ion_neutral_collision_frequency(
         nn=state.nn,
         Ti=derived.Ti,
-        ion_mass_g=ion_mass_g,
-        sigma_in_cm2=ion_neutral_drag_kwargs.get("sigma_in_cm2", 5.0e-15),
-        sigma_in_model=ion_neutral_drag_kwargs.get("sigma_in_model", "constant"),
         gas_type=ion_neutral_drag_kwargs.get("gas_type"),
     )
     active = _active_values(nu_in, plasma_active)

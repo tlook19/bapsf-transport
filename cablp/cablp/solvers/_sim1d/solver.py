@@ -818,15 +818,22 @@ class LAPDSim1D:
                 "ion_neutral_moment_closure uses the Phelps He+/He cross "
                 f"sections and requires gas_type='He' (got {self._gas_type!r})"
             )
-        # R5 stance flip: the "phelps" presheath sigma_in model (default) shares
-        # the He-only Phelps cross section; hydrogen configs must select
-        # "constant" or "cx_derived".
+        # The presheath sigma_in model shares the He-only Phelps cross
+        # section. Its two legacy arms ("constant", "cx_derived") were the
+        # only non-helium path in the solver and were removed at D3.
         _sigma_in_model = str(self._input_dict.get("sigma_in_model", "phelps"))
-        if _sigma_in_model == "phelps" and self._gas_type != "He":
+        if _sigma_in_model != "phelps":
+            raise ValueError(
+                f"sigma_in_model={_sigma_in_model!r} is not available: the "
+                "legacy 'constant' and 'cx_derived' arms were removed at D3, "
+                "2026-08-21. Accepted: 'phelps'."
+            )
+        if self._gas_type != "He":
             raise ValueError(
                 "sigma_in_model='phelps' uses the Phelps He+/He cross section "
-                f"and requires gas_type='He' (got {self._gas_type!r}); select "
-                "'constant' or 'cx_derived' for other gases"
+                f"and requires gas_type='He' (got {self._gas_type!r}); the "
+                "non-helium arms were removed at D3, 2026-08-21 and the "
+                "solver is helium-only"
             )
 
     def _init_neutral_closure_selection(self):
@@ -2943,12 +2950,8 @@ class LAPDSim1D:
         return {
             "alpha_isat": surface["alpha_isat"],
             "b_surface_loss": surface["b_surface_loss"],
-            "sigma_in_cm2": float(self._input_dict.get("sigma_in_cm2", 5.0e-15)),
             "b_presheath_length": float(
                 self._input_dict.get("b_presheath_length", 1.0)
-            ),
-            "sigma_in_model": str(
-                self._input_dict.get("sigma_in_model", "constant")
             ),
             "gas_type": self._gas_type,
         }
@@ -7140,12 +7143,8 @@ class LAPDSim1D:
             geometry=self._plasma_geometry(),
             alpha_isat=surface_kwargs["alpha_isat"],
             b_surface_loss=surface_kwargs["b_surface_loss"],
-            sigma_in_cm2=float(self._input_dict.get("sigma_in_cm2", 5.0e-15)),
             b_presheath_length=float(
                 self._input_dict.get("b_presheath_length", 1.0)
-            ),
-            sigma_in_model=str(
-                self._input_dict.get("sigma_in_model", "constant")
             ),
             gas_type=self._gas_type,
             cathode_jet=self._cathode_jet_spec(cathode_solve),
@@ -7180,12 +7179,8 @@ class LAPDSim1D:
             geometry=self._plasma_geometry(),
             alpha_isat=surface_kwargs["alpha_isat"],
             b_surface_loss=surface_kwargs["b_surface_loss"],
-            sigma_in_cm2=float(self._input_dict.get("sigma_in_cm2", 5.0e-15)),
             b_presheath_length=float(
                 self._input_dict.get("b_presheath_length", 1.0)
-            ),
-            sigma_in_model=str(
-                self._input_dict.get("sigma_in_model", "constant")
             ),
             gas_type=self._gas_type,
             cathode_jet=self._cathode_jet_spec(cathode_solve),
