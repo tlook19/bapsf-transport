@@ -1970,7 +1970,8 @@ def neutral_wall_partition_survival(geometry, nn_a, sigma_hehe_cm2):
     another He atom first, in which case its directed momentum stays in the
     gas instead of accommodating on the surface.
 
-    The He--He elastic mean free path is ``mfp = 1 / (nn_a sigma_HeHe)`` [cm].
+    The He--He momentum-transfer mean free path is
+    ``mfp = 1 / (nn_a sigma_HeHe)`` [cm].
     An atom emitted at direction cosine ``mu`` to the radial normal traverses
     the slant path ``L = d / mu``, so its collisionless survival to the wall is
     ``exp(-L/mfp) = exp(-tau/mu)`` with the optical depth ``tau = d/mfp``.
@@ -1985,9 +1986,33 @@ def neutral_wall_partition_survival(geometry, nn_a, sigma_hehe_cm2):
     is exact: ``2 E_3(0) = 1``, so a zero optical depth reproduces the
     unpartitioned ledger bit-for-bit.
 
-    ``sigma_HeHe`` [cm^2] is a total elastic (attenuation) cross section, not a
-    momentum-transfer moment: this is a transmission problem, so the relevant
-    length is the single-particle attenuation length ``1/(n sigma)``.
+    ``sigma_HeHe`` [cm^2] is the MOMENTUM-TRANSFER cross section ``sigma_mt``
+    (the ``Omega^(1,1)``-derived moment), not a total elastic one. What is
+    being attenuated here is DIRECTED MOMENTUM, not particle number: a
+    small-angle He--He encounter barely deflects the atom and so barely
+    removes its forward momentum, whereas a quantum-total cross section counts
+    that encounter at full weight. Using the total would therefore overcount
+    interception and over-suppress the wall branch. A literature box for
+    ``sigma_mt`` is in flight.
+
+    KERNEL-CONDITIONALITY (disclosed). ``2 E_3(tau)`` is the SURFACE-EMITTED
+    single-flight transmission -- every atom starts at one face and crosses the
+    full thickness ``d``. The wall-bound momentum pool is not surface-emitted:
+    it is volume-distributed through the annulus, at a mean depth of about
+    ``d/2``, so the survival number is conditional on which kernel of the
+    family is chosen. At ``tau = 1.29`` (the production fill point) the three
+    natural members give
+
+        surface-emitted single flight   2 E_3(tau)                    ~ 0.149
+        volume-averaged single flight   (2/tau) [1/3 - E_4(tau)]      ~ 0.424
+        diffusive                       1 / (1 + 3 tau / 4)           ~ 0.508
+
+    This implementation is the FIRST, which is the most retention-biased
+    member of the family -- it is the one the registered
+    "transverse-radial-exit, mu-averaged" wording specifies, and it
+    over-suppresses wall loss as ``tau -> infinity``. Read the re-routed
+    fraction as the retention-biased end of a kernel bracket, not as a point
+    value.
 
     Cells with no annulus (``Rp >= Rm``) get ``tau = 0`` and unit survival,
     matching the wall rate the caller already zeroes there. A zero density or

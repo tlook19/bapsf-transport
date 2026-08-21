@@ -2,10 +2,25 @@
 
 The neutral gas the column carries is bimodal. A cold bulk sits near the vessel
 temperature; a minority born by resonant charge exchange sits at the local ion
-temperature. Gas-gas collisions cannot merge them -- at column densities the
+temperature. Gas-gas collisions cannot merge them -- in the IONIZATION-DEPLETED
+discharge column (nn <~ 1e12 cm^-3, the state this channel was built for) the
 neutral-neutral mean free path is orders of magnitude longer than the column
 radius -- so the two populations are COLLISIONALLY DECOUPLED, and the hot
-population's pressure must never appear as a force on the cold fluid. This
+population's pressure must never appear as a force on the cold fluid.
+
+REGIME LIMIT (disclosed, not a rebuild). That separation is a property of the
+DEPLETED column, not of the machine. At FILL density it is false: nn ~ 2e13
+cm^-3 gives a He-He momentum-transfer mfp of ~24.5 cm against Rp = 15 cm, so
+mfp/Rp ~ 1.6 -- the same order, not orders of magnitude. Wherever the column
+density stays near fill (before breakdown, and in any cell the discharge never
+depletes), the hot channel therefore carries an UN-MODELED elastic leak of
+O(Rp/mfp) per crossing, transferring hot momentum and energy into the cold
+field. The sign is hot-forces-cold: the true cold fluid would be pushed and
+heated slightly more than this module's decoupled treatment allows. This is a
+stated limitation of the closure's validity range, not a defect in what it
+computes inside that range.
+
+This
 module carries the hot population as an ALGEBRAIC standing quantity (no new PDE
 state, no packed row) plus a ballistic redistribution of the flows it carries.
 

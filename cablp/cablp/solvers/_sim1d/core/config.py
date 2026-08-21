@@ -2301,9 +2301,13 @@ def physics_fit_defaults():
         accommodation in a single visit. Must lie in ``[0, 1]``; anything
         outside raises at construction.
     neutral_wall_partition_sigma_hehe_cm2:
-        He--He elastic (total, attenuation) cross section [cm^2] setting the
+        He--He MOMENTUM-TRANSFER cross section ``sigma_mt`` [cm^2] (the
+        ``Omega^(1,1)``-derived moment, NOT a total elastic one) setting the
         neutral-neutral mean free path ``1/(nn_a sigma)`` that the
         ``neutral_wall_momentum_partition`` flag uses to weight the two-zone
+        wall branch. The partition attenuates DIRECTED MOMENTUM, so the
+        forward-peaked small-angle encounters a total cross section counts at
+        full weight barely remove any, and a total would over-suppress the
         wall branch. REQUIRED by that flag and read by nothing else: it has no
         default, so arming the flag without it raises at construction, and
         supplying it without the flag raises as well. Must be finite and

@@ -567,10 +567,24 @@ IAEA rate set; the bracket is a cross-check).
 
 The neutral population in the column is bimodal. A cold bulk sits near the
 vessel temperature; a minority born by resonant charge exchange sits at the
-local ion temperature. At column densities the neutral-neutral mean free path
-is orders of magnitude longer than the column radius, so the two populations
-are **collisionally decoupled**: the hot population's (much larger) partial
-pressure must never appear as a force on the cold fluid.
+local ion temperature. In the **ionization-depleted discharge column**
+($n_n \lesssim 10^{12}\,\mathrm{cm^{-3}}$, the state this channel was built
+for) the neutral-neutral mean free path is orders of magnitude longer than the
+column radius, so the two populations are **collisionally decoupled**: the hot
+population's (much larger) partial pressure must never appear as a force on
+the cold fluid.
+
+**Regime limit (disclosed).** That separation belongs to the depleted column,
+not to the machine. At FILL density it does not hold: $n_n \approx 2\times
+10^{13}\,\mathrm{cm^{-3}}$ gives a He--He momentum-transfer mean free path of
+$\approx 24.5$ cm against $R_p = 15$ cm, i.e. $\mathrm{mfp}/R_p \approx 1.6$ --
+the same order, not orders of magnitude. Wherever the column density stays
+near fill (before breakdown, and in any cell the discharge never depletes) the
+hot channel carries an un-modeled elastic leak of $O(R_p/\mathrm{mfp})$ per
+crossing, moving hot momentum and energy into the cold field. The sign is
+hot-forces-cold: the true cold fluid would be pushed and heated slightly more
+than the decoupled treatment allows. This bounds the closure's validity range;
+it is not a defect inside that range.
 
 **Cold channel.** A fluid with its own modest pressure $p_n = n_n k T_n =
 \tfrac23 E_n$, transported by the Rusanov mini-flux described in
