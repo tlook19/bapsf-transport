@@ -2300,6 +2300,14 @@ def physics_fit_defaults():
         specular (no energy exchange at the wall) and ``1`` is full
         accommodation in a single visit. Must lie in ``[0, 1]``; anything
         outside raises at construction.
+    neutral_wall_partition_sigma_hehe_cm2:
+        He--He elastic (total, attenuation) cross section [cm^2] setting the
+        neutral-neutral mean free path ``1/(nn_a sigma)`` that the
+        ``neutral_wall_momentum_partition`` flag uses to weight the two-zone
+        wall branch. REQUIRED by that flag and read by nothing else: it has no
+        default, so arming the flag without it raises at construction, and
+        supplying it without the flag raises as well. Must be finite and
+        strictly positive.
     neutral_exchange_coeff_cm3_s:
         Constant neutral exchange coefficient for the constant model [cm^3/s].
     neutral_clausing_scale:
@@ -2318,6 +2326,10 @@ def physics_fit_defaults():
         # Neutral-energy wall accommodation (read only when the
         # neutral_energy flag is on, which ships off):
         "neutral_energy_wall_accommodation": 0.40,
+        # REQUIRED by the neutral_wall_momentum_partition flag (which ships
+        # off) and forbidden without it. None is the "not supplied" sentinel,
+        # not a physical value -- there is no defaulted He-He cross section.
+        "neutral_wall_partition_sigma_hehe_cm2": None,
         # Only the "constant" neutral_exchange_model reads this (the default is
         # "knudsen"):
         "neutral_exchange_coeff_cm3_s": 1.0e5,
@@ -3102,6 +3114,24 @@ input_flags_template_1d = {
     # (presence-gated: the off path builds no drift kernel and the isotropic
     # one is untouched).
     "neutral_hot_birth_drift": False,
+    # Partition the two-zone WALL BRANCH of the neutral momentum ledger. The
+    # free-molecular wall sink -nu_wall*M_n_a assumes every annulus atom
+    # reaches the vessel wall; at finite gas density a He-He elastic collision
+    # can intercept it first, and that momentum stays in the annulus gas
+    # instead of accommodating on the surface. The surviving fraction is the
+    # cosine-averaged slab transmission 2*E_3(tau) across the annulus radial
+    # thickness, tau = (Rm - Rp)*nn_a*sigma_HeHe (see
+    # physics.sources.neutral_wall_partition_survival). MOMENTUM ONLY: the
+    # particle and energy channels are untouched.
+    #
+    # Requires neutral_momentum_radial='kinetic_two_moment' (the only closure
+    # that owns a wall branch on its own annulus momentum row) and REQUIRES
+    # neutral_wall_partition_sigma_hehe_cm2, which has no default -- arming the
+    # flag without it raises at construction, and setting the cross section
+    # without the flag raises too. Default OFF and bit-exact off (presence
+    # gated: the off path passes sigma_hehe_cm2=None and the operator's
+    # arithmetic is unchanged).
+    "neutral_wall_momentum_partition": False,
     # Wall the hot channel's ballistic flight at the INTERNAL plasma
     # boundaries, not only at the two global end planes. The walls are the
     # closed plasma faces (geometry.plasma_open false: every face where a
