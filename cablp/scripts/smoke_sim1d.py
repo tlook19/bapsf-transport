@@ -43,11 +43,12 @@ Consequences of running a subset, stated rather than hidden:
   full suite and fail alone, or the reverse. ``--only`` is a debugging aid;
   the FULL SUITE is the gate.
 * Nothing is reordered and nothing is duplicated: the cases hold the original
-  statements, in the original order. The one deliberate exception is that
-  ``default_config()`` is now called twice at the top -- once by
-  ``production-construction-warning-free`` and ``shipped-defaults-and-base-
-  geometry`` for their read-only assertions on the shipped defaults, and once
-  inside ``_base_config`` which then pins the historical stance.
+  statements, in the original order. The one deliberate exception is ONE extra
+  ``default_config()`` call at the top. The shipped-defaults case still calls
+  it for its read-only assertions on the SHIPPED values, which have to be read
+  before anything is pinned; ``_base_config`` then calls it again to build the
+  pair it pins the historical stance onto. That is a dict build, and no
+  assertion, construction or run happens twice.
 
 DEPRECATION-WARNING SUPPRESSION (and its limits)
 ------------------------------------------------
