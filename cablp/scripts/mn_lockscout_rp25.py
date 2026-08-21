@@ -52,6 +52,10 @@ def build(nx, flare, tail, rp_end):
         "phi_wf": 2.869, "cathode_surface_model": "ads_des",
         "cathode_phiwf_clean_eV": 2.809, "cathode_cleaning_sigma_cm2": 3.5e-16,
         "cathode_cleaning_E_th_eV": 20.0,
+        # SUPERSEDED 2026-08-21: sccm now MEANS meter-sccm (4.171431e17
+        # particles/s per sccm, 20 C / 1013 mbar), so the S_gp literal below
+        # ships ~6.85 % less flux than it did when the scout ran. Left AS A
+        # RECORD of what this dated script ran.
         "gas_puff_mode": "square", "S_gp": 6000.0,
         "cathode_sample_smoothing": "presheath",
         "tau_afterglow": 0.006, "ion_neutral_drag_model": "constant",

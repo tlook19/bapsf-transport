@@ -45,6 +45,9 @@ EXTRA = {
     "cathode_cleaning_E_th_eV": 20.0,
     "cathode_sample_smoothing": "presheath",
     "gas_puff_mode": "square",
+    # SUPERSEDED 2026-08-21: sccm now MEANS meter-sccm (4.171431e17 particles/s
+    # per sccm, 20 C / 1013 mbar), so this literal ships ~6.85 % less flux than
+    # it did when the arm ran. Left AS A RECORD of what this dated script ran.
     "S_gp": 3000.0,
     "nx": 240,
     "T_s": 1998.15,

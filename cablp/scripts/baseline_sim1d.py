@@ -153,15 +153,15 @@ BASELINE_FLAG_OVERRIDES = {
 # the unrepresentative corner, not a property of the model: on the stance the
 # discharge ignites properly and the limiter relaxes as the column fills.
 #
-# MEASURED at nx=60 on the stance (2026-08-20), from the capture itself:
-# 75,615 steps to the dynamic t_end of 2.632261e-02 s, 914.6 s wall on one
-# lane, 2634 saves. Mean dt is 3.5e-7; it runs 4.8e-7 at the first step, dips
-# to ~1.9e-7 through breakdown, recovers past 6.4e-7 early in the discharge and
-# does not hold that -- which is why the step count came in well above the
-# 40-45k the pre-capture projection suggested from the early-discharge dt.
+# The capture's own measured cost -- step count, dynamic t_end, wall time,
+# saves, and the dt history behind them -- lives in
+# scripts/golden_baseline_provenance.md, which is rewritten at every recapture.
+# It is deliberately NOT restated here: a runtime figure in a standing comment
+# has no way of announcing that it has drifted.
 #
-# max_steps is a TRIPWIRE, not a run length: ~2x the measured step count, paired
-# with max_steps_action="raise" above. It exists so that a change which quietly
+# max_steps is a TRIPWIRE, not a run length: roughly twice the step count the
+# capture actually measures (that note carries the ratio), paired with
+# max_steps_action="raise" above. It exists so that a change which quietly
 # destroys the timestep fails loudly and quickly instead of running for hours.
 # If it ever fires, the question is "what happened to dt", not "what happened to
 # the trajectory". Sized at 2x deliberately: a backstop with only a few percent

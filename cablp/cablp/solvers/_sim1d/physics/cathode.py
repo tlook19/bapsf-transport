@@ -3013,8 +3013,8 @@ def _beam_ionization_sources(
             )
             gap = np.asarray(gap_cell_indices(geometry, end=end), dtype=int)
             ohmic_weights = _ohmic_gap_weights(
-            geometry, gap, Te, n, lnL_model
-        )
+                geometry, gap, Te, n, lnL_model
+            )
             beam_power_density[gap] += (
                 ohmic_weights * solver_result.P_ohmic * 1.0e7 / Vp[gap]
             )
@@ -3045,8 +3045,8 @@ def _beam_ionization_sources(
             )
             gap = np.asarray(gap_cell_indices(geometry, end=end), dtype=int)
             ohmic_weights = _ohmic_gap_weights(
-            geometry, gap, Te, n, lnL_model
-        )
+                geometry, gap, Te, n, lnL_model
+            )
             ohmic_power[gap] += (
                 ohmic_weights * solver_result.P_ohmic * 1.0e7 / Vp[gap]
             )

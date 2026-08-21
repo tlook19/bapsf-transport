@@ -20,9 +20,9 @@ heated slightly more than this module's decoupled treatment allows. This is a
 stated limitation of the closure's validity range, not a defect in what it
 computes inside that range.
 
-This
-module carries the hot population as an ALGEBRAIC standing quantity (no new PDE
-state, no packed row) plus a ballistic redistribution of the flows it carries.
+This module carries the hot population as an ALGEBRAIC standing quantity (no
+new PDE state, no packed row) plus a ballistic redistribution of the flows it
+carries.
 
 The standing population follows the saturating two-state balance
 

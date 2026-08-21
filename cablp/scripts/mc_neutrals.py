@@ -16,9 +16,10 @@ fill-density gas (nn ~ 2e13 cm^-3) gives a He-He momentum-transfer mfp of
 tallies are insensitive to this (they are set by source and sink balance, not
 by flight history), but TRANSIT-DEPENDENT tallies -- timing, reach, directed
 flows, hot-atom penetration depth -- carry an undisclosed O(1) uncertainty
-wherever the gas sits near fill density. Events: electron-impact ionization (absorb), resonant CX (resample
-velocity from the local ion Maxwellian + drift: the relay). Boundaries:
-diffuse 300 K re-emission at the radial wall and collector; the anode mesh
+wherever the gas sits near fill density. Events: electron-impact ionization
+(absorb), resonant CX (resample velocity from the local ion Maxwellian +
+drift: the relay). Boundaries: diffuse 300 K re-emission at the radial wall
+and collector; the anode mesh
 plane intercepts with probability 1 - T (T = 1 - eta) and re-emits on the
 incident side; the cathode disc re-emits either thermally (the solver's
 at-rest convention) or as the directed jet (--jet); end pumps are sticking
