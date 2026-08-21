@@ -218,7 +218,8 @@ physically-motivated candidate bounds, then clamps to `[dt_min, dt_max]`:
 - **Plasma CFL** (`cfl`, default 0.4) from the local sound speed and cell size.
 - **Front-filling** density-change bound.
 - **Fractional-change** limits (`density_dt_fraction`, `neutral_dt_fraction`,
-  `heat_dt_fraction`, default 0.25) so no single explicit source/sink changes a
+  default 0.25, and the fixed `conduction.HEAT_DT_FRACTION` = 0.25) so no
+  single explicit source/sink changes a
   field by more than a set fraction per step: surface loss, neutral exchange,
   neutral sources, reactions, energy exchange, electron cooling, ion
   charge-exchange, and (explicit path only) heat conduction.

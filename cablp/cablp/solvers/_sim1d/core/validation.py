@@ -185,6 +185,14 @@ def validate_r1_configuration_presence(
             "ionization_birth_energy_model must be 'legacy' or "
             f"'conservative' (got {birth_energy_model!r})"
         )
+    end_mode = str(input_dict.get("end_mode", "collector"))
+    if end_mode != "collector":
+        raise ValueError(
+            f"end_mode={end_mode!r} is not available: the 'mirrored_source' "
+            "end boundary was removed at D3, 2026-08-21 (it was a 0D-era "
+            "selector that the conservative solver never branched on). "
+            "Accepted: 'collector'."
+        )
     if hyperbolic_wave_speed not in {"isothermal", "adiabatic"}:
         raise ValueError(
             "hyperbolic_wave_speed must be 'isothermal' or 'adiabatic' "

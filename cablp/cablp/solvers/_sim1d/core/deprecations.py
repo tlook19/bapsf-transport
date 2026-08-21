@@ -182,14 +182,8 @@ DEPRECATED_CONTROLS = {
     "anode_radius_cm": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
     "coverage_backfill_time_s": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
     # ==== dead levers: timestep control ===================================
-    "heat_dt_fraction": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
-    "drag_dt_fraction": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
     "neutral_dt_fraction": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
-    "dt_reject_factor": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
     "dt_growth_recovery_factor": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
-    "surface_loss_floor_exempt_rtol": DeprecatedControl(
-        PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX,
-    ),
     "beam_ionization_birth_timestep_bound": DeprecatedControl(
         FLAGS, _DEAD_LEVER, _DEAD_LEVER_FIX,
     ),
@@ -216,14 +210,6 @@ DEPRECATED_CONTROLS = {
         PARAMS, _PUFF_WAVEFORM, _PUFF_WAVEFORM_FIX,
     ),
     # ==== dead levers: inert selectors ====================================
-    "end_mode": DeprecatedControl(
-        PARAMS,
-        "the 'mirrored_source' end boundary is selected by no committed "
-        "configuration (config surface audited 2026-08-19) and is scheduled "
-        "for removal",
-        _DEAD_LEVER_FIX,
-        values=("mirrored_source",),
-    ),
     "Ti_birth_ionization": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
     # ==== dead levers: scaling factors ====================================
     "b_anode_collection": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
@@ -238,7 +224,6 @@ DEPRECATED_CONTROLS = {
     "b_epara": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
     "b_ipara": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
     "b_slip_entrainment": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
-    "ln_lambda_min": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
     # ==== dead levers: neutral probe source ===============================
     "neutral_probe_profile": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
     "neutral_probe_waveform_table": DeprecatedControl(
@@ -271,8 +256,6 @@ DEPRECATED_CONTROLS = {
     "beam_excitation_energy_eV": DeprecatedControl(
         PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX,
     ),
-    "icool": DeprecatedControl(FLAGS, _DEAD_LEVER, _DEAD_LEVER_FIX),
-    "ncool": DeprecatedControl(FLAGS, _DEAD_LEVER, _DEAD_LEVER_FIX),
 }
 
 

@@ -301,9 +301,11 @@ two neutral-momentum rows, and internal radial/zone transfers close exactly.
 Configuration is resolved once at construction from the shared registry.
 Unknown keys raise `ValueError`; `config_manifest()` exposes all 184 parameter
 defaults and 29 flags with their defining groups. The live but formerly
-unregistered controls `drag_dt_fraction`, `b_anode_collection`, and
-`b_anode_advective_block` are now registered at their pre-audit fallback
-values. The disconnected source/end absorption enables/scales and the
+unregistered controls `b_anode_collection` and
+`b_anode_advective_block` are registered at their pre-audit fallback
+values; `drag_dt_fraction` was registered alongside them and then deleted
+at D3 (2026-08-21), where it became the fixed `timestep.DRAG_DT_FRACTION`.
+The disconnected source/end absorption enables/scales, deleted at D3, and the
 compatibility-only `front_flux_model`, `D_amb_model`, `D_amb`, and
 `cathode_model` accept only their checkpoint values; noncanonical values fail
 at construction rather than acting as silent no-ops. Their replacement

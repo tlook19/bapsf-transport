@@ -123,12 +123,12 @@ INERT_PARAM_KEYS = frozenset({
     # makes them re-key -- the fail-closed rule at the top, working as
     # intended.
     # --- plasma-run numerics (equil uses fixed neutral_equilibration_dt) ---
-    "cfl", "density_dt_fraction", "drag_dt_fraction", "heat_dt_fraction",
+    "cfl", "density_dt_fraction",
     "implicit_heat_scheme", "operator_splitting", "heat_picard_iterations",
-    "heat_picard_tol", "ln_lambda_min", "max_density_step_fraction",
+    "heat_picard_tol", "max_density_step_fraction",
     "max_energy_step_fraction", "circuit_picard_max_iter", "circuit_picard_tol_rel",
     "hyperbolic_wave_speed", "dt_growth_enabled", "dt_growth_factor",
-    "dt_reject_factor", "adaptive_retries_enabled",
+    "adaptive_retries_enabled",
     # --- output cadence (run_neutral_equilibration overrides these) ---
     "dt_save", "t_save_start", "max_output_steps",
     # --- the cache path itself is not seed content ---
@@ -143,9 +143,9 @@ INERT_FLAG_KEYS = frozenset({
     "beam_anode_interception", "cathode_emission_bridge", "cathode_schottky",
     "characteristic_boundary", "coupled_circuit_picard", "cx",
     "electron_heat_flux_limit", "heat_conduction", "hyperbolic_energy_consistent",
-    "icool", "icool_recomb", "implicit_heat_conduction", "ion_neutral_drag",
+    "icool_recomb", "implicit_heat_conduction", "ion_neutral_drag",
     "ion_neutral_drag_cx_only", "ion_neutral_moment_closure",
-    "ion_neutral_thermalization", "ionization_energy_cost", "ncool",
+    "ion_neutral_thermalization", "ionization_energy_cost",
     "raw_stage_validation",
     "debug_checks",
     # end_recycle_to_annulus changes ONLY the two plasma-terminating boundary

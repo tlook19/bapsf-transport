@@ -7075,7 +7075,6 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
         ion_mass_g=sim.ion_mass_g,
         mu=sim.mu,
         b_Qie=0.0,
-        ln_lambda_min=params["ln_lambda_min"],
     )
     assert np.allclose(disabled_exchange.Ee, 0.0)
     assert np.allclose(disabled_exchange.Ei, 0.0)
@@ -7123,8 +7122,6 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
         b_Qei=0.0,
         b_Qen=0.0,
         ionization_energy_cost=True,
-        icool=True,
-        ncool=True,
         icool_recomb=flags["icool_recomb"],
     )
     assert np.all(ionization_only_cooling.Ee < 0.0)
@@ -7142,8 +7139,6 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
         b_Qei=0.0,
         b_Qen=0.0,
         ionization_energy_cost=True,
-        icool=True,
-        ncool=True,
         icool_recomb=flags["icool_recomb"],
     )
     assert np.allclose(disabled_cooling.Ee, 0.0)
@@ -7278,7 +7273,6 @@ def _case_helium_only_reaction_rates(dt_default, hot_ion_cx_state):
         b_epara=0.0,
         b_ipara=0.0,
         heat_conduction=True,
-        ln_lambda_min=params["ln_lambda_min"],
     )
     assert np.allclose(disabled_heat.Ee, 0.0)
     assert np.allclose(disabled_heat.Ei, 0.0)
@@ -7319,7 +7313,6 @@ def _case_helium_only_reaction_rates(dt_default, hot_ion_cx_state):
         b_epara=0.0,
         b_ipara=0.0,
         heat_conduction=True,
-        ln_lambda_min=params["ln_lambda_min"],
     )
     assert np.allclose(disabled_implicit.Ee, heat_state.Ee)
     assert np.allclose(disabled_implicit.Ei, heat_state.Ei)

@@ -3,7 +3,7 @@ import numpy as np
 from cablp.funcs._adas import he_rates
 from cablp.funcs._fits import IAEA_exp1, IAEA_exp4, IAEA_exp6
 from cablp.funcs._heat import Q_cx_He, Q_ie
-from cablp.funcs._plasmaparams import c_log
+from cablp.funcs._plasmaparams import LN_LAMBDA_MIN, c_log
 from cablp.vars._coeff import aHII, aHI, aHeI, aHeII
 from cablp.vars._cons import ev_to_erg
 
@@ -17,7 +17,6 @@ def electron_ion_exchange_rhs(
     ion_mass_g,
     mu,
     b_Qie=1.0,
-    ln_lambda_min=1.0,
 ):
     """Return conservative electron-ion thermal exchange sources.
 
@@ -37,7 +36,7 @@ def electron_ion_exchange_rhs(
 
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     n = np.maximum(state.n, floors["n"])
-    ln_lambda = np.maximum(c_log(derived.Te, n, kind="ei"), ln_lambda_min)
+    ln_lambda = np.maximum(c_log(derived.Te, n, kind="ei"), LN_LAMBDA_MIN)
     q_e_to_i = (
         float(b_Qie)
         * Q_ie(
@@ -76,8 +75,6 @@ def electron_cooling_rhs(
     b_Q_Te_ref_eV=5.0,
     atomic_rate_model="janev",
     ionization_energy_cost=True,
-    icool=True,
-    ncool=True,
     icool_recomb=False,
     adas_low_te_extension=False,
 ):
@@ -104,8 +101,6 @@ def electron_cooling_rhs(
         b_Q_Te_ref_eV=b_Q_Te_ref_eV,
         atomic_rate_model=atomic_rate_model,
         ionization_energy_cost=ionization_energy_cost,
-        icool=icool,
-        ncool=ncool,
         icool_recomb=icool_recomb,
         adas_low_te_extension=adas_low_te_extension,
     )
@@ -141,8 +136,6 @@ def electron_cooling_rhs_terms(
     b_Q_Te_ref_eV=5.0,
     atomic_rate_model="janev",
     ionization_energy_cost=True,
-    icool=True,
-    ncool=True,
     icool_recomb=False,
     adas_low_te_extension=False,
 ):
@@ -174,8 +167,8 @@ def electron_cooling_rhs_terms(
     use_adas = atomic_rate_model == "adas"
 
     want_cost = ionization_energy_cost and b_ionization_energy_cost != 0.0
-    want_qei = icool and b_Qei != 0.0
-    want_qen = ncool and b_Qen != 0.0
+    want_qei = b_Qei != 0.0
+    want_qen = b_Qen != 0.0
 
     adas = {}
     if use_adas and (want_cost or want_qei or want_qen):

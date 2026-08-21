@@ -1191,7 +1191,9 @@ either setting.
 
 ## `timestep_defaults`
 
-**`surface_loss_floor_exempt_rtol = 1e-3` — DERIVED from measured scales.**
+**`solver.SURFACE_LOSS_FLOOR_EXEMPT_RTOL = 1e-3` — DERIVED from measured
+scales.** No longer configurable: it was a config key until D3 (2026-08-21),
+where it became a named constant in `solvers/_sim1d/solver.py`.
 Instrumented on a floor-pinned afterglow state: a pinned cell hovers at ~5e-6
 relative margin (the clip plus one step of re-heating residue, not float
 round-off), while every healthy drained cell sampled across drive and afterglow
@@ -1222,7 +1224,7 @@ latency, never detection itself.
 
 **`circuit_dt_fraction = 0.25` — ASSUMED numerical-control value**, carrying
 the same quarter-of-a-relaxation-time convention as `density_dt_fraction`,
-`neutral_dt_fraction` and `heat_dt_fraction`. What is MEASURED is the feature
+`neutral_dt_fraction` and `conduction.HEAT_DT_FRACTION`. What is MEASURED is the feature
 it exists to resolve, not the fraction: the sheath capability wall's device
 slope reaches ~2 kOhm, giving `tau_circuit = L/(R + dV_dis/dI)` ~ 4 ns against
 an `L/R_comp` of 1.12 ms and a `dt_max` of 1e-4 s, and the sub-wall slew

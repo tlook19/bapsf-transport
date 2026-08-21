@@ -217,6 +217,20 @@ from cablp.vars._cons import (
 )
 
 
+#: Timestep multiplier [dimensionless] applied after a rejected attempt. Must
+#: lie in (0, 1) to shrink the step; 1/2 halves it, which reaches any smaller
+#: admissible dt in a logarithmic number of retries.
+DT_REJECT_FACTOR = 0.5
+
+#: Relative threshold [dimensionless] for the floor-aware drain exemption on
+#: the "surface_loss" timestep bound, consulted only when the
+#: ``surface_loss_floor_exempt`` flag is on. It separates a cell HOVERING at
+#: its temperature floor (clip plus one step of re-heating residue) from a
+#: healthy drained cell orders of magnitude above it; see the flag's entry in
+#: ``core/config.py``.
+SURFACE_LOSS_FLOOR_EXEMPT_RTOL = 1e-3
+
+
 #: What energy each named RHS term's neutral-density row carries, under the
 #: ``neutral_energy`` flag. This table is the disclosure: every term in the
 #: ledger appears in it, and a term that is NOT in it raises rather than moving
@@ -1102,21 +1116,8 @@ class LAPDSim1D:
         _surface_loss_floor_exempt = bool(
             self._flags.get("surface_loss_floor_exempt", False)
         )
-        _surface_loss_floor_exempt_rtol = float(
-            self._input_dict.get("surface_loss_floor_exempt_rtol", 1e-3)
-        )
-        if _surface_loss_floor_exempt and not (
-            0.0 < _surface_loss_floor_exempt_rtol < 1.0
-        ):
-            raise ValueError(
-                "surface_loss_floor_exempt_rtol must be in (0, 1) when "
-                "surface_loss_floor_exempt is on "
-                f"(got {_surface_loss_floor_exempt_rtol})"
-            )
         self._surface_loss_floor_exempt_rtol = (
-            _surface_loss_floor_exempt_rtol
-            if _surface_loss_floor_exempt
-            else None
+            SURFACE_LOSS_FLOOR_EXEMPT_RTOL if _surface_loss_floor_exempt else None
         )
         _max_steps_action = str(
             self._input_dict.get("max_steps_action", "raise")
@@ -2998,7 +2999,6 @@ class LAPDSim1D:
     def _tracer_exchange_kwargs(self):
         return {
             "b_Qie": float(self._input_dict.get("b_Qie", 1.0)),
-            "ln_lambda_min": float(self._input_dict.get("ln_lambda_min", 1.0)),
         }
 
     def _tracer_beam_kwargs(self, state, cathode_solve, time):
@@ -4781,17 +4781,12 @@ class LAPDSim1D:
     def _attempt_step_with_retries(self, dt, operator_split, diag):
         dt_min = float(self._input_dict.get("dt_min", 1e-12))
         max_retries = int(self._input_dict.get("max_step_retries", 8))
-        reject_factor = float(self._input_dict.get("dt_reject_factor", 0.5))
+        reject_factor = DT_REJECT_FACTOR
         retries_enabled = bool(
             self._input_dict.get("adaptive_retries_enabled", True)
         )
         if max_retries < 0:
             raise ValueError(f"max_step_retries must be non-negative ({max_retries})")
-        if not 0.0 < reject_factor < 1.0:
-            raise ValueError(
-                "dt_reject_factor must be between 0 and 1 "
-                f"(got {reject_factor})"
-            )
 
         attempted_dt = float(dt)
         retry_count = 0
@@ -6534,8 +6529,6 @@ class LAPDSim1D:
             neutral_dt_fraction=float(
                 self._input_dict.get("neutral_dt_fraction", 0.25)
             ),
-            heat_dt_fraction=float(self._input_dict.get("heat_dt_fraction", 0.25)),
-            drag_dt_fraction=float(self._input_dict.get("drag_dt_fraction", 0.5)),
             circuit_dt_fraction=float(
                 self._input_dict.get("circuit_dt_fraction", 0.25)
             ),

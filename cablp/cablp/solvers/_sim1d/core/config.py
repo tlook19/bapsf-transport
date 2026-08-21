@@ -723,8 +723,10 @@ def model_mode_defaults():
         _sim3 compatibility; the current conservative flux closure does not
         directly use this selector.
     end_mode:
-        End boundary behavior. Options are ``"collector"`` and
-        ``"mirrored_source"``.
+        End boundary behaviour, carried into the cathode-boundary
+        diagnostics as a label. ``"collector"`` is the only accepted value;
+        the 0D-era ``"mirrored_source"`` alternative, which the conservative
+        solver never branched on, was removed at D3 (2026-08-21) and raises.
     cathode_model:
         Cathode model selector retained for configuration compatibility. The
         current option is ``"disabled"``; actual cathode coupling is controlled
@@ -2285,8 +2287,6 @@ def physics_fit_defaults():
         converged Picard alone does not make the whole step second-order.
     heat_picard_tol:
         Relative temperature-change tolerance ending the Picard iteration early.
-    ln_lambda_min:
-        Minimum Coulomb logarithm used by transport and exchange estimates.
     Tn_K:
         Neutral gas temperature setting the neutral thermal speed [K].
         Superseded as the collision operator's neutral temperature wherever
@@ -2313,7 +2313,6 @@ def physics_fit_defaults():
         # value is required for tr_bdf2 + strang to express second order.
         "heat_picard_iterations": 2,
         "heat_picard_tol": 1e-10,
-        "ln_lambda_min": 1.0,
         "Tn_K": 300.0,  # single cold-gas neutral temperature (Phelps T_eff)
         # --- INERT under these defaults ---
         # Neutral-energy wall accommodation (read only when the
@@ -2337,8 +2336,6 @@ def timestep_defaults():
         Fractional density-change limit for source/reaction timestep estimates.
     neutral_dt_fraction:
         Fractional neutral-density change limit for neutral source estimates.
-    heat_dt_fraction:
-        Fractional thermal-energy change limit for heat/source estimates.
     dt_min:
         Minimum allowed timestep [s].
     dt_min_lock_max_steps:
@@ -2367,32 +2364,10 @@ def timestep_defaults():
         returns the partial trajectory with ``run_status =
         "max_steps_reached"`` (a completed opt-in run carries ``run_status =
         "completed"``) so the caller can inspect and save it.
-    surface_loss_floor_exempt_rtol:
-        Relative threshold for the floor-aware drain exemption on the
-        "surface_loss" (resolved electrode/source bundle) timestep bound,
-        active only when the ``surface_loss_floor_exempt`` flag is on. A cell
-        whose electron (ion) energy margin above the per-cell floor energy
-        ``3/2 n Te_floor`` (``3/2 n Ti_floor``) is at most this fraction OF
-        that floor energy is excluded from the drain-margin bound: the
-        accept-time floor clip re-pins the cell every step while the sink
-        keeps draining, so the bound re-trips forever and dt collapses (the
-        diagnosed afterglow crawl). The threshold is relative to the floor
-        energy, not an absolute magnitude. The scale it has to separate: a
-        pinned cell HOVERS at a small positive relative margin -- the clip
-        plus one step of re-heating residue, not float round-off -- while a
-        healthy drained cell sits orders of magnitude above that. A cell
-        whose drain dominates its heating self-drives its hover margin below
-        any fixed threshold within a few steps (hover ~ heating*dt shrinks
-        with dt), so the exemption engages exactly for genuinely pinned
-        cells. Readmission is knife-edge: any margin above the threshold
-        re-admits the cell immediately (no hysteresis). Must be in (0, 1)
-        when the flag is on.
     adaptive_retries_enabled:
         Enables retrying a rejected step with a smaller timestep.
     max_step_retries:
         Maximum retry attempts for one accepted step.
-    dt_reject_factor:
-        Timestep multiplier applied after a rejected attempt.
     dt_growth_enabled:
         Enables limiting timestep growth between accepted steps.
     dt_growth_factor:
@@ -2438,10 +2413,6 @@ def timestep_defaults():
     max_energy_step_fraction:
         Optional accepted-step thermal-energy fractional-change guard. Zero
         disables it.
-    drag_dt_fraction:
-        Maximum ion-neutral drag relaxation fraction per explicit step.
-        This was formerly available only through an unregistered
-        ``dict.get`` fallback.
     circuit_dt_fraction:
         Fraction of the current-driven loop's LOCAL relaxation time
         ``tau_circuit = L_parasitic_H / (R_comp + R_mesh_ohm + dV_dis/dI)``
@@ -2460,16 +2431,13 @@ def timestep_defaults():
         "cfl": 0.4,
         "density_dt_fraction": 0.25,
         "neutral_dt_fraction": 0.25,
-        "heat_dt_fraction": 0.25,
         "dt_min": 1e-10,
         "dt_min_lock_max_steps": 250000,
         "dt_max": 1e-4,
         "max_steps": 0,
         "max_steps_action": "raise",
-        "surface_loss_floor_exempt_rtol": 1e-3,
         "adaptive_retries_enabled": True,
         "max_step_retries": 8,
-        "dt_reject_factor": 0.5,
         "dt_growth_enabled": True,
         "dt_growth_factor": 1.25,
         # Default-off: patience 0 skips the branch entirely, so the ramp is
@@ -2480,7 +2448,6 @@ def timestep_defaults():
         "max_density_step_fraction": 0.0,
         "max_neutral_step_fraction": 0.0,
         "max_energy_step_fraction": 0.0,
-        "drag_dt_fraction": 0.5,
         "circuit_dt_fraction": 0.25,
     }
 
@@ -3288,8 +3255,9 @@ input_flags_template_1d = {
     "use_cached_neutral_seed": False,
     # Floor-aware drain exemption on the "surface_loss" timestep bound
     # (the afterglow dt-collapse fix): cells pinned at the Te/Ti floor
-    # (energy margin within surface_loss_floor_exempt_rtol of the per-cell
-    # floor energy) are excluded from the drain-margin bound ONLY -- the
+    # (electron/ion energy margin within solver.SURFACE_LOSS_FLOOR_EXEMPT_RTOL
+    # of the per-cell floor energy 3/2 n Te_floor, i.e. Te within 0.1% of the
+    # floor) are excluded from the drain-margin bound ONLY -- the
     # accept-time floor clip resets their margin to float residue every step,
     # so a persistent drain otherwise pins dt at dt_min indefinitely. One-sided
     # (all other bounds still govern the cell) and knife-edge (any real margin
@@ -3403,8 +3371,6 @@ input_flags_template_1d = {
     # Default OFF, presence-gated and bit-exact off.
     "regime_vessel_node": False,
     "ionization_energy_cost": True,
-    "icool": True,
-    "ncool": True,
     "cx": True,
     "icool_recomb": False,
     "debug_checks": False,
