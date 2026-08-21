@@ -313,21 +313,21 @@
   "result_format": "sim1d packed conservative trajectory y[saves, fields*cells]",
   "saves": 2627,
   "summary": {
-    "Te_max": 25.786424791286333,
+    "Te_max": 25.809699214083636,
     "Te_min": 0.1,
-    "Ti_max": 7.924368983672906,
+    "Ti_max": 7.920988097902095,
     "Ti_min": 0.025999999999999943,
-    "final_time": 0.02625887259571793,
+    "final_time": 0.026258854049230618,
     "finite": true,
-    "n_max": 26277992980998.715,
-    "n_min": 841901969.3737209,
-    "neutral_inventory_relative_drift": 1.1927021468370431,
-    "nn_max": 39005264890216.72,
-    "nn_min": 108397744826.04575,
-    "plasma_inventory_relative_drift": 3457.5277598771254,
+    "n_max": 26279095037182.918,
+    "n_min": 841901971.4470115,
+    "neutral_inventory_relative_drift": 1.1926990912507203,
+    "nn_max": 39005879797053.11,
+    "nn_min": 108381349372.37506,
+    "plasma_inventory_relative_drift": 3457.601273061916,
     "samples": 2627,
-    "steps": 80516,
-    "thermal_energy_relative_drift": 2983.6025629945975,
-    "total_particle_inventory_relative_drift": 1.2593433325266712
+    "steps": 80416,
+    "thermal_energy_relative_drift": 2983.6987468754237,
+    "total_particle_inventory_relative_drift": 1.2593416943982465
   }
 }
