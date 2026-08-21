@@ -14641,6 +14641,80 @@ def _case_cathode_jet_hot_carrier():
     assert hc_led["E_fast_eV"] > 1.0
     # The anode mesh really culls: eta of the flux crossing the anode face.
     assert hc_led["mesh_cull_per_s"] > 0.0
+    # The geometric escape length is the mean interior-point ray of the column
+    # disc, 8 Rp/(3 pi), times <cot(theta)> = pi/2 over the Lambert launch:
+    # lambda_esc = 4 Rp / 3. Pinned as a NUMBER, because the first cut of this
+    # kernel compounded a chord-vs-ray error with a <cot> -> 1/<tan> swap and
+    # landed a third short (advisor correction 2026-08-21).
+    from cablp.solvers._sim1d.physics.jet_carrier import (
+        carrier_escape_length_cm as _hc_lesc,
+    )
+
+    hc_Rp = np.asarray(hc_g.Rp_cm, dtype=float)
+    hc_lam = _hc_lesc(hc_g)
+    assert np.allclose(
+        hc_lam[hc_Rp > 0.0],
+        (4.0 / 3.0) * hc_Rp[hc_Rp > 0.0],
+        rtol=1e-14,
+        atol=0.0,
+    )
+    assert np.all(np.isinf(hc_lam[hc_Rp <= 0.0]))
+    # The dt bundle OWNS the carrier: the bounded rows are the applied rows
+    # (the withheld boundary plus the beam), not the v1 rows the step no
+    # longer books. Off, the bundle is untouched.
+    hc_bundle_on = hc_on._plasma_source_timestep_rhs(
+        state=hc_state, time=hc_on.time
+    )
+    hc_bundle_off = hc_off._plasma_source_timestep_rhs(
+        state=hc_off.state, time=hc_off.time
+    )
+    assert np.any(hc_bundle_on.Ei != 0.0)
+    assert np.all(np.isfinite(hc_bundle_on.Ei))
+    assert np.all(np.isfinite(hc_bundle_off.Ei))
+    # A dt PROBE must not rewrite the ledger the last accepted evaluation
+    # left, exactly as it re-solves the cathode with update_cache=False.
+    hc_probe_ref = hc_on._jet_carrier_diagnostics
+    hc_on._plasma_source_timestep_rhs(state=hc_state, time=hc_on.time)
+    assert hc_on._jet_carrier_diagnostics is hc_probe_ref
+    # The birth-convention debts are REPORTED as numbers, not left as prose:
+    # neither is visible to any identity above, because both halves of every
+    # pair are booked in one convention.
+    for hc_debt in (
+        "u_dM_partner_exchange_W",
+        "u_dM_jet_ionization_W",
+        "u_dM_ion_total_W",
+        "u_dM_partner_neutral_W",
+        "q_mix_missing_W",
+        "electron_birth_convention_W",
+    ):
+        assert hc_debt in hc_led
+        assert np.isfinite(hc_led[hc_debt])
+    assert np.isclose(
+        hc_led["u_dM_ion_total_W"],
+        hc_led["u_dM_partner_exchange_W"] + hc_led["u_dM_jet_ionization_W"],
+        rtol=1e-12,
+    )
+    # Q_mix is a squared magnitude summed over births: never negative, and
+    # strictly positive wherever the beam deposited anything at all.
+    assert hc_led["q_mix_missing_W"] > 0.0
+    # THE STANCE RUNS "conservative" -- it is the shipped default, and
+    # "legacy" is the DEPRECATED arm. The carrier must stay constructible on
+    # it (every registered arm is at the stance), and on that model the
+    # electron side AGREES: the bulk books Ee_birth = 0 exactly as the
+    # carrier does. Pinned so a future refusal cannot silently strand the
+    # arms, and so the agreement is a gate rather than a memory.
+    hc_default_params, _hc_default_flags = default_config()
+    assert (
+        hc_default_params["ionization_birth_energy_model"] == "conservative"
+    )
+    LAPDSim1D(
+        dict(
+            hc_params,
+            cathode_jet_hot_carrier=True,
+            ionization_birth_energy_model="conservative",
+        ),
+        dict(hc_flags),
+    )
 
 
 # --------------------------------------------------------------------

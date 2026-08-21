@@ -94,6 +94,44 @@ carrier is armed, and the withdrawal is the carrier's whole income:
 Leaving any of the three in place would plant that channel twice. The audit
 script checks each withholding against the launch BY NAME rather than only
 through a sum, because a compensated double-book closes a sum identity.
+
+THE BIRTH-CONVENTION DEBT, NAMED AND MEASURED. This term books the whole
+``E_fast`` on ``Ei`` and the whole ``m v_fast`` on ``M``, and it books
+``Ee -= I_ion`` with NO ``(3/2) k Te`` birth credit for the freed electron.
+Read against the shipped and stance value ``ionization_birth_energy_model =
+"conservative"`` (``"legacy"`` is the DEPRECATED arm, not the stance), that
+lands as follows:
+
+* The ELECTRON side AGREES. ``"conservative"`` books ``Ee_birth = 0`` for the
+  bulk -- the new electron carries no thermal energy and ``Te`` falls by
+  dilution -- which is exactly what this term does. ``Te_birth_ionization``
+  selects WHICH ``Te`` a credit would sample and is inert on ``Ee`` under this
+  model, so it does not put the two channels at odds.
+  ``electron_birth_convention_W`` reports the size a disagreement WOULD have
+  (``(3/2) k Te`` per beam ionization) so the agreement is checkable rather
+  than asserted, and so an arm that deliberately ran the deprecated
+  ``"legacy"`` bulk could read its own mismatch straight off the ledger.
+* The ION side does NOT agree, and this is the live debt. ``"conservative"``
+  reconciles the bulk-kinetic cross term by booking an explicit mass-loading
+  mixing energy ``(1/2) m (u_i - u_birth)^2 S_ion`` onto ``Ei``. The beam's
+  own births arrive at ``u_birth = v_fast``, not at the cold gas's drift, and
+  the carrier has no such ``Q_mix`` term on either its ionization or its CX
+  channel.
+
+Neither number is visible to a conservation identity -- both halves of every
+pair here are booked in one convention, so the identities close with the debt
+inside them -- so both are REPORTED:
+
+``u_dM_*_W``            the bulk-kinetic cross term this booking creates and
+                        debits nowhere: adding ``dM`` to a fluid moving at
+                        ``u`` moves its bulk kinetic energy by ``u dM``.
+``q_mix_missing_W``     ``(1/2) m (u_i - v_fast)^2`` summed over the beam's
+                        own births -- the term the CONSERVATIVE model would
+                        add for them, and does not.
+
+Which of the two the carrier ought to book is a birth-convention ruling, not
+a plumbing choice, and it is NOT taken here: the rows are instruments, and
+they carry no opinion.
 """
 
 import numpy as np
@@ -106,7 +144,7 @@ from ..core.state import (
     derive_state,
     neutral_energy_floor,
 )
-from .sources import cathode_jet_backscatter_speed
+from .sources import cathode_jet_backscatter_speed, neutral_wind_velocity
 
 
 #: The ``E_rel`` floor [eV] and the ``Ti`` clamp [eV] the CX cross section is
@@ -142,32 +180,38 @@ def carrier_escape_length_cm(geometry):
     crossing of the plasma column surface. It is a pure geometry product with
     no fitted constant, and it is z-resolved through ``Rp(z)`` alone:
 
-        lambda_esc(z) = <transverse chord to the column surface>
+        lambda_esc(z) = <transverse ray to the column surface>
                         * <cot(theta)>_cosine
-                      = (pi/2) Rp(z) * (2/pi)
-                      = Rp(z)
+                      = (8 Rp(z) / (3 pi)) * (pi / 2)
+                      = (4/3) Rp(z)
 
-    Both averages are standard. The mean chord of a convex 2D region from a
-    uniformly distributed interior point in a uniformly distributed direction
-    is ``pi A / P`` (Cauchy), which for a disc of radius ``Rp`` is
-    ``pi Rp / 2`` -- the transverse path the atom must cover to get out. The
-    axial distance it covers meanwhile is that chord times ``cot(theta)``, and
-    for a Lambert (cosine) surface launch
-    ``<cot(theta)> = int_0^{pi/2} cot(th) 2 cos(th) sin(th) dth = pi/2``,
-    whose reciprocal ``2/pi`` cancels the chord's ``pi/2`` exactly.
+    Both averages are standard, and each is the one the launch actually
+    samples:
 
-    The result is the directed counterpart of the hot channel's ballistic
-    crossing rate ``nu_ball = v_hot / Rp``: dividing that rate by an axial
-    speed gives the same ``1 / Rp`` per unit length. The two channels are
-    different populations and neither reads the other's kernel, but they agree
-    on the geometry, which is the point.
+    * The transverse distance is the mean **interior-point** ray of a disc --
+      the atom starts somewhere on the launch disc and leaves in a uniformly
+      distributed azimuth, so the quantity is ``E[ray] = 8 R / (3 pi)``
+      (~0.849 R). This is NOT Cauchy's ``pi A / P = pi R / 2``, which is the
+      mean CHORD under mu-randomness (a chord measure, both ends on the
+      boundary, sampled by lines rather than by interior points).
+    * The axial-per-transverse conversion is ``<cot(theta)>`` over the Lambert
+      (cosine) launch, ``int_0^{pi/2} cot(th) 2 cos(th) sin(th) dth = pi/2``.
+      It is multiplied, not divided: axial = transverse * cot(theta). Note
+      ``<tan(theta)>`` is also ``pi/2`` for this measure, so the two are NOT
+      reciprocals of one another and Jensen forbids substituting ``1/<tan>``
+      for ``<cot>``.
+
+    (Both corrections are on the record: the first cut of this kernel used
+    Cauchy's chord and divided by ``<tan>``, and the two errors compounded to
+    ``lambda_esc = Rp`` -- a third short, which showed up directly as a
+    below-band ``f_dep``. Advisor ratification 2026-08-21, campaign log 21av.)
 
     Cells with no column (``Rp <= 0``) are plasma-dead and are never marched
     over; they are returned as ``inf`` so an accidental read is a zero rate
     rather than a divide-by-zero.
     """
     Rp = np.asarray(geometry.Rp_cm, dtype=float)
-    return np.where(Rp > 0.0, Rp, np.inf)
+    return np.where(Rp > 0.0, (4.0 / 3.0) * Rp, np.inf)
 
 
 def carrier_attenuation_coefficients(
@@ -303,6 +347,9 @@ def cathode_jet_carrier_rhs(
     p_in_cx = zeros.copy()
     p_in_ion = zeros.copy()
     p_leak = zeros.copy()
+    # The mass-loading mixing energy the CONSERVATIVE birth model would book
+    # for these births and this term does not; a reading, never a row.
+    q_mix_missing = zeros.copy()
     flux_profile = zeros.copy()
     launch_erg_s = 0.0
     launch_dyn = 0.0
@@ -404,6 +451,15 @@ def cathode_jet_carrier_rhs(
         p_in_ion[idx] += ion_k * p_fast
         p_leak[idx] += (esc_k + cull_k) * p_fast
         p_leak[last] += end_k * p_fast
+        # u_birth for these births is the beam's own velocity, not the cold
+        # gas's drift, so the conservative model's mixing term would be
+        # (1/2) m (u_i - direction*v_fast)^2 per birth.
+        q_mix_missing[idx] += (
+            0.5
+            * ion_mass_g
+            * (u_i[idx] - float(direction) * v_fast) ** 2
+            * (cx_k + ion_k)
+        )
 
     Vp = np.asarray(geometry.plasma_volume_cm3, dtype=float)
     Vm = np.asarray(geometry.neutral_volume_cm3, dtype=float)
@@ -457,6 +513,33 @@ def cathode_jet_carrier_rhs(
     n_cx = float(np.sum(dep_cx))
     n_ion = float(np.sum(dep_ion))
     interactions = n_cx + n_ion
+    # --- the u.dM reading, and what it makes visible ----------------------
+    # Booking the whole E_fast on Ei and the whole m v_fast on M silently
+    # CREATES the bulk kinetic cross term u_i.dM: adding momentum to a moving
+    # fluid moves its bulk kinetic energy by u.dM + O(dM^2), and none of that
+    # is debited anywhere. The pairwise audit cannot see it -- both halves of
+    # every pair are booked in the same convention, so the identities close
+    # with the cross term inside them. These rows are the only place it is
+    # visible, so they are reported per channel rather than as a total. See
+    # the module docstring for how this reads against the stance's
+    # "conservative" birth model and its Q_mix term.
+    u_dM_ion = float(np.sum(u_i * (p_in_cx - partner_Mn)))
+    u_dM_jet_ion = float(np.sum(u_i * p_in_ion))
+    if state.M_n is None:
+        u_n = np.zeros_like(u_i)
+    else:
+        u_n = neutral_wind_velocity(
+            state, floors=floors, ion_mass_g=ion_mass_g, geometry=geometry
+        )
+    u_dM_partner = float(np.sum(u_n * partner_Mn))
+    # The electron-birth convention, made a number rather than a memory. This
+    # term books only the binding cost on Ee and gives the freed electron NO
+    # (3/2) k Te birth credit -- which is what the stance's own
+    # "conservative" bulk model does too, so the two AGREE. The number is
+    # reported anyway: it is the size a disagreement would have, and it is
+    # what a deliberately-deprecated "legacy" bulk arm would be mismatched by.
+    Te = np.asarray(derived.Te, dtype=float)
+    electron_birth_gap = float(np.sum(1.5 * dep_ion * Te * ev_to_erg))
     diagnostics = {
         # --- the named ledger flows ---------------------------------------
         "launch_per_s": launched,
@@ -487,6 +570,13 @@ def cathode_jet_carrier_rhs(
         "v1_withdrawal_per_s": launched,
         "v1_withdrawal_W": launch_erg_s / _ERG_S_PER_W,
         "v1_withdrawal_dyn": launch_dyn,
+        # --- the u.dM cross-term reading, and the electron-birth gap -------
+        "u_dM_partner_exchange_W": u_dM_ion / _ERG_S_PER_W,
+        "u_dM_jet_ionization_W": u_dM_jet_ion / _ERG_S_PER_W,
+        "u_dM_ion_total_W": (u_dM_ion + u_dM_jet_ion) / _ERG_S_PER_W,
+        "u_dM_partner_neutral_W": u_dM_partner / _ERG_S_PER_W,
+        "q_mix_missing_W": float(np.sum(q_mix_missing)) / _ERG_S_PER_W,
+        "electron_birth_convention_W": electron_birth_gap / _ERG_S_PER_W,
         # --- kinematics and the TPMC-comparable readings -------------------
         "v_fast_cm_s": v_fast_report,
         "E_fast_eV": E_fast_report / ev_to_erg,

@@ -6648,6 +6648,18 @@ class LAPDSim1D:
         is the honest question "how big a step can carry what the kinetic
         side booked", and the limiter is the separate backstop for when the
         answer is below ``dt_min``.
+
+        The directed hot surface carrier joins the bundle on the same ground,
+        and it joins TOGETHER WITH its withholding: the boundary term is
+        evaluated with the carrier's launch channel armed, so the rows bounded
+        here are the rows the step applies rather than the v1 rows the step no
+        longer books. Its own bound is not circumstantial. The beam's
+        deposition frequency is a FLUX times a cross section,
+        ``nu ~ (F/A) sigma_cx (g/v_fast)``, with no plasma density in it, so it
+        does not fall away with the plasma; on a long arm the afterglow
+        stretches ``dt`` at the same time as the launch collapses, and an
+        unbounded ion momentum/energy source in that window is exactly the
+        configuration that has bitten this bundle before.
         """
         cathode_phase = self._cathode_phase_options(time=time)
         cathode_solve = None
@@ -6663,11 +6675,34 @@ class LAPDSim1D:
             if self._characteristic_boundary
             else self.boundary_absorption_rhs
         )
+        carrier_out = {} if self._cathode_jet_carrier else None
         rhs = boundary(
             state=state,
             cathode_solve=cathode_solve,
             time=time,
+            carrier_out=carrier_out,
         )
+        if self._cathode_jet_carrier:
+            # The beam reads the SAME per-neutral ionization frequency the
+            # bulk reaction term uses, exactly as the applied step does, so
+            # the bounded rows and the applied rows cannot describe different
+            # attenuation.
+            reaction = self.reaction_rhs_terms(state=state)
+            rhs = add_state_rhs(
+                rhs,
+                self.cathode_jet_hot_carrier_rhs(
+                    state=state,
+                    cathode_solve=cathode_solve,
+                    launch_per_s=carrier_out.get("launch_per_s"),
+                    ionization_rate=np.asarray(
+                        reaction["ionization_birth"].n, dtype=float
+                    )
+                    / np.maximum(
+                        np.asarray(state.nn, dtype=float), self._floors["nn"]
+                    ),
+                    cache_diagnostics=False,
+                ),
+            )
         rhs = add_state_rhs(
             rhs,
             self.anode_collection_rhs(
@@ -7169,6 +7204,7 @@ class LAPDSim1D:
         cathode_solve,
         launch_per_s,
         ionization_rate=None,
+        cache_diagnostics=True,
     ):
         """Return the directed hot surface carrier's flows, caching its ledger.
 
@@ -7185,6 +7221,11 @@ class LAPDSim1D:
         land on ``self._jet_carrier_diagnostics`` as a side channel, exactly
         as the hot channel's diagnostics do -- they are a reading of the term,
         not a row of it, and nothing about them is saved.
+
+        ``cache_diagnostics=False`` suppresses that side channel, for the same
+        reason the timestep bundle re-solves the cathode with
+        ``update_cache=False``: a dt PROBE must not leave the ledger reading
+        an evaluation the step never accepted.
         """
         zeros = self._zero_rhs_state()
         if state.En is None or launch_per_s is None:
@@ -7207,7 +7248,8 @@ class LAPDSim1D:
             I_ion=self._I_ion,
             eta=float(self._input_dict.get("eta", 0.0)),
         )
-        self._jet_carrier_diagnostics = diagnostics
+        if cache_diagnostics:
+            self._jet_carrier_diagnostics = diagnostics
         return rhs
 
     def boundary_absorption_rhs(

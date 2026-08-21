@@ -569,6 +569,87 @@ def print_ledger(ctx, stream=sys.stdout):
         file=stream,
     )
     print(file=stream)
+    print("  CONVENTION DEBTS (invisible to the identities below)", file=stream)
+    print(
+        "  u.dM partner-exchange        "
+        f"{ledger['u_dM_partner_exchange_W'] * 1e-3:14.6f} kW",
+        file=stream,
+    )
+    print(
+        "  u.dM jet-ionization          "
+        f"{ledger['u_dM_jet_ionization_W'] * 1e-3:14.6f} kW",
+        file=stream,
+    )
+    print(
+        "  u.dM ion total               "
+        f"{ledger['u_dM_ion_total_W'] * 1e-3:14.6f} kW",
+        file=stream,
+    )
+    print(
+        "  u.dM partner (neutral row)   "
+        f"{ledger['u_dM_partner_neutral_W'] * 1e-3:14.6f} kW",
+        file=stream,
+    )
+    print(
+        "    the bulk-kinetic cross term this booking creates and debits "
+        "nowhere; both halves of",
+        file=stream,
+    )
+    print(
+        "    every pair below are booked in it, so no identity can see it.",
+        file=stream,
+    )
+    print(
+        "  Q_mix missing (ion side)     "
+        f"{ledger['q_mix_missing_W'] * 1e-3:14.6f} kW",
+        file=stream,
+    )
+    print(
+        "    (1/2) m (u_i - v_fast)^2 over the beam's own births: the term "
+        "the stance's",
+        file=stream,
+    )
+    print(
+        "    ionization_birth_energy_model='conservative' books for a birth "
+        "and the carrier",
+        file=stream,
+    )
+    print(
+        "    does not. THE LIVE DEBT; which of the two rows the carrier ought "
+        "to book is a",
+        file=stream,
+    )
+    print(
+        "    birth-convention ruling and is deliberately not taken in the "
+        "code.",
+        file=stream,
+    )
+    print(
+        "  electron-birth gap           "
+        f"{ledger['electron_birth_convention_W'] * 1e-3:14.6f} kW",
+        file=stream,
+    )
+    print(
+        "    (3/2) k Te per beam ionization. NOT a mismatch at the stance: "
+        "'conservative'",
+        file=stream,
+    )
+    print(
+        "    books Ee_birth = 0 for the bulk too, so the carrier AGREES. "
+        "Reported as the size",
+        file=stream,
+    )
+    print(
+        "    a disagreement would have (a deprecated 'legacy' bulk arm would "
+        "carry it).",
+        file=stream,
+    )
+    print(
+        "  bulk birth model             "
+        f"{ctx.sim._input_dict.get('ionization_birth_energy_model', 'legacy')!r:>14}",
+        file=stream,
+    )
+    print(file=stream)
     print("  KINEMATICS AND TPMC-COMPARABLE READS", file=stream)
     print(f"  E_fast [eV]                  {ledger['E_fast_eV']:14.6f}",
           file=stream)
