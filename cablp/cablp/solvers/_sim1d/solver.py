@@ -53,6 +53,23 @@ from .core.state import (
     unpack_state,
 )
 from .core.timestep import suggest_timestep
+from .core.options import build_solver_options
+from .core.validation import (
+    OPERATOR_SPLITTINGS,
+    _RawStageError,
+    _bad_array_summary,
+    resolve_coverage_config,
+    resolve_emitting_area_config,
+    resolve_neutral_jet_config,
+    resolve_neutral_probe_config,
+    validate_equilibration_gas_puff_on,
+    validate_gas_puff_config,
+    validate_neutral_seed_cache_config,
+    validate_operator_splitting,
+    validate_phase_config,
+    validate_r1_configuration_presence,
+    validate_raw_stage,
+)
 from .physics.conduction import heat_conduction_rhs, implicit_heat_conduction_step
 from .physics.kinetic_dvm import (
     ANNULUS_FLIGHT_MODELS as KINETIC_DVM_ANNULUS_FLIGHT_MODELS,
@@ -335,15 +352,6 @@ class StepAttempt1D:
     tracer: dict | None = None
 
 
-class _RawStageError(ValueError):
-    def __init__(self, y, stage, reason, detail):
-        super().__init__(f"{stage}: {reason}")
-        self.y = np.asarray(y, dtype=float).copy()
-        self.stage = str(stage)
-        self.reason = str(reason)
-        self.detail = dict(detail)
-
-
 def _atomic_rate_domain(result):
     """Return saved active-plasma coverage of the bundled He ADF11 grid."""
     te_min_eV, te_max_eV = he_rate_temperature_range_eV()
@@ -550,19 +558,6 @@ def summarize_result(result):
     return _summarize_result(result)
 
 
-OPERATOR_SPLITTINGS = ("lie", "strang")
-
-
-def _validate_operator_splitting(splitting):
-    """Return ``splitting`` unchanged if it names an implemented composition."""
-    if splitting not in OPERATOR_SPLITTINGS:
-        raise ValueError(
-            "operator_splitting must be one of "
-            f"{sorted(OPERATOR_SPLITTINGS)} (got {splitting!r})"
-        )
-    return splitting
-
-
 def _phase_event_arrays(events):
     return {
         "time": np.asarray([event[0] for event in events], dtype=float),
@@ -661,28 +656,6 @@ def _max_relative_change(before, after, scale_floor):
     return float(np.max(np.abs(after - before) / scale)) if before.size else 0.0
 
 
-def _bad_array_summary(values, *, mode="nonfinite", max_indices=8):
-    values = np.asarray(values, dtype=float)
-    if mode == "negative":
-        mask = values < 0.0
-    else:
-        mask = ~np.isfinite(values)
-    bad = np.flatnonzero(mask)
-    if bad.size == 0:
-        return None
-    finite = values[np.isfinite(values)]
-    return {
-        "count": int(bad.size),
-        "indices": bad[:max_indices].astype(int).tolist(),
-        "values": values[bad[:max_indices]].astype(float).tolist(),
-        "nan_count": int(np.count_nonzero(np.isnan(values))),
-        "posinf_count": int(np.count_nonzero(np.isposinf(values))),
-        "neginf_count": int(np.count_nonzero(np.isneginf(values))),
-        "finite_min": float(np.min(finite)) if finite.size else np.nan,
-        "finite_max": float(np.max(finite)) if finite.size else np.nan,
-    }
-
-
 def _rejection_detail_text(detail):
     if not detail:
         return ""
@@ -714,6 +687,84 @@ class LAPDSim1D:
         progress_tracker=None,
         progress_interval_s=1.0e-4,
     ):
+        """Build a solver: resolve the config, then arm each subsystem.
+
+        Construction runs as an ORDERED sequence of phases, and the order is
+        load-bearing -- later refusals read flags earlier phases cached, and
+        the initial condition is built only after everything that shapes it
+        has been armed. The phases below are the same statements in the same
+        order they have always run in; each ``_init_*`` method is one
+        contiguous stretch of them, named.
+        """
+        self._init_config_and_early_flags(
+            input_dict,
+            input_flags,
+            progress_callback,
+            progress_tracker,
+            progress_interval_s,
+        )
+        validate_r1_configuration_presence(
+            self._input_dict,
+            self._flags,
+            geometry=self._geometry,
+            ion_neutral_moment_closure=self._ion_neutral_moment_closure,
+            hyperbolic_wave_speed=self._hyperbolic_wave_speed,
+            characteristic_boundary=self._characteristic_boundary,
+            raw_stage_validation=self._raw_stage_validation,
+        )
+        # The declarative half of the deprecation surface (core/deprecations.py):
+        # one DeprecationWarning per deprecated control this config actually
+        # uses. It reads the canonical defaults from the config templates, so
+        # default_config() construction is warning-free by construction and no
+        # value is changed -- a deprecated path stays runnable and bit-identical.
+        # The hand-written blocks in validate_r1_configuration_presence above
+        # keep their own conditions and are NOT duplicated in that table.
+        warn_deprecated_config(self._input_dict, self._flags, stacklevel=2)
+        self._init_neutral_closure_selection()
+        self._init_numerical_guards()
+        self._init_neutral_momentum_and_energy()
+        # Every RUN-CONSTANT subsystem bundle, resolved ONCE, here, now that
+        # each of its inputs is itself resolved (the wall rate immediately
+        # above is the last of them).  The `*_kwargs` accessors below read
+        # this record instead of re-interpreting the config per RHS call.
+        self._options = build_solver_options(
+            self._input_dict,
+            self._flags,
+            geometry=self._geometry,
+            gas_type=self._gas_type,
+            I_ion=self._I_ion,
+            electron_heat_flux_limit=self._electron_heat_flux_limit,
+            heat_flux_limiter_f=self._heat_flux_limiter_f,
+            heat_flux_limiter_exponent=self._heat_flux_limiter_exponent,
+            neutral_energy=self._neutral_energy,
+            neutral_energy_alpha=self._neutral_energy_alpha,
+            neutral_energy_wall_Tn_eV=self._neutral_energy_wall_Tn_eV,
+            neutral_energy_wall_rate=self._neutral_energy_wall_rate,
+            wind_column_factor=self._wind_column_factor,
+        )
+        self._init_hot_neutral_channel_and_jets()
+        self._init_atomic_package_refusals()
+        self._init_floors_and_initial_state()
+        self._init_run_and_circuit_state()
+        self._init_cathode_surface_state()
+        self._init_beam_transport_refusals()
+        self._init_area_closures()
+        self._init_run_machinery()
+
+    def _init_config_and_early_flags(
+        self,
+        input_dict,
+        input_flags,
+        progress_callback,
+        progress_tracker,
+        progress_interval_s,
+    ):
+        """Resolve both config namespaces, the gas, the grid, and the early flags.
+
+        The flags cached here are read by every phase below (and by the R1
+        presence check that follows immediately), which is why they are
+        resolved before any of them.
+        """
         self._input_dict, self._flags = resolve_config(input_dict, input_flags)
         self._progress_callback = progress_callback
         self._progress_tracker = progress_tracker
@@ -776,17 +827,16 @@ class LAPDSim1D:
                 f"and requires gas_type='He' (got {self._gas_type!r}); select "
                 "'constant' or 'cx_derived' for other gases"
             )
-        self._validate_r1_configuration_presence()
-        # The declarative half of the deprecation surface (core/deprecations.py):
-        # one DeprecationWarning per deprecated control this config actually
-        # uses. It reads the canonical defaults from the config templates, so
-        # default_config() construction is warning-free by construction and no
-        # value is changed -- a deprecated path stays runnable and bit-identical.
-        # The hand-written blocks in _validate_r1_configuration_presence above
-        # keep their own conditions and are NOT duplicated in that table.
-        warn_deprecated_config(self._input_dict, self._flags, stacklevel=2)
-        self._validate_neutral_seed_cache_config()
-        self._validate_equilibration_gas_puff_on()
+
+    def _init_neutral_closure_selection(self):
+        """Select and arm the neutral closure: zones, model, and recycle routing.
+
+        Everything here is a refusal or a run-constant topology resolved
+        once -- the two-zone conductances, the kinetic bookkeeping record,
+        the DVM accumulators -- in the order the refusals depend on.
+        """
+        validate_neutral_seed_cache_config(self._input_dict, self._flags)
+        validate_equilibration_gas_puff_on(self._input_dict)
         _x = float(self._input_dict.get("R_comp_partition", 1.0))
         if not (0.0 <= _x <= 1.0):
             raise ValueError(
@@ -806,8 +856,10 @@ class LAPDSim1D:
                 "neutral_exchange_model must be 'constant' or 'knudsen' "
                 f"(got {exchange_model!r})"
             )
-        self._validate_phase_config()
-        self._validate_gas_puff_config()
+        validate_phase_config(
+            self._phase_transition_mode(), self._prebreakdown_timeout_action()
+        )
+        validate_gas_puff_config(self._input_dict)
         self._neutral_momentum = bool(self._flags.get("neutral_momentum", False))
         if (
             self._neutral_momentum
@@ -966,6 +1018,16 @@ class LAPDSim1D:
                     "neutral_model='kinetic_dvm' and the neutral_two_zone "
                     f"flag (got {flights!r})"
                 )
+
+    def _init_numerical_guards(self):
+        """Validate the step-controller and non-ignition guards.
+
+        These are budgets rather than physics: the Picard coupling, the
+        heat-flux limiter, the floor-exempt drain, the max-step and dt_min
+        locks, the wall-clock and accepted-step ignition caps, and the
+        dt_growth recovery. Each is checked HERE so a misconfigured guard
+        cannot be discovered hours into the run it exists to catch.
+        """
         # R5.1 / audit A11: gated fluid<->circuit Picard coupling (default off).
         self._coupled_circuit_picard = bool(
             self._flags.get("coupled_circuit_picard", False)
@@ -1154,6 +1216,15 @@ class LAPDSim1D:
         self._beam_ionization_birth_timestep_bound = bool(
             self._flags.get("beam_ionization_birth_timestep_bound", False)
         )
+
+    def _init_neutral_momentum_and_energy(self):
+        """Arm the evolved neutral wind and its optional energy field.
+
+        The radial closure, the neutral_energy field and its two hot-birth
+        modifiers, the wall accommodation, the Knudsen temperature arm, and
+        the two-zone wind factors -- each gated on the flag that gives it
+        something to act on, so no selector here can be silently inert.
+        """
         self._neutral_momentum_radial = str(
             self._input_dict.get("neutral_momentum_radial", "uniform")
         )
@@ -1338,6 +1409,9 @@ class LAPDSim1D:
             )
         else:
             self._neutral_energy_wall_rate = None
+
+    def _init_hot_neutral_channel_and_jets(self):
+        """Build the ballistic flight kernels and resolve the recycle jets."""
         # The ballistic redistribution kernels are geometry alone (the flight
         # speed cancels out of the axial hop), so they are built once here and
         # never re-entered.
@@ -1349,7 +1423,30 @@ class LAPDSim1D:
         else:
             self._hot_neutral_kernels = None
         self._hot_channel_diagnostics = {}
-        self._validate_neutral_jet_config()
+        _jet = resolve_neutral_jet_config(
+            self._input_dict,
+            geometry=self._geometry,
+            neutral_momentum=self._neutral_momentum,
+            neutral_energy=self._neutral_energy,
+        )
+        self._cathode_jet_enabled = _jet.cathode_jet_enabled
+        self._anode_jet_enabled = _jet.anode_jet_enabled
+        self._mesh_accommodation = _jet.mesh_accommodation
+        self._cathode_jet_R_N = _jet.cathode_jet_R_N
+        self._cathode_jet_R_E = _jet.cathode_jet_R_E
+        self._anode_jet_R_N = _jet.anode_jet_R_N
+        self._anode_jet_R_E = _jet.anode_jet_R_E
+        self._cathode_jet_energy_convention = (
+            _jet.cathode_jet_energy_convention
+        )
+        self._cathode_surface_ion_retention = (
+            _jet.cathode_surface_ion_retention
+        )
+        self._mesh_faces = _jet.mesh_faces
+        self._mesh_blocked_area_cm2 = _jet.mesh_blocked_area_cm2
+
+    def _init_atomic_package_refusals(self):
+        """Refuse atomic-package combinations that would double-book photons."""
         self._recombination_energy_return = bool(
             self._input_dict.get("recombination_energy_return", False)
         )
@@ -1384,6 +1481,15 @@ class LAPDSim1D:
                 "them is RETIRED; without that booking the afterglow "
                 "validity window is Te > 0.2 eV (the ADF11 edge)"
             )
+
+    def _init_floors_and_initial_state(self):
+        """Set the floors, arm the initial-condition features, and build state.
+
+        Order is load-bearing: the tracer and the shaped neutral fill are
+        armed BEFORE the initial condition, because the construction floor
+        is the thing the tracer has to be exempt from and the fill is the
+        only thing the profile touches.
+        """
         self._floors = {
             "n": float(self._input_dict["ne_floor"]),
             "nn": float(self._input_dict["nn_floor"]),
@@ -1417,6 +1523,14 @@ class LAPDSim1D:
         self._init_sample_smoothing()
         self._y = pack_state(self._state)
         self._derived = derive_state(self._state, self._floors, self._ion_mass_g)
+
+    def _init_run_and_circuit_state(self):
+        """Initialize the run-loop, ignition-monitor and circuit state.
+
+        The cathode model validators run here, not at the first solve: an
+        unknown model string or an unsupported combination must fail at
+        construction.
+        """
         self._time = 0.0
         self._t_prebreakdown_trigger = None
         self._t_breakdown_trigger = None
@@ -1498,6 +1612,15 @@ class LAPDSim1D:
         # (time, integral) pair at the previous trajectory save anchors it.
         self._circuit_V_dis_time_integral = 0.0
         self._circuit_V_dis_prev_save = None
+
+    def _init_cathode_surface_state(self):
+        """Arm the vessel node and the evolving cathode surface state.
+
+        The warming model's surface temperature and the ads/des coverage
+        are the two pieces of cathode state that evolve over a shot; both
+        are ``None`` under their default 'none' selectors, which is the
+        presence gate every consumer reads.
+        """
         # Vessel / common-mode node (default absent). ``_vessel`` is the
         # resolved constant record or None; ``_vessel_V_cm`` is the node's
         # single state variable and stays None while the node is absent, so
@@ -1595,6 +1718,16 @@ class LAPDSim1D:
         self._cathode_energy_ledger_J = {
             "heater": 0.0, "ion": 0.0, "rad": 0.0, "emis": 0.0, "cond": 0.0,
         }
+
+    def _init_beam_transport_refusals(self):
+        """Refuse incomplete beam-deposition and anomalous-transport configs.
+
+        Every selector below is validated at CONSTRUCTION even though the
+        deposition module validates it again where it is consumed: a
+        misconfiguration must fail before the first cathode solve, and a
+        combination the walk machinery could not act on is an incomplete
+        configuration rather than a silent no-op.
+        """
         if float(self._input_dict.get("beam_deposition_smoothing_cm", 0.0)) < 0.0:
             raise ValueError(
                 "beam_deposition_smoothing_cm must be >= 0 (got "
@@ -1936,12 +2069,41 @@ class LAPDSim1D:
                 "entirely, and >1 would inject more gas than the valve "
                 "supplies"
             )
+
+    def _init_area_closures(self):
+        """Validate and arm the three area/coverage closures."""
         # Clumpy-plasma coverage closure v1 (default off, bit-exact off).
-        self._validate_coverage_config()
+        _cov = resolve_coverage_config(
+            self._input_dict,
+            self._flags,
+            geometry=self._geometry,
+            neutral_model=self._neutral_model,
+        )
+        self._coverage = _cov.coverage
+        self._coverage_r = _cov.r
+        self._coverage_tau_s = _cov.tau_s
+        self._coverage_f = _cov.f
+        self._coverage_deficit = _cov.deficit
+        self._coverage_burn_accum = _cov.burn_accum
+        self._coverage_burn_weight = _cov.burn_weight
+        self._coverage_w_accum = _cov.w_accum
+        self._coverage_reservoir_debit = _cov.reservoir_debit
+        self._coverage_reservoir_burn_accum = _cov.reservoir_burn_accum
         # Cathode emitting-area percolation (default off, bit-exact off).
-        self._validate_emitting_area_config()
+        self._cathode_f_em = resolve_emitting_area_config(
+            self._input_dict, self._flags
+        )
         # Ad-hoc probe neutral source (default off, bit-exact off).
-        self._validate_neutral_probe_config()
+        self._probe = resolve_neutral_probe_config(
+            self._input_dict,
+            self._flags,
+            geometry=self._geometry,
+            neutral_model=self._neutral_model,
+            neutral_two_zone=self._neutral_two_zone,
+        )
+
+    def _init_run_machinery(self):
+        """Initialize the run-loop bookkeeping and apply any restart payload."""
         self._cathode_solve = None
         # Item-35 ledger tripwire: latched so the warning fires once per run.
         self._beam_gap_ledger_warned = False
@@ -1963,258 +2125,6 @@ class LAPDSim1D:
         self._load_restart_if_configured()
         if self._flags.get("debug_checks", False):
             assert_finite_state(self._state, self._derived)
-
-    def _validate_coverage_config(self):
-        """Validate and arm the clumpy-plasma coverage closure (v2).
-
-        Every failure here is a construction-time ``ValueError``: an
-        incomplete or unrepresentable coverage configuration must never reach
-        the first cathode solve. With the flag off the four coverage keys
-        must all sit at their defaults, so a run that configures the closure
-        and forgets the flag is loud rather than silently mean-field.
-        """
-        enabled = bool(self._flags.get("coverage_closure", False))
-        r = self._input_dict.get("coverage_growth_rate_per_s", 0.0)
-        tau = self._input_dict.get("coverage_backfill_time_s", 0.0)
-        f0 = self._input_dict.get("coverage_initial_fraction", None)
-        profile = self._input_dict.get("coverage_initial_profile", None)
-        if not enabled:
-            defaults = coverage_closure_defaults()
-
-            def _is_default(value, default):
-                # coverage_initial_profile is sequence-valued, and ``!=`` on a
-                # sequence is elementwise, so the comparison is reduced to one
-                # bool here before it is used as a truth value.
-                if value is None or default is None:
-                    return value is None and default is None
-                return bool(np.array_equal(value, default))
-
-            # coverage_growth_rate_per_s is the SHARED percolation clock: the
-            # cathode emitting-area closure reads the same key rather than
-            # minting a second rate, so it is live -- and a non-default value
-            # legitimate -- whenever that flag is armed. The other three keys
-            # are the column closure's alone and stay inert.
-            inert = (
-                ("coverage_backfill_time_s", tau),
-                ("coverage_initial_fraction", f0),
-                ("coverage_initial_profile", profile),
-            )
-            if not bool(self._flags.get("cathode_emitting_area", False)):
-                inert = (("coverage_growth_rate_per_s", r),) + inert
-            configured = [
-                name
-                for name, value in inert
-                if not _is_default(value, defaults[name])
-            ]
-            if configured:
-                raise ValueError(
-                    "the coverage-closure parameters "
-                    f"{sorted(configured)} were configured without the "
-                    "coverage_closure flag, where they are inert; set the "
-                    "flag or drop the parameters"
-                )
-            self._coverage = None
-            self._coverage_r = 0.0
-            self._coverage_tau_s = 0.0
-            self._coverage_f = None
-            self._coverage_deficit = None
-            self._coverage_burn_accum = None
-            self._coverage_burn_weight = 0.0
-            self._coverage_w_accum = None
-            self._coverage_reservoir_debit = None
-            self._coverage_reservoir_burn_accum = None
-            return
-        cells = self._geometry.cells
-        if (f0 is None) == (profile is None):
-            raise ValueError(
-                "the coverage_closure flag requires EXACTLY ONE initial "
-                "condition: coverage_initial_fraction (one uniform covered "
-                "fraction in (0, 1]) or coverage_initial_profile (a per-cell "
-                f"f_cov0 of length nx={cells}). "
-                + (
-                    "Both were given; they are two spellings of the same "
-                    "initial condition and neither modifies the other, so "
-                    "there is no composition rule to apply -- drop one."
-                    if f0 is not None
-                    else "Neither was given; there is no neutral default -- "
-                    "1.0 is the fully-covered mean-field limit and would "
-                    "make the closure a silent no-op."
-                )
-            )
-        if profile is not None:
-            f_init = np.asarray(profile, dtype=float).reshape(-1)
-            if f_init.size != cells:
-                raise ValueError(
-                    "coverage_initial_profile must have one entry per grid "
-                    f"cell (nx={cells}); got {f_init.size}"
-                )
-            if not np.all(np.isfinite(f_init)) or np.any(
-                f_init <= 0.0
-            ) or np.any(f_init > 1.0):
-                raise ValueError(
-                    "every coverage_initial_profile entry must be finite and "
-                    f"in (0, 1] (got min {float(np.min(f_init)):.6g}, max "
-                    f"{float(np.max(f_init)):.6g})"
-                )
-        else:
-            f0 = float(f0)
-            if not (math.isfinite(f0) and 0.0 < f0 <= 1.0):
-                raise ValueError(
-                    "coverage_initial_fraction must be finite and in (0, 1] "
-                    f"(got {f0!r})"
-                )
-            f_init = np.full(cells, f0, dtype=float)
-        r = float(r)
-        if not (math.isfinite(r) and r >= 0.0):
-            raise ValueError(
-                "coverage_growth_rate_per_s (the column-mean logistic rate of "
-                "df_cov/dt = r0*w*f_cov*(1-f_cov)) must be finite and >= 0 "
-                f"(got {r!r})"
-            )
-        tau = float(tau)
-        if not (math.isfinite(tau) and tau > 0.0):
-            raise ValueError(
-                "coverage_backfill_time_s (the reservoir->column neutral "
-                f"refill time) must be finite and > 0 (got {tau!r})"
-            )
-        if str(
-            self._input_dict.get("beam_deposition_model", "beer_lambert")
-        ) != "csda":
-            raise ValueError(
-                "coverage_closure requires beam_deposition_model='csda': the "
-                "closure splits the beam by area across the covered and "
-                "reservoir media, and that split is built on the CSDA rays. "
-                "Under 'beer_lambert' there is no second ray to give the "
-                "reservoir, so the whole beam would be routed through the "
-                "channels while the closure's own premise says only f_cov of "
-                "it goes there -- a silently inconsistent model rather than a "
-                "no-op, which is why this refuses instead of degrading"
-            )
-        if float(self._input_dict.get("beam_clump_fraction", 0.0)) > 0.0:
-            raise ValueError(
-                "coverage_closure is incompatible with beam_clump_fraction > "
-                "0: both split the beam into rays over different neutral "
-                "media, and their product is a four-ray composition this "
-                "build does not define. Disable one"
-            )
-        if self._neutral_model != "moment":
-            raise ValueError(
-                "coverage_closure requires neutral_model='moment' (got "
-                f"{self._neutral_model!r}): the kinetic arms take over the "
-                "fluid nn rows once engaged, and the closure's covered-column "
-                "burn is read from exactly those rows, so under a kinetic "
-                "neutral model the column would never deplete and the "
-                "backfill would be a silent no-op"
-            )
-        # NB there is deliberately NO refusal of the compiled kernels here.
-        # v1 carried one, on the belief that the closure's beam split ran on
-        # transcribed arithmetic that had never been bit-compared under
-        # coverage. That is not what the opt-in reaches: the compiled march
-        # (``_CSDA_MARCH``) is bound only inside ``deposit_beam``, the
-        # SINGLE-MEDIUM ray, and ``deposit_beam_two_stream`` -- the closure's
-        # own two-medium wrapper, its per-cell re-split, its re-mix and all of
-        # its banking -- has no compiled branch at all. So under coverage the
-        # opt-in accelerates exactly the nested single-medium walker marches
-        # (the ray shape the tierA+csda transcription was bit-verified over)
-        # plus the tier-A cathode kernels, and both paths were measured
-        # raw-uint64 identical over coverage trajectories before the refusal
-        # was lifted. Bit-identity, not the refusal, is the standing guard:
-        # smoke's compiled-kernel equivalence block runs a beam-live coverage
-        # arm both ways and asserts the raw state bytes match.
-        self._coverage_r = r
-        self._coverage_tau_s = tau
-        # The coverage FIELD itself [1], per cell, in (0, 1]. v2 co-integrates
-        # it (see _advance_coverage_fraction): its growth law is driven by the
-        # beam ionization the coverage itself shapes, so there is no closed
-        # form to evaluate and the field is carried as accepted-step state.
-        self._coverage_f = f_init
-        # The covered column's neutral DEFICIT relative to the cell mean
-        # [cm^-3], per cell. The mean field nn is untouched by the closure and
-        # keeps every particle, so this auxiliary is a pure re-partition and
-        # total inventory is conserved identically whatever happens to it.
-        # It starts at zero: at the phase origin nothing has burnt yet.
-        self._coverage_deficit = np.zeros(self._geometry.cells, dtype=float)
-        self._coverage_burn_accum = None
-        self._coverage_burn_weight = 0.0
-        # The stage-accumulated growth driver for the CURRENT attempt; armed by
-        # _attempt_step and dropped with the attempt, exactly like the burn
-        # tally above, so a rejected step cannot advance the field.
-        self._coverage_w_accum = None
-        # The reservoir arm's neutral debit published by the beam terms of the
-        # CURRENT RHS evaluation; reset by rhs_terms on every call so it can
-        # never be read from a stale solve.
-        self._coverage_reservoir_debit = None
-        self._coverage_reservoir_burn_accum = None
-        self._coverage = True
-
-    def _validate_emitting_area_config(self):
-        """Validate and arm the cathode emitting-area closure (ea1).
-
-        Every failure here is a construction-time ``ValueError``: a throttle
-        that cannot be applied, or one that would be silently inert, must never
-        reach the first cathode solve. With the flag off the seed key must sit
-        at its shipped value, so a run that sets a seed and forgets the flag is
-        loud rather than silently fully lit.
-
-        On success ``self._cathode_f_em`` is the lit-area fraction -- the
-        closure's whole state -- or ``None`` when the flag is off, which is the
-        presence gate every consumer reads.
-        """
-        enabled = bool(self._flags.get("cathode_emitting_area", False))
-        default_f0 = emitting_area_defaults()[
-            "cathode_emitting_area_initial_fraction"
-        ]
-        f0 = self._input_dict.get(
-            "cathode_emitting_area_initial_fraction", default_f0
-        )
-        if not enabled:
-            if f0 != default_f0:
-                raise ValueError(
-                    "cathode_emitting_area_initial_fraction was configured "
-                    f"({f0!r}) without the cathode_emitting_area flag, where "
-                    "it is inert; set the flag or drop the parameter"
-                )
-            self._cathode_f_em = None
-            return
-        if f0 is None or not (
-            math.isfinite(float(f0)) and 0.0 < float(f0) <= 1.0
-        ):
-            raise ValueError(
-                "cathode_emitting_area_initial_fraction (the lit fraction of "
-                "the emitting face at the time origin) must be finite and in "
-                f"(0, 1] (got {f0!r})"
-            )
-        if not bool(self._flags.get("cathode_coupling", False)):
-            raise ValueError(
-                "cathode_emitting_area requires cathode_coupling: the closure "
-                "throttles the thermionic emission of the cathode solve, and "
-                "with the coupling off there is no such solve, so the flag "
-                "would be a silent no-op"
-            )
-        profile = str(
-            self._input_dict.get("cathode_emission_profile", "uniform")
-        )
-        if profile != "gaussian":
-            raise ValueError(
-                "cathode_emitting_area requires "
-                "cathode_emission_profile='gaussian' (got "
-                f"{profile!r}): under 'uniform' the disc area A_c sets the "
-                "Richardson emission AND collects the ion current, so a lit "
-                "fraction applied to it would throttle the ion sink along "
-                "with the emission -- the throttle is not expressible there"
-            )
-        # The growth rate is the SHARED percolation clock, read from the
-        # coverage closure's key. It is validated here too because this flag
-        # can be armed with that closure off, in which case nothing else
-        # checks it.
-        r = self._input_dict.get("coverage_growth_rate_per_s", 0.0)
-        if not (math.isfinite(float(r)) and float(r) >= 0.0):
-            raise ValueError(
-                "coverage_growth_rate_per_s (the shared percolation clock of "
-                "df_em/dt = r*f_em*(1-f_em)) must be finite and >= 0 "
-                f"(got {r!r})"
-            )
-        self._cathode_f_em = float(f0)
 
     def _advance_emitting_area_fraction(self, dt):
         """Advance the lit-area fraction ``f_em`` over one accepted step (ea1).
@@ -2242,188 +2152,6 @@ class LAPDSim1D:
         growth = math.exp(-r * dt)
         self._cathode_f_em = min(
             1.0 / (1.0 + (1.0 / f - 1.0) * growth), 1.0
-        )
-
-    def _validate_neutral_probe_config(self):
-        """Validate and arm the ad-hoc probe neutral source (v1).
-
-        Every failure here is a construction-time ``ValueError``: an incomplete
-        or unrepresentable probe configuration must never reach the first step.
-        With the flag off all ten probe keys must sit at their ``None``
-        defaults, so a run that configures a probe and forgets the flag is loud
-        rather than silently unprobed.
-
-        On success ``self._probe`` is the resolved instrument -- amplitude,
-        normalized axial weights, waveform selector and its own parameters, and
-        the two-zone target -- or ``None`` when the flag is off, which is the
-        presence gate every consumer reads.
-        """
-        enabled = bool(self._flags.get("neutral_probe_source", False))
-        defaults = neutral_probe_source_defaults()
-        values = {
-            name: self._input_dict.get(name, default)
-            for name, default in defaults.items()
-        }
-        if not enabled:
-            # Every default in this group is None -- the instrument ships no
-            # number, deliberately -- so "at its default" is exactly "is
-            # None", and the two sequence-valued keys need no elementwise
-            # comparison here.
-            configured = [
-                name for name, value in values.items() if value is not None
-            ]
-            if configured:
-                raise ValueError(
-                    "the probe-source parameters "
-                    f"{sorted(configured)} were configured without the "
-                    "neutral_probe_source flag, where they are inert; set the "
-                    "flag or drop the parameters"
-                )
-            self._probe = None
-            return
-        if self._neutral_model != "moment":
-            raise ValueError(
-                "neutral_probe_source requires neutral_model='moment' (got "
-                f"{self._neutral_model!r}): the kinetic arms take over the "
-                "fluid nn rows once engaged, so a source written into those "
-                "rows would be stripped or double-counted rather than felt -- "
-                "the probe would silently inject nothing. Supporting the "
-                "kinetic arms means injecting into their distribution "
-                "function, which is a different instrument, not a flag"
-            )
-        amplitude = values["neutral_probe_amplitude_cm3_s"]
-        if amplitude is None:
-            raise ValueError(
-                "the neutral_probe_source flag requires "
-                "neutral_probe_amplitude_cm3_s (the volume-mean source rate "
-                "[cm^-3 s^-1] at w = 1). There is no default: the amplitude is "
-                "the hypothesis the arm states, and 0 -- an explicit null "
-                "control -- is a value that has to be asked for"
-            )
-        amplitude = float(amplitude)
-        if not (math.isfinite(amplitude) and amplitude >= 0.0):
-            raise ValueError(
-                "neutral_probe_amplitude_cm3_s must be finite and >= 0 (got "
-                f"{values['neutral_probe_amplitude_cm3_s']!r})"
-            )
-        # The shape's own presence gating (exactly one of profile/family, and
-        # the family's parameters required with it and forbidden without it)
-        # lives with the shape builder, so the rule and its implementation
-        # cannot drift apart.
-        shape = values["neutral_probe_shape"]
-        for name, value in (
-            ("neutral_probe_center_cm", values["neutral_probe_center_cm"]),
-            ("neutral_probe_width_cm", values["neutral_probe_width_cm"]),
-        ):
-            if shape is None and value is not None:
-                raise ValueError(
-                    f"{name} is a parameter of the built-in profile family and "
-                    "has no meaning without neutral_probe_shape; drop it, or "
-                    "select a family (this run supplies its own "
-                    "neutral_probe_profile)"
-                )
-            if shape == "gaussian" and value is None:
-                raise ValueError(
-                    f"neutral_probe_shape='gaussian' requires {name}"
-                )
-        weights = neutral_probe_profile_weights(
-            self._geometry,
-            profile=values["neutral_probe_profile"],
-            shape=shape,
-            center_cm=values["neutral_probe_center_cm"],
-            width_cm=values["neutral_probe_width_cm"],
-        )
-        waveform = values["neutral_probe_waveform"]
-        if waveform is None:
-            raise ValueError(
-                "the neutral_probe_source flag requires "
-                "neutral_probe_waveform, one of "
-                f"{list(NEUTRAL_PROBE_WAVEFORMS)}. There is no default: the "
-                "waveform decides what the arm measured"
-            )
-        if waveform not in NEUTRAL_PROBE_WAVEFORMS:
-            raise ValueError(
-                "neutral_probe_waveform must be one of "
-                f"{list(NEUTRAL_PROBE_WAVEFORMS)} (got {waveform!r})"
-            )
-        t_on = values["neutral_probe_t_on_s"]
-        t_off = values["neutral_probe_t_off_s"]
-        table = values["neutral_probe_waveform_table"]
-        for name, value, owner in (
-            ("neutral_probe_t_on_s", t_on, "square"),
-            ("neutral_probe_t_off_s", t_off, "square"),
-            ("neutral_probe_waveform_table", table, "table"),
-        ):
-            if value is not None and waveform != owner:
-                raise ValueError(
-                    f"{name} belongs to neutral_probe_waveform={owner!r} and "
-                    f"is inert under {waveform!r}; drop it or change the "
-                    "waveform"
-                )
-            if value is None and waveform == owner:
-                raise ValueError(
-                    f"neutral_probe_waveform={owner!r} requires {name}"
-                )
-        if waveform == "square":
-            t_on = float(t_on)
-            t_off = float(t_off)
-            if not (math.isfinite(t_on) and math.isfinite(t_off)):
-                raise ValueError(
-                    "neutral_probe_t_on_s and neutral_probe_t_off_s must be "
-                    f"finite (got {t_on!r}, {t_off!r})"
-                )
-            if not t_on < t_off:
-                raise ValueError(
-                    "neutral_probe_t_on_s must be strictly less than "
-                    f"neutral_probe_t_off_s (got {t_on!r} >= {t_off!r}); the "
-                    "square window is the half-open [t_on, t_off), so an empty "
-                    "or inverted window injects nothing and is a "
-                    "misconfiguration rather than a null control"
-                )
-        table_cumulative = None
-        if waveform == "table":
-            table, table_cumulative = neutral_probe_waveform_table(table)
-        zone = values["neutral_probe_zone"]
-        if self._neutral_two_zone:
-            if zone not in ("column", "annulus"):
-                raise ValueError(
-                    "under the neutral_two_zone closure the probe source "
-                    "requires neutral_probe_zone = 'column' (the plasma "
-                    "column, nn) or 'annulus' (the surrounding chamber, "
-                    f"nn_a); got {zone!r}. There is no default: the two put "
-                    "the gas in different places and the plasma responds to "
-                    "them differently, which is precisely what a probe arm is "
-                    "measuring"
-                )
-        elif zone is not None:
-            raise ValueError(
-                "neutral_probe_zone selects between the two-zone closure's "
-                "column and annulus neutral fields and has no meaning without "
-                f"the neutral_two_zone flag (got {zone!r}); this run has one "
-                "neutral field"
-            )
-        # COVERAGE COMPOSES, deliberately and without a refusal. The closure
-        # partitions the MEAN nn into a covered column and a reservoir through
-        # a deficit that only the COVERAGE_BURN_TERMS move -- terms whose rate
-        # is set by a plasma or beam density. The probe is not one of those: it
-        # is uniform across the cross-section by construction, exactly like the
-        # gas puff and the pump, which that ledger already names as
-        # deliberately absent. So a probe raises the covered column and the
-        # reservoir by the same amount, leaves the deficit untouched, and the
-        # partition identity f*col + (1-f)*res = nn keeps closing. The answer
-        # to "does probe-injected inventory belong to the reservoir or the
-        # column?" is therefore neither-and-both, in area proportion, and it is
-        # forced rather than chosen -- which is why this is an allowance with a
-        # statement and not a guess.
-        self._probe = SimpleNamespace(
-            amplitude_cm3_s=amplitude,
-            weights=weights,
-            waveform=waveform,
-            t_on_s=None if waveform != "square" else t_on,
-            t_off_s=None if waveform != "square" else t_off,
-            table=None if waveform != "table" else table,
-            table_cumulative=table_cumulative,
-            zone=zone,
         )
 
     #: RHS terms whose neutral row is a COVERED-ONLY debit or return: their
@@ -3721,254 +3449,6 @@ class LAPDSim1D:
             "(NUMERICS.md tabulates where that stops being small)"
         )
 
-    def _validate_r1_configuration_presence(self):
-        """Reject R1-audited controls that would otherwise be silent no-ops."""
-        frozen_controls = {
-            "front_flux_model": (
-                str(self._input_dict.get("front_flux_model")),
-                "sonic_relaxation",
-            ),
-            "D_amb_model": (
-                str(self._input_dict.get("D_amb_model")),
-                "cs_dz",
-            ),
-            "D_amb": (
-                float(self._input_dict.get("D_amb")),
-                0.0,
-            ),
-            "cathode_model": (
-                str(self._input_dict.get("cathode_model")),
-                "disabled",
-            ),
-        }
-        changed = [
-            name
-            for name, (actual, canonical) in frozen_controls.items()
-            if actual != canonical
-        ]
-        if changed:
-            raise ValueError(
-                "R1-audited compatibility/boundary controls are frozen at "
-                "their checkpoint values until their owning repair supplies "
-                "a replacement operator; noncanonical values would be silent "
-                "no-ops: "
-                + ", ".join(changed)
-            )
-        # A13 (R3.3, 2026-07-24): the resolved-boundary surface-loss controls are
-        # DEPRECATED 0D artifacts. In the lumped model they stood in for I_sat
-        # that could not be separated between the cathode and anode; the resolved
-        # geometry measures the Bohm I_sat to each electrode face directly (the
-        # characteristic ghost-cell boundary / anode collection), so the area
-        # scales and enables have NO operator to control and are never consumed.
-        # Their owning repair (R3.3) retires them rather than wiring a 0D fudge
-        # into the resolved boundary. Loud on non-default use (no silent no-op).
-        deprecated_surface_controls = {
-            "source_surface_loss": (
-                bool(self._flags.get("source_surface_loss", True)), True,
-            ),
-            "end_surface_loss": (
-                bool(self._flags.get("end_surface_loss", True)), True,
-            ),
-            "source_surface_area_scale": (
-                float(self._input_dict.get("source_surface_area_scale", 1.8)),
-                1.8,
-            ),
-            "end_surface_area_scale": (
-                float(self._input_dict.get("end_surface_area_scale", 1.0)),
-                1.0,
-            ),
-        }
-        deprecated = [
-            name
-            for name, (actual, default) in deprecated_surface_controls.items()
-            if actual != default
-        ]
-        if deprecated:
-            warnings.warn(
-                "resolved-boundary surface-loss controls "
-                + ", ".join(deprecated)
-                + " are DEPRECATED 0D artifacts (they stood in for un-separated "
-                "cathode/anode I_sat); the resolved geometry measures the Bohm "
-                "I_sat to each electrode face directly, so they have no effect. "
-                "Remove them; reproduce 0D-scaled runs at tag "
-                "legacy-final-2026-07-22.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-        # R5 stance flip (2026-07-25) deprecations. These paths remain runnable
-        # (A/B arms + tag reproducibility) but are superseded by the repaired
-        # production baseline; a non-default/active use warns.
-        if not self._ion_neutral_moment_closure:
-            warnings.warn(
-                "the legacy ion-neutral drag/CX/thermalization path "
-                "(ion_neutral_moment_closure=False, with sigma_in_model "
-                "'constant'/'cx_derived', b_ion_neutral_drag, "
-                "ion_neutral_drag_model, b_ion_neutral_thermalization, and the "
-                "Tn_fit collision temperature) is DEPRECATED: the Phelps "
-                "moment-closed operator (ion_neutral_moment_closure) is the "
-                "production drag baseline. Still runnable as an A/B arm and for "
-                "reproducing old results at tag legacy-final-2026-07-22.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-        _gp_mode = str(self._input_dict.get("gas_puff_mode", "square"))
-        if _gp_mode in ("pulse_decay_to_level", "decay_after_breakdown", "double_erf"):
-            warnings.warn(
-                f"gas_puff_mode={_gp_mode!r} is DEPRECATED (the measured "
-                "waveform is 'square'); retained runnable only for the frozen "
-                "waveform-comparison figures.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-        _deprecated_selectors = {
-            "D_amb_model": (str(self._input_dict.get("D_amb_model", "cs_dz")), "cs_dz"),
-            "cathode_model": (
-                str(self._input_dict.get("cathode_model", "disabled")), "disabled",
-            ),
-        }
-        _sel = [n for n, (a, d) in _deprecated_selectors.items() if a != d]
-        if _sel:
-            warnings.warn(
-                "legacy-compat selectors " + ", ".join(_sel) + " are DEPRECATED "
-                "and never consumed by the conservative solver (D_amb_model was "
-                "a _sim3-compat knob; cathode_model is superseded by the "
-                "cathode_coupling flag).",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-        for name in ("Te_birth_ionization", "Ti_birth_ionization"):
-            value = self._input_dict.get(name)
-            if isinstance(value, str):
-                if value not in {"local", "floor"}:
-                    raise ValueError(
-                        f"{name} must be 'local', 'floor', or a finite "
-                        f"non-negative numeric eV value (got {value!r})"
-                    )
-                continue
-            try:
-                numeric = float(value)
-            except (TypeError, ValueError):
-                numeric = np.nan
-            if not np.isfinite(numeric) or numeric < 0.0:
-                raise ValueError(
-                    f"{name} must be 'local', 'floor', or a finite "
-                    f"non-negative numeric eV value (got {value!r})"
-                )
-        birth_energy_model = str(
-            self._input_dict.get("ionization_birth_energy_model", "legacy")
-        )
-        if birth_energy_model not in {"legacy", "conservative"}:
-            raise ValueError(
-                "ionization_birth_energy_model must be 'legacy' or "
-                f"'conservative' (got {birth_energy_model!r})"
-            )
-        if self._hyperbolic_wave_speed not in {"isothermal", "adiabatic"}:
-            raise ValueError(
-                "hyperbolic_wave_speed must be 'isothermal' or 'adiabatic' "
-                f"(got {self._hyperbolic_wave_speed!r})"
-            )
-        if self._characteristic_boundary:
-            # R3.1 characteristic ghost-cell Bohm outflow (audit A1/A16). It acts
-            # only on plasma-terminating (absorbing) faces, which exist only in
-            # the resolved geometry; without them the flag would be a silent
-            # no-op (R1d discipline).
-            absorbing = np.asarray(
-                getattr(self._geometry, "plasma_absorbing", np.zeros(0)),
-                dtype=bool,
-            )
-            if not np.any(absorbing):
-                raise ValueError(
-                    "characteristic_boundary requires plasma-terminating "
-                    "(absorbing) faces, which exist only in the resolved "
-                    "geometry (resolved_boundaries=True); it would otherwise be "
-                    "a silent no-op"
-                )
-        # R4.1 anode-mesh beam interception (audit A15) is the production default
-        # (correct csda physics). Like beam_coulomb_model / beam_anomalous_model it
-        # is a csda control: it perturbs the operator under beam_deposition_model=
-        # "csda" with resolved anode faces, and is inert under beer_lambert (which
-        # never launches the CSDA module) or where no anode faces exist. The
-        # _csda_beam_deposition wiring applies it only when eta>0 and anode faces
-        # are present, so no construction rejection is needed.
-        if self._raw_stage_validation and self._flags.get("Plasma", True):
-            for initial_name, floor_name in (
-                ("Te0", "Te_floor"),
-                ("Ti0", "Ti_floor"),
-            ):
-                initial = float(self._input_dict[initial_name])
-                floor = float(self._input_dict[floor_name])
-                if not initial > floor:
-                    raise ValueError(
-                        f"{initial_name} must be strictly greater than "
-                        f"{floor_name} when raw_stage_validation=True "
-                        f"(got {initial} <= {floor})"
-                    )
-
-    def _validate_equilibration_gas_puff_on(self):
-        """Reject a nonsense equilibration puff width (loud, at construction).
-
-        ``equilibration_gas_puff_on_s`` overrides the neutral-equilibration
-        inner sim's per-cycle puff-ON window. ``None`` means "unset" (fall back
-        to ``tau_discharge``); anything else must be a real, finite, positive
-        duration that fits inside one puff/off cycle. A zero, negative, or
-        longer-than-the-cycle value would silently produce a 0% or >100% duty
-        instead of the measured window.
-        """
-        raw = self._input_dict.get("equilibration_gas_puff_on_s", None)
-        if raw is None:
-            return
-        try:
-            puff_on = float(raw)
-        except (TypeError, ValueError):
-            raise ValueError(
-                "equilibration_gas_puff_on_s (the equilibration puff-ON window "
-                f"[s]) must be a number or None (got {raw!r})"
-            ) from None
-        if not np.isfinite(puff_on) or puff_on <= 0.0:
-            raise ValueError(
-                "equilibration_gas_puff_on_s (the equilibration puff-ON window "
-                f"[s]) must be finite and > 0 (got {puff_on!r}); use None to "
-                "fall back to tau_discharge"
-            )
-        tau_cycle = float(self._input_dict.get("tau_cycle", 0.0))
-        if tau_cycle > 0.0 and puff_on > tau_cycle:
-            raise ValueError(
-                "equilibration_gas_puff_on_s (the equilibration puff-ON window "
-                f"[s]) must fit inside one puff/off cycle: got {puff_on!r} > "
-                f"tau_cycle={tau_cycle!r}"
-            )
-
-    def _validate_neutral_seed_cache_config(self):
-        """Reject an incoherent cached-neutral-seed configuration (loud, at build).
-
-        ``use_cached_neutral_seed`` replaces the live neutral equilibration with a
-        cached seed, so it requires the equilibration pipeline to be selected
-        (``neutral_equilibration`` + ``launch_plasma_after_equilibration``) and a
-        cache path. A missing path or a contradictory flag would otherwise be a
-        silent no-op.
-        """
-        if not self._flags.get("use_cached_neutral_seed", False):
-            return
-        problems = []
-        if not self._flags.get("neutral_equilibration", False):
-            problems.append(
-                "neutral_equilibration must be ON (the cache seeds that pipeline)"
-            )
-        if not self._flags.get("launch_plasma_after_equilibration", False):
-            problems.append(
-                "launch_plasma_after_equilibration must be ON (nothing to seed "
-                "otherwise)"
-            )
-        if not self._input_dict.get("neutral_seed_cache_dir"):
-            problems.append(
-                "neutral_seed_cache_dir must be set to the seed-database directory"
-            )
-        if problems:
-            raise ValueError(
-                "use_cached_neutral_seed is ON but the configuration is "
-                "incoherent: " + "; ".join(problems)
-            )
-
     @property
     def geometry(self):
         return self._geometry
@@ -4811,77 +4291,7 @@ class LAPDSim1D:
 
     def _validate_raw_stage(self, y, stage):
         """Reject non-finite/negative raw candidates before floor clipping."""
-        packed_summary = _bad_array_summary(y)
-        if packed_summary is not None:
-            raise _RawStageError(
-                y,
-                stage,
-                "nonfinite_state",
-                {"stage": stage, "fields": {"packed_y": packed_summary}},
-            )
-        state = self._unpack(y)
-        fields = {
-            "n": state.n,
-            "nn": state.nn,
-            "M": state.M,
-            "Ee": state.Ee,
-            "Ei": state.Ei,
-        }
-        if state.M_n is not None:
-            fields["M_n"] = state.M_n
-        if state.nn_a is not None:
-            fields["nn_a"] = state.nn_a
-        if state.M_n_a is not None:
-            fields["M_n_a"] = state.M_n_a
-        if state.En is not None:
-            fields["En"] = state.En
-        nonfinite = {
-            name: summary
-            for name, values in fields.items()
-            if (summary := _bad_array_summary(values)) is not None
-        }
-        if nonfinite:
-            raise _RawStageError(
-                y,
-                stage,
-                "nonfinite_state",
-                {"stage": stage, "fields": nonfinite},
-            )
-        negative_density = {
-            name: summary
-            for name, values in (
-                ("n", state.n),
-                ("nn", state.nn),
-                ("nn_a", state.nn_a),
-            )
-            if values is not None
-            and (
-                summary := _bad_array_summary(values, mode="negative")
-            )
-            is not None
-        }
-        if negative_density:
-            raise _RawStageError(
-                y,
-                stage,
-                "negative_density",
-                {"stage": stage, "fields": negative_density},
-            )
-        negative_energy = {
-            name: summary
-            for name, values in (("Ee", state.Ee), ("Ei", state.Ei))
-            if (
-                summary := _bad_array_summary(values, mode="negative")
-            )
-            is not None
-        }
-        if negative_energy:
-            raise _RawStageError(
-                y,
-                stage,
-                "negative_energy",
-                {"stage": stage, "fields": negative_energy},
-            )
+        return validate_raw_stage(y, stage, self._unpack)
 
     def _step_cache_snapshot(self):
         return SimpleNamespace(
@@ -6285,7 +5695,7 @@ class LAPDSim1D:
         if splitting is None:
             splitting = self._operator_splitting()
         else:
-            splitting = _validate_operator_splitting(splitting)
+            splitting = validate_operator_splitting(splitting)
         if floor_func is None:
             floor_func = self.floor_state_vector
         if raw_stage_func is None and self._raw_stage_validation:
@@ -6320,7 +5730,7 @@ class LAPDSim1D:
         return heat(explicit(y0, dt), dt)
 
     def _operator_splitting(self):
-        return _validate_operator_splitting(
+        return validate_operator_splitting(
             self._input_dict.get("operator_splitting", "lie")
         )
 
@@ -6790,7 +6200,7 @@ class LAPDSim1D:
         flags["launch_plasma_after_equilibration"] = False
         # The inner sim IS the equilibration -- it must never consult the seed
         # database itself. Leaving this ON contradicts the two flags just
-        # cleared, so _validate_neutral_seed_cache_config would reject the inner
+        # cleared, so validate_neutral_seed_cache_config would reject the inner
         # config and a database MISS would raise instead of equilibrating and
         # populating the database (the caller stores the result). The cache-
         # control flags are inert to the seed signature, so clearing this here
@@ -8049,24 +7459,8 @@ class LAPDSim1D:
         )
 
     def _collision_operator_kwargs(self):
-        """Return the rate bundle every ion-neutral collision channel shares.
-
-        The moment-closed operator, the CX decoupling correction, and the hot
-        channel must all read ONE gas, ONE reference neutral temperature, and
-        ONE drag scale, or their split stops being a split.
-        """
-        drag_enabled = bool(self._flags.get("ion_neutral_drag", True))
-        return {
-            "gas_type": self._gas_type,
-            "Tn_eV": float(self._input_dict.get("Tn_K", 300.0))
-            * kb_cgs
-            / ev_to_erg,
-            "b_ion_neutral_drag": (
-                float(self._input_dict.get("b_ion_neutral_drag", 1.0))
-                if drag_enabled
-                else 0.0
-            ),
-        }
+        """Return the rate bundle every ion-neutral collision channel shares."""
+        return dict(self._options.collision_operator)
 
     def energy_exchange_rhs(self, y=None, state=None):
         """Return conservative electron-ion thermal exchange sources."""
@@ -8752,55 +8146,6 @@ class LAPDSim1D:
             ),
         }
 
-    def _validate_gas_puff_config(self):
-        mode = self._input_dict.get("gas_puff_mode", "decay_after_breakdown")
-        if mode not in {
-            "decay_after_breakdown",
-            "pulse_decay_to_level",
-            "double_erf",
-            "square",
-        }:
-            raise ValueError(
-                "gas_puff_mode must be 'decay_after_breakdown', "
-                "'pulse_decay_to_level', 'double_erf', or 'square' "
-                f"(got {mode!r})"
-            )
-        if mode == "square":
-            for key in ("gas_puff_rise_width_s",):
-                width = float(self._input_dict.get(key, 5.0e-4))
-                if width <= 0.0:
-                    raise ValueError(f"{key} must be positive (got {width})")
-            for key in ("gas_puff_rise_center_s", "gas_puff_close_lag_s"):
-                value = float(self._input_dict.get(key, 5.0e-4))
-                if value < 0.0:
-                    raise ValueError(f"{key} must be >= 0 (got {value})")
-        if mode == "double_erf":
-            for key in ("tau_gp_rise_width", "tau_gp_drop_width"):
-                width = float(self._input_dict.get(key, 1e-3))
-                if width <= 0.0:
-                    raise ValueError(f"{key} must be positive (got {width})")
-        tau_after_breakdown = self._input_dict.get("tau_gp_after_breakdown", None)
-        if tau_after_breakdown is not None and float(tau_after_breakdown) < 0.0:
-            raise ValueError(
-                "tau_gp_after_breakdown must be >= 0 s, or None to keep S_gp "
-                f"steady (got {tau_after_breakdown})"
-            )
-        tau_decay_factor = float(self._input_dict.get("tau_gp_decay_factor", 1.0))
-        if tau_decay_factor <= 0.0:
-            raise ValueError(
-                f"tau_gp_decay_factor must be > 0 (got {tau_decay_factor})"
-            )
-        tau_pulse_duration = float(self._input_dict.get("tau_gp_pulse_duration", 0.0))
-        if tau_pulse_duration < 0.0:
-            raise ValueError(
-                f"tau_gp_pulse_duration must be >= 0 (got {tau_pulse_duration})"
-            )
-        tau_decay_duration = float(self._input_dict.get("tau_gp_decay_duration", 1e-3))
-        if tau_decay_duration <= 0.0:
-            raise ValueError(
-                f"tau_gp_decay_duration must be > 0 (got {tau_decay_duration})"
-            )
-
     def _init_sample_smoothing(self):
         """Parse and seed the electrode sample-smoothing EMA (config.py).
 
@@ -8914,159 +8259,6 @@ class LAPDSim1D:
             M_n_a=state.M_n_a,
             En=state.En,
         )
-
-    def _validate_neutral_jet_config(self):
-        """Validate and cache the directed-recycle-jet configuration.
-
-        The jets and the mesh accommodation are M_n physics: they require the
-        neutral_momentum flag, and each channel requires the geometry feature
-        it rides on (an absorbing cathode face; anode faces with eta > 0), so
-        a misconfigured jet fails loudly instead of silently never firing.
-        """
-        p = self._input_dict
-        self._cathode_jet_enabled = bool(p.get("cathode_neutral_jet", False))
-        self._anode_jet_enabled = bool(p.get("anode_neutral_jet", False))
-        self._mesh_accommodation = bool(
-            p.get("neutral_mesh_accommodation", False)
-        )
-        surface_debit = bool(p.get("cathode_jet_surface_debit", False))
-        for prefix, enabled in (
-            ("cathode_jet", self._cathode_jet_enabled),
-            ("anode_jet", self._anode_jet_enabled),
-        ):
-            R_N = float(p.get(f"{prefix}_R_N", 0.0))
-            R_E = float(p.get(f"{prefix}_R_E", 0.0))
-            if enabled and not (0.0 <= R_N <= 1.0 and 0.0 <= R_E <= 1.0):
-                raise ValueError(
-                    f"{prefix}_R_N and {prefix}_R_E are particle/energy "
-                    "reflection coefficients and must lie in [0, 1] "
-                    f"(got R_N={R_N}, R_E={R_E})"
-                )
-            setattr(self, f"_{prefix}_R_N", R_N)
-            setattr(self, f"_{prefix}_R_E", R_E)
-        needs_mn = (
-            self._cathode_jet_enabled
-            or self._anode_jet_enabled
-            or self._mesh_accommodation
-        )
-        if needs_mn and not self._neutral_momentum:
-            raise ValueError(
-                "cathode_neutral_jet / anode_neutral_jet / "
-                "neutral_mesh_accommodation are M_n momentum physics and "
-                "require the neutral_momentum flag"
-            )
-        roles = np.asarray(self._geometry.cell_role)
-        absorbing = np.asarray(
-            getattr(self._geometry, "plasma_absorbing", np.zeros(0)),
-            dtype=bool,
-        )
-        if self._cathode_jet_enabled and not (
-            np.any(absorbing) and np.any(roles == "cathode")
-        ):
-            raise ValueError(
-                "cathode_neutral_jet requires an absorbing cathode face "
-                "(resolved_boundaries geometry): the jet rides the "
-                "boundary-absorption recycle flux"
-            )
-        anode_faces = np.asarray(
-            getattr(self._geometry, "anode_face_indices", ()), dtype=int
-        )
-        eta = float(p.get("eta", 0.0))
-        if (self._anode_jet_enabled or self._mesh_accommodation) and (
-            anode_faces.size == 0 or eta <= 0.0
-        ):
-            raise ValueError(
-                "anode_neutral_jet / neutral_mesh_accommodation require "
-                "anode faces with eta > 0 (resolved geometry with a mesh)"
-            )
-        if surface_debit and not self._cathode_jet_enabled:
-            raise ValueError(
-                "cathode_jet_surface_debit reads the cathode jet's R_E and "
-                "requires cathode_neutral_jet"
-            )
-        # Which convention R_E is read in when the jet's launch energy is
-        # built. "legacy" is the historical reading and is bit-exact.
-        convention = p.get("cathode_jet_energy_convention", "legacy")
-        if convention not in CATHODE_JET_ENERGY_CONVENTIONS:
-            raise ValueError(
-                "cathode_jet_energy_convention must be one of "
-                f"{CATHODE_JET_ENERGY_CONVENTIONS} (got {convention!r})"
-            )
-        self._cathode_jet_energy_convention = convention
-        if convention == "total_reflected":
-            if not self._cathode_jet_enabled:
-                raise ValueError(
-                    "cathode_jet_energy_convention='total_reflected' rescales "
-                    "the cathode jet's launch energy and requires "
-                    "cathode_neutral_jet"
-                )
-            R_N = self._cathode_jet_R_N
-            R_E = self._cathode_jet_R_E
-            if not (0.0 < R_E <= R_N < 1.0):
-                raise ValueError(
-                    "cathode_jet_energy_convention='total_reflected' reads "
-                    "cathode_jet_R_E as the TOTAL reflected energy fraction "
-                    "and gives each of the cathode_jet_R_N backscattered "
-                    "particles R_E/R_N of the incident energy, so it requires "
-                    "0 < cathode_jet_R_E <= cathode_jet_R_N < 1 (a reflected "
-                    "particle cannot carry more energy than it arrived with, "
-                    "and neither coefficient may be degenerate) -- got "
-                    f"cathode_jet_R_E={R_E}, cathode_jet_R_N={R_N}"
-                )
-        if self._neutral_energy and self._cathode_jet_enabled and not surface_debit:
-            raise ValueError(
-                "cathode_neutral_jet with neutral_energy requires "
-                "cathode_jet_surface_debit=True: the R_E share of the ion "
-                "bombardment power is the energy the backscattered atoms "
-                "carry away, and with an En field that energy is now BOOKED "
-                "into the neutral gas. Without the debit the surface keeps it "
-                "too, so the same R_E is spent twice. This is not flipped for "
-                "you -- the debit changes the cathode's power balance, which "
-                "is a stance decision, not a plumbing one. Accepted: "
-                "cathode_jet_surface_debit=True, or neutral_energy without "
-                "cathode_neutral_jet"
-            )
-        # Reflected-energy retention for the surface power balance:
-        # (1 - R_E) of the ion bombardment power stays in the surface when
-        # the debit sensitivity arm is on; 1.0 (the M5a' calibration
-        # convention) otherwise.
-        self._cathode_surface_ion_retention = (
-            1.0 - self._cathode_jet_R_E if surface_debit else 1.0
-        )
-        # Blocked mesh area for the wind's momentum accommodation: the open
-        # fraction T = 1 - eta*(Ra/Rm)^2 already lives in the face area, so
-        # A_blocked = A_open * (1 - T) / T.
-        if self._mesh_accommodation:
-            transparency = _anode_neutral_transparency(p)
-            if transparency <= 0.0:
-                raise ValueError(
-                    "neutral_mesh_accommodation requires a mesh with open "
-                    f"neutral area (transparency {transparency})"
-                )
-            open_area = np.asarray(
-                self._geometry.neutral_face_area_cm2, dtype=float
-            )[anode_faces]
-            self._mesh_faces = anode_faces
-            self._mesh_blocked_area_cm2 = (
-                open_area * (1.0 - transparency) / transparency
-            )
-        else:
-            self._mesh_faces = None
-            self._mesh_blocked_area_cm2 = None
-
-    def _validate_phase_config(self):
-        mode = self._phase_transition_mode()
-        if mode not in {"scheduled", "current"}:
-            raise ValueError(
-                "phase_transition_mode must be 'scheduled' or 'current' "
-                f"(got {mode!r})"
-            )
-        action = self._prebreakdown_timeout_action()
-        if action not in {"switch_open", "raise"}:
-            raise ValueError(
-                "prebreakdown_timeout_action must be 'switch_open' or "
-                f"'raise' (got {action!r})"
-            )
 
     def _phase_transition_mode(self):
         return self._input_dict.get("phase_transition_mode", "scheduled")
@@ -9574,155 +8766,34 @@ class LAPDSim1D:
         self._record_current_trigger_sample(I_now)
 
     def _energy_exchange_kwargs(self):
-        return {
-            "b_Qie": float(self._input_dict.get("b_Qie", 1.0)),
-            "ln_lambda_min": float(self._input_dict.get("ln_lambda_min", 1.0)),
-        }
+        return dict(self._options.energy_exchange)
 
     def _surface_loss_kwargs(self):
-        # The resolved boundary terms read only ``alpha_isat`` and
-        # ``b_surface_loss``. The former per-face source/end enables and area
-        # scales were A13 no-ops (never consumed) and are DEPRECATED 0D artifacts
-        # (R3.3): the resolved geometry measures the Bohm I_sat to each electrode
-        # face directly. ``_validate_r1_configuration_presence`` warns on their
-        # non-default use.
-        return {
-            "alpha_isat": float(self._input_dict.get("alpha_isat", np.exp(-0.5))),
-            "end_mode": self._input_dict.get("end_mode", "collector"),
-            "b_surface_loss": float(self._input_dict.get("b_surface_loss", 1.0)),
-        }
+        return dict(self._options.surface_loss)
 
     def _ion_neutral_drag_kwargs(self):
-        drag_enabled = bool(self._flags.get("ion_neutral_drag", True))
-        return {
-            "gas_type": self._gas_type,
-            "sigma_in_cm2": float(self._input_dict.get("sigma_in_cm2", 5.0e-15)),
-            "sigma_in_model": str(
-                self._input_dict.get("sigma_in_model", "constant")
-            ),
-            "b_ion_neutral_drag": (
-                float(self._input_dict.get("b_ion_neutral_drag", 1.0))
-                if drag_enabled
-                else 0.0
-            ),
-            "cx_only": bool(self._flags.get("ion_neutral_drag_cx_only", False)),
-        }
+        return dict(self._options.ion_neutral_drag)
 
     def _slip_closure_kwargs(self):
         """Extra kwargs for the drag/frictional-heating slip closure."""
-        return {
-            "drag_model": str(
-                self._input_dict.get("ion_neutral_drag_model", "constant")
-            ),
-            "b_slip_entrainment": float(
-                self._input_dict.get("b_slip_entrainment", 1.0)
-            ),
-            "Rm_cm": self._geometry.Rm_cm,
-            "Tn_fit": float(self._input_dict.get("Tn_fit", 0.1)),
-        }
+        return dict(self._options.slip_closure)
 
     def _electron_cooling_kwargs(self):
-        return {
-            "gas_type": self._gas_type,
-            "I_ion": self._I_ion,
-            "b_ioniz": float(self._input_dict.get("b_ioniz", 1.0)),
-            "b_rec_rad": float(self._input_dict.get("b_rec_rad", 1.0)),
-            "b_rec_3b": float(self._input_dict.get("b_rec_3b", 1.0)),
-            # b_ionization_energy_cost removed as a config knob (R5 stance flip):
-            # must be 1 for conservative energy booking, and the on/off is the
-            # ionization_energy_cost flag. Hardwired 1.0.
-            "b_ionization_energy_cost": 1.0,
-            "b_Qei": float(self._input_dict.get("b_Qei", 1.0)),
-            "b_Qen": float(self._input_dict.get("b_Qen", 1.0)),
-            "b_Qei_Te_exp": float(self._input_dict.get("b_Qei_Te_exp", 0.0)),
-            "b_Qen_Te_exp": float(self._input_dict.get("b_Qen_Te_exp", 0.0)),
-            "b_Q_Te_ref_eV": float(self._input_dict.get("b_Q_Te_ref_eV", 5.0)),
-            "atomic_rate_model": str(
-                self._input_dict.get("atomic_rate_model", "adas")
-            ),
-            "ionization_energy_cost": bool(
-                self._flags.get("ionization_energy_cost", True)
-            ),
-            "icool": bool(self._flags.get("icool", True)),
-            "ncool": bool(self._flags.get("ncool", True)),
-            "icool_recomb": bool(self._flags.get("icool_recomb", False)),
-            # A18/R5.3: the low-Te extension defines ONE consistent atomic
-            # package -- the electron-cooling prb1 honors it just like the
-            # particle-rate acd. Default off => golden bit-exact.
-            "adas_low_te_extension": bool(
-                self._input_dict.get("adas_low_te_extension", False)
-            ),
-        }
+        return dict(self._options.electron_cooling)
 
     def _ion_charge_exchange_kwargs(self):
-        return {
-            "gas_type": self._gas_type,
-            "Tn_fit": float(self._input_dict.get("Tn_fit", 0.1)),
-            "b_Qcx": float(self._input_dict.get("b_Qcx", 1.0)),
-            "cx": bool(self._flags.get("cx", True)),
-        }
+        return dict(self._options.ion_charge_exchange)
 
     def _heat_conduction_kwargs(self):
-        return {
-            "b_epara": float(self._input_dict.get("b_epara", 1.0)),
-            "b_ipara": float(self._input_dict.get("b_ipara", 1.0)),
-            "heat_conduction": bool(self._flags.get("heat_conduction", True)),
-            "ln_lambda_min": float(self._input_dict.get("ln_lambda_min", 1.0)),
-            "electron_heat_flux_limit": self._electron_heat_flux_limit,
-            "heat_flux_limiter_f": self._heat_flux_limiter_f,
-            "heat_flux_limiter_exponent": self._heat_flux_limiter_exponent,
-        }
+        return dict(self._options.heat_conduction)
 
     def _neutral_energy_timestep_kwargs(self):
-        """Return the bundle the En relaxation bound reads, or None.
-
-        ``None`` where no ``En`` field exists, which withdraws the candidate.
-        The values are the ones the collision operator and the wall sink
-        actually apply, so the bound describes the applied rate rather than a
-        nominal one.
-        """
-        if not self._neutral_energy:
-            return None
-        drag_enabled = bool(self._flags.get("ion_neutral_drag", True))
-        return {
-            "gas_type": self._gas_type,
-            "Tn_eV": float(self._input_dict.get("Tn_K", 300.0))
-            * kb_cgs
-            / ev_to_erg,
-            "b_ion_neutral_drag": (
-                float(self._input_dict.get("b_ion_neutral_drag", 1.0))
-                if drag_enabled
-                else 0.0
-            ),
-            "alpha_E": self._neutral_energy_alpha,
-            "Tn_fit": self._neutral_energy_wall_Tn_eV,
-            "wall_rate_1_s": self._neutral_energy_wall_rate,
-        }
+        """Return the bundle the En relaxation bound reads, or None."""
+        bundle = self._options.neutral_energy_timestep
+        return None if bundle is None else dict(bundle)
 
     def _reaction_kwargs(self):
-        return {
-            "gas_type": self._gas_type,
-            "I_ion": self._I_ion,
-            "b_ioniz": float(self._input_dict.get("b_ioniz", 1.0)),
-            "b_rec_rad": float(self._input_dict.get("b_rec_rad", 1.0)),
-            "b_rec_3b": float(self._input_dict.get("b_rec_3b", 1.0)),
-            "atomic_rate_model": str(
-                self._input_dict.get("atomic_rate_model", "adas")
-            ),
-            "adas_low_te_extension": bool(
-                self._input_dict.get("adas_low_te_extension", False)
-            ),
-            "Te_birth_ionization": self._input_dict.get(
-                "Te_birth_ionization", "local"
-            ),
-            "Ti_birth_ionization": self._input_dict.get(
-                "Ti_birth_ionization", "floor"
-            ),
-            "ionization_birth_energy_model": str(
-                self._input_dict.get("ionization_birth_energy_model", "legacy")
-            ),
-            "wind_column_factor": self._wind_column_factor,
-        }
+        return dict(self._options.reaction)
 
     def _trajectory_snapshot(self, time):
         state = self.state
