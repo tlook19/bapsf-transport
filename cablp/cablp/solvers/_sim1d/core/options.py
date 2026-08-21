@@ -56,6 +56,12 @@ def energy_exchange_kwargs(input_dict):
 
 
 def surface_loss_kwargs(input_dict):
+    # The resolved boundary terms read only ``alpha_isat`` and
+    # ``b_surface_loss``. The former per-face source/end enables and area
+    # scales were A13 no-ops (never consumed) and are DEPRECATED 0D artifacts
+    # (R3.3): the resolved geometry measures the Bohm I_sat to each electrode
+    # face directly. ``validate_r1_configuration_presence`` warns on their
+    # non-default use.
     return {
         "alpha_isat": float(input_dict.get("alpha_isat", np.exp(-0.5))),
         "end_mode": input_dict.get("end_mode", "collector"),
