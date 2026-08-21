@@ -92,7 +92,7 @@ def config_cases():
             "cathode_cleaning_E_th_eV": 20.0,
             "Te_birth_ionization": M6_ELECTRON_BIRTH_POLICY,
             "gas_puff_mode": "square",
-            "S_gp": 3400,
+            "S_gp": 3649.84,
             "cathode_sample_smoothing": "presheath",
         }
     )
@@ -103,7 +103,7 @@ def config_cases():
         "run_mechanism_ladder_es1_defaults": resolve_config(
             ladder_params, ladder_flags
         ),
-        "run_m6_point_es1_sgp3400_defaults": resolve_config(
+        "run_m6_point_es1_sgp3649_defaults": resolve_config(
             m6_params, m6_flags
         ),
     }

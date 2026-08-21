@@ -162,7 +162,11 @@ PARAM_OVERRIDES = {
     # delivered fuel) and NOT the golden, which pins the key back to None.
     "equilibration_gas_puff_on_s": _STANCE["equilibration_gas_puff_on_s"],
     "S_gp": _STANCE["S_gp"],
-    "S_gp_decay_target": _STANCE["S_gp_decay_target"],
+    # S_gp_decay_target is no longer mirrored from the stance: the stance
+    # dropped it (2026-08-21) because it is read only by the retired
+    # pulse/decay/double_erf puff waveforms and the stance runs "square", so
+    # it was inert and trajectory-invariant. The config default now applies,
+    # equally inertly.
     "tau_gp_pulse_duration": 1e-3,
     "tau_gp_decay_duration": 5e-3,
     # Ion-neutral closure: R5 STANCE FLIP (2026-07-25) -- the ad-hoc constant

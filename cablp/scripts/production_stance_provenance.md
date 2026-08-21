@@ -179,6 +179,42 @@ package (grid of record nx 268 / Lm 2117.8 / collector 7.8 + the sss
 fidelity rulings; coils-ON droop-min ansatz f_end 2.221 — always quoted
 as the ansatz, never "coils on" generically).
 
+## Anode surface recycle (2026-08-21 physics batch — ARMED stance members)
+
+**`anode_neutral_jet = true`, `anode_jet_energy_convention =
+"total_reflected"`, `neutral_mesh_accommodation = true`** (all params) are
+armed in the production stance as of the 2026-08-21 physics batch. The
+coefficients they act on (`anode_jet_R_N = 0.63`, `anode_jet_R_E = 0.41`,
+DERIVED for He -> Mo from Eckstein IPP 9/132) are surface properties and live
+in the config defaults, not here; what the stance decides is that the channel
+is ON and which convention its `R_E` is read in.
+
+Class: the ARM is a stance decision; the convention is STRUCTURAL (a guard,
+not a value). The jet gives the anode's collected-and-neutralized flux the
+directed momentum it physically leaves with instead of rebirthing it at rest,
+per collected side — gap-side −z, column-side +z, at
+`v_back = sqrt(2 (R_E/R_N)(phi_a + Ti)/m)`. The accommodation sink is the
+matching debit: momentum the wires intercept lands on the anode structure. The
+two are armed TOGETHER because the sink was built for exactly the opposing-jet
+recirculation the jet creates; arming the jet alone would leave that
+recirculation artificially elastic.
+
+**Channel is MOMENTUM-ONLY (standing M2 convention).** Neutrals carry no
+energy field on this path, so the reflected atoms' kinetic energy is not
+booked — an unbooked ~0.2–0.5 kW. This is disclosed as a convention, not
+repaired here. The surface power ledger is IDENTICALLY unchanged: the anode
+has no analogue of `cathode_jet_surface_debit`.
+
+Pre-declared impact (registered before the capture, so the recapture's
+movement can be read against it rather than rationalized after): pre-breakdown
+bit-identical and breakdown shift ≈ 0 (the jet needs a solved `phi_a`); anode
+momentum ~20–25 % of the cathode channel and OPPOSING it in the gap, so gap
+`nn` 0 to +5 %; plateau `I`/`Isat` +0–2 % with `V_dis` slightly down; the
+mid-machine trough UNMOVED — more than ~1 % movement there is a finding to
+investigate, not a number to bank. Because the batch moves `S_pump` in the
+same recapture, the observed movement is JOINT and neither member may be
+credited with it alone.
+
 ## Neutral source
 
 **`S_gp = 9010` sccm per valve × 2 valves, `gas_puff_delivery_fraction
@@ -202,6 +238,24 @@ reconciliation pending (thread 23 phase 0):** the restored ~2e21
 atoms/s recycle stream changes the model's effective fueling economy;
 the box-vs-stance reconciliation re-derives against the adopted-stance
 ledger and lands here when ruled.
+**The 9010 is METER-CLASS and was carried VERBATIM through the 2026-08-21 sccm
+changeover.** That changeover re-referenced `SCCM_TO_PARTICLES_PER_S` from the
+0 °C chemists' standard to the flow meter's own (Sensirion SFM5500, 20 °C /
+1013 mbar), so a configured sccm now MEANS what the meter reported. This value
+IS a meter reading, so its digits are exactly the ones to keep — and the
+changeover is what finally makes them mean what they say. The delivered
+throughput it implies therefore FALLS by 6.85 %: the previously quoted
+`[7.2, 8.1]e21` atoms/s restates as **`[6.7, 7.5]e21` atoms/s** at the same
+9010. The `f_gp = 5200/9010 = 0.577` line in
+`config_defaults_provenance.md` is a ratio of two sccm numbers taken under the
+OLD convention and is unaffected as a ratio; the fitted 5200 half of it is
+FITTED-FLUX-class and restates as 5582.11 meter-sccm.
+
+The stance no longer names `S_gp_decay_target` (dropped 2026-08-21). It was
+read only by the retired pulse/decay/double_erf puff waveforms and the stance
+runs `"square"`, so the line was inert and its removal is
+trajectory-invariant.
+
 `S_gp_decay_target`, `tau_gp_pulse_duration`, `tau_gp_decay_duration` are read
 only by the deprecated pulse/decay waveform modes and are inert under the
 square waveform.

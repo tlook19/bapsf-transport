@@ -56,6 +56,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from cablp.funcs._adas import he_rates
+from cablp.vars._cons import m_He_cgs
 from cablp.funcs._cross import charge_ex_react, phelps_he_backscatter_cm2
 from cablp.solvers._sim1d.core.geometry import (
     absorbing_live_cells_by_role,
@@ -68,7 +69,10 @@ from cablp.solvers._sim1d.physics.neutrals import (
 
 EV = 1.602176634e-12
 KB = 1.380649e-16
-M_HE = 4.002602 * 1.66053907e-24
+# Helium mass: imported, never re-derived. cablp.vars._cons is THE
+# definition point (Ar(4He)*u, CODATA 2022); the hand-made
+# 4.002602 * 1.66053907e-24 product this replaced was 0.31 ppm low.
+M_HE = m_He_cgs
 E_CHARGE = 1.602176634e-19
 T_WALL_K = 300.0
 

@@ -598,6 +598,19 @@ def _case_production_construction_warning_free():
 )
 def _case_shipped_defaults_and_base_geometry():
     params, flags = default_config()
+    # HELIUM MASS PIN (2026-08-21 unification). A LITERAL, deliberately: the
+    # repo had carried three hand-made helium-mass products differing by up to
+    # 0.9 ppm, none of them citable, and nothing caught it. The compiled
+    # kernels never read a helium mass, so there is no .pyx constant guard to
+    # extend -- this assertion is the guard. The value is Ar(4He)*u =
+    # 4.00260325413 * 1.66053906892e-27 kg (CODATA 2022), cross-checked
+    # against m(alpha) + 2 m_e - 79.005151 eV/c^2 to 5e-12 relative.
+    from cablp.vars._cons import m_He_SI as _m_He_SI
+    from cablp.vars._cons import m_He_cgs as _m_He_cgs
+
+    assert _m_He_cgs == 6.6464790809e-24, _m_He_cgs
+    assert _m_He_SI == 6.6464790809e-27, _m_He_SI
+    assert LAPDSim1D(params, flags).ion_mass_g == 6.6464790809e-24
     assert params["cycles"] == 1
     assert params["phase_transition_mode"] == "current"
     assert params["gas_puff_mode"] == "square"
@@ -1680,6 +1693,7 @@ def _case_cathode_resolved_gap_resistance(cathode_face):
     import warnings as _warnings
 
     from cablp.solvers._sim1d.core.geometry import gap_cell_indices
+    from cablp.funcs._cathode_solver import _c_log_ei
     from cablp.solvers._sim1d.physics.cathode import spitzer_sigma_par_ohm_cm
 
     rgap_params = dict(resolved_params)
@@ -1697,7 +1711,28 @@ def _case_cathode_resolved_gap_resistance(cathode_face):
     sim_rgap = LAPDSim1D(rgap_resolved_params, resolved_cathode_flags)
     rgap_geom = sim_rgap.get_initial_snapshot().geometry
     rgap_gap = np.asarray(gap_cell_indices(rgap_geom), dtype=int)
-    assert spitzer_sigma_par_ohm_cm(4.0) == 14.6 * 4.0**1.5
+    # sigma_par carries a state-dependent Coulomb logarithm: the NRL
+    # transverse resistivity (p.30) lifted to parallel by the Braginskii 1.96
+    # (p.38). The "fixed_14p6" arm is the historical frozen coefficient, which
+    # is the same expression evaluated at lnLambda = 13.03.
+    assert np.isclose(
+        spitzer_sigma_par_ohm_cm(4.0, 4.0e12),
+        (1.96 / (1.03e-2 * _c_log_ei(4.0, 4.0e12))) * 4.0**1.5,
+        rtol=0.0,
+        atol=0.0,
+    )
+    assert spitzer_sigma_par_ohm_cm(4.0, 4.0e12, "fixed_14p6") == (
+        14.6 * 4.0**1.5
+    )
+    assert np.isclose(
+        14.6, 1.96 / (1.03e-2 * 13.03), rtol=1e-3
+    ), "the retired 14.6 is sigma_par at lnLambda 13.03"
+    try:
+        spitzer_sigma_par_ohm_cm(4.0, 4.0e12, "bogus")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for unknown lnL_model")
 
     def _rgap_state(Te):
         return conservative_from_primitives(
@@ -1747,8 +1782,25 @@ def _case_cathode_resolved_gap_resistance(cathode_face):
     r_cold_r = sim_rgap.solve_cathode_boundary(
         state=cold_state, update_cache=False
     ).beam_result.result
-    # 1/5 of the gap at 12 eV, 4/5 at 3 eV: 0.2 + 0.8*(12/3)^1.5 = 6.6x.
-    assert np.isclose(r_cold_r.R_p, 6.6 * r_cold_s.R_p, rtol=1e-9)
+    # 1/5 of the gap at 12 eV (the sampled cell), 4/5 at 3 eV. Spitzer
+    # resistivity is eta_sp ~ lnLambda(Te, n) * Te^-3/2, so the ratio is
+    # 0.2 + 0.8*(12/3)^1.5 * lnL(3)/lnL(12); the lnLambda factor is what the
+    # frozen-coefficient form (which gave a flat 6.6x) could not carry, and
+    # the two temperatures straddle the NRL formula's 10 eV switch.
+    # lnLambda LITERAL PIN. The ratio below is built from _c_log_ei, the same
+    # helper the solver uses, so a TRANSCRIPTION error shared by both would
+    # cancel out of the comparison and pass silently. Pinning one lnLambda
+    # value against an independent literal closes that class.
+    assert np.isclose(_c_log_ei(3.0, 4.0e12), 10.1392, rtol=1e-5), _c_log_ei(
+        3.0, 4.0e12
+    )
+    assert np.isclose(_c_log_ei(12.0, 4.0e12), 11.9762, rtol=1e-5), _c_log_ei(
+        12.0, 4.0e12
+    )
+    _rgap_cold_ratio = 0.2 + 0.8 * (12.0 / 3.0) ** 1.5 * (
+        _c_log_ei(3.0, 4.0e12) / _c_log_ei(12.0, 4.0e12)
+    )
+    assert np.isclose(r_cold_r.R_p, _rgap_cold_ratio * r_cold_s.R_p, rtol=1e-9)
     # The resolved integral's larger R_p yields a larger ohmic gap drop at the
     # same driven current.
     assert r_cold_r.V_p > r_cold_s.V_p
@@ -12702,7 +12754,11 @@ def _case_gas_puff_axial_profile():
         3000.0, 2.0, puff_geom.neutral_volume_cm3[puff_idx]
     )
     assert np.count_nonzero(cell_rate) == 1
-    total_in = 4.477962e17 * 3000.0 * 2.0
+    # Deliberately a LITERAL, not the imported constant: this line is the
+    # tripwire that fires if SCCM_TO_PARTICLES_PER_S is changed without
+    # the three-class migration being redone. Restated at the 2026-08-21
+    # 0 C -> meter (20 C / 1013 mbar) changeover.
+    total_in = 4.171431e17 * 3000.0 * 2.0
     for z0, sigma in ((None, 30.0), (600.0, 200.0), (1900.0, 100.0)):
         gauss_rate = gas_puff_rate_profile(
             puff_geom, 3000.0, 2, profile="gaussian", z_cm=z0, sigma_cm=sigma
@@ -14108,6 +14164,17 @@ def _case_directed_recycle_jets(knob_mass, m3_cathode_flags, m3_params):
          jet_flags),
         # the debit reads the jet's R_E
         (dict(m3_params, cathode_jet_surface_debit=True), jet_flags),
+        # the anode jet must DECLARE which convention its R_E is read in:
+        # undeclared, unknown, declared-without-the-jet, and the
+        # total_reflected ordering requirement 0 < R_E <= R_N < 1.
+        (dict(m3_params, anode_neutral_jet=True), jet_flags),
+        (dict(m3_params, anode_neutral_jet=True,
+              anode_jet_energy_convention="bogus"), jet_flags),
+        (dict(m3_params, anode_jet_energy_convention="total_reflected"),
+         jet_flags),
+        (dict(m3_params, anode_neutral_jet=True,
+              anode_jet_energy_convention="total_reflected",
+              anode_jet_R_E=0.9), jet_flags),
     ):
         try:
             LAPDSim1D(jet_bad_params, jet_bad_flags)
@@ -14119,6 +14186,7 @@ def _case_directed_recycle_jets(knob_mass, m3_cathode_flags, m3_params):
         m3_params,
         cathode_neutral_jet=True,
         anode_neutral_jet=True,
+        anode_jet_energy_convention="total_reflected",
         neutral_mesh_accommodation=True,
     )
     jet_sim = LAPDSim1D(jet_params, jet_flags)
@@ -19569,8 +19637,13 @@ def _case_shaped_initial_neutral_fill_sp3():
     # per-valve-nominal at the 2 ms foot, the high end as-applied at 4.5 ms.
     # puff_rate(..., 1.0) is the repo's own throughput constant per unit
     # volume, so this is the solver's arithmetic and not a restatement of it.
-    _sp3_nominal = puff_rate(5200.0, 1, 1.0) * min(_sp3_mod.DT_FOOT_BRACKET_S)
-    _sp3_applied = puff_rate(5200.0, 2, 1.0) * max(_sp3_mod.DT_FOOT_BRACKET_S)
+    # The 5200 sccm the sp2 leg ran is a FITTED-FLUX quantity: it was fitted
+    # under the retired 0 C sccm convention, so the 2026-08-21 meter changeover
+    # rescales its digits by 1.0734834 (-> 5582.11 meter-sccm) to hold the
+    # delivered particle flux fixed. The banked ATOM counts below are physical
+    # and do not move.
+    _sp3_nominal = puff_rate(5582.11, 1, 1.0) * min(_sp3_mod.DT_FOOT_BRACKET_S)
+    _sp3_applied = puff_rate(5582.11, 2, 1.0) * max(_sp3_mod.DT_FOOT_BRACKET_S)
     assert abs(_sp3_nominal / 4.7e18 - 1.0) < 0.02, _sp3_nominal
     assert abs(_sp3_applied / 2.1e19 - 1.0) < 0.02, _sp3_applied
     # The two ends differ by exactly the valve factor times the foot ratio, so

@@ -79,6 +79,9 @@ PLATEAU = (15.0, 19.5)
 SNAPS_MS = (2.0, 5.0, 10.0, 15.0, 19.5)
 
 # He+ mass [g] and the erg-per-eV conversion, CGS throughout.
+# SUPERSEDED 2026-08-21: the unified helium mass is cablp.vars._cons
+# .m_He_cgs = 6.6464790809e-24 g (Ar(4He)*u, CODATA 2022). The literal
+# below is 0.31 ppm low and is left AS A RECORD of what this dated script ran.
 M_I_G = 4.002602 * 1.66053906660e-24
 ERG_PER_EV = 1.602176634e-12
 

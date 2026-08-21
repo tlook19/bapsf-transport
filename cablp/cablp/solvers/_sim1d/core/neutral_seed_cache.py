@@ -32,6 +32,8 @@ import json
 
 import numpy as np
 
+from ..physics.neutrals import SCCM_TO_PARTICLES_PER_S
+
 # v2 (item 37 duty fix, 2026-07-29): EVERY v1 seed was equilibrated with the
 # defective puff duty -- the phase lookup and the phase-boundary schedule
 # disagreed about the puff-off instant, so the puff ran one extra step in some
@@ -189,7 +191,18 @@ def _signature_payload(params, flags):
     kept_flags = {
         k: _canonical(v) for k, v in flags.items() if k not in INERT_FLAG_KEYS
     }
-    return {"params": kept_params, "flags": kept_flags}
+    return {
+        "params": kept_params,
+        "flags": kept_flags,
+        # SALT. The sccm -> particles/s conversion is a CODE constant, not a
+        # config key, so the fail-closed hash over (params, flags) cannot see
+        # it: change the convention and every stored seed still MATCHES its
+        # signature while representing a ~7 % different physical throughput.
+        # That is the one way a wrong seed could be served silently, so the
+        # constant is hashed with the configuration. Salting is one-way -- it
+        # rotates every existing entry, which is the safe direction.
+        "sccm_to_particles_per_s": _canonical(SCCM_TO_PARTICLES_PER_S),
+    }
 
 
 def neutral_seed_signature(params, flags):

@@ -482,9 +482,12 @@ def neutral_source_defaults():
         # --- ACTIVE (square waveform + pump) ---
         # S_gp is the one free constant of the puff model; every other quantity
         # in the waveform is a hardware timing. It feeds back on the discharge
-        # through S_gp -> ne -> current.
-        "S_gp": 3400,
-        "Twin_S_gp": 3400,
+        # through S_gp -> ne -> current. FITTED-FLUX class: these two levels
+        # were fitted under the retired 0 C sccm convention, so the 2026-08-21
+        # meter changeover rescaled their digits by 1.0734834 (3400 ->
+        # 3649.84) to hold the fitted particle flux fixed.
+        "S_gp": 3649.84,
+        "Twin_S_gp": 3649.84,
         "gas_puff_mode": "square",
         # "square" waveform edge timings. The piezo is driven by a square
         # voltage pulse from the SAME trigger that closes the cathode circuit
@@ -503,8 +506,8 @@ def neutral_source_defaults():
         # elbow. The elbow is already inside this number, so
         # pump_elbow_conductance_lps stays None -- setting both would count the
         # elbow twice on the source side.
-        "S_pump_L": 2900.0,
-        "S_pump_R": 2900.0,
+        "S_pump_L": 3000.0,
+        "S_pump_R": 3000.0,
         "gas_puff_enabled": True,
         "pump_enabled": True,
         "gas_puff_valves": 2,
@@ -535,7 +538,9 @@ def neutral_source_defaults():
         "gas_puff_local_ionization_fraction": 0.0,
         # --- DEPRECATED (only read by the retired pulse/decay/double_erf puff
         # modes; kept runnable for the frozen waveform-comparison figures) ---
-        "S_gp_decay_target": 1500,
+        # Same FITTED-FLUX rescale as S_gp above (1500 -> 1610.23); the twin
+        # target is zero and is invariant under any conversion.
+        "S_gp_decay_target": 1610.23,
         "Twin_S_gp_decay_target": 0.0,
         "tau_gp_after_breakdown": None,
         "tau_gp_decay_factor": 1.0,
@@ -1640,6 +1645,23 @@ def cathode_defaults():
         cannot carry two gaps sampled at different Te). NB with ``Rp !=
         R_cath`` the two models differ even for a uniform gap -- conduction
         through the plasma channel, not the cathode disc.
+    cathode_lnL_model:
+        Which Coulomb logarithm the parallel Spitzer conductivity
+        ``sigma_par`` is built from, in BOTH sheath solvers and in every
+        sim1d-side consumer of ``sigma_par`` (the ``"resolved_gap"`` R_p
+        integral and the ohmic gap deposition weights).
+
+        ``"nrl_ei"`` (default) evaluates the electron-ion Coulomb logarithm at
+        the local ``(Te, n)`` and floors it at ``LN_LAMBDA_MIN``, the same
+        convention the conduction and electron-ion exchange terms use, giving
+        ``sigma_par = (1.96/(1.03e-2 lnLambda)) Te^1.5`` [Ohm^-1 cm^-1].
+
+        ``"fixed_14p6"`` restores the frozen-coefficient form
+        ``sigma_par = 14.6 Te^1.5``, i.e. ``"nrl_ei"`` evaluated at
+        ``lnLambda = 13.03`` and held there regardless of state. It is an
+        ATTRIBUTION-ONLY comparison arm: it exists so a result can be split
+        between the lnLambda correction and everything else, and it is not a
+        physical alternative. Any other value raises at construction.
     b_beam_excitation:
         Scale on the neutral-excitation cross section added to the primary
         beam's inelastic channels. ``0`` (default) is the historical beam:
@@ -2057,11 +2079,13 @@ def cathode_defaults():
         The same directed-recycle treatment at the ANODE faces, applied per
         collected side: the backscattered fraction ``anode_jet_R_N`` is
         re-emitted back toward the side it was collected from, at
-        ``v_back = sqrt(2 R_E (phi_a + Ti)/m)`` off the solve's anode drop.
+        the launch speed ``anode_jet_energy_convention`` builds from ``R_E``
+        and the solve's anode drop ``phi_a``.
         The remaining ``1 - R_N`` re-emits from thin cylindrical wires with
         no net axial direction, so the anode channel is backscatter-only.
-        ``False`` rebirths at rest. Requires the ``neutral_momentum`` flag
-        and anode faces with ``eta > 0``; raises at construction otherwise.
+        ``False`` rebirths at rest. Requires the ``neutral_momentum`` flag,
+        anode faces with ``eta > 0``, and a declared
+        ``anode_jet_energy_convention``; raises at construction otherwise.
     anode_jet_R_N:
         Particle reflection coefficient of the anode surface -- the
         backscattered fraction. Must lie in ``[0, 1]`` when
@@ -2071,6 +2095,30 @@ def cathode_defaults():
         Energy reflection coefficient of the anode surface, setting the anode
         backscatter speed. Must lie in ``[0, 1]`` when ``anode_neutral_jet``
         is on; raises at construction otherwise.
+        ``anode_jet_energy_convention`` fixes whether it is read per
+        backscattered particle or as the total reflected energy fraction.
+    anode_jet_energy_convention:
+        What ``anode_jet_R_E`` MEANS when the backscattered atoms' launch
+        speed is built, and therefore how fast the anode jet launches them.
+
+        ``"legacy"`` reads it per backscattered particle,
+        ``v_back = sqrt(2 R_E (phi_a + Ti)/m)`` -- the reading the anode
+        channel was hard-coded to before this key existed.
+
+        ``"total_reflected"`` reads it as the TOTAL reflected energy fraction
+        (reflected energy over incident, summed over all particles -- the
+        convention tabulated reflection coefficients are published in), so
+        each of the ``R_N`` backscattered particles leaves with ``R_E/R_N``
+        of the incident energy,
+        ``v_back = sqrt(2 (R_E/R_N) (phi_a + Ti)/m)``.
+
+        ``None`` (the default) is UNDECLARED, not a reading: arming
+        ``anode_neutral_jet`` while it is ``None`` raises at construction,
+        because the two readings launch the same coefficients at different
+        speeds and the choice is a stance decision. ``"total_reflected"``
+        additionally requires ``anode_neutral_jet`` and
+        ``0 < anode_jet_R_E <= anode_jet_R_N < 1``; any other value raises.
+        Inert when the anode jet is off.
     cathode_jet_surface_debit:
         Debits the cathode surface energy balance by the reflected-energy
         fraction: the warming model receives
@@ -2190,6 +2238,10 @@ def cathode_defaults():
         "cathode_Ts_fwhm_cm": 28.0,
         "cathode_emission_annuli": 10,
         "cathode_Rp_model": "sample",
+        # Coulomb logarithm behind sigma_par. "nrl_ei" reads it at the local
+        # (Te, n); "fixed_14p6" freezes it at the historical 13.03 and is an
+        # attribution-only comparison arm.
+        "cathode_lnL_model": "nrl_ei",
         "cathode_solver_model": "current_driven",
         "cathode_phi_c_cap_V": 1000.0,
         "cathode_circuit_bound_object": "device_voltage",
@@ -2239,8 +2291,16 @@ def cathode_defaults():
         # exported power matches the debit.
         "cathode_jet_energy_convention": "total_reflected",
         "anode_neutral_jet": False,
-        "anode_jet_R_N": 0.5,
-        "anode_jet_R_E": 0.25,
+        "anode_jet_R_N": 0.63,
+        "anode_jet_R_E": 0.41,
+        # Which convention anode_jet_R_E is read in. Ships UNDECLARED (None):
+        # arming the jet without declaring it raises, because the same number
+        # read per backscattered particle rather than as the total reflected
+        # fraction launches the atoms ~21% slow and says nothing about it.
+        # "legacy" is the per-particle reading the channel was hard-coded to
+        # before this key existed; "total_reflected" is the convention the
+        # tabulated coefficients above are published in.
+        "anode_jet_energy_convention": None,
         # Debit the cathode surface's ion heating by the reflected-energy
         # fraction (power_balance receives (1 - R_E) * P_cathode_i); off, the
         # jet is momentum-only and the surface keeps that power. Requires
@@ -3445,7 +3505,18 @@ def config_manifest():
 
 
 def resolve_nn0(input_dict, input_flags):
-    """Return configured or table-derived initial neutral density [cm^-3]."""
+    """Return configured or table-derived initial neutral density [cm^-3].
+
+    CONVENTION INCONSISTENCY on the fallback branch, documented rather than
+    silently patched: ``nn_table``'s keys are pre-2026-08-21 0 C-sccm while
+    ``S_gp`` is now meter-sccm, so the lookup is off by the ~7% conversion
+    ratio. It is not converted here because the frozen table cannot be
+    regenerated on the new convention (its generator retired with _sim3) and a
+    lookup-time conversion would invent an interpolation of data that was
+    never computed. Production never reaches this branch: both the config
+    default and the stance of record pin ``nn0`` explicitly, so the line above
+    short-circuits.
+    """
     nn0 = input_dict.get("nn0")
     if nn0 is not None:
         return nn0

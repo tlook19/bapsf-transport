@@ -30,7 +30,10 @@ from ..physics.neutrals import (
     neutral_probe_profile_weights,
     neutral_probe_waveform_table,
 )
-from ..physics.sources import CATHODE_JET_ENERGY_CONVENTIONS
+from ..physics.sources import (
+    ANODE_JET_ENERGY_CONVENTIONS,
+    CATHODE_JET_ENERGY_CONVENTIONS,
+)
 
 #: Implemented operator-splitting compositions.
 OPERATOR_SPLITTINGS = ("lie", "strang")
@@ -470,6 +473,51 @@ def resolve_neutral_jet_config(
                 "and neither coefficient may be degenerate) -- got "
                 f"cathode_jet_R_E={R_E}, cathode_jet_R_N={R_N}"
             )
+    # The anode jet's own convention key. It ships UNDECLARED (``None``): the
+    # tabulated reflection coefficients are published as TOTAL reflected
+    # fractions while the channel was hard-coded to read R_E per backscattered
+    # particle, so arming the jet without saying which reading applies runs the
+    # momentum channel ~21 % low and says nothing about it. That is the failure
+    # this guard exists to make impossible, which is why the key has no
+    # default reading to fall back on.
+    anode_convention = p.get("anode_jet_energy_convention", None)
+    if anode_convention is not None and (
+        anode_convention not in ANODE_JET_ENERGY_CONVENTIONS
+    ):
+        raise ValueError(
+            "anode_jet_energy_convention must be None or one of "
+            f"{ANODE_JET_ENERGY_CONVENTIONS} (got {anode_convention!r})"
+        )
+    if anode_jet_enabled and anode_convention is None:
+        raise ValueError(
+            "anode_neutral_jet is armed but anode_jet_energy_convention is "
+            "undeclared (None). anode_jet_R_E can be read PER BACKSCATTERED "
+            "PARTICLE ('legacy') or as the TOTAL reflected energy fraction "
+            "('total_reflected', in which case each of the anode_jet_R_N "
+            "backscattered particles carries R_E/R_N of the incident "
+            "energy). The two give different launch speeds from the same "
+            "number, so the reading is a stance decision and is not chosen "
+            "for you"
+        )
+    if anode_convention == "total_reflected" and not anode_jet_enabled:
+        raise ValueError(
+            "anode_jet_energy_convention='total_reflected' rescales the "
+            "anode jet's launch energy and requires anode_neutral_jet"
+        )
+    if anode_convention == "total_reflected":
+        R_N = R_coeffs["anode_jet_R_N"]
+        R_E = R_coeffs["anode_jet_R_E"]
+        if not (0.0 < R_E <= R_N < 1.0):
+            raise ValueError(
+                "anode_jet_energy_convention='total_reflected' reads "
+                "anode_jet_R_E as the TOTAL reflected energy fraction and "
+                "gives each of the anode_jet_R_N backscattered particles "
+                "R_E/R_N of the incident energy, so it requires "
+                "0 < anode_jet_R_E <= anode_jet_R_N < 1 (a reflected "
+                "particle cannot carry more energy than it arrived with, "
+                "and neither coefficient may be degenerate) -- got "
+                f"anode_jet_R_E={R_E}, anode_jet_R_N={R_N}"
+            )
     if neutral_energy and cathode_jet_enabled and not surface_debit:
         raise ValueError(
             "cathode_neutral_jet with neutral_energy requires "
@@ -519,6 +567,7 @@ def resolve_neutral_jet_config(
         anode_jet_R_N=R_coeffs["anode_jet_R_N"],
         anode_jet_R_E=R_coeffs["anode_jet_R_E"],
         cathode_jet_energy_convention=cathode_jet_energy_convention,
+        anode_jet_energy_convention=anode_convention,
         cathode_surface_ion_retention=cathode_surface_ion_retention,
         mesh_faces=mesh_faces,
         mesh_blocked_area_cm2=mesh_blocked_area_cm2,

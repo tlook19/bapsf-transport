@@ -63,6 +63,56 @@ applies the committed stance explicitly (`scripts/golden_baseline_provenance.md`
 
 ---
 
+## Physical constants that are not config keys
+
+**`m_He = 6.6464790809e-24` g (`6.6464790809e-27` kg) — DERIVED, the neutral
+helium-4 ATOM mass.** It is not an `input_dict` key — `gas_type = "He"` selects
+it and the solver's `ion_mass_g` IS this number — but it is a boxed physical
+constant and belongs in the provenance record.
+
+`Ar(4He) * u = 4.00260325413 u * 1.66053906892e-27 kg/u = 6.646479080869e-27
+kg`, i.e. the CODATA-2022 relative atomic mass of the nuclide times the
+CODATA-2022 atomic mass constant. Independently cross-checked against
+`m(alpha) + 2 m_e - 79.005151 eV/c^2` (the alpha particle plus two electrons,
+less the double-ionization binding energy), which agrees to **5e-12
+relative**.
+
+**Class is DERIVED, not MEASURED, and the reason matters:** NIST/CODATA
+publishes no neutral helium-atom mass in kg in any adjustment (2010, 2014,
+2018 or 2022) — only the alpha particle and the helion. Every helium-atom mass
+in kg is therefore somebody's product of two published constants, and the
+honest bar is the bar on those two (both ~1e-10 relative, far below anything
+this model resolves).
+
+**Unified 2026-08-21 (Tom's ruling); the single definition point is
+`cablp/vars/_cons.py`.** The repo had carried THREE different hand-made
+products, none of them citable and none agreeing:
+
+| superseded spelling | value [g] | error vs adopted | where |
+|---|---|---|---|
+| `6.6464731e-24` | 6.6464731e-24 | **−0.90 ppm** | `vars/_cons.py` — the fluid solver's `ion_mass_g` |
+| `4.002602 * 1.66053907e-24` | 6.6464770e-24 | **−0.31 ppm** | the kinetic/TPMC instruments |
+| `4 * 1.6605e-24` | 6.642e-24 | −707 ppm | one dated figure script |
+
+The first is uniquely reproduced by `4.0026 * u(CODATA 2010)` — a stale
+5-significant-figure product. The second multiplies the standard atomic weight
+of the ELEMENT by a truncated `u`. Neither is wrong by anything this model can
+resolve; what was wrong is that the repo could not say where either came from,
+and that two of them disagreed.
+
+**Guarded by a smoke literal pin, not by a build-time constant check.** The
+compiled kernels never read a helium mass — `check_constants` covers `m_e` and
+`m_p` only — so there was no `.pyx` guard to extend and none was added. The
+pin lives in `smoke_sim1d.py` (`shipped-defaults-and-base-geometry`) and
+asserts the literal exactly, on both spellings and on a constructed solver's
+`ion_mass_g`.
+
+Dated one-off scripts keep their old literals as a RECORD of what they ran,
+each with a one-line supersession comment naming the adopted value and the ppm
+offset. They are not edited: rewriting a record of a past run is not a fix.
+
+---
+
 ## `initial_condition_defaults`
 
 **`nn0 = 2.0e13` cm^-3 — ASSUMED.** A representative pre-shot neutral
@@ -132,11 +182,62 @@ the afterglow can cool. It is a positivity floor, not a physical temperature.
 
 ## `neutral_source_defaults`
 
-**`S_gp = 3400` sccm — FITTED.** The one calibration constant of the puff
-model: the sccm-versus-drive-voltage relation of the valve is uncalibrated, so
-the level cannot be read off the hardware. Everything else in the waveform is a
-hardware timing. It feeds back on the discharge through S_gp -> ne -> current,
-so it cannot be calibrated independently of the cathode power balance.
+**`S_gp = Twin_S_gp = 3649.84` sccm — FITTED.** The one calibration constant of
+the puff model: the sccm-versus-drive-voltage relation of the valve is
+uncalibrated, so the level cannot be read off the hardware. Everything else in
+the waveform is a hardware timing. It feeds back on the discharge through
+S_gp -> ne -> current, so it cannot be calibrated independently of the cathode
+power balance.
+
+Superseded: `3400` sccm — the SAME fit, restated. Nothing was re-fitted: the
+2026-08-21 sccm changeover (below) moved the conversion constant, so the digits
+were rescaled by `4.477962/4.171431 = 1.0734834` to hold the fitted PARTICLE
+FLUX fixed. `S_gp_decay_target` moved `1500 -> 1610.23` on the same rule.
+
+### The 2026-08-21 sccm convention changeover
+
+**`SCCM_TO_PARTICLES_PER_S = 4.171431e17` s^-1 per sccm — DERIVED
+(first-principles at a MEASURED reference condition).** A configured `S_gp`
+now MEANS meter-sccm. The fueling line's mass-flow controller is a **Sensirion
+SFC5500/SFM5500**, whose sccm is referred to **20 °C and 1013 mbar**, not the
+0 °C chemists' standard the model had been using, so the model was converting
+the meter's own readings on someone else's terms.
+
+The value is `n(293.15 K, 101300 Pa)/60 = 2.5028583e19/60`, computed from those
+conditions rather than scaled off the retired literal — deliberately, so the
+old number can never serve as a check on the new one. Source:
+**Sensirion SFC5500/SFM5500 Datasheet V6 (Feb 2024), §5 "Flow units", Table 7**
+(PDF banked at `zotero_pdf_cache/Sensirion_SFC5500_SFM5500_Datasheet_V6_2024.pdf`
+in the docs repo). Honest bar: the reference condition is a datasheet
+specification, so the only residual uncertainty is whether this meter is the
+one in the line — a hardware identification, not a measurement bar.
+
+Superseded: `4.477962e17`, the same expression at 0 °C / 101325 Pa. The
+throughput at a given configured number falls by 6.85 %.
+
+**Three classes, applied once, across the whole repo.** Every sccm-dimensioned
+quantity was classified, because a blanket rescale and a blanket freeze are
+both wrong:
+
+| class | rule | why |
+|---|---|---|
+| METER-CLASS | carried VERBATIM | it is a meter reading, and the meter's convention is now the model's (`S_gp = 9010` and the stance decay target) |
+| FITTED-FLUX-CLASS | digits `x1.0734834`, 6 significant figures | the fitted object was a particle flux, not a number of sccm, so the flux is what must be preserved (the `S_gp`/`Twin_S_gp` defaults, the decay-target defaults, the sp2 5200 leg) |
+| IDENTITY-CLASS | restated to the new constant | it is a copy of the constant or of a rescaled default, and a copy must track its original (the constant, the smoke tripwire literal, the `sp3_build_nn0` docstring, the `audit_sim1d_configs` case) |
+
+**Two consequences worth stating explicitly.** (i) The neutral-seed cache
+signature is now SALTED with the conversion constant: the constant is code, not
+config, so the fail-closed hash over `(params, flags)` could not see it, and
+every stored seed would have matched its signature while representing a ~7 %
+different throughput. (ii) `vars/nn_table.csv` is ANNOTATED, not rescaled — its
+keys stay 0 °C-sccm because its generator retired with `_sim3` and rescaling
+frozen data would forge an interpolation that was never computed. Production
+never reaches that table (`nn0` is pinned in both the default and the stance);
+`resolve_nn0`'s fallback branch carries the inconsistency in its docstring.
+
+**Disclosed, expected, not a bug:** pre-changeover `default_config()` runs are
+not bit-reproducible across this change. The rescaled digits are exact only to
+6 significant figures, so the delivered flux moves by ~1.4e-6 relative.
 
 **`gas_puff_delivery_fraction = 1.0` — STRUCTURAL IDENTITY, no value claimed.**
 The shipped default is the identity element of the decomposition it enables,
@@ -188,36 +289,49 @@ is a small pipe at the chamber wall about 10 cm in front of the anode
 the throw is of order the chord across the chamber, ~2*Rm. Neither centre nor
 width is tunable.
 
-**`S_pump_L = S_pump_R = 2900.0` L/s — DERIVED, bracket [2600, 3300] L/s.**
+**`S_pump_L = S_pump_R = 3000.0` L/s — DERIVED (elbow leg literature-BOXED),
+bracket [2750, 3300] L/s.**
 The per-END lumped pumping speed for helium, i.e. the whole speed the end cell
 sees, ducting included. Each of the four main 2,200 L/s turbos is taken in
 series with its own elbow, `1/S_eff = 1/S_p + 1/C_elbow`. The elbow is modelled
-as a single Ø285.75 mm (11.25") full-centerline tube at exact Clausing
-transmission, with the sharp-miter correction taken as a BRACKET between the
-straight tube and a straight tube lengthened by the customary 1.33 D equivalent
-length. That gives **per-pump `S_eff` ≈ 1470 L/s, bracket [1300, 1650]**. Two
-of those pumps sit at each end, so the per-end lumped speed is `2 * S_eff`,
-rounded to 2900 L/s, and the reported band [2600, 3300] is the endpoint pair
-carried through the same doubling.
+as a single Ø285.75 mm (11.25") full-centerline tube over the full centerline
+at exact Clausing transmission, with the mitred bend entering through a PINNED
+transmission probability rather than an equivalent-length bracket:
+**`P = 0.303`, band [0.296, 0.310]** (Davis Table II bilinear read 0.3055, less
+a Jensen/convexity correction; the Monte-Carlo σ of that combination is 0.0023,
+and reciprocity and binomial-σ authenticity checks pass). That gives **per-pump
+`S_eff` ≈ 1510 L/s**. Two of those pumps sit at each end, so the per-end lumped
+speed is `2 * S_eff`, rounded to 3000 L/s.
+
+The pump — not the line — owns about 72 % of the total series resistance, which
+is why pinning the elbow moves the central value only +2.7 % (per-pump 1470 →
+1510) even though it collapses the elbow's own spread.
 
 Sources: Davis 1960 (*J. Appl. Phys.* **31**, 1169), Table II — Monte-Carlo
-elbow transmission probabilities; Clausing 1932 — the exact straight-tube
-transmission.
+elbow transmission probabilities; Clausing 1932 / Berman — the exact
+straight-tube transmission. Davis's table is a numerical solution, not a
+measurement, which is why the elbow leg is literature-BOXED inside a DERIVED
+entry rather than MEASURED.
 
-> **OPEN CITATION (one line, deliberately left unfilled).** The 1.33 D
-> equivalent-length convention for a sharp miter needs a named vacuum handbook
-> against it, and this entry does not yet carry one. It is **NOT** Davis: an
-> audit of that paper confirmed he never prints the convention, and attributing
-> it to him was the specific error this entry exists to stop repeating. The
-> convention is standard and the number is not in doubt; what is missing is the
-> attribution, and it is recorded as missing rather than guessed. Fill it with
-> the handbook actually consulted before this bracket is quoted in the
-> write-up.
+**Honest bar: the band is now almost entirely the He-spec ASSUMPTION.** The
+2,200 L/s nameplate does not state its spec gas, and that it is 2,200 at all
+rests on Tom's memory of the nameplate — that assumption contributes ±8 % to
+the band against the pinned elbow's ±0.6 %. Read as N2 and converted to helium
+the pump speed is `S_p(He) ∈ [1870, 2310]` L/s; that spread, not the elbow
+geometry, is what the reported [2750, 3300] band is made of.
 
-**He-spec caveat (why the bracket is as wide as it is).** The 2,200 L/s
-nameplate does not state its spec gas. Read as N2 and converted to helium the
-pump speed is `S_p(He) ∈ [1870, 2310]` L/s; that spread, not the elbow
-geometry, is the dominant term in the bracket above.
+**Beaming caveat — RE-SCOPED, not absorbed.** Cosine-re-emission junction terms
+and the diffuse-test-dome basis of the turbo rating are one-sided UPWARD
+residuals of order ≲5 % on `S_eff`. They are not inside the band; they mean the
+truth sits toward the band TOP.
+
+**Two record fixes carried here so they stop being re-quoted.** (i) The
+"straight-tube 0.311 at 5.11 R" figure that earlier passes used is the
+L/R = 5.0 value; exact Berman at 5.11 is ≈ 0.3066, so the miter penalty is
+"≲0.1 D, consistent with zero within Monte-Carlo noise" — **do not quote 0.08 D
+as a number.** (ii) The cathode-end/far-end asymmetry is real (3,020 vs 3,050
+L/s) but an order below the band, so a common per-end value stands and the two
+keys carry the same number.
 
 **The fifth pump is EXCLUDED.** The small cathode-chamber pump on the east
 side is deliberately not in this number. Whether it was valved in on any given
@@ -229,11 +343,21 @@ A/B rather than a silent addition to the stance.
 series-elbow term as well would apply the same restriction twice on the source
 side.
 
-Superseded: `4000` L/s on both ends, an ASSUMED value (the source side had
-previously been 2000, and matching them expressed the reading that the plenum
-aperture rather than the pump speed throttled the source-side rate). The re-cut
-raises the equilibrated fill by roughly +21 to +54 % depending on position
-(+36 % centrally); that rise is the physics of the correction, not a
+Superseded: `2900.0` L/s (the same derivation with the miter treated as an
+equivalent-length BRACKET between a straight tube and one lengthened by the
+customary 1.33 D, per-pump `S_eff` ≈ 1470, band [2600, 3300]); and before it
+`4000` L/s on both ends, an ASSUMED value (the source side had previously been
+2000, and matching them expressed the reading that the plenum aperture rather
+than the pump speed throttled the source-side rate). The 1.33 D
+equivalent-length convention carried an OPEN CITATION here — no vacuum handbook
+had been named against it, and it is emphatically NOT Davis, who never prints
+it. That open item is **discharged by retirement**: the pinned transmission
+probability replaces the convention, so nothing left in this entry needs the
+attribution.
+
+Downstream of the 2,900 → 3,000 step: the equilibrated fill falls −3.3 %, well
+inside the band. Stated against the older 4,000 basis the fill excess restates
+from +36 % to +33 %; that rise is the physics of the correction, not a
 regression. The neutral-seed cache keys on these values and invalidates —
 expected.
 
@@ -729,6 +853,48 @@ which arm produced it, because the two differ by `phi_a - V_p` in the returned
 sheath drop and therefore in the beam birth energy keyed to it (measured on a
 plateau-class point: 190.36 V vs 177.84 V at `phi_a = 12.90` V).
 
+**`cathode_lnL_model = "nrl_ei"` — DERIVED (literature-BOXED), no fitted
+number.** The parallel Spitzer conductivity behind the gap resistance
+`R_p = L_cath / (pi R_cath^2 sigma_par)`. Two literature factors, kept
+un-collapsed in the code so the lineage stays readable:
+
+| factor | source | what it is |
+|---|---|---|
+| `eta_perp = 1.03e-2 Z lnLambda Te^-3/2` [Ohm cm] | **NRL Plasma Formulary 2004, p.30** | TRANSVERSE (perpendicular) Spitzer resistivity |
+| `sigma_par = 1.96 sigma_perp` at `Z = 1` | **NRL Plasma Formulary 2004, p.38** (Braginskii) | the parallel/perpendicular ratio |
+
+`lnLambda` is the electron-ion Coulomb logarithm at the LOCAL `(Te, n)` — the
+same `c_log(..., kind="ei")` and the same `LN_LAMBDA_MIN = 1.0` floor the
+conduction and electron-ion exchange terms already use, so the solver carries
+ONE lnLambda convention. The floor is a positivity guard for the cold, tenuous
+corner and does not bind at any physical discharge state.
+
+**Attribution note: the geometry is NOT from the NRL Formulary.** The
+`R_p = L/(pi R^2 sigma)` form — a cathode-area column across the gap — is
+**Poulos 2019, Eq. 30**, and is cited separately. The Formulary supplies the
+conductivity only.
+
+**Archaeology, recorded so the retired numbers are not mistaken for physics.**
+The superseded form was `sigma_par = 14.6 Te^1.5`, a frozen coefficient. It is
+exactly the expression above evaluated at **`lnLambda = 13.03`**
+(`1.96/(1.03e-2 * 13.03) = 14.604`) and held there regardless of state — a
+plausible mid-discharge value that becomes wrong in both directions across a
+shot, and most wrongly on the cold ramp, where the true `lnLambda` is smaller
+and the plasma therefore MORE conductive than the frozen form says. The
+"6.65" that earlier records attached to this expression was **`lnLambda/1.96`**
+— an effective bookkeeping number, **not a physical Coulomb logarithm**, and it
+should not be quoted as one.
+
+`"fixed_14p6"` is retained as an ATTRIBUTION-ONLY comparison arm so a result
+can be split between the lnLambda correction and everything else. It is not a
+physical alternative and is expected to acquire a deprecation-register row once
+that attribution is banked. Honest bar: none applies to a selector; what a
+RESULT must state is which arm produced it.
+
+**No refit rides this.** `C_R` stays at its value of record; the correction
+moves `R_p`, and whether the emission calibration follows is a separate,
+registered decision.
+
 ### Emission
 
 **`C_R = 29.0` A cm^-2 K^-2 — literature nominal for LaB6**, in the effective
@@ -840,31 +1006,53 @@ backscatter channel's momentum `R_N * v_back ∝ R_N * sqrt(R_E/R_N)` falls by
 about 20 % (0.316 -> 0.247 in units of `sqrt(2(phi_c + Ti)/m)`). Fewer, faster
 reflected atoms.
 
-**`anode_jet_R_N = 0.5`, `anode_jet_R_E = 0.25` — UNCHANGED and NOT re-cut,
-because `anode_neutral_jet` ships `False`.** The anode channel is inert at the
-shipped defaults, so these two carry no result.
+**`anode_jet_R_N = 0.63`, `anode_jet_R_E = 0.41` — DERIVED (same mid-box
+construction as the cathode pair, run for He -> Mo), read in the TOTAL
+reflected-energy convention.** Particle and energy reflection coefficients for
+the molybdenum anode mesh, from the same source and at the same 200 eV rows as
+the cathode pair above (**Eckstein, IPP 9/132**). `R_N` and `R_E` are a PAIR
+and are quoted together for the same reason.
 
-*Banked for arming (do not paste these in without reading the guard below).*
-The same construction run for He -> Mo gives `R_N = 0.63` and, for the energy
-coefficient, **0.41 as a TOTAL reflected fraction / 0.65 PER BACKSCATTERED
-PARTICLE** — two numbers for two different conventions, and they are not
-interchangeable.
+**The energy coefficient is two numbers, not one, and they are not
+interchangeable: 0.41 as a TOTAL reflected fraction, 0.65 PER BACKSCATTERED
+PARTICLE** (`0.41 / 0.63`). The shipped value is the TOTAL one, and
+`anode_jet_energy_convention` is what says so.
 
-> **REGISTERED GUARD — READ BEFORE ANY ANODE-JET ARM.** The cathode slot has a
-> convention key, `cathode_jet_energy_convention`, which fixes whether its
-> `R_E` is read per backscattered particle or as the total reflected energy
-> fraction. **The anode slot has NO such key: it reads `anode_jet_R_E` per
-> particle, unconditionally.** So arming the anode jet with a total-reflected
-> number silently understates the exported energy by a factor `R_N`, and there
-> is nothing in the code to catch it. **Extending the D1 convention key to the
-> anode is REQUIRED before any anode-jet arm is run** — this is a build
-> prerequisite, not a caveat to disclose afterwards.
+Superseded: `R_N = 0.5`, `R_E = 0.25` — placeholders that carried no result
+while the channel was inert, never re-cut because nothing read them.
+
+> **The guard that used to live here is now CODE.** This entry previously
+> carried a registered warning that the anode slot had no convention key and
+> read `anode_jet_R_E` per backscattered particle unconditionally, so arming
+> the jet with the total-reflected 0.41 would silently launch the atoms
+> `sqrt(R_N)` slow — about 21 % low in the momentum channel — with nothing to
+> catch it. `anode_jet_energy_convention` closes that hole: it ships
+> UNDECLARED (`None`), and arming `anode_neutral_jet` while it is undeclared
+> raises at construction. The build prerequisite is discharged.
+
+**`anode_jet_energy_convention = None` (UNDECLARED) — STRUCTURAL, no value
+claimed.** It is a guard, not a physical quantity: `None` is not a third
+reading of `R_E` but a refusal to guess between the two. The stance of record
+declares `"total_reflected"`, which is the convention the coefficient above is
+published in.
 
 Note on both jets' arming state: `cathode_neutral_jet` ships **`True`** (folded
 into the defaults at R2a, 2026-08-20), so the cathode pair above is live in
-every shipped run. `anode_neutral_jet` ships `False`. An earlier version of
-this entry said "Both jets default off"; that has been wrong since the R2a
-fold.
+every shipped run. `anode_neutral_jet` ships **`False`** — the arm is a stance
+decision and lives in `scripts/stances/g1atrim.toml`, not in these defaults, so
+the coefficients above are inert in a bare `default_config()`. An earlier
+version of this entry said "Both jets default off"; that has been wrong since
+the R2a fold.
+
+**`neutral_mesh_accommodation = False` — STRUCTURAL default-off, armed at the
+stance.** The sink itself is a conservation restoration rather than a
+calibration: momentum the anode wires intercept has to land on the anode
+structure instead of staying in the gas, and the open-area throttle alone
+leaves the gap recirculation artificially elastic. It ships off so that every
+configuration predating it stays bit-exact, and it is armed WITH the anode jet
+because the recirculation it corrects is exactly what two opposing surface
+jets create. No fitted number: the blocked area follows from the mesh
+transparency already in the geometry.
 
 **Incidence angle — why the normal-incidence rows are the right ones.** The
 reflection tables are tabulated against angle of incidence, so the choice of
