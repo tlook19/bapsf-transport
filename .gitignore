@@ -35,6 +35,25 @@ cablp/scripts/*.npz
 cablp/scripts/*.json
 cablp/scripts/*.png
 
+# Run-record scratch written next to the scripts by campaign arms and gates:
+# tee'd stdout (.txt), the invocation (.cmd), and the run-wrapper bookkeeping
+# (.exit/.head/.start/.time/.wall). D-3 ruling (2026-08-20): these are SCRATCH,
+# not run-records -- the committed stance artifact under scripts/stances/ is
+# what carries a stance of record. Before this block `git status` stood at
+# ~2,800 lines of permanent noise (2,489 artifacts in the directory root).
+# Every pattern is anchored to cablp/scripts/ itself, so the tracked
+# baselines/, data/ and stances/ subdirectories are unaffected.
+# NB there are no committed .txt notes to carve out: as of this commit the
+# only tracked non-.py files here are *.npz, *.json, *.md, *.toml and the
+# notebook. A committed .txt would need an explicit `!` line added below.
+cablp/scripts/*.txt
+cablp/scripts/*.cmd
+cablp/scripts/*.exit
+cablp/scripts/*.head
+cablp/scripts/*.start
+cablp/scripts/*.time
+cablp/scripts/*.wall
+
 # R5 neutral-seed database (derived, auto-populated per neutral-flow config)
 cablp/scripts/neutral_seed_db/
 .claude/
