@@ -503,8 +503,8 @@ def neutral_source_defaults():
         # elbow. The elbow is already inside this number, so
         # pump_elbow_conductance_lps stays None -- setting both would count the
         # elbow twice on the source side.
-        "S_pump_L": 2900.0,
-        "S_pump_R": 2900.0,
+        "S_pump_L": 3000.0,
+        "S_pump_R": 3000.0,
         "gas_puff_enabled": True,
         "pump_enabled": True,
         "gas_puff_valves": 2,
@@ -2057,11 +2057,13 @@ def cathode_defaults():
         The same directed-recycle treatment at the ANODE faces, applied per
         collected side: the backscattered fraction ``anode_jet_R_N`` is
         re-emitted back toward the side it was collected from, at
-        ``v_back = sqrt(2 R_E (phi_a + Ti)/m)`` off the solve's anode drop.
+        the launch speed ``anode_jet_energy_convention`` builds from ``R_E``
+        and the solve's anode drop ``phi_a``.
         The remaining ``1 - R_N`` re-emits from thin cylindrical wires with
         no net axial direction, so the anode channel is backscatter-only.
-        ``False`` rebirths at rest. Requires the ``neutral_momentum`` flag
-        and anode faces with ``eta > 0``; raises at construction otherwise.
+        ``False`` rebirths at rest. Requires the ``neutral_momentum`` flag,
+        anode faces with ``eta > 0``, and a declared
+        ``anode_jet_energy_convention``; raises at construction otherwise.
     anode_jet_R_N:
         Particle reflection coefficient of the anode surface -- the
         backscattered fraction. Must lie in ``[0, 1]`` when
@@ -2071,6 +2073,30 @@ def cathode_defaults():
         Energy reflection coefficient of the anode surface, setting the anode
         backscatter speed. Must lie in ``[0, 1]`` when ``anode_neutral_jet``
         is on; raises at construction otherwise.
+        ``anode_jet_energy_convention`` fixes whether it is read per
+        backscattered particle or as the total reflected energy fraction.
+    anode_jet_energy_convention:
+        What ``anode_jet_R_E`` MEANS when the backscattered atoms' launch
+        speed is built, and therefore how fast the anode jet launches them.
+
+        ``"legacy"`` reads it per backscattered particle,
+        ``v_back = sqrt(2 R_E (phi_a + Ti)/m)`` -- the reading the anode
+        channel was hard-coded to before this key existed.
+
+        ``"total_reflected"`` reads it as the TOTAL reflected energy fraction
+        (reflected energy over incident, summed over all particles -- the
+        convention tabulated reflection coefficients are published in), so
+        each of the ``R_N`` backscattered particles leaves with ``R_E/R_N``
+        of the incident energy,
+        ``v_back = sqrt(2 (R_E/R_N) (phi_a + Ti)/m)``.
+
+        ``None`` (the default) is UNDECLARED, not a reading: arming
+        ``anode_neutral_jet`` while it is ``None`` raises at construction,
+        because the two readings launch the same coefficients at different
+        speeds and the choice is a stance decision. ``"total_reflected"``
+        additionally requires ``anode_neutral_jet`` and
+        ``0 < anode_jet_R_E <= anode_jet_R_N < 1``; any other value raises.
+        Inert when the anode jet is off.
     cathode_jet_surface_debit:
         Debits the cathode surface energy balance by the reflected-energy
         fraction: the warming model receives
@@ -2239,8 +2265,16 @@ def cathode_defaults():
         # exported power matches the debit.
         "cathode_jet_energy_convention": "total_reflected",
         "anode_neutral_jet": False,
-        "anode_jet_R_N": 0.5,
-        "anode_jet_R_E": 0.25,
+        "anode_jet_R_N": 0.63,
+        "anode_jet_R_E": 0.41,
+        # Which convention anode_jet_R_E is read in. Ships UNDECLARED (None):
+        # arming the jet without declaring it raises, because the same number
+        # read per backscattered particle rather than as the total reflected
+        # fraction launches the atoms ~21% slow and says nothing about it.
+        # "legacy" is the per-particle reading the channel was hard-coded to
+        # before this key existed; "total_reflected" is the convention the
+        # tabulated coefficients above are published in.
+        "anode_jet_energy_convention": None,
         # Debit the cathode surface's ion heating by the reflected-energy
         # fraction (power_balance receives (1 - R_E) * P_cathode_i); off, the
         # jet is momentum-only and the surface keeps that power. Requires

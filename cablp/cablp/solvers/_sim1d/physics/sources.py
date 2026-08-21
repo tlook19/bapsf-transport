@@ -376,6 +376,65 @@ def cathode_jet_backscatter_speed(cathode_jet, Ti_eV, ion_mass_g):
     )
 
 
+#: Accepted values of the anode jet's ``energy_convention``, which fixes how
+#: ``anode_jet_R_E`` is read when the backscattered atoms' launch speed is
+#: built. ``None`` (the shipped default of the config key) is NOT a member: an
+#: armed anode jet must declare its convention explicitly.
+ANODE_JET_ENERGY_CONVENTIONS = ("legacy", "total_reflected")
+
+
+def anode_jet_backscatter_speed(anode_jet, Ti_eV, ion_mass_g):
+    """Return the anode jet's backscatter launch speed [cm s^-1].
+
+    THE ONE SPEC for the anode channel, mirroring
+    :func:`cathode_jet_backscatter_speed`: the momentum
+    :func:`anode_collection_rhs` books reads the launch energy here and
+    nowhere else, so no second site can pick a different convention.
+
+    ``anode_jet`` is the jet spec dict (``R_N``, ``R_E``, ``phi_a_V``,
+    ``energy_convention``); ``Ti_eV`` is the local ion temperature [eV] and
+    ``ion_mass_g`` the ion mass [g]. The incident per-particle energy is
+    ``phi_a + Ti`` [eV], clamped at zero -- the ions fall through the
+    ion-attracting anode sheath before striking the wires.
+
+    ``energy_convention`` fixes what ``R_E`` means, and therefore how fast one
+    backscattered atom leaves:
+
+    ``"legacy"``
+        ``R_E`` is read PER BACKSCATTERED PARTICLE:
+        ``v_back = sqrt(2 R_E (phi_a + Ti)/m)``. This is the reading the
+        anode channel was hard-coded to before the convention key existed.
+    ``"total_reflected"``
+        ``R_E`` is the TOTAL reflected energy fraction -- reflected energy
+        over incident energy, summed over all particles, which is the
+        convention the tabulated reflection coefficients are published in.
+        The ``R_N`` reflected particles carry all of it, so each leaves with
+        ``R_E/R_N`` of the incident energy,
+        ``v_back = sqrt(2 (R_E/R_N) (phi_a + Ti)/m)``.
+
+    Raises ``ValueError`` for any other ``energy_convention`` value, including
+    the undeclared ``None``.
+    """
+    R_E = float(anode_jet["R_E"])
+    convention = anode_jet.get("energy_convention")
+    if convention == "legacy":
+        energy_fraction = R_E
+    elif convention == "total_reflected":
+        energy_fraction = R_E / float(anode_jet["R_N"])
+    else:
+        raise ValueError(
+            "anode jet energy_convention must be one of "
+            f"{ANODE_JET_ENERGY_CONVENTIONS} (got {convention!r})"
+        )
+    return np.sqrt(
+        2.0
+        * energy_fraction
+        * np.maximum(float(anode_jet["phi_a_V"]) + Ti_eV, 0.0)
+        * ev_to_erg
+        / ion_mass_g
+    )
+
+
 def boundary_absorption_rhs(
     state,
     floors,
@@ -829,12 +888,14 @@ def anode_collection_rhs(
     """Return the plasma the anode mesh collects and neutralizes.
 
     ``anode_jet``: when given
-    (a dict with ``R_N``, ``R_E``, ``phi_a_V``) and the state carries
-    ``M_n``, the backscattered fraction ``R_N`` of each side's collected
-    flux re-emits as a directed jet AWAY from the mesh on the side it was
-    collected from, at ``v_back = sqrt(2 R_E (phi_a + Ti)/m)`` -- the ions
-    fall through the ion-attracting anode sheath ``phi_a`` before striking
-    the wires. Unlike the cathode disc, the implanted-then-desorbed
+    (a dict with ``R_N``, ``R_E``, ``phi_a_V``, ``energy_convention``) and the
+    state carries ``M_n``, the backscattered fraction ``R_N`` of each side's
+    collected flux re-emits as a directed jet AWAY from the mesh on the side it
+    was collected from, at the launch speed
+    :func:`anode_jet_backscatter_speed` builds from ``R_E`` under the declared
+    convention -- the ions fall through the ion-attracting anode sheath
+    ``phi_a`` before striking the wires. Unlike the cathode disc, the
+    implanted-then-desorbed
     remainder ``1 - R_N`` re-emits from thin cylindrical wires with no net
     axial direction, so it stays momentum-free (gas at rest, as before).
     The gap-side jet points at the cathode (-z) and the column-side jet
@@ -904,14 +965,8 @@ def anode_collection_rhs(
                 # Away from the mesh, on the side the ion was collected
                 # from: -z for the low-z flanking cell, +z for the high-z.
                 direction = -1.0 if cell == int(face) - 1 else 1.0
-                v_back = np.sqrt(
-                    2.0
-                    * float(anode_jet["R_E"])
-                    * max(
-                        float(anode_jet["phi_a_V"]) + derived.Ti[cell], 0.0
-                    )
-                    * ev_to_erg
-                    / ion_mass_g
+                v_back = anode_jet_backscatter_speed(
+                    anode_jet, derived.Ti[cell], ion_mass_g
                 )
                 jet_volume = geometry.neutral_volume_cm3[cell]
                 if state.M_n_a is not None:

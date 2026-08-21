@@ -188,36 +188,49 @@ is a small pipe at the chamber wall about 10 cm in front of the anode
 the throw is of order the chord across the chamber, ~2*Rm. Neither centre nor
 width is tunable.
 
-**`S_pump_L = S_pump_R = 2900.0` L/s — DERIVED, bracket [2600, 3300] L/s.**
+**`S_pump_L = S_pump_R = 3000.0` L/s — DERIVED (elbow leg literature-BOXED),
+bracket [2750, 3300] L/s.**
 The per-END lumped pumping speed for helium, i.e. the whole speed the end cell
 sees, ducting included. Each of the four main 2,200 L/s turbos is taken in
 series with its own elbow, `1/S_eff = 1/S_p + 1/C_elbow`. The elbow is modelled
-as a single Ø285.75 mm (11.25") full-centerline tube at exact Clausing
-transmission, with the sharp-miter correction taken as a BRACKET between the
-straight tube and a straight tube lengthened by the customary 1.33 D equivalent
-length. That gives **per-pump `S_eff` ≈ 1470 L/s, bracket [1300, 1650]**. Two
-of those pumps sit at each end, so the per-end lumped speed is `2 * S_eff`,
-rounded to 2900 L/s, and the reported band [2600, 3300] is the endpoint pair
-carried through the same doubling.
+as a single Ø285.75 mm (11.25") full-centerline tube over the full centerline
+at exact Clausing transmission, with the mitred bend entering through a PINNED
+transmission probability rather than an equivalent-length bracket:
+**`P = 0.303`, band [0.296, 0.310]** (Davis Table II bilinear read 0.3055, less
+a Jensen/convexity correction; the Monte-Carlo σ of that combination is 0.0023,
+and reciprocity and binomial-σ authenticity checks pass). That gives **per-pump
+`S_eff` ≈ 1510 L/s**. Two of those pumps sit at each end, so the per-end lumped
+speed is `2 * S_eff`, rounded to 3000 L/s.
+
+The pump — not the line — owns about 72 % of the total series resistance, which
+is why pinning the elbow moves the central value only +2.7 % (per-pump 1470 →
+1510) even though it collapses the elbow's own spread.
 
 Sources: Davis 1960 (*J. Appl. Phys.* **31**, 1169), Table II — Monte-Carlo
-elbow transmission probabilities; Clausing 1932 — the exact straight-tube
-transmission.
+elbow transmission probabilities; Clausing 1932 / Berman — the exact
+straight-tube transmission. Davis's table is a numerical solution, not a
+measurement, which is why the elbow leg is literature-BOXED inside a DERIVED
+entry rather than MEASURED.
 
-> **OPEN CITATION (one line, deliberately left unfilled).** The 1.33 D
-> equivalent-length convention for a sharp miter needs a named vacuum handbook
-> against it, and this entry does not yet carry one. It is **NOT** Davis: an
-> audit of that paper confirmed he never prints the convention, and attributing
-> it to him was the specific error this entry exists to stop repeating. The
-> convention is standard and the number is not in doubt; what is missing is the
-> attribution, and it is recorded as missing rather than guessed. Fill it with
-> the handbook actually consulted before this bracket is quoted in the
-> write-up.
+**Honest bar: the band is now almost entirely the He-spec ASSUMPTION.** The
+2,200 L/s nameplate does not state its spec gas, and that it is 2,200 at all
+rests on Tom's memory of the nameplate — that assumption contributes ±8 % to
+the band against the pinned elbow's ±0.6 %. Read as N2 and converted to helium
+the pump speed is `S_p(He) ∈ [1870, 2310]` L/s; that spread, not the elbow
+geometry, is what the reported [2750, 3300] band is made of.
 
-**He-spec caveat (why the bracket is as wide as it is).** The 2,200 L/s
-nameplate does not state its spec gas. Read as N2 and converted to helium the
-pump speed is `S_p(He) ∈ [1870, 2310]` L/s; that spread, not the elbow
-geometry, is the dominant term in the bracket above.
+**Beaming caveat — RE-SCOPED, not absorbed.** Cosine-re-emission junction terms
+and the diffuse-test-dome basis of the turbo rating are one-sided UPWARD
+residuals of order ≲5 % on `S_eff`. They are not inside the band; they mean the
+truth sits toward the band TOP.
+
+**Two record fixes carried here so they stop being re-quoted.** (i) The
+"straight-tube 0.311 at 5.11 R" figure that earlier passes used is the
+L/R = 5.0 value; exact Berman at 5.11 is ≈ 0.3066, so the miter penalty is
+"≲0.1 D, consistent with zero within Monte-Carlo noise" — **do not quote 0.08 D
+as a number.** (ii) The cathode-end/far-end asymmetry is real (3,020 vs 3,050
+L/s) but an order below the band, so a common per-end value stands and the two
+keys carry the same number.
 
 **The fifth pump is EXCLUDED.** The small cathode-chamber pump on the east
 side is deliberately not in this number. Whether it was valved in on any given
@@ -229,11 +242,21 @@ A/B rather than a silent addition to the stance.
 series-elbow term as well would apply the same restriction twice on the source
 side.
 
-Superseded: `4000` L/s on both ends, an ASSUMED value (the source side had
-previously been 2000, and matching them expressed the reading that the plenum
-aperture rather than the pump speed throttled the source-side rate). The re-cut
-raises the equilibrated fill by roughly +21 to +54 % depending on position
-(+36 % centrally); that rise is the physics of the correction, not a
+Superseded: `2900.0` L/s (the same derivation with the miter treated as an
+equivalent-length BRACKET between a straight tube and one lengthened by the
+customary 1.33 D, per-pump `S_eff` ≈ 1470, band [2600, 3300]); and before it
+`4000` L/s on both ends, an ASSUMED value (the source side had previously been
+2000, and matching them expressed the reading that the plenum aperture rather
+than the pump speed throttled the source-side rate). The 1.33 D
+equivalent-length convention carried an OPEN CITATION here — no vacuum handbook
+had been named against it, and it is emphatically NOT Davis, who never prints
+it. That open item is **discharged by retirement**: the pinned transmission
+probability replaces the convention, so nothing left in this entry needs the
+attribution.
+
+Downstream of the 2,900 → 3,000 step: the equilibrated fill falls −3.3 %, well
+inside the band. Stated against the older 4,000 basis the fill excess restates
+from +36 % to +33 %; that rise is the physics of the correction, not a
 regression. The neutral-seed cache keys on these values and invalidates —
 expected.
 
@@ -840,31 +863,53 @@ backscatter channel's momentum `R_N * v_back ∝ R_N * sqrt(R_E/R_N)` falls by
 about 20 % (0.316 -> 0.247 in units of `sqrt(2(phi_c + Ti)/m)`). Fewer, faster
 reflected atoms.
 
-**`anode_jet_R_N = 0.5`, `anode_jet_R_E = 0.25` — UNCHANGED and NOT re-cut,
-because `anode_neutral_jet` ships `False`.** The anode channel is inert at the
-shipped defaults, so these two carry no result.
+**`anode_jet_R_N = 0.63`, `anode_jet_R_E = 0.41` — DERIVED (same mid-box
+construction as the cathode pair, run for He -> Mo), read in the TOTAL
+reflected-energy convention.** Particle and energy reflection coefficients for
+the molybdenum anode mesh, from the same source and at the same 200 eV rows as
+the cathode pair above (**Eckstein, IPP 9/132**). `R_N` and `R_E` are a PAIR
+and are quoted together for the same reason.
 
-*Banked for arming (do not paste these in without reading the guard below).*
-The same construction run for He -> Mo gives `R_N = 0.63` and, for the energy
-coefficient, **0.41 as a TOTAL reflected fraction / 0.65 PER BACKSCATTERED
-PARTICLE** — two numbers for two different conventions, and they are not
-interchangeable.
+**The energy coefficient is two numbers, not one, and they are not
+interchangeable: 0.41 as a TOTAL reflected fraction, 0.65 PER BACKSCATTERED
+PARTICLE** (`0.41 / 0.63`). The shipped value is the TOTAL one, and
+`anode_jet_energy_convention` is what says so.
 
-> **REGISTERED GUARD — READ BEFORE ANY ANODE-JET ARM.** The cathode slot has a
-> convention key, `cathode_jet_energy_convention`, which fixes whether its
-> `R_E` is read per backscattered particle or as the total reflected energy
-> fraction. **The anode slot has NO such key: it reads `anode_jet_R_E` per
-> particle, unconditionally.** So arming the anode jet with a total-reflected
-> number silently understates the exported energy by a factor `R_N`, and there
-> is nothing in the code to catch it. **Extending the D1 convention key to the
-> anode is REQUIRED before any anode-jet arm is run** — this is a build
-> prerequisite, not a caveat to disclose afterwards.
+Superseded: `R_N = 0.5`, `R_E = 0.25` — placeholders that carried no result
+while the channel was inert, never re-cut because nothing read them.
+
+> **The guard that used to live here is now CODE.** This entry previously
+> carried a registered warning that the anode slot had no convention key and
+> read `anode_jet_R_E` per backscattered particle unconditionally, so arming
+> the jet with the total-reflected 0.41 would silently launch the atoms
+> `sqrt(R_N)` slow — about 21 % low in the momentum channel — with nothing to
+> catch it. `anode_jet_energy_convention` closes that hole: it ships
+> UNDECLARED (`None`), and arming `anode_neutral_jet` while it is undeclared
+> raises at construction. The build prerequisite is discharged.
+
+**`anode_jet_energy_convention = None` (UNDECLARED) — STRUCTURAL, no value
+claimed.** It is a guard, not a physical quantity: `None` is not a third
+reading of `R_E` but a refusal to guess between the two. The stance of record
+declares `"total_reflected"`, which is the convention the coefficient above is
+published in.
 
 Note on both jets' arming state: `cathode_neutral_jet` ships **`True`** (folded
 into the defaults at R2a, 2026-08-20), so the cathode pair above is live in
-every shipped run. `anode_neutral_jet` ships `False`. An earlier version of
-this entry said "Both jets default off"; that has been wrong since the R2a
-fold.
+every shipped run. `anode_neutral_jet` ships **`False`** — the arm is a stance
+decision and lives in `scripts/stances/g1atrim.toml`, not in these defaults, so
+the coefficients above are inert in a bare `default_config()`. An earlier
+version of this entry said "Both jets default off"; that has been wrong since
+the R2a fold.
+
+**`neutral_mesh_accommodation = False` — STRUCTURAL default-off, armed at the
+stance.** The sink itself is a conservation restoration rather than a
+calibration: momentum the anode wires intercept has to land on the anode
+structure instead of staying in the gas, and the open-area throttle alone
+leaves the gap recirculation artificially elastic. It ships off so that every
+configuration predating it stays bit-exact, and it is armed WITH the anode jet
+because the recirculation it corrects is exactly what two opposing surface
+jets create. No fitted number: the blocked area follows from the mesh
+transparency already in the geometry.
 
 **Incidence angle — why the normal-incidence rows are the right ones.** The
 reflection tables are tabulated against angle of incidence, so the choice of

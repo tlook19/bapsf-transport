@@ -1448,6 +1448,9 @@ class LAPDSim1D:
         self._cathode_jet_energy_convention = (
             _jet.cathode_jet_energy_convention
         )
+        self._anode_jet_energy_convention = (
+            _jet.anode_jet_energy_convention
+        )
         self._cathode_surface_ion_retention = (
             _jet.cathode_surface_ion_retention
         )
@@ -7106,6 +7109,7 @@ class LAPDSim1D:
             "R_N": self._anode_jet_R_N,
             "R_E": self._anode_jet_R_E,
             "phi_a_V": phi_a,
+            "energy_convention": self._anode_jet_energy_convention,
         }
 
     def _end_recycle_annulus_volume(self):

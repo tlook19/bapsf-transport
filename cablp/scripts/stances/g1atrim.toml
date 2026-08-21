@@ -350,6 +350,18 @@ cathode_heat_capacity_J_per_K = 181.0
 cathode_emission_profile = "uniform"
 T_s = 1998.15
 
+# ANODE SURFACE RECYCLE. The anode mesh's directed-recycle channel, armed at
+# the stance (the R_N/R_E pair itself is a surface property and lives in the
+# config defaults). The convention key must be declared with the jet: the
+# 0.41 is a TOTAL reflected-energy fraction, and reading it per backscattered
+# particle would launch the atoms ~21% slow.
+anode_neutral_jet = true
+anode_jet_energy_convention = "total_reflected"
+# The wire-intercepted wind momentum lands on the anode structure. It is armed
+# WITH the jet: the sink was built for exactly the opposing-jet recirculation
+# the jet creates, and both act per anode face on both flanking cells.
+neutral_mesh_accommodation = true
+
 # FUELING.
 S_gp = 9010.0
 S_gp_decay_target = 2000
