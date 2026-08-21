@@ -15022,23 +15022,26 @@ def _case_restart_saved_evidence_r1b(r1a_flags, r1a_params):
             raise AssertionError(
                 f"expected frozen surface-control rejection: {stale_param}"
             )
-    # A13 (R3.3): the resolved-boundary surface-loss controls are now DEPRECATED
-    # 0D artifacts -- non-default use warns loudly (no longer frozen, never a
-    # silent no-op) because the resolved geometry measures per-electrode I_sat.
+    # A13 (R3.3, deleted at D3 2026-08-21): the four resolved-boundary
+    # surface-loss controls were 0D artifacts standing in for un-separated
+    # cathode/anode I_sat, and the resolved geometry measures the Bohm I_sat
+    # to each electrode face directly. They now name no key in either
+    # namespace, so the unknown-key refusal owns them -- in BOTH namespaces,
+    # which is what makes the deletion loud rather than silent.
     for dep_params, dep_flags in (
         (dict(r1a_params, source_surface_area_scale=1.7), r1a_flags),
         (dict(r1a_params, end_surface_area_scale=0.9), r1a_flags),
         (r1a_params, dict(r1a_flags, source_surface_loss=False)),
         (r1a_params, dict(r1a_flags, end_surface_loss=False)),
     ):
-        with _dep_warnings.catch_warnings(record=True) as _caught_dep:
-            _dep_warnings.simplefilter("always")
+        try:
             LAPDSim1D(dict(dep_params), dict(dep_flags))
-        assert any(
-            issubclass(w.category, DeprecationWarning)
-            and "DEPRECATED 0D artifacts" in str(w.message)
-            for w in _caught_dep
-        ), f"expected A13 deprecation warning for {dep_params}/{dep_flags}"
+        except ValueError as error:
+            assert "unknown LAPDSim1D configuration keys" in str(error), error
+        else:
+            raise AssertionError(
+                f"expected unknown-key rejection for {dep_params}/{dep_flags}"
+            )
     for birth_name, bad_value in (
         ("Te_birth_ionization", "bogus"),
         ("Ti_birth_ionization", -1.0),

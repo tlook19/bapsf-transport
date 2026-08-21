@@ -1214,13 +1214,6 @@ def fudge_factor_defaults():
         ~1.5-1.8x at 0.1 eV; too large in the warm column, ~1.3x at 5-10 eV).
     alpha_isat:
         Ion-saturation/surface-loss coefficient.
-    source_surface_area_scale:
-        DEPRECATED: 0D artifact that stood in for un-separated cathode/anode
-        I_sat. The resolved geometry measures the Bohm I_sat to each electrode
-        face directly, so this multiplier has no operator to control and is
-        never consumed; non-default use warns.
-    end_surface_area_scale:
-        DEPRECATED: 0D artifact, see ``source_surface_area_scale``.
     b_anode_collection:
         Multiplier on the resolved anode collection sink. This was formerly
         available only through an unregistered ``dict.get`` fallback.
@@ -1310,14 +1303,12 @@ def fudge_factor_defaults():
         # neutral_momentum flag; the deferred ladder).
         "neutral_momentum_radial": "uniform",
         # --- DEPRECATED: legacy ion-neutral drag (superseded by the Phelps
-        # ion_neutral_moment_closure) + the 0D area scales. Warn on
-        # non-default/active use; retained runnable for reproducibility. ---
+        # ion_neutral_moment_closure). Warn on non-default/active use;
+        # retained runnable for reproducibility. ---
         "b_ion_neutral_drag": 1.0,
         "ion_neutral_drag_model": "constant",
         "b_slip_entrainment": 1.0,
         "b_ion_neutral_thermalization": None,
-        "source_surface_area_scale": 1.8,
-        "end_surface_area_scale": 1.0,
     }
 
 
@@ -3053,12 +3044,6 @@ input_flags_template_1d = {
     # launches the CSDA module) and where the resolved geometry has no anode
     # faces. Set False for the with/without-interception A/B.
     "beam_anode_interception": True,
-    # DEPRECATED: 0D-artifact per-electrode surface-loss enables. The resolved
-    # geometry's plasma-terminating (absorbing) faces are a geometry fact, not
-    # a config toggle; these are never consumed and non-default use warns.
-    # Retained at their canonical True so a default run is warning-free.
-    "source_surface_loss": True,
-    "end_surface_loss": True,
     "ion_neutral_drag": True,
     "ion_neutral_drag_cx_only": False,
     # Evolve axial neutral momentum M_n as a sixth conservative field:

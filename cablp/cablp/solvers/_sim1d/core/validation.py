@@ -119,47 +119,6 @@ def validate_r1_configuration_presence(
             "no-ops: "
             + ", ".join(changed)
         )
-    # A13 (R3.3, 2026-07-24): the resolved-boundary surface-loss controls are
-    # DEPRECATED 0D artifacts. In the lumped model they stood in for I_sat
-    # that could not be separated between the cathode and anode; the resolved
-    # geometry measures the Bohm I_sat to each electrode face directly (the
-    # characteristic ghost-cell boundary / anode collection), so the area
-    # scales and enables have NO operator to control and are never consumed.
-    # Their owning repair (R3.3) retires them rather than wiring a 0D fudge
-    # into the resolved boundary. Loud on non-default use (no silent no-op).
-    deprecated_surface_controls = {
-        "source_surface_loss": (
-            bool(flags.get("source_surface_loss", True)), True,
-        ),
-        "end_surface_loss": (
-            bool(flags.get("end_surface_loss", True)), True,
-        ),
-        "source_surface_area_scale": (
-            float(input_dict.get("source_surface_area_scale", 1.8)),
-            1.8,
-        ),
-        "end_surface_area_scale": (
-            float(input_dict.get("end_surface_area_scale", 1.0)),
-            1.0,
-        ),
-    }
-    deprecated = [
-        name
-        for name, (actual, default) in deprecated_surface_controls.items()
-        if actual != default
-    ]
-    if deprecated:
-        warnings.warn(
-            "resolved-boundary surface-loss controls "
-            + ", ".join(deprecated)
-            + " are DEPRECATED 0D artifacts (they stood in for un-separated "
-            "cathode/anode I_sat); the resolved geometry measures the Bohm "
-            "I_sat to each electrode face directly, so they have no effect. "
-            "Remove them; reproduce 0D-scaled runs at tag "
-            "legacy-final-2026-07-22.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
     # R5 stance flip (2026-07-25) deprecations. These paths remain runnable
     # (A/B arms + tag reproducibility) but are superseded by the repaired
     # production baseline; a non-default/active use warns.

@@ -474,10 +474,6 @@ is the campaign value, folded here from the stance file at R2b (2026-08-20);
 the bracket it sits in, and what may be claimed from it, are in
 `scripts/production_stance_provenance.md`.
 
-**`source_surface_area_scale = 1.8` — FITTED, DEPRECATED.** A 0D artifact that
-stood in for un-separated cathode/anode I_sat. Never consumed by the resolved
-geometry.
-
 ## `cathode_defaults`
 
 ### Circuit

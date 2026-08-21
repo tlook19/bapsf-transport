@@ -146,7 +146,7 @@ INERT_FLAG_KEYS = frozenset({
     "icool", "icool_recomb", "implicit_heat_conduction", "ion_neutral_drag",
     "ion_neutral_drag_cx_only", "ion_neutral_moment_closure",
     "ion_neutral_thermalization", "ionization_energy_cost", "ncool",
-    "source_surface_loss", "end_surface_loss", "raw_stage_validation",
+    "raw_stage_validation",
     "debug_checks",
     # end_recycle_to_annulus changes ONLY the two plasma-terminating boundary
     # terms (boundary_absorption / characteristic_boundary), and an

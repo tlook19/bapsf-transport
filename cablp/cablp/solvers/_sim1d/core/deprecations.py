@@ -30,11 +30,9 @@ Two classes of row exist:
 Controls that already have their own louder guard are deliberately ABSENT.
 ``front_flux_model``, ``D_amb_model``, ``cathode_model`` and ``D_amb`` are
 frozen by ``LAPDSim1D._validate_r1_configuration_presence`` and raise on
-non-default use; the four resolved-boundary surface-loss controls
-(``source_surface_loss``, ``end_surface_loss``, ``source_surface_area_scale``,
-``end_surface_area_scale``), ``gas_puff_mode``'s retired waveform modes and the
-legacy ion-neutral path (``ion_neutral_moment_closure=False``) already warn from
-that same method. Adding a second warning for the same condition would only
+non-default use; ``gas_puff_mode``'s retired waveform modes and the legacy
+ion-neutral path (``ion_neutral_moment_closure=False``) already warn from that
+same method. Adding a second warning for the same condition would only
 duplicate it.
 
 Closure families with a live A/B are APPARATUS, not legacy, and are absent for
