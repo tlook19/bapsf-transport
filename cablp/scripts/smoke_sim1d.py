@@ -67,7 +67,7 @@ The suppression is deliberately narrow in both directions:
 * only cases that BUILD ON a pinned config dict are muted -- either straight
   from a fixture, or from one a predecessor derived and handed on -- so a case
   that constructs a deprecated configuration of its own still prints its
-  warning (50 of the 106 cases carry the flag; the other 56 warn as usual);
+  warning (51 of the 107 cases carry the flag; the other 56 warn as usual);
 * ``production-construction-warning-free`` is not muted, and it asserts
   against a fresh ``warnings.catch_warnings(record=True)`` with
   ``simplefilter("always")``, which overrides any outer filter -- a production
@@ -196,6 +196,7 @@ from cablp.solvers._sim1d.physics.sources import (
     ion_neutral_thermalization_rhs,
     neutral_momentum_two_zone_rhs,
     neutral_momentum_wall_rhs,
+    neutral_wall_partition_survival,
     neutral_wind_two_zone_factors,
     neutral_wind_velocity,
     velocity_divergence,
@@ -212,7 +213,7 @@ from cablp.solvers._sim1d.core.state import (
     unpack_state,
 )
 from cablp.vars._cons import (
-    I_ion, en_factor, ev_to_erg, m_He_cgs, m_p_cgs, qe_SI
+    I_ion, en_factor, ev_to_erg, kb_cgs, m_He_cgs, m_p_cgs, qe_SI
 )
 
 
@@ -11745,6 +11746,192 @@ def _case_neutral_kinetic_two_momentum_reduction(
         p2z_run_sim.save_result(p2z_path, p2z_result)
         p2z_loaded = load_result_hdf5(p2z_path)
         assert np.allclose(p2z_loaded.nn_a, p2z_result.nn_a)
+
+
+# --------------------------------------------------------------------
+# neutral-wall-momentum-partition
+# --------------------------------------------------------------------
+@_case(
+    "neutral-wall-momentum-partition",
+    historical_stance=True,
+)
+def _case_neutral_wall_momentum_partition():
+    # --- WALL-BRANCH MOMENTUM PARTITION (neutral_wall_momentum_partition).
+    # The two-zone wall branch -nu_wall*M_n_a assumes free-molecular flight to
+    # the vessel wall. At finite density a He-He elastic collision can
+    # intercept it, and that momentum stays in the annulus gas. The survival
+    # weight is the cosine-averaged slab transmission 2*E_3(tau) across the
+    # annulus radial thickness. MOMENTUM ONLY, ANNULUS ONLY, and a strict
+    # refinement: tau -> 0 reproduces the unpartitioned ledger bit-for-bit.
+    ewp_sigma = 2.044e-15  # cm^2, exercised value only (no solver default)
+    ewp_geom = SimpleNamespace(
+        Rp_cm=np.array([15.0, 15.0, 50.0]),
+        Rm_cm=np.full(3, 50.0),
+    )
+    ewp_nn_a = np.array([5.0e11, 5.0e12, 5.0e11])
+
+    # Survival weight is exactly the cosine-averaged transmission, and the
+    # cell without an annulus (Rp >= Rm) has zero optical depth.
+    ewp_surv, ewp_tau, ewp_mfp = neutral_wall_partition_survival(
+        ewp_geom, ewp_nn_a, ewp_sigma
+    )
+    assert np.allclose(ewp_mfp[:2], 1.0 / (ewp_nn_a[:2] * ewp_sigma), rtol=1e-15)
+    assert np.allclose(
+        ewp_tau[:2], (50.0 - 15.0) * ewp_nn_a[:2] * ewp_sigma, rtol=1e-15
+    )
+    assert ewp_tau[2] == 0.0 and ewp_surv[2] == 1.0
+    # Hand-integrated 2 * int_0^1 mu exp(-tau/mu) dmu on a fine mu grid.
+    ewp_mu = np.linspace(1e-9, 1.0, 400001)
+    for ewp_i in (0, 1):
+        ewp_hand = 2.0 * np.trapezoid(
+            ewp_mu * np.exp(-ewp_tau[ewp_i] / ewp_mu), ewp_mu
+        )
+        assert abs(ewp_surv[ewp_i] - ewp_hand) < 1e-9, (
+            f"survival weight is not the cosine-averaged transmission: "
+            f"{ewp_surv[ewp_i]} vs {ewp_hand}"
+        )
+    # Denser gas attenuates more, and the weight stays a probability.
+    assert ewp_surv[1] < ewp_surv[0] < 1.0
+    assert np.all((ewp_surv >= 0.0) & (ewp_surv <= 1.0))
+
+    # A two-zone state with an evolved annulus wind.
+    ewp_mass = 6.6464731e-24
+    ewp_cells = 3
+    ewp_full_geom = SimpleNamespace(
+        Rp_cm=ewp_geom.Rp_cm,
+        Rm_cm=ewp_geom.Rm_cm,
+        plasma_volume_cm3=np.pi * ewp_geom.Rp_cm**2 * 10.0,
+        neutral_volume_cm3=np.pi * ewp_geom.Rm_cm**2 * 10.0,
+    )
+    ewp_ones = np.ones(ewp_cells)
+    ewp_state = ConservativeState1D(
+        n=1.0e12 * ewp_ones,
+        nn=5.0e11 * ewp_ones,
+        M=ewp_mass * 1.0e12 * 3.0e5 * ewp_ones,
+        Ee=1.5 * 1.0e12 * 3.0 * 1.602176634e-12 * ewp_ones,
+        Ei=1.5 * 1.0e12 * 2.0 * 1.602176634e-12 * ewp_ones,
+        M_n=ewp_mass * 5.0e11 * 1.0e5 * ewp_ones,
+        nn_a=ewp_nn_a,
+        M_n_a=ewp_mass * ewp_nn_a * 4.0e4,
+    )
+    ewp_floors = {"n": 1.0e6, "nn": 1.0e6, "Te": 0.1, "Ti": 0.1}
+    ewp_kw = dict(
+        state=ewp_state,
+        floors=ewp_floors,
+        ion_mass_g=ewp_mass,
+        geometry=ewp_full_geom,
+    )
+    ewp_off = neutral_momentum_two_zone_rhs(**ewp_kw, sigma_hehe_cm2=None)
+    ewp_on = neutral_momentum_two_zone_rhs(**ewp_kw, sigma_hehe_cm2=ewp_sigma)
+
+    # ROW ISOLATION: the partition moves the annulus momentum row and nothing
+    # else -- no particle row, no energy row, not even the column momentum.
+    for ewp_row in ("n", "nn", "M", "Ee", "Ei", "M_n", "nn_a"):
+        assert np.array_equal(
+            getattr(ewp_off, ewp_row), getattr(ewp_on, ewp_row)
+        ), f"wall-branch partition moved the {ewp_row!r} row"
+
+    # PAIRWISE PARTNER: absorbed + retained is exactly the wall-branch pool,
+    # so the split fabricates nothing, and the live annulus row actually
+    # gained (the inert third cell has no annulus and must not move).
+    ewp_Vc, ewp_Va = neutral_zone_volumes(ewp_full_geom)
+    ewp_vbar_n = np.sqrt(8.0 * 300.0 * kb_cgs / (np.pi * ewp_mass))
+    ewp_nu_wall = np.where(
+        ewp_Va > 0.0,
+        ewp_vbar_n * ewp_geom.Rm_cm
+        / (2.0 * np.maximum(ewp_geom.Rm_cm**2 - ewp_geom.Rp_cm**2, 1e-300)),
+        0.0,
+    )
+    ewp_pool = ewp_nu_wall * np.asarray(ewp_state.M_n_a, dtype=float)
+    ewp_absorbed = ewp_surv * ewp_pool
+    ewp_retained = ewp_pool - ewp_absorbed
+    assert np.array_equal(ewp_absorbed + ewp_retained, ewp_pool), (
+        "wall-branch partition is not a partition: absorbed + retained "
+        f"{ewp_absorbed + ewp_retained} != pool {ewp_pool}"
+    )
+    assert np.all(ewp_retained[:2] > 0.0)
+    assert ewp_retained[2] == 0.0
+    assert np.all(ewp_retained <= ewp_pool)
+    ewp_gain = np.asarray(ewp_on.M_n_a) - np.asarray(ewp_off.M_n_a)
+    assert np.allclose(ewp_gain, ewp_retained, rtol=1e-12, atol=0.0), (
+        f"annulus gain {ewp_gain} does not match the wall-absorption "
+        f"decrement {ewp_retained}"
+    )
+    assert ewp_gain[2] == 0.0
+
+    # CONSERVATION with the flag on: the operator's only momentum leak is the
+    # wall absorption it books, and that leak is strictly SMALLER than the
+    # unpartitioned one (momentum was kept, not created).
+    ewp_net = float(
+        np.sum(np.asarray(ewp_on.M_n) * ewp_Vc)
+        + np.sum(np.asarray(ewp_on.M_n_a) * ewp_Va)
+    )
+    ewp_booked = float(np.sum(ewp_absorbed * ewp_Va))
+    assert ewp_booked > 0.0
+    assert abs(ewp_net + ewp_booked) < 1e-12 * ewp_booked, (
+        f"flag-on two-zone momentum closure broke: net {ewp_net} vs booked "
+        f"wall absorption {ewp_booked}"
+    )
+    assert ewp_booked < float(np.sum(ewp_pool * ewp_Va))
+
+    # BIT-EXACT OFF, twice over: sigma_hehe_cm2=None leaves every row of the
+    # operator untouched, and a zero optical depth (free-molecular limit)
+    # reproduces it exactly even with the partition armed.
+    ewp_fm_state = ConservativeState1D(
+        n=ewp_state.n, nn=ewp_state.nn, M=ewp_state.M, Ee=ewp_state.Ee,
+        Ei=ewp_state.Ei, M_n=ewp_state.M_n,
+        nn_a=np.zeros_like(ewp_nn_a), M_n_a=np.zeros_like(ewp_nn_a),
+    )
+    ewp_fm_kw = dict(ewp_kw, state=ewp_fm_state)
+    ewp_fm_off = neutral_momentum_two_zone_rhs(**ewp_fm_kw, sigma_hehe_cm2=None)
+    ewp_fm_on = neutral_momentum_two_zone_rhs(
+        **ewp_fm_kw, sigma_hehe_cm2=ewp_sigma
+    )
+    ewp_fm_surv, _, _ = neutral_wall_partition_survival(
+        ewp_full_geom, ewp_fm_state.nn_a, ewp_sigma
+    )
+    assert np.all(ewp_fm_surv == 1.0)
+    for ewp_row in ("n", "nn", "M", "Ee", "Ei", "M_n", "nn_a", "M_n_a"):
+        assert np.array_equal(
+            getattr(ewp_fm_off, ewp_row), getattr(ewp_fm_on, ewp_row)
+        ), f"free-molecular limit is not bit-exact on the {ewp_row!r} row"
+
+    # CONSTRUCTION-TIME REFUSALS. The flag is presence-gated in both
+    # directions, so neither an armed flag without a cross section nor a
+    # cross section without the flag can reach a run.
+    ewp_params, ewp_flags = _base_config()
+    ewp_2m = dict(ewp_params, neutral_momentum_radial="kinetic_two_moment")
+    ewp_2m_flags = dict(
+        ewp_flags,
+        neutral_two_zone=True,
+        neutral_momentum=True,
+        neutral_energy=False,
+    )
+    for ewp_p, ewp_f, ewp_why in (
+        (ewp_2m, dict(ewp_2m_flags, neutral_wall_momentum_partition=True),
+         "armed flag with no cross section"),
+        (dict(ewp_params, neutral_wall_partition_sigma_hehe_cm2=ewp_sigma),
+         ewp_flags, "cross section with the flag off"),
+        (dict(ewp_params, neutral_wall_partition_sigma_hehe_cm2=ewp_sigma),
+         dict(ewp_flags, neutral_wall_momentum_partition=True),
+         "armed flag under the wrong radial closure"),
+        (dict(ewp_2m, neutral_wall_partition_sigma_hehe_cm2=-1.0),
+         dict(ewp_2m_flags, neutral_wall_momentum_partition=True),
+         "non-positive cross section"),
+    ):
+        try:
+            LAPDSim1D(ewp_p, ewp_f)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                f"LAPDSim1D accepted a misconfiguration: {ewp_why}"
+            )
+
+    # The default configuration leaves the flag off and the cross section
+    # unset, so the shipped ledger is the unpartitioned one.
+    assert ewp_flags.get("neutral_wall_momentum_partition", False) is False
+    assert ewp_params.get("neutral_wall_partition_sigma_hehe_cm2") is None
 
 
 # --------------------------------------------------------------------

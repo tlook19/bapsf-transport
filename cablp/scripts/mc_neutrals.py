@@ -9,7 +9,14 @@ solver's nn / u_n is closure error, not input error.
 Physics: axisymmetric cylinder r < Rm(z), z in [0, Lm]; plasma column
 r < Rp(z) carries the 1D fields (n, Te, Ti, u_i). Free-molecular neutrals
 (no neutral-neutral collisions -- Kn >~ 1): free flight + null-collision
-events. Events: electron-impact ionization (absorb), resonant CX (resample
+events. That Kn assumption is REGIME-CONDITIONAL: clean in the
+ionization-depleted discharge column, but only MARGINAL in the annulus, where
+fill-density gas (nn ~ 2e13 cm^-3) gives a He-He momentum-transfer mfp of
+~24.5 cm across a ~35 cm radial thickness, i.e. Kn ~ 0.8. Equilibrium DENSITY
+tallies are insensitive to this (they are set by source and sink balance, not
+by flight history), but TRANSIT-DEPENDENT tallies -- timing, reach, directed
+flows, hot-atom penetration depth -- carry an undisclosed O(1) uncertainty
+wherever the gas sits near fill density. Events: electron-impact ionization (absorb), resonant CX (resample
 velocity from the local ion Maxwellian + drift: the relay). Boundaries:
 diffuse 300 K re-emission at the radial wall and collector; the anode mesh
 plane intercepts with probability 1 - T (T = 1 - eta) and re-emits on the

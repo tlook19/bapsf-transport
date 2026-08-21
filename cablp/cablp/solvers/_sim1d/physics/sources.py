@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.special import expn
 
 from cablp.funcs._cross import (
     charge_ex_react,
@@ -2015,12 +2016,83 @@ def _end_face_wall_rate(u_n, face_area_cm2, volume_cm3):
     return rate
 
 
+def neutral_wall_partition_survival(geometry, nn_a, sigma_hehe_cm2):
+    """Return ``(survival, tau, mfp_cm)`` for the wall-branch momentum partition.
+
+    The free-molecular wall branch assumes every annulus atom flies to the
+    vessel wall unimpeded. At finite gas density it does not: a He atom
+    crossing the annulus of radial thickness ``d = Rm - Rp`` may collide with
+    another He atom first, in which case its directed momentum stays in the
+    gas instead of accommodating on the surface.
+
+    The He--He momentum-transfer mean free path is
+    ``mfp = 1 / (nn_a sigma_HeHe)`` [cm].
+    An atom emitted at direction cosine ``mu`` to the radial normal traverses
+    the slant path ``L = d / mu``, so its collisionless survival to the wall is
+    ``exp(-L/mfp) = exp(-tau/mu)`` with the optical depth ``tau = d/mfp``.
+    Averaging that over the cosine-weighted exit geometry (``2 mu dmu`` on
+    ``[0, 1]``) gives the standard slab transmission
+
+        survival = 2 * integral_0^1 mu exp(-tau/mu) dmu = 2 E_3(tau)
+
+    with ``E_3`` the third exponential integral. ``survival`` is the fraction
+    of wall-branch momentum that still reaches the wall; the complement
+    ``1 - survival`` is retained by the annulus gas. The free-molecular limit
+    is exact: ``2 E_3(0) = 1``, so a zero optical depth reproduces the
+    unpartitioned ledger bit-for-bit.
+
+    ``sigma_HeHe`` [cm^2] is the MOMENTUM-TRANSFER cross section ``sigma_mt``
+    (the ``Omega^(1,1)``-derived moment), not a total elastic one. What is
+    being attenuated here is DIRECTED MOMENTUM, not particle number: a
+    small-angle He--He encounter barely deflects the atom and so barely
+    removes its forward momentum, whereas a quantum-total cross section counts
+    that encounter at full weight. Using the total would therefore overcount
+    interception and over-suppress the wall branch. A literature box for
+    ``sigma_mt`` is in flight.
+
+    KERNEL-CONDITIONALITY (disclosed). ``2 E_3(tau)`` is the SURFACE-EMITTED
+    single-flight transmission -- every atom starts at one face and crosses the
+    full thickness ``d``. The wall-bound momentum pool is not surface-emitted:
+    it is volume-distributed through the annulus, at a mean depth of about
+    ``d/2``, so the survival number is conditional on which kernel of the
+    family is chosen. At ``tau = 1.29`` (the production fill point) the three
+    natural members give
+
+        surface-emitted single flight   2 E_3(tau)                    ~ 0.149
+        volume-averaged single flight   (2/tau) [1/3 - E_4(tau)]      ~ 0.424
+        diffusive                       1 / (1 + 3 tau / 4)           ~ 0.508
+
+    This implementation is the FIRST, which is the most retention-biased
+    member of the family -- it is the one the registered
+    "transverse-radial-exit, mu-averaged" wording specifies, and it
+    over-suppresses wall loss as ``tau -> infinity``. Read the re-routed
+    fraction as the retention-biased end of a kernel bracket, not as a point
+    value.
+
+    Cells with no annulus (``Rp >= Rm``) get ``tau = 0`` and unit survival,
+    matching the wall rate the caller already zeroes there. A zero density or
+    a zero cross section likewise gives unit survival and an infinite path.
+    """
+    Rp = np.asarray(geometry.Rp_cm, dtype=float)
+    Rm = np.asarray(geometry.Rm_cm, dtype=float)
+    sigma = float(sigma_hehe_cm2)
+    dens = np.maximum(np.asarray(nn_a, dtype=float), 0.0)
+    thickness = np.maximum(Rm - Rp, 0.0)
+    inv_mfp = dens * sigma
+    with np.errstate(divide="ignore"):
+        mfp = np.where(inv_mfp > 0.0, 1.0 / np.maximum(inv_mfp, 1e-300), np.inf)
+    tau = thickness * inv_mfp
+    survival = 2.0 * expn(3, tau)
+    return survival, tau, mfp
+
+
 def neutral_momentum_two_zone_rhs(
     state,
     floors,
     ion_mass_g,
     geometry,
     Tn_K=300.0,
+    sigma_hehe_cm2=None,
 ):
     """Return conservative column/annulus radial momentum exchange and wall loss.
 
@@ -2030,6 +2102,18 @@ def neutral_momentum_two_zone_rhs(
     free-molecular rate. Equal and opposite volume-integrated transfers make
     the radial exchange exact. Only annulus momentum accommodates on the
     vessel wall.
+
+    A non-``None`` ``sigma_hehe_cm2`` [cm^2] arms the wall-branch momentum
+    PARTITION (the ``neutral_wall_momentum_partition`` flag). The wall
+    absorption ``nu_wall M_n_a`` is then split by the He--He survival weight of
+    ``neutral_wall_partition_survival``: only ``survival * nu_wall M_n_a``
+    accommodates on the surface, and the complement stays on the annulus
+    momentum row. The split is a partition by construction -- the retained part
+    is formed as the exact FP complement of the absorbed part -- so every
+    increment this adds to ``M_n_a`` is matched by an equal decrement of its
+    own partner, the wall-absorption term. Particle and energy channels are
+    untouched: this partitions momentum only. ``None`` (the default) leaves the
+    ledger byte-identical.
     """
     zeros = np.zeros_like(state.nn, dtype=float)
     if state.M_n_a is None:
@@ -2065,7 +2149,15 @@ def neutral_momentum_two_zone_rhs(
     Ma = np.asarray(state.M_n_a, dtype=float)
     transfer = -Vc * nu_ca * Mc + Va * nu_ac * Ma
     dMc = transfer / np.maximum(Vc, 1e-300)
-    dMa = -transfer / np.maximum(Va, 1e-300) - nu_wall * Ma
+    wall_total = nu_wall * Ma
+    if sigma_hehe_cm2 is None:
+        wall_absorbed = wall_total
+    else:
+        survival, _tau, _mfp = neutral_wall_partition_survival(
+            geometry, state.nn_a, sigma_hehe_cm2
+        )
+        wall_absorbed = survival * wall_total
+    dMa = -transfer / np.maximum(Va, 1e-300) - wall_absorbed
     dMa = np.where(live, dMa, 0.0)
     return ConservativeState1D(
         n=zeros,

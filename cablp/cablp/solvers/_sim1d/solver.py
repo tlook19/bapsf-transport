@@ -1266,6 +1266,51 @@ class LAPDSim1D:
                 "neutral_momentum_radial='kinetic_two_moment' requires "
                 "neutral_two_zone"
             )
+        # Wall-branch momentum partition (default off, bit-exact off). The
+        # cross section is presence-gated in BOTH directions so an armed flag
+        # can never fall back on a defaulted number and a stray cross section
+        # can never be silently inert.
+        self._neutral_wall_momentum_partition = bool(
+            self._flags.get("neutral_wall_momentum_partition", False)
+        )
+        _wall_sigma = self._input_dict.get(
+            "neutral_wall_partition_sigma_hehe_cm2", None
+        )
+        if self._neutral_wall_momentum_partition:
+            if not self._neutral_two_momentum:
+                raise ValueError(
+                    "the neutral_wall_momentum_partition flag requires "
+                    "neutral_momentum_radial='kinetic_two_moment': it "
+                    "partitions the wall branch of the two-zone momentum "
+                    "operator, and no other radial closure carries an annulus "
+                    "momentum row for that branch to act on. Accepted: "
+                    "neutral_wall_momentum_partition with "
+                    "neutral_momentum_radial='kinetic_two_moment'"
+                )
+            if _wall_sigma is None:
+                raise ValueError(
+                    "the neutral_wall_momentum_partition flag requires "
+                    "neutral_wall_partition_sigma_hehe_cm2: the He-He elastic "
+                    "cross section sets the mean free path the survival "
+                    "weight is built from and has no default, because no "
+                    "literature-boxed value is carried in the solver"
+                )
+            _wall_sigma = float(_wall_sigma)
+            if not np.isfinite(_wall_sigma) or _wall_sigma <= 0.0:
+                raise ValueError(
+                    "neutral_wall_partition_sigma_hehe_cm2 must be finite and "
+                    f"strictly positive [cm^2]; got {_wall_sigma!r}"
+                )
+            self._neutral_wall_partition_sigma = _wall_sigma
+        else:
+            if _wall_sigma is not None:
+                raise ValueError(
+                    "neutral_wall_partition_sigma_hehe_cm2 is read only under "
+                    "the neutral_wall_momentum_partition flag; setting it "
+                    f"with the flag off (got {_wall_sigma!r}) would be an "
+                    "inert control. Accepted: set both, or neither"
+                )
+            self._neutral_wall_partition_sigma = None
         # Evolved neutral thermal energy (default off, bit-exact off). The
         # field only means anything alongside the moment-closed collision
         # operator (which is what reads and feeds it) and an evolved wind
@@ -7282,6 +7327,7 @@ class LAPDSim1D:
             ion_mass_g=self._ion_mass_g,
             geometry=self._geometry,
             Tn_K=float(self._input_dict.get("Tn_K", 300.0)),
+            sigma_hehe_cm2=self._neutral_wall_partition_sigma,
         )
 
     def neutral_wind_advection_rhs(self, y=None, state=None):
