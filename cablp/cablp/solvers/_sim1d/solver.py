@@ -17,6 +17,7 @@ from .core.config import (
     resolve_config,
     resolve_nn0,
 )
+from .core.deprecations import warn_deprecated_config
 from .core.geometry import (
     _anode_neutral_transparency,
     absorbing_live_cells_by_role,
@@ -776,6 +777,14 @@ class LAPDSim1D:
                 "'constant' or 'cx_derived' for other gases"
             )
         self._validate_r1_configuration_presence()
+        # The declarative half of the deprecation surface (core/deprecations.py):
+        # one DeprecationWarning per deprecated control this config actually
+        # uses. It reads the canonical defaults from the config templates, so
+        # default_config() construction is warning-free by construction and no
+        # value is changed -- a deprecated path stays runnable and bit-identical.
+        # The hand-written blocks in _validate_r1_configuration_presence above
+        # keep their own conditions and are NOT duplicated in that table.
+        warn_deprecated_config(self._input_dict, self._flags, stacklevel=2)
         self._validate_neutral_seed_cache_config()
         self._validate_equilibration_gas_puff_on()
         _x = float(self._input_dict.get("R_comp_partition", 1.0))
