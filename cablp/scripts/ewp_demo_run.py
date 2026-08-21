@@ -71,7 +71,6 @@ def report(sim, sigma, label):
     survival, tau, mfp = neutral_wall_partition_survival(geom, nn_a, sigma)
 
     terms = sim.rhs_terms()
-    radial = terms["neutral_momentum_radial"]
 
     # The wall-branch pool: rebuild nu_wall from the closure's definition.
     from cablp.vars._cons import kb_cgs
