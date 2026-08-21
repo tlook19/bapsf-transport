@@ -9,7 +9,15 @@ previously committed hashes bit for bit. If it does, the fixture's only delta is
 the new key and the regeneration is a bookkeeping act; if it does not, something
 else moved and the regeneration would bury it.
 
-    python scripts/t23c_config_snapshot_delta.py --key cathode_jet_hot_carrier
+The comparison is against the PRE-change fixture, so once the fixture has been
+regenerated the proof must be pointed at the old one explicitly -- which is
+what makes it re-runnable by a reviewer rather than a one-shot:
+
+    git show <base>:cablp/cablp/solvers/_sim1d/config_snapshots.json > old.json
+    python scripts/t23c_config_snapshot_delta.py --against old.json
+
+With no ``--against`` it reads the committed fixture, which is the right target
+BEFORE the regeneration and a guaranteed mismatch after it.
 """
 
 import argparse
@@ -45,10 +53,16 @@ def _sha(obj):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--key", default="cathode_jet_hot_carrier")
+    parser.add_argument(
+        "--against",
+        type=Path,
+        default=SNAPSHOT_PATH,
+        help="the PRE-change fixture to prove the delta against",
+    )
     args = parser.parse_args()
     key = args.key
 
-    committed = json.loads(SNAPSHOT_PATH.read_text())
+    committed = json.loads(args.against.read_text())
     live = current_snapshots()
 
     manifest = config_manifest()
