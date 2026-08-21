@@ -8,8 +8,6 @@ from ._heat import (
     ion_par_heat_face_flux,
     kappa_par_elec,
     kappa_par_ion,
-    kappa_perp_elec,
-    kappa_perp_ion,
 )
 from ._plasmaparams import *
 from ._cathode_solver import *

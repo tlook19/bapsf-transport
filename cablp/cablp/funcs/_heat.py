@@ -5,8 +5,6 @@ from ._plasmaparams import (
     time_ion_coll,
     v_thm_e,
     v_ion_speed,
-    elec_gyro_freq,
-    ion_gyro_freq,
 )
 
 
@@ -134,82 +132,6 @@ def ion_par_heat_face_flux(Ti, ni, L_plasma, mu, lnlambda):
     kappa_face = (kappa[:-1] + kappa[1:]) / 2
     d_face = (L_plasma[:-1] + L_plasma[1:]) / 2
     return -kappa_face * (Ti[1:] - Ti[:-1]) / d_face
-
-
-def kappa_perp_elec(Te, ne, B, lnlambda, per_particle=True, *, rk=None):
-    """
-    Electron perpendicular thermal conductivity (classical) [eV·cm²/s or eV·cm⁻¹/s].
-
-    kappa_perp = 4.7 * v_the² / Omega_e² / tau_e
-
-    Parameters
-    ----------
-    Te : float or array
-        Electron temperature [eV].
-    ne : float or array
-        Electron density [cm⁻³].
-    B : float or array
-        Magnetic field [Gauss].
-    lnlambda : float or array
-        Coulomb logarithm.
-    per_particle : bool
-        If True return per-particle; if False return volumetric (× ne).
-
-    Returns
-    -------
-    float or array
-        Perpendicular electron thermal conductivity.
-    """
-    per_particle = _resolve_per_particle(per_particle, rk)
-    k = (
-        4.7
-        * v_thm_e(Te) ** 2
-        / elec_gyro_freq(B) ** 2
-        / time_elec_coll(Te, ne, lnlambda)
-    )
-    if per_particle:
-        return k
-    else:
-        return k * ne
-
-
-def kappa_perp_ion(Ti, ni, B, mu, lnlambda, per_particle=True, *, rk=None):
-    """
-    Ion perpendicular thermal conductivity (classical) [eV·cm²/s or eV·cm⁻¹/s].
-
-    kappa_perp = 2 * v_thi² / Omega_i² / tau_i
-
-    Parameters
-    ----------
-    Ti : float or array
-        Ion temperature [eV].
-    ni : float or array
-        Ion density [cm⁻³].
-    B : float or array
-        Magnetic field [Gauss].
-    mu : float
-        Ion mass number.
-    lnlambda : float or array
-        Coulomb logarithm.
-    per_particle : bool
-        If True return per-particle; if False return volumetric (× ni).
-
-    Returns
-    -------
-    float or array
-        Perpendicular ion thermal conductivity.
-    """
-    per_particle = _resolve_per_particle(per_particle, rk)
-    k = (
-        2
-        * v_ion_speed(Ti, mu) ** 2
-        / ion_gyro_freq(B, mu) ** 2
-        / time_ion_coll(Ti, ni, mu, lnlambda)
-    )
-    if per_particle:
-        return k
-    else:
-        return k * ni
 
 
 def Q_ie(Te, Ti, ne, mu, lnlambda, per_particle=True, *, rk=None):
