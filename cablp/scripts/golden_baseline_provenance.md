@@ -1,8 +1,9 @@
 # Provenance of the golden baseline pins (`baseline_sim1d.BASELINE_*_OVERRIDES`)
 
-**Recaptured 2026-08-20 (the stance-update wave; re-anchored onto the stance at
-thread-24 R2b immediately before it — both under the reviewed-recapture
-protocol, see the recapture record below).** The committed regression fixture
+**Recaptured 2026-08-21 (the pre-Tuesday physics batch; the 2026-08-20
+stance-update wave and the thread-24 R2b re-anchor onto the stance preceded it
+— all three under the reviewed-recapture protocol, see the recapture record
+below).** The committed regression fixture
 `scripts/baselines/production_discharge.npz` is captured at **the stance of
 record, re-cut to the gate mesh** — `default_config()` plus the committed stance
 file `scripts/stances/g1atrim.toml`, minus that stance's mesh-sized package,
@@ -80,7 +81,7 @@ to be.
 |---|---|---|
 | `nx` | `60` | Axial resolution of the far column: a pure cost knob. The campaign runs 268; a reviewer pays for this gate on the candidate branch and again post-merge. Pinned rather than inherited so a future default-`nx` change cannot multiply every gate's runtime silently. |
 | `max_steps_action` | `"raise"` | Deliberately overrides the stance's `"stop"`. For a campaign arm a step cap is a budget and a truncated arm is still data; here the cap is a tripwire, and tripping it should be loud. |
-| `max_steps` (run kwarg) | `150000` | **A tripwire, not a run length** — ~1.8× the measured 84,276 steps. It exists so a change that quietly destroys the timestep fails fast instead of running for hours. If it fires, the question is what happened to `dt`, not what happened to the trajectory. Sized at 2× deliberately: a backstop with a few percent of headroom is not a backstop, it is a second cost cap waiting to truncate the gate. |
+| `max_steps` (run kwarg) | `150000` | **A tripwire, not a run length** — ~1.9× the measured 80,516 steps. It exists so a change that quietly destroys the timestep fails fast instead of running for hours. If it fires, the question is what happened to `dt`, not what happened to the trajectory. Sized at 2× deliberately: a backstop with a few percent of headroom is not a backstop, it is a second cost cap waiting to truncate the gate. |
 
 `BASELINE_FLAG_OVERRIDES` carries one entry, `neutral_equilibration = True`, for
 the reason given in the re-cut section above.
@@ -94,14 +95,15 @@ whole cycle rather than a truncated foot.
 
 | quantity | value |
 |---|---|
-| steps | 84,276 |
-| wall, single lane | 917 s / 986 s over the two captures (~15.3 / 16.4 min) |
-| saves | 2,626 |
-| `final_time` | 2.624091e-02 s (the dynamic `t_end`, reached) |
-| trajectory | `y[2626, 576]` = 8 fields × 72 cells |
-| phase census (saves) | 9 `pre_breakdown`, 16 `breakdown`, 2000 `main_discharge`, 600 `afterglow`, 1 `post_afterglow` |
+| steps | 80,516 |
+| wall, single lane | 936 s / 907 s over the two captures (~15.6 / 15.1 min) |
+| saves | 2,627 |
+| `final_time` | 2.625887e-02 s (the dynamic `t_end`, reached) |
+| trajectory | `y[2627, 576]` = 8 fields × 72 cells |
+| phase census (saves) | 9 `pre_breakdown`, 17 `breakdown`, 2000 `main_discharge`, 600 `afterglow`, 1 `post_afterglow` |
+| save cadence | 10 us — the finest timing shift this fixture can resolve |
 
-*(Figures above are the 2026-08-20 stance-update-wave capture. The two captures
+*(Figures above are the 2026-08-21 physics-batch capture. The two captures
 were bit-identical but not equal in wall time; the spread is scheduling, not
 trajectory, and the smaller figure is the cleaner lane.)*
 
@@ -123,6 +125,74 @@ stance the cells carry plasma and the term is well behaved. Recorded as a known
 closure stress, deliberately not addressed by this pass.
 
 ## Recapture record
+
+**2026-08-21 — the pre-Tuesday PHYSICS BATCH (AUTHORIZED recapture; the
+authorization is the batch brief itself).** Four members landed in one
+recapture event, which is why the movement below is JOINT and no single member
+may be credited with any of it. Unlike the 2026-08-20 wave, this one moves CODE
+as well as defaults: the parallel Spitzer conductivity is no longer a frozen
+coefficient.
+
+| # | member | what moved |
+|---|---|---|
+| 1 | pumping | `S_pump_L`, `S_pump_R` `2900.0` -> `3000.0` L/s (Davis-pinned elbow transmission) |
+| 2 | anode recycle | `anode_neutral_jet` + `neutral_mesh_accommodation` ARMED at the stance; `anode_jet_R_N` `0.5` -> `0.63`, `anode_jet_R_E` `0.25` -> `0.41`; NEW key `anode_jet_energy_convention` (ships `None`, stance declares `"total_reflected"`) |
+| 4 | fueling units | `SCCM_TO_PARTICLES_PER_S` `4.477962e17` -> `4.171431e17` (0 °C -> flow-meter 20 °C / 1013 mbar), with the three-class migration; `S_gp`/`Twin_S_gp` defaults `3400` -> `3649.84`, `S_gp_decay_target` `1500` -> `1610.23`; the stance's inert `S_gp_decay_target` line dropped |
+| 5 | conductivity | `sigma_par = 14.6 Te^1.5` -> `(1.96/(1.03e-2 lnLambda(Te,n))) Te^1.5` in both sheath solvers and every `sigma_par` consumer; NEW selector `cathode_lnL_model` |
+
+Member 3 of the batch (the `m_He` 0.6 ppm unification) is NOT in this
+recapture — it was reported back as a blocker rather than implemented, so no
+helium mass moved here.
+
+Values, classes and brackets: `config_defaults_provenance.md` (the `S_pump`,
+anode-jet, `cathode_lnL_model` and sccm-changeover entries were all rewritten
+in the same pass) and `production_stance_provenance.md` (the arm itself and the
+`S_gp` meter-class restatement).
+
+**Delta discipline — what was proven before anything was recaptured.** A
+no-solve resolved-config diff of the branch against the base commit, in BOTH
+columns (bare `default_config()` and `default_config()` + `g1atrim` + `nx=60`),
+showed exactly the members above and nothing else: 9 deltas in the default
+column, 10 in the golden column, 0 in either flags column. `S_gp = 9010`
+verified UNCHANGED (it is METER-CLASS). `pump_elbow_conductance_lps` stayed
+`None` — the double-count trap the `S_pump` entry documents.
+`config_snapshots.json` was regenerated in the same pass; `parameter_count`
+248 -> 250 and `flag_count` 47 unchanged, the two new keys being the whole of
+the manifest delta.
+
+**Capture evidence.** Recaptured twice from clean separate processes to
+temporary paths and compared BEFORE installing: NPZ and JSON sidecar both
+byte-identical (`sha256` of the NPZ
+`a9be0b6f5b95e17edaf329dfadfd45c7222cb9f8488102b0c8bdc5f3d1e674e8`, of the
+sidecar `d892801e6756e54a0a09c5abf2b99a8f082713351cc6266a3723617fbca76810`),
+and raw-bitwise identical at `uint64` over all three arrays (`y`, `time`,
+`phase`; 0 differing elements). Wall 936 s and 907 s (~15.6 / 15.1 min) on one
+lane, run strictly serially. `--verify` prints `exact=True` on the pure path.
+
+**What moved in the trajectory, and why it is the physics.** Steps
+84,276 -> 80,516; saves 2,626 -> 2,627; `final_time`
+2.624091e-02 -> 2.625887e-02 s; phase census `breakdown` 16 -> 17, everything
+else unchanged. The fueling changeover dominates the fill: `nn` at `t = 0`
+falls 11.4 % (the meter convention delivers 6.85 % fewer particles per
+configured sccm, and the stance's 9010 was deliberately NOT rescaled), and the
+column follows — plateau mean `n` −10.0 %, `n_max` −9.9 %. `Te_max` falls
+12.5 %, the largest single mover and the conductivity member's signature: a
+colder, thinner gap has a SMALLER `lnLambda` than the frozen 13.03, so it is
+more conductive than the old form claimed and dissipates less ohmically there.
+The `I_sat`-class metric `n*sqrt(Te)` moves only −3.2 % over the plateau, so
+most of the density fall is offset in the systematics-robust combination.
+Health stayed sane and finite throughout; `Ti_max` +1.0 %.
+
+**Timing, stated at the fixture's resolution and no finer.** The
+main-discharge onset moves +10 µs LATER and the afterglow onset with it. The
+save cadence is 10 µs, so that is ONE save bin — the fixture cannot resolve the
+predicted competition between a later breakdown (less fuel) and an earlier
+conductivity knee (order tens of µs) any more sharply than this, and the
+observed shift must not be read as a measurement of either member alone.
+
+**The old and new trajectories are not comparable point-by-point** — this is a
+configuration AND code change, not a repair, and no bit-level comparison
+between them is meaningful.
 
 **2026-08-20 — stance-update wave: the S_pump and cathode-jet re-cuts
 (AUTHORIZED recapture, Tom; CAMPAIGN_LOG 2026-08-20xx/as/ax).** **The first
