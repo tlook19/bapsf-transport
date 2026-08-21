@@ -107,7 +107,3 @@ def rate_coeff(T, I, a, b):
         Reaction rate coefficient <sigma*v> averaged over a Maxwellian in units of cm^3/s
     """
     return a * npsqrt(T / I) / (I ** (1.5) * (b + T / I)) * npexp(-I / T)
-
-
-def rate_lambda(I):
-    return lambda T, a, b: rate_coeff(T, I, a, b)

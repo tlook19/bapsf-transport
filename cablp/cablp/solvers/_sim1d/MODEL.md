@@ -222,6 +222,34 @@ perpendicular conduction — only the parallel (axial) dynamics are retained. Wa
 and end losses (surface neutralization, gas puff, pumping) are folded in as 0D
 boundary-cell source terms rather than bulk 3D terms.
 
+### Radial recycling proxy (REMOVED R3b, 2026-08-20) — the closure rationale of record
+
+For a period the model carried `radial_recycling_rhs`, a deliberate stand-in
+for the radial physics the reduction above discards. Because no radial
+coordinate is resolved, radial confinement and the wall recycling it drives
+cannot emerge; the term imposed them through a single knob $\tau_s$. Plasma
+was lost at $-n/\tau_s$, the wall neutralized it, and the neutral returned
+*locally* as cold gas: per cell, with $S = n/\tau_s$, the plasma channel gave
+up particles, momentum **and** thermal energy — the wall kept all three, so
+this was a radial energy loss channel too — while the neutral inventory
+gained $S\,V_p/V_m$. Total particle inventory was conserved exactly, and
+because the returned gas was cold no energy came back.
+
+Its motivation was the mid-column neutral burnout canyon, which has no refill
+channel in this model: the physical refill — wall recycling of radially-lost
+plasma, a *distributed* neutral source — is radial. $\tau_s$ was therefore a
+**calibrated** quantity, not one derived from anything else in the model, and
+any result using it had to say so. Its honesty test: LAPD radial confinement
+is of order 5–25 ms, so a fitted $\tau_s$ in the low-ms range is plausible
+compensation and anything far outside it is a documented failure.
+
+The term was default-off ($\tau_s =$ `None`) and the golden baseline never
+exercised it; the implicit neutral-only step omitted it deliberately, since
+that step runs only before plasma launch where $n$ sits on its floor. It was
+deleted as unreachable code — no caller, no gating flag, no config key — at
+commit `30f6af1`. This paragraph is the surviving record of the closure
+choice; the implementation is recoverable from git history.
+
 ## A9 classical electron heat flux — RETAIN + limiter gate (audit 2026-07-23)
 
 The parallel electron conduction above uses the classical Spitzer–Härm
