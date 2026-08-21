@@ -1,48 +1,6 @@
 import numpy as np
 
-from .state import ConservativeState1D, pack_state, unpack_state
-
-
-def add_scaled_state(state, rhs, scale):
-    """Return state + scale * rhs for conservative state arrays."""
-    return ConservativeState1D(
-        n=state.n + scale * rhs.n,
-        nn=state.nn + scale * rhs.nn,
-        M=state.M + scale * rhs.M,
-        Ee=state.Ee + scale * rhs.Ee,
-        Ei=state.Ei + scale * rhs.Ei,
-        M_n=(
-            None
-            if state.M_n is None
-            else state.M_n
-            + scale
-            * (np.zeros_like(state.M_n) if rhs.M_n is None else rhs.M_n)
-        ),
-        nn_a=(
-            None
-            if state.nn_a is None
-            else state.nn_a
-            + scale
-            * (np.zeros_like(state.nn_a) if rhs.nn_a is None else rhs.nn_a)
-        ),
-        M_n_a=(
-            None
-            if state.M_n_a is None
-            else state.M_n_a
-            + scale
-            * (
-                np.zeros_like(state.M_n_a)
-                if rhs.M_n_a is None
-                else rhs.M_n_a
-            )
-        ),
-        En=(
-            None
-            if state.En is None
-            else state.En
-            + scale * (np.zeros_like(state.En) if rhs.En is None else rhs.En)
-        ),
-    )
+from .state import pack_state, unpack_state
 
 
 def add_scaled_vector(y, rhs, scale):

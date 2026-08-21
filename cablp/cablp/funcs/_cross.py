@@ -368,14 +368,6 @@ def rate_kern(cross_sec_func, eps, a, T, I):
     return int_kern
 
 
-def kern_lambda(cross_sec_func, a, T, I):
-    return lambda eps: rate_kern(cross_sec_func, eps, a, T, I)
-
-
-def H_ion_rate(E, T):
-    return 10e-5 * np.sqrt(T / E) / (E**1.5 * (6.0 + (T / E))) * np.exp(-E / T)
-
-
 def alpha_r(T, I=None):
     """
     Radiative recombination rate coefficient [cm³/s].

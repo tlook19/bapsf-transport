@@ -1,6 +1,16 @@
 from ._cross import *
 from ._fits import *
-from ._heat import *
+from ._heat import (
+    Q_cx_He,
+    Q_ie,
+    elec_par_heat_face_flux,
+    elec_par_heat_loss,
+    ion_par_heat_face_flux,
+    kappa_par_elec,
+    kappa_par_ion,
+    kappa_perp_elec,
+    kappa_perp_ion,
+)
 from ._plasmaparams import *
 from ._cathode_solver import *
 
