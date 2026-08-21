@@ -1077,12 +1077,35 @@ GAS_PUFF_DIAGNOSTIC_FIELDS = (
 )
 
 
-# Standard-conditions gas-flow conversion [particles s^-1 per sccm]: one
+# Meter-convention gas-flow conversion [particles s^-1 per sccm]: one
 # standard cm^3 per minute of gas delivers this many particles per second.
 # THE single source of truth for the sccm -> particles/s conversion; every
 # site that turns a valve flow into a particle rate reads it through
 # ``puff_particles_per_s`` rather than restating the number.
-SCCM_TO_PARTICLES_PER_S = 4.477962e17
+#
+# CONVENTION (changed over 2026-08-21): "standard" here is the FLOW METER's
+# standard, not the 0 C chemists' standard. The mass-flow controller in the
+# fueling line is a Sensirion SFC5500/SFM5500, whose sccm is referred to
+# 20 C and 1013 mbar, so a configured ``S_gp`` MEANS meter-sccm and must be
+# converted on the meter's own terms. The number is first-principles from
+# those conditions and is derived here rather than scaled off the retired
+# 0 C literal, so the old value can never be used as a check on the new one:
+#
+#     n = P/(k_B T) = 101300 / (1.380649e-23 * 293.15)
+#                   = 2.5028583e19 cm^-3
+#     per second     = n / 60 = 4.171431e17 s^-1 per sccm
+#
+# Citation: Sensirion SFC5500/SFM5500 Datasheet V6 (Feb 2024), section 5
+# "Flow units", Table 7. (PDF banked in the docs repo at
+# zotero_pdf_cache/Sensirion_SFC5500_SFM5500_Datasheet_V6_2024.pdf.)
+#
+# Superseded: 4.477962e17, the same expression at 0 C / 101325 Pa. Every
+# sccm-dimensioned quantity in the repo was reclassified at the changeover as
+# METER-CLASS (a meter reading, carried verbatim), FITTED-FLUX-CLASS (a level
+# fitted under the old constant, rescaled by 1.0734834 so the physical flux it
+# encodes is preserved), or IDENTITY-CLASS (a restatement of the constant or
+# of a rescaled default). See ``config_defaults_provenance.md``.
+SCCM_TO_PARTICLES_PER_S = 4.171431e17
 
 
 def puff_particles_per_s(sccm, valves, delivery_fraction=1.0):

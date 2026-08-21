@@ -238,6 +238,24 @@ reconciliation pending (thread 23 phase 0):** the restored ~2e21
 atoms/s recycle stream changes the model's effective fueling economy;
 the box-vs-stance reconciliation re-derives against the adopted-stance
 ledger and lands here when ruled.
+**The 9010 is METER-CLASS and was carried VERBATIM through the 2026-08-21 sccm
+changeover.** That changeover re-referenced `SCCM_TO_PARTICLES_PER_S` from the
+0 °C chemists' standard to the flow meter's own (Sensirion SFM5500, 20 °C /
+1013 mbar), so a configured sccm now MEANS what the meter reported. This value
+IS a meter reading, so its digits are exactly the ones to keep — and the
+changeover is what finally makes them mean what they say. The delivered
+throughput it implies therefore FALLS by 6.85 %: the previously quoted
+`[7.2, 8.1]e21` atoms/s restates as **`[6.7, 7.5]e21` atoms/s** at the same
+9010. The `f_gp = 5200/9010 = 0.577` line in
+`config_defaults_provenance.md` is a ratio of two sccm numbers taken under the
+OLD convention and is unaffected as a ratio; the fitted 5200 half of it is
+FITTED-FLUX-class and restates as 5582.11 meter-sccm.
+
+The stance no longer names `S_gp_decay_target` (dropped 2026-08-21). It was
+read only by the retired pulse/decay/double_erf puff waveforms and the stance
+runs `"square"`, so the line was inert and its removal is
+trajectory-invariant.
+
 `S_gp_decay_target`, `tau_gp_pulse_duration`, `tau_gp_decay_duration` are read
 only by the deprecated pulse/decay waveform modes and are inert under the
 square waveform.

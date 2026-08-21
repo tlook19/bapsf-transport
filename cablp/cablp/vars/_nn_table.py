@@ -32,6 +32,13 @@ Keys are per-cathode S_gp in SCCM (100 – 16000):
   single cathode: one source at cell 0
   twin cathode  : S_gp = Twin_S_gp (app splits total S_gp equally)
 
+*** LEGACY SCCM CONVENTION. *** The keys are pre-2026-08-21 0 C-sccm --
+convert before lookup. The repo's sccm now MEANS meter-sccm (Sensirion
+SFM5500, 20 C / 1013 mbar), which is a ~7% different particle throughput at
+the same numeric key, and the table's own generator retired with _sim3 so it
+cannot be regenerated on the new convention. The keys are therefore ANNOTATED,
+not rescaled: rescaling them would forge data that was never computed.
+
 Usage
 -----
     from cablp.vars._nn_table import lookup_nn0

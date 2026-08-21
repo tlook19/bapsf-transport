@@ -32,7 +32,7 @@ THE CONSTRUCTION (leg 3a of the sp campaign):
   so the accumulated shape is by construction the shape the running model
   deposits.
 * the throughput -- AS-APPLIED, valves included: the same
-  ``4.477962e17 * sccm * valves`` [particles/s] the solver applies, obtained
+  ``4.171431e17 * sccm * valves`` [particles/s] the solver applies, obtained
   from the repo's ``puff_rate`` rather than restated here. The ledger also
   prints the per-valve-nominal half, because both conventions are on the
   campaign record and a quoted number is incomplete without its convention.

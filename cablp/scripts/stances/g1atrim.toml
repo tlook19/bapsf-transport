@@ -364,7 +364,6 @@ neutral_mesh_accommodation = true
 
 # FUELING.
 S_gp = 9010.0
-S_gp_decay_target = 2000
 equilibration_gas_puff_on_s = 0.025
 
 # BEAM DEPOSITION AND ANOMALOUS HEATING. The heat-flux limiter is no longer

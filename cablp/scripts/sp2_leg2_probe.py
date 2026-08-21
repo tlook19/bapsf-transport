@@ -18,6 +18,8 @@ import numpy as np
 import h5py
 
 H5 = str(Path(__file__).resolve().parent / "sp1_ref.h5")
+# SUPERSEDED 2026-08-21: the live constant is now 4.171431e17 (meter-sccm,
+# 20 C / 1013 mbar). This dated probe is left AS A RECORD of the leg it ran.
 SCCM = 4.477962e17          # particles/s per sccm (neutrals.py:760)
 A_1045 = 7.1828e13          # cm^-3 s^-1, sp1_p1045r.cmd (frozen linear rule)
 A_630  = 9.4510e13          # cm^-3 s^-1, sp1_p630r.cmd

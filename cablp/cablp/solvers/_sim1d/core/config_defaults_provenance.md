@@ -132,11 +132,62 @@ the afterglow can cool. It is a positivity floor, not a physical temperature.
 
 ## `neutral_source_defaults`
 
-**`S_gp = 3400` sccm — FITTED.** The one calibration constant of the puff
-model: the sccm-versus-drive-voltage relation of the valve is uncalibrated, so
-the level cannot be read off the hardware. Everything else in the waveform is a
-hardware timing. It feeds back on the discharge through S_gp -> ne -> current,
-so it cannot be calibrated independently of the cathode power balance.
+**`S_gp = Twin_S_gp = 3649.84` sccm — FITTED.** The one calibration constant of
+the puff model: the sccm-versus-drive-voltage relation of the valve is
+uncalibrated, so the level cannot be read off the hardware. Everything else in
+the waveform is a hardware timing. It feeds back on the discharge through
+S_gp -> ne -> current, so it cannot be calibrated independently of the cathode
+power balance.
+
+Superseded: `3400` sccm — the SAME fit, restated. Nothing was re-fitted: the
+2026-08-21 sccm changeover (below) moved the conversion constant, so the digits
+were rescaled by `4.477962/4.171431 = 1.0734834` to hold the fitted PARTICLE
+FLUX fixed. `S_gp_decay_target` moved `1500 -> 1610.23` on the same rule.
+
+### The 2026-08-21 sccm convention changeover
+
+**`SCCM_TO_PARTICLES_PER_S = 4.171431e17` s^-1 per sccm — DERIVED
+(first-principles at a MEASURED reference condition).** A configured `S_gp`
+now MEANS meter-sccm. The fueling line's mass-flow controller is a **Sensirion
+SFC5500/SFM5500**, whose sccm is referred to **20 °C and 1013 mbar**, not the
+0 °C chemists' standard the model had been using, so the model was converting
+the meter's own readings on someone else's terms.
+
+The value is `n(293.15 K, 101300 Pa)/60 = 2.5028583e19/60`, computed from those
+conditions rather than scaled off the retired literal — deliberately, so the
+old number can never serve as a check on the new one. Source:
+**Sensirion SFC5500/SFM5500 Datasheet V6 (Feb 2024), §5 "Flow units", Table 7**
+(PDF banked at `zotero_pdf_cache/Sensirion_SFC5500_SFM5500_Datasheet_V6_2024.pdf`
+in the docs repo). Honest bar: the reference condition is a datasheet
+specification, so the only residual uncertainty is whether this meter is the
+one in the line — a hardware identification, not a measurement bar.
+
+Superseded: `4.477962e17`, the same expression at 0 °C / 101325 Pa. The
+throughput at a given configured number falls by 6.85 %.
+
+**Three classes, applied once, across the whole repo.** Every sccm-dimensioned
+quantity was classified, because a blanket rescale and a blanket freeze are
+both wrong:
+
+| class | rule | why |
+|---|---|---|
+| METER-CLASS | carried VERBATIM | it is a meter reading, and the meter's convention is now the model's (`S_gp = 9010` and the stance decay target) |
+| FITTED-FLUX-CLASS | digits `x1.0734834`, 6 significant figures | the fitted object was a particle flux, not a number of sccm, so the flux is what must be preserved (the `S_gp`/`Twin_S_gp` defaults, the decay-target defaults, the sp2 5200 leg) |
+| IDENTITY-CLASS | restated to the new constant | it is a copy of the constant or of a rescaled default, and a copy must track its original (the constant, the smoke tripwire literal, the `sp3_build_nn0` docstring, the `audit_sim1d_configs` case) |
+
+**Two consequences worth stating explicitly.** (i) The neutral-seed cache
+signature is now SALTED with the conversion constant: the constant is code, not
+config, so the fail-closed hash over `(params, flags)` could not see it, and
+every stored seed would have matched its signature while representing a ~7 %
+different throughput. (ii) `vars/nn_table.csv` is ANNOTATED, not rescaled — its
+keys stay 0 °C-sccm because its generator retired with `_sim3` and rescaling
+frozen data would forge an interpolation that was never computed. Production
+never reaches that table (`nn0` is pinned in both the default and the stance);
+`resolve_nn0`'s fallback branch carries the inconsistency in its docstring.
+
+**Disclosed, expected, not a bug:** pre-changeover `default_config()` runs are
+not bit-reproducible across this change. The rescaled digits are exact only to
+6 significant figures, so the delivered flux moves by ~1.4e-6 relative.
 
 **`gas_puff_delivery_fraction = 1.0` — STRUCTURAL IDENTITY, no value claimed.**
 The shipped default is the identity element of the decomposition it enables,

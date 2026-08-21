@@ -12731,7 +12731,11 @@ def _case_gas_puff_axial_profile():
         3000.0, 2.0, puff_geom.neutral_volume_cm3[puff_idx]
     )
     assert np.count_nonzero(cell_rate) == 1
-    total_in = 4.477962e17 * 3000.0 * 2.0
+    # Deliberately a LITERAL, not the imported constant: this line is the
+    # tripwire that fires if SCCM_TO_PARTICLES_PER_S is changed without
+    # the three-class migration being redone. Restated at the 2026-08-21
+    # 0 C -> meter (20 C / 1013 mbar) changeover.
+    total_in = 4.171431e17 * 3000.0 * 2.0
     for z0, sigma in ((None, 30.0), (600.0, 200.0), (1900.0, 100.0)):
         gauss_rate = gas_puff_rate_profile(
             puff_geom, 3000.0, 2, profile="gaussian", z_cm=z0, sigma_cm=sigma
@@ -14137,6 +14141,17 @@ def _case_directed_recycle_jets(knob_mass, m3_cathode_flags, m3_params):
          jet_flags),
         # the debit reads the jet's R_E
         (dict(m3_params, cathode_jet_surface_debit=True), jet_flags),
+        # the anode jet must DECLARE which convention its R_E is read in:
+        # undeclared, unknown, declared-without-the-jet, and the
+        # total_reflected ordering requirement 0 < R_E <= R_N < 1.
+        (dict(m3_params, anode_neutral_jet=True), jet_flags),
+        (dict(m3_params, anode_neutral_jet=True,
+              anode_jet_energy_convention="bogus"), jet_flags),
+        (dict(m3_params, anode_jet_energy_convention="total_reflected"),
+         jet_flags),
+        (dict(m3_params, anode_neutral_jet=True,
+              anode_jet_energy_convention="total_reflected",
+              anode_jet_R_E=0.9), jet_flags),
     ):
         try:
             LAPDSim1D(jet_bad_params, jet_bad_flags)
@@ -14148,6 +14163,7 @@ def _case_directed_recycle_jets(knob_mass, m3_cathode_flags, m3_params):
         m3_params,
         cathode_neutral_jet=True,
         anode_neutral_jet=True,
+        anode_jet_energy_convention="total_reflected",
         neutral_mesh_accommodation=True,
     )
     jet_sim = LAPDSim1D(jet_params, jet_flags)
@@ -19598,8 +19614,13 @@ def _case_shaped_initial_neutral_fill_sp3():
     # per-valve-nominal at the 2 ms foot, the high end as-applied at 4.5 ms.
     # puff_rate(..., 1.0) is the repo's own throughput constant per unit
     # volume, so this is the solver's arithmetic and not a restatement of it.
-    _sp3_nominal = puff_rate(5200.0, 1, 1.0) * min(_sp3_mod.DT_FOOT_BRACKET_S)
-    _sp3_applied = puff_rate(5200.0, 2, 1.0) * max(_sp3_mod.DT_FOOT_BRACKET_S)
+    # The 5200 sccm the sp2 leg ran is a FITTED-FLUX quantity: it was fitted
+    # under the retired 0 C sccm convention, so the 2026-08-21 meter changeover
+    # rescales its digits by 1.0734834 (-> 5582.11 meter-sccm) to hold the
+    # delivered particle flux fixed. The banked ATOM counts below are physical
+    # and do not move.
+    _sp3_nominal = puff_rate(5582.11, 1, 1.0) * min(_sp3_mod.DT_FOOT_BRACKET_S)
+    _sp3_applied = puff_rate(5582.11, 2, 1.0) * max(_sp3_mod.DT_FOOT_BRACKET_S)
     assert abs(_sp3_nominal / 4.7e18 - 1.0) < 0.02, _sp3_nominal
     assert abs(_sp3_applied / 2.1e19 - 1.0) < 0.02, _sp3_applied
     # The two ends differ by exactly the valve factor times the foot ratio, so

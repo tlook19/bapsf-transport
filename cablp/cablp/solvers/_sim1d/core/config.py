@@ -482,9 +482,12 @@ def neutral_source_defaults():
         # --- ACTIVE (square waveform + pump) ---
         # S_gp is the one free constant of the puff model; every other quantity
         # in the waveform is a hardware timing. It feeds back on the discharge
-        # through S_gp -> ne -> current.
-        "S_gp": 3400,
-        "Twin_S_gp": 3400,
+        # through S_gp -> ne -> current. FITTED-FLUX class: these two levels
+        # were fitted under the retired 0 C sccm convention, so the 2026-08-21
+        # meter changeover rescaled their digits by 1.0734834 (3400 ->
+        # 3649.84) to hold the fitted particle flux fixed.
+        "S_gp": 3649.84,
+        "Twin_S_gp": 3649.84,
         "gas_puff_mode": "square",
         # "square" waveform edge timings. The piezo is driven by a square
         # voltage pulse from the SAME trigger that closes the cathode circuit
@@ -535,7 +538,9 @@ def neutral_source_defaults():
         "gas_puff_local_ionization_fraction": 0.0,
         # --- DEPRECATED (only read by the retired pulse/decay/double_erf puff
         # modes; kept runnable for the frozen waveform-comparison figures) ---
-        "S_gp_decay_target": 1500,
+        # Same FITTED-FLUX rescale as S_gp above (1500 -> 1610.23); the twin
+        # target is zero and is invariant under any conversion.
+        "S_gp_decay_target": 1610.23,
         "Twin_S_gp_decay_target": 0.0,
         "tau_gp_after_breakdown": None,
         "tau_gp_decay_factor": 1.0,
@@ -3500,7 +3505,18 @@ def config_manifest():
 
 
 def resolve_nn0(input_dict, input_flags):
-    """Return configured or table-derived initial neutral density [cm^-3]."""
+    """Return configured or table-derived initial neutral density [cm^-3].
+
+    CONVENTION INCONSISTENCY on the fallback branch, documented rather than
+    silently patched: ``nn_table``'s keys are pre-2026-08-21 0 C-sccm while
+    ``S_gp`` is now meter-sccm, so the lookup is off by the ~7% conversion
+    ratio. It is not converted here because the frozen table cannot be
+    regenerated on the new convention (its generator retired with _sim3) and a
+    lookup-time conversion would invent an interpolation of data that was
+    never computed. Production never reaches this branch: both the config
+    default and the stance of record pin ``nn0`` explicitly, so the line above
+    short-circuits.
+    """
     nn0 = input_dict.get("nn0")
     if nn0 is not None:
         return nn0
