@@ -53,6 +53,7 @@ from .core.state import (
     unpack_state,
 )
 from .core.timestep import suggest_timestep
+from .core.options import build_solver_options
 from .core.validation import (
     OPERATOR_SPLITTINGS,
     _RawStageError,
@@ -1320,6 +1321,25 @@ class LAPDSim1D:
             )
         else:
             self._neutral_energy_wall_rate = None
+        # Every RUN-CONSTANT subsystem bundle, resolved ONCE, here, now that
+        # each of its inputs is itself resolved (the wall rate immediately
+        # above is the last of them).  The `*_kwargs` accessors below read
+        # this record instead of re-interpreting the config per RHS call.
+        self._options = build_solver_options(
+            self._input_dict,
+            self._flags,
+            geometry=self._geometry,
+            gas_type=self._gas_type,
+            I_ion=self._I_ion,
+            electron_heat_flux_limit=self._electron_heat_flux_limit,
+            heat_flux_limiter_f=self._heat_flux_limiter_f,
+            heat_flux_limiter_exponent=self._heat_flux_limiter_exponent,
+            neutral_energy=self._neutral_energy,
+            neutral_energy_alpha=self._neutral_energy_alpha,
+            neutral_energy_wall_Tn_eV=self._neutral_energy_wall_Tn_eV,
+            neutral_energy_wall_rate=self._neutral_energy_wall_rate,
+            wind_column_factor=self._wind_column_factor,
+        )
         # The ballistic redistribution kernels are geometry alone (the flight
         # speed cancels out of the axial hop), so they are built once here and
         # never re-entered.
@@ -7322,24 +7342,8 @@ class LAPDSim1D:
         )
 
     def _collision_operator_kwargs(self):
-        """Return the rate bundle every ion-neutral collision channel shares.
-
-        The moment-closed operator, the CX decoupling correction, and the hot
-        channel must all read ONE gas, ONE reference neutral temperature, and
-        ONE drag scale, or their split stops being a split.
-        """
-        drag_enabled = bool(self._flags.get("ion_neutral_drag", True))
-        return {
-            "gas_type": self._gas_type,
-            "Tn_eV": float(self._input_dict.get("Tn_K", 300.0))
-            * kb_cgs
-            / ev_to_erg,
-            "b_ion_neutral_drag": (
-                float(self._input_dict.get("b_ion_neutral_drag", 1.0))
-                if drag_enabled
-                else 0.0
-            ),
-        }
+        """Return the rate bundle every ion-neutral collision channel shares."""
+        return dict(self._options.collision_operator)
 
     def energy_exchange_rhs(self, y=None, state=None):
         """Return conservative electron-ion thermal exchange sources."""
@@ -8645,155 +8649,34 @@ class LAPDSim1D:
         self._record_current_trigger_sample(I_now)
 
     def _energy_exchange_kwargs(self):
-        return {
-            "b_Qie": float(self._input_dict.get("b_Qie", 1.0)),
-            "ln_lambda_min": float(self._input_dict.get("ln_lambda_min", 1.0)),
-        }
+        return dict(self._options.energy_exchange)
 
     def _surface_loss_kwargs(self):
-        # The resolved boundary terms read only ``alpha_isat`` and
-        # ``b_surface_loss``. The former per-face source/end enables and area
-        # scales were A13 no-ops (never consumed) and are DEPRECATED 0D artifacts
-        # (R3.3): the resolved geometry measures the Bohm I_sat to each electrode
-        # face directly. ``validate_r1_configuration_presence`` warns on their
-        # non-default use.
-        return {
-            "alpha_isat": float(self._input_dict.get("alpha_isat", np.exp(-0.5))),
-            "end_mode": self._input_dict.get("end_mode", "collector"),
-            "b_surface_loss": float(self._input_dict.get("b_surface_loss", 1.0)),
-        }
+        return dict(self._options.surface_loss)
 
     def _ion_neutral_drag_kwargs(self):
-        drag_enabled = bool(self._flags.get("ion_neutral_drag", True))
-        return {
-            "gas_type": self._gas_type,
-            "sigma_in_cm2": float(self._input_dict.get("sigma_in_cm2", 5.0e-15)),
-            "sigma_in_model": str(
-                self._input_dict.get("sigma_in_model", "constant")
-            ),
-            "b_ion_neutral_drag": (
-                float(self._input_dict.get("b_ion_neutral_drag", 1.0))
-                if drag_enabled
-                else 0.0
-            ),
-            "cx_only": bool(self._flags.get("ion_neutral_drag_cx_only", False)),
-        }
+        return dict(self._options.ion_neutral_drag)
 
     def _slip_closure_kwargs(self):
         """Extra kwargs for the drag/frictional-heating slip closure."""
-        return {
-            "drag_model": str(
-                self._input_dict.get("ion_neutral_drag_model", "constant")
-            ),
-            "b_slip_entrainment": float(
-                self._input_dict.get("b_slip_entrainment", 1.0)
-            ),
-            "Rm_cm": self._geometry.Rm_cm,
-            "Tn_fit": float(self._input_dict.get("Tn_fit", 0.1)),
-        }
+        return dict(self._options.slip_closure)
 
     def _electron_cooling_kwargs(self):
-        return {
-            "gas_type": self._gas_type,
-            "I_ion": self._I_ion,
-            "b_ioniz": float(self._input_dict.get("b_ioniz", 1.0)),
-            "b_rec_rad": float(self._input_dict.get("b_rec_rad", 1.0)),
-            "b_rec_3b": float(self._input_dict.get("b_rec_3b", 1.0)),
-            # b_ionization_energy_cost removed as a config knob (R5 stance flip):
-            # must be 1 for conservative energy booking, and the on/off is the
-            # ionization_energy_cost flag. Hardwired 1.0.
-            "b_ionization_energy_cost": 1.0,
-            "b_Qei": float(self._input_dict.get("b_Qei", 1.0)),
-            "b_Qen": float(self._input_dict.get("b_Qen", 1.0)),
-            "b_Qei_Te_exp": float(self._input_dict.get("b_Qei_Te_exp", 0.0)),
-            "b_Qen_Te_exp": float(self._input_dict.get("b_Qen_Te_exp", 0.0)),
-            "b_Q_Te_ref_eV": float(self._input_dict.get("b_Q_Te_ref_eV", 5.0)),
-            "atomic_rate_model": str(
-                self._input_dict.get("atomic_rate_model", "adas")
-            ),
-            "ionization_energy_cost": bool(
-                self._flags.get("ionization_energy_cost", True)
-            ),
-            "icool": bool(self._flags.get("icool", True)),
-            "ncool": bool(self._flags.get("ncool", True)),
-            "icool_recomb": bool(self._flags.get("icool_recomb", False)),
-            # A18/R5.3: the low-Te extension defines ONE consistent atomic
-            # package -- the electron-cooling prb1 honors it just like the
-            # particle-rate acd. Default off => golden bit-exact.
-            "adas_low_te_extension": bool(
-                self._input_dict.get("adas_low_te_extension", False)
-            ),
-        }
+        return dict(self._options.electron_cooling)
 
     def _ion_charge_exchange_kwargs(self):
-        return {
-            "gas_type": self._gas_type,
-            "Tn_fit": float(self._input_dict.get("Tn_fit", 0.1)),
-            "b_Qcx": float(self._input_dict.get("b_Qcx", 1.0)),
-            "cx": bool(self._flags.get("cx", True)),
-        }
+        return dict(self._options.ion_charge_exchange)
 
     def _heat_conduction_kwargs(self):
-        return {
-            "b_epara": float(self._input_dict.get("b_epara", 1.0)),
-            "b_ipara": float(self._input_dict.get("b_ipara", 1.0)),
-            "heat_conduction": bool(self._flags.get("heat_conduction", True)),
-            "ln_lambda_min": float(self._input_dict.get("ln_lambda_min", 1.0)),
-            "electron_heat_flux_limit": self._electron_heat_flux_limit,
-            "heat_flux_limiter_f": self._heat_flux_limiter_f,
-            "heat_flux_limiter_exponent": self._heat_flux_limiter_exponent,
-        }
+        return dict(self._options.heat_conduction)
 
     def _neutral_energy_timestep_kwargs(self):
-        """Return the bundle the En relaxation bound reads, or None.
-
-        ``None`` where no ``En`` field exists, which withdraws the candidate.
-        The values are the ones the collision operator and the wall sink
-        actually apply, so the bound describes the applied rate rather than a
-        nominal one.
-        """
-        if not self._neutral_energy:
-            return None
-        drag_enabled = bool(self._flags.get("ion_neutral_drag", True))
-        return {
-            "gas_type": self._gas_type,
-            "Tn_eV": float(self._input_dict.get("Tn_K", 300.0))
-            * kb_cgs
-            / ev_to_erg,
-            "b_ion_neutral_drag": (
-                float(self._input_dict.get("b_ion_neutral_drag", 1.0))
-                if drag_enabled
-                else 0.0
-            ),
-            "alpha_E": self._neutral_energy_alpha,
-            "Tn_fit": self._neutral_energy_wall_Tn_eV,
-            "wall_rate_1_s": self._neutral_energy_wall_rate,
-        }
+        """Return the bundle the En relaxation bound reads, or None."""
+        bundle = self._options.neutral_energy_timestep
+        return None if bundle is None else dict(bundle)
 
     def _reaction_kwargs(self):
-        return {
-            "gas_type": self._gas_type,
-            "I_ion": self._I_ion,
-            "b_ioniz": float(self._input_dict.get("b_ioniz", 1.0)),
-            "b_rec_rad": float(self._input_dict.get("b_rec_rad", 1.0)),
-            "b_rec_3b": float(self._input_dict.get("b_rec_3b", 1.0)),
-            "atomic_rate_model": str(
-                self._input_dict.get("atomic_rate_model", "adas")
-            ),
-            "adas_low_te_extension": bool(
-                self._input_dict.get("adas_low_te_extension", False)
-            ),
-            "Te_birth_ionization": self._input_dict.get(
-                "Te_birth_ionization", "local"
-            ),
-            "Ti_birth_ionization": self._input_dict.get(
-                "Ti_birth_ionization", "floor"
-            ),
-            "ionization_birth_energy_model": str(
-                self._input_dict.get("ionization_birth_energy_model", "legacy")
-            ),
-            "wind_column_factor": self._wind_column_factor,
-        }
+        return dict(self._options.reaction)
 
     def _trajectory_snapshot(self, time):
         state = self.state
