@@ -24,7 +24,7 @@ calibration arm, a bounded number of steps, SHA-256 over the raw little-endian
 float64 bytes of every piece of state the arm carries.
 
 Usage (from <checkout>/cablp, with PYTHONPATH set to that same cablp):
-    python scripts/k7build_frozen_bitexact.py --steps 400 --arm tw
+    python scripts/k7bbuild_frozen_bitexact.py --steps 400 --arm tw
 """
 
 import argparse
