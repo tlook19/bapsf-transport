@@ -157,8 +157,7 @@ BASELINE_FLAG_OVERRIDES = {
 # saves, and the dt history behind them -- lives in
 # scripts/golden_baseline_provenance.md, which is rewritten at every recapture.
 # It is deliberately NOT restated here: a runtime figure in a standing comment
-# has no way of announcing that it has drifted, and the figures this block used
-# to carry sat three recaptures stale before anyone noticed.
+# has no way of announcing that it has drifted.
 #
 # max_steps is a TRIPWIRE, not a run length: roughly twice the step count the
 # capture actually measures (that note carries the ratio), paired with
