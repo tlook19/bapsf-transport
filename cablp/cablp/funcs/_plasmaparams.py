@@ -130,6 +130,14 @@ def ion_gyro_freq(B, mu, Z=1):
     return 9.58e3 * Z * B / mu
 
 
+#: Floor [dimensionless] applied to :func:`c_log` by the transport and
+#: exchange estimates that consume it. The fit expression goes negative in
+#: the cold, tenuous corner of the discharge, where ln(Lambda) is outside the
+#: weak-coupling regime it was derived in; clamping at 1 keeps the collision
+#: rates finite and positive there.
+LN_LAMBDA_MIN = 1.0
+
+
 def c_log(Te, n, kind="ee"):
     """
     Coulomb logarithm ln(Lambda) for electron-electron or electron-ion collisions.

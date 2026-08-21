@@ -723,8 +723,10 @@ def model_mode_defaults():
         _sim3 compatibility; the current conservative flux closure does not
         directly use this selector.
     end_mode:
-        End boundary behavior. Options are ``"collector"`` and
-        ``"mirrored_source"``.
+        End boundary behaviour, carried into the cathode-boundary
+        diagnostics as a label. ``"collector"`` is the only accepted value;
+        the 0D-era ``"mirrored_source"`` alternative, which the conservative
+        solver never branched on, was removed at D3 (2026-08-21) and raises.
     cathode_model:
         Cathode model selector retained for configuration compatibility. The
         current option is ``"disabled"``; actual cathode coupling is controlled
@@ -1185,42 +1187,22 @@ def fudge_factor_defaults():
         to an upstream sample. `0` collapses the sample to the adjacent cell,
         recovering the historical behaviour; `1` (default) uses the physical
         depth. Inert in legacy geometry, which has no absorbing faces.
-    sigma_in_cm2:
-        Ion-neutral momentum-transfer cross section [cm^2]. Only used by the
-        ``constant`` sigma_in_model.
     sigma_in_model:
         Source of the ion-neutral momentum-transfer rate, which feeds the
         drag, the slip closure's entrainment, thermalization, the drag
         timestep bound, and the presheath depth.
 
-        ``"phelps"`` (default) is the definitive momentum-transfer rate: the
-        same Phelps He+/He isotropic + backscatter cross section the
-        ``ion_neutral_moment_closure`` operator uses, ``nu_in = nn * (k_b +
-        1/2 k_iso)(T_eff)`` with ``T_eff = (Ti + Tn)/2`` at the single
-        cold-gas ``Tn`` (300 K). This ties the presheath sampling to the same
-        collision physics as the drag, which makes ``sigma_in_cm2`` and the
-        two legacy arms below inert on the production path. He-only, gated at
-        construction.
-
-        ``"constant"`` (legacy A/B, the
-        historical behaviour) uses ``sigma_in_cm2`` at the ion thermal speed.
-        ``"cx_derived"`` (legacy A/B) builds it from the same resonant charge-exchange
-        table the CX energy channel uses -- ``nu_in = nn * (2*<sigma v>_cx(Ti)
-        + k_Langevin)`` -- since for a symmetric pair each exchange transfers
-        essentially the full momentum (``sigma_mt ~ 2*sigma_cx``), plus the
-        velocity-independent Langevin polarization floor. This restores the
-        factor ~2 velocity dependence a constant cannot express: the constant
-        crosses the CX-derived curve near 0.5 eV (too small in the afterglow,
-        ~1.5-1.8x at 0.1 eV; too large in the warm column, ~1.3x at 5-10 eV).
+        ``"phelps"`` is the only accepted value: the definitive
+        momentum-transfer rate, the same Phelps He+/He isotropic +
+        backscatter cross section the ``ion_neutral_moment_closure`` operator
+        uses, ``nu_in = nn * (k_b + 1/2 k_iso)(T_eff)`` with
+        ``T_eff = (Ti + Tn)/2`` at the single cold-gas ``Tn`` (300 K). This
+        ties the presheath sampling to the same collision physics as the
+        drag. He-only, gated at construction; the legacy ``"constant"`` and
+        ``"cx_derived"`` arms, which were the solver's only non-helium path,
+        were removed at D3 (2026-08-21) and raise.
     alpha_isat:
         Ion-saturation/surface-loss coefficient.
-    source_surface_area_scale:
-        DEPRECATED: 0D artifact that stood in for un-separated cathode/anode
-        I_sat. The resolved geometry measures the Bohm I_sat to each electrode
-        face directly, so this multiplier has no operator to control and is
-        never consumed; non-default use warns.
-    end_surface_area_scale:
-        DEPRECATED: 0D artifact, see ``source_surface_area_scale``.
     b_anode_collection:
         Multiplier on the resolved anode collection sink. This was formerly
         available only through an unregistered ``dict.get`` fallback.
@@ -1255,9 +1237,8 @@ def fudge_factor_defaults():
         "alpha_front": 1.0,
         # Ion-neutral momentum-transfer rate, which also feeds the presheath
         # depth (electrode_sheath_alpha). "phelps" is the same cross section
-        # ion_neutral_moment_closure uses (He-only); "constant"/"cx_derived"
-        # are the A/B arms, and sigma_in_cm2 is read by "constant" only.
-        "sigma_in_cm2": 5.0e-15,
+        # ion_neutral_moment_closure uses, and since D3 the only accepted
+        # value: the solver is helium-only.
         "sigma_in_model": "phelps",
         # --- INERT: superseded rate/cooling/conduction scales, locked at 1
         # (kept readable for the janev A/B and the =0 disable diagnostics) ---
@@ -1310,14 +1291,12 @@ def fudge_factor_defaults():
         # neutral_momentum flag; the deferred ladder).
         "neutral_momentum_radial": "uniform",
         # --- DEPRECATED: legacy ion-neutral drag (superseded by the Phelps
-        # ion_neutral_moment_closure) + the 0D area scales. Warn on
-        # non-default/active use; retained runnable for reproducibility. ---
+        # ion_neutral_moment_closure). Warn on non-default/active use;
+        # retained runnable for reproducibility. ---
         "b_ion_neutral_drag": 1.0,
         "ion_neutral_drag_model": "constant",
         "b_slip_entrainment": 1.0,
         "b_ion_neutral_thermalization": None,
-        "source_surface_area_scale": 1.8,
-        "end_surface_area_scale": 1.0,
     }
 
 
@@ -1488,8 +1467,8 @@ def cathode_defaults():
         fallback. During floating phases the emitted electrons return to
         the surface, so the emission-cooling term is dropped there. The
         update is semi-implicit in the linearized loss (unconditionally
-        stable for any ``C_th``), floored at ``cathode_env_T_K``, accepted
-        steps only.
+        stable for any ``C_th``), floored at the 300 K chamber-wall
+        temperature the surface radiates against, accepted steps only.
     cathode_Ts_base_K:
         Heater-maintained standby surface temperature [K] for
         ``cathode_warming_model = "power_balance"`` -- the temperature the
@@ -1508,12 +1487,6 @@ def cathode_defaults():
     cathode_emissivity:
         Total hemispherical emissivity of the emitting surface for the
         radiation term (LaB6 ~0.7).
-    cathode_rad_area_cm2:
-        Radiating area [cm^2] for ``"power_balance"``. ``None`` (default)
-        uses the cathode disc area ``pi*R_cath^2``.
-    cathode_env_T_K:
-        Environment temperature [K] the surface radiates against
-        (chamber walls); negligible against T_s^4, kept for completeness.
     cathode_conduction_W_per_K:
         Conductance [W/K] from the emitting skin layer into the
         heater-held substrate at ``cathode_Ts_base_K`` -- the "heater
@@ -1553,10 +1526,10 @@ def cathode_defaults():
         fully covered (``theta = 1``, so the shot starts at ``phi_wf``
         exactly), evolving as
 
-            dtheta/dt = k_ads (1 - theta)
-                        - [nu_th + sigma_cl Gamma_i] theta
+            dtheta/dt = -sigma_cl Gamma_i theta
 
-        (adsorption, thermal desorption, ion-stimulated desorption), and
+        (ion-stimulated desorption, the only coverage channel, so ``theta``
+        is monotonically non-increasing through a shot), and
         substitutes ``phi_eff = phi_clean + (phi_wf - phi_clean)*theta``
         wherever the work function is read -- Richardson emission, Schottky
         lowering, emission cooling and the gaussian profile's Richardson
@@ -1588,27 +1561,6 @@ def cathode_defaults():
         ``E <= E_th``. ``None`` leaves the cross section energy-independent
         (the pure fluence limit). Inert unless
         ``cathode_surface_model = "ads_des"``.
-    cathode_ads_rate_per_s:
-        Adsorption rate constant ``k_ads`` [1/s] re-covering the clean
-        fraction -- the ``k_ads (1 - theta)`` gain term, which is the only
-        channel that can raise the coverage back up. Must be non-negative;
-        raises at construction otherwise. ``0`` removes it, leaving the
-        coverage monotonically non-increasing through the shot. Inert unless
-        ``cathode_surface_model = "ads_des"``.
-    cathode_desorption_prefactor_per_s:
-        Arrhenius prefactor ``nu0`` [1/s] of the THERMAL desorption channel,
-        whose rate is ``nu_th = nu0 exp(-E_des/(k_B T_s))`` at the current
-        surface temperature (the evolving one under ``"power_balance"``, else
-        the static ``T_s``). Must be non-negative; raises at construction
-        otherwise. ``0`` removes the channel -- ``nu_th`` is set to zero
-        without evaluating the exponential, leaving
-        ``cathode_desorption_energy_eV`` unread. Inert unless
-        ``cathode_surface_model = "ads_des"``.
-    cathode_desorption_energy_eV:
-        Activation energy ``E_des`` [eV] in that Arrhenius rate; larger
-        values suppress thermal desorption more strongly at a given surface
-        temperature. Read only when
-        ``cathode_desorption_prefactor_per_s > 0``.
     cathode_solver_model:
         The live ``"current_driven"`` formulation carries the loop current
         ``I_loop`` (and the
@@ -2233,8 +2185,6 @@ def cathode_defaults():
         "cathode_heat_capacity_J_per_K": 120.0,
         "cathode_conduction_W_per_K": 1200.0,
         "cathode_emissivity": 0.7,
-        "cathode_rad_area_cm2": None,
-        "cathode_env_T_K": 300.0,
         # --- ACTIVE: uniform emission profile ---
         "cathode_emission_profile": "uniform",
         "cathode_Ts_fwhm_cm": 28.0,
@@ -2245,19 +2195,17 @@ def cathode_defaults():
         "cathode_circuit_bound_object": "device_voltage",
         # Surface-state coverage model:
         # "ads_des" evolves contaminant coverage theta with
-        # dtheta/dt = k_ads(1-theta) - [nu0 e^(-E_des/kTs) + sigma Gamma_i] theta
+        # dtheta/dt = -sigma Gamma_i theta
         # and substitutes phi_eff = phi_clean + (phi_wf - phi_clean)*theta
         # everywhere phi_wf is read (emission, Schottky, cooling, gaussian
         # inversion -- every consumer reads the one substituted
         # value, never a mix of phi_eff and phi_wf). phi_wf keeps its
         # meaning as the contaminated SHOT-START value; the clean floor is
         # the per-shot-accessible depth of the re-adsorbed layer, not the
-        # literature clean-LaB6 value. In-shot the ion-stimulated term
-        # dominates (fluence-cleaning limit); adsorption and thermal
-        # desorption are carried for the between-shot cycle map and default to
-        # zero (inert).
-        # --- ACTIVE: ads_des surface state (in-shot ion-stimulated cleaning;
-        # the between-shot ads/desorption params default to zero, inert) ---
+        # literature clean-LaB6 value. Ion-stimulated desorption is the only
+        # coverage-loss channel: the coverage is monotonically non-increasing
+        # through a shot.
+        # --- ACTIVE: ads_des surface state (in-shot ion-stimulated cleaning) ---
         "cathode_surface_model": "ads_des",
         "cathode_phiwf_clean_eV": 2.809,
         "cathode_cleaning_sigma_cm2": 3.5e-16,
@@ -2266,9 +2214,6 @@ def cathode_defaults():
         # per-ion energy E = P_cathode_i/I_i. None = the energy-independent
         # fluence limit.
         "cathode_cleaning_E_th_eV": 20.0,
-        "cathode_ads_rate_per_s": 0.0,
-        "cathode_desorption_prefactor_per_s": 0.0,
-        "cathode_desorption_energy_eV": 3.0,
         # Directed neutral recycle jets: with
         # the neutral_momentum flag on, the surface recycle fluxes carry
         # directed momentum into M_n instead of rebirthing at rest.
@@ -2342,8 +2287,6 @@ def physics_fit_defaults():
         converged Picard alone does not make the whole step second-order.
     heat_picard_tol:
         Relative temperature-change tolerance ending the Picard iteration early.
-    ln_lambda_min:
-        Minimum Coulomb logarithm used by transport and exchange estimates.
     Tn_K:
         Neutral gas temperature setting the neutral thermal speed [K].
         Superseded as the collision operator's neutral temperature wherever
@@ -2370,7 +2313,6 @@ def physics_fit_defaults():
         # value is required for tr_bdf2 + strang to express second order.
         "heat_picard_iterations": 2,
         "heat_picard_tol": 1e-10,
-        "ln_lambda_min": 1.0,
         "Tn_K": 300.0,  # single cold-gas neutral temperature (Phelps T_eff)
         # --- INERT under these defaults ---
         # Neutral-energy wall accommodation (read only when the
@@ -2394,8 +2336,6 @@ def timestep_defaults():
         Fractional density-change limit for source/reaction timestep estimates.
     neutral_dt_fraction:
         Fractional neutral-density change limit for neutral source estimates.
-    heat_dt_fraction:
-        Fractional thermal-energy change limit for heat/source estimates.
     dt_min:
         Minimum allowed timestep [s].
     dt_min_lock_max_steps:
@@ -2424,32 +2364,10 @@ def timestep_defaults():
         returns the partial trajectory with ``run_status =
         "max_steps_reached"`` (a completed opt-in run carries ``run_status =
         "completed"``) so the caller can inspect and save it.
-    surface_loss_floor_exempt_rtol:
-        Relative threshold for the floor-aware drain exemption on the
-        "surface_loss" (resolved electrode/source bundle) timestep bound,
-        active only when the ``surface_loss_floor_exempt`` flag is on. A cell
-        whose electron (ion) energy margin above the per-cell floor energy
-        ``3/2 n Te_floor`` (``3/2 n Ti_floor``) is at most this fraction OF
-        that floor energy is excluded from the drain-margin bound: the
-        accept-time floor clip re-pins the cell every step while the sink
-        keeps draining, so the bound re-trips forever and dt collapses (the
-        diagnosed afterglow crawl). The threshold is relative to the floor
-        energy, not an absolute magnitude. The scale it has to separate: a
-        pinned cell HOVERS at a small positive relative margin -- the clip
-        plus one step of re-heating residue, not float round-off -- while a
-        healthy drained cell sits orders of magnitude above that. A cell
-        whose drain dominates its heating self-drives its hover margin below
-        any fixed threshold within a few steps (hover ~ heating*dt shrinks
-        with dt), so the exemption engages exactly for genuinely pinned
-        cells. Readmission is knife-edge: any margin above the threshold
-        re-admits the cell immediately (no hysteresis). Must be in (0, 1)
-        when the flag is on.
     adaptive_retries_enabled:
         Enables retrying a rejected step with a smaller timestep.
     max_step_retries:
         Maximum retry attempts for one accepted step.
-    dt_reject_factor:
-        Timestep multiplier applied after a rejected attempt.
     dt_growth_enabled:
         Enables limiting timestep growth between accepted steps.
     dt_growth_factor:
@@ -2495,10 +2413,6 @@ def timestep_defaults():
     max_energy_step_fraction:
         Optional accepted-step thermal-energy fractional-change guard. Zero
         disables it.
-    drag_dt_fraction:
-        Maximum ion-neutral drag relaxation fraction per explicit step.
-        This was formerly available only through an unregistered
-        ``dict.get`` fallback.
     circuit_dt_fraction:
         Fraction of the current-driven loop's LOCAL relaxation time
         ``tau_circuit = L_parasitic_H / (R_comp + R_mesh_ohm + dV_dis/dI)``
@@ -2517,16 +2431,13 @@ def timestep_defaults():
         "cfl": 0.4,
         "density_dt_fraction": 0.25,
         "neutral_dt_fraction": 0.25,
-        "heat_dt_fraction": 0.25,
         "dt_min": 1e-10,
         "dt_min_lock_max_steps": 250000,
         "dt_max": 1e-4,
         "max_steps": 0,
         "max_steps_action": "raise",
-        "surface_loss_floor_exempt_rtol": 1e-3,
         "adaptive_retries_enabled": True,
         "max_step_retries": 8,
-        "dt_reject_factor": 0.5,
         "dt_growth_enabled": True,
         "dt_growth_factor": 1.25,
         # Default-off: patience 0 skips the branch entirely, so the ramp is
@@ -2537,7 +2448,6 @@ def timestep_defaults():
         "max_density_step_fraction": 0.0,
         "max_neutral_step_fraction": 0.0,
         "max_energy_step_fraction": 0.0,
-        "drag_dt_fraction": 0.5,
         "circuit_dt_fraction": 0.25,
     }
 
@@ -3087,12 +2997,6 @@ input_flags_template_1d = {
     # launches the CSDA module) and where the resolved geometry has no anode
     # faces. Set False for the with/without-interception A/B.
     "beam_anode_interception": True,
-    # DEPRECATED: 0D-artifact per-electrode surface-loss enables. The resolved
-    # geometry's plasma-terminating (absorbing) faces are a geometry fact, not
-    # a config toggle; these are never consumed and non-default use warns.
-    # Retained at their canonical True so a default run is warning-free.
-    "source_surface_loss": True,
-    "end_surface_loss": True,
     "ion_neutral_drag": True,
     "ion_neutral_drag_cx_only": False,
     # Evolve axial neutral momentum M_n as a sixth conservative field:
@@ -3256,7 +3160,7 @@ input_flags_template_1d = {
     # zero and this single operator runs; when OFF it is a strict no-op.
     # He-only. Uses the single cold-gas Tn_K for the neutral temperature,
     # ending the Tn_K/Tn_fit term-by-term mix. With this ON the ad-hoc
-    # b_ion_neutral_drag / sigma_in constant/cx_derived / slip closures are
+    # b_ion_neutral_drag / slip closures are
     # superseded and DEPRECATED.
     "ion_neutral_moment_closure": True,
     # Gated fluid<->circuit Picard. The fluid step runs at a loop current
@@ -3351,8 +3255,9 @@ input_flags_template_1d = {
     "use_cached_neutral_seed": False,
     # Floor-aware drain exemption on the "surface_loss" timestep bound
     # (the afterglow dt-collapse fix): cells pinned at the Te/Ti floor
-    # (energy margin within surface_loss_floor_exempt_rtol of the per-cell
-    # floor energy) are excluded from the drain-margin bound ONLY -- the
+    # (electron/ion energy margin within solver.SURFACE_LOSS_FLOOR_EXEMPT_RTOL
+    # of the per-cell floor energy 3/2 n Te_floor, i.e. Te within 0.1% of the
+    # floor) are excluded from the drain-margin bound ONLY -- the
     # accept-time floor clip resets their margin to float residue every step,
     # so a persistent drain otherwise pins dt at dt_min indefinitely. One-sided
     # (all other bounds still govern the cell) and knife-edge (any real margin
@@ -3466,8 +3371,6 @@ input_flags_template_1d = {
     # Default OFF, presence-gated and bit-exact off.
     "regime_vessel_node": False,
     "ionization_energy_cost": True,
-    "icool": True,
-    "ncool": True,
     "cx": True,
     "icool_recomb": False,
     "debug_checks": False,

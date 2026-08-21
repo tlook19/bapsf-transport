@@ -30,11 +30,9 @@ Two classes of row exist:
 Controls that already have their own louder guard are deliberately ABSENT.
 ``front_flux_model``, ``D_amb_model``, ``cathode_model`` and ``D_amb`` are
 frozen by ``LAPDSim1D._validate_r1_configuration_presence`` and raise on
-non-default use; the four resolved-boundary surface-loss controls
-(``source_surface_loss``, ``end_surface_loss``, ``source_surface_area_scale``,
-``end_surface_area_scale``), ``gas_puff_mode``'s retired waveform modes and the
-legacy ion-neutral path (``ion_neutral_moment_closure=False``) already warn from
-that same method. Adding a second warning for the same condition would only
+non-default use; ``gas_puff_mode``'s retired waveform modes and the legacy
+ion-neutral path (``ion_neutral_moment_closure=False``) already warn from that
+same method. Adding a second warning for the same condition would only
 duplicate it.
 
 Closure families with a live A/B are APPARATUS, not legacy, and are absent for
@@ -145,13 +143,6 @@ DEPRECATED_CONTROLS = {
     "ionization_birth_energy_model": DeprecatedControl(
         PARAMS, _FREED_BRANCH, _FREED_BRANCH_FIX, values=("legacy",),
     ),
-    "sigma_in_model": DeprecatedControl(
-        PARAMS,
-        "the pre-Phelps presheath cross-section arms are superseded by "
-        "sigma_in_model='phelps', and " + _FREED_BRANCH,
-        _FREED_BRANCH_FIX,
-        values=("constant", "cx_derived"),
-    ),
     "b_ion_neutral_drag": DeprecatedControl(
         PARAMS,
         "it scales the legacy ion-neutral drag term, which the moment-closed "
@@ -188,26 +179,11 @@ DEPRECATED_CONTROLS = {
         values=("kinetic",),
     ),
     # ==== dead levers: cathode ============================================
-    "cathode_rad_area_cm2": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
-    "cathode_ads_rate_per_s": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
-    "cathode_desorption_prefactor_per_s": DeprecatedControl(
-        PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX,
-    ),
-    "cathode_desorption_energy_eV": DeprecatedControl(
-        PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX,
-    ),
-    "cathode_env_T_K": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
     "anode_radius_cm": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
     "coverage_backfill_time_s": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
     # ==== dead levers: timestep control ===================================
-    "heat_dt_fraction": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
-    "drag_dt_fraction": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
     "neutral_dt_fraction": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
-    "dt_reject_factor": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
     "dt_growth_recovery_factor": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
-    "surface_loss_floor_exempt_rtol": DeprecatedControl(
-        PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX,
-    ),
     "beam_ionization_birth_timestep_bound": DeprecatedControl(
         FLAGS, _DEAD_LEVER, _DEAD_LEVER_FIX,
     ),
@@ -234,14 +210,6 @@ DEPRECATED_CONTROLS = {
         PARAMS, _PUFF_WAVEFORM, _PUFF_WAVEFORM_FIX,
     ),
     # ==== dead levers: inert selectors ====================================
-    "end_mode": DeprecatedControl(
-        PARAMS,
-        "the 'mirrored_source' end boundary is selected by no committed "
-        "configuration (config surface audited 2026-08-19) and is scheduled "
-        "for removal",
-        _DEAD_LEVER_FIX,
-        values=("mirrored_source",),
-    ),
     "Ti_birth_ionization": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
     # ==== dead levers: scaling factors ====================================
     "b_anode_collection": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
@@ -256,7 +224,6 @@ DEPRECATED_CONTROLS = {
     "b_epara": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
     "b_ipara": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
     "b_slip_entrainment": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
-    "ln_lambda_min": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
     # ==== dead levers: neutral probe source ===============================
     "neutral_probe_profile": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
     "neutral_probe_waveform_table": DeprecatedControl(
@@ -289,8 +256,6 @@ DEPRECATED_CONTROLS = {
     "beam_excitation_energy_eV": DeprecatedControl(
         PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX,
     ),
-    "icool": DeprecatedControl(FLAGS, _DEAD_LEVER, _DEAD_LEVER_FIX),
-    "ncool": DeprecatedControl(FLAGS, _DEAD_LEVER, _DEAD_LEVER_FIX),
 }
 
 

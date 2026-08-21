@@ -194,13 +194,13 @@ from cablp.solvers._sim1d.physics.sources import (
     ion_neutral_frictional_heating_rhs,
     ion_neutral_slip_factor,
     ion_neutral_thermalization_rhs,
-    langevin_rate_cm3_s,
     neutral_momentum_two_zone_rhs,
     neutral_momentum_wall_rhs,
     neutral_wind_two_zone_factors,
     neutral_wind_velocity,
     velocity_divergence,
 )
+from cablp.funcs._cross import phelps_momentum_transfer_rate_cm3_s
 from cablp.solvers._sim1d.core.state import (
     STATE_NAMES_1D,
     ConservativeState1D,
@@ -3904,7 +3904,7 @@ def _case_cathode_power_balance_under_current_drive(
         sf_result.cathode_diagnostics["phi_wf_eff"], float
     )
     assert np.all(np.isfinite(sf_theta)) and np.all(sf_theta <= 1.0)
-    assert np.all(np.diff(sf_theta) <= 0.0)  # cleaning only, k_ads = 0
+    assert np.all(np.diff(sf_theta) <= 0.0)  # ion-stimulated cleaning only
     # Reproduce the backward-Euler update exactly from the spy's honest
     # I_i sequence (run() starts I_loop at 0, so the accepted honest
     # solves carry the near-floating I_i -- the form is what's tested).
@@ -3912,8 +3912,8 @@ def _case_cathode_power_balance_under_current_drive(
     sf_th = 1.0
     for sf_Ii in sf_calls:
         sf_G = max(sf_Ii, 0.0) / (1.602176634e-19 * sf_area)
-        sf_loss = 0.0 + 1.0e-16 * sf_G
-        sf_th = (sf_th + 1.0e-10 * 0.0) / (1.0 + 1.0e-10 * (0.0 + sf_loss))
+        sf_loss = 1.0e-16 * sf_G
+        sf_th = sf_th / (1.0 + 1.0e-10 * sf_loss)
     assert np.isclose(sf_theta[-1], sf_th, rtol=0.0, atol=1e-11), (
         sf_theta[-1], sf_th
     )
@@ -7075,7 +7075,6 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
         ion_mass_g=sim.ion_mass_g,
         mu=sim.mu,
         b_Qie=0.0,
-        ln_lambda_min=params["ln_lambda_min"],
     )
     assert np.allclose(disabled_exchange.Ee, 0.0)
     assert np.allclose(disabled_exchange.Ei, 0.0)
@@ -7123,8 +7122,6 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
         b_Qei=0.0,
         b_Qen=0.0,
         ionization_energy_cost=True,
-        icool=True,
-        ncool=True,
         icool_recomb=flags["icool_recomb"],
     )
     assert np.all(ionization_only_cooling.Ee < 0.0)
@@ -7142,8 +7139,6 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
         b_Qei=0.0,
         b_Qen=0.0,
         ionization_energy_cost=True,
-        icool=True,
-        ncool=True,
         icool_recomb=flags["icool_recomb"],
     )
     assert np.allclose(disabled_cooling.Ee, 0.0)
@@ -7278,7 +7273,6 @@ def _case_helium_only_reaction_rates(dt_default, hot_ion_cx_state):
         b_epara=0.0,
         b_ipara=0.0,
         heat_conduction=True,
-        ln_lambda_min=params["ln_lambda_min"],
     )
     assert np.allclose(disabled_heat.Ee, 0.0)
     assert np.allclose(disabled_heat.Ei, 0.0)
@@ -7319,7 +7313,6 @@ def _case_helium_only_reaction_rates(dt_default, hot_ion_cx_state):
         b_epara=0.0,
         b_ipara=0.0,
         heat_conduction=True,
-        ln_lambda_min=params["ln_lambda_min"],
     )
     assert np.allclose(disabled_implicit.Ee, heat_state.Ee)
     assert np.allclose(disabled_implicit.Ei, heat_state.Ei)
@@ -8475,6 +8468,7 @@ def _case_cathode_power_balance_warming(
     sim, snapshot = _base_sim()
     geom = snapshot.geometry
     from cablp.solvers._sim1d.physics.cathode import (
+        CATHODE_ENV_T_K,
         cathode_power_balance_terms_W,
     )
 
@@ -8570,7 +8564,7 @@ def _case_cathode_power_balance_warming(
             + 1.0e-10
             * (pb_h + pb_p - pb_r - pb_e - pb_c)
             / (_pb_C + 1.0e-10 * pb_G),
-            float(pb_params["cathode_env_T_K"]),
+            CATHODE_ENV_T_K,
         )
         assert np.isclose(pb_Ts[pb_k], pb_T_prev, rtol=0.0, atol=1e-9), (
             pb_k, pb_Ts[pb_k], pb_T_prev,
@@ -10619,6 +10613,7 @@ def _case_ion_neutral_closure_knobs():
         Ti=np.array([1.0, 1.0, 1.0]),
         ion_mass_g=knob_mass,
         Rm_cm=knob_Rm,
+        gas_type="He",
     )
     assert np.all((slip > 0.0) & (slip <= 1.0))
     assert np.all(np.diff(slip) < 0.0)
@@ -10630,6 +10625,7 @@ def _case_ion_neutral_closure_knobs():
             Ti=np.array([1.0, 1.0, 1.0]),
             ion_mass_g=knob_mass,
             Rm_cm=knob_Rm,
+            gas_type="He",
             b_slip_entrainment=0.0,
         )
         == 1.0
@@ -10648,6 +10644,7 @@ def _case_ion_neutral_closure_knobs():
         Ti=derive_state(knob_state, floors=knob_floors, ion_mass_g=knob_mass).Ti,
         ion_mass_g=knob_mass,
         Rm_cm=knob_Rm,
+        gas_type="He",
     )
     drag_const = ion_neutral_drag_rhs(**drag_kwargs)
     drag_slip = ion_neutral_drag_rhs(
@@ -11006,7 +11003,6 @@ def _case_neutral_momentum_sources(
     mn_nu_ni = ion_neutral_collision_frequency(
         nn=mn_state.n,
         Ti=mn_Ti,
-        ion_mass_g=knob_mass,
         gas_type="He",
     )
     mn_E = mn_geom.volume_ratio * mn_nu_ni * knob_Rm / mn_vbar
@@ -11017,6 +11013,7 @@ def _case_neutral_momentum_sources(
             Ti=mn_Ti[mn_i],
             ion_mass_g=knob_mass,
             Rm_cm=knob_Rm[mn_i],
+            gas_type="He",
             b_slip_entrainment=mn_geom.volume_ratio[mn_i],
         )
         assert np.isclose(
@@ -12867,58 +12864,59 @@ def _case_anode_disc_radius(build_geometry):
 
 
 # --------------------------------------------------------------------
-# sigma-in-cx-derived
+# sigma-in-phelps
 # --------------------------------------------------------------------
 @_case(
-    "sigma-in-cx-derived",
+    "sigma-in-phelps",
     provides=("cool_flat", "cooling_kwargs", "shape_state"),
 )
-def _case_sigma_in_cx_derived(
-    drag_const, drag_kwargs, knob_floors, knob_mass, knob_state
-):
-    # --- CX-derived momentum-transfer rate (sigma_in_model = "cx_derived"):
-    # nu_in = nn * (2*<sigma v>_cx + k_Langevin), consistent with the CX
-    # energy channel and carrying the velocity dependence the constant lacks.
-    k_L = langevin_rate_cm3_s("He", knob_mass)
-    assert 5.0e-10 < k_L < 1.0e-9  # ~7.5e-10 cm^3/s for He+ in He
-    nu_kwargs = dict(nn=1e13, ion_mass_g=knob_mass)
-    for Ti_probe, expect_side in ((0.1, "smaller"), (5.0, "larger")):
-        nu_const = ion_neutral_collision_frequency(Ti=Ti_probe, **nu_kwargs)
-        nu_cxd = ion_neutral_collision_frequency(
-            Ti=Ti_probe, sigma_in_model="cx_derived", gas_type="He", **nu_kwargs
+def _case_sigma_in_phelps(knob_floors, knob_mass, knob_state):
+    # --- Momentum-transfer rate. The two legacy arms ("constant",
+    # "cx_derived") were removed at D3 (2026-08-21) together with the
+    # solver's only non-helium path, so the Phelps rate is the whole
+    # function: nu_in = nn * (k_b + 1/2 k_iso)((Ti + Tn)/2). It must be
+    # positive, finite, and exactly the tabulated rate at the effective
+    # temperature -- gas_type is now required rather than selected.
+    for Ti_probe in (0.1, 5.0):
+        nu_in = ion_neutral_collision_frequency(
+            nn=1e13, Ti=Ti_probe, gas_type="He"
         )
-        assert np.isfinite(nu_cxd) and nu_cxd > 0.0
-        # the constant crosses the CX-derived curve near 0.5 eV
-        if expect_side == "smaller":
-            assert nu_const < nu_cxd
-        else:
-            assert nu_const > nu_cxd
-        # exact construction: 2*nu_cx + nn*k_L
+        assert np.isfinite(nu_in) and nu_in > 0.0
+        assert np.isclose(
+            nu_in,
+            1e13
+            * phelps_momentum_transfer_rate_cm3_s(
+                0.5 * (Ti_probe + 0.025851), gas_type="He"
+            ),
+            rtol=0.0,
+        )
+        # The elastic remainder stays the total minus resonant CX.
         nu_cx = ion_neutral_cx_frequency(nn=1e13, Ti=Ti_probe, gas_type="He")
-        assert np.isclose(nu_cxd, 2.0 * nu_cx + 1e13 * k_L, rtol=1e-12)
-        # elastic remainder is nu_cx + Langevin, strictly positive
         nu_el = ion_neutral_elastic_frequency(
-            nn=1e13,
-            Ti=Ti_probe,
-            ion_mass_g=knob_mass,
-            gas_type="He",
-            sigma_in_model="cx_derived",
+            nn=1e13, Ti=Ti_probe, ion_mass_g=knob_mass, gas_type="He"
         )
-        assert np.isclose(nu_el, nu_cx + 1e13 * k_L, rtol=1e-12)
-    for bad_call in (
-        dict(Ti=1.0, sigma_in_model="cx_derived", **nu_kwargs),  # no gas_type
-        dict(Ti=1.0, sigma_in_model="nonsense", gas_type="He", **nu_kwargs),
-    ):
+        assert np.isclose(nu_el, max(nu_in - nu_cx, 0.0), rtol=1e-12)
+    # gas_type is no longer optional -- there is no gas-independent arm left.
+    try:
+        ion_neutral_collision_frequency(nn=1e13, Ti=1.0)
+    except ValueError as error:
+        assert "requires gas_type" in str(error), error
+    else:
+        raise AssertionError("expected ValueError without gas_type")
+    # The selector itself keeps 'phelps' and names the D3 removal for the rest.
+    _sigma_params, _sigma_flags = _base_config()
+    for _sigma_bad in ("constant", "cx_derived", "nonsense"):
         try:
-            ion_neutral_collision_frequency(**bad_call)
-        except ValueError:
-            pass
+            LAPDSim1D(
+                dict(_sigma_params, sigma_in_model=_sigma_bad), _sigma_flags
+            )
+        except ValueError as error:
+            assert "removed at D3, 2026-08-21" in str(error), error
+            assert "Accepted: 'phelps'" in str(error), error
         else:
-            raise AssertionError(f"expected ValueError for {bad_call}")
-    # drag rhs accepts the model end-to-end and differs from the constant
-    drag_cxd = ion_neutral_drag_rhs(**drag_kwargs, sigma_in_model="cx_derived")
-    assert np.all(np.isfinite(drag_cxd.M))
-    assert not np.allclose(drag_cxd.M, drag_const.M)
+            raise AssertionError(
+                f"expected sigma_in_model={_sigma_bad!r} to be refused"
+            )
 
     # Thermalization scale: None inherits b_ion_neutral_drag (historical
     # coupling), an explicit value decouples it.
@@ -15021,23 +15019,26 @@ def _case_restart_saved_evidence_r1b(r1a_flags, r1a_params):
             raise AssertionError(
                 f"expected frozen surface-control rejection: {stale_param}"
             )
-    # A13 (R3.3): the resolved-boundary surface-loss controls are now DEPRECATED
-    # 0D artifacts -- non-default use warns loudly (no longer frozen, never a
-    # silent no-op) because the resolved geometry measures per-electrode I_sat.
+    # A13 (R3.3, deleted at D3 2026-08-21): the four resolved-boundary
+    # surface-loss controls were 0D artifacts standing in for un-separated
+    # cathode/anode I_sat, and the resolved geometry measures the Bohm I_sat
+    # to each electrode face directly. They now name no key in either
+    # namespace, so the unknown-key refusal owns them -- in BOTH namespaces,
+    # which is what makes the deletion loud rather than silent.
     for dep_params, dep_flags in (
         (dict(r1a_params, source_surface_area_scale=1.7), r1a_flags),
         (dict(r1a_params, end_surface_area_scale=0.9), r1a_flags),
         (r1a_params, dict(r1a_flags, source_surface_loss=False)),
         (r1a_params, dict(r1a_flags, end_surface_loss=False)),
     ):
-        with _dep_warnings.catch_warnings(record=True) as _caught_dep:
-            _dep_warnings.simplefilter("always")
+        try:
             LAPDSim1D(dict(dep_params), dict(dep_flags))
-        assert any(
-            issubclass(w.category, DeprecationWarning)
-            and "DEPRECATED 0D artifacts" in str(w.message)
-            for w in _caught_dep
-        ), f"expected A13 deprecation warning for {dep_params}/{dep_flags}"
+        except ValueError as error:
+            assert "unknown LAPDSim1D configuration keys" in str(error), error
+        else:
+            raise AssertionError(
+                f"expected unknown-key rejection for {dep_params}/{dep_flags}"
+            )
     for birth_name, bad_value in (
         ("Te_birth_ionization", "bogus"),
         ("Ti_birth_ionization", -1.0),

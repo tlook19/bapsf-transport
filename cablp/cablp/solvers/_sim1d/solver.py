@@ -105,6 +105,7 @@ from .physics.cathode import (
 )
 from cablp.funcs._cathode_solver_idriven import beam_launch_energy_eV
 from .physics.cathode import (
+    CATHODE_ENV_T_K,
     advance_circuit_current_driven,
     circuit_bound_object,
     idriven_result_evaluator,
@@ -214,6 +215,20 @@ from cablp.vars._cons import (
     m_p_cgs,
     qe_SI,
 )
+
+
+#: Timestep multiplier [dimensionless] applied after a rejected attempt. Must
+#: lie in (0, 1) to shrink the step; 1/2 halves it, which reaches any smaller
+#: admissible dt in a logarithmic number of retries.
+DT_REJECT_FACTOR = 0.5
+
+#: Relative threshold [dimensionless] for the floor-aware drain exemption on
+#: the "surface_loss" timestep bound, consulted only when the
+#: ``surface_loss_floor_exempt`` flag is on. It separates a cell HOVERING at
+#: its temperature floor (clip plus one step of re-heating residue) from a
+#: healthy drained cell orders of magnitude above it; see the flag's entry in
+#: ``core/config.py``.
+SURFACE_LOSS_FLOOR_EXEMPT_RTOL = 1e-3
 
 
 #: What energy each named RHS term's neutral-density row carries, under the
@@ -817,15 +832,22 @@ class LAPDSim1D:
                 "ion_neutral_moment_closure uses the Phelps He+/He cross "
                 f"sections and requires gas_type='He' (got {self._gas_type!r})"
             )
-        # R5 stance flip: the "phelps" presheath sigma_in model (default) shares
-        # the He-only Phelps cross section; hydrogen configs must select
-        # "constant" or "cx_derived".
+        # The presheath sigma_in model shares the He-only Phelps cross
+        # section. Its two legacy arms ("constant", "cx_derived") were the
+        # only non-helium path in the solver and were removed at D3.
         _sigma_in_model = str(self._input_dict.get("sigma_in_model", "phelps"))
-        if _sigma_in_model == "phelps" and self._gas_type != "He":
+        if _sigma_in_model != "phelps":
+            raise ValueError(
+                f"sigma_in_model={_sigma_in_model!r} is not available: the "
+                "legacy 'constant' and 'cx_derived' arms were removed at D3, "
+                "2026-08-21. Accepted: 'phelps'."
+            )
+        if self._gas_type != "He":
             raise ValueError(
                 "sigma_in_model='phelps' uses the Phelps He+/He cross section "
-                f"and requires gas_type='He' (got {self._gas_type!r}); select "
-                "'constant' or 'cx_derived' for other gases"
+                f"and requires gas_type='He' (got {self._gas_type!r}); the "
+                "non-helium arms were removed at D3, 2026-08-21 and the "
+                "solver is helium-only"
             )
 
     def _init_neutral_closure_selection(self):
@@ -1094,21 +1116,8 @@ class LAPDSim1D:
         _surface_loss_floor_exempt = bool(
             self._flags.get("surface_loss_floor_exempt", False)
         )
-        _surface_loss_floor_exempt_rtol = float(
-            self._input_dict.get("surface_loss_floor_exempt_rtol", 1e-3)
-        )
-        if _surface_loss_floor_exempt and not (
-            0.0 < _surface_loss_floor_exempt_rtol < 1.0
-        ):
-            raise ValueError(
-                "surface_loss_floor_exempt_rtol must be in (0, 1) when "
-                "surface_loss_floor_exempt is on "
-                f"(got {_surface_loss_floor_exempt_rtol})"
-            )
         self._surface_loss_floor_exempt_rtol = (
-            _surface_loss_floor_exempt_rtol
-            if _surface_loss_floor_exempt
-            else None
+            SURFACE_LOSS_FLOOR_EXEMPT_RTOL if _surface_loss_floor_exempt else None
         )
         _max_steps_action = str(
             self._input_dict.get("max_steps_action", "raise")
@@ -1663,22 +1672,20 @@ class LAPDSim1D:
                 raise ValueError(
                     "cathode_conduction_W_per_K must be non-negative"
                 )
-            if float(Ts_base) <= float(
-                self._input_dict.get("cathode_env_T_K", 300.0)
-            ):
+            if float(Ts_base) <= CATHODE_ENV_T_K:
                 raise ValueError(
-                    "cathode_Ts_base_K must exceed cathode_env_T_K"
+                    "cathode_Ts_base_K must exceed the "
+                    f"{CATHODE_ENV_T_K:g} K chamber-wall temperature"
                 )
             self._cathode_Ts_K = float(Ts_base)
         # Surface-state coverage (cathode_surface_model="ads_des",
         # M5a): theta in [0, 1] is the contaminant
         # coverage raising the effective work function,
         # phi_eff = phi_clean + (phi_wf - phi_clean) * theta, evolving as
-        #   dtheta/dt = k_ads (1-theta) - [nu0 e^(-E_des/kT_s) + sigma Gamma_i] theta
-        # (adsorption / thermal desorption / ion-stimulated desorption).
-        # In-shot the ion term dominates (M5a: the fluence-cleaning limit);
-        # the other channels are carried for the M5b cycle map and default
-        # to zero. None = static phi_wf (historical).
+        #   dtheta/dt = -sigma Gamma_i theta
+        # (ion-stimulated desorption -- M5a, the fluence-cleaning limit --
+        # which is the only coverage channel, so theta is monotonically
+        # non-increasing). None = static phi_wf (historical).
         surface_model = str(
             self._input_dict.get("cathode_surface_model", "none")
         )
@@ -1700,13 +1707,10 @@ class LAPDSim1D:
                     "cathode_phiwf_clean_eV must be below phi_wf (the "
                     "contaminated shot-start value)"
                 )
-            for _sk in (
-                "cathode_cleaning_sigma_cm2",
-                "cathode_ads_rate_per_s",
-                "cathode_desorption_prefactor_per_s",
-            ):
-                if float(self._input_dict.get(_sk, 0.0)) < 0.0:
-                    raise ValueError(f"{_sk} must be non-negative")
+            if float(self._input_dict.get("cathode_cleaning_sigma_cm2", 0.0)) < 0.0:
+                raise ValueError(
+                    "cathode_cleaning_sigma_cm2 must be non-negative"
+                )
             self._cathode_theta = 1.0
         # Per-shot surface energy ledger [J] (power_balance only): running
         # integrals of the balance terms over accepted steps. The net
@@ -2947,12 +2951,8 @@ class LAPDSim1D:
         return {
             "alpha_isat": surface["alpha_isat"],
             "b_surface_loss": surface["b_surface_loss"],
-            "sigma_in_cm2": float(self._input_dict.get("sigma_in_cm2", 5.0e-15)),
             "b_presheath_length": float(
                 self._input_dict.get("b_presheath_length", 1.0)
-            ),
-            "sigma_in_model": str(
-                self._input_dict.get("sigma_in_model", "constant")
             ),
             "gas_type": self._gas_type,
         }
@@ -2999,7 +2999,6 @@ class LAPDSim1D:
     def _tracer_exchange_kwargs(self):
         return {
             "b_Qie": float(self._input_dict.get("b_Qie", 1.0)),
-            "ln_lambda_min": float(self._input_dict.get("ln_lambda_min", 1.0)),
         }
 
     def _tracer_beam_kwargs(self, state, cathode_solve, time):
@@ -4782,17 +4781,12 @@ class LAPDSim1D:
     def _attempt_step_with_retries(self, dt, operator_split, diag):
         dt_min = float(self._input_dict.get("dt_min", 1e-12))
         max_retries = int(self._input_dict.get("max_step_retries", 8))
-        reject_factor = float(self._input_dict.get("dt_reject_factor", 0.5))
+        reject_factor = DT_REJECT_FACTOR
         retries_enabled = bool(
             self._input_dict.get("adaptive_retries_enabled", True)
         )
         if max_retries < 0:
             raise ValueError(f"max_step_retries must be non-negative ({max_retries})")
-        if not 0.0 < reject_factor < 1.0:
-            raise ValueError(
-                "dt_reject_factor must be between 0 and 1 "
-                f"(got {reject_factor})"
-            )
 
         attempted_dt = float(dt)
         retry_count = 0
@@ -5063,9 +5057,7 @@ class LAPDSim1D:
                 # explicit update to 4 decimal places; for tiny C_th it
                 # cannot overshoot the radiative equilibrium and ring.
                 eps = float(self._input_dict.get("cathode_emissivity", 0.7))
-                area = self._input_dict.get("cathode_rad_area_cm2")
-                if area is None:
-                    area = math.pi * float(self._input_dict["R_cath"]) ** 2
+                area = math.pi * float(self._input_dict["R_cath"]) ** 2
                 G_lin = (
                     4.0
                     * eps
@@ -5086,7 +5078,7 @@ class LAPDSim1D:
                 )
                 self._cathode_Ts_K = max(
                     self._cathode_Ts_K + dT,
-                    float(self._input_dict.get("cathode_env_T_K", 300.0)),
+                    CATHODE_ENV_T_K,
                 )
                 ledger = self._cathode_energy_ledger_J
                 ledger["heater"] += float(attempt.dt) * P_heat
@@ -5137,33 +5129,10 @@ class LAPDSim1D:
                 else:
                     r = E_th / E_ion_eV
                     sigma_cl *= (1.0 - r ** (2.0 / 3.0)) * (1.0 - r) ** 2
-            k_ads = float(
-                self._input_dict.get("cathode_ads_rate_per_s", 0.0)
+            loss = sigma_cl * Gamma_i
+            self._cathode_theta = self._cathode_theta / (
+                1.0 + float(attempt.dt) * loss
             )
-            nu0 = float(
-                self._input_dict.get(
-                    "cathode_desorption_prefactor_per_s", 0.0
-                )
-            )
-            nu_th = 0.0
-            if nu0 > 0.0:
-                T_des = (
-                    float(self._cathode_Ts_K)
-                    if self._cathode_Ts_K is not None
-                    else float(self._input_dict.get("T_s", 300.0))
-                )
-                nu_th = nu0 * math.exp(
-                    -float(
-                        self._input_dict.get(
-                            "cathode_desorption_energy_eV", 3.0
-                        )
-                    )
-                    / (8.617333262e-5 * max(T_des, 1.0))
-                )
-            loss = nu_th + sigma_cl * Gamma_i
-            self._cathode_theta = (
-                self._cathode_theta + float(attempt.dt) * k_ads
-            ) / (1.0 + float(attempt.dt) * (k_ads + loss))
         # Emitting-area percolation, accepted steps only, and at the SAME seam
         # as the other two surface states above: the honest accepted-state
         # re-solve read the pre-update surface (pre-update T_s, phi_wf_eff and
@@ -6560,8 +6529,6 @@ class LAPDSim1D:
             neutral_dt_fraction=float(
                 self._input_dict.get("neutral_dt_fraction", 0.25)
             ),
-            heat_dt_fraction=float(self._input_dict.get("heat_dt_fraction", 0.25)),
-            drag_dt_fraction=float(self._input_dict.get("drag_dt_fraction", 0.5)),
             circuit_dt_fraction=float(
                 self._input_dict.get("circuit_dt_fraction", 0.25)
             ),
@@ -7169,12 +7136,8 @@ class LAPDSim1D:
             geometry=self._plasma_geometry(),
             alpha_isat=surface_kwargs["alpha_isat"],
             b_surface_loss=surface_kwargs["b_surface_loss"],
-            sigma_in_cm2=float(self._input_dict.get("sigma_in_cm2", 5.0e-15)),
             b_presheath_length=float(
                 self._input_dict.get("b_presheath_length", 1.0)
-            ),
-            sigma_in_model=str(
-                self._input_dict.get("sigma_in_model", "constant")
             ),
             gas_type=self._gas_type,
             cathode_jet=self._cathode_jet_spec(cathode_solve),
@@ -7209,12 +7172,8 @@ class LAPDSim1D:
             geometry=self._plasma_geometry(),
             alpha_isat=surface_kwargs["alpha_isat"],
             b_surface_loss=surface_kwargs["b_surface_loss"],
-            sigma_in_cm2=float(self._input_dict.get("sigma_in_cm2", 5.0e-15)),
             b_presheath_length=float(
                 self._input_dict.get("b_presheath_length", 1.0)
-            ),
-            sigma_in_model=str(
-                self._input_dict.get("sigma_in_model", "constant")
             ),
             gas_type=self._gas_type,
             cathode_jet=self._cathode_jet_spec(cathode_solve),

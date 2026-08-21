@@ -463,20 +463,12 @@ diagnostics still work.
 **`alpha_isat = 0.6065306597126334` — DERIVED.** `exp(-1/2)`, the Bohm
 presheath density ratio.
 
-**`sigma_in_cm2 = 5.0e-15` cm^2 — literature (MEASURED).** Read only by
-`sigma_in_model = "constant"`; the shipped `"phelps"` model uses the Phelps
-He+/He cross section directly.
-
 **`heat_flux_limiter_f = 0.1` — ASSUMED.** The free-streaming fraction is not
 pinned by any measurement; the limiter is a closure-family instrument and the
 coefficient is properly reported as a bracket, never as a single number. `0.1`
 is the campaign value, folded here from the stance file at R2b (2026-08-20);
 the bracket it sits in, and what may be claimed from it, are in
 `scripts/production_stance_provenance.md`.
-
-**`source_surface_area_scale = 1.8` — FITTED, DEPRECATED.** A 0D artifact that
-stood in for un-separated cathode/anode I_sat. Never consumed by the resolved
-geometry.
 
 ## `cathode_defaults`
 
@@ -808,14 +800,6 @@ different value; see `scripts/production_stance_provenance.md`.
 **`cathode_cleaning_E_th_eV = 20.0` eV — DERIVED, bracket 18-26 eV** from
 He -> O kinematics for chemisorbed oxygen.
 **`cathode_cleaning_sigma_cm2 = 3.5e-16` cm^2 — FITTED.**
-
-**`cathode_desorption_energy_eV = 3.0` eV — ASSUMED.** No independent bar is on
-record and no memo was written; the value is latent rather than load-bearing.
-It is read only when `cathode_desorption_prefactor_per_s > 0`, which ships `0`,
-so at the shipped defaults the thermal-desorption exponential is never
-evaluated and this number is inert. It acquires a bar only when the ads/des
-arm (`cathode_surface_model = "ads_des"`) is first exercised with a positive
-prefactor; a bracket must be established before any result leans on it.
 
 **`cathode_jet_R_N = 0.34`, `cathode_jet_R_E = 0.18` — ASSUMED (mid-box
 construction), bracket = the two endpoint PAIRS below.** Particle and energy
@@ -1207,7 +1191,9 @@ either setting.
 
 ## `timestep_defaults`
 
-**`surface_loss_floor_exempt_rtol = 1e-3` — DERIVED from measured scales.**
+**`solver.SURFACE_LOSS_FLOOR_EXEMPT_RTOL = 1e-3` — DERIVED from measured
+scales.** No longer configurable: it was a config key until D3 (2026-08-21),
+where it became a named constant in `solvers/_sim1d/solver.py`.
 Instrumented on a floor-pinned afterglow state: a pinned cell hovers at ~5e-6
 relative margin (the clip plus one step of re-heating residue, not float
 round-off), while every healthy drained cell sampled across drive and afterglow
@@ -1238,7 +1224,7 @@ latency, never detection itself.
 
 **`circuit_dt_fraction = 0.25` — ASSUMED numerical-control value**, carrying
 the same quarter-of-a-relaxation-time convention as `density_dt_fraction`,
-`neutral_dt_fraction` and `heat_dt_fraction`. What is MEASURED is the feature
+`neutral_dt_fraction` and `conduction.HEAT_DT_FRACTION`. What is MEASURED is the feature
 it exists to resolve, not the fraction: the sheath capability wall's device
 slope reaches ~2 kOhm, giving `tau_circuit = L/(R + dV_dis/dI)` ~ 4 ns against
 an `L/R_comp` of 1.12 ms and a `dt_max` of 1e-4 s, and the sub-wall slew

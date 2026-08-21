@@ -51,7 +51,6 @@ def collision_operator_kwargs(input_dict, flags, *, gas_type):
 def energy_exchange_kwargs(input_dict):
     return {
         "b_Qie": float(input_dict.get("b_Qie", 1.0)),
-        "ln_lambda_min": float(input_dict.get("ln_lambda_min", 1.0)),
     }
 
 
@@ -73,10 +72,6 @@ def ion_neutral_drag_kwargs(input_dict, flags, *, gas_type):
     drag_enabled = bool(flags.get("ion_neutral_drag", True))
     return {
         "gas_type": gas_type,
-        "sigma_in_cm2": float(input_dict.get("sigma_in_cm2", 5.0e-15)),
-        "sigma_in_model": str(
-            input_dict.get("sigma_in_model", "constant")
-        ),
         "b_ion_neutral_drag": (
             float(input_dict.get("b_ion_neutral_drag", 1.0))
             if drag_enabled
@@ -122,8 +117,6 @@ def electron_cooling_kwargs(input_dict, flags, *, gas_type, I_ion):
         "ionization_energy_cost": bool(
             flags.get("ionization_energy_cost", True)
         ),
-        "icool": bool(flags.get("icool", True)),
-        "ncool": bool(flags.get("ncool", True)),
         "icool_recomb": bool(flags.get("icool_recomb", False)),
         # A18/R5.3: the low-Te extension defines ONE consistent atomic
         # package -- the electron-cooling prb1 honors it just like the
@@ -155,7 +148,6 @@ def heat_conduction_kwargs(
         "b_epara": float(input_dict.get("b_epara", 1.0)),
         "b_ipara": float(input_dict.get("b_ipara", 1.0)),
         "heat_conduction": bool(flags.get("heat_conduction", True)),
-        "ln_lambda_min": float(input_dict.get("ln_lambda_min", 1.0)),
         "electron_heat_flux_limit": electron_heat_flux_limit,
         "heat_flux_limiter_f": heat_flux_limiter_f,
         "heat_flux_limiter_exponent": heat_flux_limiter_exponent,

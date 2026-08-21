@@ -27,6 +27,11 @@ from ..physics.sources import (
 )
 from .state import derive_state
 
+#: Fraction [dimensionless] of the ion-neutral drag damping time 1/nu_in the
+#: accepted step may take, so the explicit damping cannot overshoot: the
+#: forward-Euler factor (1 - dt nu_in) stays at 1/2 or above.
+DRAG_DT_FRACTION = 0.5
+
 
 @dataclass(frozen=True)
 class TimestepDiagnostics:
@@ -101,8 +106,6 @@ def suggest_timestep(
     cfl=0.4,
     density_dt_fraction=0.25,
     neutral_dt_fraction=0.25,
-    heat_dt_fraction=0.25,
-    drag_dt_fraction=0.5,
     circuit_dt_fraction=0.25,
     dt_min=1e-12,
     dt_max=1e-6,
@@ -237,7 +240,6 @@ def suggest_timestep(
             mu=mu,
             geometry=geometry,
             heat_conduction_kwargs=heat_conduction_kwargs,
-            heat_dt_fraction=heat_dt_fraction,
             plasma_active=plasma_active,
         ),
         "ion_neutral_drag": ion_neutral_drag_timestep(
@@ -245,7 +247,6 @@ def suggest_timestep(
             floors=floors,
             ion_mass_g=ion_mass_g,
             ion_neutral_drag_kwargs=ion_neutral_drag_kwargs,
-            drag_dt_fraction=drag_dt_fraction,
             plasma_active=plasma_active,
         ),
         "neutral_wind": neutral_wind_timestep(
@@ -468,20 +469,15 @@ def ion_neutral_drag_timestep(
     floors,
     ion_mass_g,
     ion_neutral_drag_kwargs=None,
-    drag_dt_fraction=0.5,
     plasma_active=None,
 ):
     """Return an explicit-stability timestep for ion-neutral drag damping.
 
     The drag damps the flow at rate ``nu_in``; the accepted step keeps
-    ``dt * max(nu_in)`` below ``drag_dt_fraction``.
+    ``dt * max(nu_in)`` below ``DRAG_DT_FRACTION``.
     """
     if ion_neutral_drag_kwargs is None:
         return np.inf
-    if drag_dt_fraction <= 0.0:
-        raise ValueError(
-            f"drag_dt_fraction must be positive (got {drag_dt_fraction})"
-        )
     b_ion_neutral_drag = ion_neutral_drag_kwargs.get("b_ion_neutral_drag", 1.0)
     if b_ion_neutral_drag == 0.0:
         return np.inf
@@ -489,9 +485,6 @@ def ion_neutral_drag_timestep(
     nu_in = ion_neutral_collision_frequency(
         nn=state.nn,
         Ti=derived.Ti,
-        ion_mass_g=ion_mass_g,
-        sigma_in_cm2=ion_neutral_drag_kwargs.get("sigma_in_cm2", 5.0e-15),
-        sigma_in_model=ion_neutral_drag_kwargs.get("sigma_in_model", "constant"),
         gas_type=ion_neutral_drag_kwargs.get("gas_type"),
     )
     active = _active_values(nu_in, plasma_active)
@@ -502,7 +495,7 @@ def ion_neutral_drag_timestep(
     )
     if nu_max <= 0.0:
         return np.inf
-    return drag_dt_fraction / nu_max
+    return DRAG_DT_FRACTION / nu_max
 
 
 def neutral_wind_timestep(state, floors, ion_mass_g, geometry, cfl=0.4):
@@ -822,7 +815,6 @@ def heat_conduction_timestep(
     mu,
     geometry,
     heat_conduction_kwargs=None,
-    heat_dt_fraction=0.25,
     plasma_active=None,
 ):
     """Return an explicit diffusion timestep bound for heat conduction."""
@@ -834,7 +826,6 @@ def heat_conduction_timestep(
         ion_mass_g=ion_mass_g,
         mu=mu,
         geometry=geometry,
-        heat_dt_fraction=heat_dt_fraction,
         active_cells=plasma_active,
         **heat_conduction_kwargs,
     )

@@ -2,10 +2,16 @@ import numpy as np
 from scipy.linalg import solve_banded
 
 from cablp.funcs._heat import kappa_par_elec, kappa_par_ion
-from cablp.funcs._plasmaparams import c_log
+from cablp.funcs._plasmaparams import LN_LAMBDA_MIN, c_log
 from cablp.vars._cons import ev_to_erg, m_e_cgs
 
 from ..core.state import ConservativeState1D, derive_state
+
+#: Fraction [dimensionless] of the explicit parallel-diffusion
+#: stability limit dz^2 C / kappa the accepted step may take. 1/4
+#: keeps the two-species bound comfortably inside the 1/2 limit of
+#: the centred five-point operator.
+HEAT_DT_FRACTION = 0.25
 
 # Named discretizations for the implicit heat substep, which advances
 #   C dT/dt = -K T
@@ -70,7 +76,6 @@ def heat_conduction_rhs(
     b_epara=1.0,
     b_ipara=1.0,
     heat_conduction=True,
-    ln_lambda_min=1.0,
     electron_heat_flux_limit=False,
     heat_flux_limiter_f=0.3,
     heat_flux_limiter_exponent=1.0,
@@ -88,7 +93,7 @@ def heat_conduction_rhs(
 
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     n = np.maximum(state.n, floors["n"])
-    ln_lambda = np.maximum(c_log(derived.Te, n, kind="ei"), ln_lambda_min)
+    ln_lambda = np.maximum(c_log(derived.Te, n, kind="ei"), LN_LAMBDA_MIN)
 
     conductivity_e = (
         kappa_par_elec(derived.Te, n, ln_lambda, per_particle=False)
@@ -200,8 +205,6 @@ def heat_conduction_timestep_bound(
     b_epara=1.0,
     b_ipara=1.0,
     heat_conduction=True,
-    ln_lambda_min=1.0,
-    heat_dt_fraction=0.25,
     active_cells=None,
     electron_heat_flux_limit=False,
     heat_flux_limiter_f=0.3,
@@ -216,14 +219,12 @@ def heat_conduction_timestep_bound(
     """
     del electron_heat_flux_limit, heat_flux_limiter_f  # conservative: see above
     del heat_flux_limiter_exponent
-    if heat_dt_fraction <= 0.0:
-        raise ValueError(f"heat_dt_fraction must be positive (got {heat_dt_fraction})")
     if not heat_conduction or (b_epara == 0.0 and b_ipara == 0.0):
         return np.inf
 
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     n = np.maximum(state.n, floors["n"])
-    ln_lambda = np.maximum(c_log(derived.Te, n, kind="ei"), ln_lambda_min)
+    ln_lambda = np.maximum(c_log(derived.Te, n, kind="ei"), LN_LAMBDA_MIN)
     capacity = 1.5 * n * ev_to_erg
     dt_e = _species_heat_timestep(
         capacity=capacity,
@@ -236,7 +237,7 @@ def heat_conduction_timestep_bound(
         * ev_to_erg
         * float(b_epara),
         geometry=geometry,
-        fraction=heat_dt_fraction,
+        fraction=HEAT_DT_FRACTION,
         active_cells=active_cells,
     )
     dt_i = _species_heat_timestep(
@@ -251,7 +252,7 @@ def heat_conduction_timestep_bound(
         * ev_to_erg
         * float(b_ipara),
         geometry=geometry,
-        fraction=heat_dt_fraction,
+        fraction=HEAT_DT_FRACTION,
         active_cells=active_cells,
     )
     return min(dt_e, dt_i)
@@ -267,7 +268,6 @@ def implicit_heat_conduction_step(
     b_epara=1.0,
     b_ipara=1.0,
     heat_conduction=True,
-    ln_lambda_min=1.0,
     implicit_heat_scheme="backward_euler",
     heat_picard_iterations=0,
     heat_picard_tol=1e-10,
@@ -343,7 +343,6 @@ def implicit_heat_conduction_step(
             Ti=Ti_eval,
             n=n,
             mu=mu,
-            ln_lambda_min=ln_lambda_min,
             b_epara=b_epara,
             b_ipara=b_ipara,
         )
@@ -412,13 +411,13 @@ def _kappa_eval_weight(scheme):
     return resolve_implicit_heat_theta(scheme)
 
 
-def _parallel_conductivities(Te, Ti, n, mu, ln_lambda_min, b_epara, b_ipara):
+def _parallel_conductivities(Te, Ti, n, mu, b_epara, b_ipara):
     """Return scaled volumetric parallel conductivities [erg cm^-1 s^-1].
 
     The Coulomb logarithm is an electron-ion quantity, so it is built from Te
     and shared by both species.
     """
-    ln_lambda = np.maximum(c_log(Te, n, kind="ei"), ln_lambda_min)
+    ln_lambda = np.maximum(c_log(Te, n, kind="ei"), LN_LAMBDA_MIN)
     conductivity_e = (
         kappa_par_elec(Te, n, ln_lambda, per_particle=False)
         * ev_to_erg

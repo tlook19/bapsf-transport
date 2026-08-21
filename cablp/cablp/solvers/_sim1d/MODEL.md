@@ -106,9 +106,11 @@ imposed result.
 - $-m_i\,\nu_{in}\,n\,\mathbf{u}$ — **ion-neutral collisional drag** (friction on
   the flow from the neutral background), with momentum-transfer collision
   frequency
-  $$\nu_{in}(T_i) = \frac{8}{3}\,n_n\,\sigma_{in}\,\sqrt{\frac{T_i}{\pi\,m_i}}, \qquad \sigma_{in} = 5\times10^{-15}\ \text{cm}^2.$$
-  Toggled by the `ion_neutral_drag` flag and scaled by `b_ion_neutral_drag`;
-  $\sigma_{in}$ is the `sigma_in_cm2` parameter. Setting the
+  $$\nu_{in}(T_i) = n_n\,\bigl(k_b + \tfrac12 k_\text{iso}\bigr)(T_\text{eff}), \qquad T_\text{eff} = \tfrac12 (T_i + T_n),$$
+  the Phelps He$^+$/He isotropic + backscatter momentum-transfer rate
+  (`sigma_in_model = "phelps"`, the only accepted value since D3).
+  Toggled by the `ion_neutral_drag` flag and scaled by `b_ion_neutral_drag`.
+  Setting the
   `ion_neutral_drag_cx_only` flag drives the drag with the resonant
   charge-exchange rate $\nu_{cx} = n_n\langle\sigma v\rangle_{cx}$ instead of
   $\nu_{in}$; in that mode the elastic fraction $\nu_{el}\to0$, so the
@@ -299,9 +301,11 @@ two neutral-momentum rows, and internal radial/zone transfers close exactly.
 Configuration is resolved once at construction from the shared registry.
 Unknown keys raise `ValueError`; `config_manifest()` exposes all 184 parameter
 defaults and 29 flags with their defining groups. The live but formerly
-unregistered controls `drag_dt_fraction`, `b_anode_collection`, and
-`b_anode_advective_block` are now registered at their pre-audit fallback
-values. The disconnected source/end absorption enables/scales and the
+unregistered controls `b_anode_collection` and
+`b_anode_advective_block` are registered at their pre-audit fallback
+values; `drag_dt_fraction` was registered alongside them and then deleted
+at D3 (2026-08-21), where it became the fixed `timestep.DRAG_DT_FRACTION`.
+The disconnected source/end absorption enables/scales, deleted at D3, and the
 compatibility-only `front_flux_model`, `D_amb_model`, `D_amb`, and
 `cathode_model` accept only their checkpoint values; noncanonical values fail
 at construction rather than acting as silent no-ops. Their replacement
@@ -494,7 +498,8 @@ caveat in the energy-source glossary above applies only to the `"legacy"` bookin
 The default-off `ion_neutral_moment_closure` flag replaces the drag +
 $Q_{\text{fric}}$ + $Q_{\text{eq,el}}$ + $Q_{cx}$ quartet with ONE moment-closed
 reduced ion-neutral collision operator (audit A7 + A8). The legacy
-`sigma_in_model="cx_derived"` applied $2\langle\sigma v\rangle_{cx}+k_L$ directly
+`sigma_in_model="cx_derived"` arm (removed at D3, 2026-08-21) applied
+$2\langle\sigma v\rangle_{cx}+k_L$ directly
 as the lab drag frequency -- dropping the equal-mass reduced-mass factor
 $\mu/m_i=\tfrac12$, so the CX drag was doubled -- and split the energy into $Q_{cx}$
 (coefficient $1\,K_{cx}$) plus an elastic $Q_{\text{fric}}/Q_{\text{eq,el}}$ at
@@ -546,7 +551,9 @@ $T_{n,K}/T_{n,\text{fit}}$ mix.
 Presence-gated: when on, the four legacy ion-neutral terms return zero and this
 single term runs; when off it is a strict no-op (golden bit-exact). He-only (loud
 `ValueError` at construction otherwise). The legacy `sigma_in_model` arms
-(`"constant"`, `"cx_derived"`) remain live A/B instruments. Analytic identities
+(`"constant"`, `"cx_derived"`) were removed at D3, 2026-08-21: they were the
+solver's only non-helium path, and `"phelps"` is now the sole accepted value.
+Analytic identities
 (`verify_sim1d_r4_collision.py`: momentum antisymmetry, friction $=-\tfrac12
 u_\text{rel}\,dM$, zero-drift thermal) hold to roundoff. On the settled matched-M6
 artifact (`probe_sim1d_r4_collision_bracket.py`) the operator's thermal cooling is
