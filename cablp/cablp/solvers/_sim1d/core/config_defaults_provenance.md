@@ -59,7 +59,7 @@ applies the committed stance explicitly (`scripts/golden_baseline_provenance.md`
 | `Lm = 2117.8`, `plenum_length_cm = 166.0`, `collector_length_cm = 7.8`, `gas_puff_z_cm = 86.3` | MEASURED (machine CAD, G1 geometry of record) | `production_stance_provenance.md` (Geometry) + the G1 record |
 | `source_region_length_cm = 100.0`, `source_region_dz_cm = 10.0`, `source_fixed_grid = True` | ASSUMED, interim geometry | `production_stance_provenance.md` (Geometry) |
 | `electron_heat_flux_limit = True` | flag only — its coefficient rode the R2b fold below | `production_stance_provenance.md` (Transport and closures) |
-| `heat_flux_limiter_f = 0.1` — **the R2b rider** | ASSUMED (a closure-family bracket, not a pinned number). Held back from R2a on the expectation that it would move the golden; it does not — the golden pinned `0.1` as a literal at R1, so its resolved config is byte-identical across this fold like the other fifteen. It landed at R2b with the recapture instead. | `production_stance_provenance.md` (Transport and closures); default entry below |
+| `heat_flux_limiter_f` — **the R2b rider** | The FOLD (stance file -> config default) happened at R2b, 2026-08-20, at the then-value `0.1`; it was held back from R2a on the expectation that it would move the golden, and it did not, because the golden pinned `0.1` as a literal at R1. **The VALUE has since moved to `0.45` and its class from ASSUMED to BOXED (literature)** — 2026-08-21, with its own authorized recapture; that is a separate event from this fold. | `production_stance_provenance.md` (Transport and closures); default entry below |
 
 ---
 
@@ -289,7 +289,7 @@ is a small pipe at the chamber wall about 10 cm in front of the anode
 the throw is of order the chord across the chamber, ~2*Rm. Neither centre nor
 width is tunable.
 
-**`S_pump_L = S_pump_R = 3000.0` L/s — DERIVED (elbow leg literature-BOXED),
+**`S_pump_L = S_pump_R = 2900.0` L/s — DERIVED (elbow leg literature-BOXED),
 bracket [2750, 3300] L/s.**
 The per-END lumped pumping speed for helium, i.e. the whole speed the end cell
 sees, ducting included. Each of the four main 2,200 L/s turbos is taken in
@@ -301,7 +301,31 @@ transmission probability rather than an equivalent-length bracket:
 a Jensen/convexity correction; the Monte-Carlo σ of that combination is 0.0023,
 and reciprocity and binomial-σ authenticity checks pass). That gives **per-pump
 `S_eff` ≈ 1510 L/s**. Two of those pumps sit at each end, so the per-end lumped
-speed is `2 * S_eff`, rounded to 3000 L/s.
+speed is `2 * S_eff` ≈ 3020 L/s.
+
+**The ADOPTED default is 2900 L/s per end, and the two are not the same
+number.** The miter has been treated two ways inside this one series-conductance
+model of the CAD elbows, and the treatment — not the geometry — is the whole
+difference:
+
+| miter treatment | per-pump `S_eff` | per-end `2 * S_eff` | shipped as |
+|---|---|---|---|
+| equivalent-length bracket (straight tube to +1.33 D) | ≈ 1470 L/s | ≈ 2940 L/s | **2900 — ADOPTED** |
+| pinned transmission `P = 0.303` (Davis Table II) | ≈ 1510 L/s | ≈ 3020 L/s | 3000 (2026-08-21 batch) |
+
+**2900 is adopted by Tom's ruling (2026-08-21bn), as the CAD/measured-elbow
+value, `3000` having been the physics batch's rounded figure.** The two sit
+2.7 % apart, well inside the band, so nothing physical turns on the choice, and
+the disclosed `4000`-vs-`2900` A/B at otherwise-identical stance is a scored
+NULL — drive 1.011 both, Te 0.89/0.90, n 0.89/0.90, Isat 0.83 both, decay 1.62
+both. The change is therefore FREE in scored terms; the A/B is disclosed as
+supporting evidence and is NOT the justification.
+
+**Reviewer note, recorded rather than resolved here.** The pinned-`P` leg is
+the better ELBOW treatment on its own terms — it discharged an open citation
+(below) that the equivalent-length convention could not — so the adopted 2900
+is the ruled value, not the leg this entry would pick on elbow physics alone.
+Both legs are kept above so the distinction stays visible.
 
 The pump — not the line — owns about 72 % of the total series resistance, which
 is why pinning the elbow moves the central value only +2.7 % (per-pump 1470 →
@@ -330,8 +354,8 @@ truth sits toward the band TOP.
 L/R = 5.0 value; exact Berman at 5.11 is ≈ 0.3066, so the miter penalty is
 "≲0.1 D, consistent with zero within Monte-Carlo noise" — **do not quote 0.08 D
 as a number.** (ii) The cathode-end/far-end asymmetry is real (3,020 vs 3,050
-L/s) but an order below the band, so a common per-end value stands and the two
-keys carry the same number.
+L/s on the pinned-`P` leg) but an order below the band, so a common per-end
+value stands and the two keys carry the same number.
 
 **The fifth pump is EXCLUDED.** The small cathode-chamber pump on the east
 side is deliberately not in this number. Whether it was valved in on any given
@@ -343,21 +367,23 @@ A/B rather than a silent addition to the stance.
 series-elbow term as well would apply the same restriction twice on the source
 side.
 
-Superseded: `2900.0` L/s (the same derivation with the miter treated as an
-equivalent-length BRACKET between a straight tube and one lengthened by the
-customary 1.33 D, per-pump `S_eff` ≈ 1470, band [2600, 3300]); and before it
-`4000` L/s on both ends, an ASSUMED value (the source side had previously been
-2000, and matching them expressed the reading that the plenum aperture rather
-than the pump speed throttled the source-side rate). The 1.33 D
-equivalent-length convention carried an OPEN CITATION here — no vacuum handbook
-had been named against it, and it is emphatically NOT Davis, who never prints
-it. That open item is **discharged by retirement**: the pinned transmission
-probability replaces the convention, so nothing left in this entry needs the
-attribution.
+Superseded: `3000.0` L/s (2026-08-21 physics batch, the pinned-`P` leg above);
+and before it `4000` L/s on both ends, an ASSUMED value (the source side had
+previously been 2000, and matching them expressed the reading that the plenum
+aperture rather than the pump speed throttled the source-side rate).
 
-Downstream of the 2,900 → 3,000 step: the equilibrated fill falls −3.3 %, well
-inside the band. Stated against the older 4,000 basis the fill excess restates
-from +36 % to +33 %; that rise is the physics of the correction, not a
+**The OPEN CITATION on the 1.33 D convention stays discharged.** No vacuum
+handbook was ever named against that equivalent-length figure, and it is
+emphatically NOT Davis, who never prints it. The discharge is by RETIREMENT of
+the convention as a citable object: the band quoted here — [2750, 3300] — is
+the pinned-transmission band, so nothing in this entry rests on the 1.33 D
+attribution even though the adopted central value came from that leg. **Do not
+re-quote 1.33 D as a sourced number.**
+
+Downstream of the 3,000 → 2,900 step: the equilibrated fill rises ≈ +3.4 %,
+well inside the band and the exact reverse of the −3.3 % the previous step
+recorded. Stated against the older 4,000 basis the fill excess restates from
++33 % back to +36 %; that rise is the physics of the correction, not a
 regression. The neutral-seed cache keys on these values and invalidates —
 expected.
 
@@ -587,11 +613,52 @@ diagnostics still work.
 **`alpha_isat = 0.6065306597126334` — DERIVED.** `exp(-1/2)`, the Bohm
 presheath density ratio.
 
-**`heat_flux_limiter_f = 0.1` — ASSUMED.** The free-streaming fraction is not
-pinned by any measurement; the limiter is a closure-family instrument and the
-coefficient is properly reported as a bracket, never as a single number. `0.1`
-is the campaign value, folded here from the stance file at R2b (2026-08-20);
-the bracket it sits in, and what may be claimed from it, are in
+**`heat_flux_limiter_f = 0.45` — BOXED (literature), NOT FITTED.
+Bracket of record [0.32, 1.5].** The free-streaming fraction in the harmonic
+saturation cap. It is pinned from the kinetic literature, not from a scan of
+our own scores.
+
+**The convention is what makes the number meaningful, so it is stated first.**
+This model uses `q_sat = f * n * Te * v_the` with `v_the = sqrt(Te/m_e)`. A
+free-streaming coefficient quoted in a different thermal-speed convention is a
+different number and must be converted before it is compared to this one:
+
+| source convention | conversion INTO this entry's `f` |
+|---|---|
+| Fundamenski 2005 (`alpha p v_t`, `v_t = sqrt(T/m)`) | 1.000 — same convention |
+| Malone, McCrory & Morse 1975, eq. (1) | 1.000 — same convention |
+| Cowie & McKee 1977 (`sqrt(2kT/pi m)`) | x sqrt(2/pi) = 0.7979 |
+
+**The pin criterion.** `0.45` is the unique literature value that is
+SIMULTANEOUSLY (i) an FP/PiC-matched ELECTRON coefficient in exactly this
+harmonic form for a sheath-terminated field-aligned channel, and (ii) inside
+the derived free-streaming ceiling fork governing the regime where the limiter
+actually acts. Kinetically-matched in-regime values span [0.45, 1.5]; the
+derived ceiling fork spans [0.32, 0.80]; `0.45` is the only actual kinetic
+computation in the intersection of the two.
+
+**The bracket [0.32, 1.5].** The LOWER edge is the half-Maxwellian one-sided
+energy flux carrying the Spitzer-Harm zero-current factor `epsilon ~ 0.40`
+(Cowie & McKee 1977 eq. 7), which in THIS convention is
+`0.4 * sqrt(2/pi) = 0.319`. The UPPER edge is Fundamenski 2005's recommendation
+given kinetic boundary conditions, `alpha ~ 1.5`. The coefficient remains a
+closure-family bracket for claim purposes: the bracket is the claim, and a bare
+central value is not to be quoted as if measured.
+
+**What did NOT pin it — stated so it is not mis-cited later.** The scored
+`f`-sensitivity family (2026-08-21bn) is FLAT above `f ~ 0.3`, which is
+precisely the evidence that the data exerted no pull on this choice. The value
+is not "the best-scoring `f`" and must never be written that way. Timing is
+NOT flat across the wider family, so any "insensitive" statement about this
+coefficient has to be qualified by which observable it is about.
+
+Superseded: `0.1` — ASSUMED, an unpinned closure-family value folded here from
+the stance file at R2b (2026-08-20). It sits BELOW the bracket above, i.e.
+outside what the kinetic literature supports in this convention. Raising `f`
+`0.1 -> 0.45` relaxes the electron heat-flux cap by 4.5x; the limiter binds
+mainly during BREAKDOWN, where `lambda_ei` exceeds the machine length and
+Spitzer-Harm is invalid, and is largely inert in the collisional discharge
+phase. What may be claimed from the coefficient is in
 `scripts/production_stance_provenance.md`.
 
 ## `cathode_defaults`

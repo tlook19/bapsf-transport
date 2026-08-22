@@ -325,16 +325,43 @@ meaningful under this model rather than a null setting.
 the extra 0.4 approximates the rest of the singlet manifold. It is inert under
 `beam_deposition_model = "csda"`, which uses the measured manifold knob-free.
 
-**`heat_flux_limiter_f = 0.1`** — ASSUMED. The free-streaming cap on the
-parallel electron heat flux. It combines harmonically (Cowie-McKee) with the
-Braginskii flux at `heat_flux_limiter_exponent = 1`, which is already the
-config default. This coefficient is a bracket, not a measurement. *(Split at
-R2a, 2026-08-20 — the FLAG `electron_heat_flux_limit` folded to a config
-default of `True` while the VALUE stayed stance-side — and rejoined at R2b the
-same day: `heat_flux_limiter_f = 0.1` is now the config default too, so the
-stance file names neither. It was held back from R2a on the expectation that
-folding it would move the golden; it does not — the R1 literal pin had already
-made the fixture immune, verified byte-identical. See
+**`heat_flux_limiter_f = 0.45`** — **BOXED (literature), NOT FITTED. Bracket of
+record [0.32, 1.5].** The free-streaming cap on the parallel electron heat
+flux. It combines harmonically with the Braginskii flux at
+`heat_flux_limiter_exponent = 1`, which is already the config default.
+
+**Convention (required whenever this number is quoted or compared):**
+`q_sat = f * n * Te * v_the` with `v_the = sqrt(Te/m_e)`. Fundamenski 2005
+(`alpha p v_t`, `v_t = sqrt(T/m)`) and Malone, McCrory & Morse 1975 eq. (1)
+use this convention exactly — conversion factor 1.000. Cowie & McKee use
+`sqrt(2kT/pi m)` and convert in by `sqrt(2/pi) = 0.7979`.
+
+**Why 0.45 and not something else.** It is the unique literature value that is
+simultaneously an FP/PiC-matched ELECTRON coefficient in our exact harmonic
+form for a sheath-terminated field-aligned channel, AND inside the derived
+free-streaming ceiling fork governing the regime where the limiter acts.
+Kinetically-matched in-regime values span [0.45, 1.5]; the derived ceiling fork
+spans [0.32, 0.80]; 0.45 is the only actual kinetic computation in the
+intersection. Bracket edges: LOWER `0.319` = the half-Maxwellian one-sided
+energy flux with the Spitzer-Harm zero-current factor `epsilon ~ 0.40`
+(Cowie & McKee 1977 eq. 7) converted into our convention; UPPER `1.5` =
+Fundamenski 2005's recommendation given kinetic boundary conditions.
+
+**What may be claimed: the BRACKET, not the central value.** This coefficient
+is still a closure-family bracket for claim purposes — boxed by literature is
+not measured by us.
+
+**It was NOT chosen because it scored best, and must not be written that way.**
+The scored `f` family (2026-08-21bn) is FLAT above `f ~ 0.3`, which is exactly
+the evidence that the data exerted no pull on the choice. Note also that TIMING
+is not flat across the wider family, so an "insensitive to `f`" statement has to
+name the observable it applies to.
+
+*(Fold history, which is a separate event from the value: split at R2a,
+2026-08-20 — the FLAG `electron_heat_flux_limit` folded to a config default of
+`True` while the VALUE stayed stance-side — and rejoined at R2b the same day at
+the then-value `0.1`, so the stance file names neither key. The value moved
+`0.1 -> 0.45` on 2026-08-21 with its own authorized recapture. See
 `config_defaults_provenance.md`.)*
 
 **`beam_deposition_smoothing_cm = 50.0`** — **ASSUMED**, nominally a physical

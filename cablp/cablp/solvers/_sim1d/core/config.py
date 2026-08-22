@@ -506,8 +506,8 @@ def neutral_source_defaults():
         # elbow. The elbow is already inside this number, so
         # pump_elbow_conductance_lps stays None -- setting both would count the
         # elbow twice on the source side.
-        "S_pump_L": 3000.0,
-        "S_pump_R": 3000.0,
+        "S_pump_L": 2900.0,
+        "S_pump_R": 2900.0,
         "gas_puff_enabled": True,
         "pump_enabled": True,
         "gas_puff_valves": 2,
@@ -1283,7 +1283,7 @@ def fudge_factor_defaults():
         # electron_heat_flux_limit flag is on, which is a shipped default) ---
         # Free-streaming fraction f in q_sat = f*n*Te*v_the, the harmonic
         # (Cowie-McKee) saturation cap.
-        "heat_flux_limiter_f": 0.1,
+        "heat_flux_limiter_f": 0.45,
         # Non-local Knudsen exponent p for that limiter (read only when
         # electron_heat_flux_limit is on). lambda = 1/(1+Kn^p)
         # with Kn = q_SH/q_sat. p=1.0 (default) is the harmonic Cowie-McKee
