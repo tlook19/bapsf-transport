@@ -59,7 +59,7 @@ applies the committed stance explicitly (`scripts/golden_baseline_provenance.md`
 | `Lm = 2117.8`, `plenum_length_cm = 166.0`, `collector_length_cm = 7.8`, `gas_puff_z_cm = 86.3` | MEASURED (machine CAD, G1 geometry of record) | `production_stance_provenance.md` (Geometry) + the G1 record |
 | `source_region_length_cm = 100.0`, `source_region_dz_cm = 10.0`, `source_fixed_grid = True` | ASSUMED, interim geometry | `production_stance_provenance.md` (Geometry) |
 | `electron_heat_flux_limit = True` | flag only — its coefficient rode the R2b fold below | `production_stance_provenance.md` (Transport and closures) |
-| `heat_flux_limiter_f = 0.1` — **the R2b rider** | ASSUMED (a closure-family bracket, not a pinned number). Held back from R2a on the expectation that it would move the golden; it does not — the golden pinned `0.1` as a literal at R1, so its resolved config is byte-identical across this fold like the other fifteen. It landed at R2b with the recapture instead. | `production_stance_provenance.md` (Transport and closures); default entry below |
+| `heat_flux_limiter_f` — **the R2b rider** | The FOLD (stance file -> config default) happened at R2b, 2026-08-20, at the then-value `0.1`; it was held back from R2a on the expectation that it would move the golden, and it did not, because the golden pinned `0.1` as a literal at R1. **The VALUE has since moved to `0.45` and its class from ASSUMED to BOXED (literature)** — 2026-08-21, with its own authorized recapture; that is a separate event from this fold. | `production_stance_provenance.md` (Transport and closures); default entry below |
 
 ---
 
@@ -587,11 +587,52 @@ diagnostics still work.
 **`alpha_isat = 0.6065306597126334` — DERIVED.** `exp(-1/2)`, the Bohm
 presheath density ratio.
 
-**`heat_flux_limiter_f = 0.1` — ASSUMED.** The free-streaming fraction is not
-pinned by any measurement; the limiter is a closure-family instrument and the
-coefficient is properly reported as a bracket, never as a single number. `0.1`
-is the campaign value, folded here from the stance file at R2b (2026-08-20);
-the bracket it sits in, and what may be claimed from it, are in
+**`heat_flux_limiter_f = 0.45` — BOXED (literature), NOT FITTED.
+Bracket of record [0.32, 1.5].** The free-streaming fraction in the harmonic
+saturation cap. It is pinned from the kinetic literature, not from a scan of
+our own scores.
+
+**The convention is what makes the number meaningful, so it is stated first.**
+This model uses `q_sat = f * n * Te * v_the` with `v_the = sqrt(Te/m_e)`. A
+free-streaming coefficient quoted in a different thermal-speed convention is a
+different number and must be converted before it is compared to this one:
+
+| source convention | conversion INTO this entry's `f` |
+|---|---|
+| Fundamenski 2005 (`alpha p v_t`, `v_t = sqrt(T/m)`) | 1.000 — same convention |
+| Malone, McCrory & Morse 1975, eq. (1) | 1.000 — same convention |
+| Cowie & McKee 1977 (`sqrt(2kT/pi m)`) | x sqrt(2/pi) = 0.7979 |
+
+**The pin criterion.** `0.45` is the unique literature value that is
+SIMULTANEOUSLY (i) an FP/PiC-matched ELECTRON coefficient in exactly this
+harmonic form for a sheath-terminated field-aligned channel, and (ii) inside
+the derived free-streaming ceiling fork governing the regime where the limiter
+actually acts. Kinetically-matched in-regime values span [0.45, 1.5]; the
+derived ceiling fork spans [0.32, 0.80]; `0.45` is the only actual kinetic
+computation in the intersection of the two.
+
+**The bracket [0.32, 1.5].** The LOWER edge is the half-Maxwellian one-sided
+energy flux carrying the Spitzer-Harm zero-current factor `epsilon ~ 0.40`
+(Cowie & McKee 1977 eq. 7), which in THIS convention is
+`0.4 * sqrt(2/pi) = 0.319`. The UPPER edge is Fundamenski 2005's recommendation
+given kinetic boundary conditions, `alpha ~ 1.5`. The coefficient remains a
+closure-family bracket for claim purposes: the bracket is the claim, and a bare
+central value is not to be quoted as if measured.
+
+**What did NOT pin it — stated so it is not mis-cited later.** The scored
+`f`-sensitivity family (2026-08-21bn) is FLAT above `f ~ 0.3`, which is
+precisely the evidence that the data exerted no pull on this choice. The value
+is not "the best-scoring `f`" and must never be written that way. Timing is
+NOT flat across the wider family, so any "insensitive" statement about this
+coefficient has to be qualified by which observable it is about.
+
+Superseded: `0.1` — ASSUMED, an unpinned closure-family value folded here from
+the stance file at R2b (2026-08-20). It sits BELOW the bracket above, i.e.
+outside what the kinetic literature supports in this convention. Raising `f`
+`0.1 -> 0.45` relaxes the electron heat-flux cap by 4.5x; the limiter binds
+mainly during BREAKDOWN, where `lambda_ei` exceeds the machine length and
+Spitzer-Harm is invalid, and is largely inert in the collisional discharge
+phase. What may be claimed from the coefficient is in
 `scripts/production_stance_provenance.md`.
 
 ## `cathode_defaults`

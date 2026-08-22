@@ -1,9 +1,10 @@
 # Provenance of the golden baseline pins (`baseline_sim1d.BASELINE_*_OVERRIDES`)
 
-**Recaptured 2026-08-21 (the pre-Tuesday physics batch; the 2026-08-20
-stance-update wave and the thread-24 R2b re-anchor onto the stance preceded it
-— all three under the reviewed-recapture protocol, see the recapture record
-below).** The committed regression fixture
+**Recaptured 2026-08-21 (the `heat_flux_limiter_f` re-cut to 0.45; the
+pre-Tuesday physics batch, the 2026-08-20 stance-update wave and the thread-24
+R2b re-anchor onto the stance preceded it — all four under the
+reviewed-recapture protocol, see the recapture record below).** The committed
+regression fixture
 `scripts/baselines/production_discharge.npz` is captured at **the stance of
 record, re-cut to the gate mesh** — `default_config()` plus the committed stance
 file `scripts/stances/g1atrim.toml`, minus that stance's mesh-sized package,
@@ -125,6 +126,101 @@ stance the cells carry plasma and the term is well behaved. Recorded as a known
 closure stress, deliberately not addressed by this pass.
 
 ## Recapture record
+
+**2026-08-21 — the `heat_flux_limiter_f` RE-CUT (AUTHORIZED recapture).** A
+SINGLE config default moved; no code path, pin, run shape or driver changed.
+
+| key | old | new | class |
+|---|---|---|---|
+| `heat_flux_limiter_f` | `0.1` | `0.45` | **ASSUMED -> BOXED (literature)**, bracket [0.32, 1.5] |
+
+Value, class, bracket and the free-streaming CONVENTION that makes `0.45`
+meaningful: `config_defaults_provenance.md` and
+`production_stance_provenance.md`, both rewritten in the same change set. It
+was **not** chosen by scoring — the scored `f` family is flat above `f ~ 0.3`,
+which is the evidence that the data exerted no pull. It is not a fit.
+
+*An `S_pump` re-cut to 2900 L/s rode the first draft of this event and was
+WITHDRAWN before it landed: the pinned-transmission derivation already in
+`config_defaults_provenance.md` (`P = 0.303`, Davis 1960 Table II, per-pump
+`S_eff` ~ 1510) is the better-sourced leg and is what discharged the open
+citation on the unattributable 1.33 D equivalent-length convention, so `3000`
+stands and the `S_pump` entry is unchanged. The withdrawn draft's fixture is
+not the gate and its movement figures are void.*
+
+**Delta discipline — what was proven before anything was recaptured.** A
+no-solve resolved-config diff of the branch against its base commit
+(`49b73c3`), in BOTH columns (bare `default_config()` and
+`default_config()` + `g1atrim`), showed **exactly ONE param and nothing
+else — 1 delta in each column, 0 in either flags column.** The same single key,
+and only it, moved in all FOUR config-complete driver cases
+(`production_golden`, `compare_sim1d_es1`,
+`run_m6_point_es1_sgp3649_defaults`, `run_mechanism_ladder_es1_defaults`),
+with 0 flags moving in any of them; and the machine-readable default manifest
+diff is likewise that one key alone. `config_snapshots.json` was regenerated in
+the same pass under that proof; `parameter_count` (252) and `flag_count` (48)
+are unchanged, so the one value is the whole of the `manifest_sha256` delta.
+
+*Reading the sidecar diff against the OUTGOING fixture shows three params and
+one flag, not one: the extra two params (`cathode_jet_hot_carrier`,
+`neutral_wall_partition_sigma_hehe_cm2`) and the flag
+(`neutral_wall_momentum_partition`) are keys that did not EXIST when that
+fixture was captured — they arrived with the thread-23 hot-carrier and
+entrainment wall-partition merges, ship default-off/`None`, and were gated
+bit-exact-off on their own branches. The one-delta proof above is against the
+base commit and is the one that governs.*
+
+**Capture evidence.** Recaptured twice from clean separate processes to
+temporary paths and compared BEFORE installing either: NPZ and JSON sidecar
+both byte-identical (`sha256` of the NPZ
+`3e5120012a11ff88f4da5653ba4fdbb195136c00aa2fa1445bd955a3d33c3e15`, of the
+sidecar `f623cc860ad97ead24679ab8711baeecaed672d7d40e5144fd579d1025ae0cdb`),
+and raw-bitwise identical over all three arrays (`y` and `time` at `uint64`,
+`phase` at raw bytes; 0 differing elements in each). ~13 min per capture, one
+lane, run strictly serially per the serial-golden rule. `--verify` prints:
+
+```
+baseline verify OK: saves=2628, exact=True, max_rel=0.000e+00, max_abs=0.000e+00, time_max_abs=0.000e+00 s (rtol=1.0e-09, atol=0.0e+00)
+```
+
+The outgoing fixture was NPZ
+`857b9e0b6b31c2de36d5cfe24a8fb0023c16ec4b68a9111c5eb89be4a9cc47d1`
+(saves 2,627, steps 80,416).
+
+**What moved in the trajectory.** Because ONE key moved, all of this is
+attributable to `f` alone — there is no joint-attribution caveat on this
+event. Steps 80,416 -> 79,348 (−1.33 %); saves 2,627 -> **2,628**;
+`final_time` 2.625885e-02 -> 2.626672e-02 s (+0.03 %, under one 10 µs save
+bin).
+
+| summary scalar | old | new | change |
+|---|---|---|---|
+| `Te_max` | 25.810 eV | 20.844 eV | **−19.2 %** |
+| `Ti_max` | 7.9210 | 7.9136 | −0.09 % |
+| `n_max` | 2.62791e13 | 2.50888e13 | −4.53 % |
+| `n_min` | 8.41902e8 | 8.41607e8 | −0.04 % |
+| `nn_max` | 3.90059e13 | 3.87819e13 | −0.57 % |
+| `nn_min` | 1.08381e11 | 1.01013e11 | −6.80 % |
+| `neutral_inventory_relative_drift` | 1.1927 | 1.1935 | +0.07 % |
+| `total_particle_inventory_relative_drift` | 1.2593 | 1.2593 | −0.00 % |
+| `plasma_inventory_relative_drift` | 3457.6 | 3413.4 | −1.28 % |
+| `thermal_energy_relative_drift` | 2983.7 | 2993.9 | +0.34 % |
+
+`Te_min`/`Ti_min` sit on their floors and are unchanged; health stayed finite
+throughout.
+
+**The movement was DISCLOSED before the capture and is recorded, not
+adjudicated here.** Raising `f` `0.1 -> 0.45` relaxes the electron heat-flux
+cap by 4.5x. The limiter binds mainly during BREAKDOWN — where `lambda_ei`
+exceeds the machine length and Spitzer-Harm is invalid — and is largely inert
+in the collisional discharge phase, so the trajectory was EXPECTED to move and
+the re-anchor exists to absorb that. `Te_max` is a breakdown-phase transient
+and is the observable that moved most. Whether any of this is an improvement is
+not a question this fixture answers, and no such reading is offered.
+
+**The old and new trajectories are not comparable point-by-point** — this is a
+configuration change, not a repair, and no bit-level comparison between them is
+meaningful.
 
 **2026-08-21 — the pre-Tuesday PHYSICS BATCH (AUTHORIZED recapture; the
 authorization is the batch brief itself, member 3 by Tom's 21as ruling).** All
