@@ -622,14 +622,16 @@ def _source_fixed_grid_spec(
     Resolution studies on the default mesh are self-confounding: ``nx`` uniform
     column cells span anode face to collector start, so refining ``nx`` moves
     every cell edge -- including the puff cell, whose centre anchors the default
-    cosine puff profile. This default-off mode pins the column between the anode
+    cosine puff profile. This mode -- the ``source_fixed_grid`` flag, which
+    ships ON -- pins the column between the anode
     face and ``source_region_length_cm`` to cells of exactly
     ``source_region_dz_cm``, leaving ``nx`` to refine only the far column.
 
     Presence-gated in both directions (the ``input_dict`` / ``input_flags``
     silent-namespace trap): the two parameters are required when the flag is on
-    and forbidden when it is off. Returns ``None`` when off, which is the only
-    path the production geometry takes.
+    and forbidden when it is off. Returns ``None`` when off; the shipped
+    default has the flag ON, so the production geometry takes the fixed-cell
+    path.
     """
     keys = ("source_region_length_cm", "source_region_dz_cm")
     raw = {key: input_dict.get(key) for key in keys}

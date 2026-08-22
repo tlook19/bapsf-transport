@@ -1093,7 +1093,7 @@ class LAPDSim1D:
             # is below the trigger at production dt).
             self._picard_triggered_steps = 0
             self._picard_extra_solves = 0
-        # R5.2 / audit A9: flux-limited electron heat conduction (default off).
+        # R5.2 / audit A9: flux-limited electron heat conduction (default on).
         self._electron_heat_flux_limit = bool(
             self._flags.get("electron_heat_flux_limit", False)
         )
@@ -1114,7 +1114,7 @@ class LAPDSim1D:
                 f"electron_heat_flux_limit is on (got {self._heat_flux_limiter_exponent})"
             )
         # Floor-aware drain exemption on the "surface_loss" dt bound (default
-        # off; presence-gated: None disables the exemption branch entirely so
+        # ON; presence-gated: None disables the exemption branch entirely so
         # the off path is bit-exact historical behavior).
         _surface_loss_floor_exempt = bool(
             self._flags.get("surface_loss_floor_exempt", False)
@@ -1313,7 +1313,7 @@ class LAPDSim1D:
                     "inert control. Accepted: set both, or neither"
                 )
             self._neutral_wall_partition_sigma = None
-        # Evolved neutral thermal energy (default off, bit-exact off). The
+        # Evolved neutral thermal energy (default ON; bit-exact when off). The
         # field only means anything alongside the moment-closed collision
         # operator (which is what reads and feeds it) and an evolved wind
         # (which is what the frictional half is booked against), and there is
@@ -1383,7 +1383,7 @@ class LAPDSim1D:
                 "inert. Accepted: neutral_hot_birth_drift with "
                 "neutral_energy=True, or neutral_hot_birth_drift=False"
             )
-        # Internal walls for the ballistic flight (default off, bit-exact off).
+        # Internal walls for the ballistic flight (default ON; bit-exact when off).
         # Same dependency as the drift flag, for the same reason: it changes
         # where the hot channel's flights stop, and without the channel there
         # is no flight to stop.

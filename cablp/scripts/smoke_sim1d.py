@@ -15221,7 +15221,7 @@ def _case_electrode_sample_smoothing(m3_params):
     # R1a: one authoritative active-plasma topology. Every closed face has at
     # most one live-side cell, pressure work is invariant to the dead-side
     # velocity, and plasma rows in plenum/obstruction cells are bit-invariant
-    # through multiple accepted steps when the default-off repair is enabled.
+    # through multiple accepted steps when the (default-on) repair is enabled.
     r1a_params, r1a_flags = default_config()
     r1a_params.update(
         {
@@ -21017,7 +21017,7 @@ def _case_config_key_namespace_and_seed_cache():
 @_case("hot-channel-internal-wall")
 def _case_hot_channel_internal_wall():
     # ==================================================================
-    # HOT-CHANNEL INTERNAL WALL (neutral_hot_internal_wall, default off).
+    # HOT-CHANNEL INTERNAL WALL (neutral_hot_internal_wall, default on).
     # The ballistic flight kernel clips at the closed/absorbing plasma faces
     # as well as the two global end planes, so a live cell's landings can no
     # longer fall on a plasma-dead cell (where the topology mask would delete

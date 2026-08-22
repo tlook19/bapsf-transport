@@ -1,8 +1,9 @@
 """R2 conservative-hyperbolic-core gate suite.
 
 Pre-registered gates G1-G7 for the kinetic-energy-preserving hyperbolic core
-(default-off flags ``hyperbolic_energy_consistent`` and the ``adiabatic``
-``hyperbolic_wave_speed``, with ``front_flux`` retired). This is a verification
+(the ``hyperbolic_energy_consistent`` flag and the ``adiabatic``
+``hyperbolic_wave_speed``, both of which are now the shipped defaults; they
+were default-off as introduced at R2, and ``front_flux`` is retired). This is a verification
 harness, not a campaign run: it isolates the pure hyperbolic operator
 (advective flux + pressure work + KEP energy correction) via a manual SSPRK2
 stepper, with reactions/cooling/conduction excluded, so the wave tests are

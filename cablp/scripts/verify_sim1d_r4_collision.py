@@ -2,7 +2,7 @@
 
 Pre-registered analytic identities for the moment-closed reduced ion-neutral
 collision operator ``ion_neutral_collision_rhs`` (flag ``ion_neutral_moment_closure``,
-default off). It replaces the drag + frictional-heating + elastic-thermalization +
+default ON). It replaces the drag + frictional-heating + elastic-thermalization +
 CX-cooling quartet with ONE equal-mass (He+/He) Braginskii momentum-transfer
 operator built from the Phelps isotropic + backscatter rate coefficients:
 

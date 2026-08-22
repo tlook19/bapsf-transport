@@ -999,7 +999,7 @@ def model_mode_defaults():
         "ionization_birth_energy_model": "conservative",
         "neutral_exchange_model": "knudsen",
         # The ratified v1-primary: conductances frozen at Tn_K. Read only under
-        # the neutral_energy flag, which ships off.
+        # the neutral_energy flag, which ships ON.
         "neutral_knudsen_temperature": "frozen",
         "neutral_model": "moment",
         # 2nd-order operator-split pair; both are needed together with
@@ -2426,7 +2426,8 @@ def physics_fit_defaults():
         "Tn_K": 300.0,  # single cold-gas neutral temperature (Phelps T_eff)
         # --- INERT under these defaults ---
         # Neutral-energy wall accommodation (read only when the
-        # neutral_energy flag is on, which ships off):
+        # neutral_energy flag is on, which ships ON -- so this key IS read
+        # under the shipped defaults):
         "neutral_energy_wall_accommodation": 0.40,
         # REQUIRED by the neutral_wall_momentum_partition flag (which ships
         # off) and forbidden without it. None is the "not supplied" sentinel,

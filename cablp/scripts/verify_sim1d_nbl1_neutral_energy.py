@@ -1,7 +1,7 @@
 """NBL pass-1 neutral-energy gate suite (En field core).
 
 Pre-registered analytic identities and construction guards for the optional
-``En`` conservative field (flag ``neutral_energy``, default off). Pass 1 builds
+``En`` conservative field (flag ``neutral_energy``, default ON). Pass 1 builds
 the field, the collision coupling, and the wall accommodation ONLY: there is no
 pressure force, no En advection, no Knudsen enthalpy carriage, and no
 jet/puff/pump/reaction En bookkeeping, so the En budget is deliberately
