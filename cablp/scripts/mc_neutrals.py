@@ -1194,8 +1194,8 @@ def run_fast_reflected(bg, n_particles, rng, r_e=0.2, r_n=0.5, max_iter=20000):
     from the same Phelps He+/He backscatter cross section the solver's R4.3
     ion-neutral operator uses, in the CENTRE-OF-MASS convention::
 
-        g_eff^2 = |v - u_i|^2 + 8 k T_i / (pi mu),   mu = m_He / 2
-        E_rel   = 1/2 mu g_eff^2
+        g_eff^2 = |v - u_i|^2 + 8 k T_i / (pi m_He)
+        E_rel   = 1/2 mu g_eff^2,   mu = m_He / 2
         nu_cx   = n_i * Qb(E_rel) * g_eff
 
     ``Qb`` is :func:`cablp.funcs._cross.phelps_he_backscatter_cm2`, whose
@@ -1203,20 +1203,43 @@ def run_fast_reflected(bg, n_particles, rng, r_e=0.2, r_n=0.5, max_iter=20000):
     ``PHELPS_QB_RANGE_EV`` = 1.0e-4 to 1.0e4 eV (the span of the archived LXCat
     table), and an ``E_rel`` reachable outside that range raises.
 
-    CENTRE-OF-MASS CONVENTION, stated rather than buried. ``Qb`` is tabulated
-    against the relative collision energy of the He+/He pair, so its argument
-    is ``E_rel = 1/2 mu g^2`` with the reduced mass ``mu = m_He / 2`` -- for
-    equal masses and cold, drift-free ions that is HALF the atom's own lab
-    kinetic energy, which is what this mode previously passed. The same
-    ``g_eff`` also sets the rate: a collision frequency is
-    ``n sigma <relative speed>``, not ``n sigma <lab speed>``. ``g_eff`` is the
-    standard interpolation between the drift-dominated and thermal-dominated
-    limits for an equal-mass pair, so the ion thermal spread is carried rather
-    than neglected. The form is transcribed symbol-for-symbol from the repo's
-    existing correct consumer,
+    CENTRE-OF-MASS CONVENTION, stated rather than buried, and it involves TWO
+    DIFFERENT MASSES that must not be reasoned about together.
+
+    ``Qb`` is tabulated against the relative collision energy of the He+/He
+    pair, so its argument is ``E_rel = 1/2 mu g^2`` with the REDUCED mass
+    ``mu = m_He / 2`` -- for equal masses and cold, drift-free ions that is
+    HALF the atom's own lab kinetic energy, which is what this mode previously
+    passed. That reduced mass is two-body kinematics, the CM-frame energy of a
+    pair at relative speed ``g``, and it is unaffected by which species is
+    Maxwellian.
+
+    The same ``g_eff`` also sets the rate: a collision frequency is
+    ``n sigma <relative speed>``, not ``n sigma <lab speed>``, and ``g_eff`` is
+    the standard interpolation between the drift-dominated and the
+    thermal-dominated limit, so the ion thermal spread is carried rather than
+    neglected. Its THERMAL FLOOR carries the mass of whichever collider is
+    MAXWELLIAN, and here that is the IONS ALONE: this tracer launches a
+    MONOENERGETIC test particle at ``v_fast``, and that velocity is not
+    averaged over anything -- it is carried exactly, per history, in the drift
+    term ``|v - u_i|^2``. The drift-free limit of ``<g>`` is therefore the mean
+    speed of the ion Maxwellian by itself, ``sqrt(8 k T_i / (pi m_He))``, with
+    the FULL ion mass. Writing the floor as ``8 k T_i / (pi mu) =
+    16 k T_i / (pi m_He)`` is the TWO-Maxwellian expression -- ``mu`` is what
+    folds two INDEPENDENT thermal spreads into one, so it is right only when
+    both colliders are thermal. Used here it would count a test-particle
+    thermal spread that does not exist and inflate ``g_eff`` by up to
+    ``sqrt(2)``.
+
+    This mode shares the ``T_i`` clamp at 1e-6 eV and the ``E_rel`` floor at
+    1e-9 eV with
     :meth:`cablp.solvers._sim1d.physics.kinetic_dvm.TransientDVM.collision_frequencies`
-    (``kinetic_dvm.py`` lines 686-689), including its ``T_i`` clamp at 1e-6 eV
-    and its ``E_rel`` floor at 1e-9 eV; ``u_i`` is the local ion MEAN drift.
+    and :func:`cablp.solvers._sim1d.physics.jet_carrier.carrier_attenuation_coefficients`,
+    so the consumers of the same Phelps table cannot disagree about its
+    argument, and it applies the same thermal-floor convention for the same
+    reason. Neither is the other's authority, though: all three were first
+    written with the reduced-mass floor and all three were corrected on
+    2026-08-21. ``u_i`` is the local ion MEAN drift.
     This replaces :func:`run_mc`'s treatment, which keys CX off the background
     ION TEMPERATURE through :func:`~cablp.funcs._cross.charge_ex_react` and so
     transports a fast atom at a thermal collision rate.
@@ -1320,11 +1343,13 @@ def run_fast_reflected(bg, n_particles, rng, r_e=0.2, r_n=0.5, max_iter=20000):
     # REALIZED E_rel is the bracket computed just below.
     E_rel_launch = 0.25 * M_HE * v_fast**2 / EV
 
-    # Ion thermal spread and drift, cell by cell, in the reference consumer's
-    # own form (kinetic_dvm.collision_frequencies, lines 686-689): mu = m/2 for
-    # the symmetric pair, so 8 k T / (pi mu) = 16 k T / (pi m).
+    # Ion thermal spread and drift, cell by cell. Only the IONS are Maxwellian
+    # here: the test particle is monoenergetic and its velocity is already
+    # exact in w2 below, so the thermal floor carries the FULL ion mass, NOT
+    # the two-Maxwellian reduced mass mu = m/2. (The reduced mass in E_rel is
+    # two-body kinematics and does belong there.)
     Ti_safe = np.maximum(np.asarray(bg["Ti"], dtype=float), 1e-6)
-    th2 = 16.0 * Ti_safe * EV / (np.pi * M_HE)
+    th2 = 8.0 * Ti_safe * EV / (np.pi * M_HE)
 
     # Fast-lobe fidelity ratio, drift-free per cell: g_eff/v_fast = 1 is the
     # cold-ion fast limit; a material departure means the ion thermal spread
@@ -1454,9 +1479,10 @@ def run_fast_reflected(bg, n_particles, rng, r_e=0.2, r_n=0.5, max_iter=20000):
         if hit_c.any():
             idx = np.flatnonzero(hit_c)
             ii = icell[idx]
-            # CoM convention, kinetic_dvm.collision_frequencies lines 686-689
-            # symbol for symbol: the thermal-spread effective relative speed
-            # sets BOTH the cross section's argument and the rate.
+            # CoM convention: the thermal-spread effective relative speed
+            # sets BOTH the cross section's argument and the rate. w2 carries
+            # this history's own velocity exactly, which is why th2 above is
+            # the ION-ONLY thermal floor.
             w2 = (
                 vel[idx, 0] ** 2
                 + vel[idx, 1] ** 2
@@ -1674,9 +1700,8 @@ def report_fast_reflected(res, bg, args):
     print("COLLISION PHYSICS (fast population)")
     print("  CX             nu_cx = n_i * Qb(E_rel) * g_eff, Phelps He+/He "
           "backscatter")
-    print("                 g_eff^2 = |v - u_i|^2 + 8 k T_i / (pi mu),   "
-          "mu = M_He/2")
-    print("                 E_rel   = 1/2 mu g_eff^2")
+    print("                 g_eff^2 = |v - u_i|^2 + 8 k T_i / (pi M_He)")
+    print("                 E_rel   = 1/2 mu g_eff^2,   mu = M_He/2")
     print(f"                 Qb validity range {PHELPS_QB_RANGE_EV[0]:g} - "
           f"{PHELPS_QB_RANGE_EV[1]:g} eV (archived LXCat table); the "
           "reachable E_rel")
@@ -1695,16 +1720,17 @@ def report_fast_reflected(res, bg, args):
     print("                 RATE: a collision frequency is n sigma <relative "
           "speed>, not")
     print("                 n sigma <lab speed>. g_eff carries the ion "
-          "thermal spread (the")
-    print("                 standard equal-mass interpolation) rather than "
-          "neglecting it, and")
-    print("                 u_i is the local ion MEAN drift. Transcribed "
-          "symbol-for-symbol")
-    print("                 from kinetic_dvm.py:686-689 "
-          "(TransientDVM.collision_frequencies),")
-    print("                 the repo's existing correct consumer, including "
-          "its T_i clamp at")
-    print("                 1e-6 eV and its E_rel floor at 1e-9 eV.")
+          "thermal spread, whose")
+    print("                 floor takes the mass of whichever collider is "
+          "MAXWELLIAN -- here")
+    print("                 the IONS ALONE, since this test particle is "
+          "monoenergetic and its")
+    print("                 velocity is exact in |v - u_i|^2. So "
+          "8 k T_i/(pi M_He), NOT the")
+    print("                 two-Maxwellian 8 k T_i/(pi mu); mu stays in "
+          "E_rel, two-body")
+    print("                 kinematics. T_i clamp 1e-6 eV, E_rel floor "
+          "1e-9 eV; u_i ion MEAN drift.")
     print("  ionization     nu_ion = n_i * SCD(n,Te), the background's "
           "Te-Maxwellian ADAS rate")
     print("                 (unchanged: the ELECTRONS are the Maxwellian "
