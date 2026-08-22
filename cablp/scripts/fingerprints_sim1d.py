@@ -165,9 +165,12 @@ def _clamp_notice(requested, limit, kind, site, extent):
 RAMP_WINDOW_S = 1.2e-3
 
 # CLASSIFICATION CONSTANTS -- these decide whether a feature is PRESENT and
-# well-separated. They are not estimator parameters: no reported value is a
-# function of them, so a reader may not tune them to move a number. Each is
-# quoted with the margin it was ruled on.
+# well-separated. They are not estimator parameters: no reported VALUE is a
+# function of them, so a reader may not tune them to move a measured number.
+# GRID_PHASE_FRACTION is the one exception to that scope, and only on the
+# BAND side: it sets the reported t_dImax conditioning band and the coarse
+# crossing bands, as its own paragraph below states. Each is quoted with the
+# margin it was ruled on.
 #
 #   EDGE_SLOPE_FRACTION -- the slope at each window edge must fall below this
 #       fraction of the maximum, so the maximum is a resolved interior
@@ -185,6 +188,29 @@ RAMP_WINDOW_S = 1.2e-3
 RAMP_EDGE_SLOPE_FRACTION = 0.9
 RAMP_OVERSHOOT_MIN_FRACTION = 0.01
 RAMP_GRID_PHASE_FRACTION = 0.002
+
+# VALUE-SELECTING CONSTANTS -- unlike the block above, these DO move reported
+# values, which is why they are disclosed here rather than left inline. Each
+# is a forward reach [s] from an already-located landmark, and it selects
+# WHICH discrete sample becomes an extremum: widen one and the search can be
+# handed a later, larger sample, moving t_ovs/I_ovs or t_dip/I_dip. They are
+# not free, though -- an extremum that lands on its own reach edge is reported
+# "not-contained" rather than as a number, so a badly sized reach fails loudly
+# instead of quietly returning the edge.
+#
+#   OVERSHOOT_SEARCH_REACH_S -- forward reach from t_dImax inside which the
+#       discrete current maximum is taken. It must cover the ringing peak and
+#       stop short of the slow plateau climb, which would otherwise supply a
+#       later and larger maximum. Measured margin on the ES1-class arms: the
+#       peak sits ~70-75 us after t_dImax, about a quarter of the reach.
+#   RINGBACK_SEARCH_REACH_S -- forward reach from that peak inside which the
+#       discrete minimum is taken. Longer than the peak reach because the dip
+#       bottom is quartic-flat and sits well after the peak; still short
+#       enough not to re-enter the plateau recovery. Measured margin on the
+#       ES1-class arms: the dip sits ~105 us after the peak, again about a
+#       quarter of the reach.
+RAMP_OVERSHOOT_SEARCH_REACH_S = 0.30e-3
+RAMP_RINGBACK_SEARCH_REACH_S = 0.40e-3
 
 # Declared equivalence bands. Measured spreads, not asserted tolerances: a
 # member whose pre->post move sits inside its band is reported "unmoved".
@@ -340,12 +366,16 @@ def _ramp_members(t, I, t_trig):
     # Overshoot EXISTENCE, on the discrete samples, before any vertex fit:
     # the peak in a fixed reach after the ramp maximum, then the minimum in a
     # fixed reach after that peak.
-    peak_win = np.flatnonzero((t >= t_dImax) & (t <= t_dImax + 0.30e-3))
+    peak_win = np.flatnonzero(
+        (t >= t_dImax) & (t <= t_dImax + RAMP_OVERSHOOT_SEARCH_REACH_S)
+    )
     if peak_win.size < 3:
         return unresolved("not-contained", "overshoot search window too short", resolved)
     jp = int(np.argmax(I[peak_win]))
     g = int(peak_win[jp])
-    dip_win = np.flatnonzero((t >= t[g]) & (t <= t[g] + 0.40e-3))
+    dip_win = np.flatnonzero(
+        (t >= t[g]) & (t <= t[g] + RAMP_RINGBACK_SEARCH_REACH_S)
+    )
     if dip_win.size < 3:
         return unresolved("not-contained", "ringback search window too short", resolved)
     jm = int(np.argmin(I[dip_win]))
@@ -690,10 +720,17 @@ def report(path, partner=None, reference_cache=None):
     t_trig = float(getattr(result, "t_breakdown_trigger", np.nan))
     members = _ramp_members(tsec_all, I, t_trig)
 
+    # Absolute times are printed to 1e-8 ms = 0.01 ns. That is far finer
+    # than anything this instrument resolves, and deliberately so: the
+    # absolute column is the one an arm-to-arm delta is taken on, and a
+    # coarser column silently caps the precision of every delta derived from
+    # it. At the previous 1e-4 ms the printed absolute difference and the
+    # printed t_trig-relative difference disagreed by ~7 % on a banked
+    # sub-microsecond reading -- pure print artifact, no physics in it.
     def _t_row(name, member):
         if member["status"] in ("ok", "coarse"):
             value = member["value"]
-            body = (f"{value * 1e3:.4f} ms absolute "
+            body = (f"{value * 1e3:.8f} ms absolute "
                     f"({(value - t_trig) * 1e6:+.2f} us vs t_trig) | band "
                     f"+-{member['band'] * 1e6:.2f} us")
         else:
@@ -710,10 +747,18 @@ def report(path, partner=None, reference_cache=None):
         note = f" -- {member['reason']}" if member["reason"] else ""
         print(f"(ii)   {name:<8} {body} [{member['status']}]{note}")
 
-    trig_text = "<absent>" if not np.isfinite(t_trig) else f"{t_trig * 1e3:.4f} ms"
+    trig_text = (
+        "<absent>" if not np.isfinite(t_trig) else f"{t_trig * 1e3:.8f} ms"
+    )
     print(f"(ii) fast-phase ramp structure [t_trig {trig_text}, window "
           f"t_trig -> t_trig+{RAMP_WINDOW_S * 1e3:g} ms, geometry only -- no "
           f"mechanism claimed]")
+    print("(ii)   TIME BASIS -- every time below is printed on TWO bases: "
+          "'ms absolute' is the saved clock, and the parenthesised "
+          "'us vs t_trig' is this run's own t_trig subtracted off. An "
+          "arm-to-arm delta differs between the two bases by exactly the "
+          "move in t_trig, so a quoted delta MUST name its basis. The "
+          "absolute column is printed fine enough to re-derive either.")
     _t_row("t_dImax", members["t_dImax"])
     _v_row("S_ramp", members["S_ramp"], "A/ms", 1.0e3, ".4f")
     _t_row("t_ovs", members["t_ovs"])
@@ -750,7 +795,7 @@ def report(path, partner=None, reference_cache=None):
             if member["status"] == "absent":
                 body = "<not resolved> | band n/a"
             else:
-                body = (f"{member['value'] * 1e3:.4f} ms absolute "
+                body = (f"{member['value'] * 1e3:.8f} ms absolute "
                         f"({(member['value'] - t_trig) * 1e6:+.2f} us vs t_trig)"
                         f" | s_loc {s_loc / 1e3:.4f} A/ms | band "
                         f"+-{member['band'] * 1e6:.2f} us")
