@@ -1,11 +1,13 @@
 """R5.2 electron heat-flux limiter gate suite (audit A9).
 
 The default-off electron_heat_flux_limit flag scales the electron conductivity per
-cell by the harmonic (Cowie-McKee) flux limiter
+cell by the harmonic flux limiter
     lambda = q_sat / (q_sat + q_SH),  q_sat = f n Te v_the,  q_SH = kappa_e |dTe/dz|
 so the parallel flux caps at the free-streaming ceiling where gradients are steep
-and recovers Spitzer where they are shallow. Analytic identities (closed domain,
-to roundoff):
+and recovers Spitzer where they are shallow. The harmonic form is Malone, McCrory
+& Morse, PRL 34 (1975) 721 (equivalently Fundamenski, PPCF 47 (2005) R163,
+eq. 10a); the free-streaming ceiling q_sat is Cowie & McKee, ApJ 211 (1977) 135,
+eq. (7). Analytic identities (closed domain, to roundoff):
 
   S1  Spitzer limit: at large f the limited conductivity == unlimited kappa_e.
   S2  saturation cap: the limited cell flux |kappa_eff * dTe/dz| <= q_sat

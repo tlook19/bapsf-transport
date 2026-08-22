@@ -93,7 +93,9 @@ def main(argv=None):
     ap.add_argument("--heat-flux-limit", action="store_true",
                     help="electron_heat_flux_limit (A9): cap the parallel "
                          "electron heat conduction at free-streaming "
-                         "(Cowie-McKee); classical is 1.7-3.3x over the ceiling")
+                         "(harmonic form: Malone 1975 / Fundamenski 2005 "
+                         "eq. 10a; ceiling: Cowie & McKee 1977); classical is "
+                         "1.7-3.3x over the ceiling")
     ap.add_argument("--heat-flux-exp", type=float, default=None,
                     help="heat_flux_limiter_exponent p (non-local A9): lambda="
                          "1/(1+Kn^p); p=1 harmonic, p>1 sharper non-local cap")
