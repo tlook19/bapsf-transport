@@ -35,11 +35,40 @@ THREE ATTENUATION CHANNELS, per unit axial length:
                 ``E_rel = (1/2) mu g_eff^2`` with the equal-mass reduced mass
                 ``mu = m/2``, and the RATE is ``n sigma <relative speed>``
                 rather than ``n sigma v_lab``. ``g_eff`` is the standard
-                equal-mass interpolation
-                ``g_eff^2 = |v_fast - u_i|^2 + 16 k Ti/(pi m)``, transcribed
-                from :meth:`..kinetic_dvm.TransientDVM.collision_frequencies`,
-                the repo's existing correct consumer, including its ``Ti``
-                clamp and its ``E_rel`` floor.
+                interpolation between the drift-dominated and the
+                thermal-dominated limit,
+
+                    ``g_eff^2 = |v_fast - u_i|^2 + 8 k Ti/(pi m)``.
+
+                THE CONVENTION, stated here once so that a third
+                transcription of it cannot drift: the thermal floor carries
+                the mass of whichever collider is MAXWELLIAN, and here that
+                is the IONS ALONE. This projectile is a MONOENERGETIC beam
+                atom; its velocity is not averaged over anything, it is
+                carried exactly by the drift term ``|v_fast - u_i|^2``. So
+                the drift-free limit of ``<g>`` is the mean speed of the ion
+                Maxwellian by itself, ``sqrt(8 k Ti/(pi m))``, with the FULL
+                ion mass. The reduced-mass form ``8 k Ti/(pi mu) = 16 k
+                Ti/(pi m)`` is the TWO-Maxwellian expression: it is right
+                only when BOTH colliders are thermal, because ``mu`` there
+                is what folds two independent thermal spreads into one. Used
+                here it would count a beam thermal spread that does not
+                exist and inflate ``g_eff`` by up to ``sqrt(2)``.
+
+                The reduced mass DOES belong in ``E_rel`` above. That is
+                two-body kinematics -- the CM-frame energy of a pair at
+                relative speed ``g`` -- not a distribution average, and it is
+                unaffected by which species is Maxwellian. The two masses are
+                not the same choice and must not be reasoned about together.
+
+                :meth:`..kinetic_dvm.TransientDVM.collision_frequencies`
+                applies the same convention for the same reason (it resolves
+                the neutral velocity on a grid, so that velocity is likewise
+                exact in its drift term), and this module shares its ``Ti``
+                clamp and its ``E_rel`` floor so the two consumers of the
+                Phelps table cannot disagree about its argument. Neither is
+                the other's authority, though: both were first written with
+                the reduced-mass floor and both were corrected on 2026-08-21.
 ``ionization``  ``a_ion = nu_ion / v_fast`` with ``nu_ion`` the caller's OWN
                 per-neutral ionization frequency ``n_e <sigma v>_SCD(Te)``.
                 The rate stays AT ``Te`` and never sees the fast energy: the
@@ -148,8 +177,8 @@ from .sources import cathode_jet_backscatter_speed, neutral_wind_velocity
 
 
 #: The ``E_rel`` floor [eV] and the ``Ti`` clamp [eV] the CX cross section is
-#: evaluated behind. Both are transcribed from
-#: :meth:`..kinetic_dvm.TransientDVM.collision_frequencies` so the two
+#: evaluated behind. Both are the values
+#: :meth:`..kinetic_dvm.TransientDVM.collision_frequencies` uses, so the two
 #: consumers of the same Phelps table cannot disagree about its argument.
 CARRIER_E_REL_FLOOR_EV = 1e-9
 CARRIER_TI_CLAMP_EV = 1e-6
@@ -242,9 +271,11 @@ def carrier_attenuation_coefficients(
     n_i = np.asarray(state.n, dtype=float)
     Ti = np.maximum(np.asarray(derived.Ti, dtype=float), CARRIER_TI_CLAMP_EV)
     w = float(direction) * float(v_fast) - np.asarray(derived.u, dtype=float)
-    # The equal-mass interpolation between the drift-dominated and
-    # thermal-dominated limits; mu = m/2, so 8 k T/(pi mu) = 16 k T/(pi m).
-    g_eff = np.sqrt(w**2 + 16.0 * Ti * ev_to_erg / (np.pi * ion_mass_g))
+    # Only the IONS are Maxwellian: the beam atom is monoenergetic and its
+    # velocity is already exact in w, so the thermal floor carries the FULL
+    # ion mass, not the two-Maxwellian reduced mass mu = m/2. (The reduced
+    # mass below in E_rel is two-body kinematics and does belong there.)
+    g_eff = np.sqrt(w**2 + 8.0 * Ti * ev_to_erg / (np.pi * ion_mass_g))
     E_rel = np.maximum(
         0.25 * ion_mass_g * g_eff**2 / ev_to_erg, CARRIER_E_REL_FLOOR_EV
     )
