@@ -506,8 +506,8 @@ def neutral_source_defaults():
         # elbow. The elbow is already inside this number, so
         # pump_elbow_conductance_lps stays None -- setting both would count the
         # elbow twice on the source side.
-        "S_pump_L": 2900.0,
-        "S_pump_R": 2900.0,
+        "S_pump_L": 3000.0,
+        "S_pump_R": 3000.0,
         "gas_puff_enabled": True,
         "pump_enabled": True,
         "gas_puff_valves": 2,

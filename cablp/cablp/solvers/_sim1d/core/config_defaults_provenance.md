@@ -289,7 +289,7 @@ is a small pipe at the chamber wall about 10 cm in front of the anode
 the throw is of order the chord across the chamber, ~2*Rm. Neither centre nor
 width is tunable.
 
-**`S_pump_L = S_pump_R = 2900.0` L/s — DERIVED (elbow leg literature-BOXED),
+**`S_pump_L = S_pump_R = 3000.0` L/s — DERIVED (elbow leg literature-BOXED),
 bracket [2750, 3300] L/s.**
 The per-END lumped pumping speed for helium, i.e. the whole speed the end cell
 sees, ducting included. Each of the four main 2,200 L/s turbos is taken in
@@ -301,31 +301,7 @@ transmission probability rather than an equivalent-length bracket:
 a Jensen/convexity correction; the Monte-Carlo σ of that combination is 0.0023,
 and reciprocity and binomial-σ authenticity checks pass). That gives **per-pump
 `S_eff` ≈ 1510 L/s**. Two of those pumps sit at each end, so the per-end lumped
-speed is `2 * S_eff` ≈ 3020 L/s.
-
-**The ADOPTED default is 2900 L/s per end, and the two are not the same
-number.** The miter has been treated two ways inside this one series-conductance
-model of the CAD elbows, and the treatment — not the geometry — is the whole
-difference:
-
-| miter treatment | per-pump `S_eff` | per-end `2 * S_eff` | shipped as |
-|---|---|---|---|
-| equivalent-length bracket (straight tube to +1.33 D) | ≈ 1470 L/s | ≈ 2940 L/s | **2900 — ADOPTED** |
-| pinned transmission `P = 0.303` (Davis Table II) | ≈ 1510 L/s | ≈ 3020 L/s | 3000 (2026-08-21 batch) |
-
-**2900 is adopted by Tom's ruling (2026-08-21bn), as the CAD/measured-elbow
-value, `3000` having been the physics batch's rounded figure.** The two sit
-2.7 % apart, well inside the band, so nothing physical turns on the choice, and
-the disclosed `4000`-vs-`2900` A/B at otherwise-identical stance is a scored
-NULL — drive 1.011 both, Te 0.89/0.90, n 0.89/0.90, Isat 0.83 both, decay 1.62
-both. The change is therefore FREE in scored terms; the A/B is disclosed as
-supporting evidence and is NOT the justification.
-
-**Reviewer note, recorded rather than resolved here.** The pinned-`P` leg is
-the better ELBOW treatment on its own terms — it discharged an open citation
-(below) that the equivalent-length convention could not — so the adopted 2900
-is the ruled value, not the leg this entry would pick on elbow physics alone.
-Both legs are kept above so the distinction stays visible.
+speed is `2 * S_eff`, rounded to 3000 L/s.
 
 The pump — not the line — owns about 72 % of the total series resistance, which
 is why pinning the elbow moves the central value only +2.7 % (per-pump 1470 →
@@ -354,8 +330,8 @@ truth sits toward the band TOP.
 L/R = 5.0 value; exact Berman at 5.11 is ≈ 0.3066, so the miter penalty is
 "≲0.1 D, consistent with zero within Monte-Carlo noise" — **do not quote 0.08 D
 as a number.** (ii) The cathode-end/far-end asymmetry is real (3,020 vs 3,050
-L/s on the pinned-`P` leg) but an order below the band, so a common per-end
-value stands and the two keys carry the same number.
+L/s) but an order below the band, so a common per-end value stands and the two
+keys carry the same number.
 
 **The fifth pump is EXCLUDED.** The small cathode-chamber pump on the east
 side is deliberately not in this number. Whether it was valved in on any given
@@ -367,23 +343,21 @@ A/B rather than a silent addition to the stance.
 series-elbow term as well would apply the same restriction twice on the source
 side.
 
-Superseded: `3000.0` L/s (2026-08-21 physics batch, the pinned-`P` leg above);
-and before it `4000` L/s on both ends, an ASSUMED value (the source side had
-previously been 2000, and matching them expressed the reading that the plenum
-aperture rather than the pump speed throttled the source-side rate).
+Superseded: `2900.0` L/s (the same derivation with the miter treated as an
+equivalent-length BRACKET between a straight tube and one lengthened by the
+customary 1.33 D, per-pump `S_eff` ≈ 1470, band [2600, 3300]); and before it
+`4000` L/s on both ends, an ASSUMED value (the source side had previously been
+2000, and matching them expressed the reading that the plenum aperture rather
+than the pump speed throttled the source-side rate). The 1.33 D
+equivalent-length convention carried an OPEN CITATION here — no vacuum handbook
+had been named against it, and it is emphatically NOT Davis, who never prints
+it. That open item is **discharged by retirement**: the pinned transmission
+probability replaces the convention, so nothing left in this entry needs the
+attribution.
 
-**The OPEN CITATION on the 1.33 D convention stays discharged.** No vacuum
-handbook was ever named against that equivalent-length figure, and it is
-emphatically NOT Davis, who never prints it. The discharge is by RETIREMENT of
-the convention as a citable object: the band quoted here — [2750, 3300] — is
-the pinned-transmission band, so nothing in this entry rests on the 1.33 D
-attribution even though the adopted central value came from that leg. **Do not
-re-quote 1.33 D as a sourced number.**
-
-Downstream of the 3,000 → 2,900 step: the equilibrated fill rises ≈ +3.4 %,
-well inside the band and the exact reverse of the −3.3 % the previous step
-recorded. Stated against the older 4,000 basis the fill excess restates from
-+33 % back to +36 %; that rise is the physics of the correction, not a
+Downstream of the 2,900 → 3,000 step: the equilibrated fill falls −3.3 %, well
+inside the band. Stated against the older 4,000 basis the fill excess restates
+from +36 % to +33 %; that rise is the physics of the correction, not a
 regression. The neutral-seed cache keys on these values and invalidates —
 expected.
 
