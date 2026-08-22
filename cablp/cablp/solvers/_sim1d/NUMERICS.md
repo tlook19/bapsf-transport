@@ -10,12 +10,16 @@ equations these schemes discretize, see [`MODEL.md`](MODEL.md).
 - **Conservative variables** (`core/state.py`, `ConservativeState1D`): electron
   density `n`, neutral density `nn`, parallel momentum density `M`, and electron
   and ion energy densities `Ee`, `Ei`. Primitive quantities (`Te`, `Ti`, `v`)
-  are recovered by `derive_state`. Default-off neutral reductions append
-  optional rows in introduction order: column/chamber neutral momentum `M_n`,
+  are recovered by `derive_state`. The optional neutral reductions append
+  rows in introduction order: column/chamber neutral momentum `M_n`,
   annulus density `nn_a`, (only for `kinetic_two_moment`) annulus momentum
   `M_n_a`, and (only for `neutral_energy`) neutral thermal energy `En`, which
   carries the neutral temperature as `Tn = (2/3) En / (nn k)` on the volume
   `nn` itself lives on. Existing 5-, 6-, 7- and 8-row layouts are unchanged.
+  In the current package `neutral_momentum`, `neutral_two_zone` and
+  `neutral_energy` are all **on by default**, so `M_n`, `nn_a` and `En` are
+  present by default; `neutral_momentum_radial` defaults to `"uniform"`, so the
+  `"kinetic_two_moment"`-only row `M_n_a` is not.
 - **Grid** (`core/geometry.py`): finite-volume cells along the axial (`z`)
   coordinate with cell-centered states and face-based fluxes. Plasma and neutral
   fields carry separate face areas and cell volumes so inventory
@@ -23,8 +27,9 @@ equations these schemes discretize, see [`MODEL.md`](MODEL.md).
 - **Floors**: density and temperature floors are enforced after every stage
   (`floor_state_vector` / `apply_state_floors`) to keep the state physical.
   They are numerical admissibility limits, not initial conditions: the live
-  repaired seeds are `Te0=0.21 eV` and `Ti0=0.125 eV`, strictly above the
-  unchanged `0.1 eV` floors. A raw-validation config rejects floor-bound
+  repaired seeds are `Te0=0.21 eV` and `Ti0=0.026 eV`, each strictly above its
+  own floor (`Te_floor=0.1 eV`, `Ti_floor=0.02585 eV`). A raw-validation config
+  rejects floor-bound
   initial temperatures at construction.
 
 ## Spatial discretization (finite volume)
@@ -95,7 +100,8 @@ Local (cell-wise) RHS contributions, all in `physics/`:
 - `energy.py` — electron cooling, electron–ion energy exchange, ion
   charge-exchange energy loss.
 - `sources.py` — surface neutralization; ion-neutral drag / frictional heating /
-  thermalization, and (default-off `ion_neutral_moment_closure`, audit A7/A8) the
+  thermalization, and (`ion_neutral_moment_closure`, **on by default**, audit
+  A7/A8) the
   moment-closed reduced ion-neutral collision operator that replaces that quartet
   with one Phelps-rate equal-mass Braginskii momentum-transfer term (MODEL.md
   R4.3). The Phelps He⁺/He rate coefficients are built once at import in
@@ -121,9 +127,10 @@ Local (cell-wise) RHS contributions, all in `physics/`:
   tridiagonal system via `scipy.linalg.solve_banded`. This removes the stiff
   parabolic heat-conduction stability limit from the explicit timestep.
 
-  `operator_splitting` selects the composition: `"lie"` (default) does
+  `operator_splitting` selects the composition: `"lie"` does
   `A(Δt)` then `B(Δt)` and is O(Δt), since the splitting error goes as
-  `Δt·[A,B]`; `"strang"` does `B(Δt/2) → A(Δt) → B(Δt/2)`, whose symmetry
+  `Δt·[A,B]`; `"strang"` (**the current package default**) does
+  `B(Δt/2) → A(Δt) → B(Δt/2)`, whose symmetry
   cancels that leading commutator term and leaves O(Δt²). `B` is the halved
   operator because it is the cheap one — banded solves against a tridiagonal
   matrix, versus `A`'s reaction-rate evaluations — so Strang costs one extra
@@ -135,10 +142,21 @@ Local (cell-wise) RHS contributions, all in `physics/`:
 
   | `implicit_heat_scheme` | θ | `R(−∞)` | L-stable | solves | substep order |
   |------------------------|-----|--------|----------|--------|---------------|
-  | `backward_euler` (default) | 1   | 0    | yes | 1 | 1 |
+  | `backward_euler`           | 1   | 0    | yes | 1 | 1 |
   | `shifted`                  | 0.6 | −2/3 | no  | 1 | 1 |
   | `crank_nicolson`           | 0.5 | −1   | no  | 1 | 2 |
-  | `tr_bdf2`                  | —   | 0    | yes | 2 | 2 |
+  | `tr_bdf2` (**default**)    | —   | 0    | yes | 2 | 2 |
+
+  **Naming the object.** The current package defaults are
+  `implicit_heat_scheme="tr_bdf2"`, `operator_splitting="strang"` and
+  `heat_picard_iterations=2` — the second-order production package, shipped at
+  the R5 flip (2026-07-25). `backward_euler` + `"lie"` +
+  `heat_picard_iterations=0` is the historical FIRST-order package; the three
+  are independent first-order error terms, so falling back on any ONE of them
+  caps the whole step at first order. The live golden-at-stance fixture is
+  captured at the package defaults — its JSON sidecar
+  (`scripts/baselines/production_discharge.json`) records `tr_bdf2`, `"strang"`
+  and `heat_picard_iterations=2`.
 
   The explicit half is assembled from `conductive_face_flux` /
   `flux_divergence_rhs`, which is exactly `−K·Tⁿ` built from the same face
@@ -433,8 +451,10 @@ numerical-diffusion evidence. The pre-registered gate suite G1–G7 lives in
 
 ## R3 characteristic material boundaries (2026-07-24)
 
-The default-off `characteristic_boundary` selector changes how the plasma-
-terminating faces are discretized; default-off is golden bit-exact.
+As introduced at R3 the `characteristic_boundary` selector was default-off, and
+default-off was bit-exact against the R3-era checkpoint golden; in the current
+package it is **on by default**. The selector changes how the plasma-
+terminating faces are discretized.
 
 - **Boundary flux.** At each absorbing face a ghost state is set to the Bohm
   outflow (`n_se = n·presheath_alpha`, `u = c_s` into the wall, `Te`, `Ti`) and
@@ -491,16 +511,18 @@ Retained as a **default-off diagnostic**; sequential stays production.
 The default electron conduction is classical Spitzer–Härm (`q = -κ_e ∇Te`), a
 local law valid only where `λ_mfp ≪ L_T`. A9 measured `q_SH` reaching 1.7–3.3×
 (static probe: ~4× median) the free-streaming ceiling `n·Te·v_the` at the resolved
-gap faces — the constitutive law leaving its validity domain. The default-off
-`electron_heat_flux_limit` flag scales `κ_e` per cell by the harmonic
+gap faces — the constitutive law leaving its validity domain. The
+`electron_heat_flux_limit` flag — default-off as introduced at R5.2, **on by
+default** in the current package — scales `κ_e` per cell by the harmonic
 (Cowie–McKee) limiter `λ = q_sat/(q_sat + q_SH)`, `q_sat = f·n·Te·v_the`
 (`f = heat_flux_limiter_f`), so the flux caps at free-streaming where gradients are
 steep and recovers Spitzer where they are shallow (`flux_limited_electron_conductivity`,
 applied in both the explicit and implicit paths at the frozen incoming `Te`, so the
 operator stays a conservative flux divergence). Identities
 (`verify_sim1d_r5_heatflux.py`): Spitzer limit at large `f`, saturation cap
-`κ_eff|∇Te| ≤ q_sat`, closed-domain energy conservation. Default off (golden
-bit-exact); a declared A9 closure-family bracket — `f=1` targets only the ~gap
+`κ_eff|∇Te| ≤ q_sat`, closed-domain energy conservation. Default off at R5.2
+(bit-exact against the R5-era checkpoint golden); a declared A9 closure-family
+bracket — `f=1` targets only the ~gap
 cells (flux → ~42%), `f=0.1` suppresses conduction globally. The static
 engagement bracket is `probe_sim1d_r5_heatflux_bracket.py`; the dynamic
 scored-observable bracket (runs at each `f`) is deferred.
