@@ -506,7 +506,7 @@ sequential); the coupling sensitivity is confined to the internal sheath potenti
 `V_b`/`φ_c` (the SCL-corner regime), while `I_tot` (~3%) and `T_s` are robust.
 Retained as a **default-off diagnostic**; sequential stays production.
 
-## R5.2 electron heat-flux limiter (default off, audit A9)
+## R5.2 electron heat-flux limiter (default on, audit A9)
 
 The default electron conduction is classical Spitzer–Härm (`q = -κ_e ∇Te`), a
 local law valid only where `λ_mfp ≪ L_T`. A9 measured `q_SH` reaching 1.7–3.3×
@@ -514,7 +514,9 @@ local law valid only where `λ_mfp ≪ L_T`. A9 measured `q_SH` reaching 1.7–3
 gap faces — the constitutive law leaving its validity domain. The
 `electron_heat_flux_limit` flag — default-off as introduced at R5.2, **on by
 default** in the current package — scales `κ_e` per cell by the harmonic
-(Cowie–McKee) limiter `λ = q_sat/(q_sat + q_SH)`, `q_sat = f·n·Te·v_the`
+limiter `λ = q_sat/(q_sat + q_SH)` (Malone, McCrory & Morse, PRL 34 (1975) 721;
+equivalently Fundamenski, PPCF 47 (2005) R163, eq. 10a), riding on the Cowie &
+McKee, ApJ 211 (1977) 135, eq. (7) free-streaming ceiling `q_sat = f·n·Te·v_the`
 (`f = heat_flux_limiter_f`), so the flux caps at free-streaming where gradients are
 steep and recovers Spitzer where they are shallow (`flux_limited_electron_conductivity`,
 applied in both the explicit and implicit paths at the frozen incoming `Te`, so the

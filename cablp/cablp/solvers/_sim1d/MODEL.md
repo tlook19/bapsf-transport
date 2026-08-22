@@ -274,8 +274,11 @@ boundary-power-transfer claim that leans on conduction must carry a
 nonlocal/flux-limited closure **bracket**. The limited arm exists as the
 `electron_heat_flux_limit` flag with `heat_flux_limiter_f` (free-streaming
 fraction, $q_{sat} = f\,n\,T_e\,v_{th,e}$) and `heat_flux_limiter_exponent`
-— see `core/config.py` for the authoritative semantics. Reference: Cowie &
-McKee, ApJ 211 (1977) 135. *(The companion audit gate A11, on the
+— see `core/config.py` for the authoritative semantics. References: the
+harmonic blend is Malone, McCrory & Morse, PRL 34 (1975) 721 (equivalently
+Fundamenski, PPCF 47 (2005) R163, eq. 10a); the saturated-flux ceiling it
+rides on is Cowie & McKee, ApJ 211 (1977) 135, eq. (7), who switch abruptly
+between branches rather than blending. *(The companion audit gate A11, on the
 fluid↔circuit coupling, is stated in the R3 section below.)*
 
 ## R1 audited topology and configuration contract (2026-07-23)

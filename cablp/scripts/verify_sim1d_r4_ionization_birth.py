@@ -5,8 +5,9 @@ finding A14: bulk ADAS ionization books electron birth energy
 ``Ee += 3/2 Te_birth S_ion`` with ``Te_birth_ionization="local"`` (= Te), adding
 +43.1 kW that cancels 92% of the separate ionization-potential cost. Creating an
 electron does not create ``3 Te/2`` of kinetic energy; the beam already books the
-defensible ``Ee = 0`` convention. The repair (default-off selector
-``ionization_birth_energy_model="conservative"``) reconciles bulk to that
+defensible ``Ee = 0`` convention. The repair (the selector
+``ionization_birth_energy_model="conservative"``, which is now the shipped
+default; it was introduced default-off as ``"legacy"``) reconciles bulk to that
 convention -- the new electron is born cold, so ``Te`` falls by dilution -- and
 books the ion mass-loading relative-drift **mixing energy**
 ``1/2 m (u_i - u_n)^2 S_ion`` to ``Ei`` explicitly, so ion total energy closes to

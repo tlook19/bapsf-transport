@@ -1,11 +1,13 @@
 """R5.2 electron heat-flux limiter gate suite (audit A9).
 
-The default-off electron_heat_flux_limit flag scales the electron conductivity per
-cell by the harmonic (Cowie-McKee) flux limiter
+The electron_heat_flux_limit flag (default ON) scales the electron conductivity per
+cell by the harmonic flux limiter
     lambda = q_sat / (q_sat + q_SH),  q_sat = f n Te v_the,  q_SH = kappa_e |dTe/dz|
 so the parallel flux caps at the free-streaming ceiling where gradients are steep
-and recovers Spitzer where they are shallow. Analytic identities (closed domain,
-to roundoff):
+and recovers Spitzer where they are shallow. The harmonic form is Malone, McCrory
+& Morse, PRL 34 (1975) 721 (equivalently Fundamenski, PPCF 47 (2005) R163,
+eq. 10a); the free-streaming ceiling q_sat is Cowie & McKee, ApJ 211 (1977) 135,
+eq. (7). Analytic identities (closed domain, to roundoff):
 
   S1  Spitzer limit: at large f the limited conductivity == unlimited kappa_e.
   S2  saturation cap: the limited cell flux |kappa_eff * dTe/dz| <= q_sat
@@ -13,7 +15,7 @@ to roundoff):
   E1  energy conservation: the limited explicit operator conserves total electron
       energy on a closed domain (sum dEe * Vp == 0, still -div(q)).
   P1  presence: limiter off == no-limiter; limiter on perturbs a steep-gradient
-      state; default off.
+      state. (The flag ships ON; this gate builds both arms explicitly.)
 
 Usage:  python scripts/verify_sim1d_r5_heatflux.py
 """
@@ -135,7 +137,7 @@ def gate_p1():
     default_off = not off._electron_heat_flux_limit
     perturbs = np.max(np.abs(r_on.Ee - r_off.Ee)) > 0.0
     ok = default_off and perturbs
-    return "P1 presence: default off; limiter perturbs steep-gradient conduction", ok, (
+    return "P1 presence: flag-off arm is inert; limiter perturbs conduction", ok, (
         f"default_off={default_off}  max|dEe|={np.max(np.abs(r_on.Ee - r_off.Ee)):.2e}"
     )
 
