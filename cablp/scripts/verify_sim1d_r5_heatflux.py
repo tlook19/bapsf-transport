@@ -134,11 +134,11 @@ def gate_p1():
     r_on = heat_conduction_rhs(
         state=st, floors=on._floors, ion_mass_g=on._ion_mass_g,
         mu=on._mu, geometry=on._geometry, **kw_on)
-    default_off = not off._electron_heat_flux_limit
+    flag_off_arm = not off._electron_heat_flux_limit
     perturbs = np.max(np.abs(r_on.Ee - r_off.Ee)) > 0.0
-    ok = default_off and perturbs
+    ok = flag_off_arm and perturbs
     return "P1 presence: flag-off arm is inert; limiter perturbs conduction", ok, (
-        f"default_off={default_off}  max|dEe|={np.max(np.abs(r_on.Ee - r_off.Ee)):.2e}"
+        f"flag_off_arm={flag_off_arm}  max|dEe|={np.max(np.abs(r_on.Ee - r_off.Ee)):.2e}"
     )
 
 

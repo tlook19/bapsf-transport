@@ -100,10 +100,13 @@ quasi-1D conservative form is
 $$\partial_t(A\rho u)+\partial_z[A(\rho u^2+p)] = p\,\partial_z A+A S_M.$$
 
 The geometric pressure source is required to preserve a uniform stationary
-plasma exactly. This closure represents area divergence only; it does not
-include pressure anisotropy or an explicit magnetic-mirror force, so parallel
-acceleration through an end-solenoid flare is an observable rather than an
-imposed result.
+plasma exactly. This closure carries no pressure anisotropy and no *separate*
+magnetic-mirror term, but it is not mirror-free: under the isotropic closure
+the Maxwellian average of $-\mu\nabla_\parallel B$ **is** the $p\,\partial_z A$
+source, term for term, at $A \propto 1/B$, so a second one would double-count
+the expansion (see *Prescribed flux-tube and vessel geometry → Mirror force*).
+Parallel acceleration through an end-solenoid flare therefore follows from the
+prescribed area profile rather than from a separately imposed force law.
 
 - $-m_i\mathbf{u}\,S_{iz}$ — **ion-loading drag**: neutrals ionize at rest, so
   newly created cold ions mass-load and slow the flow. (The recombination and
