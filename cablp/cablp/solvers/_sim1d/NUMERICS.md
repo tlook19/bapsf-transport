@@ -506,7 +506,7 @@ sequential); the coupling sensitivity is confined to the internal sheath potenti
 `V_b`/`φ_c` (the SCL-corner regime), while `I_tot` (~3%) and `T_s` are robust.
 Retained as a **default-off diagnostic**; sequential stays production.
 
-## R5.2 electron heat-flux limiter (default off, audit A9)
+## R5.2 electron heat-flux limiter (default on, audit A9)
 
 The default electron conduction is classical Spitzer–Härm (`q = -κ_e ∇Te`), a
 local law valid only where `λ_mfp ≪ L_T`. A9 measured `q_SH` reaching 1.7–3.3×

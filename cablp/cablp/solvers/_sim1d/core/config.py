@@ -1125,9 +1125,11 @@ def fudge_factor_defaults():
         Knudsen exponent ``p`` in that limiter's suppression factor
         ``lambda = 1/(1 + (q_SH/q_sat)^p)``, applied as
         ``kappa_eff = lambda*kappa_e``. The ratio ``q_SH/q_sat`` plays the
-        role of a Knudsen number. ``1.0`` is the harmonic Cowie-McKee form
-        ``lambda = q_sat/(q_sat + q_SH)`` and takes its own code branch, so
-        it is bit-exact with the pre-exponent limiter. ``p > 1`` suppresses
+        role of a Knudsen number. ``1.0`` is the harmonic form
+        ``lambda = q_sat/(q_sat + q_SH)`` (Malone, McCrory & Morse, PRL 34
+        (1975) 721; equivalently Fundamenski, PPCF 47 (2005) R163, eq. 10a) and
+        takes its own code branch, so it is bit-exact with the pre-exponent
+        limiter. ``p > 1`` suppresses
         the steep-gradient (high-ratio, non-local) flux much harder while
         leaving the shallow-gradient limit near-Spitzer -- a separation a
         single free-streaming fraction cannot express. Read only when the
@@ -1281,13 +1283,17 @@ def fudge_factor_defaults():
         "recombination_energy_return": False,
         # --- Electron heat-flux limiter (read only when the
         # electron_heat_flux_limit flag is on, which is a shipped default) ---
-        # Free-streaming fraction f in q_sat = f*n*Te*v_the, the harmonic
-        # (Cowie-McKee) saturation cap.
+        # Free-streaming fraction f in q_sat = f*n*Te*v_the -- the ceiling
+        # (Cowie & McKee, ApJ 211 (1977) 135, eq. 7) that the harmonic cap
+        # saturates toward. Convention: v_the = sqrt(Te/m_e), as in Malone
+        # 1975 / Fundamenski 2005; a coefficient quoted in the Cowie & McKee
+        # convention needs *sqrt(2/pi) = 0.7979 to be read as an f here.
         "heat_flux_limiter_f": 0.1,
         # Non-local Knudsen exponent p for that limiter (read only when
         # electron_heat_flux_limit is on). lambda = 1/(1+Kn^p)
-        # with Kn = q_SH/q_sat. p=1.0 (default) is the harmonic Cowie-McKee
-        # form. p>1 suppresses the steep-gradient (high-Kn, non-local)
+        # with Kn = q_SH/q_sat. p=1.0 (default) is the harmonic form of
+        # Malone 1975 / Fundamenski 2005 eq. 10a. p>1 suppresses the
+        # steep-gradient (high-Kn, non-local)
         # startup flux much harder while leaving the shallow-gradient established
         # column near-Spitzer -- the startup-front pre-heating vs established-
         # column trade a single free-streaming factor cannot separate.
@@ -3066,8 +3072,10 @@ input_flags_template_1d = {
     # Flux-limited electron heat conduction. The classical Spitzer-Harm flux
     # can exceed the free-streaming scale n*Te*v_the at resolved gap faces,
     # i.e. exceed the physical ceiling. When ON, the electron conductivity is
-    # scaled per cell by lambda = q_sat/(q_sat+q_SH) (harmonic Cowie-McKee),
-    # q_sat = heat_flux_limiter_f * n * Te * v_the -- so the flux caps at
+    # scaled per cell by lambda = q_sat/(q_sat+q_SH) -- the harmonic form of
+    # Malone 1975 / Fundamenski 2005 eq. 10a, riding on the Cowie & McKee 1977
+    # free-streaming ceiling q_sat = heat_flux_limiter_f * n * Te * v_the -- so
+    # the flux caps at
     # free-streaming where gradients are steep and recovers Spitzer where they
     # are shallow. Electron only; ion conduction unchanged. Bit-exact when
     # off; a declared closure-family A/B instrument. The cap COEFFICIENT

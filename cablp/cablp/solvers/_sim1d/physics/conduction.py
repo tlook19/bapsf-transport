@@ -135,7 +135,7 @@ def heat_conduction_rhs(
 def flux_limited_electron_conductivity(
     conductivity_e, Te_eV, n, geometry, f, exponent=1.0
 ):
-    """Scale the electron conductivity per cell by the Cowie-McKee flux limiter.
+    """Scale the electron conductivity per cell by the harmonic flux limiter.
 
     The classical (Spitzer-Harm) parallel flux ``q_SH = kappa_e |dTe/dz|`` is
     capped toward the free-streaming ceiling ``q_sat = f n Te v_the`` (with
@@ -149,6 +149,20 @@ def flux_limited_electron_conductivity(
     flux divergence. Frozen at the incoming ``Te`` like ``kappa`` itself. Audit A9
     / R5.2; ``conductivity_e`` is the already-scaled volumetric conductivity
     (``* ev_to_erg * b_epara``) the operator uses, so ``q_SH`` matches its flux.
+
+    Attribution of the FORM: the harmonic mean of a classical and a
+    free-streaming flux is Malone, McCrory & Morse, PRL 34 (1975) 721, p. 722;
+    the equivalent conductivity-ratio statement implemented here,
+    ``chi/chi_SH = (1 + |q_SH/q_FL|)^-1``, is Fundamenski, PPCF 47 (2005) R163,
+    eq. (10a). The saturated-flux CEILING ``q_sat`` is Cowie & McKee, ApJ 211
+    (1977) 135, eq. (7) -- but they switch abruptly between the classical and
+    saturated branches rather than blending them, so the harmonic form is not
+    theirs.
+
+    CONVENTION: ``q_sat = f n Te v_the`` with ``v_the = sqrt(Te/m_e)``, which is
+    exactly the Malone and Fundamenski normalization (conversion factor 1.000).
+    A coefficient quoted in the Cowie & McKee convention must be multiplied by
+    ``sqrt(2/pi) = 0.7979`` before it can be read as an ``f`` here.
 
     ``exponent`` p (default 1 = the harmonic A9, bit-exact) generalizes to a
     NON-LOCAL Knudsen suppression ``lambda = 1 / (1 + (q_SH/q_sat)^p)``. The ratio
