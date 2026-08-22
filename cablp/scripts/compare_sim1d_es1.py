@@ -1,10 +1,19 @@
-"""Compare a sim1d run against the ES1 experimental overlay.
+"""Compare a sim1d run against an experimental-set overlay (``--es N``).
 
 The point of the model is to reproduce measured behaviour, so the meaningful
 benchmark is the data, not a previous version of the model. This samples the
-simulation at the five ES1 probe locations and the experimental time base, and
-reports the deviation in electron temperature and density against the measured
-means and their standard errors.
+simulation at the five probe locations of the selected experiment set and its
+experimental time base, and reports the deviation in electron temperature and
+density against the measured means and their standard errors.
+
+``--es`` selects the rung, 1 through 4; every rung is scored by the same
+three stages, the same sigma_tot error model and the same semi-quantitative
+criteria, and differs only in which overlay product the measured side comes
+from (``data/es{N}_sim1d_overlay.npz``, one schema written by one exporter).
+The flag selects the DATA only: the drive-side operating point of the run
+being scored belongs to whatever produced it, so rungs other than ES1 are
+scored from a saved artifact (``--from-h5``) built at that rung's operating
+point. See the ``--es`` help.
 
 Comparisons are made on the main-discharge clock, matching the notebook: model
 time is shifted so t = 0 is the start of the main discharge, which is what the
@@ -563,7 +572,12 @@ def _sigma_sys(field, exp_values):
 
 
 def compare(result, geometry, overlay):
-    """Return per-port deviation of model Te and density from the ES1 means."""
+    """Return per-port deviation of model Te and density from measurement.
+
+    Rung-neutral: every measured quantity, port list and time base is read
+    from ``overlay``, so the caller's choice of experiment set is carried
+    entirely by which overlay it passes.
+    """
     z_probe = np.asarray(overlay["z_cm"], dtype=float)
     ports = np.asarray(overlay["port"])
     origin = _main_discharge_origin(result)
@@ -1679,8 +1693,8 @@ def _report_decay(rows, window):
         print(f"  mean tau_model/tau_exp: {np.mean(ratios):.2f}")
 
 
-def _report(label, rows):
-    print("\n--- stage (ii): bulk Te / density at the ES1 ports ---")
+def _report(label, rows, es=1):
+    print(f"\n--- stage (ii): bulk Te / density at the ES{es} ports ---")
     spread_gated = any(r.get("spread_gated") for r in rows)
     if spread_gated:
         pct = 100.0 * TE_SPREAD_SEMIQUANT_FRAC
@@ -1844,8 +1858,12 @@ def main(argv=None):
             "which experiment-set overlay to score against "
             "(data/es{N}_sim1d_overlay.npz; ES1-3 share fueling and differ "
             "only in heater current and bank voltage — the drive-side "
-            "ladder). NB the model config must match the "
-            "campaign's operating point; this flag only selects the data."
+            "ladder, while ES4 sets the heater and the bank dial to ES3's "
+            "and moves the PUFF drive instead). All four rungs are scored "
+            "identically: same three stages, same sigma_tot model, same "
+            "semi-quantitative criteria. NB the model config must match the "
+            "campaign's operating point; this flag only selects the data, "
+            "so N != 1 is accepted with --from-h5 only (see the error)."
         ),
     )
     parser.add_argument(
@@ -1885,6 +1903,27 @@ def main(argv=None):
             args.beta_collapse, args.beta_plateau, args.beta_afterglow
         )
 
+    # --es picks the MEASURED side only. run_model() below builds ONE
+    # operating point -- ES1's -- from PARAM_OVERRIDES: V_bank, C_R and the
+    # cathode power balance are the ES1 stance and --es has never fed them.
+    # Running a fresh model here and scoring it against another rung's data
+    # therefore compares an ES1-driven run to a different rung's measurement,
+    # silently. Refuse it rather than extend it: per-rung drive belongs to the
+    # driver that owns the ladder (run_mechanism_ladder.ES_OPERATING carries
+    # the per-rung V_bank and standby T_s, on its own calibration vintage),
+    # and the campaign path for every rung is to build the artifact there and
+    # re-score it here from disk.
+    if args.es != 1 and args.from_h5 is None:
+        raise ValueError(
+            f"--es {args.es} selects the ES{args.es} measurement overlay, but "
+            "this driver builds only the ES1 operating point (V_bank, C_R and "
+            "the cathode power balance in PARAM_OVERRIDES are ES1's, and --es "
+            "does not feed them). Scoring a freshly run model against "
+            f"ES{args.es} data here would compare an ES1-driven run to another "
+            "rung's measurement. Build the run at its own operating point with "
+            "scripts/run_mechanism_ladder.py or scripts/run_m6_point.py, then "
+            f"score the saved artifact: --from-h5 RUN.h5 --es {args.es}."
+        )
     overlay_path = (
         OVERLAY
         if args.es == 1
@@ -1951,7 +1990,7 @@ def main(argv=None):
     print(f"\n=== {label} ===")
     print(wpe_arm_line(scored_params))
     _report_peak_current(compare_peak_current(result, overlay))
-    _report(label, compare(result, geometry, overlay))
+    _report(label, compare(result, geometry, overlay), es=args.es)
     decay_rows, window = compare_decay(result, overlay, window_ms=args.decay_window)
     _report_decay(decay_rows, window)
     return 0
