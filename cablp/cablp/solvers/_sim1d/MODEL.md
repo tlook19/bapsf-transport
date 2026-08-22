@@ -27,12 +27,18 @@ implementation in `physics/`.
 > the **R4.3 moment-closed operator** (`ion_neutral_moment_closure=True`):
 > drag at the Phelps momentum-transfer rate $\nu_{mt}$, with
 > $Q_{in} = \tfrac12 m_i \nu_{mt} n u^2 + \tfrac32 \nu_{mt} n (T_n - T_i)$;
-> (ii) the neutral channel (eq. 2) runs with **no dynamically evolved bulk
-> neutral flow** — transport is the Knudsen/Clausing conductance closure, so
-> the production form is $\partial_t n_n + \nabla_\parallel\!\cdot\Gamma_n =
-> -S_{iz} + (S_{rr}+S_{3b}) + S_{gp} - S_{\text{pump}}$ with $\Gamma_n$ the
-> conductance flux (neutrals ionize at rest; the `neutral_momentum` /
-> two-zone selectors are default-off closure instruments);
+> (ii) the neutral channel (eq. 2) is written here in conductance form,
+> $\partial_t n_n + \nabla_\parallel\!\cdot\Gamma_n =
+> -S_{iz} + (S_{rr}+S_{3b}) + S_{gp} - S_{\text{pump}}$, with $\Gamma_n$ the
+> Knudsen/Clausing conductance flux. In the CURRENT package the
+> `neutral_momentum` and `neutral_two_zone` selectors are **on by default**,
+> so a directed bulk neutral flow IS evolved on top of that thermal
+> transport, and the ionization birth momentum samples the evolved wind
+> $u_n$ rather than rest (see R4.2). The radial closure
+> `neutral_momentum_radial` defaults to `"uniform"`; the
+> `"kinetic_two_moment"` reduction remains default-off. With
+> `neutral_momentum` off the directed neutral flow is not solved
+> dynamically and neutrals ionize at rest;
 > (iii) the electron energy (eq. 4) additionally carries $Q_{\text{beam}}$,
 > the CSDA primary-beam deposition (R4.1/R4.2 sections), so $S_{iz}$ there
 > is thermal + beam ionization. `core/config.py` is the authoritative flag
@@ -47,10 +53,10 @@ $$\frac{Dn}{Dt} = -\,n\,\nabla\!\cdot\mathbf{u} \;+\; S_{iz} \;-\; \big(S_{rr} +
 
 $$\frac{D_n n_n}{Dt} = -\,n_n\,\nabla\!\cdot\mathbf{u}_n \;-\; S_{iz} \;+\; \big(S_{rr} + S_{3b}\big)$$
 
-By default the directed neutral flow is not solved dynamically: thermal
-transport uses the **Knudsen/Clausing conductance closure**. The default-off
-`neutral_momentum` selector additionally evolves directed axial momentum on
-top of that thermal transport.
+Thermal transport uses the **Knudsen/Clausing conductance closure**. The
+`neutral_momentum` selector — **on by default** in the current package —
+additionally evolves directed axial momentum on top of that thermal
+transport. With it off, the directed neutral flow is not solved dynamically.
 
 Optional thin annular baffles are neutral-transport surfaces, not plasma
 boundaries. A baffle with clear radius $R_b\ge R_p$ leaves the plasma channel
@@ -149,8 +155,9 @@ $$\frac{3}{2}\,n\,\frac{DT_i}{Dt} = -\,p_i\,\nabla\!\cdot\mathbf{u} \;+\; \nabla
   equilibration** (the elastic companion to $Q_{cx}$), gated separately by the
   `ion_neutral_thermalization` flag (default off). The drag, $Q_{cx}$,
   $Q_{\text{fric}}$, and $Q_{\text{eq,el}}$ quartet is **replaced together** by
-  one moment-closed operator under the default-off `ion_neutral_moment_closure`
-  flag (audit A7/A8; see the R4.3 section below).
+  one moment-closed operator under the `ion_neutral_moment_closure` flag, which
+  is **on by default** in the current package (audit A7/A8; see the R4.3
+  section below).
 - $\tfrac32(T_\text{birth} - T)\,S_{iz}$ — thermal cost of injecting
   freshly-ionized particles at the birth temperature (vanishes for the default
   `birth="local"` electron choice).
@@ -283,12 +290,12 @@ from its live side. Pure neutral transport remains active in those volumes.
 The unchanged checkpoint golden explicitly pins the historical selector-off
 path and remains bit-exact; it is a regression anchor, not the live stance.
 
-The repaired startup defaults are `Te0=0.21 eV` and provisional
-`Ti0=0.125 eV`, both strictly above their unchanged `0.1 eV` numerical
-floors. The electron seed is just above the exact bundled He ADF11 lower edge
-(`0.200092... eV`). The ion seed is a numerical margin, not a neutral
-temperature claim; the model still separately uses `Tn_K=300 K` and the
-audited `Tn_fit=0.1 eV` collision temperature pending the A8/R4 repair.
+The repaired startup defaults are `Te0=0.21 eV` and `Ti0=0.026 eV`, each
+strictly above its own numerical floor (`Te_floor=0.1 eV`,
+`Ti_floor=0.02585 eV`). The electron seed is just above the exact bundled He
+ADF11 lower edge (`0.200092... eV`). The ion seed is a numerical margin, not a
+neutral temperature claim; the model still separately uses `Tn_K=300 K` and the
+audited `Tn_fit=0.1 eV` collision temperature.
 
 Optional neutral states use their actual packed layout throughout evidence:
 five rows for `(n, nn, M, Ee, Ei)`, then optional `M_n`, `nn_a`, `M_n_a`, and
@@ -334,7 +341,9 @@ promoted to validated atomic physics.
 
 ## R2 conservative hyperbolic core (2026-07-24)
 
-The default-off `hyperbolic_energy_consistent` selector makes the discrete
+As introduced at R2 the `hyperbolic_energy_consistent` selector was
+default-off; in the current package it is **on by default**. The selector
+makes the discrete
 hyperbolic operator conserve the total plasma energy `K + Ee + Ei` (kinetic
 plus electron and ion internal) to machine precision on a closed domain. It
 combines three compatible pieces:
@@ -353,16 +362,21 @@ linear acoustic speed of the implemented $\gamma=5/3$ two-species energy
 system, `c = sqrt((5/3)(Te+Ti)/m_i)` (selector
 `hyperbolic_wave_speed="adiabatic"`); the historical `sqrt(Te/m_i)`
 under-bounded it. The sonic front-filling flux is retired from the repaired
-stance (a mesh-vanishing diffusion). All three are default-off and the
-checkpoint golden is bit-exact; the deliberate repaired stance is selected only
-after the R3/R4 boundary and source ledgers close.
+stance (a mesh-vanishing diffusion). All three were default-off as introduced
+at R2, bit-exact against the R2-era checkpoint golden; in the current package
+`hyperbolic_energy_consistent` is **on by default** and `hyperbolic_wave_speed`
+defaults to `"adiabatic"`, and the live golden-at-stance fixture is captured in
+that repaired configuration.
 
 ## R3 characteristic material boundaries + closed circuit power balance (2026-07-24)
 
-The default-off `characteristic_boundary` selector rebuilds the plasma-terminating
+As introduced at R3 the `characteristic_boundary` selector was default-off, and
+default-off was bit-exact against the R3-era checkpoint golden; in the current
+package it is **on by default**, and the live golden-at-stance fixture is
+captured with it on. The selector rebuilds the plasma-terminating
 (cathode/collector) surfaces as one control surface feeding both the fluid sink
-and the circuit. Default-off is golden bit-exact; the audit findings are A1, A13,
-A16 (plus the A11 convergence gate).
+and the circuit. The audit findings are A1, A13, A16 (plus the A11 convergence
+gate).
 
 **R3.1 -- characteristic ghost-cell Bohm outflow (A1).** The closed reflecting
 face plus one-sided volumetric absorber is replaced by a ghost-cell Bohm outflow
@@ -463,7 +477,9 @@ plasma-removed / anode-heat / sheath split (settled artifact: 163.56 = 123.26 +
 
 ## R4.2 unified ionization birth energy moments (2026-07-24)
 
-The default-off `ionization_birth_energy_model` selector re-derives the bulk (and
+As introduced at R4.2 the `ionization_birth_energy_model` selector was
+default-off (`"legacy"`); the current package default is `"conservative"`. The
+selector re-derives the bulk (and
 beam) ionization birth energy moments from one particle/momentum/energy balance
 (audit A14). Under the historical `"legacy"` booking the bulk electron birth adds
 $\tfrac32 T_{e,\text{birth}} S_{iz}$ to $E_e$; with `Te_birth_ionization="local"`
@@ -491,7 +507,9 @@ kinetic derivative is retained as ion heat. The beam ion birth (electron already
 $E_e=0$) gains the same $Q_\text{mix}$ with its own $u_n$ (the two-momentum column
 wind, or zero for the historical rest-birth). Under `"conservative"` the
 `Te_birth_ionization` selector is inert (the electron birth energy is physically
-zero regardless). Default `"legacy"` keeps the golden bit-exact.
+zero regardless). At R4.2 the default was `"legacy"`, which kept the R4-era
+checkpoint golden bit-exact; the current package default is `"conservative"`
+(`core/config.py`), and the live golden-at-stance fixture is captured with it.
 
 With A15 (R4.1) and A14 (R4.2) both booked, the two item-21 structural errors
 (+164 kW anode interception, +43.1 kW electron birth) that partially concealed one
@@ -501,7 +519,8 @@ caveat in the energy-source glossary above applies only to the `"legacy"` bookin
 
 ## R4.3 moment-closed ion-neutral collision operator (2026-07-25)
 
-The default-off `ion_neutral_moment_closure` flag replaces the drag +
+As introduced at R4.3 the `ion_neutral_moment_closure` flag was default-off; in
+the current package it is **on by default**. The flag replaces the drag +
 $Q_{\text{fric}}$ + $Q_{\text{eq,el}}$ + $Q_{cx}$ quartet with ONE moment-closed
 reduced ion-neutral collision operator (audit A7 + A8). The legacy
 `sigma_in_model="cx_derived"` arm (removed at D3, 2026-08-21) applied
