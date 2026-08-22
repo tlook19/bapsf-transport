@@ -900,9 +900,13 @@ def gate_c5():
     u = np.array([0.0, 1.0e5, -2.0e5, 5.0e5])
     nu_cx, nu_el = dvm.collision_frequencies(n_i, Ti, u)
 
-    # (a) the halving itself, against the unhalved expression.
+    # (a) the halving itself, against the unhalved expression. The g_eff here
+    # is a TRANSCRIPTION of collision_frequencies' own thermal floor and must
+    # track it: the ratio below isolates the 1/2 factor only when both sides
+    # are built on the same g_eff. (sigma_iso g_eff is analytically
+    # g_eff-independent but not bitwise so, which is what part (a) resolves.)
     w2 = (g.VZ[None, :, :] - u[:, None, None]) ** 2 + (g.VP**2)[None, :, :]
-    g_eff = np.sqrt(w2 + 16.0 * Ti[:, None, None] * EV / (np.pi * M_HE))
+    g_eff = np.sqrt(w2 + 8.0 * Ti[:, None, None] * EV / (np.pi * M_HE))
     E_rel = np.maximum(0.25 * M_HE * g_eff**2 / EV, 1e-9)
     unhalved = n_i[:, None, None] * phelps_he_isotropic_cm2(E_rel) * g_eff
     ratio = nu_el / unhalved

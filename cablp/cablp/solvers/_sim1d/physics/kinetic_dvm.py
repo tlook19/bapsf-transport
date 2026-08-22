@@ -653,13 +653,26 @@ class TransientDVM:
         against the local ion Maxwellian, evaluated at the mean relative
         speed
 
-            g_eff^2 = |v - u_i|^2 + 8 k T_i / (pi mu),   mu = m_He / 2
+            g_eff^2 = |v - u_i|^2 + 8 k T_i / (pi m_He)
 
-        (the standard interpolation between the drift-dominated and
-        thermal-dominated limits for an equal-mass pair), with the Phelps
-        He+/He backscatter cross section for charge exchange and the
-        Phelps isotropic cross section for polarization-elastic
-        scattering.
+        the standard interpolation between the drift-dominated and
+        thermal-dominated limits. The thermal floor carries the FULL ion
+        mass, not the equal-mass reduced mass: only the ions are
+        Maxwellian here. The neutral's own velocity is RESOLVED by the
+        velocity grid and enters exactly, through ``|v - u_i|^2``, so the
+        target-averaged relative speed in the drift-free limit is the ion
+        thermal speed ``sqrt(8 k T_i / (pi m_He))`` alone. Writing the
+        floor as ``8 k T_i / (pi mu)`` with ``mu = m_He/2`` is the
+        TWO-Maxwellian form; it counts a neutral thermal spread the grid
+        already carries, and inflates ``g_eff`` by up to ``sqrt(2)`` -- and
+        ``nu_cx`` with it -- for a neutral slow in the ion frame, falling
+        to unity for a fast one. ``nu_el`` is insensitive to the choice:
+        ``sigma_iso ~ E^-1/2`` makes ``sigma_iso g_eff`` independent of
+        ``g_eff``.
+
+        Charge exchange uses the Phelps He+/He backscatter cross section
+        and polarization-elastic scattering the Phelps isotropic cross
+        section.
 
         Both channels are BGK FULL-REPLACEMENT events: the neutral is
         deleted and re-emitted at the local ion Maxwellian, so one event
@@ -671,19 +684,26 @@ class TransientDVM:
         gives ``mu g = m g / 2``. The returned ``nu_el`` therefore carries
         an explicit factor ``ELASTIC_BGK_MOMENTUM_FACTOR = 1/2``, which is
         not a tuning constant but the equal-mass ``mu/m`` ratio; with it
-        the arm's effective momentum transfer is ``k_b + 0.5 k_iso``,
-        exactly the superseded fluid operator
-        ``phelps_momentum_transfer_rate_cm3_s``. The factor scales the
-        whole elastic channel, so its energy transfer and its rebirth
-        throughput are reduced in the same proportion.
+        the arm's effective momentum transfer takes the same CHANNEL
+        WEIGHTING as the superseded fluid operator
+        ``phelps_momentum_transfer_rate_cm3_s``, namely ``k_b + 0.5
+        k_iso``. The two agree exactly on the ELASTIC channel only, where
+        ``sigma_iso g_eff`` is constant and the per-bin rate is therefore
+        the Maxwellian average; on the CX channel they do NOT, because
+        ``nu_cx`` is a per-bin evaluation at ``g_eff`` rather than the rate
+        average ``<sigma_b g>`` the fluid coefficient tabulates, and the
+        two differ most where the neutral is slow in the ion frame. The
+        factor scales the whole elastic channel, so its energy transfer and
+        its rebirth throughput are reduced in the same proportion.
         """
         g = self.g
         n_i = np.asarray(n_i, dtype=float)[:, None, None]
         Ti = np.maximum(np.asarray(Ti_eV, dtype=float), 1e-6)[:, None, None]
         u = np.asarray(u_i, dtype=float)[:, None, None]
         w2 = (g.VZ[None, :, :] - u) ** 2 + (g.VP**2)[None, :, :]
-        # mu = m/2 for the symmetric pair, so 8 k T / (pi mu) = 16 k T/(pi m)
-        g_eff = np.sqrt(w2 + 16.0 * Ti * EV / (np.pi * M_HE))
+        # Only the ions are Maxwellian; the neutral velocity is resolved and
+        # is already in w2, so the floor carries m_He, NOT the reduced mass.
+        g_eff = np.sqrt(w2 + 8.0 * Ti * EV / (np.pi * M_HE))
         E_rel = np.maximum(0.25 * M_HE * g_eff**2 / EV, 1e-9)
         nu_cx = n_i * phelps_he_backscatter_cm2(E_rel) * g_eff
         if self.elastic_model == "off":
