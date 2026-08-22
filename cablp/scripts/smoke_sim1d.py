@@ -21073,6 +21073,249 @@ def _case_hot_channel_internal_wall():
 
 
 # --------------------------------------------------------------------
+# The axial field-map loader (physics/mirror_field.py). There is NO mirror
+# flag and NO mirror config key here, deliberately: the fluid mirror force is
+# already in the model as the quasi-1D p dA/dz source
+# (sources.flux_tube_geometry_rhs, armed by prescribed_area_geometry), and at
+# A proportional to 1/B that source IS the isotropic average of
+# -mu grad_par B, so a second term would double-count it exactly. The loader
+# is a library function whose one in-tree consumer is
+# scripts/characterise_mirror_fieldmap.py. These cases pin its arithmetic and
+# its refusals.
+# --------------------------------------------------------------------
+def _mirror_synthetic_map(directory, *, drop=()):
+    """Write a minimal census-shaped field map and return its path.
+
+    Synthesized rather than read from ``scripts/lapd_end_field_Rp18p415.npz``
+    so the gate does not depend on an ignored run artifact. The shape is
+    deliberately analytic -- flat at B_bulk, then a linear ramp -- so every
+    assertion below is a closed-form expectation, not a re-measurement of the
+    real solve. ``drop`` omits named arrays, to exercise the malformed-map
+    refusal.
+    """
+    path = os.path.join(directory, "mirror_synthetic_map.npz")
+    z_m = np.linspace(14.0, 22.5, 4251)
+    b_g = np.where(z_m < 19.0, 1400.0, 1400.0 - 200.0 * (z_m - 19.0))
+    z_flux_m = np.linspace(14.0, 21.0, 701)
+    r_flux_m = 0.18415 + 0.05 * np.maximum(z_flux_m - 19.0, 0.0)
+    arrays = dict(
+        z_axis_m=z_m,
+        bulk_field_gauss=np.array(1400.0),
+        plasma_radius_m=np.array(0.18415),
+        interior_ripple_relative=np.array(5.430480263014005e-05),
+        droop_min_bz_axis_gauss=b_g,
+        droop_min_z_flux_m=z_flux_m,
+        droop_min_flux_radius_m=r_flux_m,
+        droop_min_crossing_z_m=np.array([20.0, 20.5]),
+        droop_min_crossing_radii_m=np.array([0.5, 0.762]),
+        droop_min_trace_end_z_m=np.array(21.0),
+        off_bz_axis_gauss=0.5 * b_g,
+        off_z_flux_m=z_flux_m,
+        off_flux_radius_m=r_flux_m,
+        off_crossing_z_m=np.array([19.5, 20.0]),
+        off_crossing_radii_m=np.array([0.5, 0.762]),
+        off_trace_end_z_m=np.array(21.0),
+    )
+    for name in drop:
+        del arrays[name]
+    np.savez_compressed(path, **arrays)
+    return path
+
+
+@_case("mirror-field-loader")
+def _case_mirror_field_loader():
+    """The map lands on the mesh in CGS, with the fill and masks declared."""
+    from cablp.solvers._sim1d.core.geometry import build_geometry
+    from cablp.solvers._sim1d.physics.mirror_field import load_mirror_field
+
+    _mf_p, _mf_f = default_config()
+    _mf_geom = build_geometry(_mf_p, _mf_f)
+    with tempfile.TemporaryDirectory() as _mf_dir:
+        _mf_map = _mirror_synthetic_map(_mf_dir)
+        _mf = load_mirror_field(
+            map_path=_mf_map,
+            case="droop_min",
+            geometry=_mf_geom,
+            plasma_radius_cm=_mf_p["Rp"],
+        )
+        assert _mf.case == "droop_min"
+        assert _mf.B_cell_gauss.shape == (_mf_geom.cells,)
+        assert _mf.B_face_gauss.shape == (_mf_geom.cells + 1,)
+        assert np.all(np.isfinite(_mf.B_cell_gauss))
+        # Below the map the fill is the map's own bulk level, with exactly
+        # zero gradient -- the declared approximation, not a solved field.
+        assert _mf.interior_fill_gauss == 1400.0
+        assert np.all(_mf.interior_fill_cell == (_mf.z_cm < _mf.map_z_min_cm))
+        assert np.all(_mf.B_cell_gauss[_mf.interior_fill_cell] == 1400.0)
+        assert np.all(
+            _mf.dBdz_native_cell_gauss_per_cm[_mf.interior_fill_cell] == 0.0
+        )
+        # On the synthetic ramp the slope is -200 G/m = -2 G/cm exactly, and
+        # both differencings must find it (the ramp is linear, so the native
+        # and mesh gradients agree there).
+        _mf_ramp = _mf.z_cm > 1910.0
+        assert np.allclose(
+            _mf.dBdz_native_cell_gauss_per_cm[_mf_ramp], -2.0, atol=1e-9
+        ), "dB/dz must be gauss per CM"
+        assert np.allclose(
+            _mf.dBdz_mesh_cell_gauss_per_cm[_mf_ramp], -2.0, atol=1e-9
+        )
+        # Mirror ratio is a pure ratio of the same array.
+        assert np.allclose(
+            _mf.mirror_ratio_cell, _mf.B_cell_gauss / _mf.B_min_gauss
+        )
+        assert np.allclose(_mf.mirror_ratio_bulk_cell, _mf.B_cell_gauss / 1400.0)
+        assert _mf.B_min_gauss == _mf.B_cell_gauss.min()
+        assert _mf.B_max_gauss == _mf.B_cell_gauss.max()
+        # The flux surface is NaN outside the trace and masked past first
+        # wall contact -- past that point it is vacuum continuation, and the
+        # loader says so instead of handing over a bare number.
+        assert _mf.first_wall_contact_z_cm == 2000.0
+        assert np.all(
+            np.isnan(_mf.flux_radius_cell_cm[~_mf.flux_radius_valid_cell])
+        )
+        assert np.all(
+            _mf.flux_radius_vacuum_continuation_cell
+            <= _mf.flux_radius_valid_cell
+        )
+        assert np.all(
+            _mf.z_cm[_mf.flux_radius_vacuum_continuation_cell] >= 2000.0
+        )
+        assert not np.any(
+            _mf.flux_radius_vacuum_continuation_cell & (_mf.z_cm < 2000.0)
+        )
+        # The cell average is the exact mean of the same interpolant, so on
+        # the flat interior it equals the point sample.
+        _mf_flat = _mf.z_cm < 1800.0
+        assert np.allclose(
+            _mf.B_cell_average_gauss[_mf_flat], _mf.B_cell_gauss[_mf_flat]
+        )
+        # The two end-coil cases are NOT small perturbations of each other,
+        # which is why 'case' has no default reading.
+        _mf_off = load_mirror_field(
+            map_path=_mf_map, case="off", geometry=_mf_geom
+        )
+        _mf_solved = ~_mf.interior_fill_cell
+        assert np.allclose(
+            _mf_off.B_cell_gauss[_mf_solved], 0.5 * _mf.B_cell_gauss[_mf_solved]
+        )
+
+
+@_case("mirror-field-loader-refusals")
+def _case_mirror_field_loader_refusals():
+    """Every way of asking the loader for a field it cannot supply."""
+    from cablp.solvers._sim1d import config_manifest
+    from cablp.solvers._sim1d.core.geometry import build_geometry
+    from cablp.solvers._sim1d.physics import mirror_field as _mf_mod
+    from cablp.solvers._sim1d.physics.mirror_field import load_mirror_field
+
+    # The module must carry no force term, and the solver no mirror control:
+    # the mirror force is already in the model and a sibling would
+    # double-count it exactly.
+    assert not hasattr(_mf_mod, "mirror_force_rhs")
+    assert not hasattr(_mf_mod, "MIRROR_FORCE_PENDING")
+    _mf_manifest = config_manifest()
+    for _key in (
+        "flux_tube_mirror",
+        "mirror_field_map_path",
+        "mirror_field_case",
+        "mirror_field_interior_fill_gauss",
+    ):
+        assert _key not in _mf_manifest["parameters"], _key
+        assert _key not in _mf_manifest["flags"], _key
+
+    _mf_p, _mf_f = default_config()
+    _mf_geom = build_geometry(_mf_p, _mf_f)
+    with tempfile.TemporaryDirectory() as _mf_dir:
+        _mf_map = _mirror_synthetic_map(_mf_dir)
+
+        # An unknown end-coil case, and an undeclared one, both refuse before
+        # the file is even opened.
+        for _bad_case in ("droopmin", None, ""):
+            try:
+                load_mirror_field(
+                    map_path=_mf_map, case=_bad_case, geometry=_mf_geom
+                )
+            except ValueError as exc:
+                assert "must be one of" in str(exc), str(exc)
+            else:
+                raise AssertionError(f"case={_bad_case!r} must be refused")
+        # Both required arguments have no default, so omitting either is a
+        # TypeError at the call site rather than a guessed reading.
+        for _kwargs in (
+            {"map_path": _mf_map, "geometry": _mf_geom},
+            {"case": "droop_min", "geometry": _mf_geom},
+        ):
+            try:
+                load_mirror_field(**_kwargs)
+            except TypeError as exc:
+                assert "required keyword-only argument" in str(exc), str(exc)
+            else:
+                raise AssertionError(f"load_mirror_field({_kwargs}) must refuse")
+        # A map path that names nothing readable.
+        try:
+            load_mirror_field(
+                map_path=os.path.join(_mf_dir, "absent.npz"),
+                case="off",
+                geometry=_mf_geom,
+            )
+        except ValueError as exc:
+            assert "does not name a readable file" in str(exc), str(exc)
+        else:
+            raise AssertionError("an unreadable map path must be refused")
+        # A non-positive or non-finite interior fill.
+        for _bad_fill in (-1.0, 0.0, float("nan")):
+            try:
+                load_mirror_field(
+                    map_path=_mf_map, case="off", geometry=_mf_geom,
+                    interior_fill_gauss=_bad_fill,
+                )
+            except ValueError as exc:
+                assert "must be finite and positive" in str(exc), str(exc)
+            else:
+                raise AssertionError(f"fill={_bad_fill} must be refused")
+        # A map whose flux surface was anchored on a different column.
+        try:
+            load_mirror_field(
+                map_path=_mf_map, case="droop_min", geometry=_mf_geom,
+                plasma_radius_cm=15.0,
+            )
+        except ValueError as exc:
+            assert "traced its flux surface on a column of radius" in str(exc), (
+                str(exc)
+            )
+        else:
+            raise AssertionError("a map anchored on another column must refuse")
+        # A mesh that runs past the map's high edge has nothing to read.
+        _mf_long_p = dict(_mf_p)
+        _mf_long_p["Lm"] = 2400.0
+        _mf_long_geom = build_geometry(_mf_long_p, _mf_f)
+        try:
+            load_mirror_field(
+                map_path=_mf_map, case="droop_min", geometry=_mf_long_geom
+            )
+        except ValueError as exc:
+            assert "nothing to extend the field from" in str(exc), str(exc)
+        else:
+            raise AssertionError("a mesh past the map's high edge must refuse")
+
+    # A file that is missing an array the loader needs is not a census output.
+    with tempfile.TemporaryDirectory() as _mf_bad_dir:
+        _mf_bad_map = _mirror_synthetic_map(
+            _mf_bad_dir, drop=("droop_min_bz_axis_gauss",)
+        )
+        try:
+            load_mirror_field(
+                map_path=_mf_bad_map, case="droop_min", geometry=_mf_geom
+            )
+        except ValueError as exc:
+            assert "has no array" in str(exc), str(exc)
+            assert "solve_lapd_coil_field_census.py" in str(exc), str(exc)
+        else:
+            raise AssertionError("a map missing its Bz array must be refused")
+
+
+# --------------------------------------------------------------------
 # smoke-summary
 # --------------------------------------------------------------------
 @_case("smoke-summary")
