@@ -179,6 +179,17 @@ def arm_config(**overrides):
     d = dict(d)
     fl = dict(fl)
     fl["neutral_two_zone"] = True
+    # A kinetic_dvm arm cannot carry an evolved M_n BY CONSTRUCTION: the DVM
+    # state already owns the neutral first moment, so an M_n field would be a
+    # second, unowned copy of it and the solver refuses the pair outright.
+    # Cleared explicitly rather than inherited, so this suite's arms build
+    # whatever the package default happens to be -- default_config() ships
+    # neutral_momentum ON, which made every arm here unconstructible.
+    # NOT a statement about which flag should be the default; that question
+    # is open elsewhere and this line does not prejudge it. The G2 refusal
+    # gate below sets the flag back to True on top of this config and so
+    # still exercises the refusal.
+    fl["neutral_momentum"] = False
     d["neutral_model"] = "kinetic_dvm"
     d["neutral_kinetic_dvm_cadence_s"] = CADENCE_S
     d["neutral_kinetic_dvm_exchange"] = EXCHANGE_MODEL

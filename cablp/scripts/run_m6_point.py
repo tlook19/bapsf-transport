@@ -32,6 +32,18 @@ from cablp.solvers._sim1d.results.health import summarize_result
 
 ELECTRON_BIRTH_POLICY = "floor"
 
+# Keys ``ES_OPERATING`` owns AND that are live in the solved configuration, so
+# a layer that overwrites one silently re-labels which rung the run is.
+#
+# ``T_s`` is deliberately NOT in this set even though ``ES_OPERATING`` also
+# supplies it. This driver sets ``cathode_warming_model="power_balance"``
+# unconditionally, under which ``T_s`` is configuration-INERT: the surface
+# temperature is solved from the power balance rather than held at the
+# configured value, so a stance that names ``T_s`` does not change which rung
+# the run represents. It keeps the ordinary "stance supersedes this driver's
+# default" print below instead of raising.
+RUNG_OWNED_LIVE = ("V_bank", "cathode_Ts_base_K")
+
 
 def _brief_value(value):
     """Return a short repr of a config value for a one-line console message.
@@ -171,6 +183,10 @@ def main(argv=None):
             "neutral_mesh_accommodation": True,
         })
         flags_extra["neutral_momentum"] = True
+    # The rung values AS THE RUNG SET THEM, snapshotted before any stance or
+    # command-line layer can touch them. Read from ``extra`` rather than from
+    # ``op`` again so there is exactly one place the rung reaches this driver.
+    rung_owned = {key: extra[key] for key in RUNG_OWNED_LIVE}
     stance = None
     if args.stance is not None:
         stance = load_stance(args.stance)
@@ -265,6 +281,36 @@ def main(argv=None):
             )
             for line in departures:
                 print(f"  WARNING: departs {stance.name} {line}")
+
+    # RUNG-vs-STANCE LAYERING GUARD.
+    #
+    # The rung is written into ``extra`` from ``ES_OPERATING[--es]`` and the
+    # stance layer lands ON TOP of it, so a stance that names a rung-owned
+    # key silently overwrites the rung: ``--es 2`` or ``--es 3`` then produces
+    # an arm that is labelled and scored as that rung while carrying ES1's
+    # drive. The departure WARNING above does not catch this -- the stance
+    # value IS the stance, so nothing departs from it.
+    #
+    # A command line can still say it meant the stance value, by re-supplying
+    # the key through ``--extra``; silence cannot. The guard runs after BOTH
+    # the stance layer and the ``--extra`` layer are resolved, so it sees the
+    # configuration the solver would actually be handed.
+    if stance is not None:
+        for key in RUNG_OWNED_LIVE:
+            if key in cli_supplied or key not in stance.params:
+                continue
+            if stance.params[key] == rung_owned[key]:
+                continue
+            raise ValueError(
+                f"run_m6_point: stance {stance.name} sets "
+                f"{key}={stance.params[key]!r}, overwriting the --es "
+                f"{args.es} rung value {key}={rung_owned[key]!r}. This run "
+                f"would be labelled ES{args.es} and scored against ES"
+                f"{args.es} data while carrying another rung's {key}. Fix: "
+                f"pass --extra {key}={rung_owned[key]} to state that the "
+                f"rung value is the intended one, or --no-stance to run "
+                f"without the stance layer."
+            )
 
     result, geometry, params, flags = run_model(
         nx=args.nx, extra=extra,
