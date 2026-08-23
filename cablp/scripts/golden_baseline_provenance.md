@@ -1,8 +1,9 @@
 # Provenance of the golden baseline pins (`baseline_sim1d.BASELINE_*_OVERRIDES`)
 
-**Recaptured 2026-08-21 (the `heat_flux_limiter_f` re-cut to 0.45; the
-pre-Tuesday physics batch, the 2026-08-20 stance-update wave and the thread-24
-R2b re-anchor onto the stance preceded it — all four under the
+**Recaptured 2026-08-23 (the conserving ionization birth ADOPTED as the
+default, jointly with the `C_R` re-trim it forced; the `heat_flux_limiter_f`
+re-cut to 0.45, the pre-Tuesday physics batch, the 2026-08-20 stance-update wave
+and the thread-24 R2b re-anchor onto the stance preceded it — all five under the
 reviewed-recapture protocol, see the recapture record below).** The committed
 regression fixture
 `scripts/baselines/production_discharge.npz` is captured at **the stance of
@@ -82,7 +83,7 @@ to be.
 |---|---|---|
 | `nx` | `60` | Axial resolution of the far column: a pure cost knob. The campaign runs 268; a reviewer pays for this gate on the candidate branch and again post-merge. Pinned rather than inherited so a future default-`nx` change cannot multiply every gate's runtime silently. |
 | `max_steps_action` | `"raise"` | Deliberately overrides the stance's `"stop"`. For a campaign arm a step cap is a budget and a truncated arm is still data; here the cap is a tripwire, and tripping it should be loud. |
-| `max_steps` (run kwarg) | `150000` | **A tripwire, not a run length** — ~1.9× the measured 80,416 steps. It exists so a change that quietly destroys the timestep fails fast instead of running for hours. If it fires, the question is what happened to `dt`, not what happened to the trajectory. Sized at 2× deliberately: a backstop with a few percent of headroom is not a backstop, it is a second cost cap waiting to truncate the gate. |
+| `max_steps` (run kwarg) | `150000` | **A tripwire, not a run length** — ~2.0× the measured 76,631 steps. It exists so a change that quietly destroys the timestep fails fast instead of running for hours. If it fires, the question is what happened to `dt`, not what happened to the trajectory. Sized at 2× deliberately: a backstop with a few percent of headroom is not a backstop, it is a second cost cap waiting to truncate the gate. |
 
 `BASELINE_FLAG_OVERRIDES` carries one entry, `neutral_equilibration = True`, for
 the reason given in the re-cut section above.
@@ -96,17 +97,19 @@ whole cycle rather than a truncated foot.
 
 | quantity | value |
 |---|---|
-| steps | 80,416 |
-| wall, single lane | 1047 s / 1034 s over the two captures (~17.5 / 17.2 min) |
-| saves | 2,627 |
-| `final_time` | 2.625885e-02 s (the dynamic `t_end`, reached) |
-| trajectory | `y[2627, 576]` = 8 fields × 72 cells |
-| phase census (saves) | 9 `pre_breakdown`, 17 `breakdown`, 2000 `main_discharge`, 600 `afterglow`, 1 `post_afterglow` |
+| steps | 76,631 |
+| wall, single lane | 1006 s / 1004 s over the two captures (~16.8 / 16.7 min) |
+| saves | 2,626 |
+| `final_time` | 2.624039e-02 s (the dynamic `t_end`, reached) |
+| trajectory | `y[2626, 576]` = 8 fields × 72 cells |
+| phase census (saves) | 9 `pre_breakdown`, 16 `breakdown`, 2000 `main_discharge`, 600 `afterglow`, 1 `post_afterglow` |
 | save cadence | 10 us — the finest timing shift this fixture can resolve |
 
-*(Figures above are the 2026-08-21 physics-batch capture, the SECOND one — the m_He ruling landed after the first and forced a re-recapture. The two captures
-were bit-identical but not equal in wall time; the spread is scheduling, not
-trajectory, and the smaller figure is the cleaner lane.)*
+*(Figures above are the 2026-08-23 adoption capture. The two captures were
+byte-identical but not equal in wall time; the spread is scheduling, not
+trajectory, and both lanes here were CONTENDED — other agents' gates were
+running — so these wall figures are an upper bound, not a clean-lane
+measurement.)*
 
 **The gate is ~2× the wall time of the fixture it replaced** (~8–9 min), not the
 same — the pre-capture projection of 40–45k steps was taken from the
@@ -126,6 +129,115 @@ stance the cells carry plasma and the term is well behaved. Recorded as a known
 closure stress, deliberately not addressed by this pass.
 
 ## Recapture record
+
+**2026-08-23 — the CONSERVING IONIZATION BIRTH adopted as the default,
+jointly with the `C_R` re-trim it forced (AUTHORIZED recapture, Tom's
+decision 5; CAMPAIGN_LOG 2026-08-23k/23r/23s).** **TWO keys moved, and this
+event is JOINTLY ATTRIBUTED to both of them.** Nothing below may be credited
+to either key alone: the birth booking changed the plasma load and the drive
+knob was re-trimmed against that change in the same event, so they are not
+separable at this fixture. No code path, pin, run shape or driver changed.
+
+| key | old | new | class |
+|---|---|---|---|
+| `Ti_birth_ionization` (config default) | `"floor"` | `"neutral"` | **DERIVED (conservation)** |
+| `C_R` (stance `g1atrim.toml`) | `7.09` | `7.36` | **FITTED**, one-knob drive-band re-trim |
+
+Values, classes and honest bars: `config_defaults_provenance.md` (the new
+`Ti_birth_ionization` entry) and `production_stance_provenance.md` (the `C_R`
+entry, rewritten). The stance file also gained an explicit
+`Ti_birth_ionization = "neutral"` line — a class-1 declaration of a
+physics-bearing selection that happens to equal the config default, which does
+not change any resolved config but does change the stance artifact.
+
+**What the birth change is.** One ionization event was booked twice and the
+two bookings only agreed at `Tn = 300 K`: the `En` side removes the local
+`(3/2) k Tn` per consumed atom while the `Ei` side added
+`(3/2) k T_birth` at the ion floor. Under the cathode neutral jet the
+source-region gas runs near 11.6 eV, so the pair was deleting **~9.7 kW at
+plateau** on the stance arm (9250 W bulk + 427 W beam, `ph_es1.h5`) — a live
+non-conservation inside the previous fixture, named nowhere. `"neutral"`
+closes it; the residual is now carried explicitly by the
+`ionization_birth_thermal_deficit_*_W_cm3` diagnostic rows, which read zero to
+roundoff here.
+
+**Delta discipline — what was proven before anything was recaptured.**
+Substituting the THREE declared config-surface changes back into the live tree
+(the default flip, the stance `C_R`, and the stance's new declaration line)
+reproduces the previously committed `config_snapshots.json` **bit-for-bit**,
+across all four config-complete driver cases (`production_golden`,
+`compare_sim1d_es1`, `run_m6_point_es1_sgp3649_defaults`,
+`run_mechanism_ladder_es1_defaults`) and the machine-readable default manifest.
+They are therefore provably its whole delta. `parameter_count` (252) and
+`flag_count` (48) are UNCHANGED — no key was added; only values moved.
+Independently, the incoming fixture's own sidecar diffed against the outgoing
+one shows exactly `C_R: 7.09 -> 7.36` and
+`Ti_birth_ionization: 'floor' -> 'neutral'` and nothing else, in either
+namespace. `config_snapshots.json` was regenerated in the same pass under that
+proof.
+
+*An intermediate run of the proof is worth recording because it caught
+something: reverting only the two VALUES left the `production_golden` case
+still differing, because the stance's new declaration line was itself a third
+change to the stance artifact. The proof was re-run with all three reverted and
+then matched. A delta proof that is allowed to pass with one of your own edits
+unaccounted for is not a proof.*
+
+**Capture evidence.** Recaptured twice from clean separate processes to
+temporary paths and compared BEFORE installing either: NPZ and JSON sidecar
+both byte-identical (`sha256` of the NPZ
+`99020956d804450388abc104519c236e6e69988a1cb3f37304c8fe3dafe6d2a4`, of the
+sidecar `1efa4e635bea0bc7efe5aa95659a9f2dbea687a845fbf5d95fc91381faa2dc7f`),
+and raw-bitwise identical over all three arrays (`y` and `time` at `uint64`,
+`phase` at raw bytes; 0 differing elements in each). 1006 s and 1004 s, run
+strictly serially per the serial-golden rule — but on CONTENDED lanes (other
+agents' gates were running), so those are upper bounds on the wall cost, not a
+clean-lane measurement. `--verify` prints:
+
+```
+baseline verify OK: saves=2626, exact=True, max_rel=0.000e+00, max_abs=0.000e+00, time_max_abs=0.000e+00 s (rtol=1.0e-09, atol=0.0e+00)
+```
+
+The outgoing fixture was NPZ
+`3e5120012a11ff88f4da5653ba4fdbb195136c00aa2fa1445bd955a3d33c3e15`
+(sidecar `f623cc860ad97ead24679ab8711baeecaed672d7d40e5144fd579d1025ae0cdb`;
+saves 2,628, steps 79,348).
+
+**What moved in the trajectory — JOINTLY, no single-key attribution.** Steps
+79,348 -> 76,631 (−3.42 %); saves 2,628 -> **2,626**; `final_time`
+2.626672e-02 -> 2.624039e-02 s (−0.10 %, about two 10 µs save bins). Phase
+census: `breakdown` 18 -> 16, everything else unchanged (9 `pre_breakdown`,
+2000 `main_discharge`, 600 `afterglow`, 1 `post_afterglow`).
+
+| summary scalar | old | new | change |
+|---|---|---|---|
+| `Te_max` | 20.844 eV | 20.422 eV | −2.03 % |
+| `Ti_max` | 7.9136 | 9.9170 | **+25.32 %** |
+| `n_max` | 2.50888e13 | 2.48883e13 | −0.80 % |
+| `n_min` | 8.41607e8 | 8.41592e8 | −0.00 % |
+| `nn_max` | 3.87819e13 | 3.98703e13 | +2.81 % |
+| `nn_min` | 1.01013e11 | 8.62161e10 | −14.65 % |
+| `neutral_inventory_relative_drift` | 1.19355 | 1.19215 | −0.12 % |
+| `total_particle_inventory_relative_drift` | 1.25934 | 1.25671 | −0.21 % |
+| `plasma_inventory_relative_drift` | 3413.4 | 3349.8 | −1.86 % |
+| `thermal_energy_relative_drift` | 2993.9 | 3016.5 | +0.76 % |
+
+`Te_min`/`Ti_min` sit on their floors and are unchanged; health stayed finite
+throughout.
+
+**The movement was DISCLOSED before the capture and is recorded, not
+adjudicated here.** `Ti_max` **+25.3 %** is the expected direction and the
+expected size: the birth change hands the ions the `(3/2) k Tn` the neutral gas
+gives up, and the ~26 % rise in source-region `Ti` measured on the campaign
+arms (5.32 -> 6.83 eV, cells 1–5, 10–20 ms mean, `ph_es1` -> `tbn2_es1`) is the
+same effect at the campaign mesh. `nn_min` falling 14.7 % and `nn_max` rising
+2.8 % is the neutral field keeping the energy it used to lose. Whether any of
+this is an improvement is not a question this fixture answers, and no such
+reading is offered here.
+
+**The old and new trajectories are not comparable point-by-point** — this is a
+configuration change, not a repair, and no bit-level comparison between them is
+meaningful.
 
 **2026-08-21 — the `heat_flux_limiter_f` RE-CUT (AUTHORIZED recapture).** A
 SINGLE config default moved; no code path, pin, run shape or driver changed.
