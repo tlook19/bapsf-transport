@@ -762,6 +762,34 @@ def _efold_time_ms(t_ms, y, floor=0.0):
     return -1.0 / slope if slope < 0.0 else np.nan
 
 
+def _decay_observability(tau_exp_ms, span_ms):
+    """Return ``(extrapolated, decay_frac)`` for a measured e-fold time.
+
+    An e-fold time is OBSERVED when ``tau_exp`` fits inside the fit window,
+    and EXTRAPOLATED when ``tau_exp`` exceeds the window span: the measured
+    signal fell by less than 1/e across the entire window, so the reported tau
+    is read off a slope, not off an observed e-folding. The criterion is the
+    window span itself -- there is no tunable constant in it, and none is to be
+    introduced.
+
+    ``decay_frac`` is ``1 - exp(-span/tau_exp)``, the fraction by which the
+    measured trace actually decayed across the window. It is a pure
+    measurement fact with no threshold in it: it reads ~0.0025 for a port whose
+    signal is flat and ~0.58 for one that visibly decays, whatever the fit
+    returns for tau.
+
+    A row whose ``tau_exp`` is NaN (``_efold_time_ms`` found too few good
+    samples, or no decay at all) is neither observed nor extrapolated: it
+    carries no measured e-fold time to classify, and the returns are
+    ``(False, nan)`` accordingly.
+    """
+    tau = float(tau_exp_ms)
+    span = float(span_ms)
+    if not np.isfinite(tau):
+        return False, np.nan
+    return bool(tau > span), float(1.0 - np.exp(-span / tau))
+
+
 # Stage (iii) fit window on the main-discharge clock [ms]. The discharge ends
 # at trigger + tau_discharge = 20 ms, so this is the first 1.5 ms OF THE
 # AFTERGLOW -- the early, transport-dominated decay that both the model and
@@ -874,6 +902,7 @@ def compare_decay(result, overlay, window_ms=DECAY_WINDOW_MS):
         )
         tau_model = _efold_time_ms(t_model_ms[model_window], proxy)
 
+        extrapolated, decay_frac_exp = _decay_observability(tau_exp, t1 - t0)
         rows.append(
             {
                 "port": int(ports[p]),
@@ -881,6 +910,8 @@ def compare_decay(result, overlay, window_ms=DECAY_WINDOW_MS):
                 "tau_exp_ms": tau_exp,
                 "tau_model_ms": tau_model,
                 "ratio": tau_model / tau_exp if np.isfinite(tau_exp) else np.nan,
+                "extrapolated": extrapolated,
+                "decay_frac_exp": decay_frac_exp,
             }
         )
     return rows, (t0, t1)
@@ -1676,21 +1707,58 @@ def _report_peak_current(peak):
 
 
 def _report_decay(rows, window):
+    span = float(window[1]) - float(window[0])
     print(
         f"\n--- stage (iii): Isat decay e-fold times, window "
         f"{window[0]:.1f}-{window[1]:.1f} ms ---"
     )
-    header = f"{'port':>6} {'z [cm]':>8} {'tau_model':>10} {'tau_exp':>9} {'ratio':>7}"
+    print(
+        f"  ('^' marks EXTRAPOLATED rows, where tau_exp exceeds the "
+        f"{span:.1f} ms window span:"
+    )
+    print("   the measured signal fell by less than 1/e across the ENTIRE window, so")
+    print("   its tau is read off a slope, not off an observed e-folding.  D_exp =")
+    print("   1 - exp(-span/tau_exp) is the fraction the measured trace actually")
+    print("   decayed inside the window -- a measurement fact with no threshold in it.")
+    print("   Both means below are printed; which one the campaign quotes is not")
+    print("   settled here.)")
+    header = (
+        f"{'port':>6} {'z [cm]':>8} {'tau_model':>10} {'tau_exp':>9} "
+        f"{'ratio':>7} {'D_exp [%]':>10}"
+    )
     print(header)
     print("-" * len(header))
     for r in rows:
+        mark = "^" if r["extrapolated"] else ""
+        # Min-width 1 keeps the unmarked rows' column widths identical to the
+        # marked ones, the way stage (ii) renders its semi-quantitative marks.
         print(
             f"{r['port']:>6} {r['z']:8.0f} {r['tau_model_ms']:9.2f}ms "
-            f"{r['tau_exp_ms']:8.2f}ms {r['ratio']:7.2f}"
+            f"{r['tau_exp_ms']:8.2f}ms {r['ratio']:7.2f} "
+            f"{100.0 * r['decay_frac_exp']:9.2f}{mark:<1}"
         )
     ratios = [r["ratio"] for r in rows if np.isfinite(r["ratio"])]
     if ratios:
         print(f"  mean tau_model/tau_exp: {np.mean(ratios):.2f}")
+        print(f"    all-port mean, over {len(ratios)} scored port(s)")
+    observed = [
+        r["ratio"] for r in rows
+        if np.isfinite(r["ratio"]) and not r["extrapolated"]
+    ]
+    if observed:
+        print(
+            f"  mean tau_model/tau_exp, OBSERVED ports only: "
+            f"{np.mean(observed):.2f}"
+        )
+        print(
+            f"    over {len(observed)} of {len(ratios)} scored port(s); "
+            f"{len(ratios) - len(observed)} excluded as extrapolated '^'"
+        )
+    elif ratios:
+        print(
+            "  mean tau_model/tau_exp, OBSERVED ports only: none -- every one "
+            f"of the {len(ratios)} scored port(s) is extrapolated '^'"
+        )
 
 
 def _report(label, rows, es=1):
