@@ -31,6 +31,51 @@ M_HE = m_He_cgs
 T_WALL_K = 300.0
 
 
+# ------------------------------------------------------------ g_eff thermal floor
+
+def ion_thermal_g_eff_floor_cm2_s2(Ti_eV, ion_mass_g=M_HE, ev_to_erg=EV):
+    """Return the ion thermal floor of ``g_eff^2`` [cm^2/s^2].
+
+        floor = 8 k Ti / (pi m)
+
+    ``Ti_eV`` is the ion temperature [eV] and may be any shape numpy
+    broadcasts; ``ion_mass_g`` [g] and ``ev_to_erg`` [erg/eV] default to this
+    module's helium constants. The result is non-negative for ``Ti_eV >= 0``
+    and nothing is raised: the temperature clamp belongs to the caller, and
+    every caller applies one before this call.
+
+    THE ONE DEFINITION of the floor, so that a transcription of it cannot
+    drift. Callers form the mean relative speed of a projectile against a
+    drifting ion Maxwellian as
+
+        g_eff^2 = |v - u_i|^2 + floor(Ti)
+
+    -- the standard interpolation between the drift-dominated and the
+    thermal-dominated limits -- and consume ``g_eff`` twice: as the rate's
+    relative speed in ``n_i sigma(E_rel) g_eff``, and through
+    ``E_rel = (1/2) mu g_eff^2`` as the Phelps cross-section argument.
+
+    The floor carries the mass of whichever collider is MAXWELLIAN, and in
+    every caller of this helper that is the IONS ALONE: the projectile's
+    velocity is resolved exactly -- a velocity-grid bin, a monoenergetic beam
+    atom, or a tracked MC particle -- and is already inside ``|v - u_i|^2``,
+    so the drift-free limit of ``<g>`` is the mean speed of the ion Maxwellian
+    by itself, ``sqrt(8 k Ti / (pi m))``. The reduced-mass form
+    ``8 k Ti / (pi mu) = 16 k Ti / (pi m)`` is the TWO-Maxwellian expression
+    -- ``mu`` is what folds two INDEPENDENT thermal spreads into one -- and
+    used against a resolved projectile it counts a thermal spread that does
+    not exist, inflating ``g_eff`` by up to ``sqrt(2)``. The reduced mass DOES
+    belong in ``E_rel``: that is two-body kinematics, unaffected by which
+    species is Maxwellian.
+
+    ``sqrt(floor)`` at ``Ti_eV = 1`` with this module's ``M_HE`` is
+    783482.7390046517 cm/s, and 1108011.9... cm/s under the reduced-mass
+    form; the value is pinned by the ``kinetic-geff-thermal-floor`` case of
+    ``scripts/smoke_sim1d.py``.
+    """
+    return 8.0 * Ti_eV * ev_to_erg / (np.pi * ion_mass_g)
+
+
 # ---------------------------------------------------------------- velocity grid
 
 def stretched_axis(vmax, n, v_fine):

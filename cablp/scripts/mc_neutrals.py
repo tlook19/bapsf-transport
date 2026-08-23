@@ -70,6 +70,9 @@ from cablp.solvers._sim1d.core.geometry import (
     absorbing_live_cells_by_role,
     build_geometry,
 )
+from cablp.solvers._sim1d.physics.kinetic_neutrals import (
+    ion_thermal_g_eff_floor_cm2_s2,
+)
 from cablp.solvers._sim1d.physics.neutrals import (
     gas_puff_rate_profile,
     puff_particles_per_s,
@@ -1349,7 +1352,7 @@ def run_fast_reflected(bg, n_particles, rng, r_e=0.2, r_n=0.5, max_iter=20000):
     # the two-Maxwellian reduced mass mu = m/2. (The reduced mass in E_rel is
     # two-body kinematics and does belong there.)
     Ti_safe = np.maximum(np.asarray(bg["Ti"], dtype=float), 1e-6)
-    th2 = 8.0 * Ti_safe * EV / (np.pi * M_HE)
+    th2 = ion_thermal_g_eff_floor_cm2_s2(Ti_safe)
 
     # Fast-lobe fidelity ratio, drift-free per cell: g_eff/v_fast = 1 is the
     # cold-ion fast limit; a material departure means the ion thermal spread

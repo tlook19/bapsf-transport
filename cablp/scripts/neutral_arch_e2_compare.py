@@ -117,6 +117,9 @@ from cablp.solvers._sim1d.physics.kinetic_dvm import (  # noqa: E402
     ELASTIC_BGK_MOMENTUM_FACTOR,
     TransientDVM,
 )
+from cablp.solvers._sim1d.physics.kinetic_neutrals import (  # noqa: E402
+    ion_thermal_g_eff_floor_cm2_s2,
+)
 
 # Return-spectrum energy bin edges [eV]. Spans the 300 K wall population
 # (mean cosine-flux energy 2 kT = 0.0517 eV) through the CX-relayed tail at the
@@ -620,7 +623,7 @@ def collision_majorants(shared, mode, dvm_grid_vmax):
         w = gg
         g_eff = np.sqrt(
             w[None, :] ** 2
-            + 8.0 * Ti[:, None] * EV / (np.pi * M_HE)
+            + ion_thermal_g_eff_floor_cm2_s2(Ti[:, None])
         )
         Ee = np.maximum(0.25 * M_HE * g_eff**2 / EV, 1e-9)
         rate = (
@@ -628,7 +631,7 @@ def collision_majorants(shared, mode, dvm_grid_vmax):
             + ELASTIC_BGK_MOMENTUM_FACTOR * phelps_he_isotropic_cm2(Ee)
         ) * g_eff
         # w = 0 is the low end of the interpolation and can dominate; include it
-        g0 = np.sqrt(8.0 * Ti * EV / (np.pi * M_HE))
+        g0 = np.sqrt(ion_thermal_g_eff_floor_cm2_s2(Ti))
         E0 = np.maximum(0.25 * M_HE * g0**2 / EV, 1e-9)
         rate0 = (
             phelps_he_backscatter_cm2(E0)
@@ -1093,7 +1096,7 @@ class TransientMC:
             # carries the FULL ion mass, not the two-Maxwellian reduced mass
             # mu = m/2. (The reduced mass in E below is two-body kinematics
             # and does belong there.)
-            g_eff = np.sqrt(w2 + 8.0 * Ti * EV / (np.pi * M_HE))
+            g_eff = np.sqrt(w2 + ion_thermal_g_eff_floor_cm2_s2(Ti))
             E = np.maximum(0.25 * M_HE * g_eff**2 / EV, 1e-9)
             nu_cx = n_i * phelps_he_backscatter_cm2(E) * g_eff
             nu_el = (

@@ -102,6 +102,7 @@ from .kinetic_neutrals import (
     T_WALL_K,
     VGrid,
     annulus_chord_classes,
+    ion_thermal_g_eff_floor_cm2_s2,
 )
 from .neutrals import neutral_zone_volumes
 
@@ -670,6 +671,18 @@ class TransientDVM:
         ``sigma_iso ~ E^-1/2`` makes ``sigma_iso g_eff`` independent of
         ``g_eff``.
 
+        Two properties of the interpolation itself, so that it is not read
+        as the exact average. (i) ``sqrt(w^2 + c_bar^2)`` is an UPPER bound
+        on the exact single-neutral mean relative speed ``<|v - u_i|>`` over
+        the ion Maxwellian, by at most ``+2.5 %``; the excess vanishes in
+        both limits and peaks near ``w/a ~ 1.2-1.5``, with
+        ``a = sqrt(2 k T_i / m_He)`` and ``w = |v - u_i|``. (ii) The cross
+        sections are evaluated at the energy OF THE MEAN SPEED,
+        ``E_rel = (1/2) mu g_eff^2``, which in the drift-free limit is
+        ``0.64 k T_i`` -- NOT at the rate-weighted energy of the average
+        ``<sigma_b g>``, which sits near ``k T_i``. For a ``sigma_b``
+        monotone in E that single-energy evaluation is one-sided as well.
+
         Charge exchange uses the Phelps He+/He backscatter cross section
         and polarization-elastic scattering the Phelps isotropic cross
         section.
@@ -703,7 +716,7 @@ class TransientDVM:
         w2 = (g.VZ[None, :, :] - u) ** 2 + (g.VP**2)[None, :, :]
         # Only the ions are Maxwellian; the neutral velocity is resolved and
         # is already in w2, so the floor carries m_He, NOT the reduced mass.
-        g_eff = np.sqrt(w2 + 8.0 * Ti * EV / (np.pi * M_HE))
+        g_eff = np.sqrt(w2 + ion_thermal_g_eff_floor_cm2_s2(Ti))
         E_rel = np.maximum(0.25 * M_HE * g_eff**2 / EV, 1e-9)
         nu_cx = n_i * phelps_he_backscatter_cm2(E_rel) * g_eff
         if self.elastic_model == "off":

@@ -61,6 +61,19 @@ THREE ATTENUATION CHANNELS, per unit axial length:
                 unaffected by which species is Maxwellian. The two masses are
                 not the same choice and must not be reasoned about together.
 
+                TWO PROPERTIES OF THE INTERPOLATION, so that it is not read
+                as the exact average. (i) ``sqrt(w^2 + c_bar^2)`` is an UPPER
+                bound on the exact mean relative speed ``<|v_fast - v_i|>``
+                over the ion Maxwellian, by at most ``+2.5 %``; the excess
+                vanishes in both limits and peaks near ``w/a ~ 1.2-1.5``,
+                with ``a = sqrt(2 k Ti/m)`` and ``w = |v_fast - u_i|``.
+                (ii) ``sigma_b`` is evaluated at the energy OF THE MEAN
+                SPEED, ``E_rel = (1/2) mu g_eff^2``, which in the drift-free
+                limit is ``0.64 k Ti`` -- NOT at the rate-weighted energy of
+                the average ``<sigma_b g>``, which sits near ``k Ti``. For a
+                ``sigma_b`` monotone in E that single-energy evaluation is
+                one-sided as well.
+
                 :meth:`..kinetic_dvm.TransientDVM.collision_frequencies`
                 applies the same convention for the same reason (it resolves
                 the neutral velocity on a grid, so that velocity is likewise
@@ -173,6 +186,7 @@ from ..core.state import (
     derive_state,
     neutral_energy_floor,
 )
+from .kinetic_neutrals import ion_thermal_g_eff_floor_cm2_s2
 from .sources import cathode_jet_backscatter_speed, neutral_wind_velocity
 
 
@@ -275,7 +289,9 @@ def carrier_attenuation_coefficients(
     # velocity is already exact in w, so the thermal floor carries the FULL
     # ion mass, not the two-Maxwellian reduced mass mu = m/2. (The reduced
     # mass below in E_rel is two-body kinematics and does belong there.)
-    g_eff = np.sqrt(w**2 + 8.0 * Ti * ev_to_erg / (np.pi * ion_mass_g))
+    g_eff = np.sqrt(
+        w**2 + ion_thermal_g_eff_floor_cm2_s2(Ti, ion_mass_g, ev_to_erg)
+    )
     E_rel = np.maximum(
         0.25 * ion_mass_g * g_eff**2 / ev_to_erg, CARRIER_E_REL_FLOOR_EV
     )
