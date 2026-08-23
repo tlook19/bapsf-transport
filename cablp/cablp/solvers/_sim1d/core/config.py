@@ -518,8 +518,9 @@ def neutral_source_defaults():
         # separate quantities rather than one lumped constant.
         "gas_puff_delivery_fraction": 1.0,
         "pump_elbow_conductance_lps": None,
-        # Physical Lambertian pipe source ~10 cm in front of the anode; its
-        # centre and width are geometry-derived, not tunable.
+        # Physical Lambertian pipe source at the mid-plane puff ports of the
+        # measured G1 machine geometry; its centre is measured and its width
+        # is geometry-derived, and neither is tunable.
         "gas_puff_profile": "cosine_pipe",
         # The pipe position, in machine coordinates so it does not move with nx.
         "gas_puff_z_cm": 86.3,
