@@ -1,10 +1,19 @@
 # sim1d Model Equations
 
-The five fields evolved by `LAPDSim1D` written in **non-conservative,
+The fields evolved by `LAPDSim1D` written in **non-conservative,
 convective-derivative (Braginskii material-derivative) form** — the continuum
 equations from which the code's conservative finite-volume scheme (see
 [`NUMERICS.md`](NUMERICS.md)) is derived. Source/sink terms and signs mirror the
 implementation in `physics/`.
+
+The base set is the **five fields** $n$, $n_n$, $M$, $E_e$, $E_i$ that the
+equations below are written for. At the current package defaults the state
+carries three more rows: the neutral wind momentum `M_n` (`neutral_momentum`),
+the annulus neutral density `nn_a` (`neutral_two_zone`) and the neutral
+thermal energy `En` (`neutral_energy`) — all three **on by default**, so eight
+rows are populated. The annulus momentum `M_n_a` is the one that is genuinely
+optional: it appears only under `neutral_momentum_radial != "uniform"`, which
+is not the default. Each of the three carries its own section below.
 
 ## Notation
 
@@ -108,10 +117,20 @@ the expansion (see *Prescribed flux-tube and vessel geometry → Mirror force*).
 Parallel acceleration through an end-solenoid flare therefore follows from the
 prescribed area profile rather than from a separately imposed force law.
 
-- $-m_i\mathbf{u}\,S_{iz}$ — **ion-loading drag**: neutrals ionize at rest, so
-  newly created cold ions mass-load and slow the flow. (The recombination and
-  wall-loss momentum sinks cancel identically against their continuity
-  contributions when moved to convective form.)
+- $-m_i\mathbf{u}\,S_{iz}$ — **ion-loading drag**. In the base form written
+  above the neutrals ionize at rest, so newly created cold ions mass-load and
+  slow the flow. **The shipped package does not ionize them at rest.** Whenever
+  the state carries an evolved neutral wind — `neutral_momentum`, **on by
+  default**, is the selector that populates `M_n` — the ionization birth
+  momentum is $m_i\mathbf{u}_n S_{iz}$, sampled at the local wind
+  (`physics/reactions.py`); the term is then
+  $-m_i(\mathbf{u}-\mathbf{u}_n)\,S_{iz}$ and ion loading drags the flow
+  toward $\mathbf{u}_n$ rather than toward rest. With `neutral_momentum` off
+  the birth momentum is identically zero and the base form stands. The
+  selector `ionization_birth_energy_model` gates the birth *energy* moments,
+  not this momentum sampling. (The recombination and wall-loss momentum sinks
+  cancel identically against their continuity contributions when moved to
+  convective form.)
 - $-m_i\,\nu_{in}\,n\,\mathbf{u}$ — **ion-neutral collisional drag** (friction on
   the flow from the neutral background), with momentum-transfer collision
   frequency
@@ -220,11 +239,21 @@ densities are expanded back into material-derivative form:
 
 Two numerical consequences follow directly. First, convective transport and
 compression cannot be tuned apart: they share one flux and therefore the same
-Rusanov numerical diffusion $\sim\tfrac12 a_{\max}\Delta z$. Second, a reflecting
-wall zeroes the convective half only — the closed face carries
+Rusanov numerical diffusion $\sim\tfrac12 a_{\max}\Delta z$. Second, a closed
+face zeroes the convective half only — it carries
 $F_n = F_{Ee} = F_{Ei} = 0$ but keeps $F_M = p_{\text{live}}$ — the discrete
 statement of "no flux through the wall, but the wall still pushes back"
-(`flux._apply_plasma_walls`).
+(`flux._apply_plasma_walls`). That condition holds on every face with
+`plasma_open` False, which under `resolved_boundaries` is not the pair of
+domain ends but the whole set of faces bounding the plasma inside the neutral
+domain. The plasma-terminating (absorbing) subset is the exception: with
+`characteristic_boundary` — **on by default** — the one-sided ghost-cell Bohm
+outflow supplies the particle, momentum and energy flux together with its own
+pressure term, so the advective flux there must carry nothing at all, $F_M$
+included, or the wall momentum is counted twice. With that selector off the
+closed-wall form above stands, which is the 0D legacy behaviour. (The same
+carve-out is stated under *R3.1 -- characteristic ghost-cell Bohm outflow*
+below.)
 
 ## Reductions relative to full 3D Braginskii
 
@@ -264,20 +293,34 @@ choice; the implementation is recoverable from git history.
 
 ## A9 classical electron heat flux — RETAIN + limiter gate (audit 2026-07-23)
 
-The parallel electron conduction above uses the classical Spitzer–Härm
-$\kappa_{\parallel e} \propto T_e^{5/2}$ closure, and the whole-model audit
-retained it **only under a standing gate**: at resolved gap faces the
-unbounded Spitzer–Härm flux reaches 1.7–3.3× $n\,T_e\,v_{th,e}$ — above the
-free-streaming scale a physically saturated flux must respect (electron mean
-free path medians ~23–24 cm after settling, p95 ~42 cm, against
-comparable-scale gradients). **Time-integration stability does not make a
-constitutive law valid**: the implicit TR-BDF2 substep being well tested is
-not evidence for the closure. The gate: any port-level or
-boundary-power-transfer claim that leans on conduction must carry a
-nonlocal/flux-limited closure **bracket**. The limited arm exists as the
-`electron_heat_flux_limit` flag with `heat_flux_limiter_f` (free-streaming
-fraction, $q_{sat} = f\,n\,T_e\,v_{th,e}$) and `heat_flux_limiter_exponent`
-— see `core/config.py` for the authoritative semantics. References: the
+The parallel electron conduction is written above as the classical
+Spitzer–Härm $\kappa_{\parallel e} \propto T_e^{5/2}$ closure, and the
+whole-model audit retained that closure **only under a standing gate**: at
+resolved gap faces the unbounded Spitzer–Härm flux reaches
+1.7–3.3× $n\,T_e\,v_{th,e}$ — above the free-streaming scale a physically
+saturated flux must respect (electron mean free path medians ~23–24 cm after
+settling, p95 ~42 cm, against comparable-scale gradients). **Time-integration
+stability does not make a constitutive law valid**: the implicit TR-BDF2
+substep being well tested is not evidence for the closure.
+
+**What the package ships is the LIMITED form.** `electron_heat_flux_limit` is
+**on by default**, so the shipped electron conduction is flux-limited
+Spitzer–Härm: $\kappa_e$ is scaled per cell by the harmonic limiter
+$\lambda = q_{sat}/(q_{sat}+q_{SH})$ against the free-streaming ceiling
+$q_{sat} = f\,n\,T_e\,v_{th,e}$ ($f$ = `heat_flux_limiter_f`, with
+`heat_flux_limiter_exponent`), in both the explicit and the implicit path
+(`physics/conduction.py`; `core/config.py` holds the authoritative semantics).
+The unlimited local law is the `electron_heat_flux_limit=False` arm. The
+shipped $f$ is **BOXED (literature), not fitted**, and carries a bracket of
+record; its value, its class and that bracket live in
+`core/config_defaults_provenance.md` and
+`scripts/production_stance_provenance.md`, which are the authority for them.
+The values $f=1$ and $f=0.1$ that appear in the A9 engagement probe are the
+declared **arms of that closure-family bracket**, never the stance.
+
+The gate survives in the form the shipped closure makes useful: any
+port-level or boundary-power-transfer claim that leans on conduction must
+state the limiter it ran under and carry its **bracket**. References: the
 harmonic blend is Malone, McCrory & Morse, PRL 34 (1975) 721 (equivalently
 Fundamenski, PPCF 47 (2005) R163, eq. 10a); the saturated-flux ceiling it
 rides on is Cowie & McKee, ApJ 211 (1977) 135, eq. (7), who switch abruptly
@@ -293,8 +336,10 @@ boundary. Plasma-dead plenum/obstruction rows are invariant,
 plasma-coupled source rows and diagnostic reductions are zero there, timestep
 bounds exclude them, and a closed internal face takes velocity/pressure only
 from its live side. Pure neutral transport remains active in those volumes.
-The unchanged checkpoint golden explicitly pins the historical selector-off
-path and remains bit-exact; it is a regression anchor, not the live stance.
+`active_plasma_topology` has never been `False` in the configuration's
+history, so there is no historical selector-off path for a fixture to pin:
+the live golden-at-stance fixture carries it on, as every configuration of
+record has.
 
 The repaired startup defaults are `Te0=0.21 eV` and `Ti0=0.026 eV`, each
 strictly above its own numerical floor (`Te_floor=0.1 eV`,
@@ -303,9 +348,11 @@ ADF11 lower edge (`0.200092... eV`). The ion seed is a numerical margin, not a
 neutral temperature claim; the model still separately uses `Tn_K=300 K` and the
 audited `Tn_fit=0.1 eV` collision temperature.
 
-Optional neutral states use their actual packed layout throughout evidence:
-five rows for `(n, nn, M, Ee, Ei)`, then optional `M_n`, `nn_a`, `M_n_a`, and
-`En`.
+Neutral states use their actual packed layout throughout evidence: five rows
+for `(n, nn, M, Ee, Ei)`, then the flag-gated `M_n`, `nn_a`, `M_n_a` and `En`
+in introduction order. `M_n`, `nn_a` and `En` are **on by default**
+(`neutral_momentum`, `neutral_two_zone`, `neutral_energy`); `M_n_a` is off by
+default, needing `neutral_momentum_radial != "uniform"`.
 For two-zone runs the column and annulus inventories are
 `nn*V_col + nn_a*V_ann`, with `V_col=V_p` and `V_ann=V_m-V_p`; `nn*V_m` is
 never reported as a two-zone inventory. The same volume split applies to the
@@ -574,10 +621,17 @@ double-count. Without an evolved neutral energy the neutral-side collisional
 energy is dropped (as before); with the `neutral_energy` flag it is booked, and
 the CX share of it is re-routed -- see the two-channel section below.
 
-**A8 (neutral temperature).** The single cold-gas $T_n$ is the 300 K feed/wall
-temperature (`Tn_K`), used consistently in both $(T_n-T_i)$ and $T_\text{eff}$; the
-legacy `Tn_fit`$=0.1$ eV is not consulted on this path, ending the term-by-term
-$T_{n,K}/T_{n,\text{fit}}$ mix.
+**A8 (neutral temperature).** ONE $T_n$ is used consistently in both
+$(T_n-T_i)$ and $T_\text{eff}$; the legacy `Tn_fit`$=0.1$ eV is not consulted on
+this path, ending the term-by-term $T_{n,K}/T_{n,\text{fit}}$ mix. Which $T_n$
+that is depends on `neutral_energy` (**on by default**): with it on the
+operator reads the PER-CELL field value $T_n = \tfrac23 E_n/(n_n k)$
+(`sources.neutral_temperature_eV`, called once and passed to both places);
+with it off it reads the single cold-gas scalar `Tn_K`. `Tn_K` keeps three
+other jobs either way — the feed/wall temperature, the `En` floor, and the
+frozen-conductance reference under `neutral_knudsen_temperature="frozen"` —
+so at package defaults it is not "the" neutral temperature this operator
+sees.
 
 Presence-gated: when on, the four legacy ion-neutral terms return zero and this
 single term runs; when off it is a strict no-op (golden bit-exact). He-only (loud
@@ -605,12 +659,18 @@ population's (much larger) partial pressure must never appear as a force on
 the cold fluid.
 
 **Regime limit (disclosed).** That separation belongs to the depleted column,
-not to the machine. At FILL density it does not hold: $n_n \approx 2\times
-10^{13}\,\mathrm{cm^{-3}}$ gives a He--He momentum-transfer mean free path of
-$\approx 24.5$ cm against $R_p = 15$ cm, i.e. $\mathrm{mfp}/R_p \approx 1.6$ --
-the same order, not orders of magnitude. Wherever the column density stays
+not to the machine. At FILL density it does not hold. The He--He
+mean free path is taken in the standard self-collision convention
+$\lambda_{nn} = 1/(\sqrt2\,n_n\sigma_{mt})$ -- the $\sqrt2$ is the relative-speed
+factor for a gas colliding with itself, and $\sigma_{mt}$ is the
+$\Omega^{(1,1)}$-derived MOMENTUM-TRANSFER cross section at 300 K, a DERIVED
+(literature-boxed) quantity and not a hard-sphere size. On that convention
+$n_n \approx 2\times 10^{13}\,\mathrm{cm^{-3}}$ gives
+$\lambda_{nn} \approx 28$ cm against the shipped plasma radius `Rp`
+($\approx 18.4$ cm), i.e. $\lambda_{nn}/R_p \approx 1.5$ -- the same order,
+not orders of magnitude. Wherever the column density stays
 near fill (before breakdown, and in any cell the discharge never depletes) the
-hot channel carries an un-modeled elastic leak of $O(R_p/\mathrm{mfp})$ per
+hot channel carries an un-modeled elastic leak of $O(R_p/\lambda_{nn})$ per
 crossing, moving hot momentum and energy into the cold field. The sign is
 hot-forces-cold: the true cold fluid would be pushed and heated slightly more
 than the decoupled treatment allows. This bounds the closure's validity range;
@@ -646,6 +706,20 @@ column boundary (mass moved axially, the CX-ballistic **erosion** that relieves
 an axial pile; energy left on the wall), in re-CX (momentum and energy handed
 to the ions where the flight got to -- the nonlocal CX-recycling channel), or
 ionized in flight (a plasma source there).
+
+**Which surfaces count as a boundary** (`neutral_hot_internal_wall`, **on by
+default**). The two global end planes are not the only surfaces a flight can
+hit. The plasma domain is bounded INSIDE the neutral domain, so wherever a
+plasma-dead cell abuts a live one there is a closed face -- the cathode disc
+against its plenum is the canonical one, and the plasma-terminating
+(absorbing) faces are a refinement of the same set. With the flag on every
+such face is a wall for the flight, on exactly the treatment the end planes
+already get: the flight is clipped to the wall plane and the atom lands in the
+cell on its OWN side of it. With it off, a flight launched in a live cell next
+to the cathode disc sails over the plenum and lands there, and the
+plasma-topology mask that the hot channel's rows are subject to then deletes
+the deposit -- so those atoms leave the inventory without a surface having
+absorbed them.
 
 **What closes and what does not.** Particles, momentum, and energy close across
 ion + cold + hot to machine precision, with the wall as the ONLY named leak:
@@ -1096,11 +1170,20 @@ for a window of zero width.
 here.** *Zero net momentum*: the momentum rows are identically zero, so the gas
 arrives at rest in the lab frame. Where a neutral wind is evolved this DILUTES
 it -- $u_n = M_n/(m_n n_n)$ falls as $n_n$ rises at fixed $M_n$ -- which is the
-physical content of injecting at rest, not a separate drag. *Temperature*: the
-moment model carries one neutral temperature, `Tn_K`, and no neutral energy
-equation, so injected particles join that single cold-gas population exactly as
-puffed particles do. There is deliberately no probe temperature key; a distinct
-injection temperature would be a new field, not a new parameter.
+physical content of injecting at rest, not a separate drag. *Temperature*:
+under `neutral_energy` (**on by default**) the injected particles carry the
+wall/feed-temperature `En` booking, at the same energy per particle as the
+puff. The probe's `nn` row does not carry an `En` row of its own; the central
+booking table in `solver.py` (`_NEUTRAL_ENERGY_TERM_BOOKING`, which files
+`neutral_probe_source` under `"wall"`) attaches one to every term that does
+not own its own, at $\tfrac32 k T_\text{wall}$ per particle -- the same energy
+the gas puff books inline through `core/state.py`'s `neutral_energy_floor`.
+With
+`neutral_energy` off there is no neutral energy equation at all and the
+injected particles simply join the single cold-gas population at `Tn_K`,
+exactly as puffed particles do. Either way there is deliberately no probe
+temperature key; a distinct injection temperature would be a new field, not a
+new parameter.
 
 **Where it is live.** Wherever the explicit RHS is evaluated in a plasma run.
 It is identically zero -- and recorded as zero, so the saved term structure is
