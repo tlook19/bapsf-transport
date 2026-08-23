@@ -336,10 +336,12 @@ boundary. Plasma-dead plenum/obstruction rows are invariant,
 plasma-coupled source rows and diagnostic reductions are zero there, timestep
 bounds exclude them, and a closed internal face takes velocity/pressure only
 from its live side. Pure neutral transport remains active in those volumes.
-`active_plasma_topology` has never been `False` in the configuration's
-history, so there is no historical selector-off path for a fixture to pin:
-the live golden-at-stance fixture carries it on, as every configuration of
-record has.
+The R1-era checkpoint golden pinned `active_plasma_topology` off explicitly
+through the baseline driver's override table so the checkpoint stayed
+reproducible; that override was dropped at the R2b re-anchor, and the live
+golden-at-stance fixture runs the selector on, as `default_config()` always
+has. The retired checkpoint is reproducible only at the
+`pre-refactor-2026-08-20` anchor.
 
 The repaired startup defaults are `Te0=0.21 eV` and `Ti0=0.026 eV`, each
 strictly above its own numerical floor (`Te_floor=0.1 eV`,

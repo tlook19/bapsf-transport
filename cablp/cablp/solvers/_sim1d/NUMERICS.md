@@ -409,9 +409,12 @@ five-/six-/seven-/eight-row trajectories have an exactly zero ledger.
 
 The repaired live stance selects raw-stage validation. Its resolved-source
 timestep candidate prevents the audited launch candidate from crossing a
-floor, while raw rejection remains the backstop. The unchanged checkpoint
-golden explicitly pins the historical selector-off path and remains bit-exact;
-no baseline was captured or updated.
+floor, while raw rejection remains the backstop. The R1-era checkpoint golden
+pinned `raw_stage_validation` off explicitly through the baseline driver's
+override table so the checkpoint stayed reproducible; that override was
+dropped at the R2b re-anchor, and the live golden-at-stance fixture runs the
+selector on, as `default_config()` always has. The retired checkpoint is
+reproducible only at the `pre-refactor-2026-08-20` anchor.
 
 ## Output
 
