@@ -37,9 +37,18 @@ equations these schemes discretize, see [`MODEL.md`](MODEL.md).
 - **Plasma advection** (`physics/flux.py`): a **Rusanov / local Lax–Friedrichs**
   flux at each interior face,
   `F = ½(F_L + F_R) − ½·a_max·(U_R − U_L)`,
-  with `a_max` from the local ion sound speed. External faces are
-  **closed/reflecting** (no particle or thermal-energy flux) — the 0D boundary
-  behavior.
+  with `a_max` from the local ion sound speed. Every face with `plasma_open`
+  False is **closed** (`flux._apply_plasma_walls`): it carries no particle or
+  thermal-energy flux and keeps the live cell's pressure as its momentum flux
+  — the 0D closed-wall behavior. Under `resolved_boundaries` that closed set
+  is not the two domain ends but every face bounding the plasma inside the
+  neutral domain. At the plasma-terminating (absorbing) subset the treatment
+  depends on `characteristic_boundary` (**on by default**): with it on the
+  advective flux carries NOTHING there, momentum included, because the
+  one-sided ghost-cell Bohm outflow (`sources.characteristic_boundary_rhs`)
+  supplies the particle, momentum and energy flux together with its own
+  pressure term and the wall pressure on top would double-count; with it off
+  the closed-wall form above stands, which is the 0D legacy behaviour.
 - **Front filling** (optional): a sonic-relaxation "front-filling" face flux
   (`front_filling_fluxes`, `alpha_front`) models plasma filling into unfilled
   cells, added alongside the Rusanov flux.
@@ -111,7 +120,9 @@ Local (cell-wise) RHS contributions, all in `physics/`:
 
 ## Time integration
 
-- **Explicit path** (default, `core/integrator.py`): a **two-stage strong
+- **Explicit path** (`core/integrator.py`) — the whole step only when
+  `implicit_heat_conduction` is off; otherwise it is operator `A` of the
+  default operator-split path below. A **two-stage strong
   stability preserving Runge–Kutta (SSPRK2 / Heun)** step,
   `y¹ = floor(y⁰ + Δt·L(tⁿ, y⁰))`,
   `yⁿ⁺¹ = floor(½y⁰ + ½(y¹ + Δt·L(tⁿ+Δt, y¹)))`,
@@ -120,8 +131,10 @@ Local (cell-wise) RHS contributions, all in `physics/`:
   forcing such as the gas-puff schedule. `ssprk2_step` freezes the forcing at
   the step start when its `time` argument is omitted, which is only
   first-order accurate in that forcing.
-- **Operator-split path** (optional, `implicit_heat_conduction` flag /
-  `--operator-split`): an explicit SSPRK2 step over all **non-heat** terms
+- **Operator-split path** (**the default**: `implicit_heat_conduction` is on
+  by default and the live golden-at-stance fixture runs it; also reachable
+  from the CLI as `--operator-split`): an explicit SSPRK2 step over all
+  **non-heat** terms
   (operator `A`) composed with an implicit heat-conduction substep
   (`implicit_heat_conduction_step`, operator `B`) solved per species as a
   tridiagonal system via `scipy.linalg.solve_banded`. This removes the stiff
@@ -154,9 +167,12 @@ Local (cell-wise) RHS contributions, all in `physics/`:
   `heat_picard_iterations=0` is the historical FIRST-order package; the three
   are independent first-order error terms, so falling back on any ONE of them
   caps the whole step at first order. The live golden-at-stance fixture is
-  captured at the package defaults — its JSON sidecar
-  (`scripts/baselines/production_discharge.json`) records `tr_bdf2`, `"strang"`
-  and `heat_picard_iterations=2`.
+  captured at the **stance of record** — `default_config()` plus the committed
+  `scripts/stances/g1atrim.toml` (minus that stance's mesh-sized package) plus
+  `nx = 60` — not at the package defaults; the three time-integration keys its
+  JSON sidecar (`scripts/baselines/production_discharge.json`) records,
+  `tr_bdf2`, `"strang"` and `heat_picard_iterations=2`, ARE the package
+  defaults, and the sidecar is the authority for what the fixture ran.
 
   The explicit half is assembled from `conductive_face_flux` /
   `flux_divergence_rhs`, which is exactly `−K·Tⁿ` built from the same face
@@ -393,9 +409,12 @@ five-/six-/seven-/eight-row trajectories have an exactly zero ledger.
 
 The repaired live stance selects raw-stage validation. Its resolved-source
 timestep candidate prevents the audited launch candidate from crossing a
-floor, while raw rejection remains the backstop. The unchanged checkpoint
-golden explicitly pins the historical selector-off path and remains bit-exact;
-no baseline was captured or updated.
+floor, while raw rejection remains the backstop. The R1-era checkpoint golden
+pinned `raw_stage_validation` off explicitly through the baseline driver's
+override table so the checkpoint stayed reproducible; that override was
+dropped at the R2b re-anchor, and the live golden-at-stance fixture runs the
+selector on, as `default_config()` always has. The retired checkpoint is
+reproducible only at the `pre-refactor-2026-08-20` anchor.
 
 ## Output
 
@@ -508,8 +527,10 @@ Retained as a **default-off diagnostic**; sequential stays production.
 
 ## R5.2 electron heat-flux limiter (default on, audit A9)
 
-The default electron conduction is classical Spitzer–Härm (`q = -κ_e ∇Te`), a
-local law valid only where `λ_mfp ≪ L_T`. A9 measured `q_SH` reaching 1.7–3.3×
+The UNLIMITED electron conduction is classical Spitzer–Härm (`q = -κ_e ∇Te`),
+a local law valid only where `λ_mfp ≪ L_T`. That is the arm
+`electron_heat_flux_limit=False` selects; it is not what the package ships.
+A9 measured `q_SH` reaching 1.7–3.3×
 (static probe: ~4× median) the free-streaming ceiling `n·Te·v_the` at the resolved
 gap faces — the constitutive law leaving its validity domain. The
 `electron_heat_flux_limit` flag — default-off as introduced at R5.2, **on by
@@ -522,9 +543,16 @@ steep and recovers Spitzer where they are shallow (`flux_limited_electron_conduc
 applied in both the explicit and implicit paths at the frozen incoming `Te`, so the
 operator stays a conservative flux divergence). Identities
 (`verify_sim1d_r5_heatflux.py`): Spitzer limit at large `f`, saturation cap
-`κ_eff|∇Te| ≤ q_sat`, closed-domain energy conservation. Default off at R5.2
-(bit-exact against the R5-era checkpoint golden); a declared A9 closure-family
-bracket — `f=1` targets only the ~gap
+`κ_eff|∇Te| ≤ q_sat`, closed-domain energy conservation. Default off as
+introduced at R5.2 and bit-exact there against the R5-era checkpoint golden;
+**on by default in the current package**, so the live golden-at-stance fixture
+runs the limited form. The shipped `f` is **BOXED (literature), not fitted**,
+and carries a bracket of record; its value, class and bracket live in
+`core/config_defaults_provenance.md` and
+`scripts/production_stance_provenance.md`, which are the authority — this
+document names the flag, not the number. The two `f` values that appear in the
+static A9 engagement probe are declared **arms of the closure-family bracket**,
+never the stance: `f=1` targets only the ~gap
 cells (flux → ~42%), `f=0.1` suppresses conduction globally. The static
 engagement bracket is `probe_sim1d_r5_heatflux_bracket.py`; the dynamic
 scored-observable bracket (runs at each `f`) is deferred.

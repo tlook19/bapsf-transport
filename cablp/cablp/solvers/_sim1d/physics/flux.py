@@ -200,8 +200,9 @@ def _apply_plasma_walls(
         # boundary_rhs), which supplies the particle, momentum, and energy flux
         # AND its own pressure term ``M_g u_g + p_g``. So the advective flux must
         # carry NOTHING here -- keeping the reflecting closed-wall pressure
-        # ``pressure[live]`` on top would double-count the wall momentum. Default
-        # off => the closed-wall condition above stands and the golden is exact.
+        # ``pressure[live]`` on top would double-count the wall momentum. This
+        # selector is ON by default in the current package; with it off the
+        # closed-wall condition above stands.
         absorbing = np.asarray(
             getattr(geometry, "plasma_absorbing", np.zeros(0)), dtype=bool
         )
