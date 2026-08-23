@@ -153,10 +153,24 @@ def _clamp_notice(requested, limit, kind, site, extent):
 # the four members as 'absent'. Recording the absence IS the reading.
 #
 # The window is anchored on row (i)'s interpolated trigger and reaches only
-# FORWARD. That is causal, not cosmetic: the drive turn-on edge (the bank
-# slewing into the cold gap at drive start) always precedes the conductivity
-# threshold crossing and is steeper than the fast-phase ramp, so any
-# backward reach re-admits a feature that is not the one being measured.
+# FORWARD. That is causal, not cosmetic: at the ES1-class rung the drive
+# turn-on edge (the bank slewing into the cold gap at drive start) precedes
+# the conductivity threshold crossing and is steeper than the fast-phase
+# ramp, so any backward reach re-admits a feature that is not the one being
+# measured.
+#
+# THAT ORDERING IS RUNG-SPECIFIC, and this comment previously asserted it
+# without qualification. It is a property of the ES1-class rung, not of the
+# instrument. At higher V_bank the turn-on surge is not separated from the
+# trigger in the same way: on an ES2-class arm it can PEAK AFTER the
+# trigger, and the forward window's slope maximum then lands on the window's
+# first samples; on an ES3-class arm it MERGES with the fast-phase ramp and
+# there is no isolated maximum at all. In both cases the forward-only window
+# reports 'not-contained' or 'absent' rather than a number, and THAT IS THE
+# INTENDED READING -- the geometry these six members describe is not present
+# on those arms, and a number obtained by reaching backward for it would be
+# a different feature wearing the same name.
+#
 # A fixed save cadence over the window is asserted, not assumed.
 
 # Window forward extent [s]. Sized so an arm whose slope maximum sits late in
@@ -450,6 +464,51 @@ def _plateau_reference_A(path, cache, loaded=None):
     except (OSError, KeyError, ValueError):
         cache[path] = None
     return cache[path]
+
+
+def _partner_ramp_members(path, cache, loaded=None):
+    """Return the partner's ``(members, t_trig)`` for the pair block, or None.
+
+    Read with h5py rather than through ``load_result_hdf5``, on the same
+    grounds as ``_plateau_reference_A`` above: two datasets and one root
+    attribute out of a multi-GB artifact, never a second full result held in
+    memory beside the one being reported.
+
+    The members come from ``_ramp_members`` -- the SAME estimator the run's
+    own row (ii) used, on the same window, constants and bands. There is
+    exactly one implementation of these six quantities in this file, so a
+    pre->post delta is a difference between two RUNS and can never be a
+    difference between two estimators.
+
+    ``None`` means the partner could not be read at all; the caller says so
+    rather than falling silent, because a silent pair block is
+    indistinguishable from an unmoved one.
+    """
+    key = ("ramp", path)
+    if key in cache:
+        return cache[key]
+    try:
+        if loaded is not None:
+            time_s = np.asarray(loaded.time, float)
+            current = np.asarray(
+                loaded.cathode_diagnostics["source_I_tot"], float
+            )
+            t_trig = float(getattr(loaded, "t_breakdown_trigger", np.nan))
+        else:
+            import h5py
+
+            with h5py.File(path, "r") as handle:
+                time_s = np.asarray(handle["time"][...], float)
+                current = np.asarray(
+                    handle["cathode_diagnostics"]["source_I_tot"][...], float
+                )
+                t_trig = float(
+                    handle.attrs.get("t_breakdown_trigger", np.nan)
+                )
+        cache[key] = (_ramp_members(time_s, current, t_trig), t_trig)
+    except (OSError, KeyError, ValueError):
+        cache[key] = None
+    return cache[key]
 
 
 def _ramp_crossings(t, I, t_trig, I_ref, S_ramp):
@@ -802,6 +861,81 @@ def report(path, partner=None, reference_cache=None):
             note = f" -- {member['reason']}" if member["reason"] else ""
             print(f"(ii)     {fraction:.2f}*I_ref={level:.4f} A  {body} "
                   f"[{member['status']}]{note}")
+
+    # --- (ii-pair) The row-(ii) PAIR DELTAS. --------------------------------
+    #
+    # ADDITIVE, and gated on a partner: an invocation without ``--pair``
+    # prints not one byte of this block, so every row above stays exactly as
+    # byte-frozen as it was.
+    #
+    # The six member values are the ones row (ii) already computed for this
+    # run; the partner's come from the same estimator via
+    # ``_partner_ramp_members``. Nothing is re-derived here -- this block only
+    # differences and formats.
+    #
+    # WHAT THE VERDICT WORD MEANS, and what it does not. It compares the
+    # pre->post difference against the instrument's own declared conditioning
+    # band for that member ON THIS RUN. It is a statement about what this
+    # instrument can RESOLVE, and it is not a significance test, not a
+    # tolerance check and not a gate: a resolved difference may still be
+    # physically negligible, and an unresolved one may still be real but
+    # below the band. The gate vocabulary is deliberately absent from this
+    # block for that reason -- read these rows as "the instrument can/cannot
+    # tell these two runs apart on this member", and take the physics
+    # question elsewhere.
+    if partner is not None:
+        pair = _partner_ramp_members(
+            partner, reference_cache,
+            loaded=result if partner == path else None,
+        )
+        print(f"(ii-pair) row (ii) pre->post deltas | pre {partner} -> "
+              f"post {path}")
+        print("(ii-pair)   VERDICT WORDS -- 'moved' = the pre->post "
+              "difference is resolved BEYOND this member's declared "
+              "conditioning band; 'unmoved' = it falls WITHIN that band. A "
+              "resolution statement about the instrument, not a "
+              "physics-significance test.")
+        if pair is None:
+            print(f"(ii-pair)   <no pair reading> -- partner {partner} could "
+                  f"not be read for its row (ii) members, so there is no pre "
+                  f"side to difference against")
+        else:
+            pre_members, pre_trig = pair
+            print("(ii-pair)   TIME BASIS -- every time below is on the 'vs "
+                  "t_trig' basis with EACH RUN'S OWN t_trig subtracted, so a "
+                  "time delta here carries no part of the move in t_trig "
+                  "itself. The band shown is the POST run's declared band.")
+
+            def _pair_row(name, unit, scale, fmt, on_trig_basis):
+                post_m = members[name]
+                pre_m = pre_members[name]
+                resolved = ("ok", "coarse")
+                if (post_m["status"] not in resolved
+                        or pre_m["status"] not in resolved):
+                    print(f"(ii-pair)   {name:<8} no pair reading "
+                          f"({pre_m['status']}/{post_m['status']})")
+                    return
+                pre_v = float(pre_m["value"]) - (
+                    pre_trig if on_trig_basis else 0.0
+                )
+                post_v = float(post_m["value"]) - (
+                    t_trig if on_trig_basis else 0.0
+                )
+                delta = post_v - pre_v
+                band = float(post_m["band"])
+                verdict = "unmoved" if abs(delta) <= band else "moved"
+                sign = "+" if on_trig_basis else ""
+                print(f"(ii-pair)   {name:<8} pre {pre_v / scale:{sign}{fmt}} "
+                      f"{unit} | post {post_v / scale:{sign}{fmt}} {unit} | "
+                      f"delta {delta / scale:+{fmt}} {unit} | band "
+                      f"+-{band / scale:{fmt}} {unit} [{verdict}]")
+
+            _pair_row("t_dImax", "us", 1.0e-6, ".2f", True)
+            _pair_row("S_ramp", "A/ms", 1.0e3, ".4f", False)
+            _pair_row("t_ovs", "us", 1.0e-6, ".2f", True)
+            _pair_row("I_ovs", "A", 1.0, ".4f", False)
+            _pair_row("t_dip", "us", 1.0e-6, ".2f", True)
+            _pair_row("I_dip", "A", 1.0, ".4f", False)
 
     # (iii) The 21q plateau observables, over the SAME plateau window the rows
     # above use (15 ms -> the clamp-checked end; no second clamp notice is

@@ -170,6 +170,49 @@ CLOSED_ISO_RATE_CM3_S = 2.0 * 7.63e-16 * np.sqrt(EV / M_HE)
 DRAG_RATIO_BRACKET = (1.0, 1.7)
 
 
+# Package defaults a ``kinetic_dvm`` arm CANNOT carry, with the value that
+# takes each one out of the branch the solver refuses. Entries are
+# ``(namespace, key, value)`` -- the chain spans BOTH namespaces, so the
+# namespace is carried explicitly rather than inferred.
+#
+# These are refusals BY CONSTRUCTION, not preferences: the DVM state already
+# owns the neutral first moment, and everything below is either that same
+# ownership restated or a presence-gate standing on it. ``arm_config`` clears
+# them explicitly so this suite's arms build IDENTICALLY whatever the package
+# defaults happen to be -- ``default_config()`` currently ships every one of
+# them armed, which made every arm in this file unconstructible.
+#
+# This is a TEST FIXTURE defining its own kinetic-compatible base. It says
+# nothing about what production should own, and it does not prejudge the
+# question of where neutral momentum belongs.
+#
+# THE LIST IS THE MEASURED DEPTH OF THE CASCADE ON THIS HEAD, obtained by
+# constructing the arm, reading the refusal, clearing the key that refusal
+# names, and repeating until ``LAPDSim1D`` constructed. It is a fixture fact
+# and not an invariant: a flipped default or a new presence-gate changes it,
+# and the way to re-measure is to run this suite and read what the solver
+# refuses. Do not extend it by guessing.
+KINETIC_DVM_INCOMPATIBLE_DEFAULTS = (
+    # The DVM state carries the neutral momentum as the first moment of f, so
+    # an evolved M_n field would be a second, unowned copy of it.
+    ("flags", "neutral_momentum", False),
+    # The frictional half of the collisional energy is booked against the
+    # relative velocity u - u_n, which has no meaning without a neutral wind.
+    ("flags", "neutral_energy", False),
+    # It walls the CX-born hot channel's ballistic flight; without
+    # neutral_energy there is no hot channel and the flag would be inert.
+    ("flags", "neutral_hot_internal_wall", False),
+    # The cathode/anode jets and the mesh accommodation are M_n momentum
+    # physics and require the neutral_momentum flag.
+    ("params", "cathode_neutral_jet", False),
+    # It reads the cathode jet's R_E, so it requires cathode_neutral_jet.
+    ("params", "cathode_jet_surface_debit", False),
+    # 'total_reflected' rescales the cathode jet's launch energy and requires
+    # cathode_neutral_jet; 'legacy' is the historical reading that does not.
+    ("params", "cathode_jet_energy_convention", "legacy"),
+)
+
+
 # --------------------------------------------------------------- harness
 
 
@@ -179,6 +222,11 @@ def arm_config(**overrides):
     d = dict(d)
     fl = dict(fl)
     fl["neutral_two_zone"] = True
+    # The kinetic-compatible base. Applied BEFORE ``overrides`` below, so a
+    # caller -- in particular a refusal gate in REFUSALS -- can still arm any
+    # of these back on top and get the refusal it is there to test.
+    for _space, _key, _value in KINETIC_DVM_INCOMPATIBLE_DEFAULTS:
+        (fl if _space == "flags" else d)[_key] = _value
     d["neutral_model"] = "kinetic_dvm"
     d["neutral_kinetic_dvm_cadence_s"] = CADENCE_S
     d["neutral_kinetic_dvm_exchange"] = EXCHANGE_MODEL
