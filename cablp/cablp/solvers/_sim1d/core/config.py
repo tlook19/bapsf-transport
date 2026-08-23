@@ -745,7 +745,7 @@ def model_mode_defaults():
         BORN by bulk ionization, by a beam ionization, and by the gas-puff
         local-ionization channel carries. Options are ``"local"`` (the local
         ion temperature), ``"floor"`` (the ion temperature floor),
-        ``"neutral"``, or a numeric eV value.
+        ``"neutral"`` (the default), or a numeric eV value.
 
         ``"neutral"`` is the option that PAIRS with the neutral energy field:
         the ion is born at the local neutral temperature
@@ -762,7 +762,9 @@ def model_mode_defaults():
         ionized atom while the ion is born at an unrelated temperature, and
         the difference leaves the model. That difference is reported per cell
         and per save by the ``ionization_birth_thermal_deficit_*_W_cm3``
-        diagnostic rows, which read zero to roundoff under ``"neutral"``.
+        diagnostic rows, which read zero to roundoff under ``"neutral"``. They
+        stay selectable, and warn, so a pre-adoption artifact can be reproduced
+        bit-for-bit.
     ionization_birth_energy_model:
         How ionization births book their energy moments. ``"legacy"``
         (historical): the electron birth adds ``3/2 Te_birth S_ion`` to ``Ee``
@@ -1012,7 +1014,7 @@ def model_mode_defaults():
         # energy system, so the signal speed matches the flux.
         "hyperbolic_wave_speed": "adiabatic",
         "end_mode": "collector",
-        "Ti_birth_ionization": "floor",
+        "Ti_birth_ionization": "neutral",
         # "conservative": no spurious 3Te/2 electron birth energy; ion
         # mass-loading mixing energy booked explicitly.
         "ionization_birth_energy_model": "conservative",

@@ -21087,12 +21087,34 @@ def _case_ionization_birth_neutral_temperature():
     # the option that makes them agree ("neutral"), the diagnostic rows that
     # DISCLOSE the gap when they do not, and the no-En fallback.
     from cablp.solvers._sim1d.results.io import save_result_hdf5 as _nb_save
+    from cablp.solvers._sim1d.core.deprecations import deprecation_messages
 
-    # (a) THE DEFAULT DOES NOT MOVE. "floor" is still the shipped booking, so
-    # the golden and every other case run the arithmetic they always ran.
+    # (a) THE SHIPPED DEFAULT IS THE CONSERVING BIRTH (adopted 2026-08-23,
+    # with the C_R one-knob re-trim; golden recaptured in the same change).
     _nb_params, _nb_flags = default_config()
-    assert _nb_params["Ti_birth_ionization"] == "floor"
+    assert _nb_params["Ti_birth_ionization"] == "neutral"
     assert _nb_flags["neutral_energy"] is True
+    # The two non-conserving arms stay SELECTABLE -- a pre-adoption artifact
+    # cannot be reproduced without them -- and they WARN, value-scoped, while
+    # the default does not. The register reads the template, so this is the
+    # scope of the row and not a second copy of the default.
+    _nb_dep = dict(_nb_params)
+    assert deprecation_messages(_nb_dep, _nb_flags) == []
+    for _nb_legacy in ("floor", "local"):
+        _nb_dep["Ti_birth_ionization"] = _nb_legacy
+        _nb_msgs = [
+            _m for _m in deprecation_messages(_nb_dep, _nb_flags)
+            if _m.startswith("Ti_birth_ionization=")
+        ]
+        assert len(_nb_msgs) == 1, (_nb_legacy, _nb_msgs)
+        assert "non-conserving against an evolved En" in _nb_msgs[0]
+        assert "Ti_birth_ionization='neutral'" in _nb_msgs[0]
+    # A numeric arm is outside the row's scope and is silent.
+    _nb_dep["Ti_birth_ionization"] = 0.5
+    assert not [
+        _m for _m in deprecation_messages(_nb_dep, _nb_flags)
+        if _m.startswith("Ti_birth_ionization=")
+    ]
 
     # The selector refuses what it does not implement, and "neutral" is an ION
     # option only: the En ionization sink has no electron partner to pair with.
