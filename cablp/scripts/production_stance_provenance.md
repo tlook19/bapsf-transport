@@ -2,9 +2,14 @@
 
 The production stance of record is the committed stance file
 `scripts/stances/g1atrim.toml`, loaded by `scripts/stance_config.py`
-(R1, 2026-08-20; it replaced the former `PARAM_OVERRIDES` / `FLAG_OVERRIDES`
-dicts in `scripts/compare_sim1d_es1.py`). This file records where each stance
-value came from. Parameter *meanings* are in the docstrings of
+(R1, 2026-08-20). The `PARAM_OVERRIDES` / `FLAG_OVERRIDES` dicts in
+`scripts/compare_sim1d_es1.py` still exist, but they are no longer the home of
+these values: every key the stance names is now POPULATED FROM the stance file
+(`_STANCE = load_stance(PRODUCTION_STANCE).params`, `compare_sim1d_es1.py:101`)
+rather than repeated in the dict, and what the dicts still carry on their own is
+the shared configuration the stance deliberately omits — the circuit, the rate
+model and the numerics package. This file records where each stance value came
+from. Parameter *meanings* are in the docstrings of
 `cablp/solvers/_sim1d/core/config.py`; defaults provenance is in
 `cablp/solvers/_sim1d/core/config_defaults_provenance.md`, which also defines
 the provenance classes MEASURED / DERIVED / FITTED / ASSUMED used here.
@@ -124,6 +129,17 @@ point in the code's own expression `J = C_R T^2 exp(-e phi/(kB T))`:
        keeps the point-emission match at 0.03%, inside the 0.1% the derivation
        was pre-registered to hit).
 
+**`T_s = 1998.15` IS named by the stance, and is configuration-inert.** It is
+one of the three RESOLVED-ACCRETION keys (`cathode_emission_profile`,
+`Te_birth_ionization`, `T_s`): keys that equal their config default but are
+stated explicitly in `g1atrim.toml` anyway, because `run_m6_point.py`'s own
+driver defaults do not. Under the stance's
+`cathode_warming_model = "power_balance"` it is ONLY the initial surface
+temperature — the surface then evolves from the power balance, so `T_s` sets no
+steady-state property and `cathode_Ts_base_K` is the live key below. *(Formerly
+listed under "Deliberately absent" on the mistaken reading that the stance does
+not name it; corrected 2026-08-23.)*
+
 **`cathode_Ts_base_K` is deliberately NOT pinned here.** It is inherited from
 the config default, which is the MEASURED standby temperature. An earlier
 stance pinned 1840 K — 70 K below the measurement — which mislabelled a measured
@@ -141,7 +157,7 @@ on `C_R_eff` versus 1840 K on 29.0 emits 1.4% more at phi = 2.809 and 2.8% at
 **`cathode_conduction_W_per_K = 12058.0`, `cathode_heat_capacity_J_per_K =
 181.0`** — DERIVED by areal transcription (L2 geometry rebaseline, 2026-08-17).
 Both are extensive in the cathode face area, so moving the face from the
-fitted 15.0 cm to the measured 18.415 cm aperture scales them by
+fitted 15.0 cm to the design-spec 18.415 cm aperture scales them by
 `(18.415/15)^2 = 1.5072`: 8000 -> 12058 W/K and 120 -> 181 J/K. The underlying
 calibration is UNCHANGED — the conduction remains the one fitted knob of the
 cathode power balance, co-tuned with `S_gp` at the reference setting and
@@ -271,22 +287,30 @@ regression fixture, which pins the key back to `None`.
 
 ## Geometry
 
-**`Rp = 18.415`, `R_cath = 18.415`** — MEASURED (caliper, 2026-08-17; L2
-geometry rebaseline). The cathode is a 15.0 in x 0.25 in LaB6 disc
+**`Rp = 18.415`, `R_cath = 18.415`** — DESIGN-SPEC HARDWARE (L2 geometry
+rebaseline, 2026-08-18). The cathode is a 15.0 in x 0.25 in LaB6 disc
 (R = 19.050 cm) held by a backside carbon ring against a graphite front panel
-whose opening is 14.5 in — r = 18.415 cm. The ring's lip fit on the disc is
-self-confirming: the overlap the ring needs is exactly the annulus the panel
-covers. The exposed aperture, not the disc, is the emitting, collecting and
-conducting face, so both radii identify with it and are equal by measurement
-rather than by the previous coincidence of one fitted 15.0. Mapping the
-aperture along the field to the plasma-column radius is ASSUMED 1:1 (recorded
-ruling: no flux-tube expansion or compression is modelled between the cathode
-face and the column).
+whose opening is 14.5 in — r = 18.415 cm. The ring's overlap on the disc edge
+is 0.6350 cm per side, exactly the disc thickness (0.2500 in): a designed lip
+fit, not a measured coincidence. The exposed aperture, not the disc, is the
+emitting, collecting and conducting face, so both radii identify with it and
+are equal by design rather than by the previous coincidence of one fitted
+15.0. Mapping the aperture along the field to the plasma-column radius is
+ASSUMED 1:1 (recorded ruling: no flux-tube expansion or compression is
+modelled between the cathode face and the column).
 
-Both values were 15.0 before this pass — a fit, not a measurement, and one
-that conflated the emitting radius with the plasma-column radius. The golden
-fixture pins 15.0/15.0 explicitly (`baseline_sim1d.BASELINE_PARAM_OVERRIDES`)
-so the regression anchor does not track this stance.
+**Honest bar: the two-spec design bracket `[18.10, 18.415]` cm.** The 14.5 in
+opening is one engineer's design spec; a second engineer's CAD gives 18.10 cm
+(a 14.25 in-class opening). No as-built number exists — the machine was
+inaccessible — so the spread between the two specs is the systematic that
+rides every aperture-sensitive claim. The live value 18.415 is the UPPER spec,
+adopted as the stance value; it is not a measurement of the machine.
+
+*Formerly labelled "MEASURED (caliper, 2026-08-17)"; corrected 2026-08-18 —
+there was no caliper measurement.* Both values were 15.0 before the L2
+rebaseline — a fit, not a measurement, and one that conflated the emitting
+radius with the plasma-column radius. Since the R2b re-anchor (2026-08-20) the
+golden is captured at the stance of record and carries 18.415.
 
 **`end_expansion_*`, `Rcs`, `Lcs`, `Rsup` — RETIRED FROM THE STANCE (R1,
 2026-08-20).** The G1 measured-geometry adoption replaced the parametric flare
@@ -405,8 +429,6 @@ legacy drag keys are deprecated and are deliberately no longer set here.
 
 ## Deliberately absent
 
-- `T_s` — the config default is identical, and under `power_balance` it is only
-  the initial surface temperature.
 - `beam_product_transport` — `"local"` is both the stance and the config
   default; the non-default arm must travel with the run it scored.
 - Run-cost settings (`tau_afterglow`, `max_steps_action`, `density_dt_fraction`)

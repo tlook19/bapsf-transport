@@ -158,17 +158,22 @@ for the legacy IAEA fits. Superseded by the single cold-gas `Tn_K = 300` K.
 
 ## `geometry_defaults`
 
-**`Rp = 18.415` cm — MEASURED.** The LAPD plasma-column radius, identified
-with the exposed cathode aperture: the graphite front panel's 14.5 in opening
-in front of the 15.0 in LaB6 disc (caliper, 2026-08-17). Mapping the aperture
-along the field to the column is ASSUMED 1:1. The previous default 15.0 was a
-fit that also conflated this radius with the emitting radius `R_cath`; both
-moved onto the measured aperture in the L2 geometry rebaseline, and the golden
-fixture pins 15.0 explicitly so the regression anchor does not follow.
+**`Rp = 18.415` cm — DESIGN-SPEC HARDWARE.** The LAPD plasma-column radius,
+identified with the exposed cathode aperture: the graphite front panel's
+14.5 in opening in front of the 15.0 in LaB6 disc. Mapping the aperture along
+the field to the column is ASSUMED 1:1. **Honest bar: the two-spec design
+bracket `[18.10, 18.415]` cm** — the 14.5 in opening is one engineer's design
+spec and a second engineer's CAD gives 18.10 cm, no as-built number exists
+(the machine was inaccessible), and 18.415 is the UPPER spec. The previous
+default 15.0 was a fit that also conflated this radius with the emitting
+radius `R_cath`; both moved onto the aperture in the L2 geometry rebaseline.
+*(Formerly labelled "MEASURED (caliper, 2026-08-17)"; corrected 2026-08-18 —
+it is not a caliper measurement.)* Since the R2b re-anchor (2026-08-20) the
+golden is captured at the stance of record and carries 18.415.
 
-**`Rm = 50.0` cm, `Lm = 2000.0` cm, `cathode_anode_gap_cm = 50.0`,
-`plenum_length_cm = 100.0`, `collector_length_cm = 100.0` — MEASURED**
-machine dimensions.
+**`Rm = 50.0` cm, `Lm = 2117.8` cm, `cathode_anode_gap_cm = 50.0`,
+`plenum_length_cm = 166.0`, `collector_length_cm = 7.8` — MEASURED**
+(machine CAD, G1 geometry of record) machine dimensions.
 
 ## `floor_defaults`
 
@@ -282,12 +287,19 @@ so the delivered flow is flat with only piezo-opening and entry-transit edges.
 **`gas_puff_rise_center_s`, `gas_puff_rise_width_s`, `gas_puff_close_lag_s`
 = 5e-4 s — MEASURED, hardware-boxed** to ~0.5-1 ms. Not fit knobs.
 
-**`gas_puff_profile = "cosine_pipe"`, `gas_puff_z_cm = 60.0` cm,
-`gas_puff_throw_cm = 100.0` cm — DERIVED from geometry.** The physical source
-is a small pipe at the chamber wall about 10 cm in front of the anode
-(anode at 50 cm, hence 60), pointing radially inward with a Lambertian outlet;
-the throw is of order the chord across the chamber, ~2*Rm. Neither centre nor
-width is tunable.
+**`gas_puff_z_cm = 86.3` cm — MEASURED** (machine CAD, G1 geometry of record;
+see the geometry table at line 59). It is the measured position of the
+mid-plane puff ports at the anode stack, in machine coordinates so it does not
+move with `nx` (`scripts/g1_build_profiles.py:91`). It supersedes the former
+60.0, which was DERIVED rather than measured — a pipe placed ~10 cm in front of
+an anode assumed to sit at 50 cm. The ports are where they are; the number is
+not tunable.
+
+**`gas_puff_profile = "cosine_pipe"`, `gas_puff_throw_cm = 100.0` cm — DERIVED
+from geometry.** The physical source is a small pipe at the chamber wall
+pointing radially inward with a Lambertian outlet; the throw is of order the
+chord across the chamber, ~2*Rm. Neither the profile shape nor the width is
+tunable.
 
 **`S_pump_L = S_pump_R = 3000.0` L/s — DERIVED (elbow leg literature-BOXED),
 bracket [2750, 3300] L/s.**
@@ -966,24 +978,30 @@ broadening to the cathode gives ~27.8 cm, and radial transport argues for the
 steeper end. The implied centre-to-edge temperature drop is of order
 150-200 K.
 
-**`R_cath = 18.415` cm — MEASURED.** The cathode is a 15.0 in x 0.25 in LaB6
-disc (R = 19.050 cm) held by a backside carbon ring against a graphite front
-panel whose opening is 14.5 in, r = 18.415 cm (caliper, 2026-08-17); the
-ring's lip fit on the disc covers exactly the annulus the panel hides, which
-confirms the two measurements against each other. The EXPOSED APERTURE — not
-the disc — is the emitting, collecting and conducting face, so `R_cath` is
-that aperture. It equals `Rp` by measurement plus the assumed 1:1 field
-mapping, no longer by the old coincidence of one fitted 15.0. The physical
-disc radius 19.050 cm remains the right number for anything that is about the
-whole body rather than the exposed face.
+**`R_cath = 18.415` cm — DESIGN-SPEC HARDWARE.** The cathode is a
+15.0 in x 0.25 in LaB6 disc (R = 19.050 cm) held by a backside carbon ring
+against a graphite front panel whose opening is 14.5 in, r = 18.415 cm; the
+ring's overlap on the disc edge is 0.6350 cm per side, exactly the disc
+thickness (0.2500 in) — a designed lip fit, not two measurements confirming
+each other. The EXPOSED APERTURE — not the disc — is the emitting, collecting
+and conducting face, so `R_cath` is that aperture. It equals `Rp` by design
+plus the assumed 1:1 field mapping, no longer by the old coincidence of one
+fitted 15.0. **Honest bar: the two-spec design bracket `[18.10, 18.415]` cm**
+— the 14.5 in opening is one engineer's design spec, a second engineer's CAD
+gives 18.10 cm, and no as-built number exists (the machine was inaccessible);
+18.415 is the UPPER spec. *(Formerly labelled "MEASURED (caliper,
+2026-08-17)"; corrected 2026-08-18.)* The physical disc radius 19.050 cm
+remains the right number for anything that is about the whole body rather than
+the exposed face.
 
 **`cathode_emission_profile = "uniform"` — the zero-shape-parameter choice on
-the measured aperture.** The default was `"gaussian"`, whose radial falloff
+the design-spec aperture.** The default was `"gaussian"`, whose radial falloff
 was carried by the fitted `cathode_Ts_fwhm_cm = 28.0` footprint. That
-empirical basis is RETIRED by the caliper: the measured emission footprint
-identifies with the aperture the panel defines, not with an emission droop
-across a larger disc, so the falloff no longer has a measurement behind it.
-`"uniform"` introduces no shape parameter and is fully boxed by hardware.
+empirical basis is RETIRED by the aperture geometry: the measured emission
+footprint identifies with the aperture the panel defines, not with an emission
+droop across a larger disc, so the falloff no longer has a measurement behind
+it. `"uniform"` introduces no shape parameter and is boxed by the hardware
+design spec (to within the `[18.10, 18.415]` cm aperture bracket).
 `"gaussian"` remains a selectable arm, and the trajectory that used it stays
 reachable at the `pre-refactor-2026-08-20` anchor tag — the golden fixture ran
 it until R2b recaptured that fixture at the stance of record, which selects
