@@ -428,10 +428,12 @@ def neutral_source_defaults():
         is the identity and is bit-exact.
     gas_puff_profile:
         Axial shape of the puff. ``"cell"`` (the historical
-        behaviour) puts the whole flow in the role-tagged puff cell (in front
-        of the anode in resolved geometry). ``"cosine_pipe"`` (default) is the
-        physical source -- a small pipe at the chamber wall ~10 cm in front of the
-        anode, pointing radially inward with a Lambertian (cosine) outlet;
+        behaviour) puts the whole flow in the role-tagged puff cell, which
+        under ``source_fixed_grid`` follows ``gas_puff_z_cm`` and otherwise
+        is the column cell against the anode face. ``"cosine_pipe"``
+        (default) is the physical source -- a small pipe at the chamber wall,
+        at the measured mid-plane puff ports on the anode stack, pointing
+        radially inward with a Lambertian (cosine) outlet;
         its first-flight axial deposition is the cosine-lobe pattern
         ``[1 + ((z - z0)/d)^2]^-2`` with throw ``d ~ 2*Rm``, so centre and
         width both come from geometry rather than tuning. ``"gaussian"`` is
@@ -518,9 +520,9 @@ def neutral_source_defaults():
         # separate quantities rather than one lumped constant.
         "gas_puff_delivery_fraction": 1.0,
         "pump_elbow_conductance_lps": None,
-        # Physical Lambertian pipe source at the mid-plane puff ports of the
-        # measured G1 machine geometry; its centre is measured and its width
-        # is geometry-derived, and neither is tunable.
+        # Physical Lambertian pipe source at the measured mid-plane puff ports
+        # on the anode stack; its centre is measured and its width is
+        # geometry-derived, and neither is tunable.
         "gas_puff_profile": "cosine_pipe",
         # The pipe position, in machine coordinates so it does not move with nx.
         "gas_puff_z_cm": 86.3,
