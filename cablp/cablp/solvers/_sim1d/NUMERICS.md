@@ -428,9 +428,9 @@ Two selectors make the plasma hyperbolic update discretely total-energy
 conservative. Both are shipped defaults now, and the golden fixture runs them
 so since the R2b re-anchor captured it at the stance of record.
 
-- `hyperbolic_wave_speed`: `"isothermal"` (default, `sqrt(Te/m_i)`) or
-  `"adiabatic"` (`sqrt((5/3)(Te+Ti)/m_i)`, the exact spectral radius of the
-  γ=5/3 two-species system). It sets the Rusanov `a_max` and the plasma CFL —
+- `hyperbolic_wave_speed`: `"isothermal"` (`sqrt(Te/m_i)`) or
+  `"adiabatic"` (default, `sqrt((5/3)(Te+Ti)/m_i)`, the exact spectral radius of
+  the γ=5/3 two-species system). It sets the Rusanov `a_max` and the plasma CFL —
   the dissipation strength and stability bound, not the physical wave speed,
   which the pressure flux already sets.
 - `hyperbolic_energy_consistent`: replaces the convective momentum flux with

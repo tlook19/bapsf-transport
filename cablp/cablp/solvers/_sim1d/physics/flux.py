@@ -184,8 +184,9 @@ def _apply_plasma_walls(
             live = int(geometry.plasma_face_live_cell[face])
             face_M[face] = 0.0 if live < 0 else pressure[live]
         else:
-            # Historical selection retained exactly while the R1 topology
-            # repair is default off.
+            # Historical selection, retained exactly on the
+            # ``active_plasma_topology=False`` path; the R1 topology repair is
+            # on by default in the current package.
             roles = np.asarray(geometry.cell_role)
             dead = ~np.asarray(geometry.plasma_active, dtype=bool)
             left, right = face - 1, face
