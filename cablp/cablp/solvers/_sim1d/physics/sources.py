@@ -1590,6 +1590,48 @@ def neutral_temperature_eV(state, floors, Tn_eV):
     return (2.0 / 3.0) * np.asarray(state.En, dtype=float) / (nn * ev_to_erg)
 
 
+#: The per-cell, per-save DIAGNOSTIC rows disclosing the thermal energy that
+#: an ionization birth deletes: what the ``En`` sink debits per particle minus
+#: what the ``Ei`` birth partner books per particle, times the birth rate. The
+#: pair is conservative only when the ion is born at the neutral temperature
+#: (``Ti_birth_ionization = "neutral"``), where these rows read zero to
+#: roundoff; under ``"floor"``/``"local"`` they are the size of the leak. Rows
+#: are [W cm^-3] on the PLASMA volume (the volume ``Ei`` lives on), signed
+#: POSITIVE for energy that leaves the model. Diagnostic only: nothing in the
+#: state or the RHS ledger reads them.
+IONIZATION_BIRTH_DEFICIT_DIAGNOSTIC_FIELDS = (
+    "ionization_birth_thermal_deficit_W_cm3",
+    "ionization_birth_thermal_deficit_bulk_W_cm3",
+    "ionization_birth_thermal_deficit_beam_W_cm3",
+    "ionization_birth_thermal_deficit_puff_W_cm3",
+)
+
+#: Which RHS term each per-site deficit row above belongs to, in the order the
+#: summed row adds them.
+IONIZATION_BIRTH_DEFICIT_SITES = (
+    ("ionization_birth", "ionization_birth_thermal_deficit_bulk_W_cm3"),
+    ("beam_ionization_birth", "ionization_birth_thermal_deficit_beam_W_cm3"),
+    (
+        "gas_puff_local_ionization",
+        "ionization_birth_thermal_deficit_puff_W_cm3",
+    ),
+)
+
+
+def ionization_birth_neutral_temperature_eV(state, floors, Tn_K):
+    """Return the neutral temperature [eV] an ionized atom is born carrying.
+
+    This is the SAME per-cell quantity :func:`neutral_temperature_eV` hands the
+    ``En`` sink, from the same ``Tn_K`` cold-gas scalar, so an ion born at it
+    receives exactly the ``(3/2) k Tn`` the neutral energy field gives up.
+    Without an evolved ``En`` the state has no local neutral temperature and
+    the cold-gas scalar ``Tn_K`` is returned.
+    """
+    return neutral_temperature_eV(
+        state, floors, Tn_eV=float(Tn_K) * kb_cgs / ev_to_erg
+    )
+
+
 def neutral_energy_volume_ratio(state, geometry):
     """Return the ``Vp / V_En`` factor converting a plasma-volume energy source
     into the volume ``En`` lives on.

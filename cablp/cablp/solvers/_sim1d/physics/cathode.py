@@ -37,7 +37,10 @@ from ..core.geometry import (
 from ..core.state import ConservativeState1D, derive_state
 from .flux import ion_sound_speed
 from .reactions import _birth_temperature
-from .sources import electrode_sheath_alpha
+from .sources import (
+    electrode_sheath_alpha,
+    ionization_birth_neutral_temperature_eV,
+)
 
 
 @dataclass(frozen=True)
@@ -2660,10 +2663,18 @@ def beam_ionization_rhs_terms(
         beam_M_birth = zeros.copy()
         beam_Mn_debit = None
         beam_Mna = None
+    Ti_birth_ionization = input_dict.get("Ti_birth_ionization", "floor")
     Ti_birth = _birth_temperature(
-        input_dict.get("Ti_birth_ionization", "floor"),
+        Ti_birth_ionization,
         beam_derived.Ti,
         floors["Ti"],
+        neutral_temperature=(
+            ionization_birth_neutral_temperature_eV(
+                state, floors, input_dict.get("Tn_K", 300.0)
+            )
+            if Ti_birth_ionization == "neutral"
+            else None
+        ),
     )
     # A14 (R4.2): the beam electron birth already uses the defensible Ee=0
     # convention; under "conservative" reconcile the ion energy too by booking

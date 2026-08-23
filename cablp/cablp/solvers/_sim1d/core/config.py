@@ -741,9 +741,30 @@ def model_mode_defaults():
         ``"local"`` to use the local electron temperature, ``"floor"`` to use
         the electron temperature floor, or a numeric eV value.
     Ti_birth_ionization:
-        Ion birth temperature model for ionization. Options are ``"local"`` to
-        use the local ion temperature, ``"floor"`` to use the ion temperature
-        floor, or a numeric eV value.
+        Ion birth temperature model for ionization -- the temperature the ion
+        BORN by bulk ionization, by a beam ionization, and by the gas-puff
+        local-ionization channel carries. Options are ``"local"`` (the local
+        ion temperature), ``"floor"`` (the ion temperature floor),
+        ``"neutral"`` (the default), or a numeric eV value.
+
+        ``"neutral"`` is the option that PAIRS with the neutral energy field:
+        the ion is born at the local neutral temperature
+        ``Tn = (2/3) En / (nn k)`` of the very population the ``En``
+        ionization sink debits (the column ``nn`` under ``neutral_two_zone``),
+        so the ion gains exactly the ``(3/2) k Tn`` per particle the neutral
+        gas gives up and the pair conserves energy by construction. With
+        ``neutral_energy`` off the state carries no ``En``, there is no local
+        neutral temperature, and the birth falls back to the cold-gas scalar
+        ``Tn_K``.
+
+        ``"floor"``, ``"local"`` and a numeric value are NON-CONSERVING
+        against an evolved ``En``: the sink still removes ``(3/2) k Tn`` per
+        ionized atom while the ion is born at an unrelated temperature, and
+        the difference leaves the model. That difference is reported per cell
+        and per save by the ``ionization_birth_thermal_deficit_*_W_cm3``
+        diagnostic rows, which read zero to roundoff under ``"neutral"``. They
+        stay selectable, and warn, so a pre-adoption artifact can be reproduced
+        bit-for-bit.
     ionization_birth_energy_model:
         How ionization births book their energy moments. ``"legacy"``
         (historical): the electron birth adds ``3/2 Te_birth S_ion`` to ``Ee``
@@ -993,7 +1014,7 @@ def model_mode_defaults():
         # energy system, so the signal speed matches the flux.
         "hyperbolic_wave_speed": "adiabatic",
         "end_mode": "collector",
-        "Ti_birth_ionization": "floor",
+        "Ti_birth_ionization": "neutral",
         # "conservative": no spurious 3Te/2 electron birth energy; ion
         # mass-loading mixing energy booked explicitly.
         "ionization_birth_energy_model": "conservative",

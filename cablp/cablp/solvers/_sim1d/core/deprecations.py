@@ -143,6 +143,21 @@ DEPRECATED_CONTROLS = {
     "ionization_birth_energy_model": DeprecatedControl(
         PARAMS, _FREED_BRANCH, _FREED_BRANCH_FIX, values=("legacy",),
     ),
+    # Value-scoped, and the scope is the point: the key itself is live -- it
+    # carries the conserving birth the campaign now runs. Only the two named
+    # arms deprecate, and they stay runnable because a pre-adoption artifact
+    # cannot be reproduced without them.
+    "Ti_birth_ionization": DeprecatedControl(
+        PARAMS,
+        "it is non-conserving against an evolved En: the En ionization sink "
+        "still gives up (3/2) k Tn per consumed atom while the ion is born at "
+        "an unrelated temperature, and the difference is disclosed by the "
+        "ionization_birth_thermal_deficit rows rather than closed",
+        "select 'neutral' (the default and the conserving partner of the En "
+        "sink); these arms are retained for bit-exact reproduction of "
+        "pre-adoption artifacts",
+        values=("floor", "local"),
+    ),
     "b_ion_neutral_drag": DeprecatedControl(
         PARAMS,
         "it scales the legacy ion-neutral drag term, which the moment-closed "
@@ -209,8 +224,6 @@ DEPRECATED_CONTROLS = {
     "tau_gp_drop_width": DeprecatedControl(
         PARAMS, _PUFF_WAVEFORM, _PUFF_WAVEFORM_FIX,
     ),
-    # ==== dead levers: inert selectors ====================================
-    "Ti_birth_ionization": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
     # ==== dead levers: scaling factors ====================================
     "b_anode_collection": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
     "b_anode_advective_block": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),

@@ -213,6 +213,9 @@ def reaction_kwargs(input_dict, *, gas_type, I_ion, wind_column_factor):
             input_dict.get("ionization_birth_energy_model", "legacy")
         ),
         "wind_column_factor": wind_column_factor,
+        # Only read when Ti_birth_ionization == "neutral": the cold-gas scalar
+        # the birth temperature falls back to with no evolved En field.
+        "Tn_K": float(input_dict.get("Tn_K", 300.0)),
     }
 
 

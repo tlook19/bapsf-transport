@@ -415,6 +415,39 @@ gamma=5/3 energy system, births book no unphysical electron thermal energy, and
 the split step is second order. The regression fixture pins the historical
 first-order values instead; see `scripts/golden_baseline_provenance.md`.
 
+**`Ti_birth_ionization = "neutral"` — DERIVED (conservation), adopted
+2026-08-23.** The temperature the ion born by bulk ionization, by a beam
+ionization, or by the gas-puff local-ionization channel carries. It is derived,
+not chosen: one ionization event is booked on BOTH sides of the model, and the
+two bookings agree only at this value. The `En` side removes the local
+`(3/2) k Tn` per consumed atom — the per-particle energy of the very population
+the sink debits, the column `nn` under `neutral_two_zone` — so the ion must be
+born carrying exactly that, and `"neutral"` is the option that reads it
+(`Tn = (2/3) En / (nn k)`; with `neutral_energy` off there is no local neutral
+temperature and the birth falls back to the cold-gas scalar `Tn_K`). Nothing
+here is fitted and no scored quantity entered the selection.
+
+`"floor"` (the predecessor default), `"local"` and a numeric value are
+NON-CONSERVING against an evolved `En` and are retained only as reproduction
+arms: they warn, value-scoped, in `core/deprecations.py`. The size of what they
+delete is not small — under the cathode neutral jet the source-region gas sits
+near 11.6 eV against a 300 K ion floor, and the deleted thermal power measured
+at the plateau of the stance arm `ph_es1.h5` is **9250 W** (bulk) **+ 427 W**
+(beam) = **~9.7 kW**, about a quarter of the ion energy supply there. Under
+`"floor"` this was a LIVE non-conservation in the golden and was named nowhere;
+it is now disclosed per cell and per save by the
+`ionization_birth_thermal_deficit_*_W_cm3` diagnostic rows, which are recorded
+regardless of the selector and read zero to roundoff under `"neutral"`.
+
+Honest bar: `"neutral"` closes the THERMAL pair exactly. It says nothing about
+the mass-loading mixing term `1/2 m (u_i - u_n)^2 S`, which is a separate
+booking under `ionization_birth_energy_model = "conservative"` and already
+closes against the momentum row. Adoption moved the drive (the returned power
+raises the source-region ion temperature ~26 % and the plasma load with it) and
+required the single `C_R` re-trim recorded in
+`scripts/production_stance_provenance.md`; the golden was recaptured in the
+same change.
+
 ### Transient DVM neutral arm (`neutral_kinetic_dvm_*`)
 
 All six keys are inert under the shipped `neutral_model = "moment"`; they are

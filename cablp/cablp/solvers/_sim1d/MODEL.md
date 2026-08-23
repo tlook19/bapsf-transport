@@ -558,7 +558,19 @@ $dn = S_{iz}$), the ion total energy then closes to the consumed neutral's energ
 $$dE_i + dK = \tfrac32 T_{i,\text{birth}} S_{iz} + \tfrac12 m_i u_n^2 S_{iz},$$
 
 to machine precision -- the drift energy that `"legacy"` lost through the bulk
-kinetic derivative is retained as ion heat. The beam ion birth (electron already
+kinetic derivative is retained as ion heat. **The THERMAL half of that closure
+holds only at $T_{i,\text{birth}} = T_n$.** With an evolved $E_n$ field the
+same event is booked on the neutral side as a removal of the local
+$\tfrac32 k T_n$ per consumed atom, so the pair conserves energy only when the
+ion is born at the gas temperature -- which is what
+`Ti_birth_ionization = "neutral"` selects (the local
+$T_n = \tfrac23 E_n / (n_n k)$ of the very population the sink debits, the
+column $n_n$ under `neutral_two_zone`, falling back to the cold-gas scalar
+`Tn_K` where there is no $E_n$). Under `"floor"`, `"local"` or a numeric value
+the difference $\tfrac32 k (T_n - T_{i,\text{birth}}) S_{iz}$ leaves the model;
+it is reported per cell and per save by the
+`ionization_birth_thermal_deficit_*_W_cm3` diagnostic rows (bulk, beam,
+gas-puff local, and their sum), which read zero to roundoff under `"neutral"`. The beam ion birth (electron already
 $E_e=0$) gains the same $Q_\text{mix}$ with its own $u_n$ (the two-momentum column
 wind, or zero for the historical rest-birth). Under `"conservative"` the
 `Te_birth_ionization` selector is inert (the electron birth energy is physically
@@ -723,10 +735,19 @@ plasma-topology mask that the hot channel's rows are subject to then deletes
 the deposit -- so those atoms leave the inventory without a surface having
 absorbed them.
 
-**What closes and what does not.** Particles, momentum, and energy close across
-ion + cold + hot to machine precision, with the wall as the ONLY named leak:
-the landed atoms rejoin the cold gas at $T_\text{wall}$ and their excess energy
-and their whole directed momentum are absorbed by the surface. Under the v1
+**What closes and what does not.** Particles and momentum close across
+ion + cold + hot to machine precision. Energy has TWO named leaks. The first is
+the wall: the landed atoms rejoin the cold gas at $T_\text{wall}$ and their
+excess energy and their whole directed momentum are absorbed by the surface.
+The second is the IONIZATION BIRTH, and it is open only when the ion is not
+born at the gas temperature: the $E_n$ sink gives up $\tfrac32 k T_n$ per
+ionized atom while the $E_i$ birth books $\tfrac32 k T_{i,\text{birth}}$, so
+under `Ti_birth_ionization` = `"floor"`/`"local"`/a number the difference goes
+nowhere -- it is the size of $T_n$ itself wherever the gas is hot, which under
+the cathode jet is the source region. It is DISCLOSED, not silent: the
+`ionization_birth_thermal_deficit_*_W_cm3` rows carry it per cell and per save,
+and `Ti_birth_ionization = "neutral"` closes it (see the birth-energy section
+above). Under the v1
 cut the annulus carries no energy field, so only the $\alpha_E$ share of that
 excess is accommodation in the physical sense and the remainder is the cut
 itself; both are reported by the run's hot-channel diagnostics. Recombination-

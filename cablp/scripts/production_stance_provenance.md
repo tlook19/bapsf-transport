@@ -85,8 +85,28 @@ across the change.
 
 ## Cathode emission
 
-**`C_R = 7.09` — FITTED (the one drive-side fit knob; 2026-08-19 stance
-event).** Value chain: the 14.25 derivation below was superseded when the
+**`C_R = 7.36` — FITTED (the one drive-side fit knob; re-trimmed
+2026-08-23 under the conserving ionization birth).** The predecessor `7.09`
+was trimmed on 2026-08-19 with the **ionization-birth thermal leak live** —
+the En sink gave up `(3/2) k Tn` per ionized atom while the ion was born at
+the 300 K floor, deleting **~9.7 kW at plateau** in the source region (9250 W
+bulk + 427 W beam, measured on `ph_es1.h5`; campaign log 2026-08-23k). Adopting
+`Ti_birth_ionization = "neutral"` returns that power to the ions and drops the
+drive, so the knob was re-trimmed ONCE, drive-band target only, at ES1, and
+frozen: peak/plateau ratio 0.965/0.965 at `C_R = 7.09` under the conserving
+birth (`tbn_es1.h5`) -> **1.000/0.999 at `C_R = 7.36`** (`tbn2_es1.h5`, peak
+2989 A against a measured 2989 +/- 23 A, plateau 2962 A against 2963 A).
+Measured pair response over the trim: plateau **2859 -> 2962 A** (peak
+2885 -> 2989 A) for `C_R` **7.09 -> 7.36**. The five pre-registered washout
+gates (campaign log 2026-08-23r) all passed at the trimmed value: drive peak
+and plateau both within +/-0.8 % of 1.000, `n` mean ratio 0.89, `Isat` mean
+ratio 0.88 (>= 0.86), `Te` mean ratio 1.01 (>= 0.98). Port scores were reported
+unconditionally and never entered the selection: Te 1.01, n 0.89, Isat 0.88
+(1.7 sigma). `cathode_Ts_base_K` remains pinned at the measured standby (the
+flat-direction rule below stands: only one member carries the calibration).
+
+*(The 2026-08-19 `7.09` event, retained as record.)* Value chain: the 14.25
+derivation below was superseded when the
 L2 geometry rebaseline moved the operating point to the measured
 18.415 cm aperture (the l2a4 free fit landed 7.26 there; the G1
 measured-geometry arms ran 6.94); the 2026-08-19 D-phase conservation
@@ -95,11 +115,8 @@ REGISTERED one-knob re-trim (drive-band target ONLY, once at ES1, frozen
 and transferred; campaign log 2026-08-19 zzzz) landed **7.09** — peak
 2997 A / plateau 2964 A, ratio 1.000 against the measured band, matched
 on the first log-knob interpolation (measured local exponent 0.99966;
-the super-linear 1.392 figure is kinetic-era only). Port scores were
-reported unconditionally and never entered the selection: n 0.91,
-Isat 0.84 (1.9σ), Te 0.88 at the matched drive. `cathode_Ts_base_K`
-remains pinned at the measured standby (the flat-direction rule below
-stands: only one member carries the calibration).
+the super-linear 1.392 figure is kinetic-era only). Port scores at that
+event: n 0.91, Isat 0.84 (1.9σ), Te 0.88 at the matched drive.
 
 *(Historical derivation of the pre-rebaseline 14.25, retained as record —
 the flat-direction and residual-honesty analysis below still applies to

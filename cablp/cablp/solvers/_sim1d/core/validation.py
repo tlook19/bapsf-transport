@@ -162,12 +162,22 @@ def validate_r1_configuration_presence(
             DeprecationWarning,
             stacklevel=2,
         )
-    for name in ("Te_birth_ionization", "Ti_birth_ionization"):
+    # "neutral" exists on the ION side only: it is the partner of the En
+    # ionization sink, which debits the neutral energy field and has no
+    # electron counterpart to pair with.
+    for name, selectors, allowed in (
+        ("Te_birth_ionization", ("local", "floor"), "'local' or 'floor'"),
+        (
+            "Ti_birth_ionization",
+            ("local", "floor", "neutral"),
+            "'local', 'floor', or 'neutral'",
+        ),
+    ):
         value = input_dict.get(name)
         if isinstance(value, str):
-            if value not in {"local", "floor"}:
+            if value not in set(selectors):
                 raise ValueError(
-                    f"{name} must be 'local', 'floor', or a finite "
+                    f"{name} must be {allowed}, or a finite "
                     f"non-negative numeric eV value (got {value!r})"
                 )
             continue
@@ -177,7 +187,7 @@ def validate_r1_configuration_presence(
             numeric = np.nan
         if not np.isfinite(numeric) or numeric < 0.0:
             raise ValueError(
-                f"{name} must be 'local', 'floor', or a finite "
+                f"{name} must be {allowed}, or a finite "
                 f"non-negative numeric eV value (got {value!r})"
             )
     birth_energy_model = str(

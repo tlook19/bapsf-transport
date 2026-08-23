@@ -53,7 +53,7 @@
     "use_cached_neutral_seed": false
   },
   "params": {
-    "C_R": 7.09,
+    "C_R": 7.36,
     "C_bank_F": 9.5,
     "D_amb": 0.0,
     "D_amb_model": "cs_dz",
@@ -80,7 +80,7 @@
     "Te_birth_ionization": "local",
     "Te_floor": 0.1,
     "Ti0": 0.026,
-    "Ti_birth_ionization": "floor",
+    "Ti_birth_ionization": "neutral",
     "Ti_floor": 0.02585,
     "Tn_K": 300.0,
     "Tn_fit": 0.1,
@@ -314,23 +314,23 @@
     "vessel_leak_resistance_ohm": 10000000000.0
   },
   "result_format": "sim1d packed conservative trajectory y[saves, fields*cells]",
-  "saves": 2628,
+  "saves": 2626,
   "summary": {
-    "Te_max": 20.844410328130284,
+    "Te_max": 20.422039016060324,
     "Te_min": 0.1,
-    "Ti_max": 7.913637456488567,
+    "Ti_max": 9.916984793794466,
     "Ti_min": 0.025999999999999943,
-    "final_time": 0.026266720316516237,
+    "final_time": 0.026240393722254132,
     "finite": true,
-    "n_max": 25088752914972.77,
-    "n_min": 841606704.3660355,
-    "neutral_inventory_relative_drift": 1.1935462765165397,
-    "nn_max": 38781923019370.69,
-    "nn_min": 101012680655.20012,
-    "plasma_inventory_relative_drift": 3413.3698705203415,
-    "samples": 2628,
-    "steps": 79348,
-    "thermal_energy_relative_drift": 2993.8947446595603,
-    "total_particle_inventory_relative_drift": 1.2593360429111813
+    "n_max": 24888323842211.867,
+    "n_min": 841591952.6670465,
+    "neutral_inventory_relative_drift": 1.1921462011014672,
+    "nn_max": 39870270400749.34,
+    "nn_min": 86216076710.10019,
+    "plasma_inventory_relative_drift": 3349.758517202019,
+    "samples": 2626,
+    "steps": 76631,
+    "thermal_energy_relative_drift": 3016.509436690918,
+    "total_particle_inventory_relative_drift": 1.256709511543498
   }
 }
