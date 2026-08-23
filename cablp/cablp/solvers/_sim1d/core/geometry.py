@@ -275,9 +275,11 @@ def _build_resolved_geometry(input_dict, flags):
         [puff, column x (nx-1)] [collector]
 
     Twin cathode (``TwinCathode``) mirrors the source end instead of the
-    collector, putting its cathode surface at ``z = Lm``. Column cells
-    adjacent to an anode face carry the ``puff`` role (gas enters in front of
-    the anode); the plasma cell against a cathode surface carries the
+    collector, putting its cathode surface at ``z = Lm``. Which column cell
+    carries the ``puff`` role depends on ``source_fixed_grid``: with it on
+    (the default) the role follows ``gas_puff_z_cm``, and on the uniform
+    column it is the cell adjacent to an anode face, where gas enters in
+    front of the anode. The plasma cell against a cathode surface carries the
     ``cathode`` role so cathode surface terms have somewhere to land.
 
     The annular cathode-structure obstruction is a *real cell* of length
