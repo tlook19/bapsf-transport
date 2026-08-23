@@ -614,10 +614,13 @@ def collision_majorants(shared, mode, dvm_grid_vmax):
         nu_coll_max = n_i * K
     else:
         # The DVM's own rate, maximized over |v - u_i| on the same range.
+        # The thermal floor TRANSCRIBES the operator's own (ion-only, full
+        # ion mass -- see the collide() BGK branch); a majorant built on a
+        # different g_eff does not bound the rate it is used against.
         w = gg
         g_eff = np.sqrt(
             w[None, :] ** 2
-            + 16.0 * Ti[:, None] * EV / (np.pi * M_HE)
+            + 8.0 * Ti[:, None] * EV / (np.pi * M_HE)
         )
         Ee = np.maximum(0.25 * M_HE * g_eff**2 / EV, 1e-9)
         rate = (
@@ -625,7 +628,7 @@ def collision_majorants(shared, mode, dvm_grid_vmax):
             + ELASTIC_BGK_MOMENTUM_FACTOR * phelps_he_isotropic_cm2(Ee)
         ) * g_eff
         # w = 0 is the low end of the interpolation and can dominate; include it
-        g0 = np.sqrt(16.0 * Ti * EV / (np.pi * M_HE))
+        g0 = np.sqrt(8.0 * Ti * EV / (np.pi * M_HE))
         E0 = np.maximum(0.25 * M_HE * g0**2 / EV, 1e-9)
         rate0 = (
             phelps_he_backscatter_cm2(E0)
@@ -1085,7 +1088,12 @@ class TransientMC:
             w2 = (
                 (vn[:, 2] - u_i) ** 2 + vn[:, 0] ** 2 + vn[:, 1] ** 2
             )
-            g_eff = np.sqrt(w2 + 16.0 * Ti * EV / (np.pi * M_HE))
+            # Only the IONS are Maxwellian: vn is this particle's own
+            # velocity and is already exact in w2, so the thermal floor
+            # carries the FULL ion mass, not the two-Maxwellian reduced mass
+            # mu = m/2. (The reduced mass in E below is two-body kinematics
+            # and does belong there.)
+            g_eff = np.sqrt(w2 + 8.0 * Ti * EV / (np.pi * M_HE))
             E = np.maximum(0.25 * M_HE * g_eff**2 / EV, 1e-9)
             nu_cx = n_i * phelps_he_backscatter_cm2(E) * g_eff
             nu_el = (
@@ -1734,7 +1742,10 @@ def write_cx(path, args, shared, table, extra_lines):
     L.append(
         "The DVM books ion-neutral momentum and energy transfer as BGK "
         "full-replacement events at a frequency evaluated at ONE effective "
-        "relative speed, g_eff^2 = |v - u_i|^2 + 8 k T_i / (pi mu). That is an "
+        "relative speed, g_eff^2 = |v - u_i|^2 + 8 k T_i / (pi m_He) -- the "
+        "thermal floor carries the FULL ion mass because the neutral velocity "
+        "is resolved and enters exactly in |v - u_i|^2, so only the ions are "
+        "Maxwellian. That is an "
         "interpolation, not the Maxwellian rate average <sigma(g) g>, and the "
         "two differ because sigma_b(E) is not flat. The MC below samples a "
         "partner ion from the local Maxwellian and evaluates the exact "
