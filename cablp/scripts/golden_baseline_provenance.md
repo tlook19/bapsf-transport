@@ -82,7 +82,7 @@ to be.
 |---|---|---|
 | `nx` | `60` | Axial resolution of the far column: a pure cost knob. The campaign runs 268; a reviewer pays for this gate on the candidate branch and again post-merge. Pinned rather than inherited so a future default-`nx` change cannot multiply every gate's runtime silently. |
 | `max_steps_action` | `"raise"` | Deliberately overrides the stance's `"stop"`. For a campaign arm a step cap is a budget and a truncated arm is still data; here the cap is a tripwire, and tripping it should be loud. |
-| `max_steps` (run kwarg) | `150000` | **A tripwire, not a run length** — ~1.9× the measured 80,416 steps. It exists so a change that quietly destroys the timestep fails fast instead of running for hours. If it fires, the question is what happened to `dt`, not what happened to the trajectory. Sized at 2× deliberately: a backstop with a few percent of headroom is not a backstop, it is a second cost cap waiting to truncate the gate. |
+| `max_steps` (run kwarg) | `150000` | **A tripwire, not a run length** — ~1.9× the measured 79,348 steps. It exists so a change that quietly destroys the timestep fails fast instead of running for hours. If it fires, the question is what happened to `dt`, not what happened to the trajectory. Sized at 2× deliberately: a backstop with a few percent of headroom is not a backstop, it is a second cost cap waiting to truncate the gate. |
 
 `BASELINE_FLAG_OVERRIDES` carries one entry, `neutral_equilibration = True`, for
 the reason given in the re-cut section above.
@@ -96,19 +96,22 @@ whole cycle rather than a truncated foot.
 
 | quantity | value |
 |---|---|
-| steps | 80,416 |
-| wall, single lane | 1047 s / 1034 s over the two captures (~17.5 / 17.2 min) |
-| saves | 2,627 |
-| `final_time` | 2.625885e-02 s (the dynamic `t_end`, reached) |
-| trajectory | `y[2627, 576]` = 8 fields × 72 cells |
-| phase census (saves) | 9 `pre_breakdown`, 17 `breakdown`, 2000 `main_discharge`, 600 `afterglow`, 1 `post_afterglow` |
+| steps | 79,348 |
+| wall, single lane | ~13 min per capture over the two captures |
+| saves | 2,628 |
+| `final_time` | 2.626672e-02 s (the dynamic `t_end`, reached) |
+| trajectory | `y[2628, 576]` = 8 fields × 72 cells |
+| phase census (saves) | *not re-measured at this capture* — the outgoing fixture's census was 9 `pre_breakdown`, 17 `breakdown`, 2000 `main_discharge`, 600 `afterglow`, 1 `post_afterglow`, which sums to the OLD 2,627 |
 | save cadence | 10 us — the finest timing shift this fixture can resolve |
 
-*(Figures above are the 2026-08-21 physics-batch capture, the SECOND one — the m_He ruling landed after the first and forced a re-recapture. The two captures
-were bit-identical but not equal in wall time; the spread is scheduling, not
-trajectory, and the smaller figure is the cleaner lane.)*
+*(Figures above are the CURRENT fixture — the f = 0.45 recapture, 2026-08-21 —
+and `steps`, `saves` and `final_time` are read from the committed sidecar
+`scripts/baselines/production_discharge.json`, which is regenerated at every
+recapture and is the authority for them. The previous capture's values
+(steps 80,416, saves 2,627, `final_time` 2.625885e-02 s) and the full
+before/after delta are in the recapture record below.)*
 
-**The gate is ~2× the wall time of the fixture it replaced** (~8–9 min), not the
+**The gate is ~1.5× the wall time of the fixture it replaced** (~8–9 min), not the
 same — the pre-capture projection of 40–45k steps was taken from the
 early-discharge `dt` (6.4e-7 at t = 1.4e-3 s) and the timestep does not hold
 that value through the plateau; the measured mean is 3.1e-7. What the extra cost

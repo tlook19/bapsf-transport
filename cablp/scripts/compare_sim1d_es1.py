@@ -421,11 +421,23 @@ def _main_discharge_origin(result):
     return float(times[hits[0]])
 
 
-# Production axial resolution (stance promotion, 2026-07-27). This is a
-# DRIVER-level default, deliberately not a config.py default: the golden
+# NO-STANCE FALLBACK MESH -- despite the name, this is NOT the mesh of record.
+# The mesh of record is the STANCE's nx (g1atrim: 268), and wherever a stance is
+# in play the stance wins: run_m6_point.py seeds extra["nx"] = args.nx and then
+# applies extra.update(stance.params) unconditionally, so `--stance g1atrim`
+# resolves nx = 268 whether or not --nx was typed (the driver prints the
+# supersession, "240 -> 268"). This value is therefore only the fallback for the
+# paths with no stance layer: compare_sim1d_es1's own CLI, run_m6_point
+# --no-stance, profile_sim1d, sp3_build_nn0, run_kn2z_promoted, and the "m6"
+# snapshot case in audit_sim1d_configs (whose resolved-config hash pins it).
+#
+# It stays a DRIVER-level default and not a config.py default: the golden
 # baseline is a regression scaffold, not a production claim, and pins its own
 # nx (baseline_sim1d BASELINE_PARAM_OVERRIDES) so the reviewer gate keeps its
-# runtime.
+# runtime. The name is kept for compatibility -- it is imported by name across
+# the campaign's drivers and scratch scripts. (Historical: it was promoted as
+# "the production resolution" on 2026-07-27, which the stance-of-record layer
+# superseded at R1/R2a, 2026-08-20.)
 PRODUCTION_NX = 240
 
 
