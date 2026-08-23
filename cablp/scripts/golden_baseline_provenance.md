@@ -47,6 +47,12 @@ limiter relaxes as the column fills, and the full cycle is affordable.
 until the fixture is recaptured.** That is intended — the fixture tracks the
 configuration the campaign actually runs. It is not a licence to recapture
 casually; a recapture stays a reviewed, authorized, recorded event.
+**A recapture regenerates the short-horizon digest reference
+`scripts/baselines/golden_digest_4k.json` in the SAME event**, with
+`python scripts/golden_digest_gate.py --capture`: it pins this same
+configuration and is invalidated by exactly the events that invalidate the NPZ,
+so the two rotate together or the digest gate starts failing for a reason that
+has nothing to do with the code under review.
 
 ## The re-cut: what could not travel to `nx = 60`
 
@@ -84,6 +90,7 @@ to be.
 | `nx` | `60` | Axial resolution of the far column: a pure cost knob. The campaign runs 268; a reviewer pays for this gate on the candidate branch and again post-merge. Pinned rather than inherited so a future default-`nx` change cannot multiply every gate's runtime silently. |
 | `max_steps_action` | `"raise"` | Deliberately overrides the stance's `"stop"`. For a campaign arm a step cap is a budget and a truncated arm is still data; here the cap is a tripwire, and tripping it should be loud. |
 | `max_steps` (run kwarg) | `150000` | **A tripwire, not a run length** — ~2.0× the measured 76,631 steps. It exists so a change that quietly destroys the timestep fails fast instead of running for hours. If it fires, the question is what happened to `dt`, not what happened to the trajectory. Sized at 2× deliberately: a backstop with a few percent of headroom is not a backstop, it is a second cost cap waiting to truncate the gate. |
+| digest horizon (`baselines/golden_digest_4k.json`) | first `4000` accepted steps | The companion fixture for `scripts/golden_digest_gate.py`, which folds the packed state into a running SHA-256 after EVERY accepted step of this same configuration. The horizon is a cost knob, not physics: 4,000 steps is ~2.5 min against the full gate's ~17, and over the steps it covers it is the STRONGER check, because the golden certifies only what reaches a save. That gate runs at `max_steps_action = "stop"` — the cap is its run length, not a tripwire — which changes what happens AT the cap and nothing before it. |
 
 `BASELINE_FLAG_OVERRIDES` carries one entry, `neutral_equilibration = True`, for
 the reason given in the re-cut section above.
