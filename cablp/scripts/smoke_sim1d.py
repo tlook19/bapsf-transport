@@ -18455,6 +18455,71 @@ def _case_neutral_probe_step_average(
 
 
 # --------------------------------------------------------------------
+# neutral-probe-energy-booking
+# --------------------------------------------------------------------
+@_case("neutral-probe-energy-booking")
+def _case_neutral_probe_energy_booking(_probe_config, _probe_ok, _probe_cells):
+    # (vii) THE ENERGY THE INJECTED GAS ARRIVES WITH, under `neutral_energy`.
+    # The probe term returns no En row of its own; the solver books one for it
+    # centrally, at the WALL birth energy, exactly as a gas-puff particle
+    # carries. The hazard this pins is a SILENT one. The central table raises
+    # on a term it does not name, and a "local"/"none" booking on a row that
+    # ADDS neutrals raises too -- but re-labelling the probe "owns" would hand
+    # back the term's own En row, which is None, and the injected gas would be
+    # born at zero energy and cool the column until the floor clip re-warmed
+    # it. So what is asserted here is the delivered energy PER PARTICLE.
+    from cablp.solvers._sim1d.core.state import (
+        NEUTRAL_ENERGY_FLOOR_T_K as _probe_En_T_wall,
+        neutral_energy_floor as _probe_En_floor,
+    )
+    from cablp.vars._cons import kb_cgs as _probe_En_kb
+
+    _probe_En_birth = 1.5 * (_probe_En_T_wall * _probe_En_kb)
+    for _probe_En_two_zone in (False, True):
+        _probe_En_p, _probe_En_f = _probe_config(**_probe_ok)
+        # `neutral_energy` refuses to construct without an evolved neutral
+        # wind, so the energy arm carries `neutral_momentum` too.
+        _probe_En_f["neutral_momentum"] = True
+        _probe_En_f["neutral_energy"] = True
+        _probe_En_f["neutral_two_zone"] = _probe_En_two_zone
+        if _probe_En_two_zone:
+            # The column is the zone that HAS an energy field; the annulus
+            # carries none, so it is the column arm that books anything.
+            _probe_En_p["neutral_probe_zone"] = "column"
+        _probe_En_sim = LAPDSim1D(_probe_En_p, _probe_En_f)
+        _probe_En_term = _probe_En_sim.rhs_terms()["neutral_probe_source"]
+        assert _probe_En_term.En is not None, _probe_En_two_zone
+        _probe_En_nn = np.asarray(_probe_En_term.nn, dtype=float)
+        _probe_En_row = np.asarray(_probe_En_term.En, dtype=float)
+        # Every injected particle carries the wall floor energy, exactly.
+        assert np.array_equal(
+            _probe_En_row, _probe_En_nn * _probe_En_birth
+        ), _probe_En_two_zone
+        # ...which IS the En floor for the particles added, to rounding: the
+        # floor helper associates the same three factors in a different order,
+        # so the two agree to an ulp rather than bit for bit.
+        assert np.max(np.abs(
+            _probe_En_row / _probe_En_floor(_probe_En_nn) - 1.0
+        )) < 1e-15, _probe_En_two_zone
+        # ANTI-VACUITY: the row is not trivially zero, so the two assertions
+        # above are about delivered energy and not about 0 == 0.
+        assert float(np.max(_probe_En_row)) > 0.0, _probe_En_two_zone
+        # The probe still moves neutrals and nothing else.
+        for _probe_En_zero_row in ("n", "M", "Ee", "Ei"):
+            assert np.array_equal(
+                np.asarray(
+                    getattr(_probe_En_term, _probe_En_zero_row), dtype=float
+                ),
+                np.zeros(_probe_cells),
+            ), (_probe_En_zero_row, _probe_En_two_zone)
+    # With `neutral_energy` OFF the state carries no En row at all and neither
+    # does the term: the flag-off path is untouched by any of the above.
+    _probe_En_off_sim = LAPDSim1D(*_probe_config(**_probe_ok))
+    assert _probe_En_off_sim.state.En is None
+    assert _probe_En_off_sim.rhs_terms()["neutral_probe_source"].En is None
+
+
+# --------------------------------------------------------------------
 # tracer-affine-update-identity
 # --------------------------------------------------------------------
 @_case(

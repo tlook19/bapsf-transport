@@ -1588,11 +1588,19 @@ def neutral_probe_source_rhs(
       DILUTES it -- ``u_n = M_n / (m_n n_n)`` falls as ``n_n`` rises at fixed
       ``M_n`` -- which is the physical content of injecting at rest and is not
       a separate drag term.
-    * TEMPERATURE. The moment neutral model carries ONE neutral temperature,
-      the config's ``Tn_K``, and no neutral energy equation, so injected
-      particles join that single cold-gas population exactly as gas-puff
-      particles do. There is deliberately no probe temperature key: a distinct
-      injection temperature would be a new field, not a new parameter.
+    * TEMPERATURE. Under the ``neutral_energy`` flag the injected particles
+      arrive at the wall/feed temperature and carry the ``En`` floor energy
+      each -- ``(3/2) k T_wall``, exactly what a gas-puff particle carries --
+      so an injection into gas already at the floor cannot move ``Tn`` at all.
+      This term does NOT return that row: it is booked for it centrally, by
+      ``solver._attach_neutral_energy_rows`` under the ``"wall"`` mode
+      ``_NEUTRAL_ENERGY_TERM_BOOKING`` records for it, which is why the
+      returned ``En`` is always ``None`` here. Only the COLUMN share is
+      booked; the annulus carries no energy field. With ``neutral_energy``
+      off there is no ``En`` row at all and the injected particles join the
+      single ``Tn_K`` cold-gas population. There is deliberately no probe
+      temperature key either way: a distinct injection temperature would be a
+      new field, not a new parameter.
 
     Under the two-zone closure ``zone`` selects which neutral field is fed,
     ``"column"`` (``nn``) or ``"annulus"`` (``nn_a``). The per-cell particle
