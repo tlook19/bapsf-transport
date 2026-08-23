@@ -161,13 +161,20 @@ EXCHANGE_MODEL = "cauchy_chord"
 # Maxwellian average is that same constant, at any temperature.
 CLOSED_ISO_RATE_CM3_S = 2.0 * 7.63e-16 * np.sqrt(EV / M_HE)
 
-# Registered coarse drift-tripwire bracket (2026-08-05) on the kinetic/fluid
-# TOTAL-drag ratio, gated by C6. The two operators are not the same object and
-# no exact ratio is predicted; this bounds how far apart they may drift. Sized
-# to catch structural regressions -- a dropped channel, a lost 1/2, a wrong
-# reduced mass -- which move the ratio by a factor. DO NOT tighten it onto the
-# values the current build produces.
-DRAG_RATIO_BRACKET = (1.0, 1.7)
+# Registered bracket on the kinetic/fluid RATE-COEFFICIENT ratio gated by C6
+# (re-registered 2026-08-23e; supersedes the 2026-08-05 [1.0, 1.7]). Both
+# sides approximate the SAME two-Maxwellian average, so the bracket is a
+# DERIVED residual budget rather than a factor-wide tripwire: the lower edge
+# is exact (every residual is sign-definite >= 0) and the upper edge is the
+# worst-case residual sum with headroom. See gate_c6's docstring for the
+# per-point decomposition and for the two structural errors it must catch.
+RATE_COEFF_RATIO_BRACKET = (1.00, 1.10)
+
+# Predicted per-point residual sums [%] over the C6 probe points
+# Ti = 0.1/0.5/2/8 eV, interpolation + Jensen + drift-neglect, recorded so a
+# future move in the observed ratios can be CLASSIFIED rather than merely
+# re-bracketed. Reported alongside the observed ratios; not itself gated.
+RATE_COEFF_RESIDUAL_PREDICTED_PCT = (0.95, 1.9, 2.8, 4.4)
 
 
 # Package defaults a ``kinetic_dvm`` arm CANNOT carry, with the value that
@@ -1013,27 +1020,56 @@ def gate_c5():
 
 
 def gate_c6():
-    """The kinetic/fluid total-drag ratio stays inside its registered bracket.
+    """The kinetic/fluid rate-coefficient ratio stays inside its bracket.
 
-    A COARSE DRIFT TRIPWIRE, not a correspondence check. The kinetic and
-    fluid operators are not the same object -- the cx channel's ``g_eff``
-    interpolation is not a Maxwellian rate average -- so no exact ratio is
-    predicted and none is asserted. What IS asserted is that the two stay
-    within a factor of each other: the kinetic arm should drag somewhat
-    HARDER than the fluid reduced operator (ratio >= 1) and not by more than
-    a modest factor.
+    WHAT IS MEASURED. Both arms are approximations to the SAME object -- the
+    ``k_b + 0.5 k_iso`` channel-weighted rate coefficient of a two-Maxwellian
+    He/He+ pair -- so this is a residual budget, not a kinetic effect scored
+    against a fluid one. The quantity is a NUMBER-WEIGHTED rate coefficient
+    against a STATIONARY 300 K neutral Maxwellian: the kinetic arm's per-bin
+    ``(nu_cx + nu_el)/n_i`` averaged over ``g.maxwellian(300 K, u = 0)``,
+    divided by ``phelps_momentum_transfer_rate_cm3_s((Ti + Tn)/2)``. It is
+    NOT a total drag; the momentum-weighted ratio is a different number and
+    differs by up to 1.4 %.
 
-    The bracket is the registered one and is deliberately loose. It exists to
-    catch gross structural drift -- a dropped channel, a wrong reduced mass, a
-    units slip -- which moves this ratio by a factor, not by percent. It must
-    NOT be tightened onto whatever the current build happens to produce; a
-    tripwire that tracks the code it watches is not a tripwire.
+    The fluid side is EXACT in the drift-free two-Maxwellian limit (it is
+    ``<sigma g>`` over the reduced-mass relative Maxwellian at
+    ``T_eff = (Ti + Tn)/2``) and it neglects the ion drift. The kinetic side
+    evaluates ``n_i sigma(E(g_eff)) g_eff`` per velocity bin with the
+    ion-only thermal floor. THREE residuals separate them, and each is
+    SIGN-DEFINITE >= 0 for the Phelps pair, which is why the lower edge is
+    exactly 1.0 and not "1 +- quadrature":
 
-    What this bracket does NOT catch, stated so nobody mistakes its scope:
-    the isotropic channel's one-half momentum-transfer factor. Dropping it
-    takes the ratios to 1.42-1.60, still inside [1.0, 1.7]. That factor is
-    gated exactly, bit-for-bit, by C5; this row is not its guard and the two
-    are complementary rather than redundant.
+    (i)   the ``sqrt(w^2 + c_bar^2)`` interpolation is an UPPER bound on
+          ``<|v - u_i|>``, by <= +2.5 %, peaking near ``w/a ~ 1.2-1.5`` --
+          which is exactly where a 300 K neutral sits against 0.03-0.1 eV
+          ions;
+    (ii)  single-energy evaluation ``sigma(E(g_eff)) g_eff`` against the
+          average ``<sigma g>`` (Jensen, with ``sigma_b`` monotone
+          DECREASING in E: ``d ln sigma_b/dE = -0.15/(E + 5) -
+          0.25/(1000 + E) < 0``), <= +2.5 % for ``Ti <= 8`` eV;
+    (iii) the fluid rate's neglect of the drift, ``~ x^2/3`` with
+          ``x = u_i/a``, ~2 % at the largest drift probed here.
+
+    PER-POINT DECOMPOSITION, recorded so a future move can be CLASSIFIED
+    rather than merely re-bracketed. Predicted residual sums over the four
+    probe points (``RATE_COEFF_RESIDUAL_PREDICTED_PCT``) are 0.95/1.9/2.8/
+    4.4 %; observed ratios are 1.0091/1.0183/1.0258/1.0428. Grid quadrature
+    is NOT part of the residual: 48x12, 96x24 and 192x48 agree to four
+    decimals.
+
+    THE BRACKET. Lower edge 1.00 is exact by the sign-definiteness above (the
+    exact erf form leaves the (0.1 eV, u = 0) point at 1.0006, and the 0.9 %
+    headroom there is deterministic and grid-converged). Upper edge 1.10 is
+    the derived worst-case residual budget (<= ~7.5 %) with headroom, chosen
+    from the admissible range [1.08, 1.15]. It still catches both structural
+    errors this operator has actually exhibited: the reduced-mass thermal
+    floor prints >= 1.22, and dropping the isotropic channel's one-half
+    momentum-transfer factor prints ~1.39/1.25/1.17/1.12. The superseded
+    [1.0, 1.7] caught NEITHER.
+
+    The one-half factor is additionally gated exactly, bit-for-bit, by C5;
+    the two rows are complementary rather than redundant.
     """
     nz = 4
     dvm = bare_dvm(nz=nz, nvz=48, nvp=12)
@@ -1053,18 +1089,22 @@ def gate_c6():
         )
         ratios.append(k_kin / k_fluid if k_fluid else float("inf"))
 
-    lo, hi = DRAG_RATIO_BRACKET
+    lo, hi = RATE_COEFF_RATIO_BRACKET
     ok = all(lo <= r <= hi for r in ratios)
     worst = min(ratios, key=lambda r: min(r - lo, hi - r))
     return (
-        "C6 kinetic/fluid total-drag ratio inside its registered bracket",
+        "C6 kinetic/fluid rate-coefficient ratio inside its bracket",
         ok,
-        f"bracket [{lo}, {hi}] (registered 2026-08-05, coarse drift "
-        f"tripwire -- not to be tightened onto the current build); "
+        f"bracket [{lo:.2f}, {hi:.2f}] (re-registered 2026-08-23e as a "
+        f"DERIVED residual budget; number-weighted rate coefficient against "
+        f"a stationary 300 K Maxwellian, NOT a total drag); "
         + "; ".join(
-            f"Ti={Ti[i]:g}: {ratios[i]:.3f}" for i in range(nz)
+            f"Ti={Ti[i]:g}: {ratios[i]:.4f} "
+            f"(predicted +{RATE_COEFF_RESIDUAL_PREDICTED_PCT[i]:g}%, "
+            f"observed +{100.0 * (ratios[i] - 1.0):.2f}%)"
+            for i in range(nz)
         )
-        + f"; closest to an edge: {worst:.3f}",
+        + f"; closest to an edge: {worst:.4f}",
     )
 
 

@@ -21380,6 +21380,52 @@ def _case_mirror_field_loader_refusals():
             raise AssertionError("a map missing its Bz array must be refused")
 
 
+@_case("kinetic-geff-thermal-floor")
+def _case_kinetic_geff_thermal_floor():
+    """Pin the ASSEMBLED ``g_eff`` thermal floor, as a value, once.
+
+    ``ion_thermal_g_eff_floor_cm2_s2`` is the single definition of
+    ``8 k Ti / (pi m)`` that the DVM collision operator, the hot surface
+    carrier, the TPMC fast-reflected arm and the E2 comparison all import,
+    so a transcription of it cannot drift between the four consumers.
+
+    The pin is the assembled floor -- coefficient AND mass together -- and
+    not the bare coefficient, because the defect class it guards is their
+    PRODUCT: ``8/mu`` is identically ``16/m_He`` for an equal-mass pair, so
+    a coefficient pin alone passes the two-Maxwellian (reduced-mass) form
+    unchanged. Pinning the drift-free mean relative speed separates them by
+    ``sqrt(2)``. Which consumer actually calls the helper is C5(a)'s job in
+    ``scripts/verify_sim1d_k2_dvm.py``; this case pins the number.
+    """
+    from cablp.solvers._sim1d.physics.kinetic_neutrals import (
+        ion_thermal_g_eff_floor_cm2_s2 as _gf,
+    )
+    from cablp.vars._cons import ev_to_erg as _gf_ev, m_He_cgs as _gf_m
+
+    # The drift-free mean speed of the ion Maxwellian at Ti = 1 eV, with the
+    # repo's m_He: sqrt(8 k Ti / (pi m_He)) [cm/s].
+    _gf_speed = float(np.sqrt(_gf(1.0)))
+    assert np.isclose(_gf_speed, 783482.7390046517, rtol=1e-12, atol=0.0), (
+        _gf_speed
+    )
+    # The form this must NOT be: the reduced mass mu = m_He/2 folds in a
+    # second thermal spread that no consumer's projectile has.
+    _gf_mu_speed = float(np.sqrt(_gf(1.0, 0.5 * _gf_m)))
+    assert np.isclose(
+        _gf_mu_speed, 1108011.9153855983, rtol=1e-12, atol=0.0
+    ), _gf_mu_speed
+    assert np.isclose(
+        _gf_mu_speed / _gf_speed, np.sqrt(2.0), rtol=1e-12, atol=0.0
+    )
+
+    # The explicit-argument call (what jet_carrier makes, passing its own
+    # two constants) is bit-identical to the default one.
+    assert _gf(1.0, _gf_m, _gf_ev) == _gf(1.0)
+    # Linear in Ti, and shape-preserving on an array argument.
+    _gf_Ti = np.array([0.25, 1.0, 4.0])
+    assert np.allclose(_gf(_gf_Ti), _gf_Ti * _gf(1.0), rtol=1e-12, atol=0.0)
+
+
 # --------------------------------------------------------------------
 # smoke-summary
 # --------------------------------------------------------------------
