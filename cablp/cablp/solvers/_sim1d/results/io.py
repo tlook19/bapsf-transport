@@ -10,6 +10,9 @@ from cablp.funcs._kernels import PURE_PROVENANCE as PURE_KERNEL_PROVENANCE
 from ..core.config import resolve_config
 from ..core.timestep import TimestepDiagnostics
 from ..physics.hot_neutrals import HOT_CHANNEL_DIAGNOSTIC_FIELDS
+from ..physics.sources import (
+    IONIZATION_BIRTH_DEFICIT_DIAGNOSTIC_FIELDS,
+)
 from .compat import add_sim3_compat_aliases
 
 
@@ -38,7 +41,7 @@ _OPTIONAL_ARRAY_FIELDS = (
     "u_n_a",
     "En",
     "Tn",
-) + HOT_CHANNEL_DIAGNOSTIC_FIELDS
+) + HOT_CHANNEL_DIAGNOSTIC_FIELDS + IONIZATION_BIRTH_DEFICIT_DIAGNOSTIC_FIELDS
 
 _ARRAY_FIELDS = (
     "time",

@@ -185,8 +185,12 @@ from cablp.solvers._sim1d.physics.reactions import (
     reaction_rhs_terms,
 )
 from cablp.solvers._sim1d.physics.sources import (
+    IONIZATION_BIRTH_DEFICIT_DIAGNOSTIC_FIELDS,
     add_state_rhs,
     cathode_jet_backscatter_speed,
+    neutral_energy_transfer_row,
+    neutral_energy_volume_ratio,
+    neutral_temperature_eV,
     ion_neutral_collision_frequency,
     ion_neutral_cx_frequency,
     ion_neutral_drag_rhs,
@@ -21070,6 +21074,185 @@ def _case_hot_channel_internal_wall():
         raise AssertionError(
             "neutral_hot_internal_wall without neutral_energy must be refused"
         )
+
+
+# --------------------------------------------------------------------
+# ionization-birth-neutral-temperature
+# --------------------------------------------------------------------
+@_case("ionization-birth-neutral-temperature")
+def _case_ionization_birth_neutral_temperature():
+    # ONE EVENT, BOOKED TWICE. At ionization the En sink removes the local
+    # (3/2) k Tn per consumed atom while the Ei birth adds (3/2) k T_birth per
+    # born ion; the pair conserves energy only at T_birth = Tn. This block pins
+    # the option that makes them agree ("neutral"), the diagnostic rows that
+    # DISCLOSE the gap when they do not, and the no-En fallback.
+    from cablp.solvers._sim1d.results.io import save_result_hdf5 as _nb_save
+
+    # (a) THE DEFAULT DOES NOT MOVE. "floor" is still the shipped booking, so
+    # the golden and every other case run the arithmetic they always ran.
+    _nb_params, _nb_flags = default_config()
+    assert _nb_params["Ti_birth_ionization"] == "floor"
+    assert _nb_flags["neutral_energy"] is True
+
+    # The selector refuses what it does not implement, and "neutral" is an ION
+    # option only: the En ionization sink has no electron partner to pair with.
+    for _nb_key, _nb_bad in (
+        ("Ti_birth_ionization", "wall"),
+        ("Te_birth_ionization", "neutral"),
+    ):
+        try:
+            LAPDSim1D(dict(_nb_params, **{_nb_key: _nb_bad}), dict(_nb_flags))
+        except ValueError as _nb_exc:
+            assert _nb_key in str(_nb_exc), str(_nb_exc)
+        else:
+            raise AssertionError(f"{_nb_key}={_nb_bad!r} must be refused")
+
+    def _nb_build(_birth):
+        # A jet-hot source region without paying for the run that makes one:
+        # the state's own En is scaled where the jet deposits, so Tn there is
+        # ~10 eV against a 300 K ion floor and the two bookings visibly part.
+        _sim = LAPDSim1D(
+            dict(_nb_params, Ti_birth_ionization=_birth), dict(_nb_flags)
+        )
+        _sim.run(t_end=3.0e-10, dt=1.0e-10)
+        _sim._circuit_I_loop = 800.0   # arm the beam so its birth row is live
+        _hot = _sim.state
+        _hot.En[1:6] *= 400.0
+        _sim._y[:] = pack_state(_hot)   # .state unpacks a COPY; write it back
+        return _sim
+
+    _nb_sims = {}
+    for _nb_birth in ("floor", "neutral"):
+        _nb_sim = _nb_build(_nb_birth)
+        _nb_sims[_nb_birth] = _nb_sim
+        _nb_terms = _nb_sim.rhs_terms()
+        _nb_state = _nb_sim.state
+        _nb_rows = _nb_sim._birth_deficit_diagnostics
+        _nb_Tn = neutral_temperature_eV(
+            _nb_state, floors=_nb_sim.floors, Tn_eV=np.nan
+        )
+        assert np.max(_nb_Tn) > 5.0, np.max(_nb_Tn)   # the hot region is hot
+        _nb_Vp = _nb_sim.geometry.plasma_volume_cm3
+        # En rides nn's volume; put both bookings on the plasma volume, which
+        # is the one Ei lives on, so the two are directly comparable in watts.
+        _nb_V_En = _nb_Vp / neutral_energy_volume_ratio(
+            _nb_state, _nb_sim.geometry
+        )
+        _nb_Ti_birth = (
+            _nb_Tn
+            if _nb_birth == "neutral"
+            else np.full_like(_nb_Tn, _nb_sim.floors["Ti"])
+        )
+        # The summed row is exactly the three per-site rows.
+        assert np.array_equal(
+            _nb_rows[IONIZATION_BIRTH_DEFICIT_DIAGNOSTIC_FIELDS[0]],
+            sum(
+                _nb_rows[_name]
+                for _name in IONIZATION_BIRTH_DEFICIT_DIAGNOSTIC_FIELDS[1:]
+            ),
+        )
+        _nb_live = 0
+        for _nb_term_name, _nb_field in zip(
+            (
+                "ionization_birth",
+                "beam_ionization_birth",
+                "gas_puff_local_ionization",
+            ),
+            IONIZATION_BIRTH_DEFICIT_DIAGNOSTIC_FIELDS[1:],
+        ):
+            _nb_term = _nb_terms[_nb_term_name]
+            _nb_S = np.asarray(_nb_term.n, dtype=float)
+            _nb_en_W = np.asarray(_nb_term.En, dtype=float) * _nb_V_En * 1.0e-7
+            _nb_ei_W = 1.5 * ev_to_erg * _nb_Ti_birth * _nb_S * _nb_Vp * 1.0e-7
+            _nb_scale = np.abs(_nb_en_W) + np.abs(_nb_ei_W)
+            _nb_scale = np.where(_nb_scale > 0.0, _nb_scale, 1.0)
+            # (c) THE ROW IS THE GAP: deficit = -(En sink + Ei birth thermal),
+            # per cell, whichever selector is in force.
+            assert np.all(
+                np.abs(_nb_rows[_nb_field] * _nb_Vp + _nb_en_W + _nb_ei_W)
+                <= 1.0e-12 * _nb_scale
+            ), (_nb_birth, _nb_term_name)
+            _nb_hot = (_nb_Tn > _nb_sim.floors["Ti"]) & (_nb_S > 0.0)
+            if _nb_birth == "neutral":
+                # (b) THE PAIR CLOSES. Booked at the neutral temperature the
+                # sink debits, the two sides cancel to roundoff per cell...
+                assert np.all(
+                    np.abs(_nb_en_W + _nb_ei_W) <= 1.0e-12 * _nb_scale
+                ), _nb_term_name
+                # ...and the disclosure row reads zero there.
+                assert np.all(
+                    np.abs(_nb_rows[_nb_field]) * _nb_Vp <= 1.0e-12 * _nb_scale
+                ), _nb_term_name
+            else:
+                # (c) ...and under "floor" it is POSITIVE wherever the gas is
+                # hotter than the ion floor: energy leaving the model.
+                assert np.all(_nb_rows[_nb_field][_nb_hot] > 0.0), _nb_term_name
+            if _nb_hot.any():
+                _nb_live += 1
+        # Both the bulk and the beam channel were actually exercised.
+        assert _nb_live >= 2, _nb_live
+
+    # The two selectors are not the same run: "floor" really does delete power
+    # here, so the block above is not vacuous.
+    _nb_floor_total = _nb_sims["floor"]._birth_deficit_diagnostics[
+        IONIZATION_BIRTH_DEFICIT_DIAGNOSTIC_FIELDS[0]
+    ]
+    assert (
+        np.sum(_nb_floor_total * _nb_sims["floor"].geometry.plasma_volume_cm3)
+        > 0.1
+    )
+
+    # The rows are ADDITIVE state on the artifact: they round-trip through
+    # sim1d-hdf5-v1 unchanged.
+    _nb_result = _nb_sims["floor"].run(t_end=4.0e-10, dt=1.0e-10)
+    with tempfile.TemporaryDirectory() as _nb_dir:
+        _nb_path = Path(_nb_dir) / "birth_deficit.h5"
+        _nb_save(_nb_path, _nb_result)
+        _nb_loaded = load_result_hdf5(_nb_path)
+        for _nb_field in IONIZATION_BIRTH_DEFICIT_DIAGNOSTIC_FIELDS:
+            assert np.array_equal(
+                getattr(_nb_loaded, _nb_field), getattr(_nb_result, _nb_field)
+            ), _nb_field
+
+    # (d) NO En FIELD, NO LOCAL NEUTRAL TEMPERATURE: the birth falls back to
+    # the cold-gas scalar Tn_K, bit-for-bit the numeric selector at that value.
+    _nb_off_p, _nb_off_f = _pin_pre_r2a_neutral_stance(*default_config())
+    _nb_TnK_eV = float(_nb_off_p.get("Tn_K", 300.0)) * kb_cgs / ev_to_erg
+    _nb_off_neutral = LAPDSim1D(
+        dict(_nb_off_p, Ti_birth_ionization="neutral"), dict(_nb_off_f)
+    )
+    _nb_off_numeric = LAPDSim1D(
+        dict(_nb_off_p, Ti_birth_ionization=_nb_TnK_eV), dict(_nb_off_f)
+    )
+    assert _nb_off_neutral.state.En is None
+    assert np.array_equal(
+        _nb_off_neutral.rhs_terms()["ionization_birth"].Ei,
+        _nb_off_numeric.rhs_terms()["ionization_birth"].Ei,
+    )
+    # With no En field there is no sink to pair with, so no rows are recorded.
+    assert _nb_off_neutral._birth_deficit_diagnostics == {}
+    # The gas-puff local-ionization site reads the same selector by the same
+    # route (it is single-zone only, so it is exercised here rather than above).
+    _nb_puff_profile = np.full(
+        _nb_off_neutral.geometry.cells, 1.0e14, dtype=float
+    )
+    _nb_puff = {
+        _birth: gas_puff_local_ionization_rhs(
+            state=_nb_off_neutral.state,
+            floors=_nb_off_neutral.floors,
+            ion_mass_g=_nb_off_neutral.ion_mass_g,
+            geometry=_nb_off_neutral.geometry,
+            puff_profile=_nb_puff_profile,
+            fraction=0.1,
+            I_ion=I_ion,
+            ionization_birth_energy_model="conservative",
+            Ti_birth_ionization=_birth,
+            Tn_K=float(_nb_off_p.get("Tn_K", 300.0)),
+        )
+        for _birth in ("neutral", _nb_TnK_eV)
+    }
+    assert np.any(_nb_puff["neutral"].n > 0.0)
+    assert np.array_equal(_nb_puff["neutral"].Ei, _nb_puff[_nb_TnK_eV].Ei)
 
 
 # --------------------------------------------------------------------

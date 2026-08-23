@@ -8,7 +8,10 @@ from cablp.funcs._fits import rate_coeff
 from cablp.vars._cons import ev_to_erg
 
 from ..core.state import ConservativeState1D, derive_state
-from .sources import neutral_wind_velocity
+from .sources import (
+    ionization_birth_neutral_temperature_eV,
+    neutral_wind_velocity,
+)
 
 
 H_ION_COEFF = (1e-5, 6.0)
@@ -95,6 +98,7 @@ def reaction_rhs(
     Ti_birth_ionization="floor",
     ionization_birth_energy_model="legacy",
     wind_column_factor=None,
+    Tn_K=300.0,
 ):
     """Return conservative source terms for local bulk plasma reactions."""
     terms = reaction_rhs_terms(
@@ -113,6 +117,7 @@ def reaction_rhs(
         Ti_birth_ionization=Ti_birth_ionization,
         ionization_birth_energy_model=ionization_birth_energy_model,
         wind_column_factor=wind_column_factor,
+        Tn_K=Tn_K,
     )
     ionization = terms["ionization_birth"]
     recombination_rad = terms["recombination_rad_loss"]
@@ -142,6 +147,7 @@ def reaction_rhs_terms(
     Ti_birth_ionization="floor",
     ionization_birth_energy_model="legacy",
     wind_column_factor=None,
+    Tn_K=300.0,
 ):
     """Return ionization and recombination conservative source terms."""
     if ionization_birth_energy_model not in ("legacy", "conservative"):
@@ -180,7 +186,16 @@ def reaction_rhs_terms(
     )
 
     Te_birth = _birth_temperature(Te_birth_ionization, derived.Te, floors["Te"])
-    Ti_birth = _birth_temperature(Ti_birth_ionization, derived.Ti, floors["Ti"])
+    Ti_birth = _birth_temperature(
+        Ti_birth_ionization,
+        derived.Ti,
+        floors["Ti"],
+        neutral_temperature=(
+            ionization_birth_neutral_temperature_eV(state, floors, Tn_K)
+            if Ti_birth_ionization == "neutral"
+            else None
+        ),
+    )
 
     zeros = np.zeros_like(state.n, dtype=float)
     # With an evolved neutral wind (state carries M_n), reactions exchange
@@ -345,6 +360,7 @@ def gas_puff_local_ionization_rhs(
     Te_birth_ionization="local",
     Ti_birth_ionization="floor",
     ionization_birth_energy_model="legacy",
+    Tn_K=300.0,
 ):
     """Local ionization of the fresh dense gas-puff clumps (fractional coverage).
 
@@ -381,7 +397,16 @@ def gas_puff_local_ionization_rhs(
     S_li = nn_sink / np.maximum(volume_ratio, 1e-300)
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     Te_birth = _birth_temperature(Te_birth_ionization, derived.Te, floors["Te"])
-    Ti_birth = _birth_temperature(Ti_birth_ionization, derived.Ti, floors["Ti"])
+    Ti_birth = _birth_temperature(
+        Ti_birth_ionization,
+        derived.Ti,
+        floors["Ti"],
+        neutral_temperature=(
+            ionization_birth_neutral_temperature_eV(state, floors, Tn_K)
+            if Ti_birth_ionization == "neutral"
+            else None
+        ),
+    )
     if ionization_birth_energy_model == "conservative":
         Ee_birth = zeros.copy()
         mixing = 0.5 * ion_mass_g * derived.u ** 2 * S_li  # born at rest, u_birth=0
@@ -399,14 +424,27 @@ def gas_puff_local_ionization_rhs(
     )
 
 
-def _birth_temperature(value, local_temperature, floor_temperature):
+def _birth_temperature(
+    value, local_temperature, floor_temperature, neutral_temperature=None
+):
     if isinstance(value, str):
         if value == "local":
             return local_temperature
         if value == "floor":
             return np.full_like(local_temperature, floor_temperature, dtype=float)
+        if value == "neutral":
+            if neutral_temperature is None:
+                raise ValueError(
+                    "birth temperature 'neutral' was requested where no "
+                    "neutral temperature was supplied; the caller must pass "
+                    "the local neutral temperature the En sink debits"
+                )
+            return np.broadcast_to(
+                np.asarray(neutral_temperature, dtype=float),
+                np.shape(local_temperature),
+            ).astype(float, copy=True)
         raise ValueError(
-            "birth temperature must be 'local', 'floor', or a numeric eV value "
-            f"(got {value!r})"
+            "birth temperature must be 'local', 'floor', 'neutral', or a "
+            f"numeric eV value (got {value!r})"
         )
     return np.full_like(local_temperature, float(value), dtype=float)

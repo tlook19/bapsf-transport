@@ -151,6 +151,7 @@ from .physics.reactions import (
     gas_puff_local_ionization_rhs as _gas_puff_local_ionization_rhs,
     reaction_rhs,
     reaction_rhs_terms,
+    _birth_temperature,
     recombination_energy_return_rhs,
 )
 from .physics.hot_neutrals import (
@@ -167,6 +168,7 @@ from .physics.sources import (
     cathode_jet_backscatter_speed,
     characteristic_boundary_rhs,
     ion_neutral_collision_rhs,
+    ionization_birth_neutral_temperature_eV,
     neutral_cx_channel_rhs,
     neutral_energy_transfer_row,
     ion_neutral_drag_rhs,
@@ -175,6 +177,8 @@ from .physics.sources import (
     neutral_energy_wall_rhs,
     neutral_momentum_wall_rhs,
     neutral_momentum_two_zone_rhs,
+    IONIZATION_BIRTH_DEFICIT_DIAGNOSTIC_FIELDS,
+    IONIZATION_BIRTH_DEFICIT_SITES,
     neutral_temperature_eV,
     neutral_wind_two_zone_factors,
     neutral_wind_velocity,
@@ -1480,6 +1484,7 @@ class LAPDSim1D:
         else:
             self._hot_neutral_kernels = None
         self._hot_channel_diagnostics = {}
+        self._birth_deficit_diagnostics = {}
         _jet = resolve_neutral_jet_config(
             self._input_dict,
             geometry=self._geometry,
@@ -4123,20 +4128,26 @@ class LAPDSim1D:
 
         It runs AFTER the plasma-topology mask, so an ``En`` row can never
         appear on a cell whose ``nn`` row was masked away.
+
+        It also records the ionization-birth thermal deficit rows
+        (:data:`IONIZATION_BIRTH_DEFICIT_DIAGNOSTIC_FIELDS`) on the side
+        channel ``self._birth_deficit_diagnostics``, from the same local
+        ``Tn`` the sinks are built with. Those rows are DIAGNOSTIC: nothing
+        here or downstream adds them to a state or to the RHS ledger.
         """
         if state.En is None:
             return terms
-        Tn = neutral_temperature_eV(
-            state,
-            floors=self._floors,
-            Tn_eV=float(self._input_dict.get("Tn_K", 300.0))
-            * kb_cgs
-            / ev_to_erg,
+        Tn = ionization_birth_neutral_temperature_eV(
+            state, self._floors, self._input_dict.get("Tn_K", 300.0)
         )
         wall_energy = NEUTRAL_ENERGY_FLOOR_T_K * kb_cgs
-        ion_energy = 1.5 * derive_state(
+        derived = derive_state(
             state, floors=self._floors, ion_mass_g=self._ion_mass_g
-        ).Ti * ev_to_erg
+        )
+        ion_energy = 1.5 * derived.Ti * ev_to_erg
+        self._birth_deficit_diagnostics = self._ionization_birth_deficit_rows(
+            terms, derived=derived, Tn=Tn
+        )
         attached = {}
         for name, term in terms.items():
             try:
@@ -4172,6 +4183,54 @@ class LAPDSim1D:
                 ),
             )
         return attached
+
+    def _ionization_birth_deficit_rows(self, terms, derived, Tn):
+        """Return the per-cell ionization-birth thermal deficit rows [W cm^-3].
+
+        Each ionization channel books ONE event twice: the ``En`` sink removes
+        the local ``(3/2) k Tn`` per consumed atom, and the ``Ei`` birth adds
+        ``(3/2) k T_birth`` per born ion. The two agree only when the ion is
+        born at the neutral temperature; otherwise the difference leaves the
+        model without a named home, and these rows are where it is named.
+        Signed POSITIVE for energy that leaves, on the PLASMA volume (the
+        volume the ``Ei`` row lives on), so a row is directly comparable with
+        the ion-energy term powers.
+
+        Diagnostic only. The rows are recorded on a side channel and are never
+        summed into a state, an RHS ledger, or a timestep bound.
+        """
+        Ti_birth_ionization = self._input_dict.get(
+            "Ti_birth_ionization", "floor"
+        )
+        Ti_birth = _birth_temperature(
+            Ti_birth_ionization,
+            derived.Ti,
+            self._floors["Ti"],
+            neutral_temperature=(
+                Tn if Ti_birth_ionization == "neutral" else None
+            ),
+        )
+        # Written exactly as the two sides write them: the sink's per-particle
+        # energy is neutral_energy_transfer_row's own ``local``, and the birth's
+        # is the reaction/beam ``1.5 * ev_to_erg * Ti_birth`` factor.
+        per_particle = (
+            1.5 * np.asarray(Tn, dtype=float) * ev_to_erg
+            - 1.5 * ev_to_erg * Ti_birth
+        )
+        rows = {}
+        total = np.zeros(self._geometry.cells, dtype=float)
+        for term_name, field_name in IONIZATION_BIRTH_DEFICIT_SITES:
+            term = terms.get(term_name)
+            S = (
+                np.zeros(self._geometry.cells, dtype=float)
+                if term is None
+                else np.asarray(term.n, dtype=float)
+            )
+            row = per_particle * S * 1.0e-7  # erg/s/cm^3 -> W/cm^3
+            rows[field_name] = row
+            total = total + row
+        rows[IONIZATION_BIRTH_DEFICIT_DIAGNOSTIC_FIELDS[0]] = total
+        return rows
 
     def _apply_active_plasma_topology(self, terms):
         """Mask plasma-coupled terms on typed plasma-dead cells.
@@ -8110,6 +8169,7 @@ class LAPDSim1D:
             ionization_birth_energy_model=str(
                 self._input_dict.get("ionization_birth_energy_model", "legacy")
             ),
+            Tn_K=float(self._input_dict.get("Tn_K", 300.0)),
         )
 
     def reaction_rhs(self, y=None, state=None):
@@ -8988,6 +9048,18 @@ class LAPDSim1D:
                     if value is None
                     else np.asarray(value, dtype=float).copy()
                 )
+            # The ionization-birth thermal deficit is a DIAGNOSTIC row on the
+            # same side channel: what the En sink debited per ionized atom
+            # minus what the Ei birth booked, times the birth rate. Zero to
+            # roundoff under Ti_birth_ionization="neutral"; the size of the
+            # leak otherwise.
+            for name in IONIZATION_BIRTH_DEFICIT_DIAGNOSTIC_FIELDS:
+                value = self._birth_deficit_diagnostics.get(name)
+                wind[name] = (
+                    np.zeros_like(state.nn)
+                    if value is None
+                    else np.asarray(value, dtype=float).copy()
+                )
         if state.nn_a is not None:
             wind["nn_a"] = state.nn_a.copy()
         if state.M_n_a is not None:
@@ -9383,6 +9455,8 @@ class LAPDSim1D:
             result.En = stack("En")
             result.Tn = stack("Tn")
             for name in HOT_CHANNEL_DIAGNOSTIC_FIELDS:
+                setattr(result, name, stack(name))
+            for name in IONIZATION_BIRTH_DEFICIT_DIAGNOSTIC_FIELDS:
                 setattr(result, name, stack(name))
         if saved and "nn_a" in saved[0]:
             result.nn_a = stack("nn_a")
