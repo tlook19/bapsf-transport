@@ -67,7 +67,7 @@ The suppression is deliberately narrow in both directions:
 * only cases that BUILD ON a pinned config dict are muted -- either straight
   from a fixture, or from one a predecessor derived and handed on -- so a case
   that constructs a deprecated configuration of its own still prints its
-  warning (51 of the 108 cases carry the flag; the other 57 warn as usual);
+  warning (51 of the 114 cases carry the flag; the other 63 warn as usual);
 * ``production-construction-warning-free`` is not muted, and it asserts
   against a fresh ``warnings.catch_warnings(record=True)`` with
   ``simplefilter("always")``, which overrides any outer filter -- a production
@@ -21629,6 +21629,55 @@ def _case_ionization_birth_neutral_temperature():
     }
     assert np.any(_nb_puff["neutral"].n > 0.0)
     assert np.array_equal(_nb_puff["neutral"].Ei, _nb_puff[_nb_TnK_eV].Ei)
+
+
+# --------------------------------------------------------------------
+# golden-digest-gate-deterministic
+# --------------------------------------------------------------------
+@_case("golden-digest-gate-deterministic")
+def _case_golden_digest_gate_deterministic():
+    # scripts/golden_digest_gate.py is the short-horizon complement to the
+    # golden: it folds the packed state into a running SHA-256 after every
+    # accepted step. Its own 4,000-step gate is a minutes-long run and is NOT
+    # run here -- what this case owns is that the module imports and that the
+    # digest is REPRODUCIBLE, because a digest that is not deterministic in
+    # process would report every merge as a divergence. A deliberately tiny
+    # config (nx=12, no neutral equilibration, 25 steps) makes that a
+    # sub-second check.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import golden_digest_gate as _gdg
+
+    assert _gdg.DIGEST_STEPS == 4000
+    assert _gdg.CHECKPOINT_INTERVAL == 1000
+    assert _gdg.DEFAULT_REFERENCE.name == "golden_digest_4k.json"
+
+    _gdg_params, _gdg_flags = default_config()
+    _gdg_params["nx"] = 12
+    _gdg_params["max_steps_action"] = "stop"
+    _gdg_flags["neutral_equilibration"] = False
+    _gdg_run_kwargs = {"t_end": None, "dt": None, "operator_split": None}
+    _gdg_a = _gdg.compute_digest(
+        _gdg_params,
+        _gdg_flags,
+        steps=25,
+        checkpoint_interval=10,
+        run_kwargs=_gdg_run_kwargs,
+    )
+    _gdg_b = _gdg.compute_digest(
+        _gdg_params,
+        _gdg_flags,
+        steps=25,
+        checkpoint_interval=10,
+        run_kwargs=_gdg_run_kwargs,
+    )
+    assert _gdg_a["steps"] == 25
+    assert len(_gdg_a["digest"]) == 64
+    assert sorted(_gdg_a["checkpoints"], key=int) == ["0", "10", "20"]
+    assert _gdg_b["digest"] == _gdg_a["digest"], (
+        _gdg_a["digest"], _gdg_b["digest"]
+    )
+    assert _gdg_b["checkpoints"] == _gdg_a["checkpoints"]
+    assert _gdg_b["config_identity"] == _gdg_a["config_identity"]
 
 
 # --------------------------------------------------------------------
