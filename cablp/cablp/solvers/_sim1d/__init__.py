@@ -8,6 +8,13 @@ from .core.config import (
     load_config,
     resolve_config,
 )
+from .core.model_families import (
+    KINETIC_DVM_INCOMPATIBLE_DEFAULTS,
+    KINETIC_TWO_MOMENT_INCOMPATIBLE_DEFAULTS,
+    KINETIC_TWO_MOMENT_INTERNAL_MEMBERS,
+    MODEL_FAMILIES,
+    resolve_model_families,
+)
 from .results.restart import (
     load_restart_state,
     save_restart_state,
@@ -24,7 +31,11 @@ from .solver import (
 
 __all__ = [
     "BreakdownError",
+    "KINETIC_DVM_INCOMPATIBLE_DEFAULTS",
+    "KINETIC_TWO_MOMENT_INCOMPATIBLE_DEFAULTS",
+    "KINETIC_TWO_MOMENT_INTERNAL_MEMBERS",
     "LAPDSim1D",
+    "MODEL_FAMILIES",
     "ProgressPrinter1D",
     "SimulationProgress1D",
     "TimestepRejectionError",
@@ -36,6 +47,7 @@ __all__ = [
     "load_restart_state",
     "load_result_hdf5",
     "resolve_config",
+    "resolve_model_families",
     "save_restart_state",
     "summarize_result",
 ]

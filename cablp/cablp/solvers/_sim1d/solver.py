@@ -18,6 +18,7 @@ from .core.config import (
     resolve_nn0,
 )
 from .core.deprecations import warn_deprecated_config
+from .core.model_families import resolve_model_families
 from .core.geometry import (
     _anode_neutral_transparency,
     absorbing_live_cells_by_role,
@@ -786,8 +787,19 @@ class LAPDSim1D:
         The flags cached here are read by every phase below (and by the R1
         presence check that follows immediately), which is why they are
         resolved before any of them.
+
+        The MODEL-FAMILY resolution runs first of all, on the merged config
+        and BEFORE every validator in this constructor: a top-level model
+        selection sets the member keys it owns that the caller left at their
+        config defaults, and refuses ONCE -- naming the selection, its whole
+        member set and every offending key -- when the caller explicitly set
+        one of them to something the selection cannot carry. The single-key
+        guards those member sets flatten are all still below and are all
+        still reached; what changes is that a resolvable config no longer
+        walks them one refusal at a time.
         """
         self._input_dict, self._flags = resolve_config(input_dict, input_flags)
+        resolve_model_families(self._input_dict, self._flags)
         self._progress_callback = progress_callback
         self._progress_tracker = progress_tracker
         self._progress_interval_s = (

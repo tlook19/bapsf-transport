@@ -88,8 +88,14 @@ Gates:
       injected flux integral equals what was fed, nothing appears
       upstream of the face, and the emitting cell does not retain the
       whole return the way the superseded stationary birth did
-  G1..G7  construction refusals: each unsupported configuration raises a
-      ValueError at construction naming the offender
+  G1..G14 construction refusals: each unsupported configuration raises a
+      ValueError at construction naming the offender. G2 is the model-preset
+      resolver's refusal half -- an explicitly-set family member the
+      selection cannot carry, refused ONCE with the whole member set named
+  X1  the resolver's other half: naming ``neutral_model='kinetic_dvm'`` on an
+      otherwise untouched ``default_config()`` constructs, every member of
+      the family resolved to the value the selection requires and none of
+      them hand-cleared
   L1  free-streaming, exact uniform stationarity: a spatially uniform
       distribution in one velocity bin with a matched inflow is stationary
       to roundoff under the transport march
@@ -127,7 +133,11 @@ from cablp.funcs._cross import (
     phelps_iso_rate_cm3_s,
     phelps_momentum_transfer_rate_cm3_s,
 )
-from cablp.solvers._sim1d import LAPDSim1D, default_config
+from cablp.solvers._sim1d import (
+    KINETIC_DVM_INCOMPATIBLE_DEFAULTS,
+    LAPDSim1D,
+    default_config,
+)
 from cablp.solvers._sim1d.core.geometry import absorbing_live_cells_by_role
 from cablp.solvers._sim1d.physics.kinetic_dvm import (
     ELASTIC_BGK_MOMENTUM_FACTOR,
@@ -191,47 +201,16 @@ RATE_COEFF_RATIO_BRACKET = (1.00, 1.10)
 RATE_COEFF_RESIDUAL_PREDICTED_PCT = (0.95, 1.9, 2.8, 4.4)
 
 
-# Package defaults a ``kinetic_dvm`` arm CANNOT carry, with the value that
-# takes each one out of the branch the solver refuses. Entries are
-# ``(namespace, key, value)`` -- the chain spans BOTH namespaces, so the
-# namespace is carried explicitly rather than inferred.
+# The measured incompatibility set for ``neutral_model = "kinetic_dvm"`` now
+# lives IN THE SOLVER (``core/model_families.py``) and is imported above: the
+# resolver applies it at construction, and this fixture reads the same tuple
+# so the arms below and the solver can never disagree about what the arm
+# refuses. Entries are ``(namespace, key, required_value, why)``.
 #
-# These are refusals BY CONSTRUCTION, not preferences: the DVM state already
-# owns the neutral first moment, and everything below is either that same
-# ownership restated or a presence-gate standing on it. ``arm_config`` clears
-# them explicitly so this suite's arms build IDENTICALLY whatever the package
-# defaults happen to be -- ``default_config()`` currently ships every one of
-# them armed, which made every arm in this file unconstructible.
-#
-# This is a TEST FIXTURE defining its own kinetic-compatible base. It says
-# nothing about what production should own, and it does not prejudge the
-# question of where neutral momentum belongs.
-#
-# THE LIST IS THE MEASURED DEPTH OF THE CASCADE ON THIS HEAD, obtained by
-# constructing the arm, reading the refusal, clearing the key that refusal
-# names, and repeating until ``LAPDSim1D`` constructed. It is a fixture fact
-# and not an invariant: a flipped default or a new presence-gate changes it,
-# and the way to re-measure is to run this suite and read what the solver
-# refuses. Do not extend it by guessing.
-KINETIC_DVM_INCOMPATIBLE_DEFAULTS = (
-    # The DVM state carries the neutral momentum as the first moment of f, so
-    # an evolved M_n field would be a second, unowned copy of it.
-    ("flags", "neutral_momentum", False),
-    # The frictional half of the collisional energy is booked against the
-    # relative velocity u - u_n, which has no meaning without a neutral wind.
-    ("flags", "neutral_energy", False),
-    # It walls the CX-born hot channel's ballistic flight; without
-    # neutral_energy there is no hot channel and the flag would be inert.
-    ("flags", "neutral_hot_internal_wall", False),
-    # The cathode/anode jets and the mesh accommodation are M_n momentum
-    # physics and require the neutral_momentum flag.
-    ("params", "cathode_neutral_jet", False),
-    # It reads the cathode jet's R_E, so it requires cathode_neutral_jet.
-    ("params", "cathode_jet_surface_debit", False),
-    # 'total_reflected' rescales the cathode jet's launch energy and requires
-    # cathode_neutral_jet; 'legacy' is the historical reading that does not.
-    ("params", "cathode_jet_energy_convention", "legacy"),
-)
+# ``arm_config`` still applies it explicitly. That is now belt-and-braces --
+# the resolver sets every member left at its config default -- but it keeps
+# this suite's arms building IDENTICALLY whatever the package defaults happen
+# to be, which is what the base was for.
 
 
 # --------------------------------------------------------------- harness
@@ -246,7 +225,7 @@ def arm_config(**overrides):
     # The kinetic-compatible base. Applied BEFORE ``overrides`` below, so a
     # caller -- in particular a refusal gate in REFUSALS -- can still arm any
     # of these back on top and get the refusal it is there to test.
-    for _space, _key, _value in KINETIC_DVM_INCOMPATIBLE_DEFAULTS:
+    for _space, _key, _value, _why in KINETIC_DVM_INCOMPATIBLE_DEFAULTS:
         (fl if _space == "flags" else d)[_key] = _value
     d["neutral_model"] = "kinetic_dvm"
     d["neutral_kinetic_dvm_cadence_s"] = CADENCE_S
@@ -1627,11 +1606,25 @@ REFUSALS = (
         "neutral_two_zone",
         lambda d, fl: (fl.__setitem__("neutral_two_zone", False), None)[1],
     ),
+    # The single-key refusal this gate used to arm -- ``neutral_momentum``
+    # set back to True on the cleared base -- is unreachable BY CONSTRUCTION
+    # since the model-preset resolver landed (2026-08-23h/aj/ak): the flag is
+    # a MEMBER of the ``neutral_model='kinetic_dvm'`` family and True is its
+    # config default, so a caller cannot distinguish "I chose True" from "I
+    # left it alone" and the resolver clears it rather than refusing. X1
+    # below pins that resolution. What is still reachable, and what this gate
+    # now arms, is an EXPLICIT family conflict: a member whose default is
+    # already compatible, set to a value the selection refuses. The one
+    # collected error names the complete member set, so ``neutral_momentum``
+    # is still in it and the pinned string is still under test.
     (
-        "G2 neutral_momentum refused",
+        "G2 explicit kinetic_dvm member refused, whole member set named",
         dict(),
         "neutral_momentum",
-        lambda d, fl: (fl.__setitem__("neutral_momentum", True), None)[1],
+        lambda d, fl: (
+            fl.__setitem__("neutral_hot_birth_drift", True),
+            None,
+        )[1],
     ),
     (
         "G3 non-helium refused",
@@ -1754,6 +1747,45 @@ def make_refusal_gate(label, offender, mutate):
         return label, False, "no ValueError raised"
 
     return gate
+
+
+def gate_x1():
+    """Family members left at their config default are RESOLVED, not refused.
+
+    Every arm in this file used to be unconstructible from
+    ``default_config()``: the package ships each member of the
+    ``neutral_model='kinetic_dvm'`` family armed, and each one had to be
+    cleared by hand before the next refusal appeared. Since the model-preset
+    resolver landed the selection alone is enough -- so this gate names the
+    selection, hands over an OTHERWISE UNTOUCHED default config, and checks
+    that every member came out at the value the family requires.
+    """
+    d, fl = default_config()
+    d["neutral_model"] = "kinetic_dvm"
+    d["neutral_kinetic_dvm_cadence_s"] = CADENCE_S
+    d["neutral_kinetic_dvm_exchange"] = EXCHANGE_MODEL
+    label = (
+        "X1 kinetic_dvm resolves its member set from an untouched "
+        "default_config()"
+    )
+    try:
+        sim = LAPDSim1D(input_dict=d, input_flags=fl)
+    except ValueError as exc:
+        return label, False, f"construction raised: {str(exc)[:120]}"
+    got_d, got_fl = sim.get_config()
+    wrong = [
+        f"{space}:{key}={(got_fl if space == 'flags' else got_d).get(key)!r}"
+        f" (required {required!r})"
+        for space, key, required, _why in KINETIC_DVM_INCOMPATIBLE_DEFAULTS
+        if (got_fl if space == "flags" else got_d).get(key) != required
+    ]
+    n = len(KINETIC_DVM_INCOMPATIBLE_DEFAULTS)
+    return (
+        label,
+        not wrong,
+        f"{n} members resolved, none hand-cleared; mismatches: "
+        f"{', '.join(wrong) if wrong else 'none'}",
+    )
 
 
 # ------------------------------------------------------- limit cases
@@ -2051,6 +2083,7 @@ def main():
         gate_d2,
         gate_d3,
         gate_d4,
+        gate_x1,
     ]
     gates += [
         make_refusal_gate(label, offender, mutate)

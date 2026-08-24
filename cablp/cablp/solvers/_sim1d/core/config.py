@@ -843,8 +843,27 @@ def model_mode_defaults():
         engages only once the plasma phase is live, so the pre-breakdown fill
         and the neutral equilibration stay on the moment terms.
 
-        ``"kinetic_dvm"`` requires the ``neutral_two_zone`` flag and refuses
-        the ``neutral_momentum`` flag, ``coupled_circuit_picard``, a nonzero
+        ``"kinetic_dvm"`` is a top-level MODEL SELECTION and OWNS a member
+        set -- every control in it is M_n or En physics the kinetic state
+        already carries, so the two cannot both own it. The measured set is
+        ``core/model_families.KINETIC_DVM_INCOMPATIBLE_DEFAULTS``, which is
+        the authority here: the ``neutral_momentum``, ``neutral_energy``,
+        ``neutral_hot_internal_wall`` and ``neutral_hot_birth_drift`` flags,
+        the ``neutral_momentum_radial`` and ``neutral_knudsen_temperature``
+        selectors, the cathode jet (``cathode_neutral_jet``,
+        ``cathode_jet_surface_debit``, ``cathode_jet_energy_convention``,
+        ``cathode_jet_hot_carrier``) and the anode-side momentum channel
+        (``anode_neutral_jet``, ``anode_jet_energy_convention``,
+        ``neutral_mesh_accommodation``). A member left at its config default
+        is set to the value this selection requires AUTOMATICALLY, before
+        any validator runs -- nothing has to be hand-cleared. A member the
+        caller set EXPLICITLY to a value the selection refuses raises one
+        ``ValueError`` at construction naming the selection, the whole
+        member set and every offending key.
+
+        Outside that set the arm still requires the ``neutral_two_zone``
+        flag (a prerequisite, never resolved for you) and refuses
+        ``coupled_circuit_picard``, a nonzero
         ``gas_puff_local_ionization_fraction``, and ``gas_type`` other than
         ``"He"``. Any other value, or ``"kinetic"``/``"kinetic_dvm"`` without
         the two-zone flag, raises at construction.
