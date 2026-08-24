@@ -34,6 +34,13 @@ Gates:
       not naming it at all
   I5  the same two statements on a zero-annulus geometry, plus the
       statement that nothing leaks into a cell whose annulus has no volume
+  I6  ENERGY ledger identity: on a synthetic CLOSED BOX -- no annulus, no
+      mesh, no pumping, specular end walls, no external source -- the change
+      in the box's total energy equals the CX/elastic exchange plus the
+      ionization consumption to roundoff, every disarmed row booking zero;
+      then the same two closure forms with EVERY channel armed at once, once
+      per annulus treatment, and on the in-solver default arm -- all at the
+      tolerance the particle ledger is held to
   S1  recycle identity: what the arm sources at a plasma-terminating surface
       equals what the ACTIVE boundary term removed from the plasma there,
       per face, on all three geometries of RECYCLE_GEOMETRIES -- the shipped
@@ -144,9 +151,14 @@ from cablp.solvers._sim1d.physics.kinetic_dvm import (
     EXCHANGE_MODELS,
     LEDGER_BIRTH_CHANNELS,
     LEDGER_BOOKKEEPING,
+    LEDGER_ENERGY_BIRTH_CHANNELS,
+    LEDGER_ENERGY_BOOKKEEPING,
+    LEDGER_ENERGY_LOSS_CHANNELS,
+    LEDGER_ENERGY_NET_CHANNELS,
     LEDGER_EXTERNAL_BIRTHS,
     LEDGER_LOSS_CHANNELS,
     TransientDVM,
+    ledger_energy_residual,
     ledger_residual,
 )
 from cablp.solvers._sim1d.physics.kinetic_neutrals import (
@@ -418,6 +430,108 @@ def zero_annulus_tube(nz=6, blocked=(2, 3)):
         plasma_volume_cm3=np.pi * Rp_cm**2 * dz,
         neutral_volume_cm3=np.pi * Rm_cm**2 * dz,
     )
+
+
+def closed_box_dvm(nz=8, nvz=16, nvp=6):
+    """Return a DVM with every external ENERGY channel disarmed.
+
+    A straight tube with NO annulus (``Rm == Rp``, so
+    :func:`neutral_zone_volumes` returns ``V_ann = 0`` in every cell): the
+    cylindrical wall and the two zone-exchange channels then carry nothing
+    at all. No anode mesh, no pumping, and SPECULAR end walls
+    (``accommodation = 0``), which return what reaches them into the exact
+    bin mirror and therefore at the incident energy. No external source of
+    any kind.
+
+    What is left is the closed box the energy identity is registered on:
+    the only channels with any energy in them are the CX/elastic exchange
+    against the ion background and the ionization a partner consumes, so
+    the change in the box's total energy must be exactly those two
+    bookings.
+    """
+    dvm = TransientDVM(
+        geometry=uniform_tube(nz, Rp=15.0, Rm=15.0),
+        nvz=nvz,
+        nvp=nvp,
+        accommodation=0.0,
+        exchange_model=EXCHANGE_MODEL,
+        s_L=0.0,
+        s_R=0.0,
+    )
+    dvm.seed_from_density(np.full(nz, 1.0e13), np.zeros(nz), T_K=400.0)
+    return dvm
+
+
+#: The energy rows the closed box disarms. Each must book exactly zero
+#: there, which is what makes the I6 residual a statement about the two
+#: channels that ARE live rather than about a cancellation between many.
+DISARMED_ENERGY_ROWS = (
+    "loss_wall",
+    "loss_mesh_blocked",
+    "loss_pump_L",
+    "loss_pump_R",
+    "birth_wall_accommodated",
+    "birth_wall_reflected",
+    "birth_mesh_reemit",
+    "birth_puff",
+    "birth_recombination",
+    "birth_cathode_face",
+    "birth_collector_face",
+    "birth_anode",
+    "net_surface_wall",
+    "net_surface_mesh",
+    "net_surface_end_L",
+    "net_surface_end_R",
+)
+
+
+def all_channels_energy_closure(annulus_flights, nz=12):
+    """Worst energy-ledger residuals with EVERY channel armed at once.
+
+    The closed box of :func:`closed_box_dvm` proves the identity on the two
+    channels it leaves live; it cannot see a mis-booked surface, because it
+    never fires one. This fires all of them on the uniform tube -- an anode
+    mesh, partial pumping at both ends, a puff, volume recombination, an
+    anode rebirth and both recycle faces -- and does it once per annulus
+    treatment, since the bounded-chord arm books its wall, mesh and end
+    channels through the flight kernel rather than through the march.
+
+    Returns ``(distribution, domain)`` worst relative residuals.
+    """
+    dvm = TransientDVM(
+        geometry=uniform_tube(nz),
+        nvz=16,
+        nvp=6,
+        s_L=0.3,
+        s_R=0.3,
+        accommodation=0.4,
+        exchange_model=EXCHANGE_MODEL,
+        annulus_flights=annulus_flights,
+        mesh_face=nz // 2,
+        transparency=0.642,
+    )
+    dvm.seed_from_density(np.full(nz, 1.0e13), np.full(nz, 1.0e13))
+    sources = {
+        "recombination": np.full(nz, 1.0e15),
+        "puff": np.zeros(nz),
+        "anode": np.zeros(nz),
+        "cathode_face": np.zeros(nz),
+        "collector_face": np.zeros(nz),
+    }
+    sources["puff"][3] = 3.0e17
+    sources["anode"][nz // 2] = 2.0e16
+    sources["cathode_face"][0] = 5.0e16
+    sources["collector_face"][-1] = 4.0e16
+    plasma = geometry_plasma(nz)
+    worst_dist = 0.0
+    worst_dom = 0.0
+    for _ in range(6):
+        r = ledger_energy_residual(
+            dvm.update(CADENCE_S, sources=sources, **plasma)
+        )
+        worst_dist = max(worst_dist, abs(r["distribution_rel"]))
+        worst_dom = max(worst_dom, abs(r["domain_rel"]))
+    return worst_dist, worst_dom
 
 
 def geometry_plasma(nz):
@@ -732,11 +846,27 @@ def gate_i3():
         and not k.startswith("loss_")
         and not k.startswith("birth_")
     ]
+    # The nested ENERGY sub-ledger, held to the same standard: every
+    # declared row present, and no row present that is not declared.
+    energy = led.get("energy", {})
+    declared_energy = (
+        {f"loss_{name}" for name in LEDGER_ENERGY_LOSS_CHANNELS}
+        | {f"birth_{name}" for name in LEDGER_ENERGY_BIRTH_CHANNELS}
+        | {f"net_{name}" for name in LEDGER_ENERGY_NET_CHANNELS}
+        | set(LEDGER_ENERGY_BOOKKEEPING)
+    )
+    missing += [
+        f"energy.{k}" for k in sorted(declared_energy) if k not in energy
+    ]
+    unaccounted += [
+        f"energy.{k}" for k in energy if k not in declared_energy
+    ]
     ok = not missing and not unaccounted
     return (
         "I3 ledger completeness: every declared channel booked",
         ok,
-        f"{len(led) - len(bookkeeping)} channel entries; "
+        f"{len(led) - len(bookkeeping)} particle channel entries, "
+        f"{len(energy)} energy entries; "
         f"missing={missing or 'none'}; unaccounted={unaccounted or 'none'}",
     )
 
@@ -761,6 +891,90 @@ def gate_i4():
         f"{dvm.nz} cells, annulus area-jump ratios {jumps}; worst "
         f"distribution {fmt(worst_dist)}, domain {fmt(worst_dom)}, "
         f"independent transfer {fmt(transfer_err)} (tol {fmt(ROUNDOFF_REL)})",
+    )
+
+
+def gate_i6():
+    """Energy ledger: closed-box identity, and the armed arm at I1/I2 class.
+
+    The registered gate of B0a. The first statement is the closed box
+    (:func:`closed_box_dvm`): with every surface and external row disarmed,
+    the change in the box's total energy IS the exchange plus the
+    consumption booking, to roundoff, and each disarmed row books zero.
+    That is a statement about the two live channels and nothing else.
+
+    The second and third statements are the reason the ledger exists at
+    all -- a closed box cannot catch a mis-booked wall, mesh, pump, puff or
+    recycle row, because it never fires one. So the same two closure forms
+    are made with EVERY channel armed at once, once per annulus treatment
+    (:func:`all_channels_energy_closure`), and then on the fully-armed
+    in-solver default arm, which is the coupled path with the counted
+    ionization handshake in it. All of them at ROUNDOFF_REL, the tolerance
+    I1 and I2 hold the particle ledger to.
+    """
+    nz = 8
+    dvm = closed_box_dvm(nz)
+    plasma = geometry_plasma(nz)
+    worst_dist = 0.0
+    worst_dom = 0.0
+    worst_disarmed = 0.0
+    live = float("inf")
+    for _ in range(6):
+        led = dvm.update(CADENCE_S, **plasma)
+        r = ledger_energy_residual(led)
+        e = led["energy"]
+        worst_dist = max(worst_dist, abs(r["distribution_rel"]))
+        worst_dom = max(worst_dom, abs(r["domain_rel"]))
+        for key in DISARMED_ENERGY_ROWS:
+            worst_disarmed = max(worst_disarmed, abs(e[key]) / r["scale"])
+        # Non-vacuity, worst update of the window: the two channels the
+        # box is closed around must actually be carrying energy on every
+        # update, or the identity being checked is 0 == 0.
+        live = min(
+            live,
+            min(
+                abs(e["net_exchange_cx"]) + abs(e["net_exchange_elastic"]),
+                abs(e["loss_ionization"]),
+            )
+            / r["scale"],
+        )
+
+    channels = {
+        name: all_channels_energy_closure(name)
+        for name in ("rates", "bounded_chord")
+    }
+    armed = run_until_updates(make_sim(), 6)
+    armed_dist = max(
+        abs(ledger_energy_residual(led)["distribution_rel"]) for led in armed
+    )
+    armed_dom = max(
+        abs(ledger_energy_residual(led)["domain_rel"]) for led in armed
+    )
+    ok = (
+        worst_dist < ROUNDOFF_REL
+        and worst_dom < ROUNDOFF_REL
+        and worst_disarmed < ROUNDOFF_REL
+        and live > 1.0e-6
+        and armed_dist < ROUNDOFF_REL
+        and armed_dom < ROUNDOFF_REL
+        and all(
+            max(pair) < ROUNDOFF_REL for pair in channels.values()
+        )
+    )
+    return (
+        "I6 energy ledger: closed box closes on exchange + consumption, "
+        "every armed channel closes at the particle-ledger tolerance",
+        ok,
+        f"closed box (6 updates): distribution {fmt(worst_dist)}, domain "
+        f"{fmt(worst_dom)}, worst disarmed row {fmt(worst_disarmed)}, live "
+        f"channel share {fmt(live)} (> 1e-6 required); every channel armed: "
+        + "; ".join(
+            f"{name} distribution {fmt(d)}, domain {fmt(m)}"
+            for name, (d, m) in channels.items()
+        )
+        + f"; in-solver arm ({len(armed)} updates): distribution "
+        f"{fmt(armed_dist)}, domain {fmt(armed_dom)} "
+        f"(tol {fmt(ROUNDOFF_REL)})",
     )
 
 
@@ -1732,6 +1946,12 @@ REFUSALS = (
             None,
         )[2],
     ),
+    (
+        "G15 gas puff into a cell with no annulus refused",
+        dict(),
+        "V_ann",
+        lambda d, fl: (d.__setitem__("Rm", d["Rp"]), None)[1],
+    ),
 )
 
 
@@ -2051,6 +2271,7 @@ def gate_l5():
 # closure hands the march. These are re-run once per value of
 # ``neutral_kinetic_dvm_exchange``.
 CONSERVATION_GATES = ("gate_i1", "gate_i2", "gate_i4", "gate_i5",
+                      "gate_i6",
                       "gate_j2",
                       "gate_s1",
                       "gate_c1", "gate_c2", "gate_c3", "gate_c4",
@@ -2064,6 +2285,7 @@ def main():
         gate_i3,
         gate_i4,
         gate_i5,
+        gate_i6,
         gate_j1,
         gate_j2,
         gate_j3,

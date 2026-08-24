@@ -172,11 +172,12 @@ LEDGER_EXTERNAL_BIRTHS = (
     "collector_face",
     "anode",
 )
-# Ledger entries that are NOT channels: the tick's own bookkeeping and the
-# counted-ionization handshake's reconciliation record. Named here for the
-# same reason as the channel tuples -- the completeness gate asserts that
-# every key is either a declared channel or a declared non-channel, so a
-# new entry cannot slip in unnoticed on either side.
+# Ledger entries that are NOT channels: the tick's own bookkeeping, the
+# counted-ionization handshake's reconciliation record, and the nested
+# ENERGY ledger declared below. Named here for the same reason as the
+# channel tuples -- the completeness gate asserts that every key is either a
+# declared channel or a declared non-channel, so a new entry cannot slip in
+# unnoticed on either side.
 LEDGER_BOOKKEEPING = (
     "dt",
     "inventory_before",
@@ -186,6 +187,47 @@ LEDGER_BOOKKEEPING = (
     "ion_booked",
     "ion_debt_carried",
     "ion_limited_cells",
+    "energy",
+)
+
+# The ENERGY ledger, carried in the ``"energy"`` entry of every ledger the
+# engine emits, in erg. Every entry is the kinetic-energy moment
+# ``sum(counts * (1/2) m |v|^2)`` of exactly the per-bin particle array its
+# namesake in the particle ledger counted, so the two ledgers close by the
+# same algebra and to the same exactness class: the march is bin-diagonal,
+# the zone coupling moves particles at fixed bin, and the per-bin energy
+# weight is a constant that therefore passes straight through both.
+#
+# The loss rows are the particle ones plus the two pumped fractions (the
+# energy that leaves with what the end planes stick); the birth rows are the
+# particle ones unchanged.
+LEDGER_ENERGY_LOSS_CHANNELS = LEDGER_LOSS_CHANNELS + ("pump_L", "pump_R")
+LEDGER_ENERGY_BIRTH_CHANNELS = LEDGER_BIRTH_CHANNELS
+# The NET rows have no particle analog, and they are the reason an energy
+# ledger is a separate statement: an internal particle channel returns
+# exactly what it took and cancels, an internal ENERGY channel does not. Each
+# ``surface_*`` row is (what the surface received) - (what it gave back), the
+# energy the gas hands to that surface over the tick; each ``exchange_*`` row
+# is the same quantity for the ion population the collisional channels
+# re-emit against. ``surface_end_*`` counts only what the end wall KEPT: the
+# pumped share is its own loss row and the buffered return is still inside
+# the inventory. With these rows present every internal channel is accounted
+# and the domain identity closes.
+LEDGER_ENERGY_NET_CHANNELS = (
+    "surface_wall",
+    "surface_mesh",
+    "surface_end_L",
+    "surface_end_R",
+    "exchange_cx",
+    "exchange_elastic",
+)
+LEDGER_ENERGY_BOOKKEEPING = (
+    "inventory_before",
+    "inventory_after",
+    "f_inventory_before",
+    "f_inventory_after",
+    "pending_after_L",
+    "pending_after_R",
 )
 
 
@@ -408,6 +450,15 @@ class TransientDVM:
 
         self.M_wall = g.wall_emission_spectrum(self.T_wall_K)
         self.M_cold = g.maxwellian(self.T_wall_K * KB / EV, 0.0)
+
+        # Energy weights for the ledger. ``E_bin`` is the kinetic energy of
+        # one atom in each velocity bin [erg]; the two means are that same
+        # moment of the run-constant emission spectra, so a channel whose
+        # birth is a counted number times a fixed spectrum is booked as that
+        # product rather than by re-summing the bins.
+        self.E_bin = 0.5 * M_HE * g.V2
+        self.E_wall_mean = float((self.M_wall * self.E_bin).sum())
+        self.E_cold_mean = float((self.M_cold * self.E_bin).sum())
 
         shape = (self.nz, g.nvz, g.nvp)
         self.f_c = np.zeros(shape)
@@ -645,6 +696,35 @@ class TransientDVM:
         """Domain particle inventory including the pending end buffers."""
         return self.f_inventory() + self.pending_inventory()
 
+    def _energy_of(self, counts):
+        """Kinetic energy [erg] of a per-bin PARTICLE count array.
+
+        ``counts`` carries the two bin axes last, so both a
+        ``(nz, nvz, nvp)`` volume tally and a ``(nvz, nvp)`` surface tally
+        are accepted.
+        """
+        return float((counts * self.E_bin).sum())
+
+    def f_energy(self):
+        """Kinetic energy [erg] carried by the distributions themselves."""
+        return float(
+            ((self.f_c * self.E_bin).sum(axis=(1, 2)) * self.V_col).sum()
+            + ((self.f_a * self.E_bin).sum(axis=(1, 2)) * self.V_ann).sum()
+        )
+
+    def pending_energy(self):
+        """Kinetic energy [erg] held in the lagged end-wall return buffers."""
+        return (
+            self._energy_of(self.pend_L_c)
+            + self._energy_of(self.pend_R_c)
+            + self._energy_of(self.pend_L_a)
+            + self._energy_of(self.pend_R_a)
+        )
+
+    def total_energy(self):
+        """Domain energy inventory including the pending end buffers."""
+        return self.f_energy() + self.pending_energy()
+
     # ------------------------------------------------------- the update
 
     def collision_frequencies(self, n_i, Ti_eV, u_i):
@@ -756,9 +836,14 @@ class TransientDVM:
         applied AFTER any mesh interception at that face: a surface emits
         into the plasma, on the plasma side of an anode mesh.
 
-        Returns ``(f_c, f_a, mesh_c, mesh_a, out)`` where the mesh arrays
-        are intercepted PARTICLES per emitting cell and ``out`` maps
-        ``(zone, end)`` to the outgoing particles per bin.
+        Returns ``(f_c, f_a, mesh_c, mesh_a, out, mesh_E)`` where the mesh
+        arrays are intercepted PARTICLES per emitting cell, ``out`` maps
+        ``(zone, end)`` to the outgoing particles per bin, and ``mesh_E`` is
+        the ``(column, annulus)`` pair of intercepted ENERGIES [erg] per
+        emitting cell. The energy pair is tallied here because the mesh is
+        the one channel whose interception is summed over velocity bins
+        inside the sweep, so its energy moment cannot be recovered from the
+        particle tally afterwards.
         """
         g = self.g
         nz, nvz, nvp = self.nz, g.nvz, g.nvp
@@ -766,6 +851,8 @@ class TransientDVM:
         f_a = np.zeros((nz, nvz, nvp))
         mesh_c = np.zeros(nz)
         mesh_a = np.zeros(nz)
+        mesh_c_E = np.zeros(nz)
+        mesh_a_E = np.zeros(nz)
         out = {}
         inv_dt = 1.0 / dt
         for direction in (+1, -1):
@@ -778,6 +865,7 @@ class TransientDVM:
                 sel = g.vz < 0
                 end_in, end_out = +1, -1
             vz = np.abs(g.vz[sel])[:, None]
+            E_sel = self.E_bin[sel]
             F_c_prev = inflow_c[end_in][sel]
             F_a_prev = None if column_only else inflow_a[end_in][sel]
             for i in order:
@@ -794,6 +882,11 @@ class TransientDVM:
                         j = min(max(i - direction, 0), nz - 1)
                         mesh_c[j] += float(
                             (blocked_c * vz).sum() * self.face_c[fi] * dt
+                        )
+                        mesh_c_E[j] += float(
+                            (blocked_c * vz * E_sel).sum()
+                            * self.face_c[fi]
+                            * dt
                         )
                         F_c_prev = self.transparency * F_c_prev
                     if inject_c:
@@ -827,6 +920,12 @@ class TransientDVM:
                     mesh_a[j] += float(
                         (blocked_a * vz).sum() * self.face_a[fi] * dt
                     )
+                    mesh_c_E[j] += float(
+                        (blocked_c * vz * E_sel).sum() * self.face_c[fi] * dt
+                    )
+                    mesh_a_E[j] += float(
+                        (blocked_a * vz * E_sel).sum() * self.face_a[fi] * dt
+                    )
                     F_c_prev = self.transparency * F_c_prev
                     F_a_prev = self.transparency * F_a_prev
                 if inject_c:
@@ -859,7 +958,7 @@ class TransientDVM:
             out[("a", end_out)][sel] = (
                 f_a[last][sel] * vz * self.face_a[fo_end] * dt
             )
-        return f_c, f_a, mesh_c, mesh_a, out
+        return f_c, f_a, mesh_c, mesh_a, out, (mesh_c_E, mesh_a_E)
 
     def _add_face_inflow(self, inject, counts, default_cell, direction,
                          spectrum, dt):
@@ -943,7 +1042,10 @@ class TransientDVM:
 
             inventory_after - inventory_before == sum(births) - sum(losses)
 
-        holds to roundoff.
+        holds to roundoff. Its ``"energy"`` entry is the same statement in
+        ERG over the same channels (see :meth:`_book_energy_ledger`), plus
+        the net surface and exchange rows an energy ledger needs and a
+        particle one does not.
         """
         dt = float(dt)
         if dt <= 0.0:
@@ -953,6 +1055,8 @@ class TransientDVM:
         T_s_K = self.T_wall_K if T_s_K is None else float(T_s_K)
         inv_before = self.total_inventory()
         f_before = self.f_inventory()
+        e_inv_before = self.total_energy()
+        e_f_before = self.f_energy()
 
         nu_ion = np.asarray(nu_ion, dtype=float)
         nu_cx, nu_el = self.collision_frequencies(n_i, Ti_eV, u_i)
@@ -976,6 +1080,12 @@ class TransientDVM:
         }
         birth_return_L = float(self.pend_L_c.sum() + self.pend_L_a.sum())
         birth_return_R = float(self.pend_R_c.sum() + self.pend_R_a.sum())
+        e_return_L = self._energy_of(self.pend_L_c) + self._energy_of(
+            self.pend_L_a
+        )
+        e_return_R = self._energy_of(self.pend_R_c) + self._energy_of(
+            self.pend_R_a
+        )
 
         # --- the wall-return (recycle) channels, as directed inflows at the
         # faces they came off. Known before the march (the plasma reports
@@ -991,13 +1101,13 @@ class TransientDVM:
         cath = np.asarray(sources.get("cathode_face", 0.0), dtype=float) * dt
         coll = np.asarray(sources.get("collector_face", 0.0), dtype=float) * dt
         inject_c = {}
+        spec_cath = g.half_flux_spectrum(T_s_K, +1)
+        spec_coll = g.half_flux_spectrum(self.T_wall_K, -1)
         self._add_face_inflow(
-            inject_c, cath, self.cath_cell, +1,
-            g.half_flux_spectrum(T_s_K, +1), dt,
+            inject_c, cath, self.cath_cell, +1, spec_cath, dt
         )
         self._add_face_inflow(
-            inject_c, coll, self.coll_cell, -1,
-            g.half_flux_spectrum(self.T_wall_K, -1), dt,
+            inject_c, coll, self.coll_cell, -1, spec_coll, dt
         )
 
         vol_c = self.V_col[:, None, None]
@@ -1030,22 +1140,26 @@ class TransientDVM:
                 end_a[-1] += eL
                 end_a[+1] += eR
             source_c = inner_land * inv_vc[:, None, None] / dt
-            f_c, f_a, mesh_c, _, out = self._march(
+            f_c, f_a, mesh_c, _, out, mesh_E = self._march(
                 dt, nu_c_loss, None, inflow_c, None, inject_c,
                 source_c=source_c, column_only=True,
             )
             out[("a", -1)] = end_a[-1]
             out[("a", +1)] = end_a[+1]
             mesh_a = mesh_a_bins.sum(axis=(1, 2))
+            # The annulus mesh tally is per BIN on this arm, so its energy
+            # moment is taken directly; the column's comes from the march.
+            e_loss_mesh = float(mesh_E[0].sum()) + self._energy_of(mesh_a_bins)
             # the column's zone escapes, at the same implicit discretization
             # the march's diagonal used, become inner-surface launches
             escapes = self.nux[:, None, :] * f_c * dt * vol_c
             L_wall = wall_land
         else:
-            f_c, f_a, mesh_c, mesh_a, out = self._march(
+            f_c, f_a, mesh_c, mesh_a, out, mesh_E = self._march(
                 dt, nu_c_loss, nu_a_loss, inflow_c, inflow_a, inject_c
             )
             L_wall = self.nuw[:, None, :] * f_a * dt * vol_a
+            e_loss_mesh = float(mesh_E[0].sum() + mesh_E[1].sum())
 
         # --- substep A tallies, in PARTICLES, from the marched state
         L_ion = nu_ion[:, None, None] * f_c * dt * vol_c
@@ -1167,6 +1281,32 @@ class TransientDVM:
         self.f_c = f_c
         self.f_a = f_a
         inv_after = self.total_inventory()
+        energy = self._book_energy_ledger(
+            e_inv_before=e_inv_before,
+            e_f_before=e_f_before,
+            alpha=alpha,
+            L_ion=L_ion,
+            L_cx=L_cx,
+            L_el=L_el,
+            L_wall=L_wall,
+            N_wall=N_wall,
+            N_cx=N_cx,
+            N_el=N_el,
+            M_i=M_i,
+            mesh_c=mesh_c,
+            mesh_a=mesh_a,
+            e_loss_mesh=e_loss_mesh,
+            out=out,
+            e_return_L=e_return_L,
+            e_return_R=e_return_R,
+            puff=puff,
+            rec=rec,
+            anode=anode,
+            cath=cath,
+            coll=coll,
+            spec_cath=spec_cath,
+            spec_coll=spec_coll,
+        )
 
         # --- plasma coupling: minus the moments of the kinetic operators
         self._book_ionization_ledger(ion)
@@ -1208,6 +1348,8 @@ class TransientDVM:
             "ion_booked": float(ion["booked"].sum()),
             "ion_debt_carried": float(self.ion_debt.sum()),
             "ion_limited_cells": float(np.count_nonzero(ion["limited"])),
+            # The same tick in ERG, per channel; see _book_energy_ledger.
+            "energy": energy,
         }
         self.last_ledger = ledger
         return ledger
@@ -1298,6 +1440,149 @@ class TransientDVM:
             self.ion_shortfall_cell_updates = (
                 self.ion_shortfall_cell_updates + limited
             )
+
+    def _book_energy_ledger(
+        self,
+        *,
+        e_inv_before,
+        e_f_before,
+        alpha,
+        L_ion,
+        L_cx,
+        L_el,
+        L_wall,
+        N_wall,
+        N_cx,
+        N_el,
+        M_i,
+        mesh_c,
+        mesh_a,
+        e_loss_mesh,
+        out,
+        e_return_L,
+        e_return_R,
+        puff,
+        rec,
+        anode,
+        cath,
+        coll,
+        spec_cath,
+        spec_coll,
+    ):
+        """Return this update's ENERGY ledger [erg], channel by channel.
+
+        Every loss and birth row is the kinetic-energy moment of exactly the
+        per-bin particle array its namesake in the particle ledger counted,
+        so the distribution identity
+
+            Delta(sum f V E) == sum(energy births) - sum(energy losses)
+
+        closes by the same algebra that closes the particle one: the march
+        is bin-diagonal, the zone coupling moves particles at fixed bin, and
+        the per-bin energy weight is therefore a constant that passes
+        straight through both statements. Where a birth is a counted number
+        times a FIXED emission spectrum -- the cylindrical wall, the anode
+        mesh, the puff, the two recycle faces, the anode rebirths -- the
+        moment is that number times the spectrum's own mean energy, which is
+        the same product the distribution received.
+
+        The internal channels do NOT cancel here the way they do in
+        particles: a surface returns as many atoms as it took but not the
+        same energy, and the collisional channels re-emit against the ION
+        population rather than against what they removed. Those net
+        transfers are the ``net_*`` rows, and with them present the domain
+        identity closes too (:func:`ledger_energy_residual`).
+
+        ``surface_end_*`` is what the end wall KEPT -- the outflow less the
+        pumped share, which is its own loss row, less the buffered return,
+        which is still inside the inventory.
+        """
+        # Losses, from the arrays substep A actually removed.
+        e_loss_ionization = self._energy_of(L_ion)
+        e_loss_cx = self._energy_of(L_cx)
+        e_loss_elastic = self._energy_of(L_el)
+        e_loss_wall = self._energy_of(L_wall)
+        e_loss_end_L = self._energy_of(out[("c", -1)]) + self._energy_of(
+            out[("a", -1)]
+        )
+        e_loss_end_R = self._energy_of(out[("c", +1)]) + self._energy_of(
+            out[("a", +1)]
+        )
+        # The pumped fraction is a per-bin multiple of the outflow, so its
+        # energy is that same fraction of the outflow's energy exactly.
+        e_loss_pump_L = self.s_L * e_loss_end_L
+        e_loss_pump_R = self.s_R * e_loss_end_R
+
+        # Births. The collisional and recombination channels re-emit at the
+        # local ion Maxwellian, so they carry that distribution's own mean
+        # energy per cell; everything else carries a fixed spectrum's.
+        E_Mi = (M_i * self.E_bin).sum(axis=(1, 2))
+        e_birth_cx = float((N_cx * E_Mi).sum())
+        e_birth_elastic = float((N_el * E_Mi).sum())
+        e_birth_wall_accommodated = (
+            alpha * float(N_wall.sum()) * self.E_wall_mean
+        )
+        # The reflected share keeps its incident bin, hence its incident
+        # energy: the cylindrical wall reverses only the unresolved radial
+        # component and an end wall reverses v_z, which the symmetric axis
+        # mirrors exactly.
+        e_birth_wall_reflected = (1.0 - alpha) * e_loss_wall
+        e_birth_mesh_reemit = (
+            float(mesh_c.sum()) + float(mesh_a.sum())
+        ) * self.E_wall_mean
+        e_birth_puff = float(puff.sum()) * self.E_cold_mean
+        e_birth_recombination = (
+            float((rec * E_Mi).sum()) if rec.ndim else 0.0
+        )
+        e_birth_anode = float(anode.sum()) * self.E_wall_mean
+        e_birth_cathode_face = float(cath.sum()) * self._energy_of(spec_cath)
+        e_birth_collector_face = float(coll.sum()) * self._energy_of(spec_coll)
+
+        e_pending_L = self._energy_of(self.pend_L_c) + self._energy_of(
+            self.pend_L_a
+        )
+        e_pending_R = self._energy_of(self.pend_R_c) + self._energy_of(
+            self.pend_R_a
+        )
+        return {
+            "loss_ionization": e_loss_ionization,
+            "loss_cx": e_loss_cx,
+            "loss_elastic": e_loss_elastic,
+            "loss_wall": e_loss_wall,
+            "loss_mesh_blocked": e_loss_mesh,
+            "loss_end_out_L": e_loss_end_L,
+            "loss_end_out_R": e_loss_end_R,
+            "loss_pump_L": e_loss_pump_L,
+            "loss_pump_R": e_loss_pump_R,
+            "birth_cx": e_birth_cx,
+            "birth_elastic": e_birth_elastic,
+            "birth_wall_accommodated": e_birth_wall_accommodated,
+            "birth_wall_reflected": e_birth_wall_reflected,
+            "birth_mesh_reemit": e_birth_mesh_reemit,
+            "birth_end_return_L": e_return_L,
+            "birth_end_return_R": e_return_R,
+            "birth_puff": e_birth_puff,
+            "birth_recombination": e_birth_recombination,
+            "birth_cathode_face": e_birth_cathode_face,
+            "birth_collector_face": e_birth_collector_face,
+            "birth_anode": e_birth_anode,
+            "net_surface_wall": (
+                e_loss_wall
+                - e_birth_wall_accommodated
+                - e_birth_wall_reflected
+            ),
+            "net_surface_mesh": e_loss_mesh - e_birth_mesh_reemit,
+            "net_surface_end_L": e_loss_end_L - e_loss_pump_L - e_pending_L,
+            "net_surface_end_R": e_loss_end_R - e_loss_pump_R - e_pending_R,
+            "net_exchange_cx": e_loss_cx - e_birth_cx,
+            "net_exchange_elastic": e_loss_elastic - e_birth_elastic,
+            "inventory_before": e_inv_before,
+            "inventory_after": self.total_energy(),
+            "f_inventory_before": e_f_before,
+            "f_inventory_after": self.f_energy(),
+            "pending_after_L": e_pending_L,
+            "pending_after_R": e_pending_R,
+        }
 
     def _book_transfer(self, dt, L_ion, L_cx, L_el, birth_cx, birth_el, rec,
                        M_i, u_i):
@@ -1638,6 +1923,63 @@ def ledger_residual(ledger):
     )
     throughput = births + losses + 1e-300
     scale = throughput + abs(ledger["inventory_before"])
+    return {
+        "distribution": distribution,
+        "domain": domain,
+        "throughput": throughput,
+        "scale": scale,
+        "distribution_rel": distribution / scale,
+        "domain_rel": domain / scale,
+    }
+
+
+def ledger_energy_residual(ledger):
+    """Return the ENERGY ledger's closure residuals [erg].
+
+    The same two statements :func:`ledger_residual` makes about particles,
+    made about the energy sub-ledger and at the same exactness class.
+
+    ``distribution``: ``Delta(sum f V E)`` minus (all energy births - all
+    energy losses), which is the statement that every energy the update
+    added to or removed from the distributions was booked to a channel.
+
+    ``domain``: ``Delta(energy incl. pending)`` minus (external energy
+    births - ionization - pumping - the net surface and exchange
+    transfers). Unlike the particle form nothing cancels here on its own --
+    an internal particle channel returns what it took and an internal
+    ENERGY channel does not -- so the ``net_*`` rows are what the internal
+    channels contribute, and the identity is the physical energy balance of
+    the modelled gas.
+
+    Both are absolute energies in erg. The relative forms divide by the
+    throughput PLUS the standing energy inventory, for the reason the
+    particle residuals do: each identity is a difference of two
+    inventories, so on a short tick the noise floor is set by the standing
+    inventory rather than by the energy that moved.
+    """
+    e = ledger["energy"]
+    births = sum(v for k, v in e.items() if k.startswith("birth_"))
+    losses = sum(
+        v
+        for k, v in e.items()
+        if k.startswith("loss_") and not k.startswith("loss_pump_")
+    )
+    distribution = (
+        e["f_inventory_after"] - e["f_inventory_before"]
+    ) - (births - losses)
+    external = sum(e[f"birth_{name}"] for name in LEDGER_EXTERNAL_BIRTHS)
+    net = sum(e[f"net_{name}"] for name in LEDGER_ENERGY_NET_CHANNELS)
+    domain = (
+        e["inventory_after"] - e["inventory_before"]
+    ) - (
+        external
+        - e["loss_ionization"]
+        - e["loss_pump_L"]
+        - e["loss_pump_R"]
+        - net
+    )
+    throughput = births + losses + 1e-300
+    scale = throughput + abs(e["inventory_before"])
     return {
         "distribution": distribution,
         "domain": domain,

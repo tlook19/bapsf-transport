@@ -162,7 +162,10 @@ def run_arm(shared, dt, nvz, nvp, ib, end_mask, mid_mask, flights_mode,
         tally["ret"] = tally["in"] = 0.0
         led = dvm.update(dt, sources=src, T_s_K=shared["T_s_K"],
                          **shared["plasma"])
-        f_c_m, f_a_m, mesh_c, mesh_a, out = captured["res"]
+        # ``_march`` also returns the intercepted mesh ENERGIES (the
+        # B0a energy ledger's one in-sweep tally); nothing here reads
+        # them.
+        f_c_m, f_a_m, mesh_c, mesh_a, out, _mesh_E = captured["res"]
         curN = end_inventory()
         acc["N_end"][k] += 0.5 * (prevN + curN) * dt
         prevN = curN
