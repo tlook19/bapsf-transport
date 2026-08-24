@@ -171,6 +171,18 @@ def check_schema_round_trip_and_digests(root):
             == "/geometry/annulus_volume_cm3"
         )
         assert (
+            h5["rhs_terms/synthetic_flux/nn"].attrs["support_dataset"]
+            == "/geometry/plasma_volume_cm3"
+        )
+        assert (
+            h5["rhs_terms/synthetic_flux/En"].attrs["support_dataset"]
+            == "/geometry/plasma_volume_cm3"
+        )
+        assert (
+            h5["rhs_terms/synthetic_flux/M_n"].attrs["support_dataset"]
+            == "/geometry/neutral_volume_cm3"
+        )
+        assert (
             h5["rhs_terms/synthetic_flux/Ee"].attrs["unit"]
             == "erg cm^-3 s^-1"
         )

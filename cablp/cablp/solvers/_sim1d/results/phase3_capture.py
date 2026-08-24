@@ -572,12 +572,16 @@ def _support_path(row, state_rows):
         return "/geometry/plasma_volume_cm3"
     if row in _ANNULUS_ROWS:
         return "/geometry/annulus_volume_cm3"
-    if row in {"nn", "M_n", "En"}:
+    if row in {"nn", "En"}:
         return (
             "/geometry/plasma_volume_cm3"
             if "nn_a" in state_rows
             else "/geometry/neutral_volume_cm3"
         )
+    if row == "M_n":
+        # The selected uniform-radial closure keeps M_n as chamber-mean
+        # momentum even when nn/En are split onto the plasma column.
+        return "/geometry/neutral_volume_cm3"
     raise ValueError(f"no support contract for row {row!r}")
 
 
