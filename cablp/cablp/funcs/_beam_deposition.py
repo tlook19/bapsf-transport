@@ -217,10 +217,16 @@ per-cell anomalous power ``P_QL(z)`` is WITHHELD from its birth cell and
 re-expressed as a population of tail electrons at a single energy
 ``tail_energy_eV`` (``E_tail``), i.e. an equivalent tail flux
 ``P_QL(z) / E_tail`` launched from that cell, split 50/50 along +B and -B
-(the QL plateau is driven along B and the bump-on-tail resonance is
-one-sided, but the plateau electrons themselves scatter both ways — a stated
-approximation, matching the secondaries' treatment above). Each population is
-then walked with the SAME closed-form Coulomb machinery the WP-D products use
+(the QL plateau is driven along B and the bump-on-tail resonance is genuinely
+ONE-SIDED; the split does not claim otherwise, and it is NOT particle
+scattering — the very Coulomb decoupling stated two paragraphs above makes
+collisional isotropization orders of magnitude too slow to act at breakdown.
+What the 50/50 stands in for is Langmuir-wave BACKSCATTER, which returns
+resonant momentum to the opposite direction; an order-unity return share is
+plausible, but the share itself is a kinetic quantity this module cannot
+compute, so 50/50 is a STATED APPROXIMATION and not a derived branching
+ratio, matching the secondaries' treatment above). Each population is then
+walked with the SAME closed-form Coulomb machinery the WP-D products use
 -- the module's own ``coulomb_stopping_eV_per_cm`` under the ray's own
 ``coulomb_model``, the same ``1.5*Te`` thermalization floor -- and deposits
 into ``plasma_heating_erg_s`` where it actually slows. **No new physics
