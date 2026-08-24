@@ -13,6 +13,22 @@ the driver runs its own argument parsing, its own override precedence, and
 its own defaults, and stops at the constructor. Nothing is solved and nothing
 is written.
 
+THE STUB'S BLIND SPOT, and the CONSTRUCTOR PROBE that closes it: stubbing the
+constructor means the CONSTRUCTION GUARDS never run, so a config the real
+solver refuses outright -- an unknown key, a member key a model family cannot
+carry, a closure combination that raises -- sails through the diff and dies
+at run time instead. That has happened twice (ab_ewp at 28f61fe; the 23ag
+re-brief). After the diff verdict this tool therefore constructs the REAL
+``LAPDSim1D`` from the captured config, replaying the driver's own call
+argument for argument, and reports ``CONSTRUCTOR: OK`` or the constructor's
+full refusal under a ``CONSTRUCTOR: RAISED`` banner. It is still NO-SOLVE:
+construction validates and arms subsystems, and neutral equilibration and the
+seed cache belong to ``start_simulation()``, not ``__init__``. Because the
+probe replays the captured call rather than rebuilding a config of its own,
+its input IS the real run's constructor input -- it cannot refuse something
+the run would have accepted, or accept something the run would refuse. On
+``--no-constructor-probe`` the stage is skipped and says so.
+
 What this fixes: those per-arm copies hardcoded required delta COUNTS in
 their verdict (control ``(0, 0)``, arm ``(0, 1)``), which is wrong the moment
 an arm carries more than one delta, and which never checked that the deltas
@@ -54,7 +70,8 @@ Usage:
         --expect 'flags:neutral_momentum=true' \\
         run-model --kwargs '{"nx": 240, "drag_closure": "neutral_momentum"}'
 
-Exit status: 0 on PASS, 2 on FAIL.
+Exit status: 0 on PASS, 2 on FAIL -- from EITHER stage: a constructor
+rejection fails the pre-flight even when every delta was the intended one.
 """
 
 import argparse
@@ -80,35 +97,71 @@ NAMESPACES = ("params", "flags")
 
 
 class _Captured(Exception):
-    """Carries the resolved config out of the stubbed constructor."""
+    """Carries the driver's whole constructor call out of the stub.
 
-    def __init__(self, params, flags):
+    The trailing ``args``/``kwargs`` are captured alongside the two config
+    dicts so the constructor probe can REPLAY the call the driver actually
+    made rather than inventing one. Both supported entry points reach the
+    same two-positional-argument site today; capturing the rest costs nothing
+    and keeps the probe honest if a driver ever passes a progress callback.
+    """
+
+    def __init__(self, params, flags, args, kwargs):
         super().__init__("captured resolved config")
         self.params = dict(params)
         self.flags = dict(flags)
+        self.args = tuple(args)
+        self.kwargs = dict(kwargs)
 
 
 class _StubSim:
     """Stands in for LAPDSim1D: captures the resolved config, never solves."""
 
     def __init__(self, params, flags, *args, **kwargs):
-        raise _Captured(params, flags)
+        raise _Captured(params, flags, args, kwargs)
 
 
 def capture(build):
-    """Run ``build`` with LAPDSim1D stubbed; return its resolved config."""
+    """Run ``build`` with LAPDSim1D stubbed; return the captured call."""
     real = cmp_es1.LAPDSim1D
     cmp_es1.LAPDSim1D = _StubSim
     try:
         build()
     except _Captured as captured:
-        return captured.params, captured.flags
+        return captured
     finally:
         cmp_es1.LAPDSim1D = real
     raise SystemExit(
         "pre-flight ERROR: the driver returned without constructing "
         "LAPDSim1D, so no config was captured"
     )
+
+
+def constructor_probe(captured):
+    """Construct the REAL LAPDSim1D from ``captured``; report, never solve.
+
+    Returns True when construction succeeded. The class is read off
+    ``cmp_es1`` AFTER ``capture`` has restored it, so this is the same object
+    the driver would have constructed and no second import path is involved.
+
+    ``ValueError`` is the construction guards' declared refusal channel (the
+    campaign rule is a loud ValueError at construction time on any
+    misconfiguration), so it is reported as a verdict rather than a crash.
+    Anything else is a genuine fault in the probe or the config machinery and
+    is left to propagate with its traceback intact.
+    """
+    print("\n=== CONSTRUCTOR PROBE (real LAPDSim1D, no solve) ===")
+    try:
+        cmp_es1.LAPDSim1D(
+            captured.params, captured.flags, *captured.args, **captured.kwargs
+        )
+    except ValueError as error:
+        print(f"  CONSTRUCTOR: RAISED ({type(error).__name__})")
+        for line in str(error).splitlines() or [""]:
+            print(f"    {line}")
+        return False
+    print("  CONSTRUCTOR: OK")
+    return True
 
 
 def read_reference(path):
@@ -237,6 +290,17 @@ def build_parser():
             "named here fails the pre-flight."
         ),
     )
+    parser.add_argument(
+        "--constructor-probe",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "after the config diff, construct the REAL LAPDSim1D from the "
+            "captured config (no solve) so the construction guards are "
+            "checked here instead of at run time. On by default; "
+            "--no-constructor-probe skips it and says so."
+        ),
+    )
     entry = parser.add_subparsers(dest="entry", required=True)
     m6 = entry.add_parser(
         "m6", help="drive run_m6_point.main with the argv that follows"
@@ -288,8 +352,11 @@ def main(argv=None):
     )
     print(f"driver    : {description}")
 
-    params, flags = capture(build)
-    rebuilt = {"params": _as_recorded(params), "flags": _as_recorded(flags)}
+    captured = capture(build)
+    rebuilt = {
+        "params": _as_recorded(captured.params),
+        "flags": _as_recorded(captured.flags),
+    }
     reference = {"params": reference_params, "flags": reference_flags}
 
     print("\n=== CONFIG DIFF (reference -> rebuilt) ===")
@@ -301,12 +368,31 @@ def main(argv=None):
         )
         failures += len(missing) + len(mismatched) + len(unexpected)
 
-    print("\n=== VERDICT ===")
+    print("\n=== DIFF VERDICT ===")
     if failures:
         print(f"  {failures} discrepanc(ies) between the expected and actual deltas")
+        print("  CONFIG DIFF: FAIL")
+    else:
+        print("  every expected delta present at its expected value, nothing else")
+        print("  CONFIG DIFF: PASS")
+
+    # The probe runs even when the diff already failed: the two stages catch
+    # different faults, and one pre-flight that reports both beats two runs.
+    if args.constructor_probe:
+        constructed = constructor_probe(captured)
+    else:
+        print("\n=== CONSTRUCTOR PROBE (real LAPDSim1D, no solve) ===")
+        print(
+            "  CONSTRUCTOR: SKIPPED (--no-constructor-probe) -- the "
+            "construction guards were NOT checked, so a config this "
+            "pre-flight passes can still be refused at run time"
+        )
+        constructed = True
+
+    print("\n=== VERDICT ===")
+    if failures or not constructed:
         print("  PRE-FLIGHT: FAIL -- DO NOT RUN")
         return 2
-    print("  every expected delta present at its expected value, nothing else")
     print("  PRE-FLIGHT: PASS")
     return 0
 
