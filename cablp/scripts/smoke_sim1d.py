@@ -108,6 +108,7 @@ from cablp.funcs._cathode_solver import _compute_l_b
 from cablp.funcs._plasmaparams import c_log
 from cablp.solvers._sim1d import (
     BreakdownError,
+    KINETIC_DVM_INCOMPATIBLE_DEFAULTS,
     LAPDSim1D,
     ProgressPrinter1D,
     SimulationProgress1D,
@@ -12229,7 +12230,20 @@ def _case_transient_dvm_neutrals_k2a(p2z_flags, p2z_params, p2z_sim):
     # Every refusal, and the offender it must name.
     for kd_bad_params, kd_bad_flags, kd_offender in (
         (kd_params, dict(kd_flags, neutral_two_zone=False), "neutral_two_zone"),
-        (kd_params, dict(kd_flags, neutral_momentum=True), "neutral_momentum"),
+        # Arming ``neutral_momentum`` back on is no longer a refusal and
+        # cannot be one: the flag is a MEMBER of the
+        # ``neutral_model='kinetic_dvm'`` family and True is its config
+        # default, so the model-preset resolver (2026-08-23h/aj/ak) cannot
+        # tell "I chose True" from "I left it alone" and clears it instead.
+        # The reachable refusal is an EXPLICIT family conflict -- a member
+        # whose default is already compatible, set to something the
+        # selection refuses -- and the one collected error names the
+        # complete member set, so it still names ``neutral_momentum``.
+        (
+            kd_params,
+            dict(kd_flags, neutral_hot_birth_drift=True),
+            "neutral_momentum",
+        ),
         (
             dict(kd_params, neutral_kinetic_dvm_cadence_s=0.0),
             kd_flags,
@@ -12297,6 +12311,23 @@ def _case_transient_dvm_neutrals_k2a(p2z_flags, p2z_params, p2z_sim):
                 f"kinetic_dvm accepted an unsupported configuration "
                 f"({kd_offender})"
             )
+
+    # The resolver's other half: naming the selection on an OTHERWISE
+    # UNTOUCHED default config is enough, because every member left at its
+    # config default is set to the value the family requires. Before the
+    # resolver this build was unconstructible -- the package ships each
+    # member armed, and each one had to be cleared by hand.
+    kd_bare_params, kd_bare_flags = default_config()
+    kd_bare_params["neutral_model"] = "kinetic_dvm"
+    kd_bare_sim = LAPDSim1D(kd_bare_params, kd_bare_flags)
+    kd_bare_got_p, kd_bare_got_f = kd_bare_sim.get_config()
+    for kd_space, kd_key, kd_required, _kd_why in (
+        KINETIC_DVM_INCOMPATIBLE_DEFAULTS
+    ):
+        kd_got = (
+            kd_bare_got_f if kd_space == "flags" else kd_bare_got_p
+        ).get(kd_key)
+        assert kd_got == kd_required, (kd_space, kd_key, kd_got, kd_required)
 
     kd_sim = LAPDSim1D(dict(kd_params), dict(kd_flags))
     assert kd_sim._dvm is not None
