@@ -59,7 +59,7 @@
     "D_amb_model": "cs_dz",
     "I_breakdown": 1000.0,
     "I_prebreakdown": 150.0,
-    "L_cath": 50.0,
+    "L_cath": 53.25,
     "L_parasitic_H": 8.1e-06,
     "Lcs": 0.0,
     "Lm": 2117.8,
@@ -129,7 +129,7 @@
     "cathode_Rp_model": "sample",
     "cathode_Ts_base_K": 1910.0,
     "cathode_Ts_fwhm_cm": 28.0,
-    "cathode_anode_gap_cm": 50.0,
+    "cathode_anode_gap_cm": 53.25,
     "cathode_circuit_bound_object": "device_voltage",
     "cathode_cleaning_E_th_eV": 20.0,
     "cathode_cleaning_sigma_cm2": 3.5e-16,
@@ -224,7 +224,7 @@
       39.75
     ],
     "neutral_baffle_positions_cm": [
-      342.6
+      342.65
     ],
     "neutral_clausing_scale": 1.0,
     "neutral_dt_fraction": 0.25,
@@ -282,7 +282,7 @@
     "restart_from": null,
     "sigma_in_model": "phelps",
     "source_region_dz_cm": 10.0,
-    "source_region_length_cm": 100.0,
+    "source_region_length_cm": 103.25,
     "t_save_start": 0.0,
     "tau_afterglow": 0.006,
     "tau_breakdown": 0.0,
@@ -314,23 +314,23 @@
     "vessel_leak_resistance_ohm": 10000000000.0
   },
   "result_format": "sim1d packed conservative trajectory y[saves, fields*cells]",
-  "saves": 2626,
+  "saves": 2625,
   "summary": {
-    "Te_max": 20.422039016060324,
+    "Te_max": 21.335640968203084,
     "Te_min": 0.1,
-    "Ti_max": 9.916984793794466,
+    "Ti_max": 9.980277259122959,
     "Ti_min": 0.025999999999999943,
-    "final_time": 0.026240393722254132,
+    "final_time": 0.02623651674056108,
     "finite": true,
-    "n_max": 24888323842211.867,
-    "n_min": 841591952.6670465,
-    "neutral_inventory_relative_drift": 1.1921462011014672,
-    "nn_max": 39870270400749.34,
-    "nn_min": 86216076710.10019,
-    "plasma_inventory_relative_drift": 3349.758517202019,
-    "samples": 2626,
-    "steps": 76631,
-    "thermal_energy_relative_drift": 3016.509436690918,
-    "total_particle_inventory_relative_drift": 1.256709511543498
+    "n_max": 24879545483851.55,
+    "n_min": 839856595.2853594,
+    "neutral_inventory_relative_drift": 1.1920693929834238,
+    "nn_max": 39793001331919.3,
+    "nn_min": 87194027851.41656,
+    "plasma_inventory_relative_drift": 3342.1428208659363,
+    "samples": 2625,
+    "steps": 71287,
+    "thermal_energy_relative_drift": 3001.093935364092,
+    "total_particle_inventory_relative_drift": 1.2564763407868078
   }
 }
