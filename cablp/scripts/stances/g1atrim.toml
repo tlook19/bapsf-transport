@@ -5,10 +5,11 @@
 #
 # This file is the ONE artifact that constructs the stance. It is the complete
 # delta from ``default_config()``: every key below differs from its config
-# default, except the four noted as resolved accretion (cathode_emission_profile,
-# Te_birth_ionization, T_s) or as a class-1 declaration (Ti_birth_ionization),
-# which equal the default and are stated explicitly because run_m6_point.py's
-# own driver defaults do not, or because the selection is physics-bearing. Applying these two
+# default, except the three noted as resolved accretion
+# (cathode_emission_profile, T_s) or as a class-1 declaration
+# (Ti_birth_ionization), which equal the default and are stated explicitly
+# because run_m6_point.py's own driver defaults do not, or because the
+# selection is physics-bearing. Applying these two
 # tables on top of ``default_config()`` reproduces, key for key, the config the
 # g1atrim arm of record ran.
 #
@@ -34,13 +35,17 @@
 [input_dict]
 
 # MACHINE GEOMETRY -- measured end-to-end (G1, 2026-08-18) and adopted with
-# the g1atrim trim. The four machine scalars (Lm, the plenum and collector
-# block lengths, the puff-pipe position) are config defaults since the R2a
-# fold-in and are no longer named here. What remains is per-cell and per-mesh:
-# the two radius profiles are built offline by scripts/g1_build_profiles.py and
-# are sized to THIS mesh (280 cells: 1 plenum + 5 gap + 5 fixed source + 268
-# far column + 1 collector), and the baffle arrays go with them.
-neutral_baffle_positions_cm = [342.6]
+# the g1atrim trim. The machine scalars (Lm, the plenum and collector block
+# lengths, the puff-pipe position, and since 2026-08-24 the cathode-anode gap
+# with the fixed source region that rides its far side) are config defaults
+# since the R2a fold-in and are no longer named here. What remains is per-cell
+# and per-mesh: the two radius profiles are built offline by
+# scripts/g1_build_profiles.py and are sized to THIS mesh (280 cells: 1 plenum
+# + 5 gap + 5 fixed source + 268 far column + 1 collector), and the baffle
+# arrays go with them. The CAD-span gap adoption (50.0 -> 53.25 cm) left that
+# cell census unchanged but moved every cell downstream of the cathode face,
+# so the profiles below were REBUILT against the new mesh in the same event.
+neutral_baffle_positions_cm = [342.65]
 neutral_baffle_clear_radii_cm = [39.75]
 plasma_radius_profile_cm = [
   18.415, 18.415, 18.415, 18.415,
@@ -104,15 +109,15 @@ plasma_radius_profile_cm = [
   18.415, 18.415, 18.415, 18.415,
   18.415, 18.415, 18.415, 18.415,
   18.415, 18.415, 18.415, 18.415,
-  18.415, 18.61576368996495, 19.007609506029358, 19.314464577001786,
-  19.450734852292015, 19.358070285754334, 19.02677757254327, 18.499260173540616,
-  17.856091686999562, 17.194025301063565, 16.606505896052013, 16.171823368171736,
-  15.94861943137315, 15.976441138468264, 16.278490976317116, 16.86489333609852,
-  17.735515061788462, 18.882749613048034, 20.293889359240826, 21.953227484516525,
-  23.843629029163814, 25.94775267813851, 28.24871601291919, 30.73045233252092,
-  33.377881297473536, 36.17702332762855, 39.1149938583596, 42.17993800837341,
-  45.360993778341324, 48.648247127654194, 52.03266919430896, 55.506018813605294,
-  59.060807685980116, 62.690239877282906, 66.38816069295255, 70.22479251719467,
+  18.415, 18.637693866826417, 19.02664092723048, 19.32617970556995,
+  19.45182754789672, 19.347550815806233, 19.00626888381385, 18.472424575001746,
+  17.827410915085125, 17.167727275825904, 16.58593929427442, 16.159168611351888,
+  15.945033603418201, 15.982255046870085, 16.293364089663466, 16.888015217132942,
+  17.765871319929627, 18.91912367169576, 20.335010107999096, 21.997855944085142,
+  23.890579045873714, 25.995929867040303, 28.297146327466017, 30.778212606702766,
+  33.42416444759869, 36.22113986083813, 39.156287940690746, 42.21783175696253,
+  45.39500619476809, 48.6779354758943, 52.057627598225736, 55.5259117804707,
+  59.07533410303422, 62.69913011395267, 66.3911760840493, 70.22479251718927,
 ]
 machine_radius_profile_cm = [
   40.0, 27.728368187412972, 30.45031314638934, 40.0,
@@ -378,7 +383,6 @@ b_beam_excitation = 1.4
 beam_deposition_smoothing_cm = 50.0
 heating_anomalous_transport = "tail_walk"
 heating_anomalous_tail_ionization = "on"
-Te_birth_ionization = "local"
 # Class-1 declaration: physics-bearing, so it is stated here even though it
 # equals the config default. The ion is born at the local neutral temperature,
 # the conserving partner of the En ionization sink.
