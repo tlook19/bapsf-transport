@@ -383,7 +383,19 @@ form for a sheath-terminated field-aligned channel, AND inside the derived
 free-streaming ceiling fork governing the regime where the limiter acts.
 Kinetically-matched in-regime values span [0.45, 1.5]; the derived ceiling fork
 spans [0.32, 0.80]; 0.45 is the only actual kinetic computation in the
-intersection. Bracket edges: LOWER `0.319` = the half-Maxwellian one-sided
+intersection. **Value-bearing locator (sight-verified 2026-08-23bf from the
+banked PDF): Fundamenski 2005, PPCF 47 R163 — SS2.6 p. R181 + figure 6
+p. R179 ("alpha_chi_e ~ 0.45 for both PiC-sh and LC-BA", K_Te-independent
+over 0.01 < K_Te < 1); harmonic form eq. (10a) p. R174; v_t = sqrt(T/m)
+p. R166; conversion x1.000. Disclosures that travel with any use: (i) the
+0.45 literal is Fundamenski's OWN harmonic-form fit to the Cohen et al.
+1994 (Contrib. Plasma Phys. 34, 198; NOT independently read) PiC-sh/LC-BA
+sheath-terminated kinetic data — the primary's tabulated multiplier in his
+Table 2 (p. R178) is 0.2, a fit-form/convention gap open until Cohen is
+fetched; (ii) the uniqueness statement above holds only with its
+qualifiers (point-valued FP/PiC computation, harmonic form,
+sheath-terminated channel) — Table 2 lists other kinetic values (0.6
+class) inside the [0.32, 0.80] fork.** Bracket edges: LOWER `0.319` = the half-Maxwellian one-sided
 energy flux with the Spitzer-Harm zero-current factor `epsilon ~ 0.40`
 (Cowie & McKee 1977 eq. 7) converted into our convention; UPPER `1.5` =
 Fundamenski 2005's recommendation given kinetic boundary conditions.
