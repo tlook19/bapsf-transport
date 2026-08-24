@@ -57,6 +57,17 @@ probe channel as V_dis. It is NOT the 180 V supply setpoint that
 `config.py` defaults to; those are different quantities. The +/-1.2%
 systematic is unresolved between supply regulation and probe gain.
 
+**Reference plane: all four are BANK-TO-TAP quantities.** The V_dis probes
+terminate at the machine FEEDTHROUGHS (Tom, 2026-08-24), not at the
+plasma-facing cathode surface, so the fit above carries the tap voltage on
+both sides and is blind to the in-vacuum feed between feedthrough and cathode
+(feedthrough-to-cathode conductors, graphite front panel, spring-ring contact
+stack). `R_comp` is therefore the bank-to-feedthrough LOOP resistance, not
+"everything external to the plasma": the feed's own `R_feed` sits outside it,
+one-sided-bracketed to `R_feed` = [0, ~1.0 mOhm] by the cross-rung V_dis
+transfer extraction. Values and bars above are unmoved by this — what changes
+is what they MEAN.
+
 `R_comp` and `C_bank_F` come from ONE joint fit and must move together.
 
 `L_parasitic_H` was 6.6e-6 until the reconciliation. 6.6e-6 was the orphaned
