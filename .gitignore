@@ -18,6 +18,7 @@ cablp/dist/
 # Data files
 *.h5
 *.hdf5
+!cablp/scripts/baselines/phase3_rhs/*.h5
 CLAUDE.md
 
 # LaTeX build outputs

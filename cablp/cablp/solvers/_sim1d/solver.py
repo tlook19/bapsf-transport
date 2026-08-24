@@ -709,6 +709,7 @@ class LAPDSim1D:
         progress_callback=None,
         progress_tracker=None,
         progress_interval_s=1.0e-4,
+        run_id=None,
     ):
         """Build a solver: resolve the config, then arm each subsystem.
 
@@ -719,6 +720,11 @@ class LAPDSim1D:
         order they have always run in; each ``_init_*`` method is one
         contiguous stretch of them, named.
         """
+        if run_id is not None:
+            from .results.phase3_capture import validate_run_id
+
+            run_id = validate_run_id(run_id)
+            self._run_id = run_id
         self._init_config_and_early_flags(
             input_dict,
             input_flags,
@@ -9506,6 +9512,8 @@ class LAPDSim1D:
                 else float(self._t_breakdown_trigger)
             ),
         )
+        if getattr(self, "_run_id", None) is not None:
+            result.run_id = self._run_id
         if self._t_ignition_abort is not None:
             # Present ONLY on a run that aborted, so normal results (and their
             # saved HDF5 files) are unchanged. This is the event context the
