@@ -5,11 +5,10 @@
 #
 # This file is the ONE artifact that constructs the stance. It is the complete
 # delta from ``default_config()``: every key below differs from its config
-# default, except the three noted as resolved accretion
-# (cathode_emission_profile, T_s) or as a class-1 declaration
-# (Ti_birth_ionization), which equal the default and are stated explicitly
-# because run_m6_point.py's own driver defaults do not, or because the
-# selection is physics-bearing. Applying these two
+# default, except the four noted as resolved accretion (cathode_emission_profile,
+# Te_birth_ionization, T_s) or as a class-1 declaration (Ti_birth_ionization),
+# which equal the default and are stated explicitly because run_m6_point.py's
+# own driver defaults do not, or because the selection is physics-bearing. Applying these two
 # tables on top of ``default_config()`` reproduces, key for key, the config the
 # g1atrim arm of record ran.
 #
@@ -383,6 +382,7 @@ b_beam_excitation = 1.4
 beam_deposition_smoothing_cm = 50.0
 heating_anomalous_transport = "tail_walk"
 heating_anomalous_tail_ionization = "on"
+Te_birth_ionization = "local"
 # Class-1 declaration: physics-bearing, so it is stated here even though it
 # equals the config default. The ion is born at the local neutral temperature,
 # the conserving partner of the En ionization sink.

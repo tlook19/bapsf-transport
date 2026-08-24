@@ -984,9 +984,18 @@ def _case_source_fixed_grid():
     # uniform column cells span anode face to collector start, so a refinement
     # study moves every near-source cell edge -- including the puff cell, whose
     # centre anchors the default cosine puff profile. With it on the column from
-    # the anode face (50 cm) to source_region_length_cm is meshed at exactly
+    # the anode face to source_region_length_cm is meshed at exactly
     # source_region_dz_cm regardless of nx, and the puff role follows
     # gas_puff_z_cm.
+    #
+    # The gap, the region end and the puff position are PINNED below rather
+    # than inherited. They were inherited until the 2026-08-24 CAD-span gap
+    # adoption moved ``cathode_anode_gap_cm`` 50.0 -> 53.25, which changes the
+    # source cell size (the span must stay a whole number of
+    # source_region_dz_cm) and moves the puff into the first source cell --
+    # neither of which this case is about. It exercises the MESHER, which is
+    # gap-agnostic, so it now states the round geometry its hard-coded edge
+    # positions below describe.
     #
     # (d) The OFF path takes no new branch: with the flag cleared and both keys
     # None the spec helper returns None. Since the R2a fold-in the flag and both
@@ -997,6 +1006,7 @@ def _case_source_fixed_grid():
     srcgrid_off_flags = {**resolved_flags, "source_fixed_grid": False}
     srcgrid_off_params = dict(
         resolved_params,
+        cathode_anode_gap_cm=50.0,
         source_region_length_cm=None,
         source_region_dz_cm=None,
     )
@@ -1024,6 +1034,7 @@ def _case_source_fixed_grid():
         params.update(
             {
                 "nx": nx,
+                "cathode_anode_gap_cm": 50.0,
                 "source_region_length_cm": 100.0,
                 "source_region_dz_cm": 10.0,
                 "gas_puff_z_cm": 60.0,
@@ -6462,6 +6473,8 @@ def _case_beam_deposition_smoothing_conservation(csda_params):
             "source_fixed_grid",
             {
                 **csda_params,
+                # Gap pinned with the region: see _case_source_fixed_grid.
+                "cathode_anode_gap_cm": 50.0,
                 "source_region_length_cm": 100.0,
                 "source_region_dz_cm": 10.0,
                 "gas_puff_z_cm": 60.0,
@@ -6564,6 +6577,8 @@ def _case_beam_smoothing_matrix_cache(csda_params, smooth_sigma_cm):
     smoothkey_flags = {**cathode_flags, "source_fixed_grid": True}
     smoothkey_base = dict(
         csda_params,
+        # Gap pinned with the region: see _case_source_fixed_grid.
+        cathode_anode_gap_cm=50.0,
         source_region_length_cm=100.0,
         gas_puff_z_cm=60.0,
     )
@@ -12522,6 +12537,7 @@ def _case_obstruction_geometry_production_style(kd_flags, kd_params):
             "end_expansion_cells": 10,
             "end_expansion_machine_radius_cm": 100.0,
             "end_expansion_plasma_radius_cm": 15.0,
+            "cathode_anode_gap_cm": 50.0,
             "source_region_length_cm": 100.0,
             "source_region_dz_cm": 10.0,
         }
