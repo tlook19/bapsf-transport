@@ -386,6 +386,14 @@ and reciprocity and binomial-σ authenticity checks pass). That gives **per-pump
 `S_eff` ≈ 1510 L/s**. Two of those pumps sit at each end, so the per-end lumped
 speed is `2 * S_eff`, rounded to 3000 L/s.
 
+**Booking these at the END CELLS is MACHINE-FAITHFUL, not a lumping:** all
+four main turbos attach at the two end chambers and the mid-machine 45°
+pumping stub is unused (machine record, Tom-confirmed), so no interior pump
+is being carried at a boundary cell — with the one rider that the far end's
+PAIR sits beyond the machine gate valve, so counting it in that end's `2 *
+S_eff` is conditional on a gate-valve-OPEN ruling the record does not yet
+carry (Tom's read is likely CLOSED, unconfirmed for the run days).
+
 The pump — not the line — owns about 72 % of the total series resistance, which
 is why pinning the elbow moves the central value only +2.7 % (per-pump 1470 →
 1510) even though it collapses the elbow's own spread.
@@ -1235,6 +1243,30 @@ and are quoted together for the same reason.
 interchangeable: 0.41 as a TOTAL reflected fraction, 0.65 PER BACKSCATTERED
 PARTICLE** (`0.41 / 0.63`). The shipped value is the TOTAL one, and
 `anode_jet_energy_convention` is what says so.
+
+**DISCLOSED BRACKET — the adopted pair is NOT anchored to a sight-verified
+fit, and the numbers above are UNCHANGED pending an explanation.** Eckstein's
+later ⁴He→Mo fit (IPP 17/12, 2009 — sight-verified, fit form and constants
+read directly and evaluated here) gives, at 200 eV normal incidence,
+`R_N = 0.520` and `R_E = 0.302`, ratio 0.581. The adopted 0.63 / 0.41 / 0.65
+exceed those by +21 % / +36 % / +12 %, and **no explanation for the gap has
+been verified.** Three candidates, none of them checked: the IPP 9/132
+tabulated values may differ from the 2009 fits; the row may be the wrong
+target (⁴He→W gives 0.600 / 0.372, much closer); or the reading may not be at
+normal incidence (which raises both, the right direction). Until one of them
+is established the honest statement is the disclosed bracket **`R_N` ∈
+[0.52, 0.63], `R_E` ∈ [0.30, 0.41]** — read as a PAIR bracket, exactly like
+the endpoint pairs above and never as independent corners.
+
+*Why the values are not moved on it.* The pair feeds exactly ONE term, the
+directed neutral-momentum source at the mesh; the particle recycle is
+`R_N`-independent and there is no energy channel. Walking to the far edge of
+the bracket changes that one term by −22 % (launch speed −6 %), which is
+PREDICTED to be below the movement class for any scored quantity — a
+prediction, not a measured null. Eckstein's own uncertainty rides the bracket
+rather than being absorbed into it: a factor of 2 in absolute terms, mostly
+under 30 %, and quoted for ZERO FLUENCE — a caveat with teeth here, because
+the anode mesh accumulates helium in service.
 
 Superseded: `R_N = 0.5`, `R_E = 0.25` — placeholders that carried no result
 while the channel was inert, never re-cut because nothing read them.
