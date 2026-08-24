@@ -425,7 +425,10 @@ def run_dvm(shared, dt, nvz, nvp, accommodation, elastic_model, progress=None):
             + led["birth_anode"] + led["birth_cathode_face"]
             + led["birth_collector_face"]
         )
-        f_c_m, f_a_m, mesh_c, mesh_a, out = captured["res"]
+        # ``_march`` also returns the intercepted mesh ENERGIES (the
+        # B0a energy ledger's one in-sweep tally); nothing here reads
+        # them.
+        f_c_m, f_a_m, mesh_c, mesh_a, out, _mesh_E = captured["res"]
 
         # --- state moments, trapezoid over the step (second order in dt, so
         # the bin average is not biased by the update cadence)
