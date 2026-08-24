@@ -38,8 +38,9 @@ Gates:
       mesh, no pumping, specular end walls, no external source -- the change
       in the box's total energy equals the CX/elastic exchange plus the
       ionization consumption to roundoff, every disarmed row booking zero;
-      and the same two closure forms hold on the fully-armed default arm, at
-      the tolerance the particle ledger is held to
+      then the same two closure forms with EVERY channel armed at once, once
+      per annulus treatment, and on the in-solver default arm -- all at the
+      tolerance the particle ledger is held to
   S1  recycle identity: what the arm sources at a plasma-terminating surface
       equals what the ACTIVE boundary term removed from the plasma there,
       per face, on all three geometries of RECYCLE_GEOMETRIES -- the shipped
@@ -917,7 +918,7 @@ def gate_i6():
     worst_dist = 0.0
     worst_dom = 0.0
     worst_disarmed = 0.0
-    live = 0.0
+    live = float("inf")
     for _ in range(6):
         led = dvm.update(CADENCE_S, **plasma)
         r = ledger_energy_residual(led)
@@ -926,12 +927,17 @@ def gate_i6():
         worst_dom = max(worst_dom, abs(r["domain_rel"]))
         for key in DISARMED_ENERGY_ROWS:
             worst_disarmed = max(worst_disarmed, abs(e[key]) / r["scale"])
-        # Non-vacuity: the two channels the box is closed around must
-        # actually be carrying energy, or the identity is 0 == 0.
+        # Non-vacuity, worst update of the window: the two channels the
+        # box is closed around must actually be carrying energy on every
+        # update, or the identity being checked is 0 == 0.
         live = min(
-            abs(e["net_exchange_cx"]) + abs(e["net_exchange_elastic"]),
-            abs(e["loss_ionization"]),
-        ) / r["scale"]
+            live,
+            min(
+                abs(e["net_exchange_cx"]) + abs(e["net_exchange_elastic"]),
+                abs(e["loss_ionization"]),
+            )
+            / r["scale"],
+        )
 
     channels = {
         name: all_channels_energy_closure(name)
@@ -957,7 +963,7 @@ def gate_i6():
     )
     return (
         "I6 energy ledger: closed box closes on exchange + consumption, "
-        "armed arm closes at the particle-ledger tolerance",
+        "every armed channel closes at the particle-ledger tolerance",
         ok,
         f"closed box (6 updates): distribution {fmt(worst_dist)}, domain "
         f"{fmt(worst_dom)}, worst disarmed row {fmt(worst_disarmed)}, live "
