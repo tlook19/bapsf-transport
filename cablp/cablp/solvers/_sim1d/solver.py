@@ -3664,6 +3664,49 @@ class LAPDSim1D:
                 "may consume in one step and must lie in (0, 1] "
                 f"(got {relax_fraction})"
             )
+        if bool(self._input_dict.get("gas_puff_enabled", True)):
+            # The arm births the puff into the ANNULUS distribution, so a
+            # puff cell with no annulus volume has nowhere to put it: the
+            # 1/V_ann guard would drop the atoms while the particle ledger
+            # still booked them as a birth. The profile SHAPE is
+            # time-independent (the waveform only scales it), so the cells
+            # it lands in are decidable here, at construction.
+            share = gas_puff_rate_profile(
+                self._geometry,
+                1.0,
+                float(self._input_dict.get("gas_puff_valves", 2)),
+                profile=str(self._input_dict.get("gas_puff_profile", "cell")),
+                z_cm=self._input_dict.get("gas_puff_z_cm"),
+                sigma_cm=float(
+                    self._input_dict.get("gas_puff_sigma_cm", 50.0)
+                ),
+                throw_cm=float(
+                    self._input_dict.get("gas_puff_throw_cm", 100.0)
+                ),
+                delivery_fraction=float(
+                    self._input_dict.get("gas_puff_delivery_fraction", 1.0)
+                ),
+            )
+            V_ann = np.asarray(self._zone_volumes[1], dtype=float)
+            starved = np.flatnonzero(
+                (np.asarray(share, dtype=float) > 0.0) & (V_ann <= 0.0)
+            )
+            if starved.size:
+                named = starved[:8].tolist()
+                extra = starved.size - 8
+                more = "" if extra <= 0 else f" (+{extra} more)"
+                raise ValueError(
+                    "neutral_model='kinetic_dvm' births the gas puff into "
+                    "the ANNULUS distribution (the 300 K at-rest wall-port "
+                    "convention), so every cell the puff profile lands in "
+                    "must have an annulus to receive it; "
+                    f"{starved.size} puff cell(s) carry V_ann = 0 "
+                    f"(Rm == Rp there): {named}{more}. Those cells would "
+                    "swallow their share of the fueling while the particle "
+                    "ledger still booked it as a birth. Accepted: a "
+                    "gas_puff_profile whose support lies in cells with "
+                    "Rm > Rp, or gas_puff_enabled = False"
+                )
         self._dvm_cadence_s = cadence
         self._dvm_tn_feedback = tn_feedback
         self._dvm_transfer_relax_fraction = relax_fraction
@@ -10869,7 +10912,18 @@ class LAPDSim1D:
         self._dvm_ion_booked = np.zeros(self._geometry.cells, dtype=float)
 
     def _dvm_advance(self, dt_neutral):
-        """Run one transient DVM update and republish the neutral moments."""
+        """Run one transient DVM update and republish the neutral moments.
+
+        The republish is ONE-SIDED at the density floor. The fluid ``nn``
+        and ``nn_a`` rows are written as ``max(moment, nn_floor)``, so a
+        cell whose kinetic moment sits below the floor publishes the floor
+        to the plasma while the kinetic state keeps its own lower moment,
+        and no cell is ever published below its moment. Nothing raises
+        ``f`` to match: the two inventories can therefore differ, in that
+        one direction only, by at most the floor times the cell volume.
+        The kinetic ledger is the inventory of record; the published rows
+        are what the plasma-side rate evaluations consume.
+        """
         state = self.state
         derived = self.derived
         geometry = self._geometry
