@@ -17,17 +17,18 @@ Gates:
   I3  ledger completeness: every channel the engine declares is present in
       every ledger it emits, and no ledger entry is unaccounted
   I4  the same inventory closure and an independent transfer reconstruction
-      on the PRODUCTION expanded-end geometry, where the column and annulus
-      areas jump at the plenum constriction and the end expansion -- the
-      case the throat-face flux form exists for and the one the uniform
-      default geometry cannot exercise
+      on the R5 STAND-IN expanded-end geometry (retired keys, kept as a
+      stand-in -- not production; see R5_STANDIN_PARAMS), where the column
+      and annulus areas jump at the plenum constriction and the end
+      expansion -- the case the throat-face flux form exists for and the one
+      the uniform default geometry cannot exercise
   J1  the bounded-chord annulus flight classes satisfy the two-dimensional
       mean-chord theorem, ``pi (Rm - Rp) / 2``, which nothing in their
       derivation was fitted to; and every class flight time is sharper than
       the exponential the rate arm implies
   J2  the bounded-chord jump operator routes every launched particle to
       exactly one outcome, and the running engine closes both ledger forms
-      and reproduces the booked transfer on the PRODUCTION expanded-end
+      and reproduces the booked transfer on the R5 stand-in expanded-end
       geometry -- the I4 statement, made against the jump kernel
   J3  naming the shipped ``annulus_flights = "rates"`` is bit-identical to
       not naming it at all
@@ -35,10 +36,11 @@ Gates:
       statement that nothing leaks into a cell whose annulus has no volume
   S1  recycle identity: what the arm sources at a plasma-terminating surface
       equals what the ACTIVE boundary term removed from the plasma there,
-      per face, on the production-style geometry (Lcs = 25, so the cathode's
-      live cell is not an end cell) and on the Lcs = 0 geometry, in both
-      stances of ``characteristic_boundary``; and the arm deposits it in
-      that same cell
+      per face, on all three geometries of RECYCLE_GEOMETRIES -- the shipped
+      uniform bore, the R5 stand-in (whose plenum obstruction puts the
+      cathode's live cell at index 2 rather than at the mesh start) and the
+      PRODUCTION machine read from the stance file -- in both stances of
+      ``characteristic_boundary``; and the arm deposits it in that same cell
   C1  momentum transfer antisymmetry: the fluid coupling term's M row is
       exactly minus the kinetic momentum moment per cell, to roundoff
   C2  energy transfer antisymmetry: the fluid coupling term's Ei row is
@@ -115,6 +117,7 @@ Usage (from <checkout>/cablp, with PYTHONPATH set to that same cablp):
     python scripts/verify_sim1d_k2_dvm.py
 """
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -143,6 +146,17 @@ from cablp.solvers._sim1d.physics.kinetic_neutrals import (
     annulus_chord_classes,
 )
 from cablp.solvers._sim1d.physics.neutrals import neutral_zone_volumes
+
+# The stance loader, for the committed stance FILE. It is this module's only
+# scripts/ import, and it is deliberate: the geometry the gates below call
+# PRODUCTION must come from the artifact production is run from, not from a
+# dict restated here that can go stale against it (it did -- see
+# PRODUCTION_GEOMETRY_KEYS).
+_SCRIPTS = Path(__file__).resolve().parent
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
+
+from stance_config import load_stance  # noqa: E402
 
 CADENCE_S = 2.5e-5
 ROUNDOFF_REL = 1.0e-12
@@ -250,13 +264,49 @@ def make_sim(**overrides):
     return LAPDSim1D(input_dict=d, input_flags=fl)
 
 
+def advance_one_step(sim, operator_split=None):
+    """Advance one step through the PRODUCTION step-acceptance path.
+
+    ``LAPDSim1D.advance_one_step`` raises on the FIRST rejected candidate. That
+    is not how a run steps: ``run()`` hands the candidate to
+    ``_attempt_step_with_retries``, which re-attempts at ``DT_REJECT_FACTOR``
+    times the dt (0.5) up to ``max_step_retries`` (8) and only raises once the
+    retries are exhausted or the dt would fall below ``dt_min``. A gate that
+    stepped the raising API was therefore asserting something stricter than the
+    solver ships -- that no candidate is ever rejected -- and a single rejected
+    candidate aborted the suite (campaign log 2026-08-23o).
+
+    This is the same three calls ``run()`` makes around one step, without
+    run()'s dt-growth ramp and output-cadence caps: those shape the step
+    SCHEDULE, which no gate here is about, whereas the retry is what decides
+    whether a step is accepted at all.
+    """
+    split = (
+        sim._flags.get("implicit_heat_conduction", False)
+        if operator_split is None
+        else operator_split
+    )
+    diag = sim.suggest_timestep(include_heat_conduction=not split)
+
+    def _generate():
+        attempt, retries, reason, events = sim._attempt_step_with_retries(
+            dt=diag.dt,
+            operator_split=operator_split,
+            diag=diag,
+        )
+        return attempt, (retries, reason, events)
+
+    result, _attempt, _extra = sim._accept_step_with_picard(_generate)
+    return result
+
+
 def run_until_updates(sim, n_updates, max_steps=6000):
     """Advance until the neutral clock has ticked ``n_updates`` times."""
     ledgers = []
     steps = 0
     while sim._dvm.updates < n_updates and steps < max_steps:
         before = sim._dvm.updates
-        sim.advance_one_step()
+        advance_one_step(sim)
         steps += 1
         if sim._dvm.updates > before:
             ledgers.append(dict(sim._dvm.last_ledger))
@@ -307,34 +357,64 @@ def zero_plasma(dvm):
     }
 
 
-def expanded_end_geometry():
-    """Return the PRODUCTION expanded-end machine geometry.
+# R5 STAND-IN GEOMETRY (retired keys, kept as a stand-in -- not production).
+#
+# The R5 parametric flare: the end vessel expands to a 1 m neutral radius over
+# 10 cells with the plasma held at ``Rp = 15`` cm, and the plenum choke
+# (``Rcs = 40``, ``Lcs = 25``) constricts the annulus in front of the cathode.
+# Both are ANNULUS area jumps, which is what the throat-face flux form in
+# ``_march`` exists to handle; the column area is uniform throughout.
+#
+# These keys were RETIRED by the G1 measured geometry (compare_sim1d_es1.py
+# records the retirement, and the two area machineries are mutually exclusive
+# by construction), so this block is NOT production geometry and is no longer
+# labelled as one. It is kept for the two things it is the only geometry here
+# to supply:
+#
+#   * a plenum obstruction, which puts the cathode's live cell at index 2
+#     rather than at the mesh start -- the offset the positional-constant
+#     deposit defect S1 guards against needs in order to be a test at all;
+#   * a coarse three-radius annulus with an exactly-representable chord split,
+#     on which the J2 flight-map routing residual is EXACTLY zero. On the
+#     280-cell stance mesh the same residual is 3.3e-16 -- roundoff, not a
+#     routing error, but the gate's statement is exact-zero and is not
+#     relaxed here.
+#
+# ``collector_length_cm`` is pinned at the R5 value. The config default dropped
+# 100 -> 7.8 at R2a, and inheriting it subdivided the ten-cell end block into
+# 0.78 cm cells -- a mesh R5 never had, and the one on which the explicit
+# neutral-diffusion checkerboard reported in campaign log 2026-08-23o appeared.
+R5_STANDIN_PARAMS = {
+    "Rp": 15.0,
+    "R_cath": 15.0,
+    "Rcs": 40.0,
+    "Lcs": 25.0,
+    "Rsup": 0.0,
+    "collector_length_cm": 100.0,
+    "end_expansion_cells": 10,
+    "end_expansion_machine_radius_cm": 100.0,
+    "end_expansion_plasma_radius_cm": 15.0,
+    "source_region_length_cm": 100.0,
+    "source_region_dz_cm": 10.0,
+}
+R5_STANDIN_FLAGS = {
+    "end_expansion_geometry": True,
+    "source_fixed_grid": True,
+}
+#: The same package in ``arm_config`` override form (``flag:`` prefixed flags).
+R5_STANDIN_GEOMETRY_KEYS = {
+    **R5_STANDIN_PARAMS,
+    **{f"flag:{key}": value for key, value in R5_STANDIN_FLAGS.items()},
+}
 
-    The stance's geometry keys, taken from ``compare_sim1d_es1.py``: the end
-    vessel expands to a 1 m neutral radius over 10 cells with the plasma
-    held at ``Rp = 15`` cm, and the plenum choke (``Rcs = 40``, ``Lcs = 25``)
-    constricts the annulus in front of the cathode. Both are ANNULUS area
-    jumps, which is what the throat-face flux form in ``_march`` exists to
-    handle; the column area is uniform throughout.
-    """
+
+def expanded_end_geometry():
+    """Return the R5 stand-in expanded-end geometry (see R5_STANDIN_PARAMS)."""
     d, fl = default_config()
     d = dict(d)
     fl = dict(fl)
-    d.update(
-        {
-            "Rp": 15.0,
-            "R_cath": 15.0,
-            "Rcs": 40.0,
-            "Lcs": 25.0,
-            "Rsup": 0.0,
-            "end_expansion_cells": 10,
-            "end_expansion_machine_radius_cm": 100.0,
-            "end_expansion_plasma_radius_cm": 15.0,
-            "source_region_length_cm": 100.0,
-            "source_region_dz_cm": 10.0,
-        }
-    )
-    fl.update({"end_expansion_geometry": True, "source_fixed_grid": True})
+    d.update(R5_STANDIN_PARAMS)
+    fl.update(R5_STANDIN_FLAGS)
     return LAPDSim1D(input_dict=d, input_flags=fl).geometry
 
 
@@ -487,23 +567,74 @@ def geometry_closure(geom, label, annulus_flights="rates"):
     return dvm, worst_dist, worst_dom, transfer_err
 
 
-PRODUCTION_GEOMETRY_KEYS = {
-    "Rp": 15.0,
-    "R_cath": 15.0,
-    "Rcs": 40.0,
-    "Lcs": 25.0,
-    "Rsup": 0.0,
-    "end_expansion_cells": 10,
-    "end_expansion_machine_radius_cm": 100.0,
-    "end_expansion_plasma_radius_cm": 15.0,
-    "source_region_length_cm": 100.0,
-    "source_region_dz_cm": 10.0,
-    "flag:end_expansion_geometry": True,
-    "flag:source_fixed_grid": True,
-}
+#: The stance of record. Its committed file is the ONE artifact that
+#: constructs the production configuration, so the geometry below is READ FROM
+#: IT rather than restated here.
+PRODUCTION_STANCE = "g1atrim"
+
+#: The ``input_dict`` keys of the stance's MACHINE GEOMETRY package. All five
+#: are mesh-coupled and travel together: ``nx`` sizes the far column, the two
+#: radius profiles carry one entry per mesh cell (they are built offline by
+#: scripts/g1_build_profiles.py from the measured census, and the vessel
+#: profile is a staircase), and the baffle arrays are the apertures that go
+#: with that machine. Nothing else of the stance is taken -- the operating
+#: point, the closure family and the shaped initial fill are not geometry, and
+#: several of them are keys a ``kinetic_dvm`` arm refuses outright (see
+#: KINETIC_DVM_INCOMPATIBLE_DEFAULTS).
+STANCE_GEOMETRY_PARAMS = (
+    "nx",
+    "plasma_radius_profile_cm",
+    "machine_radius_profile_cm",
+    "neutral_baffle_positions_cm",
+    "neutral_baffle_clear_radii_cm",
+)
+#: The two flags that package requires. ``prescribed_area_geometry`` is what
+#: makes the per-cell radii the geometry; ``neutral_baffles`` is what makes the
+#: baffle arrays live. The DVM march itself does not read the baffle faces (the
+#: fluid neutral operator does), so they travel as part of the machine rather
+#: than as a kinetic input.
+STANCE_GEOMETRY_FLAGS = ("prescribed_area_geometry", "neutral_baffles")
 
 
-def recycle_identity(production_geometry, characteristic_boundary, steps=40):
+def _production_geometry_keys():
+    """Return the stance's geometry package as ``arm_config`` overrides.
+
+    Read from the committed stance file through the same loader
+    ``run_m6_point.py`` and ``baseline_sim1d.py`` use, so this fixture's
+    "production geometry" cannot drift from what production runs.
+    """
+    stance = load_stance(PRODUCTION_STANCE)
+    keys = {name: stance.params[name] for name in STANCE_GEOMETRY_PARAMS}
+    keys.update(
+        {f"flag:{name}": stance.flags[name] for name in STANCE_GEOMETRY_FLAGS}
+    )
+    return keys
+
+
+#: The PRODUCTION machine geometry: the g1atrim stance's measured per-cell
+#: plasma and vessel radii, its baffles and the mesh they are sized to.
+#:
+#: This constant previously restated the R5 parametric flare instead (now
+#: R5_STANDIN_PARAMS above), which the G1 measured geometry had retired, and
+#: rebuilt it on a config whose ``collector_length_cm`` default had since
+#: dropped 100 -> 7.8 -- producing ten 0.78 cm end cells no stance ever ran.
+#: The gates that step a solver on it were rejecting candidate steps on that
+#: mesh alone (campaign log 2026-08-23o).
+PRODUCTION_GEOMETRY_KEYS = _production_geometry_keys()
+
+
+#: The geometries S1 makes its statement on, and what each one is there for.
+#: The invariant is a property of the arm, so it must hold on all three: the
+#: shipped uniform bore, the R5 stand-in whose plenum obstruction pushes the
+#: cathode's live cell off the mesh start, and the production machine.
+RECYCLE_GEOMETRIES = (
+    ("default", {}),
+    ("R5-standin", R5_STANDIN_GEOMETRY_KEYS),
+    (PRODUCTION_STANCE, PRODUCTION_GEOMETRY_KEYS),
+)
+
+
+def recycle_identity(geometry_keys, characteristic_boundary, steps=40):
     """Compare the arm's wall-return channels with the plasma actually removed.
 
     The DESIGN INVARIANT: whatever the active plasma-terminating boundary
@@ -521,11 +652,10 @@ def recycle_identity(production_geometry, characteristic_boundary, steps=40):
         "neutral_kinetic_dvm_nvp": 6,
         "flag:characteristic_boundary": bool(characteristic_boundary),
     }
-    if production_geometry:
-        overrides.update(PRODUCTION_GEOMETRY_KEYS)
+    overrides.update(geometry_keys)
     sim = make_sim(**overrides)
     for _ in range(steps):
-        sim.advance_one_step()
+        advance_one_step(sim)
     geom = sim.geometry
     roles = np.asarray(geom.cell_role)
     Vp = np.asarray(geom.plasma_volume_cm3, dtype=float)
@@ -646,7 +776,7 @@ def gate_i4():
         and transfer_err < ROUNDOFF_REL
     )
     return (
-        "I4 expanded-end production geometry: closure and transfer exact "
+        "I4 expanded-end R5 stand-in geometry: closure and transfer exact "
         "across the area jumps",
         ok,
         f"{dvm.nz} cells, annulus area-jump ratios {jumps}; worst "
@@ -698,7 +828,7 @@ def gate_j1():
 
 
 def gate_j2():
-    """The jump operator conserves on the production expanded-end geometry.
+    """The jump operator conserves on the R5 stand-in expanded-end geometry.
 
     The I4 statement, made against the bounded-chord annulus: the routing
     map itself must send every launched particle to exactly one outcome,
@@ -793,21 +923,19 @@ def gate_i5():
 def gate_s1():
     lines = []
     ok = True
-    for production_geometry in (False, True):
+    for geometry_name, geometry_keys in RECYCLE_GEOMETRIES:
         for characteristic_boundary in (False, True):
             sim, roles, faces = recycle_identity(
-                production_geometry, characteristic_boundary
+                geometry_keys, characteristic_boundary
             )
-            label = (
-                f"{'Lcs=25' if production_geometry else 'Lcs=0'}/"
-                f"char={int(characteristic_boundary)}"
-            )
+            label = f"{geometry_name}/char={int(characteristic_boundary)}"
             for face in faces:
                 cell = face["cell"]
                 # The invariant, plus the two structural statements the
                 # positional-constant defect violated: the channel is live and
-                # it sits on the role-resolved cell (cell 2, not 0 or 1, once
-                # the obstruction is present).
+                # it sits on the role-resolved cell -- which is cell 2 on the
+                # R5 stand-in, whose plenum obstruction is the only geometry
+                # here that moves the cathode off the mesh start.
                 face_ok = (
                     face["rel"] < ROUNDOFF_REL
                     and face["removed"] > 0.0
@@ -837,7 +965,7 @@ def gate_s1():
             lines.append(dep + f" (matches the sampled faces: {dep_ok})")
     return (
         "S1 recycle identity: what the arm re-injects equals what the active "
-        "boundary removed, per face, on both geometries and both stances",
+        "boundary removed, per face, on all three geometries and both stances",
         ok,
         ("\n        ").join(lines) + f"\n        tol {fmt(ROUNDOFF_REL)}",
     )
@@ -1166,7 +1294,7 @@ def gate_p1():
     d, fl = default_config()
     ref = LAPDSim1D(input_dict=dict(d), input_flags=dict(fl))
     for _ in range(20):
-        ref.advance_one_step()
+        advance_one_step(ref)
     terms = ref.rhs_terms()
     no_arm_term = not any("dvm" in name for name in terms)
     no_arm = ref._dvm is None
@@ -1176,7 +1304,7 @@ def gate_p1():
     fl2["neutral_two_zone"] = True
     alt = LAPDSim1D(input_dict=dict(d), input_flags=fl2)
     for _ in range(20):
-        alt.advance_one_step()
+        advance_one_step(alt)
     alt_clean = alt._dvm is None and not any(
         "dvm" in name for name in alt.rhs_terms()
     )
@@ -1255,7 +1383,7 @@ def gate_p3():
 
 
 def engaged_production_sim(**overrides):
-    """Return an ENGAGED arm on the production-style geometry."""
+    """Return an ENGAGED arm on the PRODUCTION machine geometry."""
     kwargs = {
         "neutral_kinetic_dvm_nvz": 16,
         "neutral_kinetic_dvm_nvp": 6,
@@ -1343,7 +1471,7 @@ def gate_d2():
             ok = ok and np.all(
                 np.asarray(getattr(terms[term], row), dtype=float) == 0.0
             )
-        sim.advance_one_step()
+        advance_one_step(sim)
         terms = sim.rhs_terms()
     withdrawn = {name.removeprefix("dt_") for name in PHANTOM_BOUNDS}
     ok = ok and not (constraints & withdrawn)
@@ -1367,7 +1495,7 @@ def gate_d3():
     sim = engaged_production_sim()
     # Inert first: with no limiting the applied rate is the booked rate
     # BIT-exactly, so the relax cannot perturb a healthy run.
-    sim.advance_one_step()
+    advance_one_step(sim)
     quiet = sim.dvm_transfer_ledger()
     quiet_limited = quiet["relax_limited_steps"]
     # Now a drain no admissible step could carry: 1e12 erg/cm3/s against
@@ -1378,7 +1506,7 @@ def gate_d3():
     survived = True
     try:
         for _ in range(30):
-            sim.advance_one_step()
+            advance_one_step(sim)
     except Exception as error:  # noqa: BLE001 - the gate's whole point
         survived = False
         crash = f"{type(error).__name__}: {error}"
