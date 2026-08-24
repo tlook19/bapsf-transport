@@ -52,9 +52,15 @@ Gates:
       thermal speed, not the momentum closure's 0.1 eV Tn_fit
   T1  TRANSPIRATION ARM: 'local' at a uniform Tn = Tn_K reproduces 'frozen' to
       the bit, and separates from it once Tn varies
-  G6..G8 construction guards: the two-momentum reduction, the jet without the
-      surface debit, and a bad transpiration selector each raise a loud
-      ValueError naming what is accepted; the happy paths construct
+  G6  RESOLVER DOWNGRADE: the two-momentum reduction no longer REFUSES the
+      neutral-energy package -- 40c519c made neutral_energy a shipped default,
+      and 2f3638a made a model selection resolve a member left at its config
+      default instead of raising on it -- so the gate pins the downgrade:
+      construction succeeds and the resolved arm reports _neutral_energy False
+      with _neutral_two_momentum True
+  G7, G8 construction guards: the jet without the surface debit, and a bad or
+      unusable transpiration selector, each raise a loud ValueError naming what
+      is accepted; the happy paths construct
 
 Usage:
     PYTHONPATH=<checkout>/cablp python scripts/verify_sim1d_nbl2_neutral_transport.py
@@ -243,7 +249,12 @@ def gate_k2():
         worst = max(worst, abs(measured - expect))
         rows.append(f"k={k}: {measured:.6f} vs {expect:.6f}")
     # Geometry alone: the kernel does not depend on the plasma state at all.
-    again = ballistic_flight_kernels(sim._geometry)
+    # The rebuild must mirror the solver's own arming of the internal-wall
+    # option, which is what selects the flight bounds; the default in the
+    # function signature is not the value the solver builds with.
+    again = ballistic_flight_kernels(
+        sim._geometry, internal_wall=sim._neutral_hot_internal_wall
+    )
     stable = _bitwise(again[0], landing)
     ok = worst < 1e-3 and stable
     return "K2 kernel kinematics match the closed-form isotropic hop", ok, (
@@ -694,11 +705,38 @@ def _guard(label, expect_fragment, **overrides):
 
 
 def gate_g6():
-    return _guard(
-        "G6 guard: neutral_energy with the two-momentum reduction raises",
-        "kinetic_two_moment",
-        neutral_two_zone=True,
-        neutral_momentum_radial="kinetic_two_moment",
+    """Pin the RESOLVER's downgrade, which replaced this gate's old refusal.
+
+    40c519c flipped ``neutral_energy`` ON in the shipped defaults, so the
+    two-moment reduction's incompatibility with the neutral-energy package is
+    now with a member sitting AT ITS CONFIG DEFAULT, not with an explicit
+    caller choice.
+
+    2f3638a made a model selection OWN its member keys: a member left at its
+    config default is resolved to the value the selection requires instead of
+    raising, and only an EXPLICITLY set member still raises.
+
+    Together those make this configuration construct rather than refuse, so
+    the gate certifies what the resolver documents it does -- the arm comes
+    back with the neutral-energy package off and the two-momentum closure on,
+    which is the state the earlier ValueError stood for.
+    """
+    label = (
+        "G6 resolver: neutral_energy at its default downgrades under the "
+        "two-momentum reduction"
+    )
+    try:
+        sim = make_sim(
+            neutral_two_zone=True,
+            neutral_momentum_radial="kinetic_two_moment",
+        )
+    except ValueError as exc:
+        return label, False, f"construction REFUSED: {exc}"
+    ok = sim._neutral_energy is False and sim._neutral_two_momentum is True
+    return label, ok, (
+        f"constructs=True  resolved _neutral_energy={sim._neutral_energy} "
+        f"(expect False)  _neutral_two_momentum={sim._neutral_two_momentum} "
+        f"(expect True)"
     )
 
 
@@ -730,10 +768,14 @@ def gate_g8():
         "must be 'frozen' or 'local'",
         neutral_knudsen_temperature="sqrt",
     )
+    # neutral_hot_internal_wall is a shipped default (True) whose own
+    # neutral_energy guard fires FIRST, masking the selector guard this
+    # sub-gate is for; clear it so the transpiration refusal is what is read.
     label2, ok2, detail2 = _guard(
         "local without neutral_energy",
         "requires the neutral_energy flag",
         neutral_energy=False,
+        neutral_hot_internal_wall=False,
         neutral_knudsen_temperature="local",
     )
     return label, ok and ok2, f"{detail} | {label2}: {detail2[:96]}"
