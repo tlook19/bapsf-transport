@@ -253,7 +253,7 @@ def geometry_defaults():
         "Rm": 50.0,
         "Rp": 18.415,
         "plenum_length_cm": 166.0,
-        "cathode_anode_gap_cm": 50.0,
+        "cathode_anode_gap_cm": 53.25,
         "nx_gap": 5,
         "collector_length_cm": 7.8,
         "Rcs": 0.0,
@@ -277,7 +277,7 @@ def geometry_defaults():
         "neutral_annulus_volume_fraction_min": 1.0e-2,
         "neutral_baffle_positions_cm": None,
         "neutral_baffle_clear_radii_cm": None,
-        "source_region_length_cm": 100.0,
+        "source_region_length_cm": 103.25,
         "source_region_dz_cm": 10.0,
     }
 
@@ -2265,7 +2265,7 @@ def cathode_defaults():
         "circuit_picard_max_iter": 3,
         "eta": 0.358,
         "anode_radius_cm": None,
-        "L_cath": 50.0,
+        "L_cath": 53.25,
         "R_cath": 18.415,
         # --- ACTIVE: beam deposition (CSDA production stack; b_beam_excitation
         # + beam_excitation_model are INERT under csda -- the module uses the

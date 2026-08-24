@@ -1,10 +1,13 @@
 # Provenance of the golden baseline pins (`baseline_sim1d.BASELINE_*_OVERRIDES`)
 
-**Recaptured 2026-08-23 (the conserving ionization birth ADOPTED as the
-default, jointly with the `C_R` re-trim it forced; the `heat_flux_limiter_f`
-re-cut to 0.45, the pre-Tuesday physics batch, the 2026-08-20 stance-update wave
-and the thread-24 R2b re-anchor onto the stance preceded it — all five under the
-reviewed-recapture protocol, see the recapture record below).** The committed
+**Recaptured 2026-08-24 (the CAD-SPAN MACHINE GEOMETRY adopted — the
+cathode-anode gap and the port-7 ring, both reduced by the CAD-span midpoint
+rule — together with the ray-clip exactness fix the gap value forced; the
+2026-08-23 conserving ionization birth with its `C_R` re-trim, the
+`heat_flux_limiter_f` re-cut to 0.45, the pre-Tuesday physics batch, the
+2026-08-20 stance-update wave and the thread-24 R2b re-anchor onto the stance
+preceded it — all six under the reviewed-recapture protocol, see the recapture
+record below).** The committed
 regression fixture
 `scripts/baselines/production_discharge.npz` is captured at **the stance of
 record, re-cut to the gate mesh** — `default_config()` plus the committed stance
@@ -104,15 +107,15 @@ whole cycle rather than a truncated foot.
 
 | quantity | value |
 |---|---|
-| steps | 76,631 |
-| wall, single lane | 1006 s / 1004 s over the two captures (~16.8 / 16.7 min) |
-| saves | 2,626 |
-| `final_time` | 2.624039e-02 s (the dynamic `t_end`, reached) |
-| trajectory | `y[2626, 576]` = 8 fields × 72 cells |
-| phase census (saves) | 9 `pre_breakdown`, 16 `breakdown`, 2000 `main_discharge`, 600 `afterglow`, 1 `post_afterglow` |
+| steps | 71,287 |
+| wall, single lane | ~15 min per capture, the two run strictly serially |
+| saves | 2,625 |
+| `final_time` | 2.623652e-02 s (the dynamic `t_end`, reached) |
+| trajectory | `y[2625, 576]` = 8 fields × 72 cells |
+| phase census (saves) | 9 `pre_breakdown`, 15 `breakdown`, 2000 `main_discharge`, 600 `afterglow`, 1 `post_afterglow` |
 | save cadence | 10 us — the finest timing shift this fixture can resolve |
 
-*(Figures above are the 2026-08-23 adoption capture; `steps`, `saves` and
+*(Figures above are the 2026-08-24 CAD-span capture; `steps`, `saves` and
 `final_time` are read from the committed sidecar
 `scripts/baselines/production_discharge.json`, which is regenerated at every
 recapture and is the authority for them. The two captures were
@@ -139,6 +142,152 @@ stance the cells carry plasma and the term is well behaved. Recorded as a known
 closure stress, deliberately not addressed by this pass.
 
 ## Recapture record
+
+**2026-08-24 — the CAD-SPAN MACHINE GEOMETRY adopted, with the ray-clip
+EXACTNESS FIX it forced (AUTHORIZED recapture; Tom's rulings 2026-08-23bh,
+2026-08-24, campaign log 24n).** Four config keys moved and one physics-path
+function was corrected. The keys are not four independent choices: three of
+them are ONE measured distance and the region that rides it.
+
+| key | old | new | class |
+|---|---|---|---|
+| `cathode_anode_gap_cm` (config default) | `50.0` | `53.25` | **MEASURED**, CAD-span midpoint of 0.531–0.534 m |
+| `L_cath` (config default) | `50.0` | `53.25` | **MEASURED**, the SAME distance, same reduction |
+| `source_region_length_cm` (config default) | `100.0` | `103.25` | consequence — the fixed source region is defined from the anode face outward, so its far end rides the gap; span (50 cm) and cell count (5) unchanged |
+| `neutral_baffle_positions_cm` (stance `g1atrim.toml`) | `[342.6]` | `[342.65]` | **MEASURED**, CAD-span midpoint of 3.401–3.452 m; the `342.6` was that same midpoint stale-rounded |
+
+Values, classes and honest bars: `config_defaults_provenance.md` (the gap and
+the new `L_cath` entry — that key had shipped with NO provenance row of its
+own until this event) and `production_stance_provenance.md` (the baffle
+entry, and the source-region entry re-cut to say the offset is measured and
+only the span is assumed). The stance's two per-cell radius profiles were
+REBUILT against the new mesh in the same event
+(`scripts/g1_build_profiles.py`), because the gap moves every cell
+downstream of the cathode face; the 280-cell census is unchanged.
+
+**The code change, and why it is part of this event rather than a follow-up.**
+`_clip_ray_length` (`physics/cathode.py`) built the beam ray's per-cell path
+by decrementing a running remainder. At the new gap that leaves
+`53.25 − 5 × 10.65 = 3.55e-15` cm, which put a non-zero `dz` on the
+ANODE-CROSSING cell. Anode-mesh interception scales the deposition ray's flux
+there and the probe's not at all, so the two parted company and the item-35
+gap ledger opened by **35.8 % of emitted beam power (tolerance 5 %)** — the
+solver's own tripwire fired on the first capture attempt, which was
+therefore HELD and discarded rather than installed. The function now
+ACCUMULATES FORWARD along the ray, which reproduces the same left-to-right
+sum the mesh uses to place its faces, so a clip ending on a face lands on it
+EXACTLY with no tolerance; a mesh-scale snap (`_CLIP_FACE_SNAP_REL = 1e-12`,
+≈0.1 pm at a 10.65 cm cell) closes the residual case where `L_cath` and the
+accumulated face differ by rounding rather than coinciding. The previous gap
+survived only because `50.0/5 == 10.0` is exact in binary — the defect was
+always latent.
+
+**Delta discipline — every arm run BEFORE anything was recaptured.** Each is
+the base tree (`4396dad`) plus exactly ONE delta, digested against the
+then-committed `golden_digest_4k.json` (short-horizon, 4,000 steps):
+
+| arm | result |
+|---|---|
+| base control | `exact=True`, digest `ada72fd1…` — reproduces the committed reference |
+| `Te_birth_ionization` line REMOVED from the stance | `exact=True`, digest `ada72fd1…` — **bit-inert**; see the withdrawal note below |
+| baffle `342.6 -> 342.65` | config identity moved, **no divergent checkpoint and no final-digest difference — the trajectory is bit-identical**. The baffle applies at the nearest cell FACE and both values snap to face 18 at `nx = 60` and face 43 at `nx = 268`. This delta is DOCUMENTARY at both shipped meshes. |
+| gap `50.0 -> 53.25` (+ the ruled source-region shift) | `exact=False`, first divergent checkpoint **step 0** |
+| `L_cath` `50.0 -> 53.25` ALONE | `exact=False`, first divergent checkpoint step 1000, **and it fires the item-35 tripwire** — with the mesh gap still at 50 cm the clip runs 3.25 cm PAST the anode face. Not a physically meaningful configuration: this arm is an ISOLATION ARTIFACT, and it is also the direct evidence that the two keys cannot be varied separately. |
+| the exactness FIX alone, at BASE geometry | `exact=True` on the digest AND `baseline verify OK: saves=2626, exact=True, max_rel=0.000e+00` on the FULL golden against the then-committed fixture — **bit-inert at base**, which is what licensed it to ride this recapture |
+
+A no-solve resolved-config diff of the branch against `4396dad` shows
+**exactly the three geometry params in all four config-complete driver cases
+(`production_golden`, `compare_sim1d_es1`,
+`run_m6_point_es1_sgp3649_defaults`, `run_mechanism_ladder_es1_defaults`),
+plus the baffle in `production_golden` alone** — which is the only case that
+applies the stance — and **0 flag deltas anywhere**. `parameter_count` (252)
+and `flag_count` (48) are UNCHANGED: no key was added or removed, only values
+moved. `config_snapshots.json` was regenerated in the same pass under that
+proof.
+
+**A delta that was WITHDRAWN, and why it is recorded here.** The event was
+briefed to also delete `Te_birth_ionization = "local"` from the stance file
+as a silent-inert accretion. It is inert at THIS fixture — the digest arm
+above proves it bit-for-bit, because the config default is `"local"` — but it
+is NOT inert where the stance is actually consumed: `run_m6_point.py` carries
+its own `ELECTRON_BIRTH_POLICY = "floor"`, and the stance line is exactly
+what overrides it. With the line removed, `preflight_diffcfg.py --stance
+g1atrim m6` reports `!! CHANGED Te_birth_ionization: 'local' -> 'floor'` and
+`PRE-FLIGHT: FAIL`; with it restored, `stance supersedes this driver's
+default Te_birth_ionization: 'floor' -> 'local'` and `PRE-FLIGHT: PASS`.
+Removing it would have silently changed the electron birth policy of every
+`run_m6_point --stance g1atrim` campaign arm. **The removal was withdrawn;
+the line stays.** The driver-side fix is queued separately, and the
+bit-inertness arm above is the evidence it will need.
+
+**Capture evidence.** Recaptured twice from clean separate processes to
+temporary paths and compared BEFORE installing either: NPZ and JSON sidecar
+both byte-identical (`sha256` of the NPZ
+`e2cceae7b999bb9e89b6cd56a3dec1d40c77efc956e970a659cc10f5b55e1439`, of the
+sidecar
+`dbfb813bc5784afc3c71611cddcd4195874b2e440edaf72b3b245affc44c03b0`), and
+raw-bitwise identical over all three arrays (`y` and `time` at `uint64`,
+`phase` at raw bytes; **0 differing elements of 1,512,000** in `y`). Run
+strictly serially per the serial-golden rule. Neither capture emitted the
+item-35 tripwire. `--verify` prints:
+
+```
+baseline verify OK: saves=2625, exact=True, max_rel=0.000e+00, max_abs=0.000e+00, time_max_abs=0.000e+00 s (rtol=1.0e-09, atol=0.0e+00)
+```
+
+The companion digest reference was regenerated in the same event:
+`scripts/baselines/golden_digest_4k.json`, steps 4000, digest
+`d28b3ca8e49b0d5bed2dda7882997becd404f26ce063f76e94ecad53ea57eccd`,
+config identity `91e19ac5a7eb11c2…`.
+
+The outgoing fixture was NPZ
+`99020956d804450388abc104519c236e6e69988a1cb3f37304c8fe3dafe6d2a4`
+(sidecar `1efa4e635bea0bc7efe5aa95659a9f2dbea687a845fbf5d95fc91381faa2dc7f`;
+saves 2,626, steps 76,631).
+
+**What moved in the trajectory — jointly attributed to the geometry, and NOT
+to the code fix.** This is worth stating precisely, because the fix was
+adopted on the strength of a tripwire and it would be easy to over-credit it:
+the HELD pre-fix capture at this same geometry and the installed post-fix
+capture are **bit-identical — 0 differing raw-`uint64` elements in `y` and in
+`time`.** The 35.8 % ledger non-closure was real and is exactly what the
+tripwire exists to catch, but at this operating point it did not reach the
+saved state: the extra 3.55e-15 cm of path deposited nothing the fixture can
+resolve. The fix is therefore a DIAGNOSTIC-INTEGRITY correction here, and a
+correctness guard on any geometry where the sliver would land somewhere the
+beam is still live. The hold stands as correct procedure regardless — a
+fixture whose own capture emits a 35.8 % conservation warning is not
+installable, and that the state happened to be unaffected could only be known
+by producing the fix and comparing.
+
+Steps 76,631 -> 71,287 (−6.97 %); saves 2,626 -> **2,625**; `final_time`
+2.624039e-02 -> 2.623652e-02 s (−0.01 %, well under one 10 µs save bin).
+Phase census: `breakdown` 16 -> 15, everything else unchanged.
+
+| summary scalar | old | new | change |
+|---|---|---|---|
+| `Te_max` | 20.422 eV | 21.336 eV | +4.47 % |
+| `Ti_max` | 9.9170 | 9.9803 | +0.64 % |
+| `n_max` | 2.48883e13 | 2.48795e13 | −0.04 % |
+| `n_min` | 8.41592e8 | 8.39857e8 | −0.21 % |
+| `nn_max` | 3.98703e13 | 3.97930e13 | −0.19 % |
+| `nn_min` | 8.62161e10 | 8.71940e10 | +1.13 % |
+| `neutral_inventory_relative_drift` | 1.19215 | 1.19207 | −0.01 % |
+| `total_particle_inventory_relative_drift` | 1.25671 | 1.25648 | −0.02 % |
+| `plasma_inventory_relative_drift` | 3349.8 | 3342.1 | −0.23 % |
+| `thermal_energy_relative_drift` | 3016.5 | 3001.1 | −0.51 % |
+
+`Te_min`/`Ti_min` sit on their floors and are unchanged; health stayed finite
+throughout. The direction is unremarkable for a 6.5 % longer cathode-anode
+gap at fixed drive: a longer gap raises the gap resistance
+`R_p = L_cath/(pi R_cath^2 sigma_par)` and the beam's path before the anode,
+and `Te_max` rises with it. **No reading of whether any of this is an
+improvement is offered here, and none should be taken from a regression
+fixture.**
+
+**The old and new trajectories are not comparable point-by-point** — this is a
+configuration change, not a repair, and no bit-level comparison between them
+is meaningful.
 
 **2026-08-23 — the CONSERVING IONIZATION BIRTH adopted as the default,
 jointly with the `C_R` re-trim it forced (AUTHORIZED recapture, Tom's

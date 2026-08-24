@@ -2023,9 +2023,20 @@ def _csda_beam_deposition(
         #                in when the gap does not end on a cell face. The
         #                deposition ray then has MORE path in that cell than
         #                the probe and can die inside it while the probe runs
-        #                out of dz and transmits. Production has
-        #                ``5 x 10 cm == L_cath`` exactly, so this never binds
-        #                there, but the guard is on the general geometry.
+        #                out of dz and transmits. Production does NOT bind
+        #                here: the CAD-span gap is ``5 x 10.65 == 53.25`` and
+        #                ``L_cath`` is the same distance, so the clip ends on
+        #                the anode face and ``_clip_ray_length`` lands on it
+        #                EXACTLY (see its invariant -- forward accumulation,
+        #                plus a mesh-scale snap for the residual case). The
+        #                guard is on the general geometry. Historical note,
+        #                because it was a real defect and not a hypothetical:
+        #                the clip used to decrement a running remainder, which
+        #                left a 3.55e-15 cm sliver at this gap, put non-zero
+        #                dz on the anode-crossing cell, and opened the item-35
+        #                ledger by 35.8 % of emitted beam power. It survived
+        #                the previous 50 cm gap only because ``50.0/5 == 10.0``
+        #                is exact in binary.
         #   anode in gap anode-mesh interception scales the DEPOSITION ray's
         #                flux at the anode-face crossing and the probe's not
         #                at all, so under flux-DEPENDENT stopping (the
@@ -2353,18 +2364,76 @@ def beam_gap_ledger_mismatch(
     return worst
 
 
+#: Relative width below which a clip remainder is snapped to the nearest cell
+#: face (see ``_clip_ray_length``). It is a MESH-SCALE bound, not a physics
+#: one: at the production 10.65 cm gap cell it is 1.065e-11 cm -- about a
+#: tenth of a picometre. That is ~1e4 above the double-rounding scale of these
+#: accumulations (~1e-15 relative) and ~1e10 below any length this model
+#: resolves, so it can only ever absorb arithmetic noise. A residue that small
+#: must never be read as the ray crossing the anode face; a real partial clip
+#: is a macroscopic fraction of a cell and is untouched.
+_CLIP_FACE_SNAP_REL = 1.0e-12
+
+
 def _clip_ray_length(length_cm, launch, direction, L_cath):
-    """dz array truncated so the ray's total path is at most ``L_cath``."""
-    dz = np.zeros_like(np.asarray(length_cm, dtype=float))
-    remaining = float(L_cath)
+    """dz array truncated so the ray's total path is at most ``L_cath``.
+
+    **Invariant: a clip that ends ON a cell face lands on it EXACTLY** -- the
+    stop cell gets either its full length or zero, never a rounding sliver.
+    Two mechanisms hold it, in this order of preference:
+
+    1. **Exact arithmetic.** The distance travelled is ACCUMULATED FORWARD
+       along the ray (``travelled + step``) rather than decremented out of a
+       running remainder. Forward accumulation reproduces the same
+       left-to-right sum the mesh itself uses to place its faces, so where
+       ``L_cath`` coincides with a face the comparison is exact with no
+       tolerance at all. The previous subtractive form did NOT have this
+       property: ``53.25 - 5 x 10.65`` leaves ``3.55e-15`` while
+       ``5 x 10.65`` accumulated forward is ``53.25`` to the bit.
+    2. **A mesh-scale snap** (``_CLIP_FACE_SNAP_REL``) for the residual case
+       where ``L_cath`` and the accumulated face differ by rounding rather
+       than coinciding. Exactness is genuinely unattainable there -- the two
+       quantities come from different arithmetic -- so a bound is used, and it
+       is justified from the mesh scale rather than chosen for convenience.
+
+    Why it matters, and it is not cosmetic: a sliver in the stop cell makes
+    ``_gap_clip_is_face_aligned`` false AND puts a non-zero ``dz`` on the
+    anode-crossing cell. The second is the damaging one -- anode-mesh
+    interception scales the deposition ray's flux there and the probe's not at
+    all, so the two part company and the item-35 gap ledger opens. Measured on
+    the CAD-span geometry before this fix: a 3.55e-15 cm sliver mis-booked
+    35.8 % of the emitted beam power (tolerance 5 %).
+    """
+    full = np.asarray(length_cm, dtype=float)
+    dz = np.zeros_like(full)
+    limit = float(L_cath)
     cells = dz.size
     order = range(launch, cells) if direction > 0 else range(launch, -1, -1)
+    # Distance from the launch face to the NEAR face of the current cell.
+    travelled = 0.0
     for cell in order:
-        if remaining <= 0.0:
+        if travelled >= limit:
             break
-        step = min(float(length_cm[cell]), remaining)
-        dz[cell] = step
-        remaining -= step
+        step = float(full[cell])
+        far_face = travelled + step
+        if far_face <= limit:
+            # The whole cell is inside the clip: emit its length verbatim.
+            dz[cell] = step
+        else:
+            partial = limit - travelled
+            snap = _CLIP_FACE_SNAP_REL * step
+            if partial <= snap:
+                # The clip landed on this cell's NEAR face to within
+                # arithmetic noise: stop short rather than emit a sliver.
+                break
+            if partial >= step - snap:
+                # ... and on its FAR face: take the whole cell, so the guards
+                # below see a prefix of the mesh rather than a near-full cell.
+                dz[cell] = step
+            else:
+                dz[cell] = partial
+            break
+        travelled = far_face
     return dz
 
 
@@ -2372,8 +2441,11 @@ def _gap_clip_is_face_aligned(gap_dz, length_cm):
     """True when the ``L_cath`` clip landed on a cell face.
 
     ``_clip_ray_length`` gives each cell along the ray either its full length,
-    zero, or -- in the single cell where ``L_cath`` runs out mid-cell -- a
-    partial length. That partial cell is the ONLY place a gap-clipped probe
+    zero, or -- in the single cell where ``L_cath`` runs out GENUINELY
+    mid-cell -- a partial length. It guarantees that a clip ending on a face
+    produces no partial cell at all (see its invariant), so this test reads
+    real geometry and never arithmetic noise. That partial cell is the ONLY
+    place a gap-clipped probe
     has less path available than the deposition ray it mirrors, and therefore
     the only place the two can disagree about where the ray stopped: the
     deposition ray can be absorbed inside it while the probe runs out of dz

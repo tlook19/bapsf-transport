@@ -91,7 +91,8 @@ applies the committed stance explicitly (`scripts/golden_baseline_provenance.md`
 | `neutral_hot_internal_wall = True`, `cathode_jet_energy_convention = "total_reflected"` | conservation restorations, not calibrations | `production_stance_provenance.md` (2026-08-19 stance event); convention discussion also in this file's Emission section |
 | `cathode_neutral_jet = True`, `cathode_jet_surface_debit = True` | jet mechanism armed | `production_stance_provenance.md` |
 | `Lm = 2117.8`, `plenum_length_cm = 166.0`, `collector_length_cm = 7.8`, `gas_puff_z_cm = 86.3` | MEASURED (machine CAD, G1 geometry of record) | `production_stance_provenance.md` (Geometry) + the G1 record |
-| `source_region_length_cm = 100.0`, `source_region_dz_cm = 10.0`, `source_fixed_grid = True` | ASSUMED, interim geometry | `production_stance_provenance.md` (Geometry) |
+| `cathode_anode_gap_cm = 53.25`, `L_cath = 53.25` | MEASURED (machine CAD, CAD-span midpoint) — ONE distance, two keys, and they move together | this file, Geometry section below |
+| `source_region_length_cm = 103.25`, `source_region_dz_cm = 10.0`, `source_fixed_grid = True` | ASSUMED, interim geometry — the region END rides the measured anode face | `production_stance_provenance.md` (Geometry) |
 | `electron_heat_flux_limit = True` | flag only — its coefficient rode the R2b fold below | `production_stance_provenance.md` (Transport and closures) |
 | `heat_flux_limiter_f` — **the R2b rider** | The FOLD (stance file -> config default) happened at R2b, 2026-08-20, at the then-value `0.1`; it was held back from R2a on the expectation that it would move the golden, and it did not, because the golden pinned `0.1` as a literal at R1. **The VALUE has since moved to `0.45` and its class from ASSUMED to BOXED (literature)** — 2026-08-21, with its own authorized recapture; that is a separate event from this fold. | `production_stance_provenance.md` (Transport and closures); default entry below |
 
@@ -205,9 +206,45 @@ radius `R_cath`; both moved onto the aperture in the L2 geometry rebaseline.
 it is not a caliper measurement.)* Since the R2b re-anchor (2026-08-20) the
 golden is captured at the stance of record and carries 18.415.
 
-**`Rm = 50.0` cm, `Lm = 2117.8` cm, `cathode_anode_gap_cm = 50.0`,
-`plenum_length_cm = 166.0`, `collector_length_cm = 7.8` — MEASURED**
-(machine CAD, G1 geometry of record) machine dimensions.
+**`Rm = 50.0` cm, `Lm = 2117.8` cm, `plenum_length_cm = 166.0`,
+`collector_length_cm = 7.8` — MEASURED** (machine CAD, G1 geometry of record)
+machine dimensions.
+
+**`cathode_anode_gap_cm = 53.25` cm — MEASURED (machine CAD).** The
+cathode-surface-to-anode distance; the anode is a mesh FACE at this `z`, so
+the value sets the anode position and, through `nx_gap`, the size of the gap
+cells. **Reduction rule: CAD-span midpoint.** The CAD gives the gap as a SPAN,
+`0.531–0.534` m, not a single number — the two ends of the span are the
+tolerance on the assembly, not two competing measurements — and the value of
+record is its midpoint, `0.5325` m. **Honest bar: the span itself,
+`[53.1, 53.4]` cm**, which is what a gap-sensitive claim carries; the midpoint
+is a reduction, not a tightening. *(Ruled by Tom 2026-08-23; supersedes the
+`50.0` of record, which was a round interim number and never a CAD
+reduction.)*
+
+Three consequences ride the value and are not independent choices.
+`source_region_length_cm` moves with it (`100.0 -> 103.25`) so the fixed source
+region keeps its 50 cm span and its whole number of `source_region_dz_cm`
+cells — the region is defined from the anode face outward, so it follows the
+face. At `nx_gap = 5` the gap cells become `10.65` cm, which changes the
+smallest cell in the mesh and therefore the explicit CFL bound. And `L_cath`
+moves with it — see the entry immediately below.
+
+**`L_cath = 53.25` cm — MEASURED (machine CAD, CAD-span midpoint).** The
+cathode-to-anode distance the CATHODE SOLVER reads: it sets the gap resistance
+`R_p = L_cath / (pi R_cath^2 sigma_par)`, the Coulomb-only bypass ceiling
+`exp(-L_cath/l_bi)`, the length the beam ray is clipped to, and the `1/L_cath`
+in the `sigma_eff` inversion. **It is the SAME physical distance as
+`cathode_anode_gap_cm` and carries the same value, the same class, the same
+CAD span `0.531–0.534` m, the same midpoint reduction and the same honest bar
+`[53.1, 53.4]` cm.** The two keys are separate only because the mesher and the
+cathode solver each resolve the geometry themselves; nothing makes them
+independent, and a configuration that moves one without the other describes a
+machine with two different cathode-anode gaps. *(Ruled by Tom 2026-08-24 in
+the same event as `cathode_anode_gap_cm`, which it had silently failed to
+follow. Recorded bar: until that event this key shipped at `50.0` with NO
+provenance row of its own — it was the duplicate nobody had written down, and
+it was found by the smoke assertion that pins the two equal.)*
 
 ## `floor_defaults`
 

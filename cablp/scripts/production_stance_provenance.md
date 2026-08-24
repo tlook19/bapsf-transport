@@ -329,6 +329,32 @@ rebaseline — a fit, not a measurement, and one that conflated the emitting
 radius with the plasma-column radius. Since the R2b re-anchor (2026-08-20) the
 golden is captured at the stance of record and carries 18.415.
 
+**`neutral_baffle_positions_cm = [342.65]`, `neutral_baffle_clear_radii_cm =
+[39.75]` — MEASURED (machine CAD).** The one modelled neutral baffle: a
+port-7 annular ring, `TomLook-Aperature` in the CAD, whose clear aperture
+throttles axial neutral flow past it. **Reduction rule: CAD-span midpoint.**
+The CAD gives the ring as a SPAN in `z`, `3.401–3.452` m — it has a physical
+thickness — and the value of record is that span's midpoint, `3.4265` m.
+**Honest bar: the span itself, `[340.1, 345.2]` cm.** *(The `342.6` of record
+was this same midpoint, stale-rounded; the 2026-08-23 ruling adopted the
+midpoint rule at both CAD-span sites and `342.65` is what it gives here. The
+correction is documentary at both shipped meshes: the baffle is applied at
+the nearest cell FACE, and `342.6` and `342.65` snap to the SAME face at
+`nx = 60` and at `nx = 268`, so no trajectory moves with it — see
+`golden_baseline_provenance.md`.)*
+
+**What the ring IS — identity confirmed by Tom, 2026-08-24.** It is a MOUNT
+FOR AN IRIS LIMITER, installed for biasing experiments. It is modelled as a
+neutral baffle on PHYSICAL-OBSTRUCTION grounds: what the model needs from it
+is the clear area it leaves at that `z`, and the ring presents that area
+whether or not an iris is mounted in it. Its intended purpose is immaterial
+to the transport role, and no claim rests on it being a baffle by design.
+
+**`39.75` cm clear radius — MEASURED (machine CAD), no reduction applied.**
+The ring's inner radius. It must leave the local plasma channel fully open
+and lie inside the local vessel radius, and it does at both: the column is at
+`Rp = 18.415` cm there and the bore is 50.0 cm.
+
 **`end_expansion_*`, `Rcs`, `Lcs`, `Rsup` — RETIRED FROM THE STANCE (R1,
 2026-08-20).** The G1 measured-geometry adoption replaced the parametric flare
 with the prescribed-area profiles, and the R1 de-staling deleted these keys
@@ -346,12 +372,17 @@ no independent content: it RIDES `Rp` by construction of the no-flare arm, and
 moved to 18.415 with it. The regression fixture needs no pin for it — the
 baseline pops the `end_expansion_*` params when the flag is off.
 
-**`source_region_length_cm = 100.0`, `source_region_dz_cm = 10.0`** (with
+**`source_region_length_cm = 103.25`, `source_region_dz_cm = 10.0`** (with
 `source_fixed_grid = True`) — ASSUMED, interim geometry. *(All three FOLDED to
-config defaults at R2a, 2026-08-20; no longer stance keys.)* The 100 cm column in
+config defaults at R2a, 2026-08-20; no longer stance keys.)* The 50 cm column in
 front of the anode is meshed at exactly 10 cm regardless of `nx`, so refining
 `nx` refines only the far column and no longer moves the source cells or the
-puff cell underneath the source terms. All three must travel together: the
+puff cell underneath the source terms. **The region END is not an independent
+number: it is the anode face plus that 50 cm span**, so it moved
+`100.0 -> 103.25` with the measured `cathode_anode_gap_cm` (2026-08-23 ruling)
+and would move again with it. The span and the source cell count are what is
+ASSUMED here; the offset is MEASURED and lives with the gap in
+`config_defaults_provenance.md`. All three must travel together: the
 geometry is presence-gated both ways and raises if either parameter is set
 without the flag. `nx_gap` is deliberately not pinned — it is already the config
 default, so it never appears in the delta.

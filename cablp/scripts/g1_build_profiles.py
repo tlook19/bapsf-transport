@@ -5,8 +5,9 @@ The solver takes the geometry as RADII, one entry per mesh cell, under the
 ``prescribed_area_geometry`` flag: ``plasma_radius_profile_cm`` (the flux-tube
 radius, so the flux-tube AREA is ``pi r^2``) and ``machine_radius_profile_cm``
 (the vessel bore). This script emits both, for the two end-field cases the
-census re-solve resolved, plus the mesh-identity assertions and the
-construction validation that must pass before any arm launches.
+census re-solve resolved, plus the mesh comparison against the l2a7b
+reference and the construction validation that must pass before any arm
+launches.
 
 Inputs
 ------
@@ -17,13 +18,15 @@ Inputs
     terminus ``c_trace_end_z_m``, and the vessel-wall crossings
     ``c_crossing_z_m`` / ``c_crossing_radii_m``.
 ``scripts/l2a7b_foot45_cr6p94.h5``
-    The l2a7b operating point, read for its resolved config only. Its mesh
-    is the identity target ON THE COLUMN: the grid of record (2026-08-18rrr)
-    is ``Lm = 2117.8, collector_length_cm = 7.8, nx = 268`` -- the outer
-    column extends at exactly 7.5 cm through z = 2110 cm (28 new cells) and
-    the terminal cell is 7.8 cm at the flange, so every cell from the
-    cathode face through z = 1900 cm is unmoved. BEHIND the cathode face the
-    mesh deliberately changes (the 2026-08-18sss fidelity package): the
+    The l2a7b operating point, read for its resolved config only. It is the
+    comparison base for the mesh report, NOT an identity target: it was one
+    until the 2026-08-24 CAD-span gap adoption moved
+    ``cathode_anode_gap_cm`` 50.0 -> 53.25, which moves the anode face and
+    with it every cell downstream of the cathode face. The grid of record
+    (2026-08-18rrr) is ``Lm = 2117.8, collector_length_cm = 7.8, nx = 268``,
+    and the terminal cell is the 7.8 cm collector at the flange. BEHIND the
+    cathode face the mesh deliberately changes (the 2026-08-18sss fidelity
+    package): the
     guessed ``Rcs 40 / Lcs 25`` obstruction is RETIRED (the obstruction cell
     is omitted at ``Lcs = 0``) and the plenum is the measured source chamber,
     ``plenum_length_cm = 166`` at machine radius 40 cm (reservoir volume
@@ -76,9 +79,12 @@ CENSUS_NPZ = os.path.join(HERE, "lapd_end_field_1400G_rp18p415_census2026.npz")
 REFERENCE_H5 = os.path.join(HERE, "l2a7b_foot45_cr6p94.h5")
 
 #: The G1 grid of record (2026-08-18rrr ruling, supersedes the qqq
-#: collector-217.8 draft): the end flange is the wall, the outer column
-#: extends at exactly 7.5 cm through z = 2110 cm, and the terminal cell is
-#: the 7.8 cm collector at the flange where the 0.95 cap binds flat.
+#: collector-217.8 draft): the end flange is the wall, the outer column runs
+#: at a uniform dz through z = 2110 cm, and the terminal cell is the 7.8 cm
+#: collector at the flange where the 0.95 cap binds flat. That far-column dz
+#: is (Lm - gap - collector - source span)/nx, so the CAD-span gap adoption
+#: moved it 7.5 -> 7.487873... cm; the build report carries the measured
+#: value.
 LM_CM = 2117.8
 COLLECTOR_LENGTH_CM = 7.8
 NX = 268
@@ -90,8 +96,18 @@ LCS_CM = 0.0
 PLENUM_LENGTH_CM = 166.0
 #: Measured mid-plane puff ports at the anode stack (supersedes 60.0).
 GAS_PUFF_Z_CM = 86.3
-#: The port-7 annular ring (`TomLook-Aperature`), z 3.401-3.452 m.
-BAFFLE_POSITIONS_CM = [342.6]
+#: The cathode-anode gap, CAD-span midpoint of 0.531-0.534 m (supersedes the
+#: 50.0 of record). The anode is a mesh FACE at this z, so the nx_gap = 5 gap
+#: cells stretch to 10.65 cm and every cell downstream shifts with it.
+CATHODE_ANODE_GAP_CM = 53.25
+#: The fixed source region rides the anode face: its SPAN is unchanged (50 cm
+#: = 5 x source_region_dz_cm), so its far end shifts by the same +3.25 cm and
+#: the cell count is unchanged.
+SOURCE_REGION_LENGTH_CM = 103.25
+#: The port-7 annular ring (`TomLook-Aperature`), z 3.401-3.452 m; the
+#: CAD-span midpoint is 342.65 cm (the 342.6 of record was that same midpoint
+#: stale-rounded).
+BAFFLE_POSITIONS_CM = [342.65]
 BAFFLE_CLEAR_RADII_CM = [39.75]
 
 #: The plasma column radius (design spec of record; [18.10, 18.415] bracket
@@ -145,6 +161,8 @@ def _g1_config(params, flags):
     p["collector_length_cm"] = COLLECTOR_LENGTH_CM
     p["nx"] = NX
     p["gas_puff_z_cm"] = GAS_PUFF_Z_CM
+    p["cathode_anode_gap_cm"] = CATHODE_ANODE_GAP_CM
+    p["source_region_length_cm"] = SOURCE_REGION_LENGTH_CM
     # The sss fidelity package: guessed cathode box retired, measured plenum.
     p["Rcs"] = RCS_CM
     p["Lcs"] = LCS_CM
@@ -242,17 +260,23 @@ def main():
     )
     say()
 
-    # --- mesh identity ------------------------------------------------------
-    # The identity claim is scoped to the cells DOWNSTREAM of the cathode
-    # face (0 <= z <= 1900 cm). Behind the face the sss fidelity package
-    # deliberately rebuilds the mesh -- the obstruction cell is omitted at
-    # Lcs = 0 and the plenum grows to the measured 166 cm -- so those cells
-    # are reported as a disclosed change, not asserted identical.
+    # --- mesh comparison against l2a7b ---------------------------------------
+    # THE BIT-IDENTITY CLAIM IS RETIRED (2026-08-24 CAD-span gap adoption).
+    # Until the gap moved, the G1 mesh reproduced l2a7b's cell centres and
+    # edges bit-for-bit over 0 <= z <= 1900 cm, and this block ASSERTED it.
+    # ``cathode_anode_gap_cm`` 50.0 -> 53.25 moves the anode face, so every
+    # cell downstream of the cathode face moves with it and no such identity
+    # can hold: the gap cells stretch 10.0 -> 10.65 cm, the fixed source
+    # region rides the face (+3.25 cm, span and cell count unchanged), and the
+    # far column re-divides the shortened remainder. The comparison is kept
+    # and REPORTED so the size and shape of the shift are on the record, but
+    # asserting the old identity would now be asserting something the ruling
+    # deliberately broke.
     shared = np.flatnonzero((mesh.z_cm >= 0.0) & (mesh.z_cm <= 1900.0))
     ref_shared = np.flatnonzero(
         (ref_geometry.z_cm >= 0.0) & (ref_geometry.z_cm <= 1900.0)
     )
-    say("--- mesh identity (shared cells: 0 <= z <= 1900 cm) ---")
+    say("--- mesh comparison vs l2a7b (cells 0 <= z <= 1900 cm) ---")
     say(f"reference cells {ref_geometry.cells}, G1 cells {mesh.cells}")
     ref_behind = np.flatnonzero(ref_geometry.z_cm < 0.0)
     g1_behind = np.flatnonzero(mesh.z_cm < 0.0)
@@ -268,32 +292,44 @@ def main():
             "G1 behind-cathode cells must be the plenum alone (Lcs = 0 "
             "omits the obstruction cell)"
         )
-    say(f"shared cell count: reference {ref_shared.size}, G1 {shared.size}")
-    if ref_shared.size != shared.size:
-        raise AssertionError("shared cell counts differ")
-    if not np.array_equal(ref_geometry.z_cm[ref_shared], mesh.z_cm[shared]):
-        raise AssertionError("shared cell centres are not bit-identical")
-    say("ASSERT z-centres bit-identical over shared cells: PASS")
-    ref_first = int(ref_shared[0])
-    g1_first = int(shared[0])
-    if not np.array_equal(
-        ref_geometry.z_edges_cm[ref_first : ref_first + ref_shared.size + 1],
-        mesh.z_edges_cm[g1_first : g1_first + shared.size + 1],
-    ):
-        raise AssertionError("shared cell edges are not bit-identical")
-    say("ASSERT cell EDGES bit-identical over shared cells (cathode-face anchored): PASS")
-    # Cell lengths are the one place the grown domain shows: the far-column
-    # cell size is (Lm - gap - collector - span)/nx, and the 2117.8/7.8
-    # subtraction chain can round an ulp away from the reference's. The
-    # edges (a cumsum) and the centres are unaffected, so the mesh is
-    # identical where the solver reads positions; the report is here so the
-    # residual is on the record.
-    length_delta = mesh.length_cm[shared] - ref_geometry.length_cm[ref_shared]
+    say(f"windowed cell count: reference {ref_shared.size}, G1 {shared.size}")
     say(
-        f"cell-length residual over shared cells: max |delta| = "
-        f"{np.abs(length_delta).max():.6e} cm in "
-        f"{int(np.sum(length_delta != 0.0))} cell(s) (1 ulp of the far-column dz)"
+        f"anode face z: reference {ref_params['cathode_anode_gap_cm']} cm -> "
+        f"G1 {CATHODE_ANODE_GAP_CM} cm; gap cell dz "
+        f"{ref_params['cathode_anode_gap_cm'] / mesh_params['nx_gap']:.6g} -> "
+        f"{mesh.length_cm[1]:.6g} cm over nx_gap = {mesh_params['nx_gap']}"
     )
+    say(
+        f"source region: reference [{ref_params['cathode_anode_gap_cm']}, "
+        f"{ref_params['source_region_length_cm']}) -> G1 "
+        f"[{CATHODE_ANODE_GAP_CM}, {SOURCE_REGION_LENGTH_CM}) cm; span "
+        f"{ref_params['source_region_length_cm'] - ref_params['cathode_anode_gap_cm']:.6g}"
+        f" -> {SOURCE_REGION_LENGTH_CM - CATHODE_ANODE_GAP_CM:.6g} cm at "
+        f"source_region_dz_cm = {mesh_params['source_region_dz_cm']} cm "
+        f"(cell count unchanged)"
+    )
+    # The shift, reported rather than asserted away. Over the windowed cells
+    # the centres move by the gap delta inside the fixed-size source region
+    # and by a growing amount down the far column, whose dz re-divides the
+    # shortened remainder.
+    if ref_shared.size == shared.size:
+        centre_delta = mesh.z_cm[shared] - ref_geometry.z_cm[ref_shared]
+        say(
+            f"cell-centre shift over the window: min {centre_delta.min():+.6g} "
+            f"cm, max {centre_delta.max():+.6g} cm, "
+            f"{int(np.sum(centre_delta != 0.0))} of {shared.size} cell(s) moved"
+        )
+        length_delta = mesh.length_cm[shared] - ref_geometry.length_cm[ref_shared]
+        say(
+            f"cell-length delta over the window: min {length_delta.min():+.6g} "
+            f"cm, max {length_delta.max():+.6g} cm, "
+            f"{int(np.sum(length_delta != 0.0))} of {shared.size} cell(s) changed"
+        )
+    else:
+        say(
+            "windowed cell counts differ, so no per-cell delta is reported "
+            "(the 1900 cm window is a fixed z cut, not a cell cut)"
+        )
     ref_roles = np.asarray(ref_geometry.cell_role[ref_shared], dtype=object)
     g1_roles = np.asarray(mesh.cell_role[shared], dtype=object)
     role_moved = np.flatnonzero(ref_roles != g1_roles)

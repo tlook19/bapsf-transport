@@ -984,9 +984,18 @@ def _case_source_fixed_grid():
     # uniform column cells span anode face to collector start, so a refinement
     # study moves every near-source cell edge -- including the puff cell, whose
     # centre anchors the default cosine puff profile. With it on the column from
-    # the anode face (50 cm) to source_region_length_cm is meshed at exactly
+    # the anode face to source_region_length_cm is meshed at exactly
     # source_region_dz_cm regardless of nx, and the puff role follows
     # gas_puff_z_cm.
+    #
+    # The gap, the region end and the puff position are PINNED below rather
+    # than inherited. They were inherited until the 2026-08-24 CAD-span gap
+    # adoption moved ``cathode_anode_gap_cm`` 50.0 -> 53.25, which changes the
+    # source cell size (the span must stay a whole number of
+    # source_region_dz_cm) and moves the puff into the first source cell --
+    # neither of which this case is about. It exercises the MESHER, which is
+    # gap-agnostic, so it now states the round geometry its hard-coded edge
+    # positions below describe.
     #
     # (d) The OFF path takes no new branch: with the flag cleared and both keys
     # None the spec helper returns None. Since the R2a fold-in the flag and both
@@ -997,6 +1006,7 @@ def _case_source_fixed_grid():
     srcgrid_off_flags = {**resolved_flags, "source_fixed_grid": False}
     srcgrid_off_params = dict(
         resolved_params,
+        cathode_anode_gap_cm=50.0,
         source_region_length_cm=None,
         source_region_dz_cm=None,
     )
@@ -1024,6 +1034,7 @@ def _case_source_fixed_grid():
         params.update(
             {
                 "nx": nx,
+                "cathode_anode_gap_cm": 50.0,
                 "source_region_length_cm": 100.0,
                 "source_region_dz_cm": 10.0,
                 "gas_puff_z_cm": 60.0,
@@ -4632,10 +4643,47 @@ def _case_beam_probe_skip(
             ).transmitted_flux
         )
 
-    # Production geometry: the gap is 5 x 10 cm and L_cath is 50 cm, so the
-    # clip lands on a cell face and the anode crossing sits past the gap --
-    # both structural guards are inactive here, which is the case the skip
-    # exists for.
+    # The two structural guards are checked BOTH on the production machine and
+    # on a pinned 50 cm fixture, and the pair is the point.
+    #
+    # The exact-zero skip is only VALID where the L_cath clip lands on a cell
+    # face. Production lands on one: the CAD-span gap is 5 x 10.65 == 53.25
+    # and L_cath is the same distance, and ``_clip_ray_length`` accumulates
+    # forward so it hits the anode face exactly. That was NOT true between the
+    # CAD-span adoption and the exactness fix of the same event -- the clip
+    # decremented a running remainder, left a 3.55e-15 cm sliver on the
+    # anode-crossing cell, and opened the item-35 gap ledger by 35.8 % of
+    # emitted beam power. The pinned fixture is kept alongside because a
+    # SECOND face-aligned mesh, arrived at by different arithmetic
+    # (50.0 / 5 == 10.0 is exact in binary), keeps this case honest if the
+    # production gap ever moves again.
+    _pskip_fixture_params = dict(csda_params)
+    _pskip_fixture_params["cathode_anode_gap_cm"] = 50.0
+    _pskip_fixture_params["L_cath"] = 50.0
+    # The fixed source region runs from the anode face outward, so its far end
+    # rides the pinned gap or the span stops being a whole number of cells.
+    _pskip_fixture_params["source_region_length_cm"] = 100.0
+    _pskip_fixture_sim = LAPDSim1D(_pskip_fixture_params, _cathode_flags())
+    _pskip_fixture_geom = _pskip_fixture_sim._geometry
+    _pskip_fixture_launch, _pskip_fixture_dir = beam_launch(
+        _pskip_fixture_geom, end=0
+    )
+    _pskip_fixture_gap = _clip_ray_length(
+        _pskip_fixture_geom.length_cm,
+        _pskip_fixture_launch,
+        _pskip_fixture_dir,
+        float(_pskip_fixture_params["L_cath"]),
+    )
+    assert _gap_clip_is_face_aligned(
+        _pskip_fixture_gap, _pskip_fixture_geom.length_cm
+    )
+    assert float(
+        _pskip_fixture_gap[int(_pskip_fixture_geom.anode_face_indices[0])]
+    ) == 0.0
+    # ... and so does the PRODUCTION machine, which is the regression guard for
+    # the exactness fix: if the clip ever goes back to leaving a rounding
+    # sliver at the anode face, these two fail here instead of surfacing as an
+    # item-35 ledger warning buried in a capture log.
     assert _gap_clip_is_face_aligned(_pskip_gap, _pskip_geom.length_cm)
     assert float(_pskip_gap[int(_pskip_geom.anode_face_indices[0])]) == 0.0
     for _pskip_scale, _pskip_ray_expect in ((1.0, 1.0), (1.0e3, 0.0)):
@@ -4670,19 +4718,30 @@ def _case_beam_probe_skip(
     assert _pskip_probe(np.asarray(csda_state.nn, dtype=float) * 1.0e3) == 0.0
     # Guard: a clip that ends mid-cell truncates the stop cell, so the probe
     # could run out of path where the deposition ray still had some. The skip
-    # must see that and stand down.
+    # must see that and stand down. Run on the PINNED fixture: these three
+    # clip lengths are chosen against a 10 cm gap cell (45 lands mid-cell, 40
+    # lands on a face), so they only mean what they say on that mesh.
     assert not _gap_clip_is_face_aligned(
-        _clip_ray_length(_pskip_geom.length_cm, csda_launch, csda_dir, 45.0),
-        _pskip_geom.length_cm,
+        _clip_ray_length(
+            _pskip_fixture_geom.length_cm,
+            _pskip_fixture_launch, _pskip_fixture_dir, 45.0,
+        ),
+        _pskip_fixture_geom.length_cm,
     )
     assert _gap_clip_is_face_aligned(
-        _clip_ray_length(_pskip_geom.length_cm, csda_launch, csda_dir, 40.0),
-        _pskip_geom.length_cm,
+        _clip_ray_length(
+            _pskip_fixture_geom.length_cm,
+            _pskip_fixture_launch, _pskip_fixture_dir, 40.0,
+        ),
+        _pskip_fixture_geom.length_cm,
     )
     # A clip longer than the whole path leaves every cell at its full length.
     assert _gap_clip_is_face_aligned(
-        _clip_ray_length(_pskip_geom.length_cm, csda_launch, csda_dir, 1.0e6),
-        _pskip_geom.length_cm,
+        _clip_ray_length(
+            _pskip_fixture_geom.length_cm,
+            _pskip_fixture_launch, _pskip_fixture_dir, 1.0e6,
+        ),
+        _pskip_fixture_geom.length_cm,
     )
     return locals()
 
@@ -6514,6 +6573,8 @@ def _case_beam_deposition_smoothing_conservation(csda_params):
             "source_fixed_grid",
             {
                 **csda_params,
+                # Gap pinned with the region: see _case_source_fixed_grid.
+                "cathode_anode_gap_cm": 50.0,
                 "source_region_length_cm": 100.0,
                 "source_region_dz_cm": 10.0,
                 "gas_puff_z_cm": 60.0,
@@ -6616,6 +6677,8 @@ def _case_beam_smoothing_matrix_cache(csda_params, smooth_sigma_cm):
     smoothkey_flags = {**cathode_flags, "source_fixed_grid": True}
     smoothkey_base = dict(
         csda_params,
+        # Gap pinned with the region: see _case_source_fixed_grid.
+        cathode_anode_gap_cm=50.0,
         source_region_length_cm=100.0,
         gas_puff_z_cm=60.0,
     )
@@ -12583,6 +12646,7 @@ def _case_obstruction_geometry_production_style(kd_flags, kd_params):
             "end_expansion_cells": 10,
             "end_expansion_machine_radius_cm": 100.0,
             "end_expansion_plasma_radius_cm": 15.0,
+            "cathode_anode_gap_cm": 50.0,
             "source_region_length_cm": 100.0,
             "source_region_dz_cm": 10.0,
         }
