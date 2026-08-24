@@ -4597,24 +4597,20 @@ def _case_beam_probe_skip(
             ).transmitted_flux
         )
 
-    # THE TWO STRUCTURAL GUARDS ARE CHECKED ON A PINNED FIXTURE, NOT ON THE
-    # PRODUCTION MACHINE, and that is deliberate as of 2026-08-24.
+    # The two structural guards are checked BOTH on the production machine and
+    # on a pinned 50 cm fixture, and the pair is the point.
     #
     # The exact-zero skip is only VALID where the L_cath clip lands on a cell
-    # face, and the CAD-span gap no longer gives one. The mesh itself is exact
-    # -- 5 x 10.65 == 53.25 to the bit -- but ``_clip_ray_length`` walks a
-    # running remainder, and five sequential subtractions leave ~3.6e-15 cm,
-    # which spills a sliver into the next cell and trips BOTH guards (the
-    # face-alignment one and the anode-crossing one). On the production
-    # machine the skip is therefore declined and the probe is launched for
-    # real: it fails SAFE and costs a march, which is exactly what the guards
-    # are for (see the partial-clip note in cathode.py's
-    # ``_csda_beam_deposition``; accepted by ruling, exactness fix queued
-    # separately). This case tests the skip MECHANISM, not the machine value,
-    # so the geometry it needs is pinned here: 50.0 / 5 == 10.0 is exact in
-    # binary. Everything else in the case stays on the production geometry --
-    # including the three names this case ``provides`` downstream, which must
-    # keep describing the machine the rest of the suite is running.
+    # face. Production lands on one: the CAD-span gap is 5 x 10.65 == 53.25
+    # and L_cath is the same distance, and ``_clip_ray_length`` accumulates
+    # forward so it hits the anode face exactly. That was NOT true between the
+    # CAD-span adoption and the exactness fix of the same event -- the clip
+    # decremented a running remainder, left a 3.55e-15 cm sliver on the
+    # anode-crossing cell, and opened the item-35 gap ledger by 35.8 % of
+    # emitted beam power. The pinned fixture is kept alongside because a
+    # SECOND face-aligned mesh, arrived at by different arithmetic
+    # (50.0 / 5 == 10.0 is exact in binary), keeps this case honest if the
+    # production gap ever moves again.
     _pskip_fixture_params = dict(csda_params)
     _pskip_fixture_params["cathode_anode_gap_cm"] = 50.0
     _pskip_fixture_params["L_cath"] = 50.0
@@ -4638,9 +4634,12 @@ def _case_beam_probe_skip(
     assert float(
         _pskip_fixture_gap[int(_pskip_fixture_geom.anode_face_indices[0])]
     ) == 0.0
-    # And the production machine trips them, which is the finding above stated
-    # as an assertion rather than a comment, so it cannot rot silently.
-    assert not _gap_clip_is_face_aligned(_pskip_gap, _pskip_geom.length_cm)
+    # ... and so does the PRODUCTION machine, which is the regression guard for
+    # the exactness fix: if the clip ever goes back to leaving a rounding
+    # sliver at the anode face, these two fail here instead of surfacing as an
+    # item-35 ledger warning buried in a capture log.
+    assert _gap_clip_is_face_aligned(_pskip_gap, _pskip_geom.length_cm)
+    assert float(_pskip_gap[int(_pskip_geom.anode_face_indices[0])]) == 0.0
     for _pskip_scale, _pskip_ray_expect in ((1.0, 1.0), (1.0e3, 0.0)):
         _pskip_nn = np.asarray(csda_state.nn, dtype=float) * _pskip_scale
         _pskip_beam, _pskip_ledger = _pskip_adapter(_pskip_nn)
