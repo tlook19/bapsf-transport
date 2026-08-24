@@ -106,6 +106,21 @@ def bin_edges(centers, lo=None, hi=None):
     return e
 
 
+# Condition-number ceiling on the two-basis moment-compensation solve. At
+# 1/eps a double-precision 2x2 solve retains no significant digit, so its
+# coefficients are noise -- and they multiply basis functions that are
+# moment-free only to the roundoff of a cancelling sum, which turns that
+# noise into a DENSITY error. A solve at or beyond this is rejected instead.
+_MOMENT_SOLVE_COND_MAX = 1.0 / np.finfo(float).eps
+
+# Absolute tolerance on |sum(f) - 1| below which the bin masses already sum
+# to 1. Summing the largest grid in use moves the total by a few ulps; this
+# floor sits three orders above that and far below any real violation, so
+# the density restoration is skipped -- never applied as a unit factor -- on
+# a healthy projection.
+_DENSITY_RESTORE_ATOL = 1.0e-12
+
+
 class VGrid:
     """Shared (v_z, v_perp) grid with analytic-bin-mass Maxwellian projection."""
 
@@ -130,6 +145,22 @@ class VGrid:
         two-basis compensation (KN1D's scheme, reimplemented) so the
         DISCRETE drift and energy moments -- evaluated with bin centers,
         the way the transport uses them -- also hit their targets.
+
+        The masses sum to 1 UNCONDITIONALLY, to within
+        ``_DENSITY_RESTORE_ATOL``: every consumer reads this projection as a
+        density, so a sum other than 1 manufactures or destroys particles.
+        The compensation preserves the sum analytically but not numerically
+        -- its basis functions are moment-free only to the roundoff of a
+        cancelling sum, and a numerically singular 2x2 solve scales that
+        residue by an unbounded coefficient (a cold near-sonic cell on a
+        coarse grid is where this bites). Two guards hold the invariant
+        regardless: a solve above ``_MOMENT_SOLVE_COND_MAX`` is REJECTED,
+        leaving the moments at whatever accuracy the accepted iterations
+        reached and falling back on the analytic bin masses when the first
+        solve is the singular one; and the sum is restored at the end if it
+        has drifted past the tolerance. Both are inert while the invariant
+        holds -- no informative solve is rejected, and a healthy sum is
+        left untouched rather than rescaled by one.
         """
         s = np.sqrt(max(T_eV, 1e-6) * EV / M_HE)  # 1D thermal spread
         from math import erf, sqrt
@@ -156,7 +187,10 @@ class VGrid:
         # Two-basis compensation: f' = f + a*(vz - u)*f + b*(V2 - <V2>)*f
         # solved so the discrete first (vz) and second (energy) moments hit
         # the analytic targets exactly; density is preserved because both
-        # basis functions are built moment-free about the current state.
+        # basis functions are built moment-free about the current state --
+        # analytically. Numerically that cancellation leaves a residue, so
+        # the density survives only while the coefficients stay bounded,
+        # which is what the conditioning guard enforces.
         target_u = u_drift
         target_e = u_drift**2 + 3.0 * s**2
         for _ in range(4):
@@ -171,6 +205,13 @@ class VGrid:
                 ]
             )
             rhs = np.array([target_u - m1, target_e - m2])
+            if not (
+                np.isfinite(A).all()
+                and np.linalg.cond(A) <= _MOMENT_SOLVE_COND_MAX
+            ):
+                # Numerically singular: the correction this would return is
+                # noise, and it is the noise that breaks the density.
+                break
             try:
                 ab = np.linalg.solve(A, rhs)
             except np.linalg.LinAlgError:
@@ -188,6 +229,11 @@ class VGrid:
                 and abs(float((f * self.V2).sum()) - target_e) <= 1e-10 * target_e
             ):
                 break
+        # Restore the density after the last basis update. Skipped, not
+        # applied as a factor of one, while the sum is already 1 to roundoff.
+        total = float(f.sum())
+        if abs(total - 1.0) > _DENSITY_RESTORE_ATOL:
+            f = f / total
         return f
 
     def wall_emission_spectrum(self, T_K):
