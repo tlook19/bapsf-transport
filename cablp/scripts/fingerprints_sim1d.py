@@ -337,6 +337,12 @@ def _ramp_members(t, I, t_trig):
 
     k = int(np.argmax(slope))
     s_max = float(slope[k])
+    # GUARD ORDER, and why two rungs can fail here for ONE reason: this
+    # interior test runs BEFORE the edge-slope test below, so a run whose
+    # current is still steepening as it enters the window's left edge is
+    # reported by whichever guard it happens to trip first. The two messages
+    # then read as unrelated problems when they are the same containment
+    # failure seen from two sides -- read them together before diagnosing.
     if k < 2 or k > slope.size - 3:
         return unresolved(
             "not-contained",

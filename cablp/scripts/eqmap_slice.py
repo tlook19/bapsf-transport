@@ -12,7 +12,7 @@ capability consumes::
     python scripts/run_m6_point.py --es 1 --nx 240 --two-zone \
         --nn0-profile-npz scripts/eqmap_nn0_es1_t4p5ms.npz \
         --extra-flag neutral_equilibration=false \
-        --sgp 5200 --save-h5 scripts/somerun.h5
+        --sgp 9010 --save-h5 scripts/somerun.h5
 
 No second initial-condition mechanism is built here.  The output is an ordinary
 sp3 shaped-fill npz -- ``nn0_profile``, optionally ``nn0_annulus_profile``,
