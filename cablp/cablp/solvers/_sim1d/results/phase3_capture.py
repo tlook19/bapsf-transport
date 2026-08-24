@@ -378,6 +378,7 @@ def blank_crosswalk_inventory(path):
                 "capture_revision": capture_revision,
                 "producer_path": producer_path,
                 "producer_anchor": (
+                    "cablp/cablp/solvers/_sim1d/solver.py:"
                     "LAPDSim1D._trajectory_result -> "
                     f"result.rhs_terms[{term!r}][{row!r}]"
                 ),

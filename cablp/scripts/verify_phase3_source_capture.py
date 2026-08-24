@@ -134,7 +134,7 @@ def _write(root, result, *, maximum_bytes=MAX_ARTIFACT_BYTES, invocation=None):
         result,
         run_id=result.run_id,
         capture_revision="a" * 40,
-        producer_path="cablp/cablp/solvers/_sim1d/solver.py",
+        producer_path="cablp/scripts/capture_phase3_rhs.py",
         started_at="2026-08-24T12:00:00Z",
         completed_at="2026-08-24T12:00:01Z",
         configuration_identity_sha256=configuration_identity(
@@ -223,9 +223,10 @@ def check_schema_round_trip_and_digests(root):
     first_inventory = inventory[0]
     assert first_inventory["capture_revision"] == "a" * 40
     assert first_inventory["producer_path"] == (
-        "cablp/cablp/solvers/_sim1d/solver.py"
+        "cablp/scripts/capture_phase3_rhs.py"
     )
     assert first_inventory["producer_anchor"] == (
+        "cablp/cablp/solvers/_sim1d/solver.py:"
         "LAPDSim1D._trajectory_result -> "
         "result.rhs_terms['synthetic_flux']['n']"
     )
@@ -276,7 +277,7 @@ def check_refusals_and_atomicity(root):
         wrong_id,
         run_id=RUN_A,
         capture_revision="a" * 40,
-        producer_path="cablp/cablp/solvers/_sim1d/solver.py",
+        producer_path="cablp/scripts/capture_phase3_rhs.py",
         started_at="start",
         completed_at="complete",
         configuration_identity_sha256=configuration_identity(
@@ -356,7 +357,7 @@ def _write_reserved(case_root, output, result):
         result,
         run_id=result.run_id,
         capture_revision="a" * 40,
-        producer_path="cablp/cablp/solvers/_sim1d/solver.py",
+        producer_path="cablp/scripts/capture_phase3_rhs.py",
         started_at="start",
         completed_at="complete",
         configuration_identity_sha256=configuration_identity(
