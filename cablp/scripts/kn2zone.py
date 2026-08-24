@@ -41,6 +41,7 @@ their targets to rounding.
 Usage:
     python scripts/kn2zone.py RUN.h5 [--window 5 19.5] [--nvz 80 --nvp 24]
         [--truncate 1e-3] [--max-gen 400] [--out PREFIX]
+        [--puff-orifice {wide,narrow}]
     python scripts/kn2zone.py --selftest
 """
 
@@ -53,7 +54,14 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from mc_neutrals import EV, KB, M_HE, T_WALL_K, load_background  # noqa: E402
+from mc_neutrals import (  # noqa: E402
+    EV,
+    KB,
+    M_HE,
+    PUFF_ORIFICE_ENDPOINTS,
+    T_WALL_K,
+    load_background,
+)
 
 
 from cablp.solvers._sim1d.physics.kinetic_neutrals import (  # noqa: E402
@@ -317,6 +325,13 @@ def main(argv=None):
     ap.add_argument("--truncate", type=float, default=1e-3)
     ap.add_argument("--max-gen", type=int, default=400)
     ap.add_argument("--out", default=None)
+    ap.add_argument(
+        "--puff-orifice", choices=PUFF_ORIFICE_ENDPOINTS, default=None,
+        help="place the puff by the CAD-derived tube-beamed injection row "
+             "instead of the run's own gas_puff_profile row, at the named "
+             "endpoint of the one-sided feed-line bracket (default: unset, "
+             "the run's own row)",
+    )
     args = ap.parse_args(argv)
 
     if args.selftest:
@@ -326,7 +341,9 @@ def main(argv=None):
     if args.run is None:
         ap.error("RUN.h5 required unless --selftest")
 
-    bg = load_background(args.run, tuple(args.window))
+    bg = load_background(
+        args.run, tuple(args.window), puff_orifice=args.puff_orifice
+    )
     bg["zone_rates"] = args.zone_rates
     cls = KN2ZoneJump if args.kernel == "jump" else KN2Zone
     kn = cls(bg, nvz=args.nvz, nvp=args.nvp, truncate=args.truncate,
