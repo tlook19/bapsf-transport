@@ -22,6 +22,40 @@ been mistaken for a specification and "corrected" in the wrong direction.
 Where a quantity cannot be pinned, the **bracket is the claim** and a result
 using it must report the bracket rather than a single number.
 
+### The ASSUMED numerical-control sweep clause
+
+**Every default not given its own entry below is ASSUMED numerical control:
+chosen to make the integration run, carrying no physical claim, and reported
+by no result.** This clause exists so that a missing entry reads as a
+classification rather than as an oversight. It covers, by class:
+
+- **initial seeds** — `ne0`, `u0` (and `Te0`/`Ti0`, which have their own
+  entries because they are pinned to the ADF11 table edge and to room
+  temperature respectively);
+- **positivity floors** — `ne_floor`, `nn_floor` (and `Te_floor`/`Ti_floor`,
+  entered separately below);
+- **run-length and cycle counts** — `tau_discharge`, `tau_afterglow`,
+  `tau_cycle`, `cycles`, `neutral_equilibration_cycles`,
+  `neutral_equilibration_dt`;
+- **the inert puff-waveform family** — `S_gp_decay_target`,
+  `tau_gp_pulse_duration`, `tau_gp_decay_duration`, read only by the
+  deprecated pulse/decay modes and never by the shipped `"square"` waveform;
+- **inert A/B-arm constants** — `neutral_exchange_coeff_cm3_s`, read only by
+  the `"constant"` neutral exchange model where the default is `"knudsen"`.
+
+**Two named exceptions inside the clause, stated because they are
+phase-gating rather than inert.** `I_prebreakdown = 150.0` A and
+`I_breakdown = 1000.0` A select which phase the run is in under
+`phase_transition_mode = "current"`, so they DO move where phase boundaries
+land in time. Neither has a measured basis: `I_breakdown` is the operator's
+1 kA convention for calling the discharge started, and `I_prebreakdown` has
+no stated basis at all. They are ASSUMED, and a result whose timing is read
+against a phase edge must say which threshold defined it.
+
+**The clause is not a licence.** A key that acquires a physical
+interpretation, a fitted value, or a result that quotes it leaves this class
+and earns its own entry.
+
 Analysis memos are named by filename below. They are working files kept
 alongside the scripts and are not tracked in this repository; the numbers that
 matter are reproduced here.
@@ -547,11 +581,18 @@ CELL-dependent, not a constant.
 The DEFAULT nonetheless stays `"cauchy_chord"`, because the pre-registered
 acceptance gate that would have promoted `"geometric"` was MISSED
 (`scripts/k2_dvm_exchange_acceptance.txt`, a reduced-statistics E2 rerun with
-both arms scored against one reference). At this device's main-column ratio
-`Rp/Rm = 0.3` the two errors in the shipped exchange rate nearly cancel — the
-mean chord is too long by `4/pi` and the return fraction too large by
-`(Rp+Rm)/Rm` — leaving the exchange channels only -2.1 % apart; the wall
-channel, where they do not cancel, moves +39.9 %. The gate required the worst
+both arms scored against one reference). The two errors in the shipped
+exchange rate partly cancel — the mean chord is too long by `4/pi` and the
+return fraction too large by `(Rp+Rm)/Rm` — but how much they cancel is a
+function of `Rp/Rm`, and the L2 geometry flip moved it. **Recomputed at the
+shipped `Rp = 18.415`, `Rm = 50` (ratio 0.3683):** the exchange correction is
+`4 Rm / (pi (Rp + Rm)) = 4 x 50 / (pi x 68.415) = 0.9305`, i.e. the exchange
+channels sit **-6.9 %** apart, and the wall correction is
+`4 Rm^2 / (pi (Rm^2 - Rp^2)) = 4 x 2500 / (pi x 2160.89) = 1.4731`, i.e.
+**+47.3 %**. *(At the retired `Rp = 15`, ratio 0.3, the same two expressions
+gave -2.1 % and +39.9 %; the near-cancellation on the exchange channels was
+a property of that ratio and is three times weaker at the measured aperture,
+so "nearly cancel" no longer describes it.)* The gate required the worst
 matched-time mid-machine `n_ann` deviation to shrink 3x and it shrank 1.32x
 (+184.97 % to +139.80 %), so the mid-machine annulus divergence is NOT caused
 by the zone-rate coefficients. The two arms are a declared A/B; promotion is
@@ -572,9 +613,16 @@ and radial exchange are taken. Neither arm has a fitted number in it.
   `kinetic_neutrals.annulus_chord_classes`, the same function `KN2ZoneJump`
   uses: outer wall to inner surface with the view factor `Rp/Rm` at `c_wi`,
   outer wall to outer wall at `c_ww`, inner surface outward at `c_io`. On the
-  production geometry's duct (`Rp = 15`, `Rm = 50`) they are 37.46, 69.99 and
-  37.46 cm. Their sampled distributions carry `mean^2/var` 196.0, 10.5 and
-  195.7 — the measured chord statistics of the duct, ten to two hundred times
+  production geometry's duct (`Rp = 18.415`, `Rm = 50`) they are 34.38, 67.37
+  and 34.38 cm, with sampled `mean^2/var` 124.0, 10.1 and 123.9 — recomputed
+  from `annulus_chord_classes(18.415, 50.0)` at the shipped
+  `CHORD_CLASS_SAMPLES = 20001`, the same call the kernel makes. *(At the
+  retired `Rp = 15` the same call gave 37.46, 69.99 and 37.46 cm with
+  `mean^2/var` 196.0, 10.5 and 195.7; the L2 flip narrows the duct, which
+  shortens every class and — because the inner cylinder now subtends more of
+  the wall's view — broadens the two wall-to-inner distributions by about a
+  third.)* These are the measured chord statistics of the duct, ten to a
+  hundred times
   narrower than the exponential the rate arm implies, which is the whole
   reason the arm exists. The classes are checked against the two-dimensional
   mean-chord theorem `pi (Rm - Rp) / 2`, which nothing in their derivation was
@@ -848,10 +896,16 @@ fraction:
    plus the mesh's two.
 
 **The competing "anode area / cathode area" reading is excluded twice over,
-quantitatively and structurally.** At the shipped stance `R_cath = 15` cm,
-`Rp = 15` cm and `anode_radius_cm = None` — the mesh spans the chamber, with
-`Ra >= Rp` enforced — so an anode-to-cathode AREA RATIO is `>= 1` and cannot
-be `0.358`. Independently, class 1 uses the quantity as `1 - eta`, which is a
+quantitatively and structurally.** At the shipped stance `R_cath = 18.415` cm,
+`Rp = 18.415` cm and `anode_radius_cm = None` — the mesh spans the chamber, so
+`Ra = Rm = 50` cm, with `Ra >= Rp` enforced in every case — an
+anode-to-cathode AREA RATIO is `(50/18.415)^2 = 7.37`, and `>= 1` for any
+admissible `Ra`. It cannot be `0.358`. *(The exclusion is not a property of
+the retired `Rp = R_cath = 15` cm this paragraph was first written at, where
+the same ratio read `(50/15)^2 = 11.11`: the `Ra >= Rp` constraint puts the
+ratio at or above 1 for every geometry the validator admits, so the L2 flip
+moves the number and not the conclusion.)* Independently, class 1 uses the
+quantity as `1 - eta`, which is a
 transparency only for a fraction: for a ratio `>= 1` it would be `<= 0`.
 
 **`cathode_phi_c_cap_V = 1000.0` V — DERIVED from the atomic data's domain, and
@@ -1039,6 +1093,41 @@ design spec (to within the `[18.10, 18.415]` cm aperture bracket).
 reachable at the `pre-refactor-2026-08-20` anchor tag — the golden fixture ran
 it until R2b recaptured that fixture at the stance of record, which selects
 `"uniform"`.
+
+**`cathode_emissivity = 0.7` — ASSUMED (literature-INFORMED, not
+literature-quoted). Honest bar: the spectral spread 0.41 – 0.86 of the source
+it is inferred from, and the bracket is the claim.** It is the total
+hemispherical emissivity of the LaB6 emitting surface, and it is consumed in
+exactly one place: the Stefan-Boltzmann radiation leg of the
+`"power_balance"` cathode thermal model,
+`P_rad = eps * sigma_SB * pi R_cath^2 * (T_s^4 - T_env^4)`
+(`physics/cathode.py`, `cathode_power_balance_terms`), evaluated twice per
+call — once at `T_s` as the radiative loss and once at `cathode_Ts_base_K` as
+the standby heater credit, so the two legs move together and a mis-set `eps`
+does not bias the standby pinning.
+
+The source is Kowalczyk et al., *Int. J. Thermophys.* **35**, 1538 (2014),
+doi:10.1007/s10765-014-1712-3, which reports LaB6 SPECTRAL emissivity at
+1622 K running from 0.86 at 729 nm down to 0.41 at 2146 nm. **0.7 is not a
+number that paper prints.** It is a total-hemispherical value inferred from
+that spectrum, and the class follows from that: no instrument pins the
+hemispherical total for this cathode at its operating temperature, so it is
+ASSUMED with a bracket rather than MEASURED or DERIVED — there is no stated
+relation carrying the spectral curve to the shipped scalar, which is exactly
+what a DERIVED entry would have to supply. It is likewise not FITTED: no
+campaign observable was matched to choose it, and `run_mechanism_ladder.py`
+exposes `--emissivity` at this same 0.7 default rather than sweeping it.
+
+Honest bar, and why it is wide: the emitting surface runs near 1900–2000 K,
+where the Planck peak (`2898/1950 ~ 1.49` um) sits inside the measured band,
+so the band-integrated total is bounded by the band's own endpoints and
+nothing in the record narrows it further. `P_rad` is LINEAR in `eps`, so the
+bar transfers one-for-one to the radiated power. What keeps this from being
+load-bearing at the operating point is the conduction leg: the balance there
+is stabilized by `cathode_conduction_W_per_K` against a ~230 W/K
+radiation+emission stiffness (see that entry), so the radiation term sets the
+standby level rather than the plateau. A result that leans on the radiative
+loss ALONE must quote the 0.41 – 0.86 bracket, not 0.7.
 
 **`cathode_heat_capacity_J_per_K = 120.0` — ASSUMED (hand-tuned).** It shapes
 only the ramp timescale; the steady state is independent of it. Physical scale:
@@ -1455,6 +1544,41 @@ hot-channel diagnostics report both, so the declared **0.1 / 0.4** family
 remains the right instrument for the CX tail whenever that cut is relaxed —
 still never fitted.
 
+**`neutral_wall_partition_sigma_hehe_cm2` — no default; the ARM VALUE OF
+RECORD is `sigma_mt(300 K) = 1.26e-15` cm^2, bracket `[1.24, 1.29]e-15` —
+DERIVED (literature-boxed, ±2 %).** The key itself has no shipped number:
+`physics_fit_defaults()` sets it to `None`, the neutral_wall_momentum_partition
+flag REQUIRES it, and supplying it without the flag raises. This entry
+therefore boxes the value that arm runs at, not a default.
+
+The quantity is the He–He MOMENTUM-TRANSFER cross section — the
+`Omega^(1,1)`-derived moment, deliberately NOT a quantum-total elastic one.
+The partition attenuates DIRECTED MOMENTUM, and the forward-peaked
+small-angle encounters a total cross section counts at full weight remove
+almost none of it, so a total would over-suppress the wall branch.
+
+Route (2026-08-21, banked): an exact first Chapman–Enskog inversion of the
+ab initio ⁴He self-diffusion table of **Hurly & Moldover, *J. Res. NIST*
+**105**, 667 (2000), Table A1** (Boltzmann-statistics `D`). Cross-checked on
+the ³He–⁴He channel — two reduced masses, one `Omega^(1,1)` — agreeing to
+0.7 %. The naive viscosity ÷ `A*` route overshoots by ~5 % because the ab
+initio `A*(300 K)` is 1.16, not the 1.10 that route assumes; direct
+`D`-inversion is the correct one. **Honest bar ±2 %**, and the disclosed gaps
+are that Bich/Hellmann/Vogel 2007 (the second authority on `D`) is unread and
+the Przybytek/Cencek potential primaries are unread — the latter bounded at
+≤0.05 % by the 2000→2007 potential shift.
+
+Temperature dependence, for any arm not at annulus temperature:
+`sigma_mt ~ 1.26e-15 (T/300)^-0.245`, ±3 % over 300–3000 K
+(1000 K = 9.63e-16, 3000 K = 7.17e-16 cm^2). The 300 K value is the arm's
+because the annulus gas is at ~300 K.
+
+**Relation to the repo's hard-sphere 2.044e-15 cm^2, disclosed:** that number
+OVERSTATES `sigma_mt` by ×1.62 at 300 K. Substituting this cross section into
+the `sqrt(2)`-mean-free-path formulas is convention-consistent and carries no
+extra factor. NB `MODEL.md`'s neutral-neutral mean free path is quoted with
+this boxed `sigma_mt`, not the hard-sphere value.
+
 **`neutral_knudsen_temperature = "frozen"` — ASSUMED (stance choice, ratified
 v1-primary).** Which temperature the Knudsen conductances take their thermal
 speed from; read only under the `neutral_energy` flag (default ON since the
@@ -1560,13 +1684,17 @@ flag is armed, which is why the coverage validator's inert-key refusal exempts
 this key alone under the emitting-area flag.
 
 **`coverage_backfill_time_s = 3.0e-5` s — ASSUMED. Bracket
-1.0e-5 – 1.2e-4 s, and the bracket is the claim.** The time over which the
+1.0e-5 – 1.5e-4 s, and the bracket is the claim.** The time over which the
 uncovered reservoir refills a burnt channel is a free-molecular transit across
 the inter-channel spacing. Helium at the model's `Tn_K = 300` K has mean speed
-`sqrt(8 k T / (pi m)) = 1.26e5` cm/s, so a refill path of 1 cm gives 8e-6 s and
-one of the full plasma radius `Rp = 15` cm gives 1.2e-4 s; the bracket rounds
-those to one significant figure and the shipped value is the ~4 cm spacing in
-the middle of it. Nothing in the campaign measures the azimuthal channel
+`sqrt(8 k T / (pi m)) = 1.26e5` cm/s, so a refill path of 1 cm gives
+`1 / 1.26e5 = 8e-6` s and one of the full plasma radius `Rp = 18.415` cm gives
+`18.415 / 1.26e5 = 1.5e-4` s; the bracket rounds those outward and the shipped
+value is the ~4 cm spacing (`4 / 1.26e5 = 3.2e-5` s) in the middle of it.
+*(The upper edge is DERIVED from `Rp` and therefore moved with the L2
+geometry flip: at the retired `Rp = 15` cm the same transit read 1.2e-4 s.
+The SHIPPED VALUE does not move — 3.0e-5 s is set by the channel spacing, not
+by `Rp` — so this is a widened bracket, not a stance change.)* Nothing in the campaign measures the azimuthal channel
 spacing, which is why this is a bracket rather than a point. Two further
 approximations sit inside the same constant and are NOT separately
 parameterized in v1: the closure carries its neutral deficit on the same
