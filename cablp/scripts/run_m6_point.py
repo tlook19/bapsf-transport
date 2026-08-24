@@ -11,6 +11,12 @@ committed stance file (``scripts/stances/NAME.toml``) as the base config, and
 package is mandatory -- a run either names its stance or acknowledges that it
 has none with ``--no-stance``.
 
+An array-valued param -- a per-mesh-cell profile, hundreds of numbers -- goes
+in through ``--extra-npz KEY=path.npz:arrayname`` rather than as a kilobyte of
+inline JSON on the command line. It is convenience only: inline JSON already
+round-trips IEEE doubles bit-exactly, so the two routes deliver the same
+value.
+
 Usage:
     python scripts/run_m6_point.py --es 1 --stance g1atrim --sgp 9010 \
         --save-h5 out.h5
@@ -43,6 +49,56 @@ ELECTRON_BIRTH_POLICY = "floor"
 # the run represents. It keeps the ordinary "stance supersedes this driver's
 # default" print below instead of raising.
 RUNG_OWNED_LIVE = ("V_bank", "cathode_Ts_base_K")
+
+
+def parse_npz_overrides(items):
+    """Return ``({key: value}, {key: provenance})`` from ``KEY=path.npz:array``.
+
+    The array-valued route into ``--extra``'s namespace, and the same one
+    ``sp3_build_nn0.py`` offers on the builder side -- semantics replicated
+    rather than imported so that this driver keeps standing on its own file,
+    and so that a key spelled the same way on the builder and on the run means
+    the same thing. A per-mesh-cell profile is hundreds of numbers and belongs
+    in a file, not in argv; this reads the named array out of the named
+    ``.npz`` and hands it over as a plain Python list, exactly the form the
+    config templates take. A 0-d entry becomes the scalar itself, so one file
+    can carry a whole geometry. KEY is the CONFIG key and ``arrayname`` the
+    name inside the file; they need not agree, which is what lets one file
+    hold several candidate profiles under distinguishing names.
+
+    Convenience only, and deliberately so: inline JSON already round-trips
+    IEEE doubles bit-exactly, so this route changes how a value is WRITTEN and
+    never what the solver receives.
+
+    Keys are NOT screened, as for ``--extra``: a key this stance does not own
+    must reach ``LAPDSim1D`` and raise there, because the solver's
+    construction-time refusal is the one authority on which template owns
+    which key. The DRIVER does the file I/O -- the solver never opens a file.
+    """
+    values, provenance = {}, {}
+    for item in items:
+        key, sep, reference = item.partition("=")
+        if not sep or not key or not reference:
+            raise ValueError(
+                f"npz override {item!r} is not of the form "
+                "key=path.npz:arrayname"
+            )
+        path, sep, name = reference.rpartition(":")
+        if not sep or not path or not name:
+            raise ValueError(
+                f"npz override {item!r} names no array: the value must be "
+                "path.npz:arrayname"
+            )
+        with np.load(path, allow_pickle=False) as data:
+            if name not in data:
+                raise ValueError(
+                    f"{path} carries no array {name!r}; it holds "
+                    f"{sorted(data.files)}"
+                )
+            array = np.asarray(data[name])
+        values[key] = array.item() if array.ndim == 0 else array.tolist()
+        provenance[key] = f"{reference} shape={list(array.shape)} {array.dtype}"
+    return values, provenance
 
 
 def _brief_value(value):
@@ -109,6 +165,19 @@ def main(argv=None):
                         "--extra/--extra-flag, so it overrides a stance's own "
                         "shaped fill and either of those can still override "
                         "any of it")
+    p.add_argument("--extra-npz", nargs="*", default=(),
+                   help="array-valued params override, KEY=path.npz:arrayname "
+                        "-- reads the named array out of the named .npz and "
+                        "files it under KEY, e.g. "
+                        "plasma_radius_profile_cm=scripts/g1_profiles.npz:"
+                        "plasma_radius_profile_cm_off. The route for "
+                        "per-mesh-cell profiles, which are hundreds of numbers "
+                        "and do not belong in argv; a 0-d entry in the .npz "
+                        "becomes the scalar itself. CONVENIENCE ONLY -- inline "
+                        "JSON is already bit-exact, so this changes how a value "
+                        "is written, never what the solver gets. Applied AFTER "
+                        "--stance and --nn0-profile-npz and BEFORE --extra, so "
+                        "an inline value still overrides a file-sourced one")
     p.add_argument("--extra", nargs="*", default=(),
                    help="additional k=v param overrides (JSON-parsed values)")
     p.add_argument("--extra-flag", nargs="*", default=(),
@@ -235,6 +304,11 @@ def main(argv=None):
         cli_supplied.update(("nn0", "nn0_profile", "nn0_annulus_profile"))
         cli_supplied_flags.add("neutral_initial_profile")
         print(f"shaped nn0 from {args.nn0_profile_npz}: {provenance}")
+    npz_params, npz_provenance = parse_npz_overrides(args.extra_npz)
+    for key, value in npz_params.items():
+        extra[key] = value
+        cli_supplied.add(key)
+        print(f"array param {key} from {npz_provenance[key]}")
     for kv in args.extra:
         k, v = kv.split("=", 1)
         try:

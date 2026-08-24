@@ -4458,8 +4458,9 @@ def _case_beam_gap_ledger_tripwire(csda_sim, csda_solve, exc_params):
     csda_ledger = csda_solve.beam_gap_ledger
     csda_eta = float(csda_solve.device_config.eta)
     assert set(csda_ledger) == {0}
-    csda_probe, csda_ray, csda_booked = csda_ledger[0]
+    csda_probe, csda_ray, csda_booked, csda_ceiling = csda_ledger[0]
     assert 0.0 < csda_probe <= 1.0 and 0.0 < csda_booked <= 1.0
+    assert 0.0 < csda_ceiling <= 1.0
     assert beam_gap_ledger_mismatch(csda_ledger, csda_eta) is None
     # The deposition ray's breakout is read off its OWN bookkeeping, so it is
     # an independent witness: here the ray clears the gap and the probe agrees.
@@ -4471,6 +4472,51 @@ def _case_beam_gap_ledger_tripwire(csda_sim, csda_solve, exc_params):
     # leaves a little unbooked. It must stay a small fraction of emitted beam
     # power -- item 35 was 35% -- or the warning becomes noise.
     assert 0.0 < csda_eta * (csda_ray - csda_booked) < 0.02
+    # ... and the ceiling column says WHY it is unbooked rather than leaving
+    # it to be re-derived: with the ray transmitting whole, the sigma_eff >= 0
+    # clamp pins the circuit to the Coulomb-only ceiling EXACTLY, so the two
+    # are the same number here and the whole shortfall is representability.
+    assert csda_booked == csda_ceiling
+    # The third case names that shortfall for what it is. It is opt-in, so
+    # first: with it OFF the instrument is unchanged on a ledger that now
+    # carries a ceiling -- this healthy one still reads clean.
+    assert beam_gap_ledger_mismatch(
+        csda_ledger, csda_eta, separate_representability=True
+    ) is None
+    # The MARGINAL-TRANSMISSION regime the case exists for: a broken-out ray
+    # against a low ceiling, with the circuit clamped onto that ceiling. The
+    # SAME excursion is reported either way and by the same power -- only the
+    # label moves, from a divergence that is not happening to the
+    # representability gap that is.
+    csda_marginal = {0: (1.0, 1.0, 0.5, 0.5)}
+    csda_marg_off = beam_gap_ledger_mismatch(csda_marginal, csda_eta)
+    csda_marg_on = beam_gap_ledger_mismatch(
+        csda_marginal, csda_eta, separate_representability=True
+    )
+    assert csda_marg_off[1] == "ray_vs_circuit"
+    assert csda_marg_on[1] == "ray_vs_ceiling"
+    assert csda_marg_on[4] == csda_marg_off[4]
+    assert np.isclose(csda_marg_on[4], 0.5 * csda_eta)
+    # The separation has to cut BOTH ways or it is just a rename: a ray that
+    # breaks out while the circuit sits well BELOW the ceiling is a genuine
+    # divergence (a broken probe propagated into sigma_eff), and it must stay
+    # labelled one even with the case armed. Here the representability gap is
+    # real but sub-tolerance, and the divergence is what trips.
+    csda_breakout_hole = {0: (1.0, 1.0, 0.2, 0.9)}
+    assert beam_gap_ledger_mismatch(
+        csda_breakout_hole, csda_eta, separate_representability=True
+    )[1] == "ray_vs_circuit"
+    # A ray that did NOT break out is outside the case entirely -- item 35's
+    # own signature keeps its own label with the case armed.
+    assert beam_gap_ledger_mismatch(
+        {0: (1.0, 0.0, 0.96529, 0.99)}, csda_eta,
+        separate_representability=True,
+    )[1] == "probe_vs_ray"
+    # Pre-ceiling ledger entries stay readable: no fourth element, no third
+    # case, and the answer is the one the two-case instrument always gave.
+    assert beam_gap_ledger_mismatch(
+        {0: (1.0, 1.0, 0.5)}, csda_eta, separate_representability=True
+    )[1] == "ray_vs_circuit"
     # The tripwire is a comparison, not an assertion about one side: an
     # injected divergence must be caught and reported as the worst offender.
     csda_trip = beam_gap_ledger_mismatch(
@@ -4595,7 +4641,9 @@ def _case_beam_probe_skip(
     for _pskip_scale, _pskip_ray_expect in ((1.0, 1.0), (1.0e3, 0.0)):
         _pskip_nn = np.asarray(csda_state.nn, dtype=float) * _pskip_scale
         _pskip_beam, _pskip_ledger = _pskip_adapter(_pskip_nn)
-        _pskip_T, _pskip_ray, _pskip_circuit = _pskip_ledger[0]
+        (
+            _pskip_T, _pskip_ray, _pskip_circuit, _pskip_ceiling,
+        ) = _pskip_ledger[0]
         assert _pskip_ray == _pskip_ray_expect, (_pskip_scale, _pskip_ray)
         # The probe, launched for real, must reproduce the branch taken --
         # bit-for-bit, not to a tolerance.
@@ -4603,9 +4651,13 @@ def _case_beam_probe_skip(
             max(_pskip_probe(_pskip_nn) / _pskip_Gamma0, 1.0e-6), 1.0
         )
         assert _pskip_T == _pskip_ref, (_pskip_scale, _pskip_T, _pskip_ref)
-        # All three ledger channels stay written from the values they always
-        # came from -- the skip removes a computation, not a diagnostic.
-        for _pskip_v in (_pskip_T, _pskip_ray, _pskip_circuit):
+        # All the ledger channels stay written from the values they always
+        # came from -- the skip removes a computation, not a diagnostic. The
+        # ceiling rides along: it is a property of the STATE (Coulomb-only
+        # mfp against the gap length), so the skip cannot reach it at all.
+        for _pskip_v in (
+            _pskip_T, _pskip_ray, _pskip_circuit, _pskip_ceiling,
+        ):
             assert np.isfinite(_pskip_v), (_pskip_scale, _pskip_ledger)
         assert 0.0 < _pskip_T <= 1.0 and 0.0 < _pskip_circuit <= 1.0
         assert np.isfinite(_pskip_beam.beam_atten_cross[csda_launch])
@@ -8007,7 +8059,10 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
         # kernel must be bit-identical to the pure one over the operating
         # range -- checked whether or not this process opted in to running it,
         # because the comparison is the point. Skipped (not failed) on a
-        # checkout with no compiled extension: it is optional by design.
+        # checkout with no compiled extension: it is optional by design. The
+        # skip ANNOUNCES ITSELF -- a silent one reached review twice in one
+        # cycle reading as a pass, which is the whole reason the solver-branch
+        # rule asks for the equivalence lines by eye.
         # scripts/spike_cython_kernels.py is the full-resolution version.
         try:
             import importlib as _importlib
@@ -8333,6 +8388,12 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
                         assert _cap_comp.phi_c < 1000.0, _cap_comp.phi_c
             finally:
                 _cathode_solver_idriven_mod._COMPILED_ROOT = _cap_saved_root
+        else:
+            print(
+                "compiled-kernel D4 unit equivalence: SKIPPED -- "
+                "cablp.funcs._cathode_kernels_cy is not built "
+                "(`python build_ext.py --inplace` enables it)"
+            )
 
         loaded_result = load_result_hdf5(output_path)
         loaded_via_solver = LAPDSim1D.load_result(output_path)
