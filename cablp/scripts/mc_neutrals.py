@@ -61,7 +61,10 @@ from pathlib import Path
 import h5py
 import numpy as np
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import puff_orifice as orifice
 
 from cablp.funcs._adas import he_rates
 from cablp.vars._cons import m_He_cgs
@@ -415,7 +418,90 @@ def _puff_peak_cell(ns, roles):
     return int(tied[0])
 
 
-def load_background(path, window_ms):
+#: Endpoints of the ruled feed-line bracket that ``load_background`` accepts
+#: for ``puff_orifice``. ``None`` is the default and leaves the row exactly as
+#: the ledger (or the resolved config) supplies it.
+PUFF_ORIFICE_ENDPOINTS = ("wide", "narrow")
+
+
+def _apply_orifice_puff_row(bg, endpoint, z_port_cm, path):
+    """Replace the puff row with the CAD-derived tube-beamed launch row.
+
+    THE KINETIC ROW IS THE INJECTION GEOMETRY. The row this overwrites is the
+    solver's own ``gas_puff_profile`` row, which under the config of record is
+    the fluid ``"cosine_pipe"`` DEPOSITION envelope: with no neutral transport
+    of its own the fluid model must spread its source, so its width is a
+    closure, not the aperture. The engines fed from here transport their own
+    atoms, so what they need is where the gas ENTERS -- the tube-beamed jet
+    from the measured port, derived in :mod:`puff_orifice`. The two rows
+    disagree by construction; that difference is a registered finding, and the
+    fluid stance is not touched by this route.
+
+    Only the SHAPE moves: the total ``sources["puff"]`` is carried through
+    unchanged, so the delivered flow is the run's own. ``sources["puff_z"]``
+    is left alone -- it is the single-cell fallback for point-injection
+    consumers, and the derived row peaks in the same cell it already names.
+
+    Raises ``ValueError`` on an endpoint outside the ruled bracket, and on a
+    shut valve, where redistributing a zero row would silently do nothing
+    while reporting a derivation.
+    """
+    if endpoint not in PUFF_ORIFICE_ENDPOINTS:
+        raise ValueError(
+            f"puff_orifice must be None or one of {PUFF_ORIFICE_ENDPOINTS} "
+            f"(got {endpoint!r}). The feed-line length bound is ONE-SIDED, so "
+            "the derivation has exactly two endpoints: 'wide' (the widest "
+            "footprint the hardware permits) and 'narrow' (the fully-beamed "
+            "limit)."
+        )
+    total = float(bg["sources"].get("puff", 0.0))
+    if total <= 0.0:
+        raise ValueError(
+            f"puff_orifice={endpoint!r} was requested but the puff rate over "
+            f"this window is {total} for {path}: there is no flow to place. "
+            "Re-derive the row on a window where the valve is open, or leave "
+            "puff_orifice unset."
+        )
+    i_port = int(np.searchsorted(bg["z_edges"], z_port_cm) - 1)
+    i_port = min(max(i_port, 0), bg["Rm"].size - 1)
+    rows = orifice.launch_row_bracket(
+        bg["z_edges"],
+        r_edge_cm=float(bg["Rp"][i_port]),
+        r_wall_cm=float(bg["Rm"][i_port]),
+        z_port_cm=z_port_cm,
+    )
+    superseded = np.asarray(bg["sources"]["puff_cells"], dtype=float)
+    row = rows[endpoint][0] * total
+    bg["sources"]["puff_cells"] = row
+    bg["puff_cell"] = row
+    bg.setdefault("source_provenance", {})["puff_cells"] = (
+        f"puff row DERIVED from the CAD port geometry ([puff-orifice], "
+        f"{endpoint} bracket endpoint) rather than read as the solver's "
+        f"gas_puff_profile row: tube-beamed Clausing launch at z = "
+        f"{z_port_cm:.4g} cm, flown from the vessel wall to the plasma column"
+    )
+    for line in orifice.describe(
+        rows, bg["z_edges"], cosine_pipe_row=superseded
+    ):
+        print(line, file=sys.stderr)
+    print(
+        f"  APPLIED            {endpoint} endpoint, total {total:.6g} /s "
+        f"unchanged, for {path}",
+        file=sys.stderr,
+    )
+
+
+def load_background(path, window_ms, puff_orifice=None):
+    """Assemble the kinetic instruments' shared background from one run.
+
+    ``puff_orifice`` selects the axial placement of the gas puff. ``None``
+    (the default) keeps the row the run itself carries -- the neutral
+    ledger's, or the solver's own ``gas_puff_profile`` row where the ledger
+    cannot supply one. Either ruled bracket endpoint, ``"wide"`` or
+    ``"narrow"``, replaces that row with the CAD-derived tube-beamed
+    injection row instead (:func:`_apply_orifice_puff_row`), carrying the
+    total flow through unchanged.
+    """
     with h5py.File(path, "r") as f:
         t0 = float(f.attrs["t_breakdown_trigger"])
         t_abs = f["time"][:]
@@ -792,6 +878,18 @@ def load_background(path, window_ms):
     rates = he_rates(n_safe, np.maximum(bg["Te"], 0.2), ("scd",))
     bg["nu_ion"] = bg["n"] * rates["scd"]
     bg["nu_cx"] = bg["n"] * charge_ex_react(np.maximum(bg["Ti"], 0.05), "He")
+    if puff_orifice is not None:
+        # Presence-gated: unset (the default) leaves every row above exactly
+        # as assembled, so this route cannot move an existing product.
+        z_cfg = params.get("gas_puff_z_cm")
+        _apply_orifice_puff_row(
+            bg,
+            puff_orifice,
+            float(bg["sources"]["puff_z"])
+            if z_cfg is None
+            else float(z_cfg) - float(edges[first]),
+            path,
+        )
     return bg
 
 
@@ -1989,9 +2087,18 @@ def main(argv=None):
         help="cathode particle reflection coefficient R_N "
              "(--fast-reflected only; default 0.5, the stance box)",
     )
+    ap.add_argument(
+        "--puff-orifice", choices=PUFF_ORIFICE_ENDPOINTS, default=None,
+        help="place the puff by the CAD-derived tube-beamed injection row "
+             "instead of the run's own gas_puff_profile row, at the named "
+             "endpoint of the one-sided feed-line bracket (default: unset, "
+             "the run's own row)",
+    )
     args = ap.parse_args(argv)
 
-    bg = load_background(args.run, tuple(args.window))
+    bg = load_background(
+        args.run, tuple(args.window), puff_orifice=args.puff_orifice
+    )
     if args.fast_reflected:
         # A separate mode end to end: its own launcher, its own collision
         # physics, its own tallies and its own report. It shares no state with
