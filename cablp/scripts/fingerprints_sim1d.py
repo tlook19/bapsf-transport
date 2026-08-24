@@ -92,8 +92,13 @@ def _wpe_arm_line(params):
     not as a delta -- a fingerprint set is incomplete without it, and a
     delta-only label cannot tell "this run was local" from "this artifact
     predates the label". Artifacts written before WP-E carry neither key and
-    are labelled "pre-WP-E". The tail energy is read only under
-    ``"tail_walk"`` and is marked inert otherwise.
+    are labelled "pre-WP-E". The tail energy is read only when the tail is
+    WALKED *and* ``heating_anomalous_tail_energy_keying="fixed"``, and is
+    marked inert in both of the other cases -- under ``"phi_c"`` keying the
+    walked arm's live birth energy is ``f*e*phi_c(t)`` and the printed
+    constant is a number the run never touched. The label follows the
+    artifact's own saved keying value and is omitted when that key is absent,
+    so an artifact predating the keying closure is not mislabelled.
     """
     params = params or {}
     if "heating_anomalous_transport" not in params:
@@ -106,8 +111,13 @@ def _wpe_arm_line(params):
     transport = str(params["heating_anomalous_transport"])
     tail = params.get("heating_anomalous_tail_energy_eV")
     tail_text = "<absent>" if tail is None else f"{float(tail):g} eV"
+    keying = params.get("heating_anomalous_tail_energy_keying")
     if transport == "local":
         tail_text += " (inert under 'local')"
+    elif keying is not None and str(keying) != "fixed":
+        tail_text += (
+            f" [INERT under {keying} keying; live E_tail = f*e*phi_c(t)]"
+        )
     return (
         f"WP-E arm: heating_anomalous_transport={transport} | "
         f"heating_anomalous_tail_energy_eV={tail_text}"
