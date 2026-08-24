@@ -157,9 +157,11 @@ class CathodeSolve1D:
     # Per-end CSDA deposition results ({0: primary, -1: twin}), present only
     # under beam_deposition_model = "csda"; None keys mean no active beam.
     beam_deposition: dict | None = None
-    # Per-end ``(probe, ray, circuit)`` gap survival for the item-35 ledger
-    # tripwire; keyed only for ends with an active CSDA ray. See
-    # ``beam_gap_ledger_mismatch``.
+    # Per-end ``(probe, ray, circuit, ceiling)`` gap survival for the item-35
+    # ledger tripwire; keyed only for ends with an active CSDA ray. The first
+    # three are views of ONE number; ``ceiling`` is the most the circuit can
+    # represent at this state, which is what separates a representability gap
+    # from a divergence. See ``beam_gap_ledger_mismatch``.
     beam_gap_ledger: dict | None = None
     # The RESERVOIR arm of the coverage closure's two-medium beam split, on
     # its own (v1.1). ``beam_deposition`` above is the SUM of both arms and is
@@ -1526,8 +1528,10 @@ def _csda_beam_deposition(
     Returns ``(deposition, gap_ledger, reservoir_deposition)``.
     ``deposition`` is ``{0: BeamDepositionResult | None, -1: ...}`` and is the
     SUM over the media the beam was split across; ``gap_ledger`` maps each
-    end with an active ray to ``(probe, ray, circuit)`` gap survival for the
-    item-35 tripwire (see ``beam_gap_ledger_mismatch``). The call also
+    end with an active ray to ``(probe, ray, circuit, ceiling)`` gap survival
+    for the item-35 tripwire, ``ceiling`` being the Coulomb-only bound the
+    clamp described below pins the circuit to when the ray breaks out
+    (see ``beam_gap_ledger_mismatch``). The call also
     rewrites
     ``beam_result.beam_atten_cross`` at each launch cell with the effective
     attenuation cross section that makes the frozen sheath solve's
@@ -2163,6 +2167,15 @@ def _csda_beam_deposition(
         # a broken probe that the adapter faithfully propagated. Item 35 sat
         # silently in the second: the circuit booked ~97% gap survival while
         # the deposition ray delivered 0.
+        #
+        # A FOURTH number is carried for the third case, and it is not a view
+        # of the same quantity: ``ceiling`` is the highest survival the
+        # circuit's Beer-Lambert solve CAN represent at this state, the
+        # Coulomb-only ``exp(-L_cath/l_bi)`` that the ``sigma_eff >= 0`` clamp
+        # pins it to. It is what separates a representability gap from a
+        # divergence when the ray breaks out (see
+        # ``beam_gap_ledger_mismatch``), and it is the same ``l_bi`` the
+        # inversion above already computed -- read, not re-derived.
         gap_ledger[end] = (
             transmission,
             ray_survival,
@@ -2176,6 +2189,7 @@ def _csda_beam_deposition(
                 ),
                 L_cath,
             ),
+            _compute_beam_bypass_fraction(l_bi, L_cath),
         )
     return deposition, gap_ledger, reservoir_deposition
 
@@ -2248,24 +2262,41 @@ def _ray_gap_flux_survival(flux_entry, Gamma0, gap_dz, launch, direction):
 BEAM_GAP_LEDGER_POWER_ATOL = 0.05
 
 
-def beam_gap_ledger_mismatch(gap_ledger, eta, atol=BEAM_GAP_LEDGER_POWER_ATOL):
+def beam_gap_ledger_mismatch(
+    gap_ledger,
+    eta,
+    atol=BEAM_GAP_LEDGER_POWER_ATOL,
+    separate_representability=False,
+):
     """Worst CSDA gap-survival ledger divergence, or ``None`` if all agree.
 
-    ``gap_ledger`` maps each active cathode end to ``(probe, ray, circuit)``
-    gap survival (see ``_csda_beam_deposition``). Two comparisons are made:
+    ``gap_ledger`` maps each active cathode end to
+    ``(probe, ray, circuit[, ceiling])`` gap survival (see
+    ``_csda_beam_deposition``). Three comparisons are made:
 
     ``probe`` vs ``ray``
         The probe must reproduce the deposition ray it mirrors. This is the
         item-35 class: a probe that misreports the ray corrupts ``sigma_eff``
         and therefore the circuit, and every internally-consistent check
         downstream still passes.
+    ``ray`` vs ``ceiling`` (only when ``separate_representability``)
+        The MARGINAL-TRANSMISSION case, and the only one that is not a defect
+        report. It is evaluated only for a BROKEN-OUT ray -- a ray that
+        crossed the gap whole -- and scores it against the highest survival
+        the circuit is able to represent. A fully-transmitting ray cannot be
+        represented above the Beer-Lambert solve's Coulomb-only ceiling
+        ``exp(-L_cath/l_bi)``, so the ``sigma_eff >= 0`` clamp leaves
+        ``eta * (1 - ceiling)`` unbooked. That shortfall is a
+        REPRESENTABILITY gap, not a disagreement between two views of one
+        number, and naming it as one is this case's entire job.
     ``ray`` vs ``circuit``
         The circuit must be able to represent the ray. Fails on adapter clamp
         saturation, and again -- independently -- whenever a broken probe has
         been propagated into ``sigma_eff``.
 
     Returns ``(end, kind, left, right, power_fraction)`` for the worst
-    offender, where ``kind`` is ``"probe_vs_ray"`` or ``"ray_vs_circuit"``.
+    offender, where ``kind`` is ``"probe_vs_ray"``, ``"ray_vs_ceiling"`` or
+    ``"ray_vs_circuit"``.
 
     The tolerance is stated on the quantity that matters rather than on the
     survival fractions themselves. The circuit debits
@@ -2273,26 +2304,49 @@ def beam_gap_ledger_mismatch(gap_ledger, eta, atol=BEAM_GAP_LEDGER_POWER_ATOL):
     fraction of emitted beam power booked to a bypass the fluid never loses
     (or vice versa) -- the ledger hole itself.
 
-    A small benign floor is unavoidable and must stay below ``atol``: a
-    fully-transmitting ray cannot be represented above the Beer-Lambert
-    solve's Coulomb-only ceiling ``exp(-L_cath/l_bi)``, so the
-    ``sigma_eff >= 0`` clamp leaves ``eta * (1 - exp(-L_cath/l_bi))``
-    unbooked. That floor is self-limiting -- saturation needs a transmitting
-    ray, which needs a long ``l_bi``, which makes the ceiling shortfall
-    small -- and measures 0.3-1.3% of emitted beam power across the
-    campaign's long-mfp states. Item 35 reads 35.8% on ``probe_vs_ray`` and
-    34.6% on ``ray_vs_circuit``.
+    The ceiling shortfall was long assumed to be a small benign floor that
+    would stay below ``atol`` on its own -- saturation needs a transmitting
+    ray, which needs a long ``l_bi``, which makes the shortfall small -- and
+    it measures 0.3-1.3% of emitted beam power across the campaign's
+    long-mfp states. That self-limiting argument FAILS for a hot beam in a
+    dense gap, where ``l_bi`` and the range-set transmission stop tracking
+    each other: the 2026-08-06 diagnosis measured a broken-out ray against a
+    ceiling of only ~0.78, and the excursion arrived labelled
+    ``ray_vs_circuit`` -- indistinguishable, at the point of use, from a real
+    ledger hole. That is what ``ray_vs_ceiling`` exists to tell apart. It is
+    ordered BEFORE ``ray_vs_circuit`` below because in exactly that regime
+    the clamp pins ``circuit`` to ``ceiling``, the two powers are equal, and
+    the strict ``>`` hands the tie to whichever is seen first: the label
+    changes, the trip does not. Item 35 -- a genuine hole -- reads 35.8% on
+    ``probe_vs_ray`` and 34.6% on ``ray_vs_circuit``, and stays there,
+    because a probe that misreports its ray leaves ``sigma_eff`` positive and
+    ``circuit`` strictly below ``ceiling``.
+
+    ``separate_representability`` is OFF by default, and with it off this
+    function is the two-case instrument it has always been, verbatim -- the
+    third case cannot change a returned value, only relabel one. It is a
+    parameter rather than the new behaviour because the caller that acts on
+    the result, ``LAPDSim1D._warn_beam_gap_ledger``, dispatches ``kind``
+    through an exhaustive table and owns the operator-facing text for each;
+    a third kind is meaningless until that table carries its explanation, and
+    the two must land together.
     """
     eta = float(eta)
     worst = None
     for end, entry in (gap_ledger or {}).items():
         if entry is None:
             continue
-        probe, ray, circuit = (float(v) for v in entry)
-        for kind, left, right in (
-            ("probe_vs_ray", probe, ray),
-            ("ray_vs_circuit", ray, circuit),
-        ):
+        # A three-element entry is the pre-ceiling ledger shape; its third
+        # case is simply not evaluated, which is the old behaviour exactly.
+        probe, ray, circuit, *rest = (float(v) for v in entry)
+        ceiling = rest[0] if rest else None
+        comparisons = [("probe_vs_ray", probe, ray)]
+        # ``ray`` is ``_ray_gap_breakout``'s binary verdict, so "broke out"
+        # is a comparison against 1.0 and not a threshold of any kind.
+        if separate_representability and ceiling is not None and ray >= 1.0:
+            comparisons.append(("ray_vs_ceiling", ray, ceiling))
+        comparisons.append(("ray_vs_circuit", ray, circuit))
+        for kind, left, right in comparisons:
             power = eta * abs(left - right)
             if power > atol and (worst is None or power > worst[4]):
                 worst = (int(end), kind, left, right, power)
