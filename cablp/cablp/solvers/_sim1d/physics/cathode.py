@@ -2019,9 +2019,21 @@ def _csda_beam_deposition(
         #                in when the gap does not end on a cell face. The
         #                deposition ray then has MORE path in that cell than
         #                the probe and can die inside it while the probe runs
-        #                out of dz and transmits. Production has
-        #                ``5 x 10 cm == L_cath`` exactly, so this never binds
-        #                there, but the guard is on the general geometry.
+        #                out of dz and transmits. THIS NOW BINDS ON THE
+        #                PRODUCTION GEOMETRY (2026-08-24 CAD-span gap
+        #                adoption). The mesh itself is exact --
+        #                ``5 x 10.65 == 53.25`` to the bit -- but
+        #                ``_clip_ray_length`` walks a running ``remaining``
+        #                and five sequential subtractions leave ~3.6e-15 cm,
+        #                which spills a sliver into the next cell and makes
+        #                ``_gap_clip_is_face_aligned`` False. The consequence
+        #                is COST, not correctness: the skip below is declined
+        #                and the probe is launched for real, which is what
+        #                the guard is for. (Under the previous 50 cm gap
+        #                ``50.0/5 == 10.0`` was exact in binary and the
+        #                residue was exactly zero, so the skip always
+        #                applied.) Accepted as-is by ruling; the exactness
+        #                fix is queued separately.
         #   anode in gap anode-mesh interception scales the DEPOSITION ray's
         #                flux at the anode-face crossing and the probe's not
         #                at all, so under flux-DEPENDENT stopping (the

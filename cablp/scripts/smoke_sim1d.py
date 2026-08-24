@@ -4597,12 +4597,50 @@ def _case_beam_probe_skip(
             ).transmitted_flux
         )
 
-    # Production geometry: the gap is 5 x 10 cm and L_cath is 50 cm, so the
-    # clip lands on a cell face and the anode crossing sits past the gap --
-    # both structural guards are inactive here, which is the case the skip
-    # exists for.
-    assert _gap_clip_is_face_aligned(_pskip_gap, _pskip_geom.length_cm)
-    assert float(_pskip_gap[int(_pskip_geom.anode_face_indices[0])]) == 0.0
+    # THE TWO STRUCTURAL GUARDS ARE CHECKED ON A PINNED FIXTURE, NOT ON THE
+    # PRODUCTION MACHINE, and that is deliberate as of 2026-08-24.
+    #
+    # The exact-zero skip is only VALID where the L_cath clip lands on a cell
+    # face, and the CAD-span gap no longer gives one. The mesh itself is exact
+    # -- 5 x 10.65 == 53.25 to the bit -- but ``_clip_ray_length`` walks a
+    # running remainder, and five sequential subtractions leave ~3.6e-15 cm,
+    # which spills a sliver into the next cell and trips BOTH guards (the
+    # face-alignment one and the anode-crossing one). On the production
+    # machine the skip is therefore declined and the probe is launched for
+    # real: it fails SAFE and costs a march, which is exactly what the guards
+    # are for (see the partial-clip note in cathode.py's
+    # ``_csda_beam_deposition``; accepted by ruling, exactness fix queued
+    # separately). This case tests the skip MECHANISM, not the machine value,
+    # so the geometry it needs is pinned here: 50.0 / 5 == 10.0 is exact in
+    # binary. Everything else in the case stays on the production geometry --
+    # including the three names this case ``provides`` downstream, which must
+    # keep describing the machine the rest of the suite is running.
+    _pskip_fixture_params = dict(csda_params)
+    _pskip_fixture_params["cathode_anode_gap_cm"] = 50.0
+    _pskip_fixture_params["L_cath"] = 50.0
+    # The fixed source region runs from the anode face outward, so its far end
+    # rides the pinned gap or the span stops being a whole number of cells.
+    _pskip_fixture_params["source_region_length_cm"] = 100.0
+    _pskip_fixture_sim = LAPDSim1D(_pskip_fixture_params, _cathode_flags())
+    _pskip_fixture_geom = _pskip_fixture_sim._geometry
+    _pskip_fixture_launch, _pskip_fixture_dir = beam_launch(
+        _pskip_fixture_geom, end=0
+    )
+    _pskip_fixture_gap = _clip_ray_length(
+        _pskip_fixture_geom.length_cm,
+        _pskip_fixture_launch,
+        _pskip_fixture_dir,
+        float(_pskip_fixture_params["L_cath"]),
+    )
+    assert _gap_clip_is_face_aligned(
+        _pskip_fixture_gap, _pskip_fixture_geom.length_cm
+    )
+    assert float(
+        _pskip_fixture_gap[int(_pskip_fixture_geom.anode_face_indices[0])]
+    ) == 0.0
+    # And the production machine trips them, which is the finding above stated
+    # as an assertion rather than a comment, so it cannot rot silently.
+    assert not _gap_clip_is_face_aligned(_pskip_gap, _pskip_geom.length_cm)
     for _pskip_scale, _pskip_ray_expect in ((1.0, 1.0), (1.0e3, 0.0)):
         _pskip_nn = np.asarray(csda_state.nn, dtype=float) * _pskip_scale
         _pskip_beam, _pskip_ledger = _pskip_adapter(_pskip_nn)
@@ -4629,19 +4667,30 @@ def _case_beam_probe_skip(
     assert _pskip_probe(np.asarray(csda_state.nn, dtype=float) * 1.0e3) == 0.0
     # Guard: a clip that ends mid-cell truncates the stop cell, so the probe
     # could run out of path where the deposition ray still had some. The skip
-    # must see that and stand down.
+    # must see that and stand down. Run on the PINNED fixture: these three
+    # clip lengths are chosen against a 10 cm gap cell (45 lands mid-cell, 40
+    # lands on a face), so they only mean what they say on that mesh.
     assert not _gap_clip_is_face_aligned(
-        _clip_ray_length(_pskip_geom.length_cm, csda_launch, csda_dir, 45.0),
-        _pskip_geom.length_cm,
+        _clip_ray_length(
+            _pskip_fixture_geom.length_cm,
+            _pskip_fixture_launch, _pskip_fixture_dir, 45.0,
+        ),
+        _pskip_fixture_geom.length_cm,
     )
     assert _gap_clip_is_face_aligned(
-        _clip_ray_length(_pskip_geom.length_cm, csda_launch, csda_dir, 40.0),
-        _pskip_geom.length_cm,
+        _clip_ray_length(
+            _pskip_fixture_geom.length_cm,
+            _pskip_fixture_launch, _pskip_fixture_dir, 40.0,
+        ),
+        _pskip_fixture_geom.length_cm,
     )
     # A clip longer than the whole path leaves every cell at its full length.
     assert _gap_clip_is_face_aligned(
-        _clip_ray_length(_pskip_geom.length_cm, csda_launch, csda_dir, 1.0e6),
-        _pskip_geom.length_cm,
+        _clip_ray_length(
+            _pskip_fixture_geom.length_cm,
+            _pskip_fixture_launch, _pskip_fixture_dir, 1.0e6,
+        ),
+        _pskip_fixture_geom.length_cm,
     )
     return locals()
 

@@ -2265,7 +2265,7 @@ def cathode_defaults():
         "circuit_picard_max_iter": 3,
         "eta": 0.358,
         "anode_radius_cm": None,
-        "L_cath": 50.0,
+        "L_cath": 53.25,
         "R_cath": 18.415,
         # --- ACTIVE: beam deposition (CSDA production stack; b_beam_excitation
         # + beam_excitation_model are INERT under csda -- the module uses the
