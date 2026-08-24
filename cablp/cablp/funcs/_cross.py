@@ -361,13 +361,6 @@ def int_factor(I):
     )
 
 
-def rate_kern(cross_sec_func, eps, a, T, I):
-    # I is the minimum reaction energy threshold
-    x = mp.fmul(eps, mp.fdiv(I, T))
-    int_kern = mp.fprod([cross_sec_func(eps, a), eps, mp.exp(-x)])
-    return int_kern
-
-
 def alpha_r(T, I=None):
     """
     Radiative recombination rate coefficient [cm³/s].

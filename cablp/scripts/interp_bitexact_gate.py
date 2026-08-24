@@ -1,9 +1,14 @@
 """Certify pure == compiled on a configuration that actually INTERPOLATES.
 
 The production golden returns ``exact=True`` on both the pure and the compiled
-path while saying nothing whatever about ``_interp_scalar``: its configuration
-never reaches a table lookup. A bit-exactness gate only certifies the code it
-exercises, so a second gate is needed for the code the golden does not run.
+path while saying nothing whatever about ``_interp_scalar``. The reason is NOT
+that its configuration never reaches a table lookup -- it reaches millions of
+them, and the interpolation-fusion work of 2026-08-17 measured lerp results
+changing bitwise underneath a trajectory that stayed bit-identical. The reason
+is that those differences never propagate into the state the fixture compares:
+**a bit-exactness gate certifies only what reaches its SAVED state**, not
+every line it executes. A second gate is therefore needed for interpolation
+behaviour the golden runs but cannot witness.
 
 This is that gate. It reuses the frozen K7c arms
 (``k7cbuild_frozen_bitexact.py``), which carry ``beam_deposition_model =

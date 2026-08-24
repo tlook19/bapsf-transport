@@ -10,12 +10,12 @@ aHI = [0.1247e3, 0.2111, 0.5982, 0.4063, 0.9640e-3, 1.4523]
 # IAEA EXPRESSION 6, H II Electron Cooling Rate Coefficients
 aHII = [0.3180e-3, 0.2332, -0.9388e-2, 0.8617, 0.9663e-02, 0.8537]
 
-# fitting parameters for rate_coff function
-ion_param = [1.222369776048432e-05, 11.627688363230336]
-exc_param = [2.149908208637696e-06, 9.206582620821141]
-
 # fitting parameters for ionization cross sections a_i
 a_11s = [5.857e-1, -4.457e-1, 7.680e-1, -2.521e0, 3.317e0, 0.000e0]
+# DEAD IN THE TRACKED TREE: the double-ionization row has no importer in this
+# repository. It is RETAINED rather than deleted because the gitignored
+# exploratory notebook `scripts/cross_sections.ipynb` imports and uses it on
+# the working machine. Delete it with that notebook's disposition, not before.
 a_11s_double = [1.323e-6, 8.208e-3, -6.676e-2, 2.978e-1, -1.925e-1, 0.000e0]
 
 # fitting parameters for dipole-allowed excitation cross sections b_i_f
@@ -97,10 +97,14 @@ He_singlet_manifold = {
 # He I ionization limit [eV] and the per-series quantum defects implied by the
 # NIST n = 4 singlet levels above (E_n = E_lim - Ry/(n - delta)^2); used by the
 # Eq. (5) Rydberg-tail scaling. The P defect is negative (singlet nP sits
-# slightly above hydrogenic), consistent across n = 2/3/4 to < 0.002.
+# slightly above hydrogenic), consistent across n = 2/3/4 to < 0.0022. The
+# shipped values reproduce the NIST-ASD-derived n = 4 defects (S 0.1417,
+# P -0.0116, D 0.0019, F 0.0003) to three decimals, on the reduced-mass R_He;
+# the n = 4 boxing is preferred over the asymptotic delta_0 because the n^-3
+# Rydberg tail is dominated by the lowest n it scales from.
+# UNCHECKED, flagged rather than corrected: the 41D and 41F thresholds in the
+# manifold above sit 1.9 and 6.6 cm^-1 off their NIST ASD levels. Neither has
+# been digit-proofed against the source, and no coefficient here is changed on
+# the strength of that gap.
 He_ionization_limit_eV = 24.5874
 He_singlet_quantum_defect = {"S": 0.142, "P": -0.012, "D": 0.002, "F": 0.000}
-
-# Helium ionization rate fit coefficients (used by LAPDSim)
-He_ion_coeff = [1.3950030050791237e-05, 13.62996440158007]
-fit_coeff = He_ion_coeff  # legacy alias

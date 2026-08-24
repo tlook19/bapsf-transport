@@ -60,7 +60,7 @@ Usage:
 
     python scripts/preflight_diffcfg.py --reference REF.h5 \\
         --expect 'flags:neutral_momentum=true' \\
-        m6 -- --es 2 --sgp 3000 --nx 240 --save-h5 /dev/null
+        m6 -- --es 2 --sgp 9010 --nx 240 --save-h5 /dev/null
 
     python scripts/preflight_diffcfg.py --stance g1atrim \\
         m6 -- --es 1 --stance g1atrim --sgp 9010 --save-h5 /dev/null

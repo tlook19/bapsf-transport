@@ -49,7 +49,13 @@ def v_thm_e(T):
     """
     Electron thermal velocity [cm/s].
 
-    v_th = sqrt(2 * T / m_e) in CGS, evaluated as 4.19e7 * sqrt(T[eV]).
+    v_th = sqrt(T / m_e) in CGS, evaluated as 4.19e7 * sqrt(T[eV]).
+
+    This is the NRL Formulary convention, with NO factor of 2 under the root;
+    the sqrt(2 T / m_e) spelling would run 5.93e7. The distinction is
+    load-bearing rather than cosmetic: the 4.19e7 constant is what makes the
+    parallel conductivity built on this speed reproduce Braginskii's 3.16
+    coefficient exactly.
 
     Parameters
     ----------
@@ -150,9 +156,26 @@ def c_log(Te, n, kind="ee"):
         Electron density [cm⁻³].
     kind : str
         Collision type:
-        - ``"ee"`` : electron-electron (NRL 2019, eq. 2-5); valid for T > 0.1 eV.
-        - ``"ei"`` : electron-ion (NRL 2019, eq. 2-3/2-4); switches formula at Te = 10 eV.
-        - anything else : simplified formula 23.4 - 1.15*log10(n) + 3.45*log10(Te).
+        - ``"ee"`` : electron-electron (NRL 2019, p. 34, case (a)); valid for
+          T > 0.1 eV.
+        - ``"ei"`` : electron-ion (NRL 2019, p. 34, case (b)); switches formula
+          at Te = 10 eV.
+        - anything else : the fallback 23.4 - 1.15*log10(n) + 3.45*log10(Te).
+
+        The NRL Formulary prints its Coulomb-logarithm cases as a LETTERED
+        list, not as numbered equations, so they are cited here by page and
+        case rather than by an equation number.
+
+        **The fallback branch is UNSOURCED and, as of the 2026-08-24 census,
+        UNREACHED.** Its expression appears nowhere among the NRL 2019 cases
+        (it is an older Spitzer-era spelling of unrecorded origin). Every
+        ``c_log`` call site in this repository -- six in the solver
+        (``physics/cathode.py``, ``physics/conduction.py`` x3,
+        ``physics/energy.py``, ``physics/tracer.py``) and three in
+        ``scripts/`` -- passes ``kind="ei"`` as a literal, so neither this
+        branch nor ``"ee"`` is entered by any shipped path. Do not adopt the
+        fallback as a physics choice without sourcing it first; a caller that
+        wants a Coulomb log should name ``"ee"`` or ``"ei"``.
 
     Returns
     -------

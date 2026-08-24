@@ -14,7 +14,7 @@ has none with ``--no-stance``.
 Usage:
     python scripts/run_m6_point.py --es 1 --stance g1atrim --sgp 9010 \
         --save-h5 out.h5
-    python scripts/run_m6_point.py --es 1 --no-stance --sgp 3400 \
+    python scripts/run_m6_point.py --es 1 --no-stance --sgp 9010 \
         --close-lag 2e-3 --save-h5 out.h5 [--mn] [--L 8.1e-6] [--extra k=v ...]
 """
 

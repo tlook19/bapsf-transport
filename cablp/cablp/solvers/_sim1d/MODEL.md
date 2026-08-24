@@ -1471,8 +1471,9 @@ volume-integrated rebirth rate $\sum_i (\dot n_{n,i} V_{\text{p},i} +
 throughput is conserved as before — nothing is created or destroyed, only
 placed.
 
-**What it refuses.** `neutral_two_zone`, since the destination row is that
-closure's; and any geometry whose routed collector cell has no annulus
+**What it refuses.** The *absence* of `neutral_two_zone` — the flag REQUIRES
+that closure, since the destination row $n_{n,a}$ is one only the two-zone
+state builds; and any geometry whose routed collector cell has no annulus
 ($V_\text{ann} = 0$), since the routing would then deposit into nothing. Both
 are construction-time errors rather than silent fallbacks — the alternative is
 a future end-region flare quietly destroying the stream at exactly the cells
