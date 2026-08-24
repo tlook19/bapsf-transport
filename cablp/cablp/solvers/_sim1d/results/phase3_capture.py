@@ -19,6 +19,13 @@ from pathlib import Path
 import h5py
 import numpy as np
 
+from ..core.state import (
+    NEUTRAL_ANNULUS_MOMENTUM_NAME,
+    NEUTRAL_ANNULUS_NAME,
+    NEUTRAL_ENERGY_NAME,
+    NEUTRAL_MOMENTUM_NAME,
+    STATE_NAMES_1D,
+)
 from .io import RESULT_VERSION, load_result_hdf5, save_result_hdf5
 
 
@@ -231,6 +238,7 @@ def write_qualified_capture(
     temp_provenance = temp_path.with_suffix(".provenance.tmp")
     try:
         save_result_hdf5(temp_path, result)
+        _validate_serialized_rhs_surface(temp_path, result, census)
         _qualify_hdf5(
             temp_path,
             result=result,
@@ -356,15 +364,30 @@ def blank_crosswalk_inventory(path):
     _validate_qualified_hdf5(path)
     with h5py.File(path, "r") as h5:
         run_id = _text(h5.attrs["run_id"])
+        capture_revision = _text(h5.attrs["capture_revision"])
+        producer_path = _text(h5.attrs["producer_path"])
         term_names = _read_text_dataset(h5["qualification/term_names"])
         state_rows = _read_text_dataset(h5["qualification/state_rows"])
+        units = _read_text_dataset(h5["qualification/row_units"])
+        supports = _read_text_dataset(h5["qualification/row_support_paths"])
+        row_metadata = dict(zip(state_rows, zip(units, supports), strict=True))
         return [
             {
                 "run_id": run_id,
                 "capture_profile": PHASE3_CAPTURE_PROFILE,
+                "capture_revision": capture_revision,
+                "producer_path": producer_path,
+                "producer_anchor": (
+                    "LAPDSim1D._trajectory_result -> "
+                    f"result.rhs_terms[{term!r}][{row!r}]"
+                ),
                 "source_term": term,
                 "source_row": row,
                 "dataset_path": f"/rhs_terms/{term}/{row}",
+                "unit": row_metadata[row][0],
+                "support_path": row_metadata[row][1],
+                "dataset_shape": list(h5[f"rhs_terms/{term}/{row}"].shape),
+                "dataset_dtype": h5[f"rhs_terms/{term}/{row}"].dtype.str,
                 "proposed_equation_term": "",
                 "disposition": "",
                 "reviewer": "",
@@ -403,15 +426,7 @@ def _validate_result(result, *, run_id, configuration_identity_sha256):
     if not isinstance(rhs_terms, dict) or not rhs_terms:
         raise ValueError("qualification result has no rhs_terms surface")
     term_names = tuple(rhs_terms)
-    first = rhs_terms[term_names[0]]
-    if not isinstance(first, dict) or not first:
-        raise ValueError("qualification RHS term has no state rows")
-    state_rows = tuple(first)
-    unknown_rows = set(state_rows) - set(_ROW_UNITS)
-    if unknown_rows:
-        raise ValueError(
-            f"no unit/support contract for state rows {sorted(unknown_rows)}"
-        )
+    state_rows = _source_state_rows(result)
     cells = len(np.asarray(result.z_cm))
     expected_shape = (time.size, cells)
     for term_name, fields in rhs_terms.items():
@@ -438,6 +453,57 @@ def _validate_result(result, *, run_id, configuration_identity_sha256):
     return {"term_names": term_names, "state_rows": state_rows}
 
 
+def _source_state_rows(result):
+    """Derive exact packed row order from ``core.state`` and live config.
+
+    The RHS mappings are checked against this order; they are never allowed to
+    establish their own schema merely by agreeing with each other.
+    """
+    params = dict(result.params)
+    flags = dict(result.flags)
+    present = {
+        name for name in _optional_state_names() if hasattr(result, name)
+    }
+    return _canonical_state_rows(params, flags, present)
+
+
+def _canonical_state_rows(params, flags, present_optional):
+    expectations = (
+        (NEUTRAL_MOMENTUM_NAME, bool(flags.get("neutral_momentum", False))),
+        (NEUTRAL_ANNULUS_NAME, bool(flags.get("neutral_two_zone", False))),
+        (
+            NEUTRAL_ANNULUS_MOMENTUM_NAME,
+            params.get("neutral_momentum_radial", "uniform")
+            == "kinetic_two_moment",
+        ),
+        (NEUTRAL_ENERGY_NAME, bool(flags.get("neutral_energy", False))),
+    )
+    present_optional = set(present_optional)
+    rows = list(STATE_NAMES_1D)
+    for name, configured in expectations:
+        present = name in present_optional
+        if present != configured:
+            raise ValueError(
+                f"source state row {name!r} presence {present} disagrees "
+                f"with resolved configuration expectation {configured}"
+            )
+        if configured:
+            rows.append(name)
+    unknown = present_optional - set(_optional_state_names())
+    if unknown:
+        raise ValueError(f"unknown optional source state rows: {sorted(unknown)}")
+    return tuple(rows)
+
+
+def _optional_state_names():
+    return (
+        NEUTRAL_MOMENTUM_NAME,
+        NEUTRAL_ANNULUS_NAME,
+        NEUTRAL_ANNULUS_MOMENTUM_NAME,
+        NEUTRAL_ENERGY_NAME,
+    )
+
+
 def _validate_geometry(result, state_rows, cells):
     for name in (
         "z_cm",
@@ -461,6 +527,33 @@ def _validate_geometry(result, state_rows, cells):
         )
         if np.any(annulus < 0.0):
             raise ValueError("annulus control volume is negative")
+
+
+def _validate_serialized_rhs_surface(path, result, census):
+    """Compare the source result census and arrays to the just-written HDF5."""
+    with h5py.File(path, "r") as h5:
+        term_names = census["term_names"]
+        state_rows = census["state_rows"]
+        actual_terms = set(h5["rhs_terms"].keys())
+        if actual_terms != set(term_names) or len(actual_terms) != len(term_names):
+            raise ValueError("written HDF5 term surface differs from source result")
+        for term in term_names:
+            actual_rows = set(h5[f"rhs_terms/{term}"].keys())
+            if actual_rows != set(state_rows) or len(actual_rows) != len(state_rows):
+                raise ValueError(
+                    f"written HDF5 row surface differs for source term {term!r}"
+                )
+            for row in state_rows:
+                source = np.asarray(result.rhs_terms[term][row])
+                written = np.asarray(h5[f"rhs_terms/{term}/{row}"][()])
+                if source.dtype != written.dtype or source.shape != written.shape:
+                    raise ValueError(
+                        f"written HDF5 dtype/shape differs for {term}/{row}"
+                    )
+                if not np.array_equal(source, written, equal_nan=True):
+                    raise ValueError(
+                        f"written HDF5 values differ for {term}/{row}"
+                    )
 
 
 def _qualify_hdf5(path, **metadata):
@@ -544,6 +637,12 @@ def _validate_qualified_hdf5(path):
         supports = _read_text_dataset(h5["qualification/row_support_paths"])
         if len(units) != len(state_rows) or len(supports) != len(state_rows):
             raise ValueError("row census/unit/support lengths differ")
+        if state_rows != _serialized_state_rows(h5):
+            raise ValueError(
+                "qualified row census differs from source-owned conservative order"
+            )
+        if len(term_names) != len(set(term_names)):
+            raise ValueError("qualified term census contains duplicates")
         actual_terms = set(h5["rhs_terms"].keys())
         if actual_terms != set(term_names) or len(actual_terms) != len(term_names):
             raise ValueError("RHS term census differs from captured surface")
@@ -565,6 +664,13 @@ def _validate_qualified_hdf5(path):
         embedded = _text(h5.attrs["scientific_payload_sha256"])
     if embedded != scientific_payload_digest(path):
         raise ValueError("embedded scientific-payload SHA-256 mismatch")
+
+
+def _serialized_state_rows(h5):
+    params = json.loads(_text(h5.attrs["params_json"]))
+    flags = json.loads(_text(h5.attrs["flags_json"]))
+    present = {name for name in _optional_state_names() if name in h5}
+    return _canonical_state_rows(params, flags, present)
 
 
 def _support_path(row, state_rows):

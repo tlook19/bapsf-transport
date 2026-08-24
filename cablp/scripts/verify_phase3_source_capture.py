@@ -49,8 +49,16 @@ def _fake_result(run_id=RUN_A):
     zero = np.zeros((frames, cells), dtype=float)
     result = SimpleNamespace(
         run_id=run_id,
-        params={"synthetic": 1, "max_steps_action": "stop"},
-        flags={"neutral_two_zone": True, "neutral_energy": True},
+        params={
+            "synthetic": 1,
+            "max_steps_action": "stop",
+            "neutral_momentum_radial": "kinetic_two_moment",
+        },
+        flags={
+            "neutral_momentum": True,
+            "neutral_two_zone": True,
+            "neutral_energy": True,
+        },
         compiled_kernels="pure",
         steps=4000,
         final_time=1.0e-5,
@@ -94,6 +102,26 @@ def _fake_result(run_id=RUN_A):
     return result
 
 
+def _base_only_result(run_id=RUN_C):
+    result = _fake_result(run_id)
+    result.params["neutral_momentum_radial"] = "uniform"
+    result.flags.update(
+        neutral_momentum=False,
+        neutral_two_zone=False,
+        neutral_energy=False,
+    )
+    for name in ("M_n", "u_n", "nn_a", "M_n_a", "u_n_a", "En", "Tn"):
+        delattr(result, name)
+    base_rows = ROWS[:5]
+    result.rhs_terms = {
+        term: {row: fields[row] for row in base_rows}
+        for term, fields in result.rhs_terms.items()
+    }
+    result.total_rhs = {row: result.total_rhs[row] for row in base_rows}
+    result.y = result.y[:, : 5 * len(result.z_cm)]
+    return result
+
+
 def _write(root, result, *, maximum_bytes=MAX_ARTIFACT_BYTES, invocation=None):
     output = root / "cablp/scripts/baselines/phase3_rhs"
     reserve_run_id(
@@ -106,7 +134,7 @@ def _write(root, result, *, maximum_bytes=MAX_ARTIFACT_BYTES, invocation=None):
         result,
         run_id=result.run_id,
         capture_revision="a" * 40,
-        producer_path="cablp/scripts/capture_phase3_rhs.py",
+        producer_path="cablp/cablp/solvers/_sim1d/solver.py",
         started_at="2026-08-24T12:00:00Z",
         completed_at="2026-08-24T12:00:01Z",
         configuration_identity_sha256=configuration_identity(
@@ -192,6 +220,32 @@ def check_schema_round_trip_and_digests(root):
         f"/rhs_terms/{term}/{field}" for term in TERMS for field in ROWS
     }
     assert all(row["disposition"] == row["reviewer"] == "" for row in inventory)
+    first_inventory = inventory[0]
+    assert first_inventory["capture_revision"] == "a" * 40
+    assert first_inventory["producer_path"] == (
+        "cablp/cablp/solvers/_sim1d/solver.py"
+    )
+    assert first_inventory["producer_anchor"] == (
+        "LAPDSim1D._trajectory_result -> "
+        "result.rhs_terms['synthetic_flux']['n']"
+    )
+    assert first_inventory["unit"] == "cm^-3 s^-1"
+    assert first_inventory["support_path"] == "/geometry/plasma_volume_cm3"
+    assert first_inventory["dataset_shape"] == [2, 3]
+    assert first_inventory["dataset_dtype"] == "<f8"
+    for blank_field in (
+        "proposed_equation_term",
+        "disposition",
+        "rationale",
+        "reviewer",
+        "review_time",
+        "finding",
+    ):
+        assert all(row[blank_field] == "" for row in inventory)
+
+    # The selected route admits one canonical serialization per run ID/path.
+    # Re-reservation, and therefore a repeated write, is refused.
+    _raises(FileExistsError, _write, root / "roundtrip", result)
 
     # Identity changes representation, but not the canonical scientific payload.
     second = _fake_result(RUN_B)
@@ -199,6 +253,14 @@ def check_schema_round_trip_and_digests(root):
     assert scientific_payload_digest(h5_b) == scientific_payload_digest(h5_path)
     assert whole_file_sha256(h5_b) != whole_file_sha256(h5_path)
     assert provenance_b != provenance_path
+
+    # Optional rows are derived from resolved configuration and presence; the
+    # profile is not fixed to the all-option synthetic surface above.
+    base_h5, base_provenance = _write(
+        root / "base-only", _base_only_result()
+    )
+    _base_loaded, base_record = load_qualified_capture(base_h5, base_provenance)
+    assert base_record["state_rows"] == list(ROWS[:5])
 
 
 def check_refusals_and_atomicity(root):
@@ -214,7 +276,7 @@ def check_refusals_and_atomicity(root):
         wrong_id,
         run_id=RUN_A,
         capture_revision="a" * 40,
-        producer_path="cablp/scripts/capture_phase3_rhs.py",
+        producer_path="cablp/cablp/solvers/_sim1d/solver.py",
         started_at="start",
         completed_at="complete",
         configuration_identity_sha256=configuration_identity(
@@ -237,6 +299,13 @@ def check_refusals_and_atomicity(root):
         lambda r: r.rhs_terms[TERMS[1]].__setitem__(
             "extra", np.zeros((2, 3), dtype=float)
         ),
+        lambda r: delattr(r, "M_n"),
+        lambda r: r.flags.__setitem__("neutral_momentum", False),
+        lambda r: r.params.__setitem__("neutral_momentum_radial", "uniform"),
+        _uniformly_reverse_rows,
+        _uniformly_remove_row,
+        _uniformly_add_row,
+        _uniformly_rename_row,
         lambda r: setattr(r, "y", np.zeros((2, 2))),
     ):
         candidate = copy.deepcopy(base)
@@ -287,7 +356,7 @@ def _write_reserved(case_root, output, result):
         result,
         run_id=result.run_id,
         capture_revision="a" * 40,
-        producer_path="cablp/scripts/capture_phase3_rhs.py",
+        producer_path="cablp/cablp/solvers/_sim1d/solver.py",
         started_at="start",
         completed_at="complete",
         configuration_identity_sha256=configuration_identity(
@@ -302,6 +371,29 @@ def _write_reserved(case_root, output, result):
     )
 
 
+def _uniformly_reverse_rows(result):
+    for term, fields in tuple(result.rhs_terms.items()):
+        result.rhs_terms[term] = dict(reversed(tuple(fields.items())))
+
+
+def _uniformly_remove_row(result):
+    for fields in result.rhs_terms.values():
+        fields.pop("Ei")
+
+
+def _uniformly_add_row(result):
+    for fields in result.rhs_terms.values():
+        fields["extra"] = np.zeros((2, 3), dtype=float)
+
+
+def _uniformly_rename_row(result):
+    for term, fields in tuple(result.rhs_terms.items()):
+        result.rhs_terms[term] = {
+            ("Ei_renamed" if row == "Ei" else row): values
+            for row, values in fields.items()
+        }
+
+
 def check_mutation_and_unqualified_refusal(root):
     qualified_root = root / "mutation"
     h5_path, provenance_path = _write(qualified_root, _fake_result())
@@ -309,19 +401,17 @@ def check_mutation_and_unqualified_refusal(root):
         h5["rhs_terms/synthetic_flux/n"][0, 0] += 1.0
     _raises(ValueError, load_qualified_capture, h5_path, provenance_path)
 
-    reordered_root = root / "reordered-census"
-    reordered_h5, reordered_provenance = _write(
-        reordered_root, _fake_result(RUN_B)
-    )
-    with h5py.File(reordered_h5, "r+") as h5:
-        census = h5["qualification/term_names"][()]
-        h5["qualification/term_names"][...] = census[::-1]
-    _raises(
-        ValueError,
-        load_qualified_capture,
-        reordered_h5,
-        reordered_provenance,
-    )
+    for label, mutator in (
+        ("missing-row", _h5_missing_row),
+        ("extra-row", _h5_extra_row),
+        ("renamed-row", _h5_renamed_row),
+        ("missing-term", _h5_missing_term),
+        ("extra-term", _h5_extra_term),
+        ("renamed-term", _h5_renamed_term),
+        ("reordered-row-census", _h5_reordered_row_census),
+        ("reordered-term-census", _h5_reordered_term_census),
+    ):
+        _assert_hdf5_mutation_rejected(root, label, mutator)
 
     ordinary_path = root / "ordinary.h5"
     ordinary = _fake_result()
@@ -331,6 +421,54 @@ def check_mutation_and_unqualified_refusal(root):
         assert "capture_profile" not in h5.attrs
         assert "run_id" not in h5.attrs
     _raises(ValueError, load_qualified_capture, ordinary_path)
+
+
+def _assert_hdf5_mutation_rejected(root, label, mutator):
+    h5_path, provenance_path = _write(root / label, _fake_result(RUN_B))
+    with h5py.File(h5_path, "r+") as h5:
+        mutator(h5)
+    _raises(ValueError, load_qualified_capture, h5_path, provenance_path)
+
+
+def _h5_missing_row(h5):
+    del h5["rhs_terms/synthetic_flux/n"]
+
+
+def _h5_extra_row(h5):
+    h5["rhs_terms/synthetic_flux"].create_dataset(
+        "extra", data=np.zeros((2, 3), dtype=float)
+    )
+
+
+def _h5_renamed_row(h5):
+    h5.move(
+        "rhs_terms/synthetic_flux/n",
+        "rhs_terms/synthetic_flux/n_renamed",
+    )
+
+
+def _h5_missing_term(h5):
+    del h5["rhs_terms/synthetic_flux"]
+
+
+def _h5_extra_term(h5):
+    group = h5["rhs_terms"].create_group("synthetic_extra")
+    for row in ROWS:
+        group.create_dataset(row, data=np.zeros((2, 3), dtype=float))
+
+
+def _h5_renamed_term(h5):
+    h5.move("rhs_terms/synthetic_flux", "rhs_terms/synthetic_flux_renamed")
+
+
+def _h5_reordered_row_census(h5):
+    census = h5["qualification/state_rows"][()]
+    h5["qualification/state_rows"][...] = census[::-1]
+
+
+def _h5_reordered_term_census(h5):
+    census = h5["qualification/term_names"][()]
+    h5["qualification/term_names"][...] = census[::-1]
 
 
 def check_constructor_order_and_cli_import(repo_root):

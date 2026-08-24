@@ -26,7 +26,7 @@ from cablp.solvers._sim1d.results.phase3_capture import (
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPOSITORY_ROOT = SCRIPT_DIR.parents[1]
 OUTPUT_DIRECTORY = SCRIPT_DIR / "baselines" / "phase3_rhs"
-PRODUCER_PATH = "cablp/scripts/capture_phase3_rhs.py"
+PRODUCER_PATH = "cablp/cablp/solvers/_sim1d/solver.py"
 MINIMUM_CAPTURE_ANCESTOR = "5911bc18a3b1f065dfff351d00190aba0e2f4e26"
 EXPECTED_CONFIGURATION_IDENTITY = (
     "91e19ac5a7eb11c21ce0c38ab36cb60f948c420edc8ae0a1642e80095cb0eec6"
@@ -43,7 +43,7 @@ PRODUCER_INPUT_PATHS = (
     "cablp/scripts/stances/g1atrim.toml",
     "cablp/scripts/baselines/golden_digest_4k.json",
     "cablp/scripts/baselines/production_discharge.json",
-    PRODUCER_PATH,
+    "cablp/scripts/capture_phase3_rhs.py",
 )
 
 
