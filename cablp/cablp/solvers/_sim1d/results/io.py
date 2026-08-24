@@ -153,6 +153,14 @@ def save_result_hdf5(path, result, params=None, flags=None):
         compiled_kernels = getattr(result, "compiled_kernels", None)
         if compiled_kernels is not None:
             h5.attrs["compiled_kernels"] = str(compiled_kernels)
+        # Presence-gated execution identity. Ordinary runs and their files do
+        # not acquire an identity implicitly; qualified Phase 3 runs supply it
+        # before solver construction and preserve it here.
+        run_id = getattr(result, "run_id", None)
+        if run_id is not None:
+            from .phase3_capture import validate_run_id
+
+            h5.attrs["run_id"] = validate_run_id(run_id)
         if params is not None:
             h5.attrs["params_json"] = _json_dumps(params)
         if flags is not None:
@@ -342,6 +350,10 @@ def load_result_hdf5(path):
             if "compiled_kernels" in h5.attrs
             else PURE_KERNEL_PROVENANCE
         )
+        if "run_id" in h5.attrs:
+            from .phase3_capture import validate_run_id
+
+            result.run_id = validate_run_id(_decode_string(h5.attrs["run_id"]))
         # Set only when the file carries it: a reader must be able to tell a
         # run whose census was never persisted from one whose census is zero.
         if "dvm_transfer_ledger" in h5:
