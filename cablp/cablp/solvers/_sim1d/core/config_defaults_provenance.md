@@ -389,10 +389,11 @@ speed is `2 * S_eff`, rounded to 3000 L/s.
 **Booking these at the END CELLS is MACHINE-FAITHFUL, not a lumping:** all
 four main turbos attach at the two end chambers and the mid-machine 45°
 pumping stub is unused (machine record, Tom-confirmed), so no interior pump
-is being carried at a boundary cell — with the one rider that the far end's
-PAIR sits beyond the machine gate valve, so counting it in that end's `2 *
-S_eff` is conditional on a gate-valve-OPEN ruling the record does not yet
-carry (Tom's read is likely CLOSED, unconfirmed for the run days).
+is being carried at a boundary cell — and the far end's PAIR, which sits
+beyond the machine gate valve, is counted in that end's `2 * S_eff` because
+the valve is RULED OPEN (Tom, 2026-08-18: "no major obstructions between the
+plasma and end chamber"), a ruling that retired the earlier likely-closed
+reading.
 
 The pump — not the line — owns about 72 % of the total series resistance, which
 is why pinning the elbow moves the central value only +2.7 % (per-pump 1470 →
