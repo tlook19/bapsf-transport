@@ -300,7 +300,9 @@ def beam_product_transport_note(params):
 # case below exists to remove.
 WPE_TRANSPORT_KEY = "heating_anomalous_transport"
 WPE_TAIL_ENERGY_KEY = "heating_anomalous_tail_energy_eV"
+WPE_TAIL_KEYING_KEY = "heating_anomalous_tail_energy_keying"
 WPE_TRANSPORT_DEFAULT = "local"
+WPE_TAIL_KEYING_FIXED = "fixed"
 
 
 def wpe_arm_line(params):
@@ -310,8 +312,16 @@ def wpe_arm_line(params):
     saves them fully resolved), so this reports what the run ACTUALLY carried
     rather than what the current stance would have given it.
 
-    ``heating_anomalous_tail_energy_eV`` is read only under ``"tail_walk"``
-    and is labelled inert otherwise, matching its config docstring. An
+    ``heating_anomalous_tail_energy_eV`` is read only when the tail is WALKED
+    *and* ``heating_anomalous_tail_energy_keying="fixed"``; it is labelled
+    inert in both of the other cases, matching its config docstring. The
+    keying leg matters because the walked arm still prints a plausible-looking
+    energy under ``"phi_c"`` keying, where the live birth energy is instead
+    ``f*e*phi_c(t)`` -- a reader who took the printed number for the energy the
+    run used would be reading a number the run never touched. The label is
+    driven by the artifact's own saved keying value and is omitted when that
+    key is absent, so an artifact predating the keying closure (whose walked
+    behaviour WAS the fixed energy) is not retroactively mislabelled. An
     artifact written before WP-E existed carries neither key and is labelled
     "pre-WP-E" -- not silently reported as the default arm, and not a crash.
 
@@ -330,8 +340,13 @@ def wpe_arm_line(params):
     transport = str(params[WPE_TRANSPORT_KEY])
     tail = params.get(WPE_TAIL_ENERGY_KEY)
     tail_text = "<absent>" if tail is None else f"{float(tail):g} eV"
+    keying = params.get(WPE_TAIL_KEYING_KEY)
     if transport == WPE_TRANSPORT_DEFAULT:
         tail_text += " (inert under 'local')"
+    elif keying is not None and str(keying) != WPE_TAIL_KEYING_FIXED:
+        tail_text += (
+            f" [INERT under {keying} keying; live E_tail = f*e*phi_c(t)]"
+        )
     return (
         f"WP-E arm: {WPE_TRANSPORT_KEY}={transport} | "
         f"{WPE_TAIL_ENERGY_KEY}={tail_text}"
