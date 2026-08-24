@@ -247,7 +247,25 @@ RAMP_BAND_I_FRAC = 0.002          # I_ovs and I_dip, +-0.2 %
 # taken from the PRE-BATCH PARTNER OF THE SAME RUNG, with both members of a
 # pair using the same reference -- an unpaired reference lets an amplitude
 # move masquerade as a timing move.
-RAMP_CROSSING_FRACTIONS = (0.50, 0.60, 0.90)
+#
+# THE FAMILY STOPS AT 0.60, and that bound is the whole point of the tuple:
+# every member here is meant to be a FAST-PHASE observable, read on the same
+# steep leg row (ii) measures. 0.90 of the plateau reference is not on that
+# leg -- the current reaches it only after the fast phase is over, on the
+# slow crawl toward the plateau, where the local slope is hundreds of times
+# shallower than S_ramp. A crossing time read there is milliseconds after
+# t_trig, carries a band tens of microseconds wide, and moves by hundreds of
+# microseconds between arms that the fast-phase members separate by ones --
+# a plateau-approach reading wearing a fast-phase name, and the largest
+# number in the block for a reader who scans it. The rung was removed rather
+# than left self-labelled ``[coarse]``.
+#
+# Nothing else was removed with it: the coarse branch in ``_ramp_crossings``
+# is generic (any fraction on any rung can cross below
+# CROSSING_SLOPE_FRACTION*S_ramp and must be band-widened and labelled when
+# it does), so it stays and is still exercised by the remaining fractions on
+# an arm whose ramp is shallow.
+RAMP_CROSSING_FRACTIONS = (0.50, 0.60)
 RAMP_CROSSING_SLOPE_FRACTION = 0.3   # classification: fast-crossing vs coarse
 RAMP_CROSSING_BAND_S = 1.0e-6
 
@@ -275,9 +293,20 @@ def _parabola_vertex(x, y):
     never has to assume the samples are evenly spaced. Returns ``(None, None)``
     on degenerate curvature -- three collinear points have no vertex, and
     inventing one would report a grid coordinate as a measurement.
+
+    ``(None, None)`` is returned for a repeated abscissa too. The divided
+    differences below are Python-float divisions, so two samples sharing a
+    time would raise ZeroDivisionError out of a helper whose callers are all
+    written around the (None, None) contract -- and row (ii) must never be
+    able to raise. Monotonic save times are an HDF5-format invariant and the
+    fixed-cadence precondition covers the t_dImax call, but the overshoot and
+    ringback calls reach samples outside that cadence-checked window, so the
+    guard is here rather than assumed at the call sites.
     """
     x0, x1, x2 = (float(v) for v in x)
     y0, y1, y2 = (float(v) for v in y)
+    if x0 == x1 or x1 == x2 or x0 == x2:
+        return None, None
     d01 = (y1 - y0) / (x1 - x0)
     d12 = (y2 - y1) / (x2 - x1)
     curvature = (d12 - d01) / (x2 - x0)
@@ -1006,6 +1035,28 @@ def report(path, partner=None, reference_cache=None):
                   f"(cell {int(cell)} of {Te_bd.shape[1]})")
 
 
+def _pair_spec(spec):
+    """Return ``(run, partner)`` for one ``--pair`` argument, or REFUSE.
+
+    A misconfigured pairing must not be absorbed. ``--pair run.h5`` with no
+    ``=`` used to parse as run=``run.h5``, partner=``""`` -> ``None``, which
+    is indistinguishable at the output from "this rung has no partner": the
+    crossing family printed ``[absent]`` and the pair block never printed,
+    so a typo produced a shorter but entirely plausible report. Same for an
+    empty side of the ``=``. Both raise here instead, naming the argument.
+    """
+    run, sep, partner = spec.partition("=")
+    if not sep or not run or not partner:
+        raise SystemExit(
+            f"--pair {spec!r} is malformed: the argument must be "
+            f"RUN=PARTNER, both sides non-empty (RUN is one of the artifacts "
+            f"being reported, PARTNER is its pre-batch artifact of the same "
+            f"rung and stance). A partner-less run is the DEFAULT and is "
+            f"requested by omitting --pair, never by an empty half."
+        )
+    return run, partner
+
+
 def main(argv):
     # ``--pair RUN=PARTNER`` (repeatable) names the pre-batch artifact of the
     # same rung and stance for RUN. It is passed explicitly rather than
@@ -1016,18 +1067,35 @@ def main(argv):
     pending = False
     for arg in argv:
         if pending:
-            run, _, partner = arg.partition("=")
-            pairs[run] = partner or None
+            run, partner = _pair_spec(arg)
+            pairs[run] = partner
             pending = False
         elif arg == "--pair":
             pending = True
         elif arg.startswith("--pair="):
-            run, _, partner = arg[len("--pair="):].partition("=")
-            pairs[run] = partner or None
+            run, partner = _pair_spec(arg[len("--pair="):])
+            pairs[run] = partner
         else:
             paths.append(arg)
     if pending:
         raise SystemExit("--pair needs an argument of the form RUN=PARTNER")
+    # A --pair whose RUN is not among the reported artifacts is an INERT
+    # control: it is silently dropped by the ``pairs.get(path)`` lookup
+    # below, and the run it was meant for is then reported partner-free --
+    # again indistinguishable from a deliberate partner-less report. The
+    # commonest cause is a RUN spelt differently from the path argument
+    # (absolute vs relative, or a trailing-path typo), so both lists are
+    # printed rather than just the unmatched key.
+    unmatched = [run for run in pairs if run not in paths]
+    if unmatched:
+        raise SystemExit(
+            "--pair names RUN(s) that are not among the artifacts being "
+            "reported, so the pairing would do nothing: "
+            + ", ".join(repr(run) for run in unmatched)
+            + " | reported: "
+            + (", ".join(repr(path) for path in paths) if paths else "<none>")
+            + " -- RUN must match its path argument exactly."
+        )
     reference_cache = {}
     for path in paths:
         report(path, pairs.get(path), reference_cache)
