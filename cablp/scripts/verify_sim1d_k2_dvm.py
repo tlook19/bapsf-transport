@@ -397,6 +397,12 @@ R5_STANDIN_PARAMS = {
     "end_expansion_cells": 10,
     "end_expansion_machine_radius_cm": 100.0,
     "end_expansion_plasma_radius_cm": 15.0,
+    # Gap pinned with the region: the fixed source span runs from the anode
+    # face outward, so its far end rides the pinned gap or the span stops
+    # being a whole number of source_region_dz_cm cells. ``L_cath`` is the
+    # same physical distance and moves with it.
+    "cathode_anode_gap_cm": 50.0,
+    "L_cath": 50.0,
     "source_region_length_cm": 100.0,
     "source_region_dz_cm": 10.0,
 }
