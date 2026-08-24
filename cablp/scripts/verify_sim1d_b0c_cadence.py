@@ -20,14 +20,24 @@ STRUCTURE (registration item in brackets).
                     every registered band, tolerance and observable, WITHOUT
                     solving anything.                              [R1-R7]
   --arm NAME        run exactly ONE arm to its sample time and bank its
-                    per-arm npz, so a runner can serialize the ladder in a
-                    single lane. Evaluates and prints this arm's own
-                    per-arm items (R11, R12, R13, R14 inputs).  [R2-R6, R11-R14]
+                    per-arm npz -- including its observables at EVERY neutral
+                    tick -- so a runner can serialize the ladder in a single
+                    lane. Evaluates and prints this arm's own per-arm items
+                    (R11, R12, R13, R14 inputs).            [R2-R6, R11-R14]
   --table           assemble the committed markdown table and the verdicts
                     from the banked per-arm npz files, evaluating R8-R14 and
                     printing PASS / FAIL / UNDERDETERMINED per registered
                     item with the registered consequence text on any
                     failure.                                      [R8-R16]
+
+SAMPLING [R2, as amended]. The registered sampling is the COMMON ABSOLUTE
+t*: --table interpolates every arm's per-tick capture to the one absolute
+time ``t_engage + t*``. Reading each arm at its own N_k-th tick instead
+leaves a sample-time mismatch across the ladder, which contaminates the very
+pair errors R8's order fit is made from; that reading is SUPERSEDED and
+reachable only as ``--sampling tick-count``, so the pre-amendment numbers
+stay reproducible. Both readings come from the SAME banked arms -- the
+sampling is a table-time choice, never a re-run.
 
 NOTHING RUNS AT IMPORT. Every solve is reached only through ``main``.
 
@@ -113,6 +123,19 @@ MID_PORT_CELL_Z_CM = 1054.75
 T_STAR_MS_DEFAULT = 2.0
 T_STAR_MS_DOUBLED = 4.0
 T_STAR_MS_ALLOWED = (T_STAR_MS_DEFAULT, T_STAR_MS_DOUBLED)
+
+# [R2, AMENDED] Sampling. The REGISTERED sampling is the COMMON ABSOLUTE t*:
+# every arm captures its observables at EVERY tick and the table interpolates
+# them to the one absolute time t_engage + t*. Sampling each arm at its own
+# N_k-th tick instead leaves a sample-time mismatch across the ladder, and
+# that mismatch -- not discretization -- dominated the pair errors the order
+# fit is formed from. The tick-count reading is SUPERSEDED BY THE AMENDMENT
+# and survives only under an explicitly named --sampling, so the numbers on
+# the record stay reproducible.
+SAMPLING_REGISTERED = "common-t"
+SAMPLING_SUPERSEDED = "tick-count"
+SAMPLING_MODES = (SAMPLING_REGISTERED, SAMPLING_SUPERSEDED)
+AMENDMENT_LABEL = "per the 24bd amendment"
 
 # [R2] Per-arm step cap. Hitting it is a loud FAIL, not a truncated arm.
 MAX_STEPS_PER_ARM = 200_000
@@ -313,6 +336,28 @@ def rel_error(a, b, kind, weights=None):
     return float(np.linalg.norm(a - b)) / den
 
 
+def bracket_index(tick_time, t_target):
+    """Return ``(i, w)`` with ``t_target = (1-w)*t[i-1] + w*t[i]`` [R2].
+
+    ``i`` names the tick interval that brackets ``t_target``. It is clamped
+    to a real interval at both ends, so a target outside the banked tick
+    range is EXTRAPOLATED along the nearest interval rather than silently
+    clipped to an endpoint: ``0 <= w <= 1`` is the bracketing test, and the
+    table reports it per arm instead of assuming it.
+    """
+    t = np.asarray(tick_time, dtype=float)
+    if t.size < 2:
+        raise SystemExit(
+            "REFUSED: fewer than two neutral ticks banked, so no interval "
+            "exists to interpolate the common-t sample onto"
+        )
+    i = int(np.searchsorted(t, t_target))
+    i = min(max(i, 1), int(t.size) - 1)
+    t0 = float(t[i - 1])
+    t1 = float(t[i])
+    return i, (float(t_target) - t0) / (t1 - t0)
+
+
 def magnitude(u, kind):
     """Scale of an observable row, for the NV2 zero-at-roundoff test."""
     if kind == "scalar":
@@ -433,6 +478,8 @@ def run_arm(spec, n_updates, verbose=True):
     tick_e_dist = []
     tick_e_domain = []
 
+    tick_obs = []
+
     t_engage = None
     obs_now = None
     obs_prev = None
@@ -473,6 +520,7 @@ def run_arm(spec, n_updates, verbose=True):
                 tick_e_domain.append(abs(float(e_res["domain_rel"])))
                 obs_prev, t_prev = obs_now, t_now
                 obs_now, t_now = observables(sim), float(sim._time)
+                tick_obs.append(obs_now)
                 if verbose and (
                     sim._dvm.updates % max(1, n_updates // 10) == 0
                 ):
@@ -588,6 +636,13 @@ def run_arm(spec, n_updates, verbose=True):
     if obs_prev is not None:
         for key, value in obs_prev.items():
             arrays[f"obsprev_{key}"] = np.asarray(value, dtype=float)
+    # Per-tick observable capture: the whole series, so the table can sample
+    # every arm at ONE common absolute time instead of at its own N_k-th
+    # tick. ``tick_time`` above is the matching time axis.
+    for key in obs_now:
+        arrays[f"tickobs_{key}"] = np.asarray(
+            [o[key] for o in tick_obs], dtype=float
+        )
     return record, arrays
 
 
@@ -620,6 +675,13 @@ def plan_lines(t_star_ms):
     out.append("[R1] Fixture: verify_sim1d_k2_dvm.make_sim() exactly "
                f"(exchange={EXCHANGE_MODEL!r}, fixture cadence "
                f"{CADENCE_S:g} s, production geometry, no g1atrim overlay).")
+    out.append(f"[R2, AMENDED {AMENDMENT_LABEL}] sampling = "
+               f"{SAMPLING_REGISTERED!r}: every arm captures its observables "
+               "at EVERY neutral tick and --table interpolates them to the "
+               "one absolute time t_engage + t*, so no pair error carries a "
+               f"sample-time mismatch. {SAMPLING_SUPERSEDED!r} -- each arm "
+               "read at its own N_k-th tick -- is SUPERSEDED and reachable "
+               f"only as --sampling {SAMPLING_SUPERSEDED}.")
     out.append(f"[R2] t* = t_engage + {t_star_ms:g} ms; N_k = t*/cadence_k; "
                f"max_steps = {MAX_STEPS_PER_ARM} per arm (hit = loud FAIL); "
                "arms bit-identical until engagement (NV1 asserts equal "
@@ -756,9 +818,9 @@ def _dodt(arm, key, kind):
     """Relative rate of change of an observable on ``arm``, per second."""
     obs = arm["_obs"]
     prev = arm.get("_obsprev")
-    if prev is None or arm.get("t_prev_s") is None:
+    if prev is None or arm.get("_t_prev_sample") is None:
         return None
-    dt = float(arm["t_star_s"]) - float(arm["t_prev_s"])
+    dt = float(arm["_t_sample"]) - float(arm["_t_prev_sample"])
     if dt <= 0.0:
         return None
     weights = obs["nn"] if kind == "wl2" else None
@@ -775,8 +837,19 @@ def _activity(arms, key, kind):
     return fine > ROUNDOFF_REL * ref, fine, ref
 
 
-def evaluate(arm_records, out_path=None):
-    """Assemble the R16 table and evaluate R8-R14. Returns (lines, verdicts)."""
+def evaluate(arm_records, out_path=None, sampling=SAMPLING_REGISTERED):
+    """Assemble the R16 table and evaluate R8-R14. Returns (lines, verdicts).
+
+    ``sampling`` selects how each arm's observable rows are read: the
+    registered common absolute t* (per-tick capture interpolated to
+    ``t_engage + t*``) or the superseded per-arm N_k-th tick.
+    """
+    if sampling not in SAMPLING_MODES:
+        raise SystemExit(
+            f"REFUSED: unknown sampling {sampling!r}; the registered mode is "
+            f"{SAMPLING_REGISTERED!r} and {SAMPLING_SUPERSEDED!r} is the "
+            "superseded one"
+        )
     lines = []
     verdicts = []
 
@@ -800,12 +873,43 @@ def evaluate(arm_records, out_path=None):
             )
         if name in arms:
             raise SystemExit(f"REFUSED: arm {name} banked twice")
-        meta["_obs"] = {k: arrays[f"obs_{k}"] for k in
-                        list(GATED_KEYS) + ["Te"] if f"obs_{k}" in arrays}
-        if f"obsprev_{GATED_KEYS[0]}" in arrays:
-            meta["_obsprev"] = {k: arrays[f"obsprev_{k}"] for k in
-                                list(GATED_KEYS) + ["Te"]
-                                if f"obsprev_{k}" in arrays}
+        keys = [k for k in list(GATED_KEYS) + ["Te"]]
+        if sampling == SAMPLING_REGISTERED:
+            missing = [k for k in keys if f"tickobs_{k}" not in arrays]
+            if missing:
+                raise SystemExit(
+                    f"REFUSED: {meta['_path']} carries no per-tick capture "
+                    f"for {', '.join(missing)}, so it cannot be sampled at "
+                    "the common absolute t* the amendment registers. It was "
+                    "banked by a pre-amendment harness; re-run "
+                    f"--arm {name}. (--sampling {SAMPLING_SUPERSEDED} reads "
+                    "the superseded per-arm tick-count rows it does carry.)"
+                )
+            t_target = (float(meta["t_engage_s"])
+                        + float(meta["t_star_ms"]) * 1.0e-3)
+            index, weight = bracket_index(arrays["tick_time"], t_target)
+            meta["_t_sample"] = t_target
+            meta["_t_prev_sample"] = float(arrays["tick_time"][index - 1])
+            meta["_sample_weight"] = weight
+            meta["_obs"] = {
+                k: (1.0 - weight) * arrays[f"tickobs_{k}"][index - 1]
+                + weight * arrays[f"tickobs_{k}"][index]
+                for k in keys
+            }
+            meta["_obsprev"] = {k: arrays[f"tickobs_{k}"][index - 1]
+                                for k in keys}
+        else:
+            meta["_t_sample"] = float(meta["t_star_s"])
+            meta["_t_prev_sample"] = (
+                None if meta.get("t_prev_s") is None
+                else float(meta["t_prev_s"])
+            )
+            meta["_sample_weight"] = None
+            meta["_obs"] = {k: arrays[f"obs_{k}"] for k in keys
+                            if f"obs_{k}" in arrays}
+            if f"obsprev_{GATED_KEYS[0]}" in arrays:
+                meta["_obsprev"] = {k: arrays[f"obsprev_{k}"] for k in keys
+                                    if f"obsprev_{k}" in arrays}
         meta["_arrays"] = arrays
         arms[name] = meta
 
@@ -821,6 +925,7 @@ def evaluate(arm_records, out_path=None):
     t_star_ms = t_star_set.pop()
 
     # ---------------------------------------------------------- header [R16]
+    registered = sampling == SAMPLING_REGISTERED
     lines.append("# B0c convergence table -- DVM cadence + velocity grid")
     lines.append("")
     lines.append(
@@ -829,11 +934,30 @@ def evaluate(arm_records, out_path=None):
         "`scripts/verify_sim1d_b0c_cadence.py`."
     )
     lines.append("")
+    if registered:
+        lines.append(
+            f"**Sampled at the COMMON ABSOLUTE t*, {AMENDMENT_LABEL}.** Every "
+            "arm's observables are captured at every neutral tick and "
+            "interpolated to the one absolute time `t_engage + t*`, so no "
+            "pair error below carries a sample-time mismatch. R8 and R9 are "
+            "re-formed from these rows."
+        )
+    else:
+        lines.append(
+            f"**Sampled at each arm's own N_k-th tick. This reading is "
+            f"SUPERSEDED {AMENDMENT_LABEL}** -- it is reproduced here only "
+            "so the pre-amendment numbers stay on the record. The registered "
+            f"sampling is `--sampling {SAMPLING_REGISTERED}`."
+        )
+    lines.append("")
     lines.append("| header field | value |")
     lines.append("|---|---|")
     lines.append(f"| fixture [R1] | `verify_sim1d_k2_dvm.make_sim()` exactly; "
                  f"exchange = `{EXCHANGE_MODEL}`; no g1atrim overlay |")
     lines.append(f"| horizon [R2] | t* = t_engage + {t_star_ms:g} ms |")
+    lines.append(f"| sampling [R2, amended] | `{sampling}` -- "
+                 + ("REGISTERED " + AMENDMENT_LABEL if registered else
+                    "SUPERSEDED " + AMENDMENT_LABEL) + " |")
     lines.append(f"| mid-port cell [R7] | ES port {MID_PORT_NUMBER}, "
                  f"z_probe = {MID_PORT_Z_CM} cm -> cell {MID_PORT_CELL} "
                  f"(z = {MID_PORT_CELL_Z_CM} cm), from "
@@ -853,9 +977,9 @@ def evaluate(arm_records, out_path=None):
     lines.append(
         "| arm | ladders | cadence nominal [s] | cadence effective [s] | "
         "dev | h_k used [s] | nvz | nvp | N_k done/req | steps | "
-        "t_engage [s] | t* [s] | status |"
+        "t_engage [s] | last tick [s] | sample t [s] | interp w | status |"
     )
-    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    lines.append("|---" * 15 + "|")
     for name in sorted(arms, key=lambda n: (-arms[n]["cadence_nominal_s"],
                                             arms[n]["nvz"])):
         a = arms[name]
@@ -863,14 +987,41 @@ def evaluate(arm_records, out_path=None):
         eff = float(a["cadence_effective_s"])
         dev = abs(eff - nom) / nom if nom else float("nan")
         a["_h"] = eff if dev > CADENCE_DEV_TOL else nom
+        w = a["_sample_weight"]
+        if w is None:
+            w_cell = "n/a (tick-count)"
+        elif 0.0 <= w <= 1.0:
+            w_cell = f"{w:.4f} (bracketed)"
+        else:
+            w_cell = f"{w:.4f} **EXTRAPOLATED**"
         lines.append(
             f"| `{name}` | {'+'.join(a['ladders'])} | {nom:.6g} | "
             f"{eff:.6g} | {dev:.2%} | {a['_h']:.6g} | {a['nvz']} | "
             f"{a['nvp']} | {a['n_updates_done']}/{a['n_updates_requested']} | "
             f"{a['steps']} | {a['t_engage_s']:.10g} | {a['t_star_s']:.10g} | "
-            f"{a['status']} |"
+            f"{a['_t_sample']:.10g} | {w_cell} | {a['status']} |"
         )
     lines.append("")
+    if registered:
+        extrapolated = [n for n, a in sorted(arms.items())
+                        if not (0.0 <= a["_sample_weight"] <= 1.0)]
+        lines.append(
+            "The interpolation weight is reported rather than assumed: a "
+            "weight outside [0, 1] means the arm's tick series does not "
+            "bracket t* and the row is an extrapolation along the nearest "
+            "tick interval."
+        )
+        lines.append("")
+        verdicts.append(Verdict(
+            "R2 common-t bracketing", "PASS" if not extrapolated else
+            "REPORTED",
+            "every arm's tick series brackets the common t*, so every "
+            "sampled row is an interpolation"
+            if not extrapolated else
+            "t* is NOT bracketed on " + ", ".join(extrapolated)
+            + "; those rows are extrapolated along the nearest tick "
+            "interval and are disclosed as such rather than clipped",
+        ))
 
     # ------------------------------------------------------------- NV1 [R2]
     engages = {name: float(a["t_engage_s"]) for name, a in arms.items()}
@@ -1062,6 +1213,16 @@ def evaluate(arm_records, out_path=None):
 
     lines.append("## R8 order fit -- successive pairs only")
     lines.append("")
+    lines.append(
+        f"Re-formed from the common-t rows, {AMENDMENT_LABEL}: the pair "
+        "errors below compare arms at ONE absolute time, so the sample-time "
+        "mismatch that the floor guard exists to catch is zero by "
+        "construction and the guard reads clear on every row."
+        if registered else
+        f"Formed from each arm's own N_k-th tick -- SUPERSEDED "
+        f"{AMENDMENT_LABEL}."
+    )
+    lines.append("")
     if len(ladder) < 4:
         lines.append(
             f"Only {len(ladder)} usable cadence rung(s) banked "
@@ -1118,8 +1279,8 @@ def evaluate(arm_records, out_path=None):
                 and errs[i] > errs[i + 1] for i in range(len(errs) - 1)
             )
             dodt = _dodt(ladder[-1], key, kind)
-            dt_sample = abs(float(ladder[-1]["t_star_s"])
-                            - float(ladder[-2]["t_star_s"]))
+            dt_sample = abs(float(ladder[-1]["_t_sample"])
+                            - float(ladder[-2]["_t_sample"]))
             floor = None
             guard = "n/a"
             if dodt is not None:
@@ -1222,6 +1383,17 @@ def evaluate(arm_records, out_path=None):
     # ---------------------------------------------------------------- R9
     lines.append("## R9 corrected proxy true error "
                  "Ehat_k = ||u_k - u_finest|| x h_k/(h_k - h_finest)")
+    lines.append("")
+    lines.append(
+        f"Re-formed from the common-t rows, {AMENDMENT_LABEL}."
+        if registered else
+        f"Formed from each arm's own N_k-th tick -- SUPERSEDED "
+        f"{AMENDMENT_LABEL}."
+    )
+    lines.append("")
+    lines.append(
+        "The Ehat columns are FRACTIONS, not percent."
+    )
     lines.append("")
     cadence_of_record = None
     if len(ladder) >= 2:
@@ -1529,6 +1701,16 @@ def main(argv=None):
                         "b0c_arm_*.npz under --out-dir)")
     p.add_argument("--quiet", action="store_true",
                    help="--arm: suppress per-tick progress")
+    p.add_argument("--sampling", choices=SAMPLING_MODES,
+                   default=SAMPLING_REGISTERED,
+                   help=f"--table: how each arm's rows are read. "
+                        f"{SAMPLING_REGISTERED!r} (default) is the REGISTERED "
+                        f"sampling {AMENDMENT_LABEL} -- per-tick capture "
+                        f"interpolated to the common absolute t*. "
+                        f"{SAMPLING_SUPERSEDED!r} reads each arm at its own "
+                        f"N_k-th tick and is SUPERSEDED {AMENDMENT_LABEL}; it "
+                        "is kept only so the pre-amendment numbers stay "
+                        "reproducible")
     args = p.parse_args(argv)
 
     if args.t_star_ms not in T_STAR_MS_ALLOWED:
@@ -1539,6 +1721,13 @@ def main(argv=None):
         )
     if args.updates is not None and not args.arm:
         p.error("--updates is a sanity override for --arm only")
+    if args.sampling != SAMPLING_REGISTERED and not args.table:
+        p.error(
+            "--sampling selects how --table READS the banked arms; it "
+            "changes nothing about what --arm runs (every arm banks its "
+            "per-tick capture either way), so it must not be passed here "
+            "as a silent no-op"
+        )
 
     if args.plan:
         for line in plan_lines(args.t_star_ms):
@@ -1659,7 +1848,7 @@ def main(argv=None):
     out = Path(args.out) if args.out else (
         Path(args.out_dir) / "b0c_convergence_table.md"
     )
-    lines, verdicts = evaluate(records, out_path=out)
+    lines, verdicts = evaluate(records, out_path=out, sampling=args.sampling)
     for line in lines:
         print(line)
     print(f"\nwrote {out}")
