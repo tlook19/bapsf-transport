@@ -20,7 +20,7 @@ Two distinct clip sites are tracked:
     so it is the one that decides whether a non-backward-Euler theta is safe.
 
 Usage:
-    python scripts/audit_sim1d_floor_activation.py                 # notebook production config
+    python scripts/audit_sim1d_floor_activation.py                 # stance-of-record config
     python scripts/audit_sim1d_floor_activation.py --t-end 2e-3    # short shakedown
 """
 
@@ -35,31 +35,32 @@ from cablp.solvers._sim1d import LAPDSim1D, ProgressPrinter1D, default_config
 from cablp.solvers._sim1d.physics.conduction import IMPLICIT_HEAT_SCHEMES
 from cablp.vars._cons import ev_to_erg
 
-# Overrides mirroring scripts/sim1d_run_and_plot.ipynb (the production run).
+# Re-cut onto the STANCE OF RECORD (scripts/stances/g1atrim.toml) on
+# 2026-08-24. This block previously described itself as mirroring the old
+# production notebook; that lineage ended at the L2 geometry flip and the
+# sccm changeover, so the claim has been dropped along with the stale values.
 PARAM_OVERRIDES = {
-    "V_bank": 180.0,
-    "T_s": 273.15 + 1700,
-    "S_gp": 4000,
-    "S_gp_decay_target": 1500,
-    "tau_gp_pulse_duration": 1e-3,
-    "tau_gp_decay_duration": 5e-3,
-    "b_ion_neutral_drag": 0.5,
-    "b_Qei": 0.5,
-    "b_Qen": 0.5,
-    "b_Qcx": 0.5,
-    "Rp": 15.0,
-    "R_cath": 15.0,
-    "R_comp": 0.010,
-    # Mirrors the notebook's time-integration block.
+    "V_bank": 177.843,
+    "T_s": 1998.15,
+    "S_gp": 9010,
+    # The pulse/decay puff-waveform family is deliberately ABSENT: the stance
+    # runs the "square" waveform, which reads none of those keys, and
+    # b_ion_neutral_drag is deprecated. The b_* rate scalars are absent
+    # because b = 1 is campaign policy, not a knob -- the 0.5 values this
+    # block used to carry predate that policy.
+    "Rp": 18.415,
+    "R_cath": 18.415,
+    "R_comp": 7.2244e-3,
+    # Time-integration block, spelled out because this audit reasons about it.
     "operator_splitting": "strang",
     "heat_picard_iterations": 2,
     "heat_picard_tol": 1e-10,
 }
 FLAG_OVERRIDES = {
-    # The notebook lists ion_neutral_drag_cx_only under its parameter overrides,
-    # but it is an input_flags key, so it lands in input_dict and is ignored.
-    # Keeping the flag at its template default preserves the notebook's actual
-    # behaviour rather than the behaviour its parameter block implies.
+    # Empty on purpose: every flag this audit needs is already the shipped
+    # default. NB ion_neutral_drag_cx_only is an input_flags key -- filing it
+    # here as a parameter is now a construction-time ValueError, not the
+    # silent no-op it was when this comment was first written.
 }
 
 

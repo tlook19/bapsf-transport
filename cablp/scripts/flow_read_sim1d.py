@@ -57,8 +57,17 @@ Summary lines
 -------------
 After the per-port table: the ``p41 -> p50`` span, whether the flow is
 monotone toward the end (``u_eff(p50) > u_eff(p41)``), and ``u_eff`` as a
-percentage of the measured ion flow references ``+1.8 km/s`` at p41 and
-``+5.4 km/s`` at p50.
+percentage of the RESIDUAL references ``+1.8 km/s`` at p41 and ``+5.4 km/s``
+at p50.
+
+**Those two numbers are RESIDUALS, not the machine's flow, and must never be
+quoted as a measured velocity.** Each is a measured-minus-model DIFFERENCE,
+taken against the era model's ion drift; the bins that used them were
+registered against the required INCREMENT, which is what makes a residual the
+right reference there. The machine's ABSOLUTE ion flow is a different and
+much larger quantity -- roughly 5 to 10.7 km/s across the ports -- so reading
+the percentages below as "fraction of the measured flow" overstates the
+model's agreement by a factor of about 2 to 5.
 
 Raises
 ------
@@ -83,7 +92,11 @@ from cablp.vars._cons import m_He_cgs
 # ES1 probe ports and their axial positions [cm].
 PORTS = {"p11": 470.1, "p21": 789.5, "p29": 1045.2, "p41": 1428.5, "p50": 1716.1}
 
-# Measured ion flow references at the two far ports [km/s].
+# RESIDUAL references at the two far ports [km/s] -- measured MINUS the era
+# model's ion drift, NOT the machine's flow. The absolute measured ion flow is
+# ~5 to 10.7 km/s across the ports; quoting these as a velocity overstates
+# agreement several-fold. The name below is historical; the quantity is a
+# residual.
 MEASURED = {"p41": 1.8, "p50": 5.4}
 
 # Plateau window [ms]: the drive-phase interval the port comparisons use.
@@ -181,7 +194,8 @@ def report(path, ledger, window_ms):
     print(
         f"  span p41->p50: {u50 - u41:+.3f} km/s | "
         f"monotone(u50>u41): {u50 > u41} | "
-        f"vs measured +{MEASURED['p41']}/+{MEASURED['p50']}: "
+        f"vs RESIDUAL ref +{MEASURED['p41']}/+{MEASURED['p50']} km/s "
+        f"(NOT measured flow): "
         f"p41 {u41 / MEASURED['p41'] * 100:.0f}%  "
         f"p50 {u50 / MEASURED['p50'] * 100:.0f}%"
     )

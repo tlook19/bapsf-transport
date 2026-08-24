@@ -35,21 +35,24 @@ from cablp.solvers._sim1d import (
     summarize_result,
 )
 
-# Mirrors scripts/sim1d_run_and_plot.ipynb, as baseline_sim1d.py does.
+# Re-cut onto the STANCE OF RECORD (scripts/stances/g1atrim.toml) on
+# 2026-08-24. These are no longer the old production notebook's numbers: the
+# notebook lineage this block used to claim ended at the L2 geometry flip and
+# the sccm changeover, and a self-described mirror carrying superseded values
+# is worse than none. Keys whose stance value equals the config default are
+# still spelled out where the sweep reasons about them.
 PARAM_OVERRIDES = {
-    "V_bank": 180.0,
-    "T_s": 273.15 + 1725,
-    "S_gp": 3000,
-    "S_gp_decay_target": 2000,
-    "tau_gp_pulse_duration": 1e-3,
-    "tau_gp_decay_duration": 5e-3,
-    "b_ion_neutral_drag": 0.5,
-    "b_Qei": 1,
-    "b_Qen": 1,
-    "b_Qcx": 1,
-    "Rp": 15.0,
-    "R_cath": 15.0,
-    "R_comp": 0.010,
+    "V_bank": 177.843,
+    "T_s": 1998.15,
+    "S_gp": 9010,
+    # The pulse/decay puff-waveform family is deliberately ABSENT: the stance
+    # runs the "square" waveform, which reads none of those keys, and
+    # b_ion_neutral_drag is deprecated (the moment-closed Phelps operator
+    # replaced the term it scaled). The b_* rate scalars are absent because
+    # b = 1 is campaign policy, not a knob.
+    "Rp": 18.415,
+    "R_cath": 18.415,
+    "R_comp": 7.2244e-3,
     "implicit_heat_scheme": "tr_bdf2",
     "operator_splitting": "strang",
     "heat_picard_iterations": 2,
