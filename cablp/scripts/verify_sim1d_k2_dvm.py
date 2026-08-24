@@ -48,6 +48,11 @@ Gates:
       cathode's live cell at index 2 rather than at the mesh start) and the
       PRODUCTION machine read from the stance file -- in both stances of
       ``characteristic_boundary``; and the arm deposits it in that same cell
+  S2  per-end pump fidelity: at each end the sticking coefficient times that
+      end's OWN open area times the incident one-way flux is the configured
+      pumping speed, with ``pump_elbow_conductance_lps`` folded in series on
+      a plenum end -- on the production machine, whose two ends differ in
+      area by 3.63x, with unequal speeds at the two ends
   C1  momentum transfer antisymmetry: the fluid coupling term's M row is
       exactly minus the kinetic momentum moment per cell, to roundoff
   C2  energy transfer antisymmetry: the fluid coupling term's Ei row is
@@ -145,7 +150,10 @@ from cablp.solvers._sim1d import (
     LAPDSim1D,
     default_config,
 )
-from cablp.solvers._sim1d.core.geometry import absorbing_live_cells_by_role
+from cablp.solvers._sim1d.core.geometry import (
+    absorbing_live_cells_by_role,
+    is_plenum_cell,
+)
 from cablp.solvers._sim1d.physics.kinetic_dvm import (
     ELASTIC_BGK_MOMENTUM_FACTOR,
     EXCHANGE_MODELS,
@@ -167,7 +175,11 @@ from cablp.solvers._sim1d.physics.kinetic_neutrals import (
     M_HE,
     annulus_chord_classes,
 )
-from cablp.solvers._sim1d.physics.neutrals import neutral_zone_volumes
+from cablp.solvers._sim1d.physics.neutrals import (
+    _effective_pump_speed,
+    neutral_zone_volumes,
+)
+from cablp.vars._cons import kb_cgs, m_p_cgs
 
 # The stance loader, for the committed stance FILE. It is this module's only
 # scripts/ import, and it is deliberate: the geometry the gates below call
@@ -1159,6 +1171,101 @@ def gate_s1():
     return (
         "S1 recycle identity: what the arm re-injects equals what the active "
         "boundary removed, per face, on all three geometries and both stances",
+        ok,
+        ("\n        ").join(lines) + f"\n        tol {fmt(ROUNDOFF_REL)}",
+    )
+
+
+def gate_s2():
+    """Per-end pump fidelity: each end realizes the speed it was configured.
+
+    The engine books ``loss_pump_END = s_END * (counted end-face outflow)``
+    and the march counts that outflow through THAT end's own open area, so
+    the sticking coefficient is the only place the configured pumping speed
+    enters. The identity that pins it, per end, is
+
+        s_END * A_END * vbar(300 K) / 4  ==  S_eff_END
+
+    -- area x sticking x incident flux, read as a speed -- with ``S_eff`` the
+    configured speed after the plenum elbow's series conductance. The booked
+    half is taken off a LIVE ledger rather than assumed.
+
+    Run on the PRODUCTION machine, whose plenum and collector faces differ in
+    area by 3.63x, with unequal speeds at the two ends and the elbow set, so
+    one shared area, a swapped end, or a dropped elbow cannot satisfy both
+    ends at once. ``vbar`` is rebuilt here from the neutral mass the solver
+    is holding: this gate is about the AREA and the elbow, and it must not
+    read them back through the routine under test.
+    """
+    S_L, S_R, C_elbow = 2000.0, 5000.0, 4000.0
+    overrides = {
+        "neutral_kinetic_dvm_nvz": 16,
+        "neutral_kinetic_dvm_nvp": 6,
+        "S_pump_L": S_L,
+        "S_pump_R": S_R,
+        "pump_elbow_conductance_lps": C_elbow,
+    }
+    overrides.update(PRODUCTION_GEOMETRY_KEYS)
+    sim = make_sim(**overrides)
+    dvm = sim._dvm
+    geom = sim.geometry
+    ledger = run_until_updates(sim, 2)[-1]
+    vbar = np.sqrt(
+        8.0 * kb_cgs * 300.0 / (np.pi * sim._mu_neutral * m_p_cgs)
+    )
+    lines = []
+    ok = True
+    areas = {}
+    for label, index, speed, sticking, out_key, pump_key in (
+        ("L", 0, S_L, dvm.s_L, "loss_end_out_L", "loss_pump_L"),
+        ("R", -1, S_R, dvm.s_R, "loss_end_out_R", "loss_pump_R"),
+    ):
+        # The march's own end-face area: both zones cross the same face.
+        area = float(dvm.face_c[index] + dvm.face_a[index])
+        areas[label] = area
+        plenum = is_plenum_cell(geom, index)
+        s_eff = _effective_pump_speed(speed, C_elbow if plenum else None)
+        realized = sticking * area * vbar / 4.0 / 1.0e3
+        rel = abs(realized - s_eff) / s_eff
+        incident = float(ledger[out_key])
+        booked = float(ledger[pump_key])
+        book_rel = abs(booked - sticking * incident) / max(booked, 1e-300)
+        end_ok = (
+            rel < ROUNDOFF_REL
+            and book_rel < ROUNDOFF_REL
+            # Non-vacuity: the clip is not binding (which would make the
+            # identity false by design) and gas is actually arriving.
+            and 0.0 < sticking < 1.0
+            and incident > 0.0
+        )
+        ok = ok and end_ok
+        lines.append(
+            f"end {label} (cell {index}, plenum={plenum}): area "
+            f"{fmt(area)} cm^2, s={fmt(sticking)}, realized "
+            f"{fmt(realized)} L/s vs S_eff {fmt(s_eff)} L/s, rel "
+            f"{fmt(rel)}; booked {fmt(booked)} vs s*incident "
+            f"{fmt(sticking * incident)}, rel {fmt(book_rel)}"
+        )
+    # The fixture must actually exercise what the identity distinguishes:
+    # two different end areas, and an elbow that bites on the plenum end
+    # and is absent on the collector end.
+    area_ratio = areas["R"] / areas["L"]
+    elbow_bites = _effective_pump_speed(S_L, C_elbow) < S_L
+    fixture_ok = (
+        area_ratio > 1.1
+        and elbow_bites
+        and is_plenum_cell(geom, 0)
+        and not is_plenum_cell(geom, -1)
+    )
+    ok = ok and fixture_ok
+    lines.append(
+        f"fixture: end-area ratio R/L = {area_ratio:.6f}, elbow bites on the "
+        f"plenum end = {elbow_bites}, collector end takes no elbow = "
+        f"{not is_plenum_cell(geom, -1)}"
+    )
+    return (
+        "S2 per-end pump fidelity: sticking x own-end area x incident flux "
+        "is the configured speed, elbow in series on the plenum end",
         ok,
         ("\n        ").join(lines) + f"\n        tol {fmt(ROUNDOFF_REL)}",
     )
@@ -2290,6 +2397,7 @@ def main():
         gate_j2,
         gate_j3,
         gate_s1,
+        gate_s2,
         gate_c1,
         gate_c2,
         gate_c3,

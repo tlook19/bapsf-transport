@@ -3732,14 +3732,33 @@ class LAPDSim1D:
 
         The TPMC/KN2Zone convention: the pumping speed over the one-way
         300 K thermal flux through the end plane, clipped to a probability.
+        ``key`` names the end -- ``"S_pump_L"`` the first cell's outer face,
+        ``"S_pump_R"`` the last cell's -- and the flux area is THAT end's own
+        open neutral area, which is the area the kinetic march counts its
+        end-face outflow through. The realized pumping speed is
+        ``sticking * area * vbar / 4``, so an area belonging to the other end
+        realizes a different speed than the one configured wherever the vessel
+        differs between the two ends.
+
+        Where the end cell is a plenum, ``pump_elbow_conductance_lps`` folds
+        into the speed in series first, the same restriction the fluid pump
+        term applies at the same cell; a pump on any other role has no
+        unmodeled elbow in front of it.
         """
+        index = {"S_pump_L": 0, "S_pump_R": -1}[key]
         speed = float(self._input_dict.get(key, 0.0))
         if speed <= 0.0:
             return 0.0
+        speed = _effective_pump_speed(
+            speed,
+            self._input_dict.get("pump_elbow_conductance_lps")
+            if is_plenum_cell(self._geometry, index)
+            else None,
+        )
         vbar = math.sqrt(
             8.0 * kb_cgs * 300.0 / (math.pi * self._mu_neutral * m_p_cgs)
         )
-        area = math.pi * float(np.asarray(self._geometry.Rm_cm)[-1]) ** 2
+        area = float(np.asarray(self._geometry.neutral_area_cm2)[index])
         return min(speed * 1.0e3 / (area * vbar / 4.0), 1.0)
 
     @property
