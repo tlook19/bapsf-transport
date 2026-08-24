@@ -61,6 +61,7 @@ from cablp.solvers._sim1d.physics.kinetic_neutrals import (  # noqa: E402
     KN2ZoneJump,
     VGrid,
     bin_edges,
+    puff_launch_bins,
     stretched_axis,
     stretched_positive_axis,
 )
@@ -189,9 +190,11 @@ def moment_hop_steady(kn, C_hop, T_in, K_r):
     for name, off in (("anode_left", -1), ("anode_right", 0)):
         j = min(max(kn.mesh_face + off, 0), nz - 1)
         b[j] -= bgs.get(name, 0.0)
-    if bgs.get("puff", 0.0) > 0:
-        iz = int(np.searchsorted(kn.z_edges, bgs["puff_z"]) - 1)
-        b[nz + min(max(iz, 0), nz - 1)] -= bgs["puff"]
+    # Same placement as the kinetic engine's, from the same helper: the two
+    # halves of this instrument are compared against each other, so a
+    # difference in where the fuel enters would read as closure error.
+    for iz, rate in puff_launch_bins(bgs, kn.z_edges, nz):
+        b[nz + iz] -= rate
     x = np.linalg.solve(A, b)
     return x[:nz], x[nz:]
 

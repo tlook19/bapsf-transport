@@ -75,7 +75,6 @@ from cablp.solvers._sim1d.physics.kinetic_neutrals import (
 )
 from cablp.solvers._sim1d.physics.neutrals import (
     gas_puff_rate_profile,
-    puff_particles_per_s,
 )
 
 EV = 1.602176634e-12
@@ -592,6 +591,9 @@ def load_background(path, window_ms):
             ns = ns_col * Vp_full
         else:
             ns = ns_col * Vp_full + ns_ann * np.maximum(Vm_full - Vp_full, 0.0)
+        ns_provenance = None
+        ns_expected = 0.0
+        menu_provenance = None
         kinetic_fallback = bool(not np.any(ba) and "nn_a" in f)
         if kinetic_fallback:
             # K4a kinetic run: the neutral ledger rows are superseded
@@ -607,22 +609,37 @@ def load_background(path, window_ms):
             an = -np.mean(
                 f["rhs_terms/anode_collection/n"][:][m], axis=0
             ) * Vp_full
-            params_k = __import__("json").loads(f.attrs["params_json"])
-            sccm = float(params_k.get("S_gp", 0.0))
-            valves = float(params_k.get("gas_puff_valves", 2))
-            ns = np.zeros_like(ba)
-            # square waveform at plateau: full flow into the puff cell
-            roles_full = [
-                r.decode() if isinstance(r, bytes) else str(r)
-                for r in g["cell_role"][:]
-            ]
-            puff_idx = (
-                roles_full.index("puff") if "puff" in roles_full else 0
+            # ONE puff construction for both derivation branches. What stood
+            # here was a local literal -- the full configured flow dropped
+            # into the role-tagged puff cell -- which differed from the
+            # state-keyed envelope below in two ways: it ignored the
+            # plateau-window mean of the square waveform (1.7e-5 high) and,
+            # on any distributed gas_puff_profile, it collapsed the whole
+            # profile into a single cell. Bit-identity against TPMC products
+            # made with the superseded construction is deliberately broken
+            # here: their puff is the quantity being corrected.
+            ns, ns_provenance = two_zone_puff_row_from_config(
+                f, params, flags, t_abs, m, Vm_full, Va_full
             )
-            ns[puff_idx] = puff_particles_per_s(sccm, valves)
-        ns_provenance = None
-        ns_expected = 0.0
-        if two_zone and ns_ann is None and not kinetic_fallback:
+            ns_expected = float(ns.sum())
+            menu_provenance = (
+                "K4a kinetic-mode artifact: the neutral ledger rows are "
+                "superseded (identically zero) and the WHOLE source menu is "
+                "DERIVED, not read -- boundary recycle and anode collection "
+                "from their plasma-side rows (-n * Vp, exact by the terms' "
+                "own construction), and the "
+                + (
+                    ns_provenance
+                    if ns_provenance is not None
+                    else "puff from the resolved config (a shut valve over "
+                         "this window: nothing was derived)"
+                )
+            )
+            print(
+                f"[load_background] {menu_provenance}, for {path}.",
+                file=sys.stderr,
+            )
+        elif two_zone and ns_ann is None:
             # July-era two-zone artifact: the puff is booked into the annulus
             # and no annulus row survives, so the assembled row above is a
             # genuine zero and the ledger has nothing else to offer. Derive it
@@ -729,13 +746,18 @@ def load_background(path, window_ms):
         # disagree (any share upstream of the cathode face is outside the TPMC
         # domain, as for vol_rec).
         "puff": float(ns[first:].sum()),
+        # The same row per cell [s^-1], on the in-domain slice. A consumer
+        # that can place a distribution reads THIS and fuels exactly the
+        # cells the solver fuelled; the kinetic engine does
+        # (kinetic_neutrals.puff_launch_bins).
+        "puff_cells": ns[first:],
         # Representative SINGLE-cell z, kept for the point-injection consumers
-        # of this loader (kn2zone, the E0 bench, the E2 DVM comparison), whose
-        # own discretizations inject the puff into one z-bin. run_mc no longer
-        # uses it. np.argmax alone resolved a tie by array order, which on a
-        # cosine_pipe run put the source in a plain column cell one cell
-        # UPSTREAM of the role-tagged puff cell; prefer the puff cell whenever
-        # it is among the maxima.
+        # of this loader (the E0 bench, the E2 DVM comparison), whose own
+        # discretizations inject the puff into one z-bin. run_mc and the
+        # kinetic engine no longer use it. np.argmax alone resolved a tie by
+        # array order, which on a cosine_pipe run put the source in a plain
+        # column cell one cell UPSTREAM of the role-tagged puff cell; prefer
+        # the puff cell whenever it is among the maxima.
         "puff_z": float(zc[_puff_peak_cell(ns, roles)] - edges[first]),
         "vol_rec": float(rec[first:].sum()),
     }
@@ -748,6 +770,10 @@ def load_background(path, window_ms):
         provenance["anode_right"] = an_provenance
     if ns_provenance is not None:
         provenance["puff"] = ns_provenance
+    if menu_provenance is not None:
+        # Whole-menu label: on a K4a artifact no entry is a ledger read, so
+        # the per-entry keys above would understate what was derived.
+        provenance["menu"] = menu_provenance
     if provenance:
         bg["source_provenance"] = provenance
     bg["puff_cell"] = ns[first:]
@@ -767,6 +793,42 @@ def load_background(path, window_ms):
     bg["nu_ion"] = bg["n"] * rates["scd"]
     bg["nu_cx"] = bg["n"] * charge_ex_react(np.maximum(bg["Ti"], 0.05), "He")
     return bg
+
+
+def _source_provenance_arrays(bg):
+    """Return the ``np.savez`` kwargs carrying ``bg['source_provenance']``.
+
+    THE CITATION GUARD. A menu entry that was DERIVED rather than read off
+    the neutral ledger is labelled in ``bg["source_provenance"]``, and the
+    label has to survive into the saved product: a reducer opening the npz
+    months later sees only arrays, and an unlabelled one from a superseded
+    artifact is indistinguishable from an ordinary ledger read. Writing the
+    labels beside the tallies means a citation of this product cannot be made
+    without the derivation being visible in the same file.
+
+    Empty on the ordinary case -- every entry read straight off the ledger --
+    so the keys' PRESENCE is itself the signal, and no default has to be
+    interpreted.
+    """
+    prov = bg.get("source_provenance")
+    if not prov:
+        return {}
+    keys = sorted(prov)
+    return {
+        "source_provenance_keys": np.array(keys),
+        "source_provenance_values": np.array([prov[k] for k in keys]),
+    }
+
+
+def report_source_provenance(bg):
+    """Print the derived-entry labels, or nothing when there are none."""
+    prov = bg.get("source_provenance")
+    if not prov:
+        return
+    print("\n[citation guard] source-menu entries that were DERIVED, not "
+          "read off the neutral ledger:")
+    for k in sorted(prov):
+        print(f"  {k}: {prov[k]}")
 
 
 def cosine_emit(rng, N, T_K, sign_z):
@@ -1955,6 +2017,7 @@ def main(argv=None):
     tot = sum(res["rates"].values())
     print(f"sources [atoms/s]: " + ", ".join(
         f"{k}={v:.3g}" for k, v in res["rates"].items()))
+    report_source_provenance(bg)
     print(f"sinks: ionization {res['lost']['ion']:.3g}, "
           f"pump {res['lost']['pump']:.3g}, "
           f"stuck {res['lost']['stuck']:.3g}, total {tot:.3g} "
@@ -2032,6 +2095,7 @@ def main(argv=None):
     np.savez(
         Path(args.run).parent / f"{out}.npz",
         z=zc, nn_model=bg["nn_model"], un_model=un_model,
+        **_source_provenance_arrays(bg),
         **{k: bg[k] for k in ("nncol_model", "nna_model") if k in bg},
         **{
             k: v for k, v in res.items() if isinstance(v, np.ndarray)

@@ -229,6 +229,55 @@ class VGrid:
         return w / w.sum()
 
 
+# ------------------------------------------------------------ puff placement
+
+
+def puff_launch_bins(sources, z_edges, nz):
+    """Return the gas puff as ``[(z-bin index, rate [atoms/s]), ...]``.
+
+    The puff is a DISTRIBUTION over z, not a point. ``sources["puff_cells"]``
+    is the per-cell puff row [s^-1] on this engine's own cells, assembled by
+    the loader from the run's own neutral ledger (or, on an artifact whose
+    ledger cannot carry it, derived from the resolved config through the
+    solver's own ``gas_puff_rate_profile``). Honouring it seeds the fuel
+    exactly where the solver seeded it: under the config of record the
+    ``"cosine_pipe"`` profile centred on ``gas_puff_z_cm``, whose 86.3 cm is
+    the CAD-measured mid-plane injection station -- the two CF6000-class
+    ports on the anode stack, z_model 0.812-0.914 m, centre 0.863 m. The
+    configured profile, not the bare CAD span, is what is placed: it is the
+    shape the solver applied, so the kinetic instrument and the fluid model
+    fuel the same cells and a disagreement between them stays method error
+    rather than input error.
+
+    HISTORICAL, superseded 2026-08-24: this engine seeded the WHOLE puff into
+    the single bin containing ``sources["puff_z"]``. That convention dates
+    from when ``"cell"`` was the only shipped ``gas_puff_profile``, where the
+    single bin and the per-cell row are the same bin at the same rate and
+    nothing moves; on ``"gaussian"`` or ``"cosine_pipe"`` it collapsed a
+    distributed source to a point. ``puff_z`` remains the fallback for a
+    background carrying no per-cell row -- the synthetic slab fixtures, and
+    any caller assembling ``sources`` by hand.
+
+    Raises ``ValueError`` when the per-cell row is not one entry per cell:
+    a length mismatch would silently place fuel in the wrong cells.
+    """
+    total = float(sources.get("puff", 0.0))
+    if total <= 0.0:
+        return []
+    cells = sources.get("puff_cells")
+    if cells is None:
+        iz = int(np.searchsorted(z_edges, sources["puff_z"]) - 1)
+        return [(min(max(iz, 0), nz - 1), total)]
+    row = np.asarray(cells, dtype=float)
+    if row.size != nz:
+        raise ValueError(
+            f"sources['puff_cells'] must have one entry per engine cell "
+            f"(nz={nz}); got {row.size}. It is a per-cell puff row on this "
+            "engine's own grid, not a shape to be resampled."
+        )
+    return [(int(i), float(row[i])) for i in np.flatnonzero(row > 0.0)]
+
+
 # ---------------------------------------------------------------- the solver
 
 
@@ -393,7 +442,8 @@ class KN2Zone:
         Primary sources come from ``self.bg["sources"]`` (the run's own
         ledger, exactly the TPMC's menu): cathode/collector faces as
         boundary inflows (cosine at T_s / 300 K), the puff as an annulus
-        volume source at 300 K, volume recombination in the column at the
+        volume source at 300 K over the configured axial profile
+        (:func:`puff_launch_bins`), volume recombination in the column at the
         local ion Maxwellian, and the anode-mesh rebirths as directed
         300 K half-Maxwellians in the flanking cells.
         """
@@ -425,12 +475,8 @@ class KN2Zone:
 
         Sc = np.zeros((nz, g.nvz, g.nvp))
         Sa = np.zeros((nz, g.nvz, g.nvp))
-        if bgs.get("puff", 0.0) > 0:
-            iz = int(
-                np.searchsorted(self.bg["z_edges"], bgs["puff_z"]) - 1
-            )
-            iz = min(max(iz, 0), nz - 1)
-            Sa[iz] += bgs["puff"] / self.V_ann[iz] * self.M_wall
+        for iz, rate in puff_launch_bins(bgs, self.bg["z_edges"], nz):
+            Sa[iz] += rate / self.V_ann[iz] * self.M_wall
         rec = self.bg.get("rec_cell")
         if rec is not None and rec.sum() > 0:
             scale = bgs.get("vol_rec", rec.sum()) / rec.sum()
@@ -959,10 +1005,8 @@ class KN2ZoneJump(KN2Zone):
             )
         # annulus wall-launch rates [atoms/s per bin]: the puff
         wall_launch = np.zeros((nz, g.nvz, g.nvp))
-        if bgs.get("puff", 0.0) > 0:
-            iz = int(np.searchsorted(self.z_edges, bgs["puff_z"]) - 1)
-            iz = min(max(iz, 0), nz - 1)
-            wall_launch[iz] += bgs["puff"] * wall_spec
+        for iz, rate in puff_launch_bins(bgs, self.z_edges, nz):
+            wall_launch[iz] += rate * wall_spec
         inner_launch = np.zeros_like(wall_launch)  # column escapes
 
         tal_t = np.zeros(nz)
