@@ -13163,6 +13163,164 @@ def _case_gas_puff_axial_profile():
 
 
 # --------------------------------------------------------------------
+# gas-puff-orifice-profile
+# --------------------------------------------------------------------
+@_case(
+    "gas-puff-orifice-profile",
+    provides=("build_geometry",),
+)
+def _case_gas_puff_orifice_profile():
+    # --- Tube-beamed injection row (gas_puff_profile="orifice"): the SAME row
+    # the kinetic instruments launch, read by the fluid solver as its
+    # deposition profile. Three things are owned here: the row the shared
+    # implementation returns is bit-for-bit the row scripts/puff_orifice.py
+    # derives on the same inputs (one derivation, not two), it conserves the
+    # total inflow exactly, and every misconfiguration raises at CONSTRUCTION.
+    from cablp.solvers._sim1d.core.geometry import build_geometry
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import puff_orifice as _porf
+
+    orf_params, orf_flags = default_config()
+    orf_params["nx"] = 60
+    orf_geom = build_geometry(orf_params, orf_flags)
+    orf_z = float(orf_params["gas_puff_z_cm"])
+    ORF_ID, ORF_LEN = 3.95, 22.0
+
+    orf_row = gas_puff_rate_profile(
+        orf_geom,
+        3000.0,
+        2,
+        profile="orifice",
+        z_cm=orf_z,
+        orifice_id_cm=ORF_ID,
+        orifice_length_cm=ORF_LEN,
+    )
+    # BIT-FOR-BIT against the scripts-side derivation, at the port cell the
+    # kinetic instruments index (searchsorted on the edges, clipped). The
+    # comparison is on raw bytes: "close" would not catch a re-derivation.
+    orf_i = int(np.searchsorted(orf_geom.z_edges_cm, orf_z) - 1)
+    orf_i = min(max(orf_i, 0), int(orf_geom.Rm_cm.size) - 1)
+    orf_ref_row, orf_meta = _porf.launch_row(
+        orf_geom.z_edges_cm,
+        pipe_id_cm=ORF_ID,
+        aspect_ratio=ORF_LEN / ORF_ID,
+        r_wall_cm=float(orf_geom.Rm_cm[orf_i]),
+        r_edge_cm=float(orf_geom.Rp_cm[orf_i]),
+        z_port_cm=orf_z,
+    )
+    orf_total_in = 4.171431e17 * 3000.0 * 2.0
+    orf_expected = (
+        orf_total_in
+        * orf_ref_row
+        / np.asarray(orf_geom.neutral_volume_cm3, dtype=float)
+    )
+    assert orf_expected.tobytes() == orf_row.tobytes()
+    # exact inflow conservation, same bar as the other distributed profiles
+    assert np.isclose(
+        np.sum(orf_row * orf_geom.neutral_volume_cm3), orf_total_in, rtol=1e-12
+    )
+    assert np.all(orf_row >= 0.0)
+    assert np.isclose(orf_ref_row.sum(), 1.0, rtol=1e-12)
+    # the row is run-constant and memoised; a second call must return the same
+    # values, not a re-derivation that could drift
+    orf_again = gas_puff_rate_profile(
+        orf_geom,
+        3000.0,
+        2,
+        profile="orifice",
+        z_cm=orf_z,
+        orifice_id_cm=ORF_ID,
+        orifice_length_cm=ORF_LEN,
+    )
+    assert orf_again.tobytes() == orf_row.tobytes()
+
+    def _orf_refused(label, **overrides):
+        bad_params = dict(orf_params)
+        bad_params.update(overrides)
+        try:
+            LAPDSim1D(bad_params, dict(orf_flags))
+        except ValueError:
+            return
+        raise AssertionError(f"expected ValueError at construction: {label}")
+
+    orf_armed = {
+        "gas_puff_profile": "orifice",
+        "gas_puff_orifice_id_cm": ORF_ID,
+        "gas_puff_orifice_length_cm": ORF_LEN,
+    }
+    # presence gating, BOTH directions
+    _orf_refused("id set off the orifice profile", gas_puff_orifice_id_cm=ORF_ID)
+    _orf_refused(
+        "length set off the orifice profile", gas_puff_orifice_length_cm=ORF_LEN
+    )
+    _orf_refused(
+        "orifice without the bore",
+        gas_puff_profile="orifice",
+        gas_puff_orifice_length_cm=ORF_LEN,
+    )
+    _orf_refused(
+        "orifice without the length",
+        gas_puff_profile="orifice",
+        gas_puff_orifice_id_cm=ORF_ID,
+    )
+    _orf_refused("non-positive bore", **dict(orf_armed, gas_puff_orifice_id_cm=-1.0))
+    _orf_refused(
+        "aspect ratio below 4/3",
+        **dict(orf_armed, gas_puff_orifice_length_cm=4.0),
+    )
+    _orf_refused("shut valve", **dict(orf_armed, S_gp=0.0))
+    _orf_refused("puff disabled", **dict(orf_armed, gas_puff_enabled=False))
+    _orf_refused("port off the grid", **dict(orf_armed, gas_puff_z_cm=99999.0))
+    # the derivation's own refusals, exercised directly: on this stance the
+    # config gate above fires first, so these are the backstop and their
+    # existence is what this block owns.
+    for orf_label, orf_kwargs in (
+        ("port off the grid", {"z_port_cm": 1.0e9}),
+        ("column outside the wall", {"r_edge_cm": 1.0e4}),
+    ):
+        orf_call = {
+            "r_edge_cm": float(orf_geom.Rp_cm[orf_i]),
+            "z_port_cm": orf_z,
+        }
+        orf_call.update(orf_kwargs)
+        try:
+            _porf.launch_row(
+                orf_geom.z_edges_cm,
+                pipe_id_cm=ORF_ID,
+                aspect_ratio=ORF_LEN / ORF_ID,
+                r_wall_cm=float(orf_geom.Rm_cm[orf_i]),
+                **orf_call,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"launch_row accepted {orf_label}")
+    try:
+        _porf.clausing_intensity(np.array([2.0]), ORF_LEN / ORF_ID)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("clausing_intensity accepted theta outside [0, pi/2]")
+    try:
+        _porf.clausing_intensity(np.array([0.1]), 1.0)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("clausing_intensity accepted Gamma < 4/3")
+
+    # and the armed configuration constructs and carries the keys to the puff
+    # sites, so the profile is reachable end to end rather than only in the
+    # builder.
+    orf_sim = LAPDSim1D(dict(orf_params, **orf_armed), dict(orf_flags))
+    orf_nk = orf_sim._neutral_source_kwargs(time=0.0)
+    assert orf_nk["gas_puff_orifice_id_cm"] == ORF_ID
+    assert orf_nk["gas_puff_orifice_length_cm"] == ORF_LEN
+    assert orf_nk["gas_puff_profile"] == "orifice"
+    return locals()
+
+
+# --------------------------------------------------------------------
 # gas-puff-double-erf-waveform
 # --------------------------------------------------------------------
 @_case("gas-puff-double-erf-waveform")

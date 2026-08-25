@@ -378,6 +378,75 @@ def validate_gas_puff_config(input_dict):
         raise ValueError(
             f"tau_gp_decay_duration must be > 0 (got {tau_decay_duration})"
         )
+    validate_gas_puff_orifice_config(input_dict)
+
+
+def validate_gas_puff_orifice_config(input_dict):
+    """Presence-gate the two feed-pipe keys against ``gas_puff_profile``.
+
+    They belong to ``gas_puff_profile = "orifice"`` and to nothing else, so
+    both directions raise: set without the profile they would be silently
+    inert, and missing with it there is no aperture to derive a row from.
+    Also refuses an aspect ratio the long-tube angular law has no branch for,
+    and a shut valve, where the derivation would place no flow while still
+    reporting itself as the injection geometry.
+
+    The refusals that need the MESH -- a port off the grid, a plasma column
+    that is not inside the vessel wall -- are raised by the row derivation
+    itself, which the solver runs once at construction for that reason.
+    """
+    profile = input_dict.get("gas_puff_profile", "cell")
+    keys = ("gas_puff_orifice_id_cm", "gas_puff_orifice_length_cm")
+    values = {key: input_dict.get(key) for key in keys}
+    for key, value in values.items():
+        if value is not None and profile != "orifice":
+            raise ValueError(
+                f"{key} belongs to gas_puff_profile='orifice' and is inert "
+                f"under {profile!r}; drop it or change the profile"
+            )
+        if value is None and profile == "orifice":
+            raise ValueError(
+                f"gas_puff_profile='orifice' requires {key}: the tube-beamed "
+                "row is derived from the feed pipe's own bore and length, and "
+                "there is no default aperture to fall back on"
+            )
+    if profile != "orifice":
+        return
+    bore = float(values["gas_puff_orifice_id_cm"])
+    length = float(values["gas_puff_orifice_length_cm"])
+    for key, value in (
+        ("gas_puff_orifice_id_cm", bore),
+        ("gas_puff_orifice_length_cm", length),
+    ):
+        if not math.isfinite(value) or value <= 0.0:
+            raise ValueError(
+                f"{key} must be finite and positive (got {value})"
+            )
+    if length / bore < 4.0 / 3.0:
+        raise ValueError(
+            "gas_puff_orifice_length_cm / gas_puff_orifice_id_cm must be "
+            f">= 4/3 (got {length} / {bore} = {length / bore}): the beaming "
+            "law is a LONG-tube result whose end-effect prescription inverts "
+            "below that ratio, and it has no short-tube branch"
+        )
+    if not bool(input_dict.get("gas_puff_enabled", True)):
+        raise ValueError(
+            "gas_puff_profile='orifice' derives the injection geometry of a "
+            "puff that gas_puff_enabled=False never delivers; enable the puff "
+            "or choose a profile that is not a derivation"
+        )
+    flow = (
+        float(input_dict.get("S_gp", 0.0))
+        * float(input_dict.get("gas_puff_valves", 2))
+        * float(input_dict.get("gas_puff_delivery_fraction", 1.0))
+    )
+    if flow <= 0.0:
+        raise ValueError(
+            "gas_puff_profile='orifice' was configured but the puff delivers "
+            f"no flow (S_gp x gas_puff_valves x gas_puff_delivery_fraction = "
+            f"{flow}): there is nothing to place, and a derived row over a "
+            "shut valve would report a geometry it never applies"
+        )
 
 
 def resolve_neutral_jet_config(

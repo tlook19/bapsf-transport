@@ -355,6 +355,8 @@ def two_zone_puff_row_from_config(f, params, flags, times, mask, Vm_full, Va_ful
         z_cm=params.get("gas_puff_z_cm"),
         sigma_cm=float(params.get("gas_puff_sigma_cm", 50.0)),
         throw_cm=float(params.get("gas_puff_throw_cm", 100.0)),
+        orifice_id_cm=params.get("gas_puff_orifice_id_cm"),
+        orifice_length_cm=params.get("gas_puff_orifice_length_cm"),
         end=0,
         delivery_fraction=float(params.get("gas_puff_delivery_fraction", 1.0)),
     )
@@ -367,6 +369,8 @@ def two_zone_puff_row_from_config(f, params, flags, times, mask, Vm_full, Va_ful
             z_cm=params.get("gas_puff_z_cm"),
             sigma_cm=float(params.get("gas_puff_sigma_cm", 50.0)),
             throw_cm=float(params.get("gas_puff_throw_cm", 100.0)),
+            orifice_id_cm=params.get("gas_puff_orifice_id_cm"),
+            orifice_length_cm=params.get("gas_puff_orifice_length_cm"),
             end=-1,
             delivery_fraction=float(
                 params.get("gas_puff_delivery_fraction", 1.0)

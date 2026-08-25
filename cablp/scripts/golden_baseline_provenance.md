@@ -1,13 +1,14 @@
 # Provenance of the golden baseline pins (`baseline_sim1d.BASELINE_*_OVERRIDES`)
 
-**Recaptured 2026-08-24 (the CAD-SPAN MACHINE GEOMETRY adopted — the
-cathode-anode gap and the port-7 ring, both reduced by the CAD-span midpoint
-rule — together with the ray-clip exactness fix the gap value forced; the
+**Recaptured 2026-08-24 (the TUBE-BEAMED INJECTION ROW adopted — the stance's
+gas puff moved off the `cosine_pipe` deposition envelope onto the CAD-derived
+`"orifice"` row, with the shaped initial fill regenerated under it in the same
+event; the CAD-span machine geometry with its ray-clip exactness fix, the
 2026-08-23 conserving ionization birth with its `C_R` re-trim, the
 `heat_flux_limiter_f` re-cut to 0.45, the pre-Tuesday physics batch, the
 2026-08-20 stance-update wave and the thread-24 R2b re-anchor onto the stance
-preceded it — all six under the reviewed-recapture protocol, see the recapture
-record below).** The committed
+preceded it — all seven under the reviewed-recapture protocol, see the
+recapture record below).** The committed
 regression fixture
 `scripts/baselines/production_discharge.npz` is captured at **the stance of
 record, re-cut to the gate mesh** — `default_config()` plus the committed stance
@@ -107,15 +108,15 @@ whole cycle rather than a truncated foot.
 
 | quantity | value |
 |---|---|
-| steps | 71,287 |
+| steps | 70,408 |
 | wall, single lane | ~15 min per capture, the two run strictly serially |
 | saves | 2,625 |
-| `final_time` | 2.623652e-02 s (the dynamic `t_end`, reached) |
+| `final_time` | 2.623728e-02 s (the dynamic `t_end`, reached) |
 | trajectory | `y[2625, 576]` = 8 fields × 72 cells |
 | phase census (saves) | 9 `pre_breakdown`, 15 `breakdown`, 2000 `main_discharge`, 600 `afterglow`, 1 `post_afterglow` |
 | save cadence | 10 us — the finest timing shift this fixture can resolve |
 
-*(Figures above are the 2026-08-24 CAD-span capture; `steps`, `saves` and
+*(Figures above are the 2026-08-24 tube-beamed-row capture; `steps`, `saves` and
 `final_time` are read from the committed sidecar
 `scripts/baselines/production_discharge.json`, which is regenerated at every
 recapture and is the authority for them. The two captures were
@@ -142,6 +143,120 @@ stance the cells carry plasma and the term is well behaved. Recorded as a known
 closure stress, deliberately not addressed by this pass.
 
 ## Recapture record
+
+**2026-08-24 — the TUBE-BEAMED INJECTION ROW adopted, with the shaped foot
+fill regenerated under it (AUTHORIZED recapture; Tom's `[porf-dvm-consistency]`
+ruling, which ruled the two changes ONE event).** The stance moved the fluid
+puff off the `cosine_pipe` deposition envelope and onto the CAD-derived
+`"orifice"` injection row, and rebuilt the shaped initial fill on that row at
+the current geometry. They are one event because the old fill was ALSO stale
+against the geometry the stance already carried, so rebuilding it and changing
+the row could not be separated without shipping a fill that matched neither.
+
+| key | old | new | class |
+|---|---|---|---|
+| `gas_puff_profile` (stance `g1atrim.toml`) | `"cosine_pipe"` | `"orifice"` | selector — the row is **DERIVED** (CAD port + Clausing tube beaming) |
+| `gas_puff_orifice_id_cm` (stance; new config key, default `None`) | *absent* | `3.95` | **DERIVED**, the MIDPOINT of the ruled [3.8, 4.1] cm hardware bracket |
+| `gas_puff_orifice_length_cm` (stance; new config key, default `None`) | *absent* | `22.0` | **DERIVED**, the one-sided lower bound L ≥ 22 cm |
+| `nn0_profile`, `nn0_annulus_profile` (stance) | the 2026-08-19 `g1afix_foot45.npz` fill | the `g1aporf_foot45.npz` fill | **DERIVED** from a model run, regenerated at this tip |
+
+Values, classes, brackets and the closure disclosures:
+`production_stance_provenance.md` (the stance rows) and
+`config_defaults_provenance.md` (the two new config keys). The derivation is
+`cablp/solvers/_sim1d/physics/puff_orifice.py`; `MODEL.md`'s fueling section
+carries the disclosure that a kinetic first-flight row is being read as the
+fluid deposition row.
+
+**What reaches THIS fixture, and what does not.** The re-cut drops the stance's
+mesh-sized package, so **the regenerated fill does not travel to the golden at
+all** — `nn0_profile` and `nn0_annulus_profile` are dropped whole and the
+gate runs the equilibrated seed instead. The three PUFF keys are scalars and do
+travel. So the fixture moves for one reason only: the puff's axial row. It also
+runs that row on a DIFFERENT flight than the campaign does, because dropping
+the prescribed radii puts the vessel wall at 50 cm instead of the measured
+40 cm; the row is correspondingly wider here (5–95 % span 87.05 cm vs 59.81 cm
+on the campaign mesh, `scripts/g1aporf_rowcensus.txt`). That is the re-cut
+behaving as documented, not a second change.
+
+**Delta discipline — proven BEFORE anything was recaptured.** The code change
+that adds the profile is bit-inert with the profile off, which is what licensed
+it to ride this recapture:
+
+| arm | result |
+|---|---|
+| the `"orifice"` code path alone, stance untouched (still `cosine_pipe`) | `baseline verify OK: saves=2625, exact=True, max_rel=0.000e+00` on the FULL pure golden — **bit-inert with the feature off** |
+| the same, compiled | `CABLP_COMPILED_KERNELS=1` FULL golden `exact=True` |
+| the shared builder's orifice row vs `scripts/puff_orifice.py` on the same inputs | **bit-for-bit identical** (raw bytes), asserted by the `gas-puff-orifice-profile` smoke case — one derivation, not two |
+| total inflow under the new row | conserved to `0.000e+00` relative on the golden mesh, `1.110e-16` on the campaign mesh |
+| neutral seed cache | all four candidate signatures distinct — the profile and EACH new key re-key the fail-closed hash on their own, so no stale equilibrated seed can be served (`scripts/g1aporf_seedcache.txt`); no salt needed |
+
+`config_snapshots.json` was regenerated **twice** in this pass, and the two
+regenerations say different things. After the CODE change alone:
+`parameter_count` 252 → **254** (the two new keys, both `None` by default),
+`flag_count` unchanged at 48, and every one of the four config-complete driver
+cases reproduces its previously committed digest EXACTLY when those two keys
+are deleted from the resolved params — so the config surface moved by the keys
+alone. After the STANCE edit: **only `production_golden` moved**, which is the
+only case that applies the stance file, with the counts unchanged again.
+
+**What moved in the fixture.**
+
+| quantity | before | after |
+|---|---|---|
+| `steps` | 71,287 | **70,408** (−879) |
+| `saves` | 2,625 | **2,625** (unchanged) |
+| `final_time` | 2.623652e-02 s | **2.623728e-02 s** — the dynamic `t_end`, still reached |
+| NPZ `sha256` | `e2cceae7b999bb9e89b6cd56a3dec1d40c77efc956e970a659cc10f5b55e1439` | `d53100197b76def84e4f59d13be8a40aa6b7b8733482917570787e4c8e8c77f9` |
+| sidecar `sha256` | `dbfb813bc5784afc3c71611cddcd4195874b2e440edaf72b3b245affc44c03b0` | `50a3ba19d1f7dbb7fe09b643738290281d0f340cea22267ed16c43a490b54988` |
+| 4k digest | `d28b3ca8e49b0d5bed2dda7882997becd404f26ce063f76e94ecad53ea57eccd` | `e50f58c9bcb0468a8834b92c9d49d3896afd2125235eebd022c65fba4747fa5a` |
+| digest `config_identity` | `91e19ac5a7eb11c21ce0c38ab36cb60f948c420edc8ae0a1642e80095cb0eec6` | `b5315d5c931e5404febef3133b0949348e31c406b28f80cb1d4b6b87418ed46a` |
+
+**Rotation at merge (reviewer, 2026-08-24): config-identity only.** Merging this
+recapture onto an `agent-staging` that already carried the
+`neutral_kinetic_dvm_transfer_hold` key (the `agent/dvm-exp-hold` rotation
+record below) changed the resolved-config identity again, so the digest
+reference was re-captured at the MERGED tree — twice, from clean separate
+processes, byte-identical — and installed with `config_identity`
+`b5315d5c931e5404febef3133b0949348e31c406b28f80cb1d4b6b87418ed46a` →
+`ba5a8ed54f291a08046fea902e0c1dbefab8a0f84a0dab996c326872ecf81f24`. The
+trajectory digest is UNCHANGED from this recapture
+(`e50f58c9bcb0468a8834b92c9d49d3896afd2125235eebd022c65fba4747fa5a`, all five
+checkpoints, `steps = 4000` and `final_time` equal); the NPZ fixture and
+sidecar are untouched by the merge. `config_snapshots.json` was regenerated at
+the merged tree in the same step (253 → 255 params: the two orifice keys on
+top of the exp-hold key).
+
+**The cause, stated plainly: the puff's axial row, and nothing else.** The
+`"orifice"` row concentrates the same total inflow into a much narrower
+footprint — on this mesh 5–95 % span 87.05 cm against the superseded
+`cosine_pipe` envelope's 187.8 cm — so the near-source neutral density is
+higher and the far column lower from the first step. The trajectory is
+different, not degraded: the run still ignites, reaches the dynamic `t_end`,
+holds the same 2,625 saves, and the sidecar reports `finite: true` with
+`Te_max` 21.43 eV.
+
+**A behavioural consequence worth knowing.** Unlike the length-weighted fluid
+shapes, the orifice row is NOT masked to `_PUFF_ELIGIBLE_ROLES` — it deposits
+where the ray optics lands it. On THIS mesh that puts **7.24 %** of the row's
+mass in the cathode–anode gap, the plenum and the cathode cell (3.87 % on the
+campaign mesh, whose measured 40 cm wall shortens the flight);
+`scripts/g1aporf_rowcensus.txt` has the per-role census on both meshes. Total
+inflow is conserved exactly either way, and the `kinetic_dvm` annulus-starvation
+check finds no starved support cell on either mesh.
+
+**Capture evidence.** Recaptured twice from clean separate processes to
+temporary paths and compared BEFORE installing either, run strictly serially
+per the serial-golden rule: NPZ and JSON sidecar both byte-identical (the two
+`sha256` values above), and raw-bitwise identical over all three arrays —
+`phase` identical at raw bytes, `time` **0 differing of 2,625** and `y`
+**0 differing of 1,512,000** at `uint64`. The digest reference
+`baselines/golden_digest_4k.json` was regenerated in the same event, as the
+protocol requires. `--verify` prints:
+
+```
+baseline verify OK: saves=2625, exact=True, max_rel=0.000e+00, max_abs=0.000e+00, time_max_abs=0.000e+00 s (rtol=1.0e-09, atol=0.0e+00)
+```
+
 
 **2026-08-24 — DIGEST-REFERENCE ROTATION ONLY, config-identity cause (the
 `neutral_kinetic_dvm_transfer_hold` key added; NPZ fixture UNTOUCHED).** The

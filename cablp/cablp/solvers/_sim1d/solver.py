@@ -915,6 +915,23 @@ class LAPDSim1D:
             self._phase_transition_mode(), self._prebreakdown_timeout_action()
         )
         validate_gas_puff_config(self._input_dict)
+        if str(self._input_dict.get("gas_puff_profile", "cell")) == "orifice":
+            # Derive the row ONCE, here, for the refusals that need the mesh:
+            # a port off the grid and a column that is not inside the vessel
+            # wall are configuration errors, and they must not first surface
+            # from inside a right-hand side. The row is run-constant and
+            # memoised, so this also pays its quadrature before the run.
+            gas_puff_rate_profile(
+                self._geometry,
+                1.0,
+                float(self._input_dict.get("gas_puff_valves", 2)),
+                profile="orifice",
+                z_cm=self._input_dict.get("gas_puff_z_cm"),
+                orifice_id_cm=self._input_dict.get("gas_puff_orifice_id_cm"),
+                orifice_length_cm=self._input_dict.get(
+                    "gas_puff_orifice_length_cm"
+                ),
+            )
         self._neutral_momentum = bool(self._flags.get("neutral_momentum", False))
         if (
             self._neutral_momentum
@@ -3733,6 +3750,12 @@ class LAPDSim1D:
                 throw_cm=float(
                     self._input_dict.get("gas_puff_throw_cm", 100.0)
                 ),
+                orifice_id_cm=self._input_dict.get(
+                    "gas_puff_orifice_id_cm"
+                ),
+                orifice_length_cm=self._input_dict.get(
+                    "gas_puff_orifice_length_cm"
+                ),
                 delivery_fraction=float(
                     self._input_dict.get("gas_puff_delivery_fraction", 1.0)
                 ),
@@ -4775,6 +4798,8 @@ class LAPDSim1D:
                 z_cm=source_kwargs["gas_puff_z_cm"],
                 sigma_cm=source_kwargs["gas_puff_sigma_cm"],
                 throw_cm=source_kwargs["gas_puff_throw_cm"],
+                orifice_id_cm=source_kwargs["gas_puff_orifice_id_cm"],
+                orifice_length_cm=source_kwargs["gas_puff_orifice_length_cm"],
                 end=0,
                 delivery_fraction=source_kwargs["gas_puff_delivery_fraction"],
             )
@@ -4787,6 +4812,8 @@ class LAPDSim1D:
                     z_cm=source_kwargs["gas_puff_z_cm"],
                     sigma_cm=source_kwargs["gas_puff_sigma_cm"],
                     throw_cm=source_kwargs["gas_puff_throw_cm"],
+                    orifice_id_cm=source_kwargs["gas_puff_orifice_id_cm"],
+                    orifice_length_cm=source_kwargs["gas_puff_orifice_length_cm"],
                     end=-1,
                     delivery_fraction=source_kwargs["gas_puff_delivery_fraction"],
                 )
@@ -4906,6 +4933,8 @@ class LAPDSim1D:
                     z_cm=source_kwargs["gas_puff_z_cm"],
                     sigma_cm=source_kwargs["gas_puff_sigma_cm"],
                     throw_cm=source_kwargs["gas_puff_throw_cm"],
+                    orifice_id_cm=source_kwargs["gas_puff_orifice_id_cm"],
+                    orifice_length_cm=source_kwargs["gas_puff_orifice_length_cm"],
                     end=end,
                     delivery_fraction=source_kwargs["gas_puff_delivery_fraction"],
                 )
@@ -8311,6 +8340,8 @@ class LAPDSim1D:
             self._geometry, nk["S_gp"], nk["gas_puff_valves"],
             profile=nk["gas_puff_profile"], z_cm=nk["gas_puff_z_cm"],
             sigma_cm=nk["gas_puff_sigma_cm"], throw_cm=nk["gas_puff_throw_cm"],
+            orifice_id_cm=nk["gas_puff_orifice_id_cm"],
+            orifice_length_cm=nk["gas_puff_orifice_length_cm"],
             end=0, delivery_fraction=nk["gas_puff_delivery_fraction"],
         )
         if nk["twin_cathode"]:
@@ -8318,6 +8349,8 @@ class LAPDSim1D:
                 self._geometry, nk["Twin_S_gp"], nk["gas_puff_valves"],
                 profile=nk["gas_puff_profile"], z_cm=nk["gas_puff_z_cm"],
                 sigma_cm=nk["gas_puff_sigma_cm"], throw_cm=nk["gas_puff_throw_cm"],
+                orifice_id_cm=nk["gas_puff_orifice_id_cm"],
+                orifice_length_cm=nk["gas_puff_orifice_length_cm"],
                 end=-1, delivery_fraction=nk["gas_puff_delivery_fraction"],
             )
         return _gas_puff_local_ionization_rhs(
@@ -8527,6 +8560,12 @@ class LAPDSim1D:
             ),
             "gas_puff_throw_cm": float(
                 self._input_dict.get("gas_puff_throw_cm", 100.0)
+            ),
+            "gas_puff_orifice_id_cm": self._input_dict.get(
+                "gas_puff_orifice_id_cm"
+            ),
+            "gas_puff_orifice_length_cm": self._input_dict.get(
+                "gas_puff_orifice_length_cm"
             ),
             "gas_puff_delivery_fraction": float(
                 self._input_dict.get("gas_puff_delivery_fraction", 1.0)
@@ -9313,6 +9352,8 @@ class LAPDSim1D:
             self._geometry, nk["S_gp"], nk["gas_puff_valves"],
             profile=nk["gas_puff_profile"], z_cm=nk["gas_puff_z_cm"],
             sigma_cm=nk["gas_puff_sigma_cm"], throw_cm=nk["gas_puff_throw_cm"],
+            orifice_id_cm=nk["gas_puff_orifice_id_cm"],
+            orifice_length_cm=nk["gas_puff_orifice_length_cm"],
             end=0, delivery_fraction=nk["gas_puff_delivery_fraction"],
         )
         if twin:
@@ -9321,6 +9362,8 @@ class LAPDSim1D:
                 profile=nk["gas_puff_profile"], z_cm=nk["gas_puff_z_cm"],
                 sigma_cm=nk["gas_puff_sigma_cm"],
                 throw_cm=nk["gas_puff_throw_cm"],
+                orifice_id_cm=nk["gas_puff_orifice_id_cm"],
+                orifice_length_cm=nk["gas_puff_orifice_length_cm"],
                 end=-1, delivery_fraction=nk["gas_puff_delivery_fraction"],
             )
         return {
@@ -10413,6 +10456,8 @@ class LAPDSim1D:
                 z_cm=src_kwargs["gas_puff_z_cm"],
                 sigma_cm=src_kwargs["gas_puff_sigma_cm"],
                 throw_cm=src_kwargs["gas_puff_throw_cm"],
+                orifice_id_cm=src_kwargs["gas_puff_orifice_id_cm"],
+                orifice_length_cm=src_kwargs["gas_puff_orifice_length_cm"],
                 delivery_fraction=src_kwargs["gas_puff_delivery_fraction"],
             ) * np.asarray(geometry.neutral_volume_cm3, dtype=float)
         return {
