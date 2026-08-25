@@ -40,9 +40,13 @@ stay reproducible. Both readings come from the SAME banked arms -- the
 sampling is a table-time choice, never a re-run.
 
 R8 ESTIMATOR [R8, as amended]. The registered fit is
-``--r8-fit amended``: reference-corrected errors against the converged
-reference rung ``cad_1.5625e-06``, fitted log-e against log-h over the
-rungs whose NOMINAL cadence is at or below 1.25e-5 s. The coarser rungs
+``--r8-fit amended``: errors against the converged reference rung
+``cad_1.5625e-06``, fitted as ``log(e_k)`` against ``log(h_k - h_ref)``
+over the rungs whose NOMINAL cadence is at or below 1.25e-5 s. That
+abscissa carries the FINITE-REFERENCE correction -- the reference is a
+finite h, so a first-order response gives ``e_k ~ h_k - h_ref`` and not
+``~ h_k`` -- and the uncorrected log-e/log-h slope is reported beside it
+as a diagnostic. The coarser rungs
 are reported but EXCLUDED -- they sit in the ion-debit shortfall /
 Ti-collapse regime, a different regime from the one the fit models -- and
 the pre-amendment reference is superseded because it was itself
@@ -874,11 +878,17 @@ def plan_lines(t_star_ms):
                "INACTIVE-with-disclosure, never a trivial pass.")
     out.append("")
     out.append(f"[R8, AMENDED {R8_AMENDMENT_LABEL}] the DEFAULT fit is "
-               f"--r8-fit {R8_FIT_AMENDED}: reference-corrected errors "
+               f"--r8-fit {R8_FIT_AMENDED}: errors "
                f"e_k = ||u_k - u_ref|| against the converged reference rung "
-               f"{R8_REFERENCE_ARM}, fitted as log(e) against log(h) by "
-               "least squares over the rungs with NOMINAL cadence <= "
-               f"{R8_FIT_MAX_H:g} s, using each rung's EFFECTIVE h. Coarser "
+               f"{R8_REFERENCE_ARM}, fitted as log(e_k) against "
+               "log(h_k - h_ref) by least squares over the rungs with "
+               f"NOMINAL cadence <= {R8_FIT_MAX_H:g} s, using each rung's "
+               "EFFECTIVE h. The abscissa carries the FINITE-REFERENCE "
+               "correction (R9's h_k/(h_k - h_ref)): the reference is a "
+               "finite h, so a first-order response gives "
+               "e_k ~ h_k - h_ref, not e_k ~ h_k. The uncorrected "
+               "log-e/log-h slope is REPORTED beside it, with the value a "
+               "first-order coupling would take there. Coarser "
                f"rungs are REPORTED but {R8_EXCLUDED_LABEL}: at "
                "h >= 2.5e-5 s the arm is in the ion-debit shortfall / "
                "Ti-collapse regime, not on the truncation-error curve. "
@@ -1209,29 +1219,47 @@ def _r8_amended(lines, verdicts, arms, ladder, sampling):
     """[R8, AMENDED 24cr] Reference-corrected log-e/log-h order fit.
 
     Errors are formed against the converged reference rung
-    ``R8_REFERENCE_ARM`` and the order is the least-squares slope of log(e)
-    against log(h) over the FIT DOMAIN -- the rungs whose NOMINAL cadence is
-    at or below ``R8_FIT_MAX_H``. Coarser rungs are reported with their own
-    errors and carry ``R8_EXCLUDED_LABEL``: at h >= 2.5e-5 s the arm is in
-    the ion-debit shortfall / Ti-collapse regime, which is not a sample of
-    the smooth truncation-error curve the fit models.
+    ``R8_REFERENCE_ARM``, and the order is the least-squares slope of
+    ``log(e_k)`` against ``log(h_k - h_ref)`` over the FIT DOMAIN -- the
+    rungs whose NOMINAL cadence is at or below ``R8_FIT_MAX_H``.
+
+    The abscissa carries the FINITE-REFERENCE CORRECTION, the same one R9
+    applies as ``h_k/(h_k - h_ref)``. The reference is a finite h, not the
+    exact solution, so a first-order response gives
+    ``e_k = ||u_k - u_ref|| ~ h_k - h_ref`` and NOT ``~ h_k``. Fitting
+    against ``h_k`` therefore reads a first-order coupling as steeper than
+    first order, by an amount set only by how close the reference sits to
+    the finest fit rung. That uncorrected slope is still REPORTED as a
+    diagnostic column, beside the value it would take if the coupling were
+    exactly first order, so the size of the bias is visible rather than
+    inferred.
+
+    Coarser rungs are reported with their own errors and carry
+    ``R8_EXCLUDED_LABEL``: at h >= 2.5e-5 s the arm is in the ion-debit
+    shortfall / Ti-collapse regime, which is not a sample of the smooth
+    truncation-error curve the fit models.
 
     Returns the ACTIVE gated keys (the NV2 survivors), which R9 reads.
     """
-    lines.append("## R8 order fit -- AMENDED: reference-corrected, fit "
-                 f"domain nominal h <= {R8_FIT_MAX_H:g} s")
+    lines.append("## R8 order fit -- AMENDED: finite-reference corrected, "
+                 f"fit domain nominal h <= {R8_FIT_MAX_H:g} s")
     lines.append("")
     lines.append(
         f"**Fit mode `{R8_FIT_AMENDED}` (the default), "
         f"{R8_AMENDMENT_LABEL}.** Errors are "
         f"`e_k = ||u_k - u_ref||` against the converged reference rung "
         f"`{R8_REFERENCE_ARM}`, read at the `{sampling}` sampling, and the "
-        "order is the least-squares slope of `log e` against `log h` over "
-        "the fit domain, using each rung's EFFECTIVE h. This addresses two "
-        "identified defects of the pre-amendment fit: the coarse rungs are a "
-        "DIFFERENT REGIME (ion-debit shortfall / Ti collapse at "
-        "h >= 2.5e-5 s), and the pre-amendment reference was UNCONVERGED "
-        "(its finest rung over-books 5.2 %)."
+        "gated order is the least-squares slope of `log e_k` against "
+        "**`log(h_k - h_ref)`** over the fit domain, on each rung's "
+        "EFFECTIVE h. That abscissa carries the FINITE-REFERENCE "
+        "CORRECTION -- the same one R9 applies as `h_k/(h_k - h_ref)` -- "
+        "because the reference is a finite h and not the exact solution, so "
+        "a first-order response gives `e_k ~ h_k - h_ref` rather than "
+        "`e_k ~ h_k`. This addresses two identified defects of the "
+        "pre-amendment fit: the coarse rungs are a DIFFERENT REGIME "
+        "(ion-debit shortfall / Ti collapse at h >= 2.5e-5 s), and the "
+        "pre-amendment reference was UNCONVERGED (its finest rung "
+        "over-books 5.2 %)."
     )
     lines.append("")
 
@@ -1289,35 +1317,46 @@ def _r8_amended(lines, verdicts, arms, ladder, sampling):
         )
         lines.append("")
 
-    ideal = [h - h_ref for h in hs]
-    p_ideal = _log_slope(hs, ideal)
-    p_ideal_local = _local_slopes(hs, ideal)
+    inverted = [a for a, h in zip(fit_arms, hs) if h <= h_ref]
+    if inverted:
+        raise SystemExit(
+            "REFUSED: the amended fit's abscissa is h_k - h_ref, so every "
+            "fit-domain rung must be strictly COARSER than the reference "
+            f"`{ref['name']}` (h = {h_ref:.6g} s), and "
+            + ", ".join(f"`{a['name']}` (h = {float(a['_h']):.6g} s)"
+                        for a in inverted)
+            + " is not. The EFFECTIVE cadences have inverted the ladder, and "
+            "a non-positive abscissa is not a fit domain."
+        )
+    hb = [h - h_ref for h in hs]
+    p_ideal_unc = _log_slope(hs, hb)
+    p_ideal_unc_local = _local_slopes(hs, hb)
     lines.append(
-        "**Estimator bias, disclosed and NOT corrected for.** The reference "
-        "is a finite h, not the exact solution, so a perfectly first-order "
-        "response gives `e_k ~ h_k - h_ref`, not `e_k ~ h_k`. On this "
-        f"domain and this reference that ideal sits at p = {p_ideal:.4g} "
-        "(local "
-        + ", ".join(f"{p:.4g}" for p in p_ideal_local)
-        + "), NOT at 1. The slopes below are read against the REGISTERED "
-        "band regardless -- a band is not moved to suit an estimator -- so a "
-        "row sitting above the band by about this much is the reference's "
-        "finite h rather than the coupling's order, and that reading is for "
-        "adjudication, not for the harness to apply."
+        "**The uncorrected slope is REPORTED, not gated.** Fitting the same "
+        "errors against `log h_k` instead of `log(h_k - h_ref)` leaves the "
+        "finite-reference bias in, and on THIS domain and this reference a "
+        "perfectly first-order coupling would read "
+        f"p_uncorrected = {p_ideal_unc:.4g} (local "
+        + ", ".join(f"{p:.4g}" for p in p_ideal_unc_local)
+        + ") rather than 1. That ideal is printed beside the uncorrected "
+        "column below so the size of the bias is visible on the page; the "
+        "corrected column is the one the registered band is read against."
     )
     lines.append("")
 
     lines.append(f"### Reference-corrected errors vs `{ref['name']}`")
     lines.append("")
-    lines.append("| arm | h_k [s] | in fit domain | "
+    lines.append("| arm | h_k [s] | h_k - h_ref [s] (fit abscissa) | "
+                 "in fit domain | "
                  + " | ".join(f"{GATED_TAG[k]} e_k" for k in GATED_KEYS)
                  + " |")
-    lines.append("|---" * (3 + len(GATED_KEYS)) + "|")
+    lines.append("|---" * (4 + len(GATED_KEYS)) + "|")
     for a in [x for x in ladder if x["name"] != R8_REFERENCE_ARM]:
         errs = [_ref_errors([a], ref, k, GATED_KIND[k])[0] for k in GATED_KEYS]
         in_fit = a["name"] in fit_names
+        h_a = float(a["_h"])
         lines.append(
-            f"| `{a['name']}` | {float(a['_h']):.6g} | "
+            f"| `{a['name']}` | {h_a:.6g} | {h_a - h_ref:.6g} | "
             + ("yes" if in_fit else f"NO -- {R8_EXCLUDED_LABEL}") + " | "
             + " | ".join(f"{e:.4g}" for e in errs) + " |"
         )
@@ -1331,7 +1370,9 @@ def _r8_amended(lines, verdicts, arms, ladder, sampling):
         "carries the coarsest fit rung's O(h^2) contamination, which is what "
         f"that band exists for. Containment in the tighter "
         f"[{ORDER_BAND_FINE[0]}, {ORDER_BAND_FINE[1]}] is reported per row "
-        "beside it and gates nothing."
+        "beside it and gates nothing. `fit p` and the local slopes are on "
+        "the CORRECTED abscissa `h_k - h_ref`; `uncorrected p` is the same "
+        "errors against `h_k` and is a diagnostic only."
     )
     lines.append("")
     n_local = len(hs) - 1
@@ -1339,9 +1380,11 @@ def _r8_amended(lines, verdicts, arms, ladder, sampling):
         "| obs | row | active (NV2) | "
         + " | ".join(f"e({h:.4g})" for h in hs) + " | "
         + " | ".join(f"local p{i + 1}{i + 2}" for i in range(n_local))
-        + " | fit p | in fine band | monotone | floor guard | verdict |"
+        + " | fit p | in fine band | uncorrected p (finite-reference "
+        f"biased; ideal-first-order p = {p_ideal_unc:.4g}) | monotone | "
+        "floor guard | verdict |"
     )
-    lines.append("|---" * (8 + len(hs) + n_local) + "|")
+    lines.append("|---" * (9 + len(hs) + n_local) + "|")
 
     active_keys = []
     per_obs_state = {}
@@ -1351,8 +1394,9 @@ def _r8_amended(lines, verdicts, arms, ladder, sampling):
     for tag, key, label, kind in GATED:
         active, fine_mag, ref_mag = _activity(ladder, key, kind)
         errs = _ref_errors(fit_arms, ref, key, kind)
-        loc = _local_slopes(hs, errs)
-        p = _log_slope(hs, errs)
+        loc = _local_slopes(hb, errs)
+        p = _log_slope(hb, errs)
+        p_unc = _log_slope(hs, errs)
         per_obs_p[key] = p
         monotone = all(
             np.isfinite(errs[i]) and np.isfinite(errs[i + 1])
@@ -1390,7 +1434,7 @@ def _r8_amended(lines, verdicts, arms, ladder, sampling):
             f"| {tag} | {label} | {active_cell} | "
             + " | ".join(f"{e:.4g}" for e in errs) + " | "
             + " | ".join(f"{v:.4g}" for v in loc)
-            + f" | {p:.4g} | {'yes' if in_fine else 'no'} | "
+            + f" | {p:.4g} | {'yes' if in_fine else 'no'} | {p_unc:.4g} | "
             f"{'yes' if monotone else 'NO'} | {guard} | {state} |"
         )
     lines.append("")
@@ -1399,9 +1443,10 @@ def _r8_amended(lines, verdicts, arms, ladder, sampling):
     stem = (
         f"amended fit ({R8_AMENDMENT_LABEL}): domain {domain} "
         f"(nominal h <= {R8_FIT_MAX_H:g} s), reference `{ref['name']}` "
-        f"(h = {h_ref:.6g} s), log-e/log-h on effective h, band "
-        f"[{ORDER_BAND_COARSE[0]}, {ORDER_BAND_COARSE[1]}]; rungs coarser "
-        f"than the domain are {R8_EXCLUDED_LABEL}"
+        f"(h = {h_ref:.6g} s), finite-reference-corrected log-e against "
+        f"log(h_k - h_ref) on effective h, band [{ORDER_BAND_COARSE[0]}, "
+        f"{ORDER_BAND_COARSE[1]}]; rungs coarser than the domain are "
+        f"{R8_EXCLUDED_LABEL}"
     )
     if not active_keys:
         verdicts.append(Verdict(
@@ -1588,10 +1633,11 @@ def evaluate(arm_records, out_path=None, sampling=SAMPLING_REGISTERED,
                     "SUPERSEDED " + AMENDMENT_LABEL) + " |")
     lines.append(
         f"| R8 fit mode [R8, amended] | `{r8_fit}` -- "
-        + (f"REGISTERED {R8_AMENDMENT_LABEL}: reference-corrected "
-           f"log-e/log-h fit over the rungs with nominal h <= "
-           f"{R8_FIT_MAX_H:g} s, against the reference rung "
-           f"`{R8_REFERENCE_ARM}`; coarser rungs reported but "
+        + (f"REGISTERED {R8_AMENDMENT_LABEL}: finite-reference-corrected "
+           f"fit of log e_k against log(h_k - h_ref) over the rungs with "
+           f"nominal h <= {R8_FIT_MAX_H:g} s, against the reference rung "
+           f"`{R8_REFERENCE_ARM}`; the uncorrected log-e/log-h slope is "
+           f"reported as a diagnostic; coarser rungs reported but "
            f"{R8_EXCLUDED_LABEL}"
            if r8_fit == R8_FIT_AMENDED else
            f"SUPERSEDED {R8_AMENDMENT_LABEL}: successive-pair fit over the "
@@ -2205,10 +2251,12 @@ def main(argv=None):
                    help=f"--table: which R8 ESTIMATOR the sampled rows are "
                         f"fed to. {R8_FIT_AMENDED!r} (default) is the "
                         f"REGISTERED fit {R8_AMENDMENT_LABEL} -- "
-                        f"reference-corrected errors against "
-                        f"{R8_REFERENCE_ARM!r}, log-e/log-h over the rungs "
-                        f"with nominal h <= {R8_FIT_MAX_H:g} s, coarser rungs "
-                        f"reported but {R8_EXCLUDED_LABEL}. "
+                        f"errors against {R8_REFERENCE_ARM!r}, fitted "
+                        "finite-reference-corrected as log(e_k) against "
+                        "log(h_k - h_ref) over the rungs with nominal "
+                        f"h <= {R8_FIT_MAX_H:g} s (uncorrected slope "
+                        "reported as a diagnostic), coarser rungs reported "
+                        f"but {R8_EXCLUDED_LABEL}. "
                         f"{R8_FIT_PRE_AMENDMENT!r} is the successive-pair fit "
                         "over the whole ladder and is SUPERSEDED; it is kept "
                         "only so the pre-amendment numbers stay reproducible")
