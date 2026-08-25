@@ -3652,6 +3652,45 @@ input_flags_template_1d = {
     # A non-finite phi_a belongs to neither regime and raises RuntimeError.
     # Must be a real bool. Bit-exact when off.
     "anode_sheath_full_debit": False,
+    # Operator home of the beam's electron-energy deposition, default OFF.
+    # Armed, the beam_power_deposition Ee row leaves the explicit operator A
+    # and is applied instead by the implicit heat substep B, as a source held
+    # constant over each substep and solved together with the tridiagonal
+    # conduction operator. Nothing else about the beam moves: the ionization
+    # births, the ionization cost and the excitation radiation are
+    # reaction-channel terms and stay in A, and the deposited power is booked
+    # exactly once either way -- the term row still reports the same
+    # deposition, only which operator applies it changes.
+    #
+    # WHY. All heat conduction lives in B, so inside A the deposition cell has
+    # no operator opposing it: the beam heats Te there over the whole explicit
+    # step unopposed, and the reaction rates the SSPRK2 stages evaluate are
+    # read off that swung state. Conduction is the split-cycle RESTORING
+    # operator for that cell, so the defect is the COMPOSITION, and putting the
+    # source where the restoring operator already is removes it. The substep
+    # stays second-order under a constant source: tr_bdf2's two stage weights
+    # sum to one, and backward_euler's monotonicity guarantee is untouched
+    # because a POSITIVE source cannot drive an undershoot.
+    #
+    # SOURCE EVALUATION POINT. Each substep evaluates the deposition at the
+    # state it starts from and at the time that state represents, so Strang's
+    # two half-substeps take it at (y_n, t_n) and (post-A, t_n + dt) -- the
+    # same instants operator A's own SSPRK2 stages use, making the pair a
+    # trapezoidal quadrature of the source over the step. The cost is one extra
+    # cathode/beam solve per substep; the flag is an accuracy instrument, not a
+    # free one.
+    #
+    # Requires implicit_heat_conduction: with the split off there is no B to
+    # host the source, and the combination is a construction-time ValueError.
+    # A step explicitly asked for operator_split=False while armed raises for
+    # the same reason. Must be a real bool. Bit-exact when off.
+    #
+    # NOT CERTIFIABLE BY scripts/verify_sim1d_order.py: that harness measures
+    # the split step in a deliberately cathode-free regime, where the beam
+    # deposition row is identically zero and this flag therefore changes
+    # nothing. It changes the A/B commutator, so the NUMERICS.md split-order
+    # table is stale under it until re-measured.
+    "beam_deposition_in_heat_substep": False,
     "ionization_energy_cost": True,
     "cx": True,
     "icool_recomb": False,

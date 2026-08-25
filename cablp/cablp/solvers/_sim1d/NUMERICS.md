@@ -149,6 +149,16 @@ Local (cell-wise) RHS contributions, all in `physics/`:
   matrix, versus `A`'s reaction-rate evaluations — so Strang costs one extra
   heat substep, not one extra explicit step.
 
+  `beam_deposition_in_heat_substep` (default off) re-cuts WHICH TERM SITS IN
+  WHICH OPERATOR: the beam's electron-energy deposition row leaves `A`'s
+  explicit sum and is applied by `B` as a source held constant over each
+  substep, solved with the same tridiagonal operator. It exists because all
+  heat conduction lives in `B`, so at the beam-deposition cell nothing inside
+  `A` opposes the deposition and `A`'s stage states — and the reaction rates
+  read off them — swing above the accepted state. The beam's particle births,
+  ionization cost and excitation radiation are reaction-channel terms and stay
+  in `A`. Off, the composition is unchanged bit for bit.
+
   The substep discretization is selected by the `implicit_heat_scheme`
   parameter. Three of the four are **theta methods**, solving
   `(C + θ·Δt·K)·Tⁿ⁺¹ = C·Tⁿ − (1−θ)·Δt·K·Tⁿ`:
@@ -239,6 +249,14 @@ Note that a **production discharge will not show this**. Floors bind on ~42% of
 cell-visits there and phase transitions are threshold-triggered, so the step
 degrades to first order wherever those engage. The table above verifies the
 scheme, not the production path.
+
+> **STALE UNDER `beam_deposition_in_heat_substep`.** That flag moves the beam
+> electron-energy deposition from `A` into `B`, which changes the commutator
+> `[A,B]` the table measures; the numbers above were taken with it off and are
+> not re-measured here. `verify_sim1d_order.py` cannot re-measure it either —
+> its clean regime is cathode-free, so the deposition row is identically zero
+> there and the flag changes nothing it can see. Re-measuring belongs to the
+> adoption/recapture event.
 - **Neutral-only / prebreakdown path**: when plasma is disabled (or during
   neutral prebreakdown/equilibration), neutrals are advanced with an implicit
   (backward-Euler) linear solve over exchange, pumping, and gas-puff terms

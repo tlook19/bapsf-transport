@@ -324,6 +324,13 @@ _NEUTRAL_ENERGY_TERM_BOOKING = {
 }
 
 
+#: Name of the RHS row carrying the beam's electron-energy deposition. Bound
+#: to a constant because ``beam_deposition_in_heat_substep`` has to name the
+#: same row in two places -- the one it removes from the explicit sum and the
+#: one it hands to the heat substep -- and a typo in either would be a silent
+#: energy leak rather than an error.
+BEAM_POWER_DEPOSITION_TERM = "beam_power_deposition"
+
 _CATHODE_RESULT_KEYS = (
     "phi_c_plus",
     "phi_c_minus",
@@ -1360,6 +1367,31 @@ class LAPDSim1D:
                 "so arming it would debit phi_a twice"
             )
         self._anode_sheath_full_debit = _anode_sheath_full_debit
+        # Beam electron-energy deposition re-homed into the implicit heat
+        # substep. A real bool for the same reason as the two flags above: the
+        # flag MOVES a ~10^5 W source between operators, and an int or a string
+        # there would read like a value.
+        _beam_deposition_in_heat_substep = self._flags.get(
+            "beam_deposition_in_heat_substep", False
+        )
+        if not isinstance(_beam_deposition_in_heat_substep, bool):
+            raise ValueError(
+                "beam_deposition_in_heat_substep must be a bool (got "
+                f"{_beam_deposition_in_heat_substep!r})"
+            )
+        if _beam_deposition_in_heat_substep and not bool(
+            self._flags.get("implicit_heat_conduction", False)
+        ):
+            raise ValueError(
+                "beam_deposition_in_heat_substep requires "
+                "implicit_heat_conduction (got implicit_heat_conduction="
+                f"{self._flags.get('implicit_heat_conduction', False)!r}): the "
+                "flag re-homes the beam electron-energy source from the "
+                "explicit operator A into the implicit heat substep B, and "
+                "with the split off there is no B to host it -- the source "
+                "would leave A with nowhere to land"
+            )
+        self._beam_deposition_in_heat_substep = _beam_deposition_in_heat_substep
         # Census of the attracting-anode branch, advanced on ACCEPTED steps
         # only (see _accept_step_attempt) and exposed on an armed run's
         # cathode diagnostics. Initialised unconditionally so the attributes
@@ -3940,6 +3972,13 @@ class LAPDSim1D:
         other term is evaluated pointwise at ``time`` as before, so omitting it
         (the default, and what every diagnostic caller does) is the historical
         behaviour exactly.
+
+        With ``beam_deposition_in_heat_substep`` armed this is operator A's
+        RHS with the ``beam_power_deposition`` row LEFT OUT of the sum: that
+        row is applied by the implicit heat substep instead
+        (:meth:`operator_split_step`). The row is still built and still
+        REPORTED by :meth:`rhs_terms` with the same deposited power -- only
+        which operator applies it moves.
         """
         state_rhs = self._zero_rhs_state()
         terms = self.rhs_terms(
@@ -3948,8 +3987,14 @@ class LAPDSim1D:
             time=time,
             step_window=step_window,
         )
-        for term in terms.values():
-            state_rhs = add_state_rhs(state_rhs, term)
+        if self._beam_deposition_in_heat_substep:
+            for name, term in terms.items():
+                if name == BEAM_POWER_DEPOSITION_TERM:
+                    continue
+                state_rhs = add_state_rhs(state_rhs, term)
+        else:
+            for term in terms.values():
+                state_rhs = add_state_rhs(state_rhs, term)
         self._accumulate_dvm_ion_booking(terms)
         self._accumulate_coverage_burn(terms)
         # With optional fields on, the packed RHS must always match the
@@ -4707,6 +4752,20 @@ class LAPDSim1D:
         """Return a candidate step without committing state, time, or caches."""
         if operator_split is None:
             operator_split = self._flags.get("implicit_heat_conduction", False)
+        if self._beam_deposition_in_heat_substep and not operator_split:
+            # Construction already refuses the flag without
+            # implicit_heat_conduction, so the only way here is a caller
+            # passing operator_split=False explicitly (run/advance_one_step).
+            # Silently stepping would drop the beam deposition entirely: the
+            # flag has already removed it from the explicit sum and there is no
+            # substep to receive it.
+            raise ValueError(
+                "beam_deposition_in_heat_substep is armed but this step was "
+                "asked for operator_split=False: the beam electron-energy "
+                "source has been removed from the explicit operator and lives "
+                "in the implicit heat substep, so a non-split step would "
+                "deposit no beam power at all"
+            )
         if operator_split:
             if dt is None:
                 dt = self.suggest_timestep(include_heat_conduction=False).dt
@@ -6069,6 +6128,14 @@ class LAPDSim1D:
         to be second-order (``implicit_heat_scheme``) with a non-frozen
         conductivity (``heat_picard_iterations``); Strang alone only removes
         the splitting term.
+
+        ``beam_deposition_in_heat_substep`` MOVES ONE TERM ACROSS THE SPLIT:
+        the beam's electron-energy deposition leaves A's explicit sum (see
+        :meth:`rhs`) and enters B as a source held constant over each substep
+        (:meth:`beam_deposition_ee_source`). Nothing else changes -- the beam's
+        particle births, ionization cost and excitation radiation stay in A --
+        and the deposited power is booked once either way. Off, this method is
+        the historical composition, call for call.
         """
         y0 = self._y if y is None else np.asarray(y, dtype=float)
         if dt is None:
@@ -6085,8 +6152,17 @@ class LAPDSim1D:
         if raw_stage_func is None and self._raw_stage_validation:
             raw_stage_func = self._validate_raw_stage
 
-        def heat(y_in, sub_dt):
-            state = self.implicit_heat_conduction_step(dt=sub_dt, y=y_in)
+        def heat(y_in, sub_dt, source_time=None):
+            if self._beam_deposition_in_heat_substep:
+                state = self.implicit_heat_conduction_step(
+                    dt=sub_dt,
+                    y=y_in,
+                    ee_source=self.beam_deposition_ee_source(
+                        y=y_in, time=source_time
+                    ),
+                )
+            else:
+                state = self.implicit_heat_conduction_step(dt=sub_dt, y=y_in)
             raw = pack_state(state)
             if raw_stage_func is not None:
                 raw_stage_func(raw, "implicit_heat")
@@ -6108,10 +6184,27 @@ class LAPDSim1D:
                 raw_stage_func=raw_stage_func,
             )
 
+        # The source times below matter only under
+        # ``beam_deposition_in_heat_substep``; every other substep is
+        # autonomous, which is why the unarmed path computes neither of them.
+        # The rule is that a substep's source is evaluated at the state it
+        # starts from and at the time THAT STATE represents, which under Strang
+        # pairs (y0, t) with (post-A, t + dt) -- the same two instants operator
+        # A's own SSPRK2 stages use, so the two half-substeps together form the
+        # trapezoidal quadrature of the source over the step rather than a
+        # left-endpoint rule.
+        source_time_start = source_time_end = None
+        if self._beam_deposition_in_heat_substep:
+            source_time_start = self._time
+            source_time_end = self._time + dt
         if splitting == "strang":
             half = 0.5 * dt
-            return heat(explicit(heat(y0, half), dt), half)
-        return heat(explicit(y0, dt), dt)
+            return heat(
+                explicit(heat(y0, half, source_time_start), dt),
+                half,
+                source_time_end,
+            )
+        return heat(explicit(y0, dt), dt, source_time_end)
 
     def _operator_splitting(self):
         return validate_operator_splitting(
@@ -8157,6 +8250,53 @@ class LAPDSim1D:
             coverage=self._coverage_view(state, time),
         )
 
+    def beam_deposition_ee_source(self, y=None, state=None, time=None):
+        """Return the beam ``Ee`` deposition row [erg cm^-3 s^-1] at a state.
+
+        The source the implicit heat substep integrates when
+        ``beam_deposition_in_heat_substep`` is armed, and the exact row
+        :meth:`rhs` then leaves out of operator A's sum. It is built from the
+        SAME beam path :meth:`rhs_terms` uses and carries the same two gates:
+        the phase gate (no plasma, or neutral prebreakdown, means no beam --
+        those phases do not run this stepper at all, but a direct caller can
+        reach them) and the active-plasma-topology mask. The other two
+        post-processing passes ``rhs_terms`` applies leave this row alone by
+        construction: both DVM and kinetic stripping preserve ``Ee``, and the
+        neutral-energy attachment only adds ``En`` rows.
+
+        The cathode solve here runs with ``update_cache=False``: the solve of
+        record -- the one the step's diagnostics and the sheath warm-start
+        continuation come from -- stays operator A's, so arming the flag moves
+        no diagnostic.
+        """
+        if state is None:
+            state = self.state if y is None else self._unpack(y)
+        zeros = np.zeros(self._geometry.cells, dtype=float)
+        if not self._flags.get("Plasma", True) or self._neutral_prebreakdown_active(
+            time=time,
+        ):
+            return zeros
+        cathode_phase = self._cathode_phase_options(time=time)
+        cathode_solve = None
+        if cathode_phase["solve_enabled"]:
+            cathode_solve = self.solve_cathode_boundary(
+                state=state,
+                floating=cathode_phase["floating"],
+                time=time,
+                update_cache=False,
+            )
+        beam_terms = self.beam_ionization_rhs_terms(
+            state=state,
+            cathode_solve=cathode_solve,
+            time=time,
+        )
+        row = np.asarray(
+            beam_terms[BEAM_POWER_DEPOSITION_TERM].Ee, dtype=float
+        )
+        if self._active_plasma_topology:
+            row = np.where(self._plasma_active_mask(), row, 0.0)
+        return row
+
     def solve_cathode_boundary(
         self,
         y=None,
@@ -8263,12 +8403,18 @@ class LAPDSim1D:
             stacklevel=2,
         )
 
-    def implicit_heat_conduction_step(self, dt, y=None, state=None):
-        """Return state after one frozen-conductivity implicit heat substep."""
+    def implicit_heat_conduction_step(self, dt, y=None, state=None, ee_source=None):
+        """Return state after one frozen-conductivity implicit heat substep.
+
+        ``ee_source`` (default ``None``, the historical path) is an electron-
+        energy source density held constant over the substep and solved with
+        the conduction operator; see the module function of the same name.
+        """
         if state is None:
             state = self.state if y is None else self._unpack(y)
         return implicit_heat_conduction_step(
             state=state,
+            ee_source=ee_source,
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
             mu=self._mu,
