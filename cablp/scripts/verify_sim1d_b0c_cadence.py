@@ -28,7 +28,15 @@ STRUCTURE (registration item in brackets).
                     from the banked per-arm npz files, evaluating R8-R14 and
                     printing PASS / FAIL / UNDERDETERMINED per registered
                     item with the registered consequence text on any
-                    failure.                                      [R8-R16]
+                    failure. REFUSES any arm banked below the current
+                    ``CAPTURE_SCHEMA``.                           [R8-R16]
+  --arm-extra K=V   with ``--arm``: layer ONE more config knob on top of that
+                    arm's three registered ones, repeatable. The key is
+                    resolved against BOTH config templates before anything
+                    solves, so a key filed into the wrong namespace fails
+                    here and not at solver construction. The result is a
+                    CONTROL, not the registered rung: it banks under
+                    ``b0c_extra_*`` and ``--table`` refuses it.
 
 SAMPLING [R2, as amended]. The registered sampling is the COMMON ABSOLUTE
 t*: --table interpolates every arm's per-tick capture to the one absolute
@@ -92,6 +100,7 @@ Usage (from <checkout>/cablp, with PYTHONPATH set to that same cablp):
     python scripts/verify_sim1d_b0c_cadence.py --table
 """
 import argparse
+import ast
 import json
 import math
 import sys
@@ -152,7 +161,11 @@ T_STAR_MS_ALLOWED = (T_STAR_MS_DEFAULT, T_STAR_MS_DOUBLED)
 #: different question from which sampling the table reads (that is
 #: ``SAMPLING_REGISTERED``). Growth is additive: every key an older schema
 #: wrote is still written, with the same dtype, so a npz banked at an earlier
-#: schema stays readable and only the rows it never carried are unavailable.
+#: schema stays LOADABLE and only the rows it never carried are unavailable.
+#: ``--table`` nonetheless REFUSES an arm below the current schema, because
+#: it now reports the hold-debt and ``nu_E`` rows per arm: an arm that cannot
+#: supply them would be published as ``n/a``, which puts a missing
+#: measurement and a benign one under the same mark.
 #:
 #:   1  the 24bd common-t capture: per-tick nn, nn_a, nn_midport, the booked
 #:      CUMULATIVE Ei/M, Tn, Ti, Te.
@@ -286,10 +299,17 @@ REPORTED = (("Te", "electron temperature profile", "l2"),)
 
 
 class ArmSpec:
-    """One registered arm: its knobs, its ladders, and its tick count."""
+    """One registered arm: its knobs, its ladders, and its tick count.
+
+    ``extras`` carries EXTRA-KNOB settings layered on top of the three
+    registered ones -- the ``--arm-extra`` route. It is empty on every
+    registered arm in ``ARMS``, so a spec built from the ladder is exactly
+    what it always was; only a spec derived through :meth:`with_extras`
+    carries any.
+    """
 
     def __init__(self, name, cadence_s, nvz, nvp, ladders, conditional=False,
-                 note=""):
+                 note="", extras=None):
         self.name = name
         self.cadence_s = float(cadence_s)
         self.nvz = int(nvz)
@@ -297,15 +317,35 @@ class ArmSpec:
         self.ladders = tuple(ladders)
         self.conditional = bool(conditional)
         self.note = note
+        self.extras = dict(extras or {})
 
     @property
     def knobs(self):
-        """The registered knob settings this arm names, as config keys."""
-        return {
+        """The registered knob settings this arm names, as config keys.
+
+        Any ``extras`` are layered on top, so the R1 "config diff is exactly
+        the registered knob set" assertion in :func:`run_arm` is made against
+        the knobs the arm ACTUALLY names -- an extra knob is registered with
+        that assertion, never hidden from it.
+        """
+        knobs = {
             "neutral_kinetic_dvm_cadence_s": self.cadence_s,
             "neutral_kinetic_dvm_nvz": self.nvz,
             "neutral_kinetic_dvm_nvp": self.nvp,
         }
+        knobs.update(self.extras)
+        return knobs
+
+    def with_extras(self, extras):
+        """Return a COPY of this spec carrying ``extras`` as extra knobs.
+
+        A copy, never a mutation: ``ARMS`` holds one shared spec per
+        registered arm and an in-place edit would redefine the ladder for
+        everything else in the process.
+        """
+        return ArmSpec(self.name, self.cadence_s, self.nvz, self.nvp,
+                       self.ladders, conditional=self.conditional,
+                       note=self.note, extras=extras)
 
     def n_updates(self, t_star_ms):
         """[R2] N_k = t* / cadence_k, exact by construction of the ladder."""
@@ -319,6 +359,17 @@ class ArmSpec:
                 "registered horizon requires exact tick-count sync"
             )
         return n_int
+
+
+#: The three knobs the REGISTRATION itself names. ``--arm-extra`` refuses to
+#: touch any of them: they are what the ladder is made of, so setting one
+#: through the extra route would silently redefine which rung the arm is
+#: while it kept the rung's name.
+REGISTERED_KNOB_KEYS = (
+    "neutral_kinetic_dvm_cadence_s",
+    "neutral_kinetic_dvm_nvz",
+    "neutral_kinetic_dvm_nvp",
+)
 
 
 # [R3] Cadence ladder, coarse -> fine, all at (nvz, nvp) = (16, 6).
@@ -387,6 +438,63 @@ def config_diff(overrides, reference=None):
     return diff
 
 
+def parse_arm_extras(items):
+    """Parse ``--arm-extra key=value`` strings into ``(extras, namespaces)``.
+
+    THE NAMESPACE IS RESOLVED HERE, at argument-parse time. ``input_dict``
+    and ``input_flags`` are separate namespaces that share no key, and
+    ``arm_config`` files an override into flags iff the flags template owns
+    it -- so validating a key against those same two templates is validating
+    the routing that will actually happen. A key neither template owns is a
+    misfile, and refusing it here turns a run-time construction failure into
+    an argument error the caller sees before anything solves.
+
+    Values are read as Python literals where they are ones (``2.5e-5``,
+    ``16``, ``True``, ``None``) and kept as bare strings otherwise (``zoh``,
+    ``rates``) -- between them that is the set of value kinds the config
+    templates hold.
+    """
+    ref_d, ref_fl = arm_config()
+    extras = {}
+    namespaces = {}
+    for item in items:
+        if "=" not in item:
+            raise SystemExit(
+                f"REFUSED: --arm-extra {item!r} is not of the form key=value"
+            )
+        key, _, raw = item.partition("=")
+        key = key.strip()
+        try:
+            value = ast.literal_eval(raw)
+        except (ValueError, SyntaxError):
+            value = raw
+        if key in REGISTERED_KNOB_KEYS:
+            raise SystemExit(
+                f"REFUSED: --arm-extra {key!r} is one of the three REGISTERED "
+                f"knobs {list(REGISTERED_KNOB_KEYS)} the ladder is built out "
+                "of. Setting one here would redefine WHICH RUNG the arm is "
+                "while it kept that rung's name; choose the rung with --arm."
+            )
+        if key in extras:
+            raise SystemExit(
+                f"REFUSED: --arm-extra {key!r} given more than once "
+                f"({extras[key]!r} then {value!r})"
+            )
+        if key in ref_fl:
+            namespaces[key] = "input_flags"
+        elif key in ref_d:
+            namespaces[key] = "input_dict"
+        else:
+            raise SystemExit(
+                f"REFUSED: --arm-extra {key!r} is owned by NEITHER config "
+                "template -- it is in neither input_dict nor input_flags, so "
+                "it would be a silent/inert control. Check which template "
+                "owns the key in core/config.py and spell it exactly."
+            )
+        extras[key] = value
+    return extras, namespaces
+
+
 def rel_error(a, b, kind, weights=None):
     """Relative error of ``a`` against ``b``; ``b`` is the FINER arm [R7]."""
     if kind == "scalar":
@@ -430,26 +538,96 @@ def bracket_index(tick_time, t_target):
     return i, (float(t_target) - t0) / (t1 - t0)
 
 
+def sampled_tick_row(meta, arrays, key):
+    """Return one per-tick capture row read at this arm's sampled time.
+
+    The ONE place the per-tick capture is read, so every row the table
+    samples -- observables, ``nu_E * cadence``, the hold debt -- is read at
+    the same time by the same rule. Under the registered common-t sampling
+    the row is interpolated onto the absolute ``t_engage + t*``; under the
+    superseded tick-count sampling it is the arm's own last tick.
+    """
+    series = np.asarray(arrays[key], dtype=float)
+    weight = meta.get("_sample_weight")
+    if weight is None:
+        return series[-1]
+    index, _ = bracket_index(arrays["tick_time"], meta["_t_sample"])
+    return (1.0 - weight) * series[index - 1] + weight * series[index]
+
+
 def sampled_nu_e_cadence(meta, arrays):
     """Return max over cells of ``nu_E * cadence`` at the sampled time.
 
     ``None`` on an arm banked before ``CAPTURE_SCHEMA`` 2, which did not
-    carry the row -- reported as such rather than as a reassuring zero. Under
-    the registered common-t sampling the row is interpolated onto the same
-    absolute t* every other observable is; under the superseded tick-count
-    sampling it is the arm's own last tick.
+    carry the row -- reported as such rather than as a reassuring zero.
+    ``--table`` refuses such an arm outright, so this branch is reached only
+    by a direct caller.
     """
     key = "tickobs_nu_E_cadence"
     if key not in arrays:
         return None
-    series = np.asarray(arrays[key], dtype=float)
-    weight = meta.get("_sample_weight")
-    if weight is None:
-        row = series[-1]
-    else:
-        index, _ = bracket_index(arrays["tick_time"], meta["_t_sample"])
-        row = (1.0 - weight) * series[index - 1] + weight * series[index]
+    row = sampled_tick_row(meta, arrays, key)
     return float(np.max(np.abs(np.asarray(row, dtype=float))))
+
+
+def hold_debt_rows(meta, arrays):
+    """The RR4 hold-debt meter and mid-port ``nu_E * cadence`` for one arm.
+
+    The HOLD DEBT is ``dvm.Ei_hold_debt`` / ``M_hold_debt``, the exponential
+    transfer hold's own undelivered remainder in the schema-2 identity
+    ``applied_cum + debt + hold_debt == booked_cum``. It is a DIFFERENT
+    quantity from the ``Ei_debt`` / ``M_debt`` the R13 table gates: R13's
+    debt is what the ion channel could not pay, this is what the hold has
+    not yet released. Both are reported; only R13's is gated.
+
+    Five numbers per arm:
+
+      * the two RATIOS ``sum|hold| / sum|booked_cum|`` at the sampled time,
+        one per channel, formed from the SAMPLED per-cell rows;
+      * the max over ticks of that Ei ratio, formed from the raw tick series
+        (its peak is generally not at t*);
+      * the max per-tick RESIDUAL ``|d(sum|Ei_hold|)| / sum|Ei_booked_cum|``,
+        which is the tick-to-tick movement of the hold rather than its
+        level -- a level that is large but static is a lagging hold, a
+        residual that is large is a hold still swinging at t*;
+      * ``nu_E * cadence`` at the mid-port cell, the companion to the
+        max-over-cells value the arms table already carries: the max says
+        whether the hold is stable ANYWHERE, the mid-port value says whether
+        it is stable at the cell the campaign actually scores.
+
+    The arithmetic is the post-hoc RR5 reading (``b0crr_rr5_holddebt.py``)
+    folded in unchanged, so the harness and that script cannot disagree.
+    """
+    def sampled(key):
+        return np.asarray(sampled_tick_row(meta, arrays, key), dtype=float)
+
+    def ratio(hold_key, booked_key):
+        hold = np.abs(sampled(hold_key)).sum()
+        booked = np.abs(sampled(booked_key)).sum()
+        if booked <= 0.0:
+            return float("nan")
+        return float(hold / booked)
+
+    hold_series = np.abs(
+        np.asarray(arrays["tickobs_Ei_hold_debt"], dtype=float)
+    ).sum(axis=1)
+    booked_series = np.abs(
+        np.asarray(arrays["tickobs_Ei_booked_cum"], dtype=float)
+    ).sum(axis=1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        per_tick = np.where(booked_series > 0.0,
+                            hold_series / booked_series, np.nan)
+        residual = np.where(booked_series[1:] > 0.0,
+                            np.abs(np.diff(hold_series)) / booked_series[1:],
+                            np.nan)
+    nu = sampled("tickobs_nu_E_cadence")
+    return {
+        "Ei_ratio": ratio("tickobs_Ei_hold_debt", "tickobs_Ei_booked_cum"),
+        "M_ratio": ratio("tickobs_M_hold_debt", "tickobs_M_booked_cum"),
+        "Ei_ratio_max_ticks": float(np.nanmax(per_tick)),
+        "residual_max_ticks": float(np.nanmax(residual)),
+        "nu_e_cadence_midport": float(nu[MID_PORT_CELL]),
+    }
 
 
 def _nu_e_cell(meta):
@@ -692,6 +870,9 @@ def run_arm(spec, n_updates, verbose=True):
         "nvp": spec.nvp,
         "ladders": list(spec.ladders),
         "conditional": spec.conditional,
+        # Empty on every registered arm; non-empty marks an --arm-extra
+        # control, which --table refuses to read as the registered rung.
+        "extras": dict(spec.extras),
         "n_updates_requested": int(n_updates),
         "n_updates_done": n_done,
         "steps": steps,
@@ -1543,6 +1724,30 @@ def evaluate(arm_records, out_path=None, sampling=SAMPLING_REGISTERED,
                 "cannot stand in for a registered arm. Re-run the arm "
                 "without --updates."
             )
+        schema = int(meta["capture_schema"])
+        if schema < CAPTURE_SCHEMA:
+            raise SystemExit(
+                f"REFUSED: {meta['_path']} was banked at CAPTURE SCHEMA "
+                f"{schema}; --table requires capture schema {CAPTURE_SCHEMA}. "
+                f"Schema {schema} does not carry the rows the table reports "
+                "per arm -- the per-cell hold debt and `nu_E * cadence` -- so "
+                "reading it here would print `n/a` for a measurement that is "
+                "simply ABSENT, which is how a missing number gets mistaken "
+                "for a benign one. Re-run "
+                f"`--arm {name}` on this harness to bank it at schema "
+                f"{CAPTURE_SCHEMA}."
+            )
+        extras = meta.get("extras") or {}
+        if extras:
+            raise SystemExit(
+                f"REFUSED: {meta['_path']} was run with the EXTRA KNOB(S) "
+                + ", ".join(f"{k}={v!r}" for k, v in sorted(extras.items()))
+                + f" on top of arm {name!r}'s registered knobs (the "
+                "--arm-extra route). It is a control, not that registered "
+                "arm: folding it into the ladder would put a differently "
+                "configured run in the rung's place. Read it with the "
+                "instrument that asked for it."
+            )
         if name in arms:
             raise SystemExit(f"REFUSED: arm {name} banked twice")
         keys = [k for k in list(GATED_KEYS) + ["Te"]]
@@ -1656,8 +1861,8 @@ def evaluate(arm_records, out_path=None, sampling=SAMPLING_REGISTERED,
         f"{CAPTURE_SCHEMA}. Schema 2 adds the per-tick plasma `n` and `Ei`, "
         "the tick's frozen booked Ei RATE per cell, the per-cell hold debt "
         "and `nu_E * cadence`, so `nu_E` is reconstructible from a banked "
-        "arm. Arms below schema 2 report `n/a` in the `nu_E` column -- "
-        "re-run them to fill it |"
+        "arm. An arm below schema 2 is REFUSED by `--table` rather than "
+        "reported as `n/a`: the rows are absent, not benign |"
     )
     tn_fb = {bool(a["tn_feedback"]) for a in arms.values()}
     lines.append(
@@ -1833,6 +2038,50 @@ def evaluate(arm_records, out_path=None, sampling=SAMPLING_REGISTERED,
             f"{a['ion_shortfall_updates']} | "
             f"{'yes' if a['ion_shortfall_warned'] else 'no'} | "
             f"{'PASS' if r13_ok(a) else 'FAIL'} |"
+        )
+    lines.append("")
+
+    # ------------------------------- hold debt + mid-port nu_E (reported)
+    lines.append("## Hold debt and mid-port nu_E (reported, not gated)")
+    lines.append("")
+    lines.append(
+        "The HOLD DEBT is the exponential transfer hold's own undelivered "
+        "remainder, `Ei_hold_debt` / `M_hold_debt` in the schema-2 identity "
+        "`applied_cum + debt + hold_debt == booked_cum`. It is a DIFFERENT "
+        "quantity from the `Ei_debt` / `M_debt` gated by R13 above: R13's "
+        "debt is what the ion channel could not pay, this is what the hold "
+        "has not yet released. The ratios are read at the same sampled time "
+        "as every other row; the max-over-ticks and residual columns are "
+        "formed from the raw tick series, whose peak is generally not at t*. "
+        "The residual is the tick-to-tick MOVEMENT of the hold rather than "
+        "its level -- a large but static level is a lagging hold, a large "
+        "residual is a hold still swinging at t*."
+    )
+    lines.append("")
+    lines.append(
+        "`nu_E * cadence` is carried here at the MID-PORT cell "
+        f"({MID_PORT_CELL}), the companion to the max-over-cells value in "
+        "the arms table above: the max says whether the hold is stable "
+        "ANYWHERE, the mid-port value says whether it is stable at the cell "
+        "the campaign scores."
+    )
+    lines.append("")
+    lines.append(
+        "| arm | h_k nominal [s] | sum\\|Ei_hold\\|/sum\\|Ei_booked\\| at t* "
+        "| sum\\|M_hold\\|/sum\\|M_booked\\| at t* | max over ticks (Ei) | "
+        "max per-tick resid \\|d(Ei_hold)\\|/\\|Ei_booked\\| | "
+        f"nu_E*cadence mid-port (cell {MID_PORT_CELL}) at t* |"
+    )
+    lines.append("|---|---|---|---|---|---|---|")
+    for name in sorted(arms):
+        a = arms[name]
+        hd = hold_debt_rows(a, a["_arrays"])
+        lines.append(
+            f"| `{name}` | {float(a['cadence_nominal_s']):.6g} | "
+            f"{hd['Ei_ratio']:.6g} | {hd['M_ratio']:.6g} | "
+            f"{hd['Ei_ratio_max_ticks']:.6g} | "
+            f"{hd['residual_max_ticks']:.6g} | "
+            f"{hd['nu_e_cadence_midport']:.6g} |"
         )
     lines.append("")
 
@@ -2199,9 +2448,27 @@ def evaluate(arm_records, out_path=None, sampling=SAMPLING_REGISTERED,
 # ------------------------------------------------------------------- driver
 
 
+def extras_slug(extras):
+    """A filesystem-safe tag naming an --arm-extra control's knobs."""
+    parts = []
+    for key, value in sorted(extras.items()):
+        short = key.removeprefix("neutral_kinetic_dvm_")
+        text = f"{short}-{value}"
+        parts.append("".join(c if c.isalnum() or c in "-." else "_"
+                             for c in text))
+    return "_".join(parts)
+
+
 def default_arm_path(spec, updates_override, out_dir):
+    # An --arm-extra control is NOT the registered arm, so it is never
+    # written under the ``b0c_arm_`` stem --table globs: a control must not
+    # be swept into the ladder by a bare --table.
+    stem = (f"b0c_arm_{spec.name}" if not spec.extras
+            else f"b0c_extra_{spec.name}__{extras_slug(spec.extras)}")
     if updates_override is None:
-        return Path(out_dir) / f"b0c_arm_{spec.name}.npz"
+        return Path(out_dir) / f"{stem}.npz"
+    if spec.extras:
+        return Path(out_dir) / f"{stem}_u{updates_override}.npz"
     return Path(out_dir) / f"b0c_sanity_{spec.name}_u{updates_override}.npz"
 
 
@@ -2228,6 +2495,15 @@ def main(argv=None):
                    help="SANITY ONLY: stop after this many neutral ticks "
                         "instead of the registered N_k. The resulting npz is "
                         "marked sanity and --table REFUSES it.")
+    p.add_argument("--arm-extra", metavar="KEY=VALUE", action="append",
+                   default=None,
+                   help="--arm: add ONE more config knob on top of the arm's "
+                        "three registered ones, repeatable. The key must be "
+                        "owned by input_dict or input_flags (checked here, "
+                        "before anything solves) and must not be one of the "
+                        "registered knobs. The result is a CONTROL, not the "
+                        "registered rung: it banks under b0c_extra_* and "
+                        "--table REFUSES it.")
     p.add_argument("--out", default=None,
                    help="output path (npz for --arm, markdown for --table)")
     p.add_argument("--out-dir", default=str(_SCRIPTS),
@@ -2270,6 +2546,12 @@ def main(argv=None):
         )
     if args.updates is not None and not args.arm:
         p.error("--updates is a sanity override for --arm only")
+    if args.arm_extra and not args.arm:
+        p.error(
+            "--arm-extra adds a knob to the arm --arm runs; it changes "
+            "nothing about --plan or --table, so it must not be passed here "
+            "as a silent no-op"
+        )
     if args.sampling != SAMPLING_REGISTERED and not args.table:
         p.error(
             "--sampling selects how --table READS the banked arms; it "
@@ -2296,6 +2578,10 @@ def main(argv=None):
                 + ", ".join(ARMS)
             )
         spec = ARMS[args.arm]
+        namespaces = {}
+        if args.arm_extra:
+            extras, namespaces = parse_arm_extras(args.arm_extra)
+            spec = spec.with_extras(extras)
         n_registered = spec.n_updates(args.t_star_ms)
         n_updates = n_registered if args.updates is None else int(args.updates)
         sanity = args.updates is not None
@@ -2307,12 +2593,29 @@ def main(argv=None):
         if sanity:
             print(f"  *** SANITY OVERRIDE: running {n_updates} ticks. The "
                   "npz will be marked sanity and --table will REFUSE it. ***")
+        if spec.extras:
+            print("  *** EXTRA KNOB(S): this is a CONTROL, not the "
+                  f"registered arm {spec.name}. --table will REFUSE the "
+                  "npz. ***")
+            for key, value in sorted(spec.extras.items()):
+                print(f"        {key} = {value!r}  ({type(value).__name__}) "
+                      f"-> {namespaces[key]}")
         diff = config_diff(dict(spec.knobs))
         print("  [R1] config diff vs the bare k2_dvm fixture:")
         for key, (a, b) in sorted(diff.items()):
             print(f"        {key}: {a!r} -> {b!r}")
         if not diff:
             print("        (none -- this arm IS the bare fixture)")
+        inert = [k for k in spec.extras if k not in diff]
+        if inert:
+            p.error(
+                "--arm-extra " + ", ".join(sorted(inert)) + " already "
+                "hold(s) that value in the fixture, so the knob moves "
+                "nothing and the control would be identical to the "
+                "registered arm under a different name. A silent no-op "
+                "control is worse than no control; pass a value that "
+                "differs, or drop the option."
+            )
         record, arrays = run_arm(spec, n_updates, verbose=not args.quiet)
         out = Path(args.out) if args.out else default_arm_path(
             spec, args.updates, args.out_dir
