@@ -5,8 +5,8 @@
 #
 # This file is the ONE artifact that constructs the stance. It is the complete
 # delta from ``default_config()``: every key below differs from its config
-# default, except the two noted as resolved accretion (cathode_emission_profile,
-# Te_birth_ionization) or as a class-1 declaration (Ti_birth_ionization),
+# default, except the four noted as resolved accretion (cathode_emission_profile,
+# Te_birth_ionization, T_s) or as a class-1 declaration (Ti_birth_ionization),
 # which equal the default and are stated explicitly because run_m6_point.py's
 # own driver defaults do not, or because the selection is physics-bearing. Applying these two
 # tables on top of ``default_config()`` reproduces, key for key, the config the
@@ -365,24 +365,38 @@ nn0_annulus_profile = [
 # direction and only one member of a flat pair may carry a calibration. See
 # production_stance_provenance.md.
 C_R = 8.76
-# V_bank and T_s are DELETED from this stance (2026-08-25; the deletion was
-# registered at 23b R4 and twice deferred). Neither was a stance decision:
-#   V_bank is a PER-RUNG measurement owned by run_mechanism_ladder.ES_OPERATING
-#   (ES1 = 177.843, exactly the number this file used to repeat), so naming it
-#   here duplicated the rung and could only go stale against it. Campaign scores
-#   are unaffected: every campaign arm takes V_bank from its rung. The golden
-#   takes no rung, so ITS V_bank falls back to the config default 180.0 and the
-#   authorized recapture that accompanies this edit absorbs the move.
-#   T_s merely restated its own config default (1998.15) and is
-#   configuration-INERT under cathode_warming_model = "power_balance", which
-#   this stance's drivers set unconditionally: it is the initial surface
-#   temperature only, the surface thereafter evolving from the power balance.
-#   The live cathode temperature key is cathode_Ts_base_K, which this file
-#   deliberately does not pin.
-# Both are recorded in production_stance_provenance.md.
+# V_bank is DELETED from this stance (2026-08-25; the 23b R4 deletion, executed
+# for this half only). It was never a stance decision: V_bank is a PER-RUNG
+# measurement owned by run_mechanism_ladder.ES_OPERATING (ES1 = 177.843, exactly
+# the number this file used to repeat), so naming it here duplicated the rung
+# and could only go stale against it. Campaign scores are unaffected -- every
+# campaign arm takes V_bank from its rung, which is why deleting the row is
+# invisible in a pre-flight against a campaign artifact. The golden takes no
+# rung, so ITS V_bank falls back to the config default 180.0, and the authorized
+# recapture that accompanies this edit absorbs that move.
 cathode_conduction_W_per_K = 12058.0
 cathode_heat_capacity_J_per_K = 181.0
 cathode_emission_profile = "uniform"
+# T_s is the OTHER half of the 23b R4 deletion, and it is DEFERRED a third time
+# (2026-08-25) -- now with the reason on record rather than as an open action.
+# The row was believed to be a resolved-accretion duplicate of the config
+# default. It is that against ``default_config()`` (both 1998.15), which is why
+# deleting it is invisible to the golden. It is NOT that on the CAMPAIGN route:
+# run_m6_point.py:216 supplies ``T_s`` from the ES rung's ``Ts_standby_K``
+# (ES1 = 1910.0), and THIS ROW SUPERSEDES IT. Deleting it therefore moves T_s
+# 1998.15 -> 1910.0 on every campaign arm -- measured as a real second delta in
+# the pre-flight against scripts/mgcr1_confirm.h5, and reproduced as absent the
+# moment this row is restored.
+#   Whether that move is physically inert is NOT settled here. Under
+#   cathode_warming_model = "power_balance" the evolving surface temperature is
+#   seeded from cathode_Ts_base_K, not from T_s (solver.py:1917), and every live
+#   read of T_s is guarded by that evolving value -- so T_s is inert on THIS
+#   stance. Two reads are unguarded: cathode.py:339/410 (covered on the live
+#   emission path by the T_s_override_K route) and solver.py:10925, which feeds
+#   the kinetic background and is dead only because this stance runs
+#   neutral_model = "moment". It goes LIVE under "kinetic_dvm", so the
+#   adjudication is assigned to the DVM program rather than to a stance edit.
+T_s = 1998.15
 
 # ANODE SURFACE RECYCLE. The anode mesh's directed-recycle channel, armed at
 # the stance (the R_N/R_E pair itself is a surface property and lives in the
