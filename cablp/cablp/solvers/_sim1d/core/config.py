@@ -2561,6 +2561,19 @@ def timestep_defaults():
         negative, non-integer, NaN) raises ValueError at construction.
     dt_max:
         Maximum allowed timestep [s].
+    dt_global_scale:
+        Uniform multiplier [dimensionless] on the FINAL accepted timestep,
+        applied after every timestep candidate and after the dt_min/dt_max
+        clamp, so it refines the whole dt trajectory by one factor instead of
+        tightening one channel (scaling ``cfl`` refines only the CFL-bound
+        phases). Must satisfy ``0 < dt_global_scale <= 1.0``; anything else --
+        zero, negative, above one, non-finite, non-numeric -- raises
+        ValueError at construction. It is a MEASUREMENT knob: it never
+        loosens a bound, it does not name itself ``active_constraint``, and
+        the scaled step is deliberately not re-clamped to ``dt_min``. The
+        applied factor rides the timestep diagnostics as ``dt_global_scale``.
+        The default 1.0 skips the multiply entirely, so an unarmed run is
+        bit-exact with one predating this key.
     max_steps:
         Maximum accepted timesteps for a run. Zero means unlimited.
     max_steps_action:
@@ -2640,6 +2653,9 @@ def timestep_defaults():
         "dt_min": 1e-10,
         "dt_min_lock_max_steps": 250000,
         "dt_max": 1e-4,
+        # Default-off instrument: 1.0 skips the multiply entirely, so an
+        # unarmed run's dt arithmetic is untouched.
+        "dt_global_scale": 1.0,
         "max_steps": 0,
         "max_steps_action": "raise",
         "adaptive_retries_enabled": True,
@@ -3596,6 +3612,18 @@ input_flags_template_1d = {
     # current channels ride the cathode diagnostics; nothing here is scored.
     # Default OFF, presence-gated and bit-exact off.
     "regime_vessel_node": False,
+    # Rate-freezing INSTRUMENT, default OFF. When on, the bulk reaction
+    # source terms (ionization birth and both recombination losses) inside the
+    # explicit non-heat operator are evaluated at the step-START accepted
+    # state instead of at the current SSPRK2 stage state, so the rates are
+    # frozen across the step. That deliberately caps the step at first order
+    # in the rates: it isolates the stage-state channel for measurement and is
+    # NOT an accuracy improvement. Scope is the explicit operator's reaction
+    # terms only -- the implicit heat substep, the conductivity Picard
+    # iteration and the kinetic DVM are untouched. Must be a real bool;
+    # anything else (0/1, a string) raises ValueError at construction.
+    # Bit-exact when off.
+    "rates_at_accepted_state": False,
     "ionization_energy_cost": True,
     "cx": True,
     "icool_recomb": False,

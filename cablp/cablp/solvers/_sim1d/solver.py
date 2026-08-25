@@ -53,7 +53,7 @@ from .core.state import (
     state_field_names,
     unpack_state,
 )
-from .core.timestep import suggest_timestep
+from .core.timestep import apply_dt_global_scale, suggest_timestep
 from .core.options import build_solver_options
 from .core.validation import (
     OPERATOR_SPLITTINGS,
@@ -1298,6 +1298,40 @@ class LAPDSim1D:
         self._beam_ionization_birth_timestep_bound = bool(
             self._flags.get("beam_ionization_birth_timestep_bound", False)
         )
+        # Global dt-refinement instrument. Validated here so a factor that
+        # would loosen the step (>1) or stop the run dead (0, negative) is
+        # refused before any compute, and read once so the unarmed run's
+        # arithmetic never enters the multiply.
+        _dt_global_scale = self._input_dict.get("dt_global_scale", 1.0)
+        try:
+            _dt_global_scale_value = float(_dt_global_scale)
+        except (TypeError, ValueError):
+            _dt_global_scale_value = np.nan
+        if (
+            not np.isfinite(_dt_global_scale_value)
+            or _dt_global_scale_value <= 0.0
+            or _dt_global_scale_value > 1.0
+        ):
+            raise ValueError(
+                "dt_global_scale must be a finite refinement factor in "
+                f"(0, 1.0], 1.0 to disable (got {_dt_global_scale!r}); the "
+                "instrument may only refine the accepted step, never loosen "
+                "a bound"
+            )
+        self._dt_global_scale = _dt_global_scale_value
+        # Rate-freezing instrument (I3). A real bool is required: the flag
+        # switches which STATE the explicit operator's reaction terms read,
+        # and an int or a string smuggled in there would arm a first-order
+        # rate channel while reading like a value.
+        _rates_at_accepted_state = self._flags.get(
+            "rates_at_accepted_state", False
+        )
+        if not isinstance(_rates_at_accepted_state, bool):
+            raise ValueError(
+                "rates_at_accepted_state must be a bool (got "
+                f"{_rates_at_accepted_state!r})"
+            )
+        self._rates_at_accepted_state = _rates_at_accepted_state
 
     def _init_neutral_momentum_and_energy(self):
         """Arm the evolved neutral wind and its optional energy field.
@@ -4039,7 +4073,16 @@ class LAPDSim1D:
                 self._apply_active_plasma_topology(terms), state
             )
         plasma_terms = self.plasma_flux_rhs_terms(state=state)
-        reaction_terms = self.reaction_rhs_terms(state=state)
+        # I3 instrument. Armed, the bulk reaction terms are evaluated at the
+        # step-START accepted state -- ``self._y`` is only rewritten when a
+        # step is ACCEPTED, so it is exactly that state for every SSPRK2 stage
+        # and every rejected attempt -- which freezes the rates across the
+        # step and caps it at first order in them. Unarmed, this IS ``state``,
+        # object for object, so the evaluations below are unchanged.
+        reaction_state = (
+            self.state if self._rates_at_accepted_state else state
+        )
+        reaction_terms = self.reaction_rhs_terms(state=reaction_state)
         electron_cooling_terms = self.electron_cooling_rhs_terms(state=state)
         cathode_phase = self._cathode_phase_options(time=time)
         cathode_solve = None
@@ -4095,7 +4138,7 @@ class LAPDSim1D:
             ionization_rate_per_neutral = np.asarray(
                 reaction_terms["ionization_birth"].n, dtype=float
             ) / np.maximum(
-                np.asarray(state.nn, dtype=float), self._floors["nn"]
+                np.asarray(reaction_state.nn, dtype=float), self._floors["nn"]
             )
             energy_wall_terms["neutral_hot_channel"] = (
                 self.neutral_hot_channel_rhs(
@@ -6871,6 +6914,7 @@ class LAPDSim1D:
             ),
             dt_min=dt_min,
             dt_max=dt_max,
+            dt_global_scale=self._dt_global_scale,
             include_front=plasma_enabled and self._flags.get("front_flux", True),
             alpha_front=float(self._input_dict.get("alpha_front", 1.0)),
             # With the R2 tracer engaged this mask also excludes the cells the
@@ -6905,6 +6949,12 @@ class LAPDSim1D:
             # Same honest-labeling rule as suggest_timestep(): the constraint
             # name stays the bound that minimized; the clamp is its own fact.
             neutral_clamped = neutral_dt == dt_min and raw_dt < dt_min
+            # This branch REBUILDS the final dt from the surviving candidates,
+            # discarding the one suggest_timestep() already scaled, so the
+            # global refinement factor is re-applied at this second final-dt
+            # site too. Without it a neutral-only phase would silently run
+            # unrefined and the instrument would not be global.
+            neutral_dt = apply_dt_global_scale(neutral_dt, self._dt_global_scale)
             diag = replace(
                 diag,
                 dt=float(neutral_dt),
