@@ -39,6 +39,17 @@ reachable only as ``--sampling tick-count``, so the pre-amendment numbers
 stay reproducible. Both readings come from the SAME banked arms -- the
 sampling is a table-time choice, never a re-run.
 
+R8 ESTIMATOR [R8, as amended]. The registered fit is
+``--r8-fit amended``: reference-corrected errors against the converged
+reference rung ``cad_1.5625e-06``, fitted log-e against log-h over the
+rungs whose NOMINAL cadence is at or below 1.25e-5 s. The coarser rungs
+are reported but EXCLUDED -- they sit in the ion-debit shortfall /
+Ti-collapse regime, a different regime from the one the fit models -- and
+the pre-amendment reference is superseded because it was itself
+unconverged. ``--r8-fit pre-amendment`` re-forms the superseded
+successive-pair fit over the whole ladder. Like the sampling, the
+estimator is a table-time choice over the SAME banked arms.
+
 NOTHING RUNS AT IMPORT. Every solve is reached only through ``main``.
 
 EXIT CODES. 0 = every registered item PASS (or REPORTED); 1 = at least one
@@ -167,6 +178,43 @@ ORDER_BAND_COARSE = (0.7, 1.3)
 ORDER_BAND_FINE = (0.8, 1.25)
 SAMPLING_FLOOR_FACTOR = 10.0
 
+# [R8, AMENDED 24cr] The R8 ESTIMATOR is selectable, and the amended one is
+# the default. Two defects were identified in the pre-amendment fit and the
+# amendment addresses exactly them:
+#
+#   (i)  the coarse rungs are a DIFFERENT REGIME. At h >= 2.5e-5 the arm runs
+#        into the ion-debit shortfall / Ti collapse, so those rungs are not
+#        samples of the same smooth truncation-error curve the fit models.
+#        They are REPORTED but EXCLUDED from the fit domain.
+#   (ii) the pre-amendment reference was UNCONVERGED (the finest rung
+#        over-books 5.2 %), which biases every error formed against it.
+#        The amended errors are formed against a rung one halving finer
+#        still, ``cad_1.5625e-06``.
+#
+# The amended estimator is therefore a REFERENCE-CORRECTED log-e/log-h fit
+# over the fit domain, not the successive-pair ratio. The pre-amendment
+# successive-pair path is kept byte-reachable under ``--r8-fit`` exactly as
+# the superseded ``--sampling tick-count`` reading is, so the numbers already
+# on the record stay reproducible.
+R8_FIT_AMENDED = "amended"
+R8_FIT_PRE_AMENDMENT = "pre-amendment"
+R8_FIT_MODES = (R8_FIT_AMENDED, R8_FIT_PRE_AMENDMENT)
+R8_AMENDMENT_LABEL = "per the 24cr amendment"
+
+#: [R8, amended] Fit domain: a rung enters the fit iff its NOMINAL cadence is
+#: at or below this. Nominal, not effective: the amendment names the RUNGS,
+#: and a rung's effective cadence can sit a couple of percent above its
+#: nominal (the ticks fire at the first accepted-step boundary >= next_s).
+#: The h used IN the fit is still the effective one -- that is unchanged.
+R8_FIT_MAX_H = 1.25e-5
+
+#: [R8, amended] The converged reference rung the amended errors are formed
+#: against: e_k = ||u_k - u_ref|| at the registered common-t sampling.
+R8_REFERENCE_ARM = "cad_1.5625e-06"
+
+#: [R8, amended] Verdict label carried by every rung the amendment excludes.
+R8_EXCLUDED_LABEL = "excluded: shortfall regime (24cr)"
+
 # [R9] Cadence-of-record bar on the first-order-corrected proxy true error.
 EHAT_TOL = 0.01
 
@@ -274,7 +322,7 @@ class ArmSpec:
 # The (2.5e-5, 16, 6) point is a member of BOTH ladders and is ONE arm.
 _BASE_NAME = "base_2.5e-05_16x6"
 _CAD_COND_NAME = "cad_3.125e-06"
-_CAD_REF_NAME = "cad_1.5625e-06"
+_CAD_REF_NAME = R8_REFERENCE_ARM
 _GRID_COND_NAME = "grid_128x48"
 _CROSS_NAME = "cross_6.25e-06_32x12"
 
@@ -825,16 +873,32 @@ def plan_lines(t_star_ms):
     out.append("  NV2: a gated row zero-at-roundoff on the finer arm is "
                "INACTIVE-with-disclosure, never a trivial pass.")
     out.append("")
-    out.append("[R8] successive-pair order fit only "
-               "(e_i = ||u(h_i) - u(h_i+1)||, p = log2 ratios; never "
-               "distance-to-finest). Confirmed ~1 per gated ACTIVE "
-               f"observable iff errors are monotone, the FINE pair p is in "
-               f"[{ORDER_BAND_FINE[0]}, {ORDER_BAND_FINE[1]}] and the COARSE "
-               f"pair p is in [{ORDER_BAND_COARSE[0]}, "
-               f"{ORDER_BAND_COARSE[1]}]. Sampling-floor guard: the finest "
-               f"pair error <= {SAMPLING_FLOOR_FACTOR:g} x (dt_sample x "
-               "|dO/dt|) makes that p UNDERDETERMINED -> add the conditional "
-               "rung and re-form; only then can out-of-band FAIL.")
+    out.append(f"[R8, AMENDED {R8_AMENDMENT_LABEL}] the DEFAULT fit is "
+               f"--r8-fit {R8_FIT_AMENDED}: reference-corrected errors "
+               f"e_k = ||u_k - u_ref|| against the converged reference rung "
+               f"{R8_REFERENCE_ARM}, fitted as log(e) against log(h) by "
+               "least squares over the rungs with NOMINAL cadence <= "
+               f"{R8_FIT_MAX_H:g} s, using each rung's EFFECTIVE h. Coarser "
+               f"rungs are REPORTED but {R8_EXCLUDED_LABEL}: at "
+               "h >= 2.5e-5 s the arm is in the ion-debit shortfall / "
+               "Ti-collapse regime, not on the truncation-error curve. "
+               "Confirmed ~1 per gated ACTIVE observable iff the errors are "
+               f"monotone and the domain slope is in [{ORDER_BAND_COARSE[0]}, "
+               f"{ORDER_BAND_COARSE[1]}] (the wider registered band: the "
+               "domain fit carries the coarsest fit rung's O(h^2) "
+               "contamination). Local per-rung slopes are reported beside it.")
+    out.append(f"[R8, SUPERSEDED] --r8-fit {R8_FIT_PRE_AMENDMENT} re-forms "
+               "the pre-amendment successive-pair fit over the whole banked "
+               "ladder (e_i = ||u(h_i) - u(h_i+1)||, p = log2 ratios; never "
+               "distance-to-finest), confirmed iff errors are monotone, the "
+               f"FINE pair p is in [{ORDER_BAND_FINE[0]}, "
+               f"{ORDER_BAND_FINE[1]}] and the COARSE pair p is in "
+               f"[{ORDER_BAND_COARSE[0]}, {ORDER_BAND_COARSE[1]}]. It is kept "
+               "only so the pre-amendment numbers stay reproducible.")
+    out.append(f"[R8] Sampling-floor guard, both fits: the finest error "
+               f"<= {SAMPLING_FLOOR_FACTOR:g} x (dt_sample x |dO/dt|) makes "
+               "that slope UNDERDETERMINED -- it carries no order "
+               "information; only a clear guard can FAIL out of band.")
     out.append(f"[R9] Ehat_k = ||u_k - u_finest|| x h_k/(h_k - h_finest); "
                f"cadence of record = COARSEST rung with Ehat_k < "
                f"{EHAT_TOL:.0%} on every gated ACTIVE observable AND passing "
@@ -910,17 +974,507 @@ def _activity(arms, key, kind):
     return fine > ROUNDOFF_REL * ref, fine, ref
 
 
-def evaluate(arm_records, out_path=None, sampling=SAMPLING_REGISTERED):
+def _ref_errors(fit_arms, ref, key, kind):
+    """[R8, amended] Reference-corrected errors e_k = ||u_k - u_ref||.
+
+    ``ref`` is the converged reference rung. Every e_k on one row shares
+    ITS denominator, unlike the successive-pair form where each pair
+    carries its own -- which is what makes the log-e/log-h slope over the
+    row a fit of one error curve rather than of a chain of differences.
+    """
+    weights = ref["_obs"]["nn"] if kind == "wl2" else None
+    return [rel_error(a["_obs"][key], ref["_obs"][key], kind, weights)
+            for a in fit_arms]
+
+
+def _log_slope(hs, errs):
+    """[R8, amended] Least-squares slope of log(e) against log(h).
+
+    Returns nan unless EVERY point is finite and strictly positive: a zero
+    or non-finite error carries no order information, and dropping it
+    silently would fit a domain other than the registered one.
+    """
+    hs = [float(h) for h in hs]
+    es = [float(e) for e in errs]
+    if len(es) < 2 or len(hs) != len(es):
+        return float("nan")
+    if not all(np.isfinite(v) and v > 0.0 for v in es + hs):
+        return float("nan")
+    return float(np.polyfit(np.log(hs), np.log(es), 1)[0])
+
+
+def _local_slopes(hs, errs):
+    """[R8, amended] Adjacent-rung log-log slopes across the fit domain.
+
+    Reported beside the domain fit so a slope that is drifting rung to rung
+    is visible rather than averaged away by the least squares.
+    """
+    ps = []
+    for i in range(len(errs) - 1):
+        e0, e1 = float(errs[i]), float(errs[i + 1])
+        h0, h1 = float(hs[i]), float(hs[i + 1])
+        if (np.isfinite(e0) and np.isfinite(e1) and e0 > 0.0 and e1 > 0.0
+                and h0 > 0.0 and h1 > 0.0 and h0 != h1):
+            ps.append(math.log(e0 / e1) / math.log(h0 / h1))
+        else:
+            ps.append(float("nan"))
+    return ps
+
+
+def _r8_pre_amendment(lines, verdicts, arms, ladder, dead, registered):
+    """[R8, PRE-AMENDMENT] Successive-pair order fit over the whole ladder.
+
+    SUPERSEDED by ``_r8_amended`` and kept reachable only under
+    ``--r8-fit pre-amendment``, exactly as ``--sampling tick-count`` keeps
+    the superseded reading: the numbers already on the record stay
+    reproducible. Its two identified defects are the ones the amendment
+    addresses -- it fits across the coarse shortfall-regime rungs, and it
+    measures against an unconverged finest rung.
+
+    Returns the ACTIVE gated keys (the NV2 survivors), which R9 reads.
+    """
+    lines.append("## R8 order fit -- successive pairs only")
+    lines.append("")
+    lines.append(
+        f"Re-formed from the common-t rows, {AMENDMENT_LABEL}: the pair "
+        "errors below compare arms at ONE absolute time, so the sample-time "
+        "mismatch that the floor guard exists to catch is zero by "
+        "construction and the guard reads clear on every row."
+        if registered else
+        f"Formed from each arm's own N_k-th tick -- SUPERSEDED "
+        f"{AMENDMENT_LABEL}."
+    )
+    lines.append("")
+    if len(ladder) < 4:
+        lines.append(
+            f"Only {len(ladder)} usable cadence rung(s) banked "
+            f"({', '.join(a['name'] for a in ladder) or 'none'}); the "
+            "successive-pair fit needs at least 4 rungs to form two order "
+            "pairs."
+        )
+        lines.append("")
+        verdicts.append(Verdict(
+            "R8 order ~ 1",
+            "UNDERDETERMINED",
+            f"{len(ladder)} usable rungs banked; run the missing rungs "
+            + (f"(including the conditional {_CAD_COND_NAME}) "
+               if dead else "")
+            + "before the fit can be formed",
+        ))
+        verdicts.append(Verdict(
+            "NV2 inactive rows", "UNDERDETERMINED",
+            "the zero-at-roundoff test is made on the finest rung of the "
+            "cadence ladder, which is not yet complete",
+        ))
+        active_keys = list(GATED_KEYS)
+    else:
+        lines.append(
+            "Ladder (coarse -> fine): "
+            + " -> ".join(f"`{a['name']}` (h = {a['_h']:.6g} s)"
+                          for a in ladder)
+        )
+        lines.append("")
+        lines.append(
+            "| obs | row | active (NV2) | "
+            + " | ".join(f"e{i+1}" for i in range(len(ladder) - 1))
+            + " | "
+            + " | ".join(f"p{i+1}{i+2}" for i in range(len(ladder) - 2))
+            + " | monotone | floor guard | verdict |"
+        )
+        lines.append("|---" * (6 + (len(ladder) - 1) + (len(ladder) - 2))
+                     + "|")
+        active_keys = []
+        per_obs_state = {}
+        floor_tripped = []
+        for tag, key, label, kind in GATED:
+            active, fine_mag, ref_mag = _activity(ladder, key, kind)
+            errs = _pair_errors(ladder, key, kind)
+            ps = [
+                math.log2(errs[i] / errs[i + 1])
+                if (errs[i] > 0 and errs[i + 1] > 0
+                    and np.isfinite(errs[i]) and np.isfinite(errs[i + 1]))
+                else float("nan")
+                for i in range(len(errs) - 1)
+            ]
+            monotone = all(
+                np.isfinite(errs[i]) and np.isfinite(errs[i + 1])
+                and errs[i] > errs[i + 1] for i in range(len(errs) - 1)
+            )
+            dodt = _dodt(ladder[-1], key, kind)
+            dt_sample = abs(float(ladder[-1]["_t_sample"])
+                            - float(ladder[-2]["_t_sample"]))
+            floor = None
+            guard = "n/a"
+            if dodt is not None:
+                floor = SAMPLING_FLOOR_FACTOR * dt_sample * dodt
+                tripped = np.isfinite(errs[-1]) and errs[-1] <= floor
+                guard = (f"{'TRIPPED' if tripped else 'clear'} "
+                         f"(e_fine {errs[-1]:.3g} vs {floor:.3g})")
+                if tripped and active:
+                    floor_tripped.append(key)
+            if not active:
+                state = "INACTIVE"
+            else:
+                active_keys.append(key)
+                p_fine = ps[-1] if ps else float("nan")
+                p_coarse = ps[0] if ps else float("nan")
+                in_fine = (np.isfinite(p_fine)
+                           and ORDER_BAND_FINE[0] <= p_fine
+                           <= ORDER_BAND_FINE[1])
+                in_coarse = (np.isfinite(p_coarse)
+                             and ORDER_BAND_COARSE[0] <= p_coarse
+                             <= ORDER_BAND_COARSE[1])
+                if key in floor_tripped:
+                    state = "UNDERDETERMINED"
+                elif monotone and in_fine and in_coarse:
+                    state = "PASS"
+                else:
+                    state = "FAIL"
+            per_obs_state[key] = state
+            active_cell = (
+                "yes" if active
+                else f"NO (|u|_fine {fine_mag:.3g} vs ladder max "
+                     f"{ref_mag:.3g})"
+            )
+            lines.append(
+                f"| {tag} | {label} | {active_cell} | "
+                + " | ".join(f"{e:.4g}" for e in errs) + " | "
+                + " | ".join(f"{p:.4g}" for p in ps)
+                + f" | {'yes' if monotone else 'NO'} | {guard} | {state} |"
+            )
+        lines.append("")
+        if not active_keys:
+            r8_state = "UNDERDETERMINED"
+            detail = ("every gated row is zero-at-roundoff on the finest arm "
+                      "(NV2): there is nothing to fit -- "
+                      "inactive-with-disclosure, not a pass")
+            verdicts.append(Verdict("R8 order ~ 1", r8_state, detail))
+        elif floor_tripped:
+            have_cond = (_CAD_COND_NAME in arms
+                         and arms[_CAD_COND_NAME]["status"] == "ok")
+            if not have_cond:
+                r8_state = "UNDERDETERMINED"
+                verdicts.append(Verdict(
+                    "R8 order ~ 1", r8_state,
+                    "sampling-floor guard TRIPPED on "
+                    f"{', '.join(sorted(floor_tripped))}: the finest pair "
+                    "error is at or below 10x the sample-time mismatch "
+                    f"contribution. Registration: add the {_CAD_COND_NAME} "
+                    "rung and re-form the pairs; only then can out-of-band "
+                    "FAIL.",
+                ))
+            else:
+                r8_state = "UNDERDETERMINED"
+                verdicts.append(Verdict(
+                    "R8 order ~ 1", r8_state,
+                    "sampling-floor guard TRIPPED again on "
+                    f"{', '.join(sorted(floor_tripped))} WITH the "
+                    f"conditional rung {_CAD_COND_NAME} already banked and "
+                    "the pairs re-formed. The registration provides for ONE "
+                    "conditional rung, so this is past its branch: a "
+                    "registered anomaly for adjudication, not a FAIL and not "
+                    "a pass.",
+                ))
+        else:
+            failed = [k for k in active_keys if per_obs_state[k] == "FAIL"]
+            r8_state = "PASS" if not failed else "FAIL"
+            verdicts.append(Verdict(
+                "R8 order ~ 1", r8_state,
+                "every gated ACTIVE observable is monotone with both pair "
+                "orders in band" if not failed else
+                "out of band or non-monotone on "
+                + ", ".join(f"{GATED_TAG[k]} ({GATED_LABEL[k]})"
+                            for k in failed),
+                None if not failed else CONSEQUENCE["a"],
+            ))
+        inactive = [k for k in GATED_KEYS if k not in active_keys]
+        if inactive:
+            verdicts.append(Verdict(
+                "NV2 inactive rows", "REPORTED",
+                "zero-at-roundoff on the finest arm, so INACTIVE with "
+                "disclosure (never a trivial pass): "
+                + ", ".join(f"{GATED_TAG[k]} ({GATED_LABEL[k]})"
+                            for k in inactive),
+            ))
+        else:
+            verdicts.append(Verdict(
+                "NV2 inactive rows", "PASS",
+                "every gated row carries signal on the finest arm",
+            ))
+
+    return active_keys
+
+
+def _r8_amended(lines, verdicts, arms, ladder, sampling):
+    """[R8, AMENDED 24cr] Reference-corrected log-e/log-h order fit.
+
+    Errors are formed against the converged reference rung
+    ``R8_REFERENCE_ARM`` and the order is the least-squares slope of log(e)
+    against log(h) over the FIT DOMAIN -- the rungs whose NOMINAL cadence is
+    at or below ``R8_FIT_MAX_H``. Coarser rungs are reported with their own
+    errors and carry ``R8_EXCLUDED_LABEL``: at h >= 2.5e-5 s the arm is in
+    the ion-debit shortfall / Ti-collapse regime, which is not a sample of
+    the smooth truncation-error curve the fit models.
+
+    Returns the ACTIVE gated keys (the NV2 survivors), which R9 reads.
+    """
+    lines.append("## R8 order fit -- AMENDED: reference-corrected, fit "
+                 f"domain nominal h <= {R8_FIT_MAX_H:g} s")
+    lines.append("")
+    lines.append(
+        f"**Fit mode `{R8_FIT_AMENDED}` (the default), "
+        f"{R8_AMENDMENT_LABEL}.** Errors are "
+        f"`e_k = ||u_k - u_ref||` against the converged reference rung "
+        f"`{R8_REFERENCE_ARM}`, read at the `{sampling}` sampling, and the "
+        "order is the least-squares slope of `log e` against `log h` over "
+        "the fit domain, using each rung's EFFECTIVE h. This addresses two "
+        "identified defects of the pre-amendment fit: the coarse rungs are a "
+        "DIFFERENT REGIME (ion-debit shortfall / Ti collapse at "
+        "h >= 2.5e-5 s), and the pre-amendment reference was UNCONVERGED "
+        "(its finest rung over-books 5.2 %)."
+    )
+    lines.append("")
+
+    ref = arms.get(R8_REFERENCE_ARM)
+    if ref is not None and ref["status"] != "ok":
+        ref = None
+    fit_arms = [a for a in ladder
+                if a["name"] != R8_REFERENCE_ARM
+                and float(a["cadence_nominal_s"]) <= R8_FIT_MAX_H * (1.0 + 1e-9)]
+    fit_names = {a["name"] for a in fit_arms}
+    excluded_arms = [a for a in ladder
+                     if a["name"] != R8_REFERENCE_ARM
+                     and a["name"] not in fit_names]
+
+    if ref is None or len(fit_arms) < 2:
+        missing = []
+        if ref is None:
+            missing.append(f"the reference rung `{R8_REFERENCE_ARM}`")
+        if len(fit_arms) < 2:
+            missing.append(
+                "at least 2 fit-domain rungs (banked: "
+                + (", ".join(f"`{a['name']}`" for a in fit_arms) or "none")
+                + ")"
+            )
+        lines.append("The amended fit cannot be formed: missing "
+                     + " and ".join(missing) + ".")
+        lines.append("")
+        verdicts.append(Verdict(
+            "R8 order ~ 1 (amended fit)", "UNDERDETERMINED",
+            "the amended fit needs " + " and ".join(missing)
+            + "; run the missing arm(s) before the fit can be formed",
+        ))
+        verdicts.append(Verdict(
+            "NV2 inactive rows", "UNDERDETERMINED",
+            "the zero-at-roundoff test is made on the amended fit's "
+            "reference rung, which is not banked",
+        ))
+        return list(GATED_KEYS)
+
+    hs = [float(a["_h"]) for a in fit_arms]
+    h_ref = float(ref["_h"])
+    lines.append(
+        "Fit domain (coarse -> fine): "
+        + " -> ".join(f"`{a['name']}` (h = {h:.6g} s)"
+                      for a, h in zip(fit_arms, hs))
+        + f"; reference `{ref['name']}` (h = {h_ref:.6g} s)."
+    )
+    lines.append("")
+    if excluded_arms:
+        lines.append(
+            "EXCLUDED from the fit and reported below: "
+            + ", ".join(f"`{a['name']}` (h = {float(a['_h']):.6g} s)"
+                        for a in excluded_arms)
+            + f" -- {R8_EXCLUDED_LABEL}."
+        )
+        lines.append("")
+
+    ideal = [h - h_ref for h in hs]
+    p_ideal = _log_slope(hs, ideal)
+    p_ideal_local = _local_slopes(hs, ideal)
+    lines.append(
+        "**Estimator bias, disclosed and NOT corrected for.** The reference "
+        "is a finite h, not the exact solution, so a perfectly first-order "
+        "response gives `e_k ~ h_k - h_ref`, not `e_k ~ h_k`. On this "
+        f"domain and this reference that ideal sits at p = {p_ideal:.4g} "
+        "(local "
+        + ", ".join(f"{p:.4g}" for p in p_ideal_local)
+        + "), NOT at 1. The slopes below are read against the REGISTERED "
+        "band regardless -- a band is not moved to suit an estimator -- so a "
+        "row sitting above the band by about this much is the reference's "
+        "finite h rather than the coupling's order, and that reading is for "
+        "adjudication, not for the harness to apply."
+    )
+    lines.append("")
+
+    lines.append(f"### Reference-corrected errors vs `{ref['name']}`")
+    lines.append("")
+    lines.append("| arm | h_k [s] | in fit domain | "
+                 + " | ".join(f"{GATED_TAG[k]} e_k" for k in GATED_KEYS)
+                 + " |")
+    lines.append("|---" * (3 + len(GATED_KEYS)) + "|")
+    for a in [x for x in ladder if x["name"] != R8_REFERENCE_ARM]:
+        errs = [_ref_errors([a], ref, k, GATED_KIND[k])[0] for k in GATED_KEYS]
+        in_fit = a["name"] in fit_names
+        lines.append(
+            f"| `{a['name']}` | {float(a['_h']):.6g} | "
+            + ("yes" if in_fit else f"NO -- {R8_EXCLUDED_LABEL}") + " | "
+            + " | ".join(f"{e:.4g}" for e in errs) + " |"
+        )
+    lines.append("")
+
+    lines.append("### Order over the fit domain")
+    lines.append("")
+    lines.append(
+        f"The band read here is the WIDER registered pair band "
+        f"[{ORDER_BAND_COARSE[0]}, {ORDER_BAND_COARSE[1]}]: a domain fit "
+        "carries the coarsest fit rung's O(h^2) contamination, which is what "
+        f"that band exists for. Containment in the tighter "
+        f"[{ORDER_BAND_FINE[0]}, {ORDER_BAND_FINE[1]}] is reported per row "
+        "beside it and gates nothing."
+    )
+    lines.append("")
+    n_local = len(hs) - 1
+    lines.append(
+        "| obs | row | active (NV2) | "
+        + " | ".join(f"e({h:.4g})" for h in hs) + " | "
+        + " | ".join(f"local p{i + 1}{i + 2}" for i in range(n_local))
+        + " | fit p | in fine band | monotone | floor guard | verdict |"
+    )
+    lines.append("|---" * (8 + len(hs) + n_local) + "|")
+
+    active_keys = []
+    per_obs_state = {}
+    per_obs_p = {}
+    floor_tripped = []
+    dt_sample = abs(float(fit_arms[-1]["_t_sample"]) - float(ref["_t_sample"]))
+    for tag, key, label, kind in GATED:
+        active, fine_mag, ref_mag = _activity(ladder, key, kind)
+        errs = _ref_errors(fit_arms, ref, key, kind)
+        loc = _local_slopes(hs, errs)
+        p = _log_slope(hs, errs)
+        per_obs_p[key] = p
+        monotone = all(
+            np.isfinite(errs[i]) and np.isfinite(errs[i + 1])
+            and errs[i] > errs[i + 1] for i in range(len(errs) - 1)
+        )
+        dodt = _dodt(ref, key, kind)
+        guard = "n/a"
+        if dodt is not None:
+            floor = SAMPLING_FLOOR_FACTOR * dt_sample * dodt
+            tripped = np.isfinite(errs[-1]) and errs[-1] <= floor
+            guard = (f"{'TRIPPED' if tripped else 'clear'} "
+                     f"(e_fine {errs[-1]:.3g} vs {floor:.3g})")
+            if tripped and active:
+                floor_tripped.append(key)
+        in_band = (np.isfinite(p)
+                   and ORDER_BAND_COARSE[0] <= p <= ORDER_BAND_COARSE[1])
+        in_fine = (np.isfinite(p)
+                   and ORDER_BAND_FINE[0] <= p <= ORDER_BAND_FINE[1])
+        if not active:
+            state = "INACTIVE"
+        else:
+            active_keys.append(key)
+            if key in floor_tripped:
+                state = "UNDERDETERMINED"
+            elif monotone and in_band:
+                state = "PASS"
+            else:
+                state = "FAIL"
+        per_obs_state[key] = state
+        active_cell = (
+            "yes" if active
+            else f"NO (|u|_ref {fine_mag:.3g} vs ladder max {ref_mag:.3g})"
+        )
+        lines.append(
+            f"| {tag} | {label} | {active_cell} | "
+            + " | ".join(f"{e:.4g}" for e in errs) + " | "
+            + " | ".join(f"{v:.4g}" for v in loc)
+            + f" | {p:.4g} | {'yes' if in_fine else 'no'} | "
+            f"{'yes' if monotone else 'NO'} | {guard} | {state} |"
+        )
+    lines.append("")
+
+    domain = ", ".join(f"`{a['name']}`" for a in fit_arms)
+    stem = (
+        f"amended fit ({R8_AMENDMENT_LABEL}): domain {domain} "
+        f"(nominal h <= {R8_FIT_MAX_H:g} s), reference `{ref['name']}` "
+        f"(h = {h_ref:.6g} s), log-e/log-h on effective h, band "
+        f"[{ORDER_BAND_COARSE[0]}, {ORDER_BAND_COARSE[1]}]; rungs coarser "
+        f"than the domain are {R8_EXCLUDED_LABEL}"
+    )
+    if not active_keys:
+        verdicts.append(Verdict(
+            "R8 order ~ 1 (amended fit)", "UNDERDETERMINED",
+            stem + " -- every gated row is zero-at-roundoff on the reference "
+            "rung (NV2), so there is nothing to fit: "
+            "inactive-with-disclosure, not a pass",
+        ))
+    elif floor_tripped:
+        verdicts.append(Verdict(
+            "R8 order ~ 1 (amended fit)", "UNDERDETERMINED",
+            stem + " -- sampling-floor guard TRIPPED on "
+            f"{', '.join(sorted(floor_tripped))}: the finest fit-domain "
+            f"error is at or below {SAMPLING_FLOOR_FACTOR:g}x the "
+            "sample-time mismatch against the reference, so its slope "
+            "carries no order information",
+        ))
+    else:
+        failed = [k for k in active_keys if per_obs_state[k] == "FAIL"]
+        verdicts.append(Verdict(
+            "R8 order ~ 1 (amended fit)",
+            "PASS" if not failed else "FAIL",
+            stem + " -- "
+            + ("every gated ACTIVE observable is monotone with its domain "
+               "slope in band"
+               if not failed else
+               "out of band or non-monotone on "
+               + ", ".join(f"{GATED_TAG[k]} ({GATED_LABEL[k]}, p = "
+                           f"{per_obs_p[k]:.4g})" for k in failed)),
+            None if not failed else CONSEQUENCE["a"],
+        ))
+
+    inactive = [k for k in GATED_KEYS if k not in active_keys]
+    if inactive:
+        verdicts.append(Verdict(
+            "NV2 inactive rows", "REPORTED",
+            "zero-at-roundoff on the reference rung, so INACTIVE with "
+            "disclosure (never a trivial pass): "
+            + ", ".join(f"{GATED_TAG[k]} ({GATED_LABEL[k]})"
+                        for k in inactive),
+        ))
+    else:
+        verdicts.append(Verdict(
+            "NV2 inactive rows", "PASS",
+            "every gated row carries signal on the reference rung",
+        ))
+    return active_keys
+
+
+def evaluate(arm_records, out_path=None, sampling=SAMPLING_REGISTERED,
+             r8_fit=R8_FIT_AMENDED):
     """Assemble the R16 table and evaluate R8-R14. Returns (lines, verdicts).
 
     ``sampling`` selects how each arm's observable rows are read: the
     registered common absolute t* (per-tick capture interpolated to
     ``t_engage + t*``) or the superseded per-arm N_k-th tick.
+
+    ``r8_fit`` selects the R8 ESTIMATOR those rows are fed to: the amended
+    reference-corrected fit over the rungs at or below ``R8_FIT_MAX_H``
+    (the default), or the superseded successive-pair fit over the whole
+    ladder. Both read the same banked arms -- the estimator, like the
+    sampling, is a table-time choice and never a re-run.
     """
     if sampling not in SAMPLING_MODES:
         raise SystemExit(
             f"REFUSED: unknown sampling {sampling!r}; the registered mode is "
             f"{SAMPLING_REGISTERED!r} and {SAMPLING_SUPERSEDED!r} is the "
+            "superseded one"
+        )
+    if r8_fit not in R8_FIT_MODES:
+        raise SystemExit(
+            f"REFUSED: unknown R8 fit mode {r8_fit!r}; the registered mode is "
+            f"{R8_FIT_AMENDED!r} and {R8_FIT_PRE_AMENDMENT!r} is the "
             "superseded one"
         )
     lines = []
@@ -1032,6 +1586,19 @@ def evaluate(arm_records, out_path=None, sampling=SAMPLING_REGISTERED):
     lines.append(f"| sampling [R2, amended] | `{sampling}` -- "
                  + ("REGISTERED " + AMENDMENT_LABEL if registered else
                     "SUPERSEDED " + AMENDMENT_LABEL) + " |")
+    lines.append(
+        f"| R8 fit mode [R8, amended] | `{r8_fit}` -- "
+        + (f"REGISTERED {R8_AMENDMENT_LABEL}: reference-corrected "
+           f"log-e/log-h fit over the rungs with nominal h <= "
+           f"{R8_FIT_MAX_H:g} s, against the reference rung "
+           f"`{R8_REFERENCE_ARM}`; coarser rungs reported but "
+           f"{R8_EXCLUDED_LABEL}"
+           if r8_fit == R8_FIT_AMENDED else
+           f"SUPERSEDED {R8_AMENDMENT_LABEL}: successive-pair fit over the "
+           "whole banked ladder, reproduced only so the pre-amendment "
+           "numbers stay on the record")
+        + " |"
+    )
     lines.append(f"| mid-port cell [R7] | ES port {MID_PORT_NUMBER}, "
                  f"z_probe = {MID_PORT_Z_CM} cm -> cell {MID_PORT_CELL} "
                  f"(z = {MID_PORT_CELL_Z_CM} cm), from "
@@ -1291,179 +1858,17 @@ def evaluate(arm_records, out_path=None, sampling=SAMPLING_REGISTERED):
     # ------------------------------------------------------- cadence ladder
     ladder_names = [n for n in CADENCE_LADDER
                     if n in arms and arms[n]["status"] == "ok"]
-    if _CAD_COND_NAME in arms and arms[_CAD_COND_NAME]["status"] == "ok":
-        ladder_names.append(_CAD_COND_NAME)
+    for extra in (_CAD_COND_NAME, _CAD_REF_NAME):
+        if extra in arms and arms[extra]["status"] == "ok":
+            ladder_names.append(extra)
     ladder = [arms[n] for n in ladder_names]
     ladder.sort(key=lambda a: -float(a["_h"]))
 
-    lines.append("## R8 order fit -- successive pairs only")
-    lines.append("")
-    lines.append(
-        f"Re-formed from the common-t rows, {AMENDMENT_LABEL}: the pair "
-        "errors below compare arms at ONE absolute time, so the sample-time "
-        "mismatch that the floor guard exists to catch is zero by "
-        "construction and the guard reads clear on every row."
-        if registered else
-        f"Formed from each arm's own N_k-th tick -- SUPERSEDED "
-        f"{AMENDMENT_LABEL}."
-    )
-    lines.append("")
-    if len(ladder) < 4:
-        lines.append(
-            f"Only {len(ladder)} usable cadence rung(s) banked "
-            f"({', '.join(a['name'] for a in ladder) or 'none'}); the "
-            "successive-pair fit needs at least 4 rungs to form two order "
-            "pairs."
-        )
-        lines.append("")
-        verdicts.append(Verdict(
-            "R8 order ~ 1",
-            "UNDERDETERMINED",
-            f"{len(ladder)} usable rungs banked; run the missing rungs "
-            + (f"(including the conditional {_CAD_COND_NAME}) "
-               if dead else "")
-            + "before the fit can be formed",
-        ))
-        verdicts.append(Verdict(
-            "NV2 inactive rows", "UNDERDETERMINED",
-            "the zero-at-roundoff test is made on the finest rung of the "
-            "cadence ladder, which is not yet complete",
-        ))
-        active_keys = list(GATED_KEYS)
+    if r8_fit == R8_FIT_AMENDED:
+        active_keys = _r8_amended(lines, verdicts, arms, ladder, sampling)
     else:
-        lines.append(
-            "Ladder (coarse -> fine): "
-            + " -> ".join(f"`{a['name']}` (h = {a['_h']:.6g} s)"
-                          for a in ladder)
-        )
-        lines.append("")
-        lines.append(
-            "| obs | row | active (NV2) | "
-            + " | ".join(f"e{i+1}" for i in range(len(ladder) - 1))
-            + " | "
-            + " | ".join(f"p{i+1}{i+2}" for i in range(len(ladder) - 2))
-            + " | monotone | floor guard | verdict |"
-        )
-        lines.append("|---" * (6 + (len(ladder) - 1) + (len(ladder) - 2))
-                     + "|")
-        active_keys = []
-        per_obs_state = {}
-        floor_tripped = []
-        for tag, key, label, kind in GATED:
-            active, fine_mag, ref_mag = _activity(ladder, key, kind)
-            errs = _pair_errors(ladder, key, kind)
-            ps = [
-                math.log2(errs[i] / errs[i + 1])
-                if (errs[i] > 0 and errs[i + 1] > 0
-                    and np.isfinite(errs[i]) and np.isfinite(errs[i + 1]))
-                else float("nan")
-                for i in range(len(errs) - 1)
-            ]
-            monotone = all(
-                np.isfinite(errs[i]) and np.isfinite(errs[i + 1])
-                and errs[i] > errs[i + 1] for i in range(len(errs) - 1)
-            )
-            dodt = _dodt(ladder[-1], key, kind)
-            dt_sample = abs(float(ladder[-1]["_t_sample"])
-                            - float(ladder[-2]["_t_sample"]))
-            floor = None
-            guard = "n/a"
-            if dodt is not None:
-                floor = SAMPLING_FLOOR_FACTOR * dt_sample * dodt
-                tripped = np.isfinite(errs[-1]) and errs[-1] <= floor
-                guard = (f"{'TRIPPED' if tripped else 'clear'} "
-                         f"(e_fine {errs[-1]:.3g} vs {floor:.3g})")
-                if tripped and active:
-                    floor_tripped.append(key)
-            if not active:
-                state = "INACTIVE"
-            else:
-                active_keys.append(key)
-                p_fine = ps[-1] if ps else float("nan")
-                p_coarse = ps[0] if ps else float("nan")
-                in_fine = (np.isfinite(p_fine)
-                           and ORDER_BAND_FINE[0] <= p_fine
-                           <= ORDER_BAND_FINE[1])
-                in_coarse = (np.isfinite(p_coarse)
-                             and ORDER_BAND_COARSE[0] <= p_coarse
-                             <= ORDER_BAND_COARSE[1])
-                if key in floor_tripped:
-                    state = "UNDERDETERMINED"
-                elif monotone and in_fine and in_coarse:
-                    state = "PASS"
-                else:
-                    state = "FAIL"
-            per_obs_state[key] = state
-            active_cell = (
-                "yes" if active
-                else f"NO (|u|_fine {fine_mag:.3g} vs ladder max "
-                     f"{ref_mag:.3g})"
-            )
-            lines.append(
-                f"| {tag} | {label} | {active_cell} | "
-                + " | ".join(f"{e:.4g}" for e in errs) + " | "
-                + " | ".join(f"{p:.4g}" for p in ps)
-                + f" | {'yes' if monotone else 'NO'} | {guard} | {state} |"
-            )
-        lines.append("")
-        if not active_keys:
-            r8_state = "UNDERDETERMINED"
-            detail = ("every gated row is zero-at-roundoff on the finest arm "
-                      "(NV2): there is nothing to fit -- "
-                      "inactive-with-disclosure, not a pass")
-            verdicts.append(Verdict("R8 order ~ 1", r8_state, detail))
-        elif floor_tripped:
-            have_cond = (_CAD_COND_NAME in arms
-                         and arms[_CAD_COND_NAME]["status"] == "ok")
-            if not have_cond:
-                r8_state = "UNDERDETERMINED"
-                verdicts.append(Verdict(
-                    "R8 order ~ 1", r8_state,
-                    "sampling-floor guard TRIPPED on "
-                    f"{', '.join(sorted(floor_tripped))}: the finest pair "
-                    "error is at or below 10x the sample-time mismatch "
-                    f"contribution. Registration: add the {_CAD_COND_NAME} "
-                    "rung and re-form the pairs; only then can out-of-band "
-                    "FAIL.",
-                ))
-            else:
-                r8_state = "UNDERDETERMINED"
-                verdicts.append(Verdict(
-                    "R8 order ~ 1", r8_state,
-                    "sampling-floor guard TRIPPED again on "
-                    f"{', '.join(sorted(floor_tripped))} WITH the "
-                    f"conditional rung {_CAD_COND_NAME} already banked and "
-                    "the pairs re-formed. The registration provides for ONE "
-                    "conditional rung, so this is past its branch: a "
-                    "registered anomaly for adjudication, not a FAIL and not "
-                    "a pass.",
-                ))
-        else:
-            failed = [k for k in active_keys if per_obs_state[k] == "FAIL"]
-            r8_state = "PASS" if not failed else "FAIL"
-            verdicts.append(Verdict(
-                "R8 order ~ 1", r8_state,
-                "every gated ACTIVE observable is monotone with both pair "
-                "orders in band" if not failed else
-                "out of band or non-monotone on "
-                + ", ".join(f"{GATED_TAG[k]} ({GATED_LABEL[k]})"
-                            for k in failed),
-                None if not failed else CONSEQUENCE["a"],
-            ))
-        inactive = [k for k in GATED_KEYS if k not in active_keys]
-        if inactive:
-            verdicts.append(Verdict(
-                "NV2 inactive rows", "REPORTED",
-                "zero-at-roundoff on the finest arm, so INACTIVE with "
-                "disclosure (never a trivial pass): "
-                + ", ".join(f"{GATED_TAG[k]} ({GATED_LABEL[k]})"
-                            for k in inactive),
-            ))
-        else:
-            verdicts.append(Verdict(
-                "NV2 inactive rows", "PASS",
-                "every gated row carries signal on the finest arm",
-            ))
+        active_keys = _r8_pre_amendment(lines, verdicts, arms, ladder, dead,
+                                        registered)
 
     # ---------------------------------------------------------------- R9
     lines.append("## R9 corrected proxy true error "
@@ -1796,6 +2201,17 @@ def main(argv=None):
                         f"N_k-th tick and is SUPERSEDED {AMENDMENT_LABEL}; it "
                         "is kept only so the pre-amendment numbers stay "
                         "reproducible")
+    p.add_argument("--r8-fit", choices=R8_FIT_MODES, default=R8_FIT_AMENDED,
+                   help=f"--table: which R8 ESTIMATOR the sampled rows are "
+                        f"fed to. {R8_FIT_AMENDED!r} (default) is the "
+                        f"REGISTERED fit {R8_AMENDMENT_LABEL} -- "
+                        f"reference-corrected errors against "
+                        f"{R8_REFERENCE_ARM!r}, log-e/log-h over the rungs "
+                        f"with nominal h <= {R8_FIT_MAX_H:g} s, coarser rungs "
+                        f"reported but {R8_EXCLUDED_LABEL}. "
+                        f"{R8_FIT_PRE_AMENDMENT!r} is the successive-pair fit "
+                        "over the whole ladder and is SUPERSEDED; it is kept "
+                        "only so the pre-amendment numbers stay reproducible")
     args = p.parse_args(argv)
 
     if args.t_star_ms not in T_STAR_MS_ALLOWED:
@@ -1812,6 +2228,12 @@ def main(argv=None):
             "changes nothing about what --arm runs (every arm banks its "
             "per-tick capture either way), so it must not be passed here "
             "as a silent no-op"
+        )
+    if args.r8_fit != R8_FIT_AMENDED and not args.table:
+        p.error(
+            "--r8-fit selects which R8 estimator --table forms from the "
+            "banked arms; it changes nothing about what --arm runs, so it "
+            "must not be passed here as a silent no-op"
         )
 
     if args.plan:
@@ -1933,7 +2355,8 @@ def main(argv=None):
     out = Path(args.out) if args.out else (
         Path(args.out_dir) / "b0c_convergence_table.md"
     )
-    lines, verdicts = evaluate(records, out_path=out, sampling=args.sampling)
+    lines, verdicts = evaluate(records, out_path=out, sampling=args.sampling,
+                               r8_fit=args.r8_fit)
     for line in lines:
         print(line)
     print(f"\nwrote {out}")
