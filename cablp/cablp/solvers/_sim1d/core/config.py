@@ -959,6 +959,26 @@ def model_mode_defaults():
         same presheath through a path that does not carry ``Tn``, and letting
         only one of the two move would break the shared sheath-edge density
         those two deliberately agree on. Raises at construction otherwise.
+    neutral_kinetic_dvm_transfer_hold:
+        How the plasma applies the transient DVM's tick-booked CX/elastic
+        transfer between neutral clock ticks. ``"exponential"`` (the
+        resolved default) treats that pair as the linear relaxation it is
+        and integrates it exactly over each plasma step at the tick's frozen
+        rate and target: ``Ei <- Ei_eq + (Ei - Ei_eq) exp(-nu dt)``, and the
+        momentum row at the same ``nu`` towards the same lost-population
+        drift. ``"zoh"`` holds the booked RATE constant across the tick
+        instead, which is unconditionally unstable once ``nu dt_tick``
+        exceeds 2 and is retained only as a negative control and to
+        reproduce artifacts of runs made before the exponential hold. The
+        ionization and recombination rows are a source under either value
+        and are never relaxed. The difference between what the plasma
+        applied and what the tick booked is carried as a per-cell HOLD DEBT,
+        separate from the floor debt of
+        ``neutral_kinetic_dvm_transfer_relax_fraction`` and repaid as a
+        constant source over the following tick; it is the cadence meter.
+        Read only under ``neutral_model = "kinetic_dvm"`` -- setting it
+        under any other neutral model raises at construction, as does any
+        value outside the accepted pair.
     neutral_kinetic_dvm_transfer_relax_fraction:
         Share of a cell's ion-energy margin above its ``Ti`` floor that the
         transient DVM's tick-frozen coupling drain may consume in ONE plasma
@@ -1071,6 +1091,10 @@ def model_mode_defaults():
         "neutral_kinetic_dvm_annulus_flights": "rates",
         "neutral_kinetic_dvm_tn_feedback": False,
         "neutral_kinetic_dvm_transfer_relax_fraction": 0.5,
+        # None = "not named"; resolved to "exponential" by the arm, and
+        # refused outright by every other neutral model, so the key can
+        # never be a silently inert control:
+        "neutral_kinetic_dvm_transfer_hold": None,
         # Bucket-2 default-off closure instrument (low-Te ADAS extension; only
         # active with icool_recomb, sub-0.2 eV):
         "adas_low_te_extension": False,

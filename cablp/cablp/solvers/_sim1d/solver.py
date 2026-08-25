@@ -76,6 +76,7 @@ from .physics.kinetic_dvm import (
     ANNULUS_FLIGHT_MODELS as KINETIC_DVM_ANNULUS_FLIGHT_MODELS,
     ELASTIC_MODELS as KINETIC_DVM_ELASTIC_MODELS,
     EXCHANGE_MODELS as KINETIC_DVM_EXCHANGE_MODELS,
+    TRANSFER_HOLDS as KINETIC_DVM_TRANSFER_HOLDS,
     TransientDVM,
 )
 from .physics.kinetic_neutrals import (
@@ -1036,7 +1037,17 @@ class LAPDSim1D:
         self._dvm_next_s = 0.0
         self._dvm_last_s = 0.0
         self._dvm_transfer_relax_fraction = 1.0
+        self._dvm_transfer_hold = KINETIC_DVM_TRANSFER_HOLDS[0]
         self._dvm_step_transfer = None
+        # Exponential-hold tick state: the fluid momentum and ion energy the
+        # tick's booked pair rate was measured against, and the constant
+        # repayment rate the outstanding hold debt is retired at over this
+        # tick. All three are frozen for the tick, exactly as the booked
+        # transfer is.
+        self._dvm_hold_M0 = np.zeros(self._geometry.cells, dtype=float)
+        self._dvm_hold_Ei0 = np.zeros(self._geometry.cells, dtype=float)
+        self._dvm_hold_repay_M = np.zeros(self._geometry.cells, dtype=float)
+        self._dvm_hold_repay_Ei = np.zeros(self._geometry.cells, dtype=float)
         # Ionization the plasma has BOOKED since the last neutral tick, as a
         # per-cell density increment [cm^-3] on the plasma (= column) volume.
         # This is the counted quantity the kinetic arm debits; see
@@ -1064,6 +1075,19 @@ class LAPDSim1D:
                     "'rates' anywhere, or 'bounded_chord' with "
                     "neutral_model='kinetic_dvm' and the neutral_two_zone "
                     f"flag (got {flights!r})"
+                )
+            # Same statement for the transfer hold: it selects how the
+            # plasma integrates the DVM's tick-booked coupling term, and
+            # there is no such term to integrate under any other model.
+            hold = self._input_dict.get("neutral_kinetic_dvm_transfer_hold")
+            if hold is not None:
+                raise ValueError(
+                    "neutral_kinetic_dvm_transfer_hold selects how the "
+                    "plasma applies the transient DVM's tick-booked "
+                    "coupling term and has no meaning under "
+                    f"neutral_model={self._neutral_model!r}, which books no "
+                    "such term. Accepted: leave it unset, or set it with "
+                    f"neutral_model='kinetic_dvm' (got {hold!r})"
                 )
 
     def _init_numerical_guards(self):
@@ -3670,6 +3694,19 @@ class LAPDSim1D:
                 "may consume in one step and must lie in (0, 1] "
                 f"(got {relax_fraction})"
             )
+        transfer_hold = self._input_dict.get(
+            "neutral_kinetic_dvm_transfer_hold"
+        )
+        transfer_hold = (
+            KINETIC_DVM_TRANSFER_HOLDS[0]
+            if transfer_hold is None
+            else str(transfer_hold)
+        )
+        if transfer_hold not in KINETIC_DVM_TRANSFER_HOLDS:
+            raise ValueError(
+                "neutral_kinetic_dvm_transfer_hold must be one of "
+                f"{KINETIC_DVM_TRANSFER_HOLDS} (got {transfer_hold!r})"
+            )
         if bool(self._input_dict.get("gas_puff_enabled", True)):
             # The arm births the puff into the ANNULUS distribution, so a
             # puff cell with no annulus volume has nowhere to put it: the
@@ -3716,6 +3753,7 @@ class LAPDSim1D:
         self._dvm_cadence_s = cadence
         self._dvm_tn_feedback = tn_feedback
         self._dvm_transfer_relax_fraction = relax_fraction
+        self._dvm_transfer_hold = transfer_hold
         anode_faces = np.asarray(
             getattr(self._geometry, "anode_face_indices", ()), dtype=int
         )
@@ -10668,24 +10706,38 @@ class LAPDSim1D:
         DEBT and re-offered as ``debt / dt`` on every later step, so a cell
         that regains margin pays back what it owes and the ledger identity
 
-            applied_cum + debt == booked_cum
+            applied_cum + debt + hold_debt == booked_cum
 
         holds per cell to roundoff (:meth:`_dvm_book_step_transfer` closes
-        it). A cell that never regains margin carries the debt to the end of
+        it). The ``hold_debt`` row is zero throughout under
+        ``transfer_hold = "zoh"`` and is the exponential hold's own,
+        disjoint, deferral; see :meth:`_dvm_transfer_hold_offer`.
+        A cell that never regains margin carries the debt to the end of
         the run, which is the honest statement that the plasma could not
         absorb what the kinetic side booked -- reported, never silently
         dropped.
 
         Heating (a non-negative ``Ei`` rate) is never limited: it cannot
         threaten a floor.
+
+        Under ``neutral_kinetic_dvm_transfer_hold = "exponential"`` the
+        booked rate is first corrected to the EXPONENTIAL HOLD of the
+        CX/elastic pair (:meth:`_dvm_transfer_hold_offer`) before any of the
+        above; the floor relax then acts on that, so the two mechanisms
+        compose in one direction only and each keeps its own debt row.
         """
         dvm = self._dvm
         state = self.state
         apply_mask = self._dvm_transfer_apply_mask()
         booked_M = np.asarray(dvm.M_transfer, dtype=float)
         booked_Ei = np.asarray(dvm.Ei_transfer, dtype=float)
-        desired_M = booked_M + dvm.M_debt / dt
-        desired_Ei = booked_Ei + dvm.Ei_debt / dt
+        offer_M, offer_Ei = self._dvm_transfer_hold_offer(dt, state)
+        if offer_Ei is None:
+            desired_M = booked_M + dvm.M_debt / dt
+            desired_Ei = booked_Ei + dvm.Ei_debt / dt
+        else:
+            desired_M = booked_M + offer_M + dvm.M_debt / dt
+            desired_Ei = booked_Ei + offer_Ei + dvm.Ei_debt / dt
         floor_energy = (
             1.5
             * float(self._floors["Ti"])
@@ -10706,6 +10758,8 @@ class LAPDSim1D:
             apply_mask=apply_mask,
             booked_M=booked_M,
             booked_Ei=booked_Ei,
+            offer_M=offer_M,
+            offer_Ei=offer_Ei,
             desired_M=desired_M,
             desired_Ei=desired_Ei,
             applied_M=applied_M,
@@ -10713,6 +10767,80 @@ class LAPDSim1D:
             limited=limited,
         )
         return self._dvm_step_transfer
+
+    def _dvm_transfer_hold_offer(self, dt, state):
+        """Return the exponential hold's correction to the booked pair rate.
+
+        ``(None, None)`` under ``transfer_hold = "zoh"``, where the booked
+        rate IS what the step offers and the caller's arithmetic is the
+        pre-hold one, unchanged.
+
+        Otherwise the CX/elastic pair is the linear relaxation
+
+            d(Ei)/dt = -nu (Ei - Ei_eq),   d(M)/dt = -nu (M - M_eq)
+
+        at the tick's frozen ``nu`` and targets, and the exact solution over
+        a step of length ``dt`` from the step's OWN state is applied as a
+        constant rate::
+
+            rate = (X_eq - X) (1 - e^{-nu dt}) / dt
+                 = booked_pair * phi(nu dt) - (X - X_tick) (1 - e^{-nu dt}) / dt
+
+        with ``phi(x) = (1 - e^{-x}) / x`` and ``X_tick`` the fluid row the
+        tick's rate was measured against, which is what makes the targets
+        ``X_eq = X_tick + booked_pair / nu`` -- i.e. the targets the BOOKED
+        moments define, so the pair stays antisymmetric with the kinetic
+        side rather than being rebuilt from a second formula. The returned
+        correction is that rate MINUS the booked pair rate, plus the
+        constant repayment of the outstanding hold debt; the caller adds it
+        to the booked total, so the ionization and recombination rows pass
+        through untouched as the sources they are.
+
+        The two limits are the ones that matter: ``nu dt -> 0`` returns the
+        repayment alone plus ``-nu (X - X_tick)``, i.e. the zero-order hold
+        evaluated at the current state; and no value of ``nu dt`` can carry
+        ``X`` past ``X_eq``, which is the instability this replaces.
+        """
+        if self._dvm_transfer_hold == "zoh":
+            return None, None
+        dvm = self._dvm
+        nu = np.asarray(dvm.nu_pair, dtype=float)
+        x = nu * dt
+        # 1 - e^{-x} and (1 - e^{-x})/x, both accurate as x -> 0.
+        psi = -np.expm1(-x)
+        positive = x > 0.0
+        phi = np.where(positive, psi / np.where(positive, x, 1.0), 1.0)
+        dM = np.asarray(state.M, dtype=float) - self._dvm_hold_M0
+        dEi = np.asarray(state.Ei, dtype=float) - self._dvm_hold_Ei0
+        offer_M = (
+            np.asarray(dvm.M_transfer_pair, dtype=float) * (phi - 1.0)
+            - dM * psi / dt
+            + self._dvm_hold_repay_M
+        )
+        offer_Ei = (
+            np.asarray(dvm.Ei_transfer_pair, dtype=float) * (phi - 1.0)
+            - dEi * psi / dt
+            + self._dvm_hold_repay_Ei
+        )
+        return offer_M, offer_Ei
+
+    def _dvm_arm_transfer_hold(self, state):
+        """Freeze the exponential hold's tick state and repayment rate.
+
+        Called at every neutral tick (and at engagement), from the ACCEPTED
+        state the tick's transfer was booked against. The repayment rate
+        retires whatever hold debt stands at the tick over the cadence that
+        follows, as a CONSTANT source -- never as ``debt / dt`` per plasma
+        step, which would re-offer the whole debt on every step and put the
+        truncation back into the drain path the hold exists to calm.
+        """
+        self._dvm_hold_M0 = np.asarray(state.M, dtype=float).copy()
+        self._dvm_hold_Ei0 = np.asarray(state.Ei, dtype=float).copy()
+        if self._dvm_transfer_hold == "zoh":
+            return
+        cadence = float(self._dvm_cadence_s)
+        self._dvm_hold_repay_M = self._dvm.M_hold_debt / cadence
+        self._dvm_hold_repay_Ei = self._dvm.Ei_hold_debt / cadence
 
     def _dvm_book_step_transfer(self, dt):
         """Commit the scoped step's transfer to the deferred-transfer ledger.
@@ -10732,6 +10860,17 @@ class LAPDSim1D:
         dvm.Ei_debt = np.where(
             mask, (scope.desired_Ei - scope.applied_Ei) * dt, 0.0
         )
+        if scope.offer_Ei is not None:
+            # What the hold offered over and above the booked rate is exactly
+            # what it no longer owes; the identity below closes because the
+            # offer entered ``desired`` and so reached ``applied_cum`` (or,
+            # where the floor relax withheld it, the debt row above).
+            dvm.M_hold_debt = np.where(
+                mask, dvm.M_hold_debt - scope.offer_M * dt, 0.0
+            )
+            dvm.Ei_hold_debt = np.where(
+                mask, dvm.Ei_hold_debt - scope.offer_Ei * dt, 0.0
+            )
         dvm.M_booked_cum = dvm.M_booked_cum + np.where(
             mask, scope.booked_M * dt, 0.0
         )
@@ -10753,10 +10892,11 @@ class LAPDSim1D:
     def dvm_transfer_ledger(self):
         """Return the deferred-transfer ledger's closure, or None when off.
 
-        ``residual`` is ``applied_cum + debt - booked_cum`` per cell, the
-        statement that the relax deferred energy and momentum rather than
-        destroying them; ``*_rel`` normalizes it by the accumulated
-        throughput plus the outstanding debt.
+        ``residual`` is ``applied_cum + debt + hold_debt - booked_cum`` per
+        cell, the statement that the relax and the exponential hold DEFERRED
+        energy and momentum rather than destroying them; ``*_rel``
+        normalizes it by the accumulated throughput plus both outstanding
+        debts.
 
         The ``N`` channel is the same statement for PARTICLES across the
         fluid/kinetic ionization handshake: ``removed_cum + debt -
@@ -10771,13 +10911,21 @@ class LAPDSim1D:
             return None
         dvm = self._dvm
         out = {}
-        for name, applied, booked, debt in (
-            ("M", dvm.M_applied_cum, dvm.M_booked_cum, dvm.M_debt),
-            ("Ei", dvm.Ei_applied_cum, dvm.Ei_booked_cum, dvm.Ei_debt),
-            ("N", dvm.ion_removed_cum, dvm.ion_booked_cum, dvm.ion_debt),
+        zero_hold = np.zeros(self._geometry.cells, dtype=float)
+        for name, applied, booked, debt, hold in (
+            ("M", dvm.M_applied_cum, dvm.M_booked_cum, dvm.M_debt,
+             dvm.M_hold_debt),
+            ("Ei", dvm.Ei_applied_cum, dvm.Ei_booked_cum, dvm.Ei_debt,
+             dvm.Ei_hold_debt),
+            ("N", dvm.ion_removed_cum, dvm.ion_booked_cum, dvm.ion_debt,
+             zero_hold),
         ):
-            residual = applied + debt - booked
-            scale = np.max(np.abs(booked)) + np.max(np.abs(debt))
+            residual = applied + debt + hold - booked
+            scale = (
+                np.max(np.abs(booked))
+                + np.max(np.abs(debt))
+                + np.max(np.abs(hold))
+            )
             out[name] = {
                 "residual": residual,
                 "scale": float(scale),
@@ -10809,11 +10957,15 @@ class LAPDSim1D:
         frames gives the ionization booked and debited over that interval.
         """
         dvm = self._dvm
+        volume = np.asarray(self._geometry.plasma_volume_cm3, dtype=float)
         return {
             "time": float(time),
             "relax_steps": float(dvm.relax_steps),
             "relax_limited_steps": float(dvm.relax_limited_steps),
             "limited_cells": float(np.count_nonzero(dvm.relax_cell_steps)),
+            "Ei_hold_debt_total": float(np.sum(dvm.Ei_hold_debt * volume)),
+            "M_hold_debt_total": float(np.sum(dvm.M_hold_debt * volume)),
+            "Ei_hold_debt_max_abs": float(np.max(np.abs(dvm.Ei_hold_debt))),
             "ion_booked_total": float(np.sum(dvm.ion_booked_cum)),
             "ion_removed_total": float(np.sum(dvm.ion_removed_cum)),
             "ion_debt_total": float(np.sum(dvm.ion_debt)),
@@ -10825,8 +10977,10 @@ class LAPDSim1D:
 
         The quotable form of the standing DVM report condition: how many
         steps the floor-aware relax limited, what each channel still owes the
-        plasma, and the cumulative booked-vs-applied totals that carry the
-        identity ``applied_cum + debt == booked_cum``. Per-cell arrays are
+        plasma, what the exponential hold still owes as HOLD DEBT (zero
+        throughout under ``transfer_hold = "zoh"``), and the cumulative
+        booked-vs-applied totals that carry the identity
+        ``applied_cum + debt + hold_debt == booked_cum``. Per-cell arrays are
         kept (they are one row of ``cells`` each) so the identity is
         checkable from the artifact and the debt can be localized; the
         scalars are the numbers a report quotes.
@@ -10844,6 +10998,7 @@ class LAPDSim1D:
         volume = np.asarray(self._geometry.plasma_volume_cm3, dtype=float)
         census = {
             "engaged": int(bool(self._dvm_engaged)),
+            "transfer_hold": self._dvm_transfer_hold,
             "relax_steps": int(dvm.relax_steps),
             "relax_limited_steps": int(dvm.relax_limited_steps),
             "limited_cells": int(np.count_nonzero(dvm.relax_cell_steps)),
@@ -10851,17 +11006,25 @@ class LAPDSim1D:
         }
         for name in ("Ei", "M"):
             debt = np.asarray(getattr(dvm, f"{name}_debt"), dtype=float)
+            hold = np.asarray(getattr(dvm, f"{name}_hold_debt"), dtype=float)
             booked = np.asarray(getattr(dvm, f"{name}_booked_cum"), dtype=float)
             applied = np.asarray(getattr(dvm, f"{name}_applied_cum"), dtype=float)
-            residual = applied + debt - booked
-            scale = float(np.max(np.abs(booked)) + np.max(np.abs(debt)))
+            residual = applied + debt + hold - booked
+            scale = float(
+                np.max(np.abs(booked))
+                + np.max(np.abs(debt))
+                + np.max(np.abs(hold))
+            )
             census.update(
                 {
                     f"{name}_debt": debt.copy(),
+                    f"{name}_hold_debt": hold.copy(),
                     f"{name}_booked_cum": booked.copy(),
                     f"{name}_applied_cum": applied.copy(),
                     f"{name}_debt_total": float(np.sum(debt * volume)),
                     f"{name}_debt_max_abs": float(np.max(np.abs(debt))),
+                    f"{name}_hold_debt_total": float(np.sum(hold * volume)),
+                    f"{name}_hold_debt_max_abs": float(np.max(np.abs(hold))),
                     f"{name}_booked_total": float(np.sum(booked * volume)),
                     f"{name}_applied_total": float(np.sum(applied * volume)),
                     f"{name}_residual_rel": float(
@@ -10897,6 +11060,9 @@ class LAPDSim1D:
             "relax_steps",
             "relax_limited_steps",
             "limited_cells",
+            "Ei_hold_debt_total",
+            "M_hold_debt_total",
+            "Ei_hold_debt_max_abs",
             "ion_booked_total",
             "ion_removed_total",
             "ion_debt_total",
@@ -10933,6 +11099,7 @@ class LAPDSim1D:
         self._dvm_engaged = True
         self._dvm_last_s = self._time
         self._dvm_next_s = self._time + self._dvm_cadence_s
+        self._dvm_arm_transfer_hold(state)
         # The step that engaged the arm booked its ionization against the
         # LIVE fluid nn rows, which were not yet stripped, so it is already
         # settled and must not be handed to the arm as well.
@@ -11008,6 +11175,10 @@ class LAPDSim1D:
             )
         self._dvm_last_s = self._time
         self._dvm_next_s = self._time + self._dvm_cadence_s
+        # Freeze the hold's tick state against the SAME accepted rows the
+        # transfer above was booked against, before the republish below
+        # rewrites anything.
+        self._dvm_arm_transfer_hold(state)
         # Republish: the fluid neutral density consumed by the plasma
         # physics IS the zeroth moment of f. Written straight into the
         # packed rows rather than through the flooring path, so the plasma
