@@ -10842,14 +10842,38 @@ class LAPDSim1D:
         moments define, so the pair stays antisymmetric with the kinetic
         side rather than being rebuilt from a second formula. The returned
         correction is that rate MINUS the booked pair rate, plus the
-        constant repayment of the outstanding hold debt; the caller adds it
-        to the booked total, so the ionization and recombination rows pass
-        through untouched as the sources they are.
+        repayment of the outstanding hold debt; the caller adds it to the
+        booked total, so the ionization and recombination rows pass through
+        untouched as the sources they are.
+
+        THE REPAYMENT ENTERS THROUGH THE TARGET, not as a raw constant
+        source added beside the relaxation. Spreading the tick's outstanding
+        debt ``D`` over the following tick as a flat ``D / dt_tick`` re-injects
+        the very zero-order increment the hold removed, and the coupled
+        (state, debt) map is then unstable again -- measured on the synthetic
+        cell at four plasma steps per tick: growth at ``nu dt_tick`` of 4 and
+        20, i.e. the same threshold as the scheme being replaced, with the
+        margin depending on how many plasma steps happen to fall inside a
+        tick. Offering it as ``D phi(nu dt) / dt_tick`` instead delivers
+        exactly ``D / dt_tick`` in the resolved limit (``phi -> 1``) and damps
+        it by the same exponential the relaxation carries when the tick is
+        coarse, which makes the map
+
+            g <- e^{-nu dt_tick} g + a D,   D <- -(nu dt_tick - 1 + e^{-...}) g
+                                                 + (1 - a) D
+            a = (1 - e^{-nu dt_tick}) / (nu dt_tick)
+
+        whose determinant is exactly ``1 - a`` and whose trace is
+        ``e^{-nu dt_tick} + 1 - a``. Both eigenvalues therefore lie strictly
+        inside the unit circle for every ``nu dt_tick > 0``, independently of
+        how the tick is subdivided, and the only fixed point is ``g = D = 0``:
+        the debt is driven to zero rather than merely bounded.
 
         The two limits are the ones that matter: ``nu dt -> 0`` returns the
         repayment alone plus ``-nu (X - X_tick)``, i.e. the zero-order hold
         evaluated at the current state; and no value of ``nu dt`` can carry
-        ``X`` past ``X_eq``, which is the instability this replaces.
+        ``X`` past its (debt-shifted) target within a step, which is the
+        instability this replaces.
         """
         if self._dvm_transfer_hold == "zoh":
             return None, None
@@ -10865,12 +10889,12 @@ class LAPDSim1D:
         offer_M = (
             np.asarray(dvm.M_transfer_pair, dtype=float) * (phi - 1.0)
             - dM * psi / dt
-            + self._dvm_hold_repay_M
+            + self._dvm_hold_repay_M * phi
         )
         offer_Ei = (
             np.asarray(dvm.Ei_transfer_pair, dtype=float) * (phi - 1.0)
             - dEi * psi / dt
-            + self._dvm_hold_repay_Ei
+            + self._dvm_hold_repay_Ei * phi
         )
         return offer_M, offer_Ei
 
@@ -10880,9 +10904,12 @@ class LAPDSim1D:
         Called at every neutral tick (and at engagement), from the ACCEPTED
         state the tick's transfer was booked against. The repayment rate
         retires whatever hold debt stands at the tick over the cadence that
-        follows, as a CONSTANT source -- never as ``debt / dt`` per plasma
-        step, which would re-offer the whole debt on every step and put the
-        truncation back into the drain path the hold exists to calm.
+        follows -- never as ``debt / dt`` per plasma step, which would
+        re-offer the whole debt on every step and put the truncation back
+        into the drain path the hold exists to calm. It is offered THROUGH
+        the relaxation rather than beside it; see
+        :meth:`_dvm_transfer_hold_offer` for why, and for the stability
+        statement that buys.
         """
         self._dvm_hold_M0 = np.asarray(state.M, dtype=float).copy()
         self._dvm_hold_Ei0 = np.asarray(state.Ei, dtype=float).copy()
