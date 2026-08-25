@@ -331,6 +331,18 @@ def validate_phase_config(mode, action):
 
 
 def validate_gas_puff_config(input_dict):
+    # Accepted-values gate for the axial shape selector. The same set is
+    # checked inside physics.neutrals.gas_puff_rate_profile, which is where a
+    # misspelling used to first surface -- at the FIRST RHS evaluation, long
+    # after construction. Both checks stay: this one is the construction-time
+    # refusal, the other is the defence in depth for direct callers of the
+    # shared implementation.
+    profile = input_dict.get("gas_puff_profile", "cell")
+    if profile not in ("cell", "gaussian", "cosine_pipe", "orifice"):
+        raise ValueError(
+            "gas_puff_profile must be 'cell', 'gaussian', 'cosine_pipe', or "
+            f"'orifice' (got {profile!r})"
+        )
     mode = input_dict.get("gas_puff_mode", "decay_after_breakdown")
     if mode not in {
         "decay_after_breakdown",

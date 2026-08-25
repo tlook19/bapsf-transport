@@ -13397,6 +13397,35 @@ def _case_gas_puff_axial_profile():
         pass
     else:
         raise AssertionError("expected ValueError for unknown gas_puff_profile")
+    # ...and the SAME accepted-values set is refused at CONSTRUCTION, so a
+    # misspelled profile cannot reach the first RHS (where the check above
+    # was historically the first thing to see it).
+    from cablp.solvers._sim1d.core.validation import (
+        validate_gas_puff_config as _validate_gas_puff_config,
+    )
+
+    for accepted in (
+        {"gas_puff_profile": "cell"},
+        {"gas_puff_profile": "gaussian"},
+        {"gas_puff_profile": "cosine_pipe"},
+        {
+            "gas_puff_profile": "orifice",
+            "gas_puff_orifice_id_cm": 3.95,
+            "gas_puff_orifice_length_cm": 22.0,
+        },
+    ):
+        # every value the shared implementation accepts still passes the
+        # construction-time gate: it must not narrow the set
+        _validate_gas_puff_config(dict(puff_params, **accepted))
+    try:
+        LAPDSim1D(dict(puff_params, gas_puff_profile="tube"), dict(puff_flags))
+    except ValueError as exc:
+        assert "gas_puff_profile" in str(exc)
+        assert "'tube'" in str(exc)
+    else:
+        raise AssertionError(
+            "expected ValueError at construction for gas_puff_profile='tube'"
+        )
     return locals()
 
 
