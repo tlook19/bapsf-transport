@@ -115,7 +115,10 @@ Local (cell-wise) RHS contributions, all in `physics/`:
   with one Phelps-rate equal-mass Braginskii momentum-transfer term (MODEL.md
   R4.3). The Phelps He⁺/He rate coefficients are built once at import in
   `funcs/_cross.py` (Maxwellian averages of the analytic isotropic + backscatter
-  cross sections vs `T_eff`), analogous to the IAEA `charge_ex_react` table.
+  cross sections vs `T_eff`, the effective relative-velocity temperature
+  `(Ti+Tn)/2` — a different quantity from the DVM transfer hold's `T_eff`
+  below, which shares the symbol), analogous to the IAEA `charge_ex_react`
+  table.
 - `cathode.py` — cathode/sheath boundary physics.
 
 ## Time integration
@@ -360,7 +363,10 @@ small — ~0.3 eV at the collector end cell of the g1atrim arm — so `Ei_eq` mu
 never be built from a Maxwellian at `T_n`. Everything above is published by
 the engine at booking (`nu_pair`, `M_transfer_pair`, `Ei_transfer_pair`,
 `u_n_eff`, `T_eff_eV`); `T_eff` is linearized at the tick's `u_i`, which is the
-same freeze the tick makes everywhere else.
+same freeze the tick makes everywhere else. (This `T_eff` — the hold's
+lost-population moment — is not the Phelps-rate effective relative-velocity
+temperature `(Ti+Tn)/2` of the R4.3 operator, which shares the symbol; the
+published attr `T_eff_eV` is always the hold's.)
 
 **Why the zero-order hold fails.** Freezing the booked *rate* across the tick
 advances the pair by `X_{k+1} = X_k − νΔt(X_k − X_eq)`, i.e. multiplies the
@@ -482,6 +488,14 @@ convention asks for: `nu_ion` is velocity-blind, and the population it must be
 blind about is the one that is there. Drawing only from the marched remnant,
 while the re-births sit untouched in the same cell, is the velocity-biased
 choice.
+
+**Anode-mesh re-emission is not part of that population.** The mesh
+re-emission births (`mesh_c`) are applied **after** the debit, so the
+reconciliation does not draw from them — unlike the CX/elastic re-births they
+sit outside the inventory the debit sees. On the B0c fixture they amount to
+≈2 % of `held` at the mesh cells, with no effect on the shipped arm's zero
+shortfall. Whether they should join the same-tick re-births is deliberately
+undecided; this paragraph records the as-built ordering.
 
 **What the pre-2026-08-24 ordering did.** The debit ran before the re-births,
 so `held` was the marched state stripped of CX and elastic as well. A cell
