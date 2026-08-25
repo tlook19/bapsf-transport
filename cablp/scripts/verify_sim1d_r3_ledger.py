@@ -9,7 +9,9 @@ and, on the audit's 18.81-23.80 ms main-discharge window,
   2. reproduces the full audit section-8 plasma power ledger (internal energy
      terms plus reconstructed kinetic), summing to ~-80 kW;
   3. isolates the R3 boundary defect and quantifies the misrouted sheath-phi
-     energy from the circuit's wall-side vs plasma-side (``_pl``) ion powers.
+     energy: the cathode row as I_i*phi_c (the definition of the solver's
+     P_cathode_i_phi), the anode row from the circuit's wall-side vs
+     plasma-side (``_pl``) ion powers.
 
 This validated the ledger structure and the R3 boundary term against real
 numbers before the boundary/circuit re-derivation. The -81 kW total is the
@@ -98,9 +100,29 @@ def analyze(f):
     # (3) misrouted sheath-phi from circuit scalars
     cd = f["cathode_diagnostics"]
     cm = lambda k: float(np.median(np.asarray(cd[k])[sel]))
-    phi_c_ion = cm("source_P_cathode_i") - cm("source_P_cathode_i_pl")
+    # Cathode sheath-phi power, re-derived as I_i*phi_c -- the DEFINITION of the
+    # solver's P_cathode_i_phi (_cathode_solver_idriven.py: P_cathode_i_phi =
+    # P_cathode_i - P_cathode_i_thermal, with P_cathode_i_thermal = I_i*T_e/2).
+    # This row previously took the wall-minus-plasma difference
+    # P_cathode_i - P_cathode_i_pl, which is CONTAMINATED by anode ion
+    # collection: P_cathode_i_pl is built on the ANODE ion current I_i_a
+    # (anode_current_A when the circuit supplies it -- the usual case;
+    # 2*eta*I_i only as the fallback, _cathode_solver_idriven.py:577-579),
+    # so the old difference form carried a spare (I_i - I_i_a)*T_e/2
+    # thermal term: old = new + spare, sign following I_i - I_i_a --
+    # measured +0.5004 kW (0.234% of the row) on rsc_es1 (flag-off ES1)
+    # and -0.26 kW on rt1_confirm (flag-on).
+    # CONSTRAINT THE CODE CANNOT SHOW: P_cathode_i_phi is not in the saved
+    # cathode_diagnostics schema (_CATHODE_RESULT_KEYS), so this is a
+    # RE-DERIVATION from published fields, not a read of the solver's value. It
+    # is fp-inequivalent (~1 ulp class) to the solver's remainder form, which is
+    # negligible here: this row feeds tolerance checks, not machine-zero
+    # identities. (The schema key is deferred to a reviewed solver change.)
+    phi_c_ion = cm("source_I_i") * cm("source_phi_c")
+    # Anode: already exact -- both terms carry I_i_a, so the wall-minus-plasma
+    # difference IS P_anode_i_phi = I_i_a*phi_a. Left as-is.
     phi_a_ion = cm("source_P_anode_i") - cm("source_P_anode_i_pl")
-    print("(3) sheath-phi routed to walls (circuit wall-side minus plasma-side) [kW]:")
+    print("(3) sheath-phi routed to walls [kW]:")
     print(f"    cathode ion phi_c   {phi_c_ion/1e3:+7.2f}   anode ion phi_a {phi_a_ion/1e3:+7.2f}")
     print(f"    P_net={cm('source_P_net')/1e3:+.1f} kW  vs  P_net2="
           f"{cm('source_P_net2')/1e3:+.1f} kW  (disagree by "
