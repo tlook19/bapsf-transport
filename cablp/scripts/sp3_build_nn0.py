@@ -420,6 +420,8 @@ def build(args):
         z_cm=params["gas_puff_z_cm"],
         sigma_cm=params["gas_puff_sigma_cm"],
         throw_cm=params["gas_puff_throw_cm"],
+        orifice_id_cm=params["gas_puff_orifice_id_cm"],
+        orifice_length_cm=params["gas_puff_orifice_length_cm"],
         end=0,
     )
     V_chamber = V_chamber_all

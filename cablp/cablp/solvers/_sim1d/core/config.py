@@ -437,10 +437,18 @@ def neutral_source_defaults():
         its first-flight axial deposition is the cosine-lobe pattern
         ``[1 + ((z - z0)/d)^2]^-2`` with throw ``d ~ 2*Rm``, so centre and
         width both come from geometry rather than tuning. ``"gaussian"`` is
-        the generic tunable shape. All distributed profiles conserve the
-        total inflow exactly, and one shared implementation feeds both the
-        explicit RHS and the implicit neutral matrix, so the two sites
-        cannot desync.
+        the generic tunable shape. ``"orifice"`` is the tube-beamed injection
+        row: the feed pipe at the same ports is treated as a collimating tube
+        in free-molecular flow, and the row is the ray-optics first-flight
+        landing distribution of its exit distribution on the plasma column,
+        with the wall and column radii read off the grid at the port cell. It
+        requires ``gas_puff_orifice_id_cm`` and ``gas_puff_orifice_length_cm``
+        and rejects them under any other profile. Unlike the other
+        distributed shapes it is not re-weighted by cell length and not masked
+        to the main-chamber roles -- it lands where the rays land. All
+        distributed profiles conserve the total inflow exactly, and one shared
+        implementation feeds both the explicit RHS and the implicit neutral
+        matrix, so the two sites cannot desync.
     gas_puff_z_cm:
         Distributed-puff centre [cm, machine coordinates]; ``None`` falls back
         to whichever cell currently holds the ``puff`` role. Mirrored through
@@ -454,6 +462,18 @@ def neutral_source_defaults():
     gas_puff_throw_cm:
         Cosine-pipe throw distance ``d`` [cm], of order the chord across the
         chamber (~2*Rm). Sets the lobe's HWHM = 0.64*d.
+    gas_puff_orifice_id_cm:
+        Inner diameter of the collimating feed pipe [cm], the emitting
+        aperture of the ``"orifice"`` profile. ``None`` (the default) is the
+        only value accepted under any other profile, and ``"orifice"`` refuses
+        to construct without it. Must be finite and positive.
+    gas_puff_orifice_length_cm:
+        Length of that same feed pipe [cm]. Only its ratio to
+        ``gas_puff_orifice_id_cm`` enters -- that aspect ratio is the beaming
+        parameter of the tube's exit distribution, and the row narrows as it
+        grows. Must be finite, positive, and at least 4/3 of the bore, below
+        which the long-tube expression has no branch and construction raises.
+        Same presence gating as ``gas_puff_orifice_id_cm``.
     gas_puff_local_ionization_fraction:
         Fraction of the gas-puff neutral source ionized IN PLACE rather than
         added to the background neutral density. The diverted neutrals are
@@ -528,6 +548,10 @@ def neutral_source_defaults():
         "gas_puff_z_cm": 86.3,
         "gas_puff_sigma_cm": 50.0,
         "gas_puff_throw_cm": 100.0,
+        # The collimating feed pipe behind those ports. Both None off the
+        # "orifice" profile, which is the only consumer and requires both.
+        "gas_puff_orifice_id_cm": None,
+        "gas_puff_orifice_length_cm": None,
         # Fresh-puff fractional-coverage local ionization (default 0 = OFF,
         # bit-exact). Fraction of the localized gas-puff neutral source that is
         # ionized IN PLACE (the dense spotty jet has a short beam/bulk mfp, so
