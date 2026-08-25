@@ -19,6 +19,10 @@ import numpy as np
 
 CELLS = (277, 278, 279)
 
+# Sentinel: ``params_json`` with no transfer-hold key at all, distinct from
+# the key present and null (the selector left at its default).
+_PARAMS_ABSENT = object()
+
 
 def _s(values):
     return np.array(
@@ -26,14 +30,48 @@ def _s(values):
     )
 
 
+def _hold_label(ledger_hold, params_hold):
+    """Label the transfer hold, preferring the ledger attr as the authority.
+
+    ``params_json`` records what the run was ASKED for; the
+    ``dvm_transfer_ledger/transfer_hold`` attr records what the solver
+    resolved and actually ran, so the attr wins wherever it is present.
+    An artifact written before that attr existed carries only the params
+    value, which is labelled ``<params-only: X>`` so it is never mistaken
+    for the authoritative record -- and is reported as it stands, with no
+    default substituted in, because an artifact that predates the attr also
+    predates the selector's current default.  When both are present and
+    DISAGREE neither is picked: both are reported.
+    """
+    if ledger_hold is not None:
+        if (
+            params_hold is not None
+            and params_hold is not _PARAMS_ABSENT
+            and str(params_hold) != str(ledger_hold)
+        ):
+            return (
+                f"<DISAGREEMENT: ledger={str(ledger_hold)!r} "
+                f"params={str(params_hold)!r}>"
+            )
+        return str(ledger_hold)
+    if params_hold is _PARAMS_ABSENT:
+        return "<params-only: key absent>"
+    if params_hold is None:
+        return "<params-only: unset>"
+    return f"<params-only: {params_hold}>"
+
+
 def census(path, lo, hi):
     out = {"path": path}
     with h5py.File(path, "r") as h:
         params = json.loads(h.attrs["params_json"])
         out["dt_min"] = float(params.get("dt_min", 1e-12))
-        out["transfer_hold"] = params.get(
-            "neutral_kinetic_dvm_transfer_hold", "<unset -> exponential>"
+        params_hold = params.get(
+            "neutral_kinetic_dvm_transfer_hold", _PARAMS_ABSENT
         )
+        # Seeded here to hold the report's column order; resolved against
+        # the ledger attr (the authority) once that group is open, below.
+        out["transfer_hold"] = None
         out["steps"] = int(h.attrs["steps"])
         out["final_time_ms"] = 1e3 * float(h.attrs["final_time"])
         out["run_status"] = h.attrs.get("run_status", "<absent>")
@@ -102,6 +140,14 @@ def census(path, lo, hi):
             rcs = np.asarray(g["relax_cell_steps"])
             nz = np.flatnonzero(rcs)
             out["limited_cell_index"] = nz.tolist()[:12]
+        ledger_hold = (
+            g.attrs["transfer_hold"]
+            if g is not None and "transfer_hold" in g.attrs
+            else None
+        )
+        if isinstance(ledger_hold, bytes):
+            ledger_hold = ledger_hold.decode()
+        out["transfer_hold"] = _hold_label(ledger_hold, params_hold)
         tt = np.asarray(h["time"])
         Ti = np.asarray(h["Ti"])
         n = np.asarray(h["n"])
