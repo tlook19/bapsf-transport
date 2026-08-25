@@ -143,6 +143,43 @@ closure stress, deliberately not addressed by this pass.
 
 ## Recapture record
 
+**2026-08-24 — DIGEST-REFERENCE ROTATION ONLY, config-identity cause (the
+`neutral_kinetic_dvm_transfer_hold` key added; NPZ fixture UNTOUCHED).** The
+merge of `agent/dvm-exp-hold` (agent-staging `deeb8a7`, tree `edd0c07`) added
+one `input_dict` key, `neutral_kinetic_dvm_transfer_hold` (default `None`,
+resolved to `"exponential"` only under `neutral_model = "kinetic_dvm"`; the
+golden runs the moment path and never enters the code). The short-horizon
+digest gate hashes the resolved config, so the reference's config identity
+moved while nothing in the trajectory did. This is NOT a fixture recapture:
+`scripts/baselines/production_discharge.npz` and its sidecar are unchanged, the
+FULL pure golden printed `baseline verify OK: saves=2625, exact=True,
+max_rel=0.000e+00` against the standing fixture on the candidate (`da08ce1`)
+and at the merged tip, and the compiled golden printed the same on the
+candidate (`PROVENANCE cython/_cathode_kernels_cy/tierA+csda`).
+
+**Evidence that the trajectory is bit-identical.** The gate run on `da08ce1`
+before rotation reported `exact=False` with exactly ONE failure line — the
+config identity — after walking every checkpoint and the final digest (the
+gate does not short-circuit on identity). The new reference was captured
+twice from clean separate processes at the merged tip (`deeb8a7`, main
+checkout, `PYTHONPATH` pinned) and the two captures are byte-identical;
+against the outgoing reference the only differing key is `config_identity`,
+with all 5 checkpoints, `steps = 4000`, `final_time` and the final digest
+equal.
+
+| | outgoing | incoming |
+|---|---|---|
+| config identity | `91e19ac5a7eb11c21ce0c38ab36cb60f948c420edc8ae0a1642e80095cb0eec6` | `814b175fa688ac77bce36b439438a23a3ac3b367d3265a6e688d01f45de45326` |
+| final digest (4,000 steps) | `d28b3ca8e49b0d5bed2dda7882997becd404f26ce063f76e94ecad53ea57eccd` | `d28b3ca8e49b0d5bed2dda7882997becd404f26ce063f76e94ecad53ea57eccd` (unchanged) |
+| checkpoints | 5 | 5, all equal |
+| NPZ fixture / sidecar | unchanged | unchanged |
+
+Reviewed and executed by the fable-reviewer under the orchestrator's
+instruction for this merge; the digest gate printed `exact=True` after the
+rotation (transcript in the review report). Authority for the key itself:
+`core/config_defaults_provenance.md`, `neutral_kinetic_dvm_transfer_hold`.
+
+
 **2026-08-24 — the CAD-SPAN MACHINE GEOMETRY adopted, with the ray-clip
 EXACTNESS FIX it forced (AUTHORIZED recapture; Tom's rulings 2026-08-23bh,
 2026-08-24, campaign log 24n).** Four config keys moved and one physics-path
