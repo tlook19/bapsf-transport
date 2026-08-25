@@ -94,6 +94,11 @@ class TimestepDiagnostics:
     phase_cathode_enabled: float = 0.0
     phase_gas_puff_enabled: float = 0.0
     phase_floating: float = 0.0
+    # The global dt-refinement instrument's factor, recorded as a fact about
+    # the step so an instrumented run can PROVE the scale was applied rather
+    # than inferring it from a dt trajectory. 1.0 is the unarmed value and the
+    # default, so results written before the instrument existed still load.
+    dt_global_scale: float = 1.0
 
 
 def suggest_timestep(
@@ -121,6 +126,7 @@ def suggest_timestep(
     circuit_dt_fraction=0.25,
     dt_min=1e-12,
     dt_max=1e-6,
+    dt_global_scale=1.0,
     include_front=True,
     alpha_front=1.0,
     plasma_active=None,
@@ -147,6 +153,13 @@ def suggest_timestep(
     presence-gated by the caller: ``None`` -- every run that does not arm
     ``cathode_circuit_voltage_bound``, and every phase with no live loop --
     withdraws it to ``inf``, so it cannot move an unarmed run's step.
+
+    ``dt_global_scale`` is a measurement instrument, not a bound: it
+    multiplies the returned step AFTER every candidate and after the
+    dt_min/dt_max clamp (see ``apply_dt_global_scale``), so it refines the
+    whole dt trajectory uniformly instead of tightening one channel. It does
+    NOT participate in ``active_constraint`` or in ``clamped_to_dt_min``,
+    which stay facts about the bounds.
     """
     if dt_min <= 0.0:
         raise ValueError(f"dt_min must be positive (got {dt_min})")
@@ -289,6 +302,7 @@ def suggest_timestep(
     # hid the true bound exactly when a caller most needs it: a run pinned at
     # dt_min reported only that it was pinned, never by what.
     clamped_to_dt_min = dt == dt_min and raw_dt < dt_min
+    dt = apply_dt_global_scale(dt, dt_global_scale)
     return TimestepDiagnostics(
         dt=float(dt),
         dt_plasma_cfl=float(dt_candidates["plasma_cfl"]),
@@ -309,7 +323,23 @@ def suggest_timestep(
         clamped_to_dt_min=float(clamped_to_dt_min),
         dt_raw=float(raw_dt),
         dt_neutral_energy=float(dt_candidates["neutral_energy"]),
+        dt_global_scale=float(dt_global_scale),
     )
+
+
+def apply_dt_global_scale(dt, dt_global_scale):
+    """Return the final accepted ``dt`` scaled by the refinement instrument.
+
+    The factor is applied AFTER every timestep candidate and after the
+    dt_min/dt_max clamp, so the scaled step is deliberately allowed below
+    ``dt_min``: the instrument answers "what does this run do at half the
+    step it chose", which a re-clamp would silently refuse to ask. At the
+    unarmed value 1.0 the multiply is SKIPPED rather than performed, so an
+    unarmed run's dt arithmetic is bit-identical to one predating the key.
+    """
+    if dt_global_scale == 1.0:
+        return dt
+    return dt * dt_global_scale
 
 
 def circuit_timestep(circuit_kwargs=None, circuit_dt_fraction=0.25):
