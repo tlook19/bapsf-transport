@@ -1422,11 +1422,12 @@ class TransientDVM:
 
         With a count in hand the debit is renormalized to it. The march
         already removed ``sum(L_ion)`` from each cell; the remainder is
-        taken from ``f_c`` in proportion to ``f_c`` itself, so the
-        reconciliation changes how MANY atoms the channel takes and not
-        WHICH ones. A negative remainder is a credit and puts atoms back,
-        which is what a partner that booked less than the march removed is
-        owed.
+        taken from ``f_c`` in proportion to ``f_c`` itself, so the debit
+        is velocity-BLIND over the population it draws from -- the same
+        convention ``nu_ion`` itself carries -- and biases no part of that
+        population over another. A negative remainder is a credit and puts
+        atoms back, which is what a partner that booked less than the
+        march removed is owed.
 
         ``f_c`` must be the column population as it stands after the
         tick's CONSERVING re-births have been applied -- the marched state
