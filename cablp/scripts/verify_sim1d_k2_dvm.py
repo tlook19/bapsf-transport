@@ -1954,12 +1954,18 @@ def d5_synthetic_cell(dvm, booked_fraction, I0=1.0e18):
     after the tick the cell holds ``I0`` less whatever the ionization
     channel finally takes.
 
-    Returns ``(post, pre)`` -- the debit taken against the post-rebirth
-    population (the shipped ordering) and against the marched state alone
-    (the pre-fix ordering, kept as the negative control). Both go through
-    the SHIPPED :meth:`TransientDVM._debit_booked_ionization`; the ONLY
-    difference between them is which population it is handed, which is the
-    whole of the defect and the whole of the fix.
+    Returns ``(post, pre, population, counts)`` -- the debit taken against
+    the post-rebirth population (the shipped ordering), the same debit
+    taken against the marched state alone (the pre-fix ordering, kept as
+    the negative control), the post-rebirth population itself so the
+    caller can check positivity on the array the solver would carry
+    forward, and the per-cell ``I0``. Both debits go through the SHIPPED
+    :meth:`TransientDVM._debit_booked_ionization`; the ONLY difference
+    between them is which population it is handed, which is the whole of
+    the defect and the whole of the fix.
+
+    The ``dvm`` must be freshly constructed and never stepped, so its
+    ``ion_debt`` is zero and the debit's target is the booking itself.
     """
     g = dvm.g
     vol_c = dvm.V_col[:, None, None]
