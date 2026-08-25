@@ -3639,12 +3639,18 @@ input_flags_template_1d = {
     # 3/2 Ti. Requires ``characteristic_boundary``, whose thermal-only
     # electrode routing this completes: with that routing off the full
     # P_anode_e is already deposited and arming this would debit the fall
-    # twice, so the combination is a construction-time ValueError. Requires
-    # an electron-REPELLING anode: a solve returning ``phi_a <= 0`` -- an
-    # anode demanding at or above electron saturation -- raises RuntimeError,
-    # because the booking convention inverts there (the field does work ON
-    # the electrons and the circuit is the payer) and that branch is not
-    # implemented. Must be a real bool. Bit-exact when off.
+    # twice, so the combination is a construction-time ValueError. TWO
+    # REGIMES, both booked: the increment above is the electron-REPELLING
+    # anode (phi_a > 0), where the collected electrons climbed the fall and
+    # the plasma paid; at an electron-ATTRACTING anode (phi_a <= 0 -- an
+    # anode demanding at or above electron saturation) the field does work ON
+    # the electrons, the BANK pays the fall, and the plasma-side debit stays
+    # the thermal-only 2 Te, so no increment is applied and the booking is
+    # the unarmed one. That branch is counted rather than silent: an armed
+    # run's cathode diagnostics carry ``anode_attracting_steps`` (accepted
+    # steps that took it, cumulative) and ``anode_attracting_last_time_s``.
+    # A non-finite phi_a belongs to neither regime and raises RuntimeError.
+    # Must be a real bool. Bit-exact when off.
     "anode_sheath_full_debit": False,
     "ionization_energy_cost": True,
     "cx": True,

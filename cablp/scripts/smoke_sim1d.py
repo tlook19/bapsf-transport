@@ -2163,11 +2163,25 @@ def _case_cathode_boundary_beer_lambert(cathode_face):
     cathode_loss_terms = cathode_sim.cathode_source_terms(cathode_solve=cathode_solve)
     assert cathode_loss_terms.enabled
     assert np.all(np.isfinite(pack_state(cathode_loss_terms.rhs)))
+    # Both electrode rows come out of the one solve, and their supports are
+    # disjoint here (the anode is resolved), which is the property that makes
+    # their sum bit-exactly the single row they replaced.
+    assert np.all(np.isfinite(pack_state(cathode_loss_terms.anode_rhs)))
+    _cath_Ee = np.asarray(cathode_loss_terms.rhs.Ee, dtype=float)
+    _an_Ee = np.asarray(cathode_loss_terms.anode_rhs.Ee, dtype=float)
+    assert not np.any((_cath_Ee != 0.0) & (_an_Ee != 0.0))
+    for _zero_field in ("n", "nn", "M", "Ei"):
+        assert np.allclose(
+            getattr(cathode_loss_terms.anode_rhs, _zero_field), 0.0
+        )
     afterglow_cathode_loss_terms = cathode_sim.cathode_source_terms(
         cathode_solve=floating_cathode_solve, time=afterglow_time
     )
     assert not afterglow_cathode_loss_terms.enabled
     assert np.allclose(pack_state(afterglow_cathode_loss_terms.rhs), 0.0)
+    assert np.allclose(
+        pack_state(afterglow_cathode_loss_terms.anode_rhs), 0.0
+    )
     beam_birth_terms = cathode_sim.beam_ionization_rhs(
         cathode_solve=cathode_solve,
     )
@@ -7515,7 +7529,8 @@ def _case_helium_only_reaction_rates(dt_default, hot_ion_cx_state):
         "neutral_wind_advection",
         "surface_loss",
         "anode_collection",
-        "electrode_e_sheath_loss",
+        "cathode_surface_loss",
+        "anode_e_sheath_loss",
         "neutral_exchange",
         "neutral_sources",
         "gas_puff_local_ionization",
@@ -7545,7 +7560,14 @@ def _case_helium_only_reaction_rates(dt_default, hot_ion_cx_state):
         pack_state(rhs_terms["heat_conduction"]),
         full_rhs - nonheat_rhs,
     )
-    assert np.allclose(pack_state(rhs_terms["electrode_e_sheath_loss"]), 0.0)
+    # The electrode electron sheath pair: with no cathode solve BOTH rows are
+    # zero, and the anode row is energy-only (Ee) in every configuration.
+    assert np.allclose(pack_state(rhs_terms["cathode_surface_loss"]), 0.0)
+    assert np.allclose(pack_state(rhs_terms["anode_e_sheath_loss"]), 0.0)
+    for _zero_field in ("n", "nn", "M", "Ei"):
+        assert np.allclose(
+            getattr(rhs_terms["anode_e_sheath_loss"], _zero_field), 0.0
+        )
     assert np.allclose(pack_state(rhs_terms["beam_ionization_birth"]), 0.0)
     assert np.allclose(pack_state(rhs_terms["beam_power_deposition"]), 0.0)
     assert np.allclose(pack_state(rhs_terms["beam_ionization_cost"]), 0.0)
@@ -7803,7 +7825,7 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
             run_result.rhs_terms["plasma_advective_flux"]["n"]
             + run_result.rhs_terms["plasma_front_flux"]["n"]
             + run_result.rhs_terms["surface_loss"]["n"]
-            + run_result.rhs_terms["electrode_e_sheath_loss"]["n"]
+            + run_result.rhs_terms["cathode_surface_loss"]["n"]
         ),
     )
     assert np.allclose(
@@ -7811,7 +7833,7 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
         (
             run_result.rhs_terms["neutral_exchange"]["nn"]
             + run_result.rhs_terms["surface_loss"]["nn"]
-            + run_result.rhs_terms["electrode_e_sheath_loss"]["nn"]
+            + run_result.rhs_terms["cathode_surface_loss"]["nn"]
         ),
     )
     assert np.allclose(
@@ -8767,7 +8789,7 @@ def _case_cathode_power_balance_warming(
     assert np.all(np.isfinite(cathode_diag["l_b_profile"]))
     assert np.allclose(cathode_diag["l_b_profile_twin"], 0.0)
     assert np.all(
-        np.isfinite(cathode_run_result.rhs_terms["electrode_e_sheath_loss"]["n"])
+        np.isfinite(cathode_run_result.rhs_terms["cathode_surface_loss"]["n"])
     )
     for _beam_key in (
         "beam_ionization_birth",
@@ -8790,11 +8812,35 @@ def _case_cathode_power_balance_warming(
                 "beam_ionization_cost"
             ]
             + cathode_run_result.electron_energy_terms_W_cm3[
-                "electrode_e_sheath_loss"
+                "cathode_surface_loss"
+            ]
+            + cathode_run_result.electron_energy_terms_W_cm3[
+                "anode_e_sheath_loss"
             ]
         ),
     )
     assert np.any(cathode_run_result.Qeb > 0.0)
+    # The split is honest about which electrode paid. The load-bearing
+    # property is DISJOINT SUPPORT: with a resolved anode the cathode share
+    # lands at the cathode cell and the anode share at the flanking cells, so
+    # no cell receives both -- which is what makes the pair's sum bit-exactly
+    # the single row it replaced. (Which of the two is LARGER is a property of
+    # the routing, not of the split: this fixture runs the historical
+    # characteristic_boundary=False routing, where the cathode keeps its full
+    # phi_c and can exceed the anode; under the production thermal-only
+    # routing the anode dominates by orders of magnitude.)
+    _cathode_Ee = np.asarray(
+        cathode_run_result.electron_energy_terms_W_cm3["cathode_surface_loss"],
+        dtype=float,
+    )
+    _anode_Ee = np.asarray(
+        cathode_run_result.electron_energy_terms_W_cm3["anode_e_sheath_loss"],
+        dtype=float,
+    )
+    assert np.all(np.isfinite(_cathode_Ee)) and np.all(np.isfinite(_anode_Ee))
+    assert not np.any((_cathode_Ee != 0.0) & (_anode_Ee != 0.0))
+    assert np.abs(_anode_Ee).max() > 0.0
+    assert np.abs(_cathode_Ee).max() > 0.0
     cathode_saved_sum = np.zeros_like(cathode_run_result.y)
     for term_name in expected_rhs_terms:
         term_fields = cathode_run_result.rhs_terms[term_name]
@@ -8842,7 +8888,7 @@ def _case_cathode_power_balance_warming(
             assert h5.attrs["steps"] == cathode_run_result.steps
             saved_flags = json.loads(h5.attrs["flags_json"])
             assert saved_flags["cathode_coupling"]
-            assert h5["rhs_terms/electrode_e_sheath_loss/n"].shape == (4, geom.cells)
+            assert h5["rhs_terms/cathode_surface_loss/n"].shape == (4, geom.cells)
             assert h5["rhs_terms/beam_power_deposition/Ee"].shape == (
                 4,
                 geom.cells,
@@ -8877,8 +8923,8 @@ def _case_cathode_power_balance_warming(
         )
         assert set(loaded_cathode_result.rhs_terms) == expected_rhs_terms
         assert np.allclose(
-            loaded_cathode_result.rhs_terms["electrode_e_sheath_loss"]["n"],
-            cathode_run_result.rhs_terms["electrode_e_sheath_loss"]["n"],
+            loaded_cathode_result.rhs_terms["cathode_surface_loss"]["n"],
+            cathode_run_result.rhs_terms["cathode_surface_loss"]["n"],
         )
         assert np.allclose(
             loaded_cathode_result.rhs_terms["beam_power_deposition"]["Ee"],
@@ -9320,7 +9366,7 @@ def _case_breakdown_retry_near_vacuum(
         [1.0, 1.0, 1.0, 1.0, 0.0],
     )
     assert np.allclose(
-        phase_cathode_result.rhs_terms["electrode_e_sheath_loss"]["n"][3:],
+        phase_cathode_result.rhs_terms["cathode_surface_loss"]["n"][3:],
         0.0,
     )
     assert np.allclose(

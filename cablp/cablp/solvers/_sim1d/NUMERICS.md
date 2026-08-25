@@ -931,10 +931,18 @@ CSDA + quasilinear deposition, circuit voltage bound on) at
 | `beam_power_deposition` | **+8.851e5** | +5.533e5 |
 | `heat_conduction` | **−3.633e5** | **−8.635e5** |
 | `plasma_advective_flux` | +1.279e5 | +4.095e4 |
-| `electrode_e_sheath_loss` | −6.910e4 | **−9.974e5** |
+| `cathode_surface_loss` | −6.910e4 | **−9.974e5** |
 | `ionization_energy_cost` | −5.511e4 | −6.082e4 |
 | `electron_neutral_cooling` | −2.152e4 | −2.438e4 |
 | `anode_collection` | 0 | −5.454e4 |
+
+> **Pre-split artifact.** These rows were measured before the electrode
+> electron sheath power was split by electrode, so `cathode_surface_loss`
+> here INCLUDES the anode electron sheath share — which dominates it. The
+> current code books that share separately as `anode_e_sheath_loss`, and
+> the presence of that key is what distinguishes the two artifact
+> generations; the numbers below are unchanged and remain the record of
+> what was measured.
 
 The two dominant sinks are **parallel heat conduction** and the **boundary
 losses** — each an order of magnitude larger than every local radiative
@@ -1067,10 +1075,18 @@ fluid-arm background), by `scripts/regime_pb_balance_table.py`:
 | — **remainder, what a passive cell keeps** | **+4.132e4** | **+4.626e4** |
 | `heat_conduction` | −4.336e5 | −8.259e5 |
 | `plasma_advective_flux` | +1.278e5 | +4.123e4 |
-| `electrode_e_sheath_loss` | −6.912e4 | −9.973e5 |
+| `cathode_surface_loss` | −6.912e4 | −9.973e5 |
 | `ionization_energy_cost` | −5.512e4 | −6.080e4 |
 | `electron_neutral_cooling` | −2.153e4 | −2.438e4 |
 | `anode_collection` | 0 | −5.450e4 |
+
+> **Pre-split artifact.** These rows were measured before the electrode
+> electron sheath power was split by electrode, so `cathode_surface_loss`
+> here INCLUDES the anode electron sheath share — which dominates it. The
+> current code books that share separately as `anode_e_sheath_loss`, and
+> the presence of that key is what distinguishes the two artifact
+> generations; the numbers below are unchanged and remain the record of
+> what was measured.
 
 The kept remainder is now *smaller* than the local sinks rather than an order
 of magnitude above them, which is the whole of the repair. Conduction and the

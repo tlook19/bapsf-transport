@@ -37,43 +37,6 @@ _CATHODE_COMPAT_FIELDS = (
 )
 
 
-#: Term names that were RENAMED in the code, mapped old -> new.
-#: Read-side only: every artifact written before a rename carries the old
-#: group name and the writer emits only the new one, so a loaded result is
-#: normalized here and every consumer downstream sees a single name.
-#:
-#: ``cathode_surface_loss`` -> ``electrode_e_sheath_loss`` (2026-08-25): the
-#: row's Ee field is the ELECTRODE electron sheath power, and in discharge it
-#: is ~100% anode -- the cathode sheath repels plasma electrons, so the
-#: cathode share is milliwatts -- which the old name claimed as cathode
-#: physics.
-_RENAMED_TERMS = {
-    "cathode_surface_loss": "electrode_e_sheath_loss",
-}
-
-
-def apply_term_read_aliases(result):
-    """Rename historical term keys on a loaded result, in place.
-
-    Applied to ``rhs_terms`` and to both energy-term maps. A file that already
-    carries the new name is left alone: the old key is moved only when the new
-    one is absent, so a current writer can never be shadowed by a stale group
-    that happens to survive alongside it.
-    """
-    for attribute in (
-        "rhs_terms",
-        "electron_energy_terms_W_cm3",
-        "ion_energy_terms_W_cm3",
-    ):
-        terms = getattr(result, attribute, None)
-        if not isinstance(terms, dict):
-            continue
-        for old_name, new_name in _RENAMED_TERMS.items():
-            if old_name in terms and new_name not in terms:
-                terms[new_name] = terms.pop(old_name)
-    return result
-
-
 def add_sim3_compat_aliases(result):
     """Attach _sim3-style result aliases to a sim1d result namespace.
 
@@ -81,12 +44,29 @@ def add_sim3_compat_aliases(result):
     are saved as W/cm^3 power-density diagnostics, not _sim3 primitive
     temperature-rate terms.
 
-    Historical term names are normalized FIRST
-    (:func:`apply_term_read_aliases`), so the aliases below -- and every
-    consumer of the returned result -- read one name whatever vintage the
-    artifact is.
+    TWO ARTIFACT GENERATIONS, and the aliases below read both. The electrode
+    electron sheath power used to ride ONE row, ``cathode_surface_loss``,
+    whose Ee field carried BOTH electrodes and in discharge was ~100% anode.
+    It is now SPLIT: ``cathode_surface_loss`` keeps the cathode's own members
+    (face particle loss and recycle on n/nn/M, those ions' thermal energy on
+    Ei, and the cathode's electron sheath share on Ee) and the new
+    ``anode_e_sheath_loss`` carries the anode electron sheath deposit on Ee.
+
+    A file written BEFORE the split still has its ``cathode_surface_loss``
+    row, unchanged, with the WIDER pre-split content. That is a semantic
+    seam, not a rename: the combined row cannot be split after the fact in
+    general, because the no-resolved-anode fallback lands both shares in the
+    same cell and nothing in the saved row says how much was which. So the
+    old row is left exactly as written and is NOT remapped.
+
+    **How to tell the generations apart:** the presence of the
+    ``anode_e_sheath_loss`` key. A result that has it is post-split, and its
+    ``cathode_surface_loss`` is cathode-only; a result without it is
+    pre-split, and its ``cathode_surface_loss`` includes the anode share.
+    The aliases below are written to be correct either way -- they SUM the
+    pair, and ``_term_or_zeros`` contributes zero for the absent key -- so
+    ``Qeb`` means the same physical quantity in both generations.
     """
-    apply_term_read_aliases(result)
     result.ne = result.n
     result.v_plasma = result.u
 
@@ -105,7 +85,7 @@ def add_sim3_compat_aliases(result):
             "plasma_advective_flux",
             "plasma_front_flux",
             "surface_loss",
-            "electrode_e_sheath_loss",
+            "cathode_surface_loss",
         ),
     )
     result.Nn_flux = _sum_rhs_fields(
@@ -115,7 +95,7 @@ def add_sim3_compat_aliases(result):
         (
             "neutral_exchange",
             "surface_loss",
-            "electrode_e_sheath_loss",
+            "cathode_surface_loss",
         ),
     )
     result.S_ion_bulk = _rhs_field(rhs_terms, "ionization_birth", "n", result.n)
@@ -143,11 +123,15 @@ def add_sim3_compat_aliases(result):
     result.Qeb = (
         _term_or_zeros(electron_terms, "beam_power_deposition", zeros)
         + _term_or_zeros(electron_terms, "beam_ionization_cost", zeros)
-        + _term_or_zeros(electron_terms, "electrode_e_sheath_loss", zeros)
+        # The electrode electron sheath pair. Pre-split artifacts carry the
+        # whole of it in the first row and nothing in the second; post-split
+        # artifacts carry one electrode each. The sum is the same quantity.
+        + _term_or_zeros(electron_terms, "cathode_surface_loss", zeros)
+        + _term_or_zeros(electron_terms, "anode_e_sheath_loss", zeros)
     )
     result.Qib = (
         _term_or_zeros(ion_terms, "surface_loss", zeros)
-        + _term_or_zeros(ion_terms, "electrode_e_sheath_loss", zeros)
+        + _term_or_zeros(ion_terms, "cathode_surface_loss", zeros)
     )
     result.e_par_flux = _term_or_zeros(electron_terms, "heat_conduction", zeros)
     result.i_par_flux = _term_or_zeros(ion_terms, "heat_conduction", zeros)
