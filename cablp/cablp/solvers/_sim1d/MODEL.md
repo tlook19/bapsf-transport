@@ -661,6 +661,41 @@ and reduced from the present $-46.0$ kW, with no rate tuning (Phelps supersedes 
 IAEA rate set; the bracket is a cross-check).
 
 
+## Ion-neutral coupling under the transient DVM (`neutral_model="kinetic_dvm"`)
+
+With the transient velocity-grid neutral arm engaged, the moment-closed
+operator above is superseded on the ion momentum and energy rows: the plasma no
+longer evaluates a rate against a fluid $n_n$ but receives **minus the measured
+moments** of the kinetic ionization, charge-exchange, elastic and recombination
+operators, booked once per neutral clock tick.
+
+The physics statement this section owns is the **target** the
+charge-exchange/elastic part of that booking relaxes the ion rows towards. It
+is set by the moments of the population the kinetic operators actually lost,
+taken about the **ion** drift:
+
+$$u_{n,\rm eff}=\frac{P_{\rm loss}}{m\,N_{\rm loss}},\qquad
+  \tfrac32 k T_{\rm eff}
+  =\frac{E_{\rm loss}-u_i P_{\rm loss}+\tfrac12 m u_i^2 N_{\rm loss}}
+        {N_{\rm loss}}
+  \;=\;\tfrac32 k T_{n,\rm loss}+\tfrac12 m\,|u_{n,\rm eff}-u_i|^2 .$$
+
+So $T_{\rm eff}$ is **not** the neutral gas temperature: it is that temperature
+plus the frictional term $(m/3k)|u_{n,\rm eff}-u_i|^2$, which is the same
+$Q_{\text{fric}}$ physics the moment operator books explicitly and is not a
+small correction — of order 0.3 eV at the collector end cell of the production
+DVM arm, against a 300 K wall gas at 0.026 eV. An ion-energy equilibrium built
+from a Maxwellian at $T_n$ would therefore be wrong by the whole frictional
+heating, and the arm never builds one: the target comes from the lost-population
+moments the engine already has at booking, and is published as `T_eff_eV` and
+`u_n_eff`.
+
+How the plasma *integrates* that relaxation between ticks is a discretization
+question and belongs to `NUMERICS.md` (§ "The DVM transfer hold"), together
+with the hold-debt ledger that meters the neutral clock's cadence. The
+ionization and recombination rows are sources, not relaxations, and are not
+part of this target.
+
 ## Decoupled two-channel neutral gas (`neutral_energy`)
 
 The neutral population in the column is bimodal. A cold bulk sits near the

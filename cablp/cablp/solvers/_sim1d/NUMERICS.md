@@ -310,6 +310,114 @@ so the moment path is untouched.
 `TimestepDiagnostics` records every candidate, the `active_constraint` that set
 Δt, and per-step accept/reject bookkeeping.
 
+### The DVM transfer hold (`neutral_kinetic_dvm_transfer_hold`)
+
+The transient DVM books a plasma-side momentum/energy transfer **once per
+neutral clock tick** and the plasma steps many times inside that tick. How the
+plasma applies it between ticks is a time-discretization choice, and it is the
+one this selector makes. Default `"exponential"`; `"zoh"` is the pre-2026-08-24
+behaviour, kept as the negative control.
+
+**The CX/elastic pair is not a source, it is a relaxation.** The booked
+transfer splits exactly into the ionization/recombination rows — genuine
+sources, which stay constant within the tick under either selector — and the
+charge-exchange/elastic pair, which is
+
+$$\frac{dE_i}{dt}=-\nu\,(E_i-E_i^{\rm eq}),\qquad
+  \frac{dM}{dt}=-\nu\,(M-M^{\rm eq}),$$
+
+with **one** `nu` per cell for the pair (one physical exchange, one rate),
+`nu = N_loss / (V dt n_i)` the collision rate per ion, and the targets set by
+the measured moments of the lost neutral population:
+`M_eq = m n_i u_n,eff` with `u_n,eff = P_loss/(m N_loss)`, and
+`Ei_eq = (3/2) n_i k T_eff` with
+
+$$\tfrac32 k T_{\rm eff}
+  = \frac{E_{\rm loss}-u_i P_{\rm loss}+\tfrac12 m u_i^2 N_{\rm loss}}
+         {N_{\rm loss}} .$$
+
+`T_eff` is the second moment taken about the **ion** drift, so it carries the
+frictional term `(m/3k)|u_n − u_i|²` by construction. That term is *not*
+small — ~0.3 eV at the collector end cell of the g1atrim arm — so `Ei_eq` must
+never be built from a Maxwellian at `T_n`. Everything above is published by
+the engine at booking (`nu_pair`, `M_transfer_pair`, `Ei_transfer_pair`,
+`u_n_eff`, `T_eff_eV`); `T_eff` is linearized at the tick's `u_i`, which is the
+same freeze the tick makes everywhere else.
+
+**Why the zero-order hold fails.** Freezing the booked *rate* across the tick
+advances the pair by `X_{k+1} = X_k − νΔt(X_k − X_eq)`, i.e. multiplies the
+distance to the target by `1 − νΔt` every tick. For `νΔt > 2` that is an
+amplification with a sign flip: the booked `Ei` alternates sign every one or
+two ticks with growing amplitude, the heating half-cycles are unbounded, the
+drain half-cycles drive the cell onto the `Ti` floor, and the K2d relax
+limiter and the `surface_loss` bound then crawl at `dt_min`. Measured on the
+2026-08-24 g1atrim `kinetic_dvm` arm: `νΔt` 1.4 at 11.5 ms rising to 3.8 at
+12.02 ms (`nn` 6.5e13 against `n` 1.2e12 at the collector end), 184,101 of
+199,999 steps limited, and the run spending 184,475 of its 200,000 steps in
+the 0.24 ms after t = 12.0 ms.
+
+**The exponential hold.** Per cell, per plasma step of length `dt`, at the
+tick's frozen `(nu, target)`:
+
+$$E_i \leftarrow E_i^{\rm eq}+(E_i-E_i^{\rm eq})e^{-\nu\,dt},$$
+
+and the momentum row at the same `nu`. Applied as a constant rate over the
+step, so the SSPRK2 stages integrate it exactly. It is unconditionally stable,
+exact for the linearized system, cannot carry a row past its target at any
+`dt`, and reduces to the zero-order hold to `O(ν dt)`.
+
+**Hold debt.** What the plasma applies then differs from what the tick booked,
+because the neutrals already received their births at `M_i(T_i^{\rm tick})`.
+That difference is carried as a per-cell **hold debt**, kept SEPARATE from the
+floor debt of `neutral_kinetic_dvm_transfer_relax_fraction`: floor debt says
+*the plasma could not absorb it*, hold debt says *the tick froze a rate at a
+state that then moved*. Hold debt is therefore the **cadence meter** — it is
+first-order in `νΔt` and vanishes as the neutral clock refines. The ledger
+identity is
+
+    applied_cum + debt + hold_debt == booked_cum
+
+per cell at every accepted step, and is checked to roundoff by
+`scripts/verify_sim1d_dvm_hold.py` (case `ledger-closure`) and reported in the
+saved `dvm_transfer_ledger` group.
+
+**Repaying it is where the subtlety is.** Spreading the outstanding debt `D`
+over the following tick as a flat `D/Δt_tick` source re-injects exactly the
+zero-order increment the hold removed, and the coupled `(gap, debt)` map goes
+unstable again at the same `νΔt ≈ 2` — with a margin that depends on how many
+plasma steps happen to fall inside a tick, which is not a property anything
+should rest on (measured at four steps per tick: growth at `νΔt` = 4 and 20).
+The repayment is therefore offered **through the relaxation**, as
+`D φ(ν dt)/Δt_tick` with `φ(x) = (1−e^{−x})/x`. That delivers exactly
+`D/Δt_tick` in the resolved limit (`φ → 1`) and damps it by the same
+exponential when the tick is coarse. The per-tick map is then
+
+$$\begin{pmatrix}g\\ D\end{pmatrix}_{k+1}=
+  \begin{pmatrix} e^{-X} & a\\ -(X-1+e^{-X}) & 1-a\end{pmatrix}
+  \begin{pmatrix}g\\ D\end{pmatrix}_k ,\qquad
+  a=\frac{1-e^{-X}}{X},\quad X=\nu\,\Delta t_{\rm tick},$$
+
+whose determinant is exactly `1 − a` and whose trace is `e^{−X} + 1 − a`, so
+both eigenvalues lie strictly inside the unit circle for every `X > 0`,
+independently of how the tick is subdivided, and the only fixed point is
+`g = D = 0` — the debt is driven to zero, not merely bounded. Spectral radius:
+0.899 at `X` = 0.1, 0.607 at 1, 0.869 at 4, 0.975 at 20. The battery asserts
+the shipped arithmetic against that closed form to `1e-9` relative on every
+row that is genuinely linear.
+
+**Accuracy is a separate, conditional statement.** A tick spanning twenty
+e-folds cannot be integrated *accurately* by any scheme frozen at its start;
+what the hold guarantees there is stability and a bounded, self-retiring debt
+that says the cadence is too coarse. Measured on the synthetic cell against a
+finely integrated reference, the error is within `2 νΔt` for `νΔt ≤ 1`.
+
+**The golden is unaffected by construction**: the moment neutral path never
+builds a DVM and never enters this code.
+
+The `"zoh"` branch takes the pre-hold expressions unchanged, books no hold
+debt, and exists so a pre-fix artifact can be reproduced and so the
+instability above can be exhibited on demand rather than remembered.
+
 ### Growth ramp and its accelerated re-approach (default off)
 
 Between accepted steps Δt may grow by at most `dt_growth_factor` (1.25). The
@@ -371,6 +479,31 @@ bounds the number of CONSECUTIVE clamped adaptive steps and raises
 episodes that release on their own are a normal, known-good family. Saved
 files from before this date carry the old overwriting semantics and are not
 migrated (see `results/io.py`).
+
+**The lock counts the ACCEPTED step, not only the raw candidate minimum**
+(2026-08-24). `clamped_to_dt_min` is computed inside `suggest_timestep`, i.e.
+*before* the run loop's caps (`dt_growth`, `t_end`, `phase_boundary`,
+`save_time`) and before the retry ladder, every one of which can only shrink
+the step. So an accepted step can land at or below `dt_min` while no candidate
+ever asked for less than `dt_min` — the raw flag stays clear, the consecutive
+counter RESETS, and that accepted sub-`dt_min` step becomes
+`previous_accepted_dt`, which anchors the ×`dt_growth_factor` ramp. Every step
+of the grind that follows is then set by the ramp re-approaching from below,
+not by a physics bound, and `dt_min_lock_max_steps` never fires. (Measured:
+the g1atrim `kinetic_dvm` arm of 2026-08-24 spent 184,475 of its 200,000 steps
+after t = 12.0 ms, 162,055 of them capped by `dt_growth`, with an accepted dt
+as low as 3.05e-12 against `dt_min` = 1e-10 — and no lock.) The counter is
+therefore driven by `clamped_to_dt_min OR (accepted_dt <= dt_min AND dt_raw >
+dt_min)`, evaluated after acceptance; the second conjunct is what keeps it a
+clamp rather than a step count — the step must have been pushed under the
+floor by a *cap*, so a run configured with `dt_max` at `dt_min` (which accepts
+`dt_min` every step by construction) is not counted, and a step whose raw
+minimum is itself below `dt_min` is already owned by the raw flag. Both facts
+are recorded, the raw one in `clamped_to_dt_min` and the new one in
+`clamped_to_dt_min_accepted`, and the lock's error message names which signal
+fired. The step SEQUENCE is unchanged — the snap still
+lands on the save time, and the trajectory of any run that does not trip the
+lock is bit-identical.
 
 ## Step acceptance and rejection
 

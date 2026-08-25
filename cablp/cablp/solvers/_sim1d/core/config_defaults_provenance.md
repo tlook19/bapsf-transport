@@ -727,6 +727,43 @@ regardless of its value: the applied drain cannot carry a cell through its
 floor inside a step. Raise the value only with the ledger's outstanding debt
 reported alongside.
 
+**`neutral_kinetic_dvm_transfer_hold` (unset; resolves to `"exponential"`) —
+DERIVED (a stability property, not a value), 2026-08-24.** How the plasma
+applies the tick-booked CX/elastic transfer between neutral ticks. Nothing here
+is fitted: the pair is a linear relaxation `dEi/dt = -nu (Ei - Ei_eq)` at the
+per-ion collision frequency, and the two accepted values are the two ways of
+discretizing it — `"zoh"` freezes the booked RATE across the tick (distance to
+the target multiplied by `1 - nu dt_tick` each tick, so oscillatory-unstable
+for `nu dt_tick > 2`), `"exponential"` integrates it exactly at the tick's
+frozen `(nu, target)` (unconditionally stable, exact for the linearized system,
+reduces to `"zoh"` to `O(nu dt)`).
+
+**The ruling that makes `"exponential"` the DEFAULT rather than an opt-in**
+(2026-08-24): the new-physics rule — default off, presence-gated, bit-exact
+off — governs new physics, and this is not new physics. It is a defect fix in
+the time discretization of a coupling term the arm already books, on an opt-in
+arm (`neutral_model="kinetic_dvm"`) whose every previous result was produced
+under a scheme now shown to be unstable in the regime the production arm
+actually reaches: `nu dt_tick` = 1.4 at 11.5 ms rising to 3.8 at 12.02 ms on
+the g1atrim DVM arm, where the resulting dt_min grind spent 184,475 of the
+run's 200,000 steps in a 0.24 ms window and never reached the afterglow. The
+moment path never enters this code, so the golden is inert to the choice by
+construction. `"zoh"` is retained — not deprecated — as the negative control
+the acceptance battery exhibits the instability on, and so a pre-fix artifact
+can be reproduced.
+
+The one number that is a CHOICE rather than a consequence is how the hold debt
+(the first-order truncation the hold books against the tick's stale rate) is
+repaid: as `debt * phi(nu dt) / dt_tick` with `phi(x) = (1 - e^-x)/x`, i.e. the
+brief's flat `debt/dt_tick` in the resolved limit, damped by the same
+exponential when the tick is coarse. A flat repayment re-injects the very
+zero-order increment the hold removed and is unstable again at the same
+`nu dt_tick ~ 2`; the damped form makes the per-tick `(gap, debt)` map's
+determinant exactly `1 - (1-e^-X)/X`, hence unconditionally contracting, with
+the debt driven to zero rather than merely bounded. See `NUMERICS.md`
+§ "The DVM transfer hold" for the map and `scripts/verify_sim1d_dvm_hold.py`
+for the battery that pins the shipped arithmetic to it.
+
 ## `fudge_factor_defaults`
 
 **`atomic_rate_model = "adas"` — MEASURED/published inputs.** The OPEN-ADAS GCR

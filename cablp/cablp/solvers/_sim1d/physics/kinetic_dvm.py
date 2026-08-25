@@ -128,6 +128,16 @@ FLIGHT_CLASSES = ("ww", "wi", "io")
 # ``scripts/k2_dvm_exchange_measured.txt`` for the measurement.
 EXCHANGE_MODELS = ("cauchy_chord", "geometric")
 
+# How the PLASMA applies the tick-booked CX/elastic transfer between neutral
+# clock ticks. The pair is a linear relaxation of the fluid momentum and ion
+# energy rows towards the lost-population moments at the per-ion collision
+# frequency, so "exponential" integrates it exactly over each plasma step at
+# the tick's frozen (nu, target) and is unconditionally stable; "zoh" freezes
+# the booked RATE instead and is oscillatory-unstable for nu*dt_tick > 2. The
+# first entry is the resolved default. See the solver's transfer-hold scope
+# and NUMERICS.md.
+TRANSFER_HOLDS = ("exponential", "zoh")
+
 # Rate factor on the isotropic-elastic BGK channel. A full-replacement event
 # transfers m (v - u_i), which is twice the isotropic angular average
 # ``mu <1 - cos th> g = m g / 2`` at equal mass; halving the collision rate
@@ -510,6 +520,16 @@ class TransientDVM:
         self.M_transfer = cells.copy()
         self.Ei_transfer = cells.copy()
         self.S_transfer = cells.copy()
+        # The CX/elastic pair's own share of the two rows above, the per-ion
+        # collision frequency that carries it, and the drift and ion-frame
+        # temperature it relaxes towards. Published so the plasma side can
+        # integrate the pair as the linear relaxation it is rather than as a
+        # frozen rate; see _book_transfer.
+        self.M_transfer_pair = cells.copy()
+        self.Ei_transfer_pair = cells.copy()
+        self.nu_pair = cells.copy()
+        self.u_n_eff = cells.copy()
+        self.T_eff_eV = np.full(self.nz, self.T_wall_K * KB / EV)
         self.Tn_col_eV = np.full(self.nz, self.T_wall_K * KB / EV)
         self.updates = 0
         self.last_ledger = None
@@ -534,6 +554,20 @@ class TransientDVM:
         # RHS actually carried.
         self.M_debt = cells.copy()
         self.Ei_debt = cells.copy()
+        # HOLD debt: the second, disjoint reason applied can differ from
+        # booked. The floor debt above is "the plasma could not absorb it";
+        # this one is the zero-order-hold truncation the exponential hold
+        # replaces -- the tick froze a rate at the tick's state, and the
+        # state moved inside the tick. Zero for the whole run under
+        # ``neutral_kinetic_dvm_transfer_hold = "zoh"``, and repaid as a
+        # constant source over the following tick otherwise, so the identity
+        # the pair carries is
+        #
+        #     applied_cum + debt + hold_debt == booked_cum
+        #
+        # per cell at every accepted step. Same units as the debt above.
+        self.M_hold_debt = cells.copy()
+        self.Ei_hold_debt = cells.copy()
         self.M_booked_cum = cells.copy()
         self.Ei_booked_cum = cells.copy()
         self.M_applied_cum = cells.copy()
@@ -597,10 +631,17 @@ class TransientDVM:
             "M_transfer": self.M_transfer.copy(),
             "Ei_transfer": self.Ei_transfer.copy(),
             "S_transfer": self.S_transfer.copy(),
+            "M_transfer_pair": self.M_transfer_pair.copy(),
+            "Ei_transfer_pair": self.Ei_transfer_pair.copy(),
+            "nu_pair": self.nu_pair.copy(),
+            "u_n_eff": self.u_n_eff.copy(),
+            "T_eff_eV": self.T_eff_eV.copy(),
             "Tn_col_eV": self.Tn_col_eV.copy(),
             "updates": int(self.updates),
             "M_debt": self.M_debt.copy(),
             "Ei_debt": self.Ei_debt.copy(),
+            "M_hold_debt": self.M_hold_debt.copy(),
+            "Ei_hold_debt": self.Ei_hold_debt.copy(),
             "M_booked_cum": self.M_booked_cum.copy(),
             "Ei_booked_cum": self.Ei_booked_cum.copy(),
             "M_applied_cum": self.M_applied_cum.copy(),
@@ -635,10 +676,17 @@ class TransientDVM:
         self.M_transfer = snap["M_transfer"].copy()
         self.Ei_transfer = snap["Ei_transfer"].copy()
         self.S_transfer = snap["S_transfer"].copy()
+        self.M_transfer_pair = snap["M_transfer_pair"].copy()
+        self.Ei_transfer_pair = snap["Ei_transfer_pair"].copy()
+        self.nu_pair = snap["nu_pair"].copy()
+        self.u_n_eff = snap["u_n_eff"].copy()
+        self.T_eff_eV = snap["T_eff_eV"].copy()
         self.Tn_col_eV = snap["Tn_col_eV"].copy()
         self.updates = int(snap["updates"])
         self.M_debt = snap["M_debt"].copy()
         self.Ei_debt = snap["Ei_debt"].copy()
+        self.M_hold_debt = snap["M_hold_debt"].copy()
+        self.Ei_hold_debt = snap["Ei_hold_debt"].copy()
         self.M_booked_cum = snap["M_booked_cum"].copy()
         self.Ei_booked_cum = snap["Ei_booked_cum"].copy()
         self.M_applied_cum = snap["M_applied_cum"].copy()
@@ -1311,7 +1359,7 @@ class TransientDVM:
         # --- plasma coupling: minus the moments of the kinetic operators
         self._book_ionization_ledger(ion)
         self._book_transfer(dt, L_ion, L_cx, L_el, birth_cx, birth_el, rec,
-                            M_i, u_arr)
+                            M_i, u_arr, np.asarray(n_i, dtype=float))
         self.Tn_col_eV = self.column_temperature_eV()
         self.updates += 1
 
@@ -1585,7 +1633,7 @@ class TransientDVM:
         }
 
     def _book_transfer(self, dt, L_ion, L_cx, L_el, birth_cx, birth_el, rec,
-                       M_i, u_i):
+                       M_i, u_i, n_i):
         """Book the plasma-side momentum/energy/particle transfer.
 
         Every entry is MINUS a measured moment of a kinetic operator, so
@@ -1604,6 +1652,20 @@ class TransientDVM:
         is an internal energy, so the bulk term is removed with the same
         decomposition the ``ionization_birth_energy_model="conservative"``
         booking uses, ``d(KE) = u dM - (1/2) m u^2 dN``.
+
+        The CX/elastic PAIR is additionally booked on its own
+        (``M_transfer_pair``, ``Ei_transfer_pair``) with the per-ion
+        collision frequency ``nu_pair`` [1/s] that carries it, because the
+        pair is a linear RELAXATION of the fluid rows and the plasma-side
+        integrator can hold it as one (see the solver's
+        ``neutral_kinetic_dvm_transfer_hold`` selector); the ionization and
+        recombination rows are a source and are not part of that pair. The
+        measured moments of the LOST population are also published as
+        ``u_n_eff`` [cm/s] and ``T_eff_eV``, the drift and the ion-frame
+        temperature the pair relaxes the fluid towards. ``T_eff_eV``
+        carries the frictional term ``(m/3k)|u_n - u_i|^2`` by
+        construction: it is the second moment of the lost neutrals taken
+        about the ION drift, not the neutral gas temperature.
         """
         g = self.g
         VZ = g.VZ[None, :, :]
@@ -1618,10 +1680,10 @@ class TransientDVM:
             )
 
         N_ion, P_ion, E_ion = moments(L_ion)
-        _, P_cx_l, E_cx_l = moments(L_cx + L_el)
+        N_cx_l, P_cx_l, E_cx_l = moments(L_cx + L_el)
         # Births are densities per bin; convert back to particles.
         births = (birth_cx + birth_el) * self.V_col[:, None, None]
-        _, P_cx_b, E_cx_b = moments(births)
+        N_cx_b, P_cx_b, E_cx_b = moments(births)
         rec_counts = (
             np.zeros((self.nz, g.nvz, g.nvp))
             if not np.ndim(rec)
@@ -1638,6 +1700,33 @@ class TransientDVM:
         u = np.asarray(u_i, dtype=float)
         self.Ei_transfer = (
             E * scale - u * self.M_transfer + 0.5 * M_HE * u**2 * self.S_transfer
+        )
+
+        # --- the CX/elastic pair, booked on its own with the frequency that
+        # carries it. Same decomposition, same moments; nothing above is
+        # re-derived, so the pair plus the ionization/recombination rows is
+        # the total to roundoff.
+        M_pair = (P_cx_l - P_cx_b) * scale
+        S_pair = (N_cx_l - N_cx_b) * scale
+        self.M_transfer_pair = M_pair
+        self.Ei_transfer_pair = (
+            (E_cx_l - E_cx_b) * scale - u * M_pair + 0.5 * M_HE * u**2 * S_pair
+        )
+        n_arr = np.asarray(n_i, dtype=float)
+        positive = n_arr > 0.0
+        self.nu_pair = np.where(
+            positive,
+            N_cx_l / (vol_c * dt * np.where(positive, n_arr, 1.0)),
+            0.0,
+        )
+        counted = N_cx_l > 0.0
+        inv_N = np.where(counted, 1.0 / np.where(counted, N_cx_l, 1.0), 0.0)
+        self.u_n_eff = P_cx_l * inv_N / M_HE
+        self.T_eff_eV = (
+            (2.0 / 3.0)
+            * (E_cx_l - u * P_cx_l + 0.5 * M_HE * u**2 * N_cx_l)
+            * inv_N
+            / EV
         )
 
 

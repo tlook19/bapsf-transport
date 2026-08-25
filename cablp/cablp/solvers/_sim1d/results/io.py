@@ -185,6 +185,16 @@ def save_result_hdf5(path, result, params=None, flags=None):
         # K2d transfer-ledger census. Written only by a run that built the
         # DVM arm, so a moment-model file's dataset layout is unchanged and
         # the absence of the group means "never recorded", never "zero".
+        #
+        # The group grows ADDITIVELY and is read by name, so a reader must
+        # not assume a fixed key set. The exponential transfer hold added
+        # ``transfer_hold`` (a string attr naming the selector),
+        # ``{Ei,M}_hold_debt`` (per-cell) with their ``_total`` /
+        # ``_max_abs`` scalars, and ``sample_{Ei,M}_hold_debt_total``; on a
+        # file written before it, their absence means the run predates the
+        # hold, i.e. it ran the zero-order hold with no hold debt to carry.
+        # The residual the ``*_residual_rel`` scalars report changed meaning
+        # with them: it is now ``applied + debt + hold_debt - booked``.
         dvm_ledger = getattr(result, "dvm_transfer_ledger", None)
         if dvm_ledger:
             _write_census(h5.create_group("dvm_transfer_ledger"), dvm_ledger)
@@ -423,11 +433,16 @@ def _write_census(group, census):
     """Write a scalar/array census mapping: arrays as datasets, scalars as attrs.
 
     Integer counts are written as integers so the round trip returns the count,
-    not a float that a report would have to re-cast.
+    not a float that a report would have to re-cast, and STRING entries (a
+    census that records which selector produced it -- the DVM transfer
+    ledger's ``transfer_hold``) are written as string attrs and read back as
+    ``str``, not coerced through float.
     """
     for name, value in census.items():
         if isinstance(value, np.ndarray):
             group.create_dataset(name, data=np.asarray(value, dtype=float))
+        elif isinstance(value, str):
+            group.attrs[name] = value
         elif isinstance(value, (bool, int, np.integer)):
             group.attrs[name] = int(value)
         else:
@@ -438,6 +453,11 @@ def _read_census(group):
     """Read a :func:`_write_census` group back into its scalar/array mapping."""
     census = {name: _read_dataset(dataset) for name, dataset in group.items()}
     for name, value in group.attrs.items():
+        if isinstance(value, (str, bytes)):
+            census[name] = (
+                value.decode("utf-8") if isinstance(value, bytes) else value
+            )
+            continue
         value = np.asarray(value)
         census[name] = int(value) if value.dtype.kind in "iub" else float(value)
     return census
