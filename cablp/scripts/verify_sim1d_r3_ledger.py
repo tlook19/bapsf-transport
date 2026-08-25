@@ -106,8 +106,12 @@ def analyze(f):
     # This row previously took the wall-minus-plasma difference
     # P_cathode_i - P_cathode_i_pl, which is CONTAMINATED by anode ion
     # collection: P_cathode_i_pl is built on the ANODE ion current I_i_a
-    # (= 2*eta*I_i), so the difference carried a spare (I_i - I_i_a)*T_e/2
-    # thermal term (-0.53 kW, 0.25% of the row at the ES1 point).
+    # (anode_current_A when the circuit supplies it -- the usual case;
+    # 2*eta*I_i only as the fallback, _cathode_solver_idriven.py:577-579),
+    # so the old difference form carried a spare (I_i - I_i_a)*T_e/2
+    # thermal term: old = new + spare, sign following I_i - I_i_a --
+    # measured +0.5004 kW (0.234% of the row) on rsc_es1 (flag-off ES1)
+    # and -0.26 kW on rt1_confirm (flag-on).
     # CONSTRAINT THE CODE CANNOT SHOW: P_cathode_i_phi is not in the saved
     # cathode_diagnostics schema (_CATHODE_RESULT_KEYS), so this is a
     # RE-DERIVATION from published fields, not a read of the solver's value. It
