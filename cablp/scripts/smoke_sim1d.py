@@ -4635,7 +4635,7 @@ def _case_beam_probe_skip(
             result_twin=None,
             beam_atten_cross=np.zeros(_pskip_geom.cells),
         )
-        _, _ledger, _ = _csda_beam_deposition(
+        _, _ledger, _, _ = _csda_beam_deposition(
             _beam,
             SimpleNamespace(nn=nn, n=csda_state.n),
             SimpleNamespace(Te=csda_derived.Te),
@@ -5933,6 +5933,198 @@ def _case_beam_sheath_aware_tail_k7(
         float(k7_ion_dep.ionization_events_tail.sum())
         > float(k7_ion_legacy_dep.ionization_events_tail.sum())
     )
+    return locals()
+
+
+# --------------------------------------------------------------------
+# beam-plateau-multigroup
+# --------------------------------------------------------------------
+@_case(
+    "beam-plateau-multigroup",
+    historical_stance=True,
+)
+def _case_beam_plateau_multigroup(
+    k7_ion_dep, k7_local_dep, k7_params, wpe_on_diag
+):
+    # --- The multi-group plateau closure: the QL bank carries a SPECTRUM,
+    # not a line. The single-energy arms are its two heirs taken one at a
+    # time (the shipped f = 0.25 line stood in for the WAVE share, f = 1.0
+    # for the streaming one), so this value has to reproduce both at once and
+    # conserve while it does. Unit level only -- what the recovered reach does
+    # to the discharge is a campaign run.
+    cathode_flags = _cathode_flags()
+
+    # (a) MISCONFIGURATION IS LOUD AT CONSTRUCTION. Every control the derived
+    # spectrum makes INERT is refused rather than ignored, in both namespaces.
+    for _mg_bad_p, _mg_bad_f in (
+        # an unknown selector string
+        (dict(k7_params, heating_anomalous_transport="plateau_multigroups"),
+         dict(cathode_flags)),
+        # the f dial: inert, because the spectrum spans the whole band
+        (dict(k7_params, heating_anomalous_transport="plateau_multigroup",
+              heating_anomalous_tail_phi_c_fraction=1.0),
+         dict(cathode_flags)),
+        # the fixed rung: inert, because the birth energies are derived
+        (dict(k7_params, heating_anomalous_transport="plateau_multigroup",
+              heating_anomalous_tail_energy_eV=150.0),
+         dict(cathode_flags)),
+        # the keying selector: inert, there is no rung to key
+        (dict(k7_params, heating_anomalous_transport="plateau_multigroup",
+              heating_anomalous_tail_energy_keying="fixed"),
+         dict(cathode_flags)),
+        # two dispositions for one bank
+        (dict(k7_params, heating_anomalous_transport="plateau_multigroup",
+              heating_anomalous_disposal="landau_branched"),
+         dict(cathode_flags)),
+        # the reservoir's density FLOOR cannot pose the edge equation
+        (dict(k7_params, heating_anomalous_transport="plateau_multigroup"),
+         dict(cathode_flags, coverage_closure=True)),
+        # WRONG NAMESPACE: a params key filed into flags is silent-inert and
+        # is refused by the unknown-key guard on both sides.
+        (dict(k7_params),
+         dict(cathode_flags, heating_anomalous_transport="plateau_multigroup")),
+    ):
+        try:
+            LAPDSim1D(_mg_bad_p, _mg_bad_f)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "expected ValueError for "
+                f"{_mg_bad_p.get('heating_anomalous_transport')!r} / "
+                f"{sorted(set(_mg_bad_f) - set(cathode_flags))}"
+            )
+
+    # (b) THE DERIVED SPECTRUM. The edge solve is a genuine root of a MONOTONE
+    # residual, the E^2-uniform edges are equal-power by construction, and the
+    # two shares partition the bank exactly.
+    _mg_ne, _mg_Te, _mg_Eb = 4.6e12, 9.6, 177.0
+    _mg_E1, _mg_clamp = _beam_deposition_mod.plateau_edge_energy_eV(
+        _mg_Eb, 1.17e19, _mg_ne, _mg_Te
+    )
+    assert _mg_clamp == 0
+    assert _beam_deposition_mod.HE_E_STOP_EV < _mg_E1 < _mg_Eb, _mg_E1
+
+    def _mg_residual(E1):
+        # F_M(v_1) - m j_b / ((E_b - E_1) erg); the solve's own equation,
+        # written out here so the root is checked against the STATEMENT and
+        # not against the solver that produced it.
+        F_M = _mg_ne * math.sqrt(
+            _beam_deposition_mod._ME_CGS
+            / (2.0 * math.pi * _mg_Te * _beam_deposition_mod._ERG_PER_EV)
+        ) * math.exp(-E1 / _mg_Te)
+        demand = (
+            _beam_deposition_mod._ME_CGS * 1.17e19
+            / ((_mg_Eb - E1) * _beam_deposition_mod._ERG_PER_EV)
+        )
+        return F_M - demand
+
+    assert _mg_residual(_mg_E1 - 1.0e-6) > 0.0 > _mg_residual(_mg_E1 + 1.0e-6)
+    # The clamp is REACHABLE and REPORTED, never silent: a beam flux the bulk
+    # Maxwellian cannot supply at any edge above the floor lands on the floor.
+    _mg_floor_E1, _mg_floor_clamp = (
+        _beam_deposition_mod.plateau_edge_energy_eV(
+            _mg_Eb, 1.0e21, _mg_ne, _mg_Te
+        )
+    )
+    assert _mg_floor_clamp == -1
+    assert _mg_floor_E1 == _beam_deposition_mod.HE_E_STOP_EV
+    _mg_edges, _mg_mids = _beam_deposition_mod.plateau_group_edges_eV(
+        _mg_E1, _mg_Eb, _beam_deposition_mod.PLATEAU_GROUP_COUNT
+    )
+    _mg_N = _beam_deposition_mod.PLATEAU_GROUP_COUNT
+    _mg_w = np.diff(_mg_edges ** 2) / (_mg_Eb ** 2 - _mg_E1 ** 2)
+    assert _mg_edges[0] == _mg_E1 and _mg_edges[-1] == _mg_Eb
+    assert np.allclose(_mg_w, 1.0 / _mg_N, rtol=0.0, atol=1e-14), _mg_w
+    assert np.all(_mg_edges[:-1] < _mg_mids) and np.all(_mg_mids < _mg_edges[1:])
+    assert (
+        (_mg_Eb + _mg_E1) / (2.0 * _mg_Eb)
+        + (_mg_Eb - _mg_E1) / (2.0 * _mg_Eb)
+    ) == 1.0
+
+    # (c) THE CLOSURE THROUGH THE SOLVER: it conserves, and it carries BOTH
+    # heirs. The withheld bank is measured independently as the anomalous
+    # power the SAME ray banks under "local" -- the march is bit-identical in
+    # both arms, so that sum IS P_QL.
+    _mg_bank = float(k7_local_dep.heating_anomalous_erg_s.sum())
+    assert _mg_bank > 0.0, "scenario drives no QL power"
+    mg_sim = LAPDSim1D(
+        dict(k7_params, heating_anomalous_transport="plateau_multigroup",
+             heating_anomalous_tail_ionization="on"),
+        dict(cathode_flags),
+    )
+    mg_sim._circuit_I_loop = 3000.0
+    mg_solve = mg_sim.solve_cathode_boundary()
+    mg_dep = mg_solve.beam_deposition[0]
+    mg_delivered = (
+        float(mg_dep.heating_anomalous_erg_s.sum())
+        + float(mg_dep.ionization_cost_tail_erg_s.sum())
+        + float(mg_dep.radiated_tail_erg_s.sum())
+        + float(mg_dep.end_loss_tail_low_erg_s)
+        + float(mg_dep.end_loss_tail_high_erg_s)
+    )
+    assert abs(mg_delivered - _mg_bank) / _mg_bank < 1e-12, (
+        _mg_bank, mg_delivered
+    )
+    # The two heirs partition the bank: the wave share is banked locally, the
+    # streaming share is what was launched as walkers, and nothing else exists.
+    mg_wave = float(mg_dep.plateau_wave_power_erg_s)
+    mg_stream = float(mg_dep.tail_power_erg_s)
+    assert mg_wave > 0.0 and mg_stream > 0.0
+    assert abs((mg_wave + mg_stream) - _mg_bank) / _mg_bank < 1e-12
+    # The edge is a property of the EXTRACTION and is carried per end, with
+    # its clamp verdict beside it.
+    mg_edge = mg_solve.beam_plateau_edge
+    assert set(mg_edge) == {0}, mg_edge
+    # THIS FIXTURE CLAMPS, and that is the physics rather than a defect: it is
+    # a cold pre-breakdown cathode (launch cell ne ~ 1e9, Te ~ 0.2 eV against
+    # a 300 V drop), where the bulk Maxwellian cannot reach the plateau level
+    # the emitted flux demands at ANY edge above the inelastic floor. The
+    # closure lands on the floor and SAYS SO -- which is the whole point of
+    # the clamp being counted rather than swallowed.
+    assert mg_edge[0][0] == _beam_deposition_mod.HE_E_STOP_EV
+    assert mg_edge[0][0] < float(mg_solve.beam_result.result.phi_c)
+    assert mg_edge[0][1] == -1
+    # The census rows are PRESENCE-GATED: absent on every other value, so an
+    # unarmed run's saved diagnostic structure is untouched.
+    mg_diag = mg_sim._cathode_diagnostic_snapshot()
+    assert mg_diag["source_beam_plateau_edge_eV"] == mg_edge[0][0]
+    assert mg_diag["source_beam_plateau_edge_clamped"] == -1.0
+    assert mg_diag["beam_plateau_wave_power_W"] > 0.0
+    # The clamp CENSUS counts ACCEPTED STEPS, so it is zero until one is
+    # taken and non-zero after -- never silent about a frame that clamped.
+    assert mg_diag["plateau_edge_clamped_steps"] == 0.0
+    assert math.isnan(mg_diag["plateau_edge_clamped_last_time_s"])
+    mg_sim.advance_one_step()
+    mg_stepped = mg_sim._cathode_diagnostic_snapshot()
+    assert mg_stepped["plateau_edge_clamped_steps"] == 1.0, mg_stepped[
+        "plateau_edge_clamped_steps"
+    ]
+    assert mg_stepped["plateau_edge_clamped_last_time_s"] == mg_sim._time
+    for _mg_key in (
+        "plateau_edge_clamped_steps", "plateau_edge_clamped_last_time_s",
+        "beam_plateau_wave_power_W", "source_beam_plateau_edge_eV",
+        "source_beam_plateau_edge_clamped",
+    ):
+        assert _mg_key not in wpe_on_diag, _mg_key
+
+    # (d) IT IS NEITHER SINGLE-ENERGY ARM, which is the whole point: each end
+    # of the D1 bracket carried one heir of the plateau and deleted the other.
+    # The wave heir puts power back in the EXTRACTION CELL that the f = 0.25
+    # line walks away, while the streaming heir is a strictly interior share
+    # of the bank -- so this closure is neither the f_Landau == 1 corner nor
+    # the f_Landau == 0 one. (How far the streaming groups actually reach is
+    # measured at production state by the build's frozen-ray acceptance
+    # table, not here: this fixture is a cold thin column where every walker
+    # leaves.)
+    _mg_launch = int(np.flatnonzero(
+        np.asarray(mg_sim._geometry.cell_role) == "cathode"
+    )[0])
+    assert (
+        float(mg_dep.heating_anomalous_erg_s[_mg_launch])
+        > float(k7_ion_dep.heating_anomalous_erg_s[_mg_launch])
+    )
+    assert 0.0 < mg_stream < _mg_bank
     return locals()
 
 

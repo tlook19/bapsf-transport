@@ -1917,6 +1917,33 @@ def cathode_defaults():
         {local, tail_walk} is a bracket, not a prediction, and a result must
         state which one it used. ENERGY-ONLY: ionization events, the particle
         rows and the circuit currents are identical in both modes.
+        ``"plateau_multigroup"``: the quasilinear plateau is not one energy,
+        and this value carries the SPECTRUM instead of a line. In the flux
+        frame the relaxed distribution is flat over the resonant band, so
+        ``dGamma/dE`` is flat and ``dP/dE`` goes as ``E`` from the plateau
+        EDGE ``E_1`` up to the beam energy ``E_b = e*phi_c``. ``E_1`` is a
+        state-dependent solve, not a dial: it is where the flat plateau meets
+        the launch cell's own 1D-reduced Maxwellian while carrying the emitted
+        beam flux ``j_b = I_eth*/(e A_cell)``, found by bisection at every
+        extraction solve and clamped to the inelastic floor with a counted
+        census (``plateau_edge_clamped_steps`` in the cathode diagnostics) on
+        any frame that hits it. The bank then splits into its two heirs -- a
+        WAVE/BULK share ``(E_b - E_1)/2E_b`` banked as local bulk heat in the
+        extraction cells, and a STREAMING share ``(E_b + E_1)/2E_b`` split
+        into ``N`` equal-power groups with ``E^2``-uniform edges (equal power
+        AND equal classical range by construction), each launched at its
+        arithmetic-midpoint energy and walked by exactly the machinery
+        ``"tail_walk"`` uses. Nothing is fitted and no new parameter appears:
+        the shares, edges and weights all follow from the flat plateau. The
+        two single-line arms are its two heirs taken one at a time, which is
+        why the ``f`` dial, the fixed rung and the keying selector are all
+        INERT under it and are REFUSED at construction rather than ignored.
+        The range law is unchanged (classical Coulomb). ENERGY-ONLY in the
+        same sense as ``"tail_walk"``, and it inherits that value's tail
+        ionization, cathode-boundary and end-ledger conventions unchanged.
+        Not supported under ``coverage_closure`` (the two-stream march shares
+        one withholding bank and its reservoir carries the density floor, so
+        an edge solved there would be a floor artifact) -- that raises.
     heating_anomalous_disposal:
         How each cell's extracted anomalous power is SPLIT between the local
         bulk and the walked tail (inert under ``"beer_lambert"``, and requires
@@ -1939,10 +1966,11 @@ def cathode_defaults():
         locally exactly as ``"local"`` banks all of it. NO new physical
         constant: the branching is computed from boxed inputs and the birth
         energy is the existing ``phi_c`` keying.
-        The two ``heating_anomalous_transport`` values are the ``f_Landau ≡ 1``
-        and ``f_Landau ≡ 0`` corners of this one, so selecting
-        ``"landau_branched"`` together with ``"tail_walk"`` RAISES — both name a
-        disposition for the same bank. ``"landau_branched"`` requires
+        The ``heating_anomalous_transport`` values ``"tail_walk"`` and
+        ``"local"`` are the ``f_Landau ≡ 1`` and ``f_Landau ≡ 0`` corners of
+        this one, so selecting ``"landau_branched"`` together with any
+        non-``"local"`` transport RAISES — both name a disposition for the
+        same bank. ``"landau_branched"`` requires
         ``heating_anomalous_tail_energy_keying="phi_c"`` (the registered birth
         energy is the live cathode drop, and the fixed rung is an assumed
         constant this closure does not carry) with
@@ -1960,7 +1988,10 @@ def cathode_defaults():
         only the Landau share) WITH
         ``heating_anomalous_tail_energy_keying="fixed"``** -- inert otherwise,
         and supplying a value other than the shipped one under
-        ``"phi_c"`` keying raises rather than being silently ignored. Must be
+        ``"phi_c"`` keying or under
+        ``heating_anomalous_transport="plateau_multigroup"`` (where the birth
+        energies are the derived group midpoints) raises rather than being
+        silently ignored. Must be
         finite and > 0. It sets the walkers' Coulomb
         range and therefore how far the QL power travels before thermalizing;
         the equivalent tail flux is ``P_QL / E_tail``, so the power carried is
@@ -1973,6 +2004,10 @@ def cathode_defaults():
         tail is WALKED** (``heating_anomalous_transport="tail_walk"`` or
         ``heating_anomalous_disposal="landau_branched"``) -- inert otherwise,
         and the branched disposal accepts ``"phi_c"`` alone.
+        ``heating_anomalous_transport="plateau_multigroup"`` keys the
+        spectrum's TOP to the live ``e*phi_c`` and its BOTTOM to the solved
+        plateau edge, so there is no rung to select: a non-default keying
+        raises there rather than being ignored.
         ``"phi_c"`` (default): ``E_tail = f * e*phi_c(t)``, keyed to the LIVE
         cathode accelerating drop of the ray that drove the QL power, with
         ``f`` from ``heating_anomalous_tail_phi_c_fraction``. ``"fixed"``: the
@@ -1994,7 +2029,11 @@ def cathode_defaults():
     heating_anomalous_tail_phi_c_fraction:
         The fraction ``f`` in ``E_tail = f * e*phi_c(t)``. **Read ONLY under
         ``heating_anomalous_tail_energy_keying="phi_c"``**; must be ``None``
-        under ``"fixed"``, where supplying one would silently do nothing.
+        under ``"fixed"``, where supplying one would silently do nothing, and
+        must be ``None`` under
+        ``heating_anomalous_transport="plateau_multigroup"``, whose derived
+        spectrum spans the whole band and carries BOTH ends of this bracket
+        at once.
         ``None`` (default) selects the shipped arm ``f = 0.25``, except under
         ``heating_anomalous_disposal="landau_branched"``, which requires the
         arm to be stated and raises on ``None``. The only
@@ -2005,7 +2044,8 @@ def cathode_defaults():
     heating_anomalous_tail_cathode_boundary:
         What the CATHODE end does to a tail walker that reaches it. **Read
         ONLY when the QL tail is WALKED** (``heating_anomalous_transport=
-        "tail_walk"`` or ``heating_anomalous_disposal="landau_branched"``)
+        "tail_walk"`` or ``"plateau_multigroup"``, or
+        ``heating_anomalous_disposal="landau_branched"``)
         -- inert otherwise. ``"reflect"`` (default): a walker arriving at the cathode
         face of the plasma-active window with energy below ``e*phi_c(t)`` is
         turned around at the same energy and keeps walking; only a walker at or
@@ -2035,8 +2075,13 @@ def cathode_defaults():
         Whether the QL tail walkers may IONIZE and EXCITE the column gas they
         pass through. **Read ONLY when the QL tail is WALKED**
         (``heating_anomalous_transport="tail_walk"`` or
+        ``"plateau_multigroup"``, or
         ``heating_anomalous_disposal="landau_branched"``) -- inert otherwise,
-        and selecting ``"on"`` without either raises. ``"off"`` (default, bit-exact):
+        and selecting ``"on"`` without one of them raises. Under
+        ``"plateau_multigroup"`` the two depth-1 bars below are evaluated PER
+        GROUP, on each group's own midpoint energy, so the band exposures
+        become power-weighted shares of the launched streaming bank rather
+        than all-or-nothing. ``"off"`` (default, bit-exact):
         the walk is energy-only, the walkers Coulomb-slow and nothing else, and
         every particle row is what it would be under ``"local"``. ``"on"``: each
         tail population is marched on the CSDA module's own integration, so it

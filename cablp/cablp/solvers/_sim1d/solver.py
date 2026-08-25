@@ -1398,6 +1398,18 @@ class LAPDSim1D:
         # always exist; only an armed run ever moves them or saves them.
         self._anode_attracting_steps = 0
         self._anode_attracting_last_time_s = np.nan
+        # Census of the multi-group plateau's EDGE CLAMP, on the same
+        # discipline: advanced on ACCEPTED steps only and exposed on an armed
+        # run's cathode diagnostics. The clamp is what makes an unbracketed
+        # plateau-edge solve loud instead of silent -- a run that spends
+        # frames on the inelastic floor is running a different spectrum from
+        # one that does not. Initialised unconditionally so the attributes
+        # always exist; only an armed run ever moves them or saves them.
+        self._plateau_edge_clamped_steps = 0
+        self._plateau_edge_clamped_last_time_s = np.nan
+        self._plateau_multigroup = str(
+            self._input_dict.get("heating_anomalous_transport", "local")
+        ) == "plateau_multigroup"
 
     def _init_neutral_momentum_and_energy(self):
         """Arm the evolved neutral wind and its optional energy field.
@@ -2038,11 +2050,72 @@ class LAPDSim1D:
         # (a) the CSDA module to be the thing depositing, and (b) an anomalous
         # channel actually producing the power it carries.
         _hat = str(self._input_dict.get("heating_anomalous_transport", "local"))
-        if _hat not in ("local", "tail_walk"):
+        if _hat not in ("local", "tail_walk", "plateau_multigroup"):
             raise ValueError(
-                "heating_anomalous_transport must be 'local' or 'tail_walk' "
-                f"(got {_hat!r})"
+                "heating_anomalous_transport must be 'local', 'tail_walk' or "
+                f"'plateau_multigroup' (got {_hat!r})"
             )
+        _multigroup = _hat == "plateau_multigroup"
+        if _multigroup:
+            # The multi-group plateau DERIVES its birth spectrum from the
+            # extraction (the plateau edge solved on the launch cell's own
+            # Maxwellian, then N equal-power groups up to e*phi_c), so the
+            # single-line closure's three birth-energy controls are inert
+            # under it. Inert is exactly what this repo refuses to be silent
+            # about: each is rejected here, at construction, rather than
+            # accepted and ignored. Their DEFAULTS are accepted, so an armed
+            # stance states the selector and nothing else.
+            if self._input_dict.get(
+                "heating_anomalous_tail_phi_c_fraction", None
+            ) is not None:
+                raise ValueError(
+                    "heating_anomalous_tail_phi_c_fraction was supplied with "
+                    "heating_anomalous_transport='plateau_multigroup', where "
+                    "the birth spectrum runs from the derived plateau edge "
+                    "E_1 up to e*phi_c and the f dial is inert (the shipped "
+                    "f=0.25 line was the WAVE share's stand-in and f=1.0 the "
+                    "streaming share's; this closure carries both). Drop the "
+                    "fraction, or select heating_anomalous_transport="
+                    "'tail_walk' to launch at one keyed energy"
+                )
+            if float(
+                self._input_dict.get(
+                    "heating_anomalous_tail_energy_eV", 75.0
+                )
+            ) != 75.0:
+                raise ValueError(
+                    "heating_anomalous_tail_energy_eV="
+                    f"{self._input_dict.get('heating_anomalous_tail_energy_eV')}"
+                    " was supplied with heating_anomalous_transport="
+                    "'plateau_multigroup', where the birth energies are the "
+                    "derived group midpoints and the fixed rung is inert; "
+                    "drop it, or select heating_anomalous_tail_energy_keying="
+                    "'fixed' under heating_anomalous_transport='tail_walk'"
+                )
+            if str(
+                self._input_dict.get(
+                    "heating_anomalous_tail_energy_keying", "phi_c"
+                )
+            ) != "phi_c":
+                raise ValueError(
+                    "heating_anomalous_tail_energy_keying was supplied with "
+                    "heating_anomalous_transport='plateau_multigroup', which "
+                    "keys the spectrum's TOP to the live e*phi_c and its "
+                    "BOTTOM to the solved plateau edge; there is no rung to "
+                    "select and the keying selector is inert. Drop it, or "
+                    "select heating_anomalous_transport='tail_walk'"
+                )
+            if bool(self._flags.get("coverage_closure", False)):
+                raise ValueError(
+                    "heating_anomalous_transport='plateau_multigroup' does "
+                    "not support coverage_closure: the two-stream march "
+                    "shares ONE withholding bank between the channel and "
+                    "reservoir arms and the reservoir carries the density "
+                    "FLOOR against the mean-field Te, so the plateau edge "
+                    "solved there would be an artifact of the floor "
+                    "convention rather than a measurement of the plasma. The "
+                    "coverage arms are deferred until that stance is designed"
+                )
         # pd1 branched disposal. It fills and consumes the SAME withholding
         # bank the tail walk does -- it only scales it per cell between the
         # march and the walk -- so every requirement the walk states applies to
@@ -2078,11 +2151,11 @@ class LAPDSim1D:
                 "rather than a measurement of the plasma. The coverage arms "
                 "are deferred until that stance is designed"
             )
-        _tail_walking = _hat == "tail_walk" or _branch
+        _tail_walking = _hat in ("tail_walk", "plateau_multigroup") or _branch
         if _tail_walking:
             _sel = (
                 "heating_anomalous_disposal='landau_branched'" if _branch
-                else "heating_anomalous_transport='tail_walk'"
+                else f"heating_anomalous_transport={_hat!r}"
             )
             if str(
                 self._input_dict.get("beam_deposition_model", "beer_lambert")
@@ -2245,11 +2318,13 @@ class LAPDSim1D:
                 raise ValueError(
                     "heating_anomalous_tail_ionization='on' requires walkers "
                     "to give the channel to: "
-                    "heating_anomalous_transport='tail_walk' or "
+                    "heating_anomalous_transport='tail_walk', "
+                    "heating_anomalous_transport='plateau_multigroup' or "
                     "heating_anomalous_disposal='landau_branched' (without "
                     "them the setting would be a silent no-op). "
-                    "heating_anomalous_transport accepts 'local' or "
-                    "'tail_walk'; heating_anomalous_disposal accepts 'local' "
+                    "heating_anomalous_transport accepts 'local', "
+                    "'tail_walk' or 'plateau_multigroup'; "
+                    "heating_anomalous_disposal accepts 'local' "
                     "or 'landau_branched'; heating_anomalous_tail_ionization "
                     f"accepts 'off' or 'on' (got {_hat!r}, {_disposal!r} and "
                     f"{_tion!r})"
@@ -5446,6 +5521,16 @@ class LAPDSim1D:
             if np.isfinite(_phi_a) and _phi_a <= 0.0:
                 self._anode_attracting_steps += 1
                 self._anode_attracting_last_time_s = float(self._time)
+        if self._plateau_multigroup and solve is not None:
+            # Multi-group plateau EDGE-CLAMP census, counted on ACCEPTED steps
+            # for the same reason the anode census is: a rejected attempt
+            # never reaches this commit, and the per-stage RHS evaluations
+            # inside one step are not steps. Any end whose edge solve hit the
+            # inelastic floor counts the step once.
+            _edges = getattr(solve, "beam_plateau_edge", None) or {}
+            if any(int(entry[1]) != 0 for entry in _edges.values()):
+                self._plateau_edge_clamped_steps += 1
+                self._plateau_edge_clamped_last_time_s = float(self._time)
         if solve is not None and solve.beam_result is not None:
             # Clamp the loop-current state to a generous physical ceiling
             # (~5x the dead-short bank current): the sheath solve has a
@@ -10456,6 +10541,31 @@ class LAPDSim1D:
             diag["anode_attracting_last_time_s"] = float(
                 self._anode_attracting_last_time_s
             )
+        if self._plateau_multigroup:
+            # Multi-group plateau closure, PRESENCE-GATED so an unarmed run's
+            # saved diagnostic structure -- the golden included -- is
+            # byte-identical to before the closure existed.
+            #
+            # ``beam_plateau_wave_power_W`` is the WAVE/BULK heir of the
+            # withheld QL bank, banked as local bulk heat in the extraction
+            # cells. It is ALREADY inside beam_heat_anomalous_W (it is the
+            # anomalous channel's local delivery); reported apart so the
+            # derived split of the bank -- this plus the streaming
+            # beam_tail_power_W -- is readable per frame rather than inferred.
+            #
+            # ``plateau_edge_clamped_*`` are the clamp census: the cumulative
+            # count of ACCEPTED steps on which some end's plateau-edge solve
+            # hit the inelastic floor and was clamped to it, and the solver
+            # time of the last such step (NaN while none has occurred). The
+            # edge is a state-dependent solve, so a clamped frame is running a
+            # different spectrum -- never silent.
+            diag["beam_plateau_wave_power_W"] = 0.0
+            diag["plateau_edge_clamped_steps"] = float(
+                self._plateau_edge_clamped_steps
+            )
+            diag["plateau_edge_clamped_last_time_s"] = float(
+                self._plateau_edge_clamped_last_time_s
+            )
         for prefix in ("source", "end"):
             # Per-ray exit ledger [W]: power the anode mesh intercepts at the
             # anode-face crossing, and power streaming out of the far end.
@@ -10516,6 +10626,14 @@ class LAPDSim1D:
             diag[f"{prefix}_beam_gap_survival_probe"] = np.nan
             diag[f"{prefix}_beam_gap_survival_ray"] = np.nan
             diag[f"{prefix}_beam_gap_survival_circuit"] = np.nan
+            if self._plateau_multigroup:
+                # The plateau edge E_1 [eV] THIS end's extraction solved, and
+                # -1.0 on a frame where it was clamped to the inelastic floor
+                # (0.0 otherwise). Per end, because the edge is a property of
+                # the extraction: both ends solve their own. NaN where no CSDA
+                # ray ran. Presence-gated with the closure.
+                diag[f"{prefix}_beam_plateau_edge_eV"] = np.nan
+                diag[f"{prefix}_beam_plateau_edge_clamped"] = np.nan
         for prefix in ("source", "end"):
             diag[f"{prefix}_regime"] = "none"
             for key in _CATHODE_RESULT_KEYS:
@@ -10629,6 +10747,13 @@ class LAPDSim1D:
             diag["beam_tail_above_bar_power_W"] += (
                 float(dep.tail_above_bar_power_erg_s) * 1.0e-7
             )
+            if "beam_plateau_wave_power_W" in diag:
+                # Presence-gated with the closure that fills it (the key is
+                # seeded only on an armed run), so this line cannot add a
+                # dataset to an unarmed run's saved structure.
+                diag["beam_plateau_wave_power_W"] += (
+                    float(dep.plateau_wave_power_erg_s) * 1.0e-7
+                )
             prefix = prefixes[int(end)]
             diag[f"{prefix}_beam_anode_intercepted_W"] = (
                 float(dep.anode_intercepted_erg_s) * 1.0e-7
@@ -10654,6 +10779,17 @@ class LAPDSim1D:
             diag[f"{prefix}_beam_end_loss_tail_high_W"] = (
                 float(dep.end_loss_tail_high_erg_s) * 1.0e-7
             )
+        for end, entry in (
+            getattr(cathode_solve, "beam_plateau_edge", None) or {}
+        ).items():
+            # The multi-group plateau edge this end's extraction solved, and
+            # its clamp verdict. Read off the cathode solve rather than the
+            # deposition result because the edge belongs to the EXTRACTION --
+            # one solve, shared by that end's ray and both halves of a
+            # clumping split.
+            prefix = prefixes[int(end)]
+            diag[f"{prefix}_beam_plateau_edge_eV"] = float(entry[0])
+            diag[f"{prefix}_beam_plateau_edge_clamped"] = float(entry[1])
         # K7b: the sub-threshold SHARE, formed once the per-end powers are
         # summed. NaN rather than 0 where no tail power was launched at all --
         # a frame with no QL drive has no fraction, and 0.0 there would read
