@@ -73,7 +73,7 @@ FAMILIES = {
     "geometry (flux-tube area)": ["flux_tube_geometry"],
     "boundary / end sink (the structural candidate)": [
         "characteristic_boundary", "surface_loss", "boundary_absorption",
-        "cathode_surface_loss", "anode_collection",
+        "electrode_e_sheath_loss", "anode_collection",
     ],
     "mass loading (ionization / recombination)": [
         "ionization_birth", "beam_ionization_birth", "ionization_energy_cost",

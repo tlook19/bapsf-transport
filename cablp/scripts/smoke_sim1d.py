@@ -7515,7 +7515,7 @@ def _case_helium_only_reaction_rates(dt_default, hot_ion_cx_state):
         "neutral_wind_advection",
         "surface_loss",
         "anode_collection",
-        "cathode_surface_loss",
+        "electrode_e_sheath_loss",
         "neutral_exchange",
         "neutral_sources",
         "gas_puff_local_ionization",
@@ -7545,7 +7545,7 @@ def _case_helium_only_reaction_rates(dt_default, hot_ion_cx_state):
         pack_state(rhs_terms["heat_conduction"]),
         full_rhs - nonheat_rhs,
     )
-    assert np.allclose(pack_state(rhs_terms["cathode_surface_loss"]), 0.0)
+    assert np.allclose(pack_state(rhs_terms["electrode_e_sheath_loss"]), 0.0)
     assert np.allclose(pack_state(rhs_terms["beam_ionization_birth"]), 0.0)
     assert np.allclose(pack_state(rhs_terms["beam_power_deposition"]), 0.0)
     assert np.allclose(pack_state(rhs_terms["beam_ionization_cost"]), 0.0)
@@ -7803,7 +7803,7 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
             run_result.rhs_terms["plasma_advective_flux"]["n"]
             + run_result.rhs_terms["plasma_front_flux"]["n"]
             + run_result.rhs_terms["surface_loss"]["n"]
-            + run_result.rhs_terms["cathode_surface_loss"]["n"]
+            + run_result.rhs_terms["electrode_e_sheath_loss"]["n"]
         ),
     )
     assert np.allclose(
@@ -7811,7 +7811,7 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
         (
             run_result.rhs_terms["neutral_exchange"]["nn"]
             + run_result.rhs_terms["surface_loss"]["nn"]
-            + run_result.rhs_terms["cathode_surface_loss"]["nn"]
+            + run_result.rhs_terms["electrode_e_sheath_loss"]["nn"]
         ),
     )
     assert np.allclose(
@@ -8767,7 +8767,7 @@ def _case_cathode_power_balance_warming(
     assert np.all(np.isfinite(cathode_diag["l_b_profile"]))
     assert np.allclose(cathode_diag["l_b_profile_twin"], 0.0)
     assert np.all(
-        np.isfinite(cathode_run_result.rhs_terms["cathode_surface_loss"]["n"])
+        np.isfinite(cathode_run_result.rhs_terms["electrode_e_sheath_loss"]["n"])
     )
     for _beam_key in (
         "beam_ionization_birth",
@@ -8790,7 +8790,7 @@ def _case_cathode_power_balance_warming(
                 "beam_ionization_cost"
             ]
             + cathode_run_result.electron_energy_terms_W_cm3[
-                "cathode_surface_loss"
+                "electrode_e_sheath_loss"
             ]
         ),
     )
@@ -8842,7 +8842,7 @@ def _case_cathode_power_balance_warming(
             assert h5.attrs["steps"] == cathode_run_result.steps
             saved_flags = json.loads(h5.attrs["flags_json"])
             assert saved_flags["cathode_coupling"]
-            assert h5["rhs_terms/cathode_surface_loss/n"].shape == (4, geom.cells)
+            assert h5["rhs_terms/electrode_e_sheath_loss/n"].shape == (4, geom.cells)
             assert h5["rhs_terms/beam_power_deposition/Ee"].shape == (
                 4,
                 geom.cells,
@@ -8877,8 +8877,8 @@ def _case_cathode_power_balance_warming(
         )
         assert set(loaded_cathode_result.rhs_terms) == expected_rhs_terms
         assert np.allclose(
-            loaded_cathode_result.rhs_terms["cathode_surface_loss"]["n"],
-            cathode_run_result.rhs_terms["cathode_surface_loss"]["n"],
+            loaded_cathode_result.rhs_terms["electrode_e_sheath_loss"]["n"],
+            cathode_run_result.rhs_terms["electrode_e_sheath_loss"]["n"],
         )
         assert np.allclose(
             loaded_cathode_result.rhs_terms["beam_power_deposition"]["Ee"],
@@ -9320,7 +9320,7 @@ def _case_breakdown_retry_near_vacuum(
         [1.0, 1.0, 1.0, 1.0, 0.0],
     )
     assert np.allclose(
-        phase_cathode_result.rhs_terms["cathode_surface_loss"]["n"][3:],
+        phase_cathode_result.rhs_terms["electrode_e_sheath_loss"]["n"][3:],
         0.0,
     )
     assert np.allclose(

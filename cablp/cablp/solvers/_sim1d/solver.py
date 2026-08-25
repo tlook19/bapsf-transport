@@ -281,7 +281,7 @@ _NEUTRAL_ENERGY_TERM_BOOKING = {
     "boundary_absorption": "wall",
     "characteristic_boundary": "wall",
     "anode_collection": "wall",
-    "cathode_surface_loss": "wall",
+    "electrode_e_sheath_loss": "wall",
     "surface_loss": "wall",
     "neutral_probe_source": "wall",
     # --- recombination: born at the ion temperature ----------------------
@@ -1332,6 +1332,31 @@ class LAPDSim1D:
                 f"{_rates_at_accepted_state!r})"
             )
         self._rates_at_accepted_state = _rates_at_accepted_state
+        # Anode sheath-fall electron debit. A real bool is required for the
+        # same reason: the flag arms a ~10^2 kW plasma electron sink, and an
+        # int or a string smuggled in there would read like a value.
+        _anode_sheath_full_debit = self._flags.get(
+            "anode_sheath_full_debit", False
+        )
+        if not isinstance(_anode_sheath_full_debit, bool):
+            raise ValueError(
+                "anode_sheath_full_debit must be a bool (got "
+                f"{_anode_sheath_full_debit!r})"
+            )
+        if _anode_sheath_full_debit and not bool(
+            self._flags.get("characteristic_boundary", False)
+        ):
+            raise ValueError(
+                "anode_sheath_full_debit requires characteristic_boundary "
+                "(got characteristic_boundary="
+                f"{self._flags.get('characteristic_boundary', False)!r}): the "
+                "flag COMPLETES the thermal-only electrode routing by adding "
+                "the sheath-fall share back onto the plasma electron store, "
+                "and with that routing off the full P_anode_e "
+                "(2 Te + phi_a per collected electron) is already deposited, "
+                "so arming it would debit phi_a twice"
+            )
+        self._anode_sheath_full_debit = _anode_sheath_full_debit
 
     def _init_neutral_momentum_and_energy(self):
         """Arm the evolved neutral wind and its optional energy field.
@@ -4053,7 +4078,7 @@ class LAPDSim1D:
                 "neutral_wind_advection": self._zero_rhs_state(),
                 "surface_loss": self._zero_rhs_state(),
                 "anode_collection": self._zero_rhs_state(),
-                "cathode_surface_loss": self._zero_rhs_state(),
+                "electrode_e_sheath_loss": self._zero_rhs_state(),
                 "neutral_exchange": self.neutral_exchange_rhs(state=state),
                 "neutral_sources": self.neutral_source_sink_rhs(
                     state=state,
@@ -4221,7 +4246,18 @@ class LAPDSim1D:
             "anode_collection": self.anode_collection_rhs(
                 state=state, cathode_solve=cathode_solve, time=time
             ),
-            "cathode_surface_loss": self.cathode_source_terms(
+            # electrode_e_sheath_loss -- the sheath-resolved electrode solve's
+            # single conservative row. Its Ee field is the ELECTRON SHEATH
+            # POWER OF BOTH ELECTRODES: in discharge that is ~100% anode,
+            # because the cathode sheath repels plasma electrons (the cathode
+            # share is milliwatts against ~10^5 W at the anode), and it lands
+            # at the anode-flanking cells; with no anode resolved in the mesh
+            # the whole of it falls back to the cathode cell, which is the
+            # name's geometry-neutral half. The row also carries the cathode
+            # SURFACE's own losses -- n, nn and M for the particles the face
+            # takes and recycles, and Ei for their ion thermal energy -- so
+            # the name describes its dominant energy channel, not every field.
+            "electrode_e_sheath_loss": self.cathode_source_terms(
                 state=state,
                 cathode_solve=cathode_solve,
                 time=time,
@@ -7714,6 +7750,7 @@ class LAPDSim1D:
                 self._input_dict.get("b_anode_collection", 1.0)
             ),
             anode_jet=self._anode_jet_spec(cathode_solve),
+            sheath_edge_energy=self._anode_sheath_full_debit,
         )
 
     def ion_neutral_drag_rhs(self, y=None, state=None):

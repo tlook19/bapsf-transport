@@ -2543,6 +2543,11 @@ def cathode_source_terms(
     # R3.2/A16: under the repaired boundary stance, route only the plasma-thermal
     # electron power to the plasma; the sheath-fall phi is booked on the electrode.
     thermal_only = bool(input_flags.get("characteristic_boundary", False))
+    # anode_sheath_full_debit: complete the anode side of that routing by
+    # charging the plasma electrons the sheath fall they climbed as well.
+    anode_full_debit = bool(
+        input_flags.get("anode_sheath_full_debit", False)
+    )
     if cathode_cells:
         _deposit_electrode_power(
             electron_power_loss_W,
@@ -2552,6 +2557,7 @@ def cathode_source_terms(
             state=state,
             derived=derived,
             thermal_only=thermal_only,
+            anode_full_debit=anode_full_debit,
         )
         if (
             boundary.twin_cathode
@@ -2565,6 +2571,7 @@ def cathode_source_terms(
                 state=state,
                 derived=derived,
                 thermal_only=thermal_only,
+                anode_full_debit=anode_full_debit,
             )
     else:
         electron_power_loss_W[0] = _electron_power_loss_W(
@@ -3336,7 +3343,7 @@ def _cathode_particle_loss_rate(result, eta):
 
 def _deposit_electrode_power(
     electron_power_loss_W, result, cathode_cell, anode_pair, state, derived,
-    thermal_only=False,
+    thermal_only=False, anode_full_debit=False,
 ):
     """Land P_cathode_e at the cathode cell and P_anode_e at the anode mesh.
 
@@ -3350,9 +3357,51 @@ def _deposit_electrode_power(
     PLASMA-THERMAL part (2Te per electron), leaving the sheath-fall ``phi`` on the
     electrode/circuit surface instead of removing it from the plasma thermal
     store. Off (the golden default) deposits the full historical P_*_e.
+
+    ``anode_full_debit`` (``anode_sheath_full_debit``): add the anode's
+    sheath-fall share ``phi_a * I_e_coll`` back onto the plasma electron
+    store, so the ANODE debit is the sheath-edge ``(2 Te + phi_a)`` per
+    collected electron while the cathode side keeps its ``thermal_only``
+    routing -- at the cathode the accelerated species is the ion, so the
+    electron fall there is not plasma-electron energy. ``I_e_coll`` is the
+    collected electron current ``I_i_a * fe_a``, and its ``phi_a`` moment is
+    the result's own ``P_anode_e_phi``, the complementary member of the R3.2
+    split, which rides exactly that flux. The increment is deposited under
+    the same split weights, so power and particles still leave on the same
+    side. Only the plasma store moves: no circuit or load-ledger quantity is
+    read or written here.
+
+    Composition with ``thermal_only``: the two are armed together (the solver
+    refuses ``anode_sheath_full_debit`` without ``characteristic_boundary``),
+    so the anode deposit is ``P_anode_e_thermal + P_anode_e_phi``. The
+    unresolved-cathode fallback below this function already deposits the full
+    ``P_anode_e`` and so is already on the corrected anode convention.
     """
     p_cathode_e = result.P_cathode_e_thermal if thermal_only else result.P_cathode_e
     p_anode_e = result.P_anode_e_thermal if thermal_only else result.P_anode_e
+    if anode_full_debit:
+        # Regime guard. The whole booking is written for an electron-REPELLING
+        # anode: phi_a > 0 in the "positive repels electrons" convention, the
+        # electrons climb the fall, and the plasma store is the payer. phi_a
+        # is solved as Lambda_anode - log(1 + J_anode / J_i_a), so phi_a <= 0
+        # is exactly the statement that the demanded anode electron current
+        # has reached or passed electron saturation; there the anode ATTRACTS
+        # electrons, the field does work on them, and the payer is the circuit
+        # -- the opposite sign. That branch is deliberately not implemented,
+        # so it stops the run instead of booking the wrong sign silently. A
+        # non-finite phi_a takes the same exit.
+        if not float(result.phi_a) > 0.0:
+            raise RuntimeError(
+                "anode_sheath_full_debit: the anode is not electron-repelling "
+                f"(phi_a={result.phi_a!r} V, i.e. the demanded anode electron "
+                "current is at or above electron saturation). The sheath-fall "
+                "booking inverts in that regime -- the circuit pays phi_a, not "
+                "the plasma electron store -- and this build does not "
+                "implement that branch."
+            )
+        # phi_a * I_e_coll, the sheath-fall moment of the SAME collected
+        # electron flux the 2Te part rides.
+        p_anode_e = p_anode_e + result.P_anode_e_phi
     electron_power_loss_W[cathode_cell] += p_cathode_e
     if anode_pair is None:
         electron_power_loss_W[cathode_cell] += p_anode_e

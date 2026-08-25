@@ -931,7 +931,7 @@ CSDA + quasilinear deposition, circuit voltage bound on) at
 | `beam_power_deposition` | **+8.851e5** | +5.533e5 |
 | `heat_conduction` | **−3.633e5** | **−8.635e5** |
 | `plasma_advective_flux` | +1.279e5 | +4.095e4 |
-| `cathode_surface_loss` | −6.910e4 | **−9.974e5** |
+| `electrode_e_sheath_loss` | −6.910e4 | **−9.974e5** |
 | `ionization_energy_cost` | −5.511e4 | −6.082e4 |
 | `electron_neutral_cooling` | −2.152e4 | −2.438e4 |
 | `anode_collection` | 0 | −5.454e4 |
@@ -1067,7 +1067,7 @@ fluid-arm background), by `scripts/regime_pb_balance_table.py`:
 | — **remainder, what a passive cell keeps** | **+4.132e4** | **+4.626e4** |
 | `heat_conduction` | −4.336e5 | −8.259e5 |
 | `plasma_advective_flux` | +1.278e5 | +4.123e4 |
-| `cathode_surface_loss` | −6.912e4 | −9.973e5 |
+| `electrode_e_sheath_loss` | −6.912e4 | −9.973e5 |
 | `ionization_energy_cost` | −5.512e4 | −6.080e4 |
 | `electron_neutral_cooling` | −2.153e4 | −2.438e4 |
 | `anode_collection` | 0 | −5.450e4 |

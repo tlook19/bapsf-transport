@@ -102,11 +102,13 @@ CHANNEL_PHASE = {
          "enthalpy launched into the cold gas with the cathode recycle jet; "
          "rides the cathode solve, so a residual survives the floating "
          "afterglow and it vanishes at post_afterglow"),
-    "cathode_surface_loss":
+    "electrode_e_sheath_loss":
         ("DRIVE-ONLY",
-         "energy landed on the cathode surface by the sheath-resolved "
-         "cathode solve; alive while the inductive tail keeps loop current "
-         "flowing, zero once the solve is disabled"),
+         "the sheath-resolved electrode solve's row: electron sheath power "
+         "at BOTH electrodes (anode-dominated in discharge -- the cathode "
+         "sheath repels plasma electrons) plus the cathode surface's own "
+         "particle, momentum and ion-thermal loss; alive while the inductive "
+         "tail keeps loop current flowing, zero once the solve is disabled"),
     "characteristic_boundary":
         ("BOTH",
          "energy leaving through the characteristic ghost-cell boundary at "
@@ -242,7 +244,7 @@ SELFTEST_REFERENCE = (
     ("cathode_jet_neutral_energy/En", 22.008, 4),
     ("warming_E_ion_J slope", 184.058, 4),
     ("beam_power_deposition/Ee", 322.3, 4),
-    ("cathode_surface_loss/Ee", -96.1, 3),
+    ("electrode_e_sheath_loss/Ee", -96.1, 3),
 )
 
 
@@ -553,8 +555,8 @@ def selftest(path):
                 counter_slope(dg, "warming_E_ion_J", i0, i1, dt_s) / 1e3,
             "beam_power_deposition/Ee":
                 table[("beam_power_deposition", "Ee")],
-            "cathode_surface_loss/Ee":
-                table[("cathode_surface_loss", "Ee")],
+            "electrode_e_sheath_loss/Ee":
+                table[("electrode_e_sheath_loss", "Ee")],
         }
     print("=== SELFTEST: founding drive-window numbers of record ===")
     print(f"artifact : {path}")
