@@ -288,11 +288,26 @@ def implicit_heat_conduction_step(
     electron_heat_flux_limit=False,
     heat_flux_limiter_f=0.3,
     heat_flux_limiter_exponent=1.0,
+    ee_source=None,
 ):
     """Return a state after one implicit heat step.
 
     ``implicit_heat_scheme`` names one of ``IMPLICIT_HEAT_SCHEMES``: a theta
     method (``backward_euler``, ``shifted``, ``crank_nicolson``) or ``tr_bdf2``.
+
+    ``ee_source`` [erg cm^-3 s^-1], when given, is an electron-energy source
+    density held CONSTANT over the substep and solved together with the
+    conduction operator, i.e. the substep advances
+    ``C dTe/dt = -K Te + ee_source`` instead of ``C dTe/dt = -K Te``. The ion
+    solve is never given one. ``None`` (the default) is the historical path,
+    expression for expression. It carries the beam electron-energy deposition
+    when ``beam_deposition_in_heat_substep`` is armed; the term is then
+    removed from the explicit operator, so the source enters here INSTEAD OF
+    there and is not an extra booking. Every scheme integrates a constant
+    source exactly over the substep when the conduction operator is inert
+    (``K = 0``): the theta methods trivially, and TR-BDF2 because its two
+    stage weights sum to one (``gamma/(gamma(2-gamma)) + gamma/2 = 1`` at
+    ``gamma = 2 - sqrt(2)``).
 
     ``heat_picard_iterations`` controls how the Braginskii conductivity, which
     depends on temperature as roughly T^(5/2), is evaluated:
@@ -316,11 +331,21 @@ def implicit_heat_conduction_step(
     scheme = validate_implicit_heat_scheme(implicit_heat_scheme)
     iterations = max(int(heat_picard_iterations), 0)
     if not heat_conduction or (b_epara == 0.0 and b_ipara == 0.0):
+        # No conduction operator to solve against, but the substep still OWNS
+        # the source it was handed: dropping it would delete energy the
+        # explicit operator has already stopped booking. K = 0 makes the exact
+        # integral of a constant source dt*S, which is what every scheme below
+        # would return here.
+        Ee_inert = (
+            state.Ee.copy()
+            if ee_source is None
+            else state.Ee + dt * np.asarray(ee_source, dtype=float)
+        )
         return ConservativeState1D(
             n=state.n.copy(),
             nn=state.nn.copy(),
             M=state.M.copy(),
-            Ee=state.Ee.copy(),
+            Ee=Ee_inert,
             Ei=state.Ei.copy(),
             M_n=None if state.M_n is None else state.M_n.copy(),
             nn_a=None if state.nn_a is None else state.nn_a.copy(),
@@ -373,6 +398,7 @@ def implicit_heat_conduction_step(
             geometry=geometry,
             dt=dt,
             scheme=scheme,
+            source=ee_source,
         )
         Ei = _implicit_species_energy(
             energy=state.Ei,
@@ -482,6 +508,7 @@ def _implicit_species_energy(
     geometry,
     dt,
     scheme="backward_euler",
+    source=None,
 ):
     energy = np.asarray(energy, dtype=float)
     kwargs = dict(
@@ -491,6 +518,7 @@ def _implicit_species_energy(
         conductivity=conductivity,
         geometry=geometry,
         dt=dt,
+        source=source,
     )
     if scheme == TR_BDF2:
         temperature = _tr_bdf2_temperature(**kwargs)
@@ -515,6 +543,7 @@ def _theta_temperature(
     geometry,
     dt,
     theta,
+    source=None,
 ):
     # The implicit operator carries theta*dt; the remaining (1 - theta)*dt of
     # the conduction is applied explicitly on the right-hand side below.
@@ -531,6 +560,11 @@ def _theta_temperature(
             conductivity,
             geometry,
         )
+    if source is not None:
+        # A constant source over the substep is theta-independent: it
+        # contributes theta*dt*S implicitly and (1 - theta)*dt*S explicitly,
+        # which is dt*S either way.
+        rhs = rhs + dt * np.asarray(source, dtype=float)
     return solve_banded((1, 1), banded, rhs)
 
 
@@ -541,6 +575,7 @@ def _tr_bdf2_temperature(
     conductivity,
     geometry,
     dt,
+    source=None,
 ):
     old_temperature = np.maximum(energy / capacity, temperature_floor)
     # Both stages share this operator -- that is what gamma = 2 - sqrt(2) buys.
@@ -552,24 +587,34 @@ def _tr_bdf2_temperature(
     )
     # Stage 1: trapezoidal rule out to t + gamma*dt, i.e. Crank-Nicolson over a
     # step of gamma*dt, whose implicit weight is (gamma/2)*dt = _TR_BDF2_IMPLICIT*dt.
-    gamma_temperature = solve_banded(
-        (1, 1),
-        banded,
-        energy
-        + _TR_BDF2_IMPLICIT
-        * dt
-        * _conductive_divergence(old_temperature, conductivity, geometry),
+    stage_1_rhs = energy + _TR_BDF2_IMPLICIT * dt * _conductive_divergence(
+        old_temperature, conductivity, geometry
     )
+    if source is not None:
+        # The trapezoidal stage spans gamma*dt, and a constant source over it
+        # contributes gamma*dt*S regardless of the trapezoid weighting.
+        stage_1_rhs = stage_1_rhs + _TR_BDF2_GAMMA * dt * np.asarray(
+            source, dtype=float
+        )
+    gamma_temperature = solve_banded((1, 1), banded, stage_1_rhs)
     # Stage 2: BDF2 through (T_old, T_gamma, T_new). The right-hand side needs
     # no flux evaluation -- it is just a blend of two known temperatures, and
     # _TR_BDF2_A + _TR_BDF2_B == 1 so a uniform temperature is preserved.
     # T_gamma is deliberately left unfloored: clipping between stages would
     # break the scheme's order, and the caller applies the floor once at the end.
-    return solve_banded(
-        (1, 1),
-        banded,
-        capacity * (_TR_BDF2_A * gamma_temperature + _TR_BDF2_B * old_temperature),
+    stage_2_rhs = capacity * (
+        _TR_BDF2_A * gamma_temperature + _TR_BDF2_B * old_temperature
     )
+    if source is not None:
+        # The BDF2 stage evaluates its flux at t + dt with the shared implicit
+        # weight (1-gamma)/(2-gamma)*dt == _TR_BDF2_IMPLICIT*dt, so the source
+        # enters with that weight. Together with the stage-1 share carried
+        # through by _TR_BDF2_A this integrates a constant source EXACTLY:
+        # _TR_BDF2_A*gamma + gamma/2 == 1.
+        stage_2_rhs = stage_2_rhs + _TR_BDF2_IMPLICIT * dt * np.asarray(
+            source, dtype=float
+        )
+    return solve_banded((1, 1), banded, stage_2_rhs)
 
 
 def _banded_heat_operator(capacity, conductivity, geometry, dt):
