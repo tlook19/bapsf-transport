@@ -210,7 +210,14 @@ class SolverResult:
     I_i         : Ion saturation current
     I_e         : Electron saturation current
     I_eth       : Total thermionic emission current (config constant)
-    I_eth_star  : Allowed thermionic current (clamped by virtual-cathode limit)
+    I_eth_star  : Allowed thermionic current: the effective emission clamped by
+                  the virtual-cathode (space-charge) limit. The effective
+                  emission is I_eth itself on the voltage-driven path; on the
+                  shipped current-driven path with Schottky barrier lowering it
+                  is enhanced, in scaled units J_eff = J_eth*exp(dphi/(delta*T_e)),
+                  where dphi is the Schottky work-function lowering [eV] set by
+                  the sheath surface field and delta*T_e is the emitter surface
+                  temperature in eV
     I_tot       : Net circuit current
 
     Power [W]
