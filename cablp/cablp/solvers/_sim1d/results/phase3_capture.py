@@ -4,6 +4,41 @@ The ordinary ``sim1d-hdf5-v1`` path remains the general result format.  This
 module adds the stricter ``sim1d-phase3-rhs-qualification-v1`` profile used by
 the separately authorized qualification workflow.  It deliberately contains
 no UUID generator and no solver construction.
+
+Provenance locator and execution schema
+---------------------------------------
+Five provenance-record fields state where the captured HDF5 is held and how
+the run ended.  They are record-only: nothing in this module resolves, opens
+or stats the locator they describe, and the loader validates them against the
+HDF5 file the caller explicitly names.
+
+``artifact_locator_base``
+    Symbolic name of the root ``artifact_path`` is measured from.  The only
+    known value is ``"bapsf-workspace-root"``, which resolves operationally to
+    the ``~/bapsf`` workspace directory.  An unknown value is refused.
+``artifact_path``
+    Locator of the captured HDF5, RELATIVE to that symbolic base.  Its
+    canonical form is ``artifacts/phase3/<uuid>/<uuid>.h5``, built from the
+    run's own UUID.  It carries no leading ``/``, no ``~``, no drive prefix,
+    no ``..`` component and no empty component; an absolute, private or
+    machine-rooted locator is forbidden here as everywhere else in the record.
+``locator_state``
+    Tracking state of the bytes at that locator.  The only known value is
+    ``"ignored/untracked local"``: the artifact is held outside version
+    control and is not reachable from the repository.  An unknown value is
+    refused.
+``accepted_steps``
+    Count of accepted solver steps the capture contains, mirroring the
+    result's ``steps``.  Provenance only -- it selects nothing and gates no
+    arithmetic.
+``run_status``
+    Terminal status the run reported, mirroring the result's ``run_status``
+    (``"max_steps_reached"`` under this profile).  Provenance only.
+
+``load_qualified_capture`` fails closed with a ``ValueError`` naming the
+offending field when any of the five is absent, carries a value outside its
+frozen vocabulary, is not a clean relative locator, or disagrees with the
+loaded file's attributes.
 """
 
 from __future__ import annotations
@@ -31,6 +66,18 @@ from .io import RESULT_VERSION, load_result_hdf5, save_result_hdf5
 
 PHASE3_CAPTURE_PROFILE = "sim1d-phase3-rhs-qualification-v1"
 MAX_ARTIFACT_BYTES = 50_331_648
+ARTIFACT_LOCATOR_BASE = "bapsf-workspace-root"
+ARTIFACT_LOCATOR_BASES = frozenset({ARTIFACT_LOCATOR_BASE})
+ARTIFACT_LOCATOR_STATE = "ignored/untracked local"
+ARTIFACT_LOCATOR_STATES = frozenset({ARTIFACT_LOCATOR_STATE})
+ARTIFACT_LOCATOR_PREFIX = "artifacts/phase3"
+_LOCATOR_REQUIRED_FIELDS = (
+    "artifact_locator_base",
+    "artifact_path",
+    "locator_state",
+    "accepted_steps",
+    "run_status",
+)
 
 _ROW_UNITS = {
     "n": "cm^-3 s^-1",
@@ -207,7 +254,13 @@ def write_qualified_capture(
         if target.exists():
             raise FileExistsError(f"capture target already exists: {target.name}")
     output_directory.mkdir(parents=True, exist_ok=True)
-    artifact_rel = _repository_relative(h5_path, repository_root)
+    # The capture is still written inside the repository root, and this
+    # call is that check -- not a locator source.  The emitted
+    # artifact_path is the canonical archive locator built from the
+    # execution identity and measured from ARTIFACT_LOCATOR_BASE, so it
+    # never carries a repository or machine root.
+    _repository_relative(h5_path, repository_root)
+    artifact_locator = _artifact_locator_path(run_id)
     provenance_rel = _repository_relative(provenance_path, repository_root)
     allocation_rel = _repository_relative(allocation_path, repository_root)
     producer_path = _validate_relative_path(producer_path)
@@ -269,7 +322,9 @@ def write_qualified_capture(
             "capture_profile": PHASE3_CAPTURE_PROFILE,
             "run_id": run_id,
             "capture_revision": str(capture_revision),
-            "artifact_path": artifact_rel,
+            "artifact_locator_base": ARTIFACT_LOCATOR_BASE,
+            "artifact_path": artifact_locator,
+            "locator_state": ARTIFACT_LOCATOR_STATE,
             "provenance_path": provenance_rel,
             "allocation_path": allocation_rel,
             "artifact_sha256": file_sha,
@@ -285,6 +340,8 @@ def write_qualified_capture(
             "environment_lock": environment_lock,
             "invocation": invocation,
             "run_controls": run_controls,
+            "accepted_steps": int(result.steps),
+            "run_status": str(result.run_status),
             "term_names": list(census["term_names"]),
             "state_rows": list(census["state_rows"]),
         }
@@ -317,6 +374,7 @@ def load_qualified_capture(path, provenance_path=None):
     provenance_path = Path(provenance_path)
     _validate_qualified_hdf5(path)
     provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    _validate_artifact_locator(provenance)
     _reject_private_or_absolute_values(provenance)
     if provenance.get("artifact_sha256") != whole_file_sha256(path):
         raise ValueError("whole-file SHA-256 mismatch")
@@ -341,6 +399,8 @@ def load_qualified_capture(path, provenance_path=None):
             "producer_path": _text(h5.attrs["producer_path"]),
             "invocation": json.loads(_text(h5.attrs["invocation_json"])),
             "run_controls": json.loads(_text(h5.attrs["run_controls_json"])),
+            "accepted_steps": int(h5.attrs["steps"]),
+            "run_status": _text(h5.attrs.get("run_status", "")),
             "term_names": list(
                 _read_text_dataset(h5["qualification/term_names"])
             ),
@@ -713,6 +773,60 @@ def _repository_relative(path, root):
         raise ValueError(
             f"artifact path must be inside repository root: {path}"
         ) from exc
+
+
+def _artifact_locator_path(run_id):
+    """Return the canonical archive locator for ``run_id``.
+
+    The value is relative to ``ARTIFACT_LOCATOR_BASE`` and is derived from
+    the execution identity alone, never from a filesystem location.
+    """
+    stem = validate_run_id(run_id).removeprefix("urn:uuid:")
+    return f"{ARTIFACT_LOCATOR_PREFIX}/{stem}/{stem}.h5"
+
+
+def _validate_artifact_locator(provenance):
+    """Refuse a record whose locator/execution fields are absent or unknown.
+
+    The locator is checked as text against the frozen vocabularies: nothing
+    here resolves, opens or stats the path it names.
+    """
+    for field in _LOCATOR_REQUIRED_FIELDS:
+        if field not in provenance:
+            raise ValueError(f"provenance record lacks field {field!r}")
+    base = provenance["artifact_locator_base"]
+    if base not in ARTIFACT_LOCATOR_BASES:
+        raise ValueError(
+            f"artifact_locator_base is not a known base: {base!r}"
+        )
+    state = provenance["locator_state"]
+    if state not in ARTIFACT_LOCATOR_STATES:
+        raise ValueError(f"locator_state is not a known state: {state!r}")
+    _validate_locator_relative_path(provenance["artifact_path"])
+
+
+def _validate_locator_relative_path(value):
+    if not isinstance(value, str) or not value:
+        raise ValueError(
+            f"artifact_path must be a non-empty relative locator: {value!r}"
+        )
+    if (
+        value.startswith("/")
+        or value.startswith("~")
+        or "\\" in value
+        or ":" in value
+    ):
+        raise ValueError(
+            f"artifact_path must be relative to the locator base: {value!r}"
+        )
+    for component in value.split("/"):
+        if not component:
+            raise ValueError(f"artifact_path has an empty component: {value!r}")
+        if component == "..":
+            raise ValueError(
+                f"artifact_path has a '..' component: {value!r}"
+            )
+    return value
 
 
 def _validate_relative_path(value):
