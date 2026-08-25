@@ -274,6 +274,7 @@ class ArmSpec:
 # The (2.5e-5, 16, 6) point is a member of BOTH ladders and is ONE arm.
 _BASE_NAME = "base_2.5e-05_16x6"
 _CAD_COND_NAME = "cad_3.125e-06"
+_CAD_REF_NAME = "cad_1.5625e-06"
 _GRID_COND_NAME = "grid_128x48"
 _CROSS_NAME = "cross_6.25e-06_32x12"
 
@@ -288,6 +289,8 @@ for _spec in (
             note="finest unconditional cadence rung; R9 reference"),
     ArmSpec(_CAD_COND_NAME, 3.125e-6, 16, 6, ("cadence",), conditional=True,
             note="CONDITIONAL: R8-underdetermined or R4 stability escape"),
+    ArmSpec(_CAD_REF_NAME, 1.5625e-6, 16, 6, ("cadence",),
+            note="R8-amendment converged reference rung (24cr)"),
     ArmSpec("grid_32x12", 2.5e-5, 32, 12, ("grid",), note=""),
     ArmSpec("grid_64x24", 2.5e-5, 64, 24, ("grid",), note=""),
     ArmSpec(_GRID_COND_NAME, 2.5e-5, 128, 48, ("grid",), conditional=True,
