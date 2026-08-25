@@ -372,19 +372,48 @@ pointing radially inward with a Lambertian outlet; the throw is of order the
 chord across the chamber, ~2*Rm. Neither the profile shape nor the width is
 tunable.
 
-**These two keys are the FLUID DEPOSITION ENVELOPE and they own the fluid path
-only.** The fluid model carries no neutral transport, so its source row has to
-do the spreading itself; the width above is that end-state closure. The KINETIC
-instruments transport their own atoms and therefore need the INJECTION
-geometry instead, which is a separate DERIVED quantity with its own bracket and
-its own owning code: `scripts/puff_orifice.py` derives the axial launch row
-from the CAD port station and the feed line's Clausing tube-beaming, and states
-every pin and bracket it uses (the feed pipe is not in the CAD export, so its
-inner diameter ∈ [3.8, 4.1] cm and its length ≥ 22 cm enter as hardware
-brackets — one-sided in length, hence a one-sided spread bracket). The two rows
-disagree by roughly a factor of three in 5–95 % span; that difference is a
-registered closure finding, not an error in either, and nothing on the fluid
-path reads the kinetic row.
+**`gas_puff_throw_cm` is the FLUID DEPOSITION ENVELOPE.** The fluid model
+carries no neutral transport, so under `"cosine_pipe"` its source row has to do
+the spreading itself; the width above is that end-state closure. The KINETIC
+instruments transport their own atoms and therefore need the INJECTION geometry
+instead — a separate DERIVED quantity, with its own bracket, derived in
+`cablp/solvers/_sim1d/physics/puff_orifice.py` (re-exported at
+`scripts/puff_orifice.py` for the instruments that import it by that name) from
+the CAD port station and the feed line's Clausing tube-beaming. The two rows
+disagree by roughly a factor of three in 5–95 % span, and that difference is a
+registered closure finding, not an error in either.
+
+**`gas_puff_orifice_id_cm = None`, `gas_puff_orifice_length_cm = None` —
+DERIVED, hardware-BRACKETED; `None` is "not selected".** They are the aperture
+of `gas_puff_profile = "orifice"`, which hands that same kinetic injection row
+to the fluid channel, and they are refused under every other profile. The feed
+pipe is NOT in the CAD export — nothing is modelled outboard of the port pad at
+either mid-plane azimuth — so both numbers are hardware brackets rather than
+pins:
+
+| quantity | bracket | basis |
+|---|---|---|
+| inner diameter | [3.8, 4.1] cm, two-sided | the CF35/KF40 class the port stub adapts down to |
+| length | ≥ 22 cm, ONE-SIDED | the cathode-side yellow coil stack the flange must clear, measured conservatively from the 500 mm main-chamber radius (the 400.05 mm source-chamber wall the port actually sits in would give 32 cm, i.e. a narrower row) |
+
+A one-sided length bound gives a one-sided spread bracket, and both numbers
+push the footprint the same way, so the endpoints are unambiguous: WIDE is the
+largest bore at the shortest length, NARROW is the smallest bore at
+$L\to\infty$. The angular law itself is an analytic literature result with no
+fitted quantity — the transparent-regime Clausing long-tube distribution in the
+Olander–Kruger parameterisation, Ashkarin et al., arXiv:2605.12212 Eqs. (17),
+(22)–(25) — and its only input is the aspect ratio. The 400.05 mm
+source-chamber wall radius and the 86.3 cm port station are CAD pins carried in
+that module, not config: the row reads its wall and column radii off the mesh
+at the port cell, so it is derived against the geometry the run carries. The
+module's own docstring holds the full pin list, the $\Gamma \gtrsim 10$
+regime disclosure, and the collisionless-flight caveat.
+
+**The stance value is the bracket MIDPOINT, not an endpoint.** On the
+geometry of record the two endpoints move the derived fill by < 0.1 %
+(`scripts/foot_orifice_probe.txt`), so the midpoint diameter 3.95 cm at the
+length bound 22.0 cm is quoted as the value and [3.8, 4.1] cm remains the
+bracket; see `scripts/production_stance_provenance.md` for the stance rows.
 
 **`S_pump_L = S_pump_R = 3000.0` L/s — DERIVED (elbow leg literature-BOXED),
 bracket [2750, 3300] L/s.**

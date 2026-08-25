@@ -661,6 +661,64 @@ and reduced from the present $-46.0$ kW, with no rate tuning (Phelps supersedes 
 IAEA rate set; the bracket is a cross-check).
 
 
+## Gas-puff axial placement (`gas_puff_profile`)
+
+The gas puff enters through two azimuthally opposed mid-plane ports at one
+axial station (`gas_puff_z_cm`). Where the model puts the resulting neutral
+source along $z$ is a selector, and one shared implementation
+(`physics/neutrals.gas_puff_rate_profile`) serves every consumer — the
+explicit RHS, the implicit backward-Euler neutral matrix, the kinetic-DVM
+puff booking, the saved puff diagnostics, and the offline fill builders — so
+no two sites can hold different shapes. Every distributed profile conserves
+the total inflow exactly.
+
+| value | what the row is |
+|---|---|
+| `"cell"` | The whole flow in the single role-tagged puff cell. |
+| `"gaussian"` | $\exp[-(z-z_0)^2/2\sigma^2]$, the generic tunable shape. |
+| `"cosine_pipe"` | A Lambertian (cosine) outlet at the chamber wall; its first-flight illumination $[1 + ((z-z_0)/d)^2]^{-2}$ with throw $d$ (`gas_puff_throw_cm`). |
+| `"orifice"` | The tube-beamed injection row (below). |
+
+`"gaussian"` and `"cosine_pipe"` are weighted by cell length and land only on
+main-chamber cells.
+
+**The `"orifice"` row.** The feed line behind the port is a narrow pipe, and a
+pipe in free-molecular flow does not emit with the thin-aperture cosine law —
+it BEAMS, more sharply as its aspect ratio $\Gamma = L/d$ grows. The row is
+built by ray optics on that exit distribution: emit over the pipe-exit disc at
+the vessel wall, weight directions by the transparent-regime long-tube angular
+intensity, fly straight, and record where each ray first reaches the
+plasma-column radius (its perigee where it stays outside the column — the two
+coincide at grazing, so the row is continuous there). The aperture is
+`gas_puff_orifice_id_cm` and `gas_puff_orifice_length_cm`; the wall and column
+radii are read off the mesh at the port cell, so the flight is the geometry the
+run actually carries. The derivation, its angular law and its literature source
+live in `physics/puff_orifice.py`.
+
+Two properties separate it from the shapes above. It is already a per-cell mass
+fraction, so it is **not** re-weighted by cell length; and it is **not** masked
+to the main-chamber roles — it lands where the rays land, which is the point of
+deriving it. Rays that leave the mesh are folded into the end cells, so no fuel
+is deleted. The row is run-constant and is derived once at construction, where
+an aperture that the angular law has no branch for, a port off the mesh, a
+column that is not inside the wall, and a puff with no flow to place all raise.
+
+**DISCLOSED CLOSURE — a kinetic first-flight row used as a fluid deposition
+row.** The kinetic neutral instruments transport their own atoms, so what they
+need from a puff row is where gas ENTERS. The fluid model has no neutral
+transport of its own, so its row has always had to be a DEPOSITION envelope
+that does the spreading itself — which is what `"cosine_pipe"`'s throw is, an
+end-state closure rather than an aperture. Selecting `"orifice"` hands the
+INJECTION row to the fluid channel in that deposition slot. The transport the
+kinetic engines would apply after first arrival is therefore absent, and the
+fluid model spreads an injection footprint rather than an end-state envelope.
+That is a deliberate closure choice — it puts the shaped initial fill, the
+equilibrated seed and the in-solver puff on one shape at one geometry — and the
+difference from `"cosine_pipe"` is a result to be reported, not an error. The
+beam's forward momentum is not represented either way: only the axial placement
+is affected, never the birth velocity distribution, which stays the
+wall-temperature convention described above.
+
 ## Decoupled two-channel neutral gas (`neutral_energy`)
 
 The neutral population in the column is bimodal. A cold bulk sits near the
