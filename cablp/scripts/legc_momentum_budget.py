@@ -73,6 +73,8 @@ FAMILIES = {
     "geometry (flux-tube area)": ["flux_tube_geometry"],
     "boundary / end sink (the structural candidate)": [
         "characteristic_boundary", "surface_loss", "boundary_absorption",
+        # anode_e_sheath_loss is deliberately absent: it is an energy-only
+        # row (Ee), so it contributes nothing to a momentum budget.
         "cathode_surface_loss", "anode_collection",
     ],
     "mass loading (ionization / recombination)": [

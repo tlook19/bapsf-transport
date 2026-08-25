@@ -136,9 +136,35 @@ class CathodeBoundaryState1D:
 
 @dataclass(frozen=True)
 class CathodeSourceTerms1D:
-    """Conservative cathode source placeholders and raw metadata."""
+    """Conservative electrode source rows and raw metadata.
+
+    The electrode electron sheath power is SPLIT BY ELECTRODE across two
+    conservative rows, which the solver registers under two names:
+
+    ``rhs`` (``cathode_surface_loss``)
+        The cathode's own members: the face's particle loss and its recycle
+        on ``n``/``nn``/``M``, those ions' thermal energy on ``Ei``, and the
+        CATHODE's electron sheath share on ``Ee`` -- ``P_cathode_e_thermal``
+        under the repaired routing, which is milliwatts in discharge because
+        the cathode sheath repels plasma electrons.
+    ``anode_rhs`` (``anode_e_sheath_loss``)
+        The ANODE electron sheath deposit, on ``Ee`` alone: every other field
+        is zero. ``P_anode_e_thermal`` plus, when ``anode_sheath_full_debit``
+        is armed and the anode is electron-repelling, the ``phi_a`` share --
+        landed at the anode-flanking cells under the Bohm split weights.
+
+    SUM INVARIANCE: ``rhs + anode_rhs`` is the single combined row this pair
+    replaces. Where an anode is resolved the two have DISJOINT per-cell
+    support, so the sum reproduces the pre-split row bit-exactly (every cell
+    of one row is an exact zero where the other is not). The one site where
+    they overlap is the no-resolved-anode fallback, which lands both shares
+    in the cathode cell; there the sum agrees to roundoff rather than
+    bit-exactly, because the power-to-density scaling is applied to each
+    share separately instead of to their sum.
+    """
 
     rhs: ConservativeState1D
+    anode_rhs: ConservativeState1D
     enabled: bool
     mode: str
     metadata: dict
@@ -2490,6 +2516,13 @@ def cathode_source_terms(
                 Ee=zeros.copy(),
                 Ei=zeros.copy(),
             ),
+            anode_rhs=ConservativeState1D(
+                n=zeros.copy(),
+                nn=zeros.copy(),
+                M=zeros.copy(),
+                Ee=zeros.copy(),
+                Ei=zeros.copy(),
+            ),
             enabled=boundary.enabled,
             mode=boundary.mode,
             metadata={
@@ -2537,56 +2570,86 @@ def cathode_source_terms(
     # P_anode_e at the anode mesh. Legacy has neither resolved, so both stay
     # colocated in its source cell exactly as before; resolved geometry lands each
     # at its own electrode.
-    electron_power_loss_W = zeros.copy()
+    # Split by ELECTRODE, one accumulator each. Where an anode is resolved
+    # these two never touch the same cell, which is what makes their sum
+    # bit-exactly the single row they replace.
+    cathode_power_loss_W = zeros.copy()
+    anode_power_loss_W = zeros.copy()
     cathode_cells = cathode_adjacent_cells(geometry)
     anode_pairs = anode_flanking_cells(geometry)
     # R3.2/A16: under the repaired boundary stance, route only the plasma-thermal
     # electron power to the plasma; the sheath-fall phi is booked on the electrode.
     thermal_only = bool(input_flags.get("characteristic_boundary", False))
+    # anode_sheath_full_debit: complete the anode side of that routing by
+    # charging the plasma electrons the sheath fall they climbed as well.
+    anode_full_debit = bool(
+        input_flags.get("anode_sheath_full_debit", False)
+    )
     if cathode_cells:
         _deposit_electrode_power(
-            electron_power_loss_W,
+            cathode_power_loss_W,
+            anode_power_loss_W,
             result=cathode_solve.beam_result.result,
             cathode_cell=int(cathode_cells[0]),
             anode_pair=anode_pairs[0] if anode_pairs else None,
             state=state,
             derived=derived,
             thermal_only=thermal_only,
+            anode_full_debit=anode_full_debit,
         )
         if (
             boundary.twin_cathode
             and cathode_solve.beam_result.result_twin is not None
         ):
             _deposit_electrode_power(
-                electron_power_loss_W,
+                cathode_power_loss_W,
+                anode_power_loss_W,
                 result=cathode_solve.beam_result.result_twin,
                 cathode_cell=int(cathode_cells[-1]),
                 anode_pair=anode_pairs[-1] if len(anode_pairs) > 1 else None,
                 state=state,
                 derived=derived,
                 thermal_only=thermal_only,
+                anode_full_debit=anode_full_debit,
             )
     else:
-        electron_power_loss_W[0] = _electron_power_loss_W(
-            cathode_solve.beam_result.result
-        )
+        # Unresolved geometry: the lumped model puts both electrodes in the
+        # boundary cell, and this branch keeps the HISTORICAL full P_*_e (it
+        # predates the thermal-only routing and is unaffected by it). The two
+        # shares are still booked to their own rows, so the split is complete
+        # here as well; the caveat is that they share a cell, so the summed
+        # density agrees to roundoff rather than bit-exactly.
+        result_source = cathode_solve.beam_result.result
+        cathode_power_loss_W[0] = result_source.P_cathode_e
+        anode_power_loss_W[0] = result_source.P_anode_e
         if (
             boundary.twin_cathode
             and cathode_solve.beam_result.result_twin is not None
         ):
-            electron_power_loss_W[-1] = _electron_power_loss_W(
-                cathode_solve.beam_result.result_twin
-            )
-    electron_power_loss_density = electron_power_loss_W * 1.0e7 / (
-        geometry.plasma_volume_cm3
-    )
+            result_twin = cathode_solve.beam_result.result_twin
+            cathode_power_loss_W[-1] = result_twin.P_cathode_e
+            anode_power_loss_W[-1] = result_twin.P_anode_e
+    volume_cm3 = geometry.plasma_volume_cm3
+    cathode_power_loss_density = cathode_power_loss_W * 1.0e7 / volume_cm3
+    anode_power_loss_density = anode_power_loss_W * 1.0e7 / volume_cm3
+    # Metadata keeps the COMBINED array under its historical name and meaning
+    # (both electrodes, per cell) and states each electrode's share beside it.
+    # This is a diagnostic, not the booking: the booking is the two rows.
+    electron_power_loss_W = cathode_power_loss_W + anode_power_loss_W
     return CathodeSourceTerms1D(
         rhs=ConservativeState1D(
             n=-plasma_loss_rate,
             nn=neutral_gain_rate,
             M=-ion_mass_g * derived.u * plasma_loss_rate,
-            Ee=-electron_power_loss_density,
+            Ee=-cathode_power_loss_density,
             Ei=-1.5 * ev_to_erg * derived.Ti * plasma_loss_rate,
+        ),
+        anode_rhs=ConservativeState1D(
+            n=zeros.copy(),
+            nn=zeros.copy(),
+            M=zeros.copy(),
+            Ee=-anode_power_loss_density,
+            Ei=zeros.copy(),
         ),
         enabled=boundary.enabled,
         mode=boundary.mode,
@@ -2602,6 +2665,8 @@ def cathode_source_terms(
             "electron_power_loss_W": electron_power_loss_W,
             "source_electron_power_loss_W": float(electron_power_loss_W[0]),
             "end_electron_power_loss_W": float(electron_power_loss_W[-1]),
+            "cathode_power_loss_W": cathode_power_loss_W,
+            "anode_power_loss_W": anode_power_loss_W,
         },
     )
 
@@ -3335,27 +3400,89 @@ def _cathode_particle_loss_rate(result, eta):
 
 
 def _deposit_electrode_power(
-    electron_power_loss_W, result, cathode_cell, anode_pair, state, derived,
-    thermal_only=False,
+    cathode_power_loss_W, anode_power_loss_W, result, cathode_cell, anode_pair,
+    state, derived, thermal_only=False, anode_full_debit=False,
 ):
-    """Land P_cathode_e at the cathode cell and P_anode_e at the anode mesh.
+    """Land P_cathode_e and P_anode_e in their OWN per-electrode accumulators.
+
+    ``cathode_power_loss_W`` receives the cathode's electron sheath power at
+    the cathode cell; ``anode_power_loss_W`` receives the anode's. They become
+    the ``Ee`` rows of ``cathode_surface_loss`` and ``anode_e_sheath_loss``
+    respectively, and nothing is added to both.
 
     The anode collects on both mesh faces, so its sheath power is split between
     the two flanking cells in proportion to each face's Bohm collection -- the
     same weighting ``anode_collection_rhs`` uses, so power and particles are
-    removed on the same side. With no resolved anode the whole of P_anode_e falls
-    back to the cathode cell, which is where the lumped model puts it.
+    removed on the same side.
+
+    WITH NO RESOLVED ANODE the whole of P_anode_e falls back to the CATHODE
+    CELL, which is where the lumped model puts it -- but it is still booked to
+    ``anode_power_loss_W``, so it appears in the ``anode_e_sheath_loss`` row at
+    that cell rather than being folded into the cathode's. The row name is
+    about which ELECTRODE paid, not about which cell it landed in; that is why
+    the anode row can be nonzero at the cathode cell, and it is the one
+    configuration in which the two rows share a cell.
 
     ``thermal_only`` (R3.2/A16 routing, the repaired stance): deposit only the
     PLASMA-THERMAL part (2Te per electron), leaving the sheath-fall ``phi`` on the
     electrode/circuit surface instead of removing it from the plasma thermal
     store. Off (the golden default) deposits the full historical P_*_e.
+
+    ``anode_full_debit`` (``anode_sheath_full_debit``): add the anode's
+    sheath-fall share ``phi_a * I_e_coll`` back onto the plasma electron
+    store, so the ANODE debit is the sheath-edge ``(2 Te + phi_a)`` per
+    collected electron while the cathode side keeps its ``thermal_only``
+    routing -- at the cathode the accelerated species is the ion, so the
+    electron fall there is not plasma-electron energy. ``I_e_coll`` is the
+    collected electron current ``I_i_a * fe_a``, and its ``phi_a`` moment is
+    the result's own ``P_anode_e_phi``, the complementary member of the R3.2
+    split, which rides exactly that flux. The increment is deposited under
+    the same split weights, so power and particles still leave on the same
+    side. Only the plasma store moves: no circuit or load-ledger quantity is
+    read or written here.
+
+    TWO REGIMES, both booked. ``phi_a > 0`` is the electron-REPELLING anode:
+    the collected electrons climbed the fall, the plasma paid for it, and the
+    increment above applies. ``phi_a <= 0`` is the electron-ATTRACTING anode
+    -- ``phi_a`` is solved as ``Lambda_anode - log(1 + J_anode / J_i_a)``, so
+    that is exactly the statement that the demanded anode electron current
+    has reached or passed electron saturation. There the field does work ON
+    the electrons and the BANK is the payer, so the plasma-side debit is the
+    thermal ``2 Te`` alone: NO increment is applied and the booking is the
+    unarmed one. That branch is not silent -- ``LAPDSim1D`` counts the
+    accepted steps that take it and records the last such time, and exposes
+    both on the cathode diagnostics of an armed run. A non-finite ``phi_a``
+    belongs to neither regime and raises.
+
+    Composition with ``thermal_only``: the two are armed together (the solver
+    refuses ``anode_sheath_full_debit`` without ``characteristic_boundary``),
+    so the repelling-regime anode deposit is
+    ``P_anode_e_thermal + P_anode_e_phi``. The unresolved-cathode fallback
+    below this function already deposits the full ``P_anode_e`` and so is
+    already on the corrected anode convention.
     """
     p_cathode_e = result.P_cathode_e_thermal if thermal_only else result.P_cathode_e
     p_anode_e = result.P_anode_e_thermal if thermal_only else result.P_anode_e
-    electron_power_loss_W[cathode_cell] += p_cathode_e
+    if anode_full_debit:
+        phi_a = float(result.phi_a)
+        if not np.isfinite(phi_a):
+            # Neither regime: a non-finite sheath potential cannot say who
+            # paid the fall, so there is nothing to book either way.
+            raise RuntimeError(
+                "anode_sheath_full_debit: non-finite anode sheath potential "
+                f"(phi_a={result.phi_a!r} V); neither the repelling nor the "
+                "attracting booking is defined there"
+            )
+        if phi_a > 0.0:
+            # REPELLING anode: phi_a * I_e_coll, the sheath-fall moment of the
+            # SAME collected electron flux the 2Te part rides.
+            p_anode_e = p_anode_e + result.P_anode_e_phi
+        # ATTRACTING anode (phi_a <= 0): the bank pays the fall, so the
+        # plasma-side debit stays thermal-only and p_anode_e is left exactly
+        # as the unarmed path built it. Counted by the caller, never printed.
+    cathode_power_loss_W[cathode_cell] += p_cathode_e
     if anode_pair is None:
-        electron_power_loss_W[cathode_cell] += p_anode_e
+        anode_power_loss_W[cathode_cell] += p_anode_e
         return
     gap_side, column_side = anode_pair
     # Bohm collection ~ n * c_s, and c_s ~ sqrt(Te/mu) with the same mu on both
@@ -3372,12 +3499,8 @@ def _deposit_electrode_power(
         weights = np.full(2, 0.5)
     else:
         weights = weights / total
-    electron_power_loss_W[gap_side] += weights[0] * p_anode_e
-    electron_power_loss_W[column_side] += weights[1] * p_anode_e
-
-
-def _electron_power_loss_W(result):
-    return result.P_cathode_e + result.P_anode_e
+    anode_power_loss_W[gap_side] += weights[0] * p_anode_e
+    anode_power_loss_W[column_side] += weights[1] * p_anode_e
 
 
 def _beam_event_profile(state, geometry, beam_result, event_cross, end=0):

@@ -936,6 +936,14 @@ CSDA + quasilinear deposition, circuit voltage bound on) at
 | `electron_neutral_cooling` | −2.152e4 | −2.438e4 |
 | `anode_collection` | 0 | −5.454e4 |
 
+> **Pre-split artifact.** These rows were measured before the electrode
+> electron sheath power was split by electrode, so `cathode_surface_loss`
+> here INCLUDES the anode electron sheath share — which dominates it. The
+> current code books that share separately as `anode_e_sheath_loss`, and
+> the presence of that key is what distinguishes the two artifact
+> generations; the numbers below are unchanged and remain the record of
+> what was measured.
+
 The two dominant sinks are **parallel heat conduction** and the **boundary
 losses** — each an order of magnitude larger than every local radiative
 channel. A purely per-cell balance cannot see conduction at all, so at the
@@ -1071,6 +1079,14 @@ fluid-arm background), by `scripts/regime_pb_balance_table.py`:
 | `ionization_energy_cost` | −5.512e4 | −6.080e4 |
 | `electron_neutral_cooling` | −2.153e4 | −2.438e4 |
 | `anode_collection` | 0 | −5.450e4 |
+
+> **Pre-split artifact.** These rows were measured before the electrode
+> electron sheath power was split by electrode, so `cathode_surface_loss`
+> here INCLUDES the anode electron sheath share — which dominates it. The
+> current code books that share separately as `anode_e_sheath_loss`, and
+> the presence of that key is what distinguishes the two artifact
+> generations; the numbers below are unchanged and remain the record of
+> what was measured.
 
 The kept remainder is now *smaller* than the local sinks rather than an order
 of magnitude above them, which is the whole of the repair. Conduction and the

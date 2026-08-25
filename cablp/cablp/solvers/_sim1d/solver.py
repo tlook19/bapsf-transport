@@ -282,6 +282,9 @@ _NEUTRAL_ENERGY_TERM_BOOKING = {
     "characteristic_boundary": "wall",
     "anode_collection": "wall",
     "cathode_surface_loss": "wall",
+    # The anode electron sheath row is energy only -- it moves no particles,
+    # so it has no neutrals to carry a birth temperature for.
+    "anode_e_sheath_loss": "none",
     "surface_loss": "wall",
     "neutral_probe_source": "wall",
     # --- recombination: born at the ion temperature ----------------------
@@ -1332,6 +1335,37 @@ class LAPDSim1D:
                 f"{_rates_at_accepted_state!r})"
             )
         self._rates_at_accepted_state = _rates_at_accepted_state
+        # Anode sheath-fall electron debit. A real bool is required for the
+        # same reason: the flag arms a ~10^2 kW plasma electron sink, and an
+        # int or a string smuggled in there would read like a value.
+        _anode_sheath_full_debit = self._flags.get(
+            "anode_sheath_full_debit", False
+        )
+        if not isinstance(_anode_sheath_full_debit, bool):
+            raise ValueError(
+                "anode_sheath_full_debit must be a bool (got "
+                f"{_anode_sheath_full_debit!r})"
+            )
+        if _anode_sheath_full_debit and not bool(
+            self._flags.get("characteristic_boundary", False)
+        ):
+            raise ValueError(
+                "anode_sheath_full_debit requires characteristic_boundary "
+                "(got characteristic_boundary="
+                f"{self._flags.get('characteristic_boundary', False)!r}): the "
+                "flag COMPLETES the thermal-only electrode routing by adding "
+                "the sheath-fall share back onto the plasma electron store, "
+                "and with that routing off the full P_anode_e "
+                "(2 Te + phi_a per collected electron) is already deposited, "
+                "so arming it would debit phi_a twice"
+            )
+        self._anode_sheath_full_debit = _anode_sheath_full_debit
+        # Census of the attracting-anode branch, advanced on ACCEPTED steps
+        # only (see _accept_step_attempt) and exposed on an armed run's
+        # cathode diagnostics. Initialised unconditionally so the attributes
+        # always exist; only an armed run ever moves them or saves them.
+        self._anode_attracting_steps = 0
+        self._anode_attracting_last_time_s = np.nan
 
     def _init_neutral_momentum_and_energy(self):
         """Arm the evolved neutral wind and its optional energy field.
@@ -4054,6 +4088,7 @@ class LAPDSim1D:
                 "surface_loss": self._zero_rhs_state(),
                 "anode_collection": self._zero_rhs_state(),
                 "cathode_surface_loss": self._zero_rhs_state(),
+                "anode_e_sheath_loss": self._zero_rhs_state(),
                 "neutral_exchange": self.neutral_exchange_rhs(state=state),
                 "neutral_sources": self.neutral_source_sink_rhs(
                     state=state,
@@ -4152,6 +4187,15 @@ class LAPDSim1D:
         # and the launch are one number; ``None`` leaves the boundary term on
         # its historical path, keyword for keyword.
         carrier_out = {} if self._cathode_jet_carrier else None
+        # The sheath-resolved electrode solve produces BOTH electrode rows in
+        # one call. Bound here rather than inline in the dict so the solve
+        # happens exactly once: calling it twice would pay for a second sheath
+        # solve and let the two rows come from different evaluations.
+        electrode_terms = self.cathode_source_terms(
+            state=state,
+            cathode_solve=cathode_solve,
+            time=time,
+        )
         terms = {
             **zone_terms,
             **probe_terms,
@@ -4221,11 +4265,30 @@ class LAPDSim1D:
             "anode_collection": self.anode_collection_rhs(
                 state=state, cathode_solve=cathode_solve, time=time
             ),
-            "cathode_surface_loss": self.cathode_source_terms(
-                state=state,
-                cathode_solve=cathode_solve,
-                time=time,
-            ).rhs,
+            # The electrode electron sheath power is booked PER ELECTRODE, in
+            # two rows, because one row cannot be named honestly: its Ee field
+            # was ~100% ANODE in discharge (the cathode sheath repels plasma
+            # electrons, so the cathode share is milliwatts against ~10^5 W)
+            # while its particle rows were entirely cathode surface physics.
+            #
+            # cathode_surface_loss -- the cathode's own members: the face's
+            # particle loss and recycle on n/nn/M, those ions' thermal energy
+            # on Ei, and the CATHODE electron sheath share on Ee.
+            "cathode_surface_loss": electrode_terms.rhs,
+            # anode_e_sheath_loss -- the ANODE electron sheath deposit, on Ee
+            # alone; every other field is zero. It lands at the anode-flanking
+            # cells under the Bohm split weights. WITH NO ANODE RESOLVED in
+            # the mesh the deposit falls back to the cathode CELL but is still
+            # booked to THIS row: the name says which electrode paid, not
+            # which cell received it.
+            #
+            # SUM INVARIANCE: these two sum to the single combined row they
+            # replace, bit-exactly wherever an anode is resolved (their
+            # per-cell supports are disjoint there, so every cell of one is an
+            # exact zero where the other is not, and adding an exact zero into
+            # the running total is exact). The unresolved-anode fallback is the
+            # one site where they share a cell and the sum agrees to roundoff.
+            "anode_e_sheath_loss": electrode_terms.anode_rhs,
             "neutral_exchange": self.neutral_exchange_rhs(state=state),
             "neutral_sources": self.neutral_source_sink_rhs(
                 state=state,
@@ -5309,6 +5372,21 @@ class LAPDSim1D:
                 self._dvm_advance(self._time - self._dvm_last_s)
         # Retain the accepted solve current for the measured-tail phase gate.
         solve = self._cathode_solve
+        if (
+            self._anode_sheath_full_debit
+            and solve is not None
+            and solve.beam_result is not None
+        ):
+            # anode_sheath_full_debit census. The flag's attracting-anode
+            # branch (phi_a <= 0: the bank pays the fall, so the plasma debit
+            # stays thermal-only) is loud by being COUNTED, not by printing.
+            # Counted here and nowhere else, so the census measures ACCEPTED
+            # steps: a rejected attempt never reaches this commit, and the
+            # per-stage RHS evaluations inside one step are not steps.
+            _phi_a = float(solve.beam_result.result.phi_a)
+            if np.isfinite(_phi_a) and _phi_a <= 0.0:
+                self._anode_attracting_steps += 1
+                self._anode_attracting_last_time_s = float(self._time)
         if solve is not None and solve.beam_result is not None:
             # Clamp the loop-current state to a generous physical ceiling
             # (~5x the dead-short bank current): the sheath solve has a
@@ -7067,14 +7145,17 @@ class LAPDSim1D:
                 time=time,
             ),
         )
-        rhs = add_state_rhs(
-            rhs,
-            self.cathode_source_terms(
-                state=state,
-                cathode_solve=cathode_solve,
-                time=time,
-            ).rhs,
+        # Both electrode rows, from ONE solve: the bound is over the applied
+        # row, and after the per-electrode split the applied electrode row is
+        # the pair. Their supports are disjoint wherever an anode is resolved,
+        # so adding them separately reproduces the pre-split single add exactly.
+        _electrode_terms = self.cathode_source_terms(
+            state=state,
+            cathode_solve=cathode_solve,
+            time=time,
         )
+        rhs = add_state_rhs(rhs, _electrode_terms.rhs)
+        rhs = add_state_rhs(rhs, _electrode_terms.anode_rhs)
         if self._beam_ionization_birth_timestep_bound:
             # The WHOLE applied row, per the applied-row convention: a bound
             # computed from a fraction of a row describes a term the step does
@@ -7714,6 +7795,7 @@ class LAPDSim1D:
                 self._input_dict.get("b_anode_collection", 1.0)
             ),
             anode_jet=self._anode_jet_spec(cathode_solve),
+            sheath_edge_energy=self._anode_sheath_full_debit,
         )
 
     def ion_neutral_drag_rhs(self, y=None, state=None):
@@ -10213,6 +10295,20 @@ class LAPDSim1D:
                         self._floors["nn"],
                     )
                 )
+            )
+        if self._anode_sheath_full_debit:
+            # anode_sheath_full_debit census, PRESENCE-GATED so an unarmed
+            # run's saved diagnostic structure -- the golden included -- is
+            # byte-identical to before the flag existed. Cumulative count of
+            # ACCEPTED steps whose sheath solve returned an electron-ATTRACTING
+            # anode (phi_a <= 0), where the flag books the thermal-only debit
+            # and the bank pays the fall, plus the solver time of the last such
+            # step (NaN while none has occurred). Both are as-of-this-save
+            # values, so an armed run's transcript can state how much of it
+            # took that branch and when it stopped.
+            diag["anode_attracting_steps"] = float(self._anode_attracting_steps)
+            diag["anode_attracting_last_time_s"] = float(
+                self._anode_attracting_last_time_s
             )
         for prefix in ("source", "end"):
             # Per-ray exit ledger [W]: power the anode mesh intercepts at the

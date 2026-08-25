@@ -935,6 +935,7 @@ def anode_collection_rhs(
     alpha_isat=np.exp(-0.5),
     b_anode_collection=1.0,
     anode_jet=None,
+    sheath_edge_energy=False,
 ):
     """Return the plasma the anode mesh collects and neutralizes.
 
@@ -984,6 +985,15 @@ def anode_collection_rhs(
     momentum is absorbed by the grounded anode structure rather than heating the
     ions. ``eta = 0`` gives a transparent anode -- the legacy limit -- and
     legacy geometry has no anode faces at all.
+
+    ``sheath_edge_energy`` (``anode_sheath_full_debit``): book the energy rows
+    at the sheath-edge values of the collected flux instead of the historical
+    3/2 T per species per pair. On the electron store that is ``Te/2`` per
+    collected ion -- the presheath work accelerating it to the Bohm speed --
+    because the collected ELECTRONS' own thermal transport is booked by the
+    electrode sheath term, not twice here; on the ion store it is ``5/2 Ti``,
+    the enthalpy flux (3/2 Ti internal plus the Ti of flow work) rather than
+    the internal energy alone.
     """
     zeros = np.zeros(geometry.cells, dtype=float)
     anode_faces = np.asarray(
@@ -1056,12 +1066,18 @@ def anode_collection_rhs(
     else:
         nn_gain = dN_loss / geometry.neutral_volume_cm3
         nn_a_gain = None
+    if sheath_edge_energy:
+        d_Ee = -0.5 * ev_to_erg * derived.Te * plasma_loss_rate
+        d_Ei = -2.5 * ev_to_erg * derived.Ti * plasma_loss_rate
+    else:
+        d_Ee = -1.5 * ev_to_erg * derived.Te * plasma_loss_rate
+        d_Ei = -1.5 * ev_to_erg * derived.Ti * plasma_loss_rate
     return ConservativeState1D(
         n=-plasma_loss_rate,
         nn=nn_gain,
         M=-ion_mass_g * derived.u * plasma_loss_rate,
-        Ee=-1.5 * ev_to_erg * derived.Te * plasma_loss_rate,
-        Ei=-1.5 * ev_to_erg * derived.Ti * plasma_loss_rate,
+        Ee=d_Ee,
+        Ei=d_Ei,
         M_n=None if state.M_n_a is not None else jet_M_n,
         nn_a=nn_a_gain,
         M_n_a=jet_M_n if state.M_n_a is not None else None,

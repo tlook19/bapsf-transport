@@ -43,6 +43,29 @@ def add_sim3_compat_aliases(result):
     The conservative result fields remain the source of truth.  Energy aliases
     are saved as W/cm^3 power-density diagnostics, not _sim3 primitive
     temperature-rate terms.
+
+    TWO ARTIFACT GENERATIONS, and the aliases below read both. The electrode
+    electron sheath power used to ride ONE row, ``cathode_surface_loss``,
+    whose Ee field carried BOTH electrodes and in discharge was ~100% anode.
+    It is now SPLIT: ``cathode_surface_loss`` keeps the cathode's own members
+    (face particle loss and recycle on n/nn/M, those ions' thermal energy on
+    Ei, and the cathode's electron sheath share on Ee) and the new
+    ``anode_e_sheath_loss`` carries the anode electron sheath deposit on Ee.
+
+    A file written BEFORE the split still has its ``cathode_surface_loss``
+    row, unchanged, with the WIDER pre-split content. That is a semantic
+    seam, not a rename: the combined row cannot be split after the fact in
+    general, because the no-resolved-anode fallback lands both shares in the
+    same cell and nothing in the saved row says how much was which. So the
+    old row is left exactly as written and is NOT remapped.
+
+    **How to tell the generations apart:** the presence of the
+    ``anode_e_sheath_loss`` key. A result that has it is post-split, and its
+    ``cathode_surface_loss`` is cathode-only; a result without it is
+    pre-split, and its ``cathode_surface_loss`` includes the anode share.
+    The aliases below are written to be correct either way -- they SUM the
+    pair, and ``_term_or_zeros`` contributes zero for the absent key -- so
+    ``Qeb`` means the same physical quantity in both generations.
     """
     result.ne = result.n
     result.v_plasma = result.u
@@ -100,7 +123,11 @@ def add_sim3_compat_aliases(result):
     result.Qeb = (
         _term_or_zeros(electron_terms, "beam_power_deposition", zeros)
         + _term_or_zeros(electron_terms, "beam_ionization_cost", zeros)
+        # The electrode electron sheath pair. Pre-split artifacts carry the
+        # whole of it in the first row and nothing in the second; post-split
+        # artifacts carry one electrode each. The sum is the same quantity.
         + _term_or_zeros(electron_terms, "cathode_surface_loss", zeros)
+        + _term_or_zeros(electron_terms, "anode_e_sheath_loss", zeros)
     )
     result.Qib = (
         _term_or_zeros(ion_terms, "surface_loss", zeros)

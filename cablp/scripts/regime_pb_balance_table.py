@@ -72,6 +72,7 @@ ROW_NAMES = (
     "heat_conduction",
     "plasma_advective_flux",
     "cathode_surface_loss",
+    "anode_e_sheath_loss",
     "ionization_energy_cost",
     "electron_neutral_cooling",
     "anode_collection",

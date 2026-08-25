@@ -104,9 +104,19 @@ CHANNEL_PHASE = {
          "afterglow and it vanishes at post_afterglow"),
     "cathode_surface_loss":
         ("DRIVE-ONLY",
-         "energy landed on the cathode surface by the sheath-resolved "
-         "cathode solve; alive while the inductive tail keeps loop current "
-         "flowing, zero once the solve is disabled"),
+         "the CATHODE half of the sheath-resolved electrode solve: the "
+         "cathode surface's particle, momentum and ion-thermal loss, plus "
+         "the cathode's own electron sheath power -- milliwatts in "
+         "discharge, because the cathode sheath repels plasma electrons. "
+         "NB on a PRE-SPLIT artifact this row also carries the anode "
+         "electron sheath share and is ~100% anode; the presence of "
+         "anode_e_sheath_loss tells the two generations apart"),
+    "anode_e_sheath_loss":
+        ("DRIVE-ONLY",
+         "the ANODE electron sheath deposit (Ee only), landed at the "
+         "anode-flanking cells under the Bohm split weights; this is the "
+         "~10^5 W channel that used to hide inside cathode_surface_loss. "
+         "Absent from pre-split artifacts"),
     "characteristic_boundary":
         ("BOTH",
          "energy leaving through the characteristic ghost-cell boundary at "
@@ -242,7 +252,11 @@ SELFTEST_REFERENCE = (
     ("cathode_jet_neutral_energy/En", 22.008, 4),
     ("warming_E_ion_J slope", 184.058, 4),
     ("beam_power_deposition/Ee", 322.3, 4),
-    ("cathode_surface_loss/Ee", -96.1, 3),
+    # The electrode electron sheath pair, summed: this reference predates the
+    # per-electrode split, so it must be read as the PAIR to stay comparable
+    # across both artifact generations (the second row is absent, and so
+    # contributes zero, on a pre-split artifact).
+    ("electrode e-sheath pair/Ee", -96.1, 3),
 )
 
 
@@ -553,8 +567,9 @@ def selftest(path):
                 counter_slope(dg, "warming_E_ion_J", i0, i1, dt_s) / 1e3,
             "beam_power_deposition/Ee":
                 table[("beam_power_deposition", "Ee")],
-            "cathode_surface_loss/Ee":
-                table[("cathode_surface_loss", "Ee")],
+            "electrode e-sheath pair/Ee":
+                table[("cathode_surface_loss", "Ee")]
+                + table.get(("anode_e_sheath_loss", "Ee"), 0.0),
         }
     print("=== SELFTEST: founding drive-window numbers of record ===")
     print(f"artifact : {path}")

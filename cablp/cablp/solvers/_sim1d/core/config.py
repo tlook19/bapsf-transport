@@ -3624,6 +3624,34 @@ input_flags_template_1d = {
     # anything else (0/1, a string) raises ValueError at construction.
     # Bit-exact when off.
     "rates_at_accepted_state": False,
+    # Anode sheath electron-energy booking, default OFF. Armed, the plasma
+    # electron store is debited (2 Te + phi_a) per electron the anode
+    # collects -- the sheath-edge energy flux of the truncated Maxwellian
+    # whose zeroth moment the sheath solve already closes on -- rather than
+    # the plasma-thermal 2 Te alone. The added phi_a * I_e_coll lands on the
+    # anode-flanking cells under the SAME Bohm split weights the thermal part
+    # uses, and the circuit/load ledger is untouched: the phi_a those
+    # electrons pay is the field energy the loop and the anode ions already
+    # book. It also re-cuts the anode mesh's own Bohm collection rows to
+    # their sheath-edge values -- Te/2 per collected ion on Ee (the presheath
+    # work; those electrons' thermal transport is carried by the sheath term)
+    # in place of 3/2 Te, and 5/2 Ti on Ei (the enthalpy flux) in place of
+    # 3/2 Ti. Requires ``characteristic_boundary``, whose thermal-only
+    # electrode routing this completes: with that routing off the full
+    # P_anode_e is already deposited and arming this would debit the fall
+    # twice, so the combination is a construction-time ValueError. TWO
+    # REGIMES, both booked: the increment above is the electron-REPELLING
+    # anode (phi_a > 0), where the collected electrons climbed the fall and
+    # the plasma paid; at an electron-ATTRACTING anode (phi_a <= 0 -- an
+    # anode demanding at or above electron saturation) the field does work ON
+    # the electrons, the BANK pays the fall, and the plasma-side debit stays
+    # the thermal-only 2 Te, so no increment is applied and the booking is
+    # the unarmed one. That branch is counted rather than silent: an armed
+    # run's cathode diagnostics carry ``anode_attracting_steps`` (accepted
+    # steps that took it, cumulative) and ``anode_attracting_last_time_s``.
+    # A non-finite phi_a belongs to neither regime and raises RuntimeError.
+    # Must be a real bool. Bit-exact when off.
+    "anode_sheath_full_debit": False,
     "ionization_energy_cost": True,
     "cx": True,
     "icool_recomb": False,
