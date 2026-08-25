@@ -696,6 +696,13 @@ with the hold-debt ledger that meters the neutral clock's cadence. The
 ionization and recombination rows are sources, not relaxations, and are not
 part of this target.
 
+The ionization row carries one further coupling statement: the count the plasma
+books is what the neutral arm actually destroys, so the two sides consume the
+same atoms by construction rather than by agreement of two rate formulas — and
+because charge exchange and elastic scattering return their atoms to the same
+cell within the tick, that count is measured against the inventory the cell
+holds *after* those returns (`NUMERICS.md` § "The counted ionization debit").
+
 
 ## Gas-puff axial placement (`gas_puff_profile`)
 
