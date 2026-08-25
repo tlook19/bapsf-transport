@@ -16922,6 +16922,59 @@ def _case_dt_min_lock(no_source_params):
     assert unknowable.below_dt_min_step_count == 0
     assert np.isnan(unknowable.below_dt_min_min_accepted_dt)
 
+    # (ii-c) A SAVE SNAP BELOW dt_min IS A CLAMP THE LOCK COUNTS.
+    # The 2026-08-24 defect. ``clamped_to_dt_min`` is computed inside
+    # suggest_timestep from the RAW candidate minimum, before the caps; a
+    # save-cadence snap below dt_min is therefore invisible to it, the lock
+    # counter RESETS on every such step, and the accepted sub-dt_min step then
+    # anchors the dt-growth ramp -- so a run whose every step is set by the
+    # ramp re-approaching from a sub-dt_min snap can crawl indefinitely with
+    # dt_min_lock_max_steps never firing. The accepted-dt signal is what
+    # closes it, and the two flags must stay DISTINCT: this run sets the new
+    # one on every step and the old one on none.
+    snap_params = dict(dtlock_params)
+    snap_params["dt_min"] = 1.0e-10
+    snap_params["dt_max"] = 1.0e-9
+    snap_params["dt_save"] = 2.0e-11
+    snap_params["dt_min_lock_max_steps"] = 250000
+    snap_sim = LAPDSim1D(snap_params, dtlock_flags)
+    snap_result = snap_sim.run(t_end=3.0e-10)
+    assert snap_result.steps >= 6, snap_result.steps
+    for snap_diag in snap_result.diagnostics:
+        # An output-cadence snap on every step (the final one coincides with
+        # t_end, which caps it under that name instead).
+        assert snap_diag.step_cap in ("save_time", "t_end"), snap_diag.step_cap
+        # The raw bound never asked for less than dt_min ...
+        assert snap_diag.dt_raw >= snap_params["dt_min"], snap_diag.dt_raw
+        assert snap_diag.clamped_to_dt_min == 0.0
+        # ... and yet the ACCEPTED step is below it, on every step.
+        assert snap_diag.accepted_dt < snap_params["dt_min"]
+        assert snap_diag.clamped_to_dt_min_accepted == 1.0
+    # And it is what the lock counts: the same run raises once the threshold
+    # is small enough to be crossed, on the accepted-dt signal alone.
+    snap_lock_params = dict(snap_params, dt_min_lock_max_steps=5)
+    snap_locked = LAPDSim1D(snap_lock_params, dtlock_flags)
+    try:
+        snap_locked.run(t_end=3.0e-10)
+    except RuntimeError as error:
+        snap_message = str(error)
+        assert "dt_min lock" in snap_message
+        assert "6 consecutive steps" in snap_message
+        assert "ACCEPTED step at dt_min" in snap_message, snap_message
+        assert "'save_time'" in snap_message, snap_message
+    else:
+        raise AssertionError(
+            "dt_min lock did not fire on accepted sub-dt_min save snaps"
+        )
+    # The round trip carries the new flag.
+    with tempfile.TemporaryDirectory() as snap_dir:
+        snap_path = Path(snap_dir) / "snap.h5"
+        snap_sim.save_result(snap_path, snap_result)
+        snap_loaded = load_result_hdf5(snap_path)
+        assert [
+            diag.clamped_to_dt_min_accepted for diag in snap_loaded.diagnostics
+        ] == [1.0] * snap_result.steps
+
     # (iii) PAST THE THRESHOLD IT RAISES, LOUDLY AND WITH THE EVIDENCE.
     lock_params = dict(transient_params)
     locked_sim = _ForcedClampSim(lock_params, dtlock_flags, clamp_steps=40)

@@ -238,6 +238,13 @@ DT_REJECT_FACTOR = 0.5
 #: ``core/config.py``.
 SURFACE_LOSS_FLOOR_EXEMPT_RTOL = 1e-3
 
+#: Relative slack [dimensionless] on the "the accepted step IS dt_min" test the
+#: dt_min lock counts. The accepted dt reaches dt_min through a clamp, so the
+#: comparison is against a value that has been through the caps and the retry
+#: ladder; the slack keeps a last-bit difference from reading as "above the
+#: floor" while staying far below any step a physics bound would set.
+_DT_MIN_ACCEPTED_RTOL = 1e-9
+
 
 #: What energy each named RHS term's neutral-density row carries, under the
 #: ``neutral_energy`` flag. This table is the disclosure: every term in the
@@ -6118,6 +6125,9 @@ class LAPDSim1D:
         steps = 0
         max_steps_stopped = False
         consecutive_dt_min_clamps = 0
+        # The floor the accepted-dt clamp signal below is measured against --
+        # the same value suggest_timestep clamps its raw candidate minimum to.
+        dt_min = float(self._input_dict.get("dt_min", 1e-12))
         # Presence gate for the wall-clock/step-count non-ignition guards: with
         # both caps off nothing below is evaluated and no clock is read.
         ignition_budget_guards = (
@@ -6167,21 +6177,6 @@ class LAPDSim1D:
                     else self._flags.get("implicit_heat_conduction", False)
                 )
             )
-            # dt_min lock guard. Only an ADAPTIVE step can be locked: with a
-            # caller-supplied dt the clamp does not set the step, so a fixed-dt
-            # run cannot crawl and is not counted. Consecutiveness is the
-            # discriminator -- self-releasing clamp episodes are a known-good
-            # family (see scripts/dtmin_census_runlengths.txt) and must not
-            # abort, while a genuine lock never releases.
-            if dt is None and diag.clamped_to_dt_min:
-                consecutive_dt_min_clamps += 1
-                if consecutive_dt_min_clamps > self._dt_min_lock_max_steps:
-                    raise self._dt_min_lock_error(
-                        diag=diag,
-                        consecutive=consecutive_dt_min_clamps,
-                    )
-            else:
-                consecutive_dt_min_clamps = 0
             step_dt = diag.dt if dt is None else float(dt)
             step_cap = diag.active_constraint if dt is None else "fixed_dt"
             if dt is None and dt_growth_enabled and previous_accepted_dt is not None:
@@ -6269,15 +6264,56 @@ class LAPDSim1D:
                 else:
                     dt_growth_capped_streak = 0
             previous_accepted_dt = float(attempt.dt)
+            # dt_min lock guard. Only an ADAPTIVE step can be locked: with a
+            # caller-supplied dt the clamp does not set the step, so a fixed-dt
+            # run cannot crawl and is not counted. Consecutiveness is the
+            # discriminator -- self-releasing clamp episodes are a known-good
+            # family (see scripts/dtmin_census_runlengths.txt) and must not
+            # abort, while a genuine lock never releases.
+            #
+            # The signal is the ACCEPTED dt, not the raw candidate minimum
+            # alone. ``suggest_timestep`` computes ``clamped_to_dt_min`` before
+            # the output-cadence, phase-boundary, t_end and dt_growth caps and
+            # before the retry ladder, any of which can carry the accepted step
+            # below dt_min while no candidate asked for less than dt_min -- and
+            # that accepted sub-dt_min step then anchors the growth ramp, so
+            # the ramp (not a physics bound) sets every step of the grind that
+            # follows and the raw flag never fires. Counting the accepted dt
+            # closes that hole; the raw flag is still recorded, unchanged, as
+            # its own diagnostic field.
+            #
+            # The second half of the test is what keeps it a CLAMP rather than
+            # a step count: the raw minimum must be strictly above dt_min, so
+            # the step was pushed under the floor by a CAP and by nothing else.
+            # A run configured with dt_max at dt_min accepts dt_min on every
+            # step by construction and is not grinding; where the raw minimum
+            # is itself at or below dt_min the raw flag already owns the step.
+            accepted_clamped = bool(
+                dt is None
+                and float(attempt.dt) <= dt_min * (1.0 + _DT_MIN_ACCEPTED_RTOL)
+                and diag.dt_raw > dt_min * (1.0 + _DT_MIN_ACCEPTED_RTOL)
+            )
+            if dt is None and (diag.clamped_to_dt_min or accepted_clamped):
+                consecutive_dt_min_clamps += 1
+            else:
+                consecutive_dt_min_clamps = 0
             step_diag = replace(
                 diag,
                 accepted_dt=float(attempt.dt),
+                clamped_to_dt_min_accepted=float(accepted_clamped),
                 step_cap=step_cap,
                 retry_count=int(retry_count),
                 rejection_reason=rejection_reason,
             )
             diagnostics.append(step_diag)
             steps += 1
+            if consecutive_dt_min_clamps > self._dt_min_lock_max_steps:
+                # After the step is recorded, so the diagnostics carry the
+                # step whose acceptance tripped the lock.
+                raise self._dt_min_lock_error(
+                    diag=step_diag,
+                    consecutive=consecutive_dt_min_clamps,
+                )
             if should_save(self._time):
                 saved.append(self._trajectory_snapshot(self._time))
                 t_last_save = self._time
@@ -6340,18 +6376,32 @@ class LAPDSim1D:
     def _dt_min_lock_error(self, diag, consecutive):
         """Return the RuntimeError for a run stuck at dt_min.
 
-        Names the true minimizing bound (not "dt_min"), what it asked for, and
-        the cell closest to the density floor -- the drained floor-pinned cell
-        that makes ``_negative_margin_timestep`` return exactly zero.
+        Names the true minimizing bound (not "dt_min"), WHICH of the two clamp
+        signals counted (the raw candidate minimum, or an accepted step at the
+        floor that no candidate asked for -- a ramp-capped grind), what the
+        bound asked for, and the cell closest to the density floor: the drained
+        floor-pinned cell that makes ``_negative_margin_timestep`` return
+        exactly zero.
         """
         n = np.asarray(self.state.n, dtype=float)
         n_floor = float(self._floors["n"])
         cell = int(np.argmin(n - n_floor))
+        signals = []
+        if diag.clamped_to_dt_min:
+            signals.append("raw candidate minimum below dt_min")
+        if diag.clamped_to_dt_min_accepted:
+            signals.append(
+                "ACCEPTED step at dt_min after the caps/retries "
+                f"(accepted_dt={diag.accepted_dt:.9e} s, "
+                f"step_cap={diag.step_cap!r})"
+            )
         return RuntimeError(
             f"dt_min lock: the timestep was clamped up to dt_min on "
             f"{consecutive} consecutive steps, exceeding "
             f"dt_min_lock_max_steps={self._dt_min_lock_max_steps}, at "
-            f"t={self._time:.9e} s (phase={diag.phase!r}). The true active "
+            f"t={self._time:.9e} s (phase={diag.phase!r}). Clamp signal on "
+            f"the tripping step: {'; '.join(signals) or 'none'}. "
+            f"The true active "
             f"constraint is {diag.active_constraint!r}, asking for "
             f"dt_raw={diag.dt_raw:.9e} s against dt_min={diag.dt:.9e} s. "
             f"Cell closest to the density floor: index {cell}, "

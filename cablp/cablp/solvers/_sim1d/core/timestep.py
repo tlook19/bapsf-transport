@@ -74,6 +74,18 @@ class TimestepDiagnostics:
     # run whose state carries no En.
     dt_neutral_energy: float = np.inf
     accepted_dt: float = np.nan
+    # The dt_min clamp as a fact about the ACCEPTED step, which is a different
+    # statement from ``clamped_to_dt_min`` above. That flag is computed from
+    # the raw candidate minimum alone; the caps applied after it (dt_growth,
+    # t_end, phase_boundary, save_time) and the retry ladder can each carry
+    # the accepted dt BELOW dt_min while no candidate asked for less than
+    # dt_min, so the two disagree exactly in the case the dt_min lock exists
+    # to catch: a grind whose steps are set by the growth ramp re-approaching
+    # from a sub-dt_min snap rather than by a physics bound. Set only when the
+    # raw minimum is STRICTLY ABOVE dt_min, so it names a step a cap pushed
+    # under the floor and never a run configured with dt_max at dt_min.
+    # 0.0/1.0, the float-flag idiom; defaulted so pre-existing results load.
+    clamped_to_dt_min_accepted: float = 0.0
     step_cap: str = ""
     retry_count: int = 0
     rejection_reason: str = ""

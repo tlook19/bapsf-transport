@@ -372,6 +372,31 @@ episodes that release on their own are a normal, known-good family. Saved
 files from before this date carry the old overwriting semantics and are not
 migrated (see `results/io.py`).
 
+**The lock counts the ACCEPTED step, not only the raw candidate minimum**
+(2026-08-24). `clamped_to_dt_min` is computed inside `suggest_timestep`, i.e.
+*before* the run loop's caps (`dt_growth`, `t_end`, `phase_boundary`,
+`save_time`) and before the retry ladder, every one of which can only shrink
+the step. So an accepted step can land at or below `dt_min` while no candidate
+ever asked for less than `dt_min` — the raw flag stays clear, the consecutive
+counter RESETS, and that accepted sub-`dt_min` step becomes
+`previous_accepted_dt`, which anchors the ×`dt_growth_factor` ramp. Every step
+of the grind that follows is then set by the ramp re-approaching from below,
+not by a physics bound, and `dt_min_lock_max_steps` never fires. (Measured:
+the g1atrim `kinetic_dvm` arm of 2026-08-24 spent 184,475 of its 200,000 steps
+after t = 12.0 ms, 162,055 of them capped by `dt_growth`, with an accepted dt
+as low as 3.05e-12 against `dt_min` = 1e-10 — and no lock.) The counter is
+therefore driven by `clamped_to_dt_min OR (accepted_dt <= dt_min AND dt_raw >
+dt_min)`, evaluated after acceptance; the second conjunct is what keeps it a
+clamp rather than a step count — the step must have been pushed under the
+floor by a *cap*, so a run configured with `dt_max` at `dt_min` (which accepts
+`dt_min` every step by construction) is not counted, and a step whose raw
+minimum is itself below `dt_min` is already owned by the raw flag. Both facts
+are recorded, the raw one in `clamped_to_dt_min` and the new one in
+`clamped_to_dt_min_accepted`, and the lock's error message names which signal
+fired. The step SEQUENCE is unchanged — the snap still
+lands on the save time, and the trajectory of any run that does not trip the
+lock is bit-identical.
+
 ## Step acceptance and rejection
 
 The solver attempts a candidate step without committing state
