@@ -132,6 +132,23 @@ T_STAR_MS_ALLOWED = (T_STAR_MS_DEFAULT, T_STAR_MS_DOUBLED)
 # fit is formed from. The tick-count reading is SUPERSEDED BY THE AMENDMENT
 # and survives only under an explicitly named --sampling, so the numbers on
 # the record stay reproducible.
+#: Per-arm CAPTURE SCHEMA, written into every banked npz's meta and reported
+#: in the table. It versions what the per-tick capture CONTAINS, which is a
+#: different question from which sampling the table reads (that is
+#: ``SAMPLING_REGISTERED``). Growth is additive: every key an older schema
+#: wrote is still written, with the same dtype, so a npz banked at an earlier
+#: schema stays readable and only the rows it never carried are unavailable.
+#:
+#:   1  the 24bd common-t capture: per-tick nn, nn_a, nn_midport, the booked
+#:      CUMULATIVE Ei/M, Tn, Ti, Te.
+#:   2  adds the rows nu_E cannot be reconstructed without -- per-tick plasma
+#:      ``n`` and ``Ei``, the tick's FROZEN booked Ei RATE per cell (the
+#:      cumulative rows cannot give it: they are integrals over unequal
+#:      ticks), and, from the exponential transfer hold, the per-cell hold
+#:      debt and nu_E * cadence. So ``nu_E = |booked Ei| / Ei`` and the hold's
+#:      own stability parameter are both readable from a banked arm.
+CAPTURE_SCHEMA = 2
+
 SAMPLING_REGISTERED = "common-t"
 SAMPLING_SUPERSEDED = "tick-count"
 SAMPLING_MODES = (SAMPLING_REGISTERED, SAMPLING_SUPERSEDED)
@@ -358,6 +375,36 @@ def bracket_index(tick_time, t_target):
     return i, (float(t_target) - t0) / (t1 - t0)
 
 
+def sampled_nu_e_cadence(meta, arrays):
+    """Return max over cells of ``nu_E * cadence`` at the sampled time.
+
+    ``None`` on an arm banked before ``CAPTURE_SCHEMA`` 2, which did not
+    carry the row -- reported as such rather than as a reassuring zero. Under
+    the registered common-t sampling the row is interpolated onto the same
+    absolute t* every other observable is; under the superseded tick-count
+    sampling it is the arm's own last tick.
+    """
+    key = "tickobs_nu_E_cadence"
+    if key not in arrays:
+        return None
+    series = np.asarray(arrays[key], dtype=float)
+    weight = meta.get("_sample_weight")
+    if weight is None:
+        row = series[-1]
+    else:
+        index, _ = bracket_index(arrays["tick_time"], meta["_t_sample"])
+        row = (1.0 - weight) * series[index - 1] + weight * series[index]
+    return float(np.max(np.abs(np.asarray(row, dtype=float))))
+
+
+def _nu_e_cell(meta):
+    value = meta.get("_nu_e_cadence")
+    if value is None:
+        return f"n/a (capture schema {meta['capture_schema']} < {CAPTURE_SCHEMA})"
+    marker = " **unstable under zoh**" if value > 2.0 else ""
+    return f"{value:.4g}{marker}"
+
+
 def magnitude(u, kind):
     """Scale of an observable row, for the NV2 zero-at-roundoff test."""
     if kind == "scalar":
@@ -383,6 +430,25 @@ def observables(sim):
         "Tn_col_eV": np.asarray(dvm.Tn_col_eV, dtype=float).copy(),
         "Ti": np.asarray(derived.Ti, dtype=float).copy(),
         "Te": np.asarray(derived.Te, dtype=float).copy(),
+        # --- CAPTURE_SCHEMA 2. Everything above is unchanged, in name, order
+        # and dtype; everything below is what a banked arm needed and did not
+        # have. nu_E = |booked Ei rate| / Ei is not reconstructible from the
+        # rows above at any schema: the CUMULATIVE booked rows are integrals
+        # over unequal ticks, and neither n nor Ei was captured at all.
+        "n": np.asarray(state.n, dtype=float).copy(),
+        "Ei": np.asarray(state.Ei, dtype=float).copy(),
+        "Ei_booked_rate": np.asarray(dvm.Ei_transfer, dtype=float).copy(),
+        "M_booked_rate": np.asarray(dvm.M_transfer, dtype=float).copy(),
+        "Ei_hold_debt": np.asarray(dvm.Ei_hold_debt, dtype=float).copy(),
+        "M_hold_debt": np.asarray(dvm.M_hold_debt, dtype=float).copy(),
+        # The transfer hold's own stability parameter, per cell: the pair
+        # collision frequency the tick booked, times the neutral cadence.
+        # Above ~2 the superseded zero-order hold is unstable, so this is the
+        # number that says whether a cadence rung was resolving the coupling
+        # or fighting it (NUMERICS.md, "The DVM transfer hold").
+        "nu_E_cadence": (
+            np.asarray(dvm.nu_pair, dtype=float) * float(sim._dvm_cadence_s)
+        ).copy(),
     }
 
 
@@ -650,6 +716,7 @@ def save_arm(path, record, arrays, sanity, t_star_ms):
     meta = dict(record)
     meta["sanity"] = bool(sanity)
     meta["t_star_ms"] = float(t_star_ms)
+    meta["capture_schema"] = int(CAPTURE_SCHEMA)
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     np.savez(path, meta=np.array(json.dumps(meta)), **arrays)
@@ -661,6 +728,9 @@ def load_arm(path):
     meta = json.loads(str(data["meta"]))
     arrays = {k: data[k] for k in data.files if k != "meta"}
     meta["_path"] = str(path)
+    # A npz written before the marker existed is schema 1 by definition: it
+    # carries the 24bd per-tick capture and nothing added since.
+    meta.setdefault("capture_schema", 1)
     return meta, arrays
 
 
@@ -911,6 +981,7 @@ def evaluate(arm_records, out_path=None, sampling=SAMPLING_REGISTERED):
                 meta["_obsprev"] = {k: arrays[f"obsprev_{k}"] for k in keys
                                     if f"obsprev_{k}" in arrays}
         meta["_arrays"] = arrays
+        meta["_nu_e_cadence"] = sampled_nu_e_cadence(meta, arrays)
         arms[name] = meta
 
     if not arms:
@@ -963,6 +1034,15 @@ def evaluate(arm_records, out_path=None, sampling=SAMPLING_REGISTERED):
                  f"(z = {MID_PORT_CELL_Z_CM} cm), from "
                  "`compare_sim1d_es1`'s port map |")
     lines.append(f"| suite roundoff | ROUNDOFF_REL = {ROUNDOFF_REL:g} |")
+    schemas = sorted({int(a["capture_schema"]) for a in arms.values()})
+    lines.append(
+        f"| capture schema | banked arms carry {schemas}; this harness banks "
+        f"{CAPTURE_SCHEMA}. Schema 2 adds the per-tick plasma `n` and `Ei`, "
+        "the tick's frozen booked Ei RATE per cell, the per-cell hold debt "
+        "and `nu_E * cadence`, so `nu_E` is reconstructible from a banked "
+        "arm. Arms below schema 2 report `n/a` in the `nu_E` column -- "
+        "re-run them to fill it |"
+    )
     tn_fb = {bool(a["tn_feedback"]) for a in arms.values()}
     lines.append(
         f"| Tn feedback | `neutral_kinetic_dvm_tn_feedback` = "
@@ -977,9 +1057,10 @@ def evaluate(arm_records, out_path=None, sampling=SAMPLING_REGISTERED):
     lines.append(
         "| arm | ladders | cadence nominal [s] | cadence effective [s] | "
         "dev | h_k used [s] | nvz | nvp | N_k done/req | steps | "
-        "t_engage [s] | last tick [s] | sample t [s] | interp w | status |"
+        "t_engage [s] | last tick [s] | sample t [s] | interp w | "
+        "max_cell(nu_E*cadence) at t* | capture schema | status |"
     )
-    lines.append("|---" * 15 + "|")
+    lines.append("|---" * 17 + "|")
     for name in sorted(arms, key=lambda n: (-arms[n]["cadence_nominal_s"],
                                             arms[n]["nvz"])):
         a = arms[name]
@@ -999,7 +1080,8 @@ def evaluate(arm_records, out_path=None, sampling=SAMPLING_REGISTERED):
             f"{eff:.6g} | {dev:.2%} | {a['_h']:.6g} | {a['nvz']} | "
             f"{a['nvp']} | {a['n_updates_done']}/{a['n_updates_requested']} | "
             f"{a['steps']} | {a['t_engage_s']:.10g} | {a['t_star_s']:.10g} | "
-            f"{a['_t_sample']:.10g} | {w_cell} | {a['status']} |"
+            f"{a['_t_sample']:.10g} | {w_cell} | {_nu_e_cell(a)} | "
+            f"{a['capture_schema']} | {a['status']} |"
         )
     lines.append("")
     if registered:
