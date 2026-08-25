@@ -10,6 +10,7 @@ from scipy.optimize import brentq
 from cablp.funcs._beam_deposition import (
     deposit_beam,
     deposit_beam_two_stream,
+    plateau_edge_energy_eV,
     BeamDepositionResult,
     _coulomb_stopping_coefficient,
 )
@@ -196,6 +197,16 @@ class CathodeSolve1D:
     # deficit equation needs the two debits separately. ``None`` whenever the
     # closure is off or ``f_cov == 1`` (no second medium).
     beam_reservoir_deposition: dict | None = None
+    # Per-end ``(E_1 [eV], clamp)`` plateau edge of the multi-group closure
+    # (``heating_anomalous_transport="plateau_multigroup"``), ``None`` under
+    # every other value so an unarmed solve carries exactly the fields it
+    # always did. ``E_1`` is solved per EXTRACTION -- it is a property of the
+    # sheath drop and the launch cell's own Maxwellian, shared by that end's
+    # deposition ray and both halves of a clumping split -- and ``clamp`` is
+    # ``-1`` on the frames where the solve hit the inelastic floor and was
+    # clamped to it (never silent: this is what the solver's clamp census
+    # counts).
+    beam_plateau_edge: dict | None = None
 
 
 def anode_circuit_sample(state, derived, geometry, mu, input_dict, end=0):
@@ -1360,11 +1371,13 @@ def solve_cathode_boundary(
     beam_deposition = None
     beam_gap_ledger = None
     beam_reservoir_deposition = None
+    beam_plateau_edge = None
     if str(input_dict.get("beam_deposition_model", "beer_lambert")) == "csda":
         (
             beam_deposition,
             beam_gap_ledger,
             beam_reservoir_deposition,
+            beam_plateau_edge,
         ) = _csda_beam_deposition(
             beam_result=beam_result,
             state=state,
@@ -1404,6 +1417,7 @@ def solve_cathode_boundary(
         beam_deposition=beam_deposition,
         beam_gap_ledger=beam_gap_ledger,
         beam_reservoir_deposition=beam_reservoir_deposition,
+        beam_plateau_edge=beam_plateau_edge,
     )
 
 
@@ -1481,6 +1495,13 @@ def _sum_beam_deposition(a, b):
             float(a.tail_above_bar_power_erg_s)
             + float(b.tail_above_bar_power_erg_s)
         ),
+        # Multi-group wave/bulk share: both rays split the SAME extraction's
+        # plateau at the same edge (the split varies nn alone), so their
+        # locally-banked wave powers add like every other per-ray bank.
+        plateau_wave_power_erg_s=(
+            float(a.plateau_wave_power_erg_s)
+            + float(b.plateau_wave_power_erg_s)
+        ),
     )
 
 
@@ -1551,7 +1572,8 @@ def _csda_beam_deposition(
 ):
     """Run the CSDA module for each active cathode ray (B2 wiring).
 
-    Returns ``(deposition, gap_ledger, reservoir_deposition)``.
+    Returns
+    ``(deposition, gap_ledger, reservoir_deposition, plateau_edge)``.
     ``deposition`` is ``{0: BeamDepositionResult | None, -1: ...}`` and is the
     SUM over the media the beam was split across; ``gap_ledger`` maps each
     end with an active ray to ``(probe, ray, circuit, ceiling)`` gap survival
@@ -1718,6 +1740,11 @@ def _csda_beam_deposition(
     anomalous_transport = str(
         input_dict.get("heating_anomalous_transport", "local")
     )
+    # The multi-group plateau closure derives its birth spectrum, so the
+    # single-line keying block below does not run for it and the per-ray loop
+    # solves the plateau edge instead. The solver refused the inert keying
+    # keys at construction, so nothing here has to decide what to do with one.
+    multigroup = anomalous_transport == "plateau_multigroup"
     # pd1 branched disposal. It walks the Landau share of the same bank the
     # tail walk walks whole, so it engages the SAME tail machinery below and
     # the block's condition is "is the tail walked at all", not "is transport
@@ -1743,18 +1770,23 @@ def _csda_beam_deposition(
             transport_kwargs["anomalous_transport"] = anomalous_transport
         # Read ONLY when the tail is walked (the keys are inert otherwise, by
         # design); the solver validated them at construction time.
-        tail_keying = str(
-            input_dict.get("heating_anomalous_tail_energy_keying", "phi_c")
-        )
-        if tail_keying == "fixed":
-            transport_kwargs["tail_energy_eV"] = float(
-                input_dict.get("heating_anomalous_tail_energy_eV", 75.0)
+        if not multigroup:
+            tail_keying = str(
+                input_dict.get(
+                    "heating_anomalous_tail_energy_keying", "phi_c"
+                )
             )
-        else:
-            _phi_frac = input_dict.get(
-                "heating_anomalous_tail_phi_c_fraction", None
-            )
-            tail_phi_fraction = 0.25 if _phi_frac is None else float(_phi_frac)
+            if tail_keying == "fixed":
+                transport_kwargs["tail_energy_eV"] = float(
+                    input_dict.get("heating_anomalous_tail_energy_eV", 75.0)
+                )
+            else:
+                _phi_frac = input_dict.get(
+                    "heating_anomalous_tail_phi_c_fraction", None
+                )
+                tail_phi_fraction = (
+                    0.25 if _phi_frac is None else float(_phi_frac)
+                )
         # K6: presence-gated inside the tail_walk branch, because the module
         # refuses the combination the solver has already refused at
         # construction. Passed only when ON, so a tail_walk run without it
@@ -1828,6 +1860,9 @@ def _csda_beam_deposition(
     deposition = {}
     gap_ledger = {}
     reservoir_deposition = {} if two_medium else None
+    # Presence-gated: ``None`` under every value but the multi-group plateau,
+    # so an unarmed solve's result carries exactly the fields it always did.
+    plateau_edge = {} if multigroup else None
     ends = (0, -1) if twin else (0,)
     for end in ends:
         result = beam_result.result if end == 0 else beam_result.result_twin
@@ -1856,8 +1891,27 @@ def _csda_beam_deposition(
         # neither correction is engaged, so the legacy arms pass the identical
         # object they always did.
         ray_transport = transport_kwargs
-        if tail_keying != "fixed" or tail_reflect:
+        if tail_keying != "fixed" or tail_reflect or multigroup:
             ray_transport = dict(transport_kwargs)
+            if multigroup:
+                # THE PLATEAU EDGE, solved once per EXTRACTION (this ray's own
+                # sheath drop, this ray's own launch cell, the whole emitted
+                # flux): the flat plateau's level is the launch cell's
+                # Maxwellian at the edge and the flat band must carry the
+                # emitted beam's number flux, which is one equation with one
+                # root. Solved here rather than inside the deposition module
+                # so a clumping split -- which varies nn alone and is NOT two
+                # extractions -- shares the one edge its one solve produced,
+                # and so the clamp census has a single per-solve entry to
+                # count.
+                _E1, _clamp = plateau_edge_energy_eV(
+                    float(phi_c_ray),
+                    Gamma0 / float(geometry.plasma_area_cm2[launch]),
+                    float(ray_ne[launch]),
+                    float(derived.Te[launch]),
+                )
+                ray_transport["plateau_edge_eV"] = _E1
+                plateau_edge[end] = (_E1, _clamp)
             if tail_keying != "fixed":
                 ray_transport["tail_energy_eV"] = (
                     tail_phi_fraction * float(phi_c_ray)
@@ -2228,7 +2282,7 @@ def _csda_beam_deposition(
             ),
             _compute_beam_bypass_fraction(l_bi, L_cath),
         )
-    return deposition, gap_ledger, reservoir_deposition
+    return deposition, gap_ledger, reservoir_deposition, plateau_edge
 
 
 def _ray_gap_breakout(dep, gap_dz, launch, direction):

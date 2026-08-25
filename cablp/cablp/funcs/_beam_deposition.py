@@ -451,6 +451,84 @@ slowing along the column is neglected in ``v_phi``.
 **Not available under the two-stream (coverage) march**, which refuses it: see
 :func:`deposit_beam_two_stream`.
 
+The plateau's two heirs (``anomalous_transport="plateau_multigroup"``)
+----------------------------------------------------------------------
+
+Every value above carries the extracted power at ONE energy: ``"local"`` at
+none (it is bulk heat), ``"tail_walk"`` and the branch at a single
+``E_tail``. The quasilinear plateau is not one energy. In the flux frame the
+relaxed distribution is FLAT over the resonant velocity band, so the tail the
+wave leaves behind carries a flat differential FLUX ``dGamma/dE`` and
+therefore a differential POWER ``dP/dE`` proportional to ``E``, running from
+the plateau edge ``E_1`` up to the beam energy ``E_b = e*phi_c``. That
+spectrum has two heirs, and a single-energy closure can only ever be one of
+them:
+
+* the STREAMING share, the electrons above the plateau edge, which leave the
+  extraction region and deposit wherever their own range takes them;
+* the WAVE/BULK share, the part of the extracted power that the plateau hands
+  back to the bulk where it was driven.
+
+Their sizes follow from the flat plateau alone, with nothing fitted. Matching
+the plateau level to the launch cell's own Maxwellian at the edge --
+
+    F_M(v_1) = m * j_b / ((E_b - E_1) * erg),    j_b = I_eth* / (e * A_cell)
+
+with ``F_M`` the 1D-reduced Maxwellian of the launch cell and ``j_b`` the
+emitted beam number flux -- fixes ``E_1`` as a STATE-DEPENDENT quantity,
+solved by bisection at every extraction solve (see
+:func:`plateau_edge_energy_eV`; it is monotone, so the root is unique). The
+mean energy of a ``dP/dE ~ E`` spectrum over ``[E_1, E_b]`` then splits the
+bank as
+
+    streaming share = (E_b + E_1) / (2 E_b),
+    wave/bulk share = (E_b - E_1) / (2 E_b).
+
+The wave share is banked as local bulk heat in the extraction cells, exactly
+the bank ``"local"`` fills and the same one the pd1 branch's collisional share
+returns to. The streaming share is split into ``N`` EQUAL-POWER groups whose
+edges are uniform in ``E^2``,
+
+    E_i = sqrt(E_1^2 + (i/N) (E_b^2 - E_1^2)),   i = 0 .. N,
+
+so ``w_i = (E_i+1^2 - E_i^2)/(E_b^2 - E_1^2) = 1/N`` by construction, and the
+same edges are uniform in the CLASSICAL RANGE (which goes as ``E^2``) -- one
+edge set that is simultaneously equal-power and equal-reach. Each group is
+represented by the arithmetic midpoint ``Ehat_i = (E_i + E_i+1)/2`` and
+launched at ``gamma_i = (P_stream/N) / (e * Ehat_i)``, then marched by the
+EXISTING walk machinery at its own ``Ehat_i``: same 50/50 +-B split, same
+reflection convention, same ionization channel, same tail end ledger. No walk
+physics is added -- only ``N`` populations where there was one.
+``PLATEAU_GROUP_COUNT`` is the shipped ``N = 8``.
+
+The range law is UNCHANGED (classical Coulomb): the He inelastic channel is a
+sub-percent correction to the column stopping over this band, so nothing about
+the range map is re-derived for the groups.
+
+Conservation is the same identity in the same FORM, because the wave share is
+booked into ``heating_anomalous_erg_s`` alongside the walked groups::
+
+    P_bank = sum_i (walked + cost + radiated + endloss)_i + P_wave
+
+``tail_power_erg_s`` keeps its documented meaning -- the power actually
+LAUNCHED as walkers -- so under this value it reports the STREAMING share, and
+``plateau_wave_power_erg_s`` reports the other one, the two summing to the
+withheld ``P_QL``. The edge ``E_1`` and its clamp census belong to the
+EXTRACTION SOLVE rather than to one ray, so the solver carries them (see
+``solvers._sim1d.physics.cathode``): the edge is a state-dependent solve, and
+a run that spends frames on the clamp is running a different spectrum from one
+that does not, so both must be readable per frame rather than assumed.
+
+What this REPLACES: the single-line tail closure's two dials. Under this value
+``heating_anomalous_tail_energy_eV``, the ``f`` fraction and the keying
+selector are all INERT -- the birth spectrum is derived, not dialled -- so the
+solver refuses them explicitly rather than ignoring them.
+
+**Not available under the two-stream (coverage) march**, for the same reason
+the pd1 branch is not: the withholding bank is shared between the channel and
+reservoir arms and the reservoir carries the density FLOOR, so a plateau edge
+solved on it would be an artifact of the floor convention.
+
 Sheath reflection at a walk-window face (``tail_reflect_face``, K7)
 -------------------------------------------------------------------
 
@@ -541,6 +619,22 @@ _LANDAU_DAMPING_COEFF = math.sqrt(math.pi / 8.0)
 # The declared anomalous-closure family. A bracket, not a default plus
 # alternatives: a result states which arm produced it.
 ANOMALOUS_MODELS = ("none", "quasilinear", "ql_relaxation")
+
+#: Number of equal-power groups the plateau's streaming share is split into
+#: under ``anomalous_transport="plateau_multigroup"``. Not a config key and
+#: not a knob: the band functionals the closure exists to produce converge to
+#: 0.39% at this value, so it is a RESOLUTION of the derived spectrum rather
+#: than a parameter of it. Exposed as the ``plateau_groups`` argument of
+#: :func:`deposit_beam` so a convergence read can vary it without a config
+#: dial existing for a campaign run to move.
+PLATEAU_GROUP_COUNT = 8
+
+#: Bisection budget for the plateau-edge solve (:func:`plateau_edge_energy_eV`).
+#: A fixed iteration count, so the solve is deterministic and reproducible
+#: rather than tolerance-and-machine dependent. 200 halvings take any bracket
+#: this model can pose (<= ~1e4 eV) below the double-precision spacing of its
+#: own endpoints many times over, so the loop is exact-to-representation.
+PLATEAU_EDGE_BISECTIONS = 200
 
 # He first ionization potential [eV], the module's STANDALONE default for the
 # ``I_ion_eV`` argument. Every solver path passes ``I_ion_eV`` explicitly from
@@ -990,6 +1084,167 @@ def ql_relaxation_stopping_eV_per_cm(
     return ql_trapped_fraction(ne, n_b) * E_eV / L_rel
 
 
+def _tail_band(E_walk_eV, I_ion_eV, E_stop_eV, label):
+    """K7b band treatment for ONE walker energy: ``(ionize, sub, above)``.
+
+    The two depth-1 bars are COMPUTED from the thresholds themselves, and each
+    selects a treatment rather than refusing (module docstring, K7b):
+
+    * at or below ``E_stop_eV`` no He inelastic channel is open, so the
+      ionizing march REVERTS to the energy-only walk -- exact physics, not a
+      fallback, and bit-identical to what ``tail_ionization="off"`` would do;
+    * above the ``<W_sec>`` crossing the march RUNS under the depth-1
+      truncation, whose understatement is measured (<= 2.0%) and reported;
+    * above the tabulated He EII edge it RAISES -- there the lookup clamps to
+      its last node and the walk would attenuate on an extrapolated cross
+      section. The edge itself is INCLUSIVE within ``HE_EII_EDGE_REL_TOL``
+      (K7c): AT the edge the clamped value IS the table's endpoint, so nothing
+      is extrapolated and there is nothing to refuse.
+
+    ``label`` names the caller's quantity in that refusal, so a single-energy
+    ray blames ``tail_energy_eV`` and a plateau group blames its own midpoint.
+    """
+    _E_table_top = HE_EII_EPS_TOP * I_ion_eV
+    _edge_excess = (E_walk_eV - _E_table_top) / _E_table_top
+    if _edge_excess > HE_EII_EDGE_REL_TOL:
+        raise ValueError(
+            "tail_ionization='on' marches the walkers on the tabulated "
+            "He EII cross section, which ends at eps = E/I_ion = "
+            f"{HE_EII_EPS_TOP:.6f} (i.e. "
+            f"{_E_table_top:.2f} eV at I_ion_eV={I_ion_eV}); "
+            f"at {label}={E_walk_eV} eV the lookup would clamp to its "
+            "last node and the walk would attenuate on an extrapolated "
+            "cross section. This is refused, not approximated (relative "
+            f"excess {_edge_excess:.3e}, tolerated "
+            f"{HE_EII_EDGE_REL_TOL:.1e})"
+        )
+    if E_walk_eV <= E_stop_eV:
+        return False, True, False
+    if he_mean_secondary_energy_eV(E_walk_eV, I_ion_eV=I_ion_eV) >= E_stop_eV:
+        return True, False, True
+    return True, False, False
+
+
+def plateau_edge_energy_eV(
+    E_b_eV: float,
+    beam_flux_per_cm2_s: float,
+    ne: float,
+    Te_eV: float,
+    E_stop_eV: float = HE_E_STOP_EV,
+) -> tuple[float, int]:
+    """Solve the quasilinear plateau EDGE ``E_1`` [eV]; ``(E_1, clamp)``.
+
+    The relaxed distribution is flat in velocity from the plateau edge up to
+    the beam, so its level is the launch cell's own Maxwellian evaluated AT
+    the edge, and the flat band must carry the emitted beam's number flux.
+    Those two statements are one equation,
+
+        F_M(v_1) = m * j_b / ((E_b - E_1) * erg)
+
+    with ``F_M(v) = ne sqrt(m / (2 pi Te)) exp(-m v^2 / 2 Te)`` the 1D-reduced
+    Maxwellian (``Te`` in erg), ``v_1 = sqrt(2 E_1 / m)``, ``E_b = e*phi_c``
+    the beam energy and ``j_b`` the emitted beam NUMBER flux
+    ``I_eth* / (e A_cell)`` [1/cm^2/s]. The left side falls monotonically in
+    ``E_1`` and the right side rises monotonically to ``+inf`` at ``E_b``, so
+    the root is unique and bisection cannot land on the wrong one.
+
+    ``clamp`` is ``0`` when the root was bracketed, and ``-1`` when it sits at
+    or below ``E_stop_eV`` and the edge was clamped up to that floor. There is
+    no ``+1``: the right side diverges at ``E_b``, so no root can exceed it.
+    The clamp is reported rather than swallowed because ``E_1`` is a
+    STATE-DEPENDENT solve -- a run that spends frames on the floor is running
+    a different spectrum from one that does not, and that has to be visible in
+    the diagnostics instead of inferred.
+
+    Raises when the state cannot pose the question: a non-positive or
+    non-finite ``E_b``/``Te``/``ne``, a non-positive flux, or ``E_b`` at or
+    below ``E_stop_eV`` (there is no band to split).
+    """
+    E_b = float(E_b_eV)
+    Te = float(Te_eV)
+    n_e = float(ne)
+    j_b = float(beam_flux_per_cm2_s)
+    E_stop = float(E_stop_eV)
+    if not (math.isfinite(E_b) and E_b > E_stop):
+        raise ValueError(
+            "plateau_edge_energy_eV needs a beam energy above the inelastic "
+            f"floor E_stop_eV={E_stop} (got E_b_eV={E_b_eV!r}): below it the "
+            "plateau has no band to split"
+        )
+    if not (math.isfinite(Te) and Te > 0.0):
+        raise ValueError(
+            f"plateau_edge_energy_eV needs a finite Te > 0 (got {Te_eV!r})"
+        )
+    if not (math.isfinite(n_e) and n_e > 0.0):
+        raise ValueError(
+            f"plateau_edge_energy_eV needs a finite ne > 0 (got {ne!r})"
+        )
+    if not (math.isfinite(j_b) and j_b > 0.0):
+        raise ValueError(
+            "plateau_edge_energy_eV needs a finite beam flux > 0 (got "
+            f"{beam_flux_per_cm2_s!r})"
+        )
+    # Both sides in LOGS: F_M underflows to 0.0 for any edge more than a few
+    # hundred Te above the bulk, which is the whole interesting range, and a
+    # residual formed on the underflowed value would be flat and the bisection
+    # would return the bracket midpoint rather than the root.
+    ln_level = (
+        math.log(n_e)
+        + 0.5 * math.log(_ME_CGS / (2.0 * math.pi * Te * _ERG_PER_EV))
+    )
+    ln_demand = math.log(_ME_CGS * j_b / _ERG_PER_EV)
+
+    def _residual(E1):
+        # ln F_M(v_1) - ln[ m j_b / ((E_b - E_1) erg) ], strictly decreasing.
+        gap = E_b - E1
+        if gap <= 0.0:
+            return -math.inf
+        return (ln_level - E1 / Te) - (ln_demand - math.log(gap))
+
+    if _residual(E_stop) <= 0.0:
+        # The Maxwellian is already below the level the plateau would need at
+        # the floor: the edge the equation asks for sits inside the bulk,
+        # where this closure's flat-plateau picture does not hold. Clamped to
+        # the floor and COUNTED.
+        return E_stop, -1
+    lo, hi = E_stop, E_b
+    for _ in range(PLATEAU_EDGE_BISECTIONS):
+        mid = 0.5 * (lo + hi)
+        if mid <= lo or mid >= hi:
+            break
+        if _residual(mid) > 0.0:
+            lo = mid
+        else:
+            hi = mid
+    return lo, 0
+
+
+def plateau_group_edges_eV(E_1_eV: float, E_b_eV: float, groups: int):
+    """``(edges, midpoints)`` of the equal-power plateau groups [eV].
+
+    Edges uniform in ``E^2`` -- ``E_i = sqrt(E_1^2 + (i/N)(E_b^2 - E_1^2))``,
+    ``i = 0 .. N`` -- which makes each group carry exactly ``1/N`` of the
+    streaming power (``dP/dE ~ E``) AND span an equal interval of the
+    classical range (which goes as ``E^2``). The representative energy is the
+    arithmetic midpoint of each group's two edges.
+
+    Returned as two arrays of length ``groups + 1`` and ``groups``.
+    """
+    N = int(groups)
+    if N < 1:
+        raise ValueError(f"plateau group count must be >= 1 (got {groups!r})")
+    E_1 = float(E_1_eV)
+    E_b = float(E_b_eV)
+    if not (math.isfinite(E_1) and math.isfinite(E_b) and 0.0 < E_1 < E_b):
+        raise ValueError(
+            "plateau group edges need 0 < E_1 < E_b (got "
+            f"E_1={E_1_eV!r}, E_b={E_b_eV!r})"
+        )
+    i = np.arange(N + 1, dtype=float)
+    edges = np.sqrt(E_1 * E_1 + (i / N) * (E_b * E_b - E_1 * E_1))
+    return edges, 0.5 * (edges[:-1] + edges[1:])
+
+
 @dataclass(frozen=True)
 class BeamDepositionResult:
     """Per-cell deposition of one beam ray; arrays have shape (cells,).
@@ -1106,6 +1361,20 @@ class BeamDepositionResult:
                           marched ABOVE the depth-1 ``<W_sec>`` bar [erg/s],
                           i.e. under the <= 2.0% cascade understatement. Same
                           status and same all-or-nothing structure.
+    plateau_wave_power_erg_s: MULTI-GROUP -- the WAVE/BULK share of the
+                          withheld ``P_QL``, banked as local bulk heat in the
+                          extraction cells [erg/s]. Identically 0.0 unless
+                          ``anomalous_transport="plateau_multigroup"``. It is
+                          already inside ``plasma_heating_erg_s`` and
+                          ``heating_anomalous_erg_s`` (it IS the anomalous
+                          channel's local delivery); this reports it apart so
+                          the derived split of the bank -- ``tail_power_erg_s``
+                          streaming, this wave -- is readable per frame.
+
+    The plateau EDGE itself is deliberately NOT a field here: it is a property
+    of the extraction solve rather than of one ray (both ends' rays and both
+    halves of a clumping split share one edge), so the solver carries it and
+    its clamp census on the cathode solve instead -- one home for one fact.
 
     The four ``*_tail`` arrays are bookkeeping, exactly like the four
     ``heating_*`` splits: they re-report a SUBSET of banks the shared arrays
@@ -1141,6 +1410,7 @@ class BeamDepositionResult:
     tail_power_erg_s: float = 0.0
     tail_sub_threshold_power_erg_s: float = 0.0
     tail_above_bar_power_erg_s: float = 0.0
+    plateau_wave_power_erg_s: float = 0.0
 
 
 def deposit_beam(
@@ -1170,6 +1440,8 @@ def deposit_beam(
     tail_walk_window: tuple[int, int] | None = None,
     tail_reflect_face: int | None = None,
     tail_reflect_threshold_eV: float | None = None,
+    plateau_edge_eV: float | None = None,
+    plateau_groups: int = PLATEAU_GROUP_COUNT,
     stopping_coefficient: np.ndarray | None = None,
 ) -> BeamDepositionResult:
     """Deposit one monoenergetic beam ray through the column (He only).
@@ -1227,7 +1499,8 @@ def deposit_beam(
     wall charge; this function books no charge anywhere.
 
     **QL heating locality (WP-E).** ``anomalous_transport`` is ``"local"``
-    (default) or ``"tail_walk"``; see the module docstring for the physics.
+    (default), ``"tail_walk"`` or ``"plateau_multigroup"``; see the module
+    docstring for the physics.
     Off, no branch below changes and the result is byte-for-byte the
     historical one with ``end_loss_tail_*`` identically zero. On, the
     anomalous channel's power is withheld from its birth cell, re-expressed as
@@ -1248,16 +1521,34 @@ def deposit_beam(
     it, the rest is banked locally exactly as ``"local"`` banks all of it. See
     the module docstring. It needs everything the walk needs
     (``anomalous_model`` active, ``tail_energy_eV``) and is REFUSED together
-    with ``anomalous_transport="tail_walk"``, which is its ``f_Landau ≡ 1``
-    corner -- both settings claim the same bank, so naming both states two
-    dispositions for one quantity.
+    with any non-``"local"`` ``anomalous_transport`` (``"tail_walk"`` is its
+    ``f_Landau ≡ 1`` corner) -- both settings claim the same bank, so naming
+    both states two dispositions for one quantity.
+
+    **Multi-group plateau.** ``anomalous_transport="plateau_multigroup"``
+    replaces the single birth energy with the plateau's own DERIVED spectrum
+    (module docstring). It needs ``plateau_edge_eV``, the edge ``E_1`` solved
+    for THIS extraction by :func:`plateau_edge_energy_eV` -- a state-dependent
+    quantity with deliberately no default, and one this function does not
+    solve itself because the edge belongs to the extraction rather than to a
+    ray (both ends and both halves of a clumping split share one). It must lie
+    strictly below the launch energy ``E0_eV``, which is the band's top.
+    ``plateau_groups`` is the group count ``N`` (default
+    ``PLATEAU_GROUP_COUNT``); it is an argument rather than a config key so a
+    convergence read can vary the RESOLUTION of the derived spectrum without a
+    dial existing that a campaign run could tune. ``tail_energy_eV`` is INERT
+    here and is REFUSED rather than ignored, as is ``plateau_edge_eV`` under
+    any other value. The wave/bulk share is banked locally and reported in
+    ``plateau_wave_power_erg_s``; ``tail_power_erg_s`` then carries the
+    streaming share alone, and the two sum to the withheld ``P_QL``.
 
     **Tail ionization (K6).** ``tail_ionization`` is ``"off"`` (default,
     bit-exact -- the walk stays energy-only) or ``"on"``, which marches each
     tail population on this module's own CSDA integration so it ionizes and
     excites the column gas on its way; see the module docstring. Requires
     ``anomalous_transport="tail_walk"`` (there is no other walk to give the
-    channel to) and ``tail_walk_window=(lo, hi)``, the inclusive cell range the
+    channel to; ``"plateau_multigroup"`` gives it to every group) and
+    ``tail_walk_window=(lo, hi)``, the inclusive cell range the
     walkers may traverse; see the module docstring for why the window has no
     safe default. Both are ValueErrors, not silent adjustments.
 
@@ -1312,10 +1603,12 @@ def deposit_beam(
             f"unknown product_transport {product_transport!r}; "
             "expected 'local', 'nonlocal' or 'terminal_nonlocal'"
         )
-    if anomalous_transport not in ("local", "tail_walk"):
+    if anomalous_transport not in (
+        "local", "tail_walk", "plateau_multigroup"
+    ):
         raise ValueError(
             f"unknown anomalous_transport {anomalous_transport!r}; "
-            "expected 'local' or 'tail_walk'"
+            "expected 'local', 'tail_walk' or 'plateau_multigroup'"
         )
     if anomalous_disposal not in ("local", "landau_branched"):
         raise ValueError(
@@ -1334,20 +1627,23 @@ def deposit_beam(
             "anomalous_transport='local'"
         )
     branch_tail = anomalous_disposal == "landau_branched"
+    multigroup = anomalous_transport == "plateau_multigroup"
     if tail_ionization not in ("off", "on"):
         raise ValueError(
             f"unknown tail_ionization {tail_ionization!r}; "
             "expected 'off' or 'on'"
         )
     if tail_ionization == "on" and not (
-        anomalous_transport == "tail_walk" or branch_tail
+        anomalous_transport == "tail_walk" or branch_tail or multigroup
     ):
         raise ValueError(
             "tail_ionization='on' requires walkers to give the channel to: "
-            "anomalous_transport='tail_walk' or "
+            "anomalous_transport='tail_walk', "
+            "anomalous_transport='plateau_multigroup' or "
             "anomalous_disposal='landau_branched' (with both 'local' there "
             "are no walkers and the setting would do nothing). "
-            "anomalous_transport accepts 'local' or 'tail_walk'; "
+            "anomalous_transport accepts 'local', 'tail_walk' or "
+            "'plateau_multigroup'; "
             "anomalous_disposal accepts 'local' or 'landau_branched'; "
             "tail_ionization accepts 'off' or 'on'"
         )
@@ -1407,12 +1703,18 @@ def deposit_beam(
     # tail walk does -- it only scales it per cell between the march and the
     # walk -- so it enters the march in the tail walk's own configuration and
     # every requirement the walk states applies to it verbatim.
-    walk_tail = anomalous_transport == "tail_walk" or branch_tail
+    walk_tail = (
+        anomalous_transport == "tail_walk" or branch_tail or multigroup
+    )
     _tail_sel = (
         "anomalous_disposal='landau_branched'" if branch_tail
+        else "anomalous_transport='plateau_multigroup'" if multigroup
         else "anomalous_transport='tail_walk'"
     )
     E_tail = 0.0
+    E_plateau_1 = 0.0
+    plateau_edges = plateau_midpoints = None
+    plateau_stream_share = plateau_wave_share = 0.0
     if walk_tail:
         # There must BE an anomalous channel for the walk to carry; without one
         # the setting is a silent no-op, which is exactly what the presence
@@ -1425,6 +1727,48 @@ def deposit_beam(
                 "drag there is no power to carry and the setting would do "
                 "nothing"
             )
+    if multigroup:
+        # The birth spectrum is DERIVED (module docstring), so the single-line
+        # rung is not merely unused here -- it is a different closure, and
+        # accepting it would let a caller name a birth energy that nothing
+        # reads. Refused rather than ignored.
+        if tail_energy_eV is not None:
+            raise ValueError(
+                "anomalous_transport='plateau_multigroup' derives the birth "
+                "spectrum from the plateau itself, so tail_energy_eV is inert "
+                f"under it (got {tail_energy_eV!r}); drop it, or select "
+                "anomalous_transport='tail_walk' to launch at one energy"
+            )
+        if plateau_edge_eV is None:
+            raise ValueError(
+                "anomalous_transport='plateau_multigroup' needs "
+                "plateau_edge_eV, the plateau edge E_1 solved for THIS "
+                "extraction (funcs._beam_deposition.plateau_edge_energy_eV); "
+                "it is a state-dependent solve on the launch cell's own "
+                "Maxwellian and the emitted beam flux, and there is "
+                "deliberately no default for it"
+            )
+        E_plateau_1 = float(plateau_edge_eV)
+        if not math.isfinite(E_plateau_1) or E_plateau_1 <= 0.0:
+            raise ValueError(
+                "plateau_edge_eV must be finite and > 0 (got "
+                f"{plateau_edge_eV})"
+            )
+        if not E_plateau_1 < E0_eV:
+            raise ValueError(
+                f"plateau_edge_eV={E_plateau_1} must lie strictly below the "
+                f"beam energy E_b={E0_eV} eV: the streaming band is "
+                "[E_1, E_b] and at or above E_b there is no band"
+            )
+        plateau_edges, plateau_midpoints = plateau_group_edges_eV(
+            E_plateau_1, float(E0_eV), plateau_groups
+        )
+        # The two heirs of a dP/dE ~ E plateau over [E_1, E_b]; they sum to 1
+        # by construction, which is the statement that no eV of the withheld
+        # bank is created or dropped by the split.
+        plateau_stream_share = (float(E0_eV) + E_plateau_1) / (2.0 * float(E0_eV))
+        plateau_wave_share = (float(E0_eV) - E_plateau_1) / (2.0 * float(E0_eV))
+    elif walk_tail:
         if tail_energy_eV is None:
             raise ValueError(
                 f"{_tail_sel} needs tail_energy_eV (the "
@@ -1436,6 +1780,13 @@ def deposit_beam(
                 "tail_energy_eV must be finite and > 0 (got "
                 f"{tail_energy_eV})"
             )
+    elif plateau_edge_eV is not None:
+        raise ValueError(
+            "plateau_edge_eV was given without "
+            "anomalous_transport='plateau_multigroup'; the edge belongs to "
+            "the multi-group plateau closure and on its own would silently "
+            "do nothing"
+        )
     ionize_tail = tail_ionization == "on"
     # K7b band diagnostics for THIS ray. ``tail_sub_threshold`` means the
     # requested channel was reverted to the energy-only walk because E_tail
@@ -1443,6 +1794,9 @@ def deposit_beam(
     # means it marched with the depth-1 truncation past the <W_sec> crossing.
     # At most one can be true (E_tail is one number per ray) and both are
     # false in band, which is what makes the in-band path provably untouched.
+    # Under the multi-group plateau these are the POWER-WEIGHTED shares of the
+    # launched bank instead, because the ray launches several energies and
+    # each group is banded on its own -- see the walk stage below.
     tail_sub_threshold = False
     tail_above_bar = False
     # K7 sheath reflection. The face and its threshold are one setting: a face
@@ -1530,52 +1884,16 @@ def deposit_beam(
                 f"with 0 <= lo <= hi < cells={cells} (got "
                 f"{tail_walk_window})"
             )
-        # --- The K7b band split (module docstring) -----------------------
-        # The two depth-1 bars are still COMPUTED from the thresholds
-        # themselves, but each now selects a treatment instead of refusing.
-        # BELOW E_stop the march reverts to the energy-only walk -- exact
-        # physics, no inelastic channel is open -- and ABOVE the <W_sec>
-        # crossing the march runs with the depth-1 truncation and its measured
-        # understatement. The ONE surviving refusal is the EII table edge:
-        # there the lookup would clamp to its last node and the walk would be
-        # marching on an extrapolated cross section.
-        # The edge itself is INCLUSIVE, within HE_EII_EDGE_REL_TOL (K7c): AT
-        # the edge the clamped cross section IS the table's endpoint value, so
-        # no extrapolation happens and there is nothing to refuse. Only a
-        # genuine excess -- more than the tolerance above the edge -- is
-        # refused, and the message reports the measured excess so a refusal
-        # can be told apart from float noise at a glance.
-        _E_table_top = HE_EII_EPS_TOP * I_ion_eV
-        _edge_excess = (E_tail - _E_table_top) / _E_table_top
-        if _edge_excess > HE_EII_EDGE_REL_TOL:
-            raise ValueError(
-                "tail_ionization='on' marches the walkers on the tabulated "
-                "He EII cross section, which ends at eps = E/I_ion = "
-                f"{HE_EII_EPS_TOP:.6f} (i.e. "
-                f"{_E_table_top:.2f} eV at I_ion_eV={I_ion_eV}); "
-                f"at tail_energy_eV={E_tail} eV the lookup would clamp to its "
-                "last node and the walk would attenuate on an extrapolated "
-                "cross section. This is refused, not approximated (relative "
-                f"excess {_edge_excess:.3e}, tolerated "
-                f"{HE_EII_EDGE_REL_TOL:.1e})"
+        # --- The K7b band split (see ``_tail_band``) ----------------------
+        # One walker energy per ray under the single-line closures, so the
+        # ray's whole tail power lands in one band. The multi-group plateau
+        # launches several energies from one ray, so ITS bands are decided
+        # per group in the walk stage below and the two flags become
+        # power-weighted shares there.
+        if not multigroup:
+            ionize_tail, tail_sub_threshold, tail_above_bar = _tail_band(
+                E_tail, I_ion_eV, E_stop_eV, "tail_energy_eV"
             )
-        if E_tail <= E_stop_eV:
-            # SUB-THRESHOLD: no He inelastic channel is open, so zero
-            # ionization is not a modeling choice but the answer. Revert this
-            # ray to the energy-only walk by clearing the flag -- the branches
-            # below then take the identical path, on the identical floats,
-            # that ``tail_ionization="off"`` would take for this same call.
-            tail_sub_threshold = True
-            ionize_tail = False
-        elif (
-            he_mean_secondary_energy_eV(E_tail, I_ion_eV=I_ion_eV)
-            >= E_stop_eV
-        ):
-            # ABOVE THE DEPTH-1 BAR: the mean secondary can itself do
-            # something inelastic, so banking it locally UNDERSTATES the
-            # cascade. Allowed, with the understatement measured (<= 2.0% at
-            # f = 1.0, module docstring) and the exposure reported.
-            tail_above_bar = True
     if stopping_coefficient is not None:
         stopping_coefficient = np.asarray(stopping_coefficient, dtype=float)
         if stopping_coefficient.shape != (cells,):
@@ -1651,6 +1969,10 @@ def deposit_beam(
     tail_power = 0.0
     tail_sub_threshold_power = 0.0
     tail_above_bar_power = 0.0
+    # MULTI-GROUP: the wave/bulk heir of the withheld bank [erg/s]. Reported
+    # apart from the streaming heir ``tail_power`` even though it is already
+    # inside the heating banks, so the derived split is readable per frame.
+    plateau_wave_power = 0.0
     if walk_tail:
         anom_power_eV = np.zeros(cells)
 
@@ -2002,6 +2324,27 @@ def deposit_beam(
         heating += local_anom_erg
         heat_anomalous += local_anom_erg
         anom_power_eV *= f_landau
+    elif multigroup:
+        # --- The plateau's two heirs (module docstring) -------------------
+        # Structurally the pd1 branch's sibling and in the same place: the
+        # march withheld ALL of the anomalous power, and this is where the
+        # withheld bank is divided between a share that stays and a share that
+        # streams. The difference is WHY -- the split here is the mean energy
+        # of the derived dP/dE ~ E plateau over [E_1, E_b], not a local
+        # damping ratio -- and that it is ONE number per ray rather than a
+        # per-cell field, because the spectrum is a property of the extraction
+        # and not of the cell the drag happened to be booked in.
+        #
+        # The wave/bulk share goes back to the local banks it was withheld
+        # from, exactly as pd1's collisional share does, so the conservation
+        # identity keeps its shipped FORM with the wave share inside
+        # `heating_anomalous`. The streaming share is left in the bank for the
+        # walk stage, which then splits it into groups.
+        wave_anom_erg = plateau_wave_share * anom_power_eV * _ERG_PER_EV
+        heating += wave_anom_erg
+        heat_anomalous += wave_anom_erg
+        plateau_wave_power = float(wave_anom_erg.sum())
+        anom_power_eV *= plateau_stream_share
 
     if walk_products or walk_tail:
         # --- Product walks (WP-D) and QL tail walks (WP-E) ---------------
@@ -2080,8 +2423,7 @@ def deposit_beam(
             )
         if walk_tail and np.any(anom_power_eV > 0.0):
             # WP-E: re-express each cell's withheld anomalous POWER as a flux
-            # of tail electrons at the single plateau energy E_tail
-            # (flux = P / E_tail, so flux*E_tail returns the power to
+            # of tail electrons (flux = P / E, so flux*E returns the power to
             # roundoff), split 50/50 along +-B, and walk them on the shared
             # machinery above. The escape goes to the tail-only ledger, and
             # the deposition profile becomes the anomalous diagnostic split --
@@ -2091,255 +2433,291 @@ def deposit_beam(
             # the slowing length falls below a cell, the walker thermalizes in
             # its birth cell, and the closure collapses onto the local banking
             # it replaced.
-            half_flux = 0.5 * (anom_power_eV / E_tail)
+            #
+            # ONE population at the single plateau energy E_tail under the
+            # single-line closures; under the multi-group plateau, N EQUAL-
+            # POWER populations at the derived group midpoints, each carrying
+            # 1/N of the streaming share (module docstring). The loop is the
+            # only structural difference: every population goes through the
+            # identical machinery below, so the single-line arms walk exactly
+            # the floats they always did.
             # K7b: the tail power this ray actually launched, and which band
             # it was marched in. Read-only bookkeeping over a bank that is
-            # already final -- nothing below consumes it.
+            # already final -- nothing below consumes it. Under the multi-
+            # group plateau the bank is already the STREAMING share alone (the
+            # wave share was banked locally above), and the two band exposures
+            # accumulate per group rather than being all-or-nothing.
             tail_power = float(anom_power_eV.sum()) * _ERG_PER_EV
-            if tail_sub_threshold:
-                tail_sub_threshold_power = tail_power
-            elif tail_above_bar:
-                tail_above_bar_power = tail_power
-            if ionize_tail or reflect_face is not None:
-                # Both WINDOWED closures stand on the same statement: the
-                # window must contain every cell the QL channel drives, or
-                # that cell's tail power would be dropped on the floor.
-                for birth in np.flatnonzero(half_flux > 0.0):
-                    if not tail_lo <= birth <= tail_hi:
-                        raise ValueError(
-                            f"anomalous power in cell {int(birth)} lies "
-                            f"outside tail_walk_window {(tail_lo, tail_hi)}; "
-                            "the window must contain every cell the QL "
-                            "channel drives, or that cell's tail power would "
-                            "be silently dropped"
-                        )
-            if ionize_tail:
-                # K6: the walkers attenuate INELASTICALLY on the column gas as
-                # well as Coulomb-slowing, so the closed-form integral above
-                # (which knows only the Coulomb power law) cannot carry them.
-                # March them on this module's own CSDA integration instead --
-                # one call per birth cell and direction, the same instrument
-                # the primary uses, so the cross sections, thresholds, <W_sec>
-                # convention and substep control are the primary's by
-                # construction rather than by transcription.
-                #
-                # anomalous_model="none": the plateau electrons ARE the
-                # instability's product and do not re-drive it (and a walker
-                # that drove its own QL drag would double-count the very power
-                # being carried). product_transport="local": the depth-1
-                # truncation validated at construction -- secondaries and the
-                # sub-threshold terminal residual bank where they are made.
-                # No anode interception: these are born in the column, not
-                # streaming out of the cathode through the mesh. No recursion
-                # risk: the nested call takes anomalous_transport="local".
-                #
-                # The march runs on the WINDOWED domain, so the window's two
-                # faces are walls: a walker that reaches one is transmitted out
-                # of the sliced grid and booked to the tail end ledger, exactly
-                # as it would be at a true domain end. That is what keeps every
-                # birth inside cells the solver actually integrates.
-                win = slice(tail_lo, tail_hi + 1)
-                nn_w = nn[win]
-                ne_w = ne[win]
-                Te_w = Te[win]
-                dz_w = dz_cm[win]
-
-                def _bank_tail_march(res):
-                    """Book one marched tail population into the shared banks.
-
-                    Shared banks: the tail's events and energy join the
-                    primary's, which is what puts the born pair on the existing
-                    beam-ionization birth convention and its ``I_ion``
-                    investment on the existing cost sink.
-                    """
-                    ionization_events[win] += res.ionization_events
-                    excitation_events[win] += res.excitation_events
-                    ionization_cost[win] += res.ionization_cost_erg_s
-                    radiated[win] += res.radiated_erg_s
-                    # All of the walker's HEAT (Coulomb drag, the local
-                    # <W_sec> secondaries, the terminal residual) is the
-                    # anomalous channel's delivery to the electrons, so it
-                    # lands in the lumped bank and in the anomalous split
-                    # -- never in the primary's coulomb/secondary/terminal
-                    # splits, which keep describing the primary alone.
-                    heating[win] += res.plasma_heating_erg_s
-                    heat_anomalous[win] += res.plasma_heating_erg_s
-                    # Diagnostic splits of the four shared banks.
-                    ion_events_tail[win] += res.ionization_events
-                    exc_events_tail[win] += res.excitation_events
-                    ion_cost_tail[win] += res.ionization_cost_erg_s
-                    radiated_tail[win] += res.radiated_erg_s
-
-                march_kwargs = dict(
-                    I_ion_eV=I_ion_eV,
-                    E_stop_eV=E_stop_eV,
-                    coulomb_model=coulomb_model,
-                    anomalous_model="none",
-                    max_energy_fraction_per_substep=frac,
-                )
-                for birth in np.flatnonzero(half_flux > 0.0):
-                    for walk_direction in (1, -1):
-                        leg_dir = walk_direction
-                        leg = deposit_beam(
-                            E_tail,
-                            float(half_flux[birth]),
-                            nn_w,
-                            ne_w,
-                            Te_w,
-                            int(birth) - tail_lo,
-                            leg_dir,
-                            dz_w,
-                            **march_kwargs,
-                        )
-                        while True:
-                            _bank_tail_march(leg)
-                            leg_flux = float(leg.transmitted_flux)
-                            leg_E = float(leg.transmitted_energy_eV)
-                            # K7: at the ONE reflecting face, a walker whose
-                            # arrival energy is below the sheath threshold is
-                            # turned around at the same energy and marched back
-                            # from the face cell. Only that face reflects, so
-                            # the reversed leg cannot come back to it and this
-                            # loop runs at most twice.
-                            if (
-                                reflect_face is not None
-                                and leg_dir == reflect_face
-                                and leg_flux > 0.0
-                                and leg_E < E_reflect
-                            ):
-                                leg_dir = -leg_dir
-                                leg = deposit_beam(
-                                    leg_E,
-                                    leg_flux,
-                                    nn_w,
-                                    ne_w,
-                                    Te_w,
-                                    0 if reflect_face < 0 else tail_hi - tail_lo,
-                                    leg_dir,
-                                    dz_w,
-                                    **march_kwargs,
-                                )
-                                continue
-                            # A walker still above E_stop at the window face it
-                            # was heading for escapes, on the SAME free-escape
-                            # convention the energy-only walk uses. Without a
-                            # reflecting face no sheath or ambipolar throttle
-                            # is applied at either end, which is what makes
-                            # "tail_walk" the free-escape bound it is
-                            # documented as with the channel on.
-                            exit_erg = leg_flux * leg_E * _ERG_PER_EV
-                            if leg_dir > 0:
-                                end_loss_tail_high += exit_erg
-                            else:
-                                end_loss_tail_low += exit_erg
-                            break
-            elif reflect_face is not None:
-                # K7 energy-only walk with one reflecting window face. The
-                # closed-form integral above carries a population over a
-                # SEQUENCE of cells, so a reflection is expressed by UNFOLDING
-                # the path: the reflected leg is the window traversed back the
-                # other way, concatenated onto the incoming leg. The entry
-                # energy of the first cell of the second leg is the identical
-                # float that left the last cell of the first, so the walk still
-                # telescopes exactly across the bounce and the energy ledger
-                # closes at roundoff, as it does without reflection.
-                win = slice(tail_lo, tail_hi + 1)
-                n_w = tail_hi - tail_lo + 1
-                coeff_w = coeff[win]
-                dz_w = dz_cm[win]
-                floor_w = floor_eV[win]
-                flux_w = half_flux[win]
-                W0_w = np.full(n_w, E_tail)
-                # Window-local cell indices in traversal order for the arm that
-                # heads INTO the reflecting face, and for the arm that heads
-                # away from it (which is also the reflected leg's order).
-                order_hit = (
-                    np.arange(n_w)[::-1] if reflect_face < 0 else np.arange(n_w)
-                )
-                order_away = order_hit[::-1]
-                escape_at_face = 0.0     # leaves through the reflecting face
-                escape_opposite = 0.0    # leaves through the other one
-
-                def _leg(order, W0, flux):
-                    return _walk_products_forward(
-                        W0[order], flux[order], coeff_w[order], dz_w[order],
-                        floor_w[order], q,
-                    )
-
-                def _bank_tail_walk(dep_eV, *orders):
-                    """Deposit one walked population, in ITS traversal order.
-
-                    ``orders`` maps each block of ``dep_eV`` back onto window
-                    cells: one block for a plain arm, two for the unfolded
-                    reflected path. Banked per population, matching the arm-by-
-                    arm conversion the unreflected walk does, so a walk in
-                    which nothing reflects lands on the identical floats.
-                    """
-                    dep_win = np.zeros(n_w)
-                    for k, order in enumerate(orders):
-                        dep_win[order] += dep_eV[k * n_w:(k + 1) * n_w]
-                    dep_erg = dep_win * _ERG_PER_EV
-                    heating[win] += dep_erg
-                    heat_anomalous[win] += dep_erg
-
-                # The arm walking AWAY from the reflecting face never meets it.
-                dep_a, exit_a, _ = _leg(order_away, W0_w, flux_w)
-                _bank_tail_walk(dep_a, order_away)
-                escape_opposite += exit_a
-                # The arm walking INTO it: test each population's ARRIVAL
-                # energy against the threshold. Populations born in different
-                # cells arrive with different energies, so this is a per-birth
-                # split, not a whole-arm switch.
-                dep_h, exit_h, (act_h, W_face, stop_h) = _leg(
-                    order_hit, W0_w, flux_w
-                )
-                bounced = (~stop_h) & (W_face < E_reflect)
-                if not bounced.any():
-                    _bank_tail_walk(dep_h, order_hit)
-                    escape_at_face += exit_h
-                else:
-                    flux_hit = flux_w[order_hit]
-                    flux_bounce = np.zeros(n_w)
-                    flux_escape = np.zeros(n_w)
-                    flux_bounce[act_h[bounced]] = flux_hit[act_h[bounced]]
-                    flux_escape[act_h[~bounced]] = flux_hit[act_h[~bounced]]
-                    if np.any(flux_escape > 0.0):
-                        dep_e, exit_e, _ = _walk_products_forward(
-                            W0_w[order_hit], flux_escape, coeff_w[order_hit],
-                            dz_w[order_hit], floor_w[order_hit], q,
-                        )
-                        _bank_tail_walk(dep_e, order_hit)
-                        escape_at_face += exit_e
-                    # The unfolded two-leg path. The face cell appears at the
-                    # end of the first leg and again at the start of the second
-                    # -- the reflected walker re-crosses it, the same
-                    # cell-resolution granularity the marched walk has.
-                    dep_u, exit_u, _ = _walk_products_forward(
-                        np.concatenate([W0_w[order_hit], np.zeros(n_w)]),
-                        np.concatenate([flux_bounce, np.zeros(n_w)]),
-                        np.concatenate([coeff_w[order_hit], coeff_w[order_away]]),
-                        np.concatenate([dz_w[order_hit], dz_w[order_away]]),
-                        np.concatenate([floor_w[order_hit], floor_w[order_away]]),
-                        q,
-                    )
-                    _bank_tail_walk(dep_u, order_hit, order_away)
-                    escape_opposite += exit_u
-                if reflect_face > 0:
-                    end_loss_tail_high += escape_at_face * _ERG_PER_EV
-                    end_loss_tail_low += escape_opposite * _ERG_PER_EV
-                else:
-                    end_loss_tail_low += escape_at_face * _ERG_PER_EV
-                    end_loss_tail_high += escape_opposite * _ERG_PER_EV
+            if multigroup:
+                tail_populations = [
+                    (float(E_hat), anom_power_eV / len(plateau_midpoints))
+                    for E_hat in plateau_midpoints
+                ]
             else:
-                tail_W = np.full(cells, E_tail)
-                for walk_direction in (1, -1):
-                    exit_erg, _exit_flux = _walk_and_deposit(
-                        tail_W, half_flux, walk_direction, heat_anomalous
-                    )
-                    if walk_direction > 0:
-                        end_loss_tail_high += exit_erg
+                tail_populations = [(E_tail, anom_power_eV)]
+            for E_walk, walk_power_eV in tail_populations:
+                half_flux = 0.5 * (walk_power_eV / E_walk)
+                if multigroup:
+                    # Each group is banded on its OWN energy: the bars are
+                    # properties of the walker, and this ray launches several.
+                    if tail_ionization == "on":
+                        ionize_walk, _sub_g, _above_g = _tail_band(
+                            E_walk, I_ion_eV, E_stop_eV,
+                            "plateau group energy",
+                        )
                     else:
-                        end_loss_tail_low += exit_erg
+                        ionize_walk, _sub_g, _above_g = False, False, False
+                    _group_power = float(walk_power_eV.sum()) * _ERG_PER_EV
+                    if _sub_g:
+                        tail_sub_threshold_power += _group_power
+                    elif _above_g:
+                        tail_above_bar_power += _group_power
+                else:
+                    ionize_walk = ionize_tail
+                    if tail_sub_threshold:
+                        tail_sub_threshold_power = tail_power
+                    elif tail_above_bar:
+                        tail_above_bar_power = tail_power
+                if ionize_walk or reflect_face is not None:
+                    # Both WINDOWED closures stand on the same statement: the
+                    # window must contain every cell the QL channel drives, or
+                    # that cell's tail power would be dropped on the floor.
+                    for birth in np.flatnonzero(half_flux > 0.0):
+                        if not tail_lo <= birth <= tail_hi:
+                            raise ValueError(
+                                f"anomalous power in cell {int(birth)} lies "
+                                f"outside tail_walk_window {(tail_lo, tail_hi)}; "
+                                "the window must contain every cell the QL "
+                                "channel drives, or that cell's tail power would "
+                                "be silently dropped"
+                            )
+                if ionize_walk:
+                    # K6: the walkers attenuate INELASTICALLY on the column gas as
+                    # well as Coulomb-slowing, so the closed-form integral above
+                    # (which knows only the Coulomb power law) cannot carry them.
+                    # March them on this module's own CSDA integration instead --
+                    # one call per birth cell and direction, the same instrument
+                    # the primary uses, so the cross sections, thresholds, <W_sec>
+                    # convention and substep control are the primary's by
+                    # construction rather than by transcription.
+                    #
+                    # anomalous_model="none": the plateau electrons ARE the
+                    # instability's product and do not re-drive it (and a walker
+                    # that drove its own QL drag would double-count the very power
+                    # being carried). product_transport="local": the depth-1
+                    # truncation validated at construction -- secondaries and the
+                    # sub-threshold terminal residual bank where they are made.
+                    # No anode interception: these are born in the column, not
+                    # streaming out of the cathode through the mesh. No recursion
+                    # risk: the nested call takes anomalous_transport="local".
+                    #
+                    # The march runs on the WINDOWED domain, so the window's two
+                    # faces are walls: a walker that reaches one is transmitted out
+                    # of the sliced grid and booked to the tail end ledger, exactly
+                    # as it would be at a true domain end. That is what keeps every
+                    # birth inside cells the solver actually integrates.
+                    win = slice(tail_lo, tail_hi + 1)
+                    nn_w = nn[win]
+                    ne_w = ne[win]
+                    Te_w = Te[win]
+                    dz_w = dz_cm[win]
+
+                    def _bank_tail_march(res):
+                        """Book one marched tail population into the shared banks.
+
+                        Shared banks: the tail's events and energy join the
+                        primary's, which is what puts the born pair on the existing
+                        beam-ionization birth convention and its ``I_ion``
+                        investment on the existing cost sink.
+                        """
+                        ionization_events[win] += res.ionization_events
+                        excitation_events[win] += res.excitation_events
+                        ionization_cost[win] += res.ionization_cost_erg_s
+                        radiated[win] += res.radiated_erg_s
+                        # All of the walker's HEAT (Coulomb drag, the local
+                        # <W_sec> secondaries, the terminal residual) is the
+                        # anomalous channel's delivery to the electrons, so it
+                        # lands in the lumped bank and in the anomalous split
+                        # -- never in the primary's coulomb/secondary/terminal
+                        # splits, which keep describing the primary alone.
+                        heating[win] += res.plasma_heating_erg_s
+                        heat_anomalous[win] += res.plasma_heating_erg_s
+                        # Diagnostic splits of the four shared banks.
+                        ion_events_tail[win] += res.ionization_events
+                        exc_events_tail[win] += res.excitation_events
+                        ion_cost_tail[win] += res.ionization_cost_erg_s
+                        radiated_tail[win] += res.radiated_erg_s
+
+                    march_kwargs = dict(
+                        I_ion_eV=I_ion_eV,
+                        E_stop_eV=E_stop_eV,
+                        coulomb_model=coulomb_model,
+                        anomalous_model="none",
+                        max_energy_fraction_per_substep=frac,
+                    )
+                    for birth in np.flatnonzero(half_flux > 0.0):
+                        for walk_direction in (1, -1):
+                            leg_dir = walk_direction
+                            leg = deposit_beam(
+                                E_walk,
+                                float(half_flux[birth]),
+                                nn_w,
+                                ne_w,
+                                Te_w,
+                                int(birth) - tail_lo,
+                                leg_dir,
+                                dz_w,
+                                **march_kwargs,
+                            )
+                            while True:
+                                _bank_tail_march(leg)
+                                leg_flux = float(leg.transmitted_flux)
+                                leg_E = float(leg.transmitted_energy_eV)
+                                # K7: at the ONE reflecting face, a walker whose
+                                # arrival energy is below the sheath threshold is
+                                # turned around at the same energy and marched back
+                                # from the face cell. Only that face reflects, so
+                                # the reversed leg cannot come back to it and this
+                                # loop runs at most twice.
+                                if (
+                                    reflect_face is not None
+                                    and leg_dir == reflect_face
+                                    and leg_flux > 0.0
+                                    and leg_E < E_reflect
+                                ):
+                                    leg_dir = -leg_dir
+                                    leg = deposit_beam(
+                                        leg_E,
+                                        leg_flux,
+                                        nn_w,
+                                        ne_w,
+                                        Te_w,
+                                        0 if reflect_face < 0 else tail_hi - tail_lo,
+                                        leg_dir,
+                                        dz_w,
+                                        **march_kwargs,
+                                    )
+                                    continue
+                                # A walker still above E_stop at the window face it
+                                # was heading for escapes, on the SAME free-escape
+                                # convention the energy-only walk uses. Without a
+                                # reflecting face no sheath or ambipolar throttle
+                                # is applied at either end, which is what makes
+                                # "tail_walk" the free-escape bound it is
+                                # documented as with the channel on.
+                                exit_erg = leg_flux * leg_E * _ERG_PER_EV
+                                if leg_dir > 0:
+                                    end_loss_tail_high += exit_erg
+                                else:
+                                    end_loss_tail_low += exit_erg
+                                break
+                elif reflect_face is not None:
+                    # K7 energy-only walk with one reflecting window face. The
+                    # closed-form integral above carries a population over a
+                    # SEQUENCE of cells, so a reflection is expressed by UNFOLDING
+                    # the path: the reflected leg is the window traversed back the
+                    # other way, concatenated onto the incoming leg. The entry
+                    # energy of the first cell of the second leg is the identical
+                    # float that left the last cell of the first, so the walk still
+                    # telescopes exactly across the bounce and the energy ledger
+                    # closes at roundoff, as it does without reflection.
+                    win = slice(tail_lo, tail_hi + 1)
+                    n_w = tail_hi - tail_lo + 1
+                    coeff_w = coeff[win]
+                    dz_w = dz_cm[win]
+                    floor_w = floor_eV[win]
+                    flux_w = half_flux[win]
+                    W0_w = np.full(n_w, E_walk)
+                    # Window-local cell indices in traversal order for the arm that
+                    # heads INTO the reflecting face, and for the arm that heads
+                    # away from it (which is also the reflected leg's order).
+                    order_hit = (
+                        np.arange(n_w)[::-1] if reflect_face < 0 else np.arange(n_w)
+                    )
+                    order_away = order_hit[::-1]
+                    escape_at_face = 0.0     # leaves through the reflecting face
+                    escape_opposite = 0.0    # leaves through the other one
+
+                    def _leg(order, W0, flux):
+                        return _walk_products_forward(
+                            W0[order], flux[order], coeff_w[order], dz_w[order],
+                            floor_w[order], q,
+                        )
+
+                    def _bank_tail_walk(dep_eV, *orders):
+                        """Deposit one walked population, in ITS traversal order.
+
+                        ``orders`` maps each block of ``dep_eV`` back onto window
+                        cells: one block for a plain arm, two for the unfolded
+                        reflected path. Banked per population, matching the arm-by-
+                        arm conversion the unreflected walk does, so a walk in
+                        which nothing reflects lands on the identical floats.
+                        """
+                        dep_win = np.zeros(n_w)
+                        for k, order in enumerate(orders):
+                            dep_win[order] += dep_eV[k * n_w:(k + 1) * n_w]
+                        dep_erg = dep_win * _ERG_PER_EV
+                        heating[win] += dep_erg
+                        heat_anomalous[win] += dep_erg
+
+                    # The arm walking AWAY from the reflecting face never meets it.
+                    dep_a, exit_a, _ = _leg(order_away, W0_w, flux_w)
+                    _bank_tail_walk(dep_a, order_away)
+                    escape_opposite += exit_a
+                    # The arm walking INTO it: test each population's ARRIVAL
+                    # energy against the threshold. Populations born in different
+                    # cells arrive with different energies, so this is a per-birth
+                    # split, not a whole-arm switch.
+                    dep_h, exit_h, (act_h, W_face, stop_h) = _leg(
+                        order_hit, W0_w, flux_w
+                    )
+                    bounced = (~stop_h) & (W_face < E_reflect)
+                    if not bounced.any():
+                        _bank_tail_walk(dep_h, order_hit)
+                        escape_at_face += exit_h
+                    else:
+                        flux_hit = flux_w[order_hit]
+                        flux_bounce = np.zeros(n_w)
+                        flux_escape = np.zeros(n_w)
+                        flux_bounce[act_h[bounced]] = flux_hit[act_h[bounced]]
+                        flux_escape[act_h[~bounced]] = flux_hit[act_h[~bounced]]
+                        if np.any(flux_escape > 0.0):
+                            dep_e, exit_e, _ = _walk_products_forward(
+                                W0_w[order_hit], flux_escape, coeff_w[order_hit],
+                                dz_w[order_hit], floor_w[order_hit], q,
+                            )
+                            _bank_tail_walk(dep_e, order_hit)
+                            escape_at_face += exit_e
+                        # The unfolded two-leg path. The face cell appears at the
+                        # end of the first leg and again at the start of the second
+                        # -- the reflected walker re-crosses it, the same
+                        # cell-resolution granularity the marched walk has.
+                        dep_u, exit_u, _ = _walk_products_forward(
+                            np.concatenate([W0_w[order_hit], np.zeros(n_w)]),
+                            np.concatenate([flux_bounce, np.zeros(n_w)]),
+                            np.concatenate([coeff_w[order_hit], coeff_w[order_away]]),
+                            np.concatenate([dz_w[order_hit], dz_w[order_away]]),
+                            np.concatenate([floor_w[order_hit], floor_w[order_away]]),
+                            q,
+                        )
+                        _bank_tail_walk(dep_u, order_hit, order_away)
+                        escape_opposite += exit_u
+                    if reflect_face > 0:
+                        end_loss_tail_high += escape_at_face * _ERG_PER_EV
+                        end_loss_tail_low += escape_opposite * _ERG_PER_EV
+                    else:
+                        end_loss_tail_low += escape_at_face * _ERG_PER_EV
+                        end_loss_tail_high += escape_opposite * _ERG_PER_EV
+                else:
+                    tail_W = np.full(cells, E_walk)
+                    for walk_direction in (1, -1):
+                        exit_erg, _exit_flux = _walk_and_deposit(
+                            tail_W, half_flux, walk_direction, heat_anomalous
+                        )
+                        if walk_direction > 0:
+                            end_loss_tail_high += exit_erg
+                        else:
+                            end_loss_tail_low += exit_erg
         if book_transmitted and not absorbed and gamma > 0.0 and E > 0.0:
             # The transmitted primary: computed since B1, never banked. It
             # leaves through the end the ray was heading for.
@@ -2376,6 +2754,7 @@ def deposit_beam(
         tail_power_erg_s=tail_power,
         tail_sub_threshold_power_erg_s=tail_sub_threshold_power,
         tail_above_bar_power_erg_s=tail_above_bar_power,
+        plateau_wave_power_erg_s=plateau_wave_power,
     )
 
 
@@ -2669,6 +3048,22 @@ def deposit_beam_two_stream(
         raise ValueError(
             f"unknown product_transport {product_transport!r}; "
             "expected 'local', 'nonlocal' or 'terminal_nonlocal'"
+        )
+    if anomalous_transport == "plateau_multigroup":
+        # Refused for the same reason the pd1 branch is (see the block above):
+        # this march shares ONE withholding bank between the channel and
+        # reservoir arms, and the reservoir carries the density FLOOR against
+        # the mean-field Te -- so a plateau edge solved on the launch cell of
+        # a two-medium column would be an artifact of the floor convention
+        # rather than a measurement of the plasma. The coverage arms of this
+        # closure are deferred until that stance is designed.
+        raise ValueError(
+            "anomalous_transport='plateau_multigroup' does not support the "
+            "two-stream (coverage) march: the withholding bank is shared "
+            "between the channel and reservoir arms and the reservoir carries "
+            "the density FLOOR, so the plateau edge E_1 solved there would be "
+            "an artifact of the floor convention. Run the closure without "
+            "coverage_closure"
         )
     if anomalous_transport not in ("local", "tail_walk"):
         raise ValueError(
