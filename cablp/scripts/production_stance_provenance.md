@@ -313,6 +313,82 @@ per-cycle puff window — a double duty with no physical basis. It changes the
 scorer's runs (the equilibrated seed rises ~x1.25 in delivered fuel) and not the
 regression fixture, which pins the key back to `None`.
 
+### Injection row and the shaped initial fill (2026-08-24 — `[porf-dvm-consistency]`)
+
+**`gas_puff_profile = "orifice"`, `gas_puff_orifice_id_cm = 3.95`,
+`gas_puff_orifice_length_cm = 22.0` — DERIVED, hardware-BRACKETED.** The puff's
+axial placement is no longer the fluid cosine lobe. It is the tube-beamed
+first-flight row derived from the CAD port station and the collimating feed
+pipe behind it: emit over the pipe-exit disc at the vessel wall, weight
+directions by the transparent-regime Clausing long-tube angular intensity
+(Olander–Kruger parameterisation, Ashkarin et al., arXiv:2605.12212 Eqs. (17),
+(22)–(25) — an analytic literature result with no fitted quantity), fly
+straight, and record where each ray first reaches the plasma column. The
+derivation and its full pin list live in
+`cablp/solvers/_sim1d/physics/puff_orifice.py`; the key-level provenance is in
+`config_defaults_provenance.md`.
+
+**Why the values are a midpoint and not an endpoint.** The feed pipe is not in
+the CAD export, so its two numbers are hardware brackets: bore ∈ [3.8, 4.1] cm
+(CF35/KF40 class), length ≥ 22 cm (ONE-SIDED, the cathode-side coil stack the
+flange must clear). Both push the footprint the same way, so the bracket has
+two unambiguous endpoints — WIDE (4.1 cm at 22 cm) and NARROW (3.8 cm at
+L → ∞). On this geometry the two endpoints move the derived foot fill by
+**less than 0.1 %** (`scripts/foot_orifice_probe.txt`: mid-port column density
+−3.569e-3 wide vs −3.572e-3 narrow against the same control; per-cell max
+|rel| 0.3291 vs 0.3340). The stance therefore quotes the **bracket midpoint
+bore, 3.95 cm, at the length bound 22.0 cm** as the value, and
+**[3.8, 4.1] cm with L ≥ 22 cm remains the claim's bracket**. Nothing here is
+fitted: no endpoint was chosen to move a score.
+
+**What the row does to the placement.** At the campaign mesh the 5–95 % axial
+span falls from **186.4 cm** (the superseded `cosine_pipe` envelope, throw
+100 cm) to **59.81 cm** — the injection footprint is roughly three times
+narrower than the deposition envelope it replaces. That difference is the
+registered closure finding of `[puff-orifice]`, not an error in either row.
+**Disclosed closure:** a kinetic FIRST-FLIGHT row is being read as the fluid
+DEPOSITION row, so the transport the kinetic engines would apply after first
+arrival is absent (see `MODEL.md`, the fueling section). Also disclosed: the
+row is applied UNMASKED, so the 3.87 % of its mass that grazing rays place in
+the cathode–anode gap, the plenum and the cathode cell is deposited there
+rather than being redistributed onto the main-chamber roles the length-weighted
+fluid shapes restrict to (`scripts/g1aporf_rowcensus.txt`). Total inflow is
+conserved exactly either way.
+
+**`nn0_profile`, `nn0_annulus_profile` — REGENERATED 2026-08-24 (DERIVED from a
+model run, not measured).** The shaped 4.5 ms ballistic foot, rebuilt by
+`scripts/sp3_build_nn0.py` on the equilibrated base
+`scripts/g1aporf_eqbase.h5` and written to `scripts/g1aporf_foot45.npz`
+(`scripts/g1aporf_foot45.cmd` is the verbatim command; `dt_foot = 4.5 ms` is
+the pedestal-floor end of the registered [2.0, 4.5] ms bracket, `ballistic` the
+short-reach end of the kernel bracket). This is the first provenance row this
+pair has had.
+
+**The fill it replaces was STALE, and the staleness is disclosed rather than
+absorbed.** `scripts/g1afix_foot45.npz` was built 2026-08-19 and predates two
+events: the CAD-span gap re-anchor (`cathode_anode_gap_cm` 50.0 → 53.25), which
+moved every cell downstream of the cathode face, and the sccm changeover to the
+flow meter's own 20 °C / 1013 mbar standard (`SCCM_TO_PARTICLES_PER_S`
+4.477962e17 → 4.171431e17). It also predates every physics and stance event
+its equilibrated base was run before — this fixture's own recapture record
+lists six.
+
+The staleness has been measured twice, at two different scopes, and the two
+numbers must not be conflated:
+
+| scope | how it was measured | result |
+|---|---|---|
+| the LOBE LEDGER alone, base held fixed | rebuild the fill at the current tip **on the banked file's own base** (`scripts/foot_orifice_probe.txt`) | 3.25 cm z-shift; per-cell **max 4.61 %, mean 1.28 %**; delivered inventory ×0.9315 — the sccm re-reference exactly |
+| the WHOLE recipe, base rebuilt too | rebuild the base as well, still on `cosine_pipe` (`scripts/g1acos_foot45.npz`, the control in `scripts/g1aporf_foot_diff.txt`) | port 11 **−11.3 %**, mid-port (port 29) **−28.6 %**; the base's chamber-mean rises 4.919e12 → 6.958e12 cm⁻³ |
+
+The second row is the honest size of the drift, and it is roughly **ten times
+larger than the profile change itself** (port 11 +2.54 %, port 29 −0.95 % for
+orifice against the cosine control). The banked file was therefore never the
+fill this stance's geometry and physics imply. `scripts/g1aporf_foot_diff.txt`
+reports all three side by side — banked, cosine-at-current-tip (staleness
+only), and the adopted orifice fill — because reading the banked file against
+the orifice fill directly would attribute the whole drift to the profile.
+
 ## Geometry
 
 **`Rp = 18.415`, `R_cath = 18.415`** — DESIGN-SPEC HARDWARE (L2 geometry
