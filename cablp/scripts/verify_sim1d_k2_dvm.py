@@ -100,6 +100,13 @@ Gates:
       injected flux integral equals what was fed, nothing appears
       upstream of the face, and the emitting cell does not retain the
       whole return the way the superseded stationary birth did
+  D5  the counted ionization debit is capped at the POST-REBIRTH
+      inventory: on a frozen synthetic cell the booked count is paid with
+      zero shortfall for every booking up to the cell's whole inventory,
+      while the pre-fix ordering -- the same debit against the marched
+      state alone, run as a negative control -- short-falls above the
+      closed-form threshold and not below it; plus the ledger, handshake
+      and positivity statements per tick on the live arm
   G1..G14 construction refusals: each unsupported configuration raises a
       ValueError at construction naming the offender. G2 is the model-preset
       resolver's refusal half -- an explicitly-set family member the
@@ -1923,6 +1930,195 @@ def gate_d4():
     )
 
 
+#: [D5] The synthetic cell's per-tick budget, as fractions of the pre-tick
+#: inventory I0. ``MARCHED`` is the ionization the march itself took (a
+#: NON-conserving loss); ``CONSERVING`` is the CX/elastic pair, which
+#: leaves the cell and returns to it within the same tick at the same
+#: count. Nothing else leaves the synthetic cell, so the largest booking
+#: it can pay is I0 itself, and the pre-fix ordering's ceiling was
+#: ``1 - CONSERVING``.
+D5_MARCHED = 0.10
+D5_CONSERVING = 0.35
+D5_BOOKED_FRACTIONS = (
+    0.0, 0.10, 0.30, 0.50, 0.65, 0.66, 0.70, 0.80, 0.90, 0.99, 1.0,
+)
+
+
+def d5_synthetic_cell(dvm, booked_fraction, I0=1.0e18):
+    """Build one frozen synthetic cell-tick and debit it both ways.
+
+    The cell holds ``I0`` atoms before the tick. The march takes
+    ``D5_MARCHED * I0`` of them as ionization and ``D5_CONSERVING * I0``
+    as the CX/elastic pair; the pair is re-born in the same cell, at the
+    same count, in the ion Maxwellian. Nothing else enters or leaves, so
+    after the tick the cell holds ``I0`` less whatever the ionization
+    channel finally takes.
+
+    Returns ``(post, pre, population, counts)`` -- the debit taken against
+    the post-rebirth population (the shipped ordering), the same debit
+    taken against the marched state alone (the pre-fix ordering, kept as
+    the negative control), the post-rebirth population itself so the
+    caller can check positivity on the array the solver would carry
+    forward, and the per-cell ``I0``. Both debits go through the SHIPPED
+    :meth:`TransientDVM._debit_booked_ionization`; the ONLY difference
+    between them is which population it is handed, which is the whole of
+    the defect and the whole of the fix.
+
+    The ``dvm`` must be freshly constructed and never stepped, so its
+    ``ion_debt`` is zero and the debit's target is the booking itself.
+    """
+    g = dvm.g
+    vol_c = dvm.V_col[:, None, None]
+    # A drifting Maxwellian for the marched remnant and a hotter, shifted
+    # one for the re-births, so the two populations are distinguishable in
+    # velocity and a debit that draws on the wrong one is visible.
+    shape_march = g.maxwellian(0.30, 0.0)[None, :, :] * np.ones(dvm.nz)[
+        :, None, None
+    ]
+    shape_birth = g.maxwellian(1.20, 2.0e5)[None, :, :] * np.ones(dvm.nz)[
+        :, None, None
+    ]
+
+    def at_count(shape, count):
+        mass = (shape * vol_c).sum(axis=(1, 2))
+        return shape * (count / mass)[:, None, None]
+
+    counts = np.full(dvm.nz, I0)
+    marched_n = D5_MARCHED * counts
+    conserving_n = D5_CONSERVING * counts
+    f_march = at_count(shape_march, counts - marched_n - conserving_n)
+    births = at_count(shape_birth, conserving_n)
+    # The march's own frequency tally, per bin, at exactly ``marched_n``.
+    L_ion = at_count(shape_march, marched_n) * vol_c
+    booked = booked_fraction * counts
+    return (
+        dvm._debit_booked_ionization(booked, L_ion, f_march + births, vol_c),
+        dvm._debit_booked_ionization(booked, L_ion, f_march, vol_c),
+        f_march + births,
+        counts,
+    )
+
+
+def gate_d5():
+    """The counted ionization debit is capped at the POST-REBIRTH inventory.
+
+    The march removes ionization, charge exchange and elastic scattering
+    from the pre-tick population together, but only ionization is a real
+    loss: the CX/elastic pair is re-born in the same cell, at the same
+    count, within the same tick. The count the plasma booked must therefore
+    be measured against the marched state PLUS those re-births -- the atoms
+    the cell actually holds when the tick ends. Capped at the marched state
+    alone, a cell is told it cannot pay a booking smaller than its own
+    inventory, the positivity limiter fires against atoms that never left,
+    and the resulting debt can never retire.
+
+    Two statements:
+
+    (a) SYNTHETIC, frozen (:func:`d5_synthetic_cell`). A cell holding
+        ``I0`` loses ``D5_MARCHED`` to the march's ionization and
+        ``D5_CONSERVING`` to the pair, the pair returning in full. Against
+        the post-rebirth population the debit succeeds with zero shortfall
+        and an exactly non-negative distribution for EVERY booking up to
+        ``I0``, which is the whole inventory and therefore the most any
+        booking could ask for. Against the marched state -- the pre-fix
+        ordering, run here as a negative control on the same numbers --
+        the shortfall appears at bookings above ``1 - D5_CONSERVING``,
+        sharply at that closed-form threshold and not before, which is the
+        defect reproduced on demand.
+
+    (b) LIVE. Over a window of the in-solver default arm, per tick: the
+        particle and energy ledgers close at ROUNDOFF_REL, the handshake
+        identity ``ion_removed_cum + ion_debt == ion_booked_cum`` holds per
+        cell at the same tolerance, the column distribution never goes
+        negative, and the arm is actually booking ionization -- without
+        which every identity above is 0 == 0.
+    """
+    dvm = closed_box_dvm(nz=4)
+    threshold = 1.0 - D5_CONSERVING
+    worst_short = 0.0
+    worst_removed = 0.0
+    worst_negative = 0.0
+    post_clean = True
+    control_sharp = True
+    control_fired = 0
+    for frac in D5_BOOKED_FRACTIONS:
+        post, pre, population, counts = d5_synthetic_cell(dvm, frac)
+        scale = counts
+        worst_short = max(
+            worst_short, float(np.max(np.abs(post["shortfall"]) / scale))
+        )
+        worst_removed = max(
+            worst_removed,
+            float(np.max(np.abs(post["removed"] - post["booked"]) / scale)),
+        )
+        # Positivity, as the array the solver would carry forward.
+        remaining = population - post["drop"]
+        worst_negative = max(worst_negative, float(-np.min(remaining)))
+        post_clean = post_clean and not np.any(post["limited"])
+        # The negative control must fire above the closed-form threshold
+        # and stay quiet below it -- a control that failed everywhere would
+        # not have localized anything.
+        fired = bool(np.any(pre["limited"]))
+        control_fired += int(fired)
+        control_sharp = control_sharp and (fired == (frac > threshold))
+
+    # (b) the live arm
+    sim = make_sim()
+    ledgers = run_until_updates(sim, 8)
+    dvm_live = sim._dvm
+    worst_part = max(
+        max(abs(ledger_residual(led)["distribution_rel"]),
+            abs(ledger_residual(led)["domain_rel"]))
+        for led in ledgers
+    )
+    worst_energy = max(
+        max(abs(ledger_energy_residual(led)["distribution_rel"]),
+            abs(ledger_energy_residual(led)["domain_rel"]))
+        for led in ledgers
+    )
+    booked_cum = np.asarray(dvm_live.ion_booked_cum, dtype=float)
+    identity = np.asarray(dvm_live.ion_removed_cum, dtype=float) + np.asarray(
+        dvm_live.ion_debt, dtype=float
+    ) - booked_cum
+    ion_scale = max(float(np.max(np.abs(booked_cum))), 1e-300)
+    worst_identity = float(np.max(np.abs(identity))) / ion_scale
+    live_negative = float(-np.min(dvm_live.f_c))
+    booking = float(np.sum(booked_cum))
+
+    ok = (
+        worst_short <= ROUNDOFF_REL
+        and worst_removed <= ROUNDOFF_REL
+        and worst_negative <= 0.0
+        and post_clean
+        and control_sharp
+        and control_fired > 0
+        and worst_part < ROUNDOFF_REL
+        and worst_energy < ROUNDOFF_REL
+        and worst_identity < ROUNDOFF_REL
+        and live_negative <= 0.0
+        and booking > 0.0
+    )
+    return (
+        "D5 counted ionization debits against the post-rebirth inventory",
+        ok,
+        f"synthetic cell, {len(D5_BOOKED_FRACTIONS)} bookings up to the "
+        f"whole inventory (march takes {D5_MARCHED:.2f} I0, the CX/elastic "
+        f"pair {D5_CONSERVING:.2f} I0 and returns it): worst |shortfall|/I0 "
+        f"{fmt(worst_short)}, worst |removed - booked|/I0 "
+        f"{fmt(worst_removed)}, most negative bin {fmt(worst_negative)}, "
+        f"limiter never fired ({post_clean})\n        "
+        f"negative control on the pre-fix ordering (marched state alone): "
+        f"fired at {control_fired} of {len(D5_BOOKED_FRACTIONS)} bookings, "
+        f"exactly those above the closed-form threshold "
+        f"1 - {D5_CONSERVING:.2f} = {threshold:.2f} ({control_sharp})\n        "
+        f"live arm, {len(ledgers)} ticks: particle ledger {fmt(worst_part)}, "
+        f"energy ledger {fmt(worst_energy)}, handshake "
+        f"|removed_cum + debt - booked_cum|/booked {fmt(worst_identity)}, "
+        f"most negative f_c {fmt(live_negative)}, booked "
+        f"{fmt(booking)} particles (tol {fmt(ROUNDOFF_REL)})",
+    )
+
+
 # ------------------------------------------------- construction refusals
 
 
@@ -2388,7 +2584,7 @@ CONSERVATION_GATES = ("gate_i1", "gate_i2", "gate_i4", "gate_i5",
                       "gate_j2",
                       "gate_s1",
                       "gate_c1", "gate_c2", "gate_c3", "gate_c4",
-                      "gate_d3", "gate_d4")
+                      "gate_d3", "gate_d4", "gate_d5")
 
 
 def main():
@@ -2419,6 +2615,7 @@ def main():
         gate_d2,
         gate_d3,
         gate_d4,
+        gate_d5,
         gate_x1,
     ]
     gates += [

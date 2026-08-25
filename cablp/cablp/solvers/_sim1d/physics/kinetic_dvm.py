@@ -1214,15 +1214,6 @@ class TransientDVM:
         L_cx = nu_cx * f_c * dt * vol_c
         L_el = nu_el * f_c * dt * vol_c
 
-        # --- the counted-particle ionization handshake (K2e). When a
-        # coupled partner supplies the count it BOOKED, that count -- not
-        # the march's own frequency tally -- is what leaves the column, so
-        # the two sides destroy and create the same particles by
-        # construction rather than by agreement of two rate formulas.
-        ion = self._debit_booked_ionization(ion_counts, L_ion, f_c, vol_c)
-        f_c = f_c - ion["drop"]
-        L_ion = L_ion + ion["correction"]
-
         # --- substep B: births at exactly the tallied masses
         M_i = np.empty((self.nz, g.nvz, g.nvp))
         Ti_arr = np.asarray(Ti_eV, dtype=float)
@@ -1234,9 +1225,26 @@ class TransientDVM:
         N_el = L_el.sum(axis=(1, 2))
         N_wall = L_wall.sum(axis=(1, 2))
 
+        # The CX/elastic re-births are the CONSERVING half of substep B:
+        # they return this tick's own losses to the same cell, at the same
+        # count, in the ion Maxwellian. They are applied BEFORE the counted
+        # ionization debit so that the debit's positivity cap measures the
+        # inventory the cell actually holds after the tick -- net of the
+        # non-conserving losses only. Debiting against the marched state
+        # alone counts atoms that never left as missing, which is a
+        # shortfall against an inventory the cell does not have.
         birth_cx = (N_cx * inv_vc)[:, None, None] * M_i
         birth_el = (N_el * inv_vc)[:, None, None] * M_i
-        f_c += birth_cx + birth_el
+        f_c = f_c + birth_cx + birth_el
+
+        # --- the counted-particle ionization handshake (K2e). When a
+        # coupled partner supplies the count it BOOKED, that count -- not
+        # the march's own frequency tally -- is what leaves the column, so
+        # the two sides destroy and create the same particles by
+        # construction rather than by agreement of two rate formulas.
+        ion = self._debit_booked_ionization(ion_counts, L_ion, f_c, vol_c)
+        f_c = f_c - ion["drop"]
+        L_ion = L_ion + ion["correction"]
 
         alpha = self.accommodation
         if jump:
@@ -1414,12 +1422,22 @@ class TransientDVM:
 
         With a count in hand the debit is renormalized to it. The march
         already removed ``sum(L_ion)`` from each cell; the remainder is
-        taken from the POST-march ``f_c`` in proportion to ``f_c`` itself,
-        which is the same velocity shape the march's velocity-blind
-        frequency removed, so the reconciliation changes how MANY atoms
-        the channel takes and not WHICH ones. A negative remainder is a
-        credit and puts atoms back, which is what a partner that booked
-        less than the march removed is owed.
+        taken from ``f_c`` in proportion to ``f_c`` itself, so the debit
+        is velocity-BLIND over the population it draws from -- the same
+        convention ``nu_ion`` itself carries -- and biases no part of that
+        population over another. A negative remainder is a credit and puts
+        atoms back, which is what a partner that booked less than the
+        march removed is owed.
+
+        ``f_c`` must be the column population as it stands after the
+        tick's CONSERVING re-births have been applied -- the marched state
+        plus the CX/elastic returns, which leave the cell's atom count
+        untouched and come back within this same tick. That is the
+        inventory the cell genuinely holds, and it is therefore both the
+        population the debit draws from and the ceiling it is capped at;
+        the two are the same array by construction, which is what keeps
+        the drop from driving a bin negative. Handed the marched state
+        alone the cap would measure atoms that never left as missing.
 
         Positivity is a hard constraint: a cell can give up at most the
         atoms it holds. The shortfall is never clipped away -- it is

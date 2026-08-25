@@ -418,6 +418,75 @@ The `"zoh"` branch takes the pre-hold expressions unchanged, books no hold
 debt, and exists so a pre-fix artifact can be reproduced and so the
 instability above can be exhibited on demand rather than remembered.
 
+### The counted ionization debit, and why it is taken last
+
+The counted-particle handshake makes the plasma and the neutral arm destroy
+the *same* atoms: whatever count the plasma books as ionization over a tick is
+exactly what leaves the column, with the march's own frequency tally
+reconciled to it (`_debit_booked_ionization`). The reconciliation is a
+renormalization — the march already removed `sum(L_ion)`, and the remainder is
+taken from the cell in proportion to what the cell holds.
+
+**Which population "what the cell holds" means is the whole of the ordering
+question.** Substep A's march removes ionization, charge exchange and elastic
+scattering together, but only ionization is a real loss: the CX/elastic pair is
+re-born in the same cell, at the same count, inside the same tick. The debit is
+therefore applied **after** those re-births, against
+
+$$f_c^{\rm marched} + \text{birth}_{cx} + \text{birth}_{el},$$
+
+which is the inventory the cell genuinely carries once the tick ends, net of
+the non-conserving losses only. The alternative — capping against the pre-march
+inventory less the marched ionization — is *not* equivalent and is not used:
+the drop has to be drawn from an array that actually exists, and a cap computed
+against one population while the drop is taken from a smaller one can drive a
+bin negative. Taking both from the same array makes positivity structural
+rather than checked.
+
+Two identities pin the choice, and both are exact at every tick:
+
+- the per-cell particle handshake `ion_removed_cum + ion_debt ==
+  ion_booked_cum`, and the ledger's own
+  `inventory_after − inventory_before == births − losses`;
+- the energy ledger. The re-birth counts `N_cx`, `N_el` are still tallied from
+  the **marched** state, before anything is debited, so the CX/elastic channel
+  amounts and the energy booked for them — `N × E[M_i(T_i^{\rm tick})]`, at the
+  birth spectrum — are untouched by the ordering. The ionization energy row is
+  the moment of the bins the channel actually removed, so it closes whichever
+  population those bins came from.
+
+**This changes which atoms the debit takes, not only how many, and it does so
+on every counted tick — not merely where the positivity cap binds.** The
+marched remnant and the re-births are different spectra (the latter sits at the
+ion Maxwellian, hotter and drifting with the ions), so the reconciliation now
+draws from the mixture. That is the *velocity-blind* reading the channel-1
+convention asks for: `nu_ion` is velocity-blind, and the population it must be
+blind about is the one that is there. Drawing only from the marched remnant,
+while the re-births sit untouched in the same cell, is the velocity-biased
+choice.
+
+**What the pre-2026-08-24 ordering did.** The debit ran before the re-births,
+so `held` was the marched state stripped of CX and elastic as well. A cell
+whose booking was smaller than its true post-tick inventory but larger than
+that stripped remnant was told it could not pay: the positivity limiter fired
+against atoms that had never left, the shortfall went to `ion_debt`, and
+because the same thing happened on the following tick the debt was monotone and
+never retired. On the B0c fixture this failed R13 at every cadence at or
+coarser than 2.5e-5 (42 shortfall cell-ticks at 2.5e-5 over cells {1,5,6}) —
+an artifact of the ordering, not a statement about the cadence. With the debit
+taken last the shipped 2.5e-5 arm carries **zero** shortfall updates and an ion
+debt ratio of 1.2e-19, and R13 discriminates cadence as intended: 5.0e-5 still
+fails, and the probe reason is genuine exhaustion — at its first binding tick
+the plasma books 1.086× the cell's *entire* pre-tick inventory, which no
+ordering can satisfy (`max nu_ion*dt_n` = 2.8 against the R14 bar of 0.1).
+
+Registered as gate `D5` in `scripts/verify_sim1d_k2_dvm.py`, which pays every
+booking up to a synthetic cell's whole inventory with zero shortfall and runs
+the pre-fix ordering beside it as a negative control — the control fires
+exactly above the closed-form threshold `1 − N_{cx,el}/I_0` and not below it.
+**The golden is unaffected by construction**: the moment neutral path never
+builds a DVM and never enters this code.
+
 ### Growth ramp and its accelerated re-approach (default off)
 
 Between accepted steps Δt may grow by at most `dt_growth_factor` (1.25). The
