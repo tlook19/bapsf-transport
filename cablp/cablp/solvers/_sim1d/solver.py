@@ -8444,6 +8444,14 @@ class LAPDSim1D:
         the same gap must agree, and they disagree silently -- no conservation
         check sees it, because each side is internally consistent. This is the
         state item 35 sat in.
+
+        The third comparison ``ray_vs_ceiling`` is ARMED here: this table
+        carries its explanation, which is the condition
+        ``beam_gap_ledger_mismatch`` states for the case being anything but
+        opt-in. Arming it cannot change WHETHER this warns -- a broken-out
+        ray's ceiling shortfall is never larger than its circuit shortfall,
+        because the clamp keeps ``circuit <= ceiling`` -- only which of the
+        two labels the same excursion is reported under.
         """
         if self._beam_gap_ledger_warned:
             return
@@ -8453,6 +8461,7 @@ class LAPDSim1D:
         worst = beam_gap_ledger_mismatch(
             getattr(cathode_solve, "beam_gap_ledger", None),
             device_config.eta,
+            separate_representability=True,
         )
         if worst is None:
             return
@@ -8466,6 +8475,17 @@ class LAPDSim1D:
                 "the item-35 signature; suspect a launched flux, clump split "
                 "or stopping model that the probe and the deposition ray no "
                 "longer share"
+            ),
+            "ray_vs_ceiling": (
+                "the deposition ray crossed the gap WHOLE ({left:.6g}) while "
+                "the highest survival the Beer-Lambert solve can represent -- "
+                "its Coulomb-only ceiling exp(-L_cath/l_bi) -- is {right:.6g}. "
+                "No two views of the gap disagree here: a fully transmitting "
+                "ray cannot be booked above that ceiling, so the "
+                "sigma_eff >= 0 clamp leaves the shortfall unbooked. This is "
+                "a REPRESENTABILITY gap, not a defect report; suspect a hot "
+                "beam in a dense gap, where l_bi and the range-set "
+                "transmission stop tracking each other"
             ),
             "ray_vs_circuit": (
                 "the deposition ray delivers gap survival {left:.6g} while "
