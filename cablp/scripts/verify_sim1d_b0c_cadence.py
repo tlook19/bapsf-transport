@@ -379,6 +379,7 @@ _BASE_NAME = "base_2.5e-05_16x6"
 _CAD_COND_NAME = "cad_3.125e-06"
 _CAD_REF_NAME = R8_REFERENCE_ARM
 _GRID_COND_NAME = "grid_128x48"
+_GRID_COND2_NAME = "grid_256x96"
 _CROSS_NAME = "cross_6.25e-06_32x12"
 
 ARMS = {}
@@ -398,6 +399,9 @@ for _spec in (
     ArmSpec("grid_64x24", 2.5e-5, 64, 24, ("grid",), note=""),
     ArmSpec(_GRID_COND_NAME, 2.5e-5, 128, 48, ("grid",), conditional=True,
             note="CONDITIONAL: only if (32,12)->(64,24) fails R10"),
+    ArmSpec(_GRID_COND2_NAME, 2.5e-5, 256, 96, ("grid",), conditional=True,
+            note="CONDITIONAL: R10 ladder extension, Tom-ratified "
+                 "2026-08-26 -- only if (64,24)->(128,48) fails R10"),
     ArmSpec(_CROSS_NAME, 6.25e-6, 32, 12, ("cross",),
             note="R6 cross arm: REPORTED, NOT GATED"),
 ):
@@ -1020,6 +1024,9 @@ def plan_lines(t_star_ms):
     out.append("[R5] grid ladder (coarse -> fine): " + " -> ".join(GRID_LADDER))
     out.append(f"     conditional 4th rung: {_GRID_COND_NAME} "
                "(only if (32,12)->(64,24) fails R10)")
+    out.append(f"     conditional 5th rung: {_GRID_COND2_NAME} "
+               "(only if (64,24)->(128,48) fails R10; R10 ladder extension, "
+               "Tom-ratified 2026-08-26)")
     out.append(f"[R6] cross arm (REPORTED, NOT GATED): {_CROSS_NAME}")
     out.append(f"     NB {_BASE_NAME} is ONE arm shared by both ladders; it "
                "is run once and read by both.")
@@ -2277,10 +2284,14 @@ def evaluate(arm_records, out_path=None, sampling=SAMPLING_REGISTERED,
     # --------------------------------------------------------------- R10
     lines.append("## R10 velocity-grid criterion (at the shipped cadence)")
     lines.append("")
-    grid = [arms[n] for n in GRID_LADDER
-            if n in arms and arms[n]["status"] == "ok"]
-    if _GRID_COND_NAME in arms and arms[_GRID_COND_NAME]["status"] == "ok":
-        grid.append(arms[_GRID_COND_NAME])
+    # Every banked, usable "grid"-kind arm is a rung -- the unconditional
+    # GRID_LADDER and any conditional extension of it alike -- so a rung
+    # added to the registration joins the pair chain without a second
+    # special case here. Registration order for determinism, then sorted by
+    # bin count so the chain is coarse -> fine whatever order they banked in.
+    grid = [arms[n] for n in ARMS
+            if n in arms and arms[n]["status"] == "ok"
+            and "grid" in ARMS[n].ladders]
     grid.sort(key=lambda a: a["nvz"] * a["nvp"])
     named_grid = None
     if len(grid) < 2:
@@ -2318,14 +2329,29 @@ def evaluate(arm_records, out_path=None, sampling=SAMPLING_REGISTERED,
                      "model for it -- and every rung is published above.")
         lines.append("")
         if named_grid is None:
+            # Name the rung that is actually actionable, which depends on
+            # how far down the conditional chain the banked set already is.
+            if _GRID_COND2_NAME in arms:
+                next_rung = (
+                    f"both conditional rungs ({_GRID_COND_NAME}, "
+                    f"{_GRID_COND2_NAME}) are banked -- past the conditional "
+                    "branch, adjudicate"
+                )
+            elif _GRID_COND_NAME in arms:
+                next_rung = (
+                    f"{_GRID_COND_NAME} is already banked, so the actionable "
+                    f"next rung is {_GRID_COND2_NAME} -- the R10 ladder "
+                    "extension, Tom-ratified 2026-08-26 -- run it"
+                )
+            else:
+                next_rung = (
+                    "the registration provides the conditional "
+                    f"{_GRID_COND_NAME} rung -- run it"
+                )
             verdicts.append(Verdict(
                 "R10 named velocity grid", "UNDERDETERMINED",
                 "no banked grid rung has its next refinement inside "
-                f"{GRID_TOL:.0%} on every gated observable; the registration "
-                f"provides the conditional {_GRID_COND_NAME} rung"
-                + (" (already banked -- past the conditional branch, "
-                   "adjudicate)" if _GRID_COND_NAME in arms else
-                   " -- run it"),
+                f"{GRID_TOL:.0%} on every gated observable; " + next_rung,
                 CONSEQUENCE["c"],
             ))
         else:
