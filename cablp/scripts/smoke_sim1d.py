@@ -9347,6 +9347,165 @@ def _case_timestep_dt_growth_reapproach(growth_flags, growth_params):
 
 
 # --------------------------------------------------------------------
+# timestep-surface-loss-floor-exempt-hysteresis
+# --------------------------------------------------------------------
+@_case(
+    "timestep-surface-loss-floor-exempt-hysteresis",
+    historical_stance=True,
+)
+def _case_timestep_surface_loss_floor_exempt_hysteresis(
+    growth_flags, growth_params
+):
+    # --- hysteresis band on the surface_loss floor exemption (default off) ---
+    # The single-threshold exemption is knife-edge: the accept-time floor clip
+    # perturbs a floor-pinned cell's margin by float residue every step, so one
+    # threshold lets such a cell alternate between exempt and bound. The band
+    # keeps the 1e-3 ENTRY threshold and widens RE-ADMISSION.
+    from cablp.solvers._sim1d.solver import SURFACE_LOSS_FLOOR_EXEMPT_RTOL
+
+    hyst_inner = SURFACE_LOSS_FLOOR_EXEMPT_RTOL
+    hyst_outer = 1.0e-1
+    hyst_floors = {"n": 1.0e8, "Te": 0.1, "Ti": 0.1}
+    hyst_n = np.array([1.0e10, 1.0e10])
+    hyst_floor_energy = 1.5 * hyst_floors["Te"] * ev_to_erg * hyst_n
+
+    def _hyst_state(rel_margin):
+        # Cell 0 sits at rel_margin of its per-cell floor energy; cell 1 is a
+        # healthy cell an order of magnitude clear of every threshold.
+        margin = np.array([rel_margin, 1.0]) * hyst_floor_energy
+        return SimpleNamespace(
+            n=hyst_n,
+            Ee=hyst_floor_energy + margin,
+            Ei=hyst_floor_energy + margin,
+        )
+
+    # Only the electron channel drains, and cell 0 drains 1e6x harder, so
+    # whether cell 0 is exempt IS the bound this function returns.
+    hyst_rhs = SimpleNamespace(
+        n=np.zeros(2),
+        Ee=np.array([-1.0e-3, -1.0e-9]),
+        Ei=np.zeros(2),
+    )
+
+    def _hyst_dt(rel_margin, latch):
+        return plasma_source_timestep(
+            state=_hyst_state(rel_margin),
+            source_rhs=hyst_rhs,
+            floors=hyst_floors,
+            fraction=0.25,
+            floor_exempt_rtol=hyst_inner,
+            floor_exempt_exit_rtol=None if latch is None else hyst_outer,
+            floor_exempt_latch=latch,
+        )
+
+    # Below the inner threshold, inside the band, then clear of the outer one.
+    hyst_walk = (0.5 * hyst_inner, 10.0 * hyst_inner, 0.5)
+    hyst_latch = {}
+    hyst_band = [_hyst_dt(rel, hyst_latch) for rel in hyst_walk]
+    hyst_knife = [_hyst_dt(rel, None) for rel in hyst_walk]
+    # Entry and full recovery are the same verdict either way...
+    assert hyst_band[0] == hyst_knife[0]
+    assert hyst_band[2] == hyst_knife[2]
+    # ...and inside the band the knife edge re-admits cell 0 (collapsing the
+    # bound by ~8 orders) while the band holds the exemption it granted.
+    assert hyst_band[1] > hyst_knife[1] * 1.0e6, (hyst_band[1], hyst_knife[1])
+    # Both energy channels latch, independently and per cell.
+    assert set(hyst_latch) == {"Ee", "Ei"}
+    assert hyst_latch["Ee"].tolist() == [False, False]
+    hyst_step_latch = {}
+    _hyst_dt(hyst_walk[0], hyst_step_latch)
+    assert hyst_step_latch["Ee"].tolist() == [True, False]
+    _hyst_dt(hyst_walk[1], hyst_step_latch)
+    assert hyst_step_latch["Ee"].tolist() == [True, False]
+    _hyst_dt(hyst_walk[2], hyst_step_latch)
+    assert hyst_step_latch["Ee"].tolist() == [False, False]
+    # The band is not an entry threshold: a cell that never cleared the INNER
+    # threshold is not exempted merely by lying inside the band.
+    hyst_cold_latch = {}
+    assert _hyst_dt(hyst_walk[1], hyst_cold_latch) == hyst_knife[1]
+    assert hyst_cold_latch["Ee"].tolist() == [False, False]
+
+    # DEFAULT OFF and presence-gated: the shipped default is 0.0, which builds
+    # no latch and leaves the single-threshold expression in place, and a run
+    # with the key at its default is step-for-step identical to one with the
+    # key absent from the params dict entirely.
+    assert default_config()[0]["surface_loss_floor_exempt_exit_rtol"] == 0.0
+    assert default_config()[1]["surface_loss_floor_exempt"] is True
+    assert growth_flags["surface_loss_floor_exempt"] is True
+    hyst_params = dict(growth_params)
+    hyst_params["tau_prebreakdown"] = 2.0e-9
+    hyst_params["tau_discharge"] = 40.0e-6
+    hyst_default_sim = LAPDSim1D(hyst_params, growth_flags)
+    assert hyst_default_sim._surface_loss_floor_exempt_exit_rtol is None
+    assert hyst_default_sim._surface_loss_floor_exempt_latch is None
+    hyst_absent_params = dict(hyst_params)
+    hyst_absent_params.pop("surface_loss_floor_exempt_exit_rtol")
+    hyst_default = hyst_default_sim.run(t_end=3.0e-7)
+    hyst_absent = LAPDSim1D(hyst_absent_params, growth_flags).run(t_end=3.0e-7)
+    assert [d.accepted_dt for d in hyst_absent.diagnostics] == [
+        d.accepted_dt for d in hyst_default.diagnostics
+    ]
+    for hyst_field in ("n", "nn", "M", "Ee", "Ei"):
+        assert np.array_equal(
+            getattr(hyst_absent, hyst_field), getattr(hyst_default, hyst_field)
+        ), hyst_field
+
+    # BOTH knobs armed on the same short run: the band plus the accelerated
+    # dt_growth re-approach. Finite, complete, and the latch is live.
+    hyst_on_sim = LAPDSim1D(
+        {
+            **hyst_params,
+            "surface_loss_floor_exempt_exit_rtol": hyst_outer,
+            "dt_growth_recovery_patience": 3,
+        },
+        growth_flags,
+    )
+    assert hyst_on_sim._surface_loss_floor_exempt_exit_rtol == hyst_outer
+    assert hyst_on_sim._surface_loss_floor_exempt_latch == {}
+    assert hyst_on_sim._dt_growth_recovery_patience == 3
+    hyst_on = hyst_on_sim.run(t_end=3.0e-7)
+    assert hyst_on.steps > 0
+    for hyst_field in ("n", "nn", "M", "Ee", "Ei"):
+        assert np.all(np.isfinite(getattr(hyst_on, hyst_field))), hyst_field
+    assert np.all(np.isfinite([d.accepted_dt for d in hyst_on.diagnostics]))
+    assert np.all(np.array([d.accepted_dt for d in hyst_on.diagnostics]) > 0.0)
+
+    # Misconfiguration is loud, and at CONSTRUCTION.
+    for bad_hyst in (
+        {"surface_loss_floor_exempt_exit_rtol": -1.0e-2},
+        {"surface_loss_floor_exempt_exit_rtol": float("nan")},
+        {"surface_loss_floor_exempt_exit_rtol": float("inf")},
+        {"surface_loss_floor_exempt_exit_rtol": "wide"},
+        # An outer threshold at or below the inner one is not a band.
+        {"surface_loss_floor_exempt_exit_rtol": SURFACE_LOSS_FLOOR_EXEMPT_RTOL},
+        {"surface_loss_floor_exempt_exit_rtol": 1.0e-4},
+    ):
+        try:
+            LAPDSim1D({**hyst_params, **bad_hyst}, growth_flags)
+        except ValueError as error:
+            assert "surface_loss_floor_exempt_exit_rtol" in str(error), str(error)
+        else:
+            raise AssertionError(f"{bad_hyst} must raise")
+    # Arming the band while the exemption it re-admits into is off is refused
+    # too -- it could never do anything.
+    hyst_flag_off = dict(growth_flags)
+    hyst_flag_off["surface_loss_floor_exempt"] = False
+    try:
+        LAPDSim1D(
+            {**hyst_params, "surface_loss_floor_exempt_exit_rtol": hyst_outer},
+            hyst_flag_off,
+        )
+    except ValueError as error:
+        assert "surface_loss_floor_exempt" in str(error), str(error)
+    else:
+        raise AssertionError("band armed with the exemption off must raise")
+    # ...while the key at its default stays inert with the flag off: the off
+    # path never consults it, so it cannot refuse a run that is not using it.
+    LAPDSim1D(hyst_params, hyst_flag_off)
+    return locals()
+
+
+# --------------------------------------------------------------------
 # breakdown-retry-near-vacuum
 # --------------------------------------------------------------------
 @_case(
@@ -22531,7 +22690,7 @@ def _case_smoke_summary():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 117, "historical_stance": 52}
+_CASE_CENSUS = {"total": 118, "historical_stance": 53}
 
 
 def _assert_case_census():

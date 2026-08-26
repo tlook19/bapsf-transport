@@ -235,7 +235,9 @@ DT_REJECT_FACTOR = 0.5
 #: ``surface_loss_floor_exempt`` flag is on. It separates a cell HOVERING at
 #: its temperature floor (clip plus one step of re-heating residue) from a
 #: healthy drained cell orders of magnitude above it; see the flag's entry in
-#: ``core/config.py``.
+#: ``core/config.py``. It is the ENTRY threshold: re-admission uses this same
+#: value unless the params key ``surface_loss_floor_exempt_exit_rtol`` arms a
+#: wider outer threshold, which must exceed this one.
 SURFACE_LOSS_FLOOR_EXEMPT_RTOL = 1e-3
 
 #: Relative slack [dimensionless] on the "the accepted step IS dt_min" test the
@@ -1201,6 +1203,51 @@ class LAPDSim1D:
         )
         self._surface_loss_floor_exempt_rtol = (
             SURFACE_LOSS_FLOOR_EXEMPT_RTOL if _surface_loss_floor_exempt else None
+        )
+        # Optional hysteresis band on that exemption (default off = the
+        # knife edge above). Validated here so a band that could never be a
+        # band -- outer at or below the inner threshold -- or one armed with
+        # the exemption itself off is refused before any compute.
+        _exempt_exit_rtol = self._input_dict.get(
+            "surface_loss_floor_exempt_exit_rtol", 0.0
+        )
+        try:
+            _exempt_exit_value = float(_exempt_exit_rtol)
+        except (TypeError, ValueError):
+            _exempt_exit_value = np.nan
+        if not np.isfinite(_exempt_exit_value) or _exempt_exit_value < 0.0:
+            raise ValueError(
+                "surface_loss_floor_exempt_exit_rtol must be a finite "
+                "non-negative relative threshold, 0 to disable the hysteresis "
+                f"band (got {_exempt_exit_rtol!r})"
+            )
+        if _exempt_exit_value > 0.0:
+            if not _surface_loss_floor_exempt:
+                raise ValueError(
+                    "surface_loss_floor_exempt_exit_rtol is set "
+                    f"({_exempt_exit_rtol!r}) while the surface_loss_floor_exempt "
+                    "flag is off; the hysteresis band re-admits cells to an "
+                    "exemption that is not running, so it could never do "
+                    "anything"
+                )
+            if _exempt_exit_value <= SURFACE_LOSS_FLOOR_EXEMPT_RTOL:
+                raise ValueError(
+                    "surface_loss_floor_exempt_exit_rtol must be strictly "
+                    "greater than the entry threshold "
+                    f"SURFACE_LOSS_FLOOR_EXEMPT_RTOL={SURFACE_LOSS_FLOOR_EXEMPT_RTOL!r} "
+                    f"(got {_exempt_exit_rtol!r}); an outer threshold at or "
+                    "below the inner one is not a band"
+                )
+        # Presence gate: None keeps plasma_source_timestep on its
+        # single-threshold expression and allocates no latch.
+        self._surface_loss_floor_exempt_exit_rtol = (
+            _exempt_exit_value if _exempt_exit_value > 0.0 else None
+        )
+        # Per-cell, per-energy-channel exempt memory, owned here because it is
+        # run state rather than configuration: keyed "Ee"/"Ei", advanced by
+        # suggest_timestep, and deliberately absent from the restart record.
+        self._surface_loss_floor_exempt_latch = (
+            {} if self._surface_loss_floor_exempt_exit_rtol is not None else None
         )
         _max_steps_action = str(
             self._input_dict.get("max_steps_action", "raise")
@@ -7098,7 +7145,13 @@ class LAPDSim1D:
         return summarize_result(result)
 
     def suggest_timestep(self, y=None, include_heat_conduction=None, time=None):
-        """Return an explicit timestep suggestion and diagnostics."""
+        """Return an explicit timestep suggestion and diagnostics.
+
+        A pure query, with one armed exception: while
+        ``surface_loss_floor_exempt_exit_rtol`` is set this call ADVANCES the
+        instance's ``surface_loss`` floor-exemption latch, so an out-of-loop
+        probe call moves the same run state an in-loop call does.
+        """
         state = self.state if y is None else self._unpack(y)
         if time is None:
             time = self._time
@@ -7169,6 +7222,10 @@ class LAPDSim1D:
             circuit_kwargs=circuit_kwargs,
             plasma_source_rhs=plasma_source_rhs,
             source_floor_exempt_rtol=self._surface_loss_floor_exempt_rtol,
+            source_floor_exempt_exit_rtol=(
+                self._surface_loss_floor_exempt_exit_rtol
+            ),
+            source_floor_exempt_latch=self._surface_loss_floor_exempt_latch,
             neutral_rows_superseded=dvm_superseded,
             cfl=float(self._input_dict.get("cfl", 0.4)),
             density_dt_fraction=float(
