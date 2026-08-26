@@ -33,6 +33,16 @@ the two can legitimately differ:
     bremsstrahlung coefficient into its ``electron_ion_cooling`` row; the
     PLT2 channel here is line power only and excludes it.
 
+ADF11 EDGE CLAMP.  ``he_rates`` interpolates on the adf11 grid and CLAMPS
+NEAREST-EDGE outside it (``_adas.py`` lines 9-10, 85-86, 111-112).  Below the
+low Te edge the PLT coefficients are HELD at their edge value while the true
+line power keeps collapsing under the excitation thresholds, so a window mean
+that includes below-edge frames is biased HIGH -- and ``adas_low_te_extension``
+does not rescue it even when on, because the extension rescales only
+``acd``/``prb1``.  ``te_edge_census`` therefore MEASURES the below-edge frame
+count per window and the caveat is emitted onto the column it indicts, so a
+clamp-biased mean can never be read off the table as bare physics.
+
 CHORD QUANTITIES AND THEIR ASSUMPTION.  The model is 1D: it carries one
 (ne, nn, Te) per axial cell and no radial profile at all.  A chord integral
 therefore requires an explicit radial assumption, and the honest one for a
@@ -100,7 +110,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
-from cablp.funcs._adas import he_rates  # noqa: E402
+from cablp.funcs._adas import (  # noqa: E402
+    he_rate_temperature_range_eV,
+    he_rates,
+)
 from cablp.vars._cons import qe_SI  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -334,6 +347,71 @@ def trace_stats(t_ms, y):
     }
 
 
+def te_edge_census(t_ms, Te, closure):
+    """Count frames per window whose Te sits outside the adf11 Te grid.
+
+    ``he_rates`` interpolates bilinearly in (log10 ne, log10 Te) on the adf11
+    grid and CLAMPS NEAREST-EDGE outside it (``cablp/funcs/_adas.py`` lines
+    9-10, 85-86, 111-112).  Below the low edge the PLT coefficients are
+    therefore HELD at their edge value instead of continuing to fall, while
+    the true line power collapses as Te drops under the excitation
+    thresholds.  Any window mean that includes below-edge frames is
+    consequently biased HIGH, and by an amount this instrument cannot bound
+    from the tables alone -- so the count is measured here and carried onto
+    the affected column rather than left for the reader to infer.
+
+    ``adas_low_te_extension`` does not rescue the PLT channels even when on:
+    it rescales only ``acd``/``prb1`` below the edge.
+    """
+    te_lo, te_hi = he_rate_temperature_range_eV()
+    out = {
+        "table_Te_min_eV": te_lo,
+        "table_Te_max_eV": te_hi,
+        "low_te_extension_applies_to_PLT": False,
+        "adas_low_te_extension": bool(closure["adas_low_te_extension"]),
+        "windows": {},
+    }
+    for name, window in (
+        ("drive", DRIVE_WINDOW_MS),
+        ("afterglow", AFTERGLOW_WINDOW_MS),
+    ):
+        mask = (t_ms >= window[0]) & (t_ms <= window[1])
+        frames = int(np.count_nonzero(mask))
+        below = int(np.count_nonzero(Te[mask] < te_lo))
+        above = int(np.count_nonzero(Te[mask] > te_hi))
+        out["windows"][name] = {
+            "frames": frames,
+            "frames_below_edge": below,
+            "frames_above_edge": above,
+            "fraction_below_edge": (below / frames) if frames else None,
+            "min_Te_eV": float(np.min(Te[mask])) if frames else None,
+            "clamp_biased_high": below > 0,
+        }
+    return out
+
+
+def edge_caveat_line(census, window_name):
+    """One-line clamp caveat for a window, or None when the window is clean."""
+    w = census["windows"][window_name]
+    if not w["frames"]:
+        return None
+    lo = census["table_Te_min_eV"]
+    if not w["clamp_biased_high"]:
+        return (
+            f"{window_name}: 0/{w['frames']} frames below the adf11 Te edge "
+            f"({lo:g} eV) -- no edge-clamp bias in this column "
+            f"(min Te {w['min_Te_eV']:.4f} eV)."
+        )
+    return (
+        f"{window_name}: {w['frames_below_edge']}/{w['frames']} frames "
+        f"({100.0 * w['fraction_below_edge']:.0f} %) sit BELOW the adf11 Te "
+        f"grid edge ({lo:g} eV), where he_rates clamps PLT nearest-edge "
+        f"instead of letting it fall (min Te {w['min_Te_eV']:.4f} eV) -- "
+        f"the {window_name} column is EDGE-CLAMP-BIASED HIGH and is not a "
+        "quotable radiated power."
+    )
+
+
 def ledger_crosscheck(f, iz, t_ms, eps):
     """Compare each reconstructed channel against its own ledger row.
 
@@ -429,6 +507,7 @@ def build_report(h5_path, port):
             "afterglow": list(AFTERGLOW_WINDOW_MS),
         },
         "stats": stats,
+        "te_edge_census": te_edge_census(t_ms, Te, closure),
         "ledger_crosscheck": cross,
         "state": {
             "time_ms": t_ms,
@@ -474,6 +553,21 @@ def markdown_report(rep):
         "cross-section carries no radial assumption."
     )
     L.append("")
+    census = rep["te_edge_census"]
+    L.append(
+        "**adf11 edge clamp.** `he_rates` interpolates on the adf11 "
+        f"(log10 ne, log10 Te) grid and CLAMPS NEAREST-EDGE outside it "
+        f"(`cablp/funcs/_adas.py` lines 9-10, 85-86, 111-112). The Te grid "
+        f"spans {census['table_Te_min_eV']:g} to "
+        f"{census['table_Te_max_eV']:g} eV. Below the low edge PLT is HELD at "
+        "its edge value while the true line power keeps collapsing, so any "
+        "window mean containing below-edge frames is biased HIGH. This "
+        "artifact runs `adas_low_te_extension = "
+        f"{census['adas_low_te_extension']}` -- and the extension would not "
+        "help either way, since it rescales only `acd`/`prb1`, never the PLT "
+        "channels. Per-window frame counts are on the channel table below."
+    )
+    L.append("")
     L.append("## Placement")
     L.append("")
     L.append(f"* artifact `{rep['h5']}`")
@@ -482,11 +576,29 @@ def markdown_report(rep):
         f"{r['final_time_ms']:.4f} ms, status `{r['run_status']}`, "
         f"breakdown trigger {r['t_breakdown_trigger_ms']:.4f} ms"
     )
+    anchors = sorted(int(p) for p in rep["port_law"]["anchors"])
+    is_anchor = g["port"] in anchors
     L.append(
         f"* port {g['port']} -> z_want {g['z_want_cm']:.2f} cm "
         f"(law z = {rep['port_law']['z0_cm']:.4f} + "
         f"{rep['port_law']['pitch_cm']:.4f} x port, anchored on "
         f"`{Path(rep['port_law']['overlay']).name}`)"
+    )
+    L.append(
+        "* the overlay's MEASURED anchor set is {"
+        + ", ".join(str(p) for p in anchors)
+        + "} -- "
+        + (
+            f"port {g['port']} IS one of them, so its z is the overlay's own "
+            "measured value."
+            if is_anchor
+            else f"port {g['port']} is NOT one of them. Its z is INTERPOLATED "
+            "hardware geometry: the anchors are exactly collinear and the "
+            f"resulting {rep['port_law']['pitch_cm']:.2f} cm port pitch places "
+            "it. That is a geometry extrapolation, not a measured probe "
+            "position, and nothing here was scored against a probe at this "
+            "port."
+        )
     )
     L.append(
         f"* cell {g['cell']} at z {g['z_cell_cm']:.4f} cm, role "
@@ -530,6 +642,24 @@ def markdown_report(rep):
                 f"{_fmt(s['drive_mean'])} | {_fmt(s['afterglow_mean'])} | "
                 f"{_fmt(s['peak'])} | {s['peak_time_ms']:.4f} |"
             )
+    # The flag is placed IN the column it indicts: "drive mean" is field 4 of
+    # the row, "afterglow mean" is field 5.
+    for name, field in (("drive", 4), ("afterglow", 5)):
+        w = census["windows"][name]
+        if not (w["frames"] and w["clamp_biased_high"]):
+            continue
+        cells = ["**CAVEAT**", "", "", "", "", "", ""]
+        cells[field - 1] = (
+            f"**{name} column: EDGE-CLAMP-BIASED HIGH -- "
+            f"{w['frames_below_edge']}/{w['frames']} frames below the adf11 "
+            "Te edge**"
+        )
+        L.append("| " + " | ".join(cells) + " |")
+    L.append("")
+    for name in ("drive", "afterglow"):
+        line = edge_caveat_line(census, name)
+        if line is not None:
+            L.append(f"* {line}")
     L.append("")
     L.append("## Self-consistency against the artifact's own term ledger")
     L.append("")
@@ -580,8 +710,13 @@ def json_report(rep):
             "closure",
             "windows_ms",
             "stats",
+            "te_edge_census",
             "ledger_crosscheck",
         )
+    }
+    out["te_edge_caveats"] = {
+        name: edge_caveat_line(rep["te_edge_census"], name)
+        for name in ("drive", "afterglow")
     }
     out["geometry"] = dict(rep["geometry"])
     out["units"] = dict(QUANTITY_UNIT)
