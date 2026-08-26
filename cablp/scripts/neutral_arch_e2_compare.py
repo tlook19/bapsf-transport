@@ -171,12 +171,15 @@ def build_shared(bg, args):
     )
 
     # End-pump sticking, the shipped TPMC/KN2Zone convention: the pumping speed
-    # over the one-way thermal flux through the far end plane. Both ends use
-    # A_end = pi Rm[-1]^2, as the shipped instruments do.
+    # over the one-way thermal flux through THAT END'S OWN end plane. Both ends
+    # previously used A_end = pi Rm[-1]^2, which the shipped instruments also
+    # did; they now take their own, matching the solver's _dvm_end_sticking
+    # (45e7f3b).
     vbar = np.sqrt(8.0 * KB * T_WALL_K / (np.pi * M_HE))
-    A_end = np.pi * Rm[-1] ** 2
-    s_L = float(bg["S_pump_L"]) * 1e3 / (A_end * vbar / 4.0)
-    s_R = float(bg["S_pump_R"]) * 1e3 / (A_end * vbar / 4.0)
+    A_end_L = np.pi * Rm[0] ** 2
+    A_end_R = np.pi * Rm[-1] ** 2
+    s_L = float(bg["S_pump_L"]) * 1e3 / (A_end_L * vbar / 4.0)
+    s_R = float(bg["S_pump_R"]) * 1e3 / (A_end_R * vbar / 4.0)
 
     # Source ledger -> the engine's per-cell arrays. Rates in atoms/s.
     src = bg["sources"]
@@ -2253,8 +2256,12 @@ def main(argv=None):
             "convention so this comparison stays about transport; the "
             "convention itself is therefore NOT adjudicated. It acts only in "
             f"the cells adjacent to mesh face {shared['mesh_face']}.",
-            "2. The end-pump sticking coefficients use A_end = pi Rm[-1]^2 at "
-            "BOTH ends, the shipped instrument convention, on both sides.",
+            "2. The end-pump sticking coefficients use each end's OWN "
+            "end-plane area (A_end_L = pi Rm[0]^2, A_end_R = pi Rm[-1]^2), "
+            "the shipped instrument convention since 2026-08-26, on both "
+            "sides. Before that date both ends took pi Rm[-1]^2 here and in "
+            "KN2Zone/TPMC, so numbers from earlier runs of this comparison "
+            "are not directly comparable to these.",
             "3. The puff is born as a 300 K zero-momentum volume Maxwellian in "
             "the annulus on both sides (the engine's registered channel 5).",
         ])
@@ -2528,8 +2535,12 @@ def write_summary(path, args, shared, bg, summary, cx_table, dt_note, dt_band,
         f"{shared['mesh_face']}."
     )
     L.append(
-        "2. End-pump sticking uses `A_end = pi Rm[-1]^2` at both ends (the "
-        "shipped instrument convention) on both sides."
+        "2. End-pump sticking uses each end's OWN end-plane area "
+        "(`A_end_L = pi Rm[0]^2`, `A_end_R = pi Rm[-1]^2`) on both sides -- "
+        "the shipped instrument convention since 2026-08-26. Before that "
+        "date both ends took `pi Rm[-1]^2` here and in KN2Zone/TPMC, so "
+        "numbers from earlier runs of this comparison are not directly "
+        "comparable to these."
     )
     L.append(
         "3. The puff is born as a 300 K zero-momentum volume Maxwellian in the "

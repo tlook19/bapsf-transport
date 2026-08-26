@@ -3989,6 +3989,14 @@ class LAPDSim1D:
         realizes a different speed than the one configured wherever the vessel
         differs between the two ends.
 
+        The instruments named above carry the per-end form too, as of
+        2026-08-26 (``physics/kinetic_neutrals.py``, ``scripts/mc_neutrals.py``
+        and the two ``neutral_arch_*`` benches took ``pi Rm[-1]**2`` at BOTH
+        ends until then). Their end-plane area is ``pi Rm**2`` outright, since
+        they model neither the obstruction cross-section nor the support rods
+        that ``neutral_area_cm2`` subtracts here; on a machine carrying either,
+        that residual difference stands.
+
         Where the end cell is a plenum, ``pump_elbow_conductance_lps`` folds
         into the speed in series first, the same restriction the fluid pump
         term applies at the same cell; a pump on any other role has no

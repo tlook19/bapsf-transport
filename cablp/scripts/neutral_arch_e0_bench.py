@@ -462,9 +462,13 @@ class PersistentMC:
         self.mesh_edge = bg["mesh_edge"]
         self.transparency = 1.0 - bg["eta"]
         vbar = np.sqrt(8.0 * KB * T_WALL_K / (np.pi * M_HE))
-        A_end = np.pi * self.Rm[-1] ** 2
-        self.s_R = bg["S_pump_R"] * 1e3 / (A_end * vbar / 4.0)
-        self.s_L = bg["S_pump_L"] * 1e3 / (A_end * vbar / 4.0)
+        # Per-end end-plane area, matching KN2Zone and the solver's
+        # _dvm_end_sticking (45e7f3b); both ends previously took
+        # pi Rm[-1]**2, which mis-scales the end whose vessel differs.
+        A_end_L = np.pi * self.Rm[0] ** 2
+        A_end_R = np.pi * self.Rm[-1] ** 2
+        self.s_R = bg["S_pump_R"] * 1e3 / (A_end_R * vbar / 4.0)
+        self.s_L = bg["S_pump_L"] * 1e3 / (A_end_L * vbar / 4.0)
         src = bg["sources"]
         order = ("puff", "anode_right", "anode_left", "vol_rec",
                  "cathode_face", "collector_face")

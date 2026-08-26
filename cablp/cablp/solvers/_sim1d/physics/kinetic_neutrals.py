@@ -397,12 +397,20 @@ class KN2Zone:
             self.M_cx[i] = g.maxwellian(
                 max(bg["Ti"][i], 0.02), bg["u"][i]
             )
-        # end pump sticking (TPMC convention: S_pump over the end-plane
-        # one-way thermal flux)
+        # End pump sticking: S_pump over the one-way 300 K thermal flux
+        # through THAT END'S OWN end plane. Each end's outflow is counted
+        # through its own end cell's areas (outgoing_flux, with A_col[i] +
+        # A_ann[i] = pi Rm[i]**2), so the speed an end realizes is
+        # s_END * pi Rm_END**2 * vbar / 4 -- an area belonging to the other
+        # end realizes a different speed than the one configured wherever the
+        # vessel differs between the two ends. Both ends previously took
+        # pi Rm[-1]**2. Same per-end convention as the solver's
+        # _dvm_end_sticking (45e7f3b).
         vbar = np.sqrt(8.0 * KB * T_WALL_K / (np.pi * M_HE))
-        A_end = np.pi * self.Rm[-1] ** 2
-        self.s_R = bg["S_pump_R"] * 1e3 / (A_end * vbar / 4.0)
-        self.s_L = bg["S_pump_L"] * 1e3 / (A_end * vbar / 4.0)
+        A_end_L = np.pi * self.Rm[0] ** 2
+        A_end_R = np.pi * self.Rm[-1] ** 2
+        self.s_R = bg["S_pump_R"] * 1e3 / (A_end_R * vbar / 4.0)
+        self.s_L = bg["S_pump_L"] * 1e3 / (A_end_L * vbar / 4.0)
         self.mesh_face = bg["mesh_edge"]  # z-edge index
         self.transparency = 1.0 - bg["eta"]
 
