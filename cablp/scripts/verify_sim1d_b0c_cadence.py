@@ -979,8 +979,8 @@ def load_arm(path):
 
 def plan_lines(t_star_ms):
     out = []
-    out.append("B0c arm plan -- registration of record "
-               "B0C_REGISTRATION_DRAFT_2026-08-24.md (R1-R16)")
+    out.append("B0c arm plan -- registration of record: "
+               "the B0c registration, R1-R16, ratified 2026-08-24")
     out.append("")
     out.append("[R1] Fixture: verify_sim1d_k2_dvm.make_sim() exactly "
                f"(exchange={EXCHANGE_MODEL!r}, fixture cadence "
@@ -1219,6 +1219,26 @@ def _local_slopes(hs, errs):
     return ps
 
 
+def _log2_vs_h_max_rescale(ladder):
+    """[R8] Largest rescaling the EFFECTIVE-h estimator would apply to p.
+
+    The registered successive-pair order is ``p = log2(e_i / e_i+1)``, which
+    reads the rungs as halving exactly. They do not: a neutral tick fires at
+    the first accepted-step boundary at or past ``next_s``, so an arm's
+    EFFECTIVE cadence can sit a little above its nominal. Forming the same
+    pair against the effective h -- ``log(e_i / e_i+1) / log(h_i / h_i+1)``,
+    which is what ``_local_slopes`` does on the amended path -- multiplies
+    every p by ``log(2) / log(h_i / h_i+1)``. Returns the largest
+    ``|factor - 1|`` over the ladder, or nan if no pair is usable.
+    """
+    devs = []
+    for coarse, fine in zip(ladder[:-1], ladder[1:]):
+        h0, h1 = float(coarse["_h"]), float(fine["_h"])
+        if h0 > 0.0 and h1 > 0.0 and h0 != h1:
+            devs.append(abs(math.log(2.0) / math.log(h0 / h1) - 1.0))
+    return max(devs) if devs else float("nan")
+
+
 def _r8_pre_amendment(lines, verdicts, arms, ladder, dead, registered):
     """[R8, PRE-AMENDMENT] Successive-pair order fit over the whole ladder.
 
@@ -1270,6 +1290,18 @@ def _r8_pre_amendment(lines, verdicts, arms, ladder, dead, registered):
             "Ladder (coarse -> fine): "
             + " -> ".join(f"`{a['name']}` (h = {a['_h']:.6g} s)"
                           for a in ladder)
+        )
+        lines.append("")
+        rescale = _log2_vs_h_max_rescale(ladder)
+        lines.append(
+            "ESTIMATOR DISCLOSURE: `p` below is the registered `log2` "
+            "ratio, which reads the rungs as halving exactly; the EFFECTIVE "
+            "cadences do not, so the effective-h estimator "
+            "`log(e_i/e_i+1)/log(h_i/h_i+1)` -- the amended path's form, and "
+            "the one R8-bis registers -- would rescale every `p` on this "
+            + (f"ladder by up to {rescale:.1%}"
+               if np.isfinite(rescale) else "ladder by an unreadable amount")
+            + ": reported, not applied."
         )
         lines.append("")
         lines.append(
@@ -1814,9 +1846,8 @@ def evaluate(arm_records, out_path=None, sampling=SAMPLING_REGISTERED,
     lines.append("# B0c convergence table -- DVM cadence + velocity grid")
     lines.append("")
     lines.append(
-        "Registration of record: `B0C_REGISTRATION_DRAFT_2026-08-24.md` "
-        "(R1-R16, ratified 2026-08-24). Harness: "
-        "`scripts/verify_sim1d_b0c_cadence.py`."
+        "Registration of record: the B0c registration, R1-R16, ratified "
+        "2026-08-24. Harness: `scripts/verify_sim1d_b0c_cadence.py`."
     )
     lines.append("")
     if registered:
@@ -2331,11 +2362,21 @@ def evaluate(arm_records, out_path=None, sampling=SAMPLING_REGISTERED,
         if named_grid is None:
             # Name the rung that is actually actionable, which depends on
             # how far down the conditional chain the banked set already is.
-            if _GRID_COND2_NAME in arms:
+            if _GRID_COND_NAME in arms and _GRID_COND2_NAME in arms:
                 next_rung = (
                     f"both conditional rungs ({_GRID_COND_NAME}, "
                     f"{_GRID_COND2_NAME}) are banked -- past the conditional "
                     "branch, adjudicate"
+                )
+            elif _GRID_COND2_NAME in arms:
+                # Out-of-order banking: the chain's second conditional rung
+                # without its first. Unreachable by the registered protocol,
+                # but the text must not claim both are banked.
+                next_rung = (
+                    f"{_GRID_COND2_NAME} is banked but {_GRID_COND_NAME} is "
+                    "not, so the conditional chain has a gap and no "
+                    "refinement pair spans it -- run "
+                    f"{_GRID_COND_NAME}"
                 )
             elif _GRID_COND_NAME in arms:
                 next_rung = (
@@ -2502,7 +2543,7 @@ def main(argv=None):
     p = argparse.ArgumentParser(
         description=(
             "B0c cadence + velocity-grid convergence harness "
-            "(registration B0C_REGISTRATION_DRAFT_2026-08-24, R1-R16)."
+            "(the B0c registration, R1-R16, ratified 2026-08-24)."
         )
     )
     mode = p.add_mutually_exclusive_group(required=True)

@@ -83,6 +83,24 @@ _BLOCK_HEADER = re.compile(
 )
 
 
+def _missing_data_file_message(path):
+    """Return the fetch-instruction text for a missing OPEN-ADAS data file.
+
+    Mirrors ``cablp.funcs._adas._missing_data_file_message`` so this script
+    fails the same loud way on a files-absent clone, worded for the adf15
+    PEC files it reads rather than the adf11 masters.
+    """
+    return (
+        f"OPEN-ADAS data file not found: {path}\n"
+        "The ADAS .dat files are NOT tracked in this repository -- OPEN-ADAS's "
+        "terms forbid redistributing them on a public website -- so the adf15 "
+        "PEC files this script reads must be fetched by hand into "
+        "cablp/cablp/vars/adas/ before it can run.\n"
+        "See cablp/vars/adas/README.md for the per-file download URL, the "
+        "local filename to save as, and the checksum to verify."
+    )
+
+
 def read_adf15(path):
     """Parse an adf15 photon-emissivity-coefficient file.
 
@@ -96,7 +114,11 @@ def read_adf15(path):
     taken here so the interpolation is log-log. 1.00E-74 is the format's
     zero sentinel and survives as log10 = -74.
     """
-    lines = Path(path).read_text().splitlines()
+    try:
+        text = Path(path).read_text()
+    except FileNotFoundError as exc:
+        raise RuntimeError(_missing_data_file_message(path)) from exc
+    lines = text.splitlines()
     n_expected = int(lines[0].split()[0])
 
     blocks = []

@@ -67,7 +67,8 @@ The suppression is deliberately narrow in both directions:
 * only cases that BUILD ON a pinned config dict are muted -- either straight
   from a fixture, or from one a predecessor derived and handed on -- so a case
   that constructs a deprecated configuration of its own still prints its
-  warning (52 of the 117 cases carry the flag; the other 65 warn as usual);
+  warning (how the registry splits is ``_CASE_CENSUS``, asserted against
+  the live ``_CASES`` at import so no count can go stale here);
 * ``production-construction-warning-free`` is not muted, and it asserts
   against a fresh ``warnings.catch_warnings(record=True)`` with
   ``simplefilter("always")``, which overrides any outer filter -- a production
@@ -22520,6 +22521,35 @@ def _case_smoke_summary():
         f"Vp_total={geom.plasma_volume_cm3.sum():.6e} cm^3, "
         f"Vm_total={geom.neutral_volume_cm3.sum():.6e} cm^3"
     )
+
+
+# ----------------------------------------------------------------------
+# Registry census, asserted at import.
+#
+# These counts used to sit in the module docstring as prose, where nothing
+# checked them and they drifted silently -- the sentence claimed 114 while
+# the registry held 116. They live here instead, and every import of this
+# module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
+# adding or removing a case cannot leave a stale number behind.
+# ----------------------------------------------------------------------
+_CASE_CENSUS = {"total": 117, "historical_stance": 52}
+
+
+def _assert_case_census():
+    """Fail at import if ``_CASE_CENSUS`` no longer describes ``_CASES``."""
+    live = {
+        "total": len(_CASES),
+        "historical_stance": sum(1 for e in _CASES if e.historical_stance),
+    }
+    if live != _CASE_CENSUS:
+        raise AssertionError(
+            f"smoke case census is stale: the registry holds {live}, "
+            f"_CASE_CENSUS records {_CASE_CENSUS}. Update _CASE_CENSUS in "
+            "the same commit that adds or removes a case."
+        )
+
+
+_assert_case_census()
 
 
 def main(argv=None):

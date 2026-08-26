@@ -95,8 +95,8 @@ to be.
 |---|---|---|
 | `nx` | `60` | Axial resolution of the far column: a pure cost knob. The campaign runs 268; a reviewer pays for this gate on the candidate branch and again post-merge. Pinned rather than inherited so a future default-`nx` change cannot multiply every gate's runtime silently. |
 | `max_steps_action` | `"raise"` | Deliberately overrides the stance's `"stop"`. For a campaign arm a step cap is a budget and a truncated arm is still data; here the cap is a tripwire, and tripping it should be loud. |
-| `max_steps` (run kwarg) | `150000` | **A tripwire, not a run length** — ~1.6× the measured 94,044 steps. It exists so a change that quietly destroys the timestep fails fast instead of running for hours. If it fires, the question is what happened to `dt`, not what happened to the trajectory. The value was SIZED at ~2× deliberately, against the 76,631 steps the fixture ran before the 2026-08-25 stance event: a backstop with a few percent of headroom is not a backstop, it is a second cost cap waiting to truncate the gate. That event's +23,636 steps ate part of the margin without the cap moving; 1.6× is still a backstop, and re-sizing it is a golden-touching change rather than a maintenance edit. |
-| digest horizon (`baselines/golden_digest_4k.json`) | first `4000` accepted steps | The companion fixture for `scripts/golden_digest_gate.py`, which folds the packed state into a running SHA-256 after EVERY accepted step of this same configuration. The horizon is a cost knob, not physics: 4,000 steps is **10 min 46 s** on the pure path against the full gate's ~19 min compiled / 46 min 38 s pure, and over the steps it covers it is the STRONGER check, because the golden certifies only what reaches a save. (Those are post-`mg-pure-vectorize` figures, the digest one measured on a clean lane 2026-08-26. The `~2.5 min` against a `~17` min gate this row carried before was true at the PREVIOUS stance; the adaptive-`dt` change recorded in the 2026-08-25 stance event is what moved it.) That gate runs at `max_steps_action = "stop"` — the cap is its run length, not a tripwire — which changes what happens AT the cap and nothing before it. |
+| `max_steps` (run kwarg) | `150000` | **A tripwire, not a run length** — ~1.6× the measured 94,044 steps. It exists so a change that quietly destroys the timestep fails fast instead of running for hours. If it fires, the question is what happened to `dt`, not what happened to the trajectory. The value was SIZED at ~2× deliberately, against the 76,631 steps the fixture ran at the R2b re-anchor (2026-08-20), which is the capture the cap was chosen against and not the one immediately before the stance event: a backstop with a few percent of headroom is not a backstop, it is a second cost cap waiting to truncate the gate. Two recaptures then trimmed the fixture to 70,408 steps, and it is THAT count the 2026-08-25 stance event's +23,636 steps are measured from — 70,408 + 23,636 = the 94,044 above. The margin shrank without the cap moving; 1.6× is still a backstop, and re-sizing it is a golden-touching change rather than a maintenance edit. |
+| digest horizon (`baselines/golden_digest_4k.json`) | first `4000` accepted steps | The companion fixture for `scripts/golden_digest_gate.py`, which folds the packed state into a running SHA-256 after EVERY accepted step of this same configuration. The horizon is a cost knob, not physics: 4,000 steps is **10 min 46 s** on the pure path against the full gate's 19 min 14 s compiled / 46 min 38 s pure, and over the steps it covers it is the STRONGER check, because the golden certifies only what reaches a save. (Those are post-`mg-pure-vectorize` figures, the digest one measured on a clean lane 2026-08-26. The `~2.5 min` against a `~17` min gate this row carried before was true at the PREVIOUS stance; the adaptive-`dt` change recorded in the 2026-08-25 stance event is what moved it.) That gate runs at `max_steps_action = "stop"` — the cap is its run length, not a tripwire — which changes what happens AT the cap and nothing before it. |
 
 `BASELINE_FLAG_OVERRIDES` carries one entry, `neutral_equilibration = True`, for
 the reason given in the re-cut section above.
@@ -111,7 +111,7 @@ whole cycle rather than a truncated foot.
 | quantity | value |
 |---|---|
 | steps | 94,044 |
-| wall, single lane | ~19 min per capture COMPILED; **46 min 38 s** PURE, i.e. 2.41× compiled (measured post-`mg-pure-vectorize`, 2026-08-25; see the kernel-path disclosure in the 2026-08-25 record) — the two run strictly serially. The `~2.8 h` this row once gave for the pure path was an EXTRAPOLATION from two killed attempts and was never measured; it is corrected in that record. |
+| wall, single lane | **19 min 14 s** per capture COMPILED (measured 2026-08-26); **46 min 38 s** PURE, i.e. 2.42× compiled (measured post-`mg-pure-vectorize`, 2026-08-25; see the kernel-path disclosure in the 2026-08-25 record) — the two run strictly serially. The `~2.8 h` this row once gave for the pure path was an EXTRAPOLATION from two killed attempts and was never measured; it is corrected in that record. |
 | saves | 2,620 |
 | `final_time` | 2.618731e-02 s (the dynamic `t_end`, reached) |
 | trajectory | `y[2620, 576]` = 8 fields × 72 cells |
@@ -210,8 +210,8 @@ at ~60 and ~65 minutes recorded below, so there was no finished run underneath
 it. The pure full golden was subsequently RUN TO COMPLETION at **1 h 21 min
 42 s**, `exact=True`; and then at **46 min 38 s**, `exact=True`, once
 `mg-pure-vectorize` (campaign @ `4ef3a37`) made the CSDA march's table lookups
-1.75× faster. Against the ~19 min compiled capture the pure path therefore costs
-**2.41×**, not the near-order-of-magnitude the extrapolation implied. Two
+1.75× faster. Against the 19 min 14 s compiled capture the pure path therefore
+costs **2.42×**, not the near-order-of-magnitude the extrapolation implied. Two
 consequences for reading this section: the AT-CAPTURE figures above stand as
 measured and are not restated — but the `~8.8×` digest ratio is a
 pre-`mg-pure-vectorize` number describing a stance-to-stance change, and does
