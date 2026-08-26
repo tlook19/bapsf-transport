@@ -30,18 +30,26 @@ def _s(values):
     )
 
 
-def _hold_label(ledger_hold, params_hold):
+def _hold_label(ledger_hold, params_hold, ledger_group_present=False):
     """Label the transfer hold, preferring the ledger attr as the authority.
 
     ``params_json`` records what the run was ASKED for; the
     ``dvm_transfer_ledger/transfer_hold`` attr records what the solver
     resolved and actually ran, so the attr wins wherever it is present.
-    An artifact written before that attr existed carries only the params
-    value, which is labelled ``<params-only: X>`` so it is never mistaken
-    for the authoritative record -- and is reported as it stands, with no
-    default substituted in, because an artifact that predates the attr also
-    predates the selector's current default.  When both are present and
-    DISAGREE neither is picked: both are reported.
+    When both are present and DISAGREE neither is picked: both are reported.
+
+    A file that HAS the ledger group but NOT that attr is not an unknown:
+    the writer states what its absence means (``results/io.py:191-196``) --
+    the attr arrived with the exponential hold, so a ledger written without
+    it is a run that predates the hold and therefore ran the zero-order
+    hold. Those artifacts are labelled ``zoh``, which is the authoritative
+    reading of the ledger, not a params fallback.
+
+    Only a file with no ledger group at all falls back to params, labelled
+    ``<params-only: X>`` so it is never mistaken for the authoritative
+    record -- and reported as it stands, with no default substituted in,
+    because such an artifact may also predate the selector's current
+    default.
     """
     if ledger_hold is not None:
         if (
@@ -54,6 +62,8 @@ def _hold_label(ledger_hold, params_hold):
                 f"params={str(params_hold)!r}>"
             )
         return str(ledger_hold)
+    if ledger_group_present:
+        return "zoh"
     if params_hold is _PARAMS_ABSENT:
         return "<params-only: key absent>"
     if params_hold is None:
@@ -147,7 +157,9 @@ def census(path, lo, hi):
         )
         if isinstance(ledger_hold, bytes):
             ledger_hold = ledger_hold.decode()
-        out["transfer_hold"] = _hold_label(ledger_hold, params_hold)
+        out["transfer_hold"] = _hold_label(
+            ledger_hold, params_hold, ledger_group_present=g is not None
+        )
         tt = np.asarray(h["time"])
         Ti = np.asarray(h["Ti"])
         n = np.asarray(h["n"])
