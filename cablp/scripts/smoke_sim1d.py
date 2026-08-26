@@ -67,7 +67,7 @@ The suppression is deliberately narrow in both directions:
 * only cases that BUILD ON a pinned config dict are muted -- either straight
   from a fixture, or from one a predecessor derived and handed on -- so a case
   that constructs a deprecated configuration of its own still prints its
-  warning (51 of the 114 cases carry the flag; the other 63 warn as usual);
+  warning (52 of the 117 cases carry the flag; the other 65 warn as usual);
 * ``production-construction-warning-free`` is not muted, and it asserts
   against a fresh ``warnings.catch_warnings(record=True)`` with
   ``simplefilter("always")``, which overrides any outer filter -- a production
@@ -100,6 +100,15 @@ from cablp.funcs import _beam_deposition as _beam_deposition_mod
 from cablp.funcs import _cross as _cross_mod
 from cablp.solvers._sim1d.physics import cathode as _cathode_mod
 from cablp.solvers._sim1d.results import restart as _restart_mod
+from cablp.solvers._sim1d.results.phase3_capture import (
+    ARTIFACT_LOCATOR_BASE,
+    ARTIFACT_LOCATOR_STATE,
+    _LOCATOR_REQUIRED_FIELDS,
+    configuration_identity as _phase3_configuration_identity,
+    load_qualified_capture,
+    reserve_run_id,
+    write_qualified_capture,
+)
 from cablp.funcs._adas import he_rate_temperature_range_eV
 # main() re-imports deposit_beam locally further down (B1 block), which makes
 # the bare name local to the whole function -- alias it for the item-35 block.
@@ -22312,6 +22321,190 @@ def _case_golden_digest_gate_deterministic():
     )
     assert _gdg_b["checkpoints"] == _gdg_a["checkpoints"]
     assert _gdg_b["config_identity"] == _gdg_a["config_identity"]
+
+
+# --------------------------------------------------------------------
+# phase3-artifact-locator-battery
+# --------------------------------------------------------------------
+@_case("phase3-artifact-locator-battery")
+def _case_phase3_artifact_locator_battery():
+    # The Phase 3 locator schema is what keeps the COMMITTED provenance
+    # record honest about an artifact that lives OUTSIDE the repository: the
+    # record names it by a locator relative to a frozen base, and the loader
+    # must refuse any record that names it some other way. The battery this
+    # case promotes was run once against the archived 42 MB capture; here it
+    # runs against a synthetic qualified capture built in a tempdir, so the
+    # gate carries no dependency on a machine-local archive and costs ~0.1 s.
+    #
+    # Every negative is asserted to raise ValueError AND to NAME the offending
+    # field: a refusal that does not say what was wrong sends the reader to
+    # the wrong place, and a refusal for an unrelated reason would pass a
+    # bare "it raised" check while proving nothing.
+    _p3_run = "urn:uuid:123e4567-e89b-42d3-a456-426614174000"
+    _p3_stem = _p3_run.removeprefix("urn:uuid:")
+    _p3_rows = ("n", "nn", "M", "Ee", "Ei")
+    _p3_terms = ("synthetic_flux",)
+    _p3_frames, _p3_cells = 2, 3
+    _p3_zero = np.zeros((_p3_frames, _p3_cells), dtype=float)
+    _p3_result = SimpleNamespace(
+        run_id=_p3_run,
+        params={
+            "synthetic": 1,
+            "max_steps_action": "stop",
+            "neutral_momentum_radial": "uniform",
+        },
+        flags={
+            "neutral_momentum": False,
+            "neutral_two_zone": False,
+            "neutral_energy": False,
+        },
+        compiled_kernels="pure",
+        steps=4000,
+        final_time=1.0e-5,
+        run_status="max_steps_reached",
+        time=np.asarray([0.0, 1.0e-5]),
+        y=np.arange(
+            _p3_frames * len(_p3_rows) * _p3_cells, dtype=float
+        ).reshape(_p3_frames, -1),
+        n=_p3_zero, nn=_p3_zero, M=_p3_zero, momentum=_p3_zero,
+        Ee=_p3_zero, Ei=_p3_zero, u=_p3_zero, Te=_p3_zero, Ti=_p3_zero,
+        pe=_p3_zero, pi=_p3_zero, p=_p3_zero,
+        z_cm=np.asarray([1.0, 2.0, 3.0]),
+        length_cm=np.ones(_p3_cells),
+        Rp_cm=np.ones(_p3_cells),
+        Rm_cm=np.full(_p3_cells, 2.0),
+        plasma_volume_cm3=np.full(_p3_cells, 2.0),
+        neutral_volume_cm3=np.full(_p3_cells, 5.0),
+        volume_ratio=np.full(_p3_cells, 2.5),
+        plasma_active=np.ones(_p3_cells, dtype=bool),
+        cell_role=np.asarray(["column"] * _p3_cells, dtype=object),
+        rhs_terms={
+            term: {
+                row: np.full((_p3_frames, _p3_cells), float(i), dtype=float)
+                for i, row in enumerate(_p3_rows)
+            }
+            for term in _p3_terms
+        },
+        total_rhs={row: _p3_zero for row in _p3_rows},
+        electron_energy_terms_W_cm3={term: _p3_zero for term in _p3_terms},
+        ion_energy_terms_W_cm3={term: _p3_zero for term in _p3_terms},
+        diagnostics=[],
+    )
+
+    with tempfile.TemporaryDirectory() as _p3_tmp:
+        _p3_root = Path(_p3_tmp)
+        _p3_out = _p3_root / "cablp/scripts/baselines/phase3_rhs"
+        reserve_run_id(_p3_out, _p3_run, {"kind": "smoke-synthetic"})
+        _p3_h5, _p3_provenance = write_qualified_capture(
+            _p3_out,
+            _p3_result,
+            run_id=_p3_run,
+            capture_revision="a" * 40,
+            producer_path="cablp/scripts/capture_phase3_rhs.py",
+            started_at="2026-08-24T12:00:00Z",
+            completed_at="2026-08-24T12:00:01Z",
+            configuration_identity_sha256=_phase3_configuration_identity(
+                _p3_result.params, _p3_result.flags
+            ),
+            recipe_identity="synthetic-recipe",
+            run_controls={"max_steps": 4000},
+            invocation=["python", "scripts/capture_phase3_rhs.py",
+                        "--synthetic"],
+            producer_blobs={"cablp/synthetic.py": "b" * 40},
+            environment_lock={"path": "cablp/poetry.lock",
+                              "git_blob": "c" * 40},
+            repository_root=_p3_root,
+        )
+        _p3_record = json.loads(
+            Path(_p3_provenance).read_text(encoding="utf-8")
+        )
+        # The POSITIVE, and it is load-bearing: without it a schema that
+        # refused everything would pass all 15 negatives.
+        _p3_loaded, _p3_prov = load_qualified_capture(_p3_h5, _p3_provenance)
+        assert _p3_loaded.steps == 4000
+        assert _p3_prov["run_id"] == _p3_run
+        # The record emits the canonical locator, measured from the frozen
+        # base, never from where the file happens to sit.
+        assert _p3_record["artifact_locator_base"] == ARTIFACT_LOCATOR_BASE
+        assert _p3_record["locator_state"] == ARTIFACT_LOCATOR_STATE
+        assert _p3_record["artifact_path"] == (
+            f"artifacts/phase3/{_p3_stem}/{_p3_stem}.h5"
+        )
+
+        def _p3_mutate(**overrides):
+            record = dict(_p3_record)
+            record.update(overrides)
+            return record
+
+        def _p3_drop(field):
+            record = dict(_p3_record)
+            del record[field]
+            return record
+
+        _p3_negatives = [
+            # locator vocabulary: both bases are frozen sets of one
+            ("unknown-base",
+             _p3_mutate(artifact_locator_base="bapsf-workspace"),
+             "artifact_locator_base"),
+            ("unknown-state", _p3_mutate(locator_state="tracked"),
+             "locator_state"),
+            # artifact_path form: anything that could resolve against a
+            # machine root, escape the base, or fail to be a path at all
+            ("absolute-path",
+             _p3_mutate(artifact_path=(
+                 f"/home/trloo/bapsf/artifacts/phase3/{_p3_stem}/"
+                 f"{_p3_stem}.h5"
+             )),
+             "artifact_path"),
+            ("tilde-path",
+             _p3_mutate(artifact_path=(
+                 f"~/bapsf/artifacts/phase3/{_p3_stem}/{_p3_stem}.h5"
+             )),
+             "artifact_path"),
+            ("traversing-path",
+             _p3_mutate(artifact_path=(
+                 "artifacts/phase3/" + ("%s/" % "..") * 3 + f"{_p3_stem}.h5"
+             )),
+             "artifact_path"),
+            ("empty-component",
+             _p3_mutate(artifact_path=(
+                 f"artifacts//phase3/{_p3_stem}/{_p3_stem}.h5"
+             )),
+             "artifact_path"),
+            ("drive-path",
+             _p3_mutate(artifact_path=(
+                 f"C:\\bapsf\\artifacts\\phase3\\{_p3_stem}.h5"
+             )),
+             "artifact_path"),
+            ("non-string-path", _p3_mutate(artifact_path=None),
+             "artifact_path"),
+            # execution fields that must agree with the HDF5's own attrs
+            ("accepted-steps-mismatch", _p3_mutate(accepted_steps=3999),
+             "accepted_steps"),
+            ("run-status-mismatch", _p3_mutate(run_status="completed"),
+             "run_status"),
+        ] + [
+            # every required field, absent
+            (f"missing-{_field}", _p3_drop(_field), _field)
+            for _field in _LOCATOR_REQUIRED_FIELDS
+        ]
+        assert len(_p3_negatives) == 15, len(_p3_negatives)
+
+        _p3_scratch = _p3_root / "battery"
+        _p3_scratch.mkdir()
+        for _p3_name, _p3_bad, _p3_field in _p3_negatives:
+            _p3_path = _p3_scratch / f"{_p3_name}.provenance.json"
+            _p3_path.write_text(
+                json.dumps(_p3_bad, indent=4) + "\n", encoding="utf-8"
+            )
+            try:
+                load_qualified_capture(_p3_h5, _p3_path)
+            except ValueError as _p3_exc:
+                assert _p3_field in str(_p3_exc), (_p3_name, str(_p3_exc))
+            else:
+                raise AssertionError(
+                    f"locator negative {_p3_name!r} was ACCEPTED"
+                )
 
 
 # --------------------------------------------------------------------

@@ -95,8 +95,8 @@ to be.
 |---|---|---|
 | `nx` | `60` | Axial resolution of the far column: a pure cost knob. The campaign runs 268; a reviewer pays for this gate on the candidate branch and again post-merge. Pinned rather than inherited so a future default-`nx` change cannot multiply every gate's runtime silently. |
 | `max_steps_action` | `"raise"` | Deliberately overrides the stance's `"stop"`. For a campaign arm a step cap is a budget and a truncated arm is still data; here the cap is a tripwire, and tripping it should be loud. |
-| `max_steps` (run kwarg) | `150000` | **A tripwire, not a run length** — ~2.0× the measured 76,631 steps. It exists so a change that quietly destroys the timestep fails fast instead of running for hours. If it fires, the question is what happened to `dt`, not what happened to the trajectory. Sized at 2× deliberately: a backstop with a few percent of headroom is not a backstop, it is a second cost cap waiting to truncate the gate. |
-| digest horizon (`baselines/golden_digest_4k.json`) | first `4000` accepted steps | The companion fixture for `scripts/golden_digest_gate.py`, which folds the packed state into a running SHA-256 after EVERY accepted step of this same configuration. The horizon is a cost knob, not physics: 4,000 steps is ~2.5 min against the full gate's ~17, and over the steps it covers it is the STRONGER check, because the golden certifies only what reaches a save. That gate runs at `max_steps_action = "stop"` — the cap is its run length, not a tripwire — which changes what happens AT the cap and nothing before it. |
+| `max_steps` (run kwarg) | `150000` | **A tripwire, not a run length** — ~1.6× the measured 94,044 steps. It exists so a change that quietly destroys the timestep fails fast instead of running for hours. If it fires, the question is what happened to `dt`, not what happened to the trajectory. The value was SIZED at ~2× deliberately, against the 76,631 steps the fixture ran before the 2026-08-25 stance event: a backstop with a few percent of headroom is not a backstop, it is a second cost cap waiting to truncate the gate. That event's +23,636 steps ate part of the margin without the cap moving; 1.6× is still a backstop, and re-sizing it is a golden-touching change rather than a maintenance edit. |
+| digest horizon (`baselines/golden_digest_4k.json`) | first `4000` accepted steps | The companion fixture for `scripts/golden_digest_gate.py`, which folds the packed state into a running SHA-256 after EVERY accepted step of this same configuration. The horizon is a cost knob, not physics: 4,000 steps is **10 min 46 s** on the pure path against the full gate's ~19 min compiled / 46 min 38 s pure, and over the steps it covers it is the STRONGER check, because the golden certifies only what reaches a save. (Those are post-`mg-pure-vectorize` figures, the digest one measured on a clean lane 2026-08-26. The `~2.5 min` against a `~17` min gate this row carried before was true at the PREVIOUS stance; the adaptive-`dt` change recorded in the 2026-08-25 stance event is what moved it.) That gate runs at `max_steps_action = "stop"` — the cap is its run length, not a tripwire — which changes what happens AT the cap and nothing before it. |
 
 `BASELINE_FLAG_OVERRIDES` carries one entry, `neutral_equilibration = True`, for
 the reason given in the re-cut section above.
@@ -111,7 +111,7 @@ whole cycle rather than a truncated foot.
 | quantity | value |
 |---|---|
 | steps | 94,044 |
-| wall, single lane | ~19 min per capture COMPILED; ~2.8 h PURE (see the kernel-path disclosure in the 2026-08-25 record) — the two run strictly serially |
+| wall, single lane | ~19 min per capture COMPILED; **46 min 38 s** PURE, i.e. 2.41× compiled (measured post-`mg-pure-vectorize`, 2026-08-25; see the kernel-path disclosure in the 2026-08-25 record) — the two run strictly serially. The `~2.8 h` this row once gave for the pure path was an EXTRAPOLATION from two killed attempts and was never measured; it is corrected in that record. |
 | saves | 2,620 |
 | `final_time` | 2.618731e-02 s (the dynamic `t_end`, reached) |
 | trajectory | `y[2620, 576]` = 8 fields × 72 cells |
@@ -127,14 +127,21 @@ trajectory, and both lanes here were CONTENDED — other agents' gates were
 running — so these wall figures are an upper bound, not a clean-lane
 measurement.)*
 
-**The gate is ~2× the wall time of the fixture it replaced** (~8–9 min), not the
-same — the pre-capture projection of 40–45k steps was taken from the
-early-discharge `dt` (6.4e-7 at t = 1.4e-3 s) and the timestep does not hold
-that value through the plateau; the measured mean is 3.1e-7. What the extra cost
-buys is the whole cycle at a representative operating point, including the
-plateau and the afterglow, instead of 8 % of the discharge at a corner the
-campaign never runs. Flagged rather than silently absorbed: a reviewer runs this
-twice per merge.
+**At the 2026-08-20 R2b re-anchor the gate came out ~2× the wall time of the
+fixture it replaced** (~8–9 min), not the same — the pre-capture projection of
+40–45k steps was taken from the early-discharge `dt` (6.4e-7 at t = 1.4e-3 s)
+and the timestep does not hold that value through the plateau; the mean measured
+at that capture was 3.1e-7. What the extra cost buys is the whole cycle at a
+representative operating point, including the plateau and the afterglow, instead
+of 8 % of the discharge at a corner the campaign never runs. Flagged rather than
+silently absorbed: it is a cost paid by everyone who runs the full golden.
+
+*(Every figure in the paragraph above is R2b's, over its 76,631-step capture,
+and is kept because it is the record of that re-anchor's decision — the fixture
+has since moved to 94,044 steps, see the table above. It also used to end "a
+reviewer runs this twice per merge", which is no longer how the gate is run:
+the golden's cadence is set by the review tiering, not by this note, and most
+merges do not run it at all.)*
 
 ## Disclosed closure stress (diagnosis side-finding, not fixed here)
 
@@ -189,13 +196,28 @@ fire, which is the load-bearing negative: the extra cost below is per-step, not
 a timestep collapse.
 
 **Run cost — the fixture got substantially more expensive, and a reviewer must
-budget for it.** The digest horizon's 4,000 steps cost **19 min 36 s pure**
-against ~2.5 min at the previous stance (~8.8×), and the full fixture now runs
-94,044 steps instead of 70,408. Extrapolated, a pure full capture is ~2.8 h
-against the previous ~15 min. The adaptive `dt` is the mechanism: the digest's
-`final_time` over its fixed 4,000 steps falls 1.5529e-03 → 4.5446e-04 s. This is
-a real consequence of the adopted closure, not a defect, but it changes what the
-gate costs at every future merge.
+budget for it.** AT CAPTURE the digest horizon's 4,000 steps cost **19 min 36 s
+pure** against ~2.5 min at the previous stance (~8.8×), and the full fixture now
+runs 94,044 steps instead of 70,408. The adaptive `dt` is the mechanism: the
+digest's `final_time` over its fixed 4,000 steps falls 1.5529e-03 → 4.5446e-04
+s. This is a real consequence of the adopted closure, not a defect, but it
+changed what the gate costs at every future merge.
+
+**CORRECTION, same day — the `~2.8 h` pure full capture this paragraph
+originally gave was an EXTRAPOLATION, and it was WRONG.** No pure full capture
+had completed when it was written: it was projected from the two attempts killed
+at ~60 and ~65 minutes recorded below, so there was no finished run underneath
+it. The pure full golden was subsequently RUN TO COMPLETION at **1 h 21 min
+42 s**, `exact=True`; and then at **46 min 38 s**, `exact=True`, once
+`mg-pure-vectorize` (campaign @ `4ef3a37`) made the CSDA march's table lookups
+1.75× faster. Against the ~19 min compiled capture the pure path therefore costs
+**2.41×**, not the near-order-of-magnitude the extrapolation implied. Two
+consequences for reading this section: the AT-CAPTURE figures above stand as
+measured and are not restated — but the `~8.8×` digest ratio is a
+pre-`mg-pure-vectorize` number describing a stance-to-stance change, and does
+not describe what the gate costs now (the pure 4,000-step digest gate measures
+10 min 46 s on a clean lane, 2026-08-26). Every `~2.8 h` in this file was that
+one extrapolation propagated, and is corrected here and at both other sites.
 
 **Capture evidence.** The NPZ fixture was recaptured TWICE from clean separate
 processes to temporary paths, run strictly serially per the serial-golden rule,
@@ -212,9 +234,14 @@ baseline verify OK: saves=2620, exact=True, max_rel=0.000e+00, max_abs=0.000e+00
 
 **KERNEL PATH — a disclosed departure from how previous recaptures were taken.**
 The two NPZ captures were taken on the **COMPILED** path; the digest reference
-was captured **PURE**. The reason is cost, not preference: at ~2.8 h a pure full
-capture exceeds the agent harness's background-process lifetime, and two
-successive pure attempts were killed at ~60 and ~65 minutes with nothing written.
+was captured **PURE**. The reason is cost, not preference: two successive pure
+attempts were killed at ~60 and ~65 minutes with nothing written, exceeding the
+agent harness's background-process lifetime. (This sentence originally priced
+that pure capture at `~2.8 h`. That figure was extrapolated from these same two
+kills and is WRONG — see the correction above; the pure full golden measures
+1 h 21 min 42 s, and 46 min 38 s post-`mg-pure-vectorize`. The kills were real
+and the decision to capture compiled stands on them; only the number attached to
+them was invented.)
 The licence for using the compiled path is that pure and compiled are bit-exact
 BY CONSTRUCTION of the source on linux-64 (CLAUDE.md, certified 2026-08-17), and
 that this was **proven again at THIS stance** before any fixture was captured:

@@ -1,3 +1,10 @@
+"""Debug-tool contour and time-slice plots for one sim1d HDF5 run.
+
+This is a DEBUG tool: it renders a quick look at a run for whoever ran it,
+and its output is not house-figure material -- presentation and thesis
+figures come from the dedicated figure builders, not from here.
+"""
+
 import argparse
 from pathlib import Path
 

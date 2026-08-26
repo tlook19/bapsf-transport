@@ -2420,7 +2420,9 @@ def beam_gap_ledger_mismatch(
     the result, ``LAPDSim1D._warn_beam_gap_ledger``, dispatches ``kind``
     through an exhaustive table and owns the operator-facing text for each;
     a third kind is meaningless until that table carries its explanation, and
-    the two must land together.
+    the two must land together. That table now carries it, so that caller
+    passes ``separate_representability=True``; the default stays OFF for
+    every other caller and for the two-case instrument's own tests.
     """
     eta = float(eta)
     worst = None

@@ -95,9 +95,8 @@ PORTS = {"p11": 470.1, "p21": 789.5, "p29": 1045.2, "p41": 1428.5, "p50": 1716.1
 # RESIDUAL references at the two far ports [km/s] -- measured MINUS the era
 # model's ion drift, NOT the machine's flow. The absolute measured ion flow is
 # ~5 to 10.7 km/s across the ports; quoting these as a velocity overstates
-# agreement several-fold. The name below is historical; the quantity is a
-# residual.
-MEASURED = {"p41": 1.8, "p50": 5.4}
+# agreement several-fold.
+RESIDUAL_REF = {"p41": 1.8, "p50": 5.4}
 
 # Plateau window [ms]: the drive-phase interval the port comparisons use.
 DEFAULT_WINDOW_MS = (15.0, 19.5)
@@ -194,10 +193,10 @@ def report(path, ledger, window_ms):
     print(
         f"  span p41->p50: {u50 - u41:+.3f} km/s | "
         f"monotone(u50>u41): {u50 > u41} | "
-        f"vs RESIDUAL ref +{MEASURED['p41']}/+{MEASURED['p50']} km/s "
+        f"vs RESIDUAL ref +{RESIDUAL_REF['p41']}/+{RESIDUAL_REF['p50']} km/s "
         f"(NOT measured flow): "
-        f"p41 {u41 / MEASURED['p41'] * 100:.0f}%  "
-        f"p50 {u50 / MEASURED['p50'] * 100:.0f}%"
+        f"p41 {u41 / RESIDUAL_REF['p41'] * 100:.0f}%  "
+        f"p50 {u50 / RESIDUAL_REF['p50'] * 100:.0f}%"
     )
 
 
