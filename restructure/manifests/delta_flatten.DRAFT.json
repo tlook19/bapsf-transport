@@ -13,20 +13,18 @@
     {
       "change_kind": "move",
       "old": {
-        "path": "cablp/cablp/__init__.py",
-        "anchor_kind": "module",
-        "symbol": "cablp"
+        "path": "cablp/cablp",
+        "anchor_kind": "directory"
       },
       "new": {
-        "path": "cablp/__init__.py",
-        "anchor_kind": "module",
-        "symbol": "cablp"
+        "path": "cablp",
+        "anchor_kind": "directory"
       },
       "proposed_continuity": "same_entity",
       "group_id": null,
       "deletion_reason": null,
       "replacement": null,
-      "notes": "PREFIX RULE: every tracked path under `cablp/cablp/` moves to the same path under `cablp/`; the leading `cablp/` segment is dropped exactly once. 64 files, no exceptions, no renames within the subtree. Import-qualified symbols are INVARIANT: the package's importable name was and remains `cablp`, only the directory containing it moves, so no `from cablp...` statement and no intra-package relative import changes. Content edits ride this row and are listed per file in restructure/RENAME_MAP.md section 6: cablp/funcs/_adas.py:36 (error-message path string), cablp/solvers/_sim1d/results/phase3_capture.py:441 (producer_anchor - see its own surface_change row), cablp/vars/adas/README.md:17 (fetch-location prose).",
+      "notes": "PREFIX MACRO (Sol 26dz): every tracked path under `cablp/cablp/` moves to the same path under `cablp/`; the leading `cablp/` segment is dropped exactly once. 64 files, no exceptions, no renames within the subtree. `proposed_continuity: same_entity` VECTORIZES over the 64 derived pairs -- it proposes nothing about the directory itself, and Codex confirms or rejects per expanded file. Import-qualified symbols are INVARIANT across this move: the package's importable name was and remains `cablp`, only the directory containing it moves, so no `from cablp...` statement and no intra-package relative import changes, and the successor pass may mechanically carry every existing KB locator's anchor_kind, symbol and signature across, changing only revision and path. Content edits ride this row and are listed per file in restructure/RENAME_MAP.md section 6: cablp/funcs/_adas.py:36 (error-message path string), cablp/solvers/_sim1d/results/phase3_capture.py:441 (producer_anchor - carries its own surface_change row, which is a legal finer-grained override on the same path pair), cablp/vars/adas/README.md:17 (fetch-location prose).",
       "prefix_rule": {
         "old_prefix": "cablp/cablp/",
         "new_prefix": "cablp/",
@@ -102,19 +100,17 @@
       "change_kind": "move",
       "old": {
         "path": "cablp/scripts",
-        "anchor_kind": "directory",
-        "symbol": "cablp/scripts"
+        "anchor_kind": "directory"
       },
       "new": {
         "path": "scripts",
-        "anchor_kind": "directory",
-        "symbol": "scripts"
+        "anchor_kind": "directory"
       },
       "proposed_continuity": "same_entity",
       "group_id": null,
       "deletion_reason": null,
       "replacement": null,
-      "notes": "PREFIX RULE: every tracked path under `cablp/scripts/` moves to the same path under `scripts/`. 180 files, no exceptions, no renames within the subtree; the baselines/, data/ and stances/ subdirectories travel intact so the golden fixture keeps its SCRIPT_DIR-relative resolution. PROPOSED destination (Tom/reviewer rules): the root `scripts/` slot is vacated by the 26dj legacy archival, and `cablp/scripts/` cannot stay where it is because that path is occupied by the package after this commit. Content edits ride this row: capture_phase3_rhs.py:27,29,36-45,128,177,181,186; verify_phase3_source_capture.py:126,137,151,226,229,280,290,317,332,348,360,370,477,501,520; stage3_observability_check.py:35,54; smoke_sim1d.py:22396,22403,22414; pec_band_fractions.py:98; t23c_config_snapshot_delta.py:16; mirror_fieldmap_bitexact_structural.py:54; profile_sim1d.py:64. anchor_kind `directory` and the `prefix_rule` object are additive schema extensions proposed with this manifest - see RENAME_MAP.md section 8, open question Q1.",
+      "notes": "PREFIX MACRO (Sol 26dz): every tracked path under `cablp/scripts/` moves to the same path under `scripts/`. 180 files, no exceptions, no renames within the subtree; the baselines/, data/ and stances/ subdirectories travel intact so the golden fixture keeps its SCRIPT_DIR-relative resolution. PROPOSED destination (Tom/reviewer rules): the root `scripts/` slot is vacated by the 26dj legacy archival, and `cablp/scripts/` cannot stay where it is because that path is occupied by the package after this commit. Content edits ride this row: capture_phase3_rhs.py:27,29,36-45,128,177,181,186; verify_phase3_source_capture.py:126,137,151,226,229,280,290,317,332,348,360,370,477,501,520; stage3_observability_check.py:35,54; smoke_sim1d.py:22396,22403,22414; pec_band_fractions.py:98; t23c_config_snapshot_delta.py:16; mirror_fieldmap_bitexact_structural.py:54; profile_sim1d.py:64. `proposed_continuity: same_entity` VECTORIZES over the 180 derived pairs; no continuity is proposed for the directory. This is the row for which a directory anchor is unavoidable -- `scripts/` is not an importable package and has no qualified name to carry.",
       "prefix_rule": {
         "old_prefix": "cablp/scripts/",
         "new_prefix": "scripts/",

@@ -5,6 +5,15 @@ ordered recipe for the commit that `restructure/manifests/delta_flatten.DRAFT.js
 describes, together with what must be true before it starts and what must be
 re-measured after it lands.
 
+> **Citations are pinned to `c018d925a90dcd86314866b8555fe42d9f22753d`.**
+> `agent-staging` has since advanced to `43aaaa0`; that advance modifies five
+> tracked files and adds, deletes and renames nothing, so the move sequence,
+> the file counts and the `.gitignore` work are all unaffected — but **17 line
+> citations have drifted**, in `smoke_sim1d.py`, `core/config.py`,
+> `solver.py` and `NUMERICS.md`. Locate every §3 edit by its quoted string,
+> not by its line number, and re-derive the line numbers against whatever tip
+> the flatten branch is actually cut from.
+
 Read `RENAME_MAP.md` first — this document assumes its rules F1 and F2 and its
 open questions Q1–Q7. Rule F2's destination (`cablp/scripts/` → `scripts/`) is
 **PROPOSED and unratified**; if Tom rules otherwise, step 3 changes and nothing

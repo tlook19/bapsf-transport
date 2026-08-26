@@ -3,7 +3,17 @@
 **Status: DRAFT, reviewer-gated. Nothing here has moved.** This document is a
 proposal for how every tracked path changes across the R2 mechanical
 restructure. It changes no file, and the tree it describes is the tree at
-`c018d925a90d5ba2a55b30e40ab77df1d3a34ce9` (255 tracked files).
+`c018d925a90dcd86314866b8555fe42d9f22753d` (255 tracked files).
+
+> **Every `file:line` citation in this document is pinned to that revision,
+> and `agent-staging` has since advanced to `43aaaa0` (the
+> `afterglow-dt-cost` merge).** That advance is modifications only — no adds,
+> deletes or renames — so the file inventory, both prefix rules and all 244
+> `covers` entries are unaffected. **17 line citations have drifted**, all in
+> the five files it touched (`smoke_sim1d.py`, `core/config.py`, `solver.py`,
+> `NUMERICS.md`). Re-verify any citation by its quoted symbol or string, which
+> is stable, rather than by its line number, which is not. §6 and
+> `FLATTEN_EXECUTION_NOTES.md` §3 carry the affected citations.
 
 Every line falls into one of two classes and they are marked differently:
 
@@ -11,6 +21,13 @@ Every line falls into one of two classes and they are marked differently:
 |---|---|
 | *(unmarked)* | Follows directly from a ruling already made (R0.1 flatten, the R0.2 carve slate, the R0.4 retirements). |
 | **PROPOSED** | A judgment call this map makes because the ruling does not reach it. Tom or the reviewer decides; nothing downstream may treat it as settled. |
+| **RULED** | Was PROPOSED here and has since been decided. Currently: P-3 and P-4 (Tom, 26dz) and open question Q1 (Sol, 26dz). |
+
+**Amendment pass, 26dz.** Two ruling sets have landed since the first draft:
+Tom decided Q6 (the cathode module names — §3.4, P-3/P-4), and Sol assented to
+Q1's schema fields with a semantic amendment (a prefix row is a compact mapping
+MACRO, not a claim that the directory is a KB entity — §8, Q1). Both are folded
+in here and in the manifest and validator.
 
 Companion documents in this directory:
 
@@ -157,7 +174,7 @@ The one deliberate exception is the Cython extension — see P-6.
 |---|---|---|
 | `cablp/vars/_cons.py` | `cablp/constants.py` | **PROPOSED shape** (P-1): a plain module, not a package. |
 
-60 import sites (`cablp.vars._cons`) rewrite to `cablp.constants`. Note the R3
+52 import statements (`cablp.vars._cons`) rewrite to `cablp.constants`. Note the R3
 constants-unification pass lands **inside this file** — the divergences
 (`m_e_cgs`, `m_p_cgs`, `I_ion`, the inline `qe_SI` at `solver.py:5679`) are
 census item 3 and are numerics-moving; **none of them may be touched at R2.**
@@ -166,10 +183,10 @@ census item 3 and are numerics-moving; **none of them may be touched at R2.**
 
 | Old (post-flatten) | New | Note |
 |---|---|---|
-| `cablp/funcs/_cross.py` | `cablp/atomic/cross_sections.py` | 38 import sites. |
-| `cablp/funcs/_fits.py` | `cablp/atomic/fits.py` | 4 import sites. |
-| `cablp/vars/_coeff.py` | `cablp/atomic/coefficients.py` | 9 import sites. **The slate names this `funcs/_coeff`; the file is at `vars/_coeff.py`.** The destination is unambiguous, only the source path in the ruling is off by one directory. Flagged, not silently corrected — see Q2. |
-| `cablp/funcs/_adas.py` | `cablp/atomic/adas.py` | 20 import sites. The slate's "(+ adf11/ADAS access)" is exactly this file. |
+| `cablp/funcs/_cross.py` | `cablp/atomic/cross_sections.py` | 34 import statements. |
+| `cablp/funcs/_fits.py` | `cablp/atomic/fits.py` | 4 import statements. |
+| `cablp/vars/_coeff.py` | `cablp/atomic/coefficients.py` | 9 import statements. **The slate names this `funcs/_coeff`; the file is at `vars/_coeff.py`.** The destination is unambiguous, only the source path in the ruling is off by one directory. Flagged, not silently corrected — see Q2. |
+| `cablp/funcs/_adas.py` | `cablp/atomic/adas.py` | 15 import statements. The slate's "(+ adf11/ADAS access)" is exactly this file. |
 | `cablp/vars/adas/README.md` | `cablp/atomic/data/adas/README.md` | **PROPOSED** (P-2). |
 | `cablp/vars/h_eii_cross.csv` | `cablp/atomic/data/h_eii_cross.csv` | **PROPOSED** (P-2). |
 | `cablp/vars/he_eii_cross.csv` | `cablp/atomic/data/he_eii_cross.csv` | **PROPOSED** (P-2). |
@@ -202,26 +219,26 @@ carries the procedure.
 
 | Old (post-flatten) | New | Note |
 |---|---|---|
-| `cablp/funcs/_plasmaparams.py` | `cablp/plasma/params.py` | 9 import sites. This is the exact mapping the manifest-schema document uses in its worked example, so it is settled by that document's own illustration. |
-| `cablp/funcs/_heat.py` | `cablp/plasma/heat.py` | 5 import sites. |
+| `cablp/funcs/_plasmaparams.py` | `cablp/plasma/params.py` | 9 import statements. This is the exact mapping the manifest-schema document uses in its worked example, so it is settled by that document's own illustration. |
+| `cablp/funcs/_heat.py` | `cablp/plasma/heat.py` | 5 import statements. |
 | — | `cablp/plasma/__init__.py` | `add` row. |
 
 ### 3.4 `cablp/cathode` — the sheath solvers, the beam, the kernels
 
 | Old (post-flatten) | New | Note |
 |---|---|---|
-| `cablp/funcs/_cathode_solver.py` | `cablp/cathode/solver.py` | 12 import sites. **PROPOSED** (P-3): `sheath.py` is the alternative. |
-| `cablp/funcs/_beam_deposition.py` | `cablp/cathode/beam_deposition.py` | 15 import sites. 3,874 lines; R3's reimplementation target. |
-| `cablp/funcs/_cathode_solver_idriven.py` | `cablp/cathode/solver_idriven.py` | 9 import sites. **PROPOSED** (P-4). |
-| `cablp/funcs/_kernels.py` | `cablp/cathode/kernels.py` | 12 import sites. **PROPOSED** (P-5). |
-| `cablp/funcs/_cathode_kernels_cy.pyx` | `cablp/cathode/_cathode_kernels_cy.pyx` | 7 import sites. **PROPOSED** (P-6): basename deliberately *not* made public. |
+| `cablp/funcs/_cathode_solver.py` | `cablp/cathode/circuit.py` | 12 import statements. **RULED** (P-3, Tom 26dz). |
+| `cablp/funcs/_beam_deposition.py` | `cablp/cathode/beam_deposition.py` | 15 import statements. 3,874 lines; R3's reimplementation target. |
+| `cablp/funcs/_cathode_solver_idriven.py` | `cablp/cathode/circuit_idriven.py` | 7 import statements. **RULED** (P-4, Tom 26dz). |
+| `cablp/funcs/_kernels.py` | `cablp/cathode/kernels.py` | 8 import statements. **PROPOSED** (P-5). |
+| `cablp/funcs/_cathode_kernels_cy.pyx` | `cablp/cathode/_cathode_kernels_cy.pyx` | 7 textual references (importlib strings + prose; not `import` statements). **PROPOSED** (P-6): basename deliberately *not* made public. |
 | — | `cablp/cathode/__init__.py` | `add` row. |
 
 ### 3.5 `cablp/numerics` — the fused interpolation
 
 | Old (post-flatten) | New | Note |
 |---|---|---|
-| `cablp/funcs/_interp.py` | `cablp/numerics/interp.py` | 3 import sites. **PROPOSED shape** (P-7): a package, unlike `constants`. |
+| `cablp/funcs/_interp.py` | `cablp/numerics/interp.py` | 2 import statements. **PROPOSED shape** (P-7): a package, unlike `constants`. |
 | — | `cablp/numerics/__init__.py` | `add` row. |
 
 `_interp.py` imports only `math` and `bisect`. It is the most isolated module
@@ -273,24 +290,21 @@ reads `adas/`). Putting them under the package that reads them keeps the
 considering only if a later package needs to read the same tables, which
 nothing currently does.
 
-**P-3 · `cablp/cathode/solver.py`** for `_cathode_solver.py`. The mechanical
-reading: drop the private underscore and the now-redundant `cathode_` prefix,
-since the package supplies it. *Cost:* the repository then has two
-`solver.py` files (`cablp/cathode/solver.py` and
-`cablp/solvers/_sim1d/solver.py`), which is legal but is a grep hazard and a
-"which solver.py?" hazard in review. *Alternative:* `cablp/cathode/sheath.py`
-— intention-named for what the module actually computes (a self-consistent
-Richardson-emission + sheath-potential solve) and free of the collision. This
-is the one carve name where I think the alternative may be the better one, but
-it is a naming claim rather than a mechanical consequence, so it goes to Tom
-under the house no-coining rule.
+**P-3 · `cablp/cathode/circuit.py`** for `_cathode_solver.py` — **RULED by
+Tom, 26dz.** Both of this map's original candidates were wrong. The module
+does not merely solve a sheath: it solves the full cathode/anode/bank
+**circuit** — the Thevenin load line off `V_bank`, the `R_comp` partition,
+the anode sheath `phi_a`, and `I_tot` — so `sheath.py` named a part for the
+whole, and `solver.py` named nothing at all while colliding with
+`cablp/solvers/_sim1d/solver.py`. `circuit.py` is what the module is, and it
+retires the collision as a side effect.
 
-**P-4 · `cablp/cathode/solver_idriven.py`** for
-`_cathode_solver_idriven.py`. Same prefix-drop as P-3, and the two names must
-move together: the module's design constraint is that it *imports* everything
-physical from `_cathode_solver` and leaves that file unmodified, so their
-names should stay visibly paired. If P-3 becomes `sheath.py`, this becomes
-`sheath_idriven.py`.
+**P-4 · `cablp/cathode/circuit_idriven.py`** for
+`_cathode_solver_idriven.py` — **RULED by Tom, 26dz**, with P-3. The pairing
+is load-bearing and now reads correctly: this module inverts the *same
+circuit* formulation, taking the inductor-integrated loop current as the
+independent variable, and it imports every physical piece from its partner
+rather than restating it. The two names must continue to move together.
 
 **P-5 · `cablp/cathode/kernels.py`** for `_kernels.py`. It is the opt-in
 selector that binds exactly one compiled module,
@@ -641,11 +655,11 @@ package-level `from cablp.funcs import <module>` forms:
 34  cablp.funcs._cross            →  cablp.atomic.cross_sections
 15  cablp.funcs._beam_deposition  →  cablp.cathode.beam_deposition
 15  cablp.funcs._adas             →  cablp.atomic.adas
-12  cablp.funcs._cathode_solver   →  cablp.cathode.solver          (P-3)
+12  cablp.funcs._cathode_solver   →  cablp.cathode.circuit         (P-3)
  9  cablp.vars._coeff             →  cablp.atomic.coefficients     (Q2)
  9  cablp.funcs._plasmaparams     →  cablp.plasma.params
  8  cablp.funcs._kernels          →  cablp.cathode.kernels         (P-5)
- 7  cablp.funcs._cathode_solver_idriven → cablp.cathode.solver_idriven  (P-4)
+ 7  cablp.funcs._cathode_solver_idriven → cablp.cathode.circuit_idriven (P-4)
  5  cablp.funcs._heat             →  cablp.plasma.heat
  4  cablp.funcs._fits             →  cablp.atomic.fits
  2  cablp.funcs._interp           →  cablp.numerics.interp
@@ -668,7 +682,7 @@ two aggregator `__init__.py` files:
 
 | Statement (current) | Becomes | Kind |
 |---|---|---|
-| `_beam_deposition.py:585` `from ._cathode_solver import _c_log_ei` | `from .solver import _c_log_ei` | stays same-package |
+| `_beam_deposition.py:585` `from ._cathode_solver import _c_log_ei` | `from .circuit import _c_log_ei` | stays same-package |
 | `_beam_deposition.py:594` `from ._kernels import COMPILED_KERNELS…` | `from .kernels import …` | stays same-package |
 | `_heat.py:3` `from ._plasmaparams import (…)` | `from .params import (…)` | stays same-package |
 | `_beam_deposition.py:586` `from ._cross import (…)` | `from ..atomic.cross_sections import (…)` | becomes cross-package |
@@ -695,15 +709,35 @@ commits.
 
 ## 8. Open questions for the reviewer
 
-**Q1 — two additive schema fields.** The manifest schema blesses "ONE module
-row + a stated prefix rule in `notes`" for a pure directory move but gives no
-machine-readable form, so coverage check (4) cannot be mechanical. This draft
-adds two optional, backward-compatible fields and the validator understands
-both: (a) `prefix_rule: {old_prefix, new_prefix, covers[]}`; (b)
-`anchor_kind: "directory"`, legal **only** on a row carrying a `prefix_rule`,
-because the schema's anchor kinds cannot name `cablp/scripts/` — a directory
-that is not an importable package. Both need Codex/Sol's assent, since the
-cumulative manifest is a KB-consumption artifact.
+**Q1 — RESOLVED (Sol, 26dz): assent with a semantic amendment.** Both fields
+are adopted into the schema doc, with the reading corrected: **a prefix row is
+a compact mapping MACRO, not an assertion that the directory is a KB entity.**
+Consequences already applied to these artifacts:
+
+- The package row no longer hangs the macro off a representative `cablp`
+  module locator. Both ends are now `anchor_kind: "directory"`, carrying
+  `path` alone — no `symbol`, `signature` or `line_hint`, because inventing an
+  import-qualified name for `scripts/` would be misleading.
+- `old.path`/`new.path` equal their prefixes minus the trailing slash;
+  `prefix_rule` is legal only on `move`/`move+rename`; `directory` is legal
+  only with a `prefix_rule`.
+- `covers` are base-revision old paths: nonempty, sorted, unique, tracked at
+  `base_revision`, each strictly under `old_prefix`. Each derived destination
+  is exactly `new_prefix + old_path.removeprefix(old_prefix)` and must exist
+  at `new_revision`.
+- No covered path may take a conflicting mapping from another prefix or file
+  row; a finer symbol row on the *same* path pair is a legal override (that is
+  what the `phase3_capture.py` `surface_change` row is).
+- Coverage is now "an explicit file/module row **or** membership in exactly
+  one prefix rule".
+- `proposed_continuity: "same_entity"` **vectorizes** over the covered pairs.
+  It proposes nothing about the directory, and Codex confirms or rejects per
+  expanded file — the directory row does not force an all-or-nothing verdict.
+
+The validator enforces all of it mechanically and gains a
+`--emit-expanded` diagnostic printing the canonical per-file expansion,
+labelled derived and non-authoritative. Authority:
+`SOL_MANIFEST_SCHEMA_FIELDS_ANSWER_2026-08-26.md`.
 
 **Q2 — `_coeff` lives in `vars/`, not `funcs/`.** R0.2 reads
 "`funcs/_cross` + `_fits` + `_coeff` … → `cablp/atomic`". The file is
@@ -739,14 +773,29 @@ them branch on whether the base predates the flatten commit. The third is real
 work and beyond "pure moves"; this map recommends leaving them and adding one
 sentence naming the flatten commit as the boundary.
 
-**Q6 — `cablp/cathode/solver.py` vs `sheath.py`** (P-3). The only carve name
-where I think the mechanical answer may be the worse one. Tom's call under the
-no-coining rule.
+**Q6 — RESOLVED (Tom, 26dz): `cablp/cathode/circuit.py` and
+`circuit_idriven.py`.** Neither of this map's candidates survived. The module
+solves the cathode/anode/bank **circuit** — the Thevenin load line off
+`V_bank`, the `R_comp` partition, `phi_a`, `I_tot` — so `sheath.py` named a
+part for the whole and `solver.py` named nothing while colliding with
+`cablp/solvers/_sim1d/solver.py`. P-3 and P-4 are RULED, not PROPOSED, and
+§3.4 and §7 carry the new names.
 
 **Q7 — the golden re-anchor ordering.** The flatten is registered to run
 *after* a pending golden re-anchor, so the digests and the `saves` count of
 record quoted at commit time are not today's (`saves: 2620` at `c018d92`). The
 DRAFT manifest carries `new_revision: "TBD-at-commit"` and
-`golden_gate.result: "TBD-at-commit"` for exactly this reason. Confirm the
-ordering before the flatten branch is cut, because a flatten rebased across a
+`golden_gate.result: "TBD-at-commit"` for exactly this reason.
+
+`base_revision` needs the same treatment and is the easier half to forget. It
+is **pinned** in the draft to `c018d925a90dcd86314866b8555fe42d9f22753d` — the
+tip this map was authored against — rather than read from `HEAD`, which
+advances as this branch commits. `agent-staging` is already past it (`43aaaa0`,
+the `afterglow-dt-cost` merge, modifications only). **Re-stamp `base_revision`
+to the flatten branch's actual cut point at the same time as `new_revision`,
+and regenerate the `covers` lists from `git ls-files` at that revision** — they
+happen to be unchanged at `43aaaa0`, but that is a fact about that merge, not a
+property of the map.
+
+Confirm the ordering before the flatten branch is cut, because a flatten rebased across a
 re-anchor invalidates the transcript, not the map.
