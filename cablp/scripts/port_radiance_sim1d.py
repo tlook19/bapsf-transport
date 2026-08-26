@@ -610,6 +610,13 @@ CHANNEL_STYLE = {
     "total": ("0.25", "--"),
 }
 
+#: Decades shown below the panel peak.  The PLT coefficients fall off
+#: exponentially once Te drops below the excitation thresholds, so an
+#: unbounded log axis spans ~50 decades of physically dead afterglow and
+#: compresses the whole discharge into the top of the frame.  Traces are
+#: clipped to this floor for drawing only; the tabulated numbers are not.
+PLOT_DECADES = 8.0
+
 
 def write_plot(rep, path, dpi=180):
     """Two-panel per-channel time trace: chord brightness, then emissivity."""
@@ -618,11 +625,15 @@ def write_plot(rep, path, dpi=180):
     fig, axes = plt.subplots(2, 1, figsize=(9.0, 7.2), sharex=True)
 
     for ax, q in zip(axes, ("brightness", "emissivity")):
+        peak = max(
+            float(np.max(rep["traces"][q][ch])) for ch in CHANNEL_STYLE
+        )
+        floor = peak * 10.0**-PLOT_DECADES
         for ch in ("plt2", "plt1", "total"):
             color, ls = CHANNEL_STYLE[ch]
             ax.plot(
                 t,
-                np.maximum(rep["traces"][q][ch], 1.0e-30),
+                np.maximum(rep["traces"][q][ch], floor),
                 color=color,
                 ls=ls,
                 lw=1.3,
@@ -634,6 +645,7 @@ def write_plot(rep, path, dpi=180):
         ):
             ax.axvspan(window[0], window[1], color=face, alpha=0.10, lw=0)
         ax.set_yscale("log")
+        ax.set_ylim(floor, peak * 3.0)
         ax.grid(True, which="major", alpha=0.25)
 
     axes[0].set_ylabel(
@@ -658,6 +670,14 @@ def write_plot(rep, path, dpi=180):
     twin.set_ylabel(
         f"dP/dz [{QUANTITY_UNIT['dPdz']}]  "
         f"(= emissivity x {g['area_cm2']:.1f} cm^2)"
+    )
+    axes[1].annotate(
+        f"traces clipped at {PLOT_DECADES:.0f} decades below the panel peak "
+        "(drawing only; the tables are not clipped)",
+        xy=(0.005, 0.02),
+        xycoords="axes fraction",
+        fontsize=7.5,
+        color="0.35",
     )
 
     fig.tight_layout()
