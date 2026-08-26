@@ -16,6 +16,7 @@ platform. The compiled kernel module transcribes the same expression with C's
 """
 
 import math
+from bisect import bisect_right
 
 __all__ = ["interp_scalar_fused"]
 
@@ -96,16 +97,13 @@ def interp_scalar_fused(x, xp, fp, left=None, right=None):
         return float(fp[0]) if left is None else float(left)
 
     # Largest j with xp[j] <= x, by the same bisection numpy's
-    # binary_search_with_guess settles on.
-    imin = 0
-    imax = n
-    while imin < imax:
-        imid = imin + ((imax - imin) >> 1)
-        if x >= xp[imid]:
-            imin = imid + 1
-        else:
-            imax = imid
-    j = imin - 1
+    # binary_search_with_guess settles on. ``bisect_right`` splits on the
+    # identical predicate -- it descends on ``x < xp[mid]``, the exact negation
+    # of the ``x >= xp[mid]`` this search is defined by, and NaN is already
+    # gone -- so it returns the same index, in C rather than in the
+    # interpreter. The search is the whole cost of this function: it runs
+    # ~200k times per solver step from the CSDA march.
+    j = bisect_right(xp, x) - 1
 
     if j == n - 1:
         return float(fp[j])
