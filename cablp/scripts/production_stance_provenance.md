@@ -57,6 +57,19 @@ probe channel as V_dis. It is NOT the 180 V supply setpoint that
 `config.py` defaults to; those are different quantities. The +/-1.2%
 systematic is unresolved between supply regulation and probe gain.
 
+**`V_bank` IS NO LONGER NAMED BY THE STANCE FILE (row deleted 2026-08-25 — the
+23b R4 deletion, executed for this half).** It never was a stance decision:
+`V_bank` is a PER-RUNG measurement owned by `run_mechanism_ladder.ES_OPERATING`
+(ES1 = 177.843, exactly the number the stance file repeated), so naming it in
+the stance duplicated the rung and could only go stale against it. **Campaign
+scores are unaffected** — every campaign arm takes `V_bank` from its rung, which
+is why deleting the row produced NO delta in the pre-flight against
+`scripts/mgcr1_confirm.h5` and why the three campaign config-snapshot cases did
+not move on it. The GOLDEN takes no rung, so its `V_bank` falls back to the
+config default 180.0; the authorized recapture of 2026-08-25 absorbed that move
+(`golden_baseline_provenance.md`). The measurement above is unchanged — what
+changed is only which document owns it.
+
 **Reference plane: all four are BANK-TO-TAP quantities.** The V_dis probes
 terminate at the machine FEEDTHROUGHS (Tom, 2026-08-24), not at the
 plasma-facing cathode surface, so the fit above carries the tap voltage on
@@ -96,8 +109,31 @@ across the change.
 
 ## Cathode emission
 
-**`C_R = 7.36` — FITTED (the one drive-side fit knob; re-trimmed
-2026-08-23 under the conserving ionization birth).** The predecessor `7.09`
+**`C_R = 8.76` — FITTED (the one drive-side fit knob; re-trimmed
+2026-08-25 under the `plateau_multigroup` closure).** Adopting the
+multigroup plateau moves the drive, so the knob was re-trimmed ONCE, at ES1,
+drive-band target only, and frozen. Protocol (pre-registered, campaign log
+2026-08-25at; it supersedes the WITHDRAWN 25as `Ts`-parameterization): a
+three-point scan in `C_R`, then a log-log fit of stage-(i) plateau current
+against `C_R` solved for a plateau ratio of 1.000 against the measured 2963 A
+as the scorer prints, rounded to 0.01. The scan arms were `C_R` 8.4 → 2832 A
+(ratio 0.956), 8.9 → 3013 A (1.017) and 9.4 → 3194 A (1.078); the fit gave
+`d ln(plateau)/d ln(C_R) = 1.069481` with `R^2 = 0.99999873` and
+`C_R* = 8.762467 → 8.76`, predicting 2962.11 A. The extension clause was NOT
+triggered — `C_R*` lies inside the pre-registered bracket [8.4, 9.4] and the
+target is bracketed from BOTH sides by scan artifacts. The confirm arm at
+`C_R = 8.76` (`scripts/mgcr1_confirm.h5`) measured peak 2982 A against a
+measured 2989 ± 23 A (ratio 0.997) and plateau 2962 A against 2963 A
+(**ratio 1.000**). Artifact of record: `scripts/mgcr1_fit.md`. Port scores
+were reported unconditionally and never entered the selection: Te mean ratio
+1.11, n 0.84, Isat 0.88 (mean |dev|/sigma 1.6). A robustness cross-check
+re-fitted on the fingerprint plateau means gives the same rounded trim point.
+**`cathode_Ts_base_K` was NOT co-trimmed** and sat at its measured config
+default 1910.0 on every arm — the flat-direction rule below stands, and only
+one member of that pair may carry a calibration.
+
+*(The 2026-08-23 `7.36` event, retained as record.)* **`C_R` was `7.36` —
+FITTED, re-trimmed under the conserving ionization birth.** The predecessor `7.09`
 was trimmed on 2026-08-19 with the **ionization-birth thermal leak live** —
 the En sink gave up `(3/2) k Tn` per ionized atom while the ion was born at
 the 300 K floor, deleting **~9.7 kW at plateau** in the source region (9250 W
@@ -157,7 +193,25 @@ point in the code's own expression `J = C_R T^2 exp(-e phi/(kB T))`:
        keeps the point-emission match at 0.03%, inside the 0.1% the derivation
        was pre-registered to hit).
 
-**`T_s = 1998.15` IS named by the stance, and is configuration-inert.** It is
+**`T_s = 1998.15` IS named by the stance, and its deletion was DEFERRED a
+third time on 2026-08-25 — now with the reason on record.** It was scheduled for
+deletion alongside `V_bank` (23b R4) on the reading that both merely restate
+config defaults. That reading is correct against `default_config()`, which is
+why deleting `T_s` is invisible to the golden fixture (its `T_s` resolves to
+1998.15 either way). **It is NOT correct on the campaign route:**
+`run_m6_point.py:216` supplies `T_s` from the ES rung's `Ts_standby_K`
+(ES1 = 1910.0) and THIS ROW SUPERSEDES IT, so deleting it would move `T_s`
+1998.15 → 1910.0 on every campaign arm. That was MEASURED as a real second delta
+in the pre-flight against `scripts/mgcr1_confirm.h5` and disappeared the moment
+the row was restored. Whether the move is physically inert is NOT settled here:
+under `cathode_warming_model = "power_balance"` the evolving surface temperature
+is seeded from `cathode_Ts_base_K` rather than `T_s` (`solver.py:1917`), and
+every live read of `T_s` is guarded by that evolving value — but `solver.py:10925`
+reads it UNGUARDED into the kinetic background, dead only because this stance
+runs `neutral_model = "moment"` and LIVE under `"kinetic_dvm"`. The adjudication
+is therefore assigned to the DVM program, not to a stance edit.
+
+It remains
 one of the three RESOLVED-ACCRETION keys (`cathode_emission_profile`,
 `Te_birth_ionization`, `T_s`): keys that equal their config default but are
 stated explicitly in `g1atrim.toml` anyway, because `run_m6_point.py`'s own
@@ -534,6 +588,67 @@ name the observable it applies to.
 the then-value `0.1`, so the stance file names neither key. The value moved
 `0.1 -> 0.45` on 2026-08-21 with its own authorized recapture. See
 `config_defaults_provenance.md`.)*
+
+**`heating_anomalous_transport = "plateau_multigroup"`** — **DERIVED**
+(adopted 2026-08-25; predecessor `"tail_walk"`). Where the CSDA ray's
+anomalous (quasilinear) heating lands. The quasilinear plateau is not one
+energy, and this value carries the SPECTRUM instead of a line: in the flux
+frame the relaxed distribution is flat over the resonant band, so `dP/dE` goes
+as `E` from the plateau edge `E_1` up to the beam energy `E_b = e*phi_c`, and
+the bank splits into its two heirs — a wave/bulk share `(E_b - E_1)/2E_b`
+banked locally and a streaming share `(E_b + E_1)/2E_b` split into `N`
+equal-power groups with `E^2`-uniform edges, each walked on the same Coulomb
+machinery `"tail_walk"` used. **Zero fitted parameters**: the shares, edges and
+weights all follow from the flat plateau, and `E_1` is a state-dependent
+bisection solve against the launch cell's own 1D-reduced Maxwellian, not a
+dial. That is the class argument — the two single-line predecessors
+(`"local"`, `"tail_walk"`) are this closure's two heirs taken one at a time,
+which is why the tail-energy dial, the fixed rung and the keying selector are
+INERT under it and are REFUSED at construction rather than silently ignored.
+The derivation is the advisor's two-heirs argument (campaign log 2026-08-25am).
+
+Adoption verdict (campaign log 2026-08-25av): the closure was adopted on
+**3 of 4 bands** plus the toll discriminator, and the drive was restored by the
+`C_R` re-trim above rather than by any parameter of the closure itself.
+ENERGY-ONLY in the same sense as `"tail_walk"` — ionization events, the
+particle rows and the circuit currents are unchanged — and it inherits that
+value's tail-ionization, cathode-boundary and end-ledger conventions unchanged,
+which is why `heating_anomalous_tail_ionization = "on"` rides it untouched.
+**What may be claimed is the closure family, not a prediction**: a result must
+state which value it used. Not supported under `coverage_closure`, which raises.
+
+**Run-cost consequence, disclosed:** the golden fixture's 4,000-step digest
+horizon costs ~8.8× more than under `"tail_walk"` and the full fixture runs
+94,044 steps against 70,408, because the adaptive `dt` falls. See
+`golden_baseline_provenance.md`.
+
+**`anode_sheath_full_debit = true`** (flags) — ARMED 2026-08-25; the ARM is the
+stance decision, the booking itself is a CORRECTION rather than a calibration.
+The plasma electron store is debited `(2 Te + phi_a)` per electron the anode
+collects — the sheath-edge energy flux of the truncated Maxwellian whose zeroth
+moment the sheath solve already closes on — instead of the plasma-thermal
+`2 Te` alone, and the anode mesh's Bohm collection rows are re-cut to their
+sheath-edge values in the same arming. The circuit/load ledger is IDENTICALLY
+untouched: the `phi_a` those electrons pay is field energy the loop and the
+anode ions already book. The electron-ATTRACTING regime (`phi_a <= 0`) keeps
+the unarmed thermal-only booking, because there the bank pays the fall, and
+that branch is COUNTED rather than silent (`anode_attracting_steps`). Requires
+`characteristic_boundary`, whose thermal-only electrode routing it completes;
+the combination without it is a construction-time `ValueError`. Adoption gates:
+campaign log 2026-08-25ab.
+
+**`beam_deposition_in_heat_substep = true`** (flags) — ARMED 2026-08-25; the
+class-1 fix for the staged Te bias. The beam's electron-energy deposition row
+leaves the explicit operator A and is applied by the implicit heat substep B,
+held constant over each substep and solved together with the tridiagonal
+conduction operator. Nothing else about the beam moves: the ionization births,
+the ionization cost and the excitation radiation are reaction-channel terms and
+stay in A. **Honest bar:** it changes the A/B commutator, so `NUMERICS.md`'s
+split-order table is stale under it until re-measured, and
+`scripts/verify_sim1d_order.py` CANNOT certify it — that harness measures the
+split step in a deliberately cathode-free regime where the beam deposition row
+is identically zero and this flag therefore changes nothing. Gate record:
+campaign log 2026-08-25s.
 
 **`beam_deposition_smoothing_cm = 50.0`** — **ASSUMED**, nominally a physical
 straggling width. The CSDA range profile is sharp on the mesh scale; smoothing

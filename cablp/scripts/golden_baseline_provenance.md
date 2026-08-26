@@ -1,14 +1,16 @@
 # Provenance of the golden baseline pins (`baseline_sim1d.BASELINE_*_OVERRIDES`)
 
-**Recaptured 2026-08-24 (the TUBE-BEAMED INJECTION ROW adopted — the stance's
-gas puff moved off the `cosine_pipe` deposition envelope onto the CAD-derived
-`"orifice"` row, with the shaped initial fill regenerated under it in the same
-event; the CAD-span machine geometry with its ray-clip exactness fix, the
-2026-08-23 conserving ionization birth with its `C_R` re-trim, the
-`heat_flux_limiter_f` re-cut to 0.45, the pre-Tuesday physics batch, the
-2026-08-20 stance-update wave and the thread-24 R2b re-anchor onto the stance
-preceded it — all seven under the reviewed-recapture protocol, see the
-recapture record below).** The committed
+**Recaptured 2026-08-25 (THE STANCE EVENT — the `plateau_multigroup`
+anomalous-heating closure adopted with its `C_R` re-trim, the
+`anode_sheath_full_debit` and `beam_deposition_in_heat_substep` flags armed, and
+the `V_bank` stance row deleted; the 2026-08-24 tube-beamed injection row, the
+CAD-span machine geometry with its ray-clip exactness fix, the 2026-08-23
+conserving ionization birth with its own `C_R` re-trim, the `heat_flux_limiter_f`
+re-cut to 0.45, the pre-Tuesday physics batch, the 2026-08-20 stance-update wave
+and the thread-24 R2b re-anchor onto the stance preceded it — all eight under the
+reviewed-recapture protocol, see the recapture record below). This is the first
+recapture since the digest reference was introduced in which the TRAJECTORY
+digest moves rather than only the config identity.** The committed
 regression fixture
 `scripts/baselines/production_discharge.npz` is captured at **the stance of
 record, re-cut to the gate mesh** — `default_config()` plus the committed stance
@@ -108,15 +110,15 @@ whole cycle rather than a truncated foot.
 
 | quantity | value |
 |---|---|
-| steps | 70,408 |
-| wall, single lane | ~15 min per capture, the two run strictly serially |
-| saves | 2,625 |
-| `final_time` | 2.623728e-02 s (the dynamic `t_end`, reached) |
-| trajectory | `y[2625, 576]` = 8 fields × 72 cells |
-| phase census (saves) | 9 `pre_breakdown`, 15 `breakdown`, 2000 `main_discharge`, 600 `afterglow`, 1 `post_afterglow` |
+| steps | 94,044 |
+| wall, single lane | ~19 min per capture COMPILED; ~2.8 h PURE (see the kernel-path disclosure in the 2026-08-25 record) — the two run strictly serially |
+| saves | 2,620 |
+| `final_time` | 2.618731e-02 s (the dynamic `t_end`, reached) |
+| trajectory | `y[2620, 576]` = 8 fields × 72 cells |
+| phase census (saves) | 8 `pre_breakdown`, 11 `breakdown`, 2000 `main_discharge`, 600 `afterglow`, 1 `post_afterglow` |
 | save cadence | 10 us — the finest timing shift this fixture can resolve |
 
-*(Figures above are the 2026-08-24 tube-beamed-row capture; `steps`, `saves` and
+*(Figures above are the 2026-08-25 stance-event capture; `steps`, `saves` and
 `final_time` are read from the committed sidecar
 `scripts/baselines/production_discharge.json`, which is regenerated at every
 recapture and is the authority for them. The two captures were
@@ -143,6 +145,121 @@ stance the cells carry plasma and the term is well behaved. Recorded as a known
 closure stress, deliberately not addressed by this pass.
 
 ## Recapture record
+
+**2026-08-25 — THE STANCE EVENT: the `plateau_multigroup` anomalous-heating
+closure adopted, with its `C_R` re-trim, two armed physics flags and the
+`V_bank` half of the twice-deferred 23b R4 deletion (AUTHORIZED recapture;
+Tom's ratifications — campaign log 25ag as amended by 25at/25av, plus the
+session-35 rulings that ADOPTED the selector and ARMED the stb fix).** Five
+stance members moved in one event, and they are not five independent choices:
+the selector is the physics change and the `C_R` re-trim is its consequence —
+adopting the spectrum moves the drive, so the one drive-side fit knob was
+re-trimmed ONCE, at ES1, drive-band target only, to put the plateau ratio back
+on 1.000.
+
+| key | old | new | class |
+|---|---|---|---|
+| `heating_anomalous_transport` (stance) | `"tail_walk"` | `"plateau_multigroup"` | selector — **DERIVED**, zero fitted parameters |
+| `C_R` (stance) | `7.36` | `8.76` | **FITTED** — the ONE drive-side fit knob |
+| `anode_sheath_full_debit` (stance flags) | *absent*, default `False` | `true` | ARM of a booking correction |
+| `beam_deposition_in_heat_substep` (stance flags) | *absent*, default `False` | `true` | ARM of the `[stage-te-bias]` class-1 fix |
+| `V_bank` (stance) | `177.843` | *row deleted* | rung-owned measurement; the row duplicated it |
+
+Values, classes and the knob-assignment argument: `production_stance_provenance.md`.
+The `T_s` half of the R4 deletion was NOT executed — see the note at the end of
+this record.
+
+**What moved in the fixture.**
+
+| quantity | before | after |
+|---|---|---|
+| `steps` | 70,408 | **94,044** (+23,636) |
+| `saves` | 2,625 | **2,620** (−5) |
+| `final_time` | 2.623728e-02 s | **2.618731e-02 s** — the dynamic `t_end`, still reached |
+| NPZ `sha256` | `d53100197b76def84e4f59d13be8a40aa6b7b8733482917570787e4c8e8c77f9` | `60e11c6fa64ced1050e57feae788f7e0eb4f1cd9b7e072bc483e3695002a9b76` |
+| sidecar `sha256` | `50a3ba19d1f7dbb7fe09b643738290281d0f340cea22267ed16c43a490b54988` | `074a682519fc9a4459b34829b549dc955ee3966b666af8763bdd775a0f9d22d5` |
+| 4k trajectory digest | `e50f58c9bcb0468a8834b92c9d49d3896afd2125235eebd022c65fba4747fa5a` | `f1461a03f2677146cbd927a614e3fc575a2d0dfe8a9d1eaeed54ebe872ce4b80` |
+| digest `config_identity` | `5bacfee769e5226c7d1d902abdb6a2e8b5a8302e629f74bb9541b0d1f6b8ec9b` | `f95eedbbb1a76e103f92bd58e00fc8f6d401c409d828a1095f67f2d195c61310` |
+
+**BOTH digest pairs move, and that is the expected and authorized outcome** —
+unlike the three preceding rotations, which were config-identity-only moves over
+an unchanged `e50f58c9` trajectory, this event changes physics. The sidecar
+reports `finite: true` with `Te_max` 28.38 eV. The 150,000-step tripwire did NOT
+fire, which is the load-bearing negative: the extra cost below is per-step, not
+a timestep collapse.
+
+**Run cost — the fixture got substantially more expensive, and a reviewer must
+budget for it.** The digest horizon's 4,000 steps cost **19 min 36 s pure**
+against ~2.5 min at the previous stance (~8.8×), and the full fixture now runs
+94,044 steps instead of 70,408. Extrapolated, a pure full capture is ~2.8 h
+against the previous ~15 min. The adaptive `dt` is the mechanism: the digest's
+`final_time` over its fixed 4,000 steps falls 1.5529e-03 → 4.5446e-04 s. This is
+a real consequence of the adopted closure, not a defect, but it changes what the
+gate costs at every future merge.
+
+**Capture evidence.** The NPZ fixture was recaptured TWICE from clean separate
+processes to temporary paths, run strictly serially per the serial-golden rule,
+and compared BEFORE either was installed: NPZ and JSON sidecar byte-identical
+(the two `sha256` values above), and raw-bitwise identical over all three arrays
+— `phase` identical at raw bytes, `time` **0 differing of 2,620** and `y`
+**0 differing of 1,509,120** at `uint64`. The digest reference was regenerated in
+the same event as the protocol requires, also twice from clean separate
+processes, byte-identical. `--verify` prints:
+
+```
+baseline verify OK: saves=2620, exact=True, max_rel=0.000e+00, max_abs=0.000e+00, time_max_abs=0.000e+00 s (rtol=1.0e-09, atol=0.0e+00)
+```
+
+**KERNEL PATH — a disclosed departure from how previous recaptures were taken.**
+The two NPZ captures were taken on the **COMPILED** path; the digest reference
+was captured **PURE**. The reason is cost, not preference: at ~2.8 h a pure full
+capture exceeds the agent harness's background-process lifetime, and two
+successive pure attempts were killed at ~60 and ~65 minutes with nothing written.
+The licence for using the compiled path is that pure and compiled are bit-exact
+BY CONSTRUCTION of the source on linux-64 (CLAUDE.md, certified 2026-08-17), and
+that this was **proven again at THIS stance** before any fixture was captured:
+capturing the digest reference on both paths gave the identical final digest, all
+five identical checkpoints, identical `config_identity`, `steps` and
+`final_time`, with `KERNEL_ID` (`cython/_cathode_kernels_cy/tierA+csda`) probed
+IN-PROCESS so the compiled run provably loaded the compiled path. The NPZ and its
+sidecar carry no kernel-provenance field, so a compiled capture of them is
+indistinguishable from a pure one; the digest reference DOES carry that field,
+which is why it was captured pure and still reads `kernel_provenance: "pure"`
+exactly as the outgoing reference did. The independent leg closing the loop is
+the digest gate run on the PURE path against that pure-captured reference:
+`digest gate OK: steps=4000, digest=f1461a03…, exact=True`.
+
+**`config_snapshots.json` was regenerated in this event, and the cause is
+proven rather than asserted.** All four cases moved. Restoring the stance file
+from `43e7870` reproduces all four **committed** digests exactly — the
+stripped-key reproduction — and `parameter_count` (256), `flag_count` (51) and
+`manifest_sha256` are unchanged, so the config SURFACE did not move and no key
+was added or removed. The per-case deltas are minimal and legible:
+`production_golden` moves on all five stance members, because it is the only case
+that applies the stance file; the three campaign cases (`compare_sim1d_es1`,
+`run_m6_point_es1_sgp3649_defaults`, `run_mechanism_ladder_es1_defaults`) move on
+**`C_R` alone**, since that is the only changed key `compare_sim1d_es1`'s
+stance-populated `PARAM_OVERRIDES` carries — `V_bank` is supplied per rung by
+those drivers, which is exactly why its deletion is invisible to them.
+
+**The `T_s` half of the 23b R4 deletion was NOT executed, and is deferred with
+its reason on record.** Deleting `V_bank` and `T_s` together was the registered
+intent, on the reading that both merely restated config defaults. That reading is
+correct for `V_bank` and for `T_s` *against `default_config()`* — which is why
+deleting `T_s` is invisible to THIS fixture, whose `T_s` resolves to the config
+default `1998.15` either way. It is NOT correct on the campaign route:
+`run_m6_point.py:216` supplies `T_s` from the ES rung's `Ts_standby_K`
+(ES1 = 1910.0) and the stance row SUPERSEDES it, so deleting the row would move
+`T_s` 1998.15 → 1910.0 on every campaign arm. That was measured as a real second
+delta in the pre-flight against `scripts/mgcr1_confirm.h5` and disappeared the
+moment the row was restored. Whether the move is physically inert is unsettled:
+under `cathode_warming_model = "power_balance"` the evolving surface temperature
+is seeded from `cathode_Ts_base_K`, not `T_s` (`solver.py:1917`), and every live
+read of `T_s` is guarded by that evolving value — but `solver.py:10925` reads it
+UNGUARDED into the kinetic background, dead here only because this stance runs
+`neutral_model = "moment"` and live under `"kinetic_dvm"`. The adjudication is
+assigned to the DVM program.
+
 
 **2026-08-24 — the TUBE-BEAMED INJECTION ROW adopted, with the shaped foot
 fill regenerated under it (AUTHORIZED recapture; Tom's `[porf-dvm-consistency]`
