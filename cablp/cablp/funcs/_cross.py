@@ -45,6 +45,16 @@ _he_data = np.loadtxt(_VARS_DIR / "he_eii_cross.csv", delimiter=",", comments="#
 _HE_LOG_EPS = np.log(_he_data[:, 0])
 _HE_LOG_SIGMA = np.log(_he_data[:, 1])
 
+# Python-list twins of the He EII table, for the SCALAR lookup below.
+# ``interp_scalar_fused`` indexes its table inside a binary search; indexing a
+# list hands back a float, where indexing an ndarray builds a numpy scalar per
+# probe -- and that dominates the CSDA march, which takes ~200k lookups per
+# solver step. Same float64 values, so the interpolated result is bit-identical.
+# The ndarrays above stay: the compiled kernel's table view needs buffers, and
+# ``scripts/interp_fused_reference.py`` reads them by name.
+_HE_LOG_EPS_SEQ = _HE_LOG_EPS.tolist()
+_HE_LOG_SIGMA_SEQ = _HE_LOG_SIGMA.tolist()
+
 _HE_ION_RATE_PATH = _VARS_DIR / "he_ion_rate.csv"
 if _HE_ION_RATE_PATH.exists():
     _he_ion_rate_data = np.loadtxt(
@@ -117,10 +127,13 @@ def He_EII_cross_lkup(eps):
     eps : float
         Beam energy scaled by He ionization threshold (E / IE_He).
     """
-    return float(np.exp(_interp_scalar_fused(np.log(eps), _HE_LOG_EPS,
-                                             _HE_LOG_SIGMA,
-                                             left=_HE_LOG_SIGMA[0],
-                                             right=_HE_LOG_SIGMA[-1])))
+    # math.log/math.exp rather than the numpy scalars: same float64 result
+    # (numpy dispatches to the same libm for a scalar argument), ~2x cheaper
+    # per call, and this is the march's innermost lookup.
+    return math.exp(_interp_scalar_fused(math.log(eps), _HE_LOG_EPS_SEQ,
+                                         _HE_LOG_SIGMA_SEQ,
+                                         left=_HE_LOG_SIGMA_SEQ[0],
+                                         right=_HE_LOG_SIGMA_SEQ[-1]))
 
 
 def He_ion_rate_lkup(T):
@@ -316,6 +329,7 @@ def He_beam_excitation_channel(E_eV, n_max=20):
 # only the deposition hot loop opts in (deliberate: the frozen path
 # stays bit-stable).
 _HE_BEAM_EXC_TABLE = None
+_HE_BEAM_EXC_SEQ = None
 
 
 def _he_beam_excitation_table(n_max=20):
@@ -337,13 +351,31 @@ def _he_beam_excitation_table(n_max=20):
     return _HE_BEAM_EXC_TABLE
 
 
+def _he_beam_excitation_seq(n_max=20):
+    """``(E_grid, sigma, sigma_E)`` of the table above, as Python lists.
+
+    Same float64 values -- see the note on ``_HE_LOG_EPS_SEQ`` for why the
+    scalar lookup indexes lists while the ndarrays stay for the compiled
+    kernel's table view. Keyed on the cached tuple's IDENTITY, the same test
+    ``_beam_deposition._csda_tables`` uses, so a rebuilt table (a different
+    ``n_max``) rebuilds these too.
+    """
+    global _HE_BEAM_EXC_SEQ
+    table = _he_beam_excitation_table(n_max)
+    if _HE_BEAM_EXC_SEQ is None or _HE_BEAM_EXC_SEQ[0] is not table:
+        _HE_BEAM_EXC_SEQ = (
+            table, table[1].tolist(), table[2].tolist(), table[3].tolist()
+        )
+    return _HE_BEAM_EXC_SEQ[1:]
+
+
 def He_beam_excitation_channel_lkup(E_eV, n_max=20):
     """Interpolated ``He_beam_excitation_channel``: same contract, ~100x faster.
 
     ``(0.0, 0.0)`` at or below the 20 eV table floor (below every singlet
     threshold); exact-function fallback above the 2000 eV table ceiling.
     """
-    _, E_grid, sigma, sigma_E = _he_beam_excitation_table(n_max)
+    E_grid, sigma, sigma_E = _he_beam_excitation_seq(n_max)
     E = float(E_eV)
     if E <= E_grid[0]:
         return 0.0, 0.0
