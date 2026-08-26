@@ -355,14 +355,47 @@ nn0_annulus_profile = [
 ]
 
 # CATHODE AND CIRCUIT.
-# C_R re-trimmed 2026-08-23 (7.09 -> 7.36), the ONE knob turned to restore the
-# drive after the conserving ionization birth was adopted; see
+# C_R re-trimmed 2026-08-25 (7.36 -> 8.76), the ONE knob turned to restore the
+# drive under the plateau_multigroup anomalous-heating closure adopted below.
+# The trim was a three-point scan at ES1 (C_R 8.4 / 8.9 / 9.4), a log-log fit of
+# plateau current against C_R solved for a stage-(i) plateau ratio of 1.000, and
+# a confirm arm at the fitted C_R* that measured a drive ratio of 1.000. It is
+# still the ONE drive-side fit knob: cathode_Ts_base_K is NOT co-trimmed and
+# stays at the measured config default 1910.0, because the two are the same flat
+# direction and only one member of a flat pair may carry a calibration. See
 # production_stance_provenance.md.
-C_R = 7.36
-V_bank = 177.843
+C_R = 8.76
+# V_bank is DELETED from this stance (2026-08-25; the 23b R4 deletion, executed
+# for this half only). It was never a stance decision: V_bank is a PER-RUNG
+# measurement owned by run_mechanism_ladder.ES_OPERATING (ES1 = 177.843, exactly
+# the number this file used to repeat), so naming it here duplicated the rung
+# and could only go stale against it. Campaign scores are unaffected -- every
+# campaign arm takes V_bank from its rung, which is why deleting the row is
+# invisible in a pre-flight against a campaign artifact. The golden takes no
+# rung, so ITS V_bank falls back to the config default 180.0, and the authorized
+# recapture that accompanies this edit absorbs that move.
 cathode_conduction_W_per_K = 12058.0
 cathode_heat_capacity_J_per_K = 181.0
 cathode_emission_profile = "uniform"
+# T_s is the OTHER half of the 23b R4 deletion, and it is DEFERRED a third time
+# (2026-08-25) -- now with the reason on record rather than as an open action.
+# The row was believed to be a resolved-accretion duplicate of the config
+# default. It is that against ``default_config()`` (both 1998.15), which is why
+# deleting it is invisible to the golden. It is NOT that on the CAMPAIGN route:
+# run_m6_point.py:216 supplies ``T_s`` from the ES rung's ``Ts_standby_K``
+# (ES1 = 1910.0), and THIS ROW SUPERSEDES IT. Deleting it therefore moves T_s
+# 1998.15 -> 1910.0 on every campaign arm -- measured as a real second delta in
+# the pre-flight against scripts/mgcr1_confirm.h5, and reproduced as absent the
+# moment this row is restored.
+#   Whether that move is physically inert is NOT settled here. Under
+#   cathode_warming_model = "power_balance" the evolving surface temperature is
+#   seeded from cathode_Ts_base_K, not from T_s (solver.py:1917), and every live
+#   read of T_s is guarded by that evolving value -- so T_s is inert on THIS
+#   stance. Two reads are unguarded: cathode.py:339/410 (covered on the live
+#   emission path by the T_s_override_K route) and solver.py:10925, which feeds
+#   the kinetic background and is dead only because this stance runs
+#   neutral_model = "moment". It goes LIVE under "kinetic_dvm", so the
+#   adjudication is assigned to the DVM program rather than to a stance edit.
 T_s = 1998.15
 
 # ANODE SURFACE RECYCLE. The anode mesh's directed-recycle channel, armed at
@@ -397,7 +430,19 @@ gas_puff_orifice_length_cm = 22.0
 # coefficient at R2b).
 b_beam_excitation = 1.4
 beam_deposition_smoothing_cm = 50.0
-heating_anomalous_transport = "tail_walk"
+# ANOMALOUS-HEATING TRANSPORT. Adopted 2026-08-25 (tail_walk ->
+# plateau_multigroup): the quasilinear plateau is carried as a SPECTRUM rather
+# than as the single tail line the two predecessor arms each represented, and
+# the two single-line arms are its two heirs taken one at a time. Nothing is
+# fitted -- the wave/bulk and streaming shares, the group edges and the group
+# weights all follow from the flat plateau and the state-solved plateau edge
+# E_1 -- which is why the tail-energy dial, the fixed rung and the keying
+# selector are INERT under it and are refused at construction rather than
+# ignored. That is also why none of them is named here.
+heating_anomalous_transport = "plateau_multigroup"
+# Tail ionization rides the selector unchanged: it is one of the tail_walk
+# conventions plateau_multigroup inherits, and it applies to the walked
+# streaming groups exactly as it applied to the single tail line.
 heating_anomalous_tail_ionization = "on"
 Te_birth_ionization = "local"
 # Class-1 declaration: physics-bearing, so it is stated here even though it
@@ -411,6 +456,29 @@ tau_afterglow = 0.006
 max_steps_action = "stop"
 
 [input_flags]
+
+# CORRECTED ANODE SHEATH BOOKING. Armed 2026-08-25. The plasma electron store
+# is debited (2 Te + phi_a) per electron the anode collects -- the sheath-edge
+# energy flux of the truncated Maxwellian the sheath solve already closes on --
+# instead of the plasma-thermal 2 Te alone, and the anode mesh's Bohm
+# collection rows are re-cut to their sheath-edge values in the same arming.
+# The circuit ledger is untouched: the phi_a those electrons pay is field energy
+# the loop and the anode ions already book. The electron-ATTRACTING regime
+# (phi_a <= 0) keeps the unarmed thermal-only booking, because there the bank
+# pays the fall, and it is COUNTED rather than silent. It is a booking
+# correction, not a calibration. Requires characteristic_boundary, which this
+# stance takes from the config defaults.
+anode_sheath_full_debit = true
+
+# OPERATOR HOME OF THE BEAM'S ELECTRON-ENERGY DEPOSITION. Armed 2026-08-25. The
+# beam_power_deposition Ee row leaves the explicit operator A and is applied by
+# the implicit heat substep B, held constant over each substep and solved with
+# the tridiagonal conduction operator. Nothing else about the beam moves: the
+# ionization births, the ionization cost and the excitation radiation are
+# reaction-channel terms and stay in A. This is the class-1 fix for the staged
+# Te bias -- depositing beam power explicitly and then conducting it implicitly
+# let the deposition cell run hot across the substep boundary.
+beam_deposition_in_heat_substep = true
 
 # NEUTRAL CLOSURE. Two-zone particles, neutral momentum and energy and the hot
 # internal wall are config defaults since the R2a fold-in and are no longer
