@@ -57,3 +57,13 @@ cablp/scripts/*.wall
 # R5 neutral-seed database (derived, auto-populated per neutral-flow config)
 cablp/scripts/neutral_seed_db/
 .claude/
+
+# OPEN-ADAS data files (the adf11 masters and the two adf15 PEC files).
+# Every OPEN-ADAS download carries terms forbidding redistribution and
+# publication on a public website; this repository is public, so the .dat
+# files are UNTRACKED and each user fetches their own copies from
+# https://open.adas.ac.uk. cablp/cablp/vars/adas/README.md carries the
+# per-file download URL, local filename and checksums, and README.md
+# itself stays tracked. Ignored here so the data cannot be re-added
+# silently by a `git add` over the package tree.
+cablp/cablp/vars/adas/*.dat
