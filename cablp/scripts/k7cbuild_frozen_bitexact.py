@@ -39,11 +39,57 @@ import hashlib
 
 import numpy as np
 
-from compare_sim1d_es1 import FLAG_OVERRIDES, PARAM_OVERRIDES
 from run_mechanism_ladder import ES_OPERATING
 
 from cablp.solvers._sim1d import LAPDSim1D, config_manifest, default_config
 
+
+# --------------------------------------------------------------------------
+# FROZEN SNAPSHOT of compare_sim1d_es1.PARAM_OVERRIDES / FLAG_OVERRIDES, taken
+# 2026-08-26 at the tip that froze it. This file used to IMPORT those two
+# dicts LIVE, which is not a freeze at all: several PARAM_OVERRIDES entries
+# mirror scripts/stances/g1atrim.toml (S_gp, C_R, b_beam_excitation, the two
+# cathode power-balance areals, equilibration_gas_puff_on_s), so every stance
+# re-point silently rebased this bank -- demonstrated by the arm's cell count
+# moving 262 -> 252 across the L2 geometry rebaseline with no edit to this
+# file. A bank whose configuration drifts underneath it cannot certify that
+# two checkouts carried the same trajectory.
+#
+# The values are kept here verbatim, exactly the way EXTRA below already is.
+# The provenance commentary for each one lives with the live dicts in
+# scripts/compare_sim1d_es1.py and in scripts/production_stance_provenance.md;
+# it is deliberately NOT duplicated here, because this block is a dated
+# snapshot and that commentary is not.
+PARAM_OVERRIDES = {
+    "V_bank": 177.843,
+    "R_comp": 0.0072244,
+    "L_parasitic_H": 8.1e-06,
+    "C_bank_F": 9.5,
+    "equilibration_gas_puff_on_s": 0.025,
+    "S_gp": 9010.0,
+    "tau_gp_pulse_duration": 0.001,
+    "tau_gp_decay_duration": 0.005,
+    "atomic_rate_model": "adas",
+    "b_beam_excitation": 1.4,
+    "b_Qei": 1,
+    "b_Qen": 1,
+    "b_Qcx": 1,
+    "Rp": 18.415,
+    "R_cath": 18.415,
+    "implicit_heat_scheme": "tr_bdf2",
+    "operator_splitting": "strang",
+    "heat_picard_iterations": 2,
+    "heat_picard_tol": 1e-10,
+    "Rsup": 0.0,
+    "cathode_conduction_W_per_K": 12058.0,
+    "cathode_heat_capacity_J_per_K": 181.0,
+    "C_R": 8.76,
+    "beam_deposition_smoothing_cm": 50.0,
+}
+FLAG_OVERRIDES = {
+    "ion_neutral_drag_cx_only": False,
+}
+# --------------------------------------------------------------------------
 
 # The frozen arm's argv, transcribed from es1_k5a_shot1_nx240.cmd, exactly as
 # k6_frozen_bitexact.py carries it.

@@ -3989,6 +3989,14 @@ class LAPDSim1D:
         realizes a different speed than the one configured wherever the vessel
         differs between the two ends.
 
+        The instruments named above carry the per-end form too, as of
+        2026-08-26 (``physics/kinetic_neutrals.py``, ``scripts/mc_neutrals.py``
+        and the two ``neutral_arch_*`` benches took ``pi Rm[-1]**2`` at BOTH
+        ends until then). Their end-plane area is ``pi Rm**2`` outright, since
+        they model neither the obstruction cross-section nor the support rods
+        that ``neutral_area_cm2`` subtracts here; on a machine carrying either,
+        that residual difference stands.
+
         Where the end cell is a plenum, ``pump_elbow_conductance_lps`` folds
         into the speed in series first, the same restriction the fluid pump
         term applies at the same cell; a pump on any other role has no
@@ -11082,9 +11090,14 @@ class LAPDSim1D:
             arr = arr + s * resp["arr"]
         kin.target_col = np.maximum(target_col, self._floors["nn"])
         kin.target_ann = np.maximum(target_ann, self._floors["nn"])
-        vbar = np.sqrt(
-            8.0 * kb_cgs * 300.0 / (np.pi * self._mu_neutral * m_p_cgs)
-        )
+        # vbar carries m_He_cgs -- the mass this arm's OWN operators are built
+        # on (KN2Zone/KN2ZoneJump: kinetic_neutrals.py M_HE, the velocity grid,
+        # the wall spectra, the end sticking). The escape rate below is the
+        # column's free-streaming loss for the very population the engine
+        # marches, so it must be that population's thermal speed; the integer
+        # mass number 4 x m_p is a less accurate value of the same quantity,
+        # not an alternative convention.
+        vbar = np.sqrt(8.0 * kb_cgs * 300.0 / (np.pi * m_He_cgs))
         esc = vbar / (
             2.0 * np.maximum(np.asarray(self._geometry.Rp_cm), 1e-6)
         )

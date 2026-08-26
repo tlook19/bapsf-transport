@@ -115,7 +115,6 @@ from cablp.funcs._adas import he_rate_temperature_range_eV
 # the bare name local to the whole function -- alias it for the item-35 block.
 from cablp.funcs._beam_deposition import deposit_beam as _deposit_beam_ray
 from cablp.funcs._cathode_solver import _compute_l_b
-from cablp.funcs._plasmaparams import c_log
 from cablp.solvers._sim1d import (
     BreakdownError,
     KINETIC_DVM_INCOMPATIBLE_DEFAULTS,

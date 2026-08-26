@@ -974,9 +974,14 @@ def run_mc(bg, n_particles, jet, rng, r_n=(0.5, 0.5), r_e=(0.2, 0.25),
     mesh_edge = bg["mesh_edge"]
     transparency = 1.0 - bg["eta"]
     vbar = np.sqrt(8.0 * KB * T_WALL_K / (np.pi * M_HE))
-    A_end = np.pi * Rm[-1] ** 2
-    s_R = bg["S_pump_R"] * 1e3 / (A_end * vbar / 4.0)
-    s_L = bg["S_pump_L"] * 1e3 / (A_end * vbar / 4.0)
+    # Per-end end-plane area: each end's pumping speed is realized over ITS
+    # OWN end plane, so a shared area mis-scales whichever end the vessel does
+    # not match. Both ends previously took pi Rm[-1]**2. Matches KN2Zone and
+    # the solver's _dvm_end_sticking (45e7f3b).
+    A_end_L = np.pi * Rm[0] ** 2
+    A_end_R = np.pi * Rm[-1] ** 2
+    s_R = bg["S_pump_R"] * 1e3 / (A_end_R * vbar / 4.0)
+    s_L = bg["S_pump_L"] * 1e3 / (A_end_L * vbar / 4.0)
 
     # ---- source menu: (rate, launcher) ----
     src = bg["sources"]

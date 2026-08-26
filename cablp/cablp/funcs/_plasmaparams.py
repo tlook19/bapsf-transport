@@ -144,9 +144,9 @@ def ion_gyro_freq(B, mu, Z=1):
 LN_LAMBDA_MIN = 1.0
 
 
-def c_log(Te, n, kind="ee"):
+def c_log(Te, n, kind="ei"):
     """
-    Coulomb logarithm ln(Lambda) for electron-electron or electron-ion collisions.
+    Coulomb logarithm ln(Lambda) for electron-ion collisions.
 
     Parameters
     ----------
@@ -155,45 +155,36 @@ def c_log(Te, n, kind="ee"):
     n : float or array
         Electron density [cm⁻³].
     kind : str
-        Collision type:
-        - ``"ee"`` : electron-electron (NRL 2019, p. 34, case (a)); valid for
-          T > 0.1 eV.
-        - ``"ei"`` : electron-ion (NRL 2019, p. 34, case (b)); switches formula
-          at Te = 10 eV.
-        - anything else : the fallback 23.4 - 1.15*log10(n) + 3.45*log10(Te).
+        Collision type. ``"ei"`` -- electron-ion (NRL 2019, p. 34, case (b));
+        switches formula at Te = 10 eV -- is the only accepted value, and
+        anything else raises ``ValueError``. The NRL Formulary prints its
+        Coulomb-logarithm cases as a LETTERED list, not as numbered
+        equations, so the case is cited here by page and case rather than by
+        an equation number.
 
-        The NRL Formulary prints its Coulomb-logarithm cases as a LETTERED
-        list, not as numbered equations, so they are cited here by page and
-        case rather than by an equation number.
-
-        **The fallback branch is UNSOURCED and, as of the 2026-08-24 census,
-        UNREACHED.** Its expression appears nowhere among the NRL 2019 cases
-        (it is an older Spitzer-era spelling of unrecorded origin). Every
-        ``c_log`` call site in this repository -- six in the solver
-        (``physics/cathode.py``, ``physics/conduction.py`` x3,
-        ``physics/energy.py``, ``physics/tracer.py``) and three in
-        ``scripts/`` -- passes ``kind="ei"`` as a literal, so neither this
-        branch nor ``"ee"`` is entered by any shipped path. Do not adopt the
-        fallback as a physics choice without sourcing it first; a caller that
-        wants a Coulomb log should name ``"ee"`` or ``"ei"``.
+        The parameter survives the collapse to a single case because every
+        call site names it: passing it is how a caller states which Coulomb
+        log it means, and a wrong name must fail loudly rather than return
+        the electron-ion one under another label.
 
     Returns
     -------
     float or array
         Coulomb logarithm (dimensionless).
+
+    Raises
+    ------
+    ValueError
+        If ``kind`` is anything other than ``"ei"``.
     """
-    if kind == "ee":
-        return (
-            23.5
-            - np.log(np.sqrt(n) * Te ** (-5 / 4))
-            - np.sqrt(1e-5 + ((np.log(Te) - 2) ** 2) / 16)
+    if kind != "ei":
+        raise ValueError(
+            f"c_log(kind={kind!r}) is not available: the only collision type "
+            "this helper computes is 'ei' (electron-ion, NRL 2019 p. 34 case "
+            "(b))."
         )
-    elif kind == "ei":
-        result = np.where(
-            Te > 10,
-            24 - np.log(np.sqrt(n) / Te),
-            23 - np.log(np.sqrt(n) * Te**-1.5),
-        )
-        return result
-    else:
-        return 23.4 - 1.15 * np.log10(n) + 3.45 * np.log10(Te)
+    return np.where(
+        Te > 10,
+        24 - np.log(np.sqrt(n) / Te),
+        23 - np.log(np.sqrt(n) * Te**-1.5),
+    )

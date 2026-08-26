@@ -169,7 +169,19 @@ def _verify_source_boundary(capture_revision):
 
 
 def _producer_blobs():
-    """Return a complete tracked package + locked recipe blob census."""
+    """Return a complete tracked package + locked recipe blob census.
+
+    "Complete" means complete over what git TRACKS: the census is
+    ``git ls-tree`` of ``cablp/cablp`` plus the locked recipe inputs, so a
+    file that is not in the tree cannot appear here. The OPEN-ADAS ``.dat``
+    data files under ``cablp/cablp/vars/adas`` are untracked as of
+    2026-08-26 and are therefore ABSENT from this census, even though the
+    atomic rates they carry are an input to the captured RHS. Their
+    integrity is not lost, it is carried elsewhere: the data-block sha256
+    table in ``cablp/cablp/vars/adas/README.md`` pins them, and that README
+    IS tracked and so IS censused here. A capture's provenance record must
+    be read with both halves together.
+    """
     package_paths = _git(
         "ls-tree", "-r", "--name-only", "HEAD", "--", "cablp/cablp"
     ).splitlines()
