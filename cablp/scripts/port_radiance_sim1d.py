@@ -34,7 +34,8 @@ the two can legitimately differ:
     PLT2 channel here is line power only and excludes it.
 
 ADF11 EDGE CLAMP.  ``he_rates`` interpolates on the adf11 grid and CLAMPS
-NEAREST-EDGE outside it (``_adas.py`` lines 9-10, 85-86, 111-112).  Below the
+NEAREST-EDGE outside it (``_adas.py``: the module docstring states it, and
+``_interp_coords`` / ``_interp_log_bilinear`` implement it).  Below the
 low Te edge the PLT coefficients are HELD at their edge value while the true
 line power keeps collapsing under the excitation thresholds, so a window mean
 that includes below-edge frames is biased HIGH -- and ``adas_low_te_extension``
@@ -556,8 +557,9 @@ def markdown_report(rep):
     census = rep["te_edge_census"]
     L.append(
         "**adf11 edge clamp.** `he_rates` interpolates on the adf11 "
-        f"(log10 ne, log10 Te) grid and CLAMPS NEAREST-EDGE outside it "
-        f"(`cablp/funcs/_adas.py` lines 9-10, 85-86, 111-112). The Te grid "
+        "(log10 ne, log10 Te) grid and CLAMPS NEAREST-EDGE outside it "
+        "(`cablp/funcs/_adas.py`: stated in the module docstring, implemented "
+        "in `_interp_coords` / `_interp_log_bilinear`). The Te grid "
         f"spans {census['table_Te_min_eV']:g} to "
         f"{census['table_Te_max_eV']:g} eV. Below the low edge PLT is HELD at "
         "its edge value while the true line power keeps collapsing, so any "
