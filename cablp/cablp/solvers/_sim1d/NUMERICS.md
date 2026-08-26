@@ -290,6 +290,27 @@ physically-motivated candidate bounds, then clamps to `[dt_min, dt_max]`:
   engaged `kinetic_dvm` arm adds its plasma-side coupling term, which is
   otherwise a volumetric ion momentum/energy source no bound could see.
 
+  Its two ENERGY channels carry a floor-aware drain exemption
+  (`surface_loss_floor_exempt`, on by default): a cell whose margin above the
+  per-cell floor energy `3/2 n T_floor` is within
+  `SURFACE_LOSS_FLOOR_EXEMPT_RTOL` = 1e-3 of it is dropped from this bound
+  alone. The accept-time floor clip resets a floor-pinned cell's margin to
+  float residue every step, so without the exemption a persistent drain
+  re-trips the bound forever and pins `dt` at `dt_min` while the floor, not
+  this bound, is what holds the cell. The density channel is never exempted,
+  every other bound still governs an exempted cell, and an exempted cell is
+  never reported as `active_constraint`.
+
+  The exemption is knife-edge by default — the test is recomputed from the
+  current margin each call, so the same float residue can re-admit and re-exempt
+  a hovering cell on alternating steps. `surface_loss_floor_exempt_exit_rtol`
+  (**default 0.0 = off**) replaces that single threshold with a band: 1e-3 stays
+  the entry threshold, this key is the wider re-admission threshold, and a cell
+  between the two holds its previous verdict. The memory is a per-cell,
+  per-channel latch on the solver instance; it is run state, is advanced by
+  every `suggest_timestep` call that evaluates this bound, and is not carried
+  across a restart.
+
 - **Current-driven loop relaxation** (`circuit`, `circuit_dt_fraction`,
   default 0.25), **presence-gated on `cathode_circuit_voltage_bound`** and on
   a live loop, so an unarmed run neither evaluates it nor moves. The loop

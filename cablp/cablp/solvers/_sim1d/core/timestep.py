@@ -119,6 +119,8 @@ def suggest_timestep(
     circuit_kwargs=None,
     plasma_source_rhs=None,
     source_floor_exempt_rtol=None,
+    source_floor_exempt_exit_rtol=None,
+    source_floor_exempt_latch=None,
     neutral_rows_superseded=False,
     cfl=0.4,
     density_dt_fraction=0.25,
@@ -153,6 +155,13 @@ def suggest_timestep(
     presence-gated by the caller: ``None`` -- every run that does not arm
     ``cathode_circuit_voltage_bound``, and every phase with no live loop --
     withdraws it to ``inf``, so it cannot move an unarmed run's step.
+
+    ``source_floor_exempt_exit_rtol`` and ``source_floor_exempt_latch`` are
+    the ``surface_loss`` bound's optional exemption hysteresis, forwarded
+    verbatim to ``plasma_source_timestep`` (which documents them). Both
+    ``None`` -- the default -- leaves that bound's floor exemption
+    single-threshold and this call free of side effects; with the band armed
+    the call ADVANCES the caller's latch, so it is no longer a pure query.
 
     ``dt_global_scale`` is a measurement instrument, not a bound: it
     multiplies the returned step AFTER every candidate and after the
@@ -201,6 +210,8 @@ def suggest_timestep(
             fraction=density_dt_fraction,
             plasma_active=plasma_active,
             floor_exempt_rtol=source_floor_exempt_rtol,
+            floor_exempt_exit_rtol=source_floor_exempt_exit_rtol,
+            floor_exempt_latch=source_floor_exempt_latch,
         ),
         "neutral_exchange": (
             np.inf
@@ -390,6 +401,8 @@ def plasma_source_timestep(
     fraction=0.25,
     plasma_active=None,
     floor_exempt_rtol=None,
+    floor_exempt_exit_rtol=None,
+    floor_exempt_latch=None,
 ):
     """Bound resolved plasma sources against density/temperature floors.
 
@@ -406,9 +419,22 @@ def plasma_source_timestep(
     residue every step, so a persistent drain re-trips this bound forever and
     pins dt at dt_min while the floor (not this bound) is what actually holds
     the cell. The exemption is one-sided (this drain bound only; every other
-    bound still governs the cell) and knife-edge (recomputed from the current
-    margin each call, no hysteresis: any margin above the threshold re-admits
-    the cell immediately). The density channel is never exempted.
+    bound still governs the cell) and by default knife-edge (recomputed from
+    the current margin each call: any margin above the threshold re-admits the
+    cell immediately). The density channel is never exempted.
+
+    ``floor_exempt_exit_rtol`` (default ``None`` = the knife edge above) turns
+    that single threshold into a two-threshold band. ``floor_exempt_rtol`` is
+    then the ENTRY threshold and this is the RE-ADMISSION threshold, which must
+    be the larger of the two; a cell whose margin lies between them keeps
+    whichever state it held last, so a cell hovering at its floor cannot flap
+    in and out of the exemption from one call to the next. The memory is
+    ``floor_exempt_latch``, a caller-owned dict keyed by energy-channel name
+    (``"Ee"``/``"Ei"``) holding the per-cell boolean exempt mask; this function
+    READS the previous mask and WRITES the new one, so the call is stateful
+    exactly while the band is armed and the caller owns the latch's lifetime.
+    An absent, empty or wrongly-shaped entry starts the channel with every cell
+    un-exempt.
     """
     if source_rhs is None:
         return np.inf
@@ -442,10 +468,35 @@ def plasma_source_timestep(
             # relative threshold) at the per-cell floor energy. Exempted
             # cells cannot set dt_surface_loss, so an exempted cell is never
             # reported as this bound's active constraint.
-            channel_active = active & (
-                margin
-                > float(floor_exempt_rtol) * floor_energy_per_particle * n
-            )
+            if floor_exempt_exit_rtol is None:
+                channel_active = active & (
+                    margin
+                    > float(floor_exempt_rtol) * floor_energy_per_particle * n
+                )
+            else:
+                # Hysteresis band. Entry keeps the knife-edge threshold;
+                # re-admission has to clear the wider one. A cell between the
+                # two holds its previous verdict, which is the whole point:
+                # the accept-time floor clip perturbs the margin by float
+                # residue every step, and a single threshold turns that
+                # residue into a per-step exempt/bound alternation.
+                was_exempt = None
+                if floor_exempt_latch is not None:
+                    was_exempt = floor_exempt_latch.get(energy_name)
+                if was_exempt is None or np.shape(was_exempt) != margin.shape:
+                    was_exempt = np.zeros(margin.shape, dtype=bool)
+                exempt = np.where(
+                    was_exempt,
+                    margin
+                    <= float(floor_exempt_exit_rtol)
+                    * floor_energy_per_particle
+                    * n,
+                    margin
+                    <= float(floor_exempt_rtol) * floor_energy_per_particle * n,
+                )
+                if floor_exempt_latch is not None:
+                    floor_exempt_latch[energy_name] = exempt
+                channel_active = active & ~exempt
         candidates.append(
             _negative_margin_timestep(
                 margin,

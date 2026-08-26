@@ -2670,6 +2670,36 @@ def timestep_defaults():
         conservative again the moment something is. It does not weaken any
         bound: every step is still the minimum over all candidates, and this
         only widens the ceiling the ramp itself imposes.
+    surface_loss_floor_exempt_exit_rtol:
+        Outer (re-admission) threshold [dimensionless] of a two-threshold band
+        on the ``surface_loss`` floor-aware drain exemption. Read only while
+        the ``surface_loss_floor_exempt`` flag is on. Zero (the default)
+        disables the band entirely: the exemption stays single-threshold and
+        knife-edge, and a run is bit-exact with one predating this key.
+
+        With the band armed, an energy channel's cell is EXEMPTED when its
+        margin above the per-cell floor energy ``3/2 n T_floor`` falls to
+        within ``solver.SURFACE_LOSS_FLOOR_EXEMPT_RTOL`` of it -- the inner
+        entry threshold, unchanged -- and is RE-ADMITTED only once that margin
+        rises above this key's fraction of the same floor energy. Between the
+        two thresholds a cell keeps whichever state it was last in, so a cell
+        hovering at its temperature floor cannot alternate between exempt and
+        bound from one step to the next. The band is one-sided and per-channel
+        exactly as the single-threshold exemption is: it changes only which
+        cells this drain bound reads, never a floor, a rate or any other
+        bound, and the density channel is still never exempted.
+
+        Must be strictly greater than ``solver.SURFACE_LOSS_FLOOR_EXEMPT_RTOL``
+        when nonzero, and requires ``surface_loss_floor_exempt``. A value at or
+        below the inner threshold (which would be no band at all), a negative
+        or non-finite or non-numeric value, and any nonzero value with the flag
+        off each raise ValueError at construction.
+
+        The exemption latch it introduces is per-cell, per-energy-channel RUN
+        STATE: it lives on the solver instance, advances on every
+        ``suggest_timestep`` call that actually evaluates this bound, and is
+        not part of the restart record, so a resumed run starts with every
+        cell un-exempt.
     max_density_step_fraction:
         Optional accepted-step density fractional-change guard. Zero disables it.
     max_neutral_step_fraction:
@@ -2712,6 +2742,10 @@ def timestep_defaults():
         # these keys. NO default flip -- that decision is not the code's.
         "dt_growth_recovery_patience": 0,
         "dt_growth_recovery_factor": 4.0,
+        # Default-off: zero skips the band entirely, so the floor-exempt test
+        # stays the single-threshold expression and no latch is allocated. NO
+        # default flip -- that decision is not the code's.
+        "surface_loss_floor_exempt_exit_rtol": 0.0,
         "max_density_step_fraction": 0.0,
         "max_neutral_step_fraction": 0.0,
         "max_energy_step_fraction": 0.0,
@@ -3551,6 +3585,11 @@ input_flags_template_1d = {
     # re-admits the cell immediately). ON by default because a run that reaches
     # a floor-pinned afterglow otherwise cannot finish in finite time. Set it
     # False to recover the historical bound.
+    #
+    # The knife edge can be softened into a two-threshold band by the params
+    # key surface_loss_floor_exempt_exit_rtol (default 0.0 = off, which is this
+    # flag's behavior unchanged); that key is read only while this flag is on
+    # and raises at construction if set with it off.
     "surface_loss_floor_exempt": True,
     # Include the beam_ionization_birth row in the resolved electrode/source
     # ("surface_loss") timestep bound. Default OFF and bit-exact off.
