@@ -153,7 +153,7 @@ def c_log(Te, n, kind="ei"):
     Te : float or array
         Electron temperature [eV].
     n : float or array
-        Electron density [cm\u207b\u00b3].
+        Electron density [cm⁻³].
     kind : str
         Collision type. ``"ei"`` -- electron-ion (NRL 2019, p. 34, case (b));
         switches formula at Te = 10 eV -- is the only accepted value, and
