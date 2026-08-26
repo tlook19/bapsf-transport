@@ -300,6 +300,7 @@ physically-motivated candidate bounds, then clamps to `[dt_min, dt_max]`:
   this bound, is what holds the cell. The density channel is never exempted,
   every other bound still governs an exempted cell, and an exempted cell is
   never reported as `active_constraint`.
+
   The exemption is knife-edge by default — the test is recomputed from the
   current margin each call, so the same float residue can re-admit and re-exempt
   a hovering cell on alternating steps. `surface_loss_floor_exempt_exit_rtol`
