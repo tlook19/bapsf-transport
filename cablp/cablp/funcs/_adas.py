@@ -27,6 +27,19 @@ from ..vars._cons import qe_SI
 ADAS_DIR = Path(__file__).resolve().parent.parent / "vars" / "adas"
 
 
+def _missing_data_file_message(path):
+    """Return the fetch-instruction text for a missing OPEN-ADAS data file."""
+    return (
+        f"OPEN-ADAS data file not found: {path}\n"
+        "The ADAS .dat files are NOT tracked in this repository -- OPEN-ADAS's "
+        "terms forbid redistributing them on a public website -- so they must "
+        "be fetched by hand into cablp/cablp/vars/adas/ before the "
+        'atomic_rate_model = "adas" path (or any adf11 reader) can run.\n'
+        "See cablp/vars/adas/README.md for the per-file download URL, the "
+        "local filename to save as, and the checksum to verify."
+    )
+
+
 def read_adf11(path):
     """Parse an unresolved adf11 file.
 
@@ -34,7 +47,11 @@ def read_adf11(path):
     index z1 to an ``(nte, ndens)`` array of log10 coefficients (density
     varying fastest in the file, hence columns here).
     """
-    lines = Path(path).read_text().splitlines()
+    try:
+        text = Path(path).read_text()
+    except FileNotFoundError as exc:
+        raise RuntimeError(_missing_data_file_message(path)) from exc
+    lines = text.splitlines()
     header = lines[0].split("/")[0].split()
     ndens, nte = int(header[1]), int(header[2])
     z1min, z1max = int(header[3]), int(header[4])
