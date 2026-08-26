@@ -11082,9 +11082,14 @@ class LAPDSim1D:
             arr = arr + s * resp["arr"]
         kin.target_col = np.maximum(target_col, self._floors["nn"])
         kin.target_ann = np.maximum(target_ann, self._floors["nn"])
-        vbar = np.sqrt(
-            8.0 * kb_cgs * 300.0 / (np.pi * self._mu_neutral * m_p_cgs)
-        )
+        # vbar carries m_He_cgs -- the mass this arm's OWN operators are built
+        # on (KN2Zone/KN2ZoneJump: kinetic_neutrals.py M_HE, the velocity grid,
+        # the wall spectra, the end sticking). The escape rate below is the
+        # column's free-streaming loss for the very population the engine
+        # marches, so it must be that population's thermal speed; the integer
+        # mass number 4 x m_p is a less accurate value of the same quantity,
+        # not an alternative convention.
+        vbar = np.sqrt(8.0 * kb_cgs * 300.0 / (np.pi * m_He_cgs))
         esc = vbar / (
             2.0 * np.maximum(np.asarray(self._geometry.Rp_cm), 1e-6)
         )
