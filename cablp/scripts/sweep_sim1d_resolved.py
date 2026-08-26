@@ -64,7 +64,14 @@ PARAM_OVERRIDES = {
 }
 FLAG_OVERRIDES = {
     "ion_neutral_drag_cx_only": False,
-    "ion_neutral_thermalization": True,
+    # ion_neutral_thermalization is deliberately ABSENT (dropped 2026-08-26).
+    # This sweep measures the resolved source/end boundary -- the nx_gap
+    # presheath convergence and the Lcs/Rcs/Rsup/eta/pump sensitivities -- and
+    # never touches the ion-neutral closure. It also never turns
+    # ion_neutral_moment_closure off, and under that closure (a config
+    # default) ion_neutral_thermalization_rhs is a strict no-op, so the
+    # override was LEGACY-INERT here and bought only one DeprecationWarning
+    # per constructed case.
 }
 
 
