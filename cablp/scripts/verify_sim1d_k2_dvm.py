@@ -186,7 +186,7 @@ from cablp.solvers._sim1d.physics.neutrals import (
     _effective_pump_speed,
     neutral_zone_volumes,
 )
-from cablp.vars._cons import kb_cgs, m_p_cgs
+from cablp.vars._cons import kb_cgs, m_He_cgs
 
 # The stance loader, for the committed stance FILE. It is this module's only
 # scripts/ import, and it is deliberate: the geometry the gates below call
@@ -1206,9 +1206,12 @@ def gate_s2():
     Run on the PRODUCTION machine, whose plenum and collector faces differ in
     area by 3.63x, with unequal speeds at the two ends and the elbow set, so
     one shared area, a swapped end, or a dropped elbow cannot satisfy both
-    ends at once. ``vbar`` is rebuilt here from the neutral mass the solver
-    is holding: this gate is about the AREA and the elbow, and it must not
-    read them back through the routine under test.
+    ends at once. ``vbar`` is rebuilt here from ``m_He_cgs`` -- the neutral
+    mass the DVM march itself carries, and so the one the sticking
+    probability must be normalized by for the realized speed to be the
+    configured one -- taken from the constants module rather than read back
+    through the routine under test: this gate is about the AREA and the
+    elbow.
     """
     S_L, S_R, C_elbow = 2000.0, 5000.0, 4000.0
     overrides = {
@@ -1223,9 +1226,7 @@ def gate_s2():
     dvm = sim._dvm
     geom = sim.geometry
     ledger = run_until_updates(sim, 2)[-1]
-    vbar = np.sqrt(
-        8.0 * kb_cgs * 300.0 / (np.pi * sim._mu_neutral * m_p_cgs)
-    )
+    vbar = np.sqrt(8.0 * kb_cgs * 300.0 / (np.pi * m_He_cgs))
     lines = []
     ok = True
     areas = {}

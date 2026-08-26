@@ -3993,6 +3993,12 @@ class LAPDSim1D:
         into the speed in series first, the same restriction the fluid pump
         term applies at the same cell; a pump on any other role has no
         unmodeled elbow in front of it.
+
+        ``vbar`` carries ``m_He_cgs``, the DVM/KN2Zone neutral mass: the
+        probability returned here is consumed by a march whose end-face
+        outflow is counted on a velocity grid built on that same mass, so
+        the realized speed ``sticking * area * vbar / 4`` is only the
+        configured one when both halves of the identity use it.
         """
         index = {"S_pump_L": 0, "S_pump_R": -1}[key]
         speed = float(self._input_dict.get(key, 0.0))
@@ -4004,9 +4010,7 @@ class LAPDSim1D:
             if is_plenum_cell(self._geometry, index)
             else None,
         )
-        vbar = math.sqrt(
-            8.0 * kb_cgs * 300.0 / (math.pi * self._mu_neutral * m_p_cgs)
-        )
+        vbar = math.sqrt(8.0 * kb_cgs * 300.0 / (math.pi * m_He_cgs))
         area = float(np.asarray(self._geometry.neutral_area_cm2)[index])
         return min(speed * 1.0e3 / (area * vbar / 4.0), 1.0)
 
