@@ -83,11 +83,17 @@ def _load():
 #: once at import so the hot path never branches.
 COMPILED_KERNELS = _load()
 
+#: The loaded compiled module's own ``KERNEL_ID``, or ``None`` on the default
+#: pure path. Bound here at import, beside ``COMPILED_KERNELS``, so a probe of
+#: THIS module answers "which kernels did this process load?" without having to
+#: know that the string lives on the extension module. ``None`` is the pure
+#: path and is not an error: read it together with ``PROVENANCE``.
+KERNEL_ID = (
+    None if COMPILED_KERNELS is None
+    else str(getattr(COMPILED_KERNELS, "KERNEL_ID", _MODULE))
+)
+
 #: Short provenance string for artifact metadata: ``"pure"`` or the compiled
 #: module's own ``KERNEL_ID``. An artifact with NO ``compiled_kernels`` entry
 #: predates this selector and was produced on the pure path.
-PROVENANCE = (
-    PURE_PROVENANCE
-    if COMPILED_KERNELS is None
-    else str(getattr(COMPILED_KERNELS, "KERNEL_ID", _MODULE))
-)
+PROVENANCE = PURE_PROVENANCE if KERNEL_ID is None else KERNEL_ID
