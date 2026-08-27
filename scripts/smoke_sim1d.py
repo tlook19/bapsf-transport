@@ -11019,6 +11019,76 @@ def _case_equilibration_puff_width(
             raise AssertionError(
                 f"equilibration_gas_puff_on_s={bad_puff_on!r} did not raise"
             )
+    ramp_y0 = pack_state(ramp_state)
+    ramp_y1 = ssprk2_step(
+        y0=ramp_y0,
+        dt=1e-10,
+        rhs_func=sim.rhs,
+        floor_func=sim.floor_state_vector,
+    )
+    ramp_y1 = sim.floor_state_vector(ramp_y1)
+    ramp_state_1 = unpack_state(ramp_y1, geom.cells)
+    ramp_derived_1 = derive_state(ramp_state_1, sim.floors, sim.ion_mass_g)
+    for values in (
+        ramp_state_1.n,
+        ramp_state_1.nn,
+        ramp_state_1.M,
+        ramp_state_1.Ee,
+        ramp_state_1.Ei,
+        ramp_derived_1.Te,
+        ramp_derived_1.Ti,
+    ):
+        assert np.all(np.isfinite(values))
+    for values in (
+        ramp_state_1.n,
+        ramp_state_1.nn,
+        ramp_state_1.Ee,
+        ramp_state_1.Ei,
+        ramp_derived_1.Te,
+        ramp_derived_1.Ti,
+    ):
+        assert np.all(values >= 0.0)
+    ramp_after = sim.plasma_flux_rhs(y=ramp_y1, include_front=True)
+    for values in (
+        ramp_after.n,
+        ramp_after.nn,
+        ramp_after.M,
+        ramp_after.Ee,
+        ramp_after.Ei,
+    ):
+        assert np.all(np.isfinite(values))
+
+    nn_ramp_y0 = pack_state(nn_ramp_state)
+    nn_ramp_y1 = ssprk2_step(
+        y0=nn_ramp_y0,
+        dt=1e-10,
+        rhs_func=sim.rhs,
+        floor_func=sim.floor_state_vector,
+    )
+    nn_ramp_state_1 = unpack_state(sim.floor_state_vector(nn_ramp_y1), geom.cells)
+    assert np.all(np.isfinite(nn_ramp_state_1.nn))
+    assert np.all(nn_ramp_state_1.nn >= params["nn_floor"])
+
+
+# --------------------------------------------------------------------
+# cli-run-and-plot-end-to-end
+# --------------------------------------------------------------------
+@_case("cli-run-and-plot-end-to-end")
+def _case_cli_run_and_plot_end_to_end():
+    # --- run_sim1d.py and plot_sim1d_run.py, driven as REAL CLI children --
+    # This block asks a DRIVER question, not a physics one: that the two
+    # shipped CLIs parse their arguments, run end to end as subprocesses,
+    # write a loadable HDF5 result, and render their plot files. It carried
+    # no dependency on the equilibration-puff-width case it sat inside --
+    # it landed there by POSITION at the R4 carve (2ac621c), not by
+    # relation -- so it is registered here on its own and takes no context.
+    #
+    # The child is held to an explicit SMALL equilibration. The shipped
+    # default is 100 cycles, which cost ~18 s of the suite's wall time
+    # here; not one assertion below reads the equilibrated seed, and the
+    # saved state vector is BIT-IDENTICAL at 1, 2, 100 and default cycles
+    # (measured 2026-08-27, drift exactly 0.0 in every case). Two cycles is
+    # what the puff-width case above pins for the same reason.
     with tempfile.TemporaryDirectory() as tmpdir:
         from scripts.run_sim1d import _parse_args
 
@@ -11095,6 +11165,8 @@ def _case_equilibration_puff_width(
                 "1e-10",
                 "--max-steps",
                 "10",
+                "--neutral-equilibration-cycles",
+                "2",
             ],
             cwd=Path(__file__).resolve().parents[1],
             check=True,
@@ -11138,56 +11210,6 @@ def _case_equilibration_puff_width(
         assert "sim1d plots written:" in cli_plot_run.stdout
         assert (cli_plot_dir / "cli_summary.png").exists()
         assert (cli_plot_dir / "cli_densities.png").exists()
-
-    ramp_y0 = pack_state(ramp_state)
-    ramp_y1 = ssprk2_step(
-        y0=ramp_y0,
-        dt=1e-10,
-        rhs_func=sim.rhs,
-        floor_func=sim.floor_state_vector,
-    )
-    ramp_y1 = sim.floor_state_vector(ramp_y1)
-    ramp_state_1 = unpack_state(ramp_y1, geom.cells)
-    ramp_derived_1 = derive_state(ramp_state_1, sim.floors, sim.ion_mass_g)
-    for values in (
-        ramp_state_1.n,
-        ramp_state_1.nn,
-        ramp_state_1.M,
-        ramp_state_1.Ee,
-        ramp_state_1.Ei,
-        ramp_derived_1.Te,
-        ramp_derived_1.Ti,
-    ):
-        assert np.all(np.isfinite(values))
-    for values in (
-        ramp_state_1.n,
-        ramp_state_1.nn,
-        ramp_state_1.Ee,
-        ramp_state_1.Ei,
-        ramp_derived_1.Te,
-        ramp_derived_1.Ti,
-    ):
-        assert np.all(values >= 0.0)
-    ramp_after = sim.plasma_flux_rhs(y=ramp_y1, include_front=True)
-    for values in (
-        ramp_after.n,
-        ramp_after.nn,
-        ramp_after.M,
-        ramp_after.Ee,
-        ramp_after.Ei,
-    ):
-        assert np.all(np.isfinite(values))
-
-    nn_ramp_y0 = pack_state(nn_ramp_state)
-    nn_ramp_y1 = ssprk2_step(
-        y0=nn_ramp_y0,
-        dt=1e-10,
-        rhs_func=sim.rhs,
-        floor_func=sim.floor_state_vector,
-    )
-    nn_ramp_state_1 = unpack_state(sim.floor_state_vector(nn_ramp_y1), geom.cells)
-    assert np.all(np.isfinite(nn_ramp_state_1.nn))
-    assert np.all(nn_ramp_state_1.nn >= params["nn_floor"])
 
 
 # --------------------------------------------------------------------
@@ -17042,7 +17064,7 @@ def _case_compiled_kernel_equivalence():
         # and it is the pre-R2a 5-field cold-neutral stance -- the child spells
         # _pin_pre_r2a_neutral_stance out itself, since a subprocess cannot
         # import the parent's helper (the TOML block in the
-        # equilibration-puff-width case spells the
+        # cli-run-and-plot-end-to-end case spells the
         # same pin out for the same reason). This block asks a KERNEL
         # EQUIVALENCE question, not a closure question: the compiled kernels
         # are the tier-A sheath solve and the CSDA march, neither of which
@@ -22732,7 +22754,7 @@ def _case_smoke_summary():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 118, "historical_stance": 53}
+_CASE_CENSUS = {"total": 119, "historical_stance": 53}
 
 
 def _assert_case_census():
