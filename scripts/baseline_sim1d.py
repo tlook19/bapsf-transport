@@ -56,6 +56,7 @@ from pathlib import Path
 
 import numpy as np
 
+from cablp.cathode import kernels as _kernel_selector
 from cablp.solvers._sim1d import (
     LAPDSim1D,
     default_config,
@@ -425,8 +426,29 @@ def _parse_args(argv):
     return parser.parse_args(argv)
 
 
+def _print_provenance():
+    """Print which cathode kernels THIS process loaded, before the run starts.
+
+    A golden transcript is evidence about a code path, and without this line it
+    cannot say which path produced it: the compiled and pure runs are bit-exact
+    by construction, so their output is identical and a hand-written label is
+    the only thing that ever distinguished them. ``_kernel_selector.PROVENANCE``
+    is bound at selector import from the loaded module's own ``KERNEL_ID``
+    (``"pure"`` when nothing is compiled), so this is an IN-PROCESS probe of
+    what actually loaded -- not a restatement of the environment variable, which
+    is what a transcript label was.
+
+    Print-only. Nothing here reaches the solver, the trajectory, or the fixture,
+    and it is called from ``main`` rather than at module scope so the several
+    scripts that import ``build_baseline_config`` stay silent. ``flush`` so the
+    line survives a run that is interrupted or piped.
+    """
+    print(f"provenance: kernels={_kernel_selector.PROVENANCE}", flush=True)
+
+
 def main(argv=None):
     args = _parse_args(argv)
+    _print_provenance()
     if args.capture:
         return capture(args.baseline)
     return verify(args.baseline, rtol=args.rtol, atol=args.atol)
