@@ -13,8 +13,8 @@
       "sha256": "f335eb63343dfc4017f39f20b6814cd9d4421c6d714d26c81a28fece6cf337d2"
     },
     "run_mechanism_ladder_es1_defaults": {
-      "Te_birth_ionization": "floor",
-      "sha256": "83395b6330fb89690f94b8d6ad7270a76e99d9f0f822d8a08a2a3931dc82406a"
+      "Te_birth_ionization": "local",
+      "sha256": "837ac2d8f79465c0b399c3c0df17499b43292d42a8313d29617694664b62ae97"
     }
   },
   "flag_count": 51,
