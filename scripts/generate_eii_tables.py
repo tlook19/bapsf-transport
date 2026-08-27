@@ -15,13 +15,13 @@ from pathlib import Path
 import numpy as np
 
 # Make the package importable from this directory
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from cablp.funcs._cross import H_EII_cross, He_EII_cross
 from cablp.vars._coeff import a_11s
 from cablp.vars._cons import I_Ry as IE_Hydrogen, I_ion as IE_Helium
 
-OUT_DIR = Path(__file__).parent / "cablp" / "vars"
+OUT_DIR = Path(__file__).parent.parent / "cablp" / "vars"
 N = 1000
 
 # ── H: E from IE_H to 1000 eV ──────────────────────────────────────────────

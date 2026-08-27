@@ -22620,14 +22620,14 @@ def _case_phase3_artifact_locator_battery():
 
     with tempfile.TemporaryDirectory() as _p3_tmp:
         _p3_root = Path(_p3_tmp)
-        _p3_out = _p3_root / "cablp/scripts/baselines/phase3_rhs"
+        _p3_out = _p3_root / "scripts/baselines/phase3_rhs"
         reserve_run_id(_p3_out, _p3_run, {"kind": "smoke-synthetic"})
         _p3_h5, _p3_provenance = write_qualified_capture(
             _p3_out,
             _p3_result,
             run_id=_p3_run,
             capture_revision="a" * 40,
-            producer_path="cablp/scripts/capture_phase3_rhs.py",
+            producer_path="scripts/capture_phase3_rhs.py",
             started_at="2026-08-24T12:00:00Z",
             completed_at="2026-08-24T12:00:01Z",
             configuration_identity_sha256=_phase3_configuration_identity(
@@ -22638,7 +22638,7 @@ def _case_phase3_artifact_locator_battery():
             invocation=["python", "scripts/capture_phase3_rhs.py",
                         "--synthetic"],
             producer_blobs={"cablp/synthetic.py": "b" * 40},
-            environment_lock={"path": "cablp/poetry.lock",
+            environment_lock={"path": "poetry.lock",
                               "git_blob": "c" * 40},
             repository_root=_p3_root,
         )

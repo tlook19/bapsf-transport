@@ -32,7 +32,7 @@ import sys
 import numpy as np
 
 BASELINE_REF = "64e9565"  # agent-staging tip this branch was cut from
-REPO_PATH = "cablp/scripts/compare_sim1d_es1.py"
+REPO_PATH = "scripts/compare_sim1d_es1.py"
 WINDOW = (20.0, 21.5)
 SPAN = WINDOW[1] - WINDOW[0]
 
@@ -51,7 +51,7 @@ def _load_baseline_report_decay():
     """Return the pre-change ``_report_decay`` from the baseline commit."""
     src = subprocess.run(
         ["git", "show", f"{BASELINE_REF}:{REPO_PATH}"],
-        cwd=pathlib.Path(__file__).resolve().parents[2],
+        cwd=pathlib.Path(__file__).resolve().parents[1],
         check=True,
         capture_output=True,
         text=True,

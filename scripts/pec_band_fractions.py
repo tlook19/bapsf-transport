@@ -95,7 +95,7 @@ def _missing_data_file_message(path):
         "The ADAS .dat files are NOT tracked in this repository -- OPEN-ADAS's "
         "terms forbid redistributing them on a public website -- so the adf15 "
         "PEC files this script reads must be fetched by hand into "
-        "cablp/cablp/vars/adas/ before it can run.\n"
+        "cablp/vars/adas/ before it can run.\n"
         "See cablp/vars/adas/README.md for the per-file download URL, the "
         "local filename to save as, and the checksum to verify."
     )

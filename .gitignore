@@ -1,4 +1,3 @@
-scripts/*
 .DS_Store
 
 # Python bytecode
@@ -7,13 +6,13 @@ __pycache__/
 
 # Cython build products. The .pyx sources are tracked; the C that Cython
 # generates and the compiled extension are derived and machine-specific.
-cablp/cablp/funcs/*.c
+cablp/funcs/*.c
 *.so
 build/
 
 # Poetry build output. Wheels/sdists are derived from the tracked sources and
 # go stale the moment a module moves; nothing consumes them from the repo.
-cablp/dist/
+dist/
 
 # Data files
 *.h5
@@ -31,9 +30,9 @@ manuscript/*.pdf
 
 # sim1d run outputs written next to the scripts (baselines/ and data/
 # subdirectories stay tracked; *.h5 is already ignored above)
-cablp/scripts/*.npz
-cablp/scripts/*.json
-cablp/scripts/*.png
+scripts/*.npz
+scripts/*.json
+scripts/*.png
 
 # Run-record scratch written next to the scripts by campaign arms and gates:
 # tee'd stdout (.txt), the invocation (.cmd), and the run-wrapper bookkeeping
@@ -41,29 +40,29 @@ cablp/scripts/*.png
 # not run-records -- the committed stance artifact under scripts/stances/ is
 # what carries a stance of record. Before this block `git status` stood at
 # ~2,800 lines of permanent noise (2,489 artifacts in the directory root).
-# Every pattern is anchored to cablp/scripts/ itself, so the tracked
+# Every pattern is anchored to scripts/ itself, so the tracked
 # baselines/, data/ and stances/ subdirectories are unaffected.
 # NB there are no committed .txt notes to carve out: as of this commit the
 # only tracked non-.py files here are *.npz, *.json, *.md, *.toml and the
 # notebook. A committed .txt would need an explicit `!` line added below.
-cablp/scripts/*.txt
-cablp/scripts/*.cmd
-cablp/scripts/*.exit
-cablp/scripts/*.head
-cablp/scripts/*.start
-cablp/scripts/*.time
-cablp/scripts/*.wall
+scripts/*.txt
+scripts/*.cmd
+scripts/*.exit
+scripts/*.head
+scripts/*.start
+scripts/*.time
+scripts/*.wall
 
 # R5 neutral-seed database (derived, auto-populated per neutral-flow config)
-cablp/scripts/neutral_seed_db/
+scripts/neutral_seed_db/
 .claude/
 
 # OPEN-ADAS data files (the adf11 masters and the two adf15 PEC files).
 # Every OPEN-ADAS download carries terms forbidding redistribution and
 # publication on a public website; this repository is public, so the .dat
 # files are UNTRACKED and each user fetches their own copies from
-# https://open.adas.ac.uk. cablp/cablp/vars/adas/README.md carries the
+# https://open.adas.ac.uk. cablp/vars/adas/README.md carries the
 # per-file download URL, local filename and checksums, and README.md
 # itself stays tracked. Ignored here so the data cannot be re-added
 # silently by a `git add` over the package tree.
-cablp/cablp/vars/adas/*.dat
+cablp/vars/adas/*.dat

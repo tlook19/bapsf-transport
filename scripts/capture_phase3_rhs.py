@@ -24,25 +24,25 @@ from cablp.solvers._sim1d.results.phase3_capture import (
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPOSITORY_ROOT = SCRIPT_DIR.parents[1]
+REPOSITORY_ROOT = SCRIPT_DIR.parents[0]
 OUTPUT_DIRECTORY = SCRIPT_DIR / "baselines" / "phase3_rhs"
-PRODUCER_PATH = "cablp/scripts/capture_phase3_rhs.py"
+PRODUCER_PATH = "scripts/capture_phase3_rhs.py"
 MINIMUM_CAPTURE_ANCESTOR = "5911bc18a3b1f065dfff351d00190aba0e2f4e26"
 EXPECTED_CONFIGURATION_IDENTITY = (
     "91e19ac5a7eb11c21ce0c38ab36cb60f948c420edc8ae0a1642e80095cb0eec6"
 )
 RECIPE_IDENTITY = "golden-digest-first-4000-accepted-steps-v1"
 PRODUCER_INPUT_PATHS = (
-    "cablp/cablp/solvers/_sim1d/core/config.py",
-    "cablp/cablp/solvers/_sim1d/core/state.py",
-    "cablp/cablp/solvers/_sim1d/results/io.py",
-    "cablp/cablp/solvers/_sim1d/results/phase3_capture.py",
-    "cablp/cablp/solvers/_sim1d/solver.py",
-    "cablp/scripts/baseline_sim1d.py",
-    "cablp/scripts/golden_digest_gate.py",
-    "cablp/scripts/stances/g1atrim.toml",
-    "cablp/scripts/baselines/golden_digest_4k.json",
-    "cablp/scripts/baselines/production_discharge.json",
+    "cablp/solvers/_sim1d/core/config.py",
+    "cablp/solvers/_sim1d/core/state.py",
+    "cablp/solvers/_sim1d/results/io.py",
+    "cablp/solvers/_sim1d/results/phase3_capture.py",
+    "cablp/solvers/_sim1d/solver.py",
+    "scripts/baseline_sim1d.py",
+    "scripts/golden_digest_gate.py",
+    "scripts/stances/g1atrim.toml",
+    "scripts/baselines/golden_digest_4k.json",
+    "scripts/baselines/production_discharge.json",
     PRODUCER_PATH,
 )
 
@@ -125,8 +125,8 @@ def capture_phase3_rhs(run_id, capture_revision, invocation):
         invocation=invocation,
         producer_blobs=producer_blobs,
         environment_lock={
-            "path": "cablp/poetry.lock",
-            "git_blob": _git("rev-parse", "HEAD:cablp/poetry.lock"),
+            "path": "poetry.lock",
+            "git_blob": _git("rev-parse", "HEAD:poetry.lock"),
         },
         repository_root=REPOSITORY_ROOT,
     )
@@ -172,18 +172,18 @@ def _producer_blobs():
     """Return a complete tracked package + locked recipe blob census.
 
     "Complete" means complete over what git TRACKS: the census is
-    ``git ls-tree`` of ``cablp/cablp`` plus the locked recipe inputs, so a
+    ``git ls-tree`` of ``cablp`` plus the locked recipe inputs, so a
     file that is not in the tree cannot appear here. The OPEN-ADAS ``.dat``
-    data files under ``cablp/cablp/vars/adas`` are untracked as of
+    data files under ``cablp/vars/adas`` are untracked as of
     2026-08-26 and are therefore ABSENT from this census, even though the
     atomic rates they carry are an input to the captured RHS. Their
     integrity is not lost, it is carried elsewhere: the data-block sha256
-    table in ``cablp/cablp/vars/adas/README.md`` pins them, and that README
+    table in ``cablp/vars/adas/README.md`` pins them, and that README
     IS tracked and so IS censused here. A capture's provenance record must
     be read with both halves together.
     """
     package_paths = _git(
-        "ls-tree", "-r", "--name-only", "HEAD", "--", "cablp/cablp"
+        "ls-tree", "-r", "--name-only", "HEAD", "--", "cablp"
     ).splitlines()
     paths = sorted(set(package_paths) | set(PRODUCER_INPUT_PATHS))
     return {path: _git("rev-parse", f"HEAD:{path}") for path in paths}
