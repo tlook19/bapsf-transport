@@ -1,7 +1,5 @@
 import tomllib
 
-from cablp.vars._nn_table import lookup_nn0
-
 
 def initial_condition_defaults():
     """Return defaults for species and initial primitive state.
@@ -12,13 +10,15 @@ def initial_condition_defaults():
     ne0:
         Uniform initial plasma/electron density [cm^-3].
     nn0:
-        Uniform initial neutral density [cm^-3]. If ``None``, the value is
-        looked up from the gas-puff table via ``resolve_nn0``.
+        Uniform initial neutral density [cm^-3]. REQUIRED, except under the
+        ``neutral_initial_profile`` flag, which supersedes it and requires
+        ``None``; a ``None`` reaching ``resolve_nn0`` any other way raises,
+        the frozen gas-puff table that used to fill one in being retired.
 
         This is the DIRECT-RUN fill only. The equilibrated path
         (``neutral_equilibration`` via ``start_simulation``) does NOT read this
-        value: ``run_neutral_equilibration`` pins its inner sim's start at the
-        nn_table generator's 1e8 and overwrites nn with the equilibrated
+        value: ``run_neutral_equilibration`` pins its inner sim's start at 1e8
+        and overwrites nn with the equilibrated
         profile, so the two paths are decoupled and this default can move
         without disturbing any equilibrated run. Since ``neutral_equilibration``
         ships ON, the uniform value is a PLACEHOLDER that no shipped
@@ -42,9 +42,8 @@ def initial_condition_defaults():
 
         It supersedes the scalar ``nn0`` for BOTH zones, so ``nn0`` must be
         ``None`` when the flag is armed -- an armed flag with a non-``None``
-        scalar raises rather than establishing a silent precedence. Neither
-        ``resolve_nn0`` nor the ``nn_table`` lookup is consulted on the armed
-        path.
+        scalar raises rather than establishing a silent precedence.
+        ``resolve_nn0`` is not consulted on the armed path.
     nn0_annulus_profile:
         PER-CELL initial ANNULUS neutral density [cm^-3] under the
         ``neutral_two_zone`` closure: same length, finiteness and positivity
@@ -3480,8 +3479,8 @@ input_flags_template_1d = {
     # nn0_annulus_profile under neutral_two_zone) instead of the uniform
     # scalar nn0. Values, not a shape: nothing is rescaled or normalized, so
     # the array IS the initial condition. Requires nn0_profile, requires
-    # nn0 = None (the scalar and the table lookup are superseded, and an
-    # armed flag with an explicit scalar raises rather than establishing a
+    # nn0 = None (the scalar is superseded, and an armed flag with an
+    # explicit scalar raises rather than establishing a
     # silent precedence), and REFUSES neutral_equilibration and restart_from
     # -- both of those overwrite nn after construction, so a shaped IC under
     # either would be silently discarded. Each is a construction-time
@@ -3869,20 +3868,39 @@ def config_manifest():
     }
 
 
-def resolve_nn0(input_dict, input_flags):
-    """Return configured or table-derived initial neutral density [cm^-3].
+def resolve_nn0(input_dict):
+    """Return the configured uniform initial neutral density [cm^-3].
 
-    CONVENTION INCONSISTENCY on the fallback branch, documented rather than
-    silently patched: ``nn_table``'s keys are pre-2026-08-21 0 C-sccm while
-    ``S_gp`` is now meter-sccm, so the lookup is off by the ~7% conversion
-    ratio. It is not converted here because the frozen table cannot be
-    regenerated on the new convention (its generator retired with _sim3) and a
-    lookup-time conversion would invent an interpolation of data that was
-    never computed. Production never reaches this branch: both the config
-    default and the stance of record pin ``nn0`` explicitly, so the line above
-    short-circuits.
+    ``nn0`` has no fallback. It used to have one -- a ``None`` was resolved
+    from the frozen gas-puff lookup table, keyed on ``S_gp`` and
+    ``TwinCathode`` -- and that table is RETIRED. It could not be regenerated
+    in-tree (its generator drove the removed 0D _sim3 solver), and its keys
+    were pre-2026-08-21 0 C-sccm while ``S_gp`` has meant meter-sccm since,
+    so every lookup was off by the ~7% conversion ratio and could not be
+    converted without inventing an interpolation of data that was never
+    computed.
+
+    It was NOT unreached, and the retirement record should not pretend
+    otherwise: the golden gate's own configuration arrived here with a
+    ``None`` and took the table's answer as its uniform neutral fill. The
+    stance pins a per-cell profile and ``nn0 = None`` to go with it, and the
+    gate's coarse-mesh re-cut dropped the profile without restoring a scalar,
+    which reopened this branch. That value is now an explicit literal in the
+    golden builder, pinned before this fallback was removed, so the fill the
+    gate starts from is written down instead of looked up.
+
+    Raises ``ValueError`` on a ``None``, which under the solver's call order
+    is a construction-time refusal. ``None`` is still the REQUIRED value under
+    the ``neutral_initial_profile`` flag -- that path supersedes the scalar
+    with a per-cell array and does not call this function at all.
     """
     nn0 = input_dict.get("nn0")
-    if nn0 is not None:
-        return nn0
-    return lookup_nn0(input_dict["S_gp"], twin=input_flags["TwinCathode"])
+    if nn0 is None:
+        raise ValueError(
+            "nn0 is None and there is no table to resolve it from (the "
+            "frozen gas-puff nn0 table was retired). nn0 accepts a uniform "
+            "initial neutral density in cm^-3; None is accepted ONLY under "
+            "the neutral_initial_profile flag, which supersedes the scalar "
+            "with the per-cell nn0_profile array."
+        )
+    return nn0

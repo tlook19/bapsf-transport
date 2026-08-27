@@ -20936,6 +20936,24 @@ def _case_shaped_initial_neutral_fill_sp3():
             raise AssertionError(
                 f"{_sp3_key} must be refused with neutral_initial_profile off"
             )
+    # The complementary presence gate, and the witness for the RETIRED
+    # gas-puff nn0 table. ``nn0 = None`` is the flag's own requirement, but
+    # with the flag OFF it used to fall through to a frozen lookup keyed on
+    # S_gp -- ungenerable, on a superseded sccm convention, reached by nothing
+    # that ships. The table is gone, so the only remaining reading of a None
+    # here is "no initial neutral density was configured", and resolve_nn0
+    # refuses it. The solver resolves the fill inside __init__, so the refusal
+    # is a construction-time ValueError.
+    _sp3_no_nn0_p, _sp3_no_nn0_f = _sp3_stance(nn0=None)
+    try:
+        LAPDSim1D(_sp3_no_nn0_p, _sp3_no_nn0_f)
+    except ValueError as _sp3_no_nn0_error:
+        assert "nn0 accepts" in str(_sp3_no_nn0_error), _sp3_no_nn0_error
+        assert "neutral_initial_profile" in str(_sp3_no_nn0_error)
+    else:
+        raise AssertionError(
+            "nn0 = None with neutral_initial_profile off must be refused"
+        )
 
     # (e) THE CONSTRUCTION SCRIPT. It is an instrument in scripts/, not repo
     # physics, so it is imported HERE rather than at module scope -- the smoke

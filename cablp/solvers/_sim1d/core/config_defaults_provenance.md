@@ -305,11 +305,26 @@ both wrong:
 signature is now SALTED with the conversion constant: the constant is code, not
 config, so the fail-closed hash over `(params, flags)` could not see it, and
 every stored seed would have matched its signature while representing a ~7 %
-different throughput. (ii) `vars/nn_table.csv` is ANNOTATED, not rescaled — its
-keys stay 0 °C-sccm because its generator retired with `_sim3` and rescaling
-frozen data would forge an interpolation that was never computed. Production
-never reaches that table (`nn0` is pinned in both the default and the stance);
-`resolve_nn0`'s fallback branch carries the inconsistency in its docstring.
+different throughput. (ii) `vars/nn_table.csv` was ANNOTATED, not rescaled —
+its keys stayed 0 °C-sccm because its generator retired with `_sim3` and
+rescaling frozen data would forge an interpolation that was never computed.
+The table was RETIRED at the R2 restructure (2026-08-27), and the convention
+inconsistency is now GONE rather than documented: `resolve_nn0` has no
+fallback branch any more and raises on the `nn0 = None` that used to reach
+one.
+
+**Correcting the record while retiring it:** the claim that production never
+reached that table was WRONG, and it is worth saying so here because this note
+is where the ~7 % convention question is owned. The golden gate reached it. The
+stance pins `nn0 = null` alongside its per-cell `nn0_profile`; the gate's
+coarse-mesh re-cut drops the profile package without restoring a scalar, so
+`resolve_nn0` fell through and the gate's uniform neutral fill was the table's
+answer for `S_gp = 9010.0` — **2.725059978765871e12 cm^-3, on the 0 °C-sccm
+keys, against a meter-sccm `S_gp`**. That value is now an explicit literal in
+`scripts/baseline_sim1d.py`'s re-cut, pinned in the commit before the table
+was deleted and verified to leave the constructed initial state bit-identical.
+Whether the gate SHOULD start from a 0 °C-sccm-derived fill is a live stance
+question; pinning it changed no number and settled nothing.
 
 **Disclosed, expected, not a bug:** pre-changeover `default_config()` runs are
 not bit-reproducible across this change. The rescaled digits are exact only to
