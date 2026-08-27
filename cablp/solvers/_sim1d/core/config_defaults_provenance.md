@@ -309,9 +309,12 @@ different throughput. (ii) `vars/nn_table.csv` was ANNOTATED, not rescaled —
 its keys stayed 0 °C-sccm because its generator retired with `_sim3` and
 rescaling frozen data would forge an interpolation that was never computed.
 The table was RETIRED at the R2 restructure (2026-08-27), and the convention
-inconsistency is now GONE rather than documented: `resolve_nn0` has no
-fallback branch any more and raises on the `nn0 = None` that used to reach
-one.
+inconsistency is now GONE rather than documented AS A CODE PATH: `resolve_nn0`
+has no fallback branch any more and raises on the `nn0 = None` that used to
+reach one. It is not gone as a NUMBER — the one value any shipped
+configuration ever took from the table survives as an explicit literal in
+`scripts/baseline_sim1d.py` and still carries the 0 °C-sccm convention, which
+the next paragraph states in full.
 
 **Correcting the record while retiring it:** the claim that production never
 reached that table was WRONG, and it is worth saying so here because this note
