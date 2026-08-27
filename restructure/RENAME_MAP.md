@@ -3,17 +3,21 @@
 **Status: DRAFT, reviewer-gated. Nothing here has moved.** This document is a
 proposal for how every tracked path changes across the R2 mechanical
 restructure. It changes no file, and the tree it describes is the tree at
-`c018d925a90dcd86314866b8555fe42d9f22753d` (255 tracked files).
+`5caa8ce2cb5cfc3d89270d915a15213f1aec7fe5` (255 tracked files).
 
-> **Every `file:line` citation in this document is pinned to that revision,
-> and `agent-staging` has since advanced to `43aaaa0` (the
-> `afterglow-dt-cost` merge).** That advance is modifications only — no adds,
-> deletes or renames — so the file inventory, both prefix rules and all 244
-> `covers` entries are unaffected. **17 line citations have drifted**, all in
-> the five files it touched (`smoke_sim1d.py`, `core/config.py`, `solver.py`,
-> `NUMERICS.md`). Re-verify any citation by its quoted symbol or string, which
-> is stable, rather than by its line number, which is not. §6 and
-> `FLATTEN_EXECUTION_NOTES.md` §3 carry the affected citations.
+> **RE-STAMPED 2026-08-26 to the R2 cut revision (Q7).** The map was authored
+> against `c018d925a90dcd86314866b8555fe42d9f22753d` and is now pinned to
+> `5caa8ce2cb5cfc3d89270d915a15213f1aec7fe5`, the tip of `agent-staging` and
+> of `campaign`. That window is **21 modified files and nothing else** — no
+> adds, no deletes, no renames — so the file inventory is still 255, both
+> prefix rules still hold, and all 244 `covers` entries regenerate from
+> `git ls-files` at the new base **byte-identically**. What did move is
+> re-derived here: every `file:line` citation in this document and in
+> `FLATTEN_EXECUTION_NOTES.md` was re-resolved against the new base by its
+> quoted symbol or string, and one content-edit row was **withdrawn** because
+> the string it cited no longer exists (§2.1, `_adas.py`). Two import counts
+> moved (§7). Re-verify any citation by its quoted symbol or string, which is
+> stable, rather than by its line number, which is not.
 
 Every line falls into one of two classes and they are marked differently:
 
@@ -53,7 +57,7 @@ cablp/cablp/<anything>   →   cablp/<anything>
 **importable name is unchanged**: the package was `cablp` and remains `cablp`;
 only the directory that contains it moves. Consequently **not one `from
 cablp…` statement and not one intra-package relative import changes at the
-flatten** — the 469 absolute import sites and the 117 relative ones are all
+flatten** — the 470 absolute import sites and the 117 relative ones are all
 invariant. That is the single most useful fact about this commit.
 
 **Rule F2 — the sim1d script directory takes over the vacated root slot.**
@@ -109,14 +113,25 @@ vars/he_ion_neutral_phelps_lxcat.txt    vars/he_ion_rate.csv    vars/nn_table.cs
 The manifest's `prefix_rule.covers` list is generated from `git ls-files`, so
 it is the authoritative enumeration; the above is the human-readable form.
 
-Three files in this subtree get a **content edit** riding the move, because
+Two files in this subtree get a **content edit** riding the move, because
 they carry the old path as a *string*:
 
 | File (new path) | Line | What it says |
 |---|---|---|
-| `cablp/funcs/_adas.py` | 36 | Fetch-instruction error message: `"be fetched by hand into cablp/cablp/vars/adas/ before the "` |
 | `cablp/solvers/_sim1d/results/phase3_capture.py` | 441 | `producer_anchor` prefix `"cablp/cablp/solvers/_sim1d/solver.py:"` — has its own `surface_change` row; see §6.3 |
-| `cablp/vars/adas/README.md` | 17 | Prose naming the download directory |
+| `cablp/vars/adas/README.md` | 17 | Prose naming the download directory: ``directory (`cablp/cablp/vars/adas/`)`` |
+
+**Withdrawn at the 2026-08-26 re-stamp: `cablp/funcs/_adas.py:36` was a third
+row here and is no longer one.** At the old base its missing-data message read
+`"be fetched by hand into cablp/cablp/vars/adas/ before the "` — repo-relative,
+and therefore wrong after the flatten. Commit `f04d8a8`
+(`[adas-error-path-anchor]`, message text only, no behaviour) normalized it to
+`cablp/vars/adas/`, the **CABLP-relative** anchor that the next line's README
+pointer already used. That anchor is *invariant across the flatten*, because
+the working directory the message is read from moves in the same commit:
+`<repo>/cablp` + `cablp/vars/adas/` and `<repo>` + `cablp/vars/adas/` name the
+same directory before and after. `_adas.py` therefore moves **byte-identical**;
+do not re-add an edit to it.
 
 ### 2.2 Covered by rule F2 — the sim1d scripts (180 files)
 
@@ -176,7 +191,7 @@ The one deliberate exception is the Cython extension — see P-6.
 
 52 import statements (`cablp.vars._cons`) rewrite to `cablp.constants`. Note the R3
 constants-unification pass lands **inside this file** — the divergences
-(`m_e_cgs`, `m_p_cgs`, `I_ion`, the inline `qe_SI` at `solver.py:5679`) are
+(`m_e_cgs`, `m_p_cgs`, `I_ion`, the inline `qe_SI` at `solver.py:5742`) are
 census item 3 and are numerics-moving; **none of them may be touched at R2.**
 
 ### 3.2 `cablp/atomic` — cross sections, fits, coefficients, ADAS
@@ -254,7 +269,7 @@ not so much as reflow it.
 | `cablp/vars/__init__.py` | **delete**, same reasoning (`from ._coeff import *`, `from ._cons import *`). |
 | `cablp/vars/_nn_table.py` | **delete**, R0.4 retirement. Frozen, ungenerable (its generator is the untracked `scripts/generate_nn_table.py`), one consumer (`core/config.py:3` `lookup_nn0`), and production short-circuits it. **Not golden-inert in the source sense**: `core/config.py` must drop the import and the `resolve_nn0` branch that calls it, which is a solver-file edit inside R2. See Q3. |
 | `cablp/vars/nn_table.csv` | **delete**, the data half of the same retirement. |
-| `cablp/solvers/_sim1d/results/compat.py` | **delete**, R0.4 retirement (sim3 aliases for a solver removed at D2). Three consumers: `results/io.py:16,380`, `solver.py:205,10080`, and — **the one that bites** — `scripts/smoke_sim1d.py:8074-8077`, which asserts on `sim3_compat_units` and `sim3_compat_notes`. See §6.4 and Q3. |
+| `cablp/solvers/_sim1d/results/compat.py` | **delete**, R0.4 retirement (sim3 aliases for a solver removed at D2). Three consumers: `results/io.py:16,380`, `solver.py:205,10153`, and — **the one that bites** — `scripts/smoke_sim1d.py:8074-8077`, which asserts on `sim3_compat_units` and `sim3_compat_notes`. See §6.4 and Q3. |
 | `cablp/__init__.py` | **NOT deleted** — `surface_change` row: `submodules = ["funcs", "vars", "solvers"]` becomes `["atomic", "cathode", "constants", "numerics", "plasma", "solvers"]`. |
 
 ### 3.7 Hydrogen arms — KEEP
@@ -466,7 +481,7 @@ All move under rule F1 or F2 with no content change from the *flatten* itself:
 
 R2 requires these stay *identifiable* after the move, and they do — each keeps
 its filename and its position relative to what it documents. Two content
-references need the docs pass, not the move: `NUMERICS.md:656` mentions
+references need the docs pass, not the move: `NUMERICS.md:693` mentions
 `results/compat.py` (which the retirement deletes), and
 `config_defaults_provenance.md:308` mentions `vars/nn_table.csv` (likewise) —
 both at the *carve/retirement* commit, not at the flatten.
@@ -518,7 +533,7 @@ than a hope.
 ## 6. Path breakage: what actually breaks at the flatten
 
 Everything below is a **functional** break unless marked as prose. All line
-numbers are at `c018d92`, and all paths are the *pre*-flatten paths.
+numbers are at `5caa8ce`, and all paths are the *pre*-flatten paths.
 
 ### 6.1 Repository-root anchors computed by counting parents — these BREAK
 
@@ -535,7 +550,7 @@ afterwards.
 **Two `parents[N]` sites that do NOT break, and it matters that they are
 listed as verified rather than assumed:**
 
-- `cablp/scripts/smoke_sim1d.py:10916` and `:10950` —
+- `cablp/scripts/smoke_sim1d.py:11143` and `:11177` —
   `cwd=Path(__file__).resolve().parents[1]` paired with the argument
   `"scripts/run_sim1d.py"` / `"scripts/plot_sim1d_run.py"`. Both halves shift
   by exactly one level: `<root>/cablp` + `scripts/…` becomes `<root>` +
@@ -575,9 +590,9 @@ after the flatten:
 | `verify_phase3_source_capture.py:477` | `repo_root / "cablp/cablp/solvers/_sim1d/solver.py"` |
 | `verify_phase3_source_capture.py:501` | `repo_root / "cablp/scripts/capture_phase3_rhs.py"` |
 | `stage3_observability_check.py:35` | `REPO_PATH = "cablp/scripts/compare_sim1d_es1.py"` |
-| `smoke_sim1d.py:22396` | `_p3_out = _p3_root / "cablp/scripts/baselines/phase3_rhs"` |
-| `smoke_sim1d.py:22403` | `producer_path="cablp/scripts/capture_phase3_rhs.py"` |
-| `smoke_sim1d.py:22414` | `environment_lock={"path": "cablp/poetry.lock", …}` |
+| `smoke_sim1d.py:22623` | `_p3_out = _p3_root / "cablp/scripts/baselines/phase3_rhs"` |
+| `smoke_sim1d.py:22630` | `producer_path="cablp/scripts/capture_phase3_rhs.py"` |
+| `smoke_sim1d.py:22641` | `environment_lock={"path": "cablp/poetry.lock", …}` |
 
 `smoke_sim1d.py`'s three are synthetic fixture strings, not filesystem reads —
 they must still be updated so the fixture keeps describing a real repository
@@ -615,9 +630,10 @@ must lose the import and its call site.
 `physics/reactions.py:52`; `interp_bitexact_gate.py:34`;
 `interp_fused_reference.py:39`; `mc_neutrals.py:1373`;
 `pec_band_fractions.py:89,98,111,223`; `profile_sim1d.py:64`;
-`_adas.py:36`; `vars/adas/README.md:17`; `_kernels.py:73` ("from the cablp/
+`vars/adas/README.md:17`; `_kernels.py:73` ("from the cablp/
 directory"). Most are `cablp.funcs.X`-style *import* references that break at
-the **carve**, not the flatten.
+the **carve**, not the flatten. (`_adas.py:36` was listed here until the
+2026-08-26 re-stamp; at this base it names no `cablp/cablp/` path — see §2.1.)
 
 Two deserve a second look because they are `git show` recipes against
 **historical** revisions:
@@ -633,10 +649,14 @@ revisions it exists to compare with. Q5.
 
 ## 7. Import-churn scope, by commit
 
-The whole tree holds **469** statements matching
-`^\s*(from|import)\s+cablp` across tracked `*.py` and `*.pyx`: 278 target
+The whole tree holds **470** statements matching
+`^\s*(from|import)\s+cablp` across tracked `*.py` and `*.pyx`: 279 target
 `cablp.solvers.*`, 190 target `cablp.funcs.*` or `cablp.vars.*`, and one is a
-bare `import cablp`.
+bare `import cablp`. (469/278 at the pre-re-stamp base; `smoke_sim1d.py` gained
+one `from cablp.solvers._sim1d.solver import SURFACE_LOSS_FLOOR_EXEMPT_RTOL` in
+the window. **The carve's 190 is unchanged**, and so is every per-module tally
+below — the new statement targets `cablp.solvers.*`, which neither commit
+rewrites.)
 
 | Commit | Absolute `cablp.*` import statements changed | Relative intra-package imports changed |
 |---|---|---|
@@ -674,7 +694,7 @@ All 16 package-level forms are `from cablp.funcs import <module>` —
 `interp_fused_reference.py`, `phicspike_frozen_sweep.py`,
 `spike_cython_kernels.py` and `tailion_estimate.py`. **Every one imports a
 submodule; not one imports a name aggregated by `funcs/__init__.py`**, which
-is the evidence P-9 rests on. The 469th statement is the bare `import cablp`
+is the evidence P-9 rests on. The 470th statement is the bare `import cablp`
 at `fnb3_closure.py:48`, which is invariant under both commits.
 
 **Relative imports.** 13 statements are rewritten and 7 are deleted with the
@@ -749,7 +769,7 @@ have been written from a wrong mental model of what else `vars/` contains.
 **Q3 — the two retirements are not source-inert, and R2 forbids semantic
 change.** Both `results/compat.py` and `vars/_nn_table` require *edits to
 solver-tree files* in the retirement commit: `results/io.py:16,380` and
-`solver.py:205,10080` lose the compat call, `core/config.py:3` loses
+`solver.py:205,10153` lose the compat call, `core/config.py:3` loses
 `lookup_nn0` and its call site, and `smoke_sim1d.py:8074-8077` loses four
 assertions. The golden is inert to all of it (the fixture holds only
 `phase`/`time`/`y`), and production already short-circuits `nn_table` — but
@@ -781,21 +801,31 @@ part for the whole and `solver.py` named nothing while colliding with
 `cablp/solvers/_sim1d/solver.py`. P-3 and P-4 are RULED, not PROPOSED, and
 §3.4 and §7 carry the new names.
 
-**Q7 — the golden re-anchor ordering.** The flatten is registered to run
-*after* a pending golden re-anchor, so the digests and the `saves` count of
-record quoted at commit time are not today's (`saves: 2620` at `c018d92`). The
-DRAFT manifest carries `new_revision: "TBD-at-commit"` and
-`golden_gate.result: "TBD-at-commit"` for exactly this reason.
+**Q7 — the golden re-anchor ordering. The `base_revision` half is DONE
+(2026-08-26); the `new_revision` half is still open.**
 
-`base_revision` needs the same treatment and is the easier half to forget. It
-is **pinned** in the draft to `c018d925a90dcd86314866b8555fe42d9f22753d` — the
-tip this map was authored against — rather than read from `HEAD`, which
-advances as this branch commits. `agent-staging` is already past it (`43aaaa0`,
-the `afterglow-dt-cost` merge, modifications only). **Re-stamp `base_revision`
-to the flatten branch's actual cut point at the same time as `new_revision`,
-and regenerate the `covers` lists from `git ls-files` at that revision** — they
-happen to be unchanged at `43aaaa0`, but that is a fact about that merge, not a
-property of the map.
+`base_revision` was **pinned** in the draft to
+`c018d925a90dcd86314866b8555fe42d9f22753d` — the tip this map was authored
+against — rather than read from `HEAD`, which advances as this branch commits.
+It is now re-stamped to `5caa8ce2cb5cfc3d89270d915a15213f1aec7fe5`, the R2 cut
+revision (`agent-staging` == `campaign`, pushed), and the `covers` lists were
+regenerated from `git ls-files` at that revision: **244 entries, byte-identical
+to the previous lists**, because the window is 21 modified files and nothing
+else. All 253 locators in the manifest (244 `covers` + 9 row `old` paths) were
+re-resolved one by one with `git cat-file` at the new base; none was missing.
+That they were unchanged is a fact about this window, not a property of the
+map — regenerate again at any later re-cut.
 
-Confirm the ordering before the flatten branch is cut, because a flatten rebased across a
+A golden re-anchor **did land inside that window**: the sidecar
+`scripts/baselines/production_discharge.json` moves from `steps: 94044` to
+`steps: 62613` (the `dt_growth_recovery_patience` change), with
+`saves` unchanged at **2620** — so `saves: 2620` remains the count of record at
+the new base, and the digests quoted at commit time are the re-anchored ones.
+**Whether that is the re-anchor this question was registered against is for the
+reviewer to confirm**, not for this map to assume.
+
+Still open, and still the reason this manifest is a DRAFT: it carries
+`new_revision: "TBD-at-commit"` and `golden_gate.result: "TBD-at-commit"`, both
+of which are filled in only when the flatten commit exists. Confirm the
+ordering before the flatten branch is cut, because a flatten rebased across a
 re-anchor invalidates the transcript, not the map.

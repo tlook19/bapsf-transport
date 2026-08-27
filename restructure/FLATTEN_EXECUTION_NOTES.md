@@ -5,14 +5,16 @@ ordered recipe for the commit that `restructure/manifests/delta_flatten.DRAFT.js
 describes, together with what must be true before it starts and what must be
 re-measured after it lands.
 
-> **Citations are pinned to `c018d925a90dcd86314866b8555fe42d9f22753d`.**
-> `agent-staging` has since advanced to `43aaaa0`; that advance modifies five
-> tracked files and adds, deletes and renames nothing, so the move sequence,
-> the file counts and the `.gitignore` work are all unaffected — but **17 line
-> citations have drifted**, in `smoke_sim1d.py`, `core/config.py`,
-> `solver.py` and `NUMERICS.md`. Locate every §3 edit by its quoted string,
-> not by its line number, and re-derive the line numbers against whatever tip
-> the flatten branch is actually cut from.
+> **Citations are pinned to `5caa8ce2cb5cfc3d89270d915a15213f1aec7fe5`, the R2
+> cut revision (`agent-staging` == `campaign`).** Re-stamped 2026-08-26 from
+> `c018d925a90dcd86314866b8555fe42d9f22753d` per `RENAME_MAP.md` Q7; every line
+> citation below was re-derived at the new base by its quoted string. That
+> window is 21 modified files with no adds, deletes or renames, so the move
+> sequence, the file counts and the `.gitignore` work are all unaffected. One
+> §3.5 edit was **withdrawn** (`_adas.py`, see `RENAME_MAP.md` §2.1) and the
+> import totals in §4 moved. Locate every §3 edit by its quoted string, not by
+> its line number, and re-derive the line numbers again if the flatten branch
+> is cut from anything other than `5caa8ce`.
 
 Read `RENAME_MAP.md` first — this document assumes its rules F1 and F2 and its
 open questions Q1–Q7. Rule F2's destination (`cablp/scripts/` → `scripts/`) is
@@ -28,7 +30,10 @@ Every one of these is a stop condition, not a warning.
 1. **The golden re-anchor has landed** and its digest, `saves` count and
    transcript are the ones this commit will be gated against. The flatten is
    registered to follow the pending re-anchor (Q7). A flatten rebased *across*
-   a re-anchor invalidates its transcript.
+   a re-anchor invalidates its transcript. **A re-anchor landed between the old
+   and the new base** (`production_discharge.json`: `steps` 94044 → 62613,
+   `saves` unchanged at 2620); the reviewer confirms whether that is the one
+   Q7 names before treating this precondition as met.
 2. **The legacy root `scripts/` archival is done in the main checkout** —
    this is the one step that cannot happen in a worktree, because the material
    is untracked and does not exist in a fresh worktree. In the main checkout at
@@ -171,8 +176,8 @@ enforcement.
 
 ## 3. Content edits inside the flatten
 
-249 tracked paths move and 1 is deleted. **236 of the 249 move byte-identical.**
-The 13 that do not are listed below, with every changed line. Nothing else in
+249 tracked paths move and 1 is deleted. **237 of the 249 move byte-identical.**
+The 12 that do not are listed below, with every changed line. Nothing else in
 any moved file may change, and the AST-identity check applies to the prose
 edits in §3.5 in its two-tier form (tier B, since they rewrite user-facing
 strings).
@@ -197,8 +202,8 @@ All are enumerated with line numbers in `RENAME_MAP.md` §6.2. Summarised:
   :126, :137, :151, :226, :229, :280, :290, :317, :332, :348, :360, :370,
   :477, :501.
 - `scripts/stage3_observability_check.py` — `REPO_PATH` (:35).
-- `scripts/smoke_sim1d.py` — the synthetic phase-3 fixture strings at :22396,
-  :22403, :22414. **These are a gate**: they are fixture data rather than
+- `scripts/smoke_sim1d.py` — the synthetic phase-3 fixture strings at :22623,
+  :22630, :22641. **These are a gate**: they are fixture data rather than
   filesystem reads, but leaving them describing a repository shape that no
   longer exists makes the fixture a lie.
 - `scripts/pec_band_fractions.py` — the mirrored fetch-instruction string
@@ -227,10 +232,15 @@ removes this subsection and two manifest rows change destination.
 
 ### 3.5 Prose (no behaviour)
 
-`cablp/funcs/_adas.py:36` (fetch-instruction message),
 `cablp/vars/adas/README.md:17`, `cablp/funcs/_kernels.py:73` ("from the
 `cablp/` directory" in the RuntimeError text), `build_ext.py:5,6`,
 `scripts/profile_sim1d.py:64`.
+
+**Withdrawn at the 2026-08-26 re-stamp:** `cablp/funcs/_adas.py:36` was listed
+here. At this base its fetch-instruction message already reads
+`cablp/vars/adas/` (commit `f04d8a8`), a CABLP-relative anchor that stays
+correct across the flatten because the reader's working directory moves with
+it. `_adas.py` moves byte-identical — `RENAME_MAP.md` §2.1 has the argument.
 
 **Deliberately NOT edited:** `scripts/t23c_config_snapshot_delta.py:16` and
 `scripts/mirror_fieldmap_bitexact_structural.py:54`, both of which document
@@ -243,7 +253,7 @@ boundary.
 
 ## 4. Import-churn scope
 
-**Zero.** Not one of the 469 `from cablp…` / `import cablp…` statements
+**Zero.** Not one of the 470 `from cablp…` / `import cablp…` statements
 changes, and not one of the 117 intra-package relative imports changes.
 
 The reason is worth stating because it is the whole argument for doing the
@@ -256,10 +266,10 @@ lives (`RENAME_MAP.md` §7).
 The measurements, reproducible from the repository root:
 
 ```bash
-# 469 -- every absolute cablp import statement in the tree
+# 470 -- every absolute cablp import statement in the tree
 git grep -n -E '^[[:space:]]*(from|import)[[:space:]]+cablp' -- '*.py' '*.pyx' | wc -l
 
-# 278 cablp.solvers.* / 127 cablp.funcs.* / 63 cablp.vars.*  (+1 bare `import cablp`)
+# 279 cablp.solvers.* / 127 cablp.funcs.* / 63 cablp.vars.*  (+1 bare `import cablp`)
 git grep -h -o -E '(from|import) cablp\.[A-Za-z0-9_.]+' -- '*.py' '*.pyx' \
   | awk -F. '{print $2}' | sort | uniq -c
 
@@ -279,7 +289,7 @@ do not, and are listed so nobody re-derives them under time pressure:
 
 | Site | Verdict |
 |---|---|
-| `scripts/smoke_sim1d.py:10916`, `:10950` — `cwd=…parents[1]` paired with the argument `"scripts/run_sim1d.py"` / `"scripts/plot_sim1d_run.py"` | **Invariant.** Both halves shift one level together: `<root>/cablp` + `scripts/…` becomes `<root>` + `scripts/…`. |
+| `scripts/smoke_sim1d.py:11143`, `:11177` — `cwd=…parents[1]` paired with the argument `"scripts/run_sim1d.py"` / `"scripts/plot_sim1d_run.py"` | **Invariant.** Both halves shift one level together: `<root>/cablp` + `scripts/…` becomes `<root>` + `scripts/…`. |
 | `scripts/audit_sim1d_configs.py:28` — `…parents[1] / "cablp" / "solvers" / "_sim1d" / "config_snapshots.json"` | **Invariant.** `<root>/cablp/cablp/solvers/…` becomes `<root>/cablp/solvers/…`; the two changes cancel exactly. |
 | `scripts/baseline_sim1d.py:66,67,73` and `scripts/golden_digest_gate.py:65,66,79` — `SCRIPT_DIR`-relative `baselines/` and `sys.path` | **Invariant.** The fixture and the stance loader move with the script. This is what keeps the golden gate-valid. |
 
@@ -349,8 +359,11 @@ precedes it (Q7) is where the full protocol belongs.
 ### Digest re-quoting
 
 Because the flatten lands **after** the pending golden re-anchor, the digest
-and `saves` count quoted in the commit's manifest are the re-anchored ones,
-not today's (`saves: 2620` at `c018d92`). The DRAFT manifest therefore carries
+and `saves` count quoted in the commit's manifest are the re-anchored ones. At
+the re-stamped base the sidecar `scripts/baselines/production_discharge.json`
+reads `saves: 2620` (unchanged across the re-anchor in this window, which moved
+`steps` 94044 → 62613) — read it from the sidecar at commit time rather than
+from here. The DRAFT manifest therefore carries
 `new_revision: "TBD-at-commit"` and `golden_gate: {"result":
 "TBD-at-commit", "saves": null}`. Both are filled in at commit time, in the
 same edit that renames the file from `delta_flatten.DRAFT.json` to
