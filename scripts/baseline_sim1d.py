@@ -124,6 +124,31 @@ BASELINE_PARAM_OVERRIDES = {
     # future default-nx change cannot multiply that cost silently.
     #
     "nx": 60,
+    # The scalar neutral fill, PINNED. The stance sets nn0 = None because it
+    # arms neutral_initial_profile with a per-cell foot; the re-cut above drops
+    # that package and clears the flag, which leaves the scalar as the fill the
+    # gate actually starts from. Until 2026-08-27 nothing named it, so
+    # resolve_nn0 fell through to the frozen gas-puff lookup table and the gate
+    # silently inherited its answer. This IS that answer, frozen as a literal at
+    # the table's retirement: the value cablp/vars/_nn_table.lookup_nn0 returned
+    # for this stance's S_gp = 9010.0 with TwinCathode = False. It is not
+    # re-derived here because the table is gone: it was read out of the table
+    # programmatically before the deletion, never hand-typed, and checked to
+    # round-trip through repr(); pinning it left the constructed initial state
+    # bit-identical (0 differing raw uint64 over all 1152 initial-state values,
+    # nn and nn_a included). To re-derive it, read the table out of history --
+    # it is one commit back from the retirement, under cablp/vars/.
+    #
+    # It is a LITERAL and not a lookup on purpose. A gate whose initial
+    # condition is computed by a frozen table it cannot regenerate is a gate
+    # that cannot say what it starts from.
+    #
+    # WHAT THIS DOES NOT DECIDE: whether this is the RIGHT fill. The value is on
+    # the pre-2026-08-21 0 C-sccm convention while S_gp is meter-sccm, so it
+    # carries the ~7% conversion inconsistency the retired table's own docstring
+    # disclosed. Changing it would move the golden and is a stance-era question,
+    # deliberately left on the board rather than resolved by a retirement.
+    "nn0": 2725059978765.871,
     # Deliberately OVERRIDES the stance's "stop". For a campaign arm a step cap
     # is a budget and a truncated arm is still data, so "stop" is right there.
     # Here max_steps is not a run length at all -- it is a TRIPWIRE (see
