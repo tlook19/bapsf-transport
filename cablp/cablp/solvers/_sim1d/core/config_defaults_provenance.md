@@ -2245,3 +2245,15 @@ question posed over seconds.
   `V_cm = 0`; a shot-to-shot study would have to model that reset explicitly.
 
 Zero and negative values raise at construction: they are not ties.
+
+
+## `surface_loss_floor_exempt_exit_rtol` (0.1) and `dt_growth_recovery_patience` (4) — pointer
+
+Both defaults were adopted 2026-08-26 as one reviewed stance event (the
+afterglow dt-cost pair; golden re-anchored in the same event). The
+authoritative provenance entries — value, class (DERIVED, A/B-selected
+under pre-registered gates), the corrected floor-honesty bar, and the
+near-floor resolution bracket — live in
+`cablp/scripts/production_stance_provenance.md`; this file deliberately
+carries only this pointer so the adoption evidence stays with the stance
+history.

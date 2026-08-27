@@ -571,7 +571,8 @@ resolving anything — no physical bound bound during any of them.
 
 `dt_growth_recovery_patience` (**default 4**) and `dt_growth_recovery_factor`
 (4.0, consulted only when patience > 0, which the default satisfies) are the
-accelerated re-approach; patience `0` disables it. After `patience` CONSECUTIVE accepted steps
+accelerated re-approach; patience `0` disables it. After `patience`
+CONSECUTIVE accepted steps
 capped by `dt_growth`, the ramp's factor becomes the recovery factor; one step
 capped by anything else — a physics bound, an output cadence, or a retry after
 a rejection — resets the streak and the base factor returns immediately.
