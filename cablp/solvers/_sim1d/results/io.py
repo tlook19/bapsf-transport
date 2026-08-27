@@ -13,7 +13,6 @@ from ..physics.hot_neutrals import HOT_CHANNEL_DIAGNOSTIC_FIELDS
 from ..physics.sources import (
     IONIZATION_BIRTH_DEFICIT_DIAGNOSTIC_FIELDS,
 )
-from .compat import add_sim3_compat_aliases
 
 
 RESULT_VERSION = "sim1d-hdf5-v1"
@@ -377,7 +376,7 @@ def load_result_hdf5(path):
                 )
                 for key, value in h5["ignition_abort"].attrs.items()
             }
-        return add_sim3_compat_aliases(result)
+        return result
 
 
 def _write_arrays(group, owner, names):

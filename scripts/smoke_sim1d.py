@@ -505,6 +505,47 @@ _CAPFIX_ESCAPE_I_A = 5.5674329614887945
 _CAPFIX_BELOW_I_A = (5.0, 5.44, 5.45)
 _CAPFIX_WINDOW_I_A = (5.46, 5.5, _CAPFIX_ESCAPE_I_A, 5.57, 5.58, 6.0, 8.0)
 
+# Every attribute the RETIRED ``results/compat.py`` used to attach to a result
+# namespace, on both the run and the load path. The module aliased sim1d
+# results into the shape of the 0D ``_sim3`` solver, which was removed at D2
+# (2026-08-03); the aliases outlived their only reason to exist by two years of
+# campaign and are retired with it.
+#
+# THE LIST IS THE GATE. A result is a plain ``SimpleNamespace``, so an absent
+# alias raises ``AttributeError`` at the first read rather than returning
+# anything -- there is no silent-wrong-value path to guard against, only a
+# re-introduction to catch. The cases below assert every name is ABSENT, which
+# is what makes a re-added shim fail here instead of in a plot months later.
+_RETIRED_SIM3_COMPAT_ALIASES = (
+    "ne",
+    "v_plasma",
+    "n_beam",
+    "cathode",
+    "cathode_twin",
+    "t_breakdown",
+    "t_breakdown_ms",
+    "time_since_breakdown",
+    "time_ms_since_breakdown",
+    "Ne_flux",
+    "Nn_flux",
+    "S_ion_bulk",
+    "S_ion_beam",
+    "S_rec_rad",
+    "S_rec_3b",
+    "Qie",
+    "Qei",
+    "Qen",
+    "Qcx",
+    "Qeb",
+    "Qib",
+    "e_par_flux",
+    "i_par_flux",
+    "e_perp_hl",
+    "i_perp_hl",
+    "sim3_compat_units",
+    "sim3_compat_notes",
+)
+
 
 # ----------------------------------------------------------------------
 # The case registry. ``_CASES`` is ordered by registration, and registration
@@ -7893,10 +7934,6 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
     assert np.allclose(run_result.phase_floating, 0.0)
     assert np.isnan(run_result.t_prebreakdown_trigger)
     assert np.isnan(run_result.t_breakdown_trigger)
-    assert np.isnan(run_result.t_breakdown)
-    assert np.isnan(run_result.t_breakdown_ms)
-    assert np.allclose(run_result.time_since_breakdown, run_result.time)
-    assert np.allclose(run_result.time_ms_since_breakdown, 1.0e3 * run_result.time)
     assert np.allclose(run_result.phase_events["time"], [0.0])
     assert list(run_result.phase_events["phase"]) == ["pre_breakdown"]
     assert list(run_result.phase_events["reason"]) == ["initial"]
@@ -7991,92 +8028,26 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
     assert np.allclose(saved_term_sum, packed_total_rhs)
     assert np.all(np.isfinite(run_result.y))
     assert np.allclose(run_result.time, [0.0, 1.0e-10, 2.0e-10, 3.0e-10])
-    for field_name in (
-        "ne",
-        "v_plasma",
-        "Ne_flux",
-        "Nn_flux",
-        "S_ion_bulk",
-        "S_ion_beam",
-        "S_rec_rad",
-        "S_rec_3b",
-        "Qie",
-        "Qei",
-        "Qen",
-        "Qcx",
-        "Qeb",
-        "Qib",
-        "e_par_flux",
-        "i_par_flux",
-        "e_perp_hl",
-        "i_perp_hl",
-        "cathode",
-        "cathode_twin",
-    ):
-        assert hasattr(run_result, field_name)
-    assert np.allclose(run_result.ne, run_result.n)
-    assert np.allclose(run_result.v_plasma, run_result.u)
-    assert run_result.Ne_flux.shape == run_result.n.shape
-    assert run_result.Nn_flux.shape == run_result.n.shape
-    assert run_result.S_ion_bulk.shape == run_result.n.shape
-    assert run_result.Qie.shape == run_result.n.shape
-    assert np.allclose(
-        run_result.Ne_flux,
-        (
-            run_result.rhs_terms["plasma_advective_flux"]["n"]
-            + run_result.rhs_terms["plasma_front_flux"]["n"]
-            + run_result.rhs_terms["surface_loss"]["n"]
-            + run_result.rhs_terms["cathode_surface_loss"]["n"]
-        ),
-    )
-    assert np.allclose(
-        run_result.Nn_flux,
-        (
-            run_result.rhs_terms["neutral_exchange"]["nn"]
-            + run_result.rhs_terms["surface_loss"]["nn"]
-            + run_result.rhs_terms["cathode_surface_loss"]["nn"]
-        ),
-    )
-    assert np.allclose(
-        run_result.S_ion_bulk,
-        run_result.rhs_terms["ionization_birth"]["n"],
-    )
-    assert np.allclose(
-        run_result.S_ion_beam,
-        run_result.rhs_terms["beam_ionization_birth"]["n"],
-    )
-    assert np.allclose(
-        run_result.S_rec_rad,
-        -run_result.rhs_terms["recombination_rad_loss"]["n"],
-    )
-    assert np.allclose(
-        run_result.S_rec_3b,
-        -run_result.rhs_terms["recombination_3b_loss"]["n"],
-    )
-    assert np.allclose(
-        run_result.Qei,
-        -run_result.electron_energy_terms_W_cm3["electron_ion_cooling"],
-    )
-    assert np.allclose(
-        run_result.Qen,
-        -run_result.electron_energy_terms_W_cm3["electron_neutral_cooling"],
-    )
-    assert np.allclose(
-        run_result.e_par_flux,
-        run_result.electron_energy_terms_W_cm3["heat_conduction"],
-    )
-    assert np.allclose(
-        run_result.i_par_flux,
-        run_result.ion_energy_terms_W_cm3["heat_conduction"],
-    )
-    assert np.allclose(run_result.e_perp_hl, 0.0)
-    assert np.allclose(run_result.i_perp_hl, 0.0)
-    assert run_result.sim3_compat_units["energy_terms"] == "W/cm^3"
-    assert run_result.sim3_compat_units["time_ms_since_breakdown"] == "ms"
-    assert "power density" in run_result.sim3_compat_notes["Qei"]
-    assert "breakdown-relative" in run_result.sim3_compat_notes["time_since_breakdown"]
-    assert run_result.cathode.I_tot.shape == run_result.time.shape
-    assert np.all(np.isnan(run_result.cathode.I_tot))
+    # The _sim3 compatibility aliases are RETIRED with results/compat.py. What
+    # used to stand here asserted that each alias equalled the field it aliased
+    # -- ``Qei == -electron_ion_cooling``, ``S_ion_bulk == ionization_birth``,
+    # ``ne == n`` -- so with the module gone every one of those is a statement
+    # about a line that no longer exists. The assertions are replaced, not
+    # dropped: the RUN path must now hand back a namespace carrying none of
+    # them. Absence is the whole claim, and it is loud by construction, because
+    # a result is a SimpleNamespace and a missing attribute is an
+    # AttributeError at the first read.
+    for field_name in _RETIRED_SIM3_COMPAT_ALIASES:
+        assert not hasattr(run_result, field_name), field_name
+    # The conservative fields the aliases were views OF are untouched, and the
+    # block above this one already asserts their content term by term. The one
+    # claim that only the alias carried was the cathode namespace's shape and
+    # all-NaN content on a run with no cathode solve; it reads off the
+    # diagnostics row the namespace was built from, which is unconditionally
+    # seeded NaN per end.
+    _source_I_tot = run_result.cathode_diagnostics["source_I_tot"]
+    assert _source_I_tot.shape == run_result.time.shape
+    assert np.all(np.isnan(_source_I_tot))
 
     entry_flags = dict(flags)
     entry_flags["neutral_equilibration"] = False
@@ -8690,13 +8661,13 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
             assert np.isclose(loaded.final_time, run_result.final_time)
             assert np.isnan(loaded.t_prebreakdown_trigger)
             assert np.isnan(loaded.t_breakdown_trigger)
-            assert np.isnan(loaded.t_breakdown)
-            assert np.isnan(loaded.t_breakdown_ms)
-            assert np.allclose(loaded.time_since_breakdown, loaded.time)
-            assert np.allclose(
-                loaded.time_ms_since_breakdown,
-                1.0e3 * loaded.time,
-            )
+            # The LOAD path is the second of the two sites that attached the
+            # retired _sim3 aliases (results/io.py did it on every read, the
+            # solver on every run), so it gets its own absence witness: a
+            # result reconstructed from HDF5 must be as free of them as the
+            # one that came straight off a run.
+            for _retired_alias in _RETIRED_SIM3_COMPAT_ALIASES:
+                assert not hasattr(loaded, _retired_alias), _retired_alias
             assert np.allclose(loaded.phase_events["time"], [0.0])
             assert list(loaded.phase_events["phase"]) == ["pre_breakdown"]
             assert list(loaded.phase_events["reason"]) == ["initial"]
@@ -8728,13 +8699,12 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
                 ), _gp_field
             assert np.allclose(loaded.y, run_result.y)
             assert np.allclose(loaded.n, run_result.n)
-            assert np.allclose(loaded.ne, run_result.ne)
-            assert np.allclose(loaded.v_plasma, run_result.v_plasma)
-            assert np.allclose(loaded.Ne_flux, run_result.Ne_flux)
-            assert np.allclose(loaded.S_ion_bulk, run_result.S_ion_bulk)
-            assert np.allclose(loaded.Qie, run_result.Qie)
-            assert np.allclose(loaded.Qeb, run_result.Qeb)
-            assert loaded.cathode.I_tot.shape == run_result.cathode.I_tot.shape
+            # The alias round-trips that stood here (ne, v_plasma, Ne_flux,
+            # S_ion_bulk, Qie, Qeb, and the cathode namespace's shape) were
+            # views of rows this same block round-trips directly a few lines
+            # down: the rhs_terms key set and one of its fields, the electron
+            # energy-term dict, and four cathode_diagnostics keys. Retiring
+            # them costs the file format no coverage it does not still have.
             assert np.allclose(loaded.Te, run_result.Te)
             assert np.all(loaded.cell_role == run_result.cell_role)
             assert set(loaded.rhs_terms) == expected_rhs_terms
@@ -8998,29 +8968,30 @@ def _case_cathode_power_balance_warming(
         "beam_ionization_cost",
     ):
         assert np.all(np.isfinite(cathode_run_result.rhs_terms[_beam_key]["Ee"]))
-    assert np.all(cathode_run_result.cathode.I_tot[:4] >= 0.0)
-    assert np.allclose(
-        cathode_run_result.S_ion_beam,
-        cathode_run_result.rhs_terms["beam_ionization_birth"]["n"],
+    assert np.all(
+        cathode_run_result.cathode_diagnostics["source_I_tot"][:4] >= 0.0
     )
-    assert np.allclose(
-        cathode_run_result.Qeb,
-        (
-            cathode_run_result.electron_energy_terms_W_cm3[
-                "beam_power_deposition"
-            ]
-            + cathode_run_result.electron_energy_terms_W_cm3[
-                "beam_ionization_cost"
-            ]
-            + cathode_run_result.electron_energy_terms_W_cm3[
-                "cathode_surface_loss"
-            ]
-            + cathode_run_result.electron_energy_terms_W_cm3[
-                "anode_e_sheath_loss"
-            ]
-        ),
+    # These three rode the retired _sim3 aliases. Two of them (S_ion_beam
+    # against beam_ionization_birth, Qeb against the four-term sum) restated
+    # the alias's own definition and say nothing once the definition is gone;
+    # the third is a claim about the SOLVER -- that the electron beam and
+    # sheath channels deposit net positive power somewhere -- so it is kept,
+    # rewritten against the terms the alias summed.
+    assert np.any(
+        sum(
+            np.asarray(
+                cathode_run_result.electron_energy_terms_W_cm3[_term],
+                dtype=float,
+            )
+            for _term in (
+                "beam_power_deposition",
+                "beam_ionization_cost",
+                "cathode_surface_loss",
+                "anode_e_sheath_loss",
+            )
+        )
+        > 0.0
     )
-    assert np.any(cathode_run_result.Qeb > 0.0)
     # The split is honest about which electrode paid. The load-bearing
     # property is DISJOINT SUPPORT: with a resolved anode the cathode share
     # lands at the cathode cell and the anode share at the flanking cells, so
@@ -9135,18 +9106,10 @@ def _case_cathode_power_balance_warming(
             loaded_cathode_result.cathode_diagnostics["source_I_tot"],
             cathode_run_result.cathode_diagnostics["source_I_tot"],
         )
-        assert np.allclose(
-            loaded_cathode_result.cathode.I_tot,
-            cathode_run_result.cathode.I_tot,
-        )
-        assert np.allclose(
-            loaded_cathode_result.S_ion_beam,
-            cathode_run_result.S_ion_beam,
-        )
-        assert np.allclose(
-            loaded_cathode_result.Qeb,
-            cathode_run_result.Qeb,
-        )
+        # cathode.I_tot / S_ion_beam / Qeb round-tripped here through the
+        # retired _sim3 aliases. Each was a view of a row the two assertions
+        # immediately above already round-trip by name -- source_I_tot and
+        # the beam Ee terms -- so their removal leaves the read path covered.
         assert np.allclose(
             loaded_cathode_result.cathode_diagnostics["solve_enabled"],
             cathode_run_result.cathode_diagnostics["solve_enabled"],
@@ -10025,20 +9988,16 @@ def _case_breakdown_retry_near_vacuum(
     assert np.isclose(current_phase_sim._t_breakdown_trigger, 2.0e-10)
     assert np.isclose(current_phase_result.t_prebreakdown_trigger, 1.0e-10)
     assert np.isclose(current_phase_result.t_breakdown_trigger, 2.0e-10)
-    assert np.isclose(current_phase_result.t_breakdown, 2.0e-10)
-    assert np.isclose(current_phase_result.t_breakdown_ms, 2.0e-7)
     assert np.allclose(
         current_phase_result.time,
         [0.0, 1.0e-10, 2.0e-10, 3.0e-10, 4.0e-10, 5.0e-10],
     )
-    assert np.allclose(
-        current_phase_result.time_since_breakdown,
-        current_phase_result.time - 2.0e-10,
-    )
-    assert np.allclose(
-        current_phase_result.time_ms_since_breakdown,
-        1.0e3 * (current_phase_result.time - 2.0e-10),
-    )
+    # t_breakdown / t_breakdown_ms / time_since_breakdown /
+    # time_ms_since_breakdown were retired _sim3 aliases: a copy of
+    # t_breakdown_trigger, its millisecond form, and the absolute time shifted
+    # by it. The trigger and the absolute time are asserted directly above, so
+    # what is gone is the unit conversion and the subtraction, not a fact
+    # about the run.
     assert list(current_phase_result.phase) == [
         "pre_breakdown",
         "breakdown",
@@ -10174,15 +10133,12 @@ def _case_breakdown_retry_near_vacuum(
         loaded_current_phase = load_result_hdf5(current_phase_output)
         assert np.isclose(loaded_current_phase.t_prebreakdown_trigger, 1.0e-10)
         assert np.isclose(loaded_current_phase.t_breakdown_trigger, 2.0e-10)
-        assert np.isclose(loaded_current_phase.t_breakdown, 2.0e-10)
-        assert np.isclose(loaded_current_phase.t_breakdown_ms, 2.0e-7)
+        # Same four retired aliases as on the run path; the trigger they were
+        # derived from is asserted on the line above, on both the raw HDF5
+        # attribute and the loaded result.
         assert np.allclose(
-            loaded_current_phase.time_since_breakdown,
-            current_phase_result.time_since_breakdown,
-        )
-        assert np.allclose(
-            loaded_current_phase.time_ms_since_breakdown,
-            current_phase_result.time_ms_since_breakdown,
+            loaded_current_phase.time,
+            current_phase_result.time,
         )
         assert np.allclose(
             loaded_current_phase.phase_events["time"],
