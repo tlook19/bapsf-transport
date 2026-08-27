@@ -56,7 +56,7 @@ Every one of these is a stop condition, not a warning.
 4. **A clean `git status`** apart from the intended work. The move touches 250
    tracked paths; a stray edit inside that set is unreviewable.
 5. **The untracked OPEN-ADAS `.dat` files are present in whichever checkout
-   runs the gates, and are relocated by hand when the tree moves.** The 39
+   runs the gates, and are relocated by hand when the tree moves.** The 38
    adf11/adf15 files under `cablp/cablp/vars/adas/` are gitignored by licence
    (`.gitignore:69`), so they exist only on disk. Consequences the mover must
    plan for:
@@ -232,7 +232,7 @@ removes this subsection and two manifest rows change destination.
 
 ### 3.5 Prose (no behaviour)
 
-`cablp/vars/adas/README.md:17`, `cablp/funcs/_kernels.py:73` ("from the
+`cablp/vars/adas/README.md:17`, `cablp/funcs/_kernels.py:74` ("from the
 `cablp/` directory" in the RuntimeError text), `build_ext.py:5,6`,
 `scripts/profile_sim1d.py:64`.
 
@@ -245,9 +245,8 @@ it. `_adas.py` moves byte-identical — `RENAME_MAP.md` §2.1 has the argument.
 **Deliberately NOT edited:** `scripts/t23c_config_snapshot_delta.py:16` and
 `scripts/mirror_fieldmap_bitexact_structural.py:54`, both of which document
 `git show <base>:cablp/cablp/…` recipes. At a `<base>` older than this commit
-the old path is the correct one. Q5 asks the reviewer to confirm; the
-recommendation is to leave them and add one sentence naming this commit as the
-boundary.
+the old path is the correct one. **Q5 is RULED (review, 26dw): they stay
+unedited, and this commit is the named boundary.**
 
 ---
 
@@ -376,7 +375,7 @@ same edit that renames the file from `delta_flatten.DRAFT.json` to
 - **The docs pass.** CLAUDE.md's "two script directories" section, its
   `cd cablp` invocations and its path references update in the R2 docs pass
   (26dj), not here. Keeping the flatten's diff to moves plus content edits in
-  13 files is what makes it reviewable.
+  12 files is what makes it reviewable.
 - **The carve.** Rule C, its 190 import-statement rewrites and its 13 relative
   rewrites are a separate commit with a separate manifest.
 - **The retirements.** `results/compat.py`, `vars/_nn_table` and

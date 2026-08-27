@@ -1,13 +1,22 @@
 #!/usr/bin/env python3
-"""Validate restructure rename manifests against KB_MANIFEST_SCHEMA (2026-08-26).
+"""Validate restructure rename manifests against the adopted 2026-08-26
+manifest-schema constraints.
 
-Six checks, in the order the schema doc numbers them:
+Those constraints are enforced here and nowhere else -- this module is their
+executable statement.  ``RENAME_MAP.md`` section 8 (Q1) carries the same set
+in prose for a reader who wants the rationale rather than the mechanism.
+
+Six checks, in the order the schema numbers them:
 
   (1) SCHEMA      -- JSON shape: required top-level keys, enum values,
                      per-row required keys, locator shape.
   (2) LOCATORS    -- every ``old`` locator resolves at ``base_revision`` and
-                     every ``new`` locator at ``new_revision``, via
-                     ``git cat-file`` plus an AST walk for symbol anchors.
+                     every ``new`` locator at ``new_revision``.  Directory
+                     anchors and ``prefix_rule`` ``covers`` resolve by set
+                     membership in the ``git ls-tree`` listing of the
+                     revision; file, module and symbol anchors read the blob
+                     with ``git cat-file``, and symbol anchors additionally
+                     walk its AST.
   (3) CHAIN       -- each delta's ``base_revision`` is its predecessor's
                      ``new_revision``, and a cumulative manifest equals the
                      composition of the deltas it is checked against.
@@ -66,7 +75,6 @@ DERIVED and NON-AUTHORITATIVE: the compact row is the manifest of record.
 import argparse
 import ast
 import json
-import os
 import subprocess
 import sys
 import tempfile
@@ -145,14 +153,45 @@ class Findings:
 # git plumbing
 # --------------------------------------------------------------------------
 
+class GitError(RuntimeError):
+    """A git invocation failed, or git could not be run at all.
+
+    The validation entry points catch this and record a ``FAIL`` finding, so
+    a git-level problem is reported through ``report()``'s normal exit path
+    rather than aborting by traceback -- which is what ``Findings`` means by
+    "never raises mid-walk".  It subclasses ``RuntimeError`` so the
+    self-test's fixture-building calls, where a git failure IS a genuine
+    harness abort, keep their previous behaviour.
+    """
+
+
+def _run_git(repo, *arguments):
+    """Run git in ``repo`` and return the ``CompletedProcess``.
+
+    Raises ``GitError`` only when the process could not be started at all
+    (git absent, ``repo`` not a directory).  Every git access in this module
+    funnels through here, so an unrunnable git is a ``GitError`` everywhere
+    rather than a bare ``OSError`` from whichever call site reached it first.
+    """
+    try:
+        return subprocess.run(
+            ["git", *arguments],
+            cwd=str(repo), capture_output=True, text=True,
+        )
+    except OSError as error:
+        raise GitError(
+            f"git {' '.join(arguments)} could not be run in {repo}: {error}"
+        ) from error
+
+
 def git(repo, *arguments, check=True):
-    """Run git in ``repo`` and return stdout; ``check=False`` tolerates exit!=0."""
-    completed = subprocess.run(
-        ["git", *arguments],
-        cwd=str(repo), capture_output=True, text=True,
-    )
+    """Run git in ``repo`` and return stdout; ``check=False`` tolerates exit!=0.
+
+    Raises ``GitError`` when the invocation fails or the executable is absent.
+    """
+    completed = _run_git(repo, *arguments)
     if check and completed.returncode != 0:
-        raise RuntimeError(
+        raise GitError(
             f"git {' '.join(arguments)} failed in {repo}: "
             f"{completed.stderr.strip()}"
         )
@@ -161,10 +200,7 @@ def git(repo, *arguments, check=True):
 
 def blob_at(repo, revision, path):
     """Return the blob text at ``revision:path``, or None when absent."""
-    completed = subprocess.run(
-        ["git", "cat-file", "-p", f"{revision}:{path}"],
-        cwd=str(repo), capture_output=True, text=True,
-    )
+    completed = _run_git(repo, "cat-file", "-p", f"{revision}:{path}")
     if completed.returncode != 0:
         return None
     return completed.stdout
@@ -177,10 +213,7 @@ def tree_paths(repo, revision):
 
 
 def revision_exists(repo, revision):
-    completed = subprocess.run(
-        ["git", "rev-parse", "--verify", f"{revision}^{{commit}}"],
-        cwd=str(repo), capture_output=True, text=True,
-    )
+    completed = _run_git(repo, "rev-parse", "--verify", f"{revision}^{{commit}}")
     return completed.returncode == 0
 
 
@@ -981,7 +1014,10 @@ def validate(repo, manifest_paths, skip_git=False):
             findings.skip("LOCATORS", f"{name}: --skip-git")
             findings.skip("COVERAGE", f"{name}: --skip-git")
             continue
-        check_locators(findings, repo, manifest, name, draft)
+        try:
+            check_locators(findings, repo, manifest, name, draft)
+        except GitError as error:
+            findings.fail("LOCATORS", f"{name}: {error}")
         if draft:
             findings.skip(
                 "COVERAGE",
@@ -989,7 +1025,10 @@ def validate(repo, manifest_paths, skip_git=False):
                 "diff has no second end yet)",
             )
         else:
-            check_coverage(findings, repo, manifest, name)
+            try:
+                check_coverage(findings, repo, manifest, name)
+            except GitError as error:
+                findings.fail("COVERAGE", f"{name}: {error}")
 
     deltas = [
         (Path(p).name, m) for p, m in usable
@@ -1419,9 +1458,18 @@ def self_test():
         skipped = {c for c, _ in findings.skips}
         results.append((
             "draft-mode",
-            "clean, with COVERAGE+CHAIN skipped",
-            not failed and {"COVERAGE", "CHAIN"} <= skipped,
+            "clean; CHAIN+COVERAGE skipped, LOCATORS new-end skipped",
+            not failed and {"COVERAGE", "CHAIN", "LOCATORS"} <= skipped,
             f"failed={sorted(failed)} skipped={sorted(skipped)}",
+        ))
+
+        # --- a git-level failure reports as a FAIL, never as a traceback ---
+        # A repo path that does not exist makes the first git call in
+        # check_locators unstartable.  Draft mode keeps COVERAGE skipped so
+        # exactly one check fires.
+        record("fail-git-unrunnable", "LOCATORS", validate(
+            workspace / "no-such-repo",
+            [_write(manifests, "gitfail.DRAFT.json", draft)],
         ))
 
     controls = sum(1 for _, expect, _, _ in results if expect is None)
@@ -1499,7 +1547,18 @@ def main(argv=None):
     repo = args.repo
     if repo is None:
         anchor = Path(args.manifests[0]).resolve().parent
-        repo = git(anchor, "rev-parse", "--show-toplevel").strip()
+        try:
+            repo = git(anchor, "rev-parse", "--show-toplevel").strip()
+        except GitError as error:
+            # Nothing ran, so say so: without these skips report() would
+            # print PASS for five checks that were never executed.
+            findings = Findings()
+            findings.fail(
+                "LOCATORS", f"repository discovery failed under {anchor}: {error}"
+            )
+            for check in ("SCHEMA", "CHAIN", "COVERAGE", "GROUPS", "DELETES"):
+                findings.skip(check, "not run: no repository to validate against")
+            return report(findings, args.manifests)
     findings = validate(Path(repo), args.manifests, skip_git=args.skip_git)
     return report(findings, args.manifests)
 
