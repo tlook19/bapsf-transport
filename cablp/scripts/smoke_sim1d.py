@@ -9247,7 +9247,7 @@ def _case_cathode_power_balance_warming(
     provides=("retry_flags", "retry_params"),
 )
 def _case_timestep_dt_growth_reapproach(growth_flags, growth_params):
-    # --- accelerated dt_growth re-approach (default off) ---------------------
+    # --- accelerated dt_growth re-approach (armed at the shipped default) ----
     # A long ramp: an early phase boundary sets a small first step, then
     # nothing physical binds and dt_growth caps every step while it climbs.
     # This is the regime the probe measured (80.6% of steps growth-capped at a
@@ -9256,7 +9256,12 @@ def _case_timestep_dt_growth_reapproach(growth_flags, growth_params):
     ramp_params = dict(growth_params)
     ramp_params["tau_prebreakdown"] = 2.0e-9
     ramp_params["tau_discharge"] = 40.0e-6
-    ramp_base = LAPDSim1D(ramp_params, growth_flags).run(t_end=3.0e-7)
+    # The UNACCELERATED reference arm. Patience presence-gates the whole
+    # mechanism, so 0 skips the branch and this is the uniform
+    # dt_growth_factor ramp a run predating these keys took -- the same 17
+    # steps this case pinned while 0 was the shipped default.
+    ramp_slow_params = {**ramp_params, "dt_growth_recovery_patience": 0}
+    ramp_base = LAPDSim1D(ramp_slow_params, growth_flags).run(t_end=3.0e-7)
     assert ramp_base.steps == 17
     assert [diag.step_cap for diag in ramp_base.diagnostics][:5] == [
         "phase_boundary",
@@ -9290,9 +9295,34 @@ def _case_timestep_dt_growth_reapproach(growth_flags, growth_params):
     assert np.isclose(ramp_fast_dt[5], ramp_fast_dt[4] * 4.0)
     # It never weakens a bound -- every accepted step is still <= dt_max.
     assert max(ramp_fast_dt) <= ramp_params["dt_max"] * (1.0 + 1.0e-12)
-    # DEFAULT OFF and presence-gated: shipped defaults disable it, and setting
-    # the keys to their defaults is step-for-step identical to not having them.
-    assert default_config()[0]["dt_growth_recovery_patience"] == 0
+    # DEFAULT ON and presence-gated. The shipped patience ARMS the mechanism,
+    # so a run that says nothing about these keys accelerates; and a config
+    # carrying them at their defaults is step-for-step identical to one with
+    # them absent from the params dict entirely, which is what presence-gating
+    # has to mean now that the gate is open by default.
+    assert default_config()[0]["dt_growth_recovery_patience"] == 4
+    assert default_config()[0]["dt_growth_recovery_factor"] == 4.0
+    assert ramp_params["dt_growth_recovery_patience"] == 4
+    ramp_default = LAPDSim1D(ramp_params, growth_flags).run(t_end=3.0e-7)
+    ramp_absent_params = dict(ramp_params)
+    ramp_absent_params.pop("dt_growth_recovery_patience")
+    ramp_absent_params.pop("dt_growth_recovery_factor")
+    ramp_absent = LAPDSim1D(ramp_absent_params, growth_flags).run(t_end=3.0e-7)
+    ramp_default_dt = [diag.accepted_dt for diag in ramp_default.diagnostics]
+    assert [diag.accepted_dt for diag in ramp_absent.diagnostics] == ramp_default_dt
+    assert np.array_equal(ramp_absent.n, ramp_default.n)
+    assert np.array_equal(ramp_absent.Ee, ramp_default.Ee)
+    # The armed default is the mechanism, at ITS patience: the same ramp as the
+    # unaccelerated arm while a streak of four growth-capped steps is earned,
+    # then the recovery factor -- one step later than the patience-3 arm, and
+    # over the same horizon in fewer steps than the unaccelerated arm.
+    assert np.allclose(ramp_default_dt[:5], ramp_base_dt[:5])
+    assert np.isclose(ramp_default_dt[5], ramp_default_dt[4] * 4.0)
+    assert ramp_default.steps < ramp_base.steps, (
+        ramp_default.steps, ramp_base.steps
+    )
+    # ...and turning it off is still bit-exact: patience 0 recovers the
+    # unaccelerated ramp exactly, keys present or not.
     ramp_off = LAPDSim1D(
         {
             **ramp_params,
@@ -9311,6 +9341,9 @@ def _case_timestep_dt_growth_reapproach(growth_flags, growth_params):
         {"dt_growth_recovery_patience": "soon"},
         # A recovery factor at or below the base could never accelerate.
         {"dt_growth_recovery_patience": 2, "dt_growth_recovery_factor": 1.25},
+        # ...and the factor is LIVE at the shipped patience, so a bad one is
+        # refused without any patience override to make it so.
+        {"dt_growth_recovery_factor": 1.25},
         {"dt_growth_recovery_patience": 2, "dt_growth_recovery_factor": 0.5},
         {
             "dt_growth_recovery_patience": 2,
@@ -9356,15 +9389,17 @@ def _case_timestep_dt_growth_reapproach(growth_flags, growth_params):
 def _case_timestep_surface_loss_floor_exempt_hysteresis(
     growth_flags, growth_params
 ):
-    # --- hysteresis band on the surface_loss floor exemption (default off) ---
-    # The single-threshold exemption is knife-edge: the accept-time floor clip
+    # --- hysteresis band on the surface_loss floor exemption (armed) ---------
+    # A single-threshold exemption is knife-edge: the accept-time floor clip
     # perturbs a floor-pinned cell's margin by float residue every step, so one
     # threshold lets such a cell alternate between exempt and bound. The band
-    # keeps the 1e-3 ENTRY threshold and widens RE-ADMISSION.
+    # keeps the 1e-3 ENTRY threshold and widens RE-ADMISSION. It is armed at
+    # the shipped default; 0.0 selects the knife edge.
     from cablp.solvers._sim1d.solver import SURFACE_LOSS_FLOOR_EXEMPT_RTOL
 
     hyst_inner = SURFACE_LOSS_FLOOR_EXEMPT_RTOL
-    hyst_outer = 1.0e-1
+    hyst_outer = default_config()[0]["surface_loss_floor_exempt_exit_rtol"]
+    assert hyst_outer == 1.0e-1
     hyst_floors = {"n": 1.0e8, "Te": 0.1, "Ti": 0.1}
     hyst_n = np.array([1.0e10, 1.0e10])
     hyst_floor_energy = 1.5 * hyst_floors["Te"] * ev_to_erg * hyst_n
@@ -9425,23 +9460,32 @@ def _case_timestep_surface_loss_floor_exempt_hysteresis(
     assert _hyst_dt(hyst_walk[1], hyst_cold_latch) == hyst_knife[1]
     assert hyst_cold_latch["Ee"].tolist() == [False, False]
 
-    # DEFAULT OFF and presence-gated: the shipped default is 0.0, which builds
-    # no latch and leaves the single-threshold expression in place, and a run
-    # with the key at its default is step-for-step identical to one with the
-    # key absent from the params dict entirely.
-    assert default_config()[0]["surface_loss_floor_exempt_exit_rtol"] == 0.0
+    # DEFAULT ON and presence-gated. Two separate properties, and the flip
+    # made them testable only as a pair:
+    #   (1) the ARMED default builds the latch and selects the band, and a run
+    #       with the key at its default is step-for-step identical to one with
+    #       the key absent from the params dict entirely -- the template is
+    #       what fills it, so "absent" now means 0.1, not 0.0;
+    #   (2) the OFF path is still reachable and still presence-gated: an
+    #       explicit 0.0 allocates no latch and leaves the single-threshold
+    #       expression in place (the knife edge exercised above through
+    #       floor_exempt_exit_rtol=None).
+    assert default_config()[0]["surface_loss_floor_exempt_exit_rtol"] == hyst_outer
     assert default_config()[1]["surface_loss_floor_exempt"] is True
     assert growth_flags["surface_loss_floor_exempt"] is True
     hyst_params = dict(growth_params)
     hyst_params["tau_prebreakdown"] = 2.0e-9
     hyst_params["tau_discharge"] = 40.0e-6
+    assert hyst_params["surface_loss_floor_exempt_exit_rtol"] == hyst_outer
     hyst_default_sim = LAPDSim1D(hyst_params, growth_flags)
-    assert hyst_default_sim._surface_loss_floor_exempt_exit_rtol is None
-    assert hyst_default_sim._surface_loss_floor_exempt_latch is None
+    assert hyst_default_sim._surface_loss_floor_exempt_exit_rtol == hyst_outer
+    assert hyst_default_sim._surface_loss_floor_exempt_latch == {}
     hyst_absent_params = dict(hyst_params)
     hyst_absent_params.pop("surface_loss_floor_exempt_exit_rtol")
+    hyst_absent_sim = LAPDSim1D(hyst_absent_params, growth_flags)
+    assert hyst_absent_sim._surface_loss_floor_exempt_exit_rtol == hyst_outer
     hyst_default = hyst_default_sim.run(t_end=3.0e-7)
-    hyst_absent = LAPDSim1D(hyst_absent_params, growth_flags).run(t_end=3.0e-7)
+    hyst_absent = hyst_absent_sim.run(t_end=3.0e-7)
     assert [d.accepted_dt for d in hyst_absent.diagnostics] == [
         d.accepted_dt for d in hyst_default.diagnostics
     ]
@@ -9449,20 +9493,24 @@ def _case_timestep_surface_loss_floor_exempt_hysteresis(
         assert np.array_equal(
             getattr(hyst_absent, hyst_field), getattr(hyst_default, hyst_field)
         ), hyst_field
-
-    # BOTH knobs armed on the same short run: the band plus the accelerated
-    # dt_growth re-approach. Finite, complete, and the latch is live.
-    hyst_on_sim = LAPDSim1D(
-        {
-            **hyst_params,
-            "surface_loss_floor_exempt_exit_rtol": hyst_outer,
-            "dt_growth_recovery_patience": 3,
-        },
+    # The off path, explicitly selected: no latch, no band.
+    hyst_off_sim = LAPDSim1D(
+        {**hyst_params, "surface_loss_floor_exempt_exit_rtol": 0.0},
         growth_flags,
     )
+    assert hyst_off_sim._surface_loss_floor_exempt_exit_rtol is None
+    assert hyst_off_sim._surface_loss_floor_exempt_latch is None
+    hyst_off = hyst_off_sim.run(t_end=3.0e-7)
+    for hyst_field in ("n", "nn", "M", "Ee", "Ei"):
+        assert np.all(np.isfinite(getattr(hyst_off, hyst_field))), hyst_field
+
+    # BOTH knobs armed on the same short run -- as the shipped defaults arm
+    # them, with no override at all: the band plus the accelerated dt_growth
+    # re-approach. Finite, complete, and the latch is live.
+    hyst_on_sim = LAPDSim1D(dict(hyst_params), growth_flags)
     assert hyst_on_sim._surface_loss_floor_exempt_exit_rtol == hyst_outer
     assert hyst_on_sim._surface_loss_floor_exempt_latch == {}
-    assert hyst_on_sim._dt_growth_recovery_patience == 3
+    assert hyst_on_sim._dt_growth_recovery_patience == 4
     hyst_on = hyst_on_sim.run(t_end=3.0e-7)
     assert hyst_on.steps > 0
     for hyst_field in ("n", "nn", "M", "Ee", "Ei"):
@@ -9479,6 +9527,11 @@ def _case_timestep_surface_loss_floor_exempt_hysteresis(
         # An outer threshold at or below the inner one is not a band.
         {"surface_loss_floor_exempt_exit_rtol": SURFACE_LOSS_FLOOR_EXEMPT_RTOL},
         {"surface_loss_floor_exempt_exit_rtol": 1.0e-4},
+        # ...and one at or above 1.0 is not a band either: re-admission would
+        # need a margin exceeding the floor energy itself, which in the large
+        # limit is a permanent exemption from this bound.
+        {"surface_loss_floor_exempt_exit_rtol": 1.0},
+        {"surface_loss_floor_exempt_exit_rtol": 25.0},
     ):
         try:
             LAPDSim1D({**hyst_params, **bad_hyst}, growth_flags)
@@ -9499,9 +9552,24 @@ def _case_timestep_surface_loss_floor_exempt_hysteresis(
         assert "surface_loss_floor_exempt" in str(error), str(error)
     else:
         raise AssertionError("band armed with the exemption off must raise")
-    # ...while the key at its default stays inert with the flag off: the off
-    # path never consults it, so it cannot refuse a run that is not using it.
-    LAPDSim1D(hyst_params, hyst_flag_off)
+    # CONSEQUENCE OF THE FLIP, asserted rather than left to be discovered:
+    # the band is now armed by the DEFAULT, so clearing the exemption flag on
+    # its own is exactly the configuration refused above. Recovering the
+    # historical bound is a two-key operation, and the error says so.
+    try:
+        LAPDSim1D(hyst_params, hyst_flag_off)
+    except ValueError as error:
+        assert "surface_loss_floor_exempt_exit_rtol" in str(error), str(error)
+        assert "0.0" in str(error), str(error)
+    else:
+        raise AssertionError(
+            "the shipped band with the exemption flag off must raise"
+        )
+    # The two-key form is what constructs.
+    LAPDSim1D(
+        {**hyst_params, "surface_loss_floor_exempt_exit_rtol": 0.0},
+        hyst_flag_off,
+    )
     return locals()
 
 

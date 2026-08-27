@@ -2638,8 +2638,8 @@ def timestep_defaults():
         Maximum timestep growth factor between accepted steps.
     dt_growth_recovery_patience:
         Number of CONSECUTIVE accepted steps that must be capped by
-        ``dt_growth`` before the accelerated re-approach engages. Zero (the
-        default) disables the mechanism entirely and the ramp is uniformly
+        ``dt_growth`` before the accelerated re-approach engages. The default
+        is 4. Zero disables the mechanism entirely and the ramp is uniformly
         ``dt_growth_factor``.
 
         What it is for: after a collapse the ramp re-approaches the physics
@@ -2658,8 +2658,9 @@ def timestep_defaults():
         mechanism cannot mistake a genuinely small physics bound for a ramp.
     dt_growth_recovery_factor:
         Growth factor used once the accelerated re-approach has engaged.
-        Consulted ONLY when ``dt_growth_recovery_patience`` > 0. Must be
-        greater than ``dt_growth_factor``; anything else raises at
+        Consulted ONLY when ``dt_growth_recovery_patience`` > 0, which the
+        shipped default satisfies, so this key is live at its own default.
+        Must be greater than ``dt_growth_factor``; anything else raises at
         construction.
 
         The asymmetry between engaging and releasing is the hysteresis:
@@ -2673,7 +2674,7 @@ def timestep_defaults():
     surface_loss_floor_exempt_exit_rtol:
         Outer (re-admission) threshold [dimensionless] of a two-threshold band
         on the ``surface_loss`` floor-aware drain exemption. Read only while
-        the ``surface_loss_floor_exempt`` flag is on. Zero (the default)
+        the ``surface_loss_floor_exempt`` flag is on. The default is 0.1. Zero
         disables the band entirely: the exemption stays single-threshold and
         knife-edge, and a run is bit-exact with one predating this key.
 
@@ -2689,11 +2690,23 @@ def timestep_defaults():
         cells this drain bound reads, never a floor, a rate or any other
         bound, and the density channel is still never exempted.
 
+        What the width MEANS, and it is the reason for the ceiling below: an
+        exempted cell is not re-admitted to this drain bound until its margin
+        exceeds this fraction of its floor energy, so the temperature interval
+        ``[T_floor, (1 + exit_rtol) * T_floor]`` is drain-unthrottled by
+        design once a cell has entered the exemption. The floor, not this
+        bound, holds those cells; the density channel is never exempted at any
+        width.
+
         Must be strictly greater than ``solver.SURFACE_LOSS_FLOOR_EXEMPT_RTOL``
-        when nonzero, and requires ``surface_loss_floor_exempt``. A value at or
-        below the inner threshold (which would be no band at all), a negative
-        or non-finite or non-numeric value, and any nonzero value with the flag
-        off each raise ValueError at construction.
+        and strictly less than 1.0 when nonzero, and requires
+        ``surface_loss_floor_exempt``. A value at or below the inner threshold
+        (which would be no band at all), a value at or above 1.0 (which would
+        demand a margin larger than the floor energy itself before a cell can
+        come back, so the exemption is no longer a hysteresis band around the
+        floor and in the limit is permanent), a negative or non-finite or
+        non-numeric value, and any nonzero value with the flag off each raise
+        ValueError at construction.
 
         The exemption latch it introduces is per-cell, per-energy-channel RUN
         STATE: it lives on the solver instance, advances on every
@@ -2737,15 +2750,18 @@ def timestep_defaults():
         "max_step_retries": 8,
         "dt_growth_enabled": True,
         "dt_growth_factor": 1.25,
-        # Default-off: patience 0 skips the branch entirely, so the ramp is
-        # uniformly dt_growth_factor and a run is bit-exact with one predating
-        # these keys. NO default flip -- that decision is not the code's.
-        "dt_growth_recovery_patience": 0,
+        # ARMED: after 4 consecutive dt_growth-capped steps the ramp switches
+        # to the recovery factor, which makes that factor live at its own
+        # default. Patience 0 still skips the branch entirely, so the ramp is
+        # uniformly dt_growth_factor and the off path is bit-exact with a run
+        # predating these keys.
+        "dt_growth_recovery_patience": 4,
         "dt_growth_recovery_factor": 4.0,
-        # Default-off: zero skips the band entirely, so the floor-exempt test
-        # stays the single-threshold expression and no latch is allocated. NO
-        # default flip -- that decision is not the code's.
-        "surface_loss_floor_exempt_exit_rtol": 0.0,
+        # ARMED: the floor-exempt test is the two-threshold band, entry at
+        # SURFACE_LOSS_FLOOR_EXEMPT_RTOL and re-admission at this width. Zero
+        # still skips the band entirely, leaving the single-threshold
+        # expression and allocating no latch.
+        "surface_loss_floor_exempt_exit_rtol": 0.1,
         "max_density_step_fraction": 0.0,
         "max_neutral_step_fraction": 0.0,
         "max_energy_step_fraction": 0.0,
@@ -3581,15 +3597,19 @@ input_flags_template_1d = {
     # floor) are excluded from the drain-margin bound ONLY -- the
     # accept-time floor clip resets their margin to float residue every step,
     # so a persistent drain otherwise pins dt at dt_min indefinitely. One-sided
-    # (all other bounds still govern the cell) and knife-edge (any real margin
-    # re-admits the cell immediately). ON by default because a run that reaches
-    # a floor-pinned afterglow otherwise cannot finish in finite time. Set it
-    # False to recover the historical bound.
+    # (all other bounds still govern the cell). ON by default because a run
+    # that reaches a floor-pinned afterglow otherwise cannot finish in finite
+    # time. Recovering the historical bound takes BOTH keys -- clear this flag
+    # and pass surface_loss_floor_exempt_exit_rtol=0.0 -- because the band
+    # below is armed by default and arming it with this flag off raises.
     #
-    # The knife edge can be softened into a two-threshold band by the params
-    # key surface_loss_floor_exempt_exit_rtol (default 0.0 = off, which is this
-    # flag's behavior unchanged); that key is read only while this flag is on
-    # and raises at construction if set with it off.
+    # Re-admission is governed by the params key
+    # surface_loss_floor_exempt_exit_rtol, which is read only while this flag
+    # is on and raises at construction if set with it off. At its default the
+    # exemption is a two-threshold band: entry stays at
+    # SURFACE_LOSS_FLOOR_EXEMPT_RTOL and re-admission needs the wider margin.
+    # Set that key to 0.0 for the knife edge, where any real margin re-admits
+    # the cell immediately.
     "surface_loss_floor_exempt": True,
     # Include the beam_ionization_birth row in the resolved electrode/source
     # ("surface_loss") timestep bound. Default OFF and bit-exact off.

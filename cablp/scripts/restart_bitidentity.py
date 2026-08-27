@@ -79,8 +79,9 @@ def scenario_config(name):
         # CHEAP, and deliberately in the dt-growth-dominated regime: over this
         # window the growth ramp is the active bound on most steps, which is
         # what makes previous_accepted_dt and the recovery streak observable.
-        # Later in the discharge surface_loss binds nearly every step and both
-        # go inert -- see meanfield_beam, and the control matrix.
+        # Later in the discharge surface_loss binds nearly every step; the
+        # streak stayed observable there anyway once the accelerator became a
+        # shipped default -- see meanfield_beam, and the control matrix.
         #
         # Saves are also sparse relative to the step: with dt_save capping
         # every step the ramp never binds at all.
@@ -130,9 +131,10 @@ def scenario_config(name):
             "cathode_emission_profile": "gaussian",
             "beam_deposition_model": "csda",
             "beam_anomalous_model": "quasilinear",
-            # Raised so the dt-growth recovery branch is reachable and its
-            # carried streak is a LIVE control here rather than an inert one
-            # (at the default patience 0 the whole branch is gated off).
+            # Pinned rather than inherited: this scenario wants the recovery
+            # branch reachable and its carried streak a LIVE control, and it
+            # says so itself instead of depending on whatever the shipped
+            # patience happens to be.
             "dt_growth_recovery_patience": 3,
         })
         flags["cathode_coupling"] = True
@@ -231,16 +233,15 @@ INERT_EXPECTATIONS = {
         "result over five seeds spanning a 3300x range, on both the "
         "current-driven and the floating branch. Carried anyway -- the fixed "
         "point is a property of this stance, not a guarantee",
-    ("meanfield_beam", "run_loop.dt_growth_capped_streak"):
-        "dt_growth_recovery_patience is 0 here, which presence-gates the "
-        "recovery branch off entirely (run(), solver.py:4448) -- the streak "
-        "cannot matter when nothing reads it; meanfield runs at patience 3 "
-        "and its control does break identity",
-    ("coverage", "run_loop.dt_growth_capped_streak"):
-        "dt_growth_recovery_patience is 0 here, which presence-gates the "
-        "recovery branch off entirely (run(), solver.py:4448) -- the streak "
-        "cannot matter when nothing reads it; meanfield runs at patience 3 "
-        "and its control does break identity",
+    # Both scenarios carried a run_loop.dt_growth_capped_streak entry here
+    # while dt_growth_recovery_patience defaulted to 0 and presence-gated the
+    # recovery branch off, which made the streak unreadable and its control a
+    # no-op. The shipped patience is now nonzero, so those entries are
+    # RETIRED rather than reworded: on meanfield_beam the control was
+    # re-measured at the armed default (2026-08-26) and it breaks identity in
+    # 128 places, so the member is genuinely tested and needs no excuse. Any
+    # future no-op there is a real finding and must fail loudly instead of
+    # matching a stale row.
     ("meanfield", "cathode._cathode_beam_cross"):
         "beam_atten_cross is identically zero until the sheath potential "
         "crosses the ionization threshold (~2e-4 s), so there is nothing to "

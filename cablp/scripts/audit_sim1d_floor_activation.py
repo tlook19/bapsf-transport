@@ -216,7 +216,12 @@ def install_probes(recorder):
             & (raw_T <= temperature_floor * (1.0 + FLOOR_RTOL)),
         )
 
-        return capacity * np.maximum(raw_T, temperature_floor)
+        # Bit-passive by construction: capacity is positive, so multiplication
+        # by it is order-preserving and this is elementwise identical to the
+        # library's own capacity * np.maximum(T, floor) -- while dividing out
+        # capacity and multiplying it back would round twice and inject ULP
+        # perturbations into every conduction substep of an instrumented run.
+        return np.maximum(unclipped, capacity * temperature_floor)
 
     state_mod.apply_state_floors = probed_apply_state_floors
     conduction_mod._implicit_species_energy = probed_implicit_species_energy

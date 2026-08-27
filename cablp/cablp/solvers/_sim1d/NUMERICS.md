@@ -301,15 +301,30 @@ physically-motivated candidate bounds, then clamps to `[dt_min, dt_max]`:
   every other bound still governs an exempted cell, and an exempted cell is
   never reported as `active_constraint`.
 
-  The exemption is knife-edge by default — the test is recomputed from the
-  current margin each call, so the same float residue can re-admit and re-exempt
-  a hovering cell on alternating steps. `surface_loss_floor_exempt_exit_rtol`
-  (**default 0.0 = off**) replaces that single threshold with a band: 1e-3 stays
-  the entry threshold, this key is the wider re-admission threshold, and a cell
-  between the two holds its previous verdict. The memory is a per-cell,
-  per-channel latch on the solver instance; it is run state, is advanced by
-  every `suggest_timestep` call that evaluates this bound, and is not carried
-  across a restart.
+  A single threshold would be knife-edge — the test is recomputed from the
+  current margin each call, so the same float residue can re-admit and
+  re-exempt a hovering cell on alternating steps.
+  `surface_loss_floor_exempt_exit_rtol` (**default 0.1**) replaces that single
+  threshold with a band: 1e-3 stays the entry threshold, this key is the wider
+  re-admission threshold, and a cell between the two holds its previous
+  verdict. Setting it to `0.0` restores the knife edge. The memory is a
+  per-cell, per-channel latch on the solver instance; it is run state, is
+  advanced by every `suggest_timestep` call that evaluates this bound, and is
+  not carried across a restart (`RESTART.md` states what that costs).
+
+  The band width is also a statement about resolution: an exempted cell is
+  drain-unthrottled until its margin exceeds that fraction of its floor
+  energy, so the interval `[T_floor, (1 + exit_rtol) * T_floor]` is by design
+  not resolved by this bound. Values at or above 1.0 are refused at
+  construction — re-admission would then require a margin larger than the floor
+  energy itself, which is a permanent exemption rather than a band.
+
+  **How floor injection is quoted.** Report the energy the floor clips inject
+  as energy per window expressed as a fraction of column thermal, never as a
+  count of clips. Clip counts are dt-bookkeeping: the A/B that adopted this
+  band measured them falling by 3.5x while the physically meaningful quantity,
+  the window-integrated injection, was invariant — a count-based statement
+  flips sign under a step-size change and misinforms the reader.
 
 - **Current-driven loop relaxation** (`circuit`, `circuit_dt_fraction`,
   default 0.25), **presence-gated on `cathode_circuit_voltage_bound`** and on
@@ -554,9 +569,9 @@ capped by `dt_growth`, at a median 364× below the binding physics bound**, with
 ~40-step recovery episodes recurring every ~15 steps. Those steps are not
 resolving anything — no physical bound bound during any of them.
 
-`dt_growth_recovery_patience` (**default 0 = off**) and
-`dt_growth_recovery_factor` (4.0, consulted only when patience > 0) are an
-opt-in accelerated re-approach. After `patience` CONSECUTIVE accepted steps
+`dt_growth_recovery_patience` (**default 4**) and `dt_growth_recovery_factor`
+(4.0, consulted only when patience > 0, which the default satisfies) are the
+accelerated re-approach; patience `0` disables it. After `patience` CONSECUTIVE accepted steps
 capped by `dt_growth`, the ramp's factor becomes the recovery factor; one step
 capped by anything else — a physics bound, an output cadence, or a retry after
 a rejection — resets the streak and the base factor returns immediately.
