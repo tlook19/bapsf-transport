@@ -133,7 +133,8 @@ def main():
         Te=np.full(cells, Te), Ti=np.full(cells, 1.0), ion_mass_g=mi,
     )
     kw = dict(state=st, floors=sim._floors, ion_mass_g=mi, mu=mu, geometry=geo,
-              alpha_isat=np.exp(-0.5), b_surface_loss=1.0)
+              alpha_isat=np.exp(-0.5), b_surface_loss=1.0,
+              gas_type=sim._gas_type)
     routed = characteristic_boundary_rhs(sheath_energy_routing=True, **kw)
     ghost = characteristic_boundary_rhs(sheath_energy_routing=False, **kw)
     g5 = True
