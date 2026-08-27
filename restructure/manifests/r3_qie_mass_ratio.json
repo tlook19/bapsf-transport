@@ -1,0 +1,238 @@
+{
+  "kind": "r3-semantic-qie-mass-ratio",
+  "repository": "bapsf-transport",
+  "base_revision": "5e253da491422e8f5430dd7d0599754365ee4a0c",
+  "base_revision_note": "agent-staging at dispatch: the merged R3 sub-event 1 tip (constants unification + Tier-A corpus re-capture).",
+  "schema_note": "A SEMANTIC record, not a rename manifest. It deliberately does NOT validate under restructure/manifests/validate_manifest.py -- no symbol was moved or renamed in the byte-supersession sense; one derived constant replaced a literal-times-mass-number product inside one expression. Companion to r3_constants_table.json, whose census_omissions section named this exact site as THE MOST SIGNIFICANT OMISSION of R3 sub-event 1.",
+
+  "ruling": {
+    "citation": "Tom-ruled 2026-08-27 session 39: own member / retire / advisor waived",
+    "expansion": "Carved out of R3 sub-event 1 as its own member (1b) rather than folded into the constants unification; H_e_mass_ratio to be RETIRED rather than corrected in place; the mandatory physics-advisor consult explicitly WAIVED by Tom for this member.",
+    "advisor_consult": "WAIVED by Tom. No physics-advisor was spawned for this member."
+  },
+
+  "bit_exact": false,
+  "bit_exact_note": "FALSE BY DESIGN. This member is NUMERICS-MOVING: it changes the value of the mass ratio the electron-ion energy exchange divides by, so the golden trajectory is EXPECTED to move. A pass/fail fixture gate has nothing to say about it and was not run.",
+
+  "the_change": {
+    "site": "cablp/plasma/heat.py:Q_ie",
+    "physics": "Braginskii electron-ion energy exchange, Q = 3 (Te - Ti) / tau_e / (m_i/m_e). Positive when Te > Ti (electrons lose energy to ions).",
+    "old_form": {
+      "expression": "3 * (Te - Ti) / time_elec_coll(Te, ne, lnlambda) / H_e_mass_ratio / mu",
+      "denominator_construction": "H_e_mass_ratio * mu -- a TRUNCATED proton-electron mass ratio literal (1.8362e3) times the ion mass NUMBER (mu = 4 for helium-4).",
+      "effective_mass_ratio": 7344.8,
+      "effective_mass_ratio_repr": "7344.800000000001 (1.8362e3 * 4.0 in IEEE-754 double)",
+      "what_it_was": "the mu = 4 MASS-NUMBER APPROXIMATION to the helium-4 atom / electron mass ratio, compounded with a 5-significant-figure truncation of m_p/m_e. Both errors point the same way."
+    },
+    "new_form": {
+      "expression": "3 * (Te - Ti) / time_elec_coll(Te, ne, lnlambda) / He_e_mass_ratio",
+      "denominator_construction": "constants.He_e_mass_ratio = m_He_cgs / m_e_cgs, DERIVED at import from the two existing CODATA masses already in constants.py, on the cablp/cathode/circuit.py:54 precedent (_pemr = _mp_cgs / _me_cgs).",
+      "exact_repr": "7296.299397077274",
+      "inputs": {
+        "m_He_cgs": "6.6464790809e-24 g -- the single definition point for the helium-4 ATOM mass (itself DERIVED: Ar(4He) * u), unchanged by this member",
+        "m_e_cgs": "9.1093837015e-28 g -- CODATA electron mass, unchanged by this member"
+      },
+      "class": "DERIVED",
+      "why_derived_not_literal": "a computed quotient cannot drift away from the two masses it is built from; a hand-made literal can, and the retired one had."
+    },
+    "rel_delta_on_the_ratio": -0.006603393274524303,
+    "rel_delta_on_the_coefficient": 0.0066472879309414,
+    "coefficient_factor": 1.0066472879309414,
+    "direction": "Q_ei has been running 0.66% LOW. The exchange coefficient goes UP by that factor: electrons lose energy to ions slightly faster than before.",
+    "mu_disposition": {
+      "signature": "UNCHANGED -- Q_ie(Te, Ti, ne, mu, lnlambda, per_particle=True, *, rk=None). All callers unchanged.",
+      "why_it_stays": "other functions in cablp/plasma/heat.py genuinely consume mu (kappa_par_ion, ion_conductive_flux, the ion collision time); removing it from Q_ie alone would break signature uniformity across the module's ion-side functions for no gain.",
+      "status_in_this_function": "ACCEPTED AND INERT. Verified in-process: Q_ie(10.0, 1.0, 1e13, mu=4.0, 10.0) == Q_ie(10.0, 1.0, 1e13, mu=1.0, 10.0) == 34017.52205401201.",
+      "documented": "the docstring's mu entry now says so explicitly, so an inert parameter is not mistaken for a live knob.",
+      "rationale_of_record": "Tom: the mu form existed only for hydrogen convenience. The right generalization if H were re-added is a per-gas mass-ratio constant fed in, not a mu multiplication. The solver has been hard helium-only since D3 (gas_type != 'He' raises at construction)."
+    },
+    "docstring_truth_repair": "the docstring already stated Q = 3 * (Te - Ti) / tau_e / (m_i/m_e). Under the old code that was an IDEALIZATION of what ran; it is now literally what the code computes. A sentence naming He_e_mass_ratio as the m_i/m_e was added, and the mu entry corrected. No other prose touched."
+  },
+
+  "retirement": {
+    "entity": "H_e_mass_ratio",
+    "file": "cablp/constants.py",
+    "line_at_base": 33,
+    "value": "1.8362e3",
+    "disposition": "DELETED. Not corrected in place, not aliased, not deprecated-with-warning -- removed outright per Tom's ruling.",
+    "why_deletion_was_available": "its SOLE consumer was the expression this member rewrote. Nothing else in the package read it.",
+    "correct_value_had_it_been_kept": "m_p/m_e = 1836.1526734400013, as cablp/cathode/circuit.py:54 already DERIVES it (_pemr). The retired literal was 2.58e-05 relative away from that -- which is why r3_constants_table.json's census_omissions flagged it as larger than four of the six ruled rows of sub-event 1.",
+    "zero_consumer_proof": {
+      "pre_change_grep": {
+        "command": "git grep -n H_e_mass_ratio (at 5e253da)",
+        "code_hits": [
+          "cablp/constants.py:33 -- the definition itself",
+          "cablp/plasma/heat.py:1 -- the import",
+          "cablp/plasma/heat.py:166 -- the Q_ie expression"
+        ],
+        "verdict": "ONE consumer module. The brief's STOP condition (another tracked consumer) did NOT fire."
+      },
+      "post_change_grep": {
+        "command": "git grep -n H_e_mass_ratio",
+        "code_hits": "NONE. Exit 1 (no match) over all tracked paths outside restructure/.",
+        "filesystem_grep": "grep -rn H_e_mass_ratio . --exclude-dir=.git returns no code hit and no untracked probe-script hit in scripts/.",
+        "verdict": "ZERO consumers. The symbol is gone from the package."
+      },
+      "surviving_mentions_are_records_not_consumers": {
+        "count": 4,
+        "sites": [
+          "restructure/RENAME_MAP.md:737 -- the R2 flatten's re-rooting row for the import line, a dated record of what the import WAS at the flatten",
+          "restructure/manifests/r3_constants_table.json:76 -- sub-event 1's census correction",
+          "restructure/manifests/r3_constants_table.json:140 -- census_omissions entity name",
+          "restructure/manifests/r3_constants_table.json:144 -- census_omissions consumers field"
+        ],
+        "disposition": "LEFT UNTOUCHED, deliberately. These are dated historical records of the code state at their own event, not references a reader could follow into live code. The campaign's records are append-only and are not retro-edited to match a later interpretation; this manifest is the forward pointer that resolves them.",
+        "no_dangling_pointer_risk": "both documents are restructure-era records that name their own base revision, and the retired symbol is recoverable at tag r2-tip-2026-08-27 and at 5e253da."
+      }
+    }
+  },
+
+  "gates_run": {
+    "import_provenance": {
+      "requirement": "asserted IN-PROCESS before every quoted result, because the editable install's cablp.pth resolves to the MAIN checkout (the PYTHONPATH trap).",
+      "cablp_file": "/home/trloo/bapsf/bapsf-transport/.claude/worktrees/agent-ac084a1d3c7cebb80/cablp/__init__.py",
+      "heat_file": "/home/trloo/bapsf/bapsf-transport/.claude/worktrees/agent-ac084a1d3c7cebb80/cablp/plasma/heat.py",
+      "prefix": "PYTHONPATH=<worktree root> on every gate and every arm"
+    },
+    "smoke": {
+      "command": "PYTHONPATH=<worktree> ~/miniforge3/envs/fenicsx-env/bin/python scripts/smoke_sim1d.py",
+      "exit_code": 0,
+      "tail": "sim1d smoke ok: cells=72, dz=10.65 cm, Vp_total=2.433052e+06 cm^3, Vm_total=1.793692e+07 cm^3",
+      "compiled_equivalence": "RAN, NOT SKIPPED -- 5 cases (meanfield, coverage, landau, emitting_area, initial_profile), all 'final state bit-identical' at KERNEL_ID cython/_cathode_kernels_cy/tierA+csda. The .so was built in-worktree (python build_ext.py --inplace) before the smoke, per the solver-branch rule."
+    },
+    "reference_corpus": {
+      "command": "PYTHONPATH=<worktree> ~/miniforge3/envs/fenicsx-env/bin/python scripts/deposit_beam_reference.py --verify",
+      "exit_code": 0,
+      "verdict": "GREEN -- 0 differing.",
+      "transcript": "fixture deposit_beam_reference.npz: 506 entries, format deposit-beam-reference-v1, reference path pure | compared 206218 values across 7590 result fields: 0 differing | recorded conservation closure: max 6.095224e-16 over 506 entries; tail bank max 3.891121e-16 over 268 | VERIFY OK",
+      "fixture": "scripts/data/deposit_beam_reference.npz, sha256 e70396e5... -- the RE-CAPTURED fixture from R3 sub-event 1, not the pre-unification one. Untouched by this member.",
+      "significance": "PROVES, rather than assumes, that this member does not reach the beam march. The prediction was that the Tier-A corpus would be UNAFFECTED: Q_ie is a plasma/heat.py quantity consumed by the solver's ei_exchange, while the CSDA beam march and the compiled kernels never read a mass ratio from constants.py. Sub-event 1 is the cautionary precedent -- there an unrelated-looking constant DID reach the corpus through a bound default and flipped four straddle entries, and the coder missed it. Here the gate was run and is green.",
+      "defect_flag": "NONE."
+    },
+    "golden": {
+      "script": "scripts/baseline_sim1d.py",
+      "result": "NOT RUN -- deliberately, per the brief. Running --verify here would report a mismatch and that mismatch would carry no information: the member's whole point is that the trajectory moves.",
+      "recapture": "The single R3 recapture happens at R3-tip, later. scripts/baselines/, scripts/stances/ and scripts/data/ were NOT touched by this member."
+    }
+  },
+
+  "battery": {
+    "instrument": "scripts/r3_constfoot_4k.py --fixed-dt",
+    "instrument_status": "COMMITTED AND UNCHANGED by this member -- the battery_v2 precedent tool from R3 sub-event 1, reused verbatim. git diff against 5e253da touches no file under scripts/.",
+    "why_fixed_dt": "the adaptive-grid battery (battery_v1 in r3_constants_table.json) did NOT resolve a smooth footprint: a 1-ulp perturbation flips the timestep selector at a near-tie and the arms end 4,000 steps apart at DIFFERENT physical times, so the deviation measures the time offset (floor ~1e-2, non-monotone in perturbation size). --fixed-dt pins the grid so every arm walks the same instants.",
+    "config": "the golden's own, via baseline_sim1d.build_baseline_config: default_config() + the committed scripts/stances/g1atrim.toml + BASELINE_PARAM_OVERRIDES/BASELINE_FLAG_OVERRIDES, so nx = 60 and the pinned scalar neutral fill travel with it. The single departure is max_steps_action = 'stop' (the cap IS the run length here, not a tripwire).",
+    "horizon_steps": 4000,
+    "fixed_dt_s": 1.175e-07,
+    "kernels": "pure (CABLP_COMPILED_KERNELS unset) on BOTH arms; PROVENANCE = 'pure' asserted in-process.",
+    "reference_capture_mechanism": "THE REFERENCE ARM WAS CAPTURED BEFORE THE EDIT. Sequence: (1) worktree reset --hard onto 5e253da, tree verified clean; (2) ADAS masters copied in, .so built; (3) r3qie_ref.npz captured from the UNMODIFIED tree at 5e253da; (4) only then were constants.py and heat.py edited and committed as d94e3f4; (5) r3qie_change.npz captured at d94e3f4. The reference is therefore the merged staging tip's own behaviour, not a reconstruction.",
+    "matched_grid_verification": {
+      "per_arm": "the capture REFUSES to write unless zero steps were rejected and final_time sits within 1e-9 of steps * dt. Both arms wrote.",
+      "cross_arm": "the SHARP test, enforced by --compare: two fixed-dt arms accumulate the same t from the same dt in the same order, so their final_times must agree BIT FOR BIT.",
+      "result": "MATCHED. 'matched grid confirmed: both arms end at t=0.0004700000000000171 (bit-identical)'. t_end deviation 0.000000e+00.",
+      "note": "final_time is not float-equal to 4000 * 1.175e-7 = 0.00047: the loop accumulates t += dt 4,000 times, a few hundred ulp of accumulation. Both arms accumulate identically, which is why the cross-arm test is exact."
+    },
+    "arms": [
+      {
+        "arm": "ref (pre-change)",
+        "revision": "5e253da (unmodified staging tip)",
+        "artifact": "r3qie_ref.npz",
+        "steps": 4000,
+        "cells": 72,
+        "final_time_s": 0.0004700000000000171,
+        "note": "the reference; all deviations below are against this"
+      },
+      {
+        "arm": "change",
+        "revision": "d94e3f4 ([r3-qie] Q_ie reads the true He/electron mass ratio)",
+        "artifact": "r3qie_change.npz",
+        "steps": 4000,
+        "cells": 72,
+        "final_time_s": 0.0004700000000000171,
+        "note": "He_e_mass_ratio in place of H_e_mass_ratio * mu"
+      }
+    ],
+    "measured_footprint": {
+      "verdict": "MOVED. The instrument resolves cleanly: the deviations are 2-4 orders above the ulp floor, ordered by physical channel, and correctly signed.",
+      "per_field": [
+        {"field": "n",  "max_rel": 0.0002004505, "rms_rel": 0.0001163718, "differing_of_72": 71},
+        {"field": "nn", "max_rel": 0.000541943,  "rms_rel": 0.0002752982, "differing_of_72": 72},
+        {"field": "M",  "max_rel": 0.006894480,  "rms_rel": 0.0009586852, "differing_of_72": 71},
+        {"field": "Ee", "max_rel": 0.0001498568, "rms_rel": 8.490859e-05, "differing_of_72": 71},
+        {"field": "Ei", "max_rel": 0.005192189,  "rms_rel": 0.004150756,  "differing_of_72": 71},
+        {"field": "Te", "max_rel": 8.202564e-05, "rms_rel": 4.493976e-05, "differing_of_72": 71},
+        {"field": "Ti", "max_rel": 0.005393721,  "rms_rel": 0.004252911,  "differing_of_72": 71},
+        {"field": "t_end", "max_rel": 0.0, "rms_rel": 0.0, "differing_of_72": 0}
+      ],
+      "signed_channel_reading": {
+        "method": "sum over cells of the field, arm against ref -- the direction the exchange moved energy.",
+        "Ei": "+3.176865e-03 relative (sum 1.534911e+02 -> 1.539787e+02)",
+        "Ti": "+2.611075e-03 relative",
+        "Ee": "-9.140543e-05 relative (sum 2.153550e+03 -> 2.153353e+03)",
+        "Te": "+4.057577e-05 relative",
+        "verdict": "CORRECTLY SIGNED. A larger m_i/m_e denominator would have WEAKENED the exchange; the true ratio is SMALLER than the mu=4 product, so the coefficient goes up and the ions gain while the electrons lose. Ei and Ti rise, Ee falls. That is the expected sign for Te > Ti under collisions.",
+        "asymmetry_explained": "the electron energy reservoir is ~14x the ion one over this window (sum Ee 2.15e+03 vs sum Ei 1.53e+02), so the same absolute energy transfer is a much smaller RELATIVE move on the electron side. Te rises rather than falls because this is a full nonlinear 4k-step trajectory with sources, conduction, ionization and flux -- not a closed two-box exchange -- so exact antisymmetry is not expected and is not claimed."
+      },
+      "largest_row_characterized": {
+        "field": "M",
+        "max_rel": 0.006894480,
+        "finding": "M's headline max is a SMALL-DENOMINATOR artifact, not the largest physical move. Its argmax sits at cell 16 where |M_ref| = 1.266573e-07, about 13x BELOW the field median |M| = 1.635719e-06. Its rms (9.586852e-04) is 4.3x smaller than the Ei/Ti rms.",
+        "consequence": "the dominant PHYSICAL channel is the ion energy (Ei/Ti), exactly where a Q_ei coefficient change should load. M is a downstream pressure-coupling response read on a near-zero cell.",
+        "why_reported": "so the reviewer is not misled by field ordering on max_rel alone."
+      }
+    },
+    "defect_rule": {
+      "rule_as_registered": "x10 against the prior. The direct prior is 6.6e-3 on the Q_ei exchange channel (the coefficient's own relative delta); the field-level trajectory footprint at the 4k pre-breakdown horizon was predicted to be SMALLER, because Q_ei loads where Te != Ti under collisions. Flag and STOP if any smooth observable exceeds x10 its predicted scale. Never widen anything.",
+      "prior": 0.006603393274524303,
+      "x10_bar": 0.06603393274524303,
+      "adjudication": [
+        {"field": "n",  "max_rel": 0.0002004505, "ratio_to_prior": 0.030, "verdict": "ok"},
+        {"field": "nn", "max_rel": 0.000541943,  "ratio_to_prior": 0.082, "verdict": "ok"},
+        {"field": "M",  "max_rel": 0.006894480,  "ratio_to_prior": 1.044, "verdict": "ok"},
+        {"field": "Ee", "max_rel": 0.0001498568, "ratio_to_prior": 0.023, "verdict": "ok"},
+        {"field": "Ei", "max_rel": 0.005192189,  "ratio_to_prior": 0.786, "verdict": "ok"},
+        {"field": "Te", "max_rel": 8.202564e-05, "ratio_to_prior": 0.012, "verdict": "ok"},
+        {"field": "Ti", "max_rel": 0.005393721,  "ratio_to_prior": 0.817, "verdict": "ok"}
+      ],
+      "DISPOSITION": "ADJUDICATED ON EVERY ROW, NO FLAG RAISED, NO BAR MOVED. The largest ratio to prior is M at 1.044x -- and that row is the small-denominator artifact characterized above. Every field sits at or below ~1x the prior and an order of magnitude below the x10 bar. The prediction that the trajectory footprint would come in SMALLER than the coefficient delta HOLDS on the physical channels: Ei 0.79x, Ti 0.82x, and the electron-side and particle-side fields one to two orders lower still.",
+      "prediction_vs_measurement": "PREDICTED: coefficient x 1.00665 (+0.66%), loading the electron-ion exchange channel. MEASURED: coefficient factor 1.0066472879309414 exactly as predicted; ion energy channel moves +2.6e-3 to +3.2e-3 on the summed field and 5.2e-3/5.4e-3 at per-cell max; electron channel one to two orders smaller. The channel the prediction named is the channel that moved."
+    },
+    "HORIZON_LIMITATION": "STATED PLAINLY, and it is the material caveat on every number above. 4,000 steps at 1.175e-7 s is t = 4.7e-4 s, which is deep in PRE-BREAKDOWN. The run never reaches breakdown, the discharge, or the afterglow. Q_ei is the LEADING AFTERGLOW DRAIN and dominates exactly where this instrument does not look, so these deviations are a LOWER BOUND on the member's full-cycle footprint and must not be quoted as the change's effect on a production score. The horizon was NOT extended -- doing so was explicitly out of scope. What settles the full-cycle footprint is the R3-tip recapture and a scored production arm, neither of which belongs to this member."
+  },
+
+  "scope_discipline": {
+    "files_changed": ["cablp/constants.py", "cablp/plasma/heat.py", "restructure/manifests/r3_qie_mass_ratio.json"],
+    "not_touched": "scripts/baselines/, scripts/stances/, scripts/data/, scripts/r3_constfoot_4k.py, and every other file in the repo. No flag was added (this is a constant correction, not new physics, so the default-off-flag contract does not apply and would have no off state to be bit-exact in). No caller signature changed. No verification pass, refactor, helper or error handling was added beyond the brief."
+  },
+
+  "knowledge_base_impact": {
+    "protocol": "RULE_KB_IMPACT / CLAUDE_INTEGRATION.md",
+    "sources": [
+      {
+        "path": "cablp/plasma/heat.py",
+        "anchor": "Q_ie",
+        "change": "CHANGED -- the formula's mass-ratio denominator",
+        "terminology": "electron-ion energy exchange; Braginskii; Q_ei / Q_ie; mass ratio m_i/m_e",
+        "context": "package default, unconditional -- not behind any flag or selector",
+        "disposition_impact": "MAY REQUIRE KNOWLEDGE BASE REVIEW"
+      },
+      {
+        "path": "cablp/constants.py",
+        "anchor": "He_e_mass_ratio",
+        "change": "ADDED -- DERIVED class, computed at import from m_He_cgs / m_e_cgs",
+        "terminology": "helium-4 atom to electron mass ratio",
+        "context": "package default",
+        "disposition_impact": "MAY REQUIRE KNOWLEDGE BASE REVIEW"
+      },
+      {
+        "path": "cablp/constants.py",
+        "anchor": "H_e_mass_ratio",
+        "change": "REMOVED -- truncated literal 1.8362e3, zero consumers after this member",
+        "terminology": "proton-electron mass ratio (as misused for helium via mu)",
+        "context": "package default",
+        "disposition_impact": "MAY REQUIRE KNOWLEDGE BASE REVIEW"
+      }
+    ],
+    "downstream_effects": "Q_ie is consumed by cablp/solvers/_sim1d/physics/energy.py:ei_exchange, which drives the Ee and Ei evolution. The exchange is the leading afterglow cooling channel, so the full-cycle footprint is expected to exceed the pre-breakdown footprint measured here. Any KB assertion that quotes the electron-ion exchange coefficient, the mass ratio it uses, or an afterglow cooling rate derived from it is affected.",
+    "assertion_context": "package default (unconditional on the solver path); helium-only, as the solver has been since D3."
+  }
+}

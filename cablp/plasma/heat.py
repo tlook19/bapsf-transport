@@ -1,4 +1,4 @@
-from ..constants import H_e_mass_ratio
+from ..constants import He_e_mass_ratio
 from ..atomic.cross_sections import charge_ex_react
 from .params import (
     time_elec_coll,
@@ -142,6 +142,10 @@ def Q_ie(Te, Ti, ne, mu, lnlambda, per_particle=True, *, rk=None):
 
     Q = 3 * (Te - Ti) / tau_e / (m_i/m_e)
 
+    ``m_i/m_e`` is the helium-4 atom to electron mass ratio
+    ``constants.He_e_mass_ratio``, so the expression above is literally what is
+    computed. The solver is helium-only.
+
     Parameters
     ----------
     Te : float or array
@@ -151,7 +155,9 @@ def Q_ie(Te, Ti, ne, mu, lnlambda, per_particle=True, *, rk=None):
     ne : float or array
         Electron density [cm⁻³].
     mu : float
-        Ion mass number.
+        Ion mass number. Accepted for signature uniformity with the other
+        ion-side functions in this module and NOT used: the mass ratio is
+        taken from ``He_e_mass_ratio`` directly.
     lnlambda : float or array
         Coulomb logarithm.
     per_particle : bool
@@ -163,7 +169,7 @@ def Q_ie(Te, Ti, ne, mu, lnlambda, per_particle=True, *, rk=None):
         Electron-to-ion energy transfer rate.
     """
     per_particle = _resolve_per_particle(per_particle, rk)
-    Q = 3 * (Te - Ti) / time_elec_coll(Te, ne, lnlambda) / H_e_mass_ratio / mu
+    Q = 3 * (Te - Ti) / time_elec_coll(Te, ne, lnlambda) / He_e_mass_ratio
     if per_particle:
         return Q
     else:
