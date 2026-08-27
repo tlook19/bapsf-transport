@@ -1,3 +1,10 @@
+# The ONE import in this otherwise pure-data module, and it is deliberate: the
+# He I ionization limit below is the SAME physical quantity as
+# ``constants.I_ion``, and this module carried its own 4-decimal spelling of it
+# until they were unified. Bound to a private alias so a data module that
+# everything imports ``from`` does not also re-export ``I_ion``.
+from ..constants import I_ion as _I_ION_EV
+
 # IAEA EXPRESSION 1, He I Electron Cooling Rate Coefficients
 aHeI = [0.6623e3, 0.9476e-1, 0.7456, -0.2592, 3.8098, 0.4026]
 
@@ -94,7 +101,8 @@ He_singlet_manifold = {
     },
 }
 
-# He I ionization limit [eV] and the per-series quantum defects implied by the
+# He I ionization limit [eV], taken FROM the canonical constant rather than
+# re-typed, and the per-series quantum defects implied by the
 # NIST n = 4 singlet levels above (E_n = E_lim - Ry/(n - delta)^2); used by the
 # Eq. (5) Rydberg-tail scaling. The P defect is negative (singlet nP sits
 # slightly above hydrogenic), consistent across n = 2/3/4 to < 0.0022. The
@@ -106,5 +114,5 @@ He_singlet_manifold = {
 # manifold above sit 1.9 and 6.6 cm^-1 off their NIST ASD levels. Neither has
 # been digit-proofed against the source, and no coefficient here is changed on
 # the strength of that gap.
-He_ionization_limit_eV = 24.5874
+He_ionization_limit_eV = _I_ION_EV
 He_singlet_quantum_defect = {"S": 0.142, "P": -0.012, "D": 0.002, "F": 0.000}

@@ -1,0 +1,632 @@
+{
+  "kind": "r3-semantic-constants-table",
+  "repository": "bapsf-transport",
+  "base_revision": "bc0a515154ac74bb499e9e266a04a1b8447cf25f",
+  "schema_note": "This is a SEMANTIC table, not a rename manifest. It deliberately does NOT validate under restructure/manifests/validate_manifest.py's rename-manifest schema and must not be fed to it: it carries no path mappings and asserts no file continuity. It records, per changed constant site, the old and new value, the analytic footprint prior, and what the pre-registered 4k-step A/B battery actually measured.",
+  "bit_exact": false,
+  "bit_exact_note": "FALSE BY DESIGN. This member is NUMERICS-MOVING: it changes the VALUE of physical constants the solver reads, so the production golden's trajectory is expected to move. No golden was run and no fixture under scripts/baselines/ was touched. The one recapture event belongs to R3-tip, not to this member.",
+  "golden_gate": {
+    "script": "scripts/baseline_sim1d.py",
+    "result": "NOT RUN -- deliberately. See bit_exact_note. Running --verify here would report a mismatch that is the member's intended effect, not a finding.",
+    "substitute_evidence": "scripts/r3_constfoot_4k.py, the pre-registered footprint A/B battery. TWO rounds are recorded: `battery_v1` (adaptive grid) which proved NON-RESOLVING and is retained as that finding, and `battery_v2` (--fixed-dt, matched grid) which resolves and is where the member's footprint verdicts are read from."
+  },
+  "gates_run": {
+    "smoke": {
+      "command": "PYTHONPATH=<worktree> python scripts/smoke_sim1d.py",
+      "exit_code": 0,
+      "tail": "sim1d smoke ok: cells=72, dz=10.65 cm, Vp_total=2.433052e+06 cm^3, Vm_total=1.793692e+07 cm^3",
+      "compiled_equivalence": "ran (not skipped): 5 cases ok at KERNEL_ID cython/_cathode_kernels_cy/tierA+csda, final state bit-identical on each. The .pyx was NOT edited by this member -- it already carried the full-precision values -- so this block is also the cross-check that moving the pure-path constants UP did not open a pure-vs-compiled gap."
+    },
+    "import_provenance": "cablp.__file__ = <worktree>/cablp/__init__.py, asserted in-process before every quoted result (worktree PYTHONPATH trap).",
+    "reference_corpus": {
+      "command": "PYTHONPATH=<worktree> python scripts/deposit_beam_reference.py --verify",
+      "verdict": "GREEN at the branch tip against the RE-CAPTURED fixture (0 differing, exit 0). Was RED at dd58acf against the pre-unification fixture, and GREEN at bc0a515.",
+      "status": "PASSING after the Tom-ratified re-capture.",
+      "note": "This gate was MISSED by the coder in the first pass and found by the reviewer. It is a committed gate that both I_ion-family rows reach outside the solver's explicit threading; the 4k footprint batteries could not see it because they exercise solver routes only. Full history in reference_corpus_gate."
+    }
+  },
+  "rows": [
+    {
+      "constant": "qe_cgs",
+      "file": "cablp/constants.py",
+      "anchor_kind": "module_level_assignment",
+      "anchor": "qe_cgs",
+      "old_value": "4.803e-10",
+      "new_value": "4.80320425e-10",
+      "rel_delta": 4.2524e-05,
+      "predicted_footprint": {
+        "direct": 4.3e-05,
+        "amplified_e4": 0.00017,
+        "note": "census called this THE LARGEST LEVER"
+      },
+      "measured_4k_footprint": "BIT-IDENTICAL on BOTH batteries (0.0 on every field and on t_end). battery_v2 is what settles it: against a 1e-12 noise floor the constant still moves nothing, so this is a dead constant, not a signal lost in noise.",
+      "consumers": "NONE. Imported by cablp/atomic/cross_sections.py:9 and never referenced; no other module in the package names qe_cgs. The prediction assumed a live e^4 channel that does not exist on this path.",
+      "notes": "Value unified UP to full CODATA, matching the spelling already carried by cablp/cathode/beam_deposition.py (_E4_CGS) and cablp/cathode/_cathode_kernels_cy.pyx, neither of which was touched. The change is correct as a unification and is inert as physics."
+    },
+    {
+      "constant": "m_e_cgs / m_e_SI",
+      "file": "cablp/constants.py",
+      "anchor_kind": "module_level_assignment",
+      "anchor": "m_e_cgs, m_e_SI",
+      "old_value": "9.1093837e-28 / 9.1093837e-31",
+      "new_value": "9.1093837015e-28 / 9.1093837015e-31",
+      "rel_delta": 1.6467e-10,
+      "predicted_footprint": {
+        "direct": 1.6e-10,
+        "amplified_sqrt_m": 8e-11
+      },
+      "measured_4k_footprint": "battery_v2 (matched grid, the readable one): max 3.45e-10 on M, 1.42e-11 on n, 1.99e-12 on Te. Against the ~8e-11 amplified prior that is x4.3 -- INSIDE the x10 rule, PASS. Resolved ~24x above the ulp floor on M. battery_v1's 1.7e-1 was instrument noise, not a footprint.",
+      "consumers": "m_e_cgs: cablp/atomic/cross_sections.py:964 (v_mean, electron thermal speed), cablp/solvers/_sim1d/physics/conduction.py:178 (v_the). m_e_SI: cablp/solvers/_sim1d/physics/tracer.py:535 (Spitzer sigma).",
+      "notes": "Full value already local in cablp/cathode/circuit.py (_me_cgs) and beam_deposition.py (_ME_CGS); this unifies constants.py UP to them."
+    },
+    {
+      "constant": "m_p_cgs / m_p_SI",
+      "file": "cablp/constants.py",
+      "anchor_kind": "module_level_assignment",
+      "anchor": "m_p_cgs, m_p_SI",
+      "old_value": "1.6726219e-24 / 1.6726219e-27",
+      "new_value": "1.67262192369e-24 / 1.67262192369e-27",
+      "rel_delta": 1.4163e-08,
+      "predicted_footprint": {
+        "direct": 1.4e-08,
+        "amplified": 7e-09
+      },
+      "measured_4k_footprint": "battery_v2: max 3.54e-08 on M, 4.71e-10 on n, 2.11e-10 on Te. Against the ~7e-9 amplified prior that is x5.1 -- INSIDE the x10 rule, PASS. The largest measured footprint of the member; M leads because M = m_i n u is directly proportional to the ion mass.",
+      "consumers": "m_p_cgs: cablp/solvers/_sim1d/physics/neutrals.py:19 (neutral thermal speed), cablp/solvers/_sim1d/solver.py:12139 (ion-mass base for c_s / ion thermal speed / nu_ie). m_p_SI: NO consumer in the package -- unified for consistency of the definition point, not for a live path.",
+      "notes": "CENSUS CORRECTION: the census listed constants.H_e_mass_ratio (consumed by cablp/plasma/heat.py:166) as an m_p consumer. It is NOT -- it is an INDEPENDENT truncated literal (1.8362e3) and is unaffected by this row. See census_omissions."
+    },
+    {
+      "constant": "He_ionization_limit_eV",
+      "file": "cablp/atomic/coefficients.py",
+      "anchor_kind": "module_level_assignment",
+      "anchor": "He_ionization_limit_eV",
+      "old_value": "24.5874",
+      "new_value": "_I_ION_EV (= constants.I_ion = 24.58738793623), imported rather than re-typed",
+      "rel_delta": 4.9065e-07,
+      "predicted_footprint": {
+        "direct": 4.9e-07,
+        "amplified_near_threshold": 4e-05,
+        "note": "I/Te Boltzmann factor ~82 at 0.3 eV"
+      },
+      "measured_4k_footprint": "battery_v2: max 4.08e-09 on M, 3.53e-10 on n, 1.25e-10 on Te -- FAR BELOW the 4.9e-7 direct prior (x0.008) and ~4 orders below the 4e-5 near-threshold prior. PASS (the rule fires only above x10). The amplified prior was attached to the wrong channel: this site feeds the n>=5 singlet EXCITATION tail's threshold energies, not an ionization rate.",
+      "consumers": "CORRECTED. cablp/atomic/cross_sections.py:252,257 (He_singlet_tail_levels -> E_th for the n>=5 Rydberg tail), reached from He_singlet_tail_cross and He_beam_excitation_channel. THAT CHANNEL CONTINUES INTO THE BEAM MARCH: cablp/cathode/beam_deposition.py imports it as He_beam_excitation_channel_lkup (beam_deposition.py:590) and consumes it at :2184 and :3386, so this constant reaches the Tier-A corpus INDEPENDENTLY of HE_I_ION_EV. Also cablp/cathode/circuit.py:39,604.",
+      "notes": "Bound by IMPORT to the canonical constant, per the ruling's stated preference, so the two spellings cannot drift apart again. coefficients.py previously had NO imports; the alias is private (_I_ION_EV) so this data module -- which callers import 'from' -- does not also re-export I_ion. Verified: coefficients.I_ion does not exist; He_ionization_limit_eV == constants.I_ion is True."
+    },
+    {
+      "constant": "HE_I_ION_EV",
+      "file": "cablp/cathode/beam_deposition.py",
+      "anchor_kind": "module_level_assignment",
+      "anchor": "HE_I_ION_EV",
+      "old_value": "24.587",
+      "new_value": "24.58738793623",
+      "rel_delta": 1.5778e-05,
+      "predicted_footprint": {
+        "solver_path": 0.0,
+        "note": "dormant -- every solver route passes I_ion_eV explicitly"
+      },
+      "measured_4k_footprint": "BIT-IDENTICAL on both batteries; assertion PASSED -- but SCOPED: the zero-footprint claim is true OF THE SOLVER PATH AT THE 4k HORIZON and is FALSE of the module generally. The 4k batteries exercise only solver routes, which pass I_ion_eV explicitly; they do not reach the beam march through the module default. scripts/deposit_beam_reference.py does reach it, and that gate went RED on this change -- see reference_corpus_gate. The original unscoped wording was the defect the reviewer bounced.",
+      "consumers": "CORRECTED (the original entry was solver-path only and understated this badly). SOLVER PATH: default of the I_ion_eV argument at cablp/cathode/beam_deposition.py:853 (he_mean_secondary_energy_eV), 1427 and 2798 -- bound at DEFINITION time, so it is the value every call that omits I_ion_eV actually uses. Dormant on solver routes, which all pass I_ion_eV explicitly. SCRIPT/GATE PATH, which is where it is LIVE: scripts/deposit_beam_reference.py:394 and :448 (the Tier-A corpus BUILDER and VERIFIER both -- the <W_sec> crossing bar is derived from it); scripts/verify_beam_deposition.py:35,108,149,151; scripts/tailion_estimate.py:55; scripts/smoke_sim1d.py:6331,14241.",
+      "notes": "Disarms a reproducibility trap rather than changing physics: a direct caller previously got 24.587 and could not reproduce a solver run bit for bit. The standing comment that described that divergence was updated in the same edit, since the change makes it false."
+    },
+    {
+      "constant": "qe (inline literal -> named constant)",
+      "file": "cablp/solvers/_sim1d/solver.py",
+      "anchor_kind": "statement",
+      "anchor": "Gamma_i = I_i_A / (qe_SI * area_cm2)",
+      "old_value": "1.602176634e-19 (inline literal)",
+      "new_value": "qe_SI (already imported at solver.py:223)",
+      "rel_delta": 0.0,
+      "predicted_footprint": {
+        "solver_path": 0.0,
+        "note": "PROVABLY bit-exact -- same float64"
+      },
+      "measured_4k_footprint": "BIT-IDENTICAL on BOTH batteries; assertion PASSED, against a 1e-12 floor in battery_v2.",
+      "equality_assertion": {
+        "expression": "1.602176634e-19 == cablp.constants.qe_SI",
+        "literal_repr": "1.602176634e-19",
+        "qe_SI_repr": "1.602176634e-19",
+        "result": true,
+        "note": "asserted in-process BEFORE the edit, per the ruling; qe_SI is the 2019 exact SI value, so this is a LABEL fix carrying no value change."
+      },
+      "consumers": "local to the cathode-surface coverage step (Gamma_i, the 0D ion flux density pairing).",
+      "notes": "Line number moved from the census's 5679 to 5741 under the R2 flatten; located by grep, and it is the ONLY bare qe literal in solver.py."
+    }
+  ],
+  "census_omissions": {
+    "note": "Divergent spellings of the SAME physical quantities found by grep across the package and DELIBERATELY NOT CHANGED -- outside this member's six ruled rows. Listed for the orchestrator to rule on, per the brief. Scope discipline: no edit was made to any of these.",
+    "findings": [
+      {
+        "site": "cablp/constants.py:33",
+        "entity": "H_e_mass_ratio",
+        "value": "1.8362e3",
+        "should_be": "m_p/m_e = 1836.1526734400013 (as cablp/cathode/circuit.py:54 already DERIVES it: _pemr = _mp_cgs / _me_cgs)",
+        "rel_delta": 2.5774850143627554e-05,
+        "consumers": "cablp/plasma/heat.py:166 -- the electron-ion energy exchange Q = 3(Te-Ti)/tau_e/H_e_mass_ratio/mu. LIVE on the solver path.",
+        "significance": "THE MOST SIGNIFICANT OMISSION. Its rel delta (2.6e-5) is LARGER than four of the six ruled rows, it is a live solver consumer, and the repo already carries the full-precision derivation of the same ratio a few files away. The census listed it as an m_p CONSUMER; it is in fact an independent truncated literal that the m_p row does not touch, so this member leaves the divergence in place."
+      },
+      {
+        "site": "cablp/atomic/adas.py:241",
+        "entity": "I_he",
+        "value": "24.587",
+        "should_be": "constants.I_ion = 24.58738793623",
+        "rel_delta": 1.5778e-05,
+        "consumers": "local to the adf11 power-coefficient conversion in adas.py.",
+        "significance": "A third spelling of the He ionization potential, in a module that already imports from constants (qe_SI at adas.py:25). Same class as the two I_ion rows this member did unify."
+      },
+      {
+        "site": "cablp/constants.py:9 vs cablp/constants.py:43",
+        "entity": "I_Ry vs Ry_eV",
+        "value": "13.6056931 (float) vs mp.mpf('13.605693122990')",
+        "should_be": "one value",
+        "rel_delta": 1.6897339081664075e-09,
+        "consumers": "I_Ry: cablp/solvers/_sim1d/solver.py:12139. Ry_eV: the mpmath section.",
+        "significance": "Same quantity carried at two precisions WITHIN constants.py, across the float/mpmath split."
+      },
+      {
+        "site": "cablp/constants.py:38",
+        "entity": "M_e_eV",
+        "value": "mp.mpf('510998.95069')",
+        "should_be": "510998.95000 if CODATA 2018 (the vintage the rest of this pass unifies to); 510998.95069 is the CODATA 2014 value",
+        "rel_delta": 1.3502963466186048e-09,
+        "consumers": "cablp/atomic/cross_sections.py (imported at line 5).",
+        "significance": "A VINTAGE mismatch rather than a truncation -- flagged, not corrected, because choosing a CODATA vintage for the mpmath section is a ruling, not a mechanical unification."
+      },
+      {
+        "site": "scripts/ (outside the package)",
+        "entity": "assorted",
+        "value": "compare_rates_adas.py:42 I_ION_HE=24.587; verify_sim1d_r3_boundary_startup.py:33 MI=4.0*1.6726e-24; probe_sim1d_r5_collector.py:43 mi=1.6726219e-24",
+        "should_be": "the canonical constants",
+        "rel_delta": null,
+        "consumers": "analysis/probe scripts only -- none is on the solver path.",
+        "significance": "Listed for completeness; script-side, no solver footprint."
+      }
+    ]
+  },
+  "battery_v1": {
+    "instrument": "scripts/r3_constfoot_4k.py",
+    "config": "the golden's own, via baseline_sim1d.build_baseline_config: default_config() + scripts/stances/g1atrim.toml minus its mesh-sized package + nx=60 + the pinned scalar fill nn0=2725059978765.871, with max_steps_action='stop' so the cap IS the run length.",
+    "horizon_steps": 4000,
+    "kernels": "pure (CABLP_COMPILED_KERNELS unset) on every arm",
+    "reference_final_time_s": 0.0004700000000000006,
+    "reference_note": "The reference arm ran 4000 accepted steps at a CONSTANT dt = 1.175e-7 s (4000 * 1.175e-7 = 4.7e-4 exactly). At t = 4.7e-4 s the run is deep inside pre-breakdown (tau_prebreakdown = 0.05 s); it never reaches breakdown within the horizon.",
+    "VERDICT": "THE INSTRUMENT DID NOT RESOLVE ANY SMOOTH FOOTPRINT. The pre-registered 1-ulp control -- a 2.2e-16 relative perturbation of m_p_cgs -- moved n by 1.74e-2 and M by 2.70e-1, i.e. the instrument's own noise floor is ~1e-2, between 2 and 8 orders of magnitude ABOVE every predicted footprint (largest predicted: 1.7e-4 on qe's e^4 channel). The mechanism is visible in t_end: a perturbation flips the adaptive-dt selector at a near-tie, the two runs leave the shared time grid, and after 4000 steps they are at DIFFERENT PHYSICAL TIMES (t_end moves by up to 1.4e-2 relative). A fixed-step-COUNT comparison under an adaptive dt therefore measures the time offset, not the constant's footprint.",
+    "VERDICT_PROOF": "Response is NOT monotone in perturbation size, which is what rules out reading these numbers as footprints at all. The ulp arm's perturbation is ~1e6 times SMALLER than the m_e arm's (2.2e-16 vs 1.6e-10) yet moved n MORE (1.74e-2 vs 1.09e-2); and the combined arm, which carries the LARGEST total perturbation of any arm, moved LEAST of all the moving arms (n 5.88e-3). Ranking the arms by perturbation size and by measured deviation gives uncorrelated orders.",
+    "DEFECT_RULE_DISPOSITION": "The pre-registered x10 rule is UN-ADJUDICABLE for the four smooth arms and NO defect flag is raised on them. Raising one would be a false finding: the rule compares a measured footprint against an analytic prior, and this battery did not measure a footprint. The rule IS adjudicated, and PASSES, on the two bit-exact rows, where chaos cannot hide a difference. No bar was widened and no arm was re-run to a different horizon.",
+    "WHAT_WOULD_RESOLVE_IT": "Reported, NOT built (out of this member's scope): a footprint instrument must hold the time grid fixed across arms -- a fixed-dt run, or a comparison at matched physical time rather than matched step count. Registering that is an orchestrator decision, not a coder's.",
+    "arms": [
+      {
+        "arm": "ref",
+        "perturbation_rel": 0.0,
+        "artifact": "r3const_ref.npz",
+        "final_time_s": 0.0004700000000000006,
+        "note": "the reference; all deviations below are against this"
+      },
+      {
+        "arm": "ULP-control (m_p_cgs +1 ulp via np.nextafter)",
+        "perturbation_rel": 2.1962045614251782e-16,
+        "artifact": "r3const_ulp.npz",
+        "final_time_s": 0.000465785926,
+        "t_end_rel": 0.0089661,
+        "max_rel": {
+          "n": 0.017365,
+          "nn": 0.014518,
+          "M": 0.26995,
+          "Ee": 0.021571,
+          "Ei": 0.039808,
+          "Te": 0.032309,
+          "Ti": 0.023068
+        },
+        "role": "PRE-REGISTERED CALIBRATION. This is the number that invalidated the battery's resolving power; it is the member's most consequential measurement."
+      },
+      {
+        "arm": "qe_cgs alone",
+        "perturbation_rel": 4.2524e-05,
+        "artifact": "r3const_qecgs.npz",
+        "final_time_s": 0.0004700000000000006,
+        "t_end_rel": 0.0,
+        "max_rel": {
+          "n": 0.0,
+          "nn": 0.0,
+          "M": 0.0,
+          "Ee": 0.0,
+          "Ei": 0.0,
+          "Te": 0.0,
+          "Ti": 0.0
+        },
+        "bit_identical": true,
+        "role": "CENSUS CORRECTION. Predicted THE LARGEST LEVER (4.3e-5 direct, 1.7e-4 on e^4); measured EXACTLY ZERO, on every field and on t_end. The static reason is that qe_cgs has NO live consumer: cablp/atomic/cross_sections.py imports it at line 9 and never references it again, and no other module in the package names it. The census's 'known consumer: cross_sections.py' is an UNUSED IMPORT."
+      },
+      {
+        "arm": "m_e alone (m_e_cgs + m_e_SI)",
+        "perturbation_rel": 1.6467e-10,
+        "artifact": "r3const_me.npz",
+        "final_time_s": 0.0004673332542,
+        "t_end_rel": 0.0056739,
+        "max_rel": {
+          "n": 0.010915,
+          "nn": 0.0090629,
+          "M": 0.17171,
+          "Ee": 0.02427,
+          "Ei": 0.024942,
+          "Te": 0.031574,
+          "Ti": 0.014348
+        },
+        "role": "at/below the ulp floor; un-adjudicable, see VERDICT"
+      },
+      {
+        "arm": "m_p alone (m_p_cgs + m_p_SI)",
+        "perturbation_rel": 1.4163e-08,
+        "artifact": "r3const_mp.npz",
+        "final_time_s": 0.0004637384465,
+        "t_end_rel": 0.013322,
+        "max_rel": {
+          "n": 0.025905,
+          "nn": 0.0216,
+          "M": 0.40088,
+          "Ee": 0.027782,
+          "Ei": 0.058586,
+          "Te": 0.032326,
+          "Ti": 0.033936
+        },
+        "role": "at/below the ulp floor; un-adjudicable, see VERDICT"
+      },
+      {
+        "arm": "I_ion coefficients-site alone",
+        "perturbation_rel": 4.9065e-07,
+        "artifact": "r3const_iion.npz",
+        "final_time_s": 0.0004632539149,
+        "t_end_rel": 0.014353,
+        "max_rel": {
+          "n": 0.027941,
+          "nn": 0.023429,
+          "M": 0.42956,
+          "Ee": 0.02913,
+          "Ei": 0.063219,
+          "Te": 0.032714,
+          "Ti": 0.03672
+        },
+        "role": "at/below the ulp floor; un-adjudicable, see VERDICT"
+      },
+      {
+        "arm": "HE_I_ION_EV alone",
+        "perturbation_rel": 1.5778e-05,
+        "artifact": "r3const_heiion.npz",
+        "final_time_s": 0.0004700000000000006,
+        "t_end_rel": 0.0,
+        "max_rel": {
+          "n": 0.0,
+          "nn": 0.0,
+          "M": 0.0,
+          "Ee": 0.0,
+          "Ei": 0.0,
+          "Te": 0.0,
+          "Ti": 0.0
+        },
+        "bit_identical": true,
+        "role": "ZERO-FOOTPRINT ASSERTION -- PASSED as predicted. Dormant on the solver path: every solver route passes I_ion_eV explicitly."
+      },
+      {
+        "arm": "solver qe label fix alone",
+        "perturbation_rel": 0.0,
+        "artifact": "r3const_qelabel.npz",
+        "final_time_s": 0.0004700000000000006,
+        "t_end_rel": 0.0,
+        "max_rel": {
+          "n": 0.0,
+          "nn": 0.0,
+          "M": 0.0,
+          "Ee": 0.0,
+          "Ei": 0.0,
+          "Te": 0.0,
+          "Ti": 0.0
+        },
+        "bit_identical": true,
+        "role": "ZERO-FOOTPRINT ASSERTION -- PASSED. Provably bit-exact: the replaced literal and the named constant are the SAME float64."
+      },
+      {
+        "arm": "combined (all six ruled changes = the commit)",
+        "perturbation_rel": null,
+        "artifact": "r3const_combined.npz",
+        "final_time_s": 0.0004685620127,
+        "t_end_rel": 0.0030595,
+        "max_rel": {
+          "n": 0.0058837,
+          "nn": 0.0049189,
+          "M": 0.095197,
+          "Ee": 0.027431,
+          "Ei": 0.013569,
+          "Te": 0.031504,
+          "Ti": 0.0077948
+        },
+        "role": "THE MEMBER'S F_const READOUT -- and it reads BELOW the ulp control on every field, so it is an upper bound set by instrument noise, not a measurement of the change. F_const is NOT MEASURED by this member."
+      }
+    ],
+    "instrument_status": "NON-RESOLVING, SUPERSEDED for footprint reading by battery_v2. The finding recorded here STANDS as a property of the adaptive-grid instrument and is why battery_v2 exists; it is retained unaltered, not withdrawn."
+  },
+  "battery_v2": {
+    "instrument": "scripts/r3_constfoot_4k.py --fixed-dt",
+    "status": "RESOLVING. This is the battery the member's footprint verdicts are read from.",
+    "registered_by": "orchestrator, BEFORE this re-run; same priors, same x10 rule, no bar changed",
+    "config": "identical to battery_v1 (the golden's own, via baseline_sim1d.build_baseline_config) except that dt is forced.",
+    "fixed_dt_s": 1.175e-07,
+    "fixed_dt_provenance": "the adaptive reference arm's OWN observed constant step: it ran all 4,000 steps at this dt (4000 * 1.175e-7 = 4.7e-4 s). The matched grid is therefore the grid the golden config chose for itself over this horizon, not a number invented for the instrument.",
+    "driver_side_only": "YES -- and this was the brief's STOP condition, so it was checked before running. LAPDSim1D.run() already takes dt and uses it verbatim: `step_dt = diag.dt if dt is None else float(dt)` with `step_cap = 'fixed_dt'` (cablp/solvers/_sim1d/solver.py:6582-6583). The adaptive limiter, the dt-growth ramp, the save-time snapping and the dt_min clamp are all gated on `dt is None` and go inert. NO solver code was edited for this mode.",
+    "horizon_steps": 4000,
+    "kernels": "pure (CABLP_COMPILED_KERNELS unset) on every arm",
+    "matched_grid_verification": {
+      "per_arm": "the capture REFUSES to write unless zero steps were rejected and final_time sits within 1e-9 relative of steps*dt. The rejection check is not a formality: a caller-supplied dt fixes the ATTEMPTED step, but a rejected attempt still retries at a shortened dt, and one retry anywhere would put that arm on its own grid.",
+      "cross_arm": "the SHARP test, enforced by --compare: every fixed-dt arm accumulates the same t from the same dt in the same order, so their end times must agree BIT FOR BIT. All nine arms report final_time = 0.0004700000000000171 exactly.",
+      "result": "MATCHED on every arm; zero rejected steps everywhere.",
+      "note": "final_time is NOT float-equal to 4000*1.175e-7 = 0.00047: the loop accumulates t += dt 4,000 times, which drifts ~3.6e-14 relative (a few hundred ulp). That is arithmetic, not a grid difference, and it is identical across arms -- which is exactly why the cross-arm bit-identity test is the sharp one and the absolute test is only a coarse guard."
+    },
+    "VERDICT": "THE INSTRUMENT RESOLVES. Forcing the grid drops the noise floor by TEN ORDERS OF MAGNITUDE: the same 1-ulp control that moved n by 1.74e-2 on the adaptive grid moves it by 1.28e-12 here (M: 2.70e-1 -> 1.42e-11). Dose-response is now monotone and linear -- m_e and m_p, whose perturbations differ by a factor of 86, both show an output/input gain of ~2.1-2.5 on M (1.65e-10 -> 3.45e-10 and 1.42e-08 -> 3.54e-08). The ulp arm sits far ABOVE its own linear prediction (2.2e-16 * 2.2 = 5e-16, measured 1.4e-11), which identifies it as what a control is supposed to identify: the accumulated round-off floor of 4,000 steps, not signal. Every ruled constant is either bit-identical or resolved above that floor.",
+    "DEFECT_RULE_DISPOSITION": "ADJUDICATED ON EVERY ROW, NO FLAG RAISED. The two bit-exact rows and qe_cgs are bit-identical. m_e measures x4.3 its amplified prior and m_p x5.1 -- both inside the x10 rule. I_ion measures FAR BELOW its prior (x0.008 of the direct prior), and the rule fires only on moving MORE than x10, so it passes. No bar was widened, no arm re-run to a different horizon, no rate/floor/baseline touched.",
+    "HORIZON_LIMITATION": "4.7e-4 s is deep in PRE-BREAKDOWN (tau_prebreakdown = 0.05 s); the run never reaches breakdown or the discharge plateau within this horizon. So the low-Te end of the I_ion near-threshold prior IS probed, but DISCHARGE-PHASE amplification is NOT: any constant whose footprint grows once the avalanche and the cathode coupling are live would not show it here. The horizon was NOT extended to chase that -- it is stated as a bound on what these verdicts cover.",
+    "arms": [
+      {
+        "arm": "ref (fixed-dt)",
+        "perturbation_rel": 0.0,
+        "artifact": "r3const_v2_ref.npz",
+        "final_time_s": 0.0004700000000000171,
+        "note": "the reference; all deviations below are against this"
+      },
+      {
+        "arm": "ULP-control (m_p_cgs +1 ulp via np.nextafter)",
+        "perturbation_rel": 2.1962045614251782e-16,
+        "artifact": "r3const_v2_ulp.npz",
+        "final_time_s": 0.0004700000000000171,
+        "max_rel": {
+          "n": 1.275193755089423e-12,
+          "nn": 7.613269367393234e-13,
+          "M": 1.4164332104953764e-11,
+          "Ee": 1.0329873425084888e-12,
+          "Ei": 2.8082860847848605e-12,
+          "Te": 5.000195245114952e-13,
+          "Ti": 1.6690965463383231e-12
+        },
+        "role": "PRE-REGISTERED CALIBRATION, re-established on the matched grid. Establishes the round-off floor at ~1e-12 (n) / ~1.4e-11 (M). Every resolved arm below is read against THIS."
+      },
+      {
+        "arm": "qe_cgs alone",
+        "perturbation_rel": 4.2524e-05,
+        "artifact": "r3const_v2_qecgs.npz",
+        "final_time_s": 0.0004700000000000171,
+        "max_rel": {
+          "n": 0.0,
+          "nn": 0.0,
+          "M": 0.0,
+          "Ee": 0.0,
+          "Ei": 0.0,
+          "Te": 0.0,
+          "Ti": 0.0
+        },
+        "bit_identical": true,
+        "verdict": "PASS -- bit-identical",
+        "role": "CENSUS CORRECTION CONFIRMED ON A RESOLVING INSTRUMENT. v1 could have been dismissed as chaos washing out a small signal; here the floor is 1e-12 and qe_cgs still moves NOTHING, which settles it: the constant has no live consumer (unused import at cablp/atomic/cross_sections.py:9)."
+      },
+      {
+        "arm": "m_e alone (m_e_cgs + m_e_SI)",
+        "perturbation_rel": 1.6467e-10,
+        "artifact": "r3const_v2_me.npz",
+        "final_time_s": 0.0004700000000000171,
+        "max_rel": {
+          "n": 1.423900319839387e-11,
+          "nn": 1.9058267818304232e-11,
+          "M": 3.4523511429003677e-10,
+          "Ee": 1.5047270016825878e-11,
+          "Ei": 4.156399167670401e-11,
+          "Te": 1.9861371801838167e-12,
+          "Ti": 3.0459412434291206e-11
+        },
+        "prior_direct": 1.6e-10,
+        "prior_amplified": 8e-11,
+        "measured_max": 3.4524e-10,
+        "ratio_to_amplified_prior": 4.3,
+        "ratio_to_direct_prior": 2.2,
+        "verdict": "PASS -- x4.3 the amplified prior, inside x10",
+        "role": "RESOLVED: ~24x above the ulp floor on M, ~11x on n."
+      },
+      {
+        "arm": "m_p alone (m_p_cgs + m_p_SI)",
+        "perturbation_rel": 1.4163e-08,
+        "artifact": "r3const_v2_mp.npz",
+        "final_time_s": 0.0004700000000000171,
+        "max_rel": {
+          "n": 4.71057703961584e-10,
+          "nn": 1.5658750050316584e-09,
+          "M": 3.537687900033823e-08,
+          "Ee": 6.024181724484409e-10,
+          "Ei": 9.099421147816394e-10,
+          "Te": 2.1132268051161847e-10,
+          "Ti": 6.540204902127127e-10
+        },
+        "prior_direct": 1.4e-08,
+        "prior_amplified": 7e-09,
+        "measured_max": 3.5377e-08,
+        "ratio_to_amplified_prior": 5.1,
+        "ratio_to_direct_prior": 2.5,
+        "verdict": "PASS -- x5.1 the amplified prior, inside x10",
+        "role": "RESOLVED, and the largest measured footprint of the member. M is the field that moves most, as it must: M = m_i n u is directly proportional to the ion mass."
+      },
+      {
+        "arm": "I_ion coefficients-site alone",
+        "perturbation_rel": 4.9065e-07,
+        "artifact": "r3const_v2_iion.npz",
+        "final_time_s": 0.0004700000000000171,
+        "max_rel": {
+          "n": 3.533250270717679e-10,
+          "nn": 4.609648312355277e-11,
+          "M": 4.083142293799744e-09,
+          "Ee": 2.3238148771610855e-10,
+          "Ei": 2.70007310713617e-10,
+          "Te": 1.245622582067207e-10,
+          "Ti": 1.8625881679067214e-10
+        },
+        "prior_direct": 4.9e-07,
+        "prior_amplified_near_threshold": 4e-05,
+        "measured_max": 4.0831e-09,
+        "ratio_to_direct_prior": 0.0083,
+        "verdict": "PASS -- moves far LESS than predicted; the rule fires only above x10",
+        "role": "PRIOR OVER-PREDICTED BY ~4 ORDERS. The near-threshold I/Te Boltzmann amplification argument belongs to an IONIZATION rate, but this site does not feed one: He_ionization_limit_eV is consumed only as the series limit E_th for the n>=5 singlet EXCITATION tail (cablp/atomic/cross_sections.py:252,257). The ADAS ionization coefficients never read it. The prior was attached to the wrong channel -- reported as a prior correction, with nothing adjusted to fit."
+      },
+      {
+        "arm": "HE_I_ION_EV alone",
+        "perturbation_rel": 1.5778e-05,
+        "artifact": "r3const_v2_heiion.npz",
+        "final_time_s": 0.0004700000000000171,
+        "max_rel": {
+          "n": 0.0,
+          "nn": 0.0,
+          "M": 0.0,
+          "Ee": 0.0,
+          "Ei": 0.0,
+          "Te": 0.0,
+          "Ti": 0.0
+        },
+        "bit_identical": true,
+        "verdict": "PASS -- bit-identical",
+        "role": "ZERO-FOOTPRINT ASSERTION, now against a 1e-12 floor rather than a 1e-2 one. Dormant on the solver path: every solver route passes I_ion_eV explicitly."
+      },
+      {
+        "arm": "solver qe label fix alone",
+        "perturbation_rel": 0.0,
+        "artifact": "r3const_v2_qelabel.npz",
+        "final_time_s": 0.0004700000000000171,
+        "max_rel": {
+          "n": 0.0,
+          "nn": 0.0,
+          "M": 0.0,
+          "Ee": 0.0,
+          "Ei": 0.0,
+          "Te": 0.0,
+          "Ti": 0.0
+        },
+        "bit_identical": true,
+        "verdict": "PASS -- bit-identical",
+        "role": "ZERO-FOOTPRINT ASSERTION. Provably bit-exact: the replaced literal and the named constant are the SAME float64."
+      },
+      {
+        "arm": "combined (all six ruled changes = the commit)",
+        "perturbation_rel": null,
+        "artifact": "r3const_v2_combined.npz",
+        "final_time_s": 0.0004700000000000171,
+        "max_rel": {
+          "n": 3.722966743119098e-10,
+          "nn": 1.5614714606092668e-09,
+          "M": 3.0948113293602153e-08,
+          "Ee": 4.422639610578197e-10,
+          "Ei": 8.420035012384507e-10,
+          "Te": 1.8246870754987837e-10,
+          "Ti": 6.772756317033074e-10
+        },
+        "verdict": "PASS",
+        "role": "THE MEMBER'S F_const, NOW ACTUALLY MEASURED: max 3.09e-08 on M, 3.72e-10 on n, 1.82e-10 on Te, at t = 4.7e-4 s. It sits just below the m_p arm, which is the expected composition -- m_p dominates, I_ion adds a little, and the other four rows contribute nothing (three are bit-identical and qe_cgs is inert)."
+      }
+    ]
+  },
+  "reference_corpus_gate": {
+    "gate": "scripts/deposit_beam_reference.py --verify",
+    "fixture": "scripts/data/deposit_beam_reference.npz (506 entries, format deposit-beam-reference-v1, reference path pure)",
+    "finding": "UNDISCLOSED COMMITTED-GATE REGRESSION, found at review, not by the coder. The gate is GREEN at bc0a515 and RED at dd58acf: 95,781 of 206,218 compared values differ across 496 diagnostic fields. Both I_ion-family rows of this member reach the beam march OUTSIDE the solver's explicit I_ion_eV threading, which is why the 4k footprint batteries -- which exercise solver routes only -- reported bit-identity for both.",
+    "gate_script_unchanged": "VERIFIED: git diff bc0a515 dd58acf -- scripts/deposit_beam_reference.py scripts/data/deposit_beam_reference.npz is EMPTY. Neither the gate nor the fixture was touched by this member, so the whole delta is the constants.",
+    "reproduction": {
+      "interpreter": "~/miniforge3/envs/fenicsx-env/bin/python, pure path (the builder and verifier REFUSE under CABLP_COMPILED_KERNELS=1 by design)",
+      "cablp_file_both_sides": "/home/trloo/bapsf/bapsf-transport/.claude/worktrees/agent-ac59624a52da3cabb/cablp/__init__.py -- asserted in-process on BOTH arms, so neither transcript came from the main checkout",
+      "green_at": "bc0a515 (HE_I_ION_EV = 24.587, He_ionization_limit_eV = 24.5874), exit 0",
+      "green_transcript": "fixture deposit_beam_reference.npz: 506 entries, format deposit-beam-reference-v1, reference path pure\ncompared 206218 values across 7590 result fields: 0 differing\nrecorded conservation closure: max 9.319892e-16 over 506 entries; tail bank max 5.188161e-16 over 268\nVERIFY OK -- the live pure implementation is bit-identical to the reference corpus, and its closure and substep/leg counts reproduce.",
+      "red_at": "dd58acf (both = 24.58738793623), exit 1",
+      "red_transcript": "fixture deposit_beam_reference.npz: 506 entries, format deposit-beam-reference-v1, reference path pure\ncompared 206218 values across 7590 result fields: 95781 differing\nrecorded conservation closure: max 9.319892e-16 over 506 entries; tail bank max 5.188161e-16 over 268\n[496 diagnostic field mismatch lines and 483 closure lines elided; transcript ends:]\n    ... and 476 more\nVERIFY FAILED -- the live implementation does not reproduce the reference corpus."
+    },
+    "live_paths": [
+      {
+        "path": "(a) HE_I_ION_EV as a BOUND DEFAULT",
+        "mechanism": "beam_deposition.py:853 declares `I_ion_eV: float = HE_I_ION_EV` (also :1427, :2798). A default argument is bound at DEFINITION time, so every call that omits I_ion_eV uses it, and the corpus replays most entries on the module default rather than threading a value. Confirmed in-process: monkeypatching the module global after import does NOT change it, which is exactly what makes this a definition-time binding rather than a lookup.",
+        "consequence": "the <W_sec> crossing bar, which scripts/deposit_beam_reference.py:392 derives by bisecting he_mean_secondary_energy_eV on that default, moves."
+      },
+      {
+        "path": "(b) He_ionization_limit_eV through the excitation channel",
+        "mechanism": "cross_sections.He_singlet_tail_levels function-level-imports it (cross_sections.py:252) as the series limit for the n>=5 singlet tail; He_beam_excitation_channel sums that tail; beam_deposition imports the channel as He_beam_excitation_channel_lkup (beam_deposition.py:590) and consumes it at :2184 and :3386.",
+        "independence_verified": "YES, in-process and by the reviewer's single revert. Holding HE_I_ION_EV at its NEW value and changing ONLY coefficients.He_ionization_limit_eV still moves the channel: sigma_tot(60 eV) 1.6772437267029645e-17 -> 1.677243770375354e-17, E_rad_mean(60 eV) 21.95058616643196 -> 21.950584971512203 (same direction at 120 and 180 eV). So the two paths are independently live and neither explains the other."
+      }
+    ],
+    "wsec_bar_move": {
+      "derived_from": "HE_I_ION_EV, via he_mean_secondary_energy_eV's bound default",
+      "old_bar_eV": 221.40626034301195,
+      "new_bar_eV": 221.40664827924198,
+      "old_bar_2x_eV": 442.8125206860239,
+      "new_bar_2x_eV": 442.81329655848396,
+      "relative_move": 1.7521435469159038e-06,
+      "ulp_spacing_at_bar": 2.842170943040401e-14,
+      "move_in_ulp": 13649292664.0,
+      "why_it_flips_the_straddles": "the straddle triple is nextafter-spaced around the bar -- below/at/above are +-1 ulp apart. A bar that moves ~1.4e10 ulp relocates it ten orders beyond that spacing, so all three entries that bracketed the OLD bar now sit on ONE side of the NEW bar.",
+      "verified_by": "recomputed in-process with the builder's own bisection (scripts/deposit_beam_reference.py:392), threading each constant spelling explicitly; reproduces the reviewer's figures exactly."
+    },
+    "flipped_straddle_entries": {
+      "count": 4,
+      "entries": "the four straddle_*_wsec_bar_* corpus entries (below_wsec_bar / at_wsec_bar / above_wsec_bar, both walk directions)",
+      "field": "tail_above_bar_power_erg_s",
+      "effect": "100% of the field flips -- these are branch-selection flips, not arithmetic drift"
+    },
+    "benign_class": "the eii_edge straddles move only in the last digit (ULP class), which is ordinary round-off and not a branch flip.",
+    "magnitude_census_source": "Reviewer's census (same-inputs recompute): median 1.858e-05, p90 4.766e-04, max 1.0, 11 entries <= 1e-15. The coder's independent old-fixture-vs-new-fixture census is in recapture_event.old_vs_new_census, with the reason the medians differ stated there.",
+    "DISPOSITION": {
+      "corpus_status": "RESOLVED BY RE-CAPTURE. The fixture at the branch tip was rebuilt with the committed builder at unified constants and --verify is GREEN (0 differing). The pre-unification fixture stays reproducible at tag r2-tip-2026-08-27.",
+      "recapture_ruling": "RATIFIED by Tom, 2026-08-27 (session 39): full re-capture of the Tier-A reference corpus at unified constants, ON THIS BRANCH. The old fixture stays reproducible at tag r2-tip-2026-08-27; history is untouched. Executed in the commit that follows this one -- see recapture_event.",
+      "tier_a_sub_event_2": "Score against the RE-CAPTURED corpus (sha256 e70396e5...), not the pre-unification one. The R1 <=1e-9 energy-weighted branch-flip bar is ARMED for sub-event 2 against this new corpus.",
+      "flip_census_bar": "The R1 contract's <=1e-9 energy-weighted branch-flip bar is ruled INAPPLICABLE to this constants member -- Tom-ratified 2026-08-27, session 39. The threshold itself moved BY RULING, so the straddle flips are intended semantics, not infidelity. The bar stays ARMED for sub-event 2 against the re-captured corpus.",
+      "not_touched": "SUPERSEDED: scripts/data/deposit_beam_reference.npz WAS re-captured in the following commit, under Tom's ratified ruling. It was untouched at the disclosure commit."
+    },
+    "recapture_event": {
+      "ruling": "Tom-ratified 2026-08-27, session 39: full re-capture of the Tier-A reference corpus at unified constants, ON THIS BRANCH.",
+      "executed": "YES, in commit '[r3-constants] Tier-A corpus re-capture at unified constants (Tom-ratified)'.",
+      "old_fixture": {
+        "sha256": "77b010e12f39682ff19b27820c51403eb76a33e536c471dc6ff7d691c9b8aaf2",
+        "entries": 506,
+        "constants": "HE_I_ION_EV = 24.587, He_ionization_limit_eV = 24.5874",
+        "still_reproducible_at": "tag r2-tip-2026-08-27 -- history untouched, nothing rewritten; the old fixture is recoverable there."
+      },
+      "new_fixture": {
+        "sha256": "e70396e525aade66eb8a4e965b40a697a82dc42143ca5e8da16136af7bbe2e3d",
+        "entries": 506,
+        "constants": "HE_I_ION_EV = He_ionization_limit_eV = 24.58738793623",
+        "format": "deposit-beam-reference-v1, reference path pure (unchanged)"
+      },
+      "procedure": {
+        "builder": "the COMMITTED builder at the branch tip, unmodified: scripts/deposit_beam_reference.py",
+        "step_1_capture": "--capture --output scripts/deposit_beam_corpus_raw.npz, run with CABLP_COMPILED_KERNELS=1 (KERNEL_ID cython/_cathode_kernels_cy/tierA+csda). The module docstring explicitly permits this for --capture: it records the solver's ARGUMENTS and the compiled march is bit-exact against pure, so the sampled trajectory is the same one. Exit 0.",
+        "step_2_build": "--build --captured scripts/deposit_beam_corpus_raw.npz, on the PURE path (KERNEL_ID pure). --build and --verify REFUSE the compiled opt-in by design, because the pure path is the reference implementation and a fixture captured through a kernel would pin the kernel. Exit 0; 506 entries written.",
+        "step_3_verify": "--verify on the pure path at the tip: GREEN."
+      },
+      "verify_transcript_at_tip": "cablp.__file__ = /home/trloo/bapsf/bapsf-transport/.claude/worktrees/agent-ac59624a52da3cabb/cablp/__init__.py\nKERNEL_ID = pure\nfixture deposit_beam_reference.npz: 506 entries, format deposit-beam-reference-v1, reference path pure\ncompared 206218 values across 7590 result fields: 0 differing\nrecorded conservation closure: max 6.095224e-16 over 506 entries; tail bank max 3.891121e-16 over 268\nVERIFY OK -- the live pure implementation is bit-identical to the reference corpus, and its closure and substep/leg counts reproduce.",
+      "straddle_regeneration_verified": {
+        "claim": "the builder derives the <W_sec> bar from the LIVE HE_I_ION_EV, so the straddle triple regenerates around the NEW bar by construction. CHECKED in the built fixture rather than assumed.",
+        "entries": "e0393-e0398, the six straddle_*_wsec_bar_* entries (below/at/above x two walk directions)",
+        "at_bar_entry_old": "tail_energy_eV = 221.40626034301195, E0_eV = 442.8125206860239",
+        "at_bar_entry_new": "tail_energy_eV = 221.40664827924198, E0_eV = 442.81329655848396",
+        "structure_preserved": "YES -- below/at/above still sit at -1 ulp / 0 / +1 ulp (-2.8422e-14, 0, +2.8422e-14) about the NEW bar, exactly as they did about the OLD one. The triple moved WITH the bar and kept its nextafter spacing."
+      },
+      "old_vs_new_census": {
+        "scope": "PER-ENTRY over all 506 entries: for each entry, the max relative deviation of any output field, old fixture vs new fixture.",
+        "median": 2.448302e-05,
+        "p90": 0.0004765805,
+        "max": 1.0,
+        "entries_at_or_below_1e-15": 11,
+        "measured_by": "the coder, old-fixture-vs-new-fixture, both in hand at the recapture.",
+        "relation_to_the_reviewer_census": "p90 (4.766e-04), max (1.0) and the count of entries <= 1e-15 (11) REPRODUCE the reviewer's figures. The median differs (2.448e-05 here vs the reviewer's 1.858e-05) and the difference is expected, not a discrepancy: the reviewer compared recorded outputs against a live recompute on the SAME recorded inputs, whereas this is old fixture vs new fixture, where the REAL entries' captured input tuples also moved (the capture run's trajectory shifted with the constants). Two different deltas; both are stated rather than one being presented as the other."
+      },
+      "tier_a_closure_bars": {
+        "why_restated": "the verifier measures the implementation's OWN conservation closure, and the shipped bars were 4x the OLD-constants closure. With the corpus re-captured they are stale.",
+        "old_measured_closure": "per-ray max 9.319892e-16; tail-bank max 5.188161e-16",
+        "old_bars": "per-ray 3.727957e-15; tail-bank 2.075264e-15 (= 4x the old measured)",
+        "new_measured_closure": "per-ray max 6.095224e-16 (median 1.702320e-16); tail-bank max 3.891121e-16 (median 1.267249e-16), over 506 entries / 268 walked, as reported by --build and reproduced by --verify",
+        "PROPOSED_new_bars": {
+          "per_ray": 2.43809e-15,
+          "tail_bank": 1.556448e-15,
+          "rule": "~4x the measured closure, the same rule that set the old pair"
+        },
+        "STATUS": "PROPOSED, NOT ADOPTED. The new bar VALUES await Tom's ratification at review. Nothing in the repo was changed to these numbers by this member -- they are recorded here as a proposal only.",
+        "note": "the closure IMPROVED slightly under unified constants (per-ray max 9.32e-16 -> 6.10e-16), so the proposed bars are TIGHTER than the shipped pair, not looser. No bar was widened."
+      }
+    }
+  }
+}
