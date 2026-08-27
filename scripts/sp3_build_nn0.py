@@ -22,7 +22,16 @@ THE CONSTRUCTION (leg 3a of the sp campaign):
   - the uniform ``resolve_nn0`` value for the stance config (the default).
     Retained for stances that do not start from an equilibrated seed
     (the SS/G-class conducting stances), where there is no reference frame to
-    read and the shipped convention is the honest base.
+    read and the configured scalar is the honest base.
+
+    That value is now the configured ``nn0`` and nothing else. It used to
+    have a fallback -- a ``None`` was resolved from a frozen gas-puff lookup
+    table -- and the table is RETIRED, so a stance that leaves ``nn0 = None``
+    (which is what a stance arming the per-cell ``nn0_profile`` does) is
+    REFUSED here with a ValueError naming what ``nn0`` accepts, rather than
+    being handed an interpolation on a superseded sccm convention. Such a
+    stance has a per-cell profile to read and should be given one through
+    ``--base-from-h5``.
 
   The two are mutually exclusive: passing ``--base-from-h5`` replaces the
   uniform base entirely, and the ledger records which was used.
@@ -382,7 +391,7 @@ def build(args):
     V_col_all, V_ann_all = neutral_zone_volumes(geometry)
     if args.base_from_h5 is None:
         base_col_profile, base_ann_profile = None, None
-        base_scalar = float(resolve_nn0(params, flags))
+        base_scalar = float(resolve_nn0(params))
         base_col = np.full(cells, base_scalar)
         base_ann = np.full(cells, base_scalar) if args.two_zone else None
         base_source = "resolve_nn0 at the stance config (shipped convention)"

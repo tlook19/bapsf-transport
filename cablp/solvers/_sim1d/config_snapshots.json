@@ -6,7 +6,7 @@
     },
     "production_golden": {
       "Te_birth_ionization": "local",
-      "sha256": "a0f296c73e5d74b54688233a324689fc57870a4a8a757976b60a07092ad0bd59"
+      "sha256": "21409d1a934823ef8e03f3f4f744816b9791a4d7128cf9f04ada160cd8fe4dca"
     },
     "run_m6_point_es1_sgp3649_defaults": {
       "Te_birth_ionization": "local",

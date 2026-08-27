@@ -6401,7 +6401,7 @@ class LAPDSim1D:
                 "NO equilibration happens: only start_simulation() runs the "
                 "puff/off accumulation and seeds nn from it. This run starts "
                 "from the direct nn0 fill "
-                f"({resolve_nn0(self._input_dict, self._flags):.3g} cm^-3) "
+                f"({resolve_nn0(self._input_dict):.3g} cm^-3) "
                 "instead of an equilibrated profile. Call start_simulation() "
                 "for the equilibrated result, or clear the flag to silence "
                 "this.",
@@ -6888,9 +6888,11 @@ class LAPDSim1D:
         # The equilibration OWNS its neutral start; it must not inherit the
         # outer run's nn0. nn0 is the direct-run fill (a realistic pre-shot
         # background), whereas this inner sim accumulates the fill from
-        # near-vacuum over `cycles` puff/off cycles -- exactly what the
-        # cablp/vars/_nn_table.py generator did, at nn0_init = 1e8. Pinning it
-        # here decouples the two paths, so the direct-run default can move
+        # near-vacuum over `cycles` puff/off cycles. The 1e8 is inherited from
+        # the generator of the frozen gas-puff nn0 table (retired 2026-08-27),
+        # which accumulated its equilibrated values the same way from the same
+        # start. Pinning it here decouples the two paths, so the direct-run
+        # default can move
         # without perturbing any equilibrated run. (The 100-cycle accumulation
         # forgets its start entirely: pumping decays the initial inventory
         # below the last bit of the equilibrated nn, so 1e8 and the former
@@ -12093,7 +12095,7 @@ class LAPDSim1D:
         cells = self._geometry.cells
         n0 = np.full(cells, float(self._input_dict["ne0"]))
         nn0 = (
-            np.full(cells, float(resolve_nn0(self._input_dict, self._flags)))
+            np.full(cells, float(resolve_nn0(self._input_dict)))
             if self._nn0_profile is None
             else self._nn0_profile.copy()
         )

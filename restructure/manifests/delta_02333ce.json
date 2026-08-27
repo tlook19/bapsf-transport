@@ -1,0 +1,132 @@
+{
+  "manifest_kind": "delta",
+  "repository": "bapsf-transport",
+  "base_revision": "e6a1b75dd11d045729640b67fb671afcd6cf1252",
+  "new_revision": "02333cef6cc61d3f033d94990a868c81ff70ea49",
+  "bit_exact": true,
+  "golden_gate": {
+    "script": "scripts/baseline_sim1d.py",
+    "result": "baseline verify OK: saves=2620, exact=True, max_rel=0.000e+00, max_abs=0.000e+00, time_max_abs=0.000e+00 s (rtol=1.0e-09, atol=0.0e+00) [CABLP_COMPILED_KERNELS=1, KERNEL_ID cython/_cathode_kernels_cy/tierA+csda probed in-process before the run; the script itself prints no kernel suffix]",
+    "saves": 2620,
+    "revision": "02333cef6cc61d3f033d94990a868c81ff70ea49",
+    "revision_note": "TWO compiled goldens back this delta, one per commit in the range, because the range contains two commits that had to be gated separately. At the PIN (2d1234de948340263429a5869f0c8966d09073e3): exact=True, saves=2620 -- the pin names a value the gate was already using, and the constructed initial state was proved bit-identical across it (0 differing raw uint64 over 1152 initial-state values). At the RETIREMENT (02333ce, this manifest's new_revision, quoted in `result` above): exact=True, saves=2620 -- which is only possible BECAUSE the pin landed first; before it, deleting the table made the golden config unconstructible. Both ran in the coder's worktree against the extension built from this tree; the .pyx is untouched by both commits and KERNEL_ID was identical either side. The pure 4k digest gate also ran at the pin: trajectory digest 3f2424e3b9f6954a736c84041c2737fb2624778043b1fab028c725ed1cc4991f UNCHANGED with all 5 checkpoints unchanged, config identity rotated -- see the two rotation rows below. Smoke EXIT=0 at both commits with all five compiled-kernel-equivalence blocks RUN."
+  },
+  "mappings": [
+    {
+      "change_kind": "delete",
+      "old": {
+        "path": "cablp/vars/_nn_table.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.vars._nn_table"
+      },
+      "new": null,
+      "proposed_continuity": "retired_no_successor",
+      "group_id": null,
+      "deletion_reason": "RULED at R0.4 (RENAME_MAP.md section 3.6), executed under Tom's option (a) ruling (log 26fr). Frozen and ungenerable in-tree: its generator drove the 0D _sim3 solver, removed 2026-08-03. Its keys are pre-2026-08-21 0 C-sccm while S_gp has meant meter-sccm since, so every lookup was off by the ~7% conversion ratio and could not be converted without inventing an interpolation of data that was never computed. No successor: the fallback it served is replaced by a refusal, not by another lookup.",
+      "replacement": null,
+      "notes": "THE MAP'S PREMISE FOR THIS ROW WAS FALSE AND THE ROW IS ANNOTATED IN PLACE. R0.4 justified the retirement partly with 'production short-circuits it' and 'one consumer'. Both are wrong at the base revision. The GOLDEN reached the table: scripts/stances/g1atrim.toml pins nn0 = null because it arms neutral_initial_profile with a per-cell foot, and baseline_sim1d.py's nx=60 re-cut drops that mesh-sized package and clears the flag WITHOUT restoring a scalar, so resolve_nn0 fell through and the gate's uniform neutral fill was lookup_nn0(9010.0, twin=False) = 2725059978765.871 cm^-3 -- verified as the constructed initial nn over all 72 cells. scripts/sp3_build_nn0.py:385 is a second consumer, named nowhere in the map. This is why the retirement ran in TWO commits: the value was pinned as an explicit literal in the golden builder FIRST (see the baseline_sim1d.py row), and only then was the table deleted. Deleting it alone made the golden unconstructible, which was reported as a blocker rather than worked around."
+    },
+    {
+      "change_kind": "delete",
+      "old": {
+        "path": "cablp/vars/nn_table.csv",
+        "anchor_kind": "data_file",
+        "symbol": "cablp/vars/nn_table.csv"
+      },
+      "new": null,
+      "proposed_continuity": "retired_no_successor",
+      "group_id": null,
+      "deletion_reason": "The data half of the same R0.4 retirement: the 25-row table cablp.vars._nn_table loaded at import. It has no other reader, and no successor table -- the one value any shipped configuration ever took from it is now a literal in the golden builder.",
+      "replacement": null,
+      "notes": "These two paths were ALL that survived the carve under cablp/vars/ -- deliberately, since the carve's own manifest recorded the remnant as reachable by direct import and noted it would disappear at the retirement commit. It does: cablp/vars/ is now empty and the DIRECTORY IS REMOVED. Nothing is left pointing at it. The carve had already dropped 'vars' from cablp/__init__.py's submodules list, and .gitignore carries no vars pattern."
+    },
+    {
+      "change_kind": "signature_change",
+      "old": {
+        "path": "cablp/solvers/_sim1d/core/config.py",
+        "anchor_kind": "function",
+        "symbol": "cablp.solvers._sim1d.core.config.resolve_nn0",
+        "signature": "resolve_nn0(input_dict, input_flags)"
+      },
+      "new": {
+        "path": "cablp/solvers/_sim1d/core/config.py",
+        "anchor_kind": "function",
+        "symbol": "cablp.solvers._sim1d.core.config.resolve_nn0",
+        "signature": "resolve_nn0(input_dict)"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "``input_flags`` existed for exactly one purpose -- passing twin=input_flags['TwinCathode'] to the retired table -- and nothing reads it once the table is gone. A required argument that nothing reads is the silent inert surface this repository forbids at the config layer, so it is dropped rather than left as a vestigial parameter. THREE call sites updated: solver.py twice (the direct-run equilibration warning, and _initial_state's uniform fill) and scripts/sp3_build_nn0.py once. The function's BEHAVIOUR also changes and is the retirement's loud-error path: it no longer falls back, and raises ValueError on a None stating what nn0 ACCEPTS (a uniform initial neutral density in cm^-3; None legal ONLY under neutral_initial_profile, which supersedes the scalar with the per-cell nn0_profile array). Because the solver resolves the fill inside __init__, that refusal is CONSTRUCTION-TIME. scripts/smoke_sim1d.py carries the witness."
+    },
+    {
+      "change_kind": "surface_change",
+      "old": {
+        "path": "scripts/baseline_sim1d.py",
+        "anchor_kind": "config_key",
+        "symbol": "baseline_sim1d.BASELINE_PARAM_OVERRIDES.nn0"
+      },
+      "new": {
+        "path": "scripts/baseline_sim1d.py",
+        "anchor_kind": "config_key",
+        "symbol": "baseline_sim1d.BASELINE_PARAM_OVERRIDES.nn0"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "THE PIN, made in its own commit (2d1234de948340263429a5869f0c8966d09073e3) BEFORE the table was deleted, which is the whole of Tom's option (a). The golden's nx=60 re-cut now names the scalar neutral fill explicitly: nn0 = 2725059978765.871, the value cablp.vars._nn_table.lookup_nn0 returned for this stance's S_gp = 9010.0 with TwinCathode = False. The literal was read out of the table programmatically while it still existed and checked to round-trip through repr(); it was never hand-typed. NO NUMBER MOVED: the golden solver was constructed from build_baseline_config() on each side of the pin, in its own process, and every initial-state array compared at raw uint64 -- Ee/Ei/En/M/M_n/n/nn/nn_a 72 values each and the 576-value packed y, 0 differing, 1152 values total. The only thing that changed is that the fill is written down instead of looked up. DELIBERATELY NOT DECIDED HERE: whether this is the right fill. The value is on the pre-2026-08-21 0 C-sccm convention while S_gp is meter-sccm, so it carries the ~7% inconsistency the retired table's own docstring disclosed; changing it would move the golden and needs a recapture, so it stays a stance-era board question."
+    },
+    {
+      "change_kind": "surface_change",
+      "old": {
+        "path": "scripts/baselines/golden_digest_4k.json",
+        "anchor_kind": "data_file",
+        "symbol": "scripts/baselines/golden_digest_4k.json"
+      },
+      "new": {
+        "path": "scripts/baselines/golden_digest_4k.json",
+        "anchor_kind": "data_file",
+        "symbol": "scripts/baselines/golden_digest_4k.json"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "CONFIG-IDENTITY ROTATION, NOT A RECAPTURE -- pre-authorized on the twice-established 25m/26eb precedent, and regenerated in the pin commit that causes it, through the gate's own --capture path and no other route. Naming nn0 changes the RESOLVED CONFIG the identity hash is taken over, so the identity moves while the trajectory cannot. The pre-rotation gate run emitted exactly ONE failure line -- 'config identity moved: reference c56bd67dd782fde57ddc272abb00d271898d35fc9eb138d5f72acca46dec154d vs fresh ec8ba03db7e061948a8d438ed027747cccaef05cf8171225e259dd25e9871157' -- with no divergent-checkpoint line and no final-digest line, which by the gate's own control flow means every checkpoint and the final digest reproduced. Field by field against the file it replaces: config_identity MOVED c56bd67d->ec8ba03d; digest SAME 3f2424e3b9f6954a736c84041c2737fb2624778043b1fab028c725ed1cc4991f; checkpoints SAME (5 entries, 0 differing); final_time SAME 0.0004700000000000006; cells, fields_per_cell, steps, checkpoint_interval, kernel_provenance all SAME. Exactly one field moved, and it is the one that is not about the trajectory."
+    },
+    {
+      "change_kind": "surface_change",
+      "old": {
+        "path": "cablp/solvers/_sim1d/config_snapshots.json",
+        "anchor_kind": "data_file",
+        "symbol": "cablp/solvers/_sim1d/config_snapshots.json"
+      },
+      "new": {
+        "path": "cablp/solvers/_sim1d/config_snapshots.json",
+        "anchor_kind": "data_file",
+        "symbol": "cablp/solvers/_sim1d/config_snapshots.json"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "The SECOND identity artifact the pin rotates, and for the same reason: it digests the resolved config of each config-complete driver, and the golden builder's resolved config now contains nn0 as a value instead of a null. Regenerated in the pin commit via audit_sim1d_configs.py --print-current, reviewed before writing (the script has no blind --write mode, which is the point). A ONE-LINE diff: cases.production_golden.sha256 a0f296c73e5d74b54688233a324689fc57870a4a8a757976b60a07092ad0bd59 -> 21409d1a934823ef8e03f3f4f744816b9791a4d7128cf9f04ada160cd8fe4dca. The other three driver cases are byte-identical, and so are parameter_count 257, flag_count 51 and manifest_sha256 d2fd9e26499f1fe6ef093459d0cb1f9b30669ac9489a955e5308ec5c6e9dbaa8. The UNCHANGED parameter_count is the load-bearing check on this row: it says no config KEY was added or removed, so this retirement removed a fallback and not a template key -- nn0 was and remains a documented input_dict key."
+    },
+    {
+      "change_kind": "add",
+      "old": null,
+      "new": {
+        "path": "restructure/manifests/delta_e6a1b75.json",
+        "anchor_kind": "data_file",
+        "symbol": "restructure/manifests/delta_e6a1b75.json"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "CHAIN BRIDGING ROW, per the adopted R2 bridging convention (adopted 26fo, verified 26fp) -- NOT THIS COMMIT'S WORK, disclosed. base_revision here is e6a1b75, the PREDECESSOR MANIFEST'S DECLARED new_revision, so the validator's CHAIN abutment check composes. Under the convention's 'manifest names its parent' pattern, the compat retirement's manifest-finalization commit (e83e322, which created this file) and its staging merge (5220adc) fall OUTSIDE the range that predecessor declares, so they land inside this delta's range instead. `git diff --name-status --no-renames e6a1b75 5220adc` is exactly this one added path and nothing else. Without this row check (4) COVERAGE would fail on an add this commit did not make."
+    }
+  ]
+}
