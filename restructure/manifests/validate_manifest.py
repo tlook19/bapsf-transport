@@ -18,8 +18,11 @@ Six checks, in the order the schema numbers them:
                      with ``git cat-file``, and symbol anchors additionally
                      walk its AST.
   (3) CHAIN       -- each delta's ``base_revision`` is its predecessor's
-                     ``new_revision``, and a cumulative manifest equals the
-                     composition of the deltas it is checked against.
+                     ``new_revision``; a cumulative manifest SPANS the same
+                     window as the chain (its ``base_revision`` is the first
+                     delta's and its ``new_revision`` is the last delta's) and
+                     equals the composition of the deltas it is checked
+                     against.  At most one cumulative may be supplied.
   (4) COVERAGE    -- every tracked file that git reports as moved or deleted
                      between base and new has a covering row.  Rename
                      DETECTION is used for coverage only and is never read as
@@ -752,8 +755,21 @@ def _covered_paths(manifest):
     return old_paths, new_paths
 
 
-def check_chain(findings, deltas, cumulative):
-    """Deltas must abut; a cumulative must equal their composition."""
+def check_chain(findings, deltas, cumulatives):
+    """Deltas must abut; a cumulative must span their window and compose.
+
+    ``cumulatives`` is the whole supplied list, not one manifest, because
+    "more than one cumulative" is itself a finding: only the first can be
+    composed against, so silently dropping the rest would let an unchecked
+    manifest ride along inside a green run.
+
+    The WINDOW check is separate from the composition check and both are
+    required.  Composition compares path pairs only, so a cumulative that
+    declares the wrong end of the window still composes correctly whenever the
+    deltas it omits move no file -- a surface or docstring delta, exactly the
+    kind that closes an R2 phase.  Such a manifest would then name a window it
+    does not span while every check reported PASS.
+    """
     ordered = list(deltas)
     for earlier, later in zip(ordered, ordered[1:]):
         if later[1]["base_revision"] != earlier[1]["new_revision"]:
@@ -763,10 +779,18 @@ def check_chain(findings, deltas, cumulative):
                 f"does not continue {earlier[0]} whose new_revision is "
                 f"{earlier[1]['new_revision'][:12]}",
             )
-    if cumulative is None:
+    if not cumulatives:
         findings.skip("CHAIN", "no cumulative manifest supplied to compose against")
         findings.note("CHAIN", max(len(ordered) - 1, 0))
         return
+    if len(cumulatives) > 1:
+        findings.fail(
+            "CHAIN",
+            f"{len(cumulatives)} cumulative manifests supplied "
+            f"({', '.join(n for n, _ in cumulatives)}); exactly one may be "
+            "composed against a chain, and the others would go unchecked",
+        )
+    cumulative = cumulatives[0]
     composed = {}
     for _, manifest in ordered:
         step = _row_path_pairs(manifest)
@@ -787,6 +811,18 @@ def check_chain(findings, deltas, cumulative):
             if old not in consumed and old not in composed:
                 composed[old] = news
     name, manifest = cumulative
+    if ordered:
+        for end, chain_end, chain_name in (
+            ("base_revision", ordered[0][1]["base_revision"], ordered[0][0]),
+            ("new_revision", ordered[-1][1]["new_revision"], ordered[-1][0]),
+        ):
+            if manifest[end] != chain_end:
+                findings.fail(
+                    "CHAIN",
+                    f"{name}: {end} {manifest[end][:12]} is not the chain's "
+                    f"{end} {chain_end[:12]} ({chain_name}); a cumulative must "
+                    "span exactly the window its deltas cover",
+                )
     declared = _row_path_pairs(manifest)
     if declared != composed:
         missing = sorted(set(composed) - set(declared))
@@ -1045,9 +1081,7 @@ def validate(repo, manifest_paths, skip_git=False):
     elif len(deltas) < 2 and not cumulatives:
         findings.skip("CHAIN", "skipped: fewer than two manifests to compose")
     else:
-        check_chain(
-            findings, deltas, cumulatives[0] if cumulatives else None
-        )
+        check_chain(findings, deltas, cumulatives)
     return findings
 
 
@@ -1152,12 +1186,20 @@ def _write(directory, name, payload):
 
 
 def _build_fixture_repo(repo):
-    """Three commits: base -> mid (move/split/delete) -> tip (one more move).
+    """Five commits: root -> base -> mid -> tip -> tail.
 
-    Two steps are needed so the CHAIN check has something real to compose.
+    ``base -> mid -> tip`` carries the structure (moves, a split, a delete, a
+    prefix subtree); two such steps are what the CHAIN check needs to have
+    something real to compose.
+
+    ``root -> base`` and ``tip -> tail`` are MODIFY-ONLY: one line of one file
+    changes and no path arrives or departs.  They exist for the window
+    fixtures, which need a delta that legitimately moves nothing -- that is
+    precisely the delta a composition-only check cannot see past.
     """
     _init_repo(repo)
-    base = _commit(repo, {
+    root = _commit(repo, {
+        "README": "root\n",
         "old/mod.py": "def alpha(x):\n    return x\n",
         "old/data.csv": "1,2\n",
         "old/gone.py": "def dead():\n    pass\n",
@@ -1168,7 +1210,8 @@ def _build_fixture_repo(repo):
         "old/pkg/a.py": "def a():\n    pass\n",
         "old/pkg/b.py": "def b():\n    pass\n",
         "old/pkg/orphan.py": "def orphan():\n    pass\n",
-    }, "base")
+    }, "root")
+    base = _commit(repo, {"README": "base\n"}, "base")
     git(repo, "rm", "-q", "old/mod.py", "old/data.csv", "old/gone.py",
         "old/whole.py", "old/pkg/a.py", "old/pkg/b.py", "old/pkg/orphan.py")
     mid = _commit(repo, {
@@ -1183,7 +1226,8 @@ def _build_fixture_repo(repo):
     tip = _commit(repo, {
         "final/mod.py": "def alpha(x):\n    return x\n",
     }, "tip")
-    return base, mid, tip
+    tail = _commit(repo, {"README": "tail\n"}, "tail")
+    return root, base, mid, tip, tail
 
 
 def self_test():
@@ -1210,7 +1254,7 @@ def self_test():
         workspace = Path(workspace)
         repo = workspace / "repo"
         repo.mkdir()
-        base, mid, tip = _build_fixture_repo(repo)
+        root, base, mid, tip, tail = _build_fixture_repo(repo)
         manifests = workspace / "manifests"
         manifests.mkdir()
 
@@ -1444,6 +1488,42 @@ def self_test():
             _write(manifests, "chain-x-cumulative.json", crossed),
         ]))
 
+        # (c) WINDOW, tip end.  `delta3` spans a modify-only range, so it moves
+        #     no file and the composition is byte-for-byte what it was without
+        #     it.  The cumulative below therefore COMPOSES correctly, resolves
+        #     at both its declared ends and reconciles against its own diff --
+        #     and still names a window one delta short of the chain's.  Only
+        #     the window check can see that, which is why it is separate.
+        delta3 = _base_manifest(tip, tail, [])
+        record("fail-CHAIN-window-tip", "CHAIN", validate(repo, [
+            _write(manifests, "chain-wt-a.json", delta1),
+            _write(manifests, "chain-wt-b.json", delta2),
+            _write(manifests, "chain-wt-c.json", delta3),
+            _write(manifests, "chain-wt-cumulative.json", cumulative),
+        ]))
+
+        # (d) WINDOW, base end.  The mirror image: `delta0` spans the
+        #     modify-only root->base range, and the cumulative starts one
+        #     delta late.
+        delta0 = _base_manifest(root, base, [])
+        record("fail-CHAIN-window-base", "CHAIN", validate(repo, [
+            _write(manifests, "chain-wb-0.json", delta0),
+            _write(manifests, "chain-wb-a.json", delta1),
+            _write(manifests, "chain-wb-b.json", delta2),
+            _write(manifests, "chain-wb-cumulative.json", cumulative),
+        ]))
+
+        # (e) Only ONE cumulative may be composed against a chain.  Both
+        #     copies here are the valid manifest, so every other check is
+        #     clean and the finding is purely that the second would go
+        #     unchecked.
+        record("fail-CHAIN-two-cumulatives", "CHAIN", validate(repo, [
+            _write(manifests, "chain-2c-a.json", delta1),
+            _write(manifests, "chain-2c-b.json", delta2),
+            _write(manifests, "chain-2c-cumulative-1.json", cumulative),
+            _write(manifests, "chain-2c-cumulative-2.json", cumulative),
+        ]))
+
         # --- DRAFT mode, the shape delta_flatten.DRAFT.json is in ---------
         draft = _base_manifest(base, DRAFT_SENTINEL, copy.deepcopy(good_rows))
         draft["golden_gate"] = {
@@ -1477,7 +1557,7 @@ def self_test():
         1 for _, expect, _, _ in results if isinstance(expect, str) and " " in expect
     )
     print("validate_manifest --self-test")
-    print(f"  {len(results)} cases over a synthetic three-commit repository:")
+    print(f"  {len(results)} cases over a synthetic five-commit repository:")
     print(f"  {controls} positive controls, "
           f"{len(results) - controls - drafts} failure fixtures, "
           f"{drafts} draft-mode case.")

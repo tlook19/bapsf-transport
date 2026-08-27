@@ -101,7 +101,7 @@ git rm scripts/test_adapt.ipynb
 rmdir scripts            # only succeeds once the untracked legacy content is
                          # archived out (precondition 2); if it fails, STOP
 
-# 3. rule F2 -- the sim1d scripts take the vacated slot  (180 tracked files)
+# 3. rule F2 -- the sim1d scripts take the vacated slot  (182 tracked files)
 git mv cablp/scripts scripts
 
 # 4. rule F1 -- the package flattens  (64 tracked files)
@@ -133,6 +133,10 @@ git diff --cached -M --name-status | grep -v '^R' || echo "pure renames only"
 # 8. rebuild the extension against the moved tree
 python build_ext.py --inplace
 ```
+
+**Step 3's subtree count was corrected 180 → 182 on 2026-08-27**; step 4's 64
+is unchanged. The stamp correction at the head of §3 carries the reason and
+the rest of the executed counts.
 
 **Why the temporary name in step 4.** `cablp/cablp` cannot be moved directly
 onto `cablp`. The two-step through `_cablp_pkg` keeps every operation a real
@@ -176,11 +180,50 @@ enforcement.
 
 ## 3. Content edits inside the flatten
 
-249 tracked paths move and 1 is deleted. **237 of the 249 move byte-identical.**
-The 12 that do not are listed below, with every changed line. Nothing else in
+251 tracked paths move and 1 is deleted. **240 of the 251 move byte-identical.**
+The 11 that do not are listed below, with every changed line. Nothing else in
 any moved file may change, and the AST-identity check applies to the prose
 edits in §3.5 in its two-tier form (tier B, since they rewrite user-facing
 strings).
+
+> **STAMP CORRECTION, 2026-08-27 (R2 bookkeeping tail).** This paragraph read
+> `249 / 237 / 12` and §1 step 3 read `180 tracked files` at the 2026-08-26
+> re-stamp. Both are corrected here to what the flatten commit
+> `fa3b62f` actually did — `251 / 240 / 11`, of which 182 are the
+> `cablp/scripts/` subtree — re-measured path by path against the real base
+> `9288e01` rather than the stamp revision `5caa8ce`. **The two causes are
+> independent and neither is a change of plan:**
+>
+> 1. **+2 paths: the deposit_beam reference corpus landed between the stamp
+>    and the base.** `scripts/deposit_beam_reference.py` and
+>    `scripts/data/deposit_beam_reference.npz` were merged after this document
+>    was stamped at `5caa8ce`, so they are in the moved set at `9288e01` and
+>    were not in the count. Both moved byte-identical, which is why the total
+>    and the byte-identical count each rise by two and §1 step 3's subtree
+>    count goes 180 → 182. The flatten manifest's `covers` list was regenerated
+>    at the real parent for the same reason and records the same two additions.
+> 2. **−1 content edit: the `build_ext.py:5,6` citation in §3.5 was
+>    WITHDRAWN at execution.** Those two lines name
+>    `cablp.funcs._cathode_kernels_cy` and `cablp.funcs._kernels`, which are
+>    IMPORT-QUALIFIED names, and no import-qualified name changes at the
+>    flatten — the package's importable name was and remains `cablp`, only the
+>    directory containing it moves. The citation belonged to the carve, which
+>    is where both names did change, and `build_ext.py` moved byte-identical
+>    here. Same class as the `_adas.py:36` withdrawal recorded in §3.5, and
+>    for the same reason: an anchor that stays true across the move is not an
+>    edit the flatten owes. **`build_ext.py` was edited later in this branch
+>    and NOT in the flatten commit** — `b9666cd` added `packages=[]` to
+>    `build_inplace()` to disable setuptools flat-layout auto-discovery, a
+>    consequence of the flatten but a separate functional commit with its own
+>    gate, and not one of the 11.
+>
+> The 11 content-edited files, as executed: `cablp/funcs/_kernels.py`,
+> `cablp/solvers/_sim1d/results/phase3_capture.py`,
+> `cablp/vars/adas/README.md`, `scripts/capture_phase3_rhs.py`,
+> `scripts/generate_eii_tables.py`, `scripts/generate_he_ion_rate_table.py`,
+> `scripts/pec_band_fractions.py`, `scripts/profile_sim1d.py`,
+> `scripts/smoke_sim1d.py`, `scripts/stage3_observability_check.py`,
+> `scripts/verify_phase3_source_capture.py`.
 
 ### 3.1 Functional — repository-root anchors that are now off by one (3 edits)
 
@@ -245,7 +288,8 @@ removes this subsection and two manifest rows change destination.
 ### 3.5 Prose (no behaviour)
 
 `cablp/vars/adas/README.md:17`, `cablp/funcs/_kernels.py:74` ("from the
-`cablp/` directory" in the RuntimeError text), `build_ext.py:5,6`,
+`cablp/` directory" in the RuntimeError text), ~~`build_ext.py:5,6`~~ (WITHDRAWN
+at execution, 2026-08-27 — see the stamp correction at the head of §3),
 `scripts/profile_sim1d.py:64`.
 
 **Withdrawn at the 2026-08-26 re-stamp:** `cablp/funcs/_adas.py:36` was listed
@@ -402,7 +446,7 @@ same edit that renames the file from `delta_flatten.DRAFT.json` to
 - **The docs pass.** CLAUDE.md's "two script directories" section, its
   `cd cablp` invocations and its path references update in the R2 docs pass
   (26dj), not here. Keeping the flatten's diff to moves plus content edits in
-  12 files is what makes it reviewable.
+  11 files is what makes it reviewable.
 - **The carve.** Rule C, its 190 import-statement rewrites and its 13 relative
   rewrites are a separate commit with a separate manifest.
 - **The retirements.** `results/compat.py`, `vars/_nn_table` and
