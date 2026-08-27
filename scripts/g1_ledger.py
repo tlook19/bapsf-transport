@@ -17,11 +17,12 @@ guard are the parent's, unchanged.
 """
 import json
 import sys
+from pathlib import Path
 
 import h5py
 import numpy as np
 
-sys.path.insert(0, "/home/trloo/bapsf/bapsf-transport/cablp/scripts")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from mc_neutrals import (  # noqa: E402
     assert_end_recycle_routed_live,
     boundary_recycle_row,
