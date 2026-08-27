@@ -198,7 +198,19 @@ DEPRECATED_CONTROLS = {
     "coverage_backfill_time_s": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
     # ==== dead levers: timestep control ===================================
     "neutral_dt_fraction": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
-    "dt_growth_recovery_factor": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
+    # NOT a dead lever any more: ``dt_growth_recovery_patience`` ships armed,
+    # so this factor is consulted on every run at its own default. What stays
+    # deprecated is OVERRIDING it, which is what this whole-key row warns on.
+    "dt_growth_recovery_factor": DeprecatedControl(
+        PARAMS,
+        "it is live at its default -- the accelerated re-approach ships armed "
+        "(dt_growth_recovery_patience > 0) and consults this factor -- but no "
+        "committed configuration overrides it, and the accelerator was "
+        "adopted as the (patience, factor) pair it was measured as, so a lone "
+        "override is off-stance rather than a supported arm",
+        "drop the override and leave the key at its default; move the pair "
+        "together if the re-approach itself needs retuning",
+    ),
     "beam_ionization_birth_timestep_bound": DeprecatedControl(
         FLAGS, _DEAD_LEVER, _DEAD_LEVER_FIX,
     ),

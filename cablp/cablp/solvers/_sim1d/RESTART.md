@@ -270,6 +270,38 @@ restart the average — a first-order error in every sheath solve that follows.
 
 Accumulator; appears in the result. No feedback into the state.
 
+### Surface-loss floor-exempt latch
+
+| state | site | class |
+|---|---|---|
+| `_surface_loss_floor_exempt_latch` | allocated in `__init__`, advanced by `suggest_timestep` via `plasma_source_timestep` | DROPPED |
+
+Per-cell, per-energy-channel (`"Ee"`/`"Ei"`) memory of the `surface_loss`
+floor-exempt verdict: which cells are currently inside the two-threshold
+re-admission band and holding their previous verdict. It exists only when
+`surface_loss_floor_exempt_exit_rtol` is nonzero, which is the shipped
+default, and it is `None` on the knife-edge path.
+
+It is DROPPED, and the consequence is load-bearing: **a resumed run starts
+with every cell un-exempt**, so the first `suggest_timestep` after a restart
+re-derives each verdict from the inner entry threshold alone. A cell that
+stage 1 was holding exempt inside the band is therefore re-admitted to the
+drain bound on the resumed run's first evaluation, which collapses that step's
+`surface_loss` candidate and, through the ramp, every step after it.
+**Continuation bit-identity is therefore NOT guaranteed at the shipped
+defaults.** It survives only a handoff at which no cell is sitting inside the
+band on a held exemption — true of any window before the floors are reached,
+and false in general once a floor-pinned afterglow is running. It is
+unconditional only on an arm that sets `surface_loss_floor_exempt_exit_rtol`
+to `0.0` (or turns `surface_loss_floor_exempt` off), where no latch exists and
+the exemption test is recomputed from the current margin every call anyway.
+
+Carrying it would be a structural change to the payload rather than one more
+scalar: the latch is per-cell and per-channel, so it would have to be
+compatibility-refused like the packed state fields, and the band's whole
+purpose is to damp float residue rather than to define the trajectory. The
+honest disclosure is this row.
+
 ### Picard counters
 
 | state | site | class |
@@ -382,7 +414,10 @@ than the exact float of a save instant.
 
 A restart reproduces, exactly, the continuation of **the step sequence stage 1
 actually took**. It reproduces an unsplit run's frames when — and only when —
-the handoff instant is one the unsplit run also steps to exactly.
+the handoff instant is one the unsplit run also steps to exactly, and — at the
+shipped defaults — when no cell is holding an exemption inside the
+`surface_loss` re-admission band at that instant (the DROPPED
+`_surface_loss_floor_exempt_latch` row above states the consequence in full).
 
 That is not a limitation in practice: every save instant IS a step boundary,
 because `next_save_time_after` caps the adaptive step to land on it
@@ -399,11 +434,6 @@ and says so when it does.
 Members whose carry is **inert at the shipped defaults** — real, carried, but
 which a default-configured acceptance run cannot distinguish from dropping:
 
-* `dt_growth_capped_streak`, unless `dt_growth_recovery_patience > 0`
-  (default `0` presence-gates the whole branch in `run()`: neither the
-  widened-ceiling read at `solver.py:4448` nor the streak update at
-  `solver.py:4519` runs). The
-  acceptance harness raises it so the carry is exercised.
 * `_cathode_x0`, whose consequence the d1a probe measured at exactly zero over
   a 3300x seed span. Carried regardless: the fixed point is a property of the
   current stance, not a guarantee.
@@ -411,6 +441,12 @@ which a default-configured acceptance run cannot distinguish from dropping:
   crosses the ionization threshold — roughly `2e-4 s` into the production
   stance. An acceptance window shorter than that cannot test it, which is why
   both harness scenarios hand off in the beam-live regime instead.
+
+`dt_growth_capped_streak` was on this list while `dt_growth_recovery_patience`
+defaulted to `0` and presence-gated the whole branch in `run()`. The shipped
+patience is nonzero, so the widened-ceiling read and the streak update both run
+on a default-configured acceptance run and the carry is now exercised without
+the harness having to raise the key itself.
 
 ## Compatibility refusal
 

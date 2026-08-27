@@ -235,9 +235,11 @@ DT_REJECT_FACTOR = 0.5
 #: ``surface_loss_floor_exempt`` flag is on. It separates a cell HOVERING at
 #: its temperature floor (clip plus one step of re-heating residue) from a
 #: healthy drained cell orders of magnitude above it; see the flag's entry in
-#: ``core/config.py``. It is the ENTRY threshold: re-admission uses this same
-#: value unless the params key ``surface_loss_floor_exempt_exit_rtol`` arms a
-#: wider outer threshold, which must exceed this one.
+#: ``core/config.py``. It is the ENTRY threshold only: re-admission uses the
+#: wider outer threshold named by the params key
+#: ``surface_loss_floor_exempt_exit_rtol``, which must exceed this one and is
+#: armed at its default; that key set to 0 makes re-admission use this value
+#: too, which is the knife edge.
 SURFACE_LOSS_FLOOR_EXEMPT_RTOL = 1e-3
 
 #: Relative slack [dimensionless] on the "the accepted step IS dt_min" test the
@@ -1204,10 +1206,11 @@ class LAPDSim1D:
         self._surface_loss_floor_exempt_rtol = (
             SURFACE_LOSS_FLOOR_EXEMPT_RTOL if _surface_loss_floor_exempt else None
         )
-        # Optional hysteresis band on that exemption (default off = the
-        # knife edge above). Validated here so a band that could never be a
-        # band -- outer at or below the inner threshold -- or one armed with
-        # the exemption itself off is refused before any compute.
+        # Hysteresis band on that exemption (armed at the default width; 0
+        # restores the knife edge above). Validated here so a band that could
+        # never be a band -- outer at or below the inner threshold, or wide
+        # enough to be a permanent exemption -- or one armed with the
+        # exemption itself off is refused before any compute.
         _exempt_exit_rtol = self._input_dict.get(
             "surface_loss_floor_exempt_exit_rtol", 0.0
         )
@@ -1228,7 +1231,10 @@ class LAPDSim1D:
                     f"({_exempt_exit_rtol!r}) while the surface_loss_floor_exempt "
                     "flag is off; the hysteresis band re-admits cells to an "
                     "exemption that is not running, so it could never do "
-                    "anything"
+                    "anything. The band is armed by DEFAULT, so recovering "
+                    "the historical bound takes both keys: pass "
+                    "surface_loss_floor_exempt_exit_rtol=0.0 alongside the "
+                    "cleared flag"
                 )
             if _exempt_exit_value <= SURFACE_LOSS_FLOOR_EXEMPT_RTOL:
                 raise ValueError(
@@ -1237,6 +1243,16 @@ class LAPDSim1D:
                     f"SURFACE_LOSS_FLOOR_EXEMPT_RTOL={SURFACE_LOSS_FLOOR_EXEMPT_RTOL!r} "
                     f"(got {_exempt_exit_rtol!r}); an outer threshold at or "
                     "below the inner one is not a band"
+                )
+            if _exempt_exit_value >= 1.0:
+                raise ValueError(
+                    "surface_loss_floor_exempt_exit_rtol must be strictly "
+                    f"less than 1.0 (got {_exempt_exit_rtol!r}); the band is a "
+                    "fraction of the per-cell floor energy 3/2 n T_floor, so "
+                    "at or above 1.0 re-admission would require a margin "
+                    "exceeding the floor energy itself -- that is not a "
+                    "hysteresis band around the floor, and in the large limit "
+                    "it is a permanent exemption from this bound"
                 )
         # Presence gate: None keeps plasma_source_timestep on its
         # single-threshold expression and allocates no latch.
