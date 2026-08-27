@@ -33,7 +33,7 @@ def _missing_data_file_message(path):
         f"OPEN-ADAS data file not found: {path}\n"
         "The ADAS .dat files are NOT tracked in this repository -- OPEN-ADAS's "
         "terms forbid redistributing them on a public website -- so they must "
-        "be fetched by hand into cablp/cablp/vars/adas/ before the "
+        "be fetched by hand into cablp/vars/adas/ before the "
         'atomic_rate_model = "adas" path (or any adf11 reader) can run.\n'
         "See cablp/vars/adas/README.md for the per-file download URL, the "
         "local filename to save as, and the checksum to verify."
