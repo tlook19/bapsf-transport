@@ -1,4 +1,12 @@
-"""Public API for the conservative axial 1D LAPD solver package."""
+"""Public API for the conservative axial 1D LAPD solver package.
+
+The names in ``__all__`` are the declared surface: the configuration
+templates and their loaders, the solver class with its progress and error
+types, result and restart IO, and the trajectory health summary. Every other
+member of this package remains importable by its own module path, and code
+that needs an operator, a geometry helper or a state accessor reaches it that
+way; new code targets the surface below.
+"""
 
 from .core.config import (
     config_manifest,
@@ -15,6 +23,7 @@ from .core.model_families import (
     MODEL_FAMILIES,
     resolve_model_families,
 )
+from .results.io import save_result_hdf5
 from .results.restart import (
     load_restart_state,
     save_restart_state,
@@ -49,5 +58,6 @@ __all__ = [
     "resolve_config",
     "resolve_model_families",
     "save_restart_state",
+    "save_result_hdf5",
     "summarize_result",
 ]
