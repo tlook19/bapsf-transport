@@ -14,7 +14,7 @@ section below).
 ## Fetching the files
 
 Download each file from the URL in the table below and save it into this
-directory (`cablp/cablp/vars/adas/`) under the **local filename** given in
+directory (`cablp/vars/adas/`) under the **local filename** given in
 the first column. Nothing else is needed — there is deliberately no fetch
 script, and the loader reads the files straight from this directory.
 

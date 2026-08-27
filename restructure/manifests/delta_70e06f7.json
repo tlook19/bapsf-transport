@@ -1,13 +1,15 @@
 {
   "manifest_kind": "delta",
   "repository": "bapsf-transport",
-  "base_revision": "5caa8ce2cb5cfc3d89270d915a15213f1aec7fe5",
-  "new_revision": "TBD-at-commit",
+  "base_revision": "9288e01ab337626ea4c7bbe5518885e93a244460",
+  "new_revision": "70e06f7e9b65e9888b36570a4175a24e10ae9bcb",
   "bit_exact": true,
   "golden_gate": {
     "script": "scripts/baseline_sim1d.py",
-    "result": "TBD-at-commit",
-    "saves": null
+    "result": "baseline verify OK: saves=2620, exact=True, max_rel=0.000e+00, max_abs=0.000e+00, time_max_abs=0.000e+00 s (rtol=1.0e-09, atol=0.0e+00) [CABLP_COMPILED_KERNELS=1, KERNEL_ID cython/_cathode_kernels_cy/tierA+csda]",
+    "saves": 2620,
+    "revision": "b9666cd72047d2f380d99b29e66394288a57a5a9",
+    "revision_note": "The golden ran at b9666cd, not at new_revision 70e06f7. The two commits between them (70e06f7 and its content) touch ONLY files under scripts/ -- stage3_observability_check.py, verify_phase3_source_capture.py -- plus two documents under restructure/. That is tier (a) of the 23ab golden stance (a diff touching only cablp/scripts/, excluding baseline_sim1d.py, stances/ and baselines/, cannot move the golden by construction), so the transcript above certifies new_revision's solver tree unchanged. Neither edited script is imported by the solver, by baseline_sim1d.py or by the stance loader; scripts/baselines/ is byte-identical throughout. The smoke suite and the deposit_beam corpus verifier WERE re-run at 70e06f7 and both pass -- smoke is the gate that actually exercises the edited paths, since it carries the phase-3 fixture strings and subprocesses run_sim1d.py/plot_sim1d_run.py with an explicit cwd."
   },
   "mappings": [
     {
@@ -110,7 +112,7 @@
       "group_id": null,
       "deletion_reason": null,
       "replacement": null,
-      "notes": "PREFIX MACRO (Sol 26dz): every tracked path under `cablp/scripts/` moves to the same path under `scripts/`. 180 files, no exceptions, no renames within the subtree; the baselines/, data/ and stances/ subdirectories travel intact so the golden fixture keeps its SCRIPT_DIR-relative resolution. PROPOSED destination (Tom/reviewer rules): the root `scripts/` slot is vacated by the 26dj legacy archival, and `cablp/scripts/` cannot stay where it is because that path is occupied by the package after this commit. Content edits ride this row: capture_phase3_rhs.py:27,29,36-45,128,177,181,186; verify_phase3_source_capture.py:126,137,151,226,229,280,290,317,332,348,360,370,477,501,520; stage3_observability_check.py:35,54; smoke_sim1d.py:22623,22630,22641; pec_band_fractions.py:98; profile_sim1d.py:64. DELIBERATELY NOT EDITED, per the Q5 ruling (2026-08-26dw, `RENAME_MAP.md` §8 Q5): t23c_config_snapshot_delta.py:16 and mirror_fieldmap_bitexact_structural.py:54. Both document `git show <base>:cablp/cablp/...` recipes, and at any `<base>` predating this commit the OLD path is the correct one; rewriting them would break the recipe against exactly the revisions it exists to compare with. This commit is the named boundary. `proposed_continuity: same_entity` VECTORIZES over the 180 derived pairs; no continuity is proposed for the directory. This is the row for which a directory anchor is unavoidable -- `scripts/` is not an importable package and has no qualified name to carry.",
+      "notes": "PREFIX MACRO (Sol 26dz): every tracked path under `cablp/scripts/` moves to the same path under `scripts/`. 182 files, no exceptions, no renames within the subtree; the baselines/, data/ and stances/ subdirectories travel intact so the golden fixture keeps its SCRIPT_DIR-relative resolution. PROPOSED destination (Tom/reviewer rules): the root `scripts/` slot is vacated by the 26dj legacy archival, and `cablp/scripts/` cannot stay where it is because that path is occupied by the package after this commit. Content edits ride this row: capture_phase3_rhs.py:27,29,36-45,128,177,181,186; verify_phase3_source_capture.py:126,137,151,169,226,229,271,280,290,317,332,348,360,370,477,501,520; stage3_observability_check.py:54 (:35 WITHDRAWN, see below); smoke_sim1d.py:22623,22630,22641; pec_band_fractions.py:98; profile_sim1d.py:64. DELIBERATELY NOT EDITED, per the Q5 ruling (2026-08-26dw, `RENAME_MAP.md` \u00a78 Q5): t23c_config_snapshot_delta.py:16 and mirror_fieldmap_bitexact_structural.py:54. Both document `git show <base>:cablp/cablp/...` recipes, and at any `<base>` predating this commit the OLD path is the correct one; rewriting them would break the recipe against exactly the revisions it exists to compare with. This commit is the named boundary. Q5 EXTENDED AT EXECUTION (26ep) to a THIRD site: stage3_observability_check.py:35 `REPO_PATH`, which the execution notes had listed as an ordinary path-string edit. It is consumed by `git show f\"{BASELINE_REF}:{REPO_PATH}\"` against the PINNED historical revision 64e9565, where the scripts lived under cablp/scripts/, so rewriting it breaks the only lookup the script performs -- the same class as the two above and on stronger grounds, since those instruct a human and this one executes. The edit was made and then REVERTED; the pre-flatten path stands, with a comment at the site recording why. Its :54 companion (parents[2] -> parents[1]) is INDEPENDENT and still applies, so the file is a content-edited move, NOT a pure one. ENUMERATION GAP CLOSED AT EXECUTION (26ep): verify_phase3_source_capture.py:169 and :271 were absent from the notes' list but are synthetic-tmpdir fixture paths of exactly the listed class (siblings of :126/:317/:332/:348), present at every base the notes were stamped against; they are edited, and the file now carries no repository-relative pre-flatten literal at all. `proposed_continuity: same_entity` VECTORIZES over the 182 derived pairs; no continuity is proposed for the directory. This is the row for which a directory anchor is unavoidable -- `scripts/` is not an importable package and has no qualified name to carry. FINALIZED AT COMMIT: the DRAFT's covers list stood at 180 and its base_revision at 5caa8ce; both were regenerated from `git ls-files` at the REAL parent 9288e01, which added deposit_beam_reference.py and data/deposit_beam_reference.npz (the R2 deposit-beam reference corpus, merged after the notes were re-stamped). Both moved byte-identical and the corpus verifier reproduces at the new path (0 differing over 206218 values), which is the evidence that this row's SCRIPT_DIR-relative fixture resolution survives the move.",
       "prefix_rule": {
         "old_prefix": "cablp/scripts/",
         "new_prefix": "scripts/",
@@ -144,11 +146,13 @@
           "cablp/scripts/covbuild_window_probe.py",
           "cablp/scripts/covcal_efold_read.py",
           "cablp/scripts/cycle_map_m5b.py",
+          "cablp/scripts/data/deposit_beam_reference.npz",
           "cablp/scripts/data/es1_sim1d_overlay.npz",
           "cablp/scripts/data/es2_sim1d_overlay.npz",
           "cablp/scripts/data/es3_sim1d_overlay.npz",
           "cablp/scripts/data/es4_sim1d_overlay.npz",
           "cablp/scripts/data/interp_fused_reference.npz",
+          "cablp/scripts/deposit_beam_reference.py",
           "cablp/scripts/dvmhold_arm_census.py",
           "cablp/scripts/ea0_emission_probe.py",
           "cablp/scripts/eqmap_make.py",

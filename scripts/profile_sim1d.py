@@ -61,7 +61,7 @@ Usage::
     # exact call counts (slower; timings are distorted by design)
     python scripts/profile_sim1d.py --mode cprofile --label prod_cprof_nx240
 
-Artifacts are run outputs: they live in ``cablp/scripts/`` and are never
+Artifacts are run outputs: they live in ``scripts/`` and are never
 committed.
 """
 

@@ -71,7 +71,7 @@ def _load():
         raise RuntimeError(
             f"{ENV_VAR} opts in to the compiled cathode kernels but "
             f"{_MODULE} could not be imported ({error}). Build it with "
-            "`python build_ext.py --inplace` from the cablp/ directory (needs "
+            "`python build_ext.py --inplace` from the repository root (needs "
             "Cython and a C compiler), or unset the variable to run the "
             "default pure-Python path. This is deliberately NOT a fallback: "
             "silently running pure Python here would mean a timing or "

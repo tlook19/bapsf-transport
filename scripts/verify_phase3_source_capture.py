@@ -123,7 +123,7 @@ def _base_only_result(run_id=RUN_C):
 
 
 def _write(root, result, *, maximum_bytes=MAX_ARTIFACT_BYTES, invocation=None):
-    output = root / "cablp/scripts/baselines/phase3_rhs"
+    output = root / "scripts/baselines/phase3_rhs"
     reserve_run_id(
         output,
         result.run_id,
@@ -134,7 +134,7 @@ def _write(root, result, *, maximum_bytes=MAX_ARTIFACT_BYTES, invocation=None):
         result,
         run_id=result.run_id,
         capture_revision="a" * 40,
-        producer_path="cablp/scripts/capture_phase3_rhs.py",
+        producer_path="scripts/capture_phase3_rhs.py",
         started_at="2026-08-24T12:00:00Z",
         completed_at="2026-08-24T12:00:01Z",
         configuration_identity_sha256=configuration_identity(
@@ -148,7 +148,7 @@ def _write(root, result, *, maximum_bytes=MAX_ARTIFACT_BYTES, invocation=None):
             else invocation
         ),
         producer_blobs={"cablp/synthetic.py": "b" * 40},
-        environment_lock={"path": "cablp/poetry.lock", "git_blob": "c" * 40},
+        environment_lock={"path": "poetry.lock", "git_blob": "c" * 40},
         repository_root=root,
         maximum_bytes=maximum_bytes,
     )
@@ -166,7 +166,7 @@ def check_identity_and_reservation(root):
     assert validate_run_id(RUN_A) == RUN_A
     for bad in (None, "", "123e4567-e89b-42d3-a456-426614174000", RUN_A.upper()):
         _raises(ValueError, validate_run_id, bad)
-    output = root / "reservation/cablp/scripts/baselines/phase3_rhs"
+    output = root / "reservation/scripts/baselines/phase3_rhs"
     marker = reserve_run_id(output, RUN_A, {"kind": "synthetic-test"})
     assert marker.is_file()
     _raises(FileExistsError, reserve_run_id, output, RUN_A, {})
@@ -223,10 +223,10 @@ def check_schema_round_trip_and_digests(root):
     first_inventory = inventory[0]
     assert first_inventory["capture_revision"] == "a" * 40
     assert first_inventory["producer_path"] == (
-        "cablp/scripts/capture_phase3_rhs.py"
+        "scripts/capture_phase3_rhs.py"
     )
     assert first_inventory["producer_anchor"] == (
-        "cablp/cablp/solvers/_sim1d/solver.py:"
+        "cablp/solvers/_sim1d/solver.py:"
         "LAPDSim1D._trajectory_result -> "
         "result.rhs_terms['synthetic_flux']['n']"
     )
@@ -268,7 +268,7 @@ def check_refusals_and_atomicity(root):
     base = _fake_result(RUN_A)
     wrong_id = copy.deepcopy(base)
     wrong_id.run_id = RUN_B
-    output = root / "wrong-id/cablp/scripts/baselines/phase3_rhs"
+    output = root / "wrong-id/scripts/baselines/phase3_rhs"
     reserve_run_id(output, RUN_A, {"kind": "synthetic-test"})
     _raises(
         ValueError,
@@ -277,7 +277,7 @@ def check_refusals_and_atomicity(root):
         wrong_id,
         run_id=RUN_A,
         capture_revision="a" * 40,
-        producer_path="cablp/scripts/capture_phase3_rhs.py",
+        producer_path="scripts/capture_phase3_rhs.py",
         started_at="start",
         completed_at="complete",
         configuration_identity_sha256=configuration_identity(
@@ -287,7 +287,7 @@ def check_refusals_and_atomicity(root):
         run_controls={"max_steps": 4000},
         invocation=["python", "scripts/capture_phase3_rhs.py"],
         producer_blobs={},
-        environment_lock={"path": "cablp/poetry.lock"},
+        environment_lock={"path": "poetry.lock"},
         repository_root=root / "wrong-id",
     )
 
@@ -314,7 +314,7 @@ def check_refusals_and_atomicity(root):
         mutator(candidate)
         case_name = hashlib.sha256(repr(mutator).encode()).hexdigest()
         case_root = root / f"refusal-{case_name}"
-        case_output = case_root / "cablp/scripts/baselines/phase3_rhs"
+        case_output = case_root / "scripts/baselines/phase3_rhs"
         reserve_run_id(case_output, RUN_C, {"kind": "synthetic-test"})
         _raises(
             ValueError,
@@ -329,7 +329,7 @@ def check_refusals_and_atomicity(root):
     _raises(ValueError, _write, cap_root, cap_result, maximum_bytes=1)
     cap_target = (
         cap_root
-        / "cablp/scripts/baselines/phase3_rhs"
+        / "scripts/baselines/phase3_rhs"
         / f"{RUN_C.removeprefix('urn:uuid:')}.h5"
     )
     assert not cap_target.exists()
@@ -345,7 +345,7 @@ def check_refusals_and_atomicity(root):
     )
     private_target = (
         private_root
-        / "cablp/scripts/baselines/phase3_rhs"
+        / "scripts/baselines/phase3_rhs"
         / f"{RUN_C.removeprefix('urn:uuid:')}.h5"
     )
     assert not private_target.exists()
@@ -357,7 +357,7 @@ def _write_reserved(case_root, output, result):
         result,
         run_id=result.run_id,
         capture_revision="a" * 40,
-        producer_path="cablp/scripts/capture_phase3_rhs.py",
+        producer_path="scripts/capture_phase3_rhs.py",
         started_at="start",
         completed_at="complete",
         configuration_identity_sha256=configuration_identity(
@@ -367,7 +367,7 @@ def _write_reserved(case_root, output, result):
         run_controls={"max_steps": 4000},
         invocation=["python", "scripts/capture_phase3_rhs.py"],
         producer_blobs={},
-        environment_lock={"path": "cablp/poetry.lock"},
+        environment_lock={"path": "poetry.lock"},
         repository_root=case_root,
     )
 
@@ -474,7 +474,7 @@ def _h5_reordered_term_census(h5):
 
 def check_constructor_order_and_cli_import(repo_root):
     solver_source = (
-        repo_root / "cablp/cablp/solvers/_sim1d/solver.py"
+        repo_root / "cablp/solvers/_sim1d/solver.py"
     ).read_text(encoding="utf-8")
     tree = ast.parse(solver_source)
     lapd_class = next(
@@ -498,7 +498,7 @@ def check_constructor_order_and_cli_import(repo_root):
     )
     assert validation_index < construction_index
 
-    cli_source = (repo_root / "cablp/scripts/capture_phase3_rhs.py").read_text(
+    cli_source = (repo_root / "scripts/capture_phase3_rhs.py").read_text(
         encoding="utf-8"
     )
     cli_tree = ast.parse(cli_source)
@@ -517,7 +517,7 @@ def check_constructor_order_and_cli_import(repo_root):
 
 
 def main():
-    repo_root = Path(__file__).resolve().parents[2]
+    repo_root = Path(__file__).resolve().parents[1]
     with tempfile.TemporaryDirectory(prefix="phase3-capture-synthetic-") as temp:
         root = Path(temp)
         check_identity_and_reservation(root)
