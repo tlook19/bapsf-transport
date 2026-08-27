@@ -1,0 +1,102 @@
+{
+  "manifest_kind": "delta",
+  "repository": "bapsf-transport",
+  "base_revision": "02333cef6cc61d3f033d94990a868c81ff70ea49",
+  "new_revision": "19568143c396998b00f02d585caa66c9cf884297",
+  "bit_exact": true,
+  "golden_gate": {
+    "script": "scripts/baseline_sim1d.py",
+    "result": "baseline verify OK: saves=2620, exact=True, max_rel=0.000e+00, max_abs=0.000e+00, time_max_abs=0.000e+00 s (rtol=1.0e-09, atol=0.0e+00) [CABLP_COMPILED_KERNELS=1, KERNEL_ID cython/_cathode_kernels_cy/tierA+csda probed in-process before the run; the script itself prints no kernel suffix]",
+    "saves": 2620,
+    "revision": "19568143c396998b00f02d585caa66c9cf884297",
+    "revision_note": "One commit in the range, one compiled golden, run in the coder's worktree against the extension built from this tree; the .pyx is untouched and KERNEL_ID was identical either side. The PURE 4k digest leg also ran at this revision and is the load-bearing gate for the zero-behavior claim: 'digest gate kernels=pure / digest gate OK: steps=4000, digest=3f2424e3b9f6954a736c84041c2737fb2624778043b1fab028c725ed1cc4991f, exact=True', with NO 'config identity moved' line -- the reference identity ec8ba03db7e061948a8d438ed027747cccaef05cf8171225e259dd25e9871157 reproduced, which is what an export-declaration pass must show, since a moved identity would mean the resolved config had changed. Smoke EXIT=0 with all five compiled-kernel-equivalence blocks RUN (meanfield, coverage, landau, emitting_area, initial_profile), each reporting cython/_cathode_kernels_cy/tierA+csda and 'final state bit-identical'. The deposit_beam corpus verifier reproduces: 206218 values across 7590 result fields, 0 differing. The validator's own --self-test passes 21/21."
+  },
+  "mappings": [
+    {
+      "change_kind": "surface_change",
+      "old": {
+        "path": "cablp/solvers/_sim1d/__init__.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.solvers._sim1d"
+      },
+      "new": {
+        "path": "cablp/solvers/_sim1d/__init__.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.solvers._sim1d"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "THE TIER-1 SURFACE, WIDENED BY EXACTLY ONE NAME. R0.3 rules the public-API surface TWO-TIER: the declared surface widens to what scripts actually need, scripts MAY keep importing internals, new code targets the surface. RENAME_MAP.md carries no surface-pass section -- its only two surface prescriptions are P-9 (the carved packages' __init__ files stay empty or docstring-only, never aggregators) and the SS3.6 row that re-listed cablp/__init__.py's `submodules`, both already satisfied at base_revision -- so the surface was derived EMPIRICALLY, per the brief's fallback. Census: an ast.ImportFrom/Import walk of all 164 scripts/*.py at base_revision. Of the 14 names the scripts take from the package itself, 13 were already in __all__ and the 14th is the submodule `solver`. In R0.3's enumerated categories (config templates, io/load, health, summarize, run-driver entry points) exactly ONE name was published only at tier 2: results.io.save_result_hdf5, imported by 14 scripts, three of them run drivers (run_m6_point.py, run_mechanism_ladder.py, compare_sim1d_es1.py). It is the write half of a read/write pair whose read half, load_result_hdf5, was already declared. ADDED: `from .results.io import save_result_hdf5` and the '\"save_result_hdf5\"' entry in __all__, which stays sorted; __all__ goes 20 names -> 21. NOTHING was removed: this pass only widens. The checkable consequence is that every name the seven canonical run/score/plot drivers (run_sim1d, run_m6_point, run_mechanism_ladder, baseline_sim1d, plot_sim1d_run, fingerprints_sim1d, compare_sim1d_es1) take from the package tree is now tier 1 -- run_m6_point's `from ...results.health import summarize_result` reaches the same function the surface publishes as `summarize_result`, by a different path, and is NOT rewritten (the ruling forbids consumer import rewrites). NO EAGER-IMPORT COST: results.io was ALREADY in the eager set before this commit, pulled in by results/__init__.py through phase3_capture, so the new statement adds no module and does not move the initialization order -- measured as the sorted sys.modules set after `import cablp.solvers._sim1d`, 53 modules identical either side (54 with the .so loaded), and KERNEL_ID probes cython/_cathode_kernels_cy/tierA+csda either side. That mattered enough to measure: results.io imports cablp.cathode.kernels, the module whose import-time opt-in decides KERNEL_ID. Tier-A AST identity (docstring nodes stripped, ast.dump compared against base_revision) reports exactly two added nodes and nothing else: ImportFrom(module='results.io', names=[alias(name='save_result_hdf5')], level=1) and Constant(value='save_result_hdf5'). The docstring gains a paragraph stating the two-tier contract in functionality-only terms, no provenance."
+    },
+    {
+      "change_kind": "surface_change",
+      "old": {
+        "path": "cablp/solvers/_sim1d/core/__init__.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.solvers._sim1d.core"
+      },
+      "new": {
+        "path": "cablp/solvers/_sim1d/core/__init__.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.solvers._sim1d.core"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "DOCSTRING-ONLY; NO SURFACE MOVED, an existing one is written down. This package exported nothing at base_revision and exports nothing at new_revision; the docstring now says so, in the wording the carved packages (cablp/atomic, cablp/cathode, cablp/plasma, cablp/numerics) already carry -- 'Members are imported by their own module path -- this package deliberately re-exports nothing, so there is exactly one name for every symbol' -- plus one sentence recording that config's templates and loaders are additionally published on cablp.solvers._sim1d. Disclosed as a row rather than left silent because under a TWO-TIER ruling a package's tier stance is part of its declared surface, and a reader cannot tell 'exports nothing on purpose' from 'nobody got round to it'. Tier-A AST identity against base_revision: docstring-stripped ast.dump IDENTICAL. The census evidence for the stance: 30 of the 164 scripts import names out of core.* submodules by module path (geometry 11 names/29 sites, state 11/43, timestep 4, neutral_seed_cache 4, ignition 6, config 2, integrator 1, validation 1, deprecations 1) and not one imports an aggregated name, which is the same evidence P-9 rests on for the carved packages. NO member enumeration in the docstring, deliberately: core has eleven modules and a list would go stale, which is the failure mode the documentation rule exists to prevent."
+    },
+    {
+      "change_kind": "surface_change",
+      "old": {
+        "path": "cablp/solvers/_sim1d/physics/__init__.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.solvers._sim1d.physics"
+      },
+      "new": {
+        "path": "cablp/solvers/_sim1d/physics/__init__.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.solvers._sim1d.physics"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "DOCSTRING-ONLY; NO SURFACE MOVED. Same treatment and same wording as the core row. The added sentence states the fact the census establishes: NO operator appears on the package surface, the solver composes them, and the audit and verification scripts that call one directly name the module it lives in. That is a large tier-2 population -- 14 physics modules, ~150 distinct names, ~250 import sites across the scripts, of which cathode (26 names), sources (27), neutrals (21), kinetic_dvm (14), kinetic_neutrals (14) and puff_orifice (14) are the heaviest -- and R0.3's ruling is precisely that this traffic is legitimate and stays. Nothing here is a candidate for tier 1: no physics operator falls in any of R0.3's enumerated categories. Tier-A AST identity against base_revision: docstring-stripped ast.dump IDENTICAL."
+    },
+    {
+      "change_kind": "surface_change",
+      "old": {
+        "path": "cablp/solvers/_sim1d/results/__init__.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.solvers._sim1d.results"
+      },
+      "new": {
+        "path": "cablp/solvers/_sim1d/results/__init__.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.solvers._sim1d.results"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "DOCSTRING-ONLY; the six re-exported names are UNCHANGED and __all__ is byte-identical. This is the one sub-package of the three that does re-export: the phase-3 qualified-capture sub-API (PHASE3_CAPTURE_PROFILE, blank_crosswalk_inventory, load_qualified_capture, reserve_run_id, validate_run_id, write_qualified_capture), declared by the Phase-3 capture plumbing commit 83b84c6 and therefore PRE-R2 and not this restructure's to re-litigate. The docstring now says which group that is and that io/health/restart are reached by module path instead, with five of their symbols carried on cablp.solvers._sim1d (save_result_hdf5 -- new in this commit -- load_result_hdf5, summarize_result, and the restart-state pair). DISCLOSED FOR THE REVIEWER, changed by nobody here: no script consumes the aggregated form. The three scripts that use phase-3 capture import `from ...results.phase3_capture import ...` directly (13 names, 22 sites), and the only package-level from-import of `results` anywhere is smoke_sim1d.py taking the `restart` SUBMODULE. So the re-export is currently unconsumed, which under P-9's reasoning would argue for retiring it -- but retiring an export is a NARROWING and this pass only widens, so it stands and the question is handed up. Tier-A AST identity against base_revision: docstring-stripped ast.dump IDENTICAL."
+    },
+    {
+      "change_kind": "add",
+      "old": null,
+      "new": {
+        "path": "restructure/manifests/delta_02333ce.json",
+        "anchor_kind": "data_file",
+        "symbol": "restructure/manifests/delta_02333ce.json"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "NOT THIS COMMIT'S WORK -- a chain bridging row, disclosed, and the same device delta_364b26d.json, delta_e6a1b75.json and delta_02333ce.json each used for their own predecessor. base_revision here is 02333ce, the PREDECESSOR MANIFEST'S DECLARED new_revision, so the validator's CHAIN abutment check composes. Under the established 'manifest names its parent' pattern the nn0-retirement's manifest-finalization commit (e049689, which created this file) and its staging merge (a2c278e, this branch's real base) fall OUTSIDE the range that predecessor declares, so they land inside this delta's range instead. `git diff --name-status --no-renames 02333ce a2c278e` is exactly this one added path and nothing else. Without this row check (4) COVERAGE would fail on an add this commit did not make. The open question the three preceding deltas each raised is still unruled: whether the pattern wants the bridging row, or wants the validator to tolerate a bookkeeping gap between a delta's declared new_revision and its successor's base."
+    }
+  ]
+}
