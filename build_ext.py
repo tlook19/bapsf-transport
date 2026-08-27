@@ -105,8 +105,15 @@ def build_inplace():
         return False
     from setuptools import setup
 
+    # `packages=[]` is not decoration: this call only compiles an extension in
+    # place and installs nothing, and without it setuptools runs flat-layout
+    # auto-discovery over the project root. Since the R2 flatten that root is
+    # the repository root, where `cablp/` is not the only directory holding
+    # Python, and auto-discovery then refuses to build at all ("Multiple
+    # top-level packages discovered in a flat-layout").
     setup(
         name="cablp-kernels",
+        packages=[],
         ext_modules=ext_modules,
         script_args=["build_ext", "--inplace"],
     )
