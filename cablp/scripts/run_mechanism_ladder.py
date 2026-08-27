@@ -38,7 +38,16 @@ ES_OPERATING = {
     4: {"V_bank": 98.978, "Ts_standby_K": 1972.0},
 }
 
-ELECTRON_BIRTH_POLICY = "floor"
+# The ionization electron-birth policy this driver names for itself. "local"
+# since 2026-08-26, aligned with run_m6_point.py's ELECTRON_BIRTH_POLICY,
+# core/config.py's default and the g1atrim stance line; before that it was
+# "floor", which every --stance run silently superseded and every --no-stance
+# run silently kept. The retired "floor" was an explicit campaign choice
+# carried over from the production notebook; retiring it is Tom's ruling of
+# 2026-08-26, taken for run_m6_point.py first and applied here for the same
+# reason -- the two drivers must not disagree about which birth policy an
+# unstanced rung runs.
+ELECTRON_BIRTH_POLICY = "local"
 
 
 def main(argv=None):
@@ -131,8 +140,9 @@ def main(argv=None):
         "beam_anomalous_model": "quasilinear",
         "cathode_emission_profile": "gaussian",
         "cathode_warming_model": args.warming,
-        # Explicit campaign choice restored after the notebook override was
-        # omitted by 0451c97's shared-config migration.
+        # Named rather than inherited: this driver states its own
+        # configuration package, so a key it cares about is spelled out even
+        # where it agrees with the default. See ELECTRON_BIRTH_POLICY above.
         "Te_birth_ionization": ELECTRON_BIRTH_POLICY,
     }
     if args.warming == "power_balance":
