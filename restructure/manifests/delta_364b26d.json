@@ -1,0 +1,462 @@
+{
+  "manifest_kind": "delta",
+  "repository": "bapsf-transport",
+  "base_revision": "70e06f7e9b65e9888b36570a4175a24e10ae9bcb",
+  "new_revision": "364b26d9344c467a41666140ffc85156c3999097",
+  "bit_exact": true,
+  "golden_gate": {
+    "script": "scripts/baseline_sim1d.py",
+    "result": "baseline verify OK: saves=2620, exact=True, max_rel=0.000e+00, max_abs=0.000e+00, time_max_abs=0.000e+00 s (rtol=1.0e-09, atol=0.0e+00) [CABLP_COMPILED_KERNELS=1, KERNEL_ID cython/_cathode_kernels_cy/tierA+csda probed in-process; the script itself prints no kernel suffix]",
+    "saves": 2620,
+    "revision": "364b26d9344c467a41666140ffc85156c3999097",
+    "revision_note": "The compiled golden ran AT new_revision 364b26d, in the coder's worktree, with the extension rebuilt from the post-carve tree (cablp/cathode/_cathode_kernels_cy.pyx) and KERNEL_ID probed before and after the carve: identical, cython/_cathode_kernels_cy/tierA+csda. The carve is a pure move/rename/reference-churn commit, so exact=True is the correct expectation rather than a hope: default_config() is the same source text, scripts/stances/g1atrim.toml is the same bytes, nx=60 is the same override, and scripts/baselines/ was not entered. The smoke suite (exit 0, all five compiled-equivalence blocks RUN and bit-identical) and the deposit_beam reference corpus (0 differing over 206,218 values) were run at the same commit."
+  },
+  "mappings": [
+    {
+      "change_kind": "move+rename",
+      "old": {
+        "path": "cablp/vars/_cons.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.vars._cons"
+      },
+      "new": {
+        "path": "cablp/constants.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.constants"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "R0.2: the single-source constants become a top-level module. P-1 chose a MODULE over a package because the file is 43 lines of flat bindings with no sub-structure, and because the import-qualified symbols (cablp.constants.qe_SI) are identical either way -- so promoting it to a package at R3 would cost zero import-site edits. 52 import statements rewritten. The R3 constants-unification divergences (m_e_cgs, m_p_cgs, I_ion, the inline qe_SI at solver.py) live INSIDE this file and are deliberately untouched here: they are numerics-moving and R2 is bit-exact."
+    },
+    {
+      "change_kind": "move+rename",
+      "old": {
+        "path": "cablp/funcs/_cross.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.funcs._cross"
+      },
+      "new": {
+        "path": "cablp/atomic/cross_sections.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.atomic.cross_sections"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "34 import statements rewritten. Carries the one non-import functional edit in this row: the __file__-derived table anchor, `_VARS_DIR = Path(__file__).parent.parent / \"vars\"`, becomes `_DATA_DIR = Path(__file__).parent / \"data\"` -- it must follow the CSVs and the LXCat text into cablp/atomic/data/. The identifier is renamed with its meaning (it is module-private with 4 sites and no external surface); RENAME_MAP.md section 3.2 shows only the right-hand side changing, so this is a disclosed deviation. Its three function-local `from ..vars._coeff import` statements become `from .coefficients import` -- cross-package today, intra-package after the carve, which is the cheapest evidence that the slate's grouping matches the real coupling. The H arms travel unchanged (R0.5)."
+    },
+    {
+      "change_kind": "move+rename",
+      "old": {
+        "path": "cablp/funcs/_fits.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.funcs._fits"
+      },
+      "new": {
+        "path": "cablp/atomic/fits.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.atomic.fits"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "4 import statements rewritten. The H arms travel unchanged (R0.5)."
+    },
+    {
+      "change_kind": "move+rename",
+      "old": {
+        "path": "cablp/vars/_coeff.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.vars._coeff"
+      },
+      "new": {
+        "path": "cablp/atomic/coefficients.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.atomic.coefficients"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "9 import statements rewritten. Q2: the R0.2 slate names this member `funcs/_coeff` but the file is at vars/_coeff.py. The DESTINATION is unambiguous either way and the map assigned it here; only the source path in the ruling was off by one directory. The a_11s_double row and its 'delete with cross_sections.ipynb's disposition, not before' comment travel unchanged -- that notebook is disk-archived, not deleted."
+    },
+    {
+      "change_kind": "move+rename",
+      "old": {
+        "path": "cablp/funcs/_adas.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.funcs._adas"
+      },
+      "new": {
+        "path": "cablp/atomic/adas.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.atomic.adas"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "15 import statements rewritten; the slate's '(+ adf11/ADAS access)' is exactly this file. Functional edit riding the move: `ADAS_DIR = Path(__file__).resolve().parent.parent / \"vars\" / \"adas\"` becomes `.parent / \"data\" / \"adas\"`, following the data. Its user-facing missing-data message and module docstring are re-anchored to cablp/atomic/data/adas/ in the same edit: that string IS the documented bring-up instruction for the untracked masters, so leaving it would misdirect every fresh checkout. (The flatten deliberately did NOT edit it, because the CABLP-relative anchor stayed true across that move; at the carve the directory genuinely moves, so the same argument now requires the edit.)"
+    },
+    {
+      "change_kind": "move",
+      "old": {
+        "path": "cablp/vars/h_eii_cross.csv",
+        "anchor_kind": "data_file",
+        "symbol": "cablp/vars/h_eii_cross.csv"
+      },
+      "new": {
+        "path": "cablp/atomic/data/h_eii_cross.csv",
+        "anchor_kind": "data_file",
+        "symbol": "cablp/atomic/data/h_eii_cross.csv"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "P-2: vars/ is dissolved by the carve, and this table is read by exactly one carve destination (cablp.atomic.cross_sections, through the _DATA_DIR anchor). Homing it under the package that reads it keeps the __file__-relative anchor one level deep instead of two. Bytes unchanged."
+    },
+    {
+      "change_kind": "move",
+      "old": {
+        "path": "cablp/vars/he_eii_cross.csv",
+        "anchor_kind": "data_file",
+        "symbol": "cablp/vars/he_eii_cross.csv"
+      },
+      "new": {
+        "path": "cablp/atomic/data/he_eii_cross.csv",
+        "anchor_kind": "data_file",
+        "symbol": "cablp/atomic/data/he_eii_cross.csv"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "P-2: vars/ is dissolved by the carve, and this table is read by exactly one carve destination (cablp.atomic.cross_sections, through the _DATA_DIR anchor). Homing it under the package that reads it keeps the __file__-relative anchor one level deep instead of two. Bytes unchanged."
+    },
+    {
+      "change_kind": "move",
+      "old": {
+        "path": "cablp/vars/he_ion_rate.csv",
+        "anchor_kind": "data_file",
+        "symbol": "cablp/vars/he_ion_rate.csv"
+      },
+      "new": {
+        "path": "cablp/atomic/data/he_ion_rate.csv",
+        "anchor_kind": "data_file",
+        "symbol": "cablp/atomic/data/he_ion_rate.csv"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "P-2: vars/ is dissolved by the carve, and this table is read by exactly one carve destination (cablp.atomic.cross_sections, through the _DATA_DIR anchor). Homing it under the package that reads it keeps the __file__-relative anchor one level deep instead of two. Bytes unchanged."
+    },
+    {
+      "change_kind": "move",
+      "old": {
+        "path": "cablp/vars/he_ion_neutral_phelps_lxcat.txt",
+        "anchor_kind": "data_file",
+        "symbol": "cablp/vars/he_ion_neutral_phelps_lxcat.txt"
+      },
+      "new": {
+        "path": "cablp/atomic/data/he_ion_neutral_phelps_lxcat.txt",
+        "anchor_kind": "data_file",
+        "symbol": "cablp/atomic/data/he_ion_neutral_phelps_lxcat.txt"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "P-2: vars/ is dissolved by the carve, and this table is read by exactly one carve destination (cablp.atomic.cross_sections, through the _DATA_DIR anchor). Homing it under the package that reads it keeps the __file__-relative anchor one level deep instead of two. Bytes unchanged."
+    },
+    {
+      "change_kind": "move",
+      "old": {
+        "path": "cablp/vars/adas/README.md",
+        "anchor_kind": "data_file",
+        "symbol": "cablp/vars/adas/README.md"
+      },
+      "new": {
+        "path": "cablp/atomic/data/adas/README.md",
+        "anchor_kind": "data_file",
+        "symbol": "cablp/atomic/data/adas/README.md"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "P-2, and the ONE row a fresh checkout must act on. The 38 OPEN-ADAS adf11/adf15 masters in this directory are UNTRACKED by licence (.gitignore, whose pattern moves to cablp/atomic/data/adas/*.dat in this commit), so no git operation carries them: they must be hand-moved on disk from cablp/vars/adas/ to cablp/atomic/data/adas/ in every checkout and every live worktree, and verified against this README's checksum table afterwards. A checkout that misses this fails every atomic_rate_model = \"adas\" gate with `RuntimeError: OPEN-ADAS data file not found`. The README's own download-directory line is re-anchored in the same edit, as it was at the flatten."
+    },
+    {
+      "change_kind": "move+rename",
+      "old": {
+        "path": "cablp/funcs/_plasmaparams.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.funcs._plasmaparams"
+      },
+      "new": {
+        "path": "cablp/plasma/params.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.plasma.params"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "9 import statements rewritten. This is the exact mapping the adopted manifest-schema document uses in its own worked example."
+    },
+    {
+      "change_kind": "move+rename",
+      "old": {
+        "path": "cablp/funcs/_heat.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.funcs._heat"
+      },
+      "new": {
+        "path": "cablp/plasma/heat.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.plasma.heat"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "5 import statements rewritten, plus its three relative imports: `from ._plasmaparams` becomes `from .params` (stays same-package), `from ._cross` becomes `from ..atomic.cross_sections` (becomes cross-package) and `from ..vars._cons` becomes `from ..constants` (re-rooted)."
+    },
+    {
+      "change_kind": "move+rename",
+      "old": {
+        "path": "cablp/funcs/_cathode_solver.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.funcs._cathode_solver"
+      },
+      "new": {
+        "path": "cablp/cathode/circuit.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.cathode.circuit"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "12 import statements rewritten. P-3, RULED by Tom (26dz): the module solves the full cathode/anode/bank CIRCUIT -- the Thevenin load line off V_bank, the R_comp partition, the anode sheath phi_a and I_tot -- so `sheath.py` named a part for the whole and `solver.py` named nothing while colliding with cablp/solvers/_sim1d/solver.py. The rename retires that collision as a side effect."
+    },
+    {
+      "change_kind": "move+rename",
+      "old": {
+        "path": "cablp/funcs/_cathode_solver_idriven.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.funcs._cathode_solver_idriven"
+      },
+      "new": {
+        "path": "cablp/cathode/circuit_idriven.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.cathode.circuit_idriven"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "7 import statements rewritten. P-4, RULED by Tom (26dz) with P-3. This module inverts the SAME circuit formulation, taking the inductor-integrated loop current as the independent variable, and it imports every physical piece from its partner rather than restating it. The two names must continue to move together."
+    },
+    {
+      "change_kind": "move+rename",
+      "old": {
+        "path": "cablp/funcs/_beam_deposition.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.funcs._beam_deposition"
+      },
+      "new": {
+        "path": "cablp/cathode/beam_deposition.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.cathode.beam_deposition"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "17 import statements rewritten -- RENAME_MAP.md section 7 says 15, and the extra 2 are `scripts/deposit_beam_reference.py`'s, which arrived with the deposit_beam reference corpus at 9288e01, after the map's per-module tallies were taken. Its three relative imports become `from .circuit import _c_log_ei` (the Q6 row), `from .kernels import COMPILED_KERNELS` and `from ..atomic.cross_sections import ...`. 3,874 lines and R3's reimplementation target; not one of them is touched here. The committed 506-entry fixture scripts/data/deposit_beam_reference.npz is BYTE-IDENTICAL (it pins values, not paths) and its verifier reports 0 differing at this commit."
+    },
+    {
+      "change_kind": "move+rename",
+      "old": {
+        "path": "cablp/funcs/_kernels.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.funcs._kernels"
+      },
+      "new": {
+        "path": "cablp/cathode/kernels.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.cathode.kernels"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "8 import statements rewritten. P-5: this is the opt-in selector binding exactly one compiled module, whose own KERNEL_ID is cathode tier A plus the CSDA march -- both cathode-domain -- so selector and extension stay in one package and the _MODULE string reads. Functional edit riding the move: _MODULE becomes \"cablp.cathode._cathode_kernels_cy\". The reviewer should weigh the counter-argument the map records: _kernels is arguably build/deployment infrastructure (CABLP_COMPILED_KERNELS, PROVENANCE) consumed by results/io.py and solver.py for artifact metadata rather than by cathode physics, which would put it in cablp/numerics/ or a new cablp/build/."
+    },
+    {
+      "change_kind": "move",
+      "old": {
+        "path": "cablp/funcs/_cathode_kernels_cy.pyx",
+        "anchor_kind": "module",
+        "symbol": "cablp.funcs._cathode_kernels_cy"
+      },
+      "new": {
+        "path": "cablp/cathode/_cathode_kernels_cy.pyx",
+        "anchor_kind": "module",
+        "symbol": "cablp.cathode._cathode_kernels_cy"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "P-6, and the ONE place where R0.3's 'private names become public' is deliberately NOT applied: change_kind is `move`, not `move+rename`. Renaming the extension would change its importable name, the built .so filename, and -- if KERNEL_ID moved with it -- the `compiled_kernels` provenance value recorded in EVERY artifact ever produced on the compiled path. Freezing the basename freezes KERNEL_ID at cython/_cathode_kernels_cy/tierA+csda across R2, so pre- and post-restructure artifacts stay directly comparable. VERIFIED: probed before and after this commit, byte-identical. The package path changes in build_ext.py (PYX and the Extension name) and in kernels.py (_MODULE); -ffp-contract=off and every other compile argument are untouched, they are the bit-exactness contract."
+    },
+    {
+      "change_kind": "move+rename",
+      "old": {
+        "path": "cablp/funcs/_interp.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.funcs._interp"
+      },
+      "new": {
+        "path": "cablp/numerics/interp.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.numerics.interp"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "2 import statements rewritten. P-7 chose a PACKAGE (unlike constants, P-1) because numerics is the one carve destination R3 is known to grow: the deposit_beam lane-march reimplementation is numerical-method code with no cathode-physics content. The module imports only `math` and `bisect`; its explicitly fused lerp (math.fma) is what makes pure == compiled bit-exact by construction of the source on both platforms, and it is pinned by scripts/data/interp_fused_reference.npz. Not one line of it is reflowed -- the file moves byte-identical apart from its own path."
+    },
+    {
+      "change_kind": "delete",
+      "old": {
+        "path": "cablp/funcs/__init__.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.funcs"
+      },
+      "new": null,
+      "proposed_continuity": "retired_no_successor",
+      "group_id": null,
+      "deletion_reason": "RULED at R0.3/P-9. `cablp/funcs/__init__.py` is a star-import aggregator for a package that ceases to exist at this commit. Nothing consumes what it re-exports (verified: 16 package-level import sites, all submodule imports), and it would raise ImportError the moment its members moved. The cross-package private-name fiction dies with the rename.",
+      "replacement": null,
+      "notes": "P-9: not re-homed, DELETED, and the four new package __init__.py files are docstring-only rather than new aggregators -- otherwise the two-tier surface is re-created under new names on day one. This file's star-import re-exports have no consumer: all 16 package-level `from cablp.funcs import <module>` sites import a SUBMODULE, never an aggregated name, and every one of them keeps its bound name via an explicit `as` in this commit so no use site moves. The file also cannot survive the carve on its own terms: every module it star-imports leaves the package."
+    },
+    {
+      "change_kind": "delete",
+      "old": {
+        "path": "cablp/vars/__init__.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.vars"
+      },
+      "new": null,
+      "proposed_continuity": "retired_no_successor",
+      "group_id": null,
+      "deletion_reason": "RULED at R0.3/P-9. `cablp/vars/__init__.py` is a star-import aggregator for a package that ceases to exist at this commit. Nothing consumes what it re-exports (verified: 16 package-level import sites, all submodule imports), and it would raise ImportError the moment its members moved. The cross-package private-name fiction dies with the rename.",
+      "replacement": null,
+      "notes": "P-9: not re-homed, DELETED, and the four new package __init__.py files are docstring-only rather than new aggregators -- otherwise the two-tier surface is re-created under new names on day one. This file's star-import re-exports have no consumer: all 16 package-level `from cablp.funcs import <module>` sites import a SUBMODULE, never an aggregated name, and every one of them keeps its bound name via an explicit `as` in this commit so no use site moves. The file also cannot survive the carve on its own terms: every module it star-imports leaves the package."
+    },
+    {
+      "change_kind": "add",
+      "old": null,
+      "new": {
+        "path": "cablp/atomic/__init__.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.atomic"
+      },
+      "proposed_continuity": "retired_no_successor",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "New package for cross sections, empirical fits, IAEA coefficients and OPEN-ADAS access, plus the data/ tables they read. DOCSTRING-ONLY by ruling (P-9): it re-exports nothing, so every symbol has exactly one name and the aggregator surface the carve retires is not rebuilt. proposed_continuity is 'retired_no_successor' because an `add` row has no old entity to continue -- the field is inapplicable, not a claim."
+    },
+    {
+      "change_kind": "add",
+      "old": null,
+      "new": {
+        "path": "cablp/cathode/__init__.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.cathode"
+      },
+      "proposed_continuity": "retired_no_successor",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "New package for the cathode/anode/bank circuit solvers, the CSDA beam deposition march, and the compiled-kernel selector and extension. DOCSTRING-ONLY by ruling (P-9): it re-exports nothing, so every symbol has exactly one name and the aggregator surface the carve retires is not rebuilt. proposed_continuity is 'retired_no_successor' because an `add` row has no old entity to continue -- the field is inapplicable, not a claim."
+    },
+    {
+      "change_kind": "add",
+      "old": null,
+      "new": {
+        "path": "cablp/plasma/__init__.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.plasma"
+      },
+      "proposed_continuity": "retired_no_successor",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "New package for collision times, thermal velocities and gyrofrequencies, and the Braginskii heat closures. DOCSTRING-ONLY by ruling (P-9): it re-exports nothing, so every symbol has exactly one name and the aggregator surface the carve retires is not rebuilt. proposed_continuity is 'retired_no_successor' because an `add` row has no old entity to continue -- the field is inapplicable, not a claim."
+    },
+    {
+      "change_kind": "add",
+      "old": null,
+      "new": {
+        "path": "cablp/numerics/__init__.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.numerics"
+      },
+      "proposed_continuity": "retired_no_successor",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "New package for numerical-method helpers with no physics content. DOCSTRING-ONLY by ruling (P-9): it re-exports nothing, so every symbol has exactly one name and the aggregator surface the carve retires is not rebuilt. proposed_continuity is 'retired_no_successor' because an `add` row has no old entity to continue -- the field is inapplicable, not a claim."
+    },
+    {
+      "change_kind": "surface_change",
+      "old": {
+        "path": "cablp/__init__.py",
+        "anchor_kind": "config_key",
+        "symbol": "cablp.submodules",
+        "line_hint": 1
+      },
+      "new": {
+        "path": "cablp/__init__.py",
+        "anchor_kind": "config_key",
+        "symbol": "cablp.submodules",
+        "line_hint": 1
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "The package's advertised surface. `submodules = [\"funcs\", \"vars\", \"solvers\"]` becomes [\"atomic\", \"cathode\", \"constants\", \"numerics\", \"plasma\", \"solvers\"], which is what `__all__`, `__dir__()` and the lazy `__getattr__` import hook all read. NOTE for the reviewer: `vars` is dropped from this list even though cablp/vars/_nn_table.py and nn_table.csv remain on disk -- the list follows RENAME_MAP.md section 3.6 exactly, and the remnant is reachable by direct import (a PEP 420 namespace portion, verified) which is all its one consumer, core/config.py, uses. The remnant disappears at the retirement commit."
+    },
+    {
+      "change_kind": "move+rename",
+      "old": {
+        "path": "restructure/manifests/delta_flatten.DRAFT.json",
+        "anchor_kind": "data_file",
+        "symbol": "restructure/manifests/delta_flatten.DRAFT.json"
+      },
+      "new": {
+        "path": "restructure/manifests/delta_70e06f7.json",
+        "anchor_kind": "data_file",
+        "symbol": "restructure/manifests/delta_70e06f7.json"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "NOT THIS COMMIT'S WORK -- a chain bridging row, disclosed. base_revision here is 70e06f7, the PREDECESSOR MANIFEST'S DECLARED new_revision, so that the validator's CHAIN abutment check composes. Under the flatten's 'manifest names its parent' pattern the flatten's own manifest-finalization commit (fbbc1bd, which performed exactly this rename) and the staging merge (b62c5e1) fall OUTSIDE the range the predecessor declares, so they land inside this delta's range instead. `git diff --name-status --no-renames 70e06f7 b62c5e1` is exactly these two paths and nothing else. Without this row check (4) COVERAGE would fail on an add/delete pair the carve did not make; the alternative -- declaring base_revision b62c5e1, this branch's real base -- passes COVERAGE and fails CHAIN abutment instead. The reviewer should rule which the pattern wants, and whether the validator should learn to tolerate a bookkeeping gap between a delta's declared new_revision and its successor's base."
+    }
+  ]
+}
