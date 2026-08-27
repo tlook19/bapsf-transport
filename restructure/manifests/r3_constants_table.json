@@ -17,7 +17,13 @@
       "tail": "sim1d smoke ok: cells=72, dz=10.65 cm, Vp_total=2.433052e+06 cm^3, Vm_total=1.793692e+07 cm^3",
       "compiled_equivalence": "ran (not skipped): 5 cases ok at KERNEL_ID cython/_cathode_kernels_cy/tierA+csda, final state bit-identical on each. The .pyx was NOT edited by this member -- it already carried the full-precision values -- so this block is also the cross-check that moving the pure-path constants UP did not open a pure-vs-compiled gap."
     },
-    "import_provenance": "cablp.__file__ = <worktree>/cablp/__init__.py, asserted in-process before every quoted result (worktree PYTHONPATH trap)."
+    "import_provenance": "cablp.__file__ = <worktree>/cablp/__init__.py, asserted in-process before every quoted result (worktree PYTHONPATH trap).",
+    "reference_corpus": {
+      "command": "PYTHONPATH=<worktree> python scripts/deposit_beam_reference.py --verify",
+      "verdict": "RED at dd58acf (exit 1), GREEN at bc0a515 (exit 0)",
+      "status": "DISCLOSED, NOT PASSING. See reference_corpus_gate for the full finding.",
+      "note": "This gate was MISSED by the coder in the first pass and found by the reviewer. It is a committed gate that both I_ion-family rows reach outside the solver's explicit threading; the 4k footprint batteries could not see it because they exercise solver routes only."
+    }
   },
   "rows": [
     {
@@ -83,7 +89,7 @@
         "note": "I/Te Boltzmann factor ~82 at 0.3 eV"
       },
       "measured_4k_footprint": "battery_v2: max 4.08e-09 on M, 3.53e-10 on n, 1.25e-10 on Te -- FAR BELOW the 4.9e-7 direct prior (x0.008) and ~4 orders below the 4e-5 near-threshold prior. PASS (the rule fires only above x10). The amplified prior was attached to the wrong channel: this site feeds the n>=5 singlet EXCITATION tail's threshold energies, not an ionization rate.",
-      "consumers": "cablp/atomic/cross_sections.py:252,257 (He_singlet_tail_levels -> E_th for the n>=5 Rydberg tail), reached from He_singlet_tail_cross and He_beam_excitation_channel.",
+      "consumers": "CORRECTED. cablp/atomic/cross_sections.py:252,257 (He_singlet_tail_levels -> E_th for the n>=5 Rydberg tail), reached from He_singlet_tail_cross and He_beam_excitation_channel. THAT CHANNEL CONTINUES INTO THE BEAM MARCH: cablp/cathode/beam_deposition.py imports it as He_beam_excitation_channel_lkup (beam_deposition.py:590) and consumes it at :2184 and :3386, so this constant reaches the Tier-A corpus INDEPENDENTLY of HE_I_ION_EV. Also cablp/cathode/circuit.py:39,604.",
       "notes": "Bound by IMPORT to the canonical constant, per the ruling's stated preference, so the two spellings cannot drift apart again. coefficients.py previously had NO imports; the alias is private (_I_ION_EV) so this data module -- which callers import 'from' -- does not also re-export I_ion. Verified: coefficients.I_ion does not exist; He_ionization_limit_eV == constants.I_ion is True."
     },
     {
@@ -98,8 +104,8 @@
         "solver_path": 0.0,
         "note": "dormant -- every solver route passes I_ion_eV explicitly"
       },
-      "measured_4k_footprint": "BIT-IDENTICAL on BOTH batteries; assertion PASSED. battery_v2 makes it the stronger claim, against a 1e-12 floor rather than a 1e-2 one.",
-      "consumers": "Default value of the I_ion_eV argument at beam_deposition.py:852, 1426, 2797. Dormant on every solver route; live only for a caller invoking the module directly.",
+      "measured_4k_footprint": "BIT-IDENTICAL on both batteries; assertion PASSED -- but SCOPED: the zero-footprint claim is true OF THE SOLVER PATH AT THE 4k HORIZON and is FALSE of the module generally. The 4k batteries exercise only solver routes, which pass I_ion_eV explicitly; they do not reach the beam march through the module default. scripts/deposit_beam_reference.py does reach it, and that gate went RED on this change -- see reference_corpus_gate. The original unscoped wording was the defect the reviewer bounced.",
+      "consumers": "CORRECTED (the original entry was solver-path only and understated this badly). SOLVER PATH: default of the I_ion_eV argument at cablp/cathode/beam_deposition.py:853 (he_mean_secondary_energy_eV), 1427 and 2798 -- bound at DEFINITION time, so it is the value every call that omits I_ion_eV actually uses. Dormant on solver routes, which all pass I_ion_eV explicitly. SCRIPT/GATE PATH, which is where it is LIVE: scripts/deposit_beam_reference.py:394 and :448 (the Tier-A corpus BUILDER and VERIFIER both -- the <W_sec> crossing bar is derived from it); scripts/verify_beam_deposition.py:35,108,149,151; scripts/tailion_estimate.py:55; scripts/smoke_sim1d.py:6331,14241.",
       "notes": "Disarms a reproducibility trap rather than changing physics: a direct caller previously got 24.587 and could not reproduce a solver run bit for bit. The standing comment that described that divergence was updated in the same edit, since the change makes it false."
     },
     {
@@ -517,5 +523,58 @@
         "role": "THE MEMBER'S F_const, NOW ACTUALLY MEASURED: max 3.09e-08 on M, 3.72e-10 on n, 1.82e-10 on Te, at t = 4.7e-4 s. It sits just below the m_p arm, which is the expected composition -- m_p dominates, I_ion adds a little, and the other four rows contribute nothing (three are bit-identical and qe_cgs is inert)."
       }
     ]
+  },
+  "reference_corpus_gate": {
+    "gate": "scripts/deposit_beam_reference.py --verify",
+    "fixture": "scripts/data/deposit_beam_reference.npz (506 entries, format deposit-beam-reference-v1, reference path pure)",
+    "finding": "UNDISCLOSED COMMITTED-GATE REGRESSION, found at review, not by the coder. The gate is GREEN at bc0a515 and RED at dd58acf: 95,781 of 206,218 compared values differ across 496 diagnostic fields. Both I_ion-family rows of this member reach the beam march OUTSIDE the solver's explicit I_ion_eV threading, which is why the 4k footprint batteries -- which exercise solver routes only -- reported bit-identity for both.",
+    "gate_script_unchanged": "VERIFIED: git diff bc0a515 dd58acf -- scripts/deposit_beam_reference.py scripts/data/deposit_beam_reference.npz is EMPTY. Neither the gate nor the fixture was touched by this member, so the whole delta is the constants.",
+    "reproduction": {
+      "interpreter": "~/miniforge3/envs/fenicsx-env/bin/python, pure path (the builder and verifier REFUSE under CABLP_COMPILED_KERNELS=1 by design)",
+      "cablp_file_both_sides": "/home/trloo/bapsf/bapsf-transport/.claude/worktrees/agent-ac59624a52da3cabb/cablp/__init__.py -- asserted in-process on BOTH arms, so neither transcript came from the main checkout",
+      "green_at": "bc0a515 (HE_I_ION_EV = 24.587, He_ionization_limit_eV = 24.5874), exit 0",
+      "green_transcript": "fixture deposit_beam_reference.npz: 506 entries, format deposit-beam-reference-v1, reference path pure\ncompared 206218 values across 7590 result fields: 0 differing\nrecorded conservation closure: max 9.319892e-16 over 506 entries; tail bank max 5.188161e-16 over 268\nVERIFY OK -- the live pure implementation is bit-identical to the reference corpus, and its closure and substep/leg counts reproduce.",
+      "red_at": "dd58acf (both = 24.58738793623), exit 1",
+      "red_transcript": "fixture deposit_beam_reference.npz: 506 entries, format deposit-beam-reference-v1, reference path pure\ncompared 206218 values across 7590 result fields: 95781 differing\nrecorded conservation closure: max 9.319892e-16 over 506 entries; tail bank max 5.188161e-16 over 268\n[496 diagnostic field mismatch lines and 483 closure lines elided; transcript ends:]\n    ... and 476 more\nVERIFY FAILED -- the live implementation does not reproduce the reference corpus."
+    },
+    "live_paths": [
+      {
+        "path": "(a) HE_I_ION_EV as a BOUND DEFAULT",
+        "mechanism": "beam_deposition.py:853 declares `I_ion_eV: float = HE_I_ION_EV` (also :1427, :2798). A default argument is bound at DEFINITION time, so every call that omits I_ion_eV uses it, and the corpus replays most entries on the module default rather than threading a value. Confirmed in-process: monkeypatching the module global after import does NOT change it, which is exactly what makes this a definition-time binding rather than a lookup.",
+        "consequence": "the <W_sec> crossing bar, which scripts/deposit_beam_reference.py:392 derives by bisecting he_mean_secondary_energy_eV on that default, moves."
+      },
+      {
+        "path": "(b) He_ionization_limit_eV through the excitation channel",
+        "mechanism": "cross_sections.He_singlet_tail_levels function-level-imports it (cross_sections.py:252) as the series limit for the n>=5 singlet tail; He_beam_excitation_channel sums that tail; beam_deposition imports the channel as He_beam_excitation_channel_lkup (beam_deposition.py:590) and consumes it at :2184 and :3386.",
+        "independence_verified": "YES, in-process and by the reviewer's single revert. Holding HE_I_ION_EV at its NEW value and changing ONLY coefficients.He_ionization_limit_eV still moves the channel: sigma_tot(60 eV) 1.6772437267029645e-17 -> 1.677243770375354e-17, E_rad_mean(60 eV) 21.95058616643196 -> 21.950584971512203 (same direction at 120 and 180 eV). So the two paths are independently live and neither explains the other."
+      }
+    ],
+    "wsec_bar_move": {
+      "derived_from": "HE_I_ION_EV, via he_mean_secondary_energy_eV's bound default",
+      "old_bar_eV": 221.40626034301195,
+      "new_bar_eV": 221.40664827924198,
+      "old_bar_2x_eV": 442.8125206860239,
+      "new_bar_2x_eV": 442.81329655848396,
+      "relative_move": 1.7521435469159038e-06,
+      "ulp_spacing_at_bar": 2.842170943040401e-14,
+      "move_in_ulp": 13649292664.0,
+      "why_it_flips_the_straddles": "the straddle triple is nextafter-spaced around the bar -- below/at/above are +-1 ulp apart. A bar that moves ~1.4e10 ulp relocates it ten orders beyond that spacing, so all three entries that bracketed the OLD bar now sit on ONE side of the NEW bar.",
+      "verified_by": "recomputed in-process with the builder's own bisection (scripts/deposit_beam_reference.py:392), threading each constant spelling explicitly; reproduces the reviewer's figures exactly."
+    },
+    "flipped_straddle_entries": {
+      "count": 4,
+      "entries": "the four straddle_*_wsec_bar_* corpus entries (below_wsec_bar / at_wsec_bar / above_wsec_bar, both walk directions)",
+      "field": "tail_above_bar_power_erg_s",
+      "effect": "100% of the field flips -- these are branch-selection flips, not arithmetic drift"
+    },
+    "benign_class": "the eii_edge straddles move only in the last digit (ULP class), which is ordinary round-off and not a branch flip.",
+    "magnitude_census_source": "MEASURED BY THE REVIEWER over 506 entries and recorded here as attributed, not re-derived by the coder at this commit: median 1.858e-05, p90 4.766e-04, max 1.0, 11 entries <= 1e-15. The coder re-measures it old-fixture-vs-new-fixture at the recapture commit, where both fixtures are in hand.",
+    "DISPOSITION": {
+      "corpus_status": "THE FIXTURE'S RECORDED OUTPUTS CORRESPOND TO PRE-UNIFICATION CONSTANTS. It was captured when HE_I_ION_EV was 24.587 and He_ionization_limit_eV was 24.5874, and it therefore pins a <W_sec> bar this member has moved. It is not a neutral reference for the current code.",
+      "recapture_ruling": "RATIFIED by Tom, 2026-08-27 (session 39): full re-capture of the Tier-A reference corpus at unified constants, ON THIS BRANCH. The old fixture stays reproducible at tag r2-tip-2026-08-27; history is untouched. Executed in the commit that follows this one -- see recapture_event.",
+      "tier_a_sub_event_2": "MUST NOT be scored against the OLD fixture. Once the recapture lands, the re-captured corpus is the reference.",
+      "flip_census_bar": "The R1 contract's <=1e-9 energy-weighted branch-flip bar is ruled INAPPLICABLE to this constants member (Tom-ratified 2026-08-27, session 39): the threshold itself moved BY RULING, so the straddle flips are intended semantics, not infidelity. The bar stays ARMED for sub-event 2 against the re-captured corpus.",
+      "not_touched": "scripts/data/deposit_beam_reference.npz was NOT modified at this disclosure commit."
+    }
   }
 }
