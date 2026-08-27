@@ -302,6 +302,12 @@ compatibility-refused like the packed state fields, and the band's whole
 purpose is to damp float residue rather than to define the trajectory. The
 honest disclosure is this row.
 
+Measured, so the disclosure is not merely theoretical in the other direction
+either: at the armed defaults the `meanfield` and `meanfield_beam` acceptance
+scenarios both still hand off raw-byte identical (2026-08-26), the latter with
+`surface_loss` binding 2,169 of its 2,190 steps. Neither window reaches a
+floor-pinned afterglow, which is the regime the paragraph above is about.
+
 ### Picard counters
 
 | state | site | class |

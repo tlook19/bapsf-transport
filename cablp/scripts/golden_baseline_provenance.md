@@ -1,5 +1,13 @@
 # Provenance of the golden baseline pins (`baseline_sim1d.BASELINE_*_OVERRIDES`)
 
+**Recaptured 2026-08-26 (`[afterglow-dt-cost]` ADOPTION — the exemption
+hysteresis band and the accelerated dt-growth re-approach flipped to armed
+config defaults; a stance change and a golden re-anchor in one event, see the
+recapture record below). The stance file `g1atrim.toml` is UNTOUCHED by that
+event: what moved is `default_config()`, which this fixture layers under the
+stance.** The recapture record's newest entry carries the moved numbers; the
+preceding recapture is summarized next.
+
 **Recaptured 2026-08-25 (THE STANCE EVENT — the `plateau_multigroup`
 anomalous-heating closure adopted with its `C_R` re-trim, the
 `anode_sheath_full_debit` and `beam_deposition_in_heat_substep` flags armed, and
@@ -95,8 +103,8 @@ to be.
 |---|---|---|
 | `nx` | `60` | Axial resolution of the far column: a pure cost knob. The campaign runs 268; a reviewer pays for this gate on the candidate branch and again post-merge. Pinned rather than inherited so a future default-`nx` change cannot multiply every gate's runtime silently. |
 | `max_steps_action` | `"raise"` | Deliberately overrides the stance's `"stop"`. For a campaign arm a step cap is a budget and a truncated arm is still data; here the cap is a tripwire, and tripping it should be loud. |
-| `max_steps` (run kwarg) | `150000` | **A tripwire, not a run length** — ~1.6× the measured 94,044 steps. It exists so a change that quietly destroys the timestep fails fast instead of running for hours. If it fires, the question is what happened to `dt`, not what happened to the trajectory. The value was SIZED at ~2× deliberately, against the 76,631 steps the fixture ran at the R2b re-anchor (2026-08-20), which is the capture the cap was chosen against and not the one immediately before the stance event: a backstop with a few percent of headroom is not a backstop, it is a second cost cap waiting to truncate the gate. Two recaptures then trimmed the fixture to 70,408 steps, and it is THAT count the 2026-08-25 stance event's +23,636 steps are measured from — 70,408 + 23,636 = the 94,044 above. The margin shrank without the cap moving; 1.6× is still a backstop, and re-sizing it is a golden-touching change rather than a maintenance edit. |
-| digest horizon (`baselines/golden_digest_4k.json`) | first `4000` accepted steps | The companion fixture for `scripts/golden_digest_gate.py`, which folds the packed state into a running SHA-256 after EVERY accepted step of this same configuration. The horizon is a cost knob, not physics: 4,000 steps is **10 min 46 s** on the pure path against the full gate's 19 min 14 s compiled / 46 min 38 s pure, and over the steps it covers it is the STRONGER check, because the golden certifies only what reaches a save. (Those are post-`mg-pure-vectorize` figures, the digest one measured on a clean lane 2026-08-26. The `~2.5 min` against a `~17` min gate this row carried before was true at the PREVIOUS stance; the adaptive-`dt` change recorded in the 2026-08-25 stance event is what moved it.) That gate runs at `max_steps_action = "stop"` — the cap is its run length, not a tripwire — which changes what happens AT the cap and nothing before it. |
+| `max_steps` (run kwarg) | `150000` | **A tripwire, not a run length** — ~2.4× the measured 62,613 steps, the margin restored by the 2026-08-26 adoption rather than by moving the cap (it was ~1.6× over the 94,044 steps of the capture before it). It exists so a change that quietly destroys the timestep fails fast instead of running for hours. If it fires, the question is what happened to `dt`, not what happened to the trajectory. The value was SIZED at ~2× deliberately, against the 76,631 steps the fixture ran at the R2b re-anchor (2026-08-20), which is the capture the cap was chosen against and not the one immediately before the stance event: a backstop with a few percent of headroom is not a backstop, it is a second cost cap waiting to truncate the gate. Two recaptures then trimmed the fixture to 70,408 steps, and it is THAT count the 2026-08-25 stance event's +23,636 steps are measured from — 70,408 + 23,636 = the 94,044 above. The margin shrank without the cap moving; 1.6× is still a backstop, and re-sizing it is a golden-touching change rather than a maintenance edit. |
+| digest horizon (`baselines/golden_digest_4k.json`) | first `4000` accepted steps | The companion fixture for `scripts/golden_digest_gate.py`, which folds the packed state into a running SHA-256 after EVERY accepted step of this same configuration. The horizon is a cost knob, not physics: 4,000 steps is **11 min 33 s** on the pure path against the full gate's 16 min 16 s compiled / 45 min 55 s pure (2026-08-26 adoption capture, clean lane), and over the steps it covers it is the STRONGER check, because the golden certifies only what reaches a save. (Those are post-`mg-pure-vectorize` figures, the digest one measured on a clean lane 2026-08-26. The `~2.5 min` against a `~17` min gate this row carried before was true at the PREVIOUS stance; the adaptive-`dt` change recorded in the 2026-08-25 stance event is what moved it.) That gate runs at `max_steps_action = "stop"` — the cap is its run length, not a tripwire — which changes what happens AT the cap and nothing before it. |
 
 `BASELINE_FLAG_OVERRIDES` carries one entry, `neutral_equilibration = True`, for
 the reason given in the re-cut section above.
@@ -110,22 +118,31 @@ whole cycle rather than a truncated foot.
 
 | quantity | value |
 |---|---|
-| steps | 94,044 |
-| wall, single lane | **19 min 14 s** per capture COMPILED (measured 2026-08-26); **46 min 38 s** PURE, i.e. 2.42× compiled (measured post-`mg-pure-vectorize`, 2026-08-25; see the kernel-path disclosure in the 2026-08-25 record) — the two run strictly serially. The `~2.8 h` this row once gave for the pure path was an EXTRAPOLATION from two killed attempts and was never measured; it is corrected in that record. |
+| steps | 62,613 |
+| wall, single lane | **16 min 16 s** VERIFY compiled, **45 min 55 s** CAPTURE pure (both measured 2026-08-26 on a CLEAN lane, nothing else running). |
 | saves | 2,620 |
-| `final_time` | 2.618731e-02 s (the dynamic `t_end`, reached) |
+| `final_time` | 2.618682e-02 s (the dynamic `t_end`, reached) |
 | trajectory | `y[2620, 576]` = 8 fields × 72 cells |
 | phase census (saves) | 8 `pre_breakdown`, 11 `breakdown`, 2000 `main_discharge`, 600 `afterglow`, 1 `post_afterglow` |
 | save cadence | 10 us — the finest timing shift this fixture can resolve |
 
-*(Figures above are the 2026-08-25 stance-event capture; `steps`, `saves` and
-`final_time` are read from the committed sidecar
+*(Figures above are the 2026-08-26 `[afterglow-dt-cost]` adoption capture;
+`steps`, `saves` and `final_time` are read from the committed sidecar
 `scripts/baselines/production_discharge.json`, which is regenerated at every
-recapture and is the authority for them. The two captures were
-byte-identical but not equal in wall time; the spread is scheduling, not
-trajectory, and both lanes here were CONTENDED — other agents' gates were
-running — so these wall figures are an upper bound, not a clean-lane
-measurement.)*
+recapture and is the authority for them.)*
+
+**Wall time did not fall in proportion to the step count, and the comparison
+that would explain it is not available.** The adoption removed 33.4 % of the
+accepted steps, but the pure capture came in at 45 min 55 s against the
+previous capture's recorded 46 min 38 s and the compiled verify at 16 min 16 s
+against 19 min 14 s. The two figures are not comparable measurements: the
+2026-08-25 pair was measured on CONTENDED lanes and recorded as an upper
+bound, this pair on a clean one. What can be said without a controlled
+re-measurement is that the per-accepted-step cost is higher at the armed
+defaults. **Why is not established here** — rejected attempts per accepted
+step are the obvious candidate and were not counted — and neither the size of
+the effect nor the true wall-time saving is measured. Anyone who needs that
+saving as a number must measure both stances on one lane.
 
 **At the 2026-08-20 R2b re-anchor the gate came out ~2× the wall time of the
 fixture it replaced** (~8–9 min), not the same — the pre-capture projection of
@@ -152,6 +169,66 @@ stance the cells carry plasma and the term is well behaved. Recorded as a known
 closure stress, deliberately not addressed by this pass.
 
 ## Recapture record
+
+**2026-08-26 — `[afterglow-dt-cost]` ADOPTION: the exemption hysteresis band
+and the accelerated dt-growth re-approach flipped to armed config defaults
+(AUTHORIZED recapture; Tom-ruled adoption after all three pre-registered gates
+passed — registration `AFTERGLOW_DT_COST_REGISTRATION_2026-08-26`, A3
+adjudication `AFTERGLOW_DT_COST_A3_ADVISORY_2026-08-26`, both in the local
+docs repo).** Unlike every recapture before it, **the stance file did not
+move**: the two keys are `default_config()` defaults, and the fixture picks
+them up because it layers the stance over the shipped defaults. The event is
+still a stance change and a golden re-anchor, for the reason the protocol
+cares about — the configuration the campaign runs changed.
+
+| key | old | new | class |
+|---|---|---|---|
+| `surface_loss_floor_exempt_exit_rtol` (config default) | `0.0` (band off) | `0.1` | **DERIVED** — A/B-selected numerics knob |
+| `dt_growth_recovery_patience` (config default) | `0` (accelerator off) | `4` | **DERIVED** — A/B-selected numerics knob |
+
+Values, classes, the corrected two-prong A3 bar and the near-floor resolution
+bracket the band buys: `production_stance_provenance.md`. The claim under test
+was COST, not correctness; `dt_growth_recovery_factor` did not move but is now
+live at its own default, which the deprecation register records.
+
+**What moved in the fixture.**
+
+| quantity | before | after |
+|---|---|---|
+| `steps` | 94,044 | **62,613** (−31,431, −33.4 %) |
+| `saves` | 2,620 | **2,620** (unchanged) |
+| `final_time` | 2.618731e-02 s | **2.618682e-02 s** — the dynamic `t_end`, still reached |
+| NPZ `sha256` | `60e11c6fa64ced1050e57feae788f7e0eb4f1cd9b7e072bc483e3695002a9b76` | `77c0543cbbee6038756b79fcb904c8849c57c6aab9929bc100a0872c7f6ed93d` |
+| sidecar `sha256` | `074a682519fc9a4459b34829b549dc955ee3966b666af8763bdd775a0f9d22d5` | `18587f7190bafcf10d56b500407401e2528c3df6ec378798cbf86160abd2a87c` |
+| 4k trajectory digest | `f1461a03f2677146cbd927a614e3fc575a2d0dfe8a9d1eaeed54ebe872ce4b80` | `3f2424e3b9f6954a736c84041c2737fb2624778043b1fab028c725ed1cc4991f` |
+| digest `config_identity` | `567adf6b48bc8d0f3e92bd2818857e17ee5bc0308bfc9d28c18eeaef9e744b48` | `c56bd67dd782fde57ddc272abb00d271898d35fc9eb138d5f72acca46dec154d` |
+
+**Both digest pairs move, and that is the authorized outcome**: arming the band
+changes which cells the drain bound reads from the first step it binds, so this
+is a trajectory-moving event, not a config-identity-only rotation. The digest
+reference was recaptured with PURE kernels, matching the provenance the
+committed reference records.
+
+**Health, and the continuity read at the gate.** The sidecar reports
+`finite: true`, `Te_max` 28.38 → **27.90 eV**, `Ti_max` 8.211 → 8.208 eV,
+`n_max` 1.41557e13 → 1.41548e13 cm^-3. The phase census
+(8 / 11 / 2000 / 600 / 1) and the save count are both unchanged, so the
+fixture covers exactly the same cycle it did before at a third fewer steps. That is the
+golden-side echo of the A2 continuity gate the runner passed at the production
+point; it is a health check here, not a second physics verdict.
+
+**The 150,000-step tripwire did not fire, and its margin improved without the
+cap moving** — 1.6× → 2.4× headroom. The pin table row records the new ratio.
+
+**Gates run at this recapture** (worktree `agent/dtc-adoption`, all from the
+worktree's own `cablp/` with `PYTHONPATH` pointed at it):
+`scripts/smoke_sim1d.py` exit 0; `baseline_sim1d.py --verify` COMPILED
+(`CABLP_COMPILED_KERNELS=1`, kernel provenance probed in-process as
+`cython/_cathode_kernels_cy/tierA+csda`) printing
+`exact=True, max_rel=0.000e+00`; `golden_digest_gate.py` printing
+`exact=True` against the newly captured reference on the pure path. The
+fixture was CAPTURED pure and VERIFIED compiled, so pure-vs-compiled
+bit-exactness is re-evidenced by this recapture rather than assumed.
 
 **2026-08-25 — THE STANCE EVENT: the `plateau_multigroup` anomalous-heating
 closure adopted, with its `C_R` re-trim, two armed physics flags and the

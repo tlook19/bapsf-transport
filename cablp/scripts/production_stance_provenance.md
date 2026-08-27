@@ -689,6 +689,79 @@ choices; all three are needed together for second order.
 arm, subsumed by the Phelps moment operator that is now the config default. The
 legacy drag keys are deprecated and are deliberately no longer set here.
 
+## Afterglow dt cost (2026-08-26 stance event — shipped config defaults)
+
+Two timestep-controller keys flipped from off to armed as one adoption. They
+are **config defaults, not keys of `g1atrim.toml`** — the stance file is
+untouched by this event — and they are recorded here because flipping them was
+a stance change and a golden re-anchor in the same event (`golden_baseline_
+provenance.md` carries the recapture). Registration and gates:
+`AFTERGLOW_DT_COST_REGISTRATION_2026-08-26`; adjudication:
+`AFTERGLOW_DT_COST_A3_ADVISORY_2026-08-26` (both in the local docs repo).
+
+**`surface_loss_floor_exempt_exit_rtol = 0.1`** (params, was `0.0`) — the
+outer re-admission threshold of the hysteresis band on the `surface_loss`
+floor-exempt drain bound; entry stays at `SURFACE_LOSS_FLOOR_EXEMPT_RTOL`
+= 1e-3.
+
+**`dt_growth_recovery_patience = 4`** (params, was `0`) — arms the built
+accelerated dt-growth re-approach, which consequently makes
+`dt_growth_recovery_factor = 4.0` live at its own default.
+
+**Class: DERIVED, both.** They are numerics knobs, not physics: an
+A/B-selected pair, chosen against gates pre-registered before any run and not
+tuned against data. The claim under test was COST, not correctness — the
+adopted-stance afterglow spent 34.1 % of its steps inside a 2 ms window
+(7.7 % of sim time), owned by knife-edge floor-exempt re-admission amplified
+by the ×1.25 re-approach. The adopted arm is the pair (both on); the band-only
+arm was measured and REJECTED on its own gate (A1 1.796× against a 2× bar).
+
+**Honest bar (the corrected two-prong A3 bar, physics-advisor 2026-08-26).**
+The registration's A3 bar — "no increase above measurement noise" — is
+ill-posed for deterministic runs, where measurement noise is exactly zero, and
+was superseded on the record rather than reinterpreted. The bar the floor
+honesty is actually held to:
+
+1. **Rate invariance.** Floor injection per unit window time must be
+   dt-invariant to within the O(dt) crossing-layer correction. Measured across
+   a 2.7× change in step count: 1147.8 → 1181.8 erg/ms (+3.0 %), while
+   injection per STEP tracked the mean-dt ratio to 2–3 % (0.1031 → 0.2860 erg,
+   2.775 against a mean-dt ratio of 2.695). Total injection ~invariant with
+   per-step ∝ dt is the fingerprint of the pinned-drain-refund model, and it is
+   what a laundering-free fix looks like. A rise that scaled with dt in the
+   TOTAL, or any binding of the conduction floor site, would have failed.
+2. **Materiality.** Injection as a fraction of final column thermal must not
+   change at the quoted precision: 0.0661 % → 0.0678 % in-window,
+   0.2035 % → 0.2052 % whole-run. The 68 erg delta is 2.0e-5 of column
+   thermal, ~175× smaller than the 0.35 % column-energy reshuffle the
+   timestep change itself causes, and two orders below anything the ES1
+   comparison resolves.
+
+**Quoting convention adopted with the flip: floor injection is quoted as
+energy per window as a fraction of column thermal, never as clip counts.**
+This A/B is the proof — clip counts fell 3.5× while the physical integral was
+invariant, so a count-based statement flips sign under a step-size change and
+would misinform. Figures of record: 0.068 % window / 0.21 % run.
+
+**Resolution bracket the band buys, and it is the price.** An exempted cell is
+not re-admitted to the drain bound until its margin exceeds 10 % of its floor
+energy, so `Te` in `[Te_floor, 1.1·Te_floor]` = **[0.1, 0.11] eV** is
+drain-unthrottled by design. That interval sits far inside the already
+semi-quantitative sub-1-eV afterglow regime, so it adds no new figure caveat,
+but it IS the meaning of the number and any near-floor afterglow `Te` read
+carries it. The density channel is never exempted at any width, and the floor
+itself — not this bound — holds those cells.
+
+**Two consequences that are not physics but must not be discovered later.**
+Continuation bit-identity is no longer guaranteed: the exemption latch is run
+state and is not carried, so a resumed run starts un-exempt
+(`_sim1d/RESTART.md`). And recovering the historical bound is now a two-key
+operation — clearing `surface_loss_floor_exempt` while the band sits at its
+default raises at construction, by design, with the remedy in the message.
+
+Memo: `AFTERGLOW_DT_COST_A3_ADVISORY_2026-08-26` (docs repo). The A/B arm
+numbers above are the runner's BASE-vs-FIX2 transcripts as quoted there.
+
 ## Deliberately absent
 
 - `beam_product_transport` — `"local"` is both the stance and the config
