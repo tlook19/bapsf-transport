@@ -1302,8 +1302,16 @@ def main(argv=None):
 
     print(f"E0 bench: {args.load_note}")
     bg = load_background(args.run, tuple(args.window))
+    # ``puff_z`` and ``puff_cells`` are companion ROWS of the puff channel, not
+    # channels of their own, so neither belongs in this banner. ``puff_cells``
+    # is additionally ARRAY-valued, so activity is tested by reducing with
+    # np.sum rather than truth-testing the value itself.
+    channels = [
+        k for k, v in bg["sources"].items()
+        if k not in ("puff_z", "puff_cells") and np.sum(v) > 0
+    ]
     print(f"background loaded: nz={bg['z_edges'].size - 1}, "
-          f"channels={[k for k, v in bg['sources'].items() if k != 'puff_z' and v > 0]}")
+          f"channels={channels}")
 
     print("DVM arm ...")
     kn, sol, dvm_res = dvm_arm(bg, args, dvm_path)
