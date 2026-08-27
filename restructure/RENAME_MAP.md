@@ -221,7 +221,7 @@ Both are **invariant at the flatten** and change **only at the carve** — the
 distinction matters because it keeps the flatten a pure move.
 
 **The ADAS `.dat` files are untracked and no `git mv` will carry them.** The
-39 adf11/adf15 masters under `vars/adas/` are gitignored by licence
+38 adf11/adf15 masters under `vars/adas/` are gitignored by licence
 (`.gitignore:69`); only `README.md` is tracked. They must be hand-moved on
 disk, in every checkout and every live worktree, at the flatten *and* again at
 the carve, and verified against the README's checksum table afterwards. A
@@ -384,7 +384,7 @@ the `Extension` name are project-root-relative or import-qualified, and the
 project root *is* the repository root afterwards. The documented invocation
 `python build_ext.py --inplace` is then run from the repository root instead of
 from `cablp/` — a one-line change in CLAUDE.md and in `_kernels.py`'s
-RuntimeError text (`"…from the cablp/ directory…"`, `_kernels.py:73`).
+RuntimeError text (`"…from the cablp/ directory…"`, `_kernels.py:74`).
 
 At the **carve**, three coordinated edits: `build_ext.py:59`'s Extension name,
 `build_ext.py`'s `PYX` path, and `_kernels.py:39`'s `_MODULE`. The
@@ -630,7 +630,7 @@ must lose the import and its call site.
 `physics/reactions.py:52`; `interp_bitexact_gate.py:34`;
 `interp_fused_reference.py:39`; `mc_neutrals.py:1373`;
 `pec_band_fractions.py:89,98,111,223`; `profile_sim1d.py:64`;
-`vars/adas/README.md:17`; `_kernels.py:73` ("from the cablp/
+`vars/adas/README.md:17`; `_kernels.py:74` ("from the cablp/
 directory"). Most are `cablp.funcs.X`-style *import* references that break at
 the **carve**, not the flatten. (`_adas.py:36` was listed here until the
 2026-08-26 re-stamp; at this base it names no `cablp/cablp/` path — see §2.1.)
@@ -643,7 +643,8 @@ Two deserve a second look because they are `git show` recipes against
 
 At a `<base>` older than the flatten, the **old** path is the correct one.
 Blind-rewriting these makes the documented recipe fail against exactly the
-revisions it exists to compare with. Q5.
+revisions it exists to compare with. **Q5 is RULED (review, 26dw): both stay
+unedited, with the flatten commit as the named boundary.**
 
 ---
 
@@ -756,8 +757,10 @@ Consequences already applied to these artifacts:
 
 The validator enforces all of it mechanically and gains a
 `--emit-expanded` diagnostic printing the canonical per-file expansion,
-labelled derived and non-authoritative. Authority:
-`SOL_MANIFEST_SCHEMA_FIELDS_ANSWER_2026-08-26.md`.
+labelled derived and non-authoritative. The bullets above are the adopted
+2026-08-26 manifest-schema constraints stated in full; the enforcing
+implementation is `manifests/validate_manifest.py`, whose module docstring
+restates the same set check by check.
 
 **Q2 — `_coeff` lives in `vars/`, not `funcs/`.** R0.2 reads
 "`funcs/_cross` + `_fits` + `_coeff` … → `cablp/atomic`". The file is
@@ -786,12 +789,17 @@ of *that* artifact against post-flatten code will report an anchor mismatch
 unless the verifier is taught the flatten boundary. Confirm that is the
 intended reading of HISTORY INVIOLABLE.
 
-**Q5 — `git show <historical-base>:<path>` recipes.** Two scripts document
-recipes that are only correct against pre-flatten revisions. Options: leave
-them (correct for old bases, wrong for new), update them (vice versa), or make
-them branch on whether the base predates the flatten commit. The third is real
-work and beyond "pure moves"; this map recommends leaving them and adding one
-sentence naming the flatten commit as the boundary.
+**Q5 — RULED (review, 26dw): `git show <historical-base>:<path>` recipes stay
+UNEDITED.** Two scripts document recipes that are only correct against
+pre-flatten revisions. The options were: leave them (correct for old bases,
+wrong for new), update them (vice versa), or make them branch on whether the
+base predates the flatten commit. The third is real work and beyond "pure
+moves". The ruling takes this map's recommendation — leave them, and name the
+flatten commit as the boundary. `t23c_config_snapshot_delta.py:16` and
+`mirror_fieldmap_bitexact_structural.py:54` are therefore **not** among the 12
+content-edited files enumerated in `FLATTEN_EXECUTION_NOTES.md` §3, and the
+flatten delta manifest records them as deliberately not edited on the
+`cablp/scripts/` prefix row.
 
 **Q6 — RESOLVED (Tom, 26dz): `cablp/cathode/circuit.py` and
 `circuit_idriven.py`.** Neither of this map's candidates survived. The module
