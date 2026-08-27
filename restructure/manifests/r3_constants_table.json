@@ -20,9 +20,9 @@
     "import_provenance": "cablp.__file__ = <worktree>/cablp/__init__.py, asserted in-process before every quoted result (worktree PYTHONPATH trap).",
     "reference_corpus": {
       "command": "PYTHONPATH=<worktree> python scripts/deposit_beam_reference.py --verify",
-      "verdict": "RED at dd58acf (exit 1), GREEN at bc0a515 (exit 0)",
-      "status": "DISCLOSED, NOT PASSING. See reference_corpus_gate for the full finding.",
-      "note": "This gate was MISSED by the coder in the first pass and found by the reviewer. It is a committed gate that both I_ion-family rows reach outside the solver's explicit threading; the 4k footprint batteries could not see it because they exercise solver routes only."
+      "verdict": "GREEN at the branch tip against the RE-CAPTURED fixture (0 differing, exit 0). Was RED at dd58acf against the pre-unification fixture, and GREEN at bc0a515.",
+      "status": "PASSING after the Tom-ratified re-capture.",
+      "note": "This gate was MISSED by the coder in the first pass and found by the reviewer. It is a committed gate that both I_ion-family rows reach outside the solver's explicit threading; the 4k footprint batteries could not see it because they exercise solver routes only. Full history in reference_corpus_gate."
     }
   },
   "rows": [
@@ -568,13 +568,65 @@
       "effect": "100% of the field flips -- these are branch-selection flips, not arithmetic drift"
     },
     "benign_class": "the eii_edge straddles move only in the last digit (ULP class), which is ordinary round-off and not a branch flip.",
-    "magnitude_census_source": "MEASURED BY THE REVIEWER over 506 entries and recorded here as attributed, not re-derived by the coder at this commit: median 1.858e-05, p90 4.766e-04, max 1.0, 11 entries <= 1e-15. The coder re-measures it old-fixture-vs-new-fixture at the recapture commit, where both fixtures are in hand.",
+    "magnitude_census_source": "Reviewer's census (same-inputs recompute): median 1.858e-05, p90 4.766e-04, max 1.0, 11 entries <= 1e-15. The coder's independent old-fixture-vs-new-fixture census is in recapture_event.old_vs_new_census, with the reason the medians differ stated there.",
     "DISPOSITION": {
-      "corpus_status": "THE FIXTURE'S RECORDED OUTPUTS CORRESPOND TO PRE-UNIFICATION CONSTANTS. It was captured when HE_I_ION_EV was 24.587 and He_ionization_limit_eV was 24.5874, and it therefore pins a <W_sec> bar this member has moved. It is not a neutral reference for the current code.",
+      "corpus_status": "RESOLVED BY RE-CAPTURE. The fixture at the branch tip was rebuilt with the committed builder at unified constants and --verify is GREEN (0 differing). The pre-unification fixture stays reproducible at tag r2-tip-2026-08-27.",
       "recapture_ruling": "RATIFIED by Tom, 2026-08-27 (session 39): full re-capture of the Tier-A reference corpus at unified constants, ON THIS BRANCH. The old fixture stays reproducible at tag r2-tip-2026-08-27; history is untouched. Executed in the commit that follows this one -- see recapture_event.",
-      "tier_a_sub_event_2": "MUST NOT be scored against the OLD fixture. Once the recapture lands, the re-captured corpus is the reference.",
-      "flip_census_bar": "The R1 contract's <=1e-9 energy-weighted branch-flip bar is ruled INAPPLICABLE to this constants member (Tom-ratified 2026-08-27, session 39): the threshold itself moved BY RULING, so the straddle flips are intended semantics, not infidelity. The bar stays ARMED for sub-event 2 against the re-captured corpus.",
-      "not_touched": "scripts/data/deposit_beam_reference.npz was NOT modified at this disclosure commit."
+      "tier_a_sub_event_2": "Score against the RE-CAPTURED corpus (sha256 e70396e5...), not the pre-unification one. The R1 <=1e-9 energy-weighted branch-flip bar is ARMED for sub-event 2 against this new corpus.",
+      "flip_census_bar": "The R1 contract's <=1e-9 energy-weighted branch-flip bar is ruled INAPPLICABLE to this constants member -- Tom-ratified 2026-08-27, session 39. The threshold itself moved BY RULING, so the straddle flips are intended semantics, not infidelity. The bar stays ARMED for sub-event 2 against the re-captured corpus.",
+      "not_touched": "SUPERSEDED: scripts/data/deposit_beam_reference.npz WAS re-captured in the following commit, under Tom's ratified ruling. It was untouched at the disclosure commit."
+    },
+    "recapture_event": {
+      "ruling": "Tom-ratified 2026-08-27, session 39: full re-capture of the Tier-A reference corpus at unified constants, ON THIS BRANCH.",
+      "executed": "YES, in commit '[r3-constants] Tier-A corpus re-capture at unified constants (Tom-ratified)'.",
+      "old_fixture": {
+        "sha256": "77b010e12f39682ff19b27820c51403eb76a33e536c471dc6ff7d691c9b8aaf2",
+        "entries": 506,
+        "constants": "HE_I_ION_EV = 24.587, He_ionization_limit_eV = 24.5874",
+        "still_reproducible_at": "tag r2-tip-2026-08-27 -- history untouched, nothing rewritten; the old fixture is recoverable there."
+      },
+      "new_fixture": {
+        "sha256": "e70396e525aade66eb8a4e965b40a697a82dc42143ca5e8da16136af7bbe2e3d",
+        "entries": 506,
+        "constants": "HE_I_ION_EV = He_ionization_limit_eV = 24.58738793623",
+        "format": "deposit-beam-reference-v1, reference path pure (unchanged)"
+      },
+      "procedure": {
+        "builder": "the COMMITTED builder at the branch tip, unmodified: scripts/deposit_beam_reference.py",
+        "step_1_capture": "--capture --output scripts/deposit_beam_corpus_raw.npz, run with CABLP_COMPILED_KERNELS=1 (KERNEL_ID cython/_cathode_kernels_cy/tierA+csda). The module docstring explicitly permits this for --capture: it records the solver's ARGUMENTS and the compiled march is bit-exact against pure, so the sampled trajectory is the same one. Exit 0.",
+        "step_2_build": "--build --captured scripts/deposit_beam_corpus_raw.npz, on the PURE path (KERNEL_ID pure). --build and --verify REFUSE the compiled opt-in by design, because the pure path is the reference implementation and a fixture captured through a kernel would pin the kernel. Exit 0; 506 entries written.",
+        "step_3_verify": "--verify on the pure path at the tip: GREEN."
+      },
+      "verify_transcript_at_tip": "cablp.__file__ = /home/trloo/bapsf/bapsf-transport/.claude/worktrees/agent-ac59624a52da3cabb/cablp/__init__.py\nKERNEL_ID = pure\nfixture deposit_beam_reference.npz: 506 entries, format deposit-beam-reference-v1, reference path pure\ncompared 206218 values across 7590 result fields: 0 differing\nrecorded conservation closure: max 6.095224e-16 over 506 entries; tail bank max 3.891121e-16 over 268\nVERIFY OK -- the live pure implementation is bit-identical to the reference corpus, and its closure and substep/leg counts reproduce.",
+      "straddle_regeneration_verified": {
+        "claim": "the builder derives the <W_sec> bar from the LIVE HE_I_ION_EV, so the straddle triple regenerates around the NEW bar by construction. CHECKED in the built fixture rather than assumed.",
+        "entries": "e0393-e0398, the six straddle_*_wsec_bar_* entries (below/at/above x two walk directions)",
+        "at_bar_entry_old": "tail_energy_eV = 221.40626034301195, E0_eV = 442.8125206860239",
+        "at_bar_entry_new": "tail_energy_eV = 221.40664827924198, E0_eV = 442.81329655848396",
+        "structure_preserved": "YES -- below/at/above still sit at -1 ulp / 0 / +1 ulp (-2.8422e-14, 0, +2.8422e-14) about the NEW bar, exactly as they did about the OLD one. The triple moved WITH the bar and kept its nextafter spacing."
+      },
+      "old_vs_new_census": {
+        "scope": "PER-ENTRY over all 506 entries: for each entry, the max relative deviation of any output field, old fixture vs new fixture.",
+        "median": 2.448302e-05,
+        "p90": 0.0004765805,
+        "max": 1.0,
+        "entries_at_or_below_1e-15": 11,
+        "measured_by": "the coder, old-fixture-vs-new-fixture, both in hand at the recapture.",
+        "relation_to_the_reviewer_census": "p90 (4.766e-04), max (1.0) and the count of entries <= 1e-15 (11) REPRODUCE the reviewer's figures. The median differs (2.448e-05 here vs the reviewer's 1.858e-05) and the difference is expected, not a discrepancy: the reviewer compared recorded outputs against a live recompute on the SAME recorded inputs, whereas this is old fixture vs new fixture, where the REAL entries' captured input tuples also moved (the capture run's trajectory shifted with the constants). Two different deltas; both are stated rather than one being presented as the other."
+      },
+      "tier_a_closure_bars": {
+        "why_restated": "the verifier measures the implementation's OWN conservation closure, and the shipped bars were 4x the OLD-constants closure. With the corpus re-captured they are stale.",
+        "old_measured_closure": "per-ray max 9.319892e-16; tail-bank max 5.188161e-16",
+        "old_bars": "per-ray 3.727957e-15; tail-bank 2.075264e-15 (= 4x the old measured)",
+        "new_measured_closure": "per-ray max 6.095224e-16 (median 1.702320e-16); tail-bank max 3.891121e-16 (median 1.267249e-16), over 506 entries / 268 walked, as reported by --build and reproduced by --verify",
+        "PROPOSED_new_bars": {
+          "per_ray": 2.43809e-15,
+          "tail_bank": 1.556448e-15,
+          "rule": "~4x the measured closure, the same rule that set the old pair"
+        },
+        "STATUS": "PROPOSED, NOT ADOPTED. The new bar VALUES await Tom's ratification at review. Nothing in the repo was changed to these numbers by this member -- they are recorded here as a proposal only.",
+        "note": "the closure IMPROVED slightly under unified constants (per-ray max 9.32e-16 -> 6.10e-16), so the proposed bars are TIGHTER than the shipped pair, not looser. No bar was widened."
+      }
     }
   }
 }
