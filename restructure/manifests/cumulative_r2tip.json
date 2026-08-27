@@ -1,0 +1,1099 @@
+{
+  "manifest_kind": "cumulative",
+  "repository": "bapsf-transport",
+  "base_revision": "9288e01ab337626ea4c7bbe5518885e93a244460",
+  "new_revision": "19568143c396998b00f02d585caa66c9cf884297",
+  "bit_exact": true,
+  "golden_gate": {
+    "script": "scripts/baseline_sim1d.py",
+    "result": "baseline verify OK: saves=2620, exact=True, max_rel=0.000e+00, max_abs=0.000e+00, time_max_abs=0.000e+00 s (rtol=1.0e-09, atol=0.0e+00) [CABLP_COMPILED_KERNELS=1, KERNEL_ID cython/_cathode_kernels_cy/tierA+csda probed in-process before the run; the script itself prints no kernel suffix]",
+    "saves": 2620,
+    "revision": "19568143c396998b00f02d585caa66c9cf884297",
+    "revision_note": "ANNOTATION, NOT SCRIPT OUTPUT (labelled per the 26fp convention: until [golden-transcript-provenance] lands, a manifest golden_gate.result is not a verbatim transcript by construction, so everything beyond script output is labelled). The `result` line above is the transcript from the delta that owns new_revision (delta_1956814), quoted unchanged, with its own 26fp-style bracketed annotation intact. THIS MANIFEST RAN NO NEW GOLDEN: it adds no commit to the R2 window and changes no file the golden reads, so the gate of record at 19568143c396998b00f02d585caa66c9cf884297 is the one already run there. Every commit in the window carries its own gate in its own delta -- 70e06f7 (transcript at b9666cd, tier (a) reasoning recorded there), 364b26d, e6a1b75, 02333ce (two, at the pin 2d1234de and at the retirement) and 1956814 -- and all six report exact=True with saves=2620 on the compiled path at KERNEL_ID cython/_cathode_kernels_cy/tierA+csda. `bit_exact: true` for the cumulative is therefore the conjunction of five independently gated deltas, not a sixth measurement."
+  },
+  "mappings": [
+    {
+      "change_kind": "move",
+      "old": {
+        "path": "cablp/cablp",
+        "anchor_kind": "directory"
+      },
+      "new": {
+        "path": "cablp",
+        "anchor_kind": "directory"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "PREFIX MACRO (Sol 26dz), COMPOSED to the R2 tip. The flatten (delta_70e06f7) carried this macro over 64 files; 23 of them were re-homed or retired by a LATER delta, so their derived destination `cablp/<rest>` does not exist at new_revision and they are PRUNED from `covers` here -- each carries its own explicit base->tip row below, with the intermediate path disclosed in that row's notes. What remains is the 41 paths whose whole R2 history is the single dropped `cablp/` segment. The pruned 23 are: the 18 modules and data files the carve (delta_364b26d) re-homed into cablp/{atomic,cathode,plasma,numerics}/ and cablp/constants.py, the two package aggregators the carve deleted (cablp/cablp/funcs/__init__.py, cablp/cablp/vars/__init__.py), the sim3 compat module the retirement deleted (delta_e6a1b75), and the nn0 table pair the second retirement deleted (delta_02333ce). Import-qualified symbols are INVARIANT across the covered pairs: the package's importable name was and remains `cablp`, only the directory containing it moves, so the successor pass may mechanically carry every existing KB locator's anchor_kind, symbol and signature across, changing only revision and path. `proposed_continuity: same_entity` VECTORIZES over the 41 derived pairs and proposes nothing about the directory itself. Two covered paths additionally carry finer rows below, which are legal overrides on the same path pair: cablp/cablp/__init__.py (the submodules surface) and cablp/cablp/solvers/_sim1d/results/phase3_capture.py (the producer_anchor string), plus the four solvers/_sim1d __init__ surface rows, the config.py signature row and config_snapshots.json.",
+      "prefix_rule": {
+        "old_prefix": "cablp/cablp/",
+        "new_prefix": "cablp/",
+        "covers": [
+          "cablp/cablp/__init__.py",
+          "cablp/cablp/solvers/__init__.py",
+          "cablp/cablp/solvers/_sim1d/MODEL.md",
+          "cablp/cablp/solvers/_sim1d/NUMERICS.md",
+          "cablp/cablp/solvers/_sim1d/RESTART.md",
+          "cablp/cablp/solvers/_sim1d/__init__.py",
+          "cablp/cablp/solvers/_sim1d/config_snapshots.json",
+          "cablp/cablp/solvers/_sim1d/core/__init__.py",
+          "cablp/cablp/solvers/_sim1d/core/config.py",
+          "cablp/cablp/solvers/_sim1d/core/config_defaults_provenance.md",
+          "cablp/cablp/solvers/_sim1d/core/deprecations.py",
+          "cablp/cablp/solvers/_sim1d/core/geometry.py",
+          "cablp/cablp/solvers/_sim1d/core/ignition.py",
+          "cablp/cablp/solvers/_sim1d/core/integrator.py",
+          "cablp/cablp/solvers/_sim1d/core/model_families.py",
+          "cablp/cablp/solvers/_sim1d/core/neutral_seed_cache.py",
+          "cablp/cablp/solvers/_sim1d/core/options.py",
+          "cablp/cablp/solvers/_sim1d/core/state.py",
+          "cablp/cablp/solvers/_sim1d/core/timestep.py",
+          "cablp/cablp/solvers/_sim1d/core/validation.py",
+          "cablp/cablp/solvers/_sim1d/physics/__init__.py",
+          "cablp/cablp/solvers/_sim1d/physics/cathode.py",
+          "cablp/cablp/solvers/_sim1d/physics/conduction.py",
+          "cablp/cablp/solvers/_sim1d/physics/energy.py",
+          "cablp/cablp/solvers/_sim1d/physics/flux.py",
+          "cablp/cablp/solvers/_sim1d/physics/hot_neutrals.py",
+          "cablp/cablp/solvers/_sim1d/physics/jet_carrier.py",
+          "cablp/cablp/solvers/_sim1d/physics/kinetic_dvm.py",
+          "cablp/cablp/solvers/_sim1d/physics/kinetic_neutrals.py",
+          "cablp/cablp/solvers/_sim1d/physics/mirror_field.py",
+          "cablp/cablp/solvers/_sim1d/physics/neutrals.py",
+          "cablp/cablp/solvers/_sim1d/physics/puff_orifice.py",
+          "cablp/cablp/solvers/_sim1d/physics/reactions.py",
+          "cablp/cablp/solvers/_sim1d/physics/sources.py",
+          "cablp/cablp/solvers/_sim1d/physics/tracer.py",
+          "cablp/cablp/solvers/_sim1d/results/__init__.py",
+          "cablp/cablp/solvers/_sim1d/results/health.py",
+          "cablp/cablp/solvers/_sim1d/results/io.py",
+          "cablp/cablp/solvers/_sim1d/results/phase3_capture.py",
+          "cablp/cablp/solvers/_sim1d/results/restart.py",
+          "cablp/cablp/solvers/_sim1d/solver.py"
+        ]
+      }
+    },
+    {
+      "change_kind": "move",
+      "old": {
+        "path": "cablp/scripts",
+        "anchor_kind": "directory"
+      },
+      "new": {
+        "path": "scripts",
+        "anchor_kind": "directory"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "PREFIX MACRO (Sol 26dz), COMPOSED to the R2 tip -- and composed WITHOUT pruning: all 182 paths the flatten (delta_70e06f7) moved to `scripts/` are still at `scripts/` at new_revision, so this row is byte-for-byte the flatten's covers list. The baselines/, data/ and stances/ subdirectories travel intact, which is what keeps the golden fixture's SCRIPT_DIR-relative resolution working. The root `scripts/` slot was vacated by the 26dj legacy archival (see the scripts/test_adapt.ipynb delete row). Three covered paths carry finer rows below as legal same-path-pair overrides: cablp/scripts/baseline_sim1d.py (the nn0 pin) and cablp/scripts/baselines/golden_digest_4k.json (the identity rotation it causes), both from delta_02333ce. Content edits riding this macro are enumerated per file in the flatten delta's own row and are not restated here; the Q5 ruling (three deliberately UNEDITED `git show <base>:cablp/...` recipe sites) likewise stands as that delta records it. `proposed_continuity: same_entity` VECTORIZES over the 182 derived pairs. This is the row for which a directory anchor is unavoidable -- `scripts/` is not an importable package and has no qualified name to carry.",
+      "prefix_rule": {
+        "old_prefix": "cablp/scripts/",
+        "new_prefix": "scripts/",
+        "covers": [
+          "cablp/scripts/afterglow_battery.py",
+          "cablp/scripts/afterglow_surrogate_0d.py",
+          "cablp/scripts/audit_sim1d_afterglow_ion_channel.py",
+          "cablp/scripts/audit_sim1d_configs.py",
+          "cablp/scripts/audit_sim1d_equilibration_duty.py",
+          "cablp/scripts/audit_sim1d_floor_activation.py",
+          "cablp/scripts/b0cfx_acceptance_probe.py",
+          "cablp/scripts/b0cfx_bitinertness.py",
+          "cablp/scripts/baseline_sim1d.py",
+          "cablp/scripts/baselines/golden_digest_4k.json",
+          "cablp/scripts/baselines/legacy-final-2026-07-22/notebook_discharge.json",
+          "cablp/scripts/baselines/legacy-final-2026-07-22/notebook_discharge.npz",
+          "cablp/scripts/baselines/phase3_rhs/.allocations/77d675a4-6852-45ff-9211-1c3cb6e74572.json",
+          "cablp/scripts/baselines/phase3_rhs/77d675a4-6852-45ff-9211-1c3cb6e74572.provenance.json",
+          "cablp/scripts/baselines/production_discharge.json",
+          "cablp/scripts/baselines/production_discharge.npz",
+          "cablp/scripts/build_neutral_seed_cache.py",
+          "cablp/scripts/capfix_frozen_census.py",
+          "cablp/scripts/capture_csda_rays.py",
+          "cablp/scripts/capture_phase3_rhs.py",
+          "cablp/scripts/characterise_mirror_fieldmap.py",
+          "cablp/scripts/compare_rates_adas.py",
+          "cablp/scripts/compare_sim1d_es1.py",
+          "cablp/scripts/compare_sim1d_schemes.py",
+          "cablp/scripts/covbuild_conducting_phase.toml",
+          "cablp/scripts/covbuild_run_conducting_phase.py",
+          "cablp/scripts/covbuild_window_probe.py",
+          "cablp/scripts/covcal_efold_read.py",
+          "cablp/scripts/cycle_map_m5b.py",
+          "cablp/scripts/data/deposit_beam_reference.npz",
+          "cablp/scripts/data/es1_sim1d_overlay.npz",
+          "cablp/scripts/data/es2_sim1d_overlay.npz",
+          "cablp/scripts/data/es3_sim1d_overlay.npz",
+          "cablp/scripts/data/es4_sim1d_overlay.npz",
+          "cablp/scripts/data/interp_fused_reference.npz",
+          "cablp/scripts/deposit_beam_reference.py",
+          "cablp/scripts/dvmhold_arm_census.py",
+          "cablp/scripts/ea0_emission_probe.py",
+          "cablp/scripts/eqmap_make.py",
+          "cablp/scripts/eqmap_slice.py",
+          "cablp/scripts/es4_scorer_path_check.py",
+          "cablp/scripts/ewp_ab_reader.py",
+          "cablp/scripts/ewp_ast_identity.py",
+          "cablp/scripts/ewp_demo_run.py",
+          "cablp/scripts/ewp_pairwise_audit.py",
+          "cablp/scripts/fa1_diag.py",
+          "cablp/scripts/fa2_diag.py",
+          "cablp/scripts/fa3_flare_read.py",
+          "cablp/scripts/fa4_dtcensus.py",
+          "cablp/scripts/fa4_twochannel.py",
+          "cablp/scripts/fa4j_jetread.py",
+          "cablp/scripts/fab_choke.py",
+          "cablp/scripts/faj_dtcensus.py",
+          "cablp/scripts/fingerprints_sim1d.py",
+          "cablp/scripts/fit_circuit_edges.py",
+          "cablp/scripts/fit_es1_circuit.py",
+          "cablp/scripts/flow_read_sim1d.py",
+          "cablp/scripts/fnb3_closure.py",
+          "cablp/scripts/fts_read.py",
+          "cablp/scripts/g1_build_profiles.py",
+          "cablp/scripts/g1_floor_audit.py",
+          "cablp/scripts/g1_front.py",
+          "cablp/scripts/g1_ledger.py",
+          "cablp/scripts/g1aporf_foot_diff.py",
+          "cablp/scripts/g1aporf_rowcensus.py",
+          "cablp/scripts/golden_baseline_provenance.md",
+          "cablp/scripts/golden_digest_gate.py",
+          "cablp/scripts/hiw_ledger.py",
+          "cablp/scripts/interp_bitexact_gate.py",
+          "cablp/scripts/interp_fused_reference.py",
+          "cablp/scripts/k2_dvm_exchange_acceptance.py",
+          "cablp/scripts/k2_dvm_exchange_measure.py",
+          "cablp/scripts/k5_frozen_bitexact.py",
+          "cablp/scripts/k5build_measure.py",
+          "cablp/scripts/k5gate_probe.py",
+          "cablp/scripts/k6_frozen_bitexact.py",
+          "cablp/scripts/k7bbuild_frozen_bitexact.py",
+          "cablp/scripts/k7cbuild_frozen_bitexact.py",
+          "cablp/scripts/kmpull_biagi_check.py",
+          "cablp/scripts/kmpull_threeset_check.py",
+          "cablp/scripts/kn2zone.py",
+          "cablp/scripts/l6a1_front.py",
+          "cablp/scripts/l6a1_ledger.py",
+          "cablp/scripts/ladder_operating_provenance.md",
+          "cablp/scripts/lc_flow_fig.py",
+          "cablp/scripts/legc_momentum_budget.py",
+          "cablp/scripts/mc_neutrals.py",
+          "cablp/scripts/measure_beam_manifold.py",
+          "cablp/scripts/mirror_fieldmap_bitexact_structural.py",
+          "cablp/scripts/mirror_fieldmap_refusal_demo.py",
+          "cablp/scripts/mn_lockscout_rp25.py",
+          "cablp/scripts/neutral_arch_e0_bench.py",
+          "cablp/scripts/neutral_arch_e1_study.py",
+          "cablp/scripts/neutral_arch_e2_compare.py",
+          "cablp/scripts/pd0_branching.py",
+          "cablp/scripts/pd1owner_reads.py",
+          "cablp/scripts/pec_band_fractions.md",
+          "cablp/scripts/pec_band_fractions.py",
+          "cablp/scripts/phicspike_frozen_sweep.py",
+          "cablp/scripts/plot_es1_validation.py",
+          "cablp/scripts/plot_production_golden.py",
+          "cablp/scripts/plot_sim1d_run.py",
+          "cablp/scripts/porf_footprint_proof.py",
+          "cablp/scripts/port_radiance_sim1d.py",
+          "cablp/scripts/power_ledger_sim1d.py",
+          "cablp/scripts/preflight_diffcfg.py",
+          "cablp/scripts/preset_resolver_demo.py",
+          "cablp/scripts/probe_sim1d_r4_a17_projection.py",
+          "cablp/scripts/probe_sim1d_r4_collision_bracket.py",
+          "cablp/scripts/probe_sim1d_r5_collector.py",
+          "cablp/scripts/probe_sim1d_r5_heatflux_bracket.py",
+          "cablp/scripts/probe_sim1d_r5_ignition_seed.py",
+          "cablp/scripts/probe_sim1d_r5_lowte_bracket.py",
+          "cablp/scripts/production_stance_provenance.md",
+          "cablp/scripts/profile_sim1d.py",
+          "cablp/scripts/puff_orifice.py",
+          "cablp/scripts/r1vb_probe_read.py",
+          "cablp/scripts/r1vb_run_probe.py",
+          "cablp/scripts/regime_crf_dtconv.py",
+          "cablp/scripts/regime_dtq_frozen_circuit.py",
+          "cablp/scripts/regime_pb_balance_table.py",
+          "cablp/scripts/regime_pb_pnet_decomposition.py",
+          "cablp/scripts/regime_r2_handoff_check.py",
+          "cablp/scripts/regime_r2_overlap_gate.py",
+          "cablp/scripts/regime_tnl_p1_triwindow.py",
+          "cablp/scripts/regime_tnl_p3_ledger.py",
+          "cablp/scripts/regime_vcm_onprobe_read.py",
+          "cablp/scripts/regime_vcm_r0b_check.py",
+          "cablp/scripts/restart_bitidentity.py",
+          "cablp/scripts/run_es1_r5_iter.py",
+          "cablp/scripts/run_floorfix_g3g4.py",
+          "cablp/scripts/run_kn2z_promoted.py",
+          "cablp/scripts/run_m6_point.py",
+          "cablp/scripts/run_mechanism_ladder.py",
+          "cablp/scripts/run_sim1d.py",
+          "cablp/scripts/scope_cathode_jet.py",
+          "cablp/scripts/scope_impurity_radiation.py",
+          "cablp/scripts/score_es1_drag_ab.py",
+          "cablp/scripts/score_es1_mn_ab.py",
+          "cablp/scripts/score_es1_two_baffles.py",
+          "cablp/scripts/score_kn2zone_momentum.py",
+          "cablp/scripts/scorer_spread_flag_bitexact_check.py",
+          "cablp/scripts/seed_secondary_ne0_traces.py",
+          "cablp/scripts/sim1d_run_and_plot.ipynb",
+          "cablp/scripts/smoke_sim1d.py",
+          "cablp/scripts/solve_lapd_coil_field.py",
+          "cablp/scripts/solve_lapd_coil_field_census.py",
+          "cablp/scripts/sp2_leg2_probe.py",
+          "cablp/scripts/sp3_build_nn0.py",
+          "cablp/scripts/spike_csda_march.py",
+          "cablp/scripts/spike_cython_kernels.py",
+          "cablp/scripts/stage3_observability_check.py",
+          "cablp/scripts/stance_config.py",
+          "cablp/scripts/stances/g1atrim.toml",
+          "cablp/scripts/sweep_sim1d_fueling.py",
+          "cablp/scripts/sweep_sim1d_resolved.py",
+          "cablp/scripts/sweep_sim1d_stability.py",
+          "cablp/scripts/t23c_config_snapshot_delta.py",
+          "cablp/scripts/t23c_pairwise_audit.py",
+          "cablp/scripts/tailion_estimate.py",
+          "cablp/scripts/verify_beam_deposition.py",
+          "cablp/scripts/verify_hbd_momentum.py",
+          "cablp/scripts/verify_phase3_source_capture.py",
+          "cablp/scripts/verify_sim1d_b0c_cadence.py",
+          "cablp/scripts/verify_sim1d_dvm_hold.py",
+          "cablp/scripts/verify_sim1d_k2_dvm.py",
+          "cablp/scripts/verify_sim1d_nbl1_neutral_energy.py",
+          "cablp/scripts/verify_sim1d_nbl2_neutral_transport.py",
+          "cablp/scripts/verify_sim1d_order.py",
+          "cablp/scripts/verify_sim1d_r2_hyperbolic.py",
+          "cablp/scripts/verify_sim1d_r3_a11.py",
+          "cablp/scripts/verify_sim1d_r3_boundary.py",
+          "cablp/scripts/verify_sim1d_r3_boundary_startup.py",
+          "cablp/scripts/verify_sim1d_r3_presheath.py",
+          "cablp/scripts/verify_sim1d_r3_routing.py",
+          "cablp/scripts/verify_sim1d_r4_beam_interception.py",
+          "cablp/scripts/verify_sim1d_r4_collision.py",
+          "cablp/scripts/verify_sim1d_r4_ionization_birth.py",
+          "cablp/scripts/verify_sim1d_r4_item21_ledger.py",
+          "cablp/scripts/verify_sim1d_r5_heatflux.py",
+          "cablp/scripts/verify_sim1d_r5_lowte.py",
+          "cablp/scripts/verify_sim1d_r5_picard.py"
+        ]
+      }
+    },
+    {
+      "change_kind": "move",
+      "old": {
+        "path": "cablp/pyproject.toml",
+        "anchor_kind": "data_file",
+        "symbol": "pyproject.toml"
+      },
+      "new": {
+        "path": "pyproject.toml",
+        "anchor_kind": "data_file",
+        "symbol": "pyproject.toml"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "SINGLE-DELTA ROW, carried through unchanged: this path is touched by the flatten (delta_70e06f7) and by no later delta, so its base->tip mapping is the flatten's mapping. The project root becomes the repository root, so the build configuration moves with it. `packages = [{include = \"cablp\"}]` and `include = [{path = \"cablp/funcs/*.so\"}]` are both already written relative to the project root and are therefore INVARIANT; `[tool.poetry.build] script = \"build_ext.py\"` likewise."
+    },
+    {
+      "change_kind": "move",
+      "old": {
+        "path": "cablp/poetry.lock",
+        "anchor_kind": "data_file",
+        "symbol": "poetry.lock"
+      },
+      "new": {
+        "path": "poetry.lock",
+        "anchor_kind": "data_file",
+        "symbol": "poetry.lock"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "SINGLE-DELTA ROW, carried through unchanged: this path is touched by the flatten (delta_70e06f7) and by no later delta, so its base->tip mapping is the flatten's mapping. Lockfile travels with pyproject.toml. Referenced by name as `cablp/poetry.lock` in the phase3 provenance environment_lock records - those string literals are edited in the scripts row above."
+    },
+    {
+      "change_kind": "move",
+      "old": {
+        "path": "cablp/build_ext.py",
+        "anchor_kind": "module",
+        "symbol": "build_ext"
+      },
+      "new": {
+        "path": "build_ext.py",
+        "anchor_kind": "module",
+        "symbol": "build_ext"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "SINGLE-DELTA ROW, carried through unchanged: this path is touched by the flatten (delta_70e06f7) and by no later delta, so its base->tip mapping is the flatten's mapping. Named by pyproject's [tool.poetry.build] script key, which resolves relative to the project root. `HERE = Path(__file__).resolve().parent` and `PYX = \"cablp/funcs/_cathode_kernels_cy.pyx\"` are both project-root-relative and are therefore INVARIANT across the flatten; the Extension name \"cablp.funcs._cathode_kernels_cy\" is an import-qualified name and is likewise invariant here (it changes at the CARVE, not at the flatten)."
+    },
+    {
+      "change_kind": "move",
+      "old": {
+        "path": "cablp/generate_eii_tables.py",
+        "anchor_kind": "module",
+        "symbol": "generate_eii_tables"
+      },
+      "new": {
+        "path": "scripts/generate_eii_tables.py",
+        "anchor_kind": "module",
+        "symbol": "generate_eii_tables"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "SINGLE-DELTA ROW, carried through unchanged: this path is touched by the flatten (delta_70e06f7) and by no later delta, so its base->tip mapping is the flatten's mapping. PROPOSED (RENAME_MAP.md section 4, P-8): a one-shot generator for the committed e-impact-ionization CSV tables under cablp/vars/. Nothing imports it; it is a tool, and `scripts/` is where this repository keeps tools. COSTS TWO CONTENT EDITS, which the alternative does not: line 18 `sys.path.insert(0, str(Path(__file__).parent))` and line 24 `OUT_DIR = Path(__file__).parent / \"cablp\" / \"vars\"` are both PROJECT-ROOT-relative, so each needs a second `.parent` once the file sits one level down. ALTERNATIVE, zero-edit: leave it at the repository root, where `Path(__file__).parent` still means the project root and the row becomes a pure prefix move. Reviewer's call."
+    },
+    {
+      "change_kind": "move",
+      "old": {
+        "path": "cablp/generate_he_ion_rate_table.py",
+        "anchor_kind": "module",
+        "symbol": "generate_he_ion_rate_table"
+      },
+      "new": {
+        "path": "scripts/generate_he_ion_rate_table.py",
+        "anchor_kind": "module",
+        "symbol": "generate_he_ion_rate_table"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "SINGLE-DELTA ROW, carried through unchanged: this path is touched by the flatten (delta_70e06f7) and by no later delta, so its base->tip mapping is the flatten's mapping. PROPOSED (RENAME_MAP.md section 4, P-8): same class as generate_eii_tables.py - a one-shot generator for cablp/vars/he_ion_rate.csv, with no importer. Same cost: line 18 `OUT_PATH = Path(__file__).parent / \"cablp\" / \"vars\" / \"he_ion_rate.csv\"` needs a second `.parent`. Same zero-edit alternative."
+    },
+    {
+      "change_kind": "delete",
+      "old": {
+        "path": "scripts/test_adapt.ipynb",
+        "anchor_kind": "data_file",
+        "symbol": "scripts/test_adapt.ipynb"
+      },
+      "new": null,
+      "proposed_continuity": "retired_no_successor",
+      "group_id": null,
+      "deletion_reason": "RULED RETIRE at R0.4 (Tom, 26dj). An empty husk: the only tracked file in the repository-root legacy `scripts/` directory, carrying no cells and no consumer. Its deletion is a precondition for this commit, not merely concurrent with it - `cablp/scripts/` cannot move onto `scripts/` while a tracked file occupies the destination. The rest of that directory (the exploratory notebooks, lecroydaq.py, data/) is untracked and is disk-archived outside the repository in the same operation; the `.gitignore` `scripts/*` rule is dropped in the same commit.",
+      "replacement": null,
+      "notes": "SINGLE-DELTA ROW, carried through unchanged (delta_70e06f7). Golden-inert: no gate, driver or module references this path. A knowledge-base impact block is owed for this row under the campaign's standing KB-impact rule."
+    },
+    {
+      "change_kind": "move+rename",
+      "old": {
+        "path": "cablp/cablp/vars/_cons.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.vars._cons"
+      },
+      "new": {
+        "path": "cablp/constants.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.constants"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "COMPOSED ROW (cumulative): this path is mapped by TWO deltas and is collapsed here to ONE base->tip row, never a chain of two. At base_revision the file is `cablp/cablp/vars/_cons.py`; the flatten (delta_70e06f7) moved it to `cablp/vars/_cons.py` under the cablp/cablp/ -> cablp/ prefix macro, and the carve (delta_364b26d) re-homed it from there to `cablp/constants.py`. The intermediate `cablp/vars/_cons.py` exists at neither end of this manifest and is disclosed here rather than mapped, which is why `cablp/cablp/vars/_cons.py` is PRUNED from the cablp/cablp/ prefix row's covers. The import-qualified symbol was invariant across the flatten and changes only at the carve, so this row's old symbol is the base-revision one. CARVE RATIONALE, verbatim from delta_364b26d: R0.2: the single-source constants become a top-level module. P-1 chose a MODULE over a package because the file is 43 lines of flat bindings with no sub-structure, and because the import-qualified symbols (cablp.constants.qe_SI) are identical either way -- so promoting it to a package at R3 would cost zero import-site edits. 52 import statements rewritten. The R3 constants-unification divergences (m_e_cgs, m_p_cgs, I_ion, the inline qe_SI at solver.py) live INSIDE this file and are deliberately untouched here: they are numerics-moving and R2 is bit-exact."
+    },
+    {
+      "change_kind": "move+rename",
+      "old": {
+        "path": "cablp/cablp/funcs/_cross.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.funcs._cross"
+      },
+      "new": {
+        "path": "cablp/atomic/cross_sections.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.atomic.cross_sections"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "COMPOSED ROW (cumulative): this path is mapped by TWO deltas and is collapsed here to ONE base->tip row, never a chain of two. At base_revision the file is `cablp/cablp/funcs/_cross.py`; the flatten (delta_70e06f7) moved it to `cablp/funcs/_cross.py` under the cablp/cablp/ -> cablp/ prefix macro, and the carve (delta_364b26d) re-homed it from there to `cablp/atomic/cross_sections.py`. The intermediate `cablp/funcs/_cross.py` exists at neither end of this manifest and is disclosed here rather than mapped, which is why `cablp/cablp/funcs/_cross.py` is PRUNED from the cablp/cablp/ prefix row's covers. The import-qualified symbol was invariant across the flatten and changes only at the carve, so this row's old symbol is the base-revision one. CARVE RATIONALE, verbatim from delta_364b26d: 34 import statements rewritten. Carries the one non-import functional edit in this row: the __file__-derived table anchor, `_VARS_DIR = Path(__file__).parent.parent / \"vars\"`, becomes `_DATA_DIR = Path(__file__).parent / \"data\"` -- it must follow the CSVs and the LXCat text into cablp/atomic/data/. The identifier is renamed with its meaning (it is module-private with 4 sites and no external surface); RENAME_MAP.md section 3.2 shows only the right-hand side changing, so this is a disclosed deviation. Its three function-local `from ..vars._coeff import` statements become `from .coefficients import` -- cross-package today, intra-package after the carve, which is the cheapest evidence that the slate's grouping matches the real coupling. The H arms travel unchanged (R0.5)."
+    },
+    {
+      "change_kind": "move+rename",
+      "old": {
+        "path": "cablp/cablp/funcs/_fits.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.funcs._fits"
+      },
+      "new": {
+        "path": "cablp/atomic/fits.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.atomic.fits"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "COMPOSED ROW (cumulative): this path is mapped by TWO deltas and is collapsed here to ONE base->tip row, never a chain of two. At base_revision the file is `cablp/cablp/funcs/_fits.py`; the flatten (delta_70e06f7) moved it to `cablp/funcs/_fits.py` under the cablp/cablp/ -> cablp/ prefix macro, and the carve (delta_364b26d) re-homed it from there to `cablp/atomic/fits.py`. The intermediate `cablp/funcs/_fits.py` exists at neither end of this manifest and is disclosed here rather than mapped, which is why `cablp/cablp/funcs/_fits.py` is PRUNED from the cablp/cablp/ prefix row's covers. The import-qualified symbol was invariant across the flatten and changes only at the carve, so this row's old symbol is the base-revision one. CARVE RATIONALE, verbatim from delta_364b26d: 4 import statements rewritten. The H arms travel unchanged (R0.5)."
+    },
+    {
+      "change_kind": "move+rename",
+      "old": {
+        "path": "cablp/cablp/vars/_coeff.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.vars._coeff"
+      },
+      "new": {
+        "path": "cablp/atomic/coefficients.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.atomic.coefficients"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "COMPOSED ROW (cumulative): this path is mapped by TWO deltas and is collapsed here to ONE base->tip row, never a chain of two. At base_revision the file is `cablp/cablp/vars/_coeff.py`; the flatten (delta_70e06f7) moved it to `cablp/vars/_coeff.py` under the cablp/cablp/ -> cablp/ prefix macro, and the carve (delta_364b26d) re-homed it from there to `cablp/atomic/coefficients.py`. The intermediate `cablp/vars/_coeff.py` exists at neither end of this manifest and is disclosed here rather than mapped, which is why `cablp/cablp/vars/_coeff.py` is PRUNED from the cablp/cablp/ prefix row's covers. The import-qualified symbol was invariant across the flatten and changes only at the carve, so this row's old symbol is the base-revision one. CARVE RATIONALE, verbatim from delta_364b26d: 9 import statements rewritten. Q2: the R0.2 slate names this member `funcs/_coeff` but the file is at vars/_coeff.py. The DESTINATION is unambiguous either way and the map assigned it here; only the source path in the ruling was off by one directory. The a_11s_double row and its 'delete with cross_sections.ipynb's disposition, not before' comment travel unchanged -- that notebook is disk-archived, not deleted."
+    },
+    {
+      "change_kind": "move+rename",
+      "old": {
+        "path": "cablp/cablp/funcs/_adas.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.funcs._adas"
+      },
+      "new": {
+        "path": "cablp/atomic/adas.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.atomic.adas"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "COMPOSED ROW (cumulative): this path is mapped by TWO deltas and is collapsed here to ONE base->tip row, never a chain of two. At base_revision the file is `cablp/cablp/funcs/_adas.py`; the flatten (delta_70e06f7) moved it to `cablp/funcs/_adas.py` under the cablp/cablp/ -> cablp/ prefix macro, and the carve (delta_364b26d) re-homed it from there to `cablp/atomic/adas.py`. The intermediate `cablp/funcs/_adas.py` exists at neither end of this manifest and is disclosed here rather than mapped, which is why `cablp/cablp/funcs/_adas.py` is PRUNED from the cablp/cablp/ prefix row's covers. The import-qualified symbol was invariant across the flatten and changes only at the carve, so this row's old symbol is the base-revision one. CARVE RATIONALE, verbatim from delta_364b26d: 15 import statements rewritten; the slate's '(+ adf11/ADAS access)' is exactly this file. Functional edit riding the move: `ADAS_DIR = Path(__file__).resolve().parent.parent / \"vars\" / \"adas\"` becomes `.parent / \"data\" / \"adas\"`, following the data. Its user-facing missing-data message and module docstring are re-anchored to cablp/atomic/data/adas/ in the same edit: that string IS the documented bring-up instruction for the untracked masters, so leaving it would misdirect every fresh checkout. (The flatten deliberately did NOT edit it, because the CABLP-relative anchor stayed true across that move; at the carve the directory genuinely moves, so the same argument now requires the edit.)"
+    },
+    {
+      "change_kind": "move",
+      "old": {
+        "path": "cablp/cablp/vars/h_eii_cross.csv",
+        "anchor_kind": "data_file",
+        "symbol": "cablp/cablp/vars/h_eii_cross.csv"
+      },
+      "new": {
+        "path": "cablp/atomic/data/h_eii_cross.csv",
+        "anchor_kind": "data_file",
+        "symbol": "cablp/atomic/data/h_eii_cross.csv"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "COMPOSED ROW (cumulative): this path is mapped by TWO deltas and is collapsed here to ONE base->tip row, never a chain of two. At base_revision the file is `cablp/cablp/vars/h_eii_cross.csv`; the flatten (delta_70e06f7) moved it to `cablp/vars/h_eii_cross.csv` under the cablp/cablp/ -> cablp/ prefix macro, and the carve (delta_364b26d) re-homed it from there to `cablp/atomic/data/h_eii_cross.csv`. The intermediate `cablp/vars/h_eii_cross.csv` exists at neither end of this manifest and is disclosed here rather than mapped, which is why `cablp/cablp/vars/h_eii_cross.csv` is PRUNED from the cablp/cablp/ prefix row's covers. The import-qualified symbol was invariant across the flatten and changes only at the carve, so this row's old symbol is the base-revision one. CARVE RATIONALE, verbatim from delta_364b26d: P-2: vars/ is dissolved by the carve, and this table is read by exactly one carve destination (cablp.atomic.cross_sections, through the _DATA_DIR anchor). Homing it under the package that reads it keeps the __file__-relative anchor one level deep instead of two. Bytes unchanged."
+    },
+    {
+      "change_kind": "move",
+      "old": {
+        "path": "cablp/cablp/vars/he_eii_cross.csv",
+        "anchor_kind": "data_file",
+        "symbol": "cablp/cablp/vars/he_eii_cross.csv"
+      },
+      "new": {
+        "path": "cablp/atomic/data/he_eii_cross.csv",
+        "anchor_kind": "data_file",
+        "symbol": "cablp/atomic/data/he_eii_cross.csv"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "COMPOSED ROW (cumulative): this path is mapped by TWO deltas and is collapsed here to ONE base->tip row, never a chain of two. At base_revision the file is `cablp/cablp/vars/he_eii_cross.csv`; the flatten (delta_70e06f7) moved it to `cablp/vars/he_eii_cross.csv` under the cablp/cablp/ -> cablp/ prefix macro, and the carve (delta_364b26d) re-homed it from there to `cablp/atomic/data/he_eii_cross.csv`. The intermediate `cablp/vars/he_eii_cross.csv` exists at neither end of this manifest and is disclosed here rather than mapped, which is why `cablp/cablp/vars/he_eii_cross.csv` is PRUNED from the cablp/cablp/ prefix row's covers. The import-qualified symbol was invariant across the flatten and changes only at the carve, so this row's old symbol is the base-revision one. CARVE RATIONALE, verbatim from delta_364b26d: P-2: vars/ is dissolved by the carve, and this table is read by exactly one carve destination (cablp.atomic.cross_sections, through the _DATA_DIR anchor). Homing it under the package that reads it keeps the __file__-relative anchor one level deep instead of two. Bytes unchanged."
+    },
+    {
+      "change_kind": "move",
+      "old": {
+        "path": "cablp/cablp/vars/he_ion_rate.csv",
+        "anchor_kind": "data_file",
+        "symbol": "cablp/cablp/vars/he_ion_rate.csv"
+      },
+      "new": {
+        "path": "cablp/atomic/data/he_ion_rate.csv",
+        "anchor_kind": "data_file",
+        "symbol": "cablp/atomic/data/he_ion_rate.csv"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "COMPOSED ROW (cumulative): this path is mapped by TWO deltas and is collapsed here to ONE base->tip row, never a chain of two. At base_revision the file is `cablp/cablp/vars/he_ion_rate.csv`; the flatten (delta_70e06f7) moved it to `cablp/vars/he_ion_rate.csv` under the cablp/cablp/ -> cablp/ prefix macro, and the carve (delta_364b26d) re-homed it from there to `cablp/atomic/data/he_ion_rate.csv`. The intermediate `cablp/vars/he_ion_rate.csv` exists at neither end of this manifest and is disclosed here rather than mapped, which is why `cablp/cablp/vars/he_ion_rate.csv` is PRUNED from the cablp/cablp/ prefix row's covers. The import-qualified symbol was invariant across the flatten and changes only at the carve, so this row's old symbol is the base-revision one. CARVE RATIONALE, verbatim from delta_364b26d: P-2: vars/ is dissolved by the carve, and this table is read by exactly one carve destination (cablp.atomic.cross_sections, through the _DATA_DIR anchor). Homing it under the package that reads it keeps the __file__-relative anchor one level deep instead of two. Bytes unchanged."
+    },
+    {
+      "change_kind": "move",
+      "old": {
+        "path": "cablp/cablp/vars/he_ion_neutral_phelps_lxcat.txt",
+        "anchor_kind": "data_file",
+        "symbol": "cablp/cablp/vars/he_ion_neutral_phelps_lxcat.txt"
+      },
+      "new": {
+        "path": "cablp/atomic/data/he_ion_neutral_phelps_lxcat.txt",
+        "anchor_kind": "data_file",
+        "symbol": "cablp/atomic/data/he_ion_neutral_phelps_lxcat.txt"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "COMPOSED ROW (cumulative): this path is mapped by TWO deltas and is collapsed here to ONE base->tip row, never a chain of two. At base_revision the file is `cablp/cablp/vars/he_ion_neutral_phelps_lxcat.txt`; the flatten (delta_70e06f7) moved it to `cablp/vars/he_ion_neutral_phelps_lxcat.txt` under the cablp/cablp/ -> cablp/ prefix macro, and the carve (delta_364b26d) re-homed it from there to `cablp/atomic/data/he_ion_neutral_phelps_lxcat.txt`. The intermediate `cablp/vars/he_ion_neutral_phelps_lxcat.txt` exists at neither end of this manifest and is disclosed here rather than mapped, which is why `cablp/cablp/vars/he_ion_neutral_phelps_lxcat.txt` is PRUNED from the cablp/cablp/ prefix row's covers. The import-qualified symbol was invariant across the flatten and changes only at the carve, so this row's old symbol is the base-revision one. CARVE RATIONALE, verbatim from delta_364b26d: P-2: vars/ is dissolved by the carve, and this table is read by exactly one carve destination (cablp.atomic.cross_sections, through the _DATA_DIR anchor). Homing it under the package that reads it keeps the __file__-relative anchor one level deep instead of two. Bytes unchanged."
+    },
+    {
+      "change_kind": "move",
+      "old": {
+        "path": "cablp/cablp/vars/adas/README.md",
+        "anchor_kind": "data_file",
+        "symbol": "cablp/cablp/vars/adas/README.md"
+      },
+      "new": {
+        "path": "cablp/atomic/data/adas/README.md",
+        "anchor_kind": "data_file",
+        "symbol": "cablp/atomic/data/adas/README.md"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "COMPOSED ROW (cumulative): this path is mapped by TWO deltas and is collapsed here to ONE base->tip row, never a chain of two. At base_revision the file is `cablp/cablp/vars/adas/README.md`; the flatten (delta_70e06f7) moved it to `cablp/vars/adas/README.md` under the cablp/cablp/ -> cablp/ prefix macro, and the carve (delta_364b26d) re-homed it from there to `cablp/atomic/data/adas/README.md`. The intermediate `cablp/vars/adas/README.md` exists at neither end of this manifest and is disclosed here rather than mapped, which is why `cablp/cablp/vars/adas/README.md` is PRUNED from the cablp/cablp/ prefix row's covers. The import-qualified symbol was invariant across the flatten and changes only at the carve, so this row's old symbol is the base-revision one. CARVE RATIONALE, verbatim from delta_364b26d: P-2, and the ONE row a fresh checkout must act on. The 38 OPEN-ADAS adf11/adf15 masters in this directory are UNTRACKED by licence (.gitignore, whose pattern moves to cablp/atomic/data/adas/*.dat in this commit), so no git operation carries them: they must be hand-moved on disk from cablp/vars/adas/ to cablp/atomic/data/adas/ in every checkout and every live worktree, and verified against this README's checksum table afterwards. A checkout that misses this fails every atomic_rate_model = \"adas\" gate with `RuntimeError: OPEN-ADAS data file not found`. The README's own download-directory line is re-anchored in the same edit, as it was at the flatten."
+    },
+    {
+      "change_kind": "move+rename",
+      "old": {
+        "path": "cablp/cablp/funcs/_plasmaparams.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.funcs._plasmaparams"
+      },
+      "new": {
+        "path": "cablp/plasma/params.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.plasma.params"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "COMPOSED ROW (cumulative): this path is mapped by TWO deltas and is collapsed here to ONE base->tip row, never a chain of two. At base_revision the file is `cablp/cablp/funcs/_plasmaparams.py`; the flatten (delta_70e06f7) moved it to `cablp/funcs/_plasmaparams.py` under the cablp/cablp/ -> cablp/ prefix macro, and the carve (delta_364b26d) re-homed it from there to `cablp/plasma/params.py`. The intermediate `cablp/funcs/_plasmaparams.py` exists at neither end of this manifest and is disclosed here rather than mapped, which is why `cablp/cablp/funcs/_plasmaparams.py` is PRUNED from the cablp/cablp/ prefix row's covers. The import-qualified symbol was invariant across the flatten and changes only at the carve, so this row's old symbol is the base-revision one. CARVE RATIONALE, verbatim from delta_364b26d: 9 import statements rewritten. This is the exact mapping the adopted manifest-schema document uses in its own worked example."
+    },
+    {
+      "change_kind": "move+rename",
+      "old": {
+        "path": "cablp/cablp/funcs/_heat.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.funcs._heat"
+      },
+      "new": {
+        "path": "cablp/plasma/heat.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.plasma.heat"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "COMPOSED ROW (cumulative): this path is mapped by TWO deltas and is collapsed here to ONE base->tip row, never a chain of two. At base_revision the file is `cablp/cablp/funcs/_heat.py`; the flatten (delta_70e06f7) moved it to `cablp/funcs/_heat.py` under the cablp/cablp/ -> cablp/ prefix macro, and the carve (delta_364b26d) re-homed it from there to `cablp/plasma/heat.py`. The intermediate `cablp/funcs/_heat.py` exists at neither end of this manifest and is disclosed here rather than mapped, which is why `cablp/cablp/funcs/_heat.py` is PRUNED from the cablp/cablp/ prefix row's covers. The import-qualified symbol was invariant across the flatten and changes only at the carve, so this row's old symbol is the base-revision one. CARVE RATIONALE, verbatim from delta_364b26d: 5 import statements rewritten, plus its three relative imports: `from ._plasmaparams` becomes `from .params` (stays same-package), `from ._cross` becomes `from ..atomic.cross_sections` (becomes cross-package) and `from ..vars._cons` becomes `from ..constants` (re-rooted)."
+    },
+    {
+      "change_kind": "move+rename",
+      "old": {
+        "path": "cablp/cablp/funcs/_cathode_solver.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.funcs._cathode_solver"
+      },
+      "new": {
+        "path": "cablp/cathode/circuit.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.cathode.circuit"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "COMPOSED ROW (cumulative): this path is mapped by TWO deltas and is collapsed here to ONE base->tip row, never a chain of two. At base_revision the file is `cablp/cablp/funcs/_cathode_solver.py`; the flatten (delta_70e06f7) moved it to `cablp/funcs/_cathode_solver.py` under the cablp/cablp/ -> cablp/ prefix macro, and the carve (delta_364b26d) re-homed it from there to `cablp/cathode/circuit.py`. The intermediate `cablp/funcs/_cathode_solver.py` exists at neither end of this manifest and is disclosed here rather than mapped, which is why `cablp/cablp/funcs/_cathode_solver.py` is PRUNED from the cablp/cablp/ prefix row's covers. The import-qualified symbol was invariant across the flatten and changes only at the carve, so this row's old symbol is the base-revision one. CARVE RATIONALE, verbatim from delta_364b26d: 12 import statements rewritten. P-3, RULED by Tom (26dz): the module solves the full cathode/anode/bank CIRCUIT -- the Thevenin load line off V_bank, the R_comp partition, the anode sheath phi_a and I_tot -- so `sheath.py` named a part for the whole and `solver.py` named nothing while colliding with cablp/solvers/_sim1d/solver.py. The rename retires that collision as a side effect."
+    },
+    {
+      "change_kind": "move+rename",
+      "old": {
+        "path": "cablp/cablp/funcs/_cathode_solver_idriven.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.funcs._cathode_solver_idriven"
+      },
+      "new": {
+        "path": "cablp/cathode/circuit_idriven.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.cathode.circuit_idriven"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "COMPOSED ROW (cumulative): this path is mapped by TWO deltas and is collapsed here to ONE base->tip row, never a chain of two. At base_revision the file is `cablp/cablp/funcs/_cathode_solver_idriven.py`; the flatten (delta_70e06f7) moved it to `cablp/funcs/_cathode_solver_idriven.py` under the cablp/cablp/ -> cablp/ prefix macro, and the carve (delta_364b26d) re-homed it from there to `cablp/cathode/circuit_idriven.py`. The intermediate `cablp/funcs/_cathode_solver_idriven.py` exists at neither end of this manifest and is disclosed here rather than mapped, which is why `cablp/cablp/funcs/_cathode_solver_idriven.py` is PRUNED from the cablp/cablp/ prefix row's covers. The import-qualified symbol was invariant across the flatten and changes only at the carve, so this row's old symbol is the base-revision one. CARVE RATIONALE, verbatim from delta_364b26d: 7 import statements rewritten. P-4, RULED by Tom (26dz) with P-3. This module inverts the SAME circuit formulation, taking the inductor-integrated loop current as the independent variable, and it imports every physical piece from its partner rather than restating it. The two names must continue to move together."
+    },
+    {
+      "change_kind": "move+rename",
+      "old": {
+        "path": "cablp/cablp/funcs/_beam_deposition.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.funcs._beam_deposition"
+      },
+      "new": {
+        "path": "cablp/cathode/beam_deposition.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.cathode.beam_deposition"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "COMPOSED ROW (cumulative): this path is mapped by TWO deltas and is collapsed here to ONE base->tip row, never a chain of two. At base_revision the file is `cablp/cablp/funcs/_beam_deposition.py`; the flatten (delta_70e06f7) moved it to `cablp/funcs/_beam_deposition.py` under the cablp/cablp/ -> cablp/ prefix macro, and the carve (delta_364b26d) re-homed it from there to `cablp/cathode/beam_deposition.py`. The intermediate `cablp/funcs/_beam_deposition.py` exists at neither end of this manifest and is disclosed here rather than mapped, which is why `cablp/cablp/funcs/_beam_deposition.py` is PRUNED from the cablp/cablp/ prefix row's covers. The import-qualified symbol was invariant across the flatten and changes only at the carve, so this row's old symbol is the base-revision one. CARVE RATIONALE, verbatim from delta_364b26d: 17 import statements rewritten -- RENAME_MAP.md section 7 says 15, and the extra 2 are `scripts/deposit_beam_reference.py`'s, which arrived with the deposit_beam reference corpus at 9288e01, after the map's per-module tallies were taken. Its three relative imports become `from .circuit import _c_log_ei` (the Q6 row), `from .kernels import COMPILED_KERNELS` and `from ..atomic.cross_sections import ...`. 3,874 lines and R3's reimplementation target; not one of them is touched here. The committed 506-entry fixture scripts/data/deposit_beam_reference.npz is BYTE-IDENTICAL (it pins values, not paths) and its verifier reports 0 differing at this commit."
+    },
+    {
+      "change_kind": "move+rename",
+      "old": {
+        "path": "cablp/cablp/funcs/_kernels.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.funcs._kernels"
+      },
+      "new": {
+        "path": "cablp/cathode/kernels.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.cathode.kernels"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "COMPOSED ROW (cumulative): this path is mapped by TWO deltas and is collapsed here to ONE base->tip row, never a chain of two. At base_revision the file is `cablp/cablp/funcs/_kernels.py`; the flatten (delta_70e06f7) moved it to `cablp/funcs/_kernels.py` under the cablp/cablp/ -> cablp/ prefix macro, and the carve (delta_364b26d) re-homed it from there to `cablp/cathode/kernels.py`. The intermediate `cablp/funcs/_kernels.py` exists at neither end of this manifest and is disclosed here rather than mapped, which is why `cablp/cablp/funcs/_kernels.py` is PRUNED from the cablp/cablp/ prefix row's covers. The import-qualified symbol was invariant across the flatten and changes only at the carve, so this row's old symbol is the base-revision one. CARVE RATIONALE, verbatim from delta_364b26d: 8 import statements rewritten. P-5: this is the opt-in selector binding exactly one compiled module, whose own KERNEL_ID is cathode tier A plus the CSDA march -- both cathode-domain -- so selector and extension stay in one package and the _MODULE string reads. Functional edit riding the move: _MODULE becomes \"cablp.cathode._cathode_kernels_cy\". The reviewer should weigh the counter-argument the map records: _kernels is arguably build/deployment infrastructure (CABLP_COMPILED_KERNELS, PROVENANCE) consumed by results/io.py and solver.py for artifact metadata rather than by cathode physics, which would put it in cablp/numerics/ or a new cablp/build/."
+    },
+    {
+      "change_kind": "move",
+      "old": {
+        "path": "cablp/cablp/funcs/_cathode_kernels_cy.pyx",
+        "anchor_kind": "module",
+        "symbol": "cablp.funcs._cathode_kernels_cy"
+      },
+      "new": {
+        "path": "cablp/cathode/_cathode_kernels_cy.pyx",
+        "anchor_kind": "module",
+        "symbol": "cablp.cathode._cathode_kernels_cy"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "COMPOSED ROW (cumulative): this path is mapped by TWO deltas and is collapsed here to ONE base->tip row, never a chain of two. At base_revision the file is `cablp/cablp/funcs/_cathode_kernels_cy.pyx`; the flatten (delta_70e06f7) moved it to `cablp/funcs/_cathode_kernels_cy.pyx` under the cablp/cablp/ -> cablp/ prefix macro, and the carve (delta_364b26d) re-homed it from there to `cablp/cathode/_cathode_kernels_cy.pyx`. The intermediate `cablp/funcs/_cathode_kernels_cy.pyx` exists at neither end of this manifest and is disclosed here rather than mapped, which is why `cablp/cablp/funcs/_cathode_kernels_cy.pyx` is PRUNED from the cablp/cablp/ prefix row's covers. The import-qualified symbol was invariant across the flatten and changes only at the carve, so this row's old symbol is the base-revision one. CARVE RATIONALE, verbatim from delta_364b26d: P-6, and the ONE place where R0.3's 'private names become public' is deliberately NOT applied: change_kind is `move`, not `move+rename`. Renaming the extension would change its importable name, the built .so filename, and -- if KERNEL_ID moved with it -- the `compiled_kernels` provenance value recorded in EVERY artifact ever produced on the compiled path. Freezing the basename freezes KERNEL_ID at cython/_cathode_kernels_cy/tierA+csda across R2, so pre- and post-restructure artifacts stay directly comparable. VERIFIED: probed before and after this commit, byte-identical. The package path changes in build_ext.py (PYX and the Extension name) and in kernels.py (_MODULE); -ffp-contract=off and every other compile argument are untouched, they are the bit-exactness contract."
+    },
+    {
+      "change_kind": "move+rename",
+      "old": {
+        "path": "cablp/cablp/funcs/_interp.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.funcs._interp"
+      },
+      "new": {
+        "path": "cablp/numerics/interp.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.numerics.interp"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "COMPOSED ROW (cumulative): this path is mapped by TWO deltas and is collapsed here to ONE base->tip row, never a chain of two. At base_revision the file is `cablp/cablp/funcs/_interp.py`; the flatten (delta_70e06f7) moved it to `cablp/funcs/_interp.py` under the cablp/cablp/ -> cablp/ prefix macro, and the carve (delta_364b26d) re-homed it from there to `cablp/numerics/interp.py`. The intermediate `cablp/funcs/_interp.py` exists at neither end of this manifest and is disclosed here rather than mapped, which is why `cablp/cablp/funcs/_interp.py` is PRUNED from the cablp/cablp/ prefix row's covers. The import-qualified symbol was invariant across the flatten and changes only at the carve, so this row's old symbol is the base-revision one. CARVE RATIONALE, verbatim from delta_364b26d: 2 import statements rewritten. P-7 chose a PACKAGE (unlike constants, P-1) because numerics is the one carve destination R3 is known to grow: the deposit_beam lane-march reimplementation is numerical-method code with no cathode-physics content. The module imports only `math` and `bisect`; its explicitly fused lerp (math.fma) is what makes pure == compiled bit-exact by construction of the source on both platforms, and it is pinned by scripts/data/interp_fused_reference.npz. Not one line of it is reflowed -- the file moves byte-identical apart from its own path."
+    },
+    {
+      "change_kind": "delete",
+      "old": {
+        "path": "cablp/cablp/funcs/__init__.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.funcs"
+      },
+      "new": null,
+      "proposed_continuity": "retired_no_successor",
+      "group_id": null,
+      "deletion_reason": "RULED at R0.3/P-9. `cablp/funcs/__init__.py` is a star-import aggregator for a package that ceases to exist at this commit. Nothing consumes what it re-exports (verified: 16 package-level import sites, all submodule imports), and it would raise ImportError the moment its members moved. The cross-package private-name fiction dies with the rename.",
+      "replacement": null,
+      "notes": "COMPOSED ROW (cumulative): this path is mapped by TWO deltas and is collapsed here to ONE base->tip row, never a chain of two. At base_revision the file is `cablp/cablp/funcs/__init__.py`; the flatten (delta_70e06f7) moved it to `cablp/funcs/__init__.py`, and delta_364b26d deleted it there. A move-then-delete composes to ONE delete row whose `old` is the base-revision locator -- never a move row followed by a delete row -- which is why `cablp/cablp/funcs/__init__.py` is PRUNED from the cablp/cablp/ prefix row's covers. RETIREMENT RATIONALE, verbatim from delta_364b26d: P-9: not re-homed, DELETED, and the four new package __init__.py files are docstring-only rather than new aggregators -- otherwise the two-tier surface is re-created under new names on day one. This file's star-import re-exports have no consumer: all 16 package-level `from cablp.funcs import <module>` sites import a SUBMODULE, never an aggregated name, and every one of them keeps its bound name via an explicit `as` in this commit so no use site moves. The file also cannot survive the carve on its own terms: every module it star-imports leaves the package."
+    },
+    {
+      "change_kind": "delete",
+      "old": {
+        "path": "cablp/cablp/vars/__init__.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.vars"
+      },
+      "new": null,
+      "proposed_continuity": "retired_no_successor",
+      "group_id": null,
+      "deletion_reason": "RULED at R0.3/P-9. `cablp/vars/__init__.py` is a star-import aggregator for a package that ceases to exist at this commit. Nothing consumes what it re-exports (verified: 16 package-level import sites, all submodule imports), and it would raise ImportError the moment its members moved. The cross-package private-name fiction dies with the rename.",
+      "replacement": null,
+      "notes": "COMPOSED ROW (cumulative): this path is mapped by TWO deltas and is collapsed here to ONE base->tip row, never a chain of two. At base_revision the file is `cablp/cablp/vars/__init__.py`; the flatten (delta_70e06f7) moved it to `cablp/vars/__init__.py`, and delta_364b26d deleted it there. A move-then-delete composes to ONE delete row whose `old` is the base-revision locator -- never a move row followed by a delete row -- which is why `cablp/cablp/vars/__init__.py` is PRUNED from the cablp/cablp/ prefix row's covers. RETIREMENT RATIONALE, verbatim from delta_364b26d: P-9: not re-homed, DELETED, and the four new package __init__.py files are docstring-only rather than new aggregators -- otherwise the two-tier surface is re-created under new names on day one. This file's star-import re-exports have no consumer: all 16 package-level `from cablp.funcs import <module>` sites import a SUBMODULE, never an aggregated name, and every one of them keeps its bound name via an explicit `as` in this commit so no use site moves. The file also cannot survive the carve on its own terms: every module it star-imports leaves the package."
+    },
+    {
+      "change_kind": "delete",
+      "old": {
+        "path": "cablp/cablp/vars/_nn_table.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.vars._nn_table"
+      },
+      "new": null,
+      "proposed_continuity": "retired_no_successor",
+      "group_id": null,
+      "deletion_reason": "RULED at R0.4 (RENAME_MAP.md section 3.6), executed under Tom's option (a) ruling (log 26fr). Frozen and ungenerable in-tree: its generator drove the 0D _sim3 solver, removed 2026-08-03. Its keys are pre-2026-08-21 0 C-sccm while S_gp has meant meter-sccm since, so every lookup was off by the ~7% conversion ratio and could not be converted without inventing an interpolation of data that was never computed. No successor: the fallback it served is replaced by a refusal, not by another lookup.",
+      "replacement": null,
+      "notes": "COMPOSED ROW (cumulative): this path is mapped by TWO deltas and is collapsed here to ONE base->tip row, never a chain of two. At base_revision the file is `cablp/cablp/vars/_nn_table.py`; the flatten (delta_70e06f7) moved it to `cablp/vars/_nn_table.py`, and delta_02333ce deleted it there. A move-then-delete composes to ONE delete row whose `old` is the base-revision locator -- never a move row followed by a delete row -- which is why `cablp/cablp/vars/_nn_table.py` is PRUNED from the cablp/cablp/ prefix row's covers. RETIREMENT RATIONALE, verbatim from delta_02333ce: THE MAP'S PREMISE FOR THIS ROW WAS FALSE AND THE ROW IS ANNOTATED IN PLACE. R0.4 justified the retirement partly with 'production short-circuits it' and 'one consumer'. Both are wrong at the base revision. The GOLDEN reached the table: scripts/stances/g1atrim.toml pins nn0 = null because it arms neutral_initial_profile with a per-cell foot, and baseline_sim1d.py's nx=60 re-cut drops that mesh-sized package and clears the flag WITHOUT restoring a scalar, so resolve_nn0 fell through and the gate's uniform neutral fill was lookup_nn0(9010.0, twin=False) = 2725059978765.871 cm^-3 -- verified as the constructed initial nn over all 72 cells. scripts/sp3_build_nn0.py:385 is a second consumer, named nowhere in the map. This is why the retirement ran in TWO commits: the value was pinned as an explicit literal in the golden builder FIRST (see the baseline_sim1d.py row), and only then was the table deleted. Deleting it alone made the golden unconstructible, which was reported as a blocker rather than worked around."
+    },
+    {
+      "change_kind": "delete",
+      "old": {
+        "path": "cablp/cablp/vars/nn_table.csv",
+        "anchor_kind": "data_file",
+        "symbol": "cablp/cablp/vars/nn_table.csv"
+      },
+      "new": null,
+      "proposed_continuity": "retired_no_successor",
+      "group_id": null,
+      "deletion_reason": "The data half of the same R0.4 retirement: the 25-row table cablp.vars._nn_table loaded at import. It has no other reader, and no successor table -- the one value any shipped configuration ever took from it is now a literal in the golden builder.",
+      "replacement": null,
+      "notes": "COMPOSED ROW (cumulative): this path is mapped by TWO deltas and is collapsed here to ONE base->tip row, never a chain of two. At base_revision the file is `cablp/cablp/vars/nn_table.csv`; the flatten (delta_70e06f7) moved it to `cablp/vars/nn_table.csv`, and delta_02333ce deleted it there. A move-then-delete composes to ONE delete row whose `old` is the base-revision locator -- never a move row followed by a delete row -- which is why `cablp/cablp/vars/nn_table.csv` is PRUNED from the cablp/cablp/ prefix row's covers. RETIREMENT RATIONALE, verbatim from delta_02333ce: These two paths were ALL that survived the carve under cablp/vars/ -- deliberately, since the carve's own manifest recorded the remnant as reachable by direct import and noted it would disappear at the retirement commit. It does: cablp/vars/ is now empty and the DIRECTORY IS REMOVED. Nothing is left pointing at it. The carve had already dropped 'vars' from cablp/__init__.py's submodules list, and .gitignore carries no vars pattern."
+    },
+    {
+      "change_kind": "delete",
+      "old": {
+        "path": "cablp/cablp/solvers/_sim1d/results/compat.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.solvers._sim1d.results.compat"
+      },
+      "new": null,
+      "proposed_continuity": "retired_no_successor",
+      "group_id": null,
+      "deletion_reason": "RULED at R0.4 (RENAME_MAP.md section 3.6). The module existed to shape a sim1d result like a result of the 0D _sim3 solver, and _sim3 was REMOVED 2026-08-03 (D2). No successor: the aliases were views, and every conservative field they were views OF stays exactly where it was. Retiring them costs no information -- it removes a second name for data that is still there under its first.",
+      "replacement": null,
+      "notes": "COMPOSED ROW (cumulative): this path is mapped by TWO deltas and is collapsed here to ONE base->tip row, never a chain of two. At base_revision the file is `cablp/cablp/solvers/_sim1d/results/compat.py`; the flatten (delta_70e06f7) moved it to `cablp/solvers/_sim1d/results/compat.py`, and delta_e6a1b75 deleted it there. The move-then-delete composes to ONE delete row on the base-revision locator, which is why `cablp/cablp/solvers/_sim1d/results/compat.py` is PRUNED from the cablp/cablp/ prefix row's covers. RETIREMENT RATIONALE, verbatim from delta_e6a1b75: CONSUMER SET, re-derived at base_revision rather than taken from the map, whose Q3 enumeration was cut at an older revision and is INCOMPLETE. (i) The two importers Q3 names: results/io.py:16,380 (applied on every HDF5 read) and solver.py:205,10153 (applied on every run's get_results), both of which now return the namespace unwrapped. (ii) scripts/smoke_sim1d.py -- NOT the '4 smoke assertions' Q3 names, but five blocks across three cases (no-source-run-and-results, cathode-power-balance-warming, breakdown-retry-near-vacuum): a 20-name hasattr loop, roughly twenty alias-vs-source equalities, the HDF5 round-trip pairs, and the breakdown-time aliases. (iii) scripts/sweep_sim1d_stability.py:163,166 -- `result.cathode.I_tot` and `result.cathode_twin.I_tot`, a live executable consumer OUTSIDE the smoke that Q3 lists nowhere; migrated in this commit to cathode_diagnostics['source_I_tot'] / ['end_I_tot'], the rows those namespaces were built from, which are seeded NaN per end unconditionally so nanmax reads the same numbers. NO LOUD-ERROR SELECTOR IS OWED and the reason is structural: compat.py had no config key and no selector, it ran on every result, so no template key becomes meaningless and there is no route to refuse. The removal is loud regardless -- a result is a plain SimpleNamespace and each retired alias is an AttributeError at first read, never a silently wrong value. The retired surface, in full, is the 27 names in scripts/smoke_sim1d.py's _RETIRED_SIM3_COMPAT_ALIASES: ne, v_plasma, n_beam, cathode, cathode_twin, t_breakdown, t_breakdown_ms, time_since_breakdown, time_ms_since_breakdown, Ne_flux, Nn_flux, S_ion_bulk, S_ion_beam, S_rec_rad, S_rec_3b, Qie, Qei, Qen, Qcx, Qeb, Qib, e_par_flux, i_par_flux, e_perp_hl, i_perp_hl, sim3_compat_units, sim3_compat_notes. The smoke asserts every one of them ABSENT, on the run path and on the load path separately, so a re-added shim fails the gate."
+    },
+    {
+      "change_kind": "delete",
+      "old": {
+        "path": "cablp/cablp/solvers/_sim1d/results/compat.py",
+        "anchor_kind": "function",
+        "symbol": "cablp.solvers._sim1d.results.compat.add_sim3_compat_aliases",
+        "signature": "add_sim3_compat_aliases(result)",
+        "line_hint": 40
+      },
+      "new": null,
+      "proposed_continuity": "retired_no_successor",
+      "group_id": null,
+      "deletion_reason": "The module's only public entity, and the name both solver-tree importers bound. Carried as its own row because the KB's locators are entity-level: a reader holding this symbol needs to be told it is retired, not merely that a file left. Retired with its module; no successor function replaces it.",
+      "replacement": null,
+      "notes": "COMPOSED ROW (cumulative): this path is mapped by TWO deltas and is collapsed here to ONE base->tip row, never a chain of two. At base_revision the file is `cablp/cablp/solvers/_sim1d/results/compat.py`; the flatten (delta_70e06f7) moved it to `cablp/solvers/_sim1d/results/compat.py`, and delta_e6a1b75 deleted it there. The move-then-delete composes to ONE delete row on the base-revision locator, which is why `cablp/cablp/solvers/_sim1d/results/compat.py` is PRUNED from the cablp/cablp/ prefix row's covers. This is the finer-grained entity row on the same path pair as the module row above -- the legal override shape the schema describes, kept because the KB's locators are entity-level. RETIREMENT RATIONALE, verbatim from delta_e6a1b75: A finer-grained row on the same path pair as the module row above, which is the legal override shape the adopted schema describes. Its five private helpers (_add_time_aliases, _sum_rhs_fields, _rhs_field, _term_or_zeros, _diagnostic_or_zeros, _cathode_namespace) and the module constant _CATHODE_COMPAT_FIELDS are module-private with no importer and are covered by the module row rather than enumerated here."
+    },
+    {
+      "change_kind": "add",
+      "old": null,
+      "new": {
+        "path": "cablp/atomic/__init__.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.atomic"
+      },
+      "proposed_continuity": "retired_no_successor",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "SINGLE-DELTA ROW, carried through unchanged: added by the carve (delta_364b26d) and untouched by any later delta. An `add` row has no old end, so it takes no part in the chain composition; it is here because the base->tip diff shows this path arriving and every arrival needs a covering row. New package for cross sections, empirical fits, IAEA coefficients and OPEN-ADAS access, plus the data/ tables they read. DOCSTRING-ONLY by ruling (P-9): it re-exports nothing, so every symbol has exactly one name and the aggregator surface the carve retires is not rebuilt. proposed_continuity is 'retired_no_successor' because an `add` row has no old entity to continue -- the field is inapplicable, not a claim."
+    },
+    {
+      "change_kind": "add",
+      "old": null,
+      "new": {
+        "path": "cablp/cathode/__init__.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.cathode"
+      },
+      "proposed_continuity": "retired_no_successor",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "SINGLE-DELTA ROW, carried through unchanged: added by the carve (delta_364b26d) and untouched by any later delta. An `add` row has no old end, so it takes no part in the chain composition; it is here because the base->tip diff shows this path arriving and every arrival needs a covering row. New package for the cathode/anode/bank circuit solvers, the CSDA beam deposition march, and the compiled-kernel selector and extension. DOCSTRING-ONLY by ruling (P-9): it re-exports nothing, so every symbol has exactly one name and the aggregator surface the carve retires is not rebuilt. proposed_continuity is 'retired_no_successor' because an `add` row has no old entity to continue -- the field is inapplicable, not a claim."
+    },
+    {
+      "change_kind": "add",
+      "old": null,
+      "new": {
+        "path": "cablp/plasma/__init__.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.plasma"
+      },
+      "proposed_continuity": "retired_no_successor",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "SINGLE-DELTA ROW, carried through unchanged: added by the carve (delta_364b26d) and untouched by any later delta. An `add` row has no old end, so it takes no part in the chain composition; it is here because the base->tip diff shows this path arriving and every arrival needs a covering row. New package for collision times, thermal velocities and gyrofrequencies, and the Braginskii heat closures. DOCSTRING-ONLY by ruling (P-9): it re-exports nothing, so every symbol has exactly one name and the aggregator surface the carve retires is not rebuilt. proposed_continuity is 'retired_no_successor' because an `add` row has no old entity to continue -- the field is inapplicable, not a claim."
+    },
+    {
+      "change_kind": "add",
+      "old": null,
+      "new": {
+        "path": "cablp/numerics/__init__.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.numerics"
+      },
+      "proposed_continuity": "retired_no_successor",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "SINGLE-DELTA ROW, carried through unchanged: added by the carve (delta_364b26d) and untouched by any later delta. An `add` row has no old end, so it takes no part in the chain composition; it is here because the base->tip diff shows this path arriving and every arrival needs a covering row. New package for numerical-method helpers with no physics content. DOCSTRING-ONLY by ruling (P-9): it re-exports nothing, so every symbol has exactly one name and the aggregator surface the carve retires is not rebuilt. proposed_continuity is 'retired_no_successor' because an `add` row has no old entity to continue -- the field is inapplicable, not a claim."
+    },
+    {
+      "change_kind": "surface_change",
+      "old": {
+        "path": "cablp/cablp/solvers/_sim1d/results/phase3_capture.py",
+        "anchor_kind": "function",
+        "symbol": "cablp.solvers._sim1d.results.phase3_capture.blank_crosswalk_inventory",
+        "line_hint": 441
+      },
+      "new": {
+        "path": "cablp/solvers/_sim1d/results/phase3_capture.py",
+        "anchor_kind": "function",
+        "symbol": "cablp.solvers._sim1d.results.phase3_capture.blank_crosswalk_inventory",
+        "line_hint": 441
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "FINER ROW on a path pair the prefix macro above already covers -- the legal same-path-pair override the schema describes. Its `old` locator already reads at base_revision, since the flatten is the delta that owns it. RATIONALE, verbatim from delta_70e06f7: REPORTABLE UNDER BIT-EXACTNESS. The `producer_anchor` string this function emits into every phase-3 qualification record embeds a repository-relative source path, \"cablp/cablp/solvers/_sim1d/solver.py:...\", which becomes \"cablp/solvers/_sim1d/solver.py:...\" at the flatten. The function signature and every numeric output are unchanged; what changes is the LOCATOR that downstream consumers compare against. Two consequences the reviewer must weigh: (a) verify_phase3_source_capture.py:229 asserts the old string and is edited in lockstep; (b) the ALREADY-COMMITTED record scripts/baselines/phase3_rhs/77d675a4-....provenance.json carries the OLD anchor and must NOT be rewritten - it describes a capture taken at a revision where the old path was correct. See RENAME_MAP.md open question Q4."
+    },
+    {
+      "change_kind": "surface_change",
+      "old": {
+        "path": "cablp/cablp/__init__.py",
+        "anchor_kind": "config_key",
+        "symbol": "cablp.submodules",
+        "line_hint": 1
+      },
+      "new": {
+        "path": "cablp/__init__.py",
+        "anchor_kind": "config_key",
+        "symbol": "cablp.submodules",
+        "line_hint": 1
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "FINER ROW on a path pair the prefix macro above already covers -- the legal same-path-pair override the schema describes. Its `old` locator is REBASED to the base-revision path `cablp/cablp/__init__.py`: delta_364b26d states it at `cablp/__init__.py`, which is the post-flatten path, and this manifest resolves every old locator at 9288e01. The path pair this row names is exactly the one its prefix row derives, so it is an override in the schema's sense and not a conflicting mapping. RATIONALE, verbatim from delta_364b26d: The package's advertised surface. `submodules = [\"funcs\", \"vars\", \"solvers\"]` becomes [\"atomic\", \"cathode\", \"constants\", \"numerics\", \"plasma\", \"solvers\"], which is what `__all__`, `__dir__()` and the lazy `__getattr__` import hook all read. NOTE for the reviewer: `vars` is dropped from this list even though cablp/vars/_nn_table.py and nn_table.csv remain on disk -- the list follows RENAME_MAP.md section 3.6 exactly, and the remnant is reachable by direct import (a PEP 420 namespace portion, verified) which is all its one consumer, core/config.py, uses. The remnant disappears at the retirement commit."
+    },
+    {
+      "change_kind": "signature_change",
+      "old": {
+        "path": "cablp/cablp/solvers/_sim1d/core/config.py",
+        "anchor_kind": "function",
+        "symbol": "cablp.solvers._sim1d.core.config.resolve_nn0",
+        "signature": "resolve_nn0(input_dict, input_flags)"
+      },
+      "new": {
+        "path": "cablp/solvers/_sim1d/core/config.py",
+        "anchor_kind": "function",
+        "symbol": "cablp.solvers._sim1d.core.config.resolve_nn0",
+        "signature": "resolve_nn0(input_dict)"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "FINER ROW on a path pair the prefix macro above already covers -- the legal same-path-pair override the schema describes. Its `old` locator is REBASED to the base-revision path `cablp/cablp/solvers/_sim1d/core/config.py`: delta_02333ce states it at `cablp/solvers/_sim1d/core/config.py`, which is the post-flatten path, and this manifest resolves every old locator at 9288e01. The path pair this row names is exactly the one its prefix row derives, so it is an override in the schema's sense and not a conflicting mapping. RATIONALE, verbatim from delta_02333ce: ``input_flags`` existed for exactly one purpose -- passing twin=input_flags['TwinCathode'] to the retired table -- and nothing reads it once the table is gone. A required argument that nothing reads is the silent inert surface this repository forbids at the config layer, so it is dropped rather than left as a vestigial parameter. THREE call sites updated: solver.py twice (the direct-run equilibration warning, and _initial_state's uniform fill) and scripts/sp3_build_nn0.py once. The function's BEHAVIOUR also changes and is the retirement's loud-error path: it no longer falls back, and raises ValueError on a None stating what nn0 ACCEPTS (a uniform initial neutral density in cm^-3; None legal ONLY under neutral_initial_profile, which supersedes the scalar with the per-cell nn0_profile array). Because the solver resolves the fill inside __init__, that refusal is CONSTRUCTION-TIME. scripts/smoke_sim1d.py carries the witness."
+    },
+    {
+      "change_kind": "surface_change",
+      "old": {
+        "path": "cablp/scripts/baseline_sim1d.py",
+        "anchor_kind": "config_key",
+        "symbol": "baseline_sim1d.BASELINE_PARAM_OVERRIDES.nn0"
+      },
+      "new": {
+        "path": "scripts/baseline_sim1d.py",
+        "anchor_kind": "config_key",
+        "symbol": "baseline_sim1d.BASELINE_PARAM_OVERRIDES.nn0"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "FINER ROW on a path pair the prefix macro above already covers -- the legal same-path-pair override the schema describes. Its `old` locator is REBASED to the base-revision path `cablp/scripts/baseline_sim1d.py`: delta_02333ce states it at `scripts/baseline_sim1d.py`, which is the post-flatten path, and this manifest resolves every old locator at 9288e01. The path pair this row names is exactly the one its prefix row derives, so it is an override in the schema's sense and not a conflicting mapping. RATIONALE, verbatim from delta_02333ce: THE PIN, made in its own commit (2d1234de948340263429a5869f0c8966d09073e3) BEFORE the table was deleted, which is the whole of Tom's option (a). The golden's nx=60 re-cut now names the scalar neutral fill explicitly: nn0 = 2725059978765.871, the value cablp.vars._nn_table.lookup_nn0 returned for this stance's S_gp = 9010.0 with TwinCathode = False. The literal was read out of the table programmatically while it still existed and checked to round-trip through repr(); it was never hand-typed. NO NUMBER MOVED: the golden solver was constructed from build_baseline_config() on each side of the pin, in its own process, and every initial-state array compared at raw uint64 -- Ee/Ei/En/M/M_n/n/nn/nn_a 72 values each and the 576-value packed y, 0 differing, 1152 values total. The only thing that changed is that the fill is written down instead of looked up. DELIBERATELY NOT DECIDED HERE: whether this is the right fill. The value is on the pre-2026-08-21 0 C-sccm convention while S_gp is meter-sccm, so it carries the ~7% inconsistency the retired table's own docstring disclosed; changing it would move the golden and needs a recapture, so it stays a stance-era board question."
+    },
+    {
+      "change_kind": "surface_change",
+      "old": {
+        "path": "cablp/scripts/baselines/golden_digest_4k.json",
+        "anchor_kind": "data_file",
+        "symbol": "cablp/scripts/baselines/golden_digest_4k.json"
+      },
+      "new": {
+        "path": "scripts/baselines/golden_digest_4k.json",
+        "anchor_kind": "data_file",
+        "symbol": "scripts/baselines/golden_digest_4k.json"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "FINER ROW on a path pair the prefix macro above already covers -- the legal same-path-pair override the schema describes. Its `old` locator is REBASED to the base-revision path `cablp/scripts/baselines/golden_digest_4k.json`: delta_02333ce states it at `scripts/baselines/golden_digest_4k.json`, which is the post-flatten path, and this manifest resolves every old locator at 9288e01. The path pair this row names is exactly the one its prefix row derives, so it is an override in the schema's sense and not a conflicting mapping. RATIONALE, verbatim from delta_02333ce: CONFIG-IDENTITY ROTATION, NOT A RECAPTURE -- pre-authorized on the twice-established 25m/26eb precedent, and regenerated in the pin commit that causes it, through the gate's own --capture path and no other route. Naming nn0 changes the RESOLVED CONFIG the identity hash is taken over, so the identity moves while the trajectory cannot. The pre-rotation gate run emitted exactly ONE failure line -- 'config identity moved: reference c56bd67dd782fde57ddc272abb00d271898d35fc9eb138d5f72acca46dec154d vs fresh ec8ba03db7e061948a8d438ed027747cccaef05cf8171225e259dd25e9871157' -- with no divergent-checkpoint line and no final-digest line, which by the gate's own control flow means every checkpoint and the final digest reproduced. Field by field against the file it replaces: config_identity MOVED c56bd67d->ec8ba03d; digest SAME 3f2424e3b9f6954a736c84041c2737fb2624778043b1fab028c725ed1cc4991f; checkpoints SAME (5 entries, 0 differing); final_time SAME 0.0004700000000000006; cells, fields_per_cell, steps, checkpoint_interval, kernel_provenance all SAME. Exactly one field moved, and it is the one that is not about the trajectory."
+    },
+    {
+      "change_kind": "surface_change",
+      "old": {
+        "path": "cablp/cablp/solvers/_sim1d/config_snapshots.json",
+        "anchor_kind": "data_file",
+        "symbol": "cablp/cablp/solvers/_sim1d/config_snapshots.json"
+      },
+      "new": {
+        "path": "cablp/solvers/_sim1d/config_snapshots.json",
+        "anchor_kind": "data_file",
+        "symbol": "cablp/solvers/_sim1d/config_snapshots.json"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "FINER ROW on a path pair the prefix macro above already covers -- the legal same-path-pair override the schema describes. Its `old` locator is REBASED to the base-revision path `cablp/cablp/solvers/_sim1d/config_snapshots.json`: delta_02333ce states it at `cablp/solvers/_sim1d/config_snapshots.json`, which is the post-flatten path, and this manifest resolves every old locator at 9288e01. The path pair this row names is exactly the one its prefix row derives, so it is an override in the schema's sense and not a conflicting mapping. RATIONALE, verbatim from delta_02333ce: The SECOND identity artifact the pin rotates, and for the same reason: it digests the resolved config of each config-complete driver, and the golden builder's resolved config now contains nn0 as a value instead of a null. Regenerated in the pin commit via audit_sim1d_configs.py --print-current, reviewed before writing (the script has no blind --write mode, which is the point). A ONE-LINE diff: cases.production_golden.sha256 a0f296c73e5d74b54688233a324689fc57870a4a8a757976b60a07092ad0bd59 -> 21409d1a934823ef8e03f3f4f744816b9791a4d7128cf9f04ada160cd8fe4dca. The other three driver cases are byte-identical, and so are parameter_count 257, flag_count 51 and manifest_sha256 d2fd9e26499f1fe6ef093459d0cb1f9b30669ac9489a955e5308ec5c6e9dbaa8. The UNCHANGED parameter_count is the load-bearing check on this row: it says no config KEY was added or removed, so this retirement removed a fallback and not a template key -- nn0 was and remains a documented input_dict key."
+    },
+    {
+      "change_kind": "surface_change",
+      "old": {
+        "path": "cablp/cablp/solvers/_sim1d/__init__.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.solvers._sim1d"
+      },
+      "new": {
+        "path": "cablp/solvers/_sim1d/__init__.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.solvers._sim1d"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "FINER ROW on a path pair the prefix macro above already covers -- the legal same-path-pair override the schema describes. Its `old` locator is REBASED to the base-revision path `cablp/cablp/solvers/_sim1d/__init__.py`: delta_1956814 states it at `cablp/solvers/_sim1d/__init__.py`, which is the post-flatten path, and this manifest resolves every old locator at 9288e01. The path pair this row names is exactly the one its prefix row derives, so it is an override in the schema's sense and not a conflicting mapping. RATIONALE, verbatim from delta_1956814: THE TIER-1 SURFACE, WIDENED BY EXACTLY ONE NAME. R0.3 rules the public-API surface TWO-TIER: the declared surface widens to what scripts actually need, scripts MAY keep importing internals, new code targets the surface. RENAME_MAP.md carries no surface-pass section -- its only two surface prescriptions are P-9 (the carved packages' __init__ files stay empty or docstring-only, never aggregators) and the SS3.6 row that re-listed cablp/__init__.py's `submodules`, both already satisfied at base_revision -- so the surface was derived EMPIRICALLY, per the brief's fallback. Census: an ast.ImportFrom/Import walk of all 164 scripts/*.py at base_revision. Of the 14 names the scripts take from the package itself, 13 were already in __all__ and the 14th is the submodule `solver`. In R0.3's enumerated categories (config templates, io/load, health, summarize, run-driver entry points) exactly ONE name was published only at tier 2: results.io.save_result_hdf5, imported by 14 scripts, three of them run drivers (run_m6_point.py, run_mechanism_ladder.py, compare_sim1d_es1.py). It is the write half of a read/write pair whose read half, load_result_hdf5, was already declared. ADDED: `from .results.io import save_result_hdf5` and the '\"save_result_hdf5\"' entry in __all__, which stays sorted; __all__ goes 20 names -> 21. NOTHING was removed: this pass only widens. The checkable consequence is that every name the seven canonical run/score/plot drivers (run_sim1d, run_m6_point, run_mechanism_ladder, baseline_sim1d, plot_sim1d_run, fingerprints_sim1d, compare_sim1d_es1) take from the package tree is now tier 1 -- run_m6_point's `from ...results.health import summarize_result` reaches the same function the surface publishes as `summarize_result`, by a different path, and is NOT rewritten (the ruling forbids consumer import rewrites). NO EAGER-IMPORT COST: results.io was ALREADY in the eager set before this commit, pulled in by results/__init__.py through phase3_capture, so the new statement adds no module and does not move the initialization order -- measured as the sorted sys.modules set after `import cablp.solvers._sim1d`, 53 modules identical either side (54 with the .so loaded), and KERNEL_ID probes cython/_cathode_kernels_cy/tierA+csda either side. That mattered enough to measure: results.io imports cablp.cathode.kernels, the module whose import-time opt-in decides KERNEL_ID. Tier-A AST identity (docstring nodes stripped, ast.dump compared against base_revision) reports exactly two added nodes and nothing else: ImportFrom(module='results.io', names=[alias(name='save_result_hdf5')], level=1) and Constant(value='save_result_hdf5'). The docstring gains a paragraph stating the two-tier contract in functionality-only terms, no provenance."
+    },
+    {
+      "change_kind": "surface_change",
+      "old": {
+        "path": "cablp/cablp/solvers/_sim1d/core/__init__.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.solvers._sim1d.core"
+      },
+      "new": {
+        "path": "cablp/solvers/_sim1d/core/__init__.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.solvers._sim1d.core"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "FINER ROW on a path pair the prefix macro above already covers -- the legal same-path-pair override the schema describes. Its `old` locator is REBASED to the base-revision path `cablp/cablp/solvers/_sim1d/core/__init__.py`: delta_1956814 states it at `cablp/solvers/_sim1d/core/__init__.py`, which is the post-flatten path, and this manifest resolves every old locator at 9288e01. The path pair this row names is exactly the one its prefix row derives, so it is an override in the schema's sense and not a conflicting mapping. RATIONALE, verbatim from delta_1956814: DOCSTRING-ONLY; NO SURFACE MOVED, an existing one is written down. This package exported nothing at base_revision and exports nothing at new_revision; the docstring now says so, in the wording the carved packages (cablp/atomic, cablp/cathode, cablp/plasma, cablp/numerics) already carry -- 'Members are imported by their own module path -- this package deliberately re-exports nothing, so there is exactly one name for every symbol' -- plus one sentence recording that config's templates and loaders are additionally published on cablp.solvers._sim1d. Disclosed as a row rather than left silent because under a TWO-TIER ruling a package's tier stance is part of its declared surface, and a reader cannot tell 'exports nothing on purpose' from 'nobody got round to it'. Tier-A AST identity against base_revision: docstring-stripped ast.dump IDENTICAL. The census evidence for the stance: 30 of the 164 scripts import names out of core.* submodules by module path (geometry 11 names/29 sites, state 11/43, timestep 4, neutral_seed_cache 4, ignition 6, config 2, integrator 1, validation 1, deprecations 1) and not one imports an aggregated name, which is the same evidence P-9 rests on for the carved packages. NO member enumeration in the docstring, deliberately: core has eleven modules and a list would go stale, which is the failure mode the documentation rule exists to prevent."
+    },
+    {
+      "change_kind": "surface_change",
+      "old": {
+        "path": "cablp/cablp/solvers/_sim1d/physics/__init__.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.solvers._sim1d.physics"
+      },
+      "new": {
+        "path": "cablp/solvers/_sim1d/physics/__init__.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.solvers._sim1d.physics"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "FINER ROW on a path pair the prefix macro above already covers -- the legal same-path-pair override the schema describes. Its `old` locator is REBASED to the base-revision path `cablp/cablp/solvers/_sim1d/physics/__init__.py`: delta_1956814 states it at `cablp/solvers/_sim1d/physics/__init__.py`, which is the post-flatten path, and this manifest resolves every old locator at 9288e01. The path pair this row names is exactly the one its prefix row derives, so it is an override in the schema's sense and not a conflicting mapping. RATIONALE, verbatim from delta_1956814: DOCSTRING-ONLY; NO SURFACE MOVED. Same treatment and same wording as the core row. The added sentence states the fact the census establishes: NO operator appears on the package surface, the solver composes them, and the audit and verification scripts that call one directly name the module it lives in. That is a large tier-2 population -- 14 physics modules, ~150 distinct names, ~250 import sites across the scripts, of which cathode (26 names), sources (27), neutrals (21), kinetic_dvm (14), kinetic_neutrals (14) and puff_orifice (14) are the heaviest -- and R0.3's ruling is precisely that this traffic is legitimate and stays. Nothing here is a candidate for tier 1: no physics operator falls in any of R0.3's enumerated categories. Tier-A AST identity against base_revision: docstring-stripped ast.dump IDENTICAL."
+    },
+    {
+      "change_kind": "surface_change",
+      "old": {
+        "path": "cablp/cablp/solvers/_sim1d/results/__init__.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.solvers._sim1d.results"
+      },
+      "new": {
+        "path": "cablp/solvers/_sim1d/results/__init__.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.solvers._sim1d.results"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "FINER ROW on a path pair the prefix macro above already covers -- the legal same-path-pair override the schema describes. Its `old` locator is REBASED to the base-revision path `cablp/cablp/solvers/_sim1d/results/__init__.py`: delta_1956814 states it at `cablp/solvers/_sim1d/results/__init__.py`, which is the post-flatten path, and this manifest resolves every old locator at 9288e01. The path pair this row names is exactly the one its prefix row derives, so it is an override in the schema's sense and not a conflicting mapping. RATIONALE, verbatim from delta_1956814: DOCSTRING-ONLY; the six re-exported names are UNCHANGED and __all__ is byte-identical. This is the one sub-package of the three that does re-export: the phase-3 qualified-capture sub-API (PHASE3_CAPTURE_PROFILE, blank_crosswalk_inventory, load_qualified_capture, reserve_run_id, validate_run_id, write_qualified_capture), declared by the Phase-3 capture plumbing commit 83b84c6 and therefore PRE-R2 and not this restructure's to re-litigate. The docstring now says which group that is and that io/health/restart are reached by module path instead, with five of their symbols carried on cablp.solvers._sim1d (save_result_hdf5 -- new in this commit -- load_result_hdf5, summarize_result, and the restart-state pair). DISCLOSED FOR THE REVIEWER, changed by nobody here: no script consumes the aggregated form. The three scripts that use phase-3 capture import `from ...results.phase3_capture import ...` directly (13 names, 22 sites), and the only package-level from-import of `results` anywhere is smoke_sim1d.py taking the `restart` SUBMODULE. So the re-export is currently unconsumed, which under P-9's reasoning would argue for retiring it -- but retiring an export is a NARROWING and this pass only widens, so it stands and the question is handed up. Tier-A AST identity against base_revision: docstring-stripped ast.dump IDENTICAL."
+    },
+    {
+      "change_kind": "move+rename",
+      "old": {
+        "path": "restructure/manifests/delta_flatten.DRAFT.json",
+        "anchor_kind": "data_file",
+        "symbol": "restructure/manifests/delta_flatten.DRAFT.json"
+      },
+      "new": {
+        "path": "restructure/manifests/delta_70e06f7.json",
+        "anchor_kind": "data_file",
+        "symbol": "restructure/manifests/delta_70e06f7.json"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "BRIDGING ROW, composed (R2 bridging convention, adopted 26fo, verified 26fp). This is manifest-about-manifest bookkeeping, not code-window content, and it is composed rather than excluded because it is a genuine base->tip path pair: the DRAFT is tracked at 9288e01 and its finalized name is tracked at 19568143, so the chain composition produces this pair and a cumulative that omitted it would not equal the composition. RATIONALE, verbatim from delta_364b26d: NOT THIS COMMIT'S WORK -- a chain bridging row, disclosed. base_revision here is 70e06f7, the PREDECESSOR MANIFEST'S DECLARED new_revision, so that the validator's CHAIN abutment check composes. Under the flatten's 'manifest names its parent' pattern the flatten's own manifest-finalization commit (fbbc1bd, which performed exactly this rename) and the staging merge (b62c5e1) fall OUTSIDE the range the predecessor declares, so they land inside this delta's range instead. `git diff --name-status --no-renames 70e06f7 b62c5e1` is exactly these two paths and nothing else. Without this row check (4) COVERAGE would fail on an add/delete pair the carve did not make; the alternative -- declaring base_revision b62c5e1, this branch's real base -- passes COVERAGE and fails CHAIN abutment instead. The reviewer should rule which the pattern wants, and whether the validator should learn to tolerate a bookkeeping gap between a delta's declared new_revision and its successor's base."
+    },
+    {
+      "change_kind": "add",
+      "old": null,
+      "new": {
+        "path": "restructure/manifests/delta_364b26d.json",
+        "anchor_kind": "data_file",
+        "symbol": "restructure/manifests/delta_364b26d.json"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "BRIDGING ROW, composed (R2 bridging convention, adopted 26fo, verified 26fp). Manifest-about-manifest bookkeeping, not code-window content. An `add` row takes no part in the chain composition, so this row exists for COVERAGE alone: the base->tip diff shows this path arriving inside the window and every arrival needs a covering row. RATIONALE, verbatim from delta_e6a1b75: NOT THIS COMMIT'S WORK -- a chain bridging row, disclosed, and the same device delta_364b26d.json used for its own predecessor. base_revision here is 364b26d, the PREDECESSOR MANIFEST'S DECLARED new_revision, so the validator's CHAIN abutment check composes. Under the established 'manifest names its parent' pattern the carve's manifest-finalization commit (0d10eec, which created this file) and its staging merge (f353564) fall OUTSIDE the range the predecessor declares, so they land inside this delta's range instead. `git diff --name-status --no-renames 364b26d f353564` is exactly this one added path and nothing else -- a narrower bridge than the carve's, which had a delete/add pair. Without this row check (4) COVERAGE would fail on an add this commit did not make. Same open question the carve raised and the reviewer has not yet ruled: whether the pattern wants the bridging row, or wants the validator to tolerate a bookkeeping gap between a delta's declared new_revision and its successor's base."
+    },
+    {
+      "change_kind": "add",
+      "old": null,
+      "new": {
+        "path": "restructure/manifests/delta_e6a1b75.json",
+        "anchor_kind": "data_file",
+        "symbol": "restructure/manifests/delta_e6a1b75.json"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "BRIDGING ROW, composed (R2 bridging convention, adopted 26fo, verified 26fp). Manifest-about-manifest bookkeeping, not code-window content. An `add` row takes no part in the chain composition, so this row exists for COVERAGE alone: the base->tip diff shows this path arriving inside the window and every arrival needs a covering row. RATIONALE, verbatim from delta_02333ce: CHAIN BRIDGING ROW, per the adopted R2 bridging convention (adopted 26fo, verified 26fp) -- NOT THIS COMMIT'S WORK, disclosed. base_revision here is e6a1b75, the PREDECESSOR MANIFEST'S DECLARED new_revision, so the validator's CHAIN abutment check composes. Under the convention's 'manifest names its parent' pattern, the compat retirement's manifest-finalization commit (e83e322, which created this file) and its staging merge (5220adc) fall OUTSIDE the range that predecessor declares, so they land inside this delta's range instead. `git diff --name-status --no-renames e6a1b75 5220adc` is exactly this one added path and nothing else. Without this row check (4) COVERAGE would fail on an add this commit did not make."
+    },
+    {
+      "change_kind": "add",
+      "old": null,
+      "new": {
+        "path": "restructure/manifests/delta_02333ce.json",
+        "anchor_kind": "data_file",
+        "symbol": "restructure/manifests/delta_02333ce.json"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "BRIDGING ROW, composed (R2 bridging convention, adopted 26fo, verified 26fp). Manifest-about-manifest bookkeeping, not code-window content. An `add` row takes no part in the chain composition, so this row exists for COVERAGE alone: the base->tip diff shows this path arriving inside the window and every arrival needs a covering row. RATIONALE, verbatim from delta_1956814: NOT THIS COMMIT'S WORK -- a chain bridging row, disclosed, and the same device delta_364b26d.json, delta_e6a1b75.json and delta_02333ce.json each used for their own predecessor. base_revision here is 02333ce, the PREDECESSOR MANIFEST'S DECLARED new_revision, so the validator's CHAIN abutment check composes. Under the established 'manifest names its parent' pattern the nn0-retirement's manifest-finalization commit (e049689, which created this file) and its staging merge (a2c278e, this branch's real base) fall OUTSIDE the range that predecessor declares, so they land inside this delta's range instead. `git diff --name-status --no-renames 02333ce a2c278e` is exactly this one added path and nothing else. Without this row check (4) COVERAGE would fail on an add this commit did not make. The open question the three preceding deltas each raised is still unruled: whether the pattern wants the bridging row, or wants the validator to tolerate a bookkeeping gap between a delta's declared new_revision and its successor's base."
+    }
+  ]
+}
