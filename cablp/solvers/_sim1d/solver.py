@@ -202,7 +202,6 @@ from .physics.tracer import (
     resolve_criteria as resolve_tracer_criteria,
     transport_ratio as tracer_transport_ratio,
 )
-from .results.compat import add_sim3_compat_aliases
 from .results.restart import (
     REFUSED_NEUTRAL_MODELS as RESTART_REFUSED_NEUTRAL_MODELS,
 )
@@ -10150,7 +10149,7 @@ class LAPDSim1D:
         if self._dvm is not None:
             result.dvm_transfer_ledger = self._dvm_ledger_census(saved)
         result.atomic_rate_domain = _atomic_rate_domain(result)
-        return add_sim3_compat_aliases(result)
+        return result
 
     def _phase_events(self, run_start, final_time):
         run_start = float(run_start)

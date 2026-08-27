@@ -160,10 +160,16 @@ def check_case(case, result, summary):
         cathode_fractions = summary.cathode_diagnostic_fractions
         assert cathode_fractions.get("configured", 0.0) == 1.0
         assert cathode_fractions.get("has_solution", 0.0) > 0.0
-        assert np.nanmax(result.cathode.I_tot) > 0.0
+        # Read the per-electrode loop current straight out of the saved
+        # cathode diagnostics. This used to go through the retired
+        # results/compat.py namespaces (``result.cathode`` /
+        # ``result.cathode_twin``), which were nothing but views of these two
+        # keys -- NaN-filled on frames with no solve, exactly as the keys
+        # themselves are seeded, so nanmax reads the same numbers here.
+        assert np.nanmax(result.cathode_diagnostics["source_I_tot"]) > 0.0
         if case.twin:
             assert cathode_fractions.get("has_twin_solution", 0.0) > 0.0
-            assert np.nanmax(result.cathode_twin.I_tot) > 0.0
+            assert np.nanmax(result.cathode_diagnostics["end_I_tot"]) > 0.0
 
 
 def format_report(case, summary):
