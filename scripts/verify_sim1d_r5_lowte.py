@@ -23,7 +23,7 @@ import numpy as np
 from cablp.solvers._sim1d import LAPDSim1D, default_config
 from cablp.solvers._sim1d.core.state import conservative_from_primitives
 from cablp.solvers._sim1d.physics.energy import electron_cooling_rhs_terms
-from cablp.funcs._adas import he_rates
+from cablp.atomic.adas import he_rates
 
 CLEAN_PARAMS = {
     "ne0": 1e12, "nn0": 1e13, "Te0": 15.0, "Ti0": 2.0, "u0": 0.0,

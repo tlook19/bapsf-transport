@@ -36,7 +36,7 @@ ENV_VAR = "CABLP_COMPILED_KERNELS"
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 _FALSY = frozenset({"", "0", "false", "no", "off"})
 
-_MODULE = "cablp.funcs._cathode_kernels_cy"
+_MODULE = "cablp.cathode._cathode_kernels_cy"
 
 #: Provenance string recorded in artifact metadata when nothing is compiled.
 PURE_PROVENANCE = "pure"

@@ -89,7 +89,7 @@ PLASMA volume, which is exactly the column volume.
 
 import numpy as np
 
-from cablp.funcs._cross import (
+from cablp.atomic.cross_sections import (
     phelps_he_backscatter_cm2,
     phelps_he_isotropic_cm2,
 )

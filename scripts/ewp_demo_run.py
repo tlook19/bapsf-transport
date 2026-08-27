@@ -42,7 +42,7 @@ import numpy as np
 
 from cablp.solvers._sim1d import LAPDSim1D, default_config
 from cablp.solvers._sim1d.physics.sources import neutral_wall_partition_survival
-from cablp.vars._cons import kb_cgs
+from cablp.constants import kb_cgs
 
 DEMO_SIGMA_HEHE_CM2 = 2.044e-15
 

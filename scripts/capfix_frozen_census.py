@@ -27,8 +27,8 @@ import os
 
 from k7cbuild_frozen_bitexact import ARMS, build, digest  # noqa: E402
 
-from cablp.funcs import _cathode_solver_idriven as idr  # noqa: E402
-from cablp.funcs._kernels import PROVENANCE  # noqa: E402
+from cablp.cathode import circuit_idriven as idr  # noqa: E402
+from cablp.cathode.kernels import PROVENANCE  # noqa: E402
 from cablp.solvers._sim1d.physics import cathode as cath  # noqa: E402
 
 # A net phi_c this far above the cap is a real ladder escape rather than the

@@ -45,7 +45,7 @@ b_11s_21p = [7.087e-1, -9.347e-2, -1.598e0, 2.986e0, -1.293e0, 3.086e-1]
 # collapses above ~50 eV, below the 60-180 eV beam range.
 # The n >= 5 nP/nS/nD Rydberg tail is not in this registry; it is computed
 # from the n = 4 rows by the paper's Eq. (5) scaling in
-# funcs._cross.He_singlet_tail_cross.
+# atomic.cross_sections.He_singlet_tail_cross.
 He_singlet_manifold = {
     "21S": {
         "E_eV": 20.6158,

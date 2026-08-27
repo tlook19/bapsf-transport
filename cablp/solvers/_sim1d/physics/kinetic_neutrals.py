@@ -20,11 +20,11 @@ method error, never input error).
 
 import numpy as np
 
-from cablp.vars._cons import m_He_cgs
+from cablp.constants import m_He_cgs
 
 EV = 1.602176634e-12
 KB = 1.380649e-16
-# Helium mass: imported, never re-derived. cablp.vars._cons is THE
+# Helium mass: imported, never re-derived. cablp.constants is THE
 # definition point (Ar(4He)*u, CODATA 2022); the hand-made
 # 4.002602 * 1.66053907e-24 product this replaced was 0.31 ppm low.
 M_HE = m_He_cgs

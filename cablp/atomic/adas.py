@@ -1,6 +1,6 @@
 """OPEN-ADAS adf11 helium rate coefficients.
 
-Parses the iso-nuclear master files in ``cablp/vars/adas`` (see the README
+Parses the iso-nuclear master files in ``cablp/atomic/data/adas`` (see the README
 there for provenance and conventions) and exposes vectorized (n_e, T_e)
 interpolators for the generalized collisional-radiative coefficients the
 sim1d ``atomic_rate_model = "adas"`` path consumes.
@@ -22,9 +22,9 @@ from pathlib import Path
 
 import numpy as np
 
-from ..vars._cons import qe_SI
+from ..constants import qe_SI
 
-ADAS_DIR = Path(__file__).resolve().parent.parent / "vars" / "adas"
+ADAS_DIR = Path(__file__).resolve().parent / "data" / "adas"
 
 
 def _missing_data_file_message(path):
@@ -33,9 +33,9 @@ def _missing_data_file_message(path):
         f"OPEN-ADAS data file not found: {path}\n"
         "The ADAS .dat files are NOT tracked in this repository -- OPEN-ADAS's "
         "terms forbid redistributing them on a public website -- so they must "
-        "be fetched by hand into cablp/vars/adas/ before the "
+        "be fetched by hand into cablp/atomic/data/adas/ before the "
         'atomic_rate_model = "adas" path (or any adf11 reader) can run.\n'
-        "See cablp/vars/adas/README.md for the per-file download URL, the "
+        "See cablp/atomic/data/adas/README.md for the per-file download URL, the "
         "local filename to save as, and the checksum to verify."
     )
 
@@ -236,7 +236,7 @@ def he_rates(ne_cm3, Te_eV, quantities, low_te_extension=False):
         te_edge = 10.0 ** log_te_grid[0]
         below = Te < te_edge
         if np.any(below):
-            from cablp.funcs._cross import alpha_3, alpha_r
+            from cablp.atomic.cross_sections import alpha_3, alpha_r
 
             I_he = 24.587
             ne_b = np.maximum(ne, 1.0)

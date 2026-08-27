@@ -23,8 +23,8 @@ from pathlib import Path
 
 import numpy as np
 
-from cablp.funcs._cross import phelps_momentum_transfer_rate_cm3_s
-from cablp.vars._cons import ev_to_erg, kb_cgs, m_He_cgs
+from cablp.atomic.cross_sections import phelps_momentum_transfer_rate_cm3_s
+from cablp.constants import ev_to_erg, kb_cgs, m_He_cgs
 
 DEFAULT_H5 = (
     "es1_nx120_m6_sq4600_g3200_c120_ts1900_l8p1_mn2mom300k_bmom_"

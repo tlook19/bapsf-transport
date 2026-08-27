@@ -1141,7 +1141,7 @@ def fudge_factor_defaults():
     atomic_rate_model:
         Source of the He atomic rate coefficients. ``"adas"`` (default) uses
         the OPEN-ADAS GCR '96 effective
-        coefficients (``cablp/vars/adas``, see its README): SCD ionization
+        coefficients (``cablp/atomic/data/adas``, see its README): SCD ionization
         (includes the stepwise/metastable channel the direct rate lacks --
         up to ~3-6x at 3-5 eV, LAPD densities), ACD recombination (includes
         three-body, so ``b_rec_3b`` is inert), and PLT/PRB radiated power for
@@ -1780,7 +1780,7 @@ def cathode_defaults():
         with ``beam_excitation_energy_eV`` radiated per event.
         ``"manifold"``: the summed Ralchenko et al. (2008) singlet manifold
         (fitted n <= 4 levels plus the Eq. (5) n >= 5 tail,
-        ``vars._coeff.He_singlet_manifold``) with the energy-weighted mean
+        ``atomic.coefficients.He_singlet_manifold``) with the energy-weighted mean
         radiated energy per event computed at the beam energy. Over 60-180 eV
         the manifold gives 1.65-1.75x the 2^1P events and 1.71-1.81x its
         radiated power, so it is knob-free where ``"2p_scalar"`` needs
@@ -1797,7 +1797,7 @@ def cathode_defaults():
         ``"beer_lambert"`` (historical): single-event absorption
         over the mixed Coulomb/inelastic profile (``l_b_profile`` +
         ``beam_absorption_weights``). ``"csda"`` (default): the deterministic
-        slowing-down module (``funcs/_beam_deposition.deposit_beam``, a pure
+        slowing-down module (``cathode/beam_deposition.deposit_beam``, a pure
         function of the beam and the column — B2):
         primaries survive multiple inelastic events, per-cell ionization/
         excitation/heating/radiation come from the integrated ray, and the
@@ -1958,7 +1958,7 @@ def cathode_defaults():
         ``f_Landau = gamma_L / (gamma_L + nu_en/2)`` with ``nu_en = nn*K_m(Te)``
         on the boxed He e-n momentum-transfer coefficient and ``gamma_L`` the
         Maxwellian Landau rate at the beam-resonant phase velocity
-        (``funcs._beam_deposition.landau_branching_fraction``, which carries the
+        (``cathode.beam_deposition.landau_branching_fraction``, which carries the
         formula and its ``v_phi/v_te`` validity caveat). That share of each
         cell's power is walked exactly as ``"tail_walk"`` walks all of it —
         same birth energy, launch, Coulomb machinery, cathode and collector
@@ -1979,7 +1979,7 @@ def cathode_defaults():
         withholding bank between the channel and reservoir arms and the
         reservoir carries the density FLOOR, so a branching there would be an
         artifact of the floor convention (see
-        ``funcs._beam_deposition.deposit_beam_two_stream``). ENERGY-ONLY,
+        ``cathode.beam_deposition.deposit_beam_two_stream``). ENERGY-ONLY,
         exactly like ``heating_anomalous_transport``.
     heating_anomalous_tail_energy_eV:
         QL plateau energy ``E_tail`` [eV] the tail electrons are launched at.
@@ -3526,7 +3526,7 @@ input_flags_template_1d = {
     # min(J_eth, J_crit) corner that turns boundary-cell Te noise into V_b
     # chatter. C1 blend with exact hard-branch reduction outside the window,
     # monotonicity of J_tot(psi) preserved by construction (convex combination
-    # of branch slopes -- see funcs._cathode_solver_idriven._bridge_release).
+    # of branch slopes -- see cathode.circuit_idriven._bridge_release).
     # Off => bit-exact hard branches.
     "cathode_emission_bridge": False,
     # Bound the device voltage by what the CIRCUIT can supply, *current-driven*

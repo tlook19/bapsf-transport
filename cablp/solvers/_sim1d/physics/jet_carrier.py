@@ -178,8 +178,8 @@ they carry no opinion.
 
 import numpy as np
 
-from cablp.funcs._cross import phelps_he_backscatter_cm2
-from cablp.vars._cons import ev_to_erg
+from cablp.atomic.cross_sections import phelps_he_backscatter_cm2
+from cablp.constants import ev_to_erg
 
 from ..core.state import (
     ConservativeState1D,

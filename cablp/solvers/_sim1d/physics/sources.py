@@ -1,12 +1,12 @@
 import numpy as np
 from scipy.special import expn
 
-from cablp.funcs._cross import (
+from cablp.atomic.cross_sections import (
     charge_ex_react,
     phelps_cx_rate_cm3_s,
     phelps_momentum_transfer_rate_cm3_s,
 )
-from cablp.vars._cons import ev_to_erg, kb_cgs
+from cablp.constants import ev_to_erg, kb_cgs
 
 from .flux import (
     ion_sound_speed,
@@ -275,7 +275,7 @@ def electrode_sheath_alpha(
     (R3.2 / A16): one mesh-independent sheath-edge density ``n_se``, SHARED by
     the fluid sink, the circuit current, and the power terms.
     Both the fluid characteristic boundary (``characteristic_boundary_rhs``) and
-    the circuit's cathode current (``funcs._cathode_solver_idriven.solve_idriven``
+    the circuit's cathode current (``cathode.circuit_idriven.solve_idriven``
     via the cathode adapter) call this so they cannot disagree about ``n_se``.
     The anode mesh is NOT sampled here: its presheath is geometric and always
     fits inside a cell, so its factor is the flat ``exp(-1/2)`` used unchanged by

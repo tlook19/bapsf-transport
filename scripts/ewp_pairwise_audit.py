@@ -74,7 +74,7 @@ from cablp.solvers._sim1d.physics.sources import (
     neutral_momentum_two_zone_rhs,
     neutral_wall_partition_survival,
 )
-from cablp.vars._cons import ev_to_erg, kb_cgs
+from cablp.constants import ev_to_erg, kb_cgs
 
 ROW_NAMES = ("n", "nn", "M", "Ee", "Ei", "M_n", "nn_a", "M_n_a")
 

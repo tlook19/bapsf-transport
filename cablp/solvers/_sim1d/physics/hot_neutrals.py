@@ -30,7 +30,7 @@ The standing population follows the saturating two-state balance
 
 whose ``tau_hot`` is a ballistic column-radius crossing. Everything in it is
 already boxed: ``k_cx`` is the Phelps LXCat backscatter rate coefficient
-(:func:`cablp.funcs._cross.phelps_cx_rate_cm3_s`, the same table whose sum with
+(:func:`cablp.atomic.cross_sections.phelps_cx_rate_cm3_s`, the same table whose sum with
 half the isotropic-elastic rate IS the collision operator's ``nu_mt``), and
 ``tau_hot`` is the column radius over the hot thermal speed. No constant in this
 module is fitted.
@@ -122,8 +122,8 @@ far end is carried that way, which is the whole point of the flag.
 
 import numpy as np
 
-from cablp.funcs._cross import phelps_cx_rate_cm3_s
-from cablp.vars._cons import ev_to_erg
+from cablp.atomic.cross_sections import phelps_cx_rate_cm3_s
+from cablp.constants import ev_to_erg
 
 from ..core.state import (
     ConservativeState1D,

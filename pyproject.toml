@@ -15,7 +15,7 @@ dependencies = [
 
 [build-system]
 # Cython and setuptools are BUILD-time only: they compile the optional
-# cablp.funcs._cathode_kernels_cy extension (D4 spike). The runtime never
+# cablp.cathode._cathode_kernels_cy extension (D4 spike). The runtime never
 # needs them -- the compiled kernels are opt-in via CABLP_COMPILED_KERNELS and
 # the default path is pure Python whether or not the extension was built.
 #
@@ -45,7 +45,7 @@ packages = [{include = "cablp"}]
 # must be named explicitly or it is silently left out of the wheel -- giving
 # a platform-tagged wheel with no extension in it. Wheel only: an sdist
 # ships the .pyx and rebuilds.
-include = [{ path = "cablp/funcs/*.so", format = "wheel" }]
+include = [{ path = "cablp/cathode/*.so", format = "wheel" }]
 
 [tool.poetry.build]
 script = "build_ext.py"

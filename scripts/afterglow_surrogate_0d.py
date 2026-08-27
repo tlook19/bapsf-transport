@@ -17,10 +17,10 @@ instrument, not a coupled neutral solve.
 
 Channels (each transcribed from the operator named in parentheses)
 -----------------------------------------------------------------
-* electron-ion exchange ``Q_ie`` (``funcs._heat.Q_ie`` as
+* electron-ion exchange ``Q_ie`` (``plasma.heat.Q_ie`` as
   ``physics.energy.electron_ion_exchange_rhs`` books it): positive when
   ``Te > Ti``; sink on ``Ee``, source on ``Ei``.
-* conduction-limited end loss (``funcs._heat.elec_par_heat_loss`` /
+* conduction-limited end loss (``plasma.heat.elec_par_heat_loss`` /
   ``ion_par_heat_loss``): ``kappa_par * T / (L_p * L_hf)``, a sink on both
   energies, scaled by ``end_loss_coefficient`` (1.0 = unmodified).
 * ion-neutral (charge-exchange) energy sink, the thermal channel of
@@ -71,20 +71,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from compare_sim1d_es1 import DECAY_WINDOW_MS, _efold_time_ms  # noqa: E402
 
-from cablp.funcs._cross import (  # noqa: E402
+from cablp.atomic.cross_sections import (  # noqa: E402
     phelps_momentum_transfer_rate_cm3_s,
 )
-from cablp.funcs._heat import (  # noqa: E402
+from cablp.plasma.heat import (  # noqa: E402
     Q_ie,
     _resolve_per_particle,
     elec_par_heat_loss,
     kappa_par_ion,
 )
-from cablp.funcs._plasmaparams import c_log  # noqa: E402
+from cablp.plasma.params import c_log  # noqa: E402
 from cablp.solvers._sim1d.physics.flux import plasma_wave_speed  # noqa: E402
-from cablp.vars._cons import ev_to_erg, m_He_cgs, m_p_cgs  # noqa: E402
+from cablp.constants import ev_to_erg, m_He_cgs, m_p_cgs  # noqa: E402
 
-# The R3b-deleted ``funcs._heat.ion_par_heat_loss``, transcribed here verbatim
+# The R3b-deleted ``plasma.heat.ion_par_heat_loss``, transcribed here verbatim
 # because this instrument is frozen as-run.
 def _ion_par_heat_loss(Ti, ni, L_p, L_hf, mu, lnlambda, per_particle=True, *, rk=None):
     """

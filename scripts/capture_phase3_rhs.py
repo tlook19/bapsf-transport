@@ -174,11 +174,11 @@ def _producer_blobs():
     "Complete" means complete over what git TRACKS: the census is
     ``git ls-tree`` of ``cablp`` plus the locked recipe inputs, so a
     file that is not in the tree cannot appear here. The OPEN-ADAS ``.dat``
-    data files under ``cablp/vars/adas`` are untracked as of
+    data files under ``cablp/atomic/data/adas`` are untracked as of
     2026-08-26 and are therefore ABSENT from this census, even though the
     atomic rates they carry are an input to the captured RHS. Their
     integrity is not lost, it is carried elsewhere: the data-block sha256
-    table in ``cablp/vars/adas/README.md`` pins them, and that README
+    table in ``cablp/atomic/data/adas/README.md`` pins them, and that README
     IS tracked and so IS censused here. A capture's provenance record must
     be read with both halves together.
     """

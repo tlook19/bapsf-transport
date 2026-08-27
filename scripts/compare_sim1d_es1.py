@@ -185,7 +185,7 @@ PARAM_OVERRIDES = {
     # first-principles drag+CX+thermal, no knob). The legacy drag keys are
     # DEPRECATED and no longer set here, nor in the golden, which has run the
     # shipped moment-closure defaults since the R2b re-anchor.
-    # ADAS GCR rates (see cablp/vars/adas/README.md): effective ionization/
+    # ADAS GCR rates (see cablp/atomic/data/adas/README.md): effective ionization/
     # recombination and radiation-only cooling, consistent with the separate
     # ionization-cost term. b_Q* = 1 is meaningful under this model.
     "atomic_rate_model": "adas",

@@ -21,8 +21,8 @@ from cablp.solvers._sim1d.physics.cathode import (
     cathode_device_config,
     cathode_emission_annuli,
 )
-from cablp.funcs._cathode_solver_idriven import solve_idriven
-from cablp.funcs._cathode_solver import PlasmaState
+from cablp.cathode.circuit_idriven import solve_idriven
+from cablp.cathode.circuit import PlasmaState
 
 cfg_d, cfg_f = default_config()
 d = dict(cfg_d)

@@ -11,7 +11,7 @@ import numpy as np
 
 S = Path(__file__).resolve().parent
 PORTS = {"p11": 470.1, "p21": 789.5, "p29": 1045.2, "p41": 1428.5, "p50": 1716.1}
-# SUPERSEDED 2026-08-21: the unified helium mass is cablp.vars._cons
+# SUPERSEDED 2026-08-21: the unified helium mass is cablp.constants
 # .m_He_cgs = 6.6464790809e-24 g (Ar(4He)*u, CODATA 2022). The literal
 # below is 707 ppm low and is left AS A RECORD of what this dated script ran.
 M_HE = 4 * 1.6605e-24

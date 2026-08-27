@@ -33,7 +33,7 @@ import cablp.solvers._sim1d.core.state as state_mod
 import cablp.solvers._sim1d.physics.conduction as conduction_mod
 from cablp.solvers._sim1d import LAPDSim1D, ProgressPrinter1D, default_config
 from cablp.solvers._sim1d.physics.conduction import IMPLICIT_HEAT_SCHEMES
-from cablp.vars._cons import ev_to_erg
+from cablp.constants import ev_to_erg
 
 # Re-cut onto the STANCE OF RECORD (scripts/stances/g1atrim.toml) on
 # 2026-08-24. This block previously described itself as mirroring the old

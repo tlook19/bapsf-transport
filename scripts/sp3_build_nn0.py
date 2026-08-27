@@ -106,7 +106,7 @@ from cablp.solvers._sim1d.physics.neutrals import (
     neutral_zone_volumes,
     puff_rate,
 )
-from cablp.vars._cons import kb_cgs, m_He_cgs
+from cablp.constants import kb_cgs, m_He_cgs
 
 #: He-He collision cross section [cm^2], hard-sphere from the Lennard-Jones
 #: collision diameter sigma_LJ = 2.551 Angstrom for helium (Hirschfelder,

@@ -7,7 +7,7 @@ ionization-cost term double-counts it), the He II fit is roughly 2x high,
 and the direct ground-state ionization rate misses the stepwise/metastable
 channel that dominates the effective rate at LAPD densities and low Te.
 
-Correspondences (see cablp/vars/adas/README.md for conventions):
+Correspondences (see cablp/atomic/data/adas/README.md for conventions):
 
     Qen = IAEA_exp1(aHeI)  <->  PLT(1)  [+ I_ion*SCD(1) if the fit includes
                                           the ionization cost -- it does]
@@ -25,16 +25,16 @@ import argparse
 
 import numpy as np
 
-from cablp.funcs._adas import (
+from cablp.atomic.adas import (
     he_ion_line_power,
     he_ionization_rate,
     he_neutral_line_power,
     he_recombination_power,
     he_recombination_rate,
 )
-from cablp.funcs._cross import He_ion_rate_lkup, alpha_3, alpha_r
-from cablp.funcs._fits import IAEA_exp1, IAEA_exp4
-from cablp.vars._coeff import aHeI, aHeII
+from cablp.atomic.cross_sections import He_ion_rate_lkup, alpha_3, alpha_r
+from cablp.atomic.fits import IAEA_exp1, IAEA_exp4
+from cablp.atomic.coefficients import aHeI, aHeII
 
 TE_EV = np.array(
     [0.2, 0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 12.0, 20.0, 30.0, 50.0, 70.0, 100.0]

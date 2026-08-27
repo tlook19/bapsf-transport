@@ -94,12 +94,12 @@ from cablp.solvers._sim1d.physics.sources import (
     neutral_temperature_eV,
     neutral_wind_velocity,
 )
-from cablp.funcs._cross import (
+from cablp.atomic.cross_sections import (
     phelps_cx_rate_cm3_s,
     phelps_iso_rate_cm3_s,
     phelps_momentum_transfer_rate_cm3_s,
 )
-from cablp.vars._cons import ev_to_erg, kb_cgs
+from cablp.constants import ev_to_erg, kb_cgs
 
 CLEAN_PARAMS = {
     "ne0": 1e12, "nn0": 1e13, "Te0": 15.0, "Ti0": 2.0, "u0": 0.0,

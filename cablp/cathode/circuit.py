@@ -33,15 +33,15 @@ from typing import Literal
 import numpy as np
 from scipy.optimize import brentq
 
-from cablp.funcs._cross import (
+from cablp.atomic.cross_sections import (
     He_EII_cross_lkup,
     H_EII_cross_lkup,
     He_beam_excitation_channel,
 )
-from cablp.funcs._kernels import COMPILED_KERNELS as _COMPILED_KERNELS
-from cablp.funcs._plasmaparams import LN_LAMBDA_MIN as _LN_LAMBDA_MIN
-from cablp.vars._coeff import b_11s_21p
-from cablp.vars._cons import E_21p as _E_21p_eV, Ry_eV as _Ry_eV, atm_cross_cgs as _atm_cross_cgs
+from cablp.cathode.kernels import COMPILED_KERNELS as _COMPILED_KERNELS
+from cablp.plasma.params import LN_LAMBDA_MIN as _LN_LAMBDA_MIN
+from cablp.atomic.coefficients import b_11s_21p
+from cablp.constants import E_21p as _E_21p_eV, Ry_eV as _Ry_eV, atm_cross_cgs as _atm_cross_cgs
 
 # ---------------------------------------------------------------------------
 # Universal physical constants

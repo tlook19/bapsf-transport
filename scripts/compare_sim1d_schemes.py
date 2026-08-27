@@ -50,7 +50,7 @@ import numpy as np
 
 import cablp.solvers._sim1d.core.state as state_mod
 from cablp.solvers._sim1d import LAPDSim1D, default_config
-from cablp.vars._cons import ev_to_erg
+from cablp.constants import ev_to_erg
 
 FIELDS = ("n", "nn", "u", "Te", "Ti")
 

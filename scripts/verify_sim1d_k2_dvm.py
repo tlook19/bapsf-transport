@@ -147,7 +147,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from cablp.funcs._cross import (
+from cablp.atomic.cross_sections import (
     phelps_he_isotropic_cm2,
     phelps_iso_rate_cm3_s,
     phelps_momentum_transfer_rate_cm3_s,
@@ -186,7 +186,7 @@ from cablp.solvers._sim1d.physics.neutrals import (
     _effective_pump_speed,
     neutral_zone_volumes,
 )
-from cablp.vars._cons import kb_cgs, m_He_cgs
+from cablp.constants import kb_cgs, m_He_cgs
 
 # The stance loader, for the committed stance FILE. It is this module's only
 # scripts/ import, and it is deliberate: the geometry the gates below call

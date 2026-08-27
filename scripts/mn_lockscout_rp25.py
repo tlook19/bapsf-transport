@@ -32,7 +32,7 @@ from compare_sim1d_es1 import PARAM_OVERRIDES, FLAG_OVERRIDES  # noqa: E402
 from run_mechanism_ladder import ES_OPERATING  # noqa: E402
 from cablp.solvers._sim1d import default_config, LAPDSim1D  # noqa: E402
 from cablp.solvers._sim1d.core.state import derive_state  # noqa: E402
-from cablp.vars._cons import ev_to_erg  # noqa: E402
+from cablp.constants import ev_to_erg  # noqa: E402
 
 
 def build(nx, flare, tail, rp_end):

@@ -33,7 +33,7 @@ from cablp.solvers._sim1d.core.state import (
     apply_state_floors,
 )
 from cablp.solvers._sim1d.physics.flux import plasma_wave_speed
-from cablp.vars._cons import ev_to_erg
+from cablp.constants import ev_to_erg
 
 FLOOR_RTOL = 1e-9
 

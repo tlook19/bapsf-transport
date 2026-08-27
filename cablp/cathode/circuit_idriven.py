@@ -84,11 +84,11 @@ import sys
 import numpy as np
 from scipy.optimize import brentq
 
-from cablp.funcs._beam_deposition import (
+from cablp.cathode.beam_deposition import (
     HE_EII_EDGE_REL_TOL,
     HE_EII_EPS_TOP,
 )
-from cablp.funcs._cathode_solver import (
+from cablp.cathode.circuit import (
     CATHODE_LNL_MODELS,
     BeamResult,
     DeviceConfig,
@@ -110,8 +110,8 @@ from cablp.funcs._cathode_solver import (
     _mp_cgs,
     beam_excitation_channel,
 )
-from cablp.funcs._cross import H_EII_cross_lkup, He_EII_cross_lkup
-from cablp.funcs._kernels import COMPILED_KERNELS as _COMPILED_KERNELS
+from cablp.atomic.cross_sections import H_EII_cross_lkup, He_EII_cross_lkup
+from cablp.cathode.kernels import COMPILED_KERNELS as _COMPILED_KERNELS
 
 __all__ = [
     "beam_launch_energy_eV",

@@ -2,9 +2,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from cablp.funcs._plasmaparams import v_ion_speed
+from cablp.plasma.params import v_ion_speed
 from ..core.state import ConservativeState1D, derive_state
-from cablp.vars._cons import ev_to_erg
+from cablp.constants import ev_to_erg
 
 
 @dataclass(frozen=True)

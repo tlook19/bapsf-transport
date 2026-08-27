@@ -6,7 +6,7 @@ __pycache__/
 
 # Cython build products. The .pyx sources are tracked; the C that Cython
 # generates and the compiled extension are derived and machine-specific.
-cablp/funcs/*.c
+cablp/cathode/*.c
 *.so
 build/
 
@@ -61,8 +61,8 @@ scripts/neutral_seed_db/
 # Every OPEN-ADAS download carries terms forbidding redistribution and
 # publication on a public website; this repository is public, so the .dat
 # files are UNTRACKED and each user fetches their own copies from
-# https://open.adas.ac.uk. cablp/vars/adas/README.md carries the
+# https://open.adas.ac.uk. cablp/atomic/data/adas/README.md carries the
 # per-file download URL, local filename and checksums, and README.md
 # itself stays tracked. Ignored here so the data cannot be re-added
 # silently by a `git add` over the package tree.
-cablp/vars/adas/*.dat
+cablp/atomic/data/adas/*.dat

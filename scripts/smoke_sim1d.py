@@ -94,11 +94,11 @@ from types import SimpleNamespace
 import h5py
 import numpy as np
 
-from cablp.funcs import _kernels as _kernel_selector
-from cablp.funcs import _cathode_solver as _cathode_solver_mod
-from cablp.funcs import _cathode_solver_idriven as _cathode_solver_idriven_mod
-from cablp.funcs import _beam_deposition as _beam_deposition_mod
-from cablp.funcs import _cross as _cross_mod
+from cablp.cathode import kernels as _kernel_selector
+from cablp.cathode import circuit as _cathode_solver_mod
+from cablp.cathode import circuit_idriven as _cathode_solver_idriven_mod
+from cablp.cathode import beam_deposition as _beam_deposition_mod
+from cablp.atomic import cross_sections as _cross_mod
 from cablp.solvers._sim1d.physics import cathode as _cathode_mod
 from cablp.solvers._sim1d.results import restart as _restart_mod
 from cablp.solvers._sim1d.results.phase3_capture import (
@@ -110,11 +110,11 @@ from cablp.solvers._sim1d.results.phase3_capture import (
     reserve_run_id,
     write_qualified_capture,
 )
-from cablp.funcs._adas import he_rate_temperature_range_eV
+from cablp.atomic.adas import he_rate_temperature_range_eV
 # main() re-imports deposit_beam locally further down (B1 block), which makes
 # the bare name local to the whole function -- alias it for the item-35 block.
-from cablp.funcs._beam_deposition import deposit_beam as _deposit_beam_ray
-from cablp.funcs._cathode_solver import _compute_l_b
+from cablp.cathode.beam_deposition import deposit_beam as _deposit_beam_ray
+from cablp.cathode.circuit import _compute_l_b
 from cablp.solvers._sim1d import (
     BreakdownError,
     KINETIC_DVM_INCOMPATIBLE_DEFAULTS,
@@ -215,7 +215,7 @@ from cablp.solvers._sim1d.physics.sources import (
     neutral_wind_velocity,
     velocity_divergence,
 )
-from cablp.funcs._cross import phelps_momentum_transfer_rate_cm3_s
+from cablp.atomic.cross_sections import phelps_momentum_transfer_rate_cm3_s
 from cablp.solvers._sim1d.core.state import (
     STATE_NAMES_1D,
     ConservativeState1D,
@@ -226,7 +226,7 @@ from cablp.solvers._sim1d.core.state import (
     state_field_names,
     unpack_state,
 )
-from cablp.vars._cons import (
+from cablp.constants import (
     I_ion, en_factor, ev_to_erg, kb_cgs, m_He_cgs, m_p_cgs, qe_SI
 )
 
@@ -620,8 +620,8 @@ def _case_shipped_defaults_and_base_geometry():
     # extend -- this assertion is the guard. The value is Ar(4He)*u =
     # 4.00260325413 * 1.66053906892e-27 kg (CODATA 2022), cross-checked
     # against m(alpha) + 2 m_e - 79.005151 eV/c^2 to 5e-12 relative.
-    from cablp.vars._cons import m_He_SI as _m_He_SI
-    from cablp.vars._cons import m_He_cgs as _m_He_cgs
+    from cablp.constants import m_He_SI as _m_He_SI
+    from cablp.constants import m_He_cgs as _m_He_cgs
 
     assert _m_He_cgs == 6.6464790809e-24, _m_He_cgs
     assert _m_He_SI == 6.6464790809e-27, _m_He_SI
@@ -1719,7 +1719,7 @@ def _case_cathode_resolved_gap_resistance(cathode_face):
     import warnings as _warnings
 
     from cablp.solvers._sim1d.core.geometry import gap_cell_indices
-    from cablp.funcs._cathode_solver import _c_log_ei
+    from cablp.cathode.circuit import _c_log_ei
     from cablp.solvers._sim1d.physics.cathode import spitzer_sigma_par_ohm_cm
 
     rgap_params = dict(resolved_params)
@@ -2350,7 +2350,7 @@ def _case_cathode_annular_emission_profile():
     # footprint must reproduce the uniform solve; the gaussian profile must
     # produce a monotone, softened V(I) knee.
     sim, snapshot = _base_sim()
-    from cablp.funcs._cathode_solver import PlasmaState, solve as cathode_solve_fn
+    from cablp.cathode.circuit import PlasmaState, solve as cathode_solve_fn
     from cablp.solvers._sim1d.physics.cathode import (
         cathode_device_config,
         cathode_emission_annuli,
@@ -2420,7 +2420,7 @@ def _case_cathode_current_driven_sheath_solve(
     # V-driven solve's I_tot, solve_idriven must reproduce the same operating
     # point -- phi_c/phi_a/I_eth_star/regime -- through the monotone device
     # relation, with no warm windows and no bypass iteration. The M2 gate.
-    from cablp.funcs._cathode_solver_idriven import solve_idriven
+    from cablp.cathode.circuit_idriven import solve_idriven
 
     id_sweep = []
     id_plasmas = (
@@ -3553,7 +3553,7 @@ def _case_cathode_second_wall_landing_population(
     # C1 blend across the SCL<->classical release corner. Kernel first:
     # exact hard branches outside the window, continuous slope across the
     # edges, J_star <= min(J_eff, J_crit) everywhere, both outputs monotone.
-    from cablp.funcs._cathode_solver_idriven import (
+    from cablp.cathode.circuit_idriven import (
         _BRIDGE_HALF_WIDTH,
         _bridge_release,
     )
@@ -4113,7 +4113,7 @@ def _case_beam_excitation_channel(cathode_solve):
     # --- Beam excitation channel (b_beam_excitation, default 0 = historical).
     params, flags = _base_config()
     cathode_flags = _cathode_flags()
-    from cablp.funcs._cathode_solver import beam_excitation_cross
+    from cablp.cathode.circuit import beam_excitation_cross
 
     sigma_exc_100 = beam_excitation_cross(100.0, 1.0, "He")
     assert 5.0e-18 < sigma_exc_100 < 2.0e-17
@@ -4183,8 +4183,8 @@ def _case_beam_manifold_excitation_model(
 ):
     # --- A2: the manifold excitation model (WP-A).
     cathode_flags = _cathode_flags()
-    from cablp.funcs._cathode_solver import beam_excitation_channel
-    from cablp.funcs._cross import (
+    from cablp.cathode.circuit import beam_excitation_channel
+    from cablp.atomic.cross_sections import (
         He_beam_excitation_channel as _He_manifold_channel,
     )
 
@@ -4224,7 +4224,7 @@ def _case_beam_manifold_excitation_model(
     # at the table nodes by construction; between nodes the interp error
     # must stay below the physics-irrelevant level, and the domain edges
     # must reproduce the exact function's contract.
-    from cablp.funcs._cross import He_beam_excitation_channel_lkup
+    from cablp.atomic.cross_sections import He_beam_excitation_channel_lkup
 
     _lk_rng = np.random.default_rng(20260721)
     _lk_Es = np.concatenate([
@@ -8353,7 +8353,7 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
         try:
             import importlib as _importlib
 
-            _cy = _importlib.import_module("cablp.funcs._cathode_kernels_cy")
+            _cy = _importlib.import_module("cablp.cathode._cathode_kernels_cy")
         except ImportError:
             _cy = None
         if _cy is not None:
@@ -8677,7 +8677,7 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
         else:
             print(
                 "compiled-kernel D4 unit equivalence: SKIPPED -- "
-                "cablp.funcs._cathode_kernels_cy is not built "
+                "cablp.cathode._cathode_kernels_cy is not built "
                 "(`python build_ext.py --inplace` enables it)"
             )
 
@@ -14051,10 +14051,10 @@ def _case_adas_atomic_rate_model():
     # parse, grid nodes reproduce exactly, edges clamp, and the physics the
     # switch exists for shows up (effective SCD ionization above the direct
     # ground-state rate at low Te, radiation-only cooling below the IAEA fit).
-    from cablp.funcs import _adas
-    from cablp.funcs._cross import He_ion_rate_lkup
-    from cablp.funcs._fits import IAEA_exp1
-    from cablp.vars._coeff import aHeI
+    from cablp.atomic import adas as _adas
+    from cablp.atomic.cross_sections import He_ion_rate_lkup
+    from cablp.atomic.fits import IAEA_exp1
+    from cablp.atomic.coefficients import aHeI
 
     scd_ne, scd_te, scd_stages = _adas.read_adf11(_adas.ADAS_DIR / "scd96_he.dat")
     assert scd_ne.shape == (24,) and scd_te.shape == (30,)
@@ -14091,9 +14091,9 @@ def _case_adas_atomic_rate_model():
         assert np.all(fused[name] == single(fuse_ne, fuse_Te)), name
 
     # The float port of the 2^1P excitation cross section matches mpmath.
-    from cablp.funcs._cathode_solver import _he_2p_excitation_cross_cm2
-    from cablp.funcs._cross import He_EIE_cross_DA
-    from cablp.vars._coeff import b_11s_21p as _b21p
+    from cablp.cathode.circuit import _he_2p_excitation_cross_cm2
+    from cablp.atomic.cross_sections import He_EIE_cross_DA
+    from cablp.atomic.coefficients import b_11s_21p as _b21p
     for eps_probe in (1.5, 100.0 / 21.218, 8.0):
         assert np.isclose(
             _he_2p_excitation_cross_cm2(eps_probe),
@@ -14109,11 +14109,11 @@ def _case_adas_atomic_rate_model():
 @_case("he-singlet-manifold-registry")
 def _case_he_singlet_manifold_registry(_b21p, _he_2p_excitation_cross_cm2):
     # --- A1: the He singlet manifold registry (WP-A). ---
-    from cablp.funcs._cross import (
+    from cablp.atomic.cross_sections import (
         He_EIE_cross_manifold,
         He_singlet_tail_cross,
     )
-    from cablp.vars._coeff import He_singlet_manifold
+    from cablp.atomic.coefficients import He_singlet_manifold
 
     # The 2^1P row is the provenance anchor: same list object as b_11s_21p,
     # and the general evaluator reproduces the beam's float port (the ~7e-6
@@ -14184,7 +14184,7 @@ def _case_csda_module_standalone():
     # --- B1: the standalone CSDA beam-deposition module
     # (B1; full acceptance in
     # scripts/verify_beam_deposition.py — this is the fast subset).
-    from cablp.funcs._beam_deposition import (
+    from cablp.cathode.beam_deposition import (
         _COULOMB_STOPPING_EXPONENT,
         _coulomb_stopping_coefficient,
         beam_speed_cm_s,
@@ -14279,13 +14279,13 @@ def _case_csda_per_cell_accumulators(
     # marching/banking structure can make this fire. If that happens, this
     # reference must be re-derived from the module (or retired), never
     # loosened.
-    from cablp.funcs._beam_deposition import (
+    from cablp.cathode.beam_deposition import (
         _ERG_PER_EV as _b2_ERG,
         HE_E_STOP_EV as _b2_E_STOP,
         HE_I_ION_EV as _b2_I_ION,
         he_mean_secondary_energy_eV as _b2_W_sec,
     )
-    from cablp.funcs._cross import (
+    from cablp.atomic.cross_sections import (
         He_EII_cross_lkup as _b2_sigma_i,
         He_beam_excitation_channel_lkup as _b2_sigma_x,
     )
@@ -15838,7 +15838,7 @@ def _case_gcr_recombination_energy_pair(m3_params):
     # (recombination_energy_return): +I_ion*S_rec - P_PRB on the electron
     # fluid, adas-only, mutually exclusive with icool_recomb (double-charge).
     resolved_cathode_flags = _resolved_cathode_flags()
-    from cablp.funcs._adas import he_rates as _rer_he_rates
+    from cablp.atomic.adas import he_rates as _rer_he_rates
     from cablp.solvers._sim1d.physics.reactions import (
         recombination_energy_return_rhs,
     )
@@ -17052,14 +17052,14 @@ def _case_compiled_kernel_equivalence():
         import importlib as _ck_importlib
 
         _ck_module = _ck_importlib.import_module(
-            "cablp.funcs._cathode_kernels_cy"
+            "cablp.cathode._cathode_kernels_cy"
         )
     except ImportError:
         _ck_module = None
     if _ck_module is None:
         print(
             "compiled-kernel equivalence: SKIPPED -- "
-            "cablp.funcs._cathode_kernels_cy is not built "
+            "cablp.cathode._cathode_kernels_cy is not built "
             "(`python build_ext.py --inplace` enables it)"
         )
     else:
@@ -17111,8 +17111,8 @@ import sys
 
 import numpy as np
 
-from cablp.funcs import _beam_deposition as _beam_dep
-from cablp.funcs import _kernels as K
+from cablp.cathode import beam_deposition as _beam_dep
+from cablp.cathode import kernels as K
 from cablp.solvers._sim1d import LAPDSim1D, default_config
 
 scenario = sys.argv[1]
@@ -18086,7 +18086,7 @@ def _case_coverage_two_medium_beam_split(_coverage_config):
     # the array the cathode path samples (presheath sampling moves it), so
     # comparing against it would test the sampler, not the hand-off.
     from cablp.solvers._sim1d.physics import cathode as _cov_cath_mod
-    from cablp.funcs._beam_deposition import (
+    from cablp.cathode.beam_deposition import (
         _coulomb_stopping_coefficient as _cov_stop_coeff,
     )
 
@@ -18370,7 +18370,7 @@ def _case_coverage_closure_v2(_cov_ref_sim, _coverage_config, deposit_beam):
     # energy CELL BY CELL across every re-partition boundary, the z-resolved
     # partition identity closes per cell, and a rejected step leaves the field
     # exactly where it was.
-    from cablp.funcs._beam_deposition import deposit_beam_two_stream
+    from cablp.cathode.beam_deposition import deposit_beam_two_stream
 
     def _cov2_ray_energy(dep):
         """Every erg one arm accounts for: deposited, radiated, spent or gone."""
@@ -19346,7 +19346,7 @@ def _case_neutral_probe_energy_booking(_probe_config, _probe_ok, _probe_cells):
         NEUTRAL_ENERGY_FLOOR_T_K as _probe_En_T_wall,
         neutral_energy_floor as _probe_En_floor,
     )
-    from cablp.vars._cons import kb_cgs as _probe_En_kb
+    from cablp.constants import kb_cgs as _probe_En_kb
 
     _probe_En_birth = 1.5 * (_probe_En_T_wall * _probe_En_kb)
     for _probe_En_two_zone in (False, True):
@@ -22274,7 +22274,7 @@ def _case_kinetic_geff_thermal_floor():
     from cablp.solvers._sim1d.physics.kinetic_neutrals import (
         ion_thermal_g_eff_floor_cm2_s2 as _gf,
     )
-    from cablp.vars._cons import ev_to_erg as _gf_ev, m_He_cgs as _gf_m
+    from cablp.constants import ev_to_erg as _gf_ev, m_He_cgs as _gf_m
 
     # The drift-free mean speed of the ion Maxwellian at Ti = 1 eV, with the
     # repo's m_He: sqrt(8 k Ti / (pi m_He)) [cm/s].

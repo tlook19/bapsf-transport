@@ -120,12 +120,12 @@ honest bar is the bar on those two (both ~1e-10 relative, far below anything
 this model resolves).
 
 **Unified 2026-08-21 (Tom's ruling); the single definition point is
-`cablp/vars/_cons.py`.** The repo had carried THREE different hand-made
+`cablp/constants.py`.** The repo had carried THREE different hand-made
 products, none of them citable and none agreeing:
 
 | superseded spelling | value [g] | error vs adopted | where |
 |---|---|---|---|
-| `6.6464731e-24` | 6.6464731e-24 | **−0.90 ppm** | `vars/_cons.py` — the fluid solver's `ion_mass_g` |
+| `6.6464731e-24` | 6.6464731e-24 | **−0.90 ppm** | `constants.py` — the fluid solver's `ion_mass_g` |
 | `4.002602 * 1.66053907e-24` | 6.6464770e-24 | **−0.31 ppm** | the kinetic/TPMC instruments |
 | `4 * 1.6605e-24` | 6.642e-24 | −707 ppm | one dated figure script |
 
@@ -796,7 +796,7 @@ for the battery that pins the shipped arithmetic to it.
 ## `fudge_factor_defaults`
 
 **`atomic_rate_model = "adas"` — MEASURED/published inputs.** The OPEN-ADAS GCR
-'96 effective coefficients (`cablp/vars/adas`, see its README) are used as
+'96 effective coefficients (`cablp/atomic/data/adas`, see its README) are used as
 published. They are citable inputs, **not calibration knobs**: a residual misfit
 belongs to the plasma state and transport, not to the rate coefficients.
 Consequently all `b_*` rate and cooling scale factors ship at 1 and are inert;

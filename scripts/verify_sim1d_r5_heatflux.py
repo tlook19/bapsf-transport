@@ -29,9 +29,9 @@ from cablp.solvers._sim1d.physics.conduction import (
     flux_limited_electron_conductivity,
     heat_conduction_rhs,
 )
-from cablp.funcs._heat import kappa_par_elec
-from cablp.funcs._plasmaparams import c_log
-from cablp.vars._cons import ev_to_erg, m_e_cgs
+from cablp.plasma.heat import kappa_par_elec
+from cablp.plasma.params import c_log
+from cablp.constants import ev_to_erg, m_e_cgs
 
 CLEAN_PARAMS = {
     "ne0": 1e12, "nn0": 1e13, "Te0": 15.0, "Ti0": 2.0, "u0": 0.0,

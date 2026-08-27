@@ -582,8 +582,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ._cathode_solver import _c_log_ei
-from ._cross import (
+from .circuit import _c_log_ei
+from ..atomic.cross_sections import (
     _HE_LOG_EPS,
     _HE_LOG_SIGMA,
     He_EII_cross_lkup,
@@ -591,7 +591,7 @@ from ._cross import (
     he_electron_momentum_transfer_rate_cm3_s,
     _he_beam_excitation_table,
 )
-from ._kernels import COMPILED_KERNELS as _COMPILED_KERNELS
+from .kernels import COMPILED_KERNELS as _COMPILED_KERNELS
 
 _ERG_PER_EV = 1.602176634e-12
 _ME_CGS = 9.1093837015e-28  # electron mass [g]
@@ -638,7 +638,7 @@ PLATEAU_EDGE_BISECTIONS = 200
 
 # He first ionization potential [eV], the module's STANDALONE default for the
 # ``I_ion_eV`` argument. Every solver path passes ``I_ion_eV`` explicitly from
-# ``vars._cons.I_ion = 24.58738793623``, so this default is dormant there and
+# ``constants.I_ion = 24.58738793623``, so this default is dormant there and
 # the two differ only in the 4th decimal -- but a caller invoking this module
 # directly gets 24.587 and will not reproduce a solver run's numbers bit for
 # bit. Pass the constant explicitly to match the solver.
@@ -691,7 +691,7 @@ _PRODUCT_FLOOR_MIN_EV = 0.1
 # -- which is what makes the product walk integrable in closed form below.
 _COULOMB_STOPPING_EXPONENT = {"fast_electron": -1.0, "legacy_tau_ei": 0.5}
 
-# --- Compiled CSDA march (opt-in; see cablp.funcs._kernels) ------------------
+# --- Compiled CSDA march (opt-in; see cablp.cathode.kernels) ------------------
 # The cost read of 2026-08-02 measured the substep march at ~61% numpy SCALAR
 # dispatch and Python call overhead -- ~873 sub-calls per ``deposit_beam``
 # call -- so the compiled unit's boundary encloses the WHOLE double loop
@@ -1743,7 +1743,7 @@ def deposit_beam(
             raise ValueError(
                 "anomalous_transport='plateau_multigroup' needs "
                 "plateau_edge_eV, the plateau edge E_1 solved for THIS "
-                "extraction (funcs._beam_deposition.plateau_edge_energy_eV); "
+                "extraction (cathode.beam_deposition.plateau_edge_energy_eV); "
                 "it is a state-dependent solve on the launch cell's own "
                 "Maxwellian and the emitted beam flux, and there is "
                 "deliberately no default for it"

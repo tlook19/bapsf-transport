@@ -59,7 +59,7 @@ from pathlib import Path
 
 import numpy as np
 
-from cablp.funcs._kernels import PROVENANCE as KERNEL_PROVENANCE
+from cablp.cathode.kernels import PROVENANCE as KERNEL_PROVENANCE
 from cablp.solvers._sim1d import LAPDSim1D
 
 SCRIPT_DIR = Path(__file__).resolve().parent

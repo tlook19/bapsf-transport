@@ -4,7 +4,7 @@ Generate pre-computed EII cross section lookup tables for H and He.
 Run once from the cablp/ directory:
     conda run -n fenicsx-env python generate_eii_tables.py
 
-Outputs (in cablp/vars/):
+Outputs (in cablp/atomic/data/):
     h_eii_cross.csv   -- H  electron impact ionization, E = 13.61–1000 eV
     he_eii_cross.csv  -- He electron impact ionization, eps = E/IE_He, 1.001–40.68
 """
@@ -17,11 +17,11 @@ import numpy as np
 # Make the package importable from this directory
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from cablp.funcs._cross import H_EII_cross, He_EII_cross
-from cablp.vars._coeff import a_11s
-from cablp.vars._cons import I_Ry as IE_Hydrogen, I_ion as IE_Helium
+from cablp.atomic.cross_sections import H_EII_cross, He_EII_cross
+from cablp.atomic.coefficients import a_11s
+from cablp.constants import I_Ry as IE_Hydrogen, I_ion as IE_Helium
 
-OUT_DIR = Path(__file__).parent.parent / "cablp" / "vars"
+OUT_DIR = Path(__file__).parent.parent / "cablp" / "atomic" / "data"
 N = 1000
 
 # ── H: E from IE_H to 1000 eV ──────────────────────────────────────────────

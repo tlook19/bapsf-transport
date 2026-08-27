@@ -14,7 +14,7 @@ section below).
 ## Fetching the files
 
 Download each file from the URL in the table below and save it into this
-directory (`cablp/vars/adas/`) under the **local filename** given in
+directory (`cablp/atomic/data/adas/`) under the **local filename** given in
 the first column. Nothing else is needed — there is deliberately no fetch
 script, and the loader reads the files straight from this directory.
 
@@ -42,7 +42,7 @@ every download with its own retrieval date, in a `C on DD-Mon-YYYY.` line
 inside the file's trailing comment block, so two downloads of the *same*
 ADAS revision on different days differ by that one line and therefore have
 different whole-file checksums. Both parsers here (`read_adf11` in
-`cablp.funcs._adas`, `read_adf15` in `scripts/pec_band_fractions.py`) stop
+`cablp.atomic.adas`, `read_adf15` in `scripts/pec_band_fractions.py`) stop
 at the first line beginning with `C`, so the comment block — the date stamp
 included — never reaches the numerics.
 
@@ -145,11 +145,11 @@ These are generalized collisional-radiative (GCR) coefficients: they are
 tabulated on a log10(n_e) x log10(T_e) grid (24 x 30; 5e7-2e15 cm^-3,
 0.2-1.5e4 eV) and include finite-density effects (stepwise ionization via
 metastables, collisional de-excitation), which the coronal Janev-era fits in
-`cablp.funcs._fits` / `cablp.funcs._cross` do not. Selected by the sim1d
+`cablp.atomic.fits` / `cablp.atomic.cross_sections` do not. Selected by the sim1d
 `atomic_rate_model = "adas"` input; the historical fits remain available as
 `"janev"` (the default).
 
-File format: adf11 (see `cablp.funcs._adas.read_adf11`). All tabulated
+File format: adf11 (see `cablp.atomic.adas.read_adf11`). All tabulated
 values are log10 of the coefficient in the units above.
 
 ## adf15 — helium photon emissivity coefficients (PEC)

@@ -41,8 +41,8 @@ from cablp.solvers._sim1d.physics.cathode import (
 )
 from cablp.solvers._sim1d.physics.flux import ion_sound_speed
 from cablp.solvers._sim1d.physics.sources import characteristic_boundary_rhs
-from cablp.funcs._cathode_solver_idriven import solve_idriven
-from cablp.vars._cons import ev_to_erg
+from cablp.cathode.circuit_idriven import solve_idriven
+from cablp.constants import ev_to_erg
 from compare_sim1d_es1 import FLAG_OVERRIDES, PARAM_OVERRIDES
 
 

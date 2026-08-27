@@ -33,7 +33,7 @@ def _collector_power_from_h5(f, sel):
     u = np.asarray(f["u"], dtype=float)
     # ion mass: He (params_json), fall back to He
     import json
-    # SUPERSEDED 2026-08-21: the unified helium mass is cablp.vars._cons
+    # SUPERSEDED 2026-08-21: the unified helium mass is cablp.constants
     # .m_He_cgs = 6.6464790809e-24 g (Ar(4He)*u, CODATA 2022). The literal
     # below is 0.90 ppm low and is left AS A RECORD of what this dated script ran.
     mi = 6.6464731e-24

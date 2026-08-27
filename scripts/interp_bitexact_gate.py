@@ -31,7 +31,7 @@ Two refusals, both earned:
 - **Every child reports its own kernel provenance, in-process.** A run that
   opted in to the compiled kernels but loaded the pure ones would compare pure
   against pure and call it a match. The child checks
-  ``cablp.funcs._kernels.PROVENANCE`` against what was asked of it and exits
+  ``cablp.cathode.kernels.PROVENANCE`` against what was asked of it and exits
   non-zero on a mismatch; the parent re-checks the reported line before
   scoring anything.
 
@@ -69,7 +69,7 @@ def _digest_lines(text):
 
 def child(arm, steps, report_every, want):
     """Run one arm in this process and print provenance, then its digests."""
-    from cablp.funcs import _kernels
+    from cablp.cathode import kernels as _kernels
 
     provenance = str(_kernels.PROVENANCE)
     print(f"{_PROVENANCE_TAG}{provenance}", flush=True)

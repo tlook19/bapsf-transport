@@ -28,11 +28,11 @@ from __future__ import annotations
 
 import argparse
 
-from cablp.funcs._cross import (
+from cablp.atomic.cross_sections import (
     He_EIE_cross_manifold,
     He_singlet_tail_cross,
 )
-from cablp.vars._coeff import He_singlet_manifold
+from cablp.atomic.coefficients import He_singlet_manifold
 
 E_2P_BOOKED_EV = 21.218  # the historical single-channel radiated energy
 

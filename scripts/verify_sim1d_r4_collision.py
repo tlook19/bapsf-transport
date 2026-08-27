@@ -16,7 +16,7 @@ gate style; not a campaign run.
 
 Gates:
   D1  data integrity: the analytic Phelps cross sections reproduce the archived
-      LXCat table (vars/he_ion_neutral_phelps_lxcat.txt) to < 1e-4 rel
+      LXCat table (atomic/data/he_ion_neutral_phelps_lxcat.txt) to < 1e-4 rel
   M1  momentum antisymmetry: ion M sink == neutral M_n source through the volume
       ratio, i.e. dM*Vp + dM_n*Vnn == 0 per cell, to roundoff (M_n-carrying state)
   E1  energy closure: at Ti == Tn (thermal part off), the ion frictional heating
@@ -49,12 +49,12 @@ from cablp.solvers._sim1d.physics.sources import (
     ion_neutral_collision_rhs,
     neutral_wind_velocity,
 )
-from cablp.funcs._cross import (
+from cablp.atomic.cross_sections import (
     phelps_he_backscatter_cm2,
     phelps_he_isotropic_cm2,
     phelps_momentum_transfer_rate_cm3_s,
 )
-from cablp.vars._cons import ev_to_erg, kb_cgs
+from cablp.constants import ev_to_erg, kb_cgs
 
 CLEAN_PARAMS = {
     "ne0": 1e12, "nn0": 1e13, "Te0": 15.0, "Ti0": 2.0, "u0": 0.0,

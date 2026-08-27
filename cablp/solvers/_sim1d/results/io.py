@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import h5py
 import numpy as np
 
-from cablp.funcs._kernels import PURE_PROVENANCE as PURE_KERNEL_PROVENANCE
+from cablp.cathode.kernels import PURE_PROVENANCE as PURE_KERNEL_PROVENANCE
 
 from ..core.config import resolve_config
 from ..core.timestep import TimestepDiagnostics

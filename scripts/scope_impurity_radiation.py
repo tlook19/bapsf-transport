@@ -42,7 +42,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from cablp.funcs._adas import ADAS_DIR, _interp_blend, _interp_coords, read_adf11
+from cablp.atomic.adas import ADAS_DIR, _interp_blend, _interp_coords, read_adf11
 
 PLATEAU_MS = (5.0, 19.5)
 

@@ -2,7 +2,7 @@
 
 What this is
 ------------
-``cablp.funcs._beam_deposition.deposit_beam`` is the CSDA beam-deposition hot
+``cablp.cathode.beam_deposition.deposit_beam`` is the CSDA beam-deposition hot
 path. This script pins its answers: a committed fixture of argument tuples
 paired with the outputs the implementation produces for them, compared at raw
 uint64 and never with a tolerance. It is the ``interp_fused_reference`` pattern
@@ -1081,7 +1081,7 @@ def _bitdiff(a, b):
 
 
 def build(captured_path, fixture_path):
-    import cablp.funcs._beam_deposition as B
+    import cablp.cathode.beam_deposition as B
 
     _require_pure(B)
     real_entries, census = _read_captured(Path(captured_path))
@@ -1198,7 +1198,7 @@ def _print_census(entries, records, capture_census):
 
 
 def verify(fixture_path, quiet=False):
-    import cablp.funcs._beam_deposition as B
+    import cablp.cathode.beam_deposition as B
 
     path = Path(fixture_path)
     if not path.exists():

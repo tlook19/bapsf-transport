@@ -1,7 +1,7 @@
 """R4.1 anode-mesh beam-interception gate suite (audit A15).
 
 Pre-registered gates for the CSDA anode-mesh interception event. The audit finding
-A15: ``funcs/_beam_deposition.deposit_beam`` launches the full emitted flux
+A15: ``cathode/beam_deposition.deposit_beam`` launches the full emitted flux
 ``Gamma0 = I_eth_star/e`` through the whole axial ray, so the fluid deposits the
 entire emitted beam (~470 kW on the settled artifact) while the circuit books only
 the ``(1 - eta*beam_bypass_fraction)`` fraction into the plasma. The ~164 kW
@@ -36,7 +36,7 @@ import sys
 
 import numpy as np
 
-from cablp.funcs._beam_deposition import deposit_beam, _ERG_PER_EV
+from cablp.cathode.beam_deposition import deposit_beam, _ERG_PER_EV
 
 
 def _ray(nn_val, cells=10):

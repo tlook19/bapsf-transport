@@ -2,10 +2,10 @@ import math
 
 import numpy as np
 
-from cablp.funcs._adas import he_rates
-from cablp.funcs._cross import He_ion_rate_lkup, alpha_3, alpha_r
-from cablp.funcs._fits import rate_coeff
-from cablp.vars._cons import ev_to_erg
+from cablp.atomic.adas import he_rates
+from cablp.atomic.cross_sections import He_ion_rate_lkup, alpha_3, alpha_r
+from cablp.atomic.fits import rate_coeff
+from cablp.constants import ev_to_erg
 
 from ..core.state import ConservativeState1D, derive_state
 from .sources import (
@@ -49,7 +49,7 @@ def reaction_rates(
     ``atomic_rate_model`` selects the coefficient source. ``"janev"`` (the
     historical default) uses the direct ground-state ionization rate and the
     separate radiative/three-body recombination coefficients. ``"adas"`` uses
-    the OPEN-ADAS GCR effective coefficients (``cablp.funcs._adas``): SCD for
+    the OPEN-ADAS GCR effective coefficients (``cablp.atomic.adas``): SCD for
     ionization -- which includes the stepwise/metastable channel the direct
     rate lacks (up to ~3-6x at 3-5 eV, LAPD densities) -- and ACD for
     recombination. ACD already contains three-body recombination at the

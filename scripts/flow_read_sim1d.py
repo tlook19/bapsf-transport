@@ -87,7 +87,7 @@ import argparse
 import h5py
 import numpy as np
 
-from cablp.vars._cons import m_He_cgs
+from cablp.constants import m_He_cgs
 
 # ES1 probe ports and their axial positions [cm].
 PORTS = {"p11": 470.1, "p21": 789.5, "p29": 1045.2, "p41": 1428.5, "p50": 1716.1}

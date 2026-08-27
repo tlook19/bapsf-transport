@@ -46,7 +46,7 @@ from cablp.solvers._sim1d.core.state import (
     derive_state,
 )
 from cablp.solvers._sim1d.physics.sources import neutral_wind_velocity
-from cablp.vars._cons import ev_to_erg
+from cablp.constants import ev_to_erg
 
 CLEAN_PARAMS = {
     "ne0": 1e12, "nn0": 1e13, "Te0": 15.0, "Ti0": 2.0, "u0": 0.0,

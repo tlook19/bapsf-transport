@@ -21,10 +21,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from baseline_sim1d import build_baseline_config
-from cablp.funcs._adas import he_rate_temperature_range_eV
+from cablp.atomic.adas import he_rate_temperature_range_eV
 from cablp.solvers._sim1d import LAPDSim1D
 from cablp.solvers._sim1d.core.geometry import PLASMA_DEAD_ROLES
-from cablp.vars._cons import ev_to_erg
+from cablp.constants import ev_to_erg
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent

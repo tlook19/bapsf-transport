@@ -1,6 +1,6 @@
 from numpy import exp as npexp, sqrt as npsqrt
 from math import exp as mexp, sqrt as msqrt
-from ..vars._cons import qe_SI
+from ..constants import qe_SI
 
 # note, revisit this when it is determined whether these functions are vectorized in the simulation
 

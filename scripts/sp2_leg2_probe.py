@@ -107,7 +107,7 @@ for name, R, zc in (("p1045r", A_1045 * sumV, 1045.0), ("p630r", A_630 * sumV, 6
         print(f"{name}: face z={face:.0f} (Rp={Rp[i]:.0f}/Rm={Rm[i]:.0f}, A_col={A_col:.0f}, A_ann={A_ann:.0f} cm^2; nn={ncol:.2e}, nn_a={nann:.2e}) | "
               f"column-only v: 2-sided {v2/1e5:.1f} km/s, 1-sided {v1/1e5:.1f} km/s | "
               f"chamber v_eff: 2-sided {veff2/1e5:.2f} km/s, 1-sided {veff1/1e5:.2f} km/s")
-# SUPERSEDED 2026-08-21: the unified helium mass is cablp.vars._cons
+# SUPERSEDED 2026-08-21: the unified helium mass is cablp.constants
 # .m_He_cgs = 6.6464790809e-24 g (Ar(4He)*u, CODATA 2022). The literal
 # below is 0.90 ppm low and is left AS A RECORD of what this dated script ran.
 kB = 1.380649e-16; mHe = 6.6464731e-24

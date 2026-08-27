@@ -69,7 +69,7 @@ from cablp.solvers._sim1d.core.state import (  # noqa: E402
 from cablp.solvers._sim1d.physics.sources import (  # noqa: E402
     cathode_jet_backscatter_speed,
 )
-from cablp.vars._cons import ev_to_erg, kb_cgs  # noqa: E402
+from cablp.constants import ev_to_erg, kb_cgs  # noqa: E402
 
 #: erg/s per watt.
 ERG_S_PER_W = 1.0e7
