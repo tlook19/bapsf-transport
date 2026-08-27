@@ -166,7 +166,7 @@ def check_identity_and_reservation(root):
     assert validate_run_id(RUN_A) == RUN_A
     for bad in (None, "", "123e4567-e89b-42d3-a456-426614174000", RUN_A.upper()):
         _raises(ValueError, validate_run_id, bad)
-    output = root / "reservation/cablp/scripts/baselines/phase3_rhs"
+    output = root / "reservation/scripts/baselines/phase3_rhs"
     marker = reserve_run_id(output, RUN_A, {"kind": "synthetic-test"})
     assert marker.is_file()
     _raises(FileExistsError, reserve_run_id, output, RUN_A, {})
@@ -268,7 +268,7 @@ def check_refusals_and_atomicity(root):
     base = _fake_result(RUN_A)
     wrong_id = copy.deepcopy(base)
     wrong_id.run_id = RUN_B
-    output = root / "wrong-id/cablp/scripts/baselines/phase3_rhs"
+    output = root / "wrong-id/scripts/baselines/phase3_rhs"
     reserve_run_id(output, RUN_A, {"kind": "synthetic-test"})
     _raises(
         ValueError,

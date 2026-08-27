@@ -589,7 +589,7 @@ after the flatten:
 | `verify_phase3_source_capture.py:229` | asserts the `producer_anchor` prefix `"cablp/cablp/solvers/_sim1d/solver.py:"` |
 | `verify_phase3_source_capture.py:477` | `repo_root / "cablp/cablp/solvers/_sim1d/solver.py"` |
 | `verify_phase3_source_capture.py:501` | `repo_root / "cablp/scripts/capture_phase3_rhs.py"` |
-| `stage3_observability_check.py:35` | `REPO_PATH = "cablp/scripts/compare_sim1d_es1.py"` |
+| ~~`stage3_observability_check.py:35`~~ | ~~`REPO_PATH = "cablp/scripts/compare_sim1d_es1.py"`~~ — **WITHDRAWN 26ep, ruled Q5-class: STAYS unedited.** `git show f"{BASELINE_REF}:{REPO_PATH}"` resolves it against the pinned historical `64e9565`, so the pre-flatten path is the correct one. See §8 Q5. |
 | `smoke_sim1d.py:22623` | `_p3_out = _p3_root / "cablp/scripts/baselines/phase3_rhs"` |
 | `smoke_sim1d.py:22630` | `producer_path="cablp/scripts/capture_phase3_rhs.py"` |
 | `smoke_sim1d.py:22641` | `environment_lock={"path": "cablp/poetry.lock", …}` |
@@ -790,8 +790,14 @@ unless the verifier is taught the flatten boundary. Confirm that is the
 intended reading of HISTORY INVIOLABLE.
 
 **Q5 — RULED (review, 26dw): `git show <historical-base>:<path>` recipes stay
-UNEDITED.** Two scripts document recipes that are only correct against
-pre-flatten revisions. The options were: leave them (correct for old bases,
+UNEDITED. EXTENDED at execution (26ep) to a third, executable site:
+`stage3_observability_check.py:35`'s `REPO_PATH`,** which §6.2 had listed as an
+ordinary path-string edit. It is consumed by
+`git show f"{BASELINE_REF}:{REPO_PATH}"` against the pinned `64e9565`, so the
+rewrite breaks the lookup rather than repairing it — the same class as the two
+below, on stronger grounds, since this one executes rather than instructing a
+human. Its §6.1 companion at :54 is independent and still applies. Two scripts
+document recipes that are only correct against pre-flatten revisions. The options were: leave them (correct for old bases,
 wrong for new), update them (vice versa), or make them branch on whether the
 base predates the flatten commit. The third is real work and beyond "pure
 moves". The ruling takes this map's recommendation — leave them, and name the

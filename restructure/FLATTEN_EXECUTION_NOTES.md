@@ -190,7 +190,7 @@ strings).
 | `scripts/verify_phase3_source_capture.py` | 520 | `parents[2]` → `parents[1]` |
 | `scripts/stage3_observability_check.py` | 54 | `parents[2]` → `parents[1]` |
 
-### 3.2 Functional — repository-relative path strings (32 sites, 5 files)
+### 3.2 Functional — repository-relative path strings (33 sites, 4 files)
 
 All are enumerated with line numbers in `RENAME_MAP.md` §6.2. Summarised:
 
@@ -199,9 +199,21 @@ All are enumerated with line numbers in `RENAME_MAP.md` §6.2. Summarised:
   and the `git ls-tree … -- cablp/cablp` pathspec (:186), plus three docstring
   mentions (:177, :181, and the `cablp/cablp` at :175).
 - `scripts/verify_phase3_source_capture.py` — fixture paths and assertions at
-  :126, :137, :151, :226, :229, :280, :290, :317, :332, :348, :360, :370,
-  :477, :501.
-- `scripts/stage3_observability_check.py` — `REPO_PATH` (:35).
+  :126, :137, :151, **:169**, :226, :229, :280, :290, **:271**, :317, :332,
+  :348, :360, :370, :477, :501.
+
+  **:169 and :271 were an ENUMERATION GAP, closed at execution (26ep).** Both
+  are synthetic-tmpdir fixture paths of exactly the class this row already
+  covers — `root / "reservation/cablp/scripts/baselines/phase3_rhs"` and
+  `root / "wrong-id/cablp/scripts/baselines/phase3_rhs"`, siblings of the
+  :126/:317/:332/:348 sites listed from the first draft — and they were present
+  at every base this document has been stamped against. Omitting them was an
+  oversight, not a disposition: leaving them would have left one file describing
+  two different repository shapes, which is strictly worse than either
+  consistent state and defeats the "a fixture describing a shape that no longer
+  exists is a lie" rationale stated two bullets down. Neither is a filesystem
+  read of the repository, so neither is a functional break; both are corrected
+  for coherence.
 - `scripts/smoke_sim1d.py` — the synthetic phase-3 fixture strings at :22623,
   :22630, :22641. **These are a gate**: they are fixture data rather than
   filesystem reads, but leaving them describing a repository shape that no
@@ -247,6 +259,21 @@ it. `_adas.py` moves byte-identical — `RENAME_MAP.md` §2.1 has the argument.
 `git show <base>:cablp/cablp/…` recipes. At a `<base>` older than this commit
 the old path is the correct one. **Q5 is RULED (review, 26dw): they stay
 unedited, and this commit is the named boundary.**
+
+**…and a THIRD site, added at execution (26ep):
+`scripts/stage3_observability_check.py:35`, `REPO_PATH`.** This document listed
+it in §3.2 as an ordinary path-string edit through every stamp. It is not: the
+constant is consumed by `git show f"{BASELINE_REF}:{REPO_PATH}"`, and
+`BASELINE_REF` is `64e9565`, a PINNED historical revision at which the scripts
+lived under `cablp/scripts/`. Editing it to the post-flatten path does not
+update a stale reference, it breaks the only lookup the script performs — so
+this is the same class as the two recipes above and, being executable rather
+than a docstring, has strictly stronger grounds. **RULED Q5-class (26ep): the
+edit is reverted and the pre-flatten path stands**, with a comment at the site
+recording why so it is not "fixed" later. Its §3.1 companion at :54
+(`parents[2]` → `parents[1]`) is INDEPENDENT and still applies — without it the
+`cwd` handed to `git show` points one level above the repository, so the file
+is a content-edited move, not a pure one.
 
 ---
 

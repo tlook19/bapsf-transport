@@ -32,7 +32,13 @@ import sys
 import numpy as np
 
 BASELINE_REF = "64e9565"  # agent-staging tip this branch was cut from
-REPO_PATH = "scripts/compare_sim1d_es1.py"
+# DELIBERATELY the pre-flatten path, and not a stale one. It is looked up with
+# `git show BASELINE_REF:REPO_PATH` against a PINNED HISTORICAL revision, where
+# the sim1d scripts lived under `cablp/scripts/`. Q5 disposition (review, 26dw;
+# `restructure/RENAME_MAP.md` section 8): recipes resolved against a base that
+# predates the R2 flatten keep the old path, and the flatten commit is the named
+# boundary. Rewriting this to `scripts/...` breaks the lookup it exists to do.
+REPO_PATH = "cablp/scripts/compare_sim1d_es1.py"
 WINDOW = (20.0, 21.5)
 SPAN = WINDOW[1] - WINDOW[0]
 
