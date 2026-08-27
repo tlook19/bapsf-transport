@@ -1,9 +1,15 @@
 # Flatten execution notes — the first R2 commit
 
-**Status: DRAFT, reviewer-gated. Nothing here has been executed.** This is the
-ordered recipe for the commit that `restructure/manifests/delta_flatten.DRAFT.json`
-describes, together with what must be true before it starts and what must be
-re-measured after it lands.
+**Status: EXECUTED (dated correction 2026-08-27, orchestrator, log 26fy/26fz).**
+The flatten landed as commit `fa3b62f` (branch `agent/r2-flatten`, merged
+`b62c5e1`); the finalized manifest is
+`restructure/manifests/delta_70e06f7.json` (the DRAFT this text names was
+renamed at finalization), and the R2-wide record is
+`restructure/manifests/cumulative_r2tip.json`. This document is KEPT as the
+recipe that was executed, with dated stamp-corrections at each superseded
+claim — the original text below is otherwise preserved. Historical framing
+("what must be true before it starts") reads as the pre-execution record it
+is.
 
 > **Citations are pinned to `5caa8ce2cb5cfc3d89270d915a15213f1aec7fe5`, the R2
 > cut revision (`agent-staging` == `campaign`).** Re-stamped 2026-08-26 from
@@ -15,11 +21,20 @@ re-measured after it lands.
 > import totals in §4 moved. Locate every §3 edit by its quoted string, not by
 > its line number, and re-derive the line numbers again if the flatten branch
 > is cut from anything other than `5caa8ce`.
+>
+> **Dated correction 2026-08-27: the flatten branch WAS cut from `9288e01`**
+> (the deposit-beam corpus merge landed between the re-stamp and the cut);
+> the executed counts are 251 moved / 240 byte-identical / 11 content-edited
+> / 182 in the scripts subtree (see the §3 stamp-correction block), and the
+> finalized manifest pins `base_revision = 9288e01`. The `5caa8ce` pins
+> below remain correct for every line citation (the 21-file window changed
+> no cited line outside §3/§4's own corrections).
 
 Read `RENAME_MAP.md` first — this document assumes its rules F1 and F2 and its
-open questions Q1–Q7. Rule F2's destination (`cablp/scripts/` → `scripts/`) is
-**PROPOSED and unratified**; if Tom rules otherwise, step 3 changes and nothing
-else does.
+open questions Q1–Q7. Rule F2's destination (`cablp/scripts/` → `scripts/`)
+was PROPOSED at drafting and **is now EXECUTED AS PROPOSED** (dated
+correction 2026-08-27: the flatten merged with F2 unchanged; the "if Tom
+rules otherwise" branch is dead).
 
 ---
 
