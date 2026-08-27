@@ -1,0 +1,60 @@
+{
+  "manifest_kind": "delta",
+  "repository": "bapsf-transport",
+  "base_revision": "364b26d9344c467a41666140ffc85156c3999097",
+  "new_revision": "e6a1b75dd11d045729640b67fb671afcd6cf1252",
+  "bit_exact": true,
+  "golden_gate": {
+    "script": "scripts/baseline_sim1d.py",
+    "result": "baseline verify OK: saves=2620, exact=True, max_rel=0.000e+00, max_abs=0.000e+00, time_max_abs=0.000e+00 s (rtol=1.0e-09, atol=0.0e+00) [CABLP_COMPILED_KERNELS=1, KERNEL_ID cython/_cathode_kernels_cy/tierA+csda probed in-process before the run; the script itself prints no kernel suffix]",
+    "saves": 2620,
+    "revision": "e6a1b75dd11d045729640b67fb671afcd6cf1252",
+    "revision_note": "The compiled golden ran AT new_revision e6a1b75, in the coder's worktree, against the extension built from this tree (cablp/cathode/_cathode_kernels_cy.pyx, untouched by this commit). exact=True is the correct expectation rather than a hope: the retired module attached ALIASES to an already-built result namespace and computed nothing the solver reads back, the golden fixture scripts/baselines/production_discharge.npz holds only phase/time/y, and scripts/baselines/ was not entered. The smoke suite ran at the same commit, EXIT=0, with all five compiled-kernel-equivalence blocks RUN (meanfield, coverage, landau, emitting_area, initial_profile; each bit-identical at the same KERNEL_ID)."
+  },
+  "mappings": [
+    {
+      "change_kind": "delete",
+      "old": {
+        "path": "cablp/solvers/_sim1d/results/compat.py",
+        "anchor_kind": "module",
+        "symbol": "cablp.solvers._sim1d.results.compat"
+      },
+      "new": null,
+      "proposed_continuity": "retired_no_successor",
+      "group_id": null,
+      "deletion_reason": "RULED at R0.4 (RENAME_MAP.md section 3.6). The module existed to shape a sim1d result like a result of the 0D _sim3 solver, and _sim3 was REMOVED 2026-08-03 (D2). No successor: the aliases were views, and every conservative field they were views OF stays exactly where it was. Retiring them costs no information -- it removes a second name for data that is still there under its first.",
+      "replacement": null,
+      "notes": "CONSUMER SET, re-derived at base_revision rather than taken from the map, whose Q3 enumeration was cut at an older revision and is INCOMPLETE. (i) The two importers Q3 names: results/io.py:16,380 (applied on every HDF5 read) and solver.py:205,10153 (applied on every run's get_results), both of which now return the namespace unwrapped. (ii) scripts/smoke_sim1d.py -- NOT the '4 smoke assertions' Q3 names, but five blocks across three cases (no-source-run-and-results, cathode-power-balance-warming, breakdown-retry-near-vacuum): a 20-name hasattr loop, roughly twenty alias-vs-source equalities, the HDF5 round-trip pairs, and the breakdown-time aliases. (iii) scripts/sweep_sim1d_stability.py:163,166 -- `result.cathode.I_tot` and `result.cathode_twin.I_tot`, a live executable consumer OUTSIDE the smoke that Q3 lists nowhere; migrated in this commit to cathode_diagnostics['source_I_tot'] / ['end_I_tot'], the rows those namespaces were built from, which are seeded NaN per end unconditionally so nanmax reads the same numbers. NO LOUD-ERROR SELECTOR IS OWED and the reason is structural: compat.py had no config key and no selector, it ran on every result, so no template key becomes meaningless and there is no route to refuse. The removal is loud regardless -- a result is a plain SimpleNamespace and each retired alias is an AttributeError at first read, never a silently wrong value. The retired surface, in full, is the 27 names in scripts/smoke_sim1d.py's _RETIRED_SIM3_COMPAT_ALIASES: ne, v_plasma, n_beam, cathode, cathode_twin, t_breakdown, t_breakdown_ms, time_since_breakdown, time_ms_since_breakdown, Ne_flux, Nn_flux, S_ion_bulk, S_ion_beam, S_rec_rad, S_rec_3b, Qie, Qei, Qen, Qcx, Qeb, Qib, e_par_flux, i_par_flux, e_perp_hl, i_perp_hl, sim3_compat_units, sim3_compat_notes. The smoke asserts every one of them ABSENT, on the run path and on the load path separately, so a re-added shim fails the gate."
+    },
+    {
+      "change_kind": "delete",
+      "old": {
+        "path": "cablp/solvers/_sim1d/results/compat.py",
+        "anchor_kind": "function",
+        "symbol": "cablp.solvers._sim1d.results.compat.add_sim3_compat_aliases",
+        "signature": "add_sim3_compat_aliases(result)",
+        "line_hint": 40
+      },
+      "new": null,
+      "proposed_continuity": "retired_no_successor",
+      "group_id": null,
+      "deletion_reason": "The module's only public entity, and the name both solver-tree importers bound. Carried as its own row because the KB's locators are entity-level: a reader holding this symbol needs to be told it is retired, not merely that a file left. Retired with its module; no successor function replaces it.",
+      "replacement": null,
+      "notes": "A finer-grained row on the same path pair as the module row above, which is the legal override shape the adopted schema describes. Its five private helpers (_add_time_aliases, _sum_rhs_fields, _rhs_field, _term_or_zeros, _diagnostic_or_zeros, _cathode_namespace) and the module constant _CATHODE_COMPAT_FIELDS are module-private with no importer and are covered by the module row rather than enumerated here."
+    },
+    {
+      "change_kind": "add",
+      "old": null,
+      "new": {
+        "path": "restructure/manifests/delta_364b26d.json",
+        "anchor_kind": "data_file",
+        "symbol": "restructure/manifests/delta_364b26d.json"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "NOT THIS COMMIT'S WORK -- a chain bridging row, disclosed, and the same device delta_364b26d.json used for its own predecessor. base_revision here is 364b26d, the PREDECESSOR MANIFEST'S DECLARED new_revision, so the validator's CHAIN abutment check composes. Under the established 'manifest names its parent' pattern the carve's manifest-finalization commit (0d10eec, which created this file) and its staging merge (f353564) fall OUTSIDE the range the predecessor declares, so they land inside this delta's range instead. `git diff --name-status --no-renames 364b26d f353564` is exactly this one added path and nothing else -- a narrower bridge than the carve's, which had a delete/add pair. Without this row check (4) COVERAGE would fail on an add this commit did not make. Same open question the carve raised and the reviewer has not yet ruled: whether the pattern wants the bridging row, or wants the validator to tolerate a bookkeeping gap between a delta's declared new_revision and its successor's base."
+    }
+  ]
+}
