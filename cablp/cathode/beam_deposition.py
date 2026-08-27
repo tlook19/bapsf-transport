@@ -638,11 +638,12 @@ PLATEAU_EDGE_BISECTIONS = 200
 
 # He first ionization potential [eV], the module's STANDALONE default for the
 # ``I_ion_eV`` argument. Every solver path passes ``I_ion_eV`` explicitly from
-# ``constants.I_ion = 24.58738793623``, so this default is dormant there and
-# the two differ only in the 4th decimal -- but a caller invoking this module
-# directly gets 24.587 and will not reproduce a solver run's numbers bit for
-# bit. Pass the constant explicitly to match the solver.
-HE_I_ION_EV = 24.587
+# ``constants.I_ion``, so this default is dormant there; it is spelled to the
+# same digits as that constant so that a caller invoking this module DIRECTLY
+# reproduces a solver run's numbers bit for bit. It used to read 24.587, which
+# differed in the 4th decimal and made the direct-call path silently
+# irreproducible -- a trap that could only arm itself once someone used it.
+HE_I_ION_EV = 24.58738793623
 HE_E_STOP_EV = 20.6158  # lowest inelastic threshold (2^1S)
 HE_OPB_EBAR_EV = 15.8  # Opal-Peterson-Beaty shape parameter for He
 # Top of the tabulated He EII cross section, in the table's own reduced units

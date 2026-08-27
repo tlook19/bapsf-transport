@@ -5738,7 +5738,7 @@ class LAPDSim1D:
             # 0D pairing with the solver's own I_i = A_c e n c_s: the flux
             # density is Gamma_i = I_i / (e A_c) = n c_s e^{-1/2}.
             area_cm2 = math.pi * float(self._input_dict["R_cath"]) ** 2
-            Gamma_i = I_i_A / (1.602176634e-19 * area_cm2)
+            Gamma_i = I_i_A / (qe_SI * area_cm2)
             sigma_cl = float(
                 self._input_dict.get("cathode_cleaning_sigma_cm2", 0.0)
             )
