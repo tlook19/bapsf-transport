@@ -114,7 +114,7 @@ Local (cell-wise) RHS contributions, all in `physics/`:
   moment-closed reduced ion-neutral collision operator that replaces that quartet
   with one Phelps-rate equal-mass Braginskii momentum-transfer term (MODEL.md
   R4.3). The Phelps He⁺/He rate coefficients are built once at import in
-  `funcs/_cross.py` (Maxwellian averages of the analytic isotropic + backscatter
+  `atomic/cross_sections.py` (Maxwellian averages of the analytic isotropic + backscatter
   cross sections vs `T_eff`, the effective relative-velocity temperature
   `(Ti+Tn)/2` — a different quantity from the DVM transfer hold's `T_eff`
   below, which shares the symbol), analogous to the IAEA `charge_ex_react`
@@ -758,7 +758,7 @@ terminating faces are discretized.
 - **Sheath-edge sampling.** `sources.electrode_sheath_alpha` is the single source
   of the mesh-independent factor `n_se/n = presheath_alpha` (`τ`-independent; a
   cell-length/presheath-depth exponent), called by both the fluid boundary and the
-  circuit (cathode) so they cannot disagree. In `funcs._cathode_solver_idriven`
+  circuit (cathode) so they cannot disagree. In `cathode.circuit_idriven`
   the flat `exp(-1/2)` becomes a passed `alpha_sheath`, with the electron lift
   `Λ → Λ − ln(α)` (`= Λ + 1/2` at `α = exp(-1/2)`, kept exact via a sentinel so the
   golden and the M2 equivalence gate are bit-exact). The cathode and anode carry

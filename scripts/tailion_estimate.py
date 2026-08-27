@@ -7,7 +7,7 @@ tail-ionization cross-check compares against, so this module is imported as a
 library as well as run as a script.
 
 Instrument: the repo's own CSDA march
-(``funcs._beam_deposition.deposit_beam``). Tail electrons at ``E_tail`` are
+(``cathode.beam_deposition.deposit_beam``). Tail electrons at ``E_tail`` are
 launched 50/50 +/-z from the cells carrying ``beam_heat_anomalous_W``, with
 flux ``P_QL / E_tail``, and marched with the ``fast_electron`` Coulomb model,
 the He EII ionization cross section (``He_EII_cross_lkup``, Janev) and the
@@ -44,8 +44,8 @@ if _REPO_CABLP not in sys.path:
     sys.path.append(_REPO_CABLP)
 import numpy as np
 import h5py
-from cablp.funcs import _beam_deposition as bd
-from cablp.funcs._kernels import PROVENANCE
+from cablp.cathode import beam_deposition as bd
+from cablp.cathode.kernels import PROVENANCE
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
 

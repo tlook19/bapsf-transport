@@ -72,7 +72,7 @@ physical point.
 QL-CUTOFF DIAGNOSTIC (secondary output, read-only). The CSDA beam's quasilinear
 drag channel is domain-limited: ``quasilinear_relaxation_length_cm`` returns inf
 -- no anomalous drag at all -- unless the beam is weak,
-``0 < n_b < 0.1 * n_e`` (cablp/funcs/_beam_deposition.py). Because the seed sets
+``0 < n_b < 0.1 * n_e`` (cablp/cathode/beam_deposition.py). Because the seed sets
 n_e, it can decide whether that channel exists during the early avalanche, so
 the probe reports when the cutoff releases and how much of the pre-ignition
 window sits under it. See ``ql_launch_cutoff`` for the exact quantity, which
@@ -89,7 +89,7 @@ import time as _walltime
 
 import numpy as np
 
-from cablp.funcs._beam_deposition import (
+from cablp.cathode.beam_deposition import (
     beam_speed_cm_s,
     quasilinear_relaxation_length_cm,
 )
@@ -97,7 +97,7 @@ from cablp.solvers._sim1d import LAPDSim1D, default_config
 from cablp.solvers._sim1d.physics.cathode import beam_launch
 from cablp.solvers._sim1d.solver import ProgressPrinter1D
 from cablp.solvers._sim1d.results.io import save_result_hdf5
-from cablp.vars._cons import qe_SI
+from cablp.constants import qe_SI
 
 # Reuse the REAL ES config so the probe cannot drift from the benchmark driver.
 from compare_sim1d_es1 import PARAM_OVERRIDES, FLAG_OVERRIDES

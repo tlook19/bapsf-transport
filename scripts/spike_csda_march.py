@@ -50,9 +50,9 @@ import numpy as np
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from cablp.funcs import _beam_deposition as bd  # noqa: E402
-from cablp.funcs import _kernels  # noqa: E402
-from cablp.funcs._cross import (  # noqa: E402
+from cablp.cathode import beam_deposition as bd  # noqa: E402
+from cablp.cathode import kernels as _kernels  # noqa: E402
+from cablp.atomic.cross_sections import (  # noqa: E402
     He_beam_excitation_channel_lkup as _exc_lkup,
 )
 

@@ -106,7 +106,7 @@ from .physics.cathode import (
     validate_cathode_lnL_model,
     validate_cathode_solver_model,
 )
-from cablp.funcs._cathode_solver_idriven import beam_launch_energy_eV
+from cablp.cathode.circuit_idriven import beam_launch_energy_eV
 from .physics.cathode import (
     CATHODE_ENV_T_K,
     advance_circuit_current_driven,
@@ -117,7 +117,7 @@ from .physics.cathode import (
     vessel_beam_climb_V,
     vessel_node_advance,
 )
-from cablp.funcs._cathode_solver_idriven import _CIRCUIT_BOUND_OBJECTS
+from cablp.cathode.circuit_idriven import _CIRCUIT_BOUND_OBJECTS
 from .physics.energy import (
     electron_cooling_rhs,
     electron_cooling_rhs_terms,
@@ -206,15 +206,15 @@ from .results.compat import add_sim3_compat_aliases
 from .results.restart import (
     REFUSED_NEUTRAL_MODELS as RESTART_REFUSED_NEUTRAL_MODELS,
 )
-from cablp.funcs._adas import he_rate_temperature_range_eV, he_rates
-from cablp.funcs._beam_deposition import (
+from cablp.atomic.adas import he_rate_temperature_range_eV, he_rates
+from cablp.cathode.beam_deposition import (
     ANOMALOUS_MODELS,
     HE_EII_EDGE_REL_TOL,
     HE_EII_EPS_TOP,
 )
-from cablp.funcs._cross import charge_ex_react
-from cablp.funcs._kernels import PROVENANCE as KERNEL_PROVENANCE
-from cablp.vars._cons import (
+from cablp.atomic.cross_sections import charge_ex_react
+from cablp.cathode.kernels import PROVENANCE as KERNEL_PROVENANCE
+from cablp.constants import (
     I_Ry,
     I_ion,
     ev_to_erg,

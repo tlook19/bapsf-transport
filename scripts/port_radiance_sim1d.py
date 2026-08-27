@@ -9,7 +9,7 @@ carried.
 
 WHAT IS COMPUTED.  Two line-radiation channels, both taken straight from the
 OPEN-ADAS adf11 PLT coefficients that ``atomic_rate_model = "adas"`` runs on
-(``cablp/funcs/_adas.he_rates``), evaluated at the saved cell state:
+(``cablp/atomic/adas.he_rates``), evaluated at the saved cell state:
 
     e-i (He II) line power   eps_ei = PLT2(ne, Te) * ne * ne
     e-n (He I)  line power   eps_en = PLT1(ne, Te) * ne * nn
@@ -111,11 +111,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
-from cablp.funcs._adas import (  # noqa: E402
+from cablp.atomic.adas import (  # noqa: E402
     he_rate_temperature_range_eV,
     he_rates,
 )
-from cablp.vars._cons import qe_SI  # noqa: E402
+from cablp.constants import qe_SI  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
@@ -352,7 +352,7 @@ def te_edge_census(t_ms, Te, closure):
     """Count frames per window whose Te sits outside the adf11 Te grid.
 
     ``he_rates`` interpolates bilinearly in (log10 ne, log10 Te) on the adf11
-    grid and CLAMPS NEAREST-EDGE outside it (``cablp/funcs/_adas.py`` lines
+    grid and CLAMPS NEAREST-EDGE outside it (``cablp/atomic/adas.py`` lines
     9-10, 85-86, 111-112).  Below the low edge the PLT coefficients are
     therefore HELD at their edge value instead of continuing to fall, while
     the true line power collapses as Te drops under the excitation
@@ -558,7 +558,7 @@ def markdown_report(rep):
     L.append(
         "**adf11 edge clamp.** `he_rates` interpolates on the adf11 "
         "(log10 ne, log10 Te) grid and CLAMPS NEAREST-EDGE outside it "
-        "(`cablp/funcs/_adas.py`: stated in the module docstring, implemented "
+        "(`cablp/atomic/adas.py`: stated in the module docstring, implemented "
         "in `_interp_coords` / `_interp_log_bilinear`). The Te grid "
         f"spans {census['table_Te_min_eV']:g} to "
         f"{census['table_Te_max_eV']:g} eV. Below the low edge PLT is HELD at "

@@ -5,7 +5,7 @@ memo cross-checks and the READ C walker-reach numbers.
 FORMULAS AND PROVENANCE (no new constants; everything from the repo or the
 memo's own cited standard results):
   * nu_en = nn * K_m(Te), K_m = the SHIPPED
-    cablp.funcs._cross.he_electron_momentum_transfer_rate_cm3_s (two-node
+    cablp.atomic.cross_sections.he_electron_momentum_transfer_rate_cm3_s (two-node
     boxed table, sigma(1.5Te)*<v>). Collisional Langmuir AMPLITUDE damping
     = nu_en/2 [Ginzburg 1970; memo Key formulas].
   * Landau damping of a Langmuir wave on the local Maxwellian, evaluated at
@@ -24,14 +24,14 @@ memo's own cited standard results):
 Reads only pd0_endvent_*.npz; writes only this text. Read-only w.r.t. repo.
 """
 import numpy as np
-from cablp.funcs._cross import (
+from cablp.atomic.cross_sections import (
     he_electron_momentum_transfer_rate_cm3_s as K_m,
     HE_EN_MT_SIGMA_CM2, HE_EN_MT_SIGMA_BRACKET_CM2,
 )
-from cablp.funcs._beam_deposition import (
+from cablp.cathode.beam_deposition import (
     beam_speed_cm_s, coulomb_stopping_eV_per_cm,
 )
-from cablp.vars._cons import ev_to_erg, m_e_cgs
+from cablp.constants import ev_to_erg, m_e_cgs
 
 OMEGA = 5.64e4  # memo's Omega: omega_pe = OMEGA*sqrt(ne) [rad/s]
 

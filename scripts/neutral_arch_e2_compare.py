@@ -106,7 +106,7 @@ from mc_neutrals import (  # noqa: E402
     load_background,
 )
 
-from cablp.funcs._cross import (  # noqa: E402
+from cablp.atomic.cross_sections import (  # noqa: E402
     phelps_cx_rate_cm3_s,
     phelps_he_backscatter_cm2,
     phelps_he_isotropic_cm2,

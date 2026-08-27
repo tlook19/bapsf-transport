@@ -2,8 +2,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from cablp.funcs._cross import phelps_momentum_transfer_rate_cm3_s
-from cablp.vars._cons import ev_to_erg
+from cablp.atomic.cross_sections import phelps_momentum_transfer_rate_cm3_s
+from cablp.constants import ev_to_erg
 
 from ..physics.cathode import circuit_relaxation_timestep
 from ..physics.conduction import heat_conduction_timestep_bound

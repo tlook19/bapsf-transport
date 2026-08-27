@@ -2,8 +2,8 @@
 
 Scope (D4, extended to the Tier A cathode unit and then to the CSDA beam
 march, 2026-08-02): ONE extension module,
-``cablp.funcs._cathode_kernels_cy``. Nothing imports it unless
-``CABLP_COMPILED_KERNELS`` opts in (``cablp.funcs._kernels``), so the pure
+``cablp.cathode._cathode_kernels_cy``. Nothing imports it unless
+``CABLP_COMPILED_KERNELS`` opts in (``cablp.cathode.kernels``), so the pure
 Python path is unaffected whether or not the extension is present.
 
 Fresh-clone implications
@@ -35,7 +35,7 @@ reinstalling::
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-PYX = "cablp/funcs/_cathode_kernels_cy.pyx"
+PYX = "cablp/cathode/_cathode_kernels_cy.pyx"
 
 # Bit-exactness matters more than speed here. ``-ffp-contract=off`` DISABLES
 # fused multiply-add contraction, which would otherwise let the compiler round
@@ -56,7 +56,7 @@ def _extensions():
 
     return [
         Extension(
-            "cablp.funcs._cathode_kernels_cy",
+            "cablp.cathode._cathode_kernels_cy",
             [PYX],
             extra_compile_args=list(SAFE_FP_ARGS),
         )

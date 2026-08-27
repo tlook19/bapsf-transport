@@ -7,14 +7,14 @@ import numpy as np
 
 from scipy.optimize import brentq
 
-from cablp.funcs._beam_deposition import (
+from cablp.cathode.beam_deposition import (
     deposit_beam,
     deposit_beam_two_stream,
     plateau_edge_energy_eV,
     BeamDepositionResult,
     _coulomb_stopping_coefficient,
 )
-from cablp.funcs._cathode_solver import (
+from cablp.cathode.circuit import (
     CATHODE_LNL_MODELS,
     DeviceConfig,
     PlasmaState,
@@ -22,13 +22,13 @@ from cablp.funcs._cathode_solver import (
     _compute_l_b,
     solve_beam_system,
 )
-from cablp.funcs._plasmaparams import LN_LAMBDA_MIN, c_log
-from cablp.funcs._cathode_solver_idriven import (
+from cablp.plasma.params import LN_LAMBDA_MIN, c_log
+from cablp.cathode.circuit_idriven import (
     beam_launch_energy_eV,
     solve_beam_system_idriven,
     solve_idriven,
 )
-from cablp.vars._cons import ev_to_erg, qe_SI
+from cablp.constants import ev_to_erg, qe_SI
 
 from ..core.geometry import (
     anode_flanking_cells,
@@ -777,7 +777,7 @@ def vessel_beam_climb_V(input_flags, V_cm_V):
     is referenced to the vessel and the mesh to the floating cathode/anode
     system, so an electron crossing from one to the other climbs exactly their
     difference. Only a POSITIVE ``V_cm`` decelerates; the sign is applied by
-    :func:`cablp.funcs._cathode_solver_idriven.beam_launch_energy_eV`, which
+    :func:`cablp.cathode.circuit_idriven.beam_launch_energy_eV`, which
     owns it for both beam readers.
     """
     if not bool(input_flags.get("regime_vessel_node", False)):
@@ -1210,7 +1210,7 @@ def solve_cathode_boundary(
     places -- the Beer-Lambert beam-array assembly and the CSDA deposition
     rays -- as the mesh-to-column climb the transmitted beam must pay, and
     never the sheath solve itself (see
-    :func:`cablp.funcs._cathode_solver_idriven.solve_beam_system_idriven`).
+    :func:`cablp.cathode.circuit_idriven.solve_beam_system_idriven`).
 
     ``coverage`` is the optional :class:`CoverageView1D`. It is applied at
     exactly the point where the beam's own view of the medium enters -- the

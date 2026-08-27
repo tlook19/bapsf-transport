@@ -14,7 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
-from cablp.funcs._adas import he_rates, he_rate_temperature_range_eV
+from cablp.atomic.adas import he_rates, he_rate_temperature_range_eV
 
 DEFAULT_H5 = "es1_nx120_m6_sq3400_k4t_lowte_icool_es1.h5"
 

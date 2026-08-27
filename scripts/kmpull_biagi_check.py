@@ -2,7 +2,7 @@
 LXCat Biagi pull of 2026-08-13 (~/Downloads/biagi.xml; Magboltz 8.97
 transcription, retrieved 2026-08-13).
 
-Checks, per shipped node (5 eV, 25 eV; funcs/_cross.py HE_EN_MT_*):
+Checks, per shipped node (5 eV, 25 eV; atomic/cross_sections.py HE_EN_MT_*):
   - Biagi sigma_m at the node energy (log-log and linear interpolation on
     the pulled 36-point table), vs the shipped value and its bracket.
   - Context only (documented conventions, not gated): the shipped
@@ -20,7 +20,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, ".")
-from cablp.funcs._cross import (  # noqa: E402
+from cablp.atomic.cross_sections import (  # noqa: E402
     HE_EN_MT_NODE_EV,
     HE_EN_MT_SIGMA_CM2,
     HE_EN_MT_SIGMA_BRACKET_CM2,

@@ -3,8 +3,8 @@ import math
 import mpmath as mp
 import numpy as np
 from pathlib import Path
-from ._interp import interp_scalar_fused as _interp_scalar_fused
-from ..vars._cons import (
+from ..numerics.interp import interp_scalar_fused as _interp_scalar_fused
+from ..constants import (
     M_e_eV,
     qe_cgs,
     atm_cross_cgs,
@@ -35,13 +35,13 @@ a215 = [
 A_HEII_11s = [5.857e-1, -4.457e-1, 7.680e-1, -2.521, 3.317, 0.0]
 
 # ── EII cross section lookup tables (loaded at import time) ──────────────────
-_VARS_DIR = Path(__file__).parent.parent / "vars"
+_DATA_DIR = Path(__file__).parent / "data"
 
-_h_data = np.loadtxt(_VARS_DIR / "h_eii_cross.csv", delimiter=",", comments="#")
+_h_data = np.loadtxt(_DATA_DIR / "h_eii_cross.csv", delimiter=",", comments="#")
 _H_LOG_E = np.log(_h_data[:, 0])
 _H_LOG_SIGMA = np.log(_h_data[:, 1])
 
-_he_data = np.loadtxt(_VARS_DIR / "he_eii_cross.csv", delimiter=",", comments="#")
+_he_data = np.loadtxt(_DATA_DIR / "he_eii_cross.csv", delimiter=",", comments="#")
 _HE_LOG_EPS = np.log(_he_data[:, 0])
 _HE_LOG_SIGMA = np.log(_he_data[:, 1])
 
@@ -55,7 +55,7 @@ _HE_LOG_SIGMA = np.log(_he_data[:, 1])
 _HE_LOG_EPS_SEQ = _HE_LOG_EPS.tolist()
 _HE_LOG_SIGMA_SEQ = _HE_LOG_SIGMA.tolist()
 
-_HE_ION_RATE_PATH = _VARS_DIR / "he_ion_rate.csv"
+_HE_ION_RATE_PATH = _DATA_DIR / "he_ion_rate.csv"
 if _HE_ION_RATE_PATH.exists():
     _he_ion_rate_data = np.loadtxt(
         _HE_ION_RATE_PATH, delimiter=",", comments="#"
@@ -221,7 +221,7 @@ def He_EIE_omega_forbidden(eps, A):
 def He_EIE_cross_manifold(E_eV, entry):
     """Excitation cross section [cm^2] from He 1^1S at electron energy E_eV.
 
-    ``entry`` is a value of ``vars._coeff.He_singlet_manifold``:
+    ``entry`` is a value of ``atomic.coefficients.He_singlet_manifold``:
     ``{"E_eV": threshold, "form": "allowed"|"forbidden", "A": [...]}``.
     Conversion per the paper's Eq. (1) with g_i = 1:
     sigma = pi*a0^2 * Ry / E * Omega(E/E_th). Returns 0.0 at or below
@@ -246,10 +246,10 @@ def He_singlet_tail_levels(n_max=20):
 
     Yields ``(series, n, E_th_eV, scale)`` where ``scale = (4/n)^3`` and
     E_th = E_lim - Ry/(n - delta)^2 with the per-series quantum defect
-    (``vars._coeff.He_singlet_quantum_defect``). The n^-3 sum truncated at
+    (``atomic.coefficients.He_singlet_quantum_defect``). The n^-3 sum truncated at
     ``n_max = 20`` leaves < 0.1% of the summed tail uncounted.
     """
-    from ..vars._coeff import He_ionization_limit_eV, He_singlet_quantum_defect
+    from .coefficients import He_ionization_limit_eV, He_singlet_quantum_defect
 
     for series in ("S", "P", "D", "F"):
         delta = He_singlet_quantum_defect[series]
@@ -268,7 +268,7 @@ def He_singlet_tail_cross(E_eV, n_max=20):
     fitted cross section. Returns ``(sigma_tot_cm2, sigma_E_tot_cm2_eV)``
     where the second entry books each level's threshold as radiated energy.
     """
-    from ..vars._coeff import He_singlet_manifold
+    from .coefficients import He_singlet_manifold
 
     base = {s: He_singlet_manifold[f"41{s}"] for s in ("S", "P", "D", "F")}
     sigma_tot = 0.0
@@ -289,7 +289,7 @@ def He_beam_excitation_channel(E_eV, n_max=20):
     cross section over the fitted n <= 4 manifold plus the Eq. (5) n >= 5
     tail, and the energy-weighted mean radiated energy per event
     (each event books its threshold E_k as prompt line radiation; the 2^1S
-    metastable caveat is documented on ``vars._coeff.He_singlet_manifold``).
+    metastable caveat is documented on ``atomic.coefficients.He_singlet_manifold``).
     ``(0.0, 0.0)`` below the lowest threshold (2^1S, 20.6158 eV).
 
     This is the measured replacement for the historical
@@ -297,7 +297,7 @@ def He_beam_excitation_channel(E_eV, n_max=20):
     sigma_tot / sigma_2P = 1.65-1.75 and E_rad_mean = 21.95-21.98 eV over
     the 60-180 eV beam range (``scripts/measure_beam_manifold.py``).
     """
-    from ..vars._coeff import He_singlet_manifold
+    from .coefficients import He_singlet_manifold
 
     sigma_tot = 0.0
     sigma_E_tot = 0.0
@@ -758,7 +758,7 @@ def charge_ex_react(T, gas_type="He"):
 #         (private communication; no journal reference given in the dataset).
 #   (4) LXCat platform: Pitchford et al., Plasma Process. Polym. 14, 1600098 (2017).
 # The retrieval date above is present in the header of the archived raw download
-# ``vars/he_ion_neutral_phelps_lxcat.txt`` and MUST be reproduced in any
+# ``atomic/data/he_ion_neutral_phelps_lxcat.txt`` and MUST be reproduced in any
 # publication. The database gives two analytic
 # center-of-mass differential-scatter components for He+ in He (E = relative
 # collision energy in eV, sigma in m^2 in the source; converted to cm^2 here):

@@ -18,8 +18,8 @@ from compare_sim1d_es1 import FLAG_OVERRIDES, PARAM_OVERRIDES
 from run_mechanism_ladder import ES_OPERATING
 from k7cbuild_frozen_bitexact import EXTRA
 
-from cablp.funcs import _cathode_solver_idriven as idr
-from cablp.funcs._kernels import PROVENANCE
+from cablp.cathode import circuit_idriven as idr
+from cablp.cathode.kernels import PROVENANCE
 from cablp.solvers._sim1d.physics import cathode as cath
 from cablp.solvers._sim1d import LAPDSim1D, default_config
 
@@ -131,7 +131,7 @@ def main():
       "solve samples")
     P("   the EMA-smoothed one (solver.py:4960 vs solver.py:3134). Both at "
       "I as called:")
-    from cablp.funcs._cathode_solver import PlasmaState
+    from cablp.cathode.circuit import PlasmaState
     for label, Te_s, ne_s in (
         ("EMA-smoothed (what the beam/tail solve got)", T_e, plasma.n_e),
         ("raw x1.5 Te", 1.5 * T_e, plasma.n_e),

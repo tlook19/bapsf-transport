@@ -29,7 +29,7 @@ Writes only pd1owner_* artifacts. Read-only w.r.t. the repo.
 import json
 import numpy as np
 
-from cablp.funcs._beam_deposition import (
+from cablp.cathode.beam_deposition import (
     _coulomb_stopping_coefficient,
     coulomb_stopping_eV_per_cm,
     he_mean_secondary_energy_eV,

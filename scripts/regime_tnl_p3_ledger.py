@@ -64,7 +64,7 @@ from regime_pb_balance_table import advance_to
 from regime_r2_overlap_gate import build_config
 
 from cablp.solvers._sim1d import LAPDSim1D
-from cablp.vars._cons import ev_to_erg as EV_TO_ERG, qe_SI as QE_SI
+from cablp.constants import ev_to_erg as EV_TO_ERG, qe_SI as QE_SI
 
 #: Registered relative tolerance for the per-ray identity.
 RTOL = 1.0e-9

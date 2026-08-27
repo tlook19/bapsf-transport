@@ -36,7 +36,7 @@ Usage::
 defeat the entire point.
 
 ``--impl helper`` (the default) checks
-``cablp.funcs._interp.interp_scalar_fused``, which writes the fusion out with
+``cablp.numerics.interp.interp_scalar_fused``, which writes the fusion out with
 ``math.fma`` and must therefore reproduce the fixture on EVERY platform. A
 failure there is a bug in the helper.
 
@@ -69,7 +69,7 @@ RVAL = 9.8765432109876543e4
 
 def _real_tables():
     """The (name, xp, fp) triples this package actually interpolates."""
-    from cablp.funcs import _cross as C
+    from cablp.atomic import cross_sections as C
 
     names = [
         ("H_beam_ionization", "_H_LOG_E", "_H_LOG_SIGMA"),
@@ -183,7 +183,7 @@ def _evaluator(impl):
     if impl == "numpy":
         return lambda x, xp, fp, **kw: np.interp(x, xp, fp, **kw)
 
-    from cablp.funcs._interp import interp_scalar_fused
+    from cablp.numerics.interp import interp_scalar_fused
 
     def _helper(x, xp, fp, **kw):
         return np.array(

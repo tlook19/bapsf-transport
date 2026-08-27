@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from cablp.vars._cons import ev_to_erg, kb_cgs
+from cablp.constants import ev_to_erg, kb_cgs
 
 from ..physics.kinetic_neutrals import T_WALL_K
 

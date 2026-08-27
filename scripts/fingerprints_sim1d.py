@@ -998,7 +998,7 @@ def report(path, partner=None, reference_cache=None):
                   f"median {np.median(Ip):.3f} A")
         # The gap P_ohmic ledger row. ``P_ohmic = I_tot * V_p`` is the
         # circuit's I^2 R_p dissipated in the plasma between cathode and
-        # anode (funcs/_cathode_solver.py), and physics/cathode.py deposits
+        # anode (cathode/circuit.py), and physics/cathode.py deposits
         # ALL of it into that end's gap cells through weights that normalize
         # to one -- so each end's P_ohmic IS its gap booking, and the two are
         # reported separately as well as summed. The twin end is absent on a

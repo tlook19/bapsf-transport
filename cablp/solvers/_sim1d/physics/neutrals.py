@@ -6,8 +6,8 @@ from ..core.geometry import is_plenum_cell, puff_cell_indices, pump_cell_indices
 from ..core.state import ConservativeState1D, neutral_energy_floor
 from .puff_orifice import launch_row_for_grid
 from .sources import neutral_wind_velocity
-from cablp.funcs._interp import interp_scalar_fused
-from cablp.vars._cons import kb_cgs, m_p_cgs
+from cablp.numerics.interp import interp_scalar_fused
+from cablp.constants import kb_cgs, m_p_cgs
 
 
 def neutral_thermal_speed(Tn_K, mu_neutral):

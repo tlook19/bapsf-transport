@@ -4,7 +4,7 @@ Biagi + IST-Lisbon + Morgan, He ELASTIC momentum transfer each).
 
 This is the pull OF RECORD (standard LXCat TXT format; supersedes the
 XML pull checked in kmpull_biagi_check.py, whose own header flagged the
-XML export as under development). Shipped nodes: funcs/_cross.py
+XML export as under development). Shipped nodes: atomic/cross_sections.py
 HE_EN_MT_* (5 eV and 25 eV, values + brackets).
 
 Read-only on the repo; stdout only (tee to kmpull_threeset_check.txt).
@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, ".")
-from cablp.funcs._cross import (  # noqa: E402
+from cablp.atomic.cross_sections import (  # noqa: E402
     HE_EN_MT_NODE_EV,
     HE_EN_MT_SIGMA_CM2,
     HE_EN_MT_SIGMA_BRACKET_CM2,

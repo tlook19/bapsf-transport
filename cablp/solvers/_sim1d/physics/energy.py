@@ -1,11 +1,11 @@
 import numpy as np
 
-from cablp.funcs._adas import he_rates
-from cablp.funcs._fits import IAEA_exp1, IAEA_exp4, IAEA_exp6
-from cablp.funcs._heat import Q_cx_He, Q_ie
-from cablp.funcs._plasmaparams import LN_LAMBDA_MIN, c_log
-from cablp.vars._coeff import aHII, aHI, aHeI, aHeII
-from cablp.vars._cons import ev_to_erg
+from cablp.atomic.adas import he_rates
+from cablp.atomic.fits import IAEA_exp1, IAEA_exp4, IAEA_exp6
+from cablp.plasma.heat import Q_cx_He, Q_ie
+from cablp.plasma.params import LN_LAMBDA_MIN, c_log
+from cablp.atomic.coefficients import aHII, aHI, aHeI, aHeII
+from cablp.constants import ev_to_erg
 
 from .reactions import _check_atomic_rate_model, reaction_rates
 from ..core.state import ConservativeState1D, derive_state

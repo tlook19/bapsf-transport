@@ -69,7 +69,7 @@ from cablp.solvers._sim1d import load_result_hdf5  # noqa: E402
 from cablp.solvers._sim1d.physics.sources import (  # noqa: E402
     neutral_wall_partition_survival,
 )
-from cablp.vars._cons import kb_cgs, m_He_cgs  # noqa: E402
+from cablp.constants import kb_cgs, m_He_cgs  # noqa: E402
 
 from ewp_demo_run import (  # noqa: E402
     WALL_BRANCH_T_K,

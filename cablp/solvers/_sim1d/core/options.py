@@ -24,7 +24,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from cablp.vars._cons import ev_to_erg, kb_cgs
+from cablp.constants import ev_to_erg, kb_cgs
 
 
 def collision_operator_kwargs(input_dict, flags, *, gas_type):

@@ -293,7 +293,7 @@ def main():
         print(f"    at t={d['t'][i]:.3e}: <nn>={d['nn_mean'][i]:.4e} cm^-3, "
               f"<Te>={d['Te_mean'][i]:.3f} eV, gamma_bulk={gu[i]:.4e} 1/s")
         print(f"    implied <sigma v> = gamma_bulk/<nn> = {gu[i]/d['nn_mean'][i]:.4e} cm^3/s")
-        print("    (section 6 of the memo checks this against cablp.funcs._adas.he_rates)")
+        print("    (section 6 of the memo checks this against cablp.atomic.adas.he_rates)")
 
         print("\n  --- phi_c ceiling exposure on the leg ---")
         for t2 in SHOTS:
@@ -444,7 +444,7 @@ def adas_check():
     build-leg (ne, Te), and prices the Te sensitivity of that coefficient.
     """
     section("(8) BULK CHANNEL: FROZEN-STATE CROSS-CHECK AGAINST ADAS")
-    from cablp.funcs._adas import he_rates
+    from cablp.atomic.adas import he_rates
     for ne, Te in ((1.0e9, 4.68), (1.0e10, 4.69), (1.0e10, 4.44), (1.0e10, 5.09)):
         v = float(he_rates(np.array([ne]), np.array([Te]), ("scd",))["scd"][0])
         print(f"    he_rates SCD(ne={ne:.1e}, Te={Te:.2f}) = {v:.4e} cm^3/s  "

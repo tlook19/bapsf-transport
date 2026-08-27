@@ -1,9 +1,9 @@
 import numpy as np
 from scipy.linalg import solve_banded
 
-from cablp.funcs._heat import kappa_par_elec, kappa_par_ion
-from cablp.funcs._plasmaparams import LN_LAMBDA_MIN, c_log
-from cablp.vars._cons import ev_to_erg, m_e_cgs
+from cablp.plasma.heat import kappa_par_elec, kappa_par_ion
+from cablp.plasma.params import LN_LAMBDA_MIN, c_log
+from cablp.constants import ev_to_erg, m_e_cgs
 
 from ..core.state import ConservativeState1D, derive_state
 

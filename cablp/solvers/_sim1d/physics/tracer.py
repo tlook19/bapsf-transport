@@ -20,10 +20,10 @@ import math
 
 import numpy as np
 
-from cablp.funcs._adas import _shared_grid_tables, he_rate_temperature_range_eV
-from cablp.funcs._beam_deposition import coulomb_stopping_eV_per_cm
-from cablp.funcs._plasmaparams import c_log, time_elec_coll
-from cablp.vars._cons import ev_to_erg, m_e_SI, qe_SI
+from cablp.atomic.adas import _shared_grid_tables, he_rate_temperature_range_eV
+from cablp.cathode.beam_deposition import coulomb_stopping_eV_per_cm
+from cablp.plasma.params import c_log, time_elec_coll
+from cablp.constants import ev_to_erg, m_e_SI, qe_SI
 
 from ..core.state import ConservativeState1D
 from .cathode import beam_anomalous_power_density
@@ -522,7 +522,7 @@ def spitzer_conductivity_S_per_m(n_cm3, Te_eV):
     """Return the Spitzer parallel conductivity ``sigma_par`` [S/m].
 
     ``sigma = n e^2 tau_e / m_e`` with the Braginskii electron collision time
-    the rest of the package already uses (``funcs._plasmaparams.time_elec_coll``,
+    the rest of the package already uses (``plasma.params.time_elec_coll``,
     same ``c_log`` as the conduction and exchange terms), converted to SI so the
     conducted current in criterion (a) comes out in amperes without a statamp
     detour.

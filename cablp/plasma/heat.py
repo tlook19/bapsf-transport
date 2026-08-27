@@ -1,6 +1,6 @@
-from ..vars._cons import H_e_mass_ratio
-from ._cross import charge_ex_react
-from ._plasmaparams import (
+from ..constants import H_e_mass_ratio
+from ..atomic.cross_sections import charge_ex_react
+from .params import (
     time_elec_coll,
     time_ion_coll,
     v_thm_e,

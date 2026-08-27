@@ -30,7 +30,7 @@ import math
 
 import numpy as np
 
-from cablp.funcs._beam_deposition import (
+from cablp.cathode.beam_deposition import (
     HE_E_STOP_EV,
     HE_I_ION_EV,
     beam_speed_cm_s,
@@ -39,8 +39,8 @@ from cablp.funcs._beam_deposition import (
     he_mean_secondary_energy_eV,
     quasilinear_relaxation_length_cm,
 )
-from cablp.funcs._cathode_solver import _c_log_ei, _compute_l_b
-from cablp.funcs._cross import He_EII_cross_lkup, He_beam_excitation_channel
+from cablp.cathode.circuit import _c_log_ei, _compute_l_b
+from cablp.atomic.cross_sections import He_EII_cross_lkup, He_beam_excitation_channel
 
 _ERG_PER_EV = 1.602176634e-12
 _E4_CGS = (4.80320425e-10) ** 4

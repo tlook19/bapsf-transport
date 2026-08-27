@@ -40,8 +40,8 @@ import numpy as np
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
-from cablp.funcs import _kernels  # noqa: E402
-from cablp.funcs._cathode_solver import _j_eth_crit_pure, _pemr  # noqa: E402
+from cablp.cathode import kernels as _kernels  # noqa: E402
+from cablp.cathode.circuit import _j_eth_crit_pure, _pemr  # noqa: E402
 
 
 def ulp_distance(a, b):

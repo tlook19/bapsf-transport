@@ -601,7 +601,7 @@ swap moment requires was dropped.
 **Rates (Phelps He$^+$/He, boxed literature).** The reduced operator uses the
 Phelps database He$^+$-in-He isotropic + backscatter cross sections (Phelps
 database, www.lxcat.net, retrieved on July 25, 2026; see
-`funcs/_cross.py` for the full citation and `vars/he_ion_neutral_phelps_lxcat.txt`
+`atomic/cross_sections.py` for the full citation and `atomic/data/he_ion_neutral_phelps_lxcat.txt`
 for the archived download). They map to $\sigma_{cx}=Q_b$ (backscatter = charge
 exchange) and $\sigma_{mt}=Q_i+2Q_b$ (momentum transfer: isotropic contributes
 $\int(1-\cos\theta)=Q_i$, backscatter $180^\circ$ contributes $2Q_b$), and are

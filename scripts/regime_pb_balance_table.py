@@ -57,14 +57,14 @@ import numpy as np
 
 from regime_r2_overlap_gate import build_config
 
-from cablp.funcs._beam_deposition import beam_speed_cm_s
+from cablp.cathode.beam_deposition import beam_speed_cm_s
 from cablp.solvers._sim1d import LAPDSim1D
 from cablp.solvers._sim1d.physics.cathode import beam_anomalous_power_density
 from cablp.solvers._sim1d.physics.tracer import (
     TracerBalanceError,
     quasistatic_Te_eV,
 )
-from cablp.vars._cons import ev_to_erg as EV_TO_ERG, qe_SI as QE_SI
+from cablp.constants import ev_to_erg as EV_TO_ERG, qe_SI as QE_SI
 
 #: The rows the R2 table reports, in its order.
 ROW_NAMES = (

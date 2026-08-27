@@ -66,9 +66,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import puff_orifice as orifice
 
-from cablp.funcs._adas import he_rates
-from cablp.vars._cons import m_He_cgs
-from cablp.funcs._cross import charge_ex_react, phelps_he_backscatter_cm2
+from cablp.atomic.adas import he_rates
+from cablp.constants import m_He_cgs
+from cablp.atomic.cross_sections import charge_ex_react, phelps_he_backscatter_cm2
 from cablp.solvers._sim1d.core.geometry import (
     absorbing_live_cells_by_role,
     build_geometry,
@@ -82,7 +82,7 @@ from cablp.solvers._sim1d.physics.neutrals import (
 
 EV = 1.602176634e-12
 KB = 1.380649e-16
-# Helium mass: imported, never re-derived. cablp.vars._cons is THE
+# Helium mass: imported, never re-derived. cablp.constants is THE
 # definition point (Ar(4He)*u, CODATA 2022); the hand-made
 # 4.002602 * 1.66053907e-24 product this replaced was 0.31 ppm low.
 M_HE = m_He_cgs
@@ -103,7 +103,7 @@ BOUNDARY_ROWS = ("boundary_absorption", "characteristic_boundary")
 
 # Energy range [eV] over which the Phelps He+/He backscatter cross section
 # phelps_he_backscatter_cm2 is data-backed: the span of the archived LXCat
-# download vars/he_ion_neutral_phelps_lxcat.txt, whose tabulated He+/He
+# download atomic/data/he_ion_neutral_phelps_lxcat.txt, whose tabulated He+/He
 # "Backscat" block runs 0 -> 1.0e4 eV (the analytic form's 1+5/E factor gives
 # it a finite ~2.21e-15 cm^2 limit as E -> 0, so the low end is a table
 # endpoint and not a singularity). --fast-reflected refuses a launch energy
@@ -1370,7 +1370,7 @@ def run_fast_reflected(bg, n_particles, rng, r_e=0.2, r_n=0.5, max_iter=20000):
         E_rel   = 1/2 mu g_eff^2,   mu = m_He / 2
         nu_cx   = n_i * Qb(E_rel) * g_eff
 
-    ``Qb`` is :func:`cablp.funcs._cross.phelps_he_backscatter_cm2`, whose
+    ``Qb`` is :func:`cablp.atomic.cross_sections.phelps_he_backscatter_cm2`, whose
     argument is the RELATIVE collision energy; it is valid over
     ``PHELPS_QB_RANGE_EV`` = 1.0e-4 to 1.0e4 eV (the span of the archived LXCat
     table), and an ``E_rel`` reachable outside that range raises.
@@ -1413,7 +1413,7 @@ def run_fast_reflected(bg, n_particles, rng, r_e=0.2, r_n=0.5, max_iter=20000):
     written with the reduced-mass floor and all three were corrected on
     2026-08-21. ``u_i`` is the local ion MEAN drift.
     This replaces :func:`run_mc`'s treatment, which keys CX off the background
-    ION TEMPERATURE through :func:`~cablp.funcs._cross.charge_ex_react` and so
+    ION TEMPERATURE through :func:`~cablp.atomic.cross_sections.charge_ex_react` and so
     transports a fast atom at a thermal collision rate.
 
     The mode REFUSES to run when ``E_fast`` is zero (``phi_c + Ti_cath <= 0``

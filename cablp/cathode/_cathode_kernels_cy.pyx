@@ -82,7 +82,7 @@ Faithfulness rules for anything added here
   explicit ``fma()``. See that function's docstring for the measurement.
 
 Nothing RUNS this module's kernels unless ``CABLP_COMPILED_KERNELS`` opts
-in; see ``cablp.funcs._kernels``. (``smoke_sim1d`` imports it directly
+in; see ``cablp.cathode.kernels``. (``smoke_sim1d`` imports it directly
 regardless, to compare it against the pure kernels -- comparing is not
 running.)
 """

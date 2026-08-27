@@ -1,4 +1,4 @@
-submodules = ["funcs", "vars", "solvers"]
+submodules = ["atomic", "cathode", "constants", "numerics", "plasma", "solvers"]
 
 __all__ = submodules + [
     "__version__",

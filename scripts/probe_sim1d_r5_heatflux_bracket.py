@@ -18,10 +18,10 @@ from pathlib import Path
 
 import numpy as np
 
-from cablp.funcs._heat import kappa_par_elec
-from cablp.funcs._plasmaparams import c_log
+from cablp.plasma.heat import kappa_par_elec
+from cablp.plasma.params import c_log
 from cablp.solvers._sim1d.physics.conduction import flux_limited_electron_conductivity
-from cablp.vars._cons import ev_to_erg, m_e_cgs
+from cablp.constants import ev_to_erg, m_e_cgs
 
 DEFAULT_H5 = (
     "es1_nx120_m6_sq4600_g3200_c120_ts1900_l8p1_mn2mom300k_bmom_"

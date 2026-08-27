@@ -61,7 +61,7 @@ import cablp.solvers._sim1d.core.state as state_mod
 from cablp.solvers._sim1d import LAPDSim1D, default_config
 from cablp.solvers._sim1d.core.state import conservative_from_primitives, pack_state
 from cablp.solvers._sim1d.physics.conduction import IMPLICIT_HEAT_SCHEMES
-from cablp.vars._cons import ev_to_erg
+from cablp.constants import ev_to_erg
 
 FLOOR_RTOL = 1e-9
 
