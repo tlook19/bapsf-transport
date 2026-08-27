@@ -1,0 +1,134 @@
+{
+  "manifest_kind": "delta",
+  "repository": "bapsf-transport",
+  "base_revision": "19568143c396998b00f02d585caa66c9cf884297",
+  "new_revision": "518743cd30cb6ac23dcf725791f271adabfc1db5",
+  "bit_exact": true,
+  "golden_gate": {
+    "script": "scripts/baseline_sim1d.py",
+    "result": "NOT RUN -- tier (a) of the 23ab golden stance",
+    "saves": 2620,
+    "revision": "518743cd30cb6ac23dcf725791f271adabfc1db5",
+    "revision_note": "ANNOTATION, NOT SCRIPT OUTPUT (labelled per the 26fp convention). NO GOLDEN RAN AT THIS REVISION, and `result` says so rather than quoting a transcript from elsewhere. The reason is mechanical, not a judgment: `git diff --name-only 19568143 518743c` is seven paths -- two Markdown notes under cablp/solvers/_sim1d/, two under restructure/, and three files under restructure/manifests/ -- and not one line of Python that the solver, baseline_sim1d.py or the stance loader imports. scripts/baselines/ is byte-identical and scripts/stances/g1atrim.toml is untouched, so the golden's config is the same source text and the same bytes it was at 19568143, where the surface delta's compiled golden reported exact=True with saves=2620 at KERNEL_ID cython/_cathode_kernels_cy/tierA+csda. `saves: 2620` is carried here as the count of record at that gate, not as a fresh measurement. That is tier (a) of the 23ab stance and the reviewer decides post-merge. THE GATES THAT DID RUN at this revision, in this worktree with PYTHONPATH set to the worktree root: the smoke suite EXIT=0 with all five compiled-kernel-equivalence blocks RUN against an extension built from this tree; the validator --self-test at 24/24; and the headline gate, the five-delta chain plus the cumulative, PASS on all six checks. `bit_exact: true` for this delta is a statement about a range that changes no executable line."
+  },
+  "mappings": [
+    {
+      "change_kind": "add",
+      "old": null,
+      "new": {
+        "path": "restructure/manifests/delta_1956814.json",
+        "anchor_kind": "data_file",
+        "symbol": "restructure/manifests/delta_1956814.json"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "CHAIN BRIDGING ROW, per the adopted R2 bridging convention (adopted 26fo, verified 26fp) -- NOT THIS MEMBER'S WORK, disclosed, and the same device every delta since the carve has used for its own predecessor. base_revision here is 19568143, the PREDECESSOR MANIFEST'S DECLARED new_revision, so the validator's CHAIN abutment check composes. Under the convention's 'manifest names its parent' pattern the surface pass's manifest-finalization commit (c5a52ab, which created this file) and its staging merge (37fe960, this branch's real base) fall OUTSIDE the range that predecessor declares, so they land inside this delta's range instead. `git diff --name-status --no-renames 19568143 37fe960` is exactly this one added path and nothing else. Without this row check (4) COVERAGE would fail on an add this member did not make."
+    },
+    {
+      "change_kind": "add",
+      "old": null,
+      "new": {
+        "path": "restructure/manifests/cumulative_r2tip.json",
+        "anchor_kind": "data_file",
+        "symbol": "restructure/manifests/cumulative_r2tip.json"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "THE R2-TIP CUMULATIVE MANIFEST -- the KB-consumption artifact for the successor-locator pass, and the reason this member exists. It declares base_revision 9288e01ab337626ea4c7bbe5518885e93a244460 and new_revision 19568143c396998b00f02d585caa66c9cf884297, composing the five committed deltas into 50 rows over 253 base->tip path pairs. READ THE WINDOW BOUNDARY BEFORE VALIDATING: the cumulative spans the R2 CODE window and STOPS at 19568143. This delta's own range is bookkeeping -- docs and manifests, zero cablp code paths -- and is deliberately OUTSIDE it. The gate invocation of record is therefore the FIVE code deltas plus the cumulative; adding THIS delta to that invocation asks a different question and correctly reports a CHAIN window mismatch, because the cumulative does not span this delta's commits. Both CHAIN findings that a six-manifest run emits are true: the window one names the cause, and the composition one fires alongside it only because this particular delta happens to carry same-path rows on the files it modifies. A bookkeeping delta whose rows were all `add` would compose identically and leave the window check as the ONLY thing standing between a wrong window and a green run -- which is why that check now exists (see the validate_manifest.py row below). A cumulative that is wanted for a LATER tip is re-cut at that tip; it is never widened by assertion."
+    },
+    {
+      "change_kind": "surface_change",
+      "old": {
+        "path": "restructure/manifests/validate_manifest.py",
+        "anchor_kind": "function",
+        "symbol": "validate_manifest.check_chain"
+      },
+      "new": {
+        "path": "restructure/manifests/validate_manifest.py",
+        "anchor_kind": "function",
+        "symbol": "validate_manifest.check_chain"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "THE GATE'S OWN CONTRACT, WIDENED. Check (3) previously compared path pairs only, so a cumulative could declare the wrong end of the window and still pass every check whenever the deltas it omitted moved no file -- which is exactly a surface or docstring delta, the kind that closes an R2 phase. `check_chain` now additionally asserts that the cumulative's base_revision is the first delta's and its new_revision is the last delta's, and it refuses more than one cumulative rather than silently composing against the first and leaving the rest unchecked. Its signature takes the cumulative LIST rather than one manifest for that second reason. Three self-test cases added, each built so exactly one check fires: fail-CHAIN-window-tip, fail-CHAIN-window-base, fail-CHAIN-two-cumulatives; the synthetic fixture repository grows two modify-only commits (root->base, tip->tail) so that a delta which legitimately moves nothing exists to build them from. 21/21 -> 24/24. The module docstring's statement of check (3) is updated in the same edit -- it is the executable statement of the schema constraints and must not lag them. NOTHING ELSE IN THE VALIDATOR CHANGED: no check was relaxed, no fixture retuned, and the chain half was made to RUN for the first time rather than made to pass."
+    },
+    {
+      "change_kind": "surface_change",
+      "old": {
+        "path": "restructure/FLATTEN_EXECUTION_NOTES.md",
+        "anchor_kind": "doc_section",
+        "symbol": "## 3. Content edits inside the flatten"
+      },
+      "new": {
+        "path": "restructure/FLATTEN_EXECUTION_NOTES.md",
+        "anchor_kind": "doc_section",
+        "symbol": "## 3. Content edits inside the flatten"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "STAMP CORRECTION, dated in place. The planned counts 249 moved / 237 byte-identical / 12 content-edited, and 1's '180 tracked files' for the scripts subtree, are corrected to what commit fa3b62f executed: 251 / 240 / 11, with 182 in the scripts subtree, re-measured path by path against the real base 9288e01 rather than the 5caa8ce stamp revision. Two independent causes, both recorded at the site: +2 paths because the deposit_beam reference corpus arrived between the stamp and the base and moved byte-identical (the flatten manifest's covers list records the same two additions, for the same reason); and -1 content edit because the `build_ext.py:5,6` citation in 3.5 was WITHDRAWN at execution -- those lines name IMPORT-QUALIFIED names, which the flatten does not change, so the citation belonged to the carve. Same class as the `_adas.py:36` withdrawal already recorded there. build_ext.py WAS edited later in the branch, at b9666cd (`packages=[]` against setuptools flat-layout auto-discovery), which is a separate functional commit with its own gate and is not one of the 11. The 11 are enumerated as executed. 6's 'content edits in 12 files' follows to 11."
+    },
+    {
+      "change_kind": "surface_change",
+      "old": {
+        "path": "restructure/RENAME_MAP.md",
+        "anchor_kind": "doc_section",
+        "symbol": "### 3.6 Deleted at the carve / retirement commit"
+      },
+      "new": {
+        "path": "restructure/RENAME_MAP.md",
+        "anchor_kind": "doc_section",
+        "symbol": "### 3.6 Deleted at the carve / retirement commit"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "CITE CORRECTION, dated in place: the `_nn_table` row's second-consumer cite moves `scripts/sp3_build_nn0.py:385` -> `:394`. The annotation was written at the retirement's own base, where the call site read `resolve_nn0(params, flags)` at :385; the retirement's own edit to that call site -- dropping the `input_flags` argument nothing read once the table was gone -- moved it, so :394 is where the surviving `resolve_nn0(params)` call reads at and after 02333ce. NOT TOUCHED, deliberately: the compat row at :272 and 6.4 already carry the dated fourth-consumer annotation from the nn0 branch's pass (`sweep_sim1d_stability.py:163,166`, plus the understated smoke count). Checked before writing; a second annotation would have said the same thing twice with two dates."
+    },
+    {
+      "change_kind": "surface_change",
+      "old": {
+        "path": "cablp/solvers/_sim1d/NUMERICS.md",
+        "anchor_kind": "doc_section",
+        "symbol": "## Output"
+      },
+      "new": {
+        "path": "cablp/solvers/_sim1d/NUMERICS.md",
+        "anchor_kind": "doc_section",
+        "symbol": "## Output"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "TYPOGRAPHY ONLY: one ragged line in the Output section is reflowed (`results/health.py` reports finiteness and conservation drift). No word, number, path or claim changes. Recorded as a row because this manifest set reports every tracked file the member touches, not because a surface moved."
+    },
+    {
+      "change_kind": "surface_change",
+      "old": {
+        "path": "cablp/solvers/_sim1d/core/config_defaults_provenance.md",
+        "anchor_kind": "doc_section",
+        "symbol": "### The 2026-08-21 sccm convention changeover"
+      },
+      "new": {
+        "path": "cablp/solvers/_sim1d/core/config_defaults_provenance.md",
+        "anchor_kind": "doc_section",
+        "symbol": "### The 2026-08-21 sccm convention changeover"
+      },
+      "proposed_continuity": "same_entity",
+      "group_id": null,
+      "deletion_reason": null,
+      "replacement": null,
+      "notes": "CLARIFICATION, no fact changed. The sentence recording the `_nn_table` retirement said the 0 C-sccm convention inconsistency was 'now GONE rather than documented', which read as if the ~7% question had retired with the table. It had not: the CODE PATH is gone -- `resolve_nn0` has no fallback branch and raises on the `nn0 = None` that used to reach one -- while the one value any shipped configuration ever took from the table survives as an explicit literal in `scripts/baseline_sim1d.py` and still carries the old convention. Both halves were ALREADY TRUE and already written, two paragraphs apart; the correction is that the first no longer misleads a reader who stops there. This note is where the ~7% convention question is owned, which is why the sentence had to be the one that points forward."
+    }
+  ]
+}
