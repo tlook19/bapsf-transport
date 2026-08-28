@@ -1,8 +1,8 @@
 """
 Generate pre-computed EII cross section lookup tables for H and He.
 
-Run once from the cablp/ directory:
-    conda run -n fenicsx-env python generate_eii_tables.py
+Run once from the repo root:
+    conda run -n fenicsx-env python scripts/generate_eii_tables.py
 
 Outputs (in cablp/atomic/data/):
     he_eii_cross.csv  -- He electron impact ionization, eps = E/IE_He, 1.001–40.68
