@@ -171,8 +171,8 @@ def compare(a_path, b_path):
     b = json.loads(Path(b_path).read_text())
     same = True
     for key in (
-        "arm", "steps_taken", "time_s", "cells",
-        "digest_sha256", "final_state_sha256",
+        "arm", "steps_taken", "time_s", "cells", "channel_rate_calls",
+        "digest_sha256", "channel_rows_sha256", "final_state_sha256",
     ):
         match = a[key] == b[key]
         same = same and match
