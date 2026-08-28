@@ -1,5 +1,18 @@
 # Provenance of the golden baseline pins (`baseline_sim1d.BASELINE_*_OVERRIDES`)
 
+**Recaptured 2026-08-28 (THE R3-TIP RECAPTURE — the one anchor event that
+rotates every golden reference together, closing the six-member R3
+reimplementation window; the stance file `g1atrim.toml` and
+`default_config()` are BOTH untouched, and so is the whole config surface.
+What moved is the VALUE OF PHYSICAL CONSTANTS IN CODE.** That is a shape this
+file has not recorded before: every previous recapture moved a configuration
+key, so its digest `config_identity` rotated. This one does not — the
+`config_identity` is bit-identical across the event at
+`ec8ba03d…` while the trajectory digest moves, which is the exact signature of
+a change that is real physics and no configuration at all.) The recapture
+record's newest entry carries the moved numbers; the preceding recaptures are
+summarized next.
+
 **Recaptured 2026-08-26 (`[afterglow-dt-cost]` ADOPTION — the exemption
 hysteresis band and the accelerated dt-growth re-approach flipped to armed
 config defaults; a stance change and a golden re-anchor in one event, see the
@@ -103,8 +116,8 @@ to be.
 |---|---|---|
 | `nx` | `60` | Axial resolution of the far column: a pure cost knob. The campaign runs 268; a reviewer pays for this gate on the candidate branch and again post-merge. Pinned rather than inherited so a future default-`nx` change cannot multiply every gate's runtime silently. |
 | `max_steps_action` | `"raise"` | Deliberately overrides the stance's `"stop"`. For a campaign arm a step cap is a budget and a truncated arm is still data; here the cap is a tripwire, and tripping it should be loud. |
-| `max_steps` (run kwarg) | `150000` | **A tripwire, not a run length** — ~2.4× the measured 62,613 steps, the margin restored by the 2026-08-26 adoption rather than by moving the cap (it was ~1.6× over the 94,044 steps of the capture before it). It exists so a change that quietly destroys the timestep fails fast instead of running for hours. If it fires, the question is what happened to `dt`, not what happened to the trajectory. The value was SIZED at ~2× deliberately, against the 76,631 steps the fixture ran at the R2b re-anchor (2026-08-20), which is the capture the cap was chosen against and not the one immediately before the stance event: a backstop with a few percent of headroom is not a backstop, it is a second cost cap waiting to truncate the gate. Two recaptures then trimmed the fixture to 70,408 steps, and it is THAT count the 2026-08-25 stance event's +23,636 steps are measured from — 70,408 + 23,636 = the 94,044 above. The margin shrank to 1.6× without the cap moving, and the 2026-08-26 adoption restored it to ~2.4× — again without moving the cap; re-sizing it remains a golden-touching change rather than a maintenance edit. |
-| digest horizon (`baselines/golden_digest_4k.json`) | first `4000` accepted steps | The companion fixture for `scripts/golden_digest_gate.py`, which folds the packed state into a running SHA-256 after EVERY accepted step of this same configuration. The horizon is a cost knob, not physics: 4,000 steps is **11 min 33 s** on the pure path against the full gate's 16 min 16 s compiled / 45 min 55 s pure (2026-08-26 adoption capture, clean lane), and over the steps it covers it is the STRONGER check, because the golden certifies only what reaches a save. (Those are post-`mg-pure-vectorize` figures, the digest one measured on a clean lane 2026-08-26. The `~2.5 min` against a `~17` min gate this row carried before was true at the PREVIOUS stance; the adaptive-`dt` change recorded in the 2026-08-25 stance event is what moved it.) That gate runs at `max_steps_action = "stop"` — the cap is its run length, not a tripwire — which changes what happens AT the cap and nothing before it. |
+| `max_steps` (run kwarg) | `150000` | **A tripwire, not a run length** — ~2.4× the measured 62,612 steps (the R3-tip recapture moved the count by ONE step, so the margin the 2026-08-26 adoption restored is unchanged), the margin restored by that adoption rather than by moving the cap (it was ~1.6× over the 94,044 steps of the capture before it). It exists so a change that quietly destroys the timestep fails fast instead of running for hours. If it fires, the question is what happened to `dt`, not what happened to the trajectory. The value was SIZED at ~2× deliberately, against the 76,631 steps the fixture ran at the R2b re-anchor (2026-08-20), which is the capture the cap was chosen against and not the one immediately before the stance event: a backstop with a few percent of headroom is not a backstop, it is a second cost cap waiting to truncate the gate. Two recaptures then trimmed the fixture to 70,408 steps, and it is THAT count the 2026-08-25 stance event's +23,636 steps are measured from — 70,408 + 23,636 = the 94,044 above. The margin shrank to 1.6× without the cap moving, and the 2026-08-26 adoption restored it to ~2.4× — again without moving the cap; re-sizing it remains a golden-touching change rather than a maintenance edit. |
+| digest horizon (`baselines/golden_digest_4k.json`) | first `4000` accepted steps | The companion fixture for `scripts/golden_digest_gate.py`, which folds the packed state into a running SHA-256 after EVERY accepted step of this same configuration. The horizon is a cost knob, not physics: 4,000 steps is **7 min 57 s** on the pure path against the full gate's 16 min 27 s compiled / 38 min 41 s pure (2026-08-28 R3-tip recapture, clean lane; the 11 min 33 s / 16 min 16 s / 45 min 55 s triple this row carried before was the 2026-08-26 adoption capture), and over the steps it covers it is the STRONGER check, because the golden certifies only what reaches a save. (Those are post-`mg-pure-vectorize` figures, the digest one measured on a clean lane 2026-08-26. The `~2.5 min` against a `~17` min gate this row carried before was true at the PREVIOUS stance; the adaptive-`dt` change recorded in the 2026-08-25 stance event is what moved it.) That gate runs at `max_steps_action = "stop"` — the cap is its run length, not a tripwire — which changes what happens AT the cap and nothing before it. |
 
 `BASELINE_FLAG_OVERRIDES` carries one entry, `neutral_equilibration = True`, for
 the reason given in the re-cut section above.
@@ -118,18 +131,23 @@ whole cycle rather than a truncated foot.
 
 | quantity | value |
 |---|---|
-| steps | 62,613 |
-| wall, single lane | **16 min 16 s** VERIFY compiled, **45 min 55 s** CAPTURE pure (both measured 2026-08-26 on a CLEAN lane, nothing else running). |
+| steps | 62,612 |
+| wall, single lane | **16 min 27 s** VERIFY compiled, **38 min 41 s** VERIFY pure, **37 min 56 s** / **38 min 36 s** CAPTURE pure (the two clean-process captures). All measured 2026-08-27/28 on a CLEAN lane, strictly serially, nothing else running. |
 | saves | 2,620 |
-| `final_time` | 2.618682e-02 s (the dynamic `t_end`, reached) |
+| `final_time` | 2.618681e-02 s (the dynamic `t_end`, reached) |
 | trajectory | `y[2620, 576]` = 8 fields × 72 cells |
 | phase census (saves) | 8 `pre_breakdown`, 11 `breakdown`, 2000 `main_discharge`, 600 `afterglow`, 1 `post_afterglow` |
 | save cadence | 10 us — the finest timing shift this fixture can resolve |
+| 4,000-step digest horizon | **7 min 57 s** pure (gate), 8 min 06 s / 7 min 59 s pure (the two reference captures) |
 
-*(Figures above are the 2026-08-26 `[afterglow-dt-cost]` adoption capture;
-`steps`, `saves` and `final_time` are read from the committed sidecar
+*(Figures above are the 2026-08-28 R3-tip recapture; `steps`, `saves` and
+`final_time` are read from the committed sidecar
 `scripts/baselines/production_discharge.json`, which is regenerated at every
-recapture and is the authority for them.)*
+recapture and is the authority for them. The pure CAPTURE fell 45 min 55 s →
+37 min 56 s and the pure 4,000-step digest 11 min 33 s → 7 min 57 s across
+this event, on comparably clean lanes; the R3 lane march is the obvious
+candidate and the step count barely moved, but neither figure is a controlled
+measurement of it and the saving is not claimed as one.)*
 
 **Wall time did not fall in proportion to the step count, and the comparison
 that would explain it is not available.** The adoption removed 33.4 % of the
@@ -169,6 +187,130 @@ stance the cells carry plasma and the term is well behaved. Recorded as a known
 closure stress, deliberately not addressed by this pass.
 
 ## Recapture record
+
+**2026-08-28 — THE R3-TIP RECAPTURE: the six-member R3 reimplementation window
+closed in one anchor event (AUTHORIZED recapture; the R3 build set was ratified
+member by member across 2026-08-27 and the Tier C continuity pair passed all
+seven of its pre-registered gates before this member was dispatched).** The R3
+build set is a REIMPLEMENTATION programme at fixed physics intent, and its
+members are, in merge order:
+
+| member | staging commit | what it changed |
+|---|---|---|
+| R3 sub-event 1 — constants unification | `5e253da` | six truncated physical constants unified UP to full CODATA |
+| R3 sub-event 1b — `Q_ie` mass ratio | `89a7c9c` | `H_e_mass_ratio` retired for a DERIVED `He_e_mass_ratio`; `Q_ie` divides by the true helium-4/electron ratio (coefficient ×1.0066473) |
+| smoke-eqfix | `39cb395` | smoke-suite case attribution and child pinning; no solver float |
+| small batch 1 | `508462f` | flatten stragglers, golden transcript provenance, afterglow H retirement |
+| 1d `vbar` mass unify + H quarantine | `fed56dd` | the last neutral-side mass-number reconstruction removed (the two `vbar` sites genuinely disagreed 0.330 % before it) |
+| small batch 2 | `0144808` | seven inert/dead-code rows, incl. the `A_R318` single-inserted-duplicate repair |
+| R3 sub-event 2 — lane march | `e95bb21` | `deposit_beam`'s tail legs marched as numpy lanes with an exact-FMA reconstruction; BITWISE-0 against the scalar route |
+| `[fma-underflow-fence]` | `80ef40d` | the lower Dekker fence `FMA_ARRAY_MIN_ABS`; structurally inert |
+
+plus THIS member (anchor hardening + the recapture itself), which added the
+`fma_array` signed-zero docstring caveat and the array-path leg of
+`scripts/interp_bitexact_gate.py`, and changed no arithmetic.
+
+**Nothing in the CONFIGURATION moved, and that is the defining feature of this
+event.** `g1atrim.toml` is untouched; `default_config()` is untouched; no
+config key was added, removed or re-valued. The consequences are worth stating
+plainly, because they invert a pattern every previous entry in this record
+shares:
+
+| quantity | before | after |
+|---|---|---|
+| `steps` | 62,613 | **62,612** (−1) |
+| `saves` | 2,620 | **2,620** (unchanged) |
+| `final_time` | 2.618682e-02 s | **2.618681e-02 s** — the dynamic `t_end`, still reached |
+| NPZ `sha256` | `77c0543cbbee6038756b79fcb904c8849c57c6aab9929bc100a0872c7f6ed93d` | `2c02ccd882261a0b01e0a1e8f0e313113b8431fadd526fa9d4859694e5704306` |
+| sidecar `sha256` | `18587f7190bafcf10d56b500407401e2528c3df6ec378798cbf86160abd2a87c` | `18d065b70d12a5187b3e240bb2f0eae1aec0a09b1c0076954c1cbe8e7a6c2176` |
+| 4k trajectory digest | `3f2424e3b9f6954a736c84041c2737fb2624778043b1fab028c725ed1cc4991f` | `cb54b74a34cbee055612d404abb44ba4522bea11316044556fa43c83a75b2ae2` |
+| digest `config_identity` | `ec8ba03db7e061948a8d438ed027747cccaef05cf8171225e259dd25e9871157` | **UNCHANGED** — `ec8ba03d…` |
+
+**The trajectory digest moves while the config identity does NOT, and that
+asymmetry is the load-bearing evidence, not a curiosity.** Every recapture
+before this one moved a configuration key, so both halves rotated together (or,
+in three of them, only the config identity did over an unchanged trajectory).
+Here the pair separates for the first time, and it separates in exactly the
+direction a constants reimplementation predicts: the configuration the campaign
+runs is bit-identical, and the floats the model computes from it are not.
+A reader who sees only the moved NPZ `sha256` should read this row before
+concluding a stance changed. It did not.
+
+**`config_snapshots.json` was NOT regenerated, and that is a verified result
+rather than an omission.** `scripts/audit_sim1d_configs.py` verifies the
+committed artifact (`cablp/solvers/_sim1d/config_snapshots.json`, `sha256`
+`b8ecf6c1…`) CLEAN at this tip: `params=257, flags=51, cases=4`, all four case
+digests reproducing, `production_golden` still `21409d1a…` and
+`manifest_sha256` still `d2fd9e26…`. `parameter_count` and `flag_count` did
+not move because R3 added and removed no config key — the same fact the
+unchanged `config_identity` states from the other side, measured by a second
+independent instrument.
+
+**Health, and the continuity read at the gate.** The sidecar reports
+`finite: true`, `Te_max` 27.897 → **27.805 eV**, `Ti_max` 8.2080 → 8.2077 eV,
+`n_max` 1.41548e13 → **1.41964e13 cm^-3**, `nn_max` 3.54163e13 → 3.53955e13
+cm^-3. The phase census (8 / 11 / 2000 / 600 / 1) and the save count are both
+unchanged, so the fixture covers exactly the same cycle it did before. The
+150,000-step tripwire did not fire and its ~2.4× margin is unmoved. This is a
+health check, not a physics verdict: the physics verdict is the Tier C
+continuity pair (campaign log 2026-08-27gy), which measured this window at the
+production operating point against the R2-tip parent `bc0a515` and passed all
+seven gates — all 15 printed stage-(ii) dev/σ entries identical between arms,
+plateau −0.0027 %, `t90` Δ 0.00 ms, ledger closure identical to all printed
+digits.
+
+**Capture evidence.** The NPZ fixture was captured TWICE from clean separate
+processes to temporary paths, strictly serially per the serial-golden rule, and
+compared BEFORE either was installed: NPZ and JSON sidecar byte-identical (the
+two `sha256` values above) and raw-bitwise identical over all three arrays —
+`phase` identical at raw bytes, `time` **0 differing of 2,620** and `y`
+**0 differing of 1,509,120** at `uint64`. The digest reference was regenerated
+in the same event as the protocol requires, also twice from clean separate
+processes, byte-identical (`sha256` `3a032eae…` both). `--verify` prints:
+
+```
+baseline verify OK: saves=2620, exact=True, max_rel=0.000e+00, max_abs=0.000e+00, time_max_abs=0.000e+00 s (rtol=1.0e-09, atol=0.0e+00)
+```
+
+**KERNEL PATH — the fixture was captured PURE and verified on BOTH paths, which
+is the stronger form and a return to how recaptures were taken before
+2026-08-25.** That event captured the NPZ compiled for cost reasons and
+disclosed the departure; here the pure capture cost 37 min 56 s, comfortably
+inside the harness lifetime, so no such trade was needed. Both `--verify` runs
+print `exact=True, max_rel=0.000e+00` against the pure-captured fixture, with
+kernel provenance probed IN-PROCESS on each (`pure`, and
+`cython/_cathode_kernels_cy/tierA+csda` under `CABLP_COMPILED_KERNELS=1`). The
+digest reference was likewise captured pure and reads `kernel_provenance:
+"pure"`, with the pure digest gate printing
+`digest gate OK: steps=4000, digest=cb54b74a…, exact=True` against it. So
+pure-vs-compiled bit-exactness is RE-EVIDENCED at this tip on the full cycle
+rather than assumed — which matters more than usual here, because the lane
+march is the first member to give the two paths structurally different
+inner loops (lane legs 13,424 pure / 0 compiled).
+
+**The corpus fixture rotated one member earlier and is NOT part of this
+event.** `scripts/data/deposit_beam_reference.npz` was re-captured at unified
+constants during R3 sub-event 1 (`77b010e1…` → `e70396e5…`, Tom's 2026-08-27
+ruling); it is untouched here and `deposit_beam_reference.py --verify` reads
+506 entries, 0 differing of 206,218 at this tip.
+
+**Two anchors, and where the line now falls.** Pre-R3 BIT-LEVEL claims are
+HISTORICAL as of this recapture and are reproducible only at
+`r2-tip-2026-08-27`, with its environment lockfile. Score-level physics
+transfers across the boundary — that is what the Tier C pair established and is
+the only sense in which results carry across it. This is the same two-anchor
+relationship the 2026-08-16 desktop migration created, for the same reason: the
+floats changed underneath a model whose physics did not.
+
+**Gates run at this recapture** (worktree branch `worktree-agent-a8eaac447400d6525`,
+all from the worktree's own root with `PYTHONPATH` pointed at it and
+`cablp.__file__` asserted in-process): `scripts/smoke_sim1d.py` exit 0 with the
+compiled-equivalence block live; `deposit_beam_reference.py --verify` 0
+differing; `interp_bitexact_gate.py` GATE OK on BOTH legs — the scalar
+`tw`/`twion` arms 0 differing and the new array-path corpus leg 0 flipped of
+17,024 walkers with 210 of 364 batches genuinely lane-marched;
+`baseline_sim1d.py --verify` `exact=True` pure AND compiled;
+`golden_digest_gate.py` `exact=True` pure against the newly captured reference.
 
 **2026-08-26 — `[afterglow-dt-cost]` ADOPTION: the exemption hysteresis band
 and the accelerated dt-growth re-approach flipped to armed config defaults
