@@ -217,11 +217,11 @@
     "files": [
       "r3trig_ref.npz", "r3trig_ref.log",
       "r3trig_census.log", "r3trig_ordermap.log", "r3trig_smoke.log",
-      "r3unify_chg.npz", "r3unify_chg.log", "r3unify_ab.log",
+      "r3unify_ref.npz", "r3unify_chg.npz", "r3unify_chg.log", "r3unify_ab.log",
       "r3unify_census.log", "r3unify_sites_pre.log", "r3unify_sites_post.log",
       "r3unify_corpus.log", "r3unify_smoke.log"
     ],
-    "note": "The r3trig_* files are the 1c mapping/stop evidence; the r3unify_* files are this member's build and gate evidence. The reference arm r3trig_ref.npz is the PRE-change capture both A/B verdicts are measured against."
+    "note": "The r3trig_* files are the 1c mapping/stop evidence; the r3unify_* files are this member's build and gate evidence. The reference arm is the PRE-change capture both A/B verdicts are measured against; it was taken during the 1c phase as r3trig_ref.npz and is present under BOTH names -- r3unify_ref.npz is a byte-identical copy (cmp verified), kept so the A/B pair is discoverable under one prefix. The r3unify_ab.log verdict was computed against r3trig_ref.npz."
   },
 
   "head_revision": "ffacab5b3fc8b85103aba459df851a1f63d57dd9",
