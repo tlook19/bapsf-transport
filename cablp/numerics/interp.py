@@ -34,6 +34,7 @@ __all__ = [
     "check_fma_domain",
     "check_interp_table",
     "FMA_ARRAY_MAX_ABS",
+    "FMA_ARRAY_MIN_ABS",
 ]
 
 
@@ -152,13 +153,47 @@ _SPLITTER = float(2 ** 27 + 1)
 #: receiving a silently double-rounded answer.
 FMA_ARRAY_MAX_ABS = 1e150
 
+#: Magnitude FLOOR on every NONZERO element of :func:`fma_array`'s MULTIPLIED
+#: arguments ``a`` and ``b`` -- the lower half of the domain
+#: :data:`FMA_ARRAY_MAX_ABS` bounds from above. The addend ``c`` is exempt: it
+#: is never multiplied.
+#:
+#: Dekker's two-product is error-free only ABSENT UNDERFLOW. The precondition
+#: is on the exponents of the factors -- ``e_a + e_b >= e_min + p - 1`` (Muller
+#: et al., *Handbook of Floating-Point Arithmetic*, 2nd ed. 4.4.1) -- which for
+#: binary64 (``e_min = -1022``, ``p = 53``) is ``|a*b| >= 2**-970 ~
+#: 1.0021e-292``. Below that the split partial products ``al*bl`` and friends
+#: round in the subnormal range, ``e`` stops being the whole rounding error of
+#: ``a*b``, and :func:`fma_array` silently stops agreeing with
+#: :func:`math.fma`.
+#:
+#: The floor is the cheap conservative form of that condition, applied to each
+#: operand separately: with every nonzero element at or above ``1e-145``, the
+#: product of two of them is at or above ``1e-290``, clearing ``2**-970`` by a
+#: factor of ~100; a zero operand needs no floor because ``0*x`` is exactly
+#: ``0``. Veltkamp's splitter cannot underflow on it either
+#: (``_SPLITTER * 1e-145 ~ 1.3e-137``), and the value mirrors the ceiling --
+#: ``1e150**2 = 1e300`` sits under the overflow threshold exactly as
+#: ``1e-145**2 = 1e-290`` sits over the underflow one.
+#:
+#: It is NON-BINDING on everything the CSDA lane march can reach. Over the
+#: committed ``deposit_beam`` corpus plus 2,000 randomized lane batteries
+#: (5,889,066 operand elements, ``scripts/r3fma_domain_probe.py``) the smallest
+#: nonzero operand magnitude was ``4.66e-23`` and the smallest nonzero
+#: ``|a*b|`` was ``9.45e-28`` -- 122 and 265 decades above this floor and the
+#: exactness threshold respectively.
+FMA_ARRAY_MIN_ABS = 1e-145
+
 
 def _two_product(a, b):
     """``(p, e)`` with ``p = a*b`` rounded and ``a*b == p + e`` exactly.
 
-    Dekker's algorithm. Exact for arguments within
-    :data:`FMA_ARRAY_MAX_ABS`; ``e`` is the rounding error of the product and
-    is zero when the product is exact.
+    Dekker's algorithm. Exact for arguments inside :func:`check_fma_domain`'s
+    domain -- within :data:`FMA_ARRAY_MAX_ABS`, so the split cannot overflow,
+    and, when nonzero, at or above :data:`FMA_ARRAY_MIN_ABS`, so the product
+    cannot underflow. There ``e`` is the rounding error of the product and is
+    zero when the product is exact. Outside either fence ``e`` is NOT the whole
+    error and the caller gets a double-rounded answer.
     """
     p = a * b
     ca = _SPLITTER * a
@@ -186,20 +221,29 @@ def fma_array(a, b, c):
 
     Parameters
     ----------
-    a, b, c : ndarray of float64
-        Broadcastable operands. Every element must be finite and within
-        :data:`FMA_ARRAY_MAX_ABS` in magnitude.
+    a, b : ndarray of float64
+        The MULTIPLIED operands, inside the checked domain: every element
+        finite, and every nonzero element between :data:`FMA_ARRAY_MIN_ABS`
+        and :data:`FMA_ARRAY_MAX_ABS` in magnitude.
+    c : ndarray of float64
+        The addend, broadcastable against ``a*b``. Finite and within
+        :data:`FMA_ARRAY_MAX_ABS`; it carries NO lower fence, because it is
+        never multiplied.
 
     Returns
     -------
     ndarray of float64
         ``round_to_nearest(a*b + c)``, elementwise and bit-identical to
-        :func:`math.fma` on the same operands.
+        :func:`math.fma` FOR OPERANDS WITHIN THE CHECKED DOMAIN. Both fences
+        are enforced on every call, so an out-of-domain operand raises rather
+        than returning a silently different answer.
 
     Raises
     ------
     ValueError
-        If any operand is non-finite or exceeds :data:`FMA_ARRAY_MAX_ABS`.
+        If any operand is non-finite or exceeds :data:`FMA_ARRAY_MAX_ABS`, or
+        if ``a`` or ``b`` has a nonzero element below
+        :data:`FMA_ARRAY_MIN_ABS`.
 
     Notes
     -----
@@ -211,17 +255,54 @@ def fma_array(a, b, c):
     tail is what makes the closing addition round exactly once overall -- a
     plain ``s + (t + t_err)`` would round twice and can disagree with
     ``math.fma`` at a tie.
+
+    The one place the reconstruction is NOT :func:`math.fma` is where its
+    building block stops being error-free: **when the product ``a*b``
+    underflows into the subnormal range**. :func:`_two_product` is Dekker's,
+    whose residual is the true rounding error of ``a*b`` only while the split
+    partial products stay normal (``|a*b| >= 2**-970``); below that ``e`` loses
+    bits and the answer can differ from :func:`math.fma`. It is a real
+    difference, not a theoretical one: on triples whose product is forced below
+    ``2**-970`` and whose addend exposes the residual, 64,599 of 300,000
+    disagree. :data:`FMA_ARRAY_MIN_ABS` is the fence that keeps callers out of
+    it. Three neighbouring cases are NOT affected and are deliberately left
+    inside the domain: a subnormal ADDEND
+    (``c`` only ever passes through the error-free :func:`_two_sum`), normal
+    products that CANCEL into a subnormal SUM (the closing add is a plain
+    rounding), and zero factors (``0*x`` is exactly ``0``, which is why the
+    floor exempts zeros). All three measure 0 differing from :func:`math.fma`;
+    ``scripts/r3fma_underflow_fence.py`` is the reproduction.
     """
     a = np.asarray(a, dtype=float)
     b = np.asarray(b, dtype=float)
     c = np.asarray(c, dtype=float)
-    for name, arr in (("a", a), ("b", b), ("c", c)):
-        check_fma_domain(arr, name)
+    for name, arr, factor in (("a", a, True), ("b", b, True), ("c", c, False)):
+        check_fma_domain(arr, name, factor=factor)
     return _fma_array_unchecked(a, b, c)
 
 
-def check_fma_domain(arr, name):
+def check_fma_domain(arr, name, *, factor=True):
     """Raise unless every element of ``arr`` is a legal :func:`fma_array` operand.
+
+    Two fences, one on each end of Dekker's error-free window: no element above
+    :data:`FMA_ARRAY_MAX_ABS`, where the split overflows, and no NONZERO
+    element below :data:`FMA_ARRAY_MIN_ABS`, where a product of two such
+    operands underflows. Exact zeros pass both, since ``0*x`` is exactly ``0``.
+
+    Parameters
+    ----------
+    arr : ndarray of float64
+        The operand to check.
+    name : str
+        Its name in the caller's signature, for the error message.
+    factor : bool, optional
+        Whether ``arr`` is one of the MULTIPLIED operands. The floor applies
+        only to those: the addend ``c`` reaches the answer through
+        :func:`_two_sum`, which is error-free for any finite operands, so a
+        tiny or even subnormal ``c`` is legal and is NOT fenced (measured: 0
+        differing from :func:`math.fma` over 300,000 subnormal-addend triples,
+        ``scripts/r3fma_underflow_fence.py``). Fencing it as well would refuse
+        a call the reconstruction handles exactly.
 
     Split out so a caller with a FIXED operand -- an interpolation table, say
     -- can check it once instead of on every call.
@@ -233,12 +314,31 @@ def check_fma_domain(arr, name):
             "error-free transforms it is built from are defined on finite "
             "operands only"
         )
-    if arr.size and np.max(np.abs(arr)) > FMA_ARRAY_MAX_ABS:
-        raise ValueError(
-            f"fma_array operand {name!r} exceeds FMA_ARRAY_MAX_ABS="
-            f"{FMA_ARRAY_MAX_ABS:g}; above it Dekker splitting overflows "
-            "and the reconstruction is no longer exact"
-        )
+    if arr.size:
+        mag = np.abs(arr)
+        if np.max(mag) > FMA_ARRAY_MAX_ABS:
+            raise ValueError(
+                f"fma_array operand {name!r} exceeds FMA_ARRAY_MAX_ABS="
+                f"{FMA_ARRAY_MAX_ABS:g}; above it Dekker splitting overflows "
+                "and the reconstruction is no longer exact"
+            )
+        if factor:
+            nonzero = mag[mag > 0.0]
+            if nonzero.size and np.min(nonzero) < FMA_ARRAY_MIN_ABS:
+                raise ValueError(
+                    f"fma_array operand {name!r} has a nonzero element of "
+                    f"magnitude {float(np.min(nonzero)):g}, below "
+                    f"FMA_ARRAY_MIN_ABS={FMA_ARRAY_MIN_ABS:g}: the Dekker "
+                    "two-product is error-free only absent underflow "
+                    "(|a*b| >= 2**-970 ~ 1.0e-292), and below this floor a "
+                    "product of two operands can land in the subnormal "
+                    "range, where fma_array stops matching math.fma. The "
+                    "reachable CSDA march domain clears the floor by 122 "
+                    "decades (smallest nonzero operand 4.66e-23, smallest "
+                    "nonzero |a*b| 9.45e-28, 265 decades above the exactness "
+                    "threshold), so an operand that trips this fence is a "
+                    "caller defect, not a tight bound"
+                )
 
 
 def _fma_array_unchecked(a, b, c):
@@ -305,7 +405,12 @@ def check_interp_table(xp, fp):
 
     Split out so a caller holding a FIXED table can check it once instead of
     on every lookup. The requirements are stricter than the scalar form's: a
-    strictly increasing, finite table, at least two nodes.
+    strictly increasing, finite table, at least two nodes, with BOTH axes
+    inside :func:`check_fma_domain`'s magnitude domain. ``xp`` is checked
+    because it reaches the fused multiply-add as well as ``fp`` does -- the
+    lerp's ``b`` operand is ``x - xp[j]`` and its ``a`` operand carries
+    ``xp[j+1] - xp[j]`` in the denominator -- so a table checked here needs no
+    per-lookup check in the hot loop.
     """
     xp = np.asarray(xp, dtype=float)
     fp = np.asarray(fp, dtype=float)
@@ -323,6 +428,7 @@ def check_interp_table(xp, fp):
         raise ValueError("interp_array_fused needs a strictly increasing xp")
     if not (np.all(np.isfinite(xp)) and np.all(np.isfinite(fp))):
         raise ValueError("interp_array_fused needs a finite table")
+    check_fma_domain(xp, "xp")
     check_fma_domain(fp, "fp")
 
 
