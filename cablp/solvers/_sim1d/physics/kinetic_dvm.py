@@ -1051,6 +1051,7 @@ class TransientDVM:
         nu_ion,
         ion_counts=None,
         sources=None,
+        source_counts=None,
         T_s_K=None,
     ):
         """Advance ``(f_c, f_a)`` by one neutral-clock tick of ``dt`` seconds.
@@ -1075,7 +1076,18 @@ class TransientDVM:
         ``recombination`` (column cells), ``cathode_face`` /
         ``collector_face`` (column cells, or a scalar attributed to the
         role-resolved ``cath_cell`` / ``coll_cell``), ``anode`` (column
-        cells). ``T_s_K`` is the live cathode-surface temperature used for
+        cells).
+
+        ``source_counts`` is the same external ledger stated in PARTICLES on
+        the same keys -- what a coupled partner BOOKED over this tick -- and
+        is to ``sources`` what ``ion_counts`` is to ``nu_ion``. A channel
+        named there is injected at exactly that count, carrying no ``dt`` and
+        so no first-order-in-cadence sampling error; a channel named in
+        ``sources`` is multiplied by ``dt`` as before, which is the reading
+        an offline caller with no partner has. Naming one channel in both
+        raises: they are two different statements about the same particles.
+
+        ``T_s_K`` is the live cathode-surface temperature used for
         the cathode-adjacent surfaces (the stated special case); the wall
         temperature is used everywhere else.
 
@@ -1100,6 +1112,8 @@ class TransientDVM:
             raise ValueError(f"the DVM update needs a positive dt (got {dt})")
         g = self.g
         sources = {} if sources is None else sources
+        source_counts = {} if source_counts is None else source_counts
+        self._check_source_channels(sources, source_counts)
         T_s_K = self.T_wall_K if T_s_K is None else float(T_s_K)
         inv_before = self.total_inventory()
         f_before = self.f_inventory()
@@ -1143,11 +1157,14 @@ class TransientDVM:
         # update -- the physical statement that a recycled atom leaves the
         # surface moving, rather than materializing at rest in the cell the
         # boundary was draining.
-        puff = np.asarray(sources.get("puff", 0.0), dtype=float) * dt
-        rec = np.asarray(sources.get("recombination", 0.0), dtype=float) * dt
-        anode = np.asarray(sources.get("anode", 0.0), dtype=float) * dt
-        cath = np.asarray(sources.get("cathode_face", 0.0), dtype=float) * dt
-        coll = np.asarray(sources.get("collector_face", 0.0), dtype=float) * dt
+        def channel(name):
+            return self._channel_counts(name, sources, source_counts, dt)
+
+        puff = channel("puff")
+        rec = channel("recombination")
+        anode = channel("anode")
+        cath = channel("cathode_face")
+        coll = channel("collector_face")
         inject_c = {}
         spec_cath = g.half_flux_spectrum(T_s_K, +1)
         spec_coll = g.half_flux_spectrum(self.T_wall_K, -1)
@@ -1409,6 +1426,51 @@ class TransientDVM:
         }
         self.last_ledger = ledger
         return ledger
+
+    @staticmethod
+    def _check_source_channels(sources, source_counts):
+        """Refuse a counted external ledger this engine cannot read as written.
+
+        A ``source_counts`` key outside :data:`LEDGER_EXTERNAL_BIRTHS` would
+        be silently inert, and a channel given both as a rate and as a count
+        is two different statements about the same particles with no rule
+        for which wins. Both are configuration errors and both raise here,
+        before anything is injected.
+        """
+        unknown = sorted(set(source_counts) - set(LEDGER_EXTERNAL_BIRTHS))
+        if unknown:
+            raise ValueError(
+                f"unknown counted DVM source channel(s) {unknown} "
+                "(silent/inert sources are forbidden); this engine books "
+                f"{sorted(LEDGER_EXTERNAL_BIRTHS)}"
+            )
+        both = sorted(set(sources) & set(source_counts))
+        if both:
+            raise ValueError(
+                f"DVM source channel(s) {both} were given as a rate AND as "
+                "a count: a channel is one or the other, never both"
+            )
+
+    def _channel_counts(self, name, sources, source_counts, dt):
+        """Return one external channel's PARTICLES for this update.
+
+        From ``source_counts`` when the partner counted the channel, in
+        which case the count is what is injected exactly; otherwise the
+        historical ``rate * dt``, which is what a standalone caller and
+        every uncounted channel still use.
+        """
+        counted = source_counts.get(name)
+        if counted is None:
+            return np.asarray(sources.get(name, 0.0), dtype=float) * dt
+        counted = np.asarray(counted, dtype=float)
+        if counted.shape != (self.nz,):
+            raise ValueError(
+                f"source_counts[{name!r}] must carry one particle count per "
+                f"cell (got shape {counted.shape}, expected {(self.nz,)})"
+            )
+        if not np.all(np.isfinite(counted)):
+            raise ValueError(f"source_counts[{name!r}] must be finite")
+        return counted
 
     def _debit_booked_ionization(self, ion_counts, L_ion, f_c, vol_c):
         """Reconcile the march's ionization tally with a partner's booking.
