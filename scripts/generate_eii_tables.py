@@ -5,8 +5,12 @@ Run once from the cablp/ directory:
     conda run -n fenicsx-env python generate_eii_tables.py
 
 Outputs (in cablp/atomic/data/):
-    h_eii_cross.csv   -- H  electron impact ionization, E = 13.61–1000 eV
     he_eii_cross.csv  -- He electron impact ionization, eps = E/IE_He, 1.001–40.68
+    h_eii_cross.csv   -- H  electron impact ionization, E = 13.61–1000 eV.
+                         NOT regenerated while the hydrogen quarantine
+                         (2026-08-27) stands: the H block prints a SKIPPED
+                         line quoting the quarantine and leaves the
+                         committed CSV untouched.
 """
 
 import sys
@@ -24,21 +28,9 @@ from cablp.constants import I_Ry as IE_Hydrogen, I_ion as IE_Helium
 OUT_DIR = Path(__file__).parent.parent / "cablp" / "atomic" / "data"
 N = 1000
 
-# ── H: E from IE_H to 1000 eV ──────────────────────────────────────────────
-E_H = np.logspace(np.log10(IE_Hydrogen * 1.001), np.log10(1000.0), N)
-sigma_H = np.array([H_EII_cross(E) for E in E_H])
-
-header_H = "E_eV,sigma_cm2\nH electron impact ionization cross section\nE_eV: beam energy [eV]  sigma_cm2: cross section [cm^2]"
-np.savetxt(
-    OUT_DIR / "h_eii_cross.csv",
-    np.column_stack([E_H, sigma_H]),
-    delimiter=",",
-    header=header_H,
-    comments="# ",
-)
-print(f"Wrote {OUT_DIR / 'h_eii_cross.csv'}  ({N} points, {E_H[0]:.3f}–{E_H[-1]:.1f} eV)")
-
 # ── He: eps = E/IE_He from 1.001 to 1000/IE_He ─────────────────────────────
+# He runs FIRST: the H block below cannot complete under the hydrogen
+# quarantine, and when it ran first its raise took the He table down with it.
 eps_max = 1000.0 / IE_Helium
 eps_He = np.logspace(np.log10(1.001), np.log10(eps_max), N)
 sigma_He = np.array([float(He_EII_cross(eps, a_11s)) for eps in eps_He])
@@ -56,3 +48,28 @@ np.savetxt(
     comments="# ",
 )
 print(f"Wrote {OUT_DIR / 'he_eii_cross.csv'}  ({N} points, eps={eps_He[0]:.4f}–{eps_He[-1]:.4f})")
+
+# ── H: E from IE_H to 1000 eV ──────────────────────────────────────────────
+# h_eii_cross.csv is quarantined-domain output. Skipping LOUDLY is the
+# correct behaviour: the quarantine's stated grounds include a corrupt
+# coefficient table (A_R318), so silently regenerating the CSV would launder
+# a known-bad table into a fresh-looking artifact. The committed
+# h_eii_cross.csv is left exactly as it stands.
+try:
+    E_H = np.logspace(np.log10(IE_Hydrogen * 1.001), np.log10(1000.0), N)
+    sigma_H = np.array([H_EII_cross(E) for E in E_H])
+except ValueError as exc:
+    print(
+        f"SKIPPED {OUT_DIR / 'h_eii_cross.csv'}  -- the hydrogen arm is "
+        f"quarantined and was not regenerated: {exc}"
+    )
+else:
+    header_H = "E_eV,sigma_cm2\nH electron impact ionization cross section\nE_eV: beam energy [eV]  sigma_cm2: cross section [cm^2]"
+    np.savetxt(
+        OUT_DIR / "h_eii_cross.csv",
+        np.column_stack([E_H, sigma_H]),
+        delimiter=",",
+        header=header_H,
+        comments="# ",
+    )
+    print(f"Wrote {OUT_DIR / 'h_eii_cross.csv'}  ({N} points, {E_H[0]:.3f}–{E_H[-1]:.1f} eV)")
