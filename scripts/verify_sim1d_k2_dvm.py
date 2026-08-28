@@ -123,7 +123,28 @@ Gates:
       rebuilt from the velocity grid. Emitting the cathode face at the WALL
       temperature is the negative control -- not one particle moves, so B1
       and B2 cannot see it and only this statement does
-  G1..G14 construction refusals: each unsupported configuration raises a
+  WR1 cylindrical-wall detailed balance, closed box: the registered
+      zero-net-exchange pin is measured verbatim and reported -- it does NOT
+      hold, and the offset is shown to be EXACTLY the accommodated share's
+      velocity-resolution error, present unchanged at the base commit; the
+      statement the reflection selector owns holds at roundoff instead (the
+      two arms exchange the same wall energy at every alpha, and the pure
+      reflection limit alpha = 0 exchanges none). Solving the re-emission
+      temperature against the continuum <E> = 2kT instead of the discrete
+      moment is the negative control
+  WR2 the wall-reflection selector in-solver: it reaches the engine, moves
+      the state, and both ledgers keep closing over several production-arm
+      ticks; at alpha = 1 the two values are bit-identical, in-solver and
+      on the bare engine under both annulus treatments. Dropping the
+      selector on the way to the engine -- the silent-inert defect -- is the
+      negative control
+  WR3 the diffuse-elastic wall return, every channel armed: its count is
+      (1 - alpha) times the landings exactly, its energy (1 - alpha) times
+      the incident wall energy exactly as DISCRETE moments, and its net v_z
+      zero. Booking that re-emission at the WALL MEAN energy is the negative
+      control -- not one particle moves, so nothing else in this suite sees
+      it
+  G1..G18 construction refusals: each unsupported configuration raises a
       ValueError at construction naming the offender. G2 is the model-preset
       resolver's refusal half -- an explicitly-set family member the
       selection cannot carry, refused ONCE with the whole member set named
@@ -2296,6 +2317,42 @@ REFUSALS = (
         )[2],
     ),
     (
+        "G16 unknown wall-reflection spectrum refused",
+        dict(),
+        "neutral_kinetic_dvm_wall_reflection",
+        lambda d, fl: (
+            d.__setitem__(
+                "neutral_kinetic_dvm_wall_reflection", "diffuse"
+            ),
+            None,
+        )[1],
+    ),
+    (
+        "G17 diffuse-elastic wall reflection without the DVM arm refused",
+        dict(),
+        "neutral_kinetic_dvm_wall_reflection",
+        lambda d, fl: (
+            d.__setitem__(
+                "neutral_kinetic_dvm_wall_reflection", "diffuse_elastic"
+            ),
+            d.__setitem__("neutral_model", "moment"),
+            None,
+        )[2],
+    ),
+    (
+        "G18 diffuse-elastic wall reflection without the two-zone flag "
+        "refused",
+        dict(),
+        "neutral_two_zone",
+        lambda d, fl: (
+            d.__setitem__(
+                "neutral_kinetic_dvm_wall_reflection", "diffuse_elastic"
+            ),
+            fl.__setitem__("neutral_two_zone", False),
+            None,
+        )[2],
+    ),
+    (
         "G15 gas puff into a cell with no annulus refused",
         dict(),
         "V_ann",
@@ -3072,6 +3129,455 @@ def gate_b3():
     )
 
 
+# ------------------------------------- B3 cylindrical-wall reflection
+
+#: [WR] Accommodation values the wall-reflection pins are taken at: the two
+#: values the surface-physics program brackets, the value between them, and an
+#: arbitrary interior point that is not a round number, so a statement that
+#: only holds on the registered triple cannot pass.
+WR_ALPHAS = (0.35, 0.40, 0.46, 0.7307)
+
+#: [WR] The two values of ``neutral_kinetic_dvm_wall_reflection``, shipped
+#: default first.
+WR_MODES = ("specular", "diffuse_elastic")
+
+
+def wr_box(alpha, mode, nz=10, nvz=16, nvp=6):
+    """Return a sealed uniform tube seeded at the wall temperature.
+
+    No pumping and no plasma, so the only surfaces with any energy in them
+    are the cylindrical wall and the two specular end planes, and the gas
+    starts at the same temperature the wall re-emits at. That is the
+    fixture the detailed-balance statement is taken on.
+    """
+    dvm = bare_dvm(
+        nz=nz, nvz=nvz, nvp=nvp, accommodation=alpha, wall_reflection=mode
+    )
+    dvm.s_L = 0.0
+    dvm.s_R = 0.0
+    dvm.seed_from_density(np.full(nz, 1.0e13), np.full(nz, 1.0e13))
+    return dvm
+
+
+def wr_wall_rows(dvm, led):
+    """Return ``(net, accommodated-share offset, loss)`` of the wall channel."""
+    e = led["energy"]
+    offset = dvm.accommodation * (
+        e["loss_wall"] - led["loss_wall"] * dvm.E_wall_mean
+    )
+    return e["net_surface_wall"], offset, e["loss_wall"]
+
+
+def gate_wr1():
+    """Wall detailed balance: the selector moves NO energy across the wall.
+
+    STATEMENT 1 of the B3 three (the closed-box synthetic case). A uniform
+    gas at the wall temperature in a sealed tube, at four accommodation
+    coefficients and under BOTH values of
+    ``neutral_kinetic_dvm_wall_reflection``. Three things are measured:
+
+    (a) The REGISTERED PIN, verbatim: the net wall energy exchange
+        ``net_surface_wall`` against roundoff. It DOES NOT HOLD, and the
+        reason is not this member. The engine's accommodated share re-emits
+        on ``wall_emission_spectrum`` while the wall ABSORBS at ``nu_w ~ vp``
+        times the volume Maxwellian; the two coincide in the continuum but
+        not bin by bin, so the accommodated share alone carries a
+        velocity-RESOLUTION offset -- 4.1e-2 of the incident wall energy at
+        alpha = 0.35 on the 16x6 gate grid, falling to 5.5e-3 at 96x32. The
+        number is measured and reported here rather than hidden, and it is
+        identical on the branch and on its base commit: the same statement
+        is what L4 above records for the density and temperature split.
+
+    (b) What the offset in (a) EXACTLY is, which localizes it away from this
+        member: ``net_surface_wall == alpha * (E_incident - N_incident *
+        E_wall_mean)`` to roundoff, under both values. Every term on the
+        right belongs to the ACCOMMODATED share; the non-accommodated share
+        -- the only thing the selector touches -- contributes nothing to it.
+
+    (c) The pin the selector owns, at roundoff and in the exact form the
+        registration intended: the two arms exchange the SAME wall energy at
+        every alpha (the diffuse-elastic return is elastic, so it moves no
+        energy across the surface), and at ``alpha = 0`` -- the pure
+        reflection limit, where (a)'s accommodated offset is switched off --
+        the net wall exchange is exactly zero under both.
+
+    NEGATIVE CONTROL, owned by this statement: solve the re-emission
+    temperature against the CONTINUUM relation ``<E> = 2 k T`` instead of
+    against the spectrum's discrete mean energy -- the analytic-target
+    booking the member is written to avoid. Statement (c) then fails: the
+    two arms stop exchanging the same wall energy and the alpha = 0 limit
+    stops being zero, while the particle ledger closes to the same roundoff
+    throughout.
+    """
+    literal = []
+    exact = []
+    same_arm = []
+    for alpha in WR_ALPHAS:
+        by_mode = {}
+        for mode in WR_MODES:
+            dvm = wr_box(alpha, mode)
+            led = dvm.update(1.0e-5, **zero_plasma(dvm))
+            net, offset, loss = wr_wall_rows(dvm, led)
+            by_mode[mode] = net
+            literal.append((alpha, mode, abs(net) / loss))
+            exact.append(
+                (alpha, mode, abs(net - offset) / max(abs(offset), 1e-300))
+            )
+        spec, diff = by_mode["specular"], by_mode["diffuse_elastic"]
+        same_arm.append(
+            (alpha, spec, diff, abs(spec - diff) / max(abs(spec), 1e-300))
+        )
+    zero_alpha = []
+    for mode in WR_MODES:
+        dvm = wr_box(0.0, mode)
+        led = dvm.update(1.0e-5, **zero_plasma(dvm))
+        net, _offset, loss = wr_wall_rows(dvm, led)
+        zero_alpha.append((mode, abs(net) / loss))
+
+    exact_ok = all(rel < ROUNDOFF_REL for _a, _m, rel in exact)
+    same_ok = all(rel < ROUNDOFF_REL for _a, _s, _d, rel in same_arm)
+    zero_ok = all(rel < ROUNDOFF_REL for _m, rel in zero_alpha)
+
+    # NEGATIVE CONTROL: the continuum target instead of the discrete one.
+    solve = TransientDVM._solve_wall_return_spectra
+
+    def continuum(self, e_bar):
+        from cablp.solvers._sim1d.physics.kinetic_dvm import (
+            M_HE as _M,
+            _cosine_wall_spectra,
+        )
+        return _cosine_wall_spectra(
+            self.g, np.sqrt(np.asarray(e_bar, dtype=float) / (2.0 * _M))
+        )
+
+    TransientDVM._solve_wall_return_spectra = continuum
+    try:
+        control_same = []
+        control_part = 0.0
+        for alpha in WR_ALPHAS:
+            nets = []
+            for mode in WR_MODES:
+                dvm = wr_box(alpha, mode)
+                led = dvm.update(1.0e-5, **zero_plasma(dvm))
+                nets.append(led["energy"]["net_surface_wall"])
+                control_part = max(
+                    control_part, abs(ledger_residual(led)["distribution_rel"])
+                )
+            control_same.append(
+                abs(nets[0] - nets[1]) / max(abs(nets[0]), 1e-300)
+            )
+        dvm = wr_box(0.0, "diffuse_elastic")
+        led = dvm.update(1.0e-5, **zero_plasma(dvm))
+        control_zero = abs(
+            led["energy"]["net_surface_wall"]
+        ) / led["energy"]["loss_wall"]
+    finally:
+        TransientDVM._solve_wall_return_spectra = solve
+    control_fails = (
+        max(control_same) > 1.0e-3
+        and control_zero > 1.0e-3
+        and control_part < ROUNDOFF_REL
+    )
+
+    ok = exact_ok and same_ok and zero_ok and control_fails
+    worst_literal = max(rel for _a, _m, rel in literal)
+    detail = (
+        "(a) REGISTERED PIN, as written -- |net wall energy exchange| / "
+        f"incident wall energy: worst {fmt(worst_literal)} over "
+        f"{sorted(set(a for a, _m, _r in literal))}, both arms. This is NOT "
+        "roundoff and is NOT a pass; it is the accommodated share's "
+        "velocity-resolution offset, present unchanged at the base commit "
+        "(see the k2_dvm_wall_detailed_balance_base_probe artifact)"
+    )
+    for alpha, mode, rel in literal:
+        detail += f"\n            alpha={alpha:g} [{mode}]: {fmt(rel)}"
+    detail += (
+        "\n        (b) that offset is EXACTLY the accommodated share: worst "
+        "|net - alpha (E_inc - N_inc E_wall_mean)| / offset = "
+        f"{fmt(max(rel for _a, _m, rel in exact))} (tol {fmt(ROUNDOFF_REL)}); "
+        "the non-accommodated share contributes nothing to it"
+    )
+    detail += "\n        (c) the pin this member owns, at roundoff:"
+    for alpha, spec, diff, rel in same_arm:
+        detail += (
+            f"\n            alpha={alpha:g}: net wall exchange specular "
+            f"{fmt(spec)} erg vs diffuse_elastic {fmt(diff)} erg, relative "
+            f"{fmt(rel)}"
+        )
+    for mode, rel in zero_alpha:
+        detail += (
+            f"\n            alpha=0 [{mode}] (pure reflection): "
+            f"|net| / incident = {fmt(rel)}"
+        )
+    detail += (
+        "\n        NEGATIVE CONTROL (continuum <E> = 2kT target instead of "
+        f"the discrete moment): the arms diverge by up to "
+        f"{fmt(max(control_same))} and the alpha=0 limit reads "
+        f"{fmt(control_zero)}, while the particle ledger still closes at "
+        f"{fmt(control_part)} -- caught only by statement (c) "
+        f"(control behaves as required: {control_fails})"
+    )
+    return (
+        "WR1 cylindrical-wall detailed balance: the reflection selector "
+        "moves no energy across the wall (the registered zero-net pin is "
+        "measured and does NOT hold -- see (a))",
+        ok,
+        detail,
+    )
+
+
+def gate_wr2():
+    """The selector is READ in-solver, and degenerates at full accommodation.
+
+    STATEMENT 2 of the B3 three. On the engaged production arm the two
+    values must reach the ENGINE (a selector the solver validates and then
+    drops is the silent-inert trap this repo refuses) and must actually move
+    the kinetic state, while both ledgers keep closing over several ticks.
+    The complementary half is the degeneracy the pair has by construction:
+    at ``alpha = 1`` there is no non-accommodated share to place, so the two
+    values must produce BIT-IDENTICAL distributions -- checked here both
+    in-solver and, on the standalone engine, under both annulus treatments,
+    since the jump arm places the same array as a wall launch.
+
+    NEGATIVE CONTROL, owned by this statement: drop the selector on the way
+    to the engine -- the un-threaded-config defect -- and the in-solver
+    trajectories become identical at an interior alpha, so "the arm is read"
+    fails here while every ledger statement above still passes.
+    """
+    keys = dict(
+        neutral_kinetic_dvm_nvz=16,
+        neutral_kinetic_dvm_nvp=6,
+        neutral_kinetic_dvm_accommodation=0.40,
+        **PRODUCTION_GEOMETRY_KEYS,
+    )
+
+    def run(mode, alpha=None, ticks=3):
+        over = dict(keys, neutral_kinetic_dvm_wall_reflection=mode)
+        if alpha is not None:
+            over["neutral_kinetic_dvm_accommodation"] = alpha
+        sim = make_sim(**over)
+        ledgers = run_until_updates(sim, ticks)
+        return sim, ledgers
+
+    sim_s, led_s = run("specular")
+    sim_d, led_d = run("diffuse_elastic")
+    threaded = (
+        sim_s._dvm.wall_reflection == "specular"
+        and sim_d._dvm.wall_reflection == "diffuse_elastic"
+    )
+    moved = not np.array_equal(sim_s._dvm.f_a, sim_d._dvm.f_a)
+    part = max(
+        abs(ledger_residual(led)["domain_rel"])
+        for led in led_s + led_d
+    )
+    ener = max(
+        abs(ledger_energy_residual(led)["domain_rel"])
+        for led in led_s + led_d
+    )
+
+    # Degeneracy at full accommodation, in-solver and on the bare engine.
+    one_s, _ = run("specular", alpha=1.0)
+    one_d, _ = run("diffuse_elastic", alpha=1.0)
+    degenerate = np.array_equal(
+        one_s._dvm.f_c, one_d._dvm.f_c
+    ) and np.array_equal(one_s._dvm.f_a, one_d._dvm.f_a)
+    bare = {}
+    for flights in ("rates", "bounded_chord"):
+        states = []
+        for mode in WR_MODES:
+            dvm = bare_dvm(
+                nz=10, nvz=16, nvp=6, accommodation=1.0,
+                wall_reflection=mode, annulus_flights=flights,
+            )
+            dvm.seed_from_density(
+                np.full(dvm.nz, 1.0e13), np.full(dvm.nz, 1.0e13)
+            )
+            for _ in range(3):
+                dvm.update(1.0e-5, **zero_plasma(dvm))
+            states.append((dvm.f_c.copy(), dvm.f_a.copy()))
+        bare[flights] = np.array_equal(
+            states[0][0], states[1][0]
+        ) and np.array_equal(states[0][1], states[1][1])
+
+    # NEGATIVE CONTROL: the selector never reaches the engine.
+    build = TransientDVM.__init__
+
+    def dropped(self, **kwargs):
+        kwargs.pop("wall_reflection", None)
+        return build(self, **kwargs)
+
+    TransientDVM.__init__ = dropped
+    try:
+        ctrl_s, _ = run("specular", ticks=2)
+        ctrl_d, _ = run("diffuse_elastic", ticks=2)
+    finally:
+        TransientDVM.__init__ = build
+    control_fails = np.array_equal(ctrl_s._dvm.f_a, ctrl_d._dvm.f_a)
+
+    ok = (
+        threaded
+        and moved
+        and part < ROUNDOFF_REL
+        and ener < ROUNDOFF_REL
+        and degenerate
+        and all(bare.values())
+        and control_fails
+    )
+    return (
+        "WR2 in-solver: the wall-reflection selector reaches the engine, "
+        "moves the state, and degenerates bit-exactly at alpha = 1",
+        ok,
+        f"3 ticks per arm on the production machine at alpha=0.40: engine "
+        f"carries the selected value ({threaded}), the two arms' annulus "
+        f"distributions differ ({moved}); worst domain residual particle "
+        f"{fmt(part)} / energy {fmt(ener)} (tol {fmt(ROUNDOFF_REL)})\n        "
+        f"alpha=1 degeneracy: in-solver bit-identical ({degenerate}); bare "
+        f"engine bit-identical under annulus_flights='rates' "
+        f"({bare['rates']}) and 'bounded_chord' ({bare['bounded_chord']})\n"
+        f"        NEGATIVE CONTROL (selector dropped on the way to the "
+        f"engine): the two arms' distributions become identical "
+        f"({control_fails}) -- the silent-inert defect, caught only here",
+    )
+
+
+def gate_wr3():
+    """The diffuse-elastic return conserves count, energy and axial momentum.
+
+    STATEMENT 3 of the B3 three, with EVERY channel armed at once -- pumping
+    at both ends, an anode mesh, a wall, a puff, a live plasma and all four
+    counted boundary channels. Per tick, on the array the engine actually
+    placed (``TransientDVM.last_wall_return``, in particles per bin):
+
+      * its COUNT is ``(1 - alpha)`` times the wall landings exactly;
+      * its ENERGY is ``(1 - alpha)`` times the incident wall energy exactly,
+        both sides taken as DISCRETE moments of the bins -- which is what
+        makes the reflection elastic rather than approximately so;
+      * its net ``v_z`` is zero to roundoff, so the surface hands the gas no
+        axial momentum;
+
+    and both ledgers close at the tolerance the particle ledger is held to.
+
+    NEGATIVE CONTROL, owned by this statement: book the re-emission at the
+    WALL MEAN energy -- the analytic-target booking, and the one a
+    ``birth_wall_reflected`` row would take if it were written like the
+    accommodated one. Not one particle moves, so WR1 and WR2 and every
+    particle statement in this suite are blind to it, while the energy
+    ledger's residual leaves roundoff and the mis-booked row moves by more
+    than a tenth of itself.
+    """
+    def armed(alpha, mode, nz=12):
+        dvm = TransientDVM(
+            geometry=uniform_tube(nz),
+            nvz=16,
+            nvp=6,
+            s_L=0.3,
+            s_R=0.3,
+            accommodation=alpha,
+            wall_reflection=mode,
+            exchange_model=EXCHANGE_MODEL,
+            mesh_face=nz // 2,
+            transparency=0.642,
+        )
+        dvm.seed_from_density(np.full(nz, 1.0e13), np.full(nz, 1.0e13))
+        rows = b1_fed_rows(dvm)
+        puff = np.zeros(nz)
+        puff[3] = 3.0e17
+        led = dvm.update(
+            CADENCE_S,
+            source_counts=rows,
+            sources={"puff": puff / CADENCE_S},
+            T_s_K=B1_T_S_K,
+            **geometry_plasma(nz),
+        )
+        return dvm, led
+
+    rows = []
+    ok = True
+    for alpha in WR_ALPHAS:
+        dvm, led = armed(alpha, "diffuse_elastic")
+        wr = dvm.last_wall_return
+        want_n = (1.0 - alpha) * led["loss_wall"]
+        want_e = (1.0 - alpha) * led["energy"]["loss_wall"]
+        got_n = float(wr.sum())
+        got_e = dvm._energy_of(wr)
+        vz = float((wr * dvm.g.VZ[None, :, :]).sum())
+        vz_scale = float((wr * np.abs(dvm.g.VZ[None, :, :])).sum())
+        n_rel = abs(got_n - want_n) / want_n
+        e_rel = abs(got_e - want_e) / want_e
+        vz_rel = abs(vz) / max(vz_scale, 1e-300)
+        part = abs(ledger_residual(led)["distribution_rel"])
+        part_dom = abs(ledger_residual(led)["domain_rel"])
+        ener = abs(ledger_energy_residual(led)["distribution_rel"])
+        ener_dom = abs(ledger_energy_residual(led)["domain_rel"])
+        rows.append((alpha, got_n, n_rel, e_rel, vz_rel, part, ener))
+        ok = ok and max(
+            n_rel, e_rel, vz_rel, part, part_dom, ener, ener_dom
+        ) < ROUNDOFF_REL
+
+    # NEGATIVE CONTROL: the reflected row booked at the WALL MEAN.
+    book = TransientDVM._book_energy_ledger
+
+    def wall_mean(self, **kwargs):
+        out = book(self, **kwargs)
+        was = out["birth_wall_reflected"]
+        now = (1.0 - kwargs["alpha"]) * float(
+            kwargs["N_wall"].sum()
+        ) * self.E_wall_mean
+        out["birth_wall_reflected"] = now
+        out["net_surface_wall"] = out["net_surface_wall"] + was - now
+        return out
+
+    clean_dvm, clean_led = armed(0.40, "diffuse_elastic")
+    TransientDVM._book_energy_ledger = wall_mean
+    try:
+        _, wrong_led = armed(0.40, "diffuse_elastic")
+    finally:
+        TransientDVM._book_energy_ledger = book
+    counts_unchanged = all(
+        wrong_led[f"birth_{name}"] == clean_led[f"birth_{name}"]
+        for name in LEDGER_BIRTH_CHANNELS
+    )
+    wrong_part = abs(ledger_residual(wrong_led)["distribution_rel"])
+    wrong_ener = abs(ledger_energy_residual(wrong_led)["distribution_rel"])
+    row_moved = abs(
+        wrong_led["energy"]["birth_wall_reflected"]
+        - clean_led["energy"]["birth_wall_reflected"]
+    ) / abs(clean_led["energy"]["birth_wall_reflected"])
+    control_fails = (
+        counts_unchanged
+        and wrong_part < ROUNDOFF_REL
+        and wrong_ener > 1.0e-6
+        and row_moved > 0.1
+    )
+    ok = ok and control_fails
+
+    detail = (
+        "every channel armed (both ends pumping, anode mesh, wall, puff, "
+        "live plasma, all four counted channels):"
+    )
+    for alpha, got_n, n_rel, e_rel, vz_rel, part, ener in rows:
+        detail += (
+            f"\n        alpha={alpha:g}: re-emitted {fmt(got_n)} particles, "
+            f"count rel {fmt(n_rel)}, energy rel {fmt(e_rel)}, net v_z "
+            f"{fmt(vz_rel)}; ledger residual particle {fmt(part)} / energy "
+            f"{fmt(ener)} (tol {fmt(ROUNDOFF_REL)})"
+        )
+    detail += (
+        f"\n        NEGATIVE CONTROL (re-emission booked at the WALL MEAN "
+        f"energy): every birth_* particle count unchanged "
+        f"({counts_unchanged}) and the particle ledger still closes at "
+        f"{fmt(wrong_part)}, while birth_wall_reflected moves by "
+        f"{row_moved:.3f} of itself and the energy residual goes to "
+        f"{fmt(wrong_ener)} (control behaves as required: {control_fails})"
+    )
+    return (
+        "WR3 diffuse-elastic wall return: count, energy and net v_z exact, "
+        "every channel armed",
+        ok,
+        detail,
+    )
+
+
 # ------------------------------------------------------- B2 closed faces
 
 #: [B2] Which interior face the synthetic closed-face tubes carry. Chosen off
@@ -3542,7 +4048,8 @@ CONSERVATION_GATES = ("gate_i1", "gate_i2", "gate_i4", "gate_i5",
                       "gate_c1", "gate_c2", "gate_c3", "gate_c4",
                       "gate_d3", "gate_d4", "gate_d5",
                       "gate_b1", "gate_b3",
-                      "gate_cf1", "gate_cf3")
+                      "gate_cf1", "gate_cf3",
+                      "gate_wr1", "gate_wr3")
 
 
 def main():
@@ -3580,6 +4087,9 @@ def main():
         gate_cf1,
         gate_cf2,
         gate_cf3,
+        gate_wr1,
+        gate_wr2,
+        gate_wr3,
         gate_x1,
     ]
     gates += [

@@ -77,6 +77,7 @@ from .physics.kinetic_dvm import (
     ELASTIC_MODELS as KINETIC_DVM_ELASTIC_MODELS,
     EXCHANGE_MODELS as KINETIC_DVM_EXCHANGE_MODELS,
     TRANSFER_HOLDS as KINETIC_DVM_TRANSFER_HOLDS,
+    WALL_REFLECTION_MODELS as KINETIC_DVM_WALL_REFLECTION_MODELS,
     TransientDVM,
 )
 from .physics.kinetic_neutrals import (
@@ -1157,6 +1158,25 @@ class LAPDSim1D:
                     "'rates' anywhere, or 'bounded_chord' with "
                     "neutral_model='kinetic_dvm' and the neutral_two_zone "
                     f"flag (got {flights!r})"
+                )
+            # Same statement for the cylindrical wall's reflection spectrum:
+            # it selects what the transient DVM returns its non-accommodated
+            # wall share on, and no other neutral model has such a share.
+            reflection = str(
+                self._input_dict.get(
+                    "neutral_kinetic_dvm_wall_reflection",
+                    KINETIC_DVM_WALL_REFLECTION_MODELS[0],
+                )
+            )
+            if reflection != KINETIC_DVM_WALL_REFLECTION_MODELS[0]:
+                raise ValueError(
+                    "neutral_kinetic_dvm_wall_reflection selects the "
+                    "spectrum the transient DVM returns its non-accommodated "
+                    "cylindrical-wall share on and has no meaning under "
+                    f"neutral_model={self._neutral_model!r}. Accepted: "
+                    f"{KINETIC_DVM_WALL_REFLECTION_MODELS[0]!r} anywhere, or "
+                    "'diffuse_elastic' with neutral_model='kinetic_dvm' and "
+                    f"the neutral_two_zone flag (got {reflection!r})"
                 )
             # Same statement for the transfer hold: it selects how the
             # plasma integrates the DVM's tick-booked coupling term, and
@@ -3948,6 +3968,17 @@ class LAPDSim1D:
                 "neutral_kinetic_dvm_accommodation is a surface property in "
                 f"[0, 1] (got {accommodation})"
             )
+        reflection = str(
+            self._input_dict.get(
+                "neutral_kinetic_dvm_wall_reflection",
+                KINETIC_DVM_WALL_REFLECTION_MODELS[0],
+            )
+        )
+        if reflection not in KINETIC_DVM_WALL_REFLECTION_MODELS:
+            raise ValueError(
+                "neutral_kinetic_dvm_wall_reflection must be one of "
+                f"{KINETIC_DVM_WALL_REFLECTION_MODELS} (got {reflection!r})"
+            )
         elastic = str(
             self._input_dict.get("neutral_kinetic_dvm_elastic", "phelps_iso")
         )
@@ -4072,6 +4103,7 @@ class LAPDSim1D:
             nvz=int(self._input_dict.get("neutral_kinetic_dvm_nvz", 48)),
             nvp=int(self._input_dict.get("neutral_kinetic_dvm_nvp", 12)),
             accommodation=accommodation,
+            wall_reflection=reflection,
             elastic_model=elastic,
             exchange_model=exchange,
             annulus_flights=flights,

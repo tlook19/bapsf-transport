@@ -478,6 +478,52 @@ The `"zoh"` branch takes the pre-hold expressions unchanged, books no hold
 debt, and exists so a pre-fix artifact can be reproduced and so the
 instability above can be exhibited on demand rather than remembered.
 
+### The energy-matched wall return (`neutral_kinetic_dvm_wall_reflection`)
+
+At the cylindrical wall the transient DVM splits every landing into an
+accommodated share `α_E` — re-emitted on the cosine spectrum
+`wall_emission_spectrum(T_wall)`, hence at the wall's own mean energy — and a
+non-accommodated share `1 − α_E`. `"specular"` returns that share in its
+incident bin, which on the axisymmetric `(v_z, v_⊥)` grid is exact: a
+specular reflection off the cylinder reverses only the unresolved radial
+component.
+
+`"diffuse_elastic"` returns the same count on the same cosine SHAPE, at a
+temperature that must be *solved* rather than named, because the spectrum has
+to carry the retained share's own incident mean energy per atom
+`ē = E_incident / N_incident` — that is what makes it elastic. The discrete
+mean energy of the cosine spectrum,
+
+```
+E(s) = Σ_jk  f_jk(s) · ½ m (v_z,j² + v_⊥,k²),      s = sqrt(k T / m),
+```
+
+rises monotonically with `s`, so the inverse is a one-parameter root find. It
+is taken as a bracketed bisection, per cell: seeded at the continuum relation
+`⟨E⟩ = 2 k T = 2 m s²`, bracketed outward by halving and doubling, then
+bisected until the bracket reaches the floating-point resolution of its own
+endpoints. The target is the DISCRETE moment throughout — never the continuum
+value the seed comes from — and the accepted spectrum is checked against `ē`
+before it is used.
+
+`E(s)` SATURATES once the spectrum outruns the velocity grid's outermost
+bins, so a target above that value has no solution at all. The bracket
+search, the bisection and the final agreement check each raise rather than
+returning a spectrum at an energy the caller did not ask for: a re-emission
+spectrum booked at the wrong energy is a counted-channel error, and the
+suite's WR gates show it is invisible to every particle-side statement.
+
+The energy LEDGER books this share as the kinetic moment of the array that
+was actually placed, not as `(1 − α_E)·E_incident`, so the ledger closes by
+construction rather than by the solve's convergence; the two agree to
+roundoff, which is the gated statement.
+
+`"specular"` is the shipped default and reduces to the arithmetic the arm
+carried before this member existed, so the selector is bit-exact off; the two
+values also degenerate at `α_E = 1`, where there is no share to place. **The
+golden is unaffected by construction**: the moment neutral path never builds
+a DVM.
+
 ### The counted ionization debit, and why it is taken last
 
 The counted-particle handshake makes the plasma and the neutral arm destroy

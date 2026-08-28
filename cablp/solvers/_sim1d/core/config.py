@@ -907,14 +907,59 @@ def model_mode_defaults():
         Number of perpendicular-speed bins in that same grid (positive-only,
         carrying the 2D perpendicular speed measure).
     neutral_kinetic_dvm_accommodation:
-        Thermal accommodation coefficient of the chamber surfaces, in
-        ``[0, 1]``. The accommodated fraction is re-emitted cosine-distributed
-        at the wall temperature (300 K, or the live cathode surface
-        temperature on the cathode-adjacent end); the remaining fraction is
-        reflected at the incident energy, which on this axisymmetric grid is
-        bin-preserving at the cylindrical wall and an exact bin mirror at an
-        end wall. A boxed surface property, never a fit parameter. Raises at
+        The THERMAL (energy) accommodation coefficient ``alpha_E`` of the
+        vessel's room-temperature technical-metal surfaces, in ``[0, 1]``.
+        Under this engine's Maxwell specular-diffuse kernel the diffuse
+        fraction IS ``alpha_E`` exactly: the accommodated share re-emits
+        cosine-distributed at the surface temperature and therefore carries
+        that surface's own mean energy, while the remainder exchanges no
+        energy at all, so one visit transfers ``alpha_E`` of the available
+        energy difference by construction.
+
+        It is read at the CYLINDER and the END PLATES only. The anode mesh
+        and the interior closed faces re-emit everything they intercept at a
+        surface temperature -- they are fully accommodating by construction
+        and do not read this key. It applies uniformly to every wall
+        incidence, including the charge-exchange tail: the kernel makes no
+        distinction by incident energy.
+
+        The non-accommodated share is returned at the incident energy. At
+        the cylinder its spectrum is chosen by
+        ``neutral_kinetic_dvm_wall_reflection``; at an end wall it is always
+        the exact ``v_z`` bin mirror, which the symmetric stretched axis
+        represents without re-projection error.
+
+        Behavioural note on the LEFT end: the accommodated share there
+        re-emits at the live cathode surface temperature ``T_s`` rather than
+        at the wall temperature, so a room-temperature coefficient is being
+        extrapolated to a hot surface. That end plate is area-subdominant
+        against the cylinder.
+
+        A boxed surface property, never a fit parameter. Raises at
         construction outside ``[0, 1]``.
+    neutral_kinetic_dvm_wall_reflection:
+        Spectrum the NON-accommodated ``(1 - alpha_E)`` share is returned on
+        at the CYLINDRICAL wall of the transient DVM. ``"specular"`` returns
+        it in its incident bin -- on the axisymmetric ``(v_z, v_perp)`` grid
+        a specular reflection off the cylinder reverses only the unresolved
+        radial component -- so the share keeps its energy AND its axial
+        velocity. ``"diffuse_elastic"`` returns the same count, per cell, on
+        a cosine-wall spectrum whose temperature parameter is solved so that
+        the spectrum's DISCRETE mean energy equals the retained share's own
+        incident mean energy per atom: the count and the energy are both
+        exact and the return carries zero net axial momentum, so the surface
+        randomizes the direction while exchanging no energy. The solve is a
+        bracketed bisection on a monotone function and RAISES at the tick
+        rather than falling back when the target lies outside what the
+        velocity grid can re-emit.
+
+        The END plates keep the ``v_z`` mirror under both values -- that
+        mirror already fully accommodates the directed axial momentum -- and
+        the anode mesh and the interior closed faces never read this key.
+        The two values degenerate at ``alpha_E = 1``, where there is no
+        share to place. Inert unless ``neutral_model = "kinetic_dvm"``;
+        selecting ``"diffuse_elastic"`` under any other neutral model, or
+        any other value, raises at construction.
     neutral_kinetic_dvm_elastic:
         Polarization-elastic ion-neutral channel of the transient DVM.
         ``"phelps_iso"`` adds a BGK-like relaxation toward the local ion
@@ -1109,6 +1154,7 @@ def model_mode_defaults():
         "neutral_kinetic_dvm_nvz": 48,
         "neutral_kinetic_dvm_nvp": 12,
         "neutral_kinetic_dvm_accommodation": 1.0,
+        "neutral_kinetic_dvm_wall_reflection": "specular",
         "neutral_kinetic_dvm_elastic": "phelps_iso",
         "neutral_kinetic_dvm_exchange": "cauchy_chord",
         "neutral_kinetic_dvm_annulus_flights": "rates",

@@ -105,6 +105,7 @@ PLASMA volume, which is exactly the column volume.
 """
 
 import numpy as np
+from scipy.special import erf as _erf
 
 from cablp.atomic.cross_sections import (
     phelps_he_backscatter_cm2,
@@ -144,6 +145,32 @@ FLIGHT_CLASSES = ("ww", "wi", "io")
 # ``TransientDVM`` for the expressions and
 # ``scripts/k2_dvm_exchange_measured.txt`` for the measurement.
 EXCHANGE_MODELS = ("cauchy_chord", "geometric")
+
+# What the NON-accommodated share does at the CYLINDRICAL wall. ``"specular"``
+# returns it in its incident bin (on this axisymmetric grid a specular
+# reflection reverses only the unresolved radial component, so the bin is
+# unchanged); ``"diffuse_elastic"`` returns it on a cosine-wall spectrum
+# whose temperature parameter is solved so that the spectrum's DISCRETE mean
+# energy equals the retained share's incident mean, which randomizes the
+# direction while exchanging no energy with the surface. The first entry is
+# the shipped default. The END plates keep the specular mirror under both
+# values -- an end-wall ``v_z`` mirror already fully accommodates the
+# directed axial momentum -- and the anode mesh and the interior closed faces
+# are fully accommodating by construction and never read this. See
+# ``TransientDVM._wall_return_counts``.
+WALL_REFLECTION_MODELS = ("specular", "diffuse_elastic")
+
+# Guards on the ``"diffuse_elastic"`` one-parameter re-emission solve. The
+# discrete mean energy of the cosine-wall spectrum increases monotonically
+# with the thermal speed and SATURATES once the spectrum outruns the velocity
+# grid's outermost bins, so a target above that saturation value has no
+# solution at all: the bracket search and the bisection both carry a hard
+# iteration cap and RAISE when they hit it rather than returning a spectrum
+# at the wrong energy.
+WALL_ENERGY_SOLVE_MAX_BRACKET = 60
+WALL_ENERGY_SOLVE_MAX_ITERS = 200
+#: Relative agreement the solved spectrum's discrete mean energy must reach.
+WALL_ENERGY_SOLVE_REL_TOL = 1.0e-12
 
 # How the PLASMA applies the tick-booked CX/elastic transfer between neutral
 # clock ticks. The pair is a linear relaxation of the fluid momentum and ion
@@ -274,6 +301,31 @@ class TransientDVM:
     symmetric stretched axis. Both are therefore represented exactly, with
     no re-projection error.
 
+    ``wall_reflection`` selects what the NON-accommodated ``(1 - alpha)``
+    share does at the CYLINDRICAL wall, and nowhere else: the end plates
+    keep the ``v_z`` mirror under both values (that mirror already fully
+    accommodates the directed axial momentum), and the anode mesh and the
+    interior closed faces re-emit everything they intercept at a surface
+    temperature, so they are fully accommodating by construction and do not
+    read this at all.
+
+    ``"specular"``
+        the bin-preserving reflection described above.
+
+    ``"diffuse_elastic"``
+        the same count, per cell, returned on a cosine-wall spectrum whose
+        temperature parameter is solved so that the spectrum's DISCRETE mean
+        energy equals the retained share's own incident mean energy per
+        atom. Count and energy are therefore both exact and the return
+        carries zero net axial momentum: the surface randomizes the
+        direction and exchanges no energy, which is the elastic-diffuse
+        limit. The solve is a bracketed bisection on a monotone function and
+        RAISES rather than falling back when the target lies outside what
+        the velocity grid can re-emit (see
+        :meth:`_solve_wall_return_spectra`).
+
+    The two degenerate at ``alpha == 1``, where there is no share to place.
+
     ``elastic_model`` selects the polarization-elastic channel:
     ``"phelps_iso"`` adds a BGK-like relaxation toward the local ion
     Maxwellian at HALF the Phelps isotropic rate (the isotropic
@@ -354,6 +406,7 @@ class TransientDVM:
         nvz=48,
         nvp=12,
         accommodation=1.0,
+        wall_reflection="specular",
         elastic_model="phelps_iso",
         exchange_model="cauchy_chord",
         annulus_flights="rates",
@@ -382,7 +435,13 @@ class TransientDVM:
                 f"annulus_flights must be one of {ANNULUS_FLIGHT_MODELS} "
                 f"(got {annulus_flights!r})"
             )
+        if wall_reflection not in WALL_REFLECTION_MODELS:
+            raise ValueError(
+                f"wall_reflection must be one of {WALL_REFLECTION_MODELS} "
+                f"(got {wall_reflection!r})"
+            )
         self.accommodation = float(accommodation)
+        self.wall_reflection = str(wall_reflection)
         self.elastic_model = str(elastic_model)
         self.exchange_model = str(exchange_model)
         self.annulus_flights = str(annulus_flights)
@@ -584,6 +643,12 @@ class TransientDVM:
         # Last update's closed-face traffic in PARTICLES per cell, keyed by
         # the direction the blocked particles were re-emitted into.
         self.last_closed_counts = None
+        # Last update's NON-accommodated cylindrical-wall return, in PARTICLES
+        # per (cell, v_z bin, v_perp bin). Published because the return's
+        # spectrum -- its count, its energy and its net v_z -- is the whole
+        # content of the ``wall_reflection`` selector and is otherwise not
+        # separable from the accommodated share once both are in ``f_a``.
+        self.last_wall_return = None
 
         # ---- deferred transfer ledger (the K2d floor-aware relax)
         #
@@ -874,6 +939,132 @@ class TransientDVM:
         are accepted.
         """
         return float((counts * self.E_bin).sum())
+
+    def _wall_return_counts(self, L_wall, N_wall, alpha):
+        """Return the NON-accommodated cylindrical-wall share, in PARTICLES.
+
+        ``L_wall`` is this tick's wall landings per ``(cell, v_z, v_perp)``
+        and ``N_wall`` their per-cell sum; ``alpha`` is the thermal
+        accommodation coefficient, so the share this method places is
+        ``(1 - alpha)`` of both. The COUNT is that share exactly under either
+        value of ``wall_reflection``; what the selector changes is the
+        spectrum it comes back on.
+
+        ``"specular"``
+            the incident array scaled by ``(1 - alpha)``. On this
+            axisymmetric grid a specular reflection off the cylinder
+            reverses only the unresolved radial component of ``v_perp``, so
+            the bin -- and hence the energy and the axial velocity -- is
+            unchanged.
+
+        ``"diffuse_elastic"``
+            the same count, per cell, on a cosine-wall spectrum whose
+            temperature parameter is solved so that the spectrum's DISCRETE
+            mean energy equals the retained share's own incident mean energy
+            per atom. The direction is randomized (the spectrum is symmetric
+            in ``v_z``, so the return carries zero net axial momentum) while
+            the energy handed to the surface by this share is zero, which is
+            what makes the reflection elastic. Cells with no landings
+            re-emit nothing.
+
+        At ``alpha == 1`` there is no share to place and both values return
+        the same array of exact zeros, so the pair degenerates.
+        """
+        retained = (1.0 - alpha) * L_wall
+        if self.wall_reflection == "specular" or alpha >= 1.0:
+            return retained
+        live = np.flatnonzero(N_wall > 0.0)
+        if live.size == 0:
+            return retained
+        incident = (L_wall[live] * self.E_bin).sum(axis=(1, 2))
+        e_bar = incident / N_wall[live]
+        spectra = self._solve_wall_return_spectra(e_bar)
+        out = np.zeros_like(retained)
+        out[live] = ((1.0 - alpha) * N_wall[live])[:, None, None] * spectra
+        return out
+
+    def _solve_wall_return_spectra(self, e_bar):
+        """Return cosine-wall spectra at the requested DISCRETE mean energies.
+
+        ``e_bar`` is one target kinetic energy per atom [erg] per cell. The
+        discrete mean energy of :func:`_cosine_wall_spectra` rises
+        monotonically with the thermal speed ``s``, so the inverse is a
+        one-parameter bracketed bisection: seeded at the continuum relation
+        ``<E> = 2 k T = 2 m s^2``, bracketed outward by halving and doubling,
+        then bisected to the floating-point resolution of the bracket.
+
+        The mean energy SATURATES once the spectrum outruns the grid's
+        outermost bins, so a target above the saturation value has no
+        solution. That is a misbooked launch spectrum, not a tolerance
+        question: the bracket search, the bisection and the final agreement
+        check each raise ``ValueError`` naming the offending cells rather
+        than returning a spectrum at an energy the caller did not ask for.
+        """
+        e_bar = np.asarray(e_bar, dtype=float)
+        if not np.all(np.isfinite(e_bar)) or np.any(e_bar <= 0.0):
+            raise ValueError(
+                "the energy-matched wall return needs a positive finite "
+                "incident mean energy per cell (got "
+                f"min {np.min(e_bar)!r}, max {np.max(e_bar)!r})"
+            )
+
+        def mean_energy(s):
+            return (_cosine_wall_spectra(self.g, s) * self.E_bin).sum(
+                axis=(1, 2)
+            )
+
+        s0 = np.sqrt(e_bar / (2.0 * M_HE))
+        lo = 0.5 * s0
+        hi = 2.0 * s0
+        for _ in range(WALL_ENERGY_SOLVE_MAX_BRACKET):
+            low = mean_energy(lo) > e_bar
+            if not np.any(low):
+                break
+            lo = np.where(low, 0.5 * lo, lo)
+        else:
+            raise ValueError(
+                "the energy-matched wall return could not bracket the "
+                f"requested mean energy from BELOW in "
+                f"{WALL_ENERGY_SOLVE_MAX_BRACKET} halvings"
+            )
+        for _ in range(WALL_ENERGY_SOLVE_MAX_BRACKET):
+            high = mean_energy(hi) < e_bar
+            if not np.any(high):
+                break
+            hi = np.where(high, 2.0 * hi, hi)
+        else:
+            bad = np.flatnonzero(mean_energy(hi) < e_bar)
+            raise ValueError(
+                "the energy-matched wall return could not bracket the "
+                "requested mean energy from ABOVE: the cosine-wall spectrum's "
+                "discrete mean energy saturates on this velocity grid, so "
+                f"{bad.size} cell(s) ask for more than the grid can re-emit "
+                f"(first offenders {bad[:8].tolist()}, targets "
+                f"{e_bar[bad[:8]].tolist()} erg). Widen the grid "
+                "(neutral_kinetic_dvm_nvz / _nvp, or the velocity cap) or "
+                "select wall_reflection='specular'"
+            )
+        for _ in range(WALL_ENERGY_SOLVE_MAX_ITERS):
+            if np.all(hi - lo <= 4.0 * np.finfo(float).eps * hi):
+                break
+            mid = 0.5 * (lo + hi)
+            below = mean_energy(mid) < e_bar
+            lo = np.where(below, mid, lo)
+            hi = np.where(below, hi, mid)
+        spectra = _cosine_wall_spectra(self.g, 0.5 * (lo + hi))
+        got = (spectra * self.E_bin).sum(axis=(1, 2))
+        rel = np.abs(got - e_bar) / e_bar
+        if np.any(rel > WALL_ENERGY_SOLVE_REL_TOL):
+            bad = np.flatnonzero(rel > WALL_ENERGY_SOLVE_REL_TOL)
+            raise ValueError(
+                "the energy-matched wall return did not converge in "
+                f"{WALL_ENERGY_SOLVE_MAX_ITERS} bisections: {bad.size} "
+                f"cell(s) miss their incident mean energy by up to "
+                f"{float(np.max(rel)):.3e} relative (tolerance "
+                f"{WALL_ENERGY_SOLVE_REL_TOL:.1e}, first offenders "
+                f"{bad[:8].tolist()})"
+            )
+        return spectra
 
     def f_energy(self):
         """Kinetic energy [erg] carried by the distributions themselves."""
@@ -1428,6 +1619,13 @@ class TransientDVM:
         L_ion = L_ion + ion["correction"]
 
         alpha = self.accommodation
+        # The non-accommodated cylindrical-wall share, in PARTICLES: the same
+        # count under either ``wall_reflection``, on the spectrum that
+        # selector chooses. Taken once here because both annulus treatments
+        # place the identical array -- the jump arm as a wall LAUNCH, the
+        # rate arm as a volume birth.
+        wall_return = self._wall_return_counts(L_wall, N_wall, alpha)
+        self.last_wall_return = wall_return
         if jump:
             # Every annulus return is a LAUNCH, in particles: accommodated
             # at the cosine-wall spectrum, reflected bin-preserving (the
@@ -1440,7 +1638,7 @@ class TransientDVM:
             # here too, already carrying their return spectra.
             launch_wall = (
                 alpha * N_wall[:, None, None] * self.M_wall[None, :, :]
-                + (1.0 - alpha) * L_wall
+                + wall_return
                 + mesh_a[:, None, None] * self.M_wall[None, :, :]
             )
             if puff.ndim:
@@ -1470,11 +1668,13 @@ class TransientDVM:
                 alpha * (N_wall * inv_va)[:, None, None]
                 * self.M_wall[None, :, :]
             )
-            # Specular reflection off the cylindrical wall reverses only the
-            # radial direction, which this axisymmetric grid does not
-            # resolve: the bin is unchanged, so the reflected fraction
-            # returns exactly where it left.
-            birth_wall_ref = (1.0 - alpha) * L_wall * inv_va[:, None, None]
+            # The non-accommodated share, on the spectrum ``wall_reflection``
+            # chose: under ``"specular"`` its own incident bins (the
+            # cylinder reverses only the radial direction, which this
+            # axisymmetric grid does not resolve, so the fraction returns
+            # exactly where it left), under ``"diffuse_elastic"`` an
+            # energy-matched cosine spectrum.
+            birth_wall_ref = wall_return * inv_va[:, None, None]
             f_a += birth_wall_acc + birth_wall_ref
 
         # Anode-mesh interception re-emits at the wall temperature in the
@@ -1554,6 +1754,7 @@ class TransientDVM:
             L_el=L_el,
             L_wall=L_wall,
             N_wall=N_wall,
+            wall_return=wall_return,
             N_cx=N_cx,
             N_el=N_el,
             M_i=M_i,
@@ -1777,6 +1978,7 @@ class TransientDVM:
         L_el,
         L_wall,
         N_wall,
+        wall_return,
         N_cx,
         N_el,
         M_i,
@@ -1849,11 +2051,18 @@ class TransientDVM:
         e_birth_wall_accommodated = (
             alpha * float(N_wall.sum()) * self.E_wall_mean
         )
-        # The reflected share keeps its incident bin, hence its incident
-        # energy: the cylindrical wall reverses only the unresolved radial
-        # component and an end wall reverses v_z, which the symmetric axis
-        # mirrors exactly.
-        e_birth_wall_reflected = (1.0 - alpha) * e_loss_wall
+        # Under ``wall_reflection = "specular"`` the non-accommodated share
+        # keeps its incident bin, hence its incident energy: the cylindrical
+        # wall reverses only the unresolved radial component and an end wall
+        # reverses v_z, which the symmetric axis mirrors exactly. Under
+        # ``"diffuse_elastic"`` it comes back on a solved spectrum instead,
+        # so the row is the moment of the ARRAY that was actually placed --
+        # never of the energy the solve was aiming at, which is what keeps
+        # the ledger closed by construction rather than by convergence.
+        if self.wall_reflection == "specular":
+            e_birth_wall_reflected = (1.0 - alpha) * e_loss_wall
+        else:
+            e_birth_wall_reflected = self._energy_of(wall_return)
         e_birth_mesh_reemit = (
             float(mesh_c.sum()) + float(mesh_a.sum())
         ) * self.E_wall_mean
@@ -2397,6 +2606,55 @@ def _end_return(outgoing, sticking, accommodation, mirror, spectrum):
     reflected = (1.0 - float(accommodation)) * back[mirror, :]
     accommodated = float(accommodation) * total * spectrum
     return reflected + accommodated
+
+
+def _cosine_wall_spectra(g, s):
+    """Return cosine-wall re-emission spectra for an array of thermal speeds.
+
+    Array transcription of :meth:`VGrid.wall_emission_spectrum` over
+    ``s = sqrt(k T / m)`` [cm/s]: the same error-function ``v_z`` bin masses,
+    the same 64-node trapezoid of ``vp^2 exp(-vp^2 / 2 s^2)`` on each
+    perpendicular bin, and the same normalization to unit sum. Returns one
+    spectrum per entry of ``s``, shape ``(s.size, nvz, nvp)``.
+
+    It exists because the ``"diffuse_elastic"`` wall return solves a
+    temperature PER CELL and evaluates the spectrum tens of times per solve;
+    the scalar helper's per-bin Python quadrature makes that unaffordable on
+    a device mesh. It is the same expression, not a second model of the wall.
+
+    Raises ``ValueError`` when any ``s`` is not positive and finite, or when
+    a constructed spectrum has no mass to normalize -- a spectrum that
+    silently normalized to nothing would re-emit the wall's whole return at
+    the wrong energy.
+    """
+    s = np.atleast_1d(np.asarray(s, dtype=float))
+    if not np.all(np.isfinite(s)) or np.any(s <= 0.0):
+        raise ValueError(
+            "the cosine-wall re-emission spectrum needs a positive finite "
+            f"thermal speed per cell (got min {np.min(s)!r}, "
+            f"max {np.max(s)!r})"
+        )
+    sc = s[:, None]
+    ez = g.vz_edges[None, :] / (sc * np.sqrt(2.0))
+    wz = 0.5 * np.diff(_erf(ez), axis=-1)
+    x = np.stack([
+        np.linspace(g.vp_edges[k], g.vp_edges[k + 1], 64)
+        for k in range(g.nvp)
+    ])
+    y = x[None, :, :] ** 2 * np.exp(
+        -0.5 * (x[None, :, :] / s[:, None, None]) ** 2
+    )
+    wp = np.trapezoid(y, x=np.broadcast_to(x, y.shape), axis=-1)
+    f = wz[:, :, None] * wp[:, None, :]
+    total = f.sum(axis=(1, 2))
+    if not np.all(np.isfinite(total)) or np.any(total <= 0.0):
+        raise ValueError(
+            "the cosine-wall re-emission spectrum construction produced no "
+            f"normalizable mass (worst bin total {np.min(total)!r}); the "
+            "requested temperature lies outside what this velocity grid "
+            "resolves"
+        )
+    return f / total[:, None, None]
 
 
 def _drift(f, g):
