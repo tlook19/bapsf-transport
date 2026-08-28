@@ -20,6 +20,41 @@ from ..constants import (
     m_e_cgs,
 )
 
+# ── THE HYDROGEN QUARANTINE (ruled 2026-08-27) ───────────────────────────────
+#
+# This module's hydrogen arms RAISE. They are quarantined, not removed: the
+# code and every coefficient table stay exactly where they are, so a validated
+# re-opening deletes a guard rather than rewriting an arm.
+#
+# Two independent reasons, and either alone is sufficient:
+#
+#   1. UNTESTED DOMAIN. The solver is hard helium-only (D3, 2026-08-21):
+#      LAPDSim1D refuses gas_type != "He" at construction, so no hydrogen arm
+#      here has a solver-path consumer and none is covered by the golden, the
+#      digest gate or the smoke suite. Every H result this module can produce
+#      is therefore unexercised by any gate in the repository.
+#
+#   2. ONE CORRUPT TABLE. ``A_R318`` -- the H + H+ charge-exchange fit --
+#      carries a DUPLICATED coefficient: row 1 repeats 9.536923957409e-03 and
+#      so has 10 entries where every other row of A_R318, and every row of the
+#      helium A_R531, has 9. ``heavy_reaction`` iterates ``range(len(A[i]))``,
+#      so the ragged row silently contributes an extra polynomial term rather
+#      than failing; the import-time ``_cx_H`` table is built from it without
+#      complaint. The correct row is 9 entries and must be digit-proofed
+#      against IAEA HYDHEL 3.1.8 on fetch. A_R531 is unaffected -- the helium
+#      arm was never touched by this defect.
+#
+# Guarded entry points, the narrowest set covering every H route into this
+# module: H_EII_cross, H_EII_cross_lkup, and charge_ex_react's gas_type == "H"
+# branch.
+#
+# NOT guarded, deliberately: fits.py's IAEA_exp1/exp4/exp6 and rate_coeff are
+# gas-AGNOSTIC fit forms -- IAEA_exp1 is evaluated on the helium aHeI and the
+# hydrogen aHI alike, so the species lives in the caller's coefficient table,
+# not in the function. Likewise alpha_r/alpha_3 take the ionization potential
+# as an argument and are used on the helium path. Guarding any of those would
+# refuse helium.
+
 a215 = [
     -7.7782130e2,
     9.5401909e2,
@@ -77,7 +112,22 @@ def H_EII_cross(E, A=a215):
         Beam energy [eV].
     A : list
         Janev polynomial coefficients (default: a215).
+
+    Raises
+    ------
+    ValueError
+        Always -- this is a quarantined hydrogen entry point. See the hydrogen
+        quarantine note at the top of this module.
     """
+    raise ValueError(
+        "H_EII_cross is not available: the hydrogen arms of cablp.atomic are "
+        "QUARANTINED (untested domain -- no solver-path consumer and no gate "
+        "coverage; and one corrupt table, A_R318, whose row 1 carries a "
+        "duplicated coefficient), ruled 2026-08-27. The solver is helium-only "
+        "(D3, 2026-08-21). Accepted: He -- use He_EII_cross."
+    )
+    # RETAINED, not removed: the quarantine is reversible by construction, so
+    # a validated re-opening deletes the raise above and this line stands.
     return np.exp(np.sum([a * np.log(E) ** i for i, a in enumerate(A)]))
 
 
@@ -109,7 +159,22 @@ def H_EII_cross_lkup(E):
     ----------
     E : float
         Beam energy [eV].
+
+    Raises
+    ------
+    ValueError
+        Always -- this is a quarantined hydrogen entry point. See the hydrogen
+        quarantine note at the top of this module.
     """
+    raise ValueError(
+        "H_EII_cross_lkup is not available: the hydrogen arms of cablp.atomic "
+        "are QUARANTINED (untested domain -- no solver-path consumer and no "
+        "gate coverage; and one corrupt table, A_R318, whose row 1 carries a "
+        "duplicated coefficient), ruled 2026-08-27. The solver is helium-only "
+        "(D3, 2026-08-21). Accepted: He -- use He_EII_cross_lkup."
+    )
+    # RETAINED, not removed: the quarantine is reversible by construction, so
+    # a validated re-opening deletes the raise above and this line stands.
     return float(np.exp(_interp_scalar_fused(np.log(E), _H_LOG_E, _H_LOG_SIGMA,
                                              left=_H_LOG_SIGMA[0],
                                              right=_H_LOG_SIGMA[-1])))
@@ -731,19 +796,40 @@ def charge_ex_react(T, gas_type="He"):
     T : float or array
         Ion temperature [eV].
     gas_type : str
-        Gas species: "He" for helium (A_R531 table) or "H" for hydrogen (A_R318 table).
+        Gas species. "He" for helium (A_R531 table) is the only accepted value;
+        "H" (A_R318 table) is quarantined and raises.
 
     Returns
     -------
     float or array
         Charge-exchange rate coefficient [cm³/s].
+
+    Raises
+    ------
+    ValueError
+        For ``gas_type="H"`` -- a quarantined hydrogen entry point, and the one
+        that reads the corrupt table directly. See the hydrogen quarantine note
+        at the top of this module.
     """
     if gas_type == "He":
         table = _cx_He
     elif gas_type == "H":
-        table = _cx_H
+        # RETAINED, not removed: _cx_H above is still built at import, so a
+        # validated re-opening deletes this raise and restores `table = _cx_H`.
+        raise ValueError(
+            "gas_type='H' is not available: the hydrogen arms of cablp.atomic "
+            "are QUARANTINED, ruled 2026-08-27, and this is the entry point "
+            "that reads the corrupt table. A_R318 (H + H+ charge exchange) "
+            "repeats 9.536923957409e-03 in row 1, giving that row 10 "
+            "coefficients where every other A_R318 row and every A_R531 row "
+            "has 9; heavy_reaction iterates range(len(A[i])), so the extra "
+            "term enters _cx_H silently. The row must be digit-proofed against "
+            "IAEA HYDHEL 3.1.8 before this arm re-opens. The solver is "
+            "helium-only (D3, 2026-08-21). Accepted: 'He' (A_R531, "
+            "unaffected)."
+        )
     else:
-        raise ValueError(f"unsupported gas_type {gas_type!r}; expected 'He' or 'H'")
+        raise ValueError(f"unsupported gas_type {gas_type!r}; expected 'He'")
     return np.interp(T, temps, table)
 
 
