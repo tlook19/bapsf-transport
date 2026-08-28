@@ -272,6 +272,25 @@ def fma_array(a, b, c):
     rounding), and zero factors (``0*x`` is exactly ``0``, which is why the
     floor exempts zeros). All three measure 0 differing from :func:`math.fma`;
     ``scripts/r3fma_underflow_fence.py`` is the reproduction.
+
+    The SIGNED ZERO of an exact-zero product is the one remaining departure,
+    and it is a sign question only. **When ``a*b`` is an exact zero, the sign
+    of a resulting ``±0.0`` may differ from :func:`math.fma`**: the closing
+    two-sum add loses the zero's sign, so ``(+0.0)*(-x) + (-0.0)`` returns
+    ``+0.0`` where :func:`math.fma` returns ``-0.0``. It is left in place, for
+    three reasons. It is NUMERICALLY INERT -- ``+0.0 == -0.0``, and the two
+    agree under every arithmetic and comparison operation except ``signbit``,
+    ``copysign``, ``atan2`` and division, none of which any caller applies to
+    an :func:`fma_array` result. It is IN-DOMAIN rather than fenced, because
+    zeros are deliberately exempt from :data:`FMA_ARRAY_MIN_ABS` for the reason
+    just given (``0*x`` is exactly ``0`` and cannot underflow), and fencing
+    them would refuse legal calls to suppress a sign bit. And it is
+    UNREACHABLE on the march: over the committed ``deposit_beam`` corpus plus
+    randomized lane batteries, the MULTIPLIED operand streams ``a`` and ``b``
+    contain ZERO exact zeros (``scripts/r3fma_domain_probe.py``, which counts
+    them per operand), so no reachable call forms an exact-zero product at all.
+    Disclosed rather than fixed, and it is the LAST known gap between this
+    reconstruction and :func:`math.fma`.
     """
     a = np.asarray(a, dtype=float)
     b = np.asarray(b, dtype=float)

@@ -10,10 +10,18 @@ is that those differences never propagate into the state the fixture compares:
 every line it executes. A second gate is therefore needed for interpolation
 behaviour the golden runs but cannot witness.
 
-This is that gate. It reuses the frozen K7c arms
-(``k7cbuild_frozen_bitexact.py``), which carry ``beam_deposition_model =
-"csda"`` and therefore drive the compiled march's three cross-section table
-interpolations:
+This is that gate, and it now has TWO legs, one per fused-lerp implementation.
+``cablp.numerics.interp`` ships two of them -- the scalar
+``interp_scalar_fused`` and the array ``interp_array_fused`` (through
+``_interp_array_unchecked_multi`` and the :func:`fma_array` reconstruction
+under it) -- and they are separate source paths that reach the same tables. A
+gate that exercised only one would leave the other uncertified against exactly
+the ISA-baseline contraction question this gate exists to answer.
+
+**Leg A -- the SCALAR path, pure vs compiled on the frozen K7c arms.** It
+reuses ``k7cbuild_frozen_bitexact.py``, whose arms carry
+``beam_deposition_model = "csda"`` and therefore drive the compiled march's
+three cross-section table interpolations:
 
 - ``tw``    -- tail_walk at the shipped rung, energy-only, legacy-pinned;
 - ``twion`` -- the same plus the ionizing tail channel.
@@ -35,7 +43,24 @@ Two refusals, both earned:
   non-zero on a mismatch; the parent re-checks the reported line before
   scoring anything.
 
-Usage (from <checkout>/cablp, with PYTHONPATH set to that same cablp, and the
+**Leg B -- the ARRAY path, over the committed ``deposit_beam`` corpus.** The
+sole array-fused-lerp consumer is ``cablp.cathode.beam_lane_march``, and the
+committed instrument that A/Bs it against the scalar-fused recursive route is
+``scripts/r3lane_equivalence.py --corpus``: it replays every corpus entry,
+runs each tail-leg batch BOTH ways, and censuses FLIPPED WALKERS at raw
+uint64. This gate runs it as a subprocess and scores three things, refusing on
+any of them -- the same fail-closed discipline leg A applies to its digest
+streams:
+
+- the child exits 0 and prints ``LANE EQUIVALENCE OK``;
+- the branch-flip census reports ZERO flipped walkers;
+- **the corpus line reports more than zero batches actually marched as
+  lanes.** A run in which every batch fell back to the recursive route would
+  compare that route against itself and report perfect agreement, which is the
+  array-path form of leg A's empty-stream trap: it is a vacuous pass, and it
+  fails the gate rather than passing it.
+
+Usage (from the checkout ROOT, with PYTHONPATH set to that same root, and the
 extension built with ``python build_ext.py --inplace``)::
 
     python scripts/interp_bitexact_gate.py
@@ -60,6 +85,24 @@ COMPILED_PROVENANCE = "cython/_cathode_kernels_cy/tierA+csda"
 _DIGEST_LINE = re.compile(r"^\s+\w+\s+[0-9a-f]{64}\s*$")
 
 _PROVENANCE_TAG = "PROVENANCE "
+
+#: Leg B's non-vacuity line: ``corpus: N entries, M tail-leg batches, K of
+#: them actually marched as lanes``. ``K`` is the count that must exceed zero
+#: -- it is the number of batches that really took the array-fused lane route
+#: rather than falling back to the scalar recursive one.
+_LANE_CORPUS_LINE = re.compile(
+    r"^corpus:\s+(\d+)\s+entries,\s+(\d+)\s+tail-leg batches,\s+(\d+)\s+of "
+    r"them actually marched as lanes\s*$"
+)
+
+#: Leg B's agreement line: ``branch-flip census: W walkers over C calls, F
+#: flipped``. ``F`` must be zero.
+_LANE_CENSUS_LINE = re.compile(
+    r"^branch-flip census:\s+(\d+)\s+walkers over\s+(\d+)\s+calls,\s+(\d+)\s+"
+    r"flipped\s*$"
+)
+
+_LANE_VERDICT_OK = "LANE EQUIVALENCE OK"
 
 
 def _digest_lines(text):
@@ -136,6 +179,83 @@ def _check(out, text, rc, arm, path):
     return lines
 
 
+def array_leg(outdir):
+    """Leg B: certify the ARRAY fused lerp over the ``deposit_beam`` corpus.
+
+    Runs ``r3lane_equivalence.py --corpus`` -- the committed instrument that
+    marches every corpus tail-leg batch through ``beam_lane_march`` (array
+    fused) and through the recursive ``deposit_beam`` route (scalar fused) and
+    censuses flipped walkers at raw uint64.
+
+    Returns ``None`` on success, or a one-line failure string. Fails CLOSED:
+    a non-zero exit, a missing or unparseable census line, any flipped walker,
+    or a corpus in which no batch actually took the lane route is a failure,
+    not a pass.
+    """
+    env = dict(os.environ)
+    # The lane march and the fma_array reconstruction under it are pure
+    # Python; the corpus instrument calls ``beam_deposition`` directly rather
+    # than through the kernel selector, so the compiled opt-in is irrelevant
+    # here. Cleared anyway so the leg reads the same whatever the caller's
+    # environment carries.
+    env.pop("CABLP_COMPILED_KERNELS", None)
+    cmd = [
+        sys.executable, str(SCRIPT_DIR / "r3lane_equivalence.py"), "--corpus",
+    ]
+    print("  running array-path corpus leg (r3lane_equivalence --corpus) ...",
+          flush=True)
+    proc = subprocess.run(cmd, env=env, capture_output=True, text=True)
+    text = proc.stdout + proc.stderr
+    out = outdir / "interp_gate_array_leg.txt"
+    out.write_text(text)
+
+    entries = batches = lanes = None
+    walkers = flipped = None
+    for ln in text.splitlines():
+        m = _LANE_CORPUS_LINE.match(ln)
+        if m:
+            entries, batches, lanes = (int(g) for g in m.groups())
+            continue
+        m = _LANE_CENSUS_LINE.match(ln)
+        if m:
+            walkers, _calls, flipped = (int(g) for g in m.groups())
+    verdict_ok = any(ln.strip() == _LANE_VERDICT_OK for ln in text.splitlines())
+
+    print(f"  array/corpus: rc={proc.returncode} entries={entries} "
+          f"batches={batches} lane_marched={lanes} walkers={walkers} "
+          f"flipped={flipped} verdict_ok={verdict_ok} -> {out.name}")
+
+    if proc.returncode != 0:
+        print(f"  REFUSING: array leg exited {proc.returncode}; see {out}")
+        return f"array: child exited {proc.returncode}"
+    if lanes is None:
+        print(f"  REFUSING: array leg printed no parseable corpus line; the "
+              f"non-vacuity count cannot be read. See {out}")
+        return "array: corpus line missing or unparseable"
+    if flipped is None:
+        print(f"  REFUSING: array leg printed no parseable branch-flip census; "
+              f"see {out}")
+        return "array: branch-flip census missing or unparseable"
+    if lanes <= 0:
+        print(f"  REFUSING: array leg engaged ZERO lane legs over {entries} "
+              f"corpus entries and {batches} tail-leg batches. Every batch "
+              f"fell back to the recursive route, so the comparison ran the "
+              f"scalar path against itself -- the array-path form of an empty "
+              f"digest stream, and a vacuous pass.")
+        return "array: zero lane legs engaged (vacuous)"
+    if flipped != 0:
+        print(f"  {flipped} of {walkers} walkers FLIPPED between the array and "
+              f"scalar routes; see {out}")
+        return f"array: {flipped}/{walkers} walkers differ"
+    if not verdict_ok:
+        print(f"  REFUSING: array leg did not print {_LANE_VERDICT_OK!r}; see "
+              f"{out}")
+        return "array: child withheld its OK verdict"
+    print(f"  array: compared {walkers} walkers over {batches} batches "
+          f"({lanes} lane-marched), 0 flipped")
+    return None
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--arms", nargs="+", default=["tw", "twion"])
@@ -154,6 +274,9 @@ def main(argv=None):
     a.outdir.mkdir(parents=True, exist_ok=True)
     print(f"interp bit-exactness gate: arms={a.arms} steps={a.steps} "
           f"report_every={a.report_every}")
+    print("  leg A: scalar fused lerp, pure vs compiled on the K7c arms")
+    print("  leg B: array fused lerp, lane march vs recursive route on the "
+          "deposit_beam corpus")
     failures = []
     for arm in a.arms:
         streams = {}
@@ -182,12 +305,17 @@ def main(argv=None):
             failures.append(f"{arm}: {len(differing)}/{len(pure)} digest lines "
                             f"differ")
 
+    array_failure = array_leg(a.outdir)
+    if array_failure is not None:
+        failures.append(array_failure)
+
     if failures:
         print("\nGATE FAILED:")
         for f in failures:
             print(f"  {f}")
         return 1
-    print("\nGATE OK — pure and compiled are bit-identical on every arm.")
+    print("\nGATE OK — pure and compiled are bit-identical on every arm, and "
+          "the array fused lerp agrees with the scalar one over the corpus.")
     return 0
 
 
