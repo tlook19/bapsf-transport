@@ -1,0 +1,316 @@
+{
+  "kind": "r3-semantic-lane-march",
+  "repository": "bapsf-transport",
+  "base_revision": "508462f46aea6c7e940979943a3fd201bc9b98a4",
+  "base_revision_note": "agent-staging at dispatch. The worktree spawned STALE on campaign 39cb395 and was reset --hard onto this commit before anything was written.",
+  "schema_note": "A SEMANTIC record, not a rename manifest. It deliberately does NOT validate under restructure/manifests/validate_manifest.py -- no symbol was moved or renamed in the byte-supersession sense. Sibling of r3_constants_table.json and r3_qie_mass_ratio.json.",
+
+  "bit_exact": true,
+  "bit_exact_note": "TRUE, and by CONSTRUCTION rather than by tolerance. This member is a REIMPLEMENTATION at fixed physics: the same legs, the same substeps, the same floats, computed with fewer numpy dispatches. Every gate below is a raw-uint64 comparison and every one is 0 differing.",
+
+  "route_proposal": {
+    "status": "TOM RATIFIES THE ROUTE AT REVIEW. Both targets were analysed; one was built. The recommendation and its measured basis are below.",
+    "recommended": "route (b) MECHANISM at route (a) BAR -- numpy lanes whose interpolated lookups reconstruct math.fma's single rounding, so the vectorised route is bitwise-0 against the scalar march instead of 1e-12 from it.",
+    "route_a_cython_fma_lane_kernel": {
+      "built": false,
+      "bar": "bitwise 0 per cell per bank",
+      "feasibility": "HIGH. _CSDA_MARCH is the standing proof that a Cython transcription of this march is bit-exact on both platforms, and a lane entry would extend that tier without touching the existing one.",
+      "measured_ceiling": "SMALL, and it is the wrong lever. The residual this member exists to close is PURE-vs-compiled, and a Cython kernel does not run on the pure path at all. On the COMPILED path the per-leg Python overhead a lane kernel would remove was measured at 8.92 us x 240 legs = 2.14 ms of a 5.83 ms call (36.7%), so the whole available prize there is about 2.3x, on a path that is already 5-9x faster than the one the brief names.",
+      "kernel_id_implication": "NONE ARISES, because nothing was built. Had it been: the entry would be additive and KERNEL_ID ('cython/_cathode_kernels_cy/tierA+csda') must not change -- flagged for review rather than decided here.",
+      "why_not_recommended": "it would leave the pure path -- the REFERENCE implementation, the one the 4k digest leg and the anchor-event golden run on -- exactly as slow as it is today."
+    },
+    "route_b_numpy_lanes": {
+      "built": true,
+      "bar_as_briefed": "rel <= 1e-12 per cell per bank",
+      "bar_achieved": "bitwise 0",
+      "how_the_bar_was_raised": "the brief's 1e-12 comes from vectorised np.interp being UNFUSED (hazard 6). That was not accepted. cablp/numerics/interp.py gained interp_array_fused, whose interior lerp goes through fma_array -- an exact reconstruction of math.fma from Dekker's two-product, Knuth's two-sum, and a ROUND-TO-ODD tail before the closing add. numpy has no FMA ufunc and its x86-64 baseline does not contract a*b+c, so the single rounding is rebuilt rather than emitted.",
+      "why_this_matters": "at rel 1e-12 this member would MOVE THE GOLDEN (an anchor event, a reviewed recapture) and would force scripts/deposit_beam_reference.py -- a raw-uint64 fixture over 206,218 values -- to be downgraded to a tolerance comparison. At bitwise 0 it moves nothing and the fixture keeps its teeth. The cost of the reconstruction is about 20 numpy ops per lerp, and it is the single largest term in the round; it is what caps the speedup reported below.",
+      "cost_of_the_bar": "measured. The three per-round lookups were batched into ONE fused multiply-add (and, where two share a grid, one bracketing search); that bought 5%. The exact-FMA reconstruction is not removable without giving up the bar."
+    },
+    "third_option_considered_and_rejected": "np.interp verbatim (the brief's literal route (b)). Rejected on the two consequences above, not on difficulty."
+  },
+
+  "the_change": {
+    "hot_path": "cablp/cathode/beam_deposition.py :: deposit_beam, the ionizing tail walk under anomalous_transport='tail_walk'/'plateau_multigroup' with tail_ionization='on' -- the production stance (scripts/stances/g1atrim.toml sets both).",
+    "what_it_was": "one recursive deposit_beam call per (plateau group, birth cell, direction), and a second per reflection at the walk window's reflecting face. Measured on the reference corpus: 17,633 legs and 574,450 nested substeps across 506 entries, i.e. 94% of all CSDA substeps the corpus performs.",
+    "what_it_is": "the same legs, marched together as LANES over the one shared column. A round advances every active lane by ONE OF ITS OWN substeps.",
+    "new_module": "cablp/cathode/beam_lane_march.py (lane_march, LaneMarchResult, check_constants, lane_march_energy_ceiling_eV, LANE_MARCH_MODELS).",
+    "new_numerics": "cablp/numerics/interp.py gains fma_array, interp_array_fused, check_fma_domain, check_interp_table, FMA_ARRAY_MAX_ABS. interp_scalar_fused is AST-unchanged.",
+    "routing": {
+      "selector": "beam_deposition.LANE_MARCH_MIN_LEGS (default 128) plus a _CSDA_MARCH is None gate",
+      "default": "ON for the pure path, per the brief's condition, BECAUSE the route achieved bitwise 0 everywhere. No flag: a bit-exact reimplementation has no off-state physics to presence-gate, and both routes stay live and reachable.",
+      "pure_vs_compiled": "the lane route is the PURE path's. With the compiled march bound, each leg's substep loop already runs in C and batching it is a large regression (measured below), so the recursive route is kept there. The two routes are bit-identical, so this is a cost decision with no observable consequence.",
+      "equivalence_target": "_tail_recursive_chains -- the recursive route, preserved verbatim as a module-level function, and the implementation for every configuration the lane march refuses (narrow batches, an unsupported Coulomb closure, a launch at or above the excitation table ceiling)."
+    },
+    "scope_refused_by_construction": "no anomalous channel, no anode mesh, no withheld product/tail banks, product_transport='local' only, He EII and excitation tables only, the two named Coulomb closures only. Anything else raises at lane_march rather than being approximated."
+  },
+
+  "tier_a": {
+    "corpus": {
+      "fixture": "scripts/data/deposit_beam_reference.npz",
+      "sha256": "e70396e525aade66eb8a4e965b40a697a82dc42143ca5e8da16136af7bbe2e3d",
+      "entries": 506,
+      "untouched_by_this_member": true
+    },
+    "gate_1_reference_corpus": {
+      "command": "PYTHONPATH=<worktree> ~/miniforge3/envs/fenicsx-env/bin/python scripts/deposit_beam_reference.py --verify",
+      "exit_code": 0,
+      "transcript": "fixture deposit_beam_reference.npz: 506 entries, format deposit-beam-reference-v1, reference path pure | compared 206218 values across 7590 result fields: 0 differing | recorded conservation closure: max 6.095224e-16 over 506 entries; tail bank max 3.891121e-16 over 268 | VERIFY OK",
+      "bar": "0 differing where the route is bit-exact",
+      "result": "0 differing. PASS.",
+      "coverage": "93.8% of the corpus's legs (16,548 of 17,633) and 93.1% of its nested substeps (534,852 of 574,450) went through the lane march at the SHIPPED threshold; the remainder are batches below it, which take the recursive route by design.",
+      "instrument_change_DISCLOSED": {
+        "what": "scripts/deposit_beam_reference.py::_invoke_instrumented now adds beam_deposition.LANE_MARCH_COUNTS into substeps_nested / legs / max_leg_depth.",
+        "why": "the census counts substeps by monkeypatching the module-global He_beam_excitation_channel_lkup and legs by monkeypatching the module-global deposit_beam. A batched leg is not a recursive call and its substeps are numpy rounds, so it passes through NEITHER hook and both counters read 0. The counting MECHANISM was re-plumbed; the STORED FIXTURE VALUES were not touched, which is precisely what makes comparing against them a real equality gate rather than a tautology.",
+        "not_a_moved_gate": "COUNT_KEYS and CLOSURE_KEYS are unchanged, the fixture is unchanged, and the comparison is still raw-uint64. Verified both ways: with the lane route disabled the instrument is exercised on its original path and the corpus is also 0 differing."
+      }
+    },
+    "gate_2_conservation_closure": {
+      "bars": {"per_ray": 2.438090e-15, "tail_bank": 1.556448e-15, "dated": "2026-08-27gg"},
+      "measured": {"per_ray_max": 6.095224e-16, "tail_bank_max": 3.891121e-16},
+      "margin": {"per_ray": "4.00x inside the bar", "tail_bank": "4.00x inside the bar"},
+      "result": "PASS",
+      "stronger_than_the_bar": "these are not merely inside the bar -- closure_rel and tail_closure_rel are compared to the stored values at RAW UINT64 by --verify and reproduce exactly, so the closure of the new implementation's own arithmetic is bit-identical to the old one's, not just within tolerance of it.",
+      "retired_bars_not_quoted": "the superseded 3.727957e-15 / 2.075264e-15 pair is deliberately absent."
+    },
+    "gate_3_branch_flip_census": {
+      "instrument": "scripts/r3lane_equivalence.py --corpus (NEW, committed)",
+      "method": "every tail-leg batch of every corpus entry is run BOTH ways and compared WALKER BY WALKER: chain length (did it reflect?), leg direction, transmitted flux and energy, and all five window-shaped banks, each at raw uint64. A walker differing in ANY of those is FLIPPED and is weighted by the energy it deposited.",
+      "why_not_a_per_cell_tolerance": "a 1-ULP reordering does not present as a small per-cell deviation; it presents as a walker taking a different branch. Counting flipped walkers is the measurement the hazard actually names.",
+      "bar": 1.0e-09,
+      "measured": {
+        "walkers": 17024,
+        "calls": 364,
+        "flipped": 0,
+        "energy_weighted_effect": 0.0,
+        "worst_single_call": 0.0,
+        "deposited_energy_erg_s": 5.608280e+13
+      },
+      "non_vacuity": "the threshold is forced to 1 for this run so every batch takes the lane route; 210 of the 364 batches reported lane legs (the other 154 have no ionizing population and therefore no walkers to compare).",
+      "result": "PASS -- 0 flipped, effect exactly 0.0 against a 1e-9 bar."
+    },
+    "gate_4_substep_and_leg_counts": {
+      "requirement": "equality with the old implementation per call; a mismatch is an ALGORITHM change and exits the contract.",
+      "how_measured": "--verify compares substeps_top, substeps_nested, legs, walk_integrations and max_leg_depth against the values the OLD implementation stored in the fixture.",
+      "result": "PASS -- all five reproduce on all 506 entries. Independently, the randomized battery compares the lane march's own per-lane substep count against a hooked count of the recursive leg's substeps, lane by lane: 5,690 lanes, 0 differing.",
+      "STOP_condition_did_not_fire": true
+    },
+    "cross_implementation_extra": {
+      "randomized_battery": "scripts/r3lane_equivalence.py --random 300: 300 batteries, 5,690 lanes, 575,905 values, 0 differing. Covers vacuum cells, zero-length cells, both Coulomb closures, both directions, single- and multi-cell columns, and launch energies straddling both E_stop and I_ion by ~1e-9 relative.",
+      "fused_lerp_battery": "1,636,006 values, 0 differing: fma_array against math.fma over four magnitude ranges, a catastrophic-cancellation battery and an exact-tie battery; interp_array_fused against interp_scalar_fused on all three LIVE tables (the log-log He EII table and the two excitation-manifold tables), queried at random, on every node, and one ULP either side of every node.",
+      "smoke_compiled_equivalence": "the smoke's `coverage` case runs 1,443 NESTED marches and reports 'final state bit-identical' between the pure path (lane route) and the compiled path (_CSDA_MARCH). That is an independent pure-vs-compiled check that actually exercises tail legs."
+    }
+  },
+
+  "hazard_gates": [
+    {
+      "n": 1,
+      "hazard": "The per-lane substep sequence IS the discretization: dz_sub = min(remaining, frac*E/L_tot) with exact landing on E_stop. Sharing a substep across lanes, capping legs, or coarsening frac is an algorithm change.",
+      "how_addressed": "each lane evaluates its own dz_sub from its own E and its own remaining; a round advances every active lane by one of ITS substeps, never by a shared one. No leg cap exists. frac is threaded from the caller.",
+      "gate": "hazard gate #4 (count equality)",
+      "evidence": "substeps_top/substeps_nested/legs reproduce on all 506 corpus entries; per-lane substep counts match a hooked recursive count on 5,690 randomized lanes.",
+      "verdict": "PASS"
+    },
+    {
+      "n": 2,
+      "hazard": "Energy telescoping: the old code reuses the IDENTICAL float as cell-exit/next-entry across bounces; a batched recompute breaks the telescope.",
+      "how_addressed": "a lane carries E as ONE float across cells -- the exit energy of a cell IS the entry energy of the next, never recomputed -- and a reflected lane launches at first.transmitted_energy_eV[k], the identical float its incoming leg ended on.",
+      "gate": "ulp-counted per-ray identity",
+      "evidence": "closure_rel and tail_closure_rel reproduce at RAW UINT64 on all 506 entries (per-ray max 6.095224e-16, tail max 3.891121e-16), and all 13 result scalars including transmitted_energy_eV are bitwise identical.",
+      "verdict": "PASS"
+    },
+    {
+      "n": 3,
+      "hazard": "Threshold cliffs (W_out <= floor, W_face < E_reflect, argmax stop): ULP reordering flips walkers O(1). Gate is the flip census, never a naive per-cell tolerance.",
+      "how_addressed": "no reordering exists to flip anything: every expression keeps the scalar march's associativity, and the lookups round once, as the scalar lerp does.",
+      "gate": "branch-flip census",
+      "evidence": "17,024 walkers, 0 flipped, energy-weighted effect 0.000000e+00 against a 1e-9 bar.",
+      "verdict": "PASS"
+    },
+    {
+      "n": 4,
+      "hazard": "Per-birth exit-state resolution at the reflecting face: lanes must NOT collapse per-birth resolution before the threshold test. Gate is corpus coverage of mixed above/below-threshold face arrivals.",
+      "how_addressed": "each lane keeps its own transmitted_flux and transmitted_energy_eV; the reflection test (direction == reflect_face and flux > 0 and E < E_reflect) is evaluated per lane, and the bounce wave is built from exactly the lanes that passed it.",
+      "gate": "corpus mixed above/below-threshold face arrivals",
+      "evidence": "634 reflecting-face arrivals in the corpus: 609 below the threshold and turned around, 25 above it and free-escaping. BOTH SIDES PRESENT, and all 634 reproduce bit-identically.",
+      "verdict": "PASS"
+    },
+    {
+      "n": 5,
+      "hazard": "In-cell op order is physics: anode interception at face-crossing BEFORE deposition; banks decremented with the identical products the energy decrement uses.",
+      "how_addressed": "the tail legs never intercept (they are born in the column, not streaming through the mesh), and the lane march has NO anode path at all -- 'anode' appears in beam_lane_march.py exactly once, in the docstring sentence saying so. Presence gate: a lane batch is only ever built from the tail-leg configuration, which passes no anode argument. Within a substep the banks use the same d_pot/d_sec/d_exc/d_coul products the energy decrement subtracts, in the same association order.",
+      "gate": "presence proof plus the corpus's anode entries",
+      "evidence": "grep shows no anode symbol in the lane march; the corpus's 9 anode-class entries are 0 differing, and the anode_intercepted_erg_s scalar reproduces bitwise on every entry.",
+      "verdict": "PASS"
+    },
+    {
+      "n": 6,
+      "hazard": "Interp fusion: the scalar hot loop uses a fused math.fma lerp; vectorized np.interp is unfused, with an ISA-contraction consequence.",
+      "declared_treatment": "THE LERP IS FUSED ON BOTH ROUTES. np.interp is not used anywhere in this member. interp_array_fused reconstructs the single rounding exactly (Dekker two-product + Knuth two-sum + round-to-odd tail), so the vectorised lookups agree with the scalar ones at raw uint64 rather than to 1 ULP.",
+      "isa_contraction_consequence_stated": "FP contraction is an ISA-baseline property: aarch64 fuses a*b+c, numpy's x86-64 baseline does not. Had the vectorised lerp been left to numpy's own arithmetic, the answer would have depended on which machine built numpy -- the exact defect interp_scalar_fused was created to close. The reconstruction removes that dependence by CONSTRUCTION on both routes, so this member adds no new platform-dependent site. -ffp-contract=off remains correct for the compiled path and is untouched.",
+      "gate_inventory": "the new call sites join it: cablp/numerics/interp.py is already a compiled-golden trigger path, and this member touches it.",
+      "residual_disclosed": "the pre-existing unfused np.interp in atomic/cross_sections.py::he_electron_momentum_transfer_cm2 (scalar mode) is unchanged and still not read by these paths.",
+      "evidence": "1,636,006 values 0 differing against math.fma and interp_scalar_fused, including exact-tie and cancellation batteries.",
+      "verdict": "PASS"
+    },
+    {
+      "n": 7,
+      "hazard": "Ledger-row granularity is an external interface: the walk's banks feed electron_energy_terms_W_cm3, consumed by audit instruments.",
+      "how_addressed": "no bank was added, split, renamed or re-routed. The lane march returns the five window-shaped arrays the banking step already consumed, and the banking step writes the identical ten targets in the identical order.",
+      "gate": "ledger schema identity",
+      "evidence": "class BeamDepositionResult is AST-IDENTICAL to base (ast.dump comparison, exact match). All 14 result arrays and all 13 result scalars reproduce bitwise on 506 entries.",
+      "verdict": "PASS"
+    },
+    {
+      "n": 8,
+      "hazard": "HE_I_ION_EV threading: thread I_ion_eV through; never internalize the module default.",
+      "how_addressed": "lane_march takes I_ion_eV as a KEYWORD-ONLY argument WITH NO DEFAULT and raises unless it is finite and > 0. beam_lane_march.py does not import, define or mention HE_I_ION_EV.",
+      "gate": "presence-gate proof",
+      "evidence": "grep -n 'HE_I_ION_EV' cablp/cathode/beam_lane_march.py returns no hit; every I_ion_eV occurrence is the threaded parameter. The corpus includes entries whose I_ion_eV differs from the module default and they are 0 differing.",
+      "verdict": "PASS"
+    }
+  ],
+
+  "tier_b": {
+    "instrument": "scripts/r3_constfoot_4k.py --fixed-dt (committed, UNCHANGED by this member)",
+    "config": "the golden's own, via baseline_sim1d.build_baseline_config; nx = 60; max_steps_action = 'stop'",
+    "horizon_steps": 4000,
+    "fixed_dt_s": 1.175e-07,
+    "kernels": "pure on both arms",
+    "arms": [
+      {"arm": "ref", "revision": "508462f (agent-staging tip, captured from the unmodified tree)", "artifact": "r3lane_foot4k_base.npz"},
+      {"arm": "change", "revision": "8fd8365 (this member's tip)", "artifact": "r3lane_foot4k_tip.npz"}
+    ],
+    "matched_grid": "confirmed: both arms end at t=0.0004700000000000171, bit-identical",
+    "expectation_as_registered": "BIT-IDENTICAL for a bit-exact route, else <= the battery_v2 ULP-control floor class (~1.3e-12 n / 1.4e-11 M); above that floor is a defect signal even though small.",
+    "measured": [
+      {"field": "n", "max_rel": 0.0, "rms_rel": 0.0, "differing": 0},
+      {"field": "nn", "max_rel": 0.0, "rms_rel": 0.0, "differing": 0},
+      {"field": "M", "max_rel": 0.0, "rms_rel": 0.0, "differing": 0},
+      {"field": "Ee", "max_rel": 0.0, "rms_rel": 0.0, "differing": 0},
+      {"field": "Ei", "max_rel": 0.0, "rms_rel": 0.0, "differing": 0},
+      {"field": "Te", "max_rel": 0.0, "rms_rel": 0.0, "differing": 0},
+      {"field": "Ti", "max_rel": 0.0, "rms_rel": 0.0, "differing": 0},
+      {"field": "t_end", "max_rel": 0.0}
+    ],
+    "verdict": "BIT-IDENTICAL. The registered expectation for a bit-exact route is MET; the ULP-floor branch was not needed.",
+    "horizon_limitation": "4,000 steps at 1.175e-7 s is t = 4.7e-4 s. That window DOES cover the golden's breakdown -- which is where the tail walk is widest and where the lane route is actually taken -- but it does not reach the main discharge or the afterglow. The whole-cycle statement is the golden's to make, and the golden is addressed under controls below."
+  },
+
+  "controls": {
+    "golden_control": {
+      "pattern": "standing, 27gl: compiled golden at tip AND base, serial, transcript diff; expected NULL beyond the provenance line.",
+      "command": "CABLP_COMPILED_KERNELS=1 PYTHONPATH=<worktree> ~/miniforge3/envs/fenicsx-env/bin/python scripts/baseline_sim1d.py --verify",
+      "kernel_id_probed": "cython/_cathode_kernels_cy/tierA+csda, in-process, on both arms",
+      "tip_transcript": "MISMATCH time grid: max|dt|=1.634e-08 s / MISMATCH trajectory: max_abs=6.303e+10 max_rel=2.000e+00 / baseline verify FAIL: saves=2620, exact=False, max_rel=2.000e+00, max_abs=6.303e+10, time_max_abs=1.634e-08 s (rtol=1.0e-09, atol=0.0e+00)",
+      "base_transcript": "IDENTICAL, digit for digit, at 508462f.",
+      "diff": "NULL beyond the arm label. The only differing lines are the ARM_tip_EXIT/ARM_base_EXIT marker and one duplicated provenance line in the base log (the first base attempt was killed mid-run by the harness and re-run, appending a second provenance header).",
+      "verdict": "CONTROL PASSES. The compiled golden does not move between base and tip: this member does not touch it.",
+      "PRE_EXISTING_FAILURE_REPORTED": {
+        "finding": "the compiled golden ALREADY FAILS at agent-staging 508462f, with exactly these numbers.",
+        "independent_corroboration": "the identical signature -- same max_abs 6.303e+10, same max_rel 2.000e+00, same time_max_abs 1.634e-08 s, same saves 2620 -- was produced the same evening by ANOTHER agent's arms on a different worktree (agent-a6693a1dd47fd9cab) AND on the MAIN CHECKOUT at campaign 39cb395.",
+        "not_caused_here": "established three ways: the base arm of this member's own control fails identically; the pure 4k footprint is bit-identical base-vs-tip; and the compiled path reproduces the pure reference corpus at 508462f with 0 differing over 206,218 values (probed directly, because deposit_beam_reference.py --verify refuses to run with the compiled march bound and had therefore never asked).",
+        "disposition": "REPORTED, NOT INVESTIGATED. Out of this member's scope, and another lane is already on it. Nothing was adjusted to make it pass."
+      }
+    },
+    "smoke": {
+      "command": "PYTHONPATH=<worktree> ~/miniforge3/envs/fenicsx-env/bin/python scripts/smoke_sim1d.py",
+      "exit_code": 0,
+      "tail": "sim1d smoke ok: cells=72, dz=10.65 cm, Vp_total=2.433052e+06 cm^3, Vm_total=1.793692e+07 cm^3",
+      "compiled_equivalence": "RAN, NOT SKIPPED -- 5 cases, all 'final state bit-identical' at KERNEL_ID cython/_cathode_kernels_cy/tierA+csda, with the .so built in-worktree first. The `coverage` case runs 1,443 NESTED marches, so the pure (lane) and compiled (_CSDA_MARCH) tail-leg routes are checked against each other there."
+    },
+    "import_provenance": "asserted IN-PROCESS before every quoted result (the PYTHONPATH trap): cablp.__file__ = /home/trloo/bapsf/bapsf-transport/.claude/worktrees/agent-a211cdd39e1377436/cablp/__init__.py on every gate and every arm."
+  },
+
+  "wall_time": {
+    "status": "REPORT, not a gate.",
+    "conditions": "ONE lane, machine confirmed quiet before each measurement (pgrep over smoke_sim1[d] / baseline_sim1[d] / r3const / r3unify / run_m6_poin[t] / golden_diges[t] empty), best-of-3 x 20-60 repetitions per entry.",
+    "motivating_residual_measured": {
+      "note": "the brief's 5-7x was re-measured on this machine and is 4.7-9.7x depending on the ray.",
+      "per_entry_pure_over_compiled": {
+        "real_deposition_first_breakdown": 9.7,
+        "real_deposition_first_main_discharge": 6.1,
+        "real_deposition_t1.000000e-02": 4.9,
+        "multigroup_N16_lo_d+1": 4.7
+      },
+      "why_it_is_that_large": "measured decomposition of the pure call: 96% of it is the scalar substep arithmetic and only 4.2% is per-leg fixed overhead (8.58 us x 240 legs = 2.06 ms of 48.9 ms). On the COMPILED path the same fixed overhead is 36.7% of a 5.83 ms call. A structural lane restructure alone therefore cannot close the pure residual -- the substep itself has to get cheaper, which is why the member is a vectorization and not merely a hoist."
+    },
+    "achieved_pure_path": {
+      "real_deposition_first_breakdown": {"legs": 240, "wave1_lanes": 160, "recursive_ms": 45.240, "lanes_ms": 28.816, "speedup": 1.57},
+      "real_deposition_t5.000000e-05": {"legs": 240, "wave1_lanes": 160, "recursive_ms": 44.949, "lanes_ms": 27.697, "speedup": 1.62},
+      "real_deposition_t2.000000e-04": {"legs": 144, "wave1_lanes": 96, "recursive_ms": 26.933, "lanes_ms": 27.379, "speedup": 0.98, "note": "below the threshold, recursive route; ratio is measurement noise"},
+      "real_deposition_first_main_discharge": {"legs": 96, "wave1_lanes": 64, "recursive_ms": 17.262, "lanes_ms": 17.335, "speedup": 1.00, "note": "below the threshold"},
+      "real_deposition_t1.000000e-02": {"legs": 24, "wave1_lanes": 16, "speedup": 0.97, "note": "below the threshold"},
+      "real_deposition_first_afterglow": {"legs": 24, "wave1_lanes": 16, "speedup": 1.01, "note": "below the threshold"},
+      "multigroup_N16_lo_d+1": {"legs": 640, "wave1_lanes": 640, "recursive_ms": 50.593, "lanes_ms": 21.402, "speedup": 2.36},
+      "seven_entry_total": {"recursive_ms": 195.456, "lanes_ms": 133.248, "speedup": 1.47}
+    },
+    "width_scaling": {
+      "note": "synthetic batches on one shared column; the crossover is what set LANE_MARCH_MIN_LEGS.",
+      "rows": [
+        {"lanes": 4, "speedup": 0.06}, {"lanes": 8, "speedup": 0.12},
+        {"lanes": 16, "speedup": 0.21}, {"lanes": 24, "speedup": 0.32},
+        {"lanes": 32, "speedup": 0.38}, {"lanes": 48, "speedup": 0.50},
+        {"lanes": 96, "speedup": 1.03}, {"lanes": 240, "speedup": 2.26},
+        {"lanes": 480, "speedup": 3.70}
+      ],
+      "crossover_lanes": 96,
+      "threshold_shipped": 128,
+      "threshold_history_disclosed": "the first draft shipped 24, chosen before measurement. It made the corpus's 64-leg main-discharge ray 1.5x SLOWER (0.68x). Measured, re-tuned to 128, re-measured: no corpus entry now regresses (worst 0.97x, noise)."
+    },
+    "compiled_path": {
+      "with_the_lane_route_ungated": "a 5.3x REGRESSION on the breakdown ray (5.10 -> 27.05 ms) and 0.35x over the seven entries. This is why the route is gated to the pure path.",
+      "with_the_shipped_gate": "0.99x over the seven entries -- unchanged, as intended."
+    },
+    "honest_shortfall": "1.5-2.4x achieved against a 4.7-9.7x residual. The gap is measured, not guessed: at these batch widths the round is numpy DISPATCH-bound (about 165 numpy calls per round, ~1.5 us each at L~120), and roughly 60 of those calls are the exact-FMA reconstruction that the bitwise bar requires. Batching the three lookups into one FMA and one shared search bought 5%. Closing the rest would mean either giving up the bitwise bar (route (b) as briefed, at the cost of a golden re-anchor and a downgraded fixture) or moving the lane loop into C (route (a)), which is Tom's call at review."
+  },
+
+  "files_changed": [
+    "cablp/cathode/beam_lane_march.py (NEW)",
+    "cablp/cathode/beam_deposition.py",
+    "cablp/numerics/interp.py",
+    "scripts/r3lane_equivalence.py (NEW)",
+    "scripts/deposit_beam_reference.py (counter plumbing only -- disclosed above)",
+    "restructure/manifests/r3_lane_march.json (this file)"
+  ],
+  "not_touched": "scripts/baselines/, scripts/stances/, scripts/data/, cablp/cathode/_cathode_kernels_cy.pyx, cablp/cathode/kernels.py, scripts/r3_constfoot_4k.py, scripts/smoke_sim1d.py, scripts/baseline_sim1d.py. No config key was added; no physics flag was added; no signature of any public function changed; interp_scalar_fused is AST-unchanged.",
+
+  "knowledge_base_impact": {
+    "protocol": "RULE_KB_IMPACT / CLAUDE_INTEGRATION.md",
+    "assessment": "NO MODEL-LEVEL ASSERTION CHANGES. This member changes no equation, term, state field, configuration meaning or default, stance, provenance, measurement schema, literature status, thesis claim, or terminology. It is a bit-exact reimplementation of an existing hot path, proven bitwise against the committed fixture, the 4k footprint and a per-walker census.",
+    "sources": [
+      {
+        "path": "cablp/cathode/beam_lane_march.py",
+        "anchor": "lane_march",
+        "change": "ADDED -- a second implementation of the ionizing tail-walk legs",
+        "terminology": "CSDA march; lane; tail walk; plateau group; reflecting face",
+        "context": "pure path only, above LANE_MARCH_MIN_LEGS legs; bit-identical to the recursive route",
+        "disposition_impact": "NO KB REVIEW REQUIRED -- no assertion is affected, because no value the KB could hold changes."
+      },
+      {
+        "path": "cablp/numerics/interp.py",
+        "anchor": "fma_array / interp_array_fused",
+        "change": "ADDED -- the array form of the fused lerp",
+        "terminology": "fused multiply-add; FP contraction; ISA baseline; round-to-odd",
+        "context": "package default; joins the bit-exactness gate inventory alongside interp_scalar_fused",
+        "disposition_impact": "NO KB REVIEW REQUIRED for a model assertion, BUT the standing migration/numpy-upgrade gate now has a second fused-lerp implementation to certify. scripts/r3lane_equivalence.py --random and the fused-lerp battery are the instruments."
+      },
+      {
+        "path": "cablp/cathode/beam_deposition.py",
+        "anchor": "LANE_MARCH_MIN_LEGS / _tail_lane_chains / _tail_recursive_chains",
+        "change": "CHANGED -- the tail-walk stage resolves every population's band and flux before walking any of them, so one lane batch can serve the whole ray",
+        "terminology": "tail walk; band split; walk window; reflecting face",
+        "context": "package default on the pure path",
+        "disposition_impact": "NO KB REVIEW REQUIRED. The banking order, the exposure ledgers and the window refusal are unchanged; only the point at which the band is resolved moved, and nothing is banked before it."
+      }
+    ],
+    "downstream_effects": "NONE OBSERVABLE. Every bank the tail walk fills reaches the solver through BeamDepositionResult, which is AST-identical to base, with bitwise-identical contents on the whole reference corpus and a bit-identical 4,000-step trajectory."
+  },
+
+  "open_for_review": [
+    "ROUTE RATIFICATION: Tom picks the route. Built is route (b)'s mechanism at route (a)'s bar; route (a) proper (a Cython lane kernel) is analysed and unbuilt, and its measured ceiling is ~2.3x on a path that is already the fast one.",
+    "The pre-existing compiled-golden failure at agent-staging 508462f and on campaign 39cb395 -- reported here, owned elsewhere.",
+    "The deposit_beam_reference.py counter re-plumbing: a gate INSTRUMENT change, disclosed in full above, with the fixture values untouched.",
+    "LANE_MARCH_MIN_LEGS = 128 is a measured cost threshold on THIS machine. It moves no float, so it needs no recapture to retune, but it should be re-measured after any change to the round's op count."
+  ]
+}
