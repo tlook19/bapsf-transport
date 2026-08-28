@@ -603,9 +603,6 @@ def _build_resolved_geometry(input_dict, flags):
         neutral_baffle_clear_radius_cm=baffle_radii,
         anode_transparency=1.0 - float(input_dict.get("eta", 0.0)),
         anode_neutral_transparency=_anode_neutral_transparency(input_dict),
-        anode_advective_block=float(
-            input_dict.get("b_anode_advective_block", 0.0)
-        ),
         # Plasma-terminating surfaces: every cathode, plus the collector's outer
         # face when there is one (a twin machine ends in plenums instead, whose
         # back walls are closed and see no plasma).
@@ -1011,7 +1008,6 @@ def _assemble_geometry(
     neutral_baffle_clear_radius_cm=None,
     anode_transparency=1.0,
     anode_neutral_transparency=None,
-    anode_advective_block=0.0,
     absorbing_face_indices=None,
     plasma_face_area_override=None,
 ):
@@ -1086,18 +1082,11 @@ def _assemble_geometry(
     # plasma flux is NOT: the anode removes plasma through the Bohm sheath flux at
     # its wires (physics/sources.anode_collection_rhs), and shrinking the face as
     # well would remove the same particles twice. Mass that misses a wire
-    # simply streams through the holes. `b_anode_advective_block` (default 0)
-    # exists only to dial that blocking back in for a sensitivity study; note it
-    # *reflects* rather than absorbs, since the absorption is always Bohm.
+    # simply streams through the holes, so the plasma face stays fully open.
     transparency = float(anode_transparency)
     if not 0.0 <= transparency <= 1.0:
         raise ValueError(
             f"anode transparency must lie in [0, 1] (got {transparency})"
-        )
-    block = float(anode_advective_block)
-    if not 0.0 <= block <= 1.0:
-        raise ValueError(
-            f"b_anode_advective_block must lie in [0, 1] (got {block})"
         )
     neutral_transparency = (
         transparency
@@ -1112,7 +1101,7 @@ def _assemble_geometry(
     for face in np.asarray(
         [] if anode_face_indices is None else anode_face_indices, dtype=int
     ):
-        plasma_transmission[face] = 1.0 - block * (1.0 - transparency)
+        plasma_transmission[face] = 1.0
         heat_transmission[face] = transparency
         neutral_face_area_cm2[face] = (
             neutral_face_area_cm2[face] * neutral_transparency

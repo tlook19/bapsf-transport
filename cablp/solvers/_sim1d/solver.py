@@ -3294,9 +3294,6 @@ class LAPDSim1D:
             for name in (
                 "gas_type",
                 "I_ion",
-                "b_ioniz",
-                "b_rec_rad",
-                "b_rec_3b",
                 "atomic_rate_model",
                 "adas_low_te_extension",
             )
@@ -3359,9 +3356,7 @@ class LAPDSim1D:
         return boundary
 
     def _tracer_exchange_kwargs(self):
-        return {
-            "b_Qie": float(self._input_dict.get("b_Qie", 1.0)),
-        }
+        return {}
 
     def _tracer_beam_kwargs(self, state, cathode_solve, time):
         """Return the argument set BOTH beam readers must be built from.
@@ -8055,9 +8050,6 @@ class LAPDSim1D:
             mu=self._mu,
             geometry=self._plasma_geometry(),
             eta=float(self._input_dict.get("eta", 0.0)),
-            b_anode_collection=float(
-                self._input_dict.get("b_anode_collection", 1.0)
-            ),
             anode_jet=self._anode_jet_spec(cathode_solve),
             sheath_edge_energy=self._anode_sheath_full_debit,
         )
@@ -8864,7 +8856,6 @@ class LAPDSim1D:
             ion_mass_g=self._ion_mass_g,
             gas_type=self._gas_type,
             I_ion=self._I_ion,
-            b_rec_rad=float(self._input_dict.get("b_rec_rad", 1.0)),
             atomic_rate_model=str(
                 self._input_dict.get("atomic_rate_model", "adas")
             ),

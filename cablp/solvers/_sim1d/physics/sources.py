@@ -933,7 +933,6 @@ def anode_collection_rhs(
     geometry,
     eta,
     alpha_isat=np.exp(-0.5),
-    b_anode_collection=1.0,
     anode_jet=None,
     sheath_edge_energy=False,
 ):
@@ -999,7 +998,7 @@ def anode_collection_rhs(
     anode_faces = np.asarray(
         getattr(geometry, "anode_face_indices", ()), dtype=int
     )
-    if anode_faces.size == 0 or eta <= 0.0 or b_anode_collection == 0.0:
+    if anode_faces.size == 0 or eta <= 0.0:
         return ConservativeState1D(
             n=zeros,
             nn=zeros.copy(),
@@ -1044,10 +1043,6 @@ def anode_collection_rhs(
                     * loss
                     / jet_volume
                 )
-    dN_loss *= float(b_anode_collection)
-    if jet_active:
-        jet_M_n *= float(b_anode_collection)
-
     plasma_loss_rate = dN_loss / geometry.plasma_volume_cm3
     # Two-zone state: the mesh feeds the ANNULUS, falling back to the column in
     # annulus-free cells; the jet momentum stays chamber-mean on M_n.
@@ -1156,7 +1151,6 @@ def ion_neutral_slip_factor(
     ion_mass_g,
     Rm_cm,
     Tn_eV=0.1,
-    b_slip_entrainment=1.0,
     gas_type=None,
 ):
     """Return the local drag slip factor ``s = 1 - u_n/u_i = 1/(1 + E)``.
@@ -1171,8 +1165,8 @@ def ion_neutral_slip_factor(
     steady balance gives ``u_n/u_i = E/(1 + E)`` with ``E = nu_ni * tau_wall``,
     so the drag on the ions scales by ``s = 1/(1 + E)`` -- full drag in
     rarefied plasma (``E -> 0``), vanishing as the neutrals entrain
-    (``E -> inf``). ``b_slip_entrainment`` scales ``E`` and absorbs the O(1)
-    geometric factors this balance ignores.
+    (``E -> inf``). The O(1) geometric factors this balance ignores are
+    absorbed nowhere: the closure is used as derived.
     """
     nu_ni = ion_neutral_collision_frequency(
         nn=n,
@@ -1183,7 +1177,7 @@ def ion_neutral_slip_factor(
         8.0 * float(Tn_eV) * ev_to_erg / (np.pi * ion_mass_g)
     )
     tau_wall = np.asarray(Rm_cm, dtype=float) / vbar_n
-    entrainment = float(b_slip_entrainment) * nu_ni * tau_wall
+    entrainment = nu_ni * tau_wall
     return 1.0 / (1.0 + entrainment)
 
 
@@ -1194,7 +1188,6 @@ def _resolve_slip_factor(
     drag_model,
     Rm_cm,
     Tn_fit,
-    b_slip_entrainment,
     gas_type=None,
 ):
     """Return the per-cell slip factor for ``drag_model``, or 1 for constant."""
@@ -1213,7 +1206,6 @@ def _resolve_slip_factor(
         ion_mass_g=ion_mass_g,
         Rm_cm=Rm_cm,
         Tn_eV=Tn_fit,
-        b_slip_entrainment=b_slip_entrainment,
         gas_type=gas_type,
     )
 
@@ -1307,7 +1299,6 @@ def ion_neutral_drag_rhs(
     b_ion_neutral_drag=1.0,
     cx_only=False,
     drag_model="constant",
-    b_slip_entrainment=1.0,
     Rm_cm=None,
     Tn_fit=0.1,
     geometry=None,
@@ -1403,7 +1394,6 @@ def ion_neutral_drag_rhs(
         drag_model=drag_model,
         Rm_cm=Rm_cm,
         Tn_fit=Tn_fit,
-        b_slip_entrainment=b_slip_entrainment,
         gas_type=gas_type,
     )
     drag = (
@@ -1451,7 +1441,6 @@ def ion_neutral_frictional_heating_rhs(
     b_ion_neutral_drag=1.0,
     cx_only=False,
     drag_model="constant",
-    b_slip_entrainment=1.0,
     Rm_cm=None,
     Tn_fit=0.1,
     wind_column_factor=None,
@@ -1506,7 +1495,6 @@ def ion_neutral_frictional_heating_rhs(
             drag_model=drag_model,
             Rm_cm=Rm_cm,
             Tn_fit=Tn_fit,
-            b_slip_entrainment=b_slip_entrainment,
             gas_type=gas_type,
         )
         u_rel = derived.u * slip
