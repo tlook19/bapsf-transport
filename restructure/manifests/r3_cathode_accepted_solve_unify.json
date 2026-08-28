@@ -94,7 +94,7 @@
     },
     "after": {
       "artifacts": ["scripts/r3unify_census.log", "scripts/r3unify_sites_post.log"],
-      "solves_per_accepted_step": {"5": 1187, "6": 13},
+      "solves_per_accepted_step": {"5": 1186, "6": 13},
       "by_caller": {"rhs_terms": 2414, "_update_current_phase_triggers": 2398, "beam_deposition_ee_source": 1200, "_plasma_source_timestep_rhs": 1},
       "steady_tuple": "(_update_current_phase_triggers, _update_current_phase_triggers, rhs_terms, rhs_terms, beam_deposition_ee_source)",
       "gate_1a": "PASS -- 5 solves per accepted step (was 6).",
@@ -223,6 +223,10 @@
     ],
     "note": "The r3trig_* files are the 1c mapping/stop evidence; the r3unify_* files are this member's build and gate evidence. The reference arm is the PRE-change capture both A/B verdicts are measured against; it was taken during the 1c phase as r3trig_ref.npz and is present under BOTH names -- r3unify_ref.npz is a byte-identical copy (cmp verified), kept so the A/B pair is discoverable under one prefix. The r3unify_ab.log verdict was computed against r3trig_ref.npz."
   },
+
+  "corrections": [
+    "2026-08-27 [unify-manifest-1186] -- census.after.solves_per_accepted_step['5'] read 1187; the evidence log scripts/r3unify_census.log says 1186 ('5 solves : 1186 steps') and 1186+13=1199 matches the stated horizon. Transcription slip found at review (27gn); the number was corrected to 1186 and nothing else in this file moved. census.before's 1187 is NOT the same slip -- its own log (scripts/r3unify_sites_pre.log, '6 solves : 1187 steps') corroborates it over the pre-change 1200-step denominator."
+  ],
 
   "head_revision": "ffacab5b3fc8b85103aba459df851a1f63d57dd9",
   "branch": "worktree-agent-a6693a1dd47fd9cab",

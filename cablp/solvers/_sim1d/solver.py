@@ -214,12 +214,10 @@ from cablp.cathode.beam_deposition import (
 from cablp.atomic.cross_sections import charge_ex_react
 from cablp.cathode.kernels import PROVENANCE as KERNEL_PROVENANCE
 from cablp.constants import (
-    I_Ry,
     I_ion,
     ev_to_erg,
     kb_cgs,
     m_He_cgs,
-    m_p_cgs,
     qe_SI,
 )
 
@@ -12280,9 +12278,19 @@ class LAPDSim1D:
     def _gas_constants(gas_type):
         if gas_type == "He":
             return m_He_cgs, 4, 4, I_ion
+        # Ruled 2026-08-27, the [gas-constants-h-arm] successor row of the
+        # h-quarantine: this arm was the last m_p_cgs consumer in cablp/.
         if gas_type == "H":
-            return m_p_cgs, 1, 2, I_Ry
-        raise ValueError(f"unsupported gas_type {gas_type!r}; expected 'He' or 'H'")
+            raise ValueError(
+                "gas_type='H' is not available: the hydrogen arm of "
+                "_gas_constants was retired 2026-08-27 as dead code. It "
+                "returned proton constants that no construction could ever "
+                "carry into physics -- the solver is helium-only (D3, "
+                "2026-08-21) and refuses gas_type != 'He' a few lines later "
+                "in __init__, at the Phelps He+/He sigma_in_model gate. "
+                "Accepted: 'He'."
+            )
+        raise ValueError(f"unsupported gas_type {gas_type!r}; expected 'He'")
 
 
 def _finite_or_nan(value):
