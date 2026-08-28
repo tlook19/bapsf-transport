@@ -6,7 +6,7 @@ NEUTRAL PRESSURE PER ATOM the kinetic era measured, and how does it compare
 with the cold-gas pressure per atom the NBL fluid build assumes
 (``Tn_K = 300 K``, core/config.py:2205)?
 
-Sources (all already on disk in cablp/scripts/):
+Sources (all already on disk in scripts/):
   - e2_regen_true_sources/neutral_arch_e2_compare_nx240_truesrc.txt
         E2 matched-time DVM vs true-kinematics TPMC; carries column/annulus
         DENSITY, AXIAL MOMENTUM DENSITY and KINETIC ENERGY DENSITY per
