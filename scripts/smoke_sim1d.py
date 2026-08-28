@@ -7231,9 +7231,10 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
     # --- saved effective S_gp(t) waveform (gas_puff_diagnostics) ------------
     # The recorded waveform must be the APPLIED one, not the configured level:
     # decay_after_breakdown shapes it down through the main discharge and the
-    # phase gate shuts it off in the afterglow. Every other neutral channel is
-    # switched off (pump, reactions, anode recycling) so the puff is the ONLY
-    # nn source and the delivered fuel is unambiguous.
+    # phase gate shuts it off in the afterglow. The puff is not isolated here:
+    # the inventory closure below is a FULL budget over every booked nn row, so
+    # the fixture runs the anode at its natural eta rather than arranging the
+    # channel quiet.
     params, flags = _base_config()
     sim, snapshot = _base_sim()
     geom = snapshot.geometry
@@ -7242,9 +7243,6 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
     puffdiag_params["dt_save"] = 0.0
     puffdiag_params["tau_afterglow"] = 3.0e-10
     puffdiag_params["pump_enabled"] = False
-    # eta = 0 is the documented fully-transparent-anode limit and takes the
-    # same early return in anode_collection_rhs, so the mesh recycles nothing.
-    puffdiag_params["eta"] = 0.0
     # nn0 well below the delivered fuel, so the inventory difference below is
     # not swamped by float64 cancellation against a large standing fill.
     puffdiag_params["nn0"] = 1.0e5
@@ -7286,18 +7284,73 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
     assert np.allclose(
         puffdiag_row, puffdiag["puff_particles_per_s"], rtol=1e-12, atol=0.0
     ), (puffdiag_row, puffdiag["puff_particles_per_s"])
-    # ... and its time integral is the fuel the run actually banked. SSPRK2 on
-    # a state-independent source is the explicit trapezoid, and every step is
-    # saved (dt_save = 0), so this closes to roundoff rather than to O(dt).
+    # ... and the neutral inventory closes against the FULL ledger of nn rows,
+    # with the physics ON. Every term the run books that carries an nn row is
+    # summed -- the sum is taken over the saved rhs_terms themselves, so no
+    # channel can be silently omitted by hand-listing. Same provenance class as
+    # the puff row above: the run's own saved diagnostics, never a re-derived
+    # rate. dt_save = 0 saves every step, so the time integral is over the full
+    # step sequence rather than a subsample.
+    #
+    # Rows this fixture makes ACTIVE, as a fraction of the inventory change:
+    #   neutral_sources         ~ +1.0        the puff itself
+    #   anode_collection        ~ +7.3e-5     mesh recycling at the natural eta
+    #   recombination_rad_loss  ~ +3.2e-9     neutrals returned by recombination
+    #   neutral_exchange        ~ -1.8e-37    inventory-conserving by construction
+    #   ionization_birth        ~ -9.9e-55    plasma is cold here, so fuel burnt is nil
+    # Every other booked term either exposes no nn row or is identically zero.
+    # The last two are formally nonzero but numerically inert -- they sit far
+    # below the closure's own roundoff floor, so the negative control below can
+    # only demonstrate sensitivity to the three rows that carry weight.
+    puffdiag_booked = {
+        _term_name: np.trapezoid(
+            np.asarray(_term_fields["nn"], dtype=float) @ puffdiag_vol,
+            puffdiag_result.time,
+        )
+        for _term_name, _term_fields in puffdiag_result.rhs_terms.items()
+        if "nn" in _term_fields
+    }
     puffdiag_N_n = np.asarray(puffdiag_result.nn, dtype=float) @ puffdiag_vol
+    puffdiag_dN_n = puffdiag_N_n[-1] - puffdiag_N_n[0]
+    puffdiag_budget = sum(puffdiag_booked.values())
+    # SSPRK2 on the state-INDEPENDENT puff row is the explicit trapezoid, so
+    # that row closes exactly; the residual is set by the state-DEPENDENT
+    # recombination row, whose stage-vs-saved-state gap is O(dt^2) on a row
+    # that is itself only 3.2e-9 of the total. Measured 2.2e-12 -- the same
+    # roundoff class as the puff-only tie this replaced, but a strictly
+    # stronger statement, since it ties every channel rather than one.
     assert np.isclose(
-        puffdiag_N_n[-1] - puffdiag_N_n[0],
-        np.trapezoid(
-            puffdiag["puff_particles_per_s"], puffdiag_result.time
-        ),
-        rtol=1e-11,
-        atol=0.0,
-    ), (puffdiag_N_n[-1] - puffdiag_N_n[0], puffdiag["puff_particles_per_s"])
+        puffdiag_budget, puffdiag_dN_n, rtol=1e-11, atol=0.0
+    ), (puffdiag_budget, puffdiag_dN_n, puffdiag_booked)
+    # The rows that can actually move the budget at this tolerance, pinned so a
+    # newly activated neutral channel cannot slip into the sum unnoticed. The
+    # inert rows above are 25+ orders below this threshold, so it is not a
+    # knife edge.
+    puffdiag_carrying = {
+        _term_name
+        for _term_name, _term_integral in puffdiag_booked.items()
+        if abs(_term_integral) > 1e-12 * abs(puffdiag_dN_n)
+    }
+    assert puffdiag_carrying == {
+        "neutral_sources",
+        "anode_collection",
+        "recombination_rad_loss",
+    }, puffdiag_carrying
+    # NEGATIVE CONTROL: the budget must be sensitive to every row it claims to
+    # carry, or the closure would be tying fewer channels than it advertises.
+    # Each delta is chosen just above that row's detectability threshold,
+    # rtol * |dN_n| / |row integral|; perturbing the row must break the closure.
+    for _neg_name, _neg_delta in (
+        ("neutral_sources", 1.0e-9),
+        ("anode_collection", 1.0e-5),
+        ("recombination_rad_loss", 1.0e-1),
+    ):
+        assert not np.isclose(
+            puffdiag_budget + _neg_delta * puffdiag_booked[_neg_name],
+            puffdiag_dN_n,
+            rtol=1e-11,
+            atol=0.0,
+        ), (_neg_name, _neg_delta)
 
     assert np.allclose(source_rhs.n, 0.0)
     assert np.allclose(source_rhs.M, 0.0)
