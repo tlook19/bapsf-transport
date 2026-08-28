@@ -645,6 +645,45 @@ def _copy_cache_value(value):
     return value
 
 
+def _memo_key_part(value):
+    """Return a hashable, BIT-EXACTLY comparable stand-in for ``value``.
+
+    Used to build the read-only cathode solve memo's key
+    (:meth:`LAPDSim1D._cathode_solve_memo_key`). Floats and arrays are
+    encoded as their RAW BYTES rather than compared as numbers, so the
+    resulting key separates values that ``==`` would conflate: ``-0.0`` from
+    ``0.0``, and two states differing in the last ulp. NaN compares EQUAL to
+    itself here, which is the correct reading for a memo -- the same bits in
+    means the same solve out.
+
+    The whole key is compared with ``==`` rather than hashed, so there is no
+    collision channel: a hit means every component matched byte for byte.
+    """
+    if value is None or isinstance(value, (bool, int, str, bytes)):
+        # bool before int matters only for repr; both are exact under ==.
+        return (type(value).__name__, value)
+    if isinstance(value, (float, np.floating)):
+        return ("f", np.float64(value).tobytes())
+    if isinstance(value, np.ndarray):
+        return ("a", value.dtype.str, value.shape,
+                np.ascontiguousarray(value).tobytes())
+    if isinstance(value, dict):
+        return ("d", tuple(sorted(
+            (str(k), _memo_key_part(v)) for k, v in value.items()
+        )))
+    if isinstance(value, (list, tuple)):
+        return ("t", tuple(_memo_key_part(v) for v in value))
+    fields = getattr(value, "__dict__", None)
+    if fields is not None:
+        return ("o", type(value).__name__, tuple(sorted(
+            (str(k), _memo_key_part(v)) for k, v in fields.items()
+        )))
+    # Anything else (an opaque object) is deliberately keyed by IDENTITY, so
+    # a different object is a MISS. That errs toward re-solving, never toward
+    # serving a stale memo.
+    return ("id", id(value))
+
+
 def _format_duration(seconds):
     if not np.isfinite(seconds):
         return "unknown"
@@ -2471,6 +2510,9 @@ class LAPDSim1D:
     def _init_run_machinery(self):
         """Initialize the run-loop bookkeeping and apply any restart payload."""
         self._cathode_solve = None
+        # Single-entry memo for READ-ONLY (``update_cache=False``) cathode
+        # solves: ``(key, result)`` or None. See ``solve_cathode_boundary``.
+        self._cathode_solve_memo = None
         # Item-35 ledger tripwire: latched so the warning fires once per run.
         self._beam_gap_ledger_warned = False
         self._last_result = None
@@ -8468,6 +8510,41 @@ class LAPDSim1D:
             row = np.where(self._plasma_active_mask(), row, 0.0)
         return row
 
+    def _cathode_solve_memo_key(
+        self,
+        state,
+        time,
+        input_flags,
+        floating,
+        phi_wf_override_eV,
+        circuit_V_src_V,
+        coverage,
+    ):
+        """Return the read-only cathode solve memo's key.
+
+        One entry per argument of the module-level ``solve_cathode_boundary``
+        that can move within a run; the run-constant arguments are listed in
+        :meth:`solve_cathode_boundary` with the reason they are absent. The
+        caller passes the already-resolved values so the key cannot describe a
+        different solve from the one it guards.
+        """
+        return (
+            _memo_key_part(state),
+            _memo_key_part(time),
+            _memo_key_part(input_flags),
+            _memo_key_part(bool(floating)),
+            _memo_key_part(self._cathode_beam_cross),
+            _memo_key_part(self._cathode_x0),
+            _memo_key_part(self._cathode_x0_twin),
+            _memo_key_part(self._cathode_Ts_K),
+            _memo_key_part(phi_wf_override_eV),
+            _memo_key_part(self._cathode_f_em),
+            _memo_key_part(self._circuit_I_loop),
+            _memo_key_part(circuit_V_src_V),
+            _memo_key_part(coverage),
+            _memo_key_part(self._vessel_V_cm),
+        )
+
     def solve_cathode_boundary(
         self,
         y=None,
@@ -8488,6 +8565,45 @@ class LAPDSim1D:
             active_only=False,
             floating=bool(floating),
         )
+        phi_wf_override_eV = self._cathode_phi_wf_eff()
+        circuit_V_src_V = self._circuit_source_voltage_V(cathode_phase)
+        coverage = self._coverage_view(state, time)
+        # READ-ONLY solve memo (R3 [cathode-accepted-solve-unify]). Several
+        # consumers solve at the SAME resolved inputs within one accepted step
+        # -- the shared converged accepted-state solve, the dt bound's bundle
+        # and the first Strang heat half -- and this serves the second and
+        # third of those from the first instead of repeating the sheath/beam
+        # solve. Only ``update_cache=False`` calls participate: a cache-writing
+        # solve must actually run, because its job is the write (sigma_b, x0,
+        # the solve of record), not the value.
+        #
+        # The key is the FULL mutable input set, not a state/time pair. sigma_b
+        # (``beam_cross_prev``) is an INPUT to this solve, so two calls at one
+        # (y, t) with different sigma_b are different solves -- that is exactly
+        # the lag this member exists to resolve, and keying on state alone
+        # would paper over it by serving one for the other. Everything else
+        # this passes and that can move within a run joins for the same reason:
+        # the warm start (x0/x0_twin), the surface state (T_s, phi_wf, f_em),
+        # the circuit (I_loop, V_src, vessel node), the phase-derived flags and
+        # ``floating``, and the coverage view. The remaining arguments
+        # (``floors``, ``ion_mass_g``, ``mu``, ``geometry``, ``input_dict``,
+        # ``I_ion``, ``gas_type``) are assigned once in __init__ and never
+        # mutated, so they cannot separate two calls in one run. A miss on any
+        # component solves fresh; a stale memo is never served.
+        memo_key = None
+        if not update_cache:
+            memo_key = self._cathode_solve_memo_key(
+                state=state,
+                time=time,
+                input_flags=input_flags,
+                floating=floating,
+                phi_wf_override_eV=phi_wf_override_eV,
+                circuit_V_src_V=circuit_V_src_V,
+                coverage=coverage,
+            )
+            memo = self._cathode_solve_memo
+            if memo is not None and memo[0] == memo_key:
+                return memo[1]
         result = solve_cathode_boundary(
             state=state,
             floors=self._floors,
@@ -8503,13 +8619,15 @@ class LAPDSim1D:
             x0_twin=self._cathode_x0_twin,
             floating=floating,
             T_s_override_K=self._cathode_Ts_K,
-            phi_wf_override_eV=self._cathode_phi_wf_eff(),
+            phi_wf_override_eV=phi_wf_override_eV,
             f_em_override=self._cathode_f_em,
             circuit_I_loop_A=self._circuit_I_loop,
-            circuit_V_src_V=self._circuit_source_voltage_V(cathode_phase),
-            coverage=self._coverage_view(state, time),
+            circuit_V_src_V=circuit_V_src_V,
+            coverage=coverage,
             vessel_V_cm_V=self._vessel_V_cm,
         )
+        if memo_key is not None:
+            self._cathode_solve_memo = (memo_key, result)
         if update_cache:
             self._warn_beam_gap_ledger(result)
             self._cathode_solve = result
@@ -9361,8 +9479,16 @@ class LAPDSim1D:
             return None
         return event
 
-    def _cathode_total_current_A(self):
-        cathode_solve = self._cathode_solve
+    def _cathode_total_current_A(self, cathode_solve=None):
+        """Return the cathode solve's total current [A], 0.0 when absent.
+
+        ``cathode_solve`` names WHICH solve to read; ``None`` falls back to
+        the cached solve of record, which is every historical caller's
+        reading. The phase trigger passes its own converged accepted-state
+        solve instead (see :meth:`_update_current_phase_triggers`).
+        """
+        if cathode_solve is None:
+            cathode_solve = self._cathode_solve
         if cathode_solve is None or cathode_solve.beam_result is None:
             return 0.0
         return float(cathode_solve.beam_result.result.I_tot)
@@ -9560,10 +9686,29 @@ class LAPDSim1D:
         ):
             return
         cathode_phase = self._cathode_phase_options(time=self._time)
+        converged_solve = None
         if cathode_phase["solve_enabled"]:
+            # Two solves, and they are not the same solve (R3
+            # [cathode-accepted-solve-unify]). The FIRST is the sigma_b
+            # refresher and keeps its historical job: it consumes the sigma_b
+            # the accepted step's last internal stage left -- a STAGE-state
+            # value -- and writes the accepted-state one, along with the warm
+            # start and the solve of record every existing diagnostic reads.
+            #
+            # The SECOND re-solves at the same accepted state on the sigma_b
+            # the first just wrote, which is the converged one: the lag map
+            # reaches its fixed point in a single iteration, so this solve is
+            # what the dt bound and the first Strang heat half go on to see.
+            # The trigger's threshold test reads THIS, not the lagged first
+            # solve, and the memo hands the same object to those two consumers
+            # instead of letting them repeat it -- which is why the step's
+            # solve count falls by one even though a solve was added here.
             self.solve_cathode_boundary(time=self._time, update_cache=True)
+            converged_solve = self.solve_cathode_boundary(
+                time=self._time, update_cache=False
+            )
 
-        I_now = self._cathode_total_current_A()
+        I_now = self._cathode_total_current_A(cathode_solve=converged_solve)
         tau_prebreakdown = max(
             float(self._input_dict.get("tau_prebreakdown", 0.0)),
             0.0,
