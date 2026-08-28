@@ -53,13 +53,14 @@ from ..atomic.cross_sections import (
 )
 from ..cathode.circuit import _c_log_ei
 from ..numerics.interp import (
-    _interp_array_unchecked,
+    _interp_array_unchecked_multi,
     check_fma_domain,
     check_interp_table,
 )
 
 __all__ = [
     "LaneMarchResult",
+    "check_constants",
     "lane_march",
     "lane_march_energy_ceiling_eV",
     "LANE_MARCH_MODELS",
@@ -105,6 +106,34 @@ def _exc_table():
         _EXC_GRID, _EXC_SIGMA, _EXC_SIGMA_E = grid, sig, sig_e
         _EXC_TABLE_SRC = src
     return _EXC_GRID, _EXC_SIGMA, _EXC_SIGMA_E
+
+
+def check_constants(erg_per_ev, me_cgs, e4_cgs, opb_ebar_ev):
+    """Raise unless the caller's physical constants are this module's, bit for bit.
+
+    The lane march needs four constants that ``beam_deposition`` also spells
+    out, and it cannot import them from there because that module imports this
+    one. A re-spelling can drift, and a drifted constant would move the march
+    silently, so the importer asserts the agreement AT IMPORT -- the same
+    question the compiled kernel module answers with ``check_constants_beam``.
+    """
+    mismatched = [
+        name
+        for name, mine, theirs in (
+            ("_ERG_PER_EV", _ERG_PER_EV, erg_per_ev),
+            ("_ME_CGS", _ME_CGS, me_cgs),
+            ("_E4_CGS", _E4_CGS, e4_cgs),
+            ("HE_OPB_EBAR_EV", _HE_OPB_EBAR_EV, opb_ebar_ev),
+        )
+        if mine != float(theirs)
+    ]
+    if mismatched:
+        raise ValueError(
+            "cablp.cathode.beam_lane_march disagrees with its caller on "
+            f"{', '.join(mismatched)}. The lane march reproduces the scalar "
+            "CSDA march bit for bit only while the two spell the same "
+            "constants; fix the divergence rather than tolerating it"
+        )
 
 
 def lane_march_energy_ceiling_eV():
@@ -338,31 +367,30 @@ def lane_march(
             )
         substeps[idx] += 1
         nn_c = nn[cell]
-        # --- electron-impact ionization cross section -----------------------
-        eps = E / I_ion_eV
-        open_i = E > I_ion_eV
-        log_eps = np.log(np.where(open_i, eps, 1.0))
-        sigma_i = np.where(
-            open_i,
-            np.exp(
-                _interp_array_unchecked(
-                    log_eps, _EII_LOG_EPS, _EII_LOG_SIGMA,
-                    left=_EII_LEFT, right=_EII_RIGHT,
-                )
-            ),
-            0.0,
-        )
-        # --- summed singlet excitation manifold -----------------------------
         if np.any(E >= exc_hi):
             raise ValueError(
                 "lane_march reached the He excitation table ceiling "
                 f"({exc_hi} eV), where the scalar lookup falls back to the "
                 "exact manifold sum; that fallback is not reproduced here"
             )
+        # --- the three table lookups, in one fused-multiply-add -------------
+        # The ionization cross section on the log-log EII table, and the
+        # summed singlet excitation manifold's sigma and sigma*E_rad on one
+        # energy grid. Batched only to save numpy dispatch; each is the value
+        # the scalar lookup would return.
+        eps = E / I_ion_eV
+        open_i = E > I_ion_eV
+        log_eps = np.log(np.where(open_i, eps, 1.0))
         in_band = E > exc_lo
         E_probe = np.where(in_band, E, exc_hi)
-        s_raw = _interp_array_unchecked(E_probe, exc_grid, exc_sigma)
-        sE_raw = _interp_array_unchecked(E_probe, exc_grid, exc_sigma_E)
+        eii_log, s_raw, sE_raw = _interp_array_unchecked_multi(
+            (
+                (log_eps, _EII_LOG_EPS, _EII_LOG_SIGMA, _EII_LEFT, _EII_RIGHT),
+                (E_probe, exc_grid, exc_sigma, None, None),
+                (E_probe, exc_grid, exc_sigma_E, None, None),
+            )
+        )
+        sigma_i = np.where(open_i, np.exp(eii_log), 0.0)
         live_x = in_band & (s_raw > 0.0)
         sigma_x = np.where(live_x, s_raw, 0.0)
         E_rad = np.where(live_x, sE_raw / np.where(live_x, s_raw, 1.0), 0.0)
@@ -431,15 +459,20 @@ def lane_march(
             heating[rows, cols] += acc_heat[leaving]
             radiated[rows, cols] += acc_rad[leaving]
             ion_cost[rows, cols] += acc_cost[leaving]
-            absorbed[rows[done[leaving]]] = True
-            keep = ~done
-            (idx, E, gamma, cell, step_dir, remaining, acc_ion, acc_exc,
-             acc_heat, acc_rad, acc_cost) = (
-                idx[keep], E[keep], gamma[keep], cell[keep], step_dir[keep],
-                remaining[keep], acc_ion[keep], acc_exc[keep], acc_heat[keep],
-                acc_rad[keep], acc_cost[keep],
-            )
-            advance = leaving[keep]
+            # Compaction is a copy of every lane array, so it runs only when
+            # a lane has actually finished; a round where lanes merely cross a
+            # cell boundary keeps the arrays it has.
+            advance = leaving
+            if np.any(done):
+                absorbed[rows[done[leaving]]] = True
+                keep = ~done
+                (idx, E, gamma, cell, step_dir, remaining, acc_ion, acc_exc,
+                 acc_heat, acc_rad, acc_cost, advance) = (
+                    idx[keep], E[keep], gamma[keep], cell[keep],
+                    step_dir[keep], remaining[keep], acc_ion[keep],
+                    acc_exc[keep], acc_heat[keep], acc_rad[keep],
+                    acc_cost[keep], leaving[keep],
+                )
             if np.any(advance):
                 acc_ion[advance] = 0.0
                 acc_exc[advance] = 0.0
@@ -449,19 +482,18 @@ def lane_march(
                 cell = cell.copy()
                 cell[advance] += step_dir[advance]
                 remaining = remaining.copy()
-                inside = (cell >= 0) & (cell < cells)
-                gone = advance & ~inside
+                gone = advance & ((cell < 0) | (cell >= cells))
                 if np.any(gone):
                     out_flux[idx[gone]] = gamma[gone]
                     out_E[idx[gone]] = E[gone]
-                stay = ~gone
-                (idx, E, gamma, cell, step_dir, remaining, acc_ion, acc_exc,
-                 acc_heat, acc_rad, acc_cost, advance) = (
-                    idx[stay], E[stay], gamma[stay], cell[stay],
-                    step_dir[stay], remaining[stay], acc_ion[stay],
-                    acc_exc[stay], acc_heat[stay], acc_rad[stay],
-                    acc_cost[stay], advance[stay],
-                )
+                    stay = ~gone
+                    (idx, E, gamma, cell, step_dir, remaining, acc_ion,
+                     acc_exc, acc_heat, acc_rad, acc_cost, advance) = (
+                        idx[stay], E[stay], gamma[stay], cell[stay],
+                        step_dir[stay], remaining[stay], acc_ion[stay],
+                        acc_exc[stay], acc_heat[stay], acc_rad[stay],
+                        acc_cost[stay], advance[stay],
+                    )
                 if idx.size and np.any(advance):
                     remaining[advance] = dz_cm[cell[advance]]
                     (idx, E, gamma, cell, step_dir, remaining, acc_ion,

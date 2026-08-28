@@ -76,6 +76,28 @@ class Census:
         self.calls = 0
         self.worst_call_ratio = 0.0
         self.notes = []
+        # Reflecting-face arrivals, which is what makes the per-birth exit
+        # state load-bearing: a batch is only evidence about it if the corpus
+        # actually presents BOTH sides of the threshold at the same face.
+        self.face_arrivals = 0
+        self.face_reflected = 0
+        self.face_escaped = 0
+
+    def face_census(self, ref_chains, reflect_face):
+        if reflect_face is None:
+            return
+        for chains in ref_chains:
+            if chains is None:
+                continue
+            for chain in chains:
+                banks, flux, energy, direction = chain[0]
+                if direction != reflect_face or flux <= 0.0:
+                    continue
+                self.face_arrivals += 1
+                if len(chain) > 1:
+                    self.face_reflected += 1
+                else:
+                    self.face_escaped += 1
 
     def compare(self, lane_chains, ref_chains, label):
         self.calls += 1
@@ -140,6 +162,11 @@ class Census:
             f"(worst single call {self.worst_call_ratio:.6e}); "
             f"bar {FLIP_ENERGY_BAR:.1e}"
         )
+        print(
+            f"  reflecting-face arrivals: {self.face_arrivals} "
+            f"({self.face_reflected} below threshold and turned around, "
+            f"{self.face_escaped} above it and free-escaping)"
+        )
         for line in self.notes[:20]:
             print(f"    {line}")
         return self.flipped == 0 and ratio <= FLIP_ENERGY_BAR
@@ -156,12 +183,20 @@ def run_corpus(census):
     real_min = B.LANE_MARCH_MIN_LEGS
     state = {"label": ""}
     batches = [0]
+    batched = [0]
 
     def dual(plans, *args, **kwargs):
+        before = B.LANE_MARCH_COUNTS["legs"]
         got = real_lane(plans, *args, **kwargs)
+        # A batch that fell back to the recursive route would compare itself
+        # against itself, which is no evidence at all; count the ones that
+        # really took the lane route so the census cannot be vacuous.
+        if B.LANE_MARCH_COUNTS["legs"] > before:
+            batched[0] += 1
         want = B._tail_recursive_chains(plans, *args, **kwargs)
         batches[0] += 1
         census.compare(got, want, state["label"])
+        census.face_census(want, args[7])
         return got
 
     # Threshold forced to 1 so EVERY batch takes the lane route, including the
@@ -176,7 +211,10 @@ def run_corpus(census):
     finally:
         B._tail_lane_chains = real_lane
         B.LANE_MARCH_MIN_LEGS = real_min
-    print(f"corpus: {len(entries)} entries, {batches[0]} tail-leg batches")
+    print(
+        f"corpus: {len(entries)} entries, {batches[0]} tail-leg batches, "
+        f"{batched[0]} of them actually marched as lanes"
+    )
 
 
 def run_random(census, trials, seed=20260827):

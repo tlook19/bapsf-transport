@@ -593,6 +593,7 @@ from ..atomic.cross_sections import (
 )
 from .beam_lane_march import (
     LANE_MARCH_MODELS,
+    check_constants as _check_lane_constants,
     lane_march,
     lane_march_energy_ceiling_eV,
 )
@@ -651,6 +652,14 @@ PLATEAU_EDGE_BISECTIONS = 200
 HE_I_ION_EV = 24.58738793623
 HE_E_STOP_EV = 20.6158  # lowest inelastic threshold (2^1S)
 HE_OPB_EBAR_EV = 15.8  # Opal-Peterson-Beaty shape parameter for He
+
+# The lane march (``beam_lane_march``) re-spells the four constants above that
+# its expressions need, because it cannot import them from here without a
+# cycle. Assert the two spellings agree at import, so a drift is a startup
+# error rather than a silent divergence in the batched legs -- the same check
+# the compiled kernel module answers with ``check_constants_beam``.
+_check_lane_constants(_ERG_PER_EV, _ME_CGS, _E4_CGS, HE_OPB_EBAR_EV)
+
 # Top of the tabulated He EII cross section, in the table's own reduced units
 # eps = E / I_ion (``He_EII_cross_lkup``). Taken FROM the table rather than
 # written down, so it cannot drift from the data it describes. Above it the
@@ -1107,7 +1116,14 @@ def ql_relaxation_stopping_eV_per_cm(
 #: more than the scalar substeps it replaces, so the recursive route is the
 #: cheaper one. A cost threshold, not a correctness one: both routes produce
 #: the same floats, which is what lets this be tuned without a recapture.
-LANE_MARCH_MIN_LEGS = 24
+#:
+#: MEASURED, on the reference corpus's own real deposition rays: the two routes
+#: cross near 96 legs, so the value sits above the crossing with margin rather
+#: than on it -- a batch just past a mis-set threshold pays the dispatch and
+#: gets nothing back, and the corpus's main-discharge ray is exactly that case
+#: at 64 legs. Re-measure with scripts/r3lane_equivalence.py's timing companion
+#: after any change to the round's op count.
+LANE_MARCH_MIN_LEGS = 128
 
 #: Substeps and legs the lane march absorbed since the counter was last reset.
 #: The instruments that census the CSDA march count substeps by hooking the
@@ -1161,7 +1177,14 @@ def _tail_lane_chains(
         return [None] * len(plans)
 
     use_lanes = (
-        len(lanes_E0) >= LANE_MARCH_MIN_LEGS
+        # THE PURE PATH'S ROUTE. With the compiled march bound, a leg's whole
+        # substep loop already runs in C at a fraction of a numpy round's
+        # dispatch cost, and batching it is a large REGRESSION (measured 5.1 ms
+        # -> 27.1 ms on the corpus's breakdown ray). The two routes agree bit
+        # for bit, so which one a process takes is purely a cost question, and
+        # the answer differs by whether a kernel is loaded.
+        _CSDA_MARCH is None
+        and len(lanes_E0) >= LANE_MARCH_MIN_LEGS
         and march_kwargs["coulomb_model"] in LANE_MARCH_MODELS
         and march_kwargs["I_ion_eV"] > 0.0
         and march_kwargs["E_stop_eV"] > 0.0

@@ -328,18 +328,68 @@ def check_interp_table(xp, fp):
 
 def _interp_array_unchecked(x, xp, fp, left=None, right=None):
     """:func:`interp_array_fused` with the table and query checks hoisted out."""
-    n = xp.size
-    j = np.searchsorted(xp, x, side="right") - 1
-    jj = np.clip(j, 0, n - 2)
-    xj = xp[jj]
-    fj = fp[jj]
-    slope = (fp[jj + 1] - fj) / (xp[jj + 1] - xj)
-    # On-node queries take the node's own value without evaluating a slope;
-    # the last node and the two out-of-range fills are the scalar form's.
-    out = np.where(xj == x, fj, _fma_array_unchecked(slope, x - xj, fj))
-    out = np.where(j >= n - 1, fp[n - 1], out)
-    lo = float(fp[0]) if left is None else float(left)
-    hi = float(fp[n - 1]) if right is None else float(right)
-    out = np.where(x < xp[0], lo, out)
-    out = np.where(x > xp[n - 1], hi, out)
+    return _interp_array_unchecked_multi([(x, xp, fp, left, right)])[0]
+
+
+def _interp_array_unchecked_multi(queries):
+    """Several unchecked lookups, sharing ONE fused multiply-add.
+
+    ``queries`` is a sequence of ``(x, xp, fp, left, right)``. Each is
+    interpolated exactly as :func:`_interp_array_unchecked` would; the only
+    difference is that the interior lerps are concatenated and rounded in a
+    SINGLE :func:`fma_array` call. The FMA is elementwise, so concatenating
+    changes no result -- it removes per-call numpy dispatch, which dominates at
+    the array sizes the CSDA lane march runs at.
+
+    Consecutive queries sharing the same ``x`` and ``xp`` OBJECTS reuse the
+    first one's bracketing search, which is the two-table-one-grid case
+    (sigma and sigma*E_rad on one energy grid).
+    """
+    parts = []
+    slopes = []
+    dxs = []
+    fjs = []
+    prev = None
+    for x, xp, fp, left, right in queries:
+        if prev is not None and prev[0] is x and prev[1] is xp:
+            j, jj, xj = prev[2], prev[3], prev[4]
+        else:
+            n = xp.size
+            j = np.searchsorted(xp, x, side="right") - 1
+            jj = np.clip(j, 0, n - 2)
+            xj = xp[jj]
+            prev = (x, xp, j, jj, xj)
+        fj = fp[jj]
+        slopes.append((fp[jj + 1] - fj) / (xp[jj + 1] - xj))
+        dxs.append(x - xj)
+        fjs.append(fj)
+        parts.append((x, xp, fp, left, right, j, xj, fj))
+    if len(parts) == 1:
+        lerps = [_fma_array_unchecked(slopes[0], dxs[0], fjs[0])]
+    else:
+        sizes = [np.size(v) for v in fjs]
+        flat = _fma_array_unchecked(
+            np.concatenate([np.broadcast_to(v, (s,))
+                            for v, s in zip(slopes, sizes)]),
+            np.concatenate([np.broadcast_to(v, (s,))
+                            for v, s in zip(dxs, sizes)]),
+            np.concatenate([np.broadcast_to(v, (s,))
+                            for v, s in zip(fjs, sizes)]),
+        )
+        lerps = []
+        at = 0
+        for s in sizes:
+            lerps.append(flat[at:at + s])
+            at += s
+    out = []
+    for lerp, (x, xp, fp, left, right, j, xj, fj) in zip(lerps, parts):
+        n = xp.size
+        # On-node queries take the node's own value without evaluating a slope;
+        # the last node and the two out-of-range fills are the scalar form's.
+        res = np.where(xj == x, fj, lerp)
+        res = np.where(j >= n - 1, fp[n - 1], res)
+        lo = float(fp[0]) if left is None else float(left)
+        hi = float(fp[n - 1]) if right is None else float(right)
+        res = np.where(x < xp[0], lo, res)
+        out.append(np.where(x > xp[n - 1], hi, res))
     return out
