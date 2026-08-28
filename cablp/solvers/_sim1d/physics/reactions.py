@@ -38,9 +38,6 @@ def reaction_rates(
     ion_mass_g,
     gas_type,
     I_ion,
-    b_ioniz=1.0,
-    b_rec_rad=1.0,
-    b_rec_3b=1.0,
     atomic_rate_model="janev",
     adas_low_te_extension=False,
 ):
@@ -54,7 +51,7 @@ def reaction_rates(
     rate lacks (up to ~3-6x at 3-5 eV, LAPD densities) -- and ACD for
     recombination. ACD already contains three-body recombination at the
     tabulated density, so in adas mode the whole sink is reported through the
-    ``S_rec_rad`` slot scaled by ``b_rec_rad``, and ``b_rec_3b`` is inert.
+    ``S_rec_rad`` slot, and the separate three-body channel is inert.
     """
     _check_atomic_rate_model(atomic_rate_model, gas_type)
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
@@ -64,8 +61,8 @@ def reaction_rates(
             n_safe, derived.Te, ("scd", "acd"),
             low_te_extension=adas_low_te_extension,
         )
-        S_ion = float(b_ioniz) * state.n * state.nn * rates["scd"]
-        S_rec_rad = float(b_rec_rad) * state.n * state.n * rates["acd"]
+        S_ion = state.n * state.nn * rates["scd"]
+        S_rec_rad = state.n * state.n * rates["acd"]
         S_rec_3b = np.zeros_like(state.n, dtype=float)
         return S_ion, S_rec_rad, S_rec_3b
 
@@ -76,9 +73,9 @@ def reaction_rates(
     else:
         raise ValueError(f"unsupported gas_type {gas_type!r}; expected 'He' or 'H'")
 
-    S_ion = float(b_ioniz) * state.n * state.nn * ion_rate
-    S_rec_rad = float(b_rec_rad) * state.n * state.n * alpha_r(derived.Te, I=I_ion)
-    S_rec_3b = float(b_rec_3b) * state.n * state.n * state.n * alpha_3(derived.Te)
+    S_ion = state.n * state.nn * ion_rate
+    S_rec_rad = state.n * state.n * alpha_r(derived.Te, I=I_ion)
+    S_rec_3b = state.n * state.n * state.n * alpha_3(derived.Te)
     return S_ion, S_rec_rad, S_rec_3b
 
 
@@ -89,9 +86,6 @@ def reaction_rhs(
     geometry,
     gas_type,
     I_ion,
-    b_ioniz=1.0,
-    b_rec_rad=1.0,
-    b_rec_3b=1.0,
     atomic_rate_model="janev",
     adas_low_te_extension=False,
     Te_birth_ionization="local",
@@ -108,9 +102,6 @@ def reaction_rhs(
         geometry=geometry,
         gas_type=gas_type,
         I_ion=I_ion,
-        b_ioniz=b_ioniz,
-        b_rec_rad=b_rec_rad,
-        b_rec_3b=b_rec_3b,
         atomic_rate_model=atomic_rate_model,
         adas_low_te_extension=adas_low_te_extension,
         Te_birth_ionization=Te_birth_ionization,
@@ -138,9 +129,6 @@ def reaction_rhs_terms(
     geometry,
     gas_type,
     I_ion,
-    b_ioniz=1.0,
-    b_rec_rad=1.0,
-    b_rec_3b=1.0,
     atomic_rate_model="janev",
     adas_low_te_extension=False,
     Te_birth_ionization="local",
@@ -162,9 +150,6 @@ def reaction_rhs_terms(
         ion_mass_g=ion_mass_g,
         gas_type=gas_type,
         I_ion=I_ion,
-        b_ioniz=b_ioniz,
-        b_rec_rad=b_rec_rad,
-        b_rec_3b=b_rec_3b,
         atomic_rate_model=atomic_rate_model,
         adas_low_te_extension=adas_low_te_extension,
     )
@@ -286,7 +271,6 @@ def recombination_energy_return_rhs(
     ion_mass_g,
     gas_type,
     I_ion,
-    b_rec_rad=1.0,
     atomic_rate_model="janev",
     enabled=False,
     adas_low_te_extension=False,
@@ -305,7 +289,7 @@ def recombination_energy_return_rhs(
     the recombination terms stays booked -- it cancels in the net; this
     pair adds ``I_ion*S_rec - P_PRB`` on top. The PAIR is the consistent
     unit (PRB alone double-charges -- the ``icool_recomb`` audit); both
-    halves scale with ``b_rec_rad`` so the credit tracks the particle
+    halves are evaluated from the same ACD sink so the credit tracks the particle
     equation's actual sink. ADAS ('adas' rate model) only: the janev path
     has no PRB booking. Grid lookups clamp at the adf11 edges (0.2 eV Te
     floor), nearest-edge.
@@ -332,8 +316,8 @@ def recombination_energy_return_rhs(
     )
     # Mirror reaction_rates' adas branch exactly: the credit is I_ion per
     # particle the particle equation actually recombines.
-    S_rec = float(b_rec_rad) * state.n * state.n * rates["acd"]
-    P_prb_eV = float(b_rec_rad) * state.n * state.n * rates["prb1"]
+    S_rec = state.n * state.n * rates["acd"]
+    P_prb_eV = state.n * state.n * rates["prb1"]
     return ConservativeState1D(
         n=zeros,
         nn=zeros.copy(),

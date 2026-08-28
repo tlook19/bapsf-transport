@@ -361,15 +361,16 @@ never reported as a two-zone inventory. The same volume split applies to the
 two neutral-momentum rows, and internal radial/zone transfers close exactly.
 
 Configuration is resolved once at construction from the shared registry.
-Unknown keys raise `ValueError`; `config_manifest()` exposes all 256 parameter
+Unknown keys raise `ValueError`; `config_manifest()` exposes all 242 parameter
 defaults and 51 flags with their defining groups (count current as of the
-2026-08-25 instrument/mg-plateau batch; which merge added which key is git
+2026-08-28 `b_*` removal; which merge added which key is git
 history's record — `config_snapshots.json` tracks the manifest at each
-change). The live but
-formerly
-unregistered controls `b_anode_collection` and
-`b_anode_advective_block` are registered at their pre-audit fallback
-values; `drag_dt_fraction` was registered alongside them and then deleted
+change). The legacy `b_*` rate/cooling/conduction/boundary scale factors —
+including `b_anode_collection` and `b_anode_advective_block` — were DELETED
+2026-08-28: they were locked at their shipped defaults everywhere (atomic
+rates are fixed inputs, not knobs), so the unit scale is now hardwired and
+supplying any of those names raises the unknown-key `ValueError`.
+`drag_dt_fraction` was registered alongside them and then deleted
 at D3 (2026-08-21), where it became the fixed `timestep.DRAG_DT_FRACTION`.
 The disconnected source/end absorption enables/scales, deleted at D3, and the
 compatibility-only `front_flux_model`, `D_amb_model`, `D_amb`, and

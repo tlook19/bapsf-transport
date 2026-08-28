@@ -1143,32 +1143,25 @@ def fudge_factor_defaults():
         coefficients (``cablp/atomic/data/adas``, see its README): SCD ionization
         (includes the stepwise/metastable channel the direct rate lacks --
         up to ~3-6x at 3-5 eV, LAPD densities), ACD recombination (includes
-        three-body, so ``b_rec_3b`` is inert), and PLT/PRB radiated power for
-        the ``b_Qei``/``b_Qen`` cooling terms. The ADAS cooling coefficients
+        three-body, so the separate three-body channel is absorbed), and
+        PLT/PRB radiated power for the electron cooling terms. The ADAS
+        cooling coefficients
         are radiation-only and therefore consistent with the separate
         ``ionization_energy_cost`` term; the IAEA He I fit is not -- it
         already contains the ionization-potential loss, which ``"janev"``
-        with ``b_Qen`` near 1 double-counts. ``"janev"`` (the historical
+        double-counts against that term. ``"janev"`` (the historical
         behaviour) uses the direct ground-state ionization rate, the separate
         radiative/three-body recombination coefficients, and the IAEA cooling
         fits. ``"adas"`` is wired for ``gas_type = "He"`` only -- hydrogen
         configs must set ``"janev"`` or the solver raises at construction.
-    b_ioniz:
-        Bulk ionization particle source scale factor.
-    b_rec_rad:
-        Radiative recombination particle sink scale factor. Under
-        ``atomic_rate_model = "adas"`` this scales the whole (ACD) sink.
-    b_rec_3b:
-        Three-body recombination particle sink scale factor. Inert under
-        ``atomic_rate_model = "adas"`` (ACD already includes three-body).
     recombination_energy_return:
         Books the GCR-consistent recombination energy PAIR on the electron
         fluid: per recombination event credit the binding energy ``I_ion``
         (paid at ionization via ``I_ion*S_ion`` and never returned by the
         standard booking) and charge the full ADAS ``prb1`` radiated power,
         adding ``I_ion*S_rec - P_PRB`` to ``Ee`` on top of the ordinary
-        recombination terms. Both halves scale with ``b_rec_rad``, so the
-        credit tracks the sink the particle equation actually applies; the
+        recombination terms. Both halves are evaluated from the same ACD sink
+        the particle equation applies; the
         ``3/2 Te S_rec`` capture-kinetic-energy loss stays booked where it is
         and cancels in the net. The sign of the net follows the conditions --
         heating where the radiated energy per event is below ``I_ion``, an
@@ -1178,29 +1171,6 @@ def fudge_factor_defaults():
         consistent unit, so it also raises when combined with the
         ``icool_recomb`` flag, which charges PRB on its own. Lookups clamp at
         the ADF11 grid edges.
-    b_Qie:
-        Electron-ion thermal exchange scale factor.
-    b_Qei:
-        Electron-ion inelastic/radiative cooling scale factor.
-    b_Qen:
-        Electron-neutral inelastic cooling scale factor.
-    b_Qei_Te_exp, b_Qen_Te_exp:
-        Optional Te-dependent shape for the corresponding correction: a nonzero
-        exponent multiplies the term by ``(Te / b_Q_Te_ref_eV) ** exp``. The
-        IAEA cooling fits carry a factor ~2 uncertainty across the 2-12 eV
-        discharge range, and a constant scalar cannot express an error that
-        varies over that range; this hook admits a literature- or
-        decay-calibrated shape without touching the fits. ``0`` (default)
-        skips the factor entirely.
-    b_Q_Te_ref_eV:
-        Reference temperature for the Te-dependent shape [eV]; the correction
-        equals the bare ``b_Q*`` scalar exactly at this Te.
-    b_Qcx:
-        Ion charge-exchange cooling scale factor.
-    b_epara:
-        Electron axial heat-conduction scale factor.
-    b_ipara:
-        Ion axial heat-conduction scale factor.
     heat_flux_limiter_f:
         Free-streaming fraction ``f`` setting the electron heat-flux
         saturation ceiling ``q_sat = f n Te v_the`` (``Te`` in erg,
@@ -1244,10 +1214,6 @@ def fudge_factor_defaults():
         terms (the latter quadratically). The ``neutral_momentum`` flag
         replaces both closures with an evolved neutral wind and is mutually
         exclusive with ``"slip"`` (which is that equation's own steady state).
-    b_slip_entrainment:
-        Multiplier on the entrainment parameter ``E`` of the slip closure;
-        absorbs the O(1) geometric factors the balance ignores. Inert with the
-        ``constant`` drag model.
     neutral_momentum_radial:
         Radial closure for the evolved neutral wind (requires the
         ``neutral_momentum`` flag; inert without it and errors if set to
@@ -1300,35 +1266,25 @@ def fudge_factor_defaults():
         were removed at D3 (2026-08-21) and raise.
     alpha_isat:
         Ion-saturation/surface-loss coefficient.
-    b_anode_collection:
-        Multiplier on the resolved anode collection sink. This was formerly
-        available only through an unregistered ``dict.get`` fallback.
-    b_anode_advective_block:
-        Fraction of the anode face treated as blocked by the mesh for
-        advective transport. This was formerly available only through an
-        unregistered ``dict.get`` fallback.
 
     Values and their provenance: ``config_defaults_provenance.md``.
     """
-    # The atomic-rate / cooling / conduction scale factors are INERT under the
-    # shipped defaults: ADAS and the Phelps collision operator supply those
-    # channels directly, and a single uniform multiplier is not a physical
-    # knob (the Te-dependent b_Q*_Te_exp hooks are the honest correction and
-    # ship off). They remain READABLE via the solver's .get(key, 1.0), so the
-    # "janev" A/B arm and the "=0 to disable a term" diagnostics still work.
-    #
-    # The must-be-1 STRUCTURAL constants (b_pressure_work_elec,
-    # b_pressure_work_ions, b_ionization_energy_cost) are NOT registered at
-    # all -- the solver hardwires 1.0, and resolve_config rejects them as
-    # unknown keys. Exposing a knob that must be 1 is a footgun.
+    # The atomic-rate / cooling / conduction scale factors that used to live
+    # here were REMOVED (2026-08-28): ADAS and the Phelps collision operator
+    # supply those channels directly, atomic rates are fixed inputs and not
+    # knobs (standing policy 2026-07-20), and a uniform multiplier locked at 1
+    # is not a physical control. The solver now hardwires the unit scale, and
+    # resolve_config rejects the retired names as unknown keys -- as it already
+    # does for the must-be-1 STRUCTURAL constants (b_pressure_work_elec,
+    # b_pressure_work_ions, b_ionization_energy_cost). Exposing a knob that
+    # must be 1 is a footgun. A future sensitivity instrument is a new build,
+    # not a resurrection of these.
     return {
         # --- ACTIVE coefficients ---
         "atomic_rate_model": "adas",
         "b_surface_loss": 1.0,      # functional: =0 disables the boundary sink
         "b_presheath_length": 1.0,  # presheath depth (load-bearing)
         "alpha_isat": 0.6065306597126334,
-        "b_anode_collection": 1.0,
-        "b_anode_advective_block": 0.0,
         # alpha_front is ACTIVE only if the front_flux flag is on; front_flux
         # ships OFF, so this is inert by default.
         "alpha_front": 1.0,
@@ -1337,20 +1293,6 @@ def fudge_factor_defaults():
         # ion_neutral_moment_closure uses, and since D3 the only accepted
         # value: the solver is helium-only.
         "sigma_in_model": "phelps",
-        # --- INERT: superseded rate/cooling/conduction scales, locked at 1
-        # (kept readable for the janev A/B and the =0 disable diagnostics) ---
-        "b_ioniz": 1.0,
-        "b_rec_rad": 1.0,
-        "b_rec_3b": 1.0,       # also: ACD already includes three-body under adas
-        "b_Qie": 1.0,
-        "b_Qei": 1.0,
-        "b_Qen": 1.0,
-        "b_Qcx": 1.0,          # also dead under ion_neutral_moment_closure
-        "b_Qei_Te_exp": 0.0,   # the honest Te-dependent hooks, off
-        "b_Qen_Te_exp": 0.0,
-        "b_Q_Te_ref_eV": 5.0,
-        "b_epara": 1.0,        # the real conduction knob is the flux limiter
-        "b_ipara": 1.0,
         "D_amb": 0.0,          # dead with the deprecated D_amb_model
         # GCR-consistent recombination energy booking (default-off closure
         # instrument; only active with icool_recomb, sub-0.2 eV). Per
@@ -1396,7 +1338,6 @@ def fudge_factor_defaults():
         # retained runnable for reproducibility. ---
         "b_ion_neutral_drag": 1.0,
         "ion_neutral_drag_model": "constant",
-        "b_slip_entrainment": 1.0,
         "b_ion_neutral_thermalization": None,
     }
 

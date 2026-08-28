@@ -329,9 +329,6 @@ class RunContext:
         self.wave_speed = str(
             self.params.get("hyperbolic_wave_speed", "isothermal")
         )
-        self.b_Qie = float(self.params.get("b_Qie", 1.0))
-        self.b_epara = float(self.params.get("b_epara", 1.0))
-        self.b_ipara = float(self.params.get("b_ipara", 1.0))
         self.b_drag = float(self.params.get("b_ion_neutral_drag", 1.0))
 
         grad_Te = np.gradient(self.model_state["Te"], self.z_cm)
@@ -419,13 +416,11 @@ def _rhs(ctx, port_state, nn, end_loss_coefficient, y):
     ln_lambda = max(c_log(Te, n_safe, kind="ei"), ctx.ln_lambda_min)
 
     q_ie = (
-        ctx.b_Qie
-        * Q_ie(Te, Ti, n_safe, ctx.mu, ln_lambda, per_particle=False)
+        Q_ie(Te, Ti, n_safe, ctx.mu, ln_lambda, per_particle=False)
         * ev_to_erg
     )
     q_end_e = (
         end_loss_coefficient
-        * ctx.b_epara
         * elec_par_heat_loss(
             Te, n_safe, port_state.L_p, port_state.L_hf, ln_lambda,
             per_particle=False,
@@ -434,7 +429,6 @@ def _rhs(ctx, port_state, nn, end_loss_coefficient, y):
     )
     q_end_i = (
         end_loss_coefficient
-        * ctx.b_ipara
         * _ion_par_heat_loss(
             Ti, n_safe, port_state.L_p, port_state.L_hf, ctx.mu, ln_lambda,
             per_particle=False,

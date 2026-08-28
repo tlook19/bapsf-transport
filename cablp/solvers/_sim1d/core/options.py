@@ -48,12 +48,6 @@ def collision_operator_kwargs(input_dict, flags, *, gas_type):
     }
 
 
-def energy_exchange_kwargs(input_dict):
-    return {
-        "b_Qie": float(input_dict.get("b_Qie", 1.0)),
-    }
-
-
 def surface_loss_kwargs(input_dict):
     # The resolved boundary terms read only ``alpha_isat`` and
     # ``b_surface_loss``. The former per-face source/end enables and area
@@ -87,9 +81,6 @@ def slip_closure_kwargs(input_dict, *, geometry):
         "drag_model": str(
             input_dict.get("ion_neutral_drag_model", "constant")
         ),
-        "b_slip_entrainment": float(
-            input_dict.get("b_slip_entrainment", 1.0)
-        ),
         "Rm_cm": geometry.Rm_cm,
         "Tn_fit": float(input_dict.get("Tn_fit", 0.1)),
     }
@@ -99,18 +90,10 @@ def electron_cooling_kwargs(input_dict, flags, *, gas_type, I_ion):
     return {
         "gas_type": gas_type,
         "I_ion": I_ion,
-        "b_ioniz": float(input_dict.get("b_ioniz", 1.0)),
-        "b_rec_rad": float(input_dict.get("b_rec_rad", 1.0)),
-        "b_rec_3b": float(input_dict.get("b_rec_3b", 1.0)),
         # b_ionization_energy_cost removed as a config knob (R5 stance flip):
         # must be 1 for conservative energy booking, and the on/off is the
         # ionization_energy_cost flag. Hardwired 1.0.
         "b_ionization_energy_cost": 1.0,
-        "b_Qei": float(input_dict.get("b_Qei", 1.0)),
-        "b_Qen": float(input_dict.get("b_Qen", 1.0)),
-        "b_Qei_Te_exp": float(input_dict.get("b_Qei_Te_exp", 0.0)),
-        "b_Qen_Te_exp": float(input_dict.get("b_Qen_Te_exp", 0.0)),
-        "b_Q_Te_ref_eV": float(input_dict.get("b_Q_Te_ref_eV", 5.0)),
         "atomic_rate_model": str(
             input_dict.get("atomic_rate_model", "adas")
         ),
@@ -131,7 +114,6 @@ def ion_charge_exchange_kwargs(input_dict, flags, *, gas_type):
     return {
         "gas_type": gas_type,
         "Tn_fit": float(input_dict.get("Tn_fit", 0.1)),
-        "b_Qcx": float(input_dict.get("b_Qcx", 1.0)),
         "cx": bool(flags.get("cx", True)),
     }
 
@@ -145,8 +127,6 @@ def heat_conduction_kwargs(
     heat_flux_limiter_exponent,
 ):
     return {
-        "b_epara": float(input_dict.get("b_epara", 1.0)),
-        "b_ipara": float(input_dict.get("b_ipara", 1.0)),
         "heat_conduction": bool(flags.get("heat_conduction", True)),
         "electron_heat_flux_limit": electron_heat_flux_limit,
         "heat_flux_limiter_f": heat_flux_limiter_f,
@@ -194,9 +174,6 @@ def reaction_kwargs(input_dict, *, gas_type, I_ion, wind_column_factor):
     return {
         "gas_type": gas_type,
         "I_ion": I_ion,
-        "b_ioniz": float(input_dict.get("b_ioniz", 1.0)),
-        "b_rec_rad": float(input_dict.get("b_rec_rad", 1.0)),
-        "b_rec_3b": float(input_dict.get("b_rec_3b", 1.0)),
         "atomic_rate_model": str(
             input_dict.get("atomic_rate_model", "adas")
         ),
@@ -261,7 +238,10 @@ def build_solver_options(
         collision_operator=collision_operator_kwargs(
             input_dict, flags, gas_type=gas_type
         ),
-        energy_exchange=energy_exchange_kwargs(input_dict),
+        # The electron-ion exchange term has no configuration surface left
+        # (b_Qie was removed 2026-08-28); the bundle stays as the PRESENCE
+        # signal the timestep candidate keys off -- None withdraws it.
+        energy_exchange={},
         surface_loss=surface_loss_kwargs(input_dict),
         ion_neutral_drag=ion_neutral_drag_kwargs(
             input_dict, flags, gas_type=gas_type

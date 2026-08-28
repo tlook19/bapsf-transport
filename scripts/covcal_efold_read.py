@@ -459,7 +459,8 @@ def adas_check():
         print(f"      to cut the bulk channel by x{fac:5.2f}: Te must fall "
               f"4.700 -> {float(np.interp(ref/fac, scd, Te)):.3f} eV "
               f"({100*(1-float(np.interp(ref/fac, scd, Te))/4.70):.1f} % drop)")
-    print("\n    b_ioniz = 1.0 and atomic_rate_model = 'adas' in all three shots:")
+    print("\n    atomic_rate_model = 'adas' in all three shots, with no rate "
+          "scale factor:")
     print("    the coefficient is the trusted ADAS SCD and is NOT a knob "
           "(campaign standing policy).")
 

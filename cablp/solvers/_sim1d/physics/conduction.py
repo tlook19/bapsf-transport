@@ -73,8 +73,6 @@ def heat_conduction_rhs(
     ion_mass_g,
     mu,
     geometry,
-    b_epara=1.0,
-    b_ipara=1.0,
     heat_conduction=True,
     electron_heat_flux_limit=False,
     heat_flux_limiter_f=0.3,
@@ -82,7 +80,7 @@ def heat_conduction_rhs(
 ):
     """Return conservative axial heat-conduction energy sources."""
     zeros = np.zeros_like(state.n, dtype=float)
-    if not heat_conduction or (b_epara == 0.0 and b_ipara == 0.0):
+    if not heat_conduction:
         return ConservativeState1D(
             n=zeros,
             nn=zeros.copy(),
@@ -98,7 +96,6 @@ def heat_conduction_rhs(
     conductivity_e = (
         kappa_par_elec(derived.Te, n, ln_lambda, per_particle=False)
         * ev_to_erg
-        * float(b_epara)
     )
     if electron_heat_flux_limit:
         conductivity_e = flux_limited_electron_conductivity(
@@ -119,8 +116,7 @@ def heat_conduction_rhs(
             ln_lambda,
             per_particle=False,
         )
-        * ev_to_erg
-        * float(b_ipara),
+        * ev_to_erg,
         geometry=geometry,
     )
     return ConservativeState1D(
@@ -148,7 +144,7 @@ def flux_limited_electron_conductivity(
     ``q_SH >> q_sat``. Reducing the conductivity keeps the operator a conservative
     flux divergence. Frozen at the incoming ``Te`` like ``kappa`` itself. Audit A9
     / R5.2; ``conductivity_e`` is the already-scaled volumetric conductivity
-    (``* ev_to_erg * b_epara``) the operator uses, so ``q_SH`` matches its flux.
+    (``* ev_to_erg``) the operator uses, so ``q_SH`` matches its flux.
 
     Attribution of the FORM: the harmonic mean of a classical and a
     free-streaming flux is Malone, McCrory & Morse, PRL 34 (1975) 721, p. 722;
@@ -216,8 +212,6 @@ def heat_conduction_timestep_bound(
     ion_mass_g,
     mu,
     geometry,
-    b_epara=1.0,
-    b_ipara=1.0,
     heat_conduction=True,
     active_cells=None,
     electron_heat_flux_limit=False,
@@ -233,7 +227,7 @@ def heat_conduction_timestep_bound(
     """
     del electron_heat_flux_limit, heat_flux_limiter_f  # conservative: see above
     del heat_flux_limiter_exponent
-    if not heat_conduction or (b_epara == 0.0 and b_ipara == 0.0):
+    if not heat_conduction:
         return np.inf
 
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
@@ -248,8 +242,7 @@ def heat_conduction_timestep_bound(
             ln_lambda,
             per_particle=False,
         )
-        * ev_to_erg
-        * float(b_epara),
+        * ev_to_erg,
         geometry=geometry,
         fraction=HEAT_DT_FRACTION,
         active_cells=active_cells,
@@ -263,8 +256,7 @@ def heat_conduction_timestep_bound(
             ln_lambda,
             per_particle=False,
         )
-        * ev_to_erg
-        * float(b_ipara),
+        * ev_to_erg,
         geometry=geometry,
         fraction=HEAT_DT_FRACTION,
         active_cells=active_cells,
@@ -279,8 +271,6 @@ def implicit_heat_conduction_step(
     mu,
     geometry,
     dt,
-    b_epara=1.0,
-    b_ipara=1.0,
     heat_conduction=True,
     implicit_heat_scheme="backward_euler",
     heat_picard_iterations=0,
@@ -330,7 +320,7 @@ def implicit_heat_conduction_step(
         raise ValueError(f"dt must be positive (got {dt})")
     scheme = validate_implicit_heat_scheme(implicit_heat_scheme)
     iterations = max(int(heat_picard_iterations), 0)
-    if not heat_conduction or (b_epara == 0.0 and b_ipara == 0.0):
+    if not heat_conduction:
         # No conduction operator to solve against, but the substep still OWNS
         # the source it was handed: dropping it would delete energy the
         # explicit operator has already stopped booking. K = 0 makes the exact
@@ -382,8 +372,6 @@ def implicit_heat_conduction_step(
             Ti=Ti_eval,
             n=n,
             mu=mu,
-            b_epara=b_epara,
-            b_ipara=b_ipara,
         )
         if electron_heat_flux_limit:
             conductivity_e = flux_limited_electron_conductivity(
@@ -451,7 +439,7 @@ def _kappa_eval_weight(scheme):
     return resolve_implicit_heat_theta(scheme)
 
 
-def _parallel_conductivities(Te, Ti, n, mu, b_epara, b_ipara):
+def _parallel_conductivities(Te, Ti, n, mu):
     """Return scaled volumetric parallel conductivities [erg cm^-1 s^-1].
 
     The Coulomb logarithm is an electron-ion quantity, so it is built from Te
@@ -461,12 +449,10 @@ def _parallel_conductivities(Te, Ti, n, mu, b_epara, b_ipara):
     conductivity_e = (
         kappa_par_elec(Te, n, ln_lambda, per_particle=False)
         * ev_to_erg
-        * float(b_epara)
     )
     conductivity_i = (
         kappa_par_ion(Ti, n, mu, ln_lambda, per_particle=False)
         * ev_to_erg
-        * float(b_ipara)
     )
     return conductivity_e, conductivity_i
 

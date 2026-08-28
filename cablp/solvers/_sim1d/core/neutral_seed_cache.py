@@ -83,14 +83,12 @@ INERT_PARAM_KEYS = frozenset({
     "beam_coulomb_model", "beam_deposition_model",
     "beam_excitation_energy_eV", "beam_excitation_model", "b_beam_excitation",
     # --- atomic-rate / cooling / plasma-physics scales (no plasma during equil) ---
-    "atomic_rate_model", "b_ioniz", "b_rec_rad", "b_rec_3b", "b_Qie", "b_Qei",
-    "b_Qen", "b_Qcx", "b_Qei_Te_exp", "b_Qen_Te_exp", "b_Q_Te_ref_eV",
-    "b_epara", "b_ipara", "recombination_energy_return",
+    "atomic_rate_model", "recombination_energy_return",
     "sigma_in_model", "ionization_birth_energy_model",
     "Te_birth_ionization", "Ti_birth_ionization",
-    "b_ion_neutral_drag", "b_ion_neutral_thermalization", "b_slip_entrainment",
+    "b_ion_neutral_drag", "b_ion_neutral_thermalization",
     "ion_neutral_drag_model", "D_amb", "D_amb_model", "heat_flux_limiter_f",
-    "b_presheath_length", "b_anode_collection", "b_anode_advective_block",
+    "b_presheath_length",
     "b_surface_loss", "alpha_isat", "alpha_front", "front_flux_model",
     "adas_low_te_extension",
     # --- plasma initial condition + plasma floors ---

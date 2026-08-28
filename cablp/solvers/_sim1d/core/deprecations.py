@@ -237,18 +237,10 @@ DEPRECATED_CONTROLS = {
         PARAMS, _PUFF_WAVEFORM, _PUFF_WAVEFORM_FIX,
     ),
     # ==== dead levers: scaling factors ====================================
-    "b_anode_collection": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
-    "b_anode_advective_block": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
+    # The b_* rate/cooling/conduction/boundary scalars that stood here were
+    # DELETED from the configuration surface (2026-08-28); supplying one now
+    # raises the unknown-key ValueError rather than warning.
     "alpha_front": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
-    "b_rec_rad": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
-    "b_rec_3b": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
-    "b_Qie": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
-    "b_Qei_Te_exp": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
-    "b_Qen_Te_exp": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
-    "b_Q_Te_ref_eV": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
-    "b_epara": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
-    "b_ipara": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
-    "b_slip_entrainment": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
     # ==== dead levers: neutral probe source ===============================
     "neutral_probe_profile": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
     "neutral_probe_waveform_table": DeprecatedControl(
