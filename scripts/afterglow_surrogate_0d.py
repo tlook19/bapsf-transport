@@ -82,7 +82,7 @@ from cablp.plasma.heat import (  # noqa: E402
 )
 from cablp.plasma.params import c_log  # noqa: E402
 from cablp.solvers._sim1d.physics.flux import plasma_wave_speed  # noqa: E402
-from cablp.constants import ev_to_erg, m_He_cgs, m_p_cgs  # noqa: E402
+from cablp.constants import ev_to_erg, m_He_cgs  # noqa: E402
 
 # The R3b-deleted ``plasma.heat.ion_par_heat_loss``, transcribed here verbatim
 # because this instrument is frozen as-run.
@@ -157,12 +157,28 @@ ENTHALPY_FACTOR = 2.5
 
 
 def _gas_constants(gas_type):
-    """Return ``(ion_mass_g, mu)`` for a supported gas, as the solver sets them."""
+    """Return ``(ion_mass_g, mu)`` for the supported gas, as the solver sets them.
+
+    Helium only; ``gas_type='H'`` raises. The returned ``mu`` reaches three
+    consumers here and only two of them read it: ``kappa_par_ion`` and
+    ``plasma_wave_speed`` scale with it, while ``Q_ie`` accepts it and divides
+    by ``constants.He_e_mass_ratio`` regardless. A hydrogen run would therefore
+    carry hydrogen conduction and wave speeds against a helium electron-ion
+    channel -- two gases in one energy budget, with ``Q_ie`` low by the mass
+    ratio ``m_He/m_p`` (~4) and nothing in the output saying so.
+    """
     if gas_type == "He":
         return m_He_cgs, 4
     if gas_type == "H":
-        return m_p_cgs, 1
-    raise ValueError(f"unsupported gas_type {gas_type!r}; expected 'He' or 'H'")
+        raise ValueError(
+            "gas_type='H' is not available: the hydrogen arm of this "
+            "surrogate was retired 2026-08-27 because Q_ie does not read the "
+            "mu it is handed and divides by the helium-4/electron mass ratio, "
+            "so a hydrogen run would silently mix a helium electron-ion "
+            "channel with hydrogen conduction and wave speeds. The solver is "
+            "helium-only (D3, 2026-08-21). Accepted: 'He'."
+        )
+    raise ValueError(f"unsupported gas_type {gas_type!r}; expected 'He'")
 
 
 def _require(group, name, where):
