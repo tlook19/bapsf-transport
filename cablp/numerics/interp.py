@@ -13,12 +13,28 @@ with :func:`math.fma`, so the result is the single-rounding answer on every
 platform. The compiled kernel module transcribes the same expression with C's
 ``fma()``; both therefore agree with each other, and with a contracted
 ``numpy.interp``, by construction rather than by luck.
+
+:func:`interp_array_fused` is the same lerp for a whole array of queries, for
+callers that evaluate one table at many points at once. numpy exposes no FMA
+ufunc, so the single rounding is reconstructed with the error-free transforms
+:func:`fma_array` is built from; the result is bit-identical to calling
+:func:`interp_scalar_fused` on each element, so the two are interchangeable
+and both belong to the bit-exactness gate inventory.
 """
 
 import math
 from bisect import bisect_right
 
-__all__ = ["interp_scalar_fused"]
+import numpy as np
+
+__all__ = [
+    "interp_scalar_fused",
+    "interp_array_fused",
+    "fma_array",
+    "check_fma_domain",
+    "check_interp_table",
+    "FMA_ARRAY_MAX_ABS",
+]
 
 
 def interp_scalar_fused(x, xp, fp, left=None, right=None):
@@ -121,3 +137,209 @@ def interp_scalar_fused(x, xp, fp, left=None, right=None):
         if math.isnan(res) and fj == fj1:
             res = fj
     return res
+
+
+# --- the same lerp, one table and many queries ------------------------------
+
+#: Dekker's splitting constant, ``2**27 + 1``: it cuts a float64 significand
+#: into two 26-bit halves whose products are each exactly representable.
+_SPLITTER = float(2 ** 27 + 1)
+
+#: Magnitude ceiling on every argument of :func:`fma_array`. Above it the
+#: splitting step ``_SPLITTER * a`` or the partial product ``a*b`` can
+#: overflow, and the error-free transforms below stop being error-free. It is
+#: enforced rather than assumed, so an out-of-domain caller raises instead of
+#: receiving a silently double-rounded answer.
+FMA_ARRAY_MAX_ABS = 1e150
+
+
+def _two_product(a, b):
+    """``(p, e)`` with ``p = a*b`` rounded and ``a*b == p + e`` exactly.
+
+    Dekker's algorithm. Exact for arguments within
+    :data:`FMA_ARRAY_MAX_ABS`; ``e`` is the rounding error of the product and
+    is zero when the product is exact.
+    """
+    p = a * b
+    ca = _SPLITTER * a
+    ah = ca - (ca - a)
+    al = a - ah
+    cb = _SPLITTER * b
+    bh = cb - (cb - b)
+    bl = b - bh
+    return p, ((ah * bh - p) + ah * bl + al * bh) + al * bl
+
+
+def _two_sum(a, b):
+    """``(s, e)`` with ``s = a+b`` rounded and ``a + b == s + e`` exactly.
+
+    Knuth's two-sum; unlike the "fast" variant it needs no ordering of the
+    arguments by magnitude.
+    """
+    s = a + b
+    bb = s - a
+    return s, (a - (s - bb)) + (b - bb)
+
+
+def fma_array(a, b, c):
+    """Elementwise ``math.fma(a, b, c)``: ``a*b + c`` with ONE rounding.
+
+    Parameters
+    ----------
+    a, b, c : ndarray of float64
+        Broadcastable operands. Every element must be finite and within
+        :data:`FMA_ARRAY_MAX_ABS` in magnitude.
+
+    Returns
+    -------
+    ndarray of float64
+        ``round_to_nearest(a*b + c)``, elementwise and bit-identical to
+        :func:`math.fma` on the same operands.
+
+    Raises
+    ------
+    ValueError
+        If any operand is non-finite or exceeds :data:`FMA_ARRAY_MAX_ABS`.
+
+    Notes
+    -----
+    numpy has no FMA ufunc and its x86-64 baseline does not contract
+    ``a*b + c``, so the single rounding is reconstructed rather than emitted:
+    ``a*b`` is split into an exact double-double by :func:`_two_product`, the
+    high part is summed with ``c`` by :func:`_two_sum`, and the two residuals
+    are combined and ROUNDED TO ODD before the final add. Round-to-odd on the
+    tail is what makes the closing addition round exactly once overall -- a
+    plain ``s + (t + t_err)`` would round twice and can disagree with
+    ``math.fma`` at a tie.
+    """
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+    c = np.asarray(c, dtype=float)
+    for name, arr in (("a", a), ("b", b), ("c", c)):
+        check_fma_domain(arr, name)
+    return _fma_array_unchecked(a, b, c)
+
+
+def check_fma_domain(arr, name):
+    """Raise unless every element of ``arr`` is a legal :func:`fma_array` operand.
+
+    Split out so a caller with a FIXED operand -- an interpolation table, say
+    -- can check it once instead of on every call.
+    """
+    arr = np.asarray(arr, dtype=float)
+    if not np.all(np.isfinite(arr)):
+        raise ValueError(
+            f"fma_array operand {name!r} has a non-finite element; the "
+            "error-free transforms it is built from are defined on finite "
+            "operands only"
+        )
+    if arr.size and np.max(np.abs(arr)) > FMA_ARRAY_MAX_ABS:
+        raise ValueError(
+            f"fma_array operand {name!r} exceeds FMA_ARRAY_MAX_ABS="
+            f"{FMA_ARRAY_MAX_ABS:g}; above it Dekker splitting overflows "
+            "and the reconstruction is no longer exact"
+        )
+
+
+def _fma_array_unchecked(a, b, c):
+    """:func:`fma_array` without the domain checks; operands are assumed legal."""
+    p, p_err = _two_product(a, b)
+    s, s_err = _two_sum(p, c)
+    t, t_err = _two_sum(s_err, p_err)
+    # Round the tail to odd: nudge ``t`` one ULP toward the residual whenever
+    # the residual is non-zero and ``t``'s last significand bit is even.
+    t = np.array(t, dtype=np.float64)
+    nudge = (t_err != 0.0) & ((t.view(np.uint64) & np.uint64(1)) == 0)
+    t = np.where(nudge, np.nextafter(t, np.copysign(np.inf, t_err)), t)
+    return s + t
+
+
+def interp_array_fused(x, xp, fp, left=None, right=None):
+    """``numpy.interp(x, xp, fp, left=left, right=right)`` for an array ``x``.
+
+    Parameters
+    ----------
+    x : ndarray of float64
+        Query points, any shape. Must be finite.
+    xp : ndarray of float64
+        STRICTLY increasing sample points, length >= 2. Checked, because the
+        vectorised path has no per-element fallback for a degenerate segment.
+    fp : ndarray of float64
+        Sample values, same length as ``xp``. Must be finite.
+    left, right : float, optional
+        Returned for ``x < xp[0]`` / ``x > xp[-1]``. Default ``fp[0]`` /
+        ``fp[-1]``.
+
+    Returns
+    -------
+    ndarray of float64
+        The interpolated values, bit-identical elementwise to
+        :func:`interp_scalar_fused` on the same table.
+
+    Raises
+    ------
+    ValueError
+        If ``xp`` is shorter than 2, not strictly increasing, if ``xp``/``fp``
+        disagree in length, or if any input is non-finite.
+
+    Notes
+    -----
+    The interior lerp is :func:`fma_array`, so it rounds once, exactly as the
+    scalar form does. The scalar form's NaN-retry and flat-segment fallbacks
+    are unreachable here: they exist for a non-finite or degenerate table, and
+    both are refused above rather than repaired.
+    """
+    x = np.asarray(x, dtype=float)
+    check_interp_table(xp, fp)
+    if not np.all(np.isfinite(x)):
+        raise ValueError(
+            "interp_array_fused needs finite query points; the scalar form's "
+            "NaN passthrough is deliberately not reproduced here"
+        )
+    return _interp_array_unchecked(x, np.asarray(xp, dtype=float),
+                                   np.asarray(fp, dtype=float), left, right)
+
+
+def check_interp_table(xp, fp):
+    """Raise unless ``(xp, fp)`` is a legal :func:`interp_array_fused` table.
+
+    Split out so a caller holding a FIXED table can check it once instead of
+    on every lookup. The requirements are stricter than the scalar form's: a
+    strictly increasing, finite table, at least two nodes.
+    """
+    xp = np.asarray(xp, dtype=float)
+    fp = np.asarray(fp, dtype=float)
+    n = xp.size
+    if n < 2:
+        raise ValueError(
+            f"interp_array_fused needs at least 2 sample points (got {n}); "
+            "the single-node shape has its own rule and is scalar-only"
+        )
+    if fp.size != n:
+        raise ValueError(
+            f"xp and fp must have the same length (got {n} and {fp.size})"
+        )
+    if not np.all(np.diff(xp) > 0.0):
+        raise ValueError("interp_array_fused needs a strictly increasing xp")
+    if not (np.all(np.isfinite(xp)) and np.all(np.isfinite(fp))):
+        raise ValueError("interp_array_fused needs a finite table")
+    check_fma_domain(fp, "fp")
+
+
+def _interp_array_unchecked(x, xp, fp, left=None, right=None):
+    """:func:`interp_array_fused` with the table and query checks hoisted out."""
+    n = xp.size
+    j = np.searchsorted(xp, x, side="right") - 1
+    jj = np.clip(j, 0, n - 2)
+    xj = xp[jj]
+    fj = fp[jj]
+    slope = (fp[jj + 1] - fj) / (xp[jj + 1] - xj)
+    # On-node queries take the node's own value without evaluating a slope;
+    # the last node and the two out-of-range fills are the scalar form's.
+    out = np.where(xj == x, fj, _fma_array_unchecked(slope, x - xj, fj))
+    out = np.where(j >= n - 1, fp[n - 1], out)
+    lo = float(fp[0]) if left is None else float(left)
+    hi = float(fp[n - 1]) if right is None else float(right)
+    out = np.where(x < xp[0], lo, out)
+    out = np.where(x > xp[n - 1], hi, out)
+    return out

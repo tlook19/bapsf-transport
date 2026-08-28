@@ -881,8 +881,16 @@ def _invoke_instrumented(B, entry):
     keys off the module-global ``deposit_beam`` the tail-walk stage recurses
     through, and carries a depth so a leg's substeps are separable from the
     primary's.
+
+    A tail-walk leg that the LANE MARCH batched passes through neither hook --
+    it is not a recursive call and its substeps are numpy rounds, not per-leg
+    lookups -- so its counts are read from ``beam_deposition.LANE_MARCH_COUNTS``
+    and added in. The counts themselves are unchanged by the batching, which is
+    exactly what comparing them against the stored fixture values tests.
     """
     state = {"legs": 0, "walks": 0, "depth": 0, "max_depth": 0}
+    B.LANE_MARCH_COUNTS["substeps"] = 0
+    B.LANE_MARCH_COUNTS["legs"] = 0
     substeps = {}
     real_exc = B.He_beam_excitation_channel_lkup
     real_dep = B.deposit_beam
@@ -914,14 +922,18 @@ def _invoke_instrumented(B, entry):
         B.He_beam_excitation_channel_lkup = real_exc
         B.deposit_beam = real_dep
         B._walk_products_forward = real_walk
+    lane_substeps = int(B.LANE_MARCH_COUNTS["substeps"])
+    lane_legs = int(B.LANE_MARCH_COUNTS["legs"])
     counts = {
         "substeps_top": int(substeps.get(0, 0)),
         "substeps_nested": int(
             sum(n for d, n in substeps.items() if d > 0)
-        ),
-        "legs": int(state["legs"]),
+        ) + lane_substeps,
+        "legs": int(state["legs"]) + lane_legs,
         "walk_integrations": int(state["walks"]),
-        "max_leg_depth": int(state["max_depth"]),
+        "max_leg_depth": max(
+            int(state["max_depth"]), 1 if lane_legs else 0
+        ),
     }
     return result, counts
 
