@@ -34,15 +34,20 @@ from ..constants import (
 #      digest gate or the smoke suite. Every H result this module can produce
 #      is therefore unexercised by any gate in the repository.
 #
-#   2. ONE CORRUPT TABLE. ``A_R318`` -- the H + H+ charge-exchange fit --
-#      carries a DUPLICATED coefficient: row 1 repeats 9.536923957409e-03 and
-#      so has 10 entries where every other row of A_R318, and every row of the
-#      helium A_R531, has 9. ``heavy_reaction`` iterates ``range(len(A[i]))``,
-#      so the ragged row silently contributes an extra polynomial term rather
-#      than failing; the import-time ``_cx_H`` table is built from it without
-#      complaint. The correct row is 9 entries and must be digit-proofed
-#      against IAEA HYDHEL 3.1.8 on fetch. A_R531 is unaffected -- the helium
-#      arm was never touched by this defect.
+#   2. ONE CORRUPT TABLE -- SINCE REPAIRED, 2026-08-27 ([sbq:L295]).
+#      ``A_R318`` -- the H + H+ charge-exchange fit -- CARRIED a DUPLICATED
+#      coefficient: row 1 repeated 9.536923957409e-03 and so had 10 entries
+#      where every other row of A_R318, and every row of the helium A_R531,
+#      has 9. ``heavy_reaction`` iterates ``range(len(A[i]))``, so the ragged
+#      row silently contributed an extra polynomial term rather than failing;
+#      the import-time ``_cx_H`` table was built from it without complaint.
+#      The duplicate has been deleted and all 81 coefficients digit-proofed
+#      against a re-fetched IAEA HYDHEL 3.1.8 (see the provenance comment at
+#      the table). A_R531 was never affected -- the helium arm was untouched
+#      by the defect and by the repair.
+#
+#      THE QUARANTINE STANDS REGARDLESS: reason 1 is sufficient on its own,
+#      and repairing the table did not give the hydrogen arms a gate.
 #
 # Guarded entry points, the narrowest set covering every H route into this
 # module: H_EII_cross, H_EII_cross_lkup, and charge_ex_react's gas_type == "H"
@@ -122,9 +127,10 @@ def H_EII_cross(E, A=a215):
     raise ValueError(
         "H_EII_cross is not available: the hydrogen arms of cablp.atomic are "
         "QUARANTINED (untested domain -- no solver-path consumer and no gate "
-        "coverage; and one corrupt table, A_R318, whose row 1 carries a "
-        "duplicated coefficient), ruled 2026-08-27. The solver is helium-only "
-        "(D3, 2026-08-21). Accepted: He -- use He_EII_cross."
+        "coverage), ruled 2026-08-27. The quarantine's second ground, the "
+        "corrupt A_R318 table, was repaired the same day and no longer "
+        "applies; the untested domain alone is sufficient. The solver is "
+        "helium-only (D3, 2026-08-21). Accepted: He -- use He_EII_cross."
     )
     # RETAINED, not removed: the quarantine is reversible by construction, so
     # a validated re-opening deletes the raise above and this line stands.
@@ -169,9 +175,10 @@ def H_EII_cross_lkup(E):
     raise ValueError(
         "H_EII_cross_lkup is not available: the hydrogen arms of cablp.atomic "
         "are QUARANTINED (untested domain -- no solver-path consumer and no "
-        "gate coverage; and one corrupt table, A_R318, whose row 1 carries a "
-        "duplicated coefficient), ruled 2026-08-27. The solver is helium-only "
-        "(D3, 2026-08-21). Accepted: He -- use He_EII_cross_lkup."
+        "gate coverage), ruled 2026-08-27. The quarantine's second ground, "
+        "the corrupt A_R318 table, was repaired the same day and no longer "
+        "applies; the untested domain alone is sufficient. The solver is "
+        "helium-only (D3, 2026-08-21). Accepted: He -- use He_EII_cross_lkup."
     )
     # RETAINED, not removed: the quarantine is reversible by construction, so
     # a validated re-opening deletes the raise above and this line stands.
@@ -543,6 +550,29 @@ def integrate_kern(cross_sec_func, a, T, I):
     return rate_coeff
 
 
+# H + H+ charge exchange, p + H(1s) -> H(1s) + p.
+# Source of record: IAEA HYDHEL, D. Reiter, FZJ, version 2020-01-13,
+# https://www.eirene.de/Documentation/hydhel.pdf, Sec. 3 H.3, Reaction 3.1.8,
+# printed p.165 (PDF p.176). Stored as A_R318[e][t], i.e. one list per source
+# E-Index column, indexed by T-Index 0..8.
+#
+# CITE HYDHEL, NOT THE SPRINGER BOOK. These are HYDHEL's REPLACEMENT fit, not
+# the 1987 Springer book coefficients: HYDHEL replaced the original for
+# consistency with the cross section (its own note on that page reads
+# "original fit from Springer book replaced by this one, which has better
+# consistency with cross-section, hence: better energy conservation"). A future
+# check against the Springer coefficients would report spurious mismatches, so
+# every re-verification must cite HYDHEL.
+#
+# CORRUPTION AND FIX. Row e=1 carried a single INSERTED DUPLICATE of
+# 9.536923957409e-03 (present once in the source, at T-Index 2), giving that
+# row 10 entries where every other row here and every A_R531 row has 9;
+# heavy_reaction iterates range(len(A[i])), so the ragged row silently
+# contributed an extra polynomial term to _cx_H rather than failing. The
+# duplicate was deleted 2026-08-27 and the table is now 9x9 = 81. All 81
+# coefficients were verified digit for digit against the re-fetched PDF in the
+# same change ([sbq:L295]); the source's max/mean relative fit errors are
+# 1.1026 % / 0.3105 %.
 A_R318 = [
     [
         -1.831670498376e01,
@@ -558,7 +588,6 @@ A_R318 = [
     [
         1.650239332070e-01,
         -1.067658289373e-01,
-        9.536923957409e-03,
         9.536923957409e-03,
         6.315097684976e-03,
         -1.265503371044e-03,
@@ -808,7 +837,7 @@ def charge_ex_react(T, gas_type="He"):
     ------
     ValueError
         For ``gas_type="H"`` -- a quarantined hydrogen entry point, and the one
-        that reads the corrupt table directly. See the hydrogen quarantine note
+        that reads the A_R318 table directly. See the hydrogen quarantine note
         at the top of this module.
     """
     if gas_type == "He":
@@ -819,14 +848,13 @@ def charge_ex_react(T, gas_type="He"):
         raise ValueError(
             "gas_type='H' is not available: the hydrogen arms of cablp.atomic "
             "are QUARANTINED, ruled 2026-08-27, and this is the entry point "
-            "that reads the corrupt table. A_R318 (H + H+ charge exchange) "
-            "repeats 9.536923957409e-03 in row 1, giving that row 10 "
-            "coefficients where every other A_R318 row and every A_R531 row "
-            "has 9; heavy_reaction iterates range(len(A[i])), so the extra "
-            "term enters _cx_H silently. The row must be digit-proofed against "
-            "IAEA HYDHEL 3.1.8 before this arm re-opens. The solver is "
-            "helium-only (D3, 2026-08-21). Accepted: 'He' (A_R531, "
-            "unaffected)."
+            "that reads A_R318 directly. That table's duplicated coefficient "
+            "was repaired the same day and all 81 entries digit-proofed "
+            "against IAEA HYDHEL 3.1.8, so the corruption ground no longer "
+            "applies; the quarantine stands on the untested domain alone -- "
+            "no hydrogen arm here has a solver-path consumer or any gate "
+            "coverage. The solver is helium-only (D3, 2026-08-21). Accepted: "
+            "'He' (A_R531, unaffected)."
         )
     else:
         raise ValueError(f"unsupported gas_type {gas_type!r}; expected 'He'")
