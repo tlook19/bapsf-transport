@@ -187,15 +187,13 @@ PARAM_OVERRIDES = {
     # shipped moment-closure defaults since the R2b re-anchor.
     # ADAS GCR rates (see cablp/atomic/data/adas/README.md): effective ionization/
     # recombination and radiation-only cooling, consistent with the separate
-    # ionization-cost term. b_Q* = 1 is meaningful under this model.
+    # ionization-cost term. The rate channels carry no scale factor: the b_*
+    # scalars were removed 2026-08-28 and unit scaling is now structural.
     "atomic_rate_model": "adas",
     # Beam-driven neutral excitation: 1.0 books the 2^1P channel alone, the
     # rest approximates the remainder of the singlet manifold. Radiates ~21 eV
     # per event as He I light and shortens the beam deposition length.
     "b_beam_excitation": _STANCE["b_beam_excitation"],
-    "b_Qei": 1,
-    "b_Qen": 1,
-    "b_Qcx": 1,
     # L2 GEOMETRY REBASELINE (2026-08-17): the measured cathode aperture, not
     # the fitted 15.0 the two radii previously shared. Caliper: a 15.0 in LaB6
     # disc behind a graphite front panel whose 14.5 in opening is the exposed

@@ -25,10 +25,11 @@ is checked and printed rather than assumed (see SELF-CONSISTENCY below).
 Two closure caveats, printed in every header because they are the only ways
 the two can legitimately differ:
 
-  * the solver scales its cooling rows by ``b_Qei`` / ``b_Qen`` (and by the
-    optional ``b_Q*_Te_exp`` shape); this instrument reports the UNSCALED
-    radiated power, because a cooling fudge factor is not an emissivity.  At
-    the standing ``b = 1`` rate-channel policy the two coincide exactly.
+  * the solver applied cooling scale factors (``b_Qei`` / ``b_Qen`` and an
+    optional ``b_Q*_Te_exp`` shape) until they were removed on 2026-08-28.
+    They were locked at unit scale throughout, so the solver's rows and this
+    instrument's unscaled radiated power coincide exactly on every artifact,
+    before and after the removal.
   * with ``icool_recomb`` on, the solver folds the PRB recombination +
     bremsstrahlung coefficient into its ``electron_ion_cooling`` row; the
     PLT2 channel here is line power only and excludes it.
@@ -245,10 +246,6 @@ def require_adas(params):
             params.get("adas_low_te_extension", False)
         ),
         "ne_floor": float(params.get("ne_floor", 0.0)),
-        "b_Qei": float(params.get("b_Qei", 1.0)),
-        "b_Qen": float(params.get("b_Qen", 1.0)),
-        "b_Qei_Te_exp": float(params.get("b_Qei_Te_exp", 0.0)),
-        "b_Qen_Te_exp": float(params.get("b_Qen_Te_exp", 0.0)),
     }
 
 
@@ -616,10 +613,9 @@ def markdown_report(rep):
         f"ne_floor {c['ne_floor']:.3e} cm^-3, icool_recomb {c['icool_recomb']}"
     )
     L.append(
-        f"* the artifact's cooling scalars are b_Qei {c['b_Qei']:g} / b_Qen "
-        f"{c['b_Qen']:g} (Te exponents {c['b_Qei_Te_exp']:g} / "
-        f"{c['b_Qen_Te_exp']:g}); this instrument reports the UNSCALED "
-        "radiated power and does not apply them."
+        "* the solver's cooling rows carry no scale factor (the b_Q* scalars "
+        "were removed 2026-08-28, having been unit-valued throughout), so "
+        "this instrument's unscaled radiated power is directly comparable."
     )
     L.append(
         f"* windows (run clock): drive {rep['windows_ms']['drive'][0]}-"

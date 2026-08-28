@@ -530,9 +530,11 @@ default, so it never appears in the delta.
 
 ## Transport and closures
 
-**`atomic_rate_model = "adas"`** — published inputs, not tuned. Because the ADAS
-cooling coefficients are radiation-only, `b_Qei = b_Qen = b_Qcx = 1` is
-meaningful under this model rather than a null setting.
+**`atomic_rate_model = "adas"`** — published inputs, not tuned. The ADAS
+cooling coefficients are radiation-only and are applied at unit scale: the
+`b_Qei` / `b_Qen` / `b_Qcx` scale factors this note previously recorded at 1
+were removed from the configuration surface on 2026-08-28, so unit scaling is
+now structural rather than a setting.
 
 **`b_beam_excitation = 1.4`** — ASSUMED. 1.0 books the He 2^1P channel alone and
 the extra 0.4 approximates the rest of the singlet manifold. It is inert under

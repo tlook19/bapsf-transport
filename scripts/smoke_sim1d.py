@@ -641,6 +641,31 @@ def _case_production_construction_warning_free():
         _warnings.simplefilter("always")
         LAPDSim1D(_dep_params, _dep_flags)
     assert not _caught, "production/default configuration must be warning-free"
+
+    # NEGATIVE CONTROL for the b_* removal (2026-08-28). The legacy rate,
+    # cooling, conduction and anode scale factors are GONE from the config
+    # surface; a caller that still supplies one must be told loudly at
+    # construction, not silently ignored. Checked one key at a time so a
+    # partially-completed removal cannot hide behind another name, and in the
+    # params namespace only -- these were never flags.
+    for _removed in (
+        "b_ioniz", "b_Qei", "b_Qen", "b_Qcx", "b_Qie",
+        "b_rec_rad", "b_rec_3b", "b_Qei_Te_exp", "b_Qen_Te_exp",
+        "b_Q_Te_ref_eV", "b_epara", "b_ipara", "b_slip_entrainment",
+        "b_anode_collection", "b_anode_advective_block",
+    ):
+        assert _removed not in _dep_params, _removed
+        _stale_params, _stale_flags = default_config()
+        _stale_params[_removed] = 1.0
+        try:
+            LAPDSim1D(_stale_params, _stale_flags)
+        except ValueError as _exc:
+            assert "unknown LAPDSim1D configuration keys" in str(_exc), _exc
+            assert _removed in str(_exc), _exc
+        else:
+            raise AssertionError(
+                f"removed config key {_removed!r} was accepted silently"
+            )
     return locals()
 
 
@@ -1568,14 +1593,10 @@ def _case_variable_area_well_balancedness(
         transparent_geom.neutral_face_area_cm2[anode_face],
         np.pi * transparent_params["Rm"] ** 2,
     )
-    # The advective-block knob dials the (1-eta) face reduction back in for a
-    # sensitivity study; it is 0 by default so the face stays open.
-    blocked_params = dict(resolved_params)
-    blocked_params["b_anode_advective_block"] = 1.0
-    blocked_geom = LAPDSim1D(
-        blocked_params, resolved_flags
-    ).get_initial_snapshot().geometry
-    assert np.isclose(blocked_geom.plasma_transmission[anode_face], transparency)
+    # The anode's plasma face is always fully open: the mesh removes plasma
+    # through the Bohm sheath flux at its wires, so shrinking the face too
+    # would remove the same particles twice.
+    assert resolved_geom.plasma_transmission[anode_face] == 1.0
 
     # M3: the anode collects plasma at the Bohm sheath flux on BOTH mesh faces,
     # each sampling its own side, independent of the bulk drift.
@@ -7221,15 +7242,13 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
     puffdiag_params["dt_save"] = 0.0
     puffdiag_params["tau_afterglow"] = 3.0e-10
     puffdiag_params["pump_enabled"] = False
-    puffdiag_params["b_anode_collection"] = 0.0
+    # eta = 0 is the documented fully-transparent-anode limit and takes the
+    # same early return in anode_collection_rhs, so the mesh recycles nothing.
+    puffdiag_params["eta"] = 0.0
     # nn0 well below the delivered fuel, so the inventory difference below is
     # not swamped by float64 cancellation against a large standing fill.
     puffdiag_params["nn0"] = 1.0e5
-    for _puffdiag_key in (
-        "b_ioniz", "b_rec_rad", "b_rec_3b", "b_Qei", "b_Qen", "b_Qcx",
-        "b_surface_loss",
-    ):
-        puffdiag_params[_puffdiag_key] = 0.0
+    puffdiag_params["b_surface_loss"] = 0.0
     puffdiag_flags = dict(flags)
     puffdiag_flags["neutral_equilibration"] = False
     puffdiag_sim = LAPDSim1D(puffdiag_params, puffdiag_flags)
@@ -7335,18 +7354,6 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
         )
         reaction_term_sum = reaction_term_sum + pack_state(term)
     assert np.allclose(reaction_term_sum, pack_state(reaction_rhs))
-    S_ion_off, _, _ = reaction_rates(
-        state=state,
-        floors=sim.floors,
-        ion_mass_g=sim.ion_mass_g,
-        gas_type=params["gas_type"],
-        I_ion=sim.I_ion,
-        b_ioniz=0.0,
-        b_rec_rad=params["b_rec_rad"],
-        b_rec_3b=params["b_rec_3b"],
-    )
-    assert np.allclose(S_ion_off, 0.0)
-
     recomb_state = conservative_from_primitives(
         n=np.full(geom.cells, params["ne0"]),
         nn=state.nn,
@@ -7355,13 +7362,15 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
         Ti=np.full(geom.cells, 1.0),
         ion_mass_g=sim.ion_mass_g,
     )
-    recomb_params = dict(params)
-    recomb_params["b_ioniz"] = 0.0
-    recomb_sim = LAPDSim1D(recomb_params, flags)
-    recomb_rhs = recomb_sim.reaction_rhs(state=recomb_state)
-    assert np.all(recomb_rhs.M < 0.0)
-    assert np.all(recomb_rhs.Ee < 0.0)
-    assert np.all(recomb_rhs.Ei < 0.0)
+    recomb_terms = sim.reaction_rhs_terms(state=recomb_state)
+    for _recomb_name in ("recombination_rad_loss", "recombination_3b_loss"):
+        _recomb_term = recomb_terms[_recomb_name]
+        assert np.all(_recomb_term.n <= 0.0)
+        assert np.all(_recomb_term.nn >= 0.0)
+        assert np.all(_recomb_term.M <= 0.0)
+        assert np.all(_recomb_term.Ee <= 0.0)
+        assert np.all(_recomb_term.Ei <= 0.0)
+    assert np.all(recomb_terms["recombination_rad_loss"].n < 0.0)
 
     density_ramp = np.linspace(2.0, 1.0, geom.cells) * params["ne0"]
     ramp_state = conservative_from_primitives(
@@ -7498,16 +7507,6 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
     equal_temp_exchange = sim.energy_exchange_rhs(state=equal_temp_state)
     assert np.allclose(equal_temp_exchange.Ee, 0.0, atol=1e-30)
     assert np.allclose(equal_temp_exchange.Ei, 0.0, atol=1e-30)
-    disabled_exchange = electron_ion_exchange_rhs(
-        state=hot_e_state,
-        floors=sim.floors,
-        ion_mass_g=sim.ion_mass_g,
-        mu=sim.mu,
-        b_Qie=0.0,
-    )
-    assert np.allclose(disabled_exchange.Ee, 0.0)
-    assert np.allclose(disabled_exchange.Ei, 0.0)
-
     cooling_state = conservative_from_primitives(
         n=np.full(geom.cells, 1.0e12),
         nn=np.full(geom.cells, 1.0e12),
@@ -7538,40 +7537,29 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
     cooling_dt = sim.suggest_timestep(y=pack_state(cooling_state))
     assert np.isfinite(cooling_dt.dt_electron_cooling)
 
-    ionization_only_cooling = electron_cooling_rhs(
-        state=cooling_state,
-        floors=sim.floors,
-        ion_mass_g=sim.ion_mass_g,
-        gas_type=params["gas_type"],
-        I_ion=sim.I_ion,
-        b_ioniz=params["b_ioniz"],
-        b_rec_rad=params["b_rec_rad"],
-        b_rec_3b=params["b_rec_3b"],
-        b_ionization_energy_cost=1.0,  # removed config knob; hardwired 1.0
-        b_Qei=0.0,
-        b_Qen=0.0,
-        ionization_energy_cost=True,
-        icool_recomb=flags["icool_recomb"],
-    )
-    assert np.all(ionization_only_cooling.Ee < 0.0)
+    # Every cooling channel is a strict electron-energy sink.
+    assert np.all(cooling_rhs.Ee < 0.0)
 
-    disabled_cooling = electron_cooling_rhs(
+    # b_ionization_energy_cost survives as a function-level kwarg (it is not a
+    # config key): zeroing it empties its OWN term and leaves the two
+    # radiative terms untouched.
+    costless_terms = electron_cooling_rhs_terms(
         state=cooling_state,
         floors=sim.floors,
         ion_mass_g=sim.ion_mass_g,
         gas_type=params["gas_type"],
         I_ion=sim.I_ion,
-        b_ioniz=params["b_ioniz"],
-        b_rec_rad=params["b_rec_rad"],
-        b_rec_3b=params["b_rec_3b"],
         b_ionization_energy_cost=0.0,
-        b_Qei=0.0,
-        b_Qen=0.0,
+        atomic_rate_model=params["atomic_rate_model"],
         ionization_energy_cost=True,
         icool_recomb=flags["icool_recomb"],
     )
-    assert np.allclose(disabled_cooling.Ee, 0.0)
-    assert np.allclose(disabled_cooling.Ei, 0.0)
+    assert np.allclose(costless_terms["ionization_energy_cost"].Ee, 0.0)
+    assert np.all(cooling_terms["ionization_energy_cost"].Ee < 0.0)
+    for _cool_name in ("electron_ion_cooling", "electron_neutral_cooling"):
+        assert np.array_equal(
+            costless_terms[_cool_name].Ee, cooling_terms[_cool_name].Ee
+        )
 
     hot_ion_cx_state = conservative_from_primitives(
         n=np.full(geom.cells, 1.0e12),
@@ -7608,7 +7596,6 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
         ion_mass_g=sim.ion_mass_g,
         gas_type=params["gas_type"],
         Tn_fit=20.0,
-        b_Qcx=params["b_Qcx"],
         cx=True,
     )
     assert np.all(warm_neutral_cx.Ei > 0.0)
@@ -7619,8 +7606,7 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
         ion_mass_g=sim.ion_mass_g,
         gas_type=params["gas_type"],
         Tn_fit=params["Tn_fit"],
-        b_Qcx=0.0,
-        cx=True,
+        cx=False,
     )
     assert np.allclose(disabled_cx.Ei, 0.0)
     return locals()
@@ -7650,7 +7636,6 @@ def _case_helium_only_reaction_rates(dt_default, hot_ion_cx_state):
             ion_mass_g=sim.ion_mass_g,
             gas_type="Ar",
             Tn_fit=params["Tn_fit"],
-            b_Qcx=params["b_Qcx"],
             cx=True,
         )
     except ValueError as exc:
@@ -7699,9 +7684,7 @@ def _case_helium_only_reaction_rates(dt_default, hot_ion_cx_state):
         ion_mass_g=sim.ion_mass_g,
         mu=sim.mu,
         geometry=geom,
-        b_epara=0.0,
-        b_ipara=0.0,
-        heat_conduction=True,
+        heat_conduction=False,
     )
     assert np.allclose(disabled_heat.Ee, 0.0)
     assert np.allclose(disabled_heat.Ei, 0.0)
@@ -7739,9 +7722,7 @@ def _case_helium_only_reaction_rates(dt_default, hot_ion_cx_state):
         mu=sim.mu,
         geometry=geom,
         dt=heat_dt.dt_heat_conduction,
-        b_epara=0.0,
-        b_ipara=0.0,
-        heat_conduction=True,
+        heat_conduction=False,
     )
     assert np.allclose(disabled_implicit.Ee, heat_state.Ee)
     assert np.allclose(disabled_implicit.Ei, heat_state.Ei)
@@ -7850,12 +7831,6 @@ def _case_helium_only_reaction_rates(dt_default, hot_ion_cx_state):
     no_source_params = dict(params)
     no_source_params["gas_puff_enabled"] = False
     no_source_params["pump_enabled"] = False
-    no_source_params["b_ioniz"] = 0.0
-    no_source_params["b_rec_rad"] = 0.0
-    no_source_params["b_rec_3b"] = 0.0
-    no_source_params["b_Qei"] = 0.0
-    no_source_params["b_Qen"] = 0.0
-    no_source_params["b_Qcx"] = 0.0
     return locals()
 
 
@@ -7872,8 +7847,9 @@ def _case_helium_only_reaction_rates(dt_default, hot_ion_cx_state):
     ),
 )
 def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
-    # b_ionization_energy_cost removed as a config knob; b_ioniz=0 already
-    # zeros ionization (and its cost), so no override is needed here.
+    # The atomic reaction channels have no config-level off switch since the
+    # b_* removal (2026-08-28); this case exercises the run/results plumbing,
+    # and the fuelling and boundary sources are still off.
     params, flags = _base_config()
     sim, snapshot = _base_sim()
     geom = snapshot.geometry
@@ -11117,12 +11093,6 @@ def _case_cli_run_and_plot_end_to_end():
                     "dt_save = 0.0",
                     "gas_puff_enabled = false",
                     "pump_enabled = false",
-                    "b_ioniz = 0.0",
-                    "b_rec_rad = 0.0",
-                    "b_rec_3b = 0.0",
-                    "b_Qei = 0.0",
-                    "b_Qen = 0.0",
-                    "b_Qcx = 0.0",
                     "b_surface_loss = 0.0",
                     # The inventory assertion below holds the CLI run to
                     # atol=1e-14 on the 5-field single-zone cold-neutral
@@ -11252,19 +11222,6 @@ def _case_ion_neutral_closure_knobs():
     assert np.all((slip > 0.0) & (slip <= 1.0))
     assert np.all(np.diff(slip) < 0.0)
     assert slip[0] > 0.95
-    # b_slip_entrainment = 0 removes the correction exactly.
-    assert np.all(
-        ion_neutral_slip_factor(
-            n=knob_n,
-            Ti=np.array([1.0, 1.0, 1.0]),
-            ion_mass_g=knob_mass,
-            Rm_cm=knob_Rm,
-            gas_type="He",
-            b_slip_entrainment=0.0,
-        )
-        == 1.0
-    )
-
     drag_kwargs = dict(
         state=knob_state,
         floors=knob_floors,
@@ -11287,16 +11244,6 @@ def _case_ion_neutral_closure_knobs():
     # Slip only weakens the drag, per cell, by exactly the slip factor.
     assert np.allclose(drag_slip.M, drag_const.M * slip_state, rtol=1e-12)
     assert np.all(np.abs(drag_slip.M) <= np.abs(drag_const.M))
-    # Zero-entrainment slip collapses to the constant model bit-exactly.
-    assert np.all(
-        ion_neutral_drag_rhs(
-            **drag_kwargs,
-            drag_model="slip",
-            Rm_cm=knob_Rm,
-            b_slip_entrainment=0.0,
-        ).M
-        == drag_const.M
-    )
     # Frictional heating carries the slip quadratically.
     heat_const = ion_neutral_frictional_heating_rhs(**drag_kwargs)
     heat_slip = ion_neutral_frictional_heating_rhs(
@@ -11641,19 +11588,6 @@ def _case_neutral_momentum_sources(
     )
     mn_E = mn_geom.volume_ratio * mn_nu_ni * knob_Rm / mn_vbar
     assert np.allclose(mn_un_ss / mn_u, mn_E / (1.0 + mn_E), rtol=1e-5)
-    for mn_i in range(3):
-        mn_slip = ion_neutral_slip_factor(
-            n=mn_state.n[mn_i],
-            Ti=mn_Ti[mn_i],
-            ion_mass_g=knob_mass,
-            Rm_cm=knob_Rm[mn_i],
-            gas_type="He",
-            b_slip_entrainment=mn_geom.volume_ratio[mn_i],
-        )
-        assert np.isclose(
-            1.0 - mn_un_ss[mn_i] / mn_u[mn_i], mn_slip, rtol=1e-5
-        )
-
     # Pump sink: the wind leaves with the gas at the pump cells, so the
     # pumped momentum fraction matches the pumped particle fraction there.
     from cablp.solvers._sim1d.core.geometry import build_geometry
@@ -13986,8 +13920,7 @@ def _case_sigma_in_phelps(knob_floors, knob_mass, knob_state):
     assert np.allclose(therm_decoupled.Ei, 2.0 * therm_inherit.Ei, rtol=1e-12)
     assert np.any(therm_decoupled.Ei != 0.0)
 
-    # Te-shaped cooling correction: identity at the reference temperature,
-    # and the (Te/Te_ref)^exp factor elsewhere.
+    # Reference state the ADAS-vs-janev cooling comparison below reads.
     shape_state = conservative_from_primitives(
         n=np.full(3, 1e12),
         nn=np.full(3, 1e13),
@@ -14004,16 +13937,9 @@ def _case_sigma_in_phelps(knob_floors, knob_mass, knob_state):
         I_ion=24.587,
         ionization_energy_cost=False,
     )
+    # The janev-path reference the ADAS comparison downstream reads.
     cool_flat = electron_cooling_rhs(**cooling_kwargs)
-    cool_shaped = electron_cooling_rhs(
-        **cooling_kwargs,
-        b_Qei_Te_exp=1.0,
-        b_Qen_Te_exp=1.0,
-        b_Q_Te_ref_eV=5.0,
-    )
-    shape_factor = np.array([0.5, 1.0, 2.0])
-    assert np.allclose(cool_shaped.Ee, cool_flat.Ee * shape_factor, rtol=1e-12)
-    assert cool_shaped.Ee[1] == cool_flat.Ee[1]
+    assert np.all(cool_flat.Ee < 0.0)
     return locals()
 
 
@@ -15074,13 +15000,8 @@ def _case_csda_walk_window_reflection_k7(
     for values in (S_ion_a, S_rad_a):
         assert np.all(np.isfinite(values)) and np.all(values >= 0.0)
     assert np.all(S_ion_a > S_ion_j)  # SCD > direct at these (Te <= 6 eV) cells
-    # ACD carries the whole sink; the three-body slot is empty and its knob inert.
+    # ACD carries the whole sink; the three-body slot is empty.
     assert np.all(S_3b_a == 0.0)
-    S_ion_b3, S_rad_b3, S_3b_b3 = reaction_rates(
-        **adas_reaction_kwargs, atomic_rate_model="adas", b_rec_3b=7.0
-    )
-    assert np.all(S_ion_b3 == S_ion_a) and np.all(S_rad_b3 == S_rad_a)
-    assert np.all(S_3b_b3 == 0.0)
     try:
         reaction_rates(**adas_reaction_kwargs, atomic_rate_model="nonsense")
     except ValueError:
