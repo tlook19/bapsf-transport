@@ -214,12 +214,10 @@ from cablp.cathode.beam_deposition import (
 from cablp.atomic.cross_sections import charge_ex_react
 from cablp.cathode.kernels import PROVENANCE as KERNEL_PROVENANCE
 from cablp.constants import (
-    I_Ry,
     I_ion,
     ev_to_erg,
     kb_cgs,
     m_He_cgs,
-    m_p_cgs,
     qe_SI,
 )
 
@@ -386,6 +384,7 @@ class StepAttempt1D:
     raw_rejection_reason: str = ""
     raw_rejection_detail: dict | None = None
     ion_booking: np.ndarray | None = None
+    source_booking: dict | None = None
     coverage_burn: np.ndarray | None = None
     coverage_reservoir_burn: np.ndarray | None = None
     coverage_w: np.ndarray | None = None
@@ -643,6 +642,45 @@ def _copy_cache_value(value):
     if hasattr(value, "copy"):
         return value.copy()
     return value
+
+
+def _memo_key_part(value):
+    """Return a hashable, BIT-EXACTLY comparable stand-in for ``value``.
+
+    Used to build the read-only cathode solve memo's key
+    (:meth:`LAPDSim1D._cathode_solve_memo_key`). Floats and arrays are
+    encoded as their RAW BYTES rather than compared as numbers, so the
+    resulting key separates values that ``==`` would conflate: ``-0.0`` from
+    ``0.0``, and two states differing in the last ulp. NaN compares EQUAL to
+    itself here, which is the correct reading for a memo -- the same bits in
+    means the same solve out.
+
+    The whole key is compared with ``==`` rather than hashed, so there is no
+    collision channel: a hit means every component matched byte for byte.
+    """
+    if value is None or isinstance(value, (bool, int, str, bytes)):
+        # bool before int matters only for repr; both are exact under ==.
+        return (type(value).__name__, value)
+    if isinstance(value, (float, np.floating)):
+        return ("f", np.float64(value).tobytes())
+    if isinstance(value, np.ndarray):
+        return ("a", value.dtype.str, value.shape,
+                np.ascontiguousarray(value).tobytes())
+    if isinstance(value, dict):
+        return ("d", tuple(sorted(
+            (str(k), _memo_key_part(v)) for k, v in value.items()
+        )))
+    if isinstance(value, (list, tuple)):
+        return ("t", tuple(_memo_key_part(v) for v in value))
+    fields = getattr(value, "__dict__", None)
+    if fields is not None:
+        return ("o", type(value).__name__, tuple(sorted(
+            (str(k), _memo_key_part(v)) for k, v in fields.items()
+        )))
+    # Anything else (an opaque object) is deliberately keyed by IDENTITY, so
+    # a different object is a MISS. That errs toward re-solving, never toward
+    # serving a stale memo.
+    return ("id", id(value))
 
 
 def _format_duration(seconds):
@@ -1092,6 +1130,13 @@ class LAPDSim1D:
         self._dvm_ion_booked = np.zeros(self._geometry.cells, dtype=float)
         self._dvm_ion_stage_weight = 0.0
         self._dvm_ion_stage_accum = None
+        # The boundary-inflow channels the plasma has BOOKED since the last
+        # neutral tick, in PARTICLES per cell. Same accumulator discipline
+        # and the same stage weight as the ionization tally above; see
+        # _accumulate_dvm_source_booking.
+        self._dvm_source_booked = self._zero_dvm_source_counts()
+        self._dvm_source_stage_accum = None
+        self._dvm_source_rows = None
         self._dvm_ion_shortfall_warned = False
         if self._neutral_model == "kinetic_dvm":
             self._configure_kinetic_dvm()
@@ -2471,6 +2516,9 @@ class LAPDSim1D:
     def _init_run_machinery(self):
         """Initialize the run-loop bookkeeping and apply any restart payload."""
         self._cathode_solve = None
+        # Single-entry memo for READ-ONLY (``update_cache=False``) cathode
+        # solves: ``(key, result)`` or None. See ``solve_cathode_boundary``.
+        self._cathode_solve_memo = None
         # Item-35 ledger tripwire: latched so the warning fires once per run.
         self._beam_gap_ledger_warned = False
         self._last_result = None
@@ -4140,6 +4188,7 @@ class LAPDSim1D:
             for term in terms.values():
                 state_rhs = add_state_rhs(state_rhs, term)
         self._accumulate_dvm_ion_booking(terms)
+        self._accumulate_dvm_source_booking()
         self._accumulate_coverage_burn(terms)
         # With optional fields on, the packed RHS must always match the
         # state vector's width, even when no term touched them (pads zeros).
@@ -4189,6 +4238,10 @@ class LAPDSim1D:
         # that never reaches the beam terms (the neutral-only pre-drive, or
         # Plasma off) cannot leave the accumulator reading a stale solve.
         self._coverage_reservoir_debit = None
+        # Likewise the engaged DVM arm's boundary-inflow rows: they belong to
+        # THIS evaluation's terms, and a branch that never reaches the strip
+        # must not leave the counted handshake reading an older set.
+        self._dvm_source_rows = None
         state = self.state if y is None else self._unpack(y)
         # The zone-exchange term exists only in two-zone runs, so the term
         # ledger (and the saved rhs_terms structure) is unchanged when the
@@ -4547,6 +4600,11 @@ class LAPDSim1D:
             # present from the first step so the saved term structure is
             # stable across engagement.
             if self._dvm_engaged:
+                # B1 counted handshake: read the boundary-inflow rows the
+                # arm's sources are built from BEFORE the strip below zeroes
+                # them. Side channel, not a term -- the RHS sum and the saved
+                # term structure are untouched by it.
+                self._dvm_source_rows = self._dvm_source_channel_rows(terms)
                 terms = {
                     name: self._strip_dvm_rows(name, term)
                     for name, term in terms.items()
@@ -4931,6 +4989,9 @@ class LAPDSim1D:
                 self._geometry.cells, dtype=float
             )
             self._dvm_ion_stage_weight = 0.5 * dt
+            # The B1 boundary-inflow tally rides that same weight and the
+            # same attempt lifetime; see _accumulate_dvm_source_booking.
+            self._dvm_source_stage_accum = self._zero_dvm_source_counts()
 
         if self._coverage is not None:
             # Arm the covered-only neutral-debit tally AND the coverage field's
@@ -5018,6 +5079,8 @@ class LAPDSim1D:
             attempt_ion_booking = self._dvm_ion_stage_accum
             self._dvm_ion_stage_accum = None
             self._dvm_ion_stage_weight = 0.0
+            attempt_source_booking = self._dvm_source_stage_accum
+            self._dvm_source_stage_accum = None
             attempt_coverage_burn = self._coverage_burn_accum
             attempt_coverage_reservoir_burn = (
                 self._coverage_reservoir_burn_accum
@@ -5036,6 +5099,7 @@ class LAPDSim1D:
             raw_rejection_reason=raw_rejection_reason,
             raw_rejection_detail=raw_rejection_detail,
             ion_booking=attempt_ion_booking,
+            source_booking=attempt_source_booking,
             coverage_burn=attempt_coverage_burn,
             coverage_reservoir_burn=attempt_coverage_reservoir_burn,
             coverage_w=attempt_coverage_w,
@@ -5496,6 +5560,12 @@ class LAPDSim1D:
             booking = getattr(attempt, "ion_booking", None)
             if booking is not None:
                 self._dvm_ion_booked = self._dvm_ion_booked + booking
+            source_booking = getattr(attempt, "source_booking", None)
+            if source_booking is not None:
+                self._dvm_source_booked = {
+                    name: self._dvm_source_booked[name] + row
+                    for name, row in source_booking.items()
+                }
         self._restore_step_cache(attempt.solver_cache)
         self._set_state_vector(attempt.y)
         self._accumulate_floor_ledger(
@@ -8460,6 +8530,41 @@ class LAPDSim1D:
             row = np.where(self._plasma_active_mask(), row, 0.0)
         return row
 
+    def _cathode_solve_memo_key(
+        self,
+        state,
+        time,
+        input_flags,
+        floating,
+        phi_wf_override_eV,
+        circuit_V_src_V,
+        coverage,
+    ):
+        """Return the read-only cathode solve memo's key.
+
+        One entry per argument of the module-level ``solve_cathode_boundary``
+        that can move within a run; the run-constant arguments are listed in
+        :meth:`solve_cathode_boundary` with the reason they are absent. The
+        caller passes the already-resolved values so the key cannot describe a
+        different solve from the one it guards.
+        """
+        return (
+            _memo_key_part(state),
+            _memo_key_part(time),
+            _memo_key_part(input_flags),
+            _memo_key_part(bool(floating)),
+            _memo_key_part(self._cathode_beam_cross),
+            _memo_key_part(self._cathode_x0),
+            _memo_key_part(self._cathode_x0_twin),
+            _memo_key_part(self._cathode_Ts_K),
+            _memo_key_part(phi_wf_override_eV),
+            _memo_key_part(self._cathode_f_em),
+            _memo_key_part(self._circuit_I_loop),
+            _memo_key_part(circuit_V_src_V),
+            _memo_key_part(coverage),
+            _memo_key_part(self._vessel_V_cm),
+        )
+
     def solve_cathode_boundary(
         self,
         y=None,
@@ -8480,6 +8585,45 @@ class LAPDSim1D:
             active_only=False,
             floating=bool(floating),
         )
+        phi_wf_override_eV = self._cathode_phi_wf_eff()
+        circuit_V_src_V = self._circuit_source_voltage_V(cathode_phase)
+        coverage = self._coverage_view(state, time)
+        # READ-ONLY solve memo (R3 [cathode-accepted-solve-unify]). Several
+        # consumers solve at the SAME resolved inputs within one accepted step
+        # -- the shared converged accepted-state solve, the dt bound's bundle
+        # and the first Strang heat half -- and this serves the second and
+        # third of those from the first instead of repeating the sheath/beam
+        # solve. Only ``update_cache=False`` calls participate: a cache-writing
+        # solve must actually run, because its job is the write (sigma_b, x0,
+        # the solve of record), not the value.
+        #
+        # The key is the FULL mutable input set, not a state/time pair. sigma_b
+        # (``beam_cross_prev``) is an INPUT to this solve, so two calls at one
+        # (y, t) with different sigma_b are different solves -- that is exactly
+        # the lag this member exists to resolve, and keying on state alone
+        # would paper over it by serving one for the other. Everything else
+        # this passes and that can move within a run joins for the same reason:
+        # the warm start (x0/x0_twin), the surface state (T_s, phi_wf, f_em),
+        # the circuit (I_loop, V_src, vessel node), the phase-derived flags and
+        # ``floating``, and the coverage view. The remaining arguments
+        # (``floors``, ``ion_mass_g``, ``mu``, ``geometry``, ``input_dict``,
+        # ``I_ion``, ``gas_type``) are assigned once in __init__ and never
+        # mutated, so they cannot separate two calls in one run. A miss on any
+        # component solves fresh; a stale memo is never served.
+        memo_key = None
+        if not update_cache:
+            memo_key = self._cathode_solve_memo_key(
+                state=state,
+                time=time,
+                input_flags=input_flags,
+                floating=floating,
+                phi_wf_override_eV=phi_wf_override_eV,
+                circuit_V_src_V=circuit_V_src_V,
+                coverage=coverage,
+            )
+            memo = self._cathode_solve_memo
+            if memo is not None and memo[0] == memo_key:
+                return memo[1]
         result = solve_cathode_boundary(
             state=state,
             floors=self._floors,
@@ -8495,13 +8639,15 @@ class LAPDSim1D:
             x0_twin=self._cathode_x0_twin,
             floating=floating,
             T_s_override_K=self._cathode_Ts_K,
-            phi_wf_override_eV=self._cathode_phi_wf_eff(),
+            phi_wf_override_eV=phi_wf_override_eV,
             f_em_override=self._cathode_f_em,
             circuit_I_loop_A=self._circuit_I_loop,
-            circuit_V_src_V=self._circuit_source_voltage_V(cathode_phase),
-            coverage=self._coverage_view(state, time),
+            circuit_V_src_V=circuit_V_src_V,
+            coverage=coverage,
             vessel_V_cm_V=self._vessel_V_cm,
         )
+        if memo_key is not None:
+            self._cathode_solve_memo = (memo_key, result)
         if update_cache:
             self._warn_beam_gap_ledger(result)
             self._cathode_solve = result
@@ -9352,8 +9498,16 @@ class LAPDSim1D:
             return None
         return event
 
-    def _cathode_total_current_A(self):
-        cathode_solve = self._cathode_solve
+    def _cathode_total_current_A(self, cathode_solve=None):
+        """Return the cathode solve's total current [A], 0.0 when absent.
+
+        ``cathode_solve`` names WHICH solve to read; ``None`` falls back to
+        the cached solve of record, which is every historical caller's
+        reading. The phase trigger passes its own converged accepted-state
+        solve instead (see :meth:`_update_current_phase_triggers`).
+        """
+        if cathode_solve is None:
+            cathode_solve = self._cathode_solve
         if cathode_solve is None or cathode_solve.beam_result is None:
             return 0.0
         return float(cathode_solve.beam_result.result.I_tot)
@@ -9551,10 +9705,29 @@ class LAPDSim1D:
         ):
             return
         cathode_phase = self._cathode_phase_options(time=self._time)
+        converged_solve = None
         if cathode_phase["solve_enabled"]:
+            # Two solves, and they are not the same solve (R3
+            # [cathode-accepted-solve-unify]). The FIRST is the sigma_b
+            # refresher and keeps its historical job: it consumes the sigma_b
+            # the accepted step's last internal stage left -- a STAGE-state
+            # value -- and writes the accepted-state one, along with the warm
+            # start and the solve of record every existing diagnostic reads.
+            #
+            # The SECOND re-solves at the same accepted state on the sigma_b
+            # the first just wrote, which is the converged one: the lag map
+            # reaches its fixed point in a single iteration, so this solve is
+            # what the dt bound and the first Strang heat half go on to see.
+            # The trigger's threshold test reads THIS, not the lagged first
+            # solve, and the memo hands the same object to those two consumers
+            # instead of letting them repeat it -- which is why the step's
+            # solve count falls by one even though a solve was added here.
             self.solve_cathode_boundary(time=self._time, update_cache=True)
+            converged_solve = self.solve_cathode_boundary(
+                time=self._time, update_cache=False
+            )
 
-        I_now = self._cathode_total_current_A()
+        I_now = self._cathode_total_current_A(cathode_solve=converged_solve)
         tau_prebreakdown = max(
             float(self._input_dict.get("tau_prebreakdown", 0.0)),
             0.0,
@@ -10920,6 +11093,50 @@ class LAPDSim1D:
             for name in names
         }
 
+    def _kinetic_source_channel_rows(self, boundary, reaction_terms, anode):
+        """Return the boundary-inflow source rows in atoms/s per cell.
+
+        The four channels a kinetic arm sources from a PLASMA-side booking:
+        the two wall-return faces, read from whichever boundary operator is
+        terminating the plasma and placed in the cells that operator drained,
+        resolved by role; the volumetric recombination birth; and the anode
+        return, which the fluid books into the annulus wherever a resolved
+        mesh gives it one. Each row is the term's own neutral row times the
+        zone volume that row was written against, so the row IS a particle
+        rate and its integral over an interval is particles.
+
+        One expression, two consumers: the tick-time snapshot
+        (:meth:`_kinetic_channel_rates`) and the transient arm's counted
+        handshake (:meth:`_dvm_source_channel_rows`). The counted path is
+        therefore the time integral of exactly the quantity the snapshot
+        samples, rather than a second formula for the same channel.
+        """
+        V_col, V_ann = self._zone_volumes
+        recycle = np.clip(boundary.nn, 0.0, None) * V_col
+        cath_cells = np.zeros(self._geometry.cells)
+        coll_cells = np.zeros(self._geometry.cells)
+        for role, target in (
+            ("cathode", cath_cells),
+            ("collector", coll_cells),
+        ):
+            for cell in self._recycle_cells.get(role, ()):
+                target[cell] = recycle[cell]
+        rec_cells = np.clip(
+            reaction_terms["recombination_rad_loss"].nn
+            + reaction_terms["recombination_3b_loss"].nn,
+            0.0,
+            None,
+        ) * V_col
+        an_gain = np.clip(anode.nn, 0.0, None) * V_col
+        if anode.nn_a is not None:
+            an_gain = an_gain + np.clip(anode.nn_a, 0.0, None) * V_ann
+        return {
+            "cathode_face": cath_cells,
+            "collector_face": coll_cells,
+            "recombination": rec_cells,
+            "anode": an_gain,
+        }
+
     def _kinetic_channel_rates(self, state, derived, time):
         """Return the current source-channel rates and shapes (K4a-t).
 
@@ -10944,32 +11161,18 @@ class LAPDSim1D:
         deposits into.
         """
         geometry = self._geometry
-        V_col, V_ann = self._zone_volumes
         boundary = (
             self.characteristic_boundary_rhs(state=state)
             if self._characteristic_boundary
             else self.boundary_absorption_rhs(state=state)
         )
-        recycle = np.clip(boundary.nn, 0.0, None) * V_col
-        cath_cells = np.zeros(geometry.cells)
-        coll_cells = np.zeros(geometry.cells)
-        for role, target in (
-            ("cathode", cath_cells),
-            ("collector", coll_cells),
-        ):
-            for cell in self._recycle_cells.get(role, ()):
-                target[cell] = recycle[cell]
         reaction_terms = self.reaction_rhs_terms(state=state)
-        rec_cells = np.clip(
-            reaction_terms["recombination_rad_loss"].nn
-            + reaction_terms["recombination_3b_loss"].nn,
-            0.0,
-            None,
-        ) * V_col
         an = self.anode_collection_rhs(state=state)
-        an_gain = np.clip(an.nn, 0.0, None) * V_col
-        if an.nn_a is not None:
-            an_gain = an_gain + np.clip(an.nn_a, 0.0, None) * V_ann
+        rows = self._kinetic_source_channel_rows(boundary, reaction_terms, an)
+        cath_cells = rows["cathode_face"]
+        coll_cells = rows["collector_face"]
+        rec_cells = rows["recombination"]
+        an_gain = rows["anode"]
         src_kwargs = self._neutral_source_kwargs(time=time)
         puff_cells = np.zeros(geometry.cells)
         if src_kwargs["gas_puff_enabled"]:
@@ -11200,6 +11403,50 @@ class LAPDSim1D:
             "recombination_3b_loss",
         }
     )
+    #: The arm's source channels that are settled in COUNTED PARTICLES (B1),
+    #: as the keys ``TransientDVM.update`` books them under. Each has a
+    #: plasma-side row to count -- the boundary operator's wall return, the
+    #: recombination birth, the anode return -- so the arm receives what the
+    #: tick actually delivered rather than one snapshot of its rate. The puff
+    #: is deliberately absent: it has no plasma-side row of its own (the
+    #: fluid term carrying it is the puff NET of the pump sink, and the pump
+    #: is the arm's own end-sticking channel), and being a function of time
+    #: and configuration alone it carries no plasma-state sampling error.
+    _DVM_COUNTED_SOURCES = (
+        "cathode_face",
+        "collector_face",
+        "recombination",
+        "anode",
+    )
+
+    def _zero_dvm_source_counts(self):
+        """Return a fresh zeroed per-channel particle tally."""
+        return {
+            name: np.zeros(self._geometry.cells, dtype=float)
+            for name in self._DVM_COUNTED_SOURCES
+        }
+
+    def _dvm_source_channel_rows(self, terms):
+        """Return this RHS evaluation's boundary-inflow source rows.
+
+        Read from the terms the step is about to apply, BEFORE
+        :meth:`_strip_dvm_rows` zeroes their neutral rows, and through the
+        same expression the tick-time snapshot uses, so a channel cannot
+        drift between the counted and the sampled path.
+
+        Unmasked by the plasma topology, exactly as the snapshot is: these
+        rows are the arm's sources rather than fluid rows the mask decides
+        the fate of, and masking one path but not the other would make the
+        counted channel the integral of something the snapshot never sampled.
+        """
+        boundary = terms[
+            "characteristic_boundary"
+            if self._characteristic_boundary
+            else "boundary_absorption"
+        ]
+        return self._kinetic_source_channel_rows(
+            boundary, terms, terms["anode_collection"]
+        )
 
     def _strip_dvm_rows(self, name, term):
         """Return ``term`` with the rows the engaged DVM arm owns zeroed."""
@@ -11248,6 +11495,23 @@ class LAPDSim1D:
             np.asarray(terms["ionization_birth"].n, dtype=float)
             + np.asarray(terms["beam_ionization_birth"].n, dtype=float)
         )
+
+    def _accumulate_dvm_source_booking(self):
+        """Tally this RHS stage's share of the tick's booked source inflow.
+
+        The B1 counterpart of :meth:`_accumulate_dvm_ion_booking`, on the
+        same stage weight and the same attempt lifetime: the rows were taken
+        from the terms this evaluation built, before the strip zeroed them
+        (:meth:`_dvm_source_channel_rows`), so summing them over the tick's
+        accepted steps gives the particles each channel actually delivered
+        rather than one tick-time reading of its rate. The rows are already
+        particle rates, so no volume factor enters here -- unlike the
+        ionization tally, which accumulates a density rate.
+        """
+        if self._dvm_source_stage_accum is None:
+            return
+        for name, accum in self._dvm_source_stage_accum.items():
+            accum += self._dvm_ion_stage_weight * self._dvm_source_rows[name]
 
     def _dvm_booked_transfer_rhs(self):
         """Return the tick's BOOKED transfer as an RHS term, unlimited.
@@ -11752,10 +12016,12 @@ class LAPDSim1D:
         self._dvm_last_s = self._time
         self._dvm_next_s = self._time + self._dvm_cadence_s
         self._dvm_arm_transfer_hold(state)
-        # The step that engaged the arm booked its ionization against the
-        # LIVE fluid nn rows, which were not yet stripped, so it is already
-        # settled and must not be handed to the arm as well.
+        # The step that engaged the arm booked its ionization and its
+        # boundary inflow against the LIVE fluid nn rows, which were not yet
+        # stripped, so both are already settled and must not be handed to the
+        # arm as well.
         self._dvm_ion_booked = np.zeros(self._geometry.cells, dtype=float)
+        self._dvm_source_booked = self._zero_dvm_source_counts()
 
     def _dvm_advance(self, dt_neutral):
         """Run one transient DVM update and republish the neutral moments.
@@ -11775,24 +12041,26 @@ class LAPDSim1D:
         geometry = self._geometry
         nu_ion = self._dvm_ionization_frequency(state, derived)
         rates = self._kinetic_channel_rates(state, derived, self._time)
-        sources = {
-            "puff": np.asarray(rates["puff"], dtype=float),
-            "recombination": np.asarray(rates["rec"], dtype=float),
-            "anode": np.asarray(rates["anode"], dtype=float),
-            # Per-cell, not a scalar: the wall return belongs in the cell the
-            # boundary term drained, which is not an end cell once an
-            # obstruction sits behind the cathode.
-            "cathode_face": np.asarray(rates["cath_cells"], dtype=float),
-            "collector_face": np.asarray(rates["coll_cells"], dtype=float),
-        }
-        # The counted handshake: what the plasma booked as ionization over
-        # this tick, in particles, so the arm debits that and not a rate.
-        # Reset before the update, not after, so a raise cannot leave the
-        # tally to be counted twice.
+        # Only the puff is still handed as a rate: it is a configured drive,
+        # a function of time and configuration alone with no plasma-side row
+        # of its own to count, so a tick-time reading of it carries no
+        # plasma-state sampling error. The other four channels are counted
+        # below; see _DVM_COUNTED_SOURCES. The per-cell wall returns are not
+        # scalars: the return belongs in the cell the boundary term drained,
+        # which is not an end cell once an obstruction sits behind the
+        # cathode.
+        sources = {"puff": np.asarray(rates["puff"], dtype=float)}
+        # The counted handshake: what the plasma booked as ionization, and as
+        # boundary inflow per channel, over this tick -- in particles, so the
+        # arm debits and injects those and not a rate. Reset before the
+        # update, not after, so a raise cannot leave a tally to be counted
+        # twice.
         ion_counts = self._dvm_ion_booked * np.asarray(
             self._geometry.plasma_volume_cm3, dtype=float
         )
+        source_counts = self._dvm_source_booked
         self._dvm_ion_booked = np.zeros(self._geometry.cells, dtype=float)
+        self._dvm_source_booked = self._zero_dvm_source_counts()
         self._dvm.update(
             float(dt_neutral),
             n_i=np.asarray(state.n, dtype=float),
@@ -11801,6 +12069,7 @@ class LAPDSim1D:
             nu_ion=nu_ion,
             ion_counts=ion_counts,
             sources=sources,
+            source_counts=source_counts,
             T_s_K=(
                 float(self._cathode_Ts_K)
                 if self._cathode_Ts_K is not None
@@ -12126,9 +12395,19 @@ class LAPDSim1D:
     def _gas_constants(gas_type):
         if gas_type == "He":
             return m_He_cgs, 4, 4, I_ion
+        # Ruled 2026-08-27, the [gas-constants-h-arm] successor row of the
+        # h-quarantine: this arm was the last m_p_cgs consumer in cablp/.
         if gas_type == "H":
-            return m_p_cgs, 1, 2, I_Ry
-        raise ValueError(f"unsupported gas_type {gas_type!r}; expected 'He' or 'H'")
+            raise ValueError(
+                "gas_type='H' is not available: the hydrogen arm of "
+                "_gas_constants was retired 2026-08-27 as dead code. It "
+                "returned proton constants that no construction could ever "
+                "carry into physics -- the solver is helium-only (D3, "
+                "2026-08-21) and refuses gas_type != 'He' a few lines later "
+                "in __init__, at the Phelps He+/He sigma_in_model gate. "
+                "Accepted: 'He'."
+            )
+        raise ValueError(f"unsupported gas_type {gas_type!r}; expected 'He'")
 
 
 def _finite_or_nan(value):

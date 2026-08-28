@@ -12,9 +12,15 @@ aHeI = [0.6623e3, 0.9476e-1, 0.7456, -0.2592, 3.8098, 0.4026]
 aHeII = [0.3476e3, 0.1214, 0.7974, 0.4819, 1.4066, -0.3639e-2, 0.9720e-3, 0.4078]
 
 # IAEA EXPRESSION 1, H I Electron Cooling Rate Coefficients
+# Hydrogen-arm coefficients: QUARANTINED domain (untested; ruled 2026-08-27) --
+# the guarded entry points refuse H; direct evaluation via IAEA_exp1(Te, aHI)
+# is the caller's responsibility.
 aHI = [0.1247e3, 0.2111, 0.5982, 0.4063, 0.9640e-3, 1.4523]
 
 # IAEA EXPRESSION 6, H II Electron Cooling Rate Coefficients
+# Hydrogen-arm coefficients: QUARANTINED domain (untested; ruled 2026-08-27) --
+# the guarded entry points refuse H; direct evaluation via IAEA_exp6(Te, aHII)
+# is the caller's responsibility.
 aHII = [0.3180e-3, 0.2332, -0.9388e-2, 0.8617, 0.9663e-02, 0.8537]
 
 # fitting parameters for ionization cross sections a_i

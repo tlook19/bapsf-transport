@@ -1,0 +1,200 @@
+{
+  "kind": "r3-semantic-tip-index",
+  "repository": "bapsf-transport",
+  "base_revision": "bc0a515154ac74bb499e9e266a04a1b8447cf25f",
+  "base_revision_note": "The R2 tip (tag r2-tip-2026-08-27), which is the parent of the whole R3 window and the anchor every pre-R3 bit-level claim now falls back to.",
+  "tip_revision": "80ef40d4c8de53b889fc6607697082cf07dbedb3",
+  "tip_revision_note": "agent-staging at the recapture member's dispatch: the frozen R3 build set, six members past campaign 39cb395. This index and the recapture itself are committed ON TOP of it; the orchestrator cuts the tag at Tom's advance.",
+
+  "schema_note": "A thin consolidated INDEX, and a SEMANTIC record rather than a rename manifest. Like its siblings r3_constants_table.json, r3_qie_mass_ratio.json, r3_vbar_mass_unify.json, h_quarantine.json, r3_cathode_accepted_solve_unify.json and r3_lane_march.json, it deliberately does NOT validate under restructure/manifests/validate_manifest.py -- no symbol was moved or renamed in the byte-supersession sense. It POINTS at the per-member records and the evidence set; it does not restate what they own.",
+
+  "purpose": "One place to start from when reading the R3 window. Every fact below is a POINTER plus the minimum needed to know whether to follow it; the owning document is named on every row.",
+
+  "members": [
+    {
+      "id": "r3-sub-event-1-constants-unification",
+      "staging_commit": "5e253da491422e8f5430dd7d0599754365ee4a0c",
+      "manifest": "restructure/manifests/r3_constants_table.json",
+      "summary": "Six truncated physical constants unified UP to full CODATA. Matched-grid footprint battery; the Tier-A deposit_beam corpus regression was DISCLOSED and the fixture re-captured at unified constants per Tom's 2026-08-27 ruling.",
+      "bit_exact": false,
+      "bit_exact_note": "By design -- this member is the one that moves the floats. Everything downstream of it is measured against the re-captured corpus, not the pre-unification one."
+    },
+    {
+      "id": "r3-sub-event-1b-qie-mass-ratio",
+      "staging_commit": "89a7c9c",
+      "manifest": "restructure/manifests/r3_qie_mass_ratio.json",
+      "summary": "H_e_mass_ratio retired; DERIVED He_e_mass_ratio = m_He_cgs/m_e_cgs added; Q_ie divides by the true helium-4/electron ratio (coefficient x1.0066473). mu accepted-and-inert in Q_ie, documented.",
+      "ruling": "Tom-ruled own-member/retire/advisor-waived, campaign log 27ge/27gg."
+    },
+    {
+      "id": "smoke-eqfix",
+      "staging_commit": "39cb3958c5baf26613a301789e24731c1fb654db",
+      "manifest": null,
+      "manifest_note": "No semantic manifest: the member touches scripts/smoke_sim1d.py only and moves no solver float.",
+      "summary": "The CLI/plot block attributed to its own case cli-run-and-plot-end-to-end; its child pinned to 2 equilibration cycles. Suite wall 56.9s -> 38.8s, child state bit-identical at 1/2/100/default cycles.",
+      "ruling": "Tom-ruled, log 27gg item 4."
+    },
+    {
+      "id": "small-batch-1",
+      "staging_commit": "508462f46aea6c7e940979943a3fd201bc9b98a4",
+      "manifest": null,
+      "summary": "Flatten stragglers, golden transcript provenance (the baseline_sim1d.py in-process kernel probe), afterglow H retirement."
+    },
+    {
+      "id": "r3-sub-event-1d-vbar-mass-unify-plus-h-quarantine",
+      "staging_commit": "fed56dd",
+      "manifest": ["restructure/manifests/r3_vbar_mass_unify.json", "restructure/manifests/h_quarantine.json"],
+      "summary": "The LAST neutral-side mass-number reconstruction removed: the two vbar sites genuinely disagreed 0.330% before this member (sources.py already read m_He via ion_mass_g; neutral_thermal_speed reconstructed mu*m_p). H-quarantine: three guards, 4/4 He values bit-identical raw-uint64.",
+      "ruling": "Tom-ruled 27gm; correction of record at 27go -- the 1d prior is 3.305e-03 and the x10 bar 3.305e-02 (the review brief conflated them; the manifest was correct throughout)."
+    },
+    {
+      "id": "small-batch-2",
+      "staging_commit": "0144808",
+      "manifest": null,
+      "summary": "Seven inert/dead-code rows, including the A_R318 repair (delete one of two adjacent byte-identical duplicates), the gas-constants-h-arm retirement, the eii-tables reordering with a loud H-SKIP, and the aHI+aHII quarantine comments.",
+      "evidence": "Two-tier AST identity on the table repair; the coder's own re-fetch digit-proof 81/81."
+    },
+    {
+      "id": "r3-sub-event-2-lane-march",
+      "staging_commit": "e95bb21",
+      "manifest": "restructure/manifests/r3_lane_march.json",
+      "summary": "deposit_beam's ionizing tail legs marched together by cathode.beam_lane_march instead of one recursive deposit_beam per leg. A REIMPLEMENTATION at fixed physics: same legs, same substeps, same floats, fewer numpy dispatches.",
+      "bit_exact": true,
+      "bit_exact_note": "BITWISE-0, not within a tolerance. Route (b)'s mechanism at route (a)'s bar: numpy lanes whose interpolated lookups reconstruct math.fma's single rounding (Dekker two-product + Knuth two-sum + round-to-odd), so the vectorised route is bitwise-0 against the scalar march rather than 1e-12 from it. Tom REJECTED the tolerance route -- it would have moved the golden and demoted the raw-uint64 fixture.",
+      "ruling": "Route ratified by Tom at review, log 27gt/27gu.",
+      "gating": "Default-ON pure path; compiled path gated OFF (batching there measured a 5.3x REGRESSION; compiled 0.99x unchanged). LANE_MARCH_MIN_LEGS = 128, measured not guessed."
+    },
+    {
+      "id": "fma-underflow-fence",
+      "staging_commit": "80ef40d4c8de53b889fc6607697082cf07dbedb3",
+      "manifest": "restructure/manifests/r3_lane_march.json",
+      "manifest_note": "Recorded as an APPEND-ONLY addendum inside the lane-march manifest (signature_note, not a retro-edit) -- it closes a finding the lane-march review raised.",
+      "summary": "check_fma_domain gains the lower Dekker fence FMA_ARRAY_MIN_ABS = 1e-145 on every NONZERO element of the MULTIPLIED operands; the addend c is exempt via factor=False. Structurally inert -- the arithmetic path is byte-untouched and the addendum checks only the guard, which is why no golden was run for it (reviewer concurrence banked)."
+    },
+    {
+      "id": "r3-tip-recapture",
+      "staging_commit": "THIS MEMBER",
+      "manifest": "restructure/manifests/r3_tip_index.json",
+      "summary": "Anchor hardening plus THE RECAPTURE. Hardening: the fma_array signed-zero docstring caveat, and the ARRAY-PATH leg of scripts/interp_bitexact_gate.py so the standing post-numpy-upgrade/migration gate certifies both fused-lerp implementations rather than only the scalar one. Recapture: production_discharge.npz + sidecar + golden_digest_4k.json rotated together, provenance entry appended. No arithmetic changed."
+    }
+  ],
+
+  "members_without_a_semantic_manifest": {
+    "which": ["smoke-eqfix (39cb395)", "small batch 1 (508462f)", "small batch 2 (0144808)"],
+    "why": "None of the three moves a solver float or a symbol in the byte-supersession sense; their records are the campaign log entries and their own commit messages. Listed here so the member set reads as complete rather than as three missing manifests."
+  },
+
+  "the_recapture": {
+    "event": "THE R3-TIP RECAPTURE, 2026-08-28. The one anchor event that rotates every golden reference together, under the reviewed-recapture protocol.",
+    "authoritative_record": "scripts/golden_baseline_provenance.md -- newest entry in the Recapture record. THAT note is the authority for the numbers; the pointers below exist so this index is navigable, not so it restates them.",
+    "defining_feature": "NOTHING IN THE CONFIGURATION MOVED. g1atrim.toml untouched, default_config() untouched, no config key added/removed/re-valued. What moved is the value of physical constants IN CODE. So the 4k digest's trajectory rotates while its config_identity does NOT -- the first time in this record's history that the pair separates, and the exact signature of a change that is real physics and no configuration at all.",
+    "rotations": {
+      "production_discharge.npz": {"before": "77c0543cbbee6038756b79fcb904c8849c57c6aab9929bc100a0872c7f6ed93d", "after": "2c02ccd882261a0b01e0a1e8f0e313113b8431fadd526fa9d4859694e5704306"},
+      "production_discharge.json": {"before": "18587f7190bafcf10d56b500407401e2528c3df6ec378798cbf86160abd2a87c", "after": "18d065b70d12a5187b3e240bb2f0eae1aec0a09b1c0076954c1cbe8e7a6c2176"},
+      "golden_digest_4k.json trajectory digest": {"before": "3f2424e3b9f6954a736c84041c2737fb2624778043b1fab028c725ed1cc4991f", "after": "cb54b74a34cbee055612d404abb44ba4522bea11316044556fa43c83a75b2ae2"},
+      "golden_digest_4k.json config_identity": {"before": "ec8ba03db7e061948a8d438ed027747cccaef05cf8171225e259dd25e9871157", "after": "UNCHANGED -- ec8ba03db7e061948a8d438ed027747cccaef05cf8171225e259dd25e9871157"},
+      "cablp/solvers/_sim1d/config_snapshots.json": "NOT ROTATED, and verified rather than assumed: audit_sim1d_configs.py reads params=257, flags=51, cases=4 CLEAN at this tip, production_golden still 21409d1a..., manifest_sha256 still d2fd9e26.... R3 added and removed no config key."
+    },
+    "fixture_shape": {"steps": 62612, "steps_before": 62613, "saves": 2620, "saves_before": 2620, "final_time_s": "2.618681e-02", "phase_census": "8 / 11 / 2000 / 600 / 1, unchanged"},
+    "capture_discipline": "Captured PURE, twice from clean separate processes to temporary paths, strictly serially, compared BEFORE either was installed: byte-identical NPZ and sidecar, and raw-uint64 identical over all three arrays (time 0/2,620; y 0/1,509,120; phase identical at raw bytes). Digest reference likewise captured pure twice, byte-identical. Verified on BOTH kernel paths -- a return to the pre-2026-08-25 form, which that event departed from for cost and disclosed."
+  },
+
+  "corpus_fixture_rotation": {
+    "artifact": "scripts/data/deposit_beam_reference.npz",
+    "before": "77b010e12f39682ff19b27820c51403eb76a33e536c471dc6ff7d691c9b8aaf2",
+    "after": "e70396e525aade66eb8a4e965b40a697a82dc42143ca5e8da16136af7bbe2e3d",
+    "when": "R3 sub-event 1 (constants unification), NOT at the recapture -- the two rotations are separate events and this one is already committed.",
+    "ruling": "Tom's 2026-08-27 ruling: score sub-event 2 against the RE-CAPTURED corpus, not the pre-unification one.",
+    "state_at_tip": "deposit_beam_reference.py --verify reads 506 entries, 0 differing of 206,218 values across 7,590 result fields; recorded conservation closure max 6.095224e-16 over 506 entries, tail bank max 3.891121e-16 over 268.",
+    "non_interchangeability": "The two corpus endpoints are NOT interchangeable (55 input-side entries move via the HE_I_ION_EV respell). Confirmed understood at Tier C, whose gate 6 was correctly run corpus-A-on-both-codes."
+  },
+
+  "ratified_bars": {
+    "lane_march_equivalence": "BITWISE 0 per cell per bank -- raised from the brief's rel <= 1e-12, which came from vectorised np.interp being UNFUSED and was not accepted. Achieved as ratified.",
+    "flip_census": "The R1 contract's <= 1e-9 ENERGY-WEIGHTED branch-flip bar, ARMED for sub-event 2 against the re-captured corpus. Measured 0 flipped of 17,024 walkers, energy-weighted effect 0.000000e+00. Ruled INAPPLICABLE to the constants member (sub-event 1) by Tom, 2026-08-27, session 39 -- the threshold itself moved BY RULING there.",
+    "corpus_closure": "6.095224e-16 per-ray / 3.891121e-16 tail-bank, each exactly 0.25x the superseded bar (the 4x rule). The retired 3.727957e-15 / 2.075264e-15 pair is deliberately not quoted.",
+    "tier_c_stage_ii": "dev/sigma <= 0.1 on the derived sub-print. Measured worst 0.0174 -- 5.7x headroom; all 15 printed stage-(ii) entries IDENTICAL between arms.",
+    "tier_c_timing": "t90 delta 0.00 ms and peak delta +0.06 ms against a 0.5 ms bar; tau identical at all five ports; plateau -0.0027%.",
+    "fma_domain": "FMA_ARRAY_MIN_ABS = 1e-145, derived from MIN**2 >= ~1e-290 so a fenced product clears the 2**-970 = 1.0021e-292 exactness threshold by 99.8x. NON-BINDING by 122 decades on everything reachable."
+  },
+
+  "tier_c_continuity_pair": {
+    "verdict": "PASSED all seven pre-registered gates. Campaign log 2026-08-27gy is the verdict pointer.",
+    "design": "R3-tip 80ef40d vs the R2-tip parent bc0a515; both arms COMPILED, in detached worktrees, identity-asserted.",
+    "artifact_set": "scripts/r3tc_* in the main checkout, 50 files. Principal members: r3tc_{parent,tip}_es1.{h5,log,cmd,exit,wall,score.txt,preflight.txt}, r3tc_{parent,tip}_floor.*, r3tc_{parent,tip}_ledger_audit.{md,npz} with their three PNGs each, r3tc_gate1_dev_sigma_derived.txt, r3tc_fingerprints_pair.txt, r3tc_dpdz_localization.txt, r3tc_dtmin_localization.txt, r3tc_path_selection_census.txt, r3tc_artifact_ab.txt, r3tc_kernel_probe.txt, r3tc_tip_interp_bitexact_gate.txt, r3tc_tip_smoke.txt, r3tc_wall_times.txt, and the three instruments r3tc_{artifact_ab,route_census,tree_kernel_probe}_instrument.py.",
+    "headline_results": "All 15 printed stage-(ii) dev/sigma entries identical between arms; plateau -0.0027%; t90 delta 0.00 ms; every ledger row <= 6e-4 relative with beam_power_deposition at -5.2e-5; ledger closure identical to all printed digits (5.821e-11 W both arms); floor census statistically unchanged (0.444% -> 0.440% Te clips, Ti 13 -> 13); steps -0.166% with no limiter regime change; saves 2613 = 2613; path census byte-identical route-vector SHA.",
+    "resolved_anomaly": "The dP/dz integral -1.27e-4 carried a 0.248 POINTWISE max, RESOLVED as a single save-cadence beam-shutoff shift (beam_csda_active 1 -> 0 at save 2023 vs 2022 = 0.01 ms) rather than a physics difference.",
+    "priors_confirmed_in_channel": "Q_ei -> afterglow Ti/Ei; vbar -> nn at 2.78e-3, which is approximately the x1.0033 scale itself; cell-16 does NOT recur at full-run length."
+  },
+
+  "dossier_facts": {
+    "two_path_corpus_digest": {
+      "value": "12557538331681349426",
+      "what_it_is": "The raw-uint64 digest of the whole deposit_beam corpus replay, IDENTICAL on the pure and the compiled path.",
+      "why_it_is_the_anchor_artifact": "It carries two certifications in one number: the lane march's reimplementation faithfulness, and a pure==compiled re-certification. A --verify refuses to ask this question, and it had never been measured before.",
+      "source": "campaign log 2026-08-27gu (the lane-march merge review)."
+    },
+    "lane_march_full_cycle_null": {
+      "claim": "The lane march contributes EXACTLY ZERO at staging over the full cycle.",
+      "evidence": "The correct isolation is pre-lane staging 0144808 vs post-merge e95bb21, which is BIT-IDENTICAL. The brief's tip-npz comparison would have misfired -- that artifact was captured three members back and reproduces the vbar footprint digit-for-digit; the reviewer caught it.",
+      "consequence": "This is a Tier-C ATTRIBUTION PRIOR: any movement the Tier C pair measures attributes to members 1 / 1b / 1d / unify, never to the lane march.",
+      "source": "campaign log 2026-08-27gu."
+    },
+    "cell_16_4k_instrument_artifact": {
+      "claim": "In the 4k matched-grid battery the M row peaks at CELL 16, and that is an INSTRUMENT property, not a member finding.",
+      "why": "Cell 16 carries near-zero momentum -- ~12.8-12.9x below the field median, second-smallest of 72 -- so it is a denominator artifact of the relative measure. Observed in BOTH 1b and 1d, and by 27gu in three members running.",
+      "standing_reading": "Every future member's 'largest row is M at cell 16' reads as this artifact until shown otherwise. Recorded once so it stops being re-derived per member.",
+      "does_not_recur": "Confirmed absent at full-run length by the Tier C pair.",
+      "source": "campaign log 2026-08-27go, restated 27gu, closed out 27gy."
+    },
+    "signed_zero_caveat": {
+      "claim": "fma_array's reconstruction may return +0.0 where math.fma returns -0.0, when the product a*b is an exact zero -- the closing two-sum add loses the zero's sign.",
+      "class": "Pre-existing (surfaced by the lane march), numerically inert, in-domain, unreachable on the march.",
+      "why_not_fenced": "Zeros are deliberately exempt from FMA_ARRAY_MIN_ABS because 0*x is exactly 0 and cannot underflow; fencing them would refuse legal calls to suppress a sign bit.",
+      "why_unreachable": "scripts/r3fma_domain_probe.py counts ZERO exact zeros in the MULTIPLIED operand streams a and b over the corpus plus randomized lane batteries, so no reachable call forms an exact-zero product. (588 exact zeros appear in the ADDEND c, which is not multiplied and cannot produce the corner.)",
+      "status": "THE LAST KNOWN fma_array <-> math.fma gap. Disclosed in the fma_array docstring by this member; the arithmetic is untouched.",
+      "source": "campaign log 2026-08-27gw (all 664 probe failures were exact-zero products)."
+    },
+    "dtc_adoption_parent_delta": {
+      "finding": "The Tier C PARENT is NOT 0-delta against the 26cr recipe.",
+      "mechanism": "The ratified [dtc-adoption] defaults (15c0d80 / 1c1b70e) landed post-record and pre-R2-tip, so they are already in the parent.",
+      "why_it_does_not_invalidate_the_pair": "BOTH arms carry the identical two deltas, so the PAIR is 0-delta -- which is the contract's actual requirement -- and every gate is arm-to-arm rather than arm-to-record. The -23.8% step count against the record matches the adoption's own published headline. Both preflight forms are banked.",
+      "source": "campaign log 2026-08-27gy."
+    }
+  },
+
+  "banked_memo": {
+    "name": "notes/reference/HYDHEL_A_R318_DIGITPROOF_2026-08-27.md",
+    "location": "the LOCAL-ONLY ~/bapsf/docs repository -- named here, deliberately NOT linked, because this repository is public and never references plan documents.",
+    "what_it_establishes": "A_R318's defect is a SINGLE INSERTED DUPLICATE of 9.536923957409e-03 in row 1 (adjacent byte-identical copies -- delete either). 43 digit-comparisons across both tables, zero other mismatches; A_R531 identity confirmed as He+ + He CX, HYDHEL 5.3.1.",
+    "permanent_provenance_caveat": "The repo table is HYDHEL's REPLACEMENT fit (2020 doc), NOT the 1987 Springer coefficients. Future checks must cite HYDHEL.",
+    "how_it_was_gated": "The memo alone did not meet the bar: the fix rode small batch 2 gated on the coder's OWN re-fetch digit-proof of all 81 post-fix coefficients (PDF sha256 f55acd63...)."
+  },
+
+  "disclosed_residuals": [
+    {
+      "id": "epilogue-sigma-b-seam",
+      "status": "REGISTERED RESIDUAL. Open, with a measured map as evidence and no defined delta.",
+      "what_happened": "Registered as R3 sub-event 1e and STOPPED AT THE MAPPING GATE: the ruled fix is unbuildable in scope, and the brief's ordering premise was FALSIFIED BY MEASUREMENT.",
+      "measurement": "Both epilogue evaluators run INSIDE _accept_step_attempt (solver.py:5682, :5847), BEFORE the trigger's converged solve (:9707, reached after accept), so the memo cannot hold a converged accepted-state result at their position. Moving the converged solve earlier is falsified at AMPS scale: _circuit_I_loop differs bitwise evaluator->trigger on 1200/1200 steps and _cathode_Ts_K on 1200/1200 (the vdis evaluator IS the circuit advance).",
+      "class_correction": "This is NOT the sigma_b-lag class (one solve consuming stale same-state output -- that class was closed by the unify member). It is two consumers on the far side of a STATE ADVANCE from the solve of record: a SEAM-PLACEMENT question -- does the accepted-state sheath solve of record belong before or after the surface/circuit advance -- which is a physics ruling, not a reorder.",
+      "disposition": "Queued for an unhurried advisor consult under Tom's dispatch gate; recommendation post-R3, since no defined delta exists to ride this recapture. No code changed; smoke green at tip; three evidence logs banked (r3epi_ordermap.log, r3epi_iloop.log).",
+      "source": "campaign log 2026-08-27gr."
+    },
+    {
+      "id": "discharge-phase-movement-class",
+      "status": "MEASURED AT TIER C AND PASSED. Disclosed, not open.",
+      "what_it_is": "The R3 window does move the discharge phase, and the movement is carried by members 1 (constants), 1b (Q_ie mass ratio), 1d (vbar mass) and unify -- NOT by the lane march, which is a proven full-cycle null.",
+      "why_it_is_a_residual_rather_than_a_defect": "It is the intended consequence of unifying truncated constants up to CODATA: the floats change because they were wrong before. What had to be shown is that nothing SCORE-LEVEL moves with them, and that is what the Tier C pair measured -- all seven gates passed, with every stage-(ii) entry identical between arms.",
+      "how_it_shows_in_this_recapture": "62,613 -> 62,612 steps, saves and phase census unchanged, Te_max 27.897 -> 27.805 eV.",
+      "source": "campaign log 2026-08-27gu (attribution prior) and 2026-08-27gy (the measurement)."
+    }
+  ],
+
+  "two_anchor_note": {
+    "statement": "Pre-R3 BIT-LEVEL claims are HISTORICAL as of this recapture. They are reproducible ONLY at the tag r2-tip-2026-08-27, with its environment lockfile.",
+    "what_still_transfers": "SCORE-LEVEL physics. That is what the Tier C continuity pair established, and it is the only sense in which results carry across the boundary.",
+    "precedent": "The same relationship the 2026-08-16 desktop migration created between minimal-model-2026-08-03 and desktop-migration-2026-08-16, for the same reason: the floats changed underneath a model whose physics did not.",
+    "tag": "NOT CUT BY THIS MEMBER. The R3 tip tag is the orchestrator's, cut at Tom's advance."
+  }
+}

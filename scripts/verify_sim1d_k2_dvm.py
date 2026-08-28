@@ -107,6 +107,22 @@ Gates:
       state alone, run as a negative control -- short-falls above the
       closed-form threshold and not below it; plus the ledger, handshake
       and positivity statements per tick on the live arm
+  B1  counted boundary inflow, closed box: the four boundary-inflow
+      channels handed as PARTICLES are injected at exactly that count and
+      independently of the tick length, each landing at its own face or
+      birth cell with nothing upstream/downstream/elsewhere; the same
+      numbers handed as RATES are the negative control and scale with dt
+  B2  the in-solver counted-source ledger: every tick's handed count is
+      exactly what the ACCEPTED steps since the last tick accumulated, per
+      cell and per channel, a rejected attempt moving it by zero; resetting
+      the accumulator after the tick instead of before is the negative
+      control and over-counts
+  B3  the counted channels carry their own emission energy, with every
+      channel armed at once: both ledgers close and each counted channel's
+      energy row is its count times the mean energy of its own spectrum,
+      rebuilt from the velocity grid. Emitting the cathode face at the WALL
+      temperature is the negative control -- not one particle moves, so B1
+      and B2 cannot see it and only this statement does
   G1..G14 construction refusals: each unsupported configuration raises a
       ValueError at construction naming the offender. G2 is the model-preset
       resolver's refusal half -- an explicitly-set family member the
@@ -498,6 +514,8 @@ DISARMED_ENERGY_ROWS = (
     "birth_wall_accommodated",
     "birth_wall_reflected",
     "birth_mesh_reemit",
+    "loss_closed_face_blocked",
+    "birth_closed_face_reemit",
     "birth_puff",
     "birth_recombination",
     "birth_cathode_face",
@@ -505,6 +523,7 @@ DISARMED_ENERGY_ROWS = (
     "birth_anode",
     "net_surface_wall",
     "net_surface_mesh",
+    "net_surface_closed_face",
     "net_surface_end_L",
     "net_surface_end_R",
 )
@@ -569,7 +588,7 @@ def geometry_plasma(nz):
     }
 
 
-def independent_transfer(dvm, dt, plasma, rec):
+def independent_transfer(dvm, dt, plasma, rec, T_s_K=None):
     """Rebuild ``(M, Ei, S)_transfer`` by a route independent of the engine.
 
     ``_book_transfer`` builds these from substep A's tallies and from bin
@@ -590,8 +609,19 @@ def independent_transfer(dvm, dt, plasma, rec):
     (the caller supplies only recombination and an annulus puff); zone
     exchange, the cylindrical wall and the end buffers may all be live,
     because those act on the annulus or inside the march.
+
+    The CLOSED-FACE re-emission is the one other column birth, and on a
+    geometry that has one it must come off ``f_c`` before the inversion for
+    the same reason ``rec_births`` does: left in, it is misread as
+    collisional rebirth and the recovered ``f_march`` is wrong. It is
+    rebuilt here from the engine's published per-side blocked COUNTS times
+    this function's own half-flux spectra -- the spectra are constructed
+    independently, so a side re-emitted at the wrong temperature or into
+    the wrong direction still shows up as a transfer error rather than
+    cancelling.
     """
     g = dvm.g
+    T_s_K = dvm.T_wall_K if T_s_K is None else float(T_s_K)
     Ti = np.asarray(plasma["Ti_eV"], dtype=float)
     u = np.asarray(plasma["u_i"], dtype=float)
     # The engine floors the birth temperature at 0.02 eV; match it exactly.
@@ -605,11 +635,20 @@ def independent_transfer(dvm, dt, plasma, rec):
     rec_dt = np.asarray(rec, dtype=float) * dt
     rec_births = (rec_dt * inv_vc)[:, None, None] * M_i
 
+    closed_births = np.zeros_like(dvm.f_c)
+    for _face, d_in, cell, surface in dvm._closed_emitters:
+        emit = -d_in
+        T_side = T_s_K if surface else dvm.T_wall_K
+        count = float(dvm.last_closed_counts[emit][cell])
+        closed_births[cell] += (
+            count * inv_vc[cell] * g.half_flux_spectrum(T_side, emit)
+        )
+
     nu_cx, nu_el = dvm.collision_frequencies(
         plasma["n_i"], Ti, u
     )
     nu_coll = nu_cx + nu_el
-    residual = dvm.f_c - rec_births
+    residual = dvm.f_c - rec_births - closed_births
     A = (nu_coll * residual * dt).sum(axis=(1, 2))
     B = (nu_coll * M_i * dt).sum(axis=(1, 2))
     x = A / (1.0 + B)
@@ -641,9 +680,9 @@ def independent_transfer(dvm, dt, plasma, rec):
     return M_t, Ei_t, S_t
 
 
-def transfer_reconstruction_error(dvm, dt, plasma, rec):
+def transfer_reconstruction_error(dvm, dt, plasma, rec, T_s_K=None):
     """Return the worst relative error of :func:`independent_transfer`."""
-    want = independent_transfer(dvm, dt, plasma, rec)
+    want = independent_transfer(dvm, dt, plasma, rec, T_s_K=T_s_K)
     got = (dvm.M_transfer, dvm.Ei_transfer, dvm.S_transfer)
     worst = 0.0
     for engine, rebuilt in zip(got, want):
@@ -2571,6 +2610,922 @@ def gate_l5():
     )
 
 
+# ------------------------------------------ B1 counted boundary channels
+
+
+#: [B1] The counted boundary-inflow fixture, in PARTICLES per tick.
+#: Deliberately unequal across the four channels so a channel that received
+#: another's count -- or that landed at another's cell -- could not pass.
+B1_FED_COUNTS = {
+    "cathode_face": 5.0e16,
+    "collector_face": 4.0e16,
+    "recombination": 3.0e16,
+    "anode": 2.0e16,
+}
+
+#: [B1] The cathode surface temperature the counted arm emits at. Different
+#: from the 300 K wall so the two recycle faces carry different spectra --
+#: which is what makes the B3 wrong-energy negative control bite.
+B1_T_S_K = 1910.0
+
+
+def b1_no_loss_box(nz=12):
+    """Return an empty DVM with no pumping and no external loss channel.
+
+    Started at zero (``f_c = f_a = 0``, no pending buffers) so the domain
+    inventory after one update IS what the external channels injected, and
+    with ``s_L = s_R = 0`` and no plasma so nothing leaves: the wall, mesh
+    and zone channels are internal and conserve particles exactly, and the
+    end returns are buffered inside the inventory. Anything the box holds
+    afterwards therefore came in through the source channels under test.
+    """
+    dvm = bare_dvm(nz=nz, accommodation=0.4)
+    dvm.s_L = 0.0
+    dvm.s_R = 0.0
+    dvm.f_c[:] = 0.0
+    dvm.f_a[:] = 0.0
+    return dvm
+
+
+def b1_home_cells(dvm):
+    """Return each B1 channel's own cell on ``dvm``'s grid.
+
+    The face channels belong to the cells the engine emits them from; the
+    two volume births are placed a third and two thirds along, well clear
+    of both faces and of each other, so that "landed at its own cell" and
+    "landed at another channel's" are different answers.
+    """
+    return {
+        "cathode_face": int(dvm.cath_cell),
+        "collector_face": int(dvm.coll_cell),
+        "recombination": dvm.nz // 3,
+        "anode": 2 * dvm.nz // 3,
+    }
+
+
+def b1_fed_rows(dvm):
+    """Return the B1 fixture as per-cell rows on ``dvm``'s grid."""
+    homes = b1_home_cells(dvm)
+    rows = {name: np.zeros(dvm.nz) for name in B1_FED_COUNTS}
+    for name, count in B1_FED_COUNTS.items():
+        rows[name][homes[name]] = count
+    return rows
+
+
+def gate_b1():
+    """Counted boundary inflow: injected == counted, per face, at any dt.
+
+    STATEMENT 1 of the B1 three (the closed-box synthetic case). The four
+    boundary-inflow channels are handed as PARTICLES, so what the box holds
+    after one tick is the fed count exactly and does not depend on the tick
+    length at all -- the whole point of the counted handshake, and the
+    property the rate path cannot have.
+
+    Per FACE, on the PRODUCTION machine (whose cathode face is NOT the
+    domain end, so the statement is not vacuous the way it is on the
+    uniform tube): fed one channel at a time, the counted particles put
+    EXACTLY ZERO on the far side of their own emitting face -- the march
+    cannot move anything against the direction it was launched in -- and
+    the cathode's return drifts downstream while the collector's drifts
+    upstream. The two volume births stay in the cell they were fed (they
+    are substep-B births, applied after the march).
+
+    A channel's share at ANOTHER channel's cell is bounded rather than
+    exactly zero, because the march is implicit and therefore has no finite
+    signal speed: a cell hundreds of cells downstream receives an
+    exponentially small tail within one tick. It is measured against the
+    fed count and held below the roundoff tolerance, which a genuine
+    mis-deposit -- a channel launched at the wrong face -- would exceed by
+    twenty orders of magnitude.
+
+    NEGATIVE CONTROL: the same numbers handed through ``sources`` instead,
+    which multiplies by ``dt``. The injected inventory is then proportional
+    to the tick length and equals the fed count at neither of the two,
+    which is exactly the first-order-in-cadence sampling error this member
+    removes -- and it fails at THIS statement.
+    """
+    fed_total = float(sum(B1_FED_COUNTS.values()))
+    dts = (1.0e-5, 4.0e-5)
+    counted = []
+    rows_ok = True
+    resid = 0.0
+    for dt in dts:
+        dvm = b1_no_loss_box()
+        rows = b1_fed_rows(dvm)
+        led = dvm.update(
+            dt, source_counts=rows, T_s_K=B1_T_S_K, **zero_plasma(dvm)
+        )
+        counted.append(dvm.total_inventory())
+        resid = max(resid, abs(ledger_residual(led)["distribution_rel"]))
+        for name, fed in B1_FED_COUNTS.items():
+            rows_ok = rows_ok and led[f"birth_{name}"] == fed
+    counted_rel = max(abs(c - fed_total) / fed_total for c in counted)
+    dt_rel = abs(counted[0] - counted[1]) / fed_total
+
+    # Per-face / per-cell placement on the PRODUCTION machine, one channel
+    # at a time.
+    machine = make_sim(
+        neutral_kinetic_dvm_nvz=16,
+        neutral_kinetic_dvm_nvp=6,
+        **PRODUCTION_GEOMETRY_KEYS,
+    ).geometry
+    places = []
+    place_ok = True
+    for name in B1_FED_COUNTS:
+        dvm = TransientDVM(
+            geometry=machine, nvz=16, nvp=6, exchange_model=EXCHANGE_MODEL,
+        )
+        dvm.s_L = 0.0
+        dvm.s_R = 0.0
+        dvm.f_c[:] = 0.0
+        dvm.f_a[:] = 0.0
+        homes = b1_home_cells(dvm)
+        rows = b1_fed_rows(dvm)
+        dvm.update(
+            1.0e-5,
+            source_counts={name: rows[name]},
+            T_s_K=B1_T_S_K,
+            **zero_plasma(dvm),
+        )
+        mass = dvm.f_c.sum(axis=(1, 2)) * dvm.V_col
+        mass_a = dvm.f_a.sum(axis=(1, 2)) * dvm.V_ann
+        home = homes[name]
+        foreign = float(sum(
+            mass[cell] + mass_a[cell]
+            for other, cell in homes.items() if other != name
+        ))
+        if name == "cathode_face":
+            extra = float(mass[:home].sum() + mass_a[:home].sum())
+            directed = float(dvm.column_drift()[home]) > 0.0
+            where = f"upstream of face {home}"
+        elif name == "collector_face":
+            extra = float(mass[home + 1:].sum() + mass_a[home + 1:].sum())
+            directed = float(dvm.column_drift()[home]) < 0.0
+            where = f"downstream of face {home}"
+        else:
+            extra = float(
+                mass.sum() - mass[home] + mass_a.sum() - mass_a[home]
+            )
+            directed = True
+            where = f"outside birth cell {home}"
+        got = dvm.total_inventory()
+        rel = abs(got - B1_FED_COUNTS[name]) / B1_FED_COUNTS[name]
+        at_home = float(mass[home] + mass_a[home]) > 0.0
+        foreign_rel = foreign / B1_FED_COUNTS[name]
+        places.append((name, home, where, extra, foreign_rel, rel))
+        place_ok = (
+            place_ok
+            and extra == 0.0
+            and foreign_rel < ROUNDOFF_REL
+            and at_home
+            and directed
+            and rel < ROUNDOFF_REL
+        )
+
+    # NEGATIVE CONTROL: the same numbers as RATES.
+    control = []
+    for dt in dts:
+        dvm = b1_no_loss_box()
+        rows = b1_fed_rows(dvm)
+        dvm.update(dt, sources=rows, T_s_K=B1_T_S_K, **zero_plasma(dvm))
+        control.append(dvm.total_inventory())
+    control_ratio = control[1] / control[0]
+    control_fails = (
+        abs(control_ratio - dts[1] / dts[0]) < 1.0e-9
+        and abs(control[0] - fed_total) / fed_total > 0.1
+        and abs(control[1] - fed_total) / fed_total > 0.1
+    )
+
+    ok = (
+        counted_rel < ROUNDOFF_REL
+        and dt_rel < ROUNDOFF_REL
+        and rows_ok
+        and resid < ROUNDOFF_REL
+        and place_ok
+        and control_fails
+    )
+    detail = (
+        f"fed {fmt(fed_total)} particles across "
+        f"{sorted(B1_FED_COUNTS)}; box inventory {fmt(counted[0])} at "
+        f"dt={dts[0]:g} s and {fmt(counted[1])} at dt={dts[1]:g} s -- "
+        f"relative error {fmt(counted_rel)}, dt-dependence {fmt(dt_rel)} "
+        f"(tol {fmt(ROUNDOFF_REL)}); every birth_* ledger row equals its fed "
+        f"count exactly: {rows_ok}; particle residual {fmt(resid)}"
+    )
+    for name, home, where, extra, foreign_rel, rel in places:
+        detail += (
+            f"\n        {name} fed alone at cell {home}: {fmt(extra)} "
+            f"particles {where} (exactly zero required), share at the other "
+            f"channels' cells {fmt(foreign_rel)} of the fed count (tol "
+            f"{fmt(ROUNDOFF_REL)}), injected relative error {fmt(rel)}"
+        )
+    detail += (
+        f"\n        NEGATIVE CONTROL (same numbers as RATES): inventory "
+        f"{fmt(control[0])} -> {fmt(control[1])}, ratio {control_ratio:.9f} "
+        f"= the dt ratio {dts[1] / dts[0]:.9f}, and neither equals the fed "
+        f"count -- the sampling error the counted path removes "
+        f"(control behaves as required: {control_fails})"
+    )
+    return (
+        "B1 counted boundary inflow: injected == counted particles, per "
+        "face, independent of the tick length",
+        ok,
+        detail,
+    )
+
+
+def gate_b2():
+    """The in-solver counted-source ledger: handed == accumulated, accepted only.
+
+    STATEMENT 2 of the B1 three. On the engaged production arm every tick's
+    handed count must be exactly the tally the ACCEPTED steps since the last
+    tick put into the accumulator -- nothing dropped, nothing counted twice,
+    nothing contributed by an attempt the solver rejected. Per cell, per
+    channel, over several ticks::
+
+        sum(handed over ticks) + outstanding accumulator
+            == sum(accepted attempts' bookings)
+
+    The two sides are read from opposite ends of the handshake: the left
+    from what ``TransientDVM.update`` actually received, the right from the
+    per-attempt tallies ``_accept_step_attempt`` folded in.
+
+    NEGATIVE CONTROL: restore the accumulator after the tick instead of
+    before it -- the reset-order defect the pattern exists to prevent --
+    and the identity over-counts, because each tick then re-hands every
+    earlier tick's particles. A bare rejected attempt is also run and must
+    move the accumulator by exactly zero.
+    """
+    sim = make_sim(
+        neutral_kinetic_dvm_nvz=16,
+        neutral_kinetic_dvm_nvp=6,
+        **PRODUCTION_GEOMETRY_KEYS,
+    )
+    channels = LAPDSim1D._DVM_COUNTED_SOURCES
+
+    def measure(target, ticks=4):
+        handed = {n: np.zeros(target.geometry.cells) for n in channels}
+        accepted = {n: np.zeros(target.geometry.cells) for n in channels}
+        update = TransientDVM.update
+        accept = LAPDSim1D._accept_step_attempt
+
+        def spy_update(self, dt, **kwargs):
+            for name, row in (kwargs.get("source_counts") or {}).items():
+                handed[name] = handed[name] + np.asarray(row, dtype=float)
+            return update(self, dt, **kwargs)
+
+        def spy_accept(self, attempt):
+            booking = getattr(attempt, "source_booking", None)
+            if booking is not None:
+                for name, row in booking.items():
+                    accepted[name] = accepted[name] + row
+            return accept(self, attempt)
+
+        TransientDVM.update = spy_update
+        LAPDSim1D._accept_step_attempt = spy_accept
+        try:
+            run_until_updates(target, ticks)
+        finally:
+            TransientDVM.update = update
+            LAPDSim1D._accept_step_attempt = accept
+        worst = 0.0
+        for name in channels:
+            left = handed[name] + target._dvm_source_booked[name]
+            scale = max(float(np.max(np.abs(accepted[name]))), 1e-300)
+            worst = max(worst, float(np.max(np.abs(left - accepted[name]))) / scale)
+        return worst, handed, accepted
+
+    worst, handed, accepted = measure(sim)
+
+    # A rejected attempt moves nothing: build one and drop it on the floor.
+    before = {n: sim._dvm_source_booked[n].copy() for n in channels}
+    sim._attempt_step(dt=sim.suggest_timestep().dt)
+    rejected_moved = any(
+        not np.array_equal(before[n], sim._dvm_source_booked[n])
+        for n in channels
+    )
+
+    # NEGATIVE CONTROL: reset AFTER the update instead of before it.
+    control = make_sim(
+        neutral_kinetic_dvm_nvz=16,
+        neutral_kinetic_dvm_nvp=6,
+        **PRODUCTION_GEOMETRY_KEYS,
+    )
+    advance = LAPDSim1D._dvm_advance
+
+    def late_reset(self, dt_neutral):
+        held = {n: row.copy() for n, row in self._dvm_source_booked.items()}
+        out = advance(self, dt_neutral)
+        self._dvm_source_booked = held
+        return out
+
+    LAPDSim1D._dvm_advance = late_reset
+    try:
+        control_worst, _, _ = measure(control)
+    finally:
+        LAPDSim1D._dvm_advance = advance
+
+    ok = (
+        worst < ROUNDOFF_REL
+        and not rejected_moved
+        and control_worst > 1.0e-3
+    )
+    totals = ", ".join(
+        f"{name} {fmt(float(handed[name].sum()))}" for name in channels
+    )
+    return (
+        "B2 in-solver counted-source ledger: handed == accumulated over "
+        "accepted steps, per cell",
+        ok,
+        f"4 ticks, particles handed: {totals}\n        "
+        f"worst |handed + outstanding - accepted| / scale = {fmt(worst)} "
+        f"(tol {fmt(ROUNDOFF_REL)})\n        "
+        f"a rejected attempt moved the accumulator: {rejected_moved} "
+        f"(False required)\n        "
+        f"NEGATIVE CONTROL (reset AFTER the update, the double-count "
+        f"defect): worst residual {fmt(control_worst)} -- the identity "
+        f"breaks, as required",
+    )
+
+
+def gate_b3():
+    """Counted channels carry the RIGHT energy, with every channel armed.
+
+    STATEMENT 3 of the B1 three, and the one the B0a review made binding:
+    a surface booked at the wrong energy is INVISIBLE to the closed-box and
+    in-solver statements above, because it moves no particle. With every
+    channel armed at once -- pumping at both ends, an anode mesh, a wall, a
+    puff, and all four counted channels -- both ledgers close, and each
+    counted channel's energy row is its own count times the mean energy of
+    the spectrum it is emitted into, rebuilt here from the velocity grid
+    rather than read back from the engine.
+
+    NEGATIVE CONTROL: emit the cathode face at the WALL temperature instead
+    of the cathode's. Not one particle moves -- the particle ledger closes
+    to the same roundoff and every ``birth_*`` count is unchanged -- while
+    the cathode-face energy row moves by a large factor. Only this
+    statement sees it.
+    """
+    def armed(T_s_K):
+        nz = 12
+        dvm = TransientDVM(
+            geometry=uniform_tube(nz),
+            nvz=16,
+            nvp=6,
+            s_L=0.3,
+            s_R=0.3,
+            accommodation=0.4,
+            exchange_model=EXCHANGE_MODEL,
+            mesh_face=nz // 2,
+            transparency=0.642,
+        )
+        dvm.seed_from_density(np.full(nz, 1.0e13), np.full(nz, 1.0e13))
+        rows = b1_fed_rows(dvm)
+        puff = np.zeros(nz)
+        puff[3] = 3.0e17
+        plasma = geometry_plasma(nz)
+        led = dvm.update(
+            CADENCE_S,
+            source_counts=rows,
+            sources={"puff": puff / CADENCE_S},
+            T_s_K=T_s_K,
+            **plasma,
+        )
+        return dvm, led, rows, plasma
+
+    dvm, led, rows, plasma = armed(B1_T_S_K)
+    g = dvm.g
+    M_i = np.stack([
+        g.maxwellian(max(float(t), 0.02), float(u))
+        for t, u in zip(plasma["Ti_eV"], plasma["u_i"])
+    ])
+    E_Mi = (M_i * dvm.E_bin).sum(axis=(1, 2))
+    expected = {
+        "cathode_face": float(rows["cathode_face"].sum())
+        * dvm._energy_of(g.half_flux_spectrum(B1_T_S_K, +1)),
+        "collector_face": float(rows["collector_face"].sum())
+        * dvm._energy_of(g.half_flux_spectrum(dvm.T_wall_K, -1)),
+        "anode": float(rows["anode"].sum()) * dvm.E_wall_mean,
+        "recombination": float((rows["recombination"] * E_Mi).sum()),
+    }
+    energy = led["energy"]
+    energy_rows = []
+    energy_ok = True
+    for name, want in expected.items():
+        got = energy[f"birth_{name}"]
+        rel = abs(got - want) / max(abs(want), 1e-300)
+        energy_rows.append((name, got, want, rel))
+        energy_ok = energy_ok and rel < ROUNDOFF_REL
+    part = abs(ledger_residual(led)["distribution_rel"])
+    part_dom = abs(ledger_residual(led)["domain_rel"])
+    ener = abs(ledger_energy_residual(led)["distribution_rel"])
+    ener_dom = abs(ledger_energy_residual(led)["domain_rel"])
+
+    # NEGATIVE CONTROL: the same particles, booked at the wrong temperature.
+    _, wrong_led, _, _ = armed(dvm.T_wall_K)
+    counts_unchanged = all(
+        wrong_led[f"birth_{name}"] == led[f"birth_{name}"]
+        for name in LEDGER_EXTERNAL_BIRTHS
+    )
+    wrong_part = abs(ledger_residual(wrong_led)["distribution_rel"])
+    wrong_energy = wrong_led["energy"]["birth_cathode_face"]
+    energy_moved = (
+        abs(wrong_energy - energy["birth_cathode_face"])
+        / abs(energy["birth_cathode_face"])
+    )
+    control_ok = (
+        counts_unchanged and wrong_part < ROUNDOFF_REL and energy_moved > 0.5
+    )
+
+    ok = (
+        energy_ok
+        and part < ROUNDOFF_REL
+        and part_dom < ROUNDOFF_REL
+        and ener < ROUNDOFF_REL
+        and ener_dom < ROUNDOFF_REL
+        and control_ok
+    )
+    detail = (
+        f"every channel armed, counted inflow at {B1_T_S_K:g} K: particle "
+        f"residual dist {fmt(part)} / domain {fmt(part_dom)}, energy "
+        f"residual dist {fmt(ener)} / domain {fmt(ener_dom)} "
+        f"(tol {fmt(ROUNDOFF_REL)})"
+    )
+    for name, got, want, rel in energy_rows:
+        detail += (
+            f"\n        birth_{name}: ledger {fmt(got)} erg vs count x "
+            f"spectrum mean {fmt(want)} erg, relative {fmt(rel)}"
+        )
+    detail += (
+        f"\n        NEGATIVE CONTROL (cathode face emitted at the WALL "
+        f"temperature): every birth_* particle count unchanged "
+        f"({counts_unchanged}), particle residual {fmt(wrong_part)} -- still "
+        f"closed -- while birth_cathode_face energy moves by "
+        f"{energy_moved:.3f} of itself; invisible to statements 1 and 2, "
+        f"caught here (control behaves as required: {control_ok})"
+    )
+    return (
+        "B3 counted channels carry their own emission energy, every channel "
+        "armed",
+        ok,
+        detail,
+    )
+
+
+# ------------------------------------------------------- B2 closed faces
+
+#: [B2] Which interior face the synthetic closed-face tubes carry. Chosen off
+#: the middle so the two sides have different cell counts and a statement that
+#: only holds by symmetry cannot pass.
+CF_FACE = 3
+CF_CELLS = 8
+
+#: [B2] The cathode surface temperature the closed-face gates emit at, and the
+#: same 1910 K the B1 fixture uses -- far from the 300 K wall, so a side
+#: booked at the wrong one is a large move rather than a subtle one.
+CF_T_S_K = 1910.0
+
+
+def closed_face_tube(nz=CF_CELLS, face=CF_FACE, Rp=15.0, Rm=50.0,
+                     length_cm=800.0):
+    """Return a uniform tube carrying ONE interior closed plasma face.
+
+    The device geometries reach a closed face only through their typed cell
+    roles, and every one of them puts it at the cathode. This fixture states
+    the face directly -- ``plasma_open`` false at ``face`` and at the two
+    domain ends, which is the array shape the resolved geometry hands the
+    engine -- so the transport statement is about the OPERATOR at a closed
+    face rather than about the machine that happens to have one.
+
+    ``Rm == Rp`` leaves the tube with NO annulus, which is what makes the
+    zero-transmission statement a bit-exact identity: the zone-exchange and
+    wall rates are then identically zero, so the axial column flux is the
+    ONLY route from one side of the face to the other. Passing ``Rm > Rp``
+    restores the annulus and with it the bypass around the disc.
+    """
+    dz = np.full(nz, length_cm / nz)
+    Rp_cm = np.full(nz, Rp)
+    Rm_cm = np.full(nz, Rm)
+    plasma_open = np.ones(nz + 1, dtype=bool)
+    plasma_open[0] = False
+    plasma_open[nz] = False
+    plasma_open[face] = False
+    return SimpleNamespace(
+        cells=nz,
+        length_cm=dz,
+        Rp_cm=Rp_cm,
+        Rm_cm=Rm_cm,
+        plasma_volume_cm3=np.pi * Rp_cm**2 * dz,
+        neutral_volume_cm3=np.pi * Rm_cm**2 * dz,
+        plasma_open=plasma_open,
+        plasma_absorbing=np.zeros(nz + 1, dtype=bool),
+    )
+
+
+def cf_open_the_face(dvm):
+    """Disable the closed-face BC in place -- the B2 negative control.
+
+    Strips the resolved topology and nothing else, so the run is the SAME
+    engine on the SAME geometry with only the zero-transmission condition
+    removed. That is what makes the control a control: the traffic it lets
+    across the face is exactly the traffic the BC exists to stop.
+    """
+    dvm.closed_faces = ()
+    dvm._closed_face = [False] * (dvm.nz + 1)
+    dvm._closed_emitters = ()
+    return dvm
+
+
+def cf_box(seed_dead, seed_live, closed=True, Rm=15.0, nz=CF_CELLS,
+           face=CF_FACE):
+    """Return a sealed closed-face box seeded per side, in cm^-3."""
+    dvm = TransientDVM(
+        geometry=closed_face_tube(nz=nz, face=face, Rm=Rm),
+        nvz=16,
+        nvp=6,
+        accommodation=0.4,
+        exchange_model=EXCHANGE_MODEL,
+        s_L=0.0,
+        s_R=0.0,
+    )
+    if not closed:
+        cf_open_the_face(dvm)
+    col = np.zeros(nz)
+    ann = np.zeros(nz)
+    col[:face] = seed_dead
+    col[face:] = seed_live
+    if Rm > 15.0:
+        ann[:face] = seed_dead
+        ann[face:] = seed_live
+    dvm.seed_from_density(col, ann, T_K=400.0)
+    return dvm
+
+
+def cf_block_inventory(dvm, face=CF_FACE):
+    """Return the ``(low, high)`` side inventories, pending buffers included.
+
+    Each domain end belongs to the side it terminates, so a side's buffered
+    end return is part of that side's books and the two numbers partition
+    the whole box exactly.
+    """
+    V = dvm.V_col
+    low = float((dvm.f_c[:face] * V[:face, None, None]).sum())
+    low += float((dvm.f_a[:face] * dvm.V_ann[:face, None, None]).sum())
+    low += float(dvm.pend_L_c.sum() + dvm.pend_L_a.sum())
+    high = float((dvm.f_c[face:] * V[face:, None, None]).sum())
+    high += float((dvm.f_a[face:] * dvm.V_ann[face:, None, None]).sum())
+    high += float(dvm.pend_R_c.sum() + dvm.pend_R_a.sum())
+    return low, high
+
+
+def gate_cf1():
+    """Closed faces transmit exactly nothing, and each side's books balance.
+
+    STATEMENT 1 of the B2 three (the closed-box synthetic case), and it
+    carries both pre-registered gates of the plan row.
+
+    THE TRANSMISSION PIN, as a hard identity rather than a tolerance: on a
+    tube with no annulus at all the axial column flux is the only route
+    across the face, so seeding gas on ONE side alone must leave the other
+    side's column at EXACTLY zero -- bit-exact, not to roundoff -- for as
+    many updates as it is asked to hold.
+
+    THE PLENUM-TRAFFIC LEDGER: seeded on BOTH sides, the sealed box has no
+    pumping and no plasma, and the face returns to each side exactly what
+    that side delivered, so each side's own inventory is separately
+    conserved to roundoff. That is the traffic statement per side, which a
+    whole-box total cannot make: a leak from one side into the other
+    cancels in the total and shows up here.
+
+    NON-VACUITY: with the annulus restored the dead side's ANNULUS does
+    fill, because the annulus is the clear bore around the disc and is
+    deliberately not blocked. Without that check the exact zero above would
+    also be reported by an engine that had simply stopped.
+
+    NEGATIVE CONTROL: strip the resolved closed faces and nothing else.
+    Column particles then cross into the far side, so the exact-zero
+    identity fails at this statement, which is the one that owns it.
+    """
+    updates = 8
+    plasma = zero_plasma(cf_box(0.0, 1.0e13))
+
+    def walk(dvm):
+        worst_p = 0.0
+        worst_e = 0.0
+        for _ in range(updates):
+            led = dvm.update(CADENCE_S, **plasma)
+            worst_p = max(
+                worst_p, abs(ledger_residual(led)["distribution_rel"])
+            )
+            worst_e = max(
+                worst_e, abs(ledger_energy_residual(led)["distribution_rel"])
+            )
+        return worst_p, worst_e
+
+    # (a) the transmission pin: gas on the high side only, no annulus.
+    sealed = cf_box(0.0, 1.0e13)
+    worst_p, worst_e = walk(sealed)
+    crossed = float(
+        (sealed.f_c[:CF_FACE] * sealed.V_col[:CF_FACE, None, None]).sum()
+    )
+    blocked_traffic = float(sealed.last_ledger["loss_closed_face_blocked"])
+
+    # (b) the per-side traffic ledger: both sides seeded, sealed box.
+    both = cf_box(2.0e13, 1.0e13)
+    before = cf_block_inventory(both)
+    walk(both)
+    after = cf_block_inventory(both)
+    side_rel = tuple(
+        abs(a - b) / max(abs(b), 1e-300) for a, b in zip(after, before)
+    )
+
+    # (c) non-vacuity: with an annulus, the dead side's annulus DOES fill.
+    bypass = cf_box(0.0, 1.0e13, Rm=50.0)
+    walk(bypass)
+    dead_annulus = float(
+        (bypass.f_a[:CF_FACE] * bypass.V_ann[:CF_FACE, None, None]).sum()
+    )
+
+    # NEGATIVE CONTROL: the same box with the closed faces stripped.
+    control = cf_box(0.0, 1.0e13, closed=False)
+    walk(control)
+    control_crossed = float(
+        (control.f_c[:CF_FACE] * control.V_col[:CF_FACE, None, None]).sum()
+    )
+
+    ok = (
+        crossed == 0.0
+        and blocked_traffic > 0.0
+        and max(side_rel) < ROUNDOFF_REL
+        and worst_p < ROUNDOFF_REL
+        and worst_e < ROUNDOFF_REL
+        and dead_annulus > 0.0
+        and control_crossed > 0.0
+    )
+    return (
+        "CF1 closed faces transmit exactly zero; each side's traffic balances",
+        ok,
+        f"{updates} updates, closed face {CF_FACE} of {CF_CELLS} cells, no "
+        f"annulus\n        "
+        f"column particles across the face: {crossed!r} (exactly 0.0 "
+        f"required) against {fmt(blocked_traffic)} blocked at the face on "
+        f"the last update alone\n        "
+        f"per-side inventory drift, both sides seeded: low {fmt(side_rel[0])}"
+        f", high {fmt(side_rel[1])} (tol {fmt(ROUNDOFF_REL)})\n        "
+        f"ledger residuals: particle {fmt(worst_p)}, energy {fmt(worst_e)} "
+        f"(tol {fmt(ROUNDOFF_REL)})\n        "
+        f"NON-VACUITY (annulus restored): dead-side annulus holds "
+        f"{fmt(dead_annulus)} particles, so the bore around the disc is open "
+        f"and the exact zero above is the COLUMN block\n        "
+        f"NEGATIVE CONTROL (closed faces stripped): "
+        f"{fmt(control_crossed)} column particles cross -- the identity "
+        f"fails without the BC, as required",
+    )
+
+
+def gate_cf2():
+    """The in-solver closed-face ledger on the production machine.
+
+    STATEMENT 2 of the B2 three. On the engaged production arm the closed
+    face is the CATHODE DISC, resolved from the typed cell roles and not
+    from any configuration that names it: the plenum sits on one side and
+    the live cathode cell on the other. Over several ticks the channel must
+    carry real traffic, book the same count blocked as re-emitted, and
+    leave both ledgers closed to roundoff -- the statement the synthetic
+    box cannot make, because only the coupled arm runs the face with every
+    plasma channel, the recycle ghost and the real mesh alongside it.
+
+    NEGATIVE CONTROL: re-emit HALF of what the face blocked. Not a particle
+    crosses the face either way, so the transmission pin of statement 1 is
+    untouched; the ledger stops closing, which is what this statement owns.
+    """
+    def measure(sim, ticks=4):
+        ledgers = run_until_updates(sim, ticks)
+        worst_p = max(
+            abs(ledger_residual(led)["distribution_rel"]) for led in ledgers
+        )
+        worst_e = max(
+            abs(ledger_energy_residual(led)["distribution_rel"])
+            for led in ledgers
+        )
+        pair = max(
+            abs(led["loss_closed_face_blocked"]
+                - led["birth_closed_face_reemit"])
+            for led in ledgers
+        )
+        traffic = min(led["loss_closed_face_blocked"] for led in ledgers)
+        return worst_p, worst_e, pair, traffic
+
+    sim = make_sim(
+        neutral_kinetic_dvm_nvz=16,
+        neutral_kinetic_dvm_nvp=6,
+        **PRODUCTION_GEOMETRY_KEYS,
+    )
+    dvm = sim._dvm
+    geom = sim.geometry
+    roles = np.asarray(geom.cell_role)
+    faces = dvm.closed_faces
+    sides = tuple(
+        (int(cell), str(roles[cell]))
+        for _face, _d, cell, _surface in dvm._closed_emitters
+    )
+    topology_ok = (
+        faces == tuple(int(f) for f in geom.cathode_face_indices)
+        and {role for _cell, role in sides} == {"plenum", "cathode"}
+        and any(
+            surface for _face, _d, _cell, surface in dvm._closed_emitters
+        )
+    )
+    worst_p, worst_e, pair, traffic = measure(sim)
+
+    # NEGATIVE CONTROL: give back half of what the face stopped.
+    control = make_sim(
+        neutral_kinetic_dvm_nvz=16,
+        neutral_kinetic_dvm_nvp=6,
+        **PRODUCTION_GEOMETRY_KEYS,
+    )
+    spectra = TransientDVM._closed_face_spectra
+
+    def half_back(self, T_s_K):
+        return {
+            key: 0.5 * value
+            for key, value in spectra(self, T_s_K).items()
+        }
+
+    TransientDVM._closed_face_spectra = half_back
+    try:
+        control_p, _control_e, _control_pair, _t = measure(control)
+    finally:
+        TransientDVM._closed_face_spectra = spectra
+
+    ok = (
+        topology_ok
+        and traffic > 0.0
+        and pair == 0.0
+        and worst_p < ROUNDOFF_REL
+        and worst_e < ROUNDOFF_REL
+        and control_p > 1.0e-6
+    )
+    return (
+        "CF2 in-solver closed-face ledger on the production machine",
+        ok,
+        f"closed faces {faces} == cathode faces "
+        f"{tuple(int(f) for f in geom.cathode_face_indices)}; sides "
+        f"{sides} (topology as required: {topology_ok})\n        "
+        f"4 ticks: smallest per-tick traffic {fmt(traffic)} particles, "
+        f"|blocked - re-emitted| {pair!r} (exactly 0.0 required)\n        "
+        f"ledger residuals: particle {fmt(worst_p)}, energy {fmt(worst_e)} "
+        f"(tol {fmt(ROUNDOFF_REL)})\n        "
+        f"NEGATIVE CONTROL (half the blocked count re-emitted): particle "
+        f"residual {fmt(control_p)} -- the ledger breaks while nothing "
+        f"crosses the face, as required",
+    )
+
+
+def gate_cf3():
+    """Each closed-face side re-emits at ITS OWN surface temperature.
+
+    STATEMENT 3 of the B2 three, and the one the B0a standing lesson makes
+    binding: a surface re-emitting at the wrong temperature moves no
+    particle at all, so statements 1 and 2 close to exactly the same
+    roundoff whether it is right or wrong. Only an every-channel-armed
+    ENERGY statement sees it.
+
+    Armed on the production machine with pumping, the anode mesh, the
+    cylindrical wall, a puff and all four counted inflows live at once, the
+    closed-face energy birth row must equal, side by side, that side's own
+    blocked count times the mean energy of the half-flux spectrum it is
+    emitted into -- the cathode side at the live surface temperature, the
+    plenum side at the wall's -- rebuilt here from the velocity grid rather
+    than read back from the engine.
+
+    NEGATIVE CONTROL: emit the CATHODE side of the face at the wall
+    temperature. Every particle count is unchanged and the particle ledger
+    closes to the same roundoff, while the closed-face energy row collapses
+    towards the cold spectrum.
+    """
+    geom = make_sim(**PRODUCTION_GEOMETRY_KEYS).geometry
+    nz = geom.cells
+
+    def armed(wrong_temperature=False):
+        dvm = TransientDVM(
+            geometry=geom,
+            nvz=16,
+            nvp=6,
+            s_L=0.3,
+            s_R=0.3,
+            accommodation=0.4,
+            exchange_model=EXCHANGE_MODEL,
+            mesh_face=int(geom.anode_face_indices[0]),
+            transparency=0.642,
+        )
+        if wrong_temperature:
+            # The whole face at the WALL temperature: the cathode side's
+            # own spectrum is the only thing this changes.
+            dvm._closed_surface_dirs = ()
+            for emit in (+1, -1):
+                dvm._closed_wall_spectra[(True, emit)] = (
+                    dvm.g.half_flux_spectrum(dvm.T_wall_K, emit)
+                )
+        dvm.seed_from_density(
+            np.full(nz, 1.0e13), np.full(nz, 1.0e13), T_K=400.0
+        )
+        rows = {name: np.zeros(nz) for name in B1_FED_COUNTS}
+        rows["cathode_face"][dvm.cath_cell] = B1_FED_COUNTS["cathode_face"]
+        rows["collector_face"][dvm.coll_cell] = B1_FED_COUNTS["collector_face"]
+        rows["recombination"][nz // 3] = B1_FED_COUNTS["recombination"]
+        rows["anode"][2 * nz // 3] = B1_FED_COUNTS["anode"]
+        puff = np.zeros(nz)
+        puff[nz // 4] = 3.0e17
+        led = dvm.update(
+            CADENCE_S,
+            source_counts=rows,
+            sources={"puff": puff / CADENCE_S},
+            T_s_K=CF_T_S_K,
+            **geometry_plasma(nz),
+        )
+        return dvm, led
+
+    dvm, led = armed()
+    # Rebuild the expected energy from the per-side blocked counts. The
+    # engine's own per-side split is re-derived here from the emitters, so a
+    # side attributed to the wrong temperature cannot satisfy both.
+    g = dvm.g
+    want = 0.0
+    per_side = []
+    for _face, d_in, cell, surface in dvm._closed_emitters:
+        emit = -d_in
+        T_side = CF_T_S_K if surface else dvm.T_wall_K
+        count = float(dvm.last_closed_counts[emit][cell])
+        contribution = count * dvm._energy_of(
+            g.half_flux_spectrum(T_side, emit)
+        )
+        per_side.append((cell, T_side, count, contribution))
+        want += contribution
+    got = led["energy"]["birth_closed_face_reemit"]
+    energy_rel = abs(got - want) / max(abs(want), 1e-300)
+
+    part = abs(ledger_residual(led)["distribution_rel"])
+    part_dom = abs(ledger_residual(led)["domain_rel"])
+    ener = abs(ledger_energy_residual(led)["distribution_rel"])
+    ener_dom = abs(ledger_energy_residual(led)["domain_rel"])
+
+    # NEGATIVE CONTROL: the cathode side booked at the wall temperature.
+    _wrong_dvm, wrong_led = armed(wrong_temperature=True)
+    counts_unchanged = (
+        wrong_led["birth_closed_face_reemit"]
+        == led["birth_closed_face_reemit"]
+        and all(
+            wrong_led[f"birth_{name}"] == led[f"birth_{name}"]
+            for name in LEDGER_EXTERNAL_BIRTHS
+        )
+    )
+    wrong_part = abs(ledger_residual(wrong_led)["distribution_rel"])
+    energy_moved = abs(
+        wrong_led["energy"]["birth_closed_face_reemit"] - got
+    ) / max(abs(got), 1e-300)
+    control_ok = (
+        counts_unchanged and wrong_part < ROUNDOFF_REL and energy_moved > 0.5
+    )
+
+    ok = (
+        energy_rel < ROUNDOFF_REL
+        and part < ROUNDOFF_REL
+        and part_dom < ROUNDOFF_REL
+        and ener < ROUNDOFF_REL
+        and ener_dom < ROUNDOFF_REL
+        and control_ok
+    )
+    detail = (
+        f"every channel armed on the production machine, cathode surface at "
+        f"{CF_T_S_K:g} K\n        "
+        f"birth_closed_face_reemit: ledger {fmt(got)} erg vs per-side counts "
+        f"x spectrum means {fmt(want)} erg, relative {fmt(energy_rel)} "
+        f"(tol {fmt(ROUNDOFF_REL)})"
+    )
+    for cell, T_side, count, contribution in per_side:
+        detail += (
+            f"\n        side cell {cell} at {T_side:g} K: {fmt(count)} "
+            f"particles carrying {fmt(contribution)} erg"
+        )
+    detail += (
+        f"\n        ledger residuals: particle dist {fmt(part)} / domain "
+        f"{fmt(part_dom)}, energy dist {fmt(ener)} / domain {fmt(ener_dom)}"
+        f"\n        NEGATIVE CONTROL (cathode side emitted at the WALL "
+        f"temperature): every particle count unchanged "
+        f"({counts_unchanged}), particle residual {fmt(wrong_part)} -- still "
+        f"closed -- while the closed-face energy row moves by "
+        f"{energy_moved:.3f} of itself; invisible to CF1 and CF2, caught "
+        f"here (control behaves as required: {control_ok})"
+    )
+    return (
+        "CF3 closed-face sides carry their own emission energy, every "
+        "channel armed",
+        ok,
+        detail,
+    )
+
+
 # ------------------------------------------------------------------ main
 
 
@@ -2585,7 +3540,9 @@ CONSERVATION_GATES = ("gate_i1", "gate_i2", "gate_i4", "gate_i5",
                       "gate_j2",
                       "gate_s1",
                       "gate_c1", "gate_c2", "gate_c3", "gate_c4",
-                      "gate_d3", "gate_d4", "gate_d5")
+                      "gate_d3", "gate_d4", "gate_d5",
+                      "gate_b1", "gate_b3",
+                      "gate_cf1", "gate_cf3")
 
 
 def main():
@@ -2617,6 +3574,12 @@ def main():
         gate_d3,
         gate_d4,
         gate_d5,
+        gate_b1,
+        gate_b2,
+        gate_b3,
+        gate_cf1,
+        gate_cf2,
+        gate_cf3,
         gate_x1,
     ]
     gates += [

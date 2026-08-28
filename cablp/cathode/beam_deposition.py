@@ -591,6 +591,12 @@ from ..atomic.cross_sections import (
     he_electron_momentum_transfer_rate_cm3_s,
     _he_beam_excitation_table,
 )
+from .beam_lane_march import (
+    LANE_MARCH_MODELS,
+    check_constants as _check_lane_constants,
+    lane_march,
+    lane_march_energy_ceiling_eV,
+)
 from .kernels import COMPILED_KERNELS as _COMPILED_KERNELS
 
 _ERG_PER_EV = 1.602176634e-12
@@ -646,6 +652,14 @@ PLATEAU_EDGE_BISECTIONS = 200
 HE_I_ION_EV = 24.58738793623
 HE_E_STOP_EV = 20.6158  # lowest inelastic threshold (2^1S)
 HE_OPB_EBAR_EV = 15.8  # Opal-Peterson-Beaty shape parameter for He
+
+# The lane march (``beam_lane_march``) re-spells the four constants above that
+# its expressions need, because it cannot import them from here without a
+# cycle. Assert the two spellings agree at import, so a drift is a startup
+# error rather than a silent divergence in the batched legs -- the same check
+# the compiled kernel module answers with ``check_constants_beam``.
+_check_lane_constants(_ERG_PER_EV, _ME_CGS, _E4_CGS, HE_OPB_EBAR_EV)
+
 # Top of the tabulated He EII cross section, in the table's own reduced units
 # eps = E / I_ion (``He_EII_cross_lkup``). Taken FROM the table rather than
 # written down, so it cannot drift from the data it describes. Above it the
@@ -1083,6 +1097,239 @@ def ql_relaxation_stopping_eV_per_cm(
     if not (math.isfinite(L_rel) and L_rel > 0.0):
         return 0.0
     return ql_trapped_fraction(ne, n_b) * E_eV / L_rel
+
+
+# --- The tail-walk legs, marched as LANES (R3) -------------------------------
+# The ionizing tail walk gives every (plateau group, birth cell, direction) its
+# own CSDA march, and a second march per reflection. Every one of those legs
+# runs the SAME column in the SAME configuration and none of them interacts
+# with any other, so they are marched together by
+# ``cathode.beam_lane_march.lane_march`` -- one numpy call per quantity per
+# round instead of one Python call per quantity per leg per substep. The legs
+# are bit-identical either way (that module's docstring says by what), so which
+# route runs is a COST decision and nothing else; the two constants below are
+# where it is made, and the recursive route stays as the equivalence target and
+# as the implementation for everything the lane march refuses.
+
+
+#: Fewest legs worth batching. Below it the per-round numpy dispatch costs
+#: more than the scalar substeps it replaces, so the recursive route is the
+#: cheaper one. A cost threshold, not a correctness one: both routes produce
+#: the same floats, which is what lets this be tuned without a recapture.
+#:
+#: MEASURED, on the reference corpus's own real deposition rays: the two routes
+#: cross near 96 legs, so the value sits above the crossing with margin rather
+#: than on it -- a batch just past a mis-set threshold pays the dispatch and
+#: gets nothing back, and the corpus's main-discharge ray is exactly that case
+#: at 64 legs. Re-measure with scripts/r3lane_equivalence.py's timing companion
+#: after any change to the round's op count.
+LANE_MARCH_MIN_LEGS = 128
+
+#: Substeps and legs the lane march absorbed since the counter was last reset.
+#: The instruments that census the CSDA march count substeps by hooking the
+#: per-substep excitation lookup and legs by hooking the recursive
+#: ``deposit_beam`` call; a batched leg passes through neither hook, so it
+#: reports itself here instead. Read-only bookkeeping -- nothing in the march
+#: consumes it.
+LANE_MARCH_COUNTS = {"substeps": 0, "legs": 0}
+
+
+def _tail_lane_chains(
+    plans, nn_w, ne_w, Te_w, dz_w, march_kwargs, tail_lo, tail_hi,
+    reflect_face, E_reflect,
+):
+    """The ionizing tail-walk legs of every population, in the legs' own order.
+
+    ``plans`` is one ``(E_walk_eV, half_flux, ionizes)`` per launched
+    population. Returns a list parallel to it: ``None`` for a population that
+    does not ionize, otherwise a list of CHAINS -- one per (birth cell,
+    direction) walker, each chain holding the legs that walker marched (one,
+    or two when it reflected at the walk window's reflecting face). A leg is
+    ``(banks, transmitted_flux, transmitted_energy_eV, direction)`` where
+    ``banks`` is the five window-shaped arrays
+    ``(ionization_events, excitation_events, ionization_cost_erg_s,
+    radiated_erg_s, plasma_heating_erg_s)`` the caller banks.
+
+    The order is the recursive route's exactly -- population, then birth cell
+    ascending, then ``+1`` before ``-1``, then the reflected leg after the leg
+    that produced it -- because the caller replays it into shared banks and
+    float addition is not associative.
+    """
+    lanes_E0 = []
+    lanes_flux = []
+    lanes_launch = []
+    lanes_dir = []
+    layout = []
+    for slot, (E_walk, half_flux, ionizes) in enumerate(plans):
+        if not ionizes:
+            layout.append(None)
+            continue
+        chains = []
+        for birth in np.flatnonzero(half_flux > 0.0):
+            for walk_direction in (1, -1):
+                chains.append(len(lanes_E0))
+                lanes_E0.append(float(E_walk))
+                lanes_flux.append(float(half_flux[birth]))
+                lanes_launch.append(int(birth) - tail_lo)
+                lanes_dir.append(walk_direction)
+        layout.append(chains)
+    if not lanes_E0:
+        return [None] * len(plans)
+
+    use_lanes = (
+        # THE PURE PATH'S ROUTE. With the compiled march bound, a leg's whole
+        # substep loop already runs in C at a fraction of a numpy round's
+        # dispatch cost, and batching it is a large REGRESSION (measured 5.1 ms
+        # -> 27.1 ms on the corpus's breakdown ray). The two routes agree bit
+        # for bit, so which one a process takes is purely a cost question, and
+        # the answer differs by whether a kernel is loaded.
+        _CSDA_MARCH is None
+        and len(lanes_E0) >= LANE_MARCH_MIN_LEGS
+        and march_kwargs["coulomb_model"] in LANE_MARCH_MODELS
+        and march_kwargs["I_ion_eV"] > 0.0
+        and march_kwargs["E_stop_eV"] > 0.0
+        and max(lanes_E0) < lane_march_energy_ceiling_eV()
+    )
+    if not use_lanes:
+        return _tail_recursive_chains(
+            plans, nn_w, ne_w, Te_w, dz_w, march_kwargs, tail_lo, tail_hi,
+            reflect_face, E_reflect,
+        )
+
+    first = lane_march(
+        np.array(lanes_E0, dtype=float),
+        np.array(lanes_flux, dtype=float),
+        np.array(lanes_launch, dtype=np.intp),
+        np.array(lanes_dir, dtype=np.intp),
+        nn_w, ne_w, Te_w, dz_w,
+        I_ion_eV=march_kwargs["I_ion_eV"],
+        E_stop_eV=march_kwargs["E_stop_eV"],
+        coulomb_model=march_kwargs["coulomb_model"],
+        max_energy_fraction_per_substep=march_kwargs[
+            "max_energy_fraction_per_substep"
+        ],
+    )
+    LANE_MARCH_COUNTS["legs"] += len(lanes_E0)
+    LANE_MARCH_COUNTS["substeps"] += int(first.substeps.sum())
+    # The bounce wave. Only the ONE named face reflects, so a reflected leg
+    # heads at the other one and cannot bounce again; two waves close the loop.
+    bounce_src = []
+    if reflect_face is not None:
+        for k in range(len(lanes_E0)):
+            if (
+                lanes_dir[k] == reflect_face
+                and first.transmitted_flux[k] > 0.0
+                and first.transmitted_energy_eV[k] < E_reflect
+            ):
+                bounce_src.append(k)
+    second = None
+    if bounce_src:
+        bounce_launch = 0 if reflect_face < 0 else tail_hi - tail_lo
+        second = lane_march(
+            first.transmitted_energy_eV[bounce_src],
+            first.transmitted_flux[bounce_src],
+            np.full(len(bounce_src), bounce_launch, dtype=np.intp),
+            np.array([-lanes_dir[k] for k in bounce_src], dtype=np.intp),
+            nn_w, ne_w, Te_w, dz_w,
+            I_ion_eV=march_kwargs["I_ion_eV"],
+            E_stop_eV=march_kwargs["E_stop_eV"],
+            coulomb_model=march_kwargs["coulomb_model"],
+            max_energy_fraction_per_substep=march_kwargs[
+                "max_energy_fraction_per_substep"
+            ],
+        )
+        LANE_MARCH_COUNTS["legs"] += len(bounce_src)
+        LANE_MARCH_COUNTS["substeps"] += int(second.substeps.sum())
+    bounce_of = {k: n for n, k in enumerate(bounce_src)}
+
+    def _leg(res, row, direction):
+        return (
+            (
+                res.ionization_events[row],
+                res.excitation_events[row],
+                res.ionization_cost_erg_s[row],
+                res.radiated_erg_s[row],
+                res.plasma_heating_erg_s[row],
+            ),
+            float(res.transmitted_flux[row]),
+            float(res.transmitted_energy_eV[row]),
+            direction,
+        )
+
+    out = []
+    for chains in layout:
+        if chains is None:
+            out.append(None)
+            continue
+        built = []
+        for k in chains:
+            chain = [_leg(first, k, lanes_dir[k])]
+            if k in bounce_of:
+                chain.append(
+                    _leg(second, bounce_of[k], -lanes_dir[k])
+                )
+            built.append(chain)
+        out.append(built)
+    return out
+
+
+def _tail_recursive_chains(
+    plans, nn_w, ne_w, Te_w, dz_w, march_kwargs, tail_lo, tail_hi,
+    reflect_face, E_reflect,
+):
+    """:func:`_tail_lane_chains`'s contract, one recursive march per leg.
+
+    The equivalence target: one ``deposit_beam`` call per leg, exactly as the
+    ionizing tail walk has always made them, and the route taken whenever the
+    lane march is not worth its dispatch or does not cover the configuration.
+    """
+    out = []
+    for E_walk, half_flux, ionizes in plans:
+        if not ionizes:
+            out.append(None)
+            continue
+        built = []
+        for birth in np.flatnonzero(half_flux > 0.0):
+            for walk_direction in (1, -1):
+                leg_dir = walk_direction
+                leg = deposit_beam(
+                    E_walk, float(half_flux[birth]), nn_w, ne_w, Te_w,
+                    int(birth) - tail_lo, leg_dir, dz_w, **march_kwargs,
+                )
+                chain = []
+                while True:
+                    chain.append(
+                        (
+                            (
+                                leg.ionization_events,
+                                leg.excitation_events,
+                                leg.ionization_cost_erg_s,
+                                leg.radiated_erg_s,
+                                leg.plasma_heating_erg_s,
+                            ),
+                            float(leg.transmitted_flux),
+                            float(leg.transmitted_energy_eV),
+                            leg_dir,
+                        )
+                    )
+                    if (
+                        reflect_face is not None
+                        and leg_dir == reflect_face
+                        and chain[-1][1] > 0.0
+                        and chain[-1][2] < E_reflect
+                    ):
+                        leg_flux, leg_E = chain[-1][1], chain[-1][2]
+                        leg_dir = -leg_dir
+                        leg = deposit_beam(
+                            leg_E, leg_flux, nn_w, ne_w, Te_w,
+                            0 if reflect_face < 0 else tail_hi - tail_lo,
+                            leg_dir, dz_w, **march_kwargs,
+                        )
+                        continue
+                    break
+                built.append(chain)
+        out.append(built)
+    return out
 
 
 def _tail_band(E_walk_eV, I_ion_eV, E_stop_eV, label):
@@ -2456,6 +2703,14 @@ def deposit_beam(
                 ]
             else:
                 tail_populations = [(E_tail, anom_power_eV)]
+            # Band, flux and window resolution runs for EVERY population
+            # before any of them is walked, so the ionizing legs of the whole
+            # ray form ONE lane batch below (a single group's legs are too few
+            # to batch, and the plateau launches its groups from one ray).
+            # Nothing is banked here and nothing is reordered: the two
+            # exposure ledgers still fill in population order, and the window
+            # refusal still raises on the population it always raised on.
+            tail_plans = []
             for E_walk, walk_power_eV in tail_populations:
                 half_flux = 0.5 * (walk_power_eV / E_walk)
                 if multigroup:
@@ -2492,126 +2747,102 @@ def deposit_beam(
                                 "channel drives, or that cell's tail power would "
                                 "be silently dropped"
                             )
+                tail_plans.append((E_walk, half_flux, ionize_walk))
+
+            # K6: the walkers attenuate INELASTICALLY on the column gas as well
+            # as Coulomb-slowing, so the closed-form integral above (which
+            # knows only the Coulomb power law) cannot carry them. March them
+            # on this module's own CSDA integration instead -- one leg per
+            # birth cell and direction, the same instrument the primary uses,
+            # so the cross sections, thresholds, <W_sec> convention and substep
+            # control are the primary's by construction rather than by
+            # transcription.
+            #
+            # anomalous_model="none": the plateau electrons ARE the
+            # instability's product and do not re-drive it (and a walker that
+            # drove its own QL drag would double-count the very power being
+            # carried). product_transport="local": the depth-1 truncation
+            # validated at construction -- secondaries and the sub-threshold
+            # terminal residual bank where they are made. No anode
+            # interception: these are born in the column, not streaming out of
+            # the cathode through the mesh. No recursion risk: the nested call
+            # takes anomalous_transport="local".
+            #
+            # The march runs on the WINDOWED domain, so the window's two faces
+            # are walls: a walker that reaches one is transmitted out of the
+            # sliced grid and booked to the tail end ledger, exactly as it
+            # would be at a true domain end. That is what keeps every birth
+            # inside cells the solver actually integrates.
+            win = slice(tail_lo, tail_hi + 1)
+            nn_w = nn[win]
+            ne_w = ne[win]
+            Te_w = Te[win]
+            dz_w = dz_cm[win]
+            march_kwargs = dict(
+                I_ion_eV=I_ion_eV,
+                E_stop_eV=E_stop_eV,
+                coulomb_model=coulomb_model,
+                anomalous_model="none",
+                max_energy_fraction_per_substep=frac,
+            )
+
+            def _bank_tail_march(banks):
+                """Book one marched tail LEG into the shared banks.
+
+                Shared banks: the tail's events and energy join the
+                primary's, which is what puts the born pair on the existing
+                beam-ionization birth convention and its ``I_ion``
+                investment on the existing cost sink.
+                """
+                leg_ion, leg_exc, leg_cost, leg_rad, leg_heat = banks
+                ionization_events[win] += leg_ion
+                excitation_events[win] += leg_exc
+                ionization_cost[win] += leg_cost
+                radiated[win] += leg_rad
+                # All of the walker's HEAT (Coulomb drag, the local
+                # <W_sec> secondaries, the terminal residual) is the
+                # anomalous channel's delivery to the electrons, so it
+                # lands in the lumped bank and in the anomalous split
+                # -- never in the primary's coulomb/secondary/terminal
+                # splits, which keep describing the primary alone.
+                heating[win] += leg_heat
+                heat_anomalous[win] += leg_heat
+                # Diagnostic splits of the four shared banks.
+                ion_events_tail[win] += leg_ion
+                exc_events_tail[win] += leg_exc
+                ion_cost_tail[win] += leg_cost
+                radiated_tail[win] += leg_rad
+
+            tail_chains = _tail_lane_chains(
+                tail_plans, nn_w, ne_w, Te_w, dz_w, march_kwargs,
+                tail_lo, tail_hi, reflect_face, E_reflect,
+            )
+            for (E_walk, half_flux, ionize_walk), chains in zip(
+                tail_plans, tail_chains
+            ):
                 if ionize_walk:
-                    # K6: the walkers attenuate INELASTICALLY on the column gas as
-                    # well as Coulomb-slowing, so the closed-form integral above
-                    # (which knows only the Coulomb power law) cannot carry them.
-                    # March them on this module's own CSDA integration instead --
-                    # one call per birth cell and direction, the same instrument
-                    # the primary uses, so the cross sections, thresholds, <W_sec>
-                    # convention and substep control are the primary's by
-                    # construction rather than by transcription.
-                    #
-                    # anomalous_model="none": the plateau electrons ARE the
-                    # instability's product and do not re-drive it (and a walker
-                    # that drove its own QL drag would double-count the very power
-                    # being carried). product_transport="local": the depth-1
-                    # truncation validated at construction -- secondaries and the
-                    # sub-threshold terminal residual bank where they are made.
-                    # No anode interception: these are born in the column, not
-                    # streaming out of the cathode through the mesh. No recursion
-                    # risk: the nested call takes anomalous_transport="local".
-                    #
-                    # The march runs on the WINDOWED domain, so the window's two
-                    # faces are walls: a walker that reaches one is transmitted out
-                    # of the sliced grid and booked to the tail end ledger, exactly
-                    # as it would be at a true domain end. That is what keeps every
-                    # birth inside cells the solver actually integrates.
-                    win = slice(tail_lo, tail_hi + 1)
-                    nn_w = nn[win]
-                    ne_w = ne[win]
-                    Te_w = Te[win]
-                    dz_w = dz_cm[win]
-
-                    def _bank_tail_march(res):
-                        """Book one marched tail population into the shared banks.
-
-                        Shared banks: the tail's events and energy join the
-                        primary's, which is what puts the born pair on the existing
-                        beam-ionization birth convention and its ``I_ion``
-                        investment on the existing cost sink.
-                        """
-                        ionization_events[win] += res.ionization_events
-                        excitation_events[win] += res.excitation_events
-                        ionization_cost[win] += res.ionization_cost_erg_s
-                        radiated[win] += res.radiated_erg_s
-                        # All of the walker's HEAT (Coulomb drag, the local
-                        # <W_sec> secondaries, the terminal residual) is the
-                        # anomalous channel's delivery to the electrons, so it
-                        # lands in the lumped bank and in the anomalous split
-                        # -- never in the primary's coulomb/secondary/terminal
-                        # splits, which keep describing the primary alone.
-                        heating[win] += res.plasma_heating_erg_s
-                        heat_anomalous[win] += res.plasma_heating_erg_s
-                        # Diagnostic splits of the four shared banks.
-                        ion_events_tail[win] += res.ionization_events
-                        exc_events_tail[win] += res.excitation_events
-                        ion_cost_tail[win] += res.ionization_cost_erg_s
-                        radiated_tail[win] += res.radiated_erg_s
-
-                    march_kwargs = dict(
-                        I_ion_eV=I_ion_eV,
-                        E_stop_eV=E_stop_eV,
-                        coulomb_model=coulomb_model,
-                        anomalous_model="none",
-                        max_energy_fraction_per_substep=frac,
-                    )
-                    for birth in np.flatnonzero(half_flux > 0.0):
-                        for walk_direction in (1, -1):
-                            leg_dir = walk_direction
-                            leg = deposit_beam(
-                                E_walk,
-                                float(half_flux[birth]),
-                                nn_w,
-                                ne_w,
-                                Te_w,
-                                int(birth) - tail_lo,
-                                leg_dir,
-                                dz_w,
-                                **march_kwargs,
-                            )
-                            while True:
-                                _bank_tail_march(leg)
-                                leg_flux = float(leg.transmitted_flux)
-                                leg_E = float(leg.transmitted_energy_eV)
-                                # K7: at the ONE reflecting face, a walker whose
-                                # arrival energy is below the sheath threshold is
-                                # turned around at the same energy and marched back
-                                # from the face cell. Only that face reflects, so
-                                # the reversed leg cannot come back to it and this
-                                # loop runs at most twice.
-                                if (
-                                    reflect_face is not None
-                                    and leg_dir == reflect_face
-                                    and leg_flux > 0.0
-                                    and leg_E < E_reflect
-                                ):
-                                    leg_dir = -leg_dir
-                                    leg = deposit_beam(
-                                        leg_E,
-                                        leg_flux,
-                                        nn_w,
-                                        ne_w,
-                                        Te_w,
-                                        0 if reflect_face < 0 else tail_hi - tail_lo,
-                                        leg_dir,
-                                        dz_w,
-                                        **march_kwargs,
-                                    )
-                                    continue
-                                # A walker still above E_stop at the window face it
-                                # was heading for escapes, on the SAME free-escape
-                                # convention the energy-only walk uses. Without a
-                                # reflecting face no sheath or ambipolar throttle
-                                # is applied at either end, which is what makes
-                                # "tail_walk" the free-escape bound it is
-                                # documented as with the channel on.
-                                exit_erg = leg_flux * leg_E * _ERG_PER_EV
-                                if leg_dir > 0:
-                                    end_loss_tail_high += exit_erg
-                                else:
-                                    end_loss_tail_low += exit_erg
-                                break
+                    for chain in chains:
+                        # K7: at the ONE reflecting face, a walker whose
+                        # arrival energy is below the sheath threshold is
+                        # turned around at the same energy and marched back
+                        # from the face cell. Only that face reflects, so the
+                        # reversed leg cannot come back to it and a chain holds
+                        # at most two legs.
+                        for banks, _flux, _E_leg, _leg_dir in chain:
+                            _bank_tail_march(banks)
+                        _banks, leg_flux, leg_E, leg_dir = chain[-1]
+                        # A walker still above E_stop at the window face it
+                        # was heading for escapes, on the SAME free-escape
+                        # convention the energy-only walk uses. Without a
+                        # reflecting face no sheath or ambipolar throttle
+                        # is applied at either end, which is what makes
+                        # "tail_walk" the free-escape bound it is
+                        # documented as with the channel on.
+                        exit_erg = leg_flux * leg_E * _ERG_PER_EV
+                        if leg_dir > 0:
+                            end_loss_tail_high += exit_erg
+                        else:
+                            end_loss_tail_low += exit_erg
                 elif reflect_face is not None:
                     # K7 energy-only walk with one reflecting window face. The
                     # closed-form integral above carries a population over a

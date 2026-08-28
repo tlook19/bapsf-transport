@@ -1,0 +1,183 @@
+{
+  "kind": "h-quarantine",
+  "repository": "bapsf-transport",
+  "base_revision": "508462f46aea6c7e940979943a3fd201bc9b98a4",
+  "base_revision_note": "agent-staging at dispatch: 'Merge small batch (flatten stragglers + golden transcript provenance + afterglow H retirement)'. This member rides the same branch as R3 sub-event 1d [vbar-mass-unify], as the second of two separated commits.",
+  "schema_note": "A SEMANTIC record, not a rename manifest. It deliberately does NOT validate under restructure/manifests/validate_manifest.py -- no symbol was moved, renamed or deleted. Three hydrogen entry points gained loud ValueError guards; every line of hydrogen code and every coefficient table stays exactly where it was.",
+
+  "ruling": {
+    "citation": "Tom-ruled 2026-08-27, CAMPAIGN_LOG 27gm: 'HYDROGEN ARMS: QUARANTINE (not remove, not keep): loud ValueError guards at the H entry points of cablp/atomic/ per the D3/surrogate idiom, naming the unsupported domain and the known-corrupt H table (sbq:L295); code and tables stay for a future validated re-opening. Numerics-inert (zero solver-path consumers).'",
+    "expansion": "QUARANTINE is the middle disposition between the two the ruling explicitly rejects. Removal was rejected because the arms may be re-opened on a validated basis; keeping was rejected because a silently-computing untested arm with a known-corrupt table is a fabrication hazard. The guards convert every H route from silently-computing to refused.",
+    "closes": "The R0.5 deferred supported-domain question, per the same log entry.",
+    "advisor_consult": "Not triggered -- this member states no physics and moves no number; it narrows a configuration domain that already had zero solver-path consumers."
+  },
+
+  "numerics_inert": true,
+  "numerics_inert_note": "TRUE, and proven two ways below (structural unreachability + a raw-bit He spot-check). This member is the numerics-INERT half of the branch; the numerics-MOVING half is R3 sub-event 1d, recorded in r3_vbar_mass_unify.json.",
+
+  "the_corrupt_table": {
+    "record_citation": "sbq:L295 -> notes/BOARD.md:58, '[sbq:L295] _cross.py:470-478 A_R318 duplicate line (He-inert; H arm corrupt; digit-proof on HYDHEL fetch)', expanding notes/archive/SMALL_BATCH_QUEUE_2026-08-04_to_2026-08-23_spent.md:307-310 ('A_R318 duplicate-line fix (_cross.py:469-479): delete one of the two 9.536923957409e-03 lines, digit-proof the row against HYDHEL 3.1.8 ON FETCH (correct row = 9 entries). He-inert; H arm silently corrupted until fixed.').",
+    "located_in_tree_at": "cablp/atomic/cross_sections.py -- A_R318, row index 1. The record's pre-R2 path '_cross.py:469-479' resolves to this file after the R2 carve (tag r2-tip-2026-08-27).",
+    "entity": "A_R318",
+    "physics": "H + H+ charge-exchange rate coefficient, IAEA heavy-particle 2-D log-log polynomial fit.",
+    "defect": "Row 1 repeats the coefficient 9.536923957409e-03 on two consecutive lines, giving that row 10 entries.",
+    "verified_in_process": {
+      "A_R318_row_lengths": [9, 10, 9, 9, 9, 9, 9, 9, 9],
+      "A_R531_row_lengths": [9, 9, 9, 9, 9, 9, 9, 9, 9],
+      "A_R318_1_2": 0.009536923957409,
+      "A_R318_1_3": 0.009536923957409,
+      "duplicate_confirmed": true,
+      "artifact": "scripts/r3vbar_a_r318_defect.txt"
+    },
+    "why_it_is_silent": "heavy_reaction iterates 'for j in range(len(A[i]))', so a ragged row contributes an EXTRA polynomial term rather than raising. The module-level '_cx_H = heavy_reaction(temps, 0.1, A_R318)' is therefore built at import time without complaint, and any H charge-exchange rate read from it is wrong by an unquantified amount.",
+    "helium_unaffected": "A_R531 (He + He+) is a clean 9x9 and was never touched by this defect. This is the 'He-inert' half of the board row, now independently re-verified.",
+    "disposition": "NOT FIXED by this member, deliberately. The record requires the row be digit-proofed against IAEA HYDHEL 3.1.8 ON FETCH; that fetch has not happened, and guessing which of the two lines to delete is exactly the fabrication the quarantine exists to prevent. The guard names the defect and the required source so the re-opener cannot miss it."
+  },
+
+  "entry_point_map": {
+    "method": "Census of every H-arm symbol in cablp/atomic/ and its consumers across cablp/ and scripts/, then reduction to the narrowest set of choke points covering every H route into the module.",
+    "guarded": [
+      {
+        "site": "cablp/atomic/cross_sections.py :: H_EII_cross(E, A=a215)",
+        "kind": "H-specific function (whole body)",
+        "physics": "Hydrogen electron-impact ionization cross section, Janev analytic fit over a215.",
+        "consumers_at_base": ["scripts/generate_eii_tables.py:29 (table generator for h_eii_cross.csv)"],
+        "solver_path_consumers": 0,
+        "guard_placement": "First statement of the body; the original return is RETAINED below it, unreachable, with a comment saying so."
+      },
+      {
+        "site": "cablp/atomic/cross_sections.py :: H_EII_cross_lkup(E)",
+        "kind": "H-specific function (whole body)",
+        "physics": "Same quantity via log-linear lookup over h_eii_cross.csv.",
+        "consumers_at_base": [
+          "cablp/cathode/circuit.py:1330 (inside 'elif gas_type == \"H\":')",
+          "cablp/cathode/circuit.py:1369 (inside 'elif gas_type == \"H\":')",
+          "cablp/cathode/circuit_idriven.py:1233 (inside 'elif gas_type == \"H\":')"
+        ],
+        "solver_path_consumers": 0,
+        "reachability_note": "These are the only three call sites and ALL THREE sit in an 'elif gas_type == \"H\"' branch whose sibling 'if gas_type == \"He\"' is the helium path. Guarding the function therefore cannot reach helium even though the callers are live production code.",
+        "guard_placement": "First statement of the body; the original return is RETAINED below it, unreachable, with a comment saying so."
+      },
+      {
+        "site": "cablp/atomic/cross_sections.py :: charge_ex_react(T, gas_type) -- the gas_type == 'H' branch",
+        "kind": "H branch of a shared function",
+        "physics": "Charge-exchange rate coefficient; the H branch reads _cx_H, built from the CORRUPT A_R318.",
+        "consumers_at_base": [
+          "cablp/plasma/heat.py:206 (Q_cx_He, gas_type threaded)",
+          "cablp/solvers/_sim1d/physics/sources.py:1127 (gas_type threaded)",
+          "cablp/solvers/_sim1d/solver.py:11012 (gas_type threaded)",
+          "scripts/mc_neutrals.py:884 (passes the literal \"He\")"
+        ],
+        "solver_path_consumers": "3, but all thread gas_type from the solver, which refuses gas_type != 'He' at construction.",
+        "guard_placement": "Replaces the branch body 'table = _cx_H'. This is THE guard that names the corrupt table in full.",
+        "significance": "This is the only route by which the corrupt A_R318 could ever have produced a number."
+      }
+    ],
+    "not_guarded_deliberately": [
+      {
+        "site": "cablp/atomic/fits.py :: IAEA_exp1, IAEA_exp4, IAEA_exp6, rate_coeff",
+        "reason": "GAS-AGNOSTIC fit FORMS. The species lives entirely in the caller's coefficient table, not in the function: IAEA_exp1 is evaluated on the helium aHeI (energy.py:328) and the hydrogen aHI (energy.py:330) alike. Guarding IAEA_exp1 would refuse helium. IAEA_exp6 and rate_coeff happen to have only H-coefficient consumers today, but they are the same class of object and guarding them would be guarding the wrong noun.",
+        "verdict": "fits.py contains no hydrogen entry point."
+      },
+      {
+        "site": "cablp/atomic/coefficients.py :: aHI, aHII",
+        "reason": "Plain data lists, not callables -- there is no entry point to guard, and the ruling is 'guards only, do not delete data, do not restructure'. Their only consumers are energy.py:279 and energy.py:330, which are H branches INSIDE the solver and therefore already unreachable (construction refuses gas_type != 'He').",
+        "verdict": "Inert data; reachable only through already-unreachable solver branches."
+      },
+      {
+        "site": "cablp/atomic/cross_sections.py :: alpha_r, alpha_3, heavy_reaction, integrate_kern",
+        "reason": "Gas-agnostic. alpha_r/alpha_3 take the ionization potential as an argument and are used ON THE HELIUM PATH (reactions.py:80-81, adas.py:243-246). heavy_reaction is the shared 2-D fit evaluator used for BOTH A_R318 and A_R531.",
+        "verdict": "No hydrogen entry point."
+      },
+      {
+        "site": "cablp/atomic/cross_sections.py :: a215, _h_data, _H_LOG_E, _H_LOG_SIGMA, _cx_H",
+        "reason": "H DATA, retained per the ruling. _cx_H is still built at import time from the corrupt table -- that costs nothing and keeps the re-opening a one-line change -- but charge_ex_react's guard is now the only route to it.",
+        "verdict": "Retained, unreachable."
+      }
+    ],
+    "out_of_scope_reported_not_changed": [
+      {
+        "site": "cablp/solvers/_sim1d/physics/energy.py:279 (IAEA_exp6 on aHII) and :330 (IAEA_exp1 on aHI)",
+        "status": "H branches in the SOLVER, not in cablp/atomic/. The ruling scopes this member to cablp/atomic/. Already unreachable: construction refuses gas_type != 'He'."
+      },
+      {
+        "site": "cablp/solvers/_sim1d/physics/reactions.py:74-75 (rate_coeff on H_ION_COEFF)",
+        "status": "Same class: solver-side H branch, out of this member's scope, already unreachable."
+      },
+      {
+        "site": "cablp/solvers/_sim1d/solver.py:12138-12139 (_gas_constants returns (m_p_cgs, 1, 2, I_Ry) for 'H')",
+        "status": "Solver-side, out of scope, already unreachable. NOTE: this is the LAST consumer of m_p_cgs inside cablp/ after R3 sub-event 1d removed the other one; it is the exact analogue of the arm retired in scripts/afterglow_surrogate_0d.py at staging c673554. Flagged for the orchestrator as a candidate successor row, NOT touched here."
+      },
+      {
+        "site": "scripts/generate_eii_tables.py:29",
+        "status": "Calls H_EII_cross and will now RAISE on its hydrogen arm. This is the intended effect of the quarantine -- it is the generator for the quarantined domain's table -- but it is a behaviour change in a tracked script and is disclosed here rather than left for a reviewer to discover. Its helium arm (He_EII_cross) is untouched."
+      }
+    ]
+  },
+
+  "guard_texts": {
+    "idiom": "The D3/surrogate idiom: state what is refused, the mechanism, the ruling and its date, and what IS accepted. Precedents: solver.py:891-897 (D3 sigma_in_model helium-only) and scripts/afterglow_surrogate_0d.py:172-181 (the 2026-08-27 afterglow H retirement).",
+    "H_EII_cross": "H_EII_cross is not available: the hydrogen arms of cablp.atomic are QUARANTINED (untested domain -- no solver-path consumer and no gate coverage; and one corrupt table, A_R318, whose row 1 carries a duplicated coefficient), ruled 2026-08-27. The solver is helium-only (D3, 2026-08-21). Accepted: He -- use He_EII_cross.",
+    "H_EII_cross_lkup": "H_EII_cross_lkup is not available: the hydrogen arms of cablp.atomic are QUARANTINED (untested domain -- no solver-path consumer and no gate coverage; and one corrupt table, A_R318, whose row 1 carries a duplicated coefficient), ruled 2026-08-27. The solver is helium-only (D3, 2026-08-21). Accepted: He -- use He_EII_cross_lkup.",
+    "charge_ex_react_H": "gas_type='H' is not available: the hydrogen arms of cablp.atomic are QUARANTINED, ruled 2026-08-27, and this is the entry point that reads the corrupt table. A_R318 (H + H+ charge exchange) repeats 9.536923957409e-03 in row 1, giving that row 10 coefficients where every other A_R318 row and every A_R531 row has 9; heavy_reaction iterates range(len(A[i])), so the extra term enters _cx_H silently. The row must be digit-proofed against IAEA HYDHEL 3.1.8 before this arm re-opens. The solver is helium-only (D3, 2026-08-21). Accepted: 'He' (A_R531, unaffected).",
+    "catch_all_narrowed": {
+      "before": "unsupported gas_type {gas_type!r}; expected 'He' or 'H'",
+      "after": "unsupported gas_type {gas_type!r}; expected 'He'",
+      "why": "The afterglow-retirement precedent (staging c673554) narrowed its catch-all the same way: a message that still advertises 'H' as accepted contradicts the branch above it."
+    },
+    "module_note": "A block comment at the head of cross_sections.py states the quarantine once -- the two reasons, the A_R318 defect in full, the guarded set, and the deliberately-unguarded set with reasons -- so the three guards point at one owning place rather than each restating it."
+  },
+
+  "inertness_proof": {
+    "requirement": "Gate (a) as pre-registered: prove inertness STRUCTURALLY (every guarded site unreachable under gas_type='He') rather than by re-running the matched-grid battery.",
+    "structural": {
+      "diff_confinement": "The whole member removes exactly THREE lines, and every one is H-arm or documentation: (1) the gas_type docstring line advertising 'H'; (2) 'table = _cx_H', the H branch body, replaced by the raise; (3) the catch-all message, narrowed. No helium line, no shared line, and no data value is touched. Verified by inspecting every '-' line of 'git diff -U0 cablp/atomic/cross_sections.py'.",
+      "construction_refusal": "LAPDSim1D(default_config() with gas_type='H') raises at construction: \"ion_neutral_moment_closure uses the Phelps He+/He cross sections and requires gas_type='He' (got 'H')\". Default gas_type is 'He'. Artifact: scripts/r3vbar_hquarantine_inertness.txt.",
+      "branch_reachability": "H_EII_cross_lkup's three call sites are each inside 'elif gas_type == \"H\":' with a sibling 'if gas_type == \"He\":'; the helium path takes the sibling. H_EII_cross has no consumer in cablp/ at all. charge_ex_react's guard is confined to its 'H' branch.",
+      "conclusion": "Under gas_type='He' no guarded site is reachable, so the member cannot move a number."
+    },
+    "empirical_bit_check": {
+      "requirement": "Gate (b) second half: spot-check one He rate value pre/post commit 2 -- must be identical float.",
+      "method": "Four helium values captured at RAW uint64 (struct.pack('>d').hex()) before the guards were written and again after, in-process on the worktree.",
+      "pre_artifact": "scripts/r3vbar_he_spotcheck_pre.txt",
+      "post_artifact": "scripts/r3vbar_hquarantine_probe.txt",
+      "values": [
+        {"expr": "charge_ex_react(5.0,'He')", "value": "3.44522380557344845e-09", "raw_pre": "3e2d982094b42152", "raw_post": "3e2d982094b42152", "identical": true},
+        {"expr": "charge_ex_react(0.5) [default gas_type]", "value": "1.41108423497785927e-09", "raw_pre": "3e183e039bd454ca", "raw_post": "3e183e039bd454ca", "identical": true},
+        {"expr": "He_EII_cross_lkup(3.0)", "value": "3.28571828638300585e-17", "raw_pre": "3c82f0dd45ca836f", "raw_post": "3c82f0dd45ca836f", "identical": true},
+        {"expr": "He_ion_rate_lkup(8.0)", "value": "3.57571738399525439e-10", "raw_pre": "3df89277f2a3f5a1", "raw_post": "3df89277f2a3f5a1", "identical": true}
+      ],
+      "verdict": "4/4 bit-identical at raw uint64. The default-argument case is included on purpose: charge_ex_react's signature default is gas_type='He', so it exercises the branch a caller reaches without naming a gas."
+    },
+    "guards_fire": {
+      "requirement": "Gate (b) first half: an in-process probe demonstrating each guard fires, quoting the ValueError.",
+      "artifact": "scripts/r3vbar_hquarantine_probe.txt",
+      "results": [
+        {"call": "H_EII_cross(50.0)", "outcome": "ValueError", "fired": true},
+        {"call": "H_EII_cross_lkup(50.0)", "outcome": "ValueError", "fired": true},
+        {"call": "charge_ex_react(5.0,'H')", "outcome": "ValueError", "fired": true},
+        {"call": "charge_ex_react(5.0,'Ar')", "outcome": "ValueError: unsupported gas_type 'Ar'; expected 'He'", "fired": true, "note": "Negative control on the narrowed catch-all."}
+      ],
+      "verdict": "3/3 guarded entry points fire; the catch-all no longer advertises H."
+    }
+  },
+
+  "scope_discipline": {
+    "files_changed": ["cablp/atomic/cross_sections.py"],
+    "not_touched": "No data file, no table value, no coefficient, and no line of hydrogen physics was deleted or edited -- quarantine, not removal. cablp/atomic/fits.py and cablp/atomic/coefficients.py were NOT modified: the census found no hydrogen ENTRY POINT in either (see not_guarded_deliberately). scripts/baselines/, scripts/stances/ and scripts/data/ untouched. cablp/cathode/beam_deposition.py and scripts/deposit_beam_reference.py untouched (owned by a concurrent lane-march coder)."
+  },
+
+  "knowledge_base_impact": {
+    "protocol": "knowledge-base/notes/CLAUDE_INTEGRATION.md",
+    "classification": "CHANGED -- configuration meaning narrows on a non-default domain.",
+    "what_changed": "The hydrogen rate entry points of cablp/atomic/ move from SILENTLY-COMPUTING to REFUSED. gas_type='H' was already refused at LAPDSim1D construction (D3, 2026-08-21); this member closes the DIRECT-CALLER route into the same domain, which was the residual hazard.",
+    "sources": [
+      "cablp/atomic/cross_sections.py -- the module quarantine note is the owning source for the ruling, the two reasons and the A_R318 defect; the three guard messages are the per-site statements.",
+      "restructure/manifests/h_quarantine.json (this file) -- the entry-point map, the census and the inertness proof.",
+      "notes/BOARD.md:58 [sbq:L295] -- the originating record; its 'digit-proof on HYDHEL fetch' requirement is now quoted inside the code itself."
+    ],
+    "terminology": "QUARANTINE is used consistently for 'code and data retained, entry points refuse' and is distinguished in the module note from RETIREMENT (the afterglow surrogate's H arm, c673554) and REMOVAL (the D2/D3 deletions).",
+    "downstream_effects": "No solver, gate, golden, digest or score is affected -- the member is numerics-inert. One tracked script changes behaviour on its H arm only: scripts/generate_eii_tables.py:29. The board row [sbq:L295] is NOT closed by this member: the duplicate line still stands and still needs its HYDHEL 3.1.8 digit-proof; the guard makes the defect loud instead of silent, which is the ruling's intent.",
+    "disposition": "Orchestrator to log against 27gm and to decide whether solver.py:12138-12139 (_gas_constants H arm, now the last m_p_cgs consumer in cablp/) rides a successor row."
+  }
+}

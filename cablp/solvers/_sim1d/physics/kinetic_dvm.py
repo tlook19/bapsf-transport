@@ -37,8 +37,9 @@ positivity preserving):
      exchange and elastic scattering re-emit their own losses at the local
      ion Maxwellian, the cylindrical wall re-emits its own losses (split
      accommodated/reflected), the anode mesh re-emits what it intercepted,
-     and the external ledger (puff, recombination, recycling faces, anode
-     rebirths) is added as counted particles.
+     the interior CLOSED FACES re-emit what they blocked on the side it
+     arrived from, and the external ledger (puff, recombination, recycling
+     faces, anode rebirths) is added as counted particles.
 
 Splitting births from losses this way is what makes the inventory ledger
 EXACT rather than converged: substep A never creates a particle and
@@ -72,6 +73,22 @@ whole tick, which at a plasma-terminating surface re-ionizes on the spot
 and re-ignites the cell it was supposed to be draining. That applies to
 the end walls and, since K2d, to the cathode/collector recycle channels,
 whose faces are interior whenever something sits behind the surface.
+
+INTERIOR CLOSED FACES are the solid obstructions standing inside the
+neutral domain: the geometry marks a face closed wherever a plasma-dead
+cell (plenum, obstruction) abuts a live one, and the cathode disc against
+its plenum is the canonical one. The COLUMN zone is the disc's own
+footprint -- the column radius is the plasma radius, which is the cathode
+radius -- so the column carries ZERO transmission across such a face:
+whatever reaches it is blocked, tallied, and re-emitted as a cosine
+half-flux into the side it arrived from, at that side's surface
+temperature (the live cathode surface temperature on a cathode-adjacent
+side, the wall temperature otherwise). The ANNULUS is deliberately NOT
+blocked: it is the clear bore around the disc, and it is the only route by
+which the machine's gas reaches the pump standing on the plenum behind the
+cathode. Blocking is applied BEFORE the recycle ghost at the same face, so
+a surface still emits into the plasma on the plasma side of itself rather
+than into the obstruction behind it.
 
 End walls remain the one LAGGED channel: their outflow is known only
 after the march, so the returning particles are held in a per-end pending
@@ -155,6 +172,7 @@ LEDGER_LOSS_CHANNELS = (
     "elastic",
     "wall",
     "mesh_blocked",
+    "closed_face_blocked",
     "end_out_L",
     "end_out_R",
 )
@@ -164,6 +182,7 @@ LEDGER_BIRTH_CHANNELS = (
     "wall_accommodated",
     "wall_reflected",
     "mesh_reemit",
+    "closed_face_reemit",
     "end_return_L",
     "end_return_R",
     "puff",
@@ -226,6 +245,7 @@ LEDGER_ENERGY_BIRTH_CHANNELS = LEDGER_BIRTH_CHANNELS
 LEDGER_ENERGY_NET_CHANNELS = (
     "surface_wall",
     "surface_mesh",
+    "surface_closed_face",
     "surface_end_L",
     "surface_end_R",
     "exchange_cx",
@@ -397,12 +417,21 @@ class TransientDVM:
         # the ends ARE the surfaces, which is the fallback.
         self.cath_cell = 0
         self.coll_cell = self.nz - 1
+        # Every live cell against a cathode surface, not just the first. The
+        # scalar above is where a SCALAR return is deposited and is unchanged;
+        # this tuple is what the closed-face re-emission asks "is this side the
+        # cathode surface?", which on a twin machine has two right answers.
+        self.cath_cells = ()
         if getattr(geometry, "cell_role", None) is not None:
             by_role = absorbing_live_cells_by_role(geometry)
             if by_role.get("cathode"):
                 self.cath_cell = int(by_role["cathode"][0])
+                self.cath_cells = tuple(
+                    int(cell) for cell in by_role["cathode"]
+                )
             if by_role.get("collector"):
                 self.coll_cell = int(by_role["collector"][0])
+        self._configure_closed_faces(geometry)
         Rp = np.asarray(geometry.Rp_cm, dtype=float)
         Rm = np.asarray(geometry.Rm_cm, dtype=float)
 
@@ -470,6 +499,25 @@ class TransientDVM:
         self.E_wall_mean = float((self.M_wall * self.E_bin).sum())
         self.E_cold_mean = float((self.M_cold * self.E_bin).sum())
 
+        # Closed-face re-emission spectra. A closed face is a solid plate, so
+        # each side takes the cosine HALF-flux directed away from it -- not
+        # the cylinder's symmetric spectrum, which would launch half the
+        # returned mass straight back into the plate. The wall-temperature
+        # directions are run constants; the cathode-surface ones ride the
+        # live surface temperature and are built per update.
+        self._closed_wall_spectra = {}
+        surface_dirs = []
+        for _face, d_in, _cell, surface in self._closed_emitters:
+            emit = -d_in
+            if surface:
+                if emit not in surface_dirs:
+                    surface_dirs.append(emit)
+            elif (False, emit) not in self._closed_wall_spectra:
+                self._closed_wall_spectra[(False, emit)] = (
+                    g.half_flux_spectrum(self.T_wall_K, emit)
+                )
+        self._closed_surface_dirs = tuple(surface_dirs)
+
         shape = (self.nz, g.nvz, g.nvp)
         self.f_c = np.zeros(shape)
         self.f_a = np.zeros(shape)
@@ -533,6 +581,9 @@ class TransientDVM:
         self.Tn_col_eV = np.full(self.nz, self.T_wall_K * KB / EV)
         self.updates = 0
         self.last_ledger = None
+        # Last update's closed-face traffic in PARTICLES per cell, keyed by
+        # the direction the blocked particles were re-emitted into.
+        self.last_closed_counts = None
 
         # ---- deferred transfer ledger (the K2d floor-aware relax)
         #
@@ -594,6 +645,77 @@ class TransientDVM:
         self.ion_removed_cum = cells.copy()
         self.ion_shortfall_updates = 0
         self.ion_shortfall_cell_updates = cells.copy()
+
+    # ------------------------------------------------------ closed faces
+
+    def _configure_closed_faces(self, geometry):
+        """Resolve the interior closed faces and the two sides of each.
+
+        A face is CLOSED where the plasma stops without the domain ending:
+        ``plasma_open`` false, or ``plasma_absorbing`` true, which is the
+        refinement of that same set. Both come from the typed cell roles --
+        a face between a plasma-dead cell (plenum, obstruction) and a live
+        one -- so the geometry already carries the fact and no separate
+        configuration names it. Only INTERIOR faces are taken: the two
+        domain ends are closed by construction and are the end-wall
+        channel, which is lagged and pumped and is not this one.
+
+        Sets ``closed_faces`` (the face indices, ascending), ``_closed_face``
+        (the same as a per-face flag the march indexes), and
+        ``_closed_emitters`` -- one entry ``(face, d_in, cell, surface)``
+        per face and per SIDE, where ``d_in`` is the march direction whose
+        flux that side delivers to the face, ``cell`` is the side's own
+        cell, and ``surface`` marks a side that is a cathode surface and so
+        re-emits at the live surface temperature rather than the wall's.
+
+        A geometry with no face topology at all -- the synthetic tubes the
+        gate suite builds -- yields no closed faces, so the channel is
+        absent and the march is bit-identical to one built without it.
+        """
+        self.closed_faces = ()
+        self._closed_face = [False] * (self.nz + 1)
+        self._closed_emitters = ()
+        open_faces = getattr(geometry, "plasma_open", None)
+        if open_faces is None:
+            return
+        closed = ~np.asarray(open_faces, dtype=bool)
+        absorbing = getattr(geometry, "plasma_absorbing", None)
+        if absorbing is not None:
+            closed = closed | np.asarray(absorbing, dtype=bool)
+        if closed.size != self.nz + 1:
+            raise ValueError(
+                "the DVM needs one plasma face flag per face: geometry "
+                f"carries {closed.size} for {self.nz} cells "
+                f"(expected {self.nz + 1})"
+            )
+        faces = tuple(
+            int(face) for face in np.flatnonzero(closed) if 0 < face < self.nz
+        )
+        if self.mesh_face in faces:
+            raise ValueError(
+                f"face {self.mesh_face} is both the anode mesh and a closed "
+                "plasma face: a face is one or the other, never both"
+            )
+        emitters = []
+        for face in faces:
+            self._closed_face[face] = True
+            for d_in in (+1, -1):
+                cell = face - 1 if d_in > 0 else face
+                emitters.append((face, d_in, cell, cell in self.cath_cells))
+        self.closed_faces = faces
+        self._closed_emitters = tuple(emitters)
+
+    def _closed_face_spectra(self, T_s_K):
+        """Return ``{(surface, emit_direction): spectrum}`` for this update.
+
+        The wall-temperature entries are run constants built once; the
+        cathode-surface ones follow the live surface temperature and are
+        built here, at most one per emitted direction.
+        """
+        spectra = dict(self._closed_wall_spectra)
+        for emit in self._closed_surface_dirs:
+            spectra[(True, emit)] = self.g.half_flux_spectrum(T_s_K, emit)
+        return spectra
 
     # ------------------------------------------------------------ state
 
@@ -884,14 +1006,24 @@ class TransientDVM:
         applied AFTER any mesh interception at that face: a surface emits
         into the plasma, on the plasma side of an anode mesh.
 
-        Returns ``(f_c, f_a, mesh_c, mesh_a, out, mesh_E)`` where the mesh
-        arrays are intercepted PARTICLES per emitting cell, ``out`` maps
-        ``(zone, end)`` to the outgoing particles per bin, and ``mesh_E`` is
-        the ``(column, annulus)`` pair of intercepted ENERGIES [erg] per
-        emitting cell. The energy pair is tallied here because the mesh is
-        the one channel whose interception is summed over velocity bins
-        inside the sweep, so its energy moment cannot be recovered from the
-        particle tally afterwards.
+        An INTERIOR CLOSED FACE (``_closed_face``) stops the column dead:
+        the whole upstream flux is tallied to the cell it came from and the
+        onward flux is set to zero, so nothing crosses. It is applied after
+        any mesh interception and BEFORE ``inject_c``, because the recycle
+        ghost at a cathode face is emitted by that surface into the plasma
+        and must not be blocked by the surface it left. The annulus is not
+        touched: it is the clear bore around the disc.
+
+        Returns ``(f_c, f_a, mesh_c, mesh_a, out, mesh_E, closed)`` where
+        the mesh arrays are intercepted PARTICLES per emitting cell, ``out``
+        maps ``(zone, end)`` to the outgoing particles per bin, ``mesh_E``
+        is the ``(column, annulus)`` pair of intercepted ENERGIES [erg] per
+        emitting cell, and ``closed`` is the matching
+        ``(particles, energies)`` pair for the closed faces, each a dict
+        keyed by the direction the blocked particles are re-emitted into.
+        All of them are tallied here because these are the channels whose
+        interception is summed over velocity bins inside the sweep, so their
+        moments cannot be recovered from the particle tally afterwards.
         """
         g = self.g
         nz, nvz, nvp = self.nz, g.nvz, g.nvp
@@ -901,6 +1033,11 @@ class TransientDVM:
         mesh_a = np.zeros(nz)
         mesh_c_E = np.zeros(nz)
         mesh_a_E = np.zeros(nz)
+        # Closed-face tallies, keyed by the direction the blocked particles
+        # are RE-EMITTED into (the reverse of the direction that delivered
+        # them), on the cell of the side they arrived from.
+        closed_n = {+1: np.zeros(nz), -1: np.zeros(nz)}
+        closed_E = {+1: np.zeros(nz), -1: np.zeros(nz)}
         out = {}
         inv_dt = 1.0 / dt
         for direction in (+1, -1):
@@ -937,6 +1074,16 @@ class TransientDVM:
                             * dt
                         )
                         F_c_prev = self.transparency * F_c_prev
+                    if self._closed_face[fi]:
+                        closed_n[-direction][i - direction] += float(
+                            (F_c_prev * vz).sum() * self.face_c[fi] * dt
+                        )
+                        closed_E[-direction][i - direction] += float(
+                            (F_c_prev * vz * E_sel).sum()
+                            * self.face_c[fi]
+                            * dt
+                        )
+                        F_c_prev = np.zeros_like(F_c_prev)
                     if inject_c:
                         ghost = inject_c.get((fi, direction))
                         if ghost is not None:
@@ -976,6 +1123,17 @@ class TransientDVM:
                     )
                     F_c_prev = self.transparency * F_c_prev
                     F_a_prev = self.transparency * F_a_prev
+                if self._closed_face[fi]:
+                    # The COLUMN alone: the closed face is the cathode
+                    # disc's own footprint, and the annulus around it is the
+                    # clear bore the plenum is pumped through.
+                    closed_n[-direction][i - direction] += float(
+                        (F_c_prev * vz).sum() * self.face_c[fi] * dt
+                    )
+                    closed_E[-direction][i - direction] += float(
+                        (F_c_prev * vz * E_sel).sum() * self.face_c[fi] * dt
+                    )
+                    F_c_prev = np.zeros_like(F_c_prev)
                 if inject_c:
                     ghost = inject_c.get((fi, direction))
                     if ghost is not None:
@@ -1006,7 +1164,10 @@ class TransientDVM:
             out[("a", end_out)][sel] = (
                 f_a[last][sel] * vz * self.face_a[fo_end] * dt
             )
-        return f_c, f_a, mesh_c, mesh_a, out, (mesh_c_E, mesh_a_E)
+        return (
+            f_c, f_a, mesh_c, mesh_a, out, (mesh_c_E, mesh_a_E),
+            (closed_n, closed_E),
+        )
 
     def _add_face_inflow(self, inject, counts, default_cell, direction,
                          spectrum, dt):
@@ -1051,6 +1212,7 @@ class TransientDVM:
         nu_ion,
         ion_counts=None,
         sources=None,
+        source_counts=None,
         T_s_K=None,
     ):
         """Advance ``(f_c, f_a)`` by one neutral-clock tick of ``dt`` seconds.
@@ -1075,9 +1237,23 @@ class TransientDVM:
         ``recombination`` (column cells), ``cathode_face`` /
         ``collector_face`` (column cells, or a scalar attributed to the
         role-resolved ``cath_cell`` / ``coll_cell``), ``anode`` (column
-        cells). ``T_s_K`` is the live cathode-surface temperature used for
+        cells).
+
+        ``source_counts`` is the same external ledger stated in PARTICLES on
+        the same keys -- what a coupled partner BOOKED over this tick -- and
+        is to ``sources`` what ``ion_counts`` is to ``nu_ion``. A channel
+        named there is injected at exactly that count, carrying no ``dt`` and
+        so no first-order-in-cadence sampling error; a channel named in
+        ``sources`` is multiplied by ``dt`` as before, which is the reading
+        an offline caller with no partner has. Naming one channel in both
+        raises: they are two different statements about the same particles.
+
+        ``T_s_K`` is the live cathode-surface temperature used for
         the cathode-adjacent surfaces (the stated special case); the wall
-        temperature is used everywhere else.
+        temperature is used everywhere else. That covers the cathode-side
+        face of an interior CLOSED FACE as well: the column carries no flux
+        across such a face, and each side takes back what it delivered, at
+        its own surface temperature.
 
         The two recycle channels enter as directed INFLOWS at their own
         faces -- a ``+z`` half-flux spectrum at the cathode's upstream face,
@@ -1100,6 +1276,8 @@ class TransientDVM:
             raise ValueError(f"the DVM update needs a positive dt (got {dt})")
         g = self.g
         sources = {} if sources is None else sources
+        source_counts = {} if source_counts is None else source_counts
+        self._check_source_channels(sources, source_counts)
         T_s_K = self.T_wall_K if T_s_K is None else float(T_s_K)
         inv_before = self.total_inventory()
         f_before = self.f_inventory()
@@ -1143,11 +1321,14 @@ class TransientDVM:
         # update -- the physical statement that a recycled atom leaves the
         # surface moving, rather than materializing at rest in the cell the
         # boundary was draining.
-        puff = np.asarray(sources.get("puff", 0.0), dtype=float) * dt
-        rec = np.asarray(sources.get("recombination", 0.0), dtype=float) * dt
-        anode = np.asarray(sources.get("anode", 0.0), dtype=float) * dt
-        cath = np.asarray(sources.get("cathode_face", 0.0), dtype=float) * dt
-        coll = np.asarray(sources.get("collector_face", 0.0), dtype=float) * dt
+        def channel(name):
+            return self._channel_counts(name, sources, source_counts, dt)
+
+        puff = channel("puff")
+        rec = channel("recombination")
+        anode = channel("anode")
+        cath = channel("cathode_face")
+        coll = channel("collector_face")
         inject_c = {}
         spec_cath = g.half_flux_spectrum(T_s_K, +1)
         spec_coll = g.half_flux_spectrum(self.T_wall_K, -1)
@@ -1188,7 +1369,7 @@ class TransientDVM:
                 end_a[-1] += eL
                 end_a[+1] += eR
             source_c = inner_land * inv_vc[:, None, None] / dt
-            f_c, f_a, mesh_c, _, out, mesh_E = self._march(
+            f_c, f_a, mesh_c, _, out, mesh_E, closed = self._march(
                 dt, nu_c_loss, None, inflow_c, None, inject_c,
                 source_c=source_c, column_only=True,
             )
@@ -1203,7 +1384,7 @@ class TransientDVM:
             escapes = self.nux[:, None, :] * f_c * dt * vol_c
             L_wall = wall_land
         else:
-            f_c, f_a, mesh_c, mesh_a, out, mesh_E = self._march(
+            f_c, f_a, mesh_c, mesh_a, out, mesh_E, closed = self._march(
                 dt, nu_c_loss, nu_a_loss, inflow_c, inflow_a, inject_c
             )
             L_wall = self.nuw[:, None, :] * f_a * dt * vol_a
@@ -1302,6 +1483,33 @@ class TransientDVM:
         if not jump:
             f_a += (mesh_a * inv_va)[:, None, None] * self.M_wall[None, :, :]
 
+        # Closed-face re-emission: what the plate stopped goes back into the
+        # side it came from, as a cosine half-flux directed away from the
+        # plate, at that side's own surface temperature. Every blocked
+        # particle is re-emitted, so the channel conserves particles exactly
+        # and the pair cancels in the domain identity the way the mesh does.
+        closed_n, closed_E = closed
+        # Published per side, keyed by the direction the blocked particles are
+        # re-emitted into: the ledger rows are domain totals, and the SIDE is
+        # what decides which surface temperature a return carries.
+        self.last_closed_counts = closed_n
+        n_closed = 0.0
+        e_closed_reemit = 0.0
+        if self.closed_faces:
+            closed_spectra = self._closed_face_spectra(T_s_K)
+            for _face, d_in, cell, surface in self._closed_emitters:
+                emit = -d_in
+                count = float(closed_n[emit][cell])
+                if not count:
+                    continue
+                spectrum = closed_spectra[(surface, emit)]
+                f_c[cell] += count * inv_vc[cell] * spectrum
+                n_closed += count
+                e_closed_reemit += count * self._energy_of(spectrum)
+        e_closed_blocked = float(
+            closed_E[+1].sum() + closed_E[-1].sum()
+        )
+
         # --- external source ledger (counted particles this update). The two
         # recycle channels are absent here: they entered through the march as
         # face inflows above, which is the whole point of the K2d rework.
@@ -1352,6 +1560,8 @@ class TransientDVM:
             mesh_c=mesh_c,
             mesh_a=mesh_a,
             e_loss_mesh=e_loss_mesh,
+            e_closed_blocked=e_closed_blocked,
+            e_closed_reemit=e_closed_reemit,
             out=out,
             e_return_L=e_return_L,
             e_return_R=e_return_R,
@@ -1382,6 +1592,7 @@ class TransientDVM:
             "loss_elastic": float(L_el.sum()),
             "loss_wall": float(N_wall.sum()),
             "loss_mesh_blocked": float(mesh_c.sum() + mesh_a.sum()),
+            "loss_closed_face_blocked": n_closed,
             "loss_end_out_L": out_L,
             "loss_end_out_R": out_R,
             "loss_pump_L": self.s_L * out_L,
@@ -1391,6 +1602,9 @@ class TransientDVM:
             "birth_wall_accommodated": float(alpha * N_wall.sum()),
             "birth_wall_reflected": float((1.0 - alpha) * N_wall.sum()),
             "birth_mesh_reemit": float(mesh_c.sum() + mesh_a.sum()),
+            # The same count the closed faces blocked, by construction: the
+            # plate transmits nothing and keeps nothing.
+            "birth_closed_face_reemit": n_closed,
             "birth_end_return_L": birth_return_L,
             "birth_end_return_R": birth_return_R,
             "birth_puff": float(puff.sum()),
@@ -1409,6 +1623,51 @@ class TransientDVM:
         }
         self.last_ledger = ledger
         return ledger
+
+    @staticmethod
+    def _check_source_channels(sources, source_counts):
+        """Refuse a counted external ledger this engine cannot read as written.
+
+        A ``source_counts`` key outside :data:`LEDGER_EXTERNAL_BIRTHS` would
+        be silently inert, and a channel given both as a rate and as a count
+        is two different statements about the same particles with no rule
+        for which wins. Both are configuration errors and both raise here,
+        before anything is injected.
+        """
+        unknown = sorted(set(source_counts) - set(LEDGER_EXTERNAL_BIRTHS))
+        if unknown:
+            raise ValueError(
+                f"unknown counted DVM source channel(s) {unknown} "
+                "(silent/inert sources are forbidden); this engine books "
+                f"{sorted(LEDGER_EXTERNAL_BIRTHS)}"
+            )
+        both = sorted(set(sources) & set(source_counts))
+        if both:
+            raise ValueError(
+                f"DVM source channel(s) {both} were given as a rate AND as "
+                "a count: a channel is one or the other, never both"
+            )
+
+    def _channel_counts(self, name, sources, source_counts, dt):
+        """Return one external channel's PARTICLES for this update.
+
+        From ``source_counts`` when the partner counted the channel, in
+        which case the count is what is injected exactly; otherwise the
+        historical ``rate * dt``, which is what a standalone caller and
+        every uncounted channel still use.
+        """
+        counted = source_counts.get(name)
+        if counted is None:
+            return np.asarray(sources.get(name, 0.0), dtype=float) * dt
+        counted = np.asarray(counted, dtype=float)
+        if counted.shape != (self.nz,):
+            raise ValueError(
+                f"source_counts[{name!r}] must carry one particle count per "
+                f"cell (got shape {counted.shape}, expected {(self.nz,)})"
+            )
+        if not np.all(np.isfinite(counted)):
+            raise ValueError(f"source_counts[{name!r}] must be finite")
+        return counted
 
     def _debit_booked_ionization(self, ion_counts, L_ion, f_c, vol_c):
         """Reconcile the march's ionization tally with a partner's booking.
@@ -1524,6 +1783,8 @@ class TransientDVM:
         mesh_c,
         mesh_a,
         e_loss_mesh,
+        e_closed_blocked,
+        e_closed_reemit,
         out,
         e_return_L,
         e_return_R,
@@ -1616,6 +1877,7 @@ class TransientDVM:
             "loss_elastic": e_loss_elastic,
             "loss_wall": e_loss_wall,
             "loss_mesh_blocked": e_loss_mesh,
+            "loss_closed_face_blocked": e_closed_blocked,
             "loss_end_out_L": e_loss_end_L,
             "loss_end_out_R": e_loss_end_R,
             "loss_pump_L": e_loss_pump_L,
@@ -1625,6 +1887,7 @@ class TransientDVM:
             "birth_wall_accommodated": e_birth_wall_accommodated,
             "birth_wall_reflected": e_birth_wall_reflected,
             "birth_mesh_reemit": e_birth_mesh_reemit,
+            "birth_closed_face_reemit": e_closed_reemit,
             "birth_end_return_L": e_return_L,
             "birth_end_return_R": e_return_R,
             "birth_puff": e_birth_puff,
@@ -1638,6 +1901,10 @@ class TransientDVM:
                 - e_birth_wall_reflected
             ),
             "net_surface_mesh": e_loss_mesh - e_birth_mesh_reemit,
+            # The accommodation exchange at the closed faces: what the plate
+            # took out of the gas less what it put back at its own surface
+            # temperature. Booked exactly like the other surface channels.
+            "net_surface_closed_face": e_closed_blocked - e_closed_reemit,
             "net_surface_end_L": e_loss_end_L - e_loss_pump_L - e_pending_L,
             "net_surface_end_R": e_loss_end_R - e_loss_pump_R - e_pending_R,
             "net_exchange_cx": e_loss_cx - e_birth_cx,

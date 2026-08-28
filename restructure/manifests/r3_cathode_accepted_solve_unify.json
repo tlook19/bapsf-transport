@@ -1,0 +1,234 @@
+{
+  "kind": "r3-semantic-cathode-accepted-solve-unify",
+  "repository": "bapsf-transport",
+  "base_revision": "39cb3958c5baf26613a301789e24731c1fb654db",
+  "base_revision_note": "agent-staging at dispatch (also campaign): the agent/smoke-eqfix merge. The worktree spawned stale at bc0a515 and was reset onto this tip before any edit; agent-staging had moved from the brief's expected 89a7c9c while the map was being read.",
+  "schema_note": "A SEMANTIC record, not a rename manifest. It deliberately does NOT validate under restructure/manifests/validate_manifest.py -- no symbol was moved or renamed in the byte-supersession sense; the step-loop's cathode-solve orchestration changed.",
+
+  "ruling": {
+    "citations": [
+      "27gg item 3 -- R3 sub-event 1c [trigger-sigma-b-lag] ruled as a MINIMAL REORDER ONLY, solve count to stay at 6, dedupe explicitly deferred to a separate post-R3 [cathode-solve-6to5] member.",
+      "27gk -- 'merge them'. The coder's stop was ruled CORRECT: the map showed no pure reorder could achieve the 1c intent. The 1c intent and the 6to5 dedupe were merged into ONE R3-window member, [cathode-accepted-solve-unify]."
+    ],
+    "stop_and_report": "The 1c brief carried an explicit stop condition ('if the minimal change is ambiguous or requires touching trigger logic, STOP and report the map'). It fired: the trigger's own solve is the ONLY solve at the accepted state that writes sigma_b, so no reordering of existing statements can make it consume its own output. The three implementations that do achieve it each broke one of 1c's stated constraints, which is what the merge ruling resolved.",
+    "advisor": "not consulted -- orchestrator/Tom ruled directly."
+  },
+
+  "bit_exact": true,
+  "bit_exact_note": "TRUE AT THE 4k PRE-BREAKDOWN HORIZON, and that is a MEASURED result, not a design guarantee. See disclosed_residuals.discharge_phase_movement: this member is expected to move main_discharge-phase trajectories, and the 4k instrument cannot see it. The golden was NOT run (waived for the R3 window; the member rides the single R3-tip recapture).",
+
+  "mechanism": {
+    "summary": "beam_cross_prev (sigma_b) is a one-step-lagged physics INPUT to the cathode/beam solve. It enters at cablp/cathode/circuit_idriven.py:1180 as PlasmaState(sigma_b=beam_cross_prev[cathode_index]) and sets l_b / beam_bypass_fraction / long_mfp at :886-888, the bypass fraction and the anode ledger.",
+    "measured_map_before": {
+      "instrument": "scratchpad monkeypatch over LAPDSim1D.solve_cathode_boundary and _accept_step_attempt; golden-at-stance config (build_baseline_config) on the matched fixed-dt grid dt=1.175e-07.",
+      "solves_per_accepted_step": 6,
+      "order": [
+        {"n": 1, "site": "solver.py:9564 _update_current_phase_triggers", "update_cache": true, "state": "accepted (y1,t1)", "sigma_b_consumed": "the previous step's SSPRK stage-2 write -- a STAGE-state value. THE LAG."},
+        {"n": 2, "site": "solver.py:7365 _plasma_source_timestep_rhs (inside suggest_timestep, next loop iteration)", "update_cache": false, "state": "accepted (y1,t1)", "sigma_b_consumed": "#1's write -- CONVERGED"},
+        {"n": 3, "site": "solver.py:8453 beam_deposition_ee_source (first Strang heat half)", "update_cache": false, "state": "accepted (y1,t1)", "sigma_b_consumed": "#1's write -- CONVERGED"},
+        {"n": 4, "site": "solver.py:4319 rhs_terms (SSPRK stage 1)", "update_cache": true, "state": "post-heat-half", "sigma_b_consumed": "#1's write"},
+        {"n": 5, "site": "solver.py:4319 rhs_terms (SSPRK stage 2)", "update_cache": true, "state": "SSPRK intermediate", "sigma_b_consumed": "#4's write"},
+        {"n": 6, "site": "solver.py:8453 beam_deposition_ee_source (second Strang heat half)", "update_cache": false, "state": "post-explicit", "sigma_b_consumed": "#5's write"}
+      ],
+      "accept_boundary": "solver.py:5504 _restore_step_cache(attempt.solver_cache) sets the cache to #5's write -- the stage-state value #1 then consumes.",
+      "why_no_pure_reorder_exists": "#1 is the only solve at the accepted state that writes sigma_b; #2 and #3 are converged precisely BECAUSE #1 wrote first. Moving the trigger after suggest_timestep does not help (#2 is update_cache=False and touches nothing). Moving it before the cache restore hands it the step-START cache -- more lagged, wrong state. The epilogue's other accepted-state solves (idriven_result_evaluator solver.py:5640, idriven_vdis_evaluator solver.py:5805) cannot refresh sigma_b at all: they build PlasmaState(sigma_b=beam_cross_prev[idx]) and return a SolverResult with no beam march and no beam_atten_cross (physics/cathode.py:790-890).",
+      "map_artifact": "scripts/r3trig_ordermap.log"
+    },
+    "lag_map_convergence": "One iteration. The pair (#2, #3) consumes #1's write and reproduces it; measured 1199/1199 'pair consumes exactly the trigger's sigma_b write' and 1199/1199 '#2 == #3'."
+  },
+
+  "the_change": {
+    "files": ["cablp/solvers/_sim1d/solver.py"],
+    "scope_discipline": "solver.py ONLY. No physics/ file, no cathode/ file, no constants, no .pyx, no config template, no new configuration key. git diff --name-only on the branch returns exactly cablp/solvers/_sim1d/solver.py.",
+    "edits": [
+      {
+        "site": "_update_current_phase_triggers",
+        "change": "The historical solve KEEPS running, unchanged, as the sigma_b refresher and as the solve of record (self._cathode_solve, _cathode_x0, _cathode_x0_twin) that every existing diagnostic reads. A SECOND solve at the same accepted state, update_cache=False, now runs on the sigma_b the first just wrote -- the fixed point -- and the trigger's threshold test reads THAT.",
+        "trigger_logic_untouched": "The threshold tests, the switch-open branch, _current_threshold_time, _record_current_trigger_sample and the BreakdownError path are byte-unchanged. Only WHICH solve supplies I_now moved."
+      },
+      {
+        "site": "_cathode_total_current_A",
+        "change": "Gained an optional cathode_solve argument naming WHICH solve to read. None keeps every historical caller's reading (the cached solve of record). The phase trigger passes its converged accepted-state solve."
+      },
+      {
+        "site": "solve_cathode_boundary",
+        "change": "A single-entry memo over READ-ONLY (update_cache=False) solves. A cache-writing solve never consults or populates it: its job is the write, not the value. On a hit the memoized result is returned without re-solving; on any miss the solve runs fresh and replaces the entry. A stale memo is never served."
+      },
+      {
+        "site": "_cathode_solve_memo_key / _memo_key_part (new)",
+        "change": "The memo key. Compared with == over raw-byte encodings rather than hashed, so there is no collision channel and -0.0/0.0 and last-ulp differences separate."
+      },
+      {
+        "site": "_init_run_machinery",
+        "change": "self._cathode_solve_memo = None."
+      }
+    ],
+    "memo_key": {
+      "principle": "THE INTERFACE LESSON: sigma_b is an INPUT to this solve, so keying on (state, time) alone would have served one lag state for another -- exactly the defect being removed.",
+      "components": [
+        "state (AFTER _smoothed_sample_state, so the sample EMA is covered)",
+        "time",
+        "input_flags (phase- and floating-derived)",
+        "floating",
+        "self._cathode_beam_cross  <-- sigma_b",
+        "self._cathode_x0", "self._cathode_x0_twin",
+        "self._cathode_Ts_K", "phi_wf_override_eV", "self._cathode_f_em",
+        "self._circuit_I_loop", "circuit_V_src_V", "self._vessel_V_cm",
+        "coverage view"
+      ],
+      "excluded_and_why": "floors, ion_mass_g, mu, geometry, input_dict, I_ion, gas_type -- assigned once in __init__ and never mutated anywhere in solver.py (verified by grep for in-place assignment/update/pop), so they cannot separate two calls within one run.",
+      "invalidation": "None needed and none added. Correctness is carried entirely by key completeness, which is why a rejected attempt, a Picard restore and _restore_step_cache all remain safe: they move key components, so the next lookup misses."
+    },
+    "net_effect": "6 -> 5 executed cathode solves per accepted step, AND every accepted-state consumer now reads the converged sigma_b. A solve was ADDED at the trigger and TWO were removed by the memo."
+  },
+
+  "census": {
+    "instrument": "scratchpad monkeypatch; the module-level solve entry is wrapped so a memo HIT is distinguishable from an executed solve. Caller NAMES are used (line numbers move across the diff).",
+    "horizon": "1199 main-run accepted steps, golden-at-stance config, matched fixed-dt grid dt=1.175e-07, pure path. (31300 total _accept_step_attempt calls: the neutral-equilibration inner solver contributes 30100, which is why raw step indices carry a ~30100 offset.)",
+    "before": {
+      "artifact": "scripts/r3unify_sites_pre.log",
+      "solves_per_accepted_step": {"6": 1187, "7": 13},
+      "by_caller": {"rhs_terms": 2414, "beam_deposition_ee_source": 2400, "_plasma_source_timestep_rhs": 1200, "_update_current_phase_triggers": 1199},
+      "steady_tuple": "(_update_current_phase_triggers, _plasma_source_timestep_rhs, beam_deposition_ee_source, rhs_terms, rhs_terms, beam_deposition_ee_source)",
+      "trigger_vs_pair": "scripts/r3trig_census.log -- trigger solve == dt-bound solve 1199/1199 on both the full result digest and beam_atten_cross; dt-bound == heat-half 1199/1199; trigger solve MOVES the sigma_b cache on 2/1199 steps."
+    },
+    "after": {
+      "artifacts": ["scripts/r3unify_census.log", "scripts/r3unify_sites_post.log"],
+      "solves_per_accepted_step": {"5": 1186, "6": 13},
+      "by_caller": {"rhs_terms": 2414, "_update_current_phase_triggers": 2398, "beam_deposition_ee_source": 1200, "_plasma_source_timestep_rhs": 1},
+      "steady_tuple": "(_update_current_phase_triggers, _update_current_phase_triggers, rhs_terms, rhs_terms, beam_deposition_ee_source)",
+      "gate_1a": "PASS -- 5 solves per accepted step (was 6).",
+      "gate_1b": "PASS -- the value the trigger LOGIC consumed == the dt-bound consumer's value 1199/1199 and == the heat-half consumer's value 1199/1199. dt-bound served FROM MEMO 1199/1199; heat-half served FROM MEMO 1199/1199; shared converged solve EXECUTED 1199/1199.",
+      "gate_1c": "PASS -- sigma_b cache writes unchanged: 2 from _update_current_phase_triggers (the refresher, in-trigger) and 2 from rhs_terms (the stage solves). The shared converged solve and both memo consumers never write. Identical to the pre-change write census.",
+      "refresher_vs_converged": "0/1199 differ AT THIS HORIZON -- consistent with the pre-change finding that the lag is inert pre-breakdown (see disclosed_residuals.discharge_phase_movement)."
+    },
+    "the_13_step_mode": "NOT a memo miss and NOT introduced here. Those steps carry an EXTRA rhs_terms -- the save-step diagnostic path, update_cache=True, which therefore never participates in the memo. It is 7 before and 6 after: the same -1.",
+    "_plasma_source_timestep_rhs_executes_once": "Expected: only the very first main-run step, before any memo entry exists for that key. Every later step is a hit."
+  },
+
+  "gates_run": {
+    "import_provenance": {
+      "requirement": "asserted IN-PROCESS before every quoted result (the PYTHONPATH trap: the editable install's cablp.pth resolves to the MAIN checkout).",
+      "cablp_file": "/home/trloo/bapsf/bapsf-transport/.claude/worktrees/agent-a6693a1dd47fd9cab/cablp/__init__.py",
+      "prefix": "PYTHONPATH=<worktree root> on every gate, probe and arm"
+    },
+    "gate_1_census": {"verdict": "PASS", "detail": "see census.after; gates 1a/1b/1c all PASS."},
+    "gate_2_matched_grid_ab": {
+      "command": "PYTHONPATH=<worktree> python scripts/r3_constfoot_4k.py --compare scripts/r3trig_ref.npz scripts/r3unify_chg.npz",
+      "reference_arm": "scripts/r3trig_ref.npz -- captured on the PRE-change staging tip 39cb395 before any edit.",
+      "change_arm": "scripts/r3unify_chg.npz -- captured at ffacab5.",
+      "matched_grid": "confirmed, both arms end at t=0.0004700000000000171 (bit-identical final_time)",
+      "verdict": "BIT-IDENTICAL",
+      "table": {
+        "n":  {"max_rel": 0.0, "rms_rel": 0.0, "differing": 0},
+        "nn": {"max_rel": 0.0, "rms_rel": 0.0, "differing": 0},
+        "M":  {"max_rel": 0.0, "rms_rel": 0.0, "differing": 0},
+        "Ee": {"max_rel": 0.0, "rms_rel": 0.0, "differing": 0},
+        "Ei": {"max_rel": 0.0, "rms_rel": 0.0, "differing": 0},
+        "Te": {"max_rel": 0.0, "rms_rel": 0.0, "differing": 0},
+        "Ti": {"max_rel": 0.0, "rms_rel": 0.0, "differing": 0},
+        "t_end": {"max_rel": 0.0}
+      },
+      "defect_flag": "NOT RAISED -- the >1e-9 rel stop condition was not approached; every field is exactly 0."
+    },
+    "gate_3_corpus": {
+      "command": "PYTHONPATH=<worktree> python scripts/deposit_beam_reference.py --verify",
+      "exit_code": 0,
+      "verdict": "GREEN",
+      "detail": "compared 206218 values across 7590 result fields: 0 differing; closure max 6.095224e-16 over 506 entries, tail bank max 3.891121e-16 over 268. Per-call beam physics unchanged, as required."
+    },
+    "gate_4_smoke": {
+      "command": "PYTHONPATH=<worktree> python scripts/smoke_sim1d.py",
+      "exit_code": 0,
+      "tail": "sim1d smoke ok: cells=72, dz=10.65 cm, Vp_total=2.433052e+06 cm^3, Vm_total=1.793692e+07 cm^3",
+      "compiled_equivalence": "RAN, NOT SKIPPED -- 5 cases (meanfield, coverage, landau, emitting_area, initial_profile), all 'final state bit-identical'.",
+      "kernel_id": "cython/_cathode_kernels_cy/tierA+csda (probed in-process; extension built in-worktree with build_ext.py --inplace)",
+      "note": "The suite asserts CABLP_COMPILED_KERNELS is UNSET and drives the compiled path itself; it must not be run with the env var exported."
+    },
+    "gate_5_scope": {"verdict": "PASS", "detail": "git diff --name-only = cablp/solvers/_sim1d/solver.py, one file."},
+    "golden": "NOT RUN -- waived for this member; it rides the single R3-tip recapture."
+  },
+
+  "disclosed_residuals": [
+    {
+      "id": "epilogue-evaluator-lag",
+      "status": "OUT OF SCOPE, LEFT IN PLACE by ruling",
+      "detail": "The accepted-step epilogue's power-balance warming re-solve (solver.py:5640 idriven_result_evaluator) and current-driven circuit advance (solver.py:5805 idriven_vdis_evaluator) BOTH consume the stage-state sigma_b at the accepted state -- the same lag, at a second site the 1c diagnostic did not describe. They were found by this member's mapping pass and deliberately not touched. They cannot be fixed by ordering alone: running the trigger earlier in the epilogue would refresh sigma_b for them but would also hand the trigger the pre-advance _circuit_I_loop, changing the trigger's INPUTS."
+    },
+    {
+      "id": "discharge_phase_movement",
+      "status": "EXPECTED, NOT GATED HERE",
+      "detail": "main_discharge-phase trajectories are expected to move at the diagnostic's measured class -- median ~5e-12, tails to 4e-1 on beam-family internals where long_mfp flips. This is invisible to gate 2's horizon and that is not a gate weakness but a property of the regime: sigma_b at the launch cell is 0 or ~4.2e-14 through pre-breakdown, and both land in the same long_mfp branch, so the lagged and converged inputs produce bit-identical SolverResults there. Measured: the trigger's solve already equalled the pair's on 1199/1199 pre-change steps. THE R3-TIP TIER C PAIR IS THE INSTRUMENT that will see the discharge-phase movement.",
+      "consequence": "The 4k A/B's BIT-IDENTICAL verdict certifies that the dedupe and the memo introduced NO arithmetic change; it does NOT certify that the member is a no-op over a full cycle, and must not be quoted as if it did."
+    },
+    {
+      "id": "solve-of-record-stays-lagged",
+      "status": "BY DESIGN",
+      "detail": "self._cathode_solve (and _cathode_x0 / _cathode_x0_twin) still come from the refresher, i.e. the lagged solve, so every existing diagnostic, census and warm-start continuation reads exactly what it read before and nothing else moved. Only the trigger's threshold input was redirected. Re-pointing the solve of record at the converged solve is a separate question and was not taken."
+    }
+  ],
+
+  "knowledge_base_impact": {
+    "protocol": "RULE_KB_IMPACT / CLAUDE_INTEGRATION.md",
+    "change_class": "CHANGED -- step-orchestration order + solve dedupe. Equation and term meanings UNCHANGED: no rate, coefficient, closure, unit, sign convention or state field was touched, and no configuration key was added, removed or re-defaulted.",
+    "sources": [
+      {
+        "path": "cablp/solvers/_sim1d/solver.py",
+        "anchor": "_update_current_phase_triggers",
+        "change": "CHANGED -- a second, converged accepted-state solve added; the trigger's threshold input redirected to it. Trigger logic itself byte-unchanged.",
+        "terminology": "current-phase trigger; breakdown / prebreakdown threshold; sigma_b (beam_cross_prev); accepted-step epilogue",
+        "context": "package default, unconditional -- not behind any flag or selector",
+        "downstream_effects": "Breakdown/prebreakdown trigger TIMES are now decided on the converged sheath current. Inert through pre-breakdown at the golden stance (measured); expected to move in the discharge phase.",
+        "disposition_impact": "MAY REQUIRE KNOWLEDGE BASE REVIEW"
+      },
+      {
+        "path": "cablp/solvers/_sim1d/solver.py",
+        "anchor": "solve_cathode_boundary",
+        "change": "CHANGED -- read-only solves are memoized on the full mutable input set; cache-writing solves bypass the memo entirely.",
+        "terminology": "cathode boundary solve; update_cache; solve of record",
+        "context": "package default, unconditional",
+        "downstream_effects": "Executed cathode solves per accepted step fall 6 -> 5. Consumers that previously received independent result objects at identical inputs now share one; no consumer mutates a solve result, and result sharing was already the established pattern (rhs_terms already passed its solve to beam_ionization_rhs_terms).",
+        "disposition_impact": "MAY REQUIRE KNOWLEDGE BASE REVIEW"
+      },
+      {
+        "path": "cablp/solvers/_sim1d/solver.py",
+        "anchor": "_cathode_total_current_A",
+        "change": "CHANGED -- optional cathode_solve argument; default preserves every historical caller's reading.",
+        "terminology": "total cathode current I_tot",
+        "context": "package default",
+        "downstream_effects": "none for existing callers",
+        "disposition_impact": "no review required"
+      },
+      {
+        "path": "cablp/solvers/_sim1d/solver.py",
+        "anchor": "_memo_key_part / _cathode_solve_memo_key",
+        "change": "ADDED -- memo key construction.",
+        "terminology": "memo key; bit-exact comparison",
+        "context": "internal helper, no public surface",
+        "downstream_effects": "none",
+        "disposition_impact": "no review required"
+      }
+    ],
+    "performance_note": "A cost reduction of one cathode solve in six per accepted step is expected but was NOT measured here: wall time was not the measurement and the lanes were contended, so no timing is quoted (AGENTS.md 'Compute cap' exception)."
+  },
+
+  "artifacts": {
+    "location": "MAIN checkout scripts/ (copied from the ephemeral worktree before reporting)",
+    "files": [
+      "r3trig_ref.npz", "r3trig_ref.log",
+      "r3trig_census.log", "r3trig_ordermap.log", "r3trig_smoke.log",
+      "r3unify_ref.npz", "r3unify_chg.npz", "r3unify_chg.log", "r3unify_ab.log",
+      "r3unify_census.log", "r3unify_sites_pre.log", "r3unify_sites_post.log",
+      "r3unify_corpus.log", "r3unify_smoke.log"
+    ],
+    "note": "The r3trig_* files are the 1c mapping/stop evidence; the r3unify_* files are this member's build and gate evidence. The reference arm is the PRE-change capture both A/B verdicts are measured against; it was taken during the 1c phase as r3trig_ref.npz and is present under BOTH names -- r3unify_ref.npz is a byte-identical copy (cmp verified), kept so the A/B pair is discoverable under one prefix. The r3unify_ab.log verdict was computed against r3trig_ref.npz."
+  },
+
+  "corrections": [
+    "2026-08-27 [unify-manifest-1186] -- census.after.solves_per_accepted_step['5'] read 1187; the evidence log scripts/r3unify_census.log says 1186 ('5 solves : 1186 steps') and 1186+13=1199 matches the stated horizon. Transcription slip found at review (27gn); the number was corrected to 1186 and nothing else in this file moved. census.before's 1187 is NOT the same slip -- its own log (scripts/r3unify_sites_pre.log, '6 solves : 1187 steps') corroborates it over the pre-change 1200-step denominator."
+  ],
+
+  "head_revision": "ffacab5b3fc8b85103aba459df851a1f63d57dd9",
+  "branch": "worktree-agent-a6693a1dd47fd9cab",
+  "branch_note": "Isolation-assigned name, ACCEPTED per AGENTS.md (the harness cannot always create the brief's agent/<slug> name and a worktree refuses to rename a checked-out branch). Not pushed, not merged."
+}
