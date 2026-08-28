@@ -1,0 +1,240 @@
+{
+  "kind": "r3-semantic-vbar-mass-unify",
+  "repository": "bapsf-transport",
+  "base_revision": "508462f46aea6c7e940979943a3fd201bc9b98a4",
+  "base_revision_note": "agent-staging at dispatch: 'Merge small batch (flatten stragglers + golden transcript provenance + afterglow H retirement)'. The worktree spawned STALE (on 39cb395, an ancestor) and was reset --hard onto this tip before anything was written.",
+  "schema_note": "A SEMANTIC record, not a rename manifest. It deliberately does NOT validate under restructure/manifests/validate_manifest.py -- no symbol was moved or renamed in the byte-supersession sense; one true per-gas constant replaced a mass-number-times-proton-mass product inside one expression. Direct sibling of r3_qie_mass_ratio.json (sub-event 1b), whose idiom for the now-inert mass-number parameter this member follows.",
+
+  "ruling": {
+    "citation": "Tom-ruled 2026-08-27, CAMPAIGN_LOG 27gm: '[vbar-mass-unify] = R3 sub-event 1d -- neutral_thermal_speed (physics/neutrals.py:19) drops the mu*m_p mass-number approximation (6.6905e-24 vs true m_He 6.6465e-24; vbar_n ~0.33% LOW, loading Knudsen conductances, wall accommodation, pump timescales) and reads the true helium mass per the per-gas-constant principle -- the LAST known mass approximation in the package; the 26ca golden-path fence is discharged by the R3 window (rides the single recapture; post-R3 it would cost its own golden event). Numerics-moving; prior ~3.3e-3 on neutral channels; battery + golden-control instruments. Tom ruled directly with the numbers presented (the 1b waiver class).'",
+    "principle": "The per-gas-constant principle, established at R3 sub-event 1b: where the solver is hard helium-only, a helium quantity reads its own constant rather than reconstructing it from a mass number.",
+    "advisor_consult": "WAIVED -- the 1b waiver class, per the ruling. No physics-advisor was spawned."
+  },
+
+  "bit_exact": false,
+  "bit_exact_note": "FALSE BY DESIGN. This member is NUMERICS-MOVING: it changes the neutral mean thermal speed that every free-molecular transport coefficient is built from, so the golden trajectory is EXPECTED to move. The golden is WAIVED for this member and rides the single R3-tip recapture; what replaces it as branch-side evidence is the matched-grid battery plus the golden-CONTROL pair recorded below.",
+
+  "the_change": {
+    "site": "cablp/solvers/_sim1d/physics/neutrals.py :: neutral_thermal_speed(Tn_K, mu_neutral)",
+    "physics": "The Maxwellian mean speed <v> = sqrt(8 k T / (pi m)) of the neutral gas. It is the single <v> the free-molecular neutral channels are built from.",
+    "old_form": {
+      "expression": "np.sqrt(8.0 * kb_cgs * Tn_K / (np.pi * mu_neutral * m_p_cgs))",
+      "mass_construction": "mu_neutral * m_p_cgs -- the mass NUMBER times the proton mass",
+      "effective_mass_g": 6.69048769476e-24,
+      "effective_mass_repr": "4 * 1.67262192369e-24",
+      "what_it_was": "The _sim3 convention, inherited unchanged through every refactor. The docstring said only 'using the _sim3 convention', which named a provenance rather than stating what mass was used."
+    },
+    "new_form": {
+      "expression": "np.sqrt(8.0 * kb_cgs * Tn_K / (np.pi * m_He_cgs))",
+      "mass_construction": "m_He_cgs read directly from cablp.constants",
+      "exact_repr": "6.6464790809e-24",
+      "class": "MEASURED (CODATA helium-4 atom mass, already the repository's canonical constant at cablp/constants.py:29)",
+      "why_constant_not_literal": "cablp.constants is the single owning source for the helium mass; m_He_cgs is the same constant _gas_constants already hands the solver as ion_mass_g, and the same one sources.py's vbar_n already carried."
+    },
+    "rel_delta_on_the_mass": -0.006577788625852769,
+    "mass_ratio_old_over_new": 1.0066213424166892,
+    "rel_delta_on_the_speed": 0.0033052090050609273,
+    "speed_factor": 1.003305209005061,
+    "direction": "vbar_n increases by 0.3305%. The old mass was 0.662% HIGH -- it neglects the helium binding-energy mass defect and the proton/neutron mass difference -- so the old speed was correspondingly LOW.",
+    "loaded_channels": "Every free-molecular neutral transport coefficient: the Knudsen face conductances (D = (2/3) v_th R), the anode-mesh/baffle orifice conductance (0.25 v_th A_open), the two-zone exchange conductance, and the wall/pump rates derived from them. All scale linearly in v_th, so each moves by the same +0.3305% at fixed geometry.",
+    "mu_neutral_disposition": {
+      "signature": "unchanged -- neutral_thermal_speed(Tn_K, mu_neutral)",
+      "why_it_stays": "Three callers in this module genuinely thread it -- knudsen_flow_coefficients (neutrals.py:63), neutral_zone_exchange_conductance (:190) and two_zone_knudsen_coefficients (:279) -- each fed from solver._mu_neutral (solver.py:839, 978, 983, 8707). Dropping the parameter would be a signature refactor across that chain, which is not this member's scope.",
+      "status_in_this_function": "ACCEPTED AND INERT -- not read by the formula.",
+      "validator_kept": "YES, deliberately. 'if mu_neutral <= 0.0: raise ValueError' is retained so the now-unused parameter stays LOUD rather than becoming a silently inert control, which the repository forbids by convention. Keeping it is numerically a no-op.",
+      "precedent": "Identical to the disposition of mu in Q_ie at R3 sub-event 1b (staging 89a7c9c): accepted for signature uniformity, not used, documented as such in the docstring."
+    },
+    "docstring_repair": "The old one-line docstring ('Return neutral thermal speed [cm/s] using the _sim3 convention.') is replaced. The '_sim3 convention' pointer is DISCHARGED -- the docstring now states the formula, names the mass it reads, records that the mass-number approximation was retired at R3 1d on 2026-08-27 with both percentages, documents mu_neutral as accepted-and-inert-but-validated, and notes that this <v> now agrees with sources.py's vbar_n."
+  },
+
+  "census": {
+    "question_as_briefed": "Sweep the package for OTHER thermal-speed/vbar sites using mu*m_p or mu_neutral*m_p -- the naming-pain record mentions 'two vbar-mass sites' historically. Fix ONLY neutral_thermal_speed and any site that is literally the same <v> = sqrt(8kT/pi m) quantity for HELIUM NEUTRALS with the same mu*m_p form; REPORT (do not change) anything else.",
+    "verdict": "THE CHANGE IS CONFINED TO neutral_thermal_speed. It was the ONLY mu*m_p neutral-<v> site in the package. No second site required changing.",
+    "artifact": "scripts/r3vbar_census.txt",
+    "changed": [
+      {"site": "cablp/solvers/_sim1d/physics/neutrals.py:19 -> :57", "reason": "The target. Sole mu*m_p neutral mean-speed site."}
+    ],
+    "same_quantity_already_correct": [
+      {"site": "cablp/solvers/_sim1d/physics/sources.py:1283, :2013, :2082", "form": "sqrt(8 * Tn * ev_to_erg / (pi * ion_mass_g))", "mass": "ion_mass_g = m_He_cgs via LAPDSim1D._gas_constants", "note": "THIS IS THE SECOND vbar-MASS SITE OF THE HISTORICAL RECORD, and it already carried the true mass. The two sites therefore DISAGREED by 0.33% before this member; they now agree. Closing that inconsistency is a direct consequence of the change."},
+      {"site": "cablp/solvers/_sim1d/physics/kinetic_neutrals.py:409", "form": "sqrt(8 * KB * T_WALL_K / (pi * M_HE))", "mass": "M_HE = m_He_cgs", "note": "Already correct."},
+      {"site": "cablp/solvers/_sim1d/solver.py:4083, :11174", "form": "sqrt(8 * kb_cgs * 300.0 / (pi * m_He_cgs))", "mass": "m_He_cgs", "note": "Already correct."}
+    ],
+    "reported_not_changed": [
+      {"site": "cablp/solvers/_sim1d/physics/hot_neutrals.py:317 :: hot_thermal_speed(Ti_eV, ion_mass_g)", "form": "sqrt(2 k Ti / m)", "reason": "A DIFFERENT QUANTITY -- the hot atom's most-probable launch speed (factor 2, not 8/pi), not a Maxwellian mean speed. It already carries ion_mass_g = m_He_cgs. Explicitly excluded by the brief; not touched."},
+      {"site": "cablp/solvers/_sim1d/physics/flux.py:20 :: ion_sound_speed(Te, mu)", "reason": "mu is the ION mass number and is CORRECT usage there -- a sound speed, not a thermal speed. Not touched."},
+      {"site": "cablp/plasma/params.py:73 :: v_ion_speed(T, mu, Z, gamma)", "reason": "Same class: mu is the ion mass number, correct usage. Not touched."},
+      {"site": "cablp/atomic/cross_sections.py:842 (mu_g) and :964 (m_e_cgs)", "reason": "Reduced mass and electron mass respectively, both correct; neither is a neutral mean speed. Not touched."},
+      {"site": "scripts/mc_neutrals.py:976, scripts/kn2zone.py:121,152, scripts/neutral_arch_*.py, scripts/ewp_*.py, scripts/sp*.py", "reason": "INSTRUMENT-LOCAL constants (M_HE / m_He_cgs) in scripts, out of package scope. Every one inspected already uses a true helium mass, so none disagrees with the new package value. Reported only, per the brief."}
+    ],
+    "zero_consumer_proof": {
+      "claim": "No mu*m_p neutral-<v> site remains in the package after the change.",
+      "post_change_m_p_cgs_sites_in_cablp": [
+        {"site": "cablp/constants.py:18", "kind": "the definition itself"},
+        {"site": "cablp/solvers/_sim1d/solver.py:222 (import) and :12139 (_gas_constants 'H' branch)", "kind": "the hydrogen gas-constant arm -- unreachable, since construction refuses gas_type != 'He'. This is now the LAST m_p_cgs consumer in cablp/."},
+        {"site": "cablp/solvers/_sim1d/physics/neutrals.py:19", "kind": "PROSE ONLY -- the docstring sentence recording the retired form. Not executable."}
+      ],
+      "verdict": "PROVEN. neutrals.py no longer imports m_p_cgs; the only executable m_p_cgs consumer left in the package is the unreachable hydrogen arm of _gas_constants."
+    }
+  },
+
+  "gates_run": {
+    "import_provenance": {
+      "requirement": "PYTHONPATH TRAP (AGENTS.md): the editable install resolves to the MAIN checkout, so every worktree gate asserts its own cablp in-process before its result is quotable.",
+      "assertion": "assert 'agent-a964cde856e7e60d8' in cablp.__file__",
+      "cablp_file": "/home/trloo/bapsf/bapsf-transport/.claude/worktrees/agent-a964cde856e7e60d8/cablp/__init__.py",
+      "sim1d_file": "/home/trloo/bapsf/bapsf-transport/.claude/worktrees/agent-a964cde856e7e60d8/cablp/solvers/_sim1d/__init__.py",
+      "verdict": "asserted in-process on every gate below"
+    },
+    "smoke": {
+      "command": "PYTHONPATH=<worktree> python scripts/smoke_sim1d.py",
+      "exit_code": 0,
+      "tail": "sim1d smoke ok: cells=72, dz=10.65 cm, Vp_total=2.433052e+06 cm^3, Vm_total=1.793692e+07 cm^3",
+      "compiled_equivalence": "LIVE, NOT SKIPPED -- the extension was built in-worktree first (build_ext.py --inplace). All five arms report ok on kernel cython/_cathode_kernels_cy/tierA+csda with final state bit-identical: meanfield (20 steps, 0 nested marches), coverage (10 steps, 1443 nested marches), landau, emitting_area, initial_profile (10 steps, 0 nested marches each).",
+      "why_it_passes_a_numerics_moving_change": "The smoke's neutral assertions derive their expectations FROM neutral_thermal_speed itself (smoke_sim1d.py:934, :1918, :11992), so they track the constant rather than pinning an absolute speed. No smoke assertion pins a hard-coded vbar value.",
+      "artifact": "scripts/r3vbar_smoke_commit1.log"
+    },
+    "reference_corpus": {
+      "requirement": "Gate 3 as pre-registered: corpus --verify GREEN -- vbar_n must not reach the beam march. PROVE, don't assume.",
+      "command": "PYTHONPATH=<worktree> python scripts/deposit_beam_reference.py --verify",
+      "exit_code": 0,
+      "transcript": "fixture deposit_beam_reference.npz: 506 entries, format deposit-beam-reference-v1, reference path pure | compared 206218 values across 7590 result fields: 0 differing | recorded conservation closure: max 6.095224e-16 over 506 entries; tail bank max 3.891121e-16 over 268 | VERIFY OK -- the live pure implementation is bit-identical to the reference corpus, and its closure and substep/leg counts reproduce.",
+      "significance": "206,218 values bit-identical AFTER a change to the neutral mean speed is the positive proof that vbar_n does not reach the CSDA beam march.",
+      "structural_complement": "The compiled kernel source cablp/cathode/_cathode_kernels_cy.pyx contains no mu_neutral, no thermal_speed, no vbar and no m_p_cgs reference at all -- so the beam march has no path to this constant by construction as well as by measurement.",
+      "operator_note": "The first invocation exited 1 with a DELIBERATE guard: 'the compiled CSDA march is bound (CABLP_COMPILED_KERNELS=1); the reference corpus is defined against the PURE implementation. Unset the opt-in and re-run.' That is the fixture's own design, not a failure; the recorded result is the pure re-run.",
+      "artifact": "scripts/r3vbar_corpus_verify.log"
+    },
+    "golden": {
+      "script": "scripts/baseline_sim1d.py",
+      "result": "WAIVED for this member, per the ruling -- the member is numerics-moving by intent, so a pass/fail fixture gate carries no information. What was run instead is the golden-CONTROL pair recorded under golden_control below.",
+      "recapture": "Rides the single R3-tip recapture. scripts/baselines/, scripts/stances/ and scripts/data/ were NOT touched by this member."
+    }
+  },
+
+  "battery": {
+    "instrument": "scripts/r3_constfoot_4k.py --fixed-dt (matched-grid FINAL-STATE footprint over the golden config)",
+    "why_fixed_dt": "On the ADAPTIVE grid this instrument cannot resolve a smooth footprint: a 1-ulp perturbation flips the timestep selector at a near-tie and the arms end 4,000 steps apart at DIFFERENT physical times, so the deviation measures the time offset (floor ~1e-2, non-monotone in perturbation size). --fixed-dt pins the grid so both arms walk the same 4,000 instants and land on the same t_end by construction; a field difference can then only have come from the arithmetic.",
+    "config": "EXACTLY the golden's, via baseline_sim1d.build_baseline_config (default_config() + scripts/stances/g1atrim.toml + BASELINE_PARAM_OVERRIDES/FLAG_OVERRIDES, nx=60), plus the instrument's one pin max_steps_action='stop'.",
+    "horizon_steps": 4000,
+    "fixed_dt_s": 1.175e-07,
+    "cells": 72,
+    "kernels": "cython/_cathode_kernels_cy/tierA+csda on BOTH arms (CABLP_COMPILED_KERNELS=1, KERNEL_ID probed in-process)",
+    "reference_capture_mechanism": "The reference arm was captured BEFORE any edit was made to neutrals.py, from the clean base tree, and the change arm after -- so the pair isolates this member and nothing else.",
+    "matched_grid_verification": {
+      "per_arm": "The instrument's own assertion: zero rejected steps AND final_time within 1e-9 relative of 4000*dt, checked on each arm.",
+      "cross_arm": "'matched grid confirmed: both arms end at t=0.0004700000000000171 (bit-identical)'",
+      "result": "MATCHED"
+    },
+    "arms": [
+      {"role": "reference (pre-change, base tree)", "file": "scripts/r3vbar_ref.npz"},
+      {"role": "change (post-change)", "file": "scripts/r3vbar_chg.npz"}
+    ],
+    "measured_footprint": {
+      "verdict": "MOVED",
+      "artifact": "scripts/r3vbar_battery_compare.log",
+      "per_field": [
+        {"field": "n",  "max_rel": 0.0002109071,  "rms_rel": 0.000128195,  "differing_cells": 71},
+        {"field": "nn", "max_rel": 0.0006870925,  "rms_rel": 0.0003017014, "differing_cells": 72},
+        {"field": "M",  "max_rel": 0.0158396,     "rms_rel": 0.001937856,  "differing_cells": 71},
+        {"field": "Ee", "max_rel": 0.0002408432,  "rms_rel": 0.0001404875, "differing_cells": 71},
+        {"field": "Ei", "max_rel": 0.0003050117,  "rms_rel": 0.0001748246, "differing_cells": 71},
+        {"field": "Te", "max_rel": 0.0001008212,  "rms_rel": 6.011391e-05, "differing_cells": 71},
+        {"field": "Ti", "max_rel": 0.0002160865,  "rms_rel": 0.0001095456, "differing_cells": 71},
+        {"field": "t_end", "max_rel": 0.0, "note": "bit-identical, as the matched grid requires"}
+      ],
+      "nn_reading": "THE PREDICTED MOVER, AND IT MOVED. nn is the only field differing in ALL 72 cells (every other field differs in 71 of 72), which is what a change to the neutral transport coefficients themselves should look like: the neutral model is active pre-breakdown, so unlike sub-event 1b -- where nn moved least -- here the neutral field carries the perturbation first and most broadly.",
+      "largest_row_characterized": {
+        "field": "M",
+        "max_rel": 0.0158396,
+        "diagnosis": "SMALL-DENOMINATOR ARTIFACT, not a physical outlier. The argmax is cell 16, where M_ref = -1.275305e-07 against a field scale max|M| = 7.3228e-06 -- i.e. the cell sits at 1.7% of the field maximum, near a sign change. Normalizing the same deviation on the field scale instead gives max|dM| / max|M| = 2.807e-04, in line with every other field (nn's equivalent is 3.369e-04). The rms_rel of 1.94e-03 is likewise two orders below the raw max.",
+        "precedent": "The identical row was characterized the identical way at R3 sub-event 1b, where M was also the largest ratio (1.044x prior)."
+      }
+    },
+    "defect_rule": {
+      "rule_as_registered": "x10 against the prior. The prior is ~3.3e-3 direct on vbar-fed channels (the relative change in vbar itself). Halt-and-report on any smooth observable exceeding 10x prior. Never widen.",
+      "prior": 0.003305209005061,
+      "x10_bar": 0.03305209005061,
+      "adjudication": [
+        {"field": "n",  "max_rel": 0.0002109071, "ratio_to_prior": 0.064, "verdict": "ok"},
+        {"field": "nn", "max_rel": 0.0006870925, "ratio_to_prior": 0.208, "verdict": "ok"},
+        {"field": "M",  "max_rel": 0.0158396,    "ratio_to_prior": 4.792, "verdict": "ok"},
+        {"field": "Ee", "max_rel": 0.0002408432, "ratio_to_prior": 0.073, "verdict": "ok"},
+        {"field": "Ei", "max_rel": 0.0003050117, "ratio_to_prior": 0.092, "verdict": "ok"},
+        {"field": "Te", "max_rel": 0.0001008212, "ratio_to_prior": 0.031, "verdict": "ok"},
+        {"field": "Ti", "max_rel": 0.0002160865, "ratio_to_prior": 0.065, "verdict": "ok"}
+      ],
+      "DISPOSITION": "ADJUDICATED ON EVERY ROW, NO FLAG RAISED, NO BAR MOVED. Every field sits below the x10 bar of 3.305e-02. The largest row is M at 4.792x the prior -- and that row is the small-denominator artifact characterized above; on the field-scale normalization it is 0.085x the prior. Six of seven fields sit at or below 0.21x the prior.",
+      "prediction_vs_measurement": "The brief predicted REAL movement on nn this time, unlike 1b, because the neutral model is active pre-breakdown. HELD: nn is the only field perturbed in every cell. It also came in BELOW the direct prior (0.21x) rather than at it, which is the expected signature of a conductance change that has had only 0.47 ms to propagate."
+    },
+    "HORIZON_LIMITATION": "4,000 accepted steps = 0.47 ms is the PRE-BREAKDOWN foot only. This battery measures where the change enters, not what it does to the discharge or the afterglow. The full-cycle contribution is what the golden-control pair below is for, and the authoritative statement of it will be the R3-tip recapture."
+  },
+
+  "golden_control": {
+    "instrument": "The standing 27gl golden-CONTROL: run the COMPILED golden at the branch tip AND at the branch base, serially, and diff the transcripts. Neither side can pass -- the committed fixture is already stale at the base, because R3 sub-event 1b moved the trajectory before this member existed. The DELTA between the two failing transcripts, beyond the provenance line, IS this member's full-cycle contribution, and that difference is the measurement.",
+    "why_this_replaces_a_pass_fail_golden": "A pass/fail fixture gate has nothing to say about a change whose whole point is that the trajectory moves. The control pair converts the same run into a differential measurement.",
+    "protocol": {
+      "serialization": "SERIAL, per the AGENTS.md machine-wide 'never two goldens at once' rule. The tip arm additionally WAITED for a third party's golden to clear the lane before starting (waiter in a script file with a bracketed pgrep pattern, per the self-match rule); the base arm started only after the tip arm had written its exit sidecar.",
+      "matched_conditions": "Both arms: CABLP_COMPILED_KERNELS=1, the SAME in-worktree .so, KERNEL_ID probed in-process, and the same asserted cablp import path. The .pyx is untouched by this member, so one build serves both endpoints.",
+      "base_arm_tree_check": "The base arm asserted in-process that the tree it was about to run still carried the old form: \"BASE neutral_thermal_speed carries m_p form : True\"."
+    },
+    "tip_arm": {
+      "tree": "branch tip, commit 1 ([r3-vbar-mass], the post-change tree)",
+      "command": "CABLP_COMPILED_KERNELS=1 PYTHONPATH=<worktree> python scripts/baseline_sim1d.py --verify",
+      "exit_code": 1,
+      "transcript_verbatim": [
+        "TIP IMPORT OK: /home/trloo/bapsf/bapsf-transport/.claude/worktrees/agent-a964cde856e7e60d8/cablp/__init__.py",
+        "TIP KERNEL_ID = cython/_cathode_kernels_cy/tierA+csda",
+        "provenance: kernels=cython/_cathode_kernels_cy/tierA+csda",
+        "MISMATCH time grid: max|dt|=1.058e-08 s",
+        "MISMATCH trajectory: max_abs=1.137e+11 max_rel=2.000e+00",
+        "baseline verify FAIL: saves=2620, exact=False, max_rel=2.000e+00, max_abs=1.137e+11, time_max_abs=1.058e-08 s (rtol=1.0e-09, atol=0.0e+00)",
+        "TIP_EXIT=1"
+      ],
+      "artifact": "scripts/r3vbar_golden_tip.log"
+    },
+    "base_arm": {
+      "tree": "508462f (branch base, the pre-change tree), checked out detached in the same worktree",
+      "command": "CABLP_COMPILED_KERNELS=1 PYTHONPATH=<worktree> python scripts/baseline_sim1d.py --verify",
+      "exit_code": 1,
+      "transcript_verbatim": [
+        "BASE IMPORT OK: /home/trloo/bapsf/bapsf-transport/.claude/worktrees/agent-a964cde856e7e60d8/cablp/__init__.py",
+        "BASE KERNEL_ID = cython/_cathode_kernels_cy/tierA+csda",
+        "BASE neutral_thermal_speed carries m_p form : True",
+        "provenance: kernels=cython/_cathode_kernels_cy/tierA+csda",
+        "MISMATCH time grid: max|dt|=1.634e-08 s",
+        "MISMATCH trajectory: max_abs=6.303e+10 max_rel=2.000e+00",
+        "baseline verify FAIL: saves=2620, exact=False, max_rel=2.000e+00, max_abs=6.303e+10, time_max_abs=1.634e-08 s (rtol=1.0e-09, atol=0.0e+00)",
+        "BASE_EXIT=1"
+      ],
+      "artifact": "scripts/r3vbar_golden_base.log"
+    },
+    "the_delta": {
+      "expectation_as_registered": "FAIL both sides vs the stale fixture, numbers differing.",
+      "outcome": "MET on both halves: both arms exit 1 with exact=False, and every mismatch magnitude differs between them.",
+      "saves": {"base": 2620, "tip": 2620, "delta": 0, "reading": "UNCHANGED. The full cycle still reaches the same number of saved states, so this member does not move the run length or the phase structure -- it perturbs the trajectory within an unchanged schedule."},
+      "trajectory_max_abs": {"base": 6.303e+10, "tip": 1.137e+11, "ratio_tip_over_base": 1.8039, "reading": "THE MEMBER'S FULL-CYCLE CONTRIBUTION. The tip sits 1.80x further from the stale fixture than the base does in absolute trajectory terms -- the same direction of departure, roughly doubled. The units are the fixture's own state units; this is a distance-from-a-stale-reference, NOT a physical error."},
+      "time_grid_max_abs_s": {"base": 1.634e-08, "tip": 1.058e-08, "ratio_tip_over_base": 0.6475, "reading": "DECREASED, i.e. the tip's adaptive time grid sits CLOSER to the fixture's than the base's does. This is a genuine sign difference between the two channels and is not evidence that the member is small: the timestep selector is a threshold device, so its distance from a stale reference is not monotone in a perturbation."},
+      "max_rel": {"base": 2.0, "tip": 2.0, "reading": "SATURATED ON BOTH SIDES and therefore carries NO information here. 2.000e+00 is the ceiling of the symmetric relative measure (reached where a compared pair straddles zero or one side vanishes); it was already at the ceiling at the base. Do not read the equality of these two numbers as agreement between the arms -- the max_abs and time-grid rows are the informative ones."}
+    },
+    "DISPOSITION": "MEASURED, NOT GATED. Both arms failed as pre-registered; the failure is the instrument working, not a defect. No fixture, stance or baseline was touched or regenerated to make anything pass. The authoritative post-change reference is the single R3-tip recapture, which this member rides."
+  },
+
+  "scope_discipline": {
+    "files_changed": ["cablp/solvers/_sim1d/physics/neutrals.py", "restructure/manifests/r3_vbar_mass_unify.json"],
+    "not_touched": "scripts/baselines/, scripts/stances/ and scripts/data/ untouched -- no fixture, stance or corpus was regenerated. cablp/cathode/beam_deposition.py and scripts/deposit_beam_reference.py untouched (owned by a concurrent lane-march coder). No signature was refactored, no caller was edited, no validator was removed, and no verification pass beyond the pre-registered gates was added.",
+    "companion_member": "The same branch carries a second, SEPARATE commit -- [h-quarantine], numerics-inert -- recorded in restructure/manifests/h_quarantine.json. The two are deliberately not squashed."
+  },
+
+  "knowledge_base_impact": {
+    "protocol": "knowledge-base/notes/CLAUDE_INTEGRATION.md",
+    "classification": "CHANGED -- an equation constant and a stated convention.",
+    "what_changed": "The neutral mean thermal speed now carries the true helium-4 atom mass instead of 4*m_p. vbar_n rises 0.3305%, and with it every free-molecular neutral transport coefficient derived from it. The '_sim3 convention' is RETIRED as a live convention in this package; per the ruling this was the LAST known mass approximation in the package.",
+    "sources": [
+      "cablp/solvers/_sim1d/physics/neutrals.py -- the function's docstring is the owning source for what mass this <v> reads and when the mass-number form was retired.",
+      "cablp/constants.py:29 -- m_He_cgs remains the single owning source for the helium mass value.",
+      "restructure/manifests/r3_vbar_mass_unify.json (this file) -- the caller map, the census, the battery adjudication and the golden-control measurement."
+    ],
+    "terminology": "'mass-number approximation' and 'per-gas-constant principle' are used as at sub-event 1b; no new term is coined.",
+    "downstream_effects": "Knudsen face conductances, the anode-mesh/baffle orifice conductance, the two-zone exchange conductance, and the wall and pump timescales built on them all scale linearly in v_th and each move +0.3305% at fixed geometry. The golden fixture, the 4k digest reference and any score quoted against them are stale until the R3-tip recapture -- which was already the case at this member's base, since sub-event 1b moved them first.",
+    "disposition": "Orchestrator to log against 27gm. NOT closed by this member: the R3-tip recapture, which is the event that makes the new trajectory the reference."
+  }
+}

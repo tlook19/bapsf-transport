@@ -7,16 +7,54 @@ from ..core.state import ConservativeState1D, neutral_energy_floor
 from .puff_orifice import launch_row_for_grid
 from .sources import neutral_wind_velocity
 from cablp.numerics.interp import interp_scalar_fused
-from cablp.constants import kb_cgs, m_p_cgs
+from cablp.constants import kb_cgs, m_He_cgs
 
 
 def neutral_thermal_speed(Tn_K, mu_neutral):
-    """Return neutral thermal speed [cm/s] using the _sim3 convention."""
+    """Return the neutral mean thermal speed ``sqrt(8 k Tn / (pi m))`` [cm/s].
+
+    The mass is ``constants.m_He_cgs``, the true helium-4 atom mass. The solver
+    is helium-only, so the neutral this speed belongs to IS a He atom and the
+    per-gas constant is read directly rather than reconstructed from a mass
+    number. The mass-number approximation ``mu_neutral * m_p_cgs`` that stood
+    here -- the ``_sim3`` convention -- was RETIRED at R3 sub-event 1d,
+    2026-08-27: it overstates the atom mass by 0.662% (neglecting the helium
+    binding-energy mass defect and the proton/neutron mass difference), which
+    understated this speed by 0.330%.
+
+    This is the single ``<v>`` the free-molecular neutral channels run on --
+    the Knudsen face conductances, the two-zone exchange conductance and the
+    orifice terms built from them all take it from here -- so they cannot
+    disagree about how fast the gas is, and they now agree with the ion-side
+    ``vbar_n`` in :mod:`.sources`, which already carried ``m_He_cgs``.
+
+    Parameters
+    ----------
+    Tn_K : float or array
+        Neutral temperature [K]. Must be positive.
+    mu_neutral : float
+        Neutral mass number. Accepted for signature uniformity with the
+        neutral-transport call chain that threads it (see
+        :func:`knudsen_flow_coefficients`) and NOT used in this formula: the
+        mass is taken from ``m_He_cgs`` directly. It is still validated, so a
+        nonsense value stays loud rather than becoming a silently inert
+        control.
+
+    Returns
+    -------
+    float or array
+        Neutral mean thermal speed [cm/s].
+
+    Raises
+    ------
+    ValueError
+        If ``Tn_K`` or ``mu_neutral`` is not positive.
+    """
     if Tn_K <= 0.0:
         raise ValueError(f"Tn_K must be positive (got {Tn_K})")
     if mu_neutral <= 0.0:
         raise ValueError(f"mu_neutral must be positive (got {mu_neutral})")
-    return np.sqrt(8.0 * kb_cgs * Tn_K / (np.pi * mu_neutral * m_p_cgs))
+    return np.sqrt(8.0 * kb_cgs * Tn_K / (np.pi * m_He_cgs))
 
 
 def knudsen_flow_coefficients(
