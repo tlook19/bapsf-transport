@@ -708,13 +708,23 @@ def refuse_cathode_backscatter_double_book(input_dict):
     hands the kinetic gas. Armed together the surface pays twice for one
     backscatter.
 
-    Today the pair is unreachable through the model-family resolver: the
-    fluid jet is M_n momentum physics, ``neutral_momentum`` is refused under
-    ``neutral_model = "kinetic_dvm"``, and the resolver therefore clears
-    ``cathode_jet_surface_debit`` before this is asked. That is exactly why
-    the guard is written as its own statement about the PAIR rather than
-    left implicit in a prerequisite chain: relaxing the ``neutral_momentum``
-    refusal must not silently arm both books.
+    Today the pair is unreachable through the model-family resolver, and the
+    reason is DIRECT rather than inherited: ``cathode_jet_surface_debit`` is
+    itself a member of ``KINETIC_DVM_INCOMPATIBLE_DEFAULTS`` with required
+    value ``False``, and the resolver runs BEFORE the guards, so on any
+    ``neutral_model = "kinetic_dvm"`` config it has already set the debit to
+    ``False`` by the time this is asked. (The ``neutral_momentum`` /
+    ``cathode_neutral_jet`` chain is that member's WHY string, not the
+    mechanism -- the guard is not reached through it.) The refusal is in
+    fact unconditional here: the config template ships the debit ``True``
+    and the resolver requires ``False``, and the resolver reads "explicitly
+    set" as "differs from the template", so neither of a bool's two values
+    presents itself as a caller override -- both leave this looking at
+    ``False``. Measured, not reasoned: ``scripts/dacc_pairing_mechanism_probe.py``.
+
+    That is exactly why the guard is written as its own statement about the
+    PAIR rather than left implicit in a prerequisite chain: relaxing any part
+    of that resolver membership must not silently arm both books.
     """
     if not bool(input_dict.get("neutral_kinetic_dvm_cathode_jet", False)):
         return

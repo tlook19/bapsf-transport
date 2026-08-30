@@ -2128,8 +2128,10 @@ class LAPDSim1D:
                     "cathode_cleaning_sigma_cm2 must be non-negative"
                 )
             self._cathode_theta = 1.0
-        # Per-shot surface energy ledger [J] (power_balance only): running
-        # integrals of the balance terms over accepted steps. The net
+        # Per-shot surface energy ledger [J]: running integrals of the
+        # balance terms over accepted steps. These FIVE rows are
+        # power_balance only and stay zero otherwise (the presence-gated
+        # backscatter row added just below is not -- see its own note). The net
         # (heater + ion - rad - emis - cond) is the shot's unreturned
         # energy into the emitting skin; cond is what the heater-held
         # substrate absorbed -- the quantity Tom's open-loop-heater drift
@@ -5883,12 +5885,15 @@ class LAPDSim1D:
             )(self._circuit_I_loop)
         # B5: the backscatter row of the surface energy ledger, booked on
         # EVERY accepted step the channel counted on -- not only on the ones
-        # whose warming branch runs. A run whose surface temperature is a
-        # fixed reservoir still gives the energy up; there is simply no
-        # temperature for it to come out of, exactly as the fluid channel's
-        # retention factor is inert outside ``power_balance``. Booking the
-        # row regardless is what makes that convention MEASURED rather than
-        # remembered, and it is what carries the cumulative identity
+        # whose warming branch runs. What the row measures is what left WITH
+        # THE ATOMS, and that happens on every such step. Whether the SURFACE
+        # gives it up is a separate question with a different answer: only
+        # ``power_balance`` evolves T_s, so outside it the cathode is a fixed
+        # reservoir and gives up nothing -- there is no temperature for the
+        # debit to come out of -- exactly as the fluid channel's retention
+        # factor is inert outside ``power_balance``. Booking the row
+        # regardless is what makes that gap MEASURED rather than remembered,
+        # and it is what carries the cumulative identity
         #     backscatter row == sum of the ticks' birth_cathode_jet energy
         #                        + R_E * the not-yet-ticked accumulator
         # against the kinetic arm's own ledger.
@@ -10867,8 +10872,11 @@ class LAPDSim1D:
                     ),
                 }
             ),
-            # Cumulative surface energy ledger [J] (power_balance warming
-            # only; zeros otherwise). See _cathode_energy_ledger_J.
+            # Cumulative surface energy ledger [J]. The heater/ion/rad/emis/
+            # cond rows are booked inside the power_balance warming branch
+            # and stay zero otherwise; the presence-gated backscatter row is
+            # booked on every accepted step the DVM cathode jet counted on,
+            # warming model or not. See _cathode_energy_ledger_J.
             **{
                 f"warming_E_{k}_J": float(v)
                 for k, v in self._cathode_energy_ledger_J.items()

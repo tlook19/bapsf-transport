@@ -619,16 +619,152 @@ inside `v_fine`. Refining to 96x32 takes the temperature offset to 8.4e-3 while
 the density split converges to ~2.1e-2. Recorded by
 `scripts/verify_sim1d_k2_dvm.py`, gate L4.
 
-**`neutral_kinetic_dvm_accommodation = 1.0` — ASSUMED, boxed.** Thermal
-accommodation coefficient of the chamber surfaces. Unity reproduces the
-assumption the fluid neutral model already makes everywhere (every wall return
-is a 300 K re-emission), so the arm's default introduces no new surface
-physics and the arm is comparable to the moment model on this axis. It is a
-surface property, never a fit parameter: it is not to be adjusted to move a
-residual. Honest bar: helium on technical (unbaked, oxidized) stainless steel
-is reported well below unity in the literature, so unity is the conservative
-END of a bracket, not a measurement. The incomplete-accommodation arm is the
-A/B; where data cannot pin the coefficient, the bracket over it is the claim.
+**`neutral_kinetic_dvm_accommodation = 0.40`, bracket `[0.35, 0.46]` —
+MEASURED (literature-boxed).** The thermal (energy) accommodation coefficient
+`alpha_E` of the vessel's room-temperature technical-metal surfaces, read at
+the cylinder and the end plates of the transient DVM.
+
+**It is the SAME physical quantity, from the SAME box and the same literature
+lineage, as `neutral_energy_wall_accommodation` in `physics_fit_defaults`
+below** — the value, the three boxing sources (SAND2005-6084; Trott,
+Castañeda, Torczynski, Gallis & Rader, *Rev. Sci. Instrum.* **82**, 035120
+(2011), Table I; Zampella *et al.*, PATRAM 2019; with the Song & Yovanovich
+(1987) correlation at the centre), the span-of-reported-values bracket
+`[0.35, 0.46]` and the honest bar `±0.06` are that entry's and are not
+restated here. Read it there.
+
+That the DVM key and the fluid key denote one coefficient rather than two
+similarly-named ones is a MEANING PIN, established as its own event
+(the B3 meaning-pin, 2026-08-30) before any value moved. The default was
+carried at `1.0` until the adoption ruling of 2026-08-30 — full
+accommodation, chosen so the arm reproduced the fluid neutral model's
+everywhere-300 K re-emission and was comparable to it on this axis. That
+was a comparability stance, not a measurement, and it sat at the
+conservative END of the box rather than inside it. The adoption puts the
+DVM path on the literature-boxed value, so the two paths now agree on the
+number as well as on the meaning.
+
+**Application condition, and where it differs from the fluid comparator.**
+The DVM kernel applies this single coefficient UNIFORMLY to every wall
+incidence, including the 1-5 eV charge-exchange tail: it makes no
+distinction by incident energy. The fluid entry's stated caveat therefore
+binds here identically and with the same force — the equilibrium-gas
+measurements behind `[0.35, 0.46]` are 300 K measurements, energetic helium
+on clean metal is reported near `0.07-0.09`, and a single coefficient
+over-accommodates the CX tail. The two paths reach that shared limitation
+by different routes, and the difference is worth stating: the fluid
+comparator's convention deposits the FULL excess for the hot channel,
+whereas here the non-accommodated `(1 - alpha_E)` share is returned at the
+incident energy on a spectrum `neutral_kinetic_dvm_wall_reflection`
+selects. Under `alpha_E = 1` that share was empty and the distinction did
+not arise; at `0.40` it carries 60 % of every wall encounter, so the
+reflection selector below stops being decorative at the same moment this
+value moves.
+
+Never a fit parameter: it is a surface property and is not to be adjusted to
+move a residual. Where data cannot pin it, the bracket over it is the claim.
+
+**`neutral_kinetic_dvm_wall_reflection = "specular"` — ASSUMED (structural:
+a closure family, not a value).** The spectrum the non-accommodated
+`(1 - alpha_E)` share is returned on at the cylindrical wall. This is not a
+number that could be measured and rounded; it is a choice of which limiting
+kernel stands in for a real surface's angular response, and the honest object
+is the FAMILY, not the default.
+
+The two shipped values BRACKET the tangential-momentum accommodation
+coefficient. `"specular"` returns the share in its incident bin — on the
+axisymmetric `(v_z, v_perp)` grid a specular reflection off the cylinder
+reverses only the unresolved radial component, so the share keeps its energy
+AND its axial momentum: TMAC = `alpha_E`, the floor, the surface randomizing
+nothing it did not also accommodate. `"diffuse_elastic"` returns the same
+count on a cosine spectrum whose discrete mean energy equals the retained
+share's own incident mean energy, carrying zero net axial momentum: TMAC = 1,
+the ceiling, the surface randomizing direction while exchanging no energy.
+Real technical surfaces lie between, so **TMAC ∈ [`alpha_E`, 1] is the
+bracket and the bracket is the claim** — a result under this arm states which
+value it ran.
+
+Honest bar: the default is the FLOOR of that bracket, not its centre, and it
+is a placeholder rather than an adjudicated choice. It is **under active
+literature verification as of 2026-08-30** (TMAC for helium on technical
+stainless), and the ruling that opened this adoption explicitly held the
+default at `"specular"` pending that verification. Until it lands, do not
+read the default as a statement about the surface — run the pair.
+
+Structurally inert until it can matter: the two values degenerate at
+`alpha_E = 1`, where there is no share to place, so on every run before the
+accommodation adoption above this selector was a no-op by construction.
+
+**`neutral_kinetic_dvm_cathode_jet = False` — ASSUMED (structural: a
+default-off channel).** Whether the transient DVM splits the counted cathode
+recycle into an energetic backscatter share and a thermal remainder. Off is
+the shipped reading — every recycled atom leaves on the thermal cosine
+half-flux at the live surface temperature — and off is a CLOSURE the model
+makes, not a measurement: an ion falling through the cathode sheath arrives
+with `phi_c + Ti` and a real share of that flux returns as backscattered
+atoms rather than being implanted and desorbing at the wall temperature. The
+default is default-off because the channel is new physics under the standing
+rule (default off, presence-gated, bit-exact off), not because thermal
+re-emission is the better physics. The physics it adds is in `MODEL.md`
+§ "Cathode-side energetic recycle"; its A/B is the pair of arms.
+
+**`neutral_kinetic_dvm_cathode_jet_R_N = 0.34`,
+`neutral_kinetic_dvm_cathode_jet_R_E = 0.18` — ASSUMED (mid-box
+construction), bracket = the two endpoint PAIRS.** Particle and total
+reflected-energy coefficients for He -> LaB6 at the cathode, read only when
+the channel above is armed.
+
+**These MIRROR the fluid channel's `cathode_jet_R_N` / `cathode_jet_R_E`
+exactly, by construction, so the two arms describe the SAME surface** — the
+Eckstein IPP 9/132 200 eV two-endpoint box, its mid-box default, the
+correlated-pairs rule (never four independent corners) and the stated
+La-termination skew are that entry's and are not restated here. Read it
+there. A campaign that moves one of the two pairs and not the other has
+stopped comparing two closures of one surface and is comparing two surfaces;
+that is a finding, not a configuration.
+
+Honest bar: the fluid entry's, unchanged. What the kinetic arm adds is not a
+better coefficient but a better carrier — the backscattered atoms are born as
+a directed population on the velocity grid and are transported and attacked by
+the loss channels as the energetic atoms they are, instead of depositing tens
+of eV into one cell's cold fluid temperature.
+
+**`neutral_kinetic_dvm_cathode_jet_T_launch_eV = None` (grid-tied) —
+DERIVED (numerics, not physics).** The width of the smear the monoenergetic
+backscatter beam is represented by on the discrete velocity grid. `None` ties
+it to the grid: the axial bin containing the launch speed, expressed as a
+temperature, `m dv_z(v_back)^2 / k_B` — the narrowest spectrum the grid
+resolves there. It is NOT a gas temperature; the launch spectrum's drift is
+solved from the ENERGY, so the discrete mean energy is the launch energy
+whatever this is set to, and what it changes is only how wide a bundle of bins
+carries it. A positive float pins it instead, as an A/B instrument.
+
+**FALSIFICATION ON RECORD — the registration's fixed 0.18 eV pin is FALSE.**
+The B5 registration named the grid-tied smear as `≈ 0.18 eV at the (64, 24)
+grid`, as though it were one number. It is not: the smear is
+LAUNCH-ENERGY-DEPENDENT, because the stretched axis's bin width is. Measured
+at base (`scripts/b5cj_t_launch_probe.txt`, the pin measured on the
+unmodified tree before it could be gated on): at (64, 24) the grid-tied smear
+runs `8.60 eV` at a 100 eV launch, `2.38 eV` at 32 eV, `1.01 eV` at 10 eV and
+`0.18 eV` only near a 2 eV launch — so `0.18 eV` is one point of a curve, and
+the production cathode-sheath band (`phi_c + Ti ≈ 189 eV`, so
+`(R_E/R_N)(phi_c + Ti) ≈ 100 eV` per backscattered atom) sits two orders away
+from it. Holding the smear FIXED at 0.18 eV misses the target energy by
+`6.9e-2` relative at a 100 eV launch on that grid, against the `1e-10` the
+cross-book needs; the grid-tied value hits it at roundoff
+(`≤ 4.1e-16`, every launch) on the shipped `(48, 12)` grid and on `(64, 24)`.
+The grid-tied default is therefore the DERIVED choice and the 0.18 eV figure
+must not be quoted as its value.
+
+*Stated rather than smoothed:* the same probe's `(96, 24)` row shows the
+grid-tied smear missing by `6.4e-03` at a 100 eV launch — the moment
+compensation losing its two-basis solve on the finest axis, not a property of
+the tie. It is out of the shipped configuration and is recorded here so the
+"roundoff across the band" claim above is read at the grids it was measured
+on.
+
+This entry is where that falsification lives. It was previously recorded only
+in commit messages, which `RULE_KB_IMPACT` does not accept as a fact's home.
 
 **`neutral_kinetic_dvm_elastic = "phelps_iso"` — DERIVED.** Whether the
 polarization-elastic ion-neutral channel is carried alongside charge exchange.

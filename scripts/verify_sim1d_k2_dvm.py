@@ -4555,13 +4555,16 @@ def gate_cj4():
     """The two cathode backscatter books cannot be armed together.
 
     The pairing refusal, tested as its own statement rather than through the
-    model-family resolver. Today the resolver clears
-    ``cathode_jet_surface_debit`` before the guard is reached -- the fluid
-    jet is M_n momentum physics and ``neutral_momentum`` is refused under
-    this arm -- so a refusal gate driven through ``LAPDSim1D`` would be
-    testing the resolver. The guard is called directly instead, on the pair
-    and on each half alone, so it stays a live statement about the PAIR if
-    that prerequisite chain is ever relaxed.
+    model-family resolver. ``cathode_jet_surface_debit`` is its own member of
+    ``KINETIC_DVM_INCOMPATIBLE_DEFAULTS`` with required value ``False``, and
+    the resolver runs before the guards, so the guard sees ``False`` on every
+    config this arm can be built from -- and unconditionally so, since the
+    template ships the debit ``True`` while the resolver reads "explicitly
+    set" as "differs from the template". A refusal gate driven through
+    ``LAPDSim1D`` would therefore be testing the resolver rather than the
+    guard. The guard is called directly instead, on the pair and on each half
+    alone, so it stays a live statement about the PAIR if that resolver
+    membership is ever relaxed.
     """
     both = {
         "neutral_kinetic_dvm_cathode_jet": True,
