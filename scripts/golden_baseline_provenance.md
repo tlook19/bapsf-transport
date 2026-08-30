@@ -188,6 +188,56 @@ closure stress, deliberately not addressed by this pass.
 
 ## Recapture record
 
+**2026-08-30 — NON-RECAPTURE STANCE-FILE EVENT: `g1atrim.toml` migrated to
+declaration-block FORM. NOTHING WAS RECAPTURED.** This entry exists because the
+stance file is a golden input and this record is where a reader looks when it
+changes; it is filed here so that a future `git log` on
+`scripts/stances/g1atrim.toml` showing a large diff on this date does not read
+as an unrecorded stance change.
+
+**No value moved.** The file was rewritten from a flat delta into two flat
+tables plus four `[models.*]` declaration blocks — `beam_tail_closure` (22
+members), `cathode_surface_recycle` (6), `anode_surface_recycle` (5) and
+`initial_neutral_state` (12). A block is an INVENTORY, so it states members the
+flat stance never named; every one of those was written AT ITS `default_config()`
+VALUE, which is what makes the projection inert. The two neutral-closure
+families are undeclarable at this stance (their selectors are not engaged: it
+runs `neutral_model = "moment"`, `neutral_momentum_radial = "uniform"`) and stay
+implicit. See `cablp/solvers/_sim1d/CONFIG_DECLARATIONS.md` for the form.
+
+**No fixture, sidecar or digest reference was touched.** `scripts/baselines/` is
+untouched; there was no `--capture`; `steps`, `saves`, `final_time`, the NPZ and
+sidecar `sha256` and both digest hashes all stand as the 2026-08-28 entry below
+records them.
+
+MEASURED EVIDENCE (all at the migration tip, each with in-process import
+provenance asserting the worktree and, where the compiled path is claimed,
+`KERNEL_ID`):
+
+| gate | quantity | result |
+|---|---|---|
+| G0 `g1atrim_blockform_delta_check.py` | the stance DELTA before vs after | 35 base entries preserved, 0 violations; 32 keys added, 0 not at their config default |
+| G1 `declm_route_identity.py` | resolved surface of 7 representative routes | **ALL ROUTES IDENTICAL** — `golden` `413c8d0c…`, `stance_g1atrim` `261d5469…`, `m6_es1` `c084b91b…`, `default` `cbf51a31…`, `ka1c` `7d1d7287…`, `k2_dvm`/`b0c` `e8bd6263…` |
+| G3 `golden_digest_gate.py` (pure) | golden config identity + every accepted step to 4,000 | `config_identity=fcc61568a6b11673110cc22feaacf2e8b6f496e97a24fc0d302802d9378509de` UNCHANGED; `digest gate OK: steps=4000, digest=cb54b74a34cbee055612d404abb44ba4522bea11316044556fa43c83a75b2ae2, exact=True` |
+| G4 `baseline_sim1d.py --verify` (compiled) | the full saved trajectory | see the transcript line below |
+| G5 `smoke_sim1d.py` | assertion suite, built extension | exit 0, five compiled-kernel-equivalence cases `ok … final state bit-identical` |
+
+The G1 row is the load-bearing one: the `golden` route IS
+`build_baseline_config()`, so its digest holding fixed says the golden's own
+configuration did not move, independently of running the golden.
+
+G4 transcript (compiled path, `CABLP_COMPILED_KERNELS=1`):
+
+```
+[gaterun] cablp.__file__ = <worktree>/cablp/__init__.py
+[gaterun] KERNEL_ID = cython/_cathode_kernels_cy/tierA+csda
+provenance: kernels=cython/_cathode_kernels_cy/tierA+csda
+baseline verify OK: saves=2620, exact=True, max_rel=0.000e+00, max_abs=0.000e+00, time_max_abs=0.000e+00 s (rtol=1.0e-09, atol=0.0e+00)
+```
+
+`saves=2620` is the sidecar's own count, unchanged. `max_rel` and `max_abs` are
+both exactly zero: the trajectory is bit-identical, not merely within tolerance.
+
 **2026-08-28 — THE R3-TIP RECAPTURE: the six-member R3 reimplementation window
 closed in one anchor event (AUTHORIZED recapture; the R3 build set was ratified
 member by member across 2026-08-27 and the Tier C continuity pair passed all
