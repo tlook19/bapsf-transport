@@ -155,7 +155,16 @@ compatibility check refuses instead.
 | `_cathode_theta` | `_accept_step_attempt` (`solver.py:3702`) | CARRIED |
 | `_cathode_f_em` | `_advance_emitting_area_fraction`, from `_accept_step_attempt` | CARRIED (armed only) |
 | `_cathode_energy_ledger_J` | `_accept_step_attempt` (`solver.py:3629-3634`) | CARRIED |
+| `_anode_energy_ledger_J` | `_accept_step_attempt`, B4 anode jet | CARRIED (armed only) |
 | `_cathode_warming_model`, `_cathode_surface_ion_retention` | construction | DERIVABLE |
+
+`_anode_energy_ledger_J` is the anode mesh's own cumulative surface energy book
+(`ion_incident`, `backscatter`), and exists only while
+`neutral_kinetic_dvm_anode_jet` is armed. Like the cathode ledger it is
+CARRIED rather than derivable — it is an integral over accepted steps — and
+like `_cathode_f_em` it is PRESENCE-GATED, so a payload from a run without the
+channel carries no such rows and payloads written before the channel existed
+stay readable.
 
 `_cathode_f_em` is the emitting-area closure's whole state — the lit fraction
 of the cathode face. It rides the **`cathode` group** and is written and read

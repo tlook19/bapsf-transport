@@ -1069,6 +1069,58 @@ def model_mode_defaults():
         raises at the tick rather than launching at the wrong energy. Read
         only when ``neutral_kinetic_dvm_cathode_jet`` is on; must be ``None``
         or positive.
+    neutral_kinetic_dvm_anode_jet:
+        Whether the transient DVM splits the counted anode-mesh collection
+        into an ENERGETIC BACKSCATTER share and a thermal remainder. Off,
+        every neutralized ion leaves the mesh at rest on the wall
+        distribution in the cell it was counted into, which is the shipped
+        reading. On, the ``neutral_kinetic_dvm_anode_jet_R_N`` share is
+        instead born as a directed volume birth in that same cell, carrying
+        ``(R_E/R_N)(phi_a + Ti)`` of kinetic energy per atom -- the
+        ``"total_reflected"`` reading of the reflection coefficients -- and
+        directed AWAY from the mesh on the side it was collected from, which
+        is the fluid channel's own placement rule. The remainder keeps the
+        thermal rebirth. Wire-INTERCEPTED neutrals are untouched: they keep
+        the at-rest re-emission, and the axial momentum they arrived with is
+        booked to the structure as a named diagnostic row. Inert unless
+        ``neutral_model = "kinetic_dvm"``; arming it under any other neutral
+        model raises at construction, as does arming it with no cathode
+        solve to read ``phi_a`` from, or on a geometry whose anode mesh is
+        not exactly one face. A standing guard refuses it together with the
+        fluid channel's ``anode_neutral_jet``, which would re-emit the same
+        collected stream directed a second time; that guard is unreachable
+        through this model selection -- the fluid jet is its own member of
+        the kinetic_dvm family resolver -- and is kept as a live statement
+        about the PAIR against a future relaxation of that membership.
+    neutral_kinetic_dvm_anode_jet_R_N:
+        Particle reflection coefficient of the transient DVM's anode
+        backscatter: the share of the collected ion flux that returns as
+        energetic neutrals rather than being implanted and desorbing at
+        rest. Read only when ``neutral_kinetic_dvm_anode_jet`` is on, and
+        required there to satisfy ``0 < R_E <= R_N < 1``.
+    neutral_kinetic_dvm_anode_jet_R_E:
+        TOTAL reflected energy fraction of that same channel: reflected
+        energy over incident energy, summed over all particles. The ``R_N``
+        backscattered atoms carry all of it, so each leaves with ``R_E/R_N``
+        of the incident ``phi_a + Ti``, and the anode energy book records
+        exactly ``R_E`` of the ion bombardment energy the same particles
+        delivered as having left with them. Read only when
+        ``neutral_kinetic_dvm_anode_jet`` is on.
+    neutral_kinetic_dvm_anode_jet_T_launch_eV:
+        NUMERICS parameter of that channel: the width of the smear the
+        monoenergetic backscatter beam is represented by on the discrete
+        velocity grid. ``None`` ties it to the grid -- the axial bin
+        containing the launch speed, expressed as a temperature -- which is
+        the narrowest spectrum the grid resolves there and the value the
+        channel is specified at; a positive float pins it instead, as an A/B
+        instrument. It is not a physical gas temperature: the launch
+        spectrum's drift is solved from the ENERGY, so the spectrum's
+        discrete mean energy is the launch energy whatever this is set to,
+        and what this changes is only how wide a bundle of bins carries it. A
+        spectrum this leaves too narrow or too fast for the grid to project
+        raises at the tick rather than launching at the wrong energy. Read
+        only when ``neutral_kinetic_dvm_anode_jet`` is on; must be ``None``
+        or positive.
     neutral_kinetic_dvm_tn_feedback:
         Whether the DVM's measured neutral temperature ``Tn(z)`` FEEDS the
         fluid evaluations that otherwise assume a fixed cold gas. The
@@ -1223,6 +1275,14 @@ def model_mode_defaults():
         "neutral_kinetic_dvm_cathode_jet_R_N": 0.34,
         "neutral_kinetic_dvm_cathode_jet_R_E": 0.18,
         "neutral_kinetic_dvm_cathode_jet_T_launch_eV": None,
+        # Anode-side energetic recycle, default OFF. The two reflection
+        # coefficients MIRROR the fluid channel's anode_jet_R_N /
+        # anode_jet_R_E so the two arms describe the same mesh; None ties
+        # the launch smear to the local velocity-grid bin:
+        "neutral_kinetic_dvm_anode_jet": False,
+        "neutral_kinetic_dvm_anode_jet_R_N": 0.63,
+        "neutral_kinetic_dvm_anode_jet_R_E": 0.41,
+        "neutral_kinetic_dvm_anode_jet_T_launch_eV": None,
         # None = "not named"; resolved to "exponential" by the arm, and
         # refused outright by every other neutral model, so the key can
         # never be a silently inert control:

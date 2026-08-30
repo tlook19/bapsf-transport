@@ -777,6 +777,79 @@ def refuse_dvm_cathode_jet_without_cathode_coupling(input_dict, flags):
     )
 
 
+def refuse_anode_backscatter_double_book(input_dict):
+    """Raise when both anode backscatter re-emissions are armed at once.
+
+    ``neutral_kinetic_dvm_anode_jet`` and the fluid ``anode_neutral_jet`` are
+    two independent directed re-emissions of the SAME collected stream: the
+    ions the anode mesh neutralizes. The fluid arm launches the ``R_N`` share
+    as a momentum source on ``M_n``; the DVM arm launches it as a directed
+    volume birth on the velocity grid and books the energy that left with it
+    against its own anode energy ledger. Armed together the mesh re-emits one
+    backscatter twice, once into each representation of the neutral gas.
+
+    Today the pair is unreachable through the model-family resolver:
+    ``anode_neutral_jet`` is M_n momentum physics, it is its own member of
+    ``KINETIC_DVM_INCOMPATIBLE_DEFAULTS`` at required value ``False``, and the
+    resolver therefore either clears it or refuses it -- naming the whole
+    member set -- before this is asked. That is exactly why the guard is
+    written as its own statement about the PAIR rather than left implicit in a
+    prerequisite chain: relaxing that membership must not silently arm both
+    re-emissions.
+    """
+    if not bool(input_dict.get("neutral_kinetic_dvm_anode_jet", False)):
+        return
+    if not bool(input_dict.get("anode_neutral_jet", False)):
+        return
+    raise ValueError(
+        "neutral_kinetic_dvm_anode_jet and anode_neutral_jet both re-emit the "
+        "R_N share of the anode mesh's collected stream as a DIRECTED "
+        "backscatter, and they are separate books: the fluid arm launches it "
+        "as a momentum source on M_n, the DVM arm as a directed volume birth "
+        "on the velocity grid with its own anode energy ledger row. Armed "
+        "together the mesh re-emits one backscatter twice. Accepted: "
+        "neutral_kinetic_dvm_anode_jet=True with anode_neutral_jet=False (the "
+        "kinetic arm owns the mesh recycle), or the fluid jet with "
+        "neutral_kinetic_dvm_anode_jet=False"
+    )
+
+
+def refuse_dvm_anode_jet_without_cathode_coupling(input_dict, flags):
+    """Raise when the DVM anode jet is armed with no cathode solve behind it.
+
+    The channel launches backscattered atoms at the energy an ion arrives
+    with, ``phi_a + Ti`` per collected ion. ``phi_a`` is the anode sheath
+    potential of the CATHODE SOLVE -- the same solve the fluid anode jet reads
+    it from, since the cathode/anode/bank system is solved as one -- so
+    without the ``cathode_coupling`` flag there is no such solve anywhere in
+    the run, the incident energy collapses to the thermal ``Ti`` alone for the
+    whole run, and the channel silently stops being the energetic recycle it
+    was armed to be. That is a configuration with no physical reading rather
+    than a degraded one.
+
+    The Ti-only launch remains REACHABLE, and deliberately so -- a configured
+    run whose cathode solve has not started, or whose solve returned a
+    non-finite ``phi_a``, still books the ions that arrive with what the
+    plasma gave them. What this refuses is the one corner where that reading
+    would hold for an ENTIRE run because no solve was ever configured.
+    """
+    if not bool(input_dict.get("neutral_kinetic_dvm_anode_jet", False)):
+        return
+    if bool(flags.get("cathode_coupling", False)):
+        return
+    raise ValueError(
+        "neutral_kinetic_dvm_anode_jet launches the anode-mesh recycle at the "
+        "incident ion energy phi_a + Ti, and phi_a comes from the cathode "
+        "solve the cathode_coupling flag configures -- the cathode, anode and "
+        "bank are one system and one solve. With cathode_coupling off there "
+        "is no solve for the whole run, so every backscattered atom would "
+        "launch at the thermal Ti alone -- the channel would be armed and "
+        "silently carry no sheath energy. Accepted: "
+        "neutral_kinetic_dvm_anode_jet=True with cathode_coupling=True, or "
+        "neutral_kinetic_dvm_anode_jet=False"
+    )
+
+
 def resolve_coverage_config(input_dict, flags, *, geometry, neutral_model):
     """Validate and RESOLVE the clumpy-plasma coverage closure (v2).
 
