@@ -2417,6 +2417,16 @@ REFUSALS = (
         )[2],
     ),
     (
+        "G23 DVM cathode jet without cathode coupling refused",
+        dict(),
+        "cathode_coupling",
+        lambda d, fl: (
+            d.__setitem__("neutral_kinetic_dvm_cathode_jet", True),
+            fl.__setitem__("cathode_coupling", False),
+            None,
+        )[2],
+    ),
+    (
         "G15 gas puff into a cell with no annulus refused",
         dict(),
         "V_ann",

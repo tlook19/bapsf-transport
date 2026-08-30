@@ -723,7 +723,18 @@ there. A campaign that moves one of the two pairs and not the other has
 stopped comparing two closures of one surface and is comparing two surfaces;
 that is a finding, not a configuration.
 
-Honest bar: the fluid entry's, unchanged. What the kinetic arm adds is not a
+Honest bar: the fluid entry's, unchanged — including its **registered
+afterglow disclosure**, which binds this pair identically and with the same
+force: the box is read at discharge-scale impact energies, carries no
+verified validity below roughly 10 eV impact (crossed for most of the
+afterglow's duration), and the afterglow impact energy is convention-
+bracketed between the non-emitting classical `~4 * Te` and this model's own
+MEASURED emission-dominated `~0 + Ti`. Read it there. It reaches this arm
+through the same `phi_c + Ti` the launch energy is built from, and the same
+insensitivity argument applies — the counted recycle rate is `∝ n * Te^1.5`,
+kW at discharge entry and watts by the end.
+
+What the kinetic arm adds is not a
 better coefficient but a better carrier — the backscattered atoms are born as
 a directed population on the velocity grid and are transported and attacked by
 the loss channels as the energetic atoms they are, instead of depositing tens
@@ -1466,6 +1477,35 @@ shipped `"total_reflected"` convention and quoted at the stance's
 backscatter channel's momentum `R_N * v_back ∝ R_N * sqrt(R_E/R_N)` falls by
 about 20 % (0.316 -> 0.247 in units of `sqrt(2(phi_c + Ti)/m)`). Fewer, faster
 reflected atoms.
+
+**REGISTERED DISCLOSURE — the box is a DISCHARGE-SCALE box, and afterglow
+runs below its validity floor (registered 2026-08-30).** Both endpoints are
+read at Eckstein's **200 eV** rows because the stance's ions arrive at
+`phi_c + Ti ≈ 189 eV`. That is a statement about the DISCHARGE. Reflection
+coefficients are not constant in impact energy, and the compilation the box
+is built from does not extend usefully below roughly **10 eV impact** — so
+the pair carries no verified validity beneath that floor.
+
+*When the floor is crossed.* The floor sits at `Te ≲ 2.7 eV` on the
+non-emitting classical reading of the sheath, which is crossed for most of
+the AFTERGLOW's duration. The impact energy itself is convention-bracketed
+there rather than known: the non-emitting classical limit gives
+`E_imp ≈ 4 * Te`, while the MEASURED behaviour of this model's own floating
+cathode solve is the emission-dominated one — at the 1910 K emitting surface
+the Richardson current dwarfs the afterglow Bohm current, and the solve's
+afterglow output is `phi_c` of order zero to slightly inverted, leaving
+`E_imp ≈ Ti`. The honest object is that bracket, `E_imp ∈ [~0 + Ti,
+~4 * Te]`, not a single afterglow impact energy.
+
+*Why no value moves on it, and why no claim does either.* The channel's
+power follows the counted recycle rate, `∝ n * Te^1.5`, so it runs at kW
+scale at discharge entry and at WATT scale by the run's end — and under the
+measured emission-dominated sheath the launch energy self-extinguishes on
+its own as well. Every quoted score is therefore insensitive to which end of
+the bracket is read, and the coefficients are left at their discharge-scale
+values with this disclosure standing in place of an unavailable low-energy
+box. A result that ever became sensitive to the afterglow end of this
+channel would need the low-energy coefficients measured, not interpolated.
 
 **`anode_jet_R_N = 0.63`, `anode_jet_R_E = 0.41` — DERIVED (same mid-box
 construction as the cathode pair, run for He -> Mo), read in the TOTAL
