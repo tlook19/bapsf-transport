@@ -10,25 +10,39 @@ run. Every declared family is exercised, each one built twice from ONE source of
 values (so the two arms cannot drift apart in the fixture itself) and compared
 key by key.
 
+The equivalence fixture runs on NON-DEFAULT values (``PERTURBED``), one legal
+alternative per member off the config default. On defaults the comparison is
+weak in a specific way: a member the projection silently DROPPED would fall back
+to the same default on both arms, the two sides would agree, and the leg would
+pass while measuring nothing.
+
 **REFUSAL.** A block that is wrong must fail loudly at construction, naming the
-offender and carrying the remedy -- never silently, never at run time. The cases
-below are the ones the migration registered, plus the ones the form itself
-implies: unknown family, unknown member, INCOMPLETE membership (the 24d option
-(b) rule -- a block is an inventory, not a delta), a block for a family this
-config does not select, two blocks claiming one key, a member also supplied
-flat, and a family whose mutually exclusive routes are multiply armed.
+offender and carrying the remedy -- never silently, never at run time. ALL TEN
+refusals the resolver carries are exercised here, and the count is the point:
+``CONFIG_DECLARATIONS.md`` is the KB schema source for this form, so its table
+and these checks are meant to be the same list. They are: a block that is not a
+table; ``none_valued`` given something other than an array of names; a member
+both valued and named in ``none_valued``; a key the family does not own (all
+three owner branches -- another family, a config key no family owns in either
+namespace, and no template at all); INCOMPLETE membership (the 24d option (b)
+rule -- a block is an inventory, not a delta); a block for a family this config
+does not select; a family whose mutually exclusive routes are multiply armed;
+an unknown family; two blocks claiming one key; and a member also supplied
+FLAT at a different value.
 
 Both halves run at the RESOLVER, and the equivalence half additionally runs a
 real ``LAPDSim1D`` construction on one family so the claim covers the
-constructor and not just the config boundary. The two TOML routes --
-``load_config`` and a committed stance file -- are exercised against the SAME
-block and compared to the same flat form, so a divergence between the file
-routes and the Python API cannot hide.
+constructor and not just the config boundary. That constructor leg reads the
+DEFAULT-valued fixture, because it needs a configuration that constructs. The
+two TOML routes -- ``load_config`` and a committed stance file -- are exercised
+against the SAME block and compared to the same flat form, so a divergence
+between the file routes and the Python API cannot hide.
 
-Last, the four 23an RUN-TIME-FIRST GUARDS hoisted with this migration are
-asserted to refuse AT CONSTRUCTION. Their negative control was run at base
-commit aa65468, where all four of those configurations constructed; the
-reproduction recipe is in ``gate_hoisted_guards``.
+Last, the FIVE run-time-first guards hoisted with this migration are asserted to
+refuse AT CONSTRUCTION -- the four 23an hazards (negative control at base commit
+aa65468) and ``beam_deposition_model`` (negative control at base commit
+ca444dd, where 'cdsa' constructs and silently runs beer_lambert). Both
+reproduction recipes are in ``gate_hoisted_guards``.
 
 Usage::
 
@@ -96,18 +110,23 @@ def refuses(label, build, *, must_name):
 # ------------------------------------------------------------- fixtures
 
 
-#: A declared value per member, per family: the SOURCE both arms of the
-#: equivalence test read. Values are chosen to be non-default where a default
-#: would make the test vacuous, and to satisfy the family's own guards where
-#: the constructor leg exercises them.
 def family_values(family):
-    """Return ``{member: value}`` for ``family``, from the config defaults.
+    """Return ``{member: value}`` for ``family``, AT THE CONFIG DEFAULTS.
 
     The config default IS a legal declared value for every member -- that is
-    what "explicit regardless of value" means -- and starting from it keeps the
-    fixture honest: the block arm and the flat arm are then testing the
-    PLUMBING, not a hand-tuned config. The selector is forced to the engaged
-    value where the family has one, because a block must select its family.
+    what "explicit regardless of value" means. This is the fixture the
+    CONSTRUCTOR leg and the refusal fixtures read, because both need a
+    configuration that actually constructs, and the shipped defaults are the
+    one value set guaranteed to.
+
+    It is NOT what the equivalence leg reads. A block==flat comparison built
+    from defaults is weak in a specific way: if the projection silently DROPPED
+    a member, the flat arm would carry that member's default too, both sides
+    would agree, and the test would pass while measuring nothing. See
+    :func:`perturbed_family_values`.
+
+    The selector is forced to the engaged value where the family has one,
+    because a block must select its family.
     """
     params, flags = default_config()
     values = {}
@@ -116,6 +135,134 @@ def family_values(family):
     if family.selector is not None:
         values[family.selector] = family.engaged_value
     return values
+
+
+#: A legal NON-DEFAULT value for every member of every declared family, keyed by
+#: config key. Each is a genuine alternative the solver accepts -- a bool
+#: flipped, a string from the same validator's accepted set, a float moved off
+#: its default, a None member given a legal value and vice versa -- read off the
+#: domain each key's own guard enforces, not invented.
+#:
+#: This table is what makes the equivalence leg non-vacuous: with every member
+#: at a value the config template does NOT hold, a member the projection failed
+#: to carry shows up immediately as a difference against the flat arm, instead of
+#: being masked by both sides falling back to the same default.
+#:
+#: A key appearing in two families takes one value here; where that key is the
+#: OTHER family's selector, the selector force in
+#: :func:`perturbed_family_values` overrides it, which is why
+#: ``neutral_momentum_radial`` can be ``'two_zone'`` here and still be
+#: ``'kinetic_two_moment'`` in its own family's block.
+PERTURBED = {
+    # beam_tail_closure
+    "beam_deposition_model": "beer_lambert",
+    "beam_coulomb_model": "legacy_tau_ei",
+    "beam_anomalous_model": "none",
+    "ql_relaxation_coeff": 60.0,
+    "beam_product_transport": "nonlocal",
+    "heating_anomalous_transport": "tail_walk",
+    "heating_anomalous_disposal": "landau_branched",
+    "heating_anomalous_tail_energy_eV": 150.0,
+    "heating_anomalous_tail_ionization": "on",
+    "heating_anomalous_tail_energy_keying": "fixed",
+    "heating_anomalous_tail_phi_c_fraction": 0.25,
+    "heating_anomalous_tail_cathode_boundary": "escape",
+    "beam_tail_anode_reflected_particles": 0.5,
+    "beam_tail_anode_reflected_energy": 0.5,
+    "beam_clump_fraction": 0.5,
+    "beam_clump_enhancement": 2.0,
+    "beam_deposition_smoothing_cm": 25.0,
+    "b_beam_excitation": 1.0,
+    "beam_excitation_model": "manifold",
+    "beam_excitation_energy_eV": 22.218,
+    "beam_anode_interception": False,
+    "beam_tail_anode_interception": True,
+    # cathode_surface_recycle
+    "cathode_neutral_jet": False,
+    "cathode_jet_R_N": 0.5,
+    "cathode_jet_R_E": 0.3,
+    "cathode_jet_energy_convention": "legacy",
+    "cathode_jet_surface_debit": False,
+    "cathode_jet_hot_carrier": True,
+    # anode_surface_recycle
+    "anode_neutral_jet": True,
+    "anode_jet_R_N": 0.5,
+    "anode_jet_R_E": 0.3,
+    "anode_jet_energy_convention": "total_reflected",
+    "neutral_mesh_accommodation": True,
+    # initial_neutral_state
+    "neutral_equilibration": False,
+    "launch_plasma_after_equilibration": False,
+    "neutral_equilibration_cycles": 200,
+    "neutral_equilibration_dt": 0.02,
+    "equilibration_gas_puff_on_s": 0.025,
+    "use_cached_neutral_seed": True,
+    "neutral_seed_cache_dir": "/tmp/declm_block_gate_seed_cache",
+    "neutral_initial_profile": True,
+    "nn0": 4.0e13,
+    "nn0_profile": [1.0, 2.0, 3.0, 4.0],
+    "nn0_annulus_profile": [1.0, 2.0, 3.0, 4.0],
+    # neutral_closure / neutral_radial_closure
+    "neutral_model": "kinetic_dvm",
+    "neutral_momentum": False,
+    "neutral_energy": False,
+    "neutral_hot_internal_wall": False,
+    "neutral_momentum_radial": "two_zone",
+    "neutral_hot_birth_drift": True,
+    "neutral_knudsen_temperature": "local",
+    "neutral_wall_momentum_partition": True,
+    "neutral_wall_partition_sigma_hehe_cm2": 1.5e-15,
+}
+
+#: Members deliberately LEFT at their config default in the perturbed fixture,
+#: with the reason. ``restart_from`` is a mutually exclusive ROUTE of
+#: ``initial_neutral_state``: the fixture already arms the ``profile`` route, so
+#: giving the restart payload a value would arm a second route and the block
+#: would be refused before the equivalence comparison ever ran. The perturbation
+#: is applied to the two route keys that CAN move together -- equilibrate is
+#: disarmed and profile is armed, both away from their defaults.
+PERTURB_KEEP_DEFAULT = {"restart_from"}
+
+
+def perturbed_family_values(family):
+    """Return ``{member: value}`` for ``family`` at legal NON-DEFAULT values.
+
+    Every member is moved off its config default except those named in
+    :data:`PERTURB_KEEP_DEFAULT`, and the selector is then forced to the engaged
+    value (which is itself non-default for both selector families).
+
+    This runs at the RESOLVER, where the per-key domain guards do not run; the
+    values are nevertheless taken from the accepted sets those guards enforce,
+    so the fixture reads as a configuration rather than as noise.
+    """
+    params, flags = default_config()
+    values = {}
+    for space, key in family.members:
+        default = (flags if space == FLAGS else params)[key]
+        if key in PERTURB_KEEP_DEFAULT:
+            values[key] = default
+            continue
+        if key not in PERTURBED:
+            raise KeyError(
+                f"PERTURBED has no non-default value for {space}:{key}, a "
+                f"member of {family.name!r}. Add one (a legal value off its "
+                "config default) so the equivalence leg stays non-vacuous."
+            )
+        values[key] = PERTURBED[key]
+    if family.selector is not None:
+        values[family.selector] = family.engaged_value
+    return values
+
+
+def perturbation_report(family, values):
+    """Return ``(moved, total)`` -- how many members sit off their default."""
+    params, flags = default_config()
+    moved = 0
+    for space, key in family.members:
+        default = (flags if space == FLAGS else params)[key]
+        if repr(values[key]) != repr(default):
+            moved += 1
+    return moved, len(family.members)
 
 
 def split_by_namespace(family, values):
@@ -140,9 +287,20 @@ def canonical(params, flags):
 
 
 def gate_equivalence():
-    print("\n=== BLOCK == FLAT (resolved surface, per family) ===")
+    """Block == flat, per family, ON NON-DEFAULT VALUES.
+
+    The values come from :func:`perturbed_family_values`, not from the config
+    defaults. On defaults this comparison can pass while measuring nothing: a
+    member the projection dropped would fall back to the same default on both
+    arms. Every member here sits at a value the template does not hold (bar the
+    one route key :data:`PERTURB_KEEP_DEFAULT` names), so a dropped member is a
+    visible difference.
+    """
+    print("\n=== BLOCK == FLAT (resolved surface, per family, NON-DEFAULT) ===")
     for family in DECLARED_FAMILIES:
-        values = family_values(family)
+        values = perturbed_family_values(family)
+        moved, total = perturbation_report(family, values)
+        print(f"  [{family.name}: {moved}/{total} members off their default]")
         flat_params, flat_flags = split_by_namespace(family, values)
 
         block_side = resolve_config(models={family.name: dict(values)})
@@ -230,6 +388,26 @@ def gate_refusals():
         must_name=["neutral_clsoure", "Declarable families"],
     )
 
+    # _check_block_is_a_table. A block is a TABLE of members; there is no
+    # shorthand form, so a scalar or a list where a table belongs is refused
+    # rather than half-read.
+    refuses(
+        "a block that is not a table",
+        lambda: resolve_config(models={cathode.name: ["cathode_neutral_jet"]}),
+        must_name=["must be a table of member keys", "list"],
+    )
+
+    # _split_none_valued, first refusal. none_valued carries member key NAMES;
+    # a bare string is the plausible mistake (TOML arrays and strings look alike
+    # to a reader in a hurry) and it would otherwise iterate as characters.
+    bad_none_valued = dict(family_values(cathode))
+    bad_none_valued["none_valued"] = "cathode_jet_R_N"
+    refuses(
+        "none_valued given a string instead of an array of names",
+        lambda: resolve_config(models={cathode.name: bad_none_valued}),
+        must_name=["none_valued must be an array of member key", "cathode_jet_R_N"],
+    )
+
     bad_member = dict(family_values(cathode))
     bad_member["cathode_jet_R_M"] = 0.5
     refuses(
@@ -244,6 +422,24 @@ def gate_refusals():
         "a block naming another family's member",
         lambda: resolve_config(models={cathode.name: misfiled}),
         must_name=["neutral_equilibration", "models.initial_neutral_state"],
+    )
+
+    # The same refusal's OTHER two owner branches: a real config key that no
+    # family owns at all. The remedy differs per namespace ([params] vs
+    # [flags]), and the message resolves the namespace itself -- which is the
+    # branch a reader of the refusal table needs to be true.
+    unowned = dict(family_values(cathode))
+    unowned["C_R"] = 8.76
+    unowned["neutral_baffles"] = True
+    refuses(
+        "a block naming config keys no family owns (both namespaces)",
+        lambda: resolve_config(models={cathode.name: unowned}),
+        must_name=[
+            "C_R: an input_dict key no family owns",
+            "state it flat under [params]",
+            "neutral_baffles: an input_flags key no family owns",
+            "state it flat under [flags]",
+        ],
     )
 
     incomplete = dict(family_values(cathode))
@@ -413,19 +609,38 @@ def _bad_stance(stance_config, stance_dir, block_text):
 
 
 def gate_hoisted_guards():
-    """The four 23an run-time-first guards, now refused at construction.
+    """The FIVE run-time-first guards, now refused at construction.
 
-    Each of these four domains was first checked only once a run was already
-    moving. NEGATIVE CONTROL, run at base commit aa65468 before the hoist: all
-    four of these configurations CONSTRUCTED, which is what made them
+    Each of these domains was first checked only once a run was already moving
+    -- or, for the fifth, never checked at all.
+
+    NEGATIVE CONTROL for the first four, run at base commit aa65468 before the
+    hoist: all four of those configurations CONSTRUCTED, which is what made them
     run-time-first rather than merely redundant. Reproduce it with::
 
         git archive aa65468 cablp | tar -x -C <tmp> && PYTHONPATH=<tmp> ...
 
-    The per-call checks are deliberately still in place; these are additional
-    construction-time refusals, not replacements.
+    NEGATIVE CONTROL for the fifth (``beam_deposition_model``, hoisted
+    2026-08-30 with the g1atrim block-form migration), run the same way at base
+    commit ca444dd::
+
+        git archive ca444dd | tar -x -C <tmp> && PYTHONPATH=<tmp> \\
+            python -c "from cablp.solvers._sim1d import LAPDSim1D, \\
+                default_config; p, f = default_config(); p['nx'] = 8; \\
+                p['beam_deposition_model'] = 'cdsa'; LAPDSim1D(p, f)"
+
+    At ca444dd that CONSTRUCTS and runs, carrying 'cdsa' and silently selecting
+    beer_lambert: every read of the key is an equality test against 'csda' with
+    a beer_lambert fallback, in solver.py (five sites), physics/cathode.py and
+    core/validation.py, so no per-call check refuses a name outside the domain.
+    That makes this one worse than late -- there was no later check to reach.
+    The domain now lives once, exported as
+    ``physics.cathode.BEAM_DEPOSITION_MODELS``.
+
+    The per-call checks of the first four are deliberately still in place; these
+    are additional construction-time refusals, not replacements.
     """
-    print("\n=== HOISTED RUN-TIME-FIRST GUARDS (23an hazards) ===")
+    print("\n=== HOISTED RUN-TIME-FIRST GUARDS (23an hazards + the fifth) ===")
     from cablp.solvers._sim1d import LAPDSim1D
 
     params, flags = default_config()
@@ -436,11 +651,19 @@ def gate_hoisted_guards():
         ("operator_splitting", "stang", "operator_splitting must be one of"),
         ("implicit_heat_scheme", "tr_bdf3", "implicit_heat_scheme must be one of"),
         ("ion_neutral_drag_model", "slipp", "ion_neutral_drag_model must be one of"),
+        ("beam_deposition_model", "cdsa", "beam_deposition_model must be one of"),
     ):
         refuses(
             f"{key}={value!r} refused AT CONSTRUCTION",
             lambda k=key, v=value: LAPDSim1D(dict(params, **{k: v}), dict(flags)),
             must_name=[needle],
+        )
+    # POSITIVE controls for the fifth: both accepted names still construct, so
+    # the new check refuses the typo and nothing else.
+    for value in ("csda", "beer_lambert"):
+        check(
+            f"beam_deposition_model={value!r} still constructs",
+            _constructs(dict(params, beam_deposition_model=value), flags),
         )
 
 
