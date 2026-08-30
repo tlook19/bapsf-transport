@@ -419,11 +419,12 @@ def _template(space):
     return input_flags_template_1d if space == FLAGS else input_dict_template_1d
 
 
-def _default_of(space, key):
+def member_default(space, key):
+    """The config template's value for one member, in its own namespace."""
     return _template(space).get(key)
 
 
-def _same(a, b):
+def values_equal(a, b):
     """Value equality that is safe for anything a config key can hold.
 
     Config values include bools, strings, ``None``, floats and per-cell
@@ -515,13 +516,13 @@ def resolve_model_families(params, flags):
     spaces = {PARAMS: params, FLAGS: flags}
     for family in MODEL_FAMILIES:
         selector_given = spaces[family.selector_space].get(family.selector_key)
-        if _same(selector_given, family.engaged_value):
+        if values_equal(selector_given, family.engaged_value):
             conflicts = []
             for space, key, required, why in family.members:
                 given = spaces[space].get(key)
-                if _same(given, required):
+                if values_equal(given, required):
                     continue
-                if _same(given, _default_of(space, key)):
+                if values_equal(given, member_default(space, key)):
                     spaces[space][key] = required
                     continue
                 conflicts.append((space, key, required, given, why))
@@ -531,7 +532,7 @@ def resolve_model_families(params, flags):
         armed = []
         for space, key, why in family.internal_members:
             given = spaces[space].get(key)
-            if _same(given, _default_of(space, key)):
+            if values_equal(given, member_default(space, key)):
                 continue
             armed.append((space, key, given, why))
         if armed:

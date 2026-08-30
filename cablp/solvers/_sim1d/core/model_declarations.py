@@ -31,8 +31,11 @@ Three properties, and each one is the point of a different half of the ruling:
   files each member where it belongs. The driver-side hazard -- a key filed
   into the wrong namespace, silently inert before 2026-08-14 and a run-time
   refusal since -- cannot be expressed in a block at all.
-* **One owner per key.** A member may not also appear flat, and two blocks may
-  not claim the same key. A value has one home.
+* **One owner per key.** Two blocks may not claim the same key, and a member
+  the caller ALSO chose flat, at a different value, is refused. A value has one
+  home. (A flat value still sitting at its config default was inherited rather
+  than chosen -- most callers here hand the solver a complete config dict --
+  so it does not conflict, and the block wins.)
 
 WHAT A BLOCK DOES NOT DO. It does not change any value, and it does not
 validate physics. A block is projected onto the same two flat namespaces the
@@ -47,7 +50,8 @@ THE FLAT ROUTE KEEPS WORKING. Blocks are an ADDITIONAL input form. A config
 that names no block behaves exactly as it did -- the committed stances, the
 campaign drivers and the 295 banked ``.cmd`` files are untouched and are not
 rewritten. Where a flat route would become ambiguous under a block (the same
-key in both), it fails loudly and the message carries the remedy.
+key answered twice, differently), it fails loudly and the message carries the
+remedy.
 """
 
 from .config import input_dict_template_1d, input_flags_template_1d
@@ -56,6 +60,8 @@ from .model_families import (
     FLAGS,
     PARAMS,
     RESERVED_BLOCK_KEYS,
+    member_default,
+    values_equal,
 )
 
 #: Every declared family by name.
@@ -244,8 +250,9 @@ def resolve_declaration_blocks(models, supplied_params, supplied_flags):
 
     Raises ``ValueError``, naming the offender and carrying the remedy, on an
     unknown family, a non-member key, an incomplete membership, a block for an
-    unselected family, two blocks claiming one key, a member also supplied
-    flat, and a family whose mutually exclusive routes are multiply armed.
+    unselected family, two blocks claiming one key, a member the caller also
+    CHOSE flat at a different value, and a family whose mutually exclusive
+    routes are multiply armed.
     """
     if not models:
         return {}, {}
@@ -291,23 +298,63 @@ def resolve_declaration_blocks(models, supplied_params, supplied_flags):
             claimed[key] = name
             out[space][key] = values[key]
 
-    collisions = sorted(
-        set(claimed).intersection(set(supplied_params) | set(supplied_flags))
-    )
-    if collisions:
-        _raise(
-            [
-                f"{len(collisions)} key(s) are supplied BOTH flat and inside a "
-                "declaration block. A value has one home:",
-                "",
-                *(
-                    f"  {key}: flat, and in [models.{claimed[key]}]"
-                    for key in collisions
-                ),
-                "",
-                "Remove the flat setting -- the block is the whole decision "
-                "and states this member itself -- or drop the block and keep "
-                "the flat route.",
-            ]
-        )
+    _refuse_flat_conflicts(out, claimed, supplied_params, supplied_flags)
     return out[PARAMS], out[FLAGS]
+
+
+def _refuse_flat_conflicts(out, claimed, supplied_params, supplied_flags):
+    """Refuse a member the caller ALSO chose flat, at a different value.
+
+    Co-presence alone is not the offence, and cannot be: most callers in this
+    repo hand the solver a COMPLETE config dict -- ``default_config()`` with
+    overrides applied, a stance resolved, a fixture's ``arm_config()`` -- so
+    every member is present flat whether anyone chose it or not. Refusing
+    co-presence would make blocks unusable from exactly the entry points that
+    need them.
+
+    So the test is the one ``model_families`` already uses for "did the caller
+    choose this?": a flat value EQUAL TO THE TEMPLATE DEFAULT was inherited,
+    not chosen, and the block simply wins. A flat value equal to the block's
+    own is consistent and stands. Anything else is a genuine conflict -- two
+    different answers to one question -- and is refused loudly, naming the key
+    and both values.
+
+    The consequence worth stating: inside a TOML ``[params]``/``[flags]``
+    table, where only chosen keys are written at all, a member stated both
+    ways is always either redundant or a conflict, which is the form the
+    migration is aiming at. The tolerance exists for the full-dict callers.
+    """
+    supplied = {PARAMS: supplied_params, FLAGS: supplied_flags}
+    conflicts = []
+    for space, values in out.items():
+        for key, declared in values.items():
+            if key not in supplied[space]:
+                continue
+            given = supplied[space][key]
+            inherited = values_equal(given, member_default(space, key))
+            if values_equal(given, declared) or inherited:
+                continue
+            conflicts.append((space, key, declared, given))
+    if not conflicts:
+        return
+    lines = [
+        f"{len(conflicts)} key(s) are answered TWICE, differently: once flat "
+        "and once inside a declaration block. A value has one home:",
+        "",
+    ]
+    for space, key, declared, given in sorted(conflicts, key=lambda c: c[1]):
+        lines.append(
+            f"  {space}:{key}: flat {given!r}, but "
+            f"[models.{claimed[key]}] declares {declared!r}"
+        )
+    lines.extend(
+        [
+            "",
+            "Remove the flat setting -- the block is the whole decision and "
+            "states this member itself -- or drop the block and keep the flat "
+            "route. (A flat value left at its config default is not a choice "
+            "and does not conflict; only a value the caller actually set "
+            "does.)",
+        ]
+    )
+    _raise(lines)
