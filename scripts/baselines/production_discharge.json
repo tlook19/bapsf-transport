@@ -241,7 +241,7 @@
     "neutral_kinetic_dvm_tn_feedback": false,
     "neutral_kinetic_dvm_transfer_hold": null,
     "neutral_kinetic_dvm_transfer_relax_fraction": 0.5,
-    "neutral_kinetic_dvm_wall_reflection": "specular",
+    "neutral_kinetic_dvm_wall_reflection": "diffuse_elastic",
     "neutral_kinetic_nvp": 12,
     "neutral_kinetic_nvz": 48,
     "neutral_kinetic_refresh_s": 0.0005,
