@@ -207,6 +207,14 @@ class CathodeSolve1D:
     # clamped to it (never silent: this is what the solver's clamp census
     # counts).
     beam_plateau_edge: dict | None = None
+    # A2a: the electron current [A] this solve's deposition measured the anode
+    # collecting DIRECTLY from the QL tail walkers -- the culled flux less
+    # whatever the reversed-walker rider sent back, summed over the ends. It is
+    # an OUTPUT here and an INPUT to the NEXT accepted step's circuit solve (the
+    # deposition runs after the circuit within a step), so the caller commits it
+    # only on acceptance. 0.0 whenever the tail cull is off, which is the value
+    # the circuit's parameter defaults to.
+    tail_anode_current_A: float = 0.0
 
 
 def anode_circuit_sample(state, derived, geometry, mu, input_dict, end=0):
@@ -801,6 +809,7 @@ def idriven_result_evaluator(
     f_em_override=None,
     circuit_V_src_V=None,
     apply_circuit_bound=True,
+    tail_anode_current_prev_A=0.0,
 ):
     """Return an ``I [A] -> SolverResult`` evaluator at this frozen state.
 
@@ -888,6 +897,10 @@ def idriven_result_evaluator(
                 else None
             ),
             circuit_bound_object=circuit_bound_object(input_dict),
+            # A2a: the SAME lagged tail current the dispatched solve reads, so
+            # the loop equation's V_dis(I) and the per-step sheath solve
+            # cannot disagree about what the anode is collecting.
+            tail_anode_current_A=float(tail_anode_current_prev_A),
         )
 
     return solve_at
@@ -906,6 +919,7 @@ def idriven_vdis_evaluator(
     phi_wf_override_eV=None,
     f_em_override=None,
     circuit_V_src_V=None,
+    tail_anode_current_prev_A=0.0,
 ):
     """Return a ``V_dis(I) [V]`` evaluator at this frozen plasma state.
 
@@ -951,6 +965,7 @@ def idriven_vdis_evaluator(
         f_em_override=f_em_override,
         circuit_V_src_V=circuit_V_src_V,
         apply_circuit_bound=False,
+        tail_anode_current_prev_A=tail_anode_current_prev_A,
     )
 
     # Internal series drop on the plasma side of the V_dis probe (R5 ES1 tuning
@@ -1202,6 +1217,7 @@ def solve_cathode_boundary(
     circuit_V_src_V=None,
     coverage=None,
     vessel_V_cm_V=None,
+    tail_anode_current_prev_A=0.0,
 ):
     """Call the cathode/beam solver and return raw diagnostics only.
 
@@ -1334,6 +1350,7 @@ def solve_cathode_boundary(
             ),
             circuit_bound_object=circuit_bound_object(input_dict),
             beam_climb_V=beam_climb_V,
+            tail_anode_current_A=float(tail_anode_current_prev_A),
         )
     else:
         beam_result = solve_beam_system(
@@ -1367,6 +1384,7 @@ def solve_cathode_boundary(
             beam_excitation_model=str(
                 input_dict.get("beam_excitation_model", "2p_scalar")
             ),
+            tail_anode_current_A=float(tail_anode_current_prev_A),
         )
     beam_deposition = None
     beam_gap_ledger = None
@@ -1392,7 +1410,22 @@ def solve_cathode_boundary(
             ),
             coverage=coverage,
             beam_climb_V=beam_climb_V,
+            input_flags=input_flags,
         )
+    # A2a: what the anode actually COLLECTED from the tail this solve --
+    # the culled walkers less the ones the rider sent back, converted from a
+    # walker flux to a current. Summed over the ends with an active ray,
+    # because the circuit sees one anode current. This is the value the NEXT
+    # accepted step's sheath solve reads; nothing in THIS step consumes it.
+    tail_anode_current_A = 0.0
+    if beam_deposition is not None:
+        for _dep in beam_deposition.values():
+            if _dep is None:
+                continue
+            tail_anode_current_A += qe_SI * (
+                float(_dep.tail_anode_culled_flux_per_s)
+                - float(_dep.tail_anode_returned_flux_per_s)
+            )
     return CathodeSolve1D(
         boundary=boundary,
         beam_result=beam_result,
@@ -1418,6 +1451,7 @@ def solve_cathode_boundary(
         beam_gap_ledger=beam_gap_ledger,
         beam_reservoir_deposition=beam_reservoir_deposition,
         beam_plateau_edge=beam_plateau_edge,
+        tail_anode_current_A=tail_anode_current_A,
     )
 
 
@@ -1502,6 +1536,27 @@ def _sum_beam_deposition(a, b):
             float(a.plateau_wave_power_erg_s)
             + float(b.plateau_wave_power_erg_s)
         ),
+        # A2a: both rays meet the same mesh, so their tail-cull rows add like
+        # every other per-ray bank. The clumping split's two rays each cull
+        # their own share of one tail; the two-stream split books the whole
+        # walk to its channel slot and zero to the reservoir, so the sum is
+        # the walk's own total either way.
+        tail_anode_culled_flux_per_s=(
+            float(a.tail_anode_culled_flux_per_s)
+            + float(b.tail_anode_culled_flux_per_s)
+        ),
+        tail_anode_culled_erg_s=(
+            float(a.tail_anode_culled_erg_s)
+            + float(b.tail_anode_culled_erg_s)
+        ),
+        tail_anode_returned_flux_per_s=(
+            float(a.tail_anode_returned_flux_per_s)
+            + float(b.tail_anode_returned_flux_per_s)
+        ),
+        tail_anode_returned_erg_s=(
+            float(a.tail_anode_returned_erg_s)
+            + float(b.tail_anode_returned_erg_s)
+        ),
     )
 
 
@@ -1569,6 +1624,7 @@ def _csda_beam_deposition(
     anode_interception=False,
     coverage=None,
     beam_climb_V=None,
+    input_flags=None,
 ):
     """Run the CSDA module for each active cathode ray (B2 wiring).
 
@@ -1695,6 +1751,18 @@ def _csda_beam_deposition(
     """
     coulomb_model = str(input_dict.get("beam_coulomb_model", "fast_electron"))
     anomalous_model = str(input_dict.get("beam_anomalous_model", "none"))
+    # A2a. Read here, threaded onto the DEPOSITION rays only (below): the
+    # gap-transmission probes report a primary-flux ratio and never walk a
+    # tail, so culling one there would be work with no output. The solver
+    # validated the trio at construction.
+    _flags = {} if input_flags is None else input_flags
+    tail_interception = bool(_flags.get("beam_tail_anode_interception", False))
+    tail_R_e = float(
+        input_dict.get("beam_tail_anode_reflected_particles", 0.0)
+    )
+    tail_eta_E = float(
+        input_dict.get("beam_tail_anode_reflected_energy", 0.0)
+    )
     # Read unconditionally, threaded conditionally (below). ``None`` is what
     # the module refuses on rather than substituting a default for, so a config
     # that selects the closure without registering a bracket arm still raises
@@ -1951,6 +2019,17 @@ def _csda_beam_deposition(
             interception_kwargs = dict(
                 anode_cross_index=cross_cell, anode_eta=eta
             )
+            if tail_interception:
+                # A2a: the SAME cell and the SAME eta, met by the QL tail
+                # walkers instead of by the streaming primary. Presence-gated
+                # with the flag, so an unarmed run enters the module with the
+                # argument list it had before A2a.
+                interception_kwargs.update(
+                    tail_anode_cross_index=cross_cell,
+                    tail_anode_eta=eta,
+                    tail_anode_reflected_particles=tail_R_e,
+                    tail_anode_reflected_energy=tail_eta_E,
+                )
         clump_kwargs = (
             {**ray_kwargs, "nn": np.asarray(ray_nn) * chi_clump}
             if clumping

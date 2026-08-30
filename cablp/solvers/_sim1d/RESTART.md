@@ -87,7 +87,15 @@ already-floored accepted state is not guaranteed idempotent.
 | `_cathode_x0` | `solve_cathode_boundary` (`solver.py:5900`) | CARRIED |
 | `_cathode_x0_twin` | `solve_cathode_boundary` (`solver.py:5901`) | CARRIED |
 | `_cathode_beam_cross` | `solve_cathode_boundary` (`solver.py:5903`) | CARRIED |
+| `_cathode_tail_anode_I` | `solve_cathode_boundary` (`solver.py:5903`) | CARRIED |
 | `_cathode_solve` | `solve_cathode_boundary` (`solver.py:5899`) | DROPPED — see below |
+
+`_cathode_tail_anode_I` is the A2a anode tail cull's one-step lag: the current
+the anode collected directly from the QL tail walkers on the last accepted
+step, read by the NEXT step's sheath solve. It is carried on its own payload
+key rather than inside the strict inventory loop, so a payload written before
+the cull existed still loads and restores it to `0.0` — which is exactly what
+an unarmed run carries at every instant.
 
 These are written by `solve_cathode_boundary(update_cache=True)`, which is
 reached from three consumers: the SSPRK2 stages, `_update_current_phase_triggers`
