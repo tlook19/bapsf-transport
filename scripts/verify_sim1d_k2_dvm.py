@@ -320,6 +320,17 @@ def arm_config(**overrides):
     d["neutral_model"] = "kinetic_dvm"
     d["neutral_kinetic_dvm_cadence_s"] = CADENCE_S
     d["neutral_kinetic_dvm_exchange"] = EXCHANGE_MODEL
+    # DECLARED ARM, not an inherited default (declared 2026-08-30, when the
+    # package default moved to 'diffuse_elastic'). Every pinned number in
+    # this suite that touches a cylindrical-wall return was measured with the
+    # non-accommodated share placed in its INCIDENT bin, so the suite names
+    # that arm at its one shared construction site rather than inheriting
+    # whatever the package ships. Before this line 26 of the suite's 27 build
+    # sites took the default implicitly; the flip would have moved all of
+    # them silently. The WR gates override it per-arm and so still exercise
+    # BOTH values -- which is the point: the arm under test is chosen by the
+    # gate, never by the package.
+    d["neutral_kinetic_dvm_wall_reflection"] = "specular"
     for key, value in overrides.items():
         if key in fl or key.startswith("flag:"):
             fl[key.removeprefix("flag:")] = value
@@ -2323,7 +2334,10 @@ REFUSALS = (
                 "neutral_kinetic_dvm_annulus_flights", "bounded_chord"
             ),
             d.__setitem__("neutral_model", "moment"),
-            None,
+            # Passes today only because the annulus guard is checked before
+            # the wall-reflection one; dropped here so the gate tests its own
+            # subject rather than a guard ORDERING.
+            off_arm(d),
         )[2],
     ),
     (
@@ -2349,26 +2363,35 @@ REFUSALS = (
             None,
         )[1],
     ),
+    # G17/G18 MIRRORED 2026-08-30, at the flip of the package default from
+    # 'specular' to 'diffuse_elastic'. Both gates assert that the selector's
+    # NON-DEFAULT arm is refused where it cannot act -- off the DVM arm (G17)
+    # and without the two-zone flag (G18). Which literal instantiates "the
+    # non-default arm" is decided by the default, so a default flip MUST
+    # carry these two literals with it: the statements are unchanged in
+    # intent and in cardinality, and mirroring them is the necessary
+    # companion of the flip, not a weakening. Left unmirrored, G17 asserts a
+    # refusal that the flip makes impossible (measured: no refusal raised).
     (
-        "G17 diffuse-elastic wall reflection without the DVM arm refused",
+        "G17 specular wall reflection without the DVM arm refused",
         dict(),
         "neutral_kinetic_dvm_wall_reflection",
         lambda d, fl: (
             d.__setitem__(
-                "neutral_kinetic_dvm_wall_reflection", "diffuse_elastic"
+                "neutral_kinetic_dvm_wall_reflection", "specular"
             ),
             d.__setitem__("neutral_model", "moment"),
             None,
         )[2],
     ),
     (
-        "G18 diffuse-elastic wall reflection without the two-zone flag "
+        "G18 specular wall reflection without the two-zone flag "
         "refused",
         dict(),
         "neutral_two_zone",
         lambda d, fl: (
             d.__setitem__(
-                "neutral_kinetic_dvm_wall_reflection", "diffuse_elastic"
+                "neutral_kinetic_dvm_wall_reflection", "specular"
             ),
             fl.__setitem__("neutral_two_zone", False),
             None,
@@ -2381,7 +2404,7 @@ REFUSALS = (
         lambda d, fl: (
             d.__setitem__("neutral_kinetic_dvm_cathode_jet", True),
             d.__setitem__("neutral_model", "moment"),
-            None,
+            off_arm(d),
         )[2],
     ),
     (
@@ -2391,7 +2414,7 @@ REFUSALS = (
         lambda d, fl: (
             d.__setitem__("neutral_kinetic_dvm_cathode_jet_R_N", 0.5),
             d.__setitem__("neutral_model", "moment"),
-            None,
+            off_arm(d),
         )[2],
     ),
     (
@@ -2417,12 +2440,44 @@ REFUSALS = (
         )[2],
     ),
     (
+        "G23 DVM cathode jet without cathode coupling refused",
+        dict(),
+        "cathode_coupling",
+        lambda d, fl: (
+            d.__setitem__("neutral_kinetic_dvm_cathode_jet", True),
+            fl.__setitem__("cathode_coupling", False),
+            None,
+        )[2],
+    ),
+    (
         "G15 gas puff into a cell with no annulus refused",
         dict(),
         "V_ann",
         lambda d, fl: (d.__setitem__("Rm", d["Rp"]), None)[1],
     ),
 )
+
+
+def off_arm(d):
+    """Drop the suite's declared wall-reflection arm; return ``None``.
+
+    ``arm_config`` DECLARES ``wall_reflection = "specular"`` so the suite's
+    pinned numbers name their arm instead of inheriting a default. Off the DVM
+    arm that declaration is meaningless -- there is no wall share to place --
+    and since the package default moved to ``"diffuse_elastic"`` the solver's
+    off-arm inertness guard REFUSES a declared ``"specular"`` there, by
+    design. A gate that leaves the arm to test something else would therefore
+    trip that guard before reaching its own subject: measured, G19 and G20
+    raised the wall-reflection message instead of their own.
+
+    So an off-arm gate drops the key and lets it resolve to whatever the
+    package ships, which is the inert value by construction. Written as a
+    helper rather than a literal so no gate hard-codes which value is
+    currently the default -- the coupling that broke the guard in the first
+    place.
+    """
+    d.pop("neutral_kinetic_dvm_wall_reflection", None)
+    return None
 
 
 def make_refusal_gate(label, offender, mutate):

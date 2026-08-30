@@ -61,6 +61,7 @@ from .core.validation import (
     _RawStageError,
     _bad_array_summary,
     refuse_cathode_backscatter_double_book,
+    refuse_dvm_cathode_jet_without_cathode_coupling,
     resolve_coverage_config,
     resolve_emitting_area_config,
     resolve_neutral_jet_config,
@@ -1177,20 +1178,40 @@ class LAPDSim1D:
             # Same statement for the cylindrical wall's reflection spectrum:
             # it selects what the transient DVM returns its non-accommodated
             # wall share on, and no other neutral model has such a share.
+            #
+            # The value accepted off-arm is the SHIPPED TEMPLATE DEFAULT,
+            # read from the template itself. Off-arm the key has no meaning
+            # under ANY of its values, so what the guard actually refuses is
+            # a CONFIGURED choice sitting where it can do nothing -- and the
+            # only value that is not a configured choice is the one that
+            # arrives unasked. Spelling that as a position in
+            # KINETIC_DVM_WALL_REFLECTION_MODELS coupled the guard to a tuple
+            # ORDERING that merely happened to coincide with the default, and
+            # the coincidence broke the moment the default moved (the
+            # diffuse_elastic adoption, 2026-08-30): every moment-model build,
+            # the golden included, refused at construction. Reading the
+            # template keeps the guard correct through any future flip.
+            inert = str(
+                input_dict_template_1d["neutral_kinetic_dvm_wall_reflection"]
+            )
             reflection = str(
                 self._input_dict.get(
-                    "neutral_kinetic_dvm_wall_reflection",
-                    KINETIC_DVM_WALL_REFLECTION_MODELS[0],
+                    "neutral_kinetic_dvm_wall_reflection", inert
                 )
             )
-            if reflection != KINETIC_DVM_WALL_REFLECTION_MODELS[0]:
+            if reflection != inert:
+                configured = " / ".join(
+                    repr(m)
+                    for m in KINETIC_DVM_WALL_REFLECTION_MODELS
+                    if m != inert
+                )
                 raise ValueError(
                     "neutral_kinetic_dvm_wall_reflection selects the "
                     "spectrum the transient DVM returns its non-accommodated "
                     "cylindrical-wall share on and has no meaning under "
                     f"neutral_model={self._neutral_model!r}. Accepted: "
-                    f"{KINETIC_DVM_WALL_REFLECTION_MODELS[0]!r} anywhere, or "
-                    "'diffuse_elastic' with neutral_model='kinetic_dvm' and "
+                    f"{inert!r} (the shipped default) anywhere, or "
+                    f"{configured} with neutral_model='kinetic_dvm' and "
                     f"the neutral_two_zone flag (got {reflection!r})"
                 )
             # Same statement for the transfer hold: it selects how the
@@ -4235,6 +4256,9 @@ class LAPDSim1D:
             self._input_dict.get("neutral_kinetic_dvm_cathode_jet", False)
         ):
             refuse_cathode_backscatter_double_book(self._input_dict)
+            refuse_dvm_cathode_jet_without_cathode_coupling(
+                self._input_dict, self._flags
+            )
             cathode_jet = {
                 "R_N": float(
                     self._input_dict.get(
@@ -11802,11 +11826,24 @@ class LAPDSim1D:
         reads, so the two arms describe ions arriving with one energy.
 
         ``phi_c`` comes from the solve THIS evaluation built, clamped at
-        zero exactly as :meth:`_cathode_jet_spec` clamps it. A phase with no
-        cathode solve at all -- and a solve whose sheath potential is not
-        finite -- carries no sheath drop, so the incident energy is the
-        thermal ``Ti`` alone: the ions still arrive, and they arrive with
-        what the plasma gave them. That is the reading, not a fallback.
+        zero exactly as :meth:`_cathode_jet_spec` clamps it. The ``Ti``-only
+        branch is reachable only where there is no solve to read: a
+        configuration with cathode coupling unconfigured -- which
+        :func:`~cablp.solvers._sim1d.core.validation.refuse_dvm_cathode_jet_without_cathode_coupling`
+        now refuses at construction, so it cannot hold for a whole run -- or
+        a driven solve that returned a non-finite sheath potential.
+
+        A CONFIGURED run's afterglow does NOT take that branch: it rides the
+        floating cathode solve like every other phase. What that solve
+        returns there is measured, not assumed -- at the 1910 K emitting
+        surface the Richardson current dwarfs the afterglow Bohm current, so
+        the floating output is the EMISSION-DOMINATED one, ``phi_c`` of order
+        zero to slightly inverted, rather than the classical non-emitting
+        ``Lambda * Te``. The channel therefore self-extinguishes in afterglow
+        twice over: by FLUX, since the counted recycle rate follows
+        ``n * Te^1.5``, and by LAUNCH ENERGY, since ``phi_c + Ti`` falls to
+        the ``Ti`` scale on its own. Both limits are the physics, not a
+        fallback path.
 
         The row is a RATE because its partner (the counted source row) is,
         and the stage accumulator integrates both over the step at one

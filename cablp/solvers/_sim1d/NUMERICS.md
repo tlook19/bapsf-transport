@@ -518,9 +518,13 @@ was actually placed, not as `(1 − α_E)·E_incident`, so the ledger closes by
 construction rather than by the solve's convergence; the two agree to
 roundoff, which is the gated statement.
 
-`"specular"` is the shipped default and reduces to the arithmetic the arm
-carried before this member existed, so the selector is bit-exact off; the two
-values also degenerate at `α_E = 1`, where there is no share to place. **The
+`"diffuse_elastic"` is the shipped default (adopted 2026-08-30 on the
+literature-boxed TMAC verification; the provenance note carries the box and
+the ~4x per-tick cost). `"specular"` is the disclosed bracket endpoint, and it
+reproduces the arithmetic the arm carried before this member existed. The
+selector is inert OFF-ARM rather than bit-exact-off in the usual sense: no
+other neutral model constructs the engine that reads it. The two values also
+degenerate at `α_E = 1`, where there is no share to place. **The
 golden is unaffected by construction**: the moment neutral path never builds
 a DVM.
 

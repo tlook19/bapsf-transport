@@ -957,9 +957,13 @@ def model_mode_defaults():
         mirror already fully accommodates the directed axial momentum -- and
         the anode mesh and the interior closed faces never read this key.
         The two values degenerate at ``alpha_E = 1``, where there is no
-        share to place. Inert unless ``neutral_model = "kinetic_dvm"``;
-        selecting ``"diffuse_elastic"`` under any other neutral model, or
-        any other value, raises at construction.
+        share to place. Inert unless ``neutral_model = "kinetic_dvm"``: under
+        any other neutral model the key must RESOLVE to its shipped default
+        -- left alone, or naming that same value -- and setting the other
+        value there raises at construction, because off the arm there is no
+        wall share to place and a value that differs from the shipped one is
+        a configured choice that can do nothing. A value outside the two
+        raises anywhere.
     neutral_kinetic_dvm_elastic:
         Polarization-elastic ion-neutral channel of the transient DVM.
         ``"phelps_iso"`` adds a BGK-like relaxation toward the local ion
@@ -1205,7 +1209,7 @@ def model_mode_defaults():
         "neutral_kinetic_dvm_nvz": 48,
         "neutral_kinetic_dvm_nvp": 12,
         "neutral_kinetic_dvm_accommodation": 0.40,
-        "neutral_kinetic_dvm_wall_reflection": "specular",
+        "neutral_kinetic_dvm_wall_reflection": "diffuse_elastic",
         "neutral_kinetic_dvm_elastic": "phelps_iso",
         "neutral_kinetic_dvm_exchange": "cauchy_chord",
         "neutral_kinetic_dvm_annulus_flights": "rates",

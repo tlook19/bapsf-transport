@@ -157,7 +157,11 @@ EXCHANGE_MODELS = ("cauchy_chord", "geometric")
 # whose temperature parameter is solved so that the spectrum's DISCRETE mean
 # energy equals the retained share's incident mean, which randomizes the
 # direction while exchanging no energy with the surface. The first entry is
-# the shipped default. The END plates keep the specular mirror under both
+# this ENGINE's kwarg default, used only by direct ``TransientDVM``
+# construction (test fixtures and probes); the PACKAGE default a solver-built
+# run resolves is owned by ``core/config.py`` and is not this tuple's order.
+# The two have differed since the 2026-08-30 adoption. The END plates keep
+# the specular mirror under both
 # values -- an end-wall ``v_z`` mirror already fully accommodates the
 # directed axial momentum -- and the anode mesh and the interior closed faces
 # are fully accommodating by construction and never read this. See
