@@ -53,7 +53,7 @@ _SCRIPTS = Path(__file__).resolve().parent
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
-from b5cj_bitinert_ab import capture, compare  # noqa: E402
+from b5cj_bitinert_ab import _parse_extra, capture, compare  # noqa: E402
 
 #: Steps each arm walks, pre-registered. A cost knob, not physics.
 WINDOW_STEPS = 800
@@ -104,12 +104,25 @@ def main(argv=None):
     )
     parser.add_argument("--steps", type=int, default=WINDOW_STEPS)
     parser.add_argument("--out")
+    parser.add_argument(
+        "--extra",
+        nargs="*",
+        metavar="KEY=VALUE",
+        help=(
+            "params overrides layered on top of the fixture. The A/B arms are "
+            "PRE-REGISTERED and must not be run with this; it exists for "
+            "clearly-labelled supplementary runs of the armed mode."
+        ),
+    )
     parser.add_argument("--compare", nargs=2, metavar=("A", "B"))
     args = parser.parse_args(argv)
     if args.compare:
         return compare(*args.compare)
     if not args.mode or not args.out:
         parser.error("--mode and --out are required unless --compare is given")
+    extra = _parse_extra(args.extra)
+    if extra and args.mode != "armed":
+        parser.error("--extra is accepted only with --mode armed")
     if args.mode == "moment":
         record = capture("moment", args.steps)
     elif args.mode == "kinetic_dvm":
@@ -117,9 +130,12 @@ def main(argv=None):
         record["arm"] = "kinetic_dvm"
     else:
         record = capture(
-            "kinetic_dvm", args.steps, {**KINETIC_EXTRA, **ARMED_EXTRA}
+            "kinetic_dvm",
+            args.steps,
+            {**KINETIC_EXTRA, **ARMED_EXTRA, **extra},
         )
         record["arm"] = "kinetic_dvm_anode_jet_armed"
+        record["extra"] = dict(extra)
     Path(args.out).write_text(json.dumps(record, indent=2, sort_keys=True))
     for key, value in sorted(record.items()):
         if key == "dvm_ledgers":

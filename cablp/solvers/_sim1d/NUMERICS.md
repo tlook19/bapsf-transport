@@ -595,6 +595,41 @@ different books. Reading `(φ_c + T_i)` once at tick time and applying it to
 the whole window's count is the other near-miss — the plasma moves inside a
 tick, and the suite's CJ2 negative control measures how far.
 
+### The DVM anode jet's launch spectrum
+
+**It is the cathode jet's spectrum with `phi_a` in place of `phi_c`.** Every
+statement of the section above holds here unchanged and is not restated: the
+launch energy per atom `ε = (R_E/R_N)(φ_a + T_i)`, the placement through
+`VGrid.maxwellian(T_launch, u, exact_moments=True)`, the drift SOLVED FROM THE
+ENERGY so the discrete mean energy is `ε` rather than `ε + (3/2) k T_launch`,
+the grid-tied `T_launch` default and why narrower is not better, and the
+checked projection that RAISES on a miss instead of launching at an energy the
+surface book did not record. Read them there.
+
+Two things are the anode's own.
+
+**The drift is SIGNED.** The atoms leave away from the wires on the side they
+were collected from, so `u = ±sqrt(v_back² − 3 k T_launch / m)` with the sign
+taken from the cell's position relative to the mesh face — negative below,
+positive at or above. `VGrid.maxwellian` carries a negative drift exactly as it
+carries a positive one (the `v_z` axis is symmetric and the erf differences are
+evaluated about `u`), so no separate construction is needed and the moment
+check is the same check. The signed drift is what the `momentum_anode_jet`
+diagnostic row reports: the count times the spectrum's own discrete first
+moment, summed over sides, so a dropped or mis-signed side cannot cancel
+against the other.
+
+**The grid-tied smear is SCALE-FREE on the shipped axis, and that is what makes
+the channel safe across its whole launch band.** The `v_z` axis is
+geometrically stretched, so the bin containing the launch speed widens with the
+speed and the margin `ε / ((3/2) k T_launch)` does not run away at either end.
+Measured (`scripts/b4aj_smear_margin_probe.py`) on `(48, 12)` it lies between
+3.1 and 5.4 over `0.005–100 eV`, and on `(64, 24)` between 6.1 and 8.6 over the
+same band; on the coarse `(16, 6)` axis used by most of the K2 gate suite it is
+between 0.22 and 1.4 — the smear carries more energy than the beam and the
+guard fires by design. That is why the AJ gates run the shipped grid rather
+than the suite's default.
+
 ### The counted ionization debit, and why it is taken last
 
 The counted-particle handshake makes the plasma and the neutral arm destroy

@@ -1351,7 +1351,19 @@ class TransientDVM:
                 f"atom at cell {cell} (got {e_launch!r} erg): the "
                 "backscattered share carries (R_E/R_N)(phi_a + Ti), and a "
                 "cell that collects ions at zero incident energy has no "
-                "energetic share to launch"
+                "energetic share to launch. MEASURED CAUSE of the zero at the "
+                "ES1 operating point: the anode sheath is ELECTRON-ATTRACTING "
+                "before breakdown -- phi_a runs -0.09 to -6.6 V over the "
+                "first ~9 accepted steps while Ti sits at its 0.026 eV floor "
+                "-- so the fluid-parity clamp max(phi_a + Ti, 0) is exactly "
+                "zero there while the mesh still collects at ~1e18 s^-1 "
+                "(scripts/b4aj_phi_a_probe.py). A neutral cadence fine "
+                "enough to fire a whole tick inside that window therefore "
+                "hands this channel a counted stream with no committed "
+                "energy. This is REPORTED, not resolved: the registration "
+                "pins the fluid-parity clamp and does not say what the "
+                "backscatter of a zero-energy ion is, and guessing between "
+                "the readings is not this code's call"
             )
         v_back = np.sqrt(2.0 * e_launch / M_HE)
         T_launch = self._anode_jet_launch_temperature_eV(v_back)

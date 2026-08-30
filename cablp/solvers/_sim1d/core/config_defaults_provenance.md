@@ -810,6 +810,77 @@ on.
 This entry is where that falsification lives. It was previously recorded only
 in commit messages, which `RULE_KB_IMPACT` does not accept as a fact's home.
 
+**`neutral_kinetic_dvm_anode_jet = False` — ASSUMED (structural: a
+default-off channel).** Whether the transient DVM splits the counted anode-mesh
+collection into an energetic backscatter share and a thermal remainder. Off is
+the shipped reading — every neutralized ion is reborn at rest on the wall
+distribution in the cell it was counted into — and off is a CLOSURE the model
+makes, not a measurement: an ion falling through the ion-attracting anode
+sheath arrives with `phi_a + Ti` and a real share of that flux returns as
+backscattered atoms rather than being implanted and desorbing at rest. The
+default is default-off because the channel is new physics under the standing
+rule (default off, presence-gated, bit-exact off), not because at-rest
+re-emission is the better physics. The physics it adds is in `MODEL.md`
+§ "Anode-side energetic recycle"; its A/B is the pair of arms.
+
+**`neutral_kinetic_dvm_anode_jet_R_N = 0.63`,
+`neutral_kinetic_dvm_anode_jet_R_E = 0.41` — DERIVED (fluid-mirrored),
+bracket = the fluid entry's disclosed PAIR bracket.** Particle and total
+reflected-energy coefficients for He → Mo at the anode mesh, read only when the
+channel above is armed.
+
+**These MIRROR the fluid channel's `anode_jet_R_N` / `anode_jet_R_E` exactly,
+by construction, so the two arms describe the SAME mesh** — the Eckstein
+IPP 9/132 200 eV rows, the mid-box construction, the correlated-pairs rule
+(never four independent corners), and above all that entry's **disclosed
+bracket** `R_N ∈ [0.52, 0.63]`, `R_E ∈ [0.30, 0.41]`, standing because the
+adopted pair exceeds Eckstein's sight-verified 2009 ⁴He→Mo fit by
++21 % / +36 % with no verified explanation. Read it there; none of it is
+restated here. A campaign that moves one of the two pairs and not the other has
+stopped comparing two closures of one mesh and is comparing two meshes; that is
+a finding, not a configuration.
+
+Honest bar: the fluid entry's, unchanged — including its zero-fluence caveat,
+which has teeth here because the mesh accumulates helium in service. What the
+kinetic arm adds is not a better coefficient but a better carrier: the
+backscattered atoms are born as a directed population on the velocity grid,
+transported and attacked by the loss channels as the energetic atoms they are,
+and the energy that left with them is recorded in the anode's own surface book
+rather than being an unbooked momentum source.
+
+**REGISTERED DISCLOSURE — the fluid parity that makes the incident energy
+reachably ZERO.** The launch energy is built from the fluid channel's own
+clamp, `max(phi_a + Ti, 0)`, and the fluid ANODE spec passes `phi_a` through
+raw where the fluid CATHODE spec clamps `phi_c` at zero first. Before
+breakdown the anode sheath is electron-attracting: measured over the arm's
+opening window (`scripts/b4aj_phi_a_probe.py`, measured at this branch's base
+before it could be gated on), `phi_a` runs −0.09 to −6.6 V across accepted
+steps 2–9 while `Ti` sits at its 0.026 eV floor, so the clamped incident energy
+is exactly zero there while the mesh still collects at ~1e18 s⁻¹. A neutral
+cadence fine enough to fire a whole tick inside that span hands the channel a
+counted stream with no committed energy and the launch spectrum RAISES. What
+the backscatter of a zero-energy ion is — no energetic share at all, or a
+directed launch at the thermal scale — is a closure neither this entry nor the
+registration states, and it is open.
+
+**`neutral_kinetic_dvm_anode_jet_T_launch_eV = None` (grid-tied) — DERIVED
+(numerics, not physics).** The width of the smear the monoenergetic
+backscatter beam is represented by on the discrete velocity grid, and the
+anode-side twin of the cathode entry above: `None` ties it to the axial bin
+containing the launch speed, `m dv_z(v_back)^2 / k_B`. It is NOT a gas
+temperature — the drift is solved from the ENERGY, so the discrete mean energy
+is the launch energy whatever this is set to, and what it changes is only how
+wide a bundle of bins carries it. A positive float pins it, as an A/B
+instrument. **The cathode entry's falsification of the registration's fixed
+0.18 eV pin binds this key identically and for the same reason** (the smear is
+launch-energy-dependent because the axis is stretched); read it there. What is
+measured on the anode side is the consequence for representability: the margin
+`e / ((3/2) k T_launch)` is scale-free on the stretched axis and runs 3.1–5.4
+on `(48, 12)` and 6.1–8.6 on `(64, 24)` over `0.005–100 eV`, so the grid-tied
+default is representable across the whole band the channel can reach on either
+grid, and 0.22–1.4 on the coarse `(16, 6)` axis, where it is not
+(`scripts/b4aj_smear_margin_probe.py`).
+
 **`neutral_kinetic_dvm_elastic = "phelps_iso"` — DERIVED.** Whether the
 polarization-elastic ion-neutral channel is carried alongside charge exchange.
 Derived from the requirement that the arm not silently drop physics the fluid

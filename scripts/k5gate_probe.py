@@ -458,7 +458,11 @@ def run_dvm_k5(shared, dt, nvz, nvp, ib, ib2, end_mask, end_mask2, mid_mask,
         # ``_march`` also returns the intercepted mesh ENERGIES (the
         # B0a energy ledger's one in-sweep tally); nothing here reads
         # them.
-        f_c_m, f_a_m, mesh_c, mesh_a, out, _mesh_E, _closed = captured["res"]
+        # ``_mesh_P`` is the B4 anode-jet momentum tally, zeros unless that
+        # channel is armed; this instrument does not read it.
+        (
+            f_c_m, f_a_m, mesh_c, mesh_a, out, _mesh_E, _closed, _mesh_P
+        ) = captured["res"]
         curN, curN2 = inv(end_mask), inv(end_mask2)
         acc["N_end"][k] += 0.5 * (prevN + curN) * dt
         acc["N_end2"][k] += 0.5 * (prevN2 + curN2) * dt

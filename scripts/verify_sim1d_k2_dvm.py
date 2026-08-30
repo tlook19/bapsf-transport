@@ -4769,9 +4769,9 @@ AJ_R_E = 0.41
 #: thermal energy in its narrowest resolvable spectrum than the beam has, and
 #: the engine's guard says so and RAISES. Measured on the shipped ``(48, 12)``
 #: axis the grid-tied smear leaves the margin ``e / (3/2 k T_launch)`` between
-#: 3.2 and 5.3 over ``0.005-100 eV`` -- the stretched axis makes it
-#: scale-free -- so the projection lands at machine precision at every launch
-#: energy this channel can reach.
+#: 3.1 and 5.4 over ``0.005-100 eV`` (``scripts/b4aj_smear_margin_probe.py``)
+#: -- the stretched axis makes it scale-free -- so the projection lands at
+#: machine precision at every launch energy this channel can reach.
 AJ_NVZ = 48
 AJ_NVP = 12
 
