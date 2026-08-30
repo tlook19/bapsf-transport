@@ -267,15 +267,164 @@ MODEL_FAMILIES = (
 )
 
 
+# ------------------------------------------------------------------------
+# DECLARATION-BLOCK FAMILIES
+#
+# The sets above answer "what does this SELECTION force?". The sets below
+# answer the other half: "what is this family's COMPLETE MEMBERSHIP?" -- every
+# key whose meaning belongs to the family, whether the family forces its value,
+# merely reads it, or refuses it. That is the inventory a declaration block
+# states, and the two halves are deliberately different data: a selection's
+# forced set is a subset of a family's membership (the R coefficients a jet
+# reads, for instance, are members that no selection forces).
+#
+# Membership is (space, key) only. A declaration block supplies every VALUE
+# itself -- that is the 24d option (b) ruling, declaration entries explicit
+# regardless of value -- so there is nothing here for a default to drift
+# against. The space rides with the key for the same reason it does above: the
+# families span BOTH namespaces, and a declaration block is written WITHOUT
+# namespaces precisely so a member cannot be filed into the wrong one.
+#
+# EVERY SET BELOW IS MEASURED, by the same method as the sets above and on the
+# same terms: read what the guards couple, not what a name suggests. Where the
+# measurement disagreed with the 2026-08-23 census that commissioned this pass,
+# the CODE won and the disagreement is recorded in the entry.
+
+#: Family A, DVM half. The selection plus every key it forces.
+NEUTRAL_CLOSURE_MEMBERS = ((PARAMS, "neutral_model"),) + tuple(
+    (space, key) for space, key, _required, _why in KINETIC_DVM_INCOMPATIBLE_DEFAULTS
+)
+
+#: Family A, two-moment half. The selection, every key it forces, and the two
+#: keys that have no reading without it.
+NEUTRAL_RADIAL_CLOSURE_MEMBERS = (
+    ((PARAMS, "neutral_momentum_radial"),)
+    + tuple(
+        (space, key)
+        for space, key, _required, _why in KINETIC_TWO_MOMENT_INCOMPATIBLE_DEFAULTS
+    )
+    + tuple((space, key) for space, key, _why in KINETIC_TWO_MOMENT_INTERNAL_MEMBERS)
+)
+
+#: Family K -- beam deposition, the anomalous (quasilinear) channel, and the
+#: walked tail. MEASURED 2026-08-30 at 22 keys, not the census's "~10": the
+#: census counted the tail spine and left out the excitation trio, the clump
+#: pair, the anode-reflect riders and the two interception FLAGS, all of which
+#: the same guard block couples. The enforced chain is likewise 7 deep, not 4
+#: (beam_anode_interception -> beam_tail_anode_interception -> the riders ->
+#: tail_ionization -> the walked-tail selector -> beam_anomalous_model ->
+#: beam_deposition_model); the census's "depth 4" is the middle spine read
+#: upward. This is the family the 23ag detonation class came from -- change one
+#: key and the guards refuse one at a time, which is exactly what declaring the
+#: whole membership at once removes.
+BEAM_TAIL_CLOSURE_MEMBERS = (
+    (PARAMS, "beam_deposition_model"),
+    (PARAMS, "beam_coulomb_model"),
+    (PARAMS, "beam_anomalous_model"),
+    (PARAMS, "ql_relaxation_coeff"),
+    (PARAMS, "beam_product_transport"),
+    (PARAMS, "heating_anomalous_transport"),
+    (PARAMS, "heating_anomalous_disposal"),
+    (PARAMS, "heating_anomalous_tail_energy_eV"),
+    (PARAMS, "heating_anomalous_tail_ionization"),
+    (PARAMS, "heating_anomalous_tail_energy_keying"),
+    (PARAMS, "heating_anomalous_tail_phi_c_fraction"),
+    (PARAMS, "heating_anomalous_tail_cathode_boundary"),
+    (PARAMS, "beam_tail_anode_reflected_particles"),
+    (PARAMS, "beam_tail_anode_reflected_energy"),
+    (PARAMS, "beam_clump_fraction"),
+    (PARAMS, "beam_clump_enhancement"),
+    (PARAMS, "beam_deposition_smoothing_cm"),
+    (PARAMS, "b_beam_excitation"),
+    (PARAMS, "beam_excitation_model"),
+    (PARAMS, "beam_excitation_energy_eV"),
+    (FLAGS, "beam_anode_interception"),
+    (FLAGS, "beam_tail_anode_interception"),
+)
+
+#: Family B, cathode half -- the cathode surface's directed-recycle channel.
+#: The two R coefficients are members: they are the surface property the jet
+#: reads, and a declaration that states the jet without them is not the whole
+#: decision.
+CATHODE_SURFACE_RECYCLE_MEMBERS = (
+    (PARAMS, "cathode_neutral_jet"),
+    (PARAMS, "cathode_jet_R_N"),
+    (PARAMS, "cathode_jet_R_E"),
+    (PARAMS, "cathode_jet_energy_convention"),
+    (PARAMS, "cathode_jet_surface_debit"),
+    (PARAMS, "cathode_jet_hot_carrier"),
+)
+
+#: Family B, anode half. ``neutral_mesh_accommodation`` is a member of THIS
+#: half: it is armed with the anode jet, shares the jet's anode-face and
+#: transparency requirements, and the stance arms the two together.
+ANODE_SURFACE_RECYCLE_MEMBERS = (
+    (PARAMS, "anode_neutral_jet"),
+    (PARAMS, "anode_jet_R_N"),
+    (PARAMS, "anode_jet_R_E"),
+    (PARAMS, "anode_jet_energy_convention"),
+    (PARAMS, "neutral_mesh_accommodation"),
+)
+
+#: Family F -- how the initial neutral state is established.
+INITIAL_NEUTRAL_STATE_MEMBERS = (
+    (FLAGS, "neutral_equilibration"),
+    (FLAGS, "launch_plasma_after_equilibration"),
+    (PARAMS, "neutral_equilibration_cycles"),
+    (PARAMS, "neutral_equilibration_dt"),
+    (PARAMS, "equilibration_gas_puff_on_s"),
+    (FLAGS, "use_cached_neutral_seed"),
+    (PARAMS, "neutral_seed_cache_dir"),
+    (FLAGS, "neutral_initial_profile"),
+    (PARAMS, "nn0"),
+    (PARAMS, "nn0_profile"),
+    (PARAMS, "nn0_annulus_profile"),
+    (PARAMS, "restart_from"),
+)
+
+#: The mutually exclusive routes inside :data:`INITIAL_NEUTRAL_STATE_MEMBERS`,
+#: as ``(route, (space, key), off_value, why)``: a route is ARMED when its key
+#: holds anything other than ``off_value``, and at most one may be armed.
+#:
+#: THREE routes, not the census's four. MEASURED 2026-08-30: ``cached_seed`` is
+#: NOT a fourth exclusive route -- it REQUIRES ``neutral_equilibration`` (the
+#: co-requisite is validation.py's ``use_cached_neutral_seed is ON but the
+#: configuration is incoherent`` refusal) and its dispatch is a hit/miss branch
+#: INSIDE the equilibration path, so it is a modifier of ``equilibrate``, not
+#: an alternative to it. That also settles the count: three routes have three
+#: pairs, and the code carries exactly three direct pairwise refusals, not the
+#: census's six. Collapsing the four-route reading into one selector would have
+#: made cached_seed and equilibrate mutually exclusive -- a behaviour change,
+#: and one this migration is forbidden to make.
+INITIAL_NEUTRAL_STATE_ROUTES = (
+    (
+        "equilibrate", (FLAGS, "neutral_equilibration"), False,
+        "start_simulation() runs the puff/off accumulation and seeds nn from "
+        "it, overwriting whatever the initial condition put there.",
+    ),
+    (
+        "profile", (FLAGS, "neutral_initial_profile"), False,
+        "the shaped per-cell nn0_profile IS the initial fill, and it "
+        "supersedes the scalar nn0 for both zones.",
+    ),
+    (
+        "restart", (PARAMS, "restart_from"), None,
+        "a restart payload replaces the whole initial condition, neutrals "
+        "included.",
+    ),
+)
+
+
 def _template(space):
     return input_flags_template_1d if space == FLAGS else input_dict_template_1d
 
 
-def _default_of(space, key):
+def member_default(space, key):
+    """The config template's value for one member, in its own namespace."""
     return _template(space).get(key)
 
 
-def _same(a, b):
+def values_equal(a, b):
     """Value equality that is safe for anything a config key can hold.
 
     Config values include bools, strings, ``None``, floats and per-cell
@@ -367,13 +516,13 @@ def resolve_model_families(params, flags):
     spaces = {PARAMS: params, FLAGS: flags}
     for family in MODEL_FAMILIES:
         selector_given = spaces[family.selector_space].get(family.selector_key)
-        if _same(selector_given, family.engaged_value):
+        if values_equal(selector_given, family.engaged_value):
             conflicts = []
             for space, key, required, why in family.members:
                 given = spaces[space].get(key)
-                if _same(given, required):
+                if values_equal(given, required):
                     continue
-                if _same(given, _default_of(space, key)):
+                if values_equal(given, member_default(space, key)):
                     spaces[space][key] = required
                     continue
                 conflicts.append((space, key, required, given, why))
@@ -383,9 +532,137 @@ def resolve_model_families(params, flags):
         armed = []
         for space, key, why in family.internal_members:
             given = spaces[space].get(key)
-            if _same(given, _default_of(space, key)):
+            if values_equal(given, member_default(space, key)):
                 continue
             armed.append((space, key, given, why))
         if armed:
             _raise_internal_members_armed(family, selector_given, armed)
     return params, flags
+
+
+#: Names a declaration block reserves for itself, so they can never be members.
+RESERVED_BLOCK_KEYS = frozenset({"none_valued"})
+
+
+class DeclaredFamily:
+    """One family as a DECLARATION BLOCK states it: a name and a membership.
+
+    ``members`` is the family's COMPLETE inventory as ``(space, key)`` pairs,
+    in the order a block should read. A block must state every one of them and
+    nothing else; the values are the block's, not this object's.
+
+    ``selector`` / ``engaged_value``, when present, name the member whose value
+    engages the family. A block for a family with a selector must engage it --
+    declaring the membership of a family you are not selecting is declaring
+    keys that belong to whatever you selected instead.
+
+    ``routes`` is the optional mutual-exclusion group described at
+    :data:`INITIAL_NEUTRAL_STATE_ROUTES`.
+    """
+
+    __slots__ = ("name", "summary", "members", "selector", "engaged_value", "routes")
+
+    def __init__(
+        self, name, summary, members, selector=None, engaged_value=None, routes=()
+    ):
+        self.name = name
+        self.summary = summary
+        self.members = tuple(members)
+        self.selector = selector
+        self.engaged_value = engaged_value
+        self.routes = tuple(routes)
+
+    def owns(self, key):
+        """Return the namespace of member ``key``, or ``None``."""
+        for space, member in self.members:
+            if member == key:
+                return space
+        return None
+
+
+#: Every family a declaration block may name. A key appears in more than one
+#: family here (``neutral_momentum_radial`` is the two-moment selector AND a
+#: member the DVM selection forces; the jet keys are members of family B AND of
+#: the DVM set that forbids them), which is why two blocks claiming one key is
+#: refused rather than merged: overlapping membership means the two families
+#: disagree about who owns the decision, and only the caller can settle it.
+DECLARED_FAMILIES = (
+    DeclaredFamily(
+        name="neutral_closure",
+        summary="the neutral closure: which model carries the neutral state",
+        members=NEUTRAL_CLOSURE_MEMBERS,
+        selector="neutral_model",
+        engaged_value="kinetic_dvm",
+    ),
+    DeclaredFamily(
+        name="neutral_radial_closure",
+        summary="the radial closure of the evolved neutral wind",
+        members=NEUTRAL_RADIAL_CLOSURE_MEMBERS,
+        selector="neutral_momentum_radial",
+        engaged_value="kinetic_two_moment",
+    ),
+    DeclaredFamily(
+        name="beam_tail_closure",
+        summary=(
+            "beam deposition, the anomalous channel and the walked tail"
+        ),
+        members=BEAM_TAIL_CLOSURE_MEMBERS,
+    ),
+    DeclaredFamily(
+        name="cathode_surface_recycle",
+        summary="the cathode surface's directed-recycle channel",
+        members=CATHODE_SURFACE_RECYCLE_MEMBERS,
+    ),
+    DeclaredFamily(
+        name="anode_surface_recycle",
+        summary="the anode mesh's directed-recycle channel",
+        members=ANODE_SURFACE_RECYCLE_MEMBERS,
+    ),
+    DeclaredFamily(
+        name="initial_neutral_state",
+        summary="how the initial neutral state is established",
+        members=INITIAL_NEUTRAL_STATE_MEMBERS,
+        routes=INITIAL_NEUTRAL_STATE_ROUTES,
+    ),
+)
+
+
+def _self_check():
+    """Refuse a malformed family table AT IMPORT, not at first use.
+
+    Every member must exist in the namespace its entry claims, every family
+    name must be unique, a selector must be one of its own family's members,
+    and a route key must be one too. A typo in the tables above is a defect in
+    the config surface's own description, so it fails here rather than becoming
+    a confusing refusal on somebody's arm.
+    """
+    seen = set()
+    for family in DECLARED_FAMILIES:
+        if family.name in seen:
+            raise RuntimeError(f"duplicate declared family {family.name!r}")
+        seen.add(family.name)
+        if RESERVED_BLOCK_KEYS.intersection(m for _s, m in family.members):
+            raise RuntimeError(
+                f"declared family {family.name!r} owns a member whose name is "
+                f"reserved inside a block: {sorted(RESERVED_BLOCK_KEYS)}"
+            )
+        for space, key in family.members:
+            if key not in _template(space):
+                raise RuntimeError(
+                    f"declared family {family.name!r} names {space}:{key}, "
+                    f"which the {space} template does not own"
+                )
+        if family.selector is not None and family.owns(family.selector) is None:
+            raise RuntimeError(
+                f"declared family {family.name!r} has selector "
+                f"{family.selector!r} outside its own membership"
+            )
+        for _route, (space, key), _off, _why in family.routes:
+            if (space, key) not in family.members:
+                raise RuntimeError(
+                    f"declared family {family.name!r} has a route on "
+                    f"{space}:{key}, which is outside its own membership"
+                )
+
+
+_self_check()

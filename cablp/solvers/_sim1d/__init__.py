@@ -16,7 +16,9 @@ from .core.config import (
     load_config,
     resolve_config,
 )
+from .core.model_declarations import resolve_declaration_blocks
 from .core.model_families import (
+    DECLARED_FAMILIES,
     KINETIC_DVM_INCOMPATIBLE_DEFAULTS,
     KINETIC_TWO_MOMENT_INCOMPATIBLE_DEFAULTS,
     KINETIC_TWO_MOMENT_INTERNAL_MEMBERS,
@@ -40,6 +42,7 @@ from .solver import (
 
 __all__ = [
     "BreakdownError",
+    "DECLARED_FAMILIES",
     "KINETIC_DVM_INCOMPATIBLE_DEFAULTS",
     "KINETIC_TWO_MOMENT_INCOMPATIBLE_DEFAULTS",
     "KINETIC_TWO_MOMENT_INTERNAL_MEMBERS",
@@ -56,6 +59,7 @@ __all__ = [
     "load_restart_state",
     "load_result_hdf5",
     "resolve_config",
+    "resolve_declaration_blocks",
     "resolve_model_families",
     "save_restart_state",
     "save_result_hdf5",

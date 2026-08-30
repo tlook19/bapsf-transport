@@ -1,0 +1,184 @@
+# Declaration blocks — the config surface's model-family form
+
+A **declaration block** states one model family's COMPLETE membership in one
+place. It is an input form only: blocks are projected onto the same two flat
+namespaces (`input_dict`, `input_flags`) the solver has always read, so
+adopting one changes no value and moves no trajectory.
+
+Read this alongside `core/config.py` (which owns the keys and their defaults),
+`core/model_families.py` (which owns the family data) and
+`core/model_declarations.py` (which owns the form and its refusals). Values and
+their provenance live in the `*_provenance.md` notes, never here.
+
+## Why the form exists
+
+Every model-specific key lives in one flat top-level namespace, so a config
+carries every family's keys at all times — including the families it did not
+select, at values that are meaningless or that the selected model refuses
+outright. Nothing in the flat form says which keys belong together. Two
+consequences, both measured rather than supposed:
+
+- A selection is assembled one key at a time and verified by running into the
+  guards one refusal at a time — engage, read the refusal, clear the key it
+  names, run again. `core/model_families.py` flattened that cascade for the two
+  neutral-closure families; a block removes the shape that produces it.
+- An off-arm key still sits in the namespace, so guarding against it takes a
+  hand-rolled per-key check, and a family member left undeclared reaches a run
+  as whatever the package default happens to be that week.
+
+## The form
+
+```toml
+[models.cathode_surface_recycle]
+cathode_neutral_jet           = true
+cathode_jet_R_N               = 0.34
+cathode_jet_R_E               = 0.18
+cathode_jet_energy_convention = "total_reflected"
+cathode_jet_surface_debit     = true
+cathode_jet_hot_carrier       = false
+```
+
+Three properties, each answering a different half of the ruling:
+
+**Explicit regardless of value.** Every member is written, including members
+sitting at their config default. A block is an INVENTORY, not a delta: reading
+it tells you the whole decision, and it cannot go stale against a default that
+moves underneath it. A missing member is a refusal, never an inherited value.
+
+**Namespace-free.** `cathode_neutral_jet` is an `input_dict` key and
+`neutral_equilibration` is an `input_flags` key; a block states neither fact.
+The family membership carries the namespace and the resolver files each member
+where it belongs. The driver-side hazard — a key filed into the wrong namespace
+— cannot be expressed in a block at all.
+
+**One owner per key.** Two blocks may not claim the same key, and a member the
+caller also *chose* flat, at a different value, is refused.
+
+### `none_valued`
+
+TOML has no null literal, so a member whose declared value is `None` is named
+in the block's `none_valued` array instead of carrying a value:
+
+```toml
+[models.anode_surface_recycle]
+anode_neutral_jet           = false
+anode_jet_R_N               = 0.63
+anode_jet_R_E               = 0.41
+neutral_mesh_accommodation  = false
+none_valued                 = ["anode_jet_energy_convention"]
+```
+
+The committed stance files already use this convention at file scope, so a
+reader meets it once. The Python API passes `None` directly and never needs it.
+
+## Where a block may be written
+
+| route | how |
+|---|---|
+| TOML config | `[models.<family>]` tables, read by `core/config.load_config` |
+| committed stance | `[models.<family>]` tables, read by `scripts/stance_config.py`; projected into the stance's own delta at load, so every existing consumer of `Stance.params`/`.flags` reads them unchanged, and `Stance.models` keeps the block as written |
+| Python | `LAPDSim1D(input_dict, input_flags, input_models)`, or `resolve_config(params, flags, models)` |
+
+The campaign driver reaches blocks through `--stance`; it grew no new flag.
+
+## How it resolves
+
+```
+[models.<family>] blocks ─┐
+                          ├─> resolve_config ─> flat (params, flags)
+[params] / [flags] flat ──┘         │
+                                    └─> resolve_model_families
+                                    └─> every construction guard, unchanged
+```
+
+`resolve_config` validates and projects the blocks, then merges the caller's
+flat overrides onto the templates. `resolve_model_families` then runs as it
+always has: a config that arrived as a block has already stated every member,
+so the family resolver finds nothing to resolve and nothing to refuse; a flat
+config still gets its cascade flattened. Every single-key guard below is still
+reached, by both routes.
+
+**A block route and a flat route resolve to the identical surface, byte for
+byte.** That is the migration's whole claim, and it is measured per family by
+`scripts/declm_block_gate.py` and per representative route (default, golden,
+stance, campaign driver, the 13-member kinetic command line, and the k2_dvm and
+B0c fixtures) by `scripts/declm_route_identity.py`.
+
+### The flat-conflict rule, and why it is not co-presence
+
+Most callers here hand the solver a COMPLETE config dict — `default_config()`
+with overrides applied, a resolved stance, a fixture's `arm_config()` — so
+every member is present flat whether anyone chose it or not. Refusing mere
+co-presence would make blocks unusable from exactly the entry points that need
+them. The test is instead the one `model_families` already uses for "did the
+caller choose this?":
+
+- flat value **equals the template default** → inherited, not chosen; the block
+  wins, silently;
+- flat value **equals the block's own** → consistent; it stands;
+- otherwise → the key is answered TWICE, differently, and is refused loudly
+  with both values.
+
+Inside a TOML `[params]`/`[flags]` table, where only chosen keys are written at
+all, a member stated both ways is therefore always either redundant or a
+conflict — which is the form the migration aims at. The tolerance exists for
+the full-dict callers.
+
+## The families
+
+Membership is MEASURED — read off what the guards couple, not off what a name
+suggests. `core/model_families.py` is authoritative; the counts below are a
+reader's index.
+
+| family | members | selector | notes |
+|---|---|---|---|
+| `neutral_closure` | 14 | `neutral_model = "kinetic_dvm"` | the selection plus the 13 keys it forces |
+| `neutral_radial_closure` | 8 | `neutral_momentum_radial = "kinetic_two_moment"` | plus the two keys that have no reading without it |
+| `beam_tail_closure` | 22 | — | beam deposition, the anomalous channel, the walked tail |
+| `cathode_surface_recycle` | 6 | — | the cathode surface's directed-recycle channel |
+| `anode_surface_recycle` | 5 | — | the anode mesh's channel; `neutral_mesh_accommodation` is a member here |
+| `initial_neutral_state` | 12 | — | three mutually exclusive routes (below) |
+
+A family with a **selector** may only be declared when that selector is at its
+engaging value: declaring the membership of a family you are not selecting
+would claim a decision this config is not making.
+
+Families **overlap** — `neutral_momentum_radial` is the two-moment selector and
+also a key the DVM selection forces; the jet keys are members of family B and
+of the DVM set that forbids them. Overlap is why two blocks claiming one key is
+refused rather than merged: the two families disagree about which decision owns
+the key, and only the caller can settle it.
+
+### `initial_neutral_state` — three routes, not four
+
+The routes are `equilibrate`, `profile` and `restart`, and at most one may be
+armed. `use_cached_neutral_seed` is **not** a fourth route: it REQUIRES
+`neutral_equilibration` and its dispatch is a hit/miss branch inside the
+equilibration path, so it is a MODIFIER of `equilibrate`, not an alternative to
+it. Three routes have three pairs, and the code carries exactly three direct
+pairwise refusals. (The 2026-08-23 census recorded four mutually exclusive
+routes and six pairwise exclusions; the code says otherwise, and collapsing the
+four-route reading into one selector would have made `cached_seed` and
+`equilibrate` mutually exclusive — a behaviour change.)
+
+## Refusals
+
+All are `ValueError` at construction, naming the offender and carrying the
+remedy. `scripts/declm_block_gate.py` exercises every one.
+
+| case | refusal |
+|---|---|
+| unknown family | names it, lists the declarable families |
+| a key the family does not own | names it, and which family *does* own it, plus the full inventory |
+| **incomplete membership** | names every missing member, plus the full inventory |
+| a block for an unselected family | names the selector, its given value and its engaging value |
+| two blocks claiming one key | names the key and both blocks |
+| a member also chosen flat, differently | names the key and both values |
+| two exclusive routes armed | names both routes and each one's off value |
+| a member both valued and in `none_valued` | names the key |
+
+## What a block does not do
+
+It does not change any value, and it does not validate physics. Every presence
+gate, domain check and coupling guard runs afterwards, unchanged, and remains
+the authority on what each edge means.

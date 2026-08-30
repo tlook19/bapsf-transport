@@ -1181,6 +1181,14 @@ def ion_neutral_slip_factor(
     return 1.0 / (1.0 + entrainment)
 
 
+#: The ion-neutral drag closures this module implements. EXPORTED because the
+#: solver checks the same domain at construction (a typo'd name is otherwise
+#: accepted and then never read, since the shipped moment closure returns
+#: before this function runs), and a domain stated twice is a domain that
+#: drifts.
+ION_NEUTRAL_DRAG_MODELS = ("constant", "slip")
+
+
 def _resolve_slip_factor(
     state,
     derived,
@@ -1193,10 +1201,10 @@ def _resolve_slip_factor(
     """Return the per-cell slip factor for ``drag_model``, or 1 for constant."""
     if drag_model == "constant":
         return 1.0
-    if drag_model != "slip":
+    if drag_model not in ION_NEUTRAL_DRAG_MODELS:
         raise ValueError(
-            f"ion_neutral_drag_model must be 'constant' or 'slip' "
-            f"(got {drag_model!r})"
+            "ion_neutral_drag_model must be one of "
+            f"{sorted(ION_NEUTRAL_DRAG_MODELS)} (got {drag_model!r})"
         )
     if Rm_cm is None:
         raise ValueError("drag_model='slip' requires the machine radius Rm_cm")

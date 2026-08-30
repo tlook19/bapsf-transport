@@ -74,7 +74,11 @@ from .core.validation import (
     validate_r1_configuration_presence,
     validate_raw_stage,
 )
-from .physics.conduction import heat_conduction_rhs, implicit_heat_conduction_step
+from .physics.conduction import (
+    heat_conduction_rhs,
+    implicit_heat_conduction_step,
+    validate_implicit_heat_scheme,
+)
 from .physics.kinetic_dvm import (
     ANNULUS_FLIGHT_MODELS as KINETIC_DVM_ANNULUS_FLIGHT_MODELS,
     ELASTIC_MODELS as KINETIC_DVM_ELASTIC_MODELS,
@@ -168,6 +172,7 @@ from .physics.hot_neutrals import (
 from .physics.jet_carrier import cathode_jet_carrier_rhs
 from .physics.sources import (
     CATHODE_JET_ENERGY_CONVENTIONS,
+    ION_NEUTRAL_DRAG_MODELS,
     add_state_rhs,
     anode_collection_rhs,
     boundary_absorption_rhs,
@@ -770,6 +775,7 @@ class LAPDSim1D:
         self,
         input_dict=None,
         input_flags=None,
+        input_models=None,
         progress_callback=None,
         progress_tracker=None,
         progress_interval_s=1.0e-4,
@@ -783,6 +789,13 @@ class LAPDSim1D:
         has been armed. The phases below are the same statements in the same
         order they have always run in; each ``_init_*`` method is one
         contiguous stretch of them, named.
+
+        ``input_models`` carries DECLARATION BLOCKS -- one model family's
+        complete membership per entry, stated without namespaces (see
+        ``core/model_declarations.py``). They are projected onto the two flat
+        namespaces before anything else happens, so every phase below reads
+        the same flat surface it always has, and omitting them leaves
+        construction bit-identical to the flat-only form.
         """
         if run_id is not None:
             from .results.phase3_capture import validate_run_id
@@ -792,6 +805,7 @@ class LAPDSim1D:
         self._init_config_and_early_flags(
             input_dict,
             input_flags,
+            input_models,
             progress_callback,
             progress_tracker,
             progress_interval_s,
@@ -848,6 +862,7 @@ class LAPDSim1D:
         self,
         input_dict,
         input_flags,
+        input_models,
         progress_callback,
         progress_tracker,
         progress_interval_s,
@@ -858,17 +873,27 @@ class LAPDSim1D:
         presence check that follows immediately), which is why they are
         resolved before any of them.
 
-        The MODEL-FAMILY resolution runs first of all, on the merged config
-        and BEFORE every validator in this constructor: a top-level model
-        selection sets the member keys it owns that the caller left at their
-        config defaults, and refuses ONCE -- naming the selection, its whole
-        member set and every offending key -- when the caller explicitly set
-        one of them to something the selection cannot carry. The single-key
-        guards those member sets flatten are all still below and are all
-        still reached; what changes is that a resolvable config no longer
-        walks them one refusal at a time.
+        TWO resolutions run here, in this order, and they answer different
+        questions. ``resolve_config`` projects any DECLARATION BLOCK onto the
+        flat namespaces and merges the caller's overrides onto the templates:
+        that is where a family stated as its complete membership becomes the
+        flat surface everything downstream reads. ``resolve_model_families``
+        then runs on the merged config and BEFORE every validator in this
+        constructor: a top-level model selection sets the member keys it owns
+        that the caller left at their config defaults, and refuses ONCE --
+        naming the selection, its whole member set and every offending key --
+        when the caller explicitly set one of them to something the selection
+        cannot carry. A config that arrived as a block has already stated
+        every member, so the family resolver finds nothing to resolve and
+        nothing to refuse; a flat config still gets its cascade flattened.
+
+        The single-key guards those member sets flatten are all still below
+        and are all still reached, by both routes; what changes is that a
+        resolvable config no longer walks them one refusal at a time.
         """
-        self._input_dict, self._flags = resolve_config(input_dict, input_flags)
+        self._input_dict, self._flags = resolve_config(
+            input_dict, input_flags, input_models
+        )
         resolve_model_families(self._input_dict, self._flags)
         self._progress_callback = progress_callback
         self._progress_tracker = progress_tracker
@@ -1503,6 +1528,71 @@ class LAPDSim1D:
                     "the base factor could never accelerate anything"
                 )
         self._dt_growth_recovery_factor = _growth_recovery_value
+        # THE FOUR RUN-TIME-FIRST GUARDS, HOISTED (23an hazards; hoisted with
+        # the declaration-block migration, 2026-08-30). Each of these four
+        # domains was checked for the first time only once a run was already
+        # moving -- dt_growth_factor at the top of run(), the two scheme
+        # selectors on every split step and every heat substep, the drag model
+        # inside an RHS term. Every one reads self._input_dict and nothing
+        # else, so none of them needed run state to be checked; they were
+        # simply never asked at construction. Checking them here is this
+        # phase's whole point (see the docstring): a misconfigured guard must
+        # not be discovered hours into the run it exists to catch.
+        #
+        # The per-call checks are DELIBERATELY LEFT IN PLACE, all four of them.
+        # They are the authority on what each domain means, two of them stand
+        # in modules that instruments call without a solver at all
+        # (conduction.py, sources.py), and both scheme selectors are also
+        # reachable through an explicit per-call argument that never passes
+        # through the config. These hoists add a construction-time refusal;
+        # they replace nothing.
+        #
+        # dt_growth_factor: the sibling immediately above already READS this
+        # key at construction, but only to compare it against the recovery
+        # factor and only when the recovery patience is armed, so the key's own
+        # domain went unchecked until run().
+        _dt_growth_enabled = bool(self._input_dict.get("dt_growth_enabled", True))
+        _dt_growth_factor = self._input_dict.get("dt_growth_factor", 1.25)
+        try:
+            _dt_growth_factor_value = float(_dt_growth_factor)
+        except (TypeError, ValueError):
+            _dt_growth_factor_value = np.nan
+        if _dt_growth_enabled and not _dt_growth_factor_value > 1.0:
+            raise ValueError(
+                "dt_growth_factor must be > 1 when dt growth is enabled (got "
+                f"{_dt_growth_factor!r}); a factor at or below 1 could never "
+                "grow the step, so the growth controller would be armed and "
+                "inert. Accepted: a factor above 1, or "
+                "dt_growth_enabled=False"
+            )
+        # The two time-integration scheme selectors. Their domains live with
+        # the operators that implement them, and both validators are imported
+        # rather than restated so a scheme added to either set is legal here
+        # the moment it is legal there.
+        validate_operator_splitting(
+            self._input_dict.get("operator_splitting", "lie")
+        )
+        validate_implicit_heat_scheme(
+            self._input_dict.get("implicit_heat_scheme", "backward_euler")
+        )
+        # ion_neutral_drag_model. This is the one of the four that was not
+        # merely late but UNREACHABLE on the shipped stance: the moment closure
+        # returns a zero RHS before the drag term is ever evaluated, so a
+        # typo'd model name was accepted at construction, ignored for the whole
+        # run, and would have surfaced only on the day somebody turned the
+        # closure off. The construction-time mutual-exclusion check against
+        # neutral_momentum that already exists reads the key's VALUE without
+        # checking that the value is one the solver implements.
+        _drag_model = self._input_dict.get("ion_neutral_drag_model", "constant")
+        if _drag_model not in ION_NEUTRAL_DRAG_MODELS:
+            raise ValueError(
+                "ion_neutral_drag_model must be one of "
+                f"{sorted(ION_NEUTRAL_DRAG_MODELS)} (got {_drag_model!r}). "
+                "It is checked here rather than at first use because under "
+                "the shipped ion_neutral_moment_closure the drag term returns "
+                "before reading it, so an unimplemented name would otherwise "
+                "run to completion silently."
+            )
         # Presence gate for the beam_ionization_birth timestep bound. Reading
         # it once here keeps the off path out of the branch entirely.
         self._beam_ionization_birth_timestep_bound = bool(
