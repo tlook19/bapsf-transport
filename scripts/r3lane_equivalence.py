@@ -77,6 +77,12 @@ class Census:
         self.worst_call_ratio = 0.0
         self.takes = 0
         self.take_diffs = 0
+        # Non-vacuity: tail-leg batches seen, and how many really took the
+        # lane route. A batch that fell back to the recursive route compares
+        # that route against ITSELF, so a corpus that marched no lanes is zero
+        # evidence for the equivalence -- a verdict, not a footnote.
+        self.batches = 0
+        self.lane_marched = 0
         self.notes = []
         # Reflecting-face arrivals, which is what makes the per-birth exit
         # state load-bearing: a batch is only evidence about it if the corpus
@@ -111,6 +117,12 @@ class Census:
                     f"{label}: anode take differs -- lane {tuple(lane_take)} "
                     f"vs recursive {tuple(ref_take)}"
                 )
+
+    def count_batch(self, marched):
+        """One tail-leg batch, and whether it really took the lane route."""
+        self.batches += 1
+        if marched:
+            self.lane_marched += 1
 
     def compare(self, lane_chains, ref_chains, label):
         self.calls += 1
@@ -183,12 +195,25 @@ class Census:
         print(
             f"  anode take: {self.takes} compared, {self.take_diffs} differing"
         )
+        print(
+            f"  non-vacuity: {self.lane_marched} of {self.batches} tail-leg "
+            f"batches actually marched as lanes (>0 required)"
+        )
+        if self.lane_marched == 0:
+            print(
+                f"  NON-VACUITY FAILURE: 0 of {self.batches} tail-leg batches "
+                "actually marched as lanes, so nothing compared the lane route "
+                "against the recursive one -- every comparison was the "
+                "recursive route against itself. This run is zero evidence for "
+                "lane equivalence, not a pass."
+            )
         for line in self.notes[:20]:
             print(f"    {line}")
         return (
             self.flipped == 0
             and self.take_diffs == 0
             and ratio <= FLIP_ENERGY_BAR
+            and self.lane_marched > 0
         )
 
 
@@ -202,19 +227,16 @@ def run_corpus(census):
     real_lane = B._tail_lane_chains
     real_min = B.LANE_MARCH_MIN_LEGS
     state = {"label": ""}
-    batches = [0]
-    batched = [0]
 
     def dual(plans, *args, **kwargs):
         before = B.LANE_MARCH_COUNTS["legs"]
         got, got_take = real_lane(plans, *args, **kwargs)
         # A batch that fell back to the recursive route would compare itself
         # against itself, which is no evidence at all; count the ones that
-        # really took the lane route so the census cannot be vacuous.
-        if B.LANE_MARCH_COUNTS["legs"] > before:
-            batched[0] += 1
+        # really took the lane route so the census cannot be vacuous. The
+        # count is a VERDICT input, not a footnote -- see Census.report.
+        census.count_batch(B.LANE_MARCH_COUNTS["legs"] > before)
         want, want_take = B._tail_recursive_chains(plans, *args, **kwargs)
-        batches[0] += 1
         census.compare(got, want, state["label"])
         # The anode take is route output too, so a silent divergence there
         # fails the equivalence exactly as a flipped walker does.
@@ -235,8 +257,8 @@ def run_corpus(census):
         B._tail_lane_chains = real_lane
         B.LANE_MARCH_MIN_LEGS = real_min
     print(
-        f"corpus: {len(entries)} entries, {batches[0]} tail-leg batches, "
-        f"{batched[0]} of them actually marched as lanes"
+        f"corpus: {len(entries)} entries, {census.batches} tail-leg batches, "
+        f"{census.lane_marched} of them actually marched as lanes"
     )
 
 
