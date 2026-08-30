@@ -705,6 +705,13 @@ _PRODUCT_FLOOR_MIN_EV = 0.1
 # Both closures are exact power laws in W -- lnLambda depends only on (ne, Te)
 # -- which is what makes the product walk integrable in closed form below.
 _COULOMB_STOPPING_EXPONENT = {"fast_electron": -1.0, "legacy_tau_ei": 0.5}
+# Lowest INCIDENT energy [eV] at which the reversed-walker rider evaluates its
+# {R_e, eta_E} pair. A walker arriving at the anode plane below this is treated
+# as ABSORBED whatever the pair says -- the per-incident particle/energy
+# reflection convention the pair is stated in does not hold down there, and
+# absorbing is the conservative direction for a cull. Not a config key: it is
+# the domain edge of the convention, not an arm of it.
+TAIL_ANODE_RIDER_MIN_ENERGY_EV = 50.0
 
 # --- Compiled CSDA march (opt-in; see cablp.cathode.kernels) ------------------
 # The cost read of 2026-08-02 measured the substep march at ~61% numpy SCALAR
@@ -768,7 +775,16 @@ def _coulomb_stopping_coefficient(ne, Te, model):
     )
 
 
-def _walk_products_forward(W0_eV, flux_per_s, coeff, dz_cm, floor_eV, q):
+#: Empty cull tally, in the shape :func:`_walk_products_forward` returns.
+_NO_CULL = (
+    np.zeros(0), np.zeros(0), np.zeros(0, dtype=np.intp),
+    np.zeros(0, dtype=np.intp),
+)
+
+
+def _walk_products_forward(
+    W0_eV, flux_per_s, coeff, dz_cm, floor_eV, q, cull=None
+):
     """Coulomb slowing walk of per-cell product populations toward +index.
 
     ``W0_eV[s]`` / ``flux_per_s[s]`` are the birth energy and flux of the
@@ -790,6 +806,21 @@ def _walk_products_forward(W0_eV, flux_per_s, coeff, dz_cm, floor_eV, q):
     is REUSED as the exit energy of its predecessor (the identical float), so
     the per-ray sum telescopes to the birth energy exactly rather than to
     accumulated roundoff.
+
+    ``cull=(slots, eta)`` arms an OBSTRUCTION at the given traversal slots: a
+    population that reaches the FIRST slot at or after its birth loses the
+    fraction ``eta`` of its flux there, and the survivors carry ``1 - eta``
+    through that slot and every later one (the obstruction fires once per
+    walker -- first crossing only). ``slots`` must be sorted ascending; two
+    entries describe one plane met twice by an unfolded reflected path, of
+    which only the first is a crossing. The removed share is reported rather
+    than deposited: the third return value becomes
+    ``(culled_flux_per_s, W_at_crossing_eV, birth_slots, crossing_slots)``, one
+    entry per population that actually crossed, so the caller books the flux,
+    its arrival energy and WHICH crossing it was (an unfolded reflected path
+    meets the plane in either of its two blocks, and the incident direction
+    differs between them) on its own convention. ``cull=None`` (the default) is
+    the historical walk and takes the historical arithmetic line for line.
     """
     cells = int(dz_cm.size)
     dep = np.zeros(cells)
@@ -797,7 +828,9 @@ def _walk_products_forward(W0_eV, flux_per_s, coeff, dz_cm, floor_eV, q):
     flux_per_s = np.asarray(flux_per_s, dtype=float)
     active = np.flatnonzero((flux_per_s > 0.0) & (W0_eV > 0.0))
     if active.size == 0:
-        return dep, 0.0, (active, np.zeros(0), np.zeros(0, dtype=bool))
+        return (
+            dep, 0.0, (active, np.zeros(0), np.zeros(0, dtype=bool)), _NO_CULL,
+        )
     W0v = W0_eV[active]
     fluxv = flux_per_s[active]
     index = np.arange(cells)
@@ -822,39 +855,107 @@ def _walk_products_forward(W0_eV, flux_per_s, coeff, dz_cm, floor_eV, q):
     before = reach & (index[None, :] < j_stop[:, None])
     at = reach & (index[None, :] == j_stop[:, None])
     contrib = np.where(before, W_in - W_out, 0.0) + np.where(at, W_in, 0.0)
-    dep += (fluxv[:, None] * contrib).sum(axis=0)
+    if cull is None:
+        dep += (fluxv[:, None] * contrib).sum(axis=0)
+        exit_eV = float(
+            np.sum(fluxv * np.where(has_stop, 0.0, W_out[:, -1]))
+        )
+        return dep, exit_eV, (active, W_out[:, -1], has_stop), _NO_CULL
+    slots, eta_cull = cull
+    slots = np.asarray(slots, dtype=np.intp)
+    # The first obstruction slot at or after each birth. A population born
+    # PAST the last slot never meets one; a population that thermalizes short
+    # of its slot never reaches it, and its flux is already gone.
+    pos = np.searchsorted(slots, active, side="left")
+    met = pos < slots.size
+    slot_of = np.where(met, slots[np.minimum(pos, max(slots.size - 1, 0))], cells)
+    crosses = met & (j_stop >= slot_of)
+    survivor = np.ones((active.size, cells))
+    rows = np.flatnonzero(crosses)
+    if rows.size:
+        survivor[rows] = np.where(
+            index[None, :] >= slot_of[rows][:, None], 1.0 - eta_cull, 1.0
+        )
+    dep += (fluxv[:, None] * survivor * contrib).sum(axis=0)
     exit_eV = float(
-        np.sum(fluxv * np.where(has_stop, 0.0, W_out[:, -1]))
+        np.sum(
+            fluxv * survivor[:, -1] * np.where(has_stop, 0.0, W_out[:, -1])
+        )
     )
-    return dep, exit_eV, (active, W_out[:, -1], has_stop)
+    return (
+        dep,
+        exit_eV,
+        (active, W_out[:, -1], has_stop),
+        (
+            eta_cull * fluxv[rows],
+            W_in[rows, slot_of[rows]] if rows.size else np.zeros(0),
+            active[rows],
+            slot_of[rows],
+        ),
+    )
 
 
-def _walk_products(W0_eV, flux_per_s, direction, coeff, dz_cm, floor_eV, q):
+def _walk_products(
+    W0_eV, flux_per_s, direction, coeff, dz_cm, floor_eV, q, cull=None
+):
     """Direction-aware wrapper around ``_walk_products_forward``.
 
-    Returns ``(deposited_eV_per_s, exit_eV_per_s, exit_flux_per_s)``; the exit
-    power and flux leave the HIGH-index end for ``direction > 0`` and the
+    Returns ``(deposited_eV_per_s, exit_eV_per_s, exit_flux_per_s, cull)``; the
+    exit power and flux leave the HIGH-index end for ``direction > 0`` and the
     LOW-index end otherwise. The exit FLUX is the population behind that power
-    -- the walkers that reached the end without thermalizing -- read off the
-    forward walk's own per-birth exit state, so it cannot disagree with the
-    energy about who left. The rest of the per-birth state is dropped; the
-    reflecting walk below indexes cells in its own traversal order and calls
-    the forward walk directly.
+    -- the walkers that reached the end without thermalizing, less whatever an
+    armed obstruction removed -- read off the forward walk's own per-birth exit
+    state, so it cannot disagree with the energy about who left. The rest of
+    the per-birth state is dropped; the reflecting walk below indexes cells in
+    its own traversal order and calls the forward walk directly.
+
+    ``cull=(cell_indices, eta)`` names the obstruction in CELL indices; this
+    wrapper maps them into the traversal order the walk actually runs in. The
+    returned cull tally's birth cells are likewise mapped back to cell indices.
     """
+    cells = int(np.asarray(dz_cm).size)
     if direction > 0:
+        fwd_cull = (
+            None if cull is None
+            else (np.sort(np.asarray(cull[0], dtype=np.intp)), cull[1])
+        )
         flux_ordered = np.asarray(flux_per_s, dtype=float)
-        dep, exit_eV, (active, _W_exit, thermalized) = _walk_products_forward(
-            W0_eV, flux_per_s, coeff, dz_cm, floor_eV, q
+        dep, exit_eV, (active, _W_exit, thermalized), tally = (
+            _walk_products_forward(
+                W0_eV, flux_per_s, coeff, dz_cm, floor_eV, q, cull=fwd_cull
+            )
         )
-        return dep, exit_eV, float(
-            np.sum(flux_ordered[active][~thermalized])
+        survive = np.ones(active.size)
+        if cull is not None and tally[2].size:
+            survive[np.searchsorted(active, tally[2])] = 1.0 - cull[1]
+        return (
+            dep,
+            exit_eV,
+            float(np.sum(flux_ordered[active][~thermalized]
+                         * survive[~thermalized])),
+            tally,
         )
-    flux_ordered = np.asarray(flux_per_s, dtype=float)[::-1]
-    dep, exit_eV, (active, _W_exit, thermalized) = _walk_products_forward(
-        W0_eV[::-1], flux_per_s[::-1], coeff[::-1], dz_cm[::-1],
-        floor_eV[::-1], q,
+    rev_cull = (
+        None if cull is None
+        else (np.sort(cells - 1 - np.asarray(cull[0], dtype=np.intp)), cull[1])
     )
-    return dep[::-1], exit_eV, float(np.sum(flux_ordered[active][~thermalized]))
+    flux_ordered = np.asarray(flux_per_s, dtype=float)[::-1]
+    dep, exit_eV, (active, _W_exit, thermalized), tally = (
+        _walk_products_forward(
+            W0_eV[::-1], flux_per_s[::-1], coeff[::-1], dz_cm[::-1],
+            floor_eV[::-1], q, cull=rev_cull,
+        )
+    )
+    survive = np.ones(active.size)
+    if cull is not None and tally[2].size:
+        survive[np.searchsorted(active, tally[2])] = 1.0 - cull[1]
+    return (
+        dep[::-1],
+        exit_eV,
+        float(np.sum(flux_ordered[active][~thermalized]
+                     * survive[~thermalized])),
+        (tally[0], tally[1], cells - 1 - tally[2], cells - 1 - tally[3]),
+    )
 
 
 def beam_speed_cm_s(E_eV: float) -> float:
@@ -1134,21 +1235,58 @@ LANE_MARCH_MIN_LEGS = 128
 LANE_MARCH_COUNTS = {"substeps": 0, "legs": 0}
 
 
+def _tail_anode_take(culled_flux, W_cross, R_e, eta_E):
+    """Split one crossing tally into what the anode keeps and what returns.
+
+    ``culled_flux[k]`` is the walker flux [1/s] the mesh removed from crossing
+    ``k`` and ``W_cross[k]`` the energy [eV] that flux was carrying there.
+    Returns the four scalars
+    ``(culled_flux, culled_eV, returned_flux, returned_eV)`` -- fluxes in 1/s
+    and energies in ``flux*eV``, which the caller converts. Only crossings at or
+    above :data:`TAIL_ANODE_RIDER_MIN_ENERGY_EV` contribute to the return; below
+    it the walker is ABSORBED whatever the pair says, so its whole culled share
+    stays with the anode. ``R_e = 0`` (the rider off) returns zeros, which is
+    the same statement with no threshold to test.
+    """
+    culled_flux = np.asarray(culled_flux, dtype=float)
+    W_cross = np.asarray(W_cross, dtype=float)
+    gross_flux = float(culled_flux.sum())
+    gross_eV = float((culled_flux * W_cross).sum())
+    if R_e <= 0.0 or culled_flux.size == 0:
+        return gross_flux, gross_eV, 0.0, 0.0
+    boxed = W_cross >= TAIL_ANODE_RIDER_MIN_ENERGY_EV
+    return (
+        gross_flux,
+        gross_eV,
+        float(R_e * culled_flux[boxed].sum()),
+        float(eta_E * (culled_flux[boxed] * W_cross[boxed]).sum()),
+    )
+
+
 def _tail_lane_chains(
     plans, nn_w, ne_w, Te_w, dz_w, march_kwargs, tail_lo, tail_hi,
-    reflect_face, E_reflect,
+    reflect_face, E_reflect, cull=None,
 ):
     """The ionizing tail-walk legs of every population, in the legs' own order.
 
     ``plans`` is one ``(E_walk_eV, half_flux, ionizes)`` per launched
-    population. Returns a list parallel to it: ``None`` for a population that
-    does not ionize, otherwise a list of CHAINS -- one per (birth cell,
-    direction) walker, each chain holding the legs that walker marched (one,
-    or two when it reflected at the walk window's reflecting face). A leg is
+    population. Returns ``(layout, tally)``. ``layout`` is a list parallel to
+    ``plans``: ``None`` for a population that does not ionize, otherwise a list
+    of CHAINS -- one per (birth cell, direction) walker, each chain holding the
+    legs that walker marched (one, or two when it reflected at the walk
+    window's reflecting face), plus one further chain per REVERSED walker the
+    anode rider launched. A leg is
     ``(banks, transmitted_flux, transmitted_energy_eV, direction)`` where
     ``banks`` is the five window-shaped arrays
     ``(ionization_events, excitation_events, ionization_cost_erg_s,
-    radiated_erg_s, plasma_heating_erg_s)`` the caller banks.
+    radiated_erg_s, plasma_heating_erg_s)`` the caller banks; the caller books
+    the escape of each chain's LAST leg and nothing else.
+
+    ``tally`` is the four-scalar anode take of
+    :func:`_tail_anode_take`, summed over every walker.
+
+    ``cull=(local_cell, eta, R_e, eta_E)`` arms the anode cull on these legs;
+    ``None`` leaves them exactly as they always marched.
 
     The order is the recursive route's exactly -- population, then birth cell
     ascending, then ``+1`` before ``-1``, then the reflected leg after the leg
@@ -1174,9 +1312,15 @@ def _tail_lane_chains(
                 lanes_dir.append(walk_direction)
         layout.append(chains)
     if not lanes_E0:
-        return [None] * len(plans)
+        return [None] * len(plans), (0.0, 0.0, 0.0, 0.0)
 
     use_lanes = (
+        # The anode cull is a per-lane FLUX event at one cell, and the batched
+        # marcher has no interception of its own. The armed arm takes the
+        # recursive route instead -- the two agree bit for bit, so this is a
+        # cost choice, and it costs only the arm that arms the cull.
+        cull is None
+        and
         # THE PURE PATH'S ROUTE. With the compiled march bound, a leg's whole
         # substep loop already runs in C at a fraction of a numpy round's
         # dispatch cost, and batching it is a large REGRESSION (measured 5.1 ms
@@ -1193,7 +1337,7 @@ def _tail_lane_chains(
     if not use_lanes:
         return _tail_recursive_chains(
             plans, nn_w, ne_w, Te_w, dz_w, march_kwargs, tail_lo, tail_hi,
-            reflect_face, E_reflect,
+            reflect_face, E_reflect, cull=cull,
         )
 
     first = lane_march(
@@ -1270,20 +1414,44 @@ def _tail_lane_chains(
                 )
             built.append(chain)
         out.append(built)
-    return out
+    return out, (0.0, 0.0, 0.0, 0.0)
 
 
 def _tail_recursive_chains(
     plans, nn_w, ne_w, Te_w, dz_w, march_kwargs, tail_lo, tail_hi,
-    reflect_face, E_reflect,
+    reflect_face, E_reflect, cull=None,
 ):
     """:func:`_tail_lane_chains`'s contract, one recursive march per leg.
 
     The equivalence target: one ``deposit_beam`` call per leg, exactly as the
     ionizing tail walk has always made them, and the route taken whenever the
-    lane march is not worth its dispatch or does not cover the configuration.
+    lane march is not worth its dispatch or does not cover the configuration --
+    including whenever the anode cull is armed, which the batched marcher does
+    not carry.
+
+    With ``cull=(local_cell, eta, R_e, eta_E)`` each leg is marched with the
+    module's OWN anode interception (``anode_cross_index``/``anode_eta``), which
+    is the same event, the same convention and the same arithmetic the primary
+    ray has used since A15 -- the cull is not re-derived here. It is armed
+    until it fires: a walker born gap-side of the plane may only meet it after
+    reflecting, and one that met it on its first leg must not be culled twice.
+    The energy the cull removed is read back from the leg's own
+    ``anode_intercepted_erg_s`` and the flux behind it from that energy and the
+    leg's recorded entry energy at the plane, which is the pair the rider and
+    the anode current are formed from.
     """
     out = []
+    tally = [0.0, 0.0, 0.0, 0.0]
+    if cull is None:
+        cull_local = -1
+        cull_eta = R_e = eta_E = 0.0
+        cull_kwargs = {}
+    else:
+        cull_local, cull_eta, R_e, eta_E = cull
+        cull_kwargs = dict(
+            anode_cross_index=int(cull_local), anode_eta=float(cull_eta)
+        )
+    n_w = tail_hi - tail_lo + 1
     for E_walk, half_flux, ionizes in plans:
         if not ionizes:
             out.append(None)
@@ -1292,12 +1460,55 @@ def _tail_recursive_chains(
         for birth in np.flatnonzero(half_flux > 0.0):
             for walk_direction in (1, -1):
                 leg_dir = walk_direction
+                armed = cull is not None
                 leg = deposit_beam(
                     E_walk, float(half_flux[birth]), nn_w, ne_w, Te_w,
                     int(birth) - tail_lo, leg_dir, dz_w, **march_kwargs,
+                    **(cull_kwargs if armed else {}),
                 )
                 chain = []
+                riders = []
                 while True:
+                    if armed and float(leg.anode_intercepted_erg_s) > 0.0:
+                        # The cull fired on this leg. ``anode_intercepted`` is
+                        # ``eta * gamma * E`` at the plane and ``E_entry`` at
+                        # that cell is the same ``E``, so the removed FLUX is
+                        # the one division that separates them.
+                        armed = False
+                        _E_cross = float(leg.E_entry_eV[cull_local])
+                        _f_cull = (
+                            float(leg.anode_intercepted_erg_s)
+                            / (_E_cross * _ERG_PER_EV)
+                        )
+                        _g_f, _g_eV, _r_f, _r_eV = _tail_anode_take(
+                            np.array([_f_cull]), np.array([_E_cross]),
+                            R_e, eta_E,
+                        )
+                        tally[0] += _g_f
+                        tally[1] += _g_eV
+                        tally[2] += _r_f
+                        tally[3] += _r_eV
+                        if _r_f > 0.0:
+                            # The reversed walker: launched from the plane cell
+                            # back the way it came, at the flux-weighted mean
+                            # energy the returned share carries. It is a chain
+                            # of its own -- its escape is its own, and it does
+                            # NOT meet the plane again (first crossing only).
+                            riders.append(
+                                (cull_local, -leg_dir, _r_f, _r_eV / _r_f)
+                            )
+                    if (
+                        reflect_face is not None
+                        and leg_dir == reflect_face
+                        and float(leg.transmitted_flux) > 0.0
+                        and float(leg.transmitted_energy_eV) < E_reflect
+                    ):
+                        _next = (
+                            float(leg.transmitted_flux),
+                            float(leg.transmitted_energy_eV),
+                        )
+                    else:
+                        _next = None
                     chain.append(
                         (
                             (
@@ -1312,24 +1523,76 @@ def _tail_recursive_chains(
                             leg_dir,
                         )
                     )
-                    if (
-                        reflect_face is not None
-                        and leg_dir == reflect_face
-                        and chain[-1][1] > 0.0
-                        and chain[-1][2] < E_reflect
-                    ):
-                        leg_flux, leg_E = chain[-1][1], chain[-1][2]
-                        leg_dir = -leg_dir
-                        leg = deposit_beam(
-                            leg_E, leg_flux, nn_w, ne_w, Te_w,
-                            0 if reflect_face < 0 else tail_hi - tail_lo,
-                            leg_dir, dz_w, **march_kwargs,
-                        )
-                        continue
-                    break
+                    if _next is None:
+                        break
+                    leg_flux, leg_E = _next
+                    leg_dir = -leg_dir
+                    leg = deposit_beam(
+                        leg_E, leg_flux, nn_w, ne_w, Te_w,
+                        0 if reflect_face < 0 else n_w - 1,
+                        leg_dir, dz_w, **march_kwargs,
+                        **(cull_kwargs if armed else {}),
+                    )
                 built.append(chain)
+                for r_cell, r_dir, r_flux, r_E in riders:
+                    built.append(
+                        _tail_rider_chain(
+                            r_cell, r_dir, r_flux, r_E, nn_w, ne_w, Te_w,
+                            dz_w, march_kwargs, n_w, reflect_face, E_reflect,
+                        )
+                    )
         out.append(built)
-    return out
+    return out, tuple(tally)
+
+
+def _tail_rider_chain(
+    cell, direction, flux, E_eV, nn_w, ne_w, Te_w, dz_w, march_kwargs, n_w,
+    reflect_face, E_reflect,
+):
+    """March one reversed walker the anode rider launched, as its own chain.
+
+    Same legs, same banks and same reflecting-face convention as a born
+    walker's chain -- the rider changes where a walker starts, not how it
+    walks. It never meets the anode plane again: the cull is first-crossing
+    only, and this walker's crossing is the one that made it.
+    """
+    leg_dir = int(direction)
+    leg = deposit_beam(
+        float(E_eV), float(flux), nn_w, ne_w, Te_w, int(cell), leg_dir, dz_w,
+        **march_kwargs,
+    )
+    chain = []
+    while True:
+        chain.append(
+            (
+                (
+                    leg.ionization_events,
+                    leg.excitation_events,
+                    leg.ionization_cost_erg_s,
+                    leg.radiated_erg_s,
+                    leg.plasma_heating_erg_s,
+                ),
+                float(leg.transmitted_flux),
+                float(leg.transmitted_energy_eV),
+                leg_dir,
+            )
+        )
+        if (
+            reflect_face is not None
+            and leg_dir == reflect_face
+            and chain[-1][1] > 0.0
+            and chain[-1][2] < E_reflect
+        ):
+            leg_flux, leg_E = chain[-1][1], chain[-1][2]
+            leg_dir = -leg_dir
+            leg = deposit_beam(
+                leg_E, leg_flux, nn_w, ne_w, Te_w,
+                0 if reflect_face < 0 else n_w - 1,
+                leg_dir, dz_w, **march_kwargs,
+            )
+            continue
+        break
+    return chain
 
 
 def _tail_band(E_walk_eV, I_ion_eV, E_stop_eV, label):
@@ -1536,7 +1799,24 @@ class BeamDepositionResult:
                           crossing [erg/s] (audit A15). This leaves the plasma
                           (booked to the electrode, NOT plasma_heating_erg_s);
                           0 when no interception is requested or the ray stops
-                          before the anode face.
+                          before the anode face. With the TAIL cull armed the
+                          QL tail walkers' NET contribution -- what the mesh
+                          removed from the walk less what the reversed-walker
+                          rider returned to it -- is added to this same row:
+                          one convention for everything the anode takes.
+    tail_anode_culled_flux_per_s: WALKER flux [1/s] the mesh removed from the QL
+                          tail walk at its first crossing of the anode plane.
+                          0 unless the tail cull is armed.
+    tail_anode_culled_erg_s: the energy [erg/s] that removed flux was carrying
+                          at the crossing -- the equal-and-opposite partner of
+                          the walk's own loss, and the gross the anode row is
+                          formed from.
+    tail_anode_returned_flux_per_s: WALKER flux [1/s] the reversed-walker rider
+                          launched back off the anode plane. 0 when the rider
+                          is off (its default), so the whole culled flux lands.
+    tail_anode_returned_erg_s: the energy [erg/s] that returned flux carries,
+                          i.e. what re-enters the plasma as reversed walkers
+                          and is therefore NOT booked to the anode.
     E_entry_eV          : diagnostic: primary energy entering each cell [eV]
                           (0 for cells the ray never reaches)
     end_loss_low_erg_s  : END LEDGER, low-index end [erg/s]. Identically 0.0
@@ -1659,6 +1939,10 @@ class BeamDepositionResult:
     tail_sub_threshold_power_erg_s: float = 0.0
     tail_above_bar_power_erg_s: float = 0.0
     plateau_wave_power_erg_s: float = 0.0
+    tail_anode_culled_flux_per_s: float = 0.0
+    tail_anode_culled_erg_s: float = 0.0
+    tail_anode_returned_flux_per_s: float = 0.0
+    tail_anode_returned_erg_s: float = 0.0
 
 
 def deposit_beam(
@@ -1691,6 +1975,10 @@ def deposit_beam(
     plateau_edge_eV: float | None = None,
     plateau_groups: int = PLATEAU_GROUP_COUNT,
     stopping_coefficient: np.ndarray | None = None,
+    tail_anode_cross_index: int | None = None,
+    tail_anode_eta: float = 0.0,
+    tail_anode_reflected_particles: float = 0.0,
+    tail_anode_reflected_energy: float = 0.0,
 ) -> BeamDepositionResult:
     """Deposit one monoenergetic beam ray through the column (He only).
 
@@ -1726,6 +2014,38 @@ def deposit_beam(
     Off (``anode_cross_index is None`` or ``anode_eta == 0``) the running flux
     is the constant ``Gamma0_per_s`` throughout, so every bank is byte-for-byte
     the historical result.
+
+    **Anode-mesh cull of the QL TAIL (A2a).** The primary interception above
+    removes cathode-borne flux streaming OUT through the mesh; the tail walkers
+    are born in the column and meet the same wires from whichever side they
+    happen to approach. ``tail_anode_cross_index`` (a CELL index on the full
+    grid, the same cell ``anode_cross_index`` names) with ``tail_anode_eta`` in
+    ``[0, 1)`` removes that solid fraction of a walker's flux at its FIRST
+    crossing of the anode plane and books the removed share to
+    ``anode_intercepted_erg_s`` -- the same row the primary uses, no second
+    convention. A walker that thermalizes short of the plane, or that is born
+    past it and walks away, never crosses and loses nothing; a walker that
+    reflects at the cathode face and re-crosses is culled once, on the first
+    crossing only. The gross removed flux and the energy it carried are
+    reported as ``tail_anode_culled_flux_per_s`` / ``tail_anode_culled_erg_s``.
+
+    ``tail_anode_reflected_particles`` (``R_e``) and
+    ``tail_anode_reflected_energy`` (``eta_E``) arm the REVERSED-WALKER RIDER on
+    top of that cull. Both are PER INCIDENT and both default to 0.0, which is
+    the rider off: nothing returns and the whole culled share lands on the
+    anode. Armed, ``R_e`` of the culled walkers are launched back off the plane
+    in the reversed direction carrying ``eta_E`` of the culled energy, so their
+    mean energy per returned particle is ``(eta_E / R_e)`` times the incident
+    energy -- which is why ``eta_E > R_e`` is refused rather than clamped. The
+    box evaluation has a domain edge: a crossing whose incident energy is below
+    ``TAIL_ANODE_RIDER_MIN_ENERGY_EV`` returns nothing whatever the pair says
+    (that walker is absorbed). What returns is reported as
+    ``tail_anode_returned_flux_per_s`` / ``tail_anode_returned_erg_s`` and is
+    subtracted from the anode row, since it never landed. The rider requires
+    the marched tail (``tail_ionization="on"``): the energy-only closed-form
+    walk carries a whole cell sequence in one telescoping integral and has no
+    per-walker launch to reverse, and the combination is refused rather than
+    approximated.
 
     **Product transport (WP-D).** ``product_transport`` is ``"local"``
     (default), ``"nonlocal"`` or ``"terminal_nonlocal"``; see the module
@@ -2142,6 +2462,71 @@ def deposit_beam(
             ionize_tail, tail_sub_threshold, tail_above_bar = _tail_band(
                 E_tail, I_ion_eV, E_stop_eV, "tail_energy_eV"
             )
+    # --- A2a: the anode-mesh cull of the QL tail, and its rider -----------
+    # Placed after the walk window is resolved, because the cull cell is stated
+    # on the FULL grid and has to land inside the window the walkers traverse.
+    R_e_tail = float(tail_anode_reflected_particles)
+    eta_E_tail = float(tail_anode_reflected_energy)
+    tail_cull = tail_anode_cross_index is not None and tail_anode_eta > 0.0
+    tail_anode_local = -1
+    if tail_anode_eta != 0.0 and not (0.0 <= tail_anode_eta < 1.0):
+        raise ValueError(
+            f"tail_anode_eta must be in [0, 1) (got {tail_anode_eta})"
+        )
+    for _name, _val in (
+        ("tail_anode_reflected_particles", R_e_tail),
+        ("tail_anode_reflected_energy", eta_E_tail),
+    ):
+        if not math.isfinite(_val) or not 0.0 <= _val <= 1.0:
+            raise ValueError(f"{_name} must be in [0, 1] (got {_val})")
+    if eta_E_tail > R_e_tail:
+        raise ValueError(
+            "tail_anode_reflected_energy must not exceed "
+            "tail_anode_reflected_particles (got "
+            f"{eta_E_tail} > {R_e_tail}): both are PER INCIDENT, so the "
+            "returned energy fraction is the returned particle fraction times "
+            "the mean returned energy in units of the incident energy, and "
+            "that mean cannot exceed one"
+        )
+    if (R_e_tail > 0.0 or eta_E_tail > 0.0) and not tail_cull:
+        raise ValueError(
+            "the reversed-walker rider "
+            "(tail_anode_reflected_particles/tail_anode_reflected_energy) "
+            "needs the tail cull it rides on: give tail_anode_cross_index "
+            "with tail_anode_eta > 0. Without the cull nothing is intercepted "
+            "and the pair would be a silent no-op"
+        )
+    if R_e_tail > 0.0 and tail_ionization != "on":
+        # Tested against the SELECTOR, not against the band-reverted
+        # ``ionize_tail``: a run whose walker energy tracks phi_c(t) would
+        # otherwise be accepted at one step and refused at the next. A walker
+        # the K7b band does revert to the energy-only integral is below
+        # E_stop, hence below the rider's own energy floor, so the clamp
+        # already returns nothing for it -- and the walk asserts that rather
+        # than assuming it.
+        raise ValueError(
+            "the reversed-walker rider requires tail_ionization='on': the "
+            "energy-only closed-form walk carries a whole cell sequence in one "
+            "telescoping integral and has no per-walker launch to reverse. "
+            "The cull itself composes with either walk; only the return does "
+            "not, and it is refused rather than approximated"
+        )
+    if tail_cull:
+        if not walk_tail:
+            raise ValueError(
+                "tail_anode_cross_index/tail_anode_eta cull the QL TAIL "
+                "walkers, so they need a walked tail: select "
+                "anomalous_transport='tail_walk' or 'plateau_multigroup' (or "
+                "anomalous_disposal='landau_branched'). With none of them "
+                "there are no walkers to cull and the pair would do nothing"
+            )
+        tail_anode_local = int(tail_anode_cross_index) - tail_lo
+        if not 0 <= tail_anode_local <= tail_hi - tail_lo:
+            raise ValueError(
+                f"tail_anode_cross_index={tail_anode_cross_index} lies outside "
+                f"the tail walk window {(tail_lo, tail_hi)}; the walkers never "
+                "reach that cell, so the cull would be a silent no-op"
+            )
     if stopping_coefficient is not None:
         stopping_coefficient = np.asarray(stopping_coefficient, dtype=float)
         if stopping_coefficient.shape != (cells,):
@@ -2221,6 +2606,15 @@ def deposit_beam(
     # apart from the streaming heir ``tail_power`` even though it is already
     # inside the heating banks, so the derived split is readable per frame.
     plateau_wave_power = 0.0
+    # A2a anode cull of the tail (all four stay 0.0 unless the cull is armed).
+    # ``culled`` is what the mesh took OUT of the walk at the plane; ``returned``
+    # is what the rider put back. Their difference is the net the anode row
+    # below books, and each is reported so the partner audit can name both
+    # halves rather than reading a single net.
+    tail_anode_culled_flux = 0.0
+    tail_anode_culled_erg = 0.0
+    tail_anode_returned_flux = 0.0
+    tail_anode_returned_erg = 0.0
     if walk_tail:
         anom_power_eV = np.zeros(cells)
 
@@ -2614,21 +3008,24 @@ def deposit_beam(
             _PRODUCT_FLOOR_TE_MULTIPLE * Te, _PRODUCT_FLOOR_MIN_EV
         )
 
-        def _walk_and_deposit(W0, flux, walk_direction, split):
+        def _walk_and_deposit(W0, flux, walk_direction, split, cull=None):
             """Walk one population; deposit it and RETURN what escaped.
 
-            ``(escaping power [erg/s], escaping flux [1/s])``. The caller books
-            the escape to its own end ledger -- WP-D products to
+            ``(escaping power [erg/s], escaping flux [1/s], cull tally)``. The
+            caller books the escape to its own end ledger -- WP-D products to
             ``end_loss_*``, WP-E tails to ``end_loss_tail_*`` -- which is what
-            keeps the two ledgers independently readable.
+            keeps the two ledgers independently readable. ``cull`` is passed
+            through to :func:`_walk_products`; the WP-D product walks never arm
+            it (the anode mesh removes column-borne walkers, and a secondary or
+            terminal residual is not one).
             """
-            dep_eV, exit_eV, exit_flux = _walk_products(
-                W0, flux, walk_direction, coeff, dz_cm, floor_eV, q
+            dep_eV, exit_eV, exit_flux, tally = _walk_products(
+                W0, flux, walk_direction, coeff, dz_cm, floor_eV, q, cull=cull
             )
             dep_erg = dep_eV * _ERG_PER_EV
             heating[:] += dep_erg
             split[:] += dep_erg
-            return exit_eV * _ERG_PER_EV, exit_flux
+            return exit_eV * _ERG_PER_EV, exit_flux, tally
 
         def _bank_walk(W0, flux, walk_direction, split):
             """Walk one product population and book its deposit and escape.
@@ -2637,7 +3034,7 @@ def deposit_beam(
             caller reads (it is the charge that lands on the end surface).
             """
             nonlocal end_loss_low, end_loss_high
-            exit_erg, exit_flux = _walk_and_deposit(
+            exit_erg, exit_flux, _tally = _walk_and_deposit(
                 W0, flux, walk_direction, split
             )
             if walk_direction > 0:
@@ -2813,10 +3210,19 @@ def deposit_beam(
                 ion_cost_tail[win] += leg_cost
                 radiated_tail[win] += leg_rad
 
-            tail_chains = _tail_lane_chains(
+            tail_chains, _take = _tail_lane_chains(
                 tail_plans, nn_w, ne_w, Te_w, dz_w, march_kwargs,
                 tail_lo, tail_hi, reflect_face, E_reflect,
+                cull=(
+                    None if not tail_cull
+                    else (tail_anode_local, tail_anode_eta, R_e_tail,
+                          eta_E_tail)
+                ),
             )
+            tail_anode_culled_flux += _take[0]
+            tail_anode_culled_erg += _take[1] * _ERG_PER_EV
+            tail_anode_returned_flux += _take[2]
+            tail_anode_returned_erg += _take[3] * _ERG_PER_EV
             for (E_walk, half_flux, ionize_walk), chains in zip(
                 tail_plans, tail_chains
             ):
@@ -2870,10 +3276,26 @@ def deposit_beam(
                     escape_at_face = 0.0     # leaves through the reflecting face
                     escape_opposite = 0.0    # leaves through the other one
 
-                    def _leg(order, W0, flux):
+                    # The anode plane in each traversal order. ``_cull_at``
+                    # returns the slot list the walk culls at (empty when the
+                    # cull is off), so the plain arms name one crossing and the
+                    # unfolded path names the two occurrences of one plane, of
+                    # which the walk takes only the first each walker meets.
+                    def _cull_at(*orders):
+                        if not tail_cull:
+                            return None
+                        slots = []
+                        for k, order in enumerate(orders):
+                            hit = np.flatnonzero(order == tail_anode_local)
+                            if hit.size:
+                                slots.append(k * n_w + int(hit[0]))
+                        return (np.array(sorted(slots), dtype=np.intp),
+                                tail_anode_eta)
+
+                    def _leg(order, W0, flux, cull=None):
                         return _walk_products_forward(
                             W0[order], flux[order], coeff_w[order], dz_w[order],
-                            floor_w[order], q,
+                            floor_w[order], q, cull=cull,
                         )
 
                     def _bank_tail_walk(dep_eV, *orders):
@@ -2892,21 +3314,50 @@ def deposit_beam(
                         heating[win] += dep_erg
                         heat_anomalous[win] += dep_erg
 
+                    def _bank_cull(tally):
+                        nonlocal tail_anode_culled_flux, tail_anode_culled_erg
+                        nonlocal tail_anode_returned_flux
+                        nonlocal tail_anode_returned_erg
+                        g_f, g_eV, r_f, r_eV = _tail_anode_take(
+                            tally[0], tally[1], R_e_tail, eta_E_tail
+                        )
+                        if r_f > 0.0:
+                            # Unreachable by construction: the rider is refused
+                            # unless tail_ionization='on', and a population the
+                            # K7b band reverts to THIS walk is below E_stop and
+                            # so below the rider's energy floor. Asserted rather
+                            # than assumed -- a silently dropped return would be
+                            # a hole in the ledger, not a small error.
+                            raise ValueError(
+                                "the reversed-walker rider fired on the "
+                                "energy-only tail walk, which has no launch to "
+                                "reverse; this combination is refused at "
+                                "construction and should be unreachable"
+                            )
+                        tail_anode_culled_flux += g_f
+                        tail_anode_culled_erg += g_eV * _ERG_PER_EV
+
                     # The arm walking AWAY from the reflecting face never meets it.
-                    dep_a, exit_a, _ = _leg(order_away, W0_w, flux_w)
+                    dep_a, exit_a, _, cull_a = _leg(
+                        order_away, W0_w, flux_w, cull=_cull_at(order_away)
+                    )
                     _bank_tail_walk(dep_a, order_away)
                     escape_opposite += exit_a
+                    if tail_cull:
+                        _bank_cull(cull_a)
                     # The arm walking INTO it: test each population's ARRIVAL
                     # energy against the threshold. Populations born in different
                     # cells arrive with different energies, so this is a per-birth
                     # split, not a whole-arm switch.
-                    dep_h, exit_h, (act_h, W_face, stop_h) = _leg(
-                        order_hit, W0_w, flux_w
+                    dep_h, exit_h, (act_h, W_face, stop_h), cull_h = _leg(
+                        order_hit, W0_w, flux_w, cull=_cull_at(order_hit)
                     )
                     bounced = (~stop_h) & (W_face < E_reflect)
                     if not bounced.any():
                         _bank_tail_walk(dep_h, order_hit)
                         escape_at_face += exit_h
+                        if tail_cull:
+                            _bank_cull(cull_h)
                     else:
                         flux_hit = flux_w[order_hit]
                         flux_bounce = np.zeros(n_w)
@@ -2914,26 +3365,32 @@ def deposit_beam(
                         flux_bounce[act_h[bounced]] = flux_hit[act_h[bounced]]
                         flux_escape[act_h[~bounced]] = flux_hit[act_h[~bounced]]
                         if np.any(flux_escape > 0.0):
-                            dep_e, exit_e, _ = _walk_products_forward(
+                            dep_e, exit_e, _, cull_e = _walk_products_forward(
                                 W0_w[order_hit], flux_escape, coeff_w[order_hit],
                                 dz_w[order_hit], floor_w[order_hit], q,
+                                cull=_cull_at(order_hit),
                             )
                             _bank_tail_walk(dep_e, order_hit)
                             escape_at_face += exit_e
+                            if tail_cull:
+                                _bank_cull(cull_e)
                         # The unfolded two-leg path. The face cell appears at the
                         # end of the first leg and again at the start of the second
                         # -- the reflected walker re-crosses it, the same
                         # cell-resolution granularity the marched walk has.
-                        dep_u, exit_u, _ = _walk_products_forward(
+                        dep_u, exit_u, _, cull_u = _walk_products_forward(
                             np.concatenate([W0_w[order_hit], np.zeros(n_w)]),
                             np.concatenate([flux_bounce, np.zeros(n_w)]),
                             np.concatenate([coeff_w[order_hit], coeff_w[order_away]]),
                             np.concatenate([dz_w[order_hit], dz_w[order_away]]),
                             np.concatenate([floor_w[order_hit], floor_w[order_away]]),
                             q,
+                            cull=_cull_at(order_hit, order_away),
                         )
                         _bank_tail_walk(dep_u, order_hit, order_away)
                         escape_opposite += exit_u
+                        if tail_cull:
+                            _bank_cull(cull_u)
                     if reflect_face > 0:
                         end_loss_tail_high += escape_at_face * _ERG_PER_EV
                         end_loss_tail_low += escape_opposite * _ERG_PER_EV
@@ -2942,14 +3399,36 @@ def deposit_beam(
                         end_loss_tail_high += escape_opposite * _ERG_PER_EV
                 else:
                     tail_W = np.full(cells, E_walk)
+                    # The cull is stated in FULL-GRID cell indices here: this
+                    # arm walks the whole grid, not the window.
+                    _cull_plain = (
+                        None if not tail_cull
+                        else (np.array([tail_anode_local + tail_lo],
+                                       dtype=np.intp), tail_anode_eta)
+                    )
                     for walk_direction in (1, -1):
-                        exit_erg, _exit_flux = _walk_and_deposit(
-                            tail_W, half_flux, walk_direction, heat_anomalous
+                        exit_erg, _exit_flux, _tally = _walk_and_deposit(
+                            tail_W, half_flux, walk_direction, heat_anomalous,
+                            cull=_cull_plain,
                         )
                         if walk_direction > 0:
                             end_loss_tail_high += exit_erg
                         else:
                             end_loss_tail_low += exit_erg
+                        if tail_cull:
+                            g_f, g_eV, r_f, r_eV = _tail_anode_take(
+                                _tally[0], _tally[1], R_e_tail, eta_E_tail
+                            )
+                            if r_f > 0.0:
+                                raise ValueError(
+                                    "the reversed-walker rider fired on the "
+                                    "energy-only tail walk, which has no "
+                                    "launch to reverse; this combination is "
+                                    "refused at construction and should be "
+                                    "unreachable"
+                                )
+                            tail_anode_culled_flux += g_f
+                            tail_anode_culled_erg += g_eV * _ERG_PER_EV
         if book_transmitted and not absorbed and gamma > 0.0 and E > 0.0:
             # The transmitted primary: computed since B1, never banked. It
             # leaves through the end the ray was heading for.
@@ -2958,6 +3437,16 @@ def deposit_beam(
                 end_loss_high += end_loss_transmitted
             else:
                 end_loss_low += end_loss_transmitted
+
+    # The tail's NET landing on the anode joins the primary's on the existing
+    # row. Gross less what the rider sent back: the returned walkers re-enter
+    # the plasma and are accounted for by the legs that walked them, so booking
+    # the gross here would charge the anode for energy the column got.
+    # Guarded rather than added unconditionally: with the cull off the whole
+    # statement is skipped, so the primary's float reaches the result untouched
+    # by construction and not by an argument about adding zero.
+    if tail_cull:
+        anode_intercepted += tail_anode_culled_erg - tail_anode_returned_erg
 
     return BeamDepositionResult(
         ionization_events=ionization_events,
@@ -2987,6 +3476,10 @@ def deposit_beam(
         tail_sub_threshold_power_erg_s=tail_sub_threshold_power,
         tail_above_bar_power_erg_s=tail_above_bar_power,
         plateau_wave_power_erg_s=plateau_wave_power,
+        tail_anode_culled_flux_per_s=tail_anode_culled_flux,
+        tail_anode_culled_erg_s=tail_anode_culled_erg,
+        tail_anode_returned_flux_per_s=tail_anode_returned_flux,
+        tail_anode_returned_erg_s=tail_anode_returned_erg,
     )
 
 
@@ -3046,6 +3539,10 @@ def deposit_beam_two_stream(
     stopping_coefficient: np.ndarray | None = None,
     nn_mean: np.ndarray | None = None,
     ne_mean: np.ndarray | None = None,
+    tail_anode_cross_index: int | None = None,
+    tail_anode_eta: float = 0.0,
+    tail_anode_reflected_particles: float = 0.0,
+    tail_anode_reflected_energy: float = 0.0,
 ):
     """March one beam ray through a Z-RESOLVED two-medium column (coverage v2).
 
@@ -3465,6 +3962,69 @@ def deposit_beam_two_stream(
             # Allowed, with the understatement measured and the exposure
             # reported.
             tail_above_bar = True
+    # --- A2a: the anode-mesh cull of the QL tail, and its rider -----------
+    # Transcribed from ``deposit_beam``'s block, on the same window resolution
+    # and with the same refusals -- the mesh is the same obstruction whichever
+    # march carries the walkers past it.
+    R_e_tail = float(tail_anode_reflected_particles)
+    eta_E_tail = float(tail_anode_reflected_energy)
+    tail_cull = tail_anode_cross_index is not None and tail_anode_eta > 0.0
+    tail_anode_local = -1
+    if tail_anode_eta != 0.0 and not (0.0 <= tail_anode_eta < 1.0):
+        raise ValueError(
+            f"tail_anode_eta must be in [0, 1) (got {tail_anode_eta})"
+        )
+    for _name, _val in (
+        ("tail_anode_reflected_particles", R_e_tail),
+        ("tail_anode_reflected_energy", eta_E_tail),
+    ):
+        if not math.isfinite(_val) or not 0.0 <= _val <= 1.0:
+            raise ValueError(f"{_name} must be in [0, 1] (got {_val})")
+    if eta_E_tail > R_e_tail:
+        raise ValueError(
+            "tail_anode_reflected_energy must not exceed "
+            "tail_anode_reflected_particles (got "
+            f"{eta_E_tail} > {R_e_tail}): both are PER INCIDENT, so the "
+            "returned energy fraction is the returned particle fraction times "
+            "the mean returned energy in units of the incident energy, and "
+            "that mean cannot exceed one"
+        )
+    if (R_e_tail > 0.0 or eta_E_tail > 0.0) and not tail_cull:
+        raise ValueError(
+            "the reversed-walker rider "
+            "(tail_anode_reflected_particles/tail_anode_reflected_energy) "
+            "needs the tail cull it rides on: give tail_anode_cross_index "
+            "with tail_anode_eta > 0. Without the cull nothing is intercepted "
+            "and the pair would be a silent no-op"
+        )
+    if R_e_tail > 0.0 and tail_ionization != "on":
+        raise ValueError(
+            "the reversed-walker rider requires tail_ionization='on': the "
+            "energy-only closed-form walk carries a whole cell sequence in one "
+            "telescoping integral and has no per-walker launch to reverse. "
+            "The cull itself composes with either walk; only the return does "
+            "not, and it is refused rather than approximated"
+        )
+    if tail_cull:
+        if not walk_tail:
+            raise ValueError(
+                "tail_anode_cross_index/tail_anode_eta cull the QL TAIL "
+                "walkers, so they need a walked tail: select "
+                "anomalous_transport='tail_walk' (or "
+                "anomalous_disposal='landau_branched'). With neither there "
+                "are no walkers to cull and the pair would do nothing"
+            )
+        tail_anode_local = int(tail_anode_cross_index) - tail_lo
+        if not 0 <= tail_anode_local <= tail_hi - tail_lo:
+            raise ValueError(
+                f"tail_anode_cross_index={tail_anode_cross_index} lies outside "
+                f"the tail walk window {(tail_lo, tail_hi)}; the walkers never "
+                "reach that cell, so the cull would be a silent no-op"
+            )
+    tail_anode_culled_flux = 0.0
+    tail_anode_culled_erg = 0.0
+    tail_anode_returned_flux = 0.0
+    tail_anode_returned_erg = 0.0
     if walk_products or walk_tail:
         # THE MEAN-STATE HAND-OFF, made structural. There is no medium here the
         # walk could fall back on: this function holds a channel view and a
@@ -3748,21 +4308,23 @@ def deposit_beam_two_stream(
         )
         chan = banks[0]
 
-        def _walk_and_deposit(W0, flux, walk_direction, split):
+        def _walk_and_deposit(W0, flux, walk_direction, split, cull=None):
             """Walk one population; deposit it and RETURN what escaped.
 
-            ``(escaping power [erg/s], escaping flux [1/s])``. The deposit
-            lands in the CHANNEL arm's banks: the walked energy is
+            ``(escaping power [erg/s], escaping flux [1/s], cull tally)``. The
+            deposit lands in the CHANNEL arm's banks: the walked energy is
             the mean field's, not either medium's, and the caller consumes the
-            two arms' sum (see the docstring's booking note).
+            two arms' sum (see the docstring's booking note). ``cull`` is
+            passed through to :func:`_walk_products`; the WP-D product walks
+            never arm it.
             """
-            dep_eV, exit_eV, exit_flux = _walk_products(
-                W0, flux, walk_direction, coeff, dz_cm, floor_eV, q
+            dep_eV, exit_eV, exit_flux, tally = _walk_products(
+                W0, flux, walk_direction, coeff, dz_cm, floor_eV, q, cull=cull
             )
             dep_erg = dep_eV * _ERG_PER_EV
             chan["heating"] += dep_erg
             chan[split] += dep_erg
-            return exit_eV * _ERG_PER_EV, exit_flux
+            return exit_eV * _ERG_PER_EV, exit_flux, tally
 
         def _bank_walk(W0, flux, walk_direction, split):
             """Walk one product population and book its deposit and escape.
@@ -3771,7 +4333,7 @@ def deposit_beam_two_stream(
             caller (the charge that lands on the end surface).
             """
             nonlocal end_loss_low, end_loss_high
-            exit_erg, exit_flux = _walk_and_deposit(
+            exit_erg, exit_flux, _tally = _walk_and_deposit(
                 W0, flux, walk_direction, split
             )
             if walk_direction > 0:
@@ -3903,9 +4465,22 @@ def deposit_beam_two_stream(
                     anomalous_model="none",
                     max_energy_fraction_per_substep=frac,
                 )
+                # A2a: the cull rides the nested march's OWN anode interception
+                # -- same event, same convention, same arithmetic as the
+                # primary's -- armed until it fires, so a walker that meets the
+                # plane only after reflecting still meets it and one that met
+                # it on its first leg is not culled twice. The rider's reversed
+                # walkers are marched here as their own legs.
+                _cull_kwargs = (
+                    {} if not tail_cull
+                    else dict(anode_cross_index=int(tail_anode_local),
+                              anode_eta=float(tail_anode_eta))
+                )
+                _rider_launches = []
                 for birth in np.flatnonzero(half_flux > 0.0):
                     for walk_direction in (1, -1):
                         leg_dir = walk_direction
+                        armed = tail_cull
                         leg = deposit_beam(
                             E_tail,
                             float(half_flux[birth]),
@@ -3916,9 +4491,30 @@ def deposit_beam_two_stream(
                             leg_dir,
                             dz_w,
                             **march_kwargs,
+                            **(_cull_kwargs if armed else {}),
                         )
                         while True:
                             _bank_tail_march(leg)
+                            if armed and float(leg.anode_intercepted_erg_s) > 0.0:
+                                armed = False
+                                _E_cross = float(leg.E_entry_eV[tail_anode_local])
+                                _f_cull = (
+                                    float(leg.anode_intercepted_erg_s)
+                                    / (_E_cross * _ERG_PER_EV)
+                                )
+                                _g_f, _g_eV, _r_f, _r_eV = _tail_anode_take(
+                                    np.array([_f_cull]), np.array([_E_cross]),
+                                    R_e_tail, eta_E_tail,
+                                )
+                                tail_anode_culled_flux += _g_f
+                                tail_anode_culled_erg += _g_eV * _ERG_PER_EV
+                                tail_anode_returned_flux += _r_f
+                                tail_anode_returned_erg += _r_eV * _ERG_PER_EV
+                                if _r_f > 0.0:
+                                    _rider_launches.append(
+                                        (int(tail_anode_local), -leg_dir, _r_f,
+                                         _r_eV / _r_f)
+                                    )
                             leg_flux = float(leg.transmitted_flux)
                             leg_E = float(leg.transmitted_energy_eV)
                             if (
@@ -3938,6 +4534,7 @@ def deposit_beam_two_stream(
                                     leg_dir,
                                     dz_w,
                                     **march_kwargs,
+                                    **(_cull_kwargs if armed else {}),
                                 )
                                 continue
                             exit_erg = leg_flux * leg_E * _ERG_PER_EV
@@ -3946,6 +4543,39 @@ def deposit_beam_two_stream(
                             else:
                                 end_loss_tail_low += exit_erg
                             break
+                for _r_cell, _r_dir, _r_flux, _r_E in _rider_launches:
+                    # The reversed walker walks like any other: same march,
+                    # same banks, same reflecting-face convention. It never
+                    # meets the plane again -- the cull is first-crossing only
+                    # and this walker's crossing is the one that made it.
+                    leg_dir = _r_dir
+                    leg = deposit_beam(
+                        _r_E, _r_flux, nn_w, ne_w, Te_w, _r_cell, leg_dir,
+                        dz_w, **march_kwargs,
+                    )
+                    while True:
+                        _bank_tail_march(leg)
+                        leg_flux = float(leg.transmitted_flux)
+                        leg_E = float(leg.transmitted_energy_eV)
+                        if (
+                            reflect_face is not None
+                            and leg_dir == reflect_face
+                            and leg_flux > 0.0
+                            and leg_E < E_reflect
+                        ):
+                            leg_dir = -leg_dir
+                            leg = deposit_beam(
+                                leg_E, leg_flux, nn_w, ne_w, Te_w,
+                                0 if reflect_face < 0 else tail_hi - tail_lo,
+                                leg_dir, dz_w, **march_kwargs,
+                            )
+                            continue
+                        exit_erg = leg_flux * leg_E * _ERG_PER_EV
+                        if leg_dir > 0:
+                            end_loss_tail_high += exit_erg
+                        else:
+                            end_loss_tail_low += exit_erg
+                        break
             elif reflect_face is not None:
                 # K7 with one reflecting window face. A reflection is expressed
                 # by UNFOLDING the path: the reflected leg is the window
@@ -3965,10 +4595,21 @@ def deposit_beam_two_stream(
                 escape_at_face = 0.0     # leaves through the reflecting face
                 escape_opposite = 0.0    # leaves through the other one
 
-                def _leg(order, W0, flux):
+                def _cull_at(*orders):
+                    if not tail_cull:
+                        return None
+                    slots = []
+                    for k, order in enumerate(orders):
+                        hit = np.flatnonzero(order == tail_anode_local)
+                        if hit.size:
+                            slots.append(k * n_w + int(hit[0]))
+                    return (np.array(sorted(slots), dtype=np.intp),
+                            tail_anode_eta)
+
+                def _leg(order, W0, flux, cull=None):
                     return _walk_products_forward(
                         W0[order], flux[order], coeff_w[order], dz_w[order],
-                        floor_w[order], q,
+                        floor_w[order], q, cull=cull,
                     )
 
                 def _bank_tail_walk(dep_eV, *orders):
@@ -3980,20 +4621,41 @@ def deposit_beam_two_stream(
                     chan["heating"][win] += dep_erg
                     chan["heat_anomalous"][win] += dep_erg
 
+                def _bank_cull(tally):
+                    nonlocal tail_anode_culled_flux, tail_anode_culled_erg
+                    g_f, g_eV, r_f, _r_eV = _tail_anode_take(
+                        tally[0], tally[1], R_e_tail, eta_E_tail
+                    )
+                    if r_f > 0.0:
+                        raise ValueError(
+                            "the reversed-walker rider fired on the "
+                            "energy-only tail walk, which has no launch to "
+                            "reverse; this combination is refused at "
+                            "construction and should be unreachable"
+                        )
+                    tail_anode_culled_flux += g_f
+                    tail_anode_culled_erg += g_eV * _ERG_PER_EV
+
                 # The arm walking AWAY from the reflecting face never meets it.
-                dep_a, exit_a, _ = _leg(order_away, W0_w, flux_w)
+                dep_a, exit_a, _, cull_a = _leg(
+                    order_away, W0_w, flux_w, cull=_cull_at(order_away)
+                )
                 _bank_tail_walk(dep_a, order_away)
                 escape_opposite += exit_a
+                if tail_cull:
+                    _bank_cull(cull_a)
                 # The arm walking INTO it: populations born in different cells
                 # arrive with different energies, so the threshold test is a
                 # per-birth split, not a whole-arm switch.
-                dep_h, exit_h, (act_h, W_face, stop_h) = _leg(
-                    order_hit, W0_w, flux_w
+                dep_h, exit_h, (act_h, W_face, stop_h), cull_h = _leg(
+                    order_hit, W0_w, flux_w, cull=_cull_at(order_hit)
                 )
                 bounced = (~stop_h) & (W_face < E_reflect)
                 if not bounced.any():
                     _bank_tail_walk(dep_h, order_hit)
                     escape_at_face += exit_h
+                    if tail_cull:
+                        _bank_cull(cull_h)
                 else:
                     flux_hit = flux_w[order_hit]
                     flux_bounce = np.zeros(n_w)
@@ -4001,13 +4663,16 @@ def deposit_beam_two_stream(
                     flux_bounce[act_h[bounced]] = flux_hit[act_h[bounced]]
                     flux_escape[act_h[~bounced]] = flux_hit[act_h[~bounced]]
                     if np.any(flux_escape > 0.0):
-                        dep_e, exit_e, _ = _walk_products_forward(
+                        dep_e, exit_e, _, cull_e = _walk_products_forward(
                             W0_w[order_hit], flux_escape, coeff_w[order_hit],
                             dz_w[order_hit], floor_w[order_hit], q,
+                            cull=_cull_at(order_hit),
                         )
                         _bank_tail_walk(dep_e, order_hit)
                         escape_at_face += exit_e
-                    dep_u, exit_u, _ = _walk_products_forward(
+                        if tail_cull:
+                            _bank_cull(cull_e)
+                    dep_u, exit_u, _, cull_u = _walk_products_forward(
                         np.concatenate([W0_w[order_hit], np.zeros(n_w)]),
                         np.concatenate([flux_bounce, np.zeros(n_w)]),
                         np.concatenate(
@@ -4018,9 +4683,12 @@ def deposit_beam_two_stream(
                             [floor_w[order_hit], floor_w[order_away]]
                         ),
                         q,
+                        cull=_cull_at(order_hit, order_away),
                     )
                     _bank_tail_walk(dep_u, order_hit, order_away)
                     escape_opposite += exit_u
+                    if tail_cull:
+                        _bank_cull(cull_u)
                 if reflect_face > 0:
                     end_loss_tail_high += escape_at_face * _ERG_PER_EV
                     end_loss_tail_low += escape_opposite * _ERG_PER_EV
@@ -4029,14 +4697,35 @@ def deposit_beam_two_stream(
                     end_loss_tail_high += escape_opposite * _ERG_PER_EV
             else:
                 tail_W = np.full(cells, E_tail)
+                # Stated in FULL-GRID cell indices: this arm walks the whole
+                # grid, not the window.
+                _cull_plain = (
+                    None if not tail_cull
+                    else (np.array([tail_anode_local + tail_lo], dtype=np.intp),
+                          tail_anode_eta)
+                )
                 for walk_direction in (1, -1):
-                    exit_erg, _exit_flux = _walk_and_deposit(
-                        tail_W, half_flux, walk_direction, "heat_anomalous"
+                    exit_erg, _exit_flux, _tally = _walk_and_deposit(
+                        tail_W, half_flux, walk_direction, "heat_anomalous",
+                        cull=_cull_plain,
                     )
                     if walk_direction > 0:
                         end_loss_tail_high += exit_erg
                     else:
                         end_loss_tail_low += exit_erg
+                    if tail_cull:
+                        g_f, g_eV, r_f, _r_eV = _tail_anode_take(
+                            _tally[0], _tally[1], R_e_tail, eta_E_tail
+                        )
+                        if r_f > 0.0:
+                            raise ValueError(
+                                "the reversed-walker rider fired on the "
+                                "energy-only tail walk, which has no launch "
+                                "to reverse; this combination is refused at "
+                                "construction and should be unreachable"
+                            )
+                        tail_anode_culled_flux += g_f
+                        tail_anode_culled_erg += g_eV * _ERG_PER_EV
         if book_transmitted and not absorbed and gamma_total > 0.0 and E > 0.0:
             # The transmitted primary: computed by the march, never banked. It
             # leaves through the end the ray was heading for.
@@ -4055,6 +4744,16 @@ def deposit_beam_two_stream(
         # why the caller must read the SUM (or ``flux_entry``) when it wants
         # the ray's survival.
         transmitted = 0.0 if (absorbed or arm == 1) else gamma_total
+        # A2a: the tail cull ran ONCE on the mean state for both arms' births,
+        # exactly like the end ledgers below, so its net lands whole on the
+        # channel slot's anode row and the reservoir slot carries none of it.
+        # A caller reading what the anode took must read the SUM, which is what
+        # ``_sum_beam_deposition`` gives it.
+        anode_arm = anode_intercepted[arm]
+        if tail_cull and arm == 0:
+            anode_arm = (
+                anode_arm + tail_anode_culled_erg - tail_anode_returned_erg
+            )
         results.append(
             BeamDepositionResult(
                 ionization_events=bank["ionization_events"],
@@ -4064,7 +4763,7 @@ def deposit_beam_two_stream(
                 ionization_cost_erg_s=bank["ionization_cost"],
                 transmitted_flux=transmitted,
                 transmitted_energy_eV=0.0 if transmitted <= 0.0 else E,
-                anode_intercepted_erg_s=anode_intercepted[arm],
+                anode_intercepted_erg_s=anode_arm,
                 E_entry_eV=bank["E_entry"],
                 heating_coulomb_erg_s=bank["heat_coulomb"],
                 heating_anomalous_erg_s=bank["heat_anomalous"],
@@ -4100,6 +4799,18 @@ def deposit_beam_two_stream(
                 ),
                 tail_above_bar_power_erg_s=(
                     0.0 if arm == 1 else tail_above_bar_power
+                ),
+                tail_anode_culled_flux_per_s=(
+                    0.0 if arm == 1 else tail_anode_culled_flux
+                ),
+                tail_anode_culled_erg_s=(
+                    0.0 if arm == 1 else tail_anode_culled_erg
+                ),
+                tail_anode_returned_flux_per_s=(
+                    0.0 if arm == 1 else tail_anode_returned_flux
+                ),
+                tail_anode_returned_erg_s=(
+                    0.0 if arm == 1 else tail_anode_returned_erg
                 ),
             )
         )
