@@ -39,7 +39,11 @@ positivity preserving):
      accommodated/reflected), the anode mesh re-emits what it intercepted,
      the interior CLOSED FACES re-emit what they blocked on the side it
      arrived from, and the external ledger (puff, recombination, recycling
-     faces, anode rebirths) is added as counted particles.
+     faces, anode rebirths) is added as counted particles. With the CATHODE
+     JET armed the counted cathode recycle splits here: the ``R_N``
+     backscattered share is born as a directed energetic volume birth
+     carrying exactly the ``R_E`` energy share its surface was debited, and
+     the remainder keeps the thermal face inflow.
 
 Splitting births from losses this way is what makes the inventory ledger
 EXACT rather than converged: substep A never creates a particle and
@@ -182,6 +186,17 @@ WALL_ENERGY_SOLVE_REL_TOL = 1.0e-12
 # and NUMERICS.md.
 TRANSFER_HOLDS = ("exponential", "zoh")
 
+# Relative agreement the CATHODE JET's launch spectrum must reach on its
+# DISCRETE drift and energy moments before it is placed. The spectrum is a
+# monoenergetic beam smeared onto the velocity grid, and the whole point of
+# the channel is that the energy it hands the gas equals the energy the
+# cathode surface was debited: a projection that misses its moments has
+# created or destroyed energy between the two books. The tolerance is the
+# convergence tolerance of ``VGrid.maxwellian``'s own compensation loop, so a
+# converged solve passes by construction and a bailed one -- a conditioning
+# rejection, or four iterations that did not reach the target -- RAISES.
+CATHODE_JET_MOMENT_REL_TOL = 1.0e-10
+
 # Rate factor on the isotropic-elastic BGK channel. A full-replacement event
 # transfers m (v - u_i), which is twice the isotropic angular average
 # ``mu <1 - cos th> g = m g / 2`` at equal mass; halving the collision rate
@@ -215,6 +230,7 @@ LEDGER_BIRTH_CHANNELS = (
     "puff",
     "recombination",
     "cathode_face",
+    "cathode_jet",
     "collector_face",
     "anode",
 )
@@ -225,9 +241,18 @@ LEDGER_EXTERNAL_BIRTHS = (
     "puff",
     "recombination",
     "cathode_face",
+    "cathode_jet",
     "collector_face",
     "anode",
 )
+# External births the ENGINE splits out of another channel rather than
+# receiving as a ledger entry of its own. ``cathode_jet`` is the ``R_N``
+# energetic-backscatter share of ``cathode_face``: the partner counts the
+# recycle flux ONCE, under ``cathode_face``, and the split happens here. A
+# caller naming one of these in ``sources``/``source_counts`` would be
+# handing particles nothing reads, so :meth:`TransientDVM._check_source_channels`
+# refuses it.
+LEDGER_ENGINE_SPLIT_BIRTHS = ("cathode_jet",)
 # Ledger entries that are NOT channels: the tick's own bookkeeping, the
 # counted-ionization handshake's reconciliation record, and the nested
 # ENERGY ledger declared below. Named here for the same reason as the
@@ -397,6 +422,38 @@ class TransientDVM:
         replace.
 
     Any other value raises.
+
+    ``cathode_jet`` arms the CATHODE-SIDE ENERGETIC RECYCLE, and is ``None``
+    (absent) by default: with it absent nothing below runs and every
+    ``cathode_face`` particle keeps the thermal re-emission it has always
+    had. Armed, it is the spec dict ``{"R_N", "R_E", "T_launch_eV"}`` and
+    splits the counted ``cathode_face`` channel in two:
+
+    * the ``R_N`` share is BACKSCATTERED, born as a volume birth in the cell
+      the recycle was counted into, on a moment-compensated narrow shifted
+      Maxwellian carrying ``(R_E/R_N) (phi_c + Ti)`` of kinetic energy per
+      atom -- the ``"total_reflected"`` convention of
+      :func:`~cablp.solvers._sim1d.physics.sources.cathode_jet_backscatter_speed`,
+      so the DVM channel and the fluid one describe the same atoms;
+    * the ``1 - R_N`` remainder keeps the thermal cosine half-flux inflow at
+      the live surface temperature, unchanged.
+
+    ``R_E`` is the TOTAL reflected energy fraction, so the whole channel
+    carries ``R_E`` of the incident ion energy and the surface must be
+    debited exactly that. The incident energy is not derived here: it is
+    handed to :meth:`update` as ``cathode_jet_incident_erg``, the SAME
+    committed number the partner debits its surface by, which is what makes
+    the reflected energy created once rather than twice.
+
+    ``T_launch_eV`` is a NUMERICS parameter -- the width of the smear the
+    monoenergetic beam is represented by on a discrete velocity grid.
+    ``None`` ties it to the grid: ``m dv_z(v_back)^2 / k_B``, one bin at the
+    launch speed, which is the narrowest spectrum the grid resolves there. A
+    positive float pins it instead. The drift is then solved from the
+    ENERGY: ``u = sqrt(v_back^2 - 3 k T_launch / m)``, so the spectrum's
+    discrete mean energy is ``(1/2) m v_back^2`` exactly rather than that
+    plus the smear's own ``(3/2) k T_launch``. A projection that misses its
+    moments RAISES (:meth:`_cathode_jet_launch_spectrum`).
     """
 
     def __init__(
@@ -410,6 +467,7 @@ class TransientDVM:
         elastic_model="phelps_iso",
         exchange_model="cauchy_chord",
         annulus_flights="rates",
+        cathode_jet=None,
         transparency=1.0,
         mesh_face=-999,
         s_L=0.0,
@@ -440,6 +498,7 @@ class TransientDVM:
                 f"wall_reflection must be one of {WALL_REFLECTION_MODELS} "
                 f"(got {wall_reflection!r})"
             )
+        self.cathode_jet = _validated_cathode_jet(cathode_jet)
         self.accommodation = float(accommodation)
         self.wall_reflection = str(wall_reflection)
         self.elastic_model = str(elastic_model)
@@ -1066,6 +1125,112 @@ class TransientDVM:
             )
         return spectra
 
+    # ------------------------------------------------------ cathode jet
+
+    def _cathode_jet_launch_temperature_eV(self, v_back):
+        """Return the launch smear [eV] for a backscatter speed [cm/s].
+
+        The configured ``T_launch_eV`` when one was named, and otherwise the
+        GRID-TIED width ``m dv_z(v_back)^2 / k_B``: the axial bin containing
+        the launch speed, expressed as a temperature. That is the narrowest
+        spectrum this grid can carry there -- a narrower one collapses onto a
+        single bin, where the two-basis moment compensation has nothing to
+        redistribute and cannot reach its targets at all.
+        """
+        named = self.cathode_jet["T_launch_eV"]
+        if named is not None:
+            return float(named)
+        edges = self.g.vz_edges
+        k = int(np.clip(np.searchsorted(edges, abs(v_back)) - 1, 0, self.g.nvz - 1))
+        dv = float(edges[k + 1] - edges[k])
+        return M_HE * dv * dv / EV
+
+    def _cathode_jet_launch_spectrum(self, e_launch, cell):
+        """Return the backscatter launch spectrum at ``e_launch`` erg per atom.
+
+        ``e_launch`` is the kinetic energy ONE backscattered atom leaves
+        with, ``(R_E/R_N) (phi_c + Ti)`` under the ``"total_reflected"``
+        convention. The returned bin masses sum to 1 and their DISCRETE mean
+        energy is ``e_launch`` -- not ``e_launch`` plus the smear's own
+        ``(3/2) k T_launch``, which is why the drift is solved from the
+        energy rather than set to ``v_back``::
+
+            v_back^2 = 2 e_launch / m        u^2 = v_back^2 - 3 k T_launch / m
+
+        so ``<v_z> = u`` and ``<|v|^2> = u^2 + 3 s^2 = v_back^2`` exactly.
+        The atoms leave in ``+z``, the direction the cathode's own thermal
+        re-emission is injected in.
+
+        RAISES rather than returning an approximate spectrum. The
+        compensation solve inside :meth:`VGrid.maxwellian` gives up quietly
+        on a numerically singular system and after four iterations, leaving
+        the analytic bin masses standing at whatever moments they happen to
+        have; here that is a misbooked counted channel -- the surface has
+        already been debited ``R_E`` of the incident energy and this
+        spectrum is what receives it -- so the achieved moments are checked
+        against their targets and a miss names the cell, the shortfall and
+        the two ways out.
+        """
+        e_launch = float(e_launch)
+        if not np.isfinite(e_launch) or e_launch <= 0.0:
+            raise ValueError(
+                "the DVM cathode jet needs a positive finite launch energy "
+                f"per atom at cell {cell} (got {e_launch!r} erg): the "
+                "backscattered share carries (R_E/R_N)(phi_c + Ti), and a "
+                "cell that recycles particles at zero incident energy has no "
+                "energetic share to launch"
+            )
+        v_back = np.sqrt(2.0 * e_launch / M_HE)
+        T_launch = self._cathode_jet_launch_temperature_eV(v_back)
+        if not np.isfinite(T_launch) or T_launch <= 0.0:
+            raise ValueError(
+                "the DVM cathode jet's launch smear must be a positive "
+                f"temperature (got {T_launch!r} eV at cell {cell})"
+            )
+        s2 = T_launch * EV / M_HE
+        u2 = v_back * v_back - 3.0 * s2
+        if u2 <= 0.0:
+            raise ValueError(
+                "the DVM cathode jet cannot represent a launch energy below "
+                "its own smear: cell "
+                f"{cell} asks for {e_launch / EV:.6g} eV per atom while the "
+                f"launch spectrum's thermal content alone is "
+                f"{1.5 * T_launch:.6g} eV (T_launch = {T_launch:.6g} eV). "
+                "Accepted: a smaller neutral_kinetic_dvm_cathode_jet_"
+                "T_launch_eV, or an operating point whose cathode sheath "
+                "actually makes the backscatter energetic"
+            )
+        u = np.sqrt(u2)
+        spec = self.g.maxwellian(T_launch, u, exact_moments=True)
+        total = float(spec.sum())
+        got_u = float((spec * self.g.VZ).sum())
+        got_e = 0.5 * M_HE * float((spec * self.g.V2).sum())
+        e_rel = abs(got_e - e_launch) / e_launch
+        u_rel = abs(got_u - u) / max(abs(u), np.sqrt(s2))
+        if (
+            not np.isfinite(total)
+            or abs(total - 1.0) > CATHODE_JET_MOMENT_REL_TOL
+            or e_rel > CATHODE_JET_MOMENT_REL_TOL
+            or u_rel > CATHODE_JET_MOMENT_REL_TOL
+        ):
+            raise ValueError(
+                "the DVM cathode jet's launch spectrum did not reach its "
+                f"moments at cell {cell}: density {total - 1.0:+.3e} from 1, "
+                f"mean energy {e_rel:.3e} relative from "
+                f"{e_launch / EV:.6g} eV, drift {u_rel:.3e} relative from "
+                f"{u:.6g} cm/s (tolerance "
+                f"{CATHODE_JET_MOMENT_REL_TOL:.1e}, T_launch "
+                f"{T_launch:.6g} eV). The moment compensation gave up -- a "
+                "singular two-basis solve, or a spectrum too narrow or too "
+                "fast for this velocity grid -- and the analytic bin masses "
+                "it left standing would hand the gas an energy the cathode "
+                "surface was not debited. Accepted: widen the grid "
+                "(neutral_kinetic_dvm_nvz / _nvp), or leave "
+                "neutral_kinetic_dvm_cathode_jet_T_launch_eV unset so the "
+                "smear is tied to the local bin width"
+            )
+        return spec
+
     def f_energy(self):
         """Kinetic energy [erg] carried by the distributions themselves."""
         return float(
@@ -1404,6 +1569,7 @@ class TransientDVM:
         ion_counts=None,
         sources=None,
         source_counts=None,
+        cathode_jet_incident_erg=None,
         T_s_K=None,
     ):
         """Advance ``(f_c, f_a)`` by one neutral-clock tick of ``dt`` seconds.
@@ -1438,6 +1604,16 @@ class TransientDVM:
         ``sources`` is multiplied by ``dt`` as before, which is the reading
         an offline caller with no partner has. Naming one channel in both
         raises: they are two different statements about the same particles.
+
+        ``cathode_jet_incident_erg`` is the counted INCIDENT ion energy per
+        column cell [erg] that the ``cathode_face`` particles arrived with
+        over this tick -- ``sum over the tick of N (phi_c + Ti)`` at each
+        contributing state, not a tick-time re-reading of it. Required
+        exactly when the engine was built with a ``cathode_jet`` spec and
+        refused otherwise; it is the number the partner's surface debit is
+        formed from, so the energy the jet hands the gas and the energy the
+        surface gave up are one committed quantity rather than two
+        agreeing formulas.
 
         ``T_s_K`` is the live cathode-surface temperature used for
         the cathode-adjacent surfaces (the stated special case); the wall
@@ -1520,11 +1696,18 @@ class TransientDVM:
         anode = channel("anode")
         cath = channel("cathode_face")
         coll = channel("collector_face")
+        # The cathode-side energetic recycle splits the counted recycle
+        # stream: ``R_N`` backscatters (a volume birth in substep B, below)
+        # and the remainder keeps the thermal face inflow. Absent the jet
+        # spec the whole stream is thermal and nothing here runs.
+        cath_thermal, cath_jet, jet_energy = self._split_cathode_recycle(
+            cath, cathode_jet_incident_erg
+        )
         inject_c = {}
         spec_cath = g.half_flux_spectrum(T_s_K, +1)
         spec_coll = g.half_flux_spectrum(self.T_wall_K, -1)
         self._add_face_inflow(
-            inject_c, cath, self.cath_cell, +1, spec_cath, dt
+            inject_c, cath_thermal, self.cath_cell, +1, spec_cath, dt
         )
         self._add_face_inflow(
             inject_c, coll, self.coll_cell, -1, spec_coll, dt
@@ -1721,6 +1904,22 @@ class TransientDVM:
             f_c += (rec * inv_vc)[:, None, None] * M_i
         if anode.ndim:
             f_c += (anode * inv_vc)[:, None, None] * self.M_wall[None, :, :]
+        # The cathode jet's backscatter share: a VOLUME birth in the cell the
+        # recycle was counted into, on a narrow shifted Maxwellian whose
+        # DISCRETE mean energy is the committed launch energy per atom. The
+        # ledger row is the count times that same discrete mean, so what the
+        # gas received and what the row says are one number by construction.
+        n_cathode_jet = 0.0
+        e_cathode_jet = 0.0
+        if cath_jet is not None:
+            for cell in np.flatnonzero(cath_jet):
+                count = float(cath_jet[cell])
+                spectrum = self._cathode_jet_launch_spectrum(
+                    jet_energy[cell] / count, int(cell)
+                )
+                f_c[cell] += count * inv_vc[cell] * spectrum
+                n_cathode_jet += count
+                e_cathode_jet += count * self._energy_of(spectrum)
 
         # --- end walls: pump what sticks, buffer what returns
         out_L = float(out[("c", -1)].sum() + out[("a", -1)].sum())
@@ -1769,10 +1968,11 @@ class TransientDVM:
             puff=puff,
             rec=rec,
             anode=anode,
-            cath=cath,
+            cath=cath_thermal,
             coll=coll,
             spec_cath=spec_cath,
             spec_coll=spec_coll,
+            e_birth_cathode_jet=e_cathode_jet,
         )
 
         # --- plasma coupling: minus the moments of the kinetic operators
@@ -1810,7 +2010,8 @@ class TransientDVM:
             "birth_end_return_R": birth_return_R,
             "birth_puff": float(puff.sum()),
             "birth_recombination": float(rec.sum()),
-            "birth_cathode_face": float(cath.sum()),
+            "birth_cathode_face": float(cath_thermal.sum()),
+            "birth_cathode_jet": n_cathode_jet,
             "birth_collector_face": float(coll.sum()),
             "birth_anode": float(anode.sum()),
             # The counted handshake, per update: what the partner booked,
@@ -1835,12 +2036,24 @@ class TransientDVM:
         for which wins. Both are configuration errors and both raise here,
         before anything is injected.
         """
-        unknown = sorted(set(source_counts) - set(LEDGER_EXTERNAL_BIRTHS))
+        accepted = set(LEDGER_EXTERNAL_BIRTHS) - set(LEDGER_ENGINE_SPLIT_BIRTHS)
+        split = sorted(
+            (set(sources) | set(source_counts)) & set(LEDGER_ENGINE_SPLIT_BIRTHS)
+        )
+        if split:
+            raise ValueError(
+                f"DVM source channel(s) {split} are SPLIT OUT of another "
+                "channel by the engine and are not fed directly: the cathode "
+                "jet's backscatter share is taken from the counted "
+                "'cathode_face' stream, so feeding it here would count the "
+                "same recycled particles twice"
+            )
+        unknown = sorted(set(source_counts) - accepted)
         if unknown:
             raise ValueError(
                 f"unknown counted DVM source channel(s) {unknown} "
                 "(silent/inert sources are forbidden); this engine books "
-                f"{sorted(LEDGER_EXTERNAL_BIRTHS)}"
+                f"{sorted(accepted)}"
             )
         both = sorted(set(sources) & set(source_counts))
         if both:
@@ -1869,6 +2082,67 @@ class TransientDVM:
         if not np.all(np.isfinite(counted)):
             raise ValueError(f"source_counts[{name!r}] must be finite")
         return counted
+
+    def _split_cathode_recycle(self, cath, incident_erg):
+        """Split the counted cathode recycle into its thermal and jet shares.
+
+        Returns ``(thermal, jet, jet_energy)``. Without a ``cathode_jet``
+        spec the whole stream is thermal, ``jet`` is ``None`` and the
+        returned ``thermal`` IS the array handed in, so the off path runs
+        exactly the arithmetic it ran before the channel existed.
+
+        Armed, ``jet`` is ``R_N`` of the counted particles and
+        ``jet_energy`` is ``R_E`` of the counted INCIDENT energy -- the
+        total reflected energy fraction, so the per-atom launch energy is
+        ``jet_energy / jet = (R_E/R_N)(phi_c + Ti)`` exactly. The thermal
+        share is the REMAINDER rather than ``(1 - R_N)`` of the count, so
+        the two shares sum to the counted stream to the bit and the particle
+        ledger's external total is untouched by the split.
+        """
+        if self.cathode_jet is None:
+            if incident_erg is not None:
+                raise ValueError(
+                    "cathode_jet_incident_erg was supplied to a DVM built "
+                    "with no cathode_jet spec: there is no energetic "
+                    "backscatter channel to receive it, and a silently inert "
+                    "energy booking is exactly the misbooking the counted "
+                    "handshake exists to prevent"
+                )
+            return cath, None, None
+        if incident_erg is None:
+            raise ValueError(
+                "the DVM cathode jet is armed and needs "
+                "cathode_jet_incident_erg -- the counted incident ion energy "
+                "[erg] per column cell that the cathode_face particles "
+                "arrived with over this tick. It is the same committed "
+                "number the surface debit is formed from; deriving a second "
+                "one here would let the reflected energy be created twice"
+            )
+        incident = np.asarray(incident_erg, dtype=float)
+        if incident.shape != (self.nz,):
+            raise ValueError(
+                "cathode_jet_incident_erg must carry one incident energy per "
+                f"column cell (got shape {incident.shape}, expected "
+                f"{(self.nz,)})"
+            )
+        if not np.all(np.isfinite(incident)) or np.any(incident < 0.0):
+            raise ValueError(
+                "cathode_jet_incident_erg must be finite and non-negative "
+                f"(got min {float(np.min(incident))!r}, max "
+                f"{float(np.max(incident))!r})"
+            )
+        counts = np.asarray(cath, dtype=float)
+        if not counts.ndim:
+            # The scalar convention deposits at the role-resolved cathode
+            # cell; carrying it as the equivalent per-cell row keeps the
+            # split, the birth and the face inflow on one placement rule.
+            scalar = float(counts)
+            counts = np.zeros(self.nz)
+            counts[self.cath_cell] = scalar
+        jet = float(self.cathode_jet["R_N"]) * counts
+        thermal = counts - jet
+        jet_energy = float(self.cathode_jet["R_E"]) * incident
+        return thermal, jet, jet_energy
 
     def _debit_booked_ionization(self, ion_counts, L_ion, f_c, vol_c):
         """Reconcile the march's ionization tally with a partner's booking.
@@ -1997,6 +2271,7 @@ class TransientDVM:
         coll,
         spec_cath,
         spec_coll,
+        e_birth_cathode_jet,
     ):
         """Return this update's ENERGY ledger [erg], channel by channel.
 
@@ -2102,6 +2377,11 @@ class TransientDVM:
             "birth_puff": e_birth_puff,
             "birth_recombination": e_birth_recombination,
             "birth_cathode_face": e_birth_cathode_face,
+            # Already the counted number times the DISCRETE mean energy of the
+            # spectrum that was placed -- summed at the birth site rather than
+            # rebuilt here, so the row cannot describe a spectrum other than
+            # the one the gas received.
+            "birth_cathode_jet": e_birth_cathode_jet,
             "birth_collector_face": e_birth_collector_face,
             "birth_anode": e_birth_anode,
             "net_surface_wall": (
@@ -2447,6 +2727,56 @@ class BoundedChordFlights:
             weights=launched.reshape(-1),
             minlength=self.n_flat,
         ).reshape(self.shape)
+
+
+#: The keys a ``cathode_jet`` spec carries, exactly.
+CATHODE_JET_SPEC_KEYS = ("R_N", "R_E", "T_launch_eV")
+
+
+def _validated_cathode_jet(spec):
+    """Return a validated cathode-jet spec, or ``None`` when absent.
+
+    ``R_E`` is the TOTAL reflected energy fraction and the ``R_N``
+    backscattered particles carry all of it, so each leaves with
+    ``R_E/R_N`` of the incident energy: that reading is only meaningful for
+    ``0 < R_E <= R_N < 1``, the same interval
+    :func:`~cablp.solvers._sim1d.physics.sources.cathode_jet_backscatter_speed`
+    demands of the fluid channel under ``energy_convention =
+    "total_reflected"``. A reflected atom cannot leave with more energy than
+    it arrived with, and neither coefficient may be degenerate.
+
+    ``T_launch_eV`` is ``None`` (grid-tied) or a positive finite float.
+    """
+    if spec is None:
+        return None
+    unknown = sorted(set(spec) - set(CATHODE_JET_SPEC_KEYS))
+    missing = sorted(set(CATHODE_JET_SPEC_KEYS) - set(spec))
+    if unknown or missing:
+        raise ValueError(
+            "the DVM cathode_jet spec carries exactly "
+            f"{list(CATHODE_JET_SPEC_KEYS)}; got unknown {unknown} and "
+            f"missing {missing}"
+        )
+    R_N = float(spec["R_N"])
+    R_E = float(spec["R_E"])
+    if not (0.0 < R_E <= R_N < 1.0):
+        raise ValueError(
+            "the DVM cathode jet reads R_E as the TOTAL reflected energy "
+            "fraction and gives each of the R_N backscattered particles "
+            "R_E/R_N of the incident energy, so it requires "
+            f"0 < R_E <= R_N < 1 (got R_E={R_E}, R_N={R_N})"
+        )
+    T_launch = spec["T_launch_eV"]
+    if T_launch is not None:
+        T_launch = float(T_launch)
+        if not np.isfinite(T_launch) or T_launch <= 0.0:
+            raise ValueError(
+                "the DVM cathode jet's T_launch_eV is the width of the smear "
+                "its monoenergetic beam is represented by and must be a "
+                "positive finite temperature, or None to tie it to the local "
+                f"velocity-grid bin (got {T_launch!r})"
+            )
+    return {"R_N": R_N, "R_E": R_E, "T_launch_eV": T_launch}
 
 
 def _throat_areas(cell_areas):

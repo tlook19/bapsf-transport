@@ -703,6 +703,55 @@ cell within the tick, that count is measured against the inventory the cell
 holds *after* those returns (`NUMERICS.md` § "The counted ionization debit").
 
 
+### Cathode-side energetic recycle (`neutral_kinetic_dvm_cathode_jet`, default off)
+
+The recycle the arm counts off the cathode is one stream of atoms leaving one
+surface, and by default every one of them leaves it thermally, on the cosine
+half-flux at the live surface temperature. That is a closure, not a
+measurement: an ion that falls through the cathode sheath arrives with
+$\phi_c+T_i$, and a fraction of that flux comes back off the metal as
+BACKSCATTERED atoms carrying a real share of it away, rather than being
+implanted and desorbing at the wall temperature.
+
+Armed, this selector splits the counted stream by the same two reflection
+coefficients the fluid channel carries — a particle fraction $R_N$ and a
+**total** reflected energy fraction $R_E$, so the $R_N$ backscattered atoms
+carry all of $R_E$ and each leaves with
+
+$$\varepsilon_{\rm back}=\frac{R_E}{R_N}\,(\phi_c+T_i),$$
+
+which is the `"total_reflected"` convention of `sources.py`'s one launch-speed
+spec. The remaining $1-R_N$ keeps the thermal re-emission unchanged. The
+kinetic arm can carry this where the fluid arm cannot: the backscattered atoms
+are born as a directed population on the velocity grid and are transported and
+attacked by the loss channels as the energetic atoms they are, instead of
+depositing their tens of eV into one cell's cold fluid temperature.
+
+**The cathode surface book gains a named loss channel.** The energy those
+atoms leave with is energy the surface no longer has, so the surface energy
+balance carries a `backscatter` row alongside `heater`, `ion`, `rad`, `emis`
+and `cond` — the first loss channel in that balance that is paid to the
+NEUTRAL GAS rather than to radiation, emission or the substrate. It is formed
+from the same counted (particles, incident energy) pair the birth is formed
+from, so the reflected energy is created exactly once: what the surface gives
+up is what the gas receives, to roundoff, and the pair is refused outright
+against the fluid channel's own `cathode_jet_surface_debit`, which would debit
+the same $R_E$ a second time.
+
+Two convention drops are DISCLOSED rather than remembered. The $1-R_N$
+implanted share desorbs at the surface temperature and its $\tfrac32 kT_s$ per
+atom is not debited — fluid-channel parity, and tens of watts against a
+kilowatt-class ion bombardment power. And the birth spectra of a tick read the
+surface temperature as it stood before that step's warming increment, because
+the neutral clock ticks earlier in the accept path than the warming update
+does; the staleness is one step of $\mathrm{d}T$ on a surface whose thermal
+time constant is many orders above the step.
+
+The representation of $\varepsilon_{\rm back}$ on a discrete velocity grid is a
+numerics question and belongs to `NUMERICS.md` (§ "The DVM cathode jet's launch
+spectrum").
+
+
 ## Gas-puff axial placement (`gas_puff_profile`)
 
 The gas puff enters through two azimuthally opposed mid-plane ports at one
