@@ -479,13 +479,14 @@ def _residual_annular(
     ion_frac_k: tuple,
     beam_bypass_fraction: float = 0.0,
     tau_a: float = 1.0,
+    J_tail_a: float = 0.0,
 ) -> float:
     """Annular-emission variant of ``_residual`` (same loop equation)."""
     J_star, psi_minus, _ = _annular_emission_state(
         psi_c_plus, J_i, mu, J_eth_k, delta_k, ion_frac_k
     )
     J_tot = J_i * (1.0 - _exp_clamped(Lambda - psi_c_plus)) + J_star
-    J_anode = J_tot - eta * beam_bypass_fraction * J_star
+    J_anode = J_tot - eta * beam_bypass_fraction * J_star - J_tail_a
     anode_arg = max(1.0 + J_anode / J_i_a, 1e-300)
     return (
         psi_c_plus
@@ -674,6 +675,7 @@ def _residual(
     J_i_a: float,
     beam_bypass_fraction: float = 0.0,
     tau_a: float = 1.0,
+    J_tail_a: float = 0.0,
 ) -> float:
     """Root equation for psi_c_plus (scaled positive cathode sheath drop).
 
@@ -689,7 +691,7 @@ def _residual(
         J_eth_star = min(J_eth, J_eth_crit(psi_c_plus))
         psi_c_minus = delta * ln(J_eth / J_eth_star)  [virtual cathode]
                     = 0                                 [classical]
-        J_anode    = J_tot - eta * f_bypass * J_eth_star
+        J_anode    = J_tot - eta * f_bypass * J_eth_star - J_tail_a
     """
     J_crit = _j_eth_crit(psi_c_plus, J_i, mu)
 
@@ -709,8 +711,10 @@ def _residual(
     J_tot = J_i * (1.0 - _exp_clamped(Lambda - psi_c_plus)) + J_star
 
     # A fraction of the thermionic beam can reach the anode without a
-    # plasma collision/ionization event.
-    J_anode = J_tot - eta * beam_bypass_fraction * J_star
+    # plasma collision/ionization event; ``J_tail_a`` is the A2a QL-tail
+    # current the anode mesh collects directly, on the same footing and for
+    # the same reason (see ``solve``'s docstring).
+    J_anode = J_tot - eta * beam_bypass_fraction * J_star - J_tail_a
 
     # Anode sheath argument; clamp to avoid log(≤0) in extreme bracketing
     anode_arg = max(1.0 + J_anode / J_i_a, 1e-300)
@@ -832,6 +836,7 @@ def solve(
     cathode_current_A: float | None = None,
     anode_current_A: float | None = None,
     anode_T_e: float | None = None,
+    tail_anode_current_A: float = 0.0,
 ) -> SolverResult:
     """Solve for all sheath potentials and currents given device config and plasma state.
 
@@ -844,6 +849,15 @@ def solve(
     x0 : float or None
         Warm-start hint for the cathode sheath drop [V]. If None, a cold start
         bracket is used.
+    tail_anode_current_A : float
+        Electron current [A] the anode collects DIRECTLY from the QL tail
+        walkers its mesh intercepts -- current that never crossed the anode
+        sheath. It enters ``J_anode`` with the beam bypass's sign and for the
+        same reason (the sheath has that much less plasma-borne current to
+        pass), so it raises ``phi_a`` logarithmically. The caller supplies the
+        value the LAST accepted step measured: the deposition that produces it
+        is solved after this, so the coupling is lagged one step rather than
+        iterated. 0.0 (the default) is an exact identity on every float here.
     floating : bool
         If True, override V_bank = 0, forcing the floating-potential solution
         where I_tot = V_b = 0 and phi_c = phi_a = T_e * Lambda (in the absence
@@ -942,6 +956,11 @@ def solve(
     J_i = I_i * R_p / T_e
     J_i_a = I_i_a * R_p / T_e
     J_eth = I_eth * R_p / T_e
+    # A2a: current the anode collects directly from the QL tail walkers its
+    # mesh intercepts, scaled like the rest. See the parameter's docstring for
+    # why it carries the beam bypass's sign; 0.0 (the default) is an exact
+    # identity on every float below.
+    J_tail_a = float(tail_anode_current_A) * R_p / T_e
 
     Lambda = config.Lambda + 0.5
     eta = config.eta
@@ -1059,6 +1078,7 @@ def solve(
                         ion_frac_k,
                         beam_bypass_fraction,
                         tau_a,
+                        J_tail_a,
                     )
                 return f
 
@@ -1076,6 +1096,7 @@ def solve(
                     J_i_a,
                     beam_bypass_fraction,
                     tau_a,
+                    J_tail_a,
                 )
             return f
 
@@ -1173,7 +1194,7 @@ def solve(
 
         J_tot = J_i * (1.0 - _exp_clamped(Lambda - psi_c_plus)) + J_star
 
-        J_anode = J_tot - eta * beam_bypass_fraction * J_star
+        J_anode = J_tot - eta * beam_bypass_fraction * J_star - J_tail_a
         # Scaled anode sheath potential; clamp mirrors the residual's guard
         # (extreme-emission roots can land at a marginally negative argument).
         psi_a = Lambda - math.log(max(1.0 + J_anode / J_i_a, 1e-300))
@@ -1270,6 +1291,7 @@ def solve_beam_system(
     b_beam_excitation: float = 0.0,
     beam_excitation_energy_eV: float = 21.218,
     beam_excitation_model: str = "2p_scalar",
+    tail_anode_current_A: float = 0.0,
 ) -> BeamResult:
     """Solve cathode sheath(s) and compute beam quantities for all cells.
 
@@ -1317,6 +1339,7 @@ def solve_beam_system(
         floating=floating,
         anode_current_A=anode_current_A,
         anode_T_e=anode_T_e,
+        tail_anode_current_A=tail_anode_current_A,
     )
     x0_next = result.phi_c_plus
     phi_c_0 = result.phi_c
@@ -1354,6 +1377,7 @@ def solve_beam_system(
             floating=floating,
             anode_current_A=anode_current_twin_A,
             anode_T_e=anode_T_e_twin,
+            tail_anode_current_A=tail_anode_current_A,
         )
         x0_twin_next = result_twin.phi_c_plus
         phi_c_1 = result_twin.phi_c

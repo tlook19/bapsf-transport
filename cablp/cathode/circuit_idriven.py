@@ -412,6 +412,7 @@ def solve_idriven(
     alpha_sheath_anode: float | None = None,
     circuit_V_avail_V: float | None = None,
     circuit_bound_object: str = "phi_c",
+    tail_anode_current_A: float = 0.0,
 ) -> SolverResult:
     """Solve the cathode sheath for an *imposed* loop current.
 
@@ -423,6 +424,15 @@ def solve_idriven(
     ``phi_c_cap_V`` is the fixed physical bracket ceiling on the classical
     sheath drop; a current the sheath cannot carry below it returns the
     bracket-top solution tagged ``regime="capability_limited"``.
+    ``tail_anode_current_A`` is electron current [A] the anode collects
+    DIRECTLY from the QL tail walkers the mesh intercepts, i.e. current that
+    never crossed the anode sheath. It enters ``J_anode`` with the beam
+    bypass's sign and for the same reason -- the sheath has that much less
+    plasma-borne current to pass -- so it raises ``phi_a`` logarithmically.
+    Its caller supplies the value the LAST accepted step measured: the
+    deposition that produces it is solved after this, so the coupling is
+    lagged one step rather than iterated. 0.0 (the default) leaves the solve
+    bit-for-bit as it was.
     ``circuit_V_avail_V`` is the optional CIRCUIT-AVAILABLE device voltage
     [V] -- the largest device voltage the external loop can sustain at this
     current, ``V_src - I*(R_comp + R_mesh)``, which is the loop equation
@@ -597,6 +607,15 @@ def solve_idriven(
     J_i_a = I_i_a * R_p / T_e
     J_eth = I_eth * R_p / T_e
     J_imposed = float(I_tot_A) * R_p / T_e
+    # A2a two-population split: current the anode collects from the QL TAIL
+    # walkers rather than through its own sheath, scaled like every other
+    # current here. It enters J_anode with the beam bypass's sign and for the
+    # beam bypass's reason -- both are electrons reaching the electrode
+    # without the sheath having to pass them, so the plasma-borne share the
+    # sheath does have to pass is smaller by that much, and the anode sits a
+    # few volts higher (logarithmically). 0.0 (the default) leaves every float
+    # below exactly as it was.
+    J_tail_a = float(tail_anode_current_A) * R_p / T_e
 
     annular = bool(config.emission_Ts_K)
     if annular:
@@ -690,7 +709,7 @@ def solve_idriven(
         phi_c_p = psi * T_e - psi_minus_p * T_e
         l_b_p = _compute_l_b(phi_c_p, T_e, n_e, plasma.n_n, plasma.sigma_b)
         bypass_p = _compute_beam_bypass_fraction(l_b_p, config.L_cath)
-        J_anode_p = J_tot_p - eta * bypass_p * J_star_p
+        J_anode_p = J_tot_p - eta * bypass_p * J_star_p - J_tail_a
         psi_a_p = Lambda_anode - math.log(
             max(1.0 + J_anode_p / J_i_a, 1e-300)
         )
@@ -887,7 +906,7 @@ def solve_idriven(
     beam_bypass_fraction = _compute_beam_bypass_fraction(l_b, config.L_cath)
     long_mfp = l_b > 0.0 and l_b > config.L_cath
 
-    J_anode = J_tot - eta * beam_bypass_fraction * J_star
+    J_anode = J_tot - eta * beam_bypass_fraction * J_star - J_tail_a
     # Anode floating potential: the anode's own sheath, on its own presheath.
     psi_a = Lambda_anode - math.log(max(1.0 + J_anode / J_i_a, 1e-300))
     phi_a = psi_a * T_e_anode
@@ -1138,6 +1157,7 @@ def solve_beam_system_idriven(
     circuit_V_avail_V: float | None = None,
     circuit_bound_object: str = "phi_c",
     beam_climb_V: float | None = None,
+    tail_anode_current_A: float = 0.0,
 ) -> BeamResult:
     """Current-driven, single-cathode counterpart of ``solve_beam_system``.
 
@@ -1189,6 +1209,7 @@ def solve_beam_system_idriven(
         alpha_sheath_anode=alpha_sheath_anode,
         circuit_V_avail_V=circuit_V_avail_V,
         circuit_bound_object=circuit_bound_object,
+        tail_anode_current_A=tail_anode_current_A,
     )
     phi_c_0 = beam_launch_energy_eV(result.phi_c, beam_climb_V)
     if phi_c_0 > I_ion:

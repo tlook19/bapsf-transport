@@ -2168,6 +2168,29 @@ def cathode_defaults():
         clamped to the table's last node, which AT the edge is that node's own
         value and not an extrapolation, and beyond it the march raises and the
         message reports the measured relative excess.
+    beam_tail_anode_reflected_particles:
+        Reversed-walker rider, PARTICLE half (default 0.0 = the rider OFF,
+        bit-exact). The share ``R_e`` of the QL tail walkers the anode mesh
+        intercepts that come back off it, PER INCIDENT walker. Read ONLY under
+        the ``beam_tail_anode_interception`` flag, which is refused without it
+        and which refuses this pair without itself. Dimensionless, in
+        ``[0, 1]``. At 0.0 nothing returns and the whole culled share lands on
+        the anode, which is the cull with no rider on top. The rider needs a
+        per-walker launch to reverse, so it additionally requires the marched
+        tail (``heating_anomalous_tail_ionization="on"``) and is refused, not
+        approximated, under the energy-only walk. A crossing whose incident
+        energy is below the module's rider energy floor returns nothing
+        whatever this value says: the walker is absorbed there.
+    beam_tail_anode_reflected_energy:
+        Reversed-walker rider, ENERGY half (default 0.0 = OFF, bit-exact).
+        The share ``eta_E`` of the intercepted walkers' incident ENERGY that
+        comes back, PER INCIDENT walker -- the same normalization the particle
+        half uses, which is what keeps the pair free of any separate mean
+        energy ratio. Dimensionless, in ``[0, 1]``, and it must not exceed
+        ``beam_tail_anode_reflected_particles``: the mean energy per returned
+        walker is the ratio of the two in units of the incident energy, and a
+        ratio above one would return more than arrived. Refused rather than
+        clamped.
     beam_clump_fraction:
         Fractional-coverage beam-neutral closure (default 0.0 = OFF, bit-exact).
         The fresh gas puff is a dense, SPOTTY cloud sitting on the uniform
@@ -2429,6 +2452,12 @@ def cathode_defaults():
         "heating_anomalous_tail_energy_keying": "phi_c",
         "heating_anomalous_tail_phi_c_fraction": None,
         "heating_anomalous_tail_cathode_boundary": "reflect",
+        # A2a reversed-walker rider on the anode tail cull: DEFAULT OFF
+        # (bit-exact). Both are read only under beam_tail_anode_interception.
+        # The declared box the campaign brackets these across is NOT here --
+        # the arms state their own values and the note carries the provenance.
+        "beam_tail_anode_reflected_particles": 0.0,
+        "beam_tail_anode_reflected_energy": 0.0,
         "beam_clump_fraction": 0.0,
         "beam_clump_enhancement": 1.0,
         "beam_deposition_smoothing_cm": 0.0,
@@ -3356,6 +3385,21 @@ input_flags_template_1d = {
     # launches the CSDA module) and where the resolved geometry has no anode
     # faces. Set False for the with/without-interception A/B.
     "beam_anode_interception": True,
+    # A2a: the same anode mesh, met by the QL TAIL walkers. DEFAULT OFF
+    # (bit-exact off: with it clear the tail walk never enters the cull
+    # branch). The primary interception above removes cathode-borne flux
+    # streaming OUT through the wires; the tail walkers are born in the column
+    # and meet the same wires from whichever side they approach, and until
+    # this flag they passed through the mesh as if it were not there. On, a
+    # walker loses the mesh solid fraction eta of its flux at its FIRST
+    # crossing of the anode plane, the removed share books to the SAME
+    # anode_intercepted convention the primary uses, and the walkers the anode
+    # actually collects feed the circuit's J_anode one step later (the
+    # deposition is solved after the circuit within a step, so the coupling
+    # is lagged rather than iterated). Requires beam_anode_interception: the
+    # cull uses that channel's anode face and eta, and arming one without the
+    # other would leave the two views of the same mesh disagreeing.
+    "beam_tail_anode_interception": False,
     "ion_neutral_drag": True,
     "ion_neutral_drag_cx_only": False,
     # Evolve axial neutral momentum M_n as a sixth conservative field:

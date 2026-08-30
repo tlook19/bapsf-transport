@@ -1977,6 +1977,12 @@ class LAPDSim1D:
         self._cathode_x0 = None
         self._cathode_x0_twin = None
         self._cathode_beam_cross = np.zeros(self._geometry.cells)
+        # A2a lag state: the electron current [A] the anode collected directly
+        # from the QL tail walkers on the LAST ACCEPTED step. The deposition
+        # that measures it runs after the circuit within a step, so the
+        # coupling is lagged; this member is written ONLY where the accepted
+        # solve writes its caches, so a rejected attempt cannot move it.
+        self._cathode_tail_anode_I = 0.0
         # Last accepted sheath solve's current, used only by the measured-tail
         # phase gate. The evolved loop state itself is _circuit_I_loop.
         self._circuit_I_prev = 0.0
@@ -2529,6 +2535,73 @@ class LAPDSim1D:
                     "refused, not approximated (relative excess "
                     f"{_edge_excess:.3e}, tolerated "
                     f"{HE_EII_EDGE_REL_TOL:.1e})"
+                )
+        # --- A2a: the anode-mesh cull of the QL tail, and its rider --------
+        # Duplicated from the deposition module's own guards for the standing
+        # reason: a misconfiguration must fail at construction, not on the
+        # first cathode solve. The module keeps its copies -- it is called
+        # directly by instruments that never build a solver.
+        _tail_cull = bool(
+            self._flags.get("beam_tail_anode_interception", False)
+        )
+        _R_e = float(
+            self._input_dict.get("beam_tail_anode_reflected_particles", 0.0)
+        )
+        _eta_E = float(
+            self._input_dict.get("beam_tail_anode_reflected_energy", 0.0)
+        )
+        for _name, _val in (
+            ("beam_tail_anode_reflected_particles", _R_e),
+            ("beam_tail_anode_reflected_energy", _eta_E),
+        ):
+            if not math.isfinite(_val) or not 0.0 <= _val <= 1.0:
+                raise ValueError(f"{_name} must be in [0, 1] (got {_val})")
+        if _eta_E > _R_e:
+            raise ValueError(
+                "beam_tail_anode_reflected_energy must not exceed "
+                f"beam_tail_anode_reflected_particles (got {_eta_E} > {_R_e}): "
+                "both are PER INCIDENT walker, so their ratio is the mean "
+                "energy a returned walker carries in units of the energy it "
+                "arrived with, and that cannot exceed one"
+            )
+        if (_R_e > 0.0 or _eta_E > 0.0) and not _tail_cull:
+            raise ValueError(
+                "beam_tail_anode_reflected_particles/"
+                "beam_tail_anode_reflected_energy ride on the anode tail cull "
+                "and are read only under beam_tail_anode_interception=True; "
+                "with the cull off nothing is intercepted and the pair would "
+                "be a silent no-op"
+            )
+        if _R_e > 0.0 and _tion != "on":
+            raise ValueError(
+                "the reversed-walker rider "
+                "(beam_tail_anode_reflected_particles > 0) requires "
+                "heating_anomalous_tail_ionization='on': the energy-only "
+                "closed-form tail walk carries a whole cell sequence in one "
+                "telescoping integral and has no per-walker launch to "
+                "reverse. The cull itself composes with either walk; only the "
+                "return does not, and it is refused rather than approximated"
+            )
+        if _tail_cull:
+            if not _tail_walking:
+                raise ValueError(
+                    "beam_tail_anode_interception culls the QL TAIL walkers, "
+                    "so it needs a walked tail: "
+                    "heating_anomalous_transport='tail_walk' or "
+                    "'plateau_multigroup', or "
+                    "heating_anomalous_disposal='landau_branched'. With none "
+                    "of them there are no walkers to cull and the flag would "
+                    "do nothing"
+                )
+            if not bool(self._flags.get("beam_anode_interception", False)):
+                raise ValueError(
+                    "beam_tail_anode_interception requires "
+                    "beam_anode_interception: the tail cull fires at the same "
+                    "anode face, on the same mesh solid fraction eta, and "
+                    "books to the same anode_intercepted row as the primary's "
+                    "interception. Arming one without the other would leave "
+                    "two views of one mesh disagreeing about whether it is "
+                    "there"
                 )
         _fc = float(self._input_dict.get("beam_clump_fraction", 0.0))
         if not 0.0 <= _fc < 1.0:
@@ -5072,6 +5145,7 @@ class LAPDSim1D:
             cathode_x0_twin=_copy_cache_value(self._cathode_x0_twin),
             cathode_beam_cross=self._cathode_beam_cross.copy(),
             cathode_solve=self._cathode_solve,
+            cathode_tail_anode_I=float(self._cathode_tail_anode_I),
         )
 
     def _restore_step_cache(self, snapshot):
@@ -5082,6 +5156,7 @@ class LAPDSim1D:
             dtype=float,
         ).copy()
         self._cathode_solve = snapshot.cathode_solve
+        self._cathode_tail_anode_I = float(snapshot.cathode_tail_anode_I)
 
     def _attempt_step(self, dt=None, operator_split=None):
         """Return a candidate step without committing state, time, or caches."""
@@ -6123,6 +6198,9 @@ class LAPDSim1D:
         "_cathode_theta",
         "_cathode_f_em",
         "_cathode_solve",
+        # A2a lag: a float, mutated only on the accepted-solve write, so a
+        # Picard re-run must start from the value the step started from.
+        "_cathode_tail_anode_I",
         # Vessel node: the potential is a float, and the ledger/current
         # records are copied below because they are mutable containers.
         "_vessel_V_cm",
@@ -6220,6 +6298,10 @@ class LAPDSim1D:
             name: _copy_cache_value(getattr(self, name))
             for name in self._RESTART_CATHODE_ATTRS
         }
+        # A2a lag, written on its own key rather than joining the strict
+        # inventory above so a payload taken before the cull existed stays
+        # readable: it restores to 0.0, which is what an unarmed run carries.
+        cathode["_cathode_tail_anode_I"] = float(self._cathode_tail_anode_I)
         cathode["energy_ledger_J"] = None
         # Emitting-area percolation, presence-gated exactly like the vessel
         # node and the coverage section: the lit fraction is written only when
@@ -6382,6 +6464,9 @@ class LAPDSim1D:
         cathode = payload["cathode"]
         for name in self._RESTART_CATHODE_ATTRS:
             setattr(self, name, _copy_cache_value(cathode[name]))
+        self._cathode_tail_anode_I = float(
+            cathode.get("_cathode_tail_anode_I", 0.0)
+        )
         if self._cathode_f_em is not None:
             self._cathode_f_em = float(cathode["_cathode_f_em"])
         circuit = payload["circuit"]
@@ -8747,6 +8832,10 @@ class LAPDSim1D:
             _memo_key_part(input_flags),
             _memo_key_part(bool(floating)),
             _memo_key_part(self._cathode_beam_cross),
+            # A2a: a lagged INPUT to this solve, exactly like sigma_b above.
+            # Two calls at one (y, t) with different lag values are different
+            # solves and must not be served for one another.
+            _memo_key_part(self._cathode_tail_anode_I),
             _memo_key_part(self._cathode_x0),
             _memo_key_part(self._cathode_x0_twin),
             _memo_key_part(self._cathode_Ts_K),
@@ -8826,6 +8915,7 @@ class LAPDSim1D:
             input_dict=self._input_dict,
             input_flags=input_flags,
             beam_cross_prev=self._cathode_beam_cross,
+            tail_anode_current_prev_A=self._cathode_tail_anode_I,
             I_ion=self._I_ion,
             gas_type=self._gas_type,
             x0=self._cathode_x0,
@@ -8850,6 +8940,9 @@ class LAPDSim1D:
                 self._cathode_beam_cross = (
                     result.beam_result.beam_atten_cross.copy()
                 )
+            # A2a: the lag advances on the SAME acceptance-committed write as
+            # sigma_b above. Rejected attempts never reach this branch.
+            self._cathode_tail_anode_I = float(result.tail_anode_current_A)
         return result
 
     def _warn_beam_gap_ledger(self, cathode_solve):
