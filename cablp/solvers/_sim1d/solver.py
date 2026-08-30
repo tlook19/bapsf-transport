@@ -97,6 +97,7 @@ from .physics.kinetic_neutrals import (
     _inflow as _kinetic_inflow,
 )
 from .physics.cathode import (
+    BEAM_DEPOSITION_MODELS,
     BEAM_GAP_LEDGER_POWER_ATOL,
     CoverageView1D,
     beam_anomalous_power_density,
@@ -1592,6 +1593,28 @@ class LAPDSim1D:
                 "the shipped ion_neutral_moment_closure the drag term returns "
                 "before reading it, so an unimplemented name would otherwise "
                 "run to completion silently."
+            )
+        # beam_deposition_model, the FIFTH hoist of this class (2026-08-30).
+        # Its failure mode is worse than late: there is no per-call check at
+        # all. Every read in the solver and in physics/cathode.py is an
+        # EQUALITY TEST against 'csda' with a beer_lambert fallback, so a
+        # misspelled name is not refused anywhere -- it silently selects
+        # beer_lambert and runs the whole discharge under a deposition closure
+        # the caller did not ask for, with no line of output saying so.
+        # 'cdsa' constructs and runs at base commit ca444dd; that is the
+        # negative control, and declm_block_gate.py carries the recipe.
+        _deposition_model = self._input_dict.get(
+            "beam_deposition_model", "beer_lambert"
+        )
+        if _deposition_model not in BEAM_DEPOSITION_MODELS:
+            raise ValueError(
+                "beam_deposition_model must be one of "
+                f"{sorted(BEAM_DEPOSITION_MODELS)} (got "
+                f"{_deposition_model!r}). Every read of this key is an "
+                "equality test against 'csda' with a 'beer_lambert' "
+                "fallback, so an unrecognised name is not refused at the "
+                "dispatch: it selects beer_lambert and runs to completion "
+                "silently under a closure nobody selected."
             )
         # Presence gate for the beam_ionization_birth timestep bound. Reading
         # it once here keeps the off path out of the branch entirely.

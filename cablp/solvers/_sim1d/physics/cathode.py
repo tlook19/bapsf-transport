@@ -1196,6 +1196,16 @@ def validate_cathode_Rp_model(input_dict, input_flags):
     return model
 
 
+#: The beam-deposition closures this module dispatches on. EXPORTED because the
+#: solver checks the same domain at construction, and a domain stated twice is
+#: a domain that drifts. The dispatch below is an equality test against 'csda'
+#: with a beer_lambert fallback, so it CANNOT refuse a name outside this set --
+#: an unrecognised value simply selects beer_lambert and runs a whole discharge
+#: under a closure nobody asked for. That is what the construction-time check in
+#: solver.py exists to catch; this tuple is the domain it reads.
+BEAM_DEPOSITION_MODELS = ("beer_lambert", "csda")
+
+
 def solve_cathode_boundary(
     state,
     floors,

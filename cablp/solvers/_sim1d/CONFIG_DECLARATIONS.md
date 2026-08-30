@@ -81,6 +81,14 @@ reader meets it once. The Python API passes `None` directly and never needs it.
 
 The campaign driver reaches blocks through `--stance`; it grew no new flag.
 
+**The stance of record, `scripts/stances/g1atrim.toml`, is written in block form
+since 2026-08-30**: four families declared — `beam_tail_closure`,
+`cathode_surface_recycle`, `anode_surface_recycle` and `initial_neutral_state` —
+with the rest of the stance staying flat. The two neutral-closure families are
+UNDECLARABLE there because their selectors are not engaged (that stance runs
+`neutral_model = "moment"` and `neutral_momentum_radial = "uniform"`), so it
+runs the moment closure implicitly and its header says so.
+
 ## How it resolves
 
 ```
@@ -100,9 +108,17 @@ reached, by both routes.
 
 **A block route and a flat route resolve to the identical surface, byte for
 byte.** That is the migration's whole claim, and it is measured per family by
-`scripts/declm_block_gate.py` and per representative route (default, golden,
-stance, campaign driver, the 13-member kinetic command line, and the k2_dvm and
-B0c fixtures) by `scripts/declm_route_identity.py`.
+`scripts/declm_block_gate.py` — on NON-DEFAULT values, so a member the
+projection dropped cannot hide behind both arms falling back to the same
+default — and per representative route by `scripts/declm_route_identity.py`.
+
+That harness runs SEVEN routes over SIX distinct surfaces: default, golden,
+stance, campaign driver, the 13-member kinetic command line, and the k2_dvm
+fixture. The seventh, `b0c`, is not a seventh surface —
+`verify_sim1d_b0c_cadence` imports `arm_config` from `verify_sim1d_k2_dvm`
+rather than restating it, so the two routes resolve to the same digest by
+construction. It is kept deliberately, as a check that the consumer path still
+reaches that fixture.
 
 ### The flat-conflict rule, and why it is not co-presence
 
@@ -164,18 +180,23 @@ four-route reading into one selector would have made `cached_seed` and
 ## Refusals
 
 All are `ValueError` at construction, naming the offender and carrying the
-remedy. `scripts/declm_block_gate.py` exercises every one.
+remedy. There are TEN, and `scripts/declm_block_gate.py` exercises every one.
+The owning function is named so the table and the code can be checked against
+each other — this note is the KB schema source for the form, so a row missing
+here is a gap in the schema, not just in the prose.
 
-| case | refusal |
-|---|---|
-| unknown family | names it, lists the declarable families |
-| a key the family does not own | names it, and which family *does* own it, plus the full inventory |
-| **incomplete membership** | names every missing member, plus the full inventory |
-| a block for an unselected family | names the selector, its given value and its engaging value |
-| two blocks claiming one key | names the key and both blocks |
-| a member also chosen flat, differently | names the key and both values |
-| two exclusive routes armed | names both routes and each one's off value |
-| a member both valued and in `none_valued` | names the key |
+| case | refusal | owner |
+|---|---|---|
+| unknown family | names it, lists the declarable families | `resolve_declaration_blocks` |
+| a block that is not a table | names the type it got; states there is no shorthand form | `_check_block_is_a_table` |
+| `none_valued` not an array of key names | names what it got, plus the full inventory | `_split_none_valued` |
+| a member both valued and in `none_valued` | names the key and the value it carries | `_split_none_valued` |
+| a key the family does not own | names it and its owner — another family, an `input_dict`/`input_flags` key no family owns (with the flat table to state it in), or no template at all — plus the full inventory | `_check_membership` |
+| **incomplete membership** | names every missing member, plus the full inventory | `_check_membership` |
+| a block for an unselected family | names the selector, its given value and its engaging value | `_check_selector_engaged` |
+| two exclusive routes armed | names both routes, each one's WHY and each one's off value | `_check_routes` |
+| two blocks claiming one key | names the key and both blocks | `resolve_declaration_blocks` |
+| a member also chosen flat, differently | names the key and both values | `_refuse_flat_conflicts` |
 
 ## What a block does not do
 
