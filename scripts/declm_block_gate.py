@@ -325,12 +325,56 @@ def gate_flat_route_untouched():
     )
 
 
+def gate_hoisted_guards():
+    """The four 23an run-time-first guards, now refused at construction.
+
+    Each of these four domains was first checked only once a run was already
+    moving. NEGATIVE CONTROL, run at base commit aa65468 before the hoist: all
+    four of these configurations CONSTRUCTED, which is what made them
+    run-time-first rather than merely redundant. Reproduce it with::
+
+        git archive aa65468 cablp | tar -x -C <tmp> && PYTHONPATH=<tmp> ...
+
+    The per-call checks are deliberately still in place; these are additional
+    construction-time refusals, not replacements.
+    """
+    print("\n=== HOISTED RUN-TIME-FIRST GUARDS (23an hazards) ===")
+    from cablp.solvers._sim1d import LAPDSim1D
+
+    params, flags = default_config()
+    params["nx"] = 8
+    check("the shipped defaults still construct", _constructs(params, flags))
+    for key, value, needle in (
+        ("dt_growth_factor", 0.9, "dt_growth_factor must be > 1"),
+        ("operator_splitting", "stang", "operator_splitting must be one of"),
+        ("implicit_heat_scheme", "tr_bdf3", "implicit_heat_scheme must be one of"),
+        ("ion_neutral_drag_model", "slipp", "ion_neutral_drag_model must be one of"),
+    ):
+        refuses(
+            f"{key}={value!r} refused AT CONSTRUCTION",
+            lambda k=key, v=value: LAPDSim1D(dict(params, **{k: v}), dict(flags)),
+            must_name=[needle],
+        )
+
+
+def _constructs(params, flags):
+    from cablp.solvers._sim1d import LAPDSim1D
+
+    try:
+        LAPDSim1D(dict(params), dict(flags))
+    except Exception as error:  # pragma: no cover - reported by the caller
+        print(f"        {error}")
+        return False
+    return True
+
+
 def main():
     print(f"import provenance: {cablp.__file__}")
     gate_equivalence()
     gate_equivalence_constructed()
     gate_none_valued()
     gate_refusals()
+    gate_hoisted_guards()
     gate_flat_route_untouched()
     print(f"\n{CHECKS[0]} checks, {len(FAILURES)} failed")
     if FAILURES:
