@@ -2,15 +2,34 @@
 #
 # Stance   : g1atrim
 # Adopted  : 2026-08-19
+# Form     : declaration blocks, since 2026-08-30
 #
-# This file is the ONE artifact that constructs the stance. It is the complete
-# delta from ``default_config()``: every key below differs from its config
-# default, except the four noted as resolved accretion (cathode_emission_profile,
-# Te_birth_ionization, T_s) or as a class-1 declaration (Ti_birth_ionization),
-# which equal the default and are stated explicitly because run_m6_point.py's
-# own driver defaults do not, or because the selection is physics-bearing. Applying these two
-# tables on top of ``default_config()`` reproduces, key for key, the config the
-# g1atrim arm of record ran.
+# This file is the ONE artifact that constructs the stance, and it carries two
+# kinds of table.
+#
+# ``[input_dict]`` and ``[input_flags]`` are the DELTA from ``default_config()``:
+# every key in them differs from its config default, except cathode_emission_
+# profile, Te_birth_ionization and T_s (resolved accretion) and Ti_birth_
+# ionization (a class-1 declaration), which equal the default and are stated
+# explicitly because run_m6_point.py's own driver defaults do not, or because
+# the selection is physics-bearing.
+#
+# ``[models.<family>]`` blocks are INVENTORIES, not deltas: each states one
+# model family's COMPLETE membership, every member written regardless of value,
+# so the block reads as the whole decision and cannot go stale against a default
+# that moves underneath it. Four families are declared here -- beam_tail_closure,
+# cathode_surface_recycle, anode_surface_recycle and initial_neutral_state.
+# The two neutral-closure families (neutral_closure, neutral_radial_closure)
+# are UNDECLARABLE at this stance: a family with a selector may only be declared
+# when that selector is at its engaging value, and this stance runs
+# neutral_model = "moment" and neutral_momentum_radial = "uniform". It therefore
+# runs the moment closure IMPLICITLY, by config default, and says so here rather
+# than in a block. See cablp/solvers/_sim1d/CONFIG_DECLARATIONS.md for the form,
+# its resolver and its refusals.
+#
+# Applying the two flat tables and the projected blocks on top of
+# ``default_config()`` reproduces, key for key, the config the g1atrim arm of
+# record ran.
 #
 # PROVENANCE IS NOT HERE. What each value is, how it was measured, derived,
 # fitted or assumed, and what may be claimed from it live in
@@ -20,15 +39,19 @@
 # input_dict and input_flags are SEPARATE namespaces and each rejects a key it
 # does not own, so a key in the wrong table raises at construction rather than
 # going silently inert. The loader (scripts/stance_config.py) checks both tables
-# against the config templates before anything is constructed.
+# against the config templates before anything is constructed. A declaration
+# block is written WITHOUT namespaces -- the family membership carries them --
+# so a member cannot be misfiled at all.
 #
-# TOML has no null literal: keys whose stance value is None are named in
-# [none_valued] instead of appearing in the tables above.
+# TOML has no null literal: a member whose declared value is None is named in
+# its own block's ``none_valued`` array instead of carrying a value.
 #
 # Consumers: ``run_m6_point.py --stance g1atrim`` (base config; --extra layers
 # on top and says so), ``preflight_diffcfg.py --stance g1atrim`` (reference
 # side of a config diff), and ``compare_sim1d_es1.PARAM_OVERRIDES`` (the shared
 # driver values it carries are read from here, so they live in one place).
+# A block is PROJECTED into the stance's own delta at load, so every one of
+# those consumers reads ``Stance.params``/``.flags`` unchanged.
 
 
 [input_dict]
@@ -198,6 +221,221 @@ machine_radius_profile_cm = [
 # run-cost choice and the per-cell profiles above are sized to it.
 nx = 268
 
+# CATHODE AND CIRCUIT.
+# C_R re-trimmed 2026-08-25 (7.36 -> 8.76), the ONE knob turned to restore the
+# drive under the plateau_multigroup anomalous-heating closure adopted below.
+# The trim was a three-point scan at ES1 (C_R 8.4 / 8.9 / 9.4), a log-log fit of
+# plateau current against C_R solved for a stage-(i) plateau ratio of 1.000, and
+# a confirm arm at the fitted C_R* that measured a drive ratio of 1.000. It is
+# still the ONE drive-side fit knob: cathode_Ts_base_K is NOT co-trimmed and
+# stays at the measured config default 1910.0, because the two are the same flat
+# direction and only one member of a flat pair may carry a calibration. See
+# production_stance_provenance.md.
+C_R = 8.76
+# V_bank is DELETED from this stance (2026-08-25; the 23b R4 deletion, executed
+# for this half only). It was never a stance decision: V_bank is a PER-RUNG
+# measurement owned by run_mechanism_ladder.ES_OPERATING (ES1 = 177.843, exactly
+# the number this file used to repeat), so naming it here duplicated the rung
+# and could only go stale against it. Campaign scores are unaffected -- every
+# campaign arm takes V_bank from its rung, which is why deleting the row is
+# invisible in a pre-flight against a campaign artifact. The golden takes no
+# rung, so ITS V_bank falls back to the config default 180.0, and the authorized
+# recapture that accompanies this edit absorbs that move.
+cathode_conduction_W_per_K = 12058.0
+cathode_heat_capacity_J_per_K = 181.0
+cathode_emission_profile = "uniform"
+# T_s is the OTHER half of the 23b R4 deletion, and it is DEFERRED a third time
+# (2026-08-25) -- now with the reason on record rather than as an open action.
+# The row was believed to be a resolved-accretion duplicate of the config
+# default. It is that against ``default_config()`` (both 1998.15), which is why
+# deleting it is invisible to the golden. It is NOT that on the CAMPAIGN route:
+# run_m6_point.py:216 supplies ``T_s`` from the ES rung's ``Ts_standby_K``
+# (ES1 = 1910.0), and THIS ROW SUPERSEDES IT. Deleting it therefore moves T_s
+# 1998.15 -> 1910.0 on every campaign arm -- measured as a real second delta in
+# the pre-flight against scripts/mgcr1_confirm.h5, and reproduced as absent the
+# moment this row is restored.
+#   Whether that move is physically inert is NOT settled here. Under
+#   cathode_warming_model = "power_balance" the evolving surface temperature is
+#   seeded from cathode_Ts_base_K, not from T_s (solver.py:1917), and every live
+#   read of T_s is guarded by that evolving value -- so T_s is inert on THIS
+#   stance. Two reads are unguarded: cathode.py:339/410 (covered on the live
+#   emission path by the T_s_override_K route) and solver.py:10925, which feeds
+#   the kinetic background and is dead only because this stance runs
+#   neutral_model = "moment". It goes LIVE under "kinetic_dvm", so the
+#   adjudication is assigned to the DVM program rather than to a stance edit.
+T_s = 1998.15
+
+# FUELING. The puff window that arms with the equilibrate route is a member of
+# [models.initial_neutral_state] and is stated there.
+S_gp = 9010.0
+# INJECTION ROW. The puff is placed by the tube-beamed row derived from the CAD
+# port geometry and the feed pipe behind it, not by the fluid cosine lobe: the
+# in-solver puff, the equilibrated seed and the shaped foot below now share ONE
+# shape at ONE geometry. The bore is the MIDPOINT of the ruled [3.8, 4.1] cm
+# hardware bracket and the length is its one-sided lower bound; the two bracket
+# endpoints move the derived fill by < 0.1 %, so the midpoint is the value and
+# the endpoints stay the bracket. Both keys are refused under any other profile.
+gas_puff_profile = "orifice"
+gas_puff_orifice_id_cm = 3.95
+gas_puff_orifice_length_cm = 22.0
+
+# IONIZATION BIRTH TEMPERATURES. Neither key belongs to a declared family.
+Te_birth_ionization = "local"
+# Class-1 declaration: physics-bearing, so it is stated here even though it
+# equals the config default. The ion is born at the local neutral temperature,
+# the conserving partner of the En ionization sink.
+Ti_birth_ionization = "neutral"
+
+# RUN COST. Not physics: the afterglow tail length and the max-steps
+# action the arm of record carried.
+tau_afterglow = 0.006
+max_steps_action = "stop"
+
+
+[input_flags]
+
+# CORRECTED ANODE SHEATH BOOKING. Armed 2026-08-25. The plasma electron store
+# is debited (2 Te + phi_a) per electron the anode collects -- the sheath-edge
+# energy flux of the truncated Maxwellian the sheath solve already closes on --
+# instead of the plasma-thermal 2 Te alone, and the anode mesh's Bohm
+# collection rows are re-cut to their sheath-edge values in the same arming.
+# The circuit ledger is untouched: the phi_a those electrons pay is field energy
+# the loop and the anode ions already book. The electron-ATTRACTING regime
+# (phi_a <= 0) keeps the unarmed thermal-only booking, because there the bank
+# pays the fall, and it is COUNTED rather than silent. It is a booking
+# correction, not a calibration. Requires characteristic_boundary, which this
+# stance takes from the config defaults.
+anode_sheath_full_debit = true
+
+# OPERATOR HOME OF THE BEAM'S ELECTRON-ENERGY DEPOSITION. Armed 2026-08-25. The
+# beam_power_deposition Ee row leaves the explicit operator A and is applied by
+# the implicit heat substep B, held constant over each substep and solved with
+# the tridiagonal conduction operator. Nothing else about the beam moves: the
+# ionization births, the ionization cost and the excitation radiation are
+# reaction-channel terms and stay in A. This is the class-1 fix for the staged
+# Te bias -- depositing beam power explicitly and then conducting it implicitly
+# let the deposition cell run hot across the substep boundary.
+beam_deposition_in_heat_substep = true
+
+# NEUTRAL CLOSURE. Two-zone particles, neutral momentum and energy and the hot
+# internal wall are config defaults since the R2a fold-in and are no longer
+# named here. They are members of the neutral_closure family, which this stance
+# cannot declare: that family is engaged at neutral_model = "kinetic_dvm" and
+# this stance runs "moment". The moment closure is therefore implicit here.
+
+# GEOMETRY: the per-cell prescribed areas and the baffles that go with the
+# measured machine. Both stay stance-side because the arrays they require are
+# sized to this mesh; source_fixed_grid folded into the config defaults.
+prescribed_area_geometry = true
+neutral_baffles = true
+
+
+# ---------------------------------------------------------------------------
+# DECLARATION BLOCKS. Each states one family's COMPLETE membership -- every
+# member written, at its stance value where the stance turns it and at its
+# config default where it does not. Namespaces are carried by the membership,
+# not by the block. See cablp/solvers/_sim1d/CONFIG_DECLARATIONS.md.
+# ---------------------------------------------------------------------------
+
+
+[models.beam_tail_closure]
+
+# The deposition, Coulomb and anomalous-channel selectors, the walked tail's
+# conventions and the clump pair are all config defaults; they are written here
+# because a block is an inventory of the whole closure, not a delta against
+# defaults that may move. The heat-flux limiter is NOT a member of this family
+# and is not named here: both the electron_heat_flux_limit flag and its
+# coefficient heat_flux_limiter_f are config defaults (the flag folded at R2a,
+# the coefficient at R2b).
+beam_deposition_model = "csda"
+beam_coulomb_model = "fast_electron"
+beam_anomalous_model = "quasilinear"
+ql_relaxation_coeff = 30.0
+beam_product_transport = "local"
+
+# ANOMALOUS-HEATING TRANSPORT. Adopted 2026-08-25 (tail_walk ->
+# plateau_multigroup): the quasilinear plateau is carried as a SPECTRUM rather
+# than as the single tail line the two predecessor arms each represented, and
+# the two single-line arms are its two heirs taken one at a time. Nothing is
+# fitted -- the wave/bulk and streaming shares, the group edges and the group
+# weights all follow from the flat plateau and the state-solved plateau edge
+# E_1 -- which is why the tail-energy dial, the fixed rung and the keying
+# selector are INERT under it and are refused at construction rather than
+# ignored. Their DEFAULTS are accepted, which is why the block states each of
+# them at its default rather than at a value this closure would refuse.
+heating_anomalous_transport = "plateau_multigroup"
+heating_anomalous_disposal = "local"
+heating_anomalous_tail_energy_eV = 75.0
+
+# Tail ionization rides the selector unchanged: it is one of the tail_walk
+# conventions plateau_multigroup inherits, and it applies to the walked
+# streaming groups exactly as it applied to the single tail line.
+heating_anomalous_tail_ionization = "on"
+heating_anomalous_tail_energy_keying = "phi_c"
+heating_anomalous_tail_cathode_boundary = "reflect"
+beam_tail_anode_reflected_particles = 0.0
+beam_tail_anode_reflected_energy = 0.0
+beam_clump_fraction = 0.0
+beam_clump_enhancement = 1.0
+beam_deposition_smoothing_cm = 50.0
+b_beam_excitation = 1.4
+beam_excitation_model = "2p_scalar"
+beam_excitation_energy_eV = 21.218
+beam_anode_interception = true
+beam_tail_anode_interception = false
+
+# The f dial is undeclared: plateau_multigroup runs the birth spectrum from the
+# derived plateau edge E_1 up to e*phi_c, and a stated fraction is refused.
+none_valued = ["heating_anomalous_tail_phi_c_fraction"]
+
+
+[models.cathode_surface_recycle]
+
+# The cathode surface's directed-recycle channel, at the config defaults in
+# full. The stance turns none of these keys: the whole family is declared so
+# that the arm of record reads as the complete decision rather than as silence
+# over whatever the package default happens to be.
+cathode_neutral_jet = true
+cathode_jet_R_N = 0.34
+cathode_jet_R_E = 0.18
+cathode_jet_energy_convention = "total_reflected"
+cathode_jet_surface_debit = true
+cathode_jet_hot_carrier = false
+
+
+[models.anode_surface_recycle]
+
+# The anode mesh's directed-recycle channel, armed at the stance. The R_N/R_E
+# pair is a surface property whose values are the config defaults, restated here
+# because a block is the whole decision. The convention key is read against that
+# pair: the 0.41 is a TOTAL reflected-energy fraction, and reading it per
+# backscattered particle would launch the atoms ~21% slow.
+anode_neutral_jet = true
+anode_jet_R_N = 0.63
+anode_jet_R_E = 0.41
+anode_jet_energy_convention = "total_reflected"
+
+# The wire-intercepted wind momentum lands on the anode structure. It is armed
+# WITH the jet: the sink was built for exactly the opposing-jet recirculation
+# the jet creates, and both act per anode face on both flanking cells.
+neutral_mesh_accommodation = true
+
+
+[models.initial_neutral_state]
+
+# The equilibrate route is OFF and the profile route is armed: the equilibrated
+# seed would overwrite the shaped foot, and the solver refuses the pair. The
+# equilibration cycle count, its dt and the cached-seed modifier are config
+# defaults, inert while the route is off, and are stated because a block is an
+# inventory. equilibration_gas_puff_on_s is NOT inert -- the 25 ms puff window
+# is a stance value the golden's own re-cut re-arms the route to use.
+neutral_equilibration = false
+launch_plasma_after_equilibration = true
+neutral_equilibration_cycles = 100
+neutral_equilibration_dt = 0.01
+equilibration_gas_puff_on_s = 0.025
+use_cached_neutral_seed = false
+
 # INITIAL NEUTRAL FILL. Shaped foot profile from
 # scripts/g1aporf_foot45.npz (equilibrated base scripts/g1aporf_eqbase.h5,
 # dt_foot = 4.5 ms, ballistic kernel), REGENERATED 2026-08-24 with the
@@ -207,8 +445,9 @@ nx = 268
 # grid is shifted 3.25 cm), the sccm changeover to the flow meter's 20 C /
 # 1013 mbar standard, and the physics events its equilibrated base predates.
 # scripts/g1aporf_foot_diff.txt separates that staleness from the row change.
-# nn0 is null: the scalar fill is
-# superseded by the profile and the solver refuses both together.
+# The profile flag stays stance-side because the per-cell nn0_profile it
+# requires is sized to this mesh.
+neutral_initial_profile = true
 nn0_profile = [
   5875167756214.198, 6290100564341.818, 6338508054292.149, 6378248645474.341,
   6409074565193.402, 6434531373241.21, 17850128363225.43, 17869228260242.996,
@@ -354,148 +593,7 @@ nn0_annulus_profile = [
   6753900776845.339, 6749326382816.574, 6743150706565.128, 6731383535882.461,
 ]
 
-# CATHODE AND CIRCUIT.
-# C_R re-trimmed 2026-08-25 (7.36 -> 8.76), the ONE knob turned to restore the
-# drive under the plateau_multigroup anomalous-heating closure adopted below.
-# The trim was a three-point scan at ES1 (C_R 8.4 / 8.9 / 9.4), a log-log fit of
-# plateau current against C_R solved for a stage-(i) plateau ratio of 1.000, and
-# a confirm arm at the fitted C_R* that measured a drive ratio of 1.000. It is
-# still the ONE drive-side fit knob: cathode_Ts_base_K is NOT co-trimmed and
-# stays at the measured config default 1910.0, because the two are the same flat
-# direction and only one member of a flat pair may carry a calibration. See
-# production_stance_provenance.md.
-C_R = 8.76
-# V_bank is DELETED from this stance (2026-08-25; the 23b R4 deletion, executed
-# for this half only). It was never a stance decision: V_bank is a PER-RUNG
-# measurement owned by run_mechanism_ladder.ES_OPERATING (ES1 = 177.843, exactly
-# the number this file used to repeat), so naming it here duplicated the rung
-# and could only go stale against it. Campaign scores are unaffected -- every
-# campaign arm takes V_bank from its rung, which is why deleting the row is
-# invisible in a pre-flight against a campaign artifact. The golden takes no
-# rung, so ITS V_bank falls back to the config default 180.0, and the authorized
-# recapture that accompanies this edit absorbs that move.
-cathode_conduction_W_per_K = 12058.0
-cathode_heat_capacity_J_per_K = 181.0
-cathode_emission_profile = "uniform"
-# T_s is the OTHER half of the 23b R4 deletion, and it is DEFERRED a third time
-# (2026-08-25) -- now with the reason on record rather than as an open action.
-# The row was believed to be a resolved-accretion duplicate of the config
-# default. It is that against ``default_config()`` (both 1998.15), which is why
-# deleting it is invisible to the golden. It is NOT that on the CAMPAIGN route:
-# run_m6_point.py:216 supplies ``T_s`` from the ES rung's ``Ts_standby_K``
-# (ES1 = 1910.0), and THIS ROW SUPERSEDES IT. Deleting it therefore moves T_s
-# 1998.15 -> 1910.0 on every campaign arm -- measured as a real second delta in
-# the pre-flight against scripts/mgcr1_confirm.h5, and reproduced as absent the
-# moment this row is restored.
-#   Whether that move is physically inert is NOT settled here. Under
-#   cathode_warming_model = "power_balance" the evolving surface temperature is
-#   seeded from cathode_Ts_base_K, not from T_s (solver.py:1917), and every live
-#   read of T_s is guarded by that evolving value -- so T_s is inert on THIS
-#   stance. Two reads are unguarded: cathode.py:339/410 (covered on the live
-#   emission path by the T_s_override_K route) and solver.py:10925, which feeds
-#   the kinetic background and is dead only because this stance runs
-#   neutral_model = "moment". It goes LIVE under "kinetic_dvm", so the
-#   adjudication is assigned to the DVM program rather than to a stance edit.
-T_s = 1998.15
-
-# ANODE SURFACE RECYCLE. The anode mesh's directed-recycle channel, armed at
-# the stance (the R_N/R_E pair itself is a surface property and lives in the
-# config defaults). The convention key must be declared with the jet: the
-# 0.41 is a TOTAL reflected-energy fraction, and reading it per backscattered
-# particle would launch the atoms ~21% slow.
-anode_neutral_jet = true
-anode_jet_energy_convention = "total_reflected"
-# The wire-intercepted wind momentum lands on the anode structure. It is armed
-# WITH the jet: the sink was built for exactly the opposing-jet recirculation
-# the jet creates, and both act per anode face on both flanking cells.
-neutral_mesh_accommodation = true
-
-# FUELING.
-S_gp = 9010.0
-equilibration_gas_puff_on_s = 0.025
-# INJECTION ROW. The puff is placed by the tube-beamed row derived from the CAD
-# port geometry and the feed pipe behind it, not by the fluid cosine lobe: the
-# in-solver puff, the equilibrated seed and the shaped foot above now share ONE
-# shape at ONE geometry. The bore is the MIDPOINT of the ruled [3.8, 4.1] cm
-# hardware bracket and the length is its one-sided lower bound; the two bracket
-# endpoints move the derived fill by < 0.1 %, so the midpoint is the value and
-# the endpoints stay the bracket. Both keys are refused under any other profile.
-gas_puff_profile = "orifice"
-gas_puff_orifice_id_cm = 3.95
-gas_puff_orifice_length_cm = 22.0
-
-# BEAM DEPOSITION AND ANOMALOUS HEATING. The heat-flux limiter is no longer
-# named here: both the electron_heat_flux_limit flag and its coefficient
-# heat_flux_limiter_f are config defaults (the flag folded at R2a, the
-# coefficient at R2b).
-b_beam_excitation = 1.4
-beam_deposition_smoothing_cm = 50.0
-# ANOMALOUS-HEATING TRANSPORT. Adopted 2026-08-25 (tail_walk ->
-# plateau_multigroup): the quasilinear plateau is carried as a SPECTRUM rather
-# than as the single tail line the two predecessor arms each represented, and
-# the two single-line arms are its two heirs taken one at a time. Nothing is
-# fitted -- the wave/bulk and streaming shares, the group edges and the group
-# weights all follow from the flat plateau and the state-solved plateau edge
-# E_1 -- which is why the tail-energy dial, the fixed rung and the keying
-# selector are INERT under it and are refused at construction rather than
-# ignored. That is also why none of them is named here.
-heating_anomalous_transport = "plateau_multigroup"
-# Tail ionization rides the selector unchanged: it is one of the tail_walk
-# conventions plateau_multigroup inherits, and it applies to the walked
-# streaming groups exactly as it applied to the single tail line.
-heating_anomalous_tail_ionization = "on"
-Te_birth_ionization = "local"
-# Class-1 declaration: physics-bearing, so it is stated here even though it
-# equals the config default. The ion is born at the local neutral temperature,
-# the conserving partner of the En ionization sink.
-Ti_birth_ionization = "neutral"
-
-# RUN COST. Not physics: the afterglow tail length and the max-steps
-# action the arm of record carried.
-tau_afterglow = 0.006
-max_steps_action = "stop"
-
-[input_flags]
-
-# CORRECTED ANODE SHEATH BOOKING. Armed 2026-08-25. The plasma electron store
-# is debited (2 Te + phi_a) per electron the anode collects -- the sheath-edge
-# energy flux of the truncated Maxwellian the sheath solve already closes on --
-# instead of the plasma-thermal 2 Te alone, and the anode mesh's Bohm
-# collection rows are re-cut to their sheath-edge values in the same arming.
-# The circuit ledger is untouched: the phi_a those electrons pay is field energy
-# the loop and the anode ions already book. The electron-ATTRACTING regime
-# (phi_a <= 0) keeps the unarmed thermal-only booking, because there the bank
-# pays the fall, and it is COUNTED rather than silent. It is a booking
-# correction, not a calibration. Requires characteristic_boundary, which this
-# stance takes from the config defaults.
-anode_sheath_full_debit = true
-
-# OPERATOR HOME OF THE BEAM'S ELECTRON-ENERGY DEPOSITION. Armed 2026-08-25. The
-# beam_power_deposition Ee row leaves the explicit operator A and is applied by
-# the implicit heat substep B, held constant over each substep and solved with
-# the tridiagonal conduction operator. Nothing else about the beam moves: the
-# ionization births, the ionization cost and the excitation radiation are
-# reaction-channel terms and stay in A. This is the class-1 fix for the staged
-# Te bias -- depositing beam power explicitly and then conducting it implicitly
-# let the deposition cell run hot across the substep boundary.
-beam_deposition_in_heat_substep = true
-
-# NEUTRAL CLOSURE. Two-zone particles, neutral momentum and energy and the hot
-# internal wall are config defaults since the R2a fold-in and are no longer
-# named here. What remains is the shaped initial profile (which is why
-# neutral_equilibration is OFF -- the equilibrated seed would overwrite the
-# profile, and the solver refuses the pair); the profile flag stays stance-side
-# because the per-cell nn0_profile it requires is sized to this mesh.
-neutral_initial_profile = true
-neutral_equilibration = false
-
-# GEOMETRY: the per-cell prescribed areas and the baffles that go with the
-# measured machine. Both stay stance-side because the arrays they require are
-# sized to this mesh; source_fixed_grid folded into the config defaults.
-prescribed_area_geometry = true
-neutral_baffles = true
-
-# Keys whose stance value is None (TOML has no null literal).
-[none_valued]
-input_dict = ["nn0"]
-input_flags = []
+# nn0 is null: the scalar fill is superseded by the profile and the solver
+# refuses both together. The seed cache and the restart payload are unused
+# routes, undeclared at their config defaults.
+none_valued = ["neutral_seed_cache_dir", "nn0", "restart_from"]
