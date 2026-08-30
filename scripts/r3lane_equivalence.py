@@ -75,6 +75,8 @@ class Census:
         self.total_energy = 0.0
         self.calls = 0
         self.worst_call_ratio = 0.0
+        self.takes = 0
+        self.take_diffs = 0
         self.notes = []
         # Reflecting-face arrivals, which is what makes the per-birth exit
         # state load-bearing: a batch is only evidence about it if the corpus
@@ -98,6 +100,17 @@ class Census:
                     self.face_reflected += 1
                 else:
                     self.face_escaped += 1
+
+    def compare_take(self, lane_take, ref_take, label):
+        """The four-scalar anode take both routes return beside their layout."""
+        self.takes += 1
+        if _differs(lane_take, ref_take):
+            self.take_diffs += 1
+            if len(self.notes) < 20:
+                self.notes.append(
+                    f"{label}: anode take differs -- lane {tuple(lane_take)} "
+                    f"vs recursive {tuple(ref_take)}"
+                )
 
     def compare(self, lane_chains, ref_chains, label):
         self.calls += 1
@@ -167,9 +180,16 @@ class Census:
             f"({self.face_reflected} below threshold and turned around, "
             f"{self.face_escaped} above it and free-escaping)"
         )
+        print(
+            f"  anode take: {self.takes} compared, {self.take_diffs} differing"
+        )
         for line in self.notes[:20]:
             print(f"    {line}")
-        return self.flipped == 0 and ratio <= FLIP_ENERGY_BAR
+        return (
+            self.flipped == 0
+            and self.take_diffs == 0
+            and ratio <= FLIP_ENERGY_BAR
+        )
 
 
 def run_corpus(census):
@@ -187,17 +207,20 @@ def run_corpus(census):
 
     def dual(plans, *args, **kwargs):
         before = B.LANE_MARCH_COUNTS["legs"]
-        got = real_lane(plans, *args, **kwargs)
+        got, got_take = real_lane(plans, *args, **kwargs)
         # A batch that fell back to the recursive route would compare itself
         # against itself, which is no evidence at all; count the ones that
         # really took the lane route so the census cannot be vacuous.
         if B.LANE_MARCH_COUNTS["legs"] > before:
             batched[0] += 1
-        want = B._tail_recursive_chains(plans, *args, **kwargs)
+        want, want_take = B._tail_recursive_chains(plans, *args, **kwargs)
         batches[0] += 1
         census.compare(got, want, state["label"])
+        # The anode take is route output too, so a silent divergence there
+        # fails the equivalence exactly as a flipped walker does.
+        census.compare_take(got_take, want_take, state["label"])
         census.face_census(want, args[7])
-        return got
+        return got, got_take
 
     # Threshold forced to 1 so EVERY batch takes the lane route, including the
     # small ones the shipped threshold sends down the recursive one -- the
