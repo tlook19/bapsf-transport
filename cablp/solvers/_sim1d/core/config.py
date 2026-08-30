@@ -1014,6 +1014,52 @@ def model_mode_defaults():
         selecting ``"bounded_chord"`` without that model and the
         ``neutral_two_zone`` flag, or any other value, raises at
         construction.
+    neutral_kinetic_dvm_cathode_jet:
+        Whether the transient DVM splits the counted cathode recycle into an
+        ENERGETIC BACKSCATTER share and a thermal remainder. Off, every
+        recycled atom leaves the cathode on the thermal cosine half-flux at
+        the live surface temperature, which is the shipped reading. On, the
+        ``neutral_kinetic_dvm_cathode_jet_R_N`` share is instead born as a
+        directed volume birth in the cell the recycle was counted into,
+        carrying ``(R_E/R_N)(phi_c + Ti)`` of kinetic energy per atom -- the
+        ``"total_reflected"`` reading of the reflection coefficients -- and
+        the remainder keeps the thermal inflow. The energy the share carries
+        is DEBITED from the cathode surface's own power balance in the same
+        accepted step that counted it, as the named ``backscatter`` row of
+        the surface energy ledger, so the reflected energy is created once
+        rather than by both books. Inert unless
+        ``neutral_model = "kinetic_dvm"``; arming it under any other neutral
+        model raises at construction, as does arming it together with the
+        fluid channel's ``cathode_jet_surface_debit``.
+    neutral_kinetic_dvm_cathode_jet_R_N:
+        Particle reflection coefficient of the transient DVM's cathode
+        backscatter: the share of the collected ion flux that returns as
+        energetic neutrals rather than desorbing thermally. Read only when
+        ``neutral_kinetic_dvm_cathode_jet`` is on, and required there to
+        satisfy ``0 < R_E <= R_N < 1``.
+    neutral_kinetic_dvm_cathode_jet_R_E:
+        TOTAL reflected energy fraction of that same channel: reflected
+        energy over incident energy, summed over all particles. The
+        ``R_N`` backscattered atoms carry all of it, so each leaves with
+        ``R_E/R_N`` of the incident ``phi_c + Ti``, and the cathode surface
+        is debited exactly ``R_E`` of the ion bombardment energy the same
+        particles delivered. Read only when
+        ``neutral_kinetic_dvm_cathode_jet`` is on.
+    neutral_kinetic_dvm_cathode_jet_T_launch_eV:
+        NUMERICS parameter of that channel: the width of the smear the
+        monoenergetic backscatter beam is represented by on the discrete
+        velocity grid. ``None`` ties it to the grid -- the axial bin
+        containing the launch speed, expressed as a temperature -- which is
+        the narrowest spectrum the grid resolves there and the value the
+        channel is specified at; a positive float pins it instead, as an A/B
+        instrument. It is not a physical gas temperature: the launch
+        spectrum's drift is solved from the ENERGY, so the spectrum's
+        discrete mean energy is the launch energy whatever this is set to,
+        and what this changes is only how wide a bundle of bins carries it. A
+        spectrum this leaves too narrow or too fast for the grid to project
+        raises at the tick rather than launching at the wrong energy. Read
+        only when ``neutral_kinetic_dvm_cathode_jet`` is on; must be ``None``
+        or positive.
     neutral_kinetic_dvm_tn_feedback:
         Whether the DVM's measured neutral temperature ``Tn(z)`` FEEDS the
         fluid evaluations that otherwise assume a fixed cold gas. The
@@ -1160,6 +1206,14 @@ def model_mode_defaults():
         "neutral_kinetic_dvm_annulus_flights": "rates",
         "neutral_kinetic_dvm_tn_feedback": False,
         "neutral_kinetic_dvm_transfer_relax_fraction": 0.5,
+        # Cathode-side energetic recycle, default OFF. The two reflection
+        # coefficients MIRROR the fluid channel's cathode_jet_R_N /
+        # cathode_jet_R_E so the two arms describe the same surface; None
+        # ties the launch smear to the local velocity-grid bin:
+        "neutral_kinetic_dvm_cathode_jet": False,
+        "neutral_kinetic_dvm_cathode_jet_R_N": 0.34,
+        "neutral_kinetic_dvm_cathode_jet_R_E": 0.18,
+        "neutral_kinetic_dvm_cathode_jet_T_launch_eV": None,
         # None = "not named"; resolved to "exponential" by the arm, and
         # refused outright by every other neutral model, so the key can
         # never be a silently inert control:

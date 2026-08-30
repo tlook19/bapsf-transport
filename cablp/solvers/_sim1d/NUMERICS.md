@@ -524,6 +524,73 @@ values also degenerate at `α_E = 1`, where there is no share to place. **The
 golden is unaffected by construction**: the moment neutral path never builds
 a DVM.
 
+### The DVM cathode jet's launch spectrum
+
+The physics the `neutral_kinetic_dvm_cathode_jet` selector adds is in
+`MODEL.md`; what is numerical about it is that a MONOENERGETIC beam has to be
+represented on a discrete velocity grid, and that the energy it carries is
+cross-booked against a debit taken off the cathode surface. The two together
+fix the construction.
+
+The beam's launch energy per atom is `ε = (R_E/R_N)(φ_c + T_i)`, equivalently
+a speed `v_back = sqrt(2 ε / m)`. It is placed as
+`VGrid.maxwellian(T_launch, u, exact_moments=True)`: analytic per-bin masses
+(erf differences along `v_z`, Rayleigh differences along `v_⊥`) followed by
+the two-basis compensation that pulls the DISCRETE first and second moments
+onto their targets.
+
+**The drift is solved from the ENERGY, not set to `v_back`.** That projection
+has discrete moments `⟨v_z⟩ = u` and `⟨|v|²⟩ = u² + 3s²` with
+`s² = k T_launch / m`, so a spectrum drifting at `v_back` would carry
+`ε + (3/2) k T_launch` per atom — the smear's own thermal content, on top of
+the beam. That excess is small next to `ε` and is entirely fatal to the
+cross-book, because the surface was debited `ε` per atom and not a grain
+more. So the drift is taken as
+
+```
+u = sqrt(v_back² − 3 k T_launch / m),
+```
+
+which makes `⟨|v|²⟩ = v_back²` and the discrete mean energy exactly `ε`. What
+is lost is the directed momentum, which is `m u` rather than `m v_back` — and
+nothing cross-books it: the DVM's plasma-side transfer books the ionization,
+charge-exchange, elastic and recombination moments and no external birth's.
+A launch energy below the smear's own `(3/2) k T_launch` has no drift at all
+and raises.
+
+**`T_launch` is grid-tied by default.** With the key unset it is
+`m Δv_z(v_back)² / k_B`, the axial bin containing the launch speed expressed
+as a temperature — the narrowest spectrum the grid resolves there. Narrower is
+not better: a spectrum collapsed onto one bin leaves the two-basis
+compensation nothing to redistribute, and it then MISSES its targets rather
+than failing to converge quietly. Measured on the shipped `(48, 12)` grid the
+grid-tied smear lands the discrete mean energy within a few ulps of `ε` over
+`0.03–100 eV`; a fixed `0.18 eV` smear misses it by `1e-2` at `32 eV` on the
+same grid, which is the whole reason the default is tied rather than named. A
+positive float pins it, as an A/B instrument.
+
+**The projection is CHECKED, and a miss raises.** `VGrid.maxwellian`'s
+compensation loop gives up quietly on a numerically singular two-basis solve
+and after four iterations, leaving the analytic bin masses standing at
+whatever moments they happen to have. Here that is a misbooked counted channel
+— the surface has already been debited — so the density, the drift and the
+mean energy of the accepted spectrum are compared with their targets at
+`1e-10` relative and a miss raises naming the cell, the shortfall and the two
+ways out (widen the grid, or leave the smear grid-tied). The energy LEDGER
+then books the birth as the count times the moment of the array that was
+actually placed, so the ledger closes by construction rather than by the
+projection's accuracy — the same discipline the wall return above follows.
+
+**The debit is formed from the counted pair, not from a retention factor.**
+The surface row is `R_E` times the incident ion energy the SAME accepted steps
+counted, accumulated on the SSPRK2 stage weight beside the particle count it
+belongs to. Two forms were available and only this one closes: a retention
+factor on `P_cathode_i` reads the CIRCUIT's ion power, while the backscattered
+particles are counted off the BOUNDARY operator's recycle row, and the two are
+different books. Reading `(φ_c + T_i)` once at tick time and applying it to
+the whole window's count is the other near-miss — the plasma moves inside a
+tick, and the suite's CJ2 negative control measures how far.
+
 ### The counted ionization debit, and why it is taken last
 
 The counted-particle handshake makes the plasma and the neutral arm destroy

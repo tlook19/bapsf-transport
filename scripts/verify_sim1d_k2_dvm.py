@@ -144,7 +144,26 @@ Gates:
       zero. Booking that re-emission at the WALL MEAN energy is the negative
       control -- not one particle moves, so nothing else in this suite sees
       it
-  G1..G18 construction refusals: each unsupported configuration raises a
+  CJ1 the cathode-side energetic recycle, closed box: the counted recycle
+      splits into the R_N energetic backscatter and the thermal remainder,
+      the two counts sum to the handed count exactly, and both ledgers
+      close. Birthing the atoms and leaving their energy row at zero is the
+      negative control -- the particle ledger cannot see it
+  CJ2 the same channel in-solver: injected == counted per tick, the birth's
+      energy row is the count times the placed spectrum's discrete mean, and
+      the CUMULATIVE cathode-ledger ``backscatter`` row equals the
+      cumulative birth energy plus what the next tick is still owed.
+      Forming the debit from a tick-time (phi_c + Ti) on the window count is
+      the negative control
+  CJ3 the launch energy is the debited energy, every channel armed: the row
+      against R_E times the counted incident energy, and the disclosed
+      analytic-vs-discrete faithfulness number of the launch spectrum.
+      Launching on the 300 K cosine-wall spectrum is the negative control --
+      not one particle moves and both ledgers still close, so only the
+      row-relative cross-book catches it; both normalizations are reported
+  CJ4 the DVM cathode jet and ``cathode_jet_surface_debit`` refuse to arm
+      together: two independent debits of the same R_E share
+  G1..G22 construction refusals: each unsupported configuration raises a
       ValueError at construction naming the offender. G2 is the model-preset
       resolver's refusal half -- an explicitly-set family member the
       selection cannot carry, refused ONCE with the whole member set named
@@ -197,6 +216,9 @@ from cablp.solvers._sim1d import (
 from cablp.solvers._sim1d.core.geometry import (
     absorbing_live_cells_by_role,
     is_plenum_cell,
+)
+from cablp.solvers._sim1d.core.validation import (
+    refuse_cathode_backscatter_double_book,
 )
 from cablp.solvers._sim1d.physics.kinetic_dvm import (
     ELASTIC_BGK_MOMENTUM_FACTOR,
@@ -2353,6 +2375,48 @@ REFUSALS = (
         )[2],
     ),
     (
+        "G19 DVM cathode jet without the DVM arm refused",
+        dict(),
+        "neutral_kinetic_dvm_cathode_jet",
+        lambda d, fl: (
+            d.__setitem__("neutral_kinetic_dvm_cathode_jet", True),
+            d.__setitem__("neutral_model", "moment"),
+            None,
+        )[2],
+    ),
+    (
+        "G20 DVM cathode jet coefficients without the arm refused",
+        dict(),
+        "neutral_kinetic_dvm_cathode_jet_R_N",
+        lambda d, fl: (
+            d.__setitem__("neutral_kinetic_dvm_cathode_jet_R_N", 0.5),
+            d.__setitem__("neutral_model", "moment"),
+            None,
+        )[2],
+    ),
+    (
+        "G21 DVM cathode jet with R_E > R_N refused",
+        dict(),
+        "R_E",
+        lambda d, fl: (
+            d.__setitem__("neutral_kinetic_dvm_cathode_jet", True),
+            d.__setitem__("neutral_kinetic_dvm_cathode_jet_R_E", 0.5),
+            None,
+        )[2],
+    ),
+    (
+        "G22 DVM cathode jet with a non-positive launch smear refused",
+        dict(),
+        "T_launch_eV",
+        lambda d, fl: (
+            d.__setitem__("neutral_kinetic_dvm_cathode_jet", True),
+            d.__setitem__(
+                "neutral_kinetic_dvm_cathode_jet_T_launch_eV", 0.0
+            ),
+            None,
+        )[2],
+    ),
+    (
         "G15 gas puff into a cell with no annulus refused",
         dict(),
         "V_ann",
@@ -4032,6 +4096,507 @@ def gate_cf3():
     )
 
 
+# ------------------------------- B5 cathode-side energetic recycle (jet)
+
+
+#: [B5] The reflection coefficients under test. They MIRROR the fluid
+#: channel's shipped ``cathode_jet_R_N`` / ``cathode_jet_R_E``, which is what
+#: makes the two arms statements about the same surface.
+CJ_R_N = 0.34
+CJ_R_E = 0.18
+
+#: [B5] The velocity grid these gates run on. Every other gate in this file
+#: runs the coarse ``(16, 6)`` grid; the jet cannot. Its launch spectrum is a
+#: tens-of-eV directed beam smeared onto the axial axis, and the ``(16, 6)``
+#: grid's bin at that speed is itself tens of eV wide, so the narrowest
+#: spectrum it resolves carries more thermal energy than the beam has -- the
+#: engine's guard says exactly that and RAISES. These gates therefore run the
+#: SHIPPED grid, on which the projection lands at machine precision.
+CJ_NVZ = 48
+CJ_NVP = 12
+
+#: [B5] Incident energy per collected ion [eV], ``phi_c + Ti``: a
+#: production-class cathode sheath, so the launch is the energetic beam the
+#: channel exists to carry rather than a near-thermal one that would pass the
+#: cross-book by being indistinguishable from the thermal share.
+CJ_PHI_TI_EV = 62.0
+
+#: [B5] Counted cathode recycle over one tick [particles].
+CJ_COUNT = 5.0e16
+
+#: [B5] Registered ceiling on the cross-book |booked - debited| / debited.
+#: The two are the same committed number by construction, so this is a
+#: roundoff budget, not a physics tolerance.
+CJ_CROSS_BOOK_REL = 1.0e-8
+
+#: [B5] Registered ceiling on the analytic-vs-discrete faithfulness number:
+#: the launch spectrum's DISCRETE mean energy against the ``(1/2) m v_back^2``
+#: it is built to carry. It is the convergence tolerance of the moment
+#: compensation, and a solve that misses it raises rather than launching.
+CJ_MOMENT_REL = 1.0e-10
+
+
+def cj_spec(R_N=CJ_R_N, R_E=CJ_R_E, T_launch_eV=None):
+    return {"R_N": R_N, "R_E": R_E, "T_launch_eV": T_launch_eV}
+
+
+def cj_closed_box(nz=8, jet=True, cls=None):
+    """Return the closed box of :func:`closed_box_dvm` with the jet armed.
+
+    Same disarmed box -- no annulus (``Rm == Rp``), no mesh, no pumping,
+    specular end walls -- so the only energy channels are the CX/elastic
+    exchange, the ionization a partner consumes, and the cathode recycle
+    this member splits. On the jet grid, and empty, so what the box holds
+    afterwards came in through the channel under test.
+    """
+    builder = TransientDVM if cls is None else cls
+    dvm = builder(
+        geometry=uniform_tube(nz, Rp=15.0, Rm=15.0),
+        nvz=CJ_NVZ,
+        nvp=CJ_NVP,
+        accommodation=0.0,
+        exchange_model=EXCHANGE_MODEL,
+        s_L=0.0,
+        s_R=0.0,
+        cathode_jet=cj_spec() if jet else None,
+    )
+    dvm.seed_from_density(np.full(nz, 1.0e13), np.zeros(nz), T_K=400.0)
+    return dvm
+
+
+def cj_feed(dvm, count=CJ_COUNT, per_ion_eV=CJ_PHI_TI_EV):
+    """Return ``(source_counts, incident_erg)`` for one counted tick."""
+    rows = {"cathode_face": np.zeros(dvm.nz)}
+    rows["cathode_face"][dvm.cath_cell] = count
+    incident = np.zeros(dvm.nz)
+    incident[dvm.cath_cell] = count * per_ion_eV * EV
+    return rows, incident
+
+
+class _CJUnbookedEnergy(TransientDVM):
+    """Harness defect: the jet births atoms and forgets their energy row.
+
+    The one failure the closed-box statement exists to catch -- a channel
+    added to the distribution without an entry in the energy ledger. Every
+    particle count is untouched, so the PARTICLE ledger closes exactly as it
+    did; only the energy identity sees it.
+    """
+
+    def _book_energy_ledger(self, **kwargs):
+        kwargs["e_birth_cathode_jet"] = 0.0
+        return TransientDVM._book_energy_ledger(self, **kwargs)
+
+
+class _CJWallSpectrum(TransientDVM):
+    """Harness defect: the jet launches on the 300 K cosine-wall spectrum.
+
+    The B0a-class defect -- the counted particles arrive, the ledger closes
+    against itself, and the energy the surface was debited is simply not the
+    energy the gas received. Statement 3's cross-book is the only statement
+    that sees it.
+    """
+
+    def _cathode_jet_launch_spectrum(self, e_launch, cell):
+        return self.M_wall
+
+
+def gate_cj1():
+    """Cathode jet, closed box: both ledgers close and the split conserves.
+
+    STATEMENT 1 of the B5 three. In the disarmed box the counted cathode
+    recycle is the only external channel, so what the split does is visible
+    on its own: the ``R_N`` share becomes an energetic volume birth and the
+    remainder the thermal face inflow, the two counts sum to the handed
+    count EXACTLY, and both the particle and the energy ledger close at the
+    tolerance I1/I2/I6 hold the arm to.
+
+    Non-vacuity is asserted rather than assumed: the jet's energy row must
+    carry a real share of the tick's energy throughput, or the identity
+    under test is 0 == 0. It does -- the beam is ``(R_E/R_N)(phi_c + Ti)``
+    per atom against a 400 K seed.
+
+    NEGATIVE CONTROL: birth the same atoms and book their energy row at zero
+    (:class:`_CJUnbookedEnergy`) -- an energy channel added to the
+    distribution and left out of the ledger. The particle ledger closes to
+    the same roundoff and the ENERGY distribution residual goes to order
+    one, so the control fails at THIS statement.
+    """
+    nz = 8
+    worst_part = 0.0
+    worst_ener = 0.0
+    worst_split = 0.0
+    live = float("inf")
+    dvm = cj_closed_box(nz)
+    plasma = geometry_plasma(nz)
+    for _ in range(5):
+        rows, incident = cj_feed(dvm)
+        led = dvm.update(
+            CADENCE_S,
+            source_counts=rows,
+            cathode_jet_incident_erg=incident,
+            **plasma,
+        )
+        p = ledger_residual(led)
+        e = ledger_energy_residual(led)
+        worst_part = max(
+            worst_part, abs(p["distribution_rel"]), abs(p["domain_rel"])
+        )
+        worst_ener = max(
+            worst_ener, abs(e["distribution_rel"]), abs(e["domain_rel"])
+        )
+        split = led["birth_cathode_jet"] + led["birth_cathode_face"]
+        worst_split = max(worst_split, abs(split - CJ_COUNT) / CJ_COUNT)
+        live = min(
+            live, abs(led["energy"]["birth_cathode_jet"]) / e["scale"]
+        )
+
+    control = cj_closed_box(nz, cls=_CJUnbookedEnergy)
+    control_part = 0.0
+    control_ener = 0.0
+    for _ in range(5):
+        rows, incident = cj_feed(control)
+        led = control.update(
+            CADENCE_S,
+            source_counts=rows,
+            cathode_jet_incident_erg=incident,
+            **plasma,
+        )
+        control_part = max(
+            control_part, abs(ledger_residual(led)["distribution_rel"])
+        )
+        control_ener = max(
+            control_ener,
+            abs(ledger_energy_residual(led)["distribution_rel"]),
+        )
+
+    ok = (
+        worst_part < ROUNDOFF_REL
+        and worst_ener < ROUNDOFF_REL
+        and worst_split < ROUNDOFF_REL
+        and live > 1.0e-6
+        and control_part < ROUNDOFF_REL
+        and control_ener > 1.0e-3
+    )
+    return (
+        "CJ1 cathode jet, closed box: particle and energy ledgers close, "
+        "the recycle split conserves the counted stream",
+        ok,
+        f"5 ticks at {fmt(CJ_COUNT)} counted particles, "
+        f"{CJ_PHI_TI_EV} eV incident per ion, R_N={CJ_R_N} R_E={CJ_R_E}: "
+        f"worst particle residual {fmt(worst_part)}, worst energy residual "
+        f"{fmt(worst_ener)}, |jet + thermal - handed| / handed "
+        f"{fmt(worst_split)} (tol {fmt(ROUNDOFF_REL)}); jet share of the "
+        f"energy throughput {fmt(live)} (> 1e-6 required)\n        "
+        f"NEGATIVE CONTROL (birth the atoms, book their energy row at zero): "
+        f"particle residual {fmt(control_part)} -- unchanged, as the defect "
+        f"moves no particle -- and energy distribution residual "
+        f"{fmt(control_ener)}, which is the statement failing"
+    )
+
+
+def gate_cj2():
+    """In-solver: one committed pair feeds both the birth and the debit.
+
+    STATEMENT 2 of the B5 three. On the engaged arm with the jet armed, per
+    tick and cumulatively over the window:
+
+    * every counted cathode particle is injected -- ``birth_cathode_jet +
+      birth_cathode_face`` equals the count the tick was handed;
+    * the birth's ENERGY row is the count times the discrete mean of the
+      spectrum that was placed, which is true by construction and is
+      re-derived here from the ledger rather than read back from the engine;
+    * the CUMULATIVE surface debit -- the cathode energy ledger's named
+      ``backscatter`` row, booked per ACCEPTED step -- equals the cumulative
+      ``birth_cathode_jet`` energy the ticks handed the gas, plus ``R_E``
+      times the accumulator the next tick has not yet been given. That is
+      the created-once identity: the surface gave up exactly what the gas
+      received, and what it has not yet received is still owed.
+
+    NEGATIVE CONTROL: form the same debit from a TICK-TIME reading of
+    ``(phi_c + Ti)`` applied to the whole window's count -- the sampling the
+    stage-weighted accumulator exists to avoid. The plasma moves inside a
+    tick, so that debit and the counted one differ by far more than the
+    identity's roundoff, and the control fails at THIS statement.
+    """
+    sim = make_sim(
+        nx=24,
+        neutral_kinetic_dvm_cathode_jet=True,
+        neutral_kinetic_dvm_nvz=CJ_NVZ,
+        neutral_kinetic_dvm_nvp=CJ_NVP,
+    )
+    handed = []
+    update = TransientDVM.update
+
+    def spy_update(self, dt, **kwargs):
+        rows = (kwargs.get("source_counts") or {}).get("cathode_face")
+        incident = kwargs.get("cathode_jet_incident_erg")
+        record = {
+            "count": float(np.sum(rows)) if rows is not None else 0.0,
+            "incident": (
+                float(np.sum(incident)) if incident is not None else 0.0
+            ),
+            "phi_ti_tick_eV": float(
+                np.max(np.asarray(kwargs["Ti_eV"], dtype=float))
+            ),
+        }
+        led = update(self, dt, **kwargs)
+        record["led"] = dict(led)
+        handed.append(record)
+        return led
+
+    TransientDVM.update = spy_update
+    try:
+        run_until_updates(sim, 4)
+        # A few more accepted steps, so the window ends BETWEEN ticks and
+        # the "what the next tick is still owed" term of the identity is
+        # non-zero rather than trivially satisfied. Any tick that fires in
+        # them is recorded by the same spy.
+        for _ in range(5):
+            advance_one_step(sim)
+    finally:
+        TransientDVM.update = update
+
+    worst_count = 0.0
+    worst_row = 0.0
+    births = 0.0
+    for rec in handed:
+        led = rec["led"]
+        injected = led["birth_cathode_jet"] + led["birth_cathode_face"]
+        worst_count = max(
+            worst_count,
+            abs(injected - rec["count"]) / max(rec["count"], 1e-300),
+        )
+        row = led["energy"]["birth_cathode_jet"]
+        births += row
+        # count x discrete-spectrum mean, rebuilt from the ledger: the row
+        # divided by the count IS that mean, so the statement is that the
+        # per-atom energy it implies is the committed launch energy.
+        if led["birth_cathode_jet"] > 0.0:
+            per_atom = row / led["birth_cathode_jet"]
+            target = (CJ_R_E / CJ_R_N) * rec["incident"] / rec["count"]
+            worst_row = max(worst_row, abs(per_atom - target) / target)
+
+    debited_erg = sim._cathode_energy_ledger_J["backscatter"] * 1.0e7
+    outstanding = CJ_R_E * float(np.sum(sim._dvm_cathode_jet_energy_booked))
+    identity = abs(debited_erg - (births + outstanding)) / max(
+        births + outstanding, 1e-300
+    )
+
+    # NEGATIVE CONTROL: the tick-time reading applied to the window count.
+    control_debit = sum(
+        CJ_R_E * rec["count"] * rec["phi_ti_tick_eV"] * EV for rec in handed
+    )
+    control_rel = abs(control_debit - births) / max(births, 1e-300)
+
+    ok = (
+        len(handed) >= 4
+        and births > 0.0
+        and outstanding > 0.0
+        and worst_count < ROUNDOFF_REL
+        and worst_row < CJ_CROSS_BOOK_REL
+        and identity < ROUNDOFF_REL
+        and control_rel > 1.0e-3
+    )
+    return (
+        "CJ2 in-solver cathode jet: injected == counted, and the cumulative "
+        "surface debit == the cumulative birth energy + what is still owed",
+        ok,
+        f"{len(handed)} ticks, {fmt(births)} erg of backscatter born; "
+        f"worst |injected - counted| / counted {fmt(worst_count)} "
+        f"(tol {fmt(ROUNDOFF_REL)}); worst per-atom launch energy against "
+        f"(R_E/R_N)(phi_c + Ti) {fmt(worst_row)} "
+        f"(tol {fmt(CJ_CROSS_BOOK_REL)})\n        "
+        f"cathode ledger backscatter row {fmt(debited_erg)} erg vs births "
+        f"{fmt(births)} + outstanding {fmt(outstanding)} erg: relative "
+        f"{fmt(identity)} (tol {fmt(ROUNDOFF_REL)})\n        "
+        f"NEGATIVE CONTROL (tick-time (phi_c + Ti) on the window count): "
+        f"debit {fmt(control_debit)} erg, {fmt(control_rel)} relative from "
+        f"the counted one -- the sampling error the stage accumulator "
+        f"removes, and it fails this statement"
+    )
+
+
+def gate_cj3():
+    """Every channel armed: the gas receives what the surface was debited.
+
+    STATEMENT 3 of the B5 three, and the one the B0a standing lesson makes
+    binding: a backscatter launched at the WRONG energy moves exactly the
+    right number of particles, so statements 1 and 2 close to the same
+    roundoff whether the spectrum is right or wrong. Only a cross-book
+    between the two ledgers sees it.
+
+    With the cylindrical wall, an anode mesh, pumping at both ends, a puff,
+    volume recombination, an anode rebirth and both recycle faces all live
+    at once, and once per annulus treatment:
+
+    * ``count * <E>_spectrum`` -- the ledger's ``birth_cathode_jet`` energy
+      row -- against ``R_E`` times the incident energy the surface was
+      debited by, at ``CJ_CROSS_BOOK_REL``;
+    * the analytic-vs-discrete faithfulness number: the same spectrum's
+      discrete mean energy against the ``(1/2) m v_back^2`` it is built to
+      carry, at ``CJ_MOMENT_REL``. It is a DISCLOSED number rather than an
+      assumption -- the compensation solve is what makes the two agree, and
+      a solve that gives up raises instead of launching.
+
+    NEGATIVE CONTROL: launch the same counted atoms on the 300 K cosine-wall
+    spectrum (:class:`_CJWallSpectrum`) -- the surface still debited for the
+    energetic beam, the gas given the cold one. BOTH normalizations are
+    reported, because which one a gate reads decides what it can catch: the
+    ROW-RELATIVE form (against the debit itself) is what this gate tests,
+    and the THROUGHPUT-NORMALIZED form (against the tick's whole energy
+    scale) is the one a ledger-residual gate would have seen -- and the
+    ledger residual sees nothing at all, because the engine books the row
+    from the spectrum it placed either way.
+    """
+    nz = 12
+    results = {}
+    for flights in ("rates", "bounded_chord"):
+        for wrong in (False, True):
+            cls = _CJWallSpectrum if wrong else TransientDVM
+            dvm = cls(
+                geometry=uniform_tube(nz),
+                nvz=CJ_NVZ,
+                nvp=CJ_NVP,
+                s_L=0.3,
+                s_R=0.3,
+                accommodation=0.4,
+                exchange_model=EXCHANGE_MODEL,
+                annulus_flights=flights,
+                mesh_face=nz // 2,
+                transparency=0.642,
+                cathode_jet=cj_spec(),
+            )
+            dvm.seed_from_density(np.full(nz, 1.0e13), np.full(nz, 1.0e13))
+            sources = {
+                "recombination": np.full(nz, 1.0e15),
+                "puff": np.zeros(nz),
+                "anode": np.zeros(nz),
+                "collector_face": np.zeros(nz),
+            }
+            sources["puff"][3] = 3.0e17
+            sources["anode"][nz // 2] = 2.0e16
+            sources["collector_face"][-1] = 4.0e16
+            plasma = geometry_plasma(nz)
+            cross = 0.0
+            moment = 0.0
+            throughput = 0.0
+            resid = 0.0
+            for _ in range(4):
+                rows, incident = cj_feed(dvm)
+                led = dvm.update(
+                    CADENCE_S,
+                    sources=sources,
+                    source_counts=rows,
+                    cathode_jet_incident_erg=incident,
+                    **plasma,
+                )
+                row = led["energy"]["birth_cathode_jet"]
+                debited = CJ_R_E * float(np.sum(incident))
+                cross = max(cross, abs(row - debited) / debited)
+                e = ledger_energy_residual(led)
+                throughput = max(
+                    throughput, abs(row - debited) / e["scale"]
+                )
+                resid = max(
+                    resid,
+                    abs(e["distribution_rel"]),
+                    abs(e["domain_rel"]),
+                )
+                # The faithfulness number, rebuilt independently of the
+                # engine: the spectrum the launch energy implies, and its
+                # own discrete mean energy against that launch energy.
+                e_launch = (CJ_R_E / CJ_R_N) * CJ_PHI_TI_EV * EV
+                spec = TransientDVM._cathode_jet_launch_spectrum(
+                    dvm, e_launch, int(dvm.cath_cell)
+                )
+                got = 0.5 * M_HE * float((spec * dvm.g.V2).sum())
+                moment = max(moment, abs(got - e_launch) / e_launch)
+            results[(flights, wrong)] = (cross, moment, throughput, resid)
+
+    good = [results[(f, False)] for f in ("rates", "bounded_chord")]
+    bad = [results[(f, True)] for f in ("rates", "bounded_chord")]
+    ok = (
+        all(c < CJ_CROSS_BOOK_REL for c, _m, _t, _r in good)
+        and all(m < CJ_MOMENT_REL for _c, m, _t, _r in good)
+        and all(r < ROUNDOFF_REL for _c, _m, _t, r in good)
+        and all(c > 0.5 for c, _m, _t, _r in bad)
+        and all(r < ROUNDOFF_REL for _c, _m, _t, r in bad)
+    )
+    detail = (
+        f"4 ticks per arm, every channel armed, {CJ_PHI_TI_EV} eV incident "
+        f"per ion (launch {(CJ_R_E / CJ_R_N) * CJ_PHI_TI_EV:.4g} eV per atom)"
+    )
+    for flights in ("rates", "bounded_chord"):
+        c, m, _t, r = results[(flights, False)]
+        detail += (
+            f"\n        {flights}: cross-book |row - R_E E_incident| / "
+            f"(R_E E_incident) {fmt(c)} (tol {fmt(CJ_CROSS_BOOK_REL)}); "
+            f"analytic-vs-discrete launch energy {fmt(m)} "
+            f"(tol {fmt(CJ_MOMENT_REL)}); energy-ledger residual {fmt(r)}"
+        )
+    for flights in ("rates", "bounded_chord"):
+        c, _m, t, r = results[(flights, True)]
+        detail += (
+            f"\n        NEGATIVE CONTROL [{flights}] (launch on the 300 K "
+            f"cosine-wall spectrum): row-relative {fmt(c)} -- detected -- "
+            f"while throughput-normalized it is {fmt(t)} and the energy "
+            f"ledger still closes at {fmt(r)}, so only the row-relative "
+            f"cross-book catches it"
+        )
+    return (
+        "CJ3 cathode jet, every channel armed: the booked launch energy IS "
+        "the debited surface energy",
+        ok,
+        detail,
+    )
+
+
+def gate_cj4():
+    """The two cathode backscatter books cannot be armed together.
+
+    The pairing refusal, tested as its own statement rather than through the
+    model-family resolver. Today the resolver clears
+    ``cathode_jet_surface_debit`` before the guard is reached -- the fluid
+    jet is M_n momentum physics and ``neutral_momentum`` is refused under
+    this arm -- so a refusal gate driven through ``LAPDSim1D`` would be
+    testing the resolver. The guard is called directly instead, on the pair
+    and on each half alone, so it stays a live statement about the PAIR if
+    that prerequisite chain is ever relaxed.
+    """
+    both = {
+        "neutral_kinetic_dvm_cathode_jet": True,
+        "cathode_jet_surface_debit": True,
+    }
+    singles = (
+        {"neutral_kinetic_dvm_cathode_jet": True},
+        {"cathode_jet_surface_debit": True},
+        {},
+    )
+    raised = ""
+    try:
+        refuse_cathode_backscatter_double_book(both)
+    except ValueError as exc:
+        raised = str(exc)
+    quiet = True
+    for single in singles:
+        try:
+            refuse_cathode_backscatter_double_book(single)
+        except ValueError:
+            quiet = False
+    names = (
+        "neutral_kinetic_dvm_cathode_jet" in raised
+        and "cathode_jet_surface_debit" in raised
+    )
+    ok = bool(raised) and names and quiet
+    return (
+        "CJ4 the DVM cathode jet and cathode_jet_surface_debit refuse to "
+        "arm together (both books debit the same R_E)",
+        ok,
+        f"pair refused naming both keys: {names}; each half alone and the "
+        f"empty config raise nothing: {quiet}; message: {raised[:96]!r}",
+    )
+
+
 # ------------------------------------------------------------------ main
 
 
@@ -4049,7 +4614,8 @@ CONSERVATION_GATES = ("gate_i1", "gate_i2", "gate_i4", "gate_i5",
                       "gate_d3", "gate_d4", "gate_d5",
                       "gate_b1", "gate_b3",
                       "gate_cf1", "gate_cf3",
-                      "gate_wr1", "gate_wr3")
+                      "gate_wr1", "gate_wr3",
+                      "gate_cj1", "gate_cj3")
 
 
 def main():
@@ -4090,6 +4656,10 @@ def main():
         gate_wr1,
         gate_wr2,
         gate_wr3,
+        gate_cj1,
+        gate_cj2,
+        gate_cj3,
+        gate_cj4,
         gate_x1,
     ]
     gates += [

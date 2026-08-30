@@ -697,6 +697,42 @@ def resolve_neutral_jet_config(
     )
 
 
+def refuse_cathode_backscatter_double_book(input_dict):
+    """Raise when both cathode backscatter books are armed at once.
+
+    ``neutral_kinetic_dvm_cathode_jet`` and ``cathode_jet_surface_debit``
+    are two independent debits of the SAME quantity -- the ``R_E`` share of
+    the ion bombardment energy the cathode collects. The fluid arm takes it
+    off the surface as a retention factor on ``P_cathode_i``; the DVM arm
+    takes it off as its own named ledger row, from the counted particles it
+    hands the kinetic gas. Armed together the surface pays twice for one
+    backscatter.
+
+    Today the pair is unreachable through the model-family resolver: the
+    fluid jet is M_n momentum physics, ``neutral_momentum`` is refused under
+    ``neutral_model = "kinetic_dvm"``, and the resolver therefore clears
+    ``cathode_jet_surface_debit`` before this is asked. That is exactly why
+    the guard is written as its own statement about the PAIR rather than
+    left implicit in a prerequisite chain: relaxing the ``neutral_momentum``
+    refusal must not silently arm both books.
+    """
+    if not bool(input_dict.get("neutral_kinetic_dvm_cathode_jet", False)):
+        return
+    if not bool(input_dict.get("cathode_jet_surface_debit", False)):
+        return
+    raise ValueError(
+        "neutral_kinetic_dvm_cathode_jet and cathode_jet_surface_debit both "
+        "debit the cathode surface by the R_E share of the ion bombardment "
+        "energy, and they are separate books: the fluid arm withholds it as "
+        "a retention factor on P_cathode_i, the DVM arm withholds it as its "
+        "own named 'backscatter' ledger row against the particles it counted. "
+        "Armed together the surface pays for the same backscatter twice. "
+        "Accepted: neutral_kinetic_dvm_cathode_jet=True with "
+        "cathode_jet_surface_debit=False (the kinetic arm owns the recycle), "
+        "or the fluid pair with neutral_kinetic_dvm_cathode_jet=False"
+    )
+
+
 def resolve_coverage_config(input_dict, flags, *, geometry, neutral_model):
     """Validate and RESOLVE the clumpy-plasma coverage closure (v2).
 
