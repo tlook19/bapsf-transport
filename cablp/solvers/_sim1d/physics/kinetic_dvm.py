@@ -1204,6 +1204,13 @@ class TransientDVM:
         spec = self.g.maxwellian(T_launch, u, exact_moments=True)
         total = float(spec.sum())
         got_u = float((spec * self.g.VZ).sum())
+        # Recomputed from V2 rather than folded through the precomputed
+        # self.E_bin (== 0.5 * M_HE * g.V2) every other energy read here
+        # uses. The two differ only in where the constant enters the sum --
+        # scale the sum, or sum the scaled -- and they agree to roundoff:
+        # measured worst 2.7e-16 relative (~1.2 ulp) over the shipped
+        # (48, 12) and neighbouring grids across the production launch band,
+        # scripts/dacc_v2_ebin_probe.py. Cosmetic, so it is left as written.
         got_e = 0.5 * M_HE * float((spec * self.g.V2).sum())
         e_rel = abs(got_e - e_launch) / e_launch
         u_rel = abs(got_u - u) / max(abs(u), np.sqrt(s2))

@@ -1029,8 +1029,13 @@ def model_mode_defaults():
         the surface energy ledger, so the reflected energy is created once
         rather than by both books. Inert unless
         ``neutral_model = "kinetic_dvm"``; arming it under any other neutral
-        model raises at construction, as does arming it together with the
-        fluid channel's ``cathode_jet_surface_debit``.
+        model raises at construction, and a standing guard refuses it
+        together with the fluid channel's ``cathode_jet_surface_debit``,
+        which would debit the same ``R_E`` a second time. That guard is
+        unreachable through this model selection -- the debit is its own
+        member of the kinetic_dvm family resolver, cleared to ``False``
+        before any guard runs -- and is kept as a live statement about the
+        PAIR against a future relaxation of that membership.
     neutral_kinetic_dvm_cathode_jet_R_N:
         Particle reflection coefficient of the transient DVM's cathode
         backscatter: the share of the collected ion flux that returns as
@@ -1199,7 +1204,7 @@ def model_mode_defaults():
         "neutral_kinetic_dvm_cadence_s": 2.5e-5,
         "neutral_kinetic_dvm_nvz": 48,
         "neutral_kinetic_dvm_nvp": 12,
-        "neutral_kinetic_dvm_accommodation": 1.0,
+        "neutral_kinetic_dvm_accommodation": 0.40,
         "neutral_kinetic_dvm_wall_reflection": "specular",
         "neutral_kinetic_dvm_elastic": "phelps_iso",
         "neutral_kinetic_dvm_exchange": "cauchy_chord",

@@ -738,6 +738,20 @@ up is what the gas receives, to roundoff, and the pair is refused outright
 against the fluid channel's own `cathode_jet_surface_debit`, which would debit
 the same $R_E$ a second time.
 
+**That identity is a statement about the `power_balance` warming model, and
+outside it only half of it holds.** The `backscatter` row is booked on every
+accepted step the channel counted on, but the surface temperature is only
+*evolved* under `cathode_warming_model = "power_balance"`; elsewhere the
+cathode is a fixed reservoir. So outside `power_balance` the surface gives up
+**nothing** — there is no state for the debit to come out of, and $T_s$ is
+whatever the run pinned it at — while the row still measures exactly what left
+with the atoms. The row is booked regardless precisely so that gap is
+MEASURED rather than remembered: it is the same convention the fluid channel's
+retention factor follows, which is likewise inert outside `power_balance`. A
+run that reads `warming_E_backscatter_J` off a non-`power_balance` arm is
+reading the gas's receipt, not the surface's loss, and the two are only the
+same number where the surface has a temperature to lose it from.
+
 Two convention drops are DISCLOSED rather than remembered. The $1-R_N$
 implanted share desorbs at the surface temperature and its $\tfrac32 kT_s$ per
 atom is not debited — fluid-channel parity, and tens of watts against a
