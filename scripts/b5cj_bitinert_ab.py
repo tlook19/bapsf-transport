@@ -26,10 +26,19 @@ at the base commit.
 
 The state digest is a running SHA-256 over the packed state vector's raw
 bytes after every accepted step, so a divergence anywhere in the window
-reaches the final value rather than only the endpoint. The ``kinetic_dvm``
-arm additionally digests every entry of ``TransientDVM.last_ledger`` -- both
-the particle rows and the nested energy ones -- after every neutral tick, and
-records the cathode surface energy ledger at the end of the window.
+reaches the final value rather than only the endpoint. It is the statement
+that matters and it must be identical.
+
+The ``kinetic_dvm`` arm additionally records every entry of
+``TransientDVM.last_ledger`` -- the particle rows and the nested energy ones,
+per tick, by name -- and the cathode surface energy ledger at the end of the
+window. Those are compared ROW BY ROW rather than by one digest, because the
+candidate's ledger legitimately carries rows the base has no name for: a new
+channel is a new row, and the honest statement is that every row PRESENT IN
+BOTH is bit-identical while every row present in only one is exactly zero
+there. A single digest over the whole ledger cannot say that -- it would flag
+an added zero row as a divergence -- so both are reported: the digest as a
+fingerprint, the row comparison as the gate.
 
 Usage (from the checkout root, PYTHONPATH set to it)::
 
@@ -56,7 +65,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from baseline_sim1d import build_baseline_config  # noqa: E402
 
 #: Steps each arm walks. A cost knob, not physics: the digest is running.
-DEFAULT_STEPS = 400
+DEFAULT_STEPS = 800
 
 #: The one departure from the golden pins on the ``moment`` arm: the step cap
 #: IS the run length here, so reaching it must stop rather than raise.
@@ -109,15 +118,23 @@ def step_once(sim):
     return sim._accept_step_with_picard(generate)
 
 
-def _digest_ledger(running, ledger):
-    """Fold one DVM ledger -- rows and nested energy rows -- into a digest."""
+def _flatten_ledger(ledger, prefix=""):
+    """Return one DVM ledger as a flat ``{row name: float}`` mapping."""
+    flat = {}
     for key in sorted(ledger):
         value = ledger[key]
         if isinstance(value, dict):
-            _digest_ledger(running, value)
+            flat.update(_flatten_ledger(value, prefix=f"{prefix}{key}."))
             continue
+        flat[f"{prefix}{key}"] = float(value)
+    return flat
+
+
+def _digest_ledger(running, flat):
+    """Fold one flattened ledger into a running digest, names included."""
+    for key in sorted(flat):
         running.update(key.encode())
-        running.update(np.float64(value).tobytes())
+        running.update(np.float64(flat[key]).tobytes())
 
 
 def capture(arm, steps):
@@ -126,6 +143,7 @@ def capture(arm, steps):
     sim = LAPDSim1D(input_dict=params, input_flags=flags)
     running = hashlib.sha256()
     ledger_running = hashlib.sha256()
+    ledgers = []
     ticks = 0
     taken = 0
     for _ in range(steps):
@@ -134,9 +152,12 @@ def capture(arm, steps):
         dvm = getattr(sim, "_dvm", None)
         if dvm is not None and dvm.updates > ticks:
             ticks = dvm.updates
-            _digest_ledger(ledger_running, dvm.last_ledger)
+            flat = _flatten_ledger(dvm.last_ledger)
+            ledgers.append(flat)
+            _digest_ledger(ledger_running, flat)
         taken += 1
     return {
+        "dvm_ledgers": ledgers,
         "arm": arm,
         "steps_requested": int(steps),
         "steps_taken": int(taken),
@@ -155,6 +176,32 @@ def capture(arm, steps):
     }
 
 
+def _compare_rows(label, a_rows, b_rows):
+    """Compare two ``{row: value}`` mappings; return (ok, one-line summary).
+
+    Shared rows must be BIT-IDENTICAL. A row present on only one side is a
+    row that side has a name for and the other does not -- a new channel --
+    and it must be exactly zero there, or it is carrying something.
+    """
+    shared = sorted(set(a_rows) & set(b_rows))
+    only_a = sorted(set(a_rows) - set(b_rows))
+    only_b = sorted(set(b_rows) - set(a_rows))
+    moved = [k for k in shared if a_rows[k] != b_rows[k]]
+    nonzero = [k for k in only_a if a_rows[k] != 0.0]
+    nonzero += [k for k in only_b if b_rows[k] != 0.0]
+    ok = not moved and not nonzero
+    summary = (
+        f"{label}: {len(shared)} shared rows, {len(moved)} moved; "
+        f"rows only on one side {only_a + only_b or 'none'}, of which "
+        f"{len(nonzero)} carry a non-zero value"
+    )
+    if moved:
+        summary += f"; MOVED {moved[:6]}"
+    if nonzero:
+        summary += f"; NON-ZERO {nonzero[:6]}"
+    return ok, summary
+
+
 def compare(a_path, b_path):
     """Print whether two captured arms are bit-identical; 0 when they are."""
     a = json.loads(Path(a_path).read_text())
@@ -162,12 +209,37 @@ def compare(a_path, b_path):
     same = True
     for key in (
         "arm", "steps_taken", "time_s", "cells", "dvm_ticks",
-        "digest_sha256", "dvm_ledger_sha256", "cathode_energy_ledger_J",
-        "final_state_sha256",
+        "digest_sha256", "final_state_sha256",
     ):
         match = a[key] == b[key]
         same = same and match
         print(f"{key:26s} {'==' if match else '!='}  {a[key]}  |  {b[key]}")
+    # Fingerprint only: it folds ROW NAMES in, so an added zero row moves it.
+    print(
+        f"{'dvm_ledger_sha256':26s} "
+        f"{'==' if a['dvm_ledger_sha256'] == b['dvm_ledger_sha256'] else '!='}"
+        f"  {a['dvm_ledger_sha256']}  |  {b['dvm_ledger_sha256']}"
+        "   (fingerprint; the row comparison below is the statement)"
+    )
+    ok, summary = _compare_rows(
+        "cathode surface energy ledger",
+        a["cathode_energy_ledger_J"],
+        b["cathode_energy_ledger_J"],
+    )
+    same = same and ok
+    print(summary)
+    if len(a["dvm_ledgers"]) != len(b["dvm_ledgers"]):
+        same = False
+        print(
+            f"DVM ledgers: {len(a['dvm_ledgers'])} vs "
+            f"{len(b['dvm_ledgers'])} ticks -- different windows"
+        )
+    for i, (rows_a, rows_b) in enumerate(
+        zip(a["dvm_ledgers"], b["dvm_ledgers"]), start=1
+    ):
+        ok, summary = _compare_rows(f"DVM ledger tick {i}", rows_a, rows_b)
+        same = same and ok
+        print(summary)
     print("BIT-IDENTICAL" if same else "DIVERGED")
     return 0 if same else 1
 
