@@ -224,7 +224,7 @@
     "neutral_equilibration_dt": 0.01,
     "neutral_exchange_coeff_cm3_s": 100000.0,
     "neutral_exchange_model": "knudsen",
-    "neutral_kinetic_dvm_accommodation": 1.0,
+    "neutral_kinetic_dvm_accommodation": 0.4,
     "neutral_kinetic_dvm_annulus_flights": "rates",
     "neutral_kinetic_dvm_cadence_s": 2.5e-05,
     "neutral_kinetic_dvm_cathode_jet": false,
