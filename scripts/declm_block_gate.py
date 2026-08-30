@@ -20,7 +20,15 @@ flat, and a family whose mutually exclusive routes are multiply armed.
 
 Both halves run at the RESOLVER, and the equivalence half additionally runs a
 real ``LAPDSim1D`` construction on one family so the claim covers the
-constructor and not just the config boundary.
+constructor and not just the config boundary. The two TOML routes --
+``load_config`` and a committed stance file -- are exercised against the SAME
+block and compared to the same flat form, so a divergence between the file
+routes and the Python API cannot hide.
+
+Last, the four 23an RUN-TIME-FIRST GUARDS hoisted with this migration are
+asserted to refuse AT CONSTRUCTION. Their negative control was run at base
+commit aa65468, where all four of those configurations constructed; the
+reproduction recipe is in ``gate_hoisted_guards``.
 
 Usage::
 
@@ -325,6 +333,85 @@ def gate_flat_route_untouched():
     )
 
 
+def gate_toml_routes():
+    """The two TOML routes: ``load_config`` and a committed-stance file.
+
+    Both are exercised against the SAME block, and both are compared to the
+    flat form of that block, so a divergence between the file routes and the
+    Python API cannot hide.
+    """
+    print("\n=== TOML ROUTES ===")
+    import tempfile
+
+    from cablp.solvers._sim1d import load_config
+    import stance_config
+
+    anode = next(
+        f for f in DECLARED_FAMILIES if f.name == "anode_surface_recycle"
+    )
+    values = family_values(anode)
+    flat_params, flat_flags = split_by_namespace(anode, values)
+    expected = canonical(*resolve_config(flat_params, flat_flags))
+
+    body = "\n".join(
+        f"{key} = {json.dumps(values[key])}"
+        for _space, key in anode.members
+        if values[key] is not None
+    )
+    nulls = [key for _space, key in anode.members if values[key] is None]
+    block_text = f"[models.{anode.name}]\n{body}\n"
+    if nulls:
+        block_text += f"none_valued = {json.dumps(nulls)}\n"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        config_path = Path(tmp) / "declm_block.toml"
+        config_path.write_text(block_text)
+        check(
+            "load_config reads [models.<family>] and matches the flat form",
+            canonical(*load_config(config_path)) == expected,
+        )
+
+        # The stance route, exercised against a real stance directory so the
+        # loader's own name/table/namespace checks all run.
+        stance_dir = Path(tmp) / "stances"
+        stance_dir.mkdir()
+        (stance_dir / "declmtest.toml").write_text(
+            "[input_dict]\nnx = 8\n\n[input_flags]\n\n" + block_text
+        )
+        real_dir = stance_config.STANCE_DIR
+        stance_config.STANCE_DIR = stance_dir
+        try:
+            stance = stance_config.load_stance("declmtest")
+            projected = {
+                key: stance.params[key]
+                for _space, key in anode.members
+                if key in stance.params
+            }
+            check(
+                "a stance's block is projected into Stance.params",
+                projected == {k: v for k, v in values.items()},
+                f"got {projected}",
+            )
+            check(
+                "the block is also kept as written on Stance.models",
+                anode.name in stance.models,
+            )
+            refuses(
+                "a stance whose block collides with its own flat table",
+                lambda: _bad_stance(stance_config, stance_dir, block_text),
+                must_name=["answered TWICE", "anode_neutral_jet"],
+            )
+        finally:
+            stance_config.STANCE_DIR = real_dir
+
+
+def _bad_stance(stance_config, stance_dir, block_text):
+    (stance_dir / "declmbad.toml").write_text(
+        "[input_dict]\nanode_neutral_jet = true\n\n[input_flags]\n\n" + block_text
+    )
+    stance_config.load_stance("declmbad")
+
+
 def gate_hoisted_guards():
     """The four 23an run-time-first guards, now refused at construction.
 
@@ -373,6 +460,7 @@ def main():
     gate_equivalence()
     gate_equivalence_constructed()
     gate_none_valued()
+    gate_toml_routes()
     gate_refusals()
     gate_hoisted_guards()
     gate_flat_route_untouched()
