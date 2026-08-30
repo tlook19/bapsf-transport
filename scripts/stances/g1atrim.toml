@@ -439,7 +439,7 @@ use_cached_neutral_seed = false
 # INITIAL NEUTRAL FILL. Shaped foot profile from
 # scripts/g1aporf_foot45.npz (equilibrated base scripts/g1aporf_eqbase.h5,
 # dt_foot = 4.5 ms, ballistic kernel), REGENERATED 2026-08-24 with the
-# tube-beamed puff row below. It supersedes scripts/g1afix_foot45.npz, which
+# tube-beamed puff row above. It supersedes scripts/g1afix_foot45.npz, which
 # was built 2026-08-19 and had gone stale against everything this stance
 # absorbed after that date -- the CAD-span gap re-anchor most visibly (its z
 # grid is shifted 3.25 cm), the sccm changeover to the flow meter's 20 C /
