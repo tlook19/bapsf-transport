@@ -60,7 +60,7 @@ _real_chains = bd._tail_lane_chains
 
 
 def _chains(plans, nn_w, ne_w, Te_w, dz_w, march_kwargs, tail_lo, tail_hi,
-            reflect_face, E_reflect):
+            reflect_face, E_reflect, cull=None):
     for E_walk, half_flux, ionizes in plans:
         births = np.flatnonzero(np.asarray(half_flux) > 0.0)
         if births.size:
@@ -78,7 +78,7 @@ def _chains(plans, nn_w, ne_w, Te_w, dz_w, march_kwargs, tail_lo, tail_hi,
                 )
             )
     return _real_chains(plans, nn_w, ne_w, Te_w, dz_w, march_kwargs, tail_lo,
-                        tail_hi, reflect_face, E_reflect)
+                        tail_hi, reflect_face, E_reflect, cull=cull)
 
 
 bd._tail_lane_chains = _chains
