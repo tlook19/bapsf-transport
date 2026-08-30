@@ -3901,10 +3901,18 @@ def load_config(path):
 
     The file may contain ``[params]`` and ``[flags]`` sections. Missing values
     fall back to ``input_dict_template_1d`` and ``input_flags_template_1d``.
+
+    It may additionally contain ``[models.<family>]`` DECLARATION BLOCKS, each
+    stating one model family's complete membership without namespaces; see
+    :mod:`~cablp.solvers._sim1d.core.model_declarations`. Blocks and the flat
+    tables resolve onto the same surface, and a key may appear in only one of
+    them.
     """
     with open(path, "rb") as f:
         raw = tomllib.load(f)
-    return resolve_config(raw.get("params", {}), raw.get("flags", {}))
+    return resolve_config(
+        raw.get("params", {}), raw.get("flags", {}), raw.get("models", {})
+    )
 
 
 def default_config():
@@ -3912,14 +3920,28 @@ def default_config():
     return dict(input_dict_template_1d), dict(input_flags_template_1d)
 
 
-def resolve_config(params=None, flags=None):
+def resolve_config(params=None, flags=None, models=None):
     """Resolve caller overrides against the one authoritative default registry.
 
     Unknown keys fail at this boundary so misspelled or retired campaign
     controls cannot survive as silent metadata-only settings.
+
+    ``models`` carries DECLARATION BLOCKS -- ``{family: {member: value}}`` --
+    which are projected onto the two flat namespaces before the merge, so
+    everything downstream reads the one flat surface it always has. Omitting
+    it (the default) leaves this function's behaviour and its output
+    bit-identical to the flat-only form.
     """
+    # Imported here rather than at module scope: model_declarations reads the
+    # templates this module builds, so a top-level import would close a cycle
+    # through a half-initialised config module.
+    from .model_declarations import resolve_declaration_blocks
+
     supplied_params = {} if params is None else dict(params)
     supplied_flags = {} if flags is None else dict(flags)
+    block_params, block_flags = resolve_declaration_blocks(
+        models, supplied_params, supplied_flags
+    )
     unknown_params = sorted(set(supplied_params) - set(input_dict_template_1d))
     unknown_flags = sorted(set(supplied_flags) - set(input_flags_template_1d))
     if unknown_params or unknown_flags:
@@ -3934,8 +3956,10 @@ def resolve_config(params=None, flags=None):
         )
     resolved_params = dict(input_dict_template_1d)
     resolved_params.update(supplied_params)
+    resolved_params.update(block_params)
     resolved_flags = dict(input_flags_template_1d)
     resolved_flags.update(supplied_flags)
+    resolved_flags.update(block_flags)
     return resolved_params, resolved_flags
 
 

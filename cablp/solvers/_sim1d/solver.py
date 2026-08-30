@@ -770,6 +770,7 @@ class LAPDSim1D:
         self,
         input_dict=None,
         input_flags=None,
+        input_models=None,
         progress_callback=None,
         progress_tracker=None,
         progress_interval_s=1.0e-4,
@@ -783,6 +784,13 @@ class LAPDSim1D:
         has been armed. The phases below are the same statements in the same
         order they have always run in; each ``_init_*`` method is one
         contiguous stretch of them, named.
+
+        ``input_models`` carries DECLARATION BLOCKS -- one model family's
+        complete membership per entry, stated without namespaces (see
+        ``core/model_declarations.py``). They are projected onto the two flat
+        namespaces before anything else happens, so every phase below reads
+        the same flat surface it always has, and omitting them leaves
+        construction bit-identical to the flat-only form.
         """
         if run_id is not None:
             from .results.phase3_capture import validate_run_id
@@ -792,6 +800,7 @@ class LAPDSim1D:
         self._init_config_and_early_flags(
             input_dict,
             input_flags,
+            input_models,
             progress_callback,
             progress_tracker,
             progress_interval_s,
@@ -848,6 +857,7 @@ class LAPDSim1D:
         self,
         input_dict,
         input_flags,
+        input_models,
         progress_callback,
         progress_tracker,
         progress_interval_s,
@@ -858,17 +868,27 @@ class LAPDSim1D:
         presence check that follows immediately), which is why they are
         resolved before any of them.
 
-        The MODEL-FAMILY resolution runs first of all, on the merged config
-        and BEFORE every validator in this constructor: a top-level model
-        selection sets the member keys it owns that the caller left at their
-        config defaults, and refuses ONCE -- naming the selection, its whole
-        member set and every offending key -- when the caller explicitly set
-        one of them to something the selection cannot carry. The single-key
-        guards those member sets flatten are all still below and are all
-        still reached; what changes is that a resolvable config no longer
-        walks them one refusal at a time.
+        TWO resolutions run here, in this order, and they answer different
+        questions. ``resolve_config`` projects any DECLARATION BLOCK onto the
+        flat namespaces and merges the caller's overrides onto the templates:
+        that is where a family stated as its complete membership becomes the
+        flat surface everything downstream reads. ``resolve_model_families``
+        then runs on the merged config and BEFORE every validator in this
+        constructor: a top-level model selection sets the member keys it owns
+        that the caller left at their config defaults, and refuses ONCE --
+        naming the selection, its whole member set and every offending key --
+        when the caller explicitly set one of them to something the selection
+        cannot carry. A config that arrived as a block has already stated
+        every member, so the family resolver finds nothing to resolve and
+        nothing to refuse; a flat config still gets its cascade flattened.
+
+        The single-key guards those member sets flatten are all still below
+        and are all still reached, by both routes; what changes is that a
+        resolvable config no longer walks them one refusal at a time.
         """
-        self._input_dict, self._flags = resolve_config(input_dict, input_flags)
+        self._input_dict, self._flags = resolve_config(
+            input_dict, input_flags, input_models
+        )
         resolve_model_families(self._input_dict, self._flags)
         self._progress_callback = progress_callback
         self._progress_tracker = progress_tracker
