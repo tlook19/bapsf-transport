@@ -24,6 +24,16 @@ Two arms, because the diff must be inert on two different paths:
 Neither arm names any B5 configuration key, so this same file runs unchanged
 at the base commit.
 
+**Reused by B4** (``b4aj_bitinert_ab.py``), which is a thin wrapper rather than
+a fork: the logic here is channel-agnostic, so B4 supplies its own velocity
+grid, cadence and (for the armed-sanity run) its own channel key through
+``--extra`` / ``--extra-flag``, and the two members share one implementation of
+the capture, the digest and the row comparison. The ANODE surface energy book
+is captured beside the cathode one for the same reason the cathode one is: it
+is a solver-side ledger the member can move. Both are read with ``getattr``
+and default to an empty mapping, so this file still runs unchanged at any base
+commit that has neither.
+
 The state digest is a running SHA-256 over the packed state vector's raw
 bytes after every accepted step, so a divergence anywhere in the window
 reaches the final value rather than only the endpoint. It is the statement
@@ -87,20 +97,28 @@ DVM_PARAMS = {
 DVM_FLAGS = {"neutral_two_zone": True}
 
 
-def build_arm(arm):
-    """Return the ``(input_dict, input_flags)`` of one A/B arm."""
+def build_arm(arm, extra_params=None, extra_flags=None):
+    """Return the ``(input_dict, input_flags)`` of one A/B arm.
+
+    ``extra_params`` / ``extra_flags`` are layered LAST, so a caller can pin a
+    different velocity grid or cadence, or arm the channel under test for a
+    sanity run, without either arm's shared construction moving.
+    """
     if arm == "moment":
         params, flags = build_baseline_config()
         params = dict(params)
         params.update(MOMENT_PARAM_OVERRIDES)
-        return params, dict(flags)
-    params, flags = default_config()
-    params = dict(params)
-    flags = dict(flags)
-    for space, key, value, _why in KINETIC_DVM_INCOMPATIBLE_DEFAULTS:
-        (flags if space == "flags" else params)[key] = value
-    params.update(DVM_PARAMS)
-    flags.update(DVM_FLAGS)
+        flags = dict(flags)
+    else:
+        params, flags = default_config()
+        params = dict(params)
+        flags = dict(flags)
+        for space, key, value, _why in KINETIC_DVM_INCOMPATIBLE_DEFAULTS:
+            (flags if space == "flags" else params)[key] = value
+        params.update(DVM_PARAMS)
+        flags.update(DVM_FLAGS)
+    params.update(extra_params or {})
+    flags.update(extra_flags or {})
     return params, flags
 
 
@@ -137,9 +155,9 @@ def _digest_ledger(running, flat):
         running.update(np.float64(flat[key]).tobytes())
 
 
-def capture(arm, steps):
+def capture(arm, steps, extra_params=None, extra_flags=None):
     """Return the running raw-uint64 digest of ``steps`` accepted steps."""
-    params, flags = build_arm(arm)
+    params, flags = build_arm(arm, extra_params, extra_flags)
     sim = LAPDSim1D(input_dict=params, input_flags=flags)
     running = hashlib.sha256()
     ledger_running = hashlib.sha256()
@@ -170,6 +188,17 @@ def capture(arm, steps):
             key: float(value)
             for key, value in sorted(sim._cathode_energy_ledger_J.items())
         },
+        # Presence-gated on the B4 anode jet, and read with getattr so this
+        # file still runs at a base commit that has no such book at all.
+        "anode_energy_ledger_J": {
+            key: float(value)
+            for key, value in sorted(
+                (getattr(sim, "_anode_energy_ledger_J", None) or {}).items()
+            )
+        },
+        # Non-vacuity of the walk, so a "bit-identical" verdict cannot be a
+        # statement about a window in which the arm never engaged or ticked.
+        "dvm_engaged": bool(getattr(sim, "_dvm_engaged", False)),
         "final_state_sha256": hashlib.sha256(
             np.asarray(sim._y, dtype=np.float64).tobytes()
         ).hexdigest(),
@@ -208,9 +237,11 @@ def compare(a_path, b_path):
     b = json.loads(Path(b_path).read_text())
     same = True
     for key in (
-        "arm", "steps_taken", "time_s", "cells", "dvm_ticks",
+        "arm", "steps_taken", "time_s", "cells", "dvm_ticks", "dvm_engaged",
         "digest_sha256", "final_state_sha256",
     ):
+        if key not in a or key not in b:
+            continue
         match = a[key] == b[key]
         same = same and match
         print(f"{key:26s} {'==' if match else '!='}  {a[key]}  |  {b[key]}")
@@ -221,13 +252,15 @@ def compare(a_path, b_path):
         f"  {a['dvm_ledger_sha256']}  |  {b['dvm_ledger_sha256']}"
         "   (fingerprint; the row comparison below is the statement)"
     )
-    ok, summary = _compare_rows(
-        "cathode surface energy ledger",
-        a["cathode_energy_ledger_J"],
-        b["cathode_energy_ledger_J"],
-    )
-    same = same and ok
-    print(summary)
+    for label, key in (
+        ("cathode surface energy ledger", "cathode_energy_ledger_J"),
+        ("anode surface energy ledger", "anode_energy_ledger_J"),
+    ):
+        ok, summary = _compare_rows(
+            label, a.get(key, {}), b.get(key, {})
+        )
+        same = same and ok
+        print(summary)
     if len(a["dvm_ledgers"]) != len(b["dvm_ledgers"]):
         same = False
         print(
@@ -244,18 +277,37 @@ def compare(a_path, b_path):
     return 0 if same else 1
 
 
+def _parse_extra(items):
+    """Return ``k=v`` strings as a dict, coercing the JSON-legible values."""
+    out = {}
+    for item in items or ():
+        key, _, raw = item.partition("=")
+        try:
+            out[key] = json.loads(raw)
+        except json.JSONDecodeError:
+            out[key] = raw
+    return out
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--arm", choices=("moment", "kinetic_dvm"))
     parser.add_argument("--steps", type=int, default=DEFAULT_STEPS)
     parser.add_argument("--out")
+    parser.add_argument("--extra", nargs="*", metavar="KEY=VALUE")
+    parser.add_argument("--extra-flag", nargs="*", metavar="KEY=VALUE")
     parser.add_argument("--compare", nargs=2, metavar=("A", "B"))
     args = parser.parse_args(argv)
     if args.compare:
         return compare(*args.compare)
     if not args.arm or not args.out:
         parser.error("--arm and --out are required unless --compare is given")
-    record = capture(args.arm, args.steps)
+    record = capture(
+        args.arm,
+        args.steps,
+        _parse_extra(args.extra),
+        _parse_extra(args.extra_flag),
+    )
     Path(args.out).write_text(json.dumps(record, indent=2, sort_keys=True))
     for key, value in sorted(record.items()):
         print(f"{key}: {value}")

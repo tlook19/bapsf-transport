@@ -163,7 +163,32 @@ Gates:
       row-relative cross-book catches it; both normalizations are reported
   CJ4 the DVM cathode jet and ``cathode_jet_surface_debit`` refuse to arm
       together: two independent debits of the same R_E share
-  G1..G22 construction refusals: each unsupported configuration raises a
+  AJ1 anode jet, closed box: the counted anode stream splits into the R_N
+      energetic share and the thermal remainder summing to the handed count
+      EXACTLY, and both ledgers close. Birthing the atoms with the energy row
+      left at zero is the negative control -- the particle ledger cannot see
+      it, the energy ledger can
+  AJ2 in-solver, engaged arm, jet armed: injected == counted per tick; the
+      birth energy row is the count times the placed spectrum's discrete
+      mean; and the CUMULATIVE anode-book ``backscatter`` row equals the
+      cumulative birth energy plus what the next tick is still owed. Forming
+      the debit from a tick-time (phi_a + Ti) on the window count is the
+      negative control
+  AJ3 every channel armed: the ledger's ``birth_anode_jet`` energy row
+      against R_E times the incident energy the anode book was debited by,
+      reported BOTH row-relative and throughput-normalized, plus the
+      analytic-vs-discrete faithfulness number of the launch spectrum.
+      Launching on the 300 K cosine-wall spectrum is the negative control
+  AJ4 the two presence-gated MOMENTUM rows: ``momentum_anode_jet`` against an
+      independent rebuild of the signed sum over sides of m <v_z> count from
+      the discrete launch spectra, and ``momentum_mesh_absorbed`` against the
+      MIRROR ANTISYMMETRY of a one-sided seed reflected about the mesh face.
+      Launching both sides into +z, and tallying the mesh interception with
+      |v_z| instead of the signed v_z, are the two negative controls
+  AJ5 the DVM anode jet and the fluid ``anode_neutral_jet`` refuse to arm
+      together: two independent directed re-emissions of the same collected
+      stream (the G28 statement, called directly -- see the gate's docstring)
+  G1..G27, G29 construction refusals: each unsupported configuration raises a
       ValueError at construction naming the offender. G2 is the model-preset
       resolver's refusal half -- an explicitly-set family member the
       selection cannot carry, refused ONCE with the whole member set named
@@ -218,6 +243,7 @@ from cablp.solvers._sim1d.core.geometry import (
     is_plenum_cell,
 )
 from cablp.solvers._sim1d.core.validation import (
+    refuse_anode_backscatter_double_book,
     refuse_cathode_backscatter_double_book,
 )
 from cablp.solvers._sim1d.physics.kinetic_dvm import (
@@ -231,6 +257,7 @@ from cablp.solvers._sim1d.physics.kinetic_dvm import (
     LEDGER_ENERGY_NET_CHANNELS,
     LEDGER_EXTERNAL_BIRTHS,
     LEDGER_LOSS_CHANNELS,
+    LEDGER_MOMENTUM_DIAGNOSTICS,
     TransientDVM,
     ledger_energy_residual,
     ledger_residual,
@@ -957,12 +984,25 @@ def gate_i3():
     ] + [k for k in ("loss_pump_L", "loss_pump_R") if k not in led]
     bookkeeping = set(LEDGER_BOOKKEEPING)
     missing += [k for k in LEDGER_BOOKKEEPING if k not in led]
+    # The two MOMENTUM diagnostic rows are PRESENCE-GATED on the anode jet, so
+    # they are declared-but-optional rather than declared-and-required. This
+    # fixture arms no jet, so the statement here is the STRONGER one: neither
+    # row may be present at all. That keeps a presence-gated row from becoming
+    # a hole in the completeness gate -- an always-on row could hide behind
+    # "optional" -- while AJ4 makes the armed statement about their values.
+    momentum = set(LEDGER_MOMENTUM_DIAGNOSTICS)
+    present_momentum = sorted(momentum & set(led))
     unaccounted = [
         k
         for k in led
         if k not in bookkeeping
+        and k not in momentum
         and not k.startswith("loss_")
         and not k.startswith("birth_")
+    ]
+    unaccounted += [
+        f"{k} (presence-gated row present with no anode jet armed)"
+        for k in present_momentum
     ]
     # The nested ENERGY sub-ledger, held to the same standard: every
     # declared row present, and no row present that is not declared.
@@ -984,7 +1024,9 @@ def gate_i3():
         "I3 ledger completeness: every declared channel booked",
         ok,
         f"{len(led) - len(bookkeeping)} particle channel entries, "
-        f"{len(energy)} energy entries; "
+        f"{len(energy)} energy entries, "
+        f"{len(present_momentum)} presence-gated momentum rows (0 required "
+        "with no anode jet armed); "
         f"missing={missing or 'none'}; unaccounted={unaccounted or 'none'}",
     )
 
@@ -2445,6 +2487,64 @@ REFUSALS = (
         "cathode_coupling",
         lambda d, fl: (
             d.__setitem__("neutral_kinetic_dvm_cathode_jet", True),
+            fl.__setitem__("cathode_coupling", False),
+            None,
+        )[2],
+    ),
+    # G24-G27 and G29 are the B4 anode-side twins of G19-G23, in the same
+    # order and built the same way. The PAIR statement that would be "G28" --
+    # this channel against the fluid ``anode_neutral_jet`` -- is not here for
+    # the reason CJ4 is not here: it is unreachable through LAPDSim1D, so a
+    # gate driven that way would be testing the model-family resolver rather
+    # than the guard. It is ``gate_aj5``, which calls the guard directly.
+    (
+        "G24 DVM anode jet without the DVM arm refused",
+        dict(),
+        "neutral_kinetic_dvm_anode_jet",
+        lambda d, fl: (
+            d.__setitem__("neutral_kinetic_dvm_anode_jet", True),
+            d.__setitem__("neutral_model", "moment"),
+            off_arm(d),
+        )[2],
+    ),
+    (
+        "G25 DVM anode jet coefficients without the arm refused",
+        dict(),
+        "neutral_kinetic_dvm_anode_jet_R_N",
+        lambda d, fl: (
+            d.__setitem__("neutral_kinetic_dvm_anode_jet_R_N", 0.5),
+            d.__setitem__("neutral_model", "moment"),
+            off_arm(d),
+        )[2],
+    ),
+    (
+        "G26 DVM anode jet with R_E > R_N refused",
+        dict(),
+        "R_E",
+        lambda d, fl: (
+            d.__setitem__("neutral_kinetic_dvm_anode_jet", True),
+            d.__setitem__("neutral_kinetic_dvm_anode_jet_R_E", 0.8),
+            None,
+        )[2],
+    ),
+    (
+        "G27 DVM anode jet with a non-positive launch smear refused",
+        dict(),
+        "T_launch_eV",
+        lambda d, fl: (
+            d.__setitem__("neutral_kinetic_dvm_anode_jet", True),
+            d.__setitem__(
+                "neutral_kinetic_dvm_anode_jet_T_launch_eV", 0.0
+            ),
+            None,
+        )[2],
+    ),
+    (
+        "G29 DVM anode jet without cathode coupling refused",
+        dict(),
+        "cathode_coupling",
+        lambda d, fl: (
+            d.__setitem__("neutral_kinetic_dvm_anode_jet", True),
             fl.__setitem__("cathode_coupling", False),
             None,
         )[2],
@@ -4655,6 +4755,763 @@ def gate_cj4():
     )
 
 
+# --------------------------------- B4 anode-side energetic recycle (jet)
+
+
+#: [B4] The reflection coefficients under test. They MIRROR the fluid
+#: channel's shipped ``anode_jet_R_N`` / ``anode_jet_R_E``, which is what makes
+#: the two arms statements about the same surface (He -> Mo).
+AJ_R_N = 0.63
+AJ_R_E = 0.41
+
+#: [B4] The velocity grid these gates run on, for the reason ``CJ_NVZ`` states:
+#: a directed beam smeared onto the coarse ``(16, 6)`` axis carries more
+#: thermal energy in its narrowest resolvable spectrum than the beam has, and
+#: the engine's guard says so and RAISES. Measured on the shipped ``(48, 12)``
+#: axis the grid-tied smear leaves the margin ``e / (3/2 k T_launch)`` between
+#: 3.2 and 5.3 over ``0.005-100 eV`` -- the stretched axis makes it
+#: scale-free -- so the projection lands at machine precision at every launch
+#: energy this channel can reach.
+AJ_NVZ = 48
+AJ_NVP = 12
+
+#: [B4] Incident energy per collected ion [eV], ``phi_a + Ti``, at the mesh's
+#: LOW-z flanking cell. The high-z side is fed at half of it (``aj_feed``), so
+#: the two sides carry DIFFERENT per-atom launch energies and the aggregate
+#: identities below are not a single-cell special case.
+AJ_PHI_TI_EV = 40.0
+
+#: [B4] Counted anode collection over one tick [particles], split across the
+#: two flanking cells by ``AJ_SHARES``.
+AJ_COUNT = 5.0e16
+
+#: [B4] How ``aj_feed`` splits the counted stream across the mesh's low-z and
+#: high-z flanking cells. Deliberately unequal: an equal split would let a
+#: sign error in one direction cancel against the other.
+AJ_SHARES = (0.6, 0.4)
+
+#: [B4] Registered ceiling on the cross-book |booked - debited| / debited.
+#: The two are the same committed number by construction, so this is a
+#: roundoff budget, not a physics tolerance.
+AJ_CROSS_BOOK_REL = 1.0e-8
+
+#: [B4] Registered ceiling on the analytic-vs-discrete faithfulness number of
+#: the launch spectrum: its DISCRETE mean energy against the
+#: ``(1/2) m v_back^2`` it is built to carry. It is the convergence tolerance
+#: of the moment compensation, and a solve that misses it raises.
+AJ_MOMENT_REL = 1.0e-10
+
+#: [B4] Registered ceiling on the two MOMENTUM statements of AJ4: the row
+#: against its independent rebuild, and the mirror antisymmetry of the mesh
+#: interception. Both are the same arithmetic reached by two routes, so this
+#: is a roundoff budget.
+AJ_MOMENTUM_REL = 1.0e-12
+
+
+def aj_spec(R_N=AJ_R_N, R_E=AJ_R_E, T_launch_eV=None):
+    return {"R_N": R_N, "R_E": R_E, "T_launch_eV": T_launch_eV}
+
+
+def aj_closed_box(nz=8, jet=True, cls=None, transparency=1.0):
+    """Return the closed box of :func:`closed_box_dvm` with the anode jet armed.
+
+    Same disarmed box as :func:`cj_closed_box` -- no annulus (``Rm == Rp``), no
+    pumping, specular end walls -- with ONE addition the anode channel cannot
+    do without: a mesh face, because the launch DIRECTION is defined against
+    it. The mesh ships fully TRANSPARENT here (``transparency = 1.0``), so it
+    intercepts nothing and the box stays disarmed apart from the channel under
+    test; :func:`aj_mesh_box` is where the interception is armed.
+    """
+    builder = TransientDVM if cls is None else cls
+    dvm = builder(
+        geometry=uniform_tube(nz, Rp=15.0, Rm=15.0),
+        nvz=AJ_NVZ,
+        nvp=AJ_NVP,
+        accommodation=0.0,
+        exchange_model=EXCHANGE_MODEL,
+        s_L=0.0,
+        s_R=0.0,
+        mesh_face=nz // 2,
+        transparency=transparency,
+        anode_jet=aj_spec() if jet else None,
+    )
+    dvm.seed_from_density(np.full(nz, 1.0e13), np.zeros(nz), T_K=400.0)
+    return dvm
+
+
+def aj_feed(dvm, count=AJ_COUNT, per_ion_eV=AJ_PHI_TI_EV):
+    """Return ``(source_counts, incident_erg)`` for one counted anode tick.
+
+    Both flanking cells of the mesh face are fed, at unequal shares and at
+    unequal per-ion incident energies (the high-z side at half the low-z
+    side's), so both launch directions are live and the two sides cannot
+    cancel each other's errors.
+    """
+    face = int(dvm.mesh_face)
+    rows = {"anode": np.zeros(dvm.nz)}
+    incident = np.zeros(dvm.nz)
+    for cell, share, energy in (
+        (face - 1, AJ_SHARES[0], per_ion_eV),
+        (face, AJ_SHARES[1], 0.5 * per_ion_eV),
+    ):
+        rows["anode"][cell] = share * count
+        incident[cell] = share * count * energy * EV
+    return rows, incident
+
+
+def aj_mesh_box(nz=12, cls=None, side="low"):
+    """Return an OPAQUE-mesh column box seeded on one side of the mesh.
+
+    Column-only (``Rm == Rp``), collisionless (the caller hands
+    :func:`zero_plasma`, so ``n_i = 0`` kills CX and elastic and ``nu_ion = 0``
+    kills ionization), no external sources, specular end walls, and a mesh at
+    the centre face that stops everything reaching it
+    (``transparency = 0.0``). The only channel with any axial momentum in it is
+    therefore the mesh interception, which is what AJ4's second statement is
+    about.
+
+    ``side`` seeds the column in the cells BELOW the mesh face (``"low"``) or
+    in their exact mirror image above it (``"high"``). The box is uniform and
+    the mesh sits at its centre, so the two are reflections of one another and
+    the intercepted axial momentum must be equal and OPPOSITE.
+    """
+    face = nz // 2
+    fill = np.zeros(nz)
+    if side == "low":
+        fill[:face] = 1.0e13
+    else:
+        fill[face:] = 1.0e13
+    builder = TransientDVM if cls is None else cls
+    dvm = builder(
+        geometry=uniform_tube(nz, Rp=15.0, Rm=15.0),
+        nvz=AJ_NVZ,
+        nvp=AJ_NVP,
+        accommodation=0.0,
+        exchange_model=EXCHANGE_MODEL,
+        s_L=0.0,
+        s_R=0.0,
+        mesh_face=face,
+        transparency=0.0,
+        anode_jet=aj_spec(),
+    )
+    dvm.seed_from_density(fill, np.zeros(nz), T_K=400.0)
+    return dvm
+
+
+class _AJUnbookedEnergy(TransientDVM):
+    """Harness defect: the jet births atoms and forgets their energy row.
+
+    The AJ1 twin of :class:`_CJUnbookedEnergy`: a channel added to the
+    distribution without an entry in the energy ledger. Every particle count is
+    untouched, so the PARTICLE ledger closes exactly as it did; only the energy
+    identity sees it.
+    """
+
+    def _book_energy_ledger(self, **kwargs):
+        kwargs["e_birth_anode_jet"] = 0.0
+        return TransientDVM._book_energy_ledger(self, **kwargs)
+
+
+class _AJWallSpectrum(TransientDVM):
+    """Harness defect: the jet launches on the 300 K cosine-wall spectrum.
+
+    The B0a-class defect, anode side -- the counted particles arrive, the
+    ledger closes against itself, and the energy the anode book was debited is
+    simply not the energy the gas received.
+    """
+
+    def _anode_jet_launch_spectrum(self, e_launch, cell, direction):
+        return self.M_wall
+
+
+class _AJOneSidedLaunch(TransientDVM):
+    """Harness defect: both sides of the mesh launch into ``+z``.
+
+    The defect the SIGNED momentum row exists to catch. Every particle count,
+    every energy row and both ledger residuals are untouched -- a launch
+    spectrum's energy does not know its sign -- so only ``momentum_anode_jet``
+    sees it.
+    """
+
+    def _anode_jet_launch_spectrum(self, e_launch, cell, direction):
+        return TransientDVM._anode_jet_launch_spectrum(
+            self, e_launch, cell, 1.0
+        )
+
+
+class _AJMeshUnsignedMomentum(TransientDVM):
+    """Harness defect: the mesh tallies ``|v_z|`` instead of the signed ``v_z``.
+
+    The mirror-antisymmetry statement's negative control. The intercepted
+    COUNT and its energy are unchanged, so the ledgers close; what breaks is
+    that a mirrored pair of runs no longer cancels.
+    """
+
+    def _mesh_axial_momentum_weight(self):
+        return M_HE * np.abs(self.g.VZ)
+
+
+def gate_aj1():
+    """Anode jet, closed box: both ledgers close and the split conserves.
+
+    STATEMENT 1 of the B4 four, and the AJ twin of CJ1. In the disarmed box
+    the counted anode collection is the only external channel, so what the
+    split does is visible on its own: the ``R_N`` share becomes a directed
+    energetic volume birth on the side it was collected from and the remainder
+    the thermal ``M_wall`` rebirth, the two counts sum to the handed count
+    EXACTLY, and both the particle and the energy ledger close at the tolerance
+    I1/I2/I6 hold the arm to.
+
+    Non-vacuity is asserted rather than assumed: the jet's energy row must
+    carry a real share of the tick's energy throughput, or the identity under
+    test is 0 == 0.
+
+    NEGATIVE CONTROL: birth the same atoms and book their energy row at zero
+    (:class:`_AJUnbookedEnergy`). The particle ledger closes to the same
+    roundoff and the ENERGY distribution residual goes to order one, so the
+    control fails at THIS statement.
+    """
+    nz = 8
+    worst_part = 0.0
+    worst_ener = 0.0
+    worst_split = 0.0
+    live = float("inf")
+    dvm = aj_closed_box(nz)
+    plasma = geometry_plasma(nz)
+    for _ in range(5):
+        rows, incident = aj_feed(dvm)
+        led = dvm.update(
+            CADENCE_S,
+            source_counts=rows,
+            anode_jet_incident_erg=incident,
+            **plasma,
+        )
+        p = ledger_residual(led)
+        e = ledger_energy_residual(led)
+        worst_part = max(
+            worst_part, abs(p["distribution_rel"]), abs(p["domain_rel"])
+        )
+        worst_ener = max(
+            worst_ener, abs(e["distribution_rel"]), abs(e["domain_rel"])
+        )
+        split = led["birth_anode_jet"] + led["birth_anode"]
+        worst_split = max(worst_split, abs(split - AJ_COUNT) / AJ_COUNT)
+        live = min(
+            live, abs(led["energy"]["birth_anode_jet"]) / e["scale"]
+        )
+
+    control = aj_closed_box(nz, cls=_AJUnbookedEnergy)
+    control_part = 0.0
+    control_ener = 0.0
+    for _ in range(5):
+        rows, incident = aj_feed(control)
+        led = control.update(
+            CADENCE_S,
+            source_counts=rows,
+            anode_jet_incident_erg=incident,
+            **plasma,
+        )
+        control_part = max(
+            control_part, abs(ledger_residual(led)["distribution_rel"])
+        )
+        control_ener = max(
+            control_ener,
+            abs(ledger_energy_residual(led)["distribution_rel"]),
+        )
+
+    ok = (
+        worst_part < ROUNDOFF_REL
+        and worst_ener < ROUNDOFF_REL
+        and worst_split < ROUNDOFF_REL
+        and live > 1.0e-6
+        and control_part < ROUNDOFF_REL
+        and control_ener > 1.0e-3
+    )
+    return (
+        "AJ1 anode jet, closed box: particle and energy ledgers close, the "
+        "anode split conserves the counted stream",
+        ok,
+        f"5 ticks at {fmt(AJ_COUNT)} counted particles across both flanking "
+        f"cells ({AJ_SHARES[0]} / {AJ_SHARES[1]}), {AJ_PHI_TI_EV} / "
+        f"{0.5 * AJ_PHI_TI_EV} eV incident per ion, R_N={AJ_R_N} "
+        f"R_E={AJ_R_E}: worst particle residual {fmt(worst_part)}, worst "
+        f"energy residual {fmt(worst_ener)}, |jet + thermal - handed| / "
+        f"handed {fmt(worst_split)} (tol {fmt(ROUNDOFF_REL)}); jet share of "
+        f"the energy throughput {fmt(live)} (> 1e-6 required)\n        "
+        f"NEGATIVE CONTROL (birth the atoms, book their energy row at zero): "
+        f"particle residual {fmt(control_part)} -- unchanged, as the defect "
+        f"moves no particle -- and energy distribution residual "
+        f"{fmt(control_ener)}, which is the statement failing"
+    )
+
+
+def gate_aj2():
+    """In-solver: one committed pair feeds both the birth and the anode book.
+
+    STATEMENT 2 of the B4 four. On the engaged arm with the anode jet armed,
+    per tick and cumulatively over the window:
+
+    * every counted anode particle is injected -- ``birth_anode_jet +
+      birth_anode`` equals the count the tick was handed;
+    * the birth's ENERGY row is the count times the discrete mean of the
+      spectra that were placed, re-derived here from the ledger rather than
+      read back from the engine. Summed over the two sides that is
+      ``(R_E/R_N) * (incident / count)`` per atom exactly, whatever the two
+      sides' individual launch energies are;
+    * the CUMULATIVE anode-book ``backscatter`` row -- booked per ACCEPTED
+      step -- equals the cumulative ``birth_anode_jet`` energy the ticks
+      handed the gas, plus ``R_E`` times the accumulator the next tick has not
+      yet been given.
+
+    NEGATIVE CONTROL: form the same debit from a TICK-TIME reading applied to
+    the whole window's count -- the sampling the stage-weighted accumulator
+    exists to avoid.
+    """
+    sim = make_sim(
+        nx=24,
+        neutral_kinetic_dvm_anode_jet=True,
+        neutral_kinetic_dvm_nvz=AJ_NVZ,
+        neutral_kinetic_dvm_nvp=AJ_NVP,
+    )
+    handed = []
+    update = TransientDVM.update
+
+    def spy_update(self, dt, **kwargs):
+        rows = (kwargs.get("source_counts") or {}).get("anode")
+        incident = kwargs.get("anode_jet_incident_erg")
+        record = {
+            "count": float(np.sum(rows)) if rows is not None else 0.0,
+            "incident": (
+                float(np.sum(incident)) if incident is not None else 0.0
+            ),
+            "phi_ti_tick_eV": float(
+                np.max(np.asarray(kwargs["Ti_eV"], dtype=float))
+            ),
+        }
+        led = update(self, dt, **kwargs)
+        record["led"] = dict(led)
+        handed.append(record)
+        return led
+
+    TransientDVM.update = spy_update
+    try:
+        run_until_updates(sim, 4)
+        # A few more accepted steps, so the window ends BETWEEN ticks and the
+        # "what the next tick is still owed" term is non-zero rather than
+        # trivially satisfied.
+        for _ in range(5):
+            advance_one_step(sim)
+    finally:
+        TransientDVM.update = update
+
+    worst_count = 0.0
+    worst_row = 0.0
+    births = 0.0
+    for rec in handed:
+        led = rec["led"]
+        injected = led["birth_anode_jet"] + led["birth_anode"]
+        worst_count = max(
+            worst_count,
+            abs(injected - rec["count"]) / max(rec["count"], 1e-300),
+        )
+        row = led["energy"]["birth_anode_jet"]
+        births += row
+        if led["birth_anode_jet"] > 0.0:
+            per_atom = row / led["birth_anode_jet"]
+            target = (AJ_R_E / AJ_R_N) * rec["incident"] / rec["count"]
+            worst_row = max(worst_row, abs(per_atom - target) / target)
+
+    debited_erg = sim._anode_energy_ledger_J["backscatter"] * 1.0e7
+    incident_erg = sim._anode_energy_ledger_J["ion_incident"] * 1.0e7
+    outstanding = AJ_R_E * float(np.sum(sim._dvm_anode_jet_energy_booked))
+    identity = abs(debited_erg - (births + outstanding)) / max(
+        births + outstanding, 1e-300
+    )
+    # The book's own internal statement: the backscatter row is exactly R_E of
+    # the incident row, so "the anode absorbs 1 - R_E" is a subtraction of two
+    # measured rows rather than a remembered convention.
+    share = (
+        abs(debited_erg - AJ_R_E * incident_erg)
+        / max(AJ_R_E * incident_erg, 1e-300)
+    )
+
+    control_debit = sum(
+        AJ_R_E * rec["count"] * rec["phi_ti_tick_eV"] * EV for rec in handed
+    )
+    control_rel = abs(control_debit - births) / max(births, 1e-300)
+
+    ok = (
+        len(handed) >= 4
+        and births > 0.0
+        and outstanding > 0.0
+        and worst_count < ROUNDOFF_REL
+        and worst_row < AJ_CROSS_BOOK_REL
+        and identity < ROUNDOFF_REL
+        and share < ROUNDOFF_REL
+        and control_rel > 1.0e-3
+    )
+    return (
+        "AJ2 in-solver anode jet: injected == counted, and the cumulative "
+        "anode-book debit == the cumulative birth energy + what is still owed",
+        ok,
+        f"{len(handed)} ticks, {fmt(births)} erg of backscatter born; "
+        f"worst |injected - counted| / counted {fmt(worst_count)} "
+        f"(tol {fmt(ROUNDOFF_REL)}); worst per-atom launch energy against "
+        f"(R_E/R_N)(phi_a + Ti) {fmt(worst_row)} "
+        f"(tol {fmt(AJ_CROSS_BOOK_REL)})\n        "
+        f"anode ledger backscatter row {fmt(debited_erg)} erg vs births "
+        f"{fmt(births)} + outstanding {fmt(outstanding)} erg: relative "
+        f"{fmt(identity)} (tol {fmt(ROUNDOFF_REL)}); ion_incident row "
+        f"{fmt(incident_erg)} erg, backscatter / (R_E ion_incident) - 1 = "
+        f"{fmt(share)}\n        "
+        f"NEGATIVE CONTROL (tick-time (phi_a + Ti) on the window count): "
+        f"debit {fmt(control_debit)} erg, {fmt(control_rel)} relative from "
+        f"the counted one -- the sampling error the stage accumulator removes"
+    )
+
+
+def gate_aj3():
+    """Every channel armed: the gas receives what the anode book was debited.
+
+    STATEMENT 3 of the B4 four, and the one the B0a standing lesson makes
+    binding: a backscatter launched at the WRONG energy moves exactly the right
+    number of particles, so statements 1 and 2 close to the same roundoff
+    whether the spectrum is right or wrong. Only a cross-book between the two
+    ledgers sees it.
+
+    With the cylindrical wall, an intercepting anode mesh, pumping at both
+    ends, a puff, volume recombination and both recycle faces all live at once,
+    and once per annulus treatment:
+
+    * ``count * <E>_spectrum`` -- the ledger's ``birth_anode_jet`` energy row
+      -- against ``R_E`` times the incident energy the anode book was debited
+      by, at ``AJ_CROSS_BOOK_REL``;
+    * the analytic-vs-discrete faithfulness number: the same spectrum's
+      discrete mean energy against the ``(1/2) m v_back^2`` it is built to
+      carry, at ``AJ_MOMENT_REL``, in BOTH launch directions.
+
+    NEGATIVE CONTROL: launch the same counted atoms on the 300 K cosine-wall
+    spectrum (:class:`_AJWallSpectrum`). BOTH normalizations are reported,
+    because which one a gate reads decides what it can catch: the ROW-RELATIVE
+    form is what this gate tests, and the THROUGHPUT-NORMALIZED form is the one
+    a ledger-residual gate would have seen.
+    """
+    nz = 12
+    results = {}
+    for flights in ("rates", "bounded_chord"):
+        for wrong in (False, True):
+            cls = _AJWallSpectrum if wrong else TransientDVM
+            dvm = cls(
+                geometry=uniform_tube(nz),
+                nvz=AJ_NVZ,
+                nvp=AJ_NVP,
+                s_L=0.3,
+                s_R=0.3,
+                accommodation=0.4,
+                exchange_model=EXCHANGE_MODEL,
+                annulus_flights=flights,
+                mesh_face=nz // 2,
+                transparency=0.642,
+                anode_jet=aj_spec(),
+            )
+            dvm.seed_from_density(np.full(nz, 1.0e13), np.full(nz, 1.0e13))
+            sources = {
+                "recombination": np.full(nz, 1.0e15),
+                "puff": np.zeros(nz),
+                "cathode_face": np.zeros(nz),
+                "collector_face": np.zeros(nz),
+            }
+            sources["puff"][3] = 3.0e17
+            sources["cathode_face"][0] = 2.0e16
+            sources["collector_face"][-1] = 4.0e16
+            plasma = geometry_plasma(nz)
+            cross = 0.0
+            moment = 0.0
+            throughput = 0.0
+            resid = 0.0
+            for _ in range(4):
+                rows, incident = aj_feed(dvm)
+                led = dvm.update(
+                    CADENCE_S,
+                    sources=sources,
+                    source_counts=rows,
+                    anode_jet_incident_erg=incident,
+                    **plasma,
+                )
+                row = led["energy"]["birth_anode_jet"]
+                debited = AJ_R_E * float(np.sum(incident))
+                cross = max(cross, abs(row - debited) / debited)
+                e = ledger_energy_residual(led)
+                throughput = max(
+                    throughput, abs(row - debited) / e["scale"]
+                )
+                resid = max(
+                    resid,
+                    abs(e["distribution_rel"]),
+                    abs(e["domain_rel"]),
+                )
+                # The faithfulness number, rebuilt independently of the
+                # engine's own booking, in BOTH launch directions.
+                for direction, per_ion in (
+                    (-1.0, AJ_PHI_TI_EV), (1.0, 0.5 * AJ_PHI_TI_EV)
+                ):
+                    e_launch = (AJ_R_E / AJ_R_N) * per_ion * EV
+                    spec = TransientDVM._anode_jet_launch_spectrum(
+                        dvm, e_launch, int(dvm.mesh_face), direction
+                    )
+                    got = 0.5 * M_HE * float((spec * dvm.g.V2).sum())
+                    moment = max(moment, abs(got - e_launch) / e_launch)
+            results[(flights, wrong)] = (cross, moment, throughput, resid)
+
+    good = [results[(f, False)] for f in ("rates", "bounded_chord")]
+    bad = [results[(f, True)] for f in ("rates", "bounded_chord")]
+    ok = (
+        all(c < AJ_CROSS_BOOK_REL for c, _m, _t, _r in good)
+        and all(m < AJ_MOMENT_REL for _c, m, _t, _r in good)
+        and all(r < ROUNDOFF_REL for _c, _m, _t, r in good)
+        and all(c > 0.5 for c, _m, _t, _r in bad)
+        and all(r < ROUNDOFF_REL for _c, _m, _t, r in bad)
+    )
+    detail = (
+        f"4 ticks per arm, every channel armed, {AJ_PHI_TI_EV} / "
+        f"{0.5 * AJ_PHI_TI_EV} eV incident per ion (launch "
+        f"{(AJ_R_E / AJ_R_N) * AJ_PHI_TI_EV:.4g} / "
+        f"{(AJ_R_E / AJ_R_N) * 0.5 * AJ_PHI_TI_EV:.4g} eV per atom)"
+    )
+    for flights in ("rates", "bounded_chord"):
+        c, m, _t, r = results[(flights, False)]
+        detail += (
+            f"\n        {flights}: cross-book |row - R_E E_incident| / "
+            f"(R_E E_incident) {fmt(c)} (tol {fmt(AJ_CROSS_BOOK_REL)}); "
+            f"analytic-vs-discrete launch energy {fmt(m)} "
+            f"(tol {fmt(AJ_MOMENT_REL)}); energy-ledger residual {fmt(r)}"
+        )
+    for flights in ("rates", "bounded_chord"):
+        c, _m, t, r = results[(flights, True)]
+        detail += (
+            f"\n        NEGATIVE CONTROL [{flights}] (launch on the 300 K "
+            f"cosine-wall spectrum): row-relative {fmt(c)} -- detected -- "
+            f"while throughput-normalized it is {fmt(t)} and the energy "
+            f"ledger still closes at {fmt(r)}, so only the row-relative "
+            f"cross-book catches it"
+        )
+    return (
+        "AJ3 anode jet, every channel armed: the booked launch energy IS the "
+        "debited anode-book energy",
+        ok,
+        detail,
+    )
+
+
+def gate_aj4():
+    """The two presence-gated momentum rows measure what they claim to.
+
+    STATEMENT 4 of the B4 four -- the plan's "launch momentum booked against
+    the surface / wire-intercepted momentum on the structure", made
+    MEASURABLE. Two rows, two independent statements:
+
+    ``momentum_anode_jet`` is rebuilt from the discrete launch spectra: for
+    each fed cell, ``m * <v_z>_spectrum * count`` with the direction the cell's
+    side implies, summed. The two sides launch AWAY from the mesh, so the
+    signed sum is a difference of two positive magnitudes and a dropped or
+    mis-signed side cannot hide in it. NEGATIVE CONTROL
+    (:class:`_AJOneSidedLaunch`): launch both sides into ``+z``. Not one
+    particle count, energy row or ledger residual moves -- a spectrum's energy
+    does not know its sign -- and only this row sees it.
+
+    ``momentum_mesh_absorbed`` is held to MIRROR ANTISYMMETRY, which needs no
+    second implementation of the tally: a uniform collisionless column box with
+    an opaque mesh at its centre, seeded only below the mesh, and the same box
+    seeded in the exact mirror image above it. The atoms reaching the mesh in
+    the first carry ``+z`` momentum and in the second ``-z``, in equal
+    magnitude, so the two rows must sum to zero. Non-vacuity is asserted: the
+    mesh must actually have intercepted particles. NEGATIVE CONTROL
+    (:class:`_AJMeshUnsignedMomentum`): tally ``|v_z|`` instead of the signed
+    ``v_z`` -- the intercepted COUNT and its energy are untouched, both ledgers
+    close, and the mirrored pair stops cancelling.
+
+    The transparent-mesh box of AJ1 is checked too: a mesh that intercepts
+    nothing absorbs exactly zero momentum.
+    """
+    nz = 8
+    dvm = aj_closed_box(nz)
+    plasma = geometry_plasma(nz)
+    worst_launch = 0.0
+    worst_transparent = 0.0
+    launched = 0.0
+    for _ in range(3):
+        rows, incident = aj_feed(dvm)
+        led = dvm.update(
+            CADENCE_S,
+            source_counts=rows,
+            anode_jet_incident_erg=incident,
+            **plasma,
+        )
+        expected = 0.0
+        for cell in np.flatnonzero(rows["anode"]):
+            count = AJ_R_N * float(rows["anode"][cell])
+            e_launch = AJ_R_E * float(incident[cell]) / count
+            direction = -1.0 if int(cell) < int(dvm.mesh_face) else 1.0
+            spec = TransientDVM._anode_jet_launch_spectrum(
+                dvm, e_launch, int(cell), direction
+            )
+            expected += count * M_HE * float((spec * dvm.g.VZ).sum())
+        got = led["momentum_anode_jet"]
+        launched = max(launched, abs(expected))
+        worst_launch = max(
+            worst_launch, abs(got - expected) / max(abs(expected), 1e-300)
+        )
+        worst_transparent = max(
+            worst_transparent, abs(led["momentum_mesh_absorbed"])
+        )
+
+    control = aj_closed_box(nz, cls=_AJOneSidedLaunch)
+    control_launch = 0.0
+    control_counts = True
+    for _ in range(3):
+        rows, incident = aj_feed(control)
+        led = control.update(
+            CADENCE_S,
+            source_counts=rows,
+            anode_jet_incident_erg=incident,
+            **plasma,
+        )
+        expected = 0.0
+        for cell in np.flatnonzero(rows["anode"]):
+            count = AJ_R_N * float(rows["anode"][cell])
+            e_launch = AJ_R_E * float(incident[cell]) / count
+            direction = -1.0 if int(cell) < int(control.mesh_face) else 1.0
+            spec = TransientDVM._anode_jet_launch_spectrum(
+                control, e_launch, int(cell), direction
+            )
+            expected += count * M_HE * float((spec * control.g.VZ).sum())
+        control_launch = max(
+            control_launch,
+            abs(led["momentum_anode_jet"] - expected)
+            / max(abs(expected), 1e-300),
+        )
+        control_counts = control_counts and (
+            abs(led["birth_anode_jet"] - AJ_R_N * AJ_COUNT)
+            <= ROUNDOFF_REL * AJ_R_N * AJ_COUNT
+        )
+
+    # --- the mesh row: mirror antisymmetry of a one-sided seed
+    def mesh_pair(cls=None):
+        rows = []
+        for side in ("low", "high"):
+            box = aj_mesh_box(cls=cls, side=side)
+            zero = np.zeros(box.nz)
+            led = box.update(
+                CADENCE_S,
+                source_counts={"anode": zero.copy()},
+                anode_jet_incident_erg=zero.copy(),
+                **zero_plasma(box),
+            )
+            rows.append(
+                (
+                    led["momentum_mesh_absorbed"],
+                    led["loss_mesh_blocked"],
+                    ledger_residual(led),
+                    ledger_energy_residual(led),
+                )
+            )
+        return rows
+
+    (p_low, n_low, r_low, e_low), (p_high, n_high, r_high, e_high) = mesh_pair()
+    scale = max(abs(p_low), abs(p_high), 1e-300)
+    mirror = abs(p_low + p_high) / scale
+    (c_low, _cn_low, _cr_low, _ce_low), (c_high, _cn_high, _cr_high, _ce_high) = (
+        mesh_pair(cls=_AJMeshUnsignedMomentum)
+    )
+    control_mirror = abs(c_low + c_high) / max(abs(c_low), abs(c_high), 1e-300)
+
+    ok = (
+        launched > 0.0
+        and worst_launch < AJ_MOMENTUM_REL
+        and worst_transparent == 0.0
+        and control_counts
+        and control_launch > 0.5
+        and n_low > 0.0
+        and n_high > 0.0
+        and p_low > 0.0
+        and p_high < 0.0
+        and mirror < AJ_MOMENTUM_REL
+        and abs(r_low["distribution_rel"]) < ROUNDOFF_REL
+        and abs(e_low["distribution_rel"]) < ROUNDOFF_REL
+        and control_mirror > 0.5
+    )
+    return (
+        "AJ4 the anode jet's two momentum rows: the launched momentum is the "
+        "signed sum of the placed spectra, the mesh absorbs the intercepted "
+        "axial momentum",
+        ok,
+        f"3 ticks, {fmt(launched)} g cm/s launched: worst "
+        f"|row - rebuilt| / |rebuilt| {fmt(worst_launch)} "
+        f"(tol {fmt(AJ_MOMENTUM_REL)}); transparent mesh absorbs "
+        f"{fmt(worst_transparent)} (exactly 0 required)\n        "
+        f"NEGATIVE CONTROL (both sides launch +z): the birth count is "
+        f"unchanged ({control_counts}) and the row is {fmt(control_launch)} "
+        f"relative from the signed rebuild -- only this row sees it\n        "
+        f"mesh mirror pair: low-seed {fmt(p_low)} g cm/s over "
+        f"{fmt(n_low)} intercepted particles, high-seed {fmt(p_high)} over "
+        f"{fmt(n_high)}; |sum| / |each| {fmt(mirror)} "
+        f"(tol {fmt(AJ_MOMENTUM_REL)}); particle residual "
+        f"{fmt(abs(r_low['distribution_rel']))}, energy residual "
+        f"{fmt(abs(e_low['distribution_rel']))}\n        "
+        f"NEGATIVE CONTROL (mesh tallies |v_z|): mirror sum "
+        f"{fmt(control_mirror)} relative -- the pair stops cancelling"
+    )
+
+
+def gate_aj5():
+    """The two anode backscatter re-emissions cannot be armed together.
+
+    The G28 pairing statement, tested as its own statement rather than through
+    the model-family resolver -- exactly as CJ4 is, and for the same measured
+    reason. ``anode_neutral_jet`` is its own member of
+    ``KINETIC_DVM_INCOMPATIBLE_DEFAULTS`` with required value ``False``, and
+    the resolver runs before the guards: a config that leaves it alone has it
+    CLEARED before this guard is asked, and a config that sets it ``True``
+    is refused by the RESOLVER, naming the whole member set. Either way a
+    refusal gate driven through ``LAPDSim1D`` would be testing the resolver.
+    The guard is called directly instead, on the pair and on each half alone,
+    so it stays a live statement about the PAIR if that resolver membership is
+    ever relaxed.
+    """
+    both = {
+        "neutral_kinetic_dvm_anode_jet": True,
+        "anode_neutral_jet": True,
+    }
+    singles = (
+        {"neutral_kinetic_dvm_anode_jet": True},
+        {"anode_neutral_jet": True},
+        {},
+    )
+    raised = ""
+    try:
+        refuse_anode_backscatter_double_book(both)
+    except ValueError as exc:
+        raised = str(exc)
+    quiet = True
+    for single in singles:
+        try:
+            refuse_anode_backscatter_double_book(single)
+        except ValueError:
+            quiet = False
+    names = (
+        "neutral_kinetic_dvm_anode_jet" in raised
+        and "anode_neutral_jet" in raised
+    )
+    ok = bool(raised) and names and quiet
+    return (
+        "AJ5 [G28] the DVM anode jet and the fluid anode_neutral_jet refuse "
+        "to arm together (both re-emit the same collected stream directed)",
+        ok,
+        f"pair refused naming both keys: {names}; each half alone and the "
+        f"empty config raise nothing: {quiet}; message: {raised[:96]!r}",
+    )
+
+
 # ------------------------------------------------------------------ main
 
 
@@ -4673,7 +5530,8 @@ CONSERVATION_GATES = ("gate_i1", "gate_i2", "gate_i4", "gate_i5",
                       "gate_b1", "gate_b3",
                       "gate_cf1", "gate_cf3",
                       "gate_wr1", "gate_wr3",
-                      "gate_cj1", "gate_cj3")
+                      "gate_cj1", "gate_cj3",
+                      "gate_aj1", "gate_aj3", "gate_aj4")
 
 
 def main():
@@ -4718,6 +5576,11 @@ def main():
         gate_cj2,
         gate_cj3,
         gate_cj4,
+        gate_aj1,
+        gate_aj2,
+        gate_aj3,
+        gate_aj4,
+        gate_aj5,
         gate_x1,
     ]
     gates += [
