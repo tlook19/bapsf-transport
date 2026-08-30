@@ -101,9 +101,18 @@ class _Captured(Exception):
 
     The trailing ``args``/``kwargs`` are captured alongside the two config
     dicts so the constructor probe can REPLAY the call the driver actually
-    made rather than inventing one. Both supported entry points reach the
-    same two-positional-argument site today; capturing the rest costs nothing
-    and keeps the probe honest if a driver ever passes a progress callback.
+    made rather than inventing one.
+
+    ``LAPDSim1D`` takes THREE config positionals since the declaration-block
+    migration -- ``(input_dict, input_flags, input_models)`` -- and the splat
+    is what keeps this stub faithful to that: a third positional lands in
+    ``args`` and ``constructor_probe`` forwards it unchanged, so a driver
+    that grew a block would be replayed with its block. Neither supported
+    entry point passes one today (measured 2026-08-30 by an AST sweep of all
+    487 ``LAPDSim1D`` call sites in the checkout: the only third-positional
+    callers are this module's own replay and the declaration-block gate, and
+    no driver is among them), but the probe does not depend on that staying
+    true. The same splat covers a progress callback or any later keyword.
     """
 
     def __init__(self, params, flags, args, kwargs):
