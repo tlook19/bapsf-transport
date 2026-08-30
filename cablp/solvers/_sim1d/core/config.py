@@ -1205,7 +1205,7 @@ def model_mode_defaults():
         "neutral_kinetic_dvm_nvz": 48,
         "neutral_kinetic_dvm_nvp": 12,
         "neutral_kinetic_dvm_accommodation": 0.40,
-        "neutral_kinetic_dvm_wall_reflection": "specular",
+        "neutral_kinetic_dvm_wall_reflection": "diffuse_elastic",
         "neutral_kinetic_dvm_elastic": "phelps_iso",
         "neutral_kinetic_dvm_exchange": "cauchy_chord",
         "neutral_kinetic_dvm_annulus_flights": "rates",

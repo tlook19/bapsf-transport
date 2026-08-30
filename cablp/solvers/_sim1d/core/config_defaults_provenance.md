@@ -664,12 +664,13 @@ value moves.
 Never a fit parameter: it is a surface property and is not to be adjusted to
 move a residual. Where data cannot pin it, the bracket over it is the claim.
 
-**`neutral_kinetic_dvm_wall_reflection = "specular"` — ASSUMED (structural:
-a closure family, not a value).** The spectrum the non-accommodated
-`(1 - alpha_E)` share is returned on at the cylindrical wall. This is not a
-number that could be measured and rounded; it is a choice of which limiting
-kernel stands in for a real surface's angular response, and the honest object
-is the FAMILY, not the default.
+**`neutral_kinetic_dvm_wall_reflection = "diffuse_elastic"` — the SELECTOR is
+structural (a closure family, not a value); the CHOICE of default is DERIVED
+on measured endpoints.** The spectrum the non-accommodated `(1 - alpha_E)`
+share is returned on at the cylindrical wall. Which kernel stands in for a
+real surface's angular response is not a number that could be measured and
+rounded, so the honest object remains the FAMILY — but which arm the package
+SHIPS is now a literature-grounded choice rather than a placeholder.
 
 The two shipped values BRACKET the tangential-momentum accommodation
 coefficient. `"specular"` returns the share in its incident bin — on the
@@ -680,20 +681,52 @@ nothing it did not also accommodate. `"diffuse_elastic"` returns the same
 count on a cosine spectrum whose discrete mean energy equals the retained
 share's own incident mean energy, carrying zero net axial momentum: TMAC = 1,
 the ceiling, the surface randomizing direction while exchanging no energy.
-Real technical surfaces lie between, so **TMAC ∈ [`alpha_E`, 1] is the
+Real technical surfaces lie between, so **TMAC ∈ [`alpha_E`, 1] remains the
 bracket and the bracket is the claim** — a result under this arm states which
 value it ran.
 
-Honest bar: the default is the FLOOR of that bracket, not its centre, and it
-is a placeholder rather than an adjudicated choice. It is **under active
-literature verification as of 2026-08-30** (TMAC for helium on technical
-stainless), and the ruling that opened this adoption explicitly held the
-default at `"specular"` pending that verification. Until it lands, do not
-read the default as a statement about the surface — run the pair.
+**Why the default sits at the ceiling: TMAC box `[0.85, 1.0]`, central
+`0.90-0.95` — DERIVED on measured endpoints.** Memo:
+`reference/HE_TMAC_STAINLESS_VERIFICATION_2026-08-30.md` (docs repo). The
+verification is for helium on TECHNICAL (air-exposed, as-is) stainless, which
+is the vessel's actual surface: a primary full-text SUS304 measurement gives
+`alpha_t` 0.89-0.955 with negligible gas dependence, and a helium survey
+means 0.92 ± 0.02, with helium at the TOP of multi-gas steel orderings rather
+than the low-TMAC outlier it is on atomically-clean UHV surfaces. The implied
+specular fraction on as-is SUS304 is only 0.05-0.11.
+
+**`"specular"` is retained as the disclosed bracket endpoint, and it is
+labelled NON-PHYSICAL for air-exposed technical stainless.** It stays
+reachable, and results may still run it — as the endpoint of a declared
+bracket, never as a candidate description of this surface. The same
+literature states explicitly that a single-`alpha` Maxwell kernel cannot
+represent engineering SUS304, which is a direct endorsement of the
+diffuse-elastic structure rather than merely of its numerical value.
+
+*Independent confirmation riding the same measurement:* that surface class
+also measures He `alpha_E = 0.36-0.41` on 304 SS, re-confirming the
+`0.40` `[0.35, 0.46]` box of `neutral_kinetic_dvm_accommodation` above from a
+separate lineage.
+
+*Disclosed residual:* plasma-conditioned walls trend toward the clean limit
+(`alpha_E` 0.40 → 0.32 after an in-situ Ar clean). That is a shave-below-floor
+hazard only if a plasma-cleaned-wall argument is ever made; none is made here.
+
+**COST DISCLOSURE.** The physical arm is not free: `"diffuse_elastic"` costs
+roughly **4x `"specular"` per tick** at the shipped grid, because the return
+spectrum is a bracketed bisection solved per cell rather than a bin copy.
+Cost-bound INSTRUMENT arms may therefore declare `"specular"` explicitly and
+disclose it; that is a declared numerical-bracket endpoint, and a result which
+runs it says so.
 
 Structurally inert until it can matter: the two values degenerate at
 `alpha_E = 1`, where there is no share to place, so on every run before the
-accommodation adoption above this selector was a no-op by construction.
+accommodation adoption above this selector was a no-op by construction. The
+default was carried at `"specular"` until this adoption — a placeholder held
+at the bracket FLOOR pending exactly the verification now cited, and inert on
+every run that predates the `alpha_E` move. Both events land in the same
+week and neither is readable without the other: the selector only began
+placing 60 % of every wall encounter when `alpha_E` left 1.0.
 
 **`neutral_kinetic_dvm_cathode_jet = False` — ASSUMED (structural: a
 default-off channel).** Whether the transient DVM splits the counted cathode
