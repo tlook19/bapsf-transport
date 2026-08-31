@@ -5,8 +5,10 @@ EMF-work operator from a SAVED sim1d trajectory. It reads only the HDF5 file --
 no solver construction, no new solver code -- so it can be run against an
 artifact captured at any commit, including one that predates the operator's
 implementation. That is what makes it usable as the base-side measurement of
-the pre-registered pins (AGENTS.md, "Measure pre-registered pins at BASE before
-gating on them"): the pins are properties of a saved state and of the consult's
+the pre-registered pins (the standing rule adopted 2026-08-30 (Tom): measure
+pre-registered pins at BASE before gating on them, because a pin that is
+already false at the unmodified base gates nothing): the pins are properties
+of a saved state and of the consult's
 own algebra, not of the new code, so they are measurable before a line of the
 operator exists.
 

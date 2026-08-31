@@ -155,7 +155,7 @@ def route_ka1c():
 
     Every member of ``KINETIC_DVM_INCOMPATIBLE_DEFAULTS`` is named in ITS OWN
     namespace -- ``--extra`` for params, ``--extra-flag`` for flags -- which is
-    the save-gate-probe discipline (AGENTS.md, adopted 2026-08-28) written out.
+    the save-gate-probe discipline (adopted 2026-08-28 (Tom)) written out.
     """
     argv = list(_M6_BASE) + ["--extra", "neutral_model=kinetic_dvm"]
     params = [

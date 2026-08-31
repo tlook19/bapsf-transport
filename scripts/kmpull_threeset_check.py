@@ -1,7 +1,7 @@
 """Three-set verification of the shipped He e-n momentum-transfer nodes
-against the LXCat TXT pull of record of 2026-08-13
-(``~/bapsf/docs/data/lxcat_He_mt_threeset_2026-08-13.txt``:
-Biagi + IST-Lisbon + Morgan, He ELASTIC momentum transfer each).
+against the LXCat TXT pull of record of 2026-08-13 (an archived LXCat TXT
+download held outside this repo, carrying Biagi + IST-Lisbon + Morgan, He
+ELASTIC momentum transfer each; the nodes it pins are shipped below).
 
 This is the pull OF RECORD (standard LXCat TXT format; supersedes the
 XML pull checked in kmpull_biagi_check.py, whose own header flagged the

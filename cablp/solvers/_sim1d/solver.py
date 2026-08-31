@@ -302,7 +302,7 @@ _NEUTRAL_ENERGY_TERM_BOOKING = {
     "gas_puff_local_ionization": "local",
     # --- surface sources: recycled plasma leaves the surface at T_wall ---
     # ``boundary_absorption`` is a permanently-zero row kept for saved-ledger
-    # schema stability (retired 2026-08-31, Tom); its entry stays so the table
+    # schema stability (retired 2026-08-31 (Tom)); its entry stays so the table
     # still covers every row the ledger emits.
     "boundary_absorption": "wall",
     "characteristic_boundary": "wall",
