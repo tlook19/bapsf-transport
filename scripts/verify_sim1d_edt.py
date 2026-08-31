@@ -487,11 +487,21 @@ def gate5(report):
 def gate11(report, steps):
     """Arming the operator leaves the beam bypass, and every other row, alone.
 
-    Evaluated at ONE identical state, because two RUNS diverge the moment the
-    operator books anything and could never be compared row by row. Both sims
-    are freshly constructed from the same configuration bar the flag, and both
-    are handed the same packed state and the same time, so their cathode solves
-    see identical inputs and the comparison is of the RHS assembly alone.
+    Evaluated on ONE sim at ONE state, by toggling its presence gate.
+
+    Two RUNS diverge the moment the operator books anything, so they could
+    never be compared row by row. Two freshly-built sims handed the same packed
+    state do not work either, and the reason is worth recording: the drive
+    phase is carried by TRIGGER STATE, not by the ``time`` argument, so a sim
+    that has never stepped is still pre-drive and books no beam at all -- an
+    earlier form of this gate compared two zeros and passed vacuously.
+
+    So the sim is advanced into the driven phase once, and its resolved
+    ``_electron_drift`` record -- the presence gate the whole operator hangs
+    off, and a single attribute by design -- is toggled between two evaluations
+    of the same state. Everything else (circuit lag, phase triggers, cathode
+    solve inputs, ``y``, ``t``) is then identical by construction rather than
+    by argument passing, and the comparison is of the RHS assembly alone.
     """
     params, flags = _armed_golden("cell_1", "sheath_row_closes_all")
     live = LAPDSim1D(input_dict=params, input_flags=flags)
@@ -500,11 +510,19 @@ def gate11(report, steps):
     y = np.asarray(live._y, dtype=float).copy()
     t = float(live.time)
 
-    off_params, off_flags = build_baseline_config({"max_steps_action": "stop"})
-    off = LAPDSim1D(input_dict=dict(off_params), input_flags=dict(off_flags))
-    on = LAPDSim1D(input_dict=params, input_flags=flags)
-    rows_off = off.rhs_terms(y, time=t)
-    rows_on = on.rhs_terms(y, time=t)
+    def _bypass(sim):
+        solve = getattr(sim, "_cathode_solve", None)
+        if solve is None or solve.beam_result is None:
+            return None
+        return float(solve.beam_result.result.beam_bypass_fraction)
+
+    spec = live._electron_drift
+    rows_on = live.rhs_terms(y, time=t)
+    bypass_on = _bypass(live)
+    live._electron_drift = None
+    rows_off = live.rhs_terms(y, time=t)
+    bypass_off = _bypass(live)
+    live._electron_drift = spec
 
     fields = ("n", "nn", "M", "Ee", "Ei", "M_n", "nn_a", "M_n_a", "En")
     moved = []
@@ -537,21 +555,11 @@ def gate11(report, steps):
         f"(non-vacuous={non_vacuous})",
     )
 
-    def _bypass(sim):
-        solve = getattr(sim, "_cathode_solve", None)
-        if solve is None or solve.beam_result is None:
-            return None
-        return float(solve.beam_result.result.beam_bypass_fraction)
-
-    bypass_off, bypass_on = _bypass(off), _bypass(on)
-    # Non-vacuity of the BEAM half of the statement: a bypass equality read at
-    # a state where no beam power is deposited would be an equality of two
-    # zeros. The beam rows are inside the row comparison above, so this line
-    # exists to make their magnitude visible rather than inferable.
+    # NON-VACUITY of the BEAM half of the statement, gated rather than noted:
+    # an identity read where no beam power is deposited is an equality of
+    # zeros, and an earlier form of this gate passed exactly that way.
     beam_W = {
-        name: float(
-            np.abs(np.asarray(rows_off[name].Ee, dtype=float)).sum()
-        )
+        name: float(np.abs(np.asarray(rows_off[name].Ee, dtype=float)).sum())
         for name in (
             "beam_power_deposition",
             "beam_ionization_cost",
@@ -560,13 +568,17 @@ def gate11(report, steps):
     }
     report.check(
         "G11",
+        all(v > 0.0 for v in beam_W.values()),
+        "beam is LIVE at the compared state (non-vacuity), |row| sums: "
+        + ", ".join(f"{k}={v:.4e}" for k, v in beam_W.items()),
+    )
+    report.check(
+        "G11",
         bypass_off == bypass_on and bypass_off is not None,
         f"beam bypass fraction: off {bypass_off!r} vs armed {bypass_on!r} -- "
         "bit-identical required (the registered anode closure holds the beam "
         "electrons outside both Gamma_d and the kinetic sheath row, so arming "
-        "must not touch their booking). Beam rows carried through the "
-        "comparison above, |row| sums: "
-        + ", ".join(f"{k}={v:.4e}" for k, v in beam_W.items()),
+        "must not touch their booking)",
     )
 
 
