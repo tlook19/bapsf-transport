@@ -188,6 +188,67 @@ closure stress, deliberately not addressed by this pass.
 
 ## Recapture record
 
+**2026-08-31 — IDENTITY-ONLY ROTATION (the [m1-a1-arming] cathode-jet arming
+keys). NOTHING WAS RECAPTURED.** Merge `03389f7` added TWO `input_dict` keys —
+`neutral_jet_arm_current_A = 0.0` and `neutral_jet_disarm_current_A = 0.0` —
+both inert at their shipped values: `arm = 0` declares NO arming criterion, the
+resolver returns its presence gate false, and the latch those keys describe is
+never constructed, never evaluated and never reachable by any consumer. The
+golden therefore keeps the pre-member behaviour bit for bit and only its config
+identity moves. The rotation commit `d0b6f03` regenerated BOTH references in the
+same event, the reviewer authoring it from each reference's own expression:
+
+| reference | before | after |
+|---|---|---|
+| `golden_digest_4k.json` `config_identity` | `c22691e5a4f0ecf75edf7db2bca8b43851e3ee8eb25749974e49d0cc194475c8` | `ed352561a09c442c0e9ee5a592f3ce55744cb25d0110af9774a60eee10217d37` |
+| `golden_digest_4k.json` checkpoints 0/1000/2000/3000/4000, final digest, `steps`, `cells`, `fields_per_cell`, `checkpoint_interval`, `final_time` | — | UNCHANGED (final digest `cb54b74a34cbee055612d404abb44ba4522bea11316044556fa43c83a75b2ae2`, `final_time` 0.0004714055010197914) |
+| `production_discharge.json` params | 254 keys | 256 keys: the two ADDED at 0.0/0.0, 0 removed, 0 moved |
+| `production_discharge.json` flags | 53 keys | UNCHANGED at 53 — both keys are `input_dict`; `saves` 2620, `cells` 72, `fields_per_cell` 8 and the 16-field `summary` all CARRIED |
+| sidecar `sha256` | `8776b13dcfc349e2e2adf12ce429ecdd0ee40a15a0c5fdbab50e5c0dc0ddda64` | `93a41a1c4fc4010fc3c0d57c6527f1de7e5b8c21d145a9b791eeca445068c9f0` |
+| digest reference `sha256` | `f5fe1bb29853ff194a0b06457d9fe8da46c1da4ce29f3faa8ce2e91fea6cdcbf` | `71150c0483357f1adace777b8250fad02883c5a048190b889c2211e6c38bf46c` |
+| NPZ `sha256` | `2c02ccd882261a0b01e0a1e8f0e313113b8431fadd526fa9d4859694e5704306` | UNCHANGED (the file is not rewritten) |
+
+Proof that the move is the two added keys and nothing else, verified at the
+merge tip before anything was written: a **STRIP-2 CONTROL** removing both keys
+and recomputing through the gate's OWN expression reproduces `c22691e5…` bit for
+bit, and a **WRONG-VALUE CONTROL** declaring `arm = 50 A` instead of the inert
+`0.0` gives `e4b519f2…`, so the control discriminates rather than merely
+agreeing. Field-level: exactly one field moved in each reference
+(`config_identity`; `params`), with 0 removed, 0 flags touched and 0 surviving
+values changed. `config_snapshots.json` regenerated at the merge tip is
+byte-identical to the merged file (`params=256, flags=53, cases=4`), and route
+identity across all four representative routes moves by exactly these two
+additions.
+
+**`verify_sim1d_edt.py`'s G1 pin needed NO treatment at this rotation**, unlike
+the previous one. That gate measures the golden identity against a FIXED pre-edt
+baseline, so any key added downstream of it must be stripped for the control to
+reach that baseline; the member extended G1's strip inventory to cover these two
+keys rather than re-baselining the pin. Keeping the baseline fixed is what
+preserves the property the gate exists to pin — that the baseline is the config
+with the edt keys REMOVED, not merely some earlier config — at the cost of
+requiring that inventory to grow with every future config addition. G1 passes at
+the rotated tip.
+
+Gates at the rotated tip `d0b6f03`, each run with an in-process import-provenance
+assertion — `cablp.__file__` resolving inside this checkout, printed with
+`KERNEL_ID` in the same process as the gate, and for the compiled leg the
+compiled path asserted BEFORE the run: COMPILED golden `baseline verify OK:
+saves=2620, exact=True, max_rel=0.000e+00, max_abs=0.000e+00,
+time_max_abs=0.000e+00 s` (`KERNEL_ID` `cython/_cathode_kernels_cy/tierA+csda`);
+PURE 4k digest leg `digest gate OK: steps=4000,
+digest=cb54b74a34cbee055612d404abb44ba4522bea11316044556fa43c83a75b2ae2,
+exact=True` against the ROTATED reference, `kernels=pure`; smoke exit 0 at 119
+cases with all five compiled-kernel equivalence blocks LIVE;
+`verify_sim1d_k2_dvm.py` 119/119 including the seven new JA latch gates;
+`verify_sim1d_edt.py` 31/31; `verify_sim1d_r3_boundary.py` exit 0 (`boundary
+unit gates: OK`); `declm_block_gate.py` 35 checks, 0 failed; `sgfs_census.py
+--assert-clean` PASS; `batch11_restart_citations.py` 52 cites PASS;
+`m1_verdict_invariance.py --self-test` 7 of 7.
+
+The stance file `g1atrim.toml` is untouched by this event; the golden's
+trajectory is the 2026-08-28 capture's, unchanged.
+
 **2026-08-31 — IDENTITY-ONLY ROTATION, BY REMOVAL (the
 [legacy-boundary-retirement] keys). NOTHING WAS RECAPTURED.** Merge `1fc05c9`
 retired two `input` keys and their whole code chains — `characteristic_boundary`
