@@ -5868,23 +5868,33 @@ class LAPDSim1D:
                 return "nonfinite_state", {"fields": {"packed_y": packed_summary}}
             return "invalid_state", {"message": repr(exc)}
 
-        fields = {
-            "n": state1.n,
-            "nn": state1.nn,
-            "M": state1.M,
-            "Ee": state1.Ee,
-            "Ei": state1.Ei,
-            "u": derived1.u,
-            "Te": derived1.Te,
-            "Ti": derived1.Ti,
-            "pe": derived1.pe,
-            "pi": derived1.pi,
-            "p": derived1.p,
-        }
-        if state1.M_n is not None:
-            fields["M_n"] = state1.M_n
-        if state1.nn_a is not None:
-            fields["nn_a"] = state1.nn_a
+        # The CONSERVED rows are scanned only when the packed candidate itself
+        # already failed the finiteness test above. unpack_state returns
+        # .copy() of the rows of y1, so every one of them is a bitwise copy of
+        # a value that scan has seen: a clean packed vector cannot yield a
+        # non-finite n/nn/M/Ee/Ei/M_n/nn_a, and rescanning it on every ACCEPTED
+        # step re-answers a question already answered. The DERIVED rows are not
+        # covered by it -- they are quotients of the conserved ones -- so they
+        # are scanned unconditionally. Insertion order is unchanged, so a dirty
+        # packed candidate still reports exactly the dict it always did.
+        fields = {}
+        if packed_summary is not None:
+            fields["n"] = state1.n
+            fields["nn"] = state1.nn
+            fields["M"] = state1.M
+            fields["Ee"] = state1.Ee
+            fields["Ei"] = state1.Ei
+        fields["u"] = derived1.u
+        fields["Te"] = derived1.Te
+        fields["Ti"] = derived1.Ti
+        fields["pe"] = derived1.pe
+        fields["pi"] = derived1.pi
+        fields["p"] = derived1.p
+        if packed_summary is not None:
+            if state1.M_n is not None:
+                fields["M_n"] = state1.M_n
+            if state1.nn_a is not None:
+                fields["nn_a"] = state1.nn_a
         nonfinite_fields = {}
         for name, values in fields.items():
             summary = _bad_array_summary(values)
