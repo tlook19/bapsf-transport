@@ -1849,14 +1849,28 @@ already in the model:
 CROSS-CHECKED before use, and the anchors are smoke-pinned: the same expression
 reproduces the QL-onset memo's independent §4 anchors — the `e^-37.0` Landau
 exponent at Te 5 eV, the ~4e14 Landau-limited threshold at Te 25 eV, and
-`nu_en(25 eV) = 1.405e6` s^-1 at the stance neutral density — and the stance
-branching table `f_Landau = 0.8316 / 0.9398 / 0.9802 / 0.9936` at
+`nu_en(25 eV) = 1.333e6` s^-1 at the stance neutral density — and the stance
+branching table `f_Landau = 0.8389 / 0.9427 / 0.9812 / 0.9940` at
 `n_e = 1e8 / 1e9 / 1e10 / 1e11`. Sensitivity to the `K_m` 25 eV bracket is
-<= 0.04 in `f_Landau`, i.e. immaterial. Memos:
+<= 0.008 in `f_Landau`, i.e. immaterial. Memos:
 `QL_ONSET_MEMO_2026-08-12.md` (including its 2026-08-13 addendum, which records
 that the memo's §4 prose puts the 50% crossing higher than its own formula
 gives — the error is in the conservative direction) and the pd0 read
-`scripts/pd0_branching.txt`, which is the artifact these anchors are taken from.
+`scripts/pd0_branching.py`, which is the instrument these anchors are taken
+from.
+
+**These four rows are K_m-DERIVED and rotate with the `K_m` nodes.** They were
+re-derived on 2026-08-30 with the three-set re-centring of
+`HE_EN_MT_SIGMA_CM2` ([km-node-boxing-decision]): `nu_en(25 eV)` 1.405e6 ->
+1.333e6 (-5.12%), the branching table up by +0.0007..+0.0073, and the bracket
+sensitivity down from <= 0.04 to <= 0.008 because the 25 eV bracket itself
+narrowed from `(1.6, 2.6)e-16` to `(1.950, 2.067)e-16`. The two anchors that
+did NOT move are the ones that do not depend on the table: the `e^-37.0`
+exponent (which recovers `gamma_L` by dividing `nu_en` back out — measured
+drift 7.1e-15) and the ~4e14 threshold. The banked artifact
+`scripts/pd0_branching.txt` is the PRE-2026-08-30 read and still carries the
+old numbers; it is left as the record of that read, and
+`scripts/pd0_branching.py` is what re-derives them.
 
 Honest bars, both DOCUMENTED rather than sized: (i) the asymptotic Landau
 expression is a large-argument expansion, quantitative for `v_phi/v_te`
@@ -1877,7 +1891,7 @@ REFUSED under `coverage_closure`, by design and not by omission: the two-stream
 march shares ONE withholding bank between the channel and reservoir arms, so
 the reservoir's extraction cannot be branched on the reservoir's own state; and
 the reservoir carries `n_e = ` the density floor (a numerical constant standing
-for "no plasma") against the mean-field `Te`, which returns `f_Landau` ~ 0.83
+for "no plasma") against the mean-field `Te`, which returns `f_Landau` ~ 0.84
 at Te 25 eV and ~0.98 at Te 55 eV — a branching owned by the floor convention
 rather than by the plasma. The coverage arms are deferred until that stance is
 designed.

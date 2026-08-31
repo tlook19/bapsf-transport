@@ -3675,7 +3675,7 @@ def deposit_beam_two_stream(
       ``ne = ne_floor``, a numerical floor constant standing for "no plasma",
       against the MEAN-FIELD ``Te`` this march shares between the media. That
       combination is not a physical state: at the floor with a hot ``Te`` it
-      returns ``f_Landau`` ~ 0.83 (Te 25 eV) to ~0.98 (Te 55 eV), i.e. the
+      returns ``f_Landau`` ~ 0.84 (Te 25 eV) to ~0.98 (Te 55 eV), i.e. the
       branching in the reservoir would be an artifact of the floor convention
       rather than a measurement of it.
 
