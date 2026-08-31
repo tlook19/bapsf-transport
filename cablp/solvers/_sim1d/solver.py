@@ -1,6 +1,7 @@
 """Solver implementation for the conservative axial 1D LAPD model."""
 
 import math
+import struct
 import warnings
 from dataclasses import dataclass, replace
 from time import perf_counter
@@ -238,6 +239,12 @@ from cablp.constants import (
 #: lie in (0, 1) to shrink the step; 1/2 halves it, which reaches any smaller
 #: admissible dt in a logarithmic number of retries.
 DT_REJECT_FACTOR = 0.5
+# How many assembled two-zone backward-Euler matrices one solver keeps. This
+# is a cache capacity, not a model parameter: no equation reads it, and it
+# bounds memory (one entry is a dense (2*cells)^2 array) against a run that
+# never settles onto a repeating dt. The equilibration it exists for visits
+# ~19 distinct dt values.
+TWO_ZONE_MATRIX_CACHE_ENTRIES = 32
 
 #: Relative threshold [dimensionless] for the floor-aware drain exemption on
 #: the "surface_loss" timestep bound, consulted only when the
@@ -1061,6 +1068,10 @@ class LAPDSim1D:
             self._zone_volumes = None
             self._zone_exchange_cm3_s = None
             self._zone_axial_coeffs = None
+        # Assembled two-zone backward-Euler matrices, keyed on the exact bits
+        # of dt and the pump state -- everything else the assembly reads is one
+        # of the run constants above. See _two_zone_implicit_matrix.
+        self._two_zone_matrix_cache = {}
         self._neutral_model = str(
             self._input_dict.get("neutral_model")
         )
@@ -5714,30 +5725,44 @@ class LAPDSim1D:
             En=None if state.En is None else state.En.copy(),
         )
 
-    def _implicit_neutral_step_two_zone(
-        self, dt, state, time, apply_density_floor=True
-    ):
-        """Backward-Euler neutral-only update on the split (nn, nn_a) system.
+    def _two_zone_implicit_matrix(self, dt, source_kwargs):
+        """Return the assembled 2N x 2N backward-Euler matrix for one dt.
 
-        The 2N x 2N block system: per-zone axial Knudsen exchange on the
-        diagonal blocks, the radial zone-exchange conductance coupling the
-        blocks within each cell. The puff and pumps keep their M2 (column)
-        routing here -- the M3 source-routing milestone moves them -- and
-        must stay consistent with ``neutral_source_sink_rhs`` exactly as
-        the single-zone path's comment demands.
+        Everything this assembly reads other than ``dt`` and the pump state is
+        a RUN CONSTANT resolved once at construction -- the geometry, the zone
+        volumes, the per-zone axial Knudsen conductances and the radial
+        zone-exchange conductance -- so the matrix is a function of ``dt`` and
+        the pump state alone, and the equilibration it serves re-derives the
+        same handful of them tens of thousands of times.
+
+        The cache is keyed on the EXACT BITS of ``dt`` and of the three pump
+        scalars, so two dt values that differ in the last ulp key apart and
+        signed zeros do not collide; the pump scalars are in the key whether or
+        not the pump is enabled, which over-keys (more misses) rather than
+        risking a stale entry. The assembled array is returned READ-ONLY: it is
+        handed straight to ``np.linalg.solve``, which does not write to its
+        coefficient argument, and freezing it makes a future in-place edit
+        raise instead of poisoning every later step that shares the entry.
         """
         geometry = self._geometry
         cells = geometry.cells
-        source_kwargs = self._neutral_source_kwargs(time=time)
         V_col, V_ann = self._zone_volumes
-        matrix = np.eye(2 * cells, dtype=float)
-        rhs = np.concatenate(
-            (
-                np.asarray(state.nn, dtype=float),
-                np.asarray(state.nn_a, dtype=float),
-            )
-        )
 
+        def bits(value):
+            return None if value is None else struct.pack("<d", float(value))
+
+        key = (
+            bits(dt),
+            bool(source_kwargs["pump_enabled"]),
+            bits(source_kwargs["pump_elbow_conductance_lps"]),
+            bits(source_kwargs["S_pump_L"]),
+            bits(source_kwargs["S_pump_R"]),
+        )
+        cached = self._two_zone_matrix_cache.get(key)
+        if cached is not None:
+            return cached
+
+        matrix = np.eye(2 * cells, dtype=float)
         column_coeff, annulus_coeff = self._zone_axial_coeffs
         for offset, coeff, volumes in (
             (0, np.asarray(column_coeff, dtype=float), V_col),
@@ -5767,9 +5792,7 @@ class LAPDSim1D:
             matrix[cells + cell, cells + cell] += dt * ann_rate
             matrix[cells + cell, cell] -= dt * ann_rate
 
-        puff_index, puff_twin_index = puff_cell_indices(geometry)
         pump_left_index, pump_right_index = pump_cell_indices(geometry)
-
         if source_kwargs["pump_enabled"]:
             # The pump coefficient keeps its chamber-volume normalization
             # (S/Vm) applied to BOTH zone densities: at the well-mixed
@@ -5789,6 +5812,40 @@ class LAPDSim1D:
                 )
                 matrix[index, index] += dt * rate
                 matrix[cells + index, cells + index] += dt * rate
+
+        matrix.flags.writeable = False
+        while len(self._two_zone_matrix_cache) >= TWO_ZONE_MATRIX_CACHE_ENTRIES:
+            del self._two_zone_matrix_cache[
+                next(iter(self._two_zone_matrix_cache))
+            ]
+        self._two_zone_matrix_cache[key] = matrix
+        return matrix
+
+    def _implicit_neutral_step_two_zone(
+        self, dt, state, time, apply_density_floor=True
+    ):
+        """Backward-Euler neutral-only update on the split (nn, nn_a) system.
+
+        The 2N x 2N block system: per-zone axial Knudsen exchange on the
+        diagonal blocks, the radial zone-exchange conductance coupling the
+        blocks within each cell. The puff and pumps keep their M2 (column)
+        routing here -- the M3 source-routing milestone moves them -- and
+        must stay consistent with ``neutral_source_sink_rhs`` exactly as
+        the single-zone path's comment demands.
+        """
+        geometry = self._geometry
+        cells = geometry.cells
+        source_kwargs = self._neutral_source_kwargs(time=time)
+        V_col, V_ann = self._zone_volumes
+        matrix = self._two_zone_implicit_matrix(dt, source_kwargs)
+        rhs = np.concatenate(
+            (
+                np.asarray(state.nn, dtype=float),
+                np.asarray(state.nn_a, dtype=float),
+            )
+        )
+
+        puff_index, puff_twin_index = puff_cell_indices(geometry)
 
         if source_kwargs["gas_puff_enabled"]:
             # Same routing as neutral_source_sink_rhs: the puff feeds the
