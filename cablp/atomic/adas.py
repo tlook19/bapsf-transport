@@ -185,11 +185,15 @@ def _shared_grid_tables():
 
 
 # Memo of the bilinear coordinate solve and the per-table blends, keyed on the
-# EXACT BYTES of the (ne, Te) arguments. One RHS evaluation reaches he_rates
-# from three call sites (reaction_rates, the electron-cooling package, and the
-# recombination energy return) at the same derived state, so without this each
-# site repeated the same log10 + searchsorted solve and the scd/acd/prb1 blends
-# were each computed twice. Byte keying is deliberately conservative: +0.0 and
+# EXACT BYTES of the (ne, Te) arguments. Three call sites reach he_rates from
+# the RHS -- reaction_rates, the electron-cooling package, and the
+# recombination energy return -- and which of them are armed is stance-
+# dependent. Whenever two of them land on ONE derived state, they used to
+# repeat the same log10 + searchsorted solve and re-blend the tables they
+# share (scd for the first pair, acd for the second). They now pay for one
+# solve and one blend per table between them. Calls at DIFFERENT states key
+# apart and are not shared: that is not redundancy, and the memo does not
+# pretend otherwise. Byte keying is deliberately conservative -- +0.0 and
 # -0.0 hash to different keys and recompute rather than share, and a cached
 # value is only ever returned for an argument that is bitwise the array that
 # produced it. A few entries is all the reuse there is to win -- the state
