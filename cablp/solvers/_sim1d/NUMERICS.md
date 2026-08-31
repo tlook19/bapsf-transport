@@ -69,6 +69,23 @@ equations these schemes discretize, see [`MODEL.md`](MODEL.md).
   two-zone mode only the annulus coefficient changes; plasma and column-neutral
   transport remain identical to the unbaffled geometry. The selector is
   default off and incomplete or flag-off parameter sets fail at construction.
+- **Annular baffles in the transient DVM** (`neutral_kinetic_dvm_baffles`,
+  default off): the same aperture, discretized on the kinetic annulus rather
+  than as a conductance. The march applies a per-face annulus transparency
+  `t_f = min(A_open / A_ann_f, 1)` taken against the annulus **throat**
+  `A_ann_f = min(A_ann[f-1], A_ann[f])` — the same `min(A_left, A_right)` face
+  area every other flux in the march uses — so the transmitted throughput
+  `t_f · F |v_z| A_ann_f` is identically `F |v_z| A_open` and the blocked
+  remainder `(1 − t_f) F` is tallied onto the cell it came from. The
+  bounded-chord flight map takes the SAME convention one step further: the
+  baffle is a zero-thickness annular throat, so the map's transmission at that
+  face is formed from `A_throat = min(A_left, A_right, A_open)` — apertures in
+  series, narrowest wins — which is why an open ring at least as wide as the
+  geometric throat leaves the map bit-identical rather than multiplying it by
+  one. The clip at 1 is required, not cosmetic: a PRESCRIBED annulus area can
+  be smaller than the geometric `π(Rm² − Rp²)` (support rods are subtracted),
+  so an unclipped ratio could exceed one and amplify the flux. The column is
+  untouched in both operators.
 - **Cold neutral fluid mini-flux** (`neutral_energy` only,
   `physics/neutrals.py:neutral_fluid_flux_rhs`): with an evolved `En` the
   neutral gas is transported as a fluid rather than a drifting density. A

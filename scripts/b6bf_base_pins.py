@@ -52,6 +52,10 @@ from verify_sim1d_k2_dvm import (  # noqa: E402
     arm_config,
 )
 
+#: The one key B6 adds, in the FLAGS namespace. Named here so the strip-1
+#: control below cannot drift from what the branch actually registers.
+ADDED_FLAG = "neutral_kinetic_dvm_baffles"
+
 
 def main():
     print("[B6] base pin measurement (no solve)")
@@ -80,6 +84,25 @@ def main():
     print(
         "  identity matches the measured one: "
         f"{measured == reference['config_identity']}"
+    )
+    print("=" * 78)
+
+    # STRIP-1 CONTROL. Once B6's key exists the identity above MOVES, and the
+    # 26ft identity-only rotation class requires the move to be attributable
+    # to that key and to nothing else. Removing it and recomputing through the
+    # SAME expression must return the base identity bit for bit. Computing it
+    # through any other expression is the documented rotation trap: the two
+    # committed golden references pin different configs, so a control taken
+    # through the wrong one matches neither and reads as a false failure.
+    stripped = dict(flags)
+    removed = stripped.pop(ADDED_FLAG, "<ABSENT: this is the base commit>")
+    control = config_identity(params, stripped)
+    print(f"STRIP-1 CONTROL: removed flags[{ADDED_FLAG!r}] = {removed!r}")
+    print(f"  identity with the key stripped: {control}")
+    print(f"  committed reference identity  : {reference['config_identity']}")
+    print(
+        "  the rotation is attributable to this key ALONE: "
+        f"{control == reference['config_identity']}"
     )
     print("=" * 78)
 
