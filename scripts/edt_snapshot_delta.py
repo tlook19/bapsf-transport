@@ -45,8 +45,9 @@ ADDED_FLAGS = {
     "electron_drift_transport": False,
 }
 
-#: The staging tip this branch is based on.
-DEFAULT_BASE = "75a2fa1"
+#: The staging tip this branch is based on (rebased 2026-08-31 onto the B6
+#: merge plus its identity-only golden rotation and provenance entry).
+DEFAULT_BASE = "056a733"
 
 
 def base_snapshot(rev):
