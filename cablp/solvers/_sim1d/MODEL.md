@@ -534,8 +534,9 @@ plasma-removed / anode-heat / sheath split (settled artifact: 163.56 = 123.26 +
 The bypass primaries above are not the only electrons that reach the mesh
 without the anode sheath having to pass them. The anode current the sheath does
 have to pass is formed by subtracting every directly-collected population from
-the loop current (`circuit.py:489` and `:717`, the two residuals;
-`circuit.py:1197` and `circuit_idriven.py:909`, the two recoveries):
+the loop current (`circuit.py`, in `_residual_annular` and `_residual`, the
+two residuals; `circuit.solve` and `circuit_idriven.solve_idriven`, the two
+recoveries):
 
 ```
 J_anode = J_tot - eta * beam_bypass_fraction * J_star - J_tail_a
@@ -551,20 +552,20 @@ the same sign for the same reason:
 - `J_tail_a` — COLUMN-BORNE quasilinear tail walkers, which strike the same
   wires from either side. It is the deposition module's collected tail current
   scaled like every other current here,
-  `J_tail_a = tail_anode_current_A * R_p / T_e` (`circuit.py:963`,
-  `circuit_idriven.py:618`).
+  `J_tail_a = tail_anode_current_A * R_p / T_e` (`circuit.solve` and
+  `circuit_idriven.solve_idriven`).
 
 Both reduce `J_anode`, so both raise the anode sheath logarithmically.
 `J_anode`'s only consumer is that sheath: `psi_a = Lambda - log(max(1 +
 J_anode / J_i_a, 1e-300))` and `phi_a = psi_a * T_e_anode`
-(`circuit.py:1200-1206`, `circuit_idriven.py:911-912`; the clamp guards the
-logarithm's argument). `J_anode` is not itself a result field — `phi_a` is what
+(both in `circuit.solve` and `circuit_idriven.solve_idriven`; the clamp
+guards the logarithm's argument). `J_anode` is not itself a result field — `phi_a` is what
 leaves the circuit.
 
 **The two populations are NOT symmetric in the power ledger, and the split must
 not be described as if they were.** The bypass carries an explicit power row
 (`_P_beam_bypass`) and shrinks `P_prim` by its own factor
-(`circuit_idriven.py:964`, `:1010`). The tail current touches the circuit ONLY
+(both in `circuit_idriven.solve_idriven`). The tail current touches the circuit ONLY
 through `phi_a`; its energy is booked on the fluid side, into
 `anode_intercepted_erg_s` (`beam_deposition.py`), not on the circuit's.
 
@@ -572,7 +573,10 @@ through `phi_a`; its energy is booked on the fluid side, into
 after the circuit within a step, so the current a step's deposition collects is
 an input to the NEXT accepted step's circuit solve. It is threaded as
 `tail_anode_current_prev_A` and committed only when a step is accepted
-(`cathode.py:1425-1429`, `solver.py:9249` and `:9274-9276`); RESTART.md carries
+(`cathode.solve_cathode_boundary` forms it; `solver.py`'s own
+`solve_cathode_boundary` threads it in as the `tail_anode_current_prev_A`
+keyword and commits `_cathode_tail_anode_I` on the accepted-step path);
+RESTART.md carries
 it as restart state, restoring `0.0` for pre-A2a payloads.
 
 The channel is armed by `beam_tail_anode_interception`, default off and
@@ -719,7 +723,7 @@ moments** of the kinetic ionization, charge-exchange, elastic and recombination
 operators, booked once per neutral clock tick. That booking carries the ion
 momentum and ion energy rows ONLY — the electron-side costs (ionization
 potential, radiation, excitation) stay on the plasma book unchanged, as
-`core/config.py:863-865` states for the selector itself.
+`core/config.py`'s `model_mode_defaults` states for the selector itself.
 
 The physics statement this section owns is the **target** the
 charge-exchange/elastic part of that booking relaxes the ion rows towards. It
