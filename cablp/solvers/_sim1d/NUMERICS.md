@@ -1995,8 +1995,23 @@ per-cell $(\text{low}, \text{high})$ pair: the mesh face debits the cell
 upstream of it and credits nothing downstream. A single shared face array would
 telescope that asymmetry away and turn an open-system exchange with the
 electrodes into an internal redistribution. Separately, the enthalpy channel
-and the pressure-work channel carry their own currents, because the anode
-handshake closes one and not the other.
+and the pressure-work channel carry their own currents, because the two
+bounding faces treat them differently.
+
+**The cathode face carries a different current in each channel**, and this is
+the one place the operator's face current is not read off the circuit. The
+enthalpy channel is zero there (the *returning* thermal-electron current, which
+the sheath holds at ~0.3 mA). The work channel carries
+$-e\,n\,u_\text{face}A$ — the model's own face-1 particle flux, on
+`velocity_divergence`'s face velocity and on the FLOORED density, which is the
+one `derive_state` builds $p_e$ from. Both choices are what make the operator's
+face-1 work term the exact partner of `pressure_work_rhs`'s booking at the same
+face rather than a near-cancellation: the one-sided face rule gives
+$n_\text{face} = n_\text{live}$ there, so the cell's $p_e$ divides out and the
+term reduces to $T_e$ times that current. Riding the circuit's ion current
+instead would over-correct by $\sim2.4$ kW, because the three ion currents at
+that face (circuit $I_i$, the ghost-Bohm $n$ row, and $nuA$) differ by nearly a
+factor of two and only the last is the one the pressure work was taken on.
 
 **Why the identity is exact and not merely consistent.** Write $F_k$ for the
 face power and $w_k = \Gamma_{d,k}/n_k$ for the face drift velocity. The
@@ -2021,9 +2036,10 @@ consequences are load-bearing:
    `edt_emf_work_W` row's own volume sum) rather than being defined by it.
 
 Because both sides are then exact rearrangements of the same finite sums, the
-identity holds to floating-point roundoff. Measured: $\le 1.1\times10^{-15}$
-relative on all four bracket arms at both the golden config and the ES1 source
-region (`scripts/verify_sim1d_edt.py`, gate G2). Had $W_\text{EMF}$ been
+identity holds to floating-point roundoff. Measured worst case
+$7.9\times10^{-15}$ relative, over all six arm/reading combinations at both the
+golden config and the ES1 source region (`scripts/verify_sim1d_edt.py`, gate
+G2, whose bar is $10^{-10}$). Had $W_\text{EMF}$ been
 defined as the residual, the gate would have been a tautology; had it been
 taken as a cell-centred quadrature instead, the identity would close only to
 truncation and the $10^{-10}$ bar would be measuring the mesh rather than the

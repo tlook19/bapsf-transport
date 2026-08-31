@@ -2097,42 +2097,79 @@ W_\text{EMF} = \int \Gamma_d\!\cdot\!\left(\frac{\nabla p_e}{n}
 where $3.21 = \tfrac52 + 0.71$ is the enthalpy flux plus the thermal-force heat
 flux. Note the split: $\tfrac32 + 0.71 = 2.21$ of that coefficient arrives as a
 face FLUX, and the remaining $1.00$ comes from the pressure-drift work term by
-summation by parts. That split is what the anode convention below toggles, and
-it is why the handshake moves $2.21\,T_e I/e$ and not $3.21\,T_e I/e$. The
-discrete form of the identity, and why it closes to roundoff rather than to
-truncation, is in NUMERICS.md.
+summation by parts. That split is what the anode reading below selects on:
+`"sheath_row_closes"` closes the $2.21$ channel alone, while the registered
+`"sheath_row_closes_all"` closes the full $3.21$. The discrete form of the
+identity, and why it closes to roundoff rather than to truncation, is in
+NUMERICS.md.
 
 **The operator is an open system.** The drift current terminates ON the anode
 mesh, so the face at the mesh debits the cell upstream of it and credits
 nothing downstream. $\int\Delta\,dV$ is therefore not zero and is not meant to
-be: the partners of its boundary terms are the electrode and circuit rows, and
-which of those already book a given face is exactly what the two declared
-conventions below bracket.
+be: the partners of its boundary terms are the electrode and circuit rows.
 
-### The two declared conventions (bracket axes, not chosen readings)
+### The cathode face
 
-Neither is settled by the model, and the deliverable of this operator is the
-SPREAD across them rather than any one arm. Both are `input_dict` selectors and
-both are refused at a non-default value with the flag off, where they would be
-inert.
+Both flux channels are exactly ZERO there. They would carry the *returning*
+thermal-electron current, and the cathode sheath repels plasma electrons —
+$P_{\text{cathode},e}$ is 0.06 W on the ES1 artifact, a return current of order
+0.3 mA. The sheath's kinetic boundary condition sets the electron energy flux
+at that face, not a bulk Braginskii closure evaluated on the ghost *ion*
+velocity, and R3.2 already books the face at zero for that reason.
+
+The WORK channel there is not zero, because `pressure_work_rhs` books a real
+expansion cooling at that face on the ion velocity. Its current is the model's
+own face-1 particle flux $-e\,n\,u_\text{face}A$, with $u_\text{face}$ the value
+`velocity_divergence` uses, so the operator's face-1 work term is that
+booking's exact partner: measured $+4.298$ kW against $-4.298$ kW, summing to
+zero.
+
+**Retracted (2026-08-31).** An earlier form credited $+14.8$ kW at this face,
+riding the *circuit's* ion current $I_i$. That current is carried by ions, not
+by any electron drift, so the credit had no physical carrier and no ledger
+partner; the claim that it cancelled a ghost-Bohm electron booking was a stale
+read of a legacy row inert on the shipped stance since R3.2, and that row
+measures 0.000 W. It is recorded here rather than deleted so the number is not
+re-derived.
+
+With no booked current the operator books nothing at all. The work channel does
+not vanish with the current on its own — it rides the difference velocity
+$u_e - u_i$, and its value encodes a repelling sheath, which is a driven-state
+statement. **That transition is not resolved**, and the boundary is stated
+rather than smoothed.
+
+### The anode face: a ruling, not a bracket
+
+The kinetic anode sheath row $(2T_e + \varphi_a)\Gamma$ IS the total electron
+energy flux at the sheath edge for the THERMAL population, so any fluid export
+there double-counts it. The beam electrons that reach the mesh directly lie
+outside both bookings: the circuit's own bypass row carries them, and
+$\Gamma_d = (I_\text{tot} - I_\text{beam})/(eA)$ carries the thermal drift only
+by construction. Every fluid channel therefore closes at that face.
+
+`electron_drift_anode_handshake = "sheath_row_closes_all"` is the DEFAULT and
+the registered closure (ruled 2026-08-31). `"sheath_row_closes"` (the $2.21$
+channel alone) and `"export_counts"` (neither channel) are RETAINED as
+disclosed INSTRUMENT arms that bound the size of the double count; **neither is
+claim-bearing.** Under every reading the `anode_sheath_full_debit` booking
+stands untouched, and the anode PRESHEATH term ($-T_e/2 \cdot I/e$, order
+$-11$ kW) is NOT booked here — it belongs to the separate anode-potential-debit
+question, and only one of the two may ever book it.
+
+### The declared bracket axis
 
 `electron_drift_charge_death` — where the launched beam's CHARGE dies, hence
 which faces still carry $I_\text{beam}$ rather than the full loop current as
 thermal-electron drift. `"cell_1"` puts the death in the cathode cell (the
-measured gap survival is $\sim10^{-3}$ over $l_b \approx 16$ cm, so essentially
-all of it is deposited there), `"cell_2"` in the first gap cell. The advisor
-consult (2026-08-26) put the spread across the two below 15 %.
+measured gap survival is $\sim2\times10^{-3}$ over $l_b \approx 16$ cm, so
+essentially all of it is deposited there), `"cell_2"` in the first gap cell. It
+is an `input_dict` selector and is refused at a non-default value with the flag
+off, where it would be inert. The spread across it is a first-order effect, not
+a small one: see the magnitudes below.
 
-`electron_drift_anode_handshake` — what the anode mesh face does with the drift
-ENTHALPY flux. `"export_counts"` books it as an export out of the plasma;
-`"sheath_row_closes"` holds the existing anode electron sheath row
-(`anode_e_sheath_loss`) to be the complete closure of that face for electron
-enthalpy, so the operator books no export there and cannot double-count it. The
-pressure-drift WORK at that face is a volumetric compression of the upstream
-cell that no existing row books, and it stands under both readings. **Under
-both readings the `anode_sheath_full_debit` booking stands untouched.** This is
-the dominant ambiguity — the consult could not settle it, and said explicitly
-that it cannot be settled post hoc, which is why it ships as a bracket axis.
+A continuous survival profile is NOT used, and could not be: `n_beam` is
+launch-cell-only, and the saved `l_b_profile` disagrees with the ray survival
+by a factor of order 300. The charge-death STEP is the declared substitute.
 
 ### Refusals
 
@@ -2148,23 +2185,50 @@ the operator would have to pick between them silently).
 ### Magnitudes, and what may not be claimed
 
 Measured on `scripts/mgcr1_confirm.h5` over 0.1–20.1 ms at a mean loop current
-of 2772 A: the cathode cell reads $-50.5$ kW and the gap cells $+5.5$, $+4.5$,
-$+2.6$, $+2.0$ kW, summing to $-35.8$ kW under `"export_counts"` and $+14.4$ kW
-under `"sheath_row_closes"`. **The net sign of the source region is therefore
-UNDETERMINED across the bracket**, which is the registered result: the two
-robust, handshake-independent pieces are the $+13.6$ kW reversible-compression
-warming of the gap cells and the $+14.8$ kW cathode-face influx. In afterglow
-the term is small but NOT identically zero — over the afterglow window, at a
-mean loop current of 218 A, it reads $-0.5$ to $-0.7$ kW.
+of 2772 A. Source-region sums, by charge-death arm and anode reading:
 
-The missing EMF work corresponds to an in-plasma EMF of a few volts against the
-$V_p \approx 0.35$ V the circuit books, so **this is also a missing member of
-the R3.2 $V_\text{dis}$ partition** and is saved as `edt_inplasma_emf_V`.
+| anode reading | `cell_1` | `cell_2` | status |
+|---|---|---|---|
+| `sheath_row_closes_all` | $+18.95$ kW | $+14.50$ kW | **registered closure** |
+| `sheath_row_closes` | $-2.82$ kW | $-7.27$ kW | instrument arm |
+| `export_counts` | $-53.03$ kW | $-57.48$ kW | instrument arm |
+
+Under the registered closure the net is POSITIVE on both arms of the declared
+bracket, $+14.5$ to $+19.0$ kW. The two instrument arms measure what a double
+count at the mesh face would be worth; they are not competing physical
+readings.
+
+The reversible-compression warming of the cells strictly downstream of the
+death cell is $+13.6$ kW (`cell_1`) / $+8.2$ kW (`cell_2`). **It is not
+handshake-independent and it is not robust across the bracket**: over the fixed
+cells 2–5 that an earlier form used, `cell_2` reads $-5.3$ kW, because that
+range sweeps in the death cell's own large negative. Quote it over the
+downstream cells or not at all.
+
+In afterglow the term is small but NOT identically zero — it is confined to the
+$\sim$1.5 ms ring-down, reading $-0.68$ to $-0.81$ kW as a window mean at a
+mean loop current of 218 A, and $-2$ to $-5$ W at 26 ms. In that window
+$\Gamma_d$ is NEGATIVE: the emission outlasts the loop current
+($I_\text{beam}$ 297.5 A against $I_\text{tot}$ 217.8 A, window means), so the
+drift reverses.
+
+The missing EMF work corresponds to an in-plasma EMF of $+3.7$ to $+5.9$ V
+(current-weighted window means; the range is the SUPPORT bracket — faces 2–5,
+the declared support, against faces 2–6, which includes the mesh face's
+pressure jump), against the $V_p \approx 0.35$ V the circuit books, and close
+to the Boltzmann estimate $T_e\ln(n_5/n_1) = 5.76$ V. So **this is also a
+missing member of the R3.2 $V_\text{dis}$ partition** and is saved as
+`edt_inplasma_emf_V`. That $V_p$ is the RESISTIVE drop only, and the EMF is a
+few per cent of $V_\text{dis}$; no falsification of R3.2 follows unless it
+claimed the partition to better than that. **A pre-breakdown small-current
+frame makes `edt_inplasma_emf_V` read $\sim$16 V — a ratio of two small
+numbers, not a physics reading.**
 
 **The $\sim$19 % cold ES1 electron-temperature residual MUST NOT be advanced as
-explained by this term, in either direction.** The consult's finding is that
-the magnitude is sufficient and the SIGN is not established; a bracket whose
-two arms disagree in sign cannot explain a signed residual.
+explained by this term, in either direction.** The magnitude is sufficient and
+the SIGN was not established by the evidence that registered the operator; the
+sign the registered closure now gives is a RULING on the anode, not a bracket
+result, and a ruling cannot carry a residual it was not derived from.
 
 ### Interactions carried as caveats
 
