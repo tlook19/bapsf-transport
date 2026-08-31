@@ -112,8 +112,8 @@ across the change.
 **`C_R = 8.76` — FITTED (the one drive-side fit knob; re-trimmed
 2026-08-25 under the `plateau_multigroup` closure).** Adopting the
 multigroup plateau moves the drive, so the knob was re-trimmed ONCE, at ES1,
-drive-band target only, and frozen. Protocol (pre-registered, campaign log
-2026-08-25at; it supersedes the WITHDRAWN 25as `Ts`-parameterization): a
+drive-band target only, and frozen. Protocol (pre-registered 2026-08-25 (Tom);
+it supersedes a WITHDRAWN `Ts`-parameterization of the same date): a
 three-point scan in `C_R`, then a log-log fit of stage-(i) plateau current
 against `C_R` solved for a plateau ratio of 1.000 against the measured 2963 A
 as the scorer prints, rounded to 0.01. The scan arms were `C_R` 8.4 → 2832 A
@@ -137,7 +137,7 @@ FITTED, re-trimmed under the conserving ionization birth.** The predecessor `7.0
 was trimmed on 2026-08-19 with the **ionization-birth thermal leak live** —
 the En sink gave up `(3/2) k Tn` per ionized atom while the ion was born at
 the 300 K floor, deleting **~9.7 kW at plateau** in the source region (9250 W
-bulk + 427 W beam, measured on `ph_es1.h5`; campaign log 2026-08-23k). Adopting
+bulk + 427 W beam, measured on `ph_es1.h5`, 2026-08-23). Adopting
 `Ti_birth_ionization = "neutral"` returns that power to the ions and drops the
 drive, so the knob was re-trimmed ONCE, drive-band target only, at ES1, and
 frozen: peak/plateau ratio 0.965/0.965 at `C_R = 7.09` under the conserving
@@ -145,7 +145,7 @@ birth (`tbn_es1.h5`) -> **1.000/0.999 at `C_R = 7.36`** (`tbn2_es1.h5`, peak
 2989 A against a measured 2989 +/- 23 A, plateau 2962 A against 2963 A).
 Measured pair response over the trim: plateau **2859 -> 2962 A** (peak
 2885 -> 2989 A) for `C_R` **7.09 -> 7.36**. The five pre-registered washout
-gates (campaign log 2026-08-23r) all passed at the trimmed value: drive peak
+gates (pre-registered 2026-08-23) all passed at the trimmed value: drive peak
 and plateau both within +/-0.8 % of 1.000, `n` mean ratio 0.89, `Isat` mean
 ratio 0.88 (>= 0.86), `Te` mean ratio 1.01 (>= 0.98). Port scores were reported
 unconditionally and never entered the selection: Te 1.01, n 0.89, Isat 0.88
@@ -159,7 +159,7 @@ L2 geometry rebaseline moved the operating point to the measured
 measured-geometry arms ran 6.94); the 2026-08-19 D-phase conservation
 fixes (see "Conservation fixes" below) changed the plasma load, and the
 REGISTERED one-knob re-trim (drive-band target ONLY, once at ES1, frozen
-and transferred; campaign log 2026-08-19 zzzz) landed **7.09** — peak
+and transferred; registered 2026-08-19) landed **7.09** — peak
 2997 A / plateau 2964 A, ratio 1.000 against the measured band, matched
 on the first log-knob interpolation (measured local exponent 0.99966;
 the super-linear 1.392 figure is kinetic-era only). Port scores at that
@@ -270,9 +270,9 @@ ends a measured ~24 kW energy destruction (the debit and the launch now
 share one TRIM-convention spec; per-particle identity exact). Joint
 effect at the stance: mid-machine density +6–8 % toward measured on two
 geometries at zero tuning, established with input power FALLING
-(particle/fueling-side, not a power artifact). Record: campaign log
-2026-08-19 rrrr–zzzz; the plan of record is POWER_COUPLING_PLAN.md
-(local docs). The production GEOMETRY is the G1a measured-machine
+(particle/fueling-side, not a power artifact). Measured and adopted
+2026-08-19 (Tom); this section is the statement of record for both
+conservation fixes. The production GEOMETRY is the G1a measured-machine
 package (grid of record nx 268 / Lm 2117.8 / collector 7.8 + the sss
 fidelity rulings; coils-ON droop-min ansatz f_end 2.221 — always quoted
 as the ansatz, never "coils on" generically).
@@ -579,7 +579,7 @@ is still a closure-family bracket for claim purposes — boxed by literature is
 not measured by us.
 
 **It was NOT chosen because it scored best, and must not be written that way.**
-The scored `f` family (2026-08-21bn) is FLAT above `f ~ 0.3`, which is exactly
+The scored `f` family (2026-08-21) is FLAT above `f ~ 0.3`, which is exactly
 the evidence that the data exerted no pull on the choice. Note also that TIMING
 is not flat across the wider family, so an "insensitive to `f`" statement has to
 name the observable it applies to.
@@ -607,9 +607,9 @@ dial. That is the class argument — the two single-line predecessors
 (`"local"`, `"tail_walk"`) are this closure's two heirs taken one at a time,
 which is why the tail-energy dial, the fixed rung and the keying selector are
 INERT under it and are REFUSED at construction rather than silently ignored.
-The derivation is the advisor's two-heirs argument (campaign log 2026-08-25am).
+The derivation is the advisor's two-heirs argument (2026-08-25).
 
-Adoption verdict (campaign log 2026-08-25av): the closure was adopted on
+Adoption verdict (ruled 2026-08-25 (Tom)): the closure was adopted on
 **3 of 4 bands** plus the toll discriminator, and the drive was restored by the
 `C_R` re-trim above rather than by any parameter of the closure itself.
 ENERGY-ONLY in the same sense as `"tail_walk"` — ionization events, the
@@ -639,7 +639,8 @@ completes the thermal-only electrode routing, which became unconditional when
 the legacy volumetric absorber and its `characteristic_boundary` selector were
 RETIRED 2026-08-31 (Tom); the construction-time `ValueError` that used to
 refuse the unarmed-routing combination went with them, the combination no
-longer being constructible. Adoption gates: campaign log 2026-08-25ab.
+longer being constructible. Adoption gates: pre-registered and passed at
+adoption, 2026-08-25 (Tom).
 
 **`beam_deposition_in_heat_substep = true`** (flags) — ARMED 2026-08-25; the
 class-1 fix for the staged Te bias. The beam's electron-energy deposition row
@@ -652,7 +653,7 @@ split-order table is stale under it until re-measured, and
 `scripts/verify_sim1d_order.py` CANNOT certify it — that harness measures the
 split step in a deliberately cathode-free regime where the beam deposition row
 is identically zero and this flag therefore changes nothing. Gate record:
-campaign log 2026-08-25s.
+armed and gated 2026-08-25 (Tom).
 
 **`beam_deposition_smoothing_cm = 50.0`** — **ASSUMED**, nominally a physical
 straggling width. The CSDA range profile is sharp on the mesh scale; smoothing

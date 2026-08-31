@@ -1,7 +1,8 @@
 """Build gates for the electron drift-transport + EMF-work operator (edt).
 
 **These gates were registered BEFORE the operator was implemented** and are not
-moved after seeing results (AGENTS.md, "Briefs and reports"). Each names its
+moved after seeing results (the standing pre-registration discipline: gates are
+written down before anything is run or implemented). Each names its
 QUANTITY, its MEASUREMENT SITE, and its FIXTURE. Gates 2-4 and 6 are properties
 of a SAVED state and of the advisor consult's own algebra, so they were
 measurable before the solver-side code existed at all;
@@ -67,8 +68,9 @@ GATE REGISTRY
 **G4 -- the compression piece (RE-FORMED 2026-08-31).**
   QUANTITY: the pressure-drift work summed over the cells STRICTLY DOWNSTREAM
   of the death cell, window-mean over 0.1-20.1 ms, reported ROW-RELATIVE and
-  throughput-normalized (AGENTS.md, "Negative controls gate on the ROW-RELATIVE
-  normalization").
+  throughput-normalized (the standing rule adopted 2026-08-30 (Tom): negative
+  controls gate on the ROW-RELATIVE normalization, because a misbooking that
+  moves its own row by O(1) can read as O(1e-2) throughput-normalized).
   SITE: ``edt_pressure_drift_work_W``, on the REGISTERED closure (the shipped
   default, and the headline) and on the ``export_counts`` instrument arm --
   the one where NO face is closed, so that row is the operator's own interior

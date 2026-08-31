@@ -54,7 +54,13 @@ BASE_DVM_VALUES = {
 
 
 def _provenance():
-    """In-process import-provenance assertion (AGENTS.md worktree bring-up)."""
+    """In-process import-provenance assertion for a worktree run.
+
+    The editable install resolves ``cablp`` to the main checkout, so a gate
+    run from a worktree without an explicit ``PYTHONPATH`` silently measures
+    the wrong code. Printing the resolved package path and the kernel id makes
+    that visible in the transcript instead of leaving it to be assumed.
+    """
     pkg = os.path.abspath(cablp.__file__)
     print(f"cablp.__file__ = {pkg}")
     print(f"worktree root  = {ROOT}")

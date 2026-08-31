@@ -40,7 +40,6 @@ from cablp.solvers._sim1d import LAPDSim1D, default_config
 from cablp.solvers._sim1d.core.state import conservative_from_primitives
 from cablp.solvers._sim1d.physics.flux import ion_sound_speed
 from cablp.solvers._sim1d.physics.sources import (
-    characteristic_boundary_rhs,
     presheath_alpha,
     presheath_length_cm,
 )
@@ -109,10 +108,14 @@ def main():
 
     # --- G1/G2: Bohm particle sink on both normals, plenum untouched -------
     state, edges, cs = _uniform_state(sim, n0, Te0, Ti0, u_edge_frac=1.0)
-    ch = characteristic_boundary_rhs(
-        state=state, floors=sim._floors, ion_mass_g=m_i, mu=mu, geometry=geo,
-        alpha_isat=float(np.exp(-0.5)), b_surface_loss=1.0,
-    )
+    # Call the BOUND method, not the module function: it threads the resolved
+    # run constants (gas_type, b_presheath_length, the cathode jet spec, the
+    # wave-speed and energy-consistency selectors, alpha_isat and
+    # b_surface_loss) exactly as the production callers do, so this probe
+    # cannot drift from the operator it is gating. The former raw call
+    # hardcoded alpha_isat = exp(-0.5) and b_surface_loss = 1.0, which are the
+    # values the resolved bundle carries at this configuration.
+    ch = sim.characteristic_boundary_rhs(state=state)
     dead = ~np.asarray(geo.plasma_active, bool)
     g1 = all(ch.n[live] < 0.0 for live in edges.values())
     g1 &= all(ch.nn[live] > 0.0 for live in edges.values())  # neutral return
@@ -139,10 +142,7 @@ def main():
         sim, n0, Te0, Ti0, u_edge_frac=-1.0
     )  # interior flowing AWAY from each wall (the A1 pathology)
     dv_a = derive_state(anom_state, floors=sim._floors, ion_mass_g=m_i)
-    ch_a = characteristic_boundary_rhs(
-        state=anom_state, floors=sim._floors, ion_mass_g=m_i, mu=mu,
-        geometry=geo, alpha_isat=float(np.exp(-0.5)), b_surface_loss=1.0,
-    )
+    ch_a = sim.characteristic_boundary_rhs(state=anom_state)
     g3 = True
     for face, live in anom_edges.items():
         p_live = float(dv_a.p[live])

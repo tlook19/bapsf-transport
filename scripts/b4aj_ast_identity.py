@@ -1,7 +1,7 @@
 """[B4] AST identity gate for the docstring-only review-fix pass.
 
-The standing gate for a comment/docstring-only pass (CLAUDE.md, AGENTS.md):
-parse before and after, strip docstring nodes, compare ``ast.dump``.
+The standing gate for a comment/docstring-only pass is AST IDENTITY: parse
+before and after, strip docstring nodes, compare ``ast.dump``.
 
 TIER A strips docstring nodes only -- it catches a deleted dict line, a changed
 number, a renamed identifier or a dropped argument. TIER B additionally

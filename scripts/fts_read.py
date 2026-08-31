@@ -144,7 +144,7 @@ def main():
     W('column temperature, at the last bin of each phase. f_c is the COLD')
     W('NUMBER fraction; the only measured constraint on it in the record is the')
     W('E0 reviewer statement "67-85 % of column mass sits within 3 thermal')
-    W('spreads of 300 K" (CAMPAIGN_LOG_2026-08-05_to_2026-08-10_kinetic.md:291),')
+    W('spreads of 300 K" (reviewed 2026-08-10),')
     W('so f_c = 0.67 / 0.85 bracket it and f_c = 1.0 is the HARD LOWER BOUND on')
     W('S (no cold gas can be missing).')
     W('')

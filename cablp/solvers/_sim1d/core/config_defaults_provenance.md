@@ -921,7 +921,7 @@ carrying no free parameter.
 
 The one CONVENTION the channel adds, stated because it is a choice and not a
 measurement: the baffle accommodates FULLY at the wall temperature
-(`alpha = 1`). That extends the correction of record (campaign log 28hx) — the scalar
+(`alpha = 1`). That extends the correction of record (2026-08-28) — the scalar
 `neutral_kinetic_dvm_accommodation` covers the cylinder and the two ends, while
 the anode mesh and the interior closed faces already run at `alpha = 1` — to a
 surface of the same kind: a solid plate standing in the gas, not a length of
@@ -1245,7 +1245,7 @@ closure-family bracket for claim purposes: the bracket is the claim, and a bare
 central value is not to be quoted as if measured.
 
 **What did NOT pin it — stated so it is not mis-cited later.** The scored
-`f`-sensitivity family (2026-08-21bn) is FLAT above `f ~ 0.3`, which is
+`f`-sensitivity family (2026-08-21) is FLAT above `f ~ 0.3`, which is
 precisely the evidence that the data exerted no pull on this choice. The value
 is not "the best-scoring `f`" and must never be written that way. Timing is
 NOT flat across the wider family, so any "insensitive" statement about this

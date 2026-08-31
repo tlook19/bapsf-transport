@@ -172,12 +172,15 @@ def assert_recycle_channel_live(recycle, removal, *, row, stance, path, window_m
         f"nonzero, for {path}.\n"
         f"  stance: characteristic_boundary={stance}\n"
         f"  row read: rhs_terms/{row}\n"
-        "  likely cause: the run books its boundary physics under the OTHER "
-        f"row of {BOUNDARY_ROWS} -- under characteristic_boundary the solver "
-        "zeroes the entire boundary_absorption state (including the neutral "
-        "return nn) and books it under characteristic_boundary. Refusing to "
-        "run source-starved: the end-wall return would silently vanish from "
-        "the source menu."
+        "  likely cause: this artifact predates the retirement of the legacy "
+        "volumetric absorber and books its boundary physics -- including the "
+        "neutral return nn -- under the retired boundary_absorption row, "
+        "which this reader no longer selects. characteristic_boundary is the "
+        "only plasma-terminating operator the package can now produce, so on "
+        "a current run an empty channel against a nonzero removal row instead "
+        "means the boundary neutral return is genuinely absent. Refusing to "
+        "run source-starved either way: the end-wall return would silently "
+        "vanish from the source menu."
     )
 
 

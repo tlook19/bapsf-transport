@@ -545,7 +545,7 @@ cm^-3. The phase census (8 / 11 / 2000 / 600 / 1) and the save count are both
 unchanged, so the fixture covers exactly the same cycle it did before. The
 150,000-step tripwire did not fire and its ~2.4× margin is unmoved. This is a
 health check, not a physics verdict: the physics verdict is the Tier C
-continuity pair (campaign log 2026-08-27gy), which measured this window at the
+continuity pair (measured 2026-08-27), which measured this window at the
 production operating point against the R2-tip parent `bc0a515` and passed all
 seven gates — all 15 printed stage-(ii) dev/σ entries identical between arms,
 plateau −0.0027 %, `t90` Δ 0.00 ms, ledger closure identical to all printed
@@ -667,8 +667,8 @@ bit-exactness is re-evidenced by this recapture rather than assumed.
 **2026-08-25 — THE STANCE EVENT: the `plateau_multigroup` anomalous-heating
 closure adopted, with its `C_R` re-trim, two armed physics flags and the
 `V_bank` half of the twice-deferred 23b R4 deletion (AUTHORIZED recapture;
-Tom's ratifications — campaign log 25ag as amended by 25at/25av, plus the
-session-35 rulings that ADOPTED the selector and ARMED the stb fix).** Five
+ratified 2026-08-25 (Tom), as amended the same day, plus the same session's
+rulings that ADOPTED the selector and ARMED the stb fix).** Five
 stance members moved in one event, and they are not five independent choices:
 the selector is the physics change and the `C_R` re-trim is its consequence —
 adopting the spectrum moves the drive, so the one drive-side fit knob was
@@ -951,8 +951,8 @@ rotation (transcript in the review report). Authority for the key itself:
 
 
 **2026-08-24 — the CAD-SPAN MACHINE GEOMETRY adopted, with the ray-clip
-EXACTNESS FIX it forced (AUTHORIZED recapture; Tom's rulings 2026-08-23bh,
-2026-08-24, campaign log 24n).** Four config keys moved and one physics-path
+EXACTNESS FIX it forced (AUTHORIZED recapture; ruled 2026-08-23 and
+2026-08-24 (Tom)).** Four config keys moved and one physics-path
 function was corrected. The keys are not four independent choices: three of
 them are ONE measured distance and the region that rides it.
 
@@ -1097,8 +1097,8 @@ configuration change, not a repair, and no bit-level comparison between them
 is meaningful.
 
 **2026-08-23 — the CONSERVING IONIZATION BIRTH adopted as the default,
-jointly with the `C_R` re-trim it forced (AUTHORIZED recapture, Tom's
-decision 5; CAMPAIGN_LOG 2026-08-23k/23r/23s).** **TWO keys moved, and this
+jointly with the `C_R` re-trim it forced (AUTHORIZED recapture; adopted
+2026-08-23 (Tom)).** **TWO keys moved, and this
 event is JOINTLY ATTRIBUTED to both of them.** Nothing below may be credited
 to either key alone: the birth booking changed the plasma load and the drive
 knob was re-trimmed against that change in the same event, so they are not
@@ -1406,7 +1406,7 @@ configuration AND code change, not a repair, and no bit-level comparison
 between them is meaningful.
 
 **2026-08-20 — stance-update wave: the S_pump and cathode-jet re-cuts
-(AUTHORIZED recapture, Tom; CAMPAIGN_LOG 2026-08-20xx/as/ax).** **The first
+(AUTHORIZED recapture; adopted 2026-08-20 (Tom)).** **The first
 recapture forced by the GOLDEN-AT-STANCE consequence** — the standing trade
 declared in the R2b entry below, exercised for the first time. Two shipped
 defaults moved, so the fixture moved with them; no code path, pin, or run
