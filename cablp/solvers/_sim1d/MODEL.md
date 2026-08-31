@@ -2205,12 +2205,19 @@ cells 2–5 that an earlier form used, `cell_2` reads $-5.3$ kW, because that
 range sweeps in the death cell's own large negative. Quote it over the
 downstream cells or not at all.
 
-In afterglow the term is small but NOT identically zero — it is confined to the
-$\sim$1.5 ms ring-down, reading $-0.68$ to $-0.81$ kW as a window mean at a
-mean loop current of 218 A, and $-2$ to $-5$ W at 26 ms. In that window
-$\Gamma_d$ is NEGATIVE: the emission outlasts the loop current
-($I_\text{beam}$ 297.5 A against $I_\text{tot}$ 217.8 A, window means), so the
-drift reverses.
+In afterglow the term is small but NOT identically zero, and it is confined to
+the $\sim$1.5 ms ring-down. Under the registered closure it reads $+0.25$
+(`cell_1`) / $+0.12$ (`cell_2`) kW as a window mean at a mean loop current of
+218 A, and $+1.6$ / $-1.0$ W at 26 ms. The instrument arms run the other way —
+`export_counts` gives $-0.68$ / $-0.81$ kW over the same window — so the
+afterglow sign, like the discharge sign, is a statement about the anode reading
+and not about the plasma alone.
+
+In that window $\Gamma_d$ is **NEGATIVE**: the emission outlasts the loop
+current ($I_\text{beam}$ 297.5 A against $I_\text{tot}$ 217.8 A, window means;
+$-79.7$ A of net drift), so the drift reverses. Any afterglow reading of this
+operator has to carry that clause, because a term whose driving flux has
+changed sign is not "the same term, smaller".
 
 The missing EMF work corresponds to an in-plasma EMF of $+3.7$ to $+5.9$ V
 (current-weighted window means; the range is the SUPPORT bracket — faces 2–5,
