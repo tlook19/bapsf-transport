@@ -125,9 +125,6 @@ DEPRECATED_CONTROLS = {
     "hyperbolic_energy_consistent": DeprecatedControl(
         FLAGS, _FREED_BRANCH, _FREED_BRANCH_FIX,
     ),
-    "characteristic_boundary": DeprecatedControl(
-        FLAGS, _FREED_BRANCH, _FREED_BRANCH_FIX,
-    ),
     "ion_neutral_thermalization": DeprecatedControl(
         FLAGS, _FREED_BRANCH, _FREED_BRANCH_FIX,
     ),

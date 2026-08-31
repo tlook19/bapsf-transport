@@ -92,7 +92,6 @@ def validate_r1_configuration_presence(
     geometry,
     ion_neutral_moment_closure,
     hyperbolic_wave_speed,
-    characteristic_boundary,
     raw_stage_validation,
 ):
     """Reject R1-audited controls that would otherwise be silent no-ops."""
@@ -216,22 +215,6 @@ def validate_r1_configuration_presence(
             "hyperbolic_wave_speed must be 'isothermal' or 'adiabatic' "
             f"(got {hyperbolic_wave_speed!r})"
         )
-    if characteristic_boundary:
-        # R3.1 characteristic ghost-cell Bohm outflow (audit A1/A16). It acts
-        # only on plasma-terminating (absorbing) faces, which exist only in
-        # the resolved geometry; without them the flag would be a silent
-        # no-op (R1d discipline).
-        absorbing = np.asarray(
-            getattr(geometry, "plasma_absorbing", np.zeros(0)),
-            dtype=bool,
-        )
-        if not np.any(absorbing):
-            raise ValueError(
-                "characteristic_boundary requires plasma-terminating "
-                "(absorbing) faces, which exist only in the resolved "
-                "geometry (resolved_boundaries=True); it would otherwise be "
-                "a silent no-op"
-            )
     # R4.1 anode-mesh beam interception (audit A15) is the production default
     # (correct csda physics). Like beam_coulomb_model / beam_anomalous_model it
     # is a csda control: it perturbs the operator under beam_deposition_model=

@@ -1165,19 +1165,6 @@ def model_mode_defaults():
         raises at the tick rather than launching at the wrong energy. Read
         only when ``neutral_kinetic_dvm_anode_jet`` is on; must be ``None``
         or positive.
-    neutral_kinetic_dvm_tn_feedback:
-        Whether the DVM's measured neutral temperature ``Tn(z)`` FEEDS the
-        fluid evaluations that otherwise assume a fixed cold gas. The
-        temperature moment is computed as a diagnostic whenever the arm is
-        on; this switch controls consumption only, so that the
-        assumed-300 K versus measured comparison is a clean A/B. Under this
-        arm the single surviving consumer is the collisional presheath depth
-        behind the sheath-edge sampling, whose ``T_eff = (Ti + Tn)/2`` sets
-        ``nu_in``. Requires ``characteristic_boundary`` to be OFF: in the
-        characteristic stance the circuit's cathode sheath factor samples the
-        same presheath through a path that does not carry ``Tn``, and letting
-        only one of the two move would break the shared sheath-edge density
-        those two deliberately agree on. Raises at construction otherwise.
     neutral_kinetic_dvm_transfer_hold:
         How the plasma applies the transient DVM's tick-booked CX/elastic
         transfer between neutral clock ticks. ``"exponential"`` (the
@@ -1316,7 +1303,6 @@ def model_mode_defaults():
         "neutral_kinetic_dvm_elastic": "phelps_iso",
         "neutral_kinetic_dvm_exchange": "cauchy_chord",
         "neutral_kinetic_dvm_annulus_flights": "rates",
-        "neutral_kinetic_dvm_tn_feedback": False,
         "neutral_kinetic_dvm_transfer_relax_fraction": 0.5,
         # Cathode-side energetic recycle, default OFF. The two reflection
         # coefficients MIRROR the fluid channel's cathode_jet_R_N /
@@ -3543,15 +3529,6 @@ input_flags_template_1d = {
     # energy, plus a KEP pressure-work discretization -- so the closed-domain
     # total plasma energy K+Ee+Ei is conserved to machine precision.
     "hyperbolic_energy_consistent": True,
-    # Characteristic material boundaries (R3): replace
-    # the closed-reflecting-face + one-sided volumetric absorber at the
-    # plasma-terminating (cathode/collector) surfaces with a one-sided
-    # characteristic ghost-cell Bohm outflow -- the KEP/Rusanov flux evaluated
-    # against a Bohm ghost state (n_se = n*presheath_alpha, u = c_s into the
-    # wall, Te, Ti). Fixes a wrong-sign momentum so the wall is a net energy
-    # sink instead of a kinetic source. Requires resolved geometry (absorbing
-    # faces); rejects at construction otherwise.
-    "characteristic_boundary": True,
     # Anode-mesh beam interception (R4): the CSDA beam
     # ray launches the full emitted flux Gamma0 = I_eth_star/e through the
     # whole column, so without this the fluid deposits the entire emitted beam
@@ -3633,10 +3610,8 @@ input_flags_template_1d = {
     # Requires neutral_two_zone (the destination row must exist), and refuses
     # any geometry whose routed collector cell has no annulus (V_ann = 0);
     # both are construction-time ValueErrors. Default OFF and bit-exact off
-    # (presence-gated: the off path passes no annulus volume to either
-    # boundary term and adds no nn_a row). Applies to whichever of the two
-    # plasma-terminating discretizations the run configured --
-    # characteristic_boundary or the volumetric absorber.
+    # (presence-gated: the off path passes no annulus volume to the
+    # boundary term and adds no nn_a row).
     "end_recycle_to_annulus": False,
     # Evolve the neutral thermal energy density En as an optional conservative
     # field, packed last, AND with it the decoupled two-channel neutral gas the
@@ -4057,10 +4032,9 @@ input_flags_template_1d = {
     # their sheath-edge values -- Te/2 per collected ion on Ee (the presheath
     # work; those electrons' thermal transport is carried by the sheath term)
     # in place of 3/2 Te, and 5/2 Ti on Ei (the enthalpy flux) in place of
-    # 3/2 Ti. Requires ``characteristic_boundary``, whose thermal-only
-    # electrode routing this completes: with that routing off the full
-    # P_anode_e is already deposited and arming this would debit the fall
-    # twice, so the combination is a construction-time ValueError. TWO
+    # 3/2 Ti. It completes the thermal-only electrode routing, which is
+    # unconditional since the stance that switched it off was retired
+    # 2026-08-31 (Tom). TWO
     # REGIMES, both booked: the increment above is the electron-REPELLING
     # anode (phi_a > 0), where the collected electrons climbed the fall and
     # the plasma paid; at an electron-ATTRACTING anode (phi_a <= 0 -- an

@@ -180,7 +180,6 @@ from .physics.sources import (
     ION_NEUTRAL_DRAG_MODELS,
     add_state_rhs,
     anode_collection_rhs,
-    boundary_absorption_rhs,
     cathode_jet_backscatter_speed,
     characteristic_boundary_rhs,
     ELECTRON_DRIFT_DIAGNOSTIC_ROWS,
@@ -302,6 +301,9 @@ _NEUTRAL_ENERGY_TERM_BOOKING = {
     "beam_ionization_birth": "local",
     "gas_puff_local_ionization": "local",
     # --- surface sources: recycled plasma leaves the surface at T_wall ---
+    # ``boundary_absorption`` is a permanently-zero row kept for saved-ledger
+    # schema stability (retired 2026-08-31, Tom); its entry stays so the table
+    # still covers every row the ledger emits.
     "boundary_absorption": "wall",
     "characteristic_boundary": "wall",
     "anode_collection": "wall",
@@ -834,7 +836,6 @@ class LAPDSim1D:
             geometry=self._geometry,
             ion_neutral_moment_closure=self._ion_neutral_moment_closure,
             hyperbolic_wave_speed=self._hyperbolic_wave_speed,
-            characteristic_boundary=self._characteristic_boundary,
             raw_stage_validation=self._raw_stage_validation,
         )
         # The declarative half of the deprecation surface (core/deprecations.py):
@@ -946,9 +947,6 @@ class LAPDSim1D:
         )
         self._hyperbolic_energy_consistent = bool(
             self._flags.get("hyperbolic_energy_consistent")
-        )
-        self._characteristic_boundary = bool(
-            self._flags.get("characteristic_boundary")
         )
         self._beam_anode_interception = bool(
             self._flags.get("beam_anode_interception")
@@ -1162,7 +1160,6 @@ class LAPDSim1D:
             self._kinetic = None
         self._dvm = None
         self._dvm_cadence_s = 0.0
-        self._dvm_tn_feedback = False
         self._dvm_engaged = False
         self._dvm_next_s = 0.0
         self._dvm_last_s = 0.0
@@ -1755,19 +1752,12 @@ class LAPDSim1D:
                 "anode_sheath_full_debit must be a bool (got "
                 f"{_anode_sheath_full_debit!r})"
             )
-        if _anode_sheath_full_debit and not bool(
-            self._flags.get("characteristic_boundary")
-        ):
-            raise ValueError(
-                "anode_sheath_full_debit requires characteristic_boundary "
-                "(got characteristic_boundary="
-                f"{self._flags.get('characteristic_boundary')!r}): the "
-                "flag COMPLETES the thermal-only electrode routing by adding "
-                "the sheath-fall share back onto the plasma electron store, "
-                "and with that routing off the full P_anode_e "
-                "(2 Te + phi_a per collected electron) is already deposited, "
-                "so arming it would debit phi_a twice"
-            )
+        # This flag COMPLETES the thermal-only electrode routing by adding the
+        # sheath-fall share back onto the plasma electron store. That routing
+        # is now unconditional (the stance that switched it off was retired
+        # 2026-08-31, Tom), so the pairing this used to police -- arming the
+        # debit against the full-P_anode_e routing, which would have debited
+        # phi_a twice -- is no longer constructible and needs no refusal.
         self._anode_sheath_full_debit = _anode_sheath_full_debit
         # Beam electron-energy deposition re-homed into the implicit heat
         # substep. A real bool for the same reason as the two flags above: the
@@ -3496,14 +3486,9 @@ class LAPDSim1D:
         cathode_solve = self._cathode_solve
         if cathode_solve is None:
             return 0.0
-        if self._characteristic_boundary:
-            term = self.characteristic_boundary_rhs(
-                state=state, cathode_solve=cathode_solve, time=self._time
-            )
-        else:
-            term = self.boundary_absorption_rhs(
-                state=state, cathode_solve=cathode_solve, time=self._time
-            )
+        term = self.characteristic_boundary_rhs(
+            state=state, cathode_solve=cathode_solve, time=self._time
+        )
         row = np.asarray(term.n, dtype=float)
         Vp = np.asarray(self._geometry.plasma_volume_cm3, dtype=float)
         cells = node.collector_cells
@@ -3780,42 +3765,29 @@ class LAPDSim1D:
         }
 
     def _tracer_boundary_rhs(self, cathode_solve, time):
-        """Return ``probe_state -> plasma-end loss term`` for the LIVE stance.
+        """Return ``probe_state -> plasma-end loss term``.
 
-        The plasma-terminating faces are discretized two ways in this package
-        and which one is live is a config selector: under
-        ``characteristic_boundary`` (the shipped default) the R3 one-sided
-        ghost-cell Bohm outflow owns them and ``boundary_absorption`` is
-        identically zero, otherwise the volumetric absorption does. The tracer
-        must consume WHICHEVER the run configured -- taking one unconditionally
-        made ``gamma`` disagree with the fluid's own ``n`` row at the shipped
-        stance, which is exactly what the smoke's identity assertion caught.
+        The tracer must consume the SAME boundary operator the fluid does, or
+        ``gamma`` disagrees with the fluid's own ``n`` row -- which is exactly
+        what the smoke's identity assertion catches. Since the legacy
+        volumetric absorber was retired 2026-08-31 (Tom) there is one operator,
+        so there is nothing left to select between.
         """
         surface_kwargs = self._tracer_surface_kwargs()
-        if self._characteristic_boundary:
-            def boundary(probe):
-                return characteristic_boundary_rhs(
-                    state=probe,
-                    floors=self._floors,
-                    ion_mass_g=self._ion_mass_g,
-                    mu=self._mu,
-                    geometry=self._plasma_geometry(),
-                    cathode_jet=None,
-                    wave_speed=self._hyperbolic_wave_speed,
-                    energy_consistent=self._hyperbolic_energy_consistent,
-                    sheath_energy_routing=True,
-                    **surface_kwargs,
-                )
-        else:
-            def boundary(probe):
-                return boundary_absorption_rhs(
-                    state=probe,
-                    floors=self._floors,
-                    ion_mass_g=self._ion_mass_g,
-                    mu=self._mu,
-                    geometry=self._plasma_geometry(),
-                    **surface_kwargs,
-                )
+
+        def boundary(probe):
+            return characteristic_boundary_rhs(
+                state=probe,
+                floors=self._floors,
+                ion_mass_g=self._ion_mass_g,
+                mu=self._mu,
+                geometry=self._plasma_geometry(),
+                cathode_jet=None,
+                wave_speed=self._hyperbolic_wave_speed,
+                energy_consistent=self._hyperbolic_energy_consistent,
+                **surface_kwargs,
+            )
+
         return boundary
 
     def _tracer_exchange_kwargs(self):
@@ -4399,18 +4371,6 @@ class LAPDSim1D:
                 "neutral_kinetic_dvm_annulus_flights must be one of "
                 f"{KINETIC_DVM_ANNULUS_FLIGHT_MODELS} (got {flights!r})"
             )
-        tn_feedback = bool(
-            self._input_dict.get("neutral_kinetic_dvm_tn_feedback")
-        )
-        if tn_feedback and self._characteristic_boundary:
-            raise ValueError(
-                "neutral_kinetic_dvm_tn_feedback is incompatible with the "
-                "characteristic_boundary stance: there the circuit's "
-                "cathode sheath factor samples the same presheath through a "
-                "path that carries no Tn, so feeding the measured Tn to only "
-                "the fluid half would break the shared sheath-edge density. "
-                "Accepted: tn_feedback with characteristic_boundary off"
-            )
         relax_fraction = float(
             self._input_dict.get(
                 "neutral_kinetic_dvm_transfer_relax_fraction"
@@ -4514,7 +4474,6 @@ class LAPDSim1D:
             }
         self._dvm_cathode_jet = cathode_jet
         self._dvm_cadence_s = cadence
-        self._dvm_tn_feedback = tn_feedback
         self._dvm_transfer_relax_fraction = relax_fraction
         self._dvm_transfer_hold = transfer_hold
         anode_faces = np.asarray(
@@ -4859,6 +4818,9 @@ class LAPDSim1D:
                 **kinetic_terms,
                 "plasma_advective_flux": self._zero_rhs_state(),
                 "plasma_front_flux": self._zero_rhs_state(),
+                # boundary_absorption is permanently zero everywhere since the
+                # legacy absorber was retired 2026-08-31 (Tom); kept for saved-
+                # ledger schema stability.
                 "boundary_absorption": self._zero_rhs_state(),
                 "characteristic_boundary": self._zero_rhs_state(),
                 "pressure_work": self._zero_rhs_state(),
@@ -4996,25 +4958,19 @@ class LAPDSim1D:
             **geometry_terms,
             "plasma_advective_flux": plasma_terms["plasma_advective_flux"],
             "plasma_front_flux": plasma_terms["plasma_front_flux"],
-            "boundary_absorption": (
-                self._zero_rhs_state()
-                if self._characteristic_boundary
-                else self.boundary_absorption_rhs(
-                    state=state,
-                    cathode_solve=cathode_solve,
-                    time=time,
-                    carrier_out=carrier_out,
-                )
-            ),
-            "characteristic_boundary": (
-                self.characteristic_boundary_rhs(
-                    state=state,
-                    cathode_solve=cathode_solve,
-                    time=time,
-                    carrier_out=carrier_out,
-                )
-                if self._characteristic_boundary
-                else self._zero_rhs_state()
+            # Permanently zero since the legacy volumetric absorber was
+            # retired 2026-08-31 (Tom). The ROW is kept because it is part of
+            # the saved ledger schema that existing artifacts and the
+            # committed phase-3 RHS provenance enumerate; dropping it would
+            # move the saved term set, which this change deliberately does
+            # not. Nothing can write it: read the live boundary from
+            # "characteristic_boundary" below.
+            "boundary_absorption": self._zero_rhs_state(),
+            "characteristic_boundary": self.characteristic_boundary_rhs(
+                state=state,
+                cathode_solve=cathode_solve,
+                time=time,
+                carrier_out=carrier_out,
             ),
             "pressure_work": self.pressure_work_rhs(state=state),
             # The electron-velocity correction to the row above: pressure_work
@@ -5122,11 +5078,7 @@ class LAPDSim1D:
             # Reads the recycle flux the boundary term just computed, so the
             # jet's energy cannot describe a different flux from the one that
             # actually rebirthed the atoms.
-            recycle = (
-                terms["characteristic_boundary"].nn
-                if self._characteristic_boundary
-                else terms["boundary_absorption"].nn
-            )
+            recycle = terms["characteristic_boundary"].nn
             terms["cathode_jet_neutral_energy"] = (
                 self.cathode_jet_neutral_energy_rhs(
                     state=state,
@@ -8169,12 +8121,11 @@ class LAPDSim1D:
 
         The bundle is exactly the set of non-flux terms that can drive a cell
         into a floor within one step, and it must be the set THIS STANCE
-        RUNS: the R3.1 characteristic ghost-cell flux when
-        ``characteristic_boundary`` is on, the legacy volumetric absorber
-        when it is off. The two disagree face by face -- reading the wrong
-        one bounds a term the step never applies while leaving the applied
-        one unbounded (the same wrong-operator class the recycle channel was
-        fixed for).
+        RUNS -- the characteristic ghost-cell flux, the only plasma-terminating
+        operator since the legacy volumetric absorber was retired 2026-08-31
+        (Tom). Reading the wrong operator would bound a term the step never
+        applies while leaving the applied one unbounded (the same
+        wrong-operator class the recycle channel was fixed for).
 
         The engaged DVM arm's coupling term joins the bundle for the same
         reason: it is a volumetric ion momentum/energy source of unbounded
@@ -8207,11 +8158,7 @@ class LAPDSim1D:
                 time=time,
                 update_cache=False,
             )
-        boundary = (
-            self.characteristic_boundary_rhs
-            if self._characteristic_boundary
-            else self.boundary_absorption_rhs
-        )
+        boundary = self.characteristic_boundary_rhs
         carrier_out = {} if self._cathode_jet_carrier else None
         rhs = boundary(
             state=state,
@@ -8502,7 +8449,6 @@ class LAPDSim1D:
             active_plasma_topology=self._active_plasma_topology,
             wave_speed=self._hyperbolic_wave_speed,
             energy_consistent=self._hyperbolic_energy_consistent,
-            characteristic_boundary=self._characteristic_boundary,
         )
 
     def plasma_flux_rhs_terms(self, y=None, state=None, include_front=None):
@@ -8523,7 +8469,6 @@ class LAPDSim1D:
             active_plasma_topology=self._active_plasma_topology,
             wave_speed=self._hyperbolic_wave_speed,
             energy_consistent=self._hyperbolic_energy_consistent,
-            characteristic_boundary=self._characteristic_boundary,
         )
 
     def cathode_jet_neutral_energy_rhs(
@@ -8533,10 +8478,10 @@ class LAPDSim1D:
 
         THE COMPOSITION, stated. The jet's MOMENTUM booking is untouched: the
         directed ``v_mix = R_N v_back + (1 - R_N) v_eff`` per particle stays
-        inside ``boundary_absorption_rhs``, where it rides the same term that
+        inside ``characteristic_boundary_rhs``, where it rides the same term that
         rebirths the particles. Nothing about it is repeated here, so no
         momentum is booked twice. What this term adds is the ENERGY that
-        booking has always dropped -- ``boundary_absorption_rhs`` says so in as
+        booking has always dropped -- ``characteristic_boundary_rhs`` says so in as
         many words ("the reflected atoms' kinetic energy beyond the mean-flow
         momentum is NOT booked -- neutrals carry no energy field") -- and that
         the ``En`` field now has somewhere to put:
@@ -8833,58 +8778,21 @@ class LAPDSim1D:
             self._jet_carrier_diagnostics = diagnostics
         return rhs
 
-    def boundary_absorption_rhs(
-        self, y=None, state=None, cathode_solve=None, time=None,
-        carrier_out=None,
-    ):
-        """Return the Bohm absorption at the plasma-terminating surfaces.
-
-        ``carrier_out`` is the directed hot surface carrier's launch channel:
-        a dict the physics term fills with the recycle share it withheld (see
-        that function's docstring). ``None`` is the historical call and leaves
-        the term's bookings unchanged bit for bit.
-        """
-        if state is None:
-            state = self.state if y is None else self._unpack(y)
-        surface_kwargs = self._surface_loss_kwargs()
-        cathode_solve = self._jet_cathode_solve(
-            cathode_solve, self._cathode_jet_enabled, time
-        )
-        return boundary_absorption_rhs(
-            state=state,
-            floors=self._floors,
-            ion_mass_g=self._ion_mass_g,
-            mu=self._mu,
-            geometry=self._plasma_geometry(),
-            alpha_isat=surface_kwargs["alpha_isat"],
-            b_surface_loss=surface_kwargs["b_surface_loss"],
-            b_presheath_length=float(
-                self._input_dict.get("b_presheath_length")
-            ),
-            gas_type=self._gas_type,
-            cathode_jet=self._cathode_jet_spec(cathode_solve),
-            Tn_presheath_eV=self._dvm_presheath_Tn_eV(),
-            end_recycle_annulus_volume_cm3=(
-                self._end_recycle_annulus_volume()
-            ),
-            cathode_carrier_out=carrier_out,
-        )
-
     def characteristic_boundary_rhs(
         self, y=None, state=None, cathode_solve=None, time=None,
         carrier_out=None,
     ):
-        """Return the R3.1 characteristic ghost-cell Bohm outflow (audit A1/A16).
+        """Return the characteristic ghost-cell Bohm outflow (audit A1/A16).
 
-        Replaces ``boundary_absorption_rhs`` when the ``characteristic_boundary``
-        flag is on: a one-sided ghost-cell KEP/Rusanov flux against the Bohm
-        outflow state at each absorbing face. Reads the same surface kwargs and
-        cathode jet, and follows the interior's momentum-flux form and wave speed
-        so a repaired stance stays consistent.
+        THE plasma-terminating boundary operator, and the only one since the
+        legacy volumetric absorber was retired 2026-08-31 (Tom): a one-sided
+        ghost-cell KEP/Rusanov flux against the Bohm outflow state at each
+        absorbing face. Reads the surface kwargs and cathode jet, and follows
+        the interior's momentum-flux form and wave speed so the boundary and
+        the interior stay consistent.
 
-        ``carrier_out`` is the directed hot surface carrier's launch channel,
-        booked exactly as in :meth:`boundary_absorption_rhs`; ``None`` is the
-        historical call and is unchanged bit for bit.
+        ``carrier_out`` is the directed hot surface carrier's launch channel;
+        ``None`` is the historical call and is unchanged bit for bit.
         """
         if state is None:
             state = self.state if y is None else self._unpack(y)
@@ -8907,11 +8815,6 @@ class LAPDSim1D:
             cathode_jet=self._cathode_jet_spec(cathode_solve),
             wave_speed=self._hyperbolic_wave_speed,
             energy_consistent=self._hyperbolic_energy_consistent,
-            # R3.2/A16: this term runs only in the repaired stance, so it always
-            # routes electrode energy through the one control surface (electron
-            # sheath transmission; driven electrodes owned by the circuit,
-            # collector floating).
-            sheath_energy_routing=True,
             end_recycle_annulus_volume_cm3=(
                 self._end_recycle_annulus_volume()
             ),
@@ -11382,8 +11285,8 @@ class LAPDSim1D:
         """Return the power [W] the plasma deposits on the floating collector.
 
         R5.4 (R3 tail): completes the power ledger with the collector
-        surface-power line. The plasma-terminating boundary term (the active
-        `characteristic_boundary` or legacy `boundary_absorption`) removes
+        surface-power line. The plasma-terminating boundary term
+        (`characteristic_boundary`) removes
         electron (2Te sheath), ion internal, and reconstructed kinetic energy at
         the collector cell; the negative of that removal is the surface power the
         collector receives. Diagnostic-only (no state change). It is an ambient
@@ -12014,14 +11917,11 @@ class LAPDSim1D:
         removes the afterglow flood.
 
         The wall-return channels are read from the boundary term that is
-        ACTUALLY removing the plasma in this stance -- the R3.1 characteristic
-        ghost-cell flux when ``characteristic_boundary`` is on, the legacy
-        volumetric absorber when it is off -- and from its own live cells,
-        resolved by role. Both halves matter: the two operators disagree face
-        by face (they are different discretizations of the same surface), and
-        the recycled quantity IS the ``nn`` row the fluid path would have
-        applied itself had the arm not superseded it, so what the arm re-injects
-        equals what the boundary removed, per face, to roundoff.
+        ACTUALLY removing the plasma -- the characteristic ghost-cell flux --
+        and from its own live cells, resolved by role. The recycled quantity
+        IS the ``nn`` row the fluid path would have applied itself had the arm
+        not superseded it, so what the arm re-injects equals what the boundary
+        removed, per face, to roundoff.
 
         ``cath``/``coll`` are the per-surface totals (the kinetic steady arm
         needs a magnitude per channel); ``cath_cells``/``coll_cells`` place
@@ -12029,11 +11929,7 @@ class LAPDSim1D:
         deposits into.
         """
         geometry = self._geometry
-        boundary = (
-            self.characteristic_boundary_rhs(state=state)
-            if self._characteristic_boundary
-            else self.boundary_absorption_rhs(state=state)
-        )
+        boundary = self.characteristic_boundary_rhs(state=state)
         reaction_terms = self.reaction_rhs_terms(state=state)
         an = self.anode_collection_rhs(state=state)
         rows = self._kinetic_source_channel_rows(boundary, reaction_terms, an)
@@ -12307,11 +12203,7 @@ class LAPDSim1D:
         the fate of, and masking one path but not the other would make the
         counted channel the integral of something the snapshot never sampled.
         """
-        boundary = terms[
-            "characteristic_boundary"
-            if self._characteristic_boundary
-            else "boundary_absorption"
-        ]
+        boundary = terms["characteristic_boundary"]
         return self._kinetic_source_channel_rows(
             boundary, terms, terms["anode_collection"]
         )
@@ -12974,14 +12866,6 @@ class LAPDSim1D:
                 dtype=float,
             )
         return census
-
-    def _dvm_presheath_Tn_eV(self):
-        """Return the per-cell Tn [eV] the presheath should consume, or None."""
-        if self._dvm is None or not self._dvm_engaged:
-            return None
-        if not self._dvm_tn_feedback:
-            return None
-        return self._dvm.Tn_col_eV
 
     def _dvm_engage(self):
         """Seed the transient distributions from the live fluid neutrals.
