@@ -157,10 +157,10 @@ GATE REGISTRY
   operator's ``Ee`` row times cell volume.
   SITE: ``edt_consult_pins.evaluate`` against
   ``sources.electron_drift_transport_rhs``, on ONE saved state.
-  FIXTURE: ``scripts/mgcr1_confirm.h5`` at t = 10 ms, both conventions at
-  their defaults.
-  PASS: <= 1e-12 relative on every cell, and both exactly zero outside the
-  operator's support. **Not bit-identical, by design**: the kernel
+  FIXTURE: ``scripts/mgcr1_confirm.h5`` at t = 10 ms, on ALL SIX arms
+  (``CHARGE_DEATH_CHOICES`` x ``ANODE_HANDSHAKE_CHOICES``).
+  PASS: <= 1e-12 relative on every cell, on every arm, and both exactly zero
+  outside the operator's support. **Not bit-identical, by design**: the kernel
   reconstructs ``T_e`` and ``u`` from the conservative state while the twin
   reads the saved primitives, so the two differ by that round trip.
 
@@ -794,8 +794,13 @@ def gate12(report, geom, h5):
 
     worst = 0.0
     worst_where = ""
-    for charge_death in ("cell_1",):
-        for handshake in ("sheath_row_closes_all",):
+    compared = 0
+    # ALL SIX arms: charge_death x anode_handshake. The gate previously
+    # compared only cell_1/sheath_row_closes_all -- the registered closure --
+    # which left the twin unconstrained on the five other arms that gates 3, 4,
+    # 6 and 10 actually measure through it.
+    for charge_death in CHARGE_DEATH_CHOICES:
+        for handshake in ANODE_HANDSHAKE_CHOICES:
             spec = {
                 "charge_death": charge_death,
                 "anode_handshake": handshake,
@@ -821,6 +826,7 @@ def gate12(report, geom, h5):
                 geom, Te, n, I_tot, I_beam, charge_death, handshake, u=u
             )
             twin_W = np.asarray(twin["total_W"], dtype=float)
+            compared += 1
             scale = max(float(np.abs(twin_W).max()), 1.0)
             diff = float(np.abs(shipped_W - twin_W).max())
             if diff / scale > worst:
@@ -844,9 +850,11 @@ def gate12(report, geom, h5):
             )
     report.note(
         "G12",
-        f"worst over the compared arms: {worst:.3e} relative ({worst_where}). "
-        "NOT bit-identical by design -- the kernel reconstructs T_e and u from "
-        "the conservative state while the twin reads the saved primitives",
+        f"worst over the {compared} compared arms "
+        f"(charge_death x anode_handshake): {worst:.3e} relative "
+        f"({worst_where}). NOT bit-identical by design -- the kernel "
+        "reconstructs T_e and u from the conservative state while the twin "
+        "reads the saved primitives",
     )
 
 
