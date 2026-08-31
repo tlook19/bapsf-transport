@@ -188,6 +188,38 @@ closure stress, deliberately not addressed by this pass.
 
 ## Recapture record
 
+**2026-08-30 — IDENTITY-ONLY ROTATION (the B4 anode-jet keys). NOTHING WAS
+RECAPTURED.** Merge `e0beed5` ([dvm-b4-anode-jet], the DVM anode recycle
+triple) added four `input_dict` keys to the package surface —
+`neutral_kinetic_dvm_anode_jet = False`, `neutral_kinetic_dvm_anode_jet_R_N =
+0.63`, `neutral_kinetic_dvm_anode_jet_R_E = 0.41`,
+`neutral_kinetic_dvm_anode_jet_T_launch_eV = None` — all default-inert (the
+channel is off, and read only under `neutral_model = "kinetic_dvm"`, which the
+golden does not run). The config identity therefore moved for the added keys
+and for nothing else; the rotation commit `141ff2c` regenerated BOTH references
+in one event, the reviewer authoring it from each reference's own expression:
+
+| reference | before | after |
+|---|---|---|
+| `golden_digest_4k.json` `config_identity` | `fcc61568a6b11673110cc22feaacf2e8b6f496e97a24fc0d302802d9378509de` | `8974b3ec46a944947e6f080ef48e973ecaaf51163e979d14b874fdb02f57563c` |
+| `golden_digest_4k.json` checkpoints 0/1000/2000/3000/4000, final digest, `steps`, `final_time` | — | UNCHANGED (final digest `cb54b74a34cbee055612d404abb44ba4522bea11316044556fa43c83a75b2ae2`) |
+| `production_discharge.json` params | 249 keys | 253 keys: the four ADDED, 0 removed, 0 moved; `flags` 52 unchanged; `saves` 2620, `summary.final_time` 0.026186806122473337, `summary.steps` 62612 CARRIED |
+| sidecar `sha256` | `18d065b70d12a5187b3e240bb2f0eae1aec0a09b1c0076954c1cbe8e7a6c2176` | `c1cd0f639d5b8b3cd93ea0ca5476a5af0734ed62935f88324ea9d6dd79fb3f0c` |
+| digest reference `sha256` | — | `f7403cbc777780e120a50bd3cec5d56037f8c14f528888b60c16a8c2f5bffa64` |
+| NPZ `sha256` | `2c02ccd882261a0b01e0a1e8f0e313113b8431fadd526fa9d4859694e5704306` | UNCHANGED (md5 `fd8ac896ccba10c66a7c18ec609ec48e` before and after) |
+
+Proof that the move is the four keys and nothing else: a strip-four-keys
+control at the merge tip reproduces `fcc61568…` bit-for-bit through the gate's
+own expression (`params 253 -> 249`), and every checkpoint agrees with the
+committed reference before the rotation. The sidecar params were regenerated
+programmatically (`build_baseline_config()` -> `_json_safe` -> `json.dumps(...,
+sort_keys=True)`), never hand-edited. Gates at the rotated tip: compiled golden
+`saves=2620, exact=True, max_rel=0.000e+00` (`KERNEL_ID`
+`cython/_cathode_kernels_cy/tierA+csda` attested in-process); pure 4k digest
+`exact=True` against the rotated reference; smoke exit 0 with the five
+equivalence blocks live. The stance file `g1atrim.toml` is untouched by this
+event; the golden's trajectory is the 2026-08-28 capture's, unchanged.
+
 **2026-08-30 — NON-RECAPTURE STANCE-FILE EVENT: `g1atrim.toml` migrated to
 declaration-block FORM. NOTHING WAS RECAPTURED.** This entry exists because the
 stance file is a golden input and this record is where a reader looks when it
